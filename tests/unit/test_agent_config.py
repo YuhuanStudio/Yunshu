@@ -86,6 +86,7 @@ def test_codex_catalog_entry():
     assert e["default_reasoning_level"] == "xhigh"
     assert e["input_modalities"] == ["text", "image"] and e["base_instructions"]
     assert e["visibility"] == "list" and e["shell_type"] == "shell_command"
+    assert e["apply_patch_tool_type"] == "freeform"
     # a non-reasoning model offers no effort levels, so Codex sends none
     plain = codex_catalog(ModelInfo(id="m"))["models"][0]
     assert (

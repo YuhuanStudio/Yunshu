@@ -2662,6 +2662,16 @@ class VLMEngine:
         ids: list[int] = []
         pieces: list[str] = []
         finish = None
+        prompt_list: list[int] = []
+        round_trip = None
+        with contextlib.suppress(Exception):
+            from .roundtrip_capture import RoundTripTracker, flatten_ids
+
+            prompt_list = flatten_ids(input_ids)
+            tracker = getattr(self, "_roundtrip_tracker", None)
+            if tracker is None:
+                tracker = self._roundtrip_tracker = RoundTripTracker()
+            round_trip = tracker.observe_prompt(prompt_list)
         try:
             for event in events:
                 text, token, _state, finish_reason = event[:4]
@@ -2678,9 +2688,11 @@ class VLMEngine:
                     "pieces": pieces,
                     "text": "".join(pieces),
                     "finish": finish,
+                    "round_trip": round_trip,
                 }
                 with open(path, "a") as fh:
                     fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+                self._roundtrip_tracker.add(prompt_list, ids)
 
     def _runner_events_impl(
         self,

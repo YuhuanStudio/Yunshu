@@ -35,7 +35,10 @@ def parser() -> argparse.ArgumentParser:
         "-e",
         help=f"Engine URL to watch and proxy to (YUNSHU_CONSOLE_ENGINE, else {DEFAULT_ENGINE}), or `auto` to follow whichever local engine is running (YUNSHU_CONSOLE_DISCOVER_PORTS).",
     )
-    p.add_argument("--host", help="Bind host (default 127.0.0.1; YUNSHU_CONSOLE_HOST).")
+    p.add_argument(
+        "--host",
+        help="Bind host (default 127.0.0.1; 0.0.0.0 serves the local network too; YUNSHU_CONSOLE_HOST).",
+    )
     p.add_argument(
         "--port", "-p", type=int, help="Bind port (default 8100; YUNSHU_CONSOLE_PORT)."
     )

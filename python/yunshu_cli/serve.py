@@ -65,12 +65,12 @@ def serve(
         "-d",
         help="Directory to scan for models (multi-model mode).",
     ),
-    host: str = typer.Option(
-        "127.0.0.1",
+    host: str | None = typer.Option(
+        None,
         "--host",
         "-h",
-        help="Bind host. 127.0.0.1 serves this Mac only; 0.0.0.0 also serves the "
-        "network (set --auth-token then).",
+        help="Bind host (default 127.0.0.1; YUNSHU_HOST). 127.0.0.1 serves this Mac only; "
+        "0.0.0.0 also serves the network (set --auth-token then).",
     ),
     port: int = typer.Option(8000, "--port", "-p", help="Bind port."),
     uds: str | None = typer.Option(
@@ -239,6 +239,7 @@ def serve(
             console.print(f"[yellow]Warning:[/] {warning}")
     except settings.SettingError as exc:
         fail(str(exc), code=2)
+    host = host or settings.get("YUNSHU_HOST") or "127.0.0.1"
 
     # Fail before importing/loading a checkpoint when the chosen TCP endpoint
     # cannot bind. Uvicorn remains the authority at startup (another process
