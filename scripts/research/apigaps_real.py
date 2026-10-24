@@ -347,7 +347,7 @@ def check_compact(url, results, token):
         base_url=url, api_key=token or "x", max_retries=0, timeout=900
     )
     msgs = []
-    for i in range(36):
+    for i in range(80):
         msgs.append(
             {
                 "role": "user",
