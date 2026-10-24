@@ -25,6 +25,7 @@ import urllib.error
 import urllib.request
 
 TOKEN = "defaultfix-secret"
+HOME = ""  # server HOME (its server.log), set by main()
 
 
 class Fail(AssertionError):  # noqa: N818
@@ -74,6 +75,9 @@ def post(url, path, body, raw=None, timeout=600):
             return e.code, json.loads(raw_err)
         except ValueError:
             return e.code, {"raw": raw_err[:200].decode("utf-8", "replace")}
+    except (urllib.error.URLError, ConnectionError) as e:
+        # the server answered early (413) and closed while the client was still sending
+        return -1, {"connection": repr(e)[:120]}
 
 
 def stream_count(url, body, stop_after, timeout=900):
@@ -189,6 +193,11 @@ def run_checks(url, results, long_tokens):
         st, _ = post(url, "/v1/chat/completions", None, raw=pad_body(body, 20))
         expect(st != 413, "20 MiB refused with 413")
         st2, _ = post(url, "/v1/chat/completions", None, raw=pad_body(body, 34))
+        if st2 == -1:  # early close: the server log must show the 413
+            time.sleep(1)
+            log = open(os.path.join(HOME, "server.log")).read()  # noqa: SIM115
+            expect('HTTP/1.1" 413' in log, "34 MiB closed without a 413 in the log")
+            st2 = 413
         expect(st2 == 413, f"34 MiB gave {st2}")
         return {"20MiB": st, "34MiB": st2}
 
@@ -210,6 +219,8 @@ def main():
     ap.add_argument("--home", default="/Volumes/P5Plus/yunshu-build/defaultfix-home")
     a = ap.parse_args()
     expect(18990 <= a.port <= 18999, "port outside 18990-18999")
+    global HOME
+    HOME = a.home
     os.makedirs(a.home, exist_ok=True)
     tree = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     env = dict(
