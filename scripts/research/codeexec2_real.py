@@ -240,6 +240,31 @@ def openai_suite(url, results, big=False, cl=None):
 
         return attempt(go, tries=4)
 
+    def background():
+        def go():
+            import time as _t
+
+            r = cl.responses.create(
+                model="m",
+                input="Use the tool to run exactly this Python code: print(7*8)",
+                tools=[CI],
+                tool_choice={"type": "code_interpreter"},
+                include=INCLUDE,
+                background=True,
+                max_output_tokens=600,
+            )
+            expect(r.status in ("queued", "in_progress"), f"status {r.status}")
+            end = _t.time() + 120
+            while r.status in ("queued", "in_progress") and _t.time() < end:
+                _t.sleep(0.5)
+                r = cl.responses.retrieve(r.id)
+            expect(r.status == "completed", f"background ended {r.status}")
+            ci = items(r, "code_interpreter_call")
+            expect(ci and "56" in logs_of(ci[0]), f"logs {ci and logs_of(ci[0])!r}")
+            return {"status": r.status, "logs": logs_of(ci[0])}
+
+        return attempt(go)
+
     def shell():
         def go():
             r = create(
@@ -300,6 +325,7 @@ def openai_suite(url, results, big=False, cl=None):
             ("ci_stream", streaming),
             ("ci_state_across_responses", state_across_responses),
             ("ci_file_output", file_output),
+            ("ci_background", background),
             ("shell_hosted", shell),
         ):
             step(name, fn)

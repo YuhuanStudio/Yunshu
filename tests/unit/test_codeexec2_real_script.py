@@ -116,10 +116,21 @@ def test_small_suite_passes_against_a_scripted_server(stack):
         [text("42")],
         [ci("open('report.csv','w').write('a,b\\n1,2\\n')")],
         [text("[report.csv](sandbox:/mnt/data/report.csv)")],
+        [ci("print(7*8)")],
+        [text("56")],
         [call("shell", {"commands": ["echo shell-ok && python3 -c 'print(6*7)'"]})],
         [text("done")],
     ]
-    mp.setattr(responses, "create_response", ScriptedResponses(oai_rounds))
+    real = responses.create_response
+    scripted = ScriptedResponses(oai_rounds)
+
+    async def dispatch(req, request):
+        # a background request re-enters the real handler (the loop); its rounds are scripted
+        if any(getattr(t, "type", "") == "code_interpreter" for t in (req.tools or [])):
+            return await real(req, request)
+        return await scripted(req, request)
+
+    mp.setattr(responses, "create_response", dispatch)
 
     def cc(code):
         block = {
@@ -154,6 +165,7 @@ def test_small_suite_passes_against_a_scripted_server(stack):
         "ci_stream",
         "ci_state_across_responses",
         "ci_file_output",
+        "ci_background",
         "shell_hosted",
         "anthropic_repl_state",
         "anthropic_ptc",

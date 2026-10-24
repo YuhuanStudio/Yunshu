@@ -537,3 +537,54 @@ def test_skills_in_an_auto_environment_are_refused(make):
         ),
     )
     assert r.status_code == 400 and r.json()["error"]["code"] == "unsupported_parameter"
+
+
+def test_code_interpreter_in_background_mode_and_resumed_stream(make, monkeypatch):
+    import time
+
+    real = responses.create_response
+    c, _ = make([])
+    scripted = ScriptedResponses(
+        [[call("code_interpreter", {"code": "print(6*7)"})], [text("42")]]
+    )
+
+    async def dispatch(req, request):
+        if any(getattr(t, "type", "") == "code_interpreter" for t in (req.tools or [])):
+            return await real(req, request)
+        return await scripted(req, request)
+
+    monkeypatch.setattr(responses, "create_response", dispatch)
+    r = c.post(
+        "/v1/responses",
+        json=body([CI], background=True, include=["code_interpreter_call.outputs"]),
+    )
+    assert r.status_code == 200 and r.json()["status"] == "queued", r.text
+    rid = r.json()["id"]
+    end = time.time() + 30
+    got = {}
+    while time.time() < end:
+        got = c.get(f"/v1/responses/{rid}").json()
+        if got["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+    assert got["status"] == "completed", got.get("error")
+    assert [i["type"] for i in got["output"]] == ["code_interpreter_call", "message"]
+    assert got["output"][0]["outputs"] == [{"type": "logs", "logs": "42\n"}]
+    Response.model_validate(got)
+    # a stream replayed after the fact carries the code events
+    scripted.rounds = [[call("code_interpreter", {"code": "print(1)"})], [text("1")]]
+    r2 = c.post(
+        "/v1/responses",
+        json=body([CI], background=True, stream=True),
+    )
+    names = [n for n, _e in parse_sse(r2.text)]
+    assert "response.code_interpreter_call.completed" in names
+    rid2 = [e for n, e in parse_sse(r2.text) if n == "response.created"][0]["response"][
+        "id"
+    ]
+    again = c.get(
+        f"/v1/responses/{rid2}", params={"stream": "true", "starting_after": 0}
+    )
+    assert "response.code_interpreter_call.completed" in [
+        n for n, _e in parse_sse(again.text)
+    ]
