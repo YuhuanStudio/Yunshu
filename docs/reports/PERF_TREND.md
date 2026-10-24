@@ -1419,3 +1419,10 @@ APC hit/miss and spec-off at 32K tokens + logprobs exact (gpuq 1023-213201).
 d9a63834 vs cand 25f0cd51, 3 interleaved reps (5 at 128K prose): identity 12 + 12 cells exact, APC 4 pairs; speed flat at 32K
 (decode +0.5..+1.9%, warm TTFT within noise), 128K code decode 84.8 -> 83.3 tok/s (-1.8%), 128K prose warm TTFT 0.306 -> 0.325 s
 (+6.5%, noise 3.6%, confirmed). No gain on any long cell, so the branch is archived (tag archive/roundcost-1023).
+
+2026-10-24 coldfuse (merged): cold prefill fuses the BF16 Q/K RMSNorm + scale (keeps the intermediate BF16 rounding) and
+reserves native prompt KV capacity once (singleton batch backing). Qwen3.8-27B + DFlash2, M5 Max, APC disk off, 64 tokens.
+Paired interleaved runs (Codex, 3 per cell, quiet, job_swap 0): 8K 7.46 -> 7.44 s (-19 ms), 32K 32.82 -> 32.71/32.73 s
+(-87..-117 ms), 128K 186.8/187.2 -> 185.5/185.9 s (-1.31 s); 18/18 pairs positive. yv coldfuse-final-1024f (base 62b56949,
+3 reps): identity 12+12 exact, APC 4 pairs, speed PASS within noise (128K code cold +1.4% noise 4.0%, prose -0.8%; 32K prose
+-1.4% noise 1.2%). Small but real; 32K still ~2.2 s behind Splash 1.3.2 (30.5 s).
