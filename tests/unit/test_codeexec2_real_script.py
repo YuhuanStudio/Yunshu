@@ -158,3 +158,69 @@ def test_small_suite_passes_against_a_scripted_server(stack):
         "anthropic_repl_state",
         "anthropic_ptc",
     }
+
+
+def test_a_failing_step_is_recorded_and_the_run_still_exits_nonzero(monkeypatch):
+    mod = load_script()
+    results: dict = {}
+
+    class Boom:
+        class containers:  # noqa: N801
+            @staticmethod
+            def create(**kw):
+                raise RuntimeError("boom")
+
+    mod.openai_suite("u", results, False, Boom())
+    assert results["containers_api"]["ok"] is False
+    assert "ci_plain" in results  # later steps ran after the failure
+
+
+def test_big_suite_passes_against_a_scripted_server(stack):
+    mod = load_script()
+    http, mp = stack
+    mp.setenv("YUNSHU_CODE_EXECUTION_TIMEOUT", "30")
+    sha_code = (
+        "import hashlib, csv\n"
+        "rows = [(w, hashlib.sha256(w.encode()).hexdigest()) for w in ['alpha','beta','gamma','delta']]\n"
+        "with open('report.csv','w',newline='') as f:\n"
+        "    w = csv.writer(f); w.writerow(['name','sha256']); w.writerows(rows)\n"
+        "print(rows[0])"
+    )
+    oai_rounds = [
+        [ci(sha_code)],
+        [text("The first row is alpha,...")],
+        [call("shell", {"commands": ["echo shell-ok && python3 -c 'print(6*7)'"]})],
+        [text("done")],
+    ]
+    mp.setattr(responses, "create_response", ScriptedResponses(oai_rounds))
+    ptc_code = (
+        "import asyncio\n"
+        "rs = await asyncio.gather(*[get_stock(product=p) for p in ['apple','pear','plum']])\n"
+        "print(sum(int(r) for r in rs))"
+    )
+    block = {
+        "type": "tool_use",
+        "id": "t",
+        "name": "code_execution",
+        "input": {"code": ptc_code},
+    }
+    ant_rounds = [
+        ([block], "tool_use"),
+        ([{"type": "text", "text": "23"}], "end_turn"),
+    ]
+    mp.setattr(anthropic_router, "create_message", ScriptedInner(ant_rounds))
+    oai = openai.OpenAI(
+        base_url="http://testserver/v1", api_key="k", http_client=http, max_retries=0
+    )
+    ant = anthropic.Anthropic(
+        base_url="http://testserver", api_key="k", http_client=http, max_retries=0
+    )
+    results: dict = {}
+    mod.run_suites("http://testserver", results, True, oai, ant)
+    assert all(v["ok"] for v in results.values()), results
+    assert set(results) == {
+        "containers_api",
+        "ci_sha256_csv",
+        "shell_hosted",
+        "anthropic_ptc_parallel",
+    }

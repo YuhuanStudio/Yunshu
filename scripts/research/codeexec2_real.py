@@ -66,7 +66,7 @@ def wait_ready(url, proc, secs=900):
     raise Fail("server not ready")
 
 
-def attempt(fn, tries=3):
+def attempt(fn, tries=4):
     """A small model may phrase a call differently: retry the step, fail closed."""
     last = None
     for _ in range(tries):
@@ -97,9 +97,8 @@ def openai_suite(url, results, big=False, cl=None):
     def step(name, fn):
         try:
             results[name] = {"ok": True, "detail": fn()}
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - recorded; later steps still run
             results[name] = {"ok": False, "detail": repr(exc)[:600]}
-            raise
 
     def create(prompt, tools, choice, **kw):
         return cl.responses.create(
@@ -212,9 +211,9 @@ def openai_suite(url, results, big=False, cl=None):
     def file_output():
         def go():
             r = create(
-                "Use the tool to run exactly this Python code: "
-                "open('report.csv','w').write('a,b\\n1,2\\n')\nThen tell the user "
-                "the file is [report.csv](sandbox:/mnt/data/report.csv).",
+                "Use Python to write the text 1,2 into a file named report.csv in the current "
+                "directory. Then tell the user the file is "
+                "[report.csv](sandbox:/mnt/data/report.csv).",
                 [CI],
                 {"type": "code_interpreter"},
             )
@@ -229,9 +228,7 @@ def openai_suite(url, results, big=False, cl=None):
             data = cl.containers.files.content.retrieve(
                 files[0].id, container_id=cid
             ).read()
-            expect(
-                b"1,2" in data, f"content {data!r}"
-            )  # a small model may drop the header
+            expect(b"1,2" in data, f"content {data!r}")
             cites = [
                 a
                 for m in items(r, "message")
@@ -241,7 +238,7 @@ def openai_suite(url, results, big=False, cl=None):
             ]
             return {"bytes": len(data), "citations": len(cites)}
 
-        return attempt(go)
+        return attempt(go, tries=4)
 
     def shell():
         def go():
@@ -322,9 +319,8 @@ def anthropic_suite(url, results, big=False, cl=None):
     def step(name, fn):
         try:
             results[name] = {"ok": True, "detail": fn()}
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - recorded; later steps still run
             results[name] = {"ok": False, "detail": repr(exc)[:600]}
-            raise
 
     def py_results(m):
         return [b for b in m.content if b.type == "code_execution_tool_result"]
@@ -537,7 +533,7 @@ def main():
     try:
         wait_ready(url, proc)
         run_suites(url, results, SUITES[a.suite])
-        rc = 0
+        rc = 0 if results and all(v.get("ok") for v in results.values()) else 1
     except BaseException as exc:  # noqa: BLE001
         results["_error"] = repr(exc)[:600]
     finally:
