@@ -3,10 +3,10 @@ title: 多模态与检索端点
 description: 哪些路由提供图片、音频、视频、语音、Realtime 语音、OCR、图片生成、embeddings 与 rerank，各需要哪些 extra，以及限制在哪里。
 ---
 
-选用的 extra 会安装相依套件：`pip install 'yunshu[audio]'`、`[vision]`、`[generation]`、`[embeddings]` 与 `[omni]`。每个路由都需要支持它的模型；`GET /v1/models` 会告诉你哪些可用。请求格式请见下方链接的 API 参考页面。
+可选的 extra 会安装所需的依赖：`pip install 'yunshu[audio]'`、`[vision]`、`[generation]`、`[embeddings]` 与 `[omni]`。每个路由都需要支持它的模型；`GET /v1/models` 会告诉你哪些可用。请求格式请见下方链接的 API 参考页面。
 
 <Callout type="info">
-语音、ASR、TTS、图片生成与 OCR 是支持的能力，不是调校的主要路径。功能依 checkpoint 而异，并逐模型验证：请见[模型支持](/docs/guides/model-support)。
+语音、ASR、TTS、图片生成与 OCR 是支持的能力，不是调优的重点。功能因 checkpoint 而异，并逐模型验证：请见[模型支持](/docs/guides/model-support)。
 </Callout>
 
 ## 路由
@@ -15,13 +15,13 @@ description: 哪些路由提供图片、音频、视频、语音、Realtime 语�
 |---|---|---|---|
 | 以图片、音频与视频作为聊天输入 | `/v1/chat/completions`、`/v1/responses`、`/v1/messages` | 无（mlx-vlm 模型） | 媒体会纳入前缀缓存的键 |
 | Qwen3-Omni 语音对语音 | `POST /v1/omni/speech/stream` | `omni` | 输出文本与音频；`examples/talk.py` |
-| Realtime 语音 | `WS /v1/realtime`（与 `/realtime`） | `audio` | 服务器端 VAD、插话打断、原生 omni 语音或 ASR、LLM、TTS 串接。请见 [Realtime](/docs/api/realtime) |
+| Realtime 语音 | `WS /v1/realtime`（与 `/realtime`） | `audio` | 服务器端 VAD、插话打断、原生 omni 语音或 ASR、LLM、TTS 串联。请见 [Realtime](/docs/api/realtime) |
 | 语音转文本 | `/v1/audio/transcriptions`、`/v1/audio/translations` | `audio` | 翻译需要 Whisper 模型。请见[音频](/docs/api/audio) |
 | 文本转语音 | `/v1/audio/speech`、`GET /v1/audio/voices` | `audio` | 对需要参考音频的模型，可用音频样本在本机注册声音 |
-| OCR | `POST /v1/ocr` | `vision` | GLM-OCR；`yunshu ocr`；主控台中也有 |
+| OCR | `POST /v1/ocr` | `vision` | GLM-OCR；`yunshu ocr`；主控台中也有；[OCR API](/docs/api/ocr) |
 | 图片生成、编辑、变化 | `/v1/images/generations`、`/edits`、`/variations` | `generation` | `yunshu image`、`image-edit`、`image-variations`。请见[图片](/docs/api/images) |
 | Embeddings | `POST /v1/embeddings` | `embeddings` | 文本，以及（支持的模型）图片、音频与视频。请见 [Embeddings](/docs/api/embeddings) |
-| Rerank、score、classify、pooling | `/v1/rerank`、`/v1/score`、`/v1/classify`、`/v1/pooling` | `embeddings` | cross-encoder rerank 与训练过的分类头，采用 vLLM 语意。请见 [Rerank](/docs/api/rerank) |
+| Rerank、score、classify、pooling | `/v1/rerank`、`/v1/score`、`/v1/classify`、`/v1/pooling` | `embeddings` | cross-encoder rerank 与训练过的分类头，采用 vLLM 语义。请见 [Rerank](/docs/api/rerank) |
 | 类型化决策 | `/v1/decisions`、`/v1/systemone` | 无 | 请见 [Decisions](/docs/api/decisions) |
 
 ## 从命令行试用
@@ -47,10 +47,10 @@ yunshu rerank "query" "doc one" "doc two" --top-n 1
 </Step>
 </Steps>
 
-关于通过 WebSocket 或 WebRTC 使用 Realtime，请见[传输方式](/docs/guides/transports)。暂时性的 client secret 由 `POST /v1/realtime/client_secrets` 取得。
+关于通过 WebSocket 或 WebRTC 使用 Realtime，请见[传输方式](/docs/guides/transports)。临时的 client secret 由 `POST /v1/realtime/client_secrets` 获取。
 
 ## 限制
 
-- Realtime 的仅转录 session 设置会被回传，但不会以仅转录 session 的方式运行。
-- 前缀重用取决于缓存版面配置。Gemma 4 有限定范围的精确窗口还原凭证；请勿推理所有旋转缓存模型都受支持。
-- Qwen3-Omni 重复图片的前缀重用有限定范围的命中与未命中一致性凭证；图片加音频合并的缓存重用尚未验证。请见[模型支持](/docs/guides/model-support)。
+- Realtime 的仅转录 session 设置会被返回，但不会以仅转录 session 的方式运行。
+- 前缀复用取决于缓存布局。Gemma 4 有限定范围的精确窗口还原凭证；请勿据此推断所有旋转缓存模型都受支持。
+- Qwen3-Omni 重复图片的前缀复用有限定范围的命中与未命中一致性凭证；图片加音频合并的缓存复用尚未验证。请见[模型支持](/docs/guides/model-support)。

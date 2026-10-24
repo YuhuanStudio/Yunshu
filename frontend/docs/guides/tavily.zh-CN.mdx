@@ -3,7 +3,7 @@ title: 本机 Tavily API
 description: 使用官方 Tavily Python、JavaScript 与 LangChain 客户端，连接 Yunshu 本机兼容的 search、extract、crawl、map 与 research 端点。
 ---
 
-Yunshu 在 `http://localhost:8000/tavily` 挂载兼容于 Tavily 的 API。Python、JavaScript 与 LangChain 客户端会把端点路径附加到所设置的 base URL，所以此 API 没有 `/v1`。服务器端的 `web_search` 与 `web_fetch` 工具以及提供者的选择，请见[网页搜索](/docs/guides/web-search)。
+Yunshu 在 `http://localhost:8000/tavily` 挂载与 Tavily 兼容的 API。Python、JavaScript 与 LangChain 客户端会把端点路径附加到所设置的 base URL，所以此 API 没有 `/v1`。服务器端的 `web_search` 与 `web_fetch` 工具以及提供商的选择，请见[网络搜索](/docs/guides/web-search)。
 
 ## 连接客户端
 
@@ -31,7 +31,7 @@ const client = tavily({apiKey: 'tvly-local', apiBaseURL: 'http://localhost:8000/
 </Tab>
 </Tabs>
 
-设置 `YUNSHU_AUTH_TOKEN=tvly-local` 即可要求使用该密钥；`tvly-` 前缀会原样接受，不会被去除。旧式的请求本文 `api_key` 也可使用。未设置验证时，套用一般的本机开放政策（[验证](/docs/guides/auth-and-keys)）。
+设置 `YUNSHU_AUTH_TOKEN=tvly-local` 即可要求使用该密钥；`tvly-` 前缀会原样接受，不会被去除。旧式的请求体中的 `api_key` 也可使用。未设置验证时，适用本机默认的开放策略（[验证](/docs/guides/auth-and-keys)）。
 
 ## 端点
 
@@ -41,49 +41,49 @@ const client = tavily({apiKey: 'tvly-local', apiBaseURL: 'http://localhost:8000/
 | GET | `/research/{request_id}`、`/usage`、`/providers` |
 | POST | `/mcp`（原生无状态 MCP 端点） |
 
-错误使用 `detail.error`，依情况为 400、401、403、404、413、429 与 500，字段验证则为 422。Tavily 仅限云端的额度与方案状态 432 与 433 不会被伪造。回应带有请求 ID、经过秒数与仅供参考的本机额度，数组字段顺序稳定。search、extract、crawl、map 与 research 轮询只有在 `include_usage=true` 时才回传 `usage`；内部记帐无论如何都会继续。
+错误使用 `detail.error`，依情况为 400、401、403、404、413、429 与 500，字段验证则为 422。Tavily 仅限云端的额度与方案状态 432 与 433 不会被伪造。响应带有请求 ID、耗时秒数与仅供参考的本机额度，数组字段顺序稳定。search、extract、crawl、map 与 research 轮询只有在 `include_usage=true` 时才返回 `usage`；内部记账无论如何都会继续。
 
 ## 检索与延迟
 
-SERP 是一个提供者。内置的 metasearch 会平行运行直接的 DDG HTML 与 Wikipedia，加上已设置的需密钥来源，并以 reciprocal-rank fusion 去除重复的候选项。
+SERP 是一个提供商。内置的 metasearch 会并行运行直接的 DDG HTML 与 Wikipedia，加上已设置的需要密钥的来源，并以 reciprocal-rank fusion 去除重复的候选项。
 
 <Callout type="warn">
-查找文本会离开这台机器，送往这些提供者。DDG 是尽力而为，可能封锁自动化。SearXNG 是选用，需要明确指定实例；不是必要，也不被推荐。
+查询文本会离开这台机器，送往这些提供商。DDG 是尽力而为，可能拦截自动化访问。SearXNG 是可选的，需要明确指定实例，既非必需，也不推荐。
 </Callout>
 
-`yunshu config` 会显示最近一次不含查找内容的提供者健康快照；`GET /tavily/providers` 显示即时健康状态。连续失败三次会触发有上限的指数退避，半开探测会让恢复的来源回归。验证码与速率限制会立即退避。
+`yunshu config` 会显示最近一次不含查询内容的提供商健康快照；`GET /tavily/providers` 显示即时健康状态。连续失败三次会触发有上限的指数退避，半开探测会让恢复的来源重新加入。验证码与速率限制会立即退避。
 
-| 提供者 | 启用方式 | 备注 |
+| 提供商 | 启用方式 | 备注 |
 |---|---|---|
-| Mwmbl | `YUNSHU_WEB_MWMBL=1`，或 `provider=mwmbl` | 数据集为 CC-BY-NC-SA 4.0：请保留署名并遵守非商业与相同方式分享条款（[条款](https://api.mwmbl.org/static/terms-and-conditions/)）；不会悄悄启用；没有拷贝任何 Mwmbl 代码 |
-| Mojeek | `YUNSHU_MOJEEK_API_KEY` | 加入自动 metasearch；转送 safe-search、国家与语言加权及日期范围；最多请求十笔候选（[API](https://www.mojeek.com/support/api/search/)） |
-| Marginalia | `YUNSHU_MARGINALIA_API_KEY` | 转送 safe-search 与结果数量；没有隐含的 `public` 密钥（明确设置才会使用共用的开发配额）；非商业密钥提供 CC-BY-NC-SA 4.0 数据（[API 与条款](https://about.marginalia-search.com/article/api/)） |
+| Mwmbl | `YUNSHU_WEB_MWMBL=1`，或 `provider=mwmbl` | 数据集为 CC-BY-NC-SA 4.0：请保留署名并遵守非商业与相同方式共享条款（[条款](https://api.mwmbl.org/static/terms-and-conditions/)）；不会悄悄启用；没有复制任何 Mwmbl 代码 |
+| Mojeek | `YUNSHU_MOJEEK_API_KEY` | 加入自动 metasearch；转发 safe-search、国家与语言加权及日期范围；最多请求十条候选（[API](https://www.mojeek.com/support/api/search/)） |
+| Marginalia | `YUNSHU_MARGINALIA_API_KEY` | 转发 safe-search 与结果数量；没有隐含的 `public` 密钥（明确设置才会使用共享的开发配额）；非商业密钥提供 CC-BY-NC-SA 4.0 数据（[API 与条款](https://about.marginalia-search.com/article/api/)） |
 
-可用 `YUNSHU_WEB_SEARCH_PROVIDER` 明确选择提供者（`mojeek`、`marginalia`、`mwmbl` 等；默认 `auto`）。Common Crawl 的 URL 索引与 Wikipedia 倾印需要语料导入与本机全文索引；它们不是关键字 SERP 端点，也绝不会自动下载或启用。
+可用 `YUNSHU_WEB_SEARCH_PROVIDER` 明确选择提供商（`mojeek`、`marginalia`、`mwmbl` 等；默认 `auto`）。Common Crawl 的 URL 索引与 Wikipedia 转储需要语料导入与本机全文索引；它们不是关键字 SERP 端点，也绝不会自动下载或启用。
 
-一般搜索使用 BM25、提供者先验、精确片段与去重，不调用任何 LLM。每段摘录最长 500 个字符，摘录之间以 ` [...] ` 连接。搜索深度决定抓取广度与总检索预算：
+普通搜索使用 BM25、提供商先验、精确片段与去重，不调用任何 LLM。每段摘录最长 500 个字符，摘录之间以 ` [...] ` 连接。搜索深度决定抓取广度与总检索预算：
 
 | `search_depth` | 预算 | 页数 |
 |---|---|---|
-| `ultra-fast` | 0.7 秒 | 仅提供者文本 |
+| `ultra-fast` | 0.7 秒 | 仅提供商文本 |
 | `fast` | 1 秒 | 3 |
 | `basic` | 1.3 秒 | 6 |
 | `advanced` | 3 秒 | 20 |
 
-这些是取消预算，不是保证的端到端 p50：DNS、礼貌间隔、提供者可用性与所要求的生成都会影响实际延迟。`Server-Timing` 标头会报告 SERP、抓取、IR 与生成的耗时。错过该深度抓取时窗的页面不会被取消；它们会在自己的逾时内完成并暖化页面缓存。
+这些是取消预算，不是保证的端到端 p50：DNS、礼貌间隔、提供商可用性与所要求的生成都会影响实际延迟。`Server-Timing` 标头会报告 SERP、抓取、IR 与生成的耗时。错过该深度抓取时间窗口的页面不会被取消；它们会在自己的超时内完成并预热页面缓存。
 
-时间、主题、国家、语言与 safe-search 会下推给支持的提供者；日期与严格语言也会在本机再检查。Finance 是尽力而为的新闻垂直领域，不是金融索引。除非要求严格过滤，否则未知日期会保留。精确的引号词组需要成功抓取到页面。范式分数是本机相关性，并未校准到 Tavily 专有的几率。
+时间、主题、国家、语言与 safe-search 会下推给支持的提供商；日期与严格语言也会在本机再检查。Finance 是尽力而为的新闻垂直领域，不是金融索引。除非要求严格过滤，否则未知日期会保留。精确的引号词组需要成功抓取到页面。规范化分数是本机相关性，并没有校准到 Tavily 专有的概率。
 
-Extract 处理静态 HTML、文本、JSON 与有大小上限的 PDF 内容，保留可用的 markdown、代码与表格，并隔离失败。Crawl 与 map 使用 BFS，搭配有逾时的正则表达式选择器、深度、广度与全域上限、robots 规则与主机礼貌间隔。Map 可以列出外部链接，但绝不递归跟随。`instructions` 使用低成本的字词相关性。
+Extract 处理静态 HTML、文本、JSON 与有大小上限的 PDF 内容，保留可用的 markdown、代码与表格，并隔离失败。Crawl 与 map 使用 BFS，搭配有超时的正则表达式选择器、深度、广度与全局上限、robots 规则与主机礼貌间隔。Map 可以列出外部链接，但绝不递归跟随。`instructions` 使用低成本的词语相关性。
 
 ### JavaScript 渲染
 
-高端的 extract、crawl 与 map 可以用 `YUNSHU_WEB_RENDER=1`（默认关闭）渲染简短的 JavaScript 外壳页面。
+高级的 extract、crawl 与 map 可以用 `YUNSHU_WEB_RENDER=1`（默认关闭）渲染简短的 JavaScript 外壳页面。
 
 <Steps>
 <Step>
 
-安装选用 extra：`uv sync --extra web-render`。
+安装可选 extra：`uv sync --extra web-render`。
 
 </Step>
 <Step>
@@ -98,23 +98,23 @@ Extract 处理静态 HTML、文本、JSON 与有大小上限的 PDF 内容，保
 </Step>
 </Steps>
 
-渲染一次只使用一个无头 Chromium，并且只通过一般的已检查、已锁定（pinned）抓取器重播同源的 GET 文档、脚本与 fetch。Service worker、WebSocket、下载、跨来源资源与被重新导向的资源内容都会被封锁。robots 规则仍适用于 crawl 与 map，且请求逾时涵盖静态抓取加上渲染。浏览器缺失或逾时时会保留静态结果。不支持依赖 CDN 的应用程序，也不支持绕过受保护网站。
+渲染一次只使用一个无头 Chromium，并且只通过普通的已检查、已锁定（pinned）抓取器重放同源的 GET 文档、脚本与 fetch。Service worker、WebSocket、下载、跨来源资源与被重定向的资源内容都会被拦截。robots 规则仍适用于 crawl 与 map，且请求超时覆盖静态抓取加上渲染。浏览器缺失或超时时会保留静态结果。不支持依赖 CDN 的应用程序，也不支持绕过受保护网站。
 
 ## 答案、research 与 MCP
 
 - `include_answer` 只在被要求时才调用所服务的聊天模型。
-- Research 用所服务的 LLM 规划查找，搜索并萃取证据，再附引用综合成文。输出 schema 使用聊天的受限 JSON 解码（[结构化输出](/docs/guides/structured-output)），并在事后验证。`mini` 与 `pro` 的差别在查找数量上限；`pro` 在单一 GPU 上串行运行，并不是 Tavily 专有的多代理实作。Research 维持选用。
-- 异步任务支持轮询与 SSE，包含 keepalive、工具框、内容、来源与完成事件。登录表（100 个任务）、回馈（1000）与日志（10000）在进程内有上限，重新启动即遗失。
+- Research 用所服务的 LLM 规划查询，搜索并提取证据，再附引用综合成文。输出 schema 使用聊天的受限 JSON 解码（[结构化输出](/docs/guides/structured-output)），并在事后验证。`mini` 与 `pro` 的差别在查询数量上限；`pro` 在单一 GPU 上串行运行，并不是 Tavily 专有的多代理实现。Research 维持可选。
+- 异步任务支持轮询与 SSE，包含 keepalive、工具帧、内容、来源与完成事件。注册表（100 个任务）、反馈（1000）与日志（10000）在进程内有上限，重新启动即丢失。
 - 本机额度只是估计工作量，不会计费，也不会强制运行云端方案。
 - 文件支持 base64 的 `txt`、`md` 与 `json`，合计上限 80000 字。参考书目支持编号、APA、MLA 与 Chicago 格式。
-- 图片中继数据来自抓取到的页面。`include_images` 另外会查找已设置的 SearXNG 图片类别或 Brave 的图片端点，套用来源网域过滤并去除重复 URL；图片垂直领域失败不会让搜索失败，DDG 与 Wikipedia 没有图片后备。所要求的图片描述使用常驻的本机 VLM（最多三张图，缓存 15 分钟）；不会另外加载第二个模型。
+- 图片元数据来自抓取到的页面。`include_images` 另外会查询已设置的 SearXNG 图片类别或 Brave 的图片端点，应用来源域名过滤并去除重复 URL；图片垂直领域失败不会让搜索失败，DDG 与 Wikipedia 没有图片后备。所要求的图片描述使用常驻的本机 VLM（最多三张图，缓存 15 分钟）；不会另外加载第二个模型。
 
 <Callout type="warn">
-上游 `tavily-mcp` 0.2.22 写死 `api.tavily.com`，没有 base URL 设置，所以 REST 兼容性无法让它转向。请使用 Yunshu 的原生 MCP 端点 `/tavily/mcp`，它以底线与连字号两种名称提供 Tavily 工具。
+上游 `tavily-mcp` 0.2.22 写死 `api.tavily.com`，没有 base URL 设置，所以 REST 兼容性无法让它转向。请使用 Yunshu 的原生 MCP 端点 `/tavily/mcp`，它以下划线与连字号两种名称提供 Tavily 工具。
 </Callout>
 
 ## 如何验证
 
-- `scripts/research/tavily_sdk_parity.py` 与 `scripts/research/tavily_sdk_parity.mjs` 以注入传输的方式，让真正的 SDK 套件对真正的路由器与服务运行，不需要监听的服务器，也不连网。请把 SDK 套件装在独立环境，不要装进服务用的 venv。
-- `scripts/research/tavily_stage_latency.py` 量测各阶段延迟（`Server-Timing`：serp、fetch、ir、generate）；`--live` 使用真正的内置提供者与页面，且只用 CPU。
-- `scripts/research/websearch_quality_gate.py` 以明确的审查标注评估冻结的成对重播（`--snapshot`、`--pairs`、`--reviews`、`--out`），证据不完整时以 1 结束。它要求同一设备上有 200 个不重复的配对（40 新闻、40 文档、40 代码、10 对抗性），至少 10% 的配对审查须有人工检查，且等价性最多只能有一个净正确性差异。它不会核准改变品质的 research 默认值，也不能证明延迟。
+- `scripts/research/tavily_sdk_parity.py` 与 `scripts/research/tavily_sdk_parity.mjs` 以注入传输的方式，让真正的 SDK 包对真正的路由器与服务运行，不需要监听的服务器，也不连网。请把 SDK 包装在独立环境，不要装进服务用的 venv。
+- `scripts/research/tavily_stage_latency.py` 测量各阶段延迟（`Server-Timing`：serp、fetch、ir、generate）；`--live` 使用真正的内置提供商与页面，且只用 CPU。
+- `scripts/research/websearch_quality_gate.py` 以明确的审查标注评估冻结的成对重放（`--snapshot`、`--pairs`、`--reviews`、`--out`），证据不完整时以 1 退出。它要求同一设备上有至少 200 个不重复的配对，覆盖至少 40 条新闻、40 条文档、40 条代码与 10 条对抗性参考，至少 10% 的配对审查须有人工检查，且等价性最多只能有一个净正确性差异。它不会核准改变品质的 research 默认值，也不能证明延迟。

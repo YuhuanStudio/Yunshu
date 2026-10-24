@@ -3,7 +3,7 @@ title: 傳輸方式
 description: Yunshu 提供的 HTTP、SSE、WebSocket、Realtime、WebRTC 與 Unix socket 傳輸方式、多工文字 WebSocket 協定，以及未提供的項目。
 ---
 
-Yunshu 以多種傳輸方式提供同一個應用程式。每一種都派送到相同的處理器，所以驗證、中介層、請求 id、前綴快取與取消的行為完全一致。
+Yunshu 以多種傳輸方式提供同一個應用程式。每一種都派送到相同的處理器，所以驗證、中介軟體、請求 id、前綴快取與取消的行為完全一致。
 
 | 傳輸方式 | 端點 | 狀態 |
 |---|---|---|
@@ -21,7 +21,7 @@ Yunshu 以多種傳輸方式提供同一個應用程式。每一種都派送到�
 
 **Anthropic Messages。** SSE（`stream: true`）是唯一的官方串流傳輸方式；沒有 WebSocket 模式可以對齊。Messages 可透過 Yunshu 自己的 `/v1/stream`（`api: "messages"`）使用。
 
-**OpenAI Realtime。** WebSocket 位於 `/v1/realtime?model=M`，使用 `Authorization: Bearer`（瀏覽器使用子協定 `realtime` 與 `openai-insecure-api-key.<key>`），為 JSON 文字框。GA session 有 `type: "realtime"`、`output_modalities`、`audio.input` 與 `audio.output`、`instructions`、`tools` 與 `tool_choice`。音訊格式為 `audio/pcm`（24 kHz、單聲道、16 位元）、`audio/pcmu` 與 `audio/pcma`；輪次偵測為 `server_vad`、`semantic_vad` 或 null。WebRTC 則是把 SDP offer 送到 `/v1/realtime/calls`，並在 `oai-events` 資料通道上交換相同的事件。
+**OpenAI Realtime。** WebSocket 位於 `/v1/realtime?model=M`，使用 `Authorization: Bearer`（瀏覽器使用子協定 `realtime` 與 `openai-insecure-api-key.<key>`），為 JSON 文字框。GA session 有 `type: "realtime"`、`output_modalities`、`audio.input` 與 `audio.output`、`instructions`、`tools` 與 `tool_choice`。音訊格式為 `audio/pcm`（24 kHz、單聲道、16 位元）、`audio/pcmu` 與 `audio/pcma`；回合偵測為 `server_vad`、`semantic_vad` 或 null。WebRTC 則是把 SDP offer 送到 `/v1/realtime/calls`，並在 `oai-events` 資料通道上交換相同的事件。
 
 ## 文字 WebSocket：WS /v1/stream
 
@@ -60,7 +60,7 @@ Yunshu 以多種傳輸方式提供同一個應用程式。每一種都派送到�
 |---|---|
 | `{"type":"request","id":"a","api":"chat.completions\|completions\|responses\|messages","body":{...},"stream_id":"s"}` | 開始請求（`stream_id` 為選用） |
 | `{"type":"cancel","id":"a"}` | 中止；生成停止（與 SSE 用戶端斷線相同的路徑）；以 `done(cancelled)` 結束 |
-| `{"type":"stop","id":"a"}` | 依需求停止；以 `done(stopped)` 結束 |
+| `{"type":"stop","id":"a"}` | 依需要停止；以 `done(stopped)` 結束 |
 | `{"type":"update","id":"a","max_tokens":N}` | 將串流 delta 總數（約每個 token 一個）限制為 N；以 `done(max_tokens)` 結束 |
 | `{"type":"ping","t":..}` 與 `{"type":"pong"}` | 雙向存活檢查 |
 
@@ -69,7 +69,7 @@ Yunshu 以多種傳輸方式提供同一個應用程式。每一種都派送到�
 | 訊息 | 意義 |
 |---|---|
 | `{"type":"session.created","protocol":"yunshu.stream","apis":[...],"limits":{...}}` | 第一則訊息 |
-| `{"type":"event","id":"a","event":"<SSE 事件名稱或 null>","data":{...}}` | 一個 SSE 事件。chat 的 `data` 是 `chat.completion.chunk`；responses 與 messages 則是具名事件 |
+| `{"type":"event","id":"a","event":"<SSE event name or null>","data":{...}}` | 一個 SSE 事件。chat 的 `data` 是 `chat.completion.chunk`；responses 與 messages 則是具名事件 |
 | `{"type":"done","id":"a","reason":"completed\|cancelled\|stopped\|max_tokens\|error","stats":{"ttft_ms","duration_ms","events","deltas"}}` | 每個請求的終止訊息；同時帶有 `request_id` |
 | `{"type":"error","id"?,"status":404,"error":{...}}` | 請求層級（帶 `id`）或連線層級的錯誤；上游 HTTP 錯誤保留其狀態與本文 |
 | `{"type":"ping","t":...}` | 每 `YUNSHU_WS_PING_INTERVAL` 秒一次的心跳 |
@@ -114,7 +114,7 @@ async with YunshuStream("ws://127.0.0.1:8000/v1/stream", token=None) as conn:
 與 api.openai.com 的差異：
 
 - `semantic_vad` 以 `server_vad` 提供；`eagerness` 會被忽略。
-- `turn_detection.idle_timeout_ms`：完成一次回應後（再加上其音訊的播放時間），在這段時間內使用者沒有說話，伺服器會送出 `input_audio_buffer.timeout_triggered`，把空緩衝區當作一次無聲的使用者輪次提交並回應。
+- `turn_detection.idle_timeout_ms`：完成一次回應後（再加上其音訊的播放時間），在這段時間內使用者沒有說話，伺服器會送出 `input_audio_buffer.timeout_triggered`，把空緩衝區當作一次無聲的使用者回合提交並回應。
 - `audio.input.noise_reduction`（`near_field` 或 `far_field`）會在 VAD 與 ASR 之前套用因果式 CPU 高通濾波與噪音底限擴展器。這是輕量濾波，不是神經網路降噪。
 - `rate_limits.updated` 跟在 `response.created` 之後。本機伺服器沒有配額：`requests` 回報 `YUNSHU_RATE_LIMIT_RPM`（為 0 時是 2^31-1，代表無限制），`tokens` 回報模型的 context window。
 - `output_audio_buffer.started`、`.stopped` 與 `.cleared`（僅 GA 方言）標示一次回應音訊的範圍；用戶端事件 `output_audio_buffer.clear` 會取消正在說話的回應。
@@ -145,7 +145,7 @@ async with YunshuStream("ws://127.0.0.1:8000/v1/stream", token=None) as conn:
 
 ## Unix domain socket
 
-`yunshu serve --uds /path/y.sock`（設定 `YUNSHU_UDS`）會在 socket 上提供相同的應用程式，而不是 TCP。`--host` 與 `--port` 會被忽略，殘留的 socket 檔會被移除。檔案擁有者專屬權限就是存取控制，因此這是最安全的本機傳輸方式：沒有連接埠，也沒有網路暴露。
+`yunshu serve --uds /path/y.sock`（設定 `YUNSHU_UDS`）會在 socket 上提供相同的應用程式，而不是 TCP。`--host` 與 `--port` 會被忽略，殘留的 socket 檔會被移除。以檔案擁有者專屬的權限作為存取控制，因此這是最安全的本機傳輸方式：沒有連接埠，也沒有網路暴露。
 
 <Tabs items={["curl", "Python"]}>
 <Tab value="curl">
@@ -178,5 +178,5 @@ client = openai.OpenAI(
 
 ## 如何驗證
 
-- `scripts/dev/realtime_conformance.py` 以官方 SDK 檢查 Realtime（使用假引擎的單元測試）；`scripts/dev/transport_smoke.py` 是真實模型的冒煙測試。
+- `scripts/dev/realtime_conformance.py` 以官方 SDK 檢查 Realtime（使用假引擎的單元測試）；`scripts/dev/transport_smoke.py` 是真實模型的煙霧測試。
 - WebRTC 信令、音訊分框、佇列上限與清理由 `tests/unit/test_respfeat.py` 涵蓋。

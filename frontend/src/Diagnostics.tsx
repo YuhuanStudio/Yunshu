@@ -1,3 +1,4 @@
+import { isCalm } from "./outage-view";
 import { memoryPairText } from "./byte-format";
 import { useEffect, useState } from "react";
 import {
@@ -237,7 +238,7 @@ export function healthChecks(
   return rows;
 }
 export type Verdict = {
-  level: "ok" | "attention" | "abnormal";
+  level: "ok" | "attention" | "abnormal" | "waiting";
   /** The checks behind a non-healthy verdict, worst first. */
   reasons: Health[];
 };
@@ -353,7 +354,16 @@ export function Diagnostics({
     engineCounters = results.find((r) => r.key === "engine")?.data,
     request = results.find((r) => r.key === "requests")?.data;
   const checks = healthChecks(status, system, systemState, systemReason);
-  const verdict = healthVerdict(checks, systemState);
+  // A routine restart, switch or measurement pause is waiting, never a fault.
+  const waiting = !status && isCalm(engine.outage.kind);
+  const verdict: Verdict = waiting
+    ? { level: "waiting", reasons: [] }
+    : healthVerdict(checks, systemState);
+  const shownChecks = waiting
+    ? checks.map((c) =>
+        c.status === "offline" ? { ...c, status: "away" as const } : c,
+      )
+    : checks;
   async function saveBundle() {
     setBundle({ state: "busy" });
     try {
@@ -528,7 +538,7 @@ export function Diagnostics({
               status={
                 verdict.level === "ok"
                   ? "online"
-                  : verdict.level === "attention"
+                  : verdict.level === "attention" || verdict.level === "waiting"
                     ? "away"
                     : "offline"
               }
@@ -539,9 +549,11 @@ export function Diagnostics({
                 {t(
                   verdict.level === "ok"
                     ? "diagnostics.verdict.ok"
-                    : verdict.level === "attention"
-                      ? "diagnostics.verdict.attention"
-                      : "diagnostics.verdict.abnormal",
+                    : verdict.level === "waiting"
+                      ? "diagnostics.verdict.waiting"
+                      : verdict.level === "attention"
+                        ? "diagnostics.verdict.attention"
+                        : "diagnostics.verdict.abnormal",
                 )}
               </span>
             </StatusIndicator>
@@ -565,7 +577,7 @@ export function Diagnostics({
         }
       >
         <ul className="-my-2">
-          {checks.map((check) => (
+          {shownChecks.map((check) => (
             <li key={check.key} className="py-3">
               <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1">
                 <div className="min-w-0">

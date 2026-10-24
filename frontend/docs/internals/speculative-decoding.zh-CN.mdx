@@ -1,9 +1,9 @@
 ---
 title: 推测解码
-description: 云舒如何以 DFlash2 或 MTP head 每步起草并验证多个 token、为什么开关推测时 greedy 输出相同，以及哪些模型与请求会参与。
+description: 云枢如何以 DFlash2 或 MTP head 每步起草并验证多个 token、为什么开关推测时 greedy 输出相同，以及哪些模型与请求会参与。
 ---
 
-推测解码先以低成本起草若干 token，再用目标模型的一次前向传递验证。云舒用它让解码更快，且不改变输出。
+推测解码先以低成本起草若干 token，再用目标模型的一次前向传播验证。云枢用它让解码更快，且不改变输出。
 
 ## 它做什么
 
@@ -14,14 +14,14 @@ description: 云舒如何以 DFlash2 或 MTP head 每步起草并验证多个 to
 3. 否则，若 checkpoint 自带 **MTP head** 就用它（`YUNSHU_MTP`）。
 4. 否则，使用普通解码。
 
-块大小：DFlash 使用 drafter 训练时的块，MTP 为 6，除非设置了 `YUNSHU_MTP_BLOCK_SIZE`。起草在**单请求通道**中进行：runner 接纳请求、预填，然后执行起草与验证回合。当共享批次只剩一个合格请求时，`VLMBatchRunner._maybe_promote` 会在步骤边界把该行移到通道上；通道的第一回合是单行的普通验证，用来捕获 drafter 需要的 hidden state，因此升级是无损的。
+块大小：DFlash 使用 drafter 训练时的块，MTP 为 6，除非设置了 `YUNSHU_MTP_BLOCK_SIZE`。起草在**单请求通道**中进行：runner 接纳请求、预填，然后执行起草与验证回合。当共享批次只剩一个合格请求时，`VLMBatchRunner._maybe_promote` 会在步骤边界把该行移到通道上；通道的第一回合是单行的普通验证，用来捕获 drafter 需要的 hidden state，因此移入通道是无损的。
 
 其他起草来源：
 
-- **提示复制回合。** 回合可以提议：在请求的提示加已生成文本中，当前尾部最长的先前出现处之后的接续内容。由同一个验证步骤检查。`YUNSHU_SPEC_COPY_ROWS` 设置验证行数（默认 32；`0` 关闭）。
+- **提示复制回合。** 回合可以直接提议后续内容：在请求的提示与已生成文本中，找出当前尾部最长的先前出现处，提议其后的内容。同样交由验证步骤检查。`YUNSHU_SPEC_COPY_ROWS` 设置验证行数（默认 32；`0` 关闭）。
 - **草稿树。** `YUNSHU_SPEC_TREE`（`auto`）对符合条件、使用 DFlash2 drafter 的 greedy 请求使用草稿树验证器。
 - **纯文本 `mlx-lm` 模型。** 对 greedy 请求的无损 n-gram 或 suffix 推测（`YUNSHU_NGRAM_DEFAULT`，默认关闭；请求也可用 `spec_decode` 要求；`YUNSHU_SPEC_PROPOSER` 为 `ngram` 或 `suffix`），以及 Gemma 4 文本模型的 assistant drafter 目录（`YUNSHU_GEMMA4_ASSISTANT`）。
-- **Jump-forward** 是针对受限输出的另一种机制（文法强制的 token 无需前向传递即可输出）。见[受限解码](/docs/internals/constrained-decoding)。
+- **Jump-forward** 是针对受限输出的另一种机制（文法强制的 token 无需前向传播即可输出）。见[受限解码](/docs/internals/constrained-decoding)。
 
 ```mermaid
 flowchart TD
@@ -42,14 +42,14 @@ flowchart TD
 
 ## 为什么这样设计
 
-推测解码只有在用户看不出差异时才值得提供。因此云舒让验证步骤的算术与普通解码完全相同，而不是接受微小的数值差异。草稿一律由目标模型验证，所以错误的草稿只浪费时间，不影响正确性。
+推测解码只有在用户看不出差异时才值得提供。因此云枢让验证步骤的算术与普通解码完全相同，而不是接受微小的数值差异。草稿一律由目标模型验证，所以错误的草稿只浪费时间，不影响正确性。
 
 ## 保证
 
-- **推测开等于推测关。** 开启推测解码时，greedy 输出与同一引擎关闭时 token 完全一致。解码（一行）与验证（若干行）时，目标模型的每个 matmul 都走同一个 kernel，其每行结果与共用该次调用的行数无关，且注意力与 GatedDeltaNet 的验证路径与单行解码比特精确一致。这些 batch-invariant kernel 是运行时编译的 Metal kernel，位于 `python/yunshu_engine/kernels/`。关闭起草的推测系列模型仍使用通道的普通解码算术，所以此情况下一致性也成立。
+- **推测开等于推测关。** 开启推测解码时，greedy 输出与同一引擎关闭时 token 完全一致。解码（一行）与验证（若干行）时，目标模型的每个 matmul 都走同一个 kernel，其每行结果与共用该次调用的行数无关，且注意力与 GatedDeltaNet 的验证路径与单行解码位精确相符。这些 batch-invariant kernel 是运行时编译的 Metal kernel，位于 `python/yunshu_engine/kernels/`。关闭起草的推测系列模型仍使用通道的普通解码算术，所以这种情况下一致性同样成立。
 - **采样请求**使用以位置为 key 的噪声，因此结果与哪些 token 被起草无关。
-- **Draft 模型使用原生 kernel**；只有目标模块会被改接，预填块保持自己的 kernel。
-- **不声明：** 与原生 MLX 单行解码比特一致。不同的归约顺序会让 logits 有舍入级别的差异，这种漂移是可接受的。硬性门槛是同一个云舒版本内的一致性。
+- **Draft 模型沿用原版 kernel**；只有目标模块会被改接，预填块保持自己的 kernel。
+- **不声明：** 与原生 MLX 单行解码逐位相同。不同的归约顺序会让 logits 有舍入级别的差异，这种漂移是可接受的。硬性门槛是同一个云枢版本内的一致性。
 - **Drafter 量化在效果上无损。** `YUNSHU_DRAFT_BITS`（默认 8）只改变 drafter 的权重；草稿会被验证，所以任何值的输出 token 都相同。
 
 ## 设置
@@ -65,14 +65,16 @@ flowchart TD
 | `YUNSHU_NGRAM_DEFAULT` | 关闭 | 文本模型：对 greedy 请求使用 n-gram 推测 |
 | `YUNSHU_SPEC_PROPOSER` | `ngram` | 文本模型的 `ngram` 或 `suffix` |
 | `YUNSHU_GEMMA4_ASSISTANT` | 未设置 | Gemma 4 文本模型的 assistant drafter 目录 |
+| `YUNSHU_SPEC_UNVERIFIED`、`YUNSHU_DRAFT_MODEL` | 关闭、未设置 | 稳定的用户选项，非无损：greedy 文本请求使用外部 `mlx-lm` draft 模型；见[可能改变输出的选项](/docs/guides/options) |
 | `YUNSHU_ROUND_DRIVER` | 关闭 | 实验性的逐行 round driver；见 [Round driver](/docs/developers/round-driver) |
 
 ## 限制
 
+- 无损保证不涵盖搭配外部 draft 模型的 `YUNSHU_SPEC_UNVERIFIED`：其输出可能与普通解码不同。见[可能改变输出的选项](/docs/guides/options)。
 - 在 VLM runner 上仅限 Qwen3.5 系列；其他 VLM 系列不起草直接解码。
 - 通道一次只服务一个请求。并发请求共享批次，不一起起草。
 - Apple Paravirtual Metal 主机使用原生 runner，没有推测。
-- VLM 会拒绝 LoRA adapter 与自定义 logits processor，而不安全于起草的 processor 会让请求留在通道之外。
+- VLM 会拒绝 LoRA adapter 与自定义 logits processor，而不适合起草（not draft-safe）的 processor 会让请求无法进入该通道。
 
 ## 如何验证
 

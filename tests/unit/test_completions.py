@@ -14,16 +14,16 @@ class TestCompletionRequest:
         assert req.model == "test"
         assert req.prompt == "hello"
         assert req.max_tokens == 128
-        assert req.temperature == 0.7
-        assert req.top_p == 1.0
+        assert req.temperature is None
+        assert req.top_p is None
         assert req.stream is False
         assert req.stop is None
         assert req.echo is False
         assert req.logprobs == 0
         assert req.seed is None
-        assert req.repetition_penalty == 1.0
-        assert req.frequency_penalty == 0.0
-        assert req.presence_penalty == 0.0
+        assert req.repetition_penalty is None
+        assert req.frequency_penalty is None
+        assert req.presence_penalty is None
         assert req.logit_bias is None
 
     def test_with_all_params(self):

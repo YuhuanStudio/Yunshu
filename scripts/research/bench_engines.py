@@ -67,6 +67,9 @@ SCRUB_PREFIXES = (
     "MTPLX_",
     "OMLX_",
     "TENSORFOLD_",
+    "TF_",
+    "KAPITSA_",
+    "NI_",
     "SPLASH_",
 )
 
@@ -635,6 +638,8 @@ def build_launch(
                 DRAFTER,
                 "--no-update-check",
                 "--no-thinking",
+                "--parallel",
+                str(parallel),
                 "--context",
                 str(int(ctx_tokens)),
             ],
@@ -645,7 +650,7 @@ def build_launch(
         )
     if engine in ("llamacpp-mtp", "llamacpp-dflash"):
         dflash = engine == "llamacpp-dflash"
-        ctx = int(ctx_tokens)
+        ctx = int(ctx_tokens) * parallel
         return Launch(
             [
                 LLAMA_BIN_LATEST,

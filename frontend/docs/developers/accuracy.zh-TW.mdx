@@ -3,23 +3,23 @@ title: 準確度對齊
 description: Yunshu 如何以三個層級（logit 分歧、貪婪分歧、成對任務評測）證明其服務路徑在同一檢查點上算出與原生 MLX 和 mlx-vlm 相同的結果。
 ---
 
-一次 300 題的基準測試帶有約 13 題的 95% 雜訊，因此看不出細微的數值漂移。Yunshu 因此用三個層級檢查準確度，由最便宜、最敏感的開始。本頁寫給修改核心（kernel）、快取版面配置或排程器的維護者。日常的候選檢查見[驗證](/docs/developers/verification)；各層級如何作為發版關卡見[發版關卡](/docs/developers/release-gate)。
+一次 300 題的基準測試帶有約 13 題的 95% 雜訊，因此看不出細微的數值漂移。Yunshu 因此用三個層級檢查準確度，由最便宜、最敏感的開始。本頁寫給修改 kernel、快取版面配置或排程器的維護者。日常的候選檢查見[驗證](/docs/developers/verification)；各層級如何作為發版關卡見[發版關卡](/docs/developers/release-gate)。
 
 ## 它做什麼
 
 | 層級 | 比較對象 | 腳本 |
 |---|---|---|
 | 1 | 固定文字上的下一個 token 分布（teacher forcing）：KL 散度、top-1 一致率、困惑度（perplexity） | `scripts/research/accuracy/kld.py` |
-| 2 | 50 個固定提示詞的貪婪續寫，最多 256 個 token：完全比對與第一個不同位置 | `scripts/research/accuracy/greedy_div.py` |
-| 3 | 經由使用者實際使用的 HTTP 端點做成對的下游評測：GSM8K、IFEval、MMLU-Pro、BFCL（工具呼叫）、needle 檢索 | `scripts/research/accuracy/paired_eval.py` |
+| 2 | 50 個固定提示詞的貪婪續寫，最多 256 個 token：完全相符與第一個不同位置 | `scripts/research/accuracy/greedy_div.py` |
+| 3 | 透過使用者實際使用的 HTTP 端點，做成對的下游評測：GSM8K、IFEval、MMLU-Pro、BFCL（工具呼叫）、needle 檢索 | `scripts/research/accuracy/paired_eval.py` |
 
-基準永遠是同一檢查點上的原生 `mlx-vlm`，且不匯入任何 Yunshu 核心（沒有 batch-invariant、ragged KV、lane 或 oMLX 核心）；執行時會斷言這一點。候選則是 `VLMEngine._build_batch_runner` 安裝的內容。
+基準永遠是同一檢查點上的原生 `mlx-vlm`，且不匯入任何 Yunshu 的 kernel（沒有 batch-invariant、ragged KV、lane 或 oMLX kernel）；執行時會斷言這一點。候選則是 `VLMEngine._build_batch_runner` 安裝的內容。
 
 ### 層級 1：teacher forcing 的 logit 對齊
 
 這是 llama.cpp `perplexity --kl-divergence` 與 vLLM logprob 接近度測試背後的方法。
 
-- **語料。** `common.build_corpus` 建立固定的 token 語料（散文、程式碼、中文與數學的 2048 token 視窗，另有 8K 與 32K 的長文件）。只私下保存 token id。
+- **語料。** `common.build_corpus` 建立固定的 token 語料（散文、程式碼、中文與數學的 2048 token 視窗，另有 8K 與 32K 的長文件）。token id 只私下保存。
 - **基準檔。** 每個位置的 top-64 對數機率，加上固定隨機子集位置的完整詞表 log-softmax，因此之後的比較不必重跑基準。子集之外的位置使用 top-64 加一個合併的尾部桶，這是真實分歧的下界。
 - **部分**（`kld.py` 中的 `PARTS` 表）：`prefill`、`dec1`（每步一個 token，即推測 lane）、`dec6`（6 個 token 的驗證區塊）、`decb` 與 `decb8`（在 ragged bf16 或 int8 KV 快取上的雙列共用批次）、`stockb2`（原生雙列批次，作為雜訊底線）。
 - **指標。** KL 散度（基準對候選）的平均、中位數、第 99 百分位與最大值；top-1 一致率；top-1 機率的平均變化；兩者的困惑度，整體以及依語料類型與位置區間分組。
@@ -30,12 +30,12 @@ description: Yunshu 如何以三個層級（logit 分歧、貪婪分歧、成對
 
 ### 層級 3：成對下游評測
 
-`paired_eval.py` 把相同的題目經由同一個聊天端點，貪婪地送給基準伺服器（原生 `mlx_vlm.server`）與 Yunshu。題目以 id 配對；只有兩邊都沒有傳輸錯誤而完成的題目才進入配對。每個基準它會回報成對差異與 95% 區間、不一致計數 `b`（基準對、Yunshu 錯）與 `c`（相反），以及精確的 McNemar p 值（`mcnemar_exact`、`loss_p`）。不使用獨立的準確率區間，因為它們比成對區間寬兩到三倍。失敗的嘗試、截斷與完成長度都會回報，不會隱藏。
+`paired_eval.py` 把相同的題目經由同一個聊天端點，以貪婪解碼送給基準伺服器（原生 `mlx_vlm.server`）與 Yunshu。題目以 id 配對；只有兩邊都沒有傳輸錯誤而完成的題目才進入配對。每個基準都會回報成對差異與 95% 區間、不一致計數 `b`（基準對、Yunshu 錯）與 `c`（相反），以及精確的 McNemar p 值（`mcnemar_exact`、`loss_p`）。不使用獨立的準確率區間，因為它們比成對區間寬兩到三倍。失敗的嘗試、截斷與完成長度都會回報，不會隱藏。
 
-## 為什麼（設計決策）
+## 為什麼這樣設計
 
-- 以可負擔的樣本數，基準分數無法區分數值上合法的實作與正在漂移的實作；固定文字上的分布層級檢查可以。
-- 候選必須對照原生 MLX 對自身的表現來判斷。重跑是逐位元相同的，所以任何非零差異都是真正的路徑差異。改變批次大小或預填區塊大小，就已經會讓原生輸出產生小而可量測的偏移；這個散布（`stockb2` 部分與區塊大小比較）就是門檻所依據的雜訊底線。
+- 在可負擔的樣本數下，基準分數分不出數值上合法的實作與正在漂移的實作；對固定文字做分布層級的檢查就分得出來。
+- 候選必須對照原生 MLX 對自身的表現來判斷。重跑是逐位元相同的，所以任何非零差異都是真正的路徑差異。光是改變批次大小或預填區塊大小，就會讓原生輸出產生小而可測量的偏移；這個散布（`stockb2` 部分與區塊大小比較）就是門檻所依據的雜訊底線。
 - 層級 3 用來抓住分布指標漏掉的問題：格式損壞、工具呼叫與長上下文檢索。
 
 ## 保證
@@ -45,23 +45,23 @@ description: Yunshu 如何以三個層級（logit 分歧、貪婪分歧、成對
 - 平均 KL 散度不超過原生對原生底線的兩倍，中位數與第 99 百分位同樣如此；
 - top-1 一致率至少 98.4%；
 - 困惑度的絕對變化不超過 0.5%；
-- 硬性關卡：Yunshu 的 `prefill`，以及 `dec6` 對 `dec1`，必須逐位元相同（分歧恰為 0）。這使得經由驗證核心的推測解碼等於關閉推測解碼。
+- 硬性關卡：Yunshu 的 `prefill`，以及 `dec6` 對 `dec1`，必須逐位元相同（分歧恰為 0）。這讓推測解碼經過 verify kernel 後，輸出與關閉推測解碼完全相同。
 
 層級 2 的通過條件：
 
-- 開啟推測等於關閉推測，50 題中 50 題相同（硬性關卡）；
+- 開啟與關閉推測的輸出，50 題全部相同（硬性關卡）；
 - 對基準的完全相符數與第一個分歧位置的中位數，不得低於同一檢查點已記錄的基線；
-- 原生重跑 50 題中 50 題相同（測試框架的健全性檢查）。
+- 原生重跑 50 題全部相同（測試框架的健全性檢查）。
 
-層級 3 的通過條件：每一組都沒有顯著退步（對 `b` 大於 `c` 的 McNemar p 至少為 0.05）。顯著的進步會被視為準確度相等附近的雜訊，而不是改善。部分執行會標示為部分，不會當作基準分數引用。
+層級 3 的通過條件：每一組都沒有顯著退步（對 `b` 大於 `c` 的 McNemar p 至少為 0.05）。顯著的進步視為相同準確度附近的雜訊，不算改善。部分執行會標示為部分，不會當作基準分數引用。
 
 有損的選項（int8 KV、權重量化）以其自身公布的差距來判斷，不套用上述無損限制。
 
 <Callout type="info">
-量測到的分數表刻意不放在本頁：它們會隨每次核心變更而過時。有日期的數字記錄在基準日誌（`docs/reports/PERF_TREND.md`）與[基準測試](/docs/guides/benchmarks)。
+實測的分數表刻意不放在本頁：它們會隨每次 kernel 變更而過時。有日期的數字記錄在基準日誌（`docs/reports/PERF_TREND.md`）與[基準測試](/docs/guides/benchmarks)。
 </Callout>
 
-## 旋鈕
+## 設定
 
 | 設定或選項 | 預設 | 效果 |
 |---|---|---|
@@ -72,8 +72,8 @@ description: Yunshu 如何以三個層級（logit 分歧、貪婪分歧、成對
 
 ## 限制
 
-- 層級 1 與 2 的可靠度取決於固定的語料與提示詞；更換檢查點需要重建基準（不帶 `--ref` 執行 `kld.py run --config stock`）。
-- 基準伺服器實際上是序列的（沒有批次），所以在長工作上它的請求可能逾時，而 Yunshu 的已完成；這些嘗試會計入報告。
+- 層級 1 與 2 的可信度取決於固定的語料與提示詞；更換檢查點需要重建基準（不帶 `--ref` 執行 `kld.py run --config stock`）。
+- 基準伺服器實際上是循序處理的（沒有批次），所以長工作中它的請求可能逾時，而 Yunshu 的請求能完成；這些嘗試會計入報告。
 - MMLU-Pro 執行使用固定種子的隨機抽樣，而非分層抽樣，且部分執行的區間很寬。
 - 單一檢查點與單一機器的結果無法外推：請在目標檢查點上重跑。
 
@@ -95,7 +95,7 @@ python scripts/research/accuracy/greedy_div.py compare
 python scripts/research/accuracy/paired_eval.py report --bench B --ref ref --cand default
 ```
 
-GPU 工作經由 `scripts/dev/gpuq` 執行。每次修改核心、快取版面配置或排程器，都要在 Qwen3.8-27B 上跑層級 1 與層級 2，任一條件失敗就阻擋合併；基準檔每個檢查點與語料版本只保存一次，所以一次檢查只需付出候選那一側的成本。層級 3 在每次發版前以及任何有損選項變更後執行。`yv` 工具的 `quality` 階段是層級 3 的低成本逐次變更版本；見[驗證](/docs/developers/verification)。
+GPU 工作經由 `scripts/dev/gpuq` 執行。每次修改 kernel、快取版面配置或排程器，都要在 Qwen3.8-27B 上跑層級 1 與層級 2，任一條件失敗就阻擋合併；基準檔每個檢查點與語料版本只保存一次，所以一次檢查只需付出候選那一側的成本。層級 3 在每次發版前以及任何有損選項變更後執行。`yv` 工具的 `quality` 階段是層級 3 的低成本版本，每次變更都可以跑；見[驗證](/docs/developers/verification)。
 
 ## 相關頁面
 

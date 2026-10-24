@@ -7,7 +7,7 @@ description: 依領域列出 Yunshu 的每一項功能，附上狀態與涵蓋�
 
 | 狀態 | 意義 |
 |---|---|
-| 穩定 | 如描述運作，並有測試或閘門涵蓋 |
+| 穩定 | 如描述運作，且有測試或關卡涵蓋 |
 | 部分支援 | 在摘要所述範圍內可用；其餘尚未實作或尚未驗證 |
 | 實驗性 | 受實驗性設定控制；可能變更或移除 |
 
@@ -16,14 +16,14 @@ description: 依領域列出 Yunshu 的每一項功能，附上狀態與涵蓋�
 | 功能 | 說明 | 狀態 | 文件 |
 |---|---|---|---|
 | 無損推測解碼 | DFlash2、MTP 與 prompt 複製式草稿，搭配 batch-invariant kernel；貪婪輸出與關閉推測時相同 | 穩定 | [推測解碼](/docs/internals/speculative-decoding) |
-| 文字模型推測 | 針對 mlx-lm 模型的 n-gram / suffix 與 Gemma 4 assistant 草稿（外部草稿實驗仍為實驗性） | 穩定 | [推測解碼](/docs/internals/speculative-decoding) |
-| 前綴快取（APC） | 位於 RAM、SSD 與選用儲存層的精確混合 checkpoint；含影像與音訊鍵值 | 穩定 | [前綴快取內部機制](/docs/internals/prefix-cache), [Prompt 快取](/docs/guides/prompt-caching) |
-| 結構化輸出 | 在解碼期間強制 JSON schema、regex、選項與 grammar，包含工具參數 | 穩定 | [結構化輸出](/docs/guides/structured-output), [受限解碼內部機制](/docs/internals/constrained-decoding) |
-| 有損記憶體選項 | int8 KV、壓縮的 WARM 層與載入時量化；預設關閉 | 穩定 | [記憶體管理](/docs/internals/memory), [設定](/docs/guides/configuration) |
+| 文字模型推測 | 針對 mlx-lm 模型的 n-gram / suffix 與 Gemma 4 assistant 草稿（外部 draft 模型是另一個輸出不相同的選項） | 穩定 | [推測解碼](/docs/internals/speculative-decoding), [選項](/docs/guides/options) |
+| 前綴快取（APC） | 位於 RAM、SSD 與選用儲存層的精確混合 checkpoint；含圖片與音訊的快取鍵 | 穩定 | [前綴快取](/docs/internals/prefix-cache), [提示詞快取](/docs/guides/prompt-caching) |
+| 結構化輸出 | 在解碼期間強制 JSON schema、regex、選項與 grammar，包含工具參數 | 穩定 | [結構化輸出](/docs/guides/structured-output), [約束解碼](/docs/internals/constrained-decoding) |
+| 有損記憶體選項 | int8 KV、壓縮的 WARM 層與載入時量化；預設關閉 | 穩定 | [選項](/docs/guides/options), [記憶體管理](/docs/internals/memory), [設定](/docs/guides/configuration) |
 | 大型 MoE 載入（部分支援） | 從張量形狀推導社群版 DeepSeek-V4-Flash 的位元數與 group size；載入前先做容量檢查 | 部分支援 | [模型支援](/docs/guides/model-support) |
-| Round driver（實驗性） | 針對 dense Qwen3.5 系列模型、Yunshu 自有的推測 round driver | 實驗性 | [Round driver](/docs/developers/round-driver) |
+| Round driver（實驗性） | Yunshu 自有、針對 dense Qwen3.5 系列模型的推測 round driver | 實驗性 | [Round driver](/docs/developers/round-driver) |
 | 模型支援 | 依系列說明哪些已調校、哪些走通用路徑、哪些已驗證 | 穩定 | [模型支援](/docs/guides/model-support) |
-| 下一回合預演 | 符合條件的文字回覆之後，以標準 stride 做 APC 預演；boundary/exact 是會改變數值、需明確選用的選項 | 穩定 | [Prefill 與預演](/docs/internals/prefill-and-rehearsal) |
+| 下一回合預演 | 符合條件的文字回覆之後，以標準 stride 做 APC 預演；boundary/exact 是會改變數值、須明確啟用的選項 | 穩定 | [預填與預演](/docs/internals/prefill-and-rehearsal) |
 | Batch 轉 lane 升級 | 共用 batch 縮減到一個 row 時，符合條件的貪婪請求會移到推測 lane；多 row 推測尚未實作 | 穩定 | [推測解碼](/docs/internals/speculative-decoding) |
 
 ## API
@@ -33,14 +33,14 @@ description: 依領域列出 Yunshu 的每一項功能，附上狀態與涵蓋�
 | OpenAI API | Chat、Completions、Responses（HTTP 與 WebSocket）、Embeddings、Models、Files、Batches、Conversations | 穩定 | [Chat Completions](/docs/api/chat-completions), [Responses](/docs/api/responses), [Embeddings](/docs/api/embeddings), [Models](/docs/api/models), [Files](/docs/api/files), [Batches](/docs/api/batches) |
 | Anthropic API | Messages、count_tokens、batches、thinking、tools、cache_control、文件與引用 | 穩定 | [Messages](/docs/api/messages), [Batches](/docs/api/batches) |
 | Ollama API | /api/chat、/api/generate 與原生模型管理（pull、copy、delete、show） | 穩定 | [Ollama](/docs/api/ollama) |
-| Responses 延伸功能 | 由客戶端執行的 computer 工具、conversations、compaction、previous_response_id | 穩定 | [Responses](/docs/api/responses) |
-| 已儲存的 chat completions | store: true，之後可列出、取得、更新、刪除並列出訊息 | 穩定 | [已儲存的 completions](/docs/api/stored-completions) |
+| Responses 延伸功能 | 由用戶端執行的 computer 工具、conversations、compaction、previous_response_id | 穩定 | [Responses](/docs/api/responses) |
+| 已儲存的 chat completions | store: true，之後可列出、取得、更新、刪除並列出訊息 | 穩定 | [儲存的 completions](/docs/api/stored-completions) |
 | Evals | OpenAI Evals API，支援 string-check、相似度與本機模型 grader | 穩定 | [Evals](/docs/api/evals) |
 | 型別化決策 | 單次 forward 內回傳 yes/no、選項與分數答案及機率，不產生文字 | 穩定 | [Decisions](/docs/api/decisions) |
-| Batches、Files 與分詞 | OpenAI 與 Anthropic batches、Files API、tokenize / detokenize / apply-template / props | 穩定 | [Batches](/docs/api/batches), [Files](/docs/api/files), [分詞](/docs/api/tokenization) |
+| Batches、Files 與分詞 | OpenAI 與 Anthropic batches、Files API、tokenize / detokenize / apply-template / props | 穩定 | [Batches](/docs/api/batches), [Files](/docs/api/files), [Tokenization](/docs/api/tokenization) |
 | 傳輸方式 | SSE、WebSocket 串流、Unix socket、HTTP/2、選用的 WebRTC | 穩定 | [傳輸方式](/docs/guides/transports) |
-| Yunshu 擴充 | 請求 id、即時階段、prefill 進度、取消、期限、x_yunshu 統計、暖機、記憶體單位 | 穩定 | [擴充欄位](/docs/api/extensions) |
-| Prompt 快取 API | 三種方言中的 cache_control 與快取 token 計量 | 穩定 | [Prompt 快取](/docs/guides/prompt-caching) |
+| Yunshu 擴充 | 請求 id、即時階段、prefill 進度、取消、期限、x_yunshu 統計、暖機、記憶體單位 | 穩定 | [擴充](/docs/api/extensions) |
+| Prompt 快取 API | 三種方言中的 cache_control 與快取 token 計量 | 穩定 | [提示詞快取](/docs/guides/prompt-caching) |
 
 ## Agent 與工具
 
@@ -48,37 +48,37 @@ description: 依領域列出 Yunshu 的每一項功能，附上狀態與涵蓋�
 |---|---|---|---|
 | 程式碼 Agent | Claude Code、Codex 與 opencode 透過各自的 API 運作；`yunshu launch` | 穩定 | [Agent](/docs/guides/agents), [Agent 相容性](/docs/developers/agent-compat) |
 | 網路搜尋與擷取 | 伺服器端 web_search / web_fetch 並附引用；DuckDuckGo、Wikipedia、SearXNG、Tavily、Serper、Perplexity | 穩定 | [網路搜尋](/docs/guides/web-search), [伺服器端工具](/docs/api/server-tools) |
-| 程式碼執行 | Anthropic code_execution（bash 加文字編輯器）在 sandbox-runtime 內於本機執行；需手動啟用，預設無網路 | 部分支援 | [程式碼執行](/docs/guides/code-execution), [程式碼執行沙盒](/docs/internals/code-execution-sandbox) |
-| Tavily 相容 API | search、extract、crawl、map、research 與 MCP，含供應商健康度退避 | 穩定 | [Tavily](/docs/guides/tavily) |
+| 程式碼執行 | Anthropic code_execution（bash 加文字編輯器）在 sandbox-runtime 內於本機執行；需手動啟用，預設無網路 | 部分支援 | [程式碼執行](/docs/guides/code-execution), [程式碼執行沙箱](/docs/internals/code-execution-sandbox) |
+| Tavily 相容 API | search、extract、crawl、map、research 與 MCP，含提供者健康度退避 | 穩定 | [Tavily](/docs/guides/tavily) |
 | MCP | 原生 MCP 端點，以及請求中指名的遠端 MCP 伺服器 | 穩定 | [MCP](/docs/api/mcp) |
-| 客戶端設定 | curl、OpenAI 與 Anthropic SDK、Open WebUI | 穩定 | [客戶端](/docs/guides/clients) |
-| 合格的輔助請求排程 | 已擷取的 opencode 標題指紋讓位給互動式 VLM 回合並隔離 APC；未知請求維持一般優先度 | 穩定 | [輔助請求排程](/docs/developers/auxiliary-scheduling) |
+| 用戶端設定 | curl、OpenAI 與 Anthropic SDK、Open WebUI | 穩定 | [用戶端](/docs/guides/clients) |
+| 合格的輔助請求排程 | 已擷取的 opencode 標題指紋讓位給互動式 VLM 回合並隔離 APC；未知請求維持正常優先度 | 穩定 | [輔助請求排程](/docs/developers/auxiliary-scheduling) |
 
 ## 多模態
 
 | 功能 | 說明 | 狀態 | 文件 |
 |---|---|---|---|
-| 影像、音訊與影片輸入 | mlx-vlm 模型在 Chat、Responses 與 Messages 中接受媒體；媒體會納入快取鍵值 | 穩定 | [多模態](/docs/guides/multimodal) |
-| 語音對語音（部分支援） | Qwen3-Omni 原生語音；重複影像與音訊 APC 有限定範圍的一致性收據；影像加音訊的合併重用尚未驗證 | 部分支援 | [多模態](/docs/guides/multimodal), [Realtime](/docs/api/realtime) |
+| 圖片、音訊與影片輸入 | mlx-vlm 模型在 Chat、Responses 與 Messages 中接受媒體；媒體會納入快取鍵 | 穩定 | [多模態](/docs/guides/multimodal) |
+| 語音對語音（部分支援） | Qwen3-Omni 原生語音；重複圖片與音訊 APC 有限定範圍的一致性收據；圖片加音訊的合併重用尚未驗證 | 部分支援 | [多模態](/docs/guides/multimodal), [Realtime](/docs/api/realtime) |
 | Realtime 語音 | WebSocket 與選用的 WebRTC、伺服器端 VAD、打斷、短期 client secret、本機語音 | 穩定 | [Realtime](/docs/api/realtime) |
 | 語音轉文字、文字轉語音 | transcriptions、translations、speech 與 voices | 穩定 | [Audio](/docs/api/audio) |
-| OCR 與影像生成 | GLM-OCR 文字擷取；影像 generations、edits 與 variations | 穩定 | [Images](/docs/api/images), [多模態](/docs/guides/multimodal) |
+| OCR 與圖片生成 | GLM-OCR 文字擷取；圖片 generations、edits 與 variations | 穩定 | [OCR](/docs/api/ocr), [Images](/docs/api/images), [多模態](/docs/guides/multimodal) |
 | Embeddings、rerank、score、classify | 文字與多模態 embeddings、cross-encoder rerank、訓練好的分類 head | 穩定 | [Embeddings](/docs/api/embeddings), [Rerank](/docs/api/rerank) |
 
-## 營運與主控台
+## 維運與主控台
 
 | 功能 | 說明 | 狀態 | 文件 |
 |---|---|---|---|
 | 網頁主控台 | 即時請求階段、歷史、日誌、模型、下載、快取、playground、金鑰、設定、狀態島 | 穩定 | [主控台](/docs/getting-started/console) |
-| 主控台行程與歷史紀錄 | 主控台與引擎分開執行（yunshu console，連接埠 8100，不使用 MLX）：引擎停止時仍可使用，保留 30 天的 1 秒 / 10 秒 / 1 分鐘歷史與僅含中繼資料的請求日誌，中斷期間以空缺呈現 | 穩定 | [主控台行程](/docs/internals/console-process) |
-| 主控台自動跟隨引擎 | yunshu console --engine auto 會探測本機連接埠（GET /health），跟隨最新且存活的 Yunshu 引擎，健康時持續使用，可從狀態島釘選其中一個，並顯示「等待引擎」而非錯誤；歷史會把每次引擎啟動記為獨立的 session | 穩定 | [主控台](/docs/getting-started/console), [主控台行程](/docs/internals/console-process) |
-| API 金鑰與配額 | 多組金鑰，支援範圍、到期、每把金鑰的用量與每日配額 | 穩定 | [驗證與金鑰](/docs/guides/auth-and-keys) |
-| 設定與 CORS 編輯器 | 從主控台或 API 寫入引擎設定（需重啟的會提示）並編輯 CORS | 穩定 | [驗證與金鑰](/docs/guides/auth-and-keys), [主控台](/docs/getting-started/console) |
-| 主機遙測 | 功耗、GPU 時脈、溫度、散熱與記憶體壓力、每個請求的能耗估計、Prometheus | 穩定 | [遙測](/docs/guides/telemetry) |
-| 命令列 | setup、doctor、models list/pull/rm/show、top、service、completions 與推論指令 | 穩定 | [命令列](/docs/guides/cli) |
-| 登入服務 | launchd agent、重啟與日誌 | 穩定 | [登入服務](/docs/getting-started/service) |
+| 主控台程序與歷史紀錄 | 主控台與引擎分開執行（yunshu console，連接埠 8100，不使用 MLX）：引擎停止時仍可使用，保留 30 天的 1 秒 / 10 秒 / 1 分鐘歷史與僅含中繼資料的請求日誌，中斷期間以空缺呈現 | 穩定 | [主控台程序](/docs/internals/console-process) |
+| 主控台自動跟隨引擎 | yunshu console --engine auto 會探測本機連接埠（GET /health），跟隨最新且存活的 Yunshu 引擎，健康時持續使用，可從狀態島釘選其中一個，並顯示「等待引擎」而非錯誤；歷史會把每次引擎啟動記為獨立的工作階段 | 穩定 | [主控台](/docs/getting-started/console), [主控台程序](/docs/internals/console-process) |
+| API 金鑰與配額 | 多組金鑰，支援範圍、到期、每把金鑰的用量與每日配額 | 穩定 | [驗證、API 金鑰與 CORS](/docs/guides/auth-and-keys) |
+| 設定與 CORS 編輯器 | 從主控台或 API 寫入引擎設定（需重啟的會提示）並編輯 CORS | 穩定 | [驗證、API 金鑰與 CORS](/docs/guides/auth-and-keys), [主控台](/docs/getting-started/console) |
+| 主機遙測 | 功耗、GPU 時脈、溫度、散熱與記憶體壓力、每個請求的能耗估計、Prometheus | 穩定 | [主機遙測與能耗](/docs/guides/telemetry) |
+| 命令列 | setup、doctor、models list/pull/rm/show、top、service、completions 與推論指令 | 穩定 | [CLI 參考](/docs/guides/cli) |
+| 登入服務 | launchd agent、重啟與日誌 | 穩定 | [服務](/docs/getting-started/service) |
 | 設定 | 單一設定註冊表：環境變數、TOML 檔或 `--set` | 穩定 | [設定](/docs/guides/configuration) |
-| 安全性 | 驗證 token、CORS 憑證規則、轉址標頭剝除、機密遮蔽、SSRF 防護 | 穩定 | [驗證與金鑰](/docs/guides/auth-and-keys) |
+| 安全性 | 驗證 token、CORS 憑證規則、重新導向時剝除標頭、機密遮蔽、SSRF 防護 | 穩定 | [驗證、API 金鑰與 CORS](/docs/guides/auth-and-keys) |
 | 首次執行與疑難排解 | 安裝、選擇模型、就緒檢查、修復方式 | 穩定 | [安裝](/docs/getting-started/install), [快速開始](/docs/getting-started/quickstart), [疑難排解](/docs/guides/troubleshooting) |
-| 效能基準與精確度 | 每個數字的來源、如何重現，以及精確度閘門 | 穩定 | [效能基準](/docs/guides/benchmarks) |
+| 效能基準與精確度 | 每個數字的來源、如何重現，以及精確度關卡 | 穩定 | [效能實測](/docs/guides/benchmarks) |
 | 模型生命週期控制 | 需驗證的載入 / 下載取消、本機與 Hugging Face 快照註冊，以及卸載影響 | 穩定 | [主控台](/docs/getting-started/console) |

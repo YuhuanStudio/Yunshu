@@ -86,6 +86,12 @@ const models: Shape<typeof zh> = {
     "This engine version does not provide memory holder details (needs a newer Yunshu).",
   "detail.holders.error": "Could not read memory details: {error}",
   "detail.holders.loading": "Reading memory details…",
+  "detail.sampling.title": "Sampling defaults",
+  "detail.sampling.description":
+    "What a request without sampling parameters gets. A value in the request always wins.",
+  "detail.sampling.thinking": "Thinking",
+  "detail.sampling.nonThinking": "Non-thinking",
+  "detail.sampling.defaultMode": "Default mode: {mode}",
   "detail.card.title": "Model card",
   "detail.card.description": "Raw data the server returns for this model.",
   "detail.card.loading": "Reading model info…",
@@ -209,5 +215,7 @@ const models: Shape<typeof zh> = {
     "Memory the system has available now. It is the same figure each model below is measured against; it is not a load limit, and a load is still checked first.",
   "list.freeTipMetal":
     "The engine did not report system-available memory, so this is total minus what Metal has allocated. It ignores other apps and reads high.",
+  "detail.waitingCalm":
+    "The engine is busy or restarting; its models appear here as soon as it answers.",
 };
 export default models;

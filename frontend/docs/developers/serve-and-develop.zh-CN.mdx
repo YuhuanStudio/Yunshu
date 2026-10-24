@@ -5,7 +5,7 @@ description: GPU 队列如何让正式的 Yunshu 服务器与开发用 GPU 作�
 
 GPU 队列（`scripts/dev/gpuq`）支持在同一台机器上，一边为真实用户运行正式的 Yunshu 服务器，一边让开发用的 GPU 作业（基准测试、评测）使用它。队列能感知正式服务器：开发作业只在服务器空闲时运行，用户流量一到就立刻冻结。本页写给维护者；它说明队列，以及队列所依赖的引擎端钩子。
 
-## 做了什么
+## 它做什么
 
 作业是提交给队列守护进程的独立进程。每个作业会经过守护进程在 `gpuq status` 中报告的各个状态：
 
@@ -30,16 +30,16 @@ stateDiagram-v2
 |---|---|
 | 轮询器 | 守护进程每隔 `poll_s` 对每个已配置服务器的 `/v1/yunshu/status` 发出 GET，只读取 `requests.active` 与 `requests.queued`。不含提示词，也不含请求条目 |
 | 启动门控 | 只有在每个服务器都已空闲（没有运行中、没有排队）达 `idle_start_s` 之后，作业才会启动 |
-| 抢占 | 请求出现时，`SIGSTOP` 发给该作业自己的进程组（队列让每个作业在自己的 session 中启动；绝不对其他东西发送信号，更不会对服务器发送） |
+| 抢占 | 请求出现时，`SIGSTOP` 发给该作业自己的进程组（队列让每个作业在自己的 session 中启动；绝不对其他东西发送信号，更不会发给服务器） |
 | 恢复 | 服务器空闲达 `idle_resume_s` 之后发出 `SIGCONT` |
 | 暂停记录 | 每段区间都存在作业 JSON 中（`pauses: [[t0, t1], ...]`，墙上时钟），也写入 `$GPUQ_PAUSE_FILE` 指定的文件 |
 | 超时 | `--timeout` 与 `--stall` 只计算活动时间；暂停的时间不算 |
 | 内存准入 | 作业声明 `--mem-gb`（搭配 `--serving-ok` 时为 0）。只有可用内存减去 `mem_gb` 后仍保留 `reserve_gb`，才会启动 |
 | 绕过 | `--serving-ok` 跳过空闲门控与服务暂停（用于仅 CPU 的作业）。优先级抢占仍然适用 |
 | 优先级抢占 | 优先级 0 或更高的待处理作业，在内存容得下两个常驻作业时，可以对运行中、优先级 -1 或更低的作业发出 `SIGSTOP`；不会为了回收内存而杀掉任何作业 |
-| 状态 | `gpuq status` 显示 `wait-idle`、`wait-mem`、`wait-cpu`、`paused` 与 `pauses=N` 计数；`idle:` 一行说明为什么待处理作业没有执行者 |
+| 状态 | `gpuq status` 显示 `wait-idle`、`wait-mem`、`wait-cpu`、`paused` 与 `pauses=N` 计数；`idle:` 一行说明为什么待处理作业没有任何运行中的作业 |
 
-## 为什么（设计决策）
+## 为什么这样设计
 
 - 正式服务器绝不能被基准测试拖慢，基准测试也绝不能悄悄地测到用户流量。因此队列暂停的是作业而不是服务器，并记录这次暂停。
 - 轮询只读计数器，所以任何用户内容都不会到达队列。
@@ -56,19 +56,19 @@ stateDiagram-v2
 包含暂停时间的基准测试数字，测到的是用户的流量，不是引擎，所以测试工具绝不能报告这样的样本。
 
 - `scripts/dev/gpuq_pause.py`（仅用标准库）提供 `was_paused(t0, t1)`、`timed(fn)` 与 `pause_intervals()`。`timed` 会丢弃并重跑与暂停重叠的样本，重复重叠后抛出 `PausedSampleError`。它以失败关闭为原则：无法读取的 `$GPUQ_PAUSE_FILE` 视为已暂停；在 gpuq 之外，该变量未设置，也绝不会暂停。
-- 它已接入 `scripts/research/agentic/replay_traffic.py`、`scripts/research/bench_engine_matrix.py`，以及发布关卡的 `cancel_then_next` 墙钟时间检查。新的基准测试脚本必须把每个计时样本包在 `timed(...)` 中。准确度评测不需要：暂停只会让它们变慢。
+- 已接入 `scripts/research/agentic/replay_traffic.py`、`scripts/research/bench_engine_matrix.py`，以及发布关卡的 `cancel_then_next` 墙钟时间检查。新的基准测试脚本必须把每个计时样本包在 `timed(...)` 中。准确度评测不需要：暂停只会让它们变慢。
 - 抢占会在第一个请求之后的一个轮询间隔内生效，所以样本可能在停止之前短暂与请求共用 GPU。请让 `poll_s` 保持很小。关闭这个空窗的握手机制见下文。
 
 ### 外部 CPU 与内存污染
 
 每个已启动的作业都会在开始时、定期，以及结束时记录 `cpu_samples`（`load_1m`、`load_5m`、`foreign_cpu_pct` 与最大的外部进程）。外部 CPU 包含除了该作业自己的进程树，以及 `nice` 为 10 或以上的后台进程之外的所有进程。达到阈值或采样失败时，作业会被标记为 `contended`。
 
-- 以 `--quiet` 提交的作业会在启动前等待 CPU 安静（`--quiet-window`、`--quiet-max-wait`；环境变量缺省值 `GPUQ_CPU_THRESHOLD`、`GPUQ_QUIET_WINDOW_S`、`GPUQ_QUIET_MAX_WAIT_S`、`GPUQ_CPU_SAMPLE_S`）。等待时间以该作业的最长等待与 `GPUQ_QUIET_HOLD_MAX_S`（守护进程环境变量，缺省 300 秒）中较小者为限；到期时作业会启动并标记为 `quiet_timeout` 与 `contended`。服务与内存准入仍然适用，`--serving-ok` 不会绕过 CPU 门控。
+- 以 `--quiet` 提交的作业会在启动前等待 CPU 安静（`--quiet-window`、`--quiet-max-wait`；环境变量默认值 `GPUQ_CPU_THRESHOLD`、`GPUQ_QUIET_WINDOW_S`、`GPUQ_QUIET_MAX_WAIT_S`、`GPUQ_CPU_SAMPLE_S`）。等待时间以该作业的最长等待与 `GPUQ_QUIET_HOLD_MAX_S`（守护进程环境变量，默认 300 秒）中较小者为限；到期时作业会启动并标记为 `quiet_timeout` 与 `contended`。服务与内存准入仍然适用，`--serving-ok` 不会绕过 CPU 门控。
 - 内存污染规则会在以下情况拒绝作业：其进程树的压缩或交换内存太多（`GPUQ_SWAP_MB`）、作业期间主机的 swap-in 太大（`GPUQ_HOST_SWAP_MB`），或主机的空闲加非活跃内存低于下限（`GPUQ_MEMORY_FLOOR_MB`）。无法读取的证据以失败关闭处理。作业 JSON 会记录 `host_swap_mb`、`job_swap_mb`、`available_min_mb`、`memory_processes` 与 `memory_policy_version`。
-- 对于其他方面成功、但受污染的性能或安静作业，`gpuq wait` 返回 3。`scripts/dev/gpuq_contention.py:was_contended()` 让测试工具读取该标志；发布关卡在有限的安静等待之后，会把受污染的服务器路径比较重试一次，两次都受污染就报告为 contended（关卡退出码 3），而文本或推测式解码不一致仍然是失败。
+- 对于其他方面成功、但受污染的性能或安静作业，`gpuq wait` 返回 3。`scripts/dev/gpuq_contention.py:was_contended()` 让测试工具读取该标志；发布关卡在有限的安静等待之后，会把受污染的服务器路径比较重试一次，两次都受污染就报告为 contended（关卡退出码 3），而文本或推测解码的输出不一致仍然算失败。
 - 仅 CPU 的测试套件与构建在 `nice -n 15` 下运行，所以不计入外部 CPU 监控。请不要在单元测试中加入 `taskpolicy -b`：能效核心调度可能破坏对时间敏感的检查。
 
-## 旋钮
+## 设置
 
 服务门控的配置存在于守护进程环境变量，或 `$GPUQ_DIR/serving.json`；后者每个循环都会重新读取，所以可以实时编辑：
 
@@ -77,7 +77,7 @@ stateDiagram-v2
  "poll_s": 1, "reserve_gb": 16, "api_key": "optional bearer if the server needs one"}
 ```
 
-| 设置 | 缺省值 | 效果 |
+| 设置 | 默认值 | 效果 |
 |---|---|---|
 | `GPUQ_SERVING_URLS`（`urls`） | none | 要轮询的服务器，以逗号分隔；没有设置表示没有服务门控 |
 | `GPUQ_IDLE_START_S`（`idle_start_s`） | 120 | 作业可以启动之前所需的空闲时间 |
@@ -87,7 +87,7 @@ stateDiagram-v2
 | `GPUQ_SERVING_KEY`（`api_key`） | none | 服务器需要时使用的 Bearer token |
 | `GPUQ_SHORT_MIN`、`GPUQ_SHORT_WAIT_S`、`GPUQ_SHORT_SHARE` | 10 min、5 min、0.15 | 短作业通道的限制 |
 | `GPUQ_FILLER_WAIT_S`、`GPUQ_FILLER_MAX_MIN` | 30 s、30 min | 队列头部被 CPU 安静条件挡住时，填补作业的限制 |
-| `YUNSHU_SERVE_LOG` | off | 仅含数字的事件日志（耗时、token 数、缓存层、推测式接受率、并发度、arm、build）；绝不含提示词、输出或 token id。`YUNSHU_SERVE_LOG_DIR`、`YUNSHU_SERVE_LOG_MAX_MB` 与 `YUNSHU_SERVE_LOG_KEEP` 控制位置与轮转 |
+| `YUNSHU_SERVE_LOG` | off | 仅含数字的事件日志（耗时、token 数、缓存层、推测解码接受率、并发度、arm、build）；绝不含提示词、输出或 token id。`YUNSHU_SERVE_LOG_DIR`、`YUNSHU_SERVE_LOG_MAX_MB` 与 `YUNSHU_SERVE_LOG_KEEP` 控制位置与轮转 |
 | `YUNSHU_RESEARCH_ACTIVITY_FILE` | unset | 本机暂停握手文件；也要在 `serving.json` 中将它设为 `activity_files` |
 | `YUNSHU_RESEARCH_PAUSE_TIMEOUT_S` | 2.0 | 准入前等待 gpuq 确认的最长时间；超时返回 503 |
 | `YUNSHU_ARM` | unset | 在日志中标记手动选择的配置，不改变行为 |
@@ -136,21 +136,21 @@ scripts/dev/gpuq status
 
 ### 可选的 M3 正确性通道
 
-`gpuq submit --device m5|m3|any` 缺省为 `m5`。一个守护进程同时运行本机 M5 槽位与远程 M3 槽位；`any` 由先准入它的槽位保留一次。本机服务、安静准入与优先级抢占都适用于 M5 槽位，而 `--quiet` 与 `m3`、`any` 并用时会被拒绝，因为计时属于 M5。`M3_HOST`、`M3_KEY` 与 `M3_REPO` 的配置方式与 `scripts/dev/m3run` 相同；所有 worktree、输出、模型、缓存与临时文件都留在那个 checkout 内，因为 M3 是一台个人笔记本。笔记本只会在固定上限内准入声明的内存，该上限为用户保留了容量，所以请声明实际的峰值。
+`gpuq submit --device m5|m3|any` 默认为 `m5`。一个守护进程同时运行本机 M5 槽位与远程 M3 槽位；`any` 由先准入它的槽位保留一次。本机服务、安静准入与优先级抢占都适用于 M5 槽位，而 `--quiet` 与 `m3`、`any` 并用时会被拒绝，因为计时属于 M5。`M3_HOST`、`M3_KEY` 与 `M3_REPO` 的配置方式与 `scripts/dev/m3run` 相同；所有 worktree、输出、模型、缓存与临时文件都留在那个 checkout 内，因为 M3 是一台个人笔记本。笔记本只会在固定上限内准入声明的内存，该上限为用户保留了容量，所以请声明实际的峰值。
 
-远程快照是 HEAD 加上已跟踪的修改，位于一个 detached worktree。即使命令失败，声明的输出也会回到原本的路径。SSH 或传输失败就是失败的作业，绝不是成功的收据；如果无法确认远程清理，`m3-quarantine.json` 会阻挡后续的 M3 派发，直到有人检查。M3 摘要条目标示为可移植性证据（不是 M5），混合设备的准确度或一致性 arm 与 M3 性能结论，会被研究分析辅助工具拒绝。M3 上的失败必须在 M5 复现后，才能否决 M5 的优化；M3 通过绝不会批准 M5 热路径的缺省值。
+远程快照是 HEAD 加上已跟踪的修改，位于一个 detached worktree。即使命令失败，声明的输出也会回到原本的路径。SSH 或传输失败就是失败的作业，绝不是成功的收据；如果无法确认远程清理，`m3-quarantine.json` 会阻挡后续的 M3 派发，直到有人检查。M3 摘要条目标示为可移植性证据（不是 M5），混合设备的准确度或一致性 arm 与 M3 性能结论，会被研究分析辅助工具拒绝。M3 上的失败必须在 M5 复现后，才能否决 M5 的优化；M3 通过绝不会批准 M5 热路径的默认值。
 
 ## 限制
 
-上述的引擎端组件都已实现。`scripts/servedev/` 中的离线脚本有 `replay.py`（仅形状的重放 A/B，token 相同否则失败）、`bandit.py`（对已注册的无损旋钮进行 UCB1 bandit，带有可逆的账本）以及 `loop.py`（有门控的候选循环）；没有任何一个会根据实时流量选择 arm。离线的 switchback、CUPED 与 mSPRT 辅助工具，以及运行历史的方差剖析都已存在；没有启用任何在线 arm 选择。
+上述的引擎端组件都已实现。`scripts/servedev/` 中的离线脚本有 `replay.py`（仅形状的重放 A/B，token 相同否则失败）、`bandit.py`（对已注册的无损可调参数进行 UCB1 bandit，带有可逆的账本）以及 `loop.py`（有门控的候选循环）；没有任何一个会根据实时流量选择 arm。离线的 switchback、CUPED 与 mSPRT 辅助工具，以及运行历史的方差剖析都已存在；没有启用任何在线 arm 选择。
 
 已规划但尚未实现：
 
 - 在实时流量上进行在线无损 A/B，只记录指标（不含提示词）；
-- 依据这些指标，对无损旋钮进行 bandit 自动调优；
+- 依据这些指标，对无损可调参数进行 bandit 自动调优；
 - 有门控的自主改进循环，只通过现有的关卡来提出、测量并落地变更。
 
-在开发的同时常驻提供 27B 服务，仍受制于长上下文一致性：冷启动、暖启动与后续 TTFT、解码、并发与内存都要达标。队列机制已经实现；这并不表示性能关卡已通过。逐点采样无法观察到轮询之间所有短命的进程，队列也不暗示任何每秒 token 数或 TTFT 的提升。
+要在开发的同时常驻提供 27B 服务，仍须先在长上下文上追平：冷、暖与后续 TTFT、解码、并发与内存都要达标。队列机制已经实现；这并不表示性能关卡已通过。定时采样无法观察到两次轮询之间所有短命的进程，队列也不暗示任何每秒 token 数或 TTFT 的提升。
 
 ## 如何验证
 
@@ -159,9 +159,9 @@ scripts/dev/gpuq status          # states, pauses, idle explanation
 scripts/dev/gpuq digest --peek   # finished jobs, flagged failures
 ```
 
-队列行为由 `tests/unit` 下的 gpuq 测试覆盖；在正式守护进程重新启动之前，请先在隔离的队列中跨优先级测试队列变更。基准测试脚本只有在把每个计时样本包进 `scripts/dev/gpuq_pause.py` 的 `timed(...)` 时才正确。另见[验证](/docs/developers/verification)、[发布就绪](/docs/developers/release-readiness)与[代理编码基准测试](/docs/developers/agentic-bench)。
+队列行为由 `tests/unit` 下的 gpuq 测试覆盖；在正式守护进程重新启动之前，请先在隔离的队列中跨优先级测试队列变更。基准测试脚本只有在把每个计时样本包进 `scripts/dev/gpuq_pause.py` 的 `timed(...)` 时才正确。另见[验证](/docs/developers/verification)、[发布就绪](/docs/developers/release-readiness)与[Agentic 编程基准](/docs/developers/agentic-bench)。
 
-## 相关
+## 相关页面
 
 - [验证](/docs/developers/verification)
 - [硬件验证](/docs/developers/hardware-validation)

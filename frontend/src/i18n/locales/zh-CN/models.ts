@@ -80,6 +80,12 @@ const models: Shape<typeof zh> = {
     "此引擎版本没有提供内存持有者明细（需要较新的 Yunshu）。",
   "detail.holders.error": "无法读取内存明细：{error}",
   "detail.holders.loading": "正在读取内存明细…",
+  "detail.sampling.title": "采样默认值",
+  "detail.sampling.description":
+    "未带采样参数的请求会采用这些值；请求带的值永远优先。",
+  "detail.sampling.thinking": "思考模式",
+  "detail.sampling.nonThinking": "非思考模式",
+  "detail.sampling.defaultMode": "默认模式：{mode}",
   "detail.card.title": "模型卡",
   "detail.card.description": "服务对此模型返回的原始数据。",
   "detail.card.loading": "正在读取模型信息…",
@@ -191,5 +197,6 @@ const models: Shape<typeof zh> = {
     "系统当前可用的内存，与下方每个模型的「系统可用」是同一个数字；它不是加载上限，加载前会再用试算确认。",
   "list.freeTipMetal":
     "还没取得系统可用内存（引擎没有回报），这里是总量减去 Metal 已分配的量，没计入其他程序，会偏高。",
+  "detail.waitingCalm": "引擎忙碌或重新启动中，响应后会立即列出模型。",
 };
 export default models;

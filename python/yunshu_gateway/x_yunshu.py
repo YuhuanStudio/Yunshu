@@ -22,6 +22,8 @@ working unchanged:
   the prompt leaves in the context window.
 - ``x_yunshu.context_policy`` / ``X-Yunshu-Context-Policy`` report what the context-window
   manager removed from the prompt, when it did.
+- ``x_yunshu.sampling`` gives the temperature / top_p / top_k the request ran with and where each
+  came from: ``request``, the model's ``generation_config`` or the ``api_default``.
 
 The measurements come from the engine's live ``RunStats`` (the VLM batch runner) when the
 request reaches it, and from the gateway's own clock otherwise, so the fields are best-effort
@@ -171,6 +173,9 @@ class RequestInfo:
     # The token budget when the prompt left less room than max_tokens asked for
     # (``token_budget.TokenBudget.report``); None when the request fit.
     budget: dict | None = None
+    # The sampling values the request ran with and where each came from (request /
+    # generation_config / api_default); set by ``sampling_defaults.resolve_sampling``.
+    sampling: dict | None = None
     # Tool-call parse outcome of the response(s): calls parsed, and tool-call markup blocks that
     # yielded no call (counts only; set by yunshu_engine.tool_format.record_tool_outcome).
     tool_calls_parsed: int | None = None
@@ -640,6 +645,8 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
         out["context_policy"] = info.context_policy
     if info.budget:
         out["budget"] = info.budget
+    if info.sampling:
+        out["sampling"] = info.sampling
     if info.deadline_ms is not None:
         out["deadline_ms"] = info.deadline_ms
     return out

@@ -246,7 +246,7 @@ body {
   overscroll-behavior-y: contain;
 }
 
-/* Live data: the newest sparkline segment fades in; none of it under reduced motion. */
+/* Live data: the newest sparkline segment fades in (motion tokens; opacity only). */
 @keyframes live-point-in {
   from {
     opacity: 0;
@@ -256,19 +256,17 @@ body {
   }
 }
 .live-point-in {
-  animation: live-point-in 200ms ease-out both;
-}
-@media (prefers-reduced-motion: reduce) {
-  .live-point-in {
-    animation: none;
-  }
+  animation: live-point-in var(--dur-base) var(--ease-out) both;
 }
 
-/* Presence: elements that come and go in the live feed fade (and rise 4 px) instead of popping. */
+/* Presence: elements that come and go in the live feed fade in with the soft entrance (a few px,
+   a little blur) and fade out on opacity alone, ~30% faster. Under reduced motion --enter-offset and
+   --enter-blur are zero (tokens.css), so the same classes keep only a short opacity change. */
 @keyframes live-presence-in {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(var(--enter-offset));
+    filter: blur(var(--enter-blur));
   }
 }
 @keyframes live-presence-out {
@@ -277,23 +275,19 @@ body {
   }
 }
 .live-presence[data-state="open"] {
-  animation: live-presence-in var(--live-ms, 160ms) ease-out both;
+  animation: live-presence-in var(--live-ms, var(--dur-base)) var(--ease-out)
+    both;
 }
 .live-presence[data-state="closing"] {
-  animation: live-presence-out var(--live-ms, 160ms) ease-in both;
+  animation: live-presence-out var(--live-ms, var(--dur-fast)) var(--ease-in)
+    both;
   pointer-events: none;
 }
 .live-appear {
-  animation: live-presence-in 180ms ease-out both;
-}
-@media (prefers-reduced-motion: reduce) {
-  .live-presence,
-  .live-appear {
-    animation: none !important;
-  }
+  animation: live-presence-in var(--dur-base) var(--ease-out) both;
 }
 
-/* A live request row that ends fades out (180 ms) and only then collapses (160 ms): no jump. */
+/* A live request row that ends fades out (120 ms) and only then collapses (120 ms): no jump. */
 .live-row {
   display: grid;
   grid-template-rows: 1fr;
@@ -303,31 +297,37 @@ body {
   overflow: hidden;
 }
 .live-row[data-leaving] {
-  animation: live-row-collapse 160ms ease-in 180ms forwards;
+  animation: live-row-collapse var(--dur-fast) var(--ease-standard)
+    var(--dur-fast) forwards;
   pointer-events: none;
 }
 .live-row[data-leaving] > .live-row-inner {
-  animation: live-presence-out 180ms ease-in forwards;
+  animation: live-presence-out var(--dur-fast) var(--ease-in) forwards;
 }
 @keyframes live-row-collapse {
   to {
     grid-template-rows: 0fr;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .live-row[data-leaving],
-  .live-row[data-leaving] > .live-row-inner {
-    animation: none;
-  }
-}
 
 /* A lane slot keeps its place; an ended request fades out in it and the slot is empty afterwards. */
 .live-slot[data-leaving] > .live-row-inner {
-  animation: live-presence-out 180ms ease-in forwards;
+  animation: live-presence-out var(--dur-fast) var(--ease-in) forwards;
 }
+
+/* Reduced motion: the global YunUI reset ends every animation at once; the live classes keep a short
+   opacity change (their offset and blur are zero by token), so presence is still readable. */
 @media (prefers-reduced-motion: reduce) {
+  .live-presence,
+  .live-appear,
+  .live-point-in,
+  .live-row[data-leaving],
+  .live-row[data-leaving] > .live-row-inner,
   .live-slot[data-leaving] > .live-row-inner {
-    animation: none;
+    animation-duration: var(--dur-fast) !important;
+  }
+  .live-row[data-leaving] {
+    animation-delay: var(--dur-fast);
   }
 }
 
@@ -361,4 +361,14 @@ body {
   .live-request-slot {
     height: 3.5rem;
   }
+}
+
+/* A row that arrives after the list was first shown: opacity only (tokens), so it never moves neighbours. */
+@keyframes fresh-row-in {
+  from {
+    opacity: 0;
+  }
+}
+.fresh-row {
+  animation: fresh-row-in var(--dur-base) var(--ease-out) backwards;
 }

@@ -9,7 +9,7 @@ Yunshu 是單節點、單一操作者的伺服器。存取控制分為三層，�
 
 設定 `YUNSHU_AUTH_TOKEN`（或以 `--auth-token` 啟動）。之後除了 health、version 與文件之外，每個請求都需要 `Authorization: Bearer <token>` 或 `x-api-key`。文字 WebSocket 端點也接受 `?token=`。
 
-| 狀態 | 推論路由 | 營運路由（載入／卸載模型、設定、金鑰、日誌、診斷） |
+| 狀態 | 推論路由 | 維運路由（載入／卸載模型、設定、金鑰、日誌、診斷） |
 |---|---|---|
 | 已設定 token | 需要 token | 需要 token |
 | 沒有 token 且沒有儲存的 API 金鑰 | 開放 | 拒絕 |
@@ -26,7 +26,7 @@ token 是管理員憑證。`YUNSHU_AUTH_DISABLED=1` 會開放一切，只適用�
 <Steps>
 <Step>
 
-建立金鑰。回應只會出現一次 `secret`；`~/.yunshu/keys.json`（權限 0600）中只儲存雜湊。
+建立金鑰。`secret` 只會在回應中出現一次；`~/.yunshu/keys.json`（權限 0600）中只儲存雜湊。
 
 ```bash
 curl -s -X POST localhost:8000/v1/yunshu/keys \
@@ -52,7 +52,7 @@ curl -s localhost:8000/v1/yunshu/usage -H "Authorization: Bearer $YUNSHU_AUTH_TO
 </Step>
 </Steps>
 
-對金鑰使用 `PATCH` 與 `DELETE` 可編輯與移除，`POST /v1/yunshu/keys/{id}/rotate` 會重新簽發。超過配額時，會以該路由自己的錯誤方言回傳 `429` 並附 `Retry-After`。這些路由列於 [Yunshu 擴充](/docs/api/extensions)與[營運](/docs/api/operations)。
+對金鑰使用 `PATCH` 與 `DELETE` 可編輯與移除，`POST /v1/yunshu/keys/{id}/rotate` 會重新簽發。超過配額時，會以該路由自己的錯誤格式回傳 `429` 並附 `Retry-After`。這些路由列於 [Yunshu 擴充](/docs/api/extensions)與[維運](/docs/api/operations)。
 
 金鑰不是租戶。通過驗證的用戶端共用 Files、已儲存的 completions 與 Evals 資料，沒有逐金鑰隔離，也沒有 RBAC。Realtime WebSocket 接受金鑰，但不計算配額。
 

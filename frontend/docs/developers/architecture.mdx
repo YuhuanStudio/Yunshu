@@ -55,7 +55,7 @@ The runner only yields token ids. Detokenizing, stop strings, thinking state and
 
 Text-only `mlx-lm` models run through `_generate_fast`, which calls mlx-lm's `generate_step` directly for one request at a time. Concurrent requests to such a model are serialized. This path has its own prefix cache (`KVPrefixCache`), KV quantization, n-gram and jump-forward options, and the constrained-decoding samplers.
 
-A continuous-batching loop for text models exists behind `YUNSHU_ENGINE_LOOP` (experimental, off by default). It is a legacy path rather than a direction for new work.
+A continuous-batching loop for text models exists behind `YUNSHU_ENGINE_LOOP` (a stable user option, off by default, output not guaranteed identical to the fast path; see [Options that can change output](/docs/guides/options)). It is a legacy path rather than a direction for new work.
 
 ### Per-request state
 

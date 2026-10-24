@@ -138,7 +138,8 @@ test.describe("overview tells the truth about the engine", () => {
     await page.goto("/console/#/overview");
     const pill = page.getByTestId("live-phase");
     await expect(pill).toContainText("閒置");
-    await expect(pill).not.toContainText("tok/s");
+    // Idle says what it last did, labelled as past: never a bare live-looking tok/s.
+    await expect(pill).toContainText("上次解碼");
     await expect(page.getByTestId("speed-decode-label")).toContainText(
       "最近一筆",
     );

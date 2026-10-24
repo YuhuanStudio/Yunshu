@@ -14,7 +14,7 @@ export interface Lingering<T> {
 export function useLinger<T>(
   rows: readonly T[],
   keyOf: (row: T) => string,
-  ms = 340,
+  ms = 260,
 ): Lingering<T>[] {
   const [, bump] = useState(0);
   const prev = useRef<T[]>([]);

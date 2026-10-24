@@ -3,13 +3,13 @@ title: 验证、API 密钥与 CORS
 description: 如何用 token 或逐密钥配额保护 Yunshu 服务器、从 API 写入设置、编辑 CORS 来源，以及内置防护的作用。
 ---
 
-Yunshu 是单节点、单一操作者的服务器。访问控制分为三层，全部在本机：静态 token、附配额的选用 API 密钥，以及 CORS 来源。
+Yunshu 是单节点、单一操作者的服务器。访问控制分为三层，全部在本机：静态 token、附配额的可选 API 密钥，以及 CORS 来源。
 
 ## 静态 token
 
 设置 `YUNSHU_AUTH_TOKEN`（或以 `--auth-token` 启动）。之后除了 health、version 与文档之外，每个请求都需要 `Authorization: Bearer <token>` 或 `x-api-key`。文本 WebSocket 端点也接受 `?token=`。
 
-| 状态 | 推理路由 | 营运路由（加载／卸载模型、设置、密钥、日志、诊断） |
+| 状态 | 推理路由 | 运维路由（加载／卸载模型、设置、密钥、日志、诊断） |
 |---|---|---|
 | 已设置 token | 需要 token | 需要 token |
 | 没有 token 且没有保存的 API 密钥 | 开放 | 拒绝 |
@@ -21,12 +21,12 @@ token 是管理员凭证。`YUNSHU_AUTH_DISABLED=1` 会开放一切，只适用�
 
 ## 附配额的 API 密钥
 
-除了静态 token，操作者可以创建多把密钥。每把密钥有范围（`infer`、`admin`）、选用的到期时间，以及配额（`requests_per_day`、`tokens_per_day`、`max_concurrent`）。可在主控台的 Keys 页面管理，或使用具 admin 范围的 API。
+除了静态 token，操作者可以创建多把密钥。每把密钥有范围（`infer`、`admin`）、可选的到期时间，以及配额（`requests_per_day`、`tokens_per_day`、`max_concurrent`）。可在主控台的 Keys 页面管理，或使用具 admin 范围的 API。
 
 <Steps>
 <Step>
 
-创建密钥。回应只会出现一次 `secret`；`~/.yunshu/keys.json`（权限 0600）中只保存哈希。
+创建密钥。`secret` 只会在响应中出现一次；`~/.yunshu/keys.json`（权限 0600）中只保存哈希。
 
 ```bash
 curl -s -X POST localhost:8000/v1/yunshu/keys \
@@ -52,7 +52,7 @@ curl -s localhost:8000/v1/yunshu/usage -H "Authorization: Bearer $YUNSHU_AUTH_TO
 </Step>
 </Steps>
 
-对密钥使用 `PATCH` 与 `DELETE` 可编辑与移除，`POST /v1/yunshu/keys/{id}/rotate` 会重新签发。超过配额时，会以该路由自己的错误方言回传 `429` 并附 `Retry-After`。这些路由列于 [Yunshu 扩充](/docs/api/extensions)与[营运](/docs/api/operations)。
+对密钥使用 `PATCH` 与 `DELETE` 可编辑与移除，`POST /v1/yunshu/keys/{id}/rotate` 会重新签发。超过配额时，会以该路由自己的错误格式返回 `429` 并附 `Retry-After`。这些路由列于 [Yunshu 扩展](/docs/api/extensions)与[运维](/docs/api/operations)。
 
 密钥不是租户。通过验证的客户端共用 Files、已保存的 completions 与 Evals 数据，没有逐密钥隔离，也没有 RBAC。Realtime WebSocket 接受密钥，但不计算配额。
 
@@ -69,12 +69,12 @@ curl -s localhost:8000/v1/yunshu/usage -H "Authorization: Bearer $YUNSHU_AUTH_TO
 - 来源格式为 `scheme://host[:port]`，最多 50 个。
 - 通配符（`*`）需要明确确认，不能与其他来源并用，且会停用 credentials。会发送 cookie 或 authorization 标头的浏览器必须使用明确的来源。
 - 同一份清单也用来检查 Realtime 与文本 WebSocket 的 `Origin` 标头。
-- 绑定地址与局域网路暴露在此 API 中为唯读。
+- 绑定地址与局域网暴露在此 API 中为唯读。
 
 ## 其他防护
 
-- 模型下载重新导向到其他来源时，会丢弃 Authorization、API 密钥与 cookie 标头。
-- Realtime 暂时性 secret（`ek_...`）与日志行中的凭证会被屏蔽。转录用的 secret 无法创建模型回应。
-- `web_fetch` 会封锁私有、loopback 与 link-local 地址（包含重新导向之后），除非设置 `YUNSHU_WEB_FETCH_ALLOW_PRIVATE=1`。含路径穿越的保存库 ID 会在访问磁盘前被拒绝。
+- 模型下载重定向到其他来源时，会丢弃 Authorization、API 密钥与 cookie 标头。
+- Realtime 临时 secret（`ek_...`）与日志行中的凭证会被屏蔽。转录用的 secret 无法创建模型响应。
+- `web_fetch` 会拦截私有、loopback 与 link-local 地址（包含重定向之后），除非设置 `YUNSHU_WEB_FETCH_ALLOW_PRIVATE=1`。含路径穿越的仓库 ID 会在访问磁盘前被拒绝。
 - `YUNSHU_RATE_LIMIT_RPM`（默认 `0`，关闭）限制每个客户端每分钟的请求数；当服务器暴露给其他机器时请设置。
 - 不会发送任何使用分析数据。本机会采样什么，请见[主机遥测](/docs/guides/telemetry)。

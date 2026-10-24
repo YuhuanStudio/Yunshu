@@ -3,7 +3,7 @@ title: Agentic 程式開發基準
 description: 如何在真實的程式開發 agent 迴圈（Claude Code、Codex CLI、opencode）與隱藏測試下量測 Yunshu，以及如何執行、重複與擴充這套基準。
 ---
 
-單一請求的數字無法呈現引擎在人們實際使用情境下的表現：上下文持續增長的多輪程式開發 agent 迴圈、大量工具呼叫、回合之間的前綴重用，以及長時間的工作階段。`scripts/research/agentic/` 會驅動真實的程式開發 agent 去連本機伺服器，並由隱藏測試決定它們寫出的程式是否可用。
+單一請求的數字無法呈現引擎在人們實際使用情境下的表現：上下文持續增長的多輪程式開發 agent 迴圈、大量工具呼叫、回合之間的前綴複用，以及長時間的工作階段。`scripts/research/agentic/` 會驅動真實的程式開發 agent 去連接本機伺服器，並由隱藏測試決定它們寫出的程式是否可用。
 
 ## 它做什麼
 
@@ -17,22 +17,22 @@ description: 如何在真實的程式開發 agent 迴圈（Claude Code、Codex C
 
 agent 是由 `scripts/research/agentic/install_agents.sh` 安裝在 `/Volumes/P5Plus/yunshu-test-envs/agentic-clis` 下的固定版本副本，絕不使用你 `PATH` 上的那些：**opencode**（Chat Completions）、**Claude Code**（Messages）與 **Codex CLI**（Responses）。每次執行都有全新的 `HOME`、XDG 目錄、`TMPDIR`、`CLAUDE_CONFIG_DIR` 與 `CODEX_HOME`、清理過的環境與假金鑰，並在 `sandbox-exec` 下執行：除 loopback 外封鎖所有網路、隱藏真實的 `~/.claude`、`~/.codex`、`~/.config`、鑰匙圈與 shell rc 檔，且只允許寫入該次執行的目錄。取樣參數採用各 agent 預設送出的值。
 
-共有 20 個任務：12 個來自 Aider polyglot 基準的 Exercism Python 練習（下載到 `/Volumes/P5Plus/datasets/agentic`，commit 記錄在 meta 列，絕不提交進儲存庫），以及 8 個自訂的多檔案任務（修 bug、CLI 旗標加測試、三檔案重構、標準函式庫 HTTP JSON API、依規格寫解析器、在約 2,100 行的套件中定位並修改的長上下文任務、在雜亂資料上的 shell 往返處理、失敗測試集的分診）。
+共有 20 個任務：12 個來自 Aider polyglot 基準的 Exercism Python 練習（下載到 `/Volumes/P5Plus/datasets/agentic`，commit 記錄在 meta 列，絕不提交進儲存庫），以及 8 個自訂的多檔案任務（修 bug、CLI 旗標加測試、三檔案重構、標準函式庫 HTTP JSON API、依規格寫解析器、在約 2,100 行的套件中定位並修改的長上下文任務、在雜亂資料上來回處理的 shell 任務、失敗測試集的分診）。
 
-## 為什麼（設計決策）
+## 為什麼這樣設計
 
-- agent 流量才是真實的工作負載：長上下文、重複的前綴與大量簡短的工具回合。在這裡，前綴快取重用與 TTFT 比峰值解碼速度更重要。
+- agent 流量才是真實的工作負載：長上下文、重複的前綴與大量簡短的工具回合。在這裡，前綴快取複用與 TTFT 比峰值解碼速度更重要。
 - 隱藏測試讓結果成為任務成敗，而非風格評判。
 - 在記錄代理處量測，消除了各引擎自身計時的偏差。
 - 失敗的執行留在分母中；逾時算作失敗。
 
 ## 保證
 
-- 可重複執行的結論採失敗即關閉：API 錯誤、格式錯誤的工具呼叫、標記洩漏與遺失的執行都會使其失敗。
+- 可重複執行的結論遵循失敗即關閉原則：API 錯誤、格式錯誤的工具呼叫、標記洩漏與缺失的執行都會使其失敗。
 - 輸出檔以一列 `meta`（引擎、檢查點、git SHA、agent 版本、旗標）開頭。執行可續跑：`--output` 中已存在的任務與重複會被略過。
 - 只公布有日期的彙總結果，並附上快照 SHA、分母、逾時與不確定性；原始執行中繼資料、agent 產物與 JSONL 保持私有，放在 `docs/research/` 下。
 
-## 旋鈕
+## 設定
 
 | 選項 | 預設 | 效果 |
 |---|---|---|
@@ -62,7 +62,7 @@ GPU 工作經由 `scripts/dev/gpuq` 執行。
 
 ### 整個矩陣：`scripts/dev/agentbench`
 
-`scripts/dev/agentbench` 會針對某個 ref（`--ref`，預設 `main`）上的預設 27B 伺服器，用 Claude Code、Codex 與 opencode 跑全部 20 個任務：每一格一個低優先權的 gpuq 工作、採失敗即關閉的結論，並與先前記錄的執行比較。`--dry-run` 預覽，`--no-wait` 在提交後返回，`--collect` 收集已提交的執行。`scripts/dev/release_check` 會以優先權 -3 為候選發行版提交它，並印出之後的 collect 指令。Agentbench 僅供參考：發版關卡、M3 全面測試與 agent 相容性會阻擋發版，agentbench 不會。無論如何，仍要收集並記錄每一個已提交的結果。
+`scripts/dev/agentbench` 會針對某個 ref（`--ref`，預設 `main`）上的預設 27B 伺服器，用 Claude Code、Codex 與 opencode 跑全部 20 個任務：每一格提交一個低優先權的 gpuq 工作，結論採失敗即關閉，並與先前記錄的執行比較。`--dry-run` 預覽，`--no-wait` 在提交後返回，`--collect` 收集已提交的執行。`scripts/dev/release_check` 會以優先權 -3 為候選發行版提交它，並印出之後的 collect 指令。Agentbench 僅供參考：發版關卡、M3 全面測試與 agent 相容性會阻擋發版，agentbench 不會。無論如何，仍要收集並記錄每一個已提交的結果。
 
 ## 新增任務
 
@@ -73,7 +73,7 @@ GPU 工作經由 `scripts/dev/gpuq` 執行。
 - `hidden/`：測試檔案，只在評分時才複製到 `_hidden_tests/`（已設定 `AGENTIC_TASK_DIR` 與 `AGENTIC_TASK_SRC`）；
 - `reference/`：能解出該任務的覆蓋層，或 `apply.py`。
 
-`check-tasks` 必須回報起始儲存庫失敗、參考解答通過。任務要保持確定性且可離線執行。Polyglot 練習列在 `tasks.py` 中，並由資料集實體化。
+`check-tasks` 必須回報起始儲存庫失敗、參考解答通過。任務要保持確定性且可離線執行。Polyglot 練習列在 `tasks.py` 中，並由資料集展開。
 
 ## 已記錄的結果
 
