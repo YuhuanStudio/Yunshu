@@ -70,6 +70,22 @@ CODE_BASH_SCHEMA = {
     },
     "required": ["command"],
 }
+CODE_PY_DESC = (
+    "Run Python 3 code in a sandboxed working directory (standard library only; no network access). "
+    "The value of the last expression is printed like a notebook cell, and top-level `await` works. "
+    "Files you want to hand back to the user must be written to the working directory."
+)
+CODE_PY_STATE = (
+    " Variables, imports and open files persist between calls in this conversation."
+)
+CODE_PY_STATELESS = " Each call starts a fresh interpreter; only files in the working directory persist."
+CODE_PY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "code": {"type": "string", "description": "The Python code to run."}
+    },
+    "required": ["code"],
+}
 CODE_EDITOR_DESC = (
     "View, create and edit text files in the sandbox working directory. `view` shows a file "
     "(optionally lines `view_range`) or lists a directory; `create` writes `file_text`; "
@@ -141,6 +157,45 @@ SHELL_SCHEMA = {
     },
     "required": ["commands"],
 }
+
+
+def _py_type(sch: dict) -> str:
+    t = sch.get("type") if isinstance(sch, dict) else None
+    if isinstance(t, list):
+        t = next((x for x in t if x != "null"), "any")
+    return {
+        "string": "str",
+        "integer": "int",
+        "number": "float",
+        "boolean": "bool",
+        "array": "list",
+        "object": "dict",
+    }.get(t or "", "any")
+
+
+def python_tool_description(persistent: bool, ptc: list[dict]) -> str:
+    """The python sub-tool's text; ``ptc`` are the client tools the code may call (programmatic
+    tool calling): ``[{name, description, input_schema}]``."""
+    out = CODE_PY_DESC + (CODE_PY_STATE if persistent else CODE_PY_STATELESS)
+    if ptc:
+        out += (
+            "\n\nThese functions are defined in the interpreter. Each is `async`: call it with "
+            "`await`, pass arguments by keyword (or in the listed order). It returns the tool's "
+            "result as a string (use json.loads when the tool returns JSON) and raises RuntimeError "
+            "if the tool failed. Use asyncio.gather to run several at once."
+        )
+        for t in ptc:
+            sch = t.get("input_schema") or {}
+            props = sch.get("properties") or {}
+            req = set(sch.get("required") or [])
+            params = ", ".join(
+                f"{k}: {_py_type(v)}" + ("" if k in req else " = None")
+                for k, v in props.items()
+            )
+            out += f"\n- await {t['name']}({params})"
+            if t.get("description"):
+                out += f": {str(t['description'])[:400]}"
+    return out
 
 
 def web_action(args: dict) -> dict:
@@ -387,6 +442,7 @@ class ServerToolRuntime:
         # Files API uploads to stage into it
         self.container: Container | None = None
         self.uploads: list[str] = []
+        self.ptc_tools: list[dict] = []  # client tools the python sub-tool may call
         self.container_factory = (
             None  # () -> Container, for the first use (OpenAI "auto")
         )
@@ -715,12 +771,69 @@ class ServerToolRuntime:
             text += "\nfiles created or changed: " + ", ".join(x["path"] for x in recs)
         return ToolOutcome("shell", text, False, shell=rows, files=recs)
 
+    def _py_outcome(self, ex, box: Container, r: ExecResult) -> ToolOutcome:
+        from ..sandbox.executor import model_text
+
+        if r.calls:  # the code awaits client tools: the turn ends here
+            return ToolOutcome(
+                "code_execution", "waiting for tool results", code=r, files=[]
+            )
+        if r.ok and r.changed:
+            r.files = ex.store_outputs(box, r.changed)
+        return ToolOutcome(
+            "code_execution",
+            model_text(r),
+            not r.ok,
+            r.error_code,
+            r.text if not r.ok else None,
+            code=r,
+        )
+
+    async def _code_python(self, d: ServerToolDef, args: dict) -> ToolOutcome:
+        from ..sandbox import SandboxUnavailableError, get_executor
+
+        ex = get_executor()
+        persistent = d.spec.get("type") not in (
+            "code_execution_20250522",
+            "code_execution_20250825",
+        )
+        tools = [
+            {"name": t["name"], "schema": t.get("input_schema") or {}}
+            for t in self.ptc_tools
+        ]
+        try:
+            box = self._box(ex)
+            r = await ex.python(
+                box,
+                str(args.get("code") or ""),
+                tools=tools,
+                fresh=not persistent,
+            )
+        except SandboxUnavailableError as e:
+            return ToolOutcome(
+                "code_execution", f"Error: {e}", True, "unavailable", str(e)
+            )
+        return self._py_outcome(ex, box, r)
+
+    async def python_resume(
+        self, results: dict[str, tuple[object, bool]]
+    ) -> ToolOutcome:
+        """Continue a cell that waited for client tool results (Anthropic programmatic calling)."""
+        from ..sandbox import get_executor
+
+        ex = get_executor()
+        assert self.container is not None
+        r = await ex.python_resume(self.container, results)
+        return self._py_outcome(ex, self.container, r)
+
     async def _code(self, d: ServerToolDef, args: dict) -> ToolOutcome:
         from ..sandbox import SandboxUnavailableError, get_executor
         from ..sandbox.executor import model_text
 
         ex = get_executor()
         args = args if isinstance(args, dict) else {}
+        if d.fname == "code_execution":
+            return await self._code_python(d, args)
         try:
             box = self._box(ex)
             if d.fname == "bash_code_execution":

@@ -366,6 +366,14 @@ class ReplPool:
         s.last_used = now
         return s
 
+    def find_pending(self, tool_use_ids: set[str]) -> ReplSession | None:
+        """The paused cell whose programmatic tool calls carry these tool_use ids."""
+        for s in self.sessions.values():
+            calls = (s.meta.get("ptc") or {}).get("calls") or {}
+            if s.paused and calls and set(calls) <= set(tool_use_ids):
+                return s
+        return None
+
     def peek(self, cid: str) -> ReplSession | None:
         return self.sessions.get(cid)
 
