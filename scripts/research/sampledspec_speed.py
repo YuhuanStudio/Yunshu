@@ -25,11 +25,17 @@ def arm_order(reps, rep_offset=0):
     ]
 
 
-def validate_row(row):
+def validate_row(row, *, ctx=None, tokens=None):
     if row.get("cached") != 0:
         raise RuntimeError("timing arm was an APC hit or lacks cached-token accounting")
     if row.get("ct", 0) < 32 or not row.get("dec_tps"):
         raise RuntimeError("decode arm did not generate enough tokens")
+    if ctx is not None and row.get("pt") != ctx:
+        raise RuntimeError("decode arm did not use the exact context budget")
+    if tokens is not None and (
+        row.get("ct") != tokens or row.get("finish") != "length"
+    ):
+        raise RuntimeError("decode arm did not fill the requested token budget")
     spec = (row.get("xy") or {}).get("speculative") or {}
     if not spec.get("rounds"):
         raise RuntimeError("missing speculative round accounting")
@@ -83,6 +89,12 @@ def main():
         return
     import tfbench as t
 
+    # Validate every corpus cell before loading either 27B model arm.
+    prompts = {
+        (ctx, kind): t.decode_prompt(kind, ctx, True)
+        for ctx in a.ctx
+        for kind in a.kind
+    }
     a.out.parent.mkdir(parents=True, exist_ok=True)
     for local_index, arm in enumerate(arm_order(a.reps, a.rep_offset)):
         index = 2 * a.rep_offset + local_index
@@ -105,11 +117,7 @@ def main():
             for ctx in a.ctx:
                 for kind in a.kind:
                     for sampling in a.sampling:
-                        # Each distinct cell starts from a cold server-side APC entry.
-                        prompt = (
-                            t.decode_prompt(kind, ctx, True)
-                            + f"\nSampling case: {sampling}."
-                        )
+                        prompt = prompts[ctx, kind]
                         log_start = server.log.stat().st_size
                         row = t.send(
                             server.url,
@@ -117,7 +125,7 @@ def main():
                                 server.model, prompt, a.tokens, extra=SAMPLING[sampling]
                             ),
                         )
-                        committed = validate_row(row)
+                        committed = validate_row(row, ctx=ctx, tokens=a.tokens)
                         with server.log.open("rb") as log:
                             log.seek(log_start)
                             engaged = verify_engagement(

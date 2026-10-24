@@ -48,6 +48,37 @@ def test_invalid_rep_ranges_fail_before_importing_the_backend(
     assert "--reps must be positive" in capsys.readouterr().err
 
 
+def test_missing_prompt_fails_before_model_load(tmp_path, monkeypatch):
+    from scripts.research.sampledspec_speed import main
+
+    def missing(*args):
+        raise FileNotFoundError("missing corpus")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "tfbench",
+        SimpleNamespace(
+            decode_prompt=missing,
+            Srv=lambda *args: pytest.fail("model loaded before prompt validation"),
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "sampledspec_speed.py",
+            "--base-src",
+            str(tmp_path / "base"),
+            "--cand-src",
+            str(tmp_path / "cand"),
+            "--out",
+            str(tmp_path / "out"),
+        ],
+    )
+    with pytest.raises(FileNotFoundError, match="missing corpus"):
+        main()
+
+
 @pytest.mark.parametrize("cached", [0, 1])
 def test_split_rep_uses_real_request_params_and_fails_before_later_arms(
     tmp_path, monkeypatch, cached
@@ -56,11 +87,12 @@ def test_split_rep_uses_real_request_params_and_fails_before_later_arms(
 
     source = tmp_path / "cand"
     output = tmp_path / "cpu.jsonl"
-    servers, requests = [], []
+    servers, requests, prompts = [], [], []
     backend = SimpleNamespace(D="fixture-draft")
 
     class Server:
         def __init__(self, engine, env, label):
+            assert prompts == [("code", 16384, True)]
             assert env["YUNSHU_VLM_APC_DISK"] == "0"
             assert env["YUNSHU_VLM_APC_MEMORY_GB"] == "0"
             self.candidate = str(source.resolve()) == backend.YUNSHU_SRC
@@ -87,6 +119,8 @@ def test_split_rep_uses_real_request_params_and_fails_before_later_arms(
         return dict(
             cached=cached,
             ct=request["tokens"],
+            pt=16384,
+            finish="length",
             dec_tps=40,
             xy={"speculative": {"rounds": 16}},
         )
@@ -96,7 +130,12 @@ def test_split_rep_uses_real_request_params_and_fails_before_later_arms(
     backend.req = lambda model, text, tokens, extra=None: dict(
         text=text, tokens=tokens, extra=extra
     )
-    backend.decode_prompt = lambda *a: "fixture prompt"
+
+    def decode_prompt(*args):
+        prompts.append(args)
+        return "fixture prompt"
+
+    backend.decode_prompt = decode_prompt
     monkeypatch.setitem(sys.modules, "tfbench", backend)
     monkeypatch.setattr(speed.shutil, "rmtree", lambda *a, **kw: None)
     monkeypatch.setattr(
@@ -141,6 +180,7 @@ def test_split_rep_uses_real_request_params_and_fails_before_later_arms(
         for first, second in zip(requests[:3], requests[3:], strict=True):
             assert first == second
         assert [row["extra"] for row in requests[:3]] == list(speed.SAMPLING.values())
+        assert {row["text"] for row in requests} == {"fixture prompt"}
     assert all(server.killed for server in servers)
 
 
@@ -155,6 +195,15 @@ def test_timing_rows_fail_closed():
     ):
         with pytest.raises(RuntimeError):
             validate_row(bad)
+    exact = dict(row, pt=16384, finish="length")
+    assert validate_row(exact, ctx=16384, tokens=65) == 4
+    for bad in (
+        dict(exact, pt=16385),
+        dict(exact, ct=64),
+        dict(exact, finish="stop"),
+    ):
+        with pytest.raises(RuntimeError):
+            validate_row(bad, ctx=16384, tokens=65)
 
 
 def test_each_sampled_candidate_cell_must_engage_the_keyed_tree():
