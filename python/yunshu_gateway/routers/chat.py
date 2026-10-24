@@ -3017,7 +3017,8 @@ async def _stream_vlm_response_multi(
             await queue.put((i, exc))
         finally:
             with contextlib.suppress(Exception):
-                await inner.aclose()
+                if aclose := getattr(inner, "aclose", None):
+                    await aclose()
             await queue.put((i, None))
 
     tasks = [asyncio.create_task(pump(i)) for i in range(req.n)]
