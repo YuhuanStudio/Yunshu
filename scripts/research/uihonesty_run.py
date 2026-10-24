@@ -21,7 +21,12 @@ import urllib.request
 from pathlib import Path
 
 YUNSHU = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/yunshu"
-CONSOLE_PORT = 18996
+CONSOLE_PORTS = (18996, 18998, 18997, 18993, 18992)
+
+
+def pick_console_port(engine_port: int) -> int | None:
+    """The first free port of the console list (18996 first); None when all are taken."""
+    return next((p for p in CONSOLE_PORTS if p != engine_port and port_free(p)), None)
 
 
 def port_free(port: int) -> bool:
@@ -66,10 +71,14 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--seconds", type=int, default=90)
     a = ap.parse_args()
-    for p in (a.port, CONSOLE_PORT):
-        if not port_free(p):
-            print(f"port {p} is busy", file=sys.stderr)
-            return 2
+    if not port_free(a.port):
+        print(f"port {a.port} is busy", file=sys.stderr)
+        return 2
+    console_port = pick_console_port(a.port)
+    if console_port is None:
+        print("no free console port", file=sys.stderr)
+        return 2
+    print(f"console port {console_port}", flush=True)
     root = Path(__file__).resolve().parents[2]
     home = Path(a.home)
     home.mkdir(parents=True, exist_ok=True)
@@ -110,7 +119,7 @@ def main() -> int:
                 print("server not ready", file=sys.stderr)
                 return 3
         vite = subprocess.Popen(
-            ["pnpm", "exec", "vite", "--host", "127.0.0.1", "--port", str(CONSOLE_PORT)]
+            ["pnpm", "exec", "vite", "--host", "127.0.0.1", "--port", str(console_port)]
             + ["--strictPort"],
             cwd=root / "frontend",
             env=dict(env, VITE_CONSOLE_PROXY=base),
@@ -121,7 +130,7 @@ def main() -> int:
         for _ in range(60):
             try:
                 urllib.request.urlopen(
-                    f"http://127.0.0.1:{CONSOLE_PORT}/console/", timeout=2
+                    f"http://127.0.0.1:{console_port}/console/", timeout=2
                 ).read()
                 break
             except Exception:
@@ -140,13 +149,18 @@ def main() -> int:
             [
                 "node",
                 "scripts/uihonesty-shots.mjs",
-                f"http://127.0.0.1:{CONSOLE_PORT}",
+                f"http://127.0.0.1:{console_port}",
                 base,
                 str(out),
                 str(a.seconds),
             ],
             cwd=root / "frontend",
-            env=dict(env, PLAYWRIGHT_BROWSERS_PATH=os.path.expanduser("~/Library/Caches/ms-playwright")),
+            env=dict(
+                env,
+                PLAYWRIGHT_BROWSERS_PATH=os.path.expanduser(
+                    "~/Library/Caches/ms-playwright"
+                ),
+            ),
         )
         return shots.returncode
     finally:

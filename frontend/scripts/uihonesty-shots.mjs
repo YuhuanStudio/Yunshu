@@ -17,7 +17,9 @@ export async function inFlight() {
   }
 }
 const browser = await chromium.launch();
-const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+const ctx = await browser.newContext({
+  viewport: { width: 1440, height: 1000 },
+});
 const req = await ctx.newPage();
 const over = await ctx.newPage();
 const errors = [];
@@ -40,7 +42,9 @@ while ((Date.now() - t0) / 1000 < seconds) {
       })),
     })),
   );
-  await req.getByTestId("observe-panel").screenshot({ path: `${out}/debug-${String(i).padStart(3, "0")}.png` });
+  await req
+    .getByTestId("observe-panel")
+    .screenshot({ path: `${out}/debug-${String(i).padStart(3, "0")}.png` });
   const before = await inFlight();
   const shown = await over.evaluate(() =>
     [...document.querySelectorAll("[data-live-list] > li")].map((li) => {
@@ -54,10 +58,22 @@ while ((Date.now() - t0) / 1000 < seconds) {
   for (const row of shown) {
     for (const b of before) {
       const a = after.find((x) => x.request_id === b.request_id);
-      if (!a || !row.text.includes(b.request_id.slice(-10)) && !row.text.includes(b.request_id)) continue;
-      if (b.phase !== "decode" || a.phase !== "decode" || row.count == null) continue;
+      if (
+        !a ||
+        (!row.text.includes(b.request_id.slice(-10)) &&
+          !row.text.includes(b.request_id))
+      )
+        continue;
+      if (b.phase !== "decode" || a.phase !== "decode" || row.count == null)
+        continue;
       // The page shows a count the engine reported earlier; it must never exceed what the engine had after.
-      if (row.count > a.generated) ahead.push({ id: b.request_id, shown: row.count, engine_after: a.generated, engine_before: b.generated });
+      if (row.count > a.generated)
+        ahead.push({
+          id: b.request_id,
+          shown: row.count,
+          engine_after: a.generated,
+          engine_before: b.generated,
+        });
     }
   }
   samples.push({ i, t: (Date.now() - t0) / 1000, rows, shown, ahead });
@@ -65,11 +81,29 @@ while ((Date.now() - t0) / 1000 < seconds) {
   await new Promise((r) => setTimeout(r, 2000));
 }
 await browser.close();
-const mismatches = samples.flatMap((s) => s.rows.filter((r) => r.differs).map((r) => ({ i: s.i, ...r })));
+const mismatches = samples.flatMap((s) =>
+  s.rows.filter((r) => r.differs).map((r) => ({ i: s.i, ...r })),
+);
 const aheadAll = samples.flatMap((s) => s.ahead.map((a) => ({ i: s.i, ...a })));
 const twoRows = samples.filter((s) => s.rows.length >= 2).length;
-const result = { samples: samples.length, samples_with_two_rows: twoRows, red_mismatches: mismatches.length, ahead_of_engine: aheadAll.length, mismatches, aheadAll, errors };
+const result = {
+  samples: samples.length,
+  samples_with_two_rows: twoRows,
+  red_mismatches: mismatches.length,
+  ahead_of_engine: aheadAll.length,
+  mismatches,
+  aheadAll,
+  errors,
+};
 writeFileSync(`${out}/result.json`, JSON.stringify(result, null, 2));
 writeFileSync(`${out}/samples.json`, JSON.stringify(samples, null, 2));
-console.log(JSON.stringify({ ...result, mismatches: mismatches.slice(0, 5), aheadAll: aheadAll.slice(0, 5) }));
-process.exit(mismatches.length || aheadAll.length || twoRows < 5 || errors.length ? 1 : 0);
+console.log(
+  JSON.stringify({
+    ...result,
+    mismatches: mismatches.slice(0, 5),
+    aheadAll: aheadAll.slice(0, 5),
+  }),
+);
+process.exit(
+  mismatches.length || aheadAll.length || twoRows < 5 || errors.length ? 1 : 0,
+);

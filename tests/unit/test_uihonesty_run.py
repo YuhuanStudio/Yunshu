@@ -25,3 +25,16 @@ def test_port_free_sees_a_listener():
 
 def test_killgroup_accepts_none():
     mod.killgroup(None)
+
+
+def test_pick_console_port_skips_busy_and_engine_ports(monkeypatch):
+    with socket.socket() as a, socket.socket() as b:
+        a.bind(("127.0.0.1", 0))
+        a.listen()
+        b.bind(("127.0.0.1", 0))
+        b.listen()
+        busy = a.getsockname()[1]
+        engine = b.getsockname()[1]
+        free = busy + 1 if busy + 1 != engine else busy + 2
+        monkeypatch.setattr(mod, "CONSOLE_PORTS", (busy, engine, free))
+        assert mod.pick_console_port(engine) == free

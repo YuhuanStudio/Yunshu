@@ -12,8 +12,24 @@ function status(n: number) {
     state: "ready",
     uptime_s: 3_600 + n,
     load_error: null,
-    models: [{ id: MODEL, type: "text", loaded: true, loading: false, pinned: true, size_gb: 2, expires_in_s: null }],
-    memory: { active_gb: 2 + n * 0.37, cache_gb: 1, peak_gb: 6, total_gb: 64, pressure: 0.2 },
+    models: [
+      {
+        id: MODEL,
+        type: "text",
+        loaded: true,
+        loading: false,
+        pinned: true,
+        size_gb: 2,
+        expires_in_s: null,
+      },
+    ],
+    memory: {
+      active_gb: 2 + n * 0.37,
+      cache_gb: 1,
+      peak_gb: 6,
+      total_gb: 64,
+      pressure: 0.2,
+    },
     requests: {
       active: 1,
       queued: 0,
@@ -34,18 +50,36 @@ function status(n: number) {
       ],
     },
     last: null,
-    throughput: { window_s: 60, requests: 0, prompt_tokens: 0, completion_tokens: 0, live_decode_tps: 40, mean_prefill_tps: null, mean_decode_tps: 35 },
+    throughput: {
+      window_s: 60,
+      requests: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      live_decode_tps: 40,
+      mean_prefill_tps: null,
+      mean_decode_tps: 35,
+    },
   };
 }
 
-test("the live token count equals the engine's count at every sample", async ({ page }) => {
+test("the live token count equals the engine's count at every sample", async ({
+  page,
+}) => {
   let n = 0;
   const json = (route: Route, body: unknown) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(body),
+    });
   await page.route("**/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/v1/yunshu/status") return json(route, status(++n));
-    return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+    return route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: "{}",
+    });
   });
   await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
   const list = page.locator("[data-live-list]");
@@ -65,7 +99,12 @@ test("the live token count equals the engine's count at every sample", async ({ 
     }
     seen = now;
     // Two frames after the sample is enough for any snap; a glide (about 220 ms) is still in flight.
-    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    await page.evaluate(
+      () =>
+        new Promise((r) =>
+          requestAnimationFrame(() => requestAnimationFrame(r)),
+        ),
+    );
     if (n !== now) continue; // another sample landed meanwhile
     expect(await shown(), `sample ${now}`).toBe(36 + 240 * now);
     checked++;
