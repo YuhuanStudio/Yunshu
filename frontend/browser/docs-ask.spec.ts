@@ -68,10 +68,16 @@ for (const locale of ["en", "zh-TW", "zh-CN"]) {
               ),
       })
       .click();
-    expect(feedback).toEqual({ ask_id: "a".repeat(32), opinion: "good" });
+    await expect
+      .poll(() => feedback)
+      .toEqual({ ask_id: "a".repeat(32), opinion: "good" });
     await input.fill("What about SSD?");
     await input.press("Enter");
     await expect(dialog.getByTestId("docs-ask-answer")).toHaveCount(2);
+    await expect.poll(() => bodies.length).toBe(2);
+    await expect(dialog.getByTestId("docs-ask-answer").last()).toContainText(
+      "APC",
+    );
     expect(bodies[1].history).toHaveLength(2);
     mkdirSync("evidence/docsask", { recursive: true });
     await page.screenshot({ path: `evidence/docsask/ask-${locale}.png` });
