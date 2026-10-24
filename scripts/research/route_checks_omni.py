@@ -427,7 +427,13 @@ def _realtime_transcription_only(c: Ctx):
                 }
                 want = "session.updated"
             ws.send(json.dumps(upd_event))
-            upd = json.loads(ws.recv(timeout=60))
+            upd = {}
+            for _ in range(
+                4
+            ):  # the legacy path sends conversation.created after session.created
+                upd = json.loads(ws.recv(timeout=60))
+                if upd.get("type") == want:
+                    break
             expect(upd.get("type") == want, f"beta={beta}: update answered {upd}")
             for i in range(0, len(pcm), 48000):
                 ws.send(
