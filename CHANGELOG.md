@@ -86,6 +86,7 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Added
 
+- Observe mode (`--observe` flag of the serve command, or `YUNSHU_OBSERVE=1`) turns on every observability setting you did not set yourself (`/debug/*` routes, host telemetry, serve log, audit log file, token ids, generation capture), resolved in the settings registry so `yunshu config` shows source `observe`. Without a token, `/debug/*` answers loopback clients only. The console shows every panel and a Debug data section on Requests that puts each in-flight request's `/debug/requests` state next to what the page displays. [Guide](frontend/docs/guides/debugging.mdx).
 - Anthropic Messages `context_management` is executed, not just accepted: `clear_tool_uses_20250919` (trigger by
   input tokens or tool uses, `keep`, `clear_at_least`, `exclude_tools`, `clear_tool_inputs`) and
   `clear_thinking_20251015` rewrite the context before generation; the response reports

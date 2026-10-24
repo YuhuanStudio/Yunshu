@@ -115,6 +115,10 @@ def run_ab(
         stage=None,
         started=state.get("started", started),
         args=vars(a) if hasattr(a, "__dict__") else {},
+        observe={
+            s: bool(getattr(a, "observe", False)) or s in st.OBSERVE_STAGES
+            for s in suite["stages"]
+        },
     )
     state.pop("verdict", None)
     rd.save_state(state)
@@ -142,6 +146,7 @@ def run_ab(
         suite=suite,
         mem_gb=mem_gb,
         engaged=list(a.engaged or []),
+        observe=bool(getattr(a, "observe", False)),
         log=log,
     )
     results, infra = [], ""

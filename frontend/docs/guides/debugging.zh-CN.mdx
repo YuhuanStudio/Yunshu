@@ -1,0 +1,35 @@
+---
+title: 调试与可观测性
+description: 一个开关同时开启调试路由、主机遥测、服务日志、审计日志、token id 与生成捕获；控制台随即显示所有面板，并把引擎的请求状态与页面显示并排对比。
+---
+
+`yunshu serve --observe`（或 `YUNSHU_OBSERVE=1`）会把你没有明确设置的观测功能全部开启。凡是要监督的引擎都建议使用：问题直接在引擎自己的数字上看见，而不是从页面猜。
+
+## 会开启什么
+
+| 设置 | observe 下的值 | 代价 |
+| --- | --- | --- |
+| `YUNSHU_DEBUG_ROUTES` | 开：`/debug/*` 路由（engine、system、requests、kv-cache、spec-decode、memory） | 只读；不在解码路径上 |
+| `YUNSHU_TELEMETRY` | `on`（采样器唯一的模式，1 Hz） | 小而稳定的后续 TTFT 代价：27B、1K 文章约 +1.8%（约 11 ms），解码速度在噪声内相同；见[主机遥测](/docs/guides/telemetry) |
+| `YUNSHU_SERVE_LOG` | 开，写在 `~/.yunshu/logs` | 每个完成的请求一行纯数字 JSON，有大小上限并轮转 |
+| `YUNSHU_AUDIT_LOG_FILE` | `~/.yunshu/logs/audit.log` | 每个审计操作一行 |
+| `YUNSHU_REPLAY_TOKEN_IDS` | 开：请求的 logprobs 附上精确的 `token_id` | 每个 logprob token 几个字节 |
+| `YUNSHU_DEBUG_STREAM_CAPTURE` | `~/.yunshu/logs/stream_capture.jsonl` | 每次生成一行 JSON（token id 与文本片段）；没有上限，用完请清除 |
+
+你自己设置的值永远优先，不论来源（标志、环境变量、配置文件）；`yunshu config` 会把其余项目的来源显示为 `observe`。速度基准测试请关闭 observe：遥测有可测量的代价，开启时测到的速度与关闭时不可比较。
+
+## 谁能读 `/debug/*`
+
+规则不变：需要令牌（`YUNSHU_AUTH_TOKEN`）或 `YUNSHU_AUTH_DISABLED`。在 observe 下，**没有**令牌的引擎也会响应来自本机（loopback）的 `/debug/*`，但仅限本机；来自网络的请求，或带有 `X-Forwarded-For` 等代理头的请求会被拒绝。设置了令牌时一律需要令牌。不要在没有令牌的情况下把 `/debug` 暴露在 `0.0.0.0`。
+
+## 在控制台
+
+当连接的引擎报告 observe 模式（`/v1/yunshu/status` 的 `observe: true`）：
+
+- 诊断页显示所有分组（主机、请求、KV 与前缀缓存、解码、内存），并说明 observe 已开启；若 `/debug` 读不到，会直接说明而不是留白。
+- 请求页自动展开**调试数据**区块。每个进行中的请求都上下并列：本页显示的值，以及引擎 `/debug/requests` 报告的值——阶段、预填进度（token）、已生成 token、进入引擎与首个 token 的时间。不一致的值标红；`/debug` 不认识的请求以灰色显示。开关可收起该区块，选择会记在这个浏览器。
+- 推测解码面板与主机面板也从同一组路由读取计数器。
+
+## 测试工具
+
+`tfbench`、agentic 运行器与 `conc_probe` 会启动或要求处于 observe 的引擎（`TFB_OBSERVE=0`、`AGENTIC_OBSERVE=0` 可让纯计时测试保持干净；`conc_probe` 遇到未报告 observe 的引擎会拒绝运行，除非加 `--allow-no-observe`）。`yv` 的 `smoke`、`identity`、`apc` 以 observe 运行，计时阶段则明确关闭；`yv ab --observe` 让所有阶段都开启，运行目录的 `state.json` 会记录各阶段是否使用。

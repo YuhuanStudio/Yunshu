@@ -2690,6 +2690,7 @@ class VLMEngine:
                     "finish": finish,
                     "round_trip": round_trip,
                 }
+                os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
                 with open(path, "a") as fh:
                     fh.write(json.dumps(row, ensure_ascii=False) + "\n")
                 self._roundtrip_tracker.add(prompt_list, ids)

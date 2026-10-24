@@ -6,6 +6,7 @@ import { RequestWaterfall } from "./RequestWaterfall";
 import { LatencyDistribution } from "./LatencyDistribution";
 import { SparkTip } from "./AnalyticsPanels";
 import { SpeculationPanel } from "./SpeculationPanel";
+import { ObservePanel } from "./ObservePanel";
 import { useRequestArchive } from "./useRequestArchive";
 import { ArchiveControls } from "./ArchiveControls";
 import {
@@ -754,6 +755,13 @@ export function Requests({
           );
         })}
       </StatGrid>
+      <ObservePanel
+        rows={(engine.status?.requests.items ?? []).map(
+          (row) => ({ ...row, id: row.request_id }) as Row,
+        )}
+        connection={connection}
+        observe={engine.status?.observe === true}
+      />
       <div className="flex flex-wrap justify-between gap-3">
         <div className="w-full sm:w-auto sm:max-w-xs">
           <Input

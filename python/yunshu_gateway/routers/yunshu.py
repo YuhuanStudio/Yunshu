@@ -201,6 +201,12 @@ def _gpu_busy() -> dict[str, Any]:
     return out
 
 
+def _observe_on() -> bool:
+    from yunshu_engine import settings as _settings
+
+    return _settings.get_bool("YUNSHU_OBSERVE")
+
+
 @router.get("/yunshu/status")
 async def status(request: Request) -> dict:
     """Everything an operator or a client wants to know before sending a big request."""
@@ -223,6 +229,7 @@ async def status(request: Request) -> dict:
         "state": str(getattr(state, "value", state)),
         "uptime_s": round(time.monotonic() - _STARTED, 1),
         "pid": os.getpid(),
+        "observe": _observe_on(),
         "load_error": getattr(request.app.state, "load_error", None),
         "models": _models(),
         "memory": _memory(),

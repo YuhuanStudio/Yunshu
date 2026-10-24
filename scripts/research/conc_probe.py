@@ -123,8 +123,23 @@ def scenario(url, model, out, label, plans, tokens, ctx_chars):
     print(label, [(r["name"], r["decode_tps"], r["ttft"]) for r in rows], flush=True)
 
 
+def engine_observes(url: str) -> bool:
+    """True when the engine at ``url`` reports observe mode (/v1/yunshu/status ``observe``)."""
+    try:
+        r = httpx.get(url + "/v1/yunshu/status", timeout=30.0)
+        r.raise_for_status()
+        return r.json().get("observe") is True
+    except (httpx.HTTPError, ValueError):
+        return False
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--allow-no-observe",
+        action="store_true",
+        help="run against an engine that is not in observe mode (a pure timing run)",
+    )
     ap.add_argument("--url", required=True)
     ap.add_argument("--model", required=True)
     ap.add_argument("--out", required=True)
@@ -132,6 +147,14 @@ def main():
     ap.add_argument("--ctx-chars", type=int, default=16000)
     ap.add_argument("--join", type=float, default=15.0)
     a = ap.parse_args()
+    observe = engine_observes(a.url)
+    if not observe and not a.allow_no_observe:
+        raise SystemExit(
+            "the engine is not in observe mode: start it with `yunshu serve --observe` "
+            "(YUNSHU_OBSERVE=1) or pass --allow-no-observe"
+        )
+    with open(a.out, "a") as fh:
+        fh.write(json.dumps({"meta": {"observe": observe}}) + "\n")
     T, C = a.tokens, a.ctx_chars
     run = lambda label, plans: scenario(a.url, a.model, a.out, label, plans, T, C)  # noqa: E731
     run("warmup", [("w", 0, 64, False, 99)])

@@ -26,6 +26,7 @@ const diagnostics = {
   "config.source.cli": "命令列",
   "config.source.default": "預設",
   "config.source.env": "環境變數",
+  "config.source.observe": "觀察模式",
   "config.source.file": "設定檔",
   "config.stability.experimental": "實驗",
   "config.stability.internal": "內部",
@@ -85,6 +86,8 @@ const diagnostics = {
     "後端近 60 秒 HTTP 請求耗時統計，與首頁的已觀測首 token 延遲分布不同。",
   "latency.title": "服務延遲百分位數",
   loading: "正在讀取 {items}…",
+  "observe.badge": "觀察模式：引擎已開啟所有觀測功能",
+  "observe.unreadable": "引擎回報觀察模式，但 /debug 無法讀取（需要權杖，或從本機連線）。",
   "off.body":
     "以 {flag} 啟動引擎後重新連線；另需存取權杖，或設定 {authFlag}。控制台不會自行變更引擎設定。",
   "off.description": "逐項診斷（主機、請求、快取、解碼、記憶體）需要它。",
