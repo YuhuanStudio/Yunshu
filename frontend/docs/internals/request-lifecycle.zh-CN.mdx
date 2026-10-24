@@ -69,3 +69,5 @@ sequenceDiagram
 ## 如何验证
 
 `tests/unit/test_client_disconnect_watch.py` 与 `tests/unit/test_disconnect_guard.py` 覆盖断连取消。运行 `uv run pytest tests/unit/test_client_disconnect_watch.py -q`。对真实路径，响应的 `X-Request-Id` 标头与 `x_yunshu` 对象会显示真实请求的 id、队列状态与缓存层。另见[架构](/docs/developers/architecture)。
+
+让每个路由彼此保持一致的 API 层功能矩阵，请见 [API 一致性矩阵](/docs/developers/api-parity)。

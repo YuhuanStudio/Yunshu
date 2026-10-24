@@ -1,0 +1,46 @@
+---
+title: API parity matrix
+description: One row per request or response feature of the OpenAI and Anthropic APIs we serve, one column per route and stream mode; executable probes keep every engaged cell honest and every gap counted.
+---
+
+The API layer is four routers that serve the same engine through different dialects: chat completions, Responses, Messages and legacy completions. A feature (tools, `seed`, `logprobs`, structured output, background, server tools, ...) has to work on every route where the spec has it, streamed and not. The **API parity matrix** (`python/yunshu_gateway/api_matrix.json`) is the list of those features and what each route does with them. `tests/unit/test_api_parity.py` and `tests/unit/test_api_parity_wire.py` enforce it. It is the API-layer sibling of the engine path matrix (`python/yunshu_engine/path_matrix.json`, [Architecture](/docs/developers/architecture)).
+
+## Shape
+
+- **Rows** (61): sampling fields, `max_tokens`, `stop`, `n`, `logprobs`, tools / `tool_choice` / parallel calls / tool results, structured output and grammars, reasoning and thinking controls, usage and cached tokens, background, store / retrieve / delete, `previous_response_id` and conversations, cancel and client disconnect, context management and overflow, server tools (web search, web fetch, MCP, code execution, shell), prompt caching fields and `cache_control`, image / audio / video / file input, metadata, `service_tier`, `include`, engine switches, `x_yunshu` and request ids, error envelopes, token counting and batches.
+- **Columns** (9): `chat`, `responses`, `messages` and `completions`, each streamed and non-stream, plus `responses/background`.
+- **Cells**: `engaged` (code evidence plus a probe or a named test that runs exactly that cell), `na` (the spec says it does not apply, with the reason), `partial` or `missing` (a gap, with a `kind` of `unimplemented`, `divergent` or `untested`, an impact and an owner).
+
+## Probes
+
+A cell is `engaged` only while a test exercises it. `test_api_parity_wire.py` runs 434 probes against a scripted engine behind the real routers: it posts the request through the actual route (raw HTTP or the official OpenAI and Anthropic SDKs), streamed, non-stream and as a background response, and checks what reached the engine (forwarding probes: every sampling and constraint field) or what came back (behaviour probes: usage, cached tokens, reasoning split, tool calls, structured output, stored objects, previous-response chains, cancel, client disconnect, context overflow, error envelopes). A `partial` cell whose probe starts passing fails the test until the cell is flipped to `engaged`, so a gap cannot be closed silently.
+
+## Where things stand
+
+| Column | engaged | na | partial / missing |
+|---|---|---|---|
+| `chat/nonstream` | 34 | 15 | 12 |
+| `chat/stream` | 35 | 15 | 11 |
+| `responses/nonstream` | 48 | 9 | 4 |
+| `responses/stream` | 45 | 11 | 5 |
+| `responses/background` | 37 | 11 | 13 |
+| `messages/nonstream` | 39 | 16 | 6 |
+| `messages/stream` | 35 | 18 | 8 |
+| `completions/nonstream` | 27 | 32 | 2 |
+| `completions/stream` | 28 | 32 | 1 |
+
+328 cells engaged, 159 not applicable, 62 gaps. `gap_budget` in the matrix is that last number; it may only go down.
+
+## Guards
+
+- A new request field on any of the four request models, a new server-tool kind (`ServerToolDef.kind`) or a new `server_tools` module fails the test until it has a row.
+- Evidence (code needles, test functions) that moves or disappears fails the test.
+- `duplicates` lists 14 features implemented more than once across routers (tool-call streaming, usage building, sampling resolution, server-tool loops, error mapping, disconnect handling, stop and finish mapping, reasoning split, `response_format` parsing, `tool_choice` enforcement, message conversion, `n > 1`, text and VLM branches, stored objects), each with the file paths and a one-line unification proposal.
+
+## Adding or changing a feature
+
+1. Add the request field to the router, then a row (or the field on an existing row) in `api_matrix.json`.
+2. Fill the nine cells. Prefer a probe in `test_api_parity_wire.py`; otherwise cite a route-level test by file and function.
+3. If you close a gap, flip the cell and lower `gap_budget` in the same commit.
+
+Run `uv run pytest tests/unit/test_api_parity.py tests/unit/test_api_parity_wire.py -q`. See also [Request lifecycle](/docs/internals/request-lifecycle) and [Agent compatibility](/docs/developers/agent-compat).

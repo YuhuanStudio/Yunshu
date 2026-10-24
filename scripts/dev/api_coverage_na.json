@@ -50,11 +50,6 @@
   "reason": "Video generation (Sora) is a parked modality in this engine (CLAUDE.md: other modalities are supported capabilities, not the identity)."
  },
  {
-  "match": "openai * /containers*",
-  "status": "not_applicable",
-  "reason": "Hosted Code Interpreter sandboxes and their files; Yunshu runs no remote sandbox."
- },
- {
   "match": "openai * /webhook_endpoints*",
   "status": "not_applicable",
   "reason": "Subscriptions to OpenAI-hosted events (batch / response completed); a local server has no event bus. Clients poll or stream."
