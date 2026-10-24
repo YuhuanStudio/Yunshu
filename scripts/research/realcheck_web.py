@@ -51,7 +51,7 @@ def responses_search(c):
         input=QUESTION,
         tools=[{"type": "web_search"}],
         tool_choice="required",
-        max_output_tokens=600,
+        max_output_tokens=4000,
     )
     kinds = [o.type for o in r.output]
     calls = [o for o in r.output if o.type == "web_search_call"]
@@ -73,7 +73,7 @@ def responses_search(c):
         input=QUESTION,
         tools=[{"type": "web_search"}],
         tool_choice="required",
-        max_output_tokens=600,
+        max_output_tokens=4000,
     ) as st:
         for ev in st:
             types.append(ev.type)
@@ -91,7 +91,7 @@ def responses_search(c):
 def messages_search(c):
     m = c.an.messages.create(
         model=c.model,
-        max_tokens=600,
+        max_tokens=4000,
         tool_choice={"type": "tool", "name": "web_search"},
         tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}],
         messages=[{"role": "user", "content": QUESTION}],
@@ -112,7 +112,7 @@ def messages_search(c):
 def fetch_page(c):
     m = c.an.messages.create(
         model=c.model,
-        max_tokens=600,
+        max_tokens=4000,
         tool_choice={"type": "tool", "name": "web_fetch"},
         tools=[{"type": "web_fetch_20250910", "name": "web_fetch", "max_uses": 1}],
         messages=[
