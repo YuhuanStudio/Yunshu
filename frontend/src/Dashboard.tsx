@@ -399,7 +399,7 @@ export function Dashboard({
   const recentRequests = useRecentRequests(
     connection,
     status?.last?.request_id,
-    status?.console_process === true || status == null,
+    status?.console_process === true || (status == null && engine.failures > 0),
   );
   const hit = useMemo(
     () =>

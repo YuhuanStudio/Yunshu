@@ -274,7 +274,7 @@ export function Requests({
     engine.status?.last?.request_id,
     // A page opened while the engine is away has no status yet, but the console still answers its record.
     engine.status?.console_process === true ||
-      engine.status == null,
+      (engine.status == null && engine.failures > 0),
   );
   const sampled = useMemo(
     () =>
@@ -834,7 +834,7 @@ export function Requests({
               >
                 <TooltipProvider delayDuration={200}>
                   <Table
-                    className="md:min-w-[680px] xl:table-fixed"
+                    className="md:min-w-[680px] min-[1700px]:table-fixed"
                     scrollLabel={t("requests.list.tableLabel")}
                   >
                     <Thead>
@@ -843,7 +843,7 @@ export function Requests({
                           k="time"
                           sort={sort}
                           setSort={setSort}
-                          className="w-24 max-sm:hidden"
+                          className="w-20 max-sm:hidden"
                         >
                           {t("requests.list.colTime")}
                         </SortTh>
@@ -855,7 +855,7 @@ export function Requests({
                           k="ttft"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-24 md:table-cell"
+                          className="hidden w-20 md:table-cell"
                         >
                           {t("requests.list.colTtft")}
                         </SortTh>
@@ -863,7 +863,7 @@ export function Requests({
                           k="total"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-24 md:table-cell"
+                          className="hidden w-20 md:table-cell"
                         >
                           {t("requests.list.colTotal")}
                         </SortTh>
@@ -871,14 +871,14 @@ export function Requests({
                           k="tps"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-24 md:table-cell"
+                          className="hidden w-20 md:table-cell"
                         >
                           tok/s
                         </SortTh>
                         <Th className="hidden w-24 min-[1800px]:table-cell">
                           {t("requests.list.colSpec")}
                         </Th>
-                        <Th className="w-28">
+                        <Th className="w-24">
                           <span className="sr-only">
                             {t("requests.list.colActions")}
                           </span>
@@ -1051,7 +1051,7 @@ export function Requests({
                                       : `${elapsed(row.elapsed_s)} · ${number(speedValue)} tok/s`}
                                 </p>
                                 {/* Below lg the usage column is gone; the same numbers ride on a line of their own. */}
-                                <p className="mt-0.5 text-xs tabular-nums text-muted-foreground xl:hidden">
+                                <p className="mt-0.5 truncate text-xs tabular-nums text-muted-foreground xl:hidden">
                                   {t("requests.list.mobileUsage", {
                                     prompt: number(row.prompt_tokens, 0),
                                     out: number(row.completion_tokens, 0),
