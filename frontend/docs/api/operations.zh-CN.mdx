@@ -123,6 +123,24 @@ description: 健康检查探针、Prometheus 指标、即时请求查看与取�
 
 `GET /docs` 提供 Swagger UI，`GET /redoc` 提供 ReDoc，`GET /openapi.json` 提供所有已注册路由的 OpenAPI 文档。即使配置了 token，这三者也都是公开的。
 
+## 管理端点
+
+`/v1/yunshu/*` 下 Yunshu 专属路由（另见[认证与密钥](/docs/guides/auth-and-keys)与[遥测](/docs/guides/telemetry)）。每条路由的细节与测试状态见 `docs/guides/API_SURFACE.md`。标注 admin 的需要管理员 token。
+
+| 路由 | 返回或作用 |
+|---|---|
+| `GET /v1/yunshu/memory` | 统一内存账本：各持有者（权重、前缀缓存 RAM 与 warm 层、MLX 缓存、实时 KV）、工作集、主机压力 |
+| `GET /v1/yunshu/cache, /cache/tiers` | 前缀缓存条目与各层用量、命中、SSD 读取速率（只有哈希标签，不含 token） |
+| `POST /v1/yunshu/cache/clear, /cache/tiers/clear` | 清除常驻 APC 或单一层（admin；全局清除时引擎未空闲会回 409） |
+| `POST /v1/yunshu/downloads`, `GET /v1/yunshu/downloads`, `DELETE /v1/yunshu/downloads/{id}` | 队列、列出与取消 Hugging Face 下载到模型目录；磁盘放不下时返回 507 |
+| `GET /v1/yunshu/models/local` | 磁盘上所有模型（无论是否已注册） |
+| `POST /v1/yunshu/models/register`, `DELETE /v1/yunshu/models/register/{model_id}` | 注册或取消注册本机 checkpoint，不加载（多模型模式） |
+| `POST /v1/yunshu/models/{id}/reload`, `GET /v1/yunshu/models/{id}/fit`, `GET /v1/yunshu/models/impact`, `POST /v1/yunshu/models/cancel` | 重新加载以应用设置、内存 fit 试算、驱逐影响、取消加载或下载 |
+| `GET /v1/yunshu/logs, /logs/stream` | 已遮蔽的内存内服务器日志环（admin），普通或 SSE |
+| `GET /v1/yunshu/spec-decode` | MTP / DFlash 各草稿深度的 drafted 与 accepted token 数 |
+| `GET /v1/yunshu/requests/recent, /requests/history` | 已完成请求环与轮替的 serve log 元数据（只有数字，无提示词） |
+| `GET /v1/yunshu/bundle, /bundle/manifest` | 本机诊断文件与其内容清单；不会上传 |
+
 ## 兼容 Tavily 的路由
 
 在 `/tavily` 之下，Yunshu 以自己的搜索与截取层提供 Tavily REST API 的本地实现：`POST /tavily/search`、`POST /tavily/extract`、`POST /tavily/crawl`、`POST /tavily/map`、`POST /tavily/research`、`GET /tavily/research/{request_id}`、`POST /tavily/feedback`、`POST /tavily/logs`、`GET /tavily/usage`、`GET /tavily/providers`，以及 MCP 端点 `POST /tavily/mcp`。这些路径没有 `/v1`，错误格式为 `{"detail": {"error": "..."}}`。配置了 token 时，Tavily 客户端可以用 bearer token，或在请求正文中以 `api_key` 传入。这里不计费：`GET /tavily/usage` 报告的 credits 一律为零。供应商与配置请见[网页搜索指南](/docs/guides/web-search)。

@@ -1,0 +1,34 @@
+---
+title: Roadmap and proposals
+description: What Yunshu prioritizes, what is out of scope, and the lightweight RFC process for substantial changes.
+---
+
+Yunshu prioritizes fast local LLM and VLM inference on Apple Silicon: decode speed, cold and cached first-token latency, prefix reuse, and complete client behavior. Qwen3.8-27B is the first tuned model. This page records direction, not dates or claims that work has shipped. Released behavior belongs in the changelog; measured results belong in [Benchmarks](/docs/guides/benchmarks).
+
+## Priorities
+
+| Priority | Work | Completion evidence |
+|---|---|---|
+| Now | Close measured long-context gaps in 27B and Flash-Next | Cold, warm and follow-up time to first token and decode compared separately at 32K, 64K and 128K; see the current gaps in [Benchmarks](/docs/guides/benchmarks) |
+| Next | Apple Silicon portability evidence | Recorded M1 to M5 and macOS checks distinguish passed, failed and untested combinations |
+| Next | Model and client capability evidence | Checkpoint- and client-version-specific results; unsupported features give actionable errors |
+| Next | Reproducible performance publication | Same-checkpoint cold, warm and second-turn runs with correctness checks and raw receipt links |
+| Later | Broader model tuning | Measured end-to-end gains without reducing output correctness |
+
+Audio, speech, image and video generation, and embeddings remain supported capabilities. Shared-path regressions and explicitly prioritized work take precedence. Distributed serving and multi-tenant infrastructure are outside scope.
+
+## Lightweight RFC process
+
+Routine fixes use the normal contribution and review process (see [Contributing](/docs/developers/contributing)). For substantial changes to public APIs, settings, cache formats, supported hardware or architecture, record a proposal before implementation with:
+
+- the user problem and the concrete proposed behavior;
+- scope, alternatives and the reasons for the choice;
+- compatibility, migration, privacy and failure behavior;
+- correctness checks, the measurement that decides success, and a rollback plan;
+- owner, status (proposed, accepted, implemented or superseded) and the decision rationale.
+
+Use an existing discussion or a reviewable Markdown proposal; no new issue is required for a small fix. Maintainers record the decision where the proposal is reviewed. Accepted is not shipped: close the proposal with links to the implementation and its validation. Private vulnerability details follow `SECURITY.md` instead of a public proposal.
+
+## Decisions and maintenance
+
+Contributors own the quality and explanation of their changes. Maintainers review scope, compatibility and evidence; repository administrators control merges, release publication and access. Reviewers should identify unresolved objections and record the chosen tradeoff. Governance changes need an explicit maintainer review; this page does not grant repository permissions or create new roles.

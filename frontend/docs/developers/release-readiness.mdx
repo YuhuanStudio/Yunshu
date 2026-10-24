@@ -1,0 +1,128 @@
+---
+title: Release readiness
+description: The outward-facing checklist for a release, what is evidence and what is only a capability inventory, and the maintainer procedure summarized from RELEASING.md.
+---
+
+This page is for maintainers. It covers what a new user meets before the first token (install, first run, serving, clients, upgrade, uninstall), what evidence each item has, and the order of the release procedure. The checklist table itself, with its support status per item, is on [Release gate](/docs/developers/release-gate); this page does not repeat it.
+
+## What it does
+
+The readiness checklist is a capability inventory, not a test result. It states what exists. What proves a given commit is the release gate (`scripts/dev/yv gate`), and what proves the packaging is `scripts/dev/ci-local`. Engine speed and accuracy are tracked separately in [Benchmarks](/docs/guides/benchmarks) and [Accuracy alignment](/docs/developers/accuracy).
+
+| Area | Where the evidence comes from |
+|---|---|
+| Install from a wheel, `doctor`, `pull`, `model list`, `config set models_dir`, `service install --dry-run` | Gate stage `install` |
+| Serving, SDK clients, flagship model | Gate stage `serve-27b` |
+| Supported families | Gate stage `families` |
+| Memory return and error-free soak | Gate stage `soak` |
+| Long agent traffic, idle release, restart on the SSD cache tier | Gate stage `agent-sessions` |
+| Long-context identity, cache equality, speed, memory | Gate stage `long` |
+| Real launchd service | Gate stage `service` (off by default) |
+| Package build, lint, types, unit tests, clean install | `scripts/dev/ci-local`, then the release workflow |
+| Claude Code, Codex, opencode behavior | `scripts/dev/agentcompat`, see [Agent compatibility](/docs/developers/agent-compat) |
+| M3 portability | `scripts/dev/m3sweep` |
+
+## Why (design decision)
+
+- Versions go up in small steps: a patch carries fixes and improvements, a minor marks a real capability jump.
+- The repository is public and the install path is a CLI plus a launchd service. A macOS app is not planned. Homebrew goes through the shared tap `YuhuanStudio/homebrew-tap`.
+- Models live in `~/.yunshu/models` by default; Hugging Face cache models are usable in place, and the location changes with `yunshu config set models_dir`.
+- A model that fails to load after the pre-flight keeps the server up and not ready (`GET /health/ready` returns 503 with a fatal log line), which is right for a background service.
+- No telemetry is collected. Outbound connections happen only on user action.
+- Nothing is published except by the steps below, run by a maintainer.
+
+## Guarantees
+
+- All verification refers to the final release commit; a change afterwards needs another check.
+- A version that reached PyPI cannot be re-uploaded; fix forward with the next patch version. If something fails before the publish step, nothing was published: delete the tag, fix and tag again.
+- Pre-1.0 does not make silent breakage acceptable. A user-facing removal or changed API or default needs an upgrade note naming its replacement and effect; stable settings and CLI options should get a warning and at least one published release of overlap unless security or correctness requires immediate removal. Python internals are not a stable embedding API.
+- Release notes follow a fixed order: a paragraph on what users gain, `Highlights`, `Upgrade notes / breaking changes`, `Performance` (machine, checkpoint, workload, before and after, source link), then `Added`, `Changed`, `Fixed`, `Security`, and a compare footer. Every measured number links to a dated benchmark.
+
+## Procedure
+
+<Steps>
+<Step>
+
+### One-time setup
+
+On pypi.org add a trusted publisher for project `yunshu` (owner `YuhuanStudio`, repository `Yunshu`, workflow `release.yml`, environment `pypi`); no API token is stored. In the repository settings create the GitHub environment `pypi` with a required reviewer, so every publish waits for approval.
+
+</Step>
+<Step>
+
+### Prepare the commit
+
+Between releases `main` carries the next version as a PEP 440 development version (for example `0.1.6.dev0`). Drop the `.devN` suffix in `pyproject.toml`, add the dated `CHANGELOG.md` entry and commit. After the tag, set `main` to the next `.dev0`.
+
+</Step>
+<Step>
+
+### Verify the exact commit
+
+```bash
+nice -n 15 scripts/dev/ci-local main
+scripts/dev/yv gate --priority -1 --stages install,serve-27b,families,agent-sessions
+# final release: CI, gate, M3 sweep, agent compatibility and agentbench together
+scripts/dev/release_check main --label-prefix <prefix>
+scripts/dev/release_check main --dry-run     # preview only: no CI, no GPU jobs
+```
+
+`release_check` keeps SHA-keyed evidence under `/Volumes/P5Plus/yunshu-build/release-check/`, pins a clean tree and prints the agentbench collect command. CI, the gate, the M3 sweep and agent compatibility block the release; agentbench runs at priority -3 and is informational, but its result must still be collected and recorded. Never run `gate.sh` directly: `yv gate` submits through the GPU queue and preserves successful stage evidence, so a rerun skips what already passed. Read every completed job's exit status and final evidence record.
+
+</Step>
+<Step>
+
+### Tag and push
+
+```bash
+git tag -a v<version> -m "Yunshu <version>"
+git push origin main v<version>
+```
+
+The release workflow checks that the tag matches `pyproject.toml` and the changelog, runs ruff, mypy, the console checks and the unit tests on an Apple Silicon runner, builds the sdist and wheel, runs `twine check`, installs the wheel into a clean tool environment, waits for approval on the `pypi` environment, publishes to PyPI and opens a draft GitHub release with the changelog section as its notes. Review and publish the draft.
+
+</Step>
+<Step>
+
+### After the release
+
+Check a clean install (`uv tool install "yunshu[vision]"`, then `yunshu doctor`). Update the Homebrew formula in the shared tap: the `sha256` of the sdist PyPI now serves, then copy `packaging/homebrew/yunshu.rb` to `Formula/yunshu.rb`.
+
+Then start the next cycle from current upstream: `uv lock --upgrade` followed by the tests and lint; re-check on the 27B that speculative output equals plain output, that the paired accuracy set agrees within one question, and that decode and TTFT did not regress (record the before and after in `docs/reports/PERF_TREND.md`); run `just vendor-check` and review every vendored kernel, ported file or monkeypatch whose upstream changed (see [Upstream tracking](/docs/developers/upstream-tracking)); read upstream release notes for fixes and ideas. Land the sync as its own merge so later regressions can be bisected to it.
+
+</Step>
+</Steps>
+
+## Knobs
+
+| Option | Default | Effect |
+|---|---|---|
+| `yv gate --stages` | all stages | Run selected gate stages; `--fresh` reruns everything |
+| `yv gate --priority` | per command | GPU queue priority of the gate jobs |
+| `release_check --label-prefix` | `releng015-release` | Labels the submitted jobs |
+| `release_check --dry-run` | off | Preview without CI or GPU jobs |
+
+## Limits
+
+- CI on push runs lint and build on Linux; the macOS unit tests run on release or on a manual run, so the checklist does not claim a fresh CI run.
+- A curated model picker by available RAM does not exist yet; users need to know a repository id.
+- Cline, Continue and Open WebUI are configuration guidance, not tested every release.
+- A CPU-only documentation candidate can use `yv ab --suite preflight`; it does not certify engine output or performance.
+
+## How to verify
+
+Preview the notes that a release would publish and check the public docs:
+
+```bash
+uv run pytest tests/unit/test_public_docs.py tests/unit/test_release_notes.py -q
+uv run python scripts/release/notes.py <version> --output /path/to/review-notes.md
+```
+
+`scripts/release/notes.py` adds pinned pip and uv commands, Homebrew instructions with the tap-delay caveat and the previous-version comparison. Before tagging, review `git log <previous-tag>..main`, reconcile numbers with `docs/reports/PERF_TREND.md`, state machine, checkpoint, modes and repetition count, include workload regressions, and resolve every TODO.
+
+## Related
+
+- [Release gate](/docs/developers/release-gate)
+- [Verification](/docs/developers/verification)
+- [Agent compatibility](/docs/developers/agent-compat)
+- [Install](/docs/getting-started/install)
