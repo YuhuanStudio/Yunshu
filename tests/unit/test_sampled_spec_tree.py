@@ -36,8 +36,9 @@ def params(**kw):
         (True, [-1, 0, 1, 2, 3, 4]),
     ],
 )
+@pytest.mark.parametrize("dtype", [mx.float32, mx.bfloat16])
 def test_tree_and_copy_verify_match_serial(
-    temperature, top_p, top_k, min_p, fast, parents
+    temperature, top_p, top_k, min_p, fast, parents, dtype
 ):
     p = params(temperature=temperature, top_p=top_p, top_k=top_k, min_p=min_p)
     shape = TreeShape(parents)
@@ -50,7 +51,7 @@ def test_tree_and_copy_verify_match_serial(
         )
     logits = mx.array(
         np.random.default_rng(117).normal(size=(1, len(parents), 32)).astype(np.float32)
-    )
+    ).astype(dtype)
     probs = normalize_rows(logits)
     for seed in range(12):
         sampler = KeyedSampler(p, seed)
@@ -60,8 +61,28 @@ def test_tree_and_copy_verify_match_serial(
             for i, depth in enumerate(depths)
         ]
         assert actual.tolist() == expected
-        assert np.array_equal(np.array(returned_probs), np.array(probs))
+        assert returned_probs.dtype == probs.dtype
+        assert returned_probs.tolist() == probs.tolist()
         assert sampler._next == 0
+
+
+def test_reported_tree_rows_use_serial_fp32_normalization():
+    from yunshu_engine.constrained_spec import SpecRequest, target_rows
+
+    logits = mx.array(
+        np.random.default_rng(81).normal(size=(1, 5, 32)).astype(np.float32)
+    ).astype(mx.bfloat16)
+    shape = TreeShape([-1, 0, 0, 1, 2])
+    request = SpecRequest(True, 3)
+    sampler = KeyedSampler(params(top_p=0.95, top_k=20), 83)
+    tokens, probs = tree_target_rows(logits, shape, 3, sampler, request)
+    assert probs.dtype == mx.float32
+    for row, depth in enumerate(shape.depths):
+        token, serial = target_rows(
+            logits[:, row : row + 1], None, 3 + depth, sampler, request
+        )
+        assert int(tokens[row]) == int(token.item())
+        assert probs[row].tolist() == serial[0].tolist()
 
 
 def test_siblings_share_noise_even_after_storage_reordering():
