@@ -109,6 +109,7 @@ def main():
                 "YUNSHU_VLM_APC_DISK_DIR": str(apc),
                 "YUNSHU_VLM_DRAFT": t.D,
                 "YUNSHU_NEXT_TURN_PREFILL": "off",
+                "YUNSHU_CONSOLE": "0",
             },
             label,
         )

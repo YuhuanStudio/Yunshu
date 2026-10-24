@@ -95,6 +95,7 @@ def test_split_rep_uses_real_request_params_and_fails_before_later_arms(
             assert prompts == [("code", 16384, True)]
             assert env["YUNSHU_VLM_APC_DISK"] == "0"
             assert env["YUNSHU_VLM_APC_MEMORY_GB"] == "0"
+            assert env["YUNSHU_CONSOLE"] == "0"
             self.candidate = str(source.resolve()) == backend.YUNSHU_SRC
             self.log = tmp_path / f"{label}.log"
             self.log.write_text("")
