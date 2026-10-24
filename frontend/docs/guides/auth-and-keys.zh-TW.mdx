@@ -1,0 +1,80 @@
+---
+title: 驗證、API 金鑰與 CORS
+description: 如何用 token 或逐金鑰配額保護 Yunshu 伺服器、從 API 寫入設定、編輯 CORS 來源，以及內建防護的作用。
+---
+
+Yunshu 是單節點、單一操作者的伺服器。存取控制分為三層，全部在本機：靜態 token、附配額的選用 API 金鑰，以及 CORS 來源。
+
+## 靜態 token
+
+設定 `YUNSHU_AUTH_TOKEN`（或以 `--auth-token` 啟動）。之後除了 health、version 與文件之外，每個請求都需要 `Authorization: Bearer <token>` 或 `x-api-key`。文字 WebSocket 端點也接受 `?token=`。
+
+| 狀態 | 推論路由 | 營運路由（載入／卸載模型、設定、金鑰、日誌、診斷） |
+|---|---|---|
+| 已設定 token | 需要 token | 需要 token |
+| 沒有 token 且沒有儲存的 API 金鑰 | 開放 | 拒絕 |
+| `YUNSHU_AUTH_DISABLED=1` | 開放 | 開放 |
+
+<Callout type="warn">
+token 是管理員憑證。`YUNSHU_AUTH_DISABLED=1` 會開放一切，只適用於本機開發。`YUNSHU_HOST` 預設為 `127.0.0.1`；綁定 `0.0.0.0` 之前請先設定 token。
+</Callout>
+
+## 附配額的 API 金鑰
+
+除了靜態 token，操作者可以建立多把金鑰。每把金鑰有範圍（`infer`、`admin`）、選用的到期時間，以及配額（`requests_per_day`、`tokens_per_day`、`max_concurrent`）。可在主控台的 Keys 頁面管理，或使用具 admin 範圍的 API。
+
+<Steps>
+<Step>
+
+建立金鑰。回應只會出現一次 `secret`；`~/.yunshu/keys.json`（權限 0600）中只儲存雜湊。
+
+```bash
+curl -s -X POST localhost:8000/v1/yunshu/keys \
+  -H "Authorization: Bearer $YUNSHU_AUTH_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"name":"laptop","scopes":["infer"],"quotas":{"requests_per_day":1000,"max_concurrent":2}}'
+```
+
+</Step>
+<Step>
+
+把 secret 交給用戶端，作為它的 API 金鑰。
+
+</Step>
+<Step>
+
+查看每把金鑰的每日用量（請求、提示詞、完成與快取 token、錯誤）：
+
+```bash
+curl -s localhost:8000/v1/yunshu/usage -H "Authorization: Bearer $YUNSHU_AUTH_TOKEN"
+```
+
+</Step>
+</Steps>
+
+對金鑰使用 `PATCH` 與 `DELETE` 可編輯與移除，`POST /v1/yunshu/keys/{id}/rotate` 會重新簽發。超過配額時，會以該路由自己的錯誤方言回傳 `429` 並附 `Retry-After`。這些路由列於 [Yunshu 擴充](/docs/api/extensions)與[營運](/docs/api/operations)。
+
+金鑰不是租戶。通過驗證的用戶端共用 Files、已儲存的 completions 與 Evals 資料，沒有逐金鑰隔離，也沒有 RBAC。Realtime WebSocket 接受金鑰，但不計算配額。
+
+## 寫入設定
+
+`GET /v1/yunshu/config` 會列出每個設定的值、預設值、來源，以及變更何時生效（`live`、`reload` 或 `restart`）。`PATCH /v1/yunshu/config` 會驗證並以原子方式保存變更（全部成功或全部不變，檔案權限 0600）。環境變數或 CLI 的值仍然優先，並標示為 `overridden`。`dry_run` 可預覽變更。
+
+需要重新啟動的設定會被標記，讓主控台提示你。只有在伺服器由 launchd 執行時，`POST /v1/yunshu/service/restart` 才會重新啟動伺服器。主控台的設定頁面提供相同功能，並有搜尋框與逐項控制。所有設定請見[設定](/docs/guides/configuration)。
+
+## CORS
+
+`GET` 與 `PATCH /v1/yunshu/cors`，以及主控台設定頁面，都可即時編輯允許的來源。`YUNSHU_CORS_ORIGINS` 預設為 `http://localhost:3000,http://localhost:8000`。
+
+- 來源格式為 `scheme://host[:port]`，最多 50 個。
+- 萬用字元（`*`）需要明確確認，不能與其他來源並用，且會停用 credentials。會傳送 cookie 或 authorization 標頭的瀏覽器必須使用明確的來源。
+- 同一份清單也用來檢查 Realtime 與文字 WebSocket 的 `Origin` 標頭。
+- 綁定位址與區域網路暴露在此 API 中為唯讀。
+
+## 其他防護
+
+- 模型下載重新導向到其他來源時，會丟棄 Authorization、API 金鑰與 cookie 標頭。
+- Realtime 暫時性 secret（`ek_...`）與日誌行中的憑證會被遮蔽。轉錄用的 secret 無法建立模型回應。
+- `web_fetch` 會封鎖私有、loopback 與 link-local 位址（包含重新導向之後），除非設定 `YUNSHU_WEB_FETCH_ALLOW_PRIVATE=1`。含路徑穿越的儲存庫 ID 會在存取磁碟前被拒絕。
+- `YUNSHU_RATE_LIMIT_RPM`（預設 `0`，關閉）限制每個用戶端每分鐘的請求數；當伺服器暴露給其他機器時請設定。
+- 不會傳送任何使用分析資料。本機會取樣什麼，請見[主機遙測](/docs/guides/telemetry)。
