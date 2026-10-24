@@ -1,4 +1,5 @@
 import {
+  MotionNumber,
   Alert,
   Button,
   Card,
@@ -172,9 +173,7 @@ export function ConnectionState({
       <div role="status" data-testid="outage-calm" data-kind={outage.kind}>
         <Banner
           tone="neutral"
-          icon={
-            outage.kind === "paused" ? undefined : <Spinner size="sm" />
-          }
+          icon={outage.kind === "paused" ? undefined : <Spinner size="sm" />}
           title={title}
           description={facts.filter(Boolean).join(t("common.sentenceGap"))}
         />
@@ -581,7 +580,9 @@ export function StatValue({ text, unit }: { text: string; unit?: string }) {
   // The figure always has the same box (a reserved width, tabular digits), so the unit beside it
   // and the value after "—" do not move when the number changes length.
   const figure = (
-    <span className="inline-block min-w-[7ch] tabular-nums">{value}</span>
+    <span className="inline-block min-w-[7ch] tabular-nums">
+      <MotionNumber value={value} />
+    </span>
   );
   if (!u || value === "—") return figure;
   if (u === "%") return <>{figure}%</>;

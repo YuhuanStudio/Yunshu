@@ -90,6 +90,7 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Changed
 
+- Console motion: one set of motion tokens (expo ease-out enters, 120/200/280 ms), no `transition: all`, no decorative loops; page changes fade out then in, theme switch is one cross-fade, the sidebar and tab selection is one sliding pill, stat values roll digit by digit, the overview skeleton cross-fades into the cards without a layout shift, and streamed Playground text fades in by chunk. Reduced motion keeps only short opacity changes.
 - Split-invariant prefill (NAX GEMM padded to 64 rows, BQ32 attention, chunked GDN) and 64-token-aligned APC
   checkpoints are the default on the qualified 27B path; rehearsal starts after 0.3 s.
 - The DFlash fast tree admits short contexts, reads 8-bit lane weights directly,

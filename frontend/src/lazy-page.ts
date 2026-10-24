@@ -1,6 +1,7 @@
 import {
   createElement,
   lazy,
+  useState,
   type ComponentProps,
   type ComponentType,
 } from "react";
@@ -59,12 +60,31 @@ async function recovering<T>(load: () => Promise<T>): Promise<T> {
   }
 }
 
+const warmers: Array<() => void> = [];
+/** Load every page chunk in the background (call when the browser is idle): a later route change then
+ *  renders the page in the same commit, so the page transition never shows an empty hole. */
+export function warmPages() {
+  for (const warm of warmers) warm();
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same constraint as React.lazy
 export function lazyPage<T extends ComponentType<any>>(
   load: () => Promise<{ default: T }>,
 ): ComponentType<ComponentProps<T>> {
   const Inner = lazy(() => recovering(load));
+  let loaded: T | null = null;
+  warmers.push(() => {
+    if (!loaded)
+      load().then(
+        (m) => {
+          loaded = m.default;
+        },
+        () => {},
+      );
+  });
   return function LazyPage(props: ComponentProps<T>) {
-    return createElement(Inner, props);
+    // Chosen once per mounted page: switching component type later would remount it.
+    const [Page] = useState<ComponentType<any>>(() => loaded ?? Inner); // eslint-disable-line @typescript-eslint/no-explicit-any
+    return createElement(Page, props);
   };
 }
