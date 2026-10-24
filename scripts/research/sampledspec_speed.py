@@ -17,10 +17,10 @@ SAMPLING = {
 }
 
 
-def arm_order(reps):
+def arm_order(reps, rep_offset=0):
     return [
         arm
-        for rep in range(reps)
+        for rep in range(rep_offset, rep_offset + reps)
         for arm in (("base", "cand") if rep % 2 == 0 else ("cand", "base"))
     ]
 
@@ -61,21 +61,31 @@ def main():
         "--sampling", nargs="+", choices=list(SAMPLING), default=list(SAMPLING)
     )
     p.add_argument("--reps", type=int, default=3)
+    p.add_argument("--rep-offset", type=int, default=0)
     p.add_argument("--tokens", type=int, default=512)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args()
+    if a.reps < 1 or a.rep_offset < 0:
+        p.error("--reps must be positive and --rep-offset must be nonnegative")
     if a.base_src.resolve() == a.cand_src.resolve():
         p.error("base and candidate must differ")
     if a.dry_run:
         print(
-            json.dumps(dict(complete=True, order=arm_order(a.reps), sampling=SAMPLING))
+            json.dumps(
+                dict(
+                    complete=True,
+                    order=arm_order(a.reps, a.rep_offset),
+                    sampling=SAMPLING,
+                )
+            )
         )
         return
     import tfbench as t
 
     a.out.parent.mkdir(parents=True, exist_ok=True)
-    for index, arm in enumerate(arm_order(a.reps)):
+    for local_index, arm in enumerate(arm_order(a.reps, a.rep_offset)):
+        index = 2 * a.rep_offset + local_index
         t.YUNSHU_SRC = str((a.base_src if arm == "base" else a.cand_src).resolve())
         label = f"sampledspec-speed-{a.out.stem}-{index}-{arm}"
         apc = Path("/Volumes/Micron/yunshu-apc") / label
@@ -121,6 +131,7 @@ def main():
                         result.update(
                             arm=arm,
                             index=index,
+                            rep=index // 2,
                             ctx=ctx,
                             kind=kind,
                             sampling=sampling,
