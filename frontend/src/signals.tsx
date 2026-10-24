@@ -147,6 +147,10 @@ export function useShellSignals(
   connection: Connection,
 ): Signals {
   const online = engine.phase === "online";
+  // A routine restart / engine switch (--engine auto) is neither a health fault nor a notification.
+  const calm =
+    engine.outage.kind === "restarting" || engine.outage.kind === "switching";
+  const healthPhase = calm ? "connecting" : engine.phase;
   const ledger = useMemoryLedger(connection, online, 5000).data;
   const recent = useRecentRequests(
     connection,
@@ -158,7 +162,7 @@ export function useShellSignals(
   const verdict = useMemo(
     () =>
       healthVerdict({
-        phase: engine.phase,
+        phase: healthPhase,
         status: engine.status,
         ledger: ledger
           ? {
@@ -170,7 +174,7 @@ export function useShellSignals(
         finished: facts,
         now: Date.now(),
       }),
-    [engine.phase, engine.status, ledger, facts, swapGrowth],
+    [healthPhase, engine.status, ledger, facts, swapGrowth],
   );
 
   // The list belongs to one connection identity: switching address or token shows that
@@ -212,7 +216,7 @@ export function useShellSignals(
       tracker.current = initialTracker();
       trackerScope.current = scope;
     }
-    if (engine.phase === "connecting") return;
+    if (engine.phase === "connecting" || calm) return;
     const { state, events } = observe(tracker.current, {
       at: Date.now(),
       phase: engine.phase,
@@ -228,7 +232,7 @@ export function useShellSignals(
       const { title, body } = describeNotification(e);
       (e.tone === "error" ? toast.error : toast.warning)(title, body);
     }
-  }, [scope, engine.phase, engine.status, facts, downloads]);
+  }, [scope, engine.phase, calm, engine.status, facts, downloads]);
   useEffect(() => {
     try {
       sessionStorage.setItem(

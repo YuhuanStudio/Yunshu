@@ -3,6 +3,7 @@ import type { EngineStatus } from "./api";
 import { Slot } from "./ui";
 import { livePill } from "./engineView";
 import type { EngineConnectionPhase } from "./useEngine";
+import type { OutageView } from "./outage-view";
 
 /**
  * The always-visible live pill (top bar, every page): the connection when it is
@@ -13,11 +14,13 @@ import type { EngineConnectionPhase } from "./useEngine";
 export function LivePill({
   phase,
   status,
+  outage,
 }: {
   phase: EngineConnectionPhase;
   status: EngineStatus | null;
+  outage?: OutageView["kind"];
 }) {
-  const pill = livePill(phase, status);
+  const pill = livePill(phase, status, outage);
   return (
     <span
       className="card inline-flex h-8 items-center gap-2 rounded-full px-3 text-xs text-muted-foreground"

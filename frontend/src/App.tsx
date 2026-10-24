@@ -686,14 +686,21 @@ export default function App() {
                     <StatusIndicator
                       status={
                         engine.phase !== "online"
-                          ? "offline"
+                          ? engine.outage.kind === "restarting" ||
+                            engine.outage.kind === "switching"
+                            ? "away"
+                            : "offline"
                           : loadedModel
                             ? "online"
                             : "neutral"
                       }
                     />
                     {engine.phase !== "online"
-                      ? t("shell.side.offline")
+                      ? engine.outage.kind === "restarting"
+                        ? t("shell.engine.live.restarting")
+                        : engine.outage.kind === "switching"
+                          ? t("shell.engine.live.switching")
+                          : t("shell.side.offline")
                       : loadedModel
                         ? t("shell.side.loaded")
                         : t("shell.side.noModel")}
@@ -826,7 +833,11 @@ export default function App() {
               </span>
               {wide && (
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">
-                  <LivePill phase={engine.phase} status={engine.status} />
+                  <LivePill
+                    phase={engine.phase}
+                    status={engine.status}
+                    outage={engine.outage.kind}
+                  />
                   <Button
                     variant="ghost"
                     type="button"

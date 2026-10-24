@@ -22,5 +22,18 @@ const common: Shape<typeof zh> = {
   "unlock.label": "解锁密钥",
   "unlock.remember": "在此设备记住",
   "unlock.submit": "解锁",
+  "outage.restarting": "引擎重新启动中…",
+  "outage.switching": "切换到 {engine}",
+  "outage.following": "改追最新运行中的引擎，历史会保留。",
+  "outage.wasUp": "此前已运行 {up}。",
+  "outage.backIn": "通常约 {s} 后恢复。",
+  "outage.longer": "比平常的 {usual} 久。",
+  "outage.waiting": "已等待 {s}。",
+  "outage.downTitle": "已 {s} 没有任何引擎响应",
+  "outage.downEngines":
+    "控制台已知的引擎：{engines}。请启动引擎，或检查连接设置。",
+  "outage.downNone":
+    "找不到任何引擎。请启动 Yunshu 引擎，控制台会自动重新连上。",
+  "outage.unknownState": "状态未知",
 };
 export default common;

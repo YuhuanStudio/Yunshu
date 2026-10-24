@@ -380,6 +380,31 @@ class HistoryStore:
             out.append({"t": t, "kind": kind, "detail": parsed})
         return out
 
+    def outage_stats(self, since: float, limit: int = 20) -> dict[str, Any]:
+        """How long the engine was away on its recent restarts (``engine_reachable`` events after
+        ``since``): the console says "usually back in ~Ns" from this, never from a guess."""
+        self.flush()
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT detail FROM events WHERE kind = 'engine_reachable' AND t > ? "
+                "ORDER BY t DESC LIMIT ?",
+                (since, limit),
+            ).fetchall()
+        downs: list[float] = []
+        for (detail,) in rows:
+            try:
+                v = _num((json.loads(detail) if detail else {}).get("down_s"))
+            except (ValueError, AttributeError):
+                v = None
+            if v is not None and v >= 0:
+                downs.append(v)
+        downs.sort()
+        median = None
+        if downs:
+            mid = len(downs) // 2
+            median = downs[mid] if len(downs) % 2 else (downs[mid - 1] + downs[mid]) / 2
+        return {"count": len(downs), "median_down_s": median}
+
     def requests_page(
         self, limit: int = 50, before: str | None = None, model: str | None = None
     ) -> dict[str, Any]:

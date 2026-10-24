@@ -17,8 +17,10 @@ import {
   fetchConsoleState,
   fetchMetricsHistory,
   fetchServerHistory,
+  type RestartMark,
 } from "./history-api";
 import { retryDelayMs } from "./backoff";
+import { useOutage, type OutageView } from "./outage";
 import {
   gapPoint,
   mergeBackfill,
@@ -48,6 +50,8 @@ export interface UseEngineResult {
   finished: readonly ObservedRequest[];
   /** Epoch ms of the oldest engine-side history row, or null when there is none. */
   historyFrom: number | null;
+  /** Engine restarts and switches the console recorded (plus the ones seen live), oldest first. */
+  restarts: readonly RestartMark[];
   /** One or two polls failed in a row: the page shows the last good numbers and says so. */
   retrying: boolean;
   /** Epoch ms of the first failed poll of the current outage, or null while the engine answers. */
@@ -56,6 +60,8 @@ export interface UseEngineResult {
   nextRetryAt: number | null;
   /** Consecutive failed polls in the current outage. */
   failures: number;
+  /** What an unreachable engine means: a calm restart / switch, or (sustained) a real outage. */
+  outage: OutageView;
   /** The phase to show: forward moves at once, steps back (a brief prefill, a gap) must hold. */
   livePhase: ActivityPhase;
   /** Live decode tok/s smoothed over about a second; null when nothing is decoding. */
@@ -94,10 +100,22 @@ interface EngineViewState {
   series: SeriesPoint[];
   finished: ObservedRequest[];
   historyFrom: number | null;
+  restarts: RestartMark[];
   /** A poll failed but fewer than OFFLINE_AFTER_FAILURES in a row: the numbers are the last good ones. */
   retrying: boolean;
   offlineSince: number | null;
   failures: number;
+}
+
+/** Restart marks from two sources (live and recorded), oldest first, one per 30 s. */
+export function mergeRestarts(
+  a: readonly RestartMark[],
+  b: readonly RestartMark[],
+): RestartMark[] {
+  const out: RestartMark[] = [];
+  for (const m of [...a, ...b].sort((x, y) => x.at - y.at))
+    if (!out.length || m.at - out[out.length - 1].at > 30_000) out.push(m);
+  return out;
 }
 
 /** The series with an outage marker at its end, unless it already ends in one. */
@@ -118,6 +136,7 @@ function initialState(connectionKey: symbol): EngineViewState {
     series: [],
     finished: [],
     historyFrom: null,
+    restarts: [],
     retrying: false,
     offlineSince: null,
     failures: 0,
@@ -328,6 +347,11 @@ export function useEngine(connection: Connection): UseEngineResult {
                   )
                 : known,
               historyFrom: restarted ? null : previous.historyFrom,
+              restarts: restarted
+                ? mergeRestarts(previous.restarts, [
+                    { at: at, kind: "restarted" },
+                  ])
+                : previous.restarts,
               retrying: false,
               offlineSince: null,
               failures: 0,
@@ -352,6 +376,10 @@ export function useEngine(connection: Connection): UseEngineResult {
                           loaded.points,
                           loaded.gaps,
                         ).slice(-MAX_SERIES_POINTS),
+                        restarts: mergeRestarts(
+                          current.restarts,
+                          loaded.restarts,
+                        ),
                       },
                 );
               },
@@ -396,6 +424,10 @@ export function useEngine(connection: Connection): UseEngineResult {
                           loaded.gaps,
                         ).slice(-MAX_SERIES_POINTS),
                         historyFrom: loaded.points[0].at,
+                        restarts: mergeRestarts(
+                          current.restarts,
+                          loaded.restarts,
+                        ),
                       },
                 );
               },
@@ -434,6 +466,44 @@ export function useEngine(connection: Connection): UseEngineResult {
                 );
               }
             });
+          }
+          // A page opened while the engine is away has seen nothing yet; the console process still
+          // answers its own recorded history, so the charts and lists are not left empty.
+          if (
+            !refused &&
+            historyAskedRef.current !== connectionKey &&
+            failuresRef.current >= 1
+          ) {
+            historyAskedRef.current = connectionKey;
+            void fetchMetricsHistory(apiConnection, {
+              signal: controller.signal,
+              since: Date.now() - 3_600_000,
+              step: 2.5,
+            }).then(
+              (loaded) => {
+                if (!loaded || generation !== generationRef.current) return;
+                setState((current) =>
+                  current.connectionKey !== connectionKey
+                    ? current
+                    : {
+                        ...current,
+                        series: mergeBackfill(
+                          current.series.filter((p) => !p.backfilled),
+                          loaded.points,
+                          loaded.gaps,
+                        ).slice(-MAX_SERIES_POINTS),
+                        historyFrom: loaded.points[0].at,
+                        restarts: mergeRestarts(
+                          current.restarts,
+                          loaded.restarts,
+                        ),
+                      },
+                );
+              },
+              () => {
+                historyAskedRef.current = null;
+              },
+            );
           }
           // A restart or one slow poll must not flash the offline banner.
           if (!refused && failuresRef.current < OFFLINE_AFTER_FAILURES) {
@@ -553,7 +623,15 @@ export function useEngine(connection: Connection): UseEngineResult {
         : null,
     [rawStatus, live.phase, live.tps, live.mem],
   );
+  const outage = useOutage(
+    connection,
+    stateForConnection.phase,
+    stateForConnection.offlineSince,
+    stateForConnection.updatedAt,
+    rawStatus,
+  );
   return {
+    outage,
     status,
     phase: stateForConnection.phase,
     error: stateForConnection.error,
@@ -563,6 +641,7 @@ export function useEngine(connection: Connection): UseEngineResult {
     series: stateForConnection.series,
     finished: stateForConnection.finished,
     historyFrom: stateForConnection.historyFrom,
+    restarts: stateForConnection.restarts,
     livePhase: live.phase,
     liveDecodeTps: live.tps,
     retrying: stateForConnection.retrying,

@@ -94,6 +94,13 @@ engine; any other server is ignored.
 - The request history stores the engine URL and start time with each request, so a restart shows as a
   separate session instead of mixing into the previous one, and a `engine_switched` event marks the move.
 
+- A restart is routine here, so an unreachable engine is shown calmly: "Engine restarting… Was up 12m.
+  Usually back in about 25 s." (the usual time is the median of the outages the console recorded in the last
+  24 h, `outages` in `GET /v1/yunshu/console`), or "Switching to :18991" when another engine is live. Only
+  60 s without any live engine becomes a warning with the engine list. No notification or health fault is raised
+  for the calm states. The Requests list, its KPIs and the Overview chart keep showing the console's recorded
+  history through the gap and mark where the engine restarted or was switched.
+
 ## Docs inside the console
 
 The 文件 / Docs section renders the user documentation (getting started, API reference, guides,

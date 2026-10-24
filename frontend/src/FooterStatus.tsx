@@ -59,6 +59,10 @@ export function FooterStatus({
     status: engine.status,
     gpuBusy: online ? gpuBusy : null,
     ledger: online ? ledger : null,
+    calm:
+      engine.outage.kind === "restarting" || engine.outage.kind === "switching"
+        ? engine.outage.kind
+        : undefined,
   });
   const lead = pills[0];
   const dot: IslandDot =
@@ -146,7 +150,7 @@ export function FooterStatus({
     );
   // The collapsed pill leads with the ENGINE state (same tone as the first pill
   // of the band), then the phase as secondary text: 「運作中 · 閒置」.
-  const live = livePill(engine.phase, engine.status);
+  const live = livePill(engine.phase, engine.status, engine.outage.kind);
   const secondary = online
     ? [live.phase, live.detail].filter(Boolean).join(" ")
     : (lead.value ?? "");

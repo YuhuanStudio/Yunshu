@@ -1,7 +1,7 @@
 import type { EngineStatus, RequestRow } from "./api";
 import { prefillSplit } from "./prefill-split.ts";
 import { t } from "./i18n/index.ts";
-import { fixed, number } from "./i18n/format.ts";
+import { elapsed, fixed, number } from "./i18n/format.ts";
 
 /**
  * What the engine is doing right now, and which speed figure means what.
@@ -274,10 +274,42 @@ const fix0 = (v: number) => number(v, 0);
  * overview, labelled 最近一筆); busy says the phase. A bare tok/s that is not
  * live never appears here.
  */
+/**
+ * What an idle engine can still say: its last finished decode and how long ago it ended, so "idle" is
+ * never a bare word or an empty value. `short` is for the narrow footer pill. Null when nothing finished yet.
+ */
+export function idleDetail(
+  status: Pick<EngineStatus, "last">,
+  now: number,
+  short = false,
+): string | null {
+  const last = status.last;
+  if (!last || !finite(last.decode_tps) || !finite(last.t)) return null;
+  const age = elapsed(Math.max(0, now / 1000 - last.t));
+  return t(short ? "shell.engine.live.lastShort" : "shell.engine.live.last", {
+    tps: fix0(last.decode_tps),
+    age,
+  });
+}
+
 export function livePill(
   connection: "connecting" | "online" | "offline" | "unauthorized",
   status: EngineStatus | null,
+  outage?: "restarting" | "switching" | "down" | "none",
+  now: number = Date.now(),
 ): LivePill {
+  if (
+    connection === "offline" &&
+    (outage === "restarting" || outage === "switching")
+  )
+    return {
+      phase:
+        outage === "restarting"
+          ? t("shell.engine.live.restarting")
+          : t("shell.engine.live.switching"),
+      detail: "",
+      tone: "away",
+    };
   if (connection === "offline")
     return {
       phase: t("shell.engine.live.offline"),
@@ -305,8 +337,17 @@ export function livePill(
       detail: loading.id.split("/").filter(Boolean).at(-1) ?? loading.id,
       tone: "away",
     };
-  if (a.phase === "idle")
-    return { phase: phaseLabels.idle, detail: "", tone: "neutral" };
+  // The steady phase holds "decode" for a moment after the last request ends; with nothing decoding and
+  // no speed to show it reads as idle, never as a bare "Decode".
+  if (
+    a.phase === "idle" ||
+    (a.phase === "decode" && a.decodeNow == null && a.counts.decode === 0)
+  )
+    return {
+      phase: phaseLabels.idle,
+      detail: idleDetail(status, now) ?? "",
+      tone: "neutral",
+    };
   if (a.phase === "queued")
     return {
       phase: phaseLabels.queued,

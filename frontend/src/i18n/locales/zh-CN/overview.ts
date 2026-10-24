@@ -61,14 +61,12 @@ const overview: Shape<typeof zh> = {
   "tip.ttft":
     "首 token 延迟：最近一笔已结束请求，从收到到第一个 token 的时间；下方标示它是多久以前。",
   "tip.hit":
-    "前缀命中率：本页看到的已结束请求中，输入 token 由缓存提供的比例。",
+    "前缀命中率：控制台持有的已结束请求中，由缓存提供的输入 token 占比。与请求页使用同一个范围。",
   "tip.metal": "Metal 内存：当前被 MLX 使用的统一内存；下方是总量与本次峰值。",
   "stats.latestAge": "最近一笔 · {age}前",
   "stats.ageShort": "{age}前",
   "stats.noFinished": "暂无已完成的请求",
   "stats.prefixRate": "前缀命中率",
-  "stats.observed": "本页 {n} 笔加权",
-  "stats.observedLast": "本页 {n} 笔加权 · 最近 {pct}%",
   "stats.metal": "Metal 内存",
   "stats.metalSub": "物理 {total} GB · 峰值 {peak} GB",
   "hero.decode": "解码实时合计速度 · tok/s",
@@ -267,5 +265,8 @@ const overview: Shape<typeof zh> = {
   "prefill.computed": "已计算 {n} tokens",
   "prefill.value": "缓存 {cached} + 已计算 {done} / 共 {prompt} tokens",
   "prefill.valueNoCache": "已计算 {done} / 共 {prompt} tokens",
+  "hero.restarted": "引擎于 {time} 重新启动 · 曲线接续控制台的记录",
+  "hero.switched": "于 {time} 切换到另一个引擎",
+  "hero.widened": "此范围内还没有样本，改显示最近 15 分钟",
 };
 export default overview;

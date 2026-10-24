@@ -75,7 +75,9 @@ export function StatusIslandContent({
   onNavigate: () => void;
 }) {
   const status = engine.status;
-  const { list, pause, pin } = useEngineList(connection ?? { baseUrl: "", token: "" });
+  const { list, pause, pin } = useEngineList(
+    connection ?? { baseUrl: "", token: "" },
+  );
   const switcher = (
     <>
       <PauseNotice pause={pause} />
@@ -89,12 +91,19 @@ export function StatusIslandContent({
   };
   if (!online) {
     const cause = offlineCause(engine.phase, engine.errorStatus);
+    const calm =
+      engine.outage.kind === "restarting"
+        ? t("shell.engine.live.restarting")
+        : engine.outage.kind === "switching"
+          ? t("shell.engine.live.switching")
+          : null;
     const word =
-      engine.phase === "connecting"
+      calm ??
+      (engine.phase === "connecting"
         ? t("shell.footer.engine.connecting")
         : engine.phase === "unauthorized"
           ? t("shell.footer.engine.unauthorized")
-          : t("shell.footer.engine.offline");
+          : t("shell.footer.engine.offline"));
     return (
       <>
         <StatusIslandHeader
@@ -103,7 +112,7 @@ export function StatusIslandContent({
           subtitle={
             engine.phase === "offline"
               ? [
-                  cause.short,
+                  calm ? "" : cause.short,
                   engine.offlineSince
                     ? t("common.offlineSince", {
                         time: clock(engine.offlineSince),
