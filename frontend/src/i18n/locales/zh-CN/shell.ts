@@ -64,7 +64,6 @@ const shell: Shape<typeof zh> = {
   "footer.gpu.help": "最近几次状态更新之间，GPU 执行推理的时间占比。",
   "footer.load.label": "请求",
   "footer.load.both": "{active} 进行 {queued} 排队",
-  "footer.load.active": "{active} 进行",
   "footer.load.help": "进行中 {active} 个，排队 {queued} 个。",
   "footer.sentenceEnd": "。",
   "nav.skip": "跳到主要内容",

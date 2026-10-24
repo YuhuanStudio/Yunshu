@@ -274,7 +274,9 @@ export function Requests({
     engine.status?.last?.request_id,
     // A page opened while the engine is away has no status yet, but the console still answers its record.
     engine.status?.console_process === true ||
-      (engine.status == null && engine.failures > 0),
+      (engine.status == null &&
+        engine.failures > 0 &&
+        engine.phase !== "unauthorized"),
   );
   const sampled = useMemo(
     () =>
@@ -300,6 +302,14 @@ export function Requests({
     else if (filterChoice == null && recent.rows.length > 0)
       setFilterChoice("complete");
   }, [filterChoice, engine.status, recent.rows.length]);
+  // Under load the list keeps room for a full burst (11 concurrent requests in the real-load replay) so the
+  // footer and the panels below never move as requests come and go; it relaxes 20 s after the last one.
+  const busyNow = (engine.status?.requests.active ?? 0) > 0;
+  const [reserveUntil, setReserveUntil] = useState(0);
+  useEffect(() => {
+    if (busyNow) setReserveUntil(Date.now() + 20_000);
+  }, [busyNow, engine.updatedAt]);
+  const reserved = busyNow || Date.now() < reserveUntil;
   const filter = filterChoice ?? "complete",
     setFilter = setFilterChoice;
   useEffect(() => setLimit(PAGE), [filter, outcome, query, speed, sort]);
@@ -490,7 +500,7 @@ export function Requests({
       )) ||
     detail ||
     // Nothing chosen on a wide screen: the details column shows the newest finished request, not a blank card.
-    (xl ? newestFinished : null);
+    (xl && !busyNow ? newestFinished : null);
   const done = view?.phase === "complete";
   const copyId = (id: string) => {
     void navigator.clipboard?.writeText(id).then(() => {
@@ -828,7 +838,7 @@ export function Requests({
           <div className="space-y-5">
             <Card className="overflow-hidden">
               <div
-                className={`relative ${filter === "active" ? "min-h-[9rem]" : "min-h-[14rem]"}`}
+                className={`relative ${reserved ? "min-h-[42rem]" : filter === "active" ? "min-h-[9rem]" : "min-h-[14rem]"}`}
                 data-live-list=""
                 ref={listRef}
               >
@@ -1051,13 +1061,15 @@ export function Requests({
                                       : `${elapsed(row.elapsed_s)} · ${number(speedValue)} tok/s`}
                                 </p>
                                 {/* Below lg the usage column is gone; the same numbers ride on a line of their own. */}
-                                <p className="mt-0.5 truncate text-xs tabular-nums text-muted-foreground xl:hidden">
-                                  {t("requests.list.mobileUsage", {
-                                    prompt: number(row.prompt_tokens, 0),
-                                    out: number(row.completion_tokens, 0),
-                                    cached: number(row.cached_tokens, 0),
-                                  })}
-                                </p>
+                                {row.phase === "complete" && (
+                                  <p className="mt-0.5 truncate text-xs tabular-nums text-muted-foreground xl:hidden">
+                                    {t("requests.list.mobileUsage", {
+                                      prompt: number(row.prompt_tokens, 0),
+                                      out: number(row.completion_tokens, 0),
+                                      cached: number(row.cached_tokens, 0),
+                                    })}
+                                  </p>
+                                )}
                               </Td>
                               <Td className="hidden overflow-hidden tabular-nums xl:table-cell">
                                 <span className="block truncate">
@@ -1173,7 +1185,7 @@ export function Requests({
                   </TableState>
                 )}
               </div>
-              {filter === "active" && recentDone.length > 0 && (
+              {filter === "active" && !reserved && recentDone.length > 0 && (
                 <div
                   className="border-t px-4 py-3"
                   data-testid="recent-finished"
