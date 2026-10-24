@@ -371,7 +371,7 @@ test.describe("requests page finished-request ring", () => {
       .getByRole("dialog", { name: "請求詳情" })
       .or(page.getByRole("complementary", { name: "請求詳情" }));
     const breakdown = panel.getByRole("region", { name: "耗時分解" });
-    await expect(breakdown.locator("p", { hasText: /^排隊$/ })).toBeVisible();
+    await expect(breakdown.locator("p", { hasText: /^排隊至預填開始$/ })).toBeVisible();
     await expect(breakdown).toContainText("40 ms");
     await expect(breakdown).toContainText("300 ms");
     await expect(breakdown).toContainText("2 s");
