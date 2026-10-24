@@ -33,7 +33,12 @@ def install(be, manifest: dict) -> None:
         if not 18990 <= port <= 18999:
             raise ValueError("benchmark server outside port pool")
         cfg = recipes[engine]
-        values = {"port": str(port), "home": str(home), "ctx": str(ctx_tokens)}
+        values = {
+            "port": str(port),
+            "home": str(home),
+            "ctx": str(ctx_tokens),
+            "parallel": str(parallel),
+        }
         files = {}
         if cfg.get("strata"):
             data = dict(cfg["strata"])
@@ -54,7 +59,7 @@ def install(be, manifest: dict) -> None:
                     "XDG_CACHE_HOME": str(Path(home) / "cache"),
                     "HF_HOME": "/Volumes/P5Plus/hf-cache",
                     "HF_HUB_OFFLINE": "1",
-                    **cfg.get("env", {}),
+                    **{k: v.format(**values) for k, v in cfg.get("env", {}).items()},
                 },
             ),
             cfg.get("flags", {}),

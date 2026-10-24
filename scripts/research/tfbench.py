@@ -340,6 +340,30 @@ class Srv:
             self.mem.stop()
 
 
+def cached_tokens(usage):
+    """Keep absent cache accounting unknown; zero is a measured cache miss."""
+    details = usage.get("prompt_tokens_details") or {}
+    value = details.get("cached_tokens")
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 <= value <= usage["prompt_tokens"]
+    ):
+        raise ValueError(f"invalid cached_tokens: {value!r}")
+    return value
+
+
+def concurrent_prompt(index, trial, ctx):
+    """Independent exact-size requests; salt at the front prevents shared-prefix priming."""
+    from snapshot_prompts import exact_chat_prompt
+
+    kind = "prose" if (index + trial) % 2 == 0 else "code"
+    source = load_prompt(f"{kind}-32768")
+    return exact_chat_prompt(f"Request {trial}:{index}.\n" + source, ctx, LONG_ASK)
+
+
 def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
     body = dict(body, stream=True, stream_options={"include_usage": True})
     headers = {"Content-Type": "application/json", "Authorization": "Bearer k"}
@@ -426,7 +450,7 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
         total_s=round(t1 - t0, 3),
         ct=ct,
         pt=usage["prompt_tokens"],
-        cached=(usage.get("prompt_tokens_details") or {}).get("cached_tokens"),
+        cached=cached_tokens(usage),
         dec_tps=round((ct - 1) / (t1 - tf), 1) if tf and ct > 1 and t1 > tf else None,
         finish=finish,
         sha=sha,
@@ -1150,20 +1174,9 @@ def part_conc(s, out, a):
     for n in (2,) if a.smoke else ns:
         for trial in range(1 if a.smoke else a.conc_trials):
             texts = [
-                "Say hello."
-                if a.smoke
-                else load_prompt(
-                    f"conc-{n}-{trial}-{'prose' if (i + trial) % 2 == 0 else 'code'}-{i}"
-                    if os.environ.get("TFB_EXACT_PROMPTS") == "1"
-                    else f"conc-{'prose' if (i + trial) % 2 == 0 else 'code'}-{i}"
-                )
+                "Say hello." if a.smoke else concurrent_prompt(i, trial, a.conc_ctx)
                 for i in range(n)
             ]
-            if not a.smoke and os.environ.get("TFB_EXACT_PROMPTS") == "1":
-                from snapshot_prompts import assert_chat_prompt
-
-                for text in texts:
-                    assert_chat_prompt(text, 32768)
             t0 = time.perf_counter()
             with cf.ThreadPoolExecutor(n) as ex:
                 rs = list(
@@ -1291,6 +1304,9 @@ def parse_args(argv=None):
     ap.add_argument("--conc-trials", type=int, default=2)
     ap.add_argument("--conc-tokens", type=int, default=256)
     ap.add_argument(
+        "--conc-ctx", type=int, default=32768, help="rendered concurrent prompt tokens"
+    )
+    ap.add_argument(
         "--ctx-tokens",
         type=int,
         default=140000,
@@ -1367,7 +1383,9 @@ def main():
             for ctx in a.only_ctx or [1024, 8192, 32768]:
                 for kind in a.only_kind or ("prose", "code"):
                     decode_prompt(kind, ctx, a.long_ask)
-        elif a.part in ("conc", "agent", "ca"):
+        elif a.part == "conc":
+            concurrent_prompt(0, 0, a.conc_ctx)
+        elif a.part in ("agent", "ca"):
             for directory in (BODIES, BODIES2):
                 if not list(directory.glob("*-req.json")):
                     raise FileNotFoundError(directory)
