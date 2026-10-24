@@ -119,7 +119,7 @@ def run_checks(url, results, long_tokens):
             {"model": "m", "input": "Say hi.", "reasoning": {"effort": "high"}},
         )
         expect(st == 200, f"status {st}: {j}")
-        b = (j.get("x_yunshu") or {}).get("budget") or {}
+        b = ((j.get("usage") or {}).get("x_yunshu") or {}).get("budget") or {}
         expect(b.get("max_tokens_granted", 0) > 32768, f"budget {b}")
         expect(b.get("max_tokens_source") == "model_limit", f"budget {b}")
         return b
