@@ -82,6 +82,7 @@ export function FooterStatus({
       <Suspense fallback={null}>
         <StatusIslandContent
           engine={engine}
+          connection={connection}
           ledger={online ? ledger : null}
           host={host}
           dot={dot}

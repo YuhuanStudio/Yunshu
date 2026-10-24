@@ -338,6 +338,9 @@ const settingdesc = {
     "主控台程序監看並轉送請求的引擎網址。未設定時：啟動它的引擎，否則為 http://127.0.0.1:8000。",
   YUNSHU_CONSOLE_ENGINE_TOKEN:
     "主控台程序記錄歷史時讀取引擎所用的 Bearer 權杖。未設定時使用 YUNSHU_AUTH_TOKEN。",
+  YUNSHU_CONSOLE_DISCOVER_PORTS:
+    "--engine auto 時主控台探測 Yunshu 引擎的 127.0.0.1 連接埠（逗號與範圍；只有 /health 回應符合 Yunshu 才算）。",
+  YUNSHU_CONSOLE_DISCOVER_S: "--engine auto 時主控台探測引擎的間隔秒數。",
   YUNSHU_CONSOLE_POLL_S:
     "主控台程序讀取引擎的間隔（秒）；1 秒對應 1 秒的歷史解析度。",
   YUNSHU_CONSOLE_HISTORY:

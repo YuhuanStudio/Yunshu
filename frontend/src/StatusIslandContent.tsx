@@ -40,6 +40,8 @@ import {
 import { Presence } from "./motion/Presence";
 import { LiveSparkline } from "./motion/LiveSparkline";
 import { routeHref } from "./route";
+import { EngineSwitcher, useEngineList } from "./EngineSwitcher";
+import type { Connection } from "./api";
 import type { Engine } from "./ui";
 
 /** A host sample older than this is stale: values stay, dimmed, and the age says so. */
@@ -56,6 +58,7 @@ export type IslandDot = "online" | "away" | "offline" | "neutral";
  */
 export function StatusIslandContent({
   engine,
+  connection,
   ledger,
   host,
   dot,
@@ -63,6 +66,7 @@ export function StatusIslandContent({
   onNavigate,
 }: {
   engine: Engine;
+  connection?: Connection;
   ledger: MemoryLedgerData | null;
   host: HostState;
   dot: IslandDot;
@@ -71,6 +75,9 @@ export function StatusIslandContent({
   onNavigate: () => void;
 }) {
   const status = engine.status;
+  const { list, pin } = useEngineList(connection ?? { baseUrl: "", token: "" });
+  const switcher =
+    connection && list ? <EngineSwitcher list={list} pin={pin} /> : null;
   const online = engine.phase === "online" && status != null;
   const go = (page: Parameters<typeof routeHref>[0]) => () => {
     globalThis.location.hash = routeHref(page).slice(1);
@@ -88,7 +95,7 @@ export function StatusIslandContent({
       <>
         <StatusIslandHeader
           indicator={<StatusIndicator status={dot} />}
-          title={word}
+          title={list?.waiting ? t("shell.engines.waitingTitle") : word}
           subtitle={
             engine.phase === "offline"
               ? [
@@ -115,6 +122,7 @@ export function StatusIslandContent({
               : undefined
           }
         />
+        {switcher}
         <Nav online={false} active={0} loaded={0} />
       </>
     );
@@ -263,6 +271,7 @@ export function StatusIslandContent({
       )}
 
       <MachineCard host={host} now={now} />
+      {switcher}
       <Nav
         online
         active={a.counts.active}

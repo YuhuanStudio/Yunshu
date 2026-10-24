@@ -69,6 +69,8 @@ REQUEST_COLUMNS = (
     "queue_wait_ms",
     "key_name",
     "cancelled",
+    "engine_url",
+    "engine_started",
 )
 _TEXT = {"request_id", "model", "path", "finish_reason", "key_name"}
 _INT = {
@@ -97,7 +99,9 @@ def request_row(entry: dict) -> dict[str, Any] | None:
     out: dict[str, Any] = {}
     for col in REQUEST_COLUMNS:
         v = entry.get(col)
-        if col == "key_name":
+        if col == "engine_url":
+            out[col] = v[:96] if isinstance(v, str) and v.isprintable() else None
+        elif col == "key_name":
             # a name the user typed for the key: any printable text, short, never a secret field
             out[col] = v[:64] if isinstance(v, str) and v.isprintable() else None
         elif col in _TEXT:
@@ -164,8 +168,12 @@ class HistoryStore:
                 " stream INTEGER, status INTEGER, finish_reason TEXT, prompt_tokens INTEGER,"
                 " completion_tokens INTEGER, cached_tokens INTEGER, prefill_tps REAL,"
                 " decode_tps REAL, ttft_ms REAL, queue_wait_ms REAL, key_name TEXT,"
-                " cancelled INTEGER, PRIMARY KEY (t, request_id))"
+                " cancelled INTEGER, engine_url TEXT, engine_started REAL, PRIMARY KEY (t, request_id))"
             )
+            have = {r[1] for r in db.execute("PRAGMA table_info(requests)")}
+            for col, typ in (("engine_url", "TEXT"), ("engine_started", "REAL")):
+                if col not in have:  # a history file from before engine auto-follow
+                    db.execute(f"ALTER TABLE requests ADD COLUMN {col} {typ}")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS events (t REAL NOT NULL, kind TEXT NOT NULL, detail TEXT)"
             )

@@ -61,7 +61,8 @@ const settingdesc = {
   YUNSHU_RESEARCH_PAUSE_TIMEOUT_S:
     "Maximum wait, in seconds, for the gpuq pause acknowledgement before a request is admitted.",
   YUNSHU_BATCH_MAX_ITEMS: "Batch API: maximum requests per batch.",
-  YUNSHU_BATCH_TIMEOUT: "Batch API: timeout in seconds for each request a batch runs (0: no timeout).",
+  YUNSHU_BATCH_TIMEOUT:
+    "Batch API: timeout in seconds for each request a batch runs (0: no timeout).",
   YUNSHU_ALLOW_LOCAL_FILES:
     "Allow requests to reference any local file path (default: only under `YUNSHU_MEDIA_DIR`).",
   YUNSHU_MEDIA_DIR:
@@ -358,6 +359,10 @@ const settingdesc = {
     "Engine URL the console process watches and proxies to. Unset: the engine that started it, else http://127.0.0.1:8000.",
   YUNSHU_CONSOLE_ENGINE_TOKEN:
     "Bearer token the console process uses to read the engine while recording history. Unset: YUNSHU_AUTH_TOKEN.",
+  YUNSHU_CONSOLE_DISCOVER_PORTS:
+    "Ports on 127.0.0.1 the console probes for Yunshu engines with --engine auto (comma list and ranges; only a /health that answers like Yunshu counts).",
+  YUNSHU_CONSOLE_DISCOVER_S:
+    "Seconds between the console's engine discovery probes with --engine auto.",
   YUNSHU_CONSOLE_POLL_S:
     "Seconds between the console process's reads of the engine; 1 s gives the 1 s history resolution.",
   YUNSHU_CONSOLE_HISTORY:
