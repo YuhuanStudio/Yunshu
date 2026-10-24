@@ -120,7 +120,15 @@ def main() -> int:
     a = ap.parse_args()
     home = Path(a.home)
     home.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, HOME=str(home), HF_HUB_OFFLINE="1", NO_PROXY="127.0.0.1")
+    # the tree this script lives in, not the checkout the binary was installed from
+    tree = str(Path(__file__).resolve().parents[2] / "python")
+    env = dict(
+        os.environ,
+        HOME=str(home),
+        HF_HUB_OFFLINE="1",
+        NO_PROXY="127.0.0.1",
+        PYTHONPATH=tree,
+    )
     for k in [k for k in env if k.startswith("YUNSHU_")]:
         del env[k]
     base = f"http://127.0.0.1:{a.port}"
@@ -180,8 +188,10 @@ def main() -> int:
                 time.sleep(20)
     finally:
         if not a.keep or result["failures"]:
-            with_pg = os.getpgid(proc.pid)
-            os.killpg(with_pg, signal.SIGKILL)
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         Path(a.out).write_text(json.dumps(result, indent=2))
     return 1 if result["failures"] else 0
 
