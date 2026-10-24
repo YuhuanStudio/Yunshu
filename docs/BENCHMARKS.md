@@ -1,5 +1,7 @@
 # Benchmarks
 
+
+> Console docs: the maintained, translated version of this page is `/docs/guides/benchmarks` (source `frontend/docs/guides/benchmarks.mdx`). This file stays as the repository-side reference read by tooling.
 Apple M5 Max, 128 GB unified memory. Yunshu development source pinned to
 `5ac5452c3d82f43a2208d34730cd35136bd73fa0`. Competitor releases were checked on
 2026-10-19; this is a dated snapshot, not a promise to track future releases.

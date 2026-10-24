@@ -123,6 +123,24 @@ It reports a single served model; with no model loaded, or in multi-model mode w
 
 `GET /docs` serves Swagger UI, `GET /redoc` serves ReDoc and `GET /openapi.json` serves the OpenAPI document of every registered route. All three are public even when a token is set.
 
+## Management endpoints
+
+Yunshu-only routes under `/v1/yunshu/*` (see also [Auth and keys](/docs/guides/auth-and-keys) and [Telemetry](/docs/guides/telemetry)). Per-route detail and test status: `docs/guides/API_SURFACE.md`. Routes marked admin need an admin token.
+
+| Route | What it returns or does |
+|---|---|
+| `GET /v1/yunshu/memory` | memory ledger: owners (weights, prefix cache RAM and warm tier, MLX cache, live KV), working set, host pressure |
+| `GET /v1/yunshu/cache, /cache/tiers` | prefix-cache entries and per-tier usage, hits and SSD read rates (hash labels only, never tokens) |
+| `POST /v1/yunshu/cache/clear, /cache/tiers/clear` | drop resident APC entries or one tier (admin; refuses with 409 unless engines are idle for the global clear) |
+| `POST /v1/yunshu/downloads`, `GET /v1/yunshu/downloads`, `DELETE /v1/yunshu/downloads/{id}` | queue, list and cancel Hugging Face downloads into the models dir; refuses with 507 when the disk cannot hold the repo |
+| `GET /v1/yunshu/models/local` | every model on disk, registered or not |
+| `POST /v1/yunshu/models/register`, `DELETE /v1/yunshu/models/register/{model_id}` | register or unregister a local checkpoint without loading it (multi-model mode) |
+| `POST /v1/yunshu/models/{id}/reload`, `GET /v1/yunshu/models/{id}/fit`, `GET /v1/yunshu/models/impact`, `POST /v1/yunshu/models/cancel` | reload to apply settings, dry-run memory fit, eviction impact, cancel a load or pull |
+| `GET /v1/yunshu/logs, /logs/stream` | redacted in-memory server log ring (admin), plain or as server-sent events |
+| `GET /v1/yunshu/spec-decode` | MTP / DFlash drafted and accepted tokens per draft depth |
+| `GET /v1/yunshu/requests/recent, /requests/history` | finished-request ring and rotated serve-log metadata (numbers only, no prompt text) |
+| `GET /v1/yunshu/bundle, /bundle/manifest` | local diagnostics file and the list of what it contains; never uploaded |
+
 ## Tavily-compatible routes
 
 Under `/tavily` Yunshu serves a local implementation of the Tavily REST API, backed by its own search and fetch layers: `POST /tavily/search`, `POST /tavily/extract`, `POST /tavily/crawl`, `POST /tavily/map`, `POST /tavily/research`, `GET /tavily/research/{request_id}`, `POST /tavily/feedback`, `POST /tavily/logs`, `GET /tavily/usage`, `GET /tavily/providers` and an MCP endpoint `POST /tavily/mcp`. There is no `/v1` in these paths, and errors use `{"detail": {"error": "..."}}`. When a token is set, Tavily clients may pass it as the bearer token or as `api_key` in the request body. Credits are not billed: `GET /tavily/usage` always reports zero. See the [Web search guide](/docs/guides/web-search) for providers and setup.

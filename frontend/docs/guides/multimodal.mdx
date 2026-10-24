@@ -1,0 +1,56 @@
+---
+title: Multimodal and retrieval endpoints
+description: Which routes serve images, audio, video, speech, Realtime voice, OCR, image generation, embeddings and rerank, which extras they need, and where the limits are.
+---
+
+Optional extras install the dependencies: `pip install 'yunshu[audio]'`, `[vision]`, `[generation]`, `[embeddings]` and `[omni]`. Each route needs a model that supports it; `GET /v1/models` says which. Request shapes live in the API reference pages linked below.
+
+<Callout type="info">
+Speech, ASR, TTS, image generation and OCR are supported capabilities, not the tuned path. Features differ per checkpoint and are verified per model: see [Model support](/docs/guides/model-support).
+</Callout>
+
+## Routes
+
+| Capability | Route | Extra | Notes |
+|---|---|---|---|
+| Images, audio and video as chat input | `/v1/chat/completions`, `/v1/responses`, `/v1/messages` | none (mlx-vlm models) | media enters the prefix-cache key |
+| Qwen3-Omni speech to speech | `POST /v1/omni/speech/stream` | `omni` | text and audio out; `examples/talk.py` |
+| Realtime voice | `WS /v1/realtime` (and `/realtime`) | `audio` | server VAD, barge-in, native omni speech or an ASR, LLM, TTS cascade. See [Realtime](/docs/api/realtime) |
+| Speech to text | `/v1/audio/transcriptions`, `/v1/audio/translations` | `audio` | translation needs a Whisper model. See [Audio](/docs/api/audio) |
+| Text to speech | `/v1/audio/speech`, `GET /v1/audio/voices` | `audio` | local voice enrollment from audio samples for reference-audio models |
+| OCR | `POST /v1/ocr` | `vision` | GLM-OCR; `yunshu ocr`; also in the console; [OCR API](/docs/api/ocr) |
+| Image generation, editing, variations | `/v1/images/generations`, `/edits`, `/variations` | `generation` | `yunshu image`, `image-edit`, `image-variations`. See [Images](/docs/api/images) |
+| Embeddings | `POST /v1/embeddings` | `embeddings` | text and, for supported models, image, audio and video. See [Embeddings](/docs/api/embeddings) |
+| Rerank, score, classify, pooling | `/v1/rerank`, `/v1/score`, `/v1/classify`, `/v1/pooling` | `embeddings` | cross-encoder rerank and trained classification heads, vLLM semantics. See [Rerank](/docs/api/rerank) |
+| Typed decisions | `/v1/decisions`, `/v1/systemone` | none | See [Decisions](/docs/api/decisions) |
+
+## Try it from the command line
+
+<Steps>
+<Step>
+
+Serve a model that supports the capability, for example a TTS model for `speak`.
+
+</Step>
+<Step>
+
+Run the matching command:
+
+```bash
+yunshu speak "Hello from Yunshu" -o hello.wav     # needs a TTS model served
+yunshu transcribe hello.wav                       # needs an ASR model
+yunshu ocr page.png
+yunshu embed "a sentence"
+yunshu rerank "query" "doc one" "doc two" --top-n 1
+```
+
+</Step>
+</Steps>
+
+For Realtime over WebSocket or WebRTC see [Transports](/docs/guides/transports). Ephemeral client secrets come from `POST /v1/realtime/client_secrets`.
+
+## Limits
+
+- Realtime transcription-only session configuration is echoed but not executed as a transcription-only session.
+- Prefix reuse depends on the cache layout. Gemma 4 has scoped exact-window restore receipts; do not infer support for every rotating-cache model.
+- Qwen3-Omni repeated-image prefix reuse has scoped hit and miss parity receipts; combined image and audio cache reuse is unverified. See [Model support](/docs/guides/model-support).

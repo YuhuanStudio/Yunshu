@@ -55,7 +55,7 @@ Runner 只产出 token id。解码成文本、stop 字符串、思考状态与�
 
 纯文本 `mlx-lm` 模型走 `_generate_fast`，直接调用 mlx-lm 的 `generate_step`，一次处理一个请求；对这类模型的并行请求会被串行化。这条路径有自己的前缀缓存（`KVPrefixCache`）、KV 量化、n-gram 与 jump-forward 选项，以及受限解码的采样器。
 
-文本模型的连续批量循环放在 `YUNSHU_ENGINE_LOOP` 之后（实验性、缺省关闭）。它是旧有的路径，而不是新工作的方向。
+文本模型的连续批量循环放在 `YUNSHU_ENGINE_LOOP` 之后（稳定的用户选项、缺省关闭，输出不保证与快速路径相同，见[可能改变输出的选项](/docs/guides/options)）。它是旧有的路径，而不是新工作的方向。
 
 ### 每个请求的状态
 

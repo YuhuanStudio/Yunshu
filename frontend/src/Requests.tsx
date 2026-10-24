@@ -1,3 +1,4 @@
+import { prefixHit, prefixHitWindow } from "./request-kpi";
 import { liveSlots } from "./live-slots";
 import { FRESH_ROW, useFreshIds } from "./fresh-rows";
 import { ErrorNote } from "./error-note";
@@ -6,7 +7,14 @@ import { LatencyDistribution } from "./LatencyDistribution";
 import { SpeculationPanel } from "./SpeculationPanel";
 import { useRequestArchive } from "./useRequestArchive";
 import { ArchiveControls } from "./ArchiveControls";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useFlip } from "./motion/flip";
 import {
   CustomSelect,
@@ -264,7 +272,9 @@ export function Requests({
   const recent = useRecentRequests(
     connection,
     engine.status?.last?.request_id,
-    engine.status?.console_process === true,
+    // A page opened while the engine is away has no status yet, but the console still answers its record.
+    engine.status?.console_process === true ||
+      (engine.status == null && engine.failures > 0),
   );
   const sampled = useMemo(
     () =>
@@ -286,7 +296,10 @@ export function Requests({
       setFilterChoice(
         engine.status.requests.items.length > 0 ? "active" : "complete",
       );
-  }, [filterChoice, engine.status]);
+    // No status (the engine is away) but a recorded history: show what finished, not an empty "active" tab.
+    else if (filterChoice == null && recent.rows.length > 0)
+      setFilterChoice("complete");
+  }, [filterChoice, engine.status, recent.rows.length]);
   const filter = filterChoice ?? "complete",
     setFilter = setFilterChoice;
   useEffect(() => setLimit(PAGE), [filter, outcome, query, speed, sort]);
@@ -332,6 +345,14 @@ export function Requests({
         });
   const matched = useMemo(() => sortRows(bySpeed, sort), [bySpeed, sort]);
   const shown = matched.slice(0, limit);
+  const recentDone = useMemo(
+    () =>
+      rows
+        .filter((r) => r.phase === "complete")
+        .sort((a, b) => (b.t ?? 0) - (a.t ?? 0))
+        .slice(0, 5),
+    [rows],
+  );
   const lanes = useRef<(Row | null)[]>([]);
   const laneScope = `${filter}/${outcome}/${query}/${speed}/${sort.key}/${sort.dir}`;
   const previousScope = useRef(laneScope);
@@ -366,6 +387,7 @@ export function Requests({
   );
   const promptSum = finished.reduce((n, r) => n + (r.prompt_tokens ?? 0), 0),
     cachedSum = finished.reduce((n, r) => n + (r.cached_tokens ?? 0), 0);
+  const hit = prefixHit([...finished].sort((a, b) => (a.t ?? 0) - (b.t ?? 0)));
   const retention = {
     since: Math.min(
       ...finished.map((r) => r.t ?? Infinity).concat(Date.now() / 1000),
@@ -383,7 +405,9 @@ export function Requests({
             prefill: number(status.requests.prefill, 0),
             decode: number(status.requests.decode, 0),
           })
-        : undefined,
+        : engine.phase === "offline"
+          ? t("requests.tile.activeAway")
+          : undefined,
       data: activeSeries,
       tone: "accent" as const,
       name: t("requests.tile.activeName"),
@@ -424,20 +448,9 @@ export function Requests({
     },
     {
       label: t("requests.tile.hitLabel"),
-      value: promptSum > 0 ? number((cachedSum / promptSum) * 100, 0) : "—",
-      unit: promptSum > 0 ? "%" : undefined,
-      hint:
-        promptSum > 0
-          ? t(
-              recent.supported
-                ? "requests.tile.hitServer"
-                : "requests.tile.hitPage",
-              { count: number(finished.length, 0) },
-            ) +
-            (hits.length
-              ? t("requests.tile.hitLatest", { value: number(hits.at(-1), 0) })
-              : "")
-          : t("requests.tile.noFinished"),
+      value: hit.pct != null ? number(hit.pct, 0) : "—",
+      unit: hit.pct != null ? "%" : undefined,
+      hint: prefixHitWindow(hit, recent.supported === true),
       data: rollingMedian(hits),
       tone: "accent" as const,
       name: t("requests.tile.hitName"),
@@ -458,6 +471,14 @@ export function Requests({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [xl, detail]);
+  const newestFinished = useMemo(
+    () =>
+      finished.reduce<Row | null>(
+        (a, r) => (!a || (r.t ?? 0) > (a.t ?? 0) ? r : a),
+        null,
+      ),
+    [finished],
+  );
   const view =
     (detail &&
       finished.find(
@@ -467,7 +488,9 @@ export function Requests({
             r.source === "archive" ||
             r.source === "history"),
       )) ||
-    detail;
+    detail ||
+    // Nothing chosen on a wide screen: the details column shows the newest finished request, not a blank card.
+    (xl ? newestFinished : null);
   const done = view?.phase === "complete";
   const copyId = (id: string) => {
     void navigator.clipboard?.writeText(id).then(() => {
@@ -805,13 +828,13 @@ export function Requests({
           <div className="space-y-5">
             <Card className="overflow-hidden">
               <div
-                className="relative min-h-[42rem]"
+                className={`relative ${filter === "active" ? "min-h-[9rem]" : "min-h-[14rem]"}`}
                 data-live-list=""
                 ref={listRef}
               >
                 <TooltipProvider delayDuration={200}>
                   <Table
-                    className="md:min-w-[840px] md:table-fixed"
+                    className="md:min-w-[680px] min-[1700px]:table-fixed"
                     scrollLabel={t("requests.list.tableLabel")}
                   >
                     <Thead>
@@ -820,19 +843,19 @@ export function Requests({
                           k="time"
                           sort={sort}
                           setSort={setSort}
-                          className="w-24 max-sm:hidden"
+                          className="w-20 max-sm:hidden"
                         >
                           {t("requests.list.colTime")}
                         </SortTh>
                         <Th>{t("requests.list.colRequest")}</Th>
-                        <Th className="hidden w-36 lg:table-cell">
+                        <Th className="hidden w-36 xl:table-cell">
                           {t("requests.list.colUsage")}
                         </Th>
                         <SortTh
                           k="ttft"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-24 md:table-cell"
+                          className="hidden w-20 md:table-cell"
                         >
                           {t("requests.list.colTtft")}
                         </SortTh>
@@ -840,7 +863,7 @@ export function Requests({
                           k="total"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-24 md:table-cell"
+                          className="hidden w-20 md:table-cell"
                         >
                           {t("requests.list.colTotal")}
                         </SortTh>
@@ -848,14 +871,14 @@ export function Requests({
                           k="tps"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-24 md:table-cell"
+                          className="hidden w-20 md:table-cell"
                         >
                           tok/s
                         </SortTh>
                         <Th className="hidden w-24 min-[1800px]:table-cell">
                           {t("requests.list.colSpec")}
                         </Th>
-                        <Th className="w-28">
+                        <Th className="w-24">
                           <span className="sr-only">
                             {t("requests.list.colActions")}
                           </span>
@@ -873,7 +896,7 @@ export function Requests({
                             >
                               <Td className="max-sm:hidden" />
                               <Td className="min-w-44" />
-                              <Td className="hidden lg:table-cell" />
+                              <Td className="hidden xl:table-cell" />
                               <Td className="hidden md:table-cell" />
                               <Td className="hidden md:table-cell" />
                               <Td className="hidden md:table-cell" />
@@ -897,172 +920,233 @@ export function Requests({
                             st.ttft != null ? formatMs(st.ttft) : "—",
                           totalText =
                             st.total != null ? formatMs(st.total) : "—";
+                        const newer = displayed[lane - 1],
+                          boundary =
+                            filter !== "active" &&
+                            sort.key === "time" &&
+                            when != null &&
+                            newer
+                              ? engine.restarts.find(
+                                  (m) =>
+                                    m.at > when &&
+                                    m.at <= (rowMs(newer) ?? Infinity),
+                                )
+                              : undefined;
                         return (
-                          <Tr
+                          <Fragment
                             key={filter === "active" ? `lane-${lane}` : row.id}
-                            data-request-id={row.id}
-                            data-live-request={
-                              filter === "active" ? "" : undefined
-                            }
-                            data-flip={filter === "active" ? undefined : row.id}
-                            className={
-                              [
-                                filter === "active" ? "live-request-slot" : "",
-                                detail?.id === row.id ? "bg-accent-subtle" : "",
-                                fresh(row.id) ? FRESH_ROW : "",
-                              ]
-                                .filter(Boolean)
-                                .join(" ") || undefined
-                            }
                           >
-                            <Td className="whitespace-nowrap tabular-nums max-sm:hidden">
-                              {when == null ? (
-                                "—"
-                              ) : (
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <span tabIndex={0}>{clock(when)}</span>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    {t("requests.list.clockTitle", {
-                                      relative: relativeTime(when, now),
-                                      date: dateTime(when),
-                                    })}
-                                  </TooltipContent>
-                                </Tooltip>
-                              )}
-                            </Td>
-                            <Td
-                              className="min-w-44"
-                              data-testid="request-identity"
-                            >
-                              <div className="flex min-w-0 items-center gap-2">
-                                {(row.phase !== "complete" ||
-                                  (row.outcome &&
-                                    row.outcome !== "completed")) && (
-                                  <StatusIndicator
-                                    className="shrink-0 gap-1.5 whitespace-nowrap font-sans text-xs text-muted-foreground"
-                                    status={
-                                      row.phase === "complete"
-                                        ? outcomeDot(row.outcome)
-                                        : phaseDot(row.phase)
-                                    }
-                                  >
-                                    {row.phase === "complete"
-                                      ? row.outcome
-                                        ? outcomeLabel(row.outcome)
-                                        : ""
-                                      : phaseLabel(row.phase)}
-                                  </StatusIndicator>
-                                )}
-                                <span
-                                  title={row.id}
-                                  className="min-w-0 flex-1 truncate font-mono text-xs"
+                            {boundary && (
+                              <Tr data-restart-boundary="">
+                                <Td
+                                  colSpan={8}
+                                  className="py-1 text-center text-xs text-muted-foreground"
                                 >
-                                  {shortId(row.id)}
-                                </span>
-                              </div>
-                              <p
-                                title={row.model ?? undefined}
-                                className="mt-0.5 truncate text-xs text-muted-foreground"
-                              >
-                                {row.model
-                                  ? modelLabel(row.model)
-                                  : t("requests.list.modelUnknown")}
-                              </p>
-                              <p className="mt-0.5 truncate text-xs tabular-nums text-muted-foreground md:hidden">
-                                {/* The time column is gone on phones; the time rides on this line. */}
-                                {when != null && (
-                                  <span className="sm:hidden">
-                                    {clock(when)}
-                                    {" · "}
-                                  </span>
-                                )}
-                                {row.phase === "complete"
-                                  ? t("requests.list.mobileLine", {
-                                      ttft: ttftText,
-                                      total: totalText,
-                                      tps: number(speedValue),
-                                    })
-                                  : percent != null
-                                    ? t("requests.list.prefillPercent", {
-                                        percent: number(percent, 0),
-                                      })
-                                    : `${elapsed(row.elapsed_s)} · ${number(speedValue)} tok/s`}
-                              </p>
-                            </Td>
-                            <Td className="hidden overflow-hidden tabular-nums lg:table-cell">
-                              <span className="block truncate">
-                                {number(row.prompt_tokens, 0)} /{" "}
-                                {number(row.completion_tokens, 0)}
-                              </span>
-                              <span className="block truncate text-xs text-muted-foreground">
-                                {t("requests.list.cachedOf", {
-                                  cached: number(row.cached_tokens, 0),
-                                  prompt: number(row.prompt_tokens, 0),
-                                })}
-                              </span>
-                            </Td>
-                            <Td
-                              className={`hidden whitespace-nowrap tabular-nums md:table-cell ${slow ? "text-warning" : ""}`}
-                              title={
-                                slow ? t("requests.list.slowMark") : undefined
+                                  {t(
+                                    boundary.kind === "switched"
+                                      ? "requests.list.switched"
+                                      : boundary.kind === "away"
+                                        ? "requests.list.away"
+                                        : "requests.list.restarted",
+                                    { time: clock(boundary.at) },
+                                  )}
+                                </Td>
+                              </Tr>
+                            )}
+                            <Tr
+                              data-request-id={row.id}
+                              data-live-request={
+                                filter === "active" ? "" : undefined
+                              }
+                              data-flip={
+                                filter === "active" ? undefined : row.id
+                              }
+                              className={
+                                [
+                                  filter === "active"
+                                    ? "live-request-slot"
+                                    : "",
+                                  detail?.id === row.id
+                                    ? "bg-accent-subtle"
+                                    : "",
+                                  fresh(row.id) ? FRESH_ROW : "",
+                                ]
+                                  .filter(Boolean)
+                                  .join(" ") || undefined
                               }
                             >
-                              {percent != null ? (
-                                <span>
-                                  {t("requests.list.prefillPercent", {
-                                    percent: number(percent, 0),
+                              <Td className="whitespace-nowrap tabular-nums max-sm:hidden">
+                                {when == null ? (
+                                  "—"
+                                ) : (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span tabIndex={0}>{clock(when)}</span>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      {t("requests.list.clockTitle", {
+                                        relative: relativeTime(when, now),
+                                        date: dateTime(when),
+                                      })}
+                                    </TooltipContent>
+                                  </Tooltip>
+                                )}
+                              </Td>
+                              <Td
+                                className="min-w-44"
+                                data-testid="request-identity"
+                              >
+                                <div className="flex min-w-0 items-center gap-2">
+                                  {(row.phase !== "complete" ||
+                                    (row.outcome &&
+                                      row.outcome !== "completed")) && (
+                                    <StatusIndicator
+                                      className="shrink-0 gap-1.5 whitespace-nowrap font-sans text-xs text-muted-foreground"
+                                      status={
+                                        row.phase === "complete"
+                                          ? outcomeDot(row.outcome)
+                                          : phaseDot(row.phase)
+                                      }
+                                    >
+                                      {row.phase === "complete"
+                                        ? row.outcome
+                                          ? outcomeLabel(row.outcome)
+                                          : ""
+                                        : phaseLabel(row.phase)}
+                                    </StatusIndicator>
+                                  )}
+                                  <span
+                                    title={row.id}
+                                    className="min-w-0 flex-1 truncate font-mono text-xs"
+                                  >
+                                    {shortId(row.id)}
+                                  </span>
+                                </div>
+                                <p
+                                  title={row.model ?? undefined}
+                                  className="mt-0.5 truncate text-xs text-muted-foreground"
+                                >
+                                  {row.model
+                                    ? modelLabel(row.model)
+                                    : t("requests.list.modelUnknown")}
+                                </p>
+                                <p className="mt-0.5 truncate text-xs tabular-nums text-muted-foreground md:hidden">
+                                  {/* The time column is gone on phones; the time rides on this line. */}
+                                  {when != null && (
+                                    <span className="sm:hidden">
+                                      {clock(when)}
+                                      {" · "}
+                                    </span>
+                                  )}
+                                  {row.phase === "complete"
+                                    ? t("requests.list.mobileLine", {
+                                        ttft: ttftText,
+                                        total: totalText,
+                                        tps: number(speedValue),
+                                      })
+                                    : percent != null
+                                      ? t("requests.list.prefillPercent", {
+                                          percent: number(percent, 0),
+                                        })
+                                      : `${elapsed(row.elapsed_s)} · ${number(speedValue)} tok/s`}
+                                </p>
+                                {/* Below lg the usage column is gone; the same numbers ride on a line of their own. */}
+                                <p className="mt-0.5 truncate text-xs tabular-nums text-muted-foreground xl:hidden">
+                                  {t("requests.list.mobileUsage", {
+                                    prompt: number(row.prompt_tokens, 0),
+                                    out: number(row.completion_tokens, 0),
+                                    cached: number(row.cached_tokens, 0),
+                                  })}
+                                </p>
+                              </Td>
+                              <Td className="hidden overflow-hidden tabular-nums xl:table-cell">
+                                <span className="block truncate">
+                                  {number(row.prompt_tokens, 0)} /{" "}
+                                  {number(row.completion_tokens, 0)}
+                                </span>
+                                <span
+                                  className="block text-xs text-muted-foreground"
+                                  title={t("requests.list.cachedOf", {
+                                    cached: number(row.cached_tokens, 0),
+                                    prompt: number(row.prompt_tokens, 0),
+                                  })}
+                                >
+                                  {t("requests.list.cachedShort", {
+                                    cached: number(row.cached_tokens, 0),
+                                    pct: number(
+                                      (row.prompt_tokens ?? 0) > 0
+                                        ? ((row.cached_tokens ?? 0) /
+                                            (row.prompt_tokens ?? 1)) *
+                                            100
+                                        : 0,
+                                      0,
+                                    ),
                                   })}
                                 </span>
-                              ) : row.phase === "complete" ? (
-                                ttftText
-                              ) : (
-                                elapsed(row.elapsed_s)
-                              )}
-                            </Td>
-                            <Td
-                              className={`hidden whitespace-nowrap tabular-nums md:table-cell ${slow ? "text-warning" : ""}`}
-                            >
-                              {row.phase === "complete" ? totalText : "—"}
-                            </Td>
-                            <Td className="hidden whitespace-nowrap tabular-nums md:table-cell">
-                              {number(speedValue)}
-                            </Td>
-                            <Td className="hidden min-[1800px]:table-cell">
-                              {speculativeText(row) ?? (
-                                <span className="text-muted-foreground">—</span>
-                              )}
-                            </Td>
-                            <Td>
-                              <div className="flex justify-end gap-1 whitespace-nowrap">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={(e) => {
-                                    e.currentTarget.focus();
-                                    detailOpener.current = e.currentTarget;
-                                    setDetail(row);
-                                  }}
-                                >
-                                  {t("requests.list.details")}
-                                </Button>
-                                {row.phase !== "complete" && (
+                              </Td>
+                              <Td
+                                className={`hidden whitespace-nowrap tabular-nums md:table-cell ${slow ? "text-warning" : ""}`}
+                                title={
+                                  slow ? t("requests.list.slowMark") : undefined
+                                }
+                              >
+                                {percent != null ? (
+                                  <span>
+                                    {t("requests.list.prefillPercent", {
+                                      percent: number(percent, 0),
+                                    })}
+                                  </span>
+                                ) : row.phase === "complete" ? (
+                                  ttftText
+                                ) : (
+                                  elapsed(row.elapsed_s)
+                                )}
+                              </Td>
+                              <Td
+                                className={`hidden whitespace-nowrap tabular-nums md:table-cell ${slow ? "text-warning" : ""}`}
+                              >
+                                {row.phase === "complete" ? totalText : "—"}
+                              </Td>
+                              <Td className="hidden whitespace-nowrap tabular-nums md:table-cell">
+                                {number(speedValue)}
+                              </Td>
+                              <Td className="hidden min-[1800px]:table-cell">
+                                {speculativeText(row) ?? (
+                                  <span className="text-muted-foreground">
+                                    —
+                                  </span>
+                                )}
+                              </Td>
+                              <Td>
+                                <div className="flex justify-end gap-1 whitespace-nowrap">
                                   <Button
                                     variant="ghost"
                                     size="sm"
-                                    disabled={!isOnline(engine) || !!busy}
                                     onClick={(e) => {
-                                      opener.current = e.currentTarget;
-                                      setCancel(row);
+                                      e.currentTarget.focus();
+                                      detailOpener.current = e.currentTarget;
+                                      setDetail(row);
                                     }}
                                   >
-                                    {t("requests.list.cancel")}
+                                    {t("requests.list.details")}
                                   </Button>
-                                )}
-                              </div>
-                            </Td>
-                          </Tr>
+                                  {row.phase !== "complete" && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      disabled={!isOnline(engine) || !!busy}
+                                      onClick={(e) => {
+                                        opener.current = e.currentTarget;
+                                        setCancel(row);
+                                      }}
+                                    >
+                                      {t("requests.list.cancel")}
+                                    </Button>
+                                  )}
+                                </div>
+                              </Td>
+                            </Tr>
+                          </Fragment>
                         );
                       })}
                     </Tbody>
@@ -1075,18 +1159,51 @@ export function Requests({
                         ? "absolute inset-x-0 top-12"
                         : undefined
                     }
-                    loading={!engine.status}
+                    loading={!engine.status && recent.supported == null}
                   >
-                    {engine.status
+                    {engine.status || recent.supported != null
                       ? query
                         ? t("requests.list.noMatch")
                         : filter === "active"
                           ? t("requests.list.noActive")
                           : t("requests.list.noneFiltered")
-                      : t("requests.list.waiting")}
+                      : engine.phase === "offline"
+                        ? t("requests.list.awayEmpty")
+                        : t("requests.list.waiting")}
                   </TableState>
                 )}
               </div>
+              {filter === "active" && recentDone.length > 0 && (
+                <div
+                  className="border-t px-4 py-3"
+                  data-testid="recent-finished"
+                >
+                  <p className="mb-2 text-xs font-medium text-muted-foreground">
+                    {t("requests.list.recentFinished")}
+                  </p>
+                  <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                    {recentDone.map((r) => (
+                      <li key={r.id}>
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground tabular-nums hover:bg-muted"
+                          onClick={() => setDetail(r)}
+                        >
+                          <span className="min-w-0 truncate font-mono">
+                            {shortId(r.id)}
+                          </span>
+                          <span className="shrink-0">
+                            {r.ttft_ms != null ? formatMs(r.ttft_ms) : "—"} ·{" "}
+                            {r.decode_tps != null
+                              ? `${number(r.decode_tps)} tok/s`
+                              : "—"}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {matched.length > shown.length && (
                 <div className="flex justify-center py-2">
                   <Button

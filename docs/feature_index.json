@@ -176,6 +176,14 @@
       "status": "stable"
     },
     {
+      "id": "code-execution",
+      "group": "agents",
+      "title": "Code execution",
+      "summary": "Anthropic code_execution (bash + text editor) run locally inside the sandbox-runtime; opt-in, no network by default",
+      "doc": "docs/guides/CODE_EXECUTION.md",
+      "status": "partial"
+    },
+    {
       "id": "tavily-api",
       "group": "agents",
       "title": "Tavily-compatible API",
@@ -260,6 +268,14 @@
       "group": "ops",
       "title": "Console process and recorded history",
       "summary": "the console runs apart from the engine (yunshu console, port 8100, no MLX): usable while the engine is down, 1 s / 10 s / 1 min history for 30 days and a metadata-only request log, outages kept as gaps",
+      "doc": "docs/CONSOLE.md",
+      "status": "stable"
+    },
+    {
+      "id": "console-auto-engine",
+      "group": "ops",
+      "title": "Console follows engines automatically",
+      "summary": "yunshu console --engine auto probes local ports (GET /health), follows the newest live Yunshu engine, keeps it while healthy, lets you pin one from the status island, and shows waiting for an engine instead of an error; history records each engine start as its own session",
       "doc": "docs/CONSOLE.md",
       "status": "stable"
     },

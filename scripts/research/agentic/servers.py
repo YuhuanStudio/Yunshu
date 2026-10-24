@@ -141,6 +141,8 @@ class Server:
             if not k.startswith(("ANTHROPIC_", "OPENAI_", "CLAUDE", "CODEX"))
         }
         env.update(HOME=str(SERVER_HOME), HF_HUB_OFFLINE="1", NO_PROXY="127.0.0.1")
+        # a benchmark server does not need the default (up to 64 GiB) SSD prefix-cache tier
+        env.setdefault("YUNSHU_VLM_APC_DISK_GB", "16")
         src = os.environ.get(
             "AGENTIC_YUNSHU_SRC"
         )  # a python/ dir to run instead of the checkout

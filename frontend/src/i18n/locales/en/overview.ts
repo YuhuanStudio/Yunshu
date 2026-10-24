@@ -62,15 +62,13 @@ const overview: Shape<typeof zh> = {
   "tip.ttft":
     "Time to first token of the last finished request, with how long ago it finished.",
   "tip.hit":
-    "Prefix hit rate: the share of input tokens served from cache across finished requests this page has seen.",
+    "Prefix hit rate: the share of input tokens served from cache across the finished requests the console holds. Same window as the Requests page.",
   "tip.metal":
     "Metal memory: unified memory MLX holds now; below it the total and this run\u2019s peak.",
   "stats.latestAge": "Last request · {age} ago",
   "stats.ageShort": "{age} ago",
   "stats.noFinished": "No finished requests",
   "stats.prefixRate": "Prefix hit rate",
-  "stats.observed": "Weighted, {n} seen",
-  "stats.observedLast": "Weighted, {n} seen · latest {pct}%",
   "stats.metal": "Metal memory",
   "stats.metalSub": "Physical {total} GB · peak {peak} GB",
   "hero.decode": "Decode live total · tok/s",
@@ -280,5 +278,10 @@ const overview: Shape<typeof zh> = {
   "prefill.computed": "Computed {n} tokens",
   "prefill.value": "{cached} cached + {done} computed of {prompt} tokens",
   "prefill.valueNoCache": "{done} computed of {prompt} tokens",
+  "hero.restarted":
+    "Engine restarted {time} · the line continues from the console's record",
+  "hero.switched": "Switched to another engine {time}",
+  "hero.widened": "No samples in this window yet; showing the last 15 min",
+  "hero.away": "Engine went away {time} · the line continues from the console's record",
 };
 export default overview;

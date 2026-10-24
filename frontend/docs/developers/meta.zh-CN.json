@@ -5,6 +5,16 @@
   "contributing",
   "verification",
   "release-gate",
-  "upstream-tracking"
+  "release-readiness",
+  "upstream-tracking",
+  "accuracy",
+  "agentic-bench",
+  "agent-compat",
+  "hardware-validation",
+  "serve-and-develop",
+  "round-driver",
+  "auxiliary-scheduling",
+  "prior-art-formats",
+  "roadmap"
  ]
 }

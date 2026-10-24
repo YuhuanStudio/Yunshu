@@ -1,5 +1,7 @@
 # Yunshu CLI
 
+
+> Console docs: the maintained, translated version of this page is `/docs/guides/cli` (source `frontend/docs/guides/cli.mdx`). This file stays as the repository-side reference read by tooling.
 > The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/guides/cli.mdx`](../../frontend/docs/guides/cli.mdx)); this file is its GitHub-facing counterpart.
 
 Install on an Apple Silicon Mac (Python 3.13+, macOS 14+):
@@ -56,6 +58,7 @@ Stop/unload a model before removing its files.
 yunshu serve -m org/name --port 8000   # also starts the console process on :8100
 yunshu serve -m org/name --no-console
 yunshu console --engine http://127.0.0.1:8000
+yunshu console --engine auto      # follow whichever local engine is running
 yunshu status
 yunshu top                    # refresh the merged health/system/engine API every 2 s
 yunshu top --once              # one snapshot

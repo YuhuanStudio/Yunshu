@@ -27,6 +27,7 @@ from .tool_format import (
     next_start,
     openai_tools,
     parse_block,
+    record_tool_outcome,
 )
 
 
@@ -89,6 +90,7 @@ class ToolCallStreamer:
         self._state = StreamState.WHOLE if self._whole else StreamState.TEXT
         self._counter = 0
         self._accepted = 0
+        self._failed_blocks = 0
 
     @property
     def state(self) -> StreamState:
@@ -103,7 +105,9 @@ class ToolCallStreamer:
         return self._drain(final=False)
 
     def flush(self) -> list[StreamOutput]:
-        return self._drain(final=True)
+        out = self._drain(final=True)
+        record_tool_outcome(self._accepted, self._failed_blocks)
+        return out
 
     # ── internals ──
 
@@ -147,6 +151,8 @@ class ToolCallStreamer:
             if parsed is None:
                 break  # end marker not here yet
             calls, end, dropped = parsed
+            if not calls:
+                self._failed_blocks += 1
             if calls:
                 for call in calls:
                     self._emit_call(call, out)

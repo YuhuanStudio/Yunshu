@@ -1,0 +1,132 @@
+---
+title: OCR
+description: POST /v1/ocr turns an uploaded image into text with an OCR model or, when none is loaded, any loaded vision-language model.
+---
+
+`POST /v1/ocr` is a Yunshu route, not part of the OpenAI API. It takes one image upload and returns the text read from it. The same route backs `yunshu ocr` and the console's "Image to text" dialog.
+
+<Endpoint method="POST" path="/v1/ocr" />
+
+<Callout type="info">
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. With API keys, the key needs inference permission and access to the model that ends up serving the request.
+</Callout>
+
+## Request
+
+`multipart/form-data`.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `file` | file | yes | The image, at most 10 MB. The upload is verified with Pillow; a file that is not an image returns `400`. PNG, JPEG, WebP, TIFF and BMP are read. |
+| `model` | string | no | Id of an OCR model or a vision-language model. Empty means the first loaded OCR model. |
+| `task` | string | no | `text` (default), `formula` or `table`. Selects the recognition prompt (`Text Recognition:`, `Formula Recognition:`, `Table Recognition:`); an unknown value behaves like `text`. |
+| `language` | string | no | A hint that steers the output language ("Respond in ..."). No language detection is performed. |
+
+## How the model is chosen
+
+1. A loaded OCR-type model is used first: the one named by `model`, or the first loaded one when `model` is empty. If `model` names an OCR model that is registered but not loaded, the model manager tries to load it.
+2. Otherwise the request falls back to a loaded vision-language model, the one named by `model` if it is a loaded VLM, else any loaded VLM. The image is sent with the task prompt plus "Extract all text from this image verbatim", greedy (`temperature` 0) and at most 2048 new tokens. The OCR engine path allows 4096.
+3. With neither, the server returns `503`.
+
+The key's model scope is checked again against the model that was actually resolved, so a model-scoped key cannot reach another model by leaving `model` empty.
+
+## Response
+
+```json
+{
+  "text": "Invoice 2026-001\nTotal: 120.00",
+  "model": "mlx-community/GLM-OCR-bf16",
+  "confidence": null,
+  "language": null,
+  "task": "text",
+  "prompt_tokens": 312,
+  "completion_tokens": 18,
+  "usage": {
+    "prompt_tokens": 312,
+    "completion_tokens": 18,
+    "total_tokens": 330,
+    "image_tokens": 290
+  }
+}
+```
+
+| Field | Description |
+| --- | --- |
+| `text` | The extracted text. It can be empty when the model reads nothing. |
+| `model` | The id of the model that served the request. |
+| `confidence` | Always `null`: neither path produces a confidence score, and Yunshu does not invent one. |
+| `language` | Your `language` hint on the VLM fallback; `null` on the OCR engine path. No detection is done. |
+| `task` | Echo of the request's `task`. |
+| `prompt_tokens`, `completion_tokens`, `usage` | Token counts. `usage.image_tokens` is the image's share; on the VLM fallback it is estimated from the image size and the vision config when the engine does not report it. |
+
+The response has no text boxes or positions: it is the text only.
+
+## Examples
+
+<Tabs items={["curl", "Python", "CLI"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/ocr \
+  -F file=@receipt.png \
+  -F task=text \
+  -F language="English"
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import requests
+
+with open("receipt.png", "rb") as f:
+    r = requests.post(
+        "http://localhost:8000/v1/ocr",
+        files={"file": ("receipt.png", f, "image/png")},
+        data={"model": "", "task": "text"},
+        timeout=180,
+    )
+r.raise_for_status()
+print(r.json()["text"])
+```
+
+</Tab>
+<Tab value="CLI">
+
+```bash
+yunshu ocr page.png
+```
+
+</Tab>
+</Tabs>
+
+## Cancellation
+
+The request is registered with the request tracker and is cancelled when the client disconnects, or by `POST /v1/cancel` (see [Extensions](/docs/api/extensions)). On the OCR engine path the generation call itself runs to its token limit; the handler returns promptly and the result is discarded. On the VLM fallback the generation stops between decode steps.
+
+## Errors
+
+| Status | When |
+| --- | --- |
+| `400` | The upload is not an image the server can read. |
+| `401`, `403` | Missing or invalid credentials, or the key may not infer or may not use the resolved model. |
+| `413` | The image is larger than 10 MB. |
+| `503` | No OCR model and no vision-language model is loaded. |
+| `507` | Out of GPU memory. |
+| `500` | Extraction failed; the server log has the cause. |
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| Text, formula and table tasks | <Support status="extension">Yunshu extension</Support> |
+| Vision-language model fallback | <Support status="supported">supported</Support> |
+| Confidence scores | <Support status="unsupported">always null</Support> |
+| Text positions or boxes | <Support status="unsupported">text only</Support> |
+| PDF input | <Support status="unsupported">images only</Support> |
+
+## Related
+
+- [Images](/docs/api/images) for image generation, edits and variations.
+- [Multimodal](/docs/guides/multimodal) for which routes serve which input.
+- [Console](/docs/getting-started/console) for the "Image to text" dialog.

@@ -171,6 +171,17 @@ const shell = {
   "island.trigger": "開啟狀態面板",
   "island.overview": "總覽",
   "island.version": "yunshu {version} · 已運作 {uptime}",
+  "pause.notice": "因量測暫停：{reason}",
+  "engines.title": "引擎",
+  "engines.waiting":
+    "目前沒有引擎在執行。主控台會持續監看，引擎一啟動就自動連上。",
+  "engines.waitingTitle": "等待引擎啟動",
+  "engines.pinnedNote": "已固定",
+  "engines.followingNote": "跟隨最新啟動",
+  "engines.pinned": "已固定",
+  "engines.current": "目前",
+  "engines.use": "使用",
+  "engines.unpin": "改為跟隨最新",
   "island.noModel": "尚未載入模型",
   "island.live.title": "即時",
   "island.live.counts": "進行中 {active} · 排隊 {queued}",
@@ -201,5 +212,10 @@ const shell = {
   "boundary.body": "其他頁面不受影響。可以重試，或到文件查看說明。",
   "boundary.retry": "重試",
   "boundary.docs": "開啟文件",
+  "engine.live.restarting": "重啟中",
+  "engine.live.switching": "切換中",
+  "engine.live.last": "上次解碼 {tps} tok/s · {age}前",
+  "engine.live.lastShort": "上次 {tps} tok/s · {age}",
+  "engine.live.paused": "已暫停",
 };
 export default shell;

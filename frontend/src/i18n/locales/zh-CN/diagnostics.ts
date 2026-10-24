@@ -158,5 +158,6 @@ const diagnostics: Shape<typeof zh> = {
   "realtime.notMeasured": "还没有量到：先点「测试连接」。",
   "realtime.serverMissing": "引擎没有回报这个数字，所以不显示。",
   "realtime.note": "这是浏览器通过 {scheme} 打开一次 /v1/realtime 并等第一个事件，不发送音频，不占用 GPU；量到的是从这个浏览器到引擎的路径，不是语音推理延迟。",
+  "verdict.waiting": "等待引擎",
 };
 export default diagnostics;

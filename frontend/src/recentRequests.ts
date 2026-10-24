@@ -199,6 +199,11 @@ export function useRecentRequests(
         }
         setState((s) => ({
           ...s,
+          // The engine is away but the console's own record is not: the list stays what it was
+          // (or, on a page opened during the outage, what the console recorded).
+          ...(s.rows.length === 0 && historyRef.current.length > 0
+            ? { supported: true, rows: [...historyRef.current] }
+            : {}),
           error:
             e instanceof Error ? e.message : t("requests.recent.loadFailed"),
         }));
@@ -223,6 +228,7 @@ export function useRecentRequests(
         historyRef.current = entries
           .filter((e) => e?.request_id)
           .map(historyToRow);
+        // `kick` re-reads the ring; with the engine away it fails and the recorded rows stand in.
         kick.current?.();
       },
       () => undefined,

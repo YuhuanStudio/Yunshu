@@ -191,5 +191,6 @@ const models: Shape<typeof zh> = {
     "系统当前可用的内存，与下方每个模型的「系统可用」是同一个数字；它不是加载上限，加载前会再用试算确认。",
   "list.freeTipMetal":
     "还没取得系统可用内存（引擎没有回报），这里是总量减去 Metal 已分配的量，没计入其他程序，会偏高。",
+  "detail.waitingCalm": "引擎忙碌或重新启动中，响应后会立即列出模型。",
 };
 export default models;

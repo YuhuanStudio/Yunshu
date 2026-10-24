@@ -180,6 +180,17 @@ const shell: Shape<typeof zh> = {
   "island.trigger": "Open status panel",
   "island.overview": "Overview",
   "island.version": "yunshu {version} · up {uptime}",
+  "pause.notice": "Paused for a measurement: {reason}",
+  "engines.title": "Engines",
+  "engines.waiting":
+    "No engine is running. This console keeps watching and connects as soon as one starts.",
+  "engines.waitingTitle": "Waiting for an engine",
+  "engines.pinnedNote": "pinned",
+  "engines.followingNote": "following the newest",
+  "engines.pinned": "Pinned",
+  "engines.current": "Current",
+  "engines.use": "Use",
+  "engines.unpin": "Follow the newest",
   "island.noModel": "No model loaded",
   "island.live.title": "Live",
   "island.live.counts": "{active} active · {queued} queued",
@@ -211,5 +222,10 @@ const shell: Shape<typeof zh> = {
   "boundary.body": "Other pages are not affected. Retry, or open the docs.",
   "boundary.retry": "Retry",
   "boundary.docs": "Open the docs",
+  "engine.live.restarting": "Restarting",
+  "engine.live.switching": "Switching",
+  "engine.live.last": "last decode {tps} tok/s · {age} ago",
+  "engine.live.lastShort": "last {tps} tok/s · {age}",
+  "engine.live.paused": "Paused",
 };
 export default shell;

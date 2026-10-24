@@ -1,5 +1,7 @@
 # Inference features
 
+
+> Console docs: the maintained, translated version of this page is `/docs/internals/speculative-decoding` (source `frontend/docs/internals/speculative-decoding.mdx`). This file stays as the repository-side reference read by tooling.
 What the engine does between the API and the GPU, and the settings that control it. Every
 `YUNSHU_*` setting below is listed with its default in [Configuration](../CONFIGURATION.md); run
 `yunshu config` to see the effective values. No performance number is given here: measured results

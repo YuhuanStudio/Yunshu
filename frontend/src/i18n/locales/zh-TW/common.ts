@@ -19,5 +19,20 @@ const common = {
   "unlock.label": "解鎖金鑰",
   "unlock.remember": "在此裝置記住",
   "unlock.submit": "解鎖",
+  "outage.restarting": "引擎重新啟動中…",
+  "outage.switching": "切換到 {engine}",
+  "outage.following": "改追最新運作中的引擎，歷史會保留。",
+  "outage.wasUp": "先前已運作 {up}。",
+  "outage.backIn": "通常約 {s} 後恢復。",
+  "outage.longer": "比平常的 {usual} 久。",
+  "outage.waiting": "已等待 {s}。",
+  "outage.downTitle": "已 {s} 沒有任何引擎回應",
+  "outage.downEngines":
+    "主控台已知的引擎：{engines}。請啟動引擎，或檢查連線設定。",
+  "outage.downNone":
+    "找不到任何引擎。請啟動 Yunshu 引擎，主控台會自動重新連上。",
+  "outage.unknownState": "狀態未知",
+  "outage.paused": "主控台因量測暫停",
+  "outage.pausedWhy": "暫停期間不會對任何引擎送出請求（{reason}），結束後自動恢復。",
 };
 export default common;

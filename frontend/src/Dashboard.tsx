@@ -1,5 +1,8 @@
+import { useRecentRequests } from "./recentRequests";
+import { prefixHit, prefixHitWindow } from "./request-kpi";
 import { gbTotalText } from "./byte-format";
 import { LiveNumber } from "./LiveNumber";
+import { SkeletonSwap } from "./motion/SkeletonSwap.tsx";
 import { rangeSeconds, useRangeHistory } from "./useRangeHistory";
 import { PrefillBar } from "./PrefillBar";
 import { SegmentedTray } from "./SegmentedTray";
@@ -142,7 +145,7 @@ type LaneSlot = { row: RequestRow; until: number };
 function useLaneSlots(
   rows: readonly RequestRow[],
   n: number,
-  ms = 340,
+  ms = 260,
 ): ({ row: RequestRow; leaving: boolean } | null)[] {
   const [, bump] = useState(0);
   const list = useRef<LaneSlot[]>([]);
@@ -283,7 +286,7 @@ function QuickAction({
   return (
     // One outline: the row fills the card (no inner rounded fill inside the card's own border), the
     // focus ring is the card's, and a press nudges the whole card.
-    <Card className="min-w-0 overflow-hidden p-0 transition-[box-shadow,transform] duration-[150ms] ease-out has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-(--border-strong) active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100">
+    <Card className="min-w-0 overflow-hidden p-0 transition-[box-shadow,transform] duration-(--dur-fast) ease-out has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-(--border-strong) active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100">
       <HoverRow
         onClick={onClick}
         className="flex w-full items-center gap-3 rounded-none px-4 py-4 text-left focus-visible:ring-0"
@@ -344,10 +347,25 @@ export function Dashboard({
   // A line breaks where samples are further apart than a few of this range's own steps.
   const rangeGapMs = Math.max(12_000, (longRange.resolutionS ?? 0) * 3_000);
   const data = useMemo(() => chartRows(points), [points]);
-  const heroPoints = useMemo(
-    () => windowPoints(engine.series, end - 300_000, end),
-    [engine.series, end],
+  const heroSpanMs = Number(heroWindow) * 1000;
+  const heroNarrow = useMemo(
+    () => windowPoints(engine.series, end - Math.max(300_000, heroSpanMs), end),
+    [engine.series, end, heroSpanMs],
   );
+  // Right after a restart the window can hold no sample at all; the console's record is still there,
+  // so show the last 15 minutes (and say so) instead of an empty chart.
+  const heroWiden =
+    heroNarrow.filter((p) => !p.gap).length < 2 &&
+    windowPoints(engine.series, end - 900_000, end).filter((p) => !p.gap)
+      .length >= 2;
+  const heroPoints = useMemo(
+    () =>
+      heroWiden ? windowPoints(engine.series, end - 900_000, end) : heroNarrow,
+    [heroWiden, heroNarrow, engine.series, end],
+  );
+  const heroMark = engine.restarts
+    .filter((m) => m.at >= end - (heroWiden ? 900_000 : heroSpanMs))
+    .at(-1);
   const rates = rateSeries();
   const throughputSeries = rates[metric as keyof typeof rates];
   const busy = (engine.status?.requests.active ?? 0) > 0;
@@ -377,15 +395,20 @@ export function Dashboard({
     [engine.finished, start],
   );
   const totals = useMemo(() => totalsFrom(engine.finished), [engine.finished]);
-  // Prefix reuse is weighted over the observed finished requests (cached /
-  // prompt tokens); the latest request is a secondary line, as on Requests.
-  const promptSum = observed.reduce((n, r) => n + r.prompt_tokens, 0),
-    cachedSum = observed.reduce((n, r) => n + r.cached_tokens, 0);
-  const cache = promptSum > 0 ? (cachedSum / promptSum) * 100 : null;
-  const lastHit =
-    last && last.prompt_tokens > 0
-      ? (last.cached_tokens / last.prompt_tokens) * 100
-      : null;
+  // Prefix reuse: the same definition and window as the Requests page (request-kpi.ts), over the
+  // finished requests the console holds, so the two pages can never show different numbers.
+  const recentRequests = useRecentRequests(
+    connection,
+    status?.last?.request_id,
+    status?.console_process === true || (status == null && engine.failures > 0),
+  );
+  const hit = useMemo(
+    () =>
+      prefixHit(
+        [...recentRequests.rows].sort((a, b) => (a.t ?? 0) - (b.t ?? 0)),
+      ),
+    [recentRequests.rows],
+  );
   const heroData = useMemo(() => chartRows(heroPoints), [heroPoints]);
   // Idle sparkline only when the last five minutes actually carried decode traffic.
   const recent = heroData.some((p) => {
@@ -432,9 +455,11 @@ export function Dashboard({
       return true;
     }
   })();
+  // A console following engines (--engine auto) is always configured: its own address is the connection.
   if (
     !status &&
     neverConfigured &&
+    engine.outage.kind === "none" &&
     (engine.phase === "unauthorized" || engine.phase === "offline")
   )
     return (
@@ -526,7 +551,7 @@ export function Dashboard({
             <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-1">
               <HealthLine
                 verdict={verdict}
-                checking={!status && engine.phase === "connecting"}
+                checking={!status}
                 navigate={navigate}
               />
               <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
@@ -562,87 +587,90 @@ export function Dashboard({
         />
       </div>
 
-      {!status ? (
-        // Offline or refused: the banner says why; four empty placeholder cards would only add blank space.
-        engine.phase === "connecting" ? (
-          <StatGrid data-stat-grid="">
-            {[0, 1, 2, 3].map((i) => (
-              <Skeleton key={i} className="h-[104px] w-full rounded-lg" />
-            ))}
-          </StatGrid>
-        ) : null
-      ) : (
-        <div
-          className={`grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-5 max-sm:[&>:last-child]:col-span-2 ${dim}`}
-          data-testid="overview-stats"
-          data-stat-grid=""
+      {/* Offline or refused: the banner says why; four empty placeholder cards would only add blank space.
+          While connecting, the skeleton cross-fades into the cards in the same grid cell (no pop, no shift). */}
+      {status || engine.phase === "connecting" ? (
+        <SkeletonSwap
+          ready={status != null}
+          skeleton={
+            <StatGrid data-stat-grid="">
+              {[0, 1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-[104px] w-full rounded-lg" />
+              ))}
+            </StatGrid>
+          }
         >
-          <SpeedPair status={status} />
-          <StatCard
-            compact
-            valueFirst
-            icon={Timer}
-            label={t("overview.stats.ttft")}
-            value={
-              <span title={t("overview.tip.ttft")}>
-                <StatValue
-                  text={last?.ttft_ms == null ? "—" : formatMs(last.ttft_ms)}
-                />
-              </span>
-            }
-            subtext={
-              last
-                ? t("overview.stats.latestAge", {
-                    age: elapsed(Math.max(0, Date.now() / 1000 - last.t)),
-                  })
-                : t("overview.stats.noFinished")
-            }
-          />
-          <StatCard
-            compact
-            valueFirst
-            icon={Gauge}
-            label={t("overview.stats.prefixRate")}
-            value={
-              <span title={t("overview.tip.hit")}>
-                {cache == null ? "—" : `${number(cache, 0)}%`}
-              </span>
-            }
-            subtext={
-              cache == null
-                ? t("overview.stats.noFinished")
-                : lastHit == null
-                  ? t("overview.stats.observed", {
-                      n: number(observed.length, 0),
-                    })
-                  : t("overview.stats.observedLast", {
-                      n: number(observed.length, 0),
-                      pct: number(lastHit, 0),
-                    })
-            }
-          />
-          <StatCard
-            compact
-            valueFirst
-            icon={HardDrive}
-            label={t("overview.stats.metal")}
-            value={
-              <span title={t("overview.tip.metal")}>
-                <Slot ch={5}>
-                  <LiveNumber value={memory?.active_gb ?? null} digits={1} />
-                </Slot>
-                <span className="ml-1 text-xs font-normal text-muted-foreground">
-                  GB
-                </span>
-              </span>
-            }
-            subtext={t("overview.stats.metalSub", {
-              total: number(memory?.total_gb),
-              peak: number(memory?.peak_gb),
-            })}
-          />
-        </div>
-      )}
+          {status && (
+            <div
+              className={`grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-5 max-sm:[&>:last-child]:col-span-2 ${dim}`}
+              data-testid="overview-stats"
+              data-stat-grid=""
+            >
+              <SpeedPair status={status} />
+              <StatCard
+                compact
+                valueFirst
+                icon={Timer}
+                label={t("overview.stats.ttft")}
+                value={
+                  <span title={t("overview.tip.ttft")}>
+                    <StatValue
+                      text={
+                        last?.ttft_ms == null ? "—" : formatMs(last.ttft_ms)
+                      }
+                    />
+                  </span>
+                }
+                subtext={
+                  last
+                    ? t("overview.stats.latestAge", {
+                        age: elapsed(Math.max(0, Date.now() / 1000 - last.t)),
+                      })
+                    : t("overview.stats.noFinished")
+                }
+              />
+              <StatCard
+                compact
+                valueFirst
+                icon={Gauge}
+                label={t("overview.stats.prefixRate")}
+                value={
+                  <span title={t("overview.tip.hit")}>
+                    {hit.pct == null ? "—" : `${number(hit.pct, 0)}%`}
+                  </span>
+                }
+                subtext={prefixHitWindow(
+                  hit,
+                  recentRequests.supported === true,
+                )}
+              />
+              <StatCard
+                compact
+                valueFirst
+                icon={HardDrive}
+                label={t("overview.stats.metal")}
+                value={
+                  <span title={t("overview.tip.metal")}>
+                    <Slot ch={5}>
+                      <LiveNumber
+                        value={memory?.active_gb ?? null}
+                        digits={1}
+                      />
+                    </Slot>
+                    <span className="ml-1 text-xs font-normal text-muted-foreground">
+                      GB
+                    </span>
+                  </span>
+                }
+                subtext={t("overview.stats.metalSub", {
+                  total: number(memory?.total_gb),
+                  peak: number(memory?.peak_gb),
+                })}
+              />
+            </div>
+          )}
+        </SkeletonSwap>
+      ) : null}
 
       {/* Live: what the engine is doing right now. Idle collapses to one compact card. */}
       <Card
@@ -693,8 +721,30 @@ export function Dashboard({
               formatX={clock}
               formatY={formatNumber}
               maxGap={12000}
-              liveWindowMs={Number(heroWindow) * 1000}
+              liveWindowMs={heroWiden ? 900_000 : heroSpanMs}
             />
+            {(heroMark || heroWiden) && (
+              <p
+                className="mt-1 text-xs text-muted-foreground"
+                data-testid="hero-boundary"
+              >
+                {[
+                  heroWiden ? t("overview.hero.widened") : "",
+                  heroMark
+                    ? t(
+                        heroMark.kind === "switched"
+                          ? "overview.hero.switched"
+                          : heroMark.kind === "away"
+                            ? "overview.hero.away"
+                            : "overview.hero.restarted",
+                        { time: clock(heroMark.at) },
+                      )
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            )}
           </div>
         </div>
         <div className="flex min-w-0 flex-col gap-3 p-4 max-lg:order-1">
@@ -723,14 +773,17 @@ export function Dashboard({
             </div>
           </div>
           {/* Five rows of reserved space: requests come and go inside it, nothing below moves. */}
-          <div className="relative flex-1" style={{ minHeight: LANE_AREA_PX }}>
+          <div
+            className="relative flex-1"
+            style={{ minHeight: online ? LANE_AREA_PX : 0 }}
+          >
             <ul
               className="divide-y divide-border/60"
               data-live-list=""
               ref={laneRef}
             >
               {lanes.map((lane, i) =>
-                lane ? (
+                !online && lanes.every((l) => !l) ? null : lane ? (
                   <RequestLane
                     key={`slot-${i}`}
                     row={lane.row}

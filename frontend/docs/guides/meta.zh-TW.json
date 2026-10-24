@@ -1,14 +1,23 @@
 {
-  "title": "指南",
-  "pages": [
-    "agents",
-    "web-search",
-    "prompt-caching",
-    "structured-output",
-    "cli",
-    "configuration",
-    "model-support",
-    "troubleshooting",
-    "benchmarks"
-  ]
+ "title": "指南",
+ "pages": [
+  "agents",
+  "clients",
+  "web-search",
+  "tavily",
+  "code-execution",
+  "prompt-caching",
+  "structured-output",
+  "multimodal",
+  "transports",
+  "auth-and-keys",
+  "telemetry",
+  "cli",
+  "configuration",
+  "model-support",
+  "options",
+  "features",
+  "troubleshooting",
+  "benchmarks"
+ ]
 }

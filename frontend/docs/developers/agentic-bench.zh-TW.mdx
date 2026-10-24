@@ -1,0 +1,104 @@
+---
+title: Agentic 程式開發基準
+description: 如何在真實的程式開發 agent 迴圈（Claude Code、Codex CLI、opencode）與隱藏測試下量測 Yunshu，以及如何執行、重複與擴充這套基準。
+---
+
+單一請求的數字無法呈現引擎在人們實際使用情境下的表現：上下文持續增長的多輪程式開發 agent 迴圈、大量工具呼叫、回合之間的前綴複用，以及長時間的工作階段。`scripts/research/agentic/` 會驅動真實的程式開發 agent 去連接本機伺服器，並由隱藏測試決定它們寫出的程式是否可用。
+
+## 它做什麼
+
+每一次（agent、引擎、任務、重複）的執行都會記錄：
+
+- agent 看不到的測試的通過或失敗、牆鐘時間、agent 結束狀態與逾時；
+- 模型請求數；提示詞、完成與快取 token 總數；快取命中率；最大提示詞；
+- 每個請求的 TTFT 與解碼 tok/s，由記錄代理（`proxy.py`）在線路層量測，因此每個引擎都以相同方式量測；
+- API 錯誤（4xx、5xx、不完整或錯誤的串流；僅記錄中繼資料）、格式錯誤的工具呼叫參數，以及洩漏到文字中的工具呼叫標記；
+- 伺服器在執行期間的實體記憶體佔用峰值。
+
+agent 是由 `scripts/research/agentic/install_agents.sh` 安裝在 `/Volumes/P5Plus/yunshu-test-envs/agentic-clis` 下的固定版本副本，絕不使用你 `PATH` 上的那些：**opencode**（Chat Completions）、**Claude Code**（Messages）與 **Codex CLI**（Responses）。每次執行都有全新的 `HOME`、XDG 目錄、`TMPDIR`、`CLAUDE_CONFIG_DIR` 與 `CODEX_HOME`、清理過的環境與假金鑰，並在 `sandbox-exec` 下執行：除 loopback 外封鎖所有網路、隱藏真實的 `~/.claude`、`~/.codex`、`~/.config`、鑰匙圈與 shell rc 檔，且只允許寫入該次執行的目錄。取樣參數採用各 agent 預設送出的值。
+
+共有 20 個任務：12 個來自 Aider polyglot 基準的 Exercism Python 練習（下載到 `/Volumes/P5Plus/datasets/agentic`，commit 記錄在 meta 列，絕不提交進儲存庫），以及 8 個自訂的多檔案任務（修 bug、CLI 旗標加測試、三檔案重構、標準函式庫 HTTP JSON API、依規格寫解析器、在約 2,100 行的套件中定位並修改的長上下文任務、在雜亂資料上來回處理的 shell 任務、失敗測試集的分診）。
+
+## 為什麼這樣設計
+
+- agent 流量才是真實的工作負載：長上下文、重複的前綴與大量簡短的工具回合。在這裡，前綴快取複用與 TTFT 比峰值解碼速度更重要。
+- 隱藏測試讓結果成為任務成敗，而非風格評判。
+- 在記錄代理處量測，消除了各引擎自身計時的偏差。
+- 失敗的執行留在分母中；逾時算作失敗。
+
+## 保證
+
+- 可重複執行的結論遵循失敗即關閉原則：API 錯誤、格式錯誤的工具呼叫、標記洩漏與缺失的執行都會使其失敗。
+- 輸出檔以一列 `meta`（引擎、檢查點、git SHA、agent 版本、旗標）開頭。執行可續跑：`--output` 中已存在的任務與重複會被略過。
+- 只公布有日期的彙總結果，並附上快照 SHA、分母、逾時與不確定性；原始執行中繼資料、agent 產物與 JSONL 保持私有，放在 `docs/research/` 下。
+
+## 設定
+
+| 選項 | 預設 | 效果 |
+|---|---|---|
+| `run_agentic.py run --serve yunshu` | n/a | 為該工作啟動伺服器（Yunshu 預設或 TensorFold），結束時終止它 |
+| `--engine-url URL --engine-label X` | n/a | 使用你自己啟動的伺服器 |
+| `--agent`、`--tasks`、`--repeat` | n/a | 選擇 agent、任務（`all` 或清單）與重複次數 |
+| `--shard-i`、`--shard-n` | n/a | 把執行清單分給多個工作 |
+| `--budget-min` | n/a | 停止啟動新的執行，讓工作在其佇列逾時內結束 |
+| `scripts/dev/agentbench --priority` | -1 | 矩陣各格的 gpuq 優先權（每夜獨立執行） |
+
+## 執行方式
+
+```bash
+# one server per job; --serve starts it and kills it at the end
+python scripts/research/agentic/run_agentic.py run --serve yunshu --checkpoint $M \
+    --engine-label yunshu-default --agent opencode --tasks all --repeat 3 \
+    --output docs/research/runs/DATE-agentic/yunshu-default-opencode.jsonl
+
+# against a server you started yourself
+python scripts/research/agentic/run_agentic.py run --engine-url http://127.0.0.1:18990 --engine-label X ...
+
+python scripts/research/agentic/run_agentic.py summarize docs/research/runs/DATE-agentic/*.jsonl
+python scripts/research/agentic/run_agentic.py check-tasks   # reference solutions pass, starting repos fail
+```
+
+GPU 工作經由 `scripts/dev/gpuq` 執行。
+
+### 整個矩陣：`scripts/dev/agentbench`
+
+`scripts/dev/agentbench` 會針對某個 ref（`--ref`，預設 `main`）上的預設 27B 伺服器，用 Claude Code、Codex 與 opencode 跑全部 20 個任務：每一格提交一個低優先權的 gpuq 工作，結論採失敗即關閉，並與先前記錄的執行比較。`--dry-run` 預覽，`--no-wait` 在提交後返回，`--collect` 收集已提交的執行。`scripts/dev/release_check` 會以優先權 -3 為候選發行版提交它，並印出之後的 collect 指令。Agentbench 僅供參考：發版關卡、M3 全面測試與 agent 相容性會阻擋發版，agentbench 不會。無論如何，仍要收集並記錄每一個已提交的結果。
+
+## 新增任務
+
+建立 `scripts/research/agentic/tasks/<id>/`，內含：
+
+- `task.json`：`id`、`title`、`prompt`、`test`（argv），選用的 `protected` 檔案（評分前會還原），以及選用的 `generate` 腳本（把額外檔案寫入工作目錄）；
+- `repo/`：起始檔案；
+- `hidden/`：測試檔案，只在評分時才複製到 `_hidden_tests/`（已設定 `AGENTIC_TASK_DIR` 與 `AGENTIC_TASK_SRC`）；
+- `reference/`：能解出該任務的覆蓋層，或 `apply.py`。
+
+`check-tasks` 必須回報起始儲存庫失敗、參考解答通過。任務要保持確定性且可離線執行。Polyglot 練習列在 `tasks.py` 中，並由資料集展開。
+
+## 已記錄的結果
+
+只公布一項有日期的結果，取自 `docs/reports/PERF_TREND.md`（2026-10-02，部分矩陣；Qwen3.8-27B oQ4e-mtp、M5 Max、Yunshu 預設設定、20 個任務；兩個快照的程式碼與執行組成不同，因此不合併）：
+
+| 快照（git SHA、日期） | agent | 執行數 | 通過 | 通過率（Wilson 95%） | 牆鐘中位數 / p90（秒） | 快取命中 | 逾時 |
+|---|---|---:|---:|---|---|---:|---:|
+| prod (c4e2b244+, 09-30) | opencode | 41 | 34 | 83% (69-91%) | 337 / 1200 | 83.6% | 5 |
+| prod4 (d225f16c, 10-02) | claude | 15 | 14 | 93% (70-99%) | 93 / 309 | 89.2% | 0 |
+| prod4 (d225f16c, 10-02) | opencode | 10 | 9 | 90% (60-98%) | 112 / 137 | 84.2% | 0 |
+
+在 n 為 10 到 15 時區間很寬，快照之間的變化只是一個方向，而非量測到的加速。Codex 與 TensorFold 的格子沒有公布結果。
+
+## 限制
+
+- 矩陣並不完整；沒有任何一格涵蓋全部 20 個任務的三次重複。
+- agent 為了可重複性而固定版本；與最新 CLI 的相容性是另一項檢查，見 [Agent 相容性](/docs/developers/agent-compat)。
+- 只有在工作沒有被服務流量暫停、也沒有受外部 CPU 負載污染時，計時才有意義；見[邊服務邊開發](/docs/developers/serve-and-develop)。
+
+## 如何驗證
+
+`check-tasks` 證明任務集是健全的。`scripts/dev/agentbench --dry-run` 預覽矩陣，`run_agentic.py summarize` 為一組 JSONL 檔案印出彙總。面向使用者的 agent 設定見 [Agents](/docs/guides/agents)。
+
+## 相關頁面
+
+- [Agent 相容性](/docs/developers/agent-compat)
+- [發版關卡](/docs/developers/release-gate)
+- [基準測試](/docs/guides/benchmarks)

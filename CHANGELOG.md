@@ -37,6 +37,8 @@ tested memory guidance for 128 GB and tight hosts. Outputs of speculation on and
 - New setting `YUNSHU_PREFILL_ATTENTION` (`tile` default, `stock`); `YUNSHU_PREFILL_MATMUL` and
   `YUNSHU_PREFILL_GDN` descriptions follow the split-invariant path.
 - Tight hosts: `YUNSHU_VLM_APC_MEMORY_GB=4` and `YUNSHU_PREFILL_BUFFER_CACHE_GB=1`; 128 GB hosts keep the defaults.
+- New setting `YUNSHU_CONSOLE_PAUSE_FILE`: the console sends no request to any engine while the file says so; gpuq
+  writes it for timing jobs, so an A/B is not perturbed by a one-sided monitor.
 - Dependencies were synced (28 upgrades, nothing pinned).
 
 ### Performance
@@ -68,6 +70,9 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Added
 
+- `yunshu console --engine auto` finds engines on every listening port of this Mac by default (`YUNSHU_CONSOLE_DISCOVER_PORTS=all`), skips console processes, and lists one engine behind a proxy once. `YUNSHU_HOST` sets the engine's bind host like `YUNSHU_CONSOLE_HOST` does the console's.
+- `yunshu console --engine auto`: the console finds Yunshu engines on local ports (`YUNSHU_CONSOLE_DISCOVER_PORTS`, `YUNSHU_CONSOLE_DISCOVER_S`), keeps the one it follows while healthy, switches to the newest live engine when it goes away, and lets you pin one from the status island or `POST /console/api/engines`; the history records each engine start as its own session. [Guide](docs/CONSOLE.md#following-engines-automatically).
+- Anthropic `code_execution_20250825` / `_20260120` / `_20260521` run locally inside Anthropic's sandbox-runtime (srt, optional, Node >= 22.12): bash and text-editor sub-tools, `container` reuse and expiry, `container_upload`, `$OUTPUT_DIR` files through the Files API, streaming. Off by default (`YUNSHU_CODE_EXECUTION`, plus `_ROOT`, `_TIMEOUT`, `_MEMORY_MB`, `_NETWORK_ALLOW`, `_TTL_MIN`); no network, no access to your home, wall/CPU/memory/output limits; `yunshu doctor` checks srt. [Guide](docs/guides/CODE_EXECUTION.md).
 - Anthropic API version 2026-10-21: requests that send `anthropic-version: 2026-10-21` (or later; the 2.x SDKs do)
   get the official 400 `invalid_request_error` for a `document` block in an `assistant` message and for a non-empty
   `citations` array on `text` blocks in `user` messages (also inside `search_result`), on `/v1/messages`,
@@ -95,6 +100,7 @@ and cold 32K TTFT versus Splash 1.3.2.
   `generate`. The values used and their source appear in `x_yunshu.sampling` and the model card
   (`yunshu.sampling_defaults`). Temperature 0 still means greedy.
 
+- Console motion: one set of motion tokens (expo ease-out enters, 120/200/280 ms), no `transition: all`, no decorative loops; page changes fade out then in, theme switch is one cross-fade, the sidebar and tab selection is one sliding pill, stat values roll digit by digit, the overview skeleton cross-fades into the cards without a layout shift, and streamed Playground text fades in by chunk. Reduced motion keeps only short opacity changes.
 - Split-invariant prefill (NAX GEMM padded to 64 rows, BQ32 attention, chunked GDN) and 64-token-aligned APC
   checkpoints are the default on the qualified 27B path; rehearsal starts after 0.3 s.
 - The DFlash fast tree admits short contexts, reads 8-bit lane weights directly,
@@ -104,6 +110,8 @@ and cold 32K TTFT versus Splash 1.3.2.
   0.20-0.22 s instead of 0.26-0.28 s with identical hit and miss outputs.
 - APC SSD restore uses MLX's native safetensors reader; header and cache-class validation are unchanged.
 - Idle memory: evicted APC anchors, terminal-job vocabulary pin and malloc pressure relief at the idle trim.
+- A warm single request delivers its first token as soon as it is sampled instead of after the next step's forward
+  (32K re-send first_decode 43 -> ~1 ms; warm TTFT -20 to -40 ms).
 - An APC restore writes into the finished request's KV storage instead of a fresh allocation (the held storage is
   released at the 30 s idle trim).
 - Development infrastructure: the unit suite runs on 2 x 12 pytest-xdist workers with serial tests
@@ -111,6 +119,14 @@ and cold 32K TTFT versus Splash 1.3.2.
 - gpuq jobs pending at priority >= 0 rise one step after 30 min; swap contention is attributed to the job's own memory.
 
 ### Fixed
+
+- Console round 2: Requests no longer reserves 42 rem of empty table (Active shows recent finished requests, the details column defaults to the newest request); Diagnostics, Models and the health line read a pause / restart as "waiting", never as a fault; history shows on a page opened during an outage; the usual-restart estimate ignores outages over 10 min; pipeline chips no longer reserve a count slot; new Playwright spec for paused / restarting states.
+- Console, `--engine auto`: an engine restart is now a calm "Engine restarting… (was up Xm, usually back in Ys)" or
+  "Switching to :port" state (error only after 60 s with no live engine, with the engine list); the Requests list,
+  prefix hit rate and Overview chart stay filled from the console store across restarts and mark the restart
+  boundary; prefix hit rate has one definition and window on Overview and Requests; the Requests usage cell shows
+  cached tokens without truncation; an idle engine reads "Idle · last decode N tok/s · Xm ago"; the top bar no longer squeezes the breadcrumb below 1280 px (the live pill's detail slot was never hidden), and the Requests table fits 768-1280 px without clipping. The console state
+  route gains `outages` (median down time of recent restarts).
 
 - Agent follow-ups reuse the whole conversation prefix. Claude Code's per-turn `<total_tokens>` messages no longer
   grow the system prompt; the tool-list end and the prompt end are always checkpoints; a new session reuses the

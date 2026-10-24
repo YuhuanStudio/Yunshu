@@ -615,6 +615,53 @@ def check_extras(pkg=_pkg) -> list[Check]:
     return out
 
 
+def check_code_execution() -> Check:
+    """Code execution server tools: setting, Node and srt versions, and a one-command self-test."""
+    on = bool(settings.get("YUNSHU_CODE_EXECUTION"))
+    fix = "npm install -g @anthropic-ai/sandbox-runtime (needs Node >= 22.12), then restart."
+    from yunshu_gateway.sandbox.srt import build_settings, find_srt
+
+    info = find_srt()
+    if info is None or info.problem:
+        why = "srt not installed" if info is None else info.problem
+        return Check(
+            "code execution",
+            "fail" if on else "ok",
+            f"enabled but {why}: requests get 503" if on else f"off ({why})",
+            fix if on else "Optional: " + fix,
+        )
+    import json
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="ys-doctor-", dir="/tmp") as d:
+        sp = Path(d) / "s.json"
+        sp.write_text(json.dumps(build_settings(Path(d) / "c")))
+        try:
+            p = subprocess.run(
+                info.argv(sp, ["/usr/bin/true"]),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={"PATH": "/usr/bin:/bin", "TMPDIR": "/tmp/"},
+            )
+            ok = p.returncode == 0
+            detail = p.stderr.strip()[:120]
+        except (OSError, subprocess.SubprocessError) as e:
+            ok, detail = False, str(e)
+    state = "on" if on else "off"
+    if not ok:
+        return Check(
+            "code execution",
+            "fail" if on else "warn",
+            f"{state}; srt {info.version} self-test failed: {detail}",
+            "Check that /usr/bin/sandbox-exec works for this user.",
+        )
+    return Check(
+        "code execution", "ok", f"{state}; srt {info.version} self-test passed"
+    )
+
+
 def check_api_features(host: str) -> list[Check]:
     """State of the API features that depend on configuration."""
     out = []
@@ -847,6 +894,7 @@ def run_checks(
     checks += check_disk_budget(paths.models_dir())
     checks += check_cache_integrity()
     checks += check_api_features(host)
+    checks.append(check_code_execution())
     checks += check_local_api_storage()
     if model:
         checks += check_model(model, info, metadata_only=no_metal)
