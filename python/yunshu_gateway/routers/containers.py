@@ -140,6 +140,96 @@ def _no_content() -> Response:
     return Response(status_code=204)
 
 
+def parse_options(body: dict) -> dict[str, Any] | tuple:
+    """Validate the create options shared by ``POST /v1/containers`` and the Responses tools'
+    ``container: {type: auto}``. Returns ``{ttl_s, memory_limit, network_allow, file_ids}`` or an
+    error tuple ``(status, message, code, param)``."""
+    server_ttl = float(settings.get("YUNSHU_CODE_EXECUTION_TTL_MIN")) * 60.0
+    ttl_s = server_ttl
+    ea = body.get("expires_after")
+    if ea is not None:
+        if (
+            not isinstance(ea, dict)
+            or ea.get("anchor") != "last_active_at"
+            or not isinstance(ea.get("minutes"), int)
+            or isinstance(ea.get("minutes"), bool)
+            or ea["minutes"] < 1
+        ):
+            return (
+                400,
+                "'expires_after' must be {anchor: 'last_active_at', minutes: <int >= 1>}.",
+                "invalid_value",
+                "expires_after",
+            )
+        ttl_s = min(server_ttl, ea["minutes"] * 60.0)
+    ml = body.get("memory_limit")
+    if ml is not None and ml not in MEMORY_LIMITS:
+        return (
+            400,
+            f"'memory_limit' must be one of {', '.join(MEMORY_LIMITS)}.",
+            "invalid_value",
+            "memory_limit",
+        )
+    server_net = parse_allowlist(settings.get("YUNSHU_CODE_EXECUTION_NETWORK_ALLOW"))
+    net_allow: list[str] | None = None
+    np_ = body.get("network_policy")
+    if np_ is not None:
+        if not isinstance(np_, dict) or np_.get("type") not in (
+            "disabled",
+            "allowlist",
+        ):
+            return (
+                400,
+                "'network_policy.type' must be 'disabled' or 'allowlist'.",
+                "invalid_value",
+                "network_policy",
+            )
+        if np_["type"] == "disabled":
+            net_allow = []
+        else:
+            if np_.get("domain_secrets"):
+                return (
+                    400,
+                    "domain_secrets are not supported.",
+                    "unsupported_parameter",
+                    "network_policy.domain_secrets",
+                )
+            domains = np_.get("allowed_domains")
+            if not isinstance(domains, list) or not all(
+                isinstance(d, str) and d.strip() for d in domains
+            ):
+                return (
+                    400,
+                    "'network_policy.allowed_domains' must be a list of host names.",
+                    "invalid_value",
+                    "network_policy.allowed_domains",
+                )
+            bad = [d for d in domains if not host_allowed(d, server_net)]
+            if bad:
+                return (
+                    400,
+                    f"Domain(s) {', '.join(bad)} are not allowed on this server; "
+                    "the operator lists reachable hosts in YUNSHU_CODE_EXECUTION_NETWORK_ALLOW.",
+                    "domain_not_allowed",
+                    "network_policy.allowed_domains",
+                )
+            net_allow = [d.strip() for d in domains]
+    file_ids = body.get("file_ids") or []
+    if not isinstance(file_ids, list) or not all(isinstance(f, str) for f in file_ids):
+        return (
+            400,
+            "'file_ids' must be a list of file ids.",
+            "invalid_value",
+            "file_ids",
+        )
+    return {
+        "ttl_s": ttl_s,
+        "memory_limit": ml,
+        "network_allow": net_allow,
+        "file_ids": file_ids,
+    }
+
+
 # ── containers ───────────────────────────────────────────────────────────────
 @router.post("/containers")
 async def create_container(request: Request):
@@ -166,91 +256,18 @@ async def create_container(request: Request):
             "unsupported_parameter",
             "skills",
         )
-    server_ttl = float(settings.get("YUNSHU_CODE_EXECUTION_TTL_MIN")) * 60.0
-    ttl_s = server_ttl
-    ea = body.get("expires_after")
-    if ea is not None:
-        if (
-            not isinstance(ea, dict)
-            or ea.get("anchor") != "last_active_at"
-            or not isinstance(ea.get("minutes"), int)
-            or isinstance(ea.get("minutes"), bool)
-            or ea["minutes"] < 1
-        ):
-            return _err(
-                400,
-                "'expires_after' must be {anchor: 'last_active_at', minutes: <int >= 1>}.",
-                "invalid_value",
-                "expires_after",
-            )
-        ttl_s = min(server_ttl, ea["minutes"] * 60.0)
-    ml = body.get("memory_limit")
-    if ml is not None and ml not in MEMORY_LIMITS:
-        return _err(
-            400,
-            f"'memory_limit' must be one of {', '.join(MEMORY_LIMITS)}.",
-            "invalid_value",
-            "memory_limit",
-        )
-    server_net = parse_allowlist(settings.get("YUNSHU_CODE_EXECUTION_NETWORK_ALLOW"))
-    net_allow: list[str] | None = None
-    np_ = body.get("network_policy")
-    if np_ is not None:
-        if not isinstance(np_, dict) or np_.get("type") not in (
-            "disabled",
-            "allowlist",
-        ):
-            return _err(
-                400,
-                "'network_policy.type' must be 'disabled' or 'allowlist'.",
-                "invalid_value",
-                "network_policy",
-            )
-        if np_["type"] == "disabled":
-            net_allow = []
-        else:
-            if np_.get("domain_secrets"):
-                return _err(
-                    400,
-                    "domain_secrets are not supported.",
-                    "unsupported_parameter",
-                    "network_policy.domain_secrets",
-                )
-            domains = np_.get("allowed_domains")
-            if not isinstance(domains, list) or not all(
-                isinstance(d, str) and d.strip() for d in domains
-            ):
-                return _err(
-                    400,
-                    "'network_policy.allowed_domains' must be a list of host names.",
-                    "invalid_value",
-                    "network_policy.allowed_domains",
-                )
-            bad = [d for d in domains if not host_allowed(d, server_net)]
-            if bad:
-                return _err(
-                    400,
-                    f"Domain(s) {', '.join(bad)} are not allowed on this server; "
-                    "the operator lists reachable hosts in YUNSHU_CODE_EXECUTION_NETWORK_ALLOW.",
-                    "domain_not_allowed",
-                    "network_policy.allowed_domains",
-                )
-            net_allow = [d.strip() for d in domains]
-    file_ids = body.get("file_ids") or []
-    if not isinstance(file_ids, list) or not all(isinstance(f, str) for f in file_ids):
-        return _err(
-            400, "'file_ids' must be a list of file ids.", "invalid_value", "file_ids"
-        )
+    opts = parse_options(body)
+    if isinstance(opts, tuple):
+        return _err(*opts)
+    file_ids = opts.pop("file_ids")
     ex = get_executor()
     actor, _ = _actor(request)
     mgr = get_manager()
     c = mgr.create(
         prefix=PREFIX,
         name=name.strip(),
-        ttl_s=ttl_s,
-        memory_limit=ml,
-        network_allow=net_allow,
         owner=actor,
+        **opts,
     )
     try:
         for fid in file_ids:

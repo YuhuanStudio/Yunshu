@@ -171,10 +171,8 @@ class ReplSession:
             if proc.returncode is None:
                 kill_tree(proc.pid)
             self._lost = True
-            try:
+            with contextlib.suppress(RuntimeError):  # no loop at interpreter exit
                 self._reap = asyncio.get_running_loop().create_task(proc.wait())
-            except RuntimeError:
-                pass  # no loop (interpreter exit): the group is already killed
         for t in self._tasks:
             t.cancel()
         self._tasks = []

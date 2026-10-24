@@ -19,6 +19,7 @@ outward id) so ``previous_response_id`` chains see it.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -35,8 +36,12 @@ from yunshu_engine import settings
 
 from .mcp_connector import McpError
 from .runtime import (
+    CODE_INTERPRETER_DESC,
+    CODE_INTERPRETER_SCHEMA,
     RESPONSES_WEB_DESC,
     RESPONSES_WEB_SCHEMA,
+    SHELL_DESC,
+    SHELL_SCHEMA,
     ServerToolDef,
     ServerToolRuntime,
     format_search_text,
@@ -70,12 +75,56 @@ def _is_web(t: dict) -> bool:
     return str(t.get("type") or "").startswith("web_search")
 
 
+def _is_ci(t: dict) -> bool:
+    return t.get("type") == "code_interpreter"
+
+
+def _is_hosted_shell(t: dict) -> bool:
+    """``shell`` run by the server (a container); a ``local`` environment is the client's."""
+    env = t.get("environment") or {}
+    return t.get("type") == "shell" and env.get("type") in (
+        "container_auto",
+        "container_reference",
+    )
+
+
 def has_server_tools_responses(req) -> bool:
     for t in req.tools or []:
         d = _dump(t)
-        if _is_web(d) or d.get("type") == "mcp":
+        if _is_web(d) or d.get("type") == "mcp" or _is_ci(d) or _is_hosted_shell(d):
             return True
     return False
+
+
+def container_file_annotations(text: str, created: dict[str, dict]) -> list[dict]:
+    """``container_file_citation`` annotations for mentions of files the tools made in this
+    response (``sandbox:/mnt/data/name``, ``/mnt/data/name`` or the bare path)."""
+    if not text or not created:
+        return []
+    names = sorted(created, key=len, reverse=True)
+    pat = re.compile(
+        r"(?<![\w./-])(?:sandbox:)?(?:/mnt/data/)?(?:"
+        + "|".join(re.escape(n) for n in names)
+        + r")(?![\w-])"
+    )
+    out = []
+    for m in pat.finditer(text):
+        raw = m.group(0)
+        rel = raw.removeprefix("sandbox:").removeprefix("/mnt/data/")
+        rec = created.get(rel)
+        if rec is None:
+            continue
+        out.append(
+            {
+                "type": "container_file_citation",
+                "container_id": rec["container_id"],
+                "file_id": rec["id"],
+                "filename": rel.rsplit("/", 1)[-1],
+                "start_index": m.start(),
+                "end_index": m.end(),
+            }
+        )
+    return out
 
 
 def function_tools(tools):
@@ -194,6 +243,71 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
                 item.get("output") if item.get("output") is not None else ""
             )
         return pair(fname, _json_text(item.get("arguments") or "{}"), res)
+    if ty == "code_interpreter_call":
+        code = item.get("code")
+        if not code:
+            return []
+        res = texts.get(iid)
+        if res is None:
+            logs = [
+                o.get("logs", "")
+                for o in item.get("outputs") or []
+                if isinstance(o, dict) and o.get("type") == "logs"
+            ]
+            res = "\n".join(logs) if logs else "(output not kept)"
+        return pair("code_interpreter", json.dumps({"code": code}), res)
+    if ty == "shell_call_output":
+        rows = item.get("output") or []
+        parts = []
+        for r in rows if isinstance(rows, list) else []:
+            if not isinstance(r, dict):
+                continue
+            oc = r.get("outcome") or {}
+            seg = [
+                "[timed out]"
+                if oc.get("type") == "timeout"
+                else f"exit code: {oc.get('exit_code', 0)}"
+            ]
+            if r.get("stdout"):
+                seg.append("stdout:\n" + r["stdout"])
+            if r.get("stderr"):
+                seg.append("stderr:\n" + r["stderr"])
+            parts.append("\n".join(seg))
+        return [
+            {
+                "role": "tool",
+                "tool_call_id": item.get("call_id") or "",
+                "content": "\n\n".join(parts) or "(no output)",
+            }
+        ]
+    if ty == "shell_call":
+        action = item.get("action") or {}
+        return [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": item.get("call_id") or iid,
+                        "type": "function",
+                        "function": {
+                            "name": "shell",
+                            "arguments": _json_text(
+                                {
+                                    k: action[k]
+                                    for k in (
+                                        "commands",
+                                        "timeout_ms",
+                                        "max_output_length",
+                                    )
+                                    if action.get(k) is not None
+                                }
+                            ),
+                        },
+                    }
+                ],
+            }
+        ]
     if ty in (
         "custom_tool_call_output",
         "local_shell_call_output",
@@ -329,11 +443,26 @@ def _stored_chain(req, request) -> list[dict]:
     return out
 
 
-async def _setup(req) -> _Setup | JSONResponse:
+async def _setup(req, request=None) -> _Setup | JSONResponse:
     s = _Setup()
+    code_specs: list[dict] = []
     for t in (_dump(x) for x in (req.tools or [])):
         ty = t.get("type") or "function"
-        if _is_web(t):
+        if _is_ci(t) or _is_hosted_shell(t):
+            code_specs.append(t)
+            kind = "code_interpreter" if _is_ci(t) else "shell"
+            s.defs.append(
+                ServerToolDef(
+                    kind,
+                    kind,
+                    CODE_INTERPRETER_DESC if kind == "code_interpreter" else SHELL_DESC,
+                    CODE_INTERPRETER_SCHEMA
+                    if kind == "code_interpreter"
+                    else SHELL_SCHEMA,
+                    spec=t,
+                )
+            )
+        elif _is_web(t):
             filt = t.get("filters") or {}
             spec: dict = {"page_actions": True}
             if filt.get("allowed_domains"):
@@ -374,6 +503,11 @@ async def _setup(req) -> _Setup | JSONResponse:
     if s.mcp_specs and not settings.get("YUNSHU_MCP_CONNECTOR"):
         return _err(400, "The MCP tool is disabled (YUNSHU_MCP_CONNECTOR=0).")
     s.rt = ServerToolRuntime(s.defs)
+    if code_specs:
+        bad = _setup_code(req, request, s, code_specs)
+        if bad is not None:
+            await s.rt.aclose()
+            return bad
     for label, t in s.mcp_specs.items():
         try:
             conn = await s.rt.mcp_connect(
@@ -419,6 +553,122 @@ async def _setup(req) -> _Setup | JSONResponse:
     return s
 
 
+def _setup_code(req, request, s: _Setup, specs: list[dict]) -> JSONResponse | None:
+    """Gate code_interpreter / hosted shell and decide which container the request runs in."""
+    from ..routers.containers import PREFIX, parse_options
+    from ..routers.responses import _is_admin, _resolve_owner
+    from ..sandbox import (
+        ContainerError,
+        SandboxUnavailableError,
+        get_executor,
+        get_manager,
+    )
+    from ..sandbox.containers import owner_ok
+
+    if not settings.get("YUNSHU_CODE_EXECUTION"):
+        return _err(
+            400,
+            "The code_interpreter and shell tools are disabled on this server. Set "
+            "YUNSHU_CODE_EXECUTION=1 (they run inside the sandbox-runtime, srt).",
+            "code_execution_disabled",
+            "tools",
+        )
+    rt = s.rt
+    assert rt is not None
+    ex = get_executor()
+    try:
+        ex.srt()
+    except SandboxUnavailableError as e:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": {
+                    "message": str(e),
+                    "type": "server_error",
+                    "param": None,
+                    "code": "sandbox_unavailable",
+                }
+            },
+        )
+    explicit: set[str] = set()
+    auto: list[dict] = []
+    for t in specs:
+        if t.get("type") == "code_interpreter":
+            c = t.get("container")
+            if isinstance(c, str) and c:
+                explicit.add(c)
+            elif isinstance(c, dict) and c.get("type") == "auto":
+                auto.append(c)
+            else:
+                return _err(
+                    400,
+                    "code_interpreter: 'container' is required (a container id or {type: 'auto'}).",
+                    "missing_required_parameter",
+                    "tools",
+                )
+        else:
+            env = t.get("environment") or {}
+            if env.get("type") == "container_reference":
+                if not env.get("container_id"):
+                    return _err(
+                        400,
+                        "shell: container_reference needs a container_id.",
+                        "missing_required_parameter",
+                        "tools",
+                    )
+                explicit.add(env["container_id"])
+            else:
+                auto.append(env)
+    parsed = [parse_options(a) for a in auto]
+    for o in parsed:
+        if isinstance(o, tuple):
+            return _err(o[0], o[1], o[2], "tools")
+    if len(explicit) > 1 or (explicit and auto) or any(o != parsed[0] for o in parsed):
+        return _err(
+            400,
+            "All code tools in one request must use the same container.",
+            "invalid_value",
+            "tools",
+        )
+    actor = _resolve_owner(request) if request is not None else ""
+    admin = _is_admin(request) if request is not None else False
+    mgr = get_manager()
+    if explicit:
+        cid = next(iter(explicit))
+        try:
+            c = mgr.get(cid)
+        except ContainerError as e:
+            return _err(400, e.message, "container_not_found", "tools")
+        if not owner_ok(c, actor, admin):
+            return _err(
+                400, f"Container '{cid}' was not found.", "container_not_found", "tools"
+            )
+        rt.container = c
+        return None
+    opts = dict(parsed[0])  # type: ignore[arg-type]
+    rt.uploads = list(opts.pop("file_ids"))
+    # a conversation keeps its container: reuse the one the previous response used
+    for p in _stored_chain(req, request) if request is not None else []:
+        for it in p.get("output") or []:
+            cid = it.get("container_id") or (it.get("environment") or {}).get(
+                "container_id"
+            )
+            if cid and str(cid).startswith(PREFIX + "_"):
+                try:
+                    c = mgr.get(cid)
+                except ContainerError:
+                    continue
+                if owner_ok(c, actor, admin):
+                    rt.container = c
+                    return None
+
+    def make():
+        return mgr.create(prefix=PREFIX, name="auto", owner=actor, **opts)
+
+    rt.container_factory = make
+    return None
+
+
 # ── SSE plumbing ──────────────────────────────────────────────────────────────
 async def _parse_sse(body) -> AsyncIterator[tuple[str, Any]]:
     buf = ""
@@ -446,6 +696,13 @@ async def _parse_sse(body) -> AsyncIterator[tuple[str, Any]]:
                 continue
             if isinstance(obj, dict):
                 yield name or obj.get("type", ""), obj
+
+
+def all_annotations(
+    text: str, sources: list[SearchResult], created: dict[str, dict]
+) -> list[dict]:
+    anns = annotations_for(text, sources) + container_file_annotations(text, created)
+    return sorted(anns, key=lambda a: (a["start_index"], a["end_index"]))
 
 
 def annotations_for(text: str, sources: list[SearchResult]) -> list[dict]:
@@ -660,6 +917,8 @@ def _inner_request(
         "web_search_preview",
     ):
         tc = {"type": "function", "name": "web_search"}
+    elif isinstance(tc, dict) and tc.get("type") in ("code_interpreter", "shell"):
+        tc = {"type": "function", "name": tc["type"]}
     elif isinstance(tc, dict) and tc.get("type") == "mcp":
         tc = "auto"
     upd: dict = {}
@@ -870,8 +1129,10 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
                             run.output.append({})
                         ev = {**ev, "output_index": omap[i]}
                     oi = ev.get("output_index")
-                    if t == "response.output_text.done" and run.sources:
-                        anns = annotations_for(ev.get("text", ""), run.sources)
+                    if t == "response.output_text.done" and (run.sources or rt.created):
+                        anns = all_annotations(
+                            ev.get("text", ""), run.sources, rt.created
+                        )
                         ci = ev.get("content_index", 0)
                         ann_stash[(oi, ci)] = anns
                         for ai, a in enumerate(anns):
@@ -883,11 +1144,15 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
                                 annotation_index=ai,
                                 annotation=a,
                             )
-                    elif t == "response.content_part.done" and run.sources:
+                    elif t == "response.content_part.done" and (
+                        run.sources or rt.created
+                    ):
                         part = dict(ev.get("part") or {})
                         anns = ann_stash.get(
                             (oi, ev.get("content_index", 0))
-                        ) or annotations_for(part.get("text", ""), run.sources)
+                        ) or all_annotations(
+                            part.get("text", ""), run.sources, rt.created
+                        )
                         part["annotations"] = anns
                         ev = {**ev, "part": part}
                     elif t == "response.output_item.done":
@@ -897,12 +1162,14 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
                             for ci, p in enumerate(it.get("content") or []):
                                 if p.get("type") == "output_text":
                                     round_text += p.get("text", "")
-                                    if run.sources:
+                                    if run.sources or rt.created:
                                         p = {
                                             **p,
                                             "annotations": ann_stash.get((oi, ci))
-                                            or annotations_for(
-                                                p.get("text", ""), run.sources
+                                            or all_annotations(
+                                                p.get("text", ""),
+                                                run.sources,
+                                                rt.created,
                                             ),
                                         }
                                 parts.append(p)
@@ -952,7 +1219,114 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
                 d: ServerToolDef = c["def"]
                 args = _parse_args(c["args"])
                 c["args_obj"] = args
-                if d.kind == "web_search":
+                if d.kind in ("code_interpreter", "shell"):
+                    try:
+                        box = await asyncio.to_thread(rt.ensure_box)
+                    except Exception as e:  # noqa: BLE001 - reported to the model, not raised
+                        box = None
+                        c["box_error"] = str(e)
+                    c["box"] = box
+                    cid = box.id if box is not None else ""
+                    if d.kind == "code_interpreter":
+                        code = (
+                            args.get("code")
+                            if isinstance(args.get("code"), str)
+                            else ""
+                        )
+                        item = {
+                            "id": _new_id("ci_"),
+                            "type": "code_interpreter_call",
+                            "status": "in_progress",
+                            "container_id": cid,
+                            "code": None,
+                            "outputs": None,
+                        }
+                        idx = run.add_item(item)
+                        c.update(item=item, idx=idx)
+                        yield run.ev(
+                            "response.output_item.added", output_index=idx, item=item
+                        )
+                        yield run.ev(
+                            "response.code_interpreter_call.in_progress",
+                            item_id=item["id"],
+                            output_index=idx,
+                        )
+                        for k in range(0, len(code), 256):
+                            yield run.ev(
+                                "response.code_interpreter_call_code.delta",
+                                item_id=item["id"],
+                                output_index=idx,
+                                delta=code[k : k + 256],
+                            )
+                        yield run.ev(
+                            "response.code_interpreter_call_code.done",
+                            item_id=item["id"],
+                            output_index=idx,
+                            code=code,
+                        )
+                        yield run.ev(
+                            "response.code_interpreter_call.interpreting",
+                            item_id=item["id"],
+                            output_index=idx,
+                        )
+                        item = {**item, "code": code}
+                        run.output[idx] = item
+                        c["item"] = item
+                    else:
+                        cmds = args.get("commands")
+                        cmds = [cmds] if isinstance(cmds, str) else cmds
+                        cmds = (
+                            [x for x in cmds if isinstance(x, str)]
+                            if isinstance(cmds, list)
+                            else []
+                        )
+                        action: dict[str, Any] = {"commands": cmds}
+                        for k in ("timeout_ms", "max_output_length"):
+                            if isinstance(args.get(k), int):
+                                action[k] = args[k]
+                        item = {
+                            "id": _new_id("sh_"),
+                            "type": "shell_call",
+                            "call_id": _new_id("call_"),
+                            "status": "in_progress",
+                            "action": action,
+                            "environment": {
+                                "type": "container_reference",
+                                "container_id": cid,
+                            },
+                        }
+                        idx = run.add_item(item)
+                        c.update(item=item, idx=idx)
+                        yield run.ev(
+                            "response.output_item.added", output_index=idx, item=item
+                        )
+                        for k, cmd in enumerate(cmds):
+                            yield run.ev(
+                                "response.shell_call_command.added",
+                                output_index=idx,
+                                command_index=k,
+                                command=cmd,
+                            )
+                            yield run.ev(
+                                "response.shell_call_command.delta",
+                                output_index=idx,
+                                command_index=k,
+                                delta=cmd,
+                            )
+                            yield run.ev(
+                                "response.shell_call_command.done",
+                                output_index=idx,
+                                command_index=k,
+                                command=cmd,
+                            )
+                        item = {**item, "status": "completed"}
+                        run.output[idx] = item
+                        c["item"] = item
+                        yield run.ev(
+                            "response.output_item.done", output_index=idx, item=item
+                        )
+                    running.append(c)
+                elif d.kind == "web_search":
                     item = {
                         "id": _new_id("ws_"),
                         "type": "web_search_call",
@@ -1037,7 +1411,106 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
             for c, oc in zip(to_run, outcomes, strict=True):
                 d = c["def"]
                 item, idx = c["item"], c["idx"]
-                if d.kind == "web_search":
+                if d.kind == "code_interpreter":
+                    if c.get("box_error"):
+                        oc.is_error, oc.text = True, f"Error: {c['box_error']}"
+                    outputs = None
+                    if "code_interpreter_call.outputs" in (req.include or []):
+                        outputs = []
+                        res = oc.code
+                        logs = ""
+                        if res is not None:
+                            logs = res.stdout + (
+                                ("\n" if res.stdout and res.stderr else "") + res.stderr
+                            )
+                        elif oc.is_error:
+                            logs = oc.text
+                        if logs:
+                            outputs.append({"type": "logs", "logs": logs})
+                        base = str(request.base_url).rstrip("/")
+                        for f in oc.files:
+                            if (
+                                f["path"]
+                                .lower()
+                                .endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))
+                            ):
+                                outputs.append(
+                                    {
+                                        "type": "image",
+                                        "url": f"{base}/v1/containers/{f['container_id']}"
+                                        f"/files/{f['id']}/content",
+                                    }
+                                )
+                    item = {
+                        **item,
+                        "status": "failed" if oc.is_error else "completed",
+                        "outputs": outputs,
+                    }
+                    run.output[idx] = item
+                    run.tool_texts[item["id"]] = oc.text
+                    yield run.ev(
+                        "response.code_interpreter_call.completed",
+                        item_id=item["id"],
+                        output_index=idx,
+                    )
+                    yield run.ev(
+                        "response.output_item.done", output_index=idx, item=item
+                    )
+                elif d.kind == "shell":
+                    rows = oc.shell
+                    if not rows:  # refused before running (bad arguments, no sandbox)
+                        rows = [
+                            {
+                                "stdout": "",
+                                "stderr": oc.error_message or oc.text,
+                                "timeout": False,
+                                "exit_code": 1,
+                            }
+                        ]
+                    outs = [
+                        {
+                            "stdout": r["stdout"],
+                            "stderr": r["stderr"],
+                            "outcome": {"type": "timeout"}
+                            if r["timeout"]
+                            else {"type": "exit", "exit_code": r["exit_code"]},
+                        }
+                        for r in rows
+                    ]
+                    out_item = {
+                        "id": _new_id("sho_"),
+                        "type": "shell_call_output",
+                        "call_id": item["call_id"],
+                        "status": "in_progress",
+                        "max_output_length": item["action"].get("max_output_length"),
+                        "output": [],
+                    }
+                    oidx = run.add_item(out_item)
+                    yield run.ev(
+                        "response.output_item.added", output_index=oidx, item=out_item
+                    )
+                    for k, o in enumerate(outs):
+                        yield run.ev(
+                            "response.shell_call_output_content.delta",
+                            item_id=out_item["id"],
+                            output_index=oidx,
+                            command_index=k,
+                            delta={"stdout": o["stdout"], "stderr": o["stderr"]},
+                        )
+                        yield run.ev(
+                            "response.shell_call_output_content.done",
+                            item_id=out_item["id"],
+                            output_index=oidx,
+                            command_index=k,
+                            output=[o],
+                        )
+                    out_item = {**out_item, "status": "completed", "output": outs}
+                    run.output[oidx] = out_item
+                    run.tool_texts[item["id"]] = oc.text
+                    yield run.ev(
+                        "response.output_item.done", output_index=oidx, item=out_item
+                    )
+                elif d.kind == "web_search":
                     if not oc.is_error:
                         off = len(run.sources)
                         run.sources.extend(oc.results)
@@ -1099,7 +1572,7 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
                     }
                 )
                 hist += _pair(
-                    item["id"],
+                    item.get("call_id") or item["id"],
                     d.fname,
                     _args_str(c["args_obj"]),
                     oc.text,
@@ -1108,8 +1581,10 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
                 item, idx = c["item"], c["idx"]
                 msg = "Error: the request's max_tool_calls was reached."
                 run.tool_texts[item["id"]] = msg
-                if c["def"].kind == "web_search":
+                if c["def"].kind in ("web_search", "code_interpreter"):
                     item = {**item, "status": "failed"}
+                elif c["def"].kind == "shell":
+                    item = {**item, "status": "incomplete"}
                 else:
                     item = {**item, "status": "failed", "error": msg}
                 run.output[idx] = item
@@ -1198,7 +1673,7 @@ async def create_with_server_tools_responses(req, request, inner: Inner):
             "unsupported_parameter",
             "background",
         )
-    setup = await _setup(req)
+    setup = await _setup(req, request)
     if isinstance(setup, JSONResponse):
         return setup
     run = _Run(req, setup)
