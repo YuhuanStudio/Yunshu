@@ -52,6 +52,12 @@ def _runner(job_overrides=None, pending=(), inflight=1, second_job=False):
         spec_last=None,
         spec_request=None,
         use_draft=False,
+        greedy=True,
+        keyed=None,
+        logprobs=False,
+        top_logprobs=0,
+        guide=None,
+        spec_procs=[],
     )
     for k, v in (job_overrides or {}).items():
         setattr(job, k, v)
@@ -109,3 +115,35 @@ def test_no_promotion_while_anything_else_is_in_flight_or_the_row_is_not_eligibl
         runner, *_ = _runner(**kwargs)
         assert VLMBatchRunner._maybe_promote(runner) is False, kwargs
         assert runner._spec is None
+
+
+def test_sampled_promotion_moves_the_same_sampler_with_the_committed_position_base():
+    from yunshu_engine.keyed_sampling import KeyedSampler
+    from yunshu_engine.vlm_batch_runner import RowParams
+
+    sampler = KeyedSampler(RowParams(0.7, 0.95, 20, 0.0, 17), 17)
+    runner, group, batch, job = _runner(
+        job_overrides={"greedy": False, "keyed": sampler}
+    )
+    assert VLMBatchRunner._maybe_promote(runner)
+    promoted = runner._spec.gen._generation_batch
+    assert promoted.sampler is sampler
+    assert not promoted.greedy_sampling
+    assert runner.built["sampler"] is sampler and not runner.built["greedy"]
+    assert sampler.position_base == 40
+    assert job.keyed is sampler and not group.jobs
+    assert promoted.max_tokens == [260]
+
+
+def test_promotion_transfers_the_pending_tokens_logprob_and_top_logprobs_once():
+    runner, _, batch, job = _runner(job_overrides={"logprobs": True, "top_logprobs": 2})
+    batch._next_lps = mx.array([-1.25])
+    batch._next_top_idx = mx.array([[11, 12]])
+    batch._next_top_lp = mx.array([[-1.25, -2.5]])
+    assert VLMBatchRunner._maybe_promote(runner)
+    assert job.spec_request.logprobs and job.spec_request.top_logprobs == 2
+    assert job.spec_request.take(11) == (-1.25, [(11, -1.25), (12, -2.5)])
+    assert not job.spec_request.pending
+    # The following verify report must not be shifted by the pending first token.
+    job.spec_request.record(mx.array([[-2.0, -1.0]]), [1])
+    assert job.spec_request.take(1)[0] == -1.0
