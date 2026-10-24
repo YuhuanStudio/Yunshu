@@ -13,7 +13,7 @@ export interface ServerHistory {
 
 export interface RestartMark {
   at: number;
-  kind: "restarted" | "switched";
+  kind: "restarted" | "switched" | "away";
 }
 
 const num = (v: unknown): number | null =>
@@ -84,11 +84,21 @@ export function parseServerHistory(
   const restarts: RestartMark[] = [];
   if (Array.isArray(body.events))
     for (const e of body.events as unknown[]) {
-      const ev = e as { t?: unknown; kind?: unknown } | null;
+      const ev = e as {
+        t?: unknown;
+        kind?: unknown;
+        detail?: { after_up?: unknown } | null;
+      } | null;
       const at = num(ev?.t);
       if (at == null) continue;
       if (ev?.kind === "engine_restarted")
         restarts.push({ at: at * 1000, kind: "restarted" });
+      // The engine had been answering and stopped: the boundary even when no restart was seen after it.
+      else if (
+        ev?.kind === "engine_unreachable" &&
+        ev.detail?.after_up === true
+      )
+        restarts.push({ at: at * 1000, kind: "away" });
       else if (ev?.kind === "engine_switched")
         restarts.push({ at: at * 1000, kind: "switched" });
     }

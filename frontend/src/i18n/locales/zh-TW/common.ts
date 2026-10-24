@@ -32,5 +32,7 @@ const common = {
   "outage.downNone":
     "找不到任何引擎。請啟動 Yunshu 引擎，主控台會自動重新連上。",
   "outage.unknownState": "狀態未知",
+  "outage.paused": "主控台因量測暫停",
+  "outage.pausedWhy": "暫停期間不會對任何引擎送出請求（{reason}），結束後自動恢復。",
 };
 export default common;

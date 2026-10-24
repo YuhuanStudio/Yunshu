@@ -455,9 +455,11 @@ export function Dashboard({
       return true;
     }
   })();
+  // A console following engines (--engine auto) is always configured: its own address is the connection.
   if (
     !status &&
     neverConfigured &&
+    engine.outage.kind === "none" &&
     (engine.phase === "unauthorized" || engine.phase === "offline")
   )
     return (
@@ -718,7 +720,9 @@ export function Dashboard({
                     ? t(
                         heroMark.kind === "switched"
                           ? "overview.hero.switched"
-                          : "overview.hero.restarted",
+                          : heroMark.kind === "away"
+                            ? "overview.hero.away"
+                            : "overview.hero.restarted",
                         { time: clock(heroMark.at) },
                       )
                     : "",

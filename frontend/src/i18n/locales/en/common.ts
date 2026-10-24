@@ -36,5 +36,7 @@ const common: Shape<typeof zh> = {
   "outage.downNone":
     "No engine was found. Start a Yunshu engine; the console reconnects by itself.",
   "outage.unknownState": "unknown",
+  "outage.paused": "Console paused for a measurement",
+  "outage.pausedWhy": "It sends nothing to any engine meanwhile ({reason}); data resumes by itself.",
 };
 export default common;

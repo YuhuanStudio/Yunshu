@@ -68,3 +68,15 @@ test("fixed mode, no console list, or an online engine is never calm-wrapped", (
     "none",
   );
 });
+
+test("a measurement pause is calm and says why, however long it lasts", () => {
+  const paused: EngineList = {
+    ...list([]),
+    pause: { reason: "speed job", until: null },
+  };
+  for (const now of [1_005_000, 1_900_000]) {
+    const v = outageView({ ...base, list: paused, now });
+    assert.equal(v.kind, "paused");
+    if (v.kind === "paused") assert.equal(v.reason, "speed job");
+  }
+});

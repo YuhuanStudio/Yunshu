@@ -104,7 +104,7 @@ export interface FooterInput {
   gpuBusy: number | null;
   ledger: MemoryLedgerData | null;
   /** Set while the unreachable engine is a routine restart or switch (--engine auto). */
-  calm?: "restarting" | "switching";
+  calm?: "restarting" | "switching" | "paused";
 }
 
 export function footerPills(input: FooterInput): FooterPill[] {
@@ -124,7 +124,9 @@ export function footerPills(input: FooterInput): FooterPill[] {
         label: t(
           input.calm === "restarting"
             ? "shell.engine.live.restarting"
-            : "shell.engine.live.switching",
+            : input.calm === "paused"
+              ? "shell.engine.live.paused"
+              : "shell.engine.live.switching",
         ),
         tone: "warning",
         dot: true,

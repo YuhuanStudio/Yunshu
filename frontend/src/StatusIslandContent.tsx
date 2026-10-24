@@ -96,7 +96,9 @@ export function StatusIslandContent({
         ? t("shell.engine.live.restarting")
         : engine.outage.kind === "switching"
           ? t("shell.engine.live.switching")
-          : null;
+          : engine.outage.kind === "paused"
+            ? t("shell.engine.live.paused")
+            : null;
     const word =
       calm ??
       (engine.phase === "connecting"

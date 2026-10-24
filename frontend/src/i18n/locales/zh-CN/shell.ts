@@ -218,5 +218,6 @@ const shell: Shape<typeof zh> = {
   "engine.live.switching": "切换中",
   "engine.live.last": "上次解码 {tps} tok/s · {age}前",
   "engine.live.lastShort": "上次 {tps} tok/s · {age}",
+  "engine.live.paused": "已暂停",
 };
 export default shell;

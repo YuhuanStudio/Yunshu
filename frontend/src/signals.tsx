@@ -1,3 +1,4 @@
+import { isCalm } from "./outage-view.ts";
 import { connectionScope, useScopedState } from "./scoped-state.ts";
 import {
   createContext,
@@ -148,8 +149,7 @@ export function useShellSignals(
 ): Signals {
   const online = engine.phase === "online";
   // A routine restart / engine switch (--engine auto) is neither a health fault nor a notification.
-  const calm =
-    engine.outage.kind === "restarting" || engine.outage.kind === "switching";
+  const calm = isCalm(engine.outage.kind);
   const healthPhase = calm ? "connecting" : engine.phase;
   const ledger = useMemoryLedger(connection, online, 5000).data;
   const recent = useRecentRequests(

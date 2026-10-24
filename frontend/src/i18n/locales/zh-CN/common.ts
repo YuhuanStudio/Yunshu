@@ -35,5 +35,7 @@ const common: Shape<typeof zh> = {
   "outage.downNone":
     "找不到任何引擎。请启动 Yunshu 引擎，控制台会自动重新连上。",
   "outage.unknownState": "状态未知",
+  "outage.paused": "控制台因测量暂停",
+  "outage.pausedWhy": "暂停期间不会对任何引擎发送请求（{reason}），结束后自动恢复。",
 };
 export default common;

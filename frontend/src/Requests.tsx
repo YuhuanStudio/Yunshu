@@ -927,7 +927,9 @@ export function Requests({
                                   {t(
                                     boundary.kind === "switched"
                                       ? "requests.list.switched"
-                                      : "requests.list.restarted",
+                                      : boundary.kind === "away"
+                                        ? "requests.list.away"
+                                        : "requests.list.restarted",
                                     { time: clock(boundary.at) },
                                   )}
                                 </Td>

@@ -295,18 +295,20 @@ export function idleDetail(
 export function livePill(
   connection: "connecting" | "online" | "offline" | "unauthorized",
   status: EngineStatus | null,
-  outage?: "restarting" | "switching" | "down" | "none",
+  outage?: "restarting" | "switching" | "paused" | "down" | "none",
   now: number = Date.now(),
 ): LivePill {
   if (
     connection === "offline" &&
-    (outage === "restarting" || outage === "switching")
+    (outage === "restarting" || outage === "switching" || outage === "paused")
   )
     return {
       phase:
         outage === "restarting"
           ? t("shell.engine.live.restarting")
-          : t("shell.engine.live.switching"),
+          : outage === "paused"
+            ? t("shell.engine.live.paused")
+            : t("shell.engine.live.switching"),
       detail: "",
       tone: "away",
     };

@@ -14,6 +14,8 @@ export type OutageView =
       /** Median of the recent outages the console recorded, or null. */
       usualS: number | null;
     }
+  /** The console is paused for a measurement (gpuq): it sends nothing to any engine, on purpose. */
+  | { kind: "paused"; reason: string; downS: number }
   /** Another engine is running: the console is about to follow it. */
   | { kind: "switching"; to: string; port: number | null; downS: number }
   /** Sustained outage with no live engine: a real error, with the engines the console knows about. */
@@ -32,6 +34,10 @@ export interface OutageInput {
   escalateAfterS?: number;
 }
 
+/** A routine, expected gap (restart, switch or a measurement pause): shown calmly, never as a fault. */
+export const isCalm = (kind: OutageView["kind"]): boolean =>
+  kind === "restarting" || kind === "switching" || kind === "paused";
+
 /**
  * What an unreachable engine means to the person looking. With `--engine auto` restarts are routine,
  * so a short gap is a calm "restarting" state, a running second engine is "switching", and only a
@@ -43,6 +49,7 @@ export function outageView(input: OutageInput): OutageView {
     return { kind: "none" };
   const since = input.offlineSince ?? input.updatedAt ?? input.now;
   const downS = Math.max(0, (input.now - since) / 1000);
+  if (list.pause) return { kind: "paused", reason: list.pause.reason, downS };
   const running = list.data.filter((e) => e.state === "running");
   const live = running.find((e) => e.selected) ?? running[0];
   if (live) return { kind: "switching", to: live.url, port: live.port, downS };

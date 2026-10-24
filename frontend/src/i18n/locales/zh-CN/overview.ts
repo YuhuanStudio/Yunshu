@@ -268,5 +268,6 @@ const overview: Shape<typeof zh> = {
   "hero.restarted": "引擎于 {time} 重新启动 · 曲线接续控制台的记录",
   "hero.switched": "于 {time} 切换到另一个引擎",
   "hero.widened": "此范围内还没有样本，改显示最近 15 分钟",
+  "hero.away": "引擎于 {time} 离线 · 曲线接续控制台的记录",
 };
 export default overview;

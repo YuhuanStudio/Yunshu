@@ -281,5 +281,6 @@ const requests = {
   "list.cachedShort": "命中 {cached} · {pct}%",
   "list.mobileUsage": "輸入 {prompt} · 命中 {cached} · 輸出 {out}",
   "list.awayEmpty": "引擎暫時離線，也還沒有記錄到請求",
+  "list.away": "引擎於 {time} 離線",
 };
 export default requests;

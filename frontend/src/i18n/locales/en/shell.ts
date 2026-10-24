@@ -226,5 +226,6 @@ const shell: Shape<typeof zh> = {
   "engine.live.switching": "Switching",
   "engine.live.last": "last decode {tps} tok/s · {age} ago",
   "engine.live.lastShort": "last {tps} tok/s · {age}",
+  "engine.live.paused": "Paused",
 };
 export default shell;

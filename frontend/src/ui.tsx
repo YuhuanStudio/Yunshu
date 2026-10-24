@@ -21,6 +21,7 @@ import type { EngineStatus } from "./api";
 import { t } from "./i18n/index.ts";
 import type { useEngine } from "./useEngine";
 import { offlineCause } from "./errors";
+import { isCalm } from "./outage-view";
 import { uptimeText } from "./footer-status";
 export type Engine = ReturnType<typeof useEngine>;
 export type Model = EngineStatus["models"][number];
@@ -136,13 +137,20 @@ export function ConnectionState({
   if (engine.phase === "online") return null;
   const outage = engine.outage;
   // With --engine auto a restart is routine: a calm, neutral state with the facts, not a red alarm.
-  if (outage.kind === "restarting" || outage.kind === "switching") {
+  if (isCalm(outage.kind)) {
     const title =
       outage.kind === "restarting"
         ? t("common.outage.restarting")
-        : t("common.outage.switching", {
-            engine: outage.port != null ? `:${outage.port}` : outage.to,
-          });
+        : outage.kind === "paused"
+          ? t("common.outage.paused")
+          : t("common.outage.switching", {
+              engine:
+                outage.kind === "switching" && outage.port != null
+                  ? `:${outage.port}`
+                  : outage.kind === "switching"
+                    ? outage.to
+                    : "",
+            });
     const facts =
       outage.kind === "restarting"
         ? [
@@ -157,7 +165,9 @@ export function ConnectionState({
                 : t("common.outage.longer", { usual: elapsed(outage.usualS) })
               : t("common.outage.waiting", { s: elapsed(outage.downS) }),
           ]
-        : [t("common.outage.following")];
+        : outage.kind === "paused"
+          ? [t("common.outage.pausedWhy", { reason: outage.reason || "—" })]
+          : [t("common.outage.following")];
     return (
       <div role="status" data-testid="outage-calm" data-kind={outage.kind}>
         <Banner
@@ -261,8 +271,7 @@ export function OfflineLine({ engine }: { engine: Engine }) {
   const now = useNow(offline);
   if (!offline) return null;
   // A routine restart already says it in the calm banner.
-  if (engine.outage.kind === "restarting" || engine.outage.kind === "switching")
-    return null;
+  if (isCalm(engine.outage.kind)) return null;
   const since = engine.offlineSince ?? engine.updatedAt ?? now;
   const text = [
     t("common.offlineSince", {

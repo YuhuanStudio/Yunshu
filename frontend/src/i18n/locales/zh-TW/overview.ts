@@ -267,5 +267,6 @@ const overview = {
   "hero.restarted": "引擎於 {time} 重新啟動 · 曲線接續主控台的記錄",
   "hero.switched": "於 {time} 切換到另一個引擎",
   "hero.widened": "此範圍內還沒有樣本，改顯示最近 15 分鐘",
+  "hero.away": "引擎於 {time} 離線 · 曲線接續主控台的記錄",
 };
 export default overview;

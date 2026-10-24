@@ -216,5 +216,6 @@ const shell = {
   "engine.live.switching": "切換中",
   "engine.live.last": "上次解碼 {tps} tok/s · {age}前",
   "engine.live.lastShort": "上次 {tps} tok/s · {age}",
+  "engine.live.paused": "已暫停",
 };
 export default shell;

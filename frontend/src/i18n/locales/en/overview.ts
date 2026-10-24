@@ -282,5 +282,6 @@ const overview: Shape<typeof zh> = {
     "Engine restarted {time} · the line continues from the console's record",
   "hero.switched": "Switched to another engine {time}",
   "hero.widened": "No samples in this window yet; showing the last 15 min",
+  "hero.away": "Engine went away {time} · the line continues from the console's record",
 };
 export default overview;

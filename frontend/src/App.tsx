@@ -1,3 +1,4 @@
+import { isCalm } from "./outage-view";
 import { SegmentedTray } from "./SegmentedTray";
 import { gbTotalText } from "./byte-format";
 import { Suspense, useEffect, useRef, useState } from "react";
@@ -686,8 +687,7 @@ export default function App() {
                     <StatusIndicator
                       status={
                         engine.phase !== "online"
-                          ? engine.outage.kind === "restarting" ||
-                            engine.outage.kind === "switching"
+                          ? isCalm(engine.outage.kind)
                             ? "away"
                             : "offline"
                           : loadedModel
@@ -700,7 +700,9 @@ export default function App() {
                         ? t("shell.engine.live.restarting")
                         : engine.outage.kind === "switching"
                           ? t("shell.engine.live.switching")
-                          : t("shell.side.offline")
+                          : engine.outage.kind === "paused"
+                            ? t("shell.engine.live.paused")
+                            : t("shell.side.offline")
                       : loadedModel
                         ? t("shell.side.loaded")
                         : t("shell.side.noModel")}
