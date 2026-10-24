@@ -153,6 +153,10 @@ def codex_catalog(info: ModelInfo) -> dict:
         "context_window": info.context,
         "input_modalities": ["text", "image"] if info.vision else ["text"],
         "experimental_supported_tools": [],
+        # Codex offers the freeform (Lark-grammar) apply_patch tool only when this is set; without it
+        # the model is told to call ``apply_patch`` through a shell heredoc (ApplyPatchToolType has
+        # the single variant "freeform", codex-rs protocol openai_models.rs).
+        "apply_patch_tool_type": "freeform",
     }
     if default:
         entry["default_reasoning_level"] = default

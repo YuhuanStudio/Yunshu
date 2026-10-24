@@ -831,10 +831,33 @@ def _tidy(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def record_tool_outcome(parsed: int, markup_failed: int) -> None:
+    """Add one parse outcome to the current request's record (counts only, never text): calls parsed,
+    and tool-call markup blocks that yielded no call. Read back through the finished-request ring."""
+    try:
+        from .request_tracker import current_request_info
+
+        info: Any = current_request_info.get()
+        if info is None:
+            return
+        info.tool_calls_parsed = (
+            getattr(info, "tool_calls_parsed", None) or 0
+        ) + parsed
+        info.tool_markup_failed = (
+            getattr(info, "tool_markup_failed", None) or 0
+        ) + markup_failed
+    except Exception:  # noqa: BLE001 - telemetry must never break a response
+        pass
+
+
 def parse_tool_output(
-    text: str, formats: Sequence[ToolFormat], tools: Any = None
+    text: str,
+    formats: Sequence[ToolFormat],
+    tools: Any = None,
+    *,
+    record: bool = True,
 ) -> tuple[list[Call], str]:
-    """Extract tool calls from a finished model output.
+    """Extract tool calls from a finished model output (and record the outcome on the request).
 
     Returns ``(calls, remaining_text)``: calls in output order, arguments typed
     with ``tools``' schemas; the text with every parsed call span removed.
@@ -846,7 +869,11 @@ def parse_tool_output(
     if whole:
         whole = _only_declared(whole, tools)
     if whole:
-        return coerce_tool_calls(whole, tools) or [], ""
+        out = coerce_tool_calls(whole, tools) or []
+        if record:
+            record_tool_outcome(len(out), 0)
+        return out, ""
+    failed = 0
     calls: list[Call] = []
     kept: list[str] = []
     pos = 0
@@ -865,8 +892,15 @@ def parse_tool_output(
             any_dropped = True
         else:
             kept.append(text[pos:end])
+        if not got:
+            failed += 1
         pos = end
     kept.append(text[pos:])
     if not calls:
+        if record:
+            record_tool_outcome(0, failed)
         return [], _tidy("".join(kept)) if any_dropped else text
-    return coerce_tool_calls(calls, tools) or [], _tidy("".join(kept))
+    out = coerce_tool_calls(calls, tools) or []
+    if record:
+        record_tool_outcome(len(out), failed)
+    return out, _tidy("".join(kept))

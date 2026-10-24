@@ -98,6 +98,9 @@ def base_env(home: Path, port_hint: str = "") -> dict[str, str]:
         "XDG_CACHE_HOME": str(home / ".cache"),
         "XDG_STATE_HOME": str(home / ".local" / "state"),
         "TMPDIR": str(tmp) + "/",
+        # zsh heredocs use TMPPREFIX (default /tmp/zsh), not TMPDIR; /tmp is outside the sandbox
+        # write list, so every heredoc failed with "operation not permitted".
+        "TMPPREFIX": str(tmp) + "/zsh",
         "LANG": "en_US.UTF-8",
         "LC_ALL": "en_US.UTF-8",
         "TERM": "dumb",
@@ -325,6 +328,29 @@ def _claude(env, home, workdir, base_url, model, prompt, ctx, max_out):
     return Launch(cmd, env, workdir, home)
 
 
+def codex_model_catalog(model, ctx, max_out, base_url=None) -> dict:
+    """The catalog the product's ``yunshu launch codex`` writes (same function). Model facts come from
+    the running server's /v1/models when reachable, else from the harness arguments."""
+    import sys
+    import urllib.request
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "python"))
+    from yunshu_cli.integrations.agent_config import ModelInfo, codex_catalog
+
+    info = None
+    if base_url:
+        try:
+            with urllib.request.urlopen(f"{base_url}/v1/models", timeout=5) as r:
+                for item in json.load(r).get("data", []):
+                    if item.get("id") == model:
+                        info = ModelInfo.from_models_item(item)
+        except Exception:
+            info = None
+    if info is None:
+        info = ModelInfo(id=model, context=ctx, max_output=max_out)
+    return codex_catalog(info)
+
+
 def _codex(env, home, workdir, base_url, model, prompt, ctx, max_out):
     chome = home / ".codex"
     chome.mkdir(parents=True, exist_ok=True)
@@ -333,6 +359,7 @@ model_provider = "yunshu"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 check_for_update_on_startup = false
+model_catalog_json = "{chome / "model_catalog.json"}"
 model_context_window = {ctx}
 model_auto_compact_token_limit = {int(ctx * 0.8)}
 web_search = "disabled"
@@ -353,6 +380,9 @@ request_max_retries = 1
 stream_max_retries = 1
 """
     (chome / "config.toml").write_text(toml)
+    (chome / "model_catalog.json").write_text(
+        json.dumps(codex_model_catalog(model, ctx, max_out, base_url))
+    )
     env.update(CODEX_HOME=str(chome), YUNSHU_API_KEY=API_KEY)
     cmd = [
         str(CODEX_BIN),
