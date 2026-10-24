@@ -1,6 +1,6 @@
 ---
 title: 代码执行
-description: 启用 Anthropic code_execution 工具，让模型撰写的命令在你的 Mac 上于 sandbox-runtime 内运行，并了解其容器、文件与限制。
+description: 启用 Anthropic code_execution 工具，让模型编写的命令在你的 Mac 上于 sandbox-runtime 内运行，并了解其容器、文件与限制。
 ---
 
 Anthropic 的 `code_execution_20250825`、`code_execution_20260120` 与 `code_execution_20260521` 工具会在这台机器上、Anthropic 的 [sandbox-runtime](https://github.com/anthropics/sandbox-runtime)（`srt`）内运行。此功能默认为关闭。沙箱如何构建，请见[代码执行沙箱](/docs/internals/code-execution-sandbox)。
@@ -10,7 +10,7 @@ Anthropic 的 `code_execution_20250825`、`code_execution_20260120` 与 `code_ex
 <Steps>
 <Step>
 
-安装沙箱运行环境。需要 Node 22.12 或更新版本，`srt` 是选用相依套件。
+安装沙箱运行环境。需要 Node 22.12 或更新版本，`srt` 是可选依赖。
 
 ```bash
 npm install -g @anthropic-ai/sandbox-runtime
@@ -28,17 +28,17 @@ yunshu serve -m <model> --set code_execution=1
 </Step>
 <Step>
 
-运行 `yunshu doctor`，查看「code execution」那一列，会显示 `srt` 版本与自我测试结果。
+运行 `yunshu doctor`，查看“code execution”那一列，会显示 `srt` 版本与自我测试结果。
 
 </Step>
 </Steps>
 
 | 设置 | 默认 | 意义 |
 |---|---|---|
-| `YUNSHU_CODE_EXECUTION` | `false` | 提供此工具。关闭时：声明它的请求会得到指出此设置的 `400`。打开但没有 `srt` 时：回传 `503`（`api_error`）并附安装命令。命令绝不会在 `srt` 之外运行。 |
+| `YUNSHU_CODE_EXECUTION` | `false` | 提供此工具。关闭时：声明它的请求会得到指出此设置的 `400`。开启但没有 `srt` 时：返回 `503`（`api_error`）并附安装命令。命令绝不会在 `srt` 之外运行。 |
 | `YUNSHU_CODE_EXECUTION_ROOT` | `~/.yunshu/sandbox` | 每个容器一个子目录，权限 0700。 |
-| `YUNSHU_CODE_EXECUTION_TIMEOUT` | `60.0` 秒 | 每次调用的墙上时间（同时是 CPU 时间上限）；逾时为 `execution_time_exceeded`。 |
-| `YUNSHU_CODE_EXECUTION_MEMORY_MB` | `2048` | 该次调用整个进程群组的常驻内存，每 100 ms 采样一次；超过就终止该调用。 |
+| `YUNSHU_CODE_EXECUTION_TIMEOUT` | `60.0` 秒 | 每次调用的挂钟时间（同时也是 CPU 时间上限）；超时为 `execution_time_exceeded`。 |
+| `YUNSHU_CODE_EXECUTION_MEMORY_MB` | `2048` | 该次调用整个进程组的常驻内存，每 100 ms 采样一次；超过就终止该调用。 |
 | `YUNSHU_CODE_EXECUTION_NETWORK_ALLOW` | 未设置 | 沙箱可连接的主机，以逗号分隔（`example.com`、`*.example.com`、`host:443`）。未设置：完全没有网络，包含 loopback。 |
 | `YUNSHU_CODE_EXECUTION_TTL_MIN` | `20.0` | 容器闲置多少分钟后，连同其文件一并删除。 |
 
@@ -50,28 +50,28 @@ yunshu serve -m <model> --set code_execution=1
 {"type": "code_execution_20250825", "name": "code_execution"}
 ```
 
-模型会得到两个子工具：`bash_code_execution` 与 `text_editor_code_execution`（`view`、`create`、`str_replace`）。回应会依 Anthropic 文档带有 `server_tool_use` 区块，以及 `bash_code_execution_tool_result` 或 `text_editor_code_execution_tool_result` 区块。串流的方式相同：子工具输入以 `input_json_delta` 发送，每个结果区块则整个放在一个 `content_block_start` 中。回应也带有 `container: {id, expires_at}`（串流时位于 `message_delta.delta`）。
+模型会得到两个子工具：`bash_code_execution` 与 `text_editor_code_execution`（`view`、`create`、`str_replace`）。响应会按 Anthropic 文档带有 `server_tool_use` 块，以及 `bash_code_execution_tool_result` 或 `text_editor_code_execution_tool_result` 块。流式输出的方式相同：子工具输入以 `input_json_delta` 发送，每个结果块则整个放在一个 `content_block_start` 中。响应也带有 `container: {id, expires_at}`（流式输出时位于 `message_delta.delta`）。
 
-- **容器。** 将 `container: "<id>"`（或 `{id}`）传回来即可保留工作目录。未知或已过期的 id 会是 `400`。容器在闲置 TTL 后删除，总量上限为 2 GiB（最旧的先删）。
-- **文件。** `container_upload` 内容区块会把 [Files API](/docs/api/files) 的文件拷贝到工作目录。每次 bash 调用都有全新的 `$OUTPUT_DIR`；其顶层文件会变成 Files API 项目，以 `bash_code_execution_output {file_id}` 回传（用 `GET /v1/files/{id}/content` 下载）。
-- **输出限制。** stdout 与 stderr 各自在 64 KiB 截断（并标记）。stdout 与 stderr 合计超过 1 MiB 的调用会被终止（`output_file_too_large`）。后台进程会随该次调用结束。命令看到的环境变量只有 `PATH`、`HOME`（容器）、`TMPDIR`、`OUTPUT_DIR` 与地区设置变量，绝不包含服务器的环境。
+- **容器。** 将 `container: "<id>"`（或 `{id}`）传回即可保留工作目录。未知或已过期的 id 会是 `400`。容器在闲置 TTL 后删除，总量上限为 2 GiB（最旧的先删）。
+- **文件。** `container_upload` 内容块会把 [Files API](/docs/api/files) 的文件复制到工作目录。每次 bash 调用都有全新的 `$OUTPUT_DIR`；其顶层文件会变成 Files API 条目，以 `bash_code_execution_output {file_id}` 返回（用 `GET /v1/files/{id}/content` 下载）。
+- **输出限制。** stdout 与 stderr 各自在 64 KiB 截断（并标记）。stdout 与 stderr 合计超过 1 MiB 的调用会被终止（`output_file_too_large`）。后台进程会随该次调用结束。命令看到的环境变量只有 `PATH`、`HOME`（容器）、`TMPDIR`、`OUTPUT_DIR` 与区域设置变量，绝不包含服务器的环境。
 
 ## 沙箱允许什么
 
 - **写入：** 仅限容器目录。
-- **读取：** `/Users`、`/Volumes`、`/home` 与容器根目录一律拒绝；只有该容器本身与 Python 解释器的前缀会被重新允许。你的家目录、密钥、`~/.yunshu` 与其他容器都读不到。
+- **读取：** `/Users`、`/Volumes`、`/home` 与容器根目录一律拒绝；只有该容器本身与 Python 解释器的前缀会被重新允许。你的主目录、密钥、`~/.yunshu` 与其他容器都读不到。
 - **网络：** 除非列出，否则没有。loopback 永远无法连接，且允许的名称无法解析到私有网段。
 - **其他：** Unix socket、Apple Events 与 `open` 皆关闭。
 
-违规事件只以中继数据记录（容器 id、回传码、字节数）；命令、输出与文件内容绝不写入日志。
+违规事件只以元数据记录（容器 id、返回码、字节数）；命令、输出与文件内容绝不写入日志。
 
 <Callout type="warn">
-允许的网域清单不会检查流量内容。允许像 `github.com` 这样范围广的主机仍可能泄漏数据，所以请让清单尽量短。
+允许的域名清单不会检查流量内容。允许像 `github.com` 这样覆盖面广的主机仍可能泄露数据，所以请让清单尽量短。
 </Callout>
 
 ## 与 Anthropic 容器的差异
 
-- 是 macOS，不是 Linux x86_64。Python 是 Yunshu 所使用的解释器（仅标准函数库，没有 pandas 或 numpy）。
+- 是 macOS，不是 Linux x86_64。Python 是 Yunshu 所使用的解释器（仅标准库，没有 pandas 或 numpy）。
 - 调用之间没有 REPL 状态，也没有程序化工具调用。`20260120` 与 `20260521` 类型会被接受，行为与 `20250825` 相同。
 - 没有 Content Credentials。
 - 尚未提供 OpenAI 的 `code_interpreter` 与 `shell`。

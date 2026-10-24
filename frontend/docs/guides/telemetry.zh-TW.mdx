@@ -31,10 +31,10 @@ description: 啟用本機 Apple Silicon 功耗、GPU 與溫度取樣器，從 AP
 | `YUNSHU_TELEMETRY_INTERVAL_S` | `1.0` | 取樣間隔（秒），最小 0.1；需重新啟動 |
 
 <Callout type="info">
-預設為關閉。一次 27B 的 A/B 顯示解碼速度在雜訊範圍內相同，但在 1K 純文字情境中，後續請求的 TTFT 有小而一致的代價，因此採用選用方式。這些數字未記錄在基準測試紀錄中，因此此處不引用。
+預設為關閉。一次 27B 的 A/B 顯示解碼速度在雜訊範圍內相同，但在 1K 純文字情境中，後續請求的 TTFT 有小而一致的代價，因此保持為選用項目。這些數字未記錄在基準測試紀錄中，因此此處不引用。
 </Callout>
 
-實作的 IOReport 與 HID 存取衍生自 [pierre427/mlx2](https://github.com/pierre427/mlx2)（Apache-2.0），macOS 27 的計數器目錄衍生自 [vladkens/macmon](https://github.com/vladkens/macmon)（MIT）。聲明見 `THIRD_PARTY_NOTICES.md` 與 `vendor.json`。
+IOReport 與 HID 存取的實作衍生自 [pierre427/mlx2](https://github.com/pierre427/mlx2)（Apache-2.0），macOS 27 的計數器目錄衍生自 [vladkens/macmon](https://github.com/vladkens/macmon)（MIT）。聲明見 `THIRD_PARTY_NOTICES.md` 與 `vendor.json`。
 
 ## 主機 API 與 CLI
 
@@ -55,7 +55,7 @@ description: 啟用本機 Apple Silicon 功耗、GPU 與溫度取樣器，從 AP
 ```
 
 - 功率是區間能量除以經過的秒數。Package 瓦數是所回報的 CPU、GPU、ANE 與 DRAM 通道總和，不是插座端功率。
-- GPU MHz 以作用中的 DVFS 停留時間加權。作用比例的分母包含閒置停留時間。
+- GPU MHz 以執行中的 DVFS 停留時間加權。活躍比例的分母包含閒置停留時間。
 - 缺少的計數器會是 `null` 並附原因，絕不編造零值。無法取得、已停用或過期的遙測會回傳 `state: unknown` 與 `reason`。功率只有部分涵蓋時回傳 `state: partial`；溫度可以獨立為 unknown。
 
 `yunshu top` 使用已設定的 API 金鑰監看這些快取欄位。`yunshu top --once` 印出一張表，`yunshu --json top` 輸出一份 JSON 快照。未知的值仍會顯示。CLI 本身不會取樣硬體。
@@ -80,7 +80,7 @@ description: 啟用本機 Apple Silicon 功耗、GPU 與溫度取樣器，從 AP
 - `yunshu_gpu_watts`、`yunshu_package_watts`
 - `yunshu_gpu_frequency_mhz`、`yunshu_gpu_active_ratio`
 - `yunshu_die_temperature_celsius`（最高晶片溫度）
-- `yunshu_request_energy_joules_total{phase="prefill|decode"}`（估計值的本次執行期總和）
+- `yunshu_request_energy_joules_total{phase="prefill|decode"}`（估計值的本次執行期間的總和）
 
 未知的 gauge 會被省略。請求計數器只在請求完成時更新一次，不會在抓取時更新，並帶有上述重疊視窗的限制。
 

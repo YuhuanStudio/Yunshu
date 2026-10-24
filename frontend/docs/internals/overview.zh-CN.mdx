@@ -1,13 +1,13 @@
 ---
-title: 云舒如何运作
+title: 云枢如何运作
 description: 引擎内部地图：服务模型、请求路径、前缀缓存、推测解码、预填与内存，每个部分都链接到专属页面。
 ---
 
-这些页面说明云舒的内部运作，面向阅读或修改代码的人，以及想精确了解某个设置作用的人。内容只陈述代码实际的行为。包结构请见[架构](/docs/developers/architecture)；可调整的行为请见[配置](/docs/guides/configuration)。
+这些页面说明云枢的内部运作，面向阅读或修改代码的人，以及想精确了解某个设置作用的人。内容只陈述代码实际的行为。包结构请见[架构](/docs/developers/architecture)；可调整的行为请见[配置](/docs/guides/configuration)。
 
 ## 它做什么
 
-云舒是单个进程：在 Apple Silicon 上，FastAPI 网关位于基于 MLX 的引擎之前。请求经过中间件与路由器，由 `ModelManager` 分发到对应模型的引擎，最后变成 token，再由网关转成该 API 方言的响应或流。三个想法决定了其余的设计：
+云枢是单个进程：在 Apple Silicon 上，FastAPI 网关位于基于 MLX 的引擎之前。请求经过中间件与路由器，由 `ModelManager` 分发到对应模型的引擎，最后变成 token，再由网关转成该 API 方言的响应或流。三个想法决定了其余的设计：
 
 - **两条服务路径。** 每个 `mlx-vlm` 模型（`VLMEngine`）都由 VLM batch runner 服务（`vlm_batch_runner.py`，由 `VLMEngine._build_batch_runner` 构建）。纯文本 `mlx-lm` 模型走单请求快速路径（`_generate_fast`，直接调用 mlx-lm 的 `generate_step`）；对这类模型的并发请求会被串行化。
 - **单一 MLX 线程。** 所有 GPU 工作都在拥有 Metal stream 的单 worker 执行器上运行，事件循环不会接触 MLX 数组。
@@ -17,7 +17,7 @@ description: 引擎内部地图：服务模型、请求路径、前缀缓存、�
 
 ## 为什么这样设计
 
-云舒是单节点引擎，因此针对单台机器优化首 token 时间、解码速度与前缀复用，而不是多租户吞吐量。优化默认保持无损；有损的（例如 int8 KV）是明确的用户选项。自定义 Metal kernel 只有在相同 checkpoint 的对照显示端到端确实有收益、且输出相同或在容差内时才会采用。
+云枢是单节点引擎，因此针对单台机器优化首 token 时间、解码速度与前缀复用，而不是多租户吞吐量。优化默认保持无损；有损的（例如 int8 KV）是明确的用户选项。自定义 Metal kernel 只有在相同 checkpoint 的对照显示端到端确实有收益、且输出相同或在容差内时才会采用。
 
 ```mermaid
 flowchart TD
@@ -54,7 +54,7 @@ flowchart TD
 
 ## 限制
 
-云舒没有多节点模式，也不以多租户吞吐量为目标。推测解码在单请求通道中运行，因此并发请求会以不做 draft 的方式批处理。
+云枢没有多节点模式，也不以多租户吞吐量为目标。推测解码在单请求通道中运行，因此并发请求会以不做 draft 的方式批处理。
 
 ## 如何验证
 
@@ -84,8 +84,8 @@ flowchart TD
   <Card title="工具调用解析" href="/docs/internals/tool-call-parsing">
     模型输出如何变成工具调用。
   </Card>
-  <Card title="控制台进程" href="/docs/internals/console-process">
-    网页控制台背后独立的轻量进程。
+  <Card title="主控台进程" href="/docs/internals/console-process">
+    网页主控台背后独立的轻量进程。
   </Card>
   <Card title="代码执行沙箱" href="/docs/internals/code-execution-sandbox">
     服务器端代码执行如何隔离。

@@ -3,7 +3,7 @@ title: 多模態與檢索端點
 description: 哪些路由提供圖片、音訊、影片、語音、Realtime 語音、OCR、圖片生成、embeddings 與 rerank，各需要哪些 extra，以及限制在哪裡。
 ---
 
-選用的 extra 會安裝相依套件：`pip install 'yunshu[audio]'`、`[vision]`、`[generation]`、`[embeddings]` 與 `[omni]`。每個路由都需要支援它的模型；`GET /v1/models` 會告訴你哪些可用。請求格式請見下方連結的 API 參考頁面。
+選用的 extra 會安裝所需的相依套件：`pip install 'yunshu[audio]'`、`[vision]`、`[generation]`、`[embeddings]` 與 `[omni]`。每個路由都需要支援它的模型；`GET /v1/models` 會告訴你哪些可用。請求格式請見下方連結的 API 參考頁面。
 
 <Callout type="info">
 語音、ASR、TTS、圖片生成與 OCR 是支援的能力，不是調校的主要路徑。功能依 checkpoint 而異，並逐模型驗證：請見[模型支援](/docs/guides/model-support)。
@@ -52,5 +52,5 @@ yunshu rerank "query" "doc one" "doc two" --top-n 1
 ## 限制
 
 - Realtime 的僅轉錄 session 設定會被回傳，但不會以僅轉錄 session 的方式執行。
-- 前綴重用取決於快取版面配置。Gemma 4 有限定範圍的精確視窗還原憑證；請勿推論所有旋轉快取模型都受支援。
+- 前綴重用取決於快取佈局。Gemma 4 有限定範圍的精確視窗還原憑證；請勿據此推斷所有旋轉快取模型都受支援。
 - Qwen3-Omni 重複圖片的前綴重用有限定範圍的命中與未命中一致性憑證；圖片加音訊合併的快取重用尚未驗證。請見[模型支援](/docs/guides/model-support)。

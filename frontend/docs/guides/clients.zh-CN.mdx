@@ -10,12 +10,12 @@ Yunshu 在 `/v1` 下提供 OpenAI API，并在 `/v1/messages` 提供 Anthropic M
 | OpenAI base URL | `http://127.0.0.1:8000/v1` |
 | Anthropic base URL | `http://127.0.0.1:8000`（SDK 会自动附加 `/v1/messages`） |
 | API 密钥 | 任意字符串；若服务器设有 token 或 API 密钥，则使用该凭证 |
-| 模型名称 | 单模型模式（`yunshu serve -m ...`）：任何名称都会对应到所服务的模型。多模型模式（`--models-dir`）：使用 `GET /v1/models` 回传的 id |
+| 模型名称 | 单模型模式（`yunshu serve -m ...`）：任何名称都会对应到所服务的模型。多模型模式（`--models-dir`）：使用 `GET /v1/models` 返回的 id |
 
 使用 `--auth-token` 时，密钥可以用 `Authorization: Bearer <token>`（OpenAI 客户端）或 `x-api-key: <token>`（Anthropic 客户端）传入。请见[验证与 API 密钥](/docs/guides/auth-and-keys)。
 
 <Callout type="warn">
-`yunshu serve` 默认绑定 `127.0.0.1`。若要从其他机器或 Docker 容器连接，请以 `--host 0.0.0.0 --auth-token <secret>` 启动。在非 loopback 地址上未设置 token 就提供服务时，会印出警告。
+`yunshu serve` 默认绑定 `127.0.0.1`。若要从其他机器或 Docker 容器连接，请以 `--host 0.0.0.0 --auth-token <secret>` 启动。在非 loopback 地址上未设置 token 就提供服务时，会打印警告。
 </Callout>
 
 ## 调用服务器
@@ -77,7 +77,7 @@ print(msg.content[-1].text)
 </Tab>
 </Tabs>
 
-支持串流、工具、`response_format`（JSON schema）、`stop`、`logprobs` 与 `seed`；请见 [Chat Completions](/docs/api/chat-completions)、[Responses](/docs/api/responses) 与 [Messages](/docs/api/messages)。推理模型的思考输出会与答案分开串流，位于 `delta.reasoning_content`。
+支持流式输出、工具、`response_format`（JSON schema）、`stop`、`logprobs` 与 `seed`；请见 [Chat Completions](/docs/api/chat-completions)、[Responses](/docs/api/responses) 与 [Messages](/docs/api/messages)。推理模型的思考输出会与答案分开以流式输出，位于 `delta.reasoning_content`。
 
 ## 代码代理
 
@@ -98,19 +98,19 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:8000 ANTHROPIC_AUTH_TOKEN=local ANTHROPIC_MO
 </Tab>
 <Tab value="Cline and Roo Code">
 
-选择提供者「OpenAI Compatible」，base URL 填 `http://127.0.0.1:8000/v1`，密钥任意，模型填 `local`。
+选择提供商“OpenAI Compatible”，base URL 填 `http://127.0.0.1:8000/v1`，密钥任意，模型填 `local`。
 
 </Tab>
 <Tab value="Continue">
 
-添加一个模型项目：`provider: openai`、`apiBase: http://127.0.0.1:8000/v1`、`model: local`。
+添加一个模型条目：`provider: openai`、`apiBase: http://127.0.0.1:8000/v1`、`model: local`。
 
 </Tab>
 </Tabs>
 
-`yunshu launch claude` 也会设置模型的实际 context window，并在你没有自己的状态栏时，把 `yunshu statusline`（预填进度、解码速度、最近一次缓存命中）加到 Claude Code 的状态栏。服务器端的 `web_search` 与 `web_fetch`、MCP connector，以及各代理支持的功能，请见[代理](/docs/guides/agents)与[服务器工具](/docs/api/server-tools)。
+`yunshu launch claude` 也会设置模型的实际 context window，并在你没有自己的状态栏时，把 `yunshu statusline`（预填进度、解码速度、最近一次缓存命中）加到 Claude Code 的状态栏。服务器端的 `web_search` 与 `web_fetch`、MCP connector，以及各代理支持的功能，请见[编程代理与 SDK](/docs/guides/agents)与[服务器工具](/docs/api/server-tools)。
 
-代理会送出冗长且重复的提示词。前缀缓存会重用共同的部分，所以第一轮之后只需预填添加的 token（[提示词缓存](/docs/guides/prompt-caching)）。
+代理会发送冗长且重复的提示词。前缀缓存会复用共同的部分，所以第一轮之后只需预填新增的 token（[提示词缓存](/docs/guides/prompt-caching)）。
 
 ## Open WebUI
 
@@ -122,7 +122,7 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:8000 ANTHROPIC_AUTH_TOKEN=local ANTHROPIC_MO
 </Step>
 <Step>
 
-在 Open WebUI 打开「设置」，再选「连接」，然后选 OpenAI API。
+在 Open WebUI 打开“设置”，再选“连接”，然后选 OpenAI API。
 
 </Step>
 <Step>
@@ -132,22 +132,22 @@ URL 填 `http://host.docker.internal:8000/v1`（Docker）或 `http://127.0.0.1:8
 </Step>
 </Steps>
 
-Yunmo 是另一个用户项目，它的 `llm_adapter` 兼容 OpenAI：把 `base_url` 设为 `http://127.0.0.1:8000/v1` 即可。
+Yunmo 是另一个用户的项目，它的 `llm_adapter` 兼容 OpenAI：把 `base_url` 设为 `http://127.0.0.1:8000/v1` 即可。
 
 ## 检查服务器
 
 | 端点 | 验证 | 用途 |
 |---|---|---|
 | `GET /health` | 无 | 存活状态，以及是否已加载模型 |
-| `GET /health/ready` | 无 | 在已加载模型或已注册随需模型、且使用中的 GPU 内存低于统一内存 95% 时回传 200；否则回传 503 |
+| `GET /health/ready` | 无 | 在已加载模型或已注册按需加载的模型，且使用中的 GPU 内存低于统一内存 95% 时返回 200；否则返回 503 |
 | `GET /version` | 无 | 已安装的 Yunshu 版本 |
 | `GET /v1/models` | 有设置时需 token | 所服务的模型 |
-| `GET /metrics` | 有设置时需 token | Prometheus 指针 |
+| `GET /metrics` | 有设置时需 token | Prometheus 指标 |
 
-`yunshu status` 会在命令行印出相同信息。
+`yunshu status` 会在命令行打印相同信息。
 
 ## 相关文档
 
 - [传输方式](/docs/guides/transports)：WebSocket 与 Unix socket 访问。
-- [网页搜索](/docs/guides/web-search)与 [Tavily 兼容 API](/docs/guides/tavily)。
-- [Decisions](/docs/api/decisions)、[Evals](/docs/api/evals) 与 [Stored completions](/docs/api/stored-completions)（搭配一般 OpenAI SDK 使用 `store=True`）。
+- [网络搜索](/docs/guides/web-search)与 [Tavily 兼容 API](/docs/guides/tavily)。
+- [Decisions](/docs/api/decisions)、[Evals](/docs/api/evals) 与 [Stored completions](/docs/api/stored-completions)（搭配普通 OpenAI SDK 使用 `store=True`）。
