@@ -222,16 +222,11 @@ export function HostPanel({
                 busy={false}
                 data={rows}
                 series={[
-                  {
-                    key: "gpu",
-                    label: t("overview.host.seriesGpu"),
-                    tone: "accent" as const,
-                  },
+                  { key: "gpu", label: t("overview.host.seriesGpu") },
                   {
                     key: "package",
                     label: t("overview.host.seriesPackage"),
-                    tone: "neutral" as const,
-                    dashed: true,
+                    muted: true,
                   },
                 ]}
                 height={120}
@@ -239,6 +234,8 @@ export function HostPanel({
                 formatX={clock}
                 formatY={(v) => `${number(v, 0)} W`}
                 maxGap={6000}
+                tools={{ expand: true }}
+                expandTitle={t("overview.host.chartTitle")}
               />
             </ChartCard>
           )}

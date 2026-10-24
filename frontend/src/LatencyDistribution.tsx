@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import {
-  BarChart,
   Select,
   SelectContent,
   SelectItem,
@@ -13,7 +12,7 @@ import {
   Thead,
   Tr,
 } from "@yuhuanowo/yunui";
-import { ChartCard } from "./AnalyticsPanels";
+import { ChartCard, Columns } from "./AnalyticsPanels";
 import { MIN_PERCENTILE_SAMPLES } from "./analytics";
 import {
   distribution,
@@ -36,6 +35,14 @@ const binLabel = (min: number, max: number) =>
     : max === Infinity
       ? `≥${k(min)}`
       : `${k(min)}–${k(max)}`;
+
+/** The tooltip header of a bucket: its range with the unit written out. */
+const binTitle = (min: number, max: number) =>
+  min === 0
+    ? `< ${formatMs(max)}`
+    : max === Infinity
+      ? `≥ ${formatMs(min)}`
+      : `${formatMs(min)} – ${formatMs(max)}`;
 
 const groupLabel = (id: string) =>
   id === "all"
@@ -63,6 +70,20 @@ export function LatencyDistribution({ rows }: { rows: readonly Row[] }) {
   );
   const bins = useMemo(() => histogram(rows, metric), [rows, metric]);
   const total = bins.reduce((n, b) => n + b.count, 0);
+  // P50 and P90 of everything, drawn on the bucket that holds them (only with enough samples).
+  const all = useMemo(
+    () => distribution(rows, "all", metric).groups[0],
+    [rows, metric],
+  );
+  const marks = useMemo(() => {
+    const on = (v: number | null | undefined, label: string) => {
+      if (v == null) return [];
+      const b =
+        bins.find((x) => v >= x.min && v < x.max) ?? bins[bins.length - 1];
+      return b ? [{ id: `b${b.min}`, label }] : [];
+    };
+    return [...on(all?.p50, "P50"), ...on(all?.p90, "P90")]; // i18n-ignore
+  }, [all, bins]);
   const ms = (v: number | null) => (v == null ? "—" : formatMs(v));
   if (total === 0) return null;
   return (
@@ -99,16 +120,18 @@ export function LatencyDistribution({ rows }: { rows: readonly Row[] }) {
         </div>
       }
     >
-      <BarChart
+      <Columns
         data={bins.map((b) => ({
           id: `b${b.min}`,
           label: binLabel(b.min, b.max),
+          title: binTitle(b.min, b.max),
           value: b.count,
-          tone: "neutral" as const,
         }))}
-        height={150}
+        height={160}
         ariaLabel={t("requests.dist.aria")}
         formatValue={(v) => number(v, 0)}
+        unit={t("requests.dist.unit")}
+        markers={marks}
       />
       <Table scrollLabel={t("requests.dist.tableAria")} className="mt-4">
         <Thead>

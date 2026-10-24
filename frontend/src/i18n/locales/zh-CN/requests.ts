@@ -302,5 +302,6 @@ const requests: Shape<typeof zh> = {
   "finish.refusal": "模型拒绝",
   "finish.error": "发生错误",
   "finish.timeout": "超时",
+  "dist.unit": "个请求",
 };
 export default requests;

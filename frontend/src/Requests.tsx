@@ -4,6 +4,7 @@ import { FRESH_ROW, useFreshIds } from "./fresh-rows";
 import { ErrorNote } from "./error-note";
 import { RequestWaterfall } from "./RequestWaterfall";
 import { LatencyDistribution } from "./LatencyDistribution";
+import { SparkTip } from "./AnalyticsPanels";
 import { SpeculationPanel } from "./SpeculationPanel";
 import { useRequestArchive } from "./useRequestArchive";
 import { ArchiveControls } from "./ArchiveControls";
@@ -27,7 +28,6 @@ import {
   EmptyState,
   Input,
   Sheet,
-  Sparkline,
   StatusIndicator,
   Table,
   Tbody,
@@ -735,13 +735,16 @@ export function Requests({
                   {/* The trend slot keeps its height before and after samples arrive; only the line waits for data. */}
                   <span className="hidden h-7 sm:block">
                     {spark && (
-                      <Sparkline
+                      <SparkTip
                         data={tile.data.slice(-60)}
                         tone={tile.tone}
                         area
                         height={28}
                         className="h-7 w-full"
                         label={tile.name}
+                        readout={(v) =>
+                          tile.unit ? `${number(v)} ${tile.unit}` : number(v)
+                        }
                       />
                     )}
                   </span>

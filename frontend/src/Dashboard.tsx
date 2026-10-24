@@ -3,7 +3,13 @@ import { prefixHit, prefixHitWindow } from "./request-kpi";
 import { gbTotalText } from "./byte-format";
 import { LiveNumber } from "./LiveNumber";
 import { SkeletonSwap } from "./motion/SkeletonSwap.tsx";
-import { rangeSeconds, useRangeHistory } from "./useRangeHistory";
+import { rangeSeconds, sinceStartId, useRangeHistory } from "./useRangeHistory";
+import { MetricChartGroup } from "@yuhuanowo/yunui";
+import type {
+  MetricBand,
+  MetricMarker,
+  MetricSeries,
+} from "@yuhuanowo/yunui/charts";
 import { PrefillBar } from "./PrefillBar";
 import { SegmentedTray } from "./SegmentedTray";
 import { useFlip } from "./motion/flip";
@@ -84,49 +90,50 @@ import {
 import { formatMs } from "./RequestTimeline";
 import { HostPanel } from "./HostPanel";
 import { useHostTelemetry } from "./host-hook";
-const memorySeries = () => [
-  {
-    key: "active",
-    label: t("overview.series.active"),
-    tone: "accent" as const,
-  },
-  {
-    key: "cache",
-    label: t("overview.series.pool"),
-    tone: "neutral" as const,
-    dashed: true,
-  },
+// Color follows the entity: decode is slot 1 and prefill slot 2 on every chart of the page; context
+// series (the sum, the reserve pool) are the de-emphasis gray.
+const memorySeries = (): MetricSeries[] => [
+  { key: "active", label: t("overview.series.active") },
+  { key: "cache", label: t("overview.series.pool"), muted: true },
 ];
-const requestSeries = () => [
-  { key: "requests", label: t("overview.series.all"), tone: "accent" as const },
+const requestSeries = (): MetricSeries[] => [
   {
-    key: "queued",
-    label: t("overview.series.queued"),
-    tone: "neutral" as const,
-    dashed: true,
+    key: "decodeRequests",
+    label: t("overview.series.decode"),
+    color: "var(--chart-1)",
+    raw: true,
   },
   {
     key: "prefillRequests",
     label: t("overview.series.prefill"),
-    tone: "neutral" as const,
+    color: "var(--chart-2)",
+    raw: true,
   },
   {
-    key: "decodeRequests",
-    label: t("overview.series.decode"),
-    tone: "accent" as const,
-    dashed: true,
+    key: "queued",
+    label: t("overview.series.queued"),
+    color: "var(--chart-3)",
+    raw: true,
+  },
+  {
+    key: "requests",
+    label: t("overview.series.all"),
+    muted: true,
+    raw: true,
   },
 ];
 const rateSeries = () => {
-  const decode = {
+  const decode: MetricSeries = {
     key: "decode",
     label: t("overview.series.decodeLive"),
-    tone: "accent" as const,
+    color: "var(--chart-1)",
+    band: { lo: "decodeLo", hi: "decodeHi" },
   };
-  const prefill = {
+  const prefill: MetricSeries = {
     key: "prefill",
     label: t("overview.series.prefillLive"),
-    tone: "neutral" as const,
+    color: "var(--chart-2)",
+    band: { lo: "prefillLo", hi: "prefillHi" },
   };
   return { decode: [decode], prefill: [prefill], both: [decode, prefill] };
 };
@@ -319,7 +326,6 @@ export function Dashboard({
     [heroMetric, setHeroMetric] = useState("decode"),
     [heroWindow, setHeroWindow] = useState("60"),
     [table, setTable] = useState(false),
-    [activeX, setActiveX] = useState<number | null>(null),
     [copied, setCopied] = useState<string | null>(null);
   const status = engine.status,
     online = engine.phase === "online";
@@ -327,15 +333,17 @@ export function Dashboard({
   // Offline with data on screen: the numbers stop moving, so they are dimmed and stamped.
   const stale = engine.phase === "offline" && status != null;
   const dim = stale ? "opacity-60" : "";
+  // "Since start" is a window as long as the engine has been up; everything else is a preset.
+  const rangeId = range === "start" ? sinceStartId(status?.uptime_s) : range;
   const end = engine.updatedAt ?? Date.now(),
-    start = end - rangeSeconds(range) * 1000;
+    start = end - rangeSeconds(rangeId) * 1000;
   // Charts read the slim series (engine history first, then live polls). The
   // window is a binary-search slice and the chart gets at most 300 rows.
   // Up to an hour the live series (backfilled from the console's history on open) is the source;
   // 6 h to 30 d come straight from the recorded history, gaps included.
   const longRange = useRangeHistory(
     connection,
-    range,
+    rangeId,
     engine.status?.console_process === true,
   );
   const livePoints = useMemo(
@@ -343,7 +351,7 @@ export function Dashboard({
     [engine.series, start, end],
   );
   const points = longRange.active ? longRange.points : livePoints;
-  const rangeMs = rangeSeconds(range) * 1000;
+  const rangeMs = rangeSeconds(rangeId) * 1000;
   // A line breaks where samples are further apart than a few of this range's own steps.
   const rangeGapMs = Math.max(12_000, (longRange.resolutionS ?? 0) * 3_000);
   const data = useMemo(() => chartRows(points), [points]);
@@ -369,15 +377,47 @@ export function Dashboard({
   const rates = rateSeries();
   const throughputSeries = rates[metric as keyof typeof rates];
   const busy = (engine.status?.requests.active ?? 0) > 0;
-  useEffect(() => {
-    if (activeX !== null && !points.some((point) => point.at === activeX))
-      setActiveX(null);
-  }, [points, activeX]);
   const last = status?.last;
-  const activePoint =
-    activeX == null
-      ? null
-      : (points.find((sample) => sample.at === activeX) ?? null);
+  // Engine boundaries inside a window become hairlines on the charts: a restart is drawn, never bridged.
+  const marksIn = (from: number, to: number): MetricMarker[] =>
+    engine.restarts
+      .filter((m) => m.at >= from && m.at <= to)
+      .map((m) => ({
+        x: m.at,
+        kind:
+          m.kind === "restarted"
+            ? "restart"
+            : m.kind === "away"
+              ? "away"
+              : "switch",
+        label: t(
+          m.kind === "restarted"
+            ? "overview.chart.markRestarted"
+            : m.kind === "away"
+              ? "overview.chart.markAway"
+              : "overview.chart.markSwitched",
+        ),
+      }));
+  const perfMarks = marksIn(start, end);
+  const memTotal = status?.memory.total_gb ?? null;
+  // Thresholds are quiet background bands, shown only where the axis reaches them.
+  const memBands: MetricBand[] =
+    memTotal != null && memTotal > 0
+      ? [
+          {
+            from: memTotal * 0.8,
+            to: memTotal * 0.92,
+            tone: "warning",
+            label: t("overview.memory.warn"),
+          },
+          {
+            from: memTotal * 0.92,
+            to: memTotal,
+            tone: "error",
+            label: t("overview.memory.critical"),
+          },
+        ]
+      : [];
   const items = status?.requests.items ?? [];
   const lanes = useLaneSlots(items, LANES_SHOWN);
   const laneRef = useRef<HTMLUListElement>(null);
@@ -432,10 +472,7 @@ export function Dashboard({
       () => undefined,
     );
   };
-  const chooseRange = (next: string) => {
-    setRange(next);
-    setActiveX(null);
-  };
+  const chooseRange = (next: string) => setRange(next);
   function exportData() {
     const rows = engine.history.filter((s) => s.at >= start && s.at <= end);
     const url = URL.createObjectURL(
@@ -725,6 +762,9 @@ export function Dashboard({
               formatY={formatNumber}
               maxGap={12000}
               liveWindowMs={heroWiden ? 900_000 : heroSpanMs}
+              smoothed
+              tools={{ smooth: true }}
+              markers={marksIn(end - (heroWiden ? 900_000 : heroSpanMs), end)}
             />
             {(heroMark || heroWiden) && (
               <p
@@ -859,253 +899,254 @@ export function Dashboard({
       </FoldSection>
 
       <FoldSection title={t("overview.perf.title")}>
-        <div className={`space-y-6 ${dim}`}>
-          <SectionRow
-            title={t("overview.perf.title")}
-            action={
-              <div className="flex flex-wrap items-center gap-2">
-                <SegmentedTray
-                  aria-label={t("overview.perf.range")}
-                  value={range}
-                  onChange={chooseRange}
-                  options={[
-                    { value: "15m", label: t("overview.perf.range15m") },
-                    { value: "1h", label: t("overview.perf.range1h") },
-                    { value: "6h", label: t("overview.perf.range6h") },
-                    { value: "24h", label: t("overview.perf.range24h") },
-                    { value: "7d", label: t("overview.perf.range7d") },
-                    { value: "30d", label: t("overview.perf.range30d") },
-                  ]}
+        {/* One crosshair, one zoom window and one time range for every chart below (hover a chart, all read that moment). */}
+        <MetricChartGroup>
+          <div className={`space-y-6 ${dim}`}>
+            <SectionRow
+              title={t("overview.perf.title")}
+              action={
+                <div className="flex flex-wrap items-center gap-2">
+                  <SegmentedTray
+                    aria-label={t("overview.perf.range")}
+                    value={range}
+                    onChange={chooseRange}
+                    options={[
+                      { value: "15m", label: t("overview.perf.range15m") },
+                      { value: "1h", label: t("overview.perf.range1h") },
+                      { value: "6h", label: t("overview.perf.range6h") },
+                      { value: "24h", label: t("overview.perf.range24h") },
+                      { value: "7d", label: t("overview.perf.range7d") },
+                      { value: "30d", label: t("overview.perf.range30d") },
+                      { value: "start", label: t("overview.perf.rangeStart") },
+                    ]}
+                  />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={!points.length}
+                    onClick={exportData}
+                  >
+                    <Download size={13} />
+                    {t("overview.perf.export")}
+                  </Button>
+                </div>
+              }
+            />
+            <div className="-mt-3 space-y-0.5 text-xs text-muted-foreground">
+              <p>
+                {engine.historyFrom != null
+                  ? t("overview.perf.noteEngine", {
+                      t: clock(engine.historyFrom),
+                      n: points.length,
+                    })
+                  : t("overview.perf.noteLocal", { n: points.length })}
+              </p>
+              <p>{t("overview.chart.scrub")}</p>
+            </div>
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+              <ChartCard
+                data-testid="throughput-panel"
+                title={t("overview.throughput.title")}
+                description={t("overview.throughput.desc")}
+                action={
+                  <SegmentedTray
+                    aria-label={t("overview.throughput.metric")}
+                    value={metric}
+                    onChange={setMetric}
+                    options={[
+                      { value: "decode", label: t("overview.series.decode") },
+                      { value: "prefill", label: t("overview.series.prefill") },
+                      {
+                        value: "both",
+                        label: t("overview.throughput.compare"),
+                      },
+                    ]}
+                  />
+                }
+              >
+                <SeriesChart
+                  busy={busy}
+                  data={data}
+                  series={throughputSeries}
+                  height={220}
+                  ariaLabel={t("overview.throughput.aria")}
+                  formatX={clock}
+                  formatY={formatNumber}
+                  maxGap={rangeGapMs}
+                  liveWindowMs={longRange.active ? undefined : rangeMs}
+                  refreshing={longRange.loading}
+                  markers={perfMarks}
+                  smoothed
+                  tools={{ smooth: true, log: true, expand: true }}
+                  expandTitle={t("overview.throughput.title")}
                 />
                 <Button
+                  className="mt-2"
                   size="sm"
                   variant="ghost"
-                  disabled={!points.length}
-                  onClick={exportData}
+                  aria-expanded={table}
+                  onClick={() => setTable(!table)}
                 >
-                  <Download size={13} />
-                  {t("overview.perf.export")}
+                  {table
+                    ? t("overview.throughput.hideTable")
+                    : t("overview.throughput.showTable")}
                 </Button>
-              </div>
-            }
-          />
-          <p className="-mt-3 text-xs text-muted-foreground">
-            {engine.historyFrom != null
-              ? t("overview.perf.noteEngine", {
-                  t: clock(engine.historyFrom),
-                  n: points.length,
-                })
-              : t("overview.perf.noteLocal", { n: points.length })}
-          </p>
-          <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
-            <ChartCard
-              data-testid="throughput-panel"
-              title={t("overview.throughput.title")}
-              description={t("overview.throughput.desc")}
-              action={
-                <SegmentedTray
-                  aria-label={t("overview.throughput.metric")}
-                  value={metric}
-                  onChange={setMetric}
-                  options={[
-                    { value: "decode", label: t("overview.series.decode") },
-                    { value: "prefill", label: t("overview.series.prefill") },
-                    { value: "both", label: t("overview.throughput.compare") },
-                  ]}
-                />
-              }
-            >
-              <SeriesChart
-                busy={busy}
-                data={data}
-                series={throughputSeries}
-                height={220}
-                ariaLabel={t("overview.throughput.aria")}
-                formatX={clock}
-                formatY={formatNumber}
-                maxGap={rangeGapMs}
-                liveWindowMs={longRange.active ? undefined : rangeMs}
-                activeX={activeX}
-                onActiveXChange={setActiveX}
-              />
-              <Button
-                className="mt-2"
-                size="sm"
-                variant="ghost"
-                aria-expanded={table}
-                onClick={() => setTable(!table)}
-              >
-                {table
-                  ? t("overview.throughput.hideTable")
-                  : t("overview.throughput.showTable")}
-              </Button>
-              {table && (
-                <ScrollFade className="mt-3 max-h-60 overflow-auto">
-                  <Table scrollLabel={t("overview.throughput.tableLabel")}>
-                    <Thead>
-                      <Tr>
-                        <Th>{t("overview.throughput.colTime")}</Th>
-                        <Th>{t("overview.series.decode")}</Th>
-                        <Th>{t("overview.series.prefill")}</Th>
-                        <Th>Metal GB</Th>
-                      </Tr>
-                    </Thead>
-                    <Tbody>
-                      {points.slice(-200).map((p) => (
-                        <Tr key={p.at}>
-                          <Td>{clock(p.at)}</Td>
-                          <Td>{number(p.decode)}</Td>
-                          <Td>{number(p.prefill)}</Td>
-                          <Td>{number(p.memActive)}</Td>
+                {table && (
+                  <ScrollFade className="mt-3 max-h-60 overflow-auto">
+                    <Table scrollLabel={t("overview.throughput.tableLabel")}>
+                      <Thead>
+                        <Tr>
+                          <Th>{t("overview.throughput.colTime")}</Th>
+                          <Th>{t("overview.series.decode")}</Th>
+                          <Th>{t("overview.series.prefill")}</Th>
+                          <Th>Metal GB</Th>
                         </Tr>
-                      ))}
-                    </Tbody>
-                  </Table>
-                </ScrollFade>
-              )}
-            </ChartCard>
+                      </Thead>
+                      <Tbody>
+                        {points.slice(-200).map((p) => (
+                          <Tr key={p.at}>
+                            <Td>{clock(p.at)}</Td>
+                            <Td>{number(p.decode)}</Td>
+                            <Td>{number(p.prefill)}</Td>
+                            <Td>{number(p.memActive)}</Td>
+                          </Tr>
+                        ))}
+                      </Tbody>
+                    </Table>
+                  </ScrollFade>
+                )}
+              </ChartCard>
+              <ChartCard
+                data-testid="memory-panel"
+                title={t("overview.stats.metal")}
+                description={t("overview.memory.source")}
+                action={
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {t("overview.memory.physical", {
+                      gb: number(memory?.total_gb),
+                    })}
+                  </span>
+                }
+              >
+                <p className="text-2xl font-semibold tabular-nums">
+                  <span className="tabular-nums">
+                    {fixed(memory?.active_gb)}
+                  </span>
+                  <span className="ml-1.5 text-sm font-normal text-muted-foreground">
+                    {t("overview.memory.activeOf", {
+                      gb:
+                        memory?.total_gb != null
+                          ? gbTotalText(memory.total_gb)
+                          : fixed(memory?.total_gb),
+                    })}
+                  </span>
+                </p>
+                {/* the legend wraps to a second line when the numbers get wider: both lines are reserved */}
+                <div className="mt-4 min-h-[54px]">
+                  <SegmentedBar
+                    height={10}
+                    total={memory?.total_gb ?? undefined}
+                    label={t("overview.memory.barLabel", {
+                      active: number(memory?.active_gb),
+                      pool: number(memory?.cache_gb),
+                    })}
+                    segments={[
+                      {
+                        value: memory?.active_gb ?? 0,
+                        tone: "accent",
+                        label: t("overview.series.active"),
+                      },
+                      {
+                        value: memory?.cache_gb ?? 0,
+                        tone: "neutral",
+                        label: t("overview.series.pool"),
+                      },
+                    ]}
+                    marks={
+                      memory?.peak_gb
+                        ? [
+                            {
+                              value: memory.peak_gb,
+                              label: t("overview.memory.peakMark"),
+                            },
+                          ]
+                        : undefined
+                    }
+                    legend
+                    formatValue={(v) => `${number(v)} GB`}
+                  />
+                </div>
+                <DetailList className="mt-4">
+                  <DetailRow
+                    label={t("overview.memory.peak")}
+                    value={`${number(memory?.peak_gb)} GB`}
+                  />
+                  <DetailRow
+                    label={t("overview.memory.weights")}
+                    value={
+                      loaded.length
+                        ? [
+                            loaded.reduce((s, m) => s + (m.size_gb ?? 0), 0) > 0
+                              ? sizeGb(
+                                  loaded.reduce(
+                                    (s, m) => s + (m.size_gb ?? 0),
+                                    0,
+                                  ),
+                                )
+                              : null,
+                            t("overview.memory.weightsCount", {
+                              n: loaded.length,
+                            }),
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")
+                        : "—"
+                    }
+                  />
+                </DetailList>
+                <SeriesChart
+                  busy={busy}
+                  className="mt-4"
+                  data={data}
+                  series={memorySeries()}
+                  height={120}
+                  ariaLabel={t("overview.memory.aria")}
+                  formatX={clock}
+                  formatY={formatNumber}
+                  maxGap={rangeGapMs}
+                  liveWindowMs={longRange.active ? undefined : rangeMs}
+                  refreshing={longRange.loading}
+                  markers={perfMarks}
+                  bands={memBands}
+                  tools={{ expand: true }}
+                  expandTitle={t("overview.stats.metal")}
+                />
+              </ChartCard>
+            </div>
+
             <ChartCard
-              data-testid="memory-panel"
-              title={t("overview.stats.metal")}
-              description={t("overview.memory.source")}
-              action={
-                <span className="text-xs tabular-nums text-muted-foreground">
-                  {t("overview.memory.physical", {
-                    gb: number(memory?.total_gb),
-                  })}
-                </span>
-              }
+              data-testid="concurrency-panel"
+              title={t("overview.concurrency.title")}
+              description={t("overview.concurrency.desc")}
             >
-              <p className="text-2xl font-semibold tabular-nums">
-                <span className="tabular-nums">{fixed(memory?.active_gb)}</span>
-                <span className="ml-1.5 text-sm font-normal text-muted-foreground">
-                  {t("overview.memory.activeOf", {
-                    gb:
-                      memory?.total_gb != null
-                        ? gbTotalText(memory.total_gb)
-                        : fixed(memory?.total_gb),
-                  })}
-                </span>
-              </p>
-              {/* the legend wraps to a second line when the numbers get wider: both lines are reserved */}
-              <div className="mt-4 min-h-[54px]">
-                <SegmentedBar
-                  height={10}
-                  total={memory?.total_gb ?? undefined}
-                  label={t("overview.memory.barLabel", {
-                    active: number(memory?.active_gb),
-                    pool: number(memory?.cache_gb),
-                  })}
-                  segments={[
-                    {
-                      value: memory?.active_gb ?? 0,
-                      tone: "accent",
-                      label: t("overview.series.active"),
-                    },
-                    {
-                      value: memory?.cache_gb ?? 0,
-                      tone: "neutral",
-                      label: t("overview.series.pool"),
-                    },
-                  ]}
-                  marks={
-                    memory?.peak_gb
-                      ? [
-                          {
-                            value: memory.peak_gb,
-                            label: t("overview.memory.peakMark"),
-                          },
-                        ]
-                      : undefined
-                  }
-                  legend
-                  formatValue={(v) => `${number(v)} GB`}
-                />
-              </div>
-              <DetailList className="mt-4">
-                <DetailRow
-                  label={t("overview.memory.peak")}
-                  value={`${number(memory?.peak_gb)} GB`}
-                />
-                <DetailRow
-                  label={t("overview.memory.weights")}
-                  value={
-                    loaded.length
-                      ? [
-                          loaded.reduce((s, m) => s + (m.size_gb ?? 0), 0) > 0
-                            ? sizeGb(
-                                loaded.reduce(
-                                  (s, m) => s + (m.size_gb ?? 0),
-                                  0,
-                                ),
-                              )
-                            : null,
-                          t("overview.memory.weightsCount", {
-                            n: loaded.length,
-                          }),
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")
-                      : "—"
-                  }
-                />
-              </DetailList>
               <SeriesChart
                 busy={busy}
-                className="mt-4"
                 data={data}
-                series={memorySeries()}
-                height={120}
-                ariaLabel={t("overview.memory.aria")}
+                series={requestSeries()}
+                height={180}
+                ariaLabel={t("overview.concurrency.aria")}
                 formatX={clock}
-                formatY={formatNumber}
+                formatY={formatCount}
                 maxGap={rangeGapMs}
                 liveWindowMs={longRange.active ? undefined : rangeMs}
-                activeX={activeX}
-                onActiveXChange={setActiveX}
+                refreshing={longRange.loading}
+                markers={perfMarks}
+                tools={{ expand: true }}
+                expandTitle={t("overview.concurrency.title")}
               />
             </ChartCard>
           </div>
-
-          {activePoint && (
-            <div
-              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 px-4 py-2 text-xs text-muted-foreground"
-              role="status"
-            >
-              <span>
-                {t("overview.selection.summary", {
-                  t: clock(activePoint.at),
-                  n: number(activePoint.active, 0),
-                  gb: number(activePoint.memActive),
-                })}
-              </span>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setActiveX(null)}
-              >
-                {t("overview.selection.clear")}
-              </Button>
-            </div>
-          )}
-          <ChartCard
-            title={t("overview.concurrency.title")}
-            description={t("overview.concurrency.desc")}
-          >
-            <SeriesChart
-              busy={busy}
-              data={data}
-              series={requestSeries()}
-              height={180}
-              ariaLabel={t("overview.concurrency.aria")}
-              formatX={clock}
-              formatY={formatCount}
-              maxGap={12000}
-              activeX={activeX}
-              onActiveXChange={setActiveX}
-            />
-          </ChartCard>
-        </div>
+        </MetricChartGroup>
       </FoldSection>
       <FoldSection title={t("overview.models.title")}>
         <SectionRow

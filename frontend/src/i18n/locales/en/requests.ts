@@ -319,5 +319,6 @@ const requests: Shape<typeof zh> = {
   "finish.refusal": "refused",
   "finish.error": "error",
   "finish.timeout": "timeout",
+  "dist.unit": "requests",
 };
 export default requests;

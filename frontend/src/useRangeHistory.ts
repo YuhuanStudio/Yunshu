@@ -18,8 +18,19 @@ export type RangeId = (typeof RANGES)[number]["id"];
 export const LIVE_RANGE_MAX_S = 3600;
 const TARGET_POINTS = 600;
 
-export const rangeSeconds = (id: string): number =>
-  RANGES.find((r) => r.id === id)?.seconds ?? 900;
+/**
+ * The window of a range id. `s<seconds>` is "since the engine started" (the page rounds the engine's
+ * uptime up to 5 minutes, so the recorded history is not refetched every second).
+ */
+export const rangeSeconds = (id: string): number => {
+  const since = /^s(\d+)$/.exec(id);
+  if (since) return Math.max(900, Number(since[1]));
+  return RANGES.find((r) => r.id === id)?.seconds ?? 900;
+};
+
+/** The range id for "since engine start" given the engine's uptime in seconds. */
+export const sinceStartId = (uptimeS: number | null | undefined): string =>
+  `s${Math.max(900, Math.ceil((uptimeS ?? 0) / 300) * 300)}`;
 
 /** The step to ask the server for so a range comes back as about TARGET_POINTS rows. */
 export const stepFor = (seconds: number): number =>
