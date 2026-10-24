@@ -436,6 +436,7 @@ def main() -> int:
         HOME=a.home,
         PYTHONPATH=os.path.join(tree, "python"),
         YUNSHU_AUTH_DISABLED="true",
+        YUNSHU_DEBUG_ROUTES="1",
         YUNSHU_ORPHAN_GRACE_SECONDS=str(a.grace),
         HF_HUB_OFFLINE="1",
     )

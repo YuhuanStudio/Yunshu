@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import importlib.util
 import json
 import os
@@ -79,6 +80,13 @@ async def run(url, model, plans, ctx_chars, tokens):
                     rec["poll"].append((t, it))
             except Exception as exc:  # noqa: BLE001
                 rec["poll"].append((t, {"error": repr(exc)[:80]}))
+            try:
+                d = (await client.get(url + "/debug/requests", timeout=5)).json()
+                rec.setdefault("debug", []).append(
+                    (t, d.get("active"), d.get("waiting"))
+                )
+            except Exception:  # noqa: BLE001
+                rec.setdefault("debug", []).append((t, None, None))
             await asyncio.sleep(0.2)
 
     async def one(client, name, delay, salt):
@@ -99,10 +107,8 @@ async def run(url, model, plans, ctx_chars, tokens):
             async for line in resp.aiter_lines():
                 now = time.monotonic() - t_zero
                 if line.startswith(": yunshu-progress"):
-                    try:
+                    with contextlib.suppress(ValueError):
                         r["progress"].append((now, json.loads(line.split(" ", 2)[2])))
-                    except ValueError:
-                        pass
                 elif (
                     line.startswith("data: ")
                     and line != "data: [DONE]"
@@ -166,6 +172,27 @@ def report(rec) -> tuple[str, int]:
             f"{f(sseen, 'prefill')} | {f(sseen, 'decode')} | {r['first'] and round(r['first'], 1)} | {r['end'] and round(r['end'], 1)} | "
             f"{'ok' if ok else 'BAD'}{' NO-PREFILL(poll)' if miss else ''}{' NO-PREFILL(stream)' if smiss else ''} | {pct} |"
         )
+    # Per-second view: counts by phase from /v1/requests next to the engine's own /debug/requests counters.
+    lines += [
+        "",
+        "| t | /v1/requests phases | /debug/requests active | waiting |",
+        "|---|---|---|---|",
+    ]
+    dbg = {int(t): (a, w) for t, a, w in rec.get("debug", [])}
+    per: dict[int, dict[str, int]] = {}
+    seen_ids: dict[int, set] = {}
+    for t, it in rec["poll"]:
+        ph = it.get("phase")
+        if ph:
+            k = int(t)
+            if it.get("request_id") in seen_ids.setdefault(k, set()):
+                continue
+            seen_ids[k].add(it.get("request_id"))
+            per.setdefault(k, {}).setdefault(ph, 0)
+            per[k][ph] += 1
+    for k in sorted(per):
+        a, w = dbg.get(k, (None, None))
+        lines.append(f"| {k} | {per[k]} | {a} | {w} |")
     return "\n".join(lines), bad
 
 
@@ -198,6 +225,7 @@ def main() -> int:
         HOME=a.home,
         PYTHONPATH=os.path.join(tree, "python"),
         YUNSHU_AUTH_DISABLED="true",
+        YUNSHU_DEBUG_ROUTES="1",
         HF_HUB_OFFLINE="1",
         YUNSHU_VLM_APC_DISK="0",
     )

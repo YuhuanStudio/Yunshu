@@ -19,7 +19,7 @@ if (!values.base || !values.out) throw new Error("--base and --out are required"
 mkdirSync(values.out, { recursive: true });
 const browser = await chromium.launch();
 const pages = {};
-for (const name of ["overview", "requests"]) {
+for (const name of ["overview", "requests", "diagnostics"]) {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const page = await ctx.newPage();
   await page.goto(`${values.base}/console/#/${name}`, { waitUntil: "domcontentloaded" });
