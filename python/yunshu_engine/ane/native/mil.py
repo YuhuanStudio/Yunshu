@@ -97,11 +97,15 @@ def mlp_program(gate, up, down, rows: int, mode: str = "fp16", h_exp: int = 6):
         ).astype(np.int8)
         constant(name + "q", codes)
         constant(name + "s", scale)
-        # Dequantize with scalar 1 then multiply per-channel scales. ANE compiler
-        # can select its quantized weight path; no activation quantization here.
+        # Match Core ML compressed constant weights: resolve the per-channel
+        # weight scale as constexpr, not a runtime dequantize + multiply tensor.
         h, w = value.shape
-        emit(name + "d", h, w, f"dequantize(input = {name}q, scale = fp16(1))")
-        return emit(name, h, w, f"mul(x = {name}d, y = {name}s)")
+        return emit(
+            name,
+            h,
+            w,
+            f"constexpr_blockwise_shift_scale(data = {name}q, scale = {name}s)",
+        )
 
     st, strides = surface_type(hidden, rows)
     emit("xt", hidden, rows, "tensor_buffer_to_tensor<ios17>(input = x)")
@@ -139,3 +143,21 @@ def mlp_program(gate, up, down, rows: int, mode: str = "fp16", h_exp: int = 6):
         + "\n    } -> (y);\n}\n"
     )
     return mil, blob.finish()
+
+
+def scale_program(hidden: int, rows: int):
+    """Minimal x*2 kernel: measures native call+surface/event cost, not FFN compute."""
+    if hidden <= 0 or rows <= 0:
+        raise ValueError("invalid dimensions")
+    st, strides = surface_type(hidden, rows)
+    tensor = f"tensor<fp16, [1, 1, {hidden}, {rows}]>"
+    text = f"""program(1.3)
+{{
+    func main<ios18>({st} x) {{
+        {tensor} xt = tensor_buffer_to_tensor<ios17>(input = x);
+        {tensor} yt = mul(x = xt, y = fp16(2));
+        {st} y = tensor_to_tensor_buffer<ios17>(input = yt, interleave_factors = tensor<uint8, [4]>([1, 1, 1, 1]), strides = tensor<int64, [4]>({strides}));
+    }} -> (y);
+}}
+"""
+    return text, Blob().finish()

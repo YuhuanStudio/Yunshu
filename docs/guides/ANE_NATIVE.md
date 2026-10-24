@@ -37,3 +37,11 @@ split/concurrency conclusions. Unmeasured speedups are not product claims.
 
 Source provenance: Splash 1.4.0, Apache-2.0, pinned in `vendor.json` and credited
 in `THIRD_PARTY_NOTICES.md`.
+
+The constant-int8 builder uses `constexpr_blockwise_shift_scale` so weight
+dequantization is not an extra runtime tensor multiply. Minimal `x*2` programs
+measure native evaluate/event cost separately from a 64-channel FFN. The
+interference harness retains metrics and digests, strips prompt/completion text,
+and validates every cold row's cache state and the actually engaged DFlash mode.
+Its cyclic layer load records one-second intervals so ANE rate during the GPU
+decode window can be distinguished from model loading or GPU prefill.

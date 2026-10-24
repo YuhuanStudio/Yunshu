@@ -61,7 +61,8 @@ def test_mlp_scaling_and_shape(mode):
                 np.frombuffer(blob[pos : pos + size], dtype=np.float16) == expected
             )
     else:
-        assert "dequantize" in text
+        assert "constexpr_blockwise_shift_scale" in text
+        assert "dequantize(input" not in text
 
 
 def test_bad_model_is_rejected_before_native_load(monkeypatch, tmp_path):
@@ -162,6 +163,7 @@ def test_concurrent_load_parser():
         ]
     )
     assert args.channels == 2176 and args.rows == 1024
+    assert args.layers == "40,41,42,43"
 
 
 def test_receipt_analysis_requires_complete_and_fits_known_cost(tmp_path, monkeypatch):
@@ -199,3 +201,11 @@ def test_receipt_analysis_requires_complete_and_fits_known_cost(tmp_path, monkey
     receipt.write_text("".join(json.dumps(row) + "\n" for row in records))
     with pytest.raises(ValueError, match="cached"):
         analysis.summarize(receipt)
+
+
+def test_minimal_scale_program_has_real_op_and_no_weight_records():
+    text, blob = mil.scale_program(5120, 1024)
+    assert "mul(x = xt, y = fp16(2))" in text
+    assert "[5242880, 5242880, 1024, 1]" in text
+    assert struct.unpack_from("<II", blob) == (0, 2)
+    assert len(blob) == 64

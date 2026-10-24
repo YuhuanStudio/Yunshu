@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import signal
 import time
@@ -20,6 +21,8 @@ def parser():
     p.add_argument(
         "--model", default="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
     )
+    p.add_argument("--layers", default="40,41,42,43")
+    p.add_argument("--duration", type=float, default=0.0, help="0 runs until SIGTERM")
     p.add_argument("--cache", type=Path, required=True)
     p.add_argument("--ready", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
@@ -34,39 +37,71 @@ def main():
     a = parser().parse_args()
     if a.rows < 1 or a.channels < 1:
         raise ValueError("rows/channels must be positive")
+    generator_sha = hashlib.sha256(
+        Path(mlp_program.__code__.co_filename).read_bytes()
+    ).hexdigest()
     a.ready.unlink(missing_ok=True)
     a.cache.mkdir(parents=True, exist_ok=True)
-    layer = convert.load_mlp_layer(a.model, 40)
-    inter = layer["gate_proj"]["weight"].shape[0]
-    if a.channels > inter:
-        raise ValueError("slice too wide")
-    weights = convert.mlp_slices(layer, inter - a.channels, a.mode)
-    hidden = weights[0].shape[1]
-    x = np.random.default_rng(0).normal(0, 0.7, (a.rows, hidden)).astype(np.float16)
-    session = None
-    if a.backend == "native":
-        mil, blob = mlp_program(*weights, a.rows, a.mode, 6)
-        session, reason = NativeSession.try_create(
-            mil, blob, [(hidden, a.rows)], (hidden, a.rows), a.cache / "native"
-        )
-        if session is None:
-            raise RuntimeError(reason)
-        session.copy_input(x.T)
+    layers = [int(value) for value in a.layers.split(",")]
+    sessions, runners, whole_mlps = [], [], []
+    rng = np.random.default_rng(0)
 
-        def run():
-            if session.run() is None:
-                raise RuntimeError(session.reason)
-    else:
+    def prepare(layer_index):
+        layer = convert.load_mlp_layer(a.model, layer_index)
+        inter = layer["gate_proj"]["weight"].shape[0]
+        whole_mlps.append(a.channels == inter)
+        if a.channels > inter:
+            raise ValueError("slice too wide")
+        weights = convert.mlp_slices(layer, inter - a.channels, a.mode)
+        hidden = weights[0].shape[1]
+        x = rng.normal(0, 0.7, (a.rows, hidden)).astype(np.float16)
+        if a.backend == "native":
+            mil, blob = mlp_program(*weights, a.rows, a.mode, 6)
+            session, reason = NativeSession.try_create(
+                mil, blob, [(hidden, a.rows)], (hidden, a.rows), a.cache / "native"
+            )
+            if session is None:
+                raise RuntimeError(reason)
+            sessions.append(session)
+            session.copy_input(x.T)
+
+            def call():
+                if session.run() is None:
+                    raise RuntimeError(session.reason)
+
+            call()
+            if not np.isfinite(session.copy_output()).all():
+                raise ValueError("nonfinite native background output")
+            return call
         import coremltools as ct
 
-        path = a.cache / f"c{a.channels}-r{a.rows}-{a.mode}.mlpackage"
+        path = a.cache / f"l{layer_index}-c{a.channels}-r{a.rows}-{a.mode}.mlpackage"
         if not path.exists():
             convert.build_mlp_model(*weights, a.rows, a.mode, str(path), 6)
         model = ct.models.MLModel(str(path), compute_units=ct.ComputeUnit.CPU_AND_NE)
         inp = model.get_spec().description.input[0].name
+        output = model.get_spec().description.output[0].name
 
-        def run():
-            model.predict({inp: x[None]})
+        def call():
+            return model.predict({inp: x[None]})[output]
+
+        if not np.isfinite(call()).all():
+            raise ValueError("nonfinite Core ML background output")
+        return call
+
+    try:
+        for layer_index in layers:
+            runners.append(prepare(layer_index))
+    except BaseException:
+        for session in sessions:
+            session.close()
+        raise
+    index = 0
+
+    def run():
+        nonlocal index
+        runners[index % len(runners)]()
+        index += 1
 
     stop = False
 
@@ -77,6 +112,7 @@ def main():
     signal.signal(signal.SIGTERM, stopping)
     signal.signal(signal.SIGINT, stopping)
     count = 0
+    samples = []
     start = time.perf_counter()
     try:
         run()
@@ -85,32 +121,58 @@ def main():
                 {
                     "ready": True,
                     "backend": a.backend,
+                    "generator_sha256": generator_sha,
                     "rows": a.rows,
                     "channels": a.channels,
+                    "layers": layers,
+                    "whole_mlp": all(whole_mlps),
                 }
             )
         )
         start = time.perf_counter()
-        while not stop:
+        sample_start, sample_count = start, 0
+        while not stop and (not a.duration or time.perf_counter() - start < a.duration):
             run()
             count += 1
-        seconds = time.perf_counter() - start
+            now = time.perf_counter()
+            if now - sample_start >= 1.0:
+                samples.append(
+                    {
+                        "start_s": sample_start,
+                        "end_s": now,
+                        "calls": count - sample_count,
+                    }
+                )
+                sample_start, sample_count = now, count
+        end = time.perf_counter()
+        if end > sample_start:
+            samples.append(
+                {"start_s": sample_start, "end_s": end, "calls": count - sample_count}
+            )
+        seconds = end - start
         a.out.write_text(
             json.dumps(
                 {
                     "complete": True,
                     "backend": a.backend,
+                    "generator_sha256": generator_sha,
                     "calls": count,
                     "seconds": seconds,
                     "rows": a.rows,
                     "channels": a.channels,
                     "rows_per_second": count * a.rows / seconds,
+                    "layers": layers,
+                    "whole_mlp": all(whole_mlps),
+                    "mlp_only_model64_tps_upper_bound": count * a.rows / seconds / 64
+                    if all(whole_mlps)
+                    else None,
+                    "rate_samples": samples,
                 }
             )
             + "\n"
         )
     finally:
-        if session is not None:
+        for session in sessions:
             session.close()
         a.ready.unlink(missing_ok=True)
     return 0

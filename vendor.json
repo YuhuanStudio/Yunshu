@@ -754,7 +754,8 @@
         "Isolated optional ctypes runtime; explicit caller-owned cache; local Metal event adapter; no serving integration."
       ],
       "upstream_paths": [
-        "runtime/AwakeClock.hpp"
+        "runtime/AwakeClock.hpp",
+        "runtime/metal/MetalBackend.hpp"
       ]
     },
     {
@@ -768,7 +769,8 @@
         "Isolated optional ctypes runtime; explicit caller-owned cache; local Metal event adapter; no serving integration."
       ],
       "upstream_paths": [
-        "runtime/ops/AneFfn.cpp"
+        "runtime/ops/AneFfn.cpp",
+        "runtime/ane/Program.mm"
       ]
     }
   ],

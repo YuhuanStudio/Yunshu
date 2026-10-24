@@ -8,6 +8,7 @@ No inference engine or serving arithmetic is changed. Outputs are JSONL receipts
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -16,7 +17,7 @@ import numpy as np
 
 from yunshu_engine.ane import convert
 from yunshu_engine.ane.native import NativeSession
-from yunshu_engine.ane.native.mil import mlp_program
+from yunshu_engine.ane.native.mil import mlp_program, scale_program
 
 
 def parser():
@@ -125,8 +126,17 @@ def main():
             out.flush()
             print(json.dumps(record), flush=True)
 
+        source_dir = (
+            Path(__file__).resolve().parents[2] / "python/yunshu_engine/ane/native"
+        )
+        digest = hashlib.sha256()
+        for source in sorted(source_dir.iterdir()):
+            if source.suffix in {".py", ".hpp", ".mm"}:
+                digest.update(source.name.encode())
+                digest.update(source.read_bytes())
         emit(
             {
+                "native_source_sha256": digest.hexdigest(),
                 "kind": "meta",
                 "device": "M5",
                 "model": a.model,
@@ -147,7 +157,8 @@ def main():
                 g, u = qmm(xm, "gate_proj"), qmm(xm, "up_proj")
                 return qmm((g * mx.sigmoid(g)) * u, "down_proj")
 
-            mx.eval(gpu())
+            for _ in range(25):
+                mx.eval(gpu())
             gpu_samples = []
             for _ in range(a.reps):
                 start = time.perf_counter()
@@ -161,6 +172,36 @@ def main():
                     "median_ms": float(np.median(gpu_samples)),
                 }
             )
+            mil, blob = scale_program(hidden, rows)
+            floor, reason = NativeSession.try_create(
+                mil, blob, [(hidden, rows)], (hidden, rows), a.cache / "native"
+            )
+            if floor is None:
+                raise RuntimeError(reason)
+            with floor:
+                floor.copy_input(np.full((hidden, rows), 0.5, dtype=np.float16))
+                if floor.run() is None:
+                    raise RuntimeError(floor.reason)
+                if not np.array_equal(
+                    floor.copy_output(), np.ones((hidden, rows), dtype=np.float16)
+                ):
+                    raise ValueError("minimal native call output mismatch")
+                floor_times = []
+                for _ in range(a.reps):
+                    ms = floor.run()
+                    if ms is None:
+                        raise RuntimeError(floor.reason)
+                    floor_times.append(ms)
+                emit(
+                    {
+                        "kind": "native_call_floor",
+                        "rows": rows,
+                        "ms": floor_times,
+                        "median_ms": float(np.median(floor_times)),
+                        "cached": False,
+                        "operation": "fp16 x*2, shared IOSurfaces, excludes host copies",
+                    }
+                )
             for channels in channels_list:
                 g, u, d = convert.mlp_slice(
                     dense["gate_proj"],
