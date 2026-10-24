@@ -1,5 +1,7 @@
 # Connecting clients
 
+
+> Console docs: the maintained, translated version of this page is `/docs/guides/clients` (source `frontend/docs/guides/clients.mdx`). This file stays as the repository-side reference read by tooling.
 Yunshu speaks the OpenAI API under `/v1` and the Anthropic Messages API at `/v1/messages`.
 Anything that lets you set a base URL can use it.
 

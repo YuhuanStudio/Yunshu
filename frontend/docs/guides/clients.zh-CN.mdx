@@ -1,0 +1,153 @@
+---
+title: 连接客户端
+description: 将 OpenAI 与 Anthropic SDK、curl、Open WebUI 与代码代理指向本机的 Yunshu 服务器，并确认服务器状态正常。
+---
+
+Yunshu 在 `/v1` 下提供 OpenAI API，并在 `/v1/messages` 提供 Anthropic Messages API。只要能设置 base URL 的工具都可以使用。
+
+| | 值 |
+|---|---|
+| OpenAI base URL | `http://127.0.0.1:8000/v1` |
+| Anthropic base URL | `http://127.0.0.1:8000`（SDK 会自动附加 `/v1/messages`） |
+| API 密钥 | 任意字符串；若服务器设有 token 或 API 密钥，则使用该凭证 |
+| 模型名称 | 单模型模式（`yunshu serve -m ...`）：任何名称都会对应到所服务的模型。多模型模式（`--models-dir`）：使用 `GET /v1/models` 回传的 id |
+
+使用 `--auth-token` 时，密钥可以用 `Authorization: Bearer <token>`（OpenAI 客户端）或 `x-api-key: <token>`（Anthropic 客户端）传入。请见[验证与 API 密钥](/docs/guides/auth-and-keys)。
+
+<Callout type="warn">
+`yunshu serve` 默认绑定 `127.0.0.1`。若要从其他机器或 Docker 容器连接，请以 `--host 0.0.0.0 --auth-token <secret>` 启动。在非 loopback 地址上未设置 token 就提供服务时，会印出警告。
+</Callout>
+
+## 调用服务器
+
+<Tabs items={["curl", "OpenAI Python", "OpenAI JavaScript", "Anthropic Python"]}>
+<Tab value="curl">
+
+```bash
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "local", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+</Tab>
+<Tab value="OpenAI Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="local")
+r = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Explain MLX in one sentence."}],
+    # Passed to chat templates that support it.
+    extra_body={"reasoning_effort": "medium"},
+)
+print(r.choices[0].message.content)
+```
+
+</Tab>
+<Tab value="OpenAI JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://127.0.0.1:8000/v1", apiKey: "local" });
+const r = await client.chat.completions.create({
+  model: "local",
+  messages: [{ role: "user", content: "Hello" }],
+});
+console.log(r.choices[0].message.content);
+```
+
+</Tab>
+<Tab value="Anthropic Python">
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(base_url="http://127.0.0.1:8000", api_key="local")
+msg = client.messages.create(
+    model="local",
+    max_tokens=512,
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(msg.content[-1].text)
+```
+
+</Tab>
+</Tabs>
+
+支持串流、工具、`response_format`（JSON schema）、`stop`、`logprobs` 与 `seed`；请见 [Chat Completions](/docs/api/chat-completions)、[Responses](/docs/api/responses) 与 [Messages](/docs/api/messages)。推理模型的思考输出会与答案分开串流，位于 `delta.reasoning_content`。
+
+## 代码代理
+
+<Tabs items={["Claude Code", "Codex, OpenCode, Pi", "Cline and Roo Code", "Continue"]}>
+<Tab value="Claude Code">
+
+Claude Code 使用 Anthropic API：
+
+```bash
+ANTHROPIC_BASE_URL=http://127.0.0.1:8000 ANTHROPIC_AUTH_TOKEN=local ANTHROPIC_MODEL=local claude
+```
+
+</Tab>
+<Tab value="Codex, OpenCode, Pi">
+
+`yunshu launch <tool>` 会写入该工具的设置，使其指向正在运行的服务器。`yunshu launch list` 会列出已安装的工具。
+
+</Tab>
+<Tab value="Cline and Roo Code">
+
+选择提供者「OpenAI Compatible」，base URL 填 `http://127.0.0.1:8000/v1`，密钥任意，模型填 `local`。
+
+</Tab>
+<Tab value="Continue">
+
+添加一个模型项目：`provider: openai`、`apiBase: http://127.0.0.1:8000/v1`、`model: local`。
+
+</Tab>
+</Tabs>
+
+`yunshu launch claude` 也会设置模型的实际 context window，并在你没有自己的状态栏时，把 `yunshu statusline`（预填进度、解码速度、最近一次缓存命中）加到 Claude Code 的状态栏。服务器端的 `web_search` 与 `web_fetch`、MCP connector，以及各代理支持的功能，请见[代理](/docs/guides/agents)与[服务器工具](/docs/api/server-tools)。
+
+代理会送出冗长且重复的提示词。前缀缓存会重用共同的部分，所以第一轮之后只需预填添加的 token（[提示词缓存](/docs/guides/prompt-caching)）。
+
+## Open WebUI
+
+<Steps>
+<Step>
+
+启动 Yunshu，让容器可以连到它：`yunshu serve -m <model> --host 0.0.0.0 --auth-token <secret>`。只有 Open WebUI 在 Docker 中运行时才需要这一步。
+
+</Step>
+<Step>
+
+在 Open WebUI 打开「设置」，再选「连接」，然后选 OpenAI API。
+
+</Step>
+<Step>
+
+URL 填 `http://host.docker.internal:8000/v1`（Docker）或 `http://127.0.0.1:8000/v1`（原生），密钥填你的 secret。
+
+</Step>
+</Steps>
+
+Yunmo 是另一个用户项目，它的 `llm_adapter` 兼容 OpenAI：把 `base_url` 设为 `http://127.0.0.1:8000/v1` 即可。
+
+## 检查服务器
+
+| 端点 | 验证 | 用途 |
+|---|---|---|
+| `GET /health` | 无 | 存活状态，以及是否已加载模型 |
+| `GET /health/ready` | 无 | 在已加载模型或已注册随需模型、且使用中的 GPU 内存低于统一内存 95% 时回传 200；否则回传 503 |
+| `GET /version` | 无 | 已安装的 Yunshu 版本 |
+| `GET /v1/models` | 有设置时需 token | 所服务的模型 |
+| `GET /metrics` | 有设置时需 token | Prometheus 指针 |
+
+`yunshu status` 会在命令行印出相同信息。
+
+## 相关文档
+
+- [传输方式](/docs/guides/transports)：WebSocket 与 Unix socket 访问。
+- [网页搜索](/docs/guides/web-search)与 [Tavily 兼容 API](/docs/guides/tavily)。
+- [Decisions](/docs/api/decisions)、[Evals](/docs/api/evals) 与 [Stored completions](/docs/api/stored-completions)（搭配一般 OpenAI SDK 使用 `store=True`）。

@@ -1,0 +1,84 @@
+---
+title: 功能索引
+description: 依领域列出 Yunshu 的每一项功能，附上状态与涵盖该功能的文档页面。
+---
+
+本索引依领域列出所有已提供的功能。每一列标示功能名称、用途、状态，以及文档中涵盖它的页面。清单由保存库的功能索引（`docs/feature_index.json`）产生，并由测试确保与文档保持一致。
+
+| 状态 | 意义 |
+|---|---|
+| 稳定 | 如描述运作，并有测试或闸门涵盖 |
+| 部分支持 | 在摘要所述范围内可用；其余尚未实现或尚未验证 |
+| 实验性 | 受实验性配置控制；可能变更或移除 |
+
+## 推论
+
+| 功能 | 说明 | 状态 | 文档 |
+|---|---|---|---|
+| 无损推测解码 | DFlash2、MTP 与 prompt 拷贝式草稿，搭配 batch-invariant kernel；贪婪输出与关闭推测时相同 | 稳定 | [推测解码](/docs/internals/speculative-decoding) |
+| 文本模型推测 | 针对 mlx-lm 模型的 n-gram / suffix 与 Gemma 4 assistant 草稿（外部草稿实验仍为实验性） | 稳定 | [推测解码](/docs/internals/speculative-decoding) |
+| 前缀缓存（APC） | 位于 RAM、SSD 与选用保存层的精确混合 checkpoint；含图像与音频键值 | 稳定 | [前缀缓存内部机制](/docs/internals/prefix-cache), [Prompt 缓存](/docs/guides/prompt-caching) |
+| 结构化输出 | 在解码期间强制 JSON schema、regex、选项与 grammar，包含工具参数 | 稳定 | [结构化输出](/docs/guides/structured-output), [受限解码内部机制](/docs/internals/constrained-decoding) |
+| 有损内存选项 | int8 KV、压缩的 WARM 层与加载时量化；默认关闭 | 稳定 | [内存管理](/docs/internals/memory), [配置](/docs/guides/configuration) |
+| 大型 MoE 加载（部分支持） | 从张量形状推导社群版 DeepSeek-V4-Flash 的比特数与 group size；加载前先做容量检查 | 部分支持 | [模型支持](/docs/guides/model-support) |
+| Round driver（实验性） | 针对 dense Qwen3.5 系列模型、Yunshu 自有的推测 round driver | 实验性 | [Round driver](/docs/developers/round-driver) |
+| 模型支持 | 依系列说明哪些已调校、哪些走通用路径、哪些已验证 | 稳定 | [模型支持](/docs/guides/model-support) |
+| 下一回合预演 | 符合条件的文本回复之后，以标准 stride 做 APC 预演；boundary/exact 是会改变量值、需明确选用的选项 | 稳定 | [Prefill 与预演](/docs/internals/prefill-and-rehearsal) |
+| Batch 转 lane 升级 | 共用 batch 缩减到一个 row 时，符合条件的贪婪请求会移到推测 lane；多 row 推测尚未实现 | 稳定 | [推测解码](/docs/internals/speculative-decoding) |
+
+## API
+
+| 功能 | 说明 | 状态 | 文档 |
+|---|---|---|---|
+| OpenAI API | Chat、Completions、Responses（HTTP 与 WebSocket）、Embeddings、Models、Files、Batches、Conversations | 稳定 | [Chat Completions](/docs/api/chat-completions), [Responses](/docs/api/responses), [Embeddings](/docs/api/embeddings), [Models](/docs/api/models), [Files](/docs/api/files), [Batches](/docs/api/batches) |
+| Anthropic API | Messages、count_tokens、batches、thinking、tools、cache_control、文档与引用 | 稳定 | [Messages](/docs/api/messages), [Batches](/docs/api/batches) |
+| Ollama API | /api/chat、/api/generate 与原生模型管理（pull、copy、delete、show） | 稳定 | [Ollama](/docs/api/ollama) |
+| Responses 延伸功能 | 由客户端运行的 computer 工具、conversations、compaction、previous_response_id | 稳定 | [Responses](/docs/api/responses) |
+| 已保存的 chat completions | store: true，之后可列出、取得、更新、删除并列出消息 | 稳定 | [已保存的 completions](/docs/api/stored-completions) |
+| Evals | OpenAI Evals API，支持 string-check、相似度与本机模型 grader | 稳定 | [Evals](/docs/api/evals) |
+| 类型化决策 | 单次 forward 内回传 yes/no、选项与分数答案及几率，不产生文本 | 稳定 | [Decisions](/docs/api/decisions) |
+| Batches、Files 与分词 | OpenAI 与 Anthropic batches、Files API、tokenize / detokenize / apply-template / props | 稳定 | [Batches](/docs/api/batches), [Files](/docs/api/files), [分词](/docs/api/tokenization) |
+| 传输方式 | SSE、WebSocket 流式、Unix socket、HTTP/2、选用的 WebRTC | 稳定 | [传输方式](/docs/guides/transports) |
+| Yunshu 扩充 | 请求 id、即时阶段、prefill 进度、取消、期限、x_yunshu 统计、暖机、内存单位 | 稳定 | [扩充字段](/docs/api/extensions) |
+| Prompt 缓存 API | 三种方言中的 cache_control 与缓存 token 计量 | 稳定 | [Prompt 缓存](/docs/guides/prompt-caching) |
+
+## Agent 与工具
+
+| 功能 | 说明 | 状态 | 文档 |
+|---|---|---|---|
+| 代码 Agent | Claude Code、Codex 与 opencode 通过各自的 API 运作；`yunshu launch` | 稳定 | [Agent](/docs/guides/agents), [Agent 兼容性](/docs/developers/agent-compat) |
+| 网络搜索与截取 | 服务器端 web_search / web_fetch 并附引用；DuckDuckGo、Wikipedia、SearXNG、Tavily、Serper、Perplexity | 稳定 | [网络搜索](/docs/guides/web-search), [服务器端工具](/docs/api/server-tools) |
+| 代码运行 | Anthropic code_execution（bash 加文本编辑器）在 sandbox-runtime 内于本机运行；需手动激活，默认无网络 | 部分支持 | [代码运行](/docs/guides/code-execution), [代码运行沙盒](/docs/internals/code-execution-sandbox) |
+| Tavily 兼容 API | search、extract、crawl、map、research 与 MCP，含供应商健康度退避 | 稳定 | [Tavily](/docs/guides/tavily) |
+| MCP | 原生 MCP 端点，以及请求中指名的远程 MCP 服务器 | 稳定 | [MCP](/docs/api/mcp) |
+| 客户端配置 | curl、OpenAI 与 Anthropic SDK、Open WebUI | 稳定 | [客户端](/docs/guides/clients) |
+| 合格的辅助请求调度 | 已截取的 opencode 标题指纹让位给交互式 VLM 回合并隔离 APC；未知请求维持一般优先度 | 稳定 | [辅助请求调度](/docs/developers/auxiliary-scheduling) |
+
+## 多模态
+
+| 功能 | 说明 | 状态 | 文档 |
+|---|---|---|---|
+| 图像、音频与视频输入 | mlx-vlm 模型在 Chat、Responses 与 Messages 中接受媒体；媒体会纳入缓存键值 | 稳定 | [多模态](/docs/guides/multimodal) |
+| 语音对语音（部分支持） | Qwen3-Omni 原生语音；重复图像与音频 APC 有限定范围的一致性收据；图像加音频的合并重用尚未验证 | 部分支持 | [多模态](/docs/guides/multimodal), [Realtime](/docs/api/realtime) |
+| Realtime 语音 | WebSocket 与选用的 WebRTC、服务器端 VAD、打断、短期 client secret、本机语音 | 稳定 | [Realtime](/docs/api/realtime) |
+| 语音转文本、文本转语音 | transcriptions、translations、speech 与 voices | 稳定 | [Audio](/docs/api/audio) |
+| OCR 与图像生成 | GLM-OCR 文本截取；图像 generations、edits 与 variations | 稳定 | [Images](/docs/api/images), [多模态](/docs/guides/multimodal) |
+| Embeddings、rerank、score、classify | 文本与多模态 embeddings、cross-encoder rerank、训练好的分类 head | 稳定 | [Embeddings](/docs/api/embeddings), [Rerank](/docs/api/rerank) |
+
+## 营运与主控台
+
+| 功能 | 说明 | 状态 | 文档 |
+|---|---|---|---|
+| 网页主控台 | 即时请求阶段、历史、日志、模型、下载、缓存、playground、密钥、配置、状态岛 | 稳定 | [主控台](/docs/getting-started/console) |
+| 主控台进程与历史纪录 | 主控台与引擎分开运行（yunshu console，连接端口 8100，不使用 MLX）：引擎停止时仍可使用，保留 30 天的 1 秒 / 10 秒 / 1 分钟历史与仅含中继数据的请求日志，中断期间以空缺呈现 | 稳定 | [主控台进程](/docs/internals/console-process) |
+| 主控台自动跟随引擎 | yunshu console --engine auto 会探测本机连接端口（GET /health），跟随最新且存活的 Yunshu 引擎，健康时持续使用，可从状态岛钉选其中一个，并显示「等待引擎」而非错误；历史会把每次引擎启动记为独立的 session | 稳定 | [主控台](/docs/getting-started/console), [主控台进程](/docs/internals/console-process) |
+| API 密钥与配额 | 多组密钥，支持范围、到期、每把密钥的用量与每日配额 | 稳定 | [验证与密钥](/docs/guides/auth-and-keys) |
+| 配置与 CORS 编辑器 | 从主控台或 API 写入引擎配置（需重启的会提示）并编辑 CORS | 稳定 | [验证与密钥](/docs/guides/auth-and-keys), [主控台](/docs/getting-started/console) |
+| 主机遥测 | 功耗、GPU 时脉、温度、散热与内存压力、每个请求的能耗估计、Prometheus | 稳定 | [遥测](/docs/guides/telemetry) |
+| 命令行 | setup、doctor、models list/pull/rm/show、top、service、completions 与推论指令 | 稳定 | [命令行](/docs/guides/cli) |
+| 登录服务 | launchd agent、重启与日志 | 稳定 | [登录服务](/docs/getting-started/service) |
+| 配置 | 单一配置注册表：环境变量、TOML 档或 `--set` | 稳定 | [配置](/docs/guides/configuration) |
+| 安全性 | 验证 token、CORS 凭证规则、转址标头剥除、机密屏蔽、SSRF 防护 | 稳定 | [验证与密钥](/docs/guides/auth-and-keys) |
+| 首次运行与疑难排解 | 安装、选择模型、就绪检查、修复方式 | 稳定 | [安装](/docs/getting-started/install), [快速开始](/docs/getting-started/quickstart), [疑难排解](/docs/guides/troubleshooting) |
+| 性能基准与精确度 | 每个数字的来源、如何重现，以及精确度闸门 | 稳定 | [性能基准](/docs/guides/benchmarks) |
+| 模型生命周期控制 | 需验证的加载 / 下载取消、本机与 Hugging Face 快照注册，以及卸载影响 | 稳定 | [主控台](/docs/getting-started/console) |

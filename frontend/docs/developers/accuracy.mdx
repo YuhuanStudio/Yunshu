@@ -1,0 +1,104 @@
+---
+title: Accuracy alignment
+description: How Yunshu shows that its serving path computes what stock MLX and mlx-vlm compute on the same checkpoint, in three tiers: logit divergence, greedy divergence and paired task evaluation.
+---
+
+A 300-question benchmark run carries roughly 13 questions of 95% noise, so it cannot see small numeric drift. Yunshu therefore checks accuracy in three tiers, cheapest and most sensitive first. This page is for maintainers who change kernels, cache layouts or schedulers. For the day-to-day candidate check see [Verification](/docs/developers/verification); for how the tiers gate a release see [Release gate](/docs/developers/release-gate).
+
+## What it does
+
+| Tier | What it compares | Script |
+|---|---|---|
+| 1 | next-token distributions on fixed text (teacher forcing): KL divergence, top-1 agreement, perplexity | `scripts/research/accuracy/kld.py` |
+| 2 | greedy continuations of 50 fixed prompts, up to 256 tokens: exact match and first differing position | `scripts/research/accuracy/greedy_div.py` |
+| 3 | paired downstream evaluations through the HTTP endpoint users hit: GSM8K, IFEval, MMLU-Pro, BFCL (tool calls), needle retrieval | `scripts/research/accuracy/paired_eval.py` |
+
+The reference is always stock `mlx-vlm` on the same checkpoint with no Yunshu kernel imported (no batch-invariant, ragged KV, lane or oMLX kernels); the run asserts this. The candidate is what `VLMEngine._build_batch_runner` installs.
+
+### Tier 1: teacher-forced logit alignment
+
+This is the method behind llama.cpp `perplexity --kl-divergence` and vLLM's logprob-closeness tests.
+
+- **Corpus.** `common.build_corpus` builds a pinned token corpus (prose, code, Chinese and math windows of 2048 tokens, plus long documents at 8K and 32K). Only token ids are stored, privately.
+- **Reference file.** Top-64 log-probabilities for every position, plus the full-vocabulary log-softmax for a fixed random subset of positions, so later comparisons never rerun the reference. Positions outside the subset use top-64 plus one lumped tail bucket, which is a lower bound of the true divergence.
+- **Parts** (the `PARTS` table in `kld.py`): `prefill`, `dec1` (one token per step, the speculative lane), `dec6` (6-token verify blocks), `decb` and `decb8` (two-row shared batch on a ragged bf16 or int8 KV cache), `stockb2` (stock two-row batch, a noise floor).
+- **Metrics.** KL divergence (reference to candidate) mean, median, 99th percentile and max; top-1 agreement; mean change of the top-1 probability; perplexity of both, overall and by corpus type and position bucket.
+
+### Tier 2: greedy divergence
+
+50 fixed chat prompts (English, code, math, Chinese and long summarization prompts), greedy, up to 256 tokens (`N_PROMPTS, MAX_TOKENS = 50, 256` in `greedy_div.py`). Each pair of runs is scored by exact match of the whole continuation and by the first differing position. The `engine` configuration runs each prompt with speculation off and on (`allow_draft`); `YUNSHU_ROUND_DRIVER=1` runs the round driver.
+
+### Tier 3: paired downstream evaluation
+
+`paired_eval.py` sends the same items to the reference server (stock `mlx_vlm.server`) and to Yunshu, greedy, over the same chat endpoint. Items are paired by id; only items that completed without a transport error in both arms enter the pair. It reports, per benchmark, the paired difference with a 95% interval, the discordant counts `b` (reference right, Yunshu wrong) and `c` (the reverse), and the exact McNemar p-value (`mcnemar_exact`, `loss_p`). Independent accuracy intervals are not used, because they are two to three times wider than paired ones. Failed attempts, truncations and completion lengths are reported, not hidden.
+
+## Why (design decision)
+
+- A benchmark score cannot distinguish a numerically legitimate implementation from a drifting one at affordable sample sizes; a distribution-level check on fixed text can.
+- A candidate must be judged against what stock MLX does to itself. Reruns are bit-exact, so any nonzero difference is a real path difference. Changing the batch size or the prefill chunk size already moves stock output by a small, measurable amount; that spread (the `stockb2` part and a chunk-size comparison) is the noise floor the thresholds are built from.
+- Tier 3 exists to catch what distribution metrics miss: broken formats, tool calls and long-context retrieval.
+
+## Guarantees
+
+Tier 1 pass criteria, per slice of corpus type and position:
+
+- mean KL divergence at most twice the stock-versus-stock floor, and the median and 99th percentile likewise;
+- top-1 agreement of at least 98.4%;
+- absolute perplexity change of at most 0.5%;
+- hard gate: Yunshu `prefill`, and `dec6` against `dec1`, are bit-identical (divergence exactly 0). This is what makes speculative decoding on equal speculative decoding off through the verify kernels.
+
+Tier 2 pass criteria:
+
+- speculation on equals speculation off, 50 of 50 identical (hard gate);
+- exact match against the reference and the median first divergence must not fall below the recorded baseline for the same checkpoint;
+- a stock rerun is 50 of 50 identical (harness sanity).
+
+Tier 3 pass criterion: no significant loss (McNemar p at least 0.05 for `b` greater than `c`) on every set. A significant gain is read as noise around equal accuracy, not as an improvement. Partial runs are labelled partial and are not quoted as benchmark scores.
+
+Lossy options (int8 KV, weight quantization) are judged against their own published gap, not against the lossless limits above.
+
+<Callout type="info">
+Measured score tables are kept out of this page on purpose: they go stale with every kernel change. Dated numbers live in the benchmark log (`docs/reports/PERF_TREND.md`) and in [Benchmarks](/docs/guides/benchmarks).
+</Callout>
+
+## Knobs
+
+| Setting or option | Default | Effect |
+|---|---|---|
+| `YUNSHU_ROUND_DRIVER` | off | Tier 2 `engine` runs also exercise the round driver when set to `1` |
+| `YUNSHU_KV_PRECISION` | `bf16` | `decb8` runs with int8 KV codes; this is a lossy option judged on its own gap |
+| `paired_eval.py report --bench B --ref ref --cand default` | n/a | Recomputes a benchmark row from the resumable arm files |
+| `kld.py run --config stock\|serve --part ...` | n/a | Selects which arm and which parts to run |
+
+## Limits
+
+- Tier 1 and 2 are only as good as the pinned corpus and prompts; a checkpoint change requires rebuilding the reference (`kld.py run --config stock` without `--ref`).
+- The reference server is effectively serial (no batching), so on long jobs its requests can time out where Yunshu's finish; those attempts are counted in the report.
+- MMLU-Pro runs use a seeded random sample, not a stratified one, and partial runs have wide intervals.
+- Results from one checkpoint and machine do not transfer: rerun on the target checkpoint.
+
+## How to verify
+
+```bash
+# Tier 1
+python scripts/research/accuracy/kld.py corpus
+python scripts/research/accuracy/kld.py run --config stock --part prefill
+python scripts/research/accuracy/kld.py run --config serve --part dec6
+python scripts/research/accuracy/kld.py report
+
+# Tier 2
+python scripts/research/accuracy/greedy_div.py build
+python scripts/research/accuracy/greedy_div.py run
+python scripts/research/accuracy/greedy_div.py compare
+
+# Tier 3 (per benchmark)
+python scripts/research/accuracy/paired_eval.py report --bench B --ref ref --cand default
+```
+
+GPU runs go through `scripts/dev/gpuq`. Every change to a kernel, cache layout or scheduler runs Tier 1 and Tier 2 on Qwen3.8-27B, and a failed criterion blocks the merge; reference files are stored once per checkpoint and corpus version, so a check costs only the candidate side. Tier 3 runs before each release and after any lossy option changes. The `yv` tool's `quality` stage is the cheap per-change version of Tier 3; see [Verification](/docs/developers/verification).
+
+## Related
+
+- [Verification](/docs/developers/verification)
+- [Release gate](/docs/developers/release-gate)
+- [Benchmarks](/docs/guides/benchmarks)

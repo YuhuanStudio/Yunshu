@@ -1,5 +1,7 @@
 # Published retrieval formats
 
+
+> Console docs: the maintained, translated version of this page is `/docs/developers/prior-art-formats` (source `frontend/docs/developers/prior-art-formats.mdx`). This file stays as the repository-side reference read by tooling.
 EmbeddingGemma 2 bf16 and affine 4bit checkpoints use the maintained
 `mlx_vlm.embedding_loader.load_embedding_model` when its model module is installed.
 mlx-vlm 0.7.6 does not include that module; Yunshu carries the MIT port from

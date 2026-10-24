@@ -115,6 +115,8 @@ yunshu --url http://localhost:8001 --json complete "Hello"
 
 通过 launchd 在登录时运行 Yunshu，分成两个 job：引擎与主控台进程（引擎重启时主控台仍持续记录）。子命令：`install`、`uninstall`、`start`、`stop`、`restart`、`status`、`logs`、`rotate-logs`。完整选项参见[服务](/docs/getting-started/service)页面。
 
+`yunshu service logs` 支持 `--follow`/`-f` 与 `--lines`/`-n`（默认 50）。`yunshu service install` 支持 `--no-start`（写入 agent 但不启动）；`--instance` 与 `--state-dir`（必须一起使用）会运行隔离的开发用 launchd label（`dev-*`）。`yunshu console --static-dir DIR` 从目录提供 console 构建（开发与测试用）。
+
 ### `yunshu chat`
 
 与运行中服务器的交互式终端对话。不支持 `--json`。

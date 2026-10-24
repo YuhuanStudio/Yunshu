@@ -1,5 +1,7 @@
 # Serve and develop on one machine
 
+
+> Console docs: the maintained, translated version of this page is `/docs/developers/serve-and-develop` (source `frontend/docs/developers/serve-and-develop.mdx`). This file stays as the repository-side reference read by tooling.
 The queue supports running a production Yunshu server for real users and still run development GPU jobs (benchmarks, evals).
 The GPU queue (`scripts/dev/gpuq`) is aware of the production server: dev jobs run only while it is idle and are
 frozen the instant user traffic arrives.

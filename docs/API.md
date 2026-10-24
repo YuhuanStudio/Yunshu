@@ -1,5 +1,7 @@
 # API reference
 
+
+> Console docs: the maintained, translated version of this page is `/docs/api/overview` (source `frontend/docs/api/overview.mdx`). This file stays as the repository-side reference read by tooling.
 Yunshu exposes an **OpenAI/Anthropic-compatible** HTTP API plus a few Yunshu-specific
 endpoints for the native-omni and retrieval surfaces. Base URL is `http://<host>:<port>/v1`
 (default port 8000). Auth: inference endpoints are open by default; local model lifecycle

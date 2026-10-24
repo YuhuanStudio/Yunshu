@@ -1,0 +1,128 @@
+---
+title: 发布就绪
+description: 发布的对外检查清单、哪些是证据而哪些只是能力清单，以及整理自 RELEASING.md 的维护者流程。
+---
+
+本页写给维护者。它涵盖新用户在第一个 token 之前会遇到的事（安装、首次运行、服务、客户端、升级、卸载）、每一项有什么证据，以及发布流程的顺序。清单表格本身与各项的支持状态在[发布关卡](/docs/developers/release-gate)，本页不重复。
+
+## 做了什么
+
+就绪清单是能力清单，不是测试结果。它说明有哪些东西存在。证明某个 commit 的是发布关卡（`scripts/dev/yv gate`），证明打包没问题的是 `scripts/dev/ci-local`。引擎的速度与准确度另外记录在[基准测试](/docs/guides/benchmarks)与[准确度对齐](/docs/developers/accuracy)。
+
+| 范围 | 证据来源 |
+|---|---|
+| 从 wheel 安装、`doctor`、`pull`、`model list`、`config set models_dir`、`service install --dry-run` | 关卡阶段 `install` |
+| 服务、SDK 客户端、旗舰模型 | 关卡阶段 `serve-27b` |
+| 支持的模型家族 | 关卡阶段 `families` |
+| 内存回收与无错误的浸泡测试 | 关卡阶段 `soak` |
+| 长时间代理流量、空闲释放、SSD 缓存层上的重新启动 | 关卡阶段 `agent-sessions` |
+| 长上下文一致性、缓存相等、速度、内存 | 关卡阶段 `long` |
+| 真实的 launchd 服务 | 关卡阶段 `service`（缺省关闭） |
+| 包构建、lint、类型、单元测试、干净安装 | `scripts/dev/ci-local`，接着是发布工作流 |
+| Claude Code、Codex、opencode 的行为 | `scripts/dev/agentcompat`，见[代理兼容性](/docs/developers/agent-compat) |
+| M3 可移植性 | `scripts/dev/m3sweep` |
+
+## 为什么（设计决策）
+
+- 版本号以小步前进：patch 带来修正与改进，minor 代表真正的能力跃进。
+- 仓库是公开的，安装路径是 CLI 加上 launchd 服务。不规划 macOS 应用。Homebrew 走共享的 tap `YuhuanStudio/homebrew-tap`。
+- 模型缺省放在 `~/.yunshu/models`；Hugging Face 缓存中的模型可直接使用，位置可用 `yunshu config set models_dir` 更改。
+- 预检通过后模型加载失败时，服务器保持运行但处于未就绪状态（`GET /health/ready` 返回 503 并写出 fatal 日志），这对后台服务是正确的。
+- 不收集任何遥测。只有在用户操作时才会对外连接。
+- 除了由维护者执行下列步骤之外，不会发布任何东西。
+
+## 保证
+
+- 所有验证都针对最终的发布 commit；之后再有改动，就需要重新检查。
+- 已经上到 PyPI 的版本不能重新上传；以下一个 patch 版本向前修正。如果在发布步骤之前失败，就没有发布任何东西：删除 tag、修正后重新打 tag。
+- 1.0 之前并不表示可以接受无声的破坏。用户可见的移除，或 API、缺省值的变更，需要升级说明，指出替代方案与影响；稳定的设置与 CLI 选项应先给警告，并至少保留一个已发布版本的重叠期，除非安全或正确性要求立即移除。Python 内部接口不是稳定的嵌入 API。
+- 发布说明按固定顺序：一段说明用户获得什么，接着是 `Highlights`、`Upgrade notes / breaking changes`、`Performance`（机器、检查点、工作负载、前后对照、来源链接），然后是 `Added`、`Changed`、`Fixed`、`Security`，以及比较页脚。每个测量数字都链接到有日期的基准测试。
+
+## 流程
+
+<Steps>
+<Step>
+
+### 一次性设置
+
+在 pypi.org 为项目 `yunshu` 添加 trusted publisher（owner `YuhuanStudio`、repository `Yunshu`、workflow `release.yml`、environment `pypi`）；不保存任何 API token。在仓库设置中创建 GitHub environment `pypi` 并指定必需的审核者，让每次发布都要等待批准。
+
+</Step>
+<Step>
+
+### 准备 commit
+
+两次发布之间，`main` 以 PEP 440 开发版本号（例如 `0.1.6.dev0`）承载下一个版本。在 `pyproject.toml` 中去掉 `.devN` 后缀，加入标有日期的 `CHANGELOG.md` 条目后提交。打完 tag 之后，把 `main` 设为下一个 `.dev0`。
+
+</Step>
+<Step>
+
+### 验证确切的 commit
+
+```bash
+nice -n 15 scripts/dev/ci-local main
+scripts/dev/yv gate --priority -1 --stages install,serve-27b,families,agent-sessions
+# final release: CI, gate, M3 sweep, agent compatibility and agentbench together
+scripts/dev/release_check main --label-prefix <prefix>
+scripts/dev/release_check main --dry-run     # preview only: no CI, no GPU jobs
+```
+
+`release_check` 把以 SHA 为键的证据保存在 `/Volumes/P5Plus/yunshu-build/release-check/`，固定干净的工作树，并印出 agentbench 的收集命令。CI、关卡、M3 sweep 与代理兼容性会阻挡发布；agentbench 以优先级 -3 运行，仅供参考，但其结果仍必须收集并记录。绝不要直接运行 `gate.sh`：`yv gate` 通过 GPU 队列提交并保存成功阶段的证据，所以重跑会跳过已通过的部分。请读取每个已完成作业的退出状态与最终的证据记录。
+
+</Step>
+<Step>
+
+### 打 tag 并推送
+
+```bash
+git tag -a v<version> -m "Yunshu <version>"
+git push origin main v<version>
+```
+
+发布工作流会检查 tag 与 `pyproject.toml` 及 changelog 一致，在 Apple Silicon runner 上运行 ruff、mypy、控制台检查与单元测试，构建 sdist 与 wheel，运行 `twine check`，把 wheel 安装到干净的工具环境，等待 `pypi` environment 的批准，发布到 PyPI，并打开一个以 changelog 段落作为说明的草稿 GitHub release。请审阅并发布这份草稿。
+
+</Step>
+<Step>
+
+### 发布之后
+
+检查干净安装（`uv tool install "yunshu[vision]"`，然后 `yunshu doctor`）。更新共享 tap 中的 Homebrew formula：填入 PyPI 当前提供的 sdist 的 `sha256`，再把 `packaging/homebrew/yunshu.rb` 复制到 `Formula/yunshu.rb`。
+
+接着从当前的上游开始下一个周期：`uv lock --upgrade`，然后运行测试与 lint；在 27B 上重新确认推测式输出等于普通输出、成对的准确度测试集差异在一题以内，以及解码与 TTFT 没有退步（把前后数字记录在 `docs/reports/PERF_TREND.md`）；运行 `just vendor-check`，并审阅每一个上游已有变动的 vendored kernel、移植文件或 monkeypatch（见[上游跟踪](/docs/developers/upstream-tracking)）；阅读上游的发布说明，找出修正与想法。把这次同步作为独立的合并，之后的退步才能二分定位到它。
+
+</Step>
+</Steps>
+
+## 旋钮
+
+| 选项 | 缺省值 | 效果 |
+|---|---|---|
+| `yv gate --stages` | 所有阶段 | 运行选定的关卡阶段；`--fresh` 重跑全部 |
+| `yv gate --priority` | 依命令而定 | 关卡作业的 GPU 队列优先级 |
+| `release_check --label-prefix` | `releng015-release` | 为提交的作业加上标签 |
+| `release_check --dry-run` | off | 预览，不运行 CI 或 GPU 作业 |
+
+## 限制
+
+- push 时的 CI 在 Linux 上运行 lint 与构建；macOS 单元测试在发布或手动运行时才跑，所以清单不宣称有一次最新的 CI 运行。
+- 按可用 RAM 的精选模型选择器尚未存在；用户需要自己知道仓库 id。
+- Cline、Continue 与 Open WebUI 是配置指引，并非每个版本都测试。
+- 仅用 CPU 的文档候选版本可以使用 `yv ab --suite preflight`；它不会认证引擎的输出或性能。
+
+## 如何验证
+
+预览发布会发布的说明，并检查公开文档：
+
+```bash
+uv run pytest tests/unit/test_public_docs.py tests/unit/test_release_notes.py -q
+uv run python scripts/release/notes.py <version> --output /path/to/review-notes.md
+```
+
+`scripts/release/notes.py` 会加入固定版本的 pip 与 uv 命令、附有 tap 延迟说明的 Homebrew 指示，以及与前一版的比较。打 tag 之前，审阅 `git log <previous-tag>..main`，把数字与 `docs/reports/PERF_TREND.md` 核对，注明机器、检查点、模式与重复次数，纳入工作负载的退步，并解决每一个 TODO。
+
+## 相关
+
+- [发布关卡](/docs/developers/release-gate)
+- [验证](/docs/developers/verification)
+- [代理兼容性](/docs/developers/agent-compat)
+- [安装](/docs/getting-started/install)

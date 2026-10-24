@@ -1,5 +1,7 @@
 # I8: auxiliary requests yield to interactive agent turns
 
+
+> Console docs: the maintained, translated version of this page is `/docs/developers/auxiliary-scheduling` (source `frontend/docs/developers/auxiliary-scheduling.mdx`). This file stays as the repository-side reference read by tooling.
 Evidence is the saved traffic, not a client-name / small-model heuristic. Run
 `scripts/research/agentic/characterize_auxiliary.py MAIN/docs/research/runs --out inventory.json`
 to inventory physical captured bodies. The inventory snapshot is in

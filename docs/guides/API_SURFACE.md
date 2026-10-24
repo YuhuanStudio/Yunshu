@@ -1,5 +1,7 @@
 # API surface
 
+
+> Console docs: the maintained, translated version of this page is `/docs/api/overview` (source `frontend/docs/api/overview.mdx`). This file stays as the repository-side reference read by tooling.
 Every public route, what it is checked against, how it is verified, and what was removed. The OpenAI and Anthropic
 references are the specification; a route stays only if it matches one (or a de-facto local-server
 API). **The Verified column of each row is the evidence, and a row claims no more than it says.**

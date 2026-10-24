@@ -1,0 +1,120 @@
+---
+title: Local Tavily API
+description: Use the official Tavily Python, JavaScript and LangChain clients against Yunshu's local Tavily-compatible search, extract, crawl, map and research endpoints.
+---
+
+Yunshu mounts a Tavily-compatible API at `http://localhost:8000/tavily`. The Python, JavaScript and LangChain clients append endpoint paths to the configured base URL, so there is no `/v1` in this API. For the server-side `web_search` and `web_fetch` tools and provider choice, see [Web search](/docs/guides/web-search).
+
+## Connect a client
+
+<Tabs items={["Python", "JavaScript"]}>
+<Tab value="Python">
+
+```python
+from tavily import TavilyClient, AsyncTavilyClient
+
+client = TavilyClient(api_key="tvly-local", api_base_url="http://localhost:8000/tavily")
+async_client = AsyncTavilyClient(api_key="tvly-local", api_base_url="http://localhost:8000/tavily")
+print(client.search("MLX inference", include_usage=True))
+```
+
+An injected async HTTP client must itself use this full base URL, because the SDK preserves its existing URL. LangChain's `TavilySearchAPIWrapper` accepts `api_base_url`.
+
+</Tab>
+<Tab value="JavaScript">
+
+```javascript
+const { tavily } = require('@tavily/core');
+const client = tavily({apiKey: 'tvly-local', apiBaseURL: 'http://localhost:8000/tavily'});
+```
+
+</Tab>
+</Tabs>
+
+Set `YUNSHU_AUTH_TOKEN=tvly-local` to require that key; the `tvly-` prefix is accepted verbatim, not stripped. A legacy body `api_key` also works. With auth unconfigured, the normal local open policy applies ([Authentication](/docs/guides/auth-and-keys)).
+
+## Endpoints
+
+| Method | Path |
+|---|---|
+| POST | `/search`, `/extract`, `/crawl`, `/map`, `/research`, `/feedback`, `/logs` |
+| GET | `/research/{request_id}`, `/usage`, `/providers` |
+| POST | `/mcp` (native stateless MCP endpoint) |
+
+Errors use `detail.error`, with 400, 401, 403, 404, 413, 429 and 500 as applicable and 422 for field validation. Tavily's cloud-only credit and plan statuses 432 and 433 are not fabricated. Responses carry request IDs, elapsed seconds and informational local credits, and array fields are stable. Search, extract, crawl, map and research polling return `usage` only with `include_usage=true`; internal accounting continues either way.
+
+## Retrieval and latency
+
+The SERP is a provider. Built-in metasearch runs direct DDG HTML and Wikipedia, plus configured keyed sources, in parallel, and reciprocal-rank fusion deduplicates candidates.
+
+<Callout type="warn">
+Query text leaves the machine to these providers. DDG is best effort and can block automation. SearXNG is optional and needs an explicit instance; it is never required or recommended.
+</Callout>
+
+`yunshu config` shows the most recent query-free provider health snapshot; `GET /tavily/providers` shows live health. Three consecutive failures trigger bounded exponential backoff, and a half-open probe restores a recovered source. Captcha and rate limits back off immediately.
+
+| Provider | How to enable | Notes |
+|---|---|---|
+| Mwmbl | `YUNSHU_WEB_MWMBL=1`, or `provider=mwmbl` | dataset is CC-BY-NC-SA 4.0: keep attribution and observe the noncommercial and share-alike terms ([terms](https://api.mwmbl.org/static/terms-and-conditions/)); not silently enabled; no Mwmbl code is copied |
+| Mojeek | `YUNSHU_MOJEEK_API_KEY` | joins auto metasearch; forwards safe-search, country and language boosts and date bounds; requests at most ten candidates ([API](https://www.mojeek.com/support/api/search/)) |
+| Marginalia | `YUNSHU_MARGINALIA_API_KEY` | forwards safe-search and result count; no implicit `public` key (setting it opts into the shared development quota); noncommercial keys serve CC-BY-NC-SA 4.0 data ([API and terms](https://about.marginalia-search.com/article/api/)) |
+
+Select a provider explicitly with `YUNSHU_WEB_SEARCH_PROVIDER` (`mojeek`, `marginalia`, `mwmbl`, and so on; default `auto`). Common Crawl's URL index and Wikipedia dumps need corpus ingestion and a local full-text index; they are not keyword SERP endpoints and are never downloaded or enabled automatically.
+
+Plain search uses BM25, provider priors, exact spans and deduplication, with no LLM calls. Each excerpt is at most 500 characters, and excerpts join with ` [...] `. The search depth sets the fetch breadth and the total retrieval budget:
+
+| `search_depth` | Budget | Pages |
+|---|---|---|
+| `ultra-fast` | 0.7 s | provider text only |
+| `fast` | 1 s | 3 |
+| `basic` | 1.3 s | 6 |
+| `advanced` | 3 s | 20 |
+
+These are cancellation budgets, not guaranteed end-to-end p50: DNS, politeness, provider availability and requested generation affect real latency. The `Server-Timing` header reports SERP, fetch, IR and generation durations. Pages that miss the depth's fetch window are not cancelled; they finish under their own timeout and warm the page cache.
+
+Time, topic, country, language and safe-search are pushed to providers that support them; dates and strict language are also checked locally. Finance is a best-effort news vertical, not a financial index. Unknown dates survive unless strict filtering is requested. Exact quoted phrases need a successfully fetched page. The normalized score is local relevance, not calibrated to Tavily's proprietary probability.
+
+Extract handles static HTML, text, JSON and bounded PDF bodies, keeps available markdown, code and tables, and isolates failures. Crawl and map use BFS with regex selectors (with timeouts), depth, breadth and global caps, robots rules and host politeness. Map may list external links but never follows them recursively. `instructions` uses cheap lexical relevance.
+
+### JavaScript rendering
+
+Advanced extract, crawl and map can render short JavaScript shells with `YUNSHU_WEB_RENDER=1` (default off).
+
+<Steps>
+<Step>
+
+Install the optional extra: `uv sync --extra web-render`.
+
+</Step>
+<Step>
+
+Install a local browser: `uv run playwright install chromium`. Requests never install a browser.
+
+</Step>
+<Step>
+
+Set `YUNSHU_WEB_RENDER=1`.
+
+</Step>
+</Steps>
+
+Rendering uses one headless Chromium at a time and replays only same-origin GET documents, scripts and fetches through the normal checked and pinned fetcher. Service workers, WebSockets, downloads, cross-origin resources and redirected resource bodies are blocked. Robots rules still apply to crawl and map, and the request timeout covers the static fetch plus rendering. A missing browser or a timeout keeps the static result. CDN-dependent applications and protected-site bypass are not supported.
+
+## Answers, research and MCP
+
+- `include_answer` calls the served chat model only when requested.
+- Research plans queries with the served LLM, searches and extracts evidence, then synthesizes with citations. Output schemas use the chat constrained JSON decoding ([Structured output](/docs/guides/structured-output)) and are validated afterwards. `mini` and `pro` differ in query caps; `pro` is serial on the single GPU and is not Tavily's proprietary multi-agent implementation. Research stays opt-in.
+- Async tasks support polling and SSE with keepalives, tool frames, content, sources and done events. The registry (100 tasks), feedback (1000) and logs (10000) are bounded in process and lost on restart.
+- Local credits estimate effort; they do not bill or enforce cloud plans.
+- Files support base64 `txt`, `md` and `json` with an 80000-word combined cap. Bibliographies support numbered, APA, MLA and Chicago formatting.
+- Image metadata comes from fetched pages. `include_images` additionally queries a configured SearXNG image category or Brave's image endpoint, applies source-domain filters and deduplicates URLs; a failed image vertical does not fail the search, and DDG and Wikipedia have no image fallback. Requested image descriptions use a resident local VLM (at most three images, cached for 15 minutes); no second model is loaded.
+
+<Callout type="warn">
+Upstream `tavily-mcp` 0.2.22 hard-codes `api.tavily.com` and has no base URL setting, so REST compatibility cannot redirect it. Use Yunshu's native MCP endpoint, `/tavily/mcp`, which exposes the Tavily tools under both underscore and hyphen names.
+</Callout>
+
+## How to verify
+
+- `scripts/research/tavily_sdk_parity.py` and `scripts/research/tavily_sdk_parity.mjs` run the real SDK packages against the real router and service with transport injection, no listening server and no live network. Install the SDK packages in an isolated environment, not the serving venv.
+- `scripts/research/tavily_stage_latency.py` measures per-stage latency (`Server-Timing`: serp, fetch, ir, generate); `--live` uses the real built-in providers and pages and runs on the CPU only.
+- `scripts/research/websearch_quality_gate.py` evaluates frozen paired replays with explicit review annotations (`--snapshot`, `--pairs`, `--reviews`, `--out`) and exits 1 when evidence is incomplete. It requires 200 distinct pairs (40 news, 40 docs, 40 code, 10 adversarial) on one device, human checks on at least 10% of pair reviews, and at most one net correctness difference for equivalence. It does not approve a quality-changing research default or establish latency.
