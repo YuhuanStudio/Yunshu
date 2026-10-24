@@ -54,3 +54,16 @@ test("a request /debug does not know is missing, not a difference", () => {
   const cells = compareRequest(ui, undefined);
   assert.ok(cells.every((c) => c.state === "missing"));
 });
+
+test("a token gap the sampling skew explains is not a mismatch", () => {
+  const fast = { ...ui, completion_tokens: 595, tokens_per_second: 105 };
+  const dbg = {
+    request_id: "r1",
+    has_stats: true,
+    phase: "decode",
+    generated: 418,
+  };
+  assert.equal(anyDiffers(compareRequest(fast, dbg, 0)), true);
+  assert.equal(anyDiffers(compareRequest(fast, dbg, 1)), true); // 177 > 16 + 1 * 105
+  assert.equal(anyDiffers(compareRequest(fast, dbg, 2)), false); // 177 <= 16 + 2 * 105
+});

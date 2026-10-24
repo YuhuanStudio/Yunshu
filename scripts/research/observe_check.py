@@ -70,7 +70,9 @@ def count_lines(path: Path) -> int:
     return sum(1 for _ in path.open()) if path.exists() else 0
 
 
-def verify(base: str, home: Path, in_flight_seen: list, logprobs_body: dict) -> list[str]:
+def verify(
+    base: str, home: Path, in_flight_seen: list, logprobs_body: dict
+) -> list[str]:
     """Every failed expectation as a sentence; empty when observe mode is fully live."""
     bad: list[str] = []
     for route in DEBUG_ROUTES:
@@ -81,7 +83,9 @@ def verify(base: str, home: Path, in_flight_seen: list, logprobs_body: dict) -> 
     if code != 200 or (st or {}).get("observe") is not True:
         bad.append(f"/v1/yunshu/status observe={(st or {}).get('observe')}")
     code, cfg = get(f"{base}/v1/yunshu/config?include=all")
-    rows = {r["name"]: r for r in (cfg or {}).get("settings", (cfg or {}).get("data", []))}
+    rows = {
+        r["name"]: r for r in (cfg or {}).get("settings", (cfg or {}).get("data", []))
+    }
     for name in OBSERVED:
         src = rows.get(name, {}).get("source")
         if src != "observe":
@@ -91,8 +95,12 @@ def verify(base: str, home: Path, in_flight_seen: list, logprobs_body: dict) -> 
     if tel.get("state") not in ("ok", "partial"):
         bad.append(f"telemetry state={tel.get('state')} reason={tel.get('reason')}")
     logs = home / ".yunshu" / "logs"
-    if not list(logs.glob("*.jsonl*")) or not any(count_lines(p) for p in logs.glob("serve*")):
-        bad.append(f"serve log empty under {logs}: {sorted(p.name for p in logs.glob('*'))}")
+    if not list(logs.glob("*.jsonl*")) or not any(
+        count_lines(p) for p in logs.glob("serve*")
+    ):
+        bad.append(
+            f"serve log empty under {logs}: {sorted(p.name for p in logs.glob('*'))}"
+        )
     if not (logs / "audit.log").exists():
         bad.append("audit.log was not created")
     if count_lines(logs / "stream_capture.jsonl") < 1:
@@ -115,8 +123,14 @@ def main() -> int:
     ap.add_argument("--port", type=int, required=True)
     ap.add_argument("--home", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--keep", action="store_true", help="leave the server running (console screenshots)")
-    ap.add_argument("--hold", type=float, default=0.0, help="seconds to keep it up after the check")
+    ap.add_argument(
+        "--keep",
+        action="store_true",
+        help="leave the server running (console screenshots)",
+    )
+    ap.add_argument(
+        "--hold", type=float, default=0.0, help="seconds to keep it up after the check"
+    )
     a = ap.parse_args()
     home = Path(a.home)
     home.mkdir(parents=True, exist_ok=True)
@@ -134,7 +148,16 @@ def main() -> int:
     base = f"http://127.0.0.1:{a.port}"
     log = open(home / "server.log", "wb")
     proc = subprocess.Popen(
-        [YUNSHU, "serve", "--observe", "--no-console", "-m", a.model, "--port", str(a.port)],
+        [
+            YUNSHU,
+            "serve",
+            "--observe",
+            "--no-console",
+            "-m",
+            a.model,
+            "--port",
+            str(a.port),
+        ],
         env=env,
         stdout=log,
         stderr=subprocess.STDOUT,
@@ -145,7 +168,9 @@ def main() -> int:
         t0 = time.time()
         while time.time() - t0 < 300:
             if proc.poll() is not None:
-                raise SystemExit(f"server exited rc={proc.returncode}; see {home / 'server.log'}")
+                raise SystemExit(
+                    f"server exited rc={proc.returncode}; see {home / 'server.log'}"
+                )
             try:
                 if get(base + "/v1/models", 3)[0] == 200:
                     break
@@ -168,21 +193,43 @@ def main() -> int:
         th = threading.Thread(target=poll)
         th.start()
         msgs = [{"role": "user", "content": "Count from 1 to 40, one number per line."}]
-        post(base + "/v1/chat/completions", {"model": "m", "messages": msgs, "max_tokens": 200, "stream": True})
+        post(
+            base + "/v1/chat/completions",
+            {"model": "m", "messages": msgs, "max_tokens": 200, "stream": True},
+        )
         _, lp = post(
             base + "/v1/chat/completions",
-            {"model": "m", "messages": msgs, "max_tokens": 16, "logprobs": True, "top_logprobs": 2},
+            {
+                "model": "m",
+                "messages": msgs,
+                "max_tokens": 16,
+                "logprobs": True,
+                "top_logprobs": 2,
+            },
         )
         stop.set()
         th.join()
         time.sleep(2)  # serve log / capture are written when a request finishes
         failures = verify(base, home, seen, json.loads(lp))
-        result = {"failures": failures, "in_flight_samples": len(seen), "first_sample": seen[:1]}
+        result = {
+            "failures": failures,
+            "in_flight_samples": len(seen),
+            "first_sample": seen[:1],
+        }
         print(json.dumps(result, indent=2))
         if a.hold and not failures:
             # something in flight for the console screenshots
             long = {"model": "m", "messages": msgs, "max_tokens": 1500, "stream": True}
-            threading.Thread(target=lambda: post(base + "/v1/chat/completions", long), daemon=True).start()
+            deadline = time.time() + a.hold
+
+            def keep_busy() -> None:
+                while time.time() < deadline:
+                    try:
+                        post(base + "/v1/chat/completions", long)
+                    except Exception:
+                        time.sleep(1)
+
+            threading.Thread(target=keep_busy, daemon=True).start()
             for _ in range(int(a.hold // 20)):
                 print("holding for screenshots", flush=True)
                 time.sleep(20)

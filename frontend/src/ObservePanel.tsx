@@ -24,7 +24,6 @@ import {
 } from "./observe-compare";
 
 const KEY = "yunshu.requests.debugData";
-const POLL_MS = 2000;
 
 function stored(): boolean | null {
   try {
@@ -44,16 +43,20 @@ export function ObservePanel({
   rows,
   connection,
   observe,
+  updatedAt,
 }: {
   rows: readonly Row[];
   connection: Connection;
   observe: boolean;
+  /** When the page last read /v1/yunshu/status (ms since epoch). */
+  updatedAt: number | null;
 }) {
   useLocale();
   const [pref, setPref] = useState<boolean | null>(stored),
     open = pref ?? observe;
   const [debug, setDebug] = useState<DebugInFlight[] | null>(null),
-    [error, setError] = useState<string | null>(null);
+    [error, setError] = useState<string | null>(null),
+    [sampledAt, setSampledAt] = useState<number | null>(null);
   const toggle = (value: boolean) => {
     setPref(value);
     try {
@@ -62,39 +65,33 @@ export function ObservePanel({
       /* per-viewer convenience only */
     }
   };
+  // Read /debug/requests right after each status update, so the two sides are one moment apart.
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = async () => {
-      if (document.visibilityState === "visible") {
-        try {
-          const body = await requestServerJson(connection, "/debug/requests", {
-            signal: controller.signal,
-          });
-          if (controller.signal.aborted) return;
-          setDebug(parseInFlight(body));
-          setError(null);
-        } catch (e) {
-          if (controller.signal.aborted) return;
-          setDebug(null);
-          setError(
-            e instanceof ApiError && e.status === 404
-              ? t("requests.debug.off")
-              : e instanceof ApiError
-                ? `HTTP ${e.status}`
-                : t("requests.debug.failed"),
-          );
-        }
+    void (async () => {
+      try {
+        const body = await requestServerJson(connection, "/debug/requests", {
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
+        setDebug(parseInFlight(body));
+        setSampledAt(Date.now());
+        setError(null);
+      } catch (e) {
+        if (controller.signal.aborted) return;
+        setDebug(null);
+        setError(
+          e instanceof ApiError && e.status === 404
+            ? t("requests.debug.off")
+            : e instanceof ApiError
+              ? `HTTP ${e.status}`
+              : t("requests.debug.failed"),
+        );
       }
-      if (!controller.signal.aborted) timer = setTimeout(poll, POLL_MS);
-    };
-    void poll();
-    return () => {
-      controller.abort();
-      if (timer) clearTimeout(timer);
-    };
-  }, [open, connection.baseUrl, connection.token]);
+    })();
+    return () => controller.abort();
+  }, [open, connection.baseUrl, connection.token, updatedAt]);
   const live = useMemo(
     () => rows.filter((r) => r.phase !== "complete"),
     [rows],
@@ -103,6 +100,10 @@ export function ObservePanel({
     () => new Map((debug ?? []).map((d) => [d.request_id, d])),
     [debug],
   );
+  const skewS =
+    sampledAt != null && updatedAt != null
+      ? Math.abs(sampledAt - updatedAt) / 1000
+      : 0;
   const labels = {
     phase: t("requests.debug.col.phase"),
     prefill: t("requests.debug.col.prefill"),
@@ -163,7 +164,7 @@ export function ObservePanel({
             </Thead>
             <Tbody>
               {live.map((row) => {
-                const cells = compareRequest(row, byId.get(row.id));
+                const cells = compareRequest(row, byId.get(row.id), skewS);
                 const bad = anyDiffers(cells);
                 return (
                   <Tr

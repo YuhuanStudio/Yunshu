@@ -45,7 +45,7 @@ const num = (v: unknown): number | null =>
 const show = (v: number | null, unit = ""): string =>
   v == null ? "-" : `${Math.round(v * 10) / 10}${unit}`;
 
-/** Two counters sampled a poll apart may differ by a few tokens; ms stamps are the same instant on both sides. */
+/** Counters read a moment apart may differ by a few tokens; ms stamps are the same instant on both sides. */
 const near = (a: number, b: number, abs: number): boolean =>
   Math.abs(a - b) <= abs;
 
@@ -74,6 +74,7 @@ function cell(
 export function compareRequest(
   ui: Row,
   dbg: DebugInFlight | undefined,
+  skewS = 0,
 ): CompareCell[] {
   if (!dbg)
     return (["phase", "prefill", "tokens", "admit", "first"] as const).map(
@@ -94,10 +95,21 @@ export function compareRequest(
   const uiPre = ui.phase === "prefill" ? num(ui.processed_tokens) : null;
   const prefill =
     ui.phase === "prefill" || dbg.phase === "prefill"
-      ? cell("prefill", uiPre, dPre, 2048)
+      ? cell(
+          "prefill",
+          uiPre,
+          dPre,
+          64 + skewS * (num(ui.tokens_per_second) ?? 0),
+        )
       : cell("prefill", null, null, 0);
   const uiGen = num(ui.completion_tokens);
-  const tokens = cell("tokens", uiGen, num(dbg.generated), 16);
+  // The two reads are `skewS` apart; at the request's own speed that many tokens are expected to differ.
+  const tokens = cell(
+    "tokens",
+    uiGen,
+    num(dbg.generated),
+    16 + skewS * (num(ui.tokens_per_second) ?? 0),
+  );
   return [
     phaseCell,
     prefill,

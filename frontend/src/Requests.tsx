@@ -761,6 +761,7 @@ export function Requests({
         )}
         connection={connection}
         observe={engine.status?.observe === true}
+        updatedAt={engine.updatedAt}
       />
       <div className="flex flex-wrap justify-between gap-3">
         <div className="w-full sm:w-auto sm:max-w-xs">
