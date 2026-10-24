@@ -188,7 +188,7 @@ def run(a):
                         line
                         for line in log.read_text(errors="replace").splitlines()
                         if re.search(
-                            r"prompt cache: .*GiB|streams of .* tokens|DFlash drafter (loaded|attached)|Neural Engine FFN split|(?i:kflash)",
+                            r"prompt cache: .*GiB|streams of .* tokens|DFlash drafter (loaded|attached)|Neural Engine FFN split|Neural Engine program ready|(?i:kflash)",
                             line,
                         )
                     )

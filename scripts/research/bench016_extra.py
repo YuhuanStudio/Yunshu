@@ -25,6 +25,10 @@ def install(be, manifest: dict) -> None:
             expected_mode=cfg["mode"],
             drafter=cfg.get("drafter"),
             weights=cfg.get("weights", "same"),
+            extra={
+                "startup_ready_regex": cfg.get("startup_ready_regex"),
+                "startup_timeout_s": cfg.get("startup_timeout_s", 120),
+            },
         )
 
     def launch(engine, port, home, environ, ctx_tokens=4096, parallel=1):

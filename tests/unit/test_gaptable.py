@@ -168,6 +168,7 @@ def test_extra_recipe_expands_private_home_and_slots(tmp_path):
                 argv=["/binary", "--slots", "{parallel}"],
                 env={"KAPITSA_HOME": "{home}"},
                 engaged_regex="draft",
+                startup_ready_regex="program ready",
             )
         }
     }
@@ -175,6 +176,7 @@ def test_extra_recipe_expands_private_home_and_slots(tmp_path):
     launch = be.build_launch("fixture", 18996, tmp_path, {}, 5120, 8)
     assert launch.cmd[-1] == "8"
     assert launch.env["KAPITSA_HOME"] == str(tmp_path)
+    assert be.ENGINES["fixture"].extra["startup_ready_regex"] == "program ready"
 
 
 def test_summary_retains_three_reps_and_concurrency_metrics(tmp_path):
@@ -291,3 +293,30 @@ def test_cell_has_no_idle_hold_and_cleans_its_private_tmp(monkeypatch, tmp_path)
     assert seen == [0]
     assert not (out / "scratch").exists()
     assert len(list(out.glob("*.jsonl"))) == 1
+
+
+def test_accelerator_startup_waits_for_ready_log(monkeypatch, tmp_path):
+    log = tmp_path / "server.log"
+    log.write_text("NI_ANE: compiling in the background")
+    sleeps = []
+
+    def sleep(delay):
+        sleeps.append(delay)
+        log.write_text("NI_ANE: Neural Engine program ready")
+
+    monkeypatch.setattr(tb.time, "sleep", sleep)
+    tb.wait_startup_ready(
+        SimpleNamespace(poll=lambda: None), log, "Neural Engine program ready"
+    )
+    assert sleeps == [0.2]
+    with pytest.raises(RuntimeError, match="exited"):
+        tb.wait_startup_ready(SimpleNamespace(poll=lambda: 1), log, "ready")
+
+
+def test_accelerator_startup_times_out(monkeypatch, tmp_path):
+    now = iter((100, 102))
+    monkeypatch.setattr(tb.time, "monotonic", lambda: next(now))
+    with pytest.raises(RuntimeError, match="not ready"):
+        tb.wait_startup_ready(
+            SimpleNamespace(poll=lambda: None), tmp_path / "unused", "ready", timeout=1
+        )

@@ -176,6 +176,18 @@ def warm_lazy_engine(engine, url, model):
         send(url, req(model, "Write a short example and explain it.", 16), timeout=240)
 
 
+def wait_startup_ready(proc, log, pattern, timeout=120):
+    """Some engines advertise HTTP before their background accelerator compiler is ready."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError("server exited during accelerator startup")
+        if re.search(pattern, log.read_text(errors="replace")):
+            return
+        time.sleep(0.2)
+    raise RuntimeError(f"accelerator startup not ready: {pattern}")
+
+
 class Srv:
     def __init__(
         self, engine, extra_env, tag, model=None, ctx_tokens=140000, parallel=1
@@ -280,6 +292,12 @@ class Srv:
             self.kill()
             raise RuntimeError("not ready")
         try:
+            startup = getattr(bench_engines.ENGINES.get(self.engine), "extra", {})
+            if pattern := startup.get("startup_ready_regex"):
+                wait_startup_ready(
+                    self.proc, self.log, pattern, startup.get("startup_timeout_s", 120)
+                )
+                self.ready_s = time.time() - t0
             warm_lazy_engine(self.engine, self.url, self.model)
             self.verify_spec_mode()
         except Exception:

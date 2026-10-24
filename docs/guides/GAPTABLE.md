@@ -6,6 +6,9 @@ Keep the old installations. Every server runs inside gpuq, on ports 18990–1899
 own disposable home. The driver removes homes, caches and logs after each cell; failure
 records retain a log tail in the result JSONL.
 
+Extra recipes may require a `startup_ready_regex`: Kapitsa must finish its background
+ANE program compilation before measured requests, even though HTTP already responds.
+
 A public comparison needs current main, latest competitor releases, at least three
 interleaved repetitions, and the checkpoint/quantization attached to every row. Different
 quantizations are different product samples. Single-repetition smoke results prove only
