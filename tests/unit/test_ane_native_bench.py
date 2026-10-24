@@ -334,3 +334,25 @@ def test_warm_summary_requires_live_load_and_complete_equal_arms(tmp_path):
     (tmp_path / "native.json").write_text(json.dumps(worker))
     with pytest.raises(ValueError, match="missing"):
         module.summarize(tmp_path)
+
+
+def test_tiled_handoff_grid_covers_partial_tiles_without_extra_groups():
+    path = Path(__file__).resolve().parents[2] / "scripts/research/anenative_handoff.py"
+    spec = importlib.util.spec_from_file_location("anenative_handoff_grid", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.tiled_grid(5120, 1024) == (40960, 32, 1)
+    assert module.tiled_grid(33, 31) == (512, 1, 1)
+    with pytest.raises(ValueError):
+        module.tiled_grid(0, 128)
+    args = module.parser().parse_args(
+        [
+            "--cache",
+            "/Volumes/P5Plus/cache",
+            "--out",
+            "/Volumes/P5Plus/out",
+            "--layout",
+            "tiled",
+        ]
+    )
+    assert args.layout == "tiled"

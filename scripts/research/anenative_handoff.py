@@ -26,6 +26,7 @@ def parser():
     p.add_argument("--rows", type=int, default=1024)
     p.add_argument("--channels", type=int, default=2176)
     p.add_argument("--mode", choices=["fp16", "int8"], default="fp16")
+    p.add_argument("--layout", choices=["scalar", "tiled"], default="scalar")
     p.add_argument("--reps", type=int, default=7)
     p.add_argument("--inner", type=int, default=5)
     p.add_argument("--cache", type=Path, required=True)
@@ -37,6 +38,50 @@ def valid_shape(rows, channels, inter):
     if rows < 1 or channels <= 0 or channels >= inter or channels % 64:
         raise ValueError("positive rows and proper64-aligned channel slice required")
     return max(128, (rows + 63) // 64 * 64)
+
+
+def tiled_grid(hidden, rows):
+    if hidden < 1 or rows < 1:
+        raise ValueError("positive tile dimensions required")
+    return ((hidden + 31) // 32 * 256, (rows + 31) // 32, 1)
+
+
+_PACK_TILED = """uint t = thread_position_in_threadgroup.x;
+uint lx = t%32, ly = t/32;
+uint bc = threadgroup_position_in_grid.x*32;
+uint br = threadgroup_position_in_grid.y*32;
+threadgroup half tile[32*33];
+for (uint k=0; k<32; k+=8) {
+  uint row=br+ly+k, channel=bc+lx;
+  tile[(ly+k)*33+lx] = row<R && channel<H ? half(x[row*H+channel]) : half(0);
+}
+threadgroup_barrier(mem_flags::mem_threadgroup);
+for (uint k=0; k<32; k+=8) {
+  uint row=br+lx, channel=bc+ly+k;
+  if (row<P && channel<H)
+    const_cast<device half*>(surface)[channel*P+row] = tile[lx*33+ly+k];
+}
+if (bc==0 && br==0 && t==0) marker[0]=1;
+"""
+
+_JOIN_TILED = """uint t = thread_position_in_threadgroup.x;
+uint lx=t%32, ly=t/32;
+uint bc=threadgroup_position_in_grid.x*32;
+uint br=threadgroup_position_in_grid.y*32;
+threadgroup half tile[32*33];
+for (uint k=0; k<32; k+=8) {
+  uint row=br+lx, channel=bc+ly+k;
+  tile[(ly+k)*33+lx] = row<P && channel<H ? ane[channel*P+row] : half(0);
+}
+threadgroup_barrier(mem_flags::mem_threadgroup);
+for (uint k=0; k<32; k+=8) {
+  uint row=br+ly+k, channel=bc+lx;
+  if (row<R && channel<H) {
+    uint i=row*H+channel;
+    out[i]=bfloat16_t(float(gpu[i])+float(tile[lx*33+ly+k]));
+  }
+}
+"""
 
 
 def main():
@@ -113,7 +158,9 @@ def main():
             name="anenative_ffn_pack",
             input_names=["x", "surface"],
             output_names=["marker"],
-            source="""uint i = thread_position_in_grid.x;
+            source=_PACK_TILED
+            if a.layout == "tiled"
+            else """uint i = thread_position_in_grid.x;
 if (i < H*P) {
   uint channel = i/P, row = i%P;
   const_cast<device half*>(surface)[i] = row < R ? half(x[row*H+channel]) : half(0);
@@ -125,7 +172,9 @@ if (i == 0) marker[0] = 1;
             name="anenative_ffn_join",
             input_names=["gpu", "ane"],
             output_names=["out"],
-            source="""uint i = thread_position_in_grid.x;
+            source=_JOIN_TILED
+            if a.layout == "tiled"
+            else """uint i = thread_position_in_grid.x;
 if (i < R*H) {
   uint row = i/H, channel = i%H;
   out[i] = bfloat16_t(float(gpu[i]) + float(ane[channel*P+row]));
@@ -138,7 +187,9 @@ if (i < R*H) {
             marker = producer(
                 inputs=[x, inp],
                 template=template,
-                grid=(hidden * program_rows, 1, 1),
+                grid=tiled_grid(hidden, program_rows)
+                if a.layout == "tiled"
+                else (hidden * program_rows, 1, 1),
                 threadgroup=(256, 1, 1),
                 output_shapes=[(1,)],
                 output_dtypes=[mx.uint32],
@@ -155,7 +206,9 @@ if (i < R*H) {
                 result = join(
                     inputs=[part, out],
                     template=template,
-                    grid=(hidden * a.rows, 1, 1),
+                    grid=tiled_grid(hidden, a.rows)
+                    if a.layout == "tiled"
+                    else (hidden * a.rows, 1, 1),
                     threadgroup=(256, 1, 1),
                     output_shapes=[(a.rows, hidden)],
                     output_dtypes=[mx.bfloat16],
@@ -200,6 +253,7 @@ if (i < R*H) {
                     "host_copies_included": False,
                     "host_copies_required": False,
                     "gpu_pack_included": True,
+                    "layout": a.layout,
                     "gpu_join_included": True,
                     "shared_events": True,
                     "serving_engaged": False,
