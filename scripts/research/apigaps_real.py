@@ -412,6 +412,15 @@ def check_compact(url, results, token):
     results["compaction_continue"] = [b.type for b in both.content]
 
 
+def server_log_path(home, item, env=None, now=None):
+    """A log path no other run reuses: the gpuq job id when set, else a timestamp and pid."""
+    env = os.environ if env is None else env
+    tag = env.get("GPUQ_JOB_ID") or env.get("GPUQ_JOB") or ""
+    if not tag:
+        tag = f"{time.strftime('%m%d-%H%M%S', time.localtime(now))}-{os.getpid()}"
+    return os.path.join(home, f"server-{item}-{tag}.log")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("model")
@@ -438,6 +447,8 @@ def main():
     env.pop("YUNSHU_AUTH_DISABLED", None)
     if a.token:
         env["YUNSHU_AUTH_TOKEN"] = TOKEN
+    log_path = server_log_path(home, a.item)
+    print(f"server log: {log_path}", flush=True)
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -451,7 +462,7 @@ def main():
         ],
         cwd=tree,
         env=env,
-        stdout=open(os.path.join(home, "server.log"), "w"),  # noqa: SIM115
+        stdout=open(log_path, "w"),  # noqa: SIM115
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )

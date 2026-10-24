@@ -65,3 +65,12 @@ def test_check_host_fails_when_a_tokenless_server_refuses():
             mod.check_host(f"http://127.0.0.1:{srv.server_port}", {}, None)
     finally:
         srv.shutdown()
+
+
+def test_server_log_path_is_unique_per_run():
+    a = mod.server_log_path("/h", "host", env={"GPUQ_JOB_ID": "1024-1-x"})
+    b = mod.server_log_path("/h", "host", env={"GPUQ_JOB_ID": "1024-2-y"})
+    assert a != b and "1024-1-x" in a
+    c = mod.server_log_path("/h", "host", env={}, now=1.0)
+    d = mod.server_log_path("/h", "host", env={}, now=1.0)
+    assert c == d and "server-host-" in c and str(__import__("os").getpid()) in c
