@@ -1125,6 +1125,7 @@ export function Dashboard({
             </div>
 
             <ChartCard
+              data-testid="concurrency-panel"
               title={t("overview.concurrency.title")}
               description={t("overview.concurrency.desc")}
             >
