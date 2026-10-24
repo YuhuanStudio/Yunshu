@@ -209,7 +209,8 @@ def openai_suite(url, results, big=False, cl=None):
             cid = ci[0].container_id
             files = cl.containers.files.list(cid).data
             expect(
-                [f.path for f in files] == ["/mnt/data/report.csv"], f"files {files}"
+                [f.path for f in files] == ["/mnt/data/report.csv"],
+                f"files {[f.path for f in files]}; code={ci[0].code!r} logs={logs_of(ci[0])!r}",
             )
             data = cl.containers.files.content.retrieve(
                 files[0].id, container_id=cid
