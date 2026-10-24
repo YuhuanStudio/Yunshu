@@ -172,6 +172,6 @@ def test_server_env_caps_apc_disk_tier(servers, monkeypatch, tmp_path):
     monkeypatch.delenv("YUNSHU_VLM_APC_DISK_GB", raising=False)
     monkeypatch.setattr(servers.subprocess, "Popen", launch)
     server = servers.Server("yunshu", "existing-model", 18999, tmp_path / "s.log")
-    with pytest.raises(Exception):
+    with pytest.raises((OSError, RuntimeError)):
         server.start(ready_timeout=1)
     assert seen["YUNSHU_VLM_APC_DISK_GB"] == "16"
