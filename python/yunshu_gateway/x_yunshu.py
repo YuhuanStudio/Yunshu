@@ -317,7 +317,9 @@ def prefill_began(st) -> float:
     if st is None:
         return 0.0
     return getattr(st, "t_prefill_start", 0.0) or (
-        0.0 if getattr(st, "tracks_prefill_start", False) else st.t_admit
+        0.0
+        if getattr(st, "tracks_prefill_start", False)
+        else getattr(st, "t_admit", 0.0)
     )
 
 
