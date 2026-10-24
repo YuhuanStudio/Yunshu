@@ -379,3 +379,29 @@ def test_oversized_tool_arguments_kill_the_cell(env, monkeypatch):
         assert not r.ok and r.error_code == "too_many_requests"
 
     asyncio.run(go())
+
+
+def test_background_thread_allocating_after_the_cell_is_killed_when_idle(
+    env, monkeypatch
+):
+    monkeypatch.setenv("YUNSHU_CODE_EXECUTION_MEMORY_MB", "200")
+    e, c, _ = env
+
+    async def go():
+        r = await e.python(
+            c,
+            "import threading, time\n"
+            "def hog():\n    time.sleep(0.5)\n    global big\n    big = bytearray(700*1024*1024)\n    time.sleep(30)\n"
+            "threading.Thread(target=hog, daemon=True).start()\nprint('started')",
+        )
+        assert r.ok
+        pid = repl_mod.get_pool().peek(c.id).proc.pid
+        for _ in range(60):
+            await asyncio.sleep(0.2)
+            if not _alive(pid):
+                break
+        assert not _alive(pid)
+        again = await e.python(c, "print('big' in globals())")
+        assert again.stdout.strip() == "False" and again.state_lost
+
+    asyncio.run(go())

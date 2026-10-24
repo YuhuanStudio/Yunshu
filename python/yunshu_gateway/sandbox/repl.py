@@ -81,6 +81,9 @@ class ReplSession:
         self.last_used = time.monotonic()
         self.stderr_tail = b""
         self.meta: dict = {}  # the caller's bookkeeping for a paused cell (e.g. the server tool id)
+        self._active = (
+            False  # a call is being driven (its watcher-reported memory kill is read)
+        )
         self._allowed: set[str] = set()  # tool names the current cell may call
         self._calls_made = 0
 
@@ -130,6 +133,7 @@ class ReplSession:
         self._tasks = [
             asyncio.create_task(self._pump_stdout(self.proc, self.queue)),
             asyncio.create_task(self._pump_stderr(self.proc)),
+            asyncio.create_task(self._watch_memory(self.proc.pid, self.queue)),
         ]
         try:
             msg = await asyncio.wait_for(self.queue.get(), START_TIMEOUT)
@@ -210,6 +214,7 @@ class ReplSession:
         if self.paused:
             self.kill()
         async with self._lock:
+            self._mem = mem_bytes  # before a spawn: the process-long watcher reads it
             lost = False
             if not self.alive:
                 lost = self._lost or self.proc is not None
@@ -259,19 +264,28 @@ class ReplSession:
             return await self._drive()
 
     async def _watch_memory(self, pid: int, q: asyncio.Queue) -> None:
+        """Lives as long as the process: a cell's threads can keep allocating after it returned."""
         while True:
             await asyncio.sleep(0.1)
+            if self.proc is None or self.proc.pid != pid:
+                return
             if _tree_rss(pid) > self._mem:
-                kill_tree(pid)
-                q.put_nowait({"op": "oom"})
+                if self._active:
+                    kill_tree(pid)
+                    q.put_nowait({"op": "oom"})  # the running call reports it
+                else:
+                    logger.info(
+                        "code_exec container=%s idle process over memory", self.c.id
+                    )
+                    self.kill()
                 return
 
     async def _drive(self) -> ReplOutcome:
         assert self.proc is not None and self.queue is not None
-        q, pid = self.queue, self.proc.pid
+        q = self.queue
         t0 = time.monotonic()
         calls: list[dict] = []
-        watcher = asyncio.create_task(self._watch_memory(pid, q))
+        self._active = True
 
         def spent() -> float:
             return time.monotonic() - t0
@@ -361,9 +375,7 @@ class ReplSession:
                     out.stderr = tail[-2000:]
                     return out
         finally:
-            watcher.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await watcher
+            self._active = False
 
     async def _expire_pause(self) -> None:
         try:
