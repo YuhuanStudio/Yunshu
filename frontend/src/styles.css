@@ -362,3 +362,13 @@ body {
     height: 3.5rem;
   }
 }
+
+/* A row that arrives after the list was first shown: opacity only (tokens), so it never moves neighbours. */
+@keyframes fresh-row-in {
+  from {
+    opacity: 0;
+  }
+}
+.fresh-row {
+  animation: fresh-row-in var(--dur-base) var(--ease-out) backwards;
+}
