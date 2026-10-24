@@ -97,6 +97,7 @@ import {
   slowRule,
   sortRows,
   stages,
+  ttftCell,
   type SortKey,
   type SortState,
 } from "./request-insight";
@@ -938,7 +939,9 @@ export function Requests({
                         const when = rowMs(row),
                           now = engine.updatedAt ?? Date.now();
                         const ttftText =
-                            st.ttft != null ? formatMs(st.ttft) : "—",
+                            ttftCell(row) != null
+                              ? formatMs(ttftCell(row)!)
+                              : "—",
                           totalText =
                             st.total != null ? formatMs(st.total) : "—";
                         const newer = displayed[lane - 1],
@@ -1119,16 +1122,16 @@ export function Requests({
                                       percent: number(percent, 0),
                                     })}
                                   </span>
-                                ) : row.phase === "complete" ? (
-                                  ttftText
                                 ) : (
-                                  elapsed(row.elapsed_s)
+                                  ttftText
                                 )}
                               </Td>
                               <Td
                                 className={`hidden whitespace-nowrap tabular-nums md:table-cell ${slow ? "text-warning" : ""}`}
                               >
-                                {row.phase === "complete" ? totalText : "—"}
+                                {row.phase === "complete"
+                                  ? totalText
+                                  : elapsed(row.elapsed_s)}
                               </Td>
                               <Td className="hidden whitespace-nowrap tabular-nums md:table-cell">
                                 {number(speedValue)}
