@@ -108,7 +108,7 @@ Constrained decoding masks the logits, so output that matches the schema is prod
 | Parameter | Description | Status |
 | --- | --- | --- |
 | `enable_thinking` | Turn the model's thinking mode on or off. Also read from `chat_template_kwargs.enable_thinking`. | supported |
-| `reasoning_effort` | Effort level. Also read from `chat_template_kwargs.reasoning_effort`. Values outside the template's own list are mapped (`high` becomes `xhigh` on templates that use it). `none` and `minimal` turn thinking off (as `enable_thinking: false`); `low` to `max` map monotonically, `xhigh` and `max` to the largest budgets. On a model without a reasoning mode it is accepted and has no effect. | supported |
+| `reasoning_effort` | Effort level. Also read from `chat_template_kwargs.reasoning_effort`. Values outside the template's own list are mapped (`high` becomes `xhigh` on templates that use it). `none` and `minimal` turn thinking off (as `enable_thinking: false`); `low` to `max` map monotonically, `xhigh` and `max` to the largest budgets. On models whose template has no effort levels the budgets are low 2048, medium 8192, high 32768, xhigh 131072, max 262144 (max is the Qwen3.8 card thinking limit; the others are Yunshu choices with no external source, xhigh 131072 included). On a model without a reasoning mode it is accepted and has no effect. | supported |
 | `thinking_budget` | Maximum thinking tokens, `1` to `262144` (the model's thinking limit). | extension |
 | `chat_template_kwargs` | Extra variables for the chat template. | supported |
 

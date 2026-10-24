@@ -169,3 +169,22 @@ def test_admit_grants_what_fits_and_refuses_an_unfit_prompt():
 def test_longer_prompt_leaves_fewer_output_tokens():
     g = _guard(available=16 * 1024**3)
     assert g.admit(1000, 262144)[0] > g.admit(20_000, 262144)[0] > 0
+
+
+def test_sampling_mode_follows_effort_none_and_absent_anthropic_thinking():
+    from types import SimpleNamespace
+
+    from yunshu_gateway.sampling_defaults import request_mode
+
+    for eff in ("none", "minimal"):
+        # not yet folded by a validator: the resolver folds it itself
+        req = SimpleNamespace(reasoning_effort=eff, enable_thinking=None)
+        assert request_mode(req, None) == ("non_thinking", "request")
+        folded = ChatCompletionRequest(model="m", messages=U, reasoning_effort=eff)
+        assert request_mode(folded, None) == ("non_thinking", "request")
+    a = AnthropicMessagesRequest(model="m", messages=U, max_tokens=64)
+    assert request_mode(a, None) == ("non_thinking", "request")
+    adaptive = AnthropicMessagesRequest(
+        model="m", messages=U, max_tokens=64, thinking={"type": "adaptive"}
+    )
+    assert request_mode(adaptive, None)[1] == "model_default"

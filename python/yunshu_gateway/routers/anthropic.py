@@ -223,9 +223,9 @@ class AnthropicMessagesRequest(BaseModel):
     # Messages API: max_tokens is required (SDK `max_tokens: Required[int]`, min 1); the real
     # API answers 400 invalid_request_error "max_tokens: Field required" and so do we.
     max_tokens: int = Field(..., ge=1, le=1048576)
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
-    top_k: int = Field(default=0, ge=0)
+    temperature: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    top_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
+    top_k: int = Field(default=None, ge=0)  # type: ignore[assignment]  # None until resolve_sampling
     stream: bool = False
     stop_sequences: list[str] | None = None
     system: str | list[dict] | None = None
@@ -245,10 +245,10 @@ class AnthropicMessagesRequest(BaseModel):
 
     # ── Yunshu-extended fields (forwarded to engine) ──
     lora_adapter: str | None = None
-    min_p: float = Field(default=0.0, ge=0.0, le=1.0)
-    repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
-    frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
-    presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
+    min_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
+    repetition_penalty: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    frequency_penalty: float = Field(default=None, ge=-2.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    presence_penalty: float = Field(default=None, ge=-2.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
     logit_bias: dict[str, float] | None = None
     seed: int | None = None
     reasoning_effort: str | None = None
@@ -1213,6 +1213,9 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     if (bad := _version_error(req, request)) is not None:
         return bad
     _apply_clear_at(req)
+    from ..sampling_defaults import resolve_sampling
+
+    resolve_sampling(req)
     temp_files: list[str] = []
     try:
         result = await _create_message(req, request, temp_files)
@@ -1375,6 +1378,9 @@ async def _create_message(
     handler again for each generation round with the server tools rewritten as plain
     functions (so the recursion takes the ordinary path below).
     """
+    from ..sampling_defaults import resolve_sampling
+
+    resolve_sampling(req)
     _check_permission(request, "can_infer")
     from ..capability_gate import enforce_anthropic
 

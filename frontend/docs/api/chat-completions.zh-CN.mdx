@@ -108,7 +108,7 @@ description: OpenAI Chat Completions 端点，支持 tools、结构化输出、l
 | 参数 | 说明 | 状态 |
 | --- | --- | --- |
 | `enable_thinking` | 开启或关闭模型的思考模式。也会读取 `chat_template_kwargs.enable_thinking`。 | 支持 |
-| `reasoning_effort` | 推理强度。也会读取 `chat_template_kwargs.reasoning_effort`。超出模板自身列表的值会被映射（在使用 `xhigh` 的模板上，`high` 会变成 `xhigh`）。`none` 与 `minimal` 会关闭思考（等同 `enable_thinking: false`）；`low` 至 `max` 单调映射，`xhigh`、`max` 取最大预算。对没有推理模式的模型会被接受但没有作用。 | 支持 |
+| `reasoning_effort` | 推理强度。也会读取 `chat_template_kwargs.reasoning_effort`。超出模板自身列表的值会被映射（在使用 `xhigh` 的模板上，`high` 会变成 `xhigh`）。`none` 与 `minimal` 会关闭思考（等同 `enable_thinking: false`）；`low` 至 `max` 单调映射，`xhigh`、`max` 取最大预算。模板没有强度层级的模型，预算为 low 2048、medium 8192、high 32768、xhigh 131072、max 262144（max 为 Qwen3.8 模型卡的思考上限；其余是 Yunshu 的选择，没有外部来源，包含 xhigh 131072）。对没有推理模式的模型会被接受但没有作用。 | 支持 |
 | `thinking_budget` | 思考 token 上限，`1` 至 `262144`（模型的思考上限）。 | 扩展 |
 | `chat_template_kwargs` | 传给聊天模板的额外变量。 | 支持 |
 

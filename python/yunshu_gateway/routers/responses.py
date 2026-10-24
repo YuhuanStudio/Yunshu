@@ -688,9 +688,9 @@ class ResponsesRequest(BaseModel):
     # max_output_tokens so old client code doesn't run unbounded against
     # /v1/responses. Caught by validate_request hook below.
     max_completion_tokens: int | None = Field(default=None, ge=1, le=1048576)
-    temperature: float = Field(default=1.0, ge=0.0, le=2.0)
-    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
-    top_k: int = Field(default=0, ge=0)
+    temperature: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    top_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
+    top_k: int = Field(default=None, ge=0)  # type: ignore[assignment]  # None until resolve_sampling
     stream: bool = False
     n: int = Field(default=1, ge=1, le=128)
     tools: list[ResponseTool] | None = None
@@ -717,11 +717,11 @@ class ResponsesRequest(BaseModel):
     prompt_cache_key: str | None = None
     client_metadata: dict | None = None
     service_tier: str | None = None
-    repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
-    frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
-    presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
+    repetition_penalty: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    frequency_penalty: float = Field(default=None, ge=-2.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    presence_penalty: float = Field(default=None, ge=-2.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
     logit_bias: dict[str, float] | None = None
-    min_p: float = Field(default=0.0, ge=0.0, le=1.0)
+    min_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
     top_n_sigma: float = Field(default=0.0, ge=0.0, le=10.0)
     stop: list[str] | None = None
 
@@ -1462,6 +1462,9 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
 @router.post("/responses", response_model=None)
 async def create_response(req: ResponsesRequest, request: Request):
     """OpenAI Responses API endpoint."""
+    from ..sampling_defaults import resolve_sampling
+
+    resolve_sampling(req)
     _check_permission(request, "can_infer")
     from ..capability_gate import enforce_responses
 

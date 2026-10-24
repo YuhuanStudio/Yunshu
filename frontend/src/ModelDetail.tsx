@@ -61,6 +61,60 @@ export const retention = (model: Model) =>
             })
           : t("models.retention.serverDefault");
 
+type SamplingSet = Record<string, { value: number; source: string }>;
+
+/** Read-only: the sampling a request without sampling parameters gets, per mode. */
+function SamplingDefaults({ card }: { card: unknown }) {
+  const sd = (
+    card as { yunshu?: { sampling_defaults?: Record<string, unknown> } }
+  )?.yunshu?.sampling_defaults;
+  const sets = (["thinking", "non_thinking"] as const).map(
+    (m) => [m, sd?.[m] as SamplingSet | undefined] as const,
+  );
+  if (!card || !sd || !sets.some(([, v]) => v && v.temperature)) return null;
+  const fields = ["temperature", "top_p", "top_k", "presence_penalty"];
+  return (
+    <SectionCard
+      icon={GaugeIcon}
+      title={t("models.detail.sampling.title")}
+      description={t("models.detail.sampling.description")}
+      data-testid="sampling-defaults"
+    >
+      <p className="mb-3 text-sm text-muted-foreground">
+        {t("models.detail.sampling.defaultMode", {
+          mode: String(sd.default_mode ?? ""),
+        })}
+      </p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {sets.map(([mode, v]) =>
+          v ? (
+            <div key={mode} data-testid={`sampling-${mode}`}>
+              <p className="mb-1 text-sm font-medium">
+                {t(
+                  mode === "thinking"
+                    ? "models.detail.sampling.thinking"
+                    : "models.detail.sampling.nonThinking",
+                )}
+              </p>
+              <DetailList ariaLabel={mode}>
+                {fields.map((f) =>
+                  v[f] ? (
+                    <DetailRow
+                      key={f}
+                      label={f}
+                      value={`${v[f].value} · ${v[f].source}`}
+                    />
+                  ) : null,
+                )}
+              </DetailList>
+            </div>
+          ) : null,
+        )}
+      </div>
+    </SectionCard>
+  );
+}
+
 /** Per-model page: only facts the status and model endpoints report. */
 export function ModelDetail({
   id,
@@ -281,6 +335,7 @@ export function ModelDetail({
               </p>
             )}
           </SectionCard>
+          <SamplingDefaults card={card} />
           <SectionCard
             icon={FileJson}
             title={t("models.detail.card.title")}

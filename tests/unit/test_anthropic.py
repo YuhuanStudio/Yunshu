@@ -87,7 +87,7 @@ class TestAnthropicMessagesRequest:
         )
         assert req.model == "claude-3"
         assert req.max_tokens == 1024  # as given: the field is required
-        assert req.temperature == 0.7
+        assert req.temperature is None
         assert req.stream is False
         assert req.system is None
         assert req.thinking is None

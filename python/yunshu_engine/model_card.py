@@ -392,6 +392,8 @@ class ModelCard:
     contract: dict = field(default_factory=dict)
     supported_parameters: list[str] = field(default_factory=list)
     generation_defaults: dict = field(default_factory=dict)
+    # Effective sampling defaults for a request that omits them: {param: {value, source}}.
+    sampling_defaults: dict = field(default_factory=dict)
     created: int = 0
     path: str | None = None
 
@@ -706,6 +708,12 @@ def _generation_defaults(model_path: Path) -> dict:
     }
 
 
+def _effective_sampling(model_path: Path) -> dict:
+    from .sampling_defaults import defaults_by_mode
+
+    return defaults_by_mode(model_path)
+
+
 def _display_name(model_id: str) -> str:
     return model_id.rsplit("/", 1)[-1]
 
@@ -875,6 +883,7 @@ def _derive(p: Path, mid: str, model_type_name: str | None) -> ModelCard:
         prefix_cache=_prefix_cache(kind, config, text_cfg),
         supported_parameters=list(TEXT_PARAMETERS) if text_like else [],
         generation_defaults=_generation_defaults(p),
+        sampling_defaults=_effective_sampling(p) if text_like else {},
         path=str(p),
     )
     if not tools_ok:

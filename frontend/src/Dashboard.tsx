@@ -400,7 +400,10 @@ export function Dashboard({
   const recentRequests = useRecentRequests(
     connection,
     status?.last?.request_id,
-    status?.console_process === true || (status == null && engine.failures > 0),
+    status?.console_process === true ||
+      (status == null &&
+        engine.failures > 0 &&
+        engine.phase !== "unauthorized"),
   );
   const hit = useMemo(
     () =>
@@ -651,12 +654,12 @@ export function Dashboard({
                 label={t("overview.stats.metal")}
                 value={
                   <span title={t("overview.tip.metal")}>
-                    <Slot ch={5}>
+                    <span className="tabular-nums">
                       <LiveNumber
                         value={memory?.active_gb ?? null}
                         digits={1}
                       />
-                    </Slot>
+                    </span>
                     <span className="ml-1 text-xs font-normal text-muted-foreground">
                       GB
                     </span>
@@ -974,7 +977,7 @@ export function Dashboard({
               }
             >
               <p className="text-2xl font-semibold tabular-nums">
-                <Slot ch={5}>{fixed(memory?.active_gb)}</Slot>
+                <span className="tabular-nums">{fixed(memory?.active_gb)}</span>
                 <span className="ml-1.5 text-sm font-normal text-muted-foreground">
                   {t("overview.memory.activeOf", {
                     gb:
