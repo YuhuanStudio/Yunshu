@@ -1,5 +1,7 @@
 # Verifying a change: `yv`
 
+
+> Console docs: the maintained, translated version of this page is `/docs/developers/verification` (source `frontend/docs/developers/verification.mdx`). This file stays as the repository-side reference read by tooling.
 > The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/developers/verification.mdx`](../../frontend/docs/developers/verification.mdx)); this file is its GitHub-facing counterpart.
 
 `scripts/dev/yv` runs the standard verification of a candidate change end to end and returns one

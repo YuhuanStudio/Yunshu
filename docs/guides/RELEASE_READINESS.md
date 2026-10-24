@@ -1,5 +1,7 @@
 # Release readiness: the outward-facing checklist
 
+
+> Console docs: the maintained, translated version of this page is `/docs/developers/release-readiness` (source `frontend/docs/developers/release-readiness.mdx`). This file stays as the repository-side reference read by tooling.
 This page covers what a new user meets before the first token: installing, the first run, running
 the server, connecting clients, upgrading, uninstalling, and what happens when something is
 wrong. Engine speed and accuracy are tracked in [BENCHMARKS.md](../BENCHMARKS.md).

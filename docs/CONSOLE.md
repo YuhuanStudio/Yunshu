@@ -1,5 +1,7 @@
 # Yunshu console
 
+
+> Console docs: the maintained, translated version of this page is `/docs/getting-started/console` (source `frontend/docs/getting-started/console.mdx`). This file stays as the repository-side reference read by tooling.
 A local web console for the engine: see what every request is doing, manage models, the prefix cache, keys
 and settings, and try a model, without leaving the browser. It is a YunUI-based single-page app served by
 its own light process (`yunshu console`, see [The console process](#the-console-process)), so it stays usable

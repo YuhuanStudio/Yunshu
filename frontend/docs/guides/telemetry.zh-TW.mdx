@@ -1,0 +1,97 @@
+---
+title: 主機遙測與能耗
+description: 啟用本機 Apple Silicon 功耗、GPU 與溫度取樣器，從 API、CLI 與 Prometheus 讀取，並了解逐請求能耗估計的意義。
+---
+
+`YUNSHU_TELEMETRY=on` 會啟用本機背景取樣器（預設 1 Hz）。它不需要 root、不會匯入 MLX，且只在自己的 `yunshu-host-telemetry` 執行緒上進行原生呼叫，不在推論執行器內。沒有任何取樣資料會離開這台機器。
+
+## 啟用
+
+<Steps>
+<Step>
+
+在環境變數或設定檔中設定 `YUNSHU_TELEMETRY=on`（可另外設定 `YUNSHU_TELEMETRY_INTERVAL_S`）。
+
+</Step>
+<Step>
+
+重新啟動伺服器。這兩個設定都需要重新啟動。
+
+</Step>
+<Step>
+
+用 `GET /v1/yunshu/host`、`yunshu top` 或 `/metrics` 讀取取樣器。
+
+</Step>
+</Steps>
+
+| 設定 | 預設 | 作用 |
+|---|---|---|
+| `YUNSHU_TELEMETRY` | `off` | `on` 啟動取樣器；需重新啟動 |
+| `YUNSHU_TELEMETRY_INTERVAL_S` | `1.0` | 取樣間隔（秒），最小 0.1；需重新啟動 |
+
+<Callout type="info">
+預設為關閉。一次 27B 的 A/B（1K 與 32K 上下文，各 5 次重複）顯示解碼速度在雜訊範圍內相同，但在 1K 純文字情境中，後續請求的 TTFT 有小而一致的代價（+1.8%，約 11 ms），32K 程式碼情境的解碼則有臨界的 -0.4%，因此採用選用方式。
+</Callout>
+
+實作的 IOReport 與 HID 存取衍生自 [pierre427/mlx2](https://github.com/pierre427/mlx2)（Apache-2.0），macOS 27 的計數器目錄衍生自 [vladkens/macmon](https://github.com/vladkens/macmon)（MIT）。聲明見 `THIRD_PARTY_NOTICES.md` 與 `vendor.json`。
+
+## 主機 API 與 CLI
+
+`GET /v1/yunshu/host` 使用主控台權限（`can_manage_models`）。它保留既有的 `thermal`、`power`、`memory` 與 `memory_pressure` 欄位（15 秒快取），並新增擁有獨立 1 Hz 快取的 `telemetry`：
+
+```json
+{
+  "telemetry": {
+    "state": "ok",
+    "sampled_at": 1791400000.0,
+    "interval_s": 1.0,
+    "watts": {"cpu": 5.0, "gpu": 30.0, "ane": 0.0, "dram": 2.0, "package": 37.0},
+    "gpu": {"frequency_mhz": 900.0, "active_ratio": 0.75},
+    "temperature": {"state": "ok", "die_max_c": 70.0, "die_mean_c": 65.0, "battery_c": null},
+    "reasons": {}
+  }
+}
+```
+
+- 功率是區間能量除以經過的秒數。Package 瓦數是所回報的 CPU、GPU、ANE 與 DRAM 通道總和，不是插座端功率。
+- GPU MHz 以作用中的 DVFS 停留時間加權。作用比例的分母包含閒置停留時間。
+- 缺少的計數器會是 `null` 並附原因，絕不編造零值。無法取得、已停用或過期的遙測會回傳 `state: unknown` 與 `reason`。功率只有部分涵蓋時回傳 `state: partial`；溫度可以獨立為 unknown。
+
+`yunshu top` 使用已設定的 API 金鑰監看這些快取欄位。`yunshu top --once` 印出一張表，`yunshu --json top` 輸出一份 JSON 快照。未知的值仍會顯示。CLI 本身不會取樣硬體。
+
+## 逐請求能耗估計
+
+`x_yunshu.energy` 與 `/v1/yunshu/requests/recent` 提供 schema `yunshu.energy.v1`。閘道會在 MLX 執行緒之外填入。每個 `prefill` 與 `decode` 物件都回報 `joules`、`joules_per_token`、`gpu_watts_mean`、`coverage_ratio` 與 `extrapolated_s`。
+
+- 預填使用未命中快取的提示詞 token；解碼使用生成的 token。預填結束時間戳記（若沒有則用第一個 token）用來區分兩個階段。排隊時間不計入。
+- 方法 `host_window_gpu_plus_dram` 對取樣的 GPU 與 DRAM 功率積分，並在階段邊界裁切區間。尚未結束的尾端最多使用兩個取樣間隔的最新功率。很短的階段只是取樣解析度下的估計。
+- 缺少涵蓋、讀值過期或沒有階段時鐘時，回傳 `null` 焦耳並附原因。CPU 與 ANE 另外回報，不計入請求能耗。
+- 歷史上限為 7,200 個區間；更舊的請求可能失去涵蓋。
+
+<Callout type="warn">
+這些是包含背景活動與閒置功耗的主機能耗視窗。並行請求的視窗會重疊，且並未獨立計量，因此把收據加總可能重複計入同一份主機能耗。比較效率時請使用序列式的基準測試格。取消的請求只回報實際觀察到的引擎計時，而非預測值。
+</Callout>
+
+## Prometheus
+
+需驗證的 `/metrics` 抓取會新增：
+
+- `yunshu_gpu_watts`、`yunshu_package_watts`
+- `yunshu_gpu_frequency_mhz`、`yunshu_gpu_active_ratio`
+- `yunshu_die_temperature_celsius`（最高晶片溫度）
+- `yunshu_request_energy_joules_total{phase="prefill|decode"}`（估計值的本次執行期總和）
+
+未知的 gauge 會被省略。請求計數器只在請求完成時更新一次，不會在抓取時更新，並帶有上述重疊視窗的限制。
+
+## macOS 27 功耗計數器
+
+在 macOS 27 上，沒有 Apple 授權（entitlement）時，Energy Model 的 CPU 與 ANE 計數器可能凍結。Yunshu 在 macOS 27 使用 macmon 的、依驅動程式驗證過的 CLPC 純量 IOReport 目錄（上游已在 27.0 與 27.0.1 驗證），並優先採用有效的 CLPC CPU、GPU 與 ANE 差值而非舊值。未知的驅動程式或 OS 目錄絕不猜測。當沒有有效且驗證過的差值時，macOS 27 以上的 CPU 與 ANE 值會是 unknown 並附原因，其他有效的領域仍可使用，因此凍結的零值不會被當成實測功耗。不需要 root、Apple entitlement、SMC 存取或 MLX 呼叫。
+
+晶片溫度優先使用 HID `tdie` 感測器；沒有 `tdie` 值時，改用 `pACC`、`eACC` 與 `GPU MTR Temp Sensor` 名稱，且不混用不同的感測器家族。
+
+## 限制與驗證方式
+
+- 能耗是主機視窗的估計，不是逐行程計量（見上方警告）。
+- 要評估取樣器的額外負擔，請在固定的 commit 上以明確的 `off` 基準對比明確的 `on` 候選，在 1K 與 32K 各至少做三次交錯重複。只有速度結論不能證明感測器運作正常，還要檢查實際執行的主機證據。
+- 基準測試工具（`tfbench`、`yv`）會保留完整收據，加上解碼的 `joules_per_token` 與 `gpu_watts_mean`；`yv` 在 `efficiency` 下回報各組的中位數，但不用來決定速度是否通過。關卡說明見[驗證](/docs/developers/verification)。

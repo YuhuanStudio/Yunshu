@@ -1,0 +1,98 @@
+---
+title: 硬體驗證
+description: Yunshu 跨 Apple Silicon 世代的驗證計畫，以及 M5 Max 硬體地圖：各單元量測到什麼、Yunshu 用到哪些，以及哪些想法通過了 roofline 檢驗。
+---
+
+本頁分成兩個部分。第一部分是 Apple Silicon 支援的驗證計畫，它是產品目標，並不代表每種晶片與 macOS 的組合都已測試過。第二部分是一台 M5 Max 機器的硬體地圖，用來決定最佳化的投入方向。
+
+## 硬體驗證計畫
+
+託管的 `macos-14` CI 工作不能證明特定的 M 系列 GPU 世代，也不能證明真實的 Metal 可用。目前的工作流程是 `.github/workflows/ci.yml` 與 `release.yml`；沒有為硬體覆蓋額外配置 runner。
+
+### 做了什麼
+
+| 層級 | 觸發 | 檢查 | 需保留的證據 |
+|---|---|---|---|
+| 快速 | 每次變更 | Linux 上的 lint 與建置；在依賴允許的情況下，執行不需模型的公開契約與 CLI 測試 | 原始碼 SHA、依賴鎖定檔與測試數量 |
+| 正確性 | 受信任的 PR 或發布前 | Apple Silicon 單元測試；微型模型的 API、快取與約束冒煙測試 | 晶片、記憶體、macOS、Python 與 MLX 版本、檢查點修訂版，以及通過、失敗與略過的數量 |
+| 硬體覆蓋 | 排程或發布前 | M1 到 M5；最舊的支援 macOS 與目前的 macOS，使用可取得的主機 | 明確標示已測試與未測試的格子；輸出、快取與 logprob 一致性 |
+| 效能 | 受控的排程執行 | 同一檢查點的解碼，以及冷、暖與第二輪 TTFT；三次交錯重複 | 原始收據、實際啟用的模式、輸出長度、摘要、中位數與退步 |
+
+### 保證
+
+- 某個版本無法取得的硬體會列為未測試，絕不標示為通過。
+- 絕不從 runner 名稱推論 GPU 覆蓋。
+- 不受信任的 PR 程式碼不會在個人模型主機上執行。
+- 正確性失敗與效能雜訊、基礎設施失敗分開處理。失敗的案例會保留，不會被默默重試而從報告中消失。
+- 只有在穩定的雜訊基線建立之後，基準測試門檻才會變成關卡。
+
+### 限制
+
+維護者必須先盤點可用主機與支援的最低 macOS 版本，這個計畫才會成為必要的 CI。目前 M5 Max 是計時用機器，36 GB 的 M3 筆電只提供正確性與可攜性證據：M3 的結果絕不會核准 M5 熱路徑的預設值，M3 上的失敗必須在 M5 重現後，才能否決 M5 的最佳化。此通道記載於[邊服務邊開發](/docs/developers/serve-and-develop)。
+
+### 如何驗證
+
+正確性層級是 `scripts/dev/ci-local <sha>` 加上發版關卡的 `install` 階段；見[發版關卡](/docs/developers/release-gate)。M3 通道是 `scripts/dev/m3sweep` 與 `gpuq submit --device m3`。基準測試方法見[基準測試](/docs/guides/benchmarks)，準確度證據見[準確度對齊](/docs/developers/accuracy)。
+
+## M5 Max 硬體地圖
+
+本節是單一機器（M5 Max、40 核心 GPU、128 GB）的歷史探測紀錄。它不代表目前的依賴版本或發版效能；要看有日期的數字，請用[基準測試](/docs/guides/benchmarks)。探測腳本位於 `scripts/research/hw/`，每個都會寫出 JSONL，數字都在裡面（本頁不收錄，因為它們來自同一台機器在某一個時間點）。每個 GPU、ANE 與重度 CPU 探測都在共用的 GPU 鎖下執行，因為這些單元共用同一個記憶體系統，一個執行會干擾另一個。
+
+### 各單元的用途
+
+| 單元 | 探測腳本 | Yunshu 用到它的什麼 |
+|---|---|---|
+| 記憶體頻寬 | `bw_unified_memory.py`、`decode_proxy_step.py`、`decode_step_model.py`、`decode_step_engine.py` | 解碼每一步都要串流讀取一次模型權重，所以受頻寬限制 |
+| GPU 張量單元（NAX） | `gpu_compute.py`、`tensor_unit_peak.py` | prefill 使用 MLX 中的 NAX 量化矩陣乘法；解碼與驗證使用 NAX 封裝的 4 位元 kernel |
+| GPU 啟動與同步 | `launch_overhead.py` | 啟動成本透過 `async_eval` 藏在 GPU 工作之後 |
+| ANE | `ane_probe.py`、`pick_best_ane.py`、`bg_gpu_concurrency.py`、`session_ane_prefill.sh` | 僅作為嵌入協同處理器（`ane_embedding.py`） |
+| CPU | `cpu_probe.py` | 反詞元化、文法與取樣的銜接工作 |
+| 解碼旁的 prefill | `gpu_stream_overlap.py`、`bench_prefill_interleave.py` | 以 prefill 區塊大小作為策略（`YUNSHU_ROUND_PREFILL_CHUNK`） |
+
+### 發現
+
+- **解碼受權重頻寬限制。** 一步不可能低於以最佳實測讀取頻寬讀完權重的時間，而原生解碼已經很接近這條線。只有每個 token 讀取更少位元組（每次讀權重接受更多 token、更低位元數），或讓多列共用讀取，才能推進。小型投影（K/V、GDN gate）遠低於頻寬線，是融合啟動可能有幫助的地方。
+- **寬驗證幾乎免費。** 量化矩陣乘法在數列以內仍受權重頻寬限制，運算要超過數十列才會成為瓶頸，所以一次權重讀取可以服務多列驗證。這就是推測式與多列解碼划算的原因。
+- **啟動開銷不是瓶頸。** CPU 在 GPU 執行前一步時建立下一步的計算圖。對解碼層使用 `mx.compile`、`MLX_MAX_OPS_PER_BUFFER` 與 `MLX_METAL_FAST_SYNCH` 都沒有可量測的變化，而且 MLX 沒有可利用的圖重播。
+- **ANE 不是免費的頻寬。** GPU 解碼時它幾乎保有自己全部的速率，但每次 ANE 呼叫都從同一個 DRAM 串流權重，會拖慢 GPU 解碼。單獨使用時它的 prefill 約為閒置 GPU 速率的三分之一，所以最多只適用於另一個請求正在串流時抵達的提示詞，而且它的數值與 MLX 4 位元權重不同（是有損選項，不是預設）。
+- **CPU 幫不上解碼。** 對單列而言，在大詞彙表上取樣很便宜（argmax 藏在下一步之後），但多列的 top-k 或排序就不是了，所以取樣留在 GPU 上（`YUNSHU_GPU_SAMPLER`）。CPU 的記憶體流量也會拖慢 GPU，CPU 草稿不切實際。
+- **Wired 記憶體與電源。** `mx.set_wired_limit` 與快取上限的調整，在 128 GB 的機器上沒有增益；持續解碼迴圈中看不到降頻。
+- **Prefill 與解碼互相競爭。** 兩個 GPU 命令佇列不會讓 prefill 與解碼重疊，而且解碼沒有優先權。在單一佇列上，較小的 prefill 區段能讓執行中的請求解碼快很多，代價是新抵達的提示詞首個 token 的時間變長。兩種區塊大小下，提示詞的 token 都與單獨執行時相同。`YUNSHU_ROUND_PREFILL_CHUNK` 設定區段大小。
+
+### 提案與結果
+
+| 想法 | 結果 |
+|---|---|
+| 以 prefill 區塊作為策略 | 完成：`YUNSHU_ROUND_PREFILL_CHUNK`，預設 512；依解碼列數自適應調整尚未完成 |
+| 讓解碼 kernel 維持在頻寬線上（融合小型投影） | 未完成 |
+| 更寬的驗證與多列解碼 | 透過 round driver 進行中；見 [Round driver](/docs/developers/round-driver) |
+| 張量單元上的 Int8 激活 prefill | 有損，所以只能是使用者選項；未採用 |
+| round driver 中的批次序列混合器 | 未完成，預期增益小 |
+| 在 GPU 解碼旁進行 ANE prefill | 有損選項，投入極高；排在最後 |
+| 在 CPU 上取樣 | 否決：留在 GPU 上 |
+| ANE 上的草稿器與 GPU 驗證重疊 | 放棄：草稿取決於上一輪接受的 token，而且 ANE 會占用 GPU 頻寬 |
+| 解碼層的 `mx.compile`、wired 記憶體調校、高效能模式、prefill 專用的第二個命令佇列 | 放棄：沒有可量測的效果或更差 |
+
+### 旋鈕
+
+| 設定 | 預設值 | 效果 |
+|---|---|---|
+| `YUNSHU_ROUND_PREFILL_CHUNK` | 512 | Round driver：每個 prefill 區段的提示詞 token 數；較小的區段能讓長提示詞旁的解碼列持續運行。以不同區塊大小 prefill 的提示詞各自自洽，但彼此並非位元相同 |
+| `YUNSHU_GPU_SAMPLER` | off | 文字模型：GPU 上的 Gumbel-max 取樣 |
+
+### 如何驗證
+
+在 GPU 佇列下執行探測，以免干擾共用的單元，例如：
+
+```bash
+scripts/dev/gpuq submit --label hw-decode-proxy --mem-gb 30 -- \
+  python scripts/research/hw/decode_proxy_step.py
+```
+
+開始最佳化之前先算出 roofline：理論上限與其依賴。要在執行環境中比較，而不是用孤立的微基準測試，因為每次呼叫都 eval 的零件會高估小型 kernel。
+
+## 相關
+
+- [發版就緒](/docs/developers/release-readiness)
+- [驗證](/docs/developers/verification)
+- [基準測試](/docs/guides/benchmarks)

@@ -1,0 +1,169 @@
+---
+title: Agent 兼容性
+description: Claude Code、Codex CLI 与 opencode 实际会调用什么、Yunshu 如何处理每个请求，以及用最新 CLI 重新验证这些主张的脚本。
+---
+
+对编程 agent 的目标是接近原生的保真度：Claude Code、Codex CLI、opencode 与官方 SDK 用到的每个端点、请求头、beta、工具类型与服务器端工具，都应该像真正的 Anthropic 与 OpenAI API 一样工作，而不只是生成正确。本页记录每个 agent 调用什么（来自对真实 CLI 的普查）、Yunshu 如何处理，以及这些主张如何被验证。面向用户的设置见 [Agents](/docs/guides/agents)。
+
+## 它做什么
+
+普查工具会让真实的 CLI 连到一个记录用的模拟服务器，因此 agent 发出哪些请求的清单来自观察，而非文档。工具位于 `scripts/research/agent_compat/`。
+
+| 组件 | 做什么 |
+|---|---|
+| `census_server.py` | 有脚本、会记录的模拟模型服务器。记录每个请求（方法、路径、查询、请求头、正文），以一连串工具调用的脚本响应，让 agent 走完一个会话，对未知路径返回 404，并以符合规范的服务器工具块回答 `web_search_*` 请求。不需 GPU |
+| `census.py` | 让固定版本的 CLI 跑过脚本化的会话：普通对话、bash 与编辑、子 agent、网页搜索与抓取、MCP、图片、思考、`/context`、`/cost`、`/compact`、状态栏、模型发现、Codex 推理、压缩、websocket 与目录，以及 opencode。隔离：清理过的环境、独立的 `HOME`、`CLAUDE_CONFIG_DIR` 与 `CODEX_HOME`，并以 `sandbox-exec` 拒绝除 loopback 外的一切 |
+| `census_tui.py` | 在 pty 中驱动 agent 的交互式 TUI（`/status`、`/model`） |
+| `replay.py`、`replay_report.py` | 把每个记录下来的请求重放到真正的 Yunshu，并比较状态与流有效性 |
+| `e2e_agents.py`、`e2e_sdk.py`、`capture_proxy.py`、`fake_searxng.py`、`tiny_mcp.py` | 用真实 agent 与官方 SDK 搭配真实模型做端到端运行，附带假的 SearXNG（有可检查事实的固定语料）、一个小型 MCP 服务器与完整抓取代理 |
+| `stream_check.py`、`synthetic_requests.py` | 流验证，以及重放阶段使用的 SDK 形状合成请求 |
+
+原始普查数据为私有（`docs/research/runs/<date>-agent-census/`，已列入 gitignore）。
+
+## 各 agent 调用什么
+
+### Claude Code
+
+| 请求 | 时机 | Yunshu |
+|---|---|---|
+| `POST /v1/messages?beta=true`，`stream: true` | 每一轮。多个 `anthropic-beta` 值、以多个块表示并带 `cache_control` 的 `system`、对话中途的 `role: "system"` 条目、许多客户端工具、`thinking: {type: "adaptive"}`、`output_config`、`context_management`、`metadata.user_id` | 已支持。beta 绝不被拒绝。接受 `adaptive` 思考与 `output_config` |
+| `POST /v1/messages/count_tokens?beta=true` | `/context` | 已支持（计算 system、messages、tools） |
+| `GET /v1/models?limit=1000` | 只在 `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` 时；用来填充 `/model` | 已支持，附 `max_input_tokens`、`max_tokens` 与 `capabilities` |
+| 带有 `web_search_20250305` 工具的 `POST /v1/messages` | 它的 WebSearch 工具：搜索在服务器端运行，客户端渲染 `web_search_tool_result` 块 | 以服务器工具实现，见下文 |
+| 小模型调用 | 标题、摘要、WebFetch 的页面摘要 | 已支持 |
+| MCP 服务器 | 客户端：工具以 `mcp__server__tool` 函数工具的形式交给模型 | 无需处理；需要普通的工具调用 |
+| WebFetch | 客户端抓取，再以小模型调用做摘要 | 无需处理 |
+| 子 agent、`/compact` | 普通的 `/v1/messages` 调用 | 已支持 |
+
+在封锁通往 Anthropic 的流量时，没有其他请求：没有遥测、OAuth 或更新调用。CLI 无法从自定义服务器得知两件事：上下文窗口（对未知的模型 id 它假设为 200K，这就是 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 存在的原因）与价格（对未知模型它打印自己的算式；这无法从服务器端修正）。
+
+### Codex CLI
+
+| 请求 | 时机 | Yunshu |
+|---|---|---|
+| `POST /v1/responses`，`stream: true`，`store: false` | 每一轮。`instructions`、`input` 条目（`developer` 与 `user` 消息、`function_call`、`function_call_output`、`reasoning`）、类型为 `function`、`namespace`（含嵌套 `tools`）与 `web_search` 的 `tools`、`parallel_tool_calls`、`reasoning`、`include: ["reasoning.encrypted_content"]`、`prompt_cache_key` | 已支持，包括 `namespace` 与 `web_search` 工具 |
+| 带 `Upgrade: websocket` 的 `/v1/responses` | 只在提供方设置 `supports_websockets = true` 时；尝试三次，然后改用 POST | `WS /v1/responses` 已存在；见[传输方式](/docs/guides/transports) |
+| 压缩 | 本地：以 `tools: []` 的普通 `POST /v1/responses`；自定义提供方没有 `/responses/compact` | 已支持 |
+| 模型元数据 | 绝不从自定义提供方获取；没有目录时 Codex 会打印“Model metadata not found”、不发送推理强度，且只提供内置模型 | `yunshu launch codex` 会写入 `model_catalog_json` |
+| `web_search = "live"` | 加入 `{type: "web_search"}` 工具，并预期 `web_search_call` 条目 | 已实现 |
+| MCP 服务器 | 客户端函数工具 | 无需处理 |
+
+### opencode
+
+| 请求 | 时机 | Yunshu |
+|---|---|---|
+| `POST /v1/chat/completions`，`stream_options: {include_usage: true}` | 每一轮；生成标题时先发一个 `reasoning_effort: "low"` 的请求；请求头 `x-session-id`、`x-session-affinity` | 已支持 |
+| `/models` | 不会获取；限制来自 `provider.*.models.*.limit` | `yunshu launch opencode` 会写入这些值 |
+
+## 保证
+
+下方的功能矩阵使用以下标签：**可用**（已验证，并列出证据）、**部分**、**缺少**、**n/a**（agent 从不要求）。证据：“E2E”是真实的固定版本 agent 搭配真实 Yunshu、启动辅助工具的配置与抓取代理；“SDK”是官方 SDK 搭配真实服务器；“unit”是带有假对象的 `tests/unit`。
+
+| 功能 | Claude Code | Codex | opencode | SDK 用户 | 证据 |
+|---|---|---|---|---|---|
+| 流式生成、工具调用 | 可用 | 可用 | 可用 | 可用 | 三者的 E2E 编辑与 bash 任务、unit |
+| 对话中途的 system 消息 | 可用（文本与图片轮次） | 可用（`developer` 条目） | n/a | 可用 | unit |
+| 以原生形状表示的思考与推理 | 可用（`thinking` 块） | 可用（`reasoning` 条目、`encrypted_content` 往返） | 可用（`reasoning_content`） | 可用 | unit、SDK |
+| 强度控制 | 可用（`output_config.effort`） | 可用（通过目录层级的 `reasoning.effort`） | 可用（`reasoning_effort`） | 可用 | unit、launch |
+| 网页搜索，服务器端 | 可用 | 可用 | n/a（客户端工具） | 可用（Messages 与 Responses，流式与非流式） | E2E、SDK |
+| 网页抓取 | CLI 内客户端 | n/a | n/a | 可用（服务器端，有 SSRF 防护） | SDK |
+| MCP | 客户端，可用 | 客户端，可用 | n/a | 服务器端连接器可用 | E2E、SDK |
+| 图片（工具结果或输入） | 可用 | exec 中 n/a | n/a | 可用 | E2E |
+| 模型发现与选择器 | 可用 | 可用（目录） | n/a | 可用 | TUI 抓取、普查 |
+| 上下文窗口与自动压缩点 | 可用 | 可用（目录） | 可用（`limit.context`） | 可用 | E2E `/context`、launch |
+| 费用显示 | 显示零；每轮费用是 CLI 自己的算式 | n/a | n/a | n/a | TUI 抓取 |
+| 速率限制请求头 | n/a：没有 agent 需要它们；Yunshu 没有配额，也不凭空捏造 | n/a | n/a | n/a | 普查 |
+| `count_tokens` | 可用 | n/a | n/a | 可用 | 普查重放 |
+| 用量字段 | 可用（包括缓存读取与思考 token） | 可用 | 可用（`include_usage`） | 可用 | E2E 抓取 |
+| 请求途中引擎失败 | 可用：带引擎消息的 SSE `error` 事件 | 可用：`response.failed` | 可用：错误 chunk | 可用 | unit |
+| Websocket 传输 | n/a | 可用（`WS /v1/responses`） | n/a | n/a | E2E |
+| agent 界面中的实时引擎状态 | 可用：`yunshu launch claude` 会安装 `yunshu statusline`，除非你有自己的 | 不提供 | 不提供 | `x_yunshu` 字段、`: yunshu-progress` SSE 注释 | unit |
+| agent 流量上的前缀缓存复用 | 可用：每个请求的 `x_yunshu.cache` 与 `X-Yunshu-Cache-*` | 可用 | 可用 | 可用 | 基准日志中的缓存审计 |
+
+### 从真实客户端学到的请求形状规则
+
+这些是在真实 SDK 与客户端上失败过、已修复并由测试覆盖的行为：
+
+| 客户端行为 | Yunshu 的做法 |
+|---|---|
+| 聊天模板丢弃的显式 `cache_control` 标记 | 请求不带显式检查点照常处理，日志会指出该标记；标记只是提示，绝不造成失败 |
+| `"temperature": null`、`"max_tokens": null`、`"stream": null`（LangChain、LiteLLM、Vercel AI SDK、Zed） | 在所有生成路由上，显式的 null 视为未设置（`schemas/nulls.py`） |
+| `top_k: -1` | 负的 `top_k` 表示禁用 |
+| 省略 `max_tokens` | 缺省为 `YUNSHU_DEFAULT_MAX_TOKENS`（缺省 32768）；上下文预算仍会对它设限 |
+| 聊天的 `tool_choice: {"type": "allowed_tools"}` 与 Responses 的形式 | 两条路由都折叠为 `tools` 加上一个模式 |
+| Responses 的 `usage.input_tokens_details` | 包含 `cache_write_tokens`，如当前 `openai` 的 `Response` 类型所要求（真实写入量在 `x_yunshu` 中） |
+| 流开始后发生模板或引擎错误 | 在 Messages、聊天与 Responses 上发出 `error` 事件，绝不返回空的成功回复 |
+| 图片 `Read` 之后的 Claude Code 轮次 | 视觉路径会运行模型家族的消息适配器，因此每轮的 system 备注不会破坏 Qwen 的模板 |
+
+已知缺口（每一项都在 `tests/unit/test_spec_field_inventory.py` 中附理由列出）：聊天的 `functions` 与 `function_call`（已弃用）、聊天中的自定义工具、Responses 的 `prompt` 模板、没有 `user` 轮次的消息、省略 `input` 的 Responses。Yunshu 以 `data: [DONE]` 结束 Responses 流（真实 API 不会）；每个 SDK 与 Codex 都会在此停止。
+
+### 采样式推测解码
+
+采样请求（温度大于零，也就是编程 agent 发送的类型）通过 MTP lane 起草，并使用以位置为键的 Gumbel 采样（`keyed_sampling.py`）。噪声使用 23 个随机位（24 位在 float32 中会舍入为 1.0，产生无穷大的 Gumbel 值），而被过滤的 logits 会在加入噪声之后才屏蔽，因此被过滤的 token 永远不可能胜出。贪婪请求从未受影响。检查项目是：lane 与以键采样的串行抽样 token 完全相同、抽样符合过滤后的 softmax，以及 agent E2E 任务通过且输出干净。
+
+## 服务器端工具
+
+网页搜索、网页抓取与 MCP 连接器都在 Yunshu 内部运行，所以 Claude Code、Codex 与 SDK 看到的是原生的服务器工具块。用户指南是[网页搜索](/docs/guides/web-search)；已注册的设置与其缺省值如下：
+
+| 设置 | 缺省 | 效果 |
+|---|---|---|
+| `YUNSHU_WEB_SEARCH_PROVIDER` | `auto` | 搜索后端；`none` 禁用搜索 |
+| `YUNSHU_WEB_KEYLESS` | on | 允许免密钥的 DuckDuckGo 与 Wikipedia（尽力而为）；设为 `0` 可禁用免密钥后备 |
+| `YUNSHU_WEB_RESEARCH` | off | 可选启用的来源抓取、提取与本地排序；在成对质量评测完成前保持关闭 |
+| `YUNSHU_WEB_RESEARCH_MODEL` | unset | 指定一个已加载的本地嵌入模型；Yunshu 绝不自行加载，也不会退回使用生成模型 |
+| `YUNSHU_WEB_FETCH` | on | 提供服务器端 `web_fetch` 工具；私有、loopback 与 link-local 地址会被封锁 |
+| `YUNSHU_WEB_FETCH_MAX_BYTES`、`YUNSHU_WEB_FETCH_TIMEOUT` | 2000000, 20.0 | 每个页面的最大正文与等待时间 |
+| `YUNSHU_MCP_CONNECTOR` | on | 为 Anthropic `mcp_servers` 与 OpenAI Responses `{type: mcp}` 提供 MCP 连接器 |
+| `YUNSHU_SERVER_TOOL_MAX_ITERATIONS` | 8 | 每个请求的生成、运行与继续轮数 |
+
+<Callout type="warn">
+搜索查询会离开这台机器。模型生成的查询文本可能包含对话上下文，搜索提供方会看到该查询与你的 IP；来源页面会看到抓取的 URL。对话历史与客户端凭据不会被转发。抓取到的页面摘录是不受信任的数据，而过滤器不保证能抵抗提示词注入。
+</Callout>
+
+## 启动 agent
+
+`yunshu launch claude|codex|opencode` 会从 `/v1/models` 读取模型卡，并把 agent 否则会猜错的内容传给它；`--dry-run` 会打印这些内容。
+
+| Agent | 设置了什么 |
+|---|---|
+| Claude Code | `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、每个模型别名都指向所服务的模型、`CLAUDE_CODE_MAX_CONTEXT_TOKENS`（真实的窗口）、`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`、可选的 `CLAUDE_CODE_EFFORT_LEVEL`（`--effort`），以及运行 `yunshu statusline` 的 `--settings` 状态栏（若你已有自己的 `statusLine` 则跳过，以 `--no-statusline` 关闭）。只用环境变量与标志：不会写入 `~/.claude` |
+| Codex | `~/.codex/config.toml`（`model_provider`、`model_context_window`、`model_auto_compact_token_limit`，配置提供方时加上 `web_search = "live"`）与 `~/.codex/yunshu-models.json`（`model_catalog_json`） |
+| opencode | `opencode.json` 中的 `provider.yunshu`，含 `limit.context`、`limit.output`、`reasoning`、`tool_call`、`modalities` |
+
+## 旋钮
+
+| 设置或选项 | 缺省 | 效果 |
+|---|---|---|
+| `YUNSHU_DEFAULT_MAX_TOKENS` | 32768 | 请求省略 `max_tokens` 时的完成长度 |
+| `scripts/dev/agentcompat --stages` | `census,m3` | 运行哪些验证阶段 |
+| `scripts/dev/agentcompat --model` | `Qwen3.5-9B-MLX-4bit` | M3 阶段所服务的模型 |
+
+## 限制
+
+- Claude Code 的 `/model` 仍会列出它的内置行，且缺省行带有 `[1m]` 标签：两者都来自客户端自己的目录。它实际使用的窗口是真实的窗口（`/context`）。
+- 非流式 Responses 的 `web_search` SDK 检查与模型有关：小模型有时会不调用工具就直接回答。
+- Codex `/status` 需要先完成一个轮次，才会打印 token 用量。
+- Cline、Continue 与 Open WebUI 是配置指引，而非每个版本的端到端主张。
+
+## 如何验证
+
+文档会漂移，所以上述主张用一个命令、一个结论重新验证（只有在有正面证据时才以 0 退出，并写入 `docs/research/runs/<date>-agentcompat-<commit>/verdict.json`）：
+
+```bash
+scripts/dev/agentcompat                      # census,m3
+scripts/dev/agentcompat --stages install,census,m3
+```
+
+| 阶段 | 证明什么 |
+|---|---|
+| `install` | 在 `/Volumes/P5Plus/yunshu-build/agentic-clis-latest` 下安装最新的 Claude Code、Codex 与 opencode（绝不全局安装；使用带 `*_V=latest` 的 `install_agents.sh`） |
+| `census` | 用这些 CLI 对记录用模拟服务器跑脚本化会话；与固定版本的普查做差异比对（路径、查询键、请求头、beta 值、正文字段、工具与块类型）。每个新条目都必须写进本页 |
+| `m3` | 在 M3 笔记本上的两个有界 gpuq 任务（`m3_serve.py`、小型 Qwen3.5 模型，仅 loopback，位于 `ssh -L` 转发之后）。任务 1 重放每个普查会话的第一个与最后一个请求，加上 SDK 形状的合成请求（状态 2xx、SSE 事件顺序与字段、以官方 `anthropic` 与 `openai` 模型验证的正文）。任务 2 用最新的 CLI 运行脚本化的 agent 任务（编辑、bash、MCP、图片、`/context`）。通道中断或任务未干净结束都会使该次运行失败，并将该通道隔离，等人来检查 |
+
+`python/` 中的规范漂移由 `tests/unit/test_spec_field_inventory.py` 覆盖：已安装的 `openai` 与 `anthropic` SDK 请求类型的每个参数，要么是请求模型的字段，要么附理由列出，因此新的 SDK 版本新增字段时会让 CI 失败，而不是被默默丢弃。Agent 兼容性是 `scripts/dev/release_check` 的阻止检查之一；见[发版就绪](/docs/developers/release-readiness)。
+
+## 相关页面
+
+- [Agents](/docs/guides/agents)
+- [Agentic 编程基准](/docs/developers/agentic-bench)
+- [发版关卡](/docs/developers/release-gate)

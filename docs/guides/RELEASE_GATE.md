@@ -1,5 +1,7 @@
 # Release gate
 
+
+> Console docs: the maintained, translated version of this page is `/docs/developers/release-gate` (source `frontend/docs/developers/release-gate.mdx`). This file stays as the repository-side reference read by tooling.
 > The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/developers/release-gate.mdx`](../../frontend/docs/developers/release-gate.mdx)); this file is its GitHub-facing counterpart.
 
 A version ships only when `scripts/release/gate.sh` passes on the commit being released **and** the

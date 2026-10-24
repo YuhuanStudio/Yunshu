@@ -1,0 +1,153 @@
+---
+title: Connecting clients
+description: Point the OpenAI and Anthropic SDKs, curl, Open WebUI and coding agents at a local Yunshu server, and check that the server is healthy.
+---
+
+Yunshu speaks the OpenAI API under `/v1` and the Anthropic Messages API at `/v1/messages`. Anything that lets you set a base URL can use it.
+
+| | Value |
+|---|---|
+| OpenAI base URL | `http://127.0.0.1:8000/v1` |
+| Anthropic base URL | `http://127.0.0.1:8000` (the SDK appends `/v1/messages`) |
+| API key | any string, unless the server has a token or API keys (then that credential) |
+| Model name | single-model mode (`yunshu serve -m ...`): any name maps to the served model. Multi-model mode (`--models-dir`): use an id from `GET /v1/models` |
+
+With `--auth-token`, the key is accepted as `Authorization: Bearer <token>` (OpenAI clients) or `x-api-key: <token>` (Anthropic clients). See [Authentication and API keys](/docs/guides/auth-and-keys).
+
+<Callout type="warn">
+`yunshu serve` binds `127.0.0.1` by default. To reach it from another machine or from a Docker container, start it with `--host 0.0.0.0 --auth-token <secret>`. Serving on a non-loopback host without a token prints a warning.
+</Callout>
+
+## Call the server
+
+<Tabs items={["curl", "OpenAI Python", "OpenAI JavaScript", "Anthropic Python"]}>
+<Tab value="curl">
+
+```bash
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "local", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+</Tab>
+<Tab value="OpenAI Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="local")
+r = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Explain MLX in one sentence."}],
+    # Passed to chat templates that support it.
+    extra_body={"reasoning_effort": "medium"},
+)
+print(r.choices[0].message.content)
+```
+
+</Tab>
+<Tab value="OpenAI JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://127.0.0.1:8000/v1", apiKey: "local" });
+const r = await client.chat.completions.create({
+  model: "local",
+  messages: [{ role: "user", content: "Hello" }],
+});
+console.log(r.choices[0].message.content);
+```
+
+</Tab>
+<Tab value="Anthropic Python">
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(base_url="http://127.0.0.1:8000", api_key="local")
+msg = client.messages.create(
+    model="local",
+    max_tokens=512,
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(msg.content[-1].text)
+```
+
+</Tab>
+</Tabs>
+
+Streaming, tools, `response_format` (JSON schema), `stop`, `logprobs` and `seed` are supported; see [Chat Completions](/docs/api/chat-completions), [Responses](/docs/api/responses) and [Messages](/docs/api/messages). Thinking output of reasoning models streams separately from the answer, in `delta.reasoning_content`.
+
+## Coding agents
+
+<Tabs items={["Claude Code", "Codex, OpenCode, Pi", "Cline and Roo Code", "Continue"]}>
+<Tab value="Claude Code">
+
+Claude Code uses the Anthropic API:
+
+```bash
+ANTHROPIC_BASE_URL=http://127.0.0.1:8000 ANTHROPIC_AUTH_TOKEN=local ANTHROPIC_MODEL=local claude
+```
+
+</Tab>
+<Tab value="Codex, OpenCode, Pi">
+
+`yunshu launch <tool>` writes the tool's configuration so it points at the running server. `yunshu launch list` shows which tools are installed.
+
+</Tab>
+<Tab value="Cline and Roo Code">
+
+Choose the provider "OpenAI Compatible", base URL `http://127.0.0.1:8000/v1`, any key, model `local`.
+
+</Tab>
+<Tab value="Continue">
+
+Add a model entry with `provider: openai`, `apiBase: http://127.0.0.1:8000/v1` and `model: local`.
+
+</Tab>
+</Tabs>
+
+`yunshu launch claude` also sets the model's real context window and adds `yunshu statusline` (prefill progress, decode speed, last cache hit) to Claude Code's status line unless you have your own. Server-side `web_search` and `web_fetch`, the MCP connector and what each agent supports are in [Agents](/docs/guides/agents) and [Server tools](/docs/api/server-tools).
+
+Agents send long, repeated prompts. The prefix cache reuses the shared part, so after the first turn only the new tokens are prefilled ([Prompt caching](/docs/guides/prompt-caching)).
+
+## Open WebUI
+
+<Steps>
+<Step>
+
+Start Yunshu so the container can reach it: `yunshu serve -m <model> --host 0.0.0.0 --auth-token <secret>`. This is needed only when Open WebUI runs in Docker.
+
+</Step>
+<Step>
+
+In Open WebUI open Settings, then Connections, then OpenAI API.
+
+</Step>
+<Step>
+
+Set the URL to `http://host.docker.internal:8000/v1` (Docker) or `http://127.0.0.1:8000/v1` (native), and the key to your secret.
+
+</Step>
+</Steps>
+
+Yunmo, a separate consumer project, has an OpenAI-compatible `llm_adapter`: set its `base_url` to `http://127.0.0.1:8000/v1`.
+
+## Check the server
+
+| Endpoint | Auth | Use |
+|---|---|---|
+| `GET /health` | none | liveness and whether a model is loaded |
+| `GET /health/ready` | none | 200 while running with a loaded model or registered on-demand models and with active GPU memory below 95% of unified memory; otherwise 503 |
+| `GET /version` | none | installed Yunshu version |
+| `GET /v1/models` | token if set | served models |
+| `GET /metrics` | token if set | Prometheus metrics |
+
+`yunshu status` prints the same from the command line.
+
+## Related
+
+- [Transports](/docs/guides/transports) for WebSocket and Unix socket access.
+- [Web search](/docs/guides/web-search) and the [Tavily-compatible API](/docs/guides/tavily).
+- [Decisions](/docs/api/decisions), [Evals](/docs/api/evals) and [Stored completions](/docs/api/stored-completions) (`store=True` with the regular OpenAI SDK).

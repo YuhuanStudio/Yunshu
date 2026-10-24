@@ -1,5 +1,7 @@
 # Authentication, API keys, settings and CORS
 
+
+> Console docs: the maintained, translated version of this page is `/docs/guides/auth-and-keys` (source `frontend/docs/guides/auth-and-keys.mdx`). This file stays as the repository-side reference read by tooling.
 Yunshu is a single-node, single-operator server. Access control has three layers, all local.
 
 ## Static token

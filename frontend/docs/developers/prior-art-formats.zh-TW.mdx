@@ -1,0 +1,40 @@
+---
+title: 檢索與既有格式
+description: Yunshu 載入哪些已發布的 embedding、reranker 與分類器 checkpoint 格式、各自使用哪個 loader，以及如何對照上游實作檢查這些 loader。
+---
+
+對於檢索模型，Yunshu 直接載入實際發布的格式，而不要求私有轉換。撰寫 loader 之前，會先尋找既有的 MLX 移植、checkpoint 格式或執行環境，並載入該格式。本頁列出涵蓋的範圍、刻意不支援的項目，以及一致性檢查的做法。這是維護者參考；端點請見 [Embeddings](/docs/api/embeddings) 與 [Rerank](/docs/api/rerank)，衍生檔案的來源請見[上游追蹤](/docs/developers/upstream-tracking)。
+
+## 它做什麼
+
+| 系列 | Loader | 備註 |
+|---|---|---|
+| EmbeddingGemma 2（bf16、affine 4-bit 與其他已發布的量化） | `python/yunshu_engine/embedding_gemma2_loader.py` 的 `load_published_model`：已安裝 `mlx_vlm.models.embedding_gemma2` 時使用維護中的 `mlx_vlm.embedding_loader.load_embedding_model`（strict）；否則使用衍生 loader | 衍生的後備方案使用依 Hugging Face `embedding_gemma2` 架構撰寫、vendored 的 MIT 文字塔，以及 mlx-vlm 的 Gemma 4 視覺與音訊塔。量化模組依 checkpoint 的 scale 建構；視覺與音訊塔可保留浮點權重；打包的整數張量絕不轉成浮點。未量化的 checkpoint 沿用原本的浮點 loader。來源記錄在 `vendor.json` |
+| BERT、RoBERTa、XLM-RoBERTa 編碼器與序列分類器 | mlx-vlm 維護中的 encoder loader 搭配 `SequenceClassificationModel` | 涵蓋使用裸 backbone 名稱的已發布 BGE 轉換、單標籤與多標籤 head，以及帶浮點或量化 head 的量化編碼層。缺少 backbone 或 head 張量會是載入錯誤 |
+| Qwen3 yes/no reranker | 在 mlx-lm 量化 loader 上使用官方的 instruction、prefix 與 suffix 配方 | 與轉換後 checkpoint 自帶的 `query` 與 `document` 角色模板一致 |
+| Qwen3-VL 檢索 | 已安裝的 `mlx-embeddings` `model.process` API | 沒有任何 GPL 原始碼被複製進 Yunshu |
+
+空的 embedding 輸入會回傳空清單，加入預設 instruction 時不會修改呼叫端的輸入字典。
+
+## 為什麼
+
+使用者會直接帶來 Hugging Face 上發布的 checkpoint。若 loader 悄悄換成不同的 head 或模板，會回傳看似合理但錯誤的向量與分數，因此每種格式要不就和上游一樣正確載入，要不就以可據以處理的錯誤失敗。
+
+## 保證
+
+- checkpoint 缺少 head 或 backbone 時是載入錯誤，絕不悄悄替換。
+- `JinaForRanking`（Jina v3）是另一種架構，仍不支援：它訓練好的排序 head 不能用 Qwen 的 yes/no logits 取代。
+- Qwen3 reranker 的模板很重要：已發布的 0.6B 4-bit chat 模板預期 `query` 與 `document` 角色。若服務改傳 `user`，該模板會丟掉 query 與 document，使不同的配對產生相同的 token id 與 logits。Yunshu 使用與轉換後角色模板相符的官方配方。
+
+## 限制
+
+- 2026-10-08 的 Hugging Face 盤點顯示，Google EmbeddingGemma 2 與所檢查的每個 mlx-community 轉換版本都只有單一 `model.safetensors`，因此這些已發布快照不會觸發多分片載入的缺陷。重新打包或私有的多分片 checkpoint 可能會遇到。這是有日期的盤點，不是對未來上傳的承諾。
+- 與 `mflux` 的擴散模型比較是稽核，不是服務路徑。經檢視的 `mflux` 對應會丟掉沒有 `mflux` safetensors metadata 的 affine 4-bit diffusers checkpoint 的 scale 與 bias，所以探測先解碼權重，並把結果標示為含格式橋接的浮點參考。它不是原生量化載入，也不改變任何服務預設。
+
+## 如何驗證
+
+- CPU 單元測試：`tests/unit/test_prior_art_check.py`、`tests/unit/test_priorfix_capabilities.py`、`tests/unit/test_priorfix_probes.py` 與 `tests/unit/test_priorfix_mflux_reference.py`。
+- `scripts/dev/yv ab --base <sha> --cand <sha> --suite embedding --label <name>` 會載入 bf16、4-bit，以及重新打包成兩個分片的真實 bf16 checkpoint，在 Mac 上比較 Yunshu 的封裝與直接呼叫上游模型的結果，並對 bf16 向量套用 0.99985 的 fp32 cosine 下限。量化精度另外回報。
+- `--suite priorart` 執行有界的檢索、Omni 預處理輸入與固定種子的擴散比較；`--env PRIORART_KINDS=capabilities` 在一次 GPU 准入內，以獨立的子行程執行 Gemma 各格式、檢索、分類器、擴散稽核與 Omni 預處理，每個項目保留一份證據檔與回傳碼，並拒絕缺漏、過期或裝置錯誤的證據。`PRIORART_KINDS=diffusion-timing` 以 256 px、2 步、種子 7 執行三組交錯配對，並連同確切的工作負載回報中位數。
+
+這些是針對特定模態的稽核，不納入一般 LLM 套件。擴散比較的時間不決定效能或預設。以上全都使用 GPU 佇列；見[驗證](/docs/developers/verification)。

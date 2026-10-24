@@ -1,0 +1,97 @@
+---
+title: Host telemetry and energy
+description: Enable the local Apple Silicon power, GPU and temperature sampler, read it from the API, the CLI and Prometheus, and understand what the per-request energy estimates mean.
+---
+
+`YUNSHU_TELEMETRY=on` enables a local background sampler (1 Hz by default). It needs no root, never imports MLX, and makes native calls only on its own `yunshu-host-telemetry` thread, outside the inference executor. No samples leave the machine.
+
+## Turn it on
+
+<Steps>
+<Step>
+
+Set `YUNSHU_TELEMETRY=on` (and optionally `YUNSHU_TELEMETRY_INTERVAL_S`) in the environment or the config file.
+
+</Step>
+<Step>
+
+Restart the server. Both settings need a restart.
+
+</Step>
+<Step>
+
+Read the sampler with `GET /v1/yunshu/host`, `yunshu top`, or `/metrics`.
+
+</Step>
+</Steps>
+
+| Setting | Default | Effect |
+|---|---|---|
+| `YUNSHU_TELEMETRY` | `off` | `on` starts the sampler; restart required |
+| `YUNSHU_TELEMETRY_INTERVAL_S` | `1.0` | sampling interval in seconds, minimum 0.1; restart required |
+
+<Callout type="info">
+It is off by default. A 27B A/B (1K and 32K contexts, 5 repetitions) showed identical decode speed within noise, but a small, consistent follow-up TTFT cost at 1K prose (+1.8%, about 11 ms) and a borderline -0.4% decode at 32K code, so it is opt-in.
+</Callout>
+
+The implementation derives its IOReport and HID access from [pierre427/mlx2](https://github.com/pierre427/mlx2) (Apache-2.0) and its macOS 27 counter catalog from [vladkens/macmon](https://github.com/vladkens/macmon) (MIT). Notices are in `THIRD_PARTY_NOTICES.md` and `vendor.json`.
+
+## Host API and CLI
+
+`GET /v1/yunshu/host` uses the console permission (`can_manage_models`). It keeps the existing `thermal`, `power`, `memory` and `memory_pressure` fields (15-second cache) and adds `telemetry` with its own 1 Hz cache:
+
+```json
+{
+  "telemetry": {
+    "state": "ok",
+    "sampled_at": 1791400000.0,
+    "interval_s": 1.0,
+    "watts": {"cpu": 5.0, "gpu": 30.0, "ane": 0.0, "dram": 2.0, "package": 37.0},
+    "gpu": {"frequency_mhz": 900.0, "active_ratio": 0.75},
+    "temperature": {"state": "ok", "die_max_c": 70.0, "die_mean_c": 65.0, "battery_c": null},
+    "reasons": {}
+  }
+}
+```
+
+- Power is interval energy divided by elapsed seconds. Package watts is the sum of the reported CPU, GPU, ANE and DRAM channels, not wall-plug power.
+- GPU MHz is weighted by active DVFS residency. The active ratio includes idle residency in its denominator.
+- Missing counters are `null` with a reason, never invented zeroes. Unavailable, disabled or stale telemetry returns `state: unknown` with `reason`. Partial power coverage returns `state: partial`; temperature can independently be unknown.
+
+`yunshu top` watches these cached fields using the configured API key. `yunshu top --once` prints one table and `yunshu --json top` emits one JSON snapshot. Unknown values stay visible. The CLI does not sample hardware itself.
+
+## Request energy estimates
+
+`x_yunshu.energy` and `/v1/yunshu/requests/recent` expose the schema `yunshu.energy.v1`. The gateway fills it off the MLX thread. Each `prefill` and `decode` object reports `joules`, `joules_per_token`, `gpu_watts_mean`, `coverage_ratio` and `extrapolated_s`.
+
+- Prefill uses uncached prompt tokens; decode uses generated tokens. The prefill-end timestamp, or the first token when that is unavailable, separates the phases. Queue time is excluded.
+- The method `host_window_gpu_plus_dram` integrates sampled GPU and DRAM power, clipping intervals at phase boundaries. The unfinished tail uses the latest power for at most two sampling intervals. Short phases are estimates at sampler resolution.
+- Missing coverage, stale readings and absent phase clocks return `null` joules with a reason. CPU and ANE are reported separately and excluded from request energy.
+- History is bounded to 7,200 intervals; older requests can lose coverage.
+
+<Callout type="warn">
+These are host energy windows that include background activity and idle power. Concurrent requests have overlapping windows and are not metered independently, so summing receipts can count the same host energy more than once. Use serial benchmark cells for efficiency comparisons. Cancellation reports only observed engine timing, not a forecast.
+</Callout>
+
+## Prometheus
+
+The authenticated `/metrics` scrape adds:
+
+- `yunshu_gpu_watts`, `yunshu_package_watts`
+- `yunshu_gpu_frequency_mhz`, `yunshu_gpu_active_ratio`
+- `yunshu_die_temperature_celsius` (maximum die temperature)
+- `yunshu_request_energy_joules_total{phase="prefill|decode"}` (session sum of the estimates)
+
+Unknown gauges are omitted. The request counter is updated once at request completion, never on scrapes, and has the overlapping-window caveat above.
+
+## macOS 27 power counters
+
+On macOS 27 the Energy Model CPU and ANE counters can freeze without Apple's entitlement. Yunshu uses macmon's driver-qualified CLPC scalar IOReport catalog for macOS 27 (qualified upstream on 27.0 and 27.0.1) and prefers valid CLPC CPU, GPU and ANE deltas over legacy values. Unknown driver or OS catalogs are never guessed. When no valid qualified delta exists, CPU and ANE values on macOS 27 and later are unknown with a reason, while other valid domains stay available, so a frozen zero is never reported as measured power. No root, Apple entitlement, SMC access or MLX calls are needed.
+
+Die temperature prefers HID `tdie` sensors and falls back to `pACC`, `eACC` and `GPU MTR Temp Sensor` names when no `tdie` values exist, without mixing sensor families.
+
+## Limits and how to verify
+
+- Energy is a host-window estimate, not a per-process meter (see the warning above).
+- For sampler overhead, compare an explicit `off` baseline with an explicit `on` candidate on pinned commits, with at least three interleaved repetitions at 1K and 32K. A speed verdict alone does not prove the sensors worked; check the real-run host evidence too.
+- Benchmark tooling (`tfbench`, `yv`) keeps the full receipt plus decode `joules_per_token` and `gpu_watts_mean`; `yv` reports per-arm medians under `efficiency` but they do not decide speed acceptance. The gate is described in [Verification](/docs/developers/verification).

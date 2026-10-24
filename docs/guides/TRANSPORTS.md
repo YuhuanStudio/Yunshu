@@ -1,5 +1,7 @@
 # Transports beyond SSE
 
+
+> Console docs: the maintained, translated version of this page is `/docs/guides/transports` (source `frontend/docs/guides/transports.mdx`). This file stays as the repository-side reference read by tooling.
 Yunshu serves the same app over several transports. Every one dispatches into the same handlers,
 so auth, middleware, request ids, prefix cache and cancellation behave identically.
 
