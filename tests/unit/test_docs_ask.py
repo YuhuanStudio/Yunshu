@@ -476,3 +476,16 @@ def test_docs_uses_same_origin_path_policy_as_proxy(tmp_path):
         "/v1/models",
         "/v1/chat/completions",
     ]
+
+
+def test_long_setting_table_keeps_the_questioned_row_inside_context():
+    body = Ask(**{**BODY, "question": "What is YUNSHU_DOCS_ASK_MAX_TOKENS?"})
+    text = (
+        "unrelated model setting " * 2000
+        + "\n| YUNSHU_DOCS_ASK_MAX_TOKENS | 1024 | answer limit |\n"
+        + "later rows " * 1000
+    )
+    messages, sources = budget_prompt(body, [chunk(text=text)], 4096, 1024)
+    assert "| YUNSHU_DOCS_ASK_MAX_TOKENS | 1024 |" in messages[0]["content"]
+    assert sum(len(m["content"].encode()) + 32 for m in messages) + 1024 + 400 < 4096
+    assert len(sources) == 1

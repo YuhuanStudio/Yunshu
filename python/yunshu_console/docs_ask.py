@@ -127,6 +127,30 @@ def failure(code: str, status: int = 503) -> HTTPException:
     return HTTPException(status, {"code": code, "command": START_COMMAND})
 
 
+def excerpt_for(text: str, query: str, room: int) -> str:
+    """Keep a matching setting/table row when a heading chunk exceeds context."""
+    encoded = text.encode()
+    if len(encoded) <= room:
+        return text
+    lower = text.lower()
+    position = 0
+    for term in sorted(tokens(query), key=len, reverse=True):
+        if len(term) < (3 if term.isascii() else 2):
+            continue
+        found = lower.find(term)
+        if found >= 0:
+            position = len(text[:found].encode())
+            break
+    # Keep a little preceding context and account for both ellipses. Byte
+    # slicing respects the same conservative UTF-8 budget as the prompt.
+    size = max(0, room - 8)
+    start = max(0, position - size // 4)
+    result = encoded[start : start + size].decode("utf-8", errors="ignore")
+    return (
+        ("… " if start else "") + result + (" …" if start + size < len(encoded) else "")
+    )
+
+
 def budget_prompt(
     body: Ask, chunks: list[dict], context: int, output: int
 ) -> tuple[list[dict], list[dict]]:
@@ -170,7 +194,7 @@ def budget_prompt(
         room = min(
             room, max(512, remaining // max(1, min(4, len(chunks) - len(sources))))
         )
-        excerpt = chunk["text"].encode()[:room].decode("utf-8", errors="ignore")
+        excerpt = excerpt_for(chunk["text"], retrieval_query(body), room)
         system += prefix + excerpt + "\n"
         remaining -= len((prefix + excerpt + "\n").encode())
         sources.append(
