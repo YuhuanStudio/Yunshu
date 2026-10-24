@@ -374,11 +374,9 @@ async def get_request(request_id: str, request: Request) -> dict:
             detail=f"Request '{request_id}' not found or already completed",
         )
     row = progress_payload(info)
-    row["model"] = getattr(info.gen, "model", None) or info.model
+    row["model"] = served_model(getattr(info.gen, "model", None) or info.model)
     row["path"] = info.path
     row["stream"] = info.stream
-    if info.gen is not None:
-        row["model"] = info.gen.model
     return {"object": "yunshu.request", **row}
 
 

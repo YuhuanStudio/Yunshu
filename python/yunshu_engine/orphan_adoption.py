@@ -120,6 +120,19 @@ def _unstable(obj: Any) -> Any:
     raise _UnkeyableError(type(obj).__name__)
 
 
+class _LinkedEvent(threading.Event):
+    """The engine-side cancel event. The runner attaches the live ``RunStats`` to it when the
+    request is admitted; the first consumer's own event gets the same object at that moment, so
+    the console sees queued -> prefill -> decode from the start and not only from the first token."""
+
+    mirror: Any = None
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if name == "run_stats" and self.mirror is not None:
+            self.mirror.run_stats = value
+
+
 class Generation:
     """One engine generation: a pump task fills ``buffer``; consumers read by index."""
 
@@ -380,7 +393,8 @@ async def run(
                     if parts.get(k) != other.parts.get(k)
                 )
                 logger.info("orphan not adopted: request differs in %s", diff)
-        real_cancel = threading.Event()
+        real_cancel = _LinkedEvent()
+        real_cancel.mirror = caller_cancel
         for attr in ("scheduling_priority", "client_request_id"):
             if hasattr(caller_cancel, attr):
                 setattr(real_cancel, attr, getattr(caller_cancel, attr))
@@ -415,6 +429,8 @@ async def run(
             if caller_cancel.is_set():
                 return
     finally:
+        if getattr(gen.real_cancel, "mirror", None) is caller_cancel:
+            gen.real_cancel.mirror = None
         gen.delivered = max(gen.delivered, index)
         if clean:
             reg._drop(gen, cancel=False)

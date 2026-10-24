@@ -746,3 +746,37 @@ def test_equal_cold_prompts_are_served_in_arrival_order_without_ping_pong(atoms)
     first_b = order.index(b.uid)
     assert all(u == a.uid for u in order[:first_b])
     assert first_b == 5  # ceil(10000 / 2048): A is prefilled completely first
+
+
+def test_concurrent_newcomer_reports_prefill_while_its_atoms_run(atoms):
+    """The console's phase comes from RunStats.phase: a request that arrives while another one
+    decodes is `queued` only until its first atom is picked, `prefill` (with progress) through
+    its atoms, and `decode` after its first token - never queued straight to decode."""
+    r, clock = atoms
+    a = job(0)
+    a.max_tokens = 2000
+    r._submit(a)
+    for _ in range(400):
+        r._drive_slice(False)
+        if a.stats.generated >= 60:
+            break
+    b = job(0)
+    b.ids = list(range(10000))
+    r._submit(b)
+    seen = []
+    done_seen = []
+    for _ in range(3000):
+        r._drive_slice(False)
+        ph = b.stats.phase
+        if not seen or seen[-1] != ph:
+            seen.append(ph)
+        if ph == "prefill":
+            done_seen.append((b.stats.prefill_done, b.stats.prefill_total))
+        if b.stats.t_first:
+            break
+    assert seen[0] in ("queued", "prefill")
+    assert "prefill" in seen, seen
+    assert seen[-1] == "decode"
+    assert seen.index("prefill") < seen.index("decode")
+    # progress is reported (not stuck at 0 / unknown) while the atoms run
+    assert max(d for d, _ in done_seen) > 0

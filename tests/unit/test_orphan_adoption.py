@@ -283,3 +283,37 @@ def test_deliberate_break_without_disconnect_cancels_at_once():
         assert eng.cancels[0].is_set() and reg.snapshot() == [] and c1.is_set()
 
     _run(main())
+
+
+def test_run_stats_reach_the_request_before_its_first_token():
+    """The console reads the request's phase from RunStats on its cancel event. The runner attaches
+    them at admission; they must be visible while the request is still prefilling, not only once
+    the first token has been yielded (queued straight to decode, prefill never shown)."""
+
+    class Slow:
+        async def gen(self, real_cancel):
+            real_cancel.run_stats = object()  # the runner admits the request
+            await asyncio.sleep(0.6)  # ...and prefills for a while
+            yield RequestOutput(
+                request_id="r",
+                new_text="a",
+                completion_tokens=1,
+                finished=True,
+                finish_reason="stop",
+            )
+
+        def start(self, real_cancel):
+            return self.gen(real_cancel)
+
+    async def main():
+        eng = Slow()
+        caller = threading.Event()
+        reg = oa.OrphanRegistry()
+        it = oa.run("k", eng.start, caller, 5.0, 2, reg)
+        task = asyncio.ensure_future(_take(it, 1))
+        await asyncio.sleep(0.3)
+        assert not task.done()
+        assert getattr(caller, "run_stats", None) is not None
+        await task
+
+    _run(main())
