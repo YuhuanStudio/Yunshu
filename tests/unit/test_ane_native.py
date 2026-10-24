@@ -46,6 +46,7 @@ def test_mlp_scaling_and_shape(mode):
     )
     text, blob = mil.mlp_program(g, u, d, 128, mode, h_exp=6)
     assert "func main<ios18>" in text and "tensor_buffer_to_tensor<ios17>" in text
+    assert "tanh(x = gh)" in text and "sigmoid(x = g)" not in text
     assert "strides = tensor<int64, [4]>([8192, 8192, 128, 1])" in text
     if mode == "fp16":
         offsets = []

@@ -114,8 +114,12 @@ def mlp_program(gate, up, down, rows: int, mode: str = "fp16", h_exp: int = 6):
             rows,
             f"matmul(transpose_x = bool(false), transpose_y = bool(false), x = {w}, y = xt)",
         )
-    emit("sig", channels, rows, "sigmoid(x = g)")
-    emit("silu", channels, rows, "mul(x = g, y = sig)")
+    # Splash measured ANE sigmoid error at small gate values. Its tanh form
+    # silu(g) = (g/2) * (1+tanh(g/2)) avoids that approximation problem.
+    emit("gh", channels, rows, "mul(x = g, y = fp16(0.5))")
+    emit("th", channels, rows, "tanh(x = gh)")
+    emit("tp", channels, rows, "add(x = th, y = fp16(1))")
+    emit("silu", channels, rows, "mul(x = gh, y = tp)")
     emit("h", channels, rows, "mul(x = silu, y = u)")
     emit(
         "yt",

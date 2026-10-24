@@ -43,6 +43,18 @@ def main():
             (gate / (1 + np.exp(-gate))) * (u.astype(np.float32) @ x.astype(np.float32))
         )
         rel = float(np.linalg.norm(y.astype(np.float32) - ref) / np.linalg.norm(ref))
+        print(
+            json.dumps(
+                {
+                    "kind": "oracle",
+                    "mode": a.mode,
+                    "ms": ms,
+                    "rel_l2": rel,
+                    "finite": bool(np.isfinite(y).all()),
+                }
+            ),
+            flush=True,
+        )
         assert np.isfinite(y).all() and rel < 0.05, rel
         print(
             json.dumps({"available": True, "ms": ms, "rel_l2": rel, "complete": True}),
