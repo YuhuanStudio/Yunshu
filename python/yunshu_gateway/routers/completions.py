@@ -333,12 +333,6 @@ class CompletionRequest(BaseModel):
                 raise ValueError(f"best_of ({self.best_of}) must be >= n ({self.n})")
             if self.stream:
                 raise ValueError("best_of is not supported when stream is True")
-        # n > 1 with streaming is not supported
-        if self.stream and self.n > 1:
-            raise ValueError(
-                "n > 1 is not supported when stream is True. "
-                "Use non-streaming mode for multiple choices."
-            )
         # validate logit_bias values (chat.py + responses.py do this;
         # completions was missing it). A NaN/Inf bias makes softmax all-NaN → garbage output
         # instead of a clean 422. Excludes bool (subclass of int).

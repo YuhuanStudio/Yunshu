@@ -43,7 +43,7 @@ Yunshu 在 `POST /v1/responses` 提供 OpenAI Responses API，以及周邊路由
 | `conversation` | string 或 object | 否 | 對話 id（或 `{"id": ...}`）。對話項目會加在 `input` 前面，回應結束時這一回合會附加到對話中。不可與 `previous_response_id` 同時使用（`400`）。 | 支援 |
 | `context_management` | array | 否 | `[{"type": "compaction", "compact_threshold": N}]`：輸入超過 N 個 token 時先壓縮。 | 支援 |
 | `store` | boolean | 否 | 預設 `true`，與官方 API 相同。已儲存的回應可以取回、刪除、取消、串接與列出。 | 支援 |
-| `background` | boolean | 否 | 立即回傳 `queued` 回應，並在背景產生。`stream` 為 `true` 時會被忽略（照常串流）。不能與 `web_search` 或 `mcp` 工具並用（`400`）。 | 支援 |
+| `background` | boolean | 否 | 在背景產生。未設 `stream` 時立即回傳 `queued` 回應；`stream: true` 時事件即時串流並被保留，連線中斷後可用 `GET /v1/responses/{id}?stream=true&starting_after=N` 接續。可與 `web_search`、`mcp` 工具並用。 | 支援 |
 | `truncation` | `auto` 或 `disabled` | 否 | `auto`：提示超過上下文視窗時丟棄最舊的非系統訊息，並在 `x_yunshu.context_policy` 回報移除了什麼。`disabled`（預設）則回傳 `400`。 | 支援 |
 | `generate` | boolean | 否 | `false` 只把提示前綴預先填入快取，回傳回應 id 但不產生輸出（Codex 使用的 WebSocket 預熱）。 | 支援 |
 | `metadata` | object | 否 | 最多 16 組；會在回應中原樣帶回。 | 支援 |
@@ -92,7 +92,7 @@ Yunshu 在 `POST /v1/responses` 提供 OpenAI Responses API，以及周邊路由
 | `mcp` | 伺服器連線到你指定的 MCP 伺服器。見[伺服器端工具](/docs/api/server-tools)。 | 部分支援 |
 | `file_search`、`code_interpreter`、`image_generation` 等託管工具 | 無法使用。 | 尚未支援 |
 
-用戶端工具（`custom`、`local_shell`、`tool_search`、`computer`）不能與 `web_search` 或 `mcp` 在同一個請求中並用（`400`）。
+用戶端工具（`custom`、`local_shell`、`tool_search`、`computer`）可以與 `web_search`、`mcp` 在同一個請求中並用：伺服器在迴圈內執行自己的工具，用戶端工具呼叫則交還給你，並像一般用戶端工具呼叫一樣結束該回應。
 
 #### computer 工具
 
@@ -208,9 +208,14 @@ job = client.responses.create(model="local", input="Write a long story.", backgr
 print(job.status)  # queued
 done = client.responses.retrieve(job.id)       # 輪詢，直到狀態不再是 queued / in_progress
 client.responses.cancel(job.id)                # 或取消
+
+# 背景 + 串流：讀取事件，並可從任一 sequence number 重新連線
+stream = client.responses.create(model="local", input="Write a long story.", background=True, stream=True)
+for ev in client.responses.retrieve(job_id, stream=True, starting_after=12):
+    ...
 ```
 
-回應仍在 `queued` 時送來的取消，會在開始產生之前就被處理。背景回應不會串流；背景產生失敗時，儲存的狀態會變成 `failed`，`error.code` 為 `internal_error`。
+回應仍在 `queued` 時送來的取消，會在開始產生之前就被處理。背景產生失敗時，儲存的狀態會變成 `failed`，`error.code` 為 `internal_error`。
 
 ## 回應
 
@@ -395,14 +400,14 @@ with client.responses.connect() as conn:
 | `POST /v1/responses`，串流與非串流 | <Support status="supported">支援</Support> |
 | 取回、刪除、取消、輸入項目、輸入 token、壓縮 | <Support status="supported">支援</Support> |
 | `previous_response_id` 串接、`store` | <Support status="supported">支援（存於記憶體，重新啟動後消失）</Support> |
-| 背景模式 | <Support status="partial">部分支援（背景回應不串流）</Support> |
+| 背景模式 | <Support status="supported">支援，可搭配 `stream` 與伺服器端工具</Support> |
 | Conversations API | <Support status="supported">支援（持久化）</Support> |
 | `text.format` json_schema 與 json_object | <Support status="supported">支援</Support> |
 | function、namespace、custom、local_shell、用戶端 tool_search | <Support status="supported">支援</Support> |
 | `computer` 工具 | <Support status="partial">由用戶端執行；伺服器從不執行動作</Support> |
 | `web_search`、`mcp` | <Support status="supported">支援，由伺服器執行</Support> |
 | `reasoning.summary` 產生、託管式 `tool_search`、`file_search`、`code_interpreter`、`image_generation` | <Support status="unsupported">尚未支援</Support> |
-| 恢復背景串流 | <Support status="unsupported">尚未支援</Support> |
+| 恢復背景串流（`starting_after`） | <Support status="supported">支援（事件保存在記憶體，重新啟動後消失）</Support> |
 | WebSocket 模式 | <Support status="supported">支援</Support> |
 
 ## 相關頁面

@@ -101,11 +101,9 @@ class TestCompletionsEdgeCases:
         req = CompletionRequest(model="test", prompt="hello", max_tokens=1)
         assert req.max_tokens == 1
 
-    def test_n_gt_1_with_streaming_rejected(self):
-        """n > 1 with streaming should return validation error."""
-        with pytest.raises(
-            ValidationError, match="n > 1 is not supported when stream is True"
-        ):
+    def test_n_gt_1_with_streaming_accepted(self):
+        """n > 1 with streaming is valid (OpenAI streams choices by index)."""
+        if True:
             CompletionRequest(
                 model="test",
                 prompt="hello",

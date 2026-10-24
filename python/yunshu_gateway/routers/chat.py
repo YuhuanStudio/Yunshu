@@ -647,12 +647,6 @@ class ChatCompletionRequest(BaseModel):
                 )
         if self.prompt_logprobs is not None and self.prompt_logprobs < 0:
             raise ValueError("prompt_logprobs: must be >= 0")
-        # n > 1 with streaming is not supported (OpenAI returns error for this)
-        if self.stream and self.n > 1:
-            raise ValueError(
-                "n > 1 is not supported when stream is True. "
-                "Use non-streaming mode for multiple choices."
-            )
         return self
 
     def effective_max_tokens(self) -> int:
@@ -2684,13 +2678,8 @@ async def _handle_vlm_chat(
     messages, native_tools = _vlm_tool_plan(req, vlm_engine, messages)
 
     if req.stream:
-        if req.n > 1:
-            raise HTTPException(
-                status_code=400,
-                detail="VLM streaming does not support n > 1. Use non-streaming mode for multiple choices.",
-            )
         return ClosingStreamingResponse(
-            _stream_vlm_response(
+            (_stream_vlm_response_multi if req.n > 1 else _stream_vlm_response)(
                 vlm_engine,
                 messages,
                 req,
@@ -2982,6 +2971,135 @@ async def _handle_vlm_chat(
 
 
 @with_continuous_usage
+async def _stream_vlm_response_multi(
+    vlm_engine,
+    messages: list[dict],
+    req: ChatCompletionRequest,
+    completion_id: str,
+    request: Request,
+    json_schema: dict | str | None = None,
+    native_tools: list[dict] | None = None,
+) -> AsyncIterator[bytes]:
+    """n>1 streaming on the VLM path: the n choices generate concurrently (the batch runner
+    batches them) and their chunks interleave, each carrying its `index`. Every choice is a
+    single-choice stream with its own derived seed (the non-stream path's seeds); usage is the
+    prompt once plus the completions summed, in one final chunk."""
+    import asyncio
+
+    include_usage = req.stream_options is not None and req.stream_options.include_usage
+    queue: asyncio.Queue = asyncio.Queue()
+    usages: dict[int, dict] = {}
+    cancel_evt = None
+    tracker = None
+    try:
+        from yunshu_engine.request_tracker import get_request_tracker
+
+        tracker = get_request_tracker()
+        cancel_evt = tracker.register(completion_id, req.model).cancel_event
+    except Exception:
+        tracker = None
+
+    async def pump(i: int) -> None:
+        sub = req.model_copy(
+            update={
+                "n": 1,
+                "seed": _per_choice_seed(req.seed, i),
+                "stream_options": StreamOptions(include_usage=True),
+            }
+        )
+        inner = _stream_vlm_response(
+            vlm_engine,
+            messages,
+            sub,
+            f"{completion_id}-{i}",
+            request,
+            json_schema=json_schema,
+            native_tools=native_tools,
+        )
+        try:
+            async for frame in inner:
+                await queue.put((i, frame))
+        except Exception as exc:  # surfaced to the client below
+            await queue.put((i, exc))
+        finally:
+            with contextlib.suppress(Exception):
+                if aclose := getattr(inner, "aclose", None):
+                    await aclose()
+            await queue.put((i, None))
+
+    tasks = [asyncio.create_task(pump(i)) for i in range(req.n)]
+    live = req.n
+    try:
+        while live:
+            if cancel_evt is not None and cancel_evt.is_set():
+                break
+            try:
+                i, frame = await asyncio.wait_for(queue.get(), timeout=0.5)
+            except TimeoutError:
+                continue
+            if frame is None:
+                live -= 1
+                continue
+            if isinstance(frame, Exception):
+                yield server_error_sse(
+                    str(frame)
+                    if isinstance(frame, EngineStreamError)
+                    else "Internal server error"
+                )
+                break
+            text = frame.decode("utf-8", "replace")
+            if text.startswith(":"):
+                if i == 0:
+                    yield frame
+                continue
+            body = text[5:].strip() if text.startswith("data:") else ""
+            if body == "[DONE]":
+                continue
+            try:
+                chunk = json.loads(body)
+            except ValueError:
+                yield frame
+                continue
+            if isinstance(chunk, dict) and "choices" in chunk:
+                if not chunk["choices"]:  # the per-choice usage chunk
+                    usages[i] = chunk.get("usage") or {}
+                    continue
+                chunk["id"] = completion_id
+                chunk.pop("usage", None)
+                for choice in chunk["choices"]:
+                    choice["index"] = i
+                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
+            else:
+                yield frame
+        if include_usage and usages:
+            yield format_openai_usage_chunk(
+                completion_id=completion_id,
+                model=req.model,
+                prompt_tokens=max(u.get("prompt_tokens", 0) for u in usages.values()),
+                completion_tokens=sum(
+                    u.get("completion_tokens", 0) for u in usages.values()
+                ),
+                reasoning_tokens=sum(
+                    (u.get("completion_tokens_details") or {}).get(
+                        "reasoning_tokens", 0
+                    )
+                    for u in usages.values()
+                ),
+                cached_tokens=max(
+                    (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+                    for u in usages.values()
+                ),
+            ).encode()
+        yield format_openai_done().encode()
+    finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        if tracker is not None:
+            with contextlib.suppress(Exception):
+                tracker.unregister(completion_id)
+
+
 async def _stream_vlm_response(
     vlm_engine,
     messages: list[dict],
@@ -3506,8 +3624,8 @@ async def _stream_response_multi(
     """n>1 streaming: generate each choice sequentially, emit with correct index.
 
     On single-GPU systems parallel generation would serialize anyway, so we
-    run choices one after another and interleave their SSE events.
-    Each choice gets its own streaming loop with its `index` set correctly.
+    run choices one after another, every chunk tagged with its choice `index`
+    (OpenAI allows any order). Each choice gets its own streaming loop with its `index` set correctly.
 
     When tools are provided, each choice gets its own ToolCallStreamer for
     independent per-choice tool call extraction and correct finish_reason.

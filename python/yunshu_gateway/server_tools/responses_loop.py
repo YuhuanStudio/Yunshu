@@ -468,13 +468,25 @@ def annotations_for(text: str, sources: list[SearchResult]) -> list[dict]:
     return out
 
 
+# Output items that hand a call to the client (it runs the tool and answers in the next request).
+_CLIENT_CALL_ITEMS = (
+    "function_call",
+    "custom_tool_call",
+    "local_shell_call",
+    "computer_call",
+    "tool_search_call",
+)
+
+
 class _Run:
     """Mutable state of one outward response."""
 
-    def __init__(self, req, setup: _Setup):
+    def __init__(self, req, setup: _Setup, request=None):
         self.req = req
         self.setup = setup
-        self.id = f"resp-{uuid.uuid4().hex[:24]}"
+        # A background response allocated its id (and told the client) before this ran.
+        forced = getattr(getattr(request, "state", None), "_forced_response_id", None)
+        self.id = forced or f"resp-{uuid.uuid4().hex[:24]}"
         self.created_at = int(time.time())
         self.seq = -1
         self.output: list[dict] = []
@@ -851,7 +863,7 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
                             }
                             continue
                         omap[i] = run.add_item(it)
-                        if it.get("type") == "function_call":
+                        if it.get("type") in _CLIENT_CALL_ITEMS:
                             client_call = True
                     if i is not None and i in swallowed:
                         sw = swallowed[i]
@@ -1190,18 +1202,10 @@ def _persist(req, request, run: _Run):
 
 async def create_with_server_tools_responses(req, request, inner: Inner):
     """Entry point from the Responses handler; returns a Response."""
-    if req.background:
-        return _err(
-            400,
-            "background mode is not supported together with server-side tools "
-            "(web_search / mcp); send the request without background.",
-            "unsupported_parameter",
-            "background",
-        )
     setup = await _setup(req)
     if isinstance(setup, JSONResponse):
         return setup
-    run = _Run(req, setup)
+    run = _Run(req, setup, request)
     gen = run_stream(req, request, inner, setup, run)
     if req.stream:
         return StreamingResponse(

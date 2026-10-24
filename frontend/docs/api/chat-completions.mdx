@@ -26,7 +26,7 @@ Unknown top-level fields are ignored, so a client can keep sending OpenAI fields
 | `stream_options` | object | no | Only valid with `stream: true`. `include_usage` adds a final usage chunk. `continuous_usage_stats` (a vLLM extension) puts a running `usage` on every chunk. | supported |
 | `max_tokens` | integer | no | Completion limit, `0` to `1048576`. Default is the `YUNSHU_DEFAULT_MAX_TOKENS` setting (32768). The context budget still clamps it; see `x_yunshu.budget`. | supported |
 | `max_completion_tokens` | integer | no | OpenAI's newer name. Wins over `max_tokens` when both are set. | supported |
-| `n` | integer | no | Number of choices, `1` to `128`. Not allowed with `stream: true`. | supported |
+| `n` | integer | no | Number of choices, `1` to `128`. With `stream: true` every chunk carries its choice `index`; the choices stream one after another (one request at a time on the text path; concurrently on vision-language models) and `seed` derives a per-choice seed (`seed + index`) exactly as without streaming. Usage in the final chunk is the prompt once plus all completions. | supported |
 | `stop` | string or array | no | Up to 16 stop sequences. Empty strings are dropped. | supported |
 | `user` | string | no | Logged with the request id. No other effect. | accepted and ignored |
 | `store` | boolean | no | Keep the finished completion for retrieval. See [Stored completions](/docs/api/stored-completions). | supported |
@@ -378,7 +378,7 @@ Chunks have `object: "chat.completion.chunk"`. Between chunks the server may sen
 | Image input | <Support status="supported">vision-language models</Support> |
 | Audio and video input parts | <Support status="partial">models that accept them</Support> |
 | Streaming, `stream_options.include_usage` | <Support status="supported">supported</Support> |
-| `n` greater than 1 | <Support status="partial">non-streaming only</Support> |
+| `n` greater than 1 | <Support status="supported">streaming and non-streaming, chunks carry `index`</Support> |
 | Function tools, `tool_choice`, `parallel_tool_calls` | <Support status="supported">supported</Support> |
 | `response_format` `json_object` and `json_schema` | <Support status="supported">constrained decoding</Support> |
 | `logprobs`, `top_logprobs` | <Support status="supported">up to 20 alternatives</Support> |
@@ -400,7 +400,7 @@ Chunks have `object: "chat.completion.chunk"`. Between chunks the server may sen
 | `echo` | boolean | Prepend the prompt to the returned text. With `logprobs` the prompt tokens get logprobs too (single string prompt). | supported |
 | `logprobs` | integer | `0` to `5`. The response uses the legacy `tokens`, `token_logprobs`, `top_logprobs`, `text_offset` arrays. | supported |
 | `best_of` | integer | Generates this many candidates per prompt and returns the `n` with the best average logprob. Must be at least `n`; not with streaming or several prompts. All candidates are billed in `usage`. | supported |
-| `n` | integer | `1` to `128`. Not allowed with `stream: true`. | supported |
+| `n` | integer | `1` to `128`. With `stream: true` the chunks carry `choices[].index`, as on the chat route. | supported |
 | `suffix` | string | Accepted. There is no fill-in-the-middle template, so it is not used and never appended to the text. | accepted and ignored |
 | `stop`, `seed`, `temperature`, `top_p`, `top_k`, `min_p`, penalties, `logit_bias`, `stream_options` | | As on the chat route. | supported |
 

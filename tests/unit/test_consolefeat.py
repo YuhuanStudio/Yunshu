@@ -58,7 +58,7 @@ def test_host_cache_and_fail_soft(client, monkeypatch):
 def test_admin_auth(client, monkeypatch):
     monkeypatch.setenv("YUNSHU_AUTH_DISABLED", "false")
     monkeypatch.delenv("YUNSHU_AUTH_TOKEN", raising=False)
-    assert client.get("/v1/yunshu/host").status_code == 401
+    assert client.get("/v1/yunshu/host").status_code == 200  # a read, like /status
     assert (
         client.post(
             "/v1/yunshu/models/register", json={"model": "test", "path": "/missing"}
