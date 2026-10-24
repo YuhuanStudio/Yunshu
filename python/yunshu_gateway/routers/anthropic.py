@@ -36,6 +36,12 @@ from yunshu_engine.tool_arguments import coerce_tool_calls
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
 from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
+from ..anthropic_context_edit import (
+    ContextEditError,
+    apply_edits,
+    estimate_tokens,
+)
+from ..anthropic_context_edit import validate as validate_edits
 from ..engine import get_engine
 from ..error_envelope import EngineStreamError
 from ..streaming import (
@@ -1182,6 +1188,71 @@ def _apply_clear_at(req: AnthropicMessagesRequest) -> None:
         req.messages = keep
 
 
+async def _apply_context_management(req: AnthropicMessagesRequest) -> list[dict] | None:
+    """Run the request's context edits over its messages; None when none were asked for."""
+    if not (req.context_management or {}).get("edits"):
+        return None
+    validate_edits(req.context_management)
+    count = estimate_tokens
+    try:
+        engine, _ = await _resolve_engine(req.model)
+        tok = getattr(engine, "_tokenizer", None)
+        if tok is not None:
+            count = lambda text: len(tok.encode(text))  # noqa: E731
+    except Exception:  # the estimate is enough; the generation path reports a bad model
+        logger.debug("context edit: no tokenizer, estimating", exc_info=True)
+    msgs, applied = apply_edits(
+        [{"role": m.role, "content": m.content} for m in req.messages],
+        req.context_management,
+        count,
+    )
+    if applied:
+        for m, new in zip(req.messages, msgs, strict=True):
+            m.content = new["content"]
+    return applied
+
+
+def _report_context_management(result, applied: list[dict]):
+    """`context_management.applied_edits` on the message (non-stream) or its message_delta."""
+    body = {"applied_edits": applied}
+    if isinstance(result, StreamingResponse):
+        inner = result.body_iterator
+
+        async def tagged():
+            pending = b""
+            async for chunk in inner:
+                pending += chunk.encode() if isinstance(chunk, str) else bytes(chunk)
+                while b"\n\n" in pending:
+                    raw, pending = pending.split(b"\n\n", 1)
+                    if b"event: message_delta" in raw:
+                        data = [
+                            ln[5:].strip()
+                            for ln in raw.splitlines()
+                            if ln.startswith(b"data:")
+                        ]
+                        try:
+                            ev = json.loads(b"\n".join(data))
+                            ev["context_management"] = body
+                            raw = (
+                                "event: message_delta\ndata: "
+                                + json.dumps(ev, ensure_ascii=False)
+                            ).encode()
+                        except ValueError:
+                            pass
+                    yield raw + b"\n\n"
+            if pending:
+                yield pending
+
+        result.body_iterator = tagged()
+    elif isinstance(result, JSONResponse) and result.status_code == 200:
+        data = json.loads(bytes(result.body))
+        if isinstance(data, dict) and data.get("type") == "message":
+            data["context_management"] = body
+            result.body = json.dumps(data, ensure_ascii=False).encode()
+            result.headers["content-length"] = str(len(result.body))
+    return result
+
+
 def _version_error(req: AnthropicMessagesRequest, request: Request):
     """400 for the 2026-10-21 rules (document in assistant, citations in user) or None."""
     from ..anthropic_version import is_strict, validate_messages
@@ -1206,12 +1277,24 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     if (bad := _version_error(req, request)) is not None:
         return bad
     _apply_clear_at(req)
+    try:
+        applied_edits = await _apply_context_management(req)
+    except ContextEditError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": str(exc)},
+            },
+        )
     temp_files: list[str] = []
     try:
         result = await _create_message(req, request, temp_files)
     except BaseException:
         _unlink_staged(temp_files)
         raise
+    if applied_edits is not None:
+        result = _report_context_management(result, applied_edits)
     # A stream reads its files until it ends (an SSE error frame included); every other
     # return (early error, finished non-stream) is done with them here.
     if isinstance(result, StreamingResponse):
@@ -3335,6 +3418,16 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request):
     if (bad := _version_error(req, request)) is not None:
         return bad
     _apply_clear_at(req)
+    try:
+        _cm_applied = await _apply_context_management(req)
+    except ContextEditError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": str(exc)},
+            },
+        )
     from ..anthropic_client_tools import fill_client_tool_schemas
     from ..anthropic_documents import has_documents, prepare_documents
     from ..files_store import has_file_refs, resolve_file_refs
@@ -3572,7 +3665,17 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request):
         # Anthropic's count_tokens response is just `{"input_tokens": N}` —
         # do not add a `type` discriminator (clients that strictly validate
         # against Anthropic's schema reject unknown keys).
-        return {"input_tokens": len(tokens) + _img_tokens}
+        counted = len(tokens) + _img_tokens
+        if _cm_applied is None:
+            return {"input_tokens": counted}
+        # The count is of the edited context; the original is what the edits removed, added back.
+        return {
+            "input_tokens": counted,
+            "context_management": {
+                "original_input_tokens": counted
+                + sum(e["cleared_input_tokens"] for e in _cm_applied)
+            },
+        }
     finally:
         # _convert_anthropic_messages writes each base64 image to a NamedTemporaryFile
         # (delete=False); count_tokens never sends them to an engine, so unlink them

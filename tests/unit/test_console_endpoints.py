@@ -557,3 +557,22 @@ def test_prefill_progress_waits_for_the_cache_hit_instead_of_jumping():
     assert p["cached_tokens"] == 8_000
     assert p["percent"] == 25.0
     assert p["processed_tokens"] == 8_500
+
+
+@pytest.mark.asyncio
+async def test_host_read_open_without_token_like_other_console_reads():
+    """No token configured: /v1/yunshu/host is a read like status/memory (loopback console), not 401."""
+    settings.set_override("YUNSHU_AUTH_DISABLED", "false")
+    settings.set_override("YUNSHU_AUTH_TOKEN", "")
+    async with _client() as c:
+        assert (await c.get("/v1/yunshu/host")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_host_read_follows_the_token_when_set():
+    settings.set_override("YUNSHU_AUTH_DISABLED", "false")
+    settings.set_override("YUNSHU_AUTH_TOKEN", "tok")
+    async with _client() as c:
+        assert (await c.get("/v1/yunshu/host")).status_code == 401
+        h = {"Authorization": "Bearer tok"}
+        assert (await c.get("/v1/yunshu/host", headers=h)).status_code == 200

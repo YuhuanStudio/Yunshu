@@ -487,7 +487,9 @@ async def host(request: Request) -> dict:
 
     from ..host_state import snapshot
 
-    _check_permission(request, "can_manage_models")
+    # A read like status/memory/config: open on the loopback console with no token configured,
+    # token-gated once one is set (it used to 401 every poll for a token-less console).
+    _check_permission(request, "can_infer")
     return await asyncio.to_thread(snapshot)
 
 

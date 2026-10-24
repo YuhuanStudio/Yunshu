@@ -47,7 +47,7 @@ Yunshu 在 `POST /v1/messages`（也可用 `POST /messages`）提供 Anthropic M
 | `stream` | boolean | 否 | Server-Sent Events。 | 支援 |
 | `metadata` | object | 否 | 接受。 | 接受但忽略 |
 | `service_tier`、`container` | string、object | 否 | 接受，讓 SDK 的請求能通過驗證。 | 接受但忽略 |
-| `context_management` | object | 否 | 接受（Claude Code 會送出）。不會進行任何上下文編輯。 | 接受但忽略 |
+| `context_management` | object | 否 | 上下文編輯：`{"edits": [...]}`，支援 `clear_tool_uses_20250919`（`trigger` 以輸入 token 或工具使用次數觸發，另有 `keep`、`clear_at_least`、`exclude_tools`、`clear_tool_inputs`）與 `clear_thinking_20251015`（`keep`，只能是第一個 edit）。被清除的工具結果會變成 `[cleared]`。回應帶有 `context_management.applied_edits`（串流時在 `message_delta`）；`count_tokens` 回傳 `context_management.original_input_tokens`。`compact_20260112` 會被接受但不套用；未知的 edit 類型回應 `400`。 | 支援 |
 
 ### 思考
 
@@ -319,7 +319,8 @@ print(n.input_tokens)
 | 文件與引用 | <Support status="supported">支援</Support> |
 | 伺服器端工具：網路搜尋、網頁擷取、MCP 連接器 | <Support status="supported">支援</Support> |
 | `cache_control` | <Support status="partial">提示與計算；快取本身是自動的</Support> |
-| `metadata`、`service_tier`、`container`、`context_management` | <Support status="partial">接受但忽略</Support> |
+| `metadata`、`service_tier`、`container` | <Support status="partial">接受但忽略</Support> |
+| `context_management`（`clear_tool_uses`、`clear_thinking`） | <Support status="supported">已套用並回報 `applied_edits`</Support> |
 | 程式碼執行、託管的記憶工具、`search_result` 區塊、簽名或 redacted thinking | <Support status="unsupported">尚未支援</Support> |
 
 ## 相關頁面
