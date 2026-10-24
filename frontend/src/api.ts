@@ -705,6 +705,8 @@ export interface EngineList {
   selected: string | null;
   pinned: string | null;
   waiting: boolean;
+  /** Set while a measurement pause file is active: the console sends nothing to any engine. */
+  pause?: { reason: string; until: number | null } | null;
   data: DiscoveredEngine[];
 }
 

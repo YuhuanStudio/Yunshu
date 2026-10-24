@@ -341,6 +341,8 @@ const settingdesc = {
   YUNSHU_CONSOLE_DISCOVER_PORTS:
     "--engine auto 時主控台探測 Yunshu 引擎的 127.0.0.1 連接埠（逗號與範圍；只有 /health 回應符合 Yunshu 才算）。",
   YUNSHU_CONSOLE_DISCOVER_S: "--engine auto 時主控台探測引擎的間隔秒數。",
+  YUNSHU_CONSOLE_PAUSE_FILE:
+    "暫停檔路徑（JSON：pause/until/reason）。檔案存在且未過期時，主控台不向任何引擎送出請求，避免干擾計時量測。",
   YUNSHU_CONSOLE_POLL_S:
     "主控台程序讀取引擎的間隔（秒）；1 秒對應 1 秒的歷史解析度。",
   YUNSHU_CONSOLE_HISTORY:

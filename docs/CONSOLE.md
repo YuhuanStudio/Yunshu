@@ -318,3 +318,13 @@ on entry. Cancellation is excluded from the error rate. Missing footprint or a c
 process/model resets the slope baseline. Cache growth can trigger this operational warning;
 it is a reason to inspect the memory ledger, not a leak diagnosis. Keep the console running
 for day-to-day history; longer release soaks run separately before a tagged release.
+
+## Pausing for a measurement
+
+A monitor that polls only one arm of an A/B perturbs the measurement. Set `YUNSHU_CONSOLE_PAUSE_FILE` to a
+path; while that file exists and holds `{"pause": true, "until": <epoch or null>, "reason": "..."}` the
+console sends no request to any engine: no status polling and no discovery probes. The proxy still forwards
+requests you make yourself, and the status island shows "Paused for a measurement: <reason>". The file stops
+counting after `until` (or two hours after its last write when `until` is null) and the console resumes by
+itself when it is removed. `gpuq` writes `$GPUQ_DIR/console-pause.json` while a `--quiet` job or a job whose
+label contains `-speed` runs, and removes it afterwards.

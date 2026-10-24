@@ -91,7 +91,9 @@ class Discovery:
         client: httpx.AsyncClient | None = None,
         on_change: Callable[[str | None, str], None] | None = None,
         clock=time.time,
+        pause=None,
     ) -> None:
+        self.pause = pause
         self.candidates = [c.rstrip("/") for c in candidates]
         self.interval_s = interval_s
         self.token = token
@@ -240,7 +242,8 @@ class Discovery:
         while True:
             started = time.perf_counter()
             try:
-                await self.scan()
+                if self.pause is None or not self.pause.paused:
+                    await self.scan()
             except asyncio.CancelledError:
                 raise
             except Exception:

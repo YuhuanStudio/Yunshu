@@ -37,6 +37,8 @@ tested memory guidance for 128 GB and tight hosts. Outputs of speculation on and
 - New setting `YUNSHU_PREFILL_ATTENTION` (`tile` default, `stock`); `YUNSHU_PREFILL_MATMUL` and
   `YUNSHU_PREFILL_GDN` descriptions follow the split-invariant path.
 - Tight hosts: `YUNSHU_VLM_APC_MEMORY_GB=4` and `YUNSHU_PREFILL_BUFFER_CACHE_GB=1`; 128 GB hosts keep the defaults.
+- New setting `YUNSHU_CONSOLE_PAUSE_FILE`: the console sends no request to any engine while the file says so; gpuq
+  writes it for timing jobs, so an A/B is not perturbed by a one-sided monitor.
 - Dependencies were synced (28 upgrades, nothing pinned).
 
 ### Performance

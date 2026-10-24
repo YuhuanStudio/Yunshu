@@ -363,6 +363,8 @@ const settingdesc = {
     "Ports on 127.0.0.1 the console probes for Yunshu engines with --engine auto (comma list and ranges; only a /health that answers like Yunshu counts).",
   YUNSHU_CONSOLE_DISCOVER_S:
     "Seconds between the console's engine discovery probes with --engine auto.",
+  YUNSHU_CONSOLE_PAUSE_FILE:
+    "Path of a JSON pause file (pause, until, reason). While it exists and is not stale the console sends no request to any engine (no polling, no discovery probes), so a timing A/B is not perturbed. gpuq writes it for timing jobs.",
   YUNSHU_CONSOLE_POLL_S:
     "Seconds between the console process's reads of the engine; 1 s gives the 1 s history resolution.",
   YUNSHU_CONSOLE_HISTORY:

@@ -173,6 +173,7 @@ const shell: Shape<typeof zh> = {
   "island.trigger": "打开状态面板",
   "island.overview": "总览",
   "island.version": "yunshu {version} · 已运行 {uptime}",
+  "pause.notice": "因测量暂停：{reason}",
   "engines.title": "引擎",
   "engines.waiting":
     "当前没有引擎在运行。控制台会持续监视，引擎一启动就自动连上。",
