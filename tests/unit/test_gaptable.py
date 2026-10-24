@@ -251,3 +251,43 @@ def test_competitor_research_knobs_are_not_inherited():
         },
         {"KAPITSA_HOME": "/private"},
     ) == {"PATH": "/bin", "KAPITSA_HOME": "/private"}
+
+
+def test_cell_has_no_idle_hold_and_cleans_its_private_tmp(monkeypatch, tmp_path):
+    import os
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}")
+    out = tmp_path / "results"
+    seen = []
+
+    def main():
+        args = tb.parse_args(sys.argv[1:])
+        seen.append(args.idle_s)
+        scratch = Path(os.environ["TMPDIR"])
+        assert scratch == out / "scratch/tmp"
+        (scratch / "cache").write_text("temporary")
+        Path(args.out).write_text(
+            '{"part":"decode","phase":"cold","cached":0}\n{"part":"part_done","complete":true}\n'
+        )
+
+    monkeypatch.setattr(gt, "configure", lambda *a: None)
+    monkeypatch.setitem(sys.modules, "tfbench", SimpleNamespace(D="draft", main=main))
+    monkeypatch.setattr(sys, "argv", ["fixture"])
+    gt.run(
+        SimpleNamespace(
+            src=str(ROOT),
+            out=str(out),
+            manifest=str(manifest),
+            smoke=False,
+            part="decode",
+            ctx=1024,
+            kind="code",
+            engine="tf-native",
+            rep=0,
+            dry_run=False,
+        )
+    )
+    assert seen == [0]
+    assert not (out / "scratch").exists()
+    assert len(list(out.glob("*.jsonl"))) == 1

@@ -15,7 +15,8 @@ The full plan includes code and prose at 1K, 32K and 128K, cold decode/TTFT, 32K
 follow-up TTFT, eight concurrent independent 1K prompts (aggregate end-to-end tokens/s,
 per-request decode tokens/s and TTFT), and a separate Splash `--disable-ane` arm.
 Repetition order rotates between engines. Decode uses 512 output tokens; concurrency
-uses 256 per request. Early stop remains an error. Aggregate throughput includes prefill
+uses 256 per request. Idle-memory sampling has zero settle delay; this table does not
+measure memory after an idle interval. Early stop remains an error. Aggregate throughput includes prefill
 and queueing; per-request decode throughput starts at its own first token.
 
 TensorFold must receive `--parallel 1` for single-request cells. Its automatic eight

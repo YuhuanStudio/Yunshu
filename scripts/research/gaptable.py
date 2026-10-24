@@ -139,6 +139,8 @@ def run(a):
             dest.stem,
             "--ctx-tokens",
             str(ctx + 4096),
+            "--idle-s",
+            "0",
             "--parallel",
             "8" if part == "conc" else "1",
             "--env",
