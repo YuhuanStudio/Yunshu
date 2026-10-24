@@ -44,6 +44,11 @@ def main():
     p.add_argument("--reply-tokens", type=int, nargs="+", default=[256, 512, 2048])
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--temperature", type=float, default=0)
+    p.add_argument("--top-p", type=float, default=1)
+    p.add_argument("--top-k", type=int, default=0)
+    p.add_argument("--seed", type=int, default=17)
+    p.add_argument("--apc-dir", default="/Volumes/Micron/yunshu-apc/splitinv-rehearsal")
     # A logprobs request takes the stock-serial arithmetic and its own APC namespace
     # (vlm_batch_runner._serial_rows), so it never reads the invariant checkpoints a
     # rehearsal writes: rehearsal == plain is a raw-token-ID gate. --logprobs asks for
@@ -59,12 +64,16 @@ def main():
         return
     import tfbench as t
 
+    sampling = dict(
+        temperature=a.temperature, top_p=a.top_p, top_k=a.top_k, seed=a.seed
+    )
+
     prompt = t.decode_prompt(a.kind, a.ctx, True)
     env = {
         "YUNSHU_VLM_APC_DISK": "0",
         "YUNSHU_VLM_DRAFT": t.D,
         "YUNSHU_NEXT_TURN_DELAY_S": "0",
-        "YUNSHU_VLM_APC_DISK_DIR": "/Volumes/Micron/yunshu-apc/splitinv-rehearsal",
+        "YUNSHU_VLM_APC_DISK_DIR": a.apc_dir,
     }
     a.out.parent.mkdir(parents=True, exist_ok=True)
     capture = a.out.with_suffix(".raw-ids.jsonl")
@@ -73,13 +82,18 @@ def main():
 
     def ask_plain(server, messages):
         body = t.req(server.model, "", 32)
+        body.update(sampling)
         body["messages"] = messages
         body["logprobs"] = a.logprobs
+        capture_start = len(capture.read_text().splitlines()) if capture.exists() else 0
         result = t.send(server.url, body)
         deadline = time.monotonic() + 3
         while True:
             rows = (
-                [json.loads(line) for line in capture.read_text().splitlines()]
+                [
+                    json.loads(line)
+                    for line in capture.read_text().splitlines()[capture_start:]
+                ]
                 if capture.exists()
                 else []
             )
@@ -121,6 +135,7 @@ def main():
                     + f"\nResponse budget: {tokens} tokens. Arrival case: {arrival}.",
                     tokens,
                 )
+                body.update(sampling)
                 before = metrics(t, server)
                 first = t.send(server.url, body)
                 check_reply_len(first, tokens, f"splitinv reply {tokens}")

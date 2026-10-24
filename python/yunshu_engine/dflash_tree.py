@@ -92,7 +92,14 @@ def top_k_ids(logits: mx.array, k: int, chunk: int = TOP_K_CHUNK) -> mx.array:
 
 
 def compute_lattice_gpu(
-    drafter, anchor: int, hidden: mx.array, cache, positions: int
+    drafter,
+    anchor: int,
+    hidden: mx.array,
+    cache,
+    positions: int,
+    *,
+    keyed=None,
+    committed=0,
 ) -> GpuLattice:
     """``compute_lattice`` without the host round trip (nothing is evaluated)."""
     inputs = mx.array(
@@ -130,10 +137,20 @@ def compute_lattice_gpu(
         dh = drafter._hidden(inputs, hidden, cache)[:, 1:]
     if prof:
         t0 = tv._tick("drafter_layers_ms", dh, t0)
-    return lattice_from_hidden(drafter, dh, mx.array([int(anchor)]), prof=prof, t0=t0)
+    return lattice_from_hidden(
+        drafter,
+        dh,
+        mx.array([int(anchor)]),
+        prof=prof,
+        t0=t0,
+        keyed=keyed,
+        committed=committed,
+    )
 
 
-def lattice_from_hidden(drafter, dh, anchor, *, prof=False, t0=0.0) -> GpuLattice:
+def lattice_from_hidden(
+    drafter, dh, anchor, *, prof=False, t0=0.0, keyed=None, committed=0
+) -> GpuLattice:
     """The lattice from the proposal rows' hidden states ``dh`` [1, D, H]; ``anchor`` is the
     round's bonus token as a [1] array (it may still be on the GPU)."""
     from . import tree_verify as tv
@@ -142,7 +159,9 @@ def lattice_from_hidden(drafter, dh, anchor, *, prof=False, t0=0.0) -> GpuLattic
     vocab = getattr(drafter, "_draft_vocab", None)
     subset = (
         vocab.logits_subset(dh)
-        if vocab is not None and drafter.config.final_logit_softcapping is None
+        if keyed is None
+        and vocab is not None
+        and drafter.config.final_logit_softcapping is None
         else None
     )
     if subset is not None:
@@ -154,6 +173,16 @@ def lattice_from_hidden(drafter, dh, anchor, *, prof=False, t0=0.0) -> GpuLattic
         unary = mx.take_along_axis(logits, part, axis=-1).astype(mx.float32)
     else:
         logits = drafter._logits(dh)
+        if keyed is not None:
+            from .constrained_spec import normalize_rows
+            from .keyed_sampling import coupled_scores
+
+            # Perturb the complete vocabulary before selecting candidates. A token
+            # omitted by a greedy shortlist can be the keyed winner.
+            positions = mx.arange(int(dh.shape[1])) + committed
+            logits = (TAU * coupled_scores(normalize_rows(logits), keyed, positions))[
+                None
+            ]
         if prof:
             t0 = tv._tick("drafter_head_ms", logits, t0)
         cands = top_k_ids(logits[0], sel.top_k)
@@ -164,6 +193,10 @@ def lattice_from_hidden(drafter, dh, anchor, *, prof=False, t0=0.0) -> GpuLattic
     succ = sel.successor_codebook(cands).astype(mx.float32)  # [D, K, R]
     pred = sel.predecessor_codebook(cands).astype(mx.float32)
     anchor_row = sel.predecessor_codebook(anchor.reshape(1))[0].astype(mx.float32)
+    if keyed is not None:
+        # Candidate ranking must remain the coupled distribution's ranking. Pairwise
+        # calibration was trained for greedy proposals, not Gumbel-perturbed scores.
+        hproj = mx.zeros_like(hproj)
     if prof:
         tv._tick("drafter_selector_ms", (unary, hproj, succ, pred, anchor_row), t0)
     return GpuLattice(cands, unary, hproj, succ, pred, anchor_row)
@@ -498,11 +531,16 @@ def dflash_tree_rounds(
 ):
     """Drop-in for upstream ``_dflash_rounds`` (single row): tree drafts."""
     from . import mtp_lane
+    from .constrained_spec import current_request
+    from .keyed_sampling import KeyedSampler, tree_supported, tree_target_rows
     from .spec_metrics import record as _record_speculative_round
+
+    keyed = sampler if isinstance(sampler, KeyedSampler) else None
+    request = current_request()
 
     lm = model.language_model if hasattr(model, "language_model") else model
     if (
-        not greedy_sampling
+        not tree_supported(sampler, greedy_sampling)
         or mtp_lane._STATE["guide"] is not None
         or callable(getattr(draft_model, "prepare_target_hidden", None))
         or not supported(model, draft_model)
@@ -532,7 +570,15 @@ def dflash_tree_rounds(
         started = time.perf_counter()
         n = budget.choose(max_tokens - emitted)
         if n:
-            lat = compute_lattice_gpu(draft_model, b, hidden, draft_cache, POSITIONS)
+            lat = compute_lattice_gpu(
+                draft_model,
+                b,
+                hidden,
+                draft_cache,
+                POSITIONS,
+                keyed=keyed,
+                committed=emitted,
+            )
             toks, parents = search_tree(lat, n)
             window = mx.concatenate(
                 [mx.array([b], dtype=mx.int32), toks.astype(mx.int32)]
@@ -542,7 +588,16 @@ def dflash_tree_rounds(
         else:
             window, parents, shape = mx.array([[b]], dtype=mx.int32), None, root_shape
         res = tv.tree_forward(lm, window, shape, prompt_cache, target_ids)
-        target = lm.speculative_argmax_from_hidden(res.hidden)
+        if keyed is not None or (request is not None and request.logprobs):
+            target, probs = tree_target_rows(
+                lm.speculative_logits_from_hidden(res.hidden),
+                shape,
+                emitted,
+                keyed,
+                request,
+            )
+        else:
+            target = lm.speculative_argmax_from_hidden(res.hidden)
         try:
             if parents is None:
                 mx.async_eval(target, window)
@@ -557,6 +612,11 @@ def dflash_tree_rounds(
             raise
         path = walk(tokens, wparents, row_tokens)
         new_tokens = [tokens[r] for r in path[1:]] + [row_tokens[path[-1]]]
+        if request is not None and request.logprobs:
+            request.record(
+                probs[mx.array(path, dtype=mx.int32)],
+                new_tokens[: max_tokens - emitted],
+            )
         if n:
             _record_speculative_round(draft_model, len(path) - 1, n, parents=wparents)
         tv.tree_commit(lm, prompt_cache, res, path)

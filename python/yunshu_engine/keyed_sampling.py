@@ -136,6 +136,45 @@ def supports(params: Any) -> bool:
     return not getattr(params, "xtc_probability", 0.0)
 
 
+def tree_supported(sampler: Any, greedy: bool) -> bool:
+    """Trees can verify greedy rows or explicitly position-keyed draws only."""
+    if isinstance(sampler, KeyedSampler):
+        return supports(sampler.params) and sampler.params.temperature > 0
+    return bool(greedy)
+
+
+def tree_target_rows(logits, shape, committed: int, sampler, request=None):
+    """Draw after every tree node, using depth rather than storage row order.
+
+    The pending root token has already been emitted: its distribution predicts token
+    ``committed``. Siblings at a depth share the same noise. This function also handles
+    copy windows, represented as chains. It never advances the sampler's serial cursor.
+    Return unfiltered target logprobs for accepted-token reporting.
+    """
+    from .constrained_spec import normalize_rows
+
+    if request is not None and request.logprobs:
+        logits = logits.astype(mx.float32)
+    probs = normalize_rows(logits)
+    target = (
+        sampler.sample_positions(probs, shape.depth_array() + committed)
+        if sampler is not None
+        else mx.argmax(probs, axis=-1)
+    )
+    return target, probs
+
+
+def coupled_scores(logprobs, sampler, positions):
+    """Proposal scores sharing the target draw's noise; no sampler cursor mutation.
+
+    Filtering precedes perturbation, exactly as in sample_rows. Ranking these scores
+    gives distinct sibling candidates, with the serial keyed draw ranked first.
+    """
+    row = filter_logprobs(logprobs.astype(mx.float32), sampler.params)
+    noise = gumbel(sampler.seed, positions, row.shape[-1])
+    return mx.where(row == -mx.inf, -mx.inf, row + noise)
+
+
 class KeyedSampler:
     """Sampler for one request: ``sample_target`` draws for explicit generation indices."""
 

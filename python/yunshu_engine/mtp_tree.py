@@ -97,16 +97,25 @@ def _forward_level(
     return head.norm(h)[0]
 
 
-def _top_children(lm, hidden, count, vocab=None):
+def _top_children(lm, hidden, count, vocab=None, *, keyed=None, position=0):
     """Each row's ``count`` most likely next tokens (best first) and their
     log-probabilities: ([R, count] ids, [R, count] logp). With a ``DraftVocab`` the
     candidates and the normalizer come from its reduced vocabulary (drafts only propose)."""
-    subset = vocab.logits_subset(hidden) if vocab is not None else None
+    subset = (
+        vocab.logits_subset(hidden) if vocab is not None and keyed is None else None
+    )
     if subset is not None:
         logits, ids = subset
         logits = logits.astype(mx.float32)
     else:
         logits, ids = lm.speculative_logits_from_hidden(hidden).astype(mx.float32), None
+    if keyed is not None:
+        from .keyed_sampling import coupled_scores
+
+        logits = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+        logits = coupled_scores(
+            logits, keyed, mx.full((logits.shape[0],), position, dtype=mx.int32)
+        )
     idx = mx.argpartition(-logits, count - 1, axis=-1)[..., :count]
     vals = mx.take_along_axis(logits, idx, axis=-1)
     order = mx.argsort(-vals, axis=-1)
@@ -117,7 +126,9 @@ def _top_children(lm, hidden, count, vocab=None):
     return idx, mx.minimum(lp, -1e-4)  # strictly decreasing along a path
 
 
-def search_tree(head, lm, root_hidden: mx.array, nodes: int):
+def search_tree(
+    head, lm, root_hidden: mx.array, nodes: int, *, keyed=None, committed=0
+):
     """Best-first draft tree from the head, on the GPU, level by level: each
     level keeps its ``BEAM`` most probable paths and expands them with one head
     call; the ``nodes`` most probable nodes overall form the tree. Returns
@@ -127,7 +138,9 @@ def search_tree(head, lm, root_hidden: mx.array, nodes: int):
     n_prefix = int(head._cache[0].offset)
     base_pos = int(head._next_position)
     tree_kv: list = [None] * len(head.layers)
-    idx, lp = _top_children(lm, root_hidden, BEAM, vocab)  # the root's children
+    idx, lp = _top_children(
+        lm, root_hidden, BEAM, vocab, keyed=keyed, position=committed
+    )
     tok, cum = idx[0], lp[0]  # [B]
     pool_tok, pool_cum = [tok], [cum]
     pool_par = [mx.full((BEAM,), -1, dtype=mx.int32)]
@@ -157,7 +170,9 @@ def search_tree(head, lm, root_hidden: mx.array, nodes: int):
             head, tok, hid_in, lvl, tree_mask, n_prefix, base_pos, tree_kv
         )
         # expand every kept path to its best children and keep the best BEAM
-        cidx, clp = _top_children(lm, out, CHILDREN, vocab)  # [B, C]
+        cidx, clp = _top_children(
+            lm, out, CHILDREN, vocab, keyed=keyed, position=committed + lvl + 1
+        )  # [B, C]
         flat = (cum[:, None] + clp).reshape(-1)
         top = mx.argsort(-flat)[:BEAM]
         cum = mx.take(flat, top)
@@ -203,7 +218,10 @@ def _rounds(
 ):
     """Rounds of tree drafts and verify for one greedy row; yields each round's
     committed tokens (a list)."""
+    from .keyed_sampling import KeyedSampler, tree_target_rows
     from .spec_metrics import record as _record_speculative_round
+
+    keyed = sampler if isinstance(sampler, KeyedSampler) else None
 
     lm = model.language_model if hasattr(model, "language_model") else model
     draft_model.reset(model)
@@ -221,13 +239,20 @@ def _rounds(
         started = time.perf_counter()
         n = budget.choose(max_tokens - emitted)
         if n:
-            toks, parents = search_tree(draft_model, lm, root, n)
+            toks, parents = search_tree(
+                draft_model, lm, root, n, keyed=keyed, committed=emitted
+            )
             window = mx.concatenate([mx.array([b], dtype=mx.int32), toks])[None]
             shape = tv.DynamicShape(parents, LEVELS)
         else:
             window, parents, shape = mx.array([[b]], dtype=mx.int32), None, root_shape
         res = tv.tree_forward(lm, window, shape, prompt_cache)
-        target = lm.speculative_argmax_from_hidden(res.hidden)
+        if keyed is not None:
+            target, _ = tree_target_rows(
+                lm.speculative_logits_from_hidden(res.hidden), shape, emitted, keyed
+            )
+        else:
+            target = lm.speculative_argmax_from_hidden(res.hidden)
         try:
             if parents is None:
                 mx.async_eval(target, window)
@@ -283,9 +308,11 @@ def mtp_tree_rounds_batch(
     _original=None,
 ):
     """Drop-in for upstream ``_mtp_rounds_batch`` for one greedy row."""
+    from .keyed_sampling import tree_supported
+
     if (
         int(first_bonus.shape[0]) != 1
-        or not greedy_sampling
+        or not tree_supported(sampler, greedy_sampling)
         or prompt_tokens is None
         or not supported(model, draft_model)
         or not tv.lane_ready(

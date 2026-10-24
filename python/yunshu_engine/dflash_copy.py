@@ -65,6 +65,22 @@ class CopyDraft:
     def draft_block_greedy(
         self, bonus, hidden, cache, block, sampler, token_dtype=mx.int32
     ):
+        return self._propose(
+            self._draft.draft_block_greedy,
+            bonus,
+            hidden,
+            cache,
+            block,
+            sampler,
+            token_dtype,
+        )
+
+    def draft_block(self, bonus, hidden, cache, block, sampler, token_dtype=mx.int32):
+        return self._propose(
+            self._draft.draft_block, bonus, hidden, cache, block, sampler, token_dtype
+        )
+
+    def _propose(self, method, bonus, hidden, cache, block, sampler, token_dtype):
         if self._next_copy:
             if hidden is None:  # a promoted row's first round: nothing captured yet
                 return mx.array([self._next_copy], dtype=token_dtype)
@@ -87,9 +103,7 @@ class CopyDraft:
             for entry in cache:
                 entry.offset += self._pending_skipped
             self._pending_skipped = 0
-        return self._draft.draft_block_greedy(
-            bonus, hidden, cache, block, sampler, token_dtype
-        )
+        return method(bonus, hidden, cache, block, sampler, token_dtype)
 
     def emitted(self, token: int):
         self._copy.extend([token])
@@ -145,9 +159,10 @@ def _copy_gate(lm, draft, cache, kw) -> bool:
     from mlx_vlm.speculative.common import _dflash_block_total
 
     from . import mtp_lane, tree_verify
+    from .keyed_sampling import tree_supported
 
     return not (
-        not kw.get("greedy_sampling", True)
+        not tree_supported(kw.get("sampler"), kw.get("greedy_sampling", True))
         or mtp_lane._STATE["context"] is None
         or mtp_lane.copy_rows_for_model(lm) < 3
         or not hasattr(draft, "candidate_selector")

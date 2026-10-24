@@ -2433,12 +2433,17 @@ def _serial_rows(job) -> bool:
     combined guides). A tool-call guide alone keeps the invariant kernels, the dense
     lane and the ordinary APC namespace (constrained_spec.invariant_guide): agent
     requests declare tools on every turn, and free text under that guide is unmasked."""
-    from .constrained_spec import invariant_guide
+    from .constrained_spec import SpecRequest, invariant_guide
 
     guide = getattr(job, "guide", None)
     logprobs = getattr(job, "logprobs", None)
     if guide is None:
-        return bool(logprobs)
+        # Reporting alone does not change model arithmetic. Both AR and tree verify
+        # use the invariant kernels; only the readout is promoted to float32.
+        processors = getattr(job, "processors", ())
+        return bool(logprobs) and any(
+            not isinstance(p, (Fp32LogitsProcessor, SpecRequest)) for p in processors
+        )
     return not invariant_guide(guide, logprobs)
 
 

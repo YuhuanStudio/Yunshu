@@ -303,8 +303,8 @@
     },
     "dflash": {
      "s": "partial",
-     "why": "chain only; copy islands and the fast tree require greedy (dflash_copy.py, dflash_fast.eligible)",
-     "owner": "decode16",
+     "why": "Keyed tree verify, coupled full-vocabulary draft candidates and sampled copy proposals implemented; M5 1K/32K/128K identity and speed certification pending. Stateful XTC and unsupported constraints retain chain fallback.",
+     "owner": "sampledspec",
      "impact": "high",
      "ev": [
       [
