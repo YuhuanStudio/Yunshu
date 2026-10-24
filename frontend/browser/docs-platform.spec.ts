@@ -56,6 +56,11 @@ test("OpenAPI try it sends GET models through same origin with auth", async ({
   await expect.poll(() => request).toBe(new URL("/v1/models", page.url()).href);
   expect(auth).toBe("Bearer docsplat-test-key");
   await expect(page.getByRole("dialog")).toContainText("docsplat-stub");
+  mkdirSync("evidence/docsplat", { recursive: true });
+  await page.getByRole("dialog").screenshot({
+    path: "evidence/docsplat/api-playground-response.png",
+    animations: "disabled",
+  });
 });
 
 for (const width of [1440, 402])
