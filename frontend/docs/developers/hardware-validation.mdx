@@ -1,0 +1,98 @@
+---
+title: Hardware validation
+description: "The plan for validating Yunshu across Apple Silicon generations, and the M5 Max hardware map: what each unit measured, what Yunshu uses of it and which ideas survived a roofline check."
+---
+
+This page has two sections. The first is the validation plan for Apple Silicon support, which is a product target and not evidence that every chip and macOS combination has been tested. The second is the hardware map of one machine, an M5 Max, used to decide where optimization effort goes.
+
+## Hardware validation plan
+
+Hosted `macos-14` CI jobs do not prove a particular M-series GPU generation or real Metal availability. The current workflows are `.github/workflows/ci.yml` and `release.yml`; no extra runner is provisioned for hardware coverage.
+
+### What it does
+
+| Tier | Trigger | Checks | Evidence to retain |
+|---|---|---|---|
+| Fast | Each change | Linux lint and build; model-free public-contract and CLI tests where dependencies permit | Source SHA, dependency lock and test counts |
+| Correctness | Trusted PR or pre-release | Apple Silicon unit suite; tiny-model API, cache and constraint smoke | Chip, memory, macOS, Python and MLX versions, checkpoint revision, passed, failed and skipped |
+| Hardware coverage | Scheduled or pre-release | M1 to M5; oldest supported and current macOS, with available hosts | Explicit tested and untested cells; output, cache and logprob parity |
+| Performance | Controlled scheduled run | Same-checkpoint decode and cold, warm and turn-2 TTFT; three interleaved repetitions | Raw receipts, engaged mode, output lengths, digests, medians and regressions |
+
+### Guarantees
+
+- Hardware that was unavailable for a release is listed as untested, never marked passed.
+- GPU coverage is never inferred from runner names.
+- Untrusted PR code does not run on a personal model host.
+- Correctness failures stay separate from performance noise and infrastructure failures. Failed cases are retained, not silently retried out of the report.
+- Benchmark thresholds become gates only after a stable noise baseline exists.
+
+### Limits
+
+A maintainer must inventory available hosts and the supported macOS minimums before this plan becomes required CI. Today the M5 Max is the timing machine, and a 36 GB M3 laptop provides correctness and portability evidence only: M3 results never approve an M5 hot-path default, and an M3 failure needs M5 reproduction before it rejects an M5 optimization. The lane is documented in [Serve and develop](/docs/developers/serve-and-develop).
+
+### How to verify
+
+The correctness tier is `scripts/dev/ci-local <sha>` plus the `install` stage of the release gate; see [Release gate](/docs/developers/release-gate). The M3 lane is `scripts/dev/m3sweep` and `gpuq submit --device m3`. Benchmark methodology is in [Benchmarks](/docs/guides/benchmarks) and accuracy evidence in [Accuracy alignment](/docs/developers/accuracy).
+
+## M5 Max hardware map
+
+This section is a historical probe record for one machine (M5 Max, 40-core GPU, 128 GB). It is not a statement of current dependency versions or release performance; for dated numbers use [Benchmarks](/docs/guides/benchmarks). The probes live in `scripts/research/hw/` and each writes JSONL, which holds the numbers (they are kept out of this page because they come from one machine at one time). Every GPU, ANE and heavy CPU probe ran under the shared GPU lock, because these units share one memory system and one run disturbs another.
+
+### What each unit is used for
+
+| Unit | Probe scripts | What Yunshu uses of it |
+|---|---|---|
+| Memory bandwidth | `bw_unified_memory.py`, `decode_proxy_step.py`, `decode_step_model.py`, `decode_step_engine.py` | Decode streams the model weights once per step, so it is bandwidth bound |
+| GPU tensor units (NAX) | `gpu_compute.py`, `tensor_unit_peak.py` | NAX quantized matmul in MLX for prefill; a NAX-packed 4-bit kernel for decode and verify |
+| GPU launch and sync | `launch_overhead.py` | Launch cost is hidden behind GPU work through `async_eval` |
+| ANE | `ane_probe.py`, `pick_best_ane.py`, `bg_gpu_concurrency.py`, `session_ane_prefill.sh` | An embedding co-processor only (`ane_embedding.py`) |
+| CPU | `cpu_probe.py` | Detokenization, grammar and sampling glue |
+| Prefill beside decode | `gpu_stream_overlap.py`, `bench_prefill_interleave.py` | Prefill chunk size as a policy (`YUNSHU_ROUND_PREFILL_CHUNK`) |
+
+### Findings
+
+- **Decode is weight-bandwidth bound.** A step cannot go below its weight-read time at the best measured read bandwidth, and stock decode was already close to that line. Only fewer bytes per token (more accepted tokens per weight read, lower bits) or sharing reads across rows moves it. Small projections (K/V, GDN gate) run well below the bandwidth line and are the place where fusing launches could help.
+- **Wide verify is nearly free.** Quantized matmul stays weight-bandwidth bound through a few rows, and compute only binds past a few dozen rows, so one weight read serves several verify rows. This is why speculative and multi-row decode pay.
+- **Launch overhead is not the bottleneck.** The CPU builds the next step's graph while the GPU runs the previous one. `mx.compile` on a decode layer, `MLX_MAX_OPS_PER_BUFFER` and `MLX_METAL_FAST_SYNCH` changed nothing measurable, and MLX has no graph replay to exploit.
+- **The ANE is not free bandwidth.** It keeps nearly all of its own rate while the GPU decodes, but each ANE call streams its weights from the same DRAM and slows GPU decode. Alone it prefills at roughly a third of the idle GPU rate, so it is useful at most for a prompt arriving while another request streams, and its numerics differ from the MLX 4-bit weights (a lossy option, not a default).
+- **The CPU cannot help decode.** Sampling over a large vocabulary is cheap for one row (argmax is hidden behind the next step) but not for top-k or sort over many rows, so sampling stays on the GPU (`YUNSHU_GPU_SAMPLER`). CPU memory traffic also slows the GPU, and CPU drafting is impractical.
+- **Wired memory and power.** `mx.set_wired_limit` and cache-limit changes gave no gain on a 128 GB machine; no throttling was visible in sustained decode loops.
+- **Prefill and decode contend.** Two GPU command queues do not overlap prefill and decode, and decode gets no priority. On one queue, a smaller prefill span keeps a running request decoding much faster at the cost of a longer time to first token for the arriving prompt. The prompt's tokens are identical to running it alone for both chunk sizes. `YUNSHU_ROUND_PREFILL_CHUNK` sets the span.
+
+### Proposals and outcome
+
+| Idea | Outcome |
+|---|---|
+| Prefill chunk as a policy | Done: `YUNSHU_ROUND_PREFILL_CHUNK`, default 512; adapting it to decoding rows is open |
+| Keep decode kernels at the bandwidth line (fuse small projections) | Open |
+| Wider verify and multi-row decode | In progress through the round driver; see [Round driver](/docs/developers/round-driver) |
+| Int8-activation prefill on the tensor units | Lossy, so only a user option; not adopted |
+| Batched sequence mixers in the round driver | Open, small expected gain |
+| ANE prefill beside GPU decode | Lossy option, very high effort; ranked last |
+| Sampling on the CPU | Rejected: stays on the GPU |
+| Drafter on the ANE overlapped with GPU verify | Dropped: drafting depends on the previous round's accepted tokens, and the ANE takes GPU bandwidth |
+| `mx.compile` on decode layers, wired-memory tuning, High Power mode, a second command queue for prefill | Dropped: no measured effect or worse |
+
+### Knobs
+
+| Setting | Default | Effect |
+|---|---|---|
+| `YUNSHU_ROUND_PREFILL_CHUNK` | 512 | Round driver: prompt tokens per prefill span; smaller spans keep decoding rows running next to a long prompt. Prompts prefilled with different chunk sizes are each self-consistent but not bit-identical to each other |
+| `YUNSHU_GPU_SAMPLER` | off | Text models: on-GPU Gumbel-max sampling |
+
+### How to verify
+
+Run a probe under the GPU queue so the shared units are not disturbed, for example:
+
+```bash
+scripts/dev/gpuq submit --label hw-decode-proxy --mem-gb 30 -- \
+  python scripts/research/hw/decode_proxy_step.py
+```
+
+Work out a roofline before starting an optimization: the theoretical ceiling and its dependencies. Compare in-runtime rather than from an isolated microbenchmark, because eval-per-call parts overstate small kernels.
+
+## Related
+
+- [Release readiness](/docs/developers/release-readiness)
+- [Verification](/docs/developers/verification)
+- [Benchmarks](/docs/guides/benchmarks)

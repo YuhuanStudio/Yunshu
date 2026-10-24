@@ -1,11 +1,20 @@
 import { Button } from "@yuhuanowo/yunui";
 import { Link2 } from "lucide-react";
 import { t } from "../i18n";
-import { type ComponentProps, type ReactNode } from "react";
+import { lazy, type ComponentProps, type ReactNode } from "react";
 import defaults from "fumadocs-ui/mdx";
 import { Callout } from "fumadocs-ui/components/callout";
 import { Tabs, Tab } from "fumadocs-ui/components/tabs";
-import { Accordions, Accordion } from "fumadocs-ui/components/accordion";
+const Accordions = lazy(() =>
+  import("fumadocs-ui/components/accordion").then((m) => ({
+    default: m.Accordions,
+  })),
+);
+const Accordion = lazy(() =>
+  import("fumadocs-ui/components/accordion").then((m) => ({
+    default: m.Accordion,
+  })),
+);
 import { Steps, Step } from "fumadocs-ui/components/steps";
 import { Cards, Card as FumaCard } from "fumadocs-ui/components/card";
 import { TypeTable } from "fumadocs-ui/components/type-table";

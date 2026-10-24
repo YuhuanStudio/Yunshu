@@ -3,7 +3,7 @@ import { loader } from "fumadocs-core/source";
 
 export const collection = defineDocs({
   dir: "docs",
-  docs: { async: true, lastModified: true },
+  docs: { files: ["**/*.mdx"], async: true, lastModified: true },
 });
 
 export const source = loader({

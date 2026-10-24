@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import zhTW from "./locales/zh-TW/index.ts";
+import zhTW from "./locales/zh-TW/core.ts";
 import { interpolate } from "./plural.ts";
 import {
   DEFAULT_LOCALE,
@@ -27,8 +27,8 @@ const loaders: Record<
   Exclude<Locale, "zh-TW">,
   () => Promise<{ default: object }>
 > = {
-  "zh-CN": () => import("./locales/zh-CN/index.ts"),
-  en: () => import("./locales/en/index.ts"),
+  "zh-CN": () => import("./locales/zh-CN/core.ts"),
+  en: () => import("./locales/en/core.ts"),
 };
 
 export const isLocale = (v: unknown): v is Locale =>
@@ -81,6 +81,39 @@ async function load(next: Locale) {
   flats.set(next, flatten(mod));
 }
 
+// Settings owns this generated namespace; load it before the route's first
+// render and before changing an already-open Settings page to another locale.
+let settingsMessagesUsed = false;
+const settingsLoads = new Map<Locale, Promise<void>>();
+const settingsLoaders = {
+  "zh-TW": () => import("./locales/zh-TW/settingdesc.ts"),
+  "zh-CN": () => import("./locales/zh-CN/settingdesc.ts"),
+  en: () => import("./locales/en/settingdesc.ts"),
+};
+function loadSettingsMessagesFor(next: Locale): Promise<void> {
+  let pending = settingsLoads.get(next);
+  if (!pending) {
+    pending = Promise.all([load(next), settingsLoaders[next]()]).then(
+      ([, mod]) => {
+        flats.set(next, {
+          ...flats.get(next),
+          ...flatten({ settingdesc: mod.default }),
+        });
+      },
+    );
+    settingsLoads.set(next, pending);
+    pending.catch(() => settingsLoads.delete(next));
+  }
+  return pending;
+}
+export async function loadSettingsMessages(): Promise<void> {
+  settingsMessagesUsed = true;
+  await Promise.all([
+    loadSettingsMessagesFor(locale),
+    loadSettingsMessagesFor(DEFAULT_LOCALE),
+  ]);
+}
+
 function apply(next: Locale) {
   locale = next;
   try {
@@ -105,6 +138,7 @@ export async function setLocale(next: Locale): Promise<void> {
   if (next === locale) return;
   try {
     await load(next);
+    if (settingsMessagesUsed) await loadSettingsMessagesFor(next);
   } catch {
     return;
   }

@@ -2,6 +2,13 @@ import type zh from "../zh-TW/docs.ts";
 import type { Shape } from "../../types.ts";
 
 const docs: Shape<typeof zh> = {
+  "reference.openaiSdk": "OpenAI SDK",
+  "reference.anthropicSdk": "Anthropic SDK",
+  "reference.proxy": "Console same-origin proxy",
+  "actions.chatgpt": "ChatGPT",
+  "actions.claude": "Claude",
+  "reference.link": "OpenAPI ↗",
+  sse: "Server-Sent Events",
   "nav.label": "Documentation",
   "nav.jump": "Jump to a docs page",
   "toc.title": "On this page",

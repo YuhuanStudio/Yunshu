@@ -2,6 +2,7 @@ import { useRecentRequests } from "./recentRequests";
 import { prefixHit, prefixHitWindow } from "./request-kpi";
 import { gbTotalText } from "./byte-format";
 import { LiveNumber } from "./LiveNumber";
+import { SkeletonSwap } from "./motion/SkeletonSwap.tsx";
 import { rangeSeconds, useRangeHistory } from "./useRangeHistory";
 import { PrefillBar } from "./PrefillBar";
 import { SegmentedTray } from "./SegmentedTray";
@@ -144,7 +145,7 @@ type LaneSlot = { row: RequestRow; until: number };
 function useLaneSlots(
   rows: readonly RequestRow[],
   n: number,
-  ms = 340,
+  ms = 260,
 ): ({ row: RequestRow; leaving: boolean } | null)[] {
   const [, bump] = useState(0);
   const list = useRef<LaneSlot[]>([]);
@@ -285,7 +286,7 @@ function QuickAction({
   return (
     // One outline: the row fills the card (no inner rounded fill inside the card's own border), the
     // focus ring is the card's, and a press nudges the whole card.
-    <Card className="min-w-0 overflow-hidden p-0 transition-[box-shadow,transform] duration-[150ms] ease-out has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-(--border-strong) active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100">
+    <Card className="min-w-0 overflow-hidden p-0 transition-[box-shadow,transform] duration-(--dur-fast) ease-out has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-(--border-strong) active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100">
       <HoverRow
         onClick={onClick}
         className="flex w-full items-center gap-3 rounded-none px-4 py-4 text-left focus-visible:ring-0"
@@ -400,7 +401,9 @@ export function Dashboard({
     connection,
     status?.last?.request_id,
     status?.console_process === true ||
-      (status == null && engine.phase === "offline"),
+      (status == null &&
+        engine.failures > 0 &&
+        engine.phase !== "unauthorized"),
   );
   const hit = useMemo(
     () =>
@@ -587,76 +590,90 @@ export function Dashboard({
         />
       </div>
 
-      {!status ? (
-        // Offline or refused: the banner says why; four empty placeholder cards would only add blank space.
-        engine.phase === "connecting" ? (
-          <StatGrid data-stat-grid="">
-            {[0, 1, 2, 3].map((i) => (
-              <Skeleton key={i} className="h-[104px] w-full rounded-lg" />
-            ))}
-          </StatGrid>
-        ) : null
-      ) : (
-        <div
-          className={`grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-5 max-sm:[&>:last-child]:col-span-2 ${dim}`}
-          data-testid="overview-stats"
-          data-stat-grid=""
+      {/* Offline or refused: the banner says why; four empty placeholder cards would only add blank space.
+          While connecting, the skeleton cross-fades into the cards in the same grid cell (no pop, no shift). */}
+      {status || engine.phase === "connecting" ? (
+        <SkeletonSwap
+          ready={status != null}
+          skeleton={
+            <StatGrid data-stat-grid="">
+              {[0, 1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-[104px] w-full rounded-lg" />
+              ))}
+            </StatGrid>
+          }
         >
-          <SpeedPair status={status} />
-          <StatCard
-            compact
-            valueFirst
-            icon={Timer}
-            label={t("overview.stats.ttft")}
-            value={
-              <span title={t("overview.tip.ttft")}>
-                <StatValue
-                  text={last?.ttft_ms == null ? "—" : formatMs(last.ttft_ms)}
-                />
-              </span>
-            }
-            subtext={
-              last
-                ? t("overview.stats.latestAge", {
-                    age: elapsed(Math.max(0, Date.now() / 1000 - last.t)),
-                  })
-                : t("overview.stats.noFinished")
-            }
-          />
-          <StatCard
-            compact
-            valueFirst
-            icon={Gauge}
-            label={t("overview.stats.prefixRate")}
-            value={
-              <span title={t("overview.tip.hit")}>
-                {hit.pct == null ? "—" : `${number(hit.pct, 0)}%`}
-              </span>
-            }
-            subtext={prefixHitWindow(hit, recentRequests.supported === true)}
-          />
-          <StatCard
-            compact
-            valueFirst
-            icon={HardDrive}
-            label={t("overview.stats.metal")}
-            value={
-              <span title={t("overview.tip.metal")}>
-                <Slot ch={5}>
-                  <LiveNumber value={memory?.active_gb ?? null} digits={1} />
-                </Slot>
-                <span className="ml-1 text-xs font-normal text-muted-foreground">
-                  GB
-                </span>
-              </span>
-            }
-            subtext={t("overview.stats.metalSub", {
-              total: number(memory?.total_gb),
-              peak: number(memory?.peak_gb),
-            })}
-          />
-        </div>
-      )}
+          {status && (
+            <div
+              className={`grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-5 max-sm:[&>:last-child]:col-span-2 ${dim}`}
+              data-testid="overview-stats"
+              data-stat-grid=""
+            >
+              <SpeedPair status={status} />
+              <StatCard
+                compact
+                valueFirst
+                icon={Timer}
+                label={t("overview.stats.ttft")}
+                value={
+                  <span title={t("overview.tip.ttft")}>
+                    <StatValue
+                      text={
+                        last?.ttft_ms == null ? "—" : formatMs(last.ttft_ms)
+                      }
+                    />
+                  </span>
+                }
+                subtext={
+                  last
+                    ? t("overview.stats.latestAge", {
+                        age: elapsed(Math.max(0, Date.now() / 1000 - last.t)),
+                      })
+                    : t("overview.stats.noFinished")
+                }
+              />
+              <StatCard
+                compact
+                valueFirst
+                icon={Gauge}
+                label={t("overview.stats.prefixRate")}
+                value={
+                  <span title={t("overview.tip.hit")}>
+                    {hit.pct == null ? "—" : `${number(hit.pct, 0)}%`}
+                  </span>
+                }
+                subtext={prefixHitWindow(
+                  hit,
+                  recentRequests.supported === true,
+                )}
+              />
+              <StatCard
+                compact
+                valueFirst
+                icon={HardDrive}
+                label={t("overview.stats.metal")}
+                value={
+                  <span title={t("overview.tip.metal")}>
+                    <span className="tabular-nums">
+                      <LiveNumber
+                        value={memory?.active_gb ?? null}
+                        digits={1}
+                      />
+                    </span>
+                    <span className="ml-1 text-xs font-normal text-muted-foreground">
+                      GB
+                    </span>
+                  </span>
+                }
+                subtext={t("overview.stats.metalSub", {
+                  total: number(memory?.total_gb),
+                  peak: number(memory?.peak_gb),
+                })}
+              />
+            </div>
+          )}
+        </SkeletonSwap>
+      ) : null}
 
       {/* Live: what the engine is doing right now. Idle collapses to one compact card. */}
       <Card
@@ -759,14 +776,17 @@ export function Dashboard({
             </div>
           </div>
           {/* Five rows of reserved space: requests come and go inside it, nothing below moves. */}
-          <div className="relative flex-1" style={{ minHeight: LANE_AREA_PX }}>
+          <div
+            className="relative flex-1"
+            style={{ minHeight: online ? LANE_AREA_PX : 0 }}
+          >
             <ul
               className="divide-y divide-border/60"
               data-live-list=""
               ref={laneRef}
             >
               {lanes.map((lane, i) =>
-                lane ? (
+                !online && lanes.every((l) => !l) ? null : lane ? (
                   <RequestLane
                     key={`slot-${i}`}
                     row={lane.row}
@@ -957,7 +977,7 @@ export function Dashboard({
               }
             >
               <p className="text-2xl font-semibold tabular-nums">
-                <Slot ch={5}>{fixed(memory?.active_gb)}</Slot>
+                <span className="tabular-nums">{fixed(memory?.active_gb)}</span>
                 <span className="ml-1.5 text-sm font-normal text-muted-foreground">
                   {t("overview.memory.activeOf", {
                     gb:

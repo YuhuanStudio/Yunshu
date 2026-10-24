@@ -1,4 +1,11 @@
 const docs = {
+  "reference.openaiSdk": "OpenAI SDK",
+  "reference.anthropicSdk": "Anthropic SDK",
+  "reference.proxy": "主控台同源代理",
+  "actions.chatgpt": "ChatGPT",
+  "actions.claude": "Claude",
+  "reference.link": "OpenAPI ↗",
+  sse: "伺服器傳送事件（SSE）",
   "nav.label": "文件目錄",
   "nav.jump": "跳到文件頁面",
   "toc.title": "本頁內容",

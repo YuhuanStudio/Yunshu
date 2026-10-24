@@ -1,5 +1,7 @@
 # Native tool formats and structural tags
 
+
+> Console docs: the maintained, translated version of this page is `/docs/internals/tool-call-parsing` (source `frontend/docs/internals/tool-call-parsing.mdx`). This file stays as the repository-side reference read by tooling.
 Yunshu detects the wire format from the model's chat template. Independent readers
 cover DeepSeek V3/R1/V3.1 envelopes, DeepSeek V3.2 `function_calls` DSML and V4
 `tool_calls` DSML, Harmony tool messages, Hermes JSON, Llama JSON and literal Python

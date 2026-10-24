@@ -12,7 +12,7 @@ export const BUDGET_KB = 300;
 export const ENTRY_BUDGET_KB = 270;
 // Fumadocs and the OpenAPI playground are only loaded inside Docs. The shell
 // and all other routes retain their existing budgets.
-export const DOCS_BUDGET_KB = Object.freeze({ Docs: 350, ApiReference: 650 });
+export const DOCS_BUDGET_KB = Object.freeze({ ApiReference: 650 });
 export const budgetForRoute = (name) => DOCS_BUDGET_KB[name] ?? BUDGET_KB;
 
 /** Static `import ... from "./x.js"` and `import "./x.js"` edges of one chunk (dynamic imports excluded). */

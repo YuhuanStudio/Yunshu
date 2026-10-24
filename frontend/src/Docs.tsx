@@ -371,7 +371,7 @@ function DocsContent({ sub }: { sub: string | null }) {
                         event.preventDefault();
                         location.hash = docHref(slug, h.id).slice(1);
                       }}
-                      className={`block py-0.5 text-sm text-muted-foreground transition-colors duration-[120ms] ease-out hover:text-foreground data-[active=true]:font-medium data-[active=true]:text-foreground motion-reduce:transition-none ${h.level === 3 ? "pl-6" : "pl-3"}`}
+                      className={`block py-0.5 text-sm text-muted-foreground transition-colors duration-(--dur-fast) ease-out hover:text-foreground data-[active=true]:font-medium data-[active=true]:text-foreground motion-reduce:transition-none ${h.level === 3 ? "pl-6" : "pl-3"}`}
                     >
                       {h.text}
                     </TOCItem>

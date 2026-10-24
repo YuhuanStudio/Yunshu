@@ -316,7 +316,8 @@ test.describe("requests page finished-request ring", () => {
       "title",
       /ring-req-0123456789abcdef-\d{3}/,
     );
-    await expect(id).toContainText("…");
+    // The column has room: the whole id shows (only ids over 32 characters keep both ends).
+    await expect(id).toContainText(/ring-req-0123456789abcdef-\d{3}/);
     const boxes = await first.locator("td").evaluateAll((cells) =>
       cells
         .map((c) => c.getBoundingClientRect())
@@ -327,7 +328,7 @@ test.describe("requests page finished-request ring", () => {
       expect(boxes[i][0]).toBeGreaterThanOrEqual(
         (boxes[i - 1][1] as number) - 1,
       );
-    await expect(first).toContainText("命中 1,000 / 4,000");
+    await expect(first).toContainText("命中 1,000 · 25%");
     // The shell also asks for the downloads list (another page's endpoint); not this page's concern.
     expect(
       fixture.unexpected.filter((u) => !u.includes("/yunshu/downloads")),

@@ -209,5 +209,6 @@ const models: Shape<typeof zh> = {
     "Memory the system has available now. It is the same figure each model below is measured against; it is not a load limit, and a load is still checked first.",
   "list.freeTipMetal":
     "The engine did not report system-available memory, so this is total minus what Metal has allocated. It ignores other apps and reads high.",
+  "detail.waitingCalm": "The engine is busy or restarting; its models appear here as soon as it answers.",
 };
 export default models;

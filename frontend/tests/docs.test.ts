@@ -3,6 +3,8 @@ import test from "node:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
+  listFiles,
+  parseFrontmatter,
   buildSearch,
   buildToc,
   flatten,
@@ -89,4 +91,20 @@ test("generated OpenAPI links work without weakening missing-page or anchor chec
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("every authored page has valid YAML metadata for Fumadocs and the search source", () => {
+  for (const { file } of listFiles()) {
+    const { meta } = parseFrontmatter(readFileSync(file, "utf8"));
+    assert.equal(typeof meta.title, "string", file);
+    assert.ok(
+      meta.description === undefined || typeof meta.description === "string",
+      file,
+    );
+  }
+  assert.equal(
+    parseFrontmatter('---\ntitle: "A: B"\ndescription: Safe\n---\nBody').meta
+      .title,
+    "A: B",
+  );
 });

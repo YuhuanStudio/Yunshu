@@ -415,7 +415,7 @@ function MachineCard({ host, now }: { host: HostState; now: number }) {
               <ChevronDown
                 aria-hidden
                 size={14}
-                className={`shrink-0 text-muted-foreground transition-transform duration-[180ms] ease-out motion-reduce:transition-none ${open ? "" : "-rotate-90"}`}
+                className={`shrink-0 text-muted-foreground transition-transform duration-(--dur-base) ease-out motion-reduce:transition-none ${open ? "" : "-rotate-90"}`}
               />
             </Button>
           </CollapsibleTrigger>

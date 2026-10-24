@@ -6,6 +6,9 @@ import { fumadocsMdx } from "fumadocs-mdx/vite";
 import { remarkMermaid } from "./scripts/remark-mermaid.mjs";
 import { docsAssets } from "./scripts/docs-assets.mjs";
 import { buildSearch, buildToc } from "./scripts/docs-index.mjs";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 // The 文件 section: pages are MDX compiled at build time (one lazy chunk each); the table of
 // contents and the search text come from scripts/docs-index.mjs as per-locale virtual modules,
@@ -61,6 +64,24 @@ const docsIndex = () => ({
 // history), else its default port. VITE_CONSOLE_PROXY=http://127.0.0.1:8000 points it at an engine
 // directly (no recorded history then).
 const engine = process.env.VITE_CONSOLE_PROXY ?? "http://127.0.0.1:8100";
+
+// The dev/preview server binds where the console process would: YUNSHU_CONSOLE_HOST from the environment,
+// else from the Yunshu config file (YUNSHU_CONFIG or ~/.yunshu/config.toml), else this Mac only.
+function consoleHost(): string {
+  if (process.env.YUNSHU_CONSOLE_HOST) return process.env.YUNSHU_CONSOLE_HOST;
+  try {
+    const file =
+      process.env.YUNSHU_CONFIG ?? join(homedir(), ".yunshu", "config.toml");
+    const m = /^\s*YUNSHU_CONSOLE_HOST\s*=\s*"([^"]+)"/m.exec(
+      readFileSync(file, "utf8"),
+    );
+    if (m) return m[1];
+  } catch {
+    // no config file: the default below
+  }
+  return "127.0.0.1";
+}
+const host = consoleHost();
 export default defineConfig({
   plugins: [
     docsIndex(),
@@ -79,6 +100,7 @@ export default defineConfig({
     // Let native module imports fetch JS dependencies on demand. Keep CSS
     // preloads, without embedding every lazy docs/vendor JS URL in the shell.
     modulePreload: {
+      polyfill: false,
       resolveDependencies: (_filename, deps) =>
         deps.filter((d) => d.endsWith(".css")),
     },
@@ -103,7 +125,11 @@ export default defineConfig({
     },
     license: { fileName: "licenses/bundled-dependencies.md" },
   },
+  preview: { host, port: 3971, strictPort: true },
   server: {
+    host,
+    port: 3971,
+    strictPort: true,
     proxy: {
       "/v1": engine,
       "/health": engine,

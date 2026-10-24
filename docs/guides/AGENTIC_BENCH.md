@@ -1,5 +1,7 @@
 # Agentic coding benchmark
 
+
+> Console docs: the maintained, translated version of this page is `/docs/developers/agentic-bench` (source `frontend/docs/developers/agentic-bench.mdx`). This file stays as the repository-side reference read by tooling.
 Idealised single-request numbers do not tell you how an engine behaves under what people run: multi-turn
 coding-agent loops with a growing context, many tool calls, prefix reuse between turns and long sessions.
 `scripts/research/agentic/` drives real coding agents against a local server and lets hidden tests decide

@@ -4,6 +4,7 @@
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { execFileSync } from "node:child_process";
+import { parse as parseYaml } from "yaml";
 import GithubSlugger from "github-slugger";
 
 export const DOCS_DIR = new URL("../docs/", import.meta.url).pathname;
@@ -35,12 +36,7 @@ export function listFiles(dir = DOCS_DIR) {
 
 export function parseFrontmatter(text) {
   const m = /^---\n([\s\S]*?)\n---\n?/.exec(text);
-  const meta = {};
-  if (m)
-    for (const line of m[1].split("\n")) {
-      const kv = /^(\w+):\s*(.*)$/.exec(line);
-      if (kv) meta[kv[1]] = kv[2].replace(/^["']|["']$/g, "");
-    }
+  const meta = m ? (parseYaml(m[1]) ?? {}) : {};
   return { meta, body: m ? text.slice(m[0].length) : text };
 }
 

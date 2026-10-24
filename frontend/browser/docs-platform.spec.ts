@@ -134,3 +134,42 @@ test("page actions copy source Markdown and expose assistant deep links", async 
     );
   }
 });
+
+for (const locale of ["en", "zh-TW", "zh-CN"]) {
+  test(`parallel developer content renders a fenced Mermaid diagram in ${locale}`, async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(
+      `/console/?lang=${locale}#/docs/developers/serve-and-develop`,
+    );
+    await expect(
+      page.getByTestId("docs-article").locator('[role="img"] svg').first(),
+    ).toBeVisible();
+    if (locale === "en") {
+      const svg = page
+        .getByTestId("docs-article")
+        .locator('[role="img"] svg')
+        .first();
+      const initial = await svg.innerHTML();
+      await page
+        .getByRole("button", { name: "Switch to dark", exact: true })
+        .click();
+      await expect.poll(() => svg.innerHTML()).not.toBe(initial);
+    }
+    expect(errors).toEqual([]);
+  });
+}
+
+test("deferred Fumadocs accordions retain their disclosure behavior", async ({
+  page,
+}) => {
+  await page.goto("/console/?lang=en#/docs/guides/troubleshooting");
+  const trigger = page.getByRole("button", { name: /cannot import mlx/ });
+  const body = page.getByText(/MLX ships arm64 wheels only/);
+  await expect(trigger).toBeVisible();
+  await expect(body).toBeHidden();
+  await trigger.click();
+  await expect(body).toBeVisible();
+});

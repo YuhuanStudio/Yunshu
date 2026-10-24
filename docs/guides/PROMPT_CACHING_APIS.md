@@ -1,5 +1,7 @@
 # Prompt-caching APIs — the three vendor paradigms
 
+
+> Console docs: the maintained, translated version of this page is `/docs/guides/prompt-caching` (source `frontend/docs/guides/prompt-caching.mdx`). This file stays as the repository-side reference read by tooling.
 > The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/guides/prompt-caching.mdx`](../../frontend/docs/guides/prompt-caching.mdx)); this file is its GitHub-facing counterpart.
 
 There are three distinct ways the major API vendors expose prompt caching. Yunshu

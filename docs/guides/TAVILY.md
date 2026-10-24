@@ -1,5 +1,7 @@
 # Local Tavily API
 
+
+> Console docs: the maintained, translated version of this page is `/docs/guides/tavily` (source `frontend/docs/guides/tavily.mdx`). This file stays as the repository-side reference read by tooling.
 Yunshu mounts its Tavily-compatible API at **`http://localhost:8000/tavily`**. The Python, JavaScript and
 LangChain clients append endpoint paths to the configured base URL; there is no `/v1` in this API.
 

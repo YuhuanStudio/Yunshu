@@ -1,7 +1,7 @@
 allowBuilds:
   esbuild: true
 
-# YunUI's controls and Fumadocs share these compatible Radix patches. Avoid
+# YunUI's controls and Fumadocs share these compatible Radix versions. Avoid
 # shipping two copies of collection/focus state machinery in the console shell.
 overrides:
   "@radix-ui/react-collection@1.1.15": "1.1.16"

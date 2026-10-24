@@ -9,6 +9,19 @@ export function Mermaid({
   children?: string;
 }) {
   const id = useId().replace(/[^a-z0-9]/gi, "");
+  const [dark, setDark] = useState(() =>
+    document.documentElement.classList.contains("dark"),
+  );
+  useEffect(() => {
+    const observer = new MutationObserver(() =>
+      setDark(document.documentElement.classList.contains("dark")),
+    );
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    return () => observer.disconnect();
+  }, []);
   const [svg, setSvg] = useState("");
   const [error, setError] = useState("");
   useEffect(() => {
@@ -18,9 +31,7 @@ export function Mermaid({
         mermaid.initialize({
           startOnLoad: false,
           securityLevel: "strict",
-          theme: document.documentElement.classList.contains("dark")
-            ? "dark"
-            : "default",
+          theme: dark ? "dark" : "default",
         });
         const result = await mermaid.render(
           `diagram${id}`,
@@ -32,7 +43,7 @@ export function Mermaid({
     return () => {
       live = false;
     };
-  }, [chart, children, id]);
+  }, [chart, children, id, dark]);
   return error ? (
     <pre role="alert">{error}</pre>
   ) : (

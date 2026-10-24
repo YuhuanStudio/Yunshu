@@ -70,7 +70,6 @@ const shell: Shape<typeof zh> = {
     "Share of time the GPU ran inference over the last few status updates.",
   "footer.load.label": "Requests",
   "footer.load.both": "{active} running {queued} queued",
-  "footer.load.active": "{active} running",
   "footer.load.help": "{active} running, {queued} queued.",
   "footer.sentenceEnd": ".",
   "nav.skip": "Skip to main content",
