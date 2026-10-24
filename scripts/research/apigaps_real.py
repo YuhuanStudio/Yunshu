@@ -6,6 +6,8 @@ Starts `yunshu serve` on a small model (isolated HOME, ports 18990-18999) and dr
   cm     Anthropic Messages `context_management` (clear_tool_uses / clear_thinking): the edits are
          applied and `applied_edits` is reported (non-stream, stream, count_tokens)
   bg     Responses `background` + `stream`: stream, then resume with `starting_after`, then cancel
+  st     Responses background + web_search, custom tool beside web_search
+  compact  Messages compact_20260112: pause, round trip, continue
   n      chat completions and completions `n>1` with `stream=true`
 
     python scripts/research/apigaps_real.py MODEL_DIR --item host|cm|bg|n --port 18993
@@ -273,10 +275,149 @@ def check_cm(url, results, token):
         raise Fail("bogus edit accepted")
 
 
+def check_st(url, results, token):
+    """Responses background + web_search, and a custom tool beside web_search (keyless search
+    providers: the default `auto` backend; a blocked network is recorded, not hidden)."""
+    import openai
+
+    cl = openai.OpenAI(
+        base_url=url + "/v1", api_key=token or "x", max_retries=0, timeout=300
+    )
+    ws = {"type": "web_search"}
+    job = cl.responses.create(
+        model="m",
+        input="Search the web for 'MLX Apple silicon' and answer in one sentence.",
+        tools=[ws],
+        tool_choice={"type": "web_search"},
+        max_output_tokens=200,
+        background=True,
+    )
+    expect(
+        job.status in ("queued", "in_progress"), f"background+web_search: {job.status}"
+    )
+    got = job
+    for _ in range(240):
+        got = cl.responses.retrieve(job.id)
+        if got.status not in ("queued", "in_progress"):
+            break
+        time.sleep(0.5)
+    kinds = [o.type for o in got.output]
+    results["background_web_search"] = {"status": got.status, "output": kinds}
+    expect(got.status == "completed", f"background web_search ended {got.status}")
+    expect("web_search_call" in kinds, f"no web_search_call item: {kinds}")
+    streamed = []
+    for ev in cl.responses.create(
+        model="m",
+        input="Search the web for 'MLX' and answer in one sentence.",
+        tools=[ws],
+        tool_choice={"type": "web_search"},
+        max_output_tokens=200,
+        background=True,
+        stream=True,
+    ):
+        streamed.append(ev.type)
+    expect(streamed[-1] == "response.completed", f"stream ended {streamed[-1:]}")
+    results["background_stream_web_search"] = len(streamed)
+    both = cl.responses.create(
+        model="m",
+        input="Create the file a.txt containing hello with the apply_patch tool.",
+        tools=[
+            ws,
+            {
+                "type": "custom",
+                "name": "apply_patch",
+                "description": "Edit files with a patch",
+            },
+        ],
+        tool_choice={"type": "custom", "name": "apply_patch"},
+        max_output_tokens=200,
+    )
+    kinds = [o.type for o in both.output]
+    results["custom_plus_web_search"] = {"status": both.status, "output": kinds}
+    expect(
+        both.status in ("completed", "incomplete"), f"custom+web_search: {both.status}"
+    )
+    expect("custom_tool_call" in kinds, f"no custom_tool_call: {kinds}")
+
+
+def check_compact(url, results, token):
+    import anthropic
+
+    cl = anthropic.Anthropic(
+        base_url=url, api_key=token or "x", max_retries=0, timeout=900
+    )
+    msgs = []
+    for i in range(36):
+        msgs.append(
+            {
+                "role": "user",
+                "content": f"Note {i}: the code name is project-{i}. "
+                + "filler text " * 330,
+            }
+        )
+        msgs.append({"role": "assistant", "content": f"Noted project-{i}."})
+    msgs.append(
+        {
+            "role": "user",
+            "content": "Which project number was Note 3 about? Answer briefly.",
+        }
+    )
+    edit = {
+        "type": "compact_20260112",
+        "trigger": {"type": "input_tokens", "value": 50000},
+        "pause_after_compaction": True,
+    }
+    kw = dict(model="m", max_tokens=48, messages=msgs, betas=["compact-2026-01-12"])
+    paused = cl.beta.messages.create(**kw, context_management={"edits": [edit]})
+    expect(paused.stop_reason == "compaction", f"stop_reason {paused.stop_reason}")
+    block = paused.content[0]
+    expect(block.type == "compaction" and block.content, f"block {block}")
+    results["compaction_pause"] = {
+        "summary_chars": len(block.content),
+        "iterations": [i.model_dump() for i in (paused.usage.iterations or [])],
+    }
+    follow = cl.beta.messages.create(
+        model="m",
+        max_tokens=48,
+        betas=["compact-2026-01-12"],
+        messages=[
+            *msgs,
+            {
+                "role": "assistant",
+                "content": [{"type": "compaction", "content": block.content}],
+            },
+            {
+                "role": "user",
+                "content": "Which project number was Note 3 about? Answer briefly.",
+            },
+        ],
+    )
+    results["compaction_roundtrip"] = {
+        "input_tokens": follow.usage.input_tokens,
+        "text": follow.content[0].text[:80] if follow.content else None,
+    }
+    expect(
+        follow.usage.input_tokens < 8000,
+        f"round trip kept {follow.usage.input_tokens} tokens",
+    )
+    both = cl.beta.messages.create(
+        **{**kw},
+        context_management={"edits": [{**edit, "pause_after_compaction": False}]},
+    )
+    expect(both.content[0].type == "compaction", "compaction block leads the reply")
+    expect(
+        any(b.type == "text" for b in both.content),
+        "reply follows the compaction block",
+    )
+    results["compaction_continue"] = [b.type for b in both.content]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("model")
-    ap.add_argument("--item", choices=("host", "cm", "bg", "n"), required=True)
+    ap.add_argument(
+        "--item", choices=("host", "cm", "bg", "n", "st", "compact"), required=True
+    )
     ap.add_argument("--port", type=int, default=18993)
     ap.add_argument("--token", action="store_true", help="serve with a token")
     ap.add_argument("--home", default="/Volumes/P5Plus/yunshu-build/apigaps-home")
@@ -319,7 +460,14 @@ def main():
     rc = 1
     try:
         wait_ready(url, proc)
-        fn = {"host": check_host, "cm": check_cm, "bg": check_bg, "n": check_n}[a.item]
+        fn = {
+            "host": check_host,
+            "cm": check_cm,
+            "bg": check_bg,
+            "n": check_n,
+            "st": check_st,
+            "compact": check_compact,
+        }[a.item]
         fn(url, results, TOKEN if a.token else None)
         rc = 0
     except BaseException as exc:  # noqa: BLE001

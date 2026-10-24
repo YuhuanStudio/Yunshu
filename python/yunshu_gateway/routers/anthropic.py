@@ -44,6 +44,7 @@ from ..anthropic_context_edit import (
 from ..anthropic_context_edit import validate as validate_edits
 from ..engine import get_engine
 from ..error_envelope import EngineStreamError
+from ..responses_context import ContextError
 from ..streaming import (
     run_with_disconnect_guard,
     with_sse_keepalive,
@@ -1188,11 +1189,128 @@ def _apply_clear_at(req: AnthropicMessagesRequest) -> None:
         req.messages = keep
 
 
-async def _apply_context_management(req: AnthropicMessagesRequest) -> list[dict] | None:
-    """Run the request's context edits over its messages; None when none were asked for."""
-    if not (req.context_management or {}).get("edits"):
+def _expand_compaction_blocks(req: AnthropicMessagesRequest) -> None:
+    """A `compaction` block the client sent back: everything before it is replaced by its
+    summary (a user turn); a block with null content is a no-op and is dropped."""
+    from ..responses_context import SUMMARY_PREFIX
+
+    msgs = req.messages
+
+    def blocks(m):
+        return (
+            [b for b in m.content if isinstance(b, dict)]
+            if isinstance(m.content, list)
+            else []
+        )
+
+    last = max(
+        (
+            i
+            for i, m in enumerate(msgs)
+            if any(
+                b.get("type") == "compaction" and b.get("content") for b in blocks(m)
+            )
+        ),
+        default=-1,
+    )
+    out: list[AnthropicMessage] = []
+    for i, m in enumerate(msgs):
+        if i < last and m.role != "system":
+            continue
+        if any(b.get("type") == "compaction" for b in blocks(m)):
+            summary = next(
+                (
+                    b["content"]
+                    for b in blocks(m)
+                    if b.get("type") == "compaction" and b.get("content")
+                ),
+                None,
+            )
+            if i == last and summary:
+                out.append(
+                    AnthropicMessage(role="user", content=SUMMARY_PREFIX + summary)
+                )
+            rest = [b for b in blocks(m) if b.get("type") != "compaction"]
+            if not rest:
+                continue
+            m = m.model_copy(update={"content": rest})
+        out.append(m)
+    if out != msgs:
+        req.messages = out
+
+
+async def _compact_context(
+    req: AnthropicMessagesRequest, request: Request, edit: dict, count
+) -> dict | None:
+    """`compact_20260112`: when the input crosses the trigger, the served model summarizes the
+    earlier turns (the Responses compaction machinery) and the request continues from the
+    summary. Returns {content, usage, pause} or None when the trigger was not crossed."""
+    from ..anthropic_context_edit import COMPACT_DEFAULT_TRIGGER, tokens
+    from ..responses_context import (
+        SUMMARY_PREFIX,
+        entries_from_messages,
+        summarize_history,
+    )
+
+    trigger = (edit.get("trigger") or {}).get("value", COMPACT_DEFAULT_TRIGGER)
+    raw = [{"role": m.role, "content": m.content} for m in req.messages]
+    if tokens(raw, count) <= trigger:
         return None
-    validate_edits(req.context_management)
+    # Keep the last plain user turn (and what follows it) verbatim; summarize what precedes it.
+    cut = max(
+        (
+            i
+            for i, m in enumerate(req.messages)
+            if m.role == "user"
+            and not (
+                isinstance(m.content, list)
+                and any(
+                    isinstance(b, dict) and b.get("type") == "tool_result"
+                    for b in m.content
+                )
+            )
+        ),
+        default=0,
+    )
+    head = [m for m in req.messages[:cut] if m.role != "system"]
+    if not head:
+        return None
+    converted, staged = _convert_anthropic_messages(
+        head, has_images=any(_has_image_blocks(m.content) for m in head)
+    )
+    try:
+        summary, usage = await summarize_history(
+            request,
+            req.model,
+            entries_from_messages(converted),
+            None,
+            edit.get("instructions"),
+        )
+    finally:
+        _unlink_staged(staged)
+    keep = [m for m in req.messages[:cut] if m.role == "system"] + req.messages[cut:]
+    req.messages = [
+        AnthropicMessage(role="user", content=SUMMARY_PREFIX + summary),
+        *keep,
+    ]
+    return {
+        "content": summary,
+        "usage": usage,
+        "pause": bool(edit.get("pause_after_compaction")),
+    }
+
+
+async def _apply_context_management(
+    req: AnthropicMessagesRequest, request: Request | None = None
+) -> tuple[list[dict] | None, dict | None]:
+    """Round-tripped compaction blocks, then the request's context edits over its messages.
+    (applied_edits | None when none were asked for, compaction | None)."""
+    from ..anthropic_context_edit import COMPACT_EDIT
+
+    _expand_compaction_blocks(req)
+    if not (req.context_management or {}).get("edits"):
+        return None, None
+    edits = validate_edits(req.context_management)
     count = estimate_tokens
     try:
         engine, _ = await _resolve_engine(req.model)
@@ -1209,37 +1327,180 @@ async def _apply_context_management(req: AnthropicMessagesRequest) -> list[dict]
     if applied:
         for m, new in zip(req.messages, msgs, strict=True):
             m.content = new["content"]
-    return applied
+    compaction = None
+    compact = next((e for e in edits if e["type"] == COMPACT_EDIT), None)
+    if compact is not None and request is not None:
+        compaction = await _compact_context(req, request, compact, count)
+    return applied, compaction
 
 
-def _report_context_management(result, applied: list[dict]):
-    """`context_management.applied_edits` on the message (non-stream) or its message_delta."""
-    body = {"applied_edits": applied}
+def _compaction_iterations(compaction: dict, usage: dict | None) -> list[dict]:
+    u = compaction["usage"]
+    zero = {"cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+    out = [
+        {
+            "type": "compaction",
+            "input_tokens": u.get("input_tokens", 0),
+            "output_tokens": u.get("output_tokens", 0),
+            **zero,
+        }
+    ]
+    if usage is not None:
+        out.append(
+            {
+                "type": "message",
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                **zero,
+            }
+        )
+    return out
+
+
+def _compaction_message(req: AnthropicMessagesRequest, compaction: dict):
+    """`pause_after_compaction`: the response is the compaction block alone, stop_reason compaction."""
+    block = {"type": "compaction", "content": compaction["content"]}
+    usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "iterations": _compaction_iterations(compaction, None),
+    }
+    msg = {
+        "id": f"msg_{uuid.uuid4().hex[:24]}",
+        "type": "message",
+        "role": "assistant",
+        "model": req.model,
+        "content": [block],
+        "stop_reason": "compaction",
+        "stop_sequence": None,
+        "usage": usage,
+    }
+    if not req.stream:
+        return JSONResponse(msg)
+
+    def sse(name, data):
+        return (
+            f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
+        )
+
+    async def frames():
+        yield sse(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {**msg, "content": [], "stop_reason": None},
+            },
+        )
+        yield sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "compaction", "content": None},
+            },
+        )
+        yield sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "compaction_delta", "content": block["content"]},
+            },
+        )
+        yield sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+        yield sse(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "compaction", "stop_sequence": None},
+                "usage": usage,
+            },
+        )
+        yield sse("message_stop", {"type": "message_stop"})
+
+    return StreamingResponse(frames(), media_type="text/event-stream")
+
+
+def _report_context_management(
+    result, applied: list[dict] | None, compaction: dict | None = None
+):
+    """`context_management.applied_edits` on the message (non-stream) or its message_delta, and
+    a leading `compaction` block (with `usage.iterations`) when the context was compacted."""
+    body = {"applied_edits": applied or []}
+    block = (
+        {"type": "compaction", "content": compaction["content"]} if compaction else None
+    )
     if isinstance(result, StreamingResponse):
         inner = result.body_iterator
 
         async def tagged():
             pending = b""
+
+            def frame(name, data):
+                return (
+                    f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                ).encode()
+
             async for chunk in inner:
                 pending += chunk.encode() if isinstance(chunk, str) else bytes(chunk)
                 while b"\n\n" in pending:
                     raw, pending = pending.split(b"\n\n", 1)
-                    if b"event: message_delta" in raw:
-                        data = [
-                            ln[5:].strip()
-                            for ln in raw.splitlines()
-                            if ln.startswith(b"data:")
-                        ]
-                        try:
-                            ev = json.loads(b"\n".join(data))
-                            ev["context_management"] = body
-                            raw = (
-                                "event: message_delta\ndata: "
-                                + json.dumps(ev, ensure_ascii=False)
-                            ).encode()
-                        except ValueError:
-                            pass
+                    data = [
+                        ln[5:].strip()
+                        for ln in raw.splitlines()
+                        if ln.startswith(b"data:")
+                    ]
+                    try:
+                        ev = json.loads(b"\n".join(data))
+                    except ValueError:
+                        yield raw + b"\n\n"
+                        continue
+                    kind = ev.get("type") if isinstance(ev, dict) else None
+                    if block is not None and isinstance(ev.get("index"), int):
+                        ev["index"] += 1  # the compaction block took index 0
+                    if kind == "message_delta":
+                        ev["context_management"] = body
+                        if compaction:
+                            u = ev.setdefault("usage", {})
+                            u["iterations"] = _compaction_iterations(compaction, u)
+                    if kind in ("message_delta",) or (
+                        block is not None
+                        and kind
+                        in (
+                            "content_block_start",
+                            "content_block_delta",
+                            "content_block_stop",
+                        )
+                    ):
+                        raw = frame(kind, ev)[:-2]
                     yield raw + b"\n\n"
+                    if kind == "message_start" and block is not None:
+                        yield frame(
+                            "content_block_start",
+                            {
+                                "type": "content_block_start",
+                                "index": 0,
+                                "content_block": {
+                                    "type": "compaction",
+                                    "content": None,
+                                },
+                            },
+                        )
+                        yield frame(
+                            "content_block_delta",
+                            {
+                                "type": "content_block_delta",
+                                "index": 0,
+                                "delta": {
+                                    "type": "compaction_delta",
+                                    "content": block["content"],
+                                },
+                            },
+                        )
+                        yield frame(
+                            "content_block_stop",
+                            {"type": "content_block_stop", "index": 0},
+                        )
             if pending:
                 yield pending
 
@@ -1248,6 +1509,11 @@ def _report_context_management(result, applied: list[dict]):
         data = json.loads(bytes(result.body))
         if isinstance(data, dict) and data.get("type") == "message":
             data["context_management"] = body
+            if compaction is not None and block is not None:
+                data["content"] = [block, *data.get("content", [])]
+                data.setdefault("usage", {})["iterations"] = _compaction_iterations(
+                    compaction, data["usage"]
+                )
             result.body = json.dumps(data, ensure_ascii=False).encode()
             result.headers["content-length"] = str(len(result.body))
     return result
@@ -1278,7 +1544,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         return bad
     _apply_clear_at(req)
     try:
-        applied_edits = await _apply_context_management(req)
+        applied_edits, compaction = await _apply_context_management(req, request)
     except ContextEditError as exc:
         return JSONResponse(
             status_code=400,
@@ -1287,6 +1553,16 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
                 "error": {"type": "invalid_request_error", "message": str(exc)},
             },
         )
+    except ContextError as exc:
+        return JSONResponse(
+            status_code=exc.status,
+            content={
+                "type": "error",
+                "error": {"type": "api_error", "message": str(exc)},
+            },
+        )
+    if compaction is not None and compaction["pause"]:
+        return _compaction_message(req, compaction)
     temp_files: list[str] = []
     try:
         result = await _create_message(req, request, temp_files)
@@ -1294,7 +1570,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         _unlink_staged(temp_files)
         raise
     if applied_edits is not None:
-        result = _report_context_management(result, applied_edits)
+        result = _report_context_management(result, applied_edits, compaction)
     # A stream reads its files until it ends (an SSE error frame included); every other
     # return (early error, finished non-stream) is done with them here.
     if isinstance(result, StreamingResponse):
@@ -3419,7 +3695,7 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request):
         return bad
     _apply_clear_at(req)
     try:
-        _cm_applied = await _apply_context_management(req)
+        _cm_applied, _ = await _apply_context_management(req)
     except ContextEditError as exc:
         return JSONResponse(
             status_code=400,

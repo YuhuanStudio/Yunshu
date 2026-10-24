@@ -20,8 +20,11 @@ DEFAULT_TRIGGER_TOKENS = 100000
 DEFAULT_KEEP_TOOL_USES = 3
 _TOOL_EDIT = "clear_tool_uses_20250919"
 _THINK_EDIT = "clear_thinking_20251015"
-# Spec-valid, but there is no Claude-side summariser to run: accepted, never applied, never reported.
-_COMPACT_EDIT = "compact_20260112"
+# Server-side compaction: the served model summarizes the earlier turns (see routers/anthropic.py).
+COMPACT_EDIT = "compact_20260112"
+_COMPACT_EDIT = COMPACT_EDIT
+COMPACT_DEFAULT_TRIGGER = 150000
+COMPACT_MIN_TRIGGER = 50000
 
 
 class ContextEditError(ValueError):
@@ -37,7 +40,7 @@ def _blocks(msg: dict) -> list[dict]:
     return [b for b in c if isinstance(b, dict)] if isinstance(c, list) else []
 
 
-def _tokens(messages: list[dict], count: Callable[[str], int]) -> int:
+def tokens(messages: list[dict], count: Callable[[str], int]) -> int:
     return sum(
         count(json.dumps(m.get("content"), ensure_ascii=False, default=str))
         for m in messages
@@ -64,6 +67,20 @@ def validate(cfg: Any) -> list[dict]:
             raise ContextEditError(
                 f"context_management.edits.{i}: {_THINK_EDIT} must be the first edit"
             )
+        if t == _COMPACT_EDIT:
+            trig = e.get("trigger")
+            if trig is not None:
+                v = trig.get("value") if isinstance(trig, dict) else None
+                if (
+                    not isinstance(trig, dict)
+                    or trig.get("type") != "input_tokens"
+                    or not isinstance(v, int)
+                    or v < COMPACT_MIN_TRIGGER
+                ):
+                    raise ContextEditError(
+                        f"context_management.edits.{i}.trigger: must be "
+                        f"{{type: input_tokens, value: >= {COMPACT_MIN_TRIGGER}}}"
+                    )
     return edits
 
 
@@ -89,7 +106,7 @@ def _clear_thinking(
         return None
     freed = 0
     for i in old:
-        before = _tokens([messages[i]], count)
+        before = tokens([messages[i]], count)
         messages[i]["content"] = [
             b
             for b in messages[i]["content"]
@@ -98,7 +115,7 @@ def _clear_thinking(
                 and b.get("type") in ("thinking", "redacted_thinking")
             )
         ] or [{"type": "text", "text": ""}]
-        freed += before - _tokens([messages[i]], count)
+        freed += before - tokens([messages[i]], count)
     return {
         "type": _THINK_EDIT,
         "cleared_input_tokens": max(freed, 0),
@@ -124,7 +141,7 @@ def _clear_tool_uses(
     if trigger.get("type") == "tool_uses":
         if len(uses) <= value:
             return None
-    elif _tokens(messages, count) <= value:
+    elif tokens(messages, count) <= value:
         return None
     keep = (edit.get("keep") or {}).get("value", DEFAULT_KEEP_TOOL_USES)
     candidates = uses[: len(uses) - keep] if keep else uses
@@ -134,7 +151,7 @@ def _clear_tool_uses(
         return None
     ci = edit.get("clear_tool_inputs")
     names = set(ci) if isinstance(ci, list) else set()
-    before = _tokens(messages, count)
+    before = tokens(messages, count)
     cleared = 0
     for m in messages:
         for b in _blocks(m):
@@ -144,7 +161,7 @@ def _clear_tool_uses(
                 cleared += 1
             elif b.get("type") == "tool_result" and b.get("tool_use_id") in ids:
                 b["content"] = CLEARED_PLACEHOLDER
-    freed = before - _tokens(messages, count)
+    freed = before - tokens(messages, count)
     least = (edit.get("clear_at_least") or {}).get("value", 0)
     if freed < least or freed <= 0:
         return None  # signalled to the caller, which restores the snapshot
@@ -167,7 +184,7 @@ def apply_edits(
     for edit in edits:
         snapshot = copy.deepcopy(out)
         if edit["type"] == _COMPACT_EDIT:
-            continue
+            continue  # run by the router: it needs the model
         fn = _clear_thinking if edit["type"] == _THINK_EDIT else _clear_tool_uses
         result = fn(out, edit, count)
         if result is None:

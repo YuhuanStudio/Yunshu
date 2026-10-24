@@ -138,3 +138,152 @@ def test_endpoint_bad_edit_is_400(server):  # noqa: F811
     body["context_management"] = {"edits": [{"type": "bogus"}]}
     r = client.post("/v1/messages", json=body)
     assert r.status_code == 400 and r.json()["error"]["type"] == "invalid_request_error"
+
+
+# ── compact_20260112: server-side compaction ─────────────────────────────
+
+
+def _big(**extra):
+    big = "word " * 60000  # about 75K tokens by the estimator
+    msgs = [
+        {"role": "user", "content": "OLDTURN " + big},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "LASTTURN"},
+    ]
+    edit = {"type": "compact_20260112", **extra}
+    return {
+        "model": "m",
+        "max_tokens": 8,
+        "messages": msgs,
+        "context_management": {"edits": [edit]},
+    }
+
+
+@pytest.fixture
+def summarizer(monkeypatch):
+    from yunshu_gateway import responses_context
+
+    calls = []
+
+    async def fake(request, model, entries, instructions=None, guidance=None, *a, **k):
+        calls.append({"n": len(entries), "guidance": guidance})
+        return "SUMMARY-TEXT", {"input_tokens": 70000, "output_tokens": 12}
+
+    monkeypatch.setattr(responses_context, "summarize_history", fake)
+    return calls
+
+
+def test_compaction_summarizes_and_prepends_block(server, summarizer):  # noqa: F811
+    client, captured = server
+    r = client.post(
+        "/v1/messages",
+        json=_big(
+            trigger={"type": "input_tokens", "value": 50000}, instructions="be brief"
+        ),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["content"][0] == {"type": "compaction", "content": "SUMMARY-TEXT"}
+    assert body["content"][1]["type"] == "text"
+    its = body["usage"]["iterations"]
+    assert [i["type"] for i in its] == ["compaction", "message"]
+    assert its[0]["input_tokens"] == 70000 and its[0]["output_tokens"] == 12
+    sent = json.dumps(captured["messages"])
+    assert "SUMMARY-TEXT" in sent and "LASTTURN" in sent and "OLDTURN" not in sent
+    assert summarizer[0]["guidance"] == "be brief"
+
+
+def test_compaction_not_triggered_below_threshold(server, summarizer):  # noqa: F811
+    client, _ = server
+    r = client.post(
+        "/v1/messages",
+        json=_big(trigger={"type": "input_tokens", "value": 500000}),
+    )
+    assert r.status_code == 200
+    assert all(b["type"] != "compaction" for b in r.json()["content"])
+    assert not summarizer
+
+
+def test_compaction_pause_returns_only_the_block(server, summarizer):  # noqa: F811
+    client, captured = server
+    r = client.post(
+        "/v1/messages",
+        json=_big(
+            trigger={"type": "input_tokens", "value": 50000},
+            pause_after_compaction=True,
+        ),
+    )
+    body = r.json()
+    assert body["stop_reason"] == "compaction"
+    assert [b["type"] for b in body["content"]] == ["compaction"]
+    assert "messages" not in captured  # nothing was generated
+
+
+def test_compaction_stream_shifts_block_indexes(server, summarizer):  # noqa: F811
+    from yunshu_engine.batched_engine import GenerationOutput
+    from yunshu_gateway.engine import get_engine
+
+    async def _stream(*args, **kwargs):
+        yield GenerationOutput(
+            text="ok",
+            new_text="ok",
+            prompt_tokens=1,
+            completion_tokens=1,
+            finished=True,
+            finish_reason="stop",
+        )
+
+    get_engine().stream_chat = _stream
+    client, _ = server
+    r = client.post(
+        "/v1/messages",
+        json={**_big(trigger={"type": "input_tokens", "value": 50000}), "stream": True},
+    )
+    ev = [json.loads(ln[5:]) for ln in r.text.splitlines() if ln.startswith("data:")]
+    starts = [e for e in ev if e["type"] == "content_block_start"]
+    assert (
+        starts[0]["index"] == 0 and starts[0]["content_block"]["type"] == "compaction"
+    )
+    assert starts[1]["index"] == 1 and starts[1]["content_block"]["type"] == "text"
+    delta = next(
+        e for e in ev if e["type"] == "content_block_delta" and e["index"] == 0
+    )
+    assert delta["delta"] == {"type": "compaction_delta", "content": "SUMMARY-TEXT"}
+    last = next(e for e in ev if e["type"] == "message_delta")
+    assert [i["type"] for i in last["usage"]["iterations"]] == ["compaction", "message"]
+
+
+def test_round_tripped_compaction_block_replaces_earlier_turns(server):  # noqa: F811
+    client, captured = server
+    body = {
+        "model": "m",
+        "max_tokens": 8,
+        "messages": [
+            {"role": "user", "content": "ANCIENT"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "compaction", "content": "EARLIER-SUMMARY"},
+                    {"type": "text", "text": "reply"},
+                ],
+            },
+            {"role": "user", "content": "NEXT"},
+        ],
+    }
+    r = client.post("/v1/messages", json=body)
+    assert r.status_code == 200, r.text
+    sent = json.dumps(captured["messages"])
+    assert "EARLIER-SUMMARY" in sent and "NEXT" in sent and "ANCIENT" not in sent
+    body["messages"][1]["content"][0]["content"] = (
+        None  # a failed compaction is a no-op
+    )
+    r = client.post("/v1/messages", json=body)
+    assert "ANCIENT" in json.dumps(captured["messages"])
+
+
+def test_compaction_trigger_below_minimum_is_400(server):  # noqa: F811
+    client, _ = server
+    r = client.post(
+        "/v1/messages", json=_big(trigger={"type": "input_tokens", "value": 1000})
+    )
+    assert r.status_code == 400
