@@ -276,6 +276,7 @@ YUNSHU_REALTIME_SILENCE_MS = 400
 
 | Setting | Type | Default | Applies | Description |
 |---|---|---|---|---|
+| `YUNSHU_OBSERVE` | bool | off | restart | Observe mode (`yunshu serve --observe`): turn on every observability feature you did not set yourself: /debug/* routes, host telemetry, the serve log, the audit log file (~/.yunshu/logs/audit.log), exact token ids in logprobs, and the generation capture file (~/.yunshu/logs/stream_capture.jsonl). A value you set explicitly (flag, env, config file) always wins and shows its own source; the others show source 'observe'. Costs: telemetry adds about +1.8% follow-up TTFT at 1K (27B A/B), the logs and capture write small files; keep it off for speed benchmarks. Without a token, /debug/* answers loopback clients only. |
 | `YUNSHU_DEBUG_ROUTES` | bool | off | restart | Mount the /debug/* diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or YUNSHU_AUTH_DISABLED. /metrics is always mounted. |
 | `YUNSHU_DEBUG_TREE_PROFILE` | bool | off | live | Debugging aid: time every stage of the DFlash tree verify (GDN mixer, attention, MLP, residual norms, commit) by evaluating after each one, and log the per-round means when a request ends. The sync after each stage lengthens the round; the split is for finding the dominant stage, not for speed. |
 | `YUNSHU_LOG_LEVEL` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` | INFO | restart | Log level for Yunshu's loggers (third-party loggers stay at WARNING). |

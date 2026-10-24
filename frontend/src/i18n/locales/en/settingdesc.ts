@@ -97,6 +97,8 @@ const settingdesc = {
     "Disable auth entirely (operational endpoints open too). Local development only.",
   YUNSHU_DEBUG_TREE_PROFILE:
     "Debugging aid: time each stage of the DFlash tree verify (GDN mixer, attention, MLP, norms, commit) and log per-round means when a request ends. Adds a sync after every stage, so it slows decoding; use only to find the dominant stage.",
+  YUNSHU_OBSERVE:
+    "Observe mode (`yunshu serve --observe`): turns on every observability feature you did not set yourself: `/debug/*` routes, host telemetry, the serve log, the audit log file, token ids in logprobs and the generation capture file. An explicit value wins. Telemetry costs about +1.8% follow-up TTFT at 1K, so keep it off for speed benchmarks. Without a token, `/debug/*` answers this Mac only.",
   YUNSHU_DEBUG_ROUTES:
     "Mount the `/debug/*` diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or `YUNSHU_AUTH_DISABLED`. `/metrics` is always mounted.",
   YUNSHU_DEBUG_STREAM_CAPTURE:

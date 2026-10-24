@@ -29,6 +29,19 @@ router = APIRouter(prefix="/debug", tags=["debug"])
 metrics_router = APIRouter(tags=["metrics"])
 
 
+def _is_loopback_request(request: Request) -> bool:
+    """True for a direct loopback client (no proxy header)."""
+    import ipaddress
+
+    if any(h in request.headers for h in ("x-forwarded-for", "forwarded", "x-real-ip")):
+        return False
+    client = request.client.host if request.client else ""
+    try:
+        return ipaddress.ip_address(client).is_loopback
+    except ValueError:
+        return client == "localhost"
+
+
 def _check_permission(request: Request) -> None:
     """Check auth on monitoring endpoints (deny-by-default).
 
@@ -42,6 +55,13 @@ def _check_permission(request: Request) -> None:
     if settings.get_bool("YUNSHU_AUTH_DISABLED"):
         return
     auth_token = settings.get("YUNSHU_AUTH_TOKEN")
+    if (
+        not auth_token
+        and settings.get_bool("YUNSHU_OBSERVE")
+        and _is_loopback_request(request)
+    ):
+        # Observe mode without a token: this Mac only.
+        return
     if not auth_token:
         # No auth configured — deny access.
         raise HTTPException(
@@ -202,6 +222,45 @@ def _get_model_status() -> list[dict[str, Any]]:
             }
         )
     return results
+
+
+def _in_flight_raw() -> list[dict[str, Any]]:
+    """Each in-flight request as the engine's own counters say it (the console's debug view
+    compares these with what it displays). Times are ms after arrival; None = not reached."""
+    import time
+
+    from ..x_yunshu import registry
+
+    out: list[dict[str, Any]] = []
+    now = time.perf_counter()
+    for info in registry.active():
+        st = info.stats
+        row: dict[str, Any] = {
+            "request_id": info.request_id,
+            "path": info.path,
+            "stream": info.stream,
+            "elapsed_ms": round((now - info.arrived) * 1000.0, 1),
+            "has_stats": st is not None,
+        }
+        if st is not None:
+
+            def off(t: float | None) -> float | None:
+                return round((t - info.arrived) * 1000.0, 1) if t else None
+
+            row.update(
+                phase=st.phase,
+                prompt_tokens=st.prompt_tokens,
+                cached_tokens=st.cached_tokens,
+                prefill_done=st.prefill_done,
+                prefill_total=st.prefill_total,
+                prefill_known=getattr(st, "prefill_known", True),
+                generated=st.generated,
+                t_admit_ms=off(st.t_admit),
+                t_first_ms=off(st.t_first),
+                t_last_ms=off(st.t_last),
+            )
+        out.append(row)
+    return out
 
 
 def _get_active_requests() -> dict[str, Any]:
@@ -368,6 +427,7 @@ async def requests_stats(
     """Active and recent request statistics."""
     _check_permission(request)
     data = _get_active_requests()
+    data["in_flight"] = _in_flight_raw()
     # Add aggregator percentiles.
     agg = get_metrics_aggregator()
     data["latency_percentiles"] = agg.get_percentiles(

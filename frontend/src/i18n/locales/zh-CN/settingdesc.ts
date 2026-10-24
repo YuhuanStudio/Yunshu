@@ -89,6 +89,8 @@ const settingdesc = {
     "完全禁用认证（运维类端点也会开放），仅供本地开发使用。",
   YUNSHU_DEBUG_TREE_PROFILE:
     "调试用：为 DFlash 树验证的每个阶段（GDN、注意力、MLP、归一化、提交）计时，请求结束时记录每轮平均。每个阶段后都会同步，因此会拖慢解码；只用来找出最耗时的阶段。",
+  YUNSHU_OBSERVE:
+    "观察模式（`yunshu serve --observe`）：未明确设置的观测功能一次全开——/debug/* 路由、主机遥测、服务日志、审计日志文件、logprobs 的 token id、生成捕获文件。明确设置的值优先。遥测约使 1K 后续 TTFT 增加 1.8%；速度基准测试请关闭。无令牌时 /debug/* 仅限本机。",
   YUNSHU_DEBUG_ROUTES:
     "挂载 `/debug/*` 诊断路由（engine、system、kv-cache、spec-decode 等），需要认证令牌或 `YUNSHU_AUTH_DISABLED`；`/metrics` 始终挂载。",
   YUNSHU_DEBUG_STREAM_CAPTURE:

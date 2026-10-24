@@ -29,6 +29,7 @@ const diagnostics: Shape<typeof zh> = {
   "config.source.cli": "命令行",
   "config.source.default": "默认",
   "config.source.env": "环境变量",
+  "config.source.observe": "观察模式",
   "config.source.file": "配置文件",
   "config.stability.experimental": "实验",
   "config.stability.internal": "内部",
@@ -87,6 +88,8 @@ const diagnostics: Shape<typeof zh> = {
     "后端近 60 秒 HTTP 请求耗时统计，与首页观测到的首 token 延迟分布不同。",
   "latency.title": "服务延迟百分位数",
   loading: "正在读取 {items}…",
+  "observe.badge": "观察模式：引擎已开启所有观测功能",
+  "observe.unreadable": "引擎报告观察模式，但 /debug 无法读取（需要令牌，或从本机连接）。",
   "off.body":
     "以 {flag} 启动引擎后重新连接；另需访问令牌，或设置 {authFlag}。控制台不会自行更改引擎设置。",
   "off.description": "逐项诊断（主机、请求、缓存、解码、内存）需要它。",

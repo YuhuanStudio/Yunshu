@@ -1,0 +1,35 @@
+---
+title: Debugging and observability
+description: One switch turns on the debug routes, host telemetry, serve log, audit log, token ids and generation capture; the console then shows every panel and compares the engine's request state with what it displays.
+---
+
+`yunshu serve --observe` (or `YUNSHU_OBSERVE=1`) turns on every observability feature you did not set yourself. Use it for any engine you want to supervise: problems show up in the engine's own numbers instead of being guessed from a page.
+
+## What it turns on
+
+| Setting | Under observe | What it costs |
+| --- | --- | --- |
+| `YUNSHU_DEBUG_ROUTES` | on: the `/debug/*` routes (engine, system, requests, kv-cache, spec-decode, memory) | Reads only; nothing on the decode path |
+| `YUNSHU_TELEMETRY` | `on` (the sampler's only mode; 1 Hz) | A small, consistent follow-up TTFT cost: +1.8% (about 11 ms) at 1K prose on 27B, decode identical within noise; see [Host telemetry](/docs/guides/telemetry) |
+| `YUNSHU_SERVE_LOG` | on, in `~/.yunshu/logs` | One numbers-only JSON line per finished request, size-capped and rotated |
+| `YUNSHU_AUDIT_LOG_FILE` | `~/.yunshu/logs/audit.log` | One line per audited operation |
+| `YUNSHU_REPLAY_TOKEN_IDS` | on: exact `token_id` in requested logprobs | A few bytes per logprob token |
+| `YUNSHU_DEBUG_STREAM_CAPTURE` | `~/.yunshu/logs/stream_capture.jsonl` | One JSON line per generation (token ids and text pieces); grows without bound, so clear it when you are done |
+
+A value you set yourself always wins, whatever its source (flag, environment, config file), and `yunshu config` shows the others with source `observe`. Keep observe off for speed benchmarks: telemetry is a measurable cost, and speed numbers taken with it on are not comparable with numbers taken with it off.
+
+## Who may read `/debug/*`
+
+The same rule as before: the token (`YUNSHU_AUTH_TOKEN`) or `YUNSHU_AUTH_DISABLED`. Under observe, an engine **without** a token also answers `/debug/*` to clients on this Mac (loopback) only; a request from the network, or one that carries a proxy header such as `X-Forwarded-For`, is refused. With a token set, the token is always required. Never expose `/debug` on `0.0.0.0` without one.
+
+## In the console
+
+When the attached engine reports observe mode (`observe: true` in `/v1/yunshu/status`):
+
+- Diagnostics shows every group (host, requests, KV and prefix cache, decode, memory) and says that observe mode is on; if `/debug` cannot be read it says so instead of showing nothing.
+- The Requests page opens its **Debug data** section. For each in-flight request it shows, one above the other, what the page displays and what the engine's `/debug/requests` reports: phase, prefill progress in tokens, generated tokens, and the admit and first-token times. A value that disagrees is marked red; a request `/debug` does not know is greyed. The switch hides the section; your choice is remembered in this browser.
+- The speculation panel and the host panel read their counters from the same routes.
+
+## Harnesses
+
+`tfbench`, the agentic runner and `conc_probe` start or require an observing engine (`TFB_OBSERVE=0` and `AGENTIC_OBSERVE=0` keep a pure timing run clean; `conc_probe` refuses an engine that does not report observe unless `--allow-no-observe`). `yv` runs `smoke`, `identity` and `apc` with observe on and the timing stages with it explicitly off; `yv ab --observe` turns it on everywhere, and the run's `state.json` records which stages used it.
