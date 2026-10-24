@@ -316,7 +316,8 @@ test.describe("requests page finished-request ring", () => {
       "title",
       /ring-req-0123456789abcdef-\d{3}/,
     );
-    await expect(id).toContainText("…");
+    // The column has room: the whole id shows (only ids over 32 characters keep both ends).
+    await expect(id).toContainText(/ring-req-0123456789abcdef-\d{3}/);
     const boxes = await first.locator("td").evaluateAll((cells) =>
       cells
         .map((c) => c.getBoundingClientRect())
