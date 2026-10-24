@@ -102,13 +102,37 @@ def check_stream(c):
 
 
 def check_tools(c):
-    r = c.oa.chat.completions.create(
-        model=c.model,
-        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
-        tools=[TOOL],
-        tool_choice="required",
-        max_tokens=1500,
-    )
+    import openai
+
+    note = {}
+    try:
+        r = c.oa.chat.completions.create(
+            model=c.model,
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[TOOL],
+            tool_choice="required",
+            max_tokens=1500,
+        )
+    except openai.BadRequestError as e:
+        # By design: a model whose tool grammar cannot compile refuses to promise a forced call.
+        # Then `auto` must still produce a parsed call.
+        if "Cannot guarantee forced tool_choice" not in str(e):
+            raise
+        note["forced_tool_choice"] = (
+            "refused with 400 (documented: grammar cannot compile)"
+        )
+        r = c.oa.chat.completions.create(
+            model=c.model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What is the weather in Paris? Use the get_weather tool.",
+                }
+            ],
+            tools=[TOOL],
+            tool_choice="auto",
+            max_tokens=1500,
+        )
     calls = r.choices[0].message.tool_calls or []
     if not calls:
         raise AssertionError(
@@ -117,7 +141,7 @@ def check_tools(c):
     args = json.loads(calls[0].function.arguments)
     if calls[0].function.name != "get_weather" or "city" not in args:
         raise AssertionError(f"bad call {calls[0].function}")
-    return {"name": calls[0].function.name, "args": args}
+    return {"name": calls[0].function.name, "args": args, **note}
 
 
 def check_vision(c):
