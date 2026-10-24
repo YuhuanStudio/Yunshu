@@ -127,7 +127,7 @@ export function StateStrip({
                 data-phase={id}
                 data-lit={lit ? "true" : "false"}
                 aria-current={a?.phase === id ? "true" : undefined}
-                className={`inline-flex h-6 items-center gap-1.5 rounded-md px-2 text-xs transition-opacity duration-150 ${lit ? "bg-(--bg-elevated) text-foreground" : "text-muted-foreground opacity-50"}`}
+                className={`inline-flex h-6 items-center gap-1.5 rounded-md px-2 text-xs transition-opacity duration-(--dur-fast) ${lit ? "bg-(--bg-elevated) text-foreground" : "text-muted-foreground opacity-50"}`}
               >
                 <StatusIndicator status={dot(id, lit)} />
                 {tr(`overview.phase.${id}`)}
@@ -400,7 +400,7 @@ export function FoldSection({
           {title}
           <ChevronDown
             size={15}
-            className={`text-muted-foreground transition-transform duration-150 ${open ? "rotate-180" : ""}`}
+            className={`text-muted-foreground transition-transform duration-(--dur-fast) ${open ? "rotate-180" : ""}`}
           />
         </Button>
       </CollapsibleTrigger>

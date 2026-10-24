@@ -8,7 +8,7 @@ import { reducedMotion } from "./ticker";
  *
  * Mark each row with `data-flip="<stable id>"`; call with the list's container.
  */
-export function useFlip(container: RefObject<HTMLElement | null>, ms = 200) {
+export function useFlip(container: RefObject<HTMLElement | null>) {
   const tops = useRef(new Map<string, number>());
   useLayoutEffect(() => {
     const root = container.current;
@@ -31,7 +31,7 @@ export function useFlip(container: RefObject<HTMLElement | null>, ms = 200) {
       el.style.transition = "none";
       el.style.transform = `translateY(${dy}px)`;
       void el.offsetHeight; // commit the inverted position before animating
-      el.style.transition = `transform ${ms}ms ease-out`;
+      el.style.transition = "transform var(--dur-base) var(--ease-standard)";
       el.style.transform = "";
     }
     tops.current = next;
