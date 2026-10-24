@@ -109,6 +109,7 @@ export function ObservePanel({
     prefill: t("requests.debug.col.prefill"),
     tokens: t("requests.debug.col.tokens"),
     admit: t("requests.debug.col.admit"),
+    prefillStart: t("requests.debug.col.prefillStart"),
     first: t("requests.debug.col.first"),
   } as const;
   return (

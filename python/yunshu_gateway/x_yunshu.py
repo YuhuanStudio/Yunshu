@@ -489,7 +489,7 @@ def _ms(seconds: float | None) -> float | None:
 
 def phase_offsets_ms(info: RequestInfo, t_first: float | None = None) -> dict:
     """Phase timestamps as milliseconds after the request arrived (``arrive`` is 0 by
-    definition): left the queue and started prefill (``admit``), first and latest generated
+    definition): admitted (``admit``), first prefill atom started (``prefill_start``), first and latest generated
     token, done. A phase not reached yet is None. One monotonic clock, so the lanes of a
     timeline line up exactly; ``t0_wall`` (epoch seconds) anchors them to the wall clock."""
     st = info.stats
@@ -505,7 +505,10 @@ def phase_offsets_ms(info: RequestInfo, t_first: float | None = None) -> dict:
         t_first = st_first or info.t_first_chunk
     return {
         "arrive": 0.0,
-        "admit": off(prefill_began(st) or None),
+        # ``admit``: the engine admitted it; ``prefill_start``: its own first prefill atom began (queue wait
+        # and prefill time are measured from here, so concurrent requests do not count peers' prefill as theirs).
+        "admit": off(getattr(st, "t_admit", 0.0) or None),
+        "prefill_start": off(prefill_began(st) or None),
         "first_token": off(t_first),
         "last_token": off(getattr(st, "t_last", None) if st_first else None),
         "done": off(info.t_done),

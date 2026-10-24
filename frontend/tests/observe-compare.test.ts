@@ -67,3 +67,22 @@ test("a token gap the sampling skew explains is not a mismatch", () => {
   assert.equal(anyDiffers(compareRequest(fast, dbg, 1)), true); // 177 > 16 + 1 * 105
   assert.equal(anyDiffers(compareRequest(fast, dbg, 2)), false); // 177 <= 16 + 2 * 105
 });
+
+test("admit and prefill start are compared each with its own engine field", () => {
+  const row = {
+    ...ui,
+    offsets_ms: { admit: 30, prefill_start: 3245, first_token: 3300 },
+  } as never;
+  const dbg = {
+    request_id: "r1",
+    phase: "decode",
+    generated: 40,
+    t_admit_ms: 30.1,
+    t_prefill_start_ms: 3245.2,
+    t_first_ms: 3300,
+  };
+  const cells = compareRequest(row, dbg);
+  assert.equal(cells.find((c) => c.key === "admit")?.state, "match");
+  assert.equal(cells.find((c) => c.key === "prefillStart")?.state, "match");
+  assert.equal(anyDiffers(cells), false);
+});

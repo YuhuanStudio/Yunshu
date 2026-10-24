@@ -130,6 +130,7 @@ def test_debug_requests_lists_in_flight_with_engine_counters():
             prefill_known=True,
             generated=7,
             t_admit=t0 + 0.01,
+            t_prefill_start=t0 + 0.2,
             t_first=t0 + 0.5,
             t_last=t0 + 0.6,
         )
@@ -144,3 +145,4 @@ def test_debug_requests_lists_in_flight_with_engine_counters():
     assert row["phase"] == "decode" and row["generated"] == 7
     assert row["prefill_done"] == 36 and row["cached_tokens"] == 64
     assert 9 <= row["t_admit_ms"] <= 11 and 499 <= row["t_first_ms"] <= 501
+    assert 199 <= row["t_prefill_start_ms"] <= 201

@@ -256,6 +256,7 @@ def _in_flight_raw() -> list[dict[str, Any]]:
                 prefill_known=getattr(st, "prefill_known", True),
                 generated=st.generated,
                 t_admit_ms=off(st.t_admit),
+                t_prefill_start_ms=off(getattr(st, "t_prefill_start", None)),
                 t_first_ms=off(st.t_first),
                 t_last_ms=off(st.t_last),
             )

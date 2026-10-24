@@ -18,7 +18,7 @@ export const durationValue = (ms: number) =>
 /** Wall-clock pieces of one finished request, all measured by the server; null when unreported. */
 export function breakdown(row: Row) {
   const o = row.offsets_ms ?? {},
-    admit = num(o.admit),
+    admit = num(o.prefill_start) ?? num(o.admit),
     first = num(o.first_token),
     last = num(o.last_token),
     done = num(o.done);

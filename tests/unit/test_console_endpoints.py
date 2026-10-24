@@ -81,6 +81,7 @@ def test_offsets_none_for_unreached_phases():
     assert off == {
         "arrive": 0.0,
         "admit": None,
+        "prefill_start": None,
         "first_token": None,
         "last_token": None,
         "done": None,
@@ -576,3 +577,19 @@ async def test_host_read_follows_the_token_when_set():
         assert (await c.get("/v1/yunshu/host")).status_code == 401
         h = {"Authorization": "Bearer tok"}
         assert (await c.get("/v1/yunshu/host", headers=h)).status_code == 200
+
+
+def test_offsets_name_admit_and_prefill_start_apart():
+    """A request admitted early but whose own prefill starts later (a peer's prefill ran first)
+    reports both, each as what it is."""
+    t0 = time.perf_counter()
+    info = x_yunshu.RequestInfo(request_id="p", method="POST", path="/v1/x")
+    info.arrived = t0
+    info.gen = SimpleNamespace(
+        stats=SimpleNamespace(
+            t_admit=t0 + 0.03, t_prefill_start=t0 + 3.2, t_first=0.0, t_last=0.0
+        )
+    )
+    off = x_yunshu.phase_offsets_ms(info)
+    assert off["admit"] == pytest.approx(30, abs=1)
+    assert off["prefill_start"] == pytest.approx(3200, abs=1)
