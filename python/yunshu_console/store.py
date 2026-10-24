@@ -396,7 +396,8 @@ class HistoryStore:
                 v = _num((json.loads(detail) if detail else {}).get("down_s"))
             except (ValueError, AttributeError):
                 v = None
-            if v is not None and v >= 0:
+            # a restart is seconds to a few minutes; longer gaps are the engine being stopped, not restarting
+            if v is not None and 0 <= v <= 600:
                 downs.append(v)
         downs.sort()
         median = None

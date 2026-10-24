@@ -303,5 +303,6 @@ const requests: Shape<typeof zh> = {
   "list.mobileUsage": "{prompt} in · {cached} cached · {out} out",
   "list.awayEmpty": "The engine is away and nothing has been recorded yet",
   "list.away": "Engine went away {time}",
+  "list.recentFinished": "Recently finished",
 };
 export default requests;

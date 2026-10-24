@@ -82,7 +82,7 @@ function EntriesTable({
   return (
     <div className="space-y-2">
       {/* Entries come and go and re-sort as the cache fills: room for eight rows is kept, and rows glide. */}
-      <div className="min-h-[19rem]" data-live-list="" ref={listRef}>
+      <div className="min-h-[10rem]" data-live-list="" ref={listRef}>
         <Table scrollLabel={t("cache.entries.title")} className="min-w-[560px]">
           <Thead>
             <Tr>

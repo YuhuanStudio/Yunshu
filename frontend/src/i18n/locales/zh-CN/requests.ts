@@ -285,5 +285,6 @@ const requests: Shape<typeof zh> = {
   "list.mobileUsage": "输入 {prompt} · 命中 {cached} · 输出 {out}",
   "list.awayEmpty": "引擎暂时离线，也还没有记录到请求",
   "list.away": "引擎于 {time} 离线",
+  "list.recentFinished": "最近完成",
 };
 export default requests;
