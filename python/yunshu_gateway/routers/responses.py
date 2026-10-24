@@ -32,6 +32,13 @@ from pydantic import (
 )
 
 from yunshu_engine import settings
+from yunshu_engine.output_limits import (
+    MAX_THINKING_BUDGET,
+    SOURCE_REQUEST,
+    default_max_output,
+    default_source,
+    fold_effort,
+)
 
 from ..engine import get_engine, get_engine_for_model
 from ..error_envelope import EngineStreamError, server_error_body
@@ -670,8 +677,10 @@ class ResponsesRequest(BaseModel):
     conversation: str | dict | None = None
     # [{"type": "compaction", "compact_threshold": N}]: compact the input first when it exceeds N tokens.
     context_management: list[dict] | None = None
+    # Omitted -> the model's output limit incl. reasoning tokens (OpenAI Responses reference;
+    # yunshu_engine.output_limits), clamped to the context room by token_budget.
     max_output_tokens: int = Field(
-        default_factory=lambda: int(settings.get("YUNSHU_DEFAULT_MAX_TOKENS")),
+        default_factory=default_max_output,
         ge=1,
         le=1048576,
     )
@@ -691,7 +700,7 @@ class ResponsesRequest(BaseModel):
     text: dict | None = None  # Responses API: {format: {type, name, schema, strict}}
     seed: int | None = None
     enable_thinking: bool | None = None
-    thinking_budget: int | None = Field(default=None, ge=1, le=32768)
+    thinking_budget: int | None = Field(default=None, ge=1, le=MAX_THINKING_BUDGET)
     reasoning_effort: str | None = None
     # OpenAI's canonical Responses API carries reasoning depth as a nested object
     # `reasoning: {effort: "high"}`. Accept it (the validator maps .effort →
@@ -826,6 +835,10 @@ class ResponsesRequest(BaseModel):
             _eff = self.reasoning.get("effort")
             if isinstance(_eff, str) and _eff:
                 object.__setattr__(self, "reasoning_effort", _eff)
+        # OpenAI ReasoningEffort "none" / "minimal": no reasoning
+        _et, _ef = fold_effort(self.enable_thinking, self.reasoning_effort)
+        object.__setattr__(self, "enable_thinking", _et)
+        object.__setattr__(self, "reasoning_effort", _ef)
         # Validate input: string must be non-empty, list must have elements
         if isinstance(self.input, str) and not self.input.strip():
             raise ValueError("input: cannot be empty or whitespace-only")
@@ -1718,7 +1731,16 @@ async def create_response(req: ResponsesRequest, request: Request):
         from ..token_budget import plan_for_engine
 
         _tb = plan_for_engine(
-            _est, req.max_output_tokens, req.thinking_budget, req.model, engine
+            _est,
+            req.max_output_tokens,
+            req.thinking_budget,
+            req.model,
+            engine,
+            source=(
+                SOURCE_REQUEST
+                if {"max_output_tokens", "max_completion_tokens"} & req.model_fields_set
+                else default_source()
+            ),
         )
         if _tb is not None and _tb.clamped:
             req.max_output_tokens = _tb.max_tokens_granted

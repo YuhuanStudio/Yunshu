@@ -39,7 +39,7 @@ Yunshu 在 `POST /v1/messages`（也可用 `POST /messages`）提供 Anthropic M
 | --- | --- | --- | --- | --- |
 | `model` | string | 是 | 模型 id；单模型模式下仅供参考。 | 支持 |
 | `messages` | array | 是 | 非空的 `{role, content}` 列表。`content` 是字符串或区块列表。位于开头或对话中的 `system` 角色条目会被提升到系统提示。 | 支持 |
-| `max_tokens` | integer | 否 | 1 到 1048576。Anthropic API 要求必填；Yunshu 省略时退回 1024。 | 支持 |
+| `max_tokens` | integer | 否 | 1 到 1048576。与 Anthropic API 相同为必填：省略会返回 `400` `invalid_request_error`（`max_tokens: Field required`）。 | 支持 |
 | `system` | string 或文本区块数组 | 否 | 系统提示。区块可带 `cache_control`。 | 支持 |
 | `temperature` | number | 否 | 0 到 2。省略时默认 0.7。 | 支持 |
 | `top_p`、`top_k` | number、integer | 否 | `top_p` 为 0 到 1（默认 1.0）；`top_k` 为 0 表示禁用。 | 支持 |
@@ -55,6 +55,7 @@ Yunshu 在 `POST /v1/messages`（也可用 `POST /messages`）提供 Anthropic M
 | --- | --- | --- |
 | `thinking: {"type": "enabled", "budget_tokens": N}` | 打开思考并配置预算。`budget_tokens` 必须是小于 `max_tokens` 的正整数，否则 `400`。推理内容以 `thinking` 内容区块返回。 | 支持 |
 | `thinking: {"type": "disabled"}` | 关闭思考。 | 支持 |
+| 没有 `thinking` 字段 | 思考关闭，与 Anthropic API 相同（思考需主动开启）。 | 支持 |
 | `thinking: {"type": "adaptive"}` | 沿用模型模板的默认。 | 支持 |
 | `output_config.effort` | 对应到模板的推理强度。`reasoning_effort` 是 Yunshu 的写法。 | 支持 |
 

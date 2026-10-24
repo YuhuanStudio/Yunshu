@@ -13,7 +13,7 @@ class TestCompletionRequest:
         req = CompletionRequest(model="test", prompt="hello")
         assert req.model == "test"
         assert req.prompt == "hello"
-        assert req.max_tokens == 128
+        assert req.max_tokens == 16
         assert req.temperature == 0.7
         assert req.top_p == 1.0
         assert req.stream is False

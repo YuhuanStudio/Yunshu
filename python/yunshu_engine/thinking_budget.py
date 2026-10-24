@@ -158,11 +158,8 @@ class ThinkingBudgetProcessor:
 def parse_thinking_budget(params: dict) -> ThinkingBudgetConfig | None:
     """Parse thinking budget from OpenAI/Anthropic request params.
 
-    OpenAI reasoning_effort: "low" | "medium" | "high"
-    Maps to thinking token budgets:
-    - low: 2048 tokens
-    - medium: 8192 tokens (default)
-    - high: 32768 tokens
+    OpenAI reasoning_effort -> thinking token budget (output_limits.EFFORT_THINKING_BUDGET):
+    low 2048, medium 8192, high 32768, xhigh 131072, max 262144; "none"/"minimal" -> off.
     """
     budget_tokens = params.get("thinking_budget")
     reasoning_effort = params.get("reasoning_effort")
@@ -174,12 +171,11 @@ def parse_thinking_budget(params: dict) -> ThinkingBudgetConfig | None:
         )
 
     if reasoning_effort is not None:
-        effort_map = {
-            "low": 2048,
-            "medium": 8192,
-            "high": 32768,
-        }
-        tokens = effort_map.get(reasoning_effort, 8192)
+        from .output_limits import effort_budget
+
+        tokens = effort_budget(reasoning_effort)
+        if tokens is None:  # "none" / "minimal": thinking off
+            return None
         return ThinkingBudgetConfig(max_thinking_tokens=tokens, enabled=True)
 
     return None

@@ -55,14 +55,14 @@ Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. In single-model
 
 | Parameter | Type | Required | Description | Status |
 | --- | --- | --- | --- | --- |
-| `max_output_tokens` | integer | no | 1 to 1048576. Defaults to the server setting `YUNSHU_DEFAULT_MAX_TOKENS`. `max_completion_tokens` is accepted as an alias. | supported |
+| `max_output_tokens` | integer | no | 1 to 1048576. Omitted (Codex sends none): the model's output limit including reasoning tokens (262144), clamped to the context window; the operator cap `YUNSHU_DEFAULT_MAX_TOKENS` can lower it. `x_yunshu.budget.max_tokens_source` says which applied. `max_completion_tokens` is accepted as an alias. | supported |
 | `temperature` | number | no | 0 to 2, default 1.0. | supported |
 | `top_p` | number | no | 0 to 1, default 1.0. | supported |
 | `top_k`, `min_p`, `top_n_sigma`, `repetition_penalty`, `frequency_penalty`, `presence_penalty`, `xtc_probability`, `xtc_threshold` | number | no | Extra sampling controls, same ranges as Chat Completions. | extension |
 | `seed` | integer | no | Deterministic sampling seed. | supported |
 | `stop`, `stop_token_ids` | array | no | Up to 16 non-empty stop strings (a single string is accepted). | extension |
 | `min_tokens`, `ignore_eos`, `suppress_tokens`, `logit_bias`, `logprobs`, `top_logprobs`, `n` | various | no | Passed to the engine. `logit_bias` values must be finite and within -100 to 100. `n` greater than 1 is rejected with `stream: true`. | extension |
-| `reasoning` | object | no | `{"effort": "low\|medium\|high"}` maps to the template's reasoning effort. `summary` is not read. | partial |
+| `reasoning` | object | no | `{"effort": "none\|minimal\|low\|medium\|high\|xhigh\|max"}` maps to the template's reasoning effort; `none` and `minimal` turn thinking off. `summary` is not read. | partial |
 | `reasoning_effort`, `enable_thinking`, `thinking_budget` | various | no | Flat equivalents of `reasoning`. | extension |
 | `text` | object | no | `text.format` of type `json_schema` or `json_object` becomes constrained decoding; `text` type is the default. | supported |
 | `response_format`, `grammar` | object | no | Chat-style structured output and grammar constraints (`json`, `regex`, `choice`, `cfg`). | extension |

@@ -62,7 +62,7 @@ A cancel that arrives before the request reached the engine (while it is tokeniz
 | `timings` | The same measurements under llama.cpp-style key names. |
 | `cancelled` | `true` when the answer was cut short by a cancel or a deadline. |
 | `context_policy` | Present when the prompt was shortened to fit: the strategy, tokens and messages before and after, and what was removed. |
-| `budget` | Present when `max_tokens` was clamped to the room the prompt leaves in the context window (`max_tokens_requested` and `max_tokens_granted`). |
+| `budget` | Present when `max_tokens` was clamped to the room the prompt leaves in the context window, or when the request sent none: `max_tokens_requested`, `max_tokens_granted`, `max_tokens_source` (`request`, `model_limit`, `operator_cap`, `api_spec_default`) and `clamped_by` when clamped. |
 | `server_tools` | Server-side tool loop report on Messages and Responses: `rounds`, `round_usage[]`, `tools[]`. |
 
 Fields are `null` when a path cannot measure them. Non-streaming responses also carry the compact headers `X-Yunshu-Queue-Wait-Ms`, `X-Yunshu-TTFT-Ms`, `X-Yunshu-Prefill-Tps`, `X-Yunshu-Decode-Tps`, `X-Yunshu-Cached-Tokens`, `X-Yunshu-Cache-Tier`, `X-Yunshu-Cache-Reload-Ms`, `X-Yunshu-Total-Ms`, `X-Yunshu-Spec`, `X-Yunshu-Spec-Acceptance`, `X-Yunshu-Cancelled` and `X-Yunshu-Context-Policy`, for clients that log headers and never parse bodies.

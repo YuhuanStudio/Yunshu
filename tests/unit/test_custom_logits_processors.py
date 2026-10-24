@@ -243,7 +243,7 @@ class TestGenerateFastCustomProcessors:
         eng._spec_prefill_keep_rate = 0.3
         eng._kv_quant_bits = None
         eng._kv_quant_group_size = 64
-        eng._check_memory_guard = lambda *a, **kw: None
+        eng._check_memory_guard = lambda p, mt, **kw: (None, mt)
         eng._engine_core = None
         eng._prompt_cache = None
         eng._thinking_store = None

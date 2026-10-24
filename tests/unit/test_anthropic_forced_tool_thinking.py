@@ -21,8 +21,10 @@ def test_forced_tool_choice_disables_default_thinking():
 
 
 def test_unforced_and_explicit_thinking_unchanged():
-    assert _thinking_switches(_req()) == (None, None)
-    assert _thinking_switches(_req(tool_choice={"type": "auto"})) == (None, None)
+    # no `thinking` field = disabled (Messages API: thinking is opt-in)
+    assert _thinking_switches(_req()) == (False, None)
+    assert _thinking_switches(_req(tool_choice={"type": "auto"})) == (False, None)
+    assert _thinking_switches(_req(thinking={"type": "adaptive"})) == (None, None)
     assert _thinking_switches(
         _req(
             tool_choice={"type": "any"},

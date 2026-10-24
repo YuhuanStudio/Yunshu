@@ -39,7 +39,7 @@ Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. The Anthropic S
 | --- | --- | --- | --- | --- |
 | `model` | string | yes | Model id; advisory in single-model mode. | supported |
 | `messages` | array | yes | Non-empty list of `{role, content}`. `content` is a string or a list of blocks. A leading or in-conversation `system` role entry is lifted into the system prompt. | supported |
-| `max_tokens` | integer | no | 1 to 1048576. The Anthropic API requires it; Yunshu falls back to 1024 when it is omitted. | supported |
+| `max_tokens` | integer | no | 1 to 1048576. Required, as in the Anthropic API: omitting it is a `400` `invalid_request_error` (`max_tokens: Field required`). | supported |
 | `system` | string or array of text blocks | no | System prompt. Blocks may carry `cache_control`. | supported |
 | `temperature` | number | no | 0 to 2. Default 0.7 when omitted. | supported |
 | `top_p`, `top_k` | number, integer | no | `top_p` 0 to 1 (default 1.0); `top_k` 0 disables. | supported |
@@ -56,6 +56,7 @@ Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. The Anthropic S
 | `thinking: {"type": "enabled", "budget_tokens": N}` | Turns thinking on with a budget. `budget_tokens` must be a positive integer below `max_tokens`, otherwise `400`. The reasoning is returned as `thinking` content blocks. | supported |
 | `thinking: {"type": "disabled"}` | Turns thinking off. | supported |
 | `thinking: {"type": "adaptive"}` | Leaves the model's template default. | supported |
+| no `thinking` field | Thinking is off, as in the Anthropic API (it is opt-in). | supported |
 | `output_config.effort` | Becomes the template's reasoning effort. `reasoning_effort` is the Yunshu spelling. | supported |
 
 Thinking is a property of the loaded model. For models whose chat template does not think natively, `enabled` adds an instruction to wrap reasoning in `<think>` tags and constrains the start of the reply to do so, so a `thinking` block is still returned. A forced `tool_choice` (`any` or `tool`) turns thinking off, as Anthropic does not combine them. Thinking blocks carry an empty `signature`; there are no redacted thinking blocks.

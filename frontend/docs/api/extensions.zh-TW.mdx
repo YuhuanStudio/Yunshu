@@ -62,7 +62,7 @@ curl -X DELETE http://localhost:8000/v1/requests/job-7             # cancel it
 | `timings` | 同樣的量測值，使用 llama.cpp 風格的鍵名。 |
 | `cancelled` | 回答被取消或逾時截斷時為 `true`。 |
 | `context_policy` | 提示為了放進視窗而被縮短時才有：策略、前後的 token 與訊息數，以及被移除的內容。 |
-| `budget` | `max_tokens` 因提示佔去上下文視窗而被調降時才有（`max_tokens_requested` 與 `max_tokens_granted`）。 |
+| `budget` | `max_tokens` 因提示佔去上下文視窗而被調降、或請求未帶上限時才有：`max_tokens_requested`、`max_tokens_granted`、`max_tokens_source`（`request`、`model_limit`、`operator_cap`、`api_spec_default`），被調降時另有 `clamped_by`。 |
 | `server_tools` | Messages 與 Responses 上的伺服器端工具迴圈報告：`rounds`、`round_usage[]`、`tools[]`。 |
 
 路徑無法量測的欄位為 `null`。非串流回應另外帶有精簡標頭 `X-Yunshu-Queue-Wait-Ms`、`X-Yunshu-TTFT-Ms`、`X-Yunshu-Prefill-Tps`、`X-Yunshu-Decode-Tps`、`X-Yunshu-Cached-Tokens`、`X-Yunshu-Cache-Tier`、`X-Yunshu-Cache-Reload-Ms`、`X-Yunshu-Total-Ms`、`X-Yunshu-Spec`、`X-Yunshu-Spec-Acceptance`、`X-Yunshu-Cancelled`、`X-Yunshu-Context-Policy`，給只記錄標頭、不解析本文的用戶端。

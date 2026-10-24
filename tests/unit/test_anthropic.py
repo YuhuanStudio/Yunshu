@@ -82,10 +82,11 @@ class TestAnthropicMessagesRequest:
     def test_defaults(self):
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="Hi")],
         )
         assert req.model == "claude-3"
-        assert req.max_tokens == 1024
+        assert req.max_tokens == 1024  # as given: the field is required
         assert req.temperature == 0.7
         assert req.stream is False
         assert req.system is None
@@ -97,6 +98,7 @@ class TestAnthropicMessagesRequest:
     def test_with_system(self):
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="Hi")],
             system="You are helpful.",
         )
@@ -117,6 +119,7 @@ class TestAnthropicMessagesRequest:
     def test_with_stop_sequences(self):
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="Hi")],
             stop_sequences=["END", "---"],
         )
@@ -136,6 +139,7 @@ class TestAnthropicMessagesRequest:
         )
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="What's the weather?")],
             tools=[tool],
         )
@@ -146,6 +150,7 @@ class TestAnthropicMessagesRequest:
     def test_with_tool_choice(self):
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="Hi")],
             tools=[AnthropicTool(name="test")],
             tool_choice={"type": "tool", "name": "test"},
@@ -155,6 +160,7 @@ class TestAnthropicMessagesRequest:
     def test_with_tool_choice_auto(self):
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="Hi")],
             tool_choice="auto",
         )
@@ -163,6 +169,7 @@ class TestAnthropicMessagesRequest:
     def test_top_p_and_top_k(self):
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="Hi")],
             top_p=0.9,
             top_k=50,
@@ -173,6 +180,7 @@ class TestAnthropicMessagesRequest:
     def test_metadata(self):
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="Hi")],
             metadata={"user_id": "user-123"},
         )
@@ -182,6 +190,7 @@ class TestAnthropicMessagesRequest:
         """Test multi-turn conversation with alternating roles."""
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[
                 AnthropicMessage(role="user", content="Hello"),
                 AnthropicMessage(role="assistant", content="Hi there!"),
@@ -235,6 +244,7 @@ class TestMessageConversion:
         """System prompt should be prepended as a system message."""
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="Hi")],
             system="Be concise.",
         )
@@ -272,6 +282,7 @@ class TestMessageConversion:
         """Tool definitions should be injected into the system prompt."""
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="Hi")],
             system="You are helpful.",
             tools=[AnthropicTool(name="get_weather", description="Get weather")],
@@ -770,6 +781,7 @@ class TestAnthropicEndpoint:
             "/v1/messages",
             json={
                 "model": "claude-3",
+                "max_tokens": 64,
                 "messages": [{"role": "user", "content": "Hi"}],
                 "tools": [{"name": "test", "description": "A test tool"}],
                 "tool_choice": "auto",
@@ -784,6 +796,7 @@ class TestAnthropicEndpoint:
             "/v1/messages",
             json={
                 "model": "claude-3",
+                "max_tokens": 64,
                 "messages": [{"role": "user", "content": "Hi"}],
                 "tools": [{"name": "test", "description": "A test tool"}],
                 "tool_choice": {"type": "tool", "name": "test"},
@@ -869,6 +882,7 @@ class TestAnthropicStreamingEndpoint:
             "/v1/messages",
             json={
                 "model": "claude-3",
+                "max_tokens": 64,
                 "messages": [{"role": "user", "content": "Hi"}],
                 "stream": True,
             },

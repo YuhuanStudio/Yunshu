@@ -26,6 +26,9 @@ class TokenBudget:
     max_tokens_granted: int
     thinking_budget_requested: int | None = None
     thinking_budget_granted: int | None = None
+    # where max_tokens_requested came from: "request", "model_limit", "operator_cap",
+    # "api_spec_default" (yunshu_engine.output_limits)
+    source: str = "request"
 
     @property
     def clamped(self) -> bool:
@@ -40,19 +43,23 @@ class TokenBudget:
             "prompt_tokens": self.prompt_tokens,
             "max_tokens_requested": self.max_tokens_requested,
             "max_tokens_granted": self.max_tokens_granted,
-            "clamped_by": "context_window",
+            "max_tokens_source": self.source,
         }
+        if self.max_tokens_granted < self.max_tokens_requested:
+            out["clamped_by"] = "context_window"
         if self.thinking_budget_requested is not None:
             out["thinking_budget_requested"] = self.thinking_budget_requested
             out["thinking_budget_granted"] = self.thinking_budget_granted
         return out
 
     def publish(self) -> None:
-        """Attach the report to the request being served (a no-op when nothing was clamped
-        or outside a request)."""
-        if not self.clamped:
+        """Attach the report to the request being served: when the cap was clamped, or when
+        it was not the client's own (so the effective max output and its source are visible).
+        A no-op outside a request."""
+        if not self.clamped and self.source == "request":
             return
-        logger.info("token budget clamped: %s", self.report())
+        if self.clamped:
+            logger.info("token budget clamped: %s", self.report())
         from yunshu_engine.request_tracker import current_request_info
 
         info: Any = current_request_info.get()
@@ -68,6 +75,7 @@ def plan(
     prompt_tokens: int,
     max_tokens: int,
     thinking_budget: int | None = None,
+    source: str = "request",
 ) -> TokenBudget | None:
     """The budget for one request; None when the window is unknown (nothing to enforce).
 
@@ -92,6 +100,7 @@ def plan(
         max_tokens_granted=granted,
         thinking_budget_requested=thinking_budget,
         thinking_budget_granted=thinking,
+        source=source,
     )
 
 
@@ -101,6 +110,7 @@ def plan_for_engine(
     thinking_budget: int | None,
     model_id: str | None,
     engine: Any,
+    source: str = "request",
 ) -> TokenBudget | None:
     """:func:`plan` with the window looked up the way ``validate_context_window`` does; an
     exhausted window is the same 400 as an over-long prompt."""
@@ -114,6 +124,7 @@ def plan_for_engine(
             prompt_tokens,
             max_tokens,
             thinking_budget,
+            source,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None

@@ -29,6 +29,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from yunshu_engine import settings
+from yunshu_engine.output_limits import (
+    MAX_THINKING_BUDGET,
+    SOURCE_REQUEST,
+    default_max_output,
+    default_source,
+    fold_effort,
+)
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
 from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
@@ -68,6 +75,7 @@ def _apply_token_budget(req: ChatCompletionRequest, prompt_tokens: int, engine) 
         req.thinking_budget,
         req.model,
         engine,
+        source=req.max_tokens_source(),
     )
     if budget is None or not budget.clamped:
         return
@@ -412,8 +420,10 @@ class ChatCompletionRequest(BaseModel):
     frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     logit_bias: dict[int, float] | None = None
+    # Omitted -> the model's output limit (OpenAI: up to the model / context limit; see
+    # yunshu_engine.output_limits), clamped to the context room by token_budget.
     max_tokens: int = Field(
-        default_factory=lambda: int(settings.get("YUNSHU_DEFAULT_MAX_TOKENS")),
+        default_factory=default_max_output,
         ge=0,
         le=1048576,
     )
@@ -439,7 +449,7 @@ class ChatCompletionRequest(BaseModel):
     user: str | None = None
     # Advanced engine parameters
     spec_decode: bool = False
-    thinking_budget: int | None = Field(default=None, ge=1, le=32768)
+    thinking_budget: int | None = Field(default=None, ge=1, le=MAX_THINKING_BUDGET)
     reasoning_effort: str | None = None
     stop_token_ids: list[int] | None = None
     priority: int = Field(default=0, ge=0, le=100)
@@ -505,6 +515,10 @@ class ChatCompletionRequest(BaseModel):
             _eff = self.chat_template_kwargs.get("reasoning_effort")
             if isinstance(_eff, str) and _eff:
                 self.reasoning_effort = _eff
+        # OpenAI ReasoningEffort "none" / "minimal": no reasoning
+        self.enable_thinking, self.reasoning_effort = fold_effort(
+            self.enable_thinking, self.reasoning_effort
+        )
         # Fold vLLM/SGLang guided_* aliases into the existing grammar /
         # response_format plumbing (only when the native field isn't already set).
         if self.grammar is None:
@@ -654,6 +668,15 @@ class ChatCompletionRequest(BaseModel):
                 "Use non-streaming mode for multiple choices."
             )
         return self
+
+    def max_tokens_source(self) -> str:
+        """Where the effective output cap came from (reported in ``x_yunshu.budget``)."""
+        if (
+            self.max_completion_tokens is not None
+            or "max_tokens" in self.model_fields_set
+        ):
+            return SOURCE_REQUEST
+        return default_source()
 
     def effective_max_tokens(self) -> int:
         """Return max_completion_tokens if set, else max_tokens (OpenAI SDK compat)."""

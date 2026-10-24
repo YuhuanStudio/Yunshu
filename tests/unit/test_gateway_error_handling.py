@@ -203,6 +203,7 @@ class TestAnthropicMemoryError:
 
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="hello")],
         )
         stop = []
@@ -237,6 +238,7 @@ class TestAnthropicMemoryError:
 
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="hello")],
         )
         stop = []
@@ -269,6 +271,7 @@ class TestAnthropicMemoryError:
 
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="hello")],
         )
         stop = []
@@ -301,6 +304,7 @@ class TestAnthropicMemoryError:
 
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="hello")],
         )
         stop = []

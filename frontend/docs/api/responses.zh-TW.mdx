@@ -55,7 +55,7 @@ Yunshu 在 `POST /v1/responses` 提供 OpenAI Responses API，以及周邊路由
 
 | 參數 | 型別 | 必填 | 說明 | 狀態 |
 | --- | --- | --- | --- | --- |
-| `max_output_tokens` | integer | 否 | 1 到 1048576。預設為伺服器設定 `YUNSHU_DEFAULT_MAX_TOKENS`。也接受別名 `max_completion_tokens`。 | 支援 |
+| `max_output_tokens` | integer | 否 | 1 到 1048576。省略時（Codex 不送）為模型的輸出上限（含推理 token，262144），並受上下文視窗限縮；營運者上限 `YUNSHU_DEFAULT_MAX_TOKENS` 可調低。`x_yunshu.budget.max_tokens_source` 說明採用哪一個。也接受別名 `max_completion_tokens`。 | 支援 |
 | `temperature` | number | 否 | 0 到 2，預設 1.0。 | 支援 |
 | `top_p` | number | 否 | 0 到 1，預設 1.0。 | 支援 |
 | `top_k`、`min_p`、`top_n_sigma`、`repetition_penalty`、`frequency_penalty`、`presence_penalty`、`xtc_probability`、`xtc_threshold` | number | 否 | 額外的取樣控制，範圍與 Chat Completions 相同。 | 擴充 |
