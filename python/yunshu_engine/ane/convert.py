@@ -30,9 +30,9 @@ def unpack_affine(weight: np.ndarray, bits: int) -> np.ndarray:
         word = np.zeros(grp.shape[:2], dtype=np.uint64)
         for i in range(bits):
             word |= grp[:, :, i] << np.uint64(8 * i)
-        shifts = (np.arange(8, dtype=np.uint64) * bits)[None, None, :]
-        codes = (word[:, :, None] >> shifts) & np.uint64((1 << bits) - 1)
-        return codes.reshape(out_dim, -1).astype(np.uint8)
+        shifts64 = (np.arange(8, dtype=np.uint64) * bits)[None, None, :]
+        codes64 = (word[:, :, None] >> shifts64) & np.uint64((1 << bits) - 1)
+        return codes64.reshape(out_dim, -1).astype(np.uint8)
     raise ValueError(f"unsupported bits {bits}")
 
 
@@ -89,7 +89,13 @@ def affine_slice(weight, scales, biases, bits, group_size, rows=None, cols=None)
 
 
 def build_mlp_model(
-    gate, up, down, rows: int, compress: str = "fp16", out_path: str | None = None
+    gate,
+    up,
+    down,
+    rows: int,
+    compress: str = "fp16",
+    out_path: str | None = None,
+    h_exp: int = 0,
 ):
     """A Core ML program y = down(silu(gate(x)) * up(x)) over x [1, rows, hidden] (fp16) for one slice.
 
