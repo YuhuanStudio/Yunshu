@@ -252,8 +252,8 @@ export function footerPills(input: FooterInput): FooterPill[] {
           ? "neutral"
           : "warning",
     dot: a.phase !== "idle" || !!loadingModel,
-    // the value area is always as wide as "1234 tok/s", so the pills after it never move
-    minCh: 18,
+    // room for the digits of this phase only ("999 tok/s", "100%"); the pill is last, so its width moves nothing
+    minCh: a.phase === "decode" ? 9 : a.phase === "prefill" ? 4 : undefined,
     tween,
     help:
       a.phase === "idle"
@@ -264,7 +264,8 @@ export function footerPills(input: FooterInput): FooterPill[] {
             ? t("shell.footer.now.help.prefill")
             : t("shell.footer.now.help.queued"),
   });
-  // Always present and before the pills that come and go (swap, GPU), so nothing after it moves.
+  // The live phase pill changes width with the phase, so it goes last: nothing after it moves.
+  const nowPill = pills.pop()!;
   pills.push({
     key: "load",
     label: t("shell.footer.load.label"),
@@ -277,7 +278,6 @@ export function footerPills(input: FooterInput): FooterPill[] {
         : t("shell.footer.load.active", { active: a.counts.active }),
     tone: "neutral",
     dot: false,
-    minCh: 14,
     help: t("shell.footer.load.help", {
       active: a.counts.active,
       queued: a.counts.queued,
@@ -303,6 +303,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
       minCh: 4,
       help: t("shell.footer.gpu.help"),
     });
+  pills.push(nowPill);
 
   return pills;
 }

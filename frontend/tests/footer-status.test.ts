@@ -61,17 +61,17 @@ const keys = (p: { key: string }[]) => p.map((x) => x.key);
 
 test("idle online: engine, memory, now and a steady load pill; no last-request pills", () => {
   const pills = footerPills(input(mk()));
-  assert.deepEqual(keys(pills), ["engine", "memory", "now", "load"]);
+  assert.deepEqual(keys(pills), ["engine", "memory", "load", "now"]);
   assert.equal(pills[0].value, "Qwen3.8-27B");
-  assert.equal(pills[2].label, "閒置");
+  assert.equal(pills.find((p) => p.key === "now")!.label, "閒置");
   // Idle reads as idle with the last decode, not an empty value.
-  assert.match(pills[2].value, /^上次 9 tok\/s · /);
+  assert.match(pills.find((p) => p.key === "now")!.value, /^上次 9 tok\/s · /);
   assert.ok(!JSON.stringify(pills).includes("TTFT"));
   assert.ok(pills[0].help.includes("2 小時 1 分"));
   // Running is the success tone on the dot; idle work has no dot and stays neutral.
   assert.equal(pills[0].tone, "success");
-  assert.equal(pills[2].tone, "neutral");
-  assert.equal(pills[2].dot, false);
+  assert.equal(pills.find((p) => p.key === "now")!.tone, "neutral");
+  assert.equal(pills.find((p) => p.key === "now")!.dot, false);
 });
 
 test("decoding shows live tok/s and the active count", () => {
@@ -88,10 +88,10 @@ test("decoding shows live tok/s and the active count", () => {
     },
   });
   const pills = footerPills(input(s));
-  assert.equal(pills[2].label, "解碼");
-  assert.equal(pills[2].value, "36 tok/s");
-  assert.equal(pills.at(-1)?.key, "load");
-  assert.equal(pills.at(-1)?.value, "2 進行 1 排隊");
+  assert.equal(pills.find((p) => p.key === "now")!.label, "解碼");
+  assert.equal(pills.find((p) => p.key === "now")!.value, "36 tok/s");
+  assert.equal(pills.at(-1)?.key, "now");
+  assert.equal(pills.find((p) => p.key === "load")!.value, "2 進行 1 排隊");
 });
 
 test("memory tone follows pressure level, swap and gpu only when present", () => {
@@ -116,7 +116,7 @@ test("memory tone follows pressure level, swap and gpu only when present", () =>
       }),
     }),
   );
-  assert.deepEqual(keys(calm), ["engine", "memory", "now", "load"]);
+  assert.deepEqual(keys(calm), ["engine", "memory", "load", "now"]);
 });
 
 test("offline pills carry the cause; online-only pills disappear", () => {

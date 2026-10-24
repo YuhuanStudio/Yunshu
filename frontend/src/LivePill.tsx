@@ -31,13 +31,13 @@ export function LivePill({
       <Slot ch={6} className="leading-4 text-foreground">
         {pill.phase}
       </Slot>
-      {/* As wide as the longest "prefill 100% · decode 123.4 tok/s", idle or busy: the pill and the
-          cluster around it keep their width while phase and numbers change. */}
-      <span className="hidden xl:inline-block">
-        <Slot ch={30} className="leading-4">
+      {/* Sized by its text (tabular digits, so a changing number does not jitter); a reserved
+          30ch slot left most of the pill empty. */}
+      {pill.detail ? (
+        <span className="hidden whitespace-nowrap leading-4 tabular-nums xl:inline-block">
           {pill.detail}
-        </Slot>
-      </span>
+        </span>
+      ) : null}
     </span>
   );
 }
