@@ -131,9 +131,16 @@ def main():
     ap.add_argument("--tokens", type=int, default=1500)
     ap.add_argument("--ctx-chars", type=int, default=16000)
     ap.add_argument("--join", type=float, default=15.0)
+    ap.add_argument("--only", default="", help="comma list of scenario labels to run (default all)")
     a = ap.parse_args()
     T, C = a.tokens, a.ctx_chars
-    run = lambda label, plans: scenario(a.url, a.model, a.out, label, plans, T, C)  # noqa: E731
+    only = {x for x in a.only.split(",") if x}
+
+    def run(label, plans):
+        if only and label not in only and label != "warmup":
+            return
+        scenario(a.url, a.model, a.out, label, plans, T, C)
+
     run("warmup", [("w", 0, 64, False, 99)])
     run("solo", [("A", 0, None, False, 1)])
     run("burst2", [("A", 0, None, False, 11), ("B", 0, None, False, 12)])

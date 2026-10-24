@@ -19,6 +19,7 @@ const shell = {
   "engine.headline.shortPrefill": "預填中",
   "engine.headline.prefillNoSpeed": "預填中，尚未回報速度",
   "engine.headline.prefillCached": "最近一筆命中快取，沒有實際預填",
+  "engine.headline.shortCached": "全部命中快取",
   "engine.headline.idle": "閒置",
   "engine.headline.none": "尚無完成請求",
   "engine.live.offline": "離線",

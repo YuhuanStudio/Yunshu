@@ -26,6 +26,10 @@ const settingdesc = {
     "Deprioritize captured opencode title requests: interactive VLM jobs run first, and auxiliary rows pause between GPU slices and never read or write the APC. On by default only with qualified batch-invariant kernels; other backends need explicit opt-in. In-flight GPU operations cannot be interrupted.",
   YUNSHU_QUEUE_LIMIT:
     "Generation requests in flight at once, running and waiting together; the next one is refused at once with 429, `Retry-After` and the queue depth in `error.x_yunshu`. 0 = no limit.",
+  YUNSHU_ORPHAN_GRACE_SECONDS:
+    "When a client disconnects mid-generation (an agent timing out a long streamed reply), keep that generation running for this many seconds. An identical request in the window, streaming or not, is attached to it: tokens already generated replay at once and the rest follow live, so the work is not repeated. Unadopted generations are cancelled when the window ends; an explicit cancel stops at once. 0 = cancel at disconnect.",
+  YUNSHU_ORPHAN_MAX:
+    "Most orphaned generations kept at once; each holds its decode row and KV until adopted or expired. The oldest is cancelled beyond this.",
   YUNSHU_MEMORY_PRESSURE_REJECT:
     "Share of the Metal working set above which a new generation request is refused with 503 and `Retry-After` while other requests are running, to avoid an OOM. An idle server never refuses. 0 = off.",
   YUNSHU_COMPLETION_BATCH_SIZE:

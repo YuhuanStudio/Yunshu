@@ -949,6 +949,24 @@ class VLMEngine:
             messages = messages or []
         if self._model is None:
             raise RuntimeError("Engine not started")
+        _params = dict(
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            min_p=min_p,
+            seed=seed,
+            repetition_penalty=repetition_penalty,
+            stop=stop,
+            enable_thinking=enable_thinking,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            **kwargs,
+        )
+        if self._orphan_key(messages, _params) is not None:
+            # One generation core for both modes: a retry that arrives non-streaming can
+            # adopt a streamed orphan (and the reverse) instead of recomputing it.
+            return await self._generate_collect(messages, _params)
         from .structural_tag import constrains_initial_output
 
         tpl_extra = self._request_template_extra(kwargs)
@@ -1138,7 +1156,108 @@ class VLMEngine:
                         ]
             self._cleanup_temp_files(_mine)
 
+    async def _generate_collect(self, messages, params: dict) -> dict[str, Any]:
+        """Non-streaming result assembled from the streaming core (same shape as the
+        direct path: reasoning wrapped in think tags, exact counts)."""
+        parts: list[str] = []
+        reasoning: list[str] = []
+        lps: list[Any] = []
+        thinking = generated = cached = prompt_tokens = 0
+        finish = None
+        stop_seq = False
+        async with contextlib.aclosing(  # type: ignore[type-var]  # an async generator at runtime
+            self.generate_stream(messages=messages, **params)
+        ) as stream:
+            async for out in stream:
+                if out.error:
+                    self._num_requests_processed += 1
+                    if str(out.error).startswith("Streaming timeout"):
+                        return {
+                            "text": "",
+                            "finish_reason": "timeout",
+                            "model": self.model_name,
+                            "created": int(time.time()),
+                            "reasoning_tokens": 0,
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                        }
+                    raise RuntimeError(out.error)
+                if out.new_text:
+                    (reasoning if out.current_state == "reasoning" else parts).append(
+                        out.new_text
+                    )
+                if out.logprobs:
+                    lps.extend(out.logprobs)
+                thinking = max(thinking, out.reasoning_tokens or 0)
+                generated = max(generated, out.completion_tokens or 0)
+                prompt_tokens = out.prompt_tokens or prompt_tokens
+                cached = out.cached_tokens or cached
+                if out.finished:
+                    finish = out.finish_reason
+                    stop_seq = bool(out.stopped_by_stop_sequence)
+        self._num_requests_processed += 1
+        if finish == "cancel":
+            raise asyncio.CancelledError()
+        self._total_reasoning_tokens += thinking
+        if reasoning:
+            parts = ["<think>", *reasoning, "</think>", *parts]
+        return {
+            "text": "".join(parts),
+            "finish_reason": "stop" if finish == "stop" else "length",
+            "model": self.model_name,
+            "created": int(time.time()),
+            "reasoning_tokens": thinking,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": generated,
+            "cached_tokens": cached,
+            "logprobs": lps if params.get("logprobs") else None,
+            "stopped_by_stop_sequence": stop_seq,
+        }
+
+    def _orphan_key(self, messages, params: dict) -> str | None:
+        from . import orphan_adoption, settings
+
+        if settings.get("YUNSHU_ORPHAN_GRACE_SECONDS") <= 0:
+            return None
+        return orphan_adoption.request_key(self.model_name, messages, params)
+
     async def generate_stream(
+        self, prompt=None, messages=None, cancel_event=None, **kwargs
+    ) -> AsyncIterator[RequestOutput]:
+        """Streaming generation. A client that vanishes mid-way parks the generation
+        for ``YUNSHU_ORPHAN_GRACE_SECONDS``; an identical request adopts it (see
+        ``orphan_adoption``)."""
+        from . import orphan_adoption, settings
+
+        if isinstance(prompt, str):
+            msgs = [{"role": "user", "content": prompt}]
+        else:
+            msgs = prompt if prompt is not None else (messages or [])
+        if cancel_event is None:
+            cancel_event = threading.Event()
+        key = self._orphan_key(msgs, kwargs)
+
+        def start(real_cancel):
+            return self._generate_stream_impl(
+                messages=msgs, cancel_event=real_cancel, **kwargs
+            )
+
+        async with contextlib.aclosing(  # type: ignore[type-var]  # an async generator at runtime
+            orphan_adoption.run(
+                key,
+                start,
+                cancel_event,
+                float(settings.get("YUNSHU_ORPHAN_GRACE_SECONDS")),
+                int(settings.get("YUNSHU_ORPHAN_MAX")),
+                parts=orphan_adoption.key_parts(self.model_name, msgs, kwargs)
+                if key
+                else None,
+            )
+        ) as stream:
+            async for out in stream:
+                yield out
+
+    async def _generate_stream_impl(
         self,
         prompt: list[dict] | None = None,
         messages: list[dict] | None = None,
@@ -4544,6 +4663,17 @@ class VLMEngine:
             "uptime_seconds": uptime,
             "text_prompt_cache": self._text_prompt_cache.stats,
         }
+        runner = self._batch_runner
+        counts = getattr(runner, "phase_counts", None)
+        if callable(counts):
+            try:
+                c = counts()
+                # /debug/requests and the console's debug view read these two names.
+                stats["active"] = c["prefill"] + c["decode"]
+                stats["waiting"] = c["queued"]
+                stats["phases"] = c
+            except Exception:
+                logger.debug("phase counts unavailable", exc_info=True)
         snap = self.apc_snapshot()
         if snap is not None:
             stats["apc"] = snap
