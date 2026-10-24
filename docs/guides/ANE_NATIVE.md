@@ -45,3 +45,14 @@ interference harness retains metrics and digests, strips prompt/completion text,
 and validates every cold row's cache state and the actually engaged DFlash mode.
 Its cyclic layer load records one-second intervals so ANE rate during the GPU
 decode window can be distinguished from model loading or GPU prefill.
+
+A phase-2 prototype can build the same library against an explicitly supplied
+installed MLX include/lib directory. `try_alias` uses `from_dlpack(copy=False)`
+and retains a separate native reference in the DLPack owner's lifetime, so closing
+the Python session cannot free an alias still used by a GPU graph. Submission
+signals a Metal shared event after the producer, and `wait_mlx` inserts the
+consumer's device wait. Completion is validated after the final consumer eval.
+An independent two-second watchdog starts when GPU-ready is signaled; a failure
+releases GPU waits and retires the native service. Unreported requests keep their
+storage until they settle. These are research APIs: no engine integration or
+within-version model identity/quality qualification is implied.

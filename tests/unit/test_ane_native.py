@@ -209,3 +209,83 @@ def test_minimal_scale_program_has_real_op_and_no_weight_records():
     assert "[5242880, 5242880, 1024, 1]" in text
     assert struct.unpack_from("<II", blob) == (0, 2)
     assert len(blob) == 64
+
+
+def test_alias_retains_surface_after_session_close(monkeypatch):
+    import ctypes
+    import gc
+    import sys
+    from types import ModuleType
+
+    class Alias:
+        def __init__(self, view):
+            self.view = view
+
+    core = ModuleType("mlx.core")
+
+    def from_dlpack(view, *, copy):
+        assert copy is False
+        return Alias(view)
+
+    core.from_dlpack = from_dlpack
+    pkg = ModuleType("mlx")
+    pkg.core = core
+    monkeypatch.setitem(sys.modules, "mlx", pkg)
+    monkeypatch.setitem(sys.modules, "mlx.core", core)
+    storage = ctypes.create_string_buffer(128)
+    lib = Mock()
+    lib.ys_ane_busy.return_value = 0
+    lib.ys_ane_stride.return_value = 64
+    lib.ys_ane_data.return_value = ctypes.addressof(storage)
+    lib.ys_ane_retain.return_value = 2
+    session = NativeSession(lib, 1, [(2, 32), (2, 32)])
+    alias, reason = session.try_alias(0)
+    assert reason is None and alias.view.shape == (2, 32)
+    session.close()
+    lib.ys_ane_destroy.assert_called_once_with(1)
+    del alias
+    gc.collect()
+    assert [call.args[0] for call in lib.ys_ane_destroy.call_args_list] == [1, 2]
+
+
+def test_alias_busy_and_ticket_failure_are_unavailable(monkeypatch):
+    import sys
+    from types import ModuleType
+
+    from yunshu_engine.ane.native import MlxTicket
+
+    pkg, core = ModuleType("mlx"), ModuleType("mlx.core")
+    pkg.core = core
+    monkeypatch.setitem(sys.modules, "mlx", pkg)
+    monkeypatch.setitem(sys.modules, "mlx.core", core)
+    lib = Mock()
+    lib.ys_ane_busy.return_value = 1
+    session = NativeSession(lib, 1, [(2, 32), (2, 32)])
+    alias, reason = session.try_alias()
+    assert alias is None and "in flight" in reason
+    lib.ys_ane_retain.assert_not_called()
+    lib.ys_ane_mlx_finish.return_value = 0
+    lib.ys_ane_error.return_value = b"native timeout"
+    ticket = MlxTicket(session, 3)
+    assert ticket.finish() is False and session.reason == "native timeout"
+    ticket.close()
+    ticket.close()
+    lib.ys_ane_mlx_destroy.assert_called_once_with(3)
+    session.close()
+
+
+def test_economics_does_not_extrapolate_or_claim_negative_copy_savings(
+    tmp_path, monkeypatch
+):
+    scripts = Path(__file__).resolve().parents[2] / "scripts/research"
+    monkeypatch.syspath_prepend(str(scripts))
+    import anenative_analyze as analysis
+
+    points = [(64, 1.064, 1.0), (1088, 2.088, 1.0)]
+    result = analysis.measured_curve(10.0, points)
+    assert result["channels"] == 1088
+    assert result["saving_ms"] == pytest.approx(0.625)
+    copied = analysis.measured_curve(10.0, points, serialize_copies=True)
+    assert copied["channels"] == 0 and copied["saving_ms"] == 0
+    with pytest.raises(ValueError):
+        analysis.measured_curve(10.0, [(64, 1.0, 0.0), (64, 2.0, 0.0)])

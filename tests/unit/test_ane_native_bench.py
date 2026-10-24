@@ -110,3 +110,96 @@ def test_overlap_parser_and_fail_fast_slice_validation():
     for bad in ["0", "63", "17408", "-64"]:
         with pytest.raises(ValueError):
             module.validate_channels(bad, 17408)
+
+
+def test_alias_probe_import_and_parser_are_cpu_only():
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/research/anenative_alias_probe.py"
+    )
+    spec = importlib.util.spec_from_file_location("anenative_alias_probe", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    args = module.parser().parse_args(["--cache", "/Volumes/P5Plus/cache"])
+    assert (args.height, args.width) == (64, 128)
+
+
+def test_shared_probe_parser_is_cpu_only():
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/research/anenative_shared_probe.py"
+    )
+    spec = importlib.util.spec_from_file_location("anenative_shared_probe", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    args = module.parser().parse_args(["--cache", "/Volumes/P5Plus/cache"])
+    assert args.loops == 8
+
+
+def test_coreml_plan_counts_nested_device_assignments():
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/research/anenative_coreml_plan.py"
+    )
+    spec = importlib.util.spec_from_file_location("anenative_coreml_plan", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    child = SimpleNamespace(operator_name="linear", blocks=[])
+    parent = SimpleNamespace(
+        operator_name="region", blocks=[SimpleNamespace(operations=[child])]
+    )
+
+    class Device:
+        pass
+
+    plan = SimpleNamespace(
+        model_structure=SimpleNamespace(
+            program=SimpleNamespace(
+                functions={
+                    "main": SimpleNamespace(block=SimpleNamespace(operations=[parent]))
+                }
+            )
+        ),
+        get_compute_device_usage_for_mlprogram_operation=lambda op: (
+            None if op is parent else SimpleNamespace(preferred_compute_device=Device())
+        ),
+    )
+    result = module.placement(plan)
+    assert result["preferred_counts"] == {"unassigned_or_constant": 1, "Device": 1}
+
+
+def test_handoff_parser_rejects_empty_or_unaligned_gpu_slice():
+    path = Path(__file__).resolve().parents[2] / "scripts/research/anenative_handoff.py"
+    spec = importlib.util.spec_from_file_location("anenative_handoff", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.valid_shape(64, 2176, 17408) == 128
+    assert module.valid_shape(1024, 2176, 17408) == 1024
+    for rows, channels in [(0, 2176), (1024, 0), (1024, 63), (1024, 17408)]:
+        with pytest.raises(ValueError):
+            module.valid_shape(rows, channels, 17408)
+    args = module.parser().parse_args(
+        ["--cache", "/Volumes/P5Plus/cache", "--out", "/Volumes/P5Plus/out.jsonl"]
+    )
+    assert args.rows == 1024 and args.channels == 2176
+
+
+def test_fault_probe_parser_does_not_load_private_runtime():
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/research/anenative_fault_probe.py"
+    )
+    spec = importlib.util.spec_from_file_location("anenative_fault_probe", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    args = module.parser().parse_args(
+        [
+            "--library",
+            "/Volumes/P5Plus/test.dylib",
+            "--cache",
+            "/Volumes/P5Plus/cache",
+            "--fault",
+            "stalled",
+        ]
+    )
+    assert args.fault == "stalled"

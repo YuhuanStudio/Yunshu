@@ -11,6 +11,56 @@ from pathlib import Path
 from anenative_micro import economics
 
 
+def measured_curve(gpu_ms, points, total_channels=17408, serialize_copies=False):
+    """Interpolate measured costs only; GPU remainder is an optimistic linear model."""
+    points = sorted(points)
+    if (
+        gpu_ms <= 0
+        or not points
+        or any(
+            n <= 0 or n > total_channels or ms < 0 or copies < 0
+            for n, ms, copies in points
+        )
+    ):
+        raise ValueError("invalid measured cost curve")
+    if len({p[0] for p in points}) != len(points):
+        raise ValueError("duplicate channel cost")
+    best = {
+        "channels": 0,
+        "share": 0.0,
+        "split_ms": gpu_ms,
+        "saving_ms": 0.0,
+        "offload_ms": 0.0,
+        "host_copy_ms": 0.0,
+    }
+    for count in range(64, points[-1][0] + 1, 64):
+        if count < points[0][0]:
+            continue
+        for index, (n, ms, copies) in enumerate(points):
+            if n >= count:
+                if n == count or index == 0:
+                    ane, host = ms, copies
+                else:
+                    lo, low_ms, low_copy = points[index - 1]
+                    weight = (count - lo) / (n - lo)
+                    ane = low_ms + (ms - low_ms) * weight
+                    host = low_copy + (copies - low_copy) * weight
+                break
+        split = max(gpu_ms * (1 - count / total_channels), ane) + (
+            host if serialize_copies else 0.0
+        )
+        if split < best["split_ms"]:
+            best = {
+                "channels": count,
+                "share": count / total_channels,
+                "split_ms": split,
+                "saving_ms": gpu_ms - split,
+                "offload_ms": ane,
+                "host_copy_ms": host,
+            }
+    return best
+
+
 def summarize(path: Path):
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     if not rows or rows[-1].get("complete") is not True:
@@ -62,14 +112,50 @@ def summarize(path: Path):
                     "floor_ms": intercept,
                     "ms_per_1000_channels": slope * 1000,
                     "gpu_ffn_ms": gpu[count],
-                    "optimistic_no_copy_contention": estimate,
+                    "descriptive_linear_extrapolation_not_decision": estimate,
                     "fit_max_residual_ms": max(
                         abs(b - intercept - slope * a)
                         for a, b in zip(x, y, strict=True)
                     ),
                 }
             )
-    return {"cells": output, "fits": fits, "complete": True}
+    curves = []
+    for count, mode in sorted({(r["rows"], r["mode"]) for r in output}):
+        series = [r for r in output if r["rows"] == count and r["mode"] == mode]
+        for backend in ("native", "coreml"):
+            if not all(backend + "_ms" in r for r in series):
+                continue
+            points = [
+                (
+                    r["channels"],
+                    r[backend + "_ms"],
+                    r.get("copy_ms", 0.0) if backend == "native" else 0.0,
+                )
+                for r in series
+            ]
+            item = {
+                "rows": count,
+                "mode": mode,
+                "backend": backend,
+                "gpu_ffn_ms": gpu[count],
+                "scope": "Measured-span interpolation; assumes GPU remainder scales linearly. Excludes handoff/join and measured hardware contention.",
+                "no_extra_copies": measured_curve(gpu[count], points),
+                "serialized_host_copies": measured_curve(
+                    gpu[count], points, serialize_copies=True
+                ),
+            }
+            full = next((r for r in series if r["channels"] == 17408), None)
+            if full:
+                item["model64_mlp_only_tps_if_layer40_representative"] = count / (
+                    64 * full[backend + "_ms"] * 0.001
+                )
+            curves.append(item)
+    return {
+        "cells": output,
+        "fits": fits,
+        "measured_curve_economics": curves,
+        "complete": True,
+    }
 
 
 def main():

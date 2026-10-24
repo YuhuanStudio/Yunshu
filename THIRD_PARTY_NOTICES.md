@@ -200,3 +200,11 @@ clang/ctypes runtime, explicit cache, local Metal adapter, constant slice weight
 and fp16 underflow scaling. The upstream files had no per-file copyright header.
 The Apache-2.0 license is reproduced in this repository's LICENSE.
 This research runtime is not enabled in serving.
+
+The optional native ANE MLX bridge (`ane/native/Bridge.mm`) uses the installed
+MLX 0.32.3 C++ Metal command encoder and Python DLPack contracts (Apple, MIT;
+tag `v0.32.3`). Its C ABI, watchdog and ownership implementation is Yunshu's;
+no MLX implementation source is copied. The coupling is recorded in vendor.json.
+
+`ane/native/ProgramInstrumentation.hpp` also adapts Splash's Apache-2.0
+test-only fault declarations. Production builds do not expose the arming API.

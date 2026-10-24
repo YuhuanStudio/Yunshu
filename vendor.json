@@ -772,6 +772,20 @@
         "runtime/ops/AneFfn.cpp",
         "runtime/ane/Program.mm"
       ]
+    },
+    {
+      "kind": "derived",
+      "path": "python/yunshu_engine/ane/native/ProgramInstrumentation.hpp",
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "upstream_paths": [
+        "runtime/ane/ProgramInstrumentation.hpp"
+      ],
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "Namespace changed to Yunshu; test-only fault arming for signature, Objective-C exception, async failure and stalled evaluation guards."
+      ]
     }
   ],
   "inspired": [
@@ -1532,6 +1546,23 @@
       "license": "MIT",
       "local_changes": [
         "Research-only canonical per-query TK4 adapter imports the registered harvester, preserving absolute prefix lengths and split geometry across T=1..7. FP64 reference reports both kernels absolute/relative errors; deterministic and reconstructed-cache tensor checks. No serving connection or full APC/accuracy qualification."
+      ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/ane/native/Bridge.mm",
+      "repo": "https://github.com/ml-explore/mlx",
+      "clone": "/Volumes/Micron/yunshu-refsync/mlx",
+      "upstream_paths": [
+        "mlx/backend/metal/device.h",
+        "mlx/backend/metal/device.cpp",
+        "mlx/transforms.cpp",
+        "python/src/convert.cpp"
+      ],
+      "commit": "64ea011cb65f14d9ce2737e60db9a4ae91ed7441",
+      "license": "MIT",
+      "local_changes": [
+        "Optional ABI-linked MLX encoder adapter signals ready and waits for ANE completion without producer/ANE CPU waits. Calls installed APIs, no upstream implementation copied. Adds independent watchdog, cancellation and retained IOSurface aliases; no serving importer."
       ]
     }
   ],
@@ -2815,7 +2846,11 @@
       "globs": [
         "mlx/backend/metal/kernels/quantized*",
         "mlx/backend/metal/kernels/steel/**",
-        "python/mlx/nn/layers/quantized.py"
+        "python/mlx/nn/layers/quantized.py",
+        "mlx/backend/metal/device.*",
+        "mlx/backend/metal/event.*",
+        "mlx/transforms.cpp",
+        "python/src/convert.cpp"
       ],
       "why": "quantized matmul / NAX kernels",
       "pin_package": "mlx",
@@ -3111,7 +3146,11 @@
       "commit": "36969c094354086e15d2a327a9c50feb20b9cf11",
       "globs": [
         "mlx/backend/metal/kernels/sdpa_vector.h",
-        "mlx/backend/metal/kernels/steel/attn/**/*.h"
+        "mlx/backend/metal/kernels/steel/attn/**/*.h",
+        "mlx/backend/metal/device.*",
+        "mlx/backend/metal/event.*",
+        "mlx/transforms.cpp",
+        "python/src/convert.cpp"
       ],
       "why": "Pinned external release source for research-only kernelstudy screen; external disk clone, no inference port."
     }
