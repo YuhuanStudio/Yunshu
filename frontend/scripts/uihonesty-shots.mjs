@@ -49,7 +49,9 @@ while ((Date.now() - t0) / 1000 < seconds) {
   const shown = await over.evaluate(() =>
     [...document.querySelectorAll("[data-live-list] > li")].map((li) => {
       const text = (li.textContent ?? "").replace(/,/g, "");
-      const m = /(\d+)\s*tok(?!\/)/.exec(text);
+      const m = /(?:^|[^\w])(\d+)\s*tok(?!\/)/.exec(
+        text.replace(/req_[0-9a-f]+/g, ""),
+      );
       return { text: text.slice(0, 60), count: m ? Number(m[1]) : null };
     }),
   );
