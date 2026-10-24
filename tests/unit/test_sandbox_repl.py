@@ -1,6 +1,7 @@
 """The persistent Python REPL of a container, against the real srt (skipped when it is absent)."""
 
 import asyncio
+import contextlib
 import os
 import time
 from pathlib import Path
@@ -405,3 +406,46 @@ def test_background_thread_allocating_after_the_cell_is_killed_when_idle(
         assert again.stdout.strip() == "False" and again.state_lost
 
     asyncio.run(go())
+
+
+def test_python_has_no_network_and_no_loopback(env):
+    import socket
+    import threading
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    hits = []
+
+    def accept():
+        with contextlib.suppress(OSError):  # closed by the test
+            hits.append(srv.accept())
+
+    threading.Thread(target=accept, daemon=True).start()
+    (r,) = session_run(
+        env,
+        [
+            cell(
+                "import socket\n"
+                "out = []\n"
+                f"for target in (('127.0.0.1', {port}), ('93.184.216.34', 80)):\n"
+                "    s = socket.socket(); s.settimeout(3)\n"
+                "    try:\n        s.connect(target); out.append('connected')\n"
+                "    except OSError:\n        out.append('blocked')\n"
+                "print(out)"
+            )
+        ],
+    )
+    srv.close()
+    assert r.stdout.strip() == "['blocked', 'blocked']" and not hits
+
+
+def test_doctor_self_test_runs_the_sandbox_python(monkeypatch):
+    import importlib
+
+    doctor = importlib.import_module("yunshu_cli.doctor")
+    c = doctor.check_code_execution()
+    assert c.status in ("ok", "warn", "fail")
+    if c.status == "ok":
+        assert "self-test passed" in c.detail
