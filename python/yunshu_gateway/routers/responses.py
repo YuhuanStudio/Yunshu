@@ -3280,7 +3280,12 @@ async def _stream_response(
 
             # Persist final response when the client requested storage. Mirrors
             # the non-streaming path so GET /v1/responses/{id} succeeds.
-            if getattr(req, "store", None):
+            # A cancel (POST .../cancel) already persisted the terminal "cancelled"; the
+            # generation ending afterwards must not overwrite it (a background stream does).
+            _prior_stream = _get_stored_response(response_id)
+            if getattr(req, "store", None) and not (
+                _prior_stream is not None and _prior_stream.get("status") == "cancelled"
+            ):
                 _usage_dict: dict = responses_usage(
                     prompt_tok, _total_output_tok, reasoning_tok, cached_tok
                 )

@@ -79,3 +79,12 @@ def test_registered_path_unaffected_non_cancelled_status_proceeds():
     assert (
         prior.get("status") != "cancelled"
     )  # guard would NOT fire → terminal store proceeds
+
+
+def test_stream_terminal_store_honors_a_persisted_cancel():
+    """A background stream cancelled mid-generation ends with a terminal store; it must not
+    replace the 'cancelled' the cancel endpoint persisted (found by the real-server check)."""
+    src = inspect.getsource(responses._stream_response)
+    guard = src.index('_prior_stream.get("status") == "cancelled"')
+    persist = src.index("_store_response(", guard)
+    assert guard < persist
