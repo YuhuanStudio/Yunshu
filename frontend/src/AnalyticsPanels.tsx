@@ -1,21 +1,29 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Card, EmptyState, TimeSeriesChart } from "@yuhuanowo/yunui";
-import type { ComponentProps, CSSProperties } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { Card, EmptyState } from "@yuhuanowo/yunui";
+import type {
+  ColumnChartProps,
+  MetricChartProps,
+  SparklineTipProps,
+} from "@yuhuanowo/yunui/charts";
+import { Sparkline } from "@yuhuanowo/yunui";
 import { t, useLocale } from "./i18n/index.ts";
-import { clock, number } from "./ui";
-import { initialAxis, nextAxis, timeTicks } from "./motion/axis-core";
-import { LiveScroll } from "./motion/LiveScroll";
+import { initialAxis, nextAxis } from "./motion/axis-core";
 import { reducedMotion } from "./motion/ticker";
 
-type ChartProps = ComponentProps<typeof TimeSeriesChart>;
+// The chart code (YunUI MetricChart, ColumnChart, SparklineTip) is its own chunk: no route's first load
+// carries it, and a chart reserves its final height while the chunk arrives.
+const ConsoleChart = lazy(() => import("./charts/ConsoleChart"));
+const ConsoleColumns = lazy(() => import("./charts/ConsoleColumns"));
+const ConsoleSparkTip = lazy(() => import("./charts/SparkTip"));
 
-/**
- * The console's time-series chart. The library draws a dashed box (min 180px)
- * when the visible series have no finite value yet, which is exactly what a
- * long prefill looks like. Here that state becomes one calm muted caption at
- * the chart's own height: no border, nothing shifting. "Collecting" while the
- * engine is busy (values are on their way), "idle" when nothing is running.
- */
 /**
  * A number that follows `target` with an ease-out over `ms`, re-rendering only while it moves (the
  * y-axis of a live chart changing its maximum: a few frames, not one per sample).
@@ -47,8 +55,15 @@ function useGlide(target: number, ms = 280): number {
   return value;
 }
 
+/** What the chart reserves for its legend / toolbar row (24 px + 6 px gap), so a chart never changes height when the chunk lands. */
+const HEAD_PX = 30;
 /** The time axis and its padding under the plot: the idle placeholder reserves them so the chart replaces it without a jump. */
-const CHART_AXIS_PX = 36;
+const CHART_AXIS_PX = 30;
+
+type ChartProps = Omit<
+  MetricChartProps,
+  "labels" | "height" | "yMax" | "live" | "xDomain"
+>;
 
 export function SeriesChart({
   busy,
@@ -56,27 +71,20 @@ export function SeriesChart({
   className,
   liveWindowMs,
   idleLabel,
+  refreshing = false,
   ...rest
-}: Omit<
-  ChartProps,
-  | "emptyLabel"
-  | "unavailableLabel"
-  | "missingValueLabel"
-  | "hiddenLabel"
-  | "legendLabel"
-  | "keyboardHint"
-  | "collectingLabel"
-  | "minSamples"
-  | "height"
-> & {
+}: ChartProps & {
   busy: boolean;
+  /** Plot height; the legend/toolbar row and the time axis come on top of it. */
   height?: number;
   /** What the placeholder says when no sample has a value (defaults to the page's idle wording). */
   idleLabel?: string;
+  /** Earlier data is still on screen while a new range loads: it stays, dimmed (no skeleton, no jump). */
+  refreshing?: boolean;
   /**
    * Makes the chart a live one: the x axis is the last `liveWindowMs` up to the newest sample (so a
    * point's position depends on its own time only and the series slides with the clock between
-   * samples), the y axis holds a nice maximum with hysteresis, and ticks are absolute round times.
+   * samples), and the y axis holds a nice maximum with hysteresis.
    */
   liveWindowMs?: number;
 }) {
@@ -94,33 +102,25 @@ export function SeriesChart({
   const axis = useRef(initialAxis(dataMax));
   axis.current = nextAxis(axis.current, dataMax, Date.now());
   const yMax = useGlide(axis.current.max);
-  const live = liveWindowMs
-    ? {
-        xDomain: [newest - liveWindowMs, newest] as const,
-        // A label that would touch either edge is nudged inward by the chart (a jump of its own): it
-        // appears once it is clear of the right edge and goes before it reaches the left one.
-        xTicks: timeTicks(newest - liveWindowMs, newest, 3).filter(
-          (t) =>
-            t <= newest - liveWindowMs * 0.1 &&
-            t >= newest - liveWindowMs * 0.9,
-        ),
-        yMax,
-      }
-    : null;
-  // No sample has a value yet: say so calmly, at a reduced height, instead of an empty plot with a readout row.
+  // No sample has a value yet: say so calmly, at the chart's own height, instead of an empty plot.
   const hasValues = rest.data.some((p) =>
     rest.series.some((d) => {
       const v = p.values[d.key];
       return typeof v === "number" && Number.isFinite(v) && v !== 0;
     }),
   );
+  const head =
+    rest.series.length > 1 || rest.tools?.smooth || rest.tools?.log
+      ? HEAD_PX
+      : 0;
+  const frame = height + head + CHART_AXIS_PX;
   if (rest.data.length > 0 && !hasValues)
     return (
       <div
         role="status"
         aria-label={rest.ariaLabel}
         className={`flex items-center justify-center ${className ?? ""}`}
-        style={{ height: height + CHART_AXIS_PX }}
+        style={{ height: frame }}
         data-testid="series-idle"
       >
         <EmptyState
@@ -135,50 +135,19 @@ export function SeriesChart({
     );
   return (
     <div
-      className={`[&_div[role=status]]:h-(--series-h) [&_div[role=status]]:min-h-0 [&_div[role=status]]:rounded-none [&_div[role=status]]:border-0 [&_div[role=status]]:text-xs ${className ?? ""}`}
-      style={{ "--series-h": `${height}px` } as CSSProperties}
+      className={`transition-opacity duration-(--dur-base) ${refreshing ? "opacity-60" : ""} ${className ?? ""}`}
+      style={{ minHeight: frame }}
     >
-      {live ? (
-        <LiveScroll spanMs={liveWindowMs!} newestAt={newest}>
-          <TimeSeriesChart
-            {...rest}
-            {...(live ?? {})}
-            height={height}
-            minSamples={5}
-            showReadout={false}
-            emptyLabel={t("overview.chart.empty")}
-            unavailableLabel={
-              busy ? t("overview.chart.collecting") : t("overview.chart.idle")
-            }
-            missingValueLabel={t("overview.chart.missing")}
-            hiddenLabel={t("overview.chart.hidden")}
-            legendLabel={t("overview.chart.legend")}
-            keyboardHint={t("overview.chart.keyboardHint")}
-            collectingLabel={(have, need) =>
-              t("overview.chart.collectingSamples", { have, need })
-            }
-          />
-        </LiveScroll>
-      ) : (
-        <TimeSeriesChart
+      <Suspense fallback={<div style={{ height: frame }} aria-hidden />}>
+        <ConsoleChart
           {...rest}
-          {...(live ?? {})}
-          height={height}
-          minSamples={5}
-          showReadout={false}
-          emptyLabel={t("overview.chart.empty")}
-          unavailableLabel={
-            busy ? t("overview.chart.collecting") : t("overview.chart.idle")
-          }
-          missingValueLabel={t("overview.chart.missing")}
-          hiddenLabel={t("overview.chart.hidden")}
-          legendLabel={t("overview.chart.legend")}
-          keyboardHint={t("overview.chart.keyboardHint")}
-          collectingLabel={(have, need) =>
-            t("overview.chart.collectingSamples", { have, need })
-          }
+          height={height + CHART_AXIS_PX}
+          minSamples={rest.minSamples ?? 5}
+          yMax={liveWindowMs ? yMax : undefined}
+          live={!!liveWindowMs}
+          xDomain={liveWindowMs ? [newest - liveWindowMs, newest] : undefined}
         />
-      )}
+      </Suspense>
     </div>
   );
 }
@@ -212,5 +181,27 @@ export function ChartCard({
       </div>
       {children}
     </Card>
+  );
+}
+
+/** Thin columns (counts per bucket or day) with a tooltip; holds its height while the chart chunk loads. */
+export function Columns(props: ColumnChartProps) {
+  return (
+    <Suspense
+      fallback={<div style={{ height: props.height ?? 150 }} aria-hidden />}
+    >
+      <ConsoleColumns {...props} />
+    </Suspense>
+  );
+}
+
+/** A sparkline that reads out the sample under the pointer; a plain sparkline until the chart chunk arrives. */
+export function SparkTip(props: SparklineTipProps) {
+  const { readout, ...plain } = props;
+  void readout;
+  return (
+    <Suspense fallback={<Sparkline {...plain} />}>
+      <ConsoleSparkTip {...props} />
+    </Suspense>
   );
 }

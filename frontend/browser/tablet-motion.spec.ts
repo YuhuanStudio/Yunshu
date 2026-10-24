@@ -103,7 +103,9 @@ function record(page: Page, ms: number): Promise<{ frames: Frame[] }> {
   return page.evaluate(
     (duration) =>
       new Promise<{ frames: Frame[] }>((resolve) => {
-        const root = document.querySelector(".live-scroll");
+        const root = document.querySelector(
+          '[data-yunui="metric-chart"][data-live]',
+        );
         if (!root) return resolve({ frames: [] });
         root.scrollIntoView({ block: "center" });
         const frames: Frame[] = [];

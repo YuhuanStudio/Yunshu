@@ -299,5 +299,6 @@ const requests = {
   "finish.refusal": "模型拒絕",
   "finish.error": "發生錯誤",
   "finish.timeout": "逾時",
+  "dist.unit": "個請求",
 };
 export default requests;

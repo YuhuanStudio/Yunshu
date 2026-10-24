@@ -224,9 +224,22 @@ function aggregate(group: readonly SeriesPoint[]): ChartRow {
     }
     return best;
   };
+  const low = (pick: (p: SeriesPoint) => number | null) => {
+    let best: number | null = null;
+    for (const p of group) {
+      const v = pick(p);
+      if (v != null && (best == null || v < best)) best = v;
+    }
+    return best;
+  };
   return {
     x: group[group.length - 1].at,
     values: {
+      // the spread of the samples this row stands for: the chart draws it as a faint band behind the mean
+      decodeLo: low((p) => p.decode),
+      decodeHi: peak((p) => p.decode),
+      prefillLo: low((p) => p.prefill),
+      prefillHi: peak((p) => p.prefill),
       decode: mean((p) => p.decode),
       prefill: mean((p) => p.prefill),
       active: mean((p) => p.memActive),
