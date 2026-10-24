@@ -159,6 +159,7 @@ _add("YUNSHU_CONVERSATION_MAX_ITEMS", "int", 10000, "Conversations API: maximum 
 _add("YUNSHU_COMPACT_MAX_TOKENS", "int", 2048, "Responses compaction: maximum tokens of the model-written summary.", "server", minimum=64)
 
 # ── auth ───────────────────────────────────────────────────────────────
+_add("YUNSHU_HOST", "str", "127.0.0.1", "Bind host of `yunshu serve` (`--host` wins). 127.0.0.1 serves this Mac only; 0.0.0.0 also serves the local network (set YUNSHU_AUTH_TOKEN then).", "auth")
 _add("YUNSHU_AUTH_TOKEN", "str", None, "Bearer token. When set, every request except health/version/docs needs it; unset: inference is open and operational endpoints are denied.", "auth", secret=True)
 _add("YUNSHU_AUTH_DISABLED", "bool", False, "Disable auth entirely (operational endpoints open too). Local development only.", "auth")
 _add("YUNSHU_DEBUG_ROUTES", "bool", False, "Mount the /debug/* diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or YUNSHU_AUTH_DISABLED. /metrics is always mounted.", "observability")
@@ -323,9 +324,9 @@ _add("YUNSHU_SERVE_LOG_RETENTION_DAYS", "int", 30, "History API metadata retenti
 _add("YUNSHU_SERVE_LOG_KEEP", "int", 4, "Serve log: rotated files kept.", "observability", minimum=0)
 _add("YUNSHU_CONSOLE", "bool", True, "`yunshu serve` also starts the console process (the web console, the docs, and the metrics history recorder) as a sibling on YUNSHU_CONSOLE_PORT. The console is its own light process that never loads MLX: it keeps running and recording while the engine restarts or crashes, and an engine fault cannot take it down. `--no-console` turns it off; `yunshu console` runs it on its own.", "console")
 _add("YUNSHU_CONSOLE_PORT", "int", 8100, "Port of the console process (the web console at /console/, its reverse proxy to the engine API, and the history endpoints). 8100 stays clear of the engine's 8000 and of the usual dev servers (3000, 5173, 8080, 8888).", "console", minimum=1)
-_add("YUNSHU_CONSOLE_HOST", "str", None, "Bind host of the console process. Unset: the engine's own host for the sibling, 127.0.0.1 for a standalone `yunshu console`.", "console")
+_add("YUNSHU_CONSOLE_HOST", "str", None, "Bind host of the console process. Unset: the engine's own host for the sibling, 127.0.0.1 for a standalone `yunshu console`; 0.0.0.0 serves the local network too.", "console")
 _add("YUNSHU_CONSOLE_ENGINE", "str", None, "Engine URL the console process watches and proxies to. Unset: the engine that started it, else http://127.0.0.1:8000. Point it at a LAN or remote engine to watch that one. `auto` follows whichever local engine is running (see YUNSHU_CONSOLE_DISCOVER_PORTS).", "console")
-_add("YUNSHU_CONSOLE_DISCOVER_PORTS", "str", "8000,18990-18999", "Ports on 127.0.0.1 the console probes (GET /health) for Yunshu engines when it runs with `--engine auto` (or YUNSHU_CONSOLE_ENGINE=auto): comma-separated ports and ranges. A port counts only when its /health answers like a Yunshu engine; anything else is ignored. The console keeps the engine it follows while that one is healthy, and switches to the most recently started live engine when it disappears (or to one pinned in the console).", "console")
+_add("YUNSHU_CONSOLE_DISCOVER_PORTS", "str", "all", "Where the console looks for Yunshu engines with `--engine auto` (or YUNSHU_CONSOLE_ENGINE=auto). `all` (default): every TCP port listening on this Mac (lsof, refreshed every 10 s), minus console processes; one engine reached through a proxy port is listed once. Or comma-separated ports and ranges on 127.0.0.1, e.g. `8000,18990-18999`. A port counts only when its /health answers like a Yunshu engine; a port that answered as something else is re-probed after 60 s. The console keeps the engine it follows while that one is healthy, then follows the most recently started one; pin one in the status island.", "console")
 _add("YUNSHU_CONSOLE_DISCOVER_S", "float", 2.0, "Seconds between the console's engine discovery probes in `--engine auto` mode (short-timeout GET /health on each candidate, asynchronous).", "console", minimum=0.5)
 _add("YUNSHU_CONSOLE_ENGINE_TOKEN", "str", None, "Bearer token the console process uses to read the engine while it records history. Unset: YUNSHU_AUTH_TOKEN. The browser's own token is passed through to the engine unchanged.", "console", secret=True)
 _add("YUNSHU_CONSOLE_PAUSE_FILE", "path", None, "Path of a JSON pause file `{\"pause\": true, \"until\": <epoch or null>, \"reason\": \"...\"}`. While it exists and is not stale (past `until`, or older than 2 h when `until` is null) the console process sends no request to any engine (no status polling, no discovery probes) so a timing A/B is not perturbed by an asymmetric monitor; the proxy still forwards user-initiated requests and the status island shows the reason. gpuq writes `$GPUQ_DIR/console-pause.json` while a timing (--quiet or `-speed`) job runs.", "console")
@@ -533,6 +534,7 @@ _RESTART = frozenset(
         "YUNSHU_HISTORY_HOURS",
         "YUNSHU_CONSOLE",
         "YUNSHU_CONSOLE_PORT",
+        "YUNSHU_HOST",
         "YUNSHU_CONSOLE_HOST",
         "YUNSHU_CONSOLE_ENGINE",
         "YUNSHU_CONSOLE_ENGINE_TOKEN",

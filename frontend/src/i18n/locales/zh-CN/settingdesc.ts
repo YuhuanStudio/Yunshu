@@ -332,14 +332,16 @@ const settingdesc = {
     "`yunshu serve` 同时以并行进程启动主控台进程（网页主控台、文档、历史记录器）。它不加载 MLX，引擎重启或崩溃时仍持续运行。`--no-console` 可关闭。",
   YUNSHU_CONSOLE_PORT:
     "主控台进程的端口。8100 避开引擎的 8000 与常见的开发服务器。",
+  YUNSHU_HOST:
+    "引擎的绑定主机（--host 优先）。127.0.0.1 只服务本机；0.0.0.0 也服务局域网（此时请设置认证令牌）。",
   YUNSHU_CONSOLE_HOST:
-    "主控台进程的绑定主机。未设置时：并行启动沿用引擎的主机，单独运行为 127.0.0.1。",
+    "主控台进程的绑定主机。未设置时：并行启动沿用引擎的主机，单独运行为 127.0.0.1（0.0.0.0 也服务局域网）。",
   YUNSHU_CONSOLE_ENGINE:
     "主控台进程监看并转发请求的引擎地址。未设置时：启动它的引擎，否则为 http://127.0.0.1:8000。",
   YUNSHU_CONSOLE_ENGINE_TOKEN:
     "主控台进程记录历史时读取引擎所用的 Bearer 令牌。未设置时使用 YUNSHU_AUTH_TOKEN。",
   YUNSHU_CONSOLE_DISCOVER_PORTS:
-    "--engine auto 时控制台探测 Yunshu 引擎的 127.0.0.1 端口（逗号与范围；只有 /health 响应符合 Yunshu 才算）。",
+    "--engine auto 时控制台寻找 Yunshu 引擎的范围：all（默认）＝本机所有监听中的端口（排除控制台）；或 127.0.0.1 上的逗号与范围列表。只有 /health 响应符合 Yunshu 才算。",
   YUNSHU_CONSOLE_DISCOVER_S: "--engine auto 时控制台探测引擎的间隔秒数。",
   YUNSHU_CONSOLE_PAUSE_FILE:
     "暂停文件路径（JSON：pause/until/reason）。文件存在且未过期时，控制台不向任何引擎发送请求，避免干扰计时测量。",

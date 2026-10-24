@@ -70,6 +70,7 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Added
 
+- `yunshu console --engine auto` finds engines on every listening port of this Mac by default (`YUNSHU_CONSOLE_DISCOVER_PORTS=all`), skips console processes, and lists one engine behind a proxy once. `YUNSHU_HOST` sets the engine's bind host like `YUNSHU_CONSOLE_HOST` does the console's.
 - `yunshu console --engine auto`: the console finds Yunshu engines on local ports (`YUNSHU_CONSOLE_DISCOVER_PORTS`, `YUNSHU_CONSOLE_DISCOVER_S`), keeps the one it follows while healthy, switches to the newest live engine when it goes away, and lets you pin one from the status island or `POST /console/api/engines`; the history records each engine start as its own session. [Guide](docs/CONSOLE.md#following-engines-automatically).
 - Anthropic `code_execution_20250825` / `_20260120` / `_20260521` run locally inside Anthropic's sandbox-runtime (srt, optional, Node >= 22.12): bash and text-editor sub-tools, `container` reuse and expiry, `container_upload`, `$OUTPUT_DIR` files through the Files API, streaming. Off by default (`YUNSHU_CODE_EXECUTION`, plus `_ROOT`, `_TIMEOUT`, `_MEMORY_MB`, `_NETWORK_ALLOW`, `_TTL_MIN`); no network, no access to your home, wall/CPU/memory/output limits; `yunshu doctor` checks srt. [Guide](docs/guides/CODE_EXECUTION.md).
 - Anthropic API version 2026-10-21: requests that send `anthropic-version: 2026-10-21` (or later; the 2.x SDKs do)

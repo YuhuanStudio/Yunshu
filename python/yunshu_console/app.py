@@ -537,7 +537,7 @@ def build_from_settings(
     """The app as ``yunshu console`` runs it: settings decide the engine, token, store and cadence."""
     from yunshu_engine import settings
 
-    from .discovery import DEFAULT_PORTS, candidate_urls, parse_ports
+    from .discovery import DEFAULT_PORTS, candidate_urls, listening_ports, parse_ports
 
     url = engine_url or settings.get("YUNSHU_CONSOLE_ENGINE") or "http://127.0.0.1:8000"
     auto = url.strip().lower() == "auto"
@@ -559,14 +559,15 @@ def build_from_settings(
     discovery = None
     if auto:
         own = settings.get("YUNSHU_CONSOLE_PORT")
+        spec = (settings.get("YUNSHU_CONSOLE_DISCOVER_PORTS") or DEFAULT_PORTS).strip()
+        every_port = spec.lower() == "all"
+        skip = int(own) if own else None
         discovery = Discovery(
             candidate_urls(
-                parse_ports(
-                    settings.get("YUNSHU_CONSOLE_DISCOVER_PORTS") or DEFAULT_PORTS
-                ),
-                configured,
-                skip_port=int(own) if own else None,
+                [] if every_port else parse_ports(spec), configured, skip_port=skip
             ),
+            port_source=listening_ports if every_port else None,
+            skip_port=skip,
             default_url=url,
             token=token,
             pause=pause,

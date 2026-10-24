@@ -353,14 +353,16 @@ const settingdesc = {
     "`yunshu serve` also starts the console process (web console, docs, history recorder) as a sibling. It never loads MLX and keeps running when the engine restarts or crashes. `--no-console` turns it off.",
   YUNSHU_CONSOLE_PORT:
     "Port of the console process. 8100 stays clear of the engine's 8000 and of common dev servers.",
+  YUNSHU_HOST:
+    "Bind host of the engine (--host wins). 127.0.0.1 serves this Mac only; 0.0.0.0 also serves the local network (set an auth token then).",
   YUNSHU_CONSOLE_HOST:
-    "Bind host of the console process. Unset: the engine's host for the sibling, 127.0.0.1 standalone.",
+    "Bind host of the console process. Unset: the engine's host for the sibling, 127.0.0.1 standalone (0.0.0.0 also serves the local network).",
   YUNSHU_CONSOLE_ENGINE:
     "Engine URL the console process watches and proxies to. Unset: the engine that started it, else http://127.0.0.1:8000.",
   YUNSHU_CONSOLE_ENGINE_TOKEN:
     "Bearer token the console process uses to read the engine while recording history. Unset: YUNSHU_AUTH_TOKEN.",
   YUNSHU_CONSOLE_DISCOVER_PORTS:
-    "Ports on 127.0.0.1 the console probes for Yunshu engines with --engine auto (comma list and ranges; only a /health that answers like Yunshu counts).",
+    "Where the console looks for Yunshu engines with --engine auto: all (default) = every listening port on this Mac, minus consoles; or a comma list and ranges on 127.0.0.1. Only a /health that answers like Yunshu counts.",
   YUNSHU_CONSOLE_DISCOVER_S:
     "Seconds between the console's engine discovery probes with --engine auto.",
   YUNSHU_CONSOLE_PAUSE_FILE:

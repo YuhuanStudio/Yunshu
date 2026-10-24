@@ -313,8 +313,11 @@ def test_serve_defaults_to_localhost():
     import inspect
 
     from yunshu_cli.serve import serve
+    from yunshu_engine import settings
 
-    assert inspect.signature(serve).parameters["host"].default.default == "127.0.0.1"
+    # --host unset falls back to YUNSHU_HOST, whose default keeps the server on this Mac
+    assert inspect.signature(serve).parameters["host"].default.default is None
+    assert settings.REGISTRY["YUNSHU_HOST"].default == "127.0.0.1"
 
 
 # ── service ───────────────────────────────────────────────────────────────

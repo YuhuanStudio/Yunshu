@@ -361,3 +361,84 @@ def test_history_keeps_each_engine_as_its_own_session(engines, tmp_path):
     by = {r["request_id"]: r for r in rows}
     assert by["r-a"]["engine_url"] == a.url and by["r-b"]["engine_url"] == b.url
     assert by["r-a"]["engine_started"] != by["r-b"]["engine_started"]
+
+
+def test_every_port_mode_follows_the_listening_ports_and_skips_known_non_engines(
+    engines,
+):
+    from yunshu_console import discovery as disc
+
+    other = engines("other", yunshu=False)
+    a = engines("a")
+    listening = [other.port, a.port]
+    now = [1000.0]
+    probes: list[str] = []
+
+    async def go():
+        d = Discovery([], port_source=lambda: list(listening), clock=lambda: now[0])
+        real_probe = d._probe
+
+        async def counted(url):
+            probes.append(url)
+            return await real_probe(url)
+
+        d._probe = counted
+        await d.scan()
+        first = d.snapshot()
+        b = engines("b", uptime=1.0)
+        listening.append(b.port)
+        now[0] += 1.0  # before the port refresh: b not seen yet
+        await d.scan()
+        early = [e["url"] for e in d.snapshot()["data"]]
+        now[0] += disc.PORT_REFRESH_S
+        await d.scan()
+        later = [e["url"] for e in d.snapshot()["data"]]
+        await d.aclose()
+        return first, early, later, b
+
+    first, early, later, b = asyncio.run(go())
+    assert [e["url"] for e in first["data"]] == [a.url]
+    assert early == [a.url]
+    assert sorted(later) == sorted([a.url, b.url])
+    # the non-Yunshu port answered once and is left alone for NON_ENGINE_RECHECK_S
+    assert probes.count(other.url) == 1
+
+
+def test_one_engine_behind_a_proxy_is_listed_once_preferring_the_server_port(engines):
+    from yunshu_console import discovery as disc
+
+    proxy = engines("same", uptime=50.0)
+    server = engines("same", uptime=50.0)
+    disc.SERVER_PORTS.clear()
+    disc.SERVER_PORTS.add(server.port)
+    try:
+
+        async def go():
+            d = Discovery([], port_source=lambda: [proxy.port, server.port])
+            await d.scan()
+            await d.aclose()
+            return d.snapshot()
+
+        snap = asyncio.run(go())
+    finally:
+        disc.SERVER_PORTS.clear()
+    assert [e["url"] for e in snap["data"]] == [server.url]
+    assert snap["selected"] == server.url
+
+
+def test_listening_ports_drops_consoles_and_marks_servers(monkeypatch):
+    from yunshu_console import discovery as disc
+
+    def fake_run(cmd):
+        if cmd[0] == "lsof":
+            return "p10\nf3\nn127.0.0.1:8100\np20\nf4\nn*:18990\np30\nf5\nn*:5000\n"
+        return (
+            "10 /x/python -m yunshu_console --engine auto --port 8100\n"
+            "20 /x/python /x/bin/yunshu serve -m /m --port 18990\n"
+            "30 /usr/bin/someserver\n"
+        )
+
+    monkeypatch.setattr(disc, "_run", fake_run)
+    assert disc.listening_ports() == [5000, 18990]
+    assert {18990} == disc.SERVER_PORTS
+    disc.SERVER_PORTS.clear()

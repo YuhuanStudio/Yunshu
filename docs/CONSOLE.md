@@ -77,10 +77,14 @@ the stretch that was missed is filled from the recorded history.
 ## Following engines automatically
 
 `yunshu console --engine auto` (or `YUNSHU_CONSOLE_ENGINE=auto`) lets one console stay open while engines
-start and stop on different ports. Every `YUNSHU_CONSOLE_DISCOVER_S` (2 s) it asks each candidate,
-`127.0.0.1` on the ports of `YUNSHU_CONSOLE_DISCOVER_PORTS` (default `8000,18990-18999`), for `GET /health`
-with a short timeout, without blocking the proxy. A port counts only when `/health` answers like a Yunshu
-engine; any other server is ignored.
+start and stop on different ports. Every `YUNSHU_CONSOLE_DISCOVER_S` (2 s) it asks each candidate for
+`GET /health` with a short timeout, without blocking the proxy. With `YUNSHU_CONSOLE_DISCOVER_PORTS=all`
+(the default) the candidates are every TCP port listening on this Mac (refreshed every 10 s with `lsof`),
+minus console processes, which proxy `/health` and would look like the engine behind them; an explicit
+list (`8000,18990-18999`) probes exactly those ports on `127.0.0.1`. A port counts only when `/health`
+answers like a Yunshu engine; a port that answered as something else is asked again after 60 s. One engine
+reached through several ports (a recording proxy in front of it) has one start time and is listed once,
+on the port the engine process itself listens on.
 
 - The engine being followed is kept while it is healthy. When it disappears (two missed probes) the console
   moves to the most recently started live engine (smallest uptime).
