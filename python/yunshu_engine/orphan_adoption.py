@@ -138,6 +138,8 @@ class Generation:
         self.timer: asyncio.TimerHandle | None = None
         self.adopted = 0
         self.parts: dict[str, str] = {}
+        self.delivered = 0  # outputs the first consumer has taken AND resumed after
+        self.gated = False
 
     def notify(self) -> None:
         ev, self.changed = self.changed, asyncio.Event()
@@ -277,6 +279,20 @@ async def _pump(gen: Generation, agen: AsyncIterator[Any]) -> None:
                 break
             gen.buffer.append(out)
             gen.notify()
+            if not gen.gated and getattr(out, "new_text", ""):
+                # The engine releases its first-delivery handoff (a heap collection that
+                # must not delay the first token) when we ask for the next output: hold
+                # until the consumer has taken this one and resumed.
+                gen.gated = True
+                idx = len(gen.buffer)
+                deadline = time.monotonic() + 2.0
+                while (
+                    gen.delivered < idx
+                    and gen.attached
+                    and not gen.real_cancel.is_set()
+                    and time.monotonic() < deadline
+                ):
+                    await asyncio.sleep(0.005)
     except asyncio.CancelledError:
         raise
     except BaseException as exc:  # surfaced to whoever reads the generation
@@ -383,6 +399,7 @@ async def run(
                 index += 1
                 _publish_stats(gen, caller_cancel, out, replay_n)
                 yield out
+                gen.delivered = max(gen.delivered, index)
                 if caller_cancel.is_set():
                     return
             if gen.finished and index >= len(gen.buffer):
@@ -398,9 +415,24 @@ async def run(
             if caller_cancel.is_set():
                 return
     finally:
+        gen.delivered = max(gen.delivered, index)
         if clean:
             reg._drop(gen, cancel=False)
-        elif explicitly_cancelled(caller_cancel) or not key or grace <= 0:
+        elif (
+            explicitly_cancelled(caller_cancel)
+            or not key
+            or grace <= 0
+            or not caller_cancel.is_set()
+        ):
+            # A cancel request, or the consumer simply stopped reading (a deliberate
+            # break): only a disconnect, which the gateway signals on the event before
+            # it closes the stream, is worth keeping.
             reg._drop(gen, cancel=True)
+            caller_cancel.set()
+            gen.delivered = len(gen.buffer) + 1
+            if gen.pump is not None:
+                # Let the engine wind the row down before this request is reported done.
+                with contextlib.suppress(BaseException):
+                    await asyncio.wait_for(asyncio.shield(gen.pump), timeout=30.0)
         else:
             reg.detach(gen, grace, limit)

@@ -821,7 +821,7 @@ export function Dashboard({
             style={{ minHeight: online ? LANE_AREA_PX : 0 }}
           >
             <ul
-              className="divide-y divide-border/60"
+              className="divide-y divide-border/60 [&>li:has(+li[aria-hidden])]:border-b-0 [&>li[aria-hidden]]:border-0"
               data-live-list=""
               ref={laneRef}
             >

@@ -25,6 +25,7 @@ const shell: Shape<typeof zh> = {
   "engine.headline.prefillNoSpeed": "In prefill, no speed reported yet",
   "engine.headline.prefillCached":
     "The last request hit the cache: no real prefill",
+  "engine.headline.shortCached": "All from cache",
   "engine.headline.idle": "Idle",
   "engine.headline.none": "No finished requests yet",
   "engine.live.offline": "Offline",

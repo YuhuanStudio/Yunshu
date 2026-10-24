@@ -693,7 +693,7 @@ def test_request_between_templating_and_submit_is_awaited_before_the_next_atom(a
 
 
 def test_long_reply_decode_share_is_capped_while_another_request_prefills(atoms):
-    """A row past its first tokens must not take half the GPU from a cold prefill."""
+    """A row past its first tokens takes at most a quarter of the GPU from a cold prefill."""
     r, clock = atoms
     a = job(0)
     a.max_tokens = 2000
@@ -713,7 +713,9 @@ def test_long_reply_decode_share_is_capped_while_another_request_prefills(atoms)
             break
     assert cold.stats.t_first
     prefill_s = 4 * 2048 * 0.00121
-    assert clock[0] - t0 < prefill_s * 1.1
+    assert clock[0] - t0 < prefill_s * 1.3
+    # ...and keeps decoding meanwhile instead of stalling until the prefill ends.
+    assert a.stats.generated > 200 + 8
 
 
 def test_early_rows_keep_the_generous_decode_share(atoms):
@@ -721,4 +723,26 @@ def test_early_rows_keep_the_generous_decode_share(atoms):
     from yunshu_engine.serving.work_scheduler import decode_quantum
 
     assert decode_quantum(2.0, early=True) == 2.0
-    assert decode_quantum(2.0, early=False) < 0.3
+    assert decode_quantum(2.0, early=False) <= 0.5
+
+
+def test_equal_cold_prompts_are_served_in_arrival_order_without_ping_pong(atoms):
+    """B arrived after A, so A's atom overtakes nobody: B gets no FIFO protection from it.
+    (27B probe: A's TTFT was 10.8 s instead of 9.0 s because B's atom ran between A's.)"""
+    r, clock = atoms
+    a = job(0)
+    a.ids = list(range(10000))
+    r._submit(a)
+    clock[0] += 0.01
+    b = job(0)
+    b.ids = list(range(11000))
+    r._submit(b)
+    for _ in range(200):
+        r._drive_slice(False)
+        if b.stats.t_first:
+            break
+    g = r._groups()[0]
+    order = [uid for uid, _, _ in g.gen.atoms]
+    first_b = order.index(b.uid)
+    assert all(u == a.uid for u in order[:first_b])
+    assert first_b == 5  # ceil(10000 / 2048): A is prefilled completely first

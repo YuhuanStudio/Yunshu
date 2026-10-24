@@ -135,6 +135,19 @@ def sanitize_request_id(raw: str | bytes | None) -> str | None:
     return raw if _ID_OK.match(raw) else None
 
 
+def served_model(requested: str | None) -> str | None:
+    """The model that actually answers: in single-model mode every requested name maps to the one
+    served model, so a client's alias ("m", "local") is not what the console should show."""
+    try:
+        from .engine import get_display_model_id, get_model_manager
+
+        if get_model_manager() is None:
+            return get_display_model_id() or requested
+    except Exception:  # noqa: BLE001 - display only
+        pass
+    return requested
+
+
 def new_request_id() -> str:
     return f"req_{uuid.uuid4().hex[:24]}"
 
@@ -182,6 +195,7 @@ class RequestInfo:
     tool_markup_failed: int | None = None
     api_key_id: str | None = None  # the stored API key that made the request, if any
     _rate: tuple[float, int, float] | None = None  # (t, processed, ema tokens/s)
+    _gen_samples: list = field(default_factory=list)  # (t, generated) while decoding
 
     @property
     def stats(self):
@@ -386,10 +400,36 @@ def progress_payload(info: RequestInfo) -> dict:
         out["completion_tokens"] = st.generated
         if st.phase == "decode" and st.t_first and st.t_last > st.t_first:
             # Same formula as the live aggregate in /v1/yunshu/status.
-            out["tokens_per_second"] = round(
-                (st.generated - 1) / (st.t_last - st.t_first), 1
-            )
+            rate = live_decode_rate(info, now)
+            if rate is not None:
+                out["tokens_per_second"] = round(rate, 1)
     return out
+
+
+LIVE_RATE_WINDOW_S = 5.0
+
+
+def live_decode_rate(info: RequestInfo, now: float | None = None) -> float | None:
+    """Tokens/s of this request over the last few seconds, not since its first token.
+
+    The lifetime average hid everything that matters live: a request that was cut to a
+    third of its speed by a peer still read its old average for minutes, so concurrent
+    rows looked unfairly split and the total looked higher than the GPU was producing."""
+    st = info.stats
+    if st is None or not st.t_first or st.generated < 1:
+        return None
+    now = time.perf_counter() if now is None else now
+    samples = info._gen_samples
+    if not samples or samples[-1][1] != st.generated or now - samples[-1][0] >= 0.5:
+        samples.append((now, st.generated))
+    while len(samples) > 2 and now - samples[1][0] > LIVE_RATE_WINDOW_S:
+        samples.pop(0)
+    t0, g0 = samples[0]
+    if now - t0 < 0.5:
+        if st.t_last > st.t_first:
+            return (st.generated - 1) / (st.t_last - st.t_first)
+        return None
+    return max(st.generated - g0, 0) / (now - t0)
 
 
 def _prefill_rate(info: RequestInfo, done: int, now: float) -> float | None:
@@ -568,7 +608,7 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
             }
     out = {
         "request_id": info.request_id,
-        "model": getattr(info.gen, "model", None) or info.model,
+        "model": served_model(getattr(info.gen, "model", None) or info.model),
         "reasons": {
             "cache": getattr(st, "cache_reason", None),
             "spec": getattr(st, "spec_reason", None),
@@ -706,7 +746,8 @@ def record_done(info: RequestInfo, stats: dict) -> None:
         {
             "t": time.time(),
             "request_id": info.request_id,
-            "model": getattr(info.gen, "model", None) or info.model,
+            "model": served_model(getattr(info.gen, "model", None) or info.model),
+            "model_alias": (getattr(info.gen, "model", None) or info.model),
             "speculative": stats.get("speculative"),
             "cache": stats.get("cache"),
             "structured_output": stats.get("structured_output"),

@@ -2047,6 +2047,26 @@ class VLMBatchRunner:
         chosen = min(
             candidates, key=lambda gj: estimates[id(gj[1])].key(now), default=None
         )
+        # A later arrival does not take the GPU from the earlier request whose prefill is
+        # already under way unless it is strictly shorter: otherwise two equal cold prompts
+        # alternate atoms and the first one's TTFT grows by the second one's atoms.
+        owner = getattr(self, "_atom_owner", None)
+        if (
+            chosen is not None
+            and owner is not None
+            and owner is not chosen[1]
+            and not owner.stats.t_first
+            and not owner.terminal
+            and chosen[1].priority == owner.priority
+            and chosen[1].queued >= owner.queued
+        ):
+            mine = next((c for c in candidates if c[1] is owner), None)
+            if (
+                mine is not None
+                and estimates[id(chosen[1])].uncached_tokens
+                >= estimates[id(owner)].uncached_tokens
+            ):
+                chosen = mine
         aged_yield = None
         primary_choice = min(
             ((g, j) for g, j in candidates if j.priority >= 0),
@@ -2131,6 +2151,7 @@ class VLMBatchRunner:
                     if job.priority < 0:
                         job.handoff_graced = False
             if selected_job is not None:
+                self._atom_owner = selected_job
                 if selected_job.priority < 0:
                     selected_job.prefill_skips = 0
                 # Revalidate after actual lookup/progress. A metadata-only warm
@@ -2143,9 +2164,13 @@ class VLMBatchRunner:
                 # Bound overtaking in executed atoms, independent of arrival
                 # rate and the latency of the competing short requests.
                 for _, waiter in candidates:
+                    # Only a waiter that arrived BEFORE the selected job was overtaken by it;
+                    # a later arrival gets no FIFO protection from being served second
+                    # (it made two equal cold prompts alternate atoms: first TTFT +1 atom).
                     if (
                         waiter is not selected_job
                         and waiter.priority == selected_job.priority
+                        and waiter.queued <= selected_job.queued
                     ):
                         waiter.prefill_skips += 1
                 batch = group.gen._prompt_batch

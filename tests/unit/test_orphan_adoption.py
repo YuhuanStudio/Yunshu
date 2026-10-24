@@ -264,7 +264,22 @@ def test_server_made_seed_is_not_identity():
 
 def test_omitted_defaults_match_spelled_out_defaults():
     m = [{"role": "user", "content": "x"}]
-    a = oa.request_key("m", m, {"max_tokens": 10, "temperature": 0.7, "stop": [], "logprobs": False})
+    a = oa.request_key(
+        "m", m, {"max_tokens": 10, "temperature": 0.7, "stop": [], "logprobs": False}
+    )
     b = oa.request_key("m", m, {"max_tokens": 10, "top_p": 1.0, "seed": None})
     assert a == b
     assert a != oa.request_key("m", m, {"max_tokens": 10, "temperature": 0.0})
+
+
+def test_deliberate_break_without_disconnect_cancels_at_once():
+    async def main():
+        reg = oa.OrphanRegistry()
+        eng = FakeEngine(n=500)
+        c1 = threading.Event()
+        it = oa.run("k", eng.start, c1, 60.0, 2, reg)
+        await _take(it, 2)
+        await it.aclose()  # the caller just stopped reading; no disconnect signalled
+        assert eng.cancels[0].is_set() and reg.snapshot() == [] and c1.is_set()
+
+    _run(main())

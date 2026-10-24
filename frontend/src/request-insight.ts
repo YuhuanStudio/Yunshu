@@ -182,6 +182,18 @@ export function isSlow(r: Timed, rule: SlowRule): boolean {
   );
 }
 
+/** Which of the two thresholds a request crossed: a cell is coloured only for the figure that is slow. */
+export function slowParts(
+  r: Timed,
+  rule: SlowRule,
+): { ttft: boolean; total: boolean } {
+  const s = stages(r);
+  return {
+    ttft: s.ttft != null && s.ttft > rule.ttftMs,
+    total: s.total != null && s.total > rule.totalMs,
+  };
+}
+
 /**
  * The TTFT cell of a request row. TTFT is a property of the first token, so it is the server's
  * measured value once that token exists and nothing before it. A running row never shows its

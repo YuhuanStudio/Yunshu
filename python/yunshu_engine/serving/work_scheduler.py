@@ -26,7 +26,7 @@ DECODE_SHARE = 1.0
 # is past that, a long reply earns DECODE_TAIL_SHARE, which bounds how much a
 # long cold prefill is slowed by someone else's long generation.
 DECODE_EARLY_TOKENS = 48
-DECODE_TAIL_SHARE = 0.05
+DECODE_TAIL_SHARE = 0.25
 DECODE_QUANTUM_MAX_S = 4.0
 # A row that has just received its first token gets one burst of decode before
 # the next prefill atom, so a short tool call or answer completes inside a

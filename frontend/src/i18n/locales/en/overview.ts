@@ -55,7 +55,7 @@ const overview: Shape<typeof zh> = {
   "status.paused": "(paused)",
   "stats.ttft": "Time to first token (TTFT)",
   "tip.decode":
-    "Decode speed: the sum of tok/s over requests decoding now. With none running it shows the last request\u2019s speed, labelled so.",
+    "Decode speed. Live total: the sum of each running request\u2019s tok/s over the last 5 s; the header pill and the chart show the same figure (the chart samples it every 5 s). Mean: the average speed of requests that finished in the window, per request, so with concurrent requests it is lower than the total. With none running the card shows the last request\u2019s speed, labelled so.",
   "tip.prefill":
     "Prefill speed: tok/s of the last real prefill (at least 256 prompt tokens not served from cache). Otherwise a dash, never an average.",
   "tip.ttft":

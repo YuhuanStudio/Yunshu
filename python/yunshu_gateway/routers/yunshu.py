@@ -43,10 +43,12 @@ from ..console_contracts import (
 from ..engine import get_display_model_id, get_engine, get_model_manager
 from ..x_yunshu import (
     BOOT_ID,
+    live_decode_rate,
     parse_keep_alive,
     progress_payload,
     recent_rates,
     registry,
+    served_model,
 )
 from .models import _check_permission
 
@@ -156,12 +158,14 @@ def _requests() -> list[dict[str, Any]]:
     out = []
     for info in registry.active():
         row = progress_payload(info)
-        row["model"] = getattr(info.gen, "model", None) or info.model
+        alias = getattr(info.gen, "model", None) or info.model
+        row["model"] = served_model(alias)
+        if alias and alias != row["model"]:
+            row["model_alias"] = alias
         row["path"] = info.path
         row["stream"] = info.stream
         gen = info.gen
         if gen is not None:
-            row["model"] = gen.model
             row["engine_request_id"] = gen.request_id
             row["cancelled"] = gen.cancel_event.is_set()
         out.append(row)
@@ -176,7 +180,7 @@ def _requests() -> list[dict[str, Any]]:
                     "request_id": gen.client_request_id or gen.request_id,
                     "engine_request_id": gen.request_id,
                     "phase": "running",
-                    "model": gen.model,
+                    "model": served_model(gen.model),
                     "elapsed_s": round(gen.elapsed_s, 2),
                 }
             )
@@ -222,7 +226,7 @@ async def status(request: Request) -> dict:
     for info in registry.active():
         st = info.stats
         if st is not None and st.phase == "decode" and st.t_last > st.t_first:
-            live += (st.generated - 1) / (st.t_last - st.t_first)
+            live += live_decode_rate(info) or 0.0
     rates = recent_rates()
     state = getattr(request.app.state, "server_state", "running")
     return {

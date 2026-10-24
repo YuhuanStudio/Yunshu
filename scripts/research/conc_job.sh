@@ -9,7 +9,9 @@ PORT=18994
 export HOME=$H YUNSHU_HOME=$H/.yunshu YUNSHU_VLM_APC_DISK=0 YUNSHU_CONSOLE=0 PYTHONPATH=$T/python \
   YUNSHU_VLM_DRAFT=/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2
 [ "${CONC_DEBUG:-0}" = 1 ] && export YUNSHU_LOG_LEVEL=DEBUG
-"$PY" -m yunshu_cli serve -m /Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp --port $PORT > "$OUT/server-$TAG.log" 2>&1 &
+LAUNCH=("$PY" -m yunshu_cli)
+[ -n "${TAIL_SHARE:-}" ] && LAUNCH=("$PY" "$T/scripts/research/serve_with_share.py" "$TAIL_SHARE")
+"${LAUNCH[@]}" serve -m /Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp --port $PORT > "$OUT/server-$TAG.log" 2>&1 &
 SRV=$!
 trap 'kill -9 $SRV 2>/dev/null; wait $SRV 2>/dev/null; rm -rf "${H:?}/.yunshu/cache"' EXIT
 for i in $(seq 1 240); do curl -sf http://127.0.0.1:$PORT/health >/dev/null && break; sleep 2; done
