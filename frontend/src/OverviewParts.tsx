@@ -182,13 +182,13 @@ export function SpeedPair({ status }: { status: EngineStatus }) {
         label={term}
         value={
           <>
-            <Slot ch={7}>
+            <span className="tabular-nums">
               <LiveNumber
                 value={headline.value}
                 format={(v) => fixed(v)}
                 jumpKey={headline.kind}
               />
-            </Slot>
+            </span>
             <span className="ml-1 text-xs font-normal text-muted-foreground">
               tok/s
             </span>

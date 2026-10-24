@@ -82,7 +82,7 @@ import {
   StatValue,
 } from "./ui";
 import type { Perform } from "./Models";
-import { outcomeLabel, useRecentRequests } from "./recentRequests";
+import { finishLabel, outcomeLabel, useRecentRequests } from "./recentRequests";
 import {
   RequestBreakdown,
   RequestTimeline,
@@ -106,7 +106,7 @@ import { SegmentedTray } from "./SegmentedTray";
 const PAGE = 50;
 /** Long ids keep both ends so ids that differ only at the tail stay distinguishable. */
 const shortId = (id: string) =>
-  id.length > 20 ? `${id.slice(0, 9)}…${id.slice(-8)}` : id;
+  id.length > 32 ? `${id.slice(0, 12)}…${id.slice(-8)}` : id;
 /** Error is the only red dot; a cancel is the user's own choice, so it stays neutral (amber means in progress). */
 const outcomeDot = (o?: string): "busy" | "neutral" =>
   o === "error" ? "busy" : "neutral";
@@ -524,11 +524,17 @@ export function Requests({
               className="gap-1.5 text-xs text-muted-foreground"
               status={outcomeDot(view.outcome)}
             >
-              {outcomeLabel(view.outcome)}
+              {view.outcome === "completed" && view.finish_reason
+                ? finishLabel(view.finish_reason)
+                : outcomeLabel(view.outcome)}
             </StatusIndicator>
-            {view.finish_reason && (
-              <span className="font-mono text-xs text-muted-foreground">
-                {view.finish_reason}
+            {view.finish_reason && view.outcome !== "completed" && (
+              <span
+                className="text-xs text-muted-foreground"
+                title={view.finish_reason}
+              >
+                {"· "}
+                {finishLabel(view.finish_reason)}
               </span>
             )}
           </div>
@@ -844,7 +850,7 @@ export function Requests({
               >
                 <TooltipProvider delayDuration={200}>
                   <Table
-                    className="md:min-w-[680px] min-[1700px]:table-fixed"
+                    className="md:min-w-[640px]"
                     scrollLabel={t("requests.list.tableLabel")}
                   >
                     <Thead>
@@ -853,19 +859,21 @@ export function Requests({
                           k="time"
                           sort={sort}
                           setSort={setSort}
-                          className="w-20 max-sm:hidden"
+                          className="w-px whitespace-nowrap max-sm:hidden"
                         >
                           {t("requests.list.colTime")}
                         </SortTh>
-                        <Th>{t("requests.list.colRequest")}</Th>
-                        <Th className="hidden w-36 xl:table-cell">
+                        <Th className="min-w-56">
+                          {t("requests.list.colRequest")}
+                        </Th>
+                        <Th className="hidden w-px whitespace-nowrap xl:table-cell">
                           {t("requests.list.colUsage")}
                         </Th>
                         <SortTh
                           k="ttft"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-20 md:table-cell"
+                          className="hidden w-px whitespace-nowrap md:table-cell"
                         >
                           {t("requests.list.colTtft")}
                         </SortTh>
@@ -873,7 +881,7 @@ export function Requests({
                           k="total"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-20 md:table-cell"
+                          className="hidden w-px whitespace-nowrap md:table-cell"
                         >
                           {t("requests.list.colTotal")}
                         </SortTh>
@@ -881,14 +889,14 @@ export function Requests({
                           k="tps"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-20 md:table-cell"
+                          className="hidden w-px whitespace-nowrap md:table-cell"
                         >
                           tok/s
                         </SortTh>
-                        <Th className="hidden w-24 min-[1800px]:table-cell">
+                        <Th className="hidden w-px whitespace-nowrap min-[1800px]:table-cell">
                           {t("requests.list.colSpec")}
                         </Th>
-                        <Th className="w-24">
+                        <Th className="w-px">
                           <span className="sr-only">
                             {t("requests.list.colActions")}
                           </span>
@@ -1071,7 +1079,7 @@ export function Requests({
                                   </p>
                                 )}
                               </Td>
-                              <Td className="hidden overflow-hidden tabular-nums xl:table-cell">
+                              <Td className="hidden whitespace-nowrap tabular-nums xl:table-cell">
                                 <span className="block truncate">
                                   {number(row.prompt_tokens, 0)} /{" "}
                                   {number(row.completion_tokens, 0)}
