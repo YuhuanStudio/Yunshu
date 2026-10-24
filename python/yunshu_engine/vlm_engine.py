@@ -2662,6 +2662,16 @@ class VLMEngine:
         ids: list[int] = []
         pieces: list[str] = []
         finish = None
+        prompt_list: list[int] = []
+        round_trip = None
+        with contextlib.suppress(Exception):
+            from .roundtrip_capture import RoundTripTracker, flatten_ids
+
+            prompt_list = flatten_ids(input_ids)
+            tracker = getattr(self, "_roundtrip_tracker", None)
+            if tracker is None:
+                tracker = self._roundtrip_tracker = RoundTripTracker()
+            round_trip = tracker.observe_prompt(prompt_list)
         try:
             for event in events:
                 text, token, _state, finish_reason = event[:4]
@@ -2678,9 +2688,11 @@ class VLMEngine:
                     "pieces": pieces,
                     "text": "".join(pieces),
                     "finish": finish,
+                    "round_trip": round_trip,
                 }
                 with open(path, "a") as fh:
                     fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+                self._roundtrip_tracker.add(prompt_list, ids)
 
     def _runner_events_impl(
         self,
@@ -3114,6 +3126,17 @@ class VLMEngine:
                 return None
         manager = getattr(self, "_apc_backend", None)
         alignment = getattr(manager, "prefill_alignment", 0)
+        if prompt_kwargs is None and plan.get("protocol") != "openai":
+            # Anthropic breakpoints sit on content blocks, so the last one can end well before the prompt
+            # (the first turn's task text follows Claude Code's last marker). The prompt's own tail is what
+            # the next turn of an append-only conversation shares, so it is always a checkpoint too.
+            guard = int(getattr(manager, "exact_cache_guard_tokens", 1) or 1)
+            tail = len(ids) - guard
+            plan["tail"] = tail
+            if tail > minimum and tail not in {n for n, _ in points["writes"]}:
+                points["points"] = sorted({*points["points"], (tail, 300)})
+                points["writes"] = sorted({*points["writes"], (tail, 300)})
+                points["lookup_points"] = sorted({*points["lookup_points"], tail})
         if alignment:
             from .prompt_caching import align_prefill_plan
 
@@ -3124,6 +3147,10 @@ class VLMEngine:
                 minimum=minimum,
             )
         plan.update(points)
+        if plan.get("tail"):
+            plan["tail"] = (
+                plan["tail"] // alignment * alignment if alignment else plan["tail"]
+            )
         plan["resolved"] = True
         logger.info("Prompt cache rendered token boundaries: %s", plan["points"])
         return plan

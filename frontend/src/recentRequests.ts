@@ -1,6 +1,6 @@
 import { connectionScope, useScopedState } from "./scoped-state.ts";
 import { useEffect, useRef, useState } from "react";
-import { t } from "./i18n/index.ts";
+import { has, t, tr } from "./i18n/index.ts";
 import { ApiError, type Connection } from "./api";
 import type { Offsets, Outcome, Row } from "./RequestTrace";
 import { parseEnergy, parseLatency } from "./latency-api";
@@ -17,6 +17,8 @@ export type RecentEntry = {
   t0_wall?: number | null;
   offsets_ms?: Offsets | null;
   queue_wait_ms?: number | null;
+  /** Recorded by the console process: the total duration, kept when the stage offsets are not. */
+  total_ms?: number | null;
   ttft_ms?: number | null;
   prompt_tokens?: number | null;
   cached_tokens?: number | null;
@@ -29,6 +31,13 @@ export type RecentEntry = {
   latency?: unknown;
   energy?: unknown;
 };
+
+/** The finish reason as words ("length limit"), from the OpenAI and Anthropic vocabularies and the engine's own. */
+export function finishLabel(reason: string): string {
+  const key = reason.toLowerCase().replace(/[^a-z_]/g, "_");
+  // i18n-keys: requests.finish.
+  return has(`requests.finish.${key}`) ? tr(`requests.finish.${key}`) : reason;
+}
 
 export const outcomeLabel = (o: Outcome): string =>
   o === "completed"
@@ -80,10 +89,17 @@ export function recentToRow(e: RecentEntry): Row {
 }
 
 /** A row read back from the console process's recorded log: metadata only, older than the ring may reach. */
-export const historyToRow = (e: RecentEntry): Row => ({
-  ...recentToRow(e),
-  source: "history",
-});
+export const historyToRow = (e: RecentEntry): Row => {
+  const row = recentToRow(e);
+  return {
+    ...row,
+    // The log keeps only the total of the stages: it still fills the Total column.
+    offsets_ms:
+      row.offsets_ms ??
+      (typeof e.total_ms === "number" ? { done: e.total_ms } : row.offsets_ms),
+    source: "history",
+  };
+};
 
 export type Recent = {
   /** null until the first answer; false when the endpoint is missing (older server). */
@@ -199,6 +215,11 @@ export function useRecentRequests(
         }
         setState((s) => ({
           ...s,
+          // The engine is away but the console's own record is not: the list stays what it was
+          // (or, on a page opened during the outage, what the console recorded).
+          ...(s.rows.length === 0 && historyRef.current.length > 0
+            ? { supported: true, rows: [...historyRef.current] }
+            : {}),
           error:
             e instanceof Error ? e.message : t("requests.recent.loadFailed"),
         }));
@@ -223,6 +244,7 @@ export function useRecentRequests(
         historyRef.current = entries
           .filter((e) => e?.request_id)
           .map(historyToRow);
+        // `kick` re-reads the ring; with the engine away it fails and the recorded rows stand in.
         kick.current?.();
       },
       () => undefined,

@@ -243,9 +243,10 @@ class ServingGate:
                 activity = json.loads(Path(filename).read_text())
                 if activity.get("schema") != 1 or not activity.get("ticket"):
                     continue
-                _write(Path(str(filename) + ".ack"), {
-                    "ticket": activity["ticket"], "safe": True, "updated": _now()
-                })
+                _write(
+                    Path(str(filename) + ".ack"),
+                    {"ticket": activity["ticket"], "safe": True, "updated": _now()},
+                )
             except (OSError, ValueError, TypeError):
                 pass
 
@@ -562,8 +563,10 @@ class Pauser:
 
             pid = self.job["pid"]
             members = [p for p in psutil.process_iter() if os.getpgid(p.pid) == pid]
-            return bool(members) and all(p.status() in (psutil.STATUS_STOPPED, psutil.STATUS_ZOMBIE)
-                                         for p in members)
+            return bool(members) and all(
+                p.status() in (psutil.STATUS_STOPPED, psutil.STATUS_ZOMBIE)
+                for p in members
+            )
         except Exception:  # unknown process state fails closed
             return False
 
@@ -1729,6 +1732,36 @@ def _adoption_order(jobs: list[dict]) -> list[dict]:
     return sorted(running, key=lambda j: (_alive(j.get("pid")), bool(j.get("paused"))))
 
 
+PAUSE_FILE = ROOT / "console-pause.json"
+
+
+def _timing_job(job: dict) -> bool:
+    """A timing measurement: --quiet, or a '-speed' label. The console must not poll one arm's engine meanwhile."""
+    return bool(job.get("quiet")) or "-speed" in (job.get("label") or "")
+
+
+def sync_console_pause(jobs: list[dict], path: Path | None = None) -> None:
+    """Write the console pause file while a timing job runs (reason = its label, until = start +
+    timeout) and remove it when none does. Atomic; rewritten only when its content changes."""
+    path = path or PAUSE_FILE
+    live = [
+        j
+        for j in jobs
+        if j.get("state") == "running" and not j.get("paused") and _timing_job(j)
+    ]
+    try:
+        if not live:
+            path.unlink(missing_ok=True)
+            return
+        job = min(live, key=lambda j: j.get("started") or 0)
+        until = (job.get("started") or _now()) + float(job.get("timeout_s") or 0)
+        data = {"pause": True, "until": until, "reason": job.get("label") or job["id"]}
+        if _read(path) != data:
+            _write(path, data)
+    except OSError:
+        pass
+
+
 def daemon() -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
     lock = open(ROOT / "daemon.lock", "a")  # noqa: SIM115 - held for the daemon's lifetime
@@ -1743,6 +1776,9 @@ def daemon() -> None:
     _write(
         ROOT / "daemon-capabilities.json", {"pid": os.getpid(), "devices": ["m5", "m3"]}
     )
+    sync_console_pause(
+        _jobs()
+    )  # a stale file from a dead daemon goes before anything runs
     idle_since = _now()
     gate = ServingGate()
     gate.cpu = QuietGate()
@@ -1762,6 +1798,7 @@ def daemon() -> None:
         if errors:
             raise errors[0]
         gate.configure(load_serving_config())
+        sync_console_pause(_jobs())
         if not adopted:
             by_lane: dict[str, list[dict]] = {}
             for j in _adoption_order(_jobs()):

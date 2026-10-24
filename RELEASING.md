@@ -16,7 +16,9 @@ maintainer.
 
 ## Cut a release
 
-Prepare the version in `pyproject.toml` and dated CHANGELOG entry, then commit them.
+Between releases `main` carries the next version as a PEP 440 development version (`0.1.6.dev0`), so a wheel
+built from `main` never claims an unreleased number. Prepare the release version in `pyproject.toml` (drop the
+`.devN` suffix) and the dated CHANGELOG entry, then commit them; after the tag, set `main` to the next `.dev0`.
 All verification must refer to that final commit; changes afterward need another check.
 
 ```bash
@@ -116,7 +118,7 @@ uses identical headings. Avoid implementation nicknames and unshipped claims.
 - [ ] Reconcile numbers with `docs/reports/PERF_TREND.md` and link `docs/BENCHMARKS.md`.
 - [ ] State machine, checkpoint, modes, sample/repetition count and correctness limits.
 - [ ] Include workload regressions; never add gains across separate experiments.
-- [ ] Resolve every TODO before a release; do not bump a draft's package version.
+- [ ] Resolve every TODO before a release; a draft keeps the `.devN` package version.
 - [ ] Explain migration actions, dependency floors and deprecations explicitly.
 - [ ] Run public-doc tests and inspect rendered notes for the intended release:
 

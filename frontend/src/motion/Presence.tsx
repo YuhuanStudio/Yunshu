@@ -2,14 +2,14 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { reducedMotion } from "./ticker.ts";
 
 /**
- * Keeps `children` mounted for the exit animation: it fades in on mount (data-state="open") and,
- * when `show` turns false, fades out for `ms` before it unmounts (data-state="closing"). The slot
+ * Keeps `children` mounted for the exit animation: it fades in on mount (data-state="open", the soft
+ * entrance from the motion tokens) and, when `show` turns false, fades out (120 ms unless `ms`) before it unmounts (data-state="closing"). The slot
  * keeps its height while closing, so what is below does not jump before the fade is done. Under
  * reduced motion it mounts and unmounts at once.
  */
 export function Presence({
   show,
-  ms = 160,
+  ms,
   className,
   children,
 }: {
@@ -31,7 +31,7 @@ export function Presence({
       setMounted(false);
       return;
     }
-    const id = setTimeout(() => setMounted(false), ms);
+    const id = setTimeout(() => setMounted(false), ms ?? 120);
     return () => clearTimeout(id);
   }, [show, ms]);
   if (!show && !mounted) return null;
@@ -39,7 +39,7 @@ export function Presence({
     <div
       className={`live-presence ${className ?? ""}`}
       data-state={show ? "open" : "closing"}
-      style={{ ["--live-ms" as string]: `${ms}ms` }}
+      style={ms ? { ["--live-ms" as string]: `${ms}ms` } : undefined}
     >
       {last.current}
     </div>

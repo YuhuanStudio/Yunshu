@@ -1408,3 +1408,14 @@ Profile wall time is perturbed and is not an E2E gain. Earlier norm-only/drifted
 The raw rehearsal driver initially failed before model loading on Bash3 empty-array nounset (031739); fixed and
 rerun completely. Mixed-bit a/b gate fusion was not implemented; upstream SwiGLU is already compiled. The cold
 32K gap to the previously measured Splash ~30.5s remains about2.2s.
+2026-10-23 ccache (f788cdb8): agent prefix-cache hit rate. Same M5 Max, Qwen3.8-27B + DFlash2, 3 agent tasks x 3 sessions per client
+(sampled, so turn counts differ between runs; percent of prompt tokens served from cache). Claude Code 2.1.285 62.5 -> 92.3%
+(median TTFT 10.43 -> 1.11 s), 2.1.309 83.0 -> 90.4% (1.40 -> 1.16 s), Codex 0.164.0 84.0 -> 88.6% (1.18 -> 0.90 s); opencode
+1.19.4 87.7% before, not re-measured. Ideal with the previous reply re-prefilled: 94-97%; the rest is the reply (3-7 pp) and
+64-alignment (~0.2 pp). Identity: yv console-identity base f364cf02 vs cand 26d15bf3, 12 + 12 cells 0 mismatches, APC 4 pairs;
+APC hit/miss and spec-off at 32K tokens + logprobs exact (gpuq 1023-213201).
+
+2026-10-24 roundcost (not merged): grouped GDN launch per verify round. yv decode suite, Qwen3.8-27B + DFlash2, M5 Max, base
+d9a63834 vs cand 25f0cd51, 3 interleaved reps (5 at 128K prose): identity 12 + 12 cells exact, APC 4 pairs; speed flat at 32K
+(decode +0.5..+1.9%, warm TTFT within noise), 128K code decode 84.8 -> 83.3 tok/s (-1.8%), 128K prose warm TTFT 0.306 -> 0.325 s
+(+6.5%, noise 3.6%, confirmed). No gain on any long cell, so the branch is archived (tag archive/roundcost-1023).

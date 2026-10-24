@@ -569,7 +569,8 @@ def _spec_depth_valid(rows: list, mode: str) -> tuple[bool, str]:
     if not specs:
         return False, "no speculative draft telemetry recorded"
     for spec in specs:
-        if spec.get("mode") != mode or not spec.get("rounds"):
+        # "default" is the suite's name for whatever the server engages (dflash, mtp, ...).
+        if (mode != "default" and spec.get("mode") != mode) or not spec.get("rounds"):
             return False, "speculative mode or rounds missing"
         depths = spec.get("per_depth") or []
         if not depths or any(not isinstance(row, dict) for row in depths):

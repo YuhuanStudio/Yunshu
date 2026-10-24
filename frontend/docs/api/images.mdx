@@ -95,7 +95,7 @@ Engine selection: a loaded OCR-type model (for example a GLM-OCR checkpoint) is 
 {
   "text": "Invoice 2026-001\nTotal: 120.00",
   "model": "mlx-community/GLM-OCR-bf16",
-  "confidence": 0.0,
+  "confidence": null,
   "language": null,
   "task": "text",
   "prompt_tokens": 312,
@@ -109,7 +109,7 @@ Engine selection: a loaded OCR-type model (for example a GLM-OCR checkpoint) is 
 }
 ```
 
-`confidence` is `null` on the VLM fallback and whatever the OCR engine reports otherwise; treat it as informational. `language` echoes your hint.
+`confidence` is always `null`: neither path produces a confidence score. `language` echoes your hint on the VLM fallback and is `null` on the OCR-engine path.
 
 ## Examples
 

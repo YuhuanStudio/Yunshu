@@ -613,6 +613,7 @@ def test_only_timing_jobs_wait_for_a_quiet_cpu():
     assert requires_quiet(dict(priority=-1, quiet=True))
 
 
+@pytest.mark.serial
 @pytest.mark.parametrize(
     "cpu,window,max_wait,cap,expected,timeout",
     [

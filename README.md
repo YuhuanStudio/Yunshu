@@ -92,6 +92,7 @@ Everything Yunshu serves, grouped. Each row links to the guide with an example a
 |---|---|
 | [Coding agents](docs/guides/AGENT_COMPAT.md) | Claude Code, Codex and opencode through their own APIs; `yunshu launch` |
 | [Web search and fetch](docs/guides/WEB_SEARCH.md) | server-side web_search / web_fetch with citations; DuckDuckGo, Wikipedia, SearXNG, Tavily, Serper, Perplexity |
+| [Code execution](docs/guides/CODE_EXECUTION.md) | Anthropic code_execution (bash + text editor) run locally inside the sandbox-runtime; opt-in, no network by default |
 | [Tavily-compatible API](docs/guides/TAVILY.md) | search, extract, crawl, map, research and MCP, with provider health backoff |
 | [MCP](docs/guides/API_SURFACE.md) | native MCP endpoint, and remote MCP servers named in a request |
 | [Client setup](docs/guides/CLIENTS.md) | curl, OpenAI and Anthropic SDKs, Open WebUI |
@@ -114,6 +115,7 @@ Everything Yunshu serves, grouped. Each row links to the guide with an example a
 |---|---|
 | [Web console](docs/CONSOLE.md) | live request phases, history, logs, models, downloads, cache, playground, keys, settings, status island |
 | [Console process](docs/CONSOLE.md) | the console runs apart from the engine (port 8100): usable while the engine is down, recorded history and request log, outage gaps |
+| [Console follows engines](docs/CONSOLE.md) | `yunshu console --engine auto` finds Yunshu engines on local ports and follows the newest; pin one from the status island; history keeps each engine start as its own session |
 | [API keys and quotas](docs/guides/AUTH_AND_KEYS.md) | several keys with scopes, expiry, per-key usage and daily quotas |
 | [Settings and CORS editor](docs/guides/AUTH_AND_KEYS.md) | write engine settings (restart-required ones prompt) and edit CORS from the console or API |
 | [Host telemetry](docs/guides/TELEMETRY.md) | power, GPU clock, temperatures, thermal and memory pressure, per-request energy estimate, Prometheus |

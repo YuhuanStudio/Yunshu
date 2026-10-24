@@ -1,5 +1,7 @@
 # Yunshu console
 
+
+> Console docs: the maintained, translated version of this page is `/docs/getting-started/console` (source `frontend/docs/getting-started/console.mdx`). This file stays as the repository-side reference read by tooling.
 A local web console for the engine: see what every request is doing, manage models, the prefix cache, keys
 and settings, and try a model, without leaving the browser. It is a YunUI-based single-page app served by
 its own light process (`yunshu console`, see [The console process](#the-console-process)), so it stays usable
@@ -73,6 +75,37 @@ every monitoring page keeps its last data, dimmed and marked stale, and the docs
 If the gateway is up but the model failed to load, the page shows the error and keeps Load model usable. A
 page that throws is contained by a per-page error boundary. When the engine returns, the live feed resumes and
 the stretch that was missed is filled from the recorded history.
+
+## Following engines automatically
+
+`yunshu console --engine auto` (or `YUNSHU_CONSOLE_ENGINE=auto`) lets one console stay open while engines
+start and stop on different ports. Every `YUNSHU_CONSOLE_DISCOVER_S` (2 s) it asks each candidate for
+`GET /health` with a short timeout, without blocking the proxy. With `YUNSHU_CONSOLE_DISCOVER_PORTS=all`
+(the default) the candidates are every TCP port listening on this Mac (refreshed every 10 s with `lsof`),
+minus console processes, which proxy `/health` and would look like the engine behind them; an explicit
+list (`8000,18990-18999`) probes exactly those ports on `127.0.0.1`. A port counts only when `/health`
+answers like a Yunshu engine; a port that answered as something else is asked again after 60 s. One engine
+reached through several ports (a recording proxy in front of it) has one start time and is listed once,
+on the port the engine process itself listens on.
+
+- The engine being followed is kept while it is healthy. When it disappears (two missed probes) the console
+  moves to the most recently started live engine (smallest uptime).
+- The status island lists the live engines (port, model, uptime). **Use** pins one (it wins while it is
+  live); **Follow the newest** unpins. Over the API: `GET /console/api/engines` lists them
+  (`url`, `port`, `model`, `uptime_seconds`, `state`, `selected`, `pinned`), and
+  `POST /console/api/engines` with `{"url": ...}` (or `{"port": ...}`) pins, `{"url": null}` unpins.
+- With no live engine the island says "Waiting for an engine" and the console connects as soon as one
+  starts. The poller and the reverse proxy (HTTP and WebSocket) follow the switch; a stream already open to
+  the old engine is not cut.
+- The request history stores the engine URL and start time with each request, so a restart shows as a
+  separate session instead of mixing into the previous one, and a `engine_switched` event marks the move.
+
+- A restart is routine here, so an unreachable engine is shown calmly: "Engine restarting… Was up 12m.
+  Usually back in about 25 s." (the usual time is the median of the outages the console recorded in the last
+  24 h, `outages` in `GET /v1/yunshu/console`), or "Switching to :18991" when another engine is live. Only
+  60 s without any live engine becomes a warning with the engine list. No notification or health fault is raised
+  for the calm states. The Requests list, its KPIs and the Overview chart keep showing the console's recorded
+  history through the gap and mark where the engine restarted or was switched.
 
 ## Docs inside the console
 
@@ -298,3 +331,13 @@ on entry. Cancellation is excluded from the error rate. Missing footprint or a c
 process/model resets the slope baseline. Cache growth can trigger this operational warning;
 it is a reason to inspect the memory ledger, not a leak diagnosis. Keep the console running
 for day-to-day history; longer release soaks run separately before a tagged release.
+
+## Pausing for a measurement
+
+A monitor that polls only one arm of an A/B perturbs the measurement. Set `YUNSHU_CONSOLE_PAUSE_FILE` to a
+path; while that file exists and holds `{"pause": true, "until": <epoch or null>, "reason": "..."}` the
+console sends no request to any engine: no status polling and no discovery probes. The proxy still forwards
+requests you make yourself, and the status island shows "Paused for a measurement: <reason>". The file stops
+counting after `until` (or two hours after its last write when `until` is null) and the console resumes by
+itself when it is removed. `gpuq` writes `$GPUQ_DIR/console-pause.json` while a `--quiet` job or a job whose
+label contains `-speed` runs, and removes it afterwards.

@@ -91,7 +91,13 @@ test("a request in prefill is never called idle", () => {
 test("idle: the top bar says 閒置, the card labels the last request", () => {
   const s = status({ last });
   assert.equal(livePill("online", s).phase, "閒置");
-  assert.equal(livePill("online", s).detail, "");
+  // Idle still says what it last did and how long ago, never an empty value.
+  const pill = livePill("online", s, "none", (last.t + 120) * 1000);
+  assert.equal(
+    pill.detail,
+    `上次解碼 ${Math.round(last.decode_tps ?? 0)} tok/s · 2 分鐘 0 秒前`,
+  );
+  assert.equal(livePill("online", status({ last: null })).detail, "");
   const h = decodeHeadline(s);
   assert.equal(h.label, "最近一筆");
   assert.equal(h.value, 25);
@@ -274,4 +280,18 @@ test("a loading model shows as loading, never idle", () => {
   assert.equal(pill.phase, "載入中");
   assert.equal(pill.detail, "Qwen3.5-9B");
   assert.equal(pill.tone, "away");
+});
+
+test("a held decode phase with nothing decoding and no speed reads as idle, not a bare Decode", () => {
+  const s = status({ last });
+  s.console_live = { phase: "decode", tps: null };
+  const pill = livePill("online", s, "none", last.t * 1000 + 5000);
+  assert.equal(pill.phase, "閒置");
+  assert.ok(pill.detail.includes("tok/s"));
+});
+
+test("an unreachable engine during a calm outage says restarting or switching", () => {
+  assert.equal(livePill("offline", null, "restarting").phase, "重啟中");
+  assert.equal(livePill("offline", null, "switching").phase, "切換中");
+  assert.equal(livePill("offline", null, "down").phase, "離線");
 });

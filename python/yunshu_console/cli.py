@@ -33,9 +33,12 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--engine",
         "-e",
-        help=f"Engine URL to watch and proxy to (YUNSHU_CONSOLE_ENGINE, else {DEFAULT_ENGINE}).",
+        help=f"Engine URL to watch and proxy to (YUNSHU_CONSOLE_ENGINE, else {DEFAULT_ENGINE}), or `auto` to follow whichever local engine is running (YUNSHU_CONSOLE_DISCOVER_PORTS).",
     )
-    p.add_argument("--host", help="Bind host (default 127.0.0.1; YUNSHU_CONSOLE_HOST).")
+    p.add_argument(
+        "--host",
+        help="Bind host (default 127.0.0.1; 0.0.0.0 serves the local network too; YUNSHU_CONSOLE_HOST).",
+    )
     p.add_argument(
         "--port", "-p", type=int, help="Bind port (default 8100; YUNSHU_CONSOLE_PORT)."
     )
@@ -81,7 +84,7 @@ def run(args: argparse.Namespace) -> None:
     app = build_from_settings(args.engine, static_dir=args.static_dir)
     shown = "127.0.0.1" if bind_host == "0.0.0.0" else bind_host
     print(
-        f"Yunshu console http://{shown}:{bind_port}/console/  ->  engine {app.state.engine_url}",
+        f"Yunshu console http://{shown}:{bind_port}/console/  ->  engine {'auto (discovering)' if app.state.discovery else app.state.engine_url}",
         file=sys.stderr,
         flush=True,
     )

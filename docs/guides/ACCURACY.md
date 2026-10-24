@@ -1,5 +1,7 @@
 # Accuracy alignment
 
+
+> Console docs: the maintained, translated version of this page is `/docs/developers/accuracy` (source `frontend/docs/developers/accuracy.mdx`). This file stays as the repository-side reference read by tooling.
 How Yunshu shows that its serving path computes what stock MLX / mlx-vlm computes on
 the same checkpoint. A 300-question MMLU-Pro run carries about +-13 questions of 95%
 noise, so it cannot see small numeric drift. Three tiers, cheapest and most sensitive first.

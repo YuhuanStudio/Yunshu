@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import importlib.util
 import logging
+import time as _time
 from pathlib import Path
 
 import httpx
@@ -34,6 +35,8 @@ from starlette.responses import (
 from starlette.staticfiles import StaticFiles
 from starlette.types import Scope
 
+from .discovery import Discovery
+from .pause import Pause
 from .poller import FIELDS, Poller
 from .store import HistoryStore
 
@@ -153,6 +156,7 @@ def create_app(
     static_dir: Path | None = None,
     poll: bool = True,
     client: httpx.AsyncClient | None = None,
+    discovery: Discovery | None = None,
 ) -> FastAPI:
     """Build the app. ``poll=False`` serves and proxies without the recorder (tests)."""
     engine_url = engine_url.rstrip("/")
@@ -164,12 +168,28 @@ def create_app(
     owns_client = client is None
     if poller is None and poll:
         poller = Poller(engine_url, store)
+    if discovery is not None:
+        engine_url = discovery.current_url
+        if poller is not None:
+            poller.retarget(engine_url)
+
+        def _on_switch(old: str | None, new: str) -> None:
+            app.state.engine_url = new
+            if poller is not None:
+                poller.retarget(new)
+
+        discovery.on_change = _on_switch
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         if store is not None:
             store.start()
         task = None
+        found = None
+        if discovery is not None:
+            found = asyncio.get_running_loop().create_task(
+                discovery.run(), name="yunshu-console-discovery"
+            )
         if poller is not None and poll:
             task = asyncio.get_running_loop().create_task(
                 poller.run(), name="yunshu-console-poller"
@@ -177,6 +197,12 @@ def create_app(
         try:
             yield
         finally:
+            if found is not None:
+                found.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await found
+            if discovery is not None:
+                await discovery.aclose()
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -200,6 +226,7 @@ def create_app(
     app.state.poller = poller
     app.state.http = http
     app.state.engine_url = engine_url
+    app.state.discovery = discovery
 
     # ── local answers (work with the engine down) ───────────────────────
     @app.get("/v1/yunshu/console")
@@ -215,6 +242,11 @@ def create_app(
                     "bytes": store.size_bytes(),
                     "errors": store.errors,
                 }
+                if store is not None
+                else None
+            ),
+            "outages": (
+                await asyncio.to_thread(store.outage_stats, _time.time() - 86_400)
                 if store is not None
                 else None
             ),
@@ -274,6 +306,66 @@ def create_app(
             raise HTTPException(400, str(exc)) from None
         return {"object": "list", "enabled": True, **page}
 
+    # ── engines (auto-follow) ───────────────────────────────────────────
+    def _pause_state() -> dict | None:
+        src = poller if poller is not None else discovery
+        pause = getattr(src, "pause", None)
+        return pause.state() if pause is not None else None
+
+    @app.get("/console/api/engines")
+    @app.get("/v1/yunshu/console/engines")
+    async def engines(request: Request) -> dict:
+        check_access(request)
+        paused = _pause_state()
+        if discovery is not None:
+            return {**discovery.snapshot(), "pause": paused}
+        eng = poller.engine if poller is not None else {}
+        return {
+            "object": "yunshu.console.engines",
+            "mode": "fixed",
+            "selected": app.state.engine_url,
+            "pinned": None,
+            "waiting": False,
+            "pause": paused,
+            "data": [
+                {
+                    "url": app.state.engine_url,
+                    "port": httpx.URL(app.state.engine_url).port,
+                    "model": (eng.get("models") or [None])[0],
+                    "models": eng.get("models") or [],
+                    "uptime_seconds": eng.get("uptime_s"),
+                    "state": eng.get("state"),
+                    "selected": True,
+                    "pinned": False,
+                }
+            ],
+        }
+
+    @app.post("/console/api/engines")
+    @app.post("/v1/yunshu/console/engines")
+    async def pin_engine(request: Request) -> dict:
+        """Body ``{"url": "http://127.0.0.1:18990"}`` (or ``{"port": 18990}``) pins that live
+        engine; ``{"url": null}`` unpins and returns to automatic selection."""
+        check_access(request)
+        if discovery is None:
+            raise HTTPException(
+                409, "the console follows a fixed engine (not --engine auto)"
+            )
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            raise HTTPException(400, "expected a JSON object")
+        url = body.get("url")
+        if url is None and isinstance(body.get("port"), int):
+            url = f"http://127.0.0.1:{body['port']}"
+        if url is not None and not isinstance(url, str):
+            raise HTTPException(400, "url must be a string or null")
+        if not discovery.pin(url):
+            raise HTTPException(404, "that engine is not a live discovered engine")
+        return discovery.snapshot()
+
     # ── the web console ─────────────────────────────────────────────────
     @app.get("/", include_in_schema=False)
     async def root() -> RedirectResponse:
@@ -287,6 +379,9 @@ def create_app(
 
     # ── the engine API, proxied ─────────────────────────────────────────
     def unreachable(reason: str) -> JSONResponse:
+        engine_url = app.state.engine_url
+        if discovery is not None and discovery.selected is None:
+            reason = f"waiting for an engine: {reason}"
         since = poller.since if poller is not None and poller.up is False else None
         return JSONResponse(
             {
@@ -312,7 +407,10 @@ def create_app(
         ]
         if request.client:
             headers.append(("x-forwarded-for", request.client.host))
-        url = httpx.URL(path="/" + path, query=request.url.query.encode())
+        base = discovery.current_url if discovery is not None else engine_url
+        url = httpx.URL(base).copy_with(
+            path="/" + path, query=request.url.query.encode()
+        )
         has_body = (
             request.method not in ("GET", "HEAD", "OPTIONS")
             or "content-length" in request.headers
@@ -344,7 +442,11 @@ def create_app(
 
     @app.websocket("/{path:path}")
     async def forward_ws(websocket: WebSocket, path: str) -> None:
-        await _proxy_websocket(websocket, engine_url, path)
+        await _proxy_websocket(
+            websocket,
+            discovery.current_url if discovery is not None else engine_url,
+            path,
+        )
 
     return app
 
@@ -441,22 +543,48 @@ def build_from_settings(
     """The app as ``yunshu console`` runs it: settings decide the engine, token, store and cadence."""
     from yunshu_engine import settings
 
+    from .discovery import DEFAULT_PORTS, candidate_urls, listening_ports, parse_ports
+
     url = engine_url or settings.get("YUNSHU_CONSOLE_ENGINE") or "http://127.0.0.1:8000"
+    auto = url.strip().lower() == "auto"
+    configured = None
+    if auto:
+        url = "http://127.0.0.1:8000"
     token = settings.get("YUNSHU_CONSOLE_ENGINE_TOKEN") or settings.get(
         "YUNSHU_AUTH_TOKEN"
     )
     store = open_store()
+    pause = Pause(settings.get("YUNSHU_CONSOLE_PAUSE_FILE"))
     poller = Poller(
         url,
         store,
         token=token,
+        pause=pause,
         interval_s=float(settings.get("YUNSHU_CONSOLE_POLL_S") or 1.0),
     )
+    discovery = None
+    if auto:
+        own = settings.get("YUNSHU_CONSOLE_PORT")
+        spec = (settings.get("YUNSHU_CONSOLE_DISCOVER_PORTS") or DEFAULT_PORTS).strip()
+        every_port = spec.lower() == "all"
+        skip = int(own) if own else None
+        discovery = Discovery(
+            candidate_urls(
+                [] if every_port else parse_ports(spec), configured, skip_port=skip
+            ),
+            port_source=listening_ports if every_port else None,
+            skip_port=skip,
+            default_url=url,
+            token=token,
+            pause=pause,
+            interval_s=float(settings.get("YUNSHU_CONSOLE_DISCOVER_S") or 2.0),
+        )
     return create_app(
         url,
         store=store,
         poller=poller,
         static_dir=Path(static_dir) if static_dir else None,
+        discovery=discovery,
     )
 
 

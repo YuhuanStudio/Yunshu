@@ -41,7 +41,7 @@ exclude = [
 
 [project]
 name = "yunshu"
-version = "0.1.6"
+version = "0.1.6.dev0"
 description = "Fast local single-node LLM/VLM inference engine for Apple Silicon — speculative decoding, prefix reuse, OpenAI/Anthropic-compatible"
 readme = "README.md"
 license = "Apache-2.0"
@@ -203,13 +203,14 @@ yunshu = "yunshu_cli:main"
 
 [dependency-groups]
 dev = [
-    "anthropic>=1.9.0",
+    "anthropic>=2.0.0",
     "matplotlib>=3.10.9",
     "mypy>=2.0.0",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "pytest-httpx>=0.30.0",
     "pytest-timeout>=2.3.0",
+    "pytest-xdist>=3.8",
     "ruff>=0.11.0",
 ]
 
@@ -304,4 +305,5 @@ markers = [
     "gpu: requires Apple GPU / MLX runtime",
     "integration: requires running services or real models",
     "slow: tests that take >5 seconds",
+    "serial: depends on host-wide state (CPU load, process table); ci-local runs these alone after the parallel pass",
 ]

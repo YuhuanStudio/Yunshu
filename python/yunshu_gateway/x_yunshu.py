@@ -34,6 +34,7 @@ import asyncio
 import collections
 import contextlib
 import json
+import logging
 import re
 import threading
 import time
@@ -43,6 +44,8 @@ from typing import Any
 
 from yunshu_engine import settings
 from yunshu_engine.request_tracker import current_request_id, current_request_info
+
+_log = logging.getLogger("yunshu.gateway.response")
 
 REQUEST_ID_HEADER = "X-Request-Id"
 # How long a stream past its deadline waits for the engine to wind down before the response
@@ -168,6 +171,10 @@ class RequestInfo:
     # The token budget when the prompt left less room than max_tokens asked for
     # (``token_budget.TokenBudget.report``); None when the request fit.
     budget: dict | None = None
+    # Tool-call parse outcome of the response(s): calls parsed, and tool-call markup blocks that
+    # yielded no call (counts only; set by yunshu_engine.tool_format.record_tool_outcome).
+    tool_calls_parsed: int | None = None
+    tool_markup_failed: int | None = None
     api_key_id: str | None = None  # the stored API key that made the request, if any
     _rate: tuple[float, int, float] | None = None  # (t, processed, ema tokens/s)
 
@@ -709,6 +716,8 @@ def record_done(info: RequestInfo, stats: dict) -> None:
                 getattr(info.gen, "stats", None), "finish_reason", None
             ),
             "stream": info.stream,
+            "tool_calls_parsed": info.tool_calls_parsed,
+            "tool_markup_failed": info.tool_markup_failed,
             "t0_wall": stats.get("t0_wall"),
             "offsets_ms": stats.get("offsets_ms"),
             "queue_wait_ms": stats.get("queue_wait_ms"),
@@ -717,6 +726,19 @@ def record_done(info: RequestInfo, stats: dict) -> None:
             "energy": stats.get("energy"),
         }
     )
+    with contextlib.suppress(Exception):
+        # One line per response for post-hoc diagnosis of "the turn ended without a tool call":
+        # why generation stopped and what the tool parser found (no prompt or output text).
+        _log.info(
+            "response_done path=%s stream=%s finish_reason=%s completion_tokens=%s "
+            "tool_calls_parsed=%s tool_markup_failed=%s",
+            info.path,
+            info.stream,
+            getattr(getattr(info.gen, "stats", None), "finish_reason", None),
+            stats.get("completion_tokens") or 0,
+            info.tool_calls_parsed,
+            info.tool_markup_failed,
+        )
     if info.api_key_id:  # the one place tokens are counted per key
         with contextlib.suppress(Exception):
             from .api_keys import get_store

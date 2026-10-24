@@ -16,11 +16,13 @@ def _isolate():
 
 
 @pytest.fixture
-def make_app():
+def make_app(monkeypatch):
     """``make_app(engine)`` -> app with that engine as the single served model."""
 
     def _make(engine: FakeBatchedEngine):
-        engine_mod._engine = engine
+        # Single-model mode whatever an earlier test in this worker left behind.
+        monkeypatch.setattr(engine_mod, "_model_manager", None)
+        monkeypatch.setattr(engine_mod, "_engine", engine)
         return create_app()
 
     return _make

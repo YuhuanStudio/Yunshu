@@ -175,7 +175,10 @@ def test_requests_hold_metadata_only(tmp_path):
             "decode_tps",
             "ttft_ms",
             "queue_wait_ms",
+            "total_ms",
             "key_name",
+            "engine_url",
+            "engine_started",
             "cancelled",
         ]
     )
@@ -281,3 +284,19 @@ def test_old_events_are_pruned_with_the_retention(tmp_path):
     s.flush()
     assert [e["kind"] for e in s.events_between(0, clock.t + 1)] == ["y"]
     s.close()
+
+
+def test_finished_request_rows_keep_their_total_duration(tmp_path):
+    s = mk(tmp_path)
+    s.add_request(
+        {
+            "request_id": "req_a",
+            "t": T0 + 5,
+            "t0_wall": T0 + 1,
+            "offsets_ms": {"admit": 1.0, "first_token": 300.0, "done": 4000.0},
+        }
+    )
+    s.add_request({"request_id": "req_b", "t": T0 + 6, "total_ms": 12.5})
+    rows = {r["request_id"]: r for r in s.requests_page(10)["data"]}
+    assert rows["req_a"]["total_ms"] == 4000.0 and rows["req_a"]["t_start"] == T0 + 1
+    assert rows["req_b"]["total_ms"] == 12.5

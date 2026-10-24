@@ -67,8 +67,11 @@ REQUEST_COLUMNS = (
     "decode_tps",
     "ttft_ms",
     "queue_wait_ms",
+    "total_ms",
     "key_name",
     "cancelled",
+    "engine_url",
+    "engine_started",
 )
 _TEXT = {"request_id", "model", "path", "finish_reason", "key_name"}
 _INT = {
@@ -95,9 +98,17 @@ def request_row(entry: dict) -> dict[str, Any] | None:
     if not isinstance(rid, str) or not _LABEL.fullmatch(rid) or t is None:
         return None
     out: dict[str, Any] = {}
+    offsets = entry.get("offsets_ms")
     for col in REQUEST_COLUMNS:
         v = entry.get(col)
-        if col == "key_name":
+        if col == "total_ms" and v is None and isinstance(offsets, dict):
+            # the engine reports the finished request's total as offsets_ms.done (last_token as a fallback)
+            v = offsets.get("done", offsets.get("last_token"))
+        if col == "t_start" and v is None:
+            v = entry.get("t0_wall")
+        if col == "engine_url":
+            out[col] = v[:96] if isinstance(v, str) and v.isprintable() else None
+        elif col == "key_name":
             # a name the user typed for the key: any printable text, short, never a secret field
             out[col] = v[:64] if isinstance(v, str) and v.isprintable() else None
         elif col in _TEXT:
@@ -163,9 +174,17 @@ class HistoryStore:
                 "request_id TEXT NOT NULL, t REAL NOT NULL, t_start REAL, model TEXT, path TEXT,"
                 " stream INTEGER, status INTEGER, finish_reason TEXT, prompt_tokens INTEGER,"
                 " completion_tokens INTEGER, cached_tokens INTEGER, prefill_tps REAL,"
-                " decode_tps REAL, ttft_ms REAL, queue_wait_ms REAL, key_name TEXT,"
-                " cancelled INTEGER, PRIMARY KEY (t, request_id))"
+                " decode_tps REAL, ttft_ms REAL, queue_wait_ms REAL, total_ms REAL, key_name TEXT,"
+                " cancelled INTEGER, engine_url TEXT, engine_started REAL, PRIMARY KEY (t, request_id))"
             )
+            have = {r[1] for r in db.execute("PRAGMA table_info(requests)")}
+            for col, typ in (
+                ("engine_url", "TEXT"),
+                ("engine_started", "REAL"),
+                ("total_ms", "REAL"),
+            ):
+                if col not in have:  # a history file from before engine auto-follow
+                    db.execute(f"ALTER TABLE requests ADD COLUMN {col} {typ}")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS events (t REAL NOT NULL, kind TEXT NOT NULL, detail TEXT)"
             )
@@ -371,6 +390,32 @@ class HistoryStore:
                 parsed = None
             out.append({"t": t, "kind": kind, "detail": parsed})
         return out
+
+    def outage_stats(self, since: float, limit: int = 20) -> dict[str, Any]:
+        """How long the engine was away on its recent restarts (``engine_reachable`` events after
+        ``since``): the console says "usually back in ~Ns" from this, never from a guess."""
+        self.flush()
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT detail FROM events WHERE kind = 'engine_reachable' AND t > ? "
+                "ORDER BY t DESC LIMIT ?",
+                (since, limit),
+            ).fetchall()
+        downs: list[float] = []
+        for (detail,) in rows:
+            try:
+                v = _num((json.loads(detail) if detail else {}).get("down_s"))
+            except (ValueError, AttributeError):
+                v = None
+            # a restart is seconds to a few minutes; longer gaps are the engine being stopped, not restarting
+            if v is not None and 0 <= v <= 600:
+                downs.append(v)
+        downs.sort()
+        median = None
+        if downs:
+            mid = len(downs) // 2
+            median = downs[mid] if len(downs) % 2 else (downs[mid - 1] + downs[mid]) / 2
+        return {"count": len(downs), "median_down_s": median}
 
     def requests_page(
         self, limit: int = 50, before: str | None = None, model: str | None = None

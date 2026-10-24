@@ -54,8 +54,15 @@ const settingdesc = {
   YUNSHU_CORS_ORIGINS:
     "Comma-separated allowed CORS origins (`*` for any); also checked against the Realtime WebSocket Origin header.",
   YUNSHU_RESPONSE_CACHE: "Cache identical non-streaming responses in memory.",
+  YUNSHU_REPLAY_TOKEN_IDS:
+    "Include the exact token_id in requested chat logprobs for local lossless replay verification. Off by default; token IDs are never written to the serve log.",
+  YUNSHU_RESEARCH_ACTIVITY_FILE:
+    "Opt-in local gpuq pause handshake file (set the same file in gpuq serving.json activity_files). No request content is written. Requests wait for a fresh safe acknowledgement before inference; a timeout returns 503.",
+  YUNSHU_RESEARCH_PAUSE_TIMEOUT_S:
+    "Maximum wait, in seconds, for the gpuq pause acknowledgement before a request is admitted.",
   YUNSHU_BATCH_MAX_ITEMS: "Batch API: maximum requests per batch.",
-  YUNSHU_BATCH_TIMEOUT: "Batch API: timeout in seconds for each request a batch runs (0: no timeout).",
+  YUNSHU_BATCH_TIMEOUT:
+    "Batch API: timeout in seconds for each request a batch runs (0: no timeout).",
   YUNSHU_ALLOW_LOCAL_FILES:
     "Allow requests to reference any local file path (default: only under `YUNSHU_MEDIA_DIR`).",
   YUNSHU_MEDIA_DIR:
@@ -257,6 +264,18 @@ const settingdesc = {
   YUNSHU_WEB_FETCH_TIMEOUT: "Seconds `web_fetch` waits for a page.",
   YUNSHU_WEB_FETCH_MAX_TEXT_CHARS:
     "Extracted page text handed to the model is cut to this many characters (a request’s `max_content_tokens` can lower it).",
+  YUNSHU_CODE_EXECUTION:
+    "Serve the code execution tools (Anthropic `code_execution_*`) on this machine inside the Anthropic sandbox-runtime (srt; optional, needs Node 22.12 or newer). Off: requests that declare them get a 400. On without srt: 503, never an unsandboxed run.",
+  YUNSHU_CODE_EXECUTION_ROOT:
+    "Directory holding the code execution containers (one sub-directory each, mode 0700).",
+  YUNSHU_CODE_EXECUTION_TIMEOUT:
+    "Wall-clock seconds one code execution call may run before it is killed. Also the CPU-time limit.",
+  YUNSHU_CODE_EXECUTION_MEMORY_MB:
+    "Resident memory (MB) a code execution call may use, sampled over its whole process group; above it the call is killed.",
+  YUNSHU_CODE_EXECUTION_NETWORK_ALLOW:
+    "Comma-separated hosts the sandbox may reach (`example.com`, `*.example.com`, `host:443`). Empty: no network at all, loopback included.",
+  YUNSHU_CODE_EXECUTION_TTL_MIN:
+    "Minutes a code execution container may sit unused before it and its files are deleted.",
   YUNSHU_MCP_CONNECTOR:
     "Serve the MCP connector: Anthropic `mcp_servers` and OpenAI Responses `mcp` tools are executed by this server, which connects to the named MCP servers over streamable HTTP / SSE.",
   YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE:
@@ -334,12 +353,20 @@ const settingdesc = {
     "`yunshu serve` also starts the console process (web console, docs, history recorder) as a sibling. It never loads MLX and keeps running when the engine restarts or crashes. `--no-console` turns it off.",
   YUNSHU_CONSOLE_PORT:
     "Port of the console process. 8100 stays clear of the engine's 8000 and of common dev servers.",
+  YUNSHU_HOST:
+    "Bind host of the engine (--host wins). 127.0.0.1 serves this Mac only; 0.0.0.0 also serves the local network (set an auth token then).",
   YUNSHU_CONSOLE_HOST:
-    "Bind host of the console process. Unset: the engine's host for the sibling, 127.0.0.1 standalone.",
+    "Bind host of the console process. Unset: the engine's host for the sibling, 127.0.0.1 standalone (0.0.0.0 also serves the local network).",
   YUNSHU_CONSOLE_ENGINE:
     "Engine URL the console process watches and proxies to. Unset: the engine that started it, else http://127.0.0.1:8000.",
   YUNSHU_CONSOLE_ENGINE_TOKEN:
     "Bearer token the console process uses to read the engine while recording history. Unset: YUNSHU_AUTH_TOKEN.",
+  YUNSHU_CONSOLE_DISCOVER_PORTS:
+    "Where the console looks for Yunshu engines with --engine auto: all (default) = every listening port on this Mac, minus consoles; or a comma list and ranges on 127.0.0.1. Only a /health that answers like Yunshu counts.",
+  YUNSHU_CONSOLE_DISCOVER_S:
+    "Seconds between the console's engine discovery probes with --engine auto.",
+  YUNSHU_CONSOLE_PAUSE_FILE:
+    "Path of a JSON pause file (pause, until, reason). While it exists and is not stale the console sends no request to any engine (no polling, no discovery probes), so a timing A/B is not perturbed. gpuq writes it for timing jobs.",
   YUNSHU_CONSOLE_POLL_S:
     "Seconds between the console process's reads of the engine; 1 s gives the 1 s history resolution.",
   YUNSHU_CONSOLE_HISTORY:

@@ -25,6 +25,7 @@ import logging
 import re
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import UTC
 from typing import Any
 
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -33,6 +34,10 @@ from yunshu_engine import settings
 
 from .mcp_connector import McpError
 from .runtime import (
+    CODE_BASH_DESC,
+    CODE_BASH_SCHEMA,
+    CODE_EDITOR_DESC,
+    CODE_EDITOR_SCHEMA,
     WEB_FETCH_DESC,
     WEB_FETCH_SCHEMA,
     WEB_SEARCH_DESC,
@@ -62,11 +67,29 @@ def _is_web(t: dict, kind: str) -> bool:
     return str(t.get("type") or "").startswith(kind + "_")
 
 
+_CODE_TYPE = re.compile(r"^code_execution_\d{8}$")
+CODE_RESULT_TYPES = (
+    "bash_code_execution_tool_result",
+    "text_editor_code_execution_tool_result",
+    "code_execution_tool_result",
+)
+CODE_TOOL_NAMES = (
+    "bash_code_execution",
+    "text_editor_code_execution",
+    "code_execution",
+)
+
+
+def _is_code(t: dict) -> bool:
+    return bool(_CODE_TYPE.match(str(t.get("type") or "")))
+
+
 def has_server_tools(req) -> bool:
     for t in req.tools or []:
         d = t.model_dump() if hasattr(t, "model_dump") else dict(t)
         if (
             _is_web(d, "web_search")
+            or _is_code(d)
             or _is_web(d, "web_fetch")
             or d.get("type") == "mcp_toolset"
         ):
@@ -86,6 +109,9 @@ class _Setup:
         self.defs: list[ServerToolDef] = []
         self.client_tools: list[dict] = []
         self.rt: ServerToolRuntime | None = None
+        self.messages: list | None = (
+            None  # request messages with container_upload blocks replaced
+        )
 
 
 async def _setup(req) -> _Setup | JSONResponse:
@@ -96,6 +122,7 @@ async def _setup(req) -> _Setup | JSONResponse:
         for t in (req.tools or [])
     ]
     toolsets: dict[str, dict] = {}
+    code_tool: dict | None = None
     for t in tools:
         ty = str(t.get("type") or "")
         if _is_web(t, "web_search"):
@@ -114,6 +141,26 @@ async def _setup(req) -> _Setup | JSONResponse:
                     "web_fetch", "web_fetch", WEB_FETCH_DESC, WEB_FETCH_SCHEMA, spec=t
                 )
             )
+        elif _is_code(t):
+            code_tool = t
+            s.defs.append(
+                ServerToolDef(
+                    "bash_code_execution",
+                    "code_execution",
+                    CODE_BASH_DESC,
+                    CODE_BASH_SCHEMA,
+                    spec=t,
+                )
+            )
+            s.defs.append(
+                ServerToolDef(
+                    "text_editor_code_execution",
+                    "code_execution",
+                    CODE_EDITOR_DESC,
+                    CODE_EDITOR_SCHEMA,
+                    spec=t,
+                )
+            )
         elif ty == "mcp_toolset":
             toolsets[t.get("mcp_server_name", "")] = t
         else:
@@ -126,6 +173,11 @@ async def _setup(req) -> _Setup | JSONResponse:
             "The MCP connector is disabled (YUNSHU_MCP_CONNECTOR=0).",
         )
     s.rt = ServerToolRuntime(s.defs)
+    if code_tool is not None:
+        bad = _setup_code(req, s)
+        if bad is not None:
+            await s.rt.aclose()
+            return bad
     for srv in servers:
         name = srv.get("name") or ""
         url = srv.get("url") or ""
@@ -173,6 +225,77 @@ async def _setup(req) -> _Setup | JSONResponse:
     return s
 
 
+def _setup_code(req, s: _Setup) -> JSONResponse | None:
+    """Gate the code execution tool and resolve its container; an error response, or None."""
+    from ..sandbox import ContainerError, SandboxUnavailableError, get_executor
+
+    if not settings.get("YUNSHU_CODE_EXECUTION"):
+        return _err(
+            400,
+            "invalid_request_error",
+            "The code execution tool is disabled on this server. Set YUNSHU_CODE_EXECUTION=1 "
+            "(it runs commands inside the sandbox-runtime, srt).",
+        )
+    rt = s.rt
+    assert rt is not None
+    ex = get_executor()
+    try:
+        ex.srt()
+    except SandboxUnavailableError as e:
+        return _err(503, "api_error", str(e))
+    cont = req.container
+    cid = cont.get("id") if isinstance(cont, dict) else cont
+    if cid:
+        try:
+            rt.container = ex.manager.get(str(cid))
+        except ContainerError as e:
+            return _err(400, "invalid_request_error", e.message)
+    # container_upload blocks: stage the files into the container, tell the model their names
+    uploads: list[str] = []
+    msgs: list[dict] = []
+    for m in req.messages:
+        d = m.model_dump() if hasattr(m, "model_dump") else dict(m)
+        c = d.get("content")
+        if isinstance(c, list) and any(
+            isinstance(b, dict) and b.get("type") == "container_upload" for b in c
+        ):
+            new = []
+            for b in c:
+                if isinstance(b, dict) and b.get("type") == "container_upload":
+                    uploads.append(str(b.get("file_id") or ""))
+                    new.append({"type": "text", "text": "[file uploaded: {}]"})
+                else:
+                    new.append(b)
+            d["content"] = new
+        msgs.append(d)
+    if uploads:
+        from ..files_store import FileStoreError
+
+        try:
+            if rt.container is None:
+                rt.container = ex.manager.create()
+            names = [ex.stage_file(rt.container, f) for f in uploads]
+        except FileStoreError as e:
+            return _err(
+                404 if e.status == 404 else 400,
+                "not_found_error" if e.status == 404 else "invalid_request_error",
+                str(e),
+            )
+        it = iter(names)
+        for d in msgs:
+            if isinstance(d.get("content"), list):
+                for b in d["content"]:
+                    if (
+                        b.get("type") == "text"
+                        and b.get("text") == "[file uploaded: {}]"
+                    ):
+                        b["text"] = (
+                            f"[file uploaded to the working directory: {next(it)}]"
+                        )
+        s.messages = msgs
+    return None
+
+
 # ── history: turn the spec's server-tool blocks back into plain tool_use / tool_result turns ──
 def replay_search_results(block: dict) -> list[SearchResult]:
     content = block.get("content")
@@ -215,6 +338,28 @@ def _result_text(block: dict, start: int = 1) -> str:
         doc = (c or {}).get("content") or {}
         src = doc.get("source") or {}
         return f"Fetched {(c or {}).get('url', '')}\n\n{src.get('data', '')}"
+    if ty in CODE_RESULT_TYPES:
+        if isinstance(c, dict):
+            ct = str(c.get("type") or "")
+            if ct.endswith("_error"):
+                return f"Error: {c.get('error_code', 'unavailable')}"
+            if ct == "bash_code_execution_result" or ct == "code_execution_result":
+                out = [f"exit code: {c.get('return_code', 0)}"]
+                if c.get("stdout"):
+                    out.append("stdout:\n" + c["stdout"])
+                if c.get("stderr"):
+                    out.append("stderr:\n" + c["stderr"])
+                names = [
+                    x.get("file_id", "")
+                    for x in c.get("content") or []
+                    if isinstance(x, dict)
+                ]
+                if names:
+                    out.append("files saved: " + ", ".join(names))
+                return "\n".join(out)
+            if ct.startswith("text_editor_code_execution_"):
+                return str(c.get("content") or json.dumps(c))
+        return str(c)
     parts = []
     for x in c or []:
         parts.append(x.get("text", "") if isinstance(x, dict) else str(x))
@@ -273,6 +418,7 @@ def normalize_history(
                 "web_search_tool_result",
                 "web_fetch_tool_result",
                 "mcp_tool_result",
+                *CODE_RESULT_TYPES,
             ):
                 start = len(sources) + 1
                 if ty == "web_search_tool_result":
@@ -423,6 +569,39 @@ def _render_result_block(d: ServerToolDef, tool_id: str, out: ToolOutcome) -> di
                 },
             },
         }
+    if d.kind == "code_execution":
+        r = out.code
+        editor = d.fname == "text_editor_code_execution"
+        rt = (
+            "text_editor_code_execution_tool_result"
+            if editor
+            else "bash_code_execution_tool_result"
+        )
+        if out.is_error or r is None:
+            return {
+                "type": rt,
+                "tool_use_id": tool_id,
+                "content": {
+                    "type": rt + "_error",
+                    "error_code": out.error_code or "unavailable",
+                },
+            }
+        if editor:
+            return {"type": rt, "tool_use_id": tool_id, "content": r.data}
+        return {
+            "type": rt,
+            "tool_use_id": tool_id,
+            "content": {
+                "type": "bash_code_execution_result",
+                "stdout": r.stdout,
+                "stderr": r.stderr,
+                "return_code": r.return_code,
+                "content": [
+                    {"type": "bash_code_execution_output", "file_id": f["file_id"]}
+                    for f in r.files
+                ],
+            },
+        }
     content = [c for c in out.mcp_content if c.get("type") == "text"] or [
         {"type": "text", "text": out.text}
     ]
@@ -444,7 +623,7 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
         for d in setup.defs
     ]
     sources: list[SearchResult] = []
-    history = normalize_history(req.messages, sources=sources)
+    history = normalize_history(setup.messages or req.messages, sources=sources)
     total = _Usage()
     out_index = 0
     started = False
@@ -549,7 +728,9 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
                             outb = {
                                 "type": "server_tool_use",
                                 "id": sid,
-                                "name": d.kind,
+                                "name": d.fname
+                                if d.kind == "code_execution"
+                                else d.kind,
                                 "input": {},
                             }
                         tool_blocks[i] = {
@@ -751,11 +932,24 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
             st["web_fetch_requests"] = rt.counts["web_fetch"]
         if st:
             usage["server_tool_use"] = st
+        delta: dict[str, Any] = {"stop_reason": stop_reason, "stop_sequence": None}
+        if rt.container is not None:
+            from datetime import datetime
+
+            box = rt.container
+            with contextlib.suppress(Exception):
+                box = _container_now(rt.container)
+            delta["container"] = {
+                "id": box.id,
+                "expires_at": datetime.fromtimestamp(box.expires_at, UTC)
+                .isoformat()
+                .replace("+00:00", "Z"),
+            }
         yield _sse(
             "message_delta",
             {
                 "type": "message_delta",
-                "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                "delta": delta,
                 "usage": usage,
                 "x_yunshu": {"server_tools": stats},
             },
@@ -764,6 +958,13 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
     finally:
         with contextlib.suppress(Exception):
             await rt.aclose()
+
+
+def _container_now(c):
+    """The container with its idle timer refreshed by this request."""
+    from ..sandbox import get_manager
+
+    return get_manager().get(c.id)
 
 
 def _last_user_text(history: list[dict]) -> str:
@@ -798,6 +999,15 @@ def _inner_request(
     from ..routers.anthropic import AnthropicMessage, AnthropicTool
 
     tc = req.tool_choice
+    if (
+        isinstance(tc, dict)
+        and tc.get("type") == "tool"
+        and tc.get("name") == "code_execution"
+    ):
+        tc = {
+            **tc,
+            "name": "bash_code_execution",
+        }  # the declared tool stands for its sub-tools
     if not first:
         tc = {"type": "auto"} if tools else None
     elif tc in (None, "auto", {"type": "auto"}):
@@ -815,6 +1025,7 @@ def _inner_request(
             "tool_choice": tc if tools else None,
             "stream": True,
             "mcp_servers": None,
+            "container": None,
         }
     )
 
@@ -858,6 +1069,8 @@ async def assemble_message(events: AsyncIterator[bytes]) -> dict:
                 with contextlib.suppress(ValueError):
                     blocks[i]["input"] = json.loads(jbuf[i])
         elif t == "message_delta":
+            if ev["delta"].get("container"):
+                msg["container"] = ev["delta"]["container"]
             msg["stop_reason"] = ev["delta"].get("stop_reason")
             msg["stop_sequence"] = ev["delta"].get("stop_sequence")
             usage = ev.get("usage", {})

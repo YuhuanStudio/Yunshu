@@ -67,6 +67,9 @@ SCRUB_PREFIXES = (
     "MTPLX_",
     "OMLX_",
     "TENSORFOLD_",
+    "TF_",
+    "KAPITSA_",
+    "NI_",
     "SPLASH_",
 )
 
@@ -635,6 +638,8 @@ def build_launch(
                 DRAFTER,
                 "--no-update-check",
                 "--no-thinking",
+                "--parallel",
+                str(parallel),
                 "--context",
                 str(int(ctx_tokens)),
             ],
@@ -645,7 +650,7 @@ def build_launch(
         )
     if engine in ("llamacpp-mtp", "llamacpp-dflash"):
         dflash = engine == "llamacpp-dflash"
-        ctx = int(ctx_tokens)
+        ctx = int(ctx_tokens) * parallel
         return Launch(
             [
                 LLAMA_BIN_LATEST,
@@ -795,7 +800,10 @@ def detect_mode(engine: str, log: str, probe_text: str | None = None) -> str | N
     if engine == "fn-omlx-latest":
         return (
             "mtp"
-            if re.search(r"Lightning MTP enabled for|MTP path activated|Speculative backend selected for [^\n]*Lightning MTP", log)
+            if re.search(
+                r"Lightning MTP enabled for|MTP path activated|Speculative backend selected for [^\n]*Lightning MTP",
+                log,
+            )
             else None
         )
     legacy_engine = engine

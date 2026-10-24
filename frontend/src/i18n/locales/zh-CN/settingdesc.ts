@@ -49,6 +49,12 @@ const settingdesc = {
   YUNSHU_CORS_ORIGINS:
     "以逗号分隔的允许 CORS 来源（`*` 表示任意）；同时用于检查 Realtime WebSocket 的 Origin 头。",
   YUNSHU_RESPONSE_CACHE: "在内存中缓存相同的非流式响应。",
+  YUNSHU_REPLAY_TOKEN_IDS:
+    "在请求的 chat logprobs 中附上精确的 token_id，供本机无损重放验证；默认关闭，token ID 永不写入服务日志。",
+  YUNSHU_RESEARCH_ACTIVITY_FILE:
+    "可选的本机 gpuq 暂停握手文件（在 gpuq serving.json 的 activity_files 设置同一个文件）；不写入任何请求内容。请求在推理前等待新的安全确认，超时返回 503。",
+  YUNSHU_RESEARCH_PAUSE_TIMEOUT_S:
+    "请求进入推理前，等待 gpuq 暂停确认的最长秒数。",
   YUNSHU_BATCH_MAX_ITEMS: "Batch API：每个批次的请求数上限。",
   YUNSHU_BATCH_TIMEOUT: "Batch API：批次中每个请求的超时秒数（0：不限）。",
   YUNSHU_ALLOW_LOCAL_FILES:
@@ -242,6 +248,18 @@ const settingdesc = {
   YUNSHU_WEB_FETCH_TIMEOUT: "`web_fetch` 等待网页的秒数。",
   YUNSHU_WEB_FETCH_MAX_TEXT_CHARS:
     "交给模型的提取网页文本会截断至此字符数（请求的 `max_content_tokens` 可进一步调低）。",
+  YUNSHU_CODE_EXECUTION:
+    "在本机于 Anthropic sandbox-runtime（srt；可选，需要 Node 22.12 以上）内提供代码执行工具（Anthropic `code_execution_*`）。关闭时声明这些工具的请求返回 400；开启但没有 srt 时返回 503，绝不在沙盒外执行。",
+  YUNSHU_CODE_EXECUTION_ROOT:
+    "存放代码执行容器的目录（每个容器一个子目录，权限 0700）。",
+  YUNSHU_CODE_EXECUTION_TIMEOUT:
+    "单次代码执行调用可运行的挂钟秒数，超过即终止；同时作为 CPU 时间上限。",
+  YUNSHU_CODE_EXECUTION_MEMORY_MB:
+    "单次代码执行调用可使用的常驻内存（MB），按整个进程组采样；超过即终止。",
+  YUNSHU_CODE_EXECUTION_NETWORK_ALLOW:
+    "沙盒可连接的主机，以逗号分隔（`example.com`、`*.example.com`、`host:443`）。留空：完全没有网络，包括 loopback。",
+  YUNSHU_CODE_EXECUTION_TTL_MIN:
+    "代码执行容器闲置多少分钟后，连同其文件一并删除。",
   YUNSHU_MCP_CONNECTOR:
     "提供 MCP 连接器：Anthropic 的 `mcp_servers` 和 OpenAI Responses 的 `mcp` 工具由本服务器执行，并通过可流式 HTTP／SSE 连接到指定的 MCP 服务器。",
   YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE:
@@ -314,12 +332,19 @@ const settingdesc = {
     "`yunshu serve` 同时以并行进程启动主控台进程（网页主控台、文档、历史记录器）。它不加载 MLX，引擎重启或崩溃时仍持续运行。`--no-console` 可关闭。",
   YUNSHU_CONSOLE_PORT:
     "主控台进程的端口。8100 避开引擎的 8000 与常见的开发服务器。",
+  YUNSHU_HOST:
+    "引擎的绑定主机（--host 优先）。127.0.0.1 只服务本机；0.0.0.0 也服务局域网（此时请设置认证令牌）。",
   YUNSHU_CONSOLE_HOST:
-    "主控台进程的绑定主机。未设置时：并行启动沿用引擎的主机，单独运行为 127.0.0.1。",
+    "主控台进程的绑定主机。未设置时：并行启动沿用引擎的主机，单独运行为 127.0.0.1（0.0.0.0 也服务局域网）。",
   YUNSHU_CONSOLE_ENGINE:
     "主控台进程监看并转发请求的引擎地址。未设置时：启动它的引擎，否则为 http://127.0.0.1:8000。",
   YUNSHU_CONSOLE_ENGINE_TOKEN:
     "主控台进程记录历史时读取引擎所用的 Bearer 令牌。未设置时使用 YUNSHU_AUTH_TOKEN。",
+  YUNSHU_CONSOLE_DISCOVER_PORTS:
+    "--engine auto 时控制台寻找 Yunshu 引擎的范围：all（默认）＝本机所有监听中的端口（排除控制台）；或 127.0.0.1 上的逗号与范围列表。只有 /health 响应符合 Yunshu 才算。",
+  YUNSHU_CONSOLE_DISCOVER_S: "--engine auto 时控制台探测引擎的间隔秒数。",
+  YUNSHU_CONSOLE_PAUSE_FILE:
+    "暂停文件路径（JSON：pause/until/reason）。文件存在且未过期时，控制台不向任何引擎发送请求，避免干扰计时测量。",
   YUNSHU_CONSOLE_POLL_S:
     "主控台进程读取引擎的间隔（秒）；1 秒对应 1 秒的历史分辨率。",
   YUNSHU_CONSOLE_HISTORY:

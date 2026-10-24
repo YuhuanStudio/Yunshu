@@ -1,0 +1,182 @@
+---
+title: 傳輸方式
+description: Yunshu 提供的 HTTP、SSE、WebSocket、Realtime、WebRTC 與 Unix socket 傳輸方式、多工文字 WebSocket 協定，以及未提供的項目。
+---
+
+Yunshu 以多種傳輸方式提供同一個應用程式。每一種都派送到相同的處理器，所以驗證、中介軟體、請求 id、前綴快取與取消的行為完全一致。
+
+| 傳輸方式 | 端點 | 狀態 |
+|---|---|---|
+| HTTP 與 SSE | `POST /v1/chat/completions`、`/v1/responses`、`/v1/messages` | 穩定 |
+| 文字 WebSocket（多工） | `WS /v1/stream` | 穩定，Yunshu 協定（見下） |
+| Responses WebSocket 模式 | `WS /v1/responses` | 穩定，OpenAI 的協定 |
+| Realtime WebSocket | `WS /v1/realtime`（GA schema；加上 `OpenAI-Beta: realtime=v1` 為 beta）與 `/realtime`（beta） | 穩定 |
+| Realtime WebRTC | `POST /v1/realtime/calls` | 選用 `yunshu[webrtc]` |
+| Unix domain socket | `yunshu serve --uds PATH` | 穩定 |
+| HTTP/2（h2c） | 未提供 | 無 |
+
+## 規格怎麼說
+
+**Responses WebSocket 模式。** 依 OpenAI 的 WebSocket 模式指南，用戶端以 WebSocket 連到 `/v1/responses`（SDK：`client.responses.connect()`），送出 `{"type":"response.create", "model", "input", "store", "previous_response_id", "generate", "stream_id"}`，並收到與 SSE 串流相同、原樣的 `response.*` 事件，外加 `error`。相同 `stream_id` 的請求依序執行、絕不重疊；不同 id 則並行。接續對話使用 `previous_response_id`，只帶新的輸入項目。Yunshu 在 `WS /v1/responses` 實作了這個模式。
+
+**Anthropic Messages。** SSE（`stream: true`）是唯一的官方串流傳輸方式；沒有 WebSocket 模式可以對齊。Messages 可透過 Yunshu 自己的 `/v1/stream`（`api: "messages"`）使用。
+
+**OpenAI Realtime。** WebSocket 位於 `/v1/realtime?model=M`，使用 `Authorization: Bearer`（瀏覽器使用子協定 `realtime` 與 `openai-insecure-api-key.<key>`），為 JSON 文字框。GA session 有 `type: "realtime"`、`output_modalities`、`audio.input` 與 `audio.output`、`instructions`、`tools` 與 `tool_choice`。音訊格式為 `audio/pcm`（24 kHz、單聲道、16 位元）、`audio/pcmu` 與 `audio/pcma`；回合偵測為 `server_vad`、`semantic_vad` 或 null。WebRTC 則是把 SDP offer 送到 `/v1/realtime/calls`，並在 `oai-events` 資料通道上交換相同的事件。
+
+## 文字 WebSocket：WS /v1/stream
+
+這是 Yunshu 協定，用於沒有官方 WebSocket 模式的情況（chat completions、completions、messages）以及多工的額外功能。一條連線可同時承載許多並行請求。伺服器事件與 SSE 串流以 `data:` 酬載攜帶的物件相同，並以用戶端的請求 id 包裝。
+
+<Steps>
+<Step>
+
+以與 HTTP 相同的方式驗證連線（`Authorization: Bearer`、`x-api-key` 或 `?token=`）。Origin 與憑證會在升級之前檢查，所以被拒絕的用戶端會得到 HTTP 403 的握手失敗。
+
+</Step>
+<Step>
+
+讀取伺服器的第一則訊息 `session.created`。其中列出 `apis` 與 `limits`（`max_inflight`、`max_stream_ids`、`send_queue`、`ping_interval_s`）。
+
+</Step>
+<Step>
+
+送出請求框。`body` 就是一般的 HTTP 本文；`stream` 會被強制開啟，對 chat 與 completions，`stream_options.include_usage` 預設為 true。
+
+```json
+{"type": "request", "id": "a", "api": "chat.completions", "body": {"model": "local", "messages": [{"role": "user", "content": "Hi"}]}}
+```
+
+</Step>
+<Step>
+
+讀取 `event` 框，直到該 id 的終止 `done` 框為止。
+
+</Step>
+</Steps>
+
+用戶端到伺服器（JSON 文字框）：
+
+| 訊息 | 意義 |
+|---|---|
+| `{"type":"request","id":"a","api":"chat.completions\|completions\|responses\|messages","body":{...},"stream_id":"s"}` | 開始請求（`stream_id` 為選用） |
+| `{"type":"cancel","id":"a"}` | 中止；生成停止（與 SSE 用戶端斷線相同的路徑）；以 `done(cancelled)` 結束 |
+| `{"type":"stop","id":"a"}` | 依需要停止；以 `done(stopped)` 結束 |
+| `{"type":"update","id":"a","max_tokens":N}` | 將串流 delta 總數（約每個 token 一個）限制為 N；以 `done(max_tokens)` 結束 |
+| `{"type":"ping","t":..}` 與 `{"type":"pong"}` | 雙向存活檢查 |
+
+伺服器到用戶端：
+
+| 訊息 | 意義 |
+|---|---|
+| `{"type":"session.created","protocol":"yunshu.stream","apis":[...],"limits":{...}}` | 第一則訊息 |
+| `{"type":"event","id":"a","event":"<SSE event name or null>","data":{...}}` | 一個 SSE 事件。chat 的 `data` 是 `chat.completion.chunk`；responses 與 messages 則是具名事件 |
+| `{"type":"done","id":"a","reason":"completed\|cancelled\|stopped\|max_tokens\|error","stats":{"ttft_ms","duration_ms","events","deltas"}}` | 每個請求的終止訊息；同時帶有 `request_id` |
+| `{"type":"error","id"?,"status":404,"error":{...}}` | 請求層級（帶 `id`）或連線層級的錯誤；上游 HTTP 錯誤保留其狀態與本文 |
+| `{"type":"ping","t":...}` | 每 `YUNSHU_WS_PING_INTERVAL` 秒一次的心跳 |
+| `{"type":"updated","id","max_tokens"}` | `update` 的確認 |
+| `{"type":"progress","id",...}` | 排隊與預填進度：SSE `: yunshu-progress` 註解的欄位（`phase`、`percent`、`processed_tokens`、`tokens_per_second`、`eta_s`、`queue_position` 等） |
+| `{"type":"stats","id",...}` | 每個回應的統計：`x_yunshu` 物件的欄位（`ttft_ms`、`decode_tps`、快取命中等）。請見 [Yunshu 擴充](/docs/api/extensions) |
+
+### 規則
+
+- `id` 是用戶端的請求 id。當它適合作為標頭（1 到 128 個 `A-Za-z0-9._:-` 字元）時，它同時也是 HTTP 的 `X-Request-Id`，因此 `GET` 與 `DELETE /v1/requests/{id}`、日誌與錯誤提示都使用同一個 id。否則由處理器產生一個，並以 `request_id` 在 `done` 中回報。
+- 每條連線最多同時執行 `YUNSHU_WS_MAX_INFLIGHT`（預設 16）個請求；超過會得到 `429 too_many_requests`。重複使用進行中的 id 是 `409`。共用 `stream_id` 的請求依序執行；每條連線最多 32 個 stream id。
+- 背壓：每條連線的輸出佇列有上限（`YUNSHU_WS_SEND_QUEUE`，預設 256 個事件），所以慢速的讀取端會阻塞應用程式的 `send()`，生成會暫停而不是緩衝。心跳絕不會排在停滯的讀取端後面。
+- 關閉 socket 會取消所有進行中的請求。
+
+| 設定 | 預設 | 作用 |
+|---|---|---|
+| `YUNSHU_WS_MAX_INFLIGHT` | `16` | 每條連線的並行請求數 |
+| `YUNSHU_WS_PING_INTERVAL` | `15.0` | 心跳間隔（秒）；`0` 為停用 |
+| `YUNSHU_WS_SEND_QUEUE` | `256` | 生成暫停前緩衝的輸出事件數 |
+
+### Responses WebSocket 模式
+
+`WS /v1/responses` 使用 OpenAI 的協定：送出 `{"type":"response.create", ...body..., "stream_id"?}`，並接收原樣的 `response.*` 事件。`stream_id` 通道的運作如上。Yunshu 另外加入 `{"type":"response.cancel","stream_id"|"id"}`。此方言不會送出 progress 與 stats 事件，因為 OpenAI 的協定沒有位置放它們。官方 `openai` SDK（`client.responses.connect()`）是參考用戶端。
+
+### Python 用戶端
+
+```python
+from yunshu_client import YunshuStream
+
+async with YunshuStream("ws://127.0.0.1:8000/v1/stream", token=None) as conn:
+    async for m in conn.chat({"model": "m", "messages": [...]}, id="a", with_done=True):
+        ...                      # events, then the done message
+    await conn.cancel("a")       # from any task
+```
+
+`examples/ws_stream.py` 在同一條 socket 上串流兩個聊天並取消其中一個。
+
+## Realtime
+
+`/v1/realtime` 以握手時選定的兩種方言實作 OpenAI Realtime 協定：GA（預設，也是 `client.realtime.connect()` 使用的）與 beta（`OpenAI-Beta: realtime=v1`，以及舊式的 `/realtime` 路徑）。session 引擎是共用的；`yunshu_gateway/realtime_ga.py` 在 socket 邊界轉換事件名稱與 session 形狀。驗證與 Origin 會在升級之前檢查（HTTP 403）。請見 [Realtime API 參考](/docs/api/realtime)。
+
+與 api.openai.com 的差異：
+
+- `semantic_vad` 以 `server_vad` 提供；`eagerness` 會被忽略。
+- `turn_detection.idle_timeout_ms`：完成一次回應後（再加上其音訊的播放時間），在這段時間內使用者沒有說話，伺服器會送出 `input_audio_buffer.timeout_triggered`，把空緩衝區當作一次無聲的使用者回合提交並回應。
+- `audio.input.noise_reduction`（`near_field` 或 `far_field`）會在 VAD 與 ASR 之前套用因果式 CPU 高通濾波與噪音底限擴展器。這是輕量濾波，不是神經網路降噪。
+- `rate_limits.updated` 跟在 `response.created` 之後。本機伺服器沒有配額：`requests` 回報 `YUNSHU_RATE_LIMIT_RPM`（為 0 時是 2^31-1，代表無限制），`tokens` 回報模型的 context window。
+- `output_audio_buffer.started`、`.stopped` 與 `.cleared`（僅 GA 方言）標示一次回應音訊的範圍；用戶端事件 `output_audio_buffer.clear` 會取消正在說話的回應。
+- `response.create.input` 會取代該次回應的對話上下文；搭配 `conversation: "none"` 可讓它不進入歷史。
+- 不支援的 session 欄位會被靜默透傳，不會產生 `invalid_request_error`。
+
+### WebRTC
+
+<Steps>
+<Step>
+
+安裝 extra：`uv pip install 'yunshu[webrtc]'`。沒有它時，`POST /v1/realtime/calls` 會回傳 503，可改用 `WS /v1/realtime`。
+
+</Step>
+<Step>
+
+將 SDP offer 送到 `/v1/realtime/calls`（`application/sdp`，或 multipart 的 `sdp` 加上 JSON `session`），與 `client.realtime.calls.create` 相同。伺服器回傳 201、一份 SDP answer 與 `Location` 通話 ID。
+
+</Step>
+<Step>
+
+在 `oai-events` 資料通道上交換事件，它與 GA Realtime session 共用。音訊走 RTP 軌。
+
+</Step>
+</Steps>
+
+輸入音訊會在 CPU 上重取樣為 24 kHz 單聲道 PCM16，輸出 PCM 使用有上限的兩秒緩衝。session 會在對端失敗、用戶端通道關閉、伺服器關閉或一小時後結束；沒有開啟通道的 offer 在 60 秒後過期；同時最多保持 16 通通話。暫時性 client secret 也可用於驗證此端點。沒有公用的 STUN 或 TURN 伺服器，所以 loopback 與區域網路的對端需要可直接連到的 ICE 候選。不提供 SIP 通話管理與監控用的旁路 WebSocket。
+
+## Unix domain socket
+
+`yunshu serve --uds /path/y.sock`（設定 `YUNSHU_UDS`）會在 socket 上提供相同的應用程式，而不是 TCP。`--host` 與 `--port` 會被忽略，殘留的 socket 檔會被移除。以檔案擁有者專屬的權限作為存取控制，因此這是最安全的本機傳輸方式：沒有連接埠，也沒有網路暴露。
+
+<Tabs items={["curl", "Python"]}>
+<Tab value="curl">
+
+```bash
+curl --unix-socket /path/y.sock http://localhost/v1/models
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import httpx, openai
+
+client = openai.OpenAI(
+    base_url="http://yunshu/v1",
+    api_key="x",
+    http_client=httpx.Client(transport=httpx.HTTPTransport(uds="/path/y.sock")),
+)
+```
+
+</Tab>
+</Tabs>
+
+`YunshuStream(url, uds=path)` 對 WebSocket 也是同樣做法。OpenAI SDK 自己的 Realtime 與 Responses WebSocket 用戶端會開啟 TCP 連線，所以它們請使用 TCP 連接埠。
+
+## HTTP/2
+
+未提供。uvicorn 只支援 HTTP/1.1，而 h2c 需要第二套伺服器堆疊（hypercorn 或 granian），各有自己的 lifespan、WebSocket 與斷線語意。以斷線驅動的取消與多工 WebSocket，已涵蓋 HTTP/2 本來能帶來的好處：單一連線上的多個並行串流，且請求之間沒有 head-of-line 阻塞。
+
+## 如何驗證
+
+- `scripts/dev/realtime_conformance.py` 以官方 SDK 檢查 Realtime（使用假引擎的單元測試）；`scripts/dev/transport_smoke.py` 是真實模型的煙霧測試。
+- WebRTC 信令、音訊分框、佇列上限與清理由 `tests/unit/test_respfeat.py` 涵蓋。

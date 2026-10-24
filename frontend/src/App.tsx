@@ -1,7 +1,8 @@
+import { isCalm } from "./outage-view";
 import { SegmentedTray } from "./SegmentedTray";
 import { gbTotalText } from "./byte-format";
 import { Suspense, useEffect, useRef, useState } from "react";
-import { lazyPage } from "./lazy-page";
+import { lazyPage, warmPages } from "./lazy-page";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -19,6 +20,7 @@ import {
   useCommandPaletteShortcut,
   type CommandPaletteItem,
   ScrollFade,
+  runViewTransition,
 } from "@yuhuanowo/yunui";
 import { Banner, Sidebar } from "@yuhuanowo/yunui/patterns";
 import { YunUIProvider } from "@yuhuanowo/yunui/adapters";
@@ -121,6 +123,8 @@ const Docs = lazyPage(() => import("./Docs"));
 const Logs = lazyPage(() => import("./Logs"));
 // i18n-keys: shell.page.
 const pageTitle = (page: string) => tr(`shell.page.${page}`);
+/** Outgoing page fade before a route change (ms). The incoming page does the soft entrance itself. */
+const PAGE_OUT_MS = 100;
 const route = () => {
   const { page, sub } = parseRoute(location.hash);
   return { page, sub };
@@ -437,7 +441,7 @@ export default function App() {
       title: dark ? t("shell.top.themeLight") : t("shell.top.themeDark"),
       icon: dark ? <Sun size={14} /> : <Moon size={14} />,
       group: t("shell.cmd.actions"),
-      onSelect: () => setDark((v) => !v),
+      onSelect: () => applyDark(!dark),
     },
   ];
   const q = query.trim().toLowerCase();
@@ -475,10 +479,54 @@ export default function App() {
       : commands),
     ...docItems,
   ];
+  // The route as last applied: navigate() sets it before the hashchange it causes, so that echo is ignored.
+  useEffect(() => {
+    const id = setTimeout(warmPages, 1500);
+    return () => clearTimeout(id);
+  }, []);
+  const routeRef = useRef({ page, sub });
+  const [leaving, setLeaving] = useState(false);
+  const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const pendingRoute = useRef<(() => void) | null>(null);
+  /** Runs the queued route change (once): the outgoing fade has ended, or the safety timer fired. */
+  function finishLeave() {
+    clearTimeout(leaveTimer.current);
+    const apply = pendingRoute.current;
+    pendingRoute.current = null;
+    if (!apply) return;
+    apply();
+    setLeaving(false);
+  }
+  function changePage(apply: () => void) {
+    // Without a page wrapper to fade (Playground) or under reduced motion the change is immediate.
+    if (
+      !document.querySelector("[data-page-wrap]") ||
+      matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      apply();
+      return;
+    }
+    pendingRoute.current?.();
+    pendingRoute.current = apply;
+    setLeaving(true);
+    // The fade's animationend moves on; this only covers an animation that never runs.
+    leaveTimer.current = setTimeout(finishLeave, PAGE_OUT_MS * 3);
+  }
   useEffect(() => {
     const fn = () => {
-      setRoute(route());
-      setMenu(false);
+      const next = route();
+      const cur = routeRef.current;
+      if (next.page === cur.page && next.sub === cur.sub) return;
+      routeRef.current = next;
+      const apply = () => {
+        setRoute(next);
+        setMenu(false);
+      };
+      // Back/forward and links: a new page fades the old one out first.
+      if (next.page !== cur.page) changePage(apply);
+      else apply();
     };
     addEventListener("hashchange", fn);
     return () => removeEventListener("hashchange", fn);
@@ -491,9 +539,23 @@ export default function App() {
   }, [dark]);
   function navigate(p: string, id: string | null = null) {
     location.hash = "/" + p + (id ? "/" + encodeURIComponent(id) : "");
-    setRoute({ page: p as Page, sub: id });
-    setMenu(false);
-    setNotice(null);
+    const from = routeRef.current.page;
+    routeRef.current = { page: p as Page, sub: id };
+    const apply = () => {
+      setRoute({ page: p as Page, sub: id });
+      setMenu(false);
+      setNotice(null);
+    };
+    // A page change fades the old page out (100 ms), then the new one does the soft entrance (200 ms).
+    if (p !== from) changePage(apply);
+    else apply();
+  }
+  /** Theme switch: one cross-fade of the whole page; every element transition is off while it runs. */
+  function applyDark(next: boolean) {
+    void runViewTransition(() => {
+      document.documentElement.classList.toggle("dark", next);
+      setDark(next);
+    }, "theme");
   }
   /** Follow a console link (`#/models?action=load`): the hashchange listener routes it. */
   function go(href: string) {
@@ -672,7 +734,7 @@ export default function App() {
                           ? t("shell.top.themeLight")
                           : t("shell.top.themeDark")
                       }
-                      onClick={() => setDark((v) => !v)}
+                      onClick={() => applyDark(!dark)}
                     />
                   </div>
                 </div>
@@ -686,14 +748,22 @@ export default function App() {
                     <StatusIndicator
                       status={
                         engine.phase !== "online"
-                          ? "offline"
+                          ? isCalm(engine.outage.kind)
+                            ? "away"
+                            : "offline"
                           : loadedModel
                             ? "online"
                             : "neutral"
                       }
                     />
                     {engine.phase !== "online"
-                      ? t("shell.side.offline")
+                      ? engine.outage.kind === "restarting"
+                        ? t("shell.engine.live.restarting")
+                        : engine.outage.kind === "switching"
+                          ? t("shell.engine.live.switching")
+                          : engine.outage.kind === "paused"
+                            ? t("shell.engine.live.paused")
+                            : t("shell.side.offline")
                       : loadedModel
                         ? t("shell.side.loaded")
                         : t("shell.side.noModel")}
@@ -751,7 +821,7 @@ export default function App() {
             }
           />
           <div
-            className={`flex h-dvh min-w-0 flex-col transition-[padding] duration-150 ease-in-out ${collapsed ? "lg:pl-0" : "lg:pl-64"}`}
+            className={`flex h-dvh min-w-0 flex-col transition-[padding] duration-(--dur-slow) ease-(--ease-standard) ${collapsed ? "lg:pl-0" : "lg:pl-64"}`}
           >
             <header className="safe-top-4 safe-x sticky top-0 z-30 flex shrink-0 items-center gap-2 px-4 pt-4 sm:gap-4 lg:px-6">
               <span className="relative -ml-2 inline-flex lg:hidden">
@@ -776,13 +846,13 @@ export default function App() {
                 inert={!collapsed || undefined}
                 onClick={() => setCollapsed(false)}
                 aria-label={t("shell.nav.expand")}
-                className={`hidden shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-all duration-200 ease-in-out hover:bg-muted hover:text-foreground lg:flex ${collapsed ? "-ml-2 max-w-12 p-2 opacity-100" : "pointer-events-none -ml-4 max-w-0 overflow-hidden p-0 opacity-0"}`}
+                className={`hidden shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-[max-width,margin,padding,opacity,background-color,color] duration-(--dur-base) ease-(--ease-standard) hover:bg-muted hover:text-foreground lg:flex ${collapsed ? "-ml-2 max-w-12 p-2 opacity-100" : "pointer-events-none -ml-4 max-w-0 overflow-hidden p-0 opacity-0"}`}
               >
                 <PanelLeftOpen size={18} className="shrink-0" />
               </Button>
               <Breadcrumb
                 aria-label={t("shell.nav.breadcrumb")}
-                className="card w-fit min-w-0 overflow-hidden whitespace-nowrap px-3 py-2 max-sm:hidden"
+                className={`card w-fit overflow-hidden whitespace-nowrap px-3 py-2 max-sm:hidden ${sub ? "min-w-0" : "shrink-0"}`}
               >
                 <BreadcrumbList className="flex-nowrap gap-2 overflow-hidden sm:gap-2">
                   <BreadcrumbItem className="shrink-0">
@@ -791,7 +861,7 @@ export default function App() {
                     </BreadcrumbLink>
                   </BreadcrumbItem>
                   <BreadcrumbSeparator />
-                  <BreadcrumbItem className="min-w-0">
+                  <BreadcrumbItem className={sub ? "min-w-0" : "shrink-0"}>
                     {sub ? (
                       <BreadcrumbLink
                         href={page === "docs" ? "#/docs" : "#/models"}
@@ -824,9 +894,17 @@ export default function App() {
               >
                 {pageTitle(page)}
               </span>
+              {/* The pill sits left, right after the breadcrumb: its width follows its text and only its
+                  right edge moves, so nothing shifts when the phase or the numbers change. */}
+              {wide && (
+                <LivePill
+                  phase={engine.phase}
+                  status={engine.status}
+                  outage={engine.outage.kind}
+                />
+              )}
               {wide && (
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">
-                  <LivePill phase={engine.phase} status={engine.status} />
                   <Button
                     variant="ghost"
                     type="button"
@@ -863,7 +941,7 @@ export default function App() {
                         ? t("shell.top.themeLight")
                         : t("shell.top.themeDark")
                     }
-                    onClick={() => setDark((v) => !v)}
+                    onClick={() => applyDark(!dark)}
                   />
                 </div>
               )}
@@ -974,13 +1052,21 @@ export default function App() {
                       >
                         <div
                           key={page}
+                          data-page-wrap=""
+                          onAnimationEnd={(e) => {
+                            if (
+                              e.target === e.currentTarget &&
+                              e.animationName === "yunui-exit"
+                            )
+                              finishLeave();
+                          }}
                           ref={startAtTop}
                           data-stale={
                             engine.phase === "offline" && DIM_PAGES.has(page)
                               ? ""
                               : undefined
                           }
-                          className={`yunui-fade-in mx-auto w-full max-w-7xl ${
+                          className={`${leaving ? "motion-exit" : "yunui-fade-in"} mx-auto w-full max-w-7xl ${
                             engine.phase === "offline" &&
                             engine.status != null &&
                             DIM_PAGES.has(page)
@@ -1029,7 +1115,7 @@ export default function App() {
                               connection={connection}
                               save={save}
                               dark={dark}
-                              setDark={setDark}
+                              setDark={applyDark}
                               disabled={!!busy}
                               engine={engine}
                               perform={perform}

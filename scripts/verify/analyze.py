@@ -37,7 +37,8 @@ def logprob_delta(ra: dict, rb: dict):
         return None, "logprobs missing"
     if ra.get("lp_tokens") != rb.get("lp_tokens") or len(la) != len(lb):
         return None, "logprob token sequences differ"
-    return max(abs(x - y) for x, y in zip(la, lb, strict=True)), ""
+    # yv runs on the macOS system interpreter (3.9): no zip(strict=...); the lengths are checked above.
+    return max(abs(x - y) for x, y in zip(la, lb)), ""
 
 
 def compare_identity(

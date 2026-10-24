@@ -265,6 +265,7 @@ function ReplyBody({ run, streaming }: { run: Run; streaming: boolean }) {
         }
       >
         <Markdown
+          streaming={streaming && !!run.content}
           content={
             run.content ||
             (streaming

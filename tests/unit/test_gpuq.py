@@ -95,6 +95,7 @@ def test_gate_job_runs_before_same_priority_backlog(tmp_path, monkeypatch):
     assert gpuq._pick(backlog + [low_gate])["id"] == "bench0"
 
 
+@pytest.mark.serial
 def test_adopted_job_ignoring_sigint_is_killed_after_grace(gpuq, tmp_path, monkeypatch):
     import signal
 

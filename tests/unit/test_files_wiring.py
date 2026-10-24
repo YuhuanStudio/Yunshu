@@ -17,6 +17,11 @@ from .server_tools_helpers import FakeSearch, ScriptedInner
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
+    import yunshu_gateway.engine as engine_state
+
+    # No engine or model manager left behind by an earlier test: documents resolve the engine.
+    monkeypatch.setattr(engine_state, "_engine", None)
+    monkeypatch.setattr(engine_state, "_model_manager", None)
     monkeypatch.setenv("YUNSHU_FILES_DIR", str(tmp_path / "files"))
     files_store.reset_store()
     yield files_store.get_store()

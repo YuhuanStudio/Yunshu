@@ -40,6 +40,8 @@ import {
 import { Presence } from "./motion/Presence";
 import { LiveSparkline } from "./motion/LiveSparkline";
 import { routeHref } from "./route";
+import { EngineSwitcher, PauseNotice, useEngineList } from "./EngineSwitcher";
+import type { Connection } from "./api";
 import type { Engine } from "./ui";
 
 /** A host sample older than this is stale: values stay, dimmed, and the age says so. */
@@ -56,6 +58,7 @@ export type IslandDot = "online" | "away" | "offline" | "neutral";
  */
 export function StatusIslandContent({
   engine,
+  connection,
   ledger,
   host,
   dot,
@@ -63,6 +66,7 @@ export function StatusIslandContent({
   onNavigate,
 }: {
   engine: Engine;
+  connection?: Connection;
   ledger: MemoryLedgerData | null;
   host: HostState;
   dot: IslandDot;
@@ -71,6 +75,15 @@ export function StatusIslandContent({
   onNavigate: () => void;
 }) {
   const status = engine.status;
+  const { list, pause, pin } = useEngineList(
+    connection ?? { baseUrl: "", token: "" },
+  );
+  const switcher = (
+    <>
+      <PauseNotice pause={pause} />
+      {connection && list ? <EngineSwitcher list={list} pin={pin} /> : null}
+    </>
+  );
   const online = engine.phase === "online" && status != null;
   const go = (page: Parameters<typeof routeHref>[0]) => () => {
     globalThis.location.hash = routeHref(page).slice(1);
@@ -78,21 +91,30 @@ export function StatusIslandContent({
   };
   if (!online) {
     const cause = offlineCause(engine.phase, engine.errorStatus);
+    const calm =
+      engine.outage.kind === "restarting"
+        ? t("shell.engine.live.restarting")
+        : engine.outage.kind === "switching"
+          ? t("shell.engine.live.switching")
+          : engine.outage.kind === "paused"
+            ? t("shell.engine.live.paused")
+            : null;
     const word =
-      engine.phase === "connecting"
+      calm ??
+      (engine.phase === "connecting"
         ? t("shell.footer.engine.connecting")
         : engine.phase === "unauthorized"
           ? t("shell.footer.engine.unauthorized")
-          : t("shell.footer.engine.offline");
+          : t("shell.footer.engine.offline"));
     return (
       <>
         <StatusIslandHeader
           indicator={<StatusIndicator status={dot} />}
-          title={word}
+          title={list?.waiting ? t("shell.engines.waitingTitle") : word}
           subtitle={
             engine.phase === "offline"
               ? [
-                  cause.short,
+                  calm ? "" : cause.short,
                   engine.offlineSince
                     ? t("common.offlineSince", {
                         time: clock(engine.offlineSince),
@@ -115,6 +137,7 @@ export function StatusIslandContent({
               : undefined
           }
         />
+        {switcher}
         <Nav online={false} active={0} loaded={0} />
       </>
     );
@@ -263,6 +286,7 @@ export function StatusIslandContent({
       )}
 
       <MachineCard host={host} now={now} />
+      {switcher}
       <Nav
         online
         active={a.counts.active}
@@ -391,7 +415,7 @@ function MachineCard({ host, now }: { host: HostState; now: number }) {
               <ChevronDown
                 aria-hidden
                 size={14}
-                className={`shrink-0 text-muted-foreground transition-transform duration-[180ms] ease-out motion-reduce:transition-none ${open ? "" : "-rotate-90"}`}
+                className={`shrink-0 text-muted-foreground transition-transform duration-(--dur-base) ease-out motion-reduce:transition-none ${open ? "" : "-rotate-90"}`}
               />
             </Button>
           </CollapsibleTrigger>

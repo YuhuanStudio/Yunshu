@@ -1,5 +1,7 @@
 # Coding-agent compatibility
 
+
+> Console docs: the maintained, translated version of this page is `/docs/developers/agent-compat` (source `frontend/docs/developers/agent-compat.mdx`). This file stays as the repository-side reference read by tooling.
 Yunshu's goal for coding agents is near-native fidelity: Claude Code, Codex CLI, opencode and the SDKs
 should find every endpoint, header, beta, tool type and server-side tool they use working like the real
 Anthropic / OpenAI APIs, not only correct generation. This page is the evidence: what each agent
