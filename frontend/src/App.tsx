@@ -53,7 +53,7 @@ import { LivePill } from "./LivePill";
 import { tabTitle } from "./engineView";
 import type { Connection } from "./api";
 import { FooterStatus } from "./FooterStatus";
-import { searchDocs } from "./docs/search.ts";
+
 import { docHref } from "./docs/links.ts";
 import { useDocTitle } from "./docs/title-store.ts";
 import type { SearchHit } from "./docs/types.ts";
@@ -451,9 +451,15 @@ export default function App() {
     }
     let live = true;
     import("./docs/data.ts")
-      .then((m) => m.loadSearch(locale))
+      .then(async (m) => {
+        const [index, { queryDocs }] = await Promise.all([
+          m.loadSearch(locale),
+          import("./docs/orama"),
+        ]);
+        return queryDocs(index, q);
+      })
       .then(
-        (entries) => live && setDocHits(searchDocs(entries, q)),
+        (hits) => live && setDocHits(hits),
         () => live && setDocHits([]),
       );
     return () => {

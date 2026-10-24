@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { closure, dynamicImports, staticImports } from "../scripts/bundle-size.mjs";
+import {
+  budgetForRoute,
+  ENTRY_BUDGET_KB,
+  closure,
+  dynamicImports,
+  staticImports,
+} from "../scripts/bundle-size.mjs";
 
 test("static and dynamic imports are told apart in minified output", () => {
   const code =
@@ -16,5 +22,18 @@ test("the closure follows static edges only and survives cycles", () => {
     "b.js": 'import{a}from"./a.js";',
     "lazy.js": "",
   };
-  assert.deepEqual([...closure(files, "e.js")].sort(), ["a.js", "b.js", "e.js"]);
+  assert.deepEqual([...closure(files, "e.js")].sort(), [
+    "a.js",
+    "b.js",
+    "e.js",
+  ]);
+});
+
+// A docs dependency must never silently relax the dashboard or shared entry.
+test("only deferred docs routes have the Fumadocs size allowance", () => {
+  assert.equal(ENTRY_BUDGET_KB, 270);
+  for (const name of ["Dashboard", "Requests", "Playground", "orama", "data"])
+    assert.equal(budgetForRoute(name), 300);
+  assert.equal(budgetForRoute("Docs"), 350);
+  assert.equal(budgetForRoute("ApiReference"), 650);
 });

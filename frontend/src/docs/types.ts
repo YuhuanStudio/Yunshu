@@ -4,6 +4,8 @@ export interface Heading {
   level: number;
 }
 export interface PageInfo {
+  lastUpdated?: string;
+  breadcrumbs?: { title: string; url?: string }[];
   title: string;
   description: string;
   headings: Heading[];

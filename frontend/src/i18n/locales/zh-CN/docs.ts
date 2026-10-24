@@ -18,6 +18,16 @@ const docs: Shape<typeof zh> = {
   "link.settings": "每个设置的说明",
   "link.keys": "验证与密钥说明",
   "link.lead": "文档",
+  "actions.copy": "复制 Markdown",
+  "actions.copied": "已复制",
+  "actions.failed": "无法复制此页",
+  breadcrumb: "文档路径",
+  updated: "最后更新",
+  reference: "自动生成的 API 参考",
+  "reference.description":
+    "由引擎 OpenAPI schema 生成的交互参考。请求通过此 console 的同源代理。",
+  "reference.guides": "端点指南",
+  "reference.operation": "API 操作",
 };
 
 export default docs;

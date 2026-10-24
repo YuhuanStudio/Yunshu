@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 
 // The docs section: pages render from the compiled MDX, links and anchors work, the command
@@ -199,10 +200,19 @@ for (const [locale, title] of [
     await expect(article(page).getByRole("heading", { level: 1 })).toHaveText(
       title,
     );
-    await expect(article(page)).toContainText("134.400");
-    await expect(article(page)).toContainText("117.550");
-    await expect(article(page)).toContainText("77.950");
-    await expect(article(page)).toContainText("no part_done (incomplete job)");
+    // Check the current authored evidence, rather than a retired snapshot's
+    // numbers. This catches a renderer losing table values when content evolves.
+    const suffix = locale === "en" ? "" : `.${locale}`;
+    const source = readFileSync(
+      new URL(`../docs/guides/benchmarks${suffix}.mdx`, import.meta.url),
+      "utf8",
+    );
+    const pairs = [...source.matchAll(/\d+\.\d+\s*\/\s*\d+\.\d+/g)]
+      .slice(0, 3)
+      .map((m) => m[0]);
+    expect(pairs).toHaveLength(3);
+    await expect(article(page).getByRole("table").first()).toBeVisible();
+    for (const pair of pairs) await expect(article(page)).toContainText(pair);
     expect(errors).toEqual([]);
   });
 }

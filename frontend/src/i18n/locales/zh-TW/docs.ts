@@ -15,6 +15,16 @@ const docs = {
   "link.settings": "每個設定的說明",
   "link.keys": "驗證與金鑰說明",
   "link.lead": "文件",
+  "actions.copy": "複製 Markdown",
+  "actions.copied": "已複製",
+  "actions.failed": "無法複製此頁",
+  breadcrumb: "文件路徑",
+  updated: "最後更新",
+  reference: "自動產生的 API 參考",
+  "reference.description":
+    "由引擎 OpenAPI schema 產生的互動參考。請求經由此 console 的同源代理。",
+  "reference.guides": "端點指南",
+  "reference.operation": "API 操作",
 };
 
 export default docs;

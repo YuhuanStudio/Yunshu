@@ -18,6 +18,16 @@ const docs: Shape<typeof zh> = {
   "link.settings": "What every setting does",
   "link.keys": "Authentication and keys",
   "link.lead": "Docs",
+  "actions.copy": "Copy Markdown",
+  "actions.copied": "Copied",
+  "actions.failed": "Could not copy this page",
+  breadcrumb: "Breadcrumb",
+  updated: "Last updated",
+  reference: "Generated API reference",
+  "reference.description":
+    "Interactive reference generated from the engine OpenAPI schema. Requests use this console’s same-origin proxy.",
+  "reference.guides": "Endpoint guides",
+  "reference.operation": "API operation",
 };
 
 export default docs;

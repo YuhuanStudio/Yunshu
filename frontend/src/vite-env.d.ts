@@ -18,14 +18,14 @@ declare module "virtual:docs-toc-zh-CN" {
   export default toc;
 }
 declare module "virtual:docs-search-en" {
-  const entries: import("./docs/types").SearchEntry[];
+  const entries: import("./docs/orama").StaticSearch;
   export default entries;
 }
 declare module "virtual:docs-search-zh-TW" {
-  const entries: import("./docs/types").SearchEntry[];
+  const entries: import("./docs/orama").StaticSearch;
   export default entries;
 }
 declare module "virtual:docs-search-zh-CN" {
-  const entries: import("./docs/types").SearchEntry[];
+  const entries: import("./docs/orama").StaticSearch;
   export default entries;
 }
