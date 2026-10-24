@@ -381,7 +381,7 @@ def test_service_install_needs_a_model(home, launchctl):
     r = runner.invoke(app, ["service", "install"])
     assert r.exit_code == 2
     r = runner.invoke(app, ["service", "install", "-m", str(home / "missing")])
-    assert r.exit_code == 2 and "no such directory" in r.output
+    assert r.exit_code == 2 and "no such directory" in " ".join(r.output.split())
 
 
 def test_parse_launchctl_print():
