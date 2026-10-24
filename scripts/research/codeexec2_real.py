@@ -455,8 +455,8 @@ def anthropic_suite(url, results, big=False, cl=None):
 
         def go():
             m, seen = ptc_loop(
-                "Use code execution to call get_weather for the city Paris from Python code "
-                "(`result = await get_weather(city='Paris')`), print the result, and tell me what it says.",
+                "Use the code_execution Python tool to run exactly this code: "
+                "result = await get_weather(city='Paris'); print(result)",
                 tool,
                 lambda n, a: f"Sunny, 21C in {a.get('city')}",
             )
