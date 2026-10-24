@@ -1364,3 +1364,47 @@ quiet reps (gpuq 1023-151722, 1023-152645): immediate turn-2 restore 43.1/43.4 -
 0.841/0.852 -> 0.813/0.811 s; warm re-send code 0.266 -> 0.230-0.243 s, prose restore unchanged. Cold 32K flat (~33 s).
 Identity: APC hit/miss and spec on/off tokens + logprobs exact (1023-151746); rehearsal == plain raw IDs 12/12
 (1023-165252). Memory: the held storage counts inside the existing allocator budget and is released at the 30 s idle trim.
+
+### 2026-10-24 coldfuse: cold prefill norm fusion and KV reservation
+
+Candidate branch coldfuse-1023 against 62b56949, M5 Max, same Qwen3.8-27B-oQ4e-mtp checkpoint + DFlash2.
+Retained changes: BF16 128-wide GDN Q/K RMSNorm + scale reads convolution output strides directly and preserves
+intermediate BF16 rounding; singleton BatchKVCache reserves native prompt backing after its first chunk.
+Logical offsets, canonical prefill boundaries and detached APC snapshot ownership are unchanged. No new setting.
+
+Three interleaved pairs per context/content (base, cand, cand-r1, base-r1, base-r2, cand-r2), 64 output tokens,
+APC disk off, every row cached=0, DFlash engaged, complete records, all output digests equal. All timing jobs
+quiet and job_swap=0. Savings below are medians of paired base-minus-candidate deltas, which can differ from
+the difference of arm medians.
+
+| Context | Content | Base median TTFT s | Candidate median TTFT s | Paired savings s |
+|---|---|---:|---:|---:|
+| 8192 | prose | 7.460 | 7.441 | 0.019 |
+| 8192 | code | 7.452 | 7.432 | 0.019 |
+| 32768 | prose | 32.819 | 32.710 | 0.117 |
+| 32768 | code | 32.822 | 32.729 | 0.087 |
+| 131072 | prose | 186.826 | 185.478 | 1.320 |
+| 131072 | code | 187.184 | 185.869 | 1.311 |
+
+All 18 paired deltas positive. Jobs: 1024-034038-00-coldfuse-batch-ab8-1024a,
+1024-030418-00-coldfuse-batch-ab32-1024a + 1024-034040-00-coldfuse-batch-ab32-r2-1024a,
+1024-034036-00-coldfuse-batch-ab128-1024a (all rc0). Kernel/reservation commits f84eee91 + 32ef5c1d;
+measurement contracts f058edda; baseline precheck contract repairs c329c0e2.
+
+Within-version identity including logprobs: required id_any.sh 32768,
+1024-035845-00-coldfuse-batch-id32-1024b rc0; prose/code partial APC hit32704 and full hit33408, and spec-off,
+match cold over 64 tokens, max_abs_dlp=0. Rehearsal equals plain: raw IDs in eight cells (256/512 reply budgets,
+completed/immediate arrivals, prose/code), jobs 1024-075949-00-coldfuse-rehearsal-raw-code-smoke-1024d and
+1024-075950-00-coldfuse-rehearsal-raw-prose-smoke-1024d; logprobs in four cells (256 budget, both arrivals/content),
+1024-031741-00-coldfuse-batch-rehearsal-lp32-1024b. All rc0 and complete. Raw rehearsal requires positive
+64-aligned hits; logprob requests use the separate serial namespace and require cached=0. Real-shape focused
+parity: 45 passed (1023-231437-00-coldfuse-batchreserve-parity-smoke-1023m). Final precheck PASS f058edda,
+1024-075659-00-coldfuse-precheck-smoke-1024c; i18n skipped because this worktree has no node_modules.
+Full ci-local/yv long remains the lead's merged-batch gate; this entry is branch evidence, not a release verdict.
+
+Synchronized profile 1024-025423 confirmed prompt-span KV growth concatenates480->0; once-per-prompt reservation
+is outside that span, so this is not a total-copy-zero claim. RMS + fused norm-scale spans1.2351->1.1617s.
+Profile wall time is perturbed and is not an E2E gain. Earlier norm-only/drifted pilots are excluded from the table.
+The raw rehearsal driver initially failed before model loading on Bash3 empty-array nounset (031739); fixed and
+rerun completely. Mixed-bit a/b gate fusion was not implemented; upstream SwiGLU is already compiled. The cold
+32K gap to the previously measured Splash ~30.5s remains about2.2s.
