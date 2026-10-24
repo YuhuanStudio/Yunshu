@@ -896,6 +896,9 @@ def cmd_routes(a):
                 [
                     f"YUNSHU_AUTH_TOKEN={token}",
                     "YUNSHU_VLM_APC_DISK=0",
+                    # console_backend_gaps reads the opt-in persisted request history
+                    "YUNSHU_SERVE_LOG=1",
+                    f"YUNSHU_SERVE_LOG_DIR={home / 'history'}",
                     f"YUNSHU_SEARXNG_URL={fake.url}",
                     "YUNSHU_WEB_SEARCH_PROVIDER=searxng",
                     # /v1/containers needs code execution; srt must be on PATH (see below)

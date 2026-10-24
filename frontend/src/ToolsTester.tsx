@@ -8,6 +8,7 @@ import {
   StatusIndicator,
   Textarea,
 } from "@yuhuanowo/yunui";
+import { ToolCall } from "@yuhuanowo/yunui/ai";
 import { ApiError, requestJson, type Connection } from "./api";
 import { parseSchemaText, unsupportedKeywords } from "./json-schema-lite";
 import { t, useLocale } from "./i18n/index.ts";
@@ -401,39 +402,45 @@ export function ToolsTester({
                         })}`}
                     </span>
                   </p>
-                  {r.toolCalls.map((c) => (
+                  {r.toolCalls.map((c) => {
+                    const bad = !c.known || !!c.parseError || c.issues.length > 0;
+                    const validity = !c.known
+                      ? t("playground.tools.call.unknown")
+                      : c.parseError
+                        ? t("playground.tools.call.badJson")
+                        : c.issues.length
+                          ? t("playground.tools.call.invalid", {
+                              n: c.issues.length,
+                            })
+                          : t("playground.tools.call.valid");
+                    return (
                     <div
                       key={c.id}
                       className="space-y-1.5"
                       data-testid="tool-call"
                       data-call={c.name}
                     >
-                      <p className="flex flex-wrap items-center gap-2 text-sm">
-                        <span className="font-mono">{c.name || "—"}</span>
-                        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                          <StatusIndicator
-                            status={
-                              !c.known || c.parseError || c.issues.length
-                                ? "busy"
-                                : "online"
-                            }
-                          />
-                          {!c.known
-                            ? t("playground.tools.call.unknown")
-                            : c.parseError
-                              ? t("playground.tools.call.badJson")
-                              : c.issues.length
-                                ? t("playground.tools.call.invalid", {
-                                    n: c.issues.length,
-                                  })
-                                : t("playground.tools.call.valid")}
-                        </span>
-                      </p>
-                      <pre className="overflow-x-auto rounded bg-muted/40 p-2 font-mono text-xs">
-                        {c.parseError == null
-                          ? JSON.stringify(c.args, null, 2)
-                          : c.rawArguments}
-                      </pre>
+                      <ToolCall
+                        title={c.name || "—"}
+                        status={bad ? "error" : "success"}
+                        summary={validity}
+                        input={
+                          c.parseError == null
+                            ? JSON.stringify(c.args, null, 2)
+                            : c.rawArguments
+                        }
+                        defaultOpen
+                        labels={{
+                          success: validity,
+                          error: validity,
+                          input: t("playground.tools.call.args"),
+                          copy: t("playground.tools.call.copy"),
+                          copied: t("playground.tools.call.copied"),
+                          copyFailed: t("playground.tools.call.copyFailed"),
+                          showMore: t("playground.tools.call.showMore"),
+                          showLess: t("playground.tools.call.showLess"),
+                        }}
+                      />
                       {c.issues.length > 0 && (
                         <ul className="space-y-0.5 font-mono text-xs text-error">
                           {c.issues.map((x, k) => (
@@ -477,7 +484,8 @@ export function ToolsTester({
                         </>
                       )}
                     </div>
-                  ))}
+                    );
+                  })}
                   {r.content.trim() && (
                     <div data-testid="tool-final">
                       <p className="text-xs text-muted-foreground">
