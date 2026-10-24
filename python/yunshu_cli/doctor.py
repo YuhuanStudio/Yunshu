@@ -387,14 +387,14 @@ def check_sampling(model: str) -> list[Check]:
         if not p.is_dir():
             from yunshu_gateway.sampling_defaults import _as_dir
 
-            d = _as_dir(model)
-            p = Path(d) if d else p
+            resolved = _as_dir(model)
+            p = Path(resolved) if resolved else p
         if not p.is_dir():
             return []
-        d = defaults_by_mode(p)
+        by = defaults_by_mode(p)
 
         def fmt(m: str) -> str:
-            e = d[m]
+            e = by[m]
             return (
                 f"T={e['temperature']['value']} top_p={e['top_p']['value']} "
                 f"top_k={e['top_k']['value']} presence={e['presence_penalty']['value']} "
@@ -405,7 +405,7 @@ def check_sampling(model: str) -> list[Check]:
             Check(
                 "sampling defaults",
                 "ok",
-                f"default mode {d['default_mode']}; thinking {fmt('thinking')}; non-thinking {fmt('non_thinking')}",
+                f"default mode {by['default_mode']}; thinking {fmt('thinking')}; non-thinking {fmt('non_thinking')}",
                 "A request value always wins; YUNSHU_SAMPLING_DEFAULTS=api uses API defaults.",
             )
         ]

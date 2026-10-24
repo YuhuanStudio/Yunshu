@@ -149,14 +149,14 @@ def load_profiles(path: Path | None = None) -> list[dict]:
             ):
                 logger.warning("skipping malformed sampling profile %r", e)
                 continue
-            ent = {
+            ent: dict[str, Any] = {
                 "names": [n.lower() for n in names],
                 "source_url": str(e.get("source_url", "")),
                 "read": str(e.get("read", "")),
             }
             for mode in ("thinking", "non_thinking"):
                 raw = e.get(mode)
-                vals = {}
+                vals: dict[str, Any] = {}
                 if isinstance(raw, dict):
                     for f, v in raw.items():
                         ok = _valid(f, v) if f in _RANGES else None
