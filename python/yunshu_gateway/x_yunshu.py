@@ -139,10 +139,14 @@ def served_model(requested: str | None) -> str | None:
     """The model that actually answers: in single-model mode every requested name maps to the one
     served model, so a client's alias ("m", "local") is not what the console should show."""
     try:
-        from .engine import get_display_model_id, get_model_manager
+        from .engine import get_display_model_id, get_engine, get_model_manager
 
         if get_model_manager() is None:
-            return get_display_model_id() or requested
+            return (
+                get_display_model_id()
+                or getattr(get_engine(), "model_name", None)
+                or requested
+            )
     except Exception:  # noqa: BLE001 - display only
         pass
     return requested

@@ -12,3 +12,12 @@ def test_multi_model_mode_keeps_the_requested_id(monkeypatch):
     monkeypatch.setattr(eng, "get_model_manager", lambda: object())
     monkeypatch.setattr(eng, "get_display_model_id", lambda: "other")
     assert served_model("org/real-id") == "org/real-id"
+
+
+def test_falls_back_to_the_engine_model_name_when_no_display_id(monkeypatch):
+    monkeypatch.setattr(eng, "get_model_manager", lambda: None)
+    monkeypatch.setattr(eng, "get_display_model_id", lambda: None)
+    monkeypatch.setattr(
+        eng, "get_engine", lambda: type("E", (), {"model_name": "Qwen3.8-27B"})()
+    )
+    assert served_model("m") == "Qwen3.8-27B"

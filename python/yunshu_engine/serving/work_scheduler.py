@@ -25,6 +25,13 @@ DECODE_SHARE = 1.0
 # answer, the start of a reply) get the generous share. Once every decoding row
 # is past that, a long reply earns DECODE_TAIL_SHARE, which bounds how much a
 # long cold prefill is slowed by someone else's long generation.
+# Measured (27B, `scripts/research/conc_probe.py` stagger: a 1500-token reply is running, a ~10K-token
+# prompt arrives; one run each, 2026-10-24; decode speed varies ~30% run to run):
+#   share 0.05: running row 2.5 tok/s during the newcomer's prefill, newcomer TTFT 5.98 s
+#   share 0.25: running row 6.0 tok/s,                               newcomer TTFT 6.79 s (+13%)
+#   share 0.50: running row 13.0 tok/s,                              newcomer TTFT 7.58 s (+27%)
+# 0.25 more than doubles the running row's speed for a 13% later first token. The prefill atoms run at
+# the same ~1,130 tok/s in every case: an apparent prefill crawl is a request waiting for its turn.
 DECODE_EARLY_TOKENS = 48
 DECODE_TAIL_SHARE = 0.25
 DECODE_QUANTUM_MAX_S = 4.0
