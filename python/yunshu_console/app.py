@@ -124,6 +124,16 @@ def check_access(request: Request) -> None:
             )
 
 
+def proxy_headers(request: Request) -> list[tuple[str, str]]:
+    """Shared caller-auth forwarding policy for proxy and local docs inference."""
+    headers = [
+        (k, v) for k, v in request.headers.items() if k.lower() not in DROP_REQUEST
+    ]
+    if request.client:
+        headers.append(("x-forwarded-for", request.client.host))
+    return headers
+
+
 class StampConsole:
     """Pure ASGI middleware: every answer says it came through the console process.
 
@@ -366,6 +376,12 @@ def create_app(
             raise HTTPException(404, "that engine is not a live discovered engine")
         return discovery.snapshot()
 
+    from .docs_ask import router_for
+
+    app.include_router(
+        router_for(app, static_dir or default_static_dir(), check_access, _pause_state)
+    )
+
     # ── the web console ─────────────────────────────────────────────────
     @app.get("/", include_in_schema=False)
     async def root() -> RedirectResponse:
@@ -402,11 +418,7 @@ def create_app(
         include_in_schema=False,
     )
     async def forward(path: str, request: Request) -> Response:
-        headers = [
-            (k, v) for k, v in request.headers.items() if k.lower() not in DROP_REQUEST
-        ]
-        if request.client:
-            headers.append(("x-forwarded-for", request.client.host))
+        headers = proxy_headers(request)
         base = discovery.current_url if discovery is not None else engine_url
         url = httpx.URL(base).copy_with(
             path="/" + path, query=request.url.query.encode()

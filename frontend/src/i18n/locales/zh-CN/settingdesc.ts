@@ -1,4 +1,11 @@
 const settingdesc = {
+  YUNSHU_DOCS_ASK_MAX_QUESTION:
+    "本地文档 AI 问答的问题与每条历史消息字数上限。",
+  YUNSHU_DOCS_ASK_MAX_HISTORY:
+    "文档 AI 问答接受的用户／助手历史消息数量上限，另受模型上下文限制。",
+  YUNSHU_DOCS_ASK_MAX_TOKENS:
+    "本地文档 AI 问答的回答 token 上限。仅使用已加载模型；测量暂停时不接受提问。",
+
   YUNSHU_MODEL:
     "单模型模式下提供服务的模型路径或 Hugging Face id；所有请求的模型名称都会映射到它。",
   YUNSHU_MULTI_MODEL:

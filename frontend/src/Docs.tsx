@@ -7,6 +7,7 @@ import {
   type ComponentType,
 } from "react";
 import {
+  Button,
   Select,
   SelectContent,
   SelectGroup,
@@ -240,6 +241,15 @@ function DocsContent({ sub }: { sub: string | null }) {
             className="prose min-w-0 max-w-3xl"
             data-testid="docs-article"
           >
+            <div className="not-prose mb-4 flex justify-end">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => dispatchEvent(new Event("yunshu-docs-ask"))}
+              >
+                {t("docs.ask.title")}
+              </Button>
+            </div>
             <nav
               className="not-prose mb-4 flex flex-wrap gap-2 text-xs text-muted-foreground"
               aria-label={t("docs.breadcrumb")}

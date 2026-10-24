@@ -2,7 +2,8 @@
 """CPU-only experimental flag census: exact registry decide text and measurement ownership.
 
 Split-invariant 27B prefill is a stable qualified kernel policy, not a new
-experimental flag. Existing stock/lane, tile/stock and chunked/step options
+experimental flag. Console DOCS_ASK limits are stable request bounds, not
+experimental inference paths; retrieval never loads an embedding model. Existing stock/lane, tile/stock and chunked/step options
 retain their opt-outs; NEXT_TURN_PREFILL=off disables rehearsal only.
 """
 

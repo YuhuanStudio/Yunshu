@@ -2013,6 +2013,40 @@
      "why": "legacy loop, not grown"
     }
    }
+  },
+  "docs_ask": {
+   "module": "python/yunshu_console/docs_ask.py",
+   "what": "Console docs retrieval and local engine SSE answers; request limits apply before proxy inference.",
+   "cells": {
+    "mtp": {
+     "s": "na",
+     "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
+    },
+    "dflash": {
+     "s": "na",
+     "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
+    },
+    "driver": {
+     "s": "na",
+     "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
+    },
+    "batch": {
+     "s": "na",
+     "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
+    },
+    "generic": {
+     "s": "na",
+     "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
+    },
+    "text": {
+     "s": "na",
+     "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
+    },
+    "loop": {
+     "s": "na",
+     "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
+    }
+   }
   }
  },
  "exclusions": [
@@ -2464,7 +2498,10 @@
   "YUNSHU_DEBUG_TREE_PROFILE": "tree_drafts",
   "YUNSHU_NEXT_TURN_PREFILL": "next_turn_rehearsal",
   "YUNSHU_NEXT_TURN_DELAY_S": "next_turn_rehearsal",
-  "YUNSHU_GC_POLICY": "gc_policy"
+  "YUNSHU_GC_POLICY": "gc_policy",
+  "YUNSHU_DOCS_ASK_MAX_QUESTION": "docs_ask",
+  "YUNSHU_DOCS_ASK_MAX_HISTORY": "docs_ask",
+  "YUNSHU_DOCS_ASK_MAX_TOKENS": "docs_ask"
  },
  "gap_budget": 55,
  "settings_categories": [

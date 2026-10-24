@@ -330,6 +330,9 @@ _add("YUNSHU_CONSOLE_DISCOVER_PORTS", "str", "all", "Where the console looks for
 _add("YUNSHU_CONSOLE_DISCOVER_S", "float", 2.0, "Seconds between the console's engine discovery probes in `--engine auto` mode (short-timeout GET /health on each candidate, asynchronous).", "console", minimum=0.5)
 _add("YUNSHU_CONSOLE_ENGINE_TOKEN", "str", None, "Bearer token the console process uses to read the engine while it records history. Unset: YUNSHU_AUTH_TOKEN. The browser's own token is passed through to the engine unchanged.", "console", secret=True)
 _add("YUNSHU_CONSOLE_PAUSE_FILE", "path", None, "Path of a JSON pause file `{\"pause\": true, \"until\": <epoch or null>, \"reason\": \"...\"}`. While it exists and is not stale (past `until`, or older than 2 h when `until` is null) the console process sends no request to any engine (no status polling, no discovery probes) so a timing A/B is not perturbed by an asymmetric monitor; the proxy still forwards user-initiated requests and the status island shows the reason. gpuq writes `$GPUQ_DIR/console-pause.json` while a timing (--quiet or `-speed`) job runs.", "console")
+_add("YUNSHU_DOCS_ASK_MAX_QUESTION", "int", 2000, "Maximum characters in a console documentation question or each history message. Ask AI uses only the attached engine's already loaded text model and caller credentials.", "console", minimum=1)
+_add("YUNSHU_DOCS_ASK_MAX_HISTORY", "int", 8, "Maximum prior user/assistant messages accepted by console Ask AI. Recent messages are additionally trimmed to the model context budget.", "console", minimum=0)
+_add("YUNSHU_DOCS_ASK_MAX_TOKENS", "int", 1024, "Maximum generated tokens for console Ask AI, additionally capped to a quarter of the attached model context. Documentation retrieval is local BM25; no model is loaded implicitly. Measurement pause blocks Ask AI.", "console", minimum=1)
 _add("YUNSHU_CONSOLE_POLL_S", "float", 1.0, "Seconds between the console process's reads of the engine (status and finished requests, the same cheap endpoints the console page uses). 1 s gives the 1 s history resolution.", "console", minimum=0.25)
 _add("YUNSHU_CONSOLE_HISTORY", "bool", True, "Record the metrics history (1 s for 1 h, 10 s for 24 h, 1 min for the retention) and the request log (metadata only, never prompts or outputs) to ~/.yunshu/console-history.sqlite, with engine outages kept as explicit gaps and events. Off keeps the console live-only.", "console")
 _add("YUNSHU_CONSOLE_DB", "path", None, "Where the console process keeps its history (SQLite, WAL). Unset: ~/.yunshu/console-history.sqlite.", "console")
@@ -541,6 +544,9 @@ _RESTART = frozenset(
         "YUNSHU_CONSOLE_DISCOVER_PORTS",
         "YUNSHU_CONSOLE_DISCOVER_S",
         "YUNSHU_CONSOLE_POLL_S",
+        "YUNSHU_DOCS_ASK_MAX_QUESTION",
+        "YUNSHU_DOCS_ASK_MAX_HISTORY",
+        "YUNSHU_DOCS_ASK_MAX_TOKENS",
         "YUNSHU_CONSOLE_PAUSE_FILE",
         "YUNSHU_CONSOLE_HISTORY",
         "YUNSHU_CONSOLE_DB",

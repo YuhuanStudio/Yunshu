@@ -1,7 +1,7 @@
 import { isCalm } from "./outage-view";
 import { SegmentedTray } from "./SegmentedTray";
 import { gbTotalText } from "./byte-format";
-import { Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { lazyPage, warmPages } from "./lazy-page";
 import {
   Breadcrumb,
@@ -95,6 +95,8 @@ import {
   routeHref,
   type Page,
 } from "./route";
+const AskAI = lazy(() => import("./docs/AskAI"));
+
 const Dashboard = lazyPage(() =>
   import("./Dashboard").then((m) => ({ default: m.Dashboard })),
 );
@@ -279,6 +281,23 @@ export default function App() {
   // Phones (< 640px): the top bar is the hamburger and the title only; search and the bell
   // live in the menu sheet, and the hamburger carries a dot while something is unread.
   const wide = useMinWidth(640);
+  const [askOpen, setAskOpen] = useState(false);
+  const [askSeed, setAskSeed] = useState("");
+  const [askMounted, setAskMounted] = useState(false);
+  const openAsk = () => {
+    setAskSeed(query === t("docs.ask.title") ? "" : query);
+    setAskMounted(true);
+    setAskOpen(true);
+  };
+  useEffect(() => {
+    const open = () => {
+      setAskSeed("");
+      setAskMounted(true);
+      setAskOpen(true);
+    };
+    addEventListener("yunshu-docs-ask", open);
+    return () => removeEventListener("yunshu-docs-ask", open);
+  }, []);
   const [help, setHelp] = useState(false);
   const loadedModel = engine.status?.models.find((m) => m.loaded);
   const [palette, setPalette] = useState(false),
@@ -394,6 +413,13 @@ export default function App() {
     return () => removeEventListener("keydown", onKey);
   }, []);
   const commands: CommandPaletteItem[] = [
+    {
+      id: "docs-ask",
+      title: t("docs.ask.title"),
+      description: t("docs.ask.subtitle"),
+      group: t("shell.cmd.docs"),
+      onSelect: openAsk,
+    },
     ...PAGES.map((key) => ({
       id: "go:" + key,
       title: pageTitle(key),
@@ -488,6 +514,17 @@ export default function App() {
           `${c.title} ${c.description ?? ""} ${c.id}`.toLowerCase().includes(q),
         )
       : commands),
+    ...(q
+      ? [
+          {
+            id: "docs-ask-question",
+            title: t("docs.ask.title"),
+            description: query,
+            group: t("shell.cmd.docs"),
+            onSelect: openAsk,
+          },
+        ]
+      : []),
     ...docItems,
   ];
   // The route as last applied: navigate() sets it before the hashchange it causes, so that echo is ignored.
@@ -1158,6 +1195,16 @@ export default function App() {
               <FooterStatus engine={engine} connection={connection} />
             </footer>
           </div>
+          {askMounted && (
+            <Suspense fallback={null}>
+              <AskAI
+                initialQuestion={askSeed}
+                open={askOpen}
+                onClose={() => setAskOpen(false)}
+                connection={connection}
+              />
+            </Suspense>
+          )}
           <ShortcutsSheet open={help} onClose={() => setHelp(false)} />
           <CommandPalette
             open={palette}
