@@ -74,6 +74,26 @@ If the gateway is up but the model failed to load, the page shows the error and 
 page that throws is contained by a per-page error boundary. When the engine returns, the live feed resumes and
 the stretch that was missed is filled from the recorded history.
 
+## Following engines automatically
+
+`yunshu console --engine auto` (or `YUNSHU_CONSOLE_ENGINE=auto`) lets one console stay open while engines
+start and stop on different ports. Every `YUNSHU_CONSOLE_DISCOVER_S` (2 s) it asks each candidate,
+`127.0.0.1` on the ports of `YUNSHU_CONSOLE_DISCOVER_PORTS` (default `8000,18990-18999`), for `GET /health`
+with a short timeout, without blocking the proxy. A port counts only when `/health` answers like a Yunshu
+engine; any other server is ignored.
+
+- The engine being followed is kept while it is healthy. When it disappears (two missed probes) the console
+  moves to the most recently started live engine (smallest uptime).
+- The status island lists the live engines (port, model, uptime). **Use** pins one (it wins while it is
+  live); **Follow the newest** unpins. Over the API: `GET /console/api/engines` lists them
+  (`url`, `port`, `model`, `uptime_seconds`, `state`, `selected`, `pinned`), and
+  `POST /console/api/engines` with `{"url": ...}` (or `{"port": ...}`) pins, `{"url": null}` unpins.
+- With no live engine the island says "Waiting for an engine" and the console connects as soon as one
+  starts. The poller and the reverse proxy (HTTP and WebSocket) follow the switch; a stream already open to
+  the old engine is not cut.
+- The request history stores the engine URL and start time with each request, so a restart shows as a
+  separate session instead of mixing into the previous one, and a `engine_switched` event marks the move.
+
 ## Docs inside the console
 
 The 文件 / Docs section renders the user documentation (getting started, API reference, guides,

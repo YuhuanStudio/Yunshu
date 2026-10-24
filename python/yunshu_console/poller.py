@@ -199,6 +199,32 @@ class Poller:
         self.ticks = 0
         self.errors = 0
         self.watch = DeploymentWatch()
+        self.engine_started: float | None = (
+            None  # when the engine being read started (wall clock)
+        )
+
+    def retarget(self, url: str) -> None:
+        """Follow another engine (``--engine auto``): the next tick reads ``url`` with fresh state, so
+        its requests and metrics are never mixed with the previous engine's cursor or baseline."""
+        url = url.rstrip("/")
+        if url == self.engine_url:
+            return
+        if self.store is not None:
+            self.store.add_event(
+                self._clock(), "engine_switched", {"from": self.engine_url, "to": url}
+            )
+        self.engine_url = url
+        self._client.base_url = httpx.URL(url)
+        self.up = self.since = self.last_ok = None
+        self.last_error = self.error_status = None
+        self.engine = {}
+        self.boot_id = self.seq = None
+        self._window.clear()
+        self._models = {}
+        self._load_error = self._pid = self._uptime = None
+        self._host_at = 0.0
+        self.engine_started = None
+        self.watch = DeploymentWatch()
 
     # ── http ────────────────────────────────────────────────────────────
     def _headers(self) -> dict[str, str]:
@@ -215,8 +241,11 @@ class Poller:
     async def tick(self) -> None:
         now = self._clock()
         self.ticks += 1
+        target = self.engine_url
         try:
             status = await self._get("/v1/yunshu/status")
+            if target != self.engine_url:  # switched while the read was in flight
+                return
         except httpx.HTTPStatusError as exc:
             self._down(
                 now, f"HTTP {exc.response.status_code}", exc.response.status_code
@@ -291,6 +320,8 @@ class Poller:
             None,
             None,
         )
+        if uptime is not None and (restarted or self.engine_started is None):
+            self.engine_started = round(now - uptime, 1)
         self._uptime, self._pid = uptime, pid
         models = {
             str(m.get("id")): bool(m.get("loaded"))
@@ -342,7 +373,13 @@ class Poller:
         self.boot_id = boot
         for entry in reversed(page.get("data") or []):  # oldest first
             if self.store is not None:
-                self.store.add_request(entry)
+                self.store.add_request(
+                    {
+                        **entry,
+                        "engine_url": self.engine_url,
+                        "engine_started": self.engine_started,
+                    }
+                )
             self.requests_recorded += 1
             if isinstance(entry.get("t"), (int, float)):
                 self._window.append(entry)
@@ -394,6 +431,7 @@ class Poller:
             "last_error": self.last_error,
             "error_status": self.error_status,
             "engine_url": self.engine_url,
+            "engine_started": self.engine_started,
             "engine": self.engine,
             "poll_s": self.interval_s,
             "requests_recorded": self.requests_recorded,

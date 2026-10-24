@@ -272,6 +272,14 @@
       "status": "stable"
     },
     {
+      "id": "console-auto-engine",
+      "group": "ops",
+      "title": "Console follows engines automatically",
+      "summary": "yunshu console --engine auto probes local ports (GET /health), follows the newest live Yunshu engine, keeps it while healthy, lets you pin one from the status island, and shows waiting for an engine instead of an error; history records each engine start as its own session",
+      "doc": "docs/CONSOLE.md",
+      "status": "stable"
+    },
+    {
       "id": "api-keys",
       "group": "ops",
       "title": "API keys and quotas",

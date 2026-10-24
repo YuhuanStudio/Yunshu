@@ -176,6 +176,8 @@ def test_requests_hold_metadata_only(tmp_path):
             "ttft_ms",
             "queue_wait_ms",
             "key_name",
+            "engine_url",
+            "engine_started",
             "cancelled",
         ]
     )

@@ -324,7 +324,9 @@ _add("YUNSHU_SERVE_LOG_KEEP", "int", 4, "Serve log: rotated files kept.", "obser
 _add("YUNSHU_CONSOLE", "bool", True, "`yunshu serve` also starts the console process (the web console, the docs, and the metrics history recorder) as a sibling on YUNSHU_CONSOLE_PORT. The console is its own light process that never loads MLX: it keeps running and recording while the engine restarts or crashes, and an engine fault cannot take it down. `--no-console` turns it off; `yunshu console` runs it on its own.", "console")
 _add("YUNSHU_CONSOLE_PORT", "int", 8100, "Port of the console process (the web console at /console/, its reverse proxy to the engine API, and the history endpoints). 8100 stays clear of the engine's 8000 and of the usual dev servers (3000, 5173, 8080, 8888).", "console", minimum=1)
 _add("YUNSHU_CONSOLE_HOST", "str", None, "Bind host of the console process. Unset: the engine's own host for the sibling, 127.0.0.1 for a standalone `yunshu console`.", "console")
-_add("YUNSHU_CONSOLE_ENGINE", "str", None, "Engine URL the console process watches and proxies to. Unset: the engine that started it, else http://127.0.0.1:8000. Point it at a LAN or remote engine to watch that one.", "console")
+_add("YUNSHU_CONSOLE_ENGINE", "str", None, "Engine URL the console process watches and proxies to. Unset: the engine that started it, else http://127.0.0.1:8000. Point it at a LAN or remote engine to watch that one. `auto` follows whichever local engine is running (see YUNSHU_CONSOLE_DISCOVER_PORTS).", "console")
+_add("YUNSHU_CONSOLE_DISCOVER_PORTS", "str", "8000,18990-18999", "Ports on 127.0.0.1 the console probes (GET /health) for Yunshu engines when it runs with `--engine auto` (or YUNSHU_CONSOLE_ENGINE=auto): comma-separated ports and ranges. A port counts only when its /health answers like a Yunshu engine; anything else is ignored. The console keeps the engine it follows while that one is healthy, and switches to the most recently started live engine when it disappears (or to one pinned in the console).", "console")
+_add("YUNSHU_CONSOLE_DISCOVER_S", "float", 2.0, "Seconds between the console's engine discovery probes in `--engine auto` mode (short-timeout GET /health on each candidate, asynchronous).", "console", minimum=0.5)
 _add("YUNSHU_CONSOLE_ENGINE_TOKEN", "str", None, "Bearer token the console process uses to read the engine while it records history. Unset: YUNSHU_AUTH_TOKEN. The browser's own token is passed through to the engine unchanged.", "console", secret=True)
 _add("YUNSHU_CONSOLE_POLL_S", "float", 1.0, "Seconds between the console process's reads of the engine (status and finished requests, the same cheap endpoints the console page uses). 1 s gives the 1 s history resolution.", "console", minimum=0.25)
 _add("YUNSHU_CONSOLE_HISTORY", "bool", True, "Record the metrics history (1 s for 1 h, 10 s for 24 h, 1 min for the retention) and the request log (metadata only, never prompts or outputs) to ~/.yunshu/console-history.sqlite, with engine outages kept as explicit gaps and events. Off keeps the console live-only.", "console")
@@ -533,6 +535,8 @@ _RESTART = frozenset(
         "YUNSHU_CONSOLE_HOST",
         "YUNSHU_CONSOLE_ENGINE",
         "YUNSHU_CONSOLE_ENGINE_TOKEN",
+        "YUNSHU_CONSOLE_DISCOVER_PORTS",
+        "YUNSHU_CONSOLE_DISCOVER_S",
         "YUNSHU_CONSOLE_POLL_S",
         "YUNSHU_CONSOLE_HISTORY",
         "YUNSHU_CONSOLE_DB",

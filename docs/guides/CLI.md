@@ -56,6 +56,7 @@ Stop/unload a model before removing its files.
 yunshu serve -m org/name --port 8000   # also starts the console process on :8100
 yunshu serve -m org/name --no-console
 yunshu console --engine http://127.0.0.1:8000
+yunshu console --engine auto      # follow whichever local engine is running
 yunshu status
 yunshu top                    # refresh the merged health/system/engine API every 2 s
 yunshu top --once              # one snapshot

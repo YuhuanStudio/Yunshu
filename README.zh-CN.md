@@ -110,6 +110,7 @@ Yunshu 提供的所有能力，分组列出。每一行链接到有示例与限�
 |---|---|
 | [网页 console](docs/CONSOLE.md) | 实时请求阶段、历史、日志、模型、下载、缓存、测试、密钥、设置、状态岛 |
 | [Console 进程](docs/CONSOLE.md) | console 与引擎分开运行（端口 8100）：引擎离线时仍可用、历史与请求记录、离线缺口 |
+| [Console 自动跟随引擎](docs/CONSOLE.md) | `yunshu console --engine auto` 在本机端口找出 Yunshu 引擎并跟随最新启动者；可在状态岛固定一个；历史把每次引擎启动分成独立会话 |
 | [API 密钥与配额](docs/guides/AUTH_AND_KEYS.md) | 多把密钥，含权限、到期、每钥用量与每日配额 |
 | [设置写入与 CORS 编辑](docs/guides/AUTH_AND_KEYS.md) | 从 console 或 API 写入引擎设置（需重启者会提示）并编辑 CORS |
 | [主机遥测](docs/guides/TELEMETRY.md) | 功耗、GPU 时钟、温度、散热与内存压力、每请求能耗估计、Prometheus |

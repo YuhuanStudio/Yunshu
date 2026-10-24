@@ -687,3 +687,45 @@ export async function cancelRequest(
     timeoutMs: options.timeoutMs ?? 180_000,
   });
 }
+
+/** One engine the console process discovered (`yunshu console --engine auto`). */
+export interface DiscoveredEngine {
+  url: string;
+  port: number | null;
+  model: string | null;
+  uptime_seconds: number | null;
+  state: string | null;
+  selected: boolean;
+  pinned: boolean;
+}
+
+export interface EngineList {
+  /** `auto` follows discovered engines; `fixed` is one URL and shows no switcher. */
+  mode: "auto" | "fixed";
+  selected: string | null;
+  pinned: string | null;
+  waiting: boolean;
+  data: DiscoveredEngine[];
+}
+
+export function fetchEngines(
+  connection: Connection,
+  options: Pick<RequestOptions, "signal" | "timeoutMs"> = {},
+): Promise<EngineList> {
+  return requestJson<EngineList>(
+    connection,
+    "/yunshu/console/engines",
+    options,
+  );
+}
+
+/** Pin a live engine, or `null` to go back to following the newest one. */
+export function pinEngine(
+  connection: Connection,
+  url: string | null,
+): Promise<EngineList> {
+  return requestJson<EngineList>(connection, "/yunshu/console/engines", {
+    method: "POST",
+    body: { url },
+  });
+}
