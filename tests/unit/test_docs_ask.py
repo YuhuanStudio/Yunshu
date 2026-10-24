@@ -12,7 +12,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from yunshu_console.app import create_app
-from yunshu_console.docs_ask import Ask, ChunkIndex, budget_prompt, tokens
+from yunshu_console.docs_ask import (
+    Ask,
+    ChunkIndex,
+    budget_prompt,
+    retrieval_query,
+    tokens,
+)
 from yunshu_console.store import HistoryStore
 from yunshu_engine import settings
 
@@ -418,3 +424,55 @@ def test_stop_closes_upstream_stream(tmp_path):
             assert closed.is_set()
 
     asyncio.run(run())
+
+
+def test_reasoning_only_is_not_a_completed_visible_answer(tmp_path):
+    with TestClient(
+        console(
+            tmp_path,
+            engine(
+                [],
+                stream='data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}\n\ndata: [DONE]\n\n',
+            ),
+        )
+    ) as client:
+        response = client.post("/console/api/docs/ask", json=BODY)
+        assert "event: error" in response.text
+        assert "event: done" not in response.text
+        assert "thinking" not in response.text
+
+
+def test_followup_retrieval_retains_previous_question_topic():
+    body = Ask(
+        **{
+            **BODY,
+            "question": "Can I disable it?",
+            "history": [
+                {"role": "user", "content": "APC prefix cache"},
+                {"role": "assistant", "content": "The cache is automatic."},
+            ],
+        }
+    )
+    index = ChunkIndex(
+        [
+            chunk(text="unrelated"),
+            {
+                **chunk("guides/prompt-caching", "APC prefix cache"),
+                "title": "Prompt caching",
+            },
+        ]
+    )
+    assert index.search(retrieval_query(body))[0]["slug"] == "guides/prompt-caching"
+
+
+def test_docs_uses_same_origin_path_policy_as_proxy(tmp_path):
+    log = []
+    app = console(tmp_path, engine(log))
+    app.state.engine_url = "http://engine/v1"
+    with TestClient(app) as client:
+        assert client.post("/console/api/docs/ask", json=BODY).status_code == 200
+    assert [req.url.path for req in log] == [
+        "/v1/yunshu/status",
+        "/v1/models",
+        "/v1/chat/completions",
+    ]

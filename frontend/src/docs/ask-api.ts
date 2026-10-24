@@ -23,6 +23,13 @@ export type AskState = {
   history: number;
 };
 
+/** getRandomValues also works on LAN HTTP, where randomUUID is unavailable. */
+export function makeTabId(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
 export function docsEndpoint(connection: Connection, path: string): string {
   const url = new URL(connection.baseUrl);
   url.pathname =
@@ -73,9 +80,9 @@ export async function readAskStream(
   try {
     while (true) {
       const next = await reader.read();
-      buffer += decoder
-        .decode(next.value, { stream: !next.done })
-        .replace(/\r\n/g, "\n");
+      buffer = (
+        buffer + decoder.decode(next.value, { stream: !next.done })
+      ).replace(/\r\n/g, "\n");
       let boundary;
       while ((boundary = buffer.indexOf("\n\n")) >= 0) {
         const frame = buffer.slice(0, boundary);

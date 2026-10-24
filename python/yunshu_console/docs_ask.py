@@ -109,6 +109,16 @@ class Feedback(BaseModel):
     opinion: Literal["good", "bad"]
 
 
+def retrieval_query(body: Ask) -> str:
+    """Keep the most recent question's topic available for short follow-ups.
+
+    This is a bounded lexical query, not a second model call. Orama deduplicates
+    tokens, so repeated history words cannot gain weight by repetition.
+    """
+    previous = next((m.content for m in reversed(body.history) if m.role == "user"), "")
+    return body.question + (" " + previous[:512] if previous else "")
+
+
 def event(kind: str, value: dict) -> str:
     return f"event: {kind}\ndata: {json.dumps(value, ensure_ascii=False)}\n\n"
 
@@ -141,7 +151,7 @@ def budget_prompt(
     )
     if remaining < 128:
         raise failure("context_too_small", 400)
-    history = []
+    history: list[dict] = []
     # Keep recent history within a quarter of the available input budget.
     used = 0
     for msg in reversed(body.history):
@@ -151,7 +161,7 @@ def budget_prompt(
         history.insert(0, msg.model_dump())
         used += size
     remaining -= used
-    sources = []
+    sources: list[dict] = []
     for chunk in chunks:
         prefix = f"\n[{len(sources) + 1}] {chunk['title']} / {chunk['heading']} ({chunk['url']})\n"
         room = remaining - len(prefix.encode()) - 16
@@ -203,6 +213,8 @@ def router_for(
     async def models(request: Request) -> tuple[str, list[dict], dict]:
         if paused():
             raise failure("measurement_paused", 409)
+        from .app import proxy_url
+
         http = app.state.http
         base = app.state.engine_url
         discovery = app.state.discovery
@@ -216,7 +228,7 @@ def router_for(
         try:
             # Read status first: /v1/models can list unloaded models too.
             status = await http.get(
-                base + "/v1/yunshu/status", headers=headers, timeout=3
+                proxy_url(base, "v1/yunshu/status"), headers=headers, timeout=3
             )
             if status.status_code in (401, 403):
                 raise HTTPException(
@@ -247,7 +259,9 @@ def router_for(
                 raise failure("no_model")
             if paused():
                 raise failure("measurement_paused", 409)
-            cards = await http.get(base + "/v1/models", headers=headers, timeout=3)
+            cards = await http.get(
+                proxy_url(base, "v1/models"), headers=headers, timeout=3
+            )
             cards.raise_for_status()
             return base, loaded, {c["id"]: c for c in cards.json().get("data", [])}
         except (httpx.HTTPError, ValueError, KeyError):
@@ -297,17 +311,17 @@ def router_for(
                 max(1, context // 4),
             )
             chunks = await asyncio.to_thread(index, body.language)
-            hits = await asyncio.to_thread(chunks.search, body.question)
+            hits = await asyncio.to_thread(chunks.search, retrieval_query(body))
             messages, sources = budget_prompt(body, hits, context, output)
             if paused():
                 raise failure("measurement_paused", 409)
             # Same forward seam as the existing console proxy: caller auth only,
             # pinned engine origin, never the recorder's privileged token.
-            from .app import proxy_headers
+            from .app import proxy_headers, proxy_url
 
             req = app.state.http.build_request(
                 "POST",
-                base + "/v1/chat/completions",
+                proxy_url(base, "v1/chat/completions"),
                 headers=proxy_headers(request),
                 json={
                     "model": model,
@@ -336,6 +350,7 @@ def router_for(
         ask_id = uuid.uuid4().hex
 
         async def generate():
+            has_text = False
             try:
                 yield event(
                     "sources", {"id": ask_id, "model": model, "sources": sources}
@@ -348,7 +363,10 @@ def router_for(
                         continue
                     data = line[5:].strip()
                     if data == "[DONE]":
-                        yield event("done", {"id": ask_id})
+                        if has_text:
+                            yield event("done", {"id": ask_id})
+                        else:
+                            yield event("error", {"code": "engine_error"})
                         return
                     row = json.loads(data)
                     if "error" in row:
@@ -357,6 +375,7 @@ def router_for(
                     for choice in row.get("choices", []):
                         text = choice.get("delta", {}).get("content")
                         if isinstance(text, str) and text:
+                            has_text = True
                             yield event("token", {"text": text})
                 yield event("error", {"code": "stream_incomplete"})
             except (httpx.HTTPError, ValueError, AttributeError, TypeError):

@@ -24,6 +24,7 @@ import { t, tr, useLocale } from "../i18n";
 import { docHref } from "./links";
 import {
   docsRequest,
+  makeTabId,
   readAskStream,
   type AskState,
   type ChatMessage,
@@ -80,7 +81,7 @@ export default function AskAI({
   const [retry, setRetry] = useState(0);
   const [copied, setCopied] = useState<number | null>(null);
   const controller = useRef<AbortController | null>(null);
-  const tabId = useRef(crypto.randomUUID());
+  const [tabId] = useState(makeTabId);
   const scroll = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const stop = () => controller.current?.abort();
@@ -145,7 +146,7 @@ export default function AskAI({
       const response = await docsRequest(
         connection,
         "ask",
-        { question, language: locale, tab_id: tabId.current, history },
+        { question, language: locale, tab_id: tabId, history },
         abort.signal,
       );
       await readAskStream(response, (event) => {

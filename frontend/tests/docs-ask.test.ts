@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildChunks } from "../scripts/docs-chunks.mjs";
-import { readAskStream, docsEndpoint } from "../src/docs/ask-api.ts";
+import { readAskStream, docsEndpoint, makeTabId } from "../src/docs/ask-api.ts";
 
 test("heading chunks preserve code and duplicate anchors; fence headings are not sources", () => {
   const dir = mkdtempSync(join(tmpdir(), "docs-ask-"));
@@ -112,4 +112,27 @@ test("pinned Orama fixture stays in sync with the docs tokenizer and ranking", a
       expected,
     );
   }
+});
+
+test("SSE normalizes CRLF even when each byte arrives separately", async () => {
+  const wire =
+    'event: token\r\ndata: {"text":"ok"}\r\n\r\nevent: done\r\ndata: {"id":"a"}\r\n\r\n';
+  const bytes = new TextEncoder().encode(wire);
+  const response = new Response(
+    new ReadableStream({
+      start(c) {
+        for (const byte of bytes) c.enqueue(new Uint8Array([byte]));
+        c.close();
+      },
+    }),
+  );
+  const events: unknown[] = [];
+  await readAskStream(response, (e) => events.push(e));
+  assert.equal(events.length, 2);
+});
+
+test("tab ids do not depend on secure-context randomUUID", () => {
+  const id = makeTabId();
+  assert.match(id, /^[a-f0-9]{32}$/);
+  assert.notEqual(makeTabId(), id);
 });

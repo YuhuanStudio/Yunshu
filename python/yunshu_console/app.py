@@ -124,6 +124,11 @@ def check_access(request: Request) -> None:
             )
 
 
+def proxy_url(base: str, path: str, query: bytes = b"") -> httpx.URL:
+    """Use the attached origin exactly as the reverse proxy does."""
+    return httpx.URL(base).copy_with(path="/" + path.lstrip("/"), query=query)
+
+
 def proxy_headers(request: Request) -> list[tuple[str, str]]:
     """Shared caller-auth forwarding policy for proxy and local docs inference."""
     headers = [
@@ -420,9 +425,7 @@ def create_app(
     async def forward(path: str, request: Request) -> Response:
         headers = proxy_headers(request)
         base = discovery.current_url if discovery is not None else engine_url
-        url = httpx.URL(base).copy_with(
-            path="/" + path, query=request.url.query.encode()
-        )
+        url = proxy_url(base, path, request.url.query.encode())
         has_body = (
             request.method not in ("GET", "HEAD", "OPTIONS")
             or "content-length" in request.headers

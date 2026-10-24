@@ -46,6 +46,17 @@ for (const locale of ["en", "zh-TW", "zh-CN"]) {
       dialog.getByRole("link", { name: /Prompt caching/ }),
     ).toHaveAttribute("href", "#/docs/guides/prompt-caching?h=apc");
     await expect(dialog.locator("pre")).toContainText("yunshu serve");
+    if (locale === "en") {
+      await page
+        .context()
+        .grantPermissions(["clipboard-read", "clipboard-write"]);
+      await dialog
+        .getByRole("button", { name: "Copy answer", exact: true })
+        .click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toContain("APC");
+    }
     await dialog
       .getByRole("button", {
         name:
