@@ -378,6 +378,41 @@ def _is_yunshu(host: str, port: int) -> bool:
     return False
 
 
+def check_sampling(model: str) -> list[Check]:
+    """The sampling a request without sampling parameters gets on this model, per mode."""
+    try:
+        from yunshu_engine.sampling_defaults import defaults_by_mode
+
+        p = Path(model).expanduser()
+        if not p.is_dir():
+            from yunshu_gateway.sampling_defaults import _as_dir
+
+            d = _as_dir(model)
+            p = Path(d) if d else p
+        if not p.is_dir():
+            return []
+        d = defaults_by_mode(p)
+
+        def fmt(m: str) -> str:
+            e = d[m]
+            return (
+                f"T={e['temperature']['value']} top_p={e['top_p']['value']} "
+                f"top_k={e['top_k']['value']} presence={e['presence_penalty']['value']} "
+                f"({e['temperature']['source']})"
+            )
+
+        return [
+            Check(
+                "sampling defaults",
+                "ok",
+                f"default mode {d['default_mode']}; thinking {fmt('thinking')}; non-thinking {fmt('non_thinking')}",
+                "A request value always wins; YUNSHU_SAMPLING_DEFAULTS=api uses API defaults.",
+            )
+        ]
+    except Exception as exc:
+        return [Check("sampling defaults", "warn", f"unreadable: {exc}", "")]
+
+
 def check_settings() -> list[Check]:
     try:
         warnings = settings.validate(warn=False)
@@ -898,6 +933,7 @@ def run_checks(
     checks += check_local_api_storage()
     if model:
         checks += check_model(model, info, metadata_only=no_metal)
+        checks += check_sampling(model)
         if not no_metal:
             checks += check_speculative(model)
     checks.append(check_port(host, port))

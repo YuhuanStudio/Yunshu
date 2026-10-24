@@ -8,6 +8,7 @@
   "code-execution",
   "prompt-caching",
   "structured-output",
+  "sampling",
   "multimodal",
   "transports",
   "auth-and-keys",

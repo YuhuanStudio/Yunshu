@@ -80,6 +80,12 @@ const models: Shape<typeof zh> = {
     "此引擎版本没有提供内存持有者明细（需要较新的 Yunshu）。",
   "detail.holders.error": "无法读取内存明细：{error}",
   "detail.holders.loading": "正在读取内存明细…",
+  "detail.sampling.title": "采样默认值",
+  "detail.sampling.description":
+    "未带采样参数的请求会采用这些值；请求带的值永远优先。",
+  "detail.sampling.thinking": "思考模式",
+  "detail.sampling.nonThinking": "非思考模式",
+  "detail.sampling.defaultMode": "默认模式：{mode}",
   "detail.card.title": "模型卡",
   "detail.card.description": "服务对此模型返回的原始数据。",
   "detail.card.loading": "正在读取模型信息…",

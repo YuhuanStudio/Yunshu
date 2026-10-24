@@ -77,6 +77,12 @@ const models = {
     "此引擎版本沒有提供記憶體持有者明細（需要較新的 Yunshu）。",
   "detail.holders.error": "無法讀取記憶體明細：{error}",
   "detail.holders.loading": "讀取記憶體明細…",
+  "detail.sampling.title": "取樣預設值",
+  "detail.sampling.description":
+    "未帶取樣參數的請求會採用這些值；請求帶的值永遠優先。",
+  "detail.sampling.thinking": "思考模式",
+  "detail.sampling.nonThinking": "非思考模式",
+  "detail.sampling.defaultMode": "預設模式：{mode}",
   "detail.card.title": "模型卡",
   "detail.card.description": "服務對此模型回傳的原始資料。",
   "detail.card.loading": "讀取模型資訊…",

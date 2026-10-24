@@ -711,9 +711,9 @@ def _generation_defaults(model_path: Path) -> dict:
 
 
 def _effective_sampling(model_path: Path) -> dict:
-    from .sampling_defaults import effective_defaults
+    from .sampling_defaults import defaults_by_mode
 
-    return effective_defaults(model_path)
+    return defaults_by_mode(model_path)
 
 
 def _display_name(model_id: str) -> str:
