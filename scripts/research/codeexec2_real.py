@@ -331,13 +331,15 @@ def anthropic_suite(url, results, big=False, cl=None):
                 model="m",
                 max_tokens=600,
                 tools=[CE],
-                tool_choice={"type": "tool", "name": "code_execution"},
+                tool_choice={
+                    "type": "any"
+                },  # bash, editor or python: the prompt picks python
             )
             m1 = cl.beta.messages.create(
                 messages=[
                     {
                         "role": "user",
-                        "content": "Use the tool to run exactly this Python code: kept = 6",
+                        "content": "Use the code_execution Python tool (not bash) to run exactly this Python code: kept = 6",
                     }
                 ],
                 **kw,
@@ -352,7 +354,7 @@ def anthropic_suite(url, results, big=False, cl=None):
                 messages=[
                     {
                         "role": "user",
-                        "content": "Use the tool to run exactly this Python code: print(kept * 7)",
+                        "content": "Use the code_execution Python tool (not bash) to run exactly this Python code: print(kept * 7)",
                     }
                 ],
                 **kw,
