@@ -1,5 +1,7 @@
 # Model support and validation
 
+
+> Console docs: the maintained, translated version of this page is `/docs/guides/model-support` (source `frontend/docs/guides/model-support.mdx`). This file stays as the repository-side reference read by tooling.
 > The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/guides/model-support.mdx`](../../frontend/docs/guides/model-support.mdx)); this file is its GitHub-facing counterpart.
 
 Yunshu loads text models through mlx-lm and vision-language models through

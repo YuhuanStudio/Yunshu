@@ -1,5 +1,7 @@
 # API extensions
 
+
+> Console docs: the maintained, translated version of this page is `/docs/api/extensions` (source `frontend/docs/api/extensions.mdx`). This file stays as the repository-side reference read by tooling.
 What Yunshu adds on top of the OpenAI / Anthropic / Ollama APIs, why, and how it stays out of the way.
 The rule: every extension is additive and namespaced, so the official SDKs keep working unchanged.
 

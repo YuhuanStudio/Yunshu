@@ -1,5 +1,7 @@
 # Round driver (Qwen3.5 family): packed rows, per-row invariant, multi-row drafting
 
+
+> Console docs: the maintained, translated version of this page is `/docs/developers/round-driver` (source `frontend/docs/developers/round-driver.mdx`). This file stays as the repository-side reference read by tooling.
 Status: stage 1 behind `YUNSHU_ROUND_DRIVER` (experimental, off). Once validated on Qwen3.8-27B
 (`scripts/research/validate_round_driver.sh`) it replaces, for dense Qwen3.5-family models, both
 the upstream-`BatchGenerator` shared batch and the single-request speculative lane, and the flag

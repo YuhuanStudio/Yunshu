@@ -1,5 +1,7 @@
 # Multimodal and retrieval endpoints
 
+
+> Console docs: the maintained, translated version of this page is `/docs/guides/multimodal` (source `frontend/docs/guides/multimodal.mdx`). This file stays as the repository-side reference read by tooling.
 Optional extras install the dependencies (`pip install 'yunshu[audio]'`, `[vision]`, `[generation]`,
 `[embeddings]`, `[omni]`). Each route needs a model that supports it; `/v1/models` says which. Coverage and
 verification status per route: [API surface](API_SURFACE.md). Request shapes: [API reference](../API.md).

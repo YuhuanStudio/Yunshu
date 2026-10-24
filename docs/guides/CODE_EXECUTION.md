@@ -1,5 +1,7 @@
 # Code execution (Anthropic `code_execution`)
 
+
+> Console docs: the maintained, translated version of this page is `/docs/guides/code-execution` (source `frontend/docs/guides/code-execution.mdx`). This file stays as the repository-side reference read by tooling.
 The Anthropic `code_execution_20250825`, `_20260120` and `_20260521` tools run on this machine, inside
 Anthropic's [sandbox-runtime](https://github.com/anthropics/sandbox-runtime) (`srt`). Off by default.
 

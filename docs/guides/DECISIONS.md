@@ -1,5 +1,7 @@
 # Typed decisions
 
+
+> Console docs: the maintained, translated version of this page is `/docs/api/decisions` (source `frontend/docs/api/decisions.mdx`). This file stays as the repository-side reference read by tooling.
 Use `POST /v1/decisions` for predicate, choice and ordinal score questions. A decision
 checkpoint evaluates the input and question schema in one forward pass; it generates
 no text tokens. This is separate from chat completion and JSON-schema decoding.

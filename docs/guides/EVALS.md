@@ -1,5 +1,7 @@
 # Local Evals
 
+
+> Console docs: the maintained, translated version of this page is `/docs/api/evals` (source `frontend/docs/api/evals.mdx`). This file stays as the repository-side reference read by tooling.
 The OpenAI-compatible Evals API stores definitions, runs and output items locally.
 Use the OpenAI SDK with Yunshu's `/v1` base URL. Twelve routes cover eval CRUD,
 run create/list/retrieve/cancel/delete and output-item list/retrieve.
