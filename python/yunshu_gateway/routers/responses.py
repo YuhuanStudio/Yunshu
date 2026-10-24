@@ -226,6 +226,7 @@ def _public_stored(payload: dict) -> dict:
     return {k: v for k, v in payload.items() if not k.startswith("_")}
 
 
+import asyncio
 import contextlib
 
 # A cut-short generation (token limit, the request's timeout, the memory guard) is
@@ -679,9 +680,9 @@ class ResponsesRequest(BaseModel):
     # max_output_tokens so old client code doesn't run unbounded against
     # /v1/responses. Caught by validate_request hook below.
     max_completion_tokens: int | None = Field(default=None, ge=1, le=1048576)
-    temperature: float = Field(default=1.0, ge=0.0, le=2.0)
-    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
-    top_k: int = Field(default=0, ge=0)
+    temperature: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    top_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
+    top_k: int = Field(default=None, ge=0)  # type: ignore[assignment]  # None until resolve_sampling
     stream: bool = False
     n: int = Field(default=1, ge=1, le=128)
     tools: list[ResponseTool] | None = None
@@ -708,11 +709,11 @@ class ResponsesRequest(BaseModel):
     prompt_cache_key: str | None = None
     client_metadata: dict | None = None
     service_tier: str | None = None
-    repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
-    frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
-    presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
+    repetition_penalty: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    frequency_penalty: float = Field(default=None, ge=-2.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    presence_penalty: float = Field(default=None, ge=-2.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
     logit_bias: dict[str, float] | None = None
-    min_p: float = Field(default=0.0, ge=0.0, le=1.0)
+    min_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
     top_n_sigma: float = Field(default=0.0, ge=0.0, le=10.0)
     stop: list[str] | None = None
 
@@ -1114,6 +1115,88 @@ def _parse_response_format_unchecked(
     return None
 
 
+class _DetachedRequest:
+    """The request a background generation runs under: the same state, headers and body, but it
+    never reports a client disconnect (a background response outlives its HTTP request)."""
+
+    def __init__(self, request):
+        self._request = request
+
+    def __getattr__(self, name):
+        return getattr(self._request, name)
+
+    async def is_disconnected(self) -> bool:
+        return False
+
+
+class _BgStream:
+    """Every SSE frame of a background stream, kept so a client can reconnect (``GET
+    /v1/responses/{id}?stream=true&starting_after=N``) and read on from any sequence number."""
+
+    def __init__(self, owner: str):
+        self.owner = owner
+        self.frames: list[tuple[int | None, bytes]] = []
+        self.done = False
+        self._cond: asyncio.Condition | None = None
+        self._pending = b""
+
+    def _c(self) -> asyncio.Condition:
+        if self._cond is None:
+            self._cond = asyncio.Condition()
+        return self._cond
+
+    async def push(self, chunk) -> None:
+        self._pending += chunk.encode() if isinstance(chunk, str) else bytes(chunk)
+        new: list[tuple[int | None, bytes]] = []
+        while b"\n\n" in self._pending:
+            raw, self._pending = self._pending.split(b"\n\n", 1)
+            seq = None
+            for ln in raw.splitlines():
+                if ln.startswith(b"data:") and ln[5:].strip() != b"[DONE]":
+                    with contextlib.suppress(ValueError):
+                        v = json.loads(ln[5:]).get("sequence_number")
+                        seq = v if isinstance(v, int) else None
+            new.append((seq, raw + b"\n\n"))
+        if new:
+            async with self._c():
+                self.frames.extend(new)
+                self._c().notify_all()
+
+    async def finish(self) -> None:
+        async with self._c():
+            if self._pending.strip():
+                self.frames.append((None, self._pending))
+                self._pending = b""
+            self.done = True
+            self._c().notify_all()
+
+    async def follow(self, after: int | None = None):
+        i = 0
+        while True:
+            async with self._c():
+                while i >= len(self.frames) and not self.done:
+                    await self._c().wait()
+                batch = self.frames[i:]
+                i = len(self.frames)
+                finished = self.done
+            for seq, raw in batch:
+                if after is None or seq is None or seq > after:
+                    yield raw
+            if finished and i >= len(self.frames):
+                return
+
+
+_BG_STREAMS: OrderedDict[str, _BgStream] = OrderedDict()
+_BG_STREAMS_MAX = 64
+_bg_tasks: set = set()
+
+
+def _register_bg_stream(response_id: str, bg: _BgStream) -> None:
+    _BG_STREAMS[response_id] = bg
+    while len(_BG_STREAMS) > _BG_STREAMS_MAX:
+        _BG_STREAMS.popitem(last=False)
+
+
 async def _start_background_response(req: ResponsesRequest, request: Request):
     """OpenAI background mode: store a `queued` response, kick off the full
     non-stream generation in a task under the same id, and return immediately.
@@ -1139,6 +1222,10 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
         "_owner": owner,
     }
     _store_response(response_id, queued_payload)
+    bg = _BgStream(owner) if req.stream else None
+    if bg is not None:
+        _register_bg_stream(response_id, bg)
+    detached = _DetachedRequest(request)
 
     def _mark_failed():
         cur = _get_stored_response(response_id)
@@ -1202,10 +1289,22 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
             _store_response(response_id, _in)
         try:
             request.state._forced_response_id = response_id
-            req2 = req.model_copy(
-                update={"background": False, "store": True, "stream": False}
-            )
-            await create_response(req2, request)
+            req2 = req.model_copy(update={"background": False, "store": True})
+            res = await create_response(req2, detached)
+            if isinstance(res, StreamingResponse):
+                try:
+                    async for chunk in res.body_iterator:
+                        if bg is not None:
+                            await bg.push(chunk)
+                finally:
+                    with contextlib.suppress(Exception):
+                        await res.body_iterator.aclose()
+            elif bg is not None and res is not None:
+                await bg.push(
+                    b"event: error\ndata: "
+                    + bytes(getattr(res, "body", b"{}"))
+                    + b"\n\n"
+                )
             # create_response stores the terminal payload under response_id (store=True).
             # If it returned an error JSONResponse without storing, the entry is still
             # queued/in_progress → surface a failed status instead of hanging.
@@ -1218,8 +1317,17 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
         finally:
             with contextlib.suppress(Exception):
                 request.state._forced_response_id = None
+            if bg is not None:
+                await bg.finish()
 
-    asyncio.create_task(_runner())
+    _bg_tasks.add(task := asyncio.create_task(_runner()))
+    task.add_done_callback(_bg_tasks.discard)
+    if bg is not None:
+        return StreamingResponse(
+            bg.follow(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache"},
+        )
     return JSONResponse(_public_stored(queued_payload))
 
 
@@ -1452,6 +1560,9 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
 @router.post("/responses", response_model=None)
 async def create_response(req: ResponsesRequest, request: Request):
     """OpenAI Responses API endpoint."""
+    from ..sampling_defaults import resolve_sampling
+
+    resolve_sampling(req)
     _check_permission(request, "can_infer")
     from ..capability_gate import enforce_responses
 
@@ -1502,16 +1613,10 @@ async def create_response(req: ResponsesRequest, request: Request):
     # full (non-stream) generation asynchronously under the same id. Streaming +
     # background is not supported here (would require resumable SSE), so it only
     # triggers when stream is off.
-    if has_server_tools_responses(req):
-        from ..responses_client_tools import declarations, is_client_kind
-
-        if any(is_client_kind(d) for d in declarations(req.tools).values()):
-            raise HTTPException(
-                400, "Custom tools cannot be combined with server-side tools yet"
-            )
-        return await create_with_server_tools_responses(req, request, create_response)
-    if req.background and not req.stream:
+    if req.background:
         return await _start_background_response(req, request)
+    if has_server_tools_responses(req):
+        return await create_with_server_tools_responses(req, request, create_response)
     from ..responses_client_tools import (
         create_client_tools,
         declarations,
@@ -3182,7 +3287,12 @@ async def _stream_response(
 
             # Persist final response when the client requested storage. Mirrors
             # the non-streaming path so GET /v1/responses/{id} succeeds.
-            if getattr(req, "store", None):
+            # A cancel (POST .../cancel) already persisted the terminal "cancelled"; the
+            # generation ending afterwards must not overwrite it (a background stream does).
+            _prior_stream = _get_stored_response(response_id)
+            if getattr(req, "store", None) and not (
+                _prior_stream is not None and _prior_stream.get("status") == "cancelled"
+            ):
                 _usage_dict: dict = responses_usage(
                     prompt_tok, _total_output_tok, reasoning_tok, cached_tok
                 )
@@ -3448,7 +3558,12 @@ async def _stream_response(
 
 
 @router.get("/responses/{response_id}", response_model=None)
-async def get_response(response_id: str, request: Request):
+async def get_response(
+    response_id: str,
+    request: Request,
+    stream: bool = False,
+    starting_after: int | None = None,
+):
     """Retrieve a stored response previously created with `store: true`.
 
     OpenAI-compatible: returns 404 if the response is unknown or was
@@ -3473,6 +3588,27 @@ async def get_response(response_id: str, request: Request):
                     "code": "response_not_found",
                 }
             },
+        )
+    if stream:
+        # Only a background response created with stream=true keeps its events to replay.
+        bg = _BG_STREAMS.get(response_id)
+        if bg is None:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": "Only responses created with background=true and "
+                        "stream=true can be streamed again.",
+                        "type": "invalid_request_error",
+                        "param": "stream",
+                        "code": "response_not_streamable",
+                    }
+                },
+            )
+        return StreamingResponse(
+            bg.follow(starting_after),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache"},
         )
     # Strip internal plumbing (_owner, _input_messages) before returning.
     return JSONResponse(_public_stored(payload))

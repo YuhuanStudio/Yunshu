@@ -1,0 +1,87 @@
+---
+title: 程式碼執行
+description: 啟用 Anthropic code_execution 工具，讓模型撰寫的指令在你的 Mac 上於 sandbox-runtime 內執行，並了解其容器、檔案與限制。
+---
+
+Anthropic 的 `code_execution_20250522`、`_20250825`、`_20260120` 與 `_20260521` 工具會在這台機器上、Anthropic 的 [sandbox-runtime](https://github.com/anthropics/sandbox-runtime)（`srt`）內執行。此功能預設為關閉。沙箱如何建構，請見[程式碼執行沙箱](/docs/internals/code-execution-sandbox)。
+
+## 啟用
+
+<Steps>
+<Step>
+
+安裝沙箱執行環境。需要 Node 22.12 或更新版本，`srt` 是選用的相依套件。
+
+```bash
+npm install -g @anthropic-ai/sandbox-runtime
+```
+
+</Step>
+<Step>
+
+啟用程式碼執行並啟動服務：
+
+```bash
+yunshu serve -m <model> --set code_execution=1
+```
+
+</Step>
+<Step>
+
+執行 `yunshu doctor`，查看「code execution」那一列，會顯示 `srt` 版本與自我測試結果。
+
+</Step>
+</Steps>
+
+| 設定 | 預設 | 意義 |
+|---|---|---|
+| `YUNSHU_CODE_EXECUTION` | `false` | 提供此工具。關閉時：宣告它的請求會得到指出此設定的 `400`。開啟但沒有 `srt` 時：回傳 `503`（`api_error`）並附安裝指令。指令絕不會在 `srt` 之外執行。 |
+| `YUNSHU_CODE_EXECUTION_ROOT` | `~/.yunshu/sandbox` | 每個容器一個子目錄，權限 0700。 |
+| `YUNSHU_CODE_EXECUTION_TIMEOUT` | `60.0` 秒 | 每次呼叫的牆上時間（同時是 CPU 時間上限）；逾時為 `execution_time_exceeded`。 |
+| `YUNSHU_CODE_EXECUTION_MEMORY_MB` | `2048` | 該次呼叫整個行程群組的常駐記憶體，每 100 ms 取樣一次；超過就終止該呼叫。 |
+| `YUNSHU_CODE_EXECUTION_NETWORK_ALLOW` | 未設定 | 沙箱可連線的主機，以逗號分隔（`example.com`、`*.example.com`、`host:443`）。未設定：完全沒有網路，包含 loopback。 |
+| `YUNSHU_CODE_EXECUTION_TTL_MIN` | `20.0` | 容器閒置多少分鐘後，連同其檔案一併刪除。 |
+
+## 從 Messages API 使用
+
+在 [Messages](/docs/api/messages) 請求中宣告此工具，不需要 beta 標頭：
+
+```json
+{"type": "code_execution_20250825", "name": "code_execution"}
+```
+
+模型會得到兩個子工具：`bash_code_execution` 與 `text_editor_code_execution`（`view`、`create`、`str_replace`）。回應會依 Anthropic 文件帶有 `server_tool_use` 區塊，以及 `bash_code_execution_tool_result` 或 `text_editor_code_execution_tool_result` 區塊。串流的方式相同：子工具輸入以 `input_json_delta` 傳送，每個結果區塊則整個放在一個 `content_block_start` 中。回應也帶有 `container: {id, expires_at}`（串流時位於 `message_delta.delta`）。
+
+- **容器。** 將 `container: "<id>"`（或 `{id}`）傳回來即可保留工作目錄。未知或已過期的 id 會是 `400`。容器在閒置 TTL 後刪除，總量上限為 2 GiB（最舊的先刪）。
+- **檔案。** `container_upload` 內容區塊會把 [Files API](/docs/api/files) 的檔案複製到工作目錄。每次 bash 呼叫都有全新的 `$OUTPUT_DIR`；其頂層檔案會變成 Files API 項目，以 `bash_code_execution_output {file_id}` 回傳（用 `GET /v1/files/{id}/content` 下載）。
+- **輸出限制。** stdout 與 stderr 各自在 64 KiB 截斷（並標記）。stdout 與 stderr 合計超過 1 MiB 的呼叫會被終止（`output_file_too_large`）。背景行程會隨該次呼叫結束。指令看到的環境變數只有 `PATH`、`HOME`（容器）、`TMPDIR`、`OUTPUT_DIR` 與地區設定變數，絕不包含伺服器的環境。
+
+## Python、REPL 狀態與程式化工具呼叫
+
+`20250522` 只有一個 Python 工具（`code_execution`，每次呼叫全新行程）。`20250825` 有 bash 與文字編輯器（客戶端工具在 `allowed_callers` 列出 code execution 呼叫者時再加 Python，同樣每次全新）。`20260120` 與 `20260521` 三者皆有，且 Python 行程與容器同生命週期：變數與 import 在呼叫之間保留。逾時、記憶體超限、輸出超過 1 MiB、閒置 10 分鐘、刪除容器，或超過四個容器各持有一個行程時，行程會被殺掉並乾淨地重啟。
+
+工具若設 `"allowed_callers": ["code_execution_20260120"]`，就成為直譯器中的 `async` Python 函式。程式碼 await 它時，該回合以 `stop_reason: "tool_use"` 結束，每個呼叫一個帶 `caller: {type, tool_id}` 的 `tool_use` 區塊。帶著 `container` 把結果送回，回應就接著給出 `code_execution_tool_result`。cell 最多等候 270 秒；單一 cell 最多 256 次呼叫。
+
+## OpenAI Responses 與容器
+
+同一個設定下，[Responses](/docs/api/responses) 請求可宣告 `{"type": "code_interpreter", "container": {"type": "auto"}}`（或 `cntr_` id）與託管的 `{"type": "shell", "environment": {"type": "container_auto"}}`。回應有 `code_interpreter_call`、`shell_call`、`shell_call_output` 項目、對應的串流事件，以及程式碼產生的檔案的 `container_file_citation` 註解；背景模式也可用。容器有 OpenAI containers API（`/v1/containers`，含檔案）；`expires_after`、`memory_limit`、`network_policy` 只能縮小上述設定。詳見[伺服器端工具](/docs/api/server-tools)。
+
+## 沙箱允許什麼
+
+- **寫入：** 僅限容器目錄。
+- **讀取：** `/Users`、`/Volumes`、`/home` 與容器根目錄一律拒絕；只有該容器本身與 Python 直譯器的前綴會被重新允許。你的家目錄、金鑰、`~/.yunshu` 與其他容器都讀不到。
+- **網路：** 除非列出，否則沒有。loopback 永遠無法連線，且允許的名稱無法解析到私有網段。
+- **其他：** Unix socket、Apple Events 與 `open` 皆關閉。
+
+違規事件只以中繼資料記錄（容器 id、回傳碼、位元組數）；指令、輸出與檔案內容絕不寫入日誌。
+
+<Callout type="warn">
+允許的網域清單不會檢查流量內容。允許像 `github.com` 這樣範圍廣的主機仍可能洩漏資料，所以請讓清單盡量短。
+</Callout>
+
+## 與 Anthropic 容器的差異
+
+- 是 macOS，不是 Linux x86_64。Python 是 Yunshu 所使用的直譯器（僅標準函式庫，沒有 pandas 或 numpy）。
+- 沒有 Content Credentials。
+- 沒有 Content Credentials、容器 skills 與 OpenAI 的 `programmatic_tool_calling`。
+- 沙箱在 macOS 的 `sandbox-exec` 下執行，Apple 已將它標為棄用；`srt` 是 0.0.x 版本（已測試：0.0.81）。

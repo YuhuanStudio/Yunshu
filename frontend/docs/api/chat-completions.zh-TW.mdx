@@ -26,7 +26,7 @@ description: OpenAI Chat Completions 端點，支援 tools、結構化輸出、l
 | `stream_options` | object | 否 | 僅能搭配 `stream: true`。`include_usage` 會在最後加一個 usage 區塊；`continuous_usage_stats`（vLLM 擴充）會在每個區塊都附上累計的 `usage`。 | 支援 |
 | `max_tokens` | integer | 否 | 生成長度上限，`0` 至 `1048576`。預設為 `YUNSHU_DEFAULT_MAX_TOKENS` 設定值（32768）。上下文預算仍會對它做限縮，見 `x_yunshu.budget`。 | 支援 |
 | `max_completion_tokens` | integer | 否 | OpenAI 較新的名稱。兩者同時設定時以它為準。 | 支援 |
-| `n` | integer | 否 | 回傳的選項數，`1` 至 `128`。不可與 `stream: true` 並用。 | 支援 |
+| `n` | integer | 否 | 回傳的選項數，`1` 至 `128`。搭配 `stream: true` 時，每個區塊都帶有所屬選項的 `index`；各選項依序串流（文字路徑一次處理一個請求，視覺語言模型則並行），`seed` 與非串流相同，會衍生出每個選項的種子（`seed + index`）。最後一個 usage 區塊是提示詞計一次、所有補全加總。 | 支援 |
 | `stop` | string 或 array | 否 | 最多 16 個停止序列。空字串會被丟棄。 | 支援 |
 | `user` | string | 否 | 只會連同請求 ID 寫入日誌，沒有其他作用。 | 接受但忽略 |
 | `store` | boolean | 否 | 保留完成的 completion 供日後查詢。見[儲存的 completions](/docs/api/stored-completions)。 | 支援 |
@@ -378,7 +378,7 @@ print(resp.usage.completion_tokens_details.reasoning_tokens)
 | 圖片輸入 | <Support status="supported">視覺語言模型</Support> |
 | 音訊與影片輸入區塊 | <Support status="partial">接受它們的模型</Support> |
 | 串流、`stream_options.include_usage` | <Support status="supported">支援</Support> |
-| `n` 大於 1 | <Support status="partial">僅限非串流</Support> |
+| `n` 大於 1 | <Support status="supported">串流與非串流皆可，區塊帶有 `index`</Support> |
 | Function tools、`tool_choice`、`parallel_tool_calls` | <Support status="supported">支援</Support> |
 | `response_format` 的 `json_object` 與 `json_schema` | <Support status="supported">約束式解碼</Support> |
 | `logprobs`、`top_logprobs` | <Support status="supported">最多 20 個候選</Support> |
@@ -400,7 +400,7 @@ print(resp.usage.completion_tokens_details.reasoning_tokens)
 | `echo` | boolean | 把提示詞放在回傳文字之前。搭配 `logprobs` 時，提示詞 token 也會有 logprobs（限單一字串提示詞）。 | 支援 |
 | `logprobs` | integer | `0` 至 `5`。回應使用舊版的 `tokens`、`token_logprobs`、`top_logprobs`、`text_offset` 陣列。 | 支援 |
 | `best_of` | integer | 為每個提示詞產生這麼多候選，回傳平均 logprob 最佳的 `n` 個。必須不小於 `n`；不可搭配串流或多個提示詞。所有候選都計入 `usage`。 | 支援 |
-| `n` | integer | `1` 至 `128`。不可與 `stream: true` 並用。 | 支援 |
+| `n` | integer | `1` 至 `128`。搭配 `stream: true` 時，區塊帶有 `choices[].index`，與 chat 路由相同。 | 支援 |
 | `suffix` | string | 會被接受。這裡沒有 fill-in-the-middle 模板，所以不會被使用，也不會附加到文字後面。 | 接受但忽略 |
 | `stop`、`seed`、`temperature`、`top_p`、`top_k`、`min_p`、各種 penalty、`logit_bias`、`stream_options` | | 與 chat 路由相同。 | 支援 |
 

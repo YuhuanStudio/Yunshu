@@ -64,6 +64,92 @@ Press `⌘K` (`Ctrl K` on other systems) to open the command palette. It jumps t
 
 By default the console talks to the same origin that served it. In Settings you can point it at another Yunshu server; that server must then allow the console's origin through its CORS configuration (`YUNSHU_CORS_ORIGINS`, editable in Settings when you have the admin token). Only the server address, theme and language are saved in the browser; the token is saved only if you ask for it.
 
+## Notifications
+
+The bell in the top bar opens the notification center (Notifications). It lists what changed while the console was watching, newest first, at most 50; the badge counts unread items, and opening the panel marks them read. Clear all empties it. Each row links to the page that explains it.
+
+| Event | Raised when | Leads to |
+|---|---|---|
+| Model loaded / Model failed to load | a model's loaded or error state changes between two status reads | Models |
+| Download finished / Download failed | a download that was queued or running ends | Downloads |
+| Engine unreachable / Engine back online | the engine stops or starts answering | Diagnostics / Overview |
+| Engine restarted | the reported uptime goes backwards | Diagnostics |
+| Memory pressure is high | Metal active memory reaches 80% of unified memory; clears 5 points lower | Models |
+| Server errors are rising | 3 or more 5xx responses within a minute; at most once per 5 minutes | Requests |
+
+Only warnings and errors also pop up as a toast; the rest wait in the center. The first reading after you open the page never raises anything, and downloads that had already finished are not announced.
+
+<Callout type="info">
+The events are derived in your browser from the status, request and download reads the console already makes. They are kept in `sessionStorage` per server address, so they survive a reload of the tab but not a new tab, and nothing is sent to the server. This is separate from the recorded history and its engine events, which the console process stores.
+</Callout>
+
+## Memory ledger
+
+The ledger answers "who holds the unified memory". It is fed by `/v1/yunshu/memory` on the engine, which needs inference permission, and the console re-reads it every few seconds while the page is visible. It appears in three places:
+
+- **Models**, in a model's detail, under Memory holders.
+- **Status island**, under Metal memory (with Swap, Memory pressure and the Reserve pool).
+- **Cache**, where the prefix-cache share is shown as "from the memory ledger".
+
+The table (Owner, Size, Reclaimable) lists Model weights, Prefix cache (RAM), Prefix cache (warm tier), KV of active requests, Reserve pool and Other, drawn as one bar against Metal memory. Marks show the peak since the server started, the Metal recommended limit and the wired limit.
+
+- A size the server has no counter for is shown as Unknown, not as 0; an estimate is labelled estimated.
+- When the owners add up to more than active Metal memory, "Other" shows 0 and the overshoot is stated.
+- An engine without the route shows "This engine version does not report memory owners"; polling then stops.
+
+See [Memory](/docs/internals/memory) for how each owner is counted.
+
+## Speculation and stage latency
+
+Both panels live on the Requests page and read the engine's finished-request records (`/v1/yunshu/requests/recent`).
+
+**Speculative decoding** sits under the request list. It says how many of the last finished requests reported speculation, then groups them by Mode with Requests, Acceptance (total accepted tokens divided by total drafted tokens, over requests that reported both), Accepted / drafted tokens and Rounds; copy-draft rounds are called out. Requests with no speculation record are counted as plain decode, and requests with a mode but no counters are left out of the rate. The engine reports only per-request totals, so there is no per-depth chart. A second block, Engine counters (Model, MTP cycles, Accepted, Rejected, Adaptive draft), is read from `/debug/spec-decode` and covers everything since the engine started; if `/debug` is off it says the engine does not provide them.
+
+**Stage latency** is the request waterfall, shown in a request's detail. Stages are Model lease, Gateway admit, Engine queue, Template, tokenize, Prefix-cache restore, Prefill, First decode and First flush, with time zero at gateway receive.
+
+<Callout type="warn">
+A stage the engine did not observe is listed under "Not reported", never drawn as zero. Prefill end is a host callback boundary, not a GPU profile; template and tokenize include media preparation; First flush is the server finishing the send, not the client receiving it. Rows that the page assembled from status polls (no engine record) have no waterfall, and an older engine shows "does not report stage latency yet". If the engine has host telemetry, the detail also shows an energy estimate for the prefill and decode windows; it includes other processes and idle power.
+</Callout>
+
+## Realtime health
+
+On Diagnostics, the Realtime connection card (Test connection) checks the path from this browser to the engine's Realtime WebSocket (`/v1/realtime`, over `ws` or `wss` to match the page). It opens the socket once and waits for the first event, then shows Connect, First event, Server latency and Buffer depth, each marked browser or server. It sends no audio and uses no GPU, so it proves reachability, not speech quality; a figure the engine does not report is left out rather than shown as 0. See the [Realtime API](/docs/api/realtime).
+
+## Tools tester and image to text
+
+Both open from the Playground toolbar and use the model selected there.
+
+### Tools
+
+Tools opens the tool-call and structured-output tester. On the Tool calls tab, paste tool definitions as JSON (checked as you type: a name of 1 to 64 letters, digits, underscores or hyphens, `parameters` as an object schema), enter a prompt and press Send first round. Each round shows whether the engine called a tool, and whether the arguments are valid JSON, name a tool you defined and follow the schema. Fill in a result and press Send results and continue for the next round, up to a round limit; Start over resets. On the Structured output tab, give a JSON schema and press Send: the reply is checked as JSON and against the schema. The page checks a subset of JSON Schema and lists the keywords it skipped, and the response does not say whether constrained decoding enforced the schema; only the result is checked. Requests go to `/v1/chat/completions`. See [Structured output](/docs/guides/structured-output).
+
+### Image to text
+
+Image to text (OCR dialog) takes a PNG, JPG, WEBP, TIFF or BMP up to 10 MB, sends it to `/v1/ocr` and shows the text read, with the model and token usage. The button is disabled with "No OCR or vision model is loaded" when no loaded model can answer; an OCR-type model is preferred, else the first loaded vision model. The image goes to the engine only and is not kept. The engine returns text only, so there are no boxes on the image and no confidence figure. See the [OCR API](/docs/api/ocr).
+
+## Engine pinning, auto-discovery and measurement pause
+
+These features belong to the console process (`yunshu console`), see [Console process](/docs/internals/console-process).
+
+- **Auto-discovery.** `yunshu console --engine auto` (or `YUNSHU_CONSOLE_ENGINE=auto`) keeps one console open across engine restarts and port changes. Every `YUNSHU_CONSOLE_DISCOVER_S` seconds (2) it probes the candidate ports with `/health`; `YUNSHU_CONSOLE_DISCOVER_PORTS=all` (the default) takes every TCP port listening on this Mac, or give a list such as `8000,18990-18999`. Only a port that answers like a Yunshu engine counts. It stays on the engine it follows, and moves to the most recently started live engine after two missed probes.
+- **Pinning.** The status island lists the live engines (Engines: port, model, uptime). Use pins one, and it wins while it is live; Follow the newest unpins. The same is available through the console process's engines route (`/console/api/engines`, also under `/v1/yunshu/console/engines`).
+- **Waiting.** With no live engine the island says "Waiting for an engine" and the console connects as soon as one starts; a short outage is shown calmly as a restart rather than a fault.
+- **Measurement pause.** While the file named by `YUNSHU_CONSOLE_PAUSE_FILE` holds `{"pause": true, "until": ..., "reason": "..."}`, the console polls and probes no engine, so a monitor cannot perturb a timing run, and the island shows "Paused for a measurement: reason". Requests you make yourself still go through. The pause ends at `until`, two hours after the file's last write when `until` is null, or when the file is removed.
+
+<Callout type="info">
+Request history records the engine URL and start time with each request, so a switch shows as a separate session, marked by an `engine_switched` event.
+</Callout>
+
+## Network and CORS
+
+Settings has a Network and CORS tab; changing it needs the admin token.
+
+- **Network** is read-only: the address the console uses, and Reachable from, either This machine only or Local network. It shows the `yunshu service install --force --host 127.0.0.1` or `--host 0.0.0.0` command to switch, because the listen address is changed by reinstalling the service. Before opening the local network, set `YUNSHU_AUTH_TOKEN` or create an API key, and allow only the origins you need.
+- **CORS origins** edits which websites may call the server from a browser. Add an origin as `http://` or `https://` plus host, with no path, or a lone `*`; `*` cannot be mixed with other origins and needs an explicit confirmation, because it lets any website call the server (without credentials). The page says whether this console's own origin is allowed. Save applies immediately; Reset to default restores the default.
+- If `YUNSHU_CORS_ORIGINS` or a command-line flag sets the list, that wins over the config file: the editor says so, and edits are saved but do not change the running value.
+
+See [Authentication and keys](/docs/guides/auth-and-keys) for the full CORS rules.
+
 ## What the console does not do
 
 - It is not a multi-user control plane: keys carry scopes and quotas for one local server, nothing more.

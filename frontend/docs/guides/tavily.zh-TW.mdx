@@ -1,0 +1,120 @@
+---
+title: 本機 Tavily API
+description: 使用官方 Tavily Python、JavaScript 與 LangChain 用戶端，連接 Yunshu 本機相容的 search、extract、crawl、map 與 research 端點。
+---
+
+Yunshu 在 `http://localhost:8000/tavily` 掛載與 Tavily 相容的 API。Python、JavaScript 與 LangChain 用戶端會把端點路徑附加到所設定的 base URL，所以此 API 沒有 `/v1`。伺服器端的 `web_search` 與 `web_fetch` 工具以及提供者的選擇，請見[網路搜尋](/docs/guides/web-search)。
+
+## 連接用戶端
+
+<Tabs items={["Python", "JavaScript"]}>
+<Tab value="Python">
+
+```python
+from tavily import TavilyClient, AsyncTavilyClient
+
+client = TavilyClient(api_key="tvly-local", api_base_url="http://localhost:8000/tavily")
+async_client = AsyncTavilyClient(api_key="tvly-local", api_base_url="http://localhost:8000/tavily")
+print(client.search("MLX inference", include_usage=True))
+```
+
+注入的非同步 HTTP 用戶端本身也必須使用這個完整的 base URL，因為 SDK 會保留它原本的 URL。LangChain 的 `TavilySearchAPIWrapper` 接受 `api_base_url`。
+
+</Tab>
+<Tab value="JavaScript">
+
+```javascript
+const { tavily } = require('@tavily/core');
+const client = tavily({apiKey: 'tvly-local', apiBaseURL: 'http://localhost:8000/tavily'});
+```
+
+</Tab>
+</Tabs>
+
+設定 `YUNSHU_AUTH_TOKEN=tvly-local` 即可要求使用該金鑰；`tvly-` 前綴會原樣接受，不會被去除。舊式的請求本文 `api_key` 也可使用。未設定驗證時，適用本機預設的開放規則（[驗證](/docs/guides/auth-and-keys)）。
+
+## 端點
+
+| 方法 | 路徑 |
+|---|---|
+| POST | `/search`、`/extract`、`/crawl`、`/map`、`/research`、`/feedback`、`/logs` |
+| GET | `/research/{request_id}`、`/usage`、`/providers` |
+| POST | `/mcp`（原生無狀態 MCP 端點） |
+
+錯誤使用 `detail.error`，依情況為 400、401、403、404、413、429 與 500，欄位驗證則為 422。Tavily 僅限雲端的額度與方案狀態 432 與 433 不會被偽造。回應帶有請求 ID、經過秒數與僅供參考的本機額度，陣列欄位順序穩定。search、extract、crawl、map 與 research 輪詢只有在 `include_usage=true` 時才回傳 `usage`；內部記帳無論如何都會繼續。
+
+## 檢索與延遲
+
+SERP 是一個提供者。內建的 metasearch 會並行執行直接的 DDG HTML 與 Wikipedia，加上已設定的需金鑰來源，並以 reciprocal-rank fusion 去除重複的候選項。
+
+<Callout type="warn">
+查詢文字會離開這台機器，送往這些提供者。DDG 是盡力而為，可能封鎖自動化。SearXNG 為選用，需明確指定實例，既非必要，也不建議使用。
+</Callout>
+
+`yunshu config` 會顯示最近一次不含查詢內容的提供者健康快照；`GET /tavily/providers` 顯示即時健康狀態。連續失敗三次會觸發有上限的指數退避，半開探測會讓恢復的來源重新加入。驗證碼與速率限制會立即退避。
+
+| 提供者 | 啟用方式 | 備註 |
+|---|---|---|
+| Mwmbl | `YUNSHU_WEB_MWMBL=1`，或 `provider=mwmbl` | 資料集為 CC-BY-NC-SA 4.0：請保留署名並遵守非商業與相同方式分享條款（[條款](https://api.mwmbl.org/static/terms-and-conditions/)）；不會悄悄啟用；沒有複製任何 Mwmbl 程式碼 |
+| Mojeek | `YUNSHU_MOJEEK_API_KEY` | 加入自動 metasearch；轉送 safe-search、國家與語言加權及日期範圍；最多請求十筆候選（[API](https://www.mojeek.com/support/api/search/)） |
+| Marginalia | `YUNSHU_MARGINALIA_API_KEY` | 轉送 safe-search 與結果數量；沒有隱含的 `public` 金鑰（明確設定才會使用共用的開發配額）；非商業金鑰提供 CC-BY-NC-SA 4.0 資料（[API 與條款](https://about.marginalia-search.com/article/api/)） |
+
+可用 `YUNSHU_WEB_SEARCH_PROVIDER` 明確選擇提供者（`mojeek`、`marginalia`、`mwmbl` 等；預設 `auto`）。Common Crawl 的 URL 索引與 Wikipedia 傾印需要語料匯入與本機全文索引；它們不是關鍵字 SERP 端點，也絕不會自動下載或啟用。
+
+一般搜尋使用 BM25、提供者先驗、精確片段與去重，不呼叫任何 LLM。每段摘錄最長 500 個字元，摘錄之間以 ` [...] ` 連接。搜尋深度決定抓取廣度與總檢索預算：
+
+| `search_depth` | 預算 | 頁數 |
+|---|---|---|
+| `ultra-fast` | 0.7 秒 | 僅提供者文字 |
+| `fast` | 1 秒 | 3 |
+| `basic` | 1.3 秒 | 6 |
+| `advanced` | 3 秒 | 20 |
+
+這些是取消預算，不是保證的端到端 p50：DNS、禮貌間隔、提供者可用性與所要求的生成都會影響實際延遲。`Server-Timing` 標頭會回報 SERP、抓取、IR 與生成的耗時。錯過該深度抓取時窗的頁面不會被取消；它們會在自己的逾時內完成並預熱頁面快取。
+
+時間、主題、國家、語言與 safe-search 會下推給支援的提供者；日期與嚴格語言也會在本機再檢查。Finance 是盡力而為的新聞垂直領域，不是金融索引。除非要求嚴格過濾，否則未知日期會保留。精確的引號片語需要成功抓取到頁面。正規化分數是本機相關性，並未校準到 Tavily 專有的機率。
+
+Extract 處理靜態 HTML、文字、JSON 與有大小上限的 PDF 內容，保留可用的 markdown、程式碼與表格，並隔離失敗。Crawl 與 map 使用 BFS，搭配有逾時的正規表示式選擇器、深度、廣度與全域上限、robots 規則與主機禮貌間隔。Map 可以列出外部連結，但絕不遞迴跟隨。`instructions` 使用低成本的字詞相關性。
+
+### JavaScript 渲染
+
+進階的 extract、crawl 與 map 可以用 `YUNSHU_WEB_RENDER=1`（預設關閉）渲染簡短的 JavaScript 外殼頁面。
+
+<Steps>
+<Step>
+
+安裝選用 extra：`uv sync --extra web-render`。
+
+</Step>
+<Step>
+
+安裝本機瀏覽器：`uv run playwright install chromium`。請求絕不會自行安裝瀏覽器。
+
+</Step>
+<Step>
+
+設定 `YUNSHU_WEB_RENDER=1`。
+
+</Step>
+</Steps>
+
+渲染一次只使用一個無頭 Chromium，並且只透過一般的已檢查、已鎖定（pinned）抓取器重播同源的 GET 文件、腳本與 fetch。Service worker、WebSocket、下載、跨來源資源與被重新導向的資源內容都會被封鎖。robots 規則仍適用於 crawl 與 map，且請求逾時涵蓋靜態抓取加上渲染。瀏覽器缺失或逾時時會保留靜態結果。不支援依賴 CDN 的應用程式，也不支援繞過受保護網站。
+
+## 答案、research 與 MCP
+
+- `include_answer` 只在被要求時才呼叫所服務的聊天模型。
+- Research 用所服務的 LLM 規劃查詢，搜尋並萃取證據，再附引用綜合成文。輸出 schema 使用聊天的受限 JSON 解碼（[結構化輸出](/docs/guides/structured-output)），並在事後驗證。`mini` 與 `pro` 的差別在查詢數量上限；`pro` 在單一 GPU 上依序執行，並不是 Tavily 專有的多代理實作。Research 維持選用。
+- 非同步任務支援輪詢與 SSE，包含 keepalive、工具框、內容、來源與完成事件。註冊表（100 個任務）、回饋（1000）與日誌（10000）在行程內有上限，重新啟動即遺失。
+- 本機額度只是估計工作量，不會計費，也不會強制執行雲端方案。
+- 檔案支援 base64 的 `txt`、`md` 與 `json`，合計上限 80000 字。參考書目支援編號、APA、MLA 與 Chicago 格式。
+- 圖片中繼資料來自抓取到的頁面。`include_images` 另外會查詢已設定的 SearXNG 圖片類別或 Brave 的圖片端點，套用來源網域過濾並去除重複 URL；圖片垂直領域失敗不會讓搜尋失敗，DDG 與 Wikipedia 沒有圖片後備。所要求的圖片描述使用常駐的本機 VLM（最多三張圖，快取 15 分鐘）；不會另外載入第二個模型。
+
+<Callout type="warn">
+上游 `tavily-mcp` 0.2.22 寫死 `api.tavily.com`，沒有 base URL 設定，所以 REST 相容性無法讓它轉向。請使用 Yunshu 的原生 MCP 端點 `/tavily/mcp`，它以底線與連字號兩種名稱提供 Tavily 工具。
+</Callout>
+
+## 如何驗證
+
+- `scripts/research/tavily_sdk_parity.py` 與 `scripts/research/tavily_sdk_parity.mjs` 以注入傳輸的方式，讓真正的 SDK 套件對真正的路由器與服務執行，不需要監聽的伺服器，也不連網。請把 SDK 套件裝在獨立環境，不要裝進服務用的 venv。
+- `scripts/research/tavily_stage_latency.py` 量測各階段延遲（`Server-Timing`：serp、fetch、ir、generate）；`--live` 使用真正的內建提供者與頁面，且只用 CPU。
+- `scripts/research/websearch_quality_gate.py` 以明確的審查標註評估凍結的成對重播（`--snapshot`、`--pairs`、`--reviews`、`--out`），證據不完整時以 1 結束。它要求同一裝置上有至少 200 個不重複的配對，涵蓋至少 40 筆新聞、40 筆文件、40 筆程式碼與 10 筆對抗性參考，至少 10% 的配對審查須有人工檢查，且等價性最多只能有一個淨正確性差異。它不會核准改變品質的 research 預設值，也不能證明延遲。

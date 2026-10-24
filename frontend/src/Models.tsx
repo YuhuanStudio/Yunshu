@@ -1,3 +1,4 @@
+import { isCalm } from "./outage-view";
 import { gbTotalText } from "./byte-format";
 import { modelsFreeMemory } from "./memory-api";
 import { has, t, tr } from "./i18n/index.ts";
@@ -591,7 +592,9 @@ export function Models({
                 description={
                   engine.status
                     ? t("models.list.emptyDescription")
-                    : t("models.detail.waitingDescription")
+                    : isCalm(engine.outage.kind)
+                      ? t("models.detail.waitingCalm")
+                      : t("models.detail.waitingDescription")
                 }
               />
             </Card>

@@ -22,6 +22,7 @@ from .server_tools_helpers import FakeMcpHttp, FakeSearch
 from .server_tools_responses_helpers import (
     ScriptedResponses,
     call,
+    custom,
     parse_sse,
     reasoning,
     text,
@@ -480,10 +481,25 @@ def test_mcp_connector_id_rejected(make):
     assert "connector_id" in r.json()["error"]["message"]
 
 
-def test_background_with_server_tools_is_400(make):
-    c, _ = make([])
-    r = c.post("/v1/responses", json=body([WS], background=True))
-    assert r.status_code == 400 and r.json()["error"]["param"] == "background"
+def test_custom_tool_with_server_tool_runs_both(make):
+    """A freeform custom tool beside web_search: the search runs here, the custom call is handed
+    to the client (it used to be a 400)."""
+    search.set_provider_for_tests(FakeSearch())
+    c, inner = make(
+        [
+            [call("web_search", {"query": "yunshu"})],
+            [custom("apply_patch", "*** Begin Patch")],
+        ]
+    )
+    custom_tool = {"type": "custom", "name": "apply_patch"}
+    r = c.post("/v1/responses", json=body([WS, custom_tool]))
+    assert r.status_code == 200, r.text
+    assert types(r.json()) == ["web_search_call", "custom_tool_call"]
+    sent = [t.type for t in inner.requests[0].tools]
+    assert "custom" in sent
+    assert (
+        len(inner.requests) == 2
+    )  # the custom call ended the response, no third round
 
 
 # ── mixed calls, caps ─────────────────────────────────────────────────────────

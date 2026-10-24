@@ -1,0 +1,104 @@
+---
+title: Agentic coding benchmark
+description: How Yunshu is measured under real coding-agent loops (Claude Code, Codex CLI, opencode) with hidden tests, and how to run, repeat and extend the benchmark.
+---
+
+Single-request numbers do not show how an engine behaves under what people actually run: multi-turn coding-agent loops with a growing context, many tool calls, prefix reuse between turns and long sessions. `scripts/research/agentic/` drives real coding agents against a local server and lets hidden tests decide whether the code they wrote works.
+
+## What it does
+
+Per (agent, engine, task, repeat) run it records:
+
+- pass or fail from tests the agent never sees, wall time, agent exit status and timeouts;
+- number of model requests; total prompt, completion and cached tokens; cache-hit ratio; largest prompt;
+- per-request TTFT and decode tokens per second, measured at the wire by a recording proxy (`proxy.py`), so every engine is measured the same way;
+- API errors (4xx, 5xx, incomplete or error streams; metadata only), malformed tool-call arguments and tool-call markup leaking into text;
+- the server's peak physical footprint during the run.
+
+Agents are pinned copies installed by `scripts/research/agentic/install_agents.sh` under `/Volumes/P5Plus/yunshu-test-envs/agentic-clis`, never the ones on your `PATH`: **opencode** (Chat Completions), **Claude Code** (Messages) and **Codex CLI** (Responses). Each run gets a fresh `HOME`, XDG directories, `TMPDIR`, `CLAUDE_CONFIG_DIR` and `CODEX_HOME`, a scrubbed environment and a dummy key, and runs under `sandbox-exec` that blocks all network except loopback, hides the real `~/.claude`, `~/.codex`, `~/.config`, the keychain and shell rc files, and only allows writes inside the run directory. Sampling is whatever each agent sends by default.
+
+There are 20 tasks: 12 Exercism Python exercises from the Aider polyglot benchmark (fetched to `/Volumes/P5Plus/datasets/agentic`, with the commit recorded in the meta row, never committed to the repository) and 8 custom multi-file tasks (bug fix, CLI flag plus tests, three-file refactor, stdlib HTTP JSON API, parser from a spec, long-context locate-and-change in a package of about 2,100 lines, shell round trips over messy data, failing-suite triage).
+
+## Why (design decision)
+
+- Agent traffic is the real workload: long contexts, repeated prefixes and many short tool turns. Prefix-cache reuse and TTFT matter more there than peak decode speed.
+- Hidden tests make the result a task outcome, not a style judgement.
+- Measuring at a recording proxy removes engine-specific timing bias.
+- Failed runs stay in the denominator; timeouts count as failures.
+
+## Guarantees
+
+- The verdict of the repeatable run fails closed: API errors, malformed tool calls, markup leaks and missing runs all fail it.
+- Output files begin with a `meta` row (engine, checkpoint, git SHA, agent version, flags). Runs are resumable: a task and repeat already present in `--output` is skipped.
+- Only dated, aggregate results with snapshot SHAs, denominators, timeouts and uncertainty are published; raw run metadata, agent artifacts and JSONL stay private under `docs/research/`.
+
+## Knobs
+
+| Option | Default | Effect |
+|---|---|---|
+| `run_agentic.py run --serve yunshu` | n/a | Starts a server (Yunshu defaults or TensorFold) for the job and kills it at the end |
+| `--engine-url URL --engine-label X` | n/a | Use a server you started yourself |
+| `--agent`, `--tasks`, `--repeat` | n/a | Select the agent, tasks (`all` or a list) and repeats |
+| `--shard-i`, `--shard-n` | n/a | Split the run list across jobs |
+| `--budget-min` | n/a | Stop starting new runs so a job ends inside its queue timeout |
+| `scripts/dev/agentbench --priority` | -1 | gpuq priority of the matrix cells (nightly standalone runs) |
+
+## Run it
+
+```bash
+# one server per job; --serve starts it and kills it at the end
+python scripts/research/agentic/run_agentic.py run --serve yunshu --checkpoint $M \
+    --engine-label yunshu-default --agent opencode --tasks all --repeat 3 \
+    --output docs/research/runs/DATE-agentic/yunshu-default-opencode.jsonl
+
+# against a server you started yourself
+python scripts/research/agentic/run_agentic.py run --engine-url http://127.0.0.1:18990 --engine-label X ...
+
+python scripts/research/agentic/run_agentic.py summarize docs/research/runs/DATE-agentic/*.jsonl
+python scripts/research/agentic/run_agentic.py check-tasks   # reference solutions pass, starting repos fail
+```
+
+GPU runs go through `scripts/dev/gpuq`.
+
+### The whole matrix: `scripts/dev/agentbench`
+
+`scripts/dev/agentbench` runs Claude Code, Codex and opencode on all 20 tasks against the default 27B server on a ref (`--ref`, default `main`): one low-priority gpuq job per cell, a verdict that fails closed, and a comparison with the earlier recorded run. `--dry-run` previews, `--no-wait` returns after submitting and `--collect` gathers a submitted run. `scripts/dev/release_check` submits it for the release candidate at priority -3 and prints a later collect command. Agentbench is informational: the release gate, the M3 sweep and agent compatibility block a release, agentbench does not. Collect and record every submitted result anyway.
+
+## Add a task
+
+Create `scripts/research/agentic/tasks/<id>/` with:
+
+- `task.json`: `id`, `title`, `prompt`, `test` (argv), optional `protected` files restored before grading, optional `generate` script that writes extra files into the working directory;
+- `repo/`: the starting files;
+- `hidden/`: test files copied to `_hidden_tests/` only at grading time (`AGENTIC_TASK_DIR` and `AGENTIC_TASK_SRC` are set);
+- `reference/`: an overlay, or `apply.py`, that solves the task.
+
+`check-tasks` must report the starting repo failing and the reference passing. Keep tasks deterministic and offline. Polyglot exercises are listed in `tasks.py` and materialized from the dataset.
+
+## Recorded results
+
+Only one dated result is published, from `docs/reports/PERF_TREND.md` (2026-10-02, partial matrix; Qwen3.8-27B oQ4e-mtp, M5 Max, Yunshu default settings, 20 tasks; the two snapshots differ in code and run mix, so they are not pooled):
+
+| snapshot (git SHA, date) | agent | runs | pass | rate (Wilson 95%) | wall med / p90 (s) | cache hit | timeouts |
+|---|---|---:|---:|---|---|---:|---:|
+| prod (c4e2b244+, 09-30) | opencode | 41 | 34 | 83% (69-91%) | 337 / 1200 | 83.6% | 5 |
+| prod4 (d225f16c, 10-02) | claude | 15 | 14 | 93% (70-99%) | 93 / 309 | 89.2% | 0 |
+| prod4 (d225f16c, 10-02) | opencode | 10 | 9 | 90% (60-98%) | 112 / 137 | 84.2% | 0 |
+
+Intervals are wide at n of 10 to 15, and the change between snapshots is a direction, not a measured speedup. Codex and TensorFold cells have no published result.
+
+## Limits
+
+- The matrix is partial; no cell has all three repeats of all 20 tasks.
+- Agents are pinned for repeatability; compatibility with the newest CLIs is a separate check, see [Agent compatibility](/docs/developers/agent-compat).
+- Timing is meaningful only when the job was not paused by serving traffic or contaminated by foreign CPU load; see [Serve and develop](/docs/developers/serve-and-develop).
+
+## How to verify
+
+`check-tasks` proves the task set is sound. `scripts/dev/agentbench --dry-run` previews the matrix, and `run_agentic.py summarize` prints the aggregate for a set of JSONL files. For the user-facing agent setup see [Agents](/docs/guides/agents).
+
+## Related
+
+- [Agent compatibility](/docs/developers/agent-compat)
+- [Release gate](/docs/developers/release-gate)
+- [Benchmarks](/docs/guides/benchmarks)

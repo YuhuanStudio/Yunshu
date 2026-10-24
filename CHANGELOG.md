@@ -70,6 +70,17 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Added
 
+- Anthropic Messages `context_management` is executed, not just accepted: `clear_tool_uses_20250919` (trigger by
+  input tokens or tool uses, `keep`, `clear_at_least`, `exclude_tools`, `clear_tool_inputs`) and
+  `clear_thinking_20251015` rewrite the context before generation; the response reports
+  `context_management.applied_edits` (in `message_delta` when streaming) and `count_tokens` returns
+  `original_input_tokens`. `compact_20260112` compacts with the served model when the trigger is crossed
+  (leading `compaction` block, `pause_after_compaction`, round trip, `usage.iterations`). An unknown edit type is a 400.
+- Responses `background: true` works with `stream: true` (events are kept; `GET /v1/responses/{id}?stream=true&starting_after=N`
+  resumes them; cancel works) and with `web_search` / `mcp` tools; `custom`, `local_shell`, `tool_search` and
+  `computer` tools can be combined with server tools in one request.
+- Chat completions and completions accept `n > 1` with `stream: true` (chunks carry `choices[].index`, per-choice
+  seeds as without streaming, one usage chunk); VLM chat streams the choices concurrently.
 - `yunshu console --engine auto` finds engines on every listening port of this Mac by default (`YUNSHU_CONSOLE_DISCOVER_PORTS=all`), skips console processes, and lists one engine behind a proxy once. `YUNSHU_HOST` sets the engine's bind host like `YUNSHU_CONSOLE_HOST` does the console's.
 - `yunshu console --engine auto`: the console finds Yunshu engines on local ports (`YUNSHU_CONSOLE_DISCOVER_PORTS`, `YUNSHU_CONSOLE_DISCOVER_S`), keeps the one it follows while healthy, switches to the newest live engine when it goes away, and lets you pin one from the status island or `POST /console/api/engines`; the history records each engine start as its own session. [Guide](docs/CONSOLE.md#following-engines-automatically).
 - Code execution grows to three APIs on one container manager: OpenAI Responses `code_interpreter` (container `auto` or an id, `code_interpreter_call` items with logs and image outputs, streaming `response.code_interpreter_call.*`, `container_file_citation` annotations) and the hosted `shell` tool (`shell_call` / `shell_call_output`, streaming `response.shell_call_*`), the OpenAI `/v1/containers` API (create, list, retrieve, delete; container files: upload, list, retrieve, content, delete; `expires_after`, `memory_limit` and `network_policy` map onto `YUNSHU_CODE_EXECUTION_TTL_MIN` / `_MEMORY_MB` / `_NETWORK_ALLOW` and can only narrow them), and, for Anthropic, a persistent Python process per container (REPL state across calls in `code_execution_20260120` / `_20260521`; `20250522` is Python-only, `20250825` bash and editor), plus programmatic tool calling (client tools with `allowed_callers` called from code, `tool_use` blocks with `caller`, pause and resume across requests). Gateway-side file operations never follow links the sandbox planted. [Guide](docs/guides/CODE_EXECUTION.md).
@@ -91,6 +102,22 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Changed
 
+- Sampling defaults now come from the served model. A request that omits `temperature`, `top_p`, `top_k`,
+  `min_p` or a penalty takes the value in the model's `generation_config.json` (read per model, also in
+  multi-model mode); a key the file lacks takes the API default (`temperature` 1.0, `top_p` 1.0, `top_k`
+  and `min_p` off, penalties off). Explicit request values always win, including ones equal to the old
+  defaults. **Outputs of requests without sampling parameters change:** chat, completions and Anthropic
+  Messages used 0.7 / 1.0 / 0 before; for Qwen3.8-27B the new default is 1.0 / 0.95 / 20. Same rule on
+  chat, completions, Responses, Anthropic Messages, Ollama (its `options` still override), Realtime and MCP
+  `generate`. The values used and their source appear in `x_yunshu.sampling` and the model card
+  (`yunshu.sampling_defaults`). Temperature 0 still means greedy.
+- Sampling defaults are per mode. Between the request and `generation_config.json` sits the model's published
+  recommendation for the mode the request runs in (thinking or non-thinking; Qwen3.8 / 3.6 / 3.5 and Gemma 4 31B,
+  copied from their model cards into `sampling_profiles.json`). Qwen3.8-27B without a sampling parameter and
+  with thinking: 1.0 / 0.95 / 20; with thinking off: 0.7 / 0.80 / 20 and presence_penalty 1.5. `x_yunshu.sampling`
+  adds `mode`; `YUNSHU_SAMPLING_DEFAULTS=api` restores API-only defaults.
+
+- Console motion: one set of motion tokens (expo ease-out enters, 120/200/280 ms), no `transition: all`, no decorative loops; page changes fade out then in, theme switch is one cross-fade, the sidebar and tab selection is one sliding pill, stat values roll digit by digit, the overview skeleton cross-fades into the cards without a layout shift, and streamed Playground text fades in by chunk. Reduced motion keeps only short opacity changes.
 - Split-invariant prefill (NAX GEMM padded to 64 rows, BQ32 attention, chunked GDN) and 64-token-aligned APC
   checkpoints are the default on the qualified 27B path; rehearsal starts after 0.3 s.
 - The DFlash fast tree admits short contexts, reads 8-bit lane weights directly,
@@ -110,6 +137,9 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Fixed
 
+- `GET /v1/yunshu/host` is a console read like `/v1/yunshu/status`: with no token configured it answers 200
+  (it answered 401 on every console poll); with a token it still needs the token.
+- Console round 2: Requests no longer reserves 42 rem of empty table (Active shows recent finished requests, the details column defaults to the newest request); Diagnostics, Models and the health line read a pause / restart as "waiting", never as a fault; history shows on a page opened during an outage; the usual-restart estimate ignores outages over 10 min; pipeline chips no longer reserve a count slot; new Playwright spec for paused / restarting states.
 - Console, `--engine auto`: an engine restart is now a calm "Engine restarting… (was up Xm, usually back in Ys)" or
   "Switching to :port" state (error only after 60 s with no live engine, with the engine list); the Requests list,
   prefix hit rate and Overview chart stay filled from the console store across restarts and mark the restart

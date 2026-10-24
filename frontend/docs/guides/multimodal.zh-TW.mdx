@@ -1,0 +1,56 @@
+---
+title: 多模態與檢索端點
+description: 哪些路由提供圖片、音訊、影片、語音、Realtime 語音、OCR、圖片生成、embeddings 與 rerank，各需要哪些 extra，以及限制在哪裡。
+---
+
+選用的 extra 會安裝所需的相依套件：`pip install 'yunshu[audio]'`、`[vision]`、`[generation]`、`[embeddings]` 與 `[omni]`。每個路由都需要支援它的模型；`GET /v1/models` 會告訴你哪些可用。請求格式請見下方連結的 API 參考頁面。
+
+<Callout type="info">
+語音、ASR、TTS、圖片生成與 OCR 是支援的能力，不是調校的主要路徑。功能依 checkpoint 而異，並逐模型驗證：請見[模型支援](/docs/guides/model-support)。
+</Callout>
+
+## 路由
+
+| 能力 | 路由 | Extra | 備註 |
+|---|---|---|---|
+| 以圖片、音訊與影片作為聊天輸入 | `/v1/chat/completions`、`/v1/responses`、`/v1/messages` | 無（mlx-vlm 模型） | 媒體會納入前綴快取的鍵 |
+| Qwen3-Omni 語音對語音 | `POST /v1/omni/speech/stream` | `omni` | 輸出文字與音訊；`examples/talk.py` |
+| Realtime 語音 | `WS /v1/realtime`（與 `/realtime`） | `audio` | 伺服器端 VAD、插話打斷、原生 omni 語音或 ASR、LLM、TTS 串接。請見 [Realtime](/docs/api/realtime) |
+| 語音轉文字 | `/v1/audio/transcriptions`、`/v1/audio/translations` | `audio` | 翻譯需要 Whisper 模型。請見[音訊](/docs/api/audio) |
+| 文字轉語音 | `/v1/audio/speech`、`GET /v1/audio/voices` | `audio` | 對需要參考音訊的模型，可用音訊樣本在本機註冊聲音 |
+| OCR | `POST /v1/ocr` | `vision` | GLM-OCR；`yunshu ocr`；主控台中也有；[OCR API](/docs/api/ocr) |
+| 圖片生成、編輯、變化 | `/v1/images/generations`、`/edits`、`/variations` | `generation` | `yunshu image`、`image-edit`、`image-variations`。請見[圖片](/docs/api/images) |
+| Embeddings | `POST /v1/embeddings` | `embeddings` | 文字，以及（支援的模型）圖片、音訊與影片。請見 [Embeddings](/docs/api/embeddings) |
+| Rerank、score、classify、pooling | `/v1/rerank`、`/v1/score`、`/v1/classify`、`/v1/pooling` | `embeddings` | cross-encoder rerank 與訓練過的分類頭，採用 vLLM 語意。請見 [Rerank](/docs/api/rerank) |
+| 型別化決策 | `/v1/decisions`、`/v1/systemone` | 無 | 請見 [Decisions](/docs/api/decisions) |
+
+## 從命令列試用
+
+<Steps>
+<Step>
+
+服務一個支援該能力的模型，例如用 `speak` 就需要 TTS 模型。
+
+</Step>
+<Step>
+
+執行對應的指令：
+
+```bash
+yunshu speak "Hello from Yunshu" -o hello.wav     # needs a TTS model served
+yunshu transcribe hello.wav                       # needs an ASR model
+yunshu ocr page.png
+yunshu embed "a sentence"
+yunshu rerank "query" "doc one" "doc two" --top-n 1
+```
+
+</Step>
+</Steps>
+
+關於透過 WebSocket 或 WebRTC 使用 Realtime，請見[傳輸方式](/docs/guides/transports)。暫時性的 client secret 由 `POST /v1/realtime/client_secrets` 取得。
+
+## 限制
+
+- Realtime 的僅轉錄 session 設定會被回傳，但不會以僅轉錄 session 的方式執行。
+- 前綴重用取決於快取佈局。Gemma 4 有限定範圍的精確視窗還原憑證；請勿據此推斷所有旋轉快取模型都受支援。
+- Qwen3-Omni 重複圖片的前綴重用有限定範圍的命中與未命中一致性憑證；圖片加音訊合併的快取重用尚未驗證。請見[模型支援](/docs/guides/model-support)。

@@ -30,6 +30,8 @@ const settingdesc = {
     "Share of the Metal working set above which a new generation request is refused with 503 and `Retry-After` while other requests are running, to avoid an OOM. An idle server never refuses. 0 = off.",
   YUNSHU_COMPLETION_BATCH_SIZE:
     "Text engine: maximum sequences decoded together.",
+  YUNSHU_SAMPLING_DEFAULTS:
+    "Where a request that omits a sampling parameter gets it: the model's published per-mode recommendation, then its generation_config.json, then the API default (model), or the API default only (api). A value in the request always wins.",
   YUNSHU_DEFAULT_MAX_TOKENS:
     "Completion length when a chat or responses request omits `max_tokens`; the context budget still clamps it.",
   YUNSHU_MAX_PREFILL_TOKENS:

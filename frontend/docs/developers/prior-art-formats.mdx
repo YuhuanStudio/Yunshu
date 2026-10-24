@@ -1,0 +1,40 @@
+---
+title: Retrieval and prior-art formats
+description: Which published embedding, reranker and classifier checkpoint formats Yunshu loads, which loader each one uses, and how the loaders are checked against their upstream implementations.
+---
+
+For retrieval models, Yunshu loads the formats that are actually published instead of requiring a private conversion. Before writing a loader it checks for an existing MLX port, checkpoint format or runtime and loads that format. This page lists what is covered, what is deliberately not, and how the parity checks work. It is a maintainer reference; for the endpoints see [Embeddings](/docs/api/embeddings) and [Rerank](/docs/api/rerank), and for provenance of derived files see [Upstream tracking](/docs/developers/upstream-tracking).
+
+## What it does
+
+| Family | Loader | Notes |
+|---|---|---|
+| EmbeddingGemma 2 (bf16 and affine 4-bit and other published quantizations) | `load_published_model` in `python/yunshu_engine/embedding_gemma2_loader.py`: the maintained `mlx_vlm.embedding_loader.load_embedding_model` (strict) when `mlx_vlm.models.embedding_gemma2` is installed; otherwise a derived loader | The derived fallback uses a vendored MIT port of the text tower written from the Hugging Face `embedding_gemma2` architecture, and mlx-vlm's Gemma 4 vision and audio towers. Quantized modules are built from the checkpoint's scales; vision and audio towers may keep floating weights; packed integer tensors are never cast to float. Unquantized checkpoints keep the original float loader. Provenance is in `vendor.json` |
+| BERT, RoBERTa, XLM-RoBERTa encoders and sequence classifiers | mlx-vlm's maintained encoder loader with `SequenceClassificationModel` | Published BGE converters with bare backbone names, single-label and multi-label heads, and quantized encoder layers with floating or quantized heads. A missing backbone or head tensor is a load error |
+| Qwen3 yes/no rerankers | the official instruction, prefix and suffix recipe on mlx-lm's quantized loader | Matches the converted checkpoint's own `query` and `document` role template |
+| Qwen3-VL retrieval | the installed `mlx-embeddings` `model.process` API | No GPL source is copied into Yunshu |
+
+Empty embedding input returns an empty list, and adding a default instruction never mutates the caller's input dictionaries.
+
+## Why
+
+Users bring checkpoints from Hugging Face as published. A loader that silently substitutes a different head or template would return plausible but wrong vectors and scores, so each format either loads exactly as its upstream does or fails with an actionable error.
+
+## Guarantees
+
+- A head or backbone that is missing from a checkpoint is a load error, never a silent replacement.
+- `JinaForRanking` (Jina v3) is a separate architecture and remains unsupported: its trained ranking head must not be replaced by Qwen yes/no logits.
+- The Qwen3 reranker template matters: the published 0.6B 4-bit chat template expects `query` and `document` roles. A service that supplies `user` makes that template drop the query and document, so distinct pairs produce identical token ids and logits. Yunshu uses the official recipe that matches the converted role template.
+
+## Limits
+
+- The 2026-10-08 Hugging Face inventory lists a single `model.safetensors` for Google EmbeddingGemma 2 and for each mlx-community conversion checked, so a multi-shard loading defect was not reachable with those published snapshots. Repacked or private multi-shard checkpoints could reach it. This is a dated inventory, not a claim about future uploads.
+- The diffusion comparison against `mflux` is an audit, not a serving path. The reviewed `mflux` mapping drops the scales and biases of an affine 4-bit diffusers checkpoint without `mflux` safetensors metadata, so the probe decodes weights first and labels the result a floating reference with a format bridge. It is not native quantized loading and changes no serving default.
+
+## How to verify
+
+- CPU unit tests: `tests/unit/test_prior_art_check.py`, `tests/unit/test_priorfix_capabilities.py`, `tests/unit/test_priorfix_probes.py` and `tests/unit/test_priorfix_mflux_reference.py`.
+- `scripts/dev/yv ab --base <sha> --cand <sha> --suite embedding --label <name>` loads bf16, 4-bit and a real bf16 checkpoint repacked into two shards, compares Yunshu's wrapper with direct upstream model invocation on the Mac, and applies a 0.99985 fp32 cosine floor to the bf16 vectors. Quantization accuracy is reported separately.
+- `--suite priorart` runs bounded retrieval, Omni prepared-input and fixed-seed diffusion comparisons; `--env PRIORART_KINDS=capabilities` runs the Gemma formats, retrieval, classifier, diffusion audit and Omni preparation as separate child processes in one GPU admission, keeping one evidence file and return code per arm and rejecting missing, stale or wrong-device evidence. `PRIORART_KINDS=diffusion-timing` runs three interleaved pairs at 256 px, 2 steps and seed 7 and reports medians with the exact workload.
+
+These are modality-specific audits and are excluded from the generic LLM suite. Timing from the diffusion comparison does not decide performance or defaults. All of these use the GPU queue; see [Verification](/docs/developers/verification).

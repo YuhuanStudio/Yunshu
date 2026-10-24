@@ -1,0 +1,69 @@
+---
+title: Options that can change output
+description: The opt-in settings whose output is not guaranteed identical to the default path, and the rule that separates them from lossless defaults.
+---
+
+Yunshu's rule is simple: a **lossless** optimization (same tokens as the plain path) may become the default; a **lossy or non-identical** one is a stable user option that is off by default, and a benchmark never turns it on for you. This page lists every such option. Defaults are in the settings registry (`python/yunshu_engine/settings.py`); effective values are shown by `yunshu config`. For the full table of settings see [Configuration](/docs/guides/configuration).
+
+<Callout type="warn">
+The four options in the first section (`YUNSHU_SPEC_UNVERIFIED`, `YUNSHU_DRAFT_MODEL`, `YUNSHU_ENGINE_LOOP`, `YUNSHU_OVERLAP`) are stable options, not experiments, but they are **not guaranteed to produce the same tokens as the default path**. Turn one on only if you accept that output can differ from plain decoding. Each has its own constraints below.
+</Callout>
+
+## Non-identical serving options
+
+All four apply to text-only `mlx-lm` models. The Qwen3.5-family VLM runner has its own lossless speculation (MTP, DFlash) and does not use them. See [Speculative decoding](/docs/internals/speculative-decoding).
+
+| Setting | Default | What it does |
+|---|---|---|
+| `YUNSHU_SPEC_UNVERIFIED` | `''` (off), or `eagle` | Enables speculative decoding with an external `mlx-lm` draft model on text models |
+| `YUNSHU_DRAFT_MODEL` | unset | Path of the draft checkpoint used by `YUNSHU_SPEC_UNVERIFIED=eagle` |
+| `YUNSHU_ENGINE_LOOP` | off | Serves text models with the continuous-batching loop instead of the single-request fast path |
+| `YUNSHU_OVERLAP` | `''` (off), `cpu_gpu` or `two_batch` | Overlaps CPU and GPU work in that loop |
+
+### External draft model (`YUNSHU_SPEC_UNVERIFIED` and `YUNSHU_DRAFT_MODEL`)
+
+`YUNSHU_SPEC_UNVERIFIED=eagle` loads a second, smaller `mlx-lm` checkpoint named by `YUNSHU_DRAFT_MODEL` (`_init_external_lm_spec` in `python/yunshu_engine/batched_engine.py`) and drafts with it. If `YUNSHU_DRAFT_MODEL` is unset the engine looks for a `draft_model_path` in the model config; with neither, nothing is loaded, and an unset switch never loads a second model.
+
+- `eagle` is a historical route name. An ordinary language model works as the draft; no trained EAGLE head is needed.
+- The route is taken only for greedy (temperature 0 or unset), non-streaming requests that ask for speculation or default to it, with default sampling and penalties. Schema or grammar constraints, custom logits processors, stop strings, thinking budgets, LoRA and token-mask options keep the regular fast path, and so do logprob requests.
+- Output is not guaranteed to be token-identical to plain decode. The registry records that a check on 2026-10-24 differed on every prompt it tried, and that speed ranged from slower to faster depending on the prompt; no figure from it is quoted here, because it is not in the benchmark log.
+- Use it when you have a well-matched small draft for a large text model and prefer speed over exact reproducibility. For lossless speculation use n-gram or suffix drafting (`YUNSHU_NGRAM_DEFAULT`, `YUNSHU_SPEC_PROPOSER`) or the Qwen3.5-family runner.
+
+### Continuous-batching loop (`YUNSHU_ENGINE_LOOP`)
+
+With `YUNSHU_ENGINE_LOOP=1`, text models are served by `EngineCore` (`python/yunshu_engine/engine_core.py`), which batches concurrent requests, instead of `_generate_fast`, which serializes them.
+
+- Aggregate throughput with several concurrent text requests is higher; at one request the registry records a small loss. Exact figures are not in the benchmark log, so none are given here.
+- Batched outputs are not token-identical to the single-request path, because the numerics of a batch differ.
+- Some features act differently on the loop; for example, SpecPrefill is not applied on it.
+- It does not affect VLMs, which always use the VLM batch runner.
+
+Use it for a text-only server with many simultaneous clients, where throughput matters more than bitwise repeatability.
+
+### CPU and GPU overlap (`YUNSHU_OVERLAP`)
+
+`cpu_gpu` overlaps scheduling work with the GPU step; `two_batch` splits a batch into two halves that overlap. Both are read when `EngineCore` starts, so they only matter with `YUNSHU_ENGINE_LOOP=1` and inherit its non-identical output. The registry records no measurable effect on a 3B text model (2026-10-24), so leave it off unless you measure a gain on your own model.
+
+## Lossy memory options
+
+These trade quality for memory or disk. All are off by default (a lossless value is the default). A lossy option never becomes a default because of a benchmark.
+
+| Setting | Lossless default | Lossy value | Effect |
+|---|---|---|---|
+| `YUNSHU_KV_PRECISION` | `bf16` | `int8` | int8 KV for the Qwen3.5-family shared decode batch; less memory and bandwidth, small attention error. A lone request and the speculative lane stay bf16 |
+| `YUNSHU_KV_QUANT_BITS` | `off` | `auto`, `2`, `3`, `4`, `8` | Quantized KV cache on the text engine |
+| `YUNSHU_PREFIX_HOT_LIMIT` | `0` (all full precision) | a count | Keeps that many prefix KV entries at full precision and stores older ones 4-bit in RAM; lossy on reuse |
+| `YUNSHU_SSD_CACHE_PRECISION` | `native` | `int8` | Text SSD prefix cache stored as per-tensor int8; lossy on reuse |
+| `YUNSHU_VLM_APC_WARM` | `off` | `int8`, `int4` | Compressed WARM prefix tier; a hit restores dequantized K/V, so output can differ from a cold prefill. `lossless` is exact |
+| `YUNSHU_QUANT_MODE` | `''` (keep checkpoint) | `mxfp4`, `nvfp4`, `mxfp8`, `affine` | Quantizes weights in memory at load |
+
+`YUNSHU_QUANT_CONFIG` sets bits and group size for `affine`. Memory accounting is in [Memory accounting](/docs/internals/memory).
+
+## The rule
+
+| Kind | Examples | May become the default? |
+|---|---|---|
+| Lossless (same output) | layouts, kernels, schedulers, batch-invariant speculation, lossless cache compression | Yes, after an A/B and an identity check; an opt-out may stay |
+| Lossy or non-identical | everything on this page | No. A stable option with a lossless default |
+
+To check whether an option changes your output, run the same prompts greedily with and without it and compare tokens; the identity tooling is described in [Verification](/docs/developers/verification).

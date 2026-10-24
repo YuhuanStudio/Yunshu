@@ -1,5 +1,7 @@
 # Apple Silicon host telemetry
 
+
+> Console docs: the maintained, translated version of this page is `/docs/guides/telemetry` (source `frontend/docs/guides/telemetry.mdx`). This file stays as the repository-side reference read by tooling.
 `YUNSHU_TELEMETRY=on` enables a local 1 Hz background sampler. It requires no root,
 never imports MLX, and makes native calls only on `yunshu-host-telemetry`, outside
 the inference executor. `YUNSHU_TELEMETRY_INTERVAL_S` changes the interval; restart
@@ -11,7 +13,7 @@ The implementation derives IOReport and HID access from
 
 ## Host API and CLI
 
-`GET /v1/yunshu/host` uses the existing console permission (`can_manage_models`).
+`GET /v1/yunshu/host` is a console read (`can_infer`: open with no token configured, token-gated once one is set).
 It preserves `thermal`, `power`, `memory`, and `memory_pressure` (15-second cache)
 and adds `telemetry` with an independent 1 Hz cache:
 

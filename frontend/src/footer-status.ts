@@ -216,7 +216,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
   const raw = activity(status);
   // Same rule as the top pill: a held "decode" with nothing decoding and no speed is idle.
   const a =
-    raw.phase === "decode" && raw.decodeNow == null && raw.counts.decode === 0
+    raw.phase === "decode" && raw.decodeNow == null && raw.counts.active === 0
       ? { ...raw, phase: "idle" as const }
       : raw;
   let value: string | undefined;
@@ -269,15 +269,16 @@ export function footerPills(input: FooterInput): FooterPill[] {
   pills.push({
     key: "load",
     label: t("shell.footer.load.label"),
-    value:
-      a.counts.queued > 0
-        ? t("shell.footer.load.both", {
-            active: a.counts.active,
-            queued: a.counts.queued,
-          })
-        : t("shell.footer.load.active", { active: a.counts.active }),
+    // Always both numbers: a queue appearing or emptying, or one more digit, must not resize the pill
+    // (real-load-replay measured every pill after it moving).
+    value: t("shell.footer.load.both", {
+      active: a.counts.active,
+      queued: a.counts.queued,
+    }),
     tone: "neutral",
     dot: false,
+    // Measured jitter (real-load-replay): one more digit ("9" -> "10 running") moved every pill after it.
+    minCh: 16,
     help: t("shell.footer.load.help", {
       active: a.counts.active,
       queued: a.counts.queued,

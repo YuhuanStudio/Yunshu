@@ -1,5 +1,7 @@
 # Code execution
 
+> Console docs: the maintained, translated version of this page is `/docs/guides/code-execution` (source `frontend/docs/guides/code-execution.mdx`). This file stays as the repository-side reference read by tooling.
+
 Yunshu runs model-written code on this machine, inside Anthropic's
 [sandbox-runtime](https://github.com/anthropics/sandbox-runtime) (`srt`), for three APIs. Off by default.
 

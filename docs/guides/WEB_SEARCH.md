@@ -1,5 +1,7 @@
 # Web search and fetch
 
+
+> Console docs: the maintained, translated version of this page is `/docs/guides/web-search` (source `frontend/docs/guides/web-search.mdx`). This file stays as the repository-side reference read by tooling.
 > The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/guides/web-search.mdx`](../../frontend/docs/guides/web-search.mdx)); this file is its GitHub-facing counterpart.
 
 Coding agents can request server-side search through Responses `web_search` /

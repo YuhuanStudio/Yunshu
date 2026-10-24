@@ -1,5 +1,7 @@
 # Hardware validation plan
 
+
+> Console docs: the maintained, translated version of this page is `/docs/developers/hardware-validation` (source `frontend/docs/developers/hardware-validation.mdx`). This file stays as the repository-side reference read by tooling.
 Apple Silicon support is a product target, not evidence that every chip/macOS
 combination has been tested. Hosted `macos-14` jobs in CI do not prove a particular
 M-series GPU generation or real Metal availability. Current workflows are in

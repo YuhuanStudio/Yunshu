@@ -82,7 +82,7 @@ import {
   StatValue,
 } from "./ui";
 import type { Perform } from "./Models";
-import { outcomeLabel, useRecentRequests } from "./recentRequests";
+import { finishLabel, outcomeLabel, useRecentRequests } from "./recentRequests";
 import {
   RequestBreakdown,
   RequestTimeline,
@@ -106,7 +106,7 @@ import { SegmentedTray } from "./SegmentedTray";
 const PAGE = 50;
 /** Long ids keep both ends so ids that differ only at the tail stay distinguishable. */
 const shortId = (id: string) =>
-  id.length > 20 ? `${id.slice(0, 9)}…${id.slice(-8)}` : id;
+  id.length > 32 ? `${id.slice(0, 12)}…${id.slice(-8)}` : id;
 /** Error is the only red dot; a cancel is the user's own choice, so it stays neutral (amber means in progress). */
 const outcomeDot = (o?: string): "busy" | "neutral" =>
   o === "error" ? "busy" : "neutral";
@@ -274,7 +274,9 @@ export function Requests({
     engine.status?.last?.request_id,
     // A page opened while the engine is away has no status yet, but the console still answers its record.
     engine.status?.console_process === true ||
-      (engine.status == null && engine.phase === "offline"),
+      (engine.status == null &&
+        engine.failures > 0 &&
+        engine.phase !== "unauthorized"),
   );
   const sampled = useMemo(
     () =>
@@ -300,6 +302,14 @@ export function Requests({
     else if (filterChoice == null && recent.rows.length > 0)
       setFilterChoice("complete");
   }, [filterChoice, engine.status, recent.rows.length]);
+  // Under load the list keeps room for a full burst (11 concurrent requests in the real-load replay) so the
+  // footer and the panels below never move as requests come and go; it relaxes 20 s after the last one.
+  const busyNow = (engine.status?.requests.active ?? 0) > 0;
+  const [reserveUntil, setReserveUntil] = useState(0);
+  useEffect(() => {
+    if (busyNow) setReserveUntil(Date.now() + 20_000);
+  }, [busyNow, engine.updatedAt]);
+  const reserved = busyNow || Date.now() < reserveUntil;
   const filter = filterChoice ?? "complete",
     setFilter = setFilterChoice;
   useEffect(() => setLimit(PAGE), [filter, outcome, query, speed, sort]);
@@ -345,6 +355,14 @@ export function Requests({
         });
   const matched = useMemo(() => sortRows(bySpeed, sort), [bySpeed, sort]);
   const shown = matched.slice(0, limit);
+  const recentDone = useMemo(
+    () =>
+      rows
+        .filter((r) => r.phase === "complete")
+        .sort((a, b) => (b.t ?? 0) - (a.t ?? 0))
+        .slice(0, 5),
+    [rows],
+  );
   const lanes = useRef<(Row | null)[]>([]);
   const laneScope = `${filter}/${outcome}/${query}/${speed}/${sort.key}/${sort.dir}`;
   const previousScope = useRef(laneScope);
@@ -463,6 +481,14 @@ export function Requests({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [xl, detail]);
+  const newestFinished = useMemo(
+    () =>
+      finished.reduce<Row | null>(
+        (a, r) => (!a || (r.t ?? 0) > (a.t ?? 0) ? r : a),
+        null,
+      ),
+    [finished],
+  );
   const view =
     (detail &&
       finished.find(
@@ -472,7 +498,9 @@ export function Requests({
             r.source === "archive" ||
             r.source === "history"),
       )) ||
-    detail;
+    detail ||
+    // Nothing chosen on a wide screen: the details column shows the newest finished request, not a blank card.
+    (xl && !busyNow ? newestFinished : null);
   const done = view?.phase === "complete";
   const copyId = (id: string) => {
     void navigator.clipboard?.writeText(id).then(() => {
@@ -496,11 +524,17 @@ export function Requests({
               className="gap-1.5 text-xs text-muted-foreground"
               status={outcomeDot(view.outcome)}
             >
-              {outcomeLabel(view.outcome)}
+              {view.outcome === "completed" && view.finish_reason
+                ? finishLabel(view.finish_reason)
+                : outcomeLabel(view.outcome)}
             </StatusIndicator>
-            {view.finish_reason && (
-              <span className="font-mono text-xs text-muted-foreground">
-                {view.finish_reason}
+            {view.finish_reason && view.outcome !== "completed" && (
+              <span
+                className="text-xs text-muted-foreground"
+                title={view.finish_reason}
+              >
+                {"· "}
+                {finishLabel(view.finish_reason)}
               </span>
             )}
           </div>
@@ -810,13 +844,13 @@ export function Requests({
           <div className="space-y-5">
             <Card className="overflow-hidden">
               <div
-                className="relative min-h-[42rem]"
+                className={`relative ${reserved ? "min-h-[42rem]" : filter === "active" ? "min-h-[9rem]" : "min-h-[14rem]"}`}
                 data-live-list=""
                 ref={listRef}
               >
                 <TooltipProvider delayDuration={200}>
                   <Table
-                    className="md:min-w-[680px] xl:table-fixed"
+                    className="md:min-w-[640px]"
                     scrollLabel={t("requests.list.tableLabel")}
                   >
                     <Thead>
@@ -825,19 +859,21 @@ export function Requests({
                           k="time"
                           sort={sort}
                           setSort={setSort}
-                          className="w-24 max-sm:hidden"
+                          className="w-px whitespace-nowrap max-sm:hidden"
                         >
                           {t("requests.list.colTime")}
                         </SortTh>
-                        <Th>{t("requests.list.colRequest")}</Th>
-                        <Th className="hidden w-36 xl:table-cell">
+                        <Th className="min-w-56">
+                          {t("requests.list.colRequest")}
+                        </Th>
+                        <Th className="hidden w-px whitespace-nowrap xl:table-cell">
                           {t("requests.list.colUsage")}
                         </Th>
                         <SortTh
                           k="ttft"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-24 md:table-cell"
+                          className="hidden w-px whitespace-nowrap md:table-cell"
                         >
                           {t("requests.list.colTtft")}
                         </SortTh>
@@ -845,7 +881,7 @@ export function Requests({
                           k="total"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-24 md:table-cell"
+                          className="hidden w-px whitespace-nowrap md:table-cell"
                         >
                           {t("requests.list.colTotal")}
                         </SortTh>
@@ -853,14 +889,14 @@ export function Requests({
                           k="tps"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-24 md:table-cell"
+                          className="hidden w-px whitespace-nowrap md:table-cell"
                         >
                           tok/s
                         </SortTh>
-                        <Th className="hidden w-24 min-[1800px]:table-cell">
+                        <Th className="hidden w-px whitespace-nowrap min-[1800px]:table-cell">
                           {t("requests.list.colSpec")}
                         </Th>
-                        <Th className="w-28">
+                        <Th className="w-px">
                           <span className="sr-only">
                             {t("requests.list.colActions")}
                           </span>
@@ -1033,15 +1069,17 @@ export function Requests({
                                       : `${elapsed(row.elapsed_s)} · ${number(speedValue)} tok/s`}
                                 </p>
                                 {/* Below lg the usage column is gone; the same numbers ride on a line of their own. */}
-                                <p className="mt-0.5 text-xs tabular-nums text-muted-foreground xl:hidden">
-                                  {t("requests.list.mobileUsage", {
-                                    prompt: number(row.prompt_tokens, 0),
-                                    out: number(row.completion_tokens, 0),
-                                    cached: number(row.cached_tokens, 0),
-                                  })}
-                                </p>
+                                {row.phase === "complete" && (
+                                  <p className="mt-0.5 truncate text-xs tabular-nums text-muted-foreground xl:hidden">
+                                    {t("requests.list.mobileUsage", {
+                                      prompt: number(row.prompt_tokens, 0),
+                                      out: number(row.completion_tokens, 0),
+                                      cached: number(row.cached_tokens, 0),
+                                    })}
+                                  </p>
+                                )}
                               </Td>
-                              <Td className="hidden overflow-hidden tabular-nums xl:table-cell">
+                              <Td className="hidden whitespace-nowrap tabular-nums xl:table-cell">
                                 <span className="block truncate">
                                   {number(row.prompt_tokens, 0)} /{" "}
                                   {number(row.completion_tokens, 0)}
@@ -1155,6 +1193,37 @@ export function Requests({
                   </TableState>
                 )}
               </div>
+              {filter === "active" && !reserved && recentDone.length > 0 && (
+                <div
+                  className="border-t px-4 py-3"
+                  data-testid="recent-finished"
+                >
+                  <p className="mb-2 text-xs font-medium text-muted-foreground">
+                    {t("requests.list.recentFinished")}
+                  </p>
+                  <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                    {recentDone.map((r) => (
+                      <li key={r.id}>
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground tabular-nums hover:bg-muted"
+                          onClick={() => setDetail(r)}
+                        >
+                          <span className="min-w-0 truncate font-mono">
+                            {shortId(r.id)}
+                          </span>
+                          <span className="shrink-0">
+                            {r.ttft_ms != null ? formatMs(r.ttft_ms) : "—"} ·{" "}
+                            {r.decode_tps != null
+                              ? `${number(r.decode_tps)} tok/s`
+                              : "—"}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {matched.length > shown.length && (
                 <div className="flex justify-center py-2">
                   <Button

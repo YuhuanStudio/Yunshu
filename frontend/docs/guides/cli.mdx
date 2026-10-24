@@ -115,6 +115,8 @@ Run the console process on its own: the web console and docs, a reverse proxy to
 
 Run Yunshu at login with launchd, as two jobs: the engine and the console process (so the console keeps recording while the engine restarts). Subcommands: `install`, `uninstall`, `start`, `stop`, `restart`, `status`, `logs`, `rotate-logs`. Full options are on the [Service](/docs/getting-started/service) page.
 
+`yunshu service logs` accepts `--follow`/`-f` and `--lines`/`-n` (default 50). `yunshu service install` accepts `--no-start` (write the agent without starting it); `--instance` and `--state-dir` (together) run an isolated development launchd label (`dev-*`). `yunshu console --static-dir DIR` serves a console build from a directory (development and tests).
+
 ### `yunshu chat`
 
 Interactive terminal chat with a running server. Not available with `--json`.

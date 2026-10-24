@@ -1,0 +1,87 @@
+---
+title: Code execution
+description: Turn on the Anthropic code_execution tool, which runs model-written commands on your Mac inside the sandbox-runtime, and learn its containers, files and limits.
+---
+
+The Anthropic `code_execution_20250522`, `_20250825`, `_20260120` and `_20260521` tools run on this machine, inside Anthropic's [sandbox-runtime](https://github.com/anthropics/sandbox-runtime) (`srt`). The feature is off by default. For how the sandbox is built, see [Code execution sandbox](/docs/internals/code-execution-sandbox).
+
+## Turn it on
+
+<Steps>
+<Step>
+
+Install the sandbox runtime. It needs Node 22.12 or newer, and `srt` is an optional dependency.
+
+```bash
+npm install -g @anthropic-ai/sandbox-runtime
+```
+
+</Step>
+<Step>
+
+Serve with code execution enabled:
+
+```bash
+yunshu serve -m <model> --set code_execution=1
+```
+
+</Step>
+<Step>
+
+Run `yunshu doctor` and look for the "code execution" row, which shows the `srt` version and a self-test.
+
+</Step>
+</Steps>
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `YUNSHU_CODE_EXECUTION` | `false` | Serve the tool. Off: a request that declares it gets a `400` naming this setting. On without `srt`: `503` (`api_error`) with the install command. A command never runs outside `srt`. |
+| `YUNSHU_CODE_EXECUTION_ROOT` | `~/.yunshu/sandbox` | One sub-directory per container, mode 0700. |
+| `YUNSHU_CODE_EXECUTION_TIMEOUT` | `60.0` s | Wall clock per call (also the CPU-time limit); then `execution_time_exceeded`. |
+| `YUNSHU_CODE_EXECUTION_MEMORY_MB` | `2048` | Resident memory of the call's whole process group, sampled every 100 ms; above it the call is killed. |
+| `YUNSHU_CODE_EXECUTION_NETWORK_ALLOW` | unset | Comma-separated hosts the sandbox may reach (`example.com`, `*.example.com`, `host:443`). Unset: no network, loopback included. |
+| `YUNSHU_CODE_EXECUTION_TTL_MIN` | `20.0` | Minutes a container may sit unused before it and its files are deleted. |
+
+## Use it from the Messages API
+
+Declare the tool in a [Messages](/docs/api/messages) request, with no beta header:
+
+```json
+{"type": "code_execution_20250825", "name": "code_execution"}
+```
+
+The model gets two sub-tools, `bash_code_execution` and `text_editor_code_execution` (`view`, `create`, `str_replace`). The response carries `server_tool_use` blocks and `bash_code_execution_tool_result` or `text_editor_code_execution_tool_result` blocks as in Anthropic's documentation. Streaming works the same way: the sub-tool input arrives as `input_json_delta` and each result block arrives whole in one `content_block_start`. The response also carries `container: {id, expires_at}` (in `message_delta.delta` when streaming).
+
+- **Containers.** Pass `container: "<id>"` (or `{id}`) back to keep the working directory. An unknown or expired id is a `400`. A container is deleted after the idle TTL, and the total is capped at 2 GiB (oldest first).
+- **Files.** `container_upload` content blocks copy a [Files API](/docs/api/files) file into the working directory. Every bash call gets a fresh `$OUTPUT_DIR`; its top-level files become Files API entries returned as `bash_code_execution_output {file_id}` (download with `GET /v1/files/{id}/content`).
+- **Output limits.** stdout and stderr are each cut at 64 KiB (marked). A call whose stdout and stderr together exceed 1 MiB is killed (`output_file_too_large`). Background processes die with the call. The command sees only `PATH`, `HOME` (the container), `TMPDIR`, `OUTPUT_DIR` and locale variables, never the server's environment.
+
+## Python, REPL state and programmatic tool calling
+
+`20250522` offers one Python tool (`code_execution`, a fresh process per call). `20250825` offers bash and the text editor (plus Python, also fresh per call, when a client tool lists a code-execution caller in `allowed_callers`). `20260120` and `20260521` offer all three, and the Python process lives with the container: variables and imports persist between calls. It is killed and replaced cleanly on a timeout, a memory overrun, more than 1 MiB of output, 10 idle minutes, a container delete, or when more than four containers hold one.
+
+A client tool with `"allowed_callers": ["code_execution_20260120"]` becomes an `async` Python function in the interpreter. When the code awaits it, the turn ends with `stop_reason: "tool_use"` and one `tool_use` block per call, each with `caller: {type, tool_id}`. Send the results back (with the `container`) and the response continues with the `code_execution_tool_result`. The cell waits 270 seconds for the answer; one cell may make 256 calls.
+
+## OpenAI Responses and containers
+
+With the same setting, a [Responses](/docs/api/responses) request can declare `{"type": "code_interpreter", "container": {"type": "auto"}}` (or a `cntr_` id) and the hosted `{"type": "shell", "environment": {"type": "container_auto"}}`. The response has `code_interpreter_call`, `shell_call` and `shell_call_output` items, the matching streaming events, and `container_file_citation` annotations for files the code made. They also work in background mode. The containers have the OpenAI containers API (`/v1/containers`, with files); `expires_after`, `memory_limit` and `network_policy` can only narrow the settings above. See [Server tools](/docs/api/server-tools).
+
+## What the sandbox allows
+
+- **Writes:** the container directory only.
+- **Reads:** `/Users`, `/Volumes`, `/home` and the container root are denied; only this container and the Python interpreter's prefix are allowed back. Your home, keys, `~/.yunshu` and other containers are unreadable.
+- **Network:** none unless listed. Loopback is never reachable, and allowed names cannot resolve into private ranges.
+- **Other:** Unix sockets, Apple Events and `open` are off.
+
+Violations are logged as metadata (container id, return code, byte counts); commands, output and file contents are never logged.
+
+<Callout type="warn">
+An allowed domain list does not inspect traffic. Allowing a broad host such as `github.com` can still leak data, so keep the list short.
+</Callout>
+
+## Differences from Anthropic's container
+
+- macOS, not Linux x86_64. The Python is the interpreter Yunshu runs on (standard library only, no pandas or numpy).
+- No Content Credentials.
+- No Content Credentials, container skills or OpenAI `programmatic_tool_calling`.
+- The sandbox runs under macOS `sandbox-exec`, which Apple marks deprecated, and `srt` is a 0.0.x release (tested: 0.0.81).

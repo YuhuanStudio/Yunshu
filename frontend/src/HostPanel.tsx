@@ -250,7 +250,7 @@ export function HostPanel({
             {t("overview.host.details")}
             <ChevronDown
               size={14}
-              className={`transition-transform duration-150 ${open ? "rotate-180" : ""}`}
+              className={`transition-transform duration-(--dur-fast) ${open ? "rotate-180" : ""}`}
             />
           </Button>
         </CollapsibleTrigger>

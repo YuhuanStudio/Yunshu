@@ -199,10 +199,10 @@ for (const [locale, title] of [
     await expect(article(page).getByRole("heading", { level: 1 })).toHaveText(
       title,
     );
-    await expect(article(page)).toContainText("134.400");
-    await expect(article(page)).toContainText("117.550");
-    await expect(article(page)).toContainText("77.950");
-    await expect(article(page)).toContainText("no part_done (incomplete job)");
+    // The published 27B decode row of the interleaved snapshot (docs/guides/benchmarks.mdx).
+    await expect(article(page)).toContainText("135.2 / 200.4");
+    await expect(article(page)).toContainText("118.0 / 150.6");
+    await expect(article(page)).toContainText("75.5 / 116.7");
     expect(errors).toEqual([]);
   });
 }

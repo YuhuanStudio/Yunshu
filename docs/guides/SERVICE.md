@@ -1,5 +1,7 @@
 # Running Yunshu as a background service
 
+
+> Console docs: the maintained, translated version of this page is `/docs/getting-started/service` (source `frontend/docs/getting-started/service.mdx`). This file stays as the repository-side reference read by tooling.
 > The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/getting-started/service.mdx`](../../frontend/docs/getting-started/service.mdx)); this file is its GitHub-facing counterpart.
 
 `yunshu service` manages a per-user launchd agent. It starts Yunshu at login, restarts it after a

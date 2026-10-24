@@ -1,5 +1,7 @@
 # KV cache: current serving paths and measured APC tiers
 
+
+> Console docs: the maintained, translated version of this page is `/docs/internals/prefix-cache` (source `frontend/docs/internals/prefix-cache.mdx`). This file stays as the repository-side reference read by tooling.
 Current architecture on main in the **0.1.6 development cycle**. The tier measurements below are historical:
 2026-10-02, M5 Max / 128 GB, Qwen3.8-27B oQ4e-mtp; measurement record `d00f61d7`,
 identity record `63b00e16`, merge `57272ed7`. Results are replay summaries, not confidence
