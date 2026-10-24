@@ -39,9 +39,9 @@ run() {
  APC_DIR=/Volumes/Micron/yunshu-apc/anenative-$LABEL-$arm
  "$PY" scripts/research/anenative_tfbench.py --engine yunshu \
    --model /Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp --out "$OUT/$arm.jsonl" --tag=-anenative-$arm \
-   --env YUNSHU_VLM_APC_DISK=0 --env YUNSHU_VLM_APC_DISK_DIR="$APC_DIR" \
+   --env YUNSHU_CONSOLE=0 --env YUNSHU_VLM_APC_DISK=0 --env YUNSHU_VLM_APC_DISK_DIR="$APC_DIR" \
    --env YUNSHU_VLM_DRAFT=/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2 \
-   --part decode --rep 0 --only-ctx 32768 --only-kind prose --only-kind code --decode-tokens 512 --long-ask --phases cold
+   --part decode --rep 0 --only-ctx 32768 --only-kind prose --only-kind code --decode-tokens 512 --long-ask --phases cold --idle-s 0
  "$PY" scripts/research/anenative_tfbench.py check "$OUT/$arm.jsonl" --base "$OUT/base.jsonl"
  rm -rf "$APC_DIR"
  APC_DIR=

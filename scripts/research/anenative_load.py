@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import ctypes as c
+import gc
 import hashlib
 import json
 import signal
+import sys
 import time
 from pathlib import Path
 
@@ -23,6 +26,7 @@ def parser():
     )
     p.add_argument("--layers", default="40,41,42,43")
     p.add_argument("--duration", type=float, default=0.0, help="0 runs until SIGTERM")
+    p.add_argument("--start-paused", action="store_true")
     p.add_argument("--cache", type=Path, required=True)
     p.add_argument("--ready", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
@@ -31,6 +35,19 @@ def parser():
     p.add_argument("--channels", type=int, default=2176)
     p.add_argument("--mode", choices=["fp16", "int8"], default="fp16")
     return p
+
+
+def release_staging():
+    """Free unreachable converter graphs/allocator staging, never live model storage."""
+    gc.collect()
+    if sys.platform != "darwin":
+        return 0
+    try:
+        trim = c.CDLL(None).malloc_zone_pressure_relief
+        trim.argtypes, trim.restype = [c.c_void_p, c.c_size_t], c.c_size_t
+        return int(trim(None, 0))
+    except (AttributeError, OSError):
+        return 0
 
 
 def main():
@@ -104,18 +121,43 @@ def main():
         index += 1
 
     stop = False
+    active = not a.start_paused
+    count = 0
+    samples, changes = [], []
+    sample_start, sample_count = None, 0
+
+    def flush_sample(now):
+        nonlocal sample_start, sample_count
+        if sample_start is not None and now > sample_start:
+            samples.append(
+                {
+                    "start_s": sample_start,
+                    "end_s": now,
+                    "calls": count - sample_count,
+                    "active": active,
+                }
+            )
+        sample_start, sample_count = now, count
 
     def stopping(*_):
         nonlocal stop
         stop = True
 
+    def toggle(signum, *_):
+        nonlocal active
+        now = time.perf_counter()
+        flush_sample(now)
+        active = signum == signal.SIGUSR1
+        changes.append({"time_s": now, "active": active})
+
     signal.signal(signal.SIGTERM, stopping)
     signal.signal(signal.SIGINT, stopping)
-    count = 0
-    samples = []
+    signal.signal(signal.SIGUSR1, toggle)
+    signal.signal(signal.SIGUSR2, toggle)
     start = time.perf_counter()
     try:
         run()
+        relief_bytes = release_staging()
         a.ready.write_text(
             json.dumps(
                 {
@@ -126,30 +168,27 @@ def main():
                     "channels": a.channels,
                     "layers": layers,
                     "whole_mlp": all(whole_mlps),
+                    "active": active,
+                    "allocator_relief_bytes": relief_bytes,
                 }
             )
         )
         start = time.perf_counter()
         sample_start, sample_count = start, 0
         while not stop and (not a.duration or time.perf_counter() - start < a.duration):
-            run()
-            count += 1
+            if active:
+                run()
+                count += 1
+            else:
+                time.sleep(0.02)
             now = time.perf_counter()
             if now - sample_start >= 1.0:
-                samples.append(
-                    {
-                        "start_s": sample_start,
-                        "end_s": now,
-                        "calls": count - sample_count,
-                    }
-                )
-                sample_start, sample_count = now, count
+                flush_sample(now)
         end = time.perf_counter()
-        if end > sample_start:
-            samples.append(
-                {"start_s": sample_start, "end_s": end, "calls": count - sample_count}
-            )
+        flush_sample(end)
         seconds = end - start
+        active_seconds = sum(r["end_s"] - r["start_s"] for r in samples if r["active"])
+        active_rate = count * a.rows / active_seconds if active_seconds else 0.0
         a.out.write_text(
             json.dumps(
                 {
@@ -161,9 +200,13 @@ def main():
                     "rows": a.rows,
                     "channels": a.channels,
                     "rows_per_second": count * a.rows / seconds,
+                    "active_rows_per_second": active_rate,
+                    "active_seconds": active_seconds,
+                    "activity_changes": changes,
+                    "allocator_relief_bytes": relief_bytes,
                     "layers": layers,
                     "whole_mlp": all(whole_mlps),
-                    "mlp_only_model64_tps_upper_bound": count * a.rows / seconds / 64
+                    "mlp_only_model64_tps_upper_bound": active_rate / 64
                     if all(whole_mlps)
                     else None,
                     "rate_samples": samples,

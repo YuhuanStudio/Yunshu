@@ -203,3 +203,134 @@ def test_fault_probe_parser_does_not_load_private_runtime():
         ]
     )
     assert args.fault == "stalled"
+
+
+def test_grid_oracle_compares_bits_including_signed_zero():
+    import numpy as np
+
+    path = (
+        Path(__file__).resolve().parents[2] / "scripts/research/anenative_grid_probe.py"
+    )
+    spec = importlib.util.spec_from_file_location("anenative_grid_probe", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    left = np.array([0.0, 1.0], dtype=np.float16)
+    right = np.array([-0.0, 1.0], dtype=np.float16)
+    assert module.bit_difference(left, right) == 1
+    with pytest.raises(ValueError):
+        module.bit_difference(left, np.array([np.nan, 1.0], dtype=np.float16))
+
+
+def test_warm_interference_requires_equal_hot_cache_and_digest():
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/research/anenative_warm_interference.py"
+    )
+    spec = importlib.util.spec_from_file_location("anenative_warm_interference", path)
+    module = importlib.util.module_from_spec(spec)
+    import sys
+
+    sys.path.insert(0, str(path.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    row = {
+        "ct": 512,
+        "finish": "length",
+        "cached": 32768,
+        "sha": "abc",
+        "xy": {"speculative": {"mode": "dflash"}},
+    }
+    cache = {}
+    module.validate_row(row, "code", cache, {"code": "abc"})
+    assert cache == {"code": 32768}
+    for change in [{"cached": 0}, {"cached": 32704}, {"sha": "other"}, {"ct": 128}]:
+        with pytest.raises(ValueError):
+            module.validate_row({**row, **change}, "code", cache, {"code": "abc"})
+
+
+def test_staging_relief_only_releases_unreachable_allocator_memory(monkeypatch):
+    from unittest.mock import Mock
+
+    path = Path(__file__).resolve().parents[2] / "scripts/research/anenative_load.py"
+    spec = importlib.util.spec_from_file_location("anenative_load_trim", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    trim = Mock(return_value=4096)
+    collect = Mock()
+    monkeypatch.setattr(module.gc, "collect", collect)
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        module.c, "CDLL", lambda _: SimpleNamespace(malloc_zone_pressure_relief=trim)
+    )
+    assert module.release_staging() == 4096
+    collect.assert_called_once()
+    trim.assert_called_once_with(None, 0)
+
+
+def test_warm_summary_requires_live_load_and_complete_equal_arms(tmp_path):
+    import sys
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/research/anenative_warm_summary.py"
+    )
+    spec = importlib.util.spec_from_file_location("anenative_warm_summary", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(path.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    (tmp_path / "complete.json").write_text('{"complete":true}')
+    worker = {
+        "complete": True,
+        "rows": 128,
+        "whole_mlp": True,
+        "rate_samples": [{"start_s": 1.0, "end_s": 3.0, "calls": 20, "active": True}],
+    }
+    for backend in ("native", "coreml"):
+        (tmp_path / f"{backend}.json").write_text(json.dumps(worker))
+    rows = []
+    backends = [
+        "off",
+        "native",
+        "native",
+        "off",
+        "coreml",
+        "coreml",
+        "off",
+        "native",
+        "coreml",
+        "off",
+    ]
+    for kind in ("prose", "code"):
+        for arm, backend in enumerate(backends):
+            rows.append(
+                {
+                    "stage": "decode",
+                    "kind": kind,
+                    "arm": str(arm),
+                    "backend": backend,
+                    "ct": 512,
+                    "finish": "length",
+                    "sha": "same",
+                    "cached": 32768,
+                    "xy": {"speculative": {"mode": "dflash"}},
+                    "dec_tps": 100 if backend == "off" else 90,
+                    "_first_at_s": 1.0,
+                    "_end_at_s": 3.0,
+                }
+            )
+    rows.append({"complete": True})
+    receipt = tmp_path / "decode.jsonl"
+    receipt.write_text("\n".join(json.dumps(r) for r in rows))
+    result = module.summarize(tmp_path)
+    assert len(result["cells"]) == 4
+    assert result["cells"][0]["decode_slowdown_percent"] == pytest.approx(10)
+    assert result["cells"][0]["mlp_only_model64_tps_upper_bound"] == 20
+    worker["rate_samples"][0]["active"] = False
+    (tmp_path / "native.json").write_text(json.dumps(worker))
+    with pytest.raises(ValueError, match="missing"):
+        module.summarize(tmp_path)

@@ -17,9 +17,9 @@ in-flight state after a timeout so the service cannot access freed surfaces.
 
 The adapted Splash runtime provides IOSurface-backed, channel-major fp16 memory
 and Metal shared-event completion. Phase 1 copies inputs and outputs through
-locked methods; native timings exclude those separately measured copies. No MLX
-buffer is currently backed by these surfaces. End-to-end zero-copy integration
-is a later phase, conditional on an actual measured gain.
+locked methods; native timings exclude those separately measured copies. The optional phase-2 research API can alias these surfaces into MLX without
+a copy, as described below. Serving integration remains conditional on measured
+gain and the identity and quality gates.
 
 The CPU MIL builder supports fp16 and symmetric per-channel int8 weights, with
 `up * 2**h_exp` and `down * 2**-h_exp` to reduce intermediate underflow. This does

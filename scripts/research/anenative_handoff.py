@@ -128,7 +128,7 @@ if (i == 0) marker[0] = 1;
             source="""uint i = thread_position_in_grid.x;
 if (i < R*H) {
   uint row = i/H, channel = i%H;
-  out[i] = float(gpu[i]) + float(ane[channel*P+row]);
+  out[i] = bfloat16_t(float(gpu[i]) + float(ane[channel*P+row]));
 }
 """,
         )
