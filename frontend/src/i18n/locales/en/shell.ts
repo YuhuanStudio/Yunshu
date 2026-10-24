@@ -180,6 +180,7 @@ const shell: Shape<typeof zh> = {
   "island.trigger": "Open status panel",
   "island.overview": "Overview",
   "island.version": "yunshu {version} · up {uptime}",
+  "pause.notice": "Paused for a measurement: {reason}",
   "engines.title": "Engines",
   "engines.waiting":
     "No engine is running. This console keeps watching and connects as soon as one starts.",

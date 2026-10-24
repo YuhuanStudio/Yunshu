@@ -168,7 +168,9 @@ class Poller:
         interval_s: float = 1.0,
         client: httpx.AsyncClient | None = None,
         clock=time.time,
+        pause=None,
     ) -> None:
+        self.pause = pause
         self.engine_url = engine_url.rstrip("/")
         self.store = store
         self.interval_s = max(0.25, float(interval_s))
@@ -408,7 +410,8 @@ class Poller:
         while True:
             started = time.perf_counter()
             try:
-                await self.tick()
+                if self.pause is None or not self.pause.paused:
+                    await self.tick()
             except asyncio.CancelledError:
                 raise
             except Exception:  # a bug in one tick must not end the recorder

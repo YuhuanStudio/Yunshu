@@ -40,7 +40,7 @@ import {
 import { Presence } from "./motion/Presence";
 import { LiveSparkline } from "./motion/LiveSparkline";
 import { routeHref } from "./route";
-import { EngineSwitcher, useEngineList } from "./EngineSwitcher";
+import { EngineSwitcher, PauseNotice, useEngineList } from "./EngineSwitcher";
 import type { Connection } from "./api";
 import type { Engine } from "./ui";
 
@@ -75,9 +75,13 @@ export function StatusIslandContent({
   onNavigate: () => void;
 }) {
   const status = engine.status;
-  const { list, pin } = useEngineList(connection ?? { baseUrl: "", token: "" });
-  const switcher =
-    connection && list ? <EngineSwitcher list={list} pin={pin} /> : null;
+  const { list, pause, pin } = useEngineList(connection ?? { baseUrl: "", token: "" });
+  const switcher = (
+    <>
+      <PauseNotice pause={pause} />
+      {connection && list ? <EngineSwitcher list={list} pin={pin} /> : null}
+    </>
+  );
   const online = engine.phase === "online" && status != null;
   const go = (page: Parameters<typeof routeHref>[0]) => () => {
     globalThis.location.hash = routeHref(page).slice(1);

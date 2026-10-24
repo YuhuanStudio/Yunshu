@@ -18,9 +18,11 @@ import { uptimeText } from "./footer-status";
  */
 export function useEngineList(connection: Connection): {
   list: EngineList | null;
+  pause: EngineList["pause"];
   pin: (url: string | null) => Promise<void>;
 } {
   const [list, setList] = useState<EngineList | null>(null);
+  const [pause, setPause] = useState<EngineList["pause"]>(null);
   useEffect(() => {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -30,10 +32,15 @@ export function useEngineList(connection: Connection): {
           signal: controller.signal,
           timeoutMs: 4000,
         });
-        if (!controller.signal.aborted)
+        if (!controller.signal.aborted) {
           setList(next.mode === "auto" ? next : null);
+          setPause(next.pause ?? null);
+        }
       } catch {
-        if (!controller.signal.aborted) setList(null);
+        if (!controller.signal.aborted) {
+          setList(null);
+          setPause(null);
+        }
       }
       if (!controller.signal.aborted)
         timer = setTimeout(() => void tick(), 3000);
@@ -55,7 +62,7 @@ export function useEngineList(connection: Connection): {
     },
     [connection],
   );
-  return { list, pin };
+  return { list, pause, pin };
 }
 
 /** Compact engine switcher: the engine being followed, the others discovered, pin / follow newest. */
@@ -132,6 +139,18 @@ export function EngineSwitcher({
           {t("shell.engines.unpin")}
         </Button>
       )}
+    </StatusIslandCard>
+  );
+}
+
+/** Shown while the console is paused for a measurement (it sends no request to any engine). */
+export function PauseNotice({ pause }: { pause: EngineList["pause"] }) {
+  if (!pause) return null;
+  return (
+    <StatusIslandCard data-testid="island-pause">
+      <div className="text-[13px] text-muted-foreground" role="status">
+        {t("shell.pause.notice", { reason: pause.reason || "—" })}
+      </div>
     </StatusIslandCard>
   );
 }

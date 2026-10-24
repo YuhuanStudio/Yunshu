@@ -35,6 +35,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.types import Scope
 
 from .discovery import Discovery
+from .pause import Pause
 from .poller import FIELDS, Poller
 from .store import HistoryStore
 
@@ -300,12 +301,18 @@ def create_app(
         return {"object": "list", "enabled": True, **page}
 
     # ── engines (auto-follow) ───────────────────────────────────────────
+    def _pause_state() -> dict | None:
+        src = poller if poller is not None else discovery
+        pause = getattr(src, "pause", None)
+        return pause.state() if pause is not None else None
+
     @app.get("/console/api/engines")
     @app.get("/v1/yunshu/console/engines")
     async def engines(request: Request) -> dict:
         check_access(request)
+        paused = _pause_state()
         if discovery is not None:
-            return discovery.snapshot()
+            return {**discovery.snapshot(), "pause": paused}
         eng = poller.engine if poller is not None else {}
         return {
             "object": "yunshu.console.engines",
@@ -313,6 +320,7 @@ def create_app(
             "selected": app.state.engine_url,
             "pinned": None,
             "waiting": False,
+            "pause": paused,
             "data": [
                 {
                     "url": app.state.engine_url,
@@ -540,10 +548,12 @@ def build_from_settings(
         "YUNSHU_AUTH_TOKEN"
     )
     store = open_store()
+    pause = Pause(settings.get("YUNSHU_CONSOLE_PAUSE_FILE"))
     poller = Poller(
         url,
         store,
         token=token,
+        pause=pause,
         interval_s=float(settings.get("YUNSHU_CONSOLE_POLL_S") or 1.0),
     )
     discovery = None
@@ -559,6 +569,7 @@ def build_from_settings(
             ),
             default_url=url,
             token=token,
+            pause=pause,
             interval_s=float(settings.get("YUNSHU_CONSOLE_DISCOVER_S") or 2.0),
         )
     return create_app(

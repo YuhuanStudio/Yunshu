@@ -171,6 +171,7 @@ const shell = {
   "island.trigger": "開啟狀態面板",
   "island.overview": "總覽",
   "island.version": "yunshu {version} · 已運作 {uptime}",
+  "pause.notice": "因量測暫停：{reason}",
   "engines.title": "引擎",
   "engines.waiting":
     "目前沒有引擎在執行。主控台會持續監看，引擎一啟動就自動連上。",
