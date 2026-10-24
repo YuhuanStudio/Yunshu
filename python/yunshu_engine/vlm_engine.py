@@ -4663,6 +4663,17 @@ class VLMEngine:
             "uptime_seconds": uptime,
             "text_prompt_cache": self._text_prompt_cache.stats,
         }
+        runner = self._batch_runner
+        counts = getattr(runner, "phase_counts", None)
+        if callable(counts):
+            try:
+                c = counts()
+                # /debug/requests and the console's debug view read these two names.
+                stats["active"] = c["prefill"] + c["decode"]
+                stats["waiting"] = c["queued"]
+                stats["phases"] = c
+            except Exception:
+                logger.debug("phase counts unavailable", exc_info=True)
         snap = self.apc_snapshot()
         if snap is not None:
             stats["apc"] = snap

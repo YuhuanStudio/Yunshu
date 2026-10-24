@@ -780,3 +780,27 @@ def test_concurrent_newcomer_reports_prefill_while_its_atoms_run(atoms):
     assert seen.index("prefill") < seen.index("decode")
     # progress is reported (not stuck at 0 / unknown) while the atoms run
     assert max(d for d, _ in done_seen) > 0
+
+
+def test_phase_counts_follow_the_requests_through_queued_prefill_decode(atoms):
+    """/debug/requests reported active=0 waiting=0 while two requests ran (the VLM engine
+    gave no counts); the runner now answers by phase."""
+    r, _ = atoms
+    assert r.phase_counts() == {"queued": 0, "prefill": 0, "decode": 0}
+    a = job(0)
+    a.ids = list(range(5000))
+    b = job(0)
+    b.ids = list(range(5000))
+    r._submit(a)
+    r._submit(b)
+    assert r.phase_counts()["queued"] == 2
+    seen = set()
+    for _ in range(400):
+        r._drive_slice(False)
+        c = r.phase_counts()
+        seen.add((c["queued"] > 0, c["prefill"] > 0, c["decode"] > 0))
+        if a.stats.t_first and b.stats.t_first:
+            break
+    c = r.phase_counts()
+    assert c["prefill"] == 0 and c["decode"] >= 1
+    assert any(p for _, p, _ in seen)

@@ -1848,6 +1848,15 @@ class VLMBatchRunner:
                 if not st.t_prefill_end:
                     st.t_prefill_end = time.perf_counter()
 
+    def phase_counts(self) -> dict[str, int]:
+        """Requests by phase right now: waiting for admission, prefilling, decoding."""
+        with self._lock:
+            queued = len(self._pending)
+        jobs = [j for g in self._groups() for j in g.jobs.values()]
+        jobs += list(self._driver_jobs.values())
+        prefill = sum(1 for j in jobs if not j.stats.t_first)
+        return {"queued": queued, "prefill": prefill, "decode": len(jobs) - prefill}
+
     def busy_snapshot(self) -> dict:
         """Cumulative GPU-busy accounting: all slices and the round driver's share."""
         return {

@@ -6,7 +6,7 @@ TAG=$1; OUT=$2; shift 2
 PY=/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python
 H=/Volumes/P5Plus/yunshu-build/agentload-home-conc; mkdir -p "$H" "$OUT"
 PORT=18994
-export HOME=$H YUNSHU_HOME=$H/.yunshu YUNSHU_VLM_APC_DISK=0 YUNSHU_CONSOLE=0 YUNSHU_DEBUG_ROUTES=1 YUNSHU_AUTH_DISABLED=truePYTHONPATH=$T/python \
+export HOME=$H YUNSHU_HOME=$H/.yunshu YUNSHU_VLM_APC_DISK=0 YUNSHU_CONSOLE=0 YUNSHU_DEBUG_ROUTES=1 YUNSHU_AUTH_DISABLED=true PYTHONPATH=$T/python \
   YUNSHU_VLM_DRAFT=/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2
 [ "${CONC_DEBUG:-0}" = 1 ] && export YUNSHU_LOG_LEVEL=DEBUG
 LAUNCH=("$PY" -m yunshu_cli)
