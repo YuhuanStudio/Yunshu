@@ -109,6 +109,7 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Fixed
 
+- Console round 2: Requests no longer reserves 42 rem of empty table (Active shows recent finished requests, the details column defaults to the newest request); Diagnostics, Models and the health line read a pause / restart as "waiting", never as a fault; history shows on a page opened during an outage; the usual-restart estimate ignores outages over 10 min; pipeline chips no longer reserve a count slot; new Playwright spec for paused / restarting states.
 - Console, `--engine auto`: an engine restart is now a calm "Engine restarting… (was up Xm, usually back in Ys)" or
   "Switching to :port" state (error only after 60 s with no live engine, with the engine list); the Requests list,
   prefix hit rate and Overview chart stay filled from the console store across restarts and mark the restart

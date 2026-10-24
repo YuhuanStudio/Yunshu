@@ -343,7 +343,7 @@ export function livePill(
   // no speed to show it reads as idle, never as a bare "Decode".
   if (
     a.phase === "idle" ||
-    (a.phase === "decode" && a.decodeNow == null && a.counts.decode === 0)
+    (a.phase === "decode" && a.decodeNow == null && a.counts.active === 0)
   )
     return {
       phase: phaseLabels.idle,

@@ -189,5 +189,6 @@ const models = {
     "系統目前可用的記憶體，與下方每個模型的「系統可用」是同一個數字；它不是載入上限，載入前會再用試算確認。",
   "list.freeTipMetal":
     "還沒取得系統可用記憶體（引擎沒有回報），這裡是總量減去 Metal 已配置的量，沒計入其他程式，會偏高。",
+  "detail.waitingCalm": "引擎忙碌或重新啟動中，回應後會立即列出模型。",
 };
 export default models;

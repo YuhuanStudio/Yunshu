@@ -168,5 +168,6 @@ const diagnostics: Shape<typeof zh> = {
   "realtime.notMeasured": "Not measured yet: press Test connection.",
   "realtime.serverMissing": "The engine does not report this, so none is shown.",
   "realtime.note": "This browser opens /v1/realtime once over {scheme} and waits for the first event. It sends no audio and uses no GPU. It measures the path from this browser to the engine, not speech inference latency.",
+  "verdict.waiting": "Waiting for the engine",
 };
 export default diagnostics;

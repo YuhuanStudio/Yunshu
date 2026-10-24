@@ -399,8 +399,7 @@ export function Dashboard({
   const recentRequests = useRecentRequests(
     connection,
     status?.last?.request_id,
-    status?.console_process === true ||
-      (status == null && engine.phase === "offline"),
+    status?.console_process === true || (status == null && engine.failures > 0),
   );
   const hit = useMemo(
     () =>
@@ -759,14 +758,17 @@ export function Dashboard({
             </div>
           </div>
           {/* Five rows of reserved space: requests come and go inside it, nothing below moves. */}
-          <div className="relative flex-1" style={{ minHeight: LANE_AREA_PX }}>
+          <div
+            className="relative flex-1"
+            style={{ minHeight: online ? LANE_AREA_PX : 0 }}
+          >
             <ul
               className="divide-y divide-border/60"
               data-live-list=""
               ref={laneRef}
             >
               {lanes.map((lane, i) =>
-                lane ? (
+                !online && lanes.every((l) => !l) ? null : lane ? (
                   <RequestLane
                     key={`slot-${i}`}
                     row={lane.row}
