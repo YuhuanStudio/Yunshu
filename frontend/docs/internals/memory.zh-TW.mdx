@@ -92,7 +92,7 @@ RAM 與 SSD 預算都是單一預算：選用的 WARM 層佔用 APC RAM 預算�
 | `YUNSHU_PREFILL_STEP_SIZE` | 2048 | 純文字引擎的預填區塊大小；調低可壓低啟動值峰值 |
 | `YUNSHU_FOOTPRINT_SAMPLE_MS` | 0（關閉） | 取樣 `phys_footprint` 並在 `/metrics` 匯出峰值 |
 
-在記憶體吃緊的主機上，INFERENCE 指南的長時間測試使用 `YUNSHU_VLM_APC_MEMORY_GB=4` 與 `YUNSHU_PREFILL_BUFFER_CACHE_GB=1`（27B，峰值從 37.2 降到 31.5 GiB）。只有多模型主機才需要 `YUNSHU_MAX_MEMORY_GB`。
+在記憶體吃緊的主機上，INFERENCE 指南的長時間測試使用 `YUNSHU_VLM_APC_MEMORY_GB=4` 與 `YUNSHU_PREFILL_BUFFER_CACHE_GB=1`（27B；峰值因此降低，數字未記錄在基準測試紀錄中）。只有多模型主機才需要 `YUNSHU_MAX_MEMORY_GB`。
 
 ## 限制
 

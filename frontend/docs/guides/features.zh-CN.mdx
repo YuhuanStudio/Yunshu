@@ -16,10 +16,10 @@ description: 依领域列出 Yunshu 的每一项功能，附上状态与涵盖�
 | 功能 | 说明 | 状态 | 文档 |
 |---|---|---|---|
 | 无损推测解码 | DFlash2、MTP 与 prompt 拷贝式草稿，搭配 batch-invariant kernel；贪婪输出与关闭推测时相同 | 稳定 | [推测解码](/docs/internals/speculative-decoding) |
-| 文本模型推测 | 针对 mlx-lm 模型的 n-gram / suffix 与 Gemma 4 assistant 草稿（外部草稿实验仍为实验性） | 稳定 | [推测解码](/docs/internals/speculative-decoding) |
+| 文本模型推测 | 针对 mlx-lm 模型的 n-gram / suffix 与 Gemma 4 assistant 草稿（外部 draft 模型是另一个输出不相同的选项） | 稳定 | [推测解码](/docs/internals/speculative-decoding), [选项](/docs/guides/options) |
 | 前缀缓存（APC） | 位于 RAM、SSD 与选用保存层的精确混合 checkpoint；含图像与音频键值 | 稳定 | [前缀缓存内部机制](/docs/internals/prefix-cache), [Prompt 缓存](/docs/guides/prompt-caching) |
 | 结构化输出 | 在解码期间强制 JSON schema、regex、选项与 grammar，包含工具参数 | 稳定 | [结构化输出](/docs/guides/structured-output), [受限解码内部机制](/docs/internals/constrained-decoding) |
-| 有损内存选项 | int8 KV、压缩的 WARM 层与加载时量化；默认关闭 | 稳定 | [内存管理](/docs/internals/memory), [配置](/docs/guides/configuration) |
+| 有损内存选项 | int8 KV、压缩的 WARM 层与加载时量化；默认关闭 | 稳定 | [选项](/docs/guides/options), [内存管理](/docs/internals/memory), [配置](/docs/guides/configuration) |
 | 大型 MoE 加载（部分支持） | 从张量形状推导社群版 DeepSeek-V4-Flash 的比特数与 group size；加载前先做容量检查 | 部分支持 | [模型支持](/docs/guides/model-support) |
 | Round driver（实验性） | 针对 dense Qwen3.5 系列模型、Yunshu 自有的推测 round driver | 实验性 | [Round driver](/docs/developers/round-driver) |
 | 模型支持 | 依系列说明哪些已调校、哪些走通用路径、哪些已验证 | 稳定 | [模型支持](/docs/guides/model-support) |
@@ -62,7 +62,7 @@ description: 依领域列出 Yunshu 的每一项功能，附上状态与涵盖�
 | 语音对语音（部分支持） | Qwen3-Omni 原生语音；重复图像与音频 APC 有限定范围的一致性收据；图像加音频的合并重用尚未验证 | 部分支持 | [多模态](/docs/guides/multimodal), [Realtime](/docs/api/realtime) |
 | Realtime 语音 | WebSocket 与选用的 WebRTC、服务器端 VAD、打断、短期 client secret、本机语音 | 稳定 | [Realtime](/docs/api/realtime) |
 | 语音转文本、文本转语音 | transcriptions、translations、speech 与 voices | 稳定 | [Audio](/docs/api/audio) |
-| OCR 与图像生成 | GLM-OCR 文本截取；图像 generations、edits 与 variations | 稳定 | [Images](/docs/api/images), [多模态](/docs/guides/multimodal) |
+| OCR 与图像生成 | GLM-OCR 文本截取；图像 generations、edits 与 variations | 稳定 | [OCR](/docs/api/ocr), [Images](/docs/api/images), [多模态](/docs/guides/multimodal) |
 | Embeddings、rerank、score、classify | 文本与多模态 embeddings、cross-encoder rerank、训练好的分类 head | 稳定 | [Embeddings](/docs/api/embeddings), [Rerank](/docs/api/rerank) |
 
 ## 营运与主控台

@@ -18,7 +18,7 @@ description: 哪些路由提供圖片、音訊、影片、語音、Realtime 語�
 | Realtime 語音 | `WS /v1/realtime`（與 `/realtime`） | `audio` | 伺服器端 VAD、插話打斷、原生 omni 語音或 ASR、LLM、TTS 串接。請見 [Realtime](/docs/api/realtime) |
 | 語音轉文字 | `/v1/audio/transcriptions`、`/v1/audio/translations` | `audio` | 翻譯需要 Whisper 模型。請見[音訊](/docs/api/audio) |
 | 文字轉語音 | `/v1/audio/speech`、`GET /v1/audio/voices` | `audio` | 對需要參考音訊的模型，可用音訊樣本在本機註冊聲音 |
-| OCR | `POST /v1/ocr` | `vision` | GLM-OCR；`yunshu ocr`；主控台中也有 |
+| OCR | `POST /v1/ocr` | `vision` | GLM-OCR；`yunshu ocr`；主控台中也有；[OCR API](/docs/api/ocr) |
 | 圖片生成、編輯、變化 | `/v1/images/generations`、`/edits`、`/variations` | `generation` | `yunshu image`、`image-edit`、`image-variations`。請見[圖片](/docs/api/images) |
 | Embeddings | `POST /v1/embeddings` | `embeddings` | 文字，以及（支援的模型）圖片、音訊與影片。請見 [Embeddings](/docs/api/embeddings) |
 | Rerank、score、classify、pooling | `/v1/rerank`、`/v1/score`、`/v1/classify`、`/v1/pooling` | `embeddings` | cross-encoder rerank 與訓練過的分類頭，採用 vLLM 語意。請見 [Rerank](/docs/api/rerank) |

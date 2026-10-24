@@ -64,7 +64,7 @@ flowchart LR
 - **使用滑动窗口（sliding-window）缓存的模型系列不在 VLM runner 的 APC 范围内**，因为轮转缓存无法由稠密 KV 块组装。例外是 `gemma4`：其原生快照包含窗口、绝对 offset 与环形索引；它的精确窗口恢复是针对 checkpoint 的，有范围明确的一致性检查，而不是对所有滑动窗口模型的全面声明。`VLMEngine._build_batch_runner` 依 `model_apc_plan` 与后端缓存能力逐模型判断。
 - Apple Paravirtual Metal 使用原生 runner，没有 APC。
 - 命中需要精确的 token 前缀：提示前段有任何变动，其后所有内容都会位移。
-- WARM lossless 约压缩 1.4 倍；在 2026-10-02 于 Qwen3.8-27B 上记录的重放中，它的首 token 时间并未胜过 SSD 层，因此默认关闭。
+- WARM lossless 会压缩缓存；在 2026-10-02 于 Qwen3.8-27B 上记录的重放中，它的首 token 时间并未胜过 SSD 层，因此默认关闭。
 
 ## 如何验证
 

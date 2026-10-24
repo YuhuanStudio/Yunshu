@@ -13,7 +13,7 @@ description: 引擎內部地圖：服務模型、請求路徑、前綴快取、�
 - **單一 MLX 執行緒。** 所有 GPU 工作都在擁有 Metal stream 的單一 worker 執行器上執行，事件迴圈不會碰 MLX 陣列。
 - **一致性規則。** 快取命中等於未命中、推測開啟等於推測關閉、預演（rehearsal）不改變輸出。每個內部頁面都會說明適用哪條規則以及如何檢查。
 
-文字模型的 continuous batching 迴圈藏在 `YUNSHU_ENGINE_LOOP` 後面（預設關閉、實驗性）。它是舊有路徑，不是要擴充的功能。
+文字模型的 continuous batching 迴圈藏在 `YUNSHU_ENGINE_LOOP` 後面（預設關閉）。它是穩定的使用者選項，輸出不保證與快速路徑相同（見[可能改變輸出的選項](/docs/guides/options)）；它是舊有路徑，不是要擴充的功能。
 
 ## 為什麼這樣設計
 

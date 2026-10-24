@@ -65,10 +65,12 @@ flowchart TD
 | `YUNSHU_NGRAM_DEFAULT` | 關閉 | 文字模型：對 greedy 請求使用 n-gram 推測 |
 | `YUNSHU_SPEC_PROPOSER` | `ngram` | 文字模型的 `ngram` 或 `suffix` |
 | `YUNSHU_GEMMA4_ASSISTANT` | 未設定 | Gemma 4 文字模型的 assistant drafter 目錄 |
+| `YUNSHU_SPEC_UNVERIFIED`、`YUNSHU_DRAFT_MODEL` | 關閉、未設定 | 穩定的使用者選項，非無損：貪婪文字請求使用外部 `mlx-lm` draft 模型；見[可能改變輸出的選項](/docs/guides/options) |
 | `YUNSHU_ROUND_DRIVER` | 關閉 | 實驗性的逐列 round driver；見 [Round driver](/docs/developers/round-driver) |
 
 ## 限制
 
+- 無損保證不涵蓋搭配外部 draft 模型的 `YUNSHU_SPEC_UNVERIFIED`：其輸出可能與一般解碼不同。見[可能改變輸出的選項](/docs/guides/options)。
 - 在 VLM runner 上僅限 Qwen3.5 系列；其他 VLM 系列不起草直接解碼。
 - 通道一次只服務一個請求。並行請求共用批次，不一起起草。
 - Apple Paravirtual Metal 主機使用原生 runner，沒有推測。

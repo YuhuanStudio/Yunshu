@@ -64,7 +64,7 @@ flowchart LR
 - **使用滑動視窗（sliding-window）快取的模型系列不在 VLM runner 的 APC 範圍內**，因為輪替快取無法由稠密 KV 區塊組裝。例外是 `gemma4`：其原生快照包含視窗、絕對 offset 與環形索引；它的精確視窗還原是針對 checkpoint 的，有範圍明確的一致性檢查，而不是對所有滑動視窗模型的全面宣稱。`VLMEngine._build_batch_runner` 依 `model_apc_plan` 與後端快取能力逐模型判斷。
 - Apple Paravirtual Metal 使用原生 runner，沒有 APC。
 - 命中需要精確的 token 前綴：提示前段有任何變動，其後所有內容都會位移。
-- WARM lossless 約壓縮 1.4 倍；在 2026-10-02 於 Qwen3.8-27B 上記錄的重放中，它的首 token 時間並未勝過 SSD 層，因此預設關閉。
+- WARM lossless 會壓縮快取；在 2026-10-02 於 Qwen3.8-27B 上記錄的重放中，它的首 token 時間並未勝過 SSD 層，因此預設關閉。
 
 ## 如何驗證
 

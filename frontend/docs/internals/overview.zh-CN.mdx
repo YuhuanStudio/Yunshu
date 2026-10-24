@@ -13,7 +13,7 @@ description: 引擎内部地图：服务模型、请求路径、前缀缓存、�
 - **单一 MLX 线程。** 所有 GPU 工作都在拥有 Metal stream 的单 worker 执行器上运行，事件循环不会接触 MLX 数组。
 - **一致性规则。** 缓存命中等于未命中、推测开启等于推测关闭、预演（rehearsal）不改变输出。每个内部页面都会说明适用哪条规则以及如何检查。
 
-文本模型的 continuous batching 循环藏在 `YUNSHU_ENGINE_LOOP` 之后（默认关闭、实验性）。它是遗留路径，不是要扩展的功能。
+文本模型的 continuous batching 循环藏在 `YUNSHU_ENGINE_LOOP` 之后（默认关闭）。它是稳定的用户选项，输出不保证与快速路径相同（见[可能改变输出的选项](/docs/guides/options)）；它是遗留路径，不是要扩展的功能。
 
 ## 为什么这样设计
 

@@ -1,0 +1,132 @@
+---
+title: OCR
+description: POST /v1/ocr 會用 OCR 模型把上傳的圖片轉成文字；沒有載入 OCR 模型時，改用任何已載入的視覺語言模型。
+---
+
+`POST /v1/ocr` 是 Yunshu 自己的路由，不屬於 OpenAI API。它接收一張上傳的圖片，回傳從中讀出的文字。`yunshu ocr` 與主控台的「圖片辨識」對話框使用的是同一條路由。
+
+<Endpoint method="POST" path="/v1/ocr" />
+
+<Callout type="info">
+只有設定了 `YUNSHU_AUTH_TOKEN` 才會強制驗證。使用 API key 時，該 key 需要推論權限，並且能存取最後實際服務此請求的模型。
+</Callout>
+
+## 請求
+
+`multipart/form-data`。
+
+| 欄位 | 型別 | 必填 | 說明 |
+| --- | --- | --- | --- |
+| `file` | file | 是 | 圖片，最大 10 MB。上傳內容會以 Pillow 驗證，不是圖片時回傳 `400`。可讀取 PNG、JPEG、WebP、TIFF、BMP。 |
+| `model` | string | 否 | OCR 模型或視覺語言模型的 id。留空表示使用第一個已載入的 OCR 模型。 |
+| `task` | string | 否 | `text`（預設）、`formula` 或 `table`，決定辨識提示詞（`Text Recognition:`、`Formula Recognition:`、`Table Recognition:`）；未知的值視同 `text`。 |
+| `language` | string | 否 | 引導輸出語言的提示（「Respond in ...」）。不會做語言偵測。 |
+
+## 如何選擇模型
+
+1. 優先使用已載入的 OCR 類模型：`model` 指定的那一個，`model` 留空時用第一個已載入的。若 `model` 指向已註冊但尚未載入的 OCR 模型，模型管理器會嘗試載入它。
+2. 否則退而使用已載入的視覺語言模型：`model` 若是已載入的 VLM 就用它，不然用任何一個已載入的 VLM。圖片會搭配任務提示詞與「Extract all text from this image verbatim」送出，採貪婪解碼（`temperature` 為 0），最多產生 2048 個新 token。OCR 引擎路徑上限為 4096。
+3. 兩者都沒有時，伺服器回傳 `503`。
+
+金鑰的模型範圍會針對實際解析出的模型再檢查一次，所以受模型範圍限制的 key 不能靠留空 `model` 繞到其他模型。
+
+## 回應
+
+```json
+{
+  "text": "Invoice 2026-001\nTotal: 120.00",
+  "model": "mlx-community/GLM-OCR-bf16",
+  "confidence": null,
+  "language": null,
+  "task": "text",
+  "prompt_tokens": 312,
+  "completion_tokens": 18,
+  "usage": {
+    "prompt_tokens": 312,
+    "completion_tokens": 18,
+    "total_tokens": 330,
+    "image_tokens": 290
+  }
+}
+```
+
+| 欄位 | 說明 |
+| --- | --- |
+| `text` | 擷取出的文字。模型什麼都沒讀到時可能是空字串。 |
+| `model` | 實際服務此請求的模型 id。 |
+| `confidence` | 一律為 `null`：兩條路徑都不產生信心分數，Yunshu 也不會捏造。 |
+| `language` | 走 VLM 後備時是你給的 `language` 提示；走 OCR 引擎路徑時為 `null`。不做偵測。 |
+| `task` | 原樣回傳請求的 `task`。 |
+| `prompt_tokens`、`completion_tokens`、`usage` | token 數量。`usage.image_tokens` 是圖片佔的部分；走 VLM 後備且引擎未回報時，會依圖片尺寸與視覺設定估算。 |
+
+回應不含文字框或位置，只有文字。
+
+## 範例
+
+<Tabs items={["curl", "Python", "CLI"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/ocr \
+  -F file=@receipt.png \
+  -F task=text \
+  -F language="English"
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import requests
+
+with open("receipt.png", "rb") as f:
+    r = requests.post(
+        "http://localhost:8000/v1/ocr",
+        files={"file": ("receipt.png", f, "image/png")},
+        data={"model": "", "task": "text"},
+        timeout=180,
+    )
+r.raise_for_status()
+print(r.json()["text"])
+```
+
+</Tab>
+<Tab value="CLI">
+
+```bash
+yunshu ocr page.png
+```
+
+</Tab>
+</Tabs>
+
+## 取消
+
+請求會登錄到請求追蹤器，用戶端斷線或呼叫 `POST /v1/cancel`（見[擴充](/docs/api/extensions)）時會被取消。在 OCR 引擎路徑上，生成呼叫本身會跑到 token 上限；處理常式會立即返回，結果則被丟棄。在 VLM 後備路徑上，生成會在解碼步驟之間停止。
+
+## 錯誤
+
+| 狀態碼 | 情況 |
+| --- | --- |
+| `400` | 上傳的檔案不是伺服器能讀取的圖片。 |
+| `401`、`403` | 缺少或無效的憑證，或該 key 不可推論、不可使用實際解析出的模型。 |
+| `413` | 圖片超過 10 MB。 |
+| `503` | 沒有載入 OCR 模型，也沒有載入視覺語言模型。 |
+| `507` | GPU 記憶體不足。 |
+| `500` | 擷取失敗；原因在伺服器日誌中。 |
+
+## 支援狀況
+
+| 功能 | 狀態 |
+| --- | --- |
+| 文字、公式與表格任務 | <Support status="extension">Yunshu 擴充</Support> |
+| 視覺語言模型後備 | <Support status="supported">支援</Support> |
+| 信心分數 | <Support status="unsupported">一律為 null</Support> |
+| 文字位置或文字框 | <Support status="unsupported">僅提供文字</Support> |
+| PDF 輸入 | <Support status="unsupported">僅限圖片</Support> |
+
+## 相關頁面
+
+- [Images](/docs/api/images)：圖像生成、編輯與變體。
+- [多模態](/docs/guides/multimodal)：哪些路由處理哪種輸入。
+- [主控台](/docs/getting-started/console)：「圖片辨識」對話框。

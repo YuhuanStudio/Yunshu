@@ -1,0 +1,69 @@
+---
+title: 可能改变输出的选项
+description: 输出不保证与默认路径相同的可选设置，以及将它们与无损默认值区分开来的规则。
+---
+
+Yunshu 的规则很简单：**无损**优化（与普通路径产生相同的 token）可以成为默认值；**有损或输出不相同**的优化则是稳定的用户选项，默认关闭，不会因为某次基准测试就替你打开。本页列出所有这类选项。默认值定义在设置注册表（`python/yunshu_engine/settings.py`），实际生效的值可用 `yunshu config` 查看。完整设置表请见[配置](/docs/guides/configuration)。
+
+<Callout type="warn">
+第一节的四个选项（`YUNSHU_SPEC_UNVERIFIED`、`YUNSHU_DRAFT_MODEL`、`YUNSHU_ENGINE_LOOP`、`YUNSHU_OVERLAP`）是稳定选项，不是实验功能，但**不保证产生与默认路径相同的 token**。只有在你接受输出可能与普通解码不同时才开启。每个选项的限制见下文。
+</Callout>
+
+## 输出不相同的服务选项
+
+这四个选项都只适用于纯文本的 `mlx-lm` 模型。Qwen3.5 系列的 VLM runner 有自己的无损推测解码（MTP、DFlash），不使用它们。请见[推测解码](/docs/internals/speculative-decoding)。
+
+| 设置 | 默认值 | 作用 |
+|---|---|---|
+| `YUNSHU_SPEC_UNVERIFIED` | `''`（关闭）或 `eagle` | 在文本模型上启用以外部 `mlx-lm` draft 模型进行的推测解码 |
+| `YUNSHU_DRAFT_MODEL` | 未设置 | `YUNSHU_SPEC_UNVERIFIED=eagle` 使用的 draft 检查点路径 |
+| `YUNSHU_ENGINE_LOOP` | 关闭 | 文本模型改用连续批处理循环，而不是单请求的快速路径 |
+| `YUNSHU_OVERLAP` | `''`（关闭）、`cpu_gpu` 或 `two_batch` | 让该循环中的 CPU 与 GPU 工作重叠 |
+
+### 外部 draft 模型（`YUNSHU_SPEC_UNVERIFIED` 与 `YUNSHU_DRAFT_MODEL`）
+
+`YUNSHU_SPEC_UNVERIFIED=eagle` 会加载由 `YUNSHU_DRAFT_MODEL` 指定的另一个较小的 `mlx-lm` 检查点（`python/yunshu_engine/batched_engine.py` 的 `_init_external_lm_spec`），并用它生成草稿。若未设置 `YUNSHU_DRAFT_MODEL`，引擎会在模型配置中找 `draft_model_path`；两者都没有时就什么都不加载，开关未设置时绝不会加载第二个模型。
+
+- `eagle` 是历史遗留的路由名称。普通语言模型就能当 draft，不需要训练过的 EAGLE head。
+- 只有贪婪（temperature 为 0 或未设置）、非流式、要求推测或默认启用推测、且使用默认采样与惩罚参数的请求才会走这条路。Schema 或语法约束、自定义 logits processor、stop 字符串、思考预算、LoRA 与 token mask 选项仍走普通快速路径，logprobs 请求也是。
+- 输出不保证与普通解码逐 token 相同。注册表记录 2026-10-24 的一次检查中，试过的每个提示都出现差异，速度则依提示从变慢到变快不等；这些数字不在基准测试日志中，因此这里不引用。
+- 当你有一个与大型文本模型相配的小型 draft，且重视速度胜过精确复现时才使用。要无损推测请用 n-gram 或 suffix 草稿（`YUNSHU_NGRAM_DEFAULT`、`YUNSHU_SPEC_PROPOSER`）或 Qwen3.5 系列 runner。
+
+### 连续批处理循环（`YUNSHU_ENGINE_LOOP`）
+
+设置 `YUNSHU_ENGINE_LOOP=1` 后，文本模型改由 `EngineCore`（`python/yunshu_engine/engine_core.py`）服务，它会把并发请求合批；否则由 `_generate_fast` 服务，并发请求会被串行化。
+
+- 多个并发文本请求时，总吞吐量较高；只有一个请求时，注册表记录有小幅损失。确切数字不在基准测试日志中，因此这里不列出。
+- 批处理输出与单请求路径不保证逐 token 相同，因为批处理的数值计算不同。
+- 部分功能在循环上行为不同，例如 SpecPrefill 不会应用。
+- 它不影响 VLM，VLM 一律使用 VLM batch runner。
+
+适合并发客户端很多、吞吐量比逐位可复现性更重要的纯文本服务器。
+
+### CPU 与 GPU 重叠（`YUNSHU_OVERLAP`）
+
+`cpu_gpu` 让调度工作与 GPU 步骤重叠；`two_batch` 把一个批次切成两半让它们重叠。两者都在 `EngineCore` 启动时读取，因此只有搭配 `YUNSHU_ENGINE_LOOP=1` 才有意义，并继承其输出不相同的特性。注册表记录在 3B 文本模型上没有可测量的效果（2026-10-24），除非你在自己的模型上测到好处，否则请保持关闭。
+
+## 有损内存选项
+
+这些选项以质量换取内存或磁盘。全部默认关闭（默认值是无损值）。有损选项不会因为基准测试而变成默认值。
+
+| 设置 | 无损默认值 | 有损值 | 作用 |
+|---|---|---|---|
+| `YUNSHU_KV_PRECISION` | `bf16` | `int8` | Qwen3.5 系列共享解码批次使用 int8 KV；内存与带宽较少，注意力有小误差。单请求与推测 lane 保持 bf16 |
+| `YUNSHU_KV_QUANT_BITS` | `off` | `auto`、`2`、`3`、`4`、`8` | 文本引擎的量化 KV 缓存 |
+| `YUNSHU_PREFIX_HOT_LIMIT` | `0`（全部完整精度） | 一个数量 | 只让该数量的前缀 KV 条目保持完整精度，较旧的以 4-bit 存放在 RAM；复用时有损 |
+| `YUNSHU_SSD_CACHE_PRECISION` | `native` | `int8` | 文本 SSD 前缀缓存以逐 tensor int8 存储；复用时有损 |
+| `YUNSHU_VLM_APC_WARM` | `off` | `int8`、`int4` | 压缩的 WARM 前缀层；命中时还原的是反量化的 K/V，输出可能与冷 prefill 不同。`lossless` 则是精确的 |
+| `YUNSHU_QUANT_MODE` | `''`（沿用检查点） | `mxfp4`、`nvfp4`、`mxfp8`、`affine` | 加载时在内存中量化权重 |
+
+`YUNSHU_QUANT_CONFIG` 设置 `affine` 的位数与分组大小。内存核算请见[内存核算](/docs/internals/memory)。
+
+## 规则
+
+| 类型 | 例子 | 可以成为默认值吗？ |
+|---|---|---|
+| 无损（输出相同） | 布局、kernel、调度器、batch-invariant 推测、无损缓存压缩 | 可以，需先通过 A/B 与一致性检查；可保留关闭选项 |
+| 有损或输出不相同 | 本页所有选项 | 不可以。作为稳定选项，默认为无损值 |
+
+要确认某个选项是否改变你的输出，请用相同提示在开启与关闭下各做一次贪婪解码并比对 token；一致性工具请见[验证](/docs/developers/verification)。

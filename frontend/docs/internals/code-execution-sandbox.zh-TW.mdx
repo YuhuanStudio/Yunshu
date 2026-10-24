@@ -58,7 +58,8 @@ sequenceDiagram
 | 每次呼叫的牆鐘時間（也是 CPU 時間限制） | `YUNSHU_CODE_EXECUTION_TIMEOUT`，60 秒；超過後為 `execution_time_exceeded` | 設定 |
 | 記憶體 | `YUNSHU_CODE_EXECUTION_MEMORY_MB`，2048；整個程序樹的常駐大小，每 100 ms 取樣，超出即終止 | 設定 |
 | stdout 與 stderr | 各 64 KiB，超出會截斷並標記 | `supervisor.py` |
-| 寫入的輸出總量 | 單次呼叫寫入 1 MiB 即終止（`output_file_too_large`） | 指南 |
+| 輸出總量（stdout 加 stderr） | 單次呼叫超過 1 MiB 即終止（`output_file_too_large`） | `supervisor.py` |
+| 指令寫入的單一檔案大小 | 256 MiB（`RLIMIT_FSIZE`） | `supervisor.py` |
 | 並行呼叫數 | 2（`MAX_CONCURRENT`） | `executor.py` |
 | 所有容器合計 | 2 GiB（`MAX_TOTAL_BYTES`），最舊的先移除 | `containers.py` |
 | 容器閒置過期 | `YUNSHU_CODE_EXECUTION_TTL_MIN`，20 分鐘 | 設定 |

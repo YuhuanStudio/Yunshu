@@ -65,10 +65,12 @@ flowchart TD
 | `YUNSHU_NGRAM_DEFAULT` | 关闭 | 文本模型：对 greedy 请求使用 n-gram 推测 |
 | `YUNSHU_SPEC_PROPOSER` | `ngram` | 文本模型的 `ngram` 或 `suffix` |
 | `YUNSHU_GEMMA4_ASSISTANT` | 未设置 | Gemma 4 文本模型的 assistant drafter 目录 |
+| `YUNSHU_SPEC_UNVERIFIED`、`YUNSHU_DRAFT_MODEL` | 关闭、未设置 | 稳定的用户选项，非无损：贪婪文本请求使用外部 `mlx-lm` draft 模型；见[可能改变输出的选项](/docs/guides/options) |
 | `YUNSHU_ROUND_DRIVER` | 关闭 | 实验性的逐行 round driver；见 [Round driver](/docs/developers/round-driver) |
 
 ## 限制
 
+- 无损保证不涵盖搭配外部 draft 模型的 `YUNSHU_SPEC_UNVERIFIED`：其输出可能与普通解码不同。见[可能改变输出的选项](/docs/guides/options)。
 - 在 VLM runner 上仅限 Qwen3.5 系列；其他 VLM 系列不起草直接解码。
 - 通道一次只服务一个请求。并发请求共享批次，不一起起草。
 - Apple Paravirtual Metal 主机使用原生 runner，没有推测。

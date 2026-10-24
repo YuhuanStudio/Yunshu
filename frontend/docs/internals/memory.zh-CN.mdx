@@ -92,7 +92,7 @@ RAM 与 SSD 预算都是单一预算：选用的 WARM 层占用 APC RAM 预算�
 | `YUNSHU_PREFILL_STEP_SIZE` | 2048 | 文本引擎的预填分块；调低可限制激活峰值 |
 | `YUNSHU_FOOTPRINT_SAMPLE_MS` | 0（关闭） | 采样 `phys_footprint` 并在 `/metrics` 导出峰值 |
 
-在内存紧张的主机上，INFERENCE 指南的 soak 测量使用了 `YUNSHU_VLM_APC_MEMORY_GB=4` 与 `YUNSHU_PREFILL_BUFFER_CACHE_GB=1`（27B，峰值从 37.2 降到 31.5 GiB）。`YUNSHU_MAX_MEMORY_GB` 只有多模型主机才需要。
+在内存紧张的主机上，INFERENCE 指南的 soak 测量使用了 `YUNSHU_VLM_APC_MEMORY_GB=4` 与 `YUNSHU_PREFILL_BUFFER_CACHE_GB=1`（27B；峰值因此降低，数字未记录在基准测试日志中）。`YUNSHU_MAX_MEMORY_GB` 只有多模型主机才需要。
 
 ## 限制
 

@@ -54,7 +54,7 @@ yunshu serve -m <model> --set code_execution=1
 
 - **容器。** 將 `container: "<id>"`（或 `{id}`）傳回來即可保留工作目錄。未知或已過期的 id 會是 `400`。容器在閒置 TTL 後刪除，總量上限為 2 GiB（最舊的先刪）。
 - **檔案。** `container_upload` 內容區塊會把 [Files API](/docs/api/files) 的檔案複製到工作目錄。每次 bash 呼叫都有全新的 `$OUTPUT_DIR`；其頂層檔案會變成 Files API 項目，以 `bash_code_execution_output {file_id}` 回傳（用 `GET /v1/files/{id}/content` 下載）。
-- **輸出限制。** stdout 與 stderr 各自在 64 KiB 截斷（並標記）。寫入超過 1 MiB 的呼叫會被終止（`output_file_too_large`）。背景行程會隨該次呼叫結束。指令看到的環境變數只有 `PATH`、`HOME`（容器）、`TMPDIR`、`OUTPUT_DIR` 與地區設定變數，絕不包含伺服器的環境。
+- **輸出限制。** stdout 與 stderr 各自在 64 KiB 截斷（並標記）。stdout 與 stderr 合計超過 1 MiB 的呼叫會被終止（`output_file_too_large`）。背景行程會隨該次呼叫結束。指令看到的環境變數只有 `PATH`、`HOME`（容器）、`TMPDIR`、`OUTPUT_DIR` 與地區設定變數，絕不包含伺服器的環境。
 
 ## 沙箱允許什麼
 

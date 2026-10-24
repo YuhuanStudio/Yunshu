@@ -31,7 +31,7 @@ description: 启用本机 Apple Silicon 功耗、GPU 与温度采样器，从 AP
 | `YUNSHU_TELEMETRY_INTERVAL_S` | `1.0` | 采样间隔（秒），最小 0.1；需重新启动 |
 
 <Callout type="info">
-默认为关闭。一次 27B 的 A/B（1K 与 32K 上下文，各 5 次重复）显示解码速度在杂讯范围内相同，但在 1K 纯文本情境中，后续请求的 TTFT 有小而一致的代价（+1.8%，约 11 ms），32K 代码情境的解码则有临界的 -0.4%，因此采用选用方式。
+默认为关闭。一次 27B 的 A/B 显示解码速度在杂讯范围内相同，但在 1K 纯文本情境中，后续请求的 TTFT 有小而一致的代价，因此采用选用方式。这些数字未记录在基准测试日志中，因此此处不引用。
 </Callout>
 
 实作的 IOReport 与 HID 访问衍生自 [pierre427/mlx2](https://github.com/pierre427/mlx2)（Apache-2.0），macOS 27 的计数器目录衍生自 [vladkens/macmon](https://github.com/vladkens/macmon)（MIT）。声明见 `THIRD_PARTY_NOTICES.md` 与 `vendor.json`。

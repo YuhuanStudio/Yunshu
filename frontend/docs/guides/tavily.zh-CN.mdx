@@ -117,4 +117,4 @@ Extract 处理静态 HTML、文本、JSON 与有大小上限的 PDF 内容，保
 
 - `scripts/research/tavily_sdk_parity.py` 与 `scripts/research/tavily_sdk_parity.mjs` 以注入传输的方式，让真正的 SDK 套件对真正的路由器与服务运行，不需要监听的服务器，也不连网。请把 SDK 套件装在独立环境，不要装进服务用的 venv。
 - `scripts/research/tavily_stage_latency.py` 量测各阶段延迟（`Server-Timing`：serp、fetch、ir、generate）；`--live` 使用真正的内置提供者与页面，且只用 CPU。
-- `scripts/research/websearch_quality_gate.py` 以明确的审查标注评估冻结的成对重播（`--snapshot`、`--pairs`、`--reviews`、`--out`），证据不完整时以 1 结束。它要求同一设备上有 200 个不重复的配对（40 新闻、40 文档、40 代码、10 对抗性），至少 10% 的配对审查须有人工检查，且等价性最多只能有一个净正确性差异。它不会核准改变品质的 research 默认值，也不能证明延迟。
+- `scripts/research/websearch_quality_gate.py` 以明确的审查标注评估冻结的成对重播（`--snapshot`、`--pairs`、`--reviews`、`--out`），证据不完整时以 1 结束。它要求同一设备上有 至少 200 个不重复的配对，涵盖至少 40 条新闻、40 条文档、40 条代码与 10 条对抗性参考，至少 10% 的配对审查须有人工检查，且等价性最多只能有一个净正确性差异。它不会核准改变品质的 research 默认值，也不能证明延迟。
