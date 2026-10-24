@@ -135,6 +135,35 @@ def test_only_keyed_supported_sampled_requests_are_admitted():
     assert tree_supported(lambda x: x, True)
 
 
+@pytest.mark.parametrize("seed", range(12))
+@pytest.mark.parametrize("top_p,top_k,min_p", [(1, 0, 0), (0.95, 20, 0.1)])
+def test_mtp_children_rank_coupled_full_vocabulary(seed, top_p, top_k, min_p):
+    from yunshu_engine.mtp_tree import _top_children
+
+    logits = mx.array(np.random.default_rng(29).normal(size=(3, 64)).astype(np.float32))
+    sampler = KeyedSampler(params(top_p=top_p, top_k=top_k, min_p=min_p), seed)
+    lm = SimpleNamespace(speculative_logits_from_hidden=lambda _: logits)
+
+    def reduced(_):
+        pytest.fail("sampled MTP proposals must rank the full vocabulary")
+
+    ids, _ = _top_children(
+        lm,
+        mx.zeros((3, 4)),
+        2,
+        SimpleNamespace(logits_subset=reduced),
+        keyed=sampler,
+        position=23,
+    )
+    probs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+    expected = mx.argsort(-coupled_scores(probs, sampler, mx.full((3,), 23)), axis=-1)[
+        :, :2
+    ]
+    assert ids.tolist() == expected.tolist()
+    assert ids[:, 0].tolist() == sampler.sample_positions(probs, [23] * 3).tolist()
+    assert sampler._next == 0
+
+
 @pytest.mark.parametrize("fast", [False, True])
 def test_coupled_lattice_ranks_full_vocabulary_before_shortlisting(fast):
     from yunshu_engine.dflash_tree import lattice_from_hidden, search_tree
