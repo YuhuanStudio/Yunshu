@@ -83,6 +83,7 @@ export default function AskAI({
   const controller = useRef<AbortController | null>(null);
   const [tabId] = useState(makeTabId);
   const scroll = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const stop = () => controller.current?.abort();
   useEffect(
@@ -118,6 +119,16 @@ export default function AskAI({
     if (pinned.current && scroll.current)
       scroll.current.scrollTop = scroll.current.scrollHeight;
   }, [turns, running]);
+
+  useEffect(() => {
+    if (!open || !content.current) return;
+    const observer = new ResizeObserver(() => {
+      if (pinned.current && scroll.current)
+        scroll.current.scrollTop = scroll.current.scrollHeight;
+    });
+    observer.observe(content.current);
+    return () => observer.disconnect();
+  }, [open]);
 
   async function send(question = input.trim()) {
     if (!question || controller.current || !state?.ready) return;
@@ -210,138 +221,144 @@ export default function AskAI({
               pinned.current =
                 el.scrollHeight - el.scrollTop - el.clientHeight < 64;
           }}
-          className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pr-2"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-2"
           role="log"
           aria-label={t("docs.ask.answers")}
         >
-          {!turns.length && (
-            <div className="space-y-3 py-6 text-center">
-              <p className="font-medium">{t("docs.ask.welcome")}</p>
-              <p className="text-sm text-muted-foreground">
-                {t("docs.ask.local")}
-              </p>
-              <div className="flex flex-wrap justify-center gap-2">
-                {["start", "models", "api"].map((key) => (
-                  <Button
-                    key={key}
-                    size="sm"
-                    variant="outline"
-                    disabled={!state?.ready || running}
-                    onClick={() => void send(tr(`docs.ask.suggestion.${key}`))}
-                  >
-                    {tr(`docs.ask.suggestion.${key}`)}
-                  </Button>
-                ))}
+          <div ref={content} className="space-y-5">
+            {!turns.length && (
+              <div className="space-y-3 py-6 text-center">
+                <p className="font-medium">{t("docs.ask.welcome")}</p>
+                <p className="text-sm text-muted-foreground">
+                  {t("docs.ask.local")}
+                </p>
+                <div className="flex flex-wrap justify-center gap-2">
+                  {["start", "models", "api"].map((key) => (
+                    <Button
+                      key={key}
+                      size="sm"
+                      variant="outline"
+                      disabled={!state?.ready || running}
+                      onClick={() =>
+                        void send(tr(`docs.ask.suggestion.${key}`))
+                      }
+                    >
+                      {tr(`docs.ask.suggestion.${key}`)}
+                    </Button>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
-          {unavailable && (
-            <div
-              role="status"
-              className="rounded-xl border border-border bg-(--bg-elevated) p-4 text-sm"
-            >
-              <p>{tr(`docs.ask.error.${unavailable}`)}</p>
-              {["no_engine", "no_model"].includes(unavailable) && (
-                <pre className="mt-3 overflow-x-auto">
-                  <code>
-                    {state?.command ?? "yunshu serve -m /path/to/mlx-model"}
-                  </code>
-                </pre>
-              )}
-            </div>
-          )}
-          {turns.map((turn, i) => (
-            <section key={i} className="space-y-3 motion-enter">
-              <p className="ml-8 whitespace-pre-wrap break-words rounded-xl bg-(--bg-elevated) p-3 text-sm">
-                {turn.question}
-              </p>
+            )}
+            {unavailable && (
               <div
-                className="min-w-0 overflow-x-auto"
-                data-testid="docs-ask-answer"
+                role="status"
+                className="rounded-xl border border-border bg-(--bg-elevated) p-4 text-sm"
               >
-                <Suspense
-                  fallback={
-                    <p className="whitespace-pre-wrap">{turn.answer}</p>
-                  }
-                >
-                  <Markdown
-                    content={turn.answer}
-                    streaming={running && i === turns.length - 1}
-                  />
-                </Suspense>
-                {running && i === turns.length - 1 && !turn.answer && (
-                  <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Spinner className="size-4" />
-                    {t("docs.ask.waiting")}
-                  </p>
+                <p>{tr(`docs.ask.error.${unavailable}`)}</p>
+                {["no_engine", "no_model"].includes(unavailable) && (
+                  <pre className="mt-3 overflow-x-auto">
+                    <code>
+                      {state?.command ?? "yunshu serve -m /path/to/mlx-model"}
+                    </code>
+                  </pre>
                 )}
               </div>
-              {turn.sources.length > 0 && (
-                <nav
-                  aria-label={t("docs.ask.sources")}
-                  className="grid gap-2 sm:grid-cols-2"
+            )}
+            {turns.map((turn, i) => (
+              <section key={i} className="space-y-3 motion-enter">
+                <p className="ml-8 whitespace-pre-wrap break-words rounded-xl bg-(--bg-elevated) p-3 text-sm">
+                  {turn.question}
+                </p>
+                <div
+                  className="min-w-0 overflow-x-auto"
+                  data-testid="docs-ask-answer"
                 >
-                  {turn.sources.map((source, n) => (
-                    <a
-                      key={source.id}
-                      href={docHref(source.slug, source.anchor)}
-                      onClick={onClose}
-                      className="rounded-lg border border-border px-3 py-2 text-xs transition-colors duration-(--dur-fast) hover:bg-(--bg-elevated)"
-                    >
-                      <span className="text-muted-foreground">[{n + 1}] </span>
-                      {source.title}
-                      {source.heading && (
-                        <span className="mt-1 block truncate text-muted-foreground">
-                          {source.heading}
-                        </span>
-                      )}
-                    </a>
-                  ))}
-                </nav>
-              )}
-              {turn.answer && (
-                <div className="flex gap-1">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    aria-label={t("docs.ask.copy")}
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(turn.answer);
-                        setCopied(i);
-                      } catch {
-                        setError("copy_failed");
-                      }
-                    }}
+                  <Suspense
+                    fallback={
+                      <p className="whitespace-pre-wrap">{turn.answer}</p>
+                    }
                   >
-                    {copied === i ? <Check size={14} /> : <Copy size={14} />}
-                  </Button>
-                  {turn.complete && (
-                    <>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-label={t("docs.ask.good")}
-                        aria-pressed={turn.feedback === "good"}
-                        onClick={() => void feedback(turn, "good")}
-                      >
-                        <ThumbsUp size={14} />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-label={t("docs.ask.bad")}
-                        aria-pressed={turn.feedback === "bad"}
-                        onClick={() => void feedback(turn, "bad")}
-                      >
-                        <ThumbsDown size={14} />
-                      </Button>
-                    </>
+                    <Markdown
+                      content={turn.answer}
+                      streaming={running && i === turns.length - 1}
+                    />
+                  </Suspense>
+                  {running && i === turns.length - 1 && !turn.answer && (
+                    <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Spinner className="size-4" />
+                      {t("docs.ask.waiting")}
+                    </p>
                   )}
                 </div>
-              )}
-            </section>
-          ))}
+                {turn.sources.length > 0 && (
+                  <nav
+                    aria-label={t("docs.ask.sources")}
+                    className="grid gap-2 sm:grid-cols-2"
+                  >
+                    {turn.sources.map((source, n) => (
+                      <a
+                        key={source.id}
+                        href={docHref(source.slug, source.anchor)}
+                        onClick={onClose}
+                        className="rounded-lg border border-border px-3 py-2 text-xs transition-colors duration-(--dur-fast) hover:bg-(--bg-elevated)"
+                      >
+                        <span className="text-muted-foreground">
+                          [{n + 1}]{" "}
+                        </span>
+                        {source.title}
+                        {source.heading && (
+                          <span className="mt-1 block truncate text-muted-foreground">
+                            {source.heading}
+                          </span>
+                        )}
+                      </a>
+                    ))}
+                  </nav>
+                )}
+                {turn.answer && (
+                  <div className="flex gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label={t("docs.ask.copy")}
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(turn.answer);
+                          setCopied(i);
+                        } catch {
+                          setError("copy_failed");
+                        }
+                      }}
+                    >
+                      {copied === i ? <Check size={14} /> : <Copy size={14} />}
+                    </Button>
+                    {turn.complete && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label={t("docs.ask.good")}
+                          aria-pressed={turn.feedback === "good"}
+                          onClick={() => void feedback(turn, "good")}
+                        >
+                          <ThumbsUp size={14} />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label={t("docs.ask.bad")}
+                          aria-pressed={turn.feedback === "bad"}
+                          onClick={() => void feedback(turn, "bad")}
+                        >
+                          <ThumbsDown size={14} />
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </section>
+            ))}
+          </div>
         </div>
         {error && (
           <p role="alert" className="text-sm text-destructive">
@@ -391,7 +408,10 @@ export default function AskAI({
             <Button
               type="button"
               variant="outline"
-              onClick={stop}
+              onClick={(event) => {
+                event.preventDefault();
+                stop();
+              }}
               aria-label={t("docs.ask.stop")}
             >
               <Square size={16} />

@@ -59,6 +59,7 @@ for (const locale of ["en", "zh-TW", "zh-CN"]) {
     }
     await dialog
       .getByRole("button", {
+        exact: true,
         name:
           locale === "en"
             ? "Helpful answer"
@@ -79,6 +80,9 @@ for (const locale of ["en", "zh-TW", "zh-CN"]) {
       "APC",
     );
     expect(bodies[1].history).toHaveLength(2);
+    await expect(
+      dialog.getByText("What about SSD?", { exact: true }),
+    ).toBeInViewport();
     mkdirSync("evidence/docsask", { recursive: true });
     await page.screenshot({ path: `evidence/docsask/ask-${locale}.png` });
   });
@@ -165,6 +169,10 @@ test("stop cancels a pending answer and prevents a second request in the tab", a
     dialog.getByRole("button", { name: "Send question", exact: true }),
   ).toBeVisible();
   await expect(dialog.getByRole("alert")).toHaveCount(0);
+  expect(requests).toBe(1);
+  await expect(
+    dialog.getByText("Second question", { exact: true }),
+  ).toHaveCount(0);
   release();
 });
 
