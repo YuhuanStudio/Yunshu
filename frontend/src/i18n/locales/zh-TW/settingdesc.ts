@@ -112,7 +112,11 @@ const settingdesc = {
   YUNSHU_FOOTPRINT_SAMPLE_MS:
     "在背景執行緒中每 N ms 取樣本行程的 `phys_footprint`，並將峰值以 `yunshu_process_footprint_bytes` 匯出到 `/metrics`；0（預設）表示關閉。",
   YUNSHU_MAX_MEMORY_GB:
-    "多模型模式的記憶體上限（GiB），例如 `48` 或 `48GB`；`disabled` 會關閉強制機制。未設定時為統一記憶體的 80%。",
+    "記憶體上限（GiB），例如 `48` 或 `48GB`（多模型模式，以及 VLM runner 的載入預算與請求准入：請求會在佇列等候，而不是超出上限）；`disabled` 會關閉強制機制。未設定時為統一記憶體的 80%。",
+  YUNSHU_MEMORY_ADMISSION:
+    "VLM runner：主機沒有足夠記憶體餘裕容納新請求的 KV 與預填工作區時（即時 macOS 可用記憶體、核心壓力、swap 增長、記憶體上限），請求留在佇列等候；可用記憶體低於保留量時釋出 APC RAM 項目；載入時依權重縮小 APC 預算。閒置伺服器的第一個請求一律放行。只影響排程，輸出不變。0 表示關閉。",
+  YUNSHU_MEMORY_RESERVE_GB:
+    "為 macOS 保留的空閒記憶體（GiB）。未設定時為實體記憶體的 5%，至少 4 GiB。也是釋出 APC RAM 項目的門檻。",
   YUNSHU_PREFILL_STEP_SIZE:
     "文字引擎：每次預填前向傳遞處理的提示詞 token 數；在記憶體較小的機器上調低可限制預填啟動值的峰值。",
   YUNSHU_MEM_PRESSURE_THRESHOLD:

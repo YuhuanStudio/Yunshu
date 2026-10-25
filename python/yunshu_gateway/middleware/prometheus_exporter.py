@@ -708,6 +708,23 @@ class PrometheusMetrics:
         ):
             self._gauges[key] = _Gauge(f"yunshu_{key}", text)
         for key, text in (
+            ("memory_admission_held", "Requests waiting in the queue for memory"),
+            (
+                "memory_admission_available_bytes",
+                "Host memory the engine can grow into",
+            ),
+            ("memory_admission_reserve_bytes", "Memory kept free for macOS"),
+            ("memory_admission_swap_used_bytes", "Host swap in use"),
+            ("memory_admission_pressure_level", "macOS memory pressure (1/2/4)"),
+        ):
+            self._gauges[key] = _Gauge(f"yunshu_{key}", text)
+        for key, text in (
+            ("memory_admission_holds", "Requests held in the queue for memory"),
+            ("memory_pressure_sheds", "Times APC RAM entries were shed under pressure"),
+            ("memory_pressure_shed_bytes", "APC RAM bytes shed under pressure"),
+        ):
+            self._counters[key] = _Counter(f"yunshu_{key}_total", text)
+        for key, text in (
             ("apc_lookups_hit", "APC lookups that hit"),
             ("apc_lookups_miss", "APC lookups that missed"),
             ("apc_matched_tokens", "Prompt tokens served from the APC"),

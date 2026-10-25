@@ -938,6 +938,7 @@ async def prometheus_export(request: Request) -> str:
 
     _populate_apc_metrics(pm)
     _populate_busy_metrics(pm)
+    _populate_memory_admission_metrics(pm)
     from yunshu_engine.spec_metrics import snapshot as spec_snapshot
 
     for row in spec_snapshot()["data"]:
@@ -1012,6 +1013,36 @@ def _populate_busy_metrics(pm) -> None:
             )
     except Exception:
         logger.debug("busy-time metrics population failed", exc_info=True)
+
+
+def _populate_memory_admission_metrics(pm) -> None:
+    """Memory-admission gauges / counters of every loaded VLM-runner engine."""
+    try:
+        from ..engine import get_engine, get_model_manager
+
+        for model_id, engine in _collect_engines(get_engine(), get_model_manager()):
+            fn = getattr(engine, "memory_admission_snapshot", None)
+            snap = fn() if callable(fn) else None
+            if not snap:
+                continue
+            ml = {"model_id": model_id}
+            for key, name in (
+                ("held_now", "memory_admission_held"),
+                ("available_bytes", "memory_admission_available_bytes"),
+                ("reserve_bytes", "memory_admission_reserve_bytes"),
+                ("swap_used_bytes", "memory_admission_swap_used_bytes"),
+                ("pressure_level", "memory_admission_pressure_level"),
+            ):
+                if snap.get(key) is not None:
+                    pm.set_gauge(name, snap[key], labels=ml)
+            for key, name in (
+                ("holds", "memory_admission_holds"),
+                ("sheds", "memory_pressure_sheds"),
+                ("shed_bytes", "memory_pressure_shed_bytes"),
+            ):
+                pm.set_counter(name, snap.get(key, 0), labels=ml)
+    except Exception:
+        logger.debug("memory-admission metrics population failed", exc_info=True)
 
 
 def _populate_apc_metrics(pm) -> None:

@@ -302,6 +302,7 @@ On the qualified 27B / M5 Max path prefill is split-invariant by default: checkp
 64-token boundaries, so a cached or rehearsed prefix gives the same tokens as a cold prefill
 ([details](docs/guides/INFERENCE.md#split-invariant-prefill-and-idle-keep-warm)). Tight hosts: set
 `YUNSHU_VLM_APC_MEMORY_GB=4` and `YUNSHU_PREFILL_BUFFER_CACHE_GB=1` (27B peak 37.2 -> 31.5 GiB); 128 GB hosts keep the defaults.
+The engine never admits work into swap: a request without memory headroom waits in the queue (reason in `x_yunshu`), APC RAM is shed under pressure, and a model that cannot fit is refused at load ([details](frontend/docs/internals/memory.mdx)).
 
 ### Structured output
 

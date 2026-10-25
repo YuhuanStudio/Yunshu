@@ -15,6 +15,7 @@ Usage: conc_probe.py --url http://127.0.0.1:PORT --model NAME --out FILE.jsonl [
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import threading
 import time
@@ -63,6 +64,7 @@ def run_one(
     t0 = time.perf_counter()
     usage = None
     finish = None
+    digest = hashlib.sha256()
     with httpx.Client(timeout=httpx.Timeout(1800.0)) as c:
         with c.stream("POST", url + "/v1/chat/completions", json=b) as r:
             r.raise_for_status()
@@ -80,6 +82,13 @@ def run_one(
                         or delta.get("reasoning")
                     ):
                         times.append(time.perf_counter())
+                        digest.update(
+                            (
+                                delta.get("content")
+                                or delta.get("reasoning_content")
+                                or delta.get("reasoning")
+                            ).encode()
+                        )
                     if ch.get("finish_reason"):
                         finish = ch["finish_reason"]
     end = time.perf_counter()
@@ -96,6 +105,7 @@ def run_one(
                 "end": round(end - t_zero, 3),
                 "completion_tokens": usage.get("completion_tokens"),
                 "finish": finish,
+                "text_sha": digest.hexdigest()[:16],
                 "x_yunshu": usage.get("x_yunshu"),
                 "token_times": [round(t - t_zero, 3) for t in times],
             }

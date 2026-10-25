@@ -144,6 +144,10 @@ class RunStats:
     spec_depth_drafted: list[int] = field(default_factory=list)
     spec_depth_accepted: list[int] = field(default_factory=list)
     structured_output: dict | None = None
+    # Why the request still waits in the queue ("memory": the host has no headroom for it) and
+    # the human-readable numbers; None once it is admitted or when it never waited.
+    queue_reason: str | None = None
+    queue_detail: str | None = None
 
     @property
     def phase(self) -> str:
@@ -391,6 +395,9 @@ class VLMBatchRunner:
             ),
         )
         self.processor = processor
+        # MemoryGate, set by the engine (None = no memory admission)
+        self.memory_gate: Any = None
+        self._last_shed = 0.0
         self.apc_manager = apc_manager
         self.apc_semantic_hash = apc_semantic_hash
         self.drafter = drafter
@@ -1882,6 +1889,11 @@ class VLMBatchRunner:
                 if not st.t_prefill_end:
                     st.t_prefill_end = time.perf_counter()
 
+    def memory_held(self) -> int:
+        """Requests waiting in the queue for memory headroom right now."""
+        with self._lock:
+            return sum(1 for j in self._pending if j.stats.queue_reason == "memory")
+
     def phase_counts(self) -> dict[str, int]:
         """Requests by phase right now: waiting for admission, prefilling, decoding."""
         with self._lock:
@@ -1897,6 +1909,76 @@ class VLMBatchRunner:
             "slices": self.busy_meter.snapshot(),
             "round_driver": self.driver_busy_meter.snapshot(),
         }
+
+    def _committed_bytes(self, running: list) -> int:
+        """Memory the running requests will still grow into: their reservation minus what
+        their KV already occupies (the live host reading counts the occupied part)."""
+        gate = self.memory_gate
+        total = 0
+        for j in running:
+            if j.mem_est:
+                done = (
+                    j.stats.cached_tokens + j.stats.prefill_done + j.stats.generated
+                ) * gate.kv_per_token
+                total += max(0, j.mem_est - done)
+        return total
+
+    def _memory_wait(self, job: _Job, active: list) -> bool:
+        """Hold ``job`` in the queue (True) while the host has no headroom for it. The first
+        request of an idle runner is always admitted; the reason is reported through
+        ``stats.queue_reason`` (x_yunshu, the console queue, the metrics)."""
+        gate = self.memory_gate
+        if gate is None:
+            return False
+        try:
+            running = [j for j in active if not j.terminal]
+            if job.mem_est == 0:
+                job.mem_est = gate.estimate(len(job.ids), job.max_tokens)
+            decision = gate.decide(
+                job.mem_est, self._committed_bytes(running), any_active=bool(running)
+            )
+        except Exception:
+            logger.debug("memory gate failed; admitting", exc_info=True)
+            return False
+        if decision.admit:
+            if job.mem_held_at:
+                job.stats.extra["memory_wait_ms"] = round(
+                    (time.perf_counter() - job.mem_held_at) * 1000, 1
+                )
+            job.stats.queue_reason = None
+            job.stats.queue_detail = None
+            return False
+        if not job.mem_held_at:
+            job.mem_held_at = time.perf_counter()
+            gate.holds += 1
+            logger.warning(
+                "Memory admission: request held in queue (%s)", decision.detail
+            )
+        job.stats.queue_reason = decision.reason
+        job.stats.queue_detail = decision.detail
+        return True
+
+    def _shed_under_pressure(self) -> None:
+        """Host memory is short: give APC RAM entries back (to SSD where configured) before
+        the kernel starts swapping."""
+        gate = self.memory_gate
+        shed = getattr(self.apc_manager, "shed_ram", None)
+        now = time.monotonic()
+        if gate is None or shed is None or now - self._last_shed < 1.0:
+            return
+        self._last_shed = now
+        want = gate.pressure_shortfall()
+        if want <= 0:
+            return
+        freed = int(shed(want))
+        if freed:
+            gate.sheds += 1
+            gate.shed_bytes += freed
+            logger.warning(
+                "Memory pressure: shed %.2f GiB of APC RAM entries (short by %.2f GiB)",
+                freed / (1 << 30),
+                want / (1 << 30),
+            )
 
     def _prefix_wait(self, job: _Job) -> bool:
         """Wait only for existing, exact hybrid checkpoint positions.
@@ -2349,6 +2431,7 @@ class VLMBatchRunner:
                 if not j.terminal and not j.stats.t_first
             ]
             waiting = []
+            admitted: list[_Job] = []
             for job in pending:
                 cancelled = job.cancel_event is not None and job.cancel_event.is_set()
                 if job.abandoned or cancelled:
@@ -2359,7 +2442,11 @@ class VLMBatchRunner:
                 if self._prefix_wait(job):
                     waiting.append(job)
                     continue
+                if self._memory_wait(job, [*active, *admitted]):
+                    waiting.append(job)
+                    continue
                 try:
+                    admitted.append(job)
                     self._admit(job, alone)
                     self._track_prefix_producer(job)
                 except Exception as exc:
@@ -2368,6 +2455,10 @@ class VLMBatchRunner:
             if waiting:
                 with self._lock:
                     self._pending = waiting + self._pending
+            try:
+                self._shed_under_pressure()
+            except Exception:
+                logger.debug("pressure shedding failed", exc_info=True)
             try:
                 self._maybe_promote()
             except Exception:  # lossless fallback: the row keeps decoding in the batch
@@ -2734,6 +2825,8 @@ class _Job:
     overflowed: bool = False
     first_delivery: threading.Event | None = None
     first_delivery_waited: bool = False
+    mem_est: int = 0  # bytes the memory gate reserved for this request (KV + workspace)
+    mem_held_at: float = 0.0
 
 
 @dataclass

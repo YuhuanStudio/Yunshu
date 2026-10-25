@@ -1406,6 +1406,41 @@ class YunshuAPCManager(APCManager):
             self._load_span_plans()
 
     # ── demotion: HOT -> WARM -> SSD ───────────────────────────────────
+    def shed_ram(self, want_bytes: int) -> int:
+        """Drop idle RAM entries, oldest first, until ``want_bytes`` are freed (or nothing idle
+        is left); returns the bytes freed. Exact checkpoints leave through the spilling
+        dictionary, so with an SSD tier they are written to disk, not lost. Leased blocks and
+        the running requests' state are never touched."""
+        import mlx.core as mx
+        from mlx_vlm.apc import _cache_nbytes
+
+        freed = 0
+        with self.lock:
+            while freed < want_bytes and self._exact_cache:
+                key = next(iter(self._exact_cache))
+                freed += _cache_nbytes(self._exact_cache[key].prompt_cache)
+                self._exact_cache.popitem(last=False)
+                self.stats.evictions += 1
+                self.stats.memory_evictions += 1
+            while freed < want_bytes:
+                block = self._free_head
+                while block is not None and block.block_hash is None:
+                    block = block.next
+                if block is None:
+                    break
+                self._free_remove(block)
+                freed += block.resident_bytes()
+                self.hash_table.pop(block.block_hash, None)
+                block.block_hash = None
+                block.token_ids = ()
+                block.release_components()
+                self._free_push(block)
+                self.stats.evictions += 1
+                self.stats.memory_evictions += 1
+        if freed:
+            mx.clear_cache()
+        return freed
+
     def _spill(self, key, entry) -> None:
         disk = self.disk
         if not isinstance(disk, SpillDiskStore):
