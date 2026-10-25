@@ -1625,6 +1625,36 @@
     },
     {
       "kind": "inspired",
+      "path": "python/yunshu_console/docs_ask.py",
+      "repo": "https://github.com/oramasearch/orama",
+      "clone": "frontend/node_modules/@orama/orama",
+      "upstream_paths": [
+        "dist/esm/components/algorithms.js",
+        "dist/esm/components/index.js"
+      ],
+      "commit": "v3.1.18",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "Independent Python implementation of the installed docs search BM25 formula, tokenizer and field boosts; pinned cross-runtime ranking fixture. No vector service or implicit model loads."
+      ]
+    },
+    {
+      "kind": "inspired",
+      "path": "frontend/src/docs/AskAI.tsx",
+      "repo": "https://github.com/YuhuanStudio/Yunxin",
+      "clone": "/Users/yuhuan/Documents/YuhuanStudio/Yunxin",
+      "upstream_paths": [
+        "frontend/src/components/docs/ai-search.tsx",
+        "backend/app/api/internal/docs_chat.py"
+      ],
+      "commit": "6d671e87871bffc1ba203bca1b5e5973efcbd420",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "UX reference only: independent YunUI dialog, Markdown stream, sources/follow-up/feedback. Local attached Yunshu engine with caller credentials instead of hosted models, Redis, shared secret or AI SDK transport."
+      ]
+    },
+    {
+      "kind": "inspired",
       "path": "python/yunshu_engine/ane/native/Bridge.mm",
       "repo": "https://github.com/ml-explore/mlx",
       "clone": "/Volumes/Micron/yunshu-refsync/mlx",

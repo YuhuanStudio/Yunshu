@@ -40,7 +40,7 @@ export function parseFrontmatter(text) {
   return { meta, body: m ? text.slice(m[0].length) : text };
 }
 
-const plain = (s) =>
+export const plain = (s) =>
   s
     .replace(/`([^`]*)`/g, "$1")
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")

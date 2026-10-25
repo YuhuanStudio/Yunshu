@@ -1,4 +1,11 @@
 const settingdesc = {
+  YUNSHU_DOCS_ASK_MAX_QUESTION:
+    "本機文件 AI 問答的問題與每則歷史訊息字數上限。",
+  YUNSHU_DOCS_ASK_MAX_HISTORY:
+    "文件 AI 問答接受的使用者／助理歷史訊息數量上限，另受模型上下文限制。",
+  YUNSHU_DOCS_ASK_MAX_TOKENS:
+    "本機文件 AI 問答的回答 token 上限。僅使用已載入模型；量測暫停時不接受提問。",
+
   YUNSHU_MODEL:
     "單一模型模式下提供服務的模型路徑或 Hugging Face id；所有請求的模型名稱都會對應到它。",
   YUNSHU_MULTI_MODEL:

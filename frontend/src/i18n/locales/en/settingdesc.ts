@@ -1,4 +1,11 @@
 const settingdesc = {
+  YUNSHU_DOCS_ASK_MAX_QUESTION:
+    "Maximum question and history-message length for local documentation Ask AI (characters).",
+  YUNSHU_DOCS_ASK_MAX_HISTORY:
+    "Maximum prior user/assistant messages for documentation Ask AI; also bounded by model context.",
+  YUNSHU_DOCS_ASK_MAX_TOKENS:
+    "Maximum answer tokens for local documentation Ask AI. Only an already loaded model is used; measurement pause blocks questions.",
+
   YUNSHU_MODEL:
     "Model path or Hugging Face id served in single-model mode; every requested model name maps to it.",
   YUNSHU_MULTI_MODEL:
