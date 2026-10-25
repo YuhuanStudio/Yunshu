@@ -96,3 +96,45 @@ def test_minimum_rows_breaker_and_calibration_text():
     assert out.startswith("losing to the GPU alone")
     ok = cal.Breaker(gpu)
     assert all(ok.add(2048, 4, 4 * 10.0) == "" for _ in range(2 * cal.WINDOW))
+
+
+def test_confirm_retimes_noisy_function_so_minimum_rows_reaches_the_bottom():
+    from yunshu_engine.ane import ffn_calibration as cal
+
+    gpu = (cal.GpuPoint(512, 4.8), cal.GpuPoint(2048, 19.2))
+    # 1920's first sample is a slow outlier; true cost is 0.9 of the GPU alone.
+    funcs = [
+        cal.FunctionTiming(1921, 2048, 17.0),
+        cal.FunctionTiming(1793, 1920, 25.0),
+        cal.FunctionTiming(1665, 1792, 14.0),
+    ]
+    t = cal.ChunkTimings(gpu, funcs)
+    assert cal.minimum_rows(t) == 1921
+    made = cal.confirm(t, lambda f: 0.9 * (4.8 + 0.01 * (f.rows - 512)))
+    assert made == 1
+    assert cal.minimum_rows(t) == 1665
+
+
+def test_confirm_keeps_a_real_loss():
+    from yunshu_engine.ane import ffn_calibration as cal
+
+    gpu = (cal.GpuPoint(512, 4.8), cal.GpuPoint(2048, 19.2))
+    t = cal.ChunkTimings(gpu, [cal.FunctionTiming(512, 2048, 30.0)])
+    cal.confirm(t, lambda f: 30.0)
+    assert cal.minimum_rows(t) is None
+
+
+def test_padded_rows_may_lose_a_little_below_a_winning_function_top():
+    from yunshu_engine.ane import ffn_calibration as cal
+
+    gpu = (cal.GpuPoint(512, 4.8), cal.GpuPoint(2048, 19.2))
+    line = cal.gpu_alone_line(gpu)
+    # Each function takes 0.95 of the GPU alone at its top row: its lowest row loses ~5%.
+    funcs = [
+        cal.FunctionTiming(1921, 2048, 0.95 * line(2048)),
+        cal.FunctionTiming(1793, 1920, 0.95 * line(1920)),
+        cal.FunctionTiming(1665, 1792, 0.95 * line(1792)),
+        cal.FunctionTiming(512, 1664, 0.95 * line(1664)),
+    ]
+    # The last function spans too far down (padding loses >10% at 512): the walk stops inside it.
+    assert 1300 < cal.minimum_rows(cal.ChunkTimings(gpu, funcs)) < 1665

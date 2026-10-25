@@ -108,7 +108,7 @@ def layer_from_module(mlp) -> Layer:
 NAX_TILE: dict = {"bm": 64, "bn": 64, "wm": 2, "wn": 2}
 
 
-def _nax(x, weight, sbt, bits: int):
+def _nax(x, weight, sbt, bits: int, kgw: int = 0):
     """The engine's NAX prefill matmul over a (possibly sliced) tiled weight, any row count."""
     import mlx.core as mx
 
@@ -132,6 +132,7 @@ def _nax(x, weight, sbt, bits: int):
         wm=NAX_TILE["wm"],
         wn=NAX_TILE["wn"],
         sbt=sbt,
+        kgw=kgw,
     )()
     return y[:rows] if padded != rows else y
 
@@ -142,7 +143,8 @@ def _qmm(x, p: QProj, sl=None):
 
     if p.tiled:
         w, sbt = (p.w, p.sbt) if sl is None else (sl[0], sl[1])
-        return _nax(x, w, sbt, p.bits)
+        kgw = p.inp // p.gs if sl is not None and len(sl) > 3 else 0
+        return _nax(x, w, sbt, p.bits, kgw)
     w, s, b = (p.w, p.s, p.b) if sl is None else sl
     return mx.quantized_matmul(x, w, s, b, transpose=True, group_size=p.gs, bits=p.bits)
 
@@ -156,13 +158,9 @@ def _slices(p: QProj, gpu: int, leading_inputs: bool):
         if not leading_inputs:
             sbt = mx.contiguous(p.sbt[:, :gpu])
             return (p.w[:gpu], sbt, None)
-        words = p.gs * p.bits // 32
-        groups = p.inp // p.gs
-        lead = gpu // p.gs
-        w = mx.contiguous(
-            p.w.reshape(p.out // 32, groups, 32, words)[:, :lead]
-        ).reshape(p.out, lead * words)
-        return (w, p.sbt[:lead], None)
+        # No copy: the kernel reads the leading K groups of every 32-row block of the full
+        # weight in place (kgw = the full weight's K groups, its block stride).
+        return (p.w, p.sbt[: gpu // p.gs], None, p.inp // p.gs)
     if not leading_inputs:
         return (p.w[:gpu], p.s[:gpu], p.b[:gpu])
     return (
@@ -307,7 +305,14 @@ class AneFfn:
             gate = _slices(lay.gate, g, False)
             up = _slices(lay.up, g, False)
             down = _slices(lay.down, g, True)
-            mx.eval(*[a for t in (gate, up, down) for a in t if a is not None])
+            mx.eval(
+                *[
+                    a
+                    for t in (gate, up, down)
+                    for a in t
+                    if a is not None and not isinstance(a, int)
+                ]
+            )
             self._gpu.append({"gate": gate, "up": up, "down": down})
         scales = []
         for lay in self.layers:

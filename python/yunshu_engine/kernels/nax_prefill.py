@@ -53,8 +53,11 @@ def header() -> str:
 
 
 @cache
-def lane_header() -> str:
-    """Same native QMM arithmetic; replace only its input layout loader."""
+def lane_header(kgw: int = 0) -> str:
+    """Same native QMM arithmetic; replace only its input layout loader.
+
+    kgw: the weight's K groups of 64 when the matmul reads only its leading K (a strided view of a
+    wider tiled weight, no copy); 0 means the weight is exactly K wide."""
     h = header()
     point = h.index("METAL_FUNC void qmm_t_nax_tgp_impl")
     start = h.rfind("template <", 0, point)
@@ -102,7 +105,7 @@ struct NaxLaneLoader {
       int k, int ncols, int n0, threadgroup T* ws, int sg, int lane) thread
     : W(w), SB(sb),
       dst(ws + (READS * (sg*32+lane) / CP)*LD + (READS*(sg*32+lane)%CP)*PF),
-      KG(k/64), N(ncols), n(n0+READS*(sg*32+lane)/CP),
+      KG(KGW_GROUPS), N(ncols), n(n0+READS*(sg*32+lane)/CP),
       bi(READS*(sg*32+lane)/CP), bj(READS*(sg*32+lane)%CP), g(0) {}
   void load_unsafe() const thread {
     const device uint8_t* src = W + (((n/32)*KG+g)*32+n%32)*(64*bits/8) + bj*BP;
@@ -116,14 +119,17 @@ struct NaxLaneLoader {
   void next() thread { g++; }
 };
 """
+    loader = loader.replace("KGW_GROUPS", str(kgw) if kgw else "k/64")
     return h + loader + body
 
 
 @cache
-def compiled(bits: int, bm: int, bn: int, wm: int, wn: int, lane: bool) -> Any:
+def compiled(
+    bits: int, bm: int, bn: int, wm: int, wn: int, lane: bool, kgw: int = 0
+) -> Any:
     import mlx.core as mx
 
-    h = lane_header() if lane else header()
+    h = lane_header(kgw) if lane else header()
     fn = "nax_prefill_lane_tgp_impl" if lane else "qmm_t_nax_tgp_impl"
     scale_ptr, bias_ptr = ("SB", "SB+1") if lane else ("S", "B")
     source = f"""    threadgroup bfloat Ws[{bn} * (64 + 8)];
@@ -166,12 +172,13 @@ def make(
     wm: int = 2,
     wn: int = 2,
     sbt: Any = None,
+    kgw: int = 0,
 ) -> Any:
     m, k = x.shape
     n = scales.shape[0] if sbt is None else sbt.shape[1]
     if k % 64 or n % bn or m % bm:
         raise ValueError("tile sweep requires fully aligned inputs")
-    kernel = compiled(bits, bm, bn, wm, wn, sbt is not None)
+    kernel = compiled(bits, bm, bn, wm, wn, sbt is not None, kgw)
     dims = dimensions(k, n, m)
 
     def run():
