@@ -21,6 +21,7 @@ trap 'kill -9 $SRV $SAMP 2>/dev/null; rm -rf "${H:?}/.yunshu/cache"' EXIT
 for i in $(seq 1 240); do curl -sf http://127.0.0.1:$PORT/health >/dev/null && break; sleep 2; done
 curl -sf http://127.0.0.1:$PORT/health >/dev/null
 MODEL=$(curl -s http://127.0.0.1:$PORT/v1/models | "$PY" -c 'import json,sys;print(json.load(sys.stdin)["data"][0]["id"])')
+curl -s http://127.0.0.1:$PORT/v1/chat/completions -H 'content-type: application/json' -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 2+3? Reply with the number only.\"}],\"max_tokens\":24,\"temperature\":0,\"chat_template_kwargs\":{\"enable_thinking\":false}}" | "$PY" -c 'import json,sys;print("sanity:",json.load(sys.stdin)["choices"][0]["message"])'
 "$PY" "$WT/scripts/research/conc_probe.py" --url http://127.0.0.1:$PORT --model "$MODEL" \
   --out "$OUT/$TAG.jsonl" --tokens $TOK --ctx-chars $CTX --join ${JOIN:-15} --only "$ONLY"
 echo "complete: true"
