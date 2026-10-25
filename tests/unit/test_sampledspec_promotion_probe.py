@@ -66,6 +66,8 @@ def test_identity_requires_overlap_actual_promotion_and_a_long_surviving_tail():
     result = _compare(alone, overlap, blocker)
     assert result["identity"] and result["tokens_after_blocker"] == 155
     assert result["tail_speed_ratio"] == pytest.approx(1.0)
+    assert result["alone_timeline"] == alone["times"]
+    assert result["survivor_timeline"] == overlap["times"]
     with pytest.raises(RuntimeError, match="engagement"):
         _compare(alone, overlap, blocker, log="")
     with pytest.raises(RuntimeError, match="did not overlap"):

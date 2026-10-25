@@ -147,6 +147,7 @@ def compare(alone, overlap, blocker, log, *, tokens, min_tail_ratio=0.0):
         # Keep the observed timeline so restoration is reviewable, not inferred
         # solely from a server log or whole-request average.
         survivor_timeline=overlap["times"],
+        alone_timeline=alone["times"],
         raw_ids=overlap["ids"],
         logprobs=overlap["lps"],
         top_logprobs=overlap["tops"],
@@ -244,7 +245,23 @@ def main():
                 result.update(rep=rep, sampling=sampling, admission=args.admission)
                 with args.out.open("a") as output:
                     output.write(json.dumps(result) + "\n")
-                print(json.dumps(result), flush=True)
+                print(
+                    json.dumps(
+                        {
+                            k: v
+                            for k, v in result.items()
+                            if k
+                            not in (
+                                "survivor_timeline",
+                                "alone_timeline",
+                                "raw_ids",
+                                "logprobs",
+                                "top_logprobs",
+                            )
+                        }
+                    ),
+                    flush=True,
+                )
         server.verify_spec_mode()
         with args.out.open("a") as output:
             output.write(json.dumps(dict(complete=True, cells=2 * args.reps)) + "\n")
