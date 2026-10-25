@@ -183,8 +183,10 @@ class Measurement:
 
         def again(f: cal.FunctionTiming) -> float:
             stand_in = low.milliseconds + slope * (f.rows - low.rows)
-            return self.layer(
-                range(len(self.layers)), count(f.rows), f.rows, split, stand_in
+            return float(
+                self.layer(
+                    range(len(self.layers)), count(f.rows), f.rows, split, stand_in
+                )
             )
 
         cal.confirm(timings, again)
