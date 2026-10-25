@@ -133,8 +133,23 @@ def scenario(url, model, out, label, plans, tokens, ctx_chars):
         r["decode_tps"] = round((len(tt) - 1) / span, 1) if span else None
         del r["token_times"]
     with open(out, "a") as fh:
-        fh.write(json.dumps({"scenario": label, "requests": rows}) + "\n")
+        fh.write(
+            json.dumps(
+                {"scenario": label, "requests": rows, "memory": status_memory(url)}
+            )
+            + "\n"
+        )
     print(label, [(r["name"], r["decode_tps"], r["ttft"]) for r in rows], flush=True)
+
+
+def status_memory(url: str) -> dict | None:
+    """Engine memory block of /v1/yunshu/status (peak is cumulative since start), or None."""
+    try:
+        r = httpx.get(url + "/v1/yunshu/status", timeout=30.0)
+        mem = r.json().get("memory")
+        return mem if isinstance(mem, dict) else None
+    except (httpx.HTTPError, ValueError):
+        return None
 
 
 def engine_observes(url: str) -> bool:
@@ -187,6 +202,9 @@ def main():
     run("stagger", [("A", 0, None, False, 31), ("B", a.join, T // 3, False, 32)])
     run("greedy-solo", [("A", 0, None, True, 41)])
     run("greedy-burst2", [("A", 0, None, True, 51), ("B", 0, None, True, 52)])
+    run("greedy-burst4", [(n, 0, None, True, 60 + i) for i, n in enumerate("ABCD")])
+    run("burst8", [(n, 0, None, False, 70 + i) for i, n in enumerate("ABCDEFGH")])
+    run("greedy-burst8", [(n, 0, None, True, 80 + i) for i, n in enumerate("ABCDEFGH")])
     print("complete: true", flush=True)
 
 

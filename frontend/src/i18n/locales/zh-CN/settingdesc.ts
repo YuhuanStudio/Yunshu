@@ -27,6 +27,8 @@ const settingdesc = {
   YUNSHU_MAX_CONCURRENT: "同时受理请求数的上限；未设置则自适应，起始值为 8。",
   YUNSHU_UNCACHED_SCHEDULING:
     "按预估未命中缓存的工作量和等待时间排序 VLM 预填充原子，保护交互式预填充，并在原子之间预留实测的解码时间，不改变任何 token 区间。仅在合格的批不变内核下默认开启，其他后端除非启用否则保持先进先出；停用可恢复上游排序。",
+  YUNSHU_DECODE_TAIL_SHARE:
+    "新请求预填时，每个预填原子之后要还给正在回复的请求多少 GPU 时间（对方已输出超过 48 个 token 后才适用）。调高让正在回复的请求更快，调低让新请求更早拿到第一个 token。27B 实测：0.25 为 5.0 tok/s，0.5（默认）为 7.6 tok/s，4K 新请求的第一个 token 约晚 0.8 秒。",
   YUNSHU_AUXILIARY_SCHEDULING:
     "降低已识别的 opencode 标题请求的优先级：交互式 VLM 任务先运行，辅助行在 GPU 时间片之间暂停，且不读写 APC。仅在合格的批不变内核下默认开启，其他后端需显式启用；进行中的 GPU 运算无法中断。",
   YUNSHU_QUEUE_LIMIT:
