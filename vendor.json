@@ -1627,12 +1627,12 @@
       "kind": "inspired",
       "path": "python/yunshu_console/docs_ask.py",
       "repo": "https://github.com/oramasearch/orama",
-      "clone": "frontend/node_modules/@orama/orama",
+      "clone": "/Volumes/Micron/yunshu-refsync/orama",
       "upstream_paths": [
-        "dist/esm/components/algorithms.js",
-        "dist/esm/components/index.js"
+        "packages/orama/src/components/algorithms.ts",
+        "packages/orama/src/components/index.ts"
       ],
-      "commit": "v3.1.18",
+      "commit": "2fe41e163c2bdd7830eed7496c69134aea8ee3ba",
       "license": "Apache-2.0",
       "local_changes": [
         "Independent Python implementation of the installed docs search BM25 formula, tokenizer and field boosts; pinned cross-runtime ranking fixture. No vector service or implicit model loads."
@@ -3286,6 +3286,27 @@
       ],
       "why": "Neural Engine runtime and FFN split (YUNSHU_ANE_FFN_SPLIT=splash)",
       "commit": "1482f6bbc2abf12375332725302019594150b6cb"
+    },
+    {
+      "repo": "https://github.com/oramasearch/orama",
+      "clone": "/Volumes/Micron/yunshu-refsync/orama",
+      "globs": [
+        "packages/orama/src/components/algorithms.ts",
+        "packages/orama/src/components/index.ts",
+        "packages/orama/src/components/tokenizer/**"
+      ],
+      "why": "docs search BM25 formula, tokenizer and field boosts mirrored by console Ask AI (python/yunshu_console/docs_ask.py)",
+      "commit": "2fe41e163c2bdd7830eed7496c69134aea8ee3ba"
+    },
+    {
+      "repo": "https://github.com/YuhuanStudio/Yunxin",
+      "clone": "/Users/yuhuan/Documents/YuhuanStudio/Yunxin",
+      "globs": [
+        "frontend/src/components/docs/ai-search.tsx",
+        "backend/app/api/internal/docs_chat.py"
+      ],
+      "why": "docs Ask AI UX reference for the console (frontend/src/docs/AskAI.tsx); Yunxin is the sibling YuhuanStudio project",
+      "commit": "6d671e87871bffc1ba203bca1b5e5973efcbd420"
     }
   ],
   "packages": [
