@@ -16,7 +16,9 @@ from anenative_splash_micro import load_layers
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--model", default="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp")
+    p.add_argument(
+        "--model", default="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
+    )
     p.add_argument("--layers", type=int, default=64)
     p.add_argument("--cache", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
@@ -32,6 +34,9 @@ def main():
     t0 = time.perf_counter()
     layers = load_layers(a.model, 0, a.layers, True)
     load_s = time.perf_counter() - t0
+    import mlx.core as mx
+
+    mem0 = mx.get_active_memory()
     t0 = time.perf_counter()
     outcome = ffn_startup.start(
         layers, a.cache, a.model, given_share=a.share, given_minimum_rows=a.min_rows
@@ -46,7 +51,7 @@ def main():
     if outcome.split is not None:
         record["share"] = outcome.split.share
         record["minimum_rows"] = outcome.split.minimum_rows
-        record["resident_extra_mib"] = None
+        record["resident_extra_mib"] = (mx.get_active_memory() - mem0) / 2**20
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(json.dumps(record, indent=1) + "\n")
     print(json.dumps(record)[:1500], flush=True)

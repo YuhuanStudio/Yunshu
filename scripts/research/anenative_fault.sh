@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
-cd /Volumes/P5Plus/yunshu-build/wt-codex-anenative
-export PYTHONPATH=$PWD/python TMPDIR=/Volumes/P5Plus/yunshu-build/codex/anenative-tmp
+cd /Volumes/P5Plus/yunshu-build/wt-anenative2
+export PYTHONPATH=$PWD/python TMPDIR=/Volumes/P5Plus/yunshu-build/tmp/anenative2
 mkdir -p "$TMPDIR"
 PY=/Volumes/P5Plus/venvs/anesplit-mlx/bin/python
 M=/Volumes/P5Plus/venvs/anesplit-mlx/lib/python3.13/site-packages/mlx
