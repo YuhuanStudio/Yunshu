@@ -204,41 +204,30 @@ test.describe("analytics dashboard contracts", () => {
     await collectSixSamples(page, fixture);
 
     await throughput.getByRole("tab", { name: "比較", exact: true }).click();
-    const seriesGroup = throughput.getByRole("group", {
-      name: "吞吐速度時序圖，單位 tok/s 顯示或隱藏序列",
-    });
-    const decode = seriesGroup.getByRole("button", {
+    const decode = throughput.getByRole("button", {
       name: "解碼 即時合計",
       exact: true,
     });
-    const prefill = seriesGroup.getByRole("button", {
+    const prefill = throughput.getByRole("button", {
       name: "預填 即時合計",
       exact: true,
     });
     await expect(decode).toHaveAttribute("aria-pressed", "true");
     await expect(prefill).toHaveAttribute("aria-pressed", "true");
+    // click isolates one series, a second click restores both
     await decode.click();
-    await prefill.click();
-    const chart = throughput.getByRole("group", {
-      name: "吞吐速度時序圖，單位 tok/s",
-      exact: true,
-    });
-    await expect(chart.getByRole("status")).toHaveText(
-      "序列已隱藏，可點選圖例重新顯示",
-    );
+    await expect(prefill).toHaveAttribute("aria-pressed", "false");
     await decode.click();
-    await expect(chart.getByRole("status")).toHaveCount(0);
-    await prefill.click();
+    await expect(prefill).toHaveAttribute("aria-pressed", "true");
 
-    await chart.focus();
-    await page.keyboard.press("ArrowRight");
-    const selectedX = await throughput
-      .locator('[data-yunui="time-series-chart"]')
-      .getAttribute("data-active-x");
-    expect(selectedX).not.toBeNull();
+    await throughput.getByTestId("metric-plot").focus();
+    await page.keyboard.press("ArrowLeft");
     await expect(
-      memory.locator('[data-yunui="time-series-chart"]'),
-    ).toHaveAttribute("data-active-x", selectedX!);
+      throughput.locator('[data-yunui="metric-tooltip"]'),
+    ).toHaveCount(1);
+    await expect(memory.locator('[data-yunui="metric-tooltip"]')).toHaveCount(
+      1,
+    );
 
     await overview.getByRole("tab", { name: "15 分鐘", exact: true }).click();
     const downloadPromise = page.waitForEvent("download");

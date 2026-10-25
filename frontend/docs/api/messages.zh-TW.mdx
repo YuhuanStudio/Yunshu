@@ -39,7 +39,7 @@ Yunshu 在 `POST /v1/messages`（也可用 `POST /messages`）提供 Anthropic M
 | --- | --- | --- | --- | --- |
 | `model` | string | 是 | 模型 id；單模型模式下僅供參考。 | 支援 |
 | `messages` | array | 是 | 非空的 `{role, content}` 清單。`content` 是字串或區塊清單。位於開頭或對話中的 `system` 角色項目會被提升到系統提示。 | 支援 |
-| `max_tokens` | integer | 否 | 1 到 1048576。Anthropic API 要求必填；Yunshu 省略時退回 1024。 | 支援 |
+| `max_tokens` | integer | 否 | 1 到 1048576。與 Anthropic API 相同為必填：省略會回 `400` `invalid_request_error`（`max_tokens: Field required`）。 | 支援 |
 | `system` | string 或文字區塊陣列 | 否 | 系統提示。區塊可帶 `cache_control`。 | 支援 |
 | `temperature` | number | 否 | 0 到 2。省略時預設 0.7。 | 支援 |
 | `top_p`、`top_k` | number、integer | 否 | `top_p` 為 0 到 1（預設 1.0）；`top_k` 為 0 表示停用。 | 支援 |
@@ -47,7 +47,7 @@ Yunshu 在 `POST /v1/messages`（也可用 `POST /messages`）提供 Anthropic M
 | `stream` | boolean | 否 | Server-Sent Events。 | 支援 |
 | `metadata` | object | 否 | 接受。 | 接受但忽略 |
 | `service_tier`、`container` | string、object | 否 | 接受，讓 SDK 的請求能通過驗證。 | 接受但忽略 |
-| `context_management` | object | 否 | 接受（Claude Code 會送出）。不會進行任何上下文編輯。 | 接受但忽略 |
+| `context_management` | object | 否 | 上下文編輯：`{"edits": [...]}`，支援 `clear_tool_uses_20250919`（`trigger` 以輸入 token 或工具使用次數觸發，另有 `keep`、`clear_at_least`、`exclude_tools`、`clear_tool_inputs`）與 `clear_thinking_20251015`（`keep`，只能是第一個 edit）。被清除的工具結果會變成 `[cleared]`。回應帶有 `context_management.applied_edits`（串流時在 `message_delta`）；`count_tokens` 回傳 `context_management.original_input_tokens`。`compact_20260112`（伺服器端壓縮）：輸入超過 `trigger`（預設 `150000`、最小 `50000` 輸入 token）時，由所服務的模型以和 Responses 壓縮相同的機制摘要較早的輪次（`YUNSHU_COMPACT_MAX_TOKENS` 限制摘要長度）；回覆以 `compaction` 區塊開頭（串流為 `compaction_delta`，`usage.iterations` 列出壓縮與訊息兩段），`instructions` 可引導摘要。`pause_after_compaction` 只回傳該區塊，`stop_reason` 為 `compaction`。把區塊送回後，其前的內容全部捨棄；`content` 為 null 的區塊視為不做事。`count_tokens` 不會壓縮。未知的 edit 類型回應 `400`。 | 支援 |
 
 ### 思考
 
@@ -56,6 +56,7 @@ Yunshu 在 `POST /v1/messages`（也可用 `POST /messages`）提供 Anthropic M
 | `thinking: {"type": "enabled", "budget_tokens": N}` | 開啟思考並設定預算。`budget_tokens` 必須是小於 `max_tokens` 的正整數，否則 `400`。推理內容以 `thinking` 內容區塊回傳。 | 支援 |
 | `thinking: {"type": "disabled"}` | 關閉思考。 | 支援 |
 | `thinking: {"type": "adaptive"}` | 沿用模型範本的預設。 | 支援 |
+| 沒有 `thinking` 欄位 | 思考關閉，與 Anthropic API 相同（思考需主動開啟）。 | 支援 |
 | `output_config.effort` | 對應到範本的推理強度。`reasoning_effort` 是 Yunshu 的寫法。 | 支援 |
 
 思考能力取決於載入的模型。對於聊天範本本身不會思考的模型，`enabled` 會加入一段要求用 `<think>` 標籤包住推理的指示，並限制回覆開頭照做，因此仍會回傳 `thinking` 區塊。強制的 `tool_choice`（`any` 或 `tool`）會關閉思考，因為 Anthropic 也不允許兩者並用。思考區塊的 `signature` 為空字串；沒有 redacted thinking 區塊。
@@ -319,7 +320,8 @@ print(n.input_tokens)
 | 文件與引用 | <Support status="supported">支援</Support> |
 | 伺服器端工具：網路搜尋、網頁擷取、MCP 連接器 | <Support status="supported">支援</Support> |
 | `cache_control` | <Support status="partial">提示與計算；快取本身是自動的</Support> |
-| `metadata`、`service_tier`、`container`、`context_management` | <Support status="partial">接受但忽略</Support> |
+| `metadata`、`service_tier`、`container` | <Support status="partial">接受但忽略</Support> |
+| `context_management`（`clear_tool_uses`、`clear_thinking`） | <Support status="supported">已套用並回報 `applied_edits`</Support> |
 | 程式碼執行、託管的記憶工具、`search_result` 區塊、簽名或 redacted thinking | <Support status="unsupported">尚未支援</Support> |
 
 ## 相關頁面

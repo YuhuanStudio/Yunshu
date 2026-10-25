@@ -53,6 +53,7 @@ import json
 import math
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -67,6 +68,9 @@ from types import SimpleNamespace
 ROOT = Path(os.environ.get("GPUQ_DIR", "~/.cache/yunshu/gpuq")).expanduser()
 JOBS = ROOT / "jobs"
 LOGS = ROOT / "logs"
+# Every job's temp files (Core ML compiles, pytest, HF, MLX scratch) go to a per-job dir next to the queue, removed when
+# the job ends: the default TMPDIR is the system disk, where stale ANE compiles piled up to 480 GB (2026-10-25).
+TMPS = ROOT / "tmp"
 IDLE_EXIT_S = 600
 STALL_S = 600  # a job whose log stops growing this long is stopped as "stalled"
 POLL_S = 2.0
@@ -1305,6 +1309,8 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     monitor.record("start")
     try:
         rc_file = LOGS / f"{job['id']}.rc"
+        job_tmp = TMPS / job["id"]
+        job_tmp.mkdir(parents=True, exist_ok=True)
         proc = subprocess.Popen(
             [
                 "/bin/sh",
@@ -1321,6 +1327,7 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
                 "GPUQ_RC": str(rc_file),
                 "GPUQ_PAUSE_FILE": str(pause_file),
                 "GPUQ_CONTENTION_FILE": str(monitor.flag),
+                "TMPDIR": str(job_tmp),
             },
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -1387,6 +1394,7 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
                     rc = proc.wait()
     # The command's own exit status is in the rc file; the shell's status alone is not
     # trusted (a wrapper that ends in `echo` exits 0 after a crash).
+    shutil.rmtree(TMPS / job["id"], ignore_errors=True)
     rc_file_rc = _read_rc(job["id"])
     if rc_file_rc is not None:
         rc = rc_file_rc

@@ -293,6 +293,21 @@ class EngineDiagnosticsMixin:
             if hidden and num_attn_heads:
                 head_dim = hidden // num_attn_heads
 
+        # Hybrid models (Qwen3.5 / 3.8: linear-attention layers hold a constant-size state)
+        # grow KV only on their full-attention layers: count those, not every layer.
+        if config and num_layers:
+            _types = getattr(config, "layer_types", None)
+            if _types is None and isinstance(config, dict):
+                _types = config.get("layer_types")
+            _interval = _first(config, ("full_attention_interval",))
+            _full = 0
+            if isinstance(_types, (list, tuple)) and _types:
+                _full = sum(1 for t in _types if t == "full_attention")
+            elif _interval:
+                _full = num_layers // _interval
+            if _full:
+                num_layers = _full
+
         if num_layers and num_kv_heads and head_dim:
             return {
                 "num_layers": num_layers,
@@ -366,17 +381,21 @@ class EngineDiagnosticsMixin:
         prompt: str | list,
         max_tokens: int,
         raise_on_reject: bool = False,
-    ) -> _engine.GenerationOutput | None:
-        """Run memory guard preflight check. Returns None if OK.
+    ) -> tuple[_engine.GenerationOutput | None, int]:
+        """Memory admission for one request: ``(rejection, granted_max_tokens)``.
 
-        Returns a GenerationOutput with finish_reason="memory_limit" if the memory guard
-        rejects the request (streams surface its ``error``); ``raise_on_reject`` raises
-        :class:`MemoryGuardRejectedError` instead, for the non-streaming path whose caller
-        would otherwise return the refusal as an empty, successful completion.
+        ``rejection`` is None when the prompt fits; ``granted_max_tokens`` is then the
+        ``max_tokens`` to generate with: the request's own when its projected KV fits, else the
+        count that fits (the generation ends with finish "length"; no fixed cap -- the
+        output limit is the model's, see ``output_limits``).  When even the prompt does not
+        fit, ``rejection`` is a GenerationOutput with finish_reason="memory_limit" (streams
+        surface its ``error``); ``raise_on_reject`` raises :class:`MemoryGuardRejectedError`
+        instead, for the non-streaming path whose caller would otherwise return the refusal
+        as an empty, successful completion.
         """
         guard = self._ensure_memory_guard()
-        if guard is None:
-            return None
+        if guard is None or max_tokens <= 0:
+            return None, max_tokens
 
         # Estimate prompt tokens. This is a defense-in-depth MEMORY preflight (the gateway
         # already ran validate_prefill_memory with an exact count) — it only needs a rough,
@@ -406,17 +425,18 @@ class EngineDiagnosticsMixin:
         else:
             num_prompt_tokens = len(str(prompt).split()) * 2
 
-        ok, reason = guard.preflight_check(
-            num_prompt_tokens=num_prompt_tokens,
-            max_tokens=max_tokens,
-        )
-        if not ok:
-            _engine.logger.info(f"Memory guard rejected request: {reason}")
-            if raise_on_reject:
-                from .exceptions import MemoryGuardRejectedError
+        granted, reason = guard.admit(num_prompt_tokens, max_tokens)
+        if granted > 0:
+            if granted < max_tokens:
+                _engine.logger.info(f"Memory guard clamped max_tokens: {reason}")
+            return None, granted
+        _engine.logger.info(f"Memory guard rejected request: {reason}")
+        if raise_on_reject:
+            from .exceptions import MemoryGuardRejectedError
 
-                raise MemoryGuardRejectedError(f"Memory guard rejected: {reason}")
-            return _engine.GenerationOutput(
+            raise MemoryGuardRejectedError(f"Memory guard rejected: {reason}")
+        return (
+            _engine.GenerationOutput(
                 finished=True,
                 finish_reason="memory_limit",
                 prompt_tokens=num_prompt_tokens,
@@ -424,8 +444,9 @@ class EngineDiagnosticsMixin:
                 error=f"Memory guard rejected: {reason}",
                 ttft_ms=0.0,
                 cached_tokens=0,
-            )
-        return None
+            ),
+            0,
+        )
 
 
 # Resolve the facade after definitions to also support direct module imports.

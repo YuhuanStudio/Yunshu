@@ -261,7 +261,7 @@ def anthropic_capabilities(card: ModelCard) -> dict[str, Any]:
         "batch": sup(False),
         "citations": sup(False),
         "code_execution": sup(bool(settings.get("YUNSHU_CODE_EXECUTION"))),
-        "context_management": {"supported": False},
+        "context_management": {"supported": True},
         "effort": {
             "supported": bool(levels),
             "low": level("low"),

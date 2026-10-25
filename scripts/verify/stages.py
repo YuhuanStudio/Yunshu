@@ -69,6 +69,7 @@ class Ctx:
     suite: dict
     mem_gb: float
     engaged: list = field(default_factory=list)
+    observe: bool = False  # --observe: timing stages run observe mode too
     py: str = VENV_PY
     log: object = print
 
@@ -84,6 +85,24 @@ class Ctx:
     @property
     def big(self) -> bool:
         return self.mem_gb >= 40
+
+
+# Stages that judge correctness, not speed: the engine runs in observe mode (YUNSHU_OBSERVE=1:
+# debug routes, telemetry, serve/audit logs, token ids, capture file), so what the lead watches is
+# always inspectable. Timing stages keep it off (telemetry costs ~1.8% follow-up TTFT) unless --observe.
+OBSERVE_STAGES = frozenset({"smoke", "identity", "apc", "toolparse", "client_compat"})
+
+
+def observe_for(ctx: Ctx, stage: str) -> bool:
+    return ctx.observe or stage in OBSERVE_STAGES
+
+
+def with_observe(ctx: Ctx, stage: str, env: dict) -> dict:
+    """``env`` plus YUNSHU_OBSERVE for this stage; an explicit value wins. Always explicit ("0" for
+    timing stages) so the bench harness default cannot turn it on behind a speed number."""
+    if "YUNSHU_OBSERVE" in env:
+        return env
+    return dict(env, YUNSHU_OBSERVE="1" if observe_for(ctx, stage) else "0")
 
 
 def _env_flags(env: dict) -> list:
@@ -111,7 +130,9 @@ def _tfbench_argv(
         "--out",
         "{out}",
         f"--tag=-{stage}-{key}",
-        *_env_flags(ctx.arm_env(arm) if env is None else env),
+        *_env_flags(
+            with_observe(ctx, stage, ctx.arm_env(arm) if env is None else env)
+        ),
         *extra,
     ]
 

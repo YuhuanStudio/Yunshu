@@ -179,7 +179,7 @@
       "id": "code-execution",
       "group": "agents",
       "title": "Code execution",
-      "summary": "Anthropic code_execution (bash + text editor) run locally inside the sandbox-runtime; opt-in, no network by default",
+      "summary": "Anthropic code_execution (bash, text editor, Python REPL, programmatic tool calling), OpenAI code_interpreter, shell and /v1/containers run locally inside the sandbox-runtime; opt-in, no network by default",
       "doc": "docs/guides/CODE_EXECUTION.md",
       "status": "partial"
     },
@@ -389,6 +389,14 @@
       "title": "Qualified auxiliary scheduling",
       "summary": "Captured opencode title fingerprints yield to interactive VLM turns with APC isolation; unknown requests retain normal priority",
       "doc": "docs/guides/AUXILIARY_SCHEDULING.md",
+      "status": "stable"
+    },
+    {
+      "id": "orphan-adoption",
+      "group": "inference",
+      "title": "Orphan adoption",
+      "summary": "a generation whose client timed out is kept for 120 s; the identical retry (streaming or not) attaches to it instead of recomputing",
+      "doc": "docs/guides/INFERENCE.md",
       "status": "stable"
     }
   ]

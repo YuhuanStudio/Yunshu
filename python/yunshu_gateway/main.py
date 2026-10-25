@@ -221,6 +221,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         logger.info("Single-model mode: %s detected as %s", DEFAULT_MODEL, _engine_name)
         try:
+            from yunshu_engine.sampling_defaults import log_line
+
+            from .sampling_defaults import model_path_for
+
+            _sl = log_line(model_path_for(DEFAULT_MODEL))
+            if _sl:
+                logger.info("%s", _sl)
+        except Exception:
+            logger.debug("sampling defaults log skipped", exc_info=True)
+        try:
             engine = await asyncio.wait_for(
                 instantiate_engine(_engine_mt, DEFAULT_MODEL),
                 timeout=startup_timeout,
@@ -1119,6 +1129,9 @@ def create_app() -> FastAPI:
     from .routers import files as files_mod
 
     app.include_router(files_mod.router, prefix="/v1")  # OpenAI + Anthropic Files
+    from .routers import containers as containers_mod
+
+    app.include_router(containers_mod.router, prefix="/v1")  # OpenAI containers
     app.include_router(batches_mod.router, prefix="/v1")  # Batches + Message Batches
     app.include_router(anthropic.router, prefix="/v1")
     app.include_router(audio.router, prefix="/v1")

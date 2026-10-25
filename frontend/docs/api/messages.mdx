@@ -39,7 +39,7 @@ Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. The Anthropic S
 | --- | --- | --- | --- | --- |
 | `model` | string | yes | Model id; advisory in single-model mode. | supported |
 | `messages` | array | yes | Non-empty list of `{role, content}`. `content` is a string or a list of blocks. A leading or in-conversation `system` role entry is lifted into the system prompt. | supported |
-| `max_tokens` | integer | no | 1 to 1048576. The Anthropic API requires it; Yunshu falls back to 1024 when it is omitted. | supported |
+| `max_tokens` | integer | no | 1 to 1048576. Required, as in the Anthropic API: omitting it is a `400` `invalid_request_error` (`max_tokens: Field required`). | supported |
 | `system` | string or array of text blocks | no | System prompt. Blocks may carry `cache_control`. | supported |
 | `temperature` | number | no | 0 to 2. Default 0.7 when omitted. | supported |
 | `top_p`, `top_k` | number, integer | no | `top_p` 0 to 1 (default 1.0); `top_k` 0 disables. | supported |
@@ -47,7 +47,7 @@ Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. The Anthropic S
 | `stream` | boolean | no | Server-Sent Events. | supported |
 | `metadata` | object | no | Accepted. | accepted and ignored |
 | `service_tier`, `container` | string, object | no | Accepted so SDK requests validate. | accepted and ignored |
-| `context_management` | object | no | Accepted (Claude Code sends it). No context editing is performed. | accepted and ignored |
+| `context_management` | object | no | Context editing: `{"edits": [...]}` with `clear_tool_uses_20250919` (`trigger` input tokens or tool uses, `keep`, `clear_at_least`, `exclude_tools`, `clear_tool_inputs`) and `clear_thinking_20251015` (`keep`, first edit only). Cleared tool results become `[cleared]`. The response carries `context_management.applied_edits` (the `message_delta` when streaming); `count_tokens` returns `context_management.original_input_tokens`. `compact_20260112` (server-side compaction): when the input crosses `trigger` (default and minimum `150000`/`50000` input tokens) the served model summarizes the earlier turns with the same machinery as Responses compaction (`YUNSHU_COMPACT_MAX_TOKENS` caps the summary), the reply starts with a `compaction` block (streamed as `compaction_delta`; `usage.iterations` lists the compaction and message passes) and `instructions` steers the summary. `pause_after_compaction` returns just the block with `stop_reason: "compaction"`. Send the block back and everything before it is dropped; a block with null content is a no-op. `count_tokens` does not compact. An unknown edit type is a `400`. | supported |
 
 ### Thinking
 
@@ -56,6 +56,7 @@ Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. The Anthropic S
 | `thinking: {"type": "enabled", "budget_tokens": N}` | Turns thinking on with a budget. `budget_tokens` must be a positive integer below `max_tokens`, otherwise `400`. The reasoning is returned as `thinking` content blocks. | supported |
 | `thinking: {"type": "disabled"}` | Turns thinking off. | supported |
 | `thinking: {"type": "adaptive"}` | Leaves the model's template default. | supported |
+| no `thinking` field | Thinking is off, as in the Anthropic API (it is opt-in). | supported |
 | `output_config.effort` | Becomes the template's reasoning effort. `reasoning_effort` is the Yunshu spelling. | supported |
 
 Thinking is a property of the loaded model. For models whose chat template does not think natively, `enabled` adds an instruction to wrap reasoning in `<think>` tags and constrains the start of the reply to do so, so a `thinking` block is still returned. A forced `tool_choice` (`any` or `tool`) turns thinking off, as Anthropic does not combine them. Thinking blocks carry an empty `signature`; there are no redacted thinking blocks.
@@ -319,7 +320,8 @@ Errors use Anthropic's envelope, also for denials from the authentication and ra
 | Documents and citations | <Support status="supported">supported</Support> |
 | Server tools: web search, web fetch, MCP connector | <Support status="supported">supported</Support> |
 | `cache_control` | <Support status="partial">hints and accounting; the cache itself is automatic</Support> |
-| `metadata`, `service_tier`, `container`, `context_management` | <Support status="partial">accepted and ignored</Support> |
+| `metadata`, `service_tier`, `container` | <Support status="partial">accepted and ignored</Support> |
+| `context_management` (`clear_tool_uses`, `clear_thinking`) | <Support status="supported">applied; `applied_edits` reported</Support> |
 | Code execution, hosted memory tool, `search_result` blocks, signed or redacted thinking | <Support status="unsupported">not supported</Support> |
 
 ## Related

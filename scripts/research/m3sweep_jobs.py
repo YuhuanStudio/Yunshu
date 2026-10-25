@@ -881,6 +881,9 @@ def cmd_routes(a):
             from route_checks_tools import FakeBackend
 
             fake = FakeBackend(free_port())
+            srt_bin = "/Volumes/P5Plus/yunshu-build/srt/node_modules/.bin"
+            if Path(srt_bin, "srt").exists() and srt_bin not in os.environ["PATH"]:
+                os.environ["PATH"] = f"{srt_bin}:/opt/homebrew/bin:" + os.environ["PATH"]
             cand = Path(sys.executable).parent / "yunshu"
             if "COVAUDIT_BIN" not in os.environ and cand.exists():
                 os.environ["COVAUDIT_BIN"] = str(cand)
@@ -893,8 +896,14 @@ def cmd_routes(a):
                 [
                     f"YUNSHU_AUTH_TOKEN={token}",
                     "YUNSHU_VLM_APC_DISK=0",
+                    # console_backend_gaps reads the opt-in persisted request history
+                    "YUNSHU_SERVE_LOG=1",
+                    f"YUNSHU_SERVE_LOG_DIR={home / 'history'}",
                     f"YUNSHU_SEARXNG_URL={fake.url}",
                     "YUNSHU_WEB_SEARCH_PROVIDER=searxng",
+                    # /v1/containers needs code execution; srt must be on PATH (see below)
+                    "YUNSHU_CODE_EXECUTION=1",
+                    f"YUNSHU_CODE_EXECUTION_ROOT={home / 'sandbox'}",
                     # the MCP client connects to scripts/research/agent_compat/tiny_mcp.py (stdio)
                     "YUNSHU_MCP_SERVERS="
                     + json.dumps(

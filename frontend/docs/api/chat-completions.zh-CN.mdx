@@ -24,9 +24,9 @@ description: OpenAI Chat Completions 端点，支持 tools、结构化输出、l
 | `messages` | array | 是 | 对话内容。至少要有一条内容不为空的 `user` 消息。见[消息](#消息)。 | 支持 |
 | `stream` | boolean | 否 | 使用 Server-Sent Events。默认 `false`。 | 支持 |
 | `stream_options` | object | 否 | 仅能配合 `stream: true`。`include_usage` 会在最后加一个 usage 块；`continuous_usage_stats`（vLLM 扩展）会在每个块都附上累计的 `usage`。 | 支持 |
-| `max_tokens` | integer | 否 | 生成长度上限，`0` 至 `1048576`。默认为 `YUNSHU_DEFAULT_MAX_TOKENS` 配置值（32768）。上下文预算仍会对它做限缩，见 `x_yunshu.budget`。 | 支持 |
+| `max_tokens` | integer | 否 | 生成长度上限，`0` 至 `1048576`。省略时为模型的输出上限（262144，Qwen3.8 模型卡的思考模式数值；OpenAI 规范为“直到模型上限”），只能由运维者上限 `YUNSHU_DEFAULT_MAX_TOKENS` 调低。上下文窗口仍会限缩；`x_yunshu.budget` 报告实际值与来源（`max_tokens_source`：`request`、`model_limit`、`operator_cap`）。 | 支持 |
 | `max_completion_tokens` | integer | 否 | OpenAI 较新的名称。两者同时设置时以它为准。 | 支持 |
-| `n` | integer | 否 | 返回的选项数，`1` 至 `128`。不可与 `stream: true` 并用。 | 支持 |
+| `n` | integer | 否 | 返回的选项数，`1` 至 `128`。配合 `stream: true` 时，每个块都带有所属选项的 `index`；各选项依次流式发送（文本路径一次处理一个请求，视觉语言模型则并行），`seed` 与非流式相同，会派生出每个选项的种子（`seed + index`）。最后一个 usage 块是提示词计一次、所有补全加总。 | 支持 |
 | `stop` | string 或 array | 否 | 最多 16 个停止序列。空字符串会被丢弃。 | 支持 |
 | `user` | string | 否 | 只会连同请求 ID 写入日志，没有其他作用。 | 接受但忽略 |
 | `store` | boolean | 否 | 保留完成的 completion 供日后查询。见[已存储的 completions](/docs/api/stored-completions)。 | 支持 |
@@ -108,8 +108,8 @@ description: OpenAI Chat Completions 端点，支持 tools、结构化输出、l
 | 参数 | 说明 | 状态 |
 | --- | --- | --- |
 | `enable_thinking` | 开启或关闭模型的思考模式。也会读取 `chat_template_kwargs.enable_thinking`。 | 支持 |
-| `reasoning_effort` | 推理强度。也会读取 `chat_template_kwargs.reasoning_effort`。超出模板自身列表的值会被映射（在使用 `xhigh` 的模板上，`high` 会变成 `xhigh`）。对没有推理模式的模型会被接受但没有作用。 | 支持 |
-| `thinking_budget` | 思考 token 上限，`1` 至 `32768`。 | 扩展 |
+| `reasoning_effort` | 推理强度。也会读取 `chat_template_kwargs.reasoning_effort`。超出模板自身列表的值会被映射（在使用 `xhigh` 的模板上，`high` 会变成 `xhigh`）。`none` 与 `minimal` 会关闭思考（等同 `enable_thinking: false`）；`low` 至 `max` 单调映射，`xhigh`、`max` 取最大预算。模板没有强度层级的模型，预算为 low 2048、medium 8192、high 32768、xhigh 131072、max 262144（max 为 Qwen3.8 模型卡的思考上限；其余是 Yunshu 的选择，没有外部来源，包含 xhigh 131072）。对没有推理模式的模型会被接受但没有作用。 | 支持 |
+| `thinking_budget` | 思考 token 上限，`1` 至 `262144`（模型的思考上限）。 | 扩展 |
 | `chat_template_kwargs` | 传给聊天模板的额外变量。 | 支持 |
 
 推理文本会放在 `message.reasoning_content`，与 `content` 分开。推理 token 也算在 `completion_tokens` 内，`usage.completion_tokens_details.reasoning_tokens` 则说明其中有多少。
@@ -378,7 +378,7 @@ print(resp.usage.completion_tokens_details.reasoning_tokens)
 | 图片输入 | <Support status="supported">视觉语言模型</Support> |
 | 音频与视频输入块 | <Support status="partial">接受它们的模型</Support> |
 | 流式、`stream_options.include_usage` | <Support status="supported">支持</Support> |
-| `n` 大于 1 | <Support status="partial">仅限非流式</Support> |
+| `n` 大于 1 | <Support status="supported">流式与非流式均可，块带有 `index`</Support> |
 | Function tools、`tool_choice`、`parallel_tool_calls` | <Support status="supported">支持</Support> |
 | `response_format` 的 `json_object` 与 `json_schema` | <Support status="supported">约束式解码</Support> |
 | `logprobs`、`top_logprobs` | <Support status="supported">最多 20 个候选</Support> |
@@ -396,11 +396,11 @@ print(resp.usage.completion_tokens_details.reasoning_tokens)
 | --- | --- | --- | --- |
 | `model` | string | 模型 id。 | 支持 |
 | `prompt` | string、字符串数组、token id 数组，或 token id 数组的数组 | 必填。字符串数组或 token id 数组的数组会依次为每个提示词生成选项。有多个提示词时不可使用 `stream: true`。 | 支持 |
-| `max_tokens` | integer | 默认 `128`，上限 `1048576`。也接受 `max_completion_tokens`。 | 支持 |
+| `max_tokens` | integer | 默认 `16`（OpenAI completions 规范），上限 `1048576`。也接受 `max_completion_tokens`。 | 支持 |
 | `echo` | boolean | 把提示词放在返回文本之前。配合 `logprobs` 时，提示词 token 也会有 logprobs（限单个字符串提示词）。 | 支持 |
 | `logprobs` | integer | `0` 至 `5`。响应使用旧版的 `tokens`、`token_logprobs`、`top_logprobs`、`text_offset` 数组。 | 支持 |
 | `best_of` | integer | 为每个提示词生成这么多候选，返回平均 logprob 最佳的 `n` 个。必须不小于 `n`；不可配合流式或多个提示词。所有候选都计入 `usage`。 | 支持 |
-| `n` | integer | `1` 至 `128`。不可与 `stream: true` 并用。 | 支持 |
+| `n` | integer | `1` 至 `128`。配合 `stream: true` 时，块带有 `choices[].index`，与 chat 路由相同。 | 支持 |
 | `suffix` | string | 会被接受。这里没有 fill-in-the-middle 模板，所以不会被使用，也不会附加到文本后面。 | 接受但忽略 |
 | `stop`、`seed`、`temperature`、`top_p`、`top_k`、`min_p`、各种 penalty、`logit_bias`、`stream_options` | | 与 chat 路由相同。 | 支持 |
 

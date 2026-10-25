@@ -38,7 +38,7 @@ def test_thinking_flag():
     assert sw({"type": "enabled", "budget_tokens": 5}) == (True, 5)
     assert sw({"type": "disabled"}) == (False, None)
     assert sw({"type": "adaptive"}) == (None, None)  # model default
-    assert sw(None) == (None, None)
+    assert sw(None) == (False, None)  # absent = disabled (Anthropic default)
 
 
 def test_qwen_mid_conversation_system_messages_keep_instruction_priority():

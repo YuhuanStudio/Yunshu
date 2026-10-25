@@ -4,7 +4,9 @@ import { FRESH_ROW, useFreshIds } from "./fresh-rows";
 import { ErrorNote } from "./error-note";
 import { RequestWaterfall } from "./RequestWaterfall";
 import { LatencyDistribution } from "./LatencyDistribution";
+import { SparkTip } from "./AnalyticsPanels";
 import { SpeculationPanel } from "./SpeculationPanel";
+import { ObservePanel } from "./ObservePanel";
 import { useRequestArchive } from "./useRequestArchive";
 import { ArchiveControls } from "./ArchiveControls";
 import {
@@ -27,7 +29,6 @@ import {
   EmptyState,
   Input,
   Sheet,
-  Sparkline,
   StatusIndicator,
   Table,
   Tbody,
@@ -94,13 +95,16 @@ import {
   SLOW_TOTAL_MS,
   SLOW_TTFT_MS,
   isSlow,
+  slowParts,
   slowRule,
   sortRows,
   stages,
+  ttftCell,
   type SortKey,
   type SortState,
 } from "./request-insight";
 import { logsRangeHash } from "./Logs";
+import { LiveNumber } from "./LiveNumber";
 
 import { SegmentedTray } from "./SegmentedTray";
 const PAGE = 50;
@@ -455,6 +459,8 @@ export function Requests({
       name: t("requests.tile.decodeName"),
       icon: Zap,
       trend: trendDelta(decodeSeries),
+      // Re-read every poll: it glides to each sample; digits that roll once a second smear into ghost glyphs.
+      liveValue: liveDecode ?? null,
     },
     {
       label: t("requests.tile.hitLabel"),
@@ -725,7 +731,25 @@ export function Requests({
               valueFirst
               icon={tile.icon}
               label={tile.label}
-              value={<StatValue text={tile.value} unit={tile.unit} />}
+              value={
+                "liveValue" in tile ? (
+                  <>
+                    <span className="tabular-nums">
+                      <LiveNumber
+                        value={tile.liveValue ?? null}
+                        format={(v) => number(v)}
+                      />
+                    </span>
+                    {tile.unit && (
+                      <span className="ml-1 text-xs font-normal text-muted-foreground">
+                        {tile.unit}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <StatValue text={tile.value} unit={tile.unit} />
+                )
+              }
               trend={tile.trend ?? undefined}
               subtext={
                 <span className="block min-w-0 space-y-1 sm:space-y-2">
@@ -735,13 +759,16 @@ export function Requests({
                   {/* The trend slot keeps its height before and after samples arrive; only the line waits for data. */}
                   <span className="hidden h-7 sm:block">
                     {spark && (
-                      <Sparkline
+                      <SparkTip
                         data={tile.data.slice(-60)}
                         tone={tile.tone}
                         area
                         height={28}
                         className="h-7 w-full"
                         label={tile.name}
+                        readout={(v) =>
+                          tile.unit ? `${number(v)} ${tile.unit}` : number(v)
+                        }
                       />
                     )}
                   </span>
@@ -751,6 +778,14 @@ export function Requests({
           );
         })}
       </StatGrid>
+      <ObservePanel
+        rows={(engine.status?.requests.items ?? []).map(
+          (row) => ({ ...row, id: row.request_id }) as Row,
+        )}
+        connection={connection}
+        observe={engine.status?.observe === true}
+        updatedAt={engine.updatedAt}
+      />
       <div className="flex flex-wrap justify-between gap-3">
         <div className="w-full sm:w-auto sm:max-w-xs">
           <Input
@@ -931,11 +966,16 @@ export function Requests({
                               ? row.decode_tps
                               : row.tokens_per_second,
                           st = stages(row),
-                          slow = row.phase === "complete" && isSlow(row, rule);
+                          slowAt =
+                            row.phase === "complete"
+                              ? slowParts(row, rule)
+                              : { ttft: false, total: false };
                         const when = rowMs(row),
                           now = engine.updatedAt ?? Date.now();
                         const ttftText =
-                            st.ttft != null ? formatMs(st.ttft) : "—",
+                            ttftCell(row) != null
+                              ? formatMs(ttftCell(row)!)
+                              : "—",
                           totalText =
                             st.total != null ? formatMs(st.total) : "—";
                         const newer = displayed[lane - 1],
@@ -1105,9 +1145,9 @@ export function Requests({
                                 </span>
                               </Td>
                               <Td
-                                className={`hidden whitespace-nowrap tabular-nums md:table-cell ${slow ? "text-warning" : ""}`}
+                                className={`hidden whitespace-nowrap tabular-nums md:table-cell ${slowAt.ttft ? "text-warning" : ""}`}
                                 title={
-                                  slow ? t("requests.list.slowMark") : undefined
+                                  slowAt.ttft ? t("requests.list.slowMark") : undefined
                                 }
                               >
                                 {percent != null ? (
@@ -1116,16 +1156,21 @@ export function Requests({
                                       percent: number(percent, 0),
                                     })}
                                   </span>
-                                ) : row.phase === "complete" ? (
-                                  ttftText
                                 ) : (
-                                  elapsed(row.elapsed_s)
+                                  ttftText
                                 )}
                               </Td>
                               <Td
-                                className={`hidden whitespace-nowrap tabular-nums md:table-cell ${slow ? "text-warning" : ""}`}
+                                className={`hidden whitespace-nowrap tabular-nums md:table-cell ${slowAt.total ? "text-warning" : ""}`}
+                                title={
+                                  slowAt.total
+                                    ? t("requests.list.slowMark")
+                                    : undefined
+                                }
                               >
-                                {row.phase === "complete" ? totalText : "—"}
+                                {row.phase === "complete"
+                                  ? totalText
+                                  : elapsed(row.elapsed_s)}
                               </Td>
                               <Td className="hidden whitespace-nowrap tabular-nums md:table-cell">
                                 {number(speedValue)}
@@ -1205,10 +1250,9 @@ export function Requests({
                     {recentDone.map((r) => (
                       <li key={r.id}>
                         <Button
-                          type="button"
-                          size="sm"
                           variant="ghost"
-                          className="flex h-auto w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground tabular-nums hover:bg-muted"
+                          size="sm"
+                          className="h-auto w-full justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs font-normal text-muted-foreground tabular-nums"
                           onClick={() => setDetail(r)}
                         >
                           <span className="min-w-0 truncate font-mono">

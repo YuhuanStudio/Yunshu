@@ -76,7 +76,9 @@ def _pct(vals: list, q: float) -> float:
 
 def build(jobs: list, since: float, now: float, prefix: str = "") -> dict:
     jobs = [j for j in jobs if not prefix or str(j.get("label", "")).startswith(prefix)]
-    ran = [j for j in jobs if j.get("started") and j.get("ended") and j["ended"] > since]
+    ran = [
+        j for j in jobs if j.get("started") and j.get("ended") and j["ended"] > since
+    ]
     intervals, waste, by_state = [], {}, {}
     for j in ran:
         a, b = max(float(j["started"]), since), min(float(j["ended"]), now)
@@ -85,7 +87,11 @@ def build(jobs: list, since: float, now: float, prefix: str = "") -> dict:
         intervals.append((a, b))
         run = (b - a) - _pause_s(j, a, b)
         by_state[j.get("state")] = by_state.get(j.get("state"), 0) + 1
-        cause = j.get("state") if j.get("state") in BAD else ("contended" if j.get("contended") else None)
+        cause = (
+            j.get("state")
+            if j.get("state") in BAD
+            else ("contended" if j.get("contended") else None)
+        )
         if cause:
             waste[cause] = waste.get(cause, 0.0) + run / 60
     first = min([a for a, _ in intervals] + [since]) if intervals else since
@@ -95,43 +101,81 @@ def build(jobs: list, since: float, now: float, prefix: str = "") -> dict:
     waits = {}
     for j in jobs:
         if j.get("started") and j.get("submitted") and j["started"] > since:
-            waits.setdefault(int(j.get("priority", 0)), []).append((j["started"] - j["submitted"]) / 60)
-    wait = {p: {"n": len(v), "median_min": _pct(v, .5), "p90_min": _pct(v, .9), "max_min": max(v)}
-            for p, v in sorted(waits.items())}
+            waits.setdefault(int(j.get("priority", 0)), []).append(
+                (j["started"] - j["submitted"]) / 60
+            )
+    wait = {
+        p: {
+            "n": len(v),
+            "median_min": _pct(v, 0.5),
+            "p90_min": _pct(v, 0.9),
+            "max_min": max(v),
+        }
+        for p, v in sorted(waits.items())
+    }
     cands = {}
     for j in jobs:
         m = SHA.search(str(j.get("label", "")))
         if m and j.get("ended") and j.get("submitted") and j["ended"] > since:
-            c = cands.setdefault(m.group(1), {"first": j["submitted"], "last": j["ended"], "jobs": 0, "bad": 0})
-            c["first"], c["last"] = min(c["first"], j["submitted"]), max(c["last"], j["ended"])
+            c = cands.setdefault(
+                m.group(1),
+                {"first": j["submitted"], "last": j["ended"], "jobs": 0, "bad": 0},
+            )
+            c["first"], c["last"] = (
+                min(c["first"], j["submitted"]),
+                max(c["last"], j["ended"]),
+            )
             c["jobs"] += 1
             c["bad"] += j.get("state") in BAD
-    verdict = {s: {"hours": round((c["last"] - c["first"]) / 3600, 2), "jobs": c["jobs"], "bad": c["bad"]}
-               for s, c in cands.items()}
+    verdict = {
+        s: {
+            "hours": round((c["last"] - c["first"]) / 3600, 2),
+            "jobs": c["jobs"],
+            "bad": c["bad"],
+        }
+        for s, c in cands.items()
+    }
     hrs = [v["hours"] for v in verdict.values()]
     return {
-        "window_h": round(span / 3600, 1), "jobs_ran": len(ran), "states": by_state,
+        "window_h": round(span / 3600, 1),
+        "jobs_ran": len(ran),
+        "states": by_state,
         "queue_busy_pct": round(100 * (busy_s - pausing) / span, 1),
         "paused_min": round(pausing / 60, 1),
         "run_min": round((busy_s) / 60, 1),
         "wasted_min": {k: round(v, 1) for k, v in sorted(waste.items())},
         "wasted_total_min": round(sum(waste.values()), 1),
         "queue_wait_by_priority": wait,
-        "time_to_verdict": {"candidates": len(verdict), "median_h": round(_pct(hrs, .5), 2),
-                            "p90_h": round(_pct(hrs, .9), 2), "per_candidate": verdict},
+        "time_to_verdict": {
+            "candidates": len(verdict),
+            "median_h": round(_pct(hrs, 0.5), 2),
+            "p90_h": round(_pct(hrs, 0.9), 2),
+            "per_candidate": verdict,
+        },
     }
 
 
 def render(r: dict) -> str:
-    out = ["gpuq report: window %.1f h, %d jobs ran" % (r["window_h"], r["jobs_ran"]),
-           "queue busy (occupancy, not hardware GPU util): %.1f %%  (run %.0f min, paused %.0f min)"
-           % (r["queue_busy_pct"], r["run_min"], r["paused_min"]),
-           "wasted GPU minutes: %.0f  %s" % (r["wasted_total_min"], r["wasted_min"]), "",
-           "queue wait by priority (min)", "  prio     n  median    p90    max"]
+    out = [
+        "gpuq report: window %.1f h, %d jobs ran" % (r["window_h"], r["jobs_ran"]),
+        "queue busy (occupancy, not hardware GPU util): %.1f %%  (run %.0f min, paused %.0f min)"
+        % (r["queue_busy_pct"], r["run_min"], r["paused_min"]),
+        "wasted GPU minutes: %.0f  %s" % (r["wasted_total_min"], r["wasted_min"]),
+        "",
+        "queue wait by priority (min)",
+        "  prio     n  median    p90    max",
+    ]
     for p, w in r["queue_wait_by_priority"].items():
-        out.append("  %4d %5d %7.1f %6.1f %6.1f" % (p, w["n"], w["median_min"], w["p90_min"], w["max_min"]))
+        out.append(
+            "  %4d %5d %7.1f %6.1f %6.1f"
+            % (p, w["n"], w["median_min"], w["p90_min"], w["max_min"])
+        )
     t = r["time_to_verdict"]
-    out += ["", "time to verdict: %d candidates, median %.2f h, p90 %.2f h" % (t["candidates"], t["median_h"], t["p90_h"])]
+    out += [
+        "",
+        "time to verdict: %d candidates, median %.2f h, p90 %.2f h"
+        % (t["candidates"], t["median_h"], t["p90_h"]),
+    ]
     return "\n".join(out)
 
 

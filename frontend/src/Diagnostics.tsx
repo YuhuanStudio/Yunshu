@@ -607,6 +607,17 @@ export function Diagnostics({
           ))}
         </ul>
       </SectionCard>
+      {status?.observe === true && (
+        <p
+          data-testid="observe-badge-diag"
+          role="status"
+          className={`text-sm ${systemState === "error" ? "text-warning" : "text-muted-foreground"}`}
+        >
+          {systemState === "error"
+            ? t("diagnostics.observe.unreadable")
+            : t("diagnostics.observe.badge")}
+        </p>
+      )}
       {debugOff && (
         <SectionCard
           icon={Server}
@@ -615,10 +626,12 @@ export function Diagnostics({
           data-testid="debug-disabled"
         >
           <p className="text-sm text-muted-foreground">
-            {t("diagnostics.off.body", {
-              flag: "YUNSHU_DEBUG_ROUTES=1",
-              authFlag: "YUNSHU_AUTH_DISABLED",
-            })}
+            {status?.observe === true
+              ? t("diagnostics.observe.unreadable")
+              : t("diagnostics.off.body", {
+                  flag: "YUNSHU_DEBUG_ROUTES=1",
+                  authFlag: "YUNSHU_AUTH_DISABLED",
+                })}
           </p>
         </SectionCard>
       )}

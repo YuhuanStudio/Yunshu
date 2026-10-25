@@ -144,6 +144,7 @@ def test_short_flag_counts_as_short_and_caps_timeout(gpuq, tmp_path, monkeypatch
     assert not gpuq._lane_short(j2)
 
 
+@pytest.mark.serial  # runs a real daemon loop with wall-clock waits; flaky under xdist CPU load
 def test_priority_preemption_never_interleaves(gpuq):
     """_admit(preempt=True) only considers p>=0 pending jobs and never the lane."""
     seen = []

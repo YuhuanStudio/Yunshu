@@ -2693,6 +2693,21 @@
       "why": "Scoped native MLX safetensors exact-cache reload; upstream reconstruction and validation retained",
       "source_sha256": "bdeabe368f076a095b8a03b4a4954dd24cbfe51425e4f9413052d75984596029",
       "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/gdn_prefill.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen3_5.language",
+      "symbol": "Qwen3_5GatedDeltaNet._normalize_qk",
+      "signature": "(self, q: mx.array, k: mx.array)",
+      "license": "MIT",
+      "commit": "v0.7.4",
+      "why": "split-invariant prefill only: 128-wide BF16 RMS followed by BF16 Q/K scale in one kernel, preserving the intermediate BF16 rounding; decode/verify and other shapes call upstream",
+      "source_sha256": "8f16e229aec08b7a1ca6eaf2bd15e61ade47061d7225925096b857955fe93ca9",
+      "installed_version": "0.7.8"
     }
   ],
   "watch": [

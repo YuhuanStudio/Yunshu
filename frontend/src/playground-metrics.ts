@@ -5,6 +5,9 @@ export interface RunTiming {
   start: number;
   firstAt?: number;
   endAt?: number;
+  /** First reasoning delta and the first answer delta after it: the client-measured think time. */
+  thinkStart?: number;
+  thinkEnd?: number;
   /** Number of content/reasoning deltas received (a token estimate). */
   chunks: number;
   usage?: CompletionUsage;

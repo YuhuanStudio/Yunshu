@@ -43,10 +43,12 @@ from ..console_contracts import (
 from ..engine import get_display_model_id, get_engine, get_model_manager
 from ..x_yunshu import (
     BOOT_ID,
+    live_decode_rate,
     parse_keep_alive,
     progress_payload,
     recent_rates,
     registry,
+    served_model,
 )
 from .models import _check_permission
 
@@ -156,12 +158,14 @@ def _requests() -> list[dict[str, Any]]:
     out = []
     for info in registry.active():
         row = progress_payload(info)
-        row["model"] = getattr(info.gen, "model", None) or info.model
+        alias = getattr(info.gen, "model", None) or info.model
+        row["model"] = served_model(alias)
+        if alias and alias != row["model"]:
+            row["model_alias"] = alias
         row["path"] = info.path
         row["stream"] = info.stream
         gen = info.gen
         if gen is not None:
-            row["model"] = gen.model
             row["engine_request_id"] = gen.request_id
             row["cancelled"] = gen.cancel_event.is_set()
         out.append(row)
@@ -176,11 +180,19 @@ def _requests() -> list[dict[str, Any]]:
                     "request_id": gen.client_request_id or gen.request_id,
                     "engine_request_id": gen.request_id,
                     "phase": "running",
-                    "model": gen.model,
+                    "model": served_model(gen.model),
                     "elapsed_s": round(gen.elapsed_s, 2),
                 }
             )
     return out
+
+
+def _orphans() -> dict[str, Any]:
+    """Generations whose client left and that wait for an identical retry (they still
+    decode and hold KV until adopted or expired), plus adoption counters."""
+    from yunshu_engine.orphan_adoption import get_registry
+
+    return get_registry().stats()
 
 
 def _gpu_busy() -> dict[str, Any]:
@@ -201,6 +213,12 @@ def _gpu_busy() -> dict[str, Any]:
     return out
 
 
+def _observe_on() -> bool:
+    from yunshu_engine import settings as _settings
+
+    return _settings.get_bool("YUNSHU_OBSERVE")
+
+
 @router.get("/yunshu/status")
 async def status(request: Request) -> dict:
     """Everything an operator or a client wants to know before sending a big request."""
@@ -214,7 +232,7 @@ async def status(request: Request) -> dict:
     for info in registry.active():
         st = info.stats
         if st is not None and st.phase == "decode" and st.t_last > st.t_first:
-            live += (st.generated - 1) / (st.t_last - st.t_first)
+            live += live_decode_rate(info) or 0.0
     rates = recent_rates()
     state = getattr(request.app.state, "server_state", "running")
     return {
@@ -223,6 +241,7 @@ async def status(request: Request) -> dict:
         "state": str(getattr(state, "value", state)),
         "uptime_s": round(time.monotonic() - _STARTED, 1),
         "pid": os.getpid(),
+        "observe": _observe_on(),
         "load_error": getattr(request.app.state, "load_error", None),
         "models": _models(),
         "memory": _memory(),
@@ -234,6 +253,7 @@ async def status(request: Request) -> dict:
             "items": reqs,
         },
         "last": registry.last(),
+        "orphans": _orphans(),
         "gpu": _gpu_busy(),
         "throughput": {
             "window_s": 60,
@@ -361,11 +381,9 @@ async def get_request(request_id: str, request: Request) -> dict:
             detail=f"Request '{request_id}' not found or already completed",
         )
     row = progress_payload(info)
-    row["model"] = getattr(info.gen, "model", None) or info.model
+    row["model"] = served_model(getattr(info.gen, "model", None) or info.model)
     row["path"] = info.path
     row["stream"] = info.stream
-    if info.gen is not None:
-        row["model"] = info.gen.model
     return {"object": "yunshu.request", **row}
 
 
@@ -487,7 +505,9 @@ async def host(request: Request) -> dict:
 
     from ..host_state import snapshot
 
-    _check_permission(request, "can_manage_models")
+    # A read like status/memory/config: open on the loopback console with no token configured,
+    # token-gated once one is set (it used to 401 every poll for a token-less console).
+    _check_permission(request, "can_infer")
     return await asyncio.to_thread(snapshot)
 
 

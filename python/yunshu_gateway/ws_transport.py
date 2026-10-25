@@ -251,6 +251,10 @@ class Job:
         self.deltas = 0
         self.events = 0
         self.request_id: str | None = None
+        # a ``store: false`` response on the Responses socket: kept (as stored) only so the next
+        # turn can chain off it, dropped once a newer one replaces it or the socket closes
+        self.ephemeral = False
+        self.response_id: str | None = None
 
 
 class Connection:
@@ -267,6 +271,16 @@ class Connection:
         self.max_inflight = int(settings.get("YUNSHU_WS_MAX_INFLIGHT"))
         self._writer: asyncio.Task | None = None
         self._pinger: asyncio.Task | None = None
+        self._ephemeral_ids: list[str] = []
+
+    def _drop_ephemeral(self, keep_last: bool) -> None:
+        """Forget the ``store: false`` responses of this socket (all, or all but the newest)."""
+        from .routers.responses import _delete_stored_response
+
+        drop = self._ephemeral_ids[:-1] if keep_last else self._ephemeral_ids
+        self._ephemeral_ids = self._ephemeral_ids[-1:] if keep_last else []
+        for rid in drop:
+            _delete_stored_response(rid)
 
     # ── output ──
 
@@ -334,6 +348,7 @@ class Connection:
                     tasks.append(job.task)
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
+            self._drop_ephemeral(keep_last=False)
             side = [t for t in (self._pinger, self._writer) if t]
             for t in side:
                 t.cancel()
@@ -438,6 +453,16 @@ class Connection:
     async def _start(
         self, req_id: str, api: str, body: dict, stream_id: str | None
     ) -> None:
+        # OpenAI's WebSocket mode keeps the latest response of the connection in a local cache even
+        # with ``store: false``, so the next ``response.create`` can chain through
+        # ``previous_response_id`` (an unknown id is a 404 since fd670b87). Store it for the socket.
+        ephemeral = (
+            self.dialect == "responses"
+            and api == "responses"
+            and body.get("store") is False
+        )
+        if ephemeral:
+            body["store"] = True
         if req_id in self.jobs:
             await self._error(req_id, 409, f"Request id {req_id!r} is already active")
             return
@@ -466,6 +491,7 @@ class Connection:
             else:
                 so.setdefault("include_usage", True)
         job = Job(req_id, api, body, stream_id)
+        job.ephemeral = ephemeral
         if stream_id is not None:
             self.lanes.setdefault(stream_id, asyncio.Lock())
         self.jobs[req_id] = job
@@ -512,6 +538,12 @@ class Connection:
 
     def _wrap(self, job: Job, event: str | None, data: Any) -> dict:
         if self.dialect == "responses":
+            if job.ephemeral and isinstance(data, dict):
+                resp = data.get("response")
+                if isinstance(resp, dict):
+                    job.response_id = resp.get("id") or job.response_id
+                    if "store" in resp:
+                        resp["store"] = False  # what the client asked for
             return data if isinstance(data, dict) else {"type": "raw", "data": data}
         return {"type": "event", "id": job.id, "event": event, "data": data}
 
@@ -595,6 +627,9 @@ class Connection:
                 with contextlib.suppress(BaseException):
                     await asyncio.shield(job.call.close())
             self.jobs.pop(job.id, None)
+            if job.ephemeral and job.response_id:
+                self._ephemeral_ids.append(job.response_id)
+                self._drop_ephemeral(keep_last=True)
             if job.stream_id is not None and not any(
                 j.stream_id == job.stream_id for j in self.jobs.values()
             ):

@@ -33,10 +33,16 @@ const settingdesc = {
     "Deprioritize captured opencode title requests: interactive VLM jobs run first, and auxiliary rows pause between GPU slices and never read or write the APC. On by default only with qualified batch-invariant kernels; other backends need explicit opt-in. In-flight GPU operations cannot be interrupted.",
   YUNSHU_QUEUE_LIMIT:
     "Generation requests in flight at once, running and waiting together; the next one is refused at once with 429, `Retry-After` and the queue depth in `error.x_yunshu`. 0 = no limit.",
+  YUNSHU_ORPHAN_GRACE_SECONDS:
+    "When a client disconnects mid-generation (an agent timing out a long streamed reply), keep that generation running for this many seconds. An identical request in the window, streaming or not, is attached to it: tokens already generated replay at once and the rest follow live, so the work is not repeated. Unadopted generations are cancelled when the window ends; an explicit cancel stops at once. 0 = cancel at disconnect.",
+  YUNSHU_ORPHAN_MAX:
+    "Most orphaned generations kept at once; each holds its decode row and KV until adopted or expired. The oldest is cancelled beyond this.",
   YUNSHU_MEMORY_PRESSURE_REJECT:
     "Share of the Metal working set above which a new generation request is refused with 503 and `Retry-After` while other requests are running, to avoid an OOM. An idle server never refuses. 0 = off.",
   YUNSHU_COMPLETION_BATCH_SIZE:
     "Text engine: maximum sequences decoded together.",
+  YUNSHU_SAMPLING_DEFAULTS:
+    "Where a request that omits a sampling parameter gets it: the model's published per-mode recommendation, then its generation_config.json, then the API default (model), or the API default only (api). A value in the request always wins.",
   YUNSHU_DEFAULT_MAX_TOKENS:
     "Completion length when a chat or responses request omits `max_tokens`; the context budget still clamps it.",
   YUNSHU_MAX_PREFILL_TOKENS:
@@ -98,6 +104,8 @@ const settingdesc = {
     "Disable auth entirely (operational endpoints open too). Local development only.",
   YUNSHU_DEBUG_TREE_PROFILE:
     "Debugging aid: time each stage of the DFlash tree verify (GDN mixer, attention, MLP, norms, commit) and log per-round means when a request ends. Adds a sync after every stage, so it slows decoding; use only to find the dominant stage.",
+  YUNSHU_OBSERVE:
+    "Observe mode (`yunshu serve --observe`): turns on every observability feature you did not set yourself: `/debug/*` routes, host telemetry, the serve log, the audit log file, token ids in logprobs and the generation capture file. An explicit value wins. Telemetry costs about +1.8% follow-up TTFT at 1K, so keep it off for speed benchmarks. Without a token, `/debug/*` answers this Mac only.",
   YUNSHU_DEBUG_ROUTES:
     "Mount the `/debug/*` diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or `YUNSHU_AUTH_DISABLED`. `/metrics` is always mounted.",
   YUNSHU_DEBUG_STREAM_CAPTURE:
@@ -272,17 +280,17 @@ const settingdesc = {
   YUNSHU_WEB_FETCH_MAX_TEXT_CHARS:
     "Extracted page text handed to the model is cut to this many characters (a request’s `max_content_tokens` can lower it).",
   YUNSHU_CODE_EXECUTION:
-    "Serve the code execution tools (Anthropic `code_execution_*`) on this machine inside the Anthropic sandbox-runtime (srt; optional, needs Node 22.12 or newer). Off: requests that declare them get a 400. On without srt: 503, never an unsandboxed run.",
+    "Serve the code execution tools (Anthropic `code_execution_*`, OpenAI Responses `code_interpreter` and hosted `shell`, the OpenAI `/v1/containers` API) on this machine inside the Anthropic sandbox-runtime (srt; optional, needs Node 22.12 or newer). Off: requests that declare them get a 400. On without srt: 503, never an unsandboxed run.",
   YUNSHU_CODE_EXECUTION_ROOT:
     "Directory holding the code execution containers (one sub-directory each, mode 0700).",
   YUNSHU_CODE_EXECUTION_TIMEOUT:
-    "Wall-clock seconds one code execution call may run before it is killed. Also the CPU-time limit.",
+    "Wall-clock seconds one code execution call may run before it is killed. Also the CPU-time limit. A Python cell waiting for the client’s tool results does not count.",
   YUNSHU_CODE_EXECUTION_MEMORY_MB:
-    "Resident memory (MB) a code execution call may use, sampled over its whole process group; above it the call is killed.",
+    "Resident memory (MB) a code execution call may use, sampled over its whole process group; above it the call is killed. An OpenAI container’s `memory_limit` can only lower it.",
   YUNSHU_CODE_EXECUTION_NETWORK_ALLOW:
-    "Comma-separated hosts the sandbox may reach (`example.com`, `*.example.com`, `host:443`). Empty: no network at all, loopback included.",
+    "Comma-separated hosts the sandbox may reach (`example.com`, `*.example.com`, `host:443`). Empty: no network at all, loopback included. An OpenAI container’s `network_policy` can only narrow this list.",
   YUNSHU_CODE_EXECUTION_TTL_MIN:
-    "Minutes a code execution container may sit unused before it and its files are deleted.",
+    "Minutes a code execution container may sit unused before it and its files are deleted. An OpenAI container’s `expires_after.minutes` can only shorten it.",
   YUNSHU_MCP_CONNECTOR:
     "Serve the MCP connector: Anthropic `mcp_servers` and OpenAI Responses `mcp` tools are executed by this server, which connects to the named MCP servers over streamable HTTP / SSE.",
   YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE:

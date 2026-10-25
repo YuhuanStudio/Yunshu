@@ -122,7 +122,31 @@ HTML 會轉成 Markdown；text、JSON 與 XML 類型以文字回傳。其他內�
 
 ### 程式碼執行
 
-`code_execution_20250825`、`_20260120` 與 `_20260521` 在本機的 Anthropic sandbox-runtime 內執行 bash 與文字編輯器。預設關閉：設 `YUNSHU_CODE_EXECUTION=1` 並安裝 `@anthropic-ai/sandbox-runtime`（Node 22.12 以上）。關閉時宣告此工具的請求回 `400`；開啟但沒有 runtime 時回 `503`；指令絕不會在沙盒外執行。回應含 `bash_code_execution_tool_result` / `text_editor_code_execution_tool_result` 區塊與可回傳的 `container`；寫入 `$OUTPUT_DIR` 的檔案以 Files API id 回傳。沙盒只能寫入自己的容器、讀不到你的家目錄，除非用 `YUNSHU_CODE_EXECUTION_NETWORK_ALLOW` 列出主機，否則沒有網路。
+`code_execution_20250522`、`_20250825`、`_20260120` 與 `_20260521` 在本機的 Anthropic sandbox-runtime 內執行。預設關閉：設 `YUNSHU_CODE_EXECUTION=1` 並安裝 `@anthropic-ai/sandbox-runtime`（Node 22.12 以上）。關閉時宣告此工具的請求回 `400`；開啟但沒有 runtime 時回 `503`；指令絕不會在沙盒外執行。回應含 `*_tool_result` 區塊與可回傳的 `container`。沙盒只能寫入自己的容器、讀不到你的家目錄，除非用 `YUNSHU_CODE_EXECUTION_NETWORK_ALLOW` 列出主機，否則沒有網路。
+
+| 版本 | 子工具 | Python 直譯器 |
+| --- | --- | --- |
+| `20250522` | `code_execution`（Python） | 每次呼叫全新行程 |
+| `20250825` | `bash_code_execution`、`text_editor_code_execution`（若有客戶端工具列出 code execution 呼叫者，再加 `code_execution`） | 每次呼叫全新行程 |
+| `20260120`、`20260521` | 三者皆有 | 每個容器一個行程：變數在呼叫之間保留（REPL 狀態） |
+
+bash 寫入 `$OUTPUT_DIR` 的檔案與 Python cell 產生的檔案，都以 Files API id 回傳。**程式化工具呼叫：** 工具若設 `"allowed_callers": ["code_execution_20260120"]`，就成為直譯器中的 `async` Python 函式。程式碼 await 它時，該回合以 `stop_reason: "tool_use"` 結束，每個呼叫一個帶 `caller: {type, tool_id}` 的 `tool_use` 區塊；帶著 `container` 把工具結果送回，回應就接著給出 `code_execution_tool_result`。模型自己的歷史只有那次程式碼呼叫與最終結果。暫停的 cell 最多等候 270 秒。詳見[指南](https://github.com/yuhuanowo/Yunshu/blob/main/docs/guides/CODE_EXECUTION.md)。
+
+### OpenAI code interpreter、shell 與容器
+
+同一個設定下，OpenAI Responses 請求可宣告 `{"type": "code_interpreter", "container": {"type": "auto"}}`（或容器 id）與託管的 `{"type": "shell", "environment": {"type": "container_auto"}}`（或 `container_reference`）。回應有 `code_interpreter_call` 項目（`code`、`container_id`，加上 `include: ["code_interpreter_call.outputs"]` 才有 `outputs`）、`shell_call` / `shell_call_output` 項目、串流事件 `response.code_interpreter_call.*`、`response.code_interpreter_call_code.*`、`response.shell_call_command.*`、`response.shell_call_output_content.*`，以及程式碼產生的檔案的 `container_file_citation` 註解。Python 狀態保留在容器內；`previous_response_id` 會重用它。`environment` 為 `local` 的 `shell` 工具由你的客戶端執行。
+
+這些背後的容器有 OpenAI containers API。`expires_after` 是閒置壽命（上限為 `YUNSHU_CODE_EXECUTION_TTL_MIN`），`memory_limit` 是 `YUNSHU_CODE_EXECUTION_MEMORY_MB` 之下的上限，`network_policy` 只能縮小 `YUNSHU_CODE_EXECUTION_NETWORK_ALLOW`。檔案位於 `/mnt/data/<name>`。
+
+<Endpoint method="POST" path="/v1/containers" />
+<Endpoint method="GET" path="/v1/containers" />
+<Endpoint method="GET" path="/v1/containers/{container_id}" />
+<Endpoint method="DELETE" path="/v1/containers/{container_id}" />
+<Endpoint method="POST" path="/v1/containers/{container_id}/files" />
+<Endpoint method="GET" path="/v1/containers/{container_id}/files" />
+<Endpoint method="GET" path="/v1/containers/{container_id}/files/{file_id}" />
+<Endpoint method="GET" path="/v1/containers/{container_id}/files/{file_id}/content" />
+<Endpoint method="DELETE" path="/v1/containers/{container_id}/files/{file_id}" />
 
 ### MCP 連接器
 
@@ -192,7 +216,7 @@ HTML 會轉成 Markdown；text、JSON 與 XML 類型以文字回傳。其他內�
 
 ## 限制與尚未支援的部分
 
-- 託管的記憶工具、檔案搜尋、圖片生成與 OpenAI 託管連接器皆無法使用。Anthropic 程式碼執行需手動開啟（見上）；OpenAI `code_interpreter` 與 `shell` 尚未提供。
+- 託管的記憶工具、檔案搜尋、圖片生成與 OpenAI 託管連接器皆無法使用。程式碼執行（Anthropic `code_execution_*`、OpenAI `code_interpreter` 與託管 `shell`）需手動開啟（見上）；OpenAI 的 `programmatic_tool_calling` 與容器 skills 尚未實作。
 - `web_fetch` 不讀取 PDF 或圖片，也無法執行 JavaScript。
 - 網路搜尋品質取決於你設定的提供者；免金鑰的預設值是盡力而為。
 - Responses API 沒有網頁擷取工具；請使用 `mcp` 的 fetch 伺服器，或改走 Anthropic 路由。

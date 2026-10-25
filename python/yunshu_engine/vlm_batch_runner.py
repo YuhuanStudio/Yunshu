@@ -118,7 +118,13 @@ class RunStats:
     latency_marks: dict[str, float] = field(default_factory=dict)
     t_prefill_end: float = 0.0
     t_submit: float = 0.0  # handed to the runner
-    t_admit: float = 0.0  # left the queue, prefill started
+    t_admit: float = 0.0  # left the queue, handed to the generator
+    # The first prefill atom of this request started running. Admission comes earlier: with several
+    # requests the scheduler runs their atoms one at a time, so an admitted request waits for its turn.
+    # ``tracks_prefill_start`` is set by the runner; paths that do not track it (the text fast path)
+    # count admission as the start.
+    t_prefill_start: float = 0.0
+    tracks_prefill_start: bool = False
     t_first: float = 0.0  # first generated token
     t_last: float = 0.0  # latest generated token
     prefill_done: int = 0  # prompt tokens computed so far (cache hits excluded)
@@ -146,7 +152,9 @@ class RunStats:
         if not self.t_admit:
             return "queued"
         if not self.t_first:
-            return "prefill"
+            if self.t_prefill_start or not self.tracks_prefill_start:
+                return "prefill"
+            return "queued"
         return "decode"
 
 
@@ -1010,6 +1018,7 @@ class VLMBatchRunner:
         from .mrope import clear_rope_state
 
         job.stats.t_admit = time.perf_counter()
+        job.stats.tracks_prefill_start = True
         job.stats.prefill_total = len(job.ids)
         job.stats.prefill_known = (
             False  # the upstream path learns its cache hit on the first step
@@ -1333,7 +1342,8 @@ class VLMBatchRunner:
             )
         )
         self._vocab_owner = driver
-        job.start = job.stats.t_admit = time.perf_counter()
+        job.start = job.stats.t_admit = job.stats.t_prefill_start = time.perf_counter()
+        job.stats.tracks_prefill_start = True
         hit = int(hit or 0)
         job.stats.cached_tokens = hit
         job.stats.prefill_total = len(job.ids) - hit
@@ -1519,9 +1529,23 @@ class VLMBatchRunner:
             ragged_kv.set_format(self.ragged_kv)
             if dense_lane:
                 ragged_kv.set_dense_lane(True)
+        if logger.isEnabledFor(logging.DEBUG):
+            _t0 = time.perf_counter()
+            _g0 = sum(j.stats.generated for j in group.jobs.values())
         try:
             self._step_generator(group, decode_only=decode_only)
         finally:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "slice t=%.3f dt=%.3f spec=%s decode_only=%s rows=%d emitted=%d uncached_waiting=%d",
+                    _t0,
+                    time.perf_counter() - _t0,
+                    group.spec,
+                    decode_only,
+                    len(group.jobs),
+                    sum(j.stats.generated for j in group.jobs.values()) - _g0,
+                    sum(1 for j in group.jobs.values() if not j.stats.t_first),
+                )
             cache_decode.set_active(False)
             if invariant:
                 batch_invariant.set_active(False)
@@ -1787,6 +1811,30 @@ class VLMBatchRunner:
             job.stats.cache_device = rec.device
             job.stats.latency_marks["prefill_start"] = rec.t
 
+    @staticmethod
+    def _begin_prefill(job: _Job | None) -> None:
+        """Its first atom is about to run: from now the request is prefilling, not waiting."""
+        if job is not None and not job.stats.t_prefill_start:
+            job.stats.t_prefill_start = time.perf_counter()
+
+    def _begin_prefill_front(self, group: _Group) -> None:
+        """Generator-ordered paths: the request at the head of the generator's prefill line."""
+        gen = group.gen
+        pb = getattr(gen, "_prompt_batch", None)
+        uid = None
+        if pb is not None and getattr(pb, "uids", None):
+            uid = pb.uids[0]
+        else:
+            queue = getattr(gen, "_unprocessed_sequences", None)
+            if queue:
+                uid = queue[0][0]
+            elif not hasattr(gen, "_unprocessed_sequences"):
+                for job in group.jobs.values():
+                    if not job.stats.t_first:
+                        self._begin_prefill(job)
+        if uid is not None:
+            self._begin_prefill(group.jobs.get(uid))
+
     def _note_driver_prefill(self, driver=None) -> None:
         """Publish prefill progress of the round driver's rows."""
         try:
@@ -1833,6 +1881,15 @@ class VLMBatchRunner:
                 st.prefill_done = st.prefill_total
                 if not st.t_prefill_end:
                     st.t_prefill_end = time.perf_counter()
+
+    def phase_counts(self) -> dict[str, int]:
+        """Requests by phase right now: waiting for admission, prefilling, decoding."""
+        with self._lock:
+            queued = len(self._pending)
+        jobs = [j for g in self._groups() for j in g.jobs.values()]
+        jobs += list(self._driver_jobs.values())
+        prefill = sum(1 for j in jobs if not j.stats.t_first)
+        return {"queued": queued, "prefill": prefill, "decode": len(jobs) - prefill}
 
     def busy_snapshot(self) -> dict:
         """Cumulative GPU-busy accounting: all slices and the round driver's share."""
@@ -1997,6 +2054,8 @@ class VLMBatchRunner:
                 first_pending = job.finishing_prefill and not job.stats.t_first
                 if job.uid in group.prefills:
                     group.gen._prompt_batch = group.prefills.pop(job.uid)
+                if prefilling or first_pending:
+                    self._begin_prefill(job)
                 before = time.perf_counter()
                 self._step_group(group)
                 elapsed = time.perf_counter() - before
@@ -2033,6 +2092,26 @@ class VLMBatchRunner:
         chosen = min(
             candidates, key=lambda gj: estimates[id(gj[1])].key(now), default=None
         )
+        # A later arrival does not take the GPU from the earlier request whose prefill is
+        # already under way unless it is strictly shorter: otherwise two equal cold prompts
+        # alternate atoms and the first one's TTFT grows by the second one's atoms.
+        owner = getattr(self, "_atom_owner", None)
+        if (
+            chosen is not None
+            and owner is not None
+            and owner is not chosen[1]
+            and not owner.stats.t_first
+            and not owner.terminal
+            and chosen[1].priority == owner.priority
+            and chosen[1].queued >= owner.queued
+        ):
+            mine = next((c for c in candidates if c[1] is owner), None)
+            if (
+                mine is not None
+                and estimates[id(chosen[1])].uncached_tokens
+                >= estimates[id(owner)].uncached_tokens
+            ):
+                chosen = mine
         aged_yield = None
         primary_choice = min(
             ((g, j) for g, j in candidates if j.priority >= 0),
@@ -2086,6 +2165,7 @@ class VLMBatchRunner:
             # Generators without the upstream atom API (test fakes) retain
             # ordinary dispatch. The optional round driver has its own policy.
             if not hasattr(group.gen, "_unprocessed_sequences"):
+                self._begin_prefill_front(group)
                 self._step_group(group)
                 continue
             selected_job = (
@@ -2106,6 +2186,8 @@ class VLMBatchRunner:
             first_pending = any(
                 j.finishing_prefill and not j.stats.t_first for j in allowed
             )
+            if selected:
+                self._begin_prefill(selected_job)
             before = time.perf_counter()
             self._step_group(group, decode_only=not selected)
             elapsed = time.perf_counter() - before
@@ -2117,6 +2199,7 @@ class VLMBatchRunner:
                     if job.priority < 0:
                         job.handoff_graced = False
             if selected_job is not None:
+                self._atom_owner = selected_job
                 if selected_job.priority < 0:
                     selected_job.prefill_skips = 0
                 # Revalidate after actual lookup/progress. A metadata-only warm
@@ -2129,9 +2212,13 @@ class VLMBatchRunner:
                 # Bound overtaking in executed atoms, independent of arrival
                 # rate and the latency of the competing short requests.
                 for _, waiter in candidates:
+                    # Only a waiter that arrived BEFORE the selected job was overtaken by it;
+                    # a later arrival gets no FIFO protection from being served second
+                    # (it made two equal cold prompts alternate atoms: first TTFT +1 atom).
                     if (
                         waiter is not selected_job
                         and waiter.priority == selected_job.priority
+                        and waiter.queued <= selected_job.queued
                     ):
                         waiter.prefill_skips += 1
                 batch = group.gen._prompt_batch
@@ -2298,6 +2385,7 @@ class VLMBatchRunner:
                             for j in group.jobs.values()
                         )
                     ):
+                        self._begin_prefill_front(group)
                         self._step_group(group)
                         for j in group.jobs.values():
                             j.last_service = time.perf_counter()

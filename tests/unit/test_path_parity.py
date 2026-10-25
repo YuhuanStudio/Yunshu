@@ -223,3 +223,68 @@ def test_gap_budget_only_shrinks():
 @pytest.mark.parametrize("fid", sorted(MATRIX["features"]))
 def test_feature_ids_are_slugs(fid):
     assert re.fullmatch(r"[a-z0-9_]+", fid)
+
+
+# User 2026-09-28 / 2026-10-24: no more paths, and no new feature that only works on a benchmark-shaped path. The
+# guard above only recorded divergence (55 gap cells, never driven down); these two make it block. Path convergence
+# plan: docs/research/notes/PATH_CONVERGENCE.md (the path set may only shrink as paths merge into the one runner).
+PATHS_2026_10_24 = {"mtp", "dflash", "driver", "batch", "generic", "text", "loop"}
+FEATURES_2026_10_24 = {
+    "apc_prefix_cache",
+    "batch_invariant_kernels",
+    "cancel",
+    "constrained_bitmask_engine",
+    "copy_rounds",
+    "cost_aware_depth",
+    "draft_family_coverage",
+    "draft_topk_tree",
+    "draft_vocab",
+    "gc_policy",
+    "gpu_sampler",
+    "guided_spec",
+    "idle_memory_return",
+    "jump_forward",
+    "kv_precision",
+    "lane_layers",
+    "lane_linear",
+    "lane_promotion",
+    "logprobs",
+    "lora_adapters",
+    "media_input",
+    "next_turn_rehearsal",
+    "penalties_in_spec",
+    "ple_ssd_rows",
+    "prefill_kernels",
+    "prefill_stride_rule",
+    "qwen4_fused_hc",
+    "ragged_kv",
+    "sampled_spec",
+    "spec_under_concurrency",
+    "thinking_budget",
+    "tree_drafts",
+    "weight_quant_on_load",
+}
+# The paths real traffic takes (27B agents: one request on the lane, concurrent requests in the shared batch).
+REAL_TRAFFIC_PATHS = ("dflash", "batch")
+
+
+def test_no_new_serving_path():
+    extra = set(MATRIX["paths"]) - PATHS_2026_10_24
+    assert not extra, (
+        f"new serving path(s) {sorted(extra)}: paths may only merge into the one runner "
+        "(DECISIONS 2026-10-24), never be added"
+    )
+
+
+def test_new_features_work_on_the_real_traffic_paths():
+    for fid, feature in MATRIX["features"].items():
+        if fid in FEATURES_2026_10_24:
+            continue
+        for path in REAL_TRAFFIC_PATHS:
+            if path not in MATRIX["paths"]:
+                continue
+            status = feature["cells"].get(path, {}).get("s")
+            assert status in ("engaged", "na"), (
+                f"new feature {fid!r} is {status!r} on {path!r}: a new optimization or capability must be engaged "
+                "on the paths real traffic takes (sampled and concurrent included), not only on a benchmark path"
+            )

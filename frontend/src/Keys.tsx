@@ -2,7 +2,6 @@ import { useRouteAction } from "./useRouteAction";
 import { DocLink } from "./docs/DocLink";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  BarChart,
   SegmentedSelect,
   Button,
   Checkbox,
@@ -30,6 +29,7 @@ import {
 } from "@yuhuanowo/yunui";
 import { Banner, DashboardPage, PageHeader } from "@yuhuanowo/yunui/patterns";
 import { BarChart3, KeyRound, Plus, TriangleAlert } from "lucide-react";
+import { Columns } from "./AnalyticsPanels";
 import type { Connection } from "./api";
 import { AdminError } from "./admin-settings-api";
 import {
@@ -671,8 +671,8 @@ function UsageChart({ keys, usage }: { keys: ApiKey[]; usage: UsageDay[] }) {
     series.map((p) => ({
       id: p.day,
       label: p.day.slice(5),
+      title: p.day,
       value: pick(p),
-      tone: "neutral" as const,
     }));
   return (
     <SectionCard
@@ -721,10 +721,11 @@ function UsageChart({ keys, usage }: { keys: ApiKey[]; usage: UsageDay[] }) {
             <p className="mb-2 text-xs text-muted-foreground">
               {t("keys.usage.requests")}
             </p>
-            <BarChart
+            <Columns
               data={datum((p) => p.requests)}
               ariaLabel={t("keys.usage.requests")}
               formatValue={(v) => number(v, 0)}
+              unit={t("keys.usage.requests")}
               height={160}
             />
           </div>
@@ -732,10 +733,11 @@ function UsageChart({ keys, usage }: { keys: ApiKey[]; usage: UsageDay[] }) {
             <p className="mb-2 text-xs text-muted-foreground">
               {t("keys.usage.tokens")}
             </p>
-            <BarChart
+            <Columns
               data={datum((p) => p.tokens)}
               ariaLabel={t("keys.usage.tokens")}
               formatValue={(v) => number(v, 0)}
+              unit={t("keys.usage.tokens")}
               height={160}
             />
           </div>

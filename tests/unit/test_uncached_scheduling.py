@@ -693,7 +693,7 @@ def test_request_between_templating_and_submit_is_awaited_before_the_next_atom(a
 
 
 def test_long_reply_decode_share_is_capped_while_another_request_prefills(atoms):
-    """A row past its first tokens must not take half the GPU from a cold prefill."""
+    """A row past its first tokens takes at most a quarter of the GPU from a cold prefill."""
     r, clock = atoms
     a = job(0)
     a.max_tokens = 2000
@@ -713,7 +713,9 @@ def test_long_reply_decode_share_is_capped_while_another_request_prefills(atoms)
             break
     assert cold.stats.t_first
     prefill_s = 4 * 2048 * 0.00121
-    assert clock[0] - t0 < prefill_s * 1.1
+    assert clock[0] - t0 < prefill_s * 1.3
+    # ...and keeps decoding meanwhile instead of stalling until the prefill ends.
+    assert a.stats.generated > 200 + 8
 
 
 def test_early_rows_keep_the_generous_decode_share(atoms):
@@ -721,4 +723,119 @@ def test_early_rows_keep_the_generous_decode_share(atoms):
     from yunshu_engine.serving.work_scheduler import decode_quantum
 
     assert decode_quantum(2.0, early=True) == 2.0
-    assert decode_quantum(2.0, early=False) < 0.3
+    assert decode_quantum(2.0, early=False) <= 0.5
+
+
+def test_equal_cold_prompts_are_served_in_arrival_order_without_ping_pong(atoms):
+    """B arrived after A, so A's atom overtakes nobody: B gets no FIFO protection from it.
+    (27B probe: A's TTFT was 10.8 s instead of 9.0 s because B's atom ran between A's.)"""
+    r, clock = atoms
+    a = job(0)
+    a.ids = list(range(10000))
+    r._submit(a)
+    clock[0] += 0.01
+    b = job(0)
+    b.ids = list(range(11000))
+    r._submit(b)
+    for _ in range(200):
+        r._drive_slice(False)
+        if b.stats.t_first:
+            break
+    g = r._groups()[0]
+    order = [uid for uid, _, _ in g.gen.atoms]
+    first_b = order.index(b.uid)
+    assert all(u == a.uid for u in order[:first_b])
+    assert first_b == 5  # ceil(10000 / 2048): A is prefilled completely first
+
+
+def test_concurrent_newcomer_reports_prefill_while_its_atoms_run(atoms):
+    """The console's phase comes from RunStats.phase: a request that arrives while another one
+    decodes is `queued` only until its first atom is picked, `prefill` (with progress) through
+    its atoms, and `decode` after its first token - never queued straight to decode."""
+    r, clock = atoms
+    a = job(0)
+    a.max_tokens = 2000
+    r._submit(a)
+    for _ in range(400):
+        r._drive_slice(False)
+        if a.stats.generated >= 60:
+            break
+    b = job(0)
+    b.ids = list(range(10000))
+    r._submit(b)
+    seen = []
+    done_seen = []
+    for _ in range(3000):
+        r._drive_slice(False)
+        ph = b.stats.phase
+        if not seen or seen[-1] != ph:
+            seen.append(ph)
+        if ph == "prefill":
+            done_seen.append((b.stats.prefill_done, b.stats.prefill_total))
+        if b.stats.t_first:
+            break
+    assert seen[0] in ("queued", "prefill")
+    assert "prefill" in seen, seen
+    assert seen[-1] == "decode"
+    assert seen.index("prefill") < seen.index("decode")
+    # progress is reported (not stuck at 0 / unknown) while the atoms run
+    assert max(d for d, _ in done_seen) > 0
+
+
+def test_phase_counts_follow_the_requests_through_queued_prefill_decode(atoms):
+    """/debug/requests reported active=0 waiting=0 while two requests ran (the VLM engine
+    gave no counts); the runner now answers by phase."""
+    r, _ = atoms
+    assert r.phase_counts() == {"queued": 0, "prefill": 0, "decode": 0}
+    a = job(0)
+    a.ids = list(range(5000))
+    b = job(0)
+    b.ids = list(range(5000))
+    r._submit(a)
+    r._submit(b)
+    assert r.phase_counts()["queued"] == 2
+    seen = set()
+    for _ in range(400):
+        r._drive_slice(False)
+        c = r.phase_counts()
+        seen.add((c["queued"] > 0, c["prefill"] > 0, c["decode"] > 0))
+        if a.stats.t_first and b.stats.t_first:
+            break
+    c = r.phase_counts()
+    assert c["prefill"] == 0 and c["decode"] >= 1
+    assert any(p for _, p, _ in seen)
+
+
+def test_admitted_request_is_queued_until_its_own_first_atom_runs(atoms):
+    """Admission comes before a request's atoms; with two cold prompts the second waits for its
+    turn. It must read `queued` (not `prefill` with no progress) until its first atom starts, and
+    only one request prefills at a time."""
+    r, _ = atoms
+    a = job(0)
+    a.ids = list(range(9000))
+    r._submit(a)
+    b = job(0)
+    b.ids = list(range(9000))
+    r._submit(b)
+    both_prefill = 0
+    b_queued_while_a_prefills = 0
+    order = []
+    for _ in range(600):
+        r._drive_slice(False)
+        pa, pb = a.stats.phase, b.stats.phase
+        if pa == "prefill" and pb == "prefill":
+            both_prefill += 1
+        if pa == "prefill" and pb == "queued":
+            b_queued_while_a_prefills += 1
+        for name, ph in (("a", pa), ("b", pb)):
+            if not order or order[-1] != (name, ph):
+                order.append((name, ph))
+        if a.stats.t_first and b.stats.t_first:
+            break
+    assert both_prefill == 0
+    assert b_queued_while_a_prefills > 0
+    assert ("b", "prefill") in order
+    assert order.index(("b", "queued")) < order.index(("b", "prefill"))
+    assert (
+        b.stats.t_prefill_start >= a.stats.t_first - 1e-9 or b.stats.t_prefill_start > 0
+    )

@@ -53,14 +53,13 @@ def test_negative_top_k_is_disabled():
 def test_omitted_max_tokens_follows_the_setting(monkeypatch):
     from yunshu_engine import settings
 
-    assert (
-        ChatCompletionRequest(model="m", messages=U).max_tokens
-        == settings.get("YUNSHU_DEFAULT_MAX_TOKENS")
-        >= 8192
-    )
-    assert ResponsesRequest(model="m", input="x").max_output_tokens == settings.get(
-        "YUNSHU_DEFAULT_MAX_TOKENS"
-    )
+    # 0 = the model limit (output_limits.MODEL_MAX_OUTPUT_TOKENS); a positive value is a cap
+    assert settings.get("YUNSHU_DEFAULT_MAX_TOKENS") == 0
+    assert ChatCompletionRequest(model="m", messages=U).max_tokens == 262144
+    assert ResponsesRequest(model="m", input="x").max_output_tokens == 262144
+    monkeypatch.setenv("YUNSHU_DEFAULT_MAX_TOKENS", "2048")
+    assert ChatCompletionRequest(model="m", messages=U).max_tokens == 2048
+    assert ResponsesRequest(model="m", input="x").max_output_tokens == 2048
     assert (
         ChatCompletionRequest(model="m", messages=U, max_tokens=200000).max_tokens
         == 200000

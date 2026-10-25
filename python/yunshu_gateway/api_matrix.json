@@ -1,0 +1,6786 @@
+{
+ "_doc": "API-layer parity matrix. Every request/response feature of the OpenAI and Anthropic APIs we serve, on every route x stream mode (+ Responses background). engaged = a probe in tests/unit/test_api_parity_wire.py or a named route-level test exercises the cell; na = the spec says it does not apply (cited); partial/missing = a documented gap with a kind (unimplemented | divergent | untested), an impact and an owner. tests/unit/test_api_parity.py enforces it; a new request field, server tool or router module without a row fails CI.",
+ "columns": {
+  "chat/nonstream": "POST /v1/chat/completions, stream=false",
+  "chat/stream": "POST /v1/chat/completions, stream=true",
+  "responses/nonstream": "POST /v1/responses, stream=false",
+  "responses/stream": "POST /v1/responses, stream=true",
+  "responses/background": "POST /v1/responses, background=true (poll / stream / resume)",
+  "messages/nonstream": "POST /v1/messages, stream=false",
+  "messages/stream": "POST /v1/messages, stream=true",
+  "completions/nonstream": "POST /v1/completions, stream=false",
+  "completions/stream": "POST /v1/completions, stream=true"
+ },
+ "request_models": {
+  "chat": [
+   "python/yunshu_gateway/routers/chat.py",
+   "ChatCompletionRequest"
+  ],
+  "responses": [
+   "python/yunshu_gateway/routers/responses.py",
+   "ResponsesRequest"
+  ],
+  "messages": [
+   "python/yunshu_gateway/routers/anthropic.py",
+   "AnthropicMessagesRequest"
+  ],
+  "completions": [
+   "python/yunshu_gateway/routers/completions.py",
+   "CompletionRequest"
+  ]
+ },
+ "features": {
+  "model": {
+   "what": "model name routing: echoed back, unknown name is advisory in single-model mode",
+   "fields": {
+    "c": [
+     "model"
+    ],
+    "r": [
+     "model"
+    ],
+    "m": [
+     "model"
+    ],
+    "p": [
+     "model"
+    ]
+   },
+   "probes": [
+    "model_echo"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.model"
+      ]
+     ],
+     "probe": "model_echo"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.model"
+      ]
+     ],
+     "probe": "model_echo"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.model"
+      ]
+     ],
+     "probe": "model_echo"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.model"
+      ]
+     ],
+     "probe": "model_echo"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.model"
+      ]
+     ],
+     "probe": "model_echo"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.model"
+      ]
+     ],
+     "probe": "model_echo"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.model"
+      ]
+     ],
+     "probe": "model_echo"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.model"
+      ]
+     ],
+     "probe": "model_echo"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.model"
+      ]
+     ],
+     "probe": "model_echo"
+    }
+   }
+  },
+  "system_prompt": {
+   "what": "system / developer / instructions text reaches the prompt",
+   "fields": {
+    "c": [
+     "messages"
+    ],
+    "r": [
+     "input",
+     "instructions"
+    ],
+    "m": [
+     "messages",
+     "system"
+    ],
+    "p": [
+     "prompt"
+    ]
+   },
+   "probes": [
+    "system_prompt"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "_extract_messages"
+      ]
+     ],
+     "probe": "system_prompt"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "_extract_messages"
+      ]
+     ],
+     "probe": "system_prompt"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.instructions"
+      ]
+     ],
+     "probe": "system_prompt"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.instructions"
+      ]
+     ],
+     "probe": "system_prompt"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.instructions"
+      ]
+     ],
+     "probe": "system_prompt"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.system"
+      ]
+     ],
+     "probe": "system_prompt"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.system"
+      ]
+     ],
+     "probe": "system_prompt"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "legacy completions take a raw prompt string; there is no system role (OpenAI Completions reference)"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "legacy completions take a raw prompt string; there is no system role (OpenAI Completions reference)"
+    }
+   }
+  },
+  "streaming": {
+   "what": "stream=true SSE delivery in the dialect's own event shapes; non-stream body shapes",
+   "fields": {
+    "c": [
+     "stream"
+    ],
+    "r": [
+     "stream"
+    ],
+    "m": [
+     "stream"
+    ],
+    "p": [
+     "stream"
+    ]
+   },
+   "probes": [
+    "usage_counts"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "def _create_chat_completion"
+      ]
+     ],
+     "probe": "usage_counts",
+     "tests": [
+      [
+       "tests/unit/test_wire_stream_shapes.py",
+       "test_chat_nonstream_wire_shape"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "def _stream_response"
+      ]
+     ],
+     "probe": "usage_counts",
+     "tests": [
+      [
+       "tests/unit/test_wire_stream_shapes.py",
+       "test_chat_stream_wire_shape"
+      ]
+     ]
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "async def create_response"
+      ]
+     ],
+     "probe": "usage_counts",
+     "tests": [
+      [
+       "tests/unit/test_responses_vlm_shape.py",
+       "test_nonstream_returns_response_object_and_stores"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "async def _stream_response"
+      ]
+     ],
+     "probe": "usage_counts",
+     "tests": [
+      [
+       "tests/unit/test_wire_stream_shapes.py",
+       "test_responses_stream_event_order_and_shapes"
+      ]
+     ]
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "async def _start_background_response"
+      ]
+     ],
+     "probe": "usage_counts",
+     "tests": [
+      [
+       "tests/unit/test_responses_background_stream.py",
+       "test_background_stream_streams_then_resumes"
+      ]
+     ]
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "async def _non_stream_batched"
+      ]
+     ],
+     "probe": "usage_counts",
+     "tests": [
+      [
+       "tests/unit/test_wire_stream_shapes.py",
+       "test_messages_stop_reasons"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "async def _stream_anthropic"
+      ]
+     ],
+     "probe": "usage_counts",
+     "tests": [
+      [
+       "tests/unit/test_wire_stream_shapes.py",
+       "test_messages_stream_event_order_and_shapes"
+      ]
+     ]
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "async def create_completion"
+      ]
+     ],
+     "probe": "usage_counts",
+     "tests": [
+      [
+       "tests/unit/test_completions.py",
+       "test_defaults"
+      ]
+     ]
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "async def _stream_completion"
+      ]
+     ],
+     "probe": "usage_counts",
+     "tests": [
+      [
+       "tests/unit/test_wire_stream_shapes.py",
+       "test_completions_stream_wire_shape"
+      ]
+     ]
+    }
+   }
+  },
+  "max_tokens": {
+   "what": "output cap: max_tokens / max_completion_tokens / max_output_tokens; finish length / max_tokens / incomplete",
+   "fields": {
+    "c": [
+     "max_tokens",
+     "max_completion_tokens"
+    ],
+    "r": [
+     "max_output_tokens",
+     "max_completion_tokens"
+    ],
+    "m": [
+     "max_tokens"
+    ],
+    "p": [
+     "max_tokens",
+     "max_completion_tokens"
+    ]
+   },
+   "probes": [
+    "max_tokens",
+    "finish_length"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.max_completion_tokens"
+      ]
+     ],
+     "probe": "max_tokens"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.max_completion_tokens"
+      ]
+     ],
+     "probe": "max_tokens"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.max_output_tokens"
+      ]
+     ],
+     "probe": "max_tokens"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.max_output_tokens"
+      ]
+     ],
+     "probe": "max_tokens"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.max_tokens"
+      ]
+     ],
+     "probe": "max_tokens"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.max_tokens"
+      ]
+     ],
+     "probe": "max_tokens"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.max_completion_tokens"
+      ]
+     ],
+     "probe": "max_tokens"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.max_completion_tokens"
+      ]
+     ],
+     "probe": "max_tokens"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.max_output_tokens"
+      ]
+     ],
+     "probe": "max_tokens"
+    }
+   }
+  },
+  "stop": {
+   "what": "stop strings (stop / stop_sequences) cut the text, finish stop; the matched sequence is reported (Anthropic)",
+   "fields": {
+    "c": [
+     "stop"
+    ],
+    "r": [
+     "stop"
+    ],
+    "m": [
+     "stop_sequences"
+    ],
+    "p": [
+     "stop"
+    ]
+   },
+   "probes": [
+    "stop",
+    "stop_string"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.stop"
+      ]
+     ],
+     "probe": "stop"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.stop"
+      ]
+     ],
+     "probe": "stop"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.stop"
+      ]
+     ],
+     "probe": "stop"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.stop"
+      ]
+     ],
+     "probe": "stop"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.stop_sequences"
+      ]
+     ],
+     "probe": "stop"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.stop_sequences"
+      ]
+     ],
+     "probe": "stop"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.stop"
+      ]
+     ],
+     "probe": "stop"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.stop"
+      ]
+     ],
+     "probe": "stop"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.stop"
+      ]
+     ],
+     "probe": "stop"
+    }
+   }
+  },
+  "seed": {
+   "what": "seed reaches the sampler (per-choice seed + index for n>1)",
+   "fields": {
+    "c": [
+     "seed"
+    ],
+    "r": [
+     "seed"
+    ],
+    "m": [
+     "seed"
+    ],
+    "p": [
+     "seed"
+    ]
+   },
+   "probes": [
+    "seed"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.seed"
+      ]
+     ],
+     "probe": "seed"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.seed"
+      ]
+     ],
+     "probe": "seed"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.seed"
+      ]
+     ],
+     "probe": "seed"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.seed"
+      ]
+     ],
+     "probe": "seed"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.seed"
+      ]
+     ],
+     "probe": "seed"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.seed"
+      ]
+     ],
+     "probe": "seed"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.seed"
+      ]
+     ],
+     "probe": "seed"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.seed"
+      ]
+     ],
+     "probe": "seed"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.seed"
+      ]
+     ],
+     "probe": "seed"
+    }
+   }
+  },
+  "temperature_top_p": {
+   "what": "temperature and top_p (request value wins, else the model's generation_config, else the API default)",
+   "fields": {
+    "c": [
+     "temperature",
+     "top_p"
+    ],
+    "r": [
+     "temperature",
+     "top_p"
+    ],
+    "m": [
+     "temperature",
+     "top_p"
+    ],
+    "p": [
+     "temperature",
+     "top_p"
+    ]
+   },
+   "probes": [
+    "temperature",
+    "top_p"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.temperature"
+      ]
+     ],
+     "probe": "temperature"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.temperature"
+      ]
+     ],
+     "probe": "temperature"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.temperature"
+      ]
+     ],
+     "probe": "temperature"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.temperature"
+      ]
+     ],
+     "probe": "temperature"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.temperature"
+      ]
+     ],
+     "probe": "temperature"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.temperature"
+      ]
+     ],
+     "probe": "temperature"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.temperature"
+      ]
+     ],
+     "probe": "temperature"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.temperature"
+      ]
+     ],
+     "probe": "temperature"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.temperature"
+      ]
+     ],
+     "probe": "temperature"
+    }
+   }
+  },
+  "top_k_min_p": {
+   "what": "top_k and min_p (extensions beyond the OpenAI spec; top_k is native on Anthropic)",
+   "fields": {
+    "c": [
+     "top_k",
+     "min_p"
+    ],
+    "r": [
+     "top_k",
+     "min_p"
+    ],
+    "m": [
+     "top_k",
+     "min_p"
+    ],
+    "p": [
+     "top_k",
+     "min_p"
+    ]
+   },
+   "probes": [
+    "top_k",
+    "min_p"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.top_k"
+      ]
+     ],
+     "probe": "top_k"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.top_k"
+      ]
+     ],
+     "probe": "top_k"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.top_k"
+      ]
+     ],
+     "probe": "top_k"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.top_k"
+      ]
+     ],
+     "probe": "top_k"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.top_k"
+      ]
+     ],
+     "probe": "top_k"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.top_k"
+      ]
+     ],
+     "probe": "top_k"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.top_k"
+      ]
+     ],
+     "probe": "top_k"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.top_k"
+      ]
+     ],
+     "probe": "top_k"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.top_k"
+      ]
+     ],
+     "probe": "top_k"
+    }
+   }
+  },
+  "penalties": {
+   "what": "repetition / frequency / presence penalty and logit_bias",
+   "fields": {
+    "c": [
+     "repetition_penalty",
+     "frequency_penalty",
+     "presence_penalty",
+     "logit_bias"
+    ],
+    "r": [
+     "repetition_penalty",
+     "frequency_penalty",
+     "presence_penalty",
+     "logit_bias"
+    ],
+    "m": [
+     "repetition_penalty",
+     "frequency_penalty",
+     "presence_penalty",
+     "logit_bias"
+    ],
+    "p": [
+     "repetition_penalty",
+     "frequency_penalty",
+     "presence_penalty",
+     "logit_bias"
+    ]
+   },
+   "probes": [
+    "repetition_penalty",
+    "frequency_penalty",
+    "presence_penalty",
+    "logit_bias"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.presence_penalty"
+      ]
+     ],
+     "probe": "presence_penalty"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.presence_penalty"
+      ]
+     ],
+     "probe": "presence_penalty"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.presence_penalty"
+      ]
+     ],
+     "probe": "presence_penalty"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.presence_penalty"
+      ]
+     ],
+     "probe": "presence_penalty"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.presence_penalty"
+      ]
+     ],
+     "probe": "presence_penalty"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.presence_penalty"
+      ]
+     ],
+     "probe": "presence_penalty"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.presence_penalty"
+      ]
+     ],
+     "probe": "presence_penalty"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.presence_penalty"
+      ]
+     ],
+     "probe": "presence_penalty"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.presence_penalty"
+      ]
+     ],
+     "probe": "presence_penalty"
+    }
+   }
+  },
+  "xtc_top_n_sigma": {
+   "what": "XTC and top-n-sigma samplers (extensions)",
+   "fields": {
+    "c": [
+     "xtc_probability",
+     "xtc_threshold",
+     "top_n_sigma"
+    ],
+    "r": [
+     "xtc_probability",
+     "xtc_threshold",
+     "top_n_sigma"
+    ],
+    "m": [
+     "xtc_probability",
+     "xtc_threshold"
+    ],
+    "p": [
+     "xtc_probability",
+     "xtc_threshold",
+     "top_n_sigma"
+    ]
+   },
+   "probes": [
+    "xtc",
+    "top_n_sigma"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.top_n_sigma"
+      ],
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.xtc_probability"
+      ]
+     ],
+     "probe": "top_n_sigma"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.top_n_sigma"
+      ],
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.xtc_probability"
+      ]
+     ],
+     "probe": "top_n_sigma"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.top_n_sigma"
+      ],
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.xtc_probability"
+      ]
+     ],
+     "probe": "top_n_sigma"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.top_n_sigma"
+      ],
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.xtc_probability"
+      ]
+     ],
+     "probe": "top_n_sigma"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.top_n_sigma"
+      ]
+     ],
+     "probe": "top_n_sigma"
+    },
+    "messages/nonstream": {
+     "s": "partial",
+     "why": "top_n_sigma is not a field of the Messages request (dropped; xtc works)",
+     "kind": "unimplemented",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.xtc_probability"
+      ]
+     ],
+     "probe": "top_n_sigma"
+    },
+    "messages/stream": {
+     "s": "partial",
+     "why": "top_n_sigma is not a field of the Messages request (dropped; xtc works)",
+     "kind": "unimplemented",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.xtc_probability"
+      ]
+     ],
+     "probe": "top_n_sigma"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.top_n_sigma"
+      ],
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.xtc_probability"
+      ]
+     ],
+     "probe": "top_n_sigma"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.top_n_sigma"
+      ],
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.xtc_probability"
+      ]
+     ],
+     "probe": "top_n_sigma"
+    }
+   }
+  },
+  "generation_control": {
+   "what": "min_tokens, ignore_eos, suppress_tokens, stop_token_ids (extensions)",
+   "fields": {
+    "c": [
+     "min_tokens",
+     "ignore_eos",
+     "suppress_tokens",
+     "stop_token_ids"
+    ],
+    "r": [
+     "min_tokens",
+     "ignore_eos",
+     "suppress_tokens",
+     "stop_token_ids"
+    ],
+    "m": [
+     "min_tokens",
+     "ignore_eos",
+     "suppress_tokens",
+     "stop_token_ids"
+    ],
+    "p": [
+     "min_tokens",
+     "ignore_eos",
+     "suppress_tokens",
+     "stop_token_ids"
+    ]
+   },
+   "probes": [
+    "min_tokens",
+    "ignore_eos",
+    "suppress_tokens",
+    "stop_token_ids"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.min_tokens"
+      ]
+     ],
+     "probe": "min_tokens"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.min_tokens"
+      ]
+     ],
+     "probe": "min_tokens"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.min_tokens"
+      ]
+     ],
+     "probe": "min_tokens"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.min_tokens"
+      ]
+     ],
+     "probe": "min_tokens"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.min_tokens"
+      ]
+     ],
+     "probe": "min_tokens"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.min_tokens"
+      ]
+     ],
+     "probe": "min_tokens"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.min_tokens"
+      ]
+     ],
+     "probe": "min_tokens"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.min_tokens"
+      ]
+     ],
+     "probe": "min_tokens"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.min_tokens"
+      ]
+     ],
+     "probe": "min_tokens"
+    }
+   }
+  },
+  "n_choices": {
+   "what": "n > 1 choices (per-choice seed, one usage, choices by index)",
+   "fields": {
+    "c": [
+     "n"
+    ],
+    "r": [
+     "n"
+    ],
+    "m": [],
+    "p": [
+     "n",
+     "best_of"
+    ]
+   },
+   "probes": [
+    "n_choices"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.n"
+      ]
+     ],
+     "probe": "n_choices"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.n"
+      ]
+     ],
+     "probe": "n_choices"
+    },
+    "responses/nonstream": {
+     "s": "na",
+     "why": "the Responses API has no n parameter (OpenAI Responses reference); the extension works non-stream and is a 400 when streamed"
+    },
+    "responses/stream": {
+     "s": "na",
+     "why": "the Responses API has no n parameter (OpenAI Responses reference); the extension works non-stream and is a 400 when streamed"
+    },
+    "responses/background": {
+     "s": "na",
+     "why": "the Responses API has no n parameter (OpenAI Responses reference)"
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "the Messages API has no n parameter (Anthropic Messages reference)"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "the Messages API has no n parameter (Anthropic Messages reference)"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.n"
+      ]
+     ],
+     "probe": "n_choices"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.n"
+      ]
+     ],
+     "probe": "n_choices"
+    }
+   }
+  },
+  "logprobs": {
+   "what": "logprobs / top_logprobs (extension fields on Responses and Messages)",
+   "fields": {
+    "c": [
+     "logprobs",
+     "top_logprobs"
+    ],
+    "r": [
+     "logprobs",
+     "top_logprobs"
+    ],
+    "m": [
+     "logprobs",
+     "top_logprobs"
+    ],
+    "p": [
+     "logprobs",
+     "top_logprobs"
+    ]
+   },
+   "probes": [
+    "logprobs"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.top_logprobs"
+      ]
+     ],
+     "probe": "logprobs"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.top_logprobs"
+      ]
+     ],
+     "probe": "logprobs"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.top_logprobs"
+      ]
+     ],
+     "probe": "logprobs"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.top_logprobs"
+      ]
+     ],
+     "probe": "logprobs"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.top_logprobs"
+      ]
+     ],
+     "probe": "logprobs"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.top_logprobs"
+      ]
+     ],
+     "probe": "logprobs"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.top_logprobs"
+      ]
+     ],
+     "probe": "logprobs"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.top_logprobs"
+      ]
+     ],
+     "probe": "logprobs"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.top_logprobs"
+      ]
+     ],
+     "probe": "logprobs"
+    }
+   }
+  },
+  "completions_legacy": {
+   "what": "echo, suffix, best_of, prompt_logprobs, token-id prompts on the legacy route",
+   "fields": {
+    "c": [
+     "prompt_logprobs"
+    ],
+    "r": [],
+    "m": [],
+    "p": [
+     "prompt",
+     "echo",
+     "suffix",
+     "best_of",
+     "prompt_logprobs"
+    ]
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "partial",
+     "why": "prompt_logprobs is accepted and forwarded but no route-level test drives it (schema tests only)",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.prompt_logprobs"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_chat.py",
+       "TestChatPromptLogprobsSchemaW744::test_accepts_prompt_logprobs"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "partial",
+     "why": "prompt_logprobs is accepted and forwarded but no route-level test drives it (schema tests only)",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.prompt_logprobs"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_chat.py",
+       "TestChatPromptLogprobsSchemaW744::test_accepts_prompt_logprobs"
+      ]
+     ]
+    },
+    "responses/nonstream": {
+     "s": "na",
+     "why": "not a Responses parameter"
+    },
+    "responses/stream": {
+     "s": "na",
+     "why": "not a Responses parameter"
+    },
+    "responses/background": {
+     "s": "na",
+     "why": "not a Responses parameter"
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "not a Messages parameter"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "not a Messages parameter"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.echo"
+      ],
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.best_of"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_completions_echo_logprobs.py",
+       "test_echo_prepends_prompt_token_logprobs"
+      ]
+     ]
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.echo"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_completions_streaming_echo_logprobs.py",
+       "test_streaming_echo_branch_emits_prompt_logprobs_via_shared_helper"
+      ]
+     ]
+    }
+   }
+  },
+  "tools": {
+   "what": "function tools declared, calls returned (tool_calls / function_call / tool_use), streamed arguments",
+   "fields": {
+    "c": [
+     "tools"
+    ],
+    "r": [
+     "tools"
+    ],
+    "m": [
+     "tools"
+    ],
+    "p": []
+   },
+   "probes": [
+    "tool_call",
+    "tool_call_background"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.tools"
+      ]
+     ],
+     "probe": "tool_call",
+     "tests": [
+      [
+       "tests/unit/test_wire_tools_matrix.py",
+       "test_single_tool_call"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.tools"
+      ]
+     ],
+     "probe": "tool_call",
+     "tests": [
+      [
+       "tests/unit/test_wire_tools_matrix.py",
+       "test_single_tool_call"
+      ]
+     ]
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.tools"
+      ]
+     ],
+     "probe": "tool_call",
+     "tests": [
+      [
+       "tests/unit/test_wire_tools_matrix.py",
+       "test_single_tool_call"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.tools"
+      ]
+     ],
+     "probe": "tool_call",
+     "tests": [
+      [
+       "tests/unit/test_wire_tools_matrix.py",
+       "test_single_tool_call"
+      ]
+     ]
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.tools"
+      ]
+     ],
+     "probe": "tool_call_background"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.tools"
+      ]
+     ],
+     "probe": "tool_call",
+     "tests": [
+      [
+       "tests/unit/test_wire_tools_matrix.py",
+       "test_single_tool_call"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.tools"
+      ]
+     ],
+     "probe": "tool_call",
+     "tests": [
+      [
+       "tests/unit/test_wire_tools_matrix.py",
+       "test_single_tool_call"
+      ]
+     ]
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "legacy completions have no tools parameter (OpenAI Completions reference)"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "legacy completions have no tools parameter (OpenAI Completions reference)"
+    }
+   }
+  },
+  "tool_choice": {
+   "what": "tool_choice auto / none / required / named, enforced by grammar prefill",
+   "fields": {
+    "c": [
+     "tool_choice"
+    ],
+    "r": [
+     "tool_choice"
+    ],
+    "m": [
+     "tool_choice"
+    ],
+    "p": []
+   },
+   "probes": [
+    "tool_choice_forced",
+    "tool_choice_none"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "_enforce_tool_choice"
+      ]
+     ],
+     "probe": "tool_choice_forced"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "_enforce_tool_choice"
+      ]
+     ],
+     "probe": "tool_choice_forced"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_enforce_tool_choice"
+      ]
+     ],
+     "probe": "tool_choice_forced"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_enforce_tool_choice"
+      ]
+     ],
+     "probe": "tool_choice_forced"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_enforce_tool_choice"
+      ]
+     ],
+     "probe": "tool_choice_forced"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_enforce_anthropic_tool_choice"
+      ]
+     ],
+     "probe": "tool_choice_forced"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_enforce_anthropic_tool_choice"
+      ]
+     ],
+     "probe": "tool_choice_forced"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "legacy completions have no tools parameter (OpenAI Completions reference)"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "legacy completions have no tools parameter (OpenAI Completions reference)"
+    }
+   }
+  },
+  "parallel_tool_calls": {
+   "what": "parallel_tool_calls=false (Anthropic: tool_choice.disable_parallel_tool_use) keeps the first call",
+   "fields": {
+    "c": [
+     "parallel_tool_calls"
+    ],
+    "r": [
+     "parallel_tool_calls"
+    ],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "tool_parallel",
+    "tool_parallel_off"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.parallel_tool_calls"
+      ]
+     ],
+     "probe": "tool_parallel_off"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.parallel_tool_calls"
+      ]
+     ],
+     "probe": "tool_parallel_off"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.parallel_tool_calls"
+      ]
+     ],
+     "probe": "tool_parallel_off"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.parallel_tool_calls"
+      ]
+     ],
+     "probe": "tool_parallel_off"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.parallel_tool_calls"
+      ]
+     ],
+     "probe": "tool_parallel_off"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "disable_parallel_tool_use"
+      ]
+     ],
+     "probe": "tool_parallel_off"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "disable_parallel_tool_use"
+      ]
+     ],
+     "probe": "tool_parallel_off"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "legacy completions have no tools parameter (OpenAI Completions reference)"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "legacy completions have no tools parameter (OpenAI Completions reference)"
+    }
+   }
+  },
+  "tool_results_input": {
+   "what": "tool results fed back (role tool / function_call_output / tool_result), incl. images inside results",
+   "fields": {
+    "c": [
+     "messages"
+    ],
+    "r": [
+     "input"
+    ],
+    "m": [
+     "messages"
+    ],
+    "p": []
+   },
+   "probes": [
+    "tool_result_input"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "_extract_messages"
+      ]
+     ],
+     "probe": "tool_result_input"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "_extract_messages"
+      ]
+     ],
+     "probe": "tool_result_input"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "function_call_output"
+      ]
+     ],
+     "probe": "tool_result_input"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "function_call_output"
+      ]
+     ],
+     "probe": "tool_result_input"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "function_call_output"
+      ]
+     ],
+     "probe": "tool_result_input"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "tool_result"
+      ]
+     ],
+     "probe": "tool_result_input"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "tool_result"
+      ]
+     ],
+     "probe": "tool_result_input"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "legacy completions have no tools parameter (OpenAI Completions reference)"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "legacy completions have no tools parameter (OpenAI Completions reference)"
+    }
+   }
+  },
+  "client_builtin_tools": {
+   "what": "client-executed built-in tool types: Responses custom / apply_patch / local_shell / computer / tool_search, Anthropic bash / text_editor / computer / memory",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "missing",
+     "why": "a chat tool of type custom is rejected with 400 (the OpenAI chat schema allows it); Codex / opencode use Responses, so the agent impact is small",
+     "kind": "unimplemented",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.tools"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "missing",
+     "why": "a chat tool of type custom is rejected with 400 (the OpenAI chat schema allows it); Codex / opencode use Responses, so the agent impact is small",
+     "kind": "unimplemented",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.tools"
+      ]
+     ]
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "responses_client_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_agent_client_compat.py",
+       "test_all_client_tools_become_callable_functions"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "partial",
+     "why": "streamed replay of special calls is covered, a streamed run with a real client tool turn is not",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "responses_client_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_agent_client_compat.py",
+       "test_special_calls_replay_valid_sdk_events"
+      ]
+     ]
+    },
+    "responses/background": {
+     "s": "partial",
+     "why": "no test drives a client built-in tool through background mode",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "responses_client_tools"
+      ]
+     ]
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "anthropic_client_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_agent_client_compat.py",
+       "test_editor_and_computer_version_specific_schemas"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "partial",
+     "why": "streamed client built-in tool calls are not driven by a test",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "anthropic_client_tools"
+      ]
+     ]
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "legacy completions have no tools parameter (OpenAI Completions reference)"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "legacy completions have no tools parameter (OpenAI Completions reference)"
+    }
+   },
+   "module": "python/yunshu_gateway/responses_client_tools.py"
+  },
+  "max_tool_calls": {
+   "what": "max_tool_calls caps built-in (server) tool calls in one response",
+   "fields": {
+    "c": [],
+    "r": [
+     "max_tool_calls"
+    ],
+    "m": [],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "na",
+     "why": "not a chat.completions parameter (OpenAI reference)"
+    },
+    "chat/stream": {
+     "s": "na",
+     "why": "not a chat.completions parameter (OpenAI reference)"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.max_tool_calls"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_responses.py",
+       "test_request_max_tool_calls"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "partial",
+     "why": "the cap is tested non-stream only",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.max_tool_calls"
+      ]
+     ]
+    },
+    "responses/background": {
+     "s": "partial",
+     "why": "the cap is tested non-stream only",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.max_tool_calls"
+      ]
+     ]
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "not a Messages parameter (server tools use max_uses per tool)"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "not a Messages parameter (server tools use max_uses per tool)"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "not a completions parameter"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "not a completions parameter"
+    }
+   }
+  },
+  "structured_output": {
+   "what": "JSON schema constrained decoding: response_format / text.format / output_config.format / output_format",
+   "fields": {
+    "c": [
+     "response_format"
+    ],
+    "r": [
+     "text",
+     "response_format"
+    ],
+    "m": [
+     "output_config",
+     "output_format",
+     "json_schema",
+     "response_format"
+    ],
+    "p": [
+     "response_format"
+    ]
+   },
+   "probes": [
+    "structured_output",
+    "json_schema"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.response_format"
+      ]
+     ],
+     "probe": "structured_output"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.response_format"
+      ]
+     ],
+     "probe": "structured_output"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.text"
+      ]
+     ],
+     "probe": "structured_output"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.text"
+      ]
+     ],
+     "probe": "structured_output"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.output_config"
+      ]
+     ],
+     "probe": "structured_output"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.output_config"
+      ]
+     ],
+     "probe": "structured_output"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.response_format"
+      ]
+     ],
+     "probe": "structured_output"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.response_format"
+      ]
+     ],
+     "probe": "structured_output"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.text"
+      ]
+     ],
+     "probe": "structured_output"
+    }
+   }
+  },
+  "json_object": {
+   "what": "response_format json_object mode",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "json_object"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "json_object"
+      ]
+     ],
+     "probe": "json_object"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "json_object"
+      ]
+     ],
+     "probe": "json_object"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "json_object"
+      ]
+     ],
+     "probe": "json_object"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "json_object"
+      ]
+     ],
+     "probe": "json_object"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "json_object"
+      ]
+     ],
+     "probe": "json_object"
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "Anthropic has no json_object mode; structured outputs use output_config.format json_schema (Anthropic reference)"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "Anthropic has no json_object mode; structured outputs use output_config.format json_schema (Anthropic reference)"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "response_format"
+      ]
+     ],
+     "probe": "json_object"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "response_format"
+      ]
+     ],
+     "probe": "json_object"
+    }
+   }
+  },
+  "grammar_constraints": {
+   "what": "regex / choice / EBNF grammar constrained decoding (grammar, guided_regex, guided_choice, guided_grammar, guided_json)",
+   "fields": {
+    "c": [
+     "grammar",
+     "guided_regex",
+     "guided_choice",
+     "guided_grammar",
+     "guided_json"
+    ],
+    "r": [
+     "grammar"
+    ],
+    "m": [
+     "grammar"
+    ],
+    "p": [
+     "grammar",
+     "guided_regex",
+     "guided_choice",
+     "guided_grammar",
+     "guided_json"
+    ]
+   },
+   "probes": [
+    "grammar_regex",
+    "guided_regex"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "guided_regex"
+      ]
+     ],
+     "probe": "grammar_regex"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "guided_regex"
+      ]
+     ],
+     "probe": "grammar_regex"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.grammar"
+      ]
+     ],
+     "probe": "grammar_regex"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.grammar"
+      ]
+     ],
+     "probe": "grammar_regex"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.grammar"
+      ]
+     ],
+     "probe": "grammar_regex"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.grammar"
+      ]
+     ],
+     "probe": "grammar_regex"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.grammar"
+      ]
+     ],
+     "probe": "grammar_regex"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "guided_regex"
+      ]
+     ],
+     "probe": "grammar_regex"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "guided_regex"
+      ]
+     ],
+     "probe": "grammar_regex"
+    }
+   }
+  },
+  "reasoning_effort": {
+   "what": "reasoning_effort (Responses: reasoning.effort; Messages: output_config.effort)",
+   "fields": {
+    "c": [
+     "reasoning_effort"
+    ],
+    "r": [
+     "reasoning",
+     "reasoning_effort"
+    ],
+    "m": [
+     "reasoning_effort",
+     "output_config"
+    ],
+    "p": [
+     "reasoning_effort"
+    ]
+   },
+   "probes": [
+    "reasoning_effort",
+    "reasoning_object"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.reasoning_effort"
+      ]
+     ],
+     "probe": "reasoning_effort"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.reasoning_effort"
+      ]
+     ],
+     "probe": "reasoning_effort"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.reasoning_effort"
+      ]
+     ],
+     "probe": "reasoning_effort"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.reasoning_effort"
+      ]
+     ],
+     "probe": "reasoning_effort"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_effective_effort"
+      ]
+     ],
+     "probe": "reasoning_effort"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_effective_effort"
+      ]
+     ],
+     "probe": "reasoning_effort"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.reasoning_effort"
+      ]
+     ],
+     "probe": "reasoning_effort"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.reasoning_effort"
+      ]
+     ],
+     "probe": "reasoning_effort"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.reasoning_effort"
+      ]
+     ],
+     "probe": "reasoning_effort"
+    }
+   }
+  },
+  "thinking_controls": {
+   "what": "thinking on/off and budget: enable_thinking, thinking {type,budget_tokens}, thinking_budget",
+   "fields": {
+    "c": [
+     "enable_thinking",
+     "thinking_budget"
+    ],
+    "r": [
+     "enable_thinking",
+     "thinking_budget"
+    ],
+    "m": [
+     "thinking"
+    ],
+    "p": [
+     "enable_thinking",
+     "thinking_budget"
+    ]
+   },
+   "probes": [
+    "thinking_budget"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.thinking_budget"
+      ]
+     ],
+     "probe": "thinking_budget"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.thinking_budget"
+      ]
+     ],
+     "probe": "thinking_budget"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.thinking_budget"
+      ]
+     ],
+     "probe": "thinking_budget"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.thinking_budget"
+      ]
+     ],
+     "probe": "thinking_budget"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_thinking_switches"
+      ]
+     ],
+     "probe": "thinking_budget"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_thinking_switches"
+      ]
+     ],
+     "probe": "thinking_budget"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.thinking_budget"
+      ]
+     ],
+     "probe": "thinking_budget"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.thinking_budget"
+      ]
+     ],
+     "probe": "thinking_budget"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.thinking_budget"
+      ]
+     ],
+     "probe": "thinking_budget"
+    }
+   }
+  },
+  "reasoning_output": {
+   "what": "reasoning separated from the answer: reasoning_content / reasoning item / thinking block; reasoning_tokens in usage",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "reasoning_split"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "reasoning_content"
+      ]
+     ],
+     "probe": "reasoning_split"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "reasoning_content"
+      ]
+     ],
+     "probe": "reasoning_split"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "reasoning"
+      ]
+     ],
+     "probe": "reasoning_split"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "reasoning"
+      ]
+     ],
+     "probe": "reasoning_split"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "reasoning"
+      ]
+     ],
+     "probe": "reasoning_split"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_split_thinking"
+      ]
+     ],
+     "probe": "reasoning_split"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_split_thinking"
+      ]
+     ],
+     "probe": "reasoning_split"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "legacy completions never split thinking (OpenAI Completions reference has no reasoning field)"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "legacy completions never split thinking (OpenAI Completions reference has no reasoning field)"
+    }
+   }
+  },
+  "thinking_display": {
+   "what": "Anthropic thinking.display summarized / omitted / updates",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "na",
+     "why": "Anthropic-only field"
+    },
+    "chat/stream": {
+     "s": "na",
+     "why": "Anthropic-only field"
+    },
+    "responses/nonstream": {
+     "s": "na",
+     "why": "Anthropic-only field"
+    },
+    "responses/stream": {
+     "s": "na",
+     "why": "Anthropic-only field"
+    },
+    "responses/background": {
+     "s": "na",
+     "why": "Anthropic-only field"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "Anthropic-only field"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "Anthropic-only field"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_hide_thinking"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_anthropic_thinking_display.py",
+       "test_nonstream_display_hides_reasoning_preserving_usage"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_hide_thinking"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_anthropic_thinking_display.py",
+       "test_stream_display_and_signature_before_stop"
+      ]
+     ]
+    }
+   }
+  },
+  "usage": {
+   "what": "prompt / completion / total tokens, same numbers stream and non-stream",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "usage_counts",
+    "usage_counts_background",
+    "cached_tokens"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "openai_usage"
+      ]
+     ],
+     "probe": "usage_counts"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "openai_usage"
+      ]
+     ],
+     "probe": "usage_counts"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "responses_usage"
+      ]
+     ],
+     "probe": "usage_counts"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "responses_usage"
+      ]
+     ],
+     "probe": "usage_counts"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "responses_usage"
+      ]
+     ],
+     "probe": "usage_counts_background"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_anthropic_cache_usage"
+      ]
+     ],
+     "probe": "usage_counts"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_anthropic_cache_usage"
+      ]
+     ],
+     "probe": "usage_counts"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "openai_usage"
+      ]
+     ],
+     "probe": "usage_counts"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "openai_usage"
+      ]
+     ],
+     "probe": "usage_counts"
+    }
+   }
+  },
+  "cached_tokens": {
+   "what": "cached prompt tokens reported (prompt_tokens_details.cached_tokens / cache_read_input_tokens)",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "cached_tokens"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "cached_tokens"
+      ]
+     ],
+     "probe": "cached_tokens"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "cached_tokens"
+      ]
+     ],
+     "probe": "cached_tokens"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "cached_tokens"
+      ]
+     ],
+     "probe": "cached_tokens"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "cached_tokens"
+      ]
+     ],
+     "probe": "cached_tokens"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "cached_tokens"
+      ]
+     ],
+     "probe": "cached_tokens"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_anthropic_cache_usage"
+      ]
+     ],
+     "probe": "cached_tokens"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_anthropic_cache_usage"
+      ]
+     ],
+     "probe": "cached_tokens"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "cached_tokens"
+      ]
+     ],
+     "probe": "cached_tokens"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "cached_tokens"
+      ]
+     ],
+     "probe": "cached_tokens"
+    }
+   }
+  },
+  "stream_usage_option": {
+   "what": "stream_options.include_usage: usage chunk only when asked (chat / completions)",
+   "fields": {
+    "c": [
+     "stream_options"
+    ],
+    "r": [
+     "stream_options"
+    ],
+    "m": [
+     "stream_options"
+    ],
+    "p": [
+     "stream_options"
+    ]
+   },
+   "probes": [
+    "stream_usage_option"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "na",
+     "why": "non-stream has no stream options"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "include_usage"
+      ]
+     ],
+     "probe": "stream_usage_option"
+    },
+    "responses/nonstream": {
+     "s": "na",
+     "why": "Responses always sends usage in response.completed (OpenAI Responses reference)"
+    },
+    "responses/stream": {
+     "s": "na",
+     "why": "Responses always sends usage in response.completed (OpenAI Responses reference)"
+    },
+    "responses/background": {
+     "s": "na",
+     "why": "Responses always sends usage in response.completed (OpenAI Responses reference)"
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "Messages always sends usage in message_delta (Anthropic reference)"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "Messages always sends usage in message_delta (Anthropic reference)"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "non-stream has no stream options"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "include_usage"
+      ]
+     ],
+     "probe": "stream_usage_option"
+    }
+   }
+  },
+  "background": {
+   "what": "background=true: queued response, poll, stream with resume",
+   "fields": {
+    "c": [],
+    "r": [
+     "background"
+    ],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "background_complete",
+    "background_stream"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "na",
+     "why": "chat.completions has no background mode (OpenAI reference)"
+    },
+    "chat/stream": {
+     "s": "na",
+     "why": "chat.completions has no background mode (OpenAI reference)"
+    },
+    "responses/nonstream": {
+     "s": "na",
+     "why": "this column is the non-background mode"
+    },
+    "responses/stream": {
+     "s": "na",
+     "why": "this column is the non-background mode"
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "Messages has no background mode (Anthropic reference; use message batches)"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "Messages has no background mode (Anthropic reference; use message batches)"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "completions has no background mode"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "completions has no background mode"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_start_background_response"
+      ]
+     ],
+     "probe": "background_complete",
+     "tests": [
+      [
+       "tests/unit/test_responses_background_stream.py",
+       "test_background_stream_streams_then_resumes"
+      ]
+     ]
+    }
+   }
+  },
+  "store_retrieve_delete": {
+   "what": "store: keep the finished response / chat completion; GET and DELETE it",
+   "fields": {
+    "c": [
+     "store"
+    ],
+    "r": [
+     "store"
+    ],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "store_retrieve_delete",
+    "background_complete"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "_store_completion"
+      ]
+     ],
+     "probe": "store_retrieve_delete"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "_store_completion"
+      ]
+     ],
+     "probe": "store_retrieve_delete"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_store_response"
+      ]
+     ],
+     "probe": "store_retrieve_delete"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_store_response"
+      ]
+     ],
+     "probe": "store_retrieve_delete"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_store_response"
+      ]
+     ],
+     "probe": "background_complete"
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "Messages has no stored objects (Anthropic reference); message batches are separate"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "Messages has no stored objects (Anthropic reference); message batches are separate"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "completions has no store parameter (OpenAI reference)"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "completions has no store parameter (OpenAI reference)"
+    }
+   }
+  },
+  "previous_response_chain": {
+   "what": "previous_response_id and conversation: server-side history",
+   "fields": {
+    "c": [],
+    "r": [
+     "previous_response_id",
+     "conversation"
+    ],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "previous_response_id",
+    "conversation"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "na",
+     "why": "chat.completions is stateless (OpenAI reference)"
+    },
+    "chat/stream": {
+     "s": "na",
+     "why": "chat.completions is stateless (OpenAI reference)"
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "Messages is stateless (Anthropic reference)"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "Messages is stateless (Anthropic reference)"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "completions is stateless"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "completions is stateless"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_apply_previous_response_chain"
+      ]
+     ],
+     "probe": "previous_response_id"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_apply_previous_response_chain"
+      ]
+     ],
+     "probe": "previous_response_id"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_apply_previous_response_chain"
+      ]
+     ],
+     "probe": "previous_response_id"
+    }
+   }
+  },
+  "conversation_object": {
+   "what": "conversation: a /v1/conversations id appends the turn to the conversation",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "conversation"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "na",
+     "why": "Responses-only parameter"
+    },
+    "chat/stream": {
+     "s": "na",
+     "why": "Responses-only parameter"
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "Responses-only parameter"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "Responses-only parameter"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "Responses-only parameter"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "Responses-only parameter"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "conversation"
+      ]
+     ],
+     "probe": "conversation"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "conversation"
+      ]
+     ],
+     "probe": "conversation"
+    },
+    "responses/background": {
+     "s": "partial",
+     "why": "conversation with background=true is not driven by a test",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "conversation"
+      ]
+     ]
+    }
+   }
+  },
+  "cancel": {
+   "what": "POST /v1/responses/{id}/cancel of a running background response",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "background_cancel"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "na",
+     "why": "no cancel endpoint in the chat.completions API"
+    },
+    "chat/stream": {
+     "s": "na",
+     "why": "no cancel endpoint in the chat.completions API"
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "no cancel endpoint in the Messages API"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "no cancel endpoint in the Messages API"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "no cancel endpoint in the completions API"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "no cancel endpoint in the completions API"
+    },
+    "responses/nonstream": {
+     "s": "na",
+     "why": "the OpenAI cancel endpoint only applies to background responses"
+    },
+    "responses/stream": {
+     "s": "na",
+     "why": "the OpenAI cancel endpoint only applies to background responses"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "cancel_response"
+      ]
+     ],
+     "probe": "background_cancel",
+     "tests": [
+      [
+       "tests/unit/test_responses_cancel_reply.py",
+       "test_cancel_of_a_running_background_response_says_cancelled"
+      ]
+     ]
+    }
+   }
+  },
+  "client_disconnect": {
+   "what": "a client that goes away cancels the generation (no GPU burn)",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "disconnect"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "run_with_disconnect_guard"
+      ]
+     ],
+     "probe": "disconnect"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "run_with_disconnect_guard"
+      ]
+     ],
+     "probe": "disconnect"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "run_with_disconnect_guard"
+      ]
+     ],
+     "probe": "disconnect"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "run_with_disconnect_guard"
+      ]
+     ],
+     "probe": "disconnect"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "run_with_disconnect_guard"
+      ]
+     ],
+     "probe": "disconnect"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "run_with_disconnect_guard"
+      ]
+     ],
+     "probe": "disconnect"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "run_with_disconnect_guard"
+      ]
+     ],
+     "probe": "disconnect"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "run_with_disconnect_guard"
+      ]
+     ],
+     "probe": "disconnect"
+    },
+    "responses/background": {
+     "s": "na",
+     "why": "a background response outlives its HTTP request by design (OpenAI background mode); it is cancelled with /cancel"
+    }
+   }
+  },
+  "context_management": {
+   "what": "context_management / truncation / compaction (server-side context editing)",
+   "fields": {
+    "c": [],
+    "r": [
+     "context_management",
+     "truncation"
+    ],
+    "m": [
+     "context_management"
+    ],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "na",
+     "why": "not a chat.completions parameter (OpenAI reference); the context-window manager trims instead and reports x_yunshu.context_policy"
+    },
+    "chat/stream": {
+     "s": "na",
+     "why": "not a chat.completions parameter (OpenAI reference); the context-window manager trims instead and reports x_yunshu.context_policy"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "not a completions parameter"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "not a completions parameter"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "responses_context"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_responses_compact.py",
+       "test_auto_compaction_over_threshold"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "responses_context"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_responses_compact.py",
+       "test_streaming_auto_compaction_sends_bytes_before_summary_returns"
+      ]
+     ]
+    },
+    "responses/background": {
+     "s": "partial",
+     "why": "no test runs compaction / truncation under background=true",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "responses_context"
+      ]
+     ]
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_apply_context_management"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_anthropic_context_management.py",
+       "test_compaction_summarizes_and_prepends_block"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_apply_context_management"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_anthropic_context_management.py",
+       "test_compaction_stream_shifts_block_indexes"
+      ]
+     ]
+    }
+   },
+   "module": "python/yunshu_gateway/responses_context.py"
+  },
+  "context_overflow": {
+   "what": "prompt over the context window answers 400 naming the window (Anthropic wording: prompt is too long)",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "context_overflow"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "validate_context_window"
+      ]
+     ],
+     "probe": "context_overflow"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "validate_context_window"
+      ]
+     ],
+     "probe": "context_overflow"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "validate_context_window"
+      ]
+     ],
+     "probe": "context_overflow"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "validate_context_window"
+      ]
+     ],
+     "probe": "context_overflow"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "validate_context_window"
+      ]
+     ],
+     "probe": "context_overflow"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "validate_context_window"
+      ]
+     ],
+     "probe": "context_overflow"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "validate_context_window"
+      ]
+     ],
+     "probe": "context_overflow"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "validate_context_window"
+      ]
+     ],
+     "probe": "context_overflow"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "validate_context_window"
+      ]
+     ],
+     "probe": "context_overflow"
+    }
+   }
+  },
+  "server_web_search": {
+   "what": "web search run by the server inside the generation loop (Responses web_search / web_search_preview, Anthropic web_search_*)",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "missing",
+     "why": "chat.completions web_search_options is accepted and silently ignored: no search runs",
+     "kind": "unimplemented",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "ChatCompletionRequest"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "missing",
+     "why": "chat.completions web_search_options is accepted and silently ignored: no search runs",
+     "kind": "unimplemented",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "ChatCompletionRequest"
+      ]
+     ]
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "legacy completions have no tools"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "legacy completions have no tools"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "server_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_responses.py",
+       "test_web_search_non_stream"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "server_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_responses.py",
+       "test_web_search_stream_events"
+      ]
+     ]
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "server_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_responses_background_stream.py",
+       "test_background_with_web_search_runs_the_loop"
+      ]
+     ]
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "server_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_anthropic.py",
+       "test_web_search_non_stream"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "server_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_anthropic.py",
+       "test_web_search_stream_events"
+      ]
+     ]
+    }
+   },
+   "module": "python/yunshu_gateway/server_tools/search.py",
+   "server_tool": "web_search"
+  },
+  "server_web_fetch": {
+   "what": "web_fetch_* server tool (Anthropic only)",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "na",
+     "why": "not part of the OpenAI API"
+    },
+    "chat/stream": {
+     "s": "na",
+     "why": "not part of the OpenAI API"
+    },
+    "responses/nonstream": {
+     "s": "na",
+     "why": "not part of the OpenAI Responses API (API_SURFACE)"
+    },
+    "responses/stream": {
+     "s": "na",
+     "why": "not part of the OpenAI Responses API (API_SURFACE)"
+    },
+    "responses/background": {
+     "s": "na",
+     "why": "not part of the OpenAI Responses API"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "not part of the OpenAI API"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "not part of the OpenAI API"
+    },
+    "messages/nonstream": {
+     "s": "partial",
+     "why": "only the combined blocked-then-allowed flow is tested, non-stream",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "web_fetch"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_anthropic.py",
+       "test_web_fetch_blocked_then_allowed"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "partial",
+     "why": "streamed web_fetch blocks are not driven by a test",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "web_fetch"
+      ]
+     ]
+    }
+   },
+   "module": "python/yunshu_gateway/server_tools/webfetch.py",
+   "server_tool": "web_fetch"
+  },
+  "server_mcp": {
+   "what": "MCP connector run by the server (Anthropic mcp_servers + mcp_toolset, Responses {type: mcp})",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [
+     "mcp_servers"
+    ],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "na",
+     "why": "chat.completions has no MCP connector tool (OpenAI reference)"
+    },
+    "chat/stream": {
+     "s": "na",
+     "why": "chat.completions has no MCP connector tool (OpenAI reference)"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "legacy completions have no tools"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "legacy completions have no tools"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "server_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_responses.py",
+       "test_mcp_never_approval_flow"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "server_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_responses.py",
+       "test_mcp_stream_events"
+      ]
+     ]
+    },
+    "responses/background": {
+     "s": "partial",
+     "why": "no test runs an MCP tool under background=true",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "server_tools"
+      ]
+     ]
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "mcp_servers"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_anthropic.py",
+       "test_mcp_servers_connector"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "partial",
+     "why": "streamed MCP blocks are not driven by a Messages test",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "mcp_servers"
+      ]
+     ]
+    }
+   },
+   "module": "python/yunshu_gateway/server_tools/mcp_connector.py",
+   "server_tool": "mcp"
+  },
+  "server_code_execution": {
+   "what": "code execution: Anthropic code_execution_* (bash / editor / python), Responses code_interpreter",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [
+     "container"
+    ],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "na",
+     "why": "not part of chat.completions"
+    },
+    "chat/stream": {
+     "s": "na",
+     "why": "not part of chat.completions"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "legacy completions have no tools"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "legacy completions have no tools"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "server_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_responses_code.py",
+       "test_code_interpreter_runs_python_with_state_and_validates"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "server_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_responses_code.py",
+       "test_streaming_events_validate_and_are_ordered"
+      ]
+     ]
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "server_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_responses_code.py",
+       "test_code_interpreter_in_background_mode_and_resumed_stream"
+      ]
+     ]
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "server_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_code_execution.py",
+       "test_bash_block_shapes_validate_with_sdk"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "server_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_code_execution.py",
+       "test_stream_events_and_container"
+      ]
+     ]
+    }
+   },
+   "module": "python/yunshu_gateway/server_tools/runtime.py",
+   "server_tool": [
+    "code_execution",
+    "code_interpreter"
+   ]
+  },
+  "server_shell": {
+   "what": "hosted shell tool (Responses shell with a container environment)",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "na",
+     "why": "not part of chat.completions"
+    },
+    "chat/stream": {
+     "s": "na",
+     "why": "not part of chat.completions"
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "Anthropic uses bash_code_execution inside code_execution"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "Anthropic uses bash_code_execution inside code_execution"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "legacy completions have no tools"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "legacy completions have no tools"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "server_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_responses_code.py",
+       "test_shell_runs_commands_and_emits_call_and_output_items"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "server_tools"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_server_tools_responses_code.py",
+       "test_shell_streaming_events_validate"
+      ]
+     ]
+    },
+    "responses/background": {
+     "s": "partial",
+     "why": "hosted shell under background=true is not driven by a test (code_interpreter is)",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "server_tools"
+      ]
+     ]
+    }
+   },
+   "module": "python/yunshu_gateway/server_tools/runtime.py",
+   "server_tool": "shell"
+  },
+  "prompt_cache_fields": {
+   "what": "prompt_cache_key / retention / options reach the prefix cache",
+   "fields": {
+    "c": [
+     "prompt_cache_key",
+     "prompt_cache_retention",
+     "prompt_cache_options"
+    ],
+    "r": [
+     "prompt_cache_key",
+     "prompt_cache_retention",
+     "prompt_cache_options"
+    ],
+    "m": [],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "partial",
+     "why": "forwarded on the VLM path; no route-level test asserts it on chat",
+     "kind": "untested",
+     "impact": "medium",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "prompt_cache_key=req.prompt_cache_key"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "partial",
+     "why": "forwarded on the VLM path; no route-level test asserts it on chat",
+     "kind": "untested",
+     "impact": "medium",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "prompt_cache_key=req.prompt_cache_key"
+      ]
+     ]
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "prompt_cache_key=req.prompt_cache_key"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_responses_media_bridge_cache.py",
+       "test_bridge_forwards_prompt_cache_fields"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "prompt_cache_key=req.prompt_cache_key"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_responses_media_bridge_cache.py",
+       "test_bridge_forwards_prompt_cache_fields"
+      ]
+     ]
+    },
+    "responses/background": {
+     "s": "partial",
+     "why": "not asserted under background=true",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "prompt_cache_key=req.prompt_cache_key"
+      ]
+     ]
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "Anthropic caches by cache_control breakpoints, not keys (Anthropic reference)"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "Anthropic caches by cache_control breakpoints, not keys (Anthropic reference)"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "not a completions parameter"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "not a completions parameter"
+    }
+   }
+  },
+  "cache_control": {
+   "what": "cache_control breakpoints (system blocks, content blocks, top-level) become KV cache breakpoints; usage splits creation / read",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [
+     "cache_control"
+    ],
+    "p": []
+   },
+   "probes": [
+    "system_cache_control"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "partial",
+     "why": "chat accepts per-part prompt_cache_breakpoint (extension); only the helper is tested",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "prompt_cache_breakpoint"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "partial",
+     "why": "chat accepts per-part prompt_cache_breakpoint (extension); only the helper is tested",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "prompt_cache_breakpoint"
+      ]
+     ]
+    },
+    "responses/nonstream": {
+     "s": "na",
+     "why": "Responses uses prompt_cache_key (OpenAI reference)"
+    },
+    "responses/stream": {
+     "s": "na",
+     "why": "Responses uses prompt_cache_key (OpenAI reference)"
+    },
+    "responses/background": {
+     "s": "na",
+     "why": "Responses uses prompt_cache_key (OpenAI reference)"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "not a completions parameter"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "not a completions parameter"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_extract_cache_control_hints"
+      ]
+     ],
+     "probe": "system_cache_control",
+     "tests": [
+      [
+       "tests/unit/test_anthropic_cache_usage.py",
+       "test_warm_is_read_plus_new_input"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_extract_cache_control_hints"
+      ]
+     ],
+     "probe": "system_cache_control",
+     "tests": [
+      [
+       "tests/unit/test_production_hardening.py",
+       "TestAnthropicStreamingFormat::test_cache_usage_in_message_start"
+      ]
+     ]
+    }
+   }
+  },
+  "image_input": {
+   "what": "image input (image_url / input_image / image block), also inside tool results",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "partial",
+     "why": "route-level image turn on a VLM engine is only covered streamed",
+     "kind": "untested",
+     "impact": "high",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "_extract_image_refs"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "_extract_image_refs"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_batch_chat_toolcall_image_lora_rounding.py",
+       "test_streaming_image_applies_inline_lora"
+      ]
+     ]
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "input_image"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_responses_vlm_single_template.py",
+       "test_responses_pass_messages_to_a_vlm_engine"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "input_image"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_responses_vlm_single_template.py",
+       "test_streamed_image_turn_streams_tokens_from_the_vlm_engine"
+      ]
+     ]
+    },
+    "responses/background": {
+     "s": "partial",
+     "why": "no test runs an image through background mode",
+     "kind": "untested",
+     "impact": "medium",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "input_image"
+      ]
+     ]
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_convert_image_block"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_anthropic_tool_result_image.py",
+       "test_tool_result_image_becomes_image_url_not_placeholder"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "partial",
+     "why": "a streamed image turn is not driven on Messages",
+     "kind": "untested",
+     "impact": "medium",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "_convert_image_block"
+      ]
+     ]
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "legacy completions take text only"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "legacy completions take text only"
+    }
+   }
+  },
+  "audio_input": {
+   "what": "audio input (input_audio part) on omni models",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "partial",
+     "why": "audio parts are normalized and failed loudly; no route-level run on an omni engine in CI",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "_has_audio"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_multimodal_failloud.py",
+       "test_input_audio_without_data_raises"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "partial",
+     "why": "audio parts are normalized and failed loudly; no route-level run on an omni engine in CI",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "_has_audio"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_multimodal_failloud.py",
+       "test_input_audio_without_data_raises"
+      ]
+     ]
+    },
+    "responses/nonstream": {
+     "s": "partial",
+     "why": "Responses input_audio reaches the omni bridge; only the capability gate is tested",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "input_audio"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_capability_contract_dialects.py",
+       "test_responses_input_audio_on_vision_model"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "partial",
+     "why": "Responses input_audio reaches the omni bridge; only the capability gate is tested",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "input_audio"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_capability_contract_dialects.py",
+       "test_responses_input_audio_on_vision_model"
+      ]
+     ]
+    },
+    "responses/background": {
+     "s": "partial",
+     "why": "not driven under background",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "input_audio"
+      ]
+     ]
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "the Messages API has no audio block (Anthropic reference)"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "the Messages API has no audio block (Anthropic reference)"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "legacy completions take text only"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "legacy completions take text only"
+    }
+   }
+  },
+  "video_input": {
+   "what": "video input (video_url part, frame extraction)",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "partial",
+     "why": "frame extraction is unit-tested; no route-level run",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "_has_video"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_video_understanding.py",
+       "TestVideoFrameExtraction::test_extract_base64_video"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "partial",
+     "why": "frame extraction is unit-tested; no route-level run",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "_has_video"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_video_understanding.py",
+       "TestVideoFrameExtraction::test_extract_base64_video"
+      ]
+     ]
+    },
+    "responses/nonstream": {
+     "s": "na",
+     "why": "the OpenAI Responses API has no video input type (input_text / input_image / input_file / input_audio)"
+    },
+    "responses/stream": {
+     "s": "na",
+     "why": "the OpenAI Responses API has no video input type (input_text / input_image / input_file / input_audio)"
+    },
+    "responses/background": {
+     "s": "na",
+     "why": "the OpenAI Responses API has no video input type"
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "the Messages API has no video block (Anthropic reference)"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "the Messages API has no video block (Anthropic reference)"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "legacy completions take text only"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "legacy completions take text only"
+    }
+   }
+  },
+  "file_input": {
+   "what": "file / document inputs (input_file, document blocks, file_id), citations",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "partial",
+     "why": "chat file parts: only text inlining helpers exist; no route-level test",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "file"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "partial",
+     "why": "chat file parts: only text inlining helpers exist; no route-level test",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "file"
+      ]
+     ]
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_input_file_text"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_files_wiring.py",
+       "test_responses_input_file_id_is_resolved"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "partial",
+     "why": "a streamed file turn is not driven by a test",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_input_file_text"
+      ]
+     ]
+    },
+    "responses/background": {
+     "s": "partial",
+     "why": "not driven under background",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_input_file_text"
+      ]
+     ]
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "document"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_agent_client_compat.py",
+       "test_document_messages_route_ingests_document_and_returns_citation"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "document"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_agent_client_compat.py",
+       "test_document_stream_without_citations_is_not_buffered"
+      ]
+     ]
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "legacy completions take text only"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "legacy completions take text only"
+    }
+   }
+  },
+  "metadata": {
+   "what": "metadata / client_metadata (16 string pairs), echoed or stored",
+   "fields": {
+    "c": [
+     "metadata"
+    ],
+    "r": [
+     "metadata",
+     "client_metadata"
+    ],
+    "m": [
+     "metadata"
+    ],
+    "p": []
+   },
+   "probes": [
+    "metadata_echo"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "partial",
+     "why": "chat metadata is kept only on stored completions; the stored-object round trip with metadata is not asserted",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.metadata"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_chat_stored_completions.py",
+       "test_store_retrieve_update_delete"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "partial",
+     "why": "chat metadata is kept only on stored completions; the stored-object round trip with metadata is not asserted",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.metadata"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_chat_stored_completions.py",
+       "test_store_retrieve_update_delete"
+      ]
+     ]
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.metadata"
+      ]
+     ],
+     "probe": "metadata_echo"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.metadata"
+      ]
+     ],
+     "probe": "metadata_echo"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.metadata"
+      ]
+     ],
+     "probe": "metadata_echo"
+    },
+    "messages/nonstream": {
+     "s": "partial",
+     "why": "metadata.user_id is accepted and dropped; not asserted",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "metadata"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "partial",
+     "why": "metadata.user_id is accepted and dropped; not asserted",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "metadata"
+      ]
+     ]
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "not a completions parameter"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "not a completions parameter"
+    }
+   }
+  },
+  "user_identifier": {
+   "what": "user / safety_identifier: accepted identifier (Responses echoes user)",
+   "fields": {
+    "c": [
+     "user"
+    ],
+    "r": [
+     "user",
+     "safety_identifier"
+    ],
+    "m": [],
+    "p": [
+     "user"
+    ]
+   },
+   "probes": [
+    "user_echo"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "na",
+     "why": "accepted and ignored: abuse-monitoring identifier with no local meaning (API_SURFACE)"
+    },
+    "chat/stream": {
+     "s": "na",
+     "why": "accepted and ignored: abuse-monitoring identifier with no local meaning (API_SURFACE)"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "accepted and ignored: abuse-monitoring identifier with no local meaning (API_SURFACE)"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "accepted and ignored: abuse-monitoring identifier with no local meaning (API_SURFACE)"
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "Anthropic carries it as metadata.user_id; accepted and ignored"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "Anthropic carries it as metadata.user_id; accepted and ignored"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.user"
+      ]
+     ],
+     "probe": "user_echo"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.user"
+      ]
+     ],
+     "probe": "user_echo"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.user"
+      ]
+     ],
+     "probe": "user_echo"
+    }
+   }
+  },
+  "service_tier": {
+   "what": "service_tier request value and echo in the response",
+   "fields": {
+    "c": [],
+    "r": [
+     "service_tier"
+    ],
+    "m": [
+     "service_tier"
+    ],
+    "p": []
+   },
+   "probes": [
+    "service_tier_echo"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "partial",
+     "why": "service_tier is accepted but not echoed in the completion (OpenAI returns the tier used)",
+     "kind": "unimplemented",
+     "impact": "low",
+     "owner": "unassigned",
+     "probe": "service_tier_echo"
+    },
+    "chat/stream": {
+     "s": "partial",
+     "why": "service_tier is accepted but not echoed in the completion (OpenAI returns the tier used)",
+     "kind": "unimplemented",
+     "impact": "low",
+     "owner": "unassigned",
+     "probe": "service_tier_echo"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.service_tier"
+      ]
+     ],
+     "probe": "service_tier_echo"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.service_tier"
+      ]
+     ],
+     "probe": "service_tier_echo"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.service_tier"
+      ]
+     ],
+     "probe": "service_tier_echo"
+    },
+    "messages/nonstream": {
+     "s": "partial",
+     "why": "service_tier is accepted but usage.service_tier is not returned",
+     "kind": "unimplemented",
+     "impact": "low",
+     "owner": "unassigned",
+     "probe": "service_tier_echo"
+    },
+    "messages/stream": {
+     "s": "partial",
+     "why": "service_tier is accepted but usage.service_tier is not returned",
+     "kind": "unimplemented",
+     "impact": "low",
+     "owner": "unassigned",
+     "probe": "service_tier_echo"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "not a completions parameter (OpenAI reference)"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "not a completions parameter (OpenAI reference)"
+    }
+   }
+  },
+  "include": {
+   "what": "Responses include[]: reasoning.encrypted_content, web_search sources, code_interpreter outputs, message.output_text.logprobs",
+   "fields": {
+    "c": [],
+    "r": [
+     "include"
+    ],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "logprobs_include"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "na",
+     "why": "Responses-only parameter"
+    },
+    "chat/stream": {
+     "s": "na",
+     "why": "Responses-only parameter"
+    },
+    "messages/nonstream": {
+     "s": "na",
+     "why": "Responses-only parameter"
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "Responses-only parameter"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "Responses-only parameter"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "Responses-only parameter"
+    },
+    "responses/nonstream": {
+     "s": "partial",
+     "why": "include=[message.output_text.logprobs] does not turn logprobs on; only the extension logprobs:true does, so the official SDK form returns none",
+     "kind": "unimplemented",
+     "impact": "medium",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "\"include\", None"
+      ]
+     ],
+     "probe": "logprobs_include"
+    },
+    "responses/stream": {
+     "s": "partial",
+     "why": "same as non-stream",
+     "kind": "unimplemented",
+     "impact": "medium",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "\"include\", None"
+      ]
+     ],
+     "probe": "logprobs_include"
+    },
+    "responses/background": {
+     "s": "partial",
+     "why": "same as non-stream",
+     "kind": "unimplemented",
+     "impact": "medium",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "\"include\", None"
+      ]
+     ],
+     "probe": "logprobs_include"
+    }
+   }
+  },
+  "engine_options": {
+   "what": "engine switches as request fields: spec_decode, priority, timeout, lora_adapter",
+   "fields": {
+    "c": [
+     "spec_decode",
+     "priority",
+     "timeout",
+     "lora_adapter"
+    ],
+    "r": [
+     "spec_decode",
+     "priority",
+     "timeout",
+     "lora_adapter",
+     "generate"
+    ],
+    "m": [
+     "spec_decode",
+     "priority",
+     "timeout",
+     "lora_adapter"
+    ],
+    "p": [
+     "spec_decode",
+     "priority",
+     "timeout",
+     "lora_adapter"
+    ]
+   },
+   "probes": [
+    "spec_decode",
+    "priority",
+    "timeout",
+    "lora_adapter"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.spec_decode"
+      ]
+     ],
+     "probe": "spec_decode"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "req.spec_decode"
+      ]
+     ],
+     "probe": "spec_decode"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.spec_decode"
+      ]
+     ],
+     "probe": "spec_decode"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.spec_decode"
+      ]
+     ],
+     "probe": "spec_decode"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.spec_decode"
+      ]
+     ],
+     "probe": "spec_decode"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "req.spec_decode"
+      ]
+     ],
+     "probe": "spec_decode"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.spec_decode"
+      ]
+     ],
+     "probe": "spec_decode"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "req.spec_decode"
+      ]
+     ],
+     "probe": "spec_decode"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "req.spec_decode"
+      ]
+     ],
+     "probe": "spec_decode"
+    }
+   }
+  },
+  "misc_extensions": {
+   "what": "keep_alive, logits_processors, chat_template_kwargs, generate=false (prewarm), x-yunshu headers as fields",
+   "fields": {
+    "c": [
+     "keep_alive",
+     "logits_processors",
+     "chat_template_kwargs"
+    ],
+    "r": [
+     "logits_processors"
+    ],
+    "m": [
+     "logits_processors",
+     "min_p"
+    ],
+    "p": [
+     "keep_alive",
+     "logits_processors"
+    ]
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "partial",
+     "why": "accepted and wired; no route-level test per field",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "keep_alive"
+      ],
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "logits_processors"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "partial",
+     "why": "accepted and wired; no route-level test per field",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "keep_alive"
+      ],
+      [
+       "python/yunshu_gateway/routers/chat.py",
+       "logits_processors"
+      ]
+     ]
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_prewarm_response"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_responses_prewarm.py",
+       "test_prewarm_prefills_and_returns_an_empty_response"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_prewarm_response"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_responses_prewarm.py",
+       "test_prewarm_streams_created_and_completed"
+      ]
+     ]
+    },
+    "responses/background": {
+     "s": "na",
+     "why": "generate=false answers immediately; background is not meaningful"
+    },
+    "messages/nonstream": {
+     "s": "partial",
+     "why": "accepted and wired; no route-level test per field",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "logits_processors"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "partial",
+     "why": "accepted and wired; no route-level test per field",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "logits_processors"
+      ]
+     ]
+    },
+    "completions/nonstream": {
+     "s": "partial",
+     "why": "accepted and wired; no route-level test per field",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "keep_alive"
+      ],
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "logits_processors"
+      ]
+     ]
+    },
+    "completions/stream": {
+     "s": "partial",
+     "why": "accepted and wired; no route-level test per field",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "keep_alive"
+      ],
+      [
+       "python/yunshu_gateway/routers/completions.py",
+       "logits_processors"
+      ]
+     ]
+    }
+   }
+  },
+  "request_id": {
+   "what": "X-Request-Id accepted and echoed; the id cancels the generation (DELETE /v1/requests/{id})",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "request_id"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "X-Request-Id"
+      ]
+     ],
+     "probe": "request_id",
+     "tests": [
+      [
+       "tests/unit/test_api_extensions.py",
+       "test_requests_endpoint_and_cancel_by_client_request_id"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "X-Request-Id"
+      ]
+     ],
+     "probe": "request_id",
+     "tests": [
+      [
+       "tests/unit/test_api_extensions.py",
+       "test_requests_endpoint_and_cancel_by_client_request_id"
+      ]
+     ]
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "X-Request-Id"
+      ]
+     ],
+     "probe": "request_id"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "X-Request-Id"
+      ]
+     ],
+     "probe": "request_id"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "X-Request-Id"
+      ]
+     ],
+     "probe": "request_id"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "X-Request-Id"
+      ]
+     ],
+     "probe": "request_id"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "X-Request-Id"
+      ]
+     ],
+     "probe": "request_id"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "X-Request-Id"
+      ]
+     ],
+     "probe": "request_id"
+    },
+    "responses/background": {
+     "s": "partial",
+     "why": "the request id of the background hand-off is echoed; the detached generation is cancelled by response id instead",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "X-Request-Id"
+      ]
+     ]
+    }
+   },
+   "module": "python/yunshu_gateway/x_yunshu.py"
+  },
+  "x_yunshu_stats": {
+   "what": "x_yunshu object (timing, queue, sampling provenance, budget) in bodies and the final stream chunk",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "x_yunshu"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "x_yunshu"
+      ]
+     ],
+     "probe": "x_yunshu"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "x_yunshu"
+      ]
+     ],
+     "probe": "x_yunshu"
+    },
+    "responses/nonstream": {
+     "s": "partial",
+     "why": "non-stream bodies carry X-Yunshu-* headers but no x_yunshu object (chat and completions have it)",
+     "kind": "divergent",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "x_yunshu"
+      ]
+     ],
+     "probe": "x_yunshu"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "x_yunshu"
+      ]
+     ],
+     "probe": "x_yunshu"
+    },
+    "responses/background": {
+     "s": "partial",
+     "why": "stored background responses carry no x_yunshu object (checked: absent on the polled response)",
+     "kind": "unimplemented",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "x_yunshu"
+      ]
+     ]
+    },
+    "messages/nonstream": {
+     "s": "partial",
+     "why": "non-stream bodies carry X-Yunshu-* headers but no x_yunshu object (chat and completions have it)",
+     "kind": "divergent",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "x_yunshu"
+      ]
+     ],
+     "probe": "x_yunshu"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "x_yunshu"
+      ]
+     ],
+     "probe": "x_yunshu"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "x_yunshu"
+      ]
+     ],
+     "probe": "x_yunshu"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/x_yunshu.py",
+       "x_yunshu"
+      ]
+     ],
+     "probe": "x_yunshu"
+    }
+   },
+   "module": "python/yunshu_gateway/x_yunshu.py"
+  },
+  "error_envelope": {
+   "what": "400 for a bad request in the dialect's own error envelope, also when stream=true",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [
+    "error_envelope"
+   ],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "format_error_response"
+      ]
+     ],
+     "probe": "error_envelope"
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "format_error_response"
+      ]
+     ],
+     "probe": "error_envelope"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "format_error_response"
+      ]
+     ],
+     "probe": "error_envelope"
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "format_error_response"
+      ]
+     ],
+     "probe": "error_envelope"
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "format_error_response"
+      ]
+     ],
+     "probe": "error_envelope"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "_anthropic_type"
+      ]
+     ],
+     "probe": "error_envelope"
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "_anthropic_type"
+      ]
+     ],
+     "probe": "error_envelope"
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "format_error_response"
+      ]
+     ],
+     "probe": "error_envelope"
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "format_error_response"
+      ]
+     ],
+     "probe": "error_envelope"
+    }
+   },
+   "module": "python/yunshu_gateway/error_envelope.py"
+  },
+  "engine_error_terminal": {
+   "what": "an engine failure mid-stream is one terminal error event; before output a 5xx envelope",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "server_error_sse"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_wire_errors.py",
+       "test_error_before_any_output_is_a_5xx_in_the_dialect_envelope"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "server_error_sse"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_wire_errors.py",
+       "test_chat_stream_error_event_shape_and_sdk"
+      ]
+     ]
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "server_error_sse"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_wire_errors.py",
+       "test_error_before_any_output_is_a_5xx_in_the_dialect_envelope"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "server_error_sse"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_wire_errors.py",
+       "test_responses_stream_error_is_response_failed"
+      ]
+     ]
+    },
+    "responses/background": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "_start_background_response"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_responses_background.py",
+       "test_background_failure_flips_to_failed"
+      ]
+     ]
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "_anthropic_type"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_wire_errors.py",
+       "test_error_before_any_output_is_a_5xx_in_the_dialect_envelope"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "_anthropic_type"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_wire_errors.py",
+       "test_messages_stream_error_is_an_error_event_without_message_delta"
+      ]
+     ]
+    },
+    "completions/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "server_error_sse"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_wire_errors.py",
+       "test_error_before_any_output_is_a_5xx_in_the_dialect_envelope"
+      ]
+     ]
+    },
+    "completions/stream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/error_envelope.py",
+       "server_error_sse"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_wire_errors.py",
+       "test_completions_stream_error_is_not_a_clean_finish"
+      ]
+     ]
+    }
+   }
+  },
+  "token_count": {
+   "what": "pre-flight token counting: POST /v1/responses/input_tokens, POST /v1/messages/count_tokens",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "na",
+     "why": "no count endpoint in chat.completions (OpenAI reference); /v1/tokenize is a Yunshu extension"
+    },
+    "chat/stream": {
+     "s": "na",
+     "why": "no count endpoint in chat.completions (OpenAI reference); /v1/tokenize is a Yunshu extension"
+    },
+    "completions/nonstream": {
+     "s": "na",
+     "why": "no count endpoint in completions"
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "no count endpoint in completions"
+    },
+    "responses/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/responses.py",
+       "count_input_tokens"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_input_tokens_exact.py",
+       "test_function_tools_count_natively"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "na",
+     "why": "a count endpoint has no stream mode"
+    },
+    "responses/background": {
+     "s": "na",
+     "why": "a count endpoint has no background mode"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/anthropic.py",
+       "count_tokens"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_count_tokens_and_models.py",
+       "test_count_tokens_adds_per_image_estimate"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "a count endpoint has no stream mode"
+    }
+   }
+  },
+  "batch_api": {
+   "what": "batch jobs over the same routes: /v1/batches (chat, completions, responses, embeddings), /v1/messages/batches",
+   "fields": {
+    "c": [],
+    "r": [],
+    "m": [],
+    "p": []
+   },
+   "probes": [],
+   "cells": {
+    "chat/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/batches.py",
+       "/v1/chat/completions"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_batches_api.py",
+       "test_openai_sdk_batch_flow"
+      ]
+     ]
+    },
+    "chat/stream": {
+     "s": "na",
+     "why": "a batch line has no stream mode"
+    },
+    "responses/nonstream": {
+     "s": "partial",
+     "why": "/v1/batches accepts the responses endpoint but no test submits a responses line",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/batches.py",
+       "/v1/responses"
+      ]
+     ]
+    },
+    "responses/stream": {
+     "s": "na",
+     "why": "a batch line has no stream mode"
+    },
+    "responses/background": {
+     "s": "na",
+     "why": "a batch line has no background mode"
+    },
+    "messages/nonstream": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/batches.py",
+       "/v1/messages/batches"
+      ]
+     ],
+     "tests": [
+      [
+       "tests/unit/test_batches_api.py",
+       "test_anthropic_batch_flow"
+      ]
+     ]
+    },
+    "messages/stream": {
+     "s": "na",
+     "why": "a batch line has no stream mode"
+    },
+    "completions/nonstream": {
+     "s": "partial",
+     "why": "/v1/batches accepts /v1/completions but no test submits a completions line",
+     "kind": "untested",
+     "impact": "low",
+     "owner": "unassigned",
+     "ev": [
+      [
+       "python/yunshu_gateway/routers/batches.py",
+       "/v1/completions"
+      ]
+     ]
+    },
+    "completions/stream": {
+     "s": "na",
+     "why": "a batch line has no stream mode"
+    }
+   },
+   "module": "python/yunshu_gateway/routers/batches.py"
+  }
+ },
+ "duplicates": [
+  {
+   "id": "tool-call-streaming",
+   "impls": [
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "_format_tool_call_start_chunk"
+    ],
+    [
+     "python/yunshu_gateway/routers/responses.py",
+     "function_call_arguments"
+    ],
+    [
+     "python/yunshu_gateway/routers/anthropic.py",
+     "_try_parse_tool_call_delta"
+    ]
+   ],
+   "note": "Parsing is shared (yunshu_engine/tool_call_streamer.py) but each router re-implements the event emission: chat tool_calls deltas (3 helpers + a multi-choice variant), Responses function_call items and argument deltas, Messages tool_use blocks with input_json_delta.",
+   "unify": "One ToolEventSink(dialect) fed by ToolCallStreamer that renders start / args-delta / done for the three dialects; routers only wire the sink."
+  },
+  {
+   "id": "usage-building",
+   "impls": [
+    [
+     "python/yunshu_gateway/usage_shapes.py",
+     "def openai_usage"
+    ],
+    [
+     "python/yunshu_gateway/usage_shapes.py",
+     "def responses_usage"
+    ],
+    [
+     "python/yunshu_gateway/streaming.py",
+     "def format_openai_usage_chunk"
+    ],
+    [
+     "python/yunshu_gateway/routers/anthropic.py",
+     "def _anthropic_cache_usage"
+    ],
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "def _record_metrics"
+    ],
+    [
+     "python/yunshu_gateway/routers/anthropic.py",
+     "def _record_metrics"
+    ],
+    [
+     "python/yunshu_gateway/routers/completions.py",
+     "def _record_metrics"
+    ]
+   ],
+   "note": "Two shared shape builders cover OpenAI and Responses, Messages builds its own usage and cache split inline, and _record_metrics is copy-pasted verbatim in chat, anthropic and completions.",
+   "unify": "usage_shapes.py owns all three dialect shapes (add anthropic_usage) from one UsageFacts(prompt, completion, cached, creation, reasoning); one record_usage() replaces the three _record_metrics."
+  },
+  {
+   "id": "sampling-resolution",
+   "impls": [
+    [
+     "python/yunshu_gateway/sampling_defaults.py",
+     "def resolve_sampling"
+    ],
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "def _validate_sampling_params"
+    ],
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "xtc_probability=req.xtc_probability"
+    ],
+    [
+     "python/yunshu_gateway/routers/responses.py",
+     "xtc_probability=req.xtc_probability"
+    ],
+    [
+     "python/yunshu_gateway/routers/anthropic.py",
+     "xtc_probability=req.xtc_probability"
+    ],
+    [
+     "python/yunshu_gateway/routers/completions.py",
+     "xtc_probability=req.xtc_probability"
+    ]
+   ],
+   "note": "resolve_sampling picks defaults once, but every router (and each of its stream / non-stream / VLM branches) then spells out the same ~30 engine kwargs by hand; a new field must be added in ten places (this matrix's forwarding probes are what catches a miss).",
+   "unify": "A single SamplingParams.from_request(req, dialect) that returns the engine kwargs dict; routers call it once per branch."
+  },
+  {
+   "id": "server-tool-loops",
+   "impls": [
+    [
+     "python/yunshu_gateway/server_tools/anthropic_loop.py",
+     "async def"
+    ],
+    [
+     "python/yunshu_gateway/server_tools/responses_loop.py",
+     "async def"
+    ],
+    [
+     "python/yunshu_gateway/server_tools/runtime.py",
+     "class ServerToolDef"
+    ]
+   ],
+   "note": "Two ~1,500-line loop drivers (Messages blocks, Responses items) around one runtime; the generate / detect call / run tool / append / continue skeleton, iteration limits, pause_turn / incomplete handling and per-round usage are written twice.",
+   "unify": "One ServerToolLoop(core) with a dialect adapter that only renders blocks / items and parses history; the loop, limits and usage live in runtime.py."
+  },
+  {
+   "id": "error-mapping",
+   "impls": [
+    [
+     "python/yunshu_gateway/error_envelope.py",
+     "def format_error_response"
+    ],
+    [
+     "python/yunshu_gateway/main.py",
+     "context_length_exceeded"
+    ],
+    [
+     "python/yunshu_gateway/error_envelope.py",
+     "def server_error_sse"
+    ],
+    [
+     "python/yunshu_gateway/routers/responses.py",
+     "format_responses_failed"
+    ],
+    [
+     "python/yunshu_gateway/routers/anthropic.py",
+     "api_error"
+    ]
+   ],
+   "note": "error_envelope.py shapes errors per dialect, main.py re-maps HTTPException text into codes (string match on 'exceeds max context window'), and each streaming path emits its own terminal error event.",
+   "unify": "ErrorSpec(code, status, message) raised by routers and rendered by error_envelope for JSON, SSE and Responses events; no string matching in main.py."
+  },
+  {
+   "id": "disconnect-handling",
+   "impls": [
+    [
+     "python/yunshu_gateway/streaming.py",
+     "async def run_with_disconnect_guard"
+    ],
+    [
+     "python/yunshu_gateway/streaming.py",
+     "async def with_sse_keepalive"
+    ],
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "cancel_event"
+    ],
+    [
+     "python/yunshu_gateway/routers/responses.py",
+     "class _DetachedRequest"
+    ],
+    [
+     "python/yunshu_gateway/routers/anthropic.py",
+     "cancel_event"
+    ],
+    [
+     "python/yunshu_gateway/routers/completions.py",
+     "cancel_event"
+    ]
+   ],
+   "note": "The guard is shared, but each router creates its own cancel_event, threads it through every branch (text, VLM, multi-choice, background) and tears it down; Responses fakes a Request for background.",
+   "unify": "A RequestScope context manager (cancel_event, disconnect guard, request id, metrics) entered once per request by a route decorator."
+  },
+  {
+   "id": "stop-and-finish-mapping",
+   "impls": [
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "def _normalize_finish_reason"
+    ],
+    [
+     "python/yunshu_gateway/routers/anthropic.py",
+     "def _map_stop_reason"
+    ],
+    [
+     "python/yunshu_gateway/routers/anthropic.py",
+     "def _detect_matched_stop"
+    ],
+    [
+     "python/yunshu_gateway/routers/responses.py",
+     "incomplete"
+    ]
+   ],
+   "note": "Engine finish reasons are mapped per dialect in three places (chat / completions share one), and Messages re-derives the matched stop sequence from text.",
+   "unify": "The engine returns (finish_kind, matched_stop); one table maps finish_kind to each dialect's vocabulary."
+  },
+  {
+   "id": "reasoning-split",
+   "impls": [
+    [
+     "python/yunshu_gateway/streaming.py",
+     "def extract_thinking"
+    ],
+    [
+     "python/yunshu_gateway/streaming.py",
+     "class ThinkingParser"
+    ],
+    [
+     "python/yunshu_gateway/routers/anthropic.py",
+     "def _split_thinking"
+    ],
+    [
+     "python/yunshu_gateway/routers/completions.py",
+     "def _untag_reasoning"
+    ],
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "reasoning_content"
+    ]
+   ],
+   "note": "Text-level splitting (extract_thinking / ThinkingParser) and engine-state splitting (current_state) both exist; Messages, completions and chat each carry their own fallback and tag stripping, which is why a streamed delta can carry tag text (see the reasoning_output row).",
+   "unify": "The engine always labels reasoning pieces (state machine); one ReasoningSplitter used by every dialect, text parsing only for engines that cannot label."
+  },
+  {
+   "id": "response-format-parse",
+   "impls": [
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "def _parse_response_format"
+    ],
+    [
+     "python/yunshu_gateway/routers/responses.py",
+     "def _parse_response_format"
+    ],
+    [
+     "python/yunshu_gateway/routers/anthropic.py",
+     "def _resolve_json_schema"
+    ]
+   ],
+   "note": "Three parsers of json_schema / json_object / grammar into the engine constraint spec, each with its own validation and error text.",
+   "unify": "schemas/structured_outputs.py exposes parse_constraint(dialect_fragment) -> ConstraintSpec; routers pass their fragment."
+  },
+  {
+   "id": "tool-choice-enforcement",
+   "impls": [
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "def _enforce_tool_choice"
+    ],
+    [
+     "python/yunshu_gateway/routers/responses.py",
+     "def _enforce_tool_choice"
+    ],
+    [
+     "python/yunshu_gateway/routers/anthropic.py",
+     "def _enforce_anthropic_tool_choice"
+    ],
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "def _tool_choice_prefill"
+    ]
+   ],
+   "note": "Same rule (auto / none / required / named, parallel off) written three times after the call is parsed, plus the forced-choice prefill helper only chat owns.",
+   "unify": "enforce_tool_choice(calls, ToolChoice, parallel) in one module; dialect parsers normalize tool_choice into ToolChoice first."
+  },
+  {
+   "id": "message-and-media-conversion",
+   "impls": [
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "def _extract_messages"
+    ],
+    [
+     "python/yunshu_gateway/routers/responses.py",
+     "def _convert_to_messages"
+    ],
+    [
+     "python/yunshu_gateway/routers/anthropic.py",
+     "def _convert_anthropic_messages_impl"
+    ],
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "def _normalize_image_part"
+    ],
+    [
+     "python/yunshu_gateway/routers/anthropic.py",
+     "def _convert_image_block"
+    ]
+   ],
+   "note": "Each dialect converts its messages to the engine format (inherently dialect-specific), but image part normalization, tool-result flattening and file inlining are repeated inside each converter.",
+   "unify": "Dialect converters emit one neutral Message/Part list; image, file and tool-result handling happen once on that list."
+  },
+  {
+   "id": "n-choice-loops",
+   "impls": [
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "async def _build_multi_choice"
+    ],
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "async def _stream_response_multi"
+    ],
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "async def _stream_vlm_response_multi"
+    ],
+    [
+     "python/yunshu_gateway/routers/completions.py",
+     "best_of"
+    ]
+   ],
+   "note": "n > 1 is implemented separately for chat text, chat VLM and completions (per-choice seed, shared cancel, summed usage) and not at all for the other routes.",
+   "unify": "A fan-out helper above the engine call: run n requests with seed+index, share the cancel event, merge usage; routers only render choices."
+  },
+  {
+   "id": "path-split-inside-routers",
+   "impls": [
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "async def _handle_vlm_chat"
+    ],
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "async def _create_chat_completion"
+    ],
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "async def _stream_vlm_response"
+    ],
+    [
+     "python/yunshu_gateway/routers/anthropic.py",
+     "async def _non_stream_batched"
+    ],
+    [
+     "python/yunshu_gateway/routers/anthropic.py",
+     "async def _non_stream_legacy"
+    ],
+    [
+     "python/yunshu_gateway/routers/responses.py",
+     "async def _vlm_to_responses"
+    ]
+   ],
+   "note": "Chat has a text and a VLM implementation of both stream and non-stream; Messages has a batched and a legacy non-stream; Responses bridges VLM requests through the chat handler. Every feature has to be added to each branch.",
+   "unify": "Follows the engine path convergence (one runner): once text-only models run on the runner, the routers keep one generate / stream implementation per dialect."
+  },
+  {
+   "id": "store-and-retrieve",
+   "impls": [
+    [
+     "python/yunshu_gateway/routers/chat.py",
+     "def _store_completion"
+    ],
+    [
+     "python/yunshu_gateway/routers/responses.py",
+     "def _store_response"
+    ],
+    [
+     "python/yunshu_gateway/chat_store.py",
+     "class"
+    ]
+   ],
+   "note": "Chat completions and Responses keep finished objects in two separate stores with their own owner checks and eviction.",
+   "unify": "One ObjectStore(kind) with owner checks and TTL; the two routes differ only in the object shape."
+  }
+ ],
+ "modules_other": {
+  "python/yunshu_gateway/server_tools/anthropic_loop.py": "loop driver for the Messages server tools (rows server_*; see the server-tool-loops duplicate)",
+  "python/yunshu_gateway/server_tools/responses_loop.py": "loop driver for the Responses server tools (rows server_*)",
+  "python/yunshu_gateway/server_tools/metasearch.py": "search provider backend behind web_search",
+  "python/yunshu_gateway/server_tools/netguard.py": "private-address guard shared by web_fetch and the connectors",
+  "python/yunshu_gateway/server_tools/research": "deep-research helper behind web_search",
+  "python/yunshu_gateway/server_tools/__init__.py": "package status() for /v1/models"
+ },
+ "owners": [
+  "apimatrix",
+  "agentcompat",
+  "unassigned"
+ ],
+ "gap_budget": 62
+}

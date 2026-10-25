@@ -1,0 +1,46 @@
+---
+title: API 一致性矩陣
+description: 我們提供的 OpenAI 與 Anthropic API，每個請求或回應功能一列、每個路由與串流模式一欄；可執行的 probe 讓每個 engaged 格子都有證據，每個缺口都有計數。
+---
+
+API 層是四個 router，用不同的方言服務同一個引擎：chat completions、Responses、Messages 與舊版 completions。一項功能（tools、`seed`、`logprobs`、結構化輸出、background、伺服器端工具……）必須在規格有該功能的每個路由上都能運作，不論串流與否。**API 一致性矩陣**（`python/yunshu_gateway/api_matrix.json`）列出這些功能，以及每個路由如何處理它們，並由 `tests/unit/test_api_parity.py` 與 `tests/unit/test_api_parity_wire.py` 強制執行。它是引擎路徑矩陣（`python/yunshu_engine/path_matrix.json`，見[架構](/docs/developers/architecture)）在 API 層的對應物。
+
+## 結構
+
+- **列**（61）：取樣欄位、`max_tokens`、`stop`、`n`、`logprobs`、tools / `tool_choice` / 平行呼叫 / 工具結果、結構化輸出與文法、推理與思考控制、usage 與快取 token、background、store / retrieve / delete、`previous_response_id` 與 conversation、取消與客戶端斷線、context 管理與溢位、伺服器端工具（web search、web fetch、MCP、程式碼執行、shell）、prompt 快取欄位與 `cache_control`、圖片 / 音訊 / 影片 / 檔案輸入、metadata、`service_tier`、`include`、引擎開關、`x_yunshu` 與請求 id、錯誤格式、token 計數與批次。
+- **欄**（9）：`chat`、`responses`、`messages`、`completions`，各分串流與非串流，另加 `responses/background`。
+- **格子**：`engaged`（程式碼證據，加上確實跑過該格子的 probe 或具名測試）、`na`（規格明說不適用，附理由）、`partial` 或 `missing`（缺口，附 `kind`：`unimplemented`、`divergent` 或 `untested`，以及影響與負責人）。
+
+## Probe
+
+格子只有在有測試實際執行它時才算 `engaged`。`test_api_parity_wire.py` 用腳本化引擎接在真實 router 後面，執行 434 個 probe：請求經過實際路由（原始 HTTP 或官方 OpenAI 與 Anthropic SDK），串流、非串流與 background 都跑，並檢查抵達引擎的內容（轉發 probe：每個取樣與約束欄位），或回傳的內容（行為 probe：usage、快取 token、推理拆分、工具呼叫、結構化輸出、儲存物件、previous-response 串接、取消、客戶端斷線、context 溢位、錯誤格式）。`partial` 格子的 probe 若開始通過，測試就會失敗，直到把格子改成 `engaged`，所以缺口不可能被悄悄補上。
+
+## 目前狀態
+
+| 欄 | engaged | na | partial / missing |
+|---|---|---|---|
+| `chat/nonstream` | 34 | 15 | 12 |
+| `chat/stream` | 35 | 15 | 11 |
+| `responses/nonstream` | 48 | 9 | 4 |
+| `responses/stream` | 45 | 11 | 5 |
+| `responses/background` | 37 | 11 | 13 |
+| `messages/nonstream` | 39 | 16 | 6 |
+| `messages/stream` | 35 | 18 | 8 |
+| `completions/nonstream` | 27 | 32 | 2 |
+| `completions/stream` | 28 | 32 | 1 |
+
+328 格 engaged、159 格不適用、62 個缺口。矩陣中的 `gap_budget` 就是最後這個數字，只能往下降。
+
+## 防護
+
+- 四個請求模型任何一個新增欄位、新增伺服器端工具種類（`ServerToolDef.kind`）或新增 `server_tools` 模組，在有對應的列之前測試都會失敗。
+- 證據（程式碼片段、測試函式）移動或消失，測試會失敗。
+- `duplicates` 列出 14 項在多個 router 重複實作的功能（工具呼叫串流、usage 組裝、取樣解析、伺服器端工具迴圈、錯誤對應、斷線處理、stop 與 finish 對應、推理拆分、`response_format` 解析、`tool_choice` 強制、訊息轉換、`n > 1`、文字與 VLM 分支、儲存物件），每項附檔案路徑與一行合併建議。
+
+## 新增或修改功能
+
+1. 在 router 加上請求欄位，再於 `api_matrix.json` 加一列（或把欄位加到既有列）。
+2. 填滿九個格子。優先在 `test_api_parity_wire.py` 寫 probe；否則以檔案與函式名稱引用 route 層級的測試。
+3. 若補上了缺口，在同一個 commit 把格子改成 engaged 並降低 `gap_budget`。
+
+執行 `uv run pytest tests/unit/test_api_parity.py tests/unit/test_api_parity_wire.py -q`。另見[請求生命週期](/docs/internals/request-lifecycle)與[代理程式相容性](/docs/developers/agent-compat)。

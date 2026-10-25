@@ -272,12 +272,12 @@ test("the hero chart's series slide continuously and re-base when a sample lands
   await open(page, "overview", 7000);
   await expect(page.locator(DECODE).first()).toBeVisible();
   await page.waitForTimeout(14_000); // a sample every 2.5 s; the chart needs several
-  const box = page.locator(".live-scroll").first();
+  const box = page.locator('[data-yunui="metric-chart"][data-live]').first();
   await expect(box).toBeVisible();
   const shifts = (
     await watch(
       page,
-      ".live-scroll",
+      '[data-yunui="metric-chart"][data-live]',
       6000,
       'Number(el.style.getPropertyValue("--live-shift") || 0)',
     )
@@ -293,7 +293,7 @@ test("the hero chart's series slide continuously and re-base when a sample lands
   ).toBe(true);
   expect(Math.max(...shifts)).toBeLessThan(1100);
   const moved = await page.evaluate(() => {
-    const el = document.querySelector(".live-scroll svg [clip-path] > *");
+    const el = document.querySelector("[data-live-layer]");
     return el ? getComputedStyle(el).transform : "none";
   });
   expect(moved).not.toBe("none");
@@ -309,7 +309,7 @@ test("reduced motion: the hero chart does not slide", async ({ browser }) => {
   const shifts = (
     await watch(
       page,
-      ".live-scroll",
+      '[data-yunui="metric-chart"][data-live]',
       2000,
       'Number(el.style.getPropertyValue("--live-shift") || 0)',
     )

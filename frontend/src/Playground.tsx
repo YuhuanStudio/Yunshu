@@ -29,11 +29,13 @@ import {
   ChatMessage,
   ChatMessageList,
   GenerationStats,
+  useStreamReveal,
 } from "@yuhuanowo/yunui/chat";
 import {
   CapabilityIcon,
   getModelDeveloperId,
   getProviderName,
+  AgentRunStatus,
   ModelSelect,
   ThinkingBlock,
   type ModelSelectOption,
@@ -239,8 +241,27 @@ function ReplyConfidence({ run, streaming }: { run: Run; streaming: boolean }) {
   );
 }
 
-function ReplyBody({ run, streaming }: { run: Run; streaming: boolean }) {
+function ReplyBody({
+  run,
+  streaming,
+  now,
+}: {
+  run: Run;
+  streaming: boolean;
+  now?: number;
+}) {
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  // The engine's text is paced for display: word chunks on a 34 ms frame clock with
+  // catch-up, so a burst never trails far behind and the renderer only appends.
+  const shown = useStreamReveal(run.content, {
+    active: streaming && !!run.content,
+  });
+  const thinkingNow = streaming && !run.content;
+  const thinkMs =
+    run.timing?.thinkStart != null && run.timing.thinkEnd != null
+      ? run.timing.thinkEnd - run.timing.thinkStart
+      : undefined;
+  const waiting = streaming && !run.content && !run.reasoning;
   return (
     <>
       {run.reasoning && (
@@ -252,28 +273,43 @@ function ReplyBody({ run, streaming }: { run: Run; streaming: boolean }) {
             inProgress: t("playground.reply.thinkProgress"),
           }}
           content={run.reasoning}
-          isStreaming={streaming}
+          isStreaming={thinkingNow}
+          doneLabel={
+            !thinkingNow && thinkMs != null
+              ? t("playground.reply.thoughtFor", {
+                  s: number(thinkMs / 1000, 1),
+                })
+              : undefined
+          }
           open={thinkingOpen(streaming, !!run.content, userOpen)}
           onOpenChange={setUserOpen}
         />
       )}
-      <Suspense
-        fallback={
-          <div className="whitespace-pre-wrap text-sm leading-7">
-            {run.content}
-          </div>
-        }
-      >
-        <Markdown
-          streaming={streaming && !!run.content}
-          content={
-            run.content ||
-            (streaming
-              ? t("playground.reply.waiting")
-              : t("playground.reply.noText"))
+      {waiting && (
+        <AgentRunStatus
+          label={t("playground.reply.waiting")}
+          phase="thinking"
+          elapsed={
+            now != null && run.timing
+              ? `${number(Math.max(0, now - run.timing.start) / 1000, 1)} s`
+              : undefined
           }
         />
-      </Suspense>
+      )}
+      {!waiting && (
+        <Suspense
+          fallback={
+            <div className="whitespace-pre-wrap text-sm leading-7">
+              {shown}
+            </div>
+          }
+        >
+          <Markdown
+            streaming={streaming && !!run.content}
+            content={shown || (streaming ? "" : t("playground.reply.noText"))}
+          />
+        </Suspense>
+      )}
       <ReplyConfidence run={run} streaming={streaming} />
       {run.finishReason === "length" && (
         <p className="mt-2 text-xs text-warning">
@@ -522,6 +558,10 @@ export function Playground({
             timing.chunks += 1;
             timing.firstAt ??= t;
           }
+          if (delta.reasoning && !delta.content && timing.thinkEnd == null)
+            timing.thinkStart ??= t;
+          if (delta.content && timing.thinkStart != null)
+            timing.thinkEnd ??= t;
           if (delta.usage) timing.usage = { ...timing.usage, ...delta.usage };
           patch((m) => ({
             ...m,
@@ -538,6 +578,7 @@ export function Playground({
         dialect,
       );
       timing.endAt = performance.now();
+      if (timing.thinkStart != null) timing.thinkEnd ??= timing.endAt;
       if (mounted.current) patch((m) => ({ ...m, timing: { ...timing } }));
     } catch (e) {
       timing.endAt = performance.now();
@@ -967,6 +1008,7 @@ export function Playground({
         }
       />
       <ChatMessageList
+        jumpToLatestLabel={t("playground.jumpLatest")}
         className="px-4 sm:px-7"
         empty={<div className="m-auto max-w-lg py-16">{empty}</div>}
       >
@@ -1014,6 +1056,7 @@ export function Playground({
                           <ReplyBody
                             run={run}
                             streaming={loading && !run.timing?.endAt}
+                            now={now}
                           />
                           <ReplyStats run={run} now={now} />
                         </>
@@ -1098,7 +1141,11 @@ export function Playground({
                   />
                 )}
                 {m.role === "assistant" ? (
-                  <ReplyBody run={m} streaming={loading && lastId === m.id} />
+                  <ReplyBody
+                    run={m}
+                    streaming={loading && lastId === m.id}
+                    now={now}
+                  />
                 ) : (
                   m.content
                 )}

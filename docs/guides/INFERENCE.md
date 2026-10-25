@@ -73,6 +73,21 @@ curl -s localhost:8000/v1/chat/completions -H 'content-type: application/json' -
     "schema":{"type":"object","properties":{"color":{"type":"string"}},"required":["color"],"additionalProperties":false}}}}'
 ```
 
+## Sampling defaults
+
+A request that leaves out `temperature`, `top_p`, `top_k`, `min_p`, `repetition_penalty`, `presence_penalty` or
+`frequency_penalty` takes, per field and in order: the request value; the model's published recommendation for
+the mode this request runs in (`thinking` or `non_thinking`, from `python/yunshu_engine/data/sampling_profiles.json`,
+copied from the model cards with URL and date, matched by model directory name); the model's
+`generation_config.json`; the API's official default (`temperature` 1.0, `top_p` 1.0, `top_k` 0 = off, `min_p` 0,
+penalties off). The mode follows the request: Anthropic `thinking`, `enable_thinking`,
+`chat_template_kwargs.enable_thinking`, a JSON-schema / grammar constraint (no thinking), else the chat template's
+default. Qwen3.8-27B: thinking 1.0 / 0.95 / 20 / presence 0, non-thinking 0.7 / 0.80 / 20 / presence 1.5.
+`YUNSHU_SAMPLING_DEFAULTS=api` skips the model sources. `do_sample` is not read: send `temperature: 0` for greedy.
+`x_yunshu.sampling` reports the values, `mode`, `mode_from` and each field's source (`request`, `model_card`,
+`generation_config`, `api_default`); `GET /v1/models/{id}` lists both modes under `yunshu.sampling_defaults`;
+`yunshu doctor -m` and the startup log print them.
+
 ## Lossy memory options (off by default)
 
 | Setting | Effect |
@@ -129,3 +144,20 @@ the measured [immediate follow-up latency gap](../BENCHMARKS.md#where-yunshu-sta
 
 When a shared batch drains to one eligible greedy request, the runner can promote it
 to the speculative lane at a step boundary. Concurrent rows do not draft together.
+
+## Orphan adoption (agent retries)
+
+Agent clients (Claude Code, Codex) give up on a long streamed reply after their own timeout and
+send the identical request again, often non-streaming. Without help the engine cancels the first
+generation at the disconnect and recomputes the same thing from scratch.
+
+`YUNSHU_ORPHAN_GRACE_SECONDS` (default 120; 0 = cancel at disconnect) keeps a generation whose client
+vanished running for that long. An identical request in the window (same model, messages, tools,
+constraints and sampling parameters, streaming or not) is attached to it: the tokens already
+generated replay at once, the rest follow live, and the output is exactly that generation's. Nothing
+adopts it: it is cancelled at the window's end. Two live identical requests are never merged (they
+are independent samples); an explicit cancel (`/v1/cancel`, a deadline) still stops at once.
+`YUNSHU_ORPHAN_MAX` (default 2) bounds how many orphans are kept; each holds its decode row and KV
+until adopted or expired, so it is already inside the memory ledger. `GET /v1/yunshu/status` lists
+them under `orphans` with adopted / expired counts and the tokens adoption saved. The adopting
+request's `x_yunshu` stats start at its own arrival: replayed tokens are not counted as decode speed.
