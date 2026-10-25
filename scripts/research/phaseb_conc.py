@@ -185,11 +185,6 @@ def run_cell(server, a, scenario, shape, strict=True):
     )
     if scenario == "stagger":
         result["stagger"] = interval_rates(concurrent_rows["A"], concurrent_rows["B"])
-        if a.mode == "speed" and any(
-            result["stagger"][field] is None
-            for field in ("prefill_tps", "overlap_tps", "after_tps")
-        ):
-            raise RuntimeError("stagger did not cover prefill, overlap and recovery")
     return result
 
 
@@ -218,6 +213,17 @@ def speed_verdict(rows, reps=3, tolerance=0.02):
             )
 
         base, cand = median("base", "aggregate_tps"), median("cand", "aggregate_tps")
+        if key[1] == "stagger":
+            for arm in ("base", "cand"):
+                for rep, r in arms[arm].items():
+                    if any(
+                        r.get("stagger", {}).get(f) is None
+                        for f in ("prefill_tps", "overlap_tps", "after_tps")
+                    ):
+                        reasons.append(
+                            f"{key}/{arm}/r{rep}: stagger did not cover prefill,"
+                            " overlap and recovery"
+                        )
         numbers.append(dict(cell=key, aggregate_tps=[base, cand]))
         if base is None or cand is None:
             reasons.append(f"{key}: missing aggregate rate")

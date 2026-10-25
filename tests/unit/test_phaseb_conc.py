@@ -207,3 +207,26 @@ def test_validate_skips_digest_equality_for_base_arm():
         scenarios=("solo",),
         shapes=("greedy",),
     )[0]
+
+
+def test_speed_verdict_reports_uncovered_stagger_instead_of_aborting():
+    def cell(arm, rep, stagger):
+        return dict(
+            arm=arm,
+            rep=rep,
+            ctx_chars=1,
+            scenario="stagger",
+            shape="greedy",
+            solo={"per_row": {}},
+            concurrent={
+                "aggregate_tps": 10.0 + (arm == "cand"),
+                "per_row": {"A": {"tps": 5.0}},
+            },
+            stagger=stagger,
+        )
+
+    ok = dict(prefill_tps=1.0, overlap_tps=1.0, after_tps=1.0)
+    rows = [cell(a, r, ok) for a in ("base", "cand") for r in range(3)]
+    assert p.speed_verdict(rows)[0] == []
+    rows[0]["stagger"] = dict(ok, after_tps=None)
+    assert any("stagger did not cover" in x for x in p.speed_verdict(rows)[0])
