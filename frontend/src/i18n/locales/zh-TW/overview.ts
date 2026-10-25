@@ -22,6 +22,8 @@ const overview = {
   "phase.running": "執行",
   "phase.idle": "閒置",
   "activity.rowActive": "活動請求",
+  "lane.waiting": "等待輪到預填 · 前面還有 {ahead} 個",
+  "lane.phases": "排隊 {queue} · 預填 {prefill} · 快取 {cached}",
   "speed.live": "即時合計",
   "speed.window": "近 {s} 秒均值",
   "lane.prefixHit": "前綴命中 {cached} / {prompt} token",
@@ -51,7 +53,7 @@ const overview = {
   "status.paused": "（已暫停）",
   "stats.ttft": "首 token 延遲 (TTFT)",
   "tip.decode":
-    "解碼速度：所有解碼中請求目前的 tok/s 總和。沒有請求時顯示最近一筆的速度，並標明「最近一筆」。",
+    "解碼速度。即時合計：所有解碼中請求在最近 5 秒的 tok/s 總和；頂端狀態與圖表是同一個數字（圖表每 5 秒取樣）。均值：時間窗內已結束請求各自速度的平均，並行時會低於合計。沒有請求時顯示最近一筆的速度，並標明「最近一筆」。",
   "tip.prefill":
     "預填速度：最近一次真正預填（未命中快取的 token 至少 256 個）的 tok/s。沒有就顯示 —，不用平均值。",
   "tip.ttft":

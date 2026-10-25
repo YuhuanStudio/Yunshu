@@ -25,6 +25,8 @@ const overview: Shape<typeof zh> = {
   "phase.running": "运行",
   "phase.idle": "空闲",
   "activity.rowActive": "活动请求",
+  "lane.waiting": "等待轮到预填 · 前面还有 {ahead} 个",
+  "lane.phases": "排队 {queue} · 预填 {prefill} · 缓存 {cached}",
   "speed.live": "实时合计",
   "speed.window": "近 {s} 秒均值",
   "lane.prefixHit": "前缀命中 {cached} / {prompt} token",
@@ -54,7 +56,7 @@ const overview: Shape<typeof zh> = {
   "status.paused": "（已暂停）",
   "stats.ttft": "首 token 延迟 (TTFT)",
   "tip.decode":
-    "解码速度：所有解码中请求当前的 tok/s 总和。没有请求时显示最近一笔的速度，并标明“最近一笔”。",
+    "解码速度。实时合计：所有解码中请求在最近 5 秒的 tok/s 之和；顶部状态与图表是同一个数字（图表每 5 秒采样）。均值：时间窗内已结束请求各自速度的平均，并行时会低于合计。没有请求时显示最近一笔的速度，并标明“最近一笔”。",
   "tip.prefill":
     "预填速度：最近一次真正预填（未命中缓存的 token 至少 256 个）的 tok/s。没有就显示 —，不用平均值。",
   "tip.ttft":

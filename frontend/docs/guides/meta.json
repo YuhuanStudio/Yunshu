@@ -13,6 +13,7 @@
   "transports",
   "auth-and-keys",
   "telemetry",
+  "debugging",
   "cli",
   "configuration",
   "model-support",

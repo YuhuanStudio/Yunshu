@@ -350,6 +350,8 @@ def cmd_run(args):
                 yunshu_env={
                     k: v for k, v in os.environ.items() if k.startswith("YUNSHU_")
                 },
+                observe=args.serve == "yunshu"
+                and os.environ.get("AGENTIC_OBSERVE", "1") != "0",
                 context_len=args.context,
                 timeout_min=args.timeout_min,
                 repeat=args.repeat,

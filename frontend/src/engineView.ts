@@ -240,6 +240,7 @@ export function prefillHeadline(
       value: last,
       label: last != null ? speedTerms.last : speedTerms.live,
       note: t("shell.engine.headline.prefillNoSpeed"),
+      short: t("shell.engine.headline.shortPrefill"),
     };
   return last != null
     ? {
@@ -254,6 +255,10 @@ export function prefillHeadline(
         label: speedTerms.last,
         note: status.last
           ? t("shell.engine.headline.prefillCached")
+          : t("shell.engine.headline.none"),
+        // The card's subtext is one short line: a whole sentence there was cut off mid-word.
+        short: status.last
+          ? t("shell.engine.headline.shortCached")
           : t("shell.engine.headline.none"),
       };
 }

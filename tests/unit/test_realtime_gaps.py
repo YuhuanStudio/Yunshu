@@ -464,3 +464,58 @@ def test_commit_reports_the_input_transcript_event():
     assert done["transcript"] == "the secret word is pineapple"
     assert done["item_id"] == created["item"]["id"]
     assert done["content_index"] == 0
+
+
+# ── transcription-only sessions (OpenAI: ?intent=transcription, transcription_session.update) ──
+
+
+def test_transcription_session_update_event_switches_to_transcription_only():
+    """OpenAI's beta transcription session is configured with ``transcription_session.update``
+    (answered by ``transcription_session.updated``); it was an unknown event, and a direct
+    ``?intent=transcription`` session still answered ``response.create`` with a generation."""
+    s, sent = _session("beta")
+    asyncio.run(
+        s._handle_event(
+            {
+                "type": "transcription_session.update",
+                "session": {"input_audio_transcription": {"model": "whisper-1"}},
+            }
+        )
+    )
+    assert _types(sent) == ["transcription_session.updated"], sent
+    assert s._secret_kind == "transcription"
+    sent.clear()
+    asyncio.run(s._handle_event({"type": "response.create"}))
+    assert sent[0]["error"]["code"] == "transcription_only"
+
+
+def test_ga_session_update_type_transcription_switches_to_transcription_only():
+    s, sent = _session("ga")
+    asyncio.run(
+        s._handle_event(
+            {"type": "session.update", "session": {"type": "transcription"}}
+        )
+    )
+    assert s._secret_kind == "transcription"
+    sent.clear()
+    asyncio.run(s._handle_event({"type": "response.create"}))
+    assert sent[0]["error"]["code"] == "transcription_only"
+
+
+def test_intent_transcription_query_opens_transcription_only_session(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(rt.router)
+    seen = []
+    orig = rt.RealtimeSession.__init__
+
+    def spy(self, *a, **k):
+        orig(self, *a, **k)
+        seen.append(self)
+
+    monkeypatch.setattr(rt.RealtimeSession, "__init__", spy)
+    with TestClient(app).websocket_connect("/v1/realtime?intent=transcription") as ws:
+        assert ws.receive_json()["type"] == "session.created"
+        assert seen[0]._secret_kind == "transcription"

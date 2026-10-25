@@ -21,9 +21,21 @@ def test_tmpprefix_under_run_tmp(tmp_path):
     assert env["TMPPREFIX"].startswith(str(tmp_path))
 
 
+def _sandbox_usable() -> bool:
+    """sandbox-exec exists and may apply a profile here (it refuses inside an already sandboxed process)."""
+    if not Path("/usr/bin/sandbox-exec").exists() or not Path("/bin/zsh").exists():
+        return False
+    probe = subprocess.run(
+        ["/usr/bin/sandbox-exec", "-p", "(version 1)(allow default)", "/usr/bin/true"],
+        capture_output=True,
+        check=False,
+    )
+    return probe.returncode == 0
+
+
 @pytest.mark.skipif(
-    not Path("/usr/bin/sandbox-exec").exists() or not Path("/bin/zsh").exists(),
-    reason="macOS only",
+    not _sandbox_usable(),
+    reason="sandbox-exec unavailable here (not macOS, or nested inside another sandbox)",
 )
 def test_zsh_heredoc_works_in_sandbox(tmp_path):
     home = tmp_path / "home"

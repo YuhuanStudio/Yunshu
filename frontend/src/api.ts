@@ -88,6 +88,8 @@ export interface EngineStatus {
   version: string;
   state: string;
   uptime_s: number;
+  /** True when the engine runs in observe mode (YUNSHU_OBSERVE): every observability feature is on. */
+  observe?: boolean;
   load_error: string | null;
   models: EngineModelStatus[];
   memory: EngineMemoryStatus;

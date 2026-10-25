@@ -22,6 +22,7 @@ const shell: Shape<typeof zh> = {
   "engine.headline.shortPrefill": "预填充中",
   "engine.headline.prefillNoSpeed": "预填充中，尚未报告速度",
   "engine.headline.prefillCached": "最近一笔命中缓存，没有实际预填",
+  "engine.headline.shortCached": "全部命中缓存",
   "engine.headline.idle": "空闲",
   "engine.headline.none": "暂无已完成的请求",
   "engine.live.offline": "离线",

@@ -69,6 +69,7 @@ Everything Yunshu serves, grouped. Each row links to the guide with an example a
 | [Model support](docs/guides/MODEL_SUPPORT.md) | what is tuned, generic and validated, per family |
 | [Next-turn rehearsal](docs/guides/INFERENCE.md) | Canonical stride APC rehearsal after eligible text replies; boundary/exact are explicit numeric-changing opt-ins |
 | [Batch-to-lane promotion](docs/guides/INFERENCE.md) | An eligible greedy request moves to speculation when the shared batch drains to one row; multi-row speculation is not implemented |
+| [Orphan adoption](docs/guides/INFERENCE.md) | A generation whose client timed out is kept for 120 s; the identical retry (streaming or not) attaches to it instead of recomputing |
 
 **APIs**
 

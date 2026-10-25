@@ -128,6 +128,8 @@ _add("YUNSHU_UNCACHED_SCHEDULING", "bool", True, "Order VLM canonical prefill at
 _add("YUNSHU_AUXILIARY_SCHEDULING", "bool", True, "Deprioritize captured opencode title requests: interactive VLM jobs run first; auxiliary rows pause between GPU slices and never read or write APC. Unknown fingerprints keep normal scheduling. Defaults on only with engaged qualified batch-invariant kernels; other backends require explicit opt-in. Disable to restore ordinary scheduling. In-flight GPU operations cannot be interrupted.", "server")
 _add("YUNSHU_QUEUE_LIMIT", "int", 64, "Generation requests (chat, completions, messages, responses) in flight at once, running and waiting together. The next one is refused at once with 429, `Retry-After` and the queue depth in `error.x_yunshu` instead of waiting without bound. 0 = no limit.", "server", minimum=0)
 _add("YUNSHU_MEMORY_PRESSURE_REJECT", "float", 0.95, "Share of the Metal working set (MLX active memory / recommended working set) above which, while other requests are running, a new generation request is refused with 503 and `Retry-After` (it would OOM the process). An idle server never refuses. 0 = off.", "server", minimum=0.0)
+_add("YUNSHU_ORPHAN_GRACE_SECONDS", "float", 120.0, "Orphan adoption: when a client disconnects mid-generation (an agent timing out a long streamed reply), keep that generation running for this many seconds instead of cancelling it. An identical request (same model, messages, tools, constraints and sampling parameters, streaming or not) arriving inside the window is attached to it: the tokens already generated replay at once and the rest follow live, so the work is never repeated. Two live identical requests are never merged. A cancel request or deadline still stops at once; unadopted generations are cancelled when the window ends. Observed: Claude Code re-sends 5 s to 14 min after cutting a stream. 0 = cancel at disconnect.", "server", minimum=0.0)
+_add("YUNSHU_ORPHAN_MAX", "int", 2, "Most orphaned generations kept at once (each still holds its decode row and KV until adopted or expired; the oldest is cancelled beyond this).", "server", minimum=1)
 _add("YUNSHU_COMPLETION_BATCH_SIZE", "int", 32, "Text engine: maximum sequences decoded together.", "server", minimum=1)
 _add("YUNSHU_SAMPLING_DEFAULTS", "enum", "model", "Where a request that omits a sampling parameter gets it: 'model' (the model's published per-mode recommendation, then its generation_config.json, then the API default) or 'api' (the official API default only: temperature 1.0, top_p 1.0, others off). A value in the request always wins.", "server", choices=("model", "api"))
 _add("YUNSHU_DEFAULT_MAX_TOKENS", "int", 0, "Operator cap on the output length of a chat / responses request that omits max_tokens / max_output_tokens. 0 (default) = the model's output limit (262144, Qwen3.8 card: thinking mode), which the API specs define as the default; the context window still clamps it (x_yunshu.budget reports the effective value and its source). A positive value lowers the default only; an explicit request value is never capped by it.", "server", minimum=0)
@@ -163,6 +165,7 @@ _add("YUNSHU_COMPACT_MAX_TOKENS", "int", 2048, "Responses compaction: maximum to
 _add("YUNSHU_HOST", "str", "127.0.0.1", "Bind host of `yunshu serve` (`--host` wins). 127.0.0.1 serves this Mac only; 0.0.0.0 also serves the local network (set YUNSHU_AUTH_TOKEN then).", "auth")
 _add("YUNSHU_AUTH_TOKEN", "str", None, "Bearer token. When set, every request except health/version/docs needs it; unset: inference is open and operational endpoints are denied.", "auth", secret=True)
 _add("YUNSHU_AUTH_DISABLED", "bool", False, "Disable auth entirely (operational endpoints open too). Local development only.", "auth")
+_add("YUNSHU_OBSERVE", "bool", False, "Observe mode (`yunshu serve --observe`): turn on every observability feature you did not set yourself: /debug/* routes, host telemetry, the serve log, the audit log file (~/.yunshu/logs/audit.log), exact token ids in logprobs, and the generation capture file (~/.yunshu/logs/stream_capture.jsonl). A value you set explicitly (flag, env, config file) always wins and shows its own source; the others show source 'observe'. Costs: telemetry adds about +1.8% follow-up TTFT at 1K (27B A/B), the logs and capture write small files; keep it off for speed benchmarks. Without a token, /debug/* answers loopback clients only.", "observability")
 _add("YUNSHU_DEBUG_ROUTES", "bool", False, "Mount the /debug/* diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or YUNSHU_AUTH_DISABLED. /metrics is always mounted.", "observability")
 _add("YUNSHU_DEBUG_TREE_PROFILE", "bool", False, "Debugging aid: time every stage of the DFlash tree verify (GDN mixer, attention, MLP, residual norms, commit) by evaluating after each one, and log the per-round means when a request ends. The sync after each stage lengthens the round; the split is for finding the dominant stage, not for speed.", "observability")
 _add("YUNSHU_DEBUG_STREAM_CAPTURE", "path", None, "Debugging aid: append one JSON line per VLM-runner generation to this file with the generated token ids, the text pieces the engine handed to the gateway and their joined text, so a delivered answer can be compared with what was generated (soak invariant check). Off when unset.", "observability", stability="internal")
@@ -371,6 +374,8 @@ _LIVE = frozenset(
         "YUNSHU_QUEUE_LIMIT",
         "YUNSHU_MEMORY_PRESSURE_REJECT",
         "YUNSHU_MAX_PREFILL_TOKENS",
+        "YUNSHU_ORPHAN_GRACE_SECONDS",
+        "YUNSHU_ORPHAN_MAX",
         "YUNSHU_WS_MAX_INFLIGHT",
         "YUNSHU_WS_PING_INTERVAL",
         "YUNSHU_WS_SEND_QUEUE",
@@ -526,6 +531,7 @@ _RESTART = frozenset(
         "YUNSHU_MAX_REQUEST_SIZE",
         "YUNSHU_SLOW_REQUEST_THRESHOLD",
         "YUNSHU_RESPONSE_CACHE",
+        "YUNSHU_OBSERVE",
         "YUNSHU_DEBUG_ROUTES",
         "YUNSHU_RATE_LIMIT_RPM",
         "YUNSHU_TRUSTED_PROXIES",
@@ -728,8 +734,43 @@ def write_config_value(name: str, value: Any | None, path: Path | None = None) -
     return write_config_values({name: value}, path)
 
 
+def _observe_values() -> dict[str, str]:
+    base = str(Path.home() / ".yunshu" / "logs")
+    return {
+        "YUNSHU_DEBUG_ROUTES": "1",
+        "YUNSHU_TELEMETRY": "on",
+        "YUNSHU_SERVE_LOG": "1",
+        "YUNSHU_AUDIT_LOG_FILE": os.path.join(base, "audit.log"),
+        "YUNSHU_REPLAY_TOKEN_IDS": "1",
+        "YUNSHU_DEBUG_STREAM_CAPTURE": os.path.join(base, "stream_capture.jsonl"),
+    }
+
+
+OBSERVE_SETTINGS = (
+    "YUNSHU_DEBUG_ROUTES",
+    "YUNSHU_TELEMETRY",
+    "YUNSHU_SERVE_LOG",
+    "YUNSHU_AUDIT_LOG_FILE",
+    "YUNSHU_REPLAY_TOKEN_IDS",
+    "YUNSHU_DEBUG_STREAM_CAPTURE",
+)
+
+
 def raw(name: str) -> tuple[str | None, str]:
-    """``(text, source)`` for a setting; source is cli / env / file / default."""
+    """``(text, source)`` for a setting; source is cli / env / file / observe / default.
+
+    ``observe`` is the value ``YUNSHU_OBSERVE`` gives an observability setting
+    nobody set explicitly (one place, so every reader sees the same value).
+    """
+    text, source = _raw(name)
+    if source == "default" and name in OBSERVE_SETTINGS:
+        obs_text, _ = _raw("YUNSHU_OBSERVE")
+        if obs_text is not None and obs_text.strip().lower() in _TRUE:
+            return _observe_values()[name], "observe"
+    return text, source
+
+
+def _raw(name: str) -> tuple[str | None, str]:
     s = _setting(name)
     if name in _overrides:
         return _overrides[name], "cli"

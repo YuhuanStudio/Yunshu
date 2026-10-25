@@ -255,6 +255,14 @@ class Srv:
                 str(self.home / "snap"),
                 "--no-update-check",
             ]
+        # A watched engine always runs in observe mode; TFB_OBSERVE=0 (or an explicit
+        # YUNSHU_OBSERVE via --env) keeps a pure timing run free of telemetry.
+        is_yunshu = engine == "yunshu" or (
+            bench_engines.is_new_engine(engine)
+            and bench_engines.ENGINES[engine].kind == "yunshu"
+        )
+        if is_yunshu and os.environ.get("TFB_OBSERVE", "1") != "0":
+            env.setdefault("YUNSHU_OBSERVE", "1")
         self.cmd = cmd
         baseline_used = (
             host_used_bytes()

@@ -64,6 +64,7 @@ Yunshu 提供的所有能力，分组列出。每一行链接到有示例与限�
 | [模型支持](docs/guides/MODEL_SUPPORT.md) | 各系列哪些是调校、通用与已验证 |
 | [下一轮预填](docs/guides/INFERENCE.md) | 符合条件的文本回复以标准 stride 边界预填 APC；boundary/exact 会改变数值运算，须明确选用 |
 | [单请求转入推测路径](docs/guides/INFERENCE.md) | 共享批次剩下一个符合条件的贪婪请求时转入推测；尚无多行推测 |
+| [孤儿请求接手](docs/guides/INFERENCE.md) | 客户端超时断开的生成会保留 120 秒；相同的重发请求（流式或非流式）直接接手，不重算 |
 
 **API**
 

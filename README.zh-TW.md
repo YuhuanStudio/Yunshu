@@ -64,6 +64,7 @@ Yunshu 提供的所有能力，分組列出。每一列連到有範例與限制�
 | [模型支援](docs/guides/MODEL_SUPPORT.md) | 各系列哪些是調校、通用與已驗證 |
 | [下一輪預填](docs/guides/INFERENCE.md) | 符合條件的文字回覆以標準 stride 邊界預填 APC；boundary/exact 會改變數值運算，須明確選用 |
 | [單請求轉入推測路徑](docs/guides/INFERENCE.md) | 共享批次剩下一個符合條件的貪婪請求時轉入推測；尚無多列推測 |
+| [孤兒請求接手](docs/guides/INFERENCE.md) | 客戶端逾時斷線的生成會保留 120 秒；相同的重送請求（串流或非串流）直接接手，不重算 |
 
 **API**
 

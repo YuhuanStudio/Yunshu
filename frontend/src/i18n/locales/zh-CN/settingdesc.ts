@@ -24,6 +24,10 @@ const settingdesc = {
     "降低已识别的 opencode 标题请求的优先级：交互式 VLM 任务先运行，辅助行在 GPU 时间片之间暂停，且不读写 APC。仅在合格的批不变内核下默认开启，其他后端需显式启用；进行中的 GPU 运算无法中断。",
   YUNSHU_QUEUE_LIMIT:
     "同时进行的生成请求数（运行中与等待中合计）；超出时立即以 429 拒绝，并在 `error.x_yunshu` 中附带 `Retry-After` 和队列深度。0 表示不限制。",
+  YUNSHU_ORPHAN_GRACE_SECONDS:
+    "客户端在生成途中断开（例如代理程序对长流式回复超时）时，把该生成再保留这么多秒。窗口内相同的请求（流式或非流式）会直接接手：已生成的 token 立即重放，其余实时接续，不重复计算。无人接手则在窗口结束时取消；明确的取消仍立即停止。0 表示断开即取消。",
+  YUNSHU_ORPHAN_MAX:
+    "同时保留的孤儿生成上限；每个都占用解码行与 KV，直到被接手或超时。超出时取消最旧的。",
   YUNSHU_MEMORY_PRESSURE_REJECT:
     "Metal 工作集使用比例的阈值；超过时若仍有其他请求在运行，新的生成请求会以 503 和 `Retry-After` 拒绝，以避免内存不足。空闲的服务器不会拒绝。0 表示关闭。",
   YUNSHU_COMPLETION_BATCH_SIZE: "文本引擎：一起解码的序列数上限。",
@@ -85,6 +89,8 @@ const settingdesc = {
     "完全禁用认证（运维类端点也会开放），仅供本地开发使用。",
   YUNSHU_DEBUG_TREE_PROFILE:
     "调试用：为 DFlash 树验证的每个阶段（GDN、注意力、MLP、归一化、提交）计时，请求结束时记录每轮平均。每个阶段后都会同步，因此会拖慢解码；只用来找出最耗时的阶段。",
+  YUNSHU_OBSERVE:
+    "观察模式（`yunshu serve --observe`）：未明确设置的观测功能一次全开——/debug/* 路由、主机遥测、服务日志、审计日志文件、logprobs 的 token id、生成捕获文件。明确设置的值优先。遥测约使 1K 后续 TTFT 增加 1.8%；速度基准测试请关闭。无令牌时 /debug/* 仅限本机。",
   YUNSHU_DEBUG_ROUTES:
     "挂载 `/debug/*` 诊断路由（engine、system、kv-cache、spec-decode 等），需要认证令牌或 `YUNSHU_AUTH_DISABLED`；`/metrics` 始终挂载。",
   YUNSHU_DEBUG_STREAM_CAPTURE:

@@ -8,6 +8,16 @@ from types import SimpleNamespace
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _private_environ(monkeypatch):
+    """gaptable.run() sets TMPDIR / TFB_* for its own process; inside the test process those would leak into later
+    tests on the same xdist worker (a deleted TMPDIR broke MLX and the zsh sandbox tests in ci-local)."""
+    import os
+
+    monkeypatch.setattr(os, "environ", os.environ.copy())
+
+
 ROOT = Path(__file__).parents[2]
 
 
