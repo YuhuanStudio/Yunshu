@@ -41,6 +41,7 @@ def main() -> int:
     a = ap.parse_args()
     b = body(a.model, 7, 16, a.ctx_chars, True)
     b["stream"] = False
+    b.pop("stream_options", None)
     r = httpx.post(a.url + "/v1/chat/completions", json=b, timeout=1800.0)
     try:
         payload = r.json()
