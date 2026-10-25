@@ -479,3 +479,15 @@ def test_effort_none_and_absent_anthropic_thinking_use_the_non_thinking_profile(
         req = _build(kind, reasoning_effort="none")
         sd.resolve_sampling(req)
         assert req.temperature == 0.7 and req.presence_penalty == 1.5
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_greedy_keeps_neutral_penalties(kind, named):
+    # Greedy is not sampling: the card's non-thinking presence_penalty 1.5 must not apply (it changed greedy text and
+    # disabled the fast tree; release gate serve-27b 2026-10-25). Other fields stay per-field.
+    named(Q38)
+    req = _build(kind, temperature=0.0, enable_thinking=False)
+    sd.resolve_sampling(req)
+    assert req.temperature == 0.0
+    if hasattr(req, "presence_penalty"):
+        assert req.presence_penalty == sd.API_DEFAULTS["presence_penalty"]

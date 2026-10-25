@@ -269,6 +269,16 @@ def fill_sampling(
 ) -> dict[str, dict[str, Any]]:
     """Fill the None entries of ``values`` (field -> request value); returns the full per-field report."""
     eff = effective_defaults(model_path, mode)
+    if values.get("temperature") == 0:
+        # Greedy is not sampling, so a card's sampling recipe does not apply to its penalties (user 2026-10-25): a
+        # greedy request keeps the API's neutral penalties instead of the non-thinking presence_penalty 1.5, which
+        # changed greedy text and kept the request off the fast tree (release gate serve-27b: server/in-process 0.68).
+        eff = {
+            f: {"value": API_DEFAULTS[f], "source": "api_default"}
+            if f.endswith("_penalty") and f in API_DEFAULTS
+            else e
+            for f, e in eff.items()
+        }
     report: dict[str, dict[str, Any]] = {}
     for f, v in values.items():
         if v is None:
