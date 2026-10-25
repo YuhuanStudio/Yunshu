@@ -293,8 +293,8 @@ def start(
             )
         split = AneFfn(layers, chosen, cache)
         chunks = measurement.chunks(split)
-        minimum = cal.minimum_rows(chunks)
-        if minimum is None:
+        least = cal.minimum_rows(chunks)
+        if least is None:
             split.close()
             remember(cache, key, cal.Calibration())
             return Outcome(
@@ -308,19 +308,19 @@ def start(
                 "gpu_alone": timings.gpu_alone,
             },
             "chosen_units": chosen,
-            "minimum_rows": minimum,
+            "minimum_rows": least,
             "chunks": {
                 "gpu": [vars(p) for p in chunks.gpu],
                 "functions": [vars(f) for f in chunks.functions],
             },
         }
-        made = cal.Calibration(chosen, minimum, chunks.gpu)
+        made = cal.Calibration(chosen, least, chunks.gpu)
         _take(split, made, cache, key)
         err = split.verify()
         remember(cache, key, made)
         return Outcome(
             "split",
-            f"at share {chosen / n_units:.2f} for chunks of {minimum} rows or more: "
+            f"at share {chosen / n_units:.2f} for chunks of {least} rows or more: "
             f"{chunks.functions[0].split:.1f} ms per 2048-row FFN layer against {chunks.gpu[1].milliseconds:.1f} "
             f"on the GPU alone, {100 * err:.2f}% from the GPU alone (calibrated in "
             f"{time.perf_counter() - started:.1f} s)",

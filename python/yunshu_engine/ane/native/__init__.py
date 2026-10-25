@@ -443,13 +443,13 @@ class PoolSession:
         )
         if bid < 0:
             raise RuntimeError(self._lib.ys_ane_error().decode())
-        return bid
+        return int(bid)
 
     def stride_bytes(self, index: int) -> int:
-        return self._lib.ys_ane_stride(self._handle, index)
+        return int(self._lib.ys_ane_stride(self._handle, index))
 
     def address(self, index: int) -> int:
-        return self._lib.ys_ane_data(self._handle, index)
+        return int(self._lib.ys_ane_data(self._handle, index) or 0)
 
     def alias(self, index: int):
         """MLX array over surface `index` (shape [rows, width], row stride padded)."""
@@ -468,7 +468,7 @@ class PoolSession:
         if not retained:
             raise RuntimeError(self._lib.ys_ane_error().decode())
         owner = _SurfaceOwner(self._lib, retained)
-        view.base._ane_owner = owner
+        view.base._ane_owner = owner  # type: ignore[union-attr]
         return mx.from_dlpack(view, copy=False)
 
     def begin(self, binding: int):
@@ -488,7 +488,7 @@ class PoolSession:
 
     @property
     def reason(self) -> str:
-        return self._lib.ys_ane_pool_reason(self._handle).decode()
+        return str(self._lib.ys_ane_pool_reason(self._handle).decode())
 
     def retire(self, why: str) -> None:
         self._lib.ys_ane_pool_retire(self._handle, why.encode())

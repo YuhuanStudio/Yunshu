@@ -15,9 +15,10 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -48,20 +49,20 @@ class AneRetired(RuntimeError):  # noqa: N818
 class QProj:
     """A quantized projection: MLX layout (w, s, b) or Yunshu's tiled layout (w tiled, sbt pairs)."""
 
-    w: object
-    s: object
-    b: object
+    w: Any
+    s: Any
+    b: Any
     bits: int
     gs: int
     out: int
     inp: int
     tiled: bool = False
-    sbt: object = None
+    sbt: Any = None
 
-    def kernel_args(self):
+    def kernel_args(self) -> tuple[Any, Any, Any]:
         return (self.w, self.sbt, self.sbt) if self.tiled else (self.w, self.s, self.b)
 
-    def template(self):
+    def template(self) -> list[tuple[str, int]]:
         return [("TILED", int(self.tiled)), ("NROWS", self.out)]
 
 
@@ -256,7 +257,7 @@ class AneFfn:
         self.maximum_rows = max(self.rows)
         self.minimum_rows = self.rows[0]
         self.breaker = cal.Breaker()
-        self.lost = None
+        self.lost: Callable[[], None] | None = None
         self.served_commands = 0
         self.served_evaluations = 0
         self.served_ms = 0.0
@@ -267,7 +268,7 @@ class AneFfn:
         self._committed_rows = 0
         self._unfinished = False
         self._warned = False
-        self.prof: dict | None = None
+        self.prof: defaultdict[str, float] | None = None
         self.timeline: list = []
         self.ticket_times: list = []
         self.memory = prog.allocate(self.shape, self.maximum_rows)
@@ -495,11 +496,11 @@ class AneFfn:
         return self.shape.ane / self.shape.intermediate
 
     def retired(self) -> bool:
-        return self.pool.retired
+        return bool(self.pool.retired)
 
     @property
     def reason(self) -> str:
-        return self.pool.reason
+        return str(self.pool.reason)
 
     def splits(self, rows: int) -> bool:
         return self.minimum_rows <= rows <= self.maximum_rows and not self.retired()
@@ -550,7 +551,7 @@ class AneFfn:
         s = layer & 1
         pre = []
         clock = self.prof
-        stamp = None
+        stamp: dict[str, Any] = {}
         if clock is not None:
             clock["t0"] = time.perf_counter()
             stamp = {"layer": layer, "enter": _uptime_ms()}
@@ -636,7 +637,7 @@ class AneFfn:
             t.close()
         self._tickets, self._statuses = [], []
         self._unfinished = False
-        if not ok:
+        if not ok or ran is None:
             self._warn()
             return False
         if self._committed_evals:

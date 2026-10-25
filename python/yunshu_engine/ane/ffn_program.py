@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
@@ -57,7 +58,7 @@ def hadamard(n: int) -> np.ndarray:
 
 def rotation_matrix(n: int, signs: np.ndarray) -> np.ndarray:
     """R = diag(sign[:n]) H / sqrt(n)."""
-    return (signs[:n, None] * hadamard(n) / math.sqrt(n)).astype(np.float32)
+    return np.asarray(signs[:n, None] * hadamard(n) / math.sqrt(n), dtype=np.float32)
 
 
 def rotation_weight(channels: int, signs: np.ndarray) -> np.ndarray:
@@ -164,9 +165,9 @@ class Memory:
     shape: Shape
     surfaces: list[Surf] = field(default_factory=list)
     inputs: list[Surf] = field(default_factory=list)
-    token_scale: Surf | None = None
-    partial: Surf | None = None
-    sets: list[dict] = field(default_factory=list)
+    token_scale: Surf = None  # type: ignore[assignment]  # set by allocate()
+    partial: Surf = None  # type: ignore[assignment]
+    sets: list[dict[str, Any]] = field(default_factory=list)
 
     def add(self, name: str, element: str, rows: int, width: int) -> Surf:
         s = Surf(name, element, rows, width, len(self.surfaces))
@@ -182,7 +183,7 @@ def allocate(shape: Shape, maximum_rows: int = MAXIMUM_ROWS) -> Memory:
     m.token_scale = m.add("tx", "fp16", 1, maximum_rows)
     m.partial = m.add("partial", "fp16", shape.hidden + 1, maximum_rows)
     for s in range(2):
-        w = {"gate": [], "up": [], "down": []}
+        w: dict[str, Any] = {"gate": [], "up": [], "down": []}
         for k in range(segs):
             w["gate"].append(m.add(f"wg{k}.{s}", "int8", shape.ane, SEGMENT))
             w["up"].append(m.add(f"wu{k}.{s}", "int8", shape.ane, SEGMENT))
