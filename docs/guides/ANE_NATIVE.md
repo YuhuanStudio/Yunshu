@@ -1,8 +1,9 @@
 # Native ANE phase 1
 
-`yunshu_engine.ane.native` is an optional research runtime. It has no serving
-importer, user setting, automatic split, or claim of qualified lossless arithmetic.
-The existing GPU paths remain the serving paths.
+`yunshu_engine.ane.native` is the optional native runtime under the opt-in, lossy
+[Neural Engine FFN split](ANE_FFN_SPLIT.md) (`YUNSHU_ANE_FFN_SPLIT=splash`). The sections
+below record the phase-1 research: the fp16 and constant-int8 programs it measured, none of
+which is a serving path or a claim of lossless arithmetic. The GPU paths remain the default.
 
 `NativeSession.try_create` builds a small Objective-C++ dylib using `clang++` on
 first use, in an explicitly supplied cache directory. No Xcode project, Core ML
