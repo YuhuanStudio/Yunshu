@@ -8,6 +8,7 @@ the ratio to the 1-row call: a flat ratio means the rows share the weight pass, 
 """
 
 import argparse
+import copy
 import json
 import statistics
 import sys
@@ -59,9 +60,7 @@ def main():
         copies = max(2, min(64, a.target_mb * 2**20 // nbytes))
         qs = []
         for c in range(copies):
-            q = nn.QuantizedLinear.from_linear(
-                nn.Linear(2, 64, bias=False), group_size=64, bits=4
-            )
+            q = copy.copy(base)
             q.weight = mx.contiguous(
                 base.weight ^ mx.array(c * 2654435761 % 2**32, dtype=mx.uint32)
             )

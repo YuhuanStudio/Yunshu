@@ -80,3 +80,31 @@ def test_singleton_probe_ratio():
     ps = importlib.util.module_from_spec(spec5)
     spec5.loader.exec_module(ps)
     assert ps.per_row_ratio({1: 10.0, 4: 40.0, 16: 20.0}) == {1: 1.0, 4: 4.0, 16: 2.0}
+
+
+def test_op_order_emulators():
+    import numpy as np
+
+    spec6 = importlib.util.spec_from_file_location(
+        "probe_op_order", PROBE.with_name("probe_op_order.py")
+    )
+    po = importlib.util.module_from_spec(spec6)
+    spec6.loader.exec_module(po)
+    rng = np.random.default_rng(1)
+    codes = rng.integers(0, 16, (32, 64))
+    packed = po.pack_codes(codes)
+    assert packed.shape == (32 * 32,)
+    assert packed[0] == (codes[0, 0] | (codes[0, 1] << 4))
+    x = rng.integers(-8, 9, (16, 64)).astype(
+        np.float32
+    )  # integer data: every order is exact
+    prod = po.products(x, codes)
+    ref = po.exact(prod)
+    assert all(np.array_equal(fn(prod), ref) for fn in po.HYPOTHESES.values())
+    scores = po.compare(ref, x, codes)
+    assert set(scores) == set(po.HYPOTHESES) and all(v == 1.0 for v in scores.values())
+    # float data separates the orders: sequential is not the correctly rounded sum
+    y = (rng.standard_normal((16, 64)) * np.exp(rng.uniform(-6, 6, (16, 64)))).astype(
+        np.float32
+    )
+    assert po.compare(po.exact(po.products(y, codes)), y, codes)["sequential"] < 1.0
