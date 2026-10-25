@@ -65,13 +65,25 @@ def run_one(
     usage = None
     finish = None
     digest = hashlib.sha256()
+    queue_reasons: set = set()
+    xy = None
     with httpx.Client(timeout=httpx.Timeout(1800.0)) as c:
         with c.stream("POST", url + "/v1/chat/completions", json=b) as r:
             r.raise_for_status()
             for line in r.iter_lines():
+                if line.startswith(": yunshu-progress"):
+                    try:
+                        prog = json.loads(line.split("yunshu-progress", 1)[1])
+                    except ValueError:
+                        prog = {}
+                    if prog.get("queue_reason"):
+                        queue_reasons.add(prog["queue_reason"])
+                    continue
                 if not line.startswith("data: ") or line == "data: [DONE]":
                     continue
                 d = json.loads(line[6:])
+                if d.get("x_yunshu"):
+                    xy = d["x_yunshu"]
                 if d.get("usage"):
                     usage = d["usage"]
                 for ch in d.get("choices") or []:
@@ -106,7 +118,8 @@ def run_one(
                 "completion_tokens": usage.get("completion_tokens"),
                 "finish": finish,
                 "text_sha": digest.hexdigest()[:16],
-                "x_yunshu": usage.get("x_yunshu"),
+                "x_yunshu": usage.get("x_yunshu") or xy,
+                "queue_reasons": sorted(queue_reasons),
                 "token_times": [round(t - t_zero, 3) for t in times],
             }
         )

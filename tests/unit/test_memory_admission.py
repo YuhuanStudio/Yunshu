@@ -38,6 +38,7 @@ def make_gate(readings, reserve_gib=6.0):
         kv_per_token=ma.kv_bytes_per_token(CONFIG),
         act_per_token=ma.activation_bytes_per_token(CONFIG),
         reserve_bytes=int(reserve_gib * GIB),
+        attn_heads=24,
         read=lambda: state["h"],
         ttl_s=0.0,
     )
@@ -85,6 +86,17 @@ def test_plan_load_refuses_when_minimum_does_not_fit_and_names_view(tmp_path):
     (tmp_path / "m-ple-ssd").mkdir()
     plan = ma.plan_load(64 * GIB, 70 * GIB, 8.0, model_path=raw)
     assert plan.error and "m-ple-ssd" in plan.error and plan.apc_gb == 0.0
+
+
+def test_estimate_counts_kv_and_chunk_attention_workspace():
+    gate = ma.MemoryGate(
+        kv_per_token=1000, act_per_token=10, attn_heads=24, reserve_bytes=0
+    )
+    n = 52_000
+    want = (n + 100) * 1000 + 2048 * 10 + 2048 * n * 24 * 2
+    assert gate.estimate(n, 100) == want
+    # a cached prefix shrinks the chunk, never below zero
+    assert gate.estimate(n, 100, cached_tokens=n) == (n + 100) * 1000
 
 
 def test_gate_idle_server_always_admits():
@@ -176,7 +188,7 @@ def test_runner_holds_then_admits_and_reports_wait():
     r = _runner(gate)
     running = _job(10_000, 2000)
     assert r._memory_wait(running, []) is False  # idle: admitted
-    waiting = _job(200_000, 1000)  # ~ 3 GiB KV: 7 - 3 < 6
+    waiting = _job(20_000, 1000)  # ~0.5 GiB KV + 2.3 GiB scores: 7 - 2.8 < 6
     assert r._memory_wait(waiting, [running]) is True
     assert (
         waiting.stats.queue_reason == "memory" and "GiB" in waiting.stats.queue_detail

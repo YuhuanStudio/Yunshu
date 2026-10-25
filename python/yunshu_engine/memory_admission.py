@@ -242,7 +242,8 @@ class MemoryGate:
         *,
         kv_per_token: int,
         act_per_token: int,
-        reserve_bytes: int,
+        attn_heads: int = 0,
+        reserve_bytes: int = 0,
         reclaimable: Callable[[], int] = lambda: 0,
         ceiling_free: Callable[[], int | None] = lambda: None,
         read: Callable[[], HostMemory | None] = read_host,
@@ -251,6 +252,7 @@ class MemoryGate:
     ) -> None:
         self.kv_per_token = kv_per_token
         self.act_per_token = act_per_token
+        self.attn_heads = attn_heads
         self.reserve = reserve_bytes
         self._reclaimable = reclaimable
         self._ceiling_free = ceiling_free
@@ -285,13 +287,17 @@ class MemoryGate:
     def estimate(
         self, prompt_tokens: int, max_tokens: int, cached_tokens: int = 0
     ) -> int:
-        """KV for the prompt and the output plus the prefill workspace of one chunk."""
+        """KV for the prompt and the output plus the prefill workspace of one chunk: the
+        activations (``act_per_token``) and the attention scores of the chunk against the
+        whole prompt (chunk x prompt x heads x 2 bytes; measured on the 27B: 52K-token prompt,
+        6.2 GiB over the resident state against 5.1 GiB from this formula)."""
         kv = (max(0, prompt_tokens) + max(0, max_tokens)) * self.kv_per_token
-        work = (
-            min(max(0, prompt_tokens - cached_tokens), PREFILL_STEP)
-            * self.act_per_token
+        chunk = min(max(0, prompt_tokens - cached_tokens), PREFILL_STEP)
+        return (
+            kv
+            + chunk * self.act_per_token
+            + chunk * max(0, prompt_tokens) * self.attn_heads * 2
         )
-        return kv + work
 
     def available(self) -> int | None:
         """Bytes the engine can still grow into: host available + reclaimable buffers, bounded
@@ -400,6 +406,9 @@ def build_gate(
     return MemoryGate(
         kv_per_token=kv,
         act_per_token=activation_bytes_per_token(config),
+        attn_heads=int(
+            (config.get("text_config") or config).get("num_attention_heads") or 0
+        ),
         reserve_bytes=reserve,
         reclaimable=reclaimable,
         ceiling_free=ceiling_free,

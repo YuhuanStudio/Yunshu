@@ -22,8 +22,14 @@ trap 'kill -9 $SRV $SAMP 2>/dev/null; rm -rf "${H:?}/.yunshu/cache"' EXIT
 for i in $(seq 1 300); do curl -sf http://127.0.0.1:$PORT/health >/dev/null && break; kill -0 $SRV 2>/dev/null || { echo "server exited"; tail -20 "$OUT/server-$TAG.log"; exit 1; }; sleep 2; done
 curl -sf http://127.0.0.1:$PORT/health >/dev/null
 MODEL=$(curl -s http://127.0.0.1:$PORT/v1/models | "$PY" -c 'import json,sys;print(json.load(sys.stdin)["data"][0]["id"])')
-"$PY" "$WT/scripts/research/conc_probe.py" --url http://127.0.0.1:$PORT --model "$MODEL" \
-  --out "$OUT/$TAG.jsonl" --tokens $TOK --ctx-chars $CTX --only "$ONLY"
-curl -s http://127.0.0.1:$PORT/metrics | grep -E "memory_admission|memory_pressure" > "$OUT/metrics-$TAG.txt" || true
+# CTX may be a space-separated list: the probe runs once per context size (peak memory is
+# cumulative, so ascending sizes give the per-size peak).
+for C in $CTX; do
+  "$PY" "$WT/scripts/research/conc_probe.py" --url http://127.0.0.1:$PORT --model "$MODEL" \
+    --out "$OUT/$TAG.jsonl" --tokens $TOK --ctx-chars $C --only "$ONLY"
+done
+echo '{"complete": true}' >> "$OUT/$TAG.jsonl"
+curl -s http://127.0.0.1:$PORT/metrics > "$OUT/metrics-$TAG.txt" || true
+curl -s http://127.0.0.1:$PORT/v1/yunshu/status > "$OUT/status-$TAG.json" || true
 grep -E "Memory (admission|plan|pressure)|APC RAM budget" "$OUT/server-$TAG.log" | tail -30 || true
 echo "complete: true"
