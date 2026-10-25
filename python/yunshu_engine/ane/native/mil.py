@@ -161,3 +161,118 @@ def scale_program(hidden: int, rows: int):
 }}
 """
     return text, Blob().finish()
+
+
+def w8a8_program(gate, up, down, rows: int, segment: int = 2560, act: bool = True):
+    """Splash-style int8 FFN slice: int8 weights/activations via dequantize+matmul.
+
+    Weights are symmetric per-output-row int8 (scales applied after the matmul);
+    gate/up contract over `segment`-wide hidden pieces, down over the slice's
+    channels. Activations use a fixed int8 grid here (speed probe); production
+    needs per-token scales and the Hadamard rotation. Lossy: a user option.
+    """
+    gate, up, down = (np.asarray(v, dtype=np.float32) for v in (gate, up, down))
+    channels, hidden = gate.shape
+    if up.shape != gate.shape or down.shape != (hidden, channels) or rows <= 0:
+        raise ValueError("MLP weight shape mismatch")
+    if hidden % segment:
+        segment = hidden
+    unit = np.float16(1.0 / 128)
+    blob = Blob()
+    lines = []
+
+    def tensor(dtype, h, w):
+        return f"tensor<{dtype}, [1, 1, {h}, {w}]>"
+
+    def emit(name, h, w, expr, dtype="fp16"):
+        lines.append(f"        {tensor(dtype, h, w)} {name} = {expr};")
+        return name
+
+    def const(name, value):
+        h, w = value.shape
+        dtype = "fp16" if value.dtype == np.float16 else "int8"
+        offset = blob.add(value)
+        emit(
+            name,
+            h,
+            w,
+            f'const()[name = string("{name}"), val = {tensor(dtype, h, w)}'
+            f'(BLOBFILE(path = string("@model_path/weights.bin"), offset = uint64({offset})))]',
+            dtype,
+        )
+
+    def qweight(name, value):
+        scale = np.maximum(np.max(np.abs(value), axis=1, keepdims=True) / 127, 2.0**-24)
+        codes = np.clip(np.rint(value / scale), -127, 127).astype(np.int8)
+        const(name + "q", codes)
+        h, w = value.shape
+        emit(name, h, w, f"dequantize(input = {name}q, scale = fp16({float(unit)}))")
+        return scale.astype(np.float16)
+
+    def matmul(name, w, x, h):
+        emit(
+            name,
+            h,
+            rows,
+            f"matmul(transpose_x = bool(false), transpose_y = bool(false), x = {w}, y = {x})",
+        )
+
+    def aq(name, src, h):
+        # fixed grid: values in [-1, 1) * 2^-4 ... speed probe only
+        emit(name + "s", h, rows, f"mul(x = {src}, y = fp16(64))")
+        lines.append(
+            f"        {tensor('int8', h, rows)} {name}q = quantize(input = {name}s, scale = fp16(1), output_dtype = string(\"int8\"));"
+        )
+        return emit(
+            name, h, rows, f"dequantize(input = {name}q, scale = fp16({float(unit)}))"
+        )
+
+    st, strides = surface_type(hidden, rows)
+    emit("xt", hidden, rows, "tensor_buffer_to_tensor<ios17>(input = x)")
+    xs = []
+    for k in range(hidden // segment):
+        piece = emit(
+            f"xp{k}",
+            segment,
+            rows,
+            f"slice_by_size(x = xt, begin = tensor<int32, [4]>([0, 0, {k * segment}, 0]), size = tensor<int32, [4]>([1, 1, {segment}, {rows}]))",
+        )
+        xs.append(aq(f"xa{k}", piece, segment) if act else piece)
+    outs = {}
+    for proj, w in (("g", gate), ("u", up)):
+        total = None
+        for k in range(hidden // segment):
+            sc = qweight(f"w{proj}{k}", w[:, k * segment : (k + 1) * segment])
+            matmul(f"{proj}m{k}", f"w{proj}{k}", xs[k], channels)
+            if total is None:
+                total = f"{proj}m{k}"
+            else:
+                total = emit(
+                    f"{proj}sum{k}", channels, rows, f"add(x = {total}, y = {proj}m{k})"
+                )
+        const(f"{proj}sc", sc)  # last segment scale; speed probe uses one scale vector
+        outs[proj] = emit(
+            f"{proj}s", channels, rows, f"mul(x = {total}, y = {proj}sc)"
+        )
+    emit("gh", channels, rows, f"mul(x = {outs['g']}, y = fp16(0.5))")
+    emit("th", channels, rows, "tanh(x = gh)")
+    emit("tp", channels, rows, "add(x = th, y = fp16(1))")
+    emit("silu", channels, rows, "mul(x = gh, y = tp)")
+    emit("h", channels, rows, f"mul(x = silu, y = {outs['u']})")
+    hv = aq("ha", "h", channels) if act else "h"
+    qweight("wd", down)
+    matmul("yd", "wd", hv, hidden)
+    const("dsc", np.ones((hidden, 1), dtype=np.float16))
+    emit("yt", hidden, rows, "mul(x = yd, y = dsc)")
+    lines.append(
+        f"        {st} y = tensor_to_tensor_buffer<ios17>(input = yt, "
+        "interleave_factors = tensor<uint8, [4]>([1, 1, 1, 1]), "
+        f"strides = tensor<int64, [4]>({strides}));"
+    )
+    mil = (
+        "program(1.3)\n{\n"
+        + f"    func main<ios18>({st} x) {{\n"
+        + "\n".join(lines)
+        + "\n    } -> (y);\n}\n"
+    )
+    return mil, blob.finish()

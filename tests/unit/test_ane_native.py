@@ -289,3 +289,15 @@ def test_economics_does_not_extrapolate_or_claim_negative_copy_savings(
     assert copied["channels"] == 0 and copied["saving_ms"] == 0
     with pytest.raises(ValueError):
         analysis.measured_curve(10.0, [(64, 1.0, 0.0), (64, 2.0, 0.0)])
+
+
+def test_w8a8_program_uses_int8_dequantize_matmul_segments():
+    import numpy as np
+
+    from yunshu_engine.ane.native.mil import w8a8_program
+
+    rng = np.random.default_rng(0)
+    g = rng.normal(size=(64, 5120)).astype(np.float32)
+    mil, blob = w8a8_program(g, g, g.T.copy(), 128, 2560, True)
+    assert mil.count("quantize(input") >= 3 and mil.count("dequantize(input") >= 8
+    assert "tensor<int8, [1, 1, 64, 2560]>" in mil and len(blob) > 64 * 5120 * 3

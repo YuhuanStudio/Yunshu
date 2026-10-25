@@ -312,7 +312,8 @@ class MlxTicket:
             return False
         if not self._lib.ys_ane_mlx_wait(self._handle):
             self.reason = self._lib.ys_ane_error().decode()
-            self._session.reason = self.reason
+            with suppress(AttributeError):
+                self._session.reason = self.reason
             return False
         return True
 
@@ -321,7 +322,8 @@ class MlxTicket:
             return False
         if not self._lib.ys_ane_mlx_finish(self._handle):
             self.reason = self._lib.ys_ane_error().decode()
-            self._session.reason = self.reason
+            with suppress(AttributeError):
+                self._session.reason = self.reason
             return False
         return True
 
