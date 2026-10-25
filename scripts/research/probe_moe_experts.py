@@ -157,6 +157,27 @@ def main():
         t = bench(mx, lambda aa: experts.expert_down_y(aa, picks, down, sd), act)
         byt = picked_bytes(uniq, per_d, shared_d)
         row["down"] = {"us": t * 1e6, "GBps": byt / t / 1e9, "bytes": byt}
+        # bit-identical interleaved-rows rewrite of the down kernel
+        experts.INTERLEAVE[0] = True
+        y_ilv = experts.expert_down_y(act, picks, down, sd)
+        mx.eval(y_ilv)
+        t_base, t_ilv = [], []
+        for _ in range(3):
+            experts.INTERLEAVE[0] = False
+            t_base.append(
+                bench(mx, lambda aa: experts.expert_down_y(aa, picks, down, sd), act)
+            )
+            experts.INTERLEAVE[0] = True
+            t_ilv.append(
+                bench(mx, lambda aa: experts.expert_down_y(aa, picks, down, sd), act)
+            )
+        experts.INTERLEAVE[0] = False
+        row["down_ilv"] = {
+            "us": statistics.median(t_ilv) * 1e6,
+            "us_base": statistics.median(t_base) * 1e6,
+            "GBps": byt / statistics.median(t_ilv) / 1e9,
+            "equal": bool(mx.array_equal(y_ilv, y).item()),
+        }
         if a.sweep:
             sw = {"router": [], "gateup": [], "down": []}
             for threads, split in (

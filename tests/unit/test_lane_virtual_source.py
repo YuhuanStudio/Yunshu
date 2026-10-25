@@ -91,3 +91,24 @@ def test_epilogue_prefetch_variants_keep_the_op_and_fma(name):
         "part[((s2 - 1)" in src
         and "XS[g * MP" not in src.split("op.run")[1].split("part[")[0]
     )
+
+
+def test_interleaved_down_rows_keep_each_rows_chunk_order():
+    from yunshu_engine.kernels.tf_flash_next import experts
+
+    # same ops per row, only the loop nest differs: the interleaved source has the same load, fma and simd_sum calls
+    for old, new in (
+        (experts._EXPERT_DOWN_Y, experts._EXPERT_DOWN_Y_ILV),
+        (experts._AFFINE_EXPERTS, experts._AFFINE_EXPERTS_ILV),
+    ):
+        assert old != new
+        for token in (
+            "qdot16("
+            if old is experts._EXPERT_DOWN_Y
+            else "lane_codes<BITS, VPT>(w, v0, q)",
+            "simd_sum("
+            if old is experts._EXPERT_DOWN_Y
+            else "fma(float(S[at]), d, float(B[at]) * sums[c])",
+        ):
+            assert token in old and token in new
+    assert experts.INTERLEAVE == [False]

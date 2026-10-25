@@ -267,6 +267,76 @@ _EXPERT_DOWN_Y_Q = r"""
 """
 
 
+# expert_down_y reads 8 output rows a simdgroup; the rows' loads are independent but the loop issues them one row
+# (load, fma chain, simd_sum) at a time, so the kernel is latency-bound. These rewrites run the chunk loop outside
+# and the 8 rows inside: each row's accumulator still adds its chunks in the same order, so every output is
+# bit-identical, with 8 loads outstanding instead of 1.
+_Q4_DOWN_ROWS = """  for (int row = 0; row < 8; row++) {
+    const size_t at = e * D + d0 + row;
+    const device uint8_t* w = (const device uint8_t*)DWp + at * KB;
+    float acc = qdot16(w + lane * 8, xa, float(DSp[at * KG + lane / 2]), float(DBp[at * KG + lane / 2]), sa);
+    if (second)
+      acc += qdot16(w + (32 + lane) * 8, xb, float(DSp[at * KG + (32 + lane) / 2]), float(DBp[at * KG + (32 + lane) / 2]), sb);
+    acc = simd_sum(acc);
+    if (lane == 0) Y[(r * SLOTS + k) * D + d0 + row] = bfloat(acc);
+  }
+"""
+_Q4_DOWN_ROWS_ILV = """  float accs[8];
+  for (int row = 0; row < 8; row++) {
+    const size_t at = e * D + d0 + row;
+    const device uint8_t* w = (const device uint8_t*)DWp + at * KB;
+    accs[row] = qdot16(w + lane * 8, xa, float(DSp[at * KG + lane / 2]), float(DBp[at * KG + lane / 2]), sa);
+  }
+  if (second)
+    for (int row = 0; row < 8; row++) {
+      const size_t at = e * D + d0 + row;
+      const device uint8_t* w = (const device uint8_t*)DWp + at * KB;
+      accs[row] += qdot16(w + (32 + lane) * 8, xb, float(DSp[at * KG + (32 + lane) / 2]), float(DBp[at * KG + (32 + lane) / 2]), sb);
+    }
+  for (int row = 0; row < 8; row++) {
+    const float v = simd_sum(accs[row]);
+    if (lane == 0) Y[(r * SLOTS + k) * D + d0 + row] = bfloat(v);
+  }
+"""
+_DOWN_ROWS = """  for (int row = 0; row < 8; row++) {
+    const device uint8_t* w = (const device uint8_t*)W + (first + row) * RB;
+    float acc = 0.0f;
+    for (int c = 0; c < NC; c++) {
+      const int v0 = (c * 32 + int(lane)) * VPT;
+      if (v0 < NI) {
+        float q[VPT];
+        lane_codes<BITS, VPT>(w, v0, q);
+        float d = 0.0f;
+        for (int i = 0; i < VPT; i++) d = fma(q[i], xv[c][i], d);
+        const size_t at = (first + row) * KG + v0 / GSZ;
+        acc += fma(float(S[at]), d, float(B[at]) * sums[c]);
+      }
+    }
+    out[row] = acc;
+  }
+"""
+_DOWN_ROWS_ILV = """  for (int row = 0; row < 8; row++) out[row] = 0.0f;
+  for (int c = 0; c < NC; c++) {
+    const int v0 = (c * 32 + int(lane)) * VPT;
+    if (v0 < NI) {
+      for (int row = 0; row < 8; row++) {
+        const device uint8_t* w = (const device uint8_t*)W + (first + row) * RB;
+        float q[VPT];
+        lane_codes<BITS, VPT>(w, v0, q);
+        float d = 0.0f;
+        for (int i = 0; i < VPT; i++) d = fma(q[i], xv[c][i], d);
+        const size_t at = (first + row) * KG + v0 / GSZ;
+        out[row] += fma(float(S[at]), d, float(B[at]) * sums[c]);
+      }
+    }
+  }
+"""
+INTERLEAVE = [False]  # expert_down_y with the 8 rows' loads interleaved (bit-identical); off until measured
+assert _Q4_DOWN_ROWS in _EXPERT_DOWN_Y
+_EXPERT_DOWN_Y_ILV = _EXPERT_DOWN_Y.replace(_Q4_DOWN_ROWS, _Q4_DOWN_ROWS_ILV)
+assert _DOWN_ROWS in _AFFINE_EXPERTS
+_AFFINE_EXPERTS_ILV = _AFFINE_EXPERTS.replace(_DOWN_ROWS, _DOWN_ROWS_ILV)
+
 def _format(*linears: Any) -> tuple[int, int]:
     """The one (bits, group size) of linears that a kernel reads together."""
 
@@ -335,9 +405,18 @@ def expert_down_y(act: mx.array, picks: mx.array, down: Any, shared: Any, *, sim
     swb, swg = _format(shared)
     names = ["ACT", "PICK", "DW", "DS", "DB", "SDW", "SDS", "SDB", "rows"]
     if (wb, wg, swb, swg) == (4, 32, 4, 32):
-        run, formats = kernel(*by_rows("q4_expert_down_y", _EXPERT_DOWN_Y, rows), names, ["Y"]), []
+        source = _EXPERT_DOWN_Y_ILV if INTERLEAVE[0] else _EXPERT_DOWN_Y
+        name = "q4_expert_down_y_ilv" if INTERLEAVE[0] else "q4_expert_down_y"
+        run, formats = kernel(*by_rows(name, source, rows), names, ["Y"]), []
     else:
-        run = kernel("qa_expert_down_y", _EXPERT_DOWN_Y_Q, names, ["Y"], header=QDOT_HEADER + _AFFINE_EXPERTS)
+        ilv = INTERLEAVE[0]
+        run = kernel(
+            "qa_expert_down_y_ilv" if ilv else "qa_expert_down_y",
+            _EXPERT_DOWN_Y_Q,
+            names,
+            ["Y"],
+            header=QDOT_HEADER + (_AFFINE_EXPERTS_ILV if ilv else _AFFINE_EXPERTS),
+        )
         formats = [("WB", wb), ("WG", wg), ("SWB", swb), ("SWG", swg)]
     return run(inputs=[act, picks, down.weight, down.scales, down.biases, shared.weight, shared.scales,
                           shared.biases, count(rows)],
