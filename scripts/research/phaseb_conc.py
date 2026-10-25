@@ -10,6 +10,7 @@ import argparse
 import concurrent.futures
 import json
 import shutil
+import statistics
 import time
 from pathlib import Path
 
@@ -70,6 +71,7 @@ def summarize(rows):
                 ttft=r["ttft"],
                 tps=rate(r["times"]),
                 tokens=r["usage"].get("completion_tokens"),
+                prompt_tokens=r["usage"].get("prompt_tokens"),
                 digest=r["digest"],
             )
             for name, r in rows.items()
@@ -150,6 +152,87 @@ def run_cell(server, a, scenario, shape):
     return result
 
 
+def speed_verdict(rows, reps=3, tolerance=0.02):
+    """Require paired repeated cells; medians decide, missing evidence fails."""
+    groups = {}
+    for r in rows:
+        if "scenario" in r:
+            groups.setdefault(
+                (r["ctx_chars"], r["scenario"], r["shape"]), {}
+            ).setdefault(r["arm"], {})[r["rep"]] = r
+    reasons, numbers = [], []
+    if not groups:
+        return ["no Phase B speed cells"], []
+    for key, arms in sorted(groups.items()):
+        if any(set(arms.get(arm, {})) != set(range(reps)) for arm in ("base", "cand")):
+            reasons.append(f"{key}: missing paired repetitions")
+            continue
+
+        def median(arm, name):
+            values = [r["concurrent"][name] for r in arms[arm].values()]
+            return (
+                statistics.median(values)
+                if all(v is not None and v > 0 for v in values)
+                else None
+            )
+
+        base, cand = median("base", "aggregate_tps"), median("cand", "aggregate_tps")
+        numbers.append(dict(cell=key, aggregate_tps=[base, cand]))
+        if base is None or cand is None:
+            reasons.append(f"{key}: missing aggregate rate")
+        elif key[1] == "solo" and cand < base * (1 - tolerance):
+            reasons.append(f"{key}: solo regression {base} -> {cand}")
+        elif key[1] != "solo" and cand <= base:
+            reasons.append(
+                f"{key}: concurrent aggregate did not improve {base} -> {cand}"
+            )
+        names = set(next(iter(arms["base"].values()))["concurrent"]["per_row"])
+        for name in names:
+            rates = {}
+            for arm in ("base", "cand"):
+                values = [
+                    r["concurrent"]["per_row"].get(name, {}).get("tps")
+                    for r in arms[arm].values()
+                ]
+                rates[arm] = (
+                    statistics.median(values)
+                    if all(v is not None and v > 0 for v in values)
+                    else None
+                )
+            if rates["base"] is None or rates["cand"] is None:
+                reasons.append(f"{key}/{name}: missing per-row rate")
+            elif rates["cand"] < rates["base"] * (1 - tolerance):
+                reasons.append(f"{key}/{name}: per-row regression")
+    return reasons, numbers
+
+
+def validate_records(
+    rows,
+    arms=("base", "cand"),
+    scenarios=("solo", "burst2", "burst4", "stagger"),
+    shapes=("greedy", "seeded"),
+):
+    if (
+        not rows
+        or rows[-1].get("complete") is not True
+        or rows[-1].get("success") is not True
+    ):
+        return False, "missing final successful completion record"
+    cells = [r for r in rows if "scenario" in r]
+    expected = {(a, s, h) for a in arms for s in scenarios for h in shapes}
+    actual = {(r.get("arm"), r.get("scenario"), r.get("shape")) for r in cells}
+    if actual != expected or len(cells) != len(expected):
+        return False, "missing or duplicate Phase B cells"
+    for r in cells:
+        for field in ("solo", "concurrent"):
+            per_row = r.get(field, {}).get("per_row", {})
+            if len(per_row) != len(plans(r["scenario"], 128, 12)):
+                return False, "missing request rows"
+            if any(not v.get("digest") for v in per_row.values()):
+                return False, "missing token/logprob digest"
+    return True, ""
+
+
 def main():
     a = parser().parse_args()
     validate(a)
@@ -164,6 +247,7 @@ def main():
         from sampledspec_conc import arm_order
     a.out.parent.mkdir(parents=True, exist_ok=True)
     t.OUT = a.out.parent / (a.out.stem + "-servers")
+    reference = {}
     with a.out.open("x") as out:
 
         def write(row):
@@ -189,6 +273,17 @@ def main():
                 for scenario in a.scenarios:
                     for shape in a.shapes:
                         result = run_cell(server, a, scenario, shape)
+                        if shape != "agent":
+                            key = (scenario, shape)
+                            digests = {
+                                n: r["digest"]
+                                for n, r in result["concurrent"]["per_row"].items()
+                            }
+                            if key in reference and reference[key] != digests:
+                                raise RuntimeError(
+                                    "cross-arm token/logprob identity failed"
+                                )
+                            reference[key] = digests
                         result.update(arm=arm, rep=a.rep, ctx_chars=a.ctx_chars)
                         write(result)
                 if arm != "off":

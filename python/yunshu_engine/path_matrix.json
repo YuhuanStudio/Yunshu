@@ -653,7 +653,7 @@
     },
     "driver": {
      "s": "partial",
-     "why": "MTP and bounded-context DFlash draft per row behind YUNSHU_ROUND_DRIVER; Phase B packed DFlash GPU identity and speed qualification pending; guided rows keep their established path.",
+     "why": "MTP and bounded-context DFlash draft per row behind YUNSHU_ROUND_DRIVER; Phase B packed DFlash GPU identity and speed qualification pending; invariant tool guides draft free text and mask body tokens; other processors retain established paths.",
      "owner": "decode16",
      "impact": "high",
      "ev": [

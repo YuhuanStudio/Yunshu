@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import mlx.core as mx
 
 from .. import dflash_ring, dflash_tree, keyed_sampling, tree_verify
+from ..copy_drafter import CopyDrafter
 from ..dflash_context import context_window
 from ..dflash_fast import Verifier, prepare
 from ..dflash_plan import FastShape, reorder, search_tree
@@ -45,6 +46,7 @@ class DFlashBatch:
         self.rows = []
         self.hidden = {}
         self.rings = {}
+        self.copiers = {}
         self.turn = 0
         logger.info(
             "Round driver DFlash packed: shared 32-node budget, context=%d", self.keep
@@ -73,6 +75,13 @@ class DFlashBatch:
             if count:
                 ring.append(self.draft, hidden, mx.array([count], dtype=mx.int32))
             self.rings[id(row)] = ring
+            from ..mtp_lane import copy_rows_for_model
+
+            copy_rows = min(copy_rows_for_model(self.lm), tree_verify.FAST_MAX_ROWS)
+            if copy_rows >= 3:
+                copier = CopyDrafter(max_draft=copy_rows - 1)
+                copier.extend(row.context)
+                self.copiers[id(row)] = copier
             row.slot = id(row)
             self.rows.append(row)
             tree_verify.reserve_decode(row.cache, row.req.max_tokens + 32)
@@ -83,6 +92,7 @@ class DFlashBatch:
         for row in rows:
             row.slot = None
             self.rings.pop(id(row), None)
+            self.copiers.pop(id(row), None)
             self.hidden.pop(id(row), None)
 
     def arrays(self):
@@ -119,15 +129,31 @@ class DFlashBatch:
     def _step_rows(self, driver, rows) -> list[Event]:
         from .driver import _Item
 
-        rooms = [
-            min(15, max(0, r.req.max_tokens - r.generated - 1))
-            if r.drafting and not r.force
-            else 0
-            for r in rows
-        ]
+        copies = {}
+        rooms = []
+        for b, r in enumerate(rows):
+            room = max(0, r.req.max_tokens - r.generated - 1)
+            if (
+                not r.drafting
+                or r.force
+                or (r.req.guide is not None and r.req.guide.constrained)
+            ):
+                rooms.append(0)
+                continue
+            copier = self.copiers.get(id(r))
+            copied = (
+                copier.draft(min(copier.max_draft, room)) if copier is not None else []
+            )
+            if copied and (
+                r.generated == 1 or copier.last_match < copier.cfg.confident_match
+            ):
+                copied = copied[:15]
+            if copied:
+                copies[b] = copied
+            rooms.append(len(copied) if copied else min(15, room))
         nodes = fair_nodes(rooms, turn=self.turn)
         self.turn += 1
-        live = [b for b, n in enumerate(nodes) if n]
+        live = [b for b, n in enumerate(nodes) if n and b not in copies]
         proposals = {}
         if live:
             hs = dflash_ring.draft_hidden_batch(
@@ -151,6 +177,16 @@ class DFlashBatch:
                     mx.concatenate([mx.array([r.pending], dtype=mx.int32), toks])[None],
                     FastShape(parents, 15, original_ranks=ranks),
                 )
+        for b, copied in copies.items():
+            count = nodes[b]
+            if count:
+                copied = copied[:count]
+                proposals[b] = (
+                    mx.array([[rows[b].pending, *copied]], dtype=mx.int32),
+                    FastShape(
+                        mx.arange(-1, count, dtype=mx.int32), count, is_chain=True
+                    ),
+                )
         windows = []
         for b, r in enumerate(rows):
             tokens, shape = proposals.get(
@@ -169,7 +205,11 @@ class DFlashBatch:
             for r, w, res in zip(rows, windows, results, strict=True):
                 row_logits = packed_logits[at : at + w.shape.width]
                 at += w.shape.width
-                if not r.drafting or r.force:
+                if (
+                    not r.drafting
+                    or r.force
+                    or (r.req.guide is not None and r.req.guide.constrained)
+                ):
                     it = _Item("d", r, at=0, count=1)
                     _, targets, extra = driver._draw(
                         [it], res.hidden[0], target_logits=row_logits
@@ -186,8 +226,8 @@ class DFlashBatch:
                     draws.append((targets, lp, None))
             mx.async_eval(*[d[0] for d in draws])
             events: list[Event] = []
-            for r, w, res, (target, lp, extra), n in zip(
-                rows, windows, results, draws, nodes, strict=True
+            for b, (r, w, res, (target, lp, extra), n) in enumerate(
+                zip(rows, windows, results, draws, nodes, strict=True)
             ):
                 toks = w.tokens.reshape(-1).tolist()
                 parents = w.shape.parents_array().tolist()
@@ -208,12 +248,23 @@ class DFlashBatch:
                                 mx.take_along_axis(lp[p : p + 1], idx, axis=-1),
                             ]
                     used += driver._emit(r, [int(token)], emit_extra, events)
-                    if r.finished or r.force:
+                    if (
+                        r.finished
+                        or r.force
+                        or (r.req.guide is not None and r.req.guide.constrained)
+                    ):
                         break
                 kept = path[:used]
                 tree_verify.tree_commit(self.lm, r.cache, res, kept)
                 committed_rows.add(id(r))
                 r.n += used
+                copier = self.copiers.get(id(r))
+                if copier is not None:
+                    copier.extend(committed[:used])
+                    if b in copies and n:
+                        copier.observe_copy(n, max(0, used - 1))
+                    else:
+                        copier.observe_model(used)
                 if n:
                     # Tree ranks are not chain depths; only aggregate counters
                     # use these statistics (the MTP acceptance EMA stays separate).

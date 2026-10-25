@@ -142,5 +142,12 @@ time between steps; it has not been isolated.
 ## Not yet
 
 - Image / audio prompts (mRoPE), int8 KV, MoE: those requests stay on the upstream path.
-- DFlash2 drafting (block drafts from the target's layer taps; same allocation).
-- Tree drafts.
+- Phase B performance/identity qualification on 27B, including 32K concurrency.
+
+## Phase B adapter (WIP, still opt-in)
+
+With a bounded-context DFlash2 drafter, the existing driver captures target layer taps during prefill, retains the drafter's trailing window, and keeps each row's target KV/GDN caches as lane transactions. Every decode step reserves each row's root and fairly splits a shared 32-node budget; the remainder rotates between rows. DFlash proposals share one batched drafter forward, while rings, RoPE positions and convolution sequences remain independent. CopyDrafter chains reuse the same budget. Target projections, MLP and the output head run over packed nodes; attention and GDN keep per-sequence state. Each row accepts using argmax or position-keyed Gumbel, then commits its own path through the existing tree replay.
+
+Invariant tool-call guides draft in free text, cut a round at grammar entry, and use masked one-token steps in a constrained body. Logprob reporting uses float32 readout. Other processors, media, MoE and int8 KV keep their established paths. DFlash target APC checkpoints share the driver's target-only layout; proposal rings are reconstructed from the available suffix after a cache hit. The experiment remains off by default. No 27B speed or merge verdict is claimed here.
+
+Verification: `yv ab --base <sha> --cand <sha> --suite phaseb-pilot --label phaseb-pilot`; then `phaseb-identity` (4K/32K matched solo, burst2/4, stagger, greedy/seeded, spec on/off) and `phaseb-speed` (three interleaved quiet repetitions, also agent defaults). Standard long, APC and serve-27b gates remain required.

@@ -95,6 +95,7 @@ class Request:
     logprobs: bool = False
     top_logprobs: int = 0
     draft: bool = True  # greedy without processors / logprobs may draft
+    guide: Any = None  # invariant tool-call guide, advanced on emitted tokens
     budget: Any = None  # mlx_vlm ThinkingBudgetCriteria (forces "\n</think>")
     handle: Any = None
     extra_hash: int = 0  # APC salt (model / processor identity)
@@ -317,6 +318,9 @@ class RoundDriver:
         without those kernels."""
         from ..kernels import gdn_prefill, nax_prefill
 
+        if self.dflash is not None:
+            # DFlash rings are request-local proposal state, not target APC KV.
+            drafting = False
         arith = gdn_prefill.kernel_id() + (
             nax_prefill.arithmetic_id() if nax_prefill.enabled() else "lane"
         )
@@ -509,6 +513,17 @@ class RoundDriver:
         for it, off, n in outs:
             row = it.row
             req = row.req
+            if req.guide is not None:
+                from ..tool_call_grammar import apply_bitmask
+
+                mask = req.guide.mask()
+                if mask is not None:
+                    # This row's slice only; other packed distributions stay intact.
+                    masked = apply_bitmask(lg[off : off + n], mask)
+                    lg = mx.concatenate([lg[:off], masked, lg[off + n :]], axis=0)
+                    greedy = mx.argmax(
+                        lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
+                    )
             if row.force:
                 # the thinking budget's token at this position, not a sample
                 draws.append((it, mx.array(row.force[:1], dtype=mx.int32), None))
@@ -556,6 +571,10 @@ class RoundDriver:
     def step(self) -> list[Event]:
         if not self.rows:
             return []
+        if self.dflash is not None:
+            from ..mrope import clear_rope_state
+
+            clear_rope_state(self.model)
         if self._will_decode():
             self._prefilled_last = False
             t0 = time.perf_counter()
@@ -894,6 +913,10 @@ class RoundDriver:
             used += 1
             row.generated += 1
             row.context.append(t)
+            guide_cut = False
+            if row.req.guide is not None:
+                guide_cut = row.req.guide.arms(t)
+                row.req.guide.feed(t)
             finish = None
             if t in self.stop_tokens:
                 finish = "stop"
@@ -912,6 +935,8 @@ class RoundDriver:
                     # the budget writes the next position: later drafts go
                     row.force = [int(forced)]
                     break
+            if guide_cut:
+                break
         row.pending = committed[used - 1]
         if (
             self.head is not None

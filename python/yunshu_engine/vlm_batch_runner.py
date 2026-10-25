@@ -730,14 +730,23 @@ class VLMBatchRunner:
             budget=budget,
             first_delivery=first_delivery,
         )
-        # The round driver drafts for any row without logits processors, logprobs
-        # or a tool-call guide (a thinking budget is fine there); sampled rows draw
+        from .constrained_spec import invariant_guide
+
+        # The DFlash driver accepts reporting and invariant tool-call guides;
+        # other processors retain their established path. Sampled rows draw
         # with the position-keyed sampler, so a draft is accepted exactly when serial
         # sampling would have produced it.
         job.allow_draft = bool(
             allow_draft
             and not any(not isinstance(p, Fp32LogitsProcessor) for p in processors)
-            and guide is None
+            and (
+                guide is None
+                or (
+                    self.driver is not None
+                    and getattr(self.driver, "dflash", None) is not None
+                    and invariant_guide(guide, logprobs, processors)
+                )
+            )
             and (
                 not logprobs
                 or (
@@ -983,7 +992,13 @@ class VLMBatchRunner:
         if self.driver is None or job.prompt_kwargs is not None:
             return False
         if getattr(self.driver, "dflash", None) is not None:
-            return job.guide is None
+            from .constrained_spec import invariant_guide
+
+            if any(not isinstance(p, Fp32LogitsProcessor) for p in job.processors):
+                return False
+            return job.guide is None or invariant_guide(
+                job.guide, job.logprobs, job.processors
+            )
         if alone and DRIVER_MIN_CONCURRENCY >= 2:
             return False
         return self._driver_uncached(job) <= DRIVER_MAX_UNCACHED_TOKENS
@@ -1046,14 +1061,19 @@ class VLMBatchRunner:
                 and self._spec is None
                 and not self._driver_takes(job, alone)
             )
-            if not lane:
+            driver_guide = (
+                self._driver_takes(job, alone)
+                and getattr(self.driver, "dflash", None) is not None
+            )
+            if not lane and not driver_guide:
                 job.use_draft = job.allow_draft = False
             # Preserve serial processor order: penalties / suppression first,
             # grammar next, fp32 reporting last. Spec runs these at prefill only.
             from .tool_call_grammar import ToolCallProcessor
 
             pos = len(job.processors) - int(job.logprobs)
-            job.processors.insert(pos, ToolCallProcessor(job.guide))
+            if not driver_guide:
+                job.processors.insert(pos, ToolCallProcessor(job.guide))
 
         use_apc = self.apc_manager is not None and job.priority >= 0
         if job.cache_plan is not None and job.cache_plan.get("writes") == []:
@@ -1399,6 +1419,9 @@ class VLMBatchRunner:
                 logprobs=job.logprobs,
                 top_logprobs=job.top_logprobs,
                 draft=job.allow_draft,
+                guide=job.guide
+                if getattr(driver, "dflash", None) is not None
+                else None,
                 budget=job.budget,
                 handle=job,
                 extra_hash=self.apc_semantic_hash or 0,

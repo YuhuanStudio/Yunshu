@@ -51,10 +51,27 @@ def target():
     return tiny()[0]
 
 
-def _run(lm, prompts, *, draft, sampled=False, stagger=False):
+def _run(
+    lm,
+    prompts,
+    *,
+    draft,
+    sampled=False,
+    stagger=False,
+    logprobs=True,
+    backend=None,
+    apc=None,
+    tokens=12,
+    guide_factory=None,
+):
     from yunshu_engine.round_driver.driver import Request, RoundDriver
 
-    driver = RoundDriver(lm, dflash_drafter=_draft(lm) if draft else None, chunk=16)
+    driver = RoundDriver(
+        lm,
+        dflash_drafter=_draft(lm) if (draft if backend is None else backend) else None,
+        chunk=16,
+        apc=apc,
+    )
     output = [[] for _ in prompts]
     todo = list(enumerate(prompts))
     steps = 0
@@ -75,7 +92,14 @@ def _run(lm, prompts, *, draft, sampled=False, stagger=False):
             )
             driver.add(
                 Request(
-                    prompt, 12, sampling=params, handle=i, logprobs=True, top_logprobs=2
+                    prompt,
+                    tokens,
+                    sampling=params,
+                    handle=i,
+                    logprobs=logprobs,
+                    top_logprobs=2,
+                    draft=draft,
+                    guide=guide_factory() if guide_factory else None,
                 )
             )
         for event in driver.step():
@@ -85,15 +109,28 @@ def _run(lm, prompts, *, draft, sampled=False, stagger=False):
     return output, driver
 
 
+@pytest.mark.parametrize("logprobs", [False, True])
 @pytest.mark.parametrize("rows", [1, 2, 4])
 @pytest.mark.parametrize("sampled", [False, True])
 @pytest.mark.parametrize("stagger", [False, True])
 def test_dflash_rows_match_solo_target_tokens_and_logprobs(
-    target, sampled, stagger, rows
+    target, sampled, stagger, rows, logprobs
 ):
     prompts = [list(range(4 + b, 25 + 7 * b)) for b in range(rows)]
-    ref = [_run(target, [p], draft=False, sampled=sampled)[0][0] for p in prompts]
-    got, driver = _run(target, prompts, draft=True, sampled=sampled, stagger=stagger)
+    ref = [
+        _run(
+            target,
+            [p],
+            draft=False,
+            sampled=sampled,
+            logprobs=logprobs,
+            backend=not logprobs,
+        )[0][0]
+        for p in prompts
+    ]
+    got, driver = _run(
+        target, prompts, draft=True, sampled=sampled, stagger=stagger, logprobs=logprobs
+    )
     assert got == ref
     assert driver.drafted > 0
     assert (
@@ -137,3 +174,89 @@ def test_more_than_node_budget_still_advances_every_row(monkeypatch):
     assert batch.step(None) == list(range(35))
     assert list(map(len, packs)) == [32, 3]
     assert lane_linear.sum_reuse_enabled() == before
+
+
+def test_dflash_apc_hit_matches_cold_and_uses_target_layout_salt(target):
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    from .test_round_driver_apc import _manager
+
+    apc = _manager()
+    prompt = [4 + (7 * i) % 500 for i in range(700)]
+    draft = _draft(target)
+
+    def generate():
+        driver = RoundDriver(target, dflash_drafter=draft, chunk=128, apc=apc)
+        hit = driver.add(Request(prompt, 12, logprobs=True, handle=0))
+        assert driver.apc_salt(0, True) == driver.apc_salt(0, False)
+        out = []
+        while driver.busy():
+            out.extend((e.token, e.logprob) for e in driver.step())
+        return hit, out
+
+    hit0, cold = generate()
+    hit1, warm = generate()
+    assert hit0 == 0 and hit1 > 0
+    assert warm == cold
+
+
+def test_oracle_copy_windows_commit_more_than_one_token(target, monkeypatch):
+    from yunshu_engine.copy_drafter import CopyDrafter
+
+    prompt = list(range(4, 25))
+    ref, _ = _run(target, [prompt], draft=False, tokens=48)
+    tokens = [t for t, _ in ref[0]]
+
+    def oracle(copy, cap):
+        generated = len(copy.ctx) - len(prompt)
+        copy.last_match = 100
+        return tokens[generated : generated + cap]
+
+    monkeypatch.setattr(CopyDrafter, "draft", oracle)
+    got, driver = _run(target, [prompt], draft=True, tokens=48)
+    assert got == ref
+    assert driver.accepted > 30
+    assert driver.steps < 10
+
+
+def test_guided_rows_stop_tree_at_entry_and_mask_each_body_token(target):
+    import numpy as np
+
+    class Guide:
+        def __init__(self):
+            self.position = 0
+
+        @property
+        def constrained(self):
+            return 2 <= self.position < 5
+
+        def arms(self, token):
+            return self.position == 1
+
+        def feed(self, token):
+            self.position += 1
+
+        def mask(self):
+            if not self.constrained:
+                return None
+            words = np.zeros(16, dtype=np.uint32)
+            token = 70 + self.position
+            words[token // 32] = 1 << (token % 32)
+            return words.view(np.int32)
+
+    prompts = [list(range(4, 25)), list(range(10, 47))]
+    ref, _ = _run(target, prompts, draft=False, logprobs=False, guide_factory=Guide)
+    got, _ = _run(target, prompts, draft=True, logprobs=False, guide_factory=Guide)
+    assert got == ref
+    assert all([t for t, _ in row][2:5] == [72, 73, 74] for row in got)
+
+
+def test_text_driver_clears_another_groups_mrope_before_prefill(target):
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    target._rope_deltas = mx.array([[17]], dtype=mx.float32)
+    driver = RoundDriver(target, dflash_drafter=_draft(target), chunk=16)
+    driver.add(Request(list(range(4, 25)), 4))
+    driver.step()
+    assert target._rope_deltas is None
+    driver.remove(None)
