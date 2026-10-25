@@ -88,7 +88,7 @@ def main():
                     if not split.begin():
                         raise RuntimeError(split.reason)
                     for layer in range(len(layers)):
-                        h = split.add(layer, x, h, rows)
+                        h = split.add(layer, AneFfn.after(x, h) if layer else x, h, rows)
                     mx.eval(h)
                     if not split.finish():
                         raise RuntimeError(split.reason)

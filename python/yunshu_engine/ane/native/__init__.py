@@ -110,7 +110,44 @@ def _configure_library(lib, with_mlx=False):
     lib.ys_ane_retain.restype = c.c_void_p
     lib.ys_ane_busy.argtypes = [c.c_void_p]
     lib.ys_ane_busy.restype = c.c_int
+    lib.ys_ane_pool_create.argtypes = [
+        c.c_char_p,
+        c.c_void_p,
+        c.c_size_t,
+        c.c_char_p,
+        c.POINTER(c.c_uint32),
+        c.POINTER(c.c_uint32),
+        c.POINTER(c.c_uint32),
+        c.c_uint32,
+    ]
+    lib.ys_ane_pool_create.restype = c.c_void_p
+    lib.ys_ane_pool_inputs.argtypes = [c.c_void_p, c.c_char_p]
+    lib.ys_ane_pool_inputs.restype = c.c_char_p
+    lib.ys_ane_pool_bind.argtypes = [
+        c.c_void_p,
+        c.c_char_p,
+        c.POINTER(c.c_uint32),
+        c.c_uint32,
+        c.c_uint32,
+    ]
+    lib.ys_ane_pool_bind.restype = c.c_int
+    lib.ys_ane_pool_finish.argtypes = [c.c_void_p]
+    lib.ys_ane_pool_finish.restype = c.c_double
+    for name in (
+        "ys_ane_pool_retired",
+        "ys_ane_pool_idle",
+        "ys_ane_pool_unload",
+        "ys_ane_pool_load",
+    ):
+        fn = getattr(lib, name)
+        fn.argtypes, fn.restype = [c.c_void_p], c.c_int
+    lib.ys_ane_pool_reason.argtypes = [c.c_void_p]
+    lib.ys_ane_pool_reason.restype = c.c_char_p
+    lib.ys_ane_pool_retire.argtypes = [c.c_void_p, c.c_char_p]
+    lib.ys_ane_pool_retire.restype = None
     if with_mlx:
+        lib.ys_ane_mlx_begin_binding.argtypes = [c.c_void_p, c.c_int]
+        lib.ys_ane_mlx_begin_binding.restype = c.c_void_p
         lib.ys_ane_mlx_begin.argtypes = [c.c_void_p]
         lib.ys_ane_mlx_begin.restype = c.c_void_p
         for name in ("ys_ane_mlx_wait", "ys_ane_mlx_finish"):
@@ -341,3 +378,111 @@ class MlxTicket:
 
     def __exit__(self, *_):
         self.close()
+
+
+class PoolSession:
+    """Splash-style program session: many fp16/int8 surfaces, one multi-function
+    program, bindings per (function, weight set), overlapping GPU->ANE->GPU tickets.
+
+    Unavailable (try_create returns None) on any private-API or compile failure.
+    """
+
+    def __init__(self, lib, handle, specs):
+        self._lib, self._handle, self.specs = lib, handle, specs
+        self._lock = threading.Lock()
+
+    @classmethod
+    def try_create(cls, mil, weights, specs, cache, *, mlx_root):
+        """specs: list of (element 'fp16'|'int8', rows, width)."""
+        try:
+            lib = _library(Path(cache), mlx_root)
+            if not lib.ys_ane_available():
+                return None, lib.ys_ane_error().decode()
+            n = len(specs)
+            elements = (c.c_uint32 * n)(*(1 if e == "int8" else 0 for e, _, _ in specs))
+            rows = (c.c_uint32 * n)(*(r for _, r, _ in specs))
+            widths = (c.c_uint32 * n)(*(w for _, _, w in specs))
+            handle = lib.ys_ane_pool_create(
+                mil.encode(), weights, len(weights), str(cache).encode(), elements, rows, widths, n
+            )
+            if not handle:
+                return None, lib.ys_ane_error().decode()
+            return cls(lib, handle, list(specs)), None
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            return None, str(exc)
+
+    def inputs(self, function: str) -> list[str]:
+        raw = self._lib.ys_ane_pool_inputs(self._handle, function.encode())
+        if raw is None:
+            raise RuntimeError(self._lib.ys_ane_error().decode())
+        return raw.decode().split(",") if raw else []
+
+    def bind(self, function: str, indices: list[int], out: int) -> int:
+        arr = (c.c_uint32 * len(indices))(*indices)
+        bid = self._lib.ys_ane_pool_bind(self._handle, function.encode(), arr, len(indices), out)
+        if bid < 0:
+            raise RuntimeError(self._lib.ys_ane_error().decode())
+        return bid
+
+    def stride_bytes(self, index: int) -> int:
+        return self._lib.ys_ane_stride(self._handle, index)
+
+    def address(self, index: int) -> int:
+        return self._lib.ys_ane_data(self._handle, index)
+
+    def alias(self, index: int):
+        """MLX array over surface `index` (shape [rows, width], row stride padded)."""
+        import numpy as np
+
+        import mlx.core as mx
+
+        element, rows, width = self.specs[index]
+        dtype = np.int8 if element == "int8" else np.float16
+        item = 1 if element == "int8" else 2
+        stride = self.stride_bytes(index)
+        buf = (c.c_uint8 * (rows * stride)).from_address(self.address(index))
+        view = np.ndarray((rows, width), dtype=dtype, buffer=buf, strides=(stride, item))
+        retained = self._lib.ys_ane_retain(self._handle)
+        if not retained:
+            raise RuntimeError(self._lib.ys_ane_error().decode())
+        owner = _SurfaceOwner(self._lib, retained)
+        view.base._ane_owner = owner
+        return mx.from_dlpack(view, copy=False)
+
+    def begin(self, binding: int):
+        handle = self._lib.ys_ane_mlx_begin_binding(self._handle, binding)
+        if not handle:
+            return None, self._lib.ys_ane_error().decode()
+        return MlxTicket(self, handle), None
+
+    def finish(self) -> float | None:
+        """After all tickets of a command settled: ANE milliseconds, or None on failure."""
+        ms = self._lib.ys_ane_pool_finish(self._handle)
+        return None if ms < 0 else ms
+
+    @property
+    def retired(self) -> bool:
+        return bool(self._lib.ys_ane_pool_retired(self._handle))
+
+    @property
+    def reason(self) -> str:
+        return self._lib.ys_ane_pool_reason(self._handle).decode()
+
+    def retire(self, why: str) -> None:
+        self._lib.ys_ane_pool_retire(self._handle, why.encode())
+
+    def unload(self) -> bool:
+        return bool(self._lib.ys_ane_pool_unload(self._handle))
+
+    def load(self) -> bool:
+        return bool(self._lib.ys_ane_pool_load(self._handle))
+
+    def close(self):
+        with self._lock:
+            if self._handle:
+                self._lib.ys_ane_destroy(self._handle)
+                self._handle = None
+
+    def __del__(self):
+        with suppress(Exception):
+            self.close()

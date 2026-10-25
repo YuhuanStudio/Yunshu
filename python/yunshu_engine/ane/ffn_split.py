@@ -136,7 +136,7 @@ class AneFfn:
         self.layers = list(layers)
         hidden, inter = layers[0].gate.inp, layers[0].gate.out
         self.shape = P.Shape.of(hidden, inter, len(layers), ane_units)
-        self.rows = list(function_rows) if function_rows else P.function_rows()
+        self.rows = sorted(function_rows) if function_rows else P.function_rows()
         self.maximum_rows = max(self.rows)
         self.minimum_rows = self.rows[0]
         self.breaker = cal.Breaker()
@@ -451,6 +451,13 @@ class AneFfn:
             )
 
     # ---- checks ----------------------------------------------------------------------
+    @staticmethod
+    def after(x, previous):
+        """`x` ordered after `previous` (a layer's output): a model's normalized rows already
+        depend on the previous layer; synthetic inputs must, or layer l+1's pack may overwrite the
+        shared surfaces before layer l's join has read them."""
+        return x + previous[:1, :1] * 0
+
     def gpu_alone(self, layer: int, normalized, residual):
         mx = self._mx
         lay = self.layers[layer]
@@ -476,7 +483,7 @@ class AneFfn:
                 lay, g = self.layers[layer], self._gpu[layer]
                 gate, up = _qmm(x, lay.gate, *g["gate"]), _qmm(x, lay.up, *g["up"])
                 h_part = h_part + _qmm((gate * mx.sigmoid(gate)) * up, lay.down, *g["down"])
-                h_split = self.add(layer, x, h_split, rows)
+                h_split = self.add(layer, self.after(x, h_split) if layer else x, h_split, rows)
             mx.eval(h_alone, h_split, h_part)
             if not self.finish():
                 raise AneRetired(self.reason)

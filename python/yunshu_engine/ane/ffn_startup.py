@@ -77,7 +77,7 @@ class Measurement:
             for i in range(count):
                 if split is not None:
                     h1 = _gpu_alone(split, self.layers[idx[i]], x, h0)
-                    h0 = split.add(i, x, h1, rows)
+                    h0 = split.add(i, AneFfn.after(x, h0) if i else x, h1, rows)
                 else:
                     h0 = _gpu_alone(None, self.layers[idx[i]], x, h0)
             mx.eval(h0)
@@ -98,7 +98,7 @@ class Measurement:
                 h = zero
                 start = time.perf_counter()
                 for i in range(count):
-                    h = split.add(i, x, h, P.MAXIMUM_ROWS, ane=False)
+                    h = split.add(i, AneFfn.after(x, h) if i else x, h, P.MAXIMUM_ROWS, ane=False)
                 mx.eval(h)
                 return (time.perf_counter() - start) * 1000
 
