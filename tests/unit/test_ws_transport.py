@@ -471,3 +471,74 @@ def test_uds_websocket_client_helper(uds_server):
             assert got[-1]["reason"] == "cancelled"
 
     asyncio.run(main())
+
+
+def test_responses_ws_store_false_response_chains_then_is_dropped():
+    """OpenAI's WebSocket mode keeps the latest ``store: false`` response of the connection so
+    the next turn can chain off it. Since fd670b87 an unknown ``previous_response_id`` is a 404,
+    so the second turn of a ``store: false`` conversation failed (route check ``ws_responses``,
+    2026-10-24). The response stays unstored for everyone else: it is dropped when a newer one
+    replaces it and when the socket closes, and the client still sees ``store: false``."""
+    from yunshu_gateway.routers import responses as rsp
+
+    app = FastAPI()
+    app.include_router(stream_ws.router)
+    seq = iter(range(1, 100))
+
+    @app.post("/v1/responses")
+    async def create(request: Request):
+        body = await request.json()
+        prev = body.get("previous_response_id")
+        if prev and rsp._get_stored_response(prev) is None:
+            return JSONResponse(
+                {
+                    "error": {
+                        "message": "not found",
+                        "code": "previous_response_not_found",
+                    }
+                },
+                status_code=404,
+            )
+        rid = f"resp_ws_{next(seq)}"
+        if body.get("store"):
+            rsp._store_response(rid, {"id": rid})
+        done = {
+            "type": "response.completed",
+            "response": {"id": rid, "store": body.get("store")},
+        }
+
+        async def gen():
+            yield "event: response.completed\ndata: " + json.dumps(done) + "\n\n"
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    def turn(ws, prev=None):
+        msg = {"type": "response.create", "model": "m", "input": "x", "store": False}
+        if prev:
+            msg["previous_response_id"] = prev
+        ws.send_text(json.dumps(msg))
+        return json.loads(ws.receive_text())
+
+    with TestClient(app) as c, c.websocket_connect("/v1/responses") as ws:
+        first = turn(ws)
+        assert (
+            first["type"] == "response.completed"
+            and first["response"]["store"] is False
+        )
+        second = turn(ws, first["response"]["id"])
+        assert second["type"] == "response.completed", second
+        # the newest one is the chain head; the older one is gone
+        import time as _t
+
+        for _ in range(50):
+            if rsp._get_stored_response(first["response"]["id"]) is None:
+                break
+            _t.sleep(0.02)
+        assert rsp._get_stored_response(first["response"]["id"]) is None
+        assert rsp._get_stored_response(second["response"]["id"]) is not None
+        head = second["response"]["id"]
+    for _ in range(100):
+        if rsp._get_stored_response(head) is None:
+            break
+        time.sleep(0.02)
+    assert rsp._get_stored_response(head) is None

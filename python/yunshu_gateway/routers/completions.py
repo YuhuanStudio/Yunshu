@@ -18,6 +18,13 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from yunshu_engine.output_limits import (
+    COMPLETIONS_DEFAULT_MAX_TOKENS,
+    MAX_THINKING_BUDGET,
+    SOURCE_REQUEST,
+    SOURCE_SPEC_DEFAULT,
+    fold_effort,
+)
 from yunshu_engine.tracing import get_inference_tracer, get_structured_logger
 
 from ..continuous_usage import update_usage, with_continuous_usage
@@ -161,16 +168,17 @@ class CompletionRequest(BaseModel):
     # or list[list[int]] (batched token-id prompts). Each list element becomes
     # its own choice in the response.
     prompt: str | list[str] | list[int] | list[list[int]]
-    max_tokens: int = Field(default=128, ge=0, le=1048576)
+    # OpenAI /v1/completions reference: "max_tokens ... Defaults to 16".
+    max_tokens: int = Field(default=COMPLETIONS_DEFAULT_MAX_TOKENS, ge=0, le=1048576)
     max_completion_tokens: int | None = Field(default=None, ge=0, le=1048576)
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
-    top_k: int = Field(default=0, ge=0)
-    min_p: float = Field(default=0.0, ge=0.0, le=1.0)
+    temperature: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    top_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
+    top_k: int = Field(default=None, ge=0)  # type: ignore[assignment]  # None until resolve_sampling
+    min_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
     top_n_sigma: float = Field(default=0.0, ge=0.0, le=10.0)
-    repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
-    frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
-    presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
+    repetition_penalty: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    frequency_penalty: float = Field(default=None, ge=-2.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    presence_penalty: float = Field(default=None, ge=-2.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
     logit_bias: dict[int, float] | None = None
     stream: bool = False
     stream_options: StreamOptions | None = None
@@ -184,7 +192,7 @@ class CompletionRequest(BaseModel):
     seed: int | None = None
     spec_decode: bool = False
     enable_thinking: bool | None = None
-    thinking_budget: int | None = Field(default=None, ge=1, le=32768)
+    thinking_budget: int | None = Field(default=None, ge=1, le=MAX_THINKING_BUDGET)
     response_format: dict | None = None
     reasoning_effort: str | None = None
     xtc_probability: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -248,6 +256,9 @@ class CompletionRequest(BaseModel):
     def validate_request(self):
         if not self.model or not self.model.strip():
             raise ValueError("model: field is required and cannot be empty")
+        self.enable_thinking, self.reasoning_effort = fold_effort(
+            self.enable_thinking, self.reasoning_effort
+        )
         # fold guided_* aliases into grammar/response_format (native wins).
         if self.grammar is None:
             if self.guided_regex is not None:
@@ -333,12 +344,6 @@ class CompletionRequest(BaseModel):
                 raise ValueError(f"best_of ({self.best_of}) must be >= n ({self.n})")
             if self.stream:
                 raise ValueError("best_of is not supported when stream is True")
-        # n > 1 with streaming is not supported
-        if self.stream and self.n > 1:
-            raise ValueError(
-                "n > 1 is not supported when stream is True. "
-                "Use non-streaming mode for multiple choices."
-            )
         # validate logit_bias values (chat.py + responses.py do this;
         # completions was missing it). A NaN/Inf bias makes softmax all-NaN → garbage output
         # instead of a clean 422. Excludes bool (subclass of int).
@@ -374,6 +379,9 @@ def _untag_reasoning(text: str, reasoning_tokens: int) -> str:
 @router.post("/completions", response_model=None)
 async def create_completion(req: CompletionRequest, request: Request):
     """OpenAI-compatible text completion endpoint."""
+    from ..sampling_defaults import resolve_sampling
+
+    resolve_sampling(req)
     _check_permission(request, "can_infer")
     from ..capability_gate import enforce_completion
 
@@ -528,7 +536,16 @@ async def create_completion(req: CompletionRequest, request: Request):
             from ..token_budget import plan_for_engine
 
             _tb = plan_for_engine(
-                _est_tokens, req.effective_max_tokens(), None, req.model, engine
+                _est_tokens,
+                req.effective_max_tokens(),
+                None,
+                req.model,
+                engine,
+                source=(
+                    SOURCE_REQUEST
+                    if {"max_tokens", "max_completion_tokens"} & req.model_fields_set
+                    else SOURCE_SPEC_DEFAULT
+                ),
             )
             if _tb is not None and _tb.clamped:
                 req.max_tokens = _tb.max_tokens_granted

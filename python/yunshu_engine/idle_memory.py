@@ -225,6 +225,9 @@ def _trim() -> None:
         before[1],
         after[1],
     )
+    from . import ane_ffn_runtime
+
+    ane_ffn_runtime.release_idle()
 
 
 def _trim_host_allocator() -> int:

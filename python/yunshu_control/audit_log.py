@@ -23,6 +23,7 @@ single-owner identity for the local single-consumer deployment (constant
 """
 
 import logging
+import os
 import sys
 
 from yunshu_engine import settings
@@ -51,6 +52,7 @@ def _attach_default_handler() -> None:
         return  # propagation handles emission
     log_path = settings.get("YUNSHU_AUDIT_LOG_FILE") or ""
     if log_path:
+        os.makedirs(os.path.dirname(os.path.abspath(log_path)), exist_ok=True)
         handler: logging.Handler = logging.FileHandler(log_path, encoding="utf-8")
     else:
         handler = logging.StreamHandler(sys.stderr)

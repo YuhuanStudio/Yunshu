@@ -18,6 +18,8 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 
+from .output_limits import default_max_output
+
 logger = logging.getLogger(__name__)
 
 
@@ -157,7 +159,7 @@ class InferenceBudgetManager:
 
     def __init__(
         self,
-        default_max_tokens: int = 512,
+        default_max_tokens: int = 0,
         default_max_wall_time_ms: float = 30000.0,
         global_token_rate_limit: int = 0,  # 0 = unlimited
     ) -> None:
@@ -173,9 +175,8 @@ class InferenceBudgetManager:
 
     @classmethod
     def from_env(cls) -> InferenceBudgetManager:
-        from . import settings
 
-        return cls(default_max_tokens=settings.get("YUNSHU_DEFAULT_MAX_TOKENS"))
+        return cls(default_max_tokens=default_max_output())
 
     def register(
         self,
@@ -195,7 +196,11 @@ class InferenceBudgetManager:
             )
         budget = InferenceBudget(
             request_id=request_id,
-            max_tokens=self._default_max_tokens if max_tokens is None else max_tokens,
+            max_tokens=(
+                (self._default_max_tokens or default_max_output())
+                if max_tokens is None
+                else max_tokens
+            ),
             prompt_tokens=prompt_tokens,
             thinking_budget=thinking_budget,
             max_wall_time_ms=self._default_wall_time

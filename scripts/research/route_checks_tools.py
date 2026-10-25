@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 
-from route_checks import Ctx, check, expect
+from route_checks import Ctx, Fail, check, expect
 
 
 class FakeBackend:
@@ -366,3 +366,53 @@ def _mcp_client(c: Ctx):
     names = json.dumps(tl.json())
     expect("echo" in names and "add" in names, f"tiny_mcp tools missing: {names[:300]}")
     c.notes["mcp_client"] = st
+
+
+@check(
+    "containers",
+    "POST /v1/containers",
+    "GET /v1/containers",
+    "GET /v1/containers/{container_id}",
+    "DELETE /v1/containers/{container_id}",
+    "POST /v1/containers/{container_id}/files",
+    "GET /v1/containers/{container_id}/files",
+    "GET /v1/containers/{container_id}/files/{file_id}",
+    "GET /v1/containers/{container_id}/files/{file_id}/content",
+    "DELETE /v1/containers/{container_id}/files/{file_id}",
+    needs="multi",
+    served=True,
+)
+def _containers(c: Ctx):
+    """OpenAI /v1/containers on a server started with YUNSHU_CODE_EXECUTION=1 and srt on PATH:
+    the full lifecycle through the official SDK, expiry fields, files, and hostile names."""
+    import openai
+
+    ct = c.oa.containers.create(
+        name="route-check", expires_after={"anchor": "last_active_at", "minutes": 5}
+    )
+    expect(ct.id.startswith("cntr_") and ct.status == "running", f"create {ct}")
+    expect(ct.expires_after and ct.expires_after.minutes == 5, f"expiry {ct}")
+    expect(ct.network_policy and ct.network_policy.type == "disabled", "network")
+    expect(c.oa.containers.retrieve(ct.id).name == "route-check", "retrieve")
+    expect(ct.id in [x.id for x in c.oa.containers.list().data], "not in list")
+    f = c.oa.containers.files.create(ct.id, file=("data.csv", b"a,b\n1,2\n"))
+    expect(f.path == "/mnt/data/data.csv" and f.source == "user", f"file {f}")
+    expect([x.id for x in c.oa.containers.files.list(ct.id).data] == [f.id], "files")
+    expect(c.oa.containers.files.retrieve(f.id, container_id=ct.id).bytes == 8, "meta")
+    body = c.oa.containers.files.content.retrieve(f.id, container_id=ct.id).read()
+    expect(body == b"a,b\n1,2\n", f"content {body!r}")
+    r = c.req(
+        "POST",
+        f"/v1/containers/{ct.id}/files",
+        files={"file": ("../escape.txt", b"x", "text/plain")},
+    )
+    expect(r.status_code == 400, f"path traversal name -> {r.status_code}")
+    c.oa.containers.files.delete(f.id, container_id=ct.id)
+    expect(not c.oa.containers.files.list(ct.id).data, "file not deleted")
+    c.oa.containers.delete(ct.id)
+    try:
+        c.oa.containers.retrieve(ct.id)
+        raise Fail("deleted container still retrievable")
+    except openai.NotFoundError:
+        pass
+    c.notes["container_id"] = ct.id

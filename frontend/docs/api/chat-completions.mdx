@@ -24,9 +24,9 @@ Unknown top-level fields are ignored, so a client can keep sending OpenAI fields
 | `messages` | array | yes | Conversation. Must contain at least one `user` message with content. See [Messages](#messages). | supported |
 | `stream` | boolean | no | Server-sent events. Default `false`. | supported |
 | `stream_options` | object | no | Only valid with `stream: true`. `include_usage` adds a final usage chunk. `continuous_usage_stats` (a vLLM extension) puts a running `usage` on every chunk. | supported |
-| `max_tokens` | integer | no | Completion limit, `0` to `1048576`. Default is the `YUNSHU_DEFAULT_MAX_TOKENS` setting (32768). The context budget still clamps it; see `x_yunshu.budget`. | supported |
+| `max_tokens` | integer | no | Completion limit, `0` to `1048576`. Omitted: the model's output limit (262144, the Qwen3.8 card's thinking-mode figure; the OpenAI reference says "up to the model's limit"), lowered only by the operator cap `YUNSHU_DEFAULT_MAX_TOKENS`. The context window still clamps it; `x_yunshu.budget` reports the effective value and its source (`max_tokens_source`: `request`, `model_limit`, `operator_cap`). | supported |
 | `max_completion_tokens` | integer | no | OpenAI's newer name. Wins over `max_tokens` when both are set. | supported |
-| `n` | integer | no | Number of choices, `1` to `128`. Not allowed with `stream: true`. | supported |
+| `n` | integer | no | Number of choices, `1` to `128`. With `stream: true` every chunk carries its choice `index`; the choices stream one after another (one request at a time on the text path; concurrently on vision-language models) and `seed` derives a per-choice seed (`seed + index`) exactly as without streaming. Usage in the final chunk is the prompt once plus all completions. | supported |
 | `stop` | string or array | no | Up to 16 stop sequences. Empty strings are dropped. | supported |
 | `user` | string | no | Logged with the request id. No other effect. | accepted and ignored |
 | `store` | boolean | no | Keep the finished completion for retrieval. See [Stored completions](/docs/api/stored-completions). | supported |
@@ -108,8 +108,8 @@ Constrained decoding masks the logits, so output that matches the schema is prod
 | Parameter | Description | Status |
 | --- | --- | --- |
 | `enable_thinking` | Turn the model's thinking mode on or off. Also read from `chat_template_kwargs.enable_thinking`. | supported |
-| `reasoning_effort` | Effort level. Also read from `chat_template_kwargs.reasoning_effort`. Values outside the template's own list are mapped (`high` becomes `xhigh` on templates that use it). On a model without a reasoning mode it is accepted and has no effect. | supported |
-| `thinking_budget` | Maximum thinking tokens, `1` to `32768`. | extension |
+| `reasoning_effort` | Effort level. Also read from `chat_template_kwargs.reasoning_effort`. Values outside the template's own list are mapped (`high` becomes `xhigh` on templates that use it). `none` and `minimal` turn thinking off (as `enable_thinking: false`); `low` to `max` map monotonically, `xhigh` and `max` to the largest budgets. On models whose template has no effort levels the budgets are low 2048, medium 8192, high 32768, xhigh 131072, max 262144 (max is the Qwen3.8 card thinking limit; the others are Yunshu choices with no external source, xhigh 131072 included). On a model without a reasoning mode it is accepted and has no effect. | supported |
+| `thinking_budget` | Maximum thinking tokens, `1` to `262144` (the model's thinking limit). | extension |
 | `chat_template_kwargs` | Extra variables for the chat template. | supported |
 
 Reasoning text is returned in `message.reasoning_content`, separate from `content`. The reasoning tokens are part of `completion_tokens`, and `usage.completion_tokens_details.reasoning_tokens` says how many.
@@ -378,7 +378,7 @@ Chunks have `object: "chat.completion.chunk"`. Between chunks the server may sen
 | Image input | <Support status="supported">vision-language models</Support> |
 | Audio and video input parts | <Support status="partial">models that accept them</Support> |
 | Streaming, `stream_options.include_usage` | <Support status="supported">supported</Support> |
-| `n` greater than 1 | <Support status="partial">non-streaming only</Support> |
+| `n` greater than 1 | <Support status="supported">streaming and non-streaming, chunks carry `index`</Support> |
 | Function tools, `tool_choice`, `parallel_tool_calls` | <Support status="supported">supported</Support> |
 | `response_format` `json_object` and `json_schema` | <Support status="supported">constrained decoding</Support> |
 | `logprobs`, `top_logprobs` | <Support status="supported">up to 20 alternatives</Support> |
@@ -396,11 +396,11 @@ Chunks have `object: "chat.completion.chunk"`. Between chunks the server may sen
 | --- | --- | --- | --- |
 | `model` | string | Model id. | supported |
 | `prompt` | string, array of strings, array of token ids, or array of token-id arrays | Required. An array of strings or token-id arrays produces choices for each prompt, in order. Not allowed with `stream: true` when it has more than one prompt. | supported |
-| `max_tokens` | integer | Default `128`, up to `1048576`. `max_completion_tokens` is also accepted. | supported |
+| `max_tokens` | integer | Default `16` (the OpenAI completions reference), up to `1048576`. `max_completion_tokens` is also accepted. | supported |
 | `echo` | boolean | Prepend the prompt to the returned text. With `logprobs` the prompt tokens get logprobs too (single string prompt). | supported |
 | `logprobs` | integer | `0` to `5`. The response uses the legacy `tokens`, `token_logprobs`, `top_logprobs`, `text_offset` arrays. | supported |
 | `best_of` | integer | Generates this many candidates per prompt and returns the `n` with the best average logprob. Must be at least `n`; not with streaming or several prompts. All candidates are billed in `usage`. | supported |
-| `n` | integer | `1` to `128`. Not allowed with `stream: true`. | supported |
+| `n` | integer | `1` to `128`. With `stream: true` the chunks carry `choices[].index`, as on the chat route. | supported |
 | `suffix` | string | Accepted. There is no fill-in-the-middle template, so it is not used and never appended to the text. | accepted and ignored |
 | `stop`, `seed`, `temperature`, `top_p`, `top_k`, `min_p`, penalties, `logit_bias`, `stream_options` | | As on the chat route. | supported |
 

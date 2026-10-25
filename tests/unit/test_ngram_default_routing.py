@@ -29,7 +29,7 @@ def _engine(greedy_default: bool, has_proposer: bool = True):
     eng._ngram_greedy_default = greedy_default
     eng._spec_prefill_enabled = False
     eng._kv_quant_bits = None
-    eng._check_memory_guard = MagicMock(return_value=None)
+    eng._check_memory_guard = MagicMock(side_effect=lambda p, mt, **kw: (None, mt))
     eng._engine_core = None
     return eng
 

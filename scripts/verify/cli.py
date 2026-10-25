@@ -46,6 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="server env, base only",
     )
     ab.add_argument(
+        "--observe",
+        action="store_true",
+        help="run timing stages in observe mode too (smoke/identity/apc always do); "
+        "costs ~1.8%% follow-up TTFT, so speed numbers from such a run are not comparable",
+    )
+    ab.add_argument(
         "--quick",
         action="store_true",
         help="suite quick: identity + speed on 1K/8K, quality 200; base arm cached",

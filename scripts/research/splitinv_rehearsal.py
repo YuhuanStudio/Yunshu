@@ -40,6 +40,16 @@ def same_output(left, right):
     )
 
 
+def check_rehearsal_cache(row, *, logprobs=False):
+    """Logprob rows deliberately use the separate stock-serial APC namespace."""
+    cached = row.get("cached", 0)
+    if logprobs:
+        if cached:
+            raise RuntimeError(f"logprob request reused an invariant checkpoint: {row}")
+    elif not cached or cached % 64:
+        raise RuntimeError(f"missing aligned APC hit: {row}")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--ctx", type=int, default=1024)
@@ -51,6 +61,7 @@ def main():
         help="Minimum natural-stop reply length (default: half the requested budget)",
     )
     p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--apc-dir", type=Path)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--temperature", type=float, default=0)
     p.add_argument("--top-p", type=float, default=1)
@@ -79,7 +90,9 @@ def main():
         "YUNSHU_VLM_APC_DISK": "0",
         "YUNSHU_VLM_DRAFT": t.D,
         "YUNSHU_NEXT_TURN_DELAY_S": "0",
-        "YUNSHU_VLM_APC_DISK_DIR": a.apc_dir,
+        "YUNSHU_VLM_APC_DISK_DIR": str(
+            a.apc_dir or "/Volumes/Micron/yunshu-apc/splitinv-rehearsal"
+        ),
     }
     a.out.parent.mkdir(parents=True, exist_ok=True)
     capture = a.out.with_suffix(".raw-ids.jsonl")
@@ -163,8 +176,7 @@ def main():
                     },
                 ]
                 result = ask_plain(server, messages)
-                if not result["cached"] or result["cached"] % 64:
-                    raise RuntimeError(f"missing aligned APC hit: {result}")
+                check_rehearsal_cache(result, logprobs=a.logprobs)
                 emit(
                     dict(
                         ctx=a.ctx,

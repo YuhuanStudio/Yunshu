@@ -131,7 +131,9 @@ export function StateStrip({
               >
                 <StatusIndicator status={dot(id, lit)} />
                 {tr(`overview.phase.${id}`)}
-                {lit && <span className="tabular-nums">{countOf(id)}</span>}
+                <Slot ch={2} align="right" className="tabular-nums">
+                  {lit ? countOf(id) : ""}
+                </Slot>
               </li>
             );
           })}
@@ -180,13 +182,14 @@ export function SpeedPair({ status }: { status: EngineStatus }) {
         label={term}
         value={
           <>
-            <Slot ch={7}>
+            <span className="tabular-nums">
               <LiveNumber
                 value={headline.value}
+                glide
                 format={(v) => fixed(v)}
                 jumpKey={headline.kind}
               />
-            </Slot>
+            </span>
             <span className="ml-1 text-xs font-normal text-muted-foreground">
               tok/s
             </span>

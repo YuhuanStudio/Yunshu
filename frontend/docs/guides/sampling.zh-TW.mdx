@@ -1,0 +1,37 @@
+---
+title: 取樣預設值
+description: 請求沒帶 temperature、top_p、top_k 與懲罰項時採用的值，以及思考模式如何決定它們。
+---
+
+程式代理（Claude Code、Codex、opencode）不會送取樣參數，所以預設值直接決定它們的行為。雲舒不對所有模型用同一個數字，每個欄位依下列順序取第一個有值的來源：
+
+1. 請求帶的值（永遠優先，即使等於舊預設值）；
+2. 模型針對**這次請求**所處模式（思考或非思考）公布的建議值；
+3. 模型的 `generation_config.json`；
+4. 官方 API 預設（temperature 1.0、top_p 1.0，top_k / min_p / 懲罰項關閉）。
+
+## 請求屬於哪個模式
+
+模式的判斷與請求渲染一致：Anthropic `thinking`（`enabled` / `disabled`）、`enable_thinking` 或 `chat_template_kwargs.enable_thinking`、JSON schema 或文法限制（不思考），其餘採用聊天範本自己的預設（例如 Qwen3.5、Qwen3.8 預設思考）。`reasoning_effort` 不會切換模式。
+
+## 已公布的建議值
+
+| 模型                  | 模式   | temperature | top_p | top_k | presence_penalty |
+| --------------------- | ------ | ----------- | ----- | ----- | ---------------- |
+| Qwen3.8-27B           | 思考   | 1.0         | 0.95  | 20    | 0.0              |
+| Qwen3.8-27B           | 非思考 | 0.7         | 0.80  | 20    | 1.5              |
+| Qwen3.6-27B           | 思考   | 1.0         | 0.95  | 20    | 0.0              |
+| Qwen3.6-27B           | 非思考 | 0.7         | 0.80  | 20    | 1.5              |
+| Qwen3.5-27B / 9B / 4B | 思考   | 1.0         | 0.95  | 20    | 1.5              |
+| Qwen3.5-27B / 9B / 4B | 非思考 | 0.7         | 0.80  | 20    | 1.5              |
+| Qwen3.5-2B / 0.8B     | 思考   | 1.0         | 0.95  | 20    | 1.5              |
+| Qwen3.5-2B / 0.8B     | 非思考 | 1.0         | 1.00  | 20    | 2.0              |
+| Gemma 4 31B           | 兩者   | 1.0         | 0.95  | 64    | 關閉             |
+
+數值抄自 Hugging Face 模型卡（一般任務的組合，不採用卡上的程式碼組合）。其他模型依序落到 `generation_config.json`、API 預設。
+
+## 查看與修改
+
+- 每個回應都有 `x_yunshu.sampling`：數值、模式、判定模式的原因，以及每個欄位的來源（`request`、`model_card`、`generation_config`、`api_default`）。
+- `yunshu doctor -m <model>` 依模式列出預設值；主控台的模型頁顯示它們；伺服器啟動時也會記錄。
+- `YUNSHU_SAMPLING_DEFAULTS=api` 忽略模型、只用 API 預設。`temperature: 0` 永遠是貪婪解碼。

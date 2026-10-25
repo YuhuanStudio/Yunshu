@@ -111,7 +111,7 @@ export function filterConfig(
   );
 }
 
-const SOURCES = ["default", "env", "cli", "file"];
+const SOURCES = ["default", "env", "cli", "file", "observe"];
 const STABILITIES = ["stable", "experimental", "internal"];
 export const sourceLabel = (source: string) =>
   SOURCES.includes(source) ? tr(`diagnostics.config.source.${source}`) : source;

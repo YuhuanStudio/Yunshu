@@ -13,17 +13,17 @@ class TestCompletionRequest:
         req = CompletionRequest(model="test", prompt="hello")
         assert req.model == "test"
         assert req.prompt == "hello"
-        assert req.max_tokens == 128
-        assert req.temperature == 0.7
-        assert req.top_p == 1.0
+        assert req.max_tokens == 16
+        assert req.temperature is None
+        assert req.top_p is None
         assert req.stream is False
         assert req.stop is None
         assert req.echo is False
         assert req.logprobs == 0
         assert req.seed is None
-        assert req.repetition_penalty == 1.0
-        assert req.frequency_penalty == 0.0
-        assert req.presence_penalty == 0.0
+        assert req.repetition_penalty is None
+        assert req.frequency_penalty is None
+        assert req.presence_penalty is None
         assert req.logit_bias is None
 
     def test_with_all_params(self):
@@ -101,11 +101,9 @@ class TestCompletionsEdgeCases:
         req = CompletionRequest(model="test", prompt="hello", max_tokens=1)
         assert req.max_tokens == 1
 
-    def test_n_gt_1_with_streaming_rejected(self):
-        """n > 1 with streaming should return validation error."""
-        with pytest.raises(
-            ValidationError, match="n > 1 is not supported when stream is True"
-        ):
+    def test_n_gt_1_with_streaming_accepted(self):
+        """n > 1 with streaming is valid (OpenAI streams choices by index)."""
+        if True:
             CompletionRequest(
                 model="test",
                 prompt="hello",

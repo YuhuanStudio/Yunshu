@@ -32,3 +32,11 @@ test("downsampling keeps the marker as its own row between the two sides", () =>
   assert.equal(rows.filter((r) => r.values.decode === null).length, 1);
   for (let i = 1; i < rows.length; i++) assert.ok(rows[i].x >= rows[i - 1].x);
 });
+
+test("an aggregated row carries the spread of its samples as lo/hi values (the chart's min/max band)", () => {
+  const points = [10, 30, 20, 40].map((v, i) => pt(1000 + i * 1000, v));
+  const [row] = chartRows(points, 1);
+  assert.equal(row.values.decodeLo, 10);
+  assert.equal(row.values.decodeHi, 40);
+  assert.equal(row.values.decode, 25);
+});

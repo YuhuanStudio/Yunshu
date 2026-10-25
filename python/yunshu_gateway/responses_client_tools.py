@@ -26,6 +26,33 @@ SHELL_SCHEMA = {
 }
 
 
+CLIENT_SHELL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "commands": {"type": "array", "items": {"type": "string"}},
+        "timeout_ms": {"type": "integer"},
+        "max_output_length": {"type": "integer"},
+    },
+    "required": ["commands"],
+}
+CLIENT_KINDS = ("custom", "local_shell", "tool_search", "computer")
+
+
+def is_hosted_shell(d) -> bool:
+    """A ``shell`` tool whose commands the SERVER runs (container environment)."""
+    env = d.get("environment") or {}
+    return d.get("type") == "shell" and env.get("type") in (
+        "container_auto",
+        "container_reference",
+    )
+
+
+def is_client_kind(d) -> bool:
+    """Tool kinds the model calls and the CLIENT answers (not plain functions)."""
+    t = d.get("type")
+    return t in CLIENT_KINDS or (t == "shell" and not is_hosted_shell(d))
+
+
 def computer_schema():
     """Independent schema matching the SDK's discriminated computer actions."""
     xy = {"x": {"type": "integer"}, "y": {"type": "integer"}}
@@ -137,6 +164,13 @@ def as_function(d):
             SHELL_SCHEMA,
             "Request a command to execute in the client's local shell.",
         )
+    elif kind == "shell":
+        if is_hosted_shell(d):
+            return None  # run by the server: see server_tools.responses_loop
+        schema, description = (
+            CLIENT_SHELL_SCHEMA,
+            "Request shell commands, run in order by the client in its own environment.",
+        )
     elif kind == "tool_search":
         if d.get("execution", "server") != "client":
             raise HTTPException(
@@ -234,6 +268,22 @@ def call_item(item, d):
             "type": "local_shell_call",
             "action": {"env": {}, **args, "type": "exec"},
         }
+    if kind == "shell":
+        cmds = args.get("commands") if isinstance(args, dict) else None
+        if isinstance(cmds, str):
+            cmds = [cmds]
+        if not isinstance(cmds, list) or not all(isinstance(c, str) for c in cmds):
+            raise HTTPException(502, "Model produced invalid shell commands")
+        action = {"commands": cmds}
+        for k in ("timeout_ms", "max_output_length"):
+            if isinstance(args.get(k), int):
+                action[k] = args[k]
+        return {
+            **common,
+            "type": "shell_call",
+            "action": action,
+            "environment": {"type": "local"},
+        }
     return {
         **common,
         "type": "tool_search_call",
@@ -294,6 +344,7 @@ async def create_client_tools(req, request, inner):
     forced = req.tool_choice.get("name") if isinstance(req.tool_choice, dict) else None
     if isinstance(req.tool_choice, dict) and req.tool_choice.get("type") in (
         "local_shell",
+        "shell",
         "tool_search",
         "computer",
     ):
@@ -764,6 +815,8 @@ def stream_client_calls(response, req, request, defs, formats, raw_input):
                 if declaration["type"] == "computer"
                 else {"command": []}
                 if declaration["type"] == "local_shell"
+                else {"commands": []}
+                if declaration["type"] == "shell"
                 else {}
             )
             return call_item(

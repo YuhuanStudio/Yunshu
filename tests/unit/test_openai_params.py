@@ -25,7 +25,7 @@ class TestChatCompletionParams:
         req = ChatCompletionRequest(
             model="test", messages=[{"role": "user", "content": "hi"}]
         )
-        assert req.frequency_penalty == 0.0
+        assert req.frequency_penalty is None  # unset; resolved from generation_config
 
     def test_frequency_penalty_set(self):
         req = ChatCompletionRequest(
@@ -57,7 +57,7 @@ class TestChatCompletionParams:
         req = ChatCompletionRequest(
             model="test", messages=[{"role": "user", "content": "hi"}]
         )
-        assert req.presence_penalty == 0.0
+        assert req.presence_penalty is None  # unset; resolved from generation_config
 
     def test_presence_penalty_set(self):
         req = ChatCompletionRequest(
@@ -143,7 +143,7 @@ class TestCompletionParams:
 
     def test_frequency_penalty_default(self):
         req = CompletionRequest(model="test", prompt="hello")
-        assert req.frequency_penalty == 0.0
+        assert req.frequency_penalty is None  # unset; resolved from generation_config
 
     def test_frequency_penalty_set(self):
         req = CompletionRequest(
@@ -155,7 +155,7 @@ class TestCompletionParams:
 
     def test_presence_penalty_default(self):
         req = CompletionRequest(model="test", prompt="hello")
-        assert req.presence_penalty == 0.0
+        assert req.presence_penalty is None  # unset; resolved from generation_config
 
     def test_presence_penalty_set(self):
         req = CompletionRequest(
@@ -180,7 +180,7 @@ class TestCompletionParams:
     def test_repetition_penalty_default(self):
         """repetition_penalty was already supported; verify it still works."""
         req = CompletionRequest(model="test", prompt="hello")
-        assert req.repetition_penalty == 1.0
+        assert req.repetition_penalty is None  # unset; resolved from generation_config
 
     def test_repetition_penalty_set(self):
         req = CompletionRequest(

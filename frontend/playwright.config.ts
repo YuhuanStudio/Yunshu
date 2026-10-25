@@ -29,7 +29,9 @@ export default defineConfig({
     : {
         command: `pnpm exec vite --host 127.0.0.1 --port ${port} --strictPort`,
         url: `${origin}/console/`,
-        reuseExistingServer: !process.env.CI,
+        // Never adopt whatever already answers on the port: the resident console listens on 18999 too, and reusing
+        // it ran the suite against a live engine and another build (32 failures, 2026-10-25). Opt in explicitly.
+        reuseExistingServer: process.env.PLAYWRIGHT_REUSE === "1",
         timeout: 30_000,
       },
 });

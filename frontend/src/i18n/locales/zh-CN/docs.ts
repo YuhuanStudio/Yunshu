@@ -2,6 +2,13 @@ import type zh from "../zh-TW/docs.ts";
 import type { Shape } from "../../types.ts";
 
 const docs: Shape<typeof zh> = {
+  "reference.openaiSdk": "OpenAI SDK",
+  "reference.anthropicSdk": "Anthropic SDK",
+  "reference.proxy": "控制台同源代理",
+  "actions.chatgpt": "ChatGPT",
+  "actions.claude": "Claude",
+  "reference.link": "OpenAPI ↗",
+  sse: "服务器发送事件（SSE）",
   "nav.label": "文档目录",
   "nav.jump": "跳到文档页面",
   "toc.title": "本页内容",
@@ -18,6 +25,16 @@ const docs: Shape<typeof zh> = {
   "link.settings": "每个设置的说明",
   "link.keys": "验证与密钥说明",
   "link.lead": "文档",
+  "actions.copy": "复制 Markdown",
+  "actions.copied": "已复制",
+  "actions.failed": "无法复制此页",
+  breadcrumb: "文档路径",
+  updated: "最后更新",
+  reference: "自动生成的 API 参考",
+  "reference.description":
+    "由引擎 OpenAPI schema 生成的交互参考。请求通过此 console 的同源代理。",
+  "reference.guides": "端点指南",
+  "reference.operation": "API 操作",
 };
 
 export default docs;

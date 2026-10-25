@@ -128,8 +128,11 @@ _add("YUNSHU_UNCACHED_SCHEDULING", "bool", True, "Order VLM canonical prefill at
 _add("YUNSHU_AUXILIARY_SCHEDULING", "bool", True, "Deprioritize captured opencode title requests: interactive VLM jobs run first; auxiliary rows pause between GPU slices and never read or write APC. Unknown fingerprints keep normal scheduling. Defaults on only with engaged qualified batch-invariant kernels; other backends require explicit opt-in. Disable to restore ordinary scheduling. In-flight GPU operations cannot be interrupted.", "server")
 _add("YUNSHU_QUEUE_LIMIT", "int", 64, "Generation requests (chat, completions, messages, responses) in flight at once, running and waiting together. The next one is refused at once with 429, `Retry-After` and the queue depth in `error.x_yunshu` instead of waiting without bound. 0 = no limit.", "server", minimum=0)
 _add("YUNSHU_MEMORY_PRESSURE_REJECT", "float", 0.95, "Share of the Metal working set (MLX active memory / recommended working set) above which, while other requests are running, a new generation request is refused with 503 and `Retry-After` (it would OOM the process). An idle server never refuses. 0 = off.", "server", minimum=0.0)
+_add("YUNSHU_ORPHAN_GRACE_SECONDS", "float", 120.0, "Orphan adoption: when a client disconnects mid-generation (an agent timing out a long streamed reply), keep that generation running for this many seconds instead of cancelling it. An identical request (same model, messages, tools, constraints and sampling parameters, streaming or not) arriving inside the window is attached to it: the tokens already generated replay at once and the rest follow live, so the work is never repeated. Two live identical requests are never merged. A cancel request or deadline still stops at once; unadopted generations are cancelled when the window ends. Observed: Claude Code re-sends 5 s to 14 min after cutting a stream. 0 = cancel at disconnect.", "server", minimum=0.0)
+_add("YUNSHU_ORPHAN_MAX", "int", 2, "Most orphaned generations kept at once (each still holds its decode row and KV until adopted or expired; the oldest is cancelled beyond this).", "server", minimum=1)
 _add("YUNSHU_COMPLETION_BATCH_SIZE", "int", 32, "Text engine: maximum sequences decoded together.", "server", minimum=1)
-_add("YUNSHU_DEFAULT_MAX_TOKENS", "int", 32768, "Completion length when a chat / responses request omits max_tokens (OpenAI: up to the context window); the context budget still clamps it.", "server", minimum=1)
+_add("YUNSHU_SAMPLING_DEFAULTS", "enum", "model", "Where a request that omits a sampling parameter gets it: 'model' (the model's published per-mode recommendation, then its generation_config.json, then the API default) or 'api' (the official API default only: temperature 1.0, top_p 1.0, others off). A value in the request always wins.", "server", choices=("model", "api"))
+_add("YUNSHU_DEFAULT_MAX_TOKENS", "int", 0, "Operator cap on the output length of a chat / responses request that omits max_tokens / max_output_tokens. 0 (default) = the model's output limit (262144, Qwen3.8 card: thinking mode), which the API specs define as the default; the context window still clamps it (x_yunshu.budget reports the effective value and its source). A positive value lowers the default only; an explicit request value is never capped by it.", "server", minimum=0)
 _add("YUNSHU_MAX_PREFILL_TOKENS", "int", 0, "Reject prompts longer than this many tokens (0: no limit beyond the model context).", "server", minimum=0)
 _add("YUNSHU_STARTUP_TIMEOUT", "float", 300.0, "Seconds to wait for the model to load before startup fails.", "server", minimum=0.0)
 _add("YUNSHU_DRAIN_TIMEOUT", "float", 30.0, "Seconds to wait for in-flight requests on shutdown.", "server", minimum=0.0)
@@ -138,7 +141,7 @@ _add("YUNSHU_UDS", "path", None, "Serve on this Unix domain socket instead of a 
 _add("YUNSHU_WS_MAX_INFLIGHT", "int", 16, "Text WebSocket (/v1/stream, wss /v1/responses): maximum concurrent requests per connection.", "server", minimum=1)
 _add("YUNSHU_WS_PING_INTERVAL", "float", 15.0, "Text WebSocket: seconds between server heartbeat pings (0 disables).", "server", minimum=0.0)
 _add("YUNSHU_WS_SEND_QUEUE", "int", 256, "Text WebSocket: outbound events buffered per connection before generation is paused (backpressure).", "server", minimum=1)
-_add("YUNSHU_MAX_REQUEST_SIZE", "int", 10 * 1024 * 1024, "Maximum request body size in bytes.", "server", minimum=1)
+_add("YUNSHU_MAX_REQUEST_SIZE", "int", 32 * 1024 * 1024, "Maximum request body size in bytes. Default 32 MiB = the Anthropic Messages API request limit (32 MB, API errors reference), the largest agent client (Claude Code) request the engine is meant to take; longer sessions with base64 images or large tool results used to fail with 413 at the former 10 MiB.", "server", minimum=1)
 _add("YUNSHU_PROGRESS_INTERVAL_S", "float", 2.0, "Streaming chat/completions: seconds between `: yunshu-progress` SSE comments (queue / prefill progress, ETA) before the first token; 0 turns them off. Strict SSE clients ignore comment lines.", "server", minimum=0.0)
 _add("YUNSHU_SLOW_REQUEST_THRESHOLD", "float", 30.0, "Log a warning for requests slower than this many seconds.", "server", minimum=0.0)
 _add("YUNSHU_CORS_ORIGINS", "str", "http://localhost:3000,http://localhost:8000", "Comma-separated allowed CORS origins ('*' for any). Also checked for the Realtime WebSocket Origin header.", "server")
@@ -162,6 +165,7 @@ _add("YUNSHU_COMPACT_MAX_TOKENS", "int", 2048, "Responses compaction: maximum to
 _add("YUNSHU_HOST", "str", "127.0.0.1", "Bind host of `yunshu serve` (`--host` wins). 127.0.0.1 serves this Mac only; 0.0.0.0 also serves the local network (set YUNSHU_AUTH_TOKEN then).", "auth")
 _add("YUNSHU_AUTH_TOKEN", "str", None, "Bearer token. When set, every request except health/version/docs needs it; unset: inference is open and operational endpoints are denied.", "auth", secret=True)
 _add("YUNSHU_AUTH_DISABLED", "bool", False, "Disable auth entirely (operational endpoints open too). Local development only.", "auth")
+_add("YUNSHU_OBSERVE", "bool", False, "Observe mode (`yunshu serve --observe`): turn on every observability feature you did not set yourself: /debug/* routes, host telemetry, the serve log, the audit log file (~/.yunshu/logs/audit.log), exact token ids in logprobs, and the generation capture file (~/.yunshu/logs/stream_capture.jsonl). A value you set explicitly (flag, env, config file) always wins and shows its own source; the others show source 'observe'. Costs: telemetry adds about +1.8% follow-up TTFT at 1K (27B A/B), the logs and capture write small files; keep it off for speed benchmarks. Without a token, /debug/* answers loopback clients only.", "observability")
 _add("YUNSHU_DEBUG_ROUTES", "bool", False, "Mount the /debug/* diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or YUNSHU_AUTH_DISABLED. /metrics is always mounted.", "observability")
 _add("YUNSHU_DEBUG_TREE_PROFILE", "bool", False, "Debugging aid: time every stage of the DFlash tree verify (GDN mixer, attention, MLP, residual norms, commit) by evaluating after each one, and log the per-round means when a request ends. The sync after each stage lengthens the round; the split is for finding the dominant stage, not for speed.", "observability")
 _add("YUNSHU_DEBUG_STREAM_CAPTURE", "path", None, "Debugging aid: append one JSON line per VLM-runner generation to this file with the generated token ids, the text pieces the engine handed to the gateway and their joined text, so a delivered answer can be compared with what was generated (soak invariant check). Off when unset.", "observability", stability="internal")
@@ -199,6 +203,11 @@ _add("YUNSHU_PREFILL_MATMUL", "enum", "stock", "Qwen3.5-family VLM prefill matmu
 _add("YUNSHU_PREFILL_BUFFER_CACHE_GB", "float", None, "VLM runner: GiB of MLX's freed-buffer cache kept across prefill steps. Unset: 5% of physical RAM, at most 6 GiB (128 GiB: 6; 8 GiB: 0.4), but 0.5 GiB when the resident weights leave little headroom (above 80% of YUNSHU_MAX_MEMORY_GB when set, else above 45% of RAM): lossless, it cuts the long-prefill peak of a 74 GB model by 5-10 GB. Uses MLX's cache limit to reclaim excess freed memory on the next allocation without clearing every reusable bucket; freed buffers may transiently exceed the limit until that allocation. Keeps long-prefix restore buffers warm across requests. 0 = upstream clear after every chunk. Allocator only; output unchanged.", "vlm-runner", minimum=0.0)
 _add("YUNSHU_PREFILL_GDN", "enum", "chunked", "Qwen3.5-family VLM prefill recurrence. chunked uses mx.fast.gated_delta_update; the qualified split-invariant 27B path uses it for every prompt piece, padding short tails to 64 with identity updates that preserve fp32 state. Checkpoints and resumable cuts are absolute 64-token boundaries. step retains the per-token kernel and disables split-invariant mode. Decode and speculative verify retain their existing kernels. Part of the APC arithmetic namespace.", "vlm-runner", choices=("chunked", "step"))
 _add("YUNSHU_PREFILL_ATTENTION", "enum", "tile", "Qwen3.5-family VLM prefill attention on the qualified M5 Max / MLX 0.32.3 pair (bf16, D=256, causal, plain KV). tile uses BQ32 NAX attention; the qualified split-invariant 27B path uses it for every query length, including unaligned short tails. Other configurations retain the 1024-row threshold. stock disables split-invariant mode. Decode and speculative verify retain their kernels. Split-invariant attention is included in the APC arithmetic namespace.", "vlm-runner", choices=("tile", "stock"), stability="stable")
+_add("YUNSHU_ANE_FFN_SPLIT", "enum", "off", "Qwen3.5-family VLM prefill (single-row prompt steps of at least the calibrated rows): `splash` splits each dense FFN layer by intermediate channel between the GPU and the Apple Neural Engine, as Splash does (Apache-2.0 port): the ANE runs a W8A8 share (int8 weights rotated by a block Hadamard transform, int8 activations) through the private AppleNeuralEngine API on IOSurface memory shared with Metal, ordered by a shared event inside the GPU command stream. LOSSY: the ANE's part differs from the GPU's by about 2.5% RMS of what it adds, so outputs and logprobs differ slightly from `off`; prefix-cache states are kept apart by the kernel id. The share and the least chunk come from a calibration on this Mac (about a minute at first start, remembered per model and device). Any ANE failure or a split that loses to the GPU alone stops it for the life of the process and the GPU reruns the step. Costs about 2-3 GiB of extra resident memory (the GPU's copy of the leading down-projection channels) plus ANE surfaces. Off by default.", "vlm-runner", choices=("off", "splash"))
+_add("YUNSHU_ANE_FFN_SHARE", "float", None, "With YUNSHU_ANE_FFN_SPLIT=splash: fixed fraction (0-1) of intermediate channels the ANE takes, skipping calibration (rounded to 512-channel units). Unset: calibrated.", "vlm-runner", minimum=0.0)
+_add("YUNSHU_ANE_FFN_TRACE", "bool", False, "With YUNSHU_ANE_FFN_SPLIT=splash: log, for each split prompt step, the Neural Engine's milliseconds per layer and the GPU-side gap between layers (diagnostics).", "vlm-runner")
+_add("YUNSHU_ANE_FFN_CACHE", "path", None, "With YUNSHU_ANE_FFN_SPLIT=splash: directory of the compiled Neural Engine programs' sources and the remembered calibration. Unset: ~/.yunshu/ane_cache/ffn.", "vlm-runner")
+_add("YUNSHU_ANE_FFN_MIN_ROWS", "int", None, "With YUNSHU_ANE_FFN_SHARE: least prompt-step rows that take the split (512-2048, steps of 128). Unset: 512.", "vlm-runner", minimum=512)
 _add("YUNSHU_VLM_APC_DISK_TIERS", "str", None, "Further APC storage tiers below the SSD directory, comma-separated, each 'PATH[@GiB]' (an external SSD, an HDD, a NAS mount). Each volume is profiled at startup (sequential read / write bandwidth and latency, cached per mount for a day) and the tiers are ordered by measured read speed. Checkpoints the SSD tier evicts move down in the background instead of being deleted; a tier is used for a hit only when restoring from it beats re-prefilling (measured bandwidth against the observed prefill speed). A tier that is not mounted is skipped; when it returns its files are validated again. Each tier has its own cap (default: a quarter of its volume, at most 64 GiB) and free-space reserve. Lossless; unset: SSD only.", "vlm-runner")
 _add("YUNSHU_VLM_APC_DISK_ENCODING", "enum", "auto", "How the lower APC storage tiers (YUNSHU_VLM_APC_DISK_TIERS) hold a checkpoint: 'raw' (a copy of the SSD file), 'zstd' (lossless: byte-plane shuffle of bf16 tensors + zstd; decoded on restore), 'auto' (zstd only when the measured gain in effective read bandwidth, ratio against decode cost, beats raw on that device: slow disks and network shares, not fast SSDs). Never lossy.", "vlm-runner", choices=("auto", "raw", "zstd"))
 _add("YUNSHU_VLM_APC_WARM", "enum", "off", "APC WARM tier: what happens to a prefix checkpoint that leaves the RAM tier (HOT, ready-to-use arrays) before it goes to SSD. 'off': straight to SSD. 'lossless': kept in RAM compressed (zstd after a byte-plane shuffle; bit-exact, a WARM hit equals a HOT hit token for token; costs CPU for compression and a decode on hit). 'int8' / 'int4': attention K/V kept in RAM as affine group-quantized codes (LOSSY: a hit restores dequantized K/V, so output can differ from a cold prefill; the SSD tier keeps exact states in these modes). The WARM tier takes YUNSHU_VLM_APC_WARM_SHARE of the APC RAM budget.", "vlm-runner", choices=("off", "lossless", "int8", "int4"))
@@ -292,12 +301,12 @@ _add("YUNSHU_WEB_FETCH_ALLOW_PRIVATE", "bool", False, "Let web_fetch reach priva
 _add("YUNSHU_WEB_FETCH_MAX_BYTES", "int", 2000000, "Largest response body web_fetch downloads.", "server-tools", minimum=1024)
 _add("YUNSHU_WEB_FETCH_TIMEOUT", "float", 20.0, "Seconds web_fetch waits for a page.", "server-tools", minimum=1.0)
 _add("YUNSHU_WEB_FETCH_MAX_TEXT_CHARS", "int", 40000, "Extracted page text handed to the model is cut to this many characters (a request's max_content_tokens can lower it).", "server-tools", minimum=1000)
-_add("YUNSHU_CODE_EXECUTION", "bool", False, "Serve the server-side code execution tools (Anthropic code_execution_*) on this machine inside the Anthropic sandbox-runtime (srt, optional: `npm i @anthropic-ai/sandbox-runtime`, Node >= 22.12). Off: requests that declare them get a 400. On without srt: 503, never an unsandboxed run. The sandbox writes only inside a per-container directory, reads nothing of your home, and has no network unless YUNSHU_CODE_EXECUTION_NETWORK_ALLOW lists hosts.", "server-tools")
+_add("YUNSHU_CODE_EXECUTION", "bool", False, "Serve the server-side code execution tools on this machine (Anthropic code_execution_*; OpenAI Responses code_interpreter and hosted shell; the OpenAI /v1/containers API) inside the Anthropic sandbox-runtime (srt, optional: `npm i @anthropic-ai/sandbox-runtime`, Node >= 22.12). Off: requests that declare them get a 400. On without srt: 503, never an unsandboxed run. The sandbox writes only inside a per-container directory, reads nothing of your home, and has no network unless YUNSHU_CODE_EXECUTION_NETWORK_ALLOW lists hosts.", "server-tools")
 _add("YUNSHU_CODE_EXECUTION_ROOT", "path", "~/.yunshu/sandbox", "Directory holding the code execution containers (one sub-directory each). Created with mode 0700.", "server-tools")
-_add("YUNSHU_CODE_EXECUTION_TIMEOUT", "float", 60.0, "Wall-clock seconds one code execution call may run before its process group is killed (execution_time_exceeded). Also the CPU-time limit.", "server-tools", minimum=1.0)
-_add("YUNSHU_CODE_EXECUTION_MEMORY_MB", "int", 2048, "Resident memory a code execution call may use (whole process group, sampled every 100 ms); above it the call is killed.", "server-tools", minimum=64)
-_add("YUNSHU_CODE_EXECUTION_NETWORK_ALLOW", "str", None, "Comma-separated hosts the sandbox may reach (`example.com`, `*.example.com`, `host:443`). Unset: no network at all, loopback included. Private address ranges stay blocked even for allowed names.", "server-tools")
-_add("YUNSHU_CODE_EXECUTION_TTL_MIN", "float", 20.0, "Minutes a code execution container may sit unused before it and its files are deleted.", "server-tools", minimum=1.0)
+_add("YUNSHU_CODE_EXECUTION_TIMEOUT", "float", 60.0, "Wall-clock seconds one code execution call may run before its process group is killed (execution_time_exceeded). Also the CPU-time limit. A Python cell waiting for the client's tool results does not count.", "server-tools", minimum=1.0)
+_add("YUNSHU_CODE_EXECUTION_MEMORY_MB", "int", 2048, "Resident memory a code execution call may use (whole process group, sampled every 100 ms); above it the call is killed. An OpenAI container's memory_limit can only lower it.", "server-tools", minimum=64)
+_add("YUNSHU_CODE_EXECUTION_NETWORK_ALLOW", "str", None, "Comma-separated hosts the sandbox may reach (`example.com`, `*.example.com`, `host:443`). Unset: no network at all, loopback included. Private address ranges stay blocked even for allowed names. An OpenAI container's network_policy can only narrow this list.", "server-tools")
+_add("YUNSHU_CODE_EXECUTION_TTL_MIN", "float", 20.0, "Minutes a code execution container may sit unused before it and its files are deleted. An OpenAI container's expires_after.minutes can only shorten it.", "server-tools", minimum=1.0)
 _add("YUNSHU_MCP_CONNECTOR", "bool", True, "Serve the MCP connector: Anthropic mcp_servers and OpenAI Responses {type: mcp} tools are executed by this server, which connects to the named MCP servers over streamable HTTP / SSE.", "server-tools")
 _add("YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE", "bool", True, "Let the MCP connector reach private and loopback MCP servers (local tool servers are the common case). Off: only public addresses.", "server-tools")
 _add("YUNSHU_MCP_CONNECTOR_TIMEOUT", "float", 30.0, "Seconds an MCP connector call (initialize, tools/list, tools/call) may take, DNS included.", "server-tools", minimum=1.0)
@@ -367,6 +376,8 @@ _LIVE = frozenset(
         "YUNSHU_QUEUE_LIMIT",
         "YUNSHU_MEMORY_PRESSURE_REJECT",
         "YUNSHU_MAX_PREFILL_TOKENS",
+        "YUNSHU_ORPHAN_GRACE_SECONDS",
+        "YUNSHU_ORPHAN_MAX",
         "YUNSHU_WS_MAX_INFLIGHT",
         "YUNSHU_WS_PING_INTERVAL",
         "YUNSHU_WS_SEND_QUEUE",
@@ -457,6 +468,7 @@ _RELOAD = frozenset(
         "YUNSHU_UNCACHED_SCHEDULING",
         "YUNSHU_AUXILIARY_SCHEDULING",
         "YUNSHU_DEFAULT_MAX_TOKENS",
+        "YUNSHU_SAMPLING_DEFAULTS",
         "YUNSHU_MEM_PRESSURE_THRESHOLD",
         "YUNSHU_PREFIX_MAX_ENTRIES",
         "YUNSHU_PREFIX_HOT_LIMIT",
@@ -503,6 +515,11 @@ _RELOAD = frozenset(
 )
 _RESTART = frozenset(
     {
+        "YUNSHU_ANE_FFN_SPLIT",
+        "YUNSHU_ANE_FFN_SHARE",
+        "YUNSHU_ANE_FFN_MIN_ROWS",
+        "YUNSHU_ANE_FFN_CACHE",
+        "YUNSHU_ANE_FFN_TRACE",
         "YUNSHU_VLM_APC_DRAFT_WINDOW_GB",
         "YUNSHU_MODEL",
         "YUNSHU_MULTI_MODEL",
@@ -518,6 +535,7 @@ _RESTART = frozenset(
         "YUNSHU_MAX_REQUEST_SIZE",
         "YUNSHU_SLOW_REQUEST_THRESHOLD",
         "YUNSHU_RESPONSE_CACHE",
+        "YUNSHU_OBSERVE",
         "YUNSHU_DEBUG_ROUTES",
         "YUNSHU_RATE_LIMIT_RPM",
         "YUNSHU_TRUSTED_PROXIES",
@@ -720,8 +738,43 @@ def write_config_value(name: str, value: Any | None, path: Path | None = None) -
     return write_config_values({name: value}, path)
 
 
+def _observe_values() -> dict[str, str]:
+    base = str(Path.home() / ".yunshu" / "logs")
+    return {
+        "YUNSHU_DEBUG_ROUTES": "1",
+        "YUNSHU_TELEMETRY": "on",
+        "YUNSHU_SERVE_LOG": "1",
+        "YUNSHU_AUDIT_LOG_FILE": os.path.join(base, "audit.log"),
+        "YUNSHU_REPLAY_TOKEN_IDS": "1",
+        "YUNSHU_DEBUG_STREAM_CAPTURE": os.path.join(base, "stream_capture.jsonl"),
+    }
+
+
+OBSERVE_SETTINGS = (
+    "YUNSHU_DEBUG_ROUTES",
+    "YUNSHU_TELEMETRY",
+    "YUNSHU_SERVE_LOG",
+    "YUNSHU_AUDIT_LOG_FILE",
+    "YUNSHU_REPLAY_TOKEN_IDS",
+    "YUNSHU_DEBUG_STREAM_CAPTURE",
+)
+
+
 def raw(name: str) -> tuple[str | None, str]:
-    """``(text, source)`` for a setting; source is cli / env / file / default."""
+    """``(text, source)`` for a setting; source is cli / env / file / observe / default.
+
+    ``observe`` is the value ``YUNSHU_OBSERVE`` gives an observability setting
+    nobody set explicitly (one place, so every reader sees the same value).
+    """
+    text, source = _raw(name)
+    if source == "default" and name in OBSERVE_SETTINGS:
+        obs_text, _ = _raw("YUNSHU_OBSERVE")
+        if obs_text is not None and obs_text.strip().lower() in _TRUE:
+            return _observe_values()[name], "observe"
+    return text, source
+
+
+def _raw(name: str) -> tuple[str | None, str]:
     s = _setting(name)
     if name in _overrides:
         return _overrides[name], "cli"

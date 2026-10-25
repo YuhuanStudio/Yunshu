@@ -69,3 +69,5 @@ The diagram shows the ordering of the hand-offs for a streamed request; a non-st
 ## How to verify
 
 `tests/unit/test_client_disconnect_watch.py` and `tests/unit/test_disconnect_guard.py` cover cancellation on disconnect. Run `uv run pytest tests/unit/test_client_disconnect_watch.py -q`. For the live path, a response's `X-Request-Id` header and `x_yunshu` object show the id, queue state and cache tier of a real request. See also [Architecture](/docs/developers/architecture).
+
+The API-layer feature matrix that keeps every route in step with the others is described in [API parity matrix](/docs/developers/api-parity).

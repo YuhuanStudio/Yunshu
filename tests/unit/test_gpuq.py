@@ -142,3 +142,38 @@ def test_cancel_and_patch_take_the_job_lock(gpuq, tmp_path):
         t.join(5)
     assert blocked
     assert gpuq._read(path)["cancel"] is True
+
+
+def test_job_temp_files_stay_off_the_system_disk(tmp_path, monkeypatch):
+    """A job's TMPDIR is a per-job dir under GPUQ_DIR, removed when the job ends (Core ML compiles in the default
+    system-disk TMPDIR piled up to 480 GB, 2026-10-25)."""
+    import importlib
+    import os
+    import sys
+
+    monkeypatch.setenv("GPUQ_DIR", str(tmp_path))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "dev"))
+    import gpuq
+
+    gpuq = importlib.reload(gpuq)
+    gpuq.JOBS.mkdir(parents=True, exist_ok=True)
+    gpuq.LOGS.mkdir(parents=True, exist_ok=True)
+    seen = tmp_path / "seen"
+    code = f"import os,tempfile;open(tempfile.mktemp(),'w').write('x');open({str(seen)!r},'w').write(os.environ['TMPDIR'])"
+    job = {
+        "id": "tmpjob",
+        "cmd": [sys.executable, "-c", code],
+        "cwd": str(tmp_path),
+        "env": {**os.environ, "TMPDIR": "/private/var/folders/system-disk"},
+        "timeout_s": 60,
+        "stall_s": 60,
+        "priority": 0,
+        "submitted": 0.0,
+        "state": "pending",
+    }
+    path = gpuq.JOBS / "tmpjob.json"
+    gpuq._write(path, job)
+    gpuq._run_one(job, path)
+    assert job["state"] == "done"
+    assert seen.read_text() == str(tmp_path / "tmp" / "tmpjob")
+    assert not (tmp_path / "tmp" / "tmpjob").exists()

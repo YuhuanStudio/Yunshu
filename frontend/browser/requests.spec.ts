@@ -316,7 +316,8 @@ test.describe("requests page finished-request ring", () => {
       "title",
       /ring-req-0123456789abcdef-\d{3}/,
     );
-    await expect(id).toContainText("…");
+    // The column has room: the whole id shows (only ids over 32 characters keep both ends).
+    await expect(id).toContainText(/ring-req-0123456789abcdef-\d{3}/);
     const boxes = await first.locator("td").evaluateAll((cells) =>
       cells
         .map((c) => c.getBoundingClientRect())
@@ -370,7 +371,7 @@ test.describe("requests page finished-request ring", () => {
       .getByRole("dialog", { name: "請求詳情" })
       .or(page.getByRole("complementary", { name: "請求詳情" }));
     const breakdown = panel.getByRole("region", { name: "耗時分解" });
-    await expect(breakdown.locator("p", { hasText: /^排隊$/ })).toBeVisible();
+    await expect(breakdown.locator("p", { hasText: /^排隊至預填開始$/ })).toBeVisible();
     await expect(breakdown).toContainText("40 ms");
     await expect(breakdown).toContainText("300 ms");
     await expect(breakdown).toContainText("2 s");

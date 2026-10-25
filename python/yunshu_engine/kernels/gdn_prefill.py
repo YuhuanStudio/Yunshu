@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from contextvars import ContextVar
+from typing import Any
 
 import mlx.core as mx
 
@@ -97,6 +98,7 @@ def install_split_forward(language_model) -> None:
         supported._yunshu_split_prefill = True  # type: ignore[attr-defined]
         language_model._supports_batch_invariant_decode = supported
     install_fused_conv(Qwen3_5GatedDeltaNet)
+    install_norm_scale(Qwen3_5GatedDeltaNet)
     original = Qwen3_5GatedDeltaNet._causal_conv1d_decode
     if not getattr(original, "_yunshu_split_prefill", False):
 
@@ -107,6 +109,75 @@ def install_split_forward(language_model) -> None:
 
         conv._yunshu_split_prefill = True  # type: ignore[attr-defined]
         Qwen3_5GatedDeltaNet._causal_conv1d_decode = conv
+
+
+# Match MLX RMSNorm's four consecutive values per SIMD lane, including the
+# BF16 materialization before the scalar multiply. Never fold the scale into
+# rsqrt: that would move a rounding boundary.
+_NORM_SCALE_SOURCE = r"""
+uint lane = thread_position_in_threadgroup.x;
+uint row = thread_position_in_grid.y;
+uint head = row % x_shape[2];
+uint token = (row / x_shape[2]) % x_shape[1];
+uint batch = row / (x_shape[2] * x_shape[1]);
+size_t offset = batch * x_strides[0] + token * x_strides[1] + head * x_strides[2];
+float vals[4];
+float ss = 0.0f;
+for (uint i=0; i<4; ++i) {
+    vals[i] = float(x[offset + (lane * 4 + i) * x_strides[3]]);
+    ss += vals[i] * vals[i];
+}
+ss = simd_sum(ss);
+float inv = metal::precise::rsqrt(ss / 128.0f + 1e-6f);
+for (uint i=0; i<4; ++i) {
+    bfloat16_t normed = bfloat16_t(vals[i] * inv);
+    out[row * 128 + lane * 4 + i] = bfloat16_t(float(normed) * float(bfloat16_t(INVERSE ? 0.0078125f : 0.08838834764831845f)));
+}
+"""
+_NORM_SCALE_KERNEL: Any = None
+
+
+def fused_norm_scale(x, *, inverse: bool):
+    """128-wide BF16 RMSNorm followed by the Qwen GDN Q/K scale."""
+    global _NORM_SCALE_KERNEL
+    if _NORM_SCALE_KERNEL is None:
+        _NORM_SCALE_KERNEL = mx.fast.metal_kernel(
+            name="yunshu_gdn_norm_scale",
+            input_names=["x"],
+            output_names=["out"],
+            source=_NORM_SCALE_SOURCE,
+            ensure_row_contiguous=False,
+        )
+    rows = x.size // 128
+    return _NORM_SCALE_KERNEL(
+        inputs=[x],
+        template=[("INVERSE", inverse)],
+        grid=(32, rows, 1),
+        threadgroup=(32, 8, 1),
+        output_shapes=[x.shape],
+        output_dtypes=[x.dtype],
+    )[0]
+
+
+def install_norm_scale(cls) -> None:
+    original = cls._normalize_qk
+    if getattr(original, "_yunshu_norm_scale", False):
+        return
+
+    def normalize(self, q, k):
+        if (
+            split_enabled()
+            and in_prefill_math()
+            and q.ndim == k.ndim == 4
+            and q.dtype == k.dtype == mx.bfloat16
+            and q.shape[-1] == k.shape[-1] == 128
+            and mx.default_device() == mx.gpu
+        ):
+            return fused_norm_scale(q, inverse=True), fused_norm_scale(k, inverse=False)
+        return original(self, q, k)
+
+    normalize._yunshu_norm_scale = True  # type: ignore[attr-defined]
+    cls._normalize_qk = normalize
 
 
 _CONV_SRC = """

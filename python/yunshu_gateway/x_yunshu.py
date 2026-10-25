@@ -22,6 +22,8 @@ working unchanged:
   the prompt leaves in the context window.
 - ``x_yunshu.context_policy`` / ``X-Yunshu-Context-Policy`` report what the context-window
   manager removed from the prompt, when it did.
+- ``x_yunshu.sampling`` gives the temperature / top_p / top_k the request ran with and where each
+  came from: ``request``, the model's ``generation_config`` or the ``api_default``.
 
 The measurements come from the engine's live ``RunStats`` (the VLM batch runner) when the
 request reaches it, and from the gateway's own clock otherwise, so the fields are best-effort
@@ -133,6 +135,23 @@ def sanitize_request_id(raw: str | bytes | None) -> str | None:
     return raw if _ID_OK.match(raw) else None
 
 
+def served_model(requested: str | None) -> str | None:
+    """The model that actually answers: in single-model mode every requested name maps to the one
+    served model, so a client's alias ("m", "local") is not what the console should show."""
+    try:
+        from .engine import get_display_model_id, get_engine, get_model_manager
+
+        if get_model_manager() is None:
+            return (
+                get_display_model_id()
+                or getattr(get_engine(), "model_name", None)
+                or requested
+            )
+    except Exception:  # noqa: BLE001 - display only
+        pass
+    return requested
+
+
 def new_request_id() -> str:
     return f"req_{uuid.uuid4().hex[:24]}"
 
@@ -171,12 +190,16 @@ class RequestInfo:
     # The token budget when the prompt left less room than max_tokens asked for
     # (``token_budget.TokenBudget.report``); None when the request fit.
     budget: dict | None = None
+    # The sampling values the request ran with and where each came from (request /
+    # generation_config / api_default); set by ``sampling_defaults.resolve_sampling``.
+    sampling: dict | None = None
     # Tool-call parse outcome of the response(s): calls parsed, and tool-call markup blocks that
     # yielded no call (counts only; set by yunshu_engine.tool_format.record_tool_outcome).
     tool_calls_parsed: int | None = None
     tool_markup_failed: int | None = None
     api_key_id: str | None = None  # the stored API key that made the request, if any
     _rate: tuple[float, int, float] | None = None  # (t, processed, ema tokens/s)
+    _gen_samples: list = field(default_factory=list)  # (t, generated) while decoding
 
     @property
     def stats(self):
@@ -272,8 +295,14 @@ class _Registry:
             if model is not None and e.get("model") != model:
                 continue
             out.append(dict(e))
-            if len(out) >= limit:
+            if after_seq is None and len(out) >= limit:
                 break
+        if after_seq is not None and len(out) > limit:
+            # More finished since the cursor than one page holds: hand out the OLDEST page and move the cursor only
+            # to its newest row, so the next read continues there. Returning the newest page with the global latest
+            # skipped everything in between (a reader under load lost 88 of 3000 requests).
+            out = out[-limit:]
+            return out, int(out[0].get("seq", latest))
         return out, latest
 
     def clear(self) -> None:
@@ -288,6 +317,18 @@ registry = _Registry()
 # ── queue / progress ────────────────────────────────────────────────────
 
 
+def prefill_began(st) -> float:
+    """When this request's first prefill atom started (0 = not yet). Admission is earlier: an admitted
+    request waits for its turn while other requests' atoms run."""
+    if st is None:
+        return 0.0
+    return getattr(st, "t_prefill_start", 0.0) or (
+        0.0
+        if getattr(st, "tracks_prefill_start", False)
+        else getattr(st, "t_admit", 0.0)
+    )
+
+
 def _remaining_prefill_s(st) -> float:
     """Best-effort seconds of prefill left for one request's stats (0 when unknown)."""
     if st is None:
@@ -295,8 +336,8 @@ def _remaining_prefill_s(st) -> float:
     left = max(st.prefill_total - st.prefill_done, 0)
     if left <= 0 or st.t_first:
         return 0.0
-    if st.t_admit and st.prefill_done > 0:
-        rate = st.prefill_done / max(time.perf_counter() - st.t_admit, 1e-6)
+    if prefill_began(st) and st.prefill_done > 0:
+        rate = st.prefill_done / max(time.perf_counter() - prefill_began(st), 1e-6)
         return left / rate if rate > 0 else 0.0
     rate = recent_rates().get("prefill_tps") or 0.0
     return left / rate if rate > 0 else 0.0
@@ -313,6 +354,7 @@ def queue_snapshot(info: RequestInfo) -> tuple[int, float]:
         i
         for i in registry.active()
         if i is not info
+        and (i.stats is None or not i.stats.t_first)  # a decoding request is not ahead
         and (
             i.scheduling_priority > info.scheduling_priority
             or (
@@ -381,10 +423,36 @@ def progress_payload(info: RequestInfo) -> dict:
         out["completion_tokens"] = st.generated
         if st.phase == "decode" and st.t_first and st.t_last > st.t_first:
             # Same formula as the live aggregate in /v1/yunshu/status.
-            out["tokens_per_second"] = round(
-                (st.generated - 1) / (st.t_last - st.t_first), 1
-            )
+            rate = live_decode_rate(info, now)
+            if rate is not None:
+                out["tokens_per_second"] = round(rate, 1)
     return out
+
+
+LIVE_RATE_WINDOW_S = 5.0
+
+
+def live_decode_rate(info: RequestInfo, now: float | None = None) -> float | None:
+    """Tokens/s of this request over the last few seconds, not since its first token.
+
+    The lifetime average hid everything that matters live: a request that was cut to a
+    third of its speed by a peer still read its old average for minutes, so concurrent
+    rows looked unfairly split and the total looked higher than the GPU was producing."""
+    st = info.stats
+    if st is None or not st.t_first or st.generated < 1:
+        return None
+    now = time.perf_counter() if now is None else now
+    samples = info._gen_samples
+    if not samples or samples[-1][1] != st.generated or now - samples[-1][0] >= 0.5:
+        samples.append((now, st.generated))
+    while len(samples) > 2 and now - samples[1][0] > LIVE_RATE_WINDOW_S:
+        samples.pop(0)
+    t0, g0 = samples[0]
+    if now - t0 < 0.5:
+        if st.t_last > st.t_first:
+            return float((st.generated - 1) / (st.t_last - st.t_first))
+        return None
+    return float(max(st.generated - g0, 0) / (now - t0))
 
 
 def _prefill_rate(info: RequestInfo, done: int, now: float) -> float | None:
@@ -397,8 +465,8 @@ def _prefill_rate(info: RequestInfo, done: int, now: float) -> float | None:
         rate = inst if not prev[2] else 0.5 * prev[2] + 0.5 * inst
     elif prev is not None:
         rate = prev[2] or None
-    if rate is None and st is not None and st.t_admit and done > 0:
-        rate = done / max(now - st.t_admit, 1e-6)
+    if rate is None and st is not None and prefill_began(st) and done > 0:
+        rate = done / max(now - prefill_began(st), 1e-6)
     if prev is None or done != prev[1]:
         info._rate = (now, done, rate or 0.0)
     return rate
@@ -421,7 +489,7 @@ def _ms(seconds: float | None) -> float | None:
 
 def phase_offsets_ms(info: RequestInfo, t_first: float | None = None) -> dict:
     """Phase timestamps as milliseconds after the request arrived (``arrive`` is 0 by
-    definition): left the queue and started prefill (``admit``), first and latest generated
+    definition): admitted (``admit``), first prefill atom started (``prefill_start``), first and latest generated
     token, done. A phase not reached yet is None. One monotonic clock, so the lanes of a
     timeline line up exactly; ``t0_wall`` (epoch seconds) anchors them to the wall clock."""
     st = info.stats
@@ -437,7 +505,10 @@ def phase_offsets_ms(info: RequestInfo, t_first: float | None = None) -> dict:
         t_first = st_first or info.t_first_chunk
     return {
         "arrive": 0.0,
-        "admit": off(getattr(st, "t_admit", None)),
+        # ``admit``: the engine admitted it; ``prefill_start``: its own first prefill atom began (queue wait
+        # and prefill time are measured from here, so concurrent requests do not count peers' prefill as theirs).
+        "admit": off(getattr(st, "t_admit", 0.0) or None),
+        "prefill_start": off(prefill_began(st) or None),
         "first_token": off(t_first),
         "last_token": off(getattr(st, "t_last", None) if st_first else None),
         "done": off(info.t_done),
@@ -457,6 +528,7 @@ def latency_breakdown(info: RequestInfo) -> dict:
         for key, attr in (
             ("engine_submit", "t_submit"),
             ("engine_admit", "t_admit"),
+            ("prefill_start", "t_prefill_start"),
             ("prefill_end", "t_prefill_end"),
             ("first_decode", "t_first"),
         ):
@@ -512,14 +584,13 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
     if t_first is None and info.t_first_chunk is not None:
         t_first = info.t_first_chunk
     ttft = (t_first - info.arrived) if t_first is not None else None
+    began = prefill_began(st) if st is not None else 0.0
     queue_wait = (
-        (st.t_admit - st.t_submit)
-        if st is not None and st.t_admit and st.t_submit
-        else None
+        (began - st.t_submit) if st is not None and began and st.t_submit else None
     )
     prefill_s = (
-        (t_first - st.t_admit)
-        if (st is not None and st.t_admit and t_first is not None)
+        (t_first - began)
+        if (st is not None and began and t_first is not None)
         else None
     )
     fresh = (prompt_tokens - cached) if prompt_tokens is not None else None
@@ -530,9 +601,11 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
     )
     t_last = st.t_last if st is not None and st.t_last else end
     decode_s = (t_last - t_first) if t_first is not None else None
+    # An adopted orphan replays tokens decoded before this request arrived; they are no speed.
+    live_tokens = (completion_tokens or 0) - int(getattr(st, "replayed", 0) or 0)
     decode_tps = (
-        round((completion_tokens - 1) / decode_s, 1)
-        if (decode_s and decode_s > 0 and completion_tokens and completion_tokens > 1)
+        round((live_tokens - 1) / decode_s, 1)
+        if (decode_s and decode_s > 0 and live_tokens > 1)
         else None
     )
     spec = None
@@ -561,7 +634,7 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
             }
     out = {
         "request_id": info.request_id,
-        "model": getattr(info.gen, "model", None) or info.model,
+        "model": served_model(getattr(info.gen, "model", None) or info.model),
         "reasons": {
             "cache": getattr(st, "cache_reason", None),
             "spec": getattr(st, "spec_reason", None),
@@ -640,6 +713,8 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
         out["context_policy"] = info.context_policy
     if info.budget:
         out["budget"] = info.budget
+    if info.sampling:
+        out["sampling"] = info.sampling
     if info.deadline_ms is not None:
         out["deadline_ms"] = info.deadline_ms
     return out
@@ -697,7 +772,8 @@ def record_done(info: RequestInfo, stats: dict) -> None:
         {
             "t": time.time(),
             "request_id": info.request_id,
-            "model": getattr(info.gen, "model", None) or info.model,
+            "model": served_model(getattr(info.gen, "model", None) or info.model),
+            "model_alias": (getattr(info.gen, "model", None) or info.model),
             "speculative": stats.get("speculative"),
             "cache": stats.get("cache"),
             "structured_output": stats.get("structured_output"),

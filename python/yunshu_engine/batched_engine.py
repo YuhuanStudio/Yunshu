@@ -46,7 +46,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-_REASONING_EFFORT_MAP = {"low": 2048, "medium": 8192, "high": 32768}
+from .output_limits import (  # noqa: E402
+    EFFORT_BUDGET_FALLBACK,
+    EFFORT_THINKING_BUDGET,
+    THINKING_OFF_EFFORTS,
+)
+
+_REASONING_EFFORT_MAP = EFFORT_THINKING_BUDGET
 _MAX_STREAMING_TEXT_BUFFER = (
     1 * 1024 * 1024
 )  # 1MB safety limit for streaming text buffer
@@ -1441,11 +1447,22 @@ class BatchedEngine(
 
         # Memory guard preflight check
         # (raises: a refused request is an error, not an empty "length" completion)
-        self._check_memory_guard(prompt, max_tokens, raise_on_reject=True)
+        _, max_tokens = self._check_memory_guard(
+            prompt, max_tokens, raise_on_reject=True
+        )
 
         # Resolve reasoning_effort → thinking_budget if not explicitly set
+        if (
+            reasoning_effort is not None
+            and str(reasoning_effort).strip().lower() in THINKING_OFF_EFFORTS
+        ):
+            reasoning_effort = None
+            if enable_thinking is None:
+                enable_thinking = False
         if thinking_budget is None and reasoning_effort is not None:
-            thinking_budget = _REASONING_EFFORT_MAP.get(reasoning_effort, 8192)
+            thinking_budget = _REASONING_EFFORT_MAP.get(
+                reasoning_effort, EFFORT_BUDGET_FALLBACK
+            )
             if enable_thinking is None:
                 enable_thinking = True
         if constrains_initial_output(json_schema):
@@ -1897,8 +1914,17 @@ class BatchedEngine(
         )
         spec_decode = _spec is not None
         # Resolve reasoning_effort → thinking_budget if not explicitly set
+        if (
+            reasoning_effort is not None
+            and str(reasoning_effort).strip().lower() in THINKING_OFF_EFFORTS
+        ):
+            reasoning_effort = None
+            if enable_thinking is None:
+                enable_thinking = False
         if thinking_budget is None and reasoning_effort is not None:
-            thinking_budget = _REASONING_EFFORT_MAP.get(reasoning_effort, 8192)
+            thinking_budget = _REASONING_EFFORT_MAP.get(
+                reasoning_effort, EFFORT_BUDGET_FALLBACK
+            )
             if enable_thinking is None:
                 enable_thinking = True
         if constrains_initial_output(json_schema):
@@ -1928,7 +1954,7 @@ class BatchedEngine(
             return
 
         # Memory guard preflight check
-        guard_rejection = self._check_memory_guard(prompt, max_tokens)
+        guard_rejection, max_tokens = self._check_memory_guard(prompt, max_tokens)
         if guard_rejection is not None:
             yield guard_rejection
             return

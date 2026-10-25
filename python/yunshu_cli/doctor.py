@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib.metadata
+import os
 import platform
 import shutil
 import socket
@@ -378,6 +379,41 @@ def _is_yunshu(host: str, port: int) -> bool:
     return False
 
 
+def check_sampling(model: str) -> list[Check]:
+    """The sampling a request without sampling parameters gets on this model, per mode."""
+    try:
+        from yunshu_engine.sampling_defaults import defaults_by_mode
+
+        p = Path(model).expanduser()
+        if not p.is_dir():
+            from yunshu_gateway.sampling_defaults import _as_dir
+
+            resolved = _as_dir(model)
+            p = Path(resolved) if resolved else p
+        if not p.is_dir():
+            return []
+        by = defaults_by_mode(p)
+
+        def fmt(m: str) -> str:
+            e = by[m]
+            return (
+                f"T={e['temperature']['value']} top_p={e['top_p']['value']} "
+                f"top_k={e['top_k']['value']} presence={e['presence_penalty']['value']} "
+                f"({e['temperature']['source']})"
+            )
+
+        return [
+            Check(
+                "sampling defaults",
+                "ok",
+                f"default mode {by['default_mode']}; thinking {fmt('thinking')}; non-thinking {fmt('non_thinking')}",
+                "A request value always wins; YUNSHU_SAMPLING_DEFAULTS=api uses API defaults.",
+            )
+        ]
+    except Exception as exc:
+        return [Check("sampling defaults", "warn", f"unreadable: {exc}", "")]
+
+
 def check_settings() -> list[Check]:
     try:
         warnings = settings.validate(warn=False)
@@ -639,14 +675,23 @@ def check_code_execution() -> Check:
         sp.write_text(json.dumps(build_settings(Path(d) / "c")))
         try:
             p = subprocess.run(
-                info.argv(sp, ["/usr/bin/true"]),
+                # the sandbox's Python is what code_interpreter and the REPL run
+                info.argv(
+                    sp,
+                    [
+                        os.path.join(sys.base_prefix, "bin", "python3"),
+                        "-c",
+                        "print(40 + 2)",
+                    ],
+                ),
                 capture_output=True,
                 text=True,
                 timeout=30,
+                cwd=d,  # the caller's directory may be one the sandbox hides (python reads it)
                 env={"PATH": "/usr/bin:/bin", "TMPDIR": "/tmp/"},
             )
-            ok = p.returncode == 0
-            detail = p.stderr.strip()[:120]
+            ok = p.returncode == 0 and p.stdout.strip() == "42"
+            detail = p.stderr.strip()[:120] or "python3 did not run in the sandbox"
         except (OSError, subprocess.SubprocessError) as e:
             ok, detail = False, str(e)
     state = "on" if on else "off"
@@ -898,6 +943,7 @@ def run_checks(
     checks += check_local_api_storage()
     if model:
         checks += check_model(model, info, metadata_only=no_metal)
+        checks += check_sampling(model)
         if not no_metal:
             checks += check_speculative(model)
     checks.append(check_port(host, port))

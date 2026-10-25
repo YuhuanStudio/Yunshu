@@ -21,6 +21,10 @@ def call(name: str, args: dict, call_id: str = "call_m1") -> dict:
     return {"kind": "call", "name": name, "args": args, "call_id": call_id}
 
 
+def custom(name: str, text_input: str, call_id: str = "call_c1") -> dict:
+    return {"kind": "custom", "name": name, "input": text_input, "call_id": call_id}
+
+
 def reasoning(t: str) -> dict:
     return {"kind": "reasoning", "text": t}
 
@@ -124,6 +128,23 @@ def response_events(
                 "content": [full],
                 "status": "completed",
             }
+            out.append(ev("response.output_item.done", output_index=i, item=item))
+        elif it["kind"] == "custom":
+            cid = f"ctc_{i}"
+            item = {
+                "type": "custom_tool_call",
+                "id": cid,
+                "call_id": it["call_id"],
+                "name": it["name"],
+                "input": it["input"],
+            }
+            out.append(
+                ev(
+                    "response.output_item.added",
+                    output_index=i,
+                    item={**item, "input": ""},
+                )
+            )
             out.append(ev("response.output_item.done", output_index=i, item=item))
         else:
             args = json.dumps(it["args"])

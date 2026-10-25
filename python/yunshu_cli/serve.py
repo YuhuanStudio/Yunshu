@@ -151,7 +151,7 @@ def serve(
     max_request_size: int | None = typer.Option(
         None,
         "--max-request-size",
-        help="Maximum request body size in bytes (default 10MB).",
+        help="Maximum request body size in bytes (default 32 MiB, the Anthropic Messages API limit).",
     ),
     server_header: bool = typer.Option(
         False,
@@ -172,6 +172,12 @@ def serve(
         None,
         "--console-port",
         help="Port of the console process (default 8100; YUNSHU_CONSOLE_PORT).",
+    ),
+    observe: bool = typer.Option(
+        False,
+        "--observe",
+        help="Observe mode (YUNSHU_OBSERVE): debug routes, telemetry, serve log, audit "
+        "log, token ids and generation capture on unless you set them yourself.",
     ),
     config: str | None = typer.Option(
         None,
@@ -219,6 +225,7 @@ def serve(
         ("YUNSHU_KEEP_ALIVE_TIMEOUT", keep_alive_timeout),
         ("YUNSHU_MAX_REQUEST_SIZE", max_request_size),
         ("YUNSHU_UDS", os.path.abspath(os.path.expanduser(uds)) if uds else None),
+        ("YUNSHU_OBSERVE", True if observe else None),
         ("YUNSHU_CONSOLE", False if no_console else None),
         ("YUNSHU_CONSOLE_PORT", console_port),
     ):

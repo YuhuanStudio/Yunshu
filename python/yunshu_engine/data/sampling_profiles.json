@@ -1,0 +1,123 @@
+{
+ "version": 1,
+ "note": "Published per-mode sampling recommendations, copied from model cards; nothing here is invented. Matched by the normalized model directory name (lowercase, quantization suffixes stripped).",
+ "profiles": [
+  {
+   "names": [
+    "qwen3.8-27b"
+   ],
+   "source_url": "https://huggingface.co/Qwen/Qwen3.8-27B",
+   "read": "2026-10-24",
+   "quote": "Thinking Mode: temperature=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0, repetition_penalty=1.0 | Instruct (or non-thinking) mode: temperature=0.7, top_p=0.80, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0",
+   "thinking": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 0.0,
+    "repetition_penalty": 1.0
+   },
+   "non_thinking": {
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 1.5,
+    "repetition_penalty": 1.0
+   }
+  },
+  {
+   "names": [
+    "qwen3.6-27b"
+   ],
+   "source_url": "https://huggingface.co/Qwen/Qwen3.6-27B",
+   "read": "2026-10-24",
+   "quote": "Thinking mode, general tasks: temperature=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0, repetition_penalty=1.0 | Instruct (non-thinking): temperature=0.7, top_p=0.80, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0 (the card also lists a coding set, temperature 0.6, not used)",
+   "thinking": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 0.0,
+    "repetition_penalty": 1.0
+   },
+   "non_thinking": {
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 1.5,
+    "repetition_penalty": 1.0
+   }
+  },
+  {
+   "names": [
+    "qwen3.5-27b",
+    "qwen3.5-9b",
+    "qwen3.5-4b"
+   ],
+   "source_url": "https://huggingface.co/Qwen/Qwen3.5-27B (same sets on Qwen3.5-9B and Qwen3.5-4B)",
+   "read": "2026-10-24",
+   "quote": "Thinking mode for general tasks: temperature=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0 | Instruct (or non-thinking) mode for general tasks: temperature=0.7, top_p=0.8, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0 (the 27B card says presence_penalty=1.5 for thinking; coding and reasoning-task sets not used)",
+   "thinking": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 1.5,
+    "repetition_penalty": 1.0
+   },
+   "non_thinking": {
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 1.5,
+    "repetition_penalty": 1.0
+   }
+  },
+  {
+   "names": [
+    "qwen3.5-2b",
+    "qwen3.5-0.8b"
+   ],
+   "source_url": "https://huggingface.co/Qwen/Qwen3.5-2B (same sets on Qwen3.5-0.8B)",
+   "read": "2026-10-24",
+   "quote": "Text tasks, thinking: temperature=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0 | Text tasks, non-thinking: temperature=1.0, top_p=1.00, top_k=20, min_p=0.0, presence_penalty=2.0, repetition_penalty=1.0 (the VL-task sets are not used)",
+   "thinking": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 1.5,
+    "repetition_penalty": 1.0
+   },
+   "non_thinking": {
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 2.0,
+    "repetition_penalty": 1.0
+   }
+  },
+  {
+   "names": [
+    "gemma-4-31b-it"
+   ],
+   "source_url": "https://huggingface.co/google/gemma-4-31B-it",
+   "read": "2026-10-24",
+   "quote": "Use the following standardized sampling configuration across all use cases: temperature=1.0, top_p=0.95, top_k=64",
+   "thinking": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 64
+   },
+   "non_thinking": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 64
+   }
+  }
+ ]
+}

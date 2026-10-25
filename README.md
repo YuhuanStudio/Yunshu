@@ -66,9 +66,11 @@ Everything Yunshu serves, grouped. Each row links to the guide with an example a
 | [Lossy memory options](docs/guides/INFERENCE.md) | int8 KV, compressed WARM tier and load-time quantization; off by default |
 | [Large MoE loading (partial)](docs/guides/INFERENCE.md) | bits and group size derived from tensor shapes for community DeepSeek-V4-Flash packs; fit check before loading |
 | [Round driver (experimental)](docs/guides/ROUND_DRIVER.md) | own speculative round driver for dense Qwen3.5-family models |
+| [Neural Engine FFN split (experimental, lossy)](docs/guides/ANE_FFN_SPLIT.md) | opt-in W8A8 share of each dense FFN layer on the Apple Neural Engine beside the GPU during 27B prefill (Splash scheme); cold TTFT -5 to -10% |
 | [Model support](docs/guides/MODEL_SUPPORT.md) | what is tuned, generic and validated, per family |
 | [Next-turn rehearsal](docs/guides/INFERENCE.md) | Canonical stride APC rehearsal after eligible text replies; boundary/exact are explicit numeric-changing opt-ins |
 | [Batch-to-lane promotion](docs/guides/INFERENCE.md) | An eligible greedy request moves to speculation when the shared batch drains to one row; multi-row speculation is not implemented |
+| [Orphan adoption](docs/guides/INFERENCE.md) | A generation whose client timed out is kept for 120 s; the identical retry (streaming or not) attaches to it instead of recomputing |
 
 **APIs**
 
@@ -92,7 +94,7 @@ Everything Yunshu serves, grouped. Each row links to the guide with an example a
 |---|---|
 | [Coding agents](docs/guides/AGENT_COMPAT.md) | Claude Code, Codex and opencode through their own APIs; `yunshu launch` |
 | [Web search and fetch](docs/guides/WEB_SEARCH.md) | server-side web_search / web_fetch with citations; DuckDuckGo, Wikipedia, SearXNG, Tavily, Serper, Perplexity |
-| [Code execution](docs/guides/CODE_EXECUTION.md) | Anthropic code_execution (bash + text editor) run locally inside the sandbox-runtime; opt-in, no network by default |
+| [Code execution](docs/guides/CODE_EXECUTION.md) | Anthropic code_execution (bash, text editor, Python REPL, programmatic tool calling), OpenAI code_interpreter, shell and /v1/containers run locally inside the sandbox-runtime; opt-in, no network by default |
 | [Tavily-compatible API](docs/guides/TAVILY.md) | search, extract, crawl, map, research and MCP, with provider health backoff |
 | [MCP](docs/guides/API_SURFACE.md) | native MCP endpoint, and remote MCP servers named in a request |
 | [Client setup](docs/guides/CLIENTS.md) | curl, OpenAI and Anthropic SDKs, Open WebUI |

@@ -686,6 +686,181 @@
         "Research-only Steel FA2 harvester and exact-shape screen; kernel arithmetic retained, function constants fixed to causal aligned/no-mask/no-sinks/no-LSE and scratch supplied by caller. Not connected to inference; no winner or token parity claimed.",
         "Harvest release 0.32.4 vector TK4 bodies; fixed batch1,G6,D256 with screen-selected blocks 512/1024/1024 at 32K/64K/128K (not upstream g17s defaults). Installed MLX 0.32.3 compiles/launches. Bit differences are diagnostic, not a lossless rejection: deterministic, fp32/reference error, row/cache invariance and paired accuracy gates govern qualification."
       ]
+    },
+    {
+      "path": "python/yunshu_engine/ane/native/Program.hpp",
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "local_changes": [
+        "Isolated optional ctypes runtime; explicit caller-owned cache; local Metal event adapter; no serving integration."
+      ],
+      "upstream_paths": [
+        "runtime/ane/Program.hpp"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/ane/native/Program.mm",
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "local_changes": [
+        "Isolated optional ctypes runtime; explicit caller-owned cache; local Metal event adapter; no serving integration."
+      ],
+      "upstream_paths": [
+        "runtime/ane/Program.mm"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/ane/native/Handoff.hpp",
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "local_changes": [
+        "Isolated optional ctypes runtime; explicit caller-owned cache; local Metal event adapter; no serving integration."
+      ],
+      "upstream_paths": [
+        "runtime/ane/Handoff.hpp"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/ane/native/Handoff.mm",
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "local_changes": [
+        "Isolated optional ctypes runtime; explicit caller-owned cache; local Metal event adapter; no serving integration."
+      ],
+      "upstream_paths": [
+        "runtime/ane/Handoff.mm"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/ane/native/Support.hpp",
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "local_changes": [
+        "Isolated optional ctypes runtime; explicit caller-owned cache; local Metal event adapter; no serving integration."
+      ],
+      "upstream_paths": [
+        "runtime/AwakeClock.hpp",
+        "runtime/metal/MetalBackend.hpp"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/ane/native/mil.py",
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "local_changes": [
+        "Isolated optional ctypes runtime; explicit caller-owned cache; local Metal event adapter; no serving integration."
+      ],
+      "upstream_paths": [
+        "runtime/ops/AneFfn.cpp",
+        "runtime/ane/Program.mm"
+      ]
+    },
+    {
+      "kind": "derived",
+      "path": "python/yunshu_engine/ane/native/ProgramInstrumentation.hpp",
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "upstream_paths": [
+        "runtime/ane/ProgramInstrumentation.hpp"
+      ],
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "Namespace changed to Yunshu; test-only fault arming for signature, Objective-C exception, async failure and stalled evaluation guards."
+      ]
+    },
+    {
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "path": "python/yunshu_engine/ane/ffn_program.py",
+      "upstream_paths": [
+        "runtime/ops/AneFfn.cpp",
+        "runtime/ops/AneFfn.hpp",
+        "runtime/metal/abi/AneFfn.h"
+      ],
+      "local_changes": [
+        "Python port of the ANE program text (functions per row count, W8A8 segments, block-Hadamard intermediate rotation, per-token scales), surfaces and rotation signs; same constants and layout."
+      ]
+    },
+    {
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "path": "python/yunshu_engine/ane/ffn_kernels.py",
+      "upstream_paths": [
+        "runtime/metal/kernels/prefill/ane_ffn.metal"
+      ],
+      "local_changes": [
+        "MLX custom-kernel form of rotate/pack/weights/row_scale/join; MLX affine and Yunshu tiled quantized weights instead of GGUF image tensors; per-tile finite flags instead of an atomic status word."
+      ]
+    },
+    {
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "path": "python/yunshu_engine/ane/ffn_split.py",
+      "upstream_paths": [
+        "runtime/ops/AneFfn.cpp",
+        "runtime/ops/AneFfn.hpp"
+      ],
+      "local_changes": [
+        "Python/MLX orchestration of AneFfn (begin/add/commit/finish, double-buffered one-layer-ahead weight staging, shared-event join, discard-and-rerun, verify); the GPU part runs through Yunshu's NAX tile kernels (bm=64)."
+      ]
+    },
+    {
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "path": "python/yunshu_engine/ane/ffn_calibration.py",
+      "upstream_paths": [
+        "runtime/ops/AneFfnCalibration.cpp",
+        "runtime/ops/AneFfnCalibration.hpp"
+      ],
+      "local_changes": [
+        "Direct Python port of the timing model, share choice, least-chunk rule, calibration record and breaker."
+      ]
+    },
+    {
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "path": "python/yunshu_engine/ane/ffn_startup.py",
+      "upstream_paths": [
+        "runtime/ops/AneFfnMeasurement.cpp",
+        "runtime/engine/AneFfnStartup.cpp"
+      ],
+      "local_changes": [
+        "Python port of the measurement and start decision; calibration kept as a file beside the compiled programs; no memory planner."
+      ]
     }
   ],
   "inspired": [
@@ -1451,6 +1626,23 @@
       "local_changes": [
         "Research-only canonical per-query TK4 adapter imports the registered harvester, preserving absolute prefix lengths and split geometry across T=1..7. FP64 reference reports both kernels absolute/relative errors; deterministic and reconstructed-cache tensor checks. No serving connection or full APC/accuracy qualification."
       ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/ane/native/Bridge.mm",
+      "repo": "https://github.com/ml-explore/mlx",
+      "clone": "/Volumes/Micron/yunshu-refsync/mlx",
+      "upstream_paths": [
+        "mlx/backend/metal/device.h",
+        "mlx/backend/metal/device.cpp",
+        "mlx/transforms.cpp",
+        "python/src/convert.cpp"
+      ],
+      "commit": "64ea011cb65f14d9ce2737e60db9a4ae91ed7441",
+      "license": "MIT",
+      "local_changes": [
+        "Optional ABI-linked MLX encoder adapter signals ready and waits for ANE completion without producer/ANE CPU waits. Calls installed APIs, no upstream implementation copied. Adds independent watchdog, cancellation and retained IOSurface aliases; no serving importer."
+      ]
     }
   ],
   "patches": [
@@ -2043,7 +2235,7 @@
       "license": "MIT",
       "commit": "v0.7.3",
       "why": "prefill attention of 1024+ query rows (causal, plain KV cache) runs the BQ32 tile kernel; everything else calls the original",
-      "installed_version": "0.7.6",
+      "installed_version": "0.7.8",
       "source_sha256": "2bc5644af48b66c94f7ab1488e5807a9e2f5c2700fd32d06185eeb246bda667c"
     },
     {
@@ -2667,6 +2859,36 @@
       "why": "Scoped native MLX safetensors exact-cache reload; upstream reconstruction and validation retained",
       "source_sha256": "bdeabe368f076a095b8a03b4a4954dd24cbfe51425e4f9413052d75984596029",
       "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/gdn_prefill.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen3_5.language",
+      "symbol": "Qwen3_5GatedDeltaNet._normalize_qk",
+      "signature": "(self, q: mx.array, k: mx.array)",
+      "license": "MIT",
+      "commit": "v0.7.4",
+      "why": "split-invariant prefill only: 128-wide BF16 RMS followed by BF16 Q/K scale in one kernel, preserving the intermediate BF16 rounding; decode/verify and other shapes call upstream",
+      "source_sha256": "8f16e229aec08b7a1ca6eaf2bd15e61ade47061d7225925096b857955fe93ca9",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/ane_ffn_runtime.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen3_5.language",
+      "symbol": "Qwen3_5MLP.__call__",
+      "signature": "(self, x)",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "why": "class patch routing the dense FFN of qualified prompt steps through the ANE split",
+      "source_sha256": "ec6fbfefb1f0b4c0319f9e2178a70afadfeb06a591620757b0b86c754ed938eb",
+      "installed_version": "0.7.8"
     }
   ],
   "watch": [
@@ -2718,7 +2940,11 @@
       "globs": [
         "mlx/backend/metal/kernels/quantized*",
         "mlx/backend/metal/kernels/steel/**",
-        "python/mlx/nn/layers/quantized.py"
+        "python/mlx/nn/layers/quantized.py",
+        "mlx/backend/metal/device.*",
+        "mlx/backend/metal/event.*",
+        "mlx/transforms.cpp",
+        "python/src/convert.cpp"
       ],
       "why": "quantized matmul / NAX kernels",
       "pin_package": "mlx",
@@ -3014,9 +3240,26 @@
       "commit": "36969c094354086e15d2a327a9c50feb20b9cf11",
       "globs": [
         "mlx/backend/metal/kernels/sdpa_vector.h",
-        "mlx/backend/metal/kernels/steel/attn/**/*.h"
+        "mlx/backend/metal/kernels/steel/attn/**/*.h",
+        "mlx/backend/metal/device.*",
+        "mlx/backend/metal/event.*",
+        "mlx/transforms.cpp",
+        "python/src/convert.cpp"
       ],
       "why": "Pinned external release source for research-only kernelstudy screen; external disk clone, no inference port."
+    },
+    {
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "globs": [
+        "runtime/ane/**",
+        "runtime/ops/AneFfn*",
+        "runtime/engine/AneFfnStartup*",
+        "runtime/metal/kernels/prefill/ane_ffn.metal",
+        "runtime/metal/abi/AneFfn.h"
+      ],
+      "why": "Neural Engine runtime and FFN split (YUNSHU_ANE_FFN_SPLIT=splash)",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb"
     }
   ],
   "packages": [
@@ -3475,6 +3718,19 @@
       "paths": [],
       "status": "release source inspected; top-three M5 component screens complete, all failed bit parity; no inference port",
       "pending": "No qualified winner. Any future arithmetic adaptation requires same-split Q1/verify parity, yv long spec/APC identity, paired quality and same-checkpoint cold/warm/follow-up measurements."
+    },
+    {
+      "repo": "https://github.com/incoai/splash",
+      "license": "Apache-2.0",
+      "revision": "1482f6bbc2abf12375332725302019594150b6cb",
+      "owner": "anenative",
+      "status": "adopted native Program/Handoff only; no serving qualification",
+      "alternatives_reviewed": [
+        "https://github.com/jan-kyncl/Apple-Neural-Engine",
+        "https://github.com/christopherkarani/Espresso",
+        "https://github.com/tmc/autoresearch-mlx-go-ane"
+      ],
+      "reason": "Existing Splash client has full selector type checks and bounded shared-event handoff; retain that defensive implementation for phase 1."
     }
   ],
   "websearch_prior_art": [

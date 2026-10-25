@@ -524,7 +524,11 @@ class SessionConfig:
         # {"type": "near_field" | "far_field"} or None: input noise reduction before VAD / ASR.
         self.input_audio_noise_reduction: dict | None = None
         self.max_response_output_tokens = 4096
-        self.temperature = 0.7
+        self.temperature = (
+            0.7  # as reported to clients; the sampler uses _explicit_sampling
+        )
+        # Sampling fields a client set on this session; the rest follow the model's defaults.
+        self._explicit_sampling: set[str] = set()
         self.tools: list[dict] = []
         # tool_choice — "auto" (model decides), "none" (forbid tool calls this
         # turn → plain text), "required", or a {"type":"function","function":{"name":…}} dict.
@@ -614,6 +618,16 @@ class SessionConfig:
                     if _coerced is _SENTINEL:
                         continue
                     value = _coerced
+                if key in (
+                    "temperature",
+                    "top_p",
+                    "top_k",
+                    "min_p",
+                    "repetition_penalty",
+                    "frequency_penalty",
+                    "presence_penalty",
+                ):
+                    self._explicit_sampling.add(key)
                 setattr(self, key, value)
                 changed.append(key)
         return changed
@@ -1318,6 +1332,23 @@ class RealtimeSession:
 
     async def _handle_event(self, event: dict) -> None:
         """Dispatch incoming events to handlers."""
+        event_type = event.get("type", "")
+        sess = event.get("session")
+        # A transcription-only session (OpenAI: ``?intent=transcription``, a transcription client
+        # secret, ``session.update`` with ``session.type == "transcription"``, or the beta
+        # ``transcription_session.update``) transcribes committed audio and never answers.
+        if event_type == "transcription_session.update" or (
+            event_type == "session.update"
+            and isinstance(sess, dict)
+            and sess.get("type") == "transcription"
+        ):
+            self._secret_kind = "transcription"
+        if event_type == "transcription_session.update":
+            await self._handle_session_update(
+                {**event, "type": "session.update"},
+                updated_type="transcription_session.updated",
+            )
+            return
         if self.dialect == "ga":
             event = realtime_ga.from_ga(event)
         event_type = event.get("type", "")
@@ -1344,7 +1375,9 @@ class RealtimeSession:
                 )
             )
 
-    async def _handle_session_update(self, event: dict) -> None:
+    async def _handle_session_update(
+        self, event: dict, updated_type: str = RealtimeEvent.SESSION_UPDATED
+    ) -> None:
         """Handle session.update — modify session configuration.
 
         Supports updating turn_detection configuration for VAD control.
@@ -1358,7 +1391,7 @@ class RealtimeSession:
         self.session.update(session_data)
         await self.send_event(
             _event(
-                RealtimeEvent.SESSION_UPDATED,
+                updated_type,
                 session=self.session.to_dict(),
             )
         )
@@ -1880,6 +1913,29 @@ class RealtimeSession:
                 temperature = float(temperature)
             except (TypeError, ValueError):
                 temperature = self.session.temperature
+            # Sampling the client never set (session.update / response.create) comes from the
+            # model's generation_config, then the API default (sampling_defaults.py).
+            from ..sampling_defaults import fill_sampling, model_path_for
+
+            _explicit = self.session._explicit_sampling
+            _smp: dict = {
+                f: (getattr(self.session, f, None) if f in _explicit else None)
+                for f in (
+                    "top_p",
+                    "top_k",
+                    "min_p",
+                    "repetition_penalty",
+                    "frequency_penalty",
+                    "presence_penalty",
+                )
+            }
+            _smp["temperature"] = (
+                temperature
+                if ("temperature" in config or "temperature" in _explicit)
+                else None
+            )
+            fill_sampling(_smp, model_path_for(self.session.model))
+            temperature = _smp["temperature"]
             # SNAPSHOT the config this response depends on at creation time. The
             # receive loop runs concurrently with this generation task and a mid-response
             # session.update mutates self.session live — reading tools/model/voice live could
@@ -1992,12 +2048,12 @@ class RealtimeSession:
                     messages=messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
-                    top_p=getattr(self.session, "top_p", 1.0),
-                    top_k=getattr(self.session, "top_k", 0),
-                    min_p=getattr(self.session, "min_p", 0.0),
-                    repetition_penalty=getattr(self.session, "repetition_penalty", 1.0),
-                    frequency_penalty=getattr(self.session, "frequency_penalty", 0.0),
-                    presence_penalty=getattr(self.session, "presence_penalty", 0.0),
+                    top_p=_smp["top_p"],
+                    top_k=_smp["top_k"],
+                    min_p=_smp["min_p"],
+                    repetition_penalty=_smp["repetition_penalty"],
+                    frequency_penalty=_smp["frequency_penalty"],
+                    presence_penalty=_smp["presence_penalty"],
                     logit_bias=getattr(self.session, "logit_bias", None),
                     enable_thinking=getattr(self.session, "enable_thinking", False),
                     thinking_budget=_thinking_budget,
@@ -2049,12 +2105,12 @@ class RealtimeSession:
                     prompt=messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
-                    top_p=getattr(self.session, "top_p", 1.0),
-                    top_k=getattr(self.session, "top_k", 0),
-                    min_p=getattr(self.session, "min_p", 0.0),
-                    repetition_penalty=getattr(self.session, "repetition_penalty", 1.0),
-                    frequency_penalty=getattr(self.session, "frequency_penalty", 0.0),
-                    presence_penalty=getattr(self.session, "presence_penalty", 0.0),
+                    top_p=_smp["top_p"],
+                    top_k=_smp["top_k"],
+                    min_p=_smp["min_p"],
+                    repetition_penalty=_smp["repetition_penalty"],
+                    frequency_penalty=_smp["frequency_penalty"],
+                    presence_penalty=_smp["presence_penalty"],
                     logit_bias=getattr(self.session, "logit_bias", None),
                     enable_thinking=getattr(self.session, "enable_thinking", False),
                     thinking_budget=_thinking_budget,
@@ -3829,6 +3885,8 @@ async def realtime_endpoint(ws: WebSocket):
         if secret is None and principal is not None
         else getattr(secret, "key_id", None)
     )
+    if secret is None and ws.query_params.get("intent") == "transcription":
+        session._secret_kind = "transcription"
     if secret is not None:
         session._secret_kind = secret.kind
         session.session.update({k: v for k, v in secret.config.items() if k != "model"})

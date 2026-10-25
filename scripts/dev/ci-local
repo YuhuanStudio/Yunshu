@@ -18,6 +18,9 @@ SHA="$(git -C "$SRC" rev-parse "$REF")"
 # the denied build volume below). Default /tmp.
 WORK="${YUNSHU_CI_ROOT:-/tmp}/ycl-$(echo "$SHA" | cut -c1-8)"
 rm -rf "$WORK"
+# A failing run's checkout stays for debugging, but only until the next run: three kept failures filled the system
+# disk (36 GB) on 2026-10-25. Older than 6 h so a concurrent run's checkout is never touched.
+find "${YUNSHU_CI_ROOT:-/tmp}/" -maxdepth 1 -type d -name 'ycl-*' -mmin +360 -exec rm -rf {} + 2>/dev/null
 git clone -q --no-hardlinks "$SRC" "$WORK"
 git -C "$WORK" checkout -q "$SHA"
 cd "$WORK"
@@ -32,8 +35,11 @@ uv run --python 3.13 ruff format --check python/ tests/
 uv run --python 3.13 python scripts/dev/mypy_gate.py
 (cd frontend && pnpm install --frozen-lockfile && pnpm exec tsc --noEmit && pnpm test && pnpm build && pnpm exec yunui doctor --strict && pnpm exec yunui audit --strict)
 if [ "${YUNSHU_CI_BROWSER:-0}" = 1 ]; then
+  # A port nothing answers on (the resident console and agent servers live in 18990-18999); Playwright never reuses a server
+  # already on the port (playwright.config.ts), so a taken port fails loudly.
+  PW_PORT=$("$WORK/.venv/bin/python" -c 'import socket; s=socket.socket(); s.bind(("0.0.0.0", 0)); print(s.getsockname()[1])')
   (cd frontend && pnpm exec playwright install --with-deps chromium webkit && \
-    YUNSHU_TEST_PYTHON="$WORK/.venv/bin/python" pnpm test:browser)
+    PLAYWRIGHT_PORT="$PW_PORT" YUNSHU_TEST_PYTHON="$WORK/.venv/bin/python" pnpm test:browser)
 fi
 PROFILE="$WORK/ci.sb"
 cat > "$PROFILE" <<EOF

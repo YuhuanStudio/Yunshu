@@ -9,7 +9,20 @@ import { report } from "./bundle-size.mjs";
 const root = new URL("..", import.meta.url).pathname;
 const out = mkdtempSync(join(tmpdir(), "yunshu-console-bundle-"));
 try {
-  execFileSync("npx", ["vite", "build", "--outDir", out, "--emptyOutDir", "--logLevel", "error"], { cwd: root, stdio: ["ignore", "ignore", "inherit"] });
+  execFileSync(
+    "pnpm",
+    [
+      "exec",
+      "vite",
+      "build",
+      "--outDir",
+      out,
+      "--emptyOutDir",
+      "--logLevel",
+      "error",
+    ],
+    { cwd: root, stdio: ["ignore", "ignore", "inherit"] },
+  );
   const { lines, problems } = report(out);
   console.log(lines.join("\n"));
   if (problems.length) {

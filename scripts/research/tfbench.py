@@ -123,6 +123,8 @@ def spec_request(engine, extra_env):
     if engine != "yunshu":
         return "dflash", dict(extra_env)
     env = dict(extra_env)
+    # Benchmarks own only their API port; never auto-start the console on8100.
+    env.setdefault("YUNSHU_CONSOLE", "0")
     override = env.setdefault("YUNSHU_VLM_DRAFT", D)
     mode = {"mtp": "mtp", "force-mtp": "mtp", "off": "off", "none": "off"}.get(
         override.lower(), "dflash"
@@ -174,6 +176,18 @@ def warm_lazy_engine(engine, url, model):
         "ollama-mlx",
     ):
         send(url, req(model, "Write a short example and explain it.", 16), timeout=240)
+
+
+def wait_startup_ready(proc, log, pattern, timeout=120):
+    """Some engines advertise HTTP before their background accelerator compiler is ready."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError("server exited during accelerator startup")
+        if re.search(pattern, log.read_text(errors="replace")):
+            return
+        time.sleep(0.2)
+    raise RuntimeError(f"accelerator startup not ready: {pattern}")
 
 
 class Srv:
@@ -241,6 +255,14 @@ class Srv:
                 str(self.home / "snap"),
                 "--no-update-check",
             ]
+        # A watched engine always runs in observe mode; TFB_OBSERVE=0 (or an explicit
+        # YUNSHU_OBSERVE via --env) keeps a pure timing run free of telemetry.
+        is_yunshu = engine == "yunshu" or (
+            bench_engines.is_new_engine(engine)
+            and bench_engines.ENGINES[engine].kind == "yunshu"
+        )
+        if is_yunshu and os.environ.get("TFB_OBSERVE", "1") != "0":
+            env.setdefault("YUNSHU_OBSERVE", "1")
         self.cmd = cmd
         baseline_used = (
             host_used_bytes()
@@ -280,6 +302,12 @@ class Srv:
             self.kill()
             raise RuntimeError("not ready")
         try:
+            startup = getattr(bench_engines.ENGINES.get(self.engine), "extra", {})
+            if pattern := startup.get("startup_ready_regex"):
+                wait_startup_ready(
+                    self.proc, self.log, pattern, startup.get("startup_timeout_s", 120)
+                )
+                self.ready_s = time.time() - t0
             warm_lazy_engine(self.engine, self.url, self.model)
             self.verify_spec_mode()
         except Exception:
@@ -338,6 +366,30 @@ class Srv:
                 shutil.rmtree(self.home / sub, ignore_errors=True)
         if getattr(self, "mem", None):
             self.mem.stop()
+
+
+def cached_tokens(usage):
+    """Keep absent cache accounting unknown; zero is a measured cache miss."""
+    details = usage.get("prompt_tokens_details") or {}
+    value = details.get("cached_tokens")
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 <= value <= usage["prompt_tokens"]
+    ):
+        raise ValueError(f"invalid cached_tokens: {value!r}")
+    return value
+
+
+def concurrent_prompt(index, trial, ctx):
+    """Independent exact-size requests; salt at the front prevents shared-prefix priming."""
+    from snapshot_prompts import exact_chat_prompt
+
+    kind = "prose" if (index + trial) % 2 == 0 else "code"
+    source = load_prompt(f"{kind}-32768")
+    return exact_chat_prompt(f"Request {trial}:{index}.\n" + source, ctx, LONG_ASK)
 
 
 def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
@@ -426,7 +478,7 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
         total_s=round(t1 - t0, 3),
         ct=ct,
         pt=usage["prompt_tokens"],
-        cached=(usage.get("prompt_tokens_details") or {}).get("cached_tokens"),
+        cached=cached_tokens(usage),
         dec_tps=round((ct - 1) / (t1 - tf), 1) if tf and ct > 1 and t1 > tf else None,
         finish=finish,
         sha=sha,
@@ -1150,20 +1202,9 @@ def part_conc(s, out, a):
     for n in (2,) if a.smoke else ns:
         for trial in range(1 if a.smoke else a.conc_trials):
             texts = [
-                "Say hello."
-                if a.smoke
-                else load_prompt(
-                    f"conc-{n}-{trial}-{'prose' if (i + trial) % 2 == 0 else 'code'}-{i}"
-                    if os.environ.get("TFB_EXACT_PROMPTS") == "1"
-                    else f"conc-{'prose' if (i + trial) % 2 == 0 else 'code'}-{i}"
-                )
+                "Say hello." if a.smoke else concurrent_prompt(i, trial, a.conc_ctx)
                 for i in range(n)
             ]
-            if not a.smoke and os.environ.get("TFB_EXACT_PROMPTS") == "1":
-                from snapshot_prompts import assert_chat_prompt
-
-                for text in texts:
-                    assert_chat_prompt(text, 32768)
             t0 = time.perf_counter()
             with cf.ThreadPoolExecutor(n) as ex:
                 rs = list(
@@ -1291,6 +1332,9 @@ def parse_args(argv=None):
     ap.add_argument("--conc-trials", type=int, default=2)
     ap.add_argument("--conc-tokens", type=int, default=256)
     ap.add_argument(
+        "--conc-ctx", type=int, default=32768, help="rendered concurrent prompt tokens"
+    )
+    ap.add_argument(
         "--ctx-tokens",
         type=int,
         default=140000,
@@ -1367,7 +1411,9 @@ def main():
             for ctx in a.only_ctx or [1024, 8192, 32768]:
                 for kind in a.only_kind or ("prose", "code"):
                     decode_prompt(kind, ctx, a.long_ask)
-        elif a.part in ("conc", "agent", "ca"):
+        elif a.part == "conc":
+            concurrent_prompt(0, 0, a.conc_ctx)
+        elif a.part in ("agent", "ca"):
             for directory in (BODIES, BODIES2):
                 if not list(directory.glob("*-req.json")):
                     raise FileNotFoundError(directory)

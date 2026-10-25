@@ -61,9 +61,11 @@ Yunshu 提供的所有能力，分组列出。每一行链接到有示例与限�
 | [有损内存选项](docs/guides/INFERENCE.md) | int8 KV、压缩 WARM 层与载入时量化；默认关闭 |
 | [大型 MoE 加载（部分）](docs/guides/INFERENCE.md) | 社区 DeepSeek-V4-Flash 权重包的位数与 group size 由张量形状推得；加载前有容纳检查 |
 | [Round driver（实验）](docs/guides/ROUND_DRIVER.md) | 稠密 Qwen3.5 系列模型的自有推测回合驱动 |
+| [Neural Engine FFN 分担（实验、有损）](docs/guides/ANE_FFN_SPLIT.md) | 可选：27B prefill 时，把每层稠密 FFN 的 W8A8 一部分交给 Apple Neural Engine 与 GPU 并行（Splash 方案）；冷 TTFT 约降 5 至 10% |
 | [模型支持](docs/guides/MODEL_SUPPORT.md) | 各系列哪些是调校、通用与已验证 |
 | [下一轮预填](docs/guides/INFERENCE.md) | 符合条件的文本回复以标准 stride 边界预填 APC；boundary/exact 会改变数值运算，须明确选用 |
 | [单请求转入推测路径](docs/guides/INFERENCE.md) | 共享批次剩下一个符合条件的贪婪请求时转入推测；尚无多行推测 |
+| [孤儿请求接手](docs/guides/INFERENCE.md) | 客户端超时断开的生成会保留 120 秒；相同的重发请求（流式或非流式）直接接手，不重算 |
 
 **API**
 
@@ -87,7 +89,7 @@ Yunshu 提供的所有能力，分组列出。每一行链接到有示例与限�
 |---|---|
 | [编程 agent](docs/guides/AGENT_COMPAT.md) | Claude Code、Codex、opencode 通过各自的 API 运作；`yunshu launch` |
 | [网页搜索与抓取](docs/guides/WEB_SEARCH.md) | 服务器端 web_search / web_fetch 与引用；DuckDuckGo、Wikipedia、SearXNG、Tavily、Serper、Perplexity |
-| [代码执行](docs/guides/CODE_EXECUTION.md) | Anthropic code_execution（bash 与文本编辑器）在本机的 sandbox-runtime 内执行；需手动开启，默认无网络 |
+| [代码执行](docs/guides/CODE_EXECUTION.md) | Anthropic code_execution（bash、文本编辑器、Python REPL、程序化工具调用）、OpenAI code_interpreter、shell 与 /v1/containers 在本机的 sandbox-runtime 内执行；需手动开启，默认无网络 |
 | [Tavily 兼容 API](docs/guides/TAVILY.md) | search、extract、crawl、map、research 与 MCP，含 provider 健康退避 |
 | [MCP](docs/guides/API_SURFACE.md) | 原生 MCP 端点，以及请求中指定的远端 MCP server |
 | [客户端设置](docs/guides/CLIENTS.md) | curl、OpenAI 与 Anthropic SDK、Open WebUI |

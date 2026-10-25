@@ -38,6 +38,7 @@ export type Timed = {
   queue_wait_ms?: number | null;
   offsets_ms?: {
     admit?: number | null;
+    prefill_start?: number | null;
     first_token?: number | null;
     last_token?: number | null;
     done?: number | null;
@@ -52,7 +53,7 @@ const num = (v: unknown): number | null =>
 /** Server-measured pieces in ms; null where the engine did not report them. */
 export function stages(r: Timed) {
   const o = r.offsets_ms ?? {};
-  const admit = num(o.admit),
+  const admit = num(o.prefill_start) ?? num(o.admit),
     first = num(o.first_token),
     last = num(o.last_token) ?? num(o.done),
     total = num(o.done);
@@ -180,6 +181,64 @@ export function isSlow(r: Timed, rule: SlowRule): boolean {
     (s.ttft != null && s.ttft > rule.ttftMs) ||
     (s.total != null && s.total > rule.totalMs)
   );
+}
+
+/**
+ * How long a running request spent waiting and prefilling, from the server's phase timestamps. Agent
+ * requests mostly hit the prefix cache, so their prefill lasts well under a second and a poll never lands
+ * inside it: once the first token exists the row keeps showing what the prefill took.
+ */
+export function phaseDurations(
+  r: Timed,
+): { queueMs: number; prefillMs: number; cachedPct: number | null } | null {
+  const o = r.offsets_ms ?? {},
+    admit = num(o.prefill_start) ?? num(o.admit),
+    first = num(o.first_token);
+  if (admit == null || first == null || first < admit) return null;
+  const prompt = num(r.prompt_tokens),
+    cached = num(r.cached_tokens);
+  return {
+    queueMs: admit,
+    prefillMs: first - admit,
+    cachedPct:
+      prompt != null && prompt > 0 && cached != null
+        ? Math.round((cached / prompt) * 100)
+        : null,
+  };
+}
+
+/** Which of the two thresholds a request crossed: a cell is coloured only for the figure that is slow. */
+export function slowParts(
+  r: Timed,
+  rule: SlowRule,
+): { ttft: boolean; total: boolean } {
+  const s = stages(r);
+  return {
+    ttft: s.ttft != null && s.ttft > rule.ttftMs,
+    total: s.total != null && s.total > rule.totalMs,
+  };
+}
+
+/**
+ * The TTFT cell of a request row. TTFT is a property of the first token, so it is the server's
+ * measured value once that token exists and nothing before it. A running row never shows its
+ * elapsed time here (that kept counting through decode and read as a TTFT that grows); the
+ * running time belongs in the total column (`runningTotal`).
+ */
+export function ttftCell(r: Timed & { phase?: string }): number | null {
+  return stages(r).ttft;
+}
+
+/** Total column: the server's total once finished, the time so far while it runs. */
+export function totalCell(
+  r: Timed & { phase?: string; elapsed_s?: number | null },
+): { ms: number; running: boolean } | null {
+  const done = stages(r).total;
+  if (done != null) return { ms: done, running: false };
+  const e = num(r.elapsed_s);
+  return r.phase !== "complete" && e != null
+    ? { ms: e * 1000, running: true }
+    : null;
 }
 
 export type SortKey = "time" | "ttft" | "total" | "tps";

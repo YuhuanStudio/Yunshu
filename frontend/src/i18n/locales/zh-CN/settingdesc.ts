@@ -24,9 +24,15 @@ const settingdesc = {
     "降低已识别的 opencode 标题请求的优先级：交互式 VLM 任务先运行，辅助行在 GPU 时间片之间暂停，且不读写 APC。仅在合格的批不变内核下默认开启，其他后端需显式启用；进行中的 GPU 运算无法中断。",
   YUNSHU_QUEUE_LIMIT:
     "同时进行的生成请求数（运行中与等待中合计）；超出时立即以 429 拒绝，并在 `error.x_yunshu` 中附带 `Retry-After` 和队列深度。0 表示不限制。",
+  YUNSHU_ORPHAN_GRACE_SECONDS:
+    "客户端在生成途中断开（例如代理程序对长流式回复超时）时，把该生成再保留这么多秒。窗口内相同的请求（流式或非流式）会直接接手：已生成的 token 立即重放，其余实时接续，不重复计算。无人接手则在窗口结束时取消；明确的取消仍立即停止。0 表示断开即取消。",
+  YUNSHU_ORPHAN_MAX:
+    "同时保留的孤儿生成上限；每个都占用解码行与 KV，直到被接手或超时。超出时取消最旧的。",
   YUNSHU_MEMORY_PRESSURE_REJECT:
     "Metal 工作集使用比例的阈值；超过时若仍有其他请求在运行，新的生成请求会以 503 和 `Retry-After` 拒绝，以避免内存不足。空闲的服务器不会拒绝。0 表示关闭。",
   YUNSHU_COMPLETION_BATCH_SIZE: "文本引擎：一起解码的序列数上限。",
+  YUNSHU_SAMPLING_DEFAULTS:
+    "请求未带采样参数时的默认来源：model 依次采用模型公布的各模式建议、generation_config.json、API 默认；api 只用 API 默认。请求带的值永远优先。",
   YUNSHU_DEFAULT_MAX_TOKENS:
     "聊天或 responses 请求省略 `max_tokens` 时的生成长度；仍受上下文预算限制。",
   YUNSHU_MAX_PREFILL_TOKENS:
@@ -83,6 +89,8 @@ const settingdesc = {
     "完全禁用认证（运维类端点也会开放），仅供本地开发使用。",
   YUNSHU_DEBUG_TREE_PROFILE:
     "调试用：为 DFlash 树验证的每个阶段（GDN、注意力、MLP、归一化、提交）计时，请求结束时记录每轮平均。每个阶段后都会同步，因此会拖慢解码；只用来找出最耗时的阶段。",
+  YUNSHU_OBSERVE:
+    "观察模式（`yunshu serve --observe`）：未明确设置的观测功能一次全开——/debug/* 路由、主机遥测、服务日志、审计日志文件、logprobs 的 token id、生成捕获文件。明确设置的值优先。遥测约使 1K 后续 TTFT 增加 1.8%；速度基准测试请关闭。无令牌时 /debug/* 仅限本机。",
   YUNSHU_DEBUG_ROUTES:
     "挂载 `/debug/*` 诊断路由（engine、system、kv-cache、spec-decode 等），需要认证令牌或 `YUNSHU_AUTH_DISABLED`；`/metrics` 始终挂载。",
   YUNSHU_DEBUG_STREAM_CAPTURE:
@@ -249,17 +257,17 @@ const settingdesc = {
   YUNSHU_WEB_FETCH_MAX_TEXT_CHARS:
     "交给模型的提取网页文本会截断至此字符数（请求的 `max_content_tokens` 可进一步调低）。",
   YUNSHU_CODE_EXECUTION:
-    "在本机于 Anthropic sandbox-runtime（srt；可选，需要 Node 22.12 以上）内提供代码执行工具（Anthropic `code_execution_*`）。关闭时声明这些工具的请求返回 400；开启但没有 srt 时返回 503，绝不在沙盒外执行。",
+    "在本机于 Anthropic sandbox-runtime（srt；可选，需要 Node 22.12 以上）内提供代码执行工具（Anthropic `code_execution_*`、OpenAI Responses 的 `code_interpreter` 与托管 `shell`、OpenAI `/v1/containers` API）。关闭时声明这些工具的请求返回 400；开启但没有 srt 时返回 503，绝不在沙盒外执行。",
   YUNSHU_CODE_EXECUTION_ROOT:
     "存放代码执行容器的目录（每个容器一个子目录，权限 0700）。",
   YUNSHU_CODE_EXECUTION_TIMEOUT:
-    "单次代码执行调用可运行的挂钟秒数，超过即终止；同时作为 CPU 时间上限。",
+    "单次代码执行调用可运行的挂钟秒数，超过即终止；同时作为 CPU 时间上限。Python cell 等待客户端工具结果的时间不计入。",
   YUNSHU_CODE_EXECUTION_MEMORY_MB:
-    "单次代码执行调用可使用的常驻内存（MB），按整个进程组采样；超过即终止。",
+    "单次代码执行调用可使用的常驻内存（MB），按整个进程组采样；超过即终止。OpenAI 容器的 `memory_limit` 只能再往下调。",
   YUNSHU_CODE_EXECUTION_NETWORK_ALLOW:
-    "沙盒可连接的主机，以逗号分隔（`example.com`、`*.example.com`、`host:443`）。留空：完全没有网络，包括 loopback。",
+    "沙盒可连接的主机，以逗号分隔（`example.com`、`*.example.com`、`host:443`）。留空：完全没有网络，包括 loopback。OpenAI 容器的 `network_policy` 只能缩小这份清单。",
   YUNSHU_CODE_EXECUTION_TTL_MIN:
-    "代码执行容器闲置多少分钟后，连同其文件一并删除。",
+    "代码执行容器闲置多少分钟后，连同其文件一并删除。OpenAI 容器的 `expires_after.minutes` 只能缩短。",
   YUNSHU_MCP_CONNECTOR:
     "提供 MCP 连接器：Anthropic 的 `mcp_servers` 和 OpenAI Responses 的 `mcp` 工具由本服务器执行，并通过可流式 HTTP／SSE 连接到指定的 MCP 服务器。",
   YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE:
@@ -355,5 +363,15 @@ const settingdesc = {
     "主控台历史文件的大小上限（MiB）；超过时删除最旧的数据。",
   YUNSHU_CONSOLE_DB:
     "主控台进程保存历史的位置（SQLite）。未设置时为 ~/.yunshu/console-history.sqlite。",
+  YUNSHU_ANE_FFN_SPLIT:
+    "Qwen3.5 系列 prefill（有损，默认关闭）：splash 按 intermediate 通道把每层稠密 FFN 分给 GPU 与 Apple Neural Engine；ANE 通过私有 AppleNeuralEngine API，在与 Metal 共用的 IOSurface 内存上以共享事件排序执行 W8A8 部分。ANE 部分与 GPU 约差 2 至 3% RMS，输出与 off 略有不同；前缀缓存状态另行区隔。分担比例与最小步长在首次启动校准。ANE 任何失败即停用，该步由 GPU 重跑。额外约 3 GiB 内存。",
+  YUNSHU_ANE_FFN_SHARE:
+    "配合 ANE FFN 分担：ANE 负责的 intermediate 通道比例（0 至 1），跳过校准（以 512 通道为单位）。未设置：由校准决定。",
+  YUNSHU_ANE_FFN_MIN_ROWS:
+    "配合固定 ANE 比例：采用分担的最小 prompt 步长行数（512 至 2048）。未设置：512。",
+  YUNSHU_ANE_FFN_CACHE:
+    "已编译 ANE 程序源码与校准记录的目录。未设置：~/.yunshu/ane_cache/ffn。",
+  YUNSHU_ANE_FFN_TRACE:
+    "对每个分担的 prompt 步长记录 ANE 每层毫秒与 GPU 层间空档（诊断用）。",
 };
 export default settingdesc;

@@ -7,7 +7,6 @@ const overview: Shape<typeof zh> = {
   "chart.idle": "Idle",
   "chart.quiet": "No decoding in this window",
   "chart.missing": "Not reported",
-  "chart.hidden": "Series hidden. Select the legend to show it again",
   "chart.legend": "Show or hide series",
   "chart.collectingSamples": "Collecting samples {have} / {need}",
   "chart.keyboardHint": "Use the arrow keys, Home or End to browse samples",
@@ -26,6 +25,8 @@ const overview: Shape<typeof zh> = {
   "phase.running": "Running",
   "phase.idle": "Idle",
   "activity.rowActive": "Active requests",
+  "lane.waiting": "Waiting for its prefill turn · {ahead} ahead",
+  "lane.phases": "Queued {queue} · prefill {prefill} · {cached} cached",
   "speed.live": "Live total",
   "speed.window": "{s}s mean",
   "lane.prefixHit": "Prefix hit {cached} / {prompt} tokens",
@@ -56,7 +57,7 @@ const overview: Shape<typeof zh> = {
   "status.paused": "(paused)",
   "stats.ttft": "Time to first token (TTFT)",
   "tip.decode":
-    "Decode speed: the sum of tok/s over requests decoding now. With none running it shows the last request\u2019s speed, labelled so.",
+    "Decode speed. Live total: the sum of each running request\u2019s tok/s over the last 5 s; the header pill and the chart show the same figure (the chart samples it every 5 s). Mean: the average speed of requests that finished in the window, per request, so with concurrent requests it is lower than the total. With none running the card shows the last request\u2019s speed, labelled so.",
   "tip.prefill":
     "Prefill speed: tok/s of the last real prefill (at least 256 prompt tokens not served from cache). Otherwise a dash, never an average.",
   "tip.ttft":
@@ -127,9 +128,6 @@ const overview: Shape<typeof zh> = {
   "memory.weights": "Loaded weights",
   "memory.weightsCount": "{n, plural, one {# model} other {# models}}",
   "memory.aria": "Metal memory over time, in GB",
-  "selection.summary":
-    "Selected {t} · {n, plural, one {# active request} other {# active requests}} · {gb} GB",
-  "selection.clear": "Clear selection",
   "concurrency.title": "Request concurrency",
   "concurrency.desc": "Phases share one request-count scale",
   "concurrency.aria": "Concurrent requests by phase over time",
@@ -282,6 +280,24 @@ const overview: Shape<typeof zh> = {
     "Engine restarted {time} · the line continues from the console's record",
   "hero.switched": "Switched to another engine {time}",
   "hero.widened": "No samples in this window yet; showing the last 15 min",
-  "hero.away": "Engine went away {time} · the line continues from the console's record",
+  "hero.away":
+    "Engine went away {time} · the line continues from the console's record",
+  "chart.reset": "Reset zoom",
+  "chart.expand": "Expand",
+  "chart.smooth": "Smoothing (moving average); the faint line is raw",
+  "chart.logScale": "Log scale",
+  "chart.linearScale": "Linear scale",
+  "chart.zoomHint": "Drag to zoom, double-click to reset",
+  "chart.raw": "raw",
+  "chart.isolateHint": "Click to show only this one, Shift-click to hide",
+  "chart.zoomed": "Zoomed",
+  "chart.markRestarted": "Engine restarted",
+  "chart.markAway": "Engine away",
+  "chart.markSwitched": "Switched engine",
+  "chart.noDataHere": "No data at this time",
+  "perf.rangeStart": "Since start",
+  "memory.warn": "Warning",
+  "memory.critical": "Critical",
+  "chart.scrub": "Drag to zoom; hover to read every chart at the same moment",
 };
 export default overview;

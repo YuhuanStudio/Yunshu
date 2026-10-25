@@ -13,7 +13,7 @@ The implementation derives IOReport and HID access from
 
 ## Host API and CLI
 
-`GET /v1/yunshu/host` uses the existing console permission (`can_manage_models`).
+`GET /v1/yunshu/host` is a console read (`can_infer`: open with no token configured, token-gated once one is set).
 It preserves `thermal`, `power`, `memory`, and `memory_pressure` (15-second cache)
 and adds `telemetry` with an independent 1 Hz cache:
 

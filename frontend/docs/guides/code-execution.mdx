@@ -3,7 +3,7 @@ title: Code execution
 description: Turn on the Anthropic code_execution tool, which runs model-written commands on your Mac inside the sandbox-runtime, and learn its containers, files and limits.
 ---
 
-The Anthropic `code_execution_20250825`, `code_execution_20260120` and `code_execution_20260521` tools run on this machine, inside Anthropic's [sandbox-runtime](https://github.com/anthropics/sandbox-runtime) (`srt`). The feature is off by default. For how the sandbox is built, see [Code execution sandbox](/docs/internals/code-execution-sandbox).
+The Anthropic `code_execution_20250522`, `_20250825`, `_20260120` and `_20260521` tools run on this machine, inside Anthropic's [sandbox-runtime](https://github.com/anthropics/sandbox-runtime) (`srt`). The feature is off by default. For how the sandbox is built, see [Code execution sandbox](/docs/internals/code-execution-sandbox).
 
 ## Turn it on
 
@@ -56,6 +56,16 @@ The model gets two sub-tools, `bash_code_execution` and `text_editor_code_execut
 - **Files.** `container_upload` content blocks copy a [Files API](/docs/api/files) file into the working directory. Every bash call gets a fresh `$OUTPUT_DIR`; its top-level files become Files API entries returned as `bash_code_execution_output {file_id}` (download with `GET /v1/files/{id}/content`).
 - **Output limits.** stdout and stderr are each cut at 64 KiB (marked). A call whose stdout and stderr together exceed 1 MiB is killed (`output_file_too_large`). Background processes die with the call. The command sees only `PATH`, `HOME` (the container), `TMPDIR`, `OUTPUT_DIR` and locale variables, never the server's environment.
 
+## Python, REPL state and programmatic tool calling
+
+`20250522` offers one Python tool (`code_execution`, a fresh process per call). `20250825` offers bash and the text editor (plus Python, also fresh per call, when a client tool lists a code-execution caller in `allowed_callers`). `20260120` and `20260521` offer all three, and the Python process lives with the container: variables and imports persist between calls. It is killed and replaced cleanly on a timeout, a memory overrun, more than 1 MiB of output, 10 idle minutes, a container delete, or when more than four containers hold one.
+
+A client tool with `"allowed_callers": ["code_execution_20260120"]` becomes an `async` Python function in the interpreter. When the code awaits it, the turn ends with `stop_reason: "tool_use"` and one `tool_use` block per call, each with `caller: {type, tool_id}`. Send the results back (with the `container`) and the response continues with the `code_execution_tool_result`. The cell waits 270 seconds for the answer; one cell may make 256 calls.
+
+## OpenAI Responses and containers
+
+With the same setting, a [Responses](/docs/api/responses) request can declare `{"type": "code_interpreter", "container": {"type": "auto"}}` (or a `cntr_` id) and the hosted `{"type": "shell", "environment": {"type": "container_auto"}}`. The response has `code_interpreter_call`, `shell_call` and `shell_call_output` items, the matching streaming events, and `container_file_citation` annotations for files the code made. They also work in background mode. The containers have the OpenAI containers API (`/v1/containers`, with files); `expires_after`, `memory_limit` and `network_policy` can only narrow the settings above. See [Server tools](/docs/api/server-tools).
+
 ## What the sandbox allows
 
 - **Writes:** the container directory only.
@@ -72,7 +82,6 @@ An allowed domain list does not inspect traffic. Allowing a broad host such as `
 ## Differences from Anthropic's container
 
 - macOS, not Linux x86_64. The Python is the interpreter Yunshu runs on (standard library only, no pandas or numpy).
-- No REPL state between calls and no programmatic tool calling. The `20260120` and `20260521` types are accepted and behave like `20250825`.
 - No Content Credentials.
-- OpenAI `code_interpreter` and `shell` are not served yet.
+- No Content Credentials, container skills or OpenAI `programmatic_tool_calling`.
 - The sandbox runs under macOS `sandbox-exec`, which Apple marks deprecated, and `srt` is a 0.0.x release (tested: 0.0.81).

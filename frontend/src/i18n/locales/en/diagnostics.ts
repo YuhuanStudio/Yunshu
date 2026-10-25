@@ -29,6 +29,7 @@ const diagnostics: Shape<typeof zh> = {
   "config.source.cli": "Command line",
   "config.source.default": "Default",
   "config.source.env": "Environment",
+  "config.source.observe": "Observe mode",
   "config.source.file": "Config file",
   "config.stability.experimental": "Experimental",
   "config.stability.internal": "Internal",
@@ -94,6 +95,8 @@ const diagnostics: Shape<typeof zh> = {
     "Backend HTTP request timings over the last 60 s. Different from the observed time-to-first-token distribution on the home page.",
   "latency.title": "Server latency percentiles",
   loading: "Reading {items}…",
+  "observe.badge": "Observe mode: every observability feature is on",
+  "observe.unreadable": "The engine reports observe mode, but /debug is unreadable (it needs the token, or a connection from this Mac).",
   "off.body":
     "Start the engine with {flag} and reconnect. An access token is also required, or set {authFlag}. The console never changes engine settings itself.",
   "off.description":

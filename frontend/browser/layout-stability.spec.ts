@@ -142,7 +142,11 @@ function snapshot(page: Page, selector: string) {
 
 for (const route of ["overview", "requests", "models", "diagnostics"]) {
   test(`polling changes digits, not geometry: ${route}`, async ({ page }) => {
-    test.setTimeout(60_000);
+    // The overview's live chart draws every animation frame, and clock.runFor replays all ~190 frames of each 3.1 s
+    // step synchronously: 59 s in WebKit on an idle machine (2-14 s for the other pages), over a minute under ci-local
+    // load. Real frames are fine (WebKit overview p50 17 ms, p95 24 ms, no long tasks, 2026-10-25); the cost is the
+    // fake clock's, so this page gets the time it needs.
+    test.setTimeout(route === "overview" ? 180_000 : 60_000);
     await install(page);
     await page.clock.install();
     await page.goto(`/console/#/${route}`, { waitUntil: "domcontentloaded" });

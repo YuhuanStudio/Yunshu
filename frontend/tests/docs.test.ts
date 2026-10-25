@@ -1,16 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSearch, buildToc, flatten, headingsOf, LOCALES, parseName } from "../scripts/docs-index.mjs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import {
+  listFiles,
+  parseFrontmatter,
+  buildSearch,
+  buildToc,
+  flatten,
+  headingsOf,
+  LOCALES,
+  parseName,
+} from "../scripts/docs-index.mjs";
 import { checkLinks } from "../scripts/docs-links.mjs";
 
 test("file names map to slug and locale", () => {
-  assert.deepEqual(parseName("api/audio.zh-TW.mdx"), { slug: "api/audio", locale: "zh-TW" });
+  assert.deepEqual(parseName("api/audio.zh-TW.mdx"), {
+    slug: "api/audio",
+    locale: "zh-TW",
+  });
   assert.deepEqual(parseName("index.mdx"), { slug: "index", locale: "en" });
   assert.equal(parseName("meta.json"), null);
 });
 
 test("headings carry the ids rehype-slug gives them, duplicates numbered, code fences skipped", () => {
-  const h = headingsOf("# T\n\n## Setup `x`\n\n```\n## not a heading\n```\n\n## Setup `x`\n\n### 中文 標題\n");
+  const h = headingsOf(
+    "# T\n\n## Setup `x`\n\n```\n## not a heading\n```\n\n## Setup `x`\n\n### 中文 標題\n",
+  );
   assert.deepEqual(h, [
     { id: "setup-x", text: "Setup x", level: 2 },
     { id: "setup-x-1", text: "Setup x", level: 2 },
@@ -25,7 +41,8 @@ for (const locale of LOCALES) {
     assert.equal(new Set(order).size, order.length);
     assert.deepEqual([...order].sort(), Object.keys(pages).sort());
     assert.ok(order.length >= 40);
-    for (const slug of order) assert.ok(pages[slug].title, `${slug} has a title`);
+    for (const slug of order)
+      assert.ok(pages[slug].title, `${slug} has a title`);
     assert.equal(order[0], "index");
   });
 }
@@ -39,7 +56,11 @@ test("zh pages use their own translation, never the English text", () => {
 test("search entries carry plain text for every page", () => {
   const entries = buildSearch("en");
   const chat = entries.find((e) => e.slug === "api/chat-completions");
-  assert.ok(chat && chat.text.includes("completions") && !chat.text.includes("<Endpoint"));
+  assert.ok(
+    chat &&
+      chat.text.includes("completions") &&
+      !chat.text.includes("<Endpoint"),
+  );
   assert.ok(entries.every((e) => e.title && e.text.length > 50));
 });
 
@@ -47,4 +68,43 @@ test("every internal docs link resolves to a page and a heading", () => {
   const { broken, checked } = checkLinks();
   assert.deepEqual(broken, []);
   assert.ok(checked > 500);
+});
+
+test("generated OpenAPI links work without weakening missing-page or anchor checks", () => {
+  const evidence = new URL("../evidence/", import.meta.url);
+  mkdirSync(evidence, { recursive: true });
+  const dir = mkdtempSync(new URL("docs-links-", evidence));
+  try {
+    writeFileSync(
+      join(dir, "index.mdx"),
+      `---\ntitle: Test\n---\n[Reference](/docs/api/reference)\n[Models](/docs/api/reference?operation=get%20%2Fv1%2Fmodels)\n`,
+    );
+    assert.deepEqual(checkLinks(dir).broken, []);
+    writeFileSync(
+      join(dir, "index.mdx"),
+      `[Missing](/docs/missing)\n[Anchor](/docs/api/reference#missing)\n`,
+    );
+    const { broken } = checkLinks(dir);
+    assert.equal(broken.length, 2);
+    assert.ok(broken.some((line) => line.includes("no such page")));
+    assert.ok(broken.some((line) => line.includes("missing anchor")));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("every authored page has valid YAML metadata for Fumadocs and the search source", () => {
+  for (const { file } of listFiles()) {
+    const { meta } = parseFrontmatter(readFileSync(file, "utf8"));
+    assert.equal(typeof meta.title, "string", file);
+    assert.ok(
+      meta.description === undefined || typeof meta.description === "string",
+      file,
+    );
+  }
+  assert.equal(
+    parseFrontmatter('---\ntitle: "A: B"\ndescription: Safe\n---\nBody').meta
+      .title,
+    "A: B",
+  );
 });

@@ -103,7 +103,9 @@ function record(page: Page, ms: number): Promise<{ frames: Frame[] }> {
   return page.evaluate(
     (duration) =>
       new Promise<{ frames: Frame[] }>((resolve) => {
-        const root = document.querySelector(".live-scroll");
+        const root = document.querySelector(
+          '[data-yunui="metric-chart"][data-live]',
+        );
         if (!root) return resolve({ frames: [] });
         root.scrollIntoView({ block: "center" });
         const frames: Frame[] = [];
@@ -117,8 +119,10 @@ function record(page: Page, ms: number): Promise<{ frames: Frame[] }> {
             const yTexts = [
               ...root.querySelectorAll('svg text[data-axis="y"]'),
             ];
+            // The plot is the pointer overlay (0,0,plotW,plotH in the plot frame). A <clipPath> rect is not drawn, so
+            // WebKit reports it without the plot's top margin: the "baseline" read from it was 8 px high.
             const clip = root
-              .querySelector("clipPath rect")
+              .querySelector('svg rect[fill="transparent"]')
               ?.getBoundingClientRect();
             frames.push({
               t: performance.now(),

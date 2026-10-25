@@ -188,3 +188,39 @@ https://github.com/mflux-community/mflux
 intra-package imports were changed and a credit line was added at the top of each file; the full license
 text is at https://www.apache.org/licenses/LICENSE-2.0 and in TensorFold's `LICENSE`. TensorFold's NOTICE:
 "TensorFold. Copyright 2026 TensorFold contributors. https://github.com/ashhart/TensorFold".
+
+## Splash native ANE runtime (1.4.0)
+
+`python/yunshu_engine/ane/native/{Program.hpp,Program.mm,Handoff.hpp,Handoff.mm}`
+are adapted from [incoai/splash](https://github.com/incoai/splash), commit
+`1482f6bbc2abf12375332725302019594150b6cb`, under Apache License 2.0.
+`Support.hpp` adapts its awake-time clock semantics and `mil.py` derives the
+IOSurface MIL ABI from `runtime/ops/AneFfn.cpp`. Modified for Yunshu: standalone
+clang/ctypes runtime, explicit cache, local Metal adapter, constant slice weights
+and fp16 underflow scaling. The upstream files had no per-file copyright header.
+The Apache-2.0 license is reproduced in this repository's LICENSE.
+This research runtime is not enabled in serving.
+
+The optional native ANE MLX bridge (`ane/native/Bridge.mm`) uses the installed
+MLX 0.32.3 C++ Metal command encoder and Python DLPack contracts (Apple, MIT;
+tag `v0.32.3`). Its C ABI, watchdog and ownership implementation is Yunshu's;
+no MLX implementation source is copied. The coupling is recorded in vendor.json.
+
+`ane/native/ProgramInstrumentation.hpp` also adapts Splash's Apache-2.0
+test-only fault declarations. Production builds do not expose the arming API.
+
+## Splash ANE FFN split (1.4.0)
+
+`python/yunshu_engine/ane/{ffn_program.py,ffn_kernels.py,ffn_split.py,ffn_calibration.py,ffn_startup.py}`
+are a Python/MLX port of the dense-FFN Neural Engine split of
+[incoai/splash](https://github.com/incoai/splash), commit
+`1482f6bbc2abf12375332725302019594150b6cb` (`runtime/ops/AneFfn.{hpp,cpp}`,
+`AneFfnCalibration.*`, `AneFfnMeasurement.cpp`, `runtime/engine/AneFfnStartup.cpp`,
+`runtime/metal/kernels/prefill/ane_ffn.metal`, `runtime/metal/abi/AneFfn.h`), under Apache
+License 2.0: the W8A8 MIL program with 2560-channel segments and a block-Hadamard
+intermediate rotation, the GPU rotate/pack/weight-staging/join kernels, the double-buffered
+one-layer-ahead weight staging, the timing model, share choice, least-chunk rule and breaker.
+Modified for Yunshu: MLX custom kernels over MLX affine and Yunshu tiled quantized weights, an
+MLX-stream shared-event bridge, calibration kept in a file. Enabled only by
+`YUNSHU_ANE_FFN_SPLIT=splash` (off by default; lossy). The Apache-2.0 license is reproduced in
+this repository's LICENSE.

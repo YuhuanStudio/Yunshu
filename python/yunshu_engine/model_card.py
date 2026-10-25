@@ -26,10 +26,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Largest max_tokens / max_completion_tokens the chat routes accept (ChatRequest le=...).
-API_MAX_OUTPUT_TOKENS = 131072
-# max_tokens applied when a request omits it.
-API_DEFAULT_MAX_TOKENS = 512
+# The model's output limit (Qwen3.8 card Best Practices: 262,144 thinking / 131,072 answer);
+# also the cap applied when a request omits max_tokens (yunshu_engine.output_limits).
+from .output_limits import MODEL_MAX_OUTPUT_TOKENS as API_MAX_OUTPUT_TOKENS
 
 # card kind -> ModelType.name
 _KIND_FOR_TYPE = {
@@ -195,10 +194,9 @@ def reasoning_levels(template: str) -> tuple[list[str], str | None]:
     return levels, (d.group(1) if d else None)
 
 
-# OpenAI's ladder mapped onto the template's own levels.
+# OpenAI's ladder mapped onto the template's own levels.  "none" / "minimal" are not rungs: the
+# request layer turns them into thinking disabled (output_limits.fold_effort).
 _EFFORT_ALIASES = {
-    "minimal": ("low",),
-    "none": ("low",),
     "high": ("xhigh", "high", "medium"),
     "max": ("xhigh", "high"),
 }
@@ -394,6 +392,8 @@ class ModelCard:
     contract: dict = field(default_factory=dict)
     supported_parameters: list[str] = field(default_factory=list)
     generation_defaults: dict = field(default_factory=dict)
+    # Effective sampling defaults for a request that omits them: {param: {value, source}}.
+    sampling_defaults: dict = field(default_factory=dict)
     created: int = 0
     path: str | None = None
 
@@ -708,6 +708,12 @@ def _generation_defaults(model_path: Path) -> dict:
     }
 
 
+def _effective_sampling(model_path: Path) -> dict:
+    from .sampling_defaults import defaults_by_mode
+
+    return defaults_by_mode(model_path)
+
+
 def _display_name(model_id: str) -> str:
     return model_id.rsplit("/", 1)[-1]
 
@@ -877,6 +883,7 @@ def _derive(p: Path, mid: str, model_type_name: str | None) -> ModelCard:
         prefix_cache=_prefix_cache(kind, config, text_cfg),
         supported_parameters=list(TEXT_PARAMETERS) if text_like else [],
         generation_defaults=_generation_defaults(p),
+        sampling_defaults=_effective_sampling(p) if text_like else {},
         path=str(p),
     )
     if not tools_ok:
