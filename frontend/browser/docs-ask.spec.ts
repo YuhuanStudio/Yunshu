@@ -84,7 +84,10 @@ for (const locale of ["en", "zh-TW", "zh-CN"]) {
       dialog.getByText("What about SSD?", { exact: true }),
     ).toBeInViewport();
     mkdirSync("evidence/docsask", { recursive: true });
-    await page.screenshot({ path: `evidence/docsask/ask-${locale}.png` });
+    await page.screenshot({
+      animations: "disabled",
+      path: `evidence/docsask/ask-${locale}.png`,
+    });
   });
 }
 
@@ -107,6 +110,9 @@ test("no engine and paused states show clear guidance; palette opens Ask AI", as
     }),
   );
   await page.goto("/console/#/docs");
+  await expect(
+    page.getByTestId("docs-article").getByRole("heading", { level: 1 }),
+  ).toBeVisible();
   await page.keyboard.press("Meta+k");
   await page.getByRole("dialog").locator("input").first().fill("Ask AI");
   await page.getByRole("option").filter({ hasText: "Ask AI" }).first().click();
@@ -171,7 +177,7 @@ test("stop cancels a pending answer and prevents a second request in the tab", a
   await expect(dialog.getByRole("alert")).toHaveCount(0);
   expect(requests).toBe(1);
   await expect(
-    dialog.getByText("Second question", { exact: true }),
+    dialog.getByRole("log").getByText("Second question", { exact: true }),
   ).toHaveCount(0);
   release();
 });
@@ -208,6 +214,9 @@ for (const theme of ["light", "dark"]) {
     expect(box?.x).toBeGreaterThanOrEqual(0);
     expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(402);
     mkdirSync("evidence/docsask", { recursive: true });
-    await page.screenshot({ path: `evidence/docsask/ask-mobile-${theme}.png` });
+    await page.screenshot({
+      animations: "disabled",
+      path: `evidence/docsask/ask-mobile-${theme}.png`,
+    });
   });
 }
