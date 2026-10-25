@@ -508,7 +508,7 @@ export default function App() {
     group: t("shell.cmd.docs"),
     onSelect: () => go(docHref(h.slug, h.heading?.id)),
   }));
-  const shown = [
+  const listed = [
     ...(q
       ? commands.filter((c) =>
           `${c.title} ${c.description ?? ""} ${c.id}`.toLowerCase().includes(q),
@@ -527,6 +527,11 @@ export default function App() {
         ]
       : []),
   ];
+  // The palette renders one section per run of the same group, keyed by the group name: Ask AI (a docs command) at
+  // the top and the docs hits at the end made two "Docs" sections with one key. Keep each group's items together, in
+  // the order the groups first appear.
+  const groupOrder = [...new Set(listed.map((c) => c.group))];
+  const shown = groupOrder.flatMap((g) => listed.filter((c) => c.group === g));
   // The route as last applied: navigate() sets it before the hashchange it causes, so that echo is ignored.
   useEffect(() => {
     const id = setTimeout(warmPages, 1500);

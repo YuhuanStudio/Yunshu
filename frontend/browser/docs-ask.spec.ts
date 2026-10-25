@@ -237,6 +237,11 @@ test("the command palette lists doc pages before the Ask AI entry and seeds the 
   await page.addInitScript(() =>
     localStorage.setItem("yunshu.console.locale", "en"),
   );
+  // Ask AI (a docs command) and the docs hits are one group: two runs of it rendered two sections with one key.
+  const keyWarnings: string[] = [];
+  page.on("console", (m) => {
+    if (m.type() === "error" && /same key/.test(m.text())) keyWarnings.push(m.text());
+  });
   await page.goto("/console/#/overview");
   await page
     .getByRole("button", { name: /Search/ })
@@ -250,6 +255,13 @@ test("the command palette lists doc pages before the Ask AI entry and seeds the 
   await expect(
     options.filter({ hasText: /Prompt caching/i }).first(),
   ).not.toContainText("Ask AI");
+  // "ask" matches the Ask AI command, a page action and docs hits: before the grouping fix that query split the docs
+  // group around the other commands.
+  await page.getByPlaceholder("Search pages, models and actions…").fill("ask");
+  await expect(options.filter({ hasText: "Ask AI" }).first()).toBeVisible();
+  await page.waitForTimeout(500);
+  await page.getByPlaceholder("Search pages, models and actions…").fill("prompt caching");
   await options.filter({ hasText: "Ask AI" }).last().click();
   await expect(page.getByTestId("docs-ask")).toBeVisible();
+  expect(keyWarnings).toEqual([]);
 });
