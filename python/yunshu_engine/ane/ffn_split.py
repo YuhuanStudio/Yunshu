@@ -451,7 +451,6 @@ class AneFfn:
                 inputs=[rotated, self.alias(surf)],
                 template=[
                     ("H", shape.hidden),
-                    ("R", rows),
                     ("CHANNEL0", k * prog.SEGMENT),
                     ("STRIDE", surf.stride_elems),
                 ],
@@ -475,7 +474,6 @@ class AneFfn:
             inputs=[gpu_out, self.alias(mem.partial), self.alias(mem.token_scale)],
             template=[
                 ("H", shape.hidden),
-                ("R", rows),
                 ("PSTRIDE", mem.partial.stride_elems),
             ],
             grid=(tiles * prog.TILE, (shape.hidden // prog.TILE) * prog.TILE_ROWS, 1),
@@ -583,16 +581,13 @@ class AneFfn:
         if clock is not None:
             clock["part_build"] += time.perf_counter() - clock["t0"]
             clock["t0"] = time.perf_counter()
-        mx.async_eval(part)
+        # One command buffer for the GPU's part and the next layer's weight staging: every
+        # buffer boundary costs the GPU an idle gap.
+        mx.async_eval(part, *nxt)
         if clock is not None:
             clock["part_eval"] += time.perf_counter() - clock["t0"]
             clock["t0"] = time.perf_counter()
-            stamp["part_committed"] = _uptime_ms()
-        mx.async_eval(*nxt)
-        if clock is not None:
-            clock["stage_eval"] += time.perf_counter() - clock["t0"]
-            clock["t0"] = time.perf_counter()
-            stamp["stage_committed"] = _uptime_ms()
+            stamp["part_committed"] = stamp["stage_committed"] = _uptime_ms()
             self.timeline.append(stamp)
         if ticket is not None and not ticket.wait_mlx():
             self.pool.retire(ticket.reason or "ANE wait failed")

@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,11 @@ class Runtime:
         self.chunks_split = 0
         self.chunks_gpu = 0
         self.failures = 0
+        self.trace = False
+        self.extra_bytes = 0
+        self._t_exit = 0.0
+        self._cpu_in: list[float] = []
+        self._cpu_between: list[float] = []
 
     # -- per layer ---------------------------------------------------------------------
     def run(self, module, x):
@@ -53,8 +59,8 @@ class Runtime:
         rows = int(x.shape[1])
         if index == 0:
             self._expect = 0
-            self._chunk_ok = (
-                bool(self.split.splits(rows)) and str(x.dtype).endswith("bfloat16")
+            self._chunk_ok = bool(self.split.splits(rows)) and str(x.dtype).endswith(
+                "bfloat16"
             )
             if self._chunk_ok and not self.split.begin():
                 self._chunk_ok = False
@@ -64,21 +70,67 @@ class Runtime:
             return None
         from yunshu_engine.ane.ffn_split import AneRetired
 
+        t_enter = time.perf_counter() if self.trace else 0.0
         try:
             out = self.split.add(index, x.reshape(rows, -1), None, rows)
         except AneRetired as exc:
             self.failures += 1
             raise AneChunkFailed(str(exc)) from exc
         self._expect += 1
+        if self.trace:
+            t_exit = time.perf_counter()
+            if self._t_exit:
+                self._cpu_between.append(t_enter - self._t_exit)
+            self._cpu_in.append(t_exit - t_enter)
+            self._t_exit = t_exit
         if index == self.layers - 1:
             self._chunk_ok = False
             if not self.split.finish():
                 self.failures += 1
                 raise AneChunkFailed(self.split.reason)
             self.chunks_split += 1
+            if self.trace:
+                self._trace_step(rows)
             if self.chunks_split in (1, 2, 4) or self.chunks_split % 16 == 0:
                 logger.info("Neural Engine FFN split engaged: %s", self.summary())
         return out.reshape(1, rows, -1)
+
+    def _trace_step(self, rows: int) -> None:
+        times = self.split.ticket_times[-1] if self.split.ticket_times else []
+        pairs = [t for t in times if t[0] and t[1]]
+        if len(pairs) < 3:
+            return
+        ane = [r - s for s, r in pairs]
+        gaps = [pairs[i + 1][0] - pairs[i][1] for i in range(len(pairs) - 1)]
+        period = (pairs[-1][0] - pairs[0][0]) / (len(pairs) - 1)
+        cpu_in = 1000 * sum(self._cpu_in) / max(len(self._cpu_in), 1)
+        cpu_between = 1000 * sum(self._cpu_between) / max(len(self._cpu_between), 1)
+        self._cpu_in.clear()
+        self._cpu_between.clear()
+        self._t_exit = 0.0
+        prof = self.split.prof or {}
+        phases = {
+            k: round(1000 * v / max(self.layers, 1), 2)
+            for k, v in prof.items()
+            if k != "t0"
+        }
+        prof.clear()
+        logger.info(
+            "ANE FFN trace cpu_in_add_ms=%.2f cpu_between_layers_ms=%.2f phases_ms_per_layer=%s",
+            cpu_in,
+            cpu_between,
+            phases,
+        )
+        logger.info(
+            "ANE FFN trace rows=%d layers=%d ane_ms=%.2f gap_ms=%.2f period_ms=%.2f first_ready_to_last_report_ms=%.1f",
+            rows,
+            len(pairs),
+            sum(ane) / len(ane),
+            sum(gaps) / len(gaps),
+            period,
+            pairs[-1][1] - pairs[0][0],
+        )
+        self.split.ticket_times.clear()
 
     def abandon(self) -> None:
         """A step that ended (or raised) before its last layer: settle the split's tickets."""
@@ -163,6 +215,9 @@ def install(
             exc,
         )
         return None
+    import mlx.core as mx
+
+    before = mx.get_active_memory()
     outcome = ffn_startup.start(
         projections,
         cache_dir,
@@ -177,7 +232,12 @@ def install(
         mlp._ane_index = index
     _patch_mlp_class(Qwen3_5MLP)
     _RUNTIME = Runtime(outcome.split, outcome.reason)
-    logger.info("Neural Engine FFN split %s", outcome.reason)
+    _RUNTIME.extra_bytes = max(mx.get_active_memory() - before, 0)
+    logger.info(
+        "Neural Engine FFN split %s; %.2f GiB resident beyond the model",
+        outcome.reason,
+        _RUNTIME.extra_bytes / 2**30,
+    )
     return _RUNTIME
 
 

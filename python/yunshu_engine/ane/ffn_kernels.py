@@ -124,7 +124,7 @@ uint2 tile = uint2(threadgroup_position_in_grid.x, threadgroup_position_in_grid.
 uint2 position = uint2(thread_position_in_threadgroup.x, thread_position_in_threadgroup.y);
 const uint row = tile.x * 32, channel = tile.y * 32;
 for (uint j = position.y; j < 32; j += 8)
-  staged[j][position.x] = (row + j < R) ? rotated[(row + j) * H + CHANNEL0 + channel + position.x] : half(0);
+  staged[j][position.x] = (row + j < rotated_shape[0]) ? rotated[(row + j) * H + CHANNEL0 + channel + position.x] : half(0);
 threadgroup_barrier(mem_flags::mem_threadgroup);
 device char *packed = (device char *)(surface);
 for (uint j = position.y; j < 32; j += 8)
@@ -187,6 +187,7 @@ threadgroup float scale[32];
 uint2 tile = uint2(threadgroup_position_in_grid.x, threadgroup_position_in_grid.y);
 uint2 position = uint2(thread_position_in_threadgroup.x, thread_position_in_threadgroup.y);
 const uint row = tile.x * 32, channel = tile.y * 32, token = row + position.x;
+const uint R = gpu_shape[0];
 const bool chunk = token < R;
 bool finite = true;
 for (uint j = position.y; j < 32; j += 8) {

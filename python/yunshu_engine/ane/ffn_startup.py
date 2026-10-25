@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 TIMED_SHARES = (0.4, 0.8)
 SAMPLED_LAYERS = 5
 COMMAND_ROWS = 2 * prog.MAXIMUM_ROWS
-RUNS = 3
+RUNS = 7
 
 
 def _median_ms(run: Callable[[], float]) -> float:
@@ -94,7 +94,9 @@ class Measurement:
             for i in range(count):
                 if split is not None:
                     h1 = _gpu_alone(split, self.layers[idx[i]], x, h0)
-                    h0 = split.add(i, AneFfn.after(x, h0) if i else x, h1, rows)
+                    # The stand-in runs first: order this layer's pack after it (else the ANE overlaps
+                    # the stand-in and the split looks faster than it is).
+                    h0 = split.add(i, AneFfn.after(x, h1), h1, rows)
                 else:
                     h0 = _gpu_alone(None, self.layers[idx[i]], x, h0)
             mx.eval(h0)

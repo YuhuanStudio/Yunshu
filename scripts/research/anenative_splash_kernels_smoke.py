@@ -54,7 +54,7 @@ def main():
     tiles = (rows + 31) // 32
     (marker,) = K.kernel("pack")(
         inputs=[rotated, surf],
-        template=[("H", hidden), ("R", rows), ("CHANNEL0", 0), ("STRIDE", stride)],
+        template=[("H", hidden), ("CHANNEL0", 0), ("STRIDE", stride)],
         grid=(tiles * 32, (2560 // 32) * 8, 1),
         threadgroup=(32, 8, 1),
         output_shapes=[(1,)],
@@ -170,7 +170,7 @@ def main():
     tscale = mx.array(rng.uniform(0.5, 2.0, (1, 2048)).astype(np.float16))
     out, status = K.kernel("join")(
         inputs=[gpu, mx.array(part), tscale],
-        template=[("H", hid), ("R", rws), ("PSTRIDE", stride_p)],
+        template=[("H", hid), ("PSTRIDE", stride_p)],
         grid=(((rws + 31) // 32) * 32, (hid // 32) * 8, 1),
         threadgroup=(32, 8, 1),
         output_shapes=[(rws, hid), (((rws + 31) // 32) * (hid // 32),)],
@@ -193,7 +193,7 @@ def main():
     part2[7, 3] = np.inf
     _, status2 = K.kernel("join")(
         inputs=[gpu, mx.array(part2), tscale],
-        template=[("H", hid), ("R", rws), ("PSTRIDE", stride_p)],
+        template=[("H", hid), ("PSTRIDE", stride_p)],
         grid=(((rws + 31) // 32) * 32, (hid // 32) * 8, 1),
         threadgroup=(32, 8, 1),
         output_shapes=[(rws, hid), (((rws + 31) // 32) * (hid // 32),)],

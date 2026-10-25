@@ -88,6 +88,18 @@ def _use_stock(split):
     split._gpu_part = gpu_part
 
 
+def _make_heavy(split, n):
+    base = split._gpu_part
+
+    def heavy(layer, normalized, residual):
+        out = residual
+        for _ in range(n):
+            out = base(layer, normalized, out)
+        return out
+
+    split._gpu_part = heavy
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument(
@@ -102,6 +114,7 @@ def main():
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--no-verify", action="store_true")
     p.add_argument("--tiled", action="store_true")
+    p.add_argument("--heavy", type=int, default=1, help="repeat the GPU part N times (contention probe)")
     p.add_argument("--tile", default="", help="bm,bn,wm,wn for the NAX GPU part")
     p.add_argument(
         "--gpu-kernel", choices=["nax", "stock"], default="nax",
@@ -133,6 +146,8 @@ def main():
         for units in (int(v) for v in a.units.split(",")):
             t0 = time.perf_counter()
             split = AneFfn(layers, units, a.cache, function_rows=rows_list)
+            if a.heavy > 1:
+                _make_heavy(split, a.heavy)
             if a.tiled and a.gpu_kernel == 'stock':
                 _use_stock(split)
             emit(

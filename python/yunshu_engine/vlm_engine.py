@@ -2468,6 +2468,9 @@ class VLMEngine:
                         share=settings.get("YUNSHU_ANE_FFN_SHARE"),
                         minimum_rows=settings.get("YUNSHU_ANE_FFN_MIN_ROWS"),
                     )
+                    if runtime and settings.get("YUNSHU_ANE_FFN_TRACE"):
+                        runtime.trace = True
+                        runtime.split.profile(True)
                     kernels["ane_ffn_split"] = (
                         ane_ffn_runtime.kernel_suffix() if runtime else None
                     )

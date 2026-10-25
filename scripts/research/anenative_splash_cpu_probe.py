@@ -21,6 +21,10 @@ def main():
     a = p.parse_args()
     import mlx.core as mx
 
+    from yunshu_engine.kernels import nax_prefill
+
+    if not nax_prefill.enable():
+        raise SystemExit("NAX prefill unavailable")
     layers = load_layers(a.model, 40, 3, True)
     split = AneFfn(layers, 8, a.cache, function_rows=[2048])
 
@@ -43,6 +47,28 @@ def main():
             flush=True,
         )
 
+    rows = 2048
+    x = mx.array(
+        __import__("numpy").random.default_rng(1).normal(0, 1, (rows, split.shape.hidden)).astype("float32")
+    ).astype(mx.bfloat16)
+    mx.eval(x)
+
+    def gpu_time(label, fn, reps=20):
+        mx.eval(*fn())
+        import time as _t
+
+        t = _t.perf_counter()
+        for _ in range(reps):
+            mx.eval(*fn())
+        ms = (_t.perf_counter() - t) * 1000 / reps
+        print(f"{label}: {ms:.3f} ms (eval + sync each)", flush=True)
+
+    gpu_time("rotate+pack(2)", lambda: split._pack(x, rows))
+    gpu_time("noop-ish (x+0)", lambda: [x + 0])
+    out_gpu = x
+    gpu_time("join", lambda: list(split._join(out_gpu, rows)))
+    gpu_time("stage layer (6 kernels)", lambda: split._stage(1, 1))
+    gpu_time("gpu part", lambda: [split._gpu_part(1, x, None)])
     measure("aliases")
     real = split.alias
     cache = {}

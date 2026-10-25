@@ -29,6 +29,9 @@ def main():
     p.add_argument("--scratch", type=Path, required=True)
     p.add_argument("--cache", type=Path, default=Path("/Volumes/P5Plus/yunshu-build/codex/anenative-ffncache"))
     p.add_argument("--decode-tokens", default="32")
+    p.add_argument("--trace", action="store_true")
+    p.add_argument("--share", type=float, default=None)
+    p.add_argument("--min-rows", type=int, default=None)
     a = p.parse_args()
 
     os.environ.update(
@@ -69,6 +72,9 @@ def main():
         f"YUNSHU_ANE_FFN_SPLIT={a.arm}",
         "--env",
         f"YUNSHU_ANE_FFN_CACHE={a.cache}",
+        *(["--env", "YUNSHU_ANE_FFN_TRACE=1"] if a.trace else []),
+        *(["--env", f"YUNSHU_ANE_FFN_SHARE={a.share}"] if a.share else []),
+        *(["--env", f"YUNSHU_ANE_FFN_MIN_ROWS={a.min_rows}"] if a.min_rows else []),
         "--only-ctx",
         str(a.ctx),
         "--only-kind",
@@ -88,11 +94,12 @@ def main():
     finally:
         lines = []
         for log in (a.scratch / "out").glob("*.log"):
-            lines.extend(
-                line
-                for line in log.read_text(errors="replace").splitlines()
-                if re.search(r"Neural Engine|ANE FFN|prompt cache: .*GiB", line)
-            )
+            text = log.read_text(errors="replace").splitlines()
+            for i, line in enumerate(text):
+                if re.search(r"Neural Engine|ANE FFN|prompt cache: .*GiB", line):
+                    lines.append(line)
+                    if "failed" in line:
+                        lines.extend(text[i + 1 : i + 40])
         with a.out.open("a") as f:
             f.write(json.dumps({"part": "launch_evidence", "arm": a.arm, "lines": lines[-40:]}) + "\n")
         shutil.rmtree(a.scratch, ignore_errors=True)
