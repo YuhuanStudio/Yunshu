@@ -125,6 +125,7 @@ _add("YUNSHU_WARM_PROMPTS", "str", None, "Prompts prefilled at startup to warm t
 _add("YUNSHU_CONFIG", "path", None, "TOML config file with YUNSHU_* settings (lower precedence than the environment).", "server")
 _add("YUNSHU_MAX_CONCURRENT", "int", None, "Cap on concurrently admitted requests. Unset: adaptive (starts at 8).", "server", minimum=1)
 _add("YUNSHU_UNCACHED_SCHEDULING", "bool", True, "Order VLM canonical prefill atoms by estimated uncached RAM-prefix work and wait time, protect interactive prefills after one overtaking atom, age waiters after 10 seconds, and reserve up to 75 ms of measured decode time between prefill atoms; finish an interactive request's last 2048-token window and deliver its first token before repaying decode debt. No token spans change; SSD-only hits are conservatively estimated cold. Defaults on only with engaged qualified batch-invariant kernels; other backends keep FIFO unless explicitly enabled. Disable to restore upstream ordering.", "server")
+_add("YUNSHU_DECODE_TAIL_SHARE", "float", 0.5, "Share of GPU time running decode rows are owed after each prefill atom of a newcomer, once every running row is past its first 48 tokens: a prefill atom of t seconds earns decode time share*t (0.075-4 s). The same GPU time is divided either way. Measured on the 27B with one long reply running and a cold 4K / 32K prompt arriving (3 interleaved reps): 0.25 gave the running row 5.0 tok/s and the newcomer first token after 7.0 s / 58 s; 0.5 gave 7.6 tok/s at 7.8 s / 68 s; 1.0 gave 11.2 tok/s at 9.8 s (4K). Lower favors the newcomer's first token, higher the running reply.", "server", minimum=0.0)
 _add("YUNSHU_AUXILIARY_SCHEDULING", "bool", True, "Deprioritize captured opencode title requests: interactive VLM jobs run first; auxiliary rows pause between GPU slices and never read or write APC. Unknown fingerprints keep normal scheduling. Defaults on only with engaged qualified batch-invariant kernels; other backends require explicit opt-in. Disable to restore ordinary scheduling. In-flight GPU operations cannot be interrupted.", "server")
 _add("YUNSHU_QUEUE_LIMIT", "int", 64, "Generation requests (chat, completions, messages, responses) in flight at once, running and waiting together. The next one is refused at once with 429, `Retry-After` and the queue depth in `error.x_yunshu` instead of waiting without bound. 0 = no limit.", "server", minimum=0)
 _add("YUNSHU_MEMORY_PRESSURE_REJECT", "float", 0.95, "Share of the Metal working set (MLX active memory / recommended working set) above which, while other requests are running, a new generation request is refused with 503 and `Retry-After` (it would OOM the process). An idle server never refuses. 0 = off.", "server", minimum=0.0)
@@ -470,6 +471,7 @@ _RELOAD = frozenset(
         "YUNSHU_WARM_PROMPTS",
         "YUNSHU_UNCACHED_SCHEDULING",
         "YUNSHU_AUXILIARY_SCHEDULING",
+        "YUNSHU_DECODE_TAIL_SHARE",
         "YUNSHU_DEFAULT_MAX_TOKENS",
         "YUNSHU_SAMPLING_DEFAULTS",
         "YUNSHU_MEM_PRESSURE_THRESHOLD",
