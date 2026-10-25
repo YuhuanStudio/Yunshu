@@ -398,6 +398,14 @@
       "summary": "a generation whose client timed out is kept for 120 s; the identical retry (streaming or not) attaches to it instead of recomputing",
       "doc": "docs/guides/INFERENCE.md",
       "status": "stable"
+    },
+    {
+      "id": "ane-ffn-split",
+      "group": "inference",
+      "title": "Neural Engine FFN split (experimental, lossy)",
+      "summary": "opt-in W8A8 share of each dense FFN layer on the Apple Neural Engine beside the GPU during 27B prefill (Splash scheme); cold TTFT -5 to -10%",
+      "doc": "docs/guides/ANE_FFN_SPLIT.md",
+      "status": "experimental"
     }
   ]
 }

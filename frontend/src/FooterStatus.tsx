@@ -119,6 +119,7 @@ export function FooterStatus({
                         <LiveNumber
                           value={p.tween.value}
                           digits={p.tween.digits}
+                          glide
                         />
                         {p.tween.suffix}
                       </>

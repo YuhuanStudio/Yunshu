@@ -2047,6 +2047,67 @@
      "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
     }
    }
+  },
+  "ane_ffn_split": {
+   "module": "python/yunshu_engine/ane_ffn_runtime.py",
+   "what": "Opt-in lossy Neural Engine share of each dense FFN layer in single-row prompt steps (YUNSHU_ANE_FFN_SPLIT=splash, Splash scheme, W8A8 + Hadamard, IOSurface + shared-event handoff); decode, verify and short tails unchanged; APC states kept apart by the kernel id",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/cache_prefill.py",
+       "ane_ffn_runtime.guarded"
+      ],
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "ane_ffn_runtime.install("
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/cache_prefill.py",
+       "ane_ffn_runtime.guarded"
+      ],
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "ane_ffn_runtime.install("
+      ]
+     ]
+    },
+    "driver": {
+     "s": "na",
+     "why": "the round driver prefills its own fixed 512-row spans through packed forwards, not PromptProcessingBatch; the split's calibrated rows start above that"
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/cache_prefill.py",
+       "ane_ffn_runtime.guarded"
+      ],
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "ane_ffn_runtime.install("
+      ]
+     ]
+    },
+    "generic": {
+     "s": "na",
+     "why": "dense Qwen3.5-family MLP only (Qwen3_5MLP class patch)"
+    },
+    "text": {
+     "s": "na",
+     "why": "mlx-lm stock prefill; the split patches the mlx-vlm Qwen3.5 MLP"
+    },
+    "loop": {
+     "s": "na",
+     "why": "legacy loop is not grown (CLAUDE.md)"
+    }
+   }
   }
  },
  "exclusions": [
@@ -2436,7 +2497,9 @@
   "python/yunshu_engine/kernels/tf_flash_next/inputs.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
   "python/yunshu_engine/kernels/tf_flash_next/experts.py": "TensorFold flash_next v1 router/expert kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
   "python/yunshu_engine/kernels/attn_prefill.py": "prefill_kernels",
-  "python/yunshu_engine/copy_graft.py": "Implementation helper of the registered copy_rounds feature: MTP greedy shared-prefix tree selection and request-local cost budget. Existing copy_rounds remains available on sampled/constrained MTP via its original verifier. This prototype does not claim DFlash/driver/generic/text graft coverage; those adapters and GPU qualification remain explicitly pending in tf110/HANDOFF.md."
+  "python/yunshu_engine/copy_graft.py": "Implementation helper of the registered copy_rounds feature: MTP greedy shared-prefix tree selection and request-local cost budget. Existing copy_rounds remains available on sampled/constrained MTP via its original verifier. This prototype does not claim DFlash/driver/generic/text graft coverage; those adapters and GPU qualification remain explicitly pending in tf110/HANDOFF.md.",
+  "python/yunshu_engine/ane/native/__init__.py": "Phase 1 research-only optional native ANE runtime; no serving importer or setting. GPU default unchanged; private API failures return unavailable.",
+  "python/yunshu_engine/ane/native/mil.py": "CPU-only native ANE benchmark MIL builder; fp16/int8 numerics unqualified for serving."
  },
  "settings": {
   "YUNSHU_MTP": "draft_family_coverage",
@@ -2501,7 +2564,12 @@
   "YUNSHU_GC_POLICY": "gc_policy",
   "YUNSHU_DOCS_ASK_MAX_QUESTION": "docs_ask",
   "YUNSHU_DOCS_ASK_MAX_HISTORY": "docs_ask",
-  "YUNSHU_DOCS_ASK_MAX_TOKENS": "docs_ask"
+  "YUNSHU_DOCS_ASK_MAX_TOKENS": "docs_ask",
+  "YUNSHU_ANE_FFN_SPLIT": "ane_ffn_split",
+  "YUNSHU_ANE_FFN_SHARE": "ane_ffn_split",
+  "YUNSHU_ANE_FFN_MIN_ROWS": "ane_ffn_split",
+  "YUNSHU_ANE_FFN_CACHE": "ane_ffn_split",
+  "YUNSHU_ANE_FFN_TRACE": "ane_ffn_split"
  },
  "gap_budget": 55,
  "settings_categories": [

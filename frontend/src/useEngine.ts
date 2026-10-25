@@ -189,7 +189,7 @@ export function useEngine(connection: Connection): UseEngineResult {
   const [live, setLive] = useState<{
     phase: ActivityPhase;
     tps: number | null;
-    /** Metal active memory smoothed over about 1.5 s: it moves with every allocation. */
+    /** Metal active memory as last sampled. */
     mem: number | null;
   }>({ phase: "idle", tps: null, mem: null });
   const inFlightRef = useRef<{
@@ -270,7 +270,17 @@ export function useEngine(connection: Connection): UseEngineResult {
           // Steady phase and smoothed speed, from the freshest sample (see phase-stability.ts).
           const raw = activity(status);
           if (raw.phase !== "idle") lastBusyRef.current = at;
-          stableRef.current = nextStablePhase(stableRef.current, raw.phase, at);
+          // The phase and the memory reading are facts: shown as sampled (no hold, no averaging). Only the
+          // decode speed below is a rate, and it is smoothed.
+          stableRef.current = nextStablePhase(
+            stableRef.current,
+            raw.phase,
+            at,
+            {
+              back: 0,
+              idle: 0,
+            },
+          );
           const prevEma = emaRef.current;
           emaRef.current = {
             v: emaStep(prevEma.v, raw.decodeNow, at - prevEma.at),
@@ -280,15 +290,7 @@ export function useEngine(connection: Connection): UseEngineResult {
             typeof status.memory.active_gb === "number"
               ? status.memory.active_gb
               : null;
-          memEmaRef.current = {
-            v: emaStep(
-              memEmaRef.current.v,
-              rawMem,
-              at - memEmaRef.current.at,
-              1500,
-            ),
-            at,
-          };
+          memEmaRef.current = { v: rawMem, at };
           setLive((cur) =>
             cur.phase === stableRef.current.phase &&
             cur.tps === emaRef.current.v &&

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createServer } from "node:net";
+import { connect, createServer } from "node:net";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -63,10 +63,18 @@ async function until<T>(
 async function freePort(not = 0): Promise<number> {
   for (let port = 18990; port <= 18999; port++) {
     if (port === not) continue;
+    // A bind test alone is not enough: Node binds with SO_REUSEADDR, so 127.0.0.1 binds even when a server already
+    // listens on 0.0.0.0 at that port (the resident console on 18999). Something that accepts a connection is in use.
+    const answers = await new Promise<boolean>((done) => {
+      const c = connect(port, "127.0.0.1");
+      c.once("connect", () => (c.destroy(), done(true)));
+      c.once("error", () => done(false));
+    });
+    if (answers) continue;
     const free = await new Promise<boolean>((done) => {
       const s = createServer();
       s.once("error", () => done(false));
-      s.listen(port, "127.0.0.1", () => s.close(() => done(true)));
+      s.listen(port, "0.0.0.0", () => s.close(() => done(true)));
     });
     if (free) return port;
   }

@@ -132,8 +132,12 @@ def install():
             return (end - 1) // 64 * 64 > start
 
         def prompt_step(self):
+            from . import ane_ffn_runtime
+
             with self._prefill_scope():
-                return self._absolute_prompt_step()
+                return ane_ffn_runtime.guarded(
+                    getattr(self, "prompt_cache", None), self._absolute_prompt_step
+                )
 
         def _absolute_prompt_step(self):
             step = self.prefill_step_size

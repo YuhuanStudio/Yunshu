@@ -5,6 +5,7 @@ Split-invariant 27B prefill is a stable qualified kernel policy, not a new
 experimental flag. Console DOCS_ASK limits are stable request bounds, not
 experimental inference paths; retrieval never loads an embedding model. Existing stock/lane, tile/stock and chunked/step options
 retain their opt-outs; NEXT_TURN_PREFILL=off disables rehearsal only.
+Native ANE phase 1 is an explicit research API, with no new setting/flag or serving hook.
 """
 
 from __future__ import annotations

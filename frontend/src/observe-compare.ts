@@ -15,6 +15,7 @@ export interface DebugInFlight {
   prefill_known?: boolean;
   generated?: number;
   t_admit_ms?: number | null;
+  t_prefill_start_ms?: number | null;
   t_first_ms?: number | null;
   t_last_ms?: number | null;
 }
@@ -22,7 +23,7 @@ export interface DebugInFlight {
 export type CompareState = "match" | "differs" | "missing";
 
 export interface CompareCell {
-  key: "phase" | "prefill" | "tokens" | "admit" | "first";
+  key: "phase" | "prefill" | "tokens" | "admit" | "prefillStart" | "first";
   ui: string;
   debug: string;
   state: CompareState;
@@ -77,9 +78,9 @@ export function compareRequest(
   skewS = 0,
 ): CompareCell[] {
   if (!dbg)
-    return (["phase", "prefill", "tokens", "admit", "first"] as const).map(
-      (key) => ({ key, ui: "", debug: "-", state: "missing" as const }),
-    );
+    return (
+      ["phase", "prefill", "tokens", "admit", "prefillStart", "first"] as const
+    ).map((key) => ({ key, ui: "", debug: "-", state: "missing" as const }));
   const uiOff = (ui.offsets_ms ?? {}) as Record<string, unknown>;
   const dPhase = dbg.has_stats === false ? "starting" : (dbg.phase ?? "-");
   const phaseCell: CompareCell = {
@@ -115,6 +116,13 @@ export function compareRequest(
     prefill,
     tokens,
     cell("admit", num(uiOff.admit), num(dbg.t_admit_ms), 250, " ms"),
+    cell(
+      "prefillStart",
+      num(uiOff.prefill_start),
+      num(dbg.t_prefill_start_ms),
+      250,
+      " ms",
+    ),
     cell("first", num(uiOff.first_token), num(dbg.t_first_ms), 250, " ms"),
   ];
 }

@@ -738,6 +738,7 @@ export function Requests({
                       <LiveNumber
                         value={tile.liveValue ?? null}
                         format={(v) => number(v)}
+                        glide
                       />
                     </span>
                     {tile.unit && (

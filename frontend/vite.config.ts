@@ -97,6 +97,9 @@ export default defineConfig({
   build: {
     outDir: "../python/yunshu_gateway/console_static",
     emptyOutDir: true,
+    // YunUI's ModelIcon treats any iconUrl that is not http(s) or root-relative as a file name under its CDN base, so
+    // an icon small enough to be inlined as a data: URI became a broken jsDelivr request. Model icons stay files.
+    assetsInlineLimit: (file) => (file.includes("/yunui/icons/") ? false : undefined),
     // Let native module imports fetch JS dependencies on demand. Keep CSS
     // preloads, without embedding every lazy docs/vendor JS URL in the shell.
     modulePreload: {

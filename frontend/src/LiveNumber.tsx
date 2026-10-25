@@ -5,8 +5,10 @@ import { ticker, reducedMotion } from "./motion/ticker.ts";
 import { Tween } from "./motion/tween-core.ts";
 
 /**
- * A live reading that glides to each new sample (ease-out, about one sample interval) and is
- * drawn with tabular digits, so its width does not move. Frames write the text straight into the
+ * A live reading drawn with tabular digits, so its width does not move. A count or any other fact
+ * (the default) shows the sampled value at once: a glide would draw numbers the engine never
+ * reported. A RATE (`glide`) eases to each new sample (ease-out, about one sample interval); it
+ * only moves between two real samples and settles on the engine's value. Frames write the text straight into the
  * DOM from the shared ticker: no React render per frame. Under reduced motion, and whenever
  * `jumpKey` changes (another request, another phase), it shows the new value at once, because
  * gliding through values that never existed would be a lie.
@@ -15,6 +17,7 @@ export function LiveNumber({
   value,
   digits = 0,
   ms = 220,
+  glide = false,
   jumpKey,
   format,
   className,
@@ -22,6 +25,8 @@ export function LiveNumber({
   value: number | null;
   digits?: number;
   ms?: number;
+  /** Smooth between samples; only for rates (tok/s). Counts and other facts snap. */
+  glide?: boolean;
   jumpKey?: string | number | null;
   format?: (v: number) => string;
   className?: string;
@@ -50,7 +55,7 @@ export function LiveNumber({
     };
     if (!tween.current) tween.current = new Tween(value, ms);
     const tw = tween.current;
-    if (reducedMotion() || key.current !== jumpKey || value == null) {
+    if (!glide || reducedMotion() || key.current !== jumpKey || value == null) {
       key.current = jumpKey;
       stop();
       tw.jump(value);
@@ -66,7 +71,7 @@ export function LiveNumber({
         if (tw.settled(t)) stop();
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value, jumpKey, digits, locale]);
+  }, [value, jumpKey, digits, locale, glide]);
   useLayoutEffect(
     () => () => {
       off.current?.();

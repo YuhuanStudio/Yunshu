@@ -55,7 +55,7 @@ async function install(page: Page, feed: (t: number) => Items) {
   return { polls: () => polls };
 }
 
-test("an agent's short prefills between decodes never flip the phase back to 預填", async ({
+test("an agent's short prefills between decodes show the phase the engine reported (no hold)", async ({
   page,
 }) => {
   // 900 ms decode, then a 300 ms prefill of the next turn, over and over: one request at a time.
@@ -87,11 +87,26 @@ test("an agent's short prefills between decodes never flip the phase back to 預
   const pill = page.getByTestId("live-phase");
   await expect(pill).toHaveAttribute("data-phase", /解碼/);
   const seen = new Set<string>();
+  await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="live-phase"]')!;
+    (window as unknown as { __seen: string[] }).__seen = [];
+    new MutationObserver(() =>
+      (window as unknown as { __seen: string[] }).__seen.push(
+        el.getAttribute("data-phase") ?? "",
+      ),
+    ).observe(el, { attributes: true });
+  });
   for (let i = 0; i < 40; i++) {
     seen.add((await pill.getAttribute("data-phase")) ?? "");
     await page.waitForTimeout(120);
   }
-  expect([...seen]).toEqual(["解碼"]);
+  for (const p of await page.evaluate(
+    () => (window as unknown as { __seen: string[] }).__seen,
+  ))
+    seen.add(p);
+  // The phase is a fact: a 300 ms prefill window shows 預填 as sampled, not a held 解碼.
+  expect([...seen].some((p) => /預填/.test(p))).toBe(true);
+  expect([...seen].every((p) => /預填|解碼/.test(p))).toBe(true);
 });
 
 test("a single request goes prefill then decode and never back", async ({

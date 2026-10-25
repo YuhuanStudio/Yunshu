@@ -392,5 +392,15 @@ const settingdesc = {
     "Size cap of the console history file in MiB; the oldest rows are dropped when it is exceeded.",
   YUNSHU_CONSOLE_DB:
     "Where the console process keeps its history (SQLite). Unset: ~/.yunshu/console-history.sqlite.",
+  YUNSHU_ANE_FFN_SPLIT:
+    "Qwen3.5-family prefill (lossy, off by default): `splash` splits each dense FFN layer by intermediate channel between the GPU and the Apple Neural Engine, which runs a W8A8 share through the private AppleNeuralEngine API on IOSurface memory shared with Metal, ordered by a shared event. The ANE's part differs from the GPU's by about 2-3% RMS, so outputs differ slightly from off; prefix-cache states are kept apart. Share and least step are calibrated at first start. Any ANE failure stops it and the GPU reruns the step. About 3 GiB extra memory.",
+  YUNSHU_ANE_FFN_SHARE:
+    "With the ANE FFN split: fixed fraction (0-1) of intermediate channels the ANE takes, skipping calibration (512-channel units). Unset: calibrated.",
+  YUNSHU_ANE_FFN_MIN_ROWS:
+    "With a fixed ANE FFN share: least prompt-step rows that take the split (512-2048). Unset: 512.",
+  YUNSHU_ANE_FFN_CACHE:
+    "Directory of the compiled ANE programs' sources and the remembered calibration. Unset: ~/.yunshu/ane_cache/ffn.",
+  YUNSHU_ANE_FFN_TRACE:
+    "Log, per split prompt step, the ANE's milliseconds per layer and the GPU-side gap between layers (diagnostics).",
 };
 export default settingdesc;

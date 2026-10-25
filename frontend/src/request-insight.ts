@@ -38,6 +38,7 @@ export type Timed = {
   queue_wait_ms?: number | null;
   offsets_ms?: {
     admit?: number | null;
+    prefill_start?: number | null;
     first_token?: number | null;
     last_token?: number | null;
     done?: number | null;
@@ -52,7 +53,7 @@ const num = (v: unknown): number | null =>
 /** Server-measured pieces in ms; null where the engine did not report them. */
 export function stages(r: Timed) {
   const o = r.offsets_ms ?? {};
-  const admit = num(o.admit),
+  const admit = num(o.prefill_start) ?? num(o.admit),
     first = num(o.first_token),
     last = num(o.last_token) ?? num(o.done),
     total = num(o.done);
@@ -191,7 +192,7 @@ export function phaseDurations(
   r: Timed,
 ): { queueMs: number; prefillMs: number; cachedPct: number | null } | null {
   const o = r.offsets_ms ?? {},
-    admit = num(o.admit),
+    admit = num(o.prefill_start) ?? num(o.admit),
     first = num(o.first_token);
   if (admit == null || first == null || first < admit) return null;
   const prompt = num(r.prompt_tokens),

@@ -94,39 +94,33 @@ test("tween: null clears at once; jump never shows in-between values", () => {
   assert.equal(tw.settled(21), true);
 });
 
-test("bar: advances every frame between samples at the observed rate", () => {
+test("bar: eases toward the latest sample and never draws past it", () => {
   const bar = new BarModel(0, 0);
-  bar.push(0.1, 250); // 0.4/s
+  bar.push(0.1, 250);
   const frames: number[] = [];
-  for (let t = 250; t <= 500; t += 16) frames.push(bar.frame(t));
+  for (let t = 250; t <= 2000; t += 16) frames.push(bar.frame(t));
   assert.ok(
-    frames.every((v, i) => i === 0 || v >= frames[i - 1]),
-    "monotone",
+    frames.every((v, i) => v <= 0.1 + 1e-12 && (i === 0 || v >= frames[i - 1])),
+    "monotone and never above the sample",
   );
-  assert.ok(
-    new Set(frames.map((v) => v.toFixed(4))).size > 8,
-    "moves on (almost) every frame, not in steps",
-  );
-  assert.ok(frames.at(-1)! > 0.1 && frames.at(-1)! < 0.35);
+  assert.ok(Math.abs(frames.at(-1)! - 0.1) < 1e-3, "converges on the sample");
 });
 
-test("bar: extrapolation is capped, so a stalled request does not creep on", () => {
+test("bar: a stalled request does not creep on (no extrapolation from the rate)", () => {
   const bar = new BarModel(0, 0);
   bar.push(0.2, 250);
+  bar.push(0.4, 500); // a fast rate that would extrapolate past 0.4
   let v = 0;
-  for (let t = 250; t <= 5000; t += 16) v = bar.frame(t);
-  assert.ok(v <= 0.2 + 0.8 * 0.45 + 1e-6);
-  const later = bar.frame(10_000);
-  assert.ok(Math.abs(later - v) < 1e-6);
+  for (let t = 500; t <= 5000; t += 16) v = bar.frame(t);
+  assert.ok(v <= 0.4 + 1e-12);
 });
 
-test("bar: never runs backwards inside a request, never past 1", () => {
+test("bar: a lower sample lowers it at once, never past 1", () => {
   const bar = new BarModel(0.5, 0);
   bar.push(0.7, 250);
-  let last = 0;
-  for (let t = 250; t <= 500; t += 16) last = bar.frame(t);
-  bar.push(0.65, 500); // a late, lower sample
-  assert.ok(bar.frame(516) >= last);
+  for (let t = 250; t <= 1000; t += 16) bar.frame(t);
+  bar.push(0.65, 1000);
+  assert.ok(bar.frame(1016) <= 0.65);
   const full = new BarModel(0.9, 0);
   full.push(0.99, 250);
   for (let t = 250; t <= 2000; t += 16) assert.ok(full.frame(t) <= 1);

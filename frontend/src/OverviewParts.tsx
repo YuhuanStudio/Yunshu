@@ -185,6 +185,7 @@ export function SpeedPair({ status }: { status: EngineStatus }) {
             <span className="tabular-nums">
               <LiveNumber
                 value={headline.value}
+                glide
                 format={(v) => fixed(v)}
                 jumpKey={headline.kind}
               />
