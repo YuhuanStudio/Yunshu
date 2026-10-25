@@ -94,3 +94,91 @@ _PIPE = r"""
         }
   }
 """
+
+
+_LOOP_START = "  for (int g = g_begin; g < g_end; g++) {\n"
+_LOOP_END = "  // K slices are added in slice order, one 16-row block at a time\n"
+
+_LOAD_SB = """      for (int f = 0; f < NF; f++) {
+        const uint4 q = colok[f] ? sbv[(GG * N + n0 + f * 16 + fn) / 4] : uint4(0);
+        const vec<bfloat, 8> v = as_type<vec<bfloat, 8>>(q);
+        for (int j = 0; j < 4; j++) { SS[f][j] = float(v[2 * j]); BB[f][j] = float(v[2 * j + 1]); }
+      }
+      for (int t = 0; t < TMR; t++) {
+        const bool live = !EDGE || rb + t * 16 < MP;
+        X0[t] = live ? XS[GG * MP + rb + t * 16 + fm] : 0.0f;
+        X1[t] = live ? XS[GG * MP + rb + t * 16 + fm + 8] : 0.0f;
+      }
+"""
+
+
+def _load(group, s, b, x0, x1):
+    return (
+        _LOAD_SB.replace("GG", group)
+        .replace("SS", s)
+        .replace("BB", b)
+        .replace("X0", x0)
+        .replace("X1", x1)
+    )
+
+
+_EPILOGUE = """    for (int t = 0; t < TMR; t++) {
+      for (int f = 0; f < NF; f++)
+        for (int r = 0; r < 2; r++)
+          for (int j = 0; j < 4; j++) {
+            const int i = f * 8 + r * 4 + j;
+            C[t][i] = fma(s[f][j], P[t * NF * 8 + i], fma(bb[f][j], r ? xa1[t] : xa0[t], C[t][i]));
+          }
+    }
+"""
+
+_OP = """    auto a = tA.slice(g * GS, 0);
+    tensor<device uint4b_format, dextents<int32_t, 2>, tensor_inline> b(
+        (device uchar*)Wq + (int64_t)(threadgroup_position_in_grid.x * KG + g) * (NT * GS / 2), dextents<int32_t, 2>(GS, NT));
+    auto P = op.template get_destination_cooperative_tensor<decltype(a), decltype(b), float>();
+    op.run(a, b, P);
+"""
+
+
+def variant_source(name: str, tiled_main: str) -> str:
+    """Bit-identical schedules of the tiled M5 body that issue the epilogue's small loads (scales, biases, input group
+    sums) ahead of the op instead of around it: ``pre1`` loads this group's before the op, ``pre2`` loads the next
+    group's while this group's op runs."""
+    i = tiled_main.index(_LOOP_START)
+    j = tiled_main.index(_LOOP_END)
+    head, tail = tiled_main[:i], tiled_main[j:]
+    if _OP not in tiled_main:
+        raise AssertionError("lane_pipe: the tiled M5 body changed")
+    if name == "pre1":
+        loop = (
+            _LOOP_START
+            + "    float s[NF][4], bb[NF][4], xa0[TMR], xa1[TMR];\n    {\n"
+            + _load("g", "s", "bb", "xa0", "xa1")
+            + "    }\n"
+            + _OP
+            + _EPILOGUE
+            + "  }\n"
+        )
+    elif name == "pre2":
+        loop = (
+            "  float s[NF][4], bb[NF][4], xa0[TMR], xa1[TMR];\n"
+            "  if (g_begin < g_end) {\n"
+            + _load("g_begin", "s", "bb", "xa0", "xa1")
+            + "  }\n"
+            + _LOOP_START
+            + "    float sn[NF][4], bn[NF][4], xn0[TMR], xn1[TMR];\n"
+            "    const bool more = g + 1 < g_end;\n"
+            "    if (more) {\n"
+            + _load("(g + 1)", "sn", "bn", "xn0", "xn1")
+            + "    }\n"
+            + _OP
+            + _EPILOGUE
+            + "    if (more) {\n"
+            "      for (int f = 0; f < NF; f++) for (int j = 0; j < 4; j++) { s[f][j] = sn[f][j]; bb[f][j] = bn[f][j]; }\n"
+            "      for (int t = 0; t < TMR; t++) { xa0[t] = xn0[t]; xa1[t] = xn1[t]; }\n"
+            "    }\n"
+            "  }\n"
+        )
+    else:
+        raise ValueError(name)
+    return head + loop + tail

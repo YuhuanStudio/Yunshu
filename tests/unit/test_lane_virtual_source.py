@@ -70,3 +70,24 @@ def test_pipelined_body_groups_and_keeps_arithmetic(count):
 
 def test_pipelined_body_is_off_by_default():
     assert q.PIPE == [False]
+
+
+@pytest.mark.parametrize("name", ["pre1", "pre2"])
+def test_epilogue_prefetch_variants_keep_the_op_and_fma(name):
+    from yunshu_engine.kernels.tensorfold import lane_m5, lane_pipe
+
+    tiled = lane_m5._MAIN.replace(
+        "    auto b = tB.slice(g * GS, n0);\n",
+        "    tensor<device uint4b_format, dextents<int32_t, 2>, tensor_inline> b(\n"
+        "        (device uchar*)Wq + (int64_t)(threadgroup_position_in_grid.x * KG + g) * (NT * GS / 2), dextents<int32_t, 2>(GS, NT));\n",
+    )
+    src = lane_pipe.variant_source(name, tiled)
+    assert src.count("op.run(a, b, P)") == 1
+    assert (
+        "C[t][i] = fma(s[f][j], P[t * NF * 8 + i], fma(bb[f][j], r ? xa1[t] : xa0[t], C[t][i]))"
+        in src
+    )
+    assert (
+        "part[((s2 - 1)" in src
+        and "XS[g * MP" not in src.split("op.run")[1].split("part[")[0]
+    )

@@ -26,6 +26,8 @@ for ctx in sorted({k[0] for k in v}):
         if x:
             m = statistics.median(x)
             pct = f" ({100 * (m / base - 1):+.1f}%)" if base and arm != "off" else ""
-            row += f" | {arm} {m:.3f}s{pct} n={len(x)} same={len(heads[(ctx, arm)]) == 1}"
+            row += (
+                f" | {arm} {m:.3f}s{pct} n={len(x)} same={len(heads[(ctx, arm)]) == 1}"
+            )
     print(row)
 print("contended records:", cont)

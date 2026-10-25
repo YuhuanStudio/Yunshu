@@ -146,6 +146,7 @@ _COOP = r"""
       if (m < M) Y[m * N + n] = static_cast<bfloat>(C[i]);
     }
 """
+EXTRA = [None]                                       # dev variant name of the tiled 4-bit M5 body (lane_pipe.variant_source)
 PIPE = [False]                                       # software-pipelined M5 body for tiled 4-bit weights (lane_pipe)
 AB_FLAG = [False]                                    # The engine can switch kernel variants between rounds.
 
@@ -221,6 +222,10 @@ def _kernel(name: str) -> Any:
                 from . import lane_pipe
 
                 source = lane_pipe._PIPE
+            elif name in ("pre1", "pre2"):
+                from . import lane_pipe
+
+                source = lane_pipe.variant_source(name, _MAIN_TILED)
             elif name == "bytes8":
                 from . import lane_m5
 
@@ -383,6 +388,8 @@ def lane_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, tiled: bool = F
     name = "main_tiled" if tiled else "main"
     if PIPE[0] and tiled and nt == NT and _VARIANT == "m5" and group * 1 == 64:
         name = "pipe"
+    if EXTRA[0] and tiled and nt == NT and _VARIANT == "m5" and group == 64:
+        name = EXTRA[0]
     y = _kernel(name)(inputs=[x2, xs, weight, sbt, mdims],
                         template=[("TMR", block // 16), ("N", N), ("K", K), ("NT", nt), ("SK", sk), ("GS", group),
                                   ("EDGE", edge)],

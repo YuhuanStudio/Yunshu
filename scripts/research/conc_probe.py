@@ -26,7 +26,11 @@ CORPUS = Path("/Volumes/P5Plus/yunshu-build/snapshot014/corpus")
 
 
 def filler(chars: int, salt: int) -> str:
-    texts = sorted(p for p in CORPUS.rglob("*") if p.is_file() and p.suffix in (".txt", ".md", ".py"))
+    texts = sorted(
+        p
+        for p in CORPUS.rglob("*")
+        if p.is_file() and p.suffix in (".txt", ".md", ".py")
+    )
     out, i = [], salt
     while sum(len(x) for x in out) < chars and texts:
         out.append(texts[i % len(texts)].read_text(errors="ignore")[:4000])
@@ -52,7 +56,9 @@ def body(model: str, salt: int, tokens: int, ctx_chars: int, greedy: bool) -> di
     return b
 
 
-def run_one(url: str, b: dict, name: str, t_zero: float, rows: list, lock: threading.Lock) -> None:
+def run_one(
+    url: str, b: dict, name: str, t_zero: float, rows: list, lock: threading.Lock
+) -> None:
     times: list[float] = []
     t0 = time.perf_counter()
     usage = None
@@ -68,13 +74,19 @@ def run_one(url: str, b: dict, name: str, t_zero: float, rows: list, lock: threa
                     usage = d["usage"]
                 for ch in d.get("choices") or []:
                     delta = ch.get("delta") or {}
-                    if delta.get("content") or delta.get("reasoning_content") or delta.get("reasoning"):
+                    if (
+                        delta.get("content")
+                        or delta.get("reasoning_content")
+                        or delta.get("reasoning")
+                    ):
                         times.append(time.perf_counter())
                     if ch.get("finish_reason"):
                         finish = ch["finish_reason"]
     end = time.perf_counter()
     if finish is None or usage is None:
-        raise RuntimeError(f"{name}: incomplete stream (finish={finish}, usage={usage})")
+        raise RuntimeError(
+            f"{name}: incomplete stream (finish={finish}, usage={usage})"
+        )
     with lock:
         rows.append(
             {
@@ -114,7 +126,9 @@ def scenario(url, model, out, label, plans, tokens, ctx_chars):
         buckets: dict[int, int] = {}
         for t in tt:
             buckets[int(t)] = buckets.get(int(t), 0) + 1
-        r["tps_by_second"] = [buckets.get(s, 0) for s in range(int(r["start"]), int(r["end"]) + 1)]
+        r["tps_by_second"] = [
+            buckets.get(s, 0) for s in range(int(r["start"]), int(r["end"]) + 1)
+        ]
         span = (tt[-1] - tt[0]) if len(tt) > 1 else 0
         r["decode_tps"] = round((len(tt) - 1) / span, 1) if span else None
         del r["token_times"]
@@ -146,7 +160,9 @@ def main():
     ap.add_argument("--tokens", type=int, default=1500)
     ap.add_argument("--ctx-chars", type=int, default=16000)
     ap.add_argument("--join", type=float, default=15.0)
-    ap.add_argument("--only", default="", help="comma list of scenario labels to run (default all)")
+    ap.add_argument(
+        "--only", default="", help="comma list of scenario labels to run (default all)"
+    )
     a = ap.parse_args()
     observe = engine_observes(a.url)
     if not observe and not a.allow_no_observe:

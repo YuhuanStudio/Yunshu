@@ -883,7 +883,9 @@ def cmd_routes(a):
             fake = FakeBackend(free_port())
             srt_bin = "/Volumes/P5Plus/yunshu-build/srt/node_modules/.bin"
             if Path(srt_bin, "srt").exists() and srt_bin not in os.environ["PATH"]:
-                os.environ["PATH"] = f"{srt_bin}:/opt/homebrew/bin:" + os.environ["PATH"]
+                os.environ["PATH"] = (
+                    f"{srt_bin}:/opt/homebrew/bin:" + os.environ["PATH"]
+                )
             cand = Path(sys.executable).parent / "yunshu"
             if "COVAUDIT_BIN" not in os.environ and cand.exists():
                 os.environ["COVAUDIT_BIN"] = str(cand)

@@ -66,10 +66,18 @@ def main():
                 t0 = time.perf_counter()
                 mx.eval(run())
                 ts.append(time.perf_counter() - t0)
-            rows.append({"threads": threads_total, "tg": tg, "GBps": a.mb * 2**20 / statistics.median(ts) / 1e9})
+            rows.append(
+                {
+                    "threads": threads_total,
+                    "tg": tg,
+                    "GBps": a.mb * 2**20 / statistics.median(ts) / 1e9,
+                }
+            )
             print(json.dumps(rows[-1]), flush=True)
     with a.out.open("a") as f:
-        f.write(json.dumps({"best_GBps": max(r["GBps"] for r in rows), "rows": rows}) + "\n")
+        f.write(
+            json.dumps({"best_GBps": max(r["GBps"] for r in rows), "rows": rows}) + "\n"
+        )
 
 
 if __name__ == "__main__":

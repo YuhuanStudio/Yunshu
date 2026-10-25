@@ -316,6 +316,10 @@ def run_flashverify(a, mx, tracer):
 
     async def go():
         settings.set_override("YUNSHU_VLM_DRAFT", "off")
+        # the oQ3e pack's 6-bit head makes configure_lane refuse the load; this probe times the verify forward only
+        from yunshu_engine import qwen4_mtp
+
+        qwen4_mtp.configure_lane = lambda lm, drafter, block: ({}, block)
         settings.set_override("YUNSHU_VLM_APC_MEMORY_GB", 1.0)
         engine = VLMEngine(
             str(a.model), EngineConfig(prefill_step_size=512, completion_batch_size=1)
