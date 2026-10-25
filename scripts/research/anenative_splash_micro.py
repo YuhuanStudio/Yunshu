@@ -68,7 +68,10 @@ def _use_stock(split):
             bi = mx.contiguous(proj.sbt[..., 1].T)
             if lead_in:
                 w = mx.contiguous(w[:, : gpu * proj.bits // 32])
-                sc, bi = mx.contiguous(sc[:, : gpu // proj.gs]), mx.contiguous(bi[:, : gpu // proj.gs])
+                sc, bi = (
+                    mx.contiguous(sc[:, : gpu // proj.gs]),
+                    mx.contiguous(bi[:, : gpu // proj.gs]),
+                )
             else:
                 w, sc, bi = w[:gpu], sc[:gpu], bi[:gpu]
             mx.eval(w, sc, bi)
@@ -82,7 +85,9 @@ def _use_stock(split):
 
     def gpu_part(layer, normalized, residual):
         e = stock[layer]
-        y = qmm(_swiglu(qmm(normalized, e["gate"]), qmm(normalized, e["up"])), e["down"])
+        y = qmm(
+            _swiglu(qmm(normalized, e["gate"]), qmm(normalized, e["up"])), e["down"]
+        )
         return y if residual is None else residual + y
 
     split._gpu_part = gpu_part
@@ -114,10 +119,17 @@ def main():
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--no-verify", action="store_true")
     p.add_argument("--tiled", action="store_true")
-    p.add_argument("--heavy", type=int, default=1, help="repeat the GPU part N times (contention probe)")
+    p.add_argument(
+        "--heavy",
+        type=int,
+        default=1,
+        help="repeat the GPU part N times (contention probe)",
+    )
     p.add_argument("--tile", default="", help="bm,bn,wm,wn for the NAX GPU part")
     p.add_argument(
-        "--gpu-kernel", choices=["nax", "stock"], default="nax",
+        "--gpu-kernel",
+        choices=["nax", "stock"],
+        default="nax",
         help="tiled layers only: GPU part through the NAX tiled kernel or MLX quantized_matmul on untiled copies",
     )
     a = p.parse_args()
@@ -126,14 +138,14 @@ def main():
     if a.tile:
         from yunshu_engine.ane import ffn_split
 
-        bm, bn, wm, wn = (int(v) for v in a.tile.split(','))
+        bm, bn, wm, wn = (int(v) for v in a.tile.split(","))
         ffn_split.NAX_TILE.update(bm=bm, bn=bn, wm=wm, wn=wn)
     layers = load_layers(a.model, a.first, a.layers, a.tiled)
     if a.tiled:
         from yunshu_engine.kernels import nax_prefill
 
         if not nax_prefill.enable():
-            raise SystemExit('NAX prefill unavailable')
+            raise SystemExit("NAX prefill unavailable")
     a.out.parent.mkdir(parents=True, exist_ok=True)
     with a.out.open("w") as out:
 
@@ -148,7 +160,7 @@ def main():
             split = AneFfn(layers, units, a.cache, function_rows=rows_list)
             if a.heavy > 1:
                 _make_heavy(split, a.heavy)
-            if a.tiled and a.gpu_kernel == 'stock':
+            if a.tiled and a.gpu_kernel == "stock":
                 _use_stock(split)
             emit(
                 {
@@ -232,7 +244,9 @@ def main():
                         "gpu_part_ms_per_layer": tg,
                         "gpu_part_median": statistics.median(tg),
                         "cpu_encode_ms_per_layer": statistics.median(cpu),
-                        "timeline_last": split.timeline[-2 * len(layers) : -len(layers)],
+                        "timeline_last": split.timeline[
+                            -2 * len(layers) : -len(layers)
+                        ],
                         "ticket_times_last": split.ticket_times[-1],
                         "phase_ms_per_layer": {
                             k: v * 1000 / (a.reps * 2 * len(layers))
