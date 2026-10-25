@@ -49,7 +49,10 @@ def main():
 
     rows = 2048
     x = mx.array(
-        __import__("numpy").random.default_rng(1).normal(0, 1, (rows, split.shape.hidden)).astype("float32")
+        __import__("numpy")
+        .random.default_rng(1)
+        .normal(0, 1, (rows, split.shape.hidden))
+        .astype("float32")
     ).astype(mx.bfloat16)
     mx.eval(x)
 
@@ -108,7 +111,10 @@ def main():
         mx.async_eval(*outs)
         t.append((time.perf_counter() - t0) * 1000 / 10)
         mx.eval(*outs)
-    print(f"noop custom kernel: {statistics.median(t):.3f} ms per launch (CPU)", flush=True)
+    print(
+        f"noop custom kernel: {statistics.median(t):.3f} ms per launch (CPU)",
+        flush=True,
+    )
     print("complete")
 
 

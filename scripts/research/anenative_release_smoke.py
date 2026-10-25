@@ -12,7 +12,9 @@ from anenative_splash_micro import load_layers
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--model", default="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp")
+    p.add_argument(
+        "--model", default="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
+    )
     p.add_argument("--cache", type=Path, required=True)
     a = p.parse_args()
     from yunshu_engine.ane.ffn_split import AneFfn

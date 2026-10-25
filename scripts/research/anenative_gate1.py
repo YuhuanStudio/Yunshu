@@ -27,7 +27,11 @@ def main():
     p.add_argument("--rep", type=int, default=0)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--scratch", type=Path, required=True)
-    p.add_argument("--cache", type=Path, default=Path("/Volumes/P5Plus/yunshu-build/codex/anenative-ffncache"))
+    p.add_argument(
+        "--cache",
+        type=Path,
+        default=Path("/Volumes/P5Plus/yunshu-build/codex/anenative-ffncache"),
+    )
     p.add_argument("--decode-tokens", default="32")
     p.add_argument("--trace", action="store_true")
     p.add_argument("--share", type=float, default=None)
@@ -101,7 +105,12 @@ def main():
                     if "failed" in line:
                         lines.extend(text[i + 1 : i + 40])
         with a.out.open("a") as f:
-            f.write(json.dumps({"part": "launch_evidence", "arm": a.arm, "lines": lines[-40:]}) + "\n")
+            f.write(
+                json.dumps(
+                    {"part": "launch_evidence", "arm": a.arm, "lines": lines[-40:]}
+                )
+                + "\n"
+            )
         shutil.rmtree(a.scratch, ignore_errors=True)
     print(json.dumps({"complete": True, "arm": a.arm, "ctx": a.ctx, "rep": a.rep}))
 

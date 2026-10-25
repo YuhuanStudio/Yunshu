@@ -36,7 +36,11 @@ def stream(url, body, t0, rows, name, lock):
                     usage = d["usage"]
                 for ch in d.get("choices") or []:
                     delta = ch.get("delta") or {}
-                    if delta.get("content") or delta.get("reasoning_content") or delta.get("reasoning"):
+                    if (
+                        delta.get("content")
+                        or delta.get("reasoning_content")
+                        or delta.get("reasoning")
+                    ):
                         times.append(time.perf_counter() - t0)
                     if ch.get("finish_reason"):
                         finish = ch["finish_reason"]
@@ -72,11 +76,15 @@ def main():
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--scratch", type=Path, required=True)
     p.add_argument(
-        "--cache", type=Path, default=Path("/Volumes/P5Plus/yunshu-build/codex/anenative-ffncache")
+        "--cache",
+        type=Path,
+        default=Path("/Volumes/P5Plus/yunshu-build/codex/anenative-ffncache"),
     )
     a = p.parse_args()
     os.environ.update(
-        TFB_YUNSHU_SRC=str(ROOT / "python"), TFB_OUT=str(a.scratch), TFB_PORT_LAST="18996"
+        TFB_YUNSHU_SRC=str(ROOT / "python"),
+        TFB_OUT=str(a.scratch),
+        TFB_PORT_LAST="18996",
     )
     sys.path.insert(0, str(HERE))
     import conc_probe
@@ -95,7 +103,14 @@ def main():
         env["YUNSHU_ANE_FFN_SHARE"] = str(a.share)
     if a.min_rows:
         env["YUNSHU_ANE_FFN_MIN_ROWS"] = str(a.min_rows)
-    s = tb.start_server("yunshu-main", env, f"conc-{a.arm}-{a.rep}", model=tb.M, ctx_tokens=40000, parallel=1)
+    s = tb.start_server(
+        "yunshu-main",
+        env,
+        f"conc-{a.arm}-{a.rep}",
+        model=tb.M,
+        ctx_tokens=40000,
+        parallel=1,
+    )
     try:
         for _ in range(2):
             tb.send(s.url, tb.req(s.model, "Say hi.", 24))
@@ -130,7 +145,9 @@ def main():
             "b_ttft_s": round(b_first - b_start, 3),
             "a_tps_before": tps(A["times"], 2.0, b_start),
             "a_tps_during_b_prefill": tps(A["times"], b_start, b_first),
-            "a_tokens_during_b_prefill": sum(1 for t in A["times"] if b_start <= t < b_first),
+            "a_tokens_during_b_prefill": sum(
+                1 for t in A["times"] if b_start <= t < b_first
+            ),
             "a_tps_after": tps(A["times"], b_first + 1.0, 1e9),
             "a_first_token_s": round(A["times"][0], 3),
             "a_end_s": round(A["times"][-1], 3),
