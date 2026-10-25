@@ -37,28 +37,40 @@ def plans(scenario, tokens, join):
         return [("A", 0.0, tokens, 101), ("B", 0.0, max(64, tokens // 3), 102)]
     if scenario == "stagger":
         return [("A", 0.0, tokens, 111), ("B", join, max(64, tokens // 3), 112)]
+    if scenario == "solo":
+        return [("A", 0.0, tokens, 121)]
     raise ValueError(scenario)
 
 
 def split_rates(a, b):
-    """Running row A's tok/s while B decodes, and after B ends, plus B's TTFT (all from arrival times)."""
+    """Running row A's tok/s in B's three phases (B prefilling, both decoding, A alone), B's TTFT and wall clock."""
     ta, tb = a["times"], b["times"]
     if len(tb) < 2 or len(ta) < 4:
         raise RuntimeError("too few tokens to split rates")
-    lo, hi = tb[0], tb[-1]
-    during = [t for t in ta if lo <= t <= hi]
-    after = [t for t in ta if t > hi]
+    b_start, lo, hi = b["t0"], tb[0], tb[-1]
 
     def rate(ts):
         return (
             (len(ts) - 1) / (ts[-1] - ts[0]) if len(ts) > 1 and ts[-1] > ts[0] else None
         )
 
+    def span_rate(ts, t0, t1):
+        # tokens per second over the whole phase window (stalls count), not first-to-last arrival
+        return len([t for t in ts if t0 <= t < t1]) / (t1 - t0) if t1 > t0 else None
+
+    during = [t for t in ta if lo <= t <= hi]
+    after = [t for t in ta if t > hi]
+    a_end = ta[-1]
     return dict(
         a_overlap_tps=rate(during),
         a_after_tps=rate(after),
         a_after_tokens=len(after),
         a_overlap_tokens=len(during),
+        a_prefill_phase_tps=span_rate(ta, max(b_start, ta[0]), lo),
+        a_prefill_phase_tokens=len([t for t in ta if b_start <= t < lo]),
+        b_prefill_phase_s=lo - b_start,
+        a_decode_phase_tps=span_rate(ta, lo, hi),
+        wall_s=max(a_end, hi) - min(a["t0"], b_start),
         b_ttft=b["ttft"],
         a_ttft=a["ttft"],
         overlapped=bool(during),
@@ -87,7 +99,7 @@ def stream(url, b, t_zero):
     import httpx
 
     times, text, lps = [], [], []
-    usage = finish = None
+    usage = finish = xy = None
     t0 = time.perf_counter()
     with httpx.Client(timeout=httpx.Timeout(1800.0)) as c:
         with c.stream("POST", url + "/v1/chat/completions", json=b) as r:
@@ -97,6 +109,7 @@ def stream(url, b, t_zero):
                     continue
                 d = json.loads(line[6:])
                 usage = d.get("usage") or usage
+                xy = d.get("x_yunshu") or xy
                 for ch in d.get("choices") or []:
                     delta = ch.get("delta") or {}
                     piece = (
@@ -117,6 +130,7 @@ def stream(url, b, t_zero):
         times=[t - t_zero for t in times],
         ttft=times[0] - t0,
         usage=usage,
+        xy=xy,
         finish=finish,
         digest=digest("".join(text), lps),
     )
@@ -148,9 +162,16 @@ def run_scenario(url, model, scenario, shape, tokens, ctx_chars, join, salt_base
         t.start()
     for t in th:
         t.join()
-    if errs or set(out) != {"A", "B"}:
+    if errs or set(out) != ({"A"} if scenario == "solo" else {"A", "B"}):
         raise RuntimeError(f"scenario failed: {errs}")
-    rates = split_rates(out["A"], out["B"])
+    if scenario == "solo":
+        ta = out["A"]["times"]
+        out["B"] = dict(
+            times=ta[-2:], ttft=0.0, t0=ta[-1], usage={}, finish=None, digest=""
+        )
+        rates = dict(a_solo_tps=(len(ta) - 1) / (ta[-1] - ta[0]), overlapped=True)
+    else:
+        rates = split_rates(out["A"], out["B"])
     return dict(
         scenario=scenario,
         shape=shape,
@@ -160,7 +181,10 @@ def run_scenario(url, model, scenario, shape, tokens, ctx_chars, join, salt_base
         finish=[out["A"]["finish"], out["B"]["finish"]],
         a_digest=out["A"]["digest"],
         b_digest=out["B"]["digest"],
-        a_x_yunshu=out["A"]["usage"].get("x_yunshu"),
+        a_x_yunshu=out["A"]["xy"] or out["A"]["usage"].get("x_yunshu"),
+        a_times=[round(x, 4) for x in out["A"]["times"]],
+        b_times=[round(x, 4) for x in out["B"]["times"]],
+        b_t0=round(out["B"]["t0"], 4),
         **rates,
     )
 
@@ -173,6 +197,10 @@ def main():
     p.add_argument("--scenarios", nargs="+", required=True)
     p.add_argument("--shapes", nargs="+", required=True)
     p.add_argument("--rep", type=int, required=True)
+    p.add_argument("--model", default=None, help="model path (default: the 27B)")
+    p.add_argument(
+        "--auto-draft", action="store_true", help="leave the draft setting unset"
+    )
     p.add_argument("--tokens", type=int, default=800)
     p.add_argument("--join", type=float, default=12.0)
     p.add_argument("--out", type=Path, required=True)
@@ -198,11 +226,18 @@ def main():
                 "YUNSHU_VLM_APC_DISK": "0",
                 "YUNSHU_VLM_APC_MEMORY_GB": "0",
                 "YUNSHU_VLM_APC_DISK_DIR": str(apc),
-                "YUNSHU_VLM_DRAFT": "off" if arm == "off" else t.D,
+                **(
+                    {"YUNSHU_VLM_DRAFT": "off"}
+                    if arm == "off"
+                    else {"YUNSHU_VLM_DRAFT": "mtp"}
+                    if a.auto_draft
+                    else {"YUNSHU_VLM_DRAFT": t.D}
+                ),
                 "YUNSHU_NEXT_TURN_PREFILL": "off",
                 "YUNSHU_CONSOLE": "0",
             },
             label,
+            model=a.model,
         )
         try:
             t.send(server.url, t.req(server.model, "Say hi.", 16))
@@ -231,13 +266,24 @@ def main():
                     )
                     if not res["overlapped"]:
                         raise RuntimeError("requests did not overlap; invalid cell")
-                    if arm == "cand" and scenario == "uneven" and shape == "seeded":
+                    if (
+                        arm == "cand"
+                        and scenario == "uneven"
+                        and shape == "seeded"
+                        and not a.auto_draft
+                    ):
                         if not res["promoted"]:
                             raise RuntimeError("candidate never promoted a row")
                     with a.out.open("a") as fh:
                         fh.write(json.dumps(res) + "\n")
                     print(
-                        json.dumps({k: v for k, v in res.items() if k != "a_x_yunshu"}),
+                        json.dumps(
+                            {
+                                k: v
+                                for k, v in res.items()
+                                if k not in ("a_x_yunshu", "a_times", "b_times")
+                            }
+                        ),
                         flush=True,
                     )
             if arm != "off":

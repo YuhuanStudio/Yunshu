@@ -48,6 +48,8 @@ from .serving.work_scheduler import (
     PREPARE_WAIT_MAX,
     PREPARE_WAIT_S,
     PRIMARY_HANDOFF_S,
+    SPEC_ROUND_S,
+    SPEC_SLICE_STEPS,
     Work,
     decode_quantum,
 )
@@ -1302,6 +1304,14 @@ class VLMBatchRunner:
             # predicts local index 1, i.e. absolute generation index n + 1.
             job.keyed.position_base = int(batch._num_tokens[0])
         cache = list(batch.prompt_cache)  # the filter below clears the batch's own list
+        from .kernels import ragged_kv
+
+        for i, entry in enumerate(cache):
+            if isinstance(entry, ragged_kv.RaggedKVCache):
+                lane_cache = ragged_kv.to_lane_cache(entry)
+                if lane_cache is None:
+                    return False
+                cache[i] = lane_cache
         spec_batch = SpeculativeGenerationBatch(
             self.model,
             self.drafter,
@@ -2235,6 +2245,19 @@ class VLMBatchRunner:
                 self._begin_prefill(selected_job)
             before = time.perf_counter()
             self._step_group(group, decode_only=not selected)
+            if group.spec and not selected and len(groups) > 1:
+                # The lane yields one token per step: the rest of a round's tokens leave in
+                # near-free release steps and the next round's verify runs in the step after.
+                # One step per slice would pair each lane token with a peer step (1:1), so a
+                # lane row would decode at the peer's rate; run the lane until a real round ran.
+                steps = 1
+                while (
+                    steps < SPEC_SLICE_STEPS
+                    and group.jobs
+                    and time.perf_counter() - before < SPEC_ROUND_S
+                ):
+                    self._step_group(group, decode_only=True)
+                    steps += 1
             elapsed = time.perf_counter() - before
             if any(j.priority < 0 for j in allowed):
                 self._primary_handoff_at = None

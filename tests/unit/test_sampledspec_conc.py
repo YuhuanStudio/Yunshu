@@ -18,8 +18,8 @@ def test_plans():
 
 
 def test_split_rates():
-    a = dict(times=[i * 0.1 for i in range(100)], ttft=1.0)
-    b = dict(times=[0.5 + i * 0.1 for i in range(30)], ttft=0.4)
+    a = dict(times=[i * 0.1 for i in range(100)], ttft=1.0, t0=0.0)
+    b = dict(times=[0.5 + i * 0.1 for i in range(30)], ttft=0.4, t0=0.1)
     r = c.split_rates(a, b)
     assert r["overlapped"] and r["a_after_tokens"] > 0
     assert abs(r["a_overlap_tps"] - 10) < 0.5 and abs(r["a_after_tps"] - 10) < 0.5

@@ -40,6 +40,11 @@ DECODE_QUANTUM_MAX_S = 4.0
 # single window instead of waiting for a second long atom (~2-3 s each).
 DECODE_FIRST_BURST_S = 1.0
 PRIMARY_HANDOFF_S = 0.10
+# A speculative-lane slice with a peer group keeps stepping the lane until one real round ran (a step
+# longer than SPEC_ROUND_S) or SPEC_SLICE_STEPS steps: its tokens leave one per step, and the peer's
+# step in between would otherwise cap the lane row at the peer's token rate.
+SPEC_ROUND_S = 0.008
+SPEC_SLICE_STEPS = 40
 # After a slice, a request still between templating and submit gets this long
 # (at most PREPARE_WAIT_MAX times per episode, 48 ms in all) to reach the queue
 # before the next prefill atom starts.
