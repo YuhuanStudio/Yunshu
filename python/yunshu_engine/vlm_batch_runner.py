@@ -735,7 +735,16 @@ class VLMBatchRunner:
         # with the position-keyed sampler, so a draft is accepted exactly when serial
         # sampling would have produced it.
         job.allow_draft = bool(
-            allow_draft and not processors and not logprobs and guide is None
+            allow_draft
+            and not any(not isinstance(p, Fp32LogitsProcessor) for p in processors)
+            and guide is None
+            and (
+                not logprobs
+                or (
+                    self.driver is not None
+                    and getattr(self.driver, "dflash", None) is not None
+                )
+            )
         )
         stats.used_draft = use_draft
         stats.t_submit = time.perf_counter()
@@ -973,6 +982,8 @@ class VLMBatchRunner:
         speculative lane, a long cold prompt the upstream prefill."""
         if self.driver is None or job.prompt_kwargs is not None:
             return False
+        if getattr(self.driver, "dflash", None) is not None:
+            return job.guide is None
         if alone and DRIVER_MIN_CONCURRENCY >= 2:
             return False
         return self._driver_uncached(job) <= DRIVER_MAX_UNCACHED_TOKENS
@@ -1365,6 +1376,9 @@ class VLMBatchRunner:
                 self._aux_driver = RoundDriver(
                     self.model,
                     drafter=self.drafter if self.draft_kind == "mtp" else None,
+                    dflash_drafter=self.drafter
+                    if self.draft_kind == "dflash"
+                    else None,
                     stop_tokens=self.stop_tokens,
                     chunk=self.driver.chunk,
                     apc=None,
@@ -1376,7 +1390,12 @@ class VLMBatchRunner:
                 ids=job.ids,
                 max_tokens=job.max_tokens,
                 sampling=job.sampling,
-                processors=list(job.processors or []),
+                processors=[
+                    p
+                    for p in (job.processors or [])
+                    if getattr(driver, "dflash", None) is None
+                    or not isinstance(p, Fp32LogitsProcessor)
+                ],
                 logprobs=job.logprobs,
                 top_logprobs=job.top_logprobs,
                 draft=job.allow_draft,
@@ -1394,9 +1413,14 @@ class VLMBatchRunner:
         job.stats.prefill_total = len(job.ids) - hit
         job.stats.prefill_known = True
         job.stats.used_apc = use_apc
-        job.stats.used_draft = bool(job.allow_draft and driver.head is not None)
+        job.stats.used_draft = bool(
+            job.allow_draft
+            and (driver.head is not None or getattr(driver, "dflash", None) is not None)
+        )
         if job.stats.used_draft:
-            job.stats.spec_mode = "mtp"
+            job.stats.spec_mode = (
+                "dflash" if getattr(driver, "dflash", None) is not None else "mtp"
+            )
         self._driver_jobs[id(job)] = job
 
     def _step_driver(self, primary: bool = False) -> None:

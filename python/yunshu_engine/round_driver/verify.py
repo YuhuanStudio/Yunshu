@@ -51,6 +51,7 @@ def forward(lm, windows: list[Window], capture_ids=(), *, verifier=None):
 
     verifier = q35._EXACT_SPECULATIVE_VERIFIER if verifier is None else verifier
     model = lm.model
+    h = model.embed_tokens(mx.concatenate([w.tokens for w in windows], axis=1))
     offsets, at = [], 0
     results, contexts, positions = [], [], []
     for w in windows:
@@ -66,10 +67,9 @@ def forward(lm, windows: list[Window], capture_ids=(), *, verifier=None):
             )
         )
         contexts.append(tv.RoundContext(w.shape, n0))
-        results.append(tv.TreeResult(w.shape, n0, None))
+        results.append(tv.TreeResult(w.shape, n0, h[:, offsets[-1][0] : at]))
     capture = set(capture_ids)
     try:
-        h = model.embed_tokens(mx.concatenate([w.tokens for w in windows], axis=1))
         for i, layer in enumerate(model.layers):
             normed = layer.input_layernorm(h)
             if layer.is_linear:

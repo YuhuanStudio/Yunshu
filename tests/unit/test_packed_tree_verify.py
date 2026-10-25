@@ -138,3 +138,40 @@ def test_probe_plan_is_cpu_checkable():
     a.nodes = 9
     with pytest.raises(ValueError, match="32"):
         plan(a)
+
+
+def test_fair_nodes_reserves_roots_caps_and_rotates_remainder():
+    from yunshu_engine.round_driver.allocate import fair_nodes
+
+    assert fair_nodes([15]) == [15]
+    assert fair_nodes([15, 15]) == [15, 15]
+    assert fair_nodes([15] * 4) == [7] * 4
+    assert fair_nodes([0, 1, 15, 15], budget=12) == [0, 1, 4, 3]
+    assert fair_nodes([15] * 3, budget=8, turn=0) == [2, 2, 1]
+    assert fair_nodes([15] * 3, budget=8, turn=1) == [1, 2, 2]
+    assert fair_nodes([], budget=0) == []
+    with pytest.raises(ValueError):
+        fair_nodes([0, 0], budget=1)
+
+
+def test_probe_tiny_config_satisfies_installed_model_schema():
+    from scripts.research.phaseb_verify import tiny_config
+
+    cfg = tiny_config()
+    assert cfg.model_type == "qwen3_5"
+    assert cfg.linear_key_head_dim == cfg.linear_value_head_dim == 128
+    assert cfg.head_dim == 256
+
+
+def test_probe_tiny_end_to_end_small_arrays():
+    from scripts.research.phaseb_verify import parser, run
+
+    from yunshu_engine.kernels.ragged_attention import tile_ready
+
+    if not tile_ready():
+        pytest.skip("needs lane-capable Metal")
+    a = parser().parse_args(["--tiny", "--context", "32", "--output", "unused"])
+    rows = []
+    run(a, rows.append)
+    assert rows[-1]["complete"] and rows[-1]["success"]
+    assert len(rows) == 8

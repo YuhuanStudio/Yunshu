@@ -209,7 +209,7 @@
     },
     "driver": {
      "s": "missing",
-     "why": "single greedy row only (tree_verify); the driver verifies chains",
+     "why": "RoundDriver has packed DFlash tree verification; Phase B GPU qualification pending; MTP driver still verifies chains",
      "owner": "decode16",
      "impact": "medium",
      "absent": [
@@ -653,7 +653,7 @@
     },
     "driver": {
      "s": "partial",
-     "why": "MTP drafts for every row; DFlash is not wired (RoundDriver gets drafter only for draft_kind == 'mtp')",
+     "why": "MTP and bounded-context DFlash draft per row behind YUNSHU_ROUND_DRIVER; Phase B packed DFlash GPU identity and speed qualification pending; guided rows keep their established path.",
      "owner": "decode16",
      "impact": "high",
      "ev": [
@@ -1338,7 +1338,7 @@
     },
     "driver": {
      "s": "na",
-     "why": "MTP only"
+     "why": "Dense Qwen3.5 family MTP or bounded-context DFlash2 only; other families retain established runner paths"
     },
     "batch": {
      "s": "na",
@@ -2365,7 +2365,6 @@
   }
  ],
  "orphans": {
-  "python/yunshu_engine/round_driver/verify.py": "Phase B packed verifier primitive, under GPU qualification before driver integration; no serving behavior or coverage claimed (docs/guides/PHASEB_DESIGN.md).",
   "python/yunshu_engine/dflash_draft.py": "Quantized DFlash context-KV fusion and the trained-selector greedy readout; unit tested, never installed (quantize_drafter does not call it). Wire or delete after an A/B.",
   "python/yunshu_engine/dflash_conv.py": "One-dispatch private DFlash convolution candidate; unit tested, never installed. Wire or delete after an A/B.",
   "python/yunshu_engine/mtp_patch.py": "oMLX MTP patch for mlx-lm Qwen3.5 (text path); no importer, superseded by the VLM runner's MTP.",

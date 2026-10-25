@@ -35,10 +35,32 @@ def plan(a):
     return [dict(rows=n, nodes=a.nodes, context=a.context) for n in a.rows]
 
 
+def tiny_config():
+    from mlx_vlm.models.qwen3_5.config import TextConfig
+
+    return TextConfig(
+        model_type="qwen3_5",
+        linear_conv_kernel_dim=4,
+        rms_norm_eps=1e-6,
+        max_position_embeddings=4096,
+        hidden_size=256,
+        intermediate_size=512,
+        num_hidden_layers=4,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=256,
+        linear_num_value_heads=4,
+        linear_num_key_heads=2,
+        linear_key_head_dim=128,
+        linear_value_head_dim=128,
+        vocab_size=512,
+        tie_word_embeddings=False,
+    )
+
+
 def tiny():
     import mlx.core as mx
     import mlx.nn as nn
-    from mlx_vlm.models.qwen3_5.config import TextConfig
     from mlx_vlm.models.qwen3_5.language import LanguageModel
 
     from yunshu_engine.kernels import gdn_prefill, lane_linear, omlx, ragged_kv
@@ -46,22 +68,7 @@ def tiny():
 
     omlx.apply(row_exact=False)
     mx.random.seed(23)
-    lm = LanguageModel(
-        TextConfig(
-            hidden_size=256,
-            intermediate_size=512,
-            num_hidden_layers=4,
-            num_attention_heads=2,
-            num_key_value_heads=1,
-            head_dim=256,
-            linear_num_value_heads=2,
-            linear_num_key_heads=2,
-            linear_key_head_dim=128,
-            linear_value_head_dim=128,
-            vocab_size=512,
-            tie_word_embeddings=False,
-        )
-    )
+    lm = LanguageModel(tiny_config())
     lm.set_dtype(mx.bfloat16)
     nn.quantize(lm, group_size=64, bits=4)
     lane_linear.convert(lm)
@@ -93,7 +100,26 @@ def run(a, write):
     capture = [0, len(lm.model.layers) - 1]
     # Reuse immutable prefix arrays; each copy owns the cache wrappers and any
     # mutable KV storage, matching the normal cache transaction's ownership.
-    prefixes = [prefill(lm, ids[i:], a.context + i) for i in range(max(a.rows))]
+    if a.tiny:
+        from yunshu_engine.round_driver.forward import (
+            Segment,
+        )
+        from yunshu_engine.round_driver.forward import (
+            forward as prefill_forward,
+        )
+
+        def prefix(i):
+            cache = lm.make_cache()
+            prefill_forward(
+                lm,
+                [Segment(cache, mx.array(ids[i : i + a.context + i], dtype=mx.int32))],
+            )
+            mx.eval(*state(cache))
+            return cache
+
+        prefixes = [prefix(i) for i in range(max(a.rows))]
+    else:
+        prefixes = [prefill(lm, ids[i:], a.context + i) for i in range(max(a.rows))]
     for n in a.rows:
         solo_caches = [copy.deepcopy(c) for c in prefixes[:n]]
         packed_caches = [copy.deepcopy(c) for c in prefixes[:n]]

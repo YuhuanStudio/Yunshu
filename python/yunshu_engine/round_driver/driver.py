@@ -159,6 +159,7 @@ class RoundDriver:
         model: Any,
         *,
         drafter: Any = None,
+        dflash_drafter: Any = None,
         stop_tokens=None,
         chunk: int | None = None,
         apc: Any = None,
@@ -188,7 +189,14 @@ class RoundDriver:
         prev = mx.set_cache_limit(CACHE_LIMIT)
         if prev < CACHE_LIMIT:
             mx.set_cache_limit(prev)  # a tighter limit set by the host stays
-        self.batch = DecodeBatch(self.lm)
+        self.dflash = None
+        if dflash_drafter is not None:
+            from .dflash import DFlashBatch
+
+            self.dflash = DFlashBatch(model, dflash_drafter)
+        self.batch: Any = (
+            self.dflash if self.dflash is not None else DecodeBatch(self.lm)
+        )
         # APC prefix cache (mlx_vlm ``APCManager``): a prompt starts from the
         # longest stored checkpoint (target KV + GDN state, plus the MTP
         # head's KV for rows that draft) and stores checkpoints at chunk
@@ -228,7 +236,7 @@ class RoundDriver:
             req.sampling is not None
             and req.draft
             and not req.processors
-            and not req.logprobs
+            and (not req.logprobs or self.dflash is not None)
             and keyed_sampling.supports(req.sampling)
         ):
             # A sampled row drafts too (and draws the same tokens whether or
@@ -242,13 +250,16 @@ class RoundDriver:
             )
         draft = bool(
             req.draft
-            and self.head is not None
+            and (self.head is not None or self.dflash is not None)
+            and not req.processors
             and (req.sampling is None or keyed is not None)
         )
         row = _Row(
             req=req,
             cache=self.lm.make_cache(),
-            mtp_cache=self.head.make_cache() if draft else None,
+            mtp_cache=self.head.make_cache()
+            if draft and self.head is not None
+            else None,
             rates=[ACCEPT_PRIOR] * (MAX_DECODE_TOKENS - 1),
             context=list(req.ids),
             drafting=draft,
@@ -287,12 +298,12 @@ class RoundDriver:
         """Whether a request with these fields gets an MTP head row (as ``add``)."""
         return bool(
             draft
-            and self.head is not None
+            and (self.head is not None or self.dflash is not None)
             and (
                 sampling is None
                 or (
                     not processors
-                    and not logprobs
+                    and (not logprobs or self.dflash is not None)
                     and keyed_sampling.supports(sampling)
                 )
             )
@@ -417,6 +428,8 @@ class RoundDriver:
         gone = [r for r in self.rows if r.req.handle is handle]
         self.rows = [r for r in self.rows if r.req.handle is not handle]
         self._release(gone)
+        if self.dflash is not None:
+            self.dflash.leave(gone)
 
     def _release(self, gone: list[_Row]) -> None:
         """Drop rows' slots in the decode batch and the head's."""
@@ -467,7 +480,7 @@ class RoundDriver:
             return mx.random.categorical(x, key=sub)
         return mx.random.categorical(x)
 
-    def _draw(self, items: list[_Item], hidden: mx.array):
+    def _draw(self, items: list[_Item], hidden: mx.array, target_logits=None):
         """Logits at every decode window position and the last position of a
         prompt finished this step; the row's token(s) at each. Returns
         ``[(item, token ids array, logprob arrays or None)]``."""
@@ -481,13 +494,18 @@ class RoundDriver:
                 pick.append(it.at + it.count - 1)
         if not pick:
             return []
-        lg = logits(self.lm, hidden[mx.array(pick, dtype=mx.int32)])
+        indices = mx.array(pick, dtype=mx.int32)
+        lg = (
+            logits(self.lm, hidden[indices])
+            if target_logits is None
+            else target_logits[indices]
+        )
         # Serial greedy decoding samples ``logits - logsumexp(logits)`` in the logits
         # dtype, so its argmax runs over rounded log-probabilities: two adjacent bf16
         # logits can land on one value and the tie goes to the lower id. Take the same
         # argmax so a verified row picks the token serial decode would (omlx 26375259).
         greedy = mx.argmax(lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1)
-        draws = []
+        draws: list[tuple[_Item, Any, Any]] = []
         for it, off, n in outs:
             row = it.row
             req = row.req
@@ -501,17 +519,27 @@ class RoundDriver:
                 continue
             if row.keyed is not None:
                 # window position j is generation index generated + j
-                x = lg[off : off + n].astype(mx.float32)
+                x = lg[off : off + n]
+                if self.dflash is None or req.logprobs:
+                    x = x.astype(mx.float32)
                 lp = x - mx.logsumexp(x, axis=-1, keepdims=True)
                 tok = row.keyed.sample_positions(
                     lp, list(range(row.generated, row.generated + n))
                 )
-                draws.append((it, tok, None))
+                extra = None
+                if req.logprobs:
+                    extra = [lp[0, tok[0]]]
+                    if req.top_logprobs > 0:
+                        idx = mx.argsort(lp, axis=-1)[..., -req.top_logprobs :][
+                            ..., ::-1
+                        ]
+                        extra += [idx, mx.take_along_axis(lp, idx, axis=-1)]
+                draws.append((it, tok, extra))
                 continue
             x = self._processed(row, lg[off : off + 1], first=it.kind == "p")
-            if row.base is not None:
-                # normalize in float32 like the keyed (drafting) branch: the stream must not
-                # depend on whether this row drafts
+            if req.logprobs or (row.base is not None and self.dflash is None):
+                # DFlash matches the shared batch: retain bf16 normalization
+                # unless reporting logprobs explicitly requests float32.
                 x = x.astype(mx.float32)
             lp = x - mx.logsumexp(x, axis=-1, keepdims=True)
             tok = self._sample(row, lp)
@@ -620,7 +648,17 @@ class RoundDriver:
                 blocked = True
         if not items:
             return []
-        hidden = forward(self.lm, [it.seg for it in items])
+        captures: list[mx.array] = []
+        segments = [it.seg for it in items if it.seg is not None]
+        if self.dflash is not None:
+            hidden = forward(
+                self.lm,
+                segments,
+                capture_ids=self.dflash.capture_ids,
+                captured=captures,
+            )
+        else:
+            hidden = forward(self.lm, segments)
         draws = self._draw(items, hidden)
         # Evaluate every cache the step advanced, not only what feeds a token:
         # a prompt chunk that emits nothing would otherwise stay a lazy graph
@@ -635,6 +673,8 @@ class RoundDriver:
         events: list[Event] = []
         for it, tok, extra in draws:
             self._emit(it.row, [int(tok.tolist()[0])], extra, events)
+        if self.dflash is not None:
+            self.dflash.absorb(items, captures)
         # prompt chunks of draftable rows feed their MTP head, in order
         absorb: dict[int, tuple] = {}
         for it in items:
@@ -670,7 +710,7 @@ class RoundDriver:
         arrays += [
             a for r in self.rows if r.mtp_cache for a in cache_buffers(r.mtp_cache)
         ]
-        ready = [r for r in joined if r.drafting]
+        ready = [r for r in joined if r.drafting] if self.head is not None else []
         if ready:
             self.head.join(ready)
             arrays += self.head.slots.arrays()
@@ -685,6 +725,8 @@ class RoundDriver:
         return events
 
     def _decode_step(self) -> list[Event]:
+        if self.dflash is not None:
+            return self.dflash.step(self)
         started = time.perf_counter()
         late = [r for r in self.batch.rows if r.head_state is not None]
         if late:

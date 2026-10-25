@@ -2695,6 +2695,7 @@ class VLMEngine:
             runner.driver = RoundDriver(
                 self._model,
                 drafter=drafter if draft_kind == "mtp" else None,
+                dflash_drafter=drafter if draft_kind == "dflash" else None,
                 stop_tokens=runner.stop_tokens,
                 chunk=settings.get("YUNSHU_ROUND_PREFILL_CHUNK"),
                 apc=self._apc_backend,

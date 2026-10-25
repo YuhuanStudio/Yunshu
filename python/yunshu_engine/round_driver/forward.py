@@ -192,7 +192,9 @@ def _mlp(mlp, x: mx.array, spans: list[tuple[int, int]], lane: list[bool]) -> mx
     return _project(mlp.down_proj, h, spans, lane)
 
 
-def forward(language_model: Any, segments: list[Segment]) -> mx.array:
+def forward(
+    language_model: Any, segments: list[Segment], *, capture_ids=(), captured=None
+) -> mx.array:
     """Run prompt ``segments`` through the decoder in one packed forward;
     returns the final-norm hidden states ``[N, D]`` in segment order.
 
@@ -248,6 +250,8 @@ def forward(language_model: Any, segments: list[Segment]) -> mx.array:
         h = x + r
         x = h + _mlp(layer.mlp, layer.post_attention_layernorm(h), spans, lane)
         _tick("mlp", x)
+        if captured is not None and i in capture_ids:
+            captured.append(x[0])
         # transient stock weights are freed every few layers (the graph would
         # otherwise hold every layer's)
         if i % EVAL_EVERY == EVAL_EVERY - 1:

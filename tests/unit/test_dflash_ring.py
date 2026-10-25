@@ -214,3 +214,42 @@ def test_vendor_draft_reads_the_installed_context_projection():
         err = mx.abs(w.astype(mx.float32) - g.astype(mx.float32)).max().item()
         scale = mx.abs(w.astype(mx.float32)).max().item()
         assert err <= 0.02 * scale, (err, scale)
+
+
+@pytest.mark.parametrize("rows", [1, 2, 4])
+def test_batched_ring_draft_preserves_each_rows_context(rows):
+    d = _drafter(window=13)
+    rings = [dflash_ring.Ring(d, 40, 12) for _ in range(rows)]
+    bonuses = mx.array([11 + b for b in range(rows)], dtype=mx.int32)
+    for b, ring in enumerate(rings):
+        # Distinct offsets, ring wrap and distinct context values. A shared
+        # RoPE offset or convolution crossing row boundaries changes proposals.
+        for turn in range(3 + b):
+            hidden = mx.full((1, 16, D_TARGET), (turn + b) / 10, dtype=mx.bfloat16)
+            ring.append(d, hidden, mx.array([8 + b], dtype=mx.int32))
+    saved = [(r.pos, r.slot_pos, *r.keys, *r.values) for r in rings]
+    want = mx.concatenate(
+        [
+            dflash_ring.draft_hidden(d, r, bonuses[b : b + 1], 7)
+            for b, r in enumerate(rings)
+        ],
+        axis=0,
+    )
+    got = dflash_ring.draft_hidden_batch(d, rings, bonuses, 7)
+    # Proposal projections may use another matmul variant at the packed width;
+    # emitted tokens are still decided by the row-invariant target verifier.
+    assert mx.allclose(got, want, atol=0.025, rtol=0.025).item()
+    for r, before in zip(rings, saved, strict=True):
+        assert all(
+            mx.array_equal(x, y).item()
+            for x, y in zip(
+                (r.pos, r.slot_pos, *r.keys, *r.values), before, strict=True
+            )
+        )
+    if rows == 1:
+        assert mx.array_equal(got, want).item()
+
+
+def test_batched_ring_draft_requires_one_bonus_per_row():
+    with pytest.raises(ValueError, match="bonus"):
+        dflash_ring.draft_hidden_batch(None, [], mx.array([], dtype=mx.int32), 7)

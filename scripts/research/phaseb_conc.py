@@ -1,0 +1,210 @@
+"""Phase B HTTP identity/timing cells, reusing conc_probe and sampledspec_conc.
+
+Run via gpuq (speed: --quiet). Output contains hashes, shapes and timings only.
+Every deterministic concurrent row is checked against its matched solo request.
+"""
+
+from __future__ import annotations
+
+import argparse
+import concurrent.futures
+import json
+import shutil
+import time
+from pathlib import Path
+
+
+def parser():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--base-src", type=Path, required=True)
+    p.add_argument("--cand-src", type=Path, required=True)
+    p.add_argument(
+        "--model", default="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
+    )
+    p.add_argument("--mode", choices=["identity", "speed"], default="identity")
+    p.add_argument("--ctx-chars", type=int, default=16000)
+    p.add_argument("--tokens", type=int, default=128)
+    p.add_argument("--rep", type=int, default=0)
+    p.add_argument("--join", type=float, default=12.0)
+    p.add_argument("--scenarios", nargs="+", default=["burst2", "burst4", "stagger"])
+    p.add_argument("--shapes", nargs="+", default=["greedy", "seeded"])
+    p.add_argument("--arms", nargs="+", default=["base", "cand"])
+    p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--dry-run", action="store_true")
+    return p
+
+
+def plans(scenario, tokens, join):
+    if scenario in ("solo", "burst2", "burst4"):
+        n = {"solo": 1, "burst2": 2, "burst4": 4}[scenario]
+        return [(chr(65 + b), 0.0, tokens, 101 + b) for b in range(n)]
+    if scenario == "stagger":
+        return [("A", 0.0, tokens, 101), ("B", join, max(16, tokens // 3), 102)]
+    raise ValueError(f"unknown scenario: {scenario}")
+
+
+def validate(a):
+    if a.tokens < 4 or a.ctx_chars < 16 or a.join < 0 or a.rep < 0:
+        raise ValueError("invalid request shape")
+    if not set(a.shapes) <= {"greedy", "seeded", "agent"} or not a.shapes:
+        raise ValueError("unknown or empty sampling shapes")
+    if not set(a.arms) <= {"base", "cand", "off"} or not a.arms:
+        raise ValueError("unknown or empty arms")
+    return [plans(s, a.tokens, a.join) for s in a.scenarios]
+
+
+def rate(times):
+    return (
+        (len(times) - 1) / (times[-1] - times[0])
+        if len(times) > 1 and times[-1] > times[0]
+        else None
+    )
+
+
+def summarize(rows):
+    first = min(r["times"][0] for r in rows.values())
+    last = max(r["times"][-1] for r in rows.values())
+    return dict(
+        per_row={
+            name: dict(
+                ttft=r["ttft"],
+                tps=rate(r["times"]),
+                tokens=r["usage"].get("completion_tokens"),
+                digest=r["digest"],
+            )
+            for name, r in rows.items()
+        },
+        aggregate_tps=sum(len(r["times"]) for r in rows.values()) / (last - first)
+        if last > first
+        else None,
+    )
+
+
+def interval_rates(a, b):
+    times = a["times"]
+    return dict(
+        prefill_tps=rate([t for t in times if b["t0"] <= t <= b["times"][0]]),
+        overlap_tps=rate([t for t in times if b["times"][0] <= t <= b["times"][-1]]),
+        after_tps=rate([t for t in times if t > b["times"][-1]]),
+    )
+
+
+def check_identity(solo, concurrent):
+    if solo.keys() != concurrent.keys() or any(
+        solo[n]["digest"] != concurrent[n]["digest"] for n in solo
+    ):
+        raise RuntimeError(
+            "concurrent token/logprob digest differs from matched solo request"
+        )
+
+
+def run_cell(server, a, scenario, shape):
+    try:
+        from . import conc_probe
+        from . import sampledspec_conc as sampled
+    except ImportError:
+        import conc_probe
+        import sampledspec_conc as sampled
+
+    jobs = plans(scenario, a.tokens, a.join)
+
+    def request(salt, ntok):
+        prompt = (
+            conc_probe.filler(a.ctx_chars, salt)
+            + "\nReview this design carefully and propose concrete improvements. Reason step by step."
+        )
+        body = sampled.body(
+            server.model, prompt, ntok, "seeded" if shape == "seeded" else "agent"
+        )
+        if shape == "greedy":
+            body.update(temperature=0.0, logprobs=True)
+        if shape == "seeded":
+            body["seed"] = 17 + salt
+        return body
+
+    solo = {}
+    for name, _, ntok, salt in jobs:
+        solo[name] = sampled.stream(
+            server.url, request(salt, ntok), time.perf_counter()
+        )
+    t_zero = time.perf_counter()
+
+    def go(job):
+        name, delay, ntok, salt = job
+        time.sleep(delay)
+        return name, sampled.stream(server.url, request(salt, ntok), t_zero)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        concurrent_rows = dict(pool.map(go, jobs))
+    if shape != "agent":
+        check_identity(solo, concurrent_rows)
+    result = dict(
+        scenario=scenario,
+        shape=shape,
+        solo=summarize(solo),
+        concurrent=summarize(concurrent_rows),
+        identity=shape != "agent",
+    )
+    if scenario == "stagger":
+        result["stagger"] = interval_rates(concurrent_rows["A"], concurrent_rows["B"])
+    return result
+
+
+def main():
+    a = parser().parse_args()
+    validate(a)
+    if a.dry_run:
+        print(json.dumps(dict(complete=True, dry_run=True)))
+        return
+    try:
+        from . import tfbench as t
+        from .sampledspec_conc import arm_order
+    except ImportError:
+        import tfbench as t
+        from sampledspec_conc import arm_order
+    a.out.parent.mkdir(parents=True, exist_ok=True)
+    t.OUT = a.out.parent / (a.out.stem + "-servers")
+    with a.out.open("x") as out:
+
+        def write(row):
+            line = json.dumps(row)
+            out.write(line + "\n")
+            out.flush()
+            print(line, flush=True)
+
+        for arm in [x for x in arm_order(a.rep) if x in a.arms]:
+            t.YUNSHU_SRC = str(a.base_src if arm == "base" else a.cand_src)
+            home = t.OUT / "apc" / arm
+            env = dict(
+                YUNSHU_ROUND_DRIVER="1" if arm == "cand" else "0",
+                YUNSHU_VLM_APC_DISK="0",
+                YUNSHU_VLM_APC_MEMORY_GB="0",
+                YUNSHU_VLM_APC_DISK_DIR=str(home),
+                YUNSHU_VLM_DRAFT="off" if arm == "off" else t.D,
+                YUNSHU_NEXT_TURN_PREFILL="off",
+                YUNSHU_CONSOLE="0",
+            )
+            server = t.Srv("yunshu", env, f"phaseb-{a.out.stem}-{arm}", model=a.model)
+            try:
+                for scenario in a.scenarios:
+                    for shape in a.shapes:
+                        result = run_cell(server, a, scenario, shape)
+                        result.update(arm=arm, rep=a.rep, ctx_chars=a.ctx_chars)
+                        write(result)
+                if arm != "off":
+                    server.verify_spec_mode()
+                if (
+                    arm == "cand"
+                    and "Round driver DFlash packed"
+                    not in server.log.read_text(errors="replace")
+                ):
+                    raise RuntimeError("candidate did not engage packed DFlash")
+            finally:
+                server.kill()
+                shutil.rmtree(home, ignore_errors=True)
+                shutil.rmtree(server.home, ignore_errors=True)
+        write(dict(complete=True, success=True, mode=a.mode, device="m5"))
+
+
+if __name__ == "__main__":
+    main()
