@@ -1184,9 +1184,10 @@ export function Requests({
                   <ul className="m-0 flex list-none flex-col gap-1 p-0">
                     {recentDone.map((r) => (
                       <li key={r.id}>
-                        <button
-                          type="button"
-                          className="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground tabular-nums hover:bg-muted"
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-auto w-full justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs font-normal text-muted-foreground tabular-nums"
                           onClick={() => setDetail(r)}
                         >
                           <span className="min-w-0 truncate font-mono">
@@ -1198,7 +1199,7 @@ export function Requests({
                               ? `${number(r.decode_tps)} tok/s`
                               : "—"}
                           </span>
-                        </button>
+                        </Button>
                       </li>
                     ))}
                   </ul>
