@@ -528,6 +528,7 @@ export default function App() {
       if (next.page !== cur.page) changePage(apply);
       else apply();
     };
+    fn(); // a hash written between the first render and this effect was not heard
     addEventListener("hashchange", fn);
     return () => removeEventListener("hashchange", fn);
   }, []);
