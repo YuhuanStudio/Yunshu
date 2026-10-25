@@ -56,6 +56,17 @@ const queries = [
   "缓存",
   "YUNSHU_VLM_APC_DISK",
   "noresults",
+  "How do I stream chat completions?",
+  "what is the OpenAI SDK",
+  "如何設定快取？",
+  "怎么使用缓存",
+];
+const tokenCases = [
+  "APC 快取快取",
+  "How do I start the engine with a local model?",
+  "如何使用 OpenAI Python SDK 連接 Yunshu？",
+  "缓存",
+  "a 快 I",
 ];
 const expected = {};
 for (const query of queries)
@@ -70,5 +81,13 @@ for (const query of queries)
   ).hits.map((h) => h.document.id);
 writeFileSync(
   new URL("../../tests/fixtures/docsask/orama.json", import.meta.url),
-  JSON.stringify({ chunks, expected }, null, 2) + "\n",
+  JSON.stringify(
+    {
+      chunks,
+      expected,
+      tokens: Object.fromEntries(tokenCases.map((t) => [t, tokenizeDocs(t)])),
+    },
+    null,
+    2,
+  ) + "\n",
 );
