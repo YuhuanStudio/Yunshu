@@ -2696,48 +2696,49 @@ def stage_phaseb(ctx: Ctx, *, speed: bool = False) -> StageResult:
     cells = []
     for chars in contexts:
         for rep in range(reps):
-            cells.append(
-                Cell(
-                    name,
-                    f"c{chars}-r{rep}",
-                    [
-                        ctx.py,
-                        str(REPO / "scripts/research/phaseb_conc.py"),
-                        "--base-src",
-                        str(ctx.base.path / "python"),
-                        "--cand-src",
-                        str(ctx.cand.path / "python"),
-                        "--model",
-                        ctx.model,
-                        "--mode",
-                        "speed" if speed else "identity",
-                        "--ctx-chars",
-                        str(chars),
-                        "--rep",
-                        str(rep),
-                        "--tokens",
-                        str(ctx.suite.get("phaseb_tokens", 1500 if speed else 256)),
-                        "--arms",
-                        *arms,
-                        "--scenarios",
-                        *scenarios,
-                        "--shapes",
-                        *shapes,
-                        "--out",
-                        "{out}",
-                    ],
-                    mem_gb=ctx.mem_gb,
-                    timeout_min=120,
-                    stall_min=20,
-                    quiet=speed,
-                    validate=lambda path: validate_records(
-                        read_jsonl(path),
-                        arms=arms,
-                        scenarios=scenarios,
-                        shapes=shapes,
-                    ),
+            for scen in scenarios:
+                cells.append(
+                    Cell(
+                        name,
+                        f"c{chars}-r{rep}-{scen}",
+                        [
+                            ctx.py,
+                            str(REPO / "scripts/research/phaseb_conc.py"),
+                            "--base-src",
+                            str(ctx.base.path / "python"),
+                            "--cand-src",
+                            str(ctx.cand.path / "python"),
+                            "--model",
+                            ctx.model,
+                            "--mode",
+                            "speed" if speed else "identity",
+                            "--ctx-chars",
+                            str(chars),
+                            "--rep",
+                            str(rep),
+                            "--tokens",
+                            str(ctx.suite.get("phaseb_tokens", 1500 if speed else 256)),
+                            "--arms",
+                            *arms,
+                            "--scenarios",
+                            scen,
+                            "--shapes",
+                            *shapes,
+                            "--out",
+                            "{out}",
+                        ],
+                        mem_gb=ctx.mem_gb,
+                        timeout_min=120,
+                        stall_min=20,
+                        quiet=speed,
+                        validate=lambda path, scen=scen: validate_records(
+                            read_jsonl(path),
+                            arms=arms,
+                            scenarios=(scen,),
+                            shapes=shapes,
+                        ),
+                    )
                 )
-            )
     results = ctx.exe.run_cells(cells)
     reasons = _failed_cells(results)
     if set(results) != {cell.key for cell in cells}:

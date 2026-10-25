@@ -8,6 +8,7 @@ its accepted path. It does not run a server or a separate generation loop.
 from __future__ import annotations
 
 import logging
+import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 class DFlashBatch:
     def __init__(self, model, draft):
+        self._diag = dict(rounds=0, rows=0, s=0.0, nodes=0, used=0)
         from mlx_vlm.models.qwen3_5 import language as q35
 
         self.model = model
@@ -127,6 +129,28 @@ class DFlashBatch:
             tree_verify.vq.clear_group_sums()
 
     def _step_rows(self, driver, rows) -> list[Event]:
+        t_round = time.perf_counter()
+        out = self._step_rows_inner(driver, rows)
+        self._diag_round(len(rows), time.perf_counter() - t_round)
+        return out
+
+    def _diag_round(self, width: int, seconds: float) -> None:
+        d = self._diag
+        d["rounds"] += 1
+        d["rows"] += width
+        d["s"] += seconds
+        if d["rounds"] % 100 == 0:
+            logger.info(
+                "Round driver DFlash rounds: %d, rows/round %.2f, %.1f ms/round, "
+                "nodes/row %.2f, tokens/row-round %.2f",
+                d["rounds"],
+                d["rows"] / d["rounds"],
+                1000 * d["s"] / d["rounds"],
+                d["nodes"] / max(1, d["rows"]),
+                d["used"] / max(1, d["rows"]),
+            )
+
+    def _step_rows_inner(self, driver, rows) -> list[Event]:
         from .driver import _Item
 
         copies = {}
@@ -265,6 +289,8 @@ class DFlashBatch:
                         copier.observe_copy(n, max(0, used - 1))
                     else:
                         copier.observe_model(used)
+                self._diag["nodes"] += n
+                self._diag["used"] += used
                 if n:
                     # Tree ranks are not chain depths; only aggregate counters
                     # use these statistics (the MTP acceptance EMA stays separate).
