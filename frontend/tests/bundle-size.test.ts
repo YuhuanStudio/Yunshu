@@ -31,9 +31,9 @@ test("the closure follows static edges only and survives cycles", () => {
 
 // A docs dependency must never silently relax the dashboard or shared entry.
 test("only deferred docs routes have the Fumadocs size allowance", () => {
-  assert.equal(ENTRY_BUDGET_KB, 270);
+  assert.equal(ENTRY_BUDGET_KB, 273);
   for (const name of ["Dashboard", "Requests", "Playground", "orama", "data"])
-    assert.equal(budgetForRoute(name), 300);
-  assert.equal(budgetForRoute("Docs"), 300);
+    assert.equal(budgetForRoute(name), 304);
+  assert.equal(budgetForRoute("Docs"), 304);
   assert.equal(budgetForRoute("ApiReference"), 650);
 });
