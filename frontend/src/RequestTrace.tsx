@@ -55,6 +55,8 @@ export type Row = {
 export type Offsets = {
   arrive?: number | null;
   admit?: number | null;
+  /** The request's own first prefill atom began (queued until here). Older servers send only `admit`. */
+  prefill_start?: number | null;
   first_token?: number | null;
   last_token?: number | null;
   done?: number | null;

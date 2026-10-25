@@ -239,6 +239,7 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
             <Slot ch={12} align="right" className="text-foreground">
               <LiveNumber
                 value={row.tokens_per_second ?? null}
+                glide
                 format={(v) => fixed(v)}
                 jumpKey={row.request_id + phase}
               />
