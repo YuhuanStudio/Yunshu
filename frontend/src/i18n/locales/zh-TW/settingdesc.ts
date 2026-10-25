@@ -1,4 +1,11 @@
 const settingdesc = {
+  YUNSHU_DOCS_ASK_MAX_QUESTION:
+    "本機文件 AI 問答的問題與每則歷史訊息字數上限。",
+  YUNSHU_DOCS_ASK_MAX_HISTORY:
+    "文件 AI 問答接受的使用者／助理歷史訊息數量上限，另受模型上下文限制。",
+  YUNSHU_DOCS_ASK_MAX_TOKENS:
+    "本機文件 AI 問答的回答 token 上限。僅使用已載入模型；量測暫停時不接受提問。",
+
   YUNSHU_MODEL:
     "單一模型模式下提供服務的模型路徑或 Hugging Face id；所有請求的模型名稱都會對應到它。",
   YUNSHU_MULTI_MODEL:
@@ -20,6 +27,8 @@ const settingdesc = {
   YUNSHU_MAX_CONCURRENT: "同時受理請求數的上限；未設定則自適應，起始值為 8。",
   YUNSHU_UNCACHED_SCHEDULING:
     "依預估未命中快取的工作量與等待時間排序 VLM 預填原子，保護互動式預填，並在原子之間預留實測的解碼時間，不改變任何 token 區段。僅在合格的批次不變核心下預設開啟，其他後端除非啟用否則維持先進先出；停用可還原上游排序。",
+  YUNSHU_DECODE_TAIL_SHARE:
+    "新請求預填時，每個預填原子之後要還給正在回覆的請求多少 GPU 時間（對方已輸出超過 48 個 token 後才適用）。調高讓正在回覆的請求較快，調低讓新請求較早拿到第一個 token。27B 實測：0.25 為 5.0 tok/s，0.5（預設）為 7.6 tok/s，4K 新請求的第一個 token 約晚 0.8 秒。",
   YUNSHU_AUXILIARY_SCHEDULING:
     "降低已識別的 opencode 標題請求的優先順序：互動式 VLM 工作先執行，輔助列在 GPU 時間片之間暫停，且不讀寫 APC。僅在合格的批次不變核心下預設開啟，其他後端需明確選用；進行中的 GPU 運算無法中斷。",
   YUNSHU_QUEUE_LIMIT:

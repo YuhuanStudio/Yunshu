@@ -23,7 +23,7 @@ DECODE_QUANTUM_S = 0.075
 DECODE_SHARE = 1.0
 # Only rows within their first DECODE_EARLY_TOKENS tokens (a tool call, a JSON
 # answer, the start of a reply) get the generous share. Once every decoding row
-# is past that, a long reply earns DECODE_TAIL_SHARE, which bounds how much a
+# is past that, a long reply earns YUNSHU_DECODE_TAIL_SHARE (0.5), which bounds how much a
 # long cold prefill is slowed by someone else's long generation.
 # Measured (27B, `scripts/research/conc_probe.py` stagger: a 1500-token reply is running, a ~10K-token
 # prompt arrives; one run each, 2026-10-24; decode speed varies ~30% run to run):
@@ -33,7 +33,6 @@ DECODE_SHARE = 1.0
 # 0.25 more than doubles the running row's speed for a 13% later first token. The prefill atoms run at
 # the same ~1,130 tok/s in every case: an apparent prefill crawl is a request waiting for its turn.
 DECODE_EARLY_TOKENS = 48
-DECODE_TAIL_SHARE = 0.25
 DECODE_QUANTUM_MAX_S = 4.0
 # A row that has just received its first token gets one burst of decode before
 # the next prefill atom, so a short tool call or answer completes inside a
@@ -56,7 +55,12 @@ FIXED_S = 0.236
 
 def decode_quantum(atom_s: float, early: bool = True) -> float:
     """Decode time owed to running rows after a prefill atom that took ``atom_s``."""
-    share = DECODE_SHARE if early else DECODE_TAIL_SHARE
+    if early:
+        share = DECODE_SHARE
+    else:
+        from .. import settings
+
+        share = settings.get("YUNSHU_DECODE_TAIL_SHARE")
     return min(DECODE_QUANTUM_MAX_S, max(DECODE_QUANTUM_S, share * atom_s))
 
 

@@ -341,3 +341,38 @@ requests you make yourself, and the status island shows "Paused for a measuremen
 counting after `until` (or two hours after its last write when `until` is null) and the console resumes by
 itself when it is removed. `gpuq` writes `$GPUQ_DIR/console-pause.json` while a `--quiet` job or a job whose
 label contains `-speed` runs, and removes it afterwards.
+
+## Ask the docs with your local engine
+
+Open **Ask AI** in the documentation header or command palette (⌘K / Ctrl+K).
+The console retrieves heading-level excerpts from the selected documentation language,
+then streams an answer from an already loaded text model on the attached Yunshu engine.
+There is no cloud provider and retrieval never loads an embedding or reranking model.
+Source cards open the cited page section; follow-up questions retain a short conversation.
+Copy, stop and helpful/unhelpful controls are available beside each answer. Feedback is
+stored as `docs_ask_feedback` events in the console history SQLite store (answer id and
+opinion only, without prompts or generated answers). History must be enabled to save it.
+
+If no engine or text model is running, the panel shows `yunshu serve -m /path/to/mlx-model`.
+Ask AI sends no engine requests during the console measurement pause. A tab has at most
+one answer in flight; closing the panel or pressing Stop cancels its upstream stream.
+The console forwards the caller's credentials through the same proxy policy as other
+engine requests, and does not substitute the history recorder's token.
+
+`POST /console/api/docs/ask` accepts `{question, language, tab_id, history}` (history items
+have `role: user|assistant` and `content`). Its SSE events are `sources` (`id`, `model`,
+`sources`), `token` (`text`), `done` (`id`), or `error` (`code`). A truncated stream is an
+error, never a completed answer. `GET /console/api/docs/state` reports availability and
+limits; `POST /console/api/docs/feedback` accepts `{ask_id, opinion: good|bad}`.
+
+The question/history-message limit defaults to 2,000 characters, history to eight prior
+messages, and output to 1,024 tokens. Configure `YUNSHU_DOCS_ASK_MAX_QUESTION`,
+`YUNSHU_DOCS_ASK_MAX_HISTORY` and `YUNSHU_DOCS_ASK_MAX_TOKENS` in the settings registry.
+Transport hard caps are 16,000 characters, 32 messages and 8,192 output tokens. The prompt
+uses a conservative UTF-8 byte budget within the model context (at most 16K), reserving
+output and chat-template overhead and trimming history/excerpts as needed. Answers may
+be incomplete or incorrect; check the linked sources.
+
+The frontend build emits `docs-assets/ask-{en,zh-TW,zh-CN}.json` from the MDX pages,
+with page URLs and heading anchors. Retrieval shares the docs Orama tokenizer, field
+boosts and BM25 formula. Rebuild the frontend when changing documentation.

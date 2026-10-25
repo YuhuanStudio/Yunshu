@@ -1,10 +1,10 @@
 #!/bin/bash
 # Correctness only, no --quiet needed. Run under gpuq, after phase-1 measurements.
 set -euo pipefail
-ROOT=/Volumes/P5Plus/yunshu-build/wt-codex-anenative
+ROOT=/Volumes/P5Plus/yunshu-build/wt-anenative2
 cd "$ROOT"
 export PYTHONPATH=$ROOT/python
-export TMPDIR=/Volumes/P5Plus/yunshu-build/codex/anenative-tmp
+export TMPDIR=/Volumes/P5Plus/yunshu-build/tmp/anenative2
 mkdir -p "$TMPDIR"
 nice -n 15 /Volumes/P5Plus/yunshu-build/lead/precheck.sh "$ROOT" tests/unit/test_ane_native.py tests/unit/test_ane_convert.py tests/unit/test_ane_native_bench.py tests/unit/test_tfbench_spec_mode.py
 # just is not installed here; this is the exact vendor-check recipe, using the existing venv.

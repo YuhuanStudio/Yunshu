@@ -1,7 +1,7 @@
 #!/bin/bash
 # One gpuq job owns both sustained ANE work and GPU server. No foreign process is killed.
 set -euo pipefail
-ROOT=${ANENATIVE_ROOT:-/Volumes/P5Plus/yunshu-build/wt-codex-anenative}
+ROOT=${ANENATIVE_ROOT:-/Volumes/P5Plus/yunshu-build/wt-anenative2}
 LABEL=${1:?unique-label}
 CHANNELS=${2:-2176}
 MODE=${3:-fp16}

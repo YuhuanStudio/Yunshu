@@ -1,3 +1,4 @@
+import { buildChunks } from "./docs-chunks.mjs";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import {
@@ -36,6 +37,10 @@ export function docsAssets() {
     ]);
     const files = listFiles();
     for (const locale of LOCALES) {
+      assets.set(
+        `docs-assets/ask-${locale}.json`,
+        JSON.stringify(buildChunks(locale)),
+      );
       const entries = [];
       for (const slug of new Set(files.map((f) => f.slug))) {
         const file = pickFile(files, slug, locale);

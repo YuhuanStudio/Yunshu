@@ -134,6 +134,7 @@ export default defineConfig({
     port: 3971,
     strictPort: true,
     proxy: {
+      "/console/api": engine,
       "/v1": engine,
       "/health": engine,
       "/api": engine,

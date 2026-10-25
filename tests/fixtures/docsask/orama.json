@@ -1,0 +1,102 @@
+{
+  "chunks": [
+    {
+      "id": "cache",
+      "title": "Prompt caching",
+      "heading": "APC prefix cache",
+      "description": "Reuse prefill work",
+      "searchText": "APC cache disk RAM prefix 快取 快取命中 缓存",
+      "text": "Cache"
+    },
+    {
+      "id": "api",
+      "title": "Chat completions",
+      "heading": "Streaming",
+      "description": "OpenAI API",
+      "searchText": "stream chat completions API code curl 串流 流式",
+      "text": "Chat"
+    },
+    {
+      "id": "start",
+      "title": "Quickstart",
+      "heading": "Start the engine",
+      "description": "Local models",
+      "searchText": "yunshu serve model start Python SDK OpenAI 本機 本地",
+      "text": "Start"
+    },
+    {
+      "id": "settings",
+      "title": "Configuration",
+      "heading": "Cache options",
+      "description": "Settings",
+      "searchText": "YUNSHU_VLM_APC_DISK disk cache tokens context",
+      "text": "Settings"
+    }
+  ],
+  "expected": {
+    "APC prefix": [
+      "cache"
+    ],
+    "cache": [
+      "settings",
+      "cache"
+    ],
+    "stream chat API": [
+      "api"
+    ],
+    "OpenAI SDK": [
+      "api",
+      "start"
+    ],
+    "快取": [
+      "cache"
+    ],
+    "缓存": [
+      "cache"
+    ],
+    "YUNSHU_VLM_APC_DISK": [
+      "settings"
+    ],
+    "noresults": [],
+    "How do I stream chat completions?": [
+      "api"
+    ],
+    "what is the OpenAI SDK": [
+      "api",
+      "start"
+    ],
+    "如何設定快取？": [
+      "cache"
+    ],
+    "怎么使用缓存": [
+      "cache"
+    ]
+  },
+  "tokens": {
+    "APC 快取快取": [
+      "apc",
+      "快取",
+      "取快"
+    ],
+    "How do I start the engine with a local model?": [
+      "start",
+      "engine",
+      "local",
+      "model"
+    ],
+    "如何使用 OpenAI Python SDK 連接 Yunshu？": [
+      "使用",
+      "openai",
+      "python",
+      "sdk",
+      "連接",
+      "yunshu"
+    ],
+    "缓存": [
+      "缓存"
+    ],
+    "a 快 I": [
+      "快"
+    ]
+  }
+}

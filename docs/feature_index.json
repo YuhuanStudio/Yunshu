@@ -264,6 +264,14 @@
       "status": "stable"
     },
     {
+      "id": "console-docs-ask",
+      "group": "ops",
+      "title": "Ask the docs locally",
+      "summary": "heading-level BM25 retrieval in three languages, streaming answers from the attached loaded text model, source links, follow-up, stop/copy and history-store feedback; measurement pause respected, no cloud model",
+      "doc": "docs/CONSOLE.md",
+      "status": "stable"
+    },
+    {
       "id": "console-process",
       "group": "ops",
       "title": "Console process and recorded history",

@@ -1,11 +1,11 @@
 #!/bin/bash
 # Prove harness and sustained load before loading the 27B server.
 set -euo pipefail
-cd "${ANENATIVE_ROOT:-/Volumes/P5Plus/yunshu-build/wt-codex-anenative}"
+cd "${ANENATIVE_ROOT:-/Volumes/P5Plus/yunshu-build/wt-anenative2}"
 CHANNELS=${1:-2176}
 ROWS=${2:-1024}
 MODE=${3:-fp16}
-export PYTHONPATH=$PWD/python TMPDIR=/Volumes/P5Plus/yunshu-build/codex/anenative-tmp
+export PYTHONPATH=$PWD/python TMPDIR=/Volumes/P5Plus/yunshu-build/tmp/anenative2
 export TFB_WORK=/Volumes/P5Plus/yunshu-build/snapshot014/corpus TFB_EXACT_PROMPTS=1
 export TFB_YUNSHU_SRC=$PWD/python TFB_PORT_LAST=18996
 export TFB_OUT=/Volumes/P5Plus/yunshu-build/codex/anenative-conc-dry

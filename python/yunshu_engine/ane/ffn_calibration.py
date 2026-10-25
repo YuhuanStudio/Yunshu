@@ -1,6 +1,7 @@
 # Upstream (Splash 1.4.0, Apache-2.0): runtime/ops/AneFfnCalibration.{hpp,cpp} (Apache-2.0).
 # Licensed under the Apache License, Version 2.0; see THIRD_PARTY_NOTICES.md.
-# Modified for Yunshu: Python port, same model, constants and decisions.
+# Modified for Yunshu: Python port, same model and constants; minimum_rows tolerates PADDED_LOSS
+# below a function's top row and calibration re-times the functions that fail (confirm).
 """How the ANE FFN split runs on this device, from measured timings (no MLX, no ANE).
 
 A full chunk's split FFN layer at share s takes T(s) = max(A(s), G(s) + u*A(s)):
@@ -17,7 +18,12 @@ from dataclasses import dataclass, field
 MINIMUM_GAIN = 0.05
 # How much longer than the GPU alone a chunk's split layer may take and still split.
 CHUNK_NOISE = 0.02
-CALIBRATION_TAG = "ane-ffn-calibration-1"
+# Rows below a function's own rows run padded up to it, so they take as long as its top row. Splash
+# holds them to CHUNK_NOISE too, which ends its walk where the padding alone costs 2% (here by
+# 1.3K rows, where the split gains 10% at every function's top). A padded row may lose this much
+# to the GPU alone: it is one chunk size's band, the functions below win again.
+PADDED_LOSS = 0.10
+CALIBRATION_TAG = "ane-ffn-calibration-3"
 WINDOW = 8
 
 
@@ -146,10 +152,37 @@ def minimum_rows(timings: ChunkTimings) -> int | None:
     minimum = None
     for f in timings.functions:
         for rows in range(f.rows, f.least - 1, -1):
-            if not f.split <= (1.0 + CHUNK_NOISE) * gpu(rows):
+            noise = CHUNK_NOISE if rows == f.rows else PADDED_LOSS
+            if not f.split <= (1.0 + noise) * gpu(rows):
                 return minimum
             minimum = rows
     return minimum
+
+
+RETRIES = 3
+
+
+def confirm(timings: ChunkTimings, remeasure) -> int:
+    """Re-time each function that fails the noise bound, keeping its least time.
+
+    One slow sample (the ANE shared with another process, a first call after a program loads)
+    otherwise ends minimum_rows's walk at that function, many hundred rows too high. Timing noise
+    only ever adds, so the least of several is the function's cost. Returns the re-timings made.
+    """
+    gpu = gpu_alone_line(timings.gpu)
+    made = 0
+    for i, f in enumerate(timings.functions):
+        best = f.split
+        for _ in range(RETRIES):
+            if best <= (1.0 + CHUNK_NOISE) * gpu(f.rows) and best <= (
+                1.0 + PADDED_LOSS
+            ) * gpu(f.least):
+                break
+            best = min(best, remeasure(f))
+            made += 1
+        if best != f.split:
+            timings.functions[i] = FunctionTiming(f.least, f.rows, best)
+    return made
 
 
 @dataclass(frozen=True)
