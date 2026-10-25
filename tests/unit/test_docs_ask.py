@@ -232,7 +232,9 @@ def test_feedback_stays_in_history_store(tmp_path):
 
 
 def test_cjk_and_orama_bm25_retrieval():
-    assert tokens("APC 快取快取") == ["apc", "快", "快取", "取", "取快"]
+    assert tokens("APC 快取快取") == ["apc", "快取", "取快"]
+    assert tokens("How do I start the engine?") == ["start", "engine"]
+    assert tokens("如何使用快取") == ["使用", "用快", "快取"]
     chunks = [
         chunk(text="unrelated"),
         {
@@ -351,8 +353,13 @@ def test_engine_disappears_after_status_returns_no_engine(tmp_path):
 def test_ranking_matches_pinned_orama_fixture():
     fixture = json.loads((ROOT / "tests/fixtures/docsask/orama.json").read_text())
     index = ChunkIndex(fixture["chunks"])
+    # The first stage is Orama BM25 parity; search() re-ranks its candidates.
     for query, expected in fixture["expected"].items():
-        assert [chunk["id"] for chunk in index.search(query, 10)] == expected
+        ranked = index.bm25(tokens(query))
+        assert [index.chunks[i]["id"] for i, _ in ranked[:10]] == expected
+    # The tokenizer (stop words, Han stop-word splitting) matches orama-tokenizer.ts.
+    for text, expected in fixture["tokens"].items():
+        assert tokens(text) == expected
 
 
 def test_pause_between_status_and_models_blocks_further_calls(tmp_path, limits):

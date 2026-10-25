@@ -57,6 +57,46 @@
     "YUNSHU_VLM_APC_DISK": [
       "settings"
     ],
-    "noresults": []
+    "noresults": [],
+    "How do I stream chat completions?": [
+      "api"
+    ],
+    "what is the OpenAI SDK": [
+      "api",
+      "start"
+    ],
+    "如何設定快取？": [
+      "cache"
+    ],
+    "怎么使用缓存": [
+      "cache"
+    ]
+  },
+  "tokens": {
+    "APC 快取快取": [
+      "apc",
+      "快取",
+      "取快"
+    ],
+    "How do I start the engine with a local model?": [
+      "start",
+      "engine",
+      "local",
+      "model"
+    ],
+    "如何使用 OpenAI Python SDK 連接 Yunshu？": [
+      "使用",
+      "openai",
+      "python",
+      "sdk",
+      "連接",
+      "yunshu"
+    ],
+    "缓存": [
+      "缓存"
+    ],
+    "a 快 I": [
+      "快"
+    ]
   }
 }

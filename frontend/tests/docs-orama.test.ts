@@ -36,3 +36,17 @@ test("three locale indexes never accidentally use another locale's text", () => 
   );
   assert.equal(new Set(titles).size, 3);
 });
+
+import { readFileSync } from "node:fs";
+import { tokenizeDocs } from "../src/docs/orama-tokenizer.ts";
+
+test("tokenizer matches the pinned cross-runtime fixture used by the Python ranking", () => {
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL("../../tests/fixtures/docsask/orama.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  for (const [text, expected] of Object.entries(fixture.tokens))
+    assert.deepEqual(tokenizeDocs(text), expected);
+});
