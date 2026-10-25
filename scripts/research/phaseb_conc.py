@@ -106,7 +106,7 @@ def check_identity(solo, concurrent):
         )
 
 
-def run_cell(server, a, scenario, shape):
+def run_cell(server, a, scenario, shape, strict=True):
     try:
         from . import conc_probe
         from . import sampledspec_conc as sampled
@@ -166,14 +166,22 @@ def run_cell(server, a, scenario, shape):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         concurrent_rows = dict(pool.map(go, jobs))
+    same = True
     if shape != "agent":
-        check_identity(solo, concurrent_rows)
+        # The base arm is today's serving: a concurrent row there is not
+        # guaranteed to equal its solo run, so its mismatch is a measurement.
+        try:
+            check_identity(solo, concurrent_rows)
+        except RuntimeError:
+            if strict:
+                raise
+            same = False
     result = dict(
         scenario=scenario,
         shape=shape,
         solo=summarize(solo),
         concurrent=summarize(concurrent_rows),
-        identity=shape != "agent",
+        identity=shape != "agent" and same,
     )
     if scenario == "stagger":
         result["stagger"] = interval_rates(concurrent_rows["A"], concurrent_rows["B"])
@@ -263,7 +271,7 @@ def validate_records(
     if actual != expected or len(cells) != len(expected):
         return False, "missing or duplicate Phase B cells"
     for r in cells:
-        if r["shape"] != "agent":
+        if r["shape"] != "agent" and r.get("arm") != "base":
             solo = _per_row(r.get("solo"))
             concurrent = _per_row(r.get("concurrent"))
             if solo.keys() != concurrent.keys() or any(
@@ -318,18 +326,33 @@ def main():
             try:
                 for scenario in a.scenarios:
                     for shape in a.shapes:
-                        result = run_cell(server, a, scenario, shape)
+                        result = run_cell(
+                            server, a, scenario, shape, strict=arm != "base"
+                        )
                         if shape != "agent":
                             key = (scenario, shape)
-                            digests = {
+                            # Reference: the request alone (today's lane or
+                            # AR); every non-base arm's concurrent rows must
+                            # equal it, and every arm's solo run must too.
+                            alone = {
                                 n: r["digest"]
-                                for n, r in result["concurrent"]["per_row"].items()
+                                for n, r in _per_row(result["solo"]).items()
                             }
-                            if key in reference and reference[key] != digests:
-                                raise RuntimeError(
-                                    "cross-arm token/logprob identity failed"
+                            seen = [alone]
+                            if arm != "base":
+                                seen.append(
+                                    {
+                                        n: r["digest"]
+                                        for n, r in _per_row(
+                                            result["concurrent"]
+                                        ).items()
+                                    }
                                 )
-                            reference[key] = digests
+                            for digests in seen:
+                                if reference.setdefault(key, digests) != digests:
+                                    raise RuntimeError(
+                                        "cross-arm token/logprob identity failed"
+                                    )
                         result.update(arm=arm, rep=a.rep, ctx_chars=a.ctx_chars)
                         write(result)
                 if arm != "off":

@@ -165,3 +165,45 @@ def test_validate_ignores_queue_device_stamps():
         scenarios=("solo",),
         shapes=("greedy",),
     )[0]
+
+
+def test_base_arm_mismatch_is_recorded_not_fatal(monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts.research import sampledspec_conc as sampled
+
+    n = iter(range(100))
+    monkeypatch.setattr(
+        sampled,
+        "stream",
+        lambda *a, **k: dict(
+            times=[1, 2, 3],
+            t0=0,
+            ttft=1,
+            usage={"completion_tokens": 3},
+            digest=f"d{next(n)}",
+        ),
+    )
+    a = SimpleNamespace(tokens=128, join=0, ctx_chars=16, mode="identity")
+    server = SimpleNamespace(model="test", url="unused")
+    r = p.run_cell(server, a, "solo", "greedy", strict=False)
+    assert r["identity"] is False
+    with pytest.raises(RuntimeError):
+        p.run_cell(server, a, "solo", "greedy")
+
+
+def test_validate_skips_digest_equality_for_base_arm():
+    side = lambda d: {"per_row": {"A": {"digest": d}}}  # noqa: E731
+    r = dict(
+        arm="base",
+        scenario="solo",
+        shape="greedy",
+        solo=side("a"),
+        concurrent=side("b"),
+    )
+    assert p.validate_records(
+        [r, {"complete": True, "success": True}],
+        arms=("base",),
+        scenarios=("solo",),
+        shapes=("greedy",),
+    )[0]
