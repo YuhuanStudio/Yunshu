@@ -18,13 +18,19 @@ from anenative_splash_micro import load_layers
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--model", default="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp")
+    p.add_argument(
+        "--model", default="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
+    )
     p.add_argument("--rows", type=int, default=1024)
     p.add_argument("--units", type=int, default=8)
     p.add_argument("--sample", default="0,8,16,24,32,40,48,56,63")
     p.add_argument("--cache", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
-    p.add_argument("--corpus", type=Path, default=Path("/Volumes/P5Plus/yunshu-build/snapshot014/corpus"))
+    p.add_argument(
+        "--corpus",
+        type=Path,
+        default=Path("/Volumes/P5Plus/yunshu-build/snapshot014/corpus"),
+    )
     a = p.parse_args()
 
     import mlx.core as mx
@@ -75,7 +81,9 @@ def main():
             "p999": float(np.quantile(np.abs(xf), 0.999)),
         }
         pair = [raw[layer], raw[layer]]
-        split = AneFfn(pair, a.units, a.cache, function_rows=[((a.rows + 127) // 128) * 128])
+        split = AneFfn(
+            pair, a.units, a.cache, function_rows=[((a.rows + 127) // 128) * 128]
+        )
         split.set_minimum_rows(split.rows[0])
         rows = x.shape[0]
         split.begin()
@@ -87,7 +95,9 @@ def main():
         mx.eval(alone, part)
         o, g, pt = (np.array(t.astype(mx.float32)) for t in (out, alone, part))
         stats["ane_ok"] = ok
-        stats["rel_err_vs_ane_part"] = float(np.sqrt(((o - g) ** 2).sum() / ((g - pt) ** 2).sum()))
+        stats["rel_err_vs_ane_part"] = float(
+            np.sqrt(((o - g) ** 2).sum() / ((g - pt) ** 2).sum())
+        )
         stats["rel_err_whole_ffn"] = float(np.linalg.norm(o - g) / np.linalg.norm(g))
         records.append(stats)
         print(json.dumps(stats), flush=True)
