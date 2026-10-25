@@ -171,6 +171,7 @@ def main():
     run("stagger", [("A", 0, None, False, 31), ("B", a.join, T // 3, False, 32)])
     run("greedy-solo", [("A", 0, None, True, 41)])
     run("greedy-burst2", [("A", 0, None, True, 51), ("B", 0, None, True, 52)])
+    run("greedy-burst4", [(n, 0, None, True, 60 + i) for i, n in enumerate("ABCD")])
     print("complete: true", flush=True)
 
 
