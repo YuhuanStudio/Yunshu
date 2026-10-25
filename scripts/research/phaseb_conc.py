@@ -219,12 +219,12 @@ def speed_verdict(rows, reps=3, tolerance=0.02):
             reasons.append(
                 f"{key}: concurrent aggregate did not improve {base} -> {cand}"
             )
-        names = set(next(iter(arms["base"].values()))["concurrent"]["per_row"])
+        names = set(_per_row(next(iter(arms["base"].values()))["concurrent"]))
         for name in names:
             rates = {}
             for arm in ("base", "cand"):
                 values = [
-                    r["concurrent"]["per_row"].get(name, {}).get("tps")
+                    _per_row(r["concurrent"]).get(name, {}).get("tps")
                     for r in arms[arm].values()
                 ]
                 rates[arm] = (
@@ -237,6 +237,12 @@ def speed_verdict(rows, reps=3, tolerance=0.02):
             elif rates["cand"] < rates["base"] * (1 - tolerance):
                 reasons.append(f"{key}/{name}: per-row regression")
     return reasons, numbers
+
+
+def _per_row(section):
+    """Row records only: the queue stamps device strings next to them."""
+    per_row = (section or {}).get("per_row", {})
+    return {k: v for k, v in per_row.items() if isinstance(v, dict)}
 
 
 def validate_records(
@@ -258,14 +264,14 @@ def validate_records(
         return False, "missing or duplicate Phase B cells"
     for r in cells:
         if r["shape"] != "agent":
-            solo = r.get("solo", {}).get("per_row", {})
-            concurrent = r.get("concurrent", {}).get("per_row", {})
+            solo = _per_row(r.get("solo"))
+            concurrent = _per_row(r.get("concurrent"))
             if solo.keys() != concurrent.keys() or any(
                 solo[n].get("digest") != concurrent[n].get("digest") for n in solo
             ):
                 return False, "concurrent token/logprob digest differs from solo"
         for field in ("solo", "concurrent"):
-            per_row = r.get(field, {}).get("per_row", {})
+            per_row = _per_row(r.get(field))
             if len(per_row) != len(plans(r["scenario"], 128, 12)):
                 return False, "missing request rows"
             if any(not v.get("digest") for v in per_row.values()):

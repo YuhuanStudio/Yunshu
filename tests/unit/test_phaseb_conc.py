@@ -153,3 +153,15 @@ def test_stagger_waits_for_running_row_first_token(monkeypatch):
     assert result["identity"] and newcomer.is_set()
     assert calls[:2] == [None, None]
     assert callable(calls[2]) and calls[3] is None
+
+
+def test_validate_ignores_queue_device_stamps():
+    stamp = {"device": "m5", "execution_device": "m5", "remote_host": None}
+    side = {"per_row": {"A": {"digest": "id"}, **stamp}, **stamp}
+    r = dict(arm="cand", scenario="solo", shape="greedy", solo=side, concurrent=side)
+    assert p.validate_records(
+        [r, {"complete": True, "success": True}],
+        arms=("cand",),
+        scenarios=("solo",),
+        shapes=("greedy",),
+    )[0]
