@@ -126,3 +126,14 @@ def test_request_normalizes_string_prompt_and_retains_sampling(tmp_path, monkeyp
     )
     assert bodies[0]["messages"] == [{"role": "user", "content": "hello"}]
     assert bodies[0]["seed"] == 17 and bodies[0]["top_k"] == 20
+
+
+def test_blocker_can_hold_the_lane_or_shared_batch_without_changing_survivor_params():
+    original = copy.deepcopy(probe.SAMPLING)
+    assert probe.blocker_sampling("lane") == probe.SAMPLING[0]
+    shared = probe.blocker_sampling("shared")
+    assert shared.pop("xtc_probability") > 0
+    assert shared == probe.SAMPLING[0]
+    assert original == probe.SAMPLING
+    with pytest.raises(ValueError):
+        probe.blocker_sampling("unknown")

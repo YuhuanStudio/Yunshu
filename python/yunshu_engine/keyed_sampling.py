@@ -171,6 +171,8 @@ def coupled_scores(logprobs, sampler, positions):
     gives distinct sibling candidates, with the serial keyed draw ranked first.
     """
     row = filter_logprobs(logprobs.astype(mx.float32), sampler.params)
+    if sampler.position_base:
+        positions = positions + sampler.position_base
     noise = gumbel(sampler.seed, positions, row.shape[-1])
     return mx.where(row == -mx.inf, -mx.inf, row + noise)
 
@@ -181,6 +183,9 @@ class KeyedSampler:
     def __init__(self, params: Any, seed: int):
         self.params = params
         self.seed = int(seed) & 0xFFFFFFFFFFFFFFFF
+        # A promoted lane counts locally from its pending token; keep its draws
+        # at the original request's absolute generation indices.
+        self.position_base = 0
         self._next = 0
         from .utils.hardware import is_paravirtual_metal
 
@@ -207,6 +212,8 @@ class KeyedSampler:
         pos = (
             positions if isinstance(positions, mx.array) else mx.array(list(positions))
         )
+        if self.position_base:
+            pos = pos + self.position_base
         bases = mx.array(
             np.full((int(pos.size),), seed_base(self.seed), dtype=np.uint64)
         )

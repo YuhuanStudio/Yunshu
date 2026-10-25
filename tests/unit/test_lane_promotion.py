@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import mlx.core as mx
+import pytest
 
 from yunshu_engine.vlm_batch_runner import VLMBatchRunner, _Group
 
@@ -136,10 +137,13 @@ def test_sampled_promotion_moves_the_same_sampler_with_the_committed_position_ba
 
 
 def test_promotion_transfers_the_pending_tokens_logprob_and_top_logprobs_once():
+    from yunshu_engine.vlm_batch_runner import Fp32LogitsProcessor
+
     runner, _, batch, job = _runner(job_overrides={"logprobs": True, "top_logprobs": 2})
     batch._next_lps = mx.array([-1.25])
     batch._next_top_idx = mx.array([[11, 12]])
     batch._next_top_lp = mx.array([[-1.25, -2.5]])
+    batch.logits_processors = [[Fp32LogitsProcessor()]]
     assert VLMBatchRunner._maybe_promote(runner)
     assert job.spec_request.logprobs and job.spec_request.top_logprobs == 2
     assert job.spec_request.take(11) == (-1.25, [(11, -1.25), (12, -2.5)])
@@ -147,3 +151,78 @@ def test_promotion_transfers_the_pending_tokens_logprob_and_top_logprobs_once():
     # The following verify report must not be shifted by the pending first token.
     job.spec_request.record(mx.array([[-2.0, -1.0]]), [1])
     assert job.spec_request.take(1)[0] == -1.0
+
+
+def test_reporting_row_stays_in_the_batch_if_pending_reports_are_unavailable():
+    for missing in ("_next_lps", "_next_top_idx", "_next_top_lp"):
+        runner, _, batch, _ = _runner(
+            job_overrides={"logprobs": True, "top_logprobs": 2}
+        )
+        batch._next_lps = mx.array([-1.25])
+        batch._next_top_idx = mx.array([[11, 12]])
+        batch._next_top_lp = mx.array([[-1.25, -2.5]])
+        setattr(batch, missing, None)
+        assert not VLMBatchRunner._maybe_promote(runner)
+        assert batch.filtered is None
+
+
+@pytest.mark.parametrize("lane_busy", [False, True])
+@pytest.mark.parametrize(
+    "mode,expected",
+    [
+        ("plain", True),
+        ("tool", True),
+        ("report", True),
+        ("combined", False),
+        ("xtc", False),
+        ("processor", False),
+    ],
+)
+def test_sampled_admission_retains_precise_promotion_eligibility(
+    monkeypatch, lane_busy, mode, expected
+):
+    from yunshu_engine.keyed_sampling import seed_base
+    from yunshu_engine.tool_call_grammar import ToolCallGuide
+    from yunshu_engine.vlm_batch_runner import _DONE
+
+    model = SimpleNamespace(
+        language_model=SimpleNamespace(
+            speculative_verify_dflash_hidden=lambda *a: None
+        ),
+        get_input_embeddings=lambda *a, **kw: SimpleNamespace(to_dict=lambda: {}),
+    )
+    runner = VLMBatchRunner(model, None, drafter=_Drafter(), draft_kind="dflash")
+    jobs = []
+
+    def submit(job):
+        jobs.append(job)
+        job.out.put(_DONE)
+
+    monkeypatch.setattr(runner, "_submit", submit)
+    monkeypatch.setattr(
+        runner,
+        "_new_generator",
+        lambda **kw: SimpleNamespace(insert=lambda *a, **kw: [7]),
+    )
+    guide = object.__new__(ToolCallGuide) if mode in ("tool", "combined") else None
+    list(
+        runner.iter_tokens(
+            [1, 2, 3],
+            max_tokens=100,
+            temperature=0.7,
+            seed=None,
+            guide=guide,
+            logprobs=mode in ("report", "combined"),
+            xtc_probability=0.5 if mode == "xtc" else 0.0,
+            logits_processors=[object()] if mode == "processor" else None,
+        )
+    )
+    if lane_busy:
+        runner._spec = SimpleNamespace(jobs={})
+    job = jobs[0]
+    runner._admit(job, alone=lane_busy)
+    assert job.promotable is expected
+    assert not job.use_draft and not job.stats.used_draft
+    if expected:
+        group = next(iter(runner._batches.values()))
+        assert group.sampler._rows[7][2] == seed_base(job.keyed.seed)

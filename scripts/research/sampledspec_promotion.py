@@ -17,6 +17,15 @@ SAMPLING = (
 )
 
 
+def blocker_sampling(admission):
+    """XTC keeps the blocker in the shared batch; keyed draws occupy the lane."""
+    if admission not in ("lane", "shared"):
+        raise ValueError(admission)
+    return dict(
+        SAMPLING[0], **({"xtc_probability": 0.1} if admission == "shared" else {})
+    )
+
+
 def read_stream(lines, *, clock=time.monotonic, first=None):
     tokens, lps, tops, times = [], [], [], []
     usage = finish = None
@@ -151,6 +160,7 @@ def main():
     parser.add_argument("--tokens", type=int, default=1024)
     parser.add_argument("--blocker-tokens", type=int, default=256)
     parser.add_argument("--reps", type=int, default=1)
+    parser.add_argument("--admission", choices=("lane", "shared"), default="lane")
     parser.add_argument("--min-tail-ratio", type=float, default=0.0)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -159,7 +169,16 @@ def main():
     if not 0 <= args.min_tail_ratio <= 1:
         parser.error("--min-tail-ratio must be in [0, 1]")
     if args.dry_run:
-        print(json.dumps(dict(complete=True, sampling=SAMPLING, reps=args.reps)))
+        print(
+            json.dumps(
+                dict(
+                    complete=True,
+                    sampling=SAMPLING,
+                    reps=args.reps,
+                    admission=args.admission,
+                )
+            )
+        )
         return
     import tfbench as t
 
@@ -199,7 +218,12 @@ def main():
                 first = threading.Event()
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                     task = pool.submit(
-                        ask, server, blocker, args.blocker_tokens, SAMPLING[0], first
+                        ask,
+                        server,
+                        blocker,
+                        args.blocker_tokens,
+                        blocker_sampling(args.admission),
+                        first,
                     )
                     if not first.wait(900):
                         raise RuntimeError("blocker never started")
@@ -217,7 +241,7 @@ def main():
                     tokens=args.tokens,
                     min_tail_ratio=args.min_tail_ratio,
                 )
-                result.update(rep=rep, sampling=sampling)
+                result.update(rep=rep, sampling=sampling, admission=args.admission)
                 with args.out.open("a") as output:
                     output.write(json.dumps(result) + "\n")
                 print(json.dumps(result), flush=True)
