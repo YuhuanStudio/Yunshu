@@ -86,6 +86,11 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Added
 
+- `YUNSHU_ANE_FFN_SPLIT=splash` (off by default, lossy): a port of Splash's Neural Engine FFN split. Each dense FFN layer of a
+  Qwen3.5-family prefill step runs about three quarters of its channels on the GPU and the rest as a W8A8 program on the Apple
+  Neural Engine at the same time, through the private AppleNeuralEngine API on IOSurface memory shared with Metal and a
+  shared-event handoff; any ANE failure reruns the step on the GPU. Qwen3.8-27B cold TTFT on an M5 Max: 1K -9.7%, 8K -8.6%, 32K
+  -5.9% with a fixed 0.24 share. About 3 GiB extra memory. [Guide](docs/guides/ANE_FFN_SPLIT.md).
 - Observe mode (`--observe` flag of the serve command, or `YUNSHU_OBSERVE=1`) turns on every observability setting you did not set yourself (`/debug/*` routes, host telemetry, serve log, audit log file, token ids, generation capture), resolved in the settings registry so `yunshu config` shows source `observe`. Without a token, `/debug/*` answers loopback clients only. The console shows every panel and a Debug data section on Requests that puts each in-flight request's `/debug/requests` state next to what the page displays. [Guide](frontend/docs/guides/debugging.mdx).
 - Anthropic Messages `context_management` is executed, not just accepted: `clear_tool_uses_20250919` (trigger by
   input tokens or tool uses, `keep`, `clear_at_least`, `exclude_tools`, `clear_tool_inputs`) and

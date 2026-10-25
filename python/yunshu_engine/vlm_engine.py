@@ -1994,7 +1994,9 @@ class VLMEngine:
             from .kernels import attn_prefill
 
             grid = f"+split64-v1+{attn_prefill.arithmetic_id()}"
-        return f"{matmul}+{gdn_prefill.kernel_id()}{single_row}{grid}"
+        from . import ane_ffn_runtime
+
+        return f"{matmul}+{gdn_prefill.kernel_id()}{single_row}{grid}{ane_ffn_runtime.kernel_suffix()}"
 
     def _install_apc_identity(self, lm) -> None:
         """Make every APC key (RAM and SSD) depend on this checkpoint's identity, and
@@ -2452,6 +2454,25 @@ class VLMEngine:
                     kernels["split_prefill"] = "split64-v1"
                     logger.info(
                         "Split-invariant prefill engaged: NAX/BQ32/GDN, alignment=64"
+                    )
+                if settings.get("YUNSHU_ANE_FFN_SPLIT") == "splash" and split_ready:
+                    from . import ane_ffn_runtime
+
+                    runtime = ane_ffn_runtime.install(
+                        lm,
+                        Path(
+                            settings.get("YUNSHU_ANE_FFN_CACHE")
+                            or Path.home() / ".yunshu" / "ane_cache" / "ffn"
+                        ),
+                        str(model_path),
+                        share=settings.get("YUNSHU_ANE_FFN_SHARE"),
+                        minimum_rows=settings.get("YUNSHU_ANE_FFN_MIN_ROWS"),
+                    )
+                    if runtime and settings.get("YUNSHU_ANE_FFN_TRACE"):
+                        runtime.trace = True
+                        runtime.split.profile(True)
+                    kernels["ane_ffn_split"] = (
+                        ane_ffn_runtime.kernel_suffix() if runtime else None
                     )
                 # The runner turns them on for spec and lone AR target steps.
                 set_active(False)

@@ -101,6 +101,7 @@ def test_server_launch_checks_fresh_log_and_cleans_up(monkeypatch, tmp_path, act
         with pytest.raises(RuntimeError, match="requested spec=dflash"):
             tfbench.Srv("yunshu", {}, "repeat")
         assert len(killed) == 1
+    assert launched["env"]["YUNSHU_CONSOLE"] == "0"
     assert launched["env"]["YUNSHU_VLM_DRAFT"] == tfbench.D
     assert launched["env"]["HOME"] == str(tmp_path / "home/repeat")
 
@@ -343,3 +344,12 @@ def test_send_surfaces_energy_from_x_yunshu(monkeypatch):
     assert out["energy"] == energy
     assert out["joules_per_token"] == 0.05
     assert out["xy"]["energy"] == energy
+
+
+def test_benchmark_console_defaults_off_without_mutating_the_arm():
+    arm = {"YUNSHU_VLM_DRAFT": "off"}
+    _, env = tfbench.spec_request("yunshu", arm)
+    assert env["YUNSHU_CONSOLE"] == "0"
+    assert "YUNSHU_CONSOLE" not in arm
+    _, explicit = tfbench.spec_request("yunshu", {"YUNSHU_CONSOLE": "1"})
+    assert explicit["YUNSHU_CONSOLE"] == "1"
