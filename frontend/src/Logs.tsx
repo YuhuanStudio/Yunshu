@@ -51,7 +51,15 @@ function parseRange(hash: string): { from: number; to: number } | null {
 function useHashRange() {
   const [range, setRange] = useState(() => parseRange(location.hash));
   useEffect(() => {
-    const fn = () => setRange(parseRange(location.hash));
+    const fn = () => {
+      const next = parseRange(location.hash);
+      // the same window keeps its object, so the fetch keyed on it does not run again
+      setRange((cur) =>
+        cur && next && cur.from === next.from && cur.to === next.to ? cur : next,
+      );
+    };
+    // A hash written between the first render and this effect fired its hashchange before anyone listened.
+    fn();
     addEventListener("hashchange", fn);
     return () => removeEventListener("hashchange", fn);
   }, []);
