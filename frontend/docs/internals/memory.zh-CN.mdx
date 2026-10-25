@@ -79,7 +79,7 @@ RAM 与 SSD 预算都是单一预算：选用的 WARM 层占用 APC RAM 预算�
 引擎在内存不足时降级或等待，而不是 swap，并说明原因（`YUNSHU_MEMORY_ADMISSION`，默认开启；只影响调度，输出不变）。
 
 1. **加载时。** 读取权重之前，`plan_load` 检查权重 + 操作系统保留量（`YUNSHU_MEMORY_RESERVE_GB`，默认为 RAM 的 5%，至少 4 GiB）+ 最小 KV 与工作区能否放进物理内存（或 `YUNSHU_MAX_MEMORY_GB`）。放不下就以清晰的 `MemoryError` 拒绝加载，旁边若有 `-ple-ssd` 视图会直接指出。加载后 APC RAM 预算会缩小到权重之外剩余的空间，日志 `Memory plan:` 会说明缩了多少。
-2. **请求准入。** 新请求的 KV（提示词 + `max_tokens`）与预填工作区，对照实时余量检查：macOS 空闲 + 非活跃 + 可清除页、MLX 可回收的缓冲缓存、内核压力等级、swap 增长，再扣掉运行中请求仍会增长的部分。没有余量的请求留在队列等待；空闲服务器的第一个请求一律放行。等待在实时进度的 `queue_reason: "memory"` 与 `queue_detail`、响应的 `x_yunshu.reasons.queue.waited_ms` 和 `yunshu_memory_admission_*` 指标中可见。
+2. **请求准入。** 新请求的 KV（提示词 + `max_tokens`）与预填工作区，对照实时余量检查：macOS 空闲 + 非活跃 + 可清除页、MLX 可回收的缓冲缓存、内核压力等级、swap 增长，再扣掉运行中请求仍会增长的部分。没有余量的请求留在队列等待；空闲服务器的第一个请求一律放行，除非它连单独运行都放不下（KV 与预填工作区超过权重之后 Metal 建议工作集剩下的空间）：此时返回 HTTP 507、`error.code: memory_limit` 与具体数字，而不是让所有请求一起耗尽 Metal 内存。等待在实时进度的 `queue_reason: "memory"` 与 `queue_detail`、响应的 `x_yunshu.reasons.queue.waited_ms` 和 `yunshu_memory_admission_*` 指标中可见。
 3. **释放。** 可用内存低于保留量（或内核报告警告压力）时，APC RAM 条目由旧到新释放，配置了 SSD 层时写入 SSD，不会先走到 swap（`yunshu_memory_pressure_sheds_total`、`yunshu_memory_pressure_shed_bytes_total`）。
 
 ## 保证
