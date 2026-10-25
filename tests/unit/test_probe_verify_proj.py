@@ -44,3 +44,18 @@ def test_moe_probe_bytes():
     moe = importlib.util.module_from_spec(spec2)
     spec2.loader.exec_module(moe)
     assert moe.picked_bytes(10, 100, 7) == 1007
+
+
+def test_boundary_probe_params():
+    spec3 = importlib.util.spec_from_file_location(
+        "probe_boundary", PROBE.with_name("probe_boundary.py")
+    )
+    pb = importlib.util.module_from_spec(spec3)
+    spec3.loader.exec_module(pb)
+    n16 = 50 * 2**20 // 16
+    first = pb.params_list(0, 48, n16, 8, 0, 1 << 18, 1 << 14)
+    assert first[:4] == [0, n16, n16, 8 * 2**20 // 16] and first[5] == 1 << 14
+    last = pb.params_list(47, 48, n16, 8, 0, 1 << 18, 1 << 14)
+    assert last[3] == 0 and last[5] == 0  # no next slice: no prefetch threads
+    assert pb.params_list(3, 48, n16, 0, 0, 1 << 18, 1 << 14)[3] == 0
+    assert pb.params_list(0, 4, n16, 0, 0, 8, 8, big=True)[1] == 4 * n16
