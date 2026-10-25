@@ -715,6 +715,18 @@ def install():
                 model, draft_model, prompt_cache, kw
             ):
                 return original(model, draft_model, prompt_cache, hidden, **kw)
+            if request.guide is None and not request.processors:
+                logger.info(
+                    "Exact speculative chain (fast tree unavailable): %s",
+                    ",".join(
+                        dflash_copy.chain_reasons(
+                            getattr(model, "language_model", model),
+                            draft_model,
+                            prompt_cache,
+                            kw,
+                        )
+                    ),
+                )
             return dflash_rounds(
                 model, draft_model, prompt_cache, hidden, request=request, **kw
             )

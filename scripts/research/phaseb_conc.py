@@ -11,6 +11,7 @@ import concurrent.futures
 import json
 import shutil
 import statistics
+import threading
 import time
 from pathlib import Path
 
@@ -26,7 +27,7 @@ def parser():
     p.add_argument("--ctx-chars", type=int, default=16000)
     p.add_argument("--tokens", type=int, default=128)
     p.add_argument("--rep", type=int, default=0)
-    p.add_argument("--join", type=float, default=12.0)
+    p.add_argument("--join", type=float, default=0.5)
     p.add_argument("--scenarios", nargs="+", default=["burst2", "burst4", "stagger"])
     p.add_argument("--shapes", nargs="+", default=["greedy", "seeded"])
     p.add_argument("--arms", nargs="+", default=["base", "cand"])
@@ -84,8 +85,13 @@ def summarize(rows):
 
 def interval_rates(a, b):
     times = a["times"]
+    start, end = b["t0"], b["times"][0]
     return dict(
-        prefill_tps=rate([t for t in times if b["t0"] <= t <= b["times"][0]]),
+        # Count over the whole prefill interval: first-to-last arrivals omit
+        # stalls at either edge and overstate service during long atoms.
+        prefill_tps=sum(start <= t < end for t in times) / (end - start)
+        if end > start
+        else None,
         overlap_tps=rate([t for t in times if b["times"][0] <= t <= b["times"][-1]]),
         after_tps=rate([t for t in times if t > b["times"][-1]]),
     )
@@ -131,10 +137,32 @@ def run_cell(server, a, scenario, shape):
         )
     t_zero = time.perf_counter()
 
+    started = threading.Event()
+    finished = threading.Event()
+
     def go(job):
         name, delay, ntok, salt = job
-        time.sleep(delay)
-        return name, sampled.stream(server.url, request(salt, ntok), t_zero)
+        if scenario == "stagger" and name == "B":
+            if not started.wait(timeout=1800):
+                raise RuntimeError("running row never delivered a token")
+            time.sleep(delay)
+            if finished.is_set():
+                raise RuntimeError(
+                    "stagger running row finished before newcomer joined"
+                )
+        else:
+            time.sleep(delay)
+        try:
+            return name, sampled.stream(
+                server.url,
+                request(salt, ntok),
+                t_zero,
+                on_first_token=started.set if name == "A" else None,
+            )
+        finally:
+            if name == "A":
+                finished.set()
+                started.set()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         concurrent_rows = dict(pool.map(go, jobs))
@@ -149,6 +177,11 @@ def run_cell(server, a, scenario, shape):
     )
     if scenario == "stagger":
         result["stagger"] = interval_rates(concurrent_rows["A"], concurrent_rows["B"])
+        if a.mode == "speed" and any(
+            result["stagger"][field] is None
+            for field in ("prefill_tps", "overlap_tps", "after_tps")
+        ):
+            raise RuntimeError("stagger did not cover prefill, overlap and recovery")
     return result
 
 
@@ -224,6 +257,13 @@ def validate_records(
     if actual != expected or len(cells) != len(expected):
         return False, "missing or duplicate Phase B cells"
     for r in cells:
+        if r["shape"] != "agent":
+            solo = r.get("solo", {}).get("per_row", {})
+            concurrent = r.get("concurrent", {}).get("per_row", {})
+            if solo.keys() != concurrent.keys() or any(
+                solo[n].get("digest") != concurrent[n].get("digest") for n in solo
+            ):
+                return False, "concurrent token/logprob digest differs from solo"
         for field in ("solo", "concurrent"):
             per_row = r.get(field, {}).get("per_row", {})
             if len(per_row) != len(plans(r["scenario"], 128, 12)):

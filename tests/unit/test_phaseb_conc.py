@@ -96,3 +96,60 @@ def test_yv_pilot_uses_one_arm_cell_and_short_output():
     assert cfg["phaseb_ctx_chars"] == [16000]
     assert cfg["phaseb_scenarios"] == ["burst2"]
     assert cfg["phaseb_tokens"] == 128
+
+
+def test_prefill_rate_counts_stalls_at_both_edges():
+    # A is stalled for most of B's ten-second prefill. Arrival-only rates
+    # incorrectly report 10 tok/s for the two adjacent tokens.
+    a = dict(times=[0, 5, 5.1, 15])
+    b = dict(t0=1, times=[11, 12])
+    assert p.interval_rates(a, b)["prefill_tps"] == pytest.approx(0.2)
+
+
+def test_saved_identity_evidence_rechecks_solo_hash():
+    r = dict(
+        arm="cand",
+        scenario="solo",
+        shape="seeded",
+        solo={"per_row": {"A": {"digest": "solo"}}},
+        concurrent={"per_row": {"A": {"digest": "changed"}}},
+    )
+    assert not p.validate_records(
+        [r, {"complete": True, "success": True}],
+        arms=("cand",),
+        scenarios=("solo",),
+        shapes=("seeded",),
+    )[0]
+
+
+def test_stagger_waits_for_running_row_first_token(monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from scripts.research import sampledspec_conc as sampled
+
+    newcomer = threading.Event()
+    calls = []
+
+    def stream(url, body, zero, *, on_first_token=None):
+        calls.append(on_first_token)
+        if len(calls) <= 2:  # matched solo references
+            pass
+        elif on_first_token is not None:
+            assert not newcomer.is_set()
+            on_first_token()
+            assert newcomer.wait(timeout=2)
+        else:
+            newcomer.set()
+        return dict(
+            times=[1, 2, 3], t0=0, ttft=1, usage={"completion_tokens": 3}, digest="same"
+        )
+
+    monkeypatch.setattr(sampled, "stream", stream)
+    a = SimpleNamespace(tokens=128, join=0, ctx_chars=16, mode="identity")
+    result = p.run_cell(
+        SimpleNamespace(model="test", url="unused"), a, "stagger", "seeded"
+    )
+    assert result["identity"] and newcomer.is_set()
+    assert calls[:2] == [None, None]
+    assert callable(calls[2]) and calls[3] is None

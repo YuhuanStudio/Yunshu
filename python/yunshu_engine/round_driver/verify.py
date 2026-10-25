@@ -1,3 +1,4 @@
+# Upstream (inspired): Blaizzy/mlx-vlm (MIT) models/qwen4_exp/language.py, speculative/cache_state.py @ 92b31ad3
 """Packed lane projections with per-sequence tree attention and commit records.
 
 This is a round-driver primitive, not a serving path. Each window owns its KV,
@@ -134,3 +135,138 @@ def forward(lm, windows: list[Window], capture_ids=(), *, verifier=None):
         raise
     finally:
         tv.vq.clear_group_sums()
+
+
+def native_chain_forward(lm, tokens, caches):
+    """Flash-Next chain primitive; native per-row cache transactions.
+
+    Returns (hyper hidden, native transaction) per row. Callers must commit
+    accepted prefix lengths or abort each transaction. Not yet serving: the
+    driver's native MTP lifecycle must be qualified before admission changes.
+    Dense projections and routed/shared experts see all real tokens; PLE,
+    QSA and GDN state remain owned by each request. No 27B shape assumptions.
+    """
+    from mlx_vlm.models.qwen4_exp.language import Qwen4ExpBatchInvariantForward
+    from mlx_vlm.speculative.cache_state import start_speculative_cache
+
+    if not tokens or len(tokens) != len(caches):
+        raise ValueError("native chain requires matching nonempty tokens and caches")
+    if len({id(c) for c in caches}) != len(caches):
+        raise ValueError("native chain requires independent caches")
+    if any(t.ndim != 2 or t.shape[0] != 1 or not 1 <= t.shape[1] <= 2 for t in tokens):
+        raise ValueError("native chain supports one or two positions per row")
+    if sum(t.shape[1] for t in tokens) > tv.FAST_MAX_ROWS:
+        raise ValueError("native chain exceeds the shared node budget")
+
+    native = Qwen4ExpBatchInvariantForward()
+
+    class Projected(Qwen4ExpBatchInvariantForward):
+        # Native QSA may split a two-token chain at its sparse boundary. Each
+        # projection consumes its own consecutive slice; no global patching.
+        def __init__(self, projected, output):
+            self.projected = projected
+            self.output = output
+            self.at = {}
+
+        def _linear(self, linear, x):
+            key = id(linear)
+            if key == self.output:
+                return x
+            if key not in self.projected:
+                return native._linear(linear, x)
+            at = self.at.get(key, 0)
+            self.at[key] = at + x.shape[1]
+            return self.projected[key][:, at : at + x.shape[1]]
+
+        def _linears(self, linears, x):
+            return [self._linear(linear, x) for linear in linears]
+
+    spans, at = [], 0
+    for t in tokens:
+        spans.append((at, at + t.shape[1]))
+        at += t.shape[1]
+    model = lm.model
+    hidden = mx.tile(
+        model.embed_tokens(mx.concatenate(tokens, axis=1)), (1, 1, model.args.hc_count)
+    )
+    transactions = []
+    try:
+        positions = []
+        for t, cache in zip(tokens, caches, strict=True):
+            mx.async_eval([entry.state for entry in cache])
+            offset = int(cache[model.fa_idx].offset)
+            delta = getattr(lm, "_rope_deltas", None)
+            if delta is not None:
+                offset += int(delta.reshape(-1)[0].item())
+            positions.append(offset + mx.arange(t.shape[1], dtype=mx.int64)[None])
+            transactions.append(start_speculative_cache(cache, t.shape[1]))
+        for i, layer in enumerate(model.layers):
+            if "ple" in layer:
+                # Native PLE owns ngram history and convolution windows. Its
+                # dense projections are comparatively small; keep this part
+                # canonical until its packed version has a separate bit gate.
+                hidden = hidden + mx.concatenate(
+                    [
+                        native._ple(layer.ple, hidden[:, s:e], t, c[i], None)
+                        for t, c, (s, e) in zip(tokens, caches, spans, strict=True)
+                    ],
+                    axis=1,
+                )
+            mixed, residual, injection = native._hyper_connection(
+                layer.attn_hyper_connection, hidden
+            )
+            if layer.is_linear:
+                mixer = layer.linear_attn
+                linears = (
+                    mixer.in_proj_qkv,
+                    mixer.in_proj_z,
+                    mixer.in_proj_b,
+                    mixer.in_proj_a,
+                )
+                output = mixer.out_proj
+            else:
+                mixer = layer.self_attn
+                linears = (
+                    mixer.indexer.index_qk_proj,
+                    mixer.q_proj,
+                    mixer.k_proj,
+                    mixer.v_proj,
+                )
+                output = mixer.o_proj
+            projected = native._linears(linears, mixed)
+            parts = []
+            for cache, pos, (s, e) in zip(caches, positions, spans, strict=True):
+                view = Projected(
+                    {id(p): v[:, s:e] for p, v in zip(linears, projected, strict=True)},
+                    id(output),
+                )
+                if layer.is_linear:
+                    part = view._gated_delta(mixer, mixed[:, s:e], None, cache[i])
+                else:
+                    part = view._qsa_attention(
+                        mixer,
+                        mixed[:, s:e],
+                        cache[i],
+                        pos,
+                        "causal" if e - s > 1 else None,
+                    )
+                parts.append(part)
+            branch = native._linear(output, mx.concatenate(parts, axis=1))
+            hidden = native._inject(branch, residual, injection)
+            mixed, residual, injection = native._hyper_connection(
+                layer.mlp_hyper_connection, hidden
+            )
+            # This includes router, routed expert projections and shared expert;
+            # the native verifier keeps its canonical per-token reductions.
+            hidden = native._inject(
+                native._feed_forward(layer.mlp, mixed), residual, injection
+            )
+            mx.async_eval(hidden)
+        return [
+            (hidden[:, s:e], transaction)
+            for (s, e), transaction in zip(spans, transactions, strict=True)
+        ]
+    except BaseException:
+        for transaction in transactions:
+            transaction.abort()
+        raise

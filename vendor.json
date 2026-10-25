@@ -1643,6 +1643,22 @@
       "local_changes": [
         "Optional ABI-linked MLX encoder adapter signals ready and waits for ANE completion without producer/ANE CPU waits. Calls installed APIs, no upstream implementation copied. Adds independent watchdog, cancellation and retained IOSurface aliases; no serving importer."
       ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/round_driver/verify.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "upstream_paths": [
+        "mlx_vlm/models/qwen4_exp/language.py",
+        "mlx_vlm/models/qwen3_5/speculative_verifier.py",
+        "mlx_vlm/speculative/cache_state.py"
+      ],
+      "commit": "92b31ad308b651a7c1e22d0c58bcdc35c3807750",
+      "license": "MIT",
+      "local_changes": [
+        "Request-local projection views pack native HC/router/shared and routed expert work while native QSA/GDN/PLE own independent temporal state and transactions. Not admitted for serving until native MTP lifecycle gates pass."
+      ]
     }
   ],
   "patches": [

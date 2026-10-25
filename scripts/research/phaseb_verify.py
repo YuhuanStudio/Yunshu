@@ -17,6 +17,11 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("model", nargs="?")
     p.add_argument("--tiny", action="store_true")
+    p.add_argument(
+        "--native-tiny",
+        action="store_true",
+        help="Flash-Next HC/QSA/PLE/MoE small-array pilot",
+    )
     p.add_argument("--context", type=int, default=128)
     p.add_argument("--rows", type=int, nargs="+", default=[1, 2, 4])
     p.add_argument("--nodes", type=int, default=8)
@@ -26,8 +31,21 @@ def parser():
 
 
 def plan(a):
-    if not a.tiny and not a.model:
+    if not a.tiny and not a.native_tiny and not a.model:
         raise ValueError("model path or --tiny required")
+    if a.tiny and a.native_tiny:
+        raise ValueError("select one tiny architecture")
+    if a.native_tiny:
+        if (
+            not 4 <= a.context <= 4000
+            or not a.rows
+            or any(n < 1 or n > 16 for n in a.rows)
+        ):
+            raise ValueError("native tiny context 4..4000 and 1..16 rows required")
+        return [
+            dict(rows=n, nodes="1/2 chain", context=a.context, native=True)
+            for n in a.rows
+        ]
     if a.context < 4 or a.nodes < 1 or not a.rows:
         raise ValueError("context >= 4 and positive nodes/rows required")
     if any(n < 1 or n * a.nodes > 32 for n in a.rows):
@@ -172,6 +190,108 @@ def run(a, write):
     write(dict(complete=True, success=True, device="m5", tiny=a.tiny))
 
 
+def native_tiny():
+    import mlx.core as mx
+    import mlx.nn as nn
+    from mlx_vlm.models.qwen4_exp.config import ModelConfig
+    from mlx_vlm.models.qwen4_exp.language import LanguageModel
+    from scripts.research.qwen4_mtp_probe import tiny_config
+
+    mx.random.seed(17)
+    config = ModelConfig.from_dict(
+        {
+            "model_type": "qwen4_exp",
+            "text_config": tiny_config(),
+            "vision_config": {
+                "depth": 1,
+                "hidden_size": 32,
+                "intermediate_size": 64,
+                "num_heads": 2,
+                "out_hidden_size": 32,
+                "deepstack_visual_indexes": [],
+            },
+        }
+    )
+    lm = LanguageModel(config.text_config, config)
+    lm.set_dtype(mx.bfloat16)
+    nn.quantize(
+        lm,
+        group_size=32,
+        bits=4,
+        class_predicate=lambda p, m: (
+            hasattr(m, "to_quantized") and m.weight.shape[-1] % 32 == 0
+        ),
+    )
+    mx.eval(lm.parameters())
+    return lm
+
+
+def run_native_tiny(a, write):
+    import mlx.core as mx
+    from yunshu_engine.round_driver.verify import native_chain_forward
+
+    lm = native_tiny()
+    for count in a.rows:
+        for keep in (None, 1):
+            prefixes, tokens = [], []
+            for b in range(count):
+                cache = lm.make_cache()
+                lm(
+                    mx.array([[1 + (i + b) % 60 for i in range(a.context + b)]]),
+                    cache=cache,
+                )
+                mx.eval(*state(cache))
+                prefixes.append(cache)
+                tokens.append(mx.array([[8 + b, 9 + b]])[:, : 1 + b % 2])
+            solo = copy.deepcopy(prefixes)
+            packed = copy.deepcopy(prefixes)
+            references = [
+                lm.speculative_verify_hidden(t, c)
+                for t, c in zip(tokens, solo, strict=True)
+            ]
+            results = native_chain_forward(lm, tokens, packed)
+            for b, ((ref, _, st), (got, pt)) in enumerate(
+                zip(references, results, strict=True)
+            ):
+                checks = dict(
+                    hidden=bool(mx.array_equal(ref, got).item()),
+                    logits=bool(
+                        mx.array_equal(
+                            lm.speculative_logits_from_hidden(ref),
+                            lm.speculative_logits_from_hidden(got),
+                        ).item()
+                    ),
+                )
+                if keep is None:
+                    st.abort()
+                    pt.abort()
+                else:
+                    st.commit(keep)
+                    pt.commit(keep)
+                token = mx.array([[21 + b]])
+                checks["next_logits"] = bool(
+                    mx.array_equal(
+                        lm(token, cache=solo[b]).logits,
+                        lm(token, cache=packed[b]).logits,
+                    ).item()
+                )
+                write(
+                    dict(
+                        rows=count,
+                        row=b,
+                        context=a.context + b,
+                        keep=keep,
+                        native=True,
+                        checks=checks,
+                    )
+                )
+                if not all(checks.values()):
+                    raise RuntimeError(
+                        f"native packed parity failed: row={b}, checks={checks}"
+                    )
+    write(dict(complete=True, success=True, device="m5", native=True, tiny=True))
+
+
 def main():
     a = parser().parse_args()
     cells = plan(a)
@@ -187,7 +307,10 @@ def main():
             out.flush()
             print(line, flush=True)
 
-        run(a, write)
+        if a.native_tiny:
+            run_native_tiny(a, write)
+        else:
+            run(a, write)
 
 
 if __name__ == "__main__":

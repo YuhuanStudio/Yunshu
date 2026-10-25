@@ -2423,7 +2423,7 @@
   "python/yunshu_engine/cache_prefill.py": "prefill cache install",
   "python/yunshu_engine/cache_observation.py": "cache observation",
   "python/yunshu_engine/cache_restore.py": "n/a placeholder",
-  "python/yunshu_engine/round_driver": "RoundDriver package (driver cells)",
+  "python/yunshu_engine/round_driver": "RoundDriver package (driver cells); verify.native_chain_forward is an unadmitted Flash-Next HC/QSA/PLE/MoE primitive pending native MTP lifecycle gates",
   "python/yunshu_engine/constrained_spec.py": "guided_spec",
   "python/yunshu_engine/keyed_sampling.py": "sampled_spec",
   "python/yunshu_engine/kv_quantization.py": "kv_precision (text)",
