@@ -320,11 +320,23 @@ def run_flashverify(a, mx, tracer):
         from yunshu_engine import qwen4_mtp
 
         qwen4_mtp.configure_lane = lambda lm, drafter, block: ({}, block)
+        import threading
+
+        alive = threading.Event()
+
+        def heartbeat():
+            while not alive.wait(20):
+                print(
+                    "loading...", flush=True
+                )  # the 95 GB load is silent for minutes (gpuq stall rule)
+
+        threading.Thread(target=heartbeat, daemon=True).start()
         settings.set_override("YUNSHU_VLM_APC_MEMORY_GB", 1.0)
         engine = VLMEngine(
             str(a.model), EngineConfig(prefill_step_size=512, completion_batch_size=1)
         )
         await engine.start()
+        alive.set()
         lm = engine._model.language_model
         ids = [(i * 7919) % 200000 + 1000 for i in range(a.ctx + 64)]
         cache = lm.make_cache()

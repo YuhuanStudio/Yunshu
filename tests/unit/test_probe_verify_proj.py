@@ -71,3 +71,12 @@ def test_lane_stream_geometry():
     assert g["tiles"] == 544 and g["kg"] == 80 and g["cb"] == 32 and g["nv"] == 2
     assert g["bytes"] == 17408 * 5120 // 2
     assert pl.geometry(5120, 17408, 8)["kg"] == 272
+
+
+def test_singleton_probe_ratio():
+    spec5 = importlib.util.spec_from_file_location(
+        "probe_singleton", PROBE.with_name("probe_singleton.py")
+    )
+    ps = importlib.util.module_from_spec(spec5)
+    spec5.loader.exec_module(ps)
+    assert ps.per_row_ratio({1: 10.0, 4: 40.0, 16: 20.0}) == {1: 1.0, 4: 4.0, 16: 2.0}
