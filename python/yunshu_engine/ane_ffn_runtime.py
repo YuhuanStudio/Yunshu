@@ -45,6 +45,7 @@ class Runtime:
         self.chunks_gpu = 0
         self.failures = 0
         self.trace = False
+        self.released = False
         self.extra_bytes = 0
         self._t_exit = 0.0
         self._cpu_in: list[float] = []
@@ -131,6 +132,31 @@ class Runtime:
             pairs[-1][1] - pairs[0][0],
         )
         self.split.ticket_times.clear()
+
+    def release(self) -> bool:
+        """Between steps: unload the ANE program so the service gives its memory back."""
+        if self.released or self.engaged or self.retired:
+            return False
+        if self.split.pool.unload():
+            self.released = True
+            logger.info("Neural Engine FFN program unloaded while idle")
+            return True
+        self.split.pool.retire("its program did not unload")
+        return False
+
+    def ensure_loaded(self) -> None:
+        """Load the program again before a step that follows an idle release."""
+        if not self.released:
+            return
+        self.released = False
+        start = time.perf_counter()
+        if self.split.pool.load():
+            logger.info(
+                "Neural Engine FFN program reloaded in %.2f s",
+                time.perf_counter() - start,
+            )
+        else:
+            self.split.pool.retire("its program did not load again")
 
     def abandon(self) -> None:
         """A step that ended (or raised) before its last layer: settle the split's tickets."""
@@ -276,6 +302,9 @@ def guarded(prompt_cache, step: Callable[[], Any]):
     rt = _RUNTIME
     if rt is None or rt.retired:
         return step()
+    rt.ensure_loaded()
+    if rt.retired:
+        return step()
     saved = _snapshot(prompt_cache)
     rt.engaged = True
     try:
@@ -290,6 +319,12 @@ def guarded(prompt_cache, step: Callable[[], Any]):
     finally:
         rt.engaged = False
         rt.abandon()
+
+
+def release_idle() -> bool:
+    """The engine went idle: let the Neural Engine give its program's memory back."""
+    rt = _RUNTIME
+    return bool(rt is not None and rt.release())
 
 
 def kernel_suffix() -> str:

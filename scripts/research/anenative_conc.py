@@ -63,9 +63,12 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--arm", choices=["off", "splash"], required=True)
     p.add_argument("--rep", type=int, default=0)
+    p.add_argument("--share", type=float, default=None)
+    p.add_argument("--min-rows", type=int, default=None)
     p.add_argument("--join", type=float, default=12.0)
     p.add_argument("--a-tokens", type=int, default=2000)
     p.add_argument("--b-chars", type=int, default=60000)
+    p.add_argument("--a-chars", type=int, default=1400)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--scratch", type=Path, required=True)
     p.add_argument(
@@ -88,6 +91,10 @@ def main():
         "YUNSHU_ANE_FFN_SPLIT": a.arm,
         "YUNSHU_ANE_FFN_CACHE": str(a.cache),
     }
+    if a.share:
+        env["YUNSHU_ANE_FFN_SHARE"] = str(a.share)
+    if a.min_rows:
+        env["YUNSHU_ANE_FFN_MIN_ROWS"] = str(a.min_rows)
     s = tb.start_server("yunshu-main", env, f"conc-{a.arm}-{a.rep}", model=tb.M, ctx_tokens=40000, parallel=1)
     try:
         for _ in range(2):
@@ -95,7 +102,7 @@ def main():
         rows: dict = {}
         lock = threading.Lock()
         t0 = time.perf_counter()
-        body_a = conc_probe.body(s.model, 5, a.a_tokens, 4000, True)
+        body_a = conc_probe.body(s.model, 5, a.a_tokens, a.a_chars, True)
         body_b = conc_probe.body(s.model, 6, 32, a.b_chars, True)
         threads = [
             threading.Thread(target=stream, args=(s.url, body_a, t0, rows, "A", lock)),

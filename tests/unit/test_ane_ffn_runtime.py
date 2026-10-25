@@ -57,6 +57,22 @@ class FakeSplit:
         pass
 
 
+class FakePool:
+    def __init__(self, ok=True):
+        self.ok, self.state, self.retired_why = ok, "loaded", None
+
+    def unload(self):
+        self.state = "unloaded"
+        return self.ok
+
+    def load(self):
+        self.state = "loaded"
+        return self.ok
+
+    def retire(self, why):
+        self.retired_why = why
+
+
 class Mlp:
     def __init__(self, index):
         self._ane_index = index
@@ -148,3 +164,27 @@ def test_setting_is_registered_off_by_default():
     assert settings.REGISTRY["YUNSHU_ANE_FFN_SPLIT"].default == "off"
     with pytest.raises(Exception):  # noqa: B017
         settings.REGISTRY["YUNSHU_ANE_FFN_SPLIT"].choices.index("bogus")
+
+
+def test_idle_release_unloads_and_the_next_step_reloads(monkeypatch):
+    split = FakeSplit()
+    split.pool = FakePool()
+    rt = rt_mod.Runtime(split, "r")
+    monkeypatch.setattr(rt_mod, "_RUNTIME", rt)
+    assert (
+        rt_mod.release_idle() is True and split.pool.state == "unloaded" and rt.released
+    )
+    assert rt_mod.release_idle() is False  # already released
+    assert rt_mod.guarded([], lambda: "ok") == "ok"
+    assert split.pool.state == "loaded" and not rt.released
+
+
+def test_failed_reload_retires_to_the_gpu(monkeypatch):
+    split = FakeSplit()
+    split.pool = FakePool(ok=False)
+    rt = rt_mod.Runtime(split, "r")
+    rt.released = True
+    monkeypatch.setattr(rt_mod, "_RUNTIME", rt)
+    split.retired = lambda: split.pool.retired_why is not None
+    assert rt_mod.guarded([], lambda: "gpu") == "gpu"
+    assert split.pool.retired_why == "its program did not load again"

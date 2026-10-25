@@ -2013,6 +2013,67 @@
      "why": "legacy loop, not grown"
     }
    }
+  },
+  "ane_ffn_split": {
+   "module": "python/yunshu_engine/ane_ffn_runtime.py",
+   "what": "Opt-in lossy Neural Engine share of each dense FFN layer in single-row prompt steps (YUNSHU_ANE_FFN_SPLIT=splash, Splash scheme, W8A8 + Hadamard, IOSurface + shared-event handoff); decode, verify and short tails unchanged; APC states kept apart by the kernel id",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/cache_prefill.py",
+       "ane_ffn_runtime.guarded"
+      ],
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "ane_ffn_runtime.install("
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/cache_prefill.py",
+       "ane_ffn_runtime.guarded"
+      ],
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "ane_ffn_runtime.install("
+      ]
+     ]
+    },
+    "driver": {
+     "s": "na",
+     "why": "the round driver prefills its own fixed 512-row spans through packed forwards, not PromptProcessingBatch; the split's calibrated rows start above that"
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/cache_prefill.py",
+       "ane_ffn_runtime.guarded"
+      ],
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "ane_ffn_runtime.install("
+      ]
+     ]
+    },
+    "generic": {
+     "s": "na",
+     "why": "dense Qwen3.5-family MLP only (Qwen3_5MLP class patch)"
+    },
+    "text": {
+     "s": "na",
+     "why": "mlx-lm stock prefill; the split patches the mlx-vlm Qwen3.5 MLP"
+    },
+    "loop": {
+     "s": "na",
+     "why": "legacy loop is not grown (CLAUDE.md)"
+    }
+   }
   }
  },
  "exclusions": [
@@ -2466,7 +2527,12 @@
   "YUNSHU_DEBUG_TREE_PROFILE": "tree_drafts",
   "YUNSHU_NEXT_TURN_PREFILL": "next_turn_rehearsal",
   "YUNSHU_NEXT_TURN_DELAY_S": "next_turn_rehearsal",
-  "YUNSHU_GC_POLICY": "gc_policy"
+  "YUNSHU_GC_POLICY": "gc_policy",
+  "YUNSHU_ANE_FFN_SPLIT": "ane_ffn_split",
+  "YUNSHU_ANE_FFN_SHARE": "ane_ffn_split",
+  "YUNSHU_ANE_FFN_MIN_ROWS": "ane_ffn_split",
+  "YUNSHU_ANE_FFN_CACHE": "ane_ffn_split",
+  "YUNSHU_ANE_FFN_TRACE": "ane_ffn_split"
  },
  "gap_budget": 55,
  "settings_categories": [

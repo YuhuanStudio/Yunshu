@@ -193,8 +193,11 @@ def _gpu_alone(split: AneFfn | None, layer: Layer, x, residual):
 
 # ---- remembered calibration -------------------------------------------------------------
 def calibration_key(model_id: str, layers: Sequence[Layer], max_units: int) -> str:
+    # The checkpoint's directory name, not its path: servers may reach one checkpoint through
+    # per-run symlinks.
+    name = Path(str(model_id)).resolve().name
     h = hashlib.sha256(
-        f"{model_id}|{platform.mac_ver()[0]}|{platform.machine()}|{len(layers)}|"
+        f"{name}|{platform.mac_ver()[0]}|{platform.machine()}|{len(layers)}|"
         f"{layers[0].gate.out}x{layers[0].gate.inp}|{max_units}".encode()
     ).hexdigest()[:16]
     return f"ane-ffn-{h}"

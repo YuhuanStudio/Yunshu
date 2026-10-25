@@ -363,5 +363,15 @@ const settingdesc = {
     "主控台歷史檔案的大小上限（MiB）；超過時刪除最舊的資料。",
   YUNSHU_CONSOLE_DB:
     "主控台程序保存歷史的位置（SQLite）。未設定時為 ~/.yunshu/console-history.sqlite。",
+  YUNSHU_ANE_FFN_SPLIT:
+    "Qwen3.5 系列 prefill（有損，預設關閉）：splash 依 intermediate 通道把每層稠密 FFN 分給 GPU 與 Apple Neural Engine；ANE 透過私有 AppleNeuralEngine API，在與 Metal 共用的 IOSurface 記憶體上以共享事件排序執行 W8A8 部分。ANE 部分與 GPU 約差 2 至 3% RMS，輸出與 off 略有不同；前綴快取狀態另行區隔。分擔比例與最小步長於首次啟動校準。ANE 任何失敗即停用，該步由 GPU 重跑。額外約 3 GiB 記憶體。",
+  YUNSHU_ANE_FFN_SHARE:
+    "搭配 ANE FFN 分擔：ANE 負責的 intermediate 通道比例（0 至 1），略過校準（以 512 通道為單位）。未設定：由校準決定。",
+  YUNSHU_ANE_FFN_MIN_ROWS:
+    "搭配固定 ANE 比例：採用分擔的最小 prompt 步長列數（512 至 2048）。未設定：512。",
+  YUNSHU_ANE_FFN_CACHE:
+    "已編譯 ANE 程式原始碼與校準紀錄的目錄。未設定：~/.yunshu/ane_cache/ffn。",
+  YUNSHU_ANE_FFN_TRACE:
+    "對每個分擔的 prompt 步長記錄 ANE 每層毫秒與 GPU 層間空檔（診斷用）。",
 };
 export default settingdesc;
