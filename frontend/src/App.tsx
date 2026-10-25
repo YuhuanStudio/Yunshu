@@ -514,18 +514,18 @@ export default function App() {
           `${c.title} ${c.description ?? ""} ${c.id}`.toLowerCase().includes(q),
         )
       : commands),
+    ...docItems,
     ...(q
       ? [
           {
             id: "docs-ask-question",
             title: t("docs.ask.title"),
-            description: query,
+            description: t("docs.ask.subtitle"),
             group: t("shell.cmd.docs"),
             onSelect: openAsk,
           },
         ]
       : []),
-    ...docItems,
   ];
   // The route as last applied: navigate() sets it before the hashchange it causes, so that echo is ignored.
   useEffect(() => {

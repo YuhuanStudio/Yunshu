@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 for (const locale of ["en", "zh-TW", "zh-CN"]) {
   test(`local Ask AI sources, follow-up, feedback and copy ${locale}`, async ({
     page,
+    browserName,
   }) => {
     await page.addInitScript(
       (locale) => localStorage.setItem("yunshu.console.locale", locale),
@@ -47,12 +48,16 @@ for (const locale of ["en", "zh-TW", "zh-CN"]) {
     ).toHaveAttribute("href", "#/docs/guides/prompt-caching?h=apc");
     await expect(dialog.locator("pre")).toContainText("yunshu serve");
     if (locale === "en") {
-      await page
-        .context()
-        .grantPermissions(["clipboard-read", "clipboard-write"]);
+      // Only Chromium exposes clipboard permissions to automation; WebKit still clicks the button.
+      if (browserName === "chromium")
+        await page
+          .context()
+          .grantPermissions(["clipboard-read", "clipboard-write"]);
       await dialog
         .getByRole("button", { name: "Copy answer", exact: true })
         .click();
+    }
+    if (locale === "en" && browserName === "chromium") {
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
         .toContain("APC");
@@ -220,3 +225,31 @@ for (const theme of ["light", "dark"]) {
     });
   });
 }
+
+test("the command palette lists doc pages before the Ask AI entry and seeds the question", async ({
+  page,
+}) => {
+  await page.route("**/console/api/docs/state", (route) =>
+    route.fulfill({
+      json: { ready: true, model: "local", question: 2000, history: 8 },
+    }),
+  );
+  await page.addInitScript(() =>
+    localStorage.setItem("yunshu.console.locale", "en"),
+  );
+  await page.goto("/console/#/overview");
+  await page
+    .getByRole("button", { name: /Search/ })
+    .first()
+    .click();
+  await page
+    .getByPlaceholder("Search pages, models and actions…")
+    .fill("prompt caching");
+  const options = page.getByRole("option");
+  // The page hit renders first; the Ask AI row never matches the query text itself.
+  await expect(
+    options.filter({ hasText: /Prompt caching/i }).first(),
+  ).not.toContainText("Ask AI");
+  await options.filter({ hasText: "Ask AI" }).last().click();
+  await expect(page.getByTestId("docs-ask")).toBeVisible();
+});
