@@ -75,6 +75,8 @@ class Runtime:
                 self.failures += 1
                 raise AneChunkFailed(self.split.reason)
             self.chunks_split += 1
+            if self.chunks_split in (1, 2, 4) or self.chunks_split % 16 == 0:
+                logger.info("Neural Engine FFN split engaged: %s", self.summary())
         return out.reshape(1, rows, -1)
 
     def abandon(self) -> None:

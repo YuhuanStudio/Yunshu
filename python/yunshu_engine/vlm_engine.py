@@ -2460,7 +2460,10 @@ class VLMEngine:
 
                     runtime = ane_ffn_runtime.install(
                         lm,
-                        Path.home() / ".yunshu" / "ane_cache" / "ffn",
+                        Path(
+                            settings.get("YUNSHU_ANE_FFN_CACHE")
+                            or Path.home() / ".yunshu" / "ane_cache" / "ffn"
+                        ),
                         str(model_path),
                         share=settings.get("YUNSHU_ANE_FFN_SHARE"),
                         minimum_rows=settings.get("YUNSHU_ANE_FFN_MIN_ROWS"),

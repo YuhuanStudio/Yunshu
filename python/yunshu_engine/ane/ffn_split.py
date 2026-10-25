@@ -681,6 +681,16 @@ class AneFfn:
         return y if residual is None else residual + y
 
     def verify(self, seed: int = 20261001) -> float:
+        saved, self.minimum_rows = (
+            self.minimum_rows,
+            self.rows[0],
+        )  # every function, whatever the least chunk
+        try:
+            return self._verify(seed)
+        finally:
+            self.minimum_rows = saved
+
+    def _verify(self, seed: int) -> float:
         """Splash AneFfn::verify: each function at its own rows over the first two layers, the
         ANE's contribution against the GPU alone's. Returns the worst relative RMS error."""
         mx = self._mx

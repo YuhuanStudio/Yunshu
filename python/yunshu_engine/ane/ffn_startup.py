@@ -221,6 +221,7 @@ class Outcome:
     kind: str  # split | no_gain | unavailable | off
     reason: str
     split: AneFfn | None = None
+    detail: dict | None = None
 
 
 def start(
@@ -295,6 +296,19 @@ def start(
                 "no_gain",
                 "no chunk of the Neural Engine split beats the GPU alone by enough",
             )
+        detail = {
+            "timings": {
+                "low": vars(timings.low),
+                "high": vars(timings.high),
+                "gpu_alone": timings.gpu_alone,
+            },
+            "chosen_units": chosen,
+            "minimum_rows": minimum,
+            "chunks": {
+                "gpu": [vars(p) for p in chunks.gpu],
+                "functions": [vars(f) for f in chunks.functions],
+            },
+        }
         made = cal.Calibration(chosen, minimum, chunks.gpu)
         _take(split, made, cache, key)
         err = split.verify()
@@ -306,8 +320,10 @@ def start(
             f"on the GPU alone, {100 * err:.2f}% from the GPU alone (calibrated in "
             f"{time.perf_counter() - started:.1f} s)",
             split,
+            detail,
         )
     except (AneUnavailable, AneRetired, RuntimeError, ValueError, OSError) as exc:
+        log.warning("ANE FFN split start failed", exc_info=True)
         return Outcome("unavailable", str(exc))
 
 

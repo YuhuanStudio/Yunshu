@@ -73,7 +73,13 @@ def test_split_chunk_runs_every_layer_and_finishes_once():
     rt = rt_mod.Runtime(FakeSplit(), "r")
     outs = run_layers(rt, 1024)
     assert all(o is not None for o in outs)
-    assert rt.split.calls == ["begin", ("add", 0, 1024), ("add", 1, 1024), ("add", 2, 1024), "finish"]
+    assert rt.split.calls == [
+        "begin",
+        ("add", 0, 1024),
+        ("add", 1, 1024),
+        ("add", 2, 1024),
+        "finish",
+    ]
     assert rt.chunks_split == 1 and rt.chunks_gpu == 0
 
 
