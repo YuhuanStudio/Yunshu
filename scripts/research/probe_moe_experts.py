@@ -1,3 +1,4 @@
+# ruff: noqa: E731
 """Flash-Next MoE expert kernels (router, gate|up, down) at the served row counts (gpuq only).
 
 Random quantized experts at the real shapes (512 experts, top-10, D=2560, I=640, shared
@@ -209,23 +210,27 @@ def main():
                         sw["gateup"].append(
                             {"rps": rps, "sg": sgs, "error": str(exc)[:60]}
                         )
-            for sgs in (1, 2, 4, 8):
-                fn = lambda aa, g=sgs: experts.expert_down_y(
-                    aa, picks, down, sd, simdgroups=g
-                )  # noqa: E731
-                try:
-                    eq = bool(mx.array_equal(fn(act), y).item())
-                    t = bench(mx, fn, act)
-                    sw["down"].append(
-                        {
-                            "sg": sgs,
-                            "us": t * 1e6,
-                            "equal": eq,
-                            "GBps": picked_bytes(uniq, per_d, shared_d) / t / 1e9,
-                        }
+            for dps in (8, 16, 32, 64):
+                for sgs in (1, 2, 4):
+                    fn = lambda aa, g=sgs, d=dps: experts.expert_down_y(  # noqa: E731
+                        aa, picks, down, sd, simdgroups=g, dims_per_simdgroup=d
                     )
-                except Exception as exc:  # noqa: BLE001
-                    sw["down"].append({"sg": sgs, "error": str(exc)[:60]})
+                    try:
+                        eq = bool(mx.array_equal(fn(act), y).item())
+                        t = bench(mx, fn, act)
+                        sw["down"].append(
+                            {
+                                "dps": dps,
+                                "sg": sgs,
+                                "us": t * 1e6,
+                                "equal": eq,
+                                "GBps": picked_bytes(uniq, per_d, shared_d) / t / 1e9,
+                            }
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        sw["down"].append(
+                            {"dps": dps, "sg": sgs, "error": str(exc)[:60]}
+                        )
             row["sweep"] = sw
         with a.out.open("a") as f:
             f.write(json.dumps(row) + "\n")

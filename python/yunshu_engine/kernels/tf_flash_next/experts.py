@@ -186,8 +186,8 @@ inline void gateup_rows(const device uint32_t* GWp, const device uint32_t* UWp, 
     }
   }
 }
-// 8 down rows from ``first`` over NI inputs, the lane's input chunks read once
-template <int BITS, int GSZ, int NI>
+// DPS down rows from ``first`` over NI inputs, the lane's input chunks read once
+template <int BITS, int GSZ, int NI, int DPS>
 inline void down_rows(const device uint32_t* W, const device bfloat* S, const device bfloat* B, size_t first,
                       const device bfloat* x, uint lane, thread float* out) {
   constexpr int VPT = lane_values(BITS), NC = (NI / VPT + 31) / 32, RB = NI * BITS / 8, KG = NI / GSZ;
@@ -197,7 +197,7 @@ inline void down_rows(const device uint32_t* W, const device bfloat* S, const de
     sums[c] = 0.0f;
     for (int i = 0; i < VPT; i++) { xv[c][i] = v0 < NI ? float(x[v0 + i]) : 0.0f; sums[c] += xv[c][i]; }
   }
-  for (int row = 0; row < 8; row++) {
+  for (int row = 0; row < DPS; row++) {
     const device uint8_t* w = (const device uint8_t*)W + (first + row) * RB;
     float acc = 0.0f;
     for (int c = 0; c < NC; c++) {
@@ -247,20 +247,20 @@ _EXPERT_GATEUP_Q = r"""
 """
 
 _EXPERT_DOWN_Y_Q = r"""
-  // expert_down_y for any width: simdgroup (row, slot) pair, dims 8 b .. 8 b + 7, one fp32 sum a dim
+  // expert_down_y for any width: simdgroup (row, slot) pair, dims DPS b .. DPS b + DPS - 1, one fp32 sum a dim
   const uint lane = thread_index_in_simdgroup;
   const int R = rows[0];
   const int pair = int(threadgroup_position_in_grid.z) * SG + int(simdgroup_index_in_threadgroup);
   constexpr int SLOTS = TOPK + 1;
   if (pair >= R * SLOTS) return;
   const int r = pair / SLOTS, k = pair % SLOTS;
-  const int d0 = int(threadgroup_position_in_grid.y) * 8;
+  const int d0 = int(threadgroup_position_in_grid.y) * DPS;
   const bool shared = k == TOPK;
   const device bfloat* x = ACT + (r * SLOTS + k) * NI;
-  float out[8];
-  if (shared) down_rows<SWB, SWG, NI>(SDW, SDS, SDB, size_t(d0), x, lane, out);
-  else down_rows<WB, WG, NI>(DW, DS, DB, size_t(PICK[r * TOPK + k]) * D + d0, x, lane, out);
-  for (int row = 0; row < 8; row++) {
+  float out[DPS];
+  if (shared) down_rows<SWB, SWG, NI, DPS>(SDW, SDS, SDB, size_t(d0), x, lane, out);
+  else down_rows<WB, WG, NI, DPS>(DW, DS, DB, size_t(PICK[r * TOPK + k]) * D + d0, x, lane, out);
+  for (int row = 0; row < DPS; row++) {
     const float v = simd_sum(out[row]);
     if (lane == 0) Y[(r * SLOTS + k) * D + d0 + row] = bfloat(v);
   }
@@ -325,7 +325,9 @@ def expert_gateup(x: mx.array, logits: mx.array, top_k: int, experts: int, gate:
                         output_shapes=[(rows, top_k + extra, width), (rows, top_k), (rows, top_k)],
                         output_dtypes=[mx.bfloat16, mx.uint32, mx.float32]))
 
-def expert_down_y(act: mx.array, picks: mx.array, down: Any, shared: Any, *, simdgroups: int = 2) -> mx.array:
+def expert_down_y(
+    act: mx.array, picks: mx.array, down: Any, shared: Any, *, simdgroups: int = 2, dims_per_simdgroup: int = 8
+) -> mx.array:
     """Down-project each row's picked experts and final shared slot to bf16 [R, k + 1, D] for grouped hc_norm write-back."""
 
     rows, slots, width = act.shape
@@ -334,14 +336,19 @@ def expert_down_y(act: mx.array, picks: mx.array, down: Any, shared: Any, *, sim
     wb, wg = _format(down)
     swb, swg = _format(shared)
     names = ["ACT", "PICK", "DW", "DS", "DB", "SDW", "SDS", "SDB", "rows"]
+    dps = int(dims_per_simdgroup)
+    if dims % dps:
+        raise ValueError(f"expert_down_y: dims_per_simdgroup {dps} must divide {dims}")
     if (wb, wg, swb, swg) == (4, 32, 4, 32):
+        if dps != 8:
+            raise ValueError("expert_down_y: the 4-bit group-32 kernel takes 8 dims a simdgroup")
         run, formats = kernel(*by_rows("q4_expert_down_y", _EXPERT_DOWN_Y, rows), names, ["Y"]), []
     else:
         run = kernel("qa_expert_down_y", _EXPERT_DOWN_Y_Q, names, ["Y"], header=QDOT_HEADER + _AFFINE_EXPERTS)
-        formats = [("WB", wb), ("WG", wg), ("SWB", swb), ("SWG", swg)]
+        formats = [("WB", wb), ("WG", wg), ("SWB", swb), ("SWG", swg), ("DPS", dps)]
     return run(inputs=[act, picks, down.weight, down.scales, down.biases, shared.weight, shared.scales,
                           shared.biases, count(rows)],
                   template=[("NI", width), ("D", dims), ("TOPK", top_k), ("SG", simdgroups), *formats],
-                  grid=(32 * simdgroups, dims // 8, -(-rows * slots // simdgroups)),
+                  grid=(32 * simdgroups, dims // dps, -(-rows * slots // simdgroups)),
                   threadgroup=(32 * simdgroups, 1, 1),
                   output_shapes=[(rows, slots, dims)], output_dtypes=[mx.bfloat16])[0]

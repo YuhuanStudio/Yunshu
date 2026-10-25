@@ -48,6 +48,12 @@ def parse_args(argv=None):
     ap.add_argument("--steps", type=int, default=24)
     ap.add_argument("--n", type=int, default=3000, help="chain: kernels per step")
     ap.add_argument("--dylib", type=Path, default=DYLIB)
+    ap.add_argument(
+        "--lane",
+        action="store_true",
+        help="flashverify: convert the dense projections to LaneLinear first; check the hidden states "
+        "against the stock singleton path and the rows against each other",
+    )
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args(argv)
     if a.kind != "chain" and a.model is None:
@@ -344,6 +350,65 @@ def run_flashverify(a, mx, tracer):
             o = lm(mx.array([ids[i : i + 512]]), cache=cache)
             mx.eval(o.logits)
             mx.eval([c.state for c in cache if hasattr(c, "state")])
+
+        def hidden_of(T):
+            toks = mx.array([ids[a.ctx : a.ctx + T]])
+            hidden, _extra, tx = lm.speculative_verify_hidden(toks, cache)
+            tx.abort()
+            return hidden
+
+        def time_rows(tag):
+            for T in a.rows:
+                toks = mx.array([ids[a.ctx : a.ctx + T]])
+
+                def step(prev, toks=toks):
+                    hidden, _extra, tx = lm.speculative_verify_hidden(toks, cache)
+                    tx.abort()
+                    return hidden
+
+                emit(
+                    a,
+                    measure(
+                        mx,
+                        tracer,
+                        step,
+                        a.steps,
+                        f"{tag} T={T}",
+                        {"T": T, "ctx": a.ctx},
+                    ),
+                )
+
+        if a.lane:
+            time_rows("flashverify stock")
+            stock = {T: hidden_of(T) for T in a.rows}
+            mx.eval(list(stock.values()))
+            from yunshu_engine.kernels import lane_linear
+
+            report = lane_linear.convert(lm, skip=("lm_head",))
+            mx.clear_cache()
+            lane = {T: hidden_of(T) for T in a.rows}
+            mx.eval(list(lane.values()))
+            row = {
+                "label": "lane conversion",
+                "converted": report["converted"],
+                "skipped": report["skipped"][:12],
+            }
+            top = max(a.rows)
+            for T in a.rows:
+                ref = stock[T].astype(mx.float32)
+                diff = mx.max(mx.abs(lane[T].astype(mx.float32) - ref)) / mx.max(
+                    mx.abs(ref)
+                )
+                # rows are batch-invariant: the first T rows of the widest call equal the T-row call, bit for bit
+                prefix = bool(mx.array_equal(lane[T], lane[top][:, :T]).item())
+                stock_prefix = bool(mx.array_equal(stock[T], stock[top][:, :T]).item())
+                row[f"T{T}"] = {
+                    "max_rel_diff_vs_stock": float(diff.item()),
+                    "lane_prefix_equal": prefix,
+                    "stock_prefix_equal": stock_prefix,
+                }
+            emit(a, row)
+
         for T in a.rows:
             toks = mx.array([ids[a.ctx : a.ctx + T]])
 
@@ -359,12 +424,14 @@ def run_flashverify(a, mx, tracer):
                     tracer,
                     step,
                     a.steps,
-                    f"flashverify T={T}",
+                    f"flashverify{' lane' if a.lane else ''} T={T}",
                     {"T": T, "ctx": a.ctx},
                 ),
             )
             if a.replay:
-                replay_study(a, mx, tracer, step, f"flashverify T={T}")
+                replay_study(
+                    a, mx, tracer, step, f"flashverify{' lane' if a.lane else ''} T={T}"
+                )
 
     asyncio.run(go())
 

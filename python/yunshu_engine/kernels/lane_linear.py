@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 PIECE = 512  # prefill dispatch only; other lane callers retain the 128-row guard
 NARROW = 256  # outputs below this run the lane matmul in prefill too
+WIDE_GROUP = 128  # checkpoint groups of 128 are read as two 64-groups with the scale and bias repeated
 # Calls above this many rows (a prefill chunk) run MLX's own quantized matmul on the weight
 # untiled for the call: the lane kernel reads the whole weight once per 128 rows (16 reads per
 # 2048-token chunk), which costs ~25% of a cold prefill. 0 (the default) keeps the lane kernel
@@ -90,11 +91,13 @@ def eligible(module: Any) -> bool:
     if module.get("biases") is None or module.scales.dtype != mx.bfloat16:
         return False
     bits, group = int(module.bits), int(module.group_size)
+    if group == WIDE_GROUP:
+        group = group // 2  # read as two 64-groups sharing one scale and bias
     if not lane_qmm.readable(bits, group) or not lane_qmm.ready():
         return False
     n = int(module.weight.shape[0])
     k = int(module.weight.shape[1]) * 32 // bits
-    return k % 64 == 0 and n % 4 == 0
+    return k % int(module.group_size) == 0 and k % 64 == 0 and n % 4 == 0
 
 
 class LaneLinear(nn.Module):
@@ -122,13 +125,16 @@ class LaneLinear(nn.Module):
 
     @classmethod
     def from_quantized(cls, linear: nn.QuantizedLinear) -> LaneLinear:
+        scales, biases, group = linear.scales, linear.biases, int(linear.group_size)
+        if group == WIDE_GROUP:
+            # the same dequantized values: each 128-group's scale and bias serve both of its 64-groups
+            scales, biases, group = (
+                mx.repeat(scales, 2, axis=1),
+                mx.repeat(biases, 2, axis=1),
+                group // 2,
+            )
         return cls(
-            linear.weight,
-            linear.scales,
-            linear.biases,
-            linear.bits,
-            linear.group_size,
-            linear.get("bias"),
+            linear.weight, scales, biases, linear.bits, group, linear.get("bias")
         )
 
     def quantized_rows(self, ids: mx.array):
@@ -425,7 +431,7 @@ def lane_head(embedding: Any) -> LaneLinear | None:
     )
 
 
-def convert(language_model: Any) -> dict:
+def convert(language_model: Any, *, skip: tuple[str, ...] = ()) -> dict:
     """Replace the eligible quantized projections of ``language_model`` (the
     decoder and ``lm_head``) with ``LaneLinear``; returns counts. Layers the
     kernel cannot read stay as they are (``skipped``) — the round driver runs
@@ -439,6 +445,9 @@ def convert(language_model: Any) -> dict:
         ]
         updates = {}
         for key, child in children:
+            path = f"{name}.{key}" if name else key
+            if any(path.endswith(tail) for tail in skip):
+                continue
             if eligible(child):
                 lane = LaneLinear.from_quantized(child)
                 updates[key] = lane
