@@ -31,11 +31,16 @@ FAMILIES = {4: "main_tiled", 5: "bytes"}
 _KERNELS: dict = {}
 
 
-def _source(count: int, bits: int) -> str:
+def _source(count: int, bits: int, pipe: bool = False) -> str:
     q._resolve_variant()
     from .tensorfold import lane_widen
 
-    body = q._MAIN_TILED if bits == 4 else lane_widen.BYTES
+    if pipe and bits == 4:
+        from .tensorfold import lane_pipe
+
+        body = lane_pipe._PIPE
+    else:
+        body = q._MAIN_TILED if bits == 4 else lane_widen.BYTES
     needle = "  const int n0 = threadgroup_position_in_grid.x * NT;"
     assert body.count(needle) == 1
 
@@ -60,14 +65,15 @@ def _source(count: int, bits: int) -> str:
 
 
 def _kernel(count: int, bits: int):
-    key = (count, bits)
+    pipe = bool(q.PIPE[0] and bits == 4 and q._resolve_variant() == "m5")
+    key = (count, bits, pipe)
     if key not in _KERNELS:
         inputs = ["X", "XS"]
         for i in range(count):
             inputs += [f"W{i}", f"S{i}"]
         _KERNELS[key] = q._Baked(
-            f"yunshu_virtual_columns_{count}_b{bits}",
-            _source(count, bits),
+            f"yunshu_virtual_columns_{count}_b{bits}{'_pipe' if pipe else ''}",
+            _source(count, bits, pipe),
             inputs + ["mdims"],
             [f"Y{i}" for i in range(count)],
         )

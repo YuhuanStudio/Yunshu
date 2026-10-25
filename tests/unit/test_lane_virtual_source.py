@@ -47,3 +47,26 @@ def test_group_partition_ignores_unmatched_members():
     assert q.split_k(6144, 5120) == q.split_k(48, 5120) == 8  # z, b, a share a split
     assert q.split_k(1024, 5120) == 8  # k and v
     assert q.split_k(10240, 5120) != q.split_k(6144, 5120)  # qkv keeps its own launch
+
+
+@pytest.mark.parametrize("count", [2, 3])
+def test_pipelined_body_groups_and_keeps_arithmetic(count):
+    from yunshu_engine.kernels.tensorfold import lane_m5, lane_pipe
+
+    src = lane_virtual._source(count, 4, pipe=True)
+    assert (
+        "(n0 / NT) * KG * TILE_V" in src
+        and "threadgroup_position_in_grid.x * KG" not in src
+    )
+    assert f"gcol >= O{count - 1}" in src
+    # same op descriptor, epilogue fma and slice-add order as the unpipelined M5 body
+    for token in (
+        "matmul2d_descriptor(16 * TMR, NT, GS",
+        "fma(s[f][j], P[t * NF * 8 + i]",
+        "part[((s2 - 1)",
+    ):
+        assert token in lane_pipe._PIPE and token in lane_m5._MAIN
+
+
+def test_pipelined_body_is_off_by_default():
+    assert q.PIPE == [False]

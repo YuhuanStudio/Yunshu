@@ -113,6 +113,9 @@ def main():
     p.add_argument("--sks", nargs="+", default=["default"])
     p.add_argument("--only", nargs="*", default=None)
     p.add_argument(
+        "--variants", nargs="+", default=["default"], choices=["default", "pipe"]
+    )
+    p.add_argument(
         "--shape", action="append", default=[], help="extra name:n:k:bits:group[:count]"
     )
     p.add_argument("--reps", type=int, default=7)
@@ -188,25 +191,6 @@ def main():
                         flush=True,
                     )
                     continue
-                # row invariance (bitwise): this call's rows vs the same rows of the 32-row call
-                y_m = mods[0]._rows(x)
-                y_32 = mods[0]._rows(x32)
-                mx.eval(y_m, y_32)
-                invariant = bool(mx.array_equal(y_m, y_32[:m_]).item())
-                if skv is None:
-                    ref_default[m_] = y_m
-                diff = (
-                    float(
-                        mx.max(
-                            mx.abs(
-                                y_m.astype(mx.float32)
-                                - ref_default[m_].astype(mx.float32)
-                            )
-                        ).item()
-                    )
-                    if m_ in ref_default
-                    else None
-                )
 
                 def graph():
                     outs, prev = [], None
@@ -216,51 +200,91 @@ def main():
                         outs.append(prev)
                     return outs
 
-                for _ in range(2):
-                    mx.eval(graph())
-                samples = []
-                for _ in range(a.reps):
-                    g = graph()
-                    mx.synchronize()
-                    t0 = time.perf_counter()
-                    mx.eval(g)
-                    samples.append((time.perf_counter() - t0) / nc)
-                s = summarize(samples)
-                row = {
-                    "preset": a.preset,
-                    "name": name,
-                    "n": n,
-                    "k": k,
-                    "bits": bits,
-                    "group": group,
-                    "rows": m_,
-                    "sk_req": sk,
-                    "copies": nc,
-                    "bytes": nbytes,
-                    "us_per_call": s["ms_median"] * 1e3,
-                    "GBps": gbps(nbytes, 1, s["ms_median"] / 1e3),
-                    "GBps_best": gbps(nbytes, 1, s["ms_min"] / 1e3),
-                    "invariant_vs32": invariant,
-                    "maxdiff_vs_default": diff,
-                    "per_round_ms_x_count": s["ms_median"] * count,
-                    **geometry(n, k, bits, m_, group, skv),
-                }
-                if first:
-                    row["device"] = str(mx.device_info().get("architecture"))
-                    first = False
-                with a.out.open("a") as f:
-                    f.write(json.dumps(row) + "\n")
-                print(
-                    json.dumps(
-                        {
-                            k_: row[k_]
-                            for k_ in ("name", "rows", "sk", "GBps", "invariant_vs32")
-                        }
-                    ),
-                    flush=True,
-                )
-                if not invariant:
-                    sys.exit(f"ROW INVARIANCE BROKEN {name} rows={m_} sk={sk}")
+                results, samples, graphs = {}, {}, {}
+                for variant in a.variants:
+                    q.PIPE[0] = variant == "pipe"
+                    y_m = mods[0]._rows(x)
+                    y_32 = mods[0]._rows(x32)
+                    mx.eval(y_m, y_32)
+                    results[variant] = (
+                        y_m,
+                        bool(mx.array_equal(y_m, y_32[:m_]).item()),
+                    )
+                    if skv is None and variant == "default":
+                        ref_default[m_] = y_m
+                    for _ in range(2):
+                        mx.eval(graph())
+                    graphs[variant] = None
+                    samples[variant] = []
+                for rep in range(a.reps):
+                    order = a.variants if rep % 2 == 0 else a.variants[::-1]
+                    for variant in order:
+                        q.PIPE[0] = variant == "pipe"
+                        g = graph()
+                        mx.synchronize()
+                        t0 = time.perf_counter()
+                        mx.eval(g)
+                        samples[variant].append((time.perf_counter() - t0) / nc)
+                q.PIPE[0] = False
+                for variant in a.variants:
+                    y_m, invariant = results[variant]
+                    ref = ref_default.get(m_)
+                    s = summarize(samples[variant])
+                    row = {
+                        "preset": a.preset,
+                        "name": name,
+                        "n": n,
+                        "k": k,
+                        "bits": bits,
+                        "group": group,
+                        "rows": m_,
+                        "sk_req": sk,
+                        "variant": variant,
+                        "copies": nc,
+                        "bytes": nbytes,
+                        "us_per_call": s["ms_median"] * 1e3,
+                        "GBps": gbps(nbytes, 1, s["ms_median"] / 1e3),
+                        "GBps_best": gbps(nbytes, 1, s["ms_min"] / 1e3),
+                        "invariant_vs32": invariant,
+                        "maxdiff_vs_default": None
+                        if ref is None
+                        else float(
+                            mx.max(
+                                mx.abs(y_m.astype(mx.float32) - ref.astype(mx.float32))
+                            ).item()
+                        ),
+                        "bit_equal_default": None
+                        if ref is None
+                        else bool(mx.array_equal(y_m, ref).item()),
+                        "per_round_ms_x_count": s["ms_median"] * count,
+                        **geometry(n, k, bits, m_, group, skv),
+                    }
+                    if first:
+                        row["device"] = str(mx.device_info().get("architecture"))
+                        first = False
+                    with a.out.open("a") as f:
+                        f.write(json.dumps(row) + "\n")
+                    print(
+                        json.dumps(
+                            {
+                                k_: row[k_]
+                                for k_ in (
+                                    "name",
+                                    "rows",
+                                    "sk",
+                                    "variant",
+                                    "GBps",
+                                    "invariant_vs32",
+                                    "bit_equal_default",
+                                )
+                            }
+                        ),
+                        flush=True,
+                    )
+                    if not invariant:
+                        sys.exit(
+                            f"ROW INVARIANCE BROKEN {name} rows={m_} sk={sk} variant={variant}"
+                        )
 
 
 if __name__ == "__main__":

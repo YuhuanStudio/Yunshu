@@ -79,15 +79,19 @@ def main():
         bad, grouped_any = [], False
         for rows in ROWS:
             x = (mx.random.normal((1, rows, k)) * 0.5).astype(mx.bfloat16)
-            got = lane_virtual.grouped_linears(members, x)
+            q.PIPE[0] = False
             ref = [m(x) for m in members]
-            if got is None:
-                continue
-            grouped_any = True
-            mx.eval(*got, *ref)
-            for i, (g, r) in enumerate(zip(got, ref, strict=True)):
-                if g.shape != r.shape or not bool(mx.array_equal(g, r).item()):
-                    bad.append((rows, i))
+            for pipe in (False, True):
+                q.PIPE[0] = pipe
+                got = lane_virtual.grouped_linears(members, x)
+                if got is None:
+                    continue
+                grouped_any = True
+                mx.eval(*got, *ref)
+                for i, (g, r) in enumerate(zip(got, ref, strict=True)):
+                    if g.shape != r.shape or not bool(mx.array_equal(g, r).item()):
+                        bad.append((rows, i, "pipe" if pipe else "plain"))
+            q.PIPE[0] = False
         row = {"case": name, "grouped": grouped_any, "mismatch": bad}
         if a.bench and grouped_any:
             x = (mx.random.normal((1, 16, k)) * 0.5).astype(mx.bfloat16)
