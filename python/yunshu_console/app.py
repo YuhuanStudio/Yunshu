@@ -126,7 +126,7 @@ def check_access(request: Request) -> None:
 
 def proxy_url(base: str, path: str, query: bytes = b"") -> httpx.URL:
     """Use the attached origin exactly as the reverse proxy does."""
-    return httpx.URL(base).copy_with(path="/" + path.lstrip("/"), query=query)
+    return httpx.URL(base).copy_with(path="/" + path.lstrip("/"), query=query or None)
 
 
 def proxy_headers(request: Request) -> list[tuple[str, str]]:
