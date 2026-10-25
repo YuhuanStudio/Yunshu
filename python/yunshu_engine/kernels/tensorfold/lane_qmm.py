@@ -146,8 +146,6 @@ _COOP = r"""
       if (m < M) Y[m * N + n] = static_cast<bfloat>(C[i]);
     }
 """
-EXTRA = [None]                                       # dev variant name of the tiled 4-bit M5 body (lane_pipe.variant_source)
-PIPE = [False]                                       # software-pipelined M5 body for tiled 4-bit weights (lane_pipe)
 AB_FLAG = [False]                                    # The engine can switch kernel variants between rounds.
 
 _kernels: dict[str, Any] = {}
@@ -218,15 +216,7 @@ def _kernel(name: str) -> Any:
         else:
             from . import lane_widen
 
-            if name == "pipe":
-                from . import lane_pipe
-
-                source = lane_pipe._PIPE
-            elif name in ("pre1", "pre2"):
-                from . import lane_pipe
-
-                source = lane_pipe.variant_source(name, _MAIN_TILED)
-            elif name == "bytes8":
+            if name == "bytes8":
                 from . import lane_m5
 
                 source = lane_m5.direct_bytes(lane_widen.BYTES)
@@ -385,12 +375,7 @@ def lane_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, tiled: bool = F
         return y.reshape(*lead, N)
     if tiled and N % nt:
         raise ValueError(f"tiled weights need N to be a multiple of {nt}, got {N}")
-    name = "main_tiled" if tiled else "main"
-    if PIPE[0] and tiled and nt == NT and _VARIANT == "m5" and group * 1 == 64:
-        name = "pipe"
-    if EXTRA[0] and tiled and nt == NT and _VARIANT == "m5" and group == 64:
-        name = EXTRA[0]
-    y = _kernel(name)(inputs=[x2, xs, weight, sbt, mdims],
+    y = _kernel("main_tiled" if tiled else "main")(inputs=[x2, xs, weight, sbt, mdims],
                         template=[("TMR", block // 16), ("N", N), ("K", K), ("NT", nt), ("SK", sk), ("GS", group),
                                   ("EDGE", edge)],
                         grid=(-(-N // nt) * 32 * sk, -(-MP // block), 1), threadgroup=(32 * sk, 1, 1),

@@ -116,7 +116,7 @@ def main():
         "--variants",
         nargs="+",
         default=["default"],
-        choices=["default", "pipe", "coop64", "pre1", "pre2"],
+        choices=["default", "coop64"],
     )
     p.add_argument(
         "--shape", action="append", default=[], help="extra name:n:k:bits:group[:count]"
@@ -180,7 +180,6 @@ def main():
             m_: (mx.random.normal((m_, k)) * 0.5).astype(mx.bfloat16) for m_ in a.rows
         }
         mx.eval(list(xs.values()))
-        ref32 = None
         for m_ in sorted(set(a.rows) | {32}):
             if m_ not in xs:
                 xs[m_] = (mx.random.normal((m_, k)) * 0.5).astype(mx.bfloat16)
@@ -218,8 +217,6 @@ def main():
 
                 results, samples, graphs = {}, {}, {}
                 for variant in variants:
-                    q.PIPE[0] = variant == "pipe"
-                    q.EXTRA[0] = variant if variant in ("pre1", "pre2") else None
                     vm = mods64 if variant == "coop64" else mods
                     y_m = vm[0]._rows(x)
                     y_32 = vm[0]._rows(x32)
@@ -237,15 +234,11 @@ def main():
                 for rep in range(a.reps):
                     order = variants if rep % 2 == 0 else variants[::-1]
                     for variant in order:
-                        q.PIPE[0] = variant == "pipe"
-                        q.EXTRA[0] = variant if variant in ("pre1", "pre2") else None
                         g = graph(mods64 if variant == "coop64" else mods)
                         mx.synchronize()
                         t0 = time.perf_counter()
                         mx.eval(g)
                         samples[variant].append((time.perf_counter() - t0) / nc)
-                q.PIPE[0] = False
-                q.EXTRA[0] = None
                 for variant in variants:
                     y_m, invariant = results[variant]
                     ref = ref_default.get(m_)
