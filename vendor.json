@@ -3243,6 +3243,19 @@
         "python/src/convert.cpp"
       ],
       "why": "Pinned external release source for research-only kernelstudy screen; external disk clone, no inference port."
+    },
+    {
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "globs": [
+        "runtime/ane/**",
+        "runtime/ops/AneFfn*",
+        "runtime/engine/AneFfnStartup*",
+        "runtime/metal/kernels/prefill/ane_ffn.metal",
+        "runtime/metal/abi/AneFfn.h"
+      ],
+      "why": "Neural Engine runtime and FFN split (YUNSHU_ANE_FFN_SPLIT=splash)",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb"
     }
   ],
   "packages": [
