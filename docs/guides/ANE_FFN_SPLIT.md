@@ -35,7 +35,7 @@ YUNSHU_ANE_FFN_SPLIT=splash yunshu serve -m <27B checkpoint>
 
 | | |
 |---|---|
-| Accuracy | Lossy. Splash's own check: the ANE's part differs from the GPU's by about 2-3% RMS (measured 2.6-3.0% on random rows, 1.8-2.6% on real prompt rows of layers 0-63; 0.3-1.1% of the whole FFN output). Outputs and logprobs differ slightly from `off`. |
+| Accuracy | Lossy. Splash's own check: the ANE's part differs from the GPU's by about 2-3% RMS (measured 2.6-3.0% on random rows, 1.8-2.6% on real prompt rows of layers 0-63; 0.3-1.1% of the whole FFN output). Outputs and logprobs differ slightly from `off`, and a prefix-cache hit can differ slightly from a cold prefill of the same prompt (steps below the calibrated floor run on the GPU). Greedy output of the first 32 tokens was identical in every measured run. |
 | Memory | about 3.0 GiB resident beyond the model (the GPU's copy of the leading down-projection channels, the ANE surfaces and the GPU slices' scales) |
 | Start | the program compiles once per OS build (about 30 s cold); later starts load it in a few seconds |
 
