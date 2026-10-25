@@ -40,6 +40,17 @@ def _draft(lm):
     return d
 
 
+@pytest.fixture(scope="module", autouse=True)
+def restore_probe_lane_mode():
+    # The probe enables a process-global kernel route for the tiny model.
+    # A later module must see the mode it had before this module ran.
+    from yunshu_engine.kernels import ragged_kv
+
+    previous = ragged_kv._STATE["dense_lane"]
+    yield
+    ragged_kv.set_dense_lane(previous)
+
+
 @pytest.fixture(scope="module")
 def target():
     from scripts.research.phaseb_verify import tiny
