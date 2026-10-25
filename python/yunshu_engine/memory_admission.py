@@ -229,11 +229,17 @@ def plan_load(
 
 
 # ---------------------------------------------------------------- admission gate
+class MemoryAdmissionError(MemoryError):
+    """A request that cannot fit even on an idle server (it would run the process out of
+    Metal memory and take every running request with it): refused with the numbers."""
+
+
 @dataclass(frozen=True)
 class Decision:
     admit: bool
-    reason: str | None = None  # "memory" when held
+    reason: str | None = None  # "memory" when held, "memory_limit" when refused
     detail: str = ""
+    refuse: bool = False
 
 
 class MemoryGate:
@@ -316,6 +322,17 @@ class MemoryGate:
         requests already running (their KV will still grow into the headroom)."""
         host = self.host()
         avail = self.available()
+        hard = self._ceiling_free()
+        if not any_active and hard is not None and estimate > hard:
+            self.last = {"available": avail, "estimate": estimate, "refused": True}
+            return Decision(
+                False,
+                "memory_limit",
+                f"needs {estimate / GIB:.2f} GiB but only {max(0, hard) / GIB:.2f} GiB "
+                "of the Metal working set is free after the weights; shorten the prompt "
+                "or max_tokens",
+                refuse=True,
+            )
         if avail is None or (not any_active):
             self.last = {"available": avail, "estimate": estimate, "idle_admit": True}
             return Decision(True)
@@ -397,11 +414,19 @@ def build_gate(
         return int(mx.get_cache_memory())
 
     def ceiling_free() -> int | None:
-        if not ceiling_gb:
-            return None
+        """Bytes left under the hard limit: the Metal recommended working set (running past
+        it ends in "Insufficient Memory" for every request) and the user's ceiling."""
         import mlx.core as mx
 
-        return int(float(ceiling_gb) * GIB) - int(mx.get_active_memory())
+        limits = []
+        if ceiling_gb:
+            limits.append(int(float(ceiling_gb) * GIB))
+        working_set = mx.device_info().get("max_recommended_working_set_size")
+        if working_set:
+            limits.append(int(working_set))
+        if not limits:
+            return None
+        return min(limits) - int(mx.get_active_memory())
 
     return MemoryGate(
         kv_per_token=kv,

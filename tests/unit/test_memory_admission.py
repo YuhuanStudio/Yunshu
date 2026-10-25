@@ -246,3 +246,62 @@ def test_apc_shed_ram_drops_oldest_exact_entries_first(monkeypatch):
     assert list(m._exact_cache) == ["c"]
     assert m.stats.memory_evictions == 2
     assert m.shed_ram(10 * GIB) == GIB and not m._exact_cache
+
+
+def test_idle_request_that_exceeds_the_metal_working_set_is_refused():
+    gate = ma.MemoryGate(
+        kv_per_token=1,
+        act_per_token=1,
+        reserve_bytes=GIB,
+        read=lambda: host(100.0),
+        ceiling_free=lambda: 10 * GIB,
+        ttl_s=0.0,
+    )
+    d = gate.decide(11 * GIB, 0, any_active=False)
+    assert (
+        d.refuse and not d.admit and d.reason == "memory_limit" and "Metal" in d.detail
+    )
+    assert gate.decide(9 * GIB, 0, any_active=False).admit
+    # with other requests running the same request waits instead of being refused
+    held = gate.decide(11 * GIB, 0, any_active=True)
+    assert not held.admit and not held.refuse and held.reason == "memory"
+
+
+def test_runner_raises_a_memory_error_for_a_refusal():
+    gate = ma.MemoryGate(
+        kv_per_token=1000,
+        act_per_token=0,
+        reserve_bytes=0,
+        read=lambda: host(100.0),
+        ceiling_free=lambda: GIB,
+        ttl_s=0.0,
+    )
+    r = _runner(gate)
+    with pytest.raises(ma.MemoryAdmissionError) as e:
+        r._memory_wait(_job(2_000_000, 0), [])
+    assert isinstance(e.value, MemoryError) and "Metal" in str(e.value)
+
+
+def test_chat_reports_the_refusal_reason():
+    from yunshu_gateway.routers import chat
+
+    exc = ma.MemoryAdmissionError("needs 20.00 GiB")
+    assert "needs 20.00 GiB" in chat._memory_error_message(exc)
+    assert chat._memory_error_code(exc) == "memory_limit"
+    assert chat._memory_error_message(MemoryError()) == "Out of GPU memory"
+    assert chat._memory_error_code(MemoryError()) == "oom"
+
+
+def test_refusal_probe_judges_the_answer():
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location(
+        "memadmit_refuse", "scripts/research/memadmit_refuse.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["memadmit_refuse"] = mod
+    spec.loader.exec_module(mod)
+    ok = {"error": {"code": "memory_limit"}}
+    assert mod.judge(507, ok, True) == []
+    assert len(mod.judge(500, {"error": {"code": "oom"}}, False)) == 3

@@ -28,6 +28,10 @@ for C in $CTX; do
   "$PY" "$WT/scripts/research/conc_probe.py" --url http://127.0.0.1:$PORT --model "$MODEL" \
     --out "$OUT/$TAG.jsonl" --tokens $TOK --ctx-chars $C --only "$ONLY"
 done
+if [ -n "${REFUSE_CTX:-}" ]; then
+  "$PY" "$WT/scripts/research/memadmit_refuse.py" --url http://127.0.0.1:$PORT --model "$MODEL" \
+    --ctx-chars $REFUSE_CTX --out "$OUT/refuse-$TAG.json"
+fi
 echo '{"complete": true}' >> "$OUT/$TAG.jsonl"
 curl -s http://127.0.0.1:$PORT/metrics > "$OUT/metrics-$TAG.txt" || true
 curl -s http://127.0.0.1:$PORT/v1/yunshu/status > "$OUT/status-$TAG.json" || true

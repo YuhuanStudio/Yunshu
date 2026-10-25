@@ -773,6 +773,21 @@ def _vlm_json_output_error(content: str, schema: dict | str | None) -> str | Non
     return error
 
 
+def _memory_error_message(exc: BaseException) -> str:
+    """A refusal from the memory gate says why; any other MemoryError stays generic."""
+    from yunshu_engine.memory_admission import MemoryAdmissionError
+
+    if isinstance(exc, MemoryAdmissionError):
+        return f"Request refused, it cannot fit in memory: {exc}"
+    return "Out of GPU memory"
+
+
+def _memory_error_code(exc: BaseException) -> str:
+    from yunshu_engine.memory_admission import MemoryAdmissionError
+
+    return "memory_limit" if isinstance(exc, MemoryAdmissionError) else "oom"
+
+
 def _validation_extension(error: str) -> dict:
     return {"validation": {"valid": False, "error": error}}
 
@@ -2372,13 +2387,14 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                         getattr(engine, "_tokenizer", None),
                         req.top_logprobs,
                     )
-            except MemoryError:
+            except MemoryError as mem_exc:
                 return JSONResponse(
                     status_code=507,
                     content={
                         "error": {
-                            "message": "Out of GPU memory",
+                            "message": _memory_error_message(mem_exc),
                             "type": "memory_error",
+                            "code": _memory_error_code(mem_exc),
                         }
                     },
                 )
@@ -3481,10 +3497,22 @@ async def _stream_vlm_response(
         ) as events:
             async for event in events:
                 yield event.encode("utf-8")
-    except MemoryError:
+    except MemoryError as mem_exc:
         if _vlm_cancel_evt is not None:
             _vlm_cancel_evt.set()
-        yield b'data: {"error": {"message": "Out of GPU memory", "type": "memory_error", "code": "oom"}}\n\n'
+        yield (
+            "data: "
+            + json.dumps(
+                {
+                    "error": {
+                        "message": _memory_error_message(mem_exc),
+                        "type": "memory_error",
+                        "code": _memory_error_code(mem_exc),
+                    }
+                }
+            )
+            + "\n\n"
+        ).encode()
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     except Exception as _vlm_exc:

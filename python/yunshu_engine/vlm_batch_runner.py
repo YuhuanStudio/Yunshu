@@ -1940,6 +1940,11 @@ class VLMBatchRunner:
         except Exception:
             logger.debug("memory gate failed; admitting", exc_info=True)
             return False
+        if decision.refuse:
+            from .memory_admission import MemoryAdmissionError
+
+            logger.warning("Memory admission: request refused (%s)", decision.detail)
+            raise MemoryAdmissionError(decision.detail)
         if decision.admit:
             if job.mem_held_at:
                 job.stats.extra["memory_wait_ms"] = round(
@@ -2442,7 +2447,12 @@ class VLMBatchRunner:
                 if self._prefix_wait(job):
                     waiting.append(job)
                     continue
-                if self._memory_wait(job, [*active, *admitted]):
+                try:
+                    memory_hold = self._memory_wait(job, [*active, *admitted])
+                except MemoryError as exc:  # refused: cannot fit even alone
+                    self._emit(job, exc)
+                    continue
+                if memory_hold:
                     waiting.append(job)
                     continue
                 try:
