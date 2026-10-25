@@ -64,6 +64,12 @@ def main() -> None:
             lins.append(lane_linear.LaneLinear.from_quantized(q))
             stock.append(q)
         mx.eval([m.parameters() for m in lins])
+        w64 = (
+            [lane_qmm.tile_weight(q.weight, 64, 64, bits=bits) for q in stock]
+            if bits == 4 and n % 64 == 0
+            else []
+        )
+        mx.eval(w64)
         nbytes = lins[0].weight.nbytes + lins[0].sbt.nbytes
         sk0 = lane_qmm.split_k(n, k)
         for m in a.rows:
@@ -84,6 +90,11 @@ def main() -> None:
                 )
 
             arms["lane_default_fresh_x"] = fresh
+            if bits == 4 and n % 64 == 0:
+                for sk in (1, 2, 4, 8):
+                    arms[f"coop64_sk{sk}"] = lambda i, sk=sk: lane_qmm.lane_matmul(
+                        x, w64[i], lins[i].sbt, tiled=True, nt=64, sk=sk
+                    )
             ref = lane_qmm.lane_matmul(
                 x, lins[0].weight, lins[0].sbt, tiled=lins[0].tiled
             )

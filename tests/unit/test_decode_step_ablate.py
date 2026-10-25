@@ -15,4 +15,12 @@ def test_summarize_ms():
 
 
 def test_arms_cover_the_ablations():
-    assert set(mod.ARMS) == {"lane", "no_xsum", "sk4", "sk8"}
+    assert set(mod.ARMS) == {
+        "lane",
+        "no_xsum",
+        "sk4",
+        "sk8",
+        "inv_off",
+        "no_dense_lane",
+        "stock_mm",
+    }

@@ -15,7 +15,9 @@ env ${ENVX:-} HOME=$H YUNSHU_HOME=$H/.yunshu YUNSHU_VLM_APC_DISK=0 YUNSHU_CONSOL
   ${EXTRA[@]+"${EXTRA[@]}"} PYTHONPATH=$WT/python \
   "$PY" -m yunshu_cli serve -m ${MODEL_DIR:-/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp} --port $PORT > "$OUT/server-$TAG.log" 2>&1 &
 SRV=$!
-trap 'kill -9 $SRV 2>/dev/null; rm -rf "${H:?}/.yunshu/cache"' EXIT
+( while kill -0 $SRV 2>/dev/null; do echo "$(date +%s) rss_kb=$(ps -o rss= -p $SRV | tr -d ' ') $(sysctl -n vm.swapusage | tr -s ' ' | tr '\n' ' ') pressure_free=$(memory_pressure 2>/dev/null | grep -o 'free percentage: [0-9]*%' | tr -d '\n')"; sleep 5; done > "$OUT/mem-$TAG.log" 2>&1 ) &
+SAMP=$!
+trap 'kill -9 $SRV $SAMP 2>/dev/null; rm -rf "${H:?}/.yunshu/cache"' EXIT
 for i in $(seq 1 240); do curl -sf http://127.0.0.1:$PORT/health >/dev/null && break; sleep 2; done
 curl -sf http://127.0.0.1:$PORT/health >/dev/null
 MODEL=$(curl -s http://127.0.0.1:$PORT/v1/models | "$PY" -c 'import json,sys;print(json.load(sys.stdin)["data"][0]["id"])')

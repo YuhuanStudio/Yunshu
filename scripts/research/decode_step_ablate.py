@@ -7,6 +7,10 @@ meaningful (they only time the kernels):
 
   lane         the served configuration
   no_xsum      the per-input group-sum kernel replaced by a cached zero buffer
+  stock_mm     every LaneLinear call (<= 128 rows) runs MLX's quantized_matmul on a stock-layout copy
+               of its weight (not row-invariant; times the kernel difference only)
+  inv_off      batch_invariant.set_active(False) (the remaining non-lane projections and verify hooks)
+  no_dense_lane  ragged_kv dense-lane attention off
   sk4 / sk8    every projection's K split forced to 4 / 8 slices (changes bits)
 
     python scripts/research/decode_step_ablate.py MODEL_DIR --rows 1 4 8 --output out.jsonl
@@ -19,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-ARMS = ("lane", "no_xsum", "sk4", "sk8")
+ARMS = ("lane", "no_xsum", "sk4", "sk8", "inv_off", "no_dense_lane", "stock_mm")
 
 
 def summarize(samples: list[float]) -> dict:
@@ -83,13 +87,37 @@ def main() -> None:
 
         return call
 
+    stock_cache: dict = {}
+    real_call = lane_linear.LaneLinear.__call__
+
+    def stock_call(self, x):
+        if int(x.reshape(-1, self.input_dims).shape[0]) > 128:
+            return real_call(self, x)
+        st = stock_cache.get(id(self))
+        if st is None:
+            st = stock_cache[id(self)] = self.stock()
+            mx.eval(st)
+        lead = x.shape[:-1]
+        y = mx.quantized_matmul(
+            x.reshape(-1, self.input_dims).astype(mx.bfloat16),
+            *st,
+            transpose=True,
+            group_size=self.group_size,
+            bits=self.bits,
+        )
+        if "bias" in self:
+            y = y + self["bias"]
+        return y.reshape(*lead, self.output_dims).astype(x.dtype)
+
     def configure(arm: str) -> None:
+        lane_linear.LaneLinear.__call__ = stock_call if arm == "stock_mm" else real_call
         lane_qmm._kernel = fake_kernel if arm == "no_xsum" else real_kernel
         lane_qmm.split_k = (
             (lambda n, k, s=int(arm[2:]): s) if arm in ("sk4", "sk8") else real_split
         )
         lane_qmm._xs_cache.clear()
-        set_active(True)
+        set_active(arm != "inv_off")
+        ragged_kv.set_dense_lane(arm != "no_dense_lane")
 
     def fresh_cache(ctx):
         cache = lm.make_cache()
