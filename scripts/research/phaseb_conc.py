@@ -302,6 +302,7 @@ def main():
     a.out.parent.mkdir(parents=True, exist_ok=True)
     t.OUT = a.out.parent / (a.out.stem + "-servers")
     reference = {}
+    mismatched = []
     with a.out.open("x") as out:
 
         def write(row):
@@ -348,11 +349,12 @@ def main():
                                         ).items()
                                     }
                                 )
-                            for digests in seen:
-                                if reference.setdefault(key, digests) != digests:
-                                    raise RuntimeError(
-                                        "cross-arm token/logprob identity failed"
-                                    )
+                            result["cross_arm"] = all(
+                                reference.setdefault(key, digests) == digests
+                                for digests in seen
+                            )
+                            if not result["cross_arm"]:
+                                mismatched.append((arm, key))
                         result.update(arm=arm, rep=a.rep, ctx_chars=a.ctx_chars)
                         write(result)
                 if arm != "off":
@@ -367,7 +369,10 @@ def main():
                 server.kill()
                 shutil.rmtree(home, ignore_errors=True)
                 shutil.rmtree(server.home, ignore_errors=True)
-        write(dict(complete=True, success=True, mode=a.mode, device="m5"))
+        write(dict(complete=True, success=not mismatched, mode=a.mode, device="m5"))
+        if mismatched:
+            # Every cell is on record above; fail closed after the evidence.
+            raise SystemExit(f"cross-arm token/logprob identity failed: {mismatched}")
 
 
 if __name__ == "__main__":
