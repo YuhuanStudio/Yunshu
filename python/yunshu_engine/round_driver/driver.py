@@ -49,6 +49,11 @@ import numpy as np
 
 from .. import keyed_sampling
 from ..keyed_sampling import top_k_filter, top_p_filter
+from ..serving.work_scheduler import (
+    DECODE_EARLY_TOKENS,
+    DECODE_FIRST_BURST_S,
+    decode_quantum,
+)
 from .allocate import CostCurve, allocate, chain
 from .batch import MAX_WINDOW, DecodeBatch
 from .forward import Segment, forward, logits
@@ -215,6 +220,7 @@ class RoundDriver:
         self.drafted = 0
         self.accepted = 0
         self._prefilled_last = False
+        self._decode_credit = 0.0
         self.chain_ms = 0.0  # measured drafting cost per chain depth
         self._chain_t = 0.0  # when the last chain was submitted
         self._chain_deep = 0  # its depth while it may still be running
@@ -583,6 +589,8 @@ class RoundDriver:
             out = self._decode_step()
             self._t_end = time.perf_counter()
             self.step_s += self._t_end - t0
+            if self.dflash is not None:
+                self._decode_credit = max(0.0, self._decode_credit - (self._t_end - t0))
             self.decode_steps += 1
             if not self.rows:
                 logger.info(
@@ -602,6 +610,7 @@ class RoundDriver:
         self._t_end = 0.0
         self._prefilled_last = True
         decoding = bool(self.batch.rows)
+        prefill_started = time.perf_counter()
         out = self._prefill_step([r for r in self.rows if r.pending is None], decoding)
         # A checkpoint ends a row's span for the step (the snapshot is taken from
         # the cache after it), so a prompt's last atoms arrive one step apart and
@@ -619,6 +628,8 @@ class RoundDriver:
             if not near:
                 break
             out += self._prefill_step(near, decoding)
+        if self.dflash is not None:
+            self._credit_prefill(time.perf_counter() - prefill_started, decoding)
         return out
 
     def _will_decode(self) -> bool:
@@ -626,7 +637,27 @@ class RoundDriver:
         prompt waits or the last step was a prefill."""
         if not self.batch.rows:
             return False
-        return self._prefilled_last or all(r.pending is not None for r in self.rows)
+        return (
+            self._prefilled_last
+            or (self.dflash is not None and self._decode_credit > 0)
+            or all(r.pending is not None for r in self.rows)
+        )
+
+    def _credit_prefill(self, elapsed: float, was_decoding: bool) -> None:
+        """The shared scheduler policy, measured in GPU service time, not rounds.
+
+        Credit is replaced after each prefill episode, never accumulated. A
+        newly joined first row gets the existing bounded first-token burst.
+        """
+        live = self.batch.rows
+        if not live:
+            self._decode_credit = 0.0
+            return
+        early = any(r.generated < DECODE_EARLY_TOKENS for r in live)
+        credit = decode_quantum(elapsed, early)
+        self._decode_credit = (
+            credit if was_decoding else min(credit, DECODE_FIRST_BURST_S)
+        )
 
     def _prefill_step(self, waiting: list[_Row], decoding: bool) -> list[Event]:
         items: list[_Item] = []

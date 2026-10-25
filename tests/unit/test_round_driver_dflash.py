@@ -271,3 +271,33 @@ def test_text_driver_clears_another_groups_mrope_before_prefill(target):
     driver.step()
     assert target._rope_deltas is None
     driver.remove(None)
+
+
+def test_prefill_service_credit_reuses_shared_policy_and_bounds_dispatch(monkeypatch):
+    from yunshu_engine.round_driver import driver as rd
+    from yunshu_engine.serving.work_scheduler import DECODE_FIRST_BURST_S
+
+    driver = object.__new__(rd.RoundDriver)
+    driver.dflash = object()
+    driver._prefilled_last = False
+    driver.batch = SimpleNamespace(rows=[SimpleNamespace(generated=100)])
+    driver.rows = [SimpleNamespace(pending=1), SimpleNamespace(pending=None)]
+    calls = []
+    monkeypatch.setattr(
+        rd,
+        "decode_quantum",
+        lambda elapsed, early: calls.append((elapsed, early)) or 2.0,
+    )
+    driver._credit_prefill(4.0, True)
+    assert calls == [(4.0, False)]
+    assert driver._will_decode()
+    driver._decode_credit = 0
+    assert not driver._will_decode()  # waiting prompt gets the next atom
+    driver.batch.rows[0].generated = 1
+    driver._credit_prefill(4.0, False)
+    assert calls[-1] == (4.0, True)
+    assert driver._decode_credit == DECODE_FIRST_BURST_S
+    driver.batch.rows.clear()
+    driver._credit_prefill(4.0, True)
+    assert driver._decode_credit == 0
+    assert not driver._will_decode()
