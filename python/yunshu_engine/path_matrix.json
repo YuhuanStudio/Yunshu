@@ -2530,6 +2530,7 @@
   "YUNSHU_ROUND_DRIVER": "spec_under_concurrency",
   "YUNSHU_ROUND_PREFILL_CHUNK": "spec_under_concurrency",
   "YUNSHU_MTP_ROW_EXACT": "batch_invariant_kernels",
+  "YUNSHU_QWEN4_LANE": "batch_invariant_kernels",
   "YUNSHU_GPU_SAMPLER": "gpu_sampler",
   "YUNSHU_JUMP_FORWARD": "jump_forward",
   "YUNSHU_JSON_SCHEMA_ENGINE": "constrained_bitmask_engine",

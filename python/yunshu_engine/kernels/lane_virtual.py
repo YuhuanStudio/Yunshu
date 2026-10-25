@@ -27,7 +27,7 @@ from .tensorfold import lane_qmm as q
 logger = logging.getLogger(__name__)
 MAX_MEMBERS = 4
 STATS: dict = {"launches": 0, "members": 0}
-FAMILIES = {4: "main_tiled", 5: "bytes"}
+FAMILIES = {4: "main_tiled", 5: "bytes", 6: "bytes", 8: "bytes"}
 _KERNELS: dict = {}
 
 
@@ -100,13 +100,23 @@ def _padded_tiles(member: LaneLinear):
     return copy, pad
 
 
-def _eligible(m) -> bool:
+def _eligible(m, rows: int = 1) -> bool:
     return (
         m.bits in FAMILIES
         and (m.bits == 4 or m.group_size == 64)
         and "bias" not in m
         and getattr(m, "sk", None) is None
         and m.output_dims % 4 == 0
+        # a certified direct-byte schedule is another kernel: the member keeps its own launch
+        and q._lane_schedule(
+            m.bits,
+            m.output_dims,
+            m.input_dims,
+            rows,
+            m.group_size,
+            q.NT if m.tiled else 0,
+        )
+        == "default"
     )
 
 
@@ -196,7 +206,7 @@ def grouped_linears(members, x):
         return None
     parts: dict = {}
     for i, m in enumerate(members):
-        if _eligible(m):
+        if _eligible(m, rows):
             key = (
                 m.bits,
                 m.group_size,
@@ -238,3 +248,28 @@ def grouped_linears(members, x):
         y.reshape(*x.shape[:-1], m.output_dims).astype(dtype)
         for y, m in zip(results, members, strict=True)
     )
+
+
+def install_qwen4() -> bool:
+    """Qwen4-Exp verify forward: one launch for the projections of a mixer that share a split and weight format.
+
+    Its GDN layers read ``(in_proj_qkv, in_proj_z, in_proj_b, in_proj_a)`` and its attention layers
+    ``(q_proj, k_proj, v_proj)`` of one normed input; with lane projections each was a launch plus a group-sum
+    launch. Output is bit-identical to the separate calls (``grouped_linears``)."""
+    try:
+        from mlx_vlm.models.qwen4_exp import language as ql
+    except ImportError:  # pragma: no cover - mlx-vlm without qwen4_exp
+        return False
+    cls = ql.Qwen4ExpBatchInvariantForward
+    if getattr(cls, "_yunshu_grouped_linears", False):
+        return True
+    original = cls._linears
+
+    def _linears(self, linears, x):
+        out = grouped_linears(linears, x)
+        return out if out is not None else original(self, linears, x)
+
+    cls._linears = _linears
+    cls._yunshu_grouped_linears = True
+    logger.info("lane columns: Qwen4 mixers' projections grouped per launch")
+    return True

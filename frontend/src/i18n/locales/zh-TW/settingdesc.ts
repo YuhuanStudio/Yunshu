@@ -211,6 +211,8 @@ const settingdesc = {
     "稠密 Qwen3.5 系列 VLM：以Yunshu的回合驅動器處理文字請求（對所有解碼列做打包前向傳遞，與批次預填步驟交替；每列皆有 MTP 草稿；依位置鍵取樣；見 `docs/guides/ROUND_DRIVER.md`）。關閉時使用上游 BatchGenerator 加單一請求推測解碼通道。圖片提示詞、int8 KV 與 MoE 無論如何都走上游路徑。",
   YUNSHU_MTP_ROW_EXACT:
     "Qwen3.5 系列執行器：使用 oMLX 逐列精確驗證（驗證列與單列解碼位元相同），取代批次不變核心。",
+  YUNSHU_QWEN4_LANE:
+    "Qwen3.8-Flash-Next（qwen4_exp）：解碼、推測驗證與草稿一律以列不變的 lane 矩陣乘處理稠密量化投影，取代上游逐列的單列 qmv。多一列驗證不再倍增稠密權重讀取量；推測輸出仍與一般解碼相同。輸出與預設算術相差最後一位。上游融合 head 核心讀不了的 head 格式（如 6-bit）會強制啟用。寬於 32 列的預填區塊仍用 MLX 的量化矩陣乘。",
   YUNSHU_ENGINE_LOOP:
     "文字模型：使用 EngineCore 連續批次迴圈，取代單一請求快速路徑。",
   YUNSHU_OVERLAP:

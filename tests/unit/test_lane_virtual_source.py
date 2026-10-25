@@ -38,6 +38,7 @@ def test_group_partition_ignores_unmatched_members():
         def __init__(self, n, bits):
             self.output_dims, self.bits, self.group_size = n, bits, 64
             self.input_dims = 5120
+            self.tiled = n % 32 == 0
 
         def __contains__(self, key):
             return False
