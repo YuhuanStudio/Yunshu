@@ -199,7 +199,16 @@ def replay_study(a, mx, tracer, make_step, label):
     emit(a, pr)
 
 
+def arm_watchdog(seconds=420):
+    """A hang fails fast: dump every thread's stack and exit nonzero when no row was emitted for ``seconds``
+    (the 2026-10-25 flash runs hung silently in the capture/replay of a second row, ~1 h of GPU lost)."""
+    import faulthandler
+
+    faulthandler.dump_traceback_later(seconds, exit=True)
+
+
 def emit(a, row):
+    arm_watchdog()
     with a.out.open("a") as f:
         f.write(json.dumps(row) + "\n")
     print(json.dumps(row), flush=True)
