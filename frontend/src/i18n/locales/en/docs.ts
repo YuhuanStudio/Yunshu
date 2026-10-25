@@ -2,6 +2,13 @@ import type zh from "../zh-TW/docs.ts";
 import type { Shape } from "../../types.ts";
 
 const docs: Shape<typeof zh> = {
+  "reference.openaiSdk": "OpenAI SDK",
+  "reference.anthropicSdk": "Anthropic SDK",
+  "reference.proxy": "Console same-origin proxy",
+  "actions.chatgpt": "ChatGPT",
+  "actions.claude": "Claude",
+  "reference.link": "OpenAPI ↗",
+  sse: "Server-Sent Events",
   "nav.label": "Documentation",
   "nav.jump": "Jump to a docs page",
   "toc.title": "On this page",
@@ -18,6 +25,16 @@ const docs: Shape<typeof zh> = {
   "link.settings": "What every setting does",
   "link.keys": "Authentication and keys",
   "link.lead": "Docs",
+  "actions.copy": "Copy Markdown",
+  "actions.copied": "Copied",
+  "actions.failed": "Could not copy this page",
+  breadcrumb: "Breadcrumb",
+  updated: "Last updated",
+  reference: "Generated API reference",
+  "reference.description":
+    "Interactive reference generated from the engine OpenAPI schema. Requests use this console’s same-origin proxy.",
+  "reference.guides": "Endpoint guides",
+  "reference.operation": "API operation",
 };
 
 export default docs;

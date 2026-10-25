@@ -1,0 +1,29 @@
+@import "tailwindcss/utilities.css";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+@import "fumadocs-openapi/css/preset.css";
+@reference "../styles.css";
+@source "../../node_modules/fumadocs-ui/dist/**/*.js";
+@source "../../node_modules/fumadocs-openapi/dist/**/*.js";
+
+/* Fumadocs uses the console's YunUI palette in both themes. */
+:root, .dark {
+  --color-fd-background: var(--bg-window);
+  --color-fd-foreground: var(--text-primary);
+  --color-fd-card: var(--bg-card);
+  --color-fd-card-foreground: var(--text-primary);
+  --color-fd-popover: var(--bg-elevated);
+  --color-fd-popover-foreground: var(--text-primary);
+  --color-fd-muted: var(--bg-elevated);
+  --color-fd-muted-foreground: var(--text-secondary);
+  --color-fd-primary: var(--text-primary);
+  --color-fd-primary-foreground: var(--bg-window);
+  --color-fd-secondary: var(--bg-elevated);
+  --color-fd-secondary-foreground: var(--text-primary);
+  --color-fd-accent: var(--bg-elevated);
+  --color-fd-accent-foreground: var(--text-primary);
+  --color-fd-border: var(--border-default);
+}
+[data-testid="docs-article"] { overflow-wrap: anywhere; }
+[data-testid="docs-article"] pre { overflow-wrap: normal; }
+[data-testid="docs-article"] .prose { max-width: none; }

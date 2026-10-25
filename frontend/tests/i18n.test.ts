@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   detectLocale,
   getLocale,
+  has,
+  loadSettingsMessages,
   matchLocale,
   setLocale,
   t,
@@ -69,4 +71,17 @@ test("YunUI keys exist in every locale", async () => {
     );
     assert.match(tr("yunui.content.codeBlock.lineCount", { count: 2 }), /2/);
   }
+});
+
+test("Settings gets localized generated descriptions before rendering and after a locale switch", async () => {
+  await setLocale("en");
+  await loadSettingsMessages();
+  assert.equal(has("settingdesc.YUNSHU_HOST"), true);
+  const en = t("settingdesc.YUNSHU_HOST");
+  assert.notEqual(en, "⟦settingdesc.YUNSHU_HOST⟧");
+  await setLocale("zh-CN");
+  assert.equal(has("settingdesc.YUNSHU_HOST"), true);
+  assert.notEqual(t("settingdesc.YUNSHU_HOST"), en);
+  await setLocale("zh-TW");
+  assert.equal(has("settingdesc.YUNSHU_HOST"), true);
 });

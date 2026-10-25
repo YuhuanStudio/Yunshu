@@ -1,6 +1,6 @@
 ---
 title: Accuracy alignment
-description: How Yunshu shows that its serving path computes what stock MLX and mlx-vlm compute on the same checkpoint, in three tiers: logit divergence, greedy divergence and paired task evaluation.
+description: "How Yunshu shows that its serving path computes what stock MLX and mlx-vlm compute on the same checkpoint, in three tiers: logit divergence, greedy divergence and paired task evaluation."
 ---
 
 A 300-question benchmark run carries roughly 13 questions of 95% noise, so it cannot see small numeric drift. Yunshu therefore checks accuracy in three tiers, cheapest and most sensitive first. This page is for maintainers who change kernels, cache layouts or schedulers. For the day-to-day candidate check see [Verification](/docs/developers/verification); for how the tiers gate a release see [Release gate](/docs/developers/release-gate).

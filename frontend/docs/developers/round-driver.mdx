@@ -1,6 +1,6 @@
 ---
 title: Round driver
-description: The experimental packed-row engine for dense Qwen3.5-family models: one forward per step over every decoding row, row-invariant arithmetic, and cost-aware MTP drafting for several rows at once.
+description: "The experimental packed-row engine for dense Qwen3.5-family models: one forward per step over every decoding row, row-invariant arithmetic, and cost-aware MTP drafting for several rows at once."
 ---
 
 The round driver (`python/yunshu_engine/round_driver/`) is an **experimental** serving path behind `YUNSHU_ROUND_DRIVER` (default off, registered as experimental in `python/yunshu_engine/settings.py`). It exists to let concurrent requests on a dense Qwen3.5-family model draft with MTP too. The default VLM batch runner drafts only while a request is alone. This page is a maintainer reference; for the default serving paths see [Architecture](/docs/developers/architecture).

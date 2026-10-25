@@ -3,6 +3,8 @@
 // body for search. Used by the Vite plugin (virtual modules), the link checker and the tests.
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
+import { execFileSync } from "node:child_process";
+import { parse as parseYaml } from "yaml";
 import GithubSlugger from "github-slugger";
 
 export const DOCS_DIR = new URL("../docs/", import.meta.url).pathname;
@@ -34,12 +36,7 @@ export function listFiles(dir = DOCS_DIR) {
 
 export function parseFrontmatter(text) {
   const m = /^---\n([\s\S]*?)\n---\n?/.exec(text);
-  const meta = {};
-  if (m)
-    for (const line of m[1].split("\n")) {
-      const kv = /^(\w+):\s*(.*)$/.exec(line);
-      if (kv) meta[kv[1]] = kv[2].replace(/^["']|["']$/g, "");
-    }
+  const meta = m ? (parseYaml(m[1]) ?? {}) : {};
   return { meta, body: m ? text.slice(m[0].length) : text };
 }
 
@@ -79,9 +76,27 @@ export function textOf(body) {
     .trim();
 }
 
+const dates = new Map();
+export function lastUpdated(file) {
+  if (!dates.has(file)) {
+    try {
+      dates.set(
+        file,
+        execFileSync("git", ["log", "-1", "--format=%cI", "--", file], {
+          cwd: DOCS_DIR,
+          encoding: "utf8",
+        }).trim(),
+      );
+    } catch {
+      dates.set(file, "");
+    }
+  }
+  return dates.get(file);
+}
 export function readPage(file) {
   const { meta, body } = parseFrontmatter(readFileSync(file, "utf8"));
   return {
+    lastUpdated: lastUpdated(file),
     title: meta.title ?? "",
     description: meta.description ?? "",
     headings: headingsOf(body),
@@ -115,14 +130,18 @@ export function buildToc(locale, dir = DOCS_DIR) {
   const pages = {};
   for (const slug of new Set(files.map((f) => f.slug))) {
     const f = pickFile(files, slug, locale);
-    if (f) pages[slug] = { ...readPage(f.file), text: undefined, locale: f.locale };
+    if (f)
+      pages[slug] = { ...readPage(f.file), text: undefined, locale: f.locale };
   }
   const node = (folder) => {
     const m = readMeta(join(dir, folder), locale);
     const children = [];
     for (const name of m.pages ?? []) {
       const slug = folder ? `${folder}/${name}` : name;
-      if (existsSync(join(dir, slug)) && statSync(join(dir, slug)).isDirectory())
+      if (
+        existsSync(join(dir, slug)) &&
+        statSync(join(dir, slug)).isDirectory()
+      )
         children.push(node(slug));
       else if (pages[slug]) children.push({ slug, title: pages[slug].title });
     }
@@ -139,7 +158,13 @@ export function buildSearch(locale, dir = DOCS_DIR) {
     const f = pickFile(files, slug, locale);
     if (!f) continue;
     const p = readPage(f.file);
-    out.push({ slug, title: p.title, description: p.description, headings: p.headings, text: p.text });
+    out.push({
+      slug,
+      title: p.title,
+      description: p.description,
+      headings: p.headings,
+      text: p.text,
+    });
   }
   return out;
 }

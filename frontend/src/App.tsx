@@ -54,7 +54,7 @@ import { LivePill } from "./LivePill";
 import { tabTitle } from "./engineView";
 import type { Connection } from "./api";
 import { FooterStatus } from "./FooterStatus";
-import { searchDocs } from "./docs/search.ts";
+
 import { docHref } from "./docs/links.ts";
 import { useDocTitle } from "./docs/title-store.ts";
 import type { SearchHit } from "./docs/types.ts";
@@ -62,6 +62,7 @@ import { PageBoundary } from "./PageBoundary";
 import { LanguageSwitch } from "./LanguageSwitch";
 import {
   LOCALES,
+  loadSettingsMessages,
   LOCALE_NAMES,
   has,
   setLocale,
@@ -103,9 +104,13 @@ const Models = lazyPage(() =>
 const Requests = lazyPage(() =>
   import("./Requests").then((m) => ({ default: m.Requests })),
 );
-const Settings = lazyPage(() =>
-  import("./Settings").then((m) => ({ default: m.Settings })),
-);
+const Settings = lazyPage(async () => {
+  const [module] = await Promise.all([
+    import("./Settings"),
+    loadSettingsMessages(),
+  ]);
+  return { default: module.Settings };
+});
 const ApiView = lazyPage(() =>
   import("./ApiAccess").then((m) => ({ default: m.ApiView })),
 );
@@ -454,9 +459,15 @@ export default function App() {
     }
     let live = true;
     import("./docs/data.ts")
-      .then((m) => m.loadSearch(locale))
+      .then(async (m) => {
+        const [index, { queryDocs }] = await Promise.all([
+          m.loadSearch(locale),
+          import("./docs/orama"),
+        ]);
+        return queryDocs(index, q);
+      })
       .then(
-        (entries) => live && setDocHits(searchDocs(entries, q)),
+        (hits) => live && setDocHits(hits),
         () => live && setDocHits([]),
       );
     return () => {

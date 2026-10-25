@@ -1,9 +1,10 @@
+import { create, insertMultiple, save } from "@orama/orama";
+import { tokenizeDocs } from "./src/docs/orama-tokenizer";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import mdx from "@mdx-js/rollup";
-import remarkGfm from "remark-gfm";
-import remarkFrontmatter from "remark-frontmatter";
-import rehypeSlug from "rehype-slug";
+import { fumadocsMdx } from "fumadocs-mdx/vite";
+import { remarkMermaid } from "./scripts/remark-mermaid.mjs";
+import { docsAssets } from "./scripts/docs-assets.mjs";
 import { buildSearch, buildToc } from "./scripts/docs-index.mjs";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -18,10 +19,34 @@ const docsIndex = () => ({
   resolveId(id: string) {
     return VIRTUAL.test(id) ? "\0" + id : undefined;
   },
-  load(id: string) {
+  async load(id: string) {
     const m = VIRTUAL.exec(id.replace("\0", ""));
     if (!m) return undefined;
-    const data = m[1] === "toc" ? buildToc(m[2]) : buildSearch(m[2]);
+    let data: unknown;
+    if (m[1] === "toc") data = buildToc(m[2]);
+    else {
+      const entries = buildSearch(m[2]);
+      const db = create({
+        schema: {
+          slug: "string",
+          title: "string",
+          description: "string",
+          text: "string",
+          headings: "string",
+        },
+        components: {
+          tokenizer: { language: "english", tokenize: tokenizeDocs },
+        },
+      });
+      await insertMultiple(
+        db,
+        entries.map((e) => ({
+          ...e,
+          headings: e.headings.map((h) => h.text).join(" "),
+        })),
+      );
+      data = { data: save(db), entries };
+    }
     return `export default ${JSON.stringify(data)};`;
   },
   handleHotUpdate({
@@ -60,13 +85,11 @@ const host = consoleHost();
 export default defineConfig({
   plugins: [
     docsIndex(),
-    {
-      enforce: "pre",
-      ...mdx({
-        remarkPlugins: [remarkGfm, remarkFrontmatter],
-        rehypePlugins: [rehypeSlug],
-      }),
-    },
+    docsAssets(),
+    ...fumadocsMdx({
+      index: false,
+      globalOptions: { mdxOptions: { remarkPlugins: [remarkMermaid] } },
+    }),
     react({ include: /\.(mdx|tsx|ts|jsx|js)$/ }),
   ],
   base: "/console/",
@@ -77,13 +100,27 @@ export default defineConfig({
     // YunUI's ModelIcon treats any iconUrl that is not http(s) or root-relative as a file name under its CDN base, so
     // an icon small enough to be inlined as a data: URI became a broken jsDelivr request. Model icons stay files.
     assetsInlineLimit: (file) => (file.includes("/yunui/icons/") ? false : undefined),
+    // Let native module imports fetch JS dependencies on demand. Keep CSS
+    // preloads, without embedding every lazy docs/vendor JS URL in the shell.
+    modulePreload: {
+      polyfill: false,
+      resolveDependencies: (_filename, deps) =>
+        deps.filter((d) => d.endsWith(".css")),
+    },
     rolldownOptions: {
       output: {
+        chunkFileNames: (chunk) =>
+          chunk.name.startsWith("vendor")
+            ? "assets/v-[hash].js"
+            : "assets/[name]-[hash].js",
         codeSplitting: {
-          // Vendor code is grouped by which routes use it, so a library that
-          // only some lazy pages need stays out of the entry chunk.
           includeDependenciesRecursively: false,
           groups: [
+            {
+              name: "react-client",
+              test: /node_modules\/(?:react\/(?:index\.js|jsx-runtime\.js|cjs\/react(?:-jsx-runtime)?\.production\.js)|react-dom\/(?:client\.js|index\.js|cjs\/react-dom(?:-client)?\.production\.js)|scheduler\/(?:index\.js|cjs\/scheduler\.production\.js))$/,
+              priority: 30,
+            },
             { name: "vendor", test: /node_modules/, entriesAware: true },
           ],
         },
