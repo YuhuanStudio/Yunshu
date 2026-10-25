@@ -141,14 +141,15 @@ class DFlashBatch:
         d["s"] += seconds
         if d["rounds"] % 100 == 0:
             logger.info(
-                "Round driver DFlash rounds: %d, rows/round %.2f, %.1f ms/round, "
+                "Round driver DFlash window of 100 rounds (total %d): rows/round %.2f, %.1f ms/round, "
                 "nodes/row %.2f, tokens/row-round %.2f",
-                d["rounds"],
+                self.turn,
                 d["rows"] / d["rounds"],
                 1000 * d["s"] / d["rounds"],
                 d["nodes"] / max(1, d["rows"]),
                 d["used"] / max(1, d["rows"]),
             )
+            self._diag = dict(rounds=0, rows=0, s=0.0, nodes=0, used=0)
 
     def _step_rows_inner(self, driver, rows) -> list[Event]:
         from .driver import _Item
