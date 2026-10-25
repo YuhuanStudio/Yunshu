@@ -65,7 +65,7 @@ def load_native_head(config: dict, weights: dict | None) -> Any:
 STOCK_ROWS = 32  # lane projections serve calls up to this many rows (decode, MTP / draft verify); prefill chunks stay stock
 
 
-def lane_projections(lm: Any, *, head: bool) -> dict:
+def lane_projections(lm: Any, *, head: bool, group: bool = True) -> dict:
     """Run the dense quantized projections as the row-invariant lane matmul (``kernels.lane_linear``).
 
     Upstream's verify forward computes every dense projection of T rows as T singleton ``gather_qmm`` calls so
@@ -82,9 +82,10 @@ def lane_projections(lm: Any, *, head: bool) -> dict:
         return {}
     report = lane_linear.convert(lm, skip=() if head else ("lm_head",))
     lane_linear.set_stock_rows(STOCK_ROWS)
-    from .kernels import lane_virtual
+    if group:
+        from .kernels import lane_virtual
 
-    lane_virtual.install_qwen4()
+        lane_virtual.install_qwen4()
     return {
         "lane_linear": report["converted"],
         "lane_skipped": len(report["skipped"]),

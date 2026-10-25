@@ -382,16 +382,26 @@ def run_flashverify(a, mx, tracer):
             time_rows("flashverify stock")
             stock = {T: hidden_of(T) for T in a.rows}
             mx.eval(list(stock.values()))
-            from yunshu_engine.kernels import lane_linear
+            from yunshu_engine import qwen4_mtp
+            from yunshu_engine.kernels import lane_virtual
 
-            report = lane_linear.convert(lm, skip=("lm_head",))
+            report = qwen4_mtp.lane_projections(lm, head=False, group=False)
             mx.clear_cache()
             lane = {T: hidden_of(T) for T in a.rows}
             mx.eval(list(lane.values()))
+            time_rows("flashverify lane (ungrouped)")
+            lane_virtual.install_qwen4()
+            grouped = {T: hidden_of(T) for T in a.rows}
+            mx.eval(list(grouped.values()))
+            time_rows("flashverify lane grouped")
             row = {
                 "label": "lane conversion",
-                "converted": report["converted"],
-                "skipped": report["skipped"][:12],
+                "converted": report["lane_linear"],
+                "skipped": report["lane_skipped"],
+                "grouped_equals_ungrouped": all(
+                    bool(mx.array_equal(lane[T], grouped[T]).item()) for T in a.rows
+                ),
+                "grouped_launches": lane_virtual.STATS,
             }
             top = max(a.rows)
             for T in a.rows:
@@ -409,7 +419,7 @@ def run_flashverify(a, mx, tracer):
                 }
             emit(a, row)
 
-        for T in a.rows:
+        for T in a.rows if (a.replay or not a.lane) else ():
             toks = mx.array([ids[a.ctx : a.ctx + T]])
 
             def step(prev, toks=toks):
