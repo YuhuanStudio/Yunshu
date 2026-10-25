@@ -208,3 +208,19 @@ no MLX implementation source is copied. The coupling is recorded in vendor.json.
 
 `ane/native/ProgramInstrumentation.hpp` also adapts Splash's Apache-2.0
 test-only fault declarations. Production builds do not expose the arming API.
+
+## Splash ANE FFN split (1.4.0)
+
+`python/yunshu_engine/ane/{ffn_program.py,ffn_kernels.py,ffn_split.py,ffn_calibration.py,ffn_startup.py}`
+are a Python/MLX port of the dense-FFN Neural Engine split of
+[incoai/splash](https://github.com/incoai/splash), commit
+`1482f6bbc2abf12375332725302019594150b6cb` (`runtime/ops/AneFfn.{hpp,cpp}`,
+`AneFfnCalibration.*`, `AneFfnMeasurement.cpp`, `runtime/engine/AneFfnStartup.cpp`,
+`runtime/metal/kernels/prefill/ane_ffn.metal`, `runtime/metal/abi/AneFfn.h`), under Apache
+License 2.0: the W8A8 MIL program with 2560-channel segments and a block-Hadamard
+intermediate rotation, the GPU rotate/pack/weight-staging/join kernels, the double-buffered
+one-layer-ahead weight staging, the timing model, share choice, least-chunk rule and breaker.
+Modified for Yunshu: MLX custom kernels over MLX affine and Yunshu tiled quantized weights, an
+MLX-stream shared-event bridge, calibration kept in a file. Enabled only by
+`YUNSHU_ANE_FFN_SPLIT=splash` (off by default; lossy). The Apache-2.0 license is reproduced in
+this repository's LICENSE.

@@ -1,4 +1,4 @@
-# Derived from Splash 1.4.0 runtime/ops/AneFfnCalibration.{hpp,cpp} (Apache-2.0).
+# Upstream (Splash 1.4.0, Apache-2.0): runtime/ops/AneFfnCalibration.{hpp,cpp} (Apache-2.0).
 # Licensed under the Apache License, Version 2.0; see THIRD_PARTY_NOTICES.md.
 # Modified for Yunshu: Python port, same model, constants and decisions.
 """How the ANE FFN split runs on this device, from measured timings (no MLX, no ANE).

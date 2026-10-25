@@ -1,4 +1,4 @@
-# Derived from Splash 1.4.0 runtime/ops/AneFfn.{hpp,cpp} (Apache-2.0).
+# Upstream (Splash 1.4.0, Apache-2.0): runtime/ops/AneFfn.{hpp,cpp} (Apache-2.0).
 # Licensed under the Apache License, Version 2.0; see THIRD_PARTY_NOTICES.md.
 # Modified for Yunshu: Python/MLX orchestration over the native ANE bridge.
 """Splash-style prefill FFN split: the GPU runs the leading intermediate channels, the ANE the rest.

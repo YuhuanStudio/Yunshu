@@ -1,4 +1,4 @@
-# Derived from Splash 1.4.0 runtime/ops/AneFfn.{hpp,cpp} and runtime/metal/abi/AneFfn.h (Apache-2.0).
+# Upstream (Splash 1.4.0, Apache-2.0): runtime/ops/AneFfn.{hpp,cpp} and runtime/metal/abi/AneFfn.h (Apache-2.0).
 # Licensed under the Apache License, Version 2.0; see THIRD_PARTY_NOTICES.md.
 # Modified for Yunshu: Python port of the ANE program text, surfaces and constants.
 """MIL program of the Splash-style W8A8 FFN split: shapes, surfaces, rotation, functions.

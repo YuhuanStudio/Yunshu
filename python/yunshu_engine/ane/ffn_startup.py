@@ -1,4 +1,4 @@
-# Derived from Splash 1.4.0 runtime/ops/AneFfnMeasurement.cpp and runtime/engine/AneFfnStartup.cpp (Apache-2.0).
+# Upstream (Splash 1.4.0, Apache-2.0): runtime/ops/AneFfnMeasurement.cpp and runtime/engine/AneFfnStartup.cpp (Apache-2.0).
 # Licensed under the Apache License, Version 2.0; see THIRD_PARTY_NOTICES.md.
 # Modified for Yunshu: Python port; calibration kept as a file beside the compiled programs.
 """Calibrate and start the ANE FFN split: time the layers, choose the share and the least chunk.

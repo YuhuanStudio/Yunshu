@@ -1,4 +1,4 @@
-# Derived from Splash 1.4.0 runtime/metal/kernels/prefill/ane_ffn.metal (Apache-2.0).
+# Upstream (Splash 1.4.0, Apache-2.0): runtime/metal/kernels/prefill/ane_ffn.metal (Apache-2.0).
 # Licensed under the Apache License, Version 2.0; see THIRD_PARTY_NOTICES.md.
 # Modified for Yunshu: MLX custom-kernel form, MLX affine quantized weights instead of
 # GGUF image tensors (one generic bit-stream decoder for 2..8 bits), per-tile status flags.

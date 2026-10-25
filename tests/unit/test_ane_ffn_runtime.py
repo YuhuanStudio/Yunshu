@@ -10,7 +10,7 @@ class FakeX:
 
     def __init__(self, rows, name="bfloat16"):
         self.shape = (1, rows, 8)
-        self.dtype = type("D", (), {"name": name})()
+        self.dtype = type("D", (), {"__str__": lambda self: f"mlx.core.{name}"})()
 
     def reshape(self, *shape):
         return self

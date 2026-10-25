@@ -1,3 +1,4 @@
+# Patches upstream mlx-vlm 0.7.8 mlx_vlm.models.qwen3_5.language.Qwen3_5MLP.__call__ (vendor.json kind=patches)
 """Serving hook of the Splash-style ANE FFN split (YUNSHU_ANE_FFN_SPLIT=splash).
 
 The split itself lives in ``yunshu_engine.ane`` (derived from Splash 1.4.0, Apache-2.0). This
@@ -53,7 +54,7 @@ class Runtime:
         if index == 0:
             self._expect = 0
             self._chunk_ok = (
-                bool(self.split.splits(rows)) and x.dtype.name == "bfloat16"
+                bool(self.split.splits(rows)) and str(x.dtype).endswith("bfloat16")
             )
             if self._chunk_ok and not self.split.begin():
                 self._chunk_ok = False
