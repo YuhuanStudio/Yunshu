@@ -71,15 +71,48 @@ def main():
     for bits in (4, 5):
         out_rows, inp, gs = 256, 2560, 64
         wdense = rng.normal(0, 0.05, (out_rows, inp)).astype(np.float32)
-        wq, sc, bi = mx.quantize(mx.array(wdense), group_size=gs, bits=bits)
+        wq, sc, bi = mx.quantize(
+            mx.array(wdense).astype(mx.bfloat16), group_size=gs, bits=bits
+        )
         mx.eval(wq, sc, bi)
-        deq = np.array(mx.dequantize(wq, sc.astype(mx.float32), bi.astype(mx.float32), group_size=gs, bits=bits))
-        for kk, block in ((1, 128), (4, 512)):
+        deq = np.array(
+            mx.dequantize(
+                wq,
+                sc.astype(mx.float32),
+                bi.astype(mx.float32),
+                group_size=gs,
+                bits=bits,
+            )
+        )
+        from yunshu_engine.kernels.tensorfold import lane_qmm
+
+        wt = lane_qmm.tile_weight(wq, 32, gs, bits=bits)
+        sbt = lane_qmm.pack_scales(sc, bi)
+        mx.eval(wt, sbt)
+        for layout, kk, block in (
+            ("mlx", 1, 128),
+            ("mlx", 4, 512),
+            ("tiled", 1, 128),
+            ("tiled", 4, 512),
+        ):
+            args = [wq, sc, bi] if layout == "mlx" else [wt, sbt, sbt]
+            base = [("TILED", int(layout == "tiled")), ("NROWS", out_rows)]
             rot = P.rotation_matrix(block, signs)
-            wrot = (deq.reshape(out_rows, inp // block, block) @ rot.T).reshape(out_rows, inp)
+            wrot = (deq.reshape(out_rows, inp // block, block) @ rot.T).reshape(
+                out_rows, inp
+            )
             (rs,) = K.kernel("row_scale")(
-                inputs=[wq, sc, bi, sg],
-                template=[("K", kk), ("KIN", inp), ("BITS", bits), ("GS", gs), ("ROW0", 0), ("IN0", 0), ("WIDTH", inp - inp % block)],
+                inputs=[*args, sg],
+                template=[
+                    *base,
+                    ("K", kk),
+                    ("KIN", inp),
+                    ("BITS", bits),
+                    ("GS", gs),
+                    ("ROW0", 0),
+                    ("IN0", 0),
+                    ("WIDTH", inp - inp % block),
+                ],
                 grid=(out_rows // 8 * 256, 1, 1),
                 threadgroup=(256, 1, 1),
                 output_shapes=[(out_rows,)],
@@ -89,12 +122,24 @@ def main():
             width = inp - inp % block
             peak = np.abs(wrot[:, :width]).max(axis=1)
             rs_ref = np.maximum(peak, P.PEAK_FLOOR) / 127.0 * 128.0
-            assert np.allclose(np.array(rs.astype(mx.float32)), rs_ref, rtol=3e-3), f"row scale bits={bits} k={kk}"
+            assert np.allclose(np.array(rs.astype(mx.float32)), rs_ref, rtol=3e-3), (
+                f"row scale {layout} bits={bits} k={kk}"
+            )
             surf = mx.zeros((out_rows, width), dtype=mx.int8)
             ssurf = mx.zeros((out_rows, 32), dtype=mx.float16)
             (m,) = K.kernel("weights")(
-                inputs=[wq, sc, bi, rs, sg, surf, ssurf],
-                template=[("K", kk), ("KIN", inp), ("BITS", bits), ("GS", gs), ("ROW0", 0), ("IN0", 0), ("STRIDE", width), ("SSTRIDE", 32)],
+                inputs=[*args, rs, sg, surf, ssurf],
+                template=[
+                    *base,
+                    ("K", kk),
+                    ("KIN", inp),
+                    ("BITS", bits),
+                    ("GS", gs),
+                    ("ROW0", 0),
+                    ("IN0", 0),
+                    ("STRIDE", width),
+                    ("SSTRIDE", 32),
+                ],
                 grid=(out_rows // 8 * 256, width // (kk * 128), 1),
                 threadgroup=(256, 1, 1),
                 output_shapes=[(1,)],
@@ -102,11 +147,19 @@ def main():
             )
             mx.eval(m)
             rs_half = np.array(rs.astype(mx.float32))
-            q_ref = np.clip(np.rint(wrot[:, :width] * (128.0 / rs_half[:, None])), -127, 127)
+            q_ref = np.clip(
+                np.rint(wrot[:, :width] * (128.0 / rs_half[:, None])), -127, 127
+            )
             diff = np.abs(np.array(surf).astype(np.int32) - q_ref.astype(np.int32))
-            print(f"weights bits={bits} K={kk}: max diff {diff.max()} ties {(diff > 0).sum()}", flush=True)
+            print(
+                f"weights {layout} bits={bits} K={kk}: max diff {diff.max()} ties {(diff > 0).sum()}",
+                flush=True,
+            )
             assert diff.max() <= 1 and (diff > 0).mean() < 1e-3, "weights mismatch"
-            assert np.allclose(np.array(ssurf.astype(mx.float32))[:, 0], np.array(rs.astype(mx.float32))), "scale copy"
+            assert np.allclose(
+                np.array(ssurf.astype(mx.float32))[:, 0],
+                np.array(rs.astype(mx.float32)),
+            ), "scale copy"
 
     # ---- join -----------------------------------------------------------------------
     hid, rws = 5120, 70
@@ -124,8 +177,13 @@ def main():
         output_dtypes=[mx.bfloat16, mx.uint32],
     )
     mx.eval(out, status)
-    sc_tok = part[hid, :rws].astype(np.float32) * np.array(tscale)[0, :rws].astype(np.float32)
-    ref = (np.array(gpu.astype(mx.float32)) + part[:hid, :rws].astype(np.float32).T * sc_tok[:, None])
+    sc_tok = part[hid, :rws].astype(np.float32) * np.array(tscale)[0, :rws].astype(
+        np.float32
+    )
+    ref = (
+        np.array(gpu.astype(mx.float32))
+        + part[:hid, :rws].astype(np.float32).T * sc_tok[:, None]
+    )
     ref_bf = np.array(mx.array(ref).astype(mx.bfloat16).astype(mx.float32))
     mism = float((np.array(out.astype(mx.float32)) != ref_bf).mean())
     print("join mismatch fraction", mism, flush=True)

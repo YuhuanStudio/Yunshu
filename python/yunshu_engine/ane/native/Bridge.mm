@@ -254,6 +254,7 @@ struct MlxTicket : std::enable_shared_from_this<MlxTicket> {
   std::condition_variable changed;
   bool settled = false, success = false, finalized = false, waitEncoded = false;
   int binding = -1;
+  std::atomic<double> readyAt{0.0}, reportAt{0.0};
   std::string failure;
   MlxTicket(SessionHandle s, mlx::core::Stream stream)
       : session(std::move(s)), stream(stream), ready(session->handoff->next()), done(session->handoff->next()) {}
@@ -270,6 +271,7 @@ struct MlxTicket : std::enable_shared_from_this<MlxTicket> {
     changed.notify_all();
   }
   void reported(bool ok) {
+    reportAt = std::chrono::duration<double, std::milli>(AwakeClock::now().time_since_epoch()).count();
     if (!ok) { fail("native ANE evaluation failed"); return; }
     {
       std::lock_guard lock(mutex);
@@ -299,6 +301,7 @@ void *ys_ane_mlx_begin_binding(void *handle, int binding) {
       // Watch ready independently of enqueue: even a stuck private evaluate
       // call must release a GPU wait within two seconds of its producer.
       event.notify(ticket->ready, [ticket] {
+        ticket->readyAt = std::chrono::duration<double, std::milli>(AwakeClock::now().time_since_epoch()).count();
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC),
           dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
             bool settled;
@@ -346,6 +349,13 @@ void *ys_ane_mlx_begin_binding(void *handle, int binding) {
   return new TicketHandle(std::move(result));
 }
 void *ys_ane_mlx_begin(void *handle) { return ys_ane_mlx_begin_binding(handle, -1); }
+// Host uptime milliseconds at which the GPU's ready signal was noticed and the ANE reported.
+int ys_ane_mlx_times(void *handle, double *ready, double *report) {
+  auto ticket = *static_cast<TicketHandle *>(handle);
+  *ready = ticket->readyAt;
+  *report = ticket->reportAt;
+  return 1;
+}
 int ys_ane_mlx_wait(void *handle) {
   auto ticket = *static_cast<TicketHandle *>(handle);
   int ok = protect([&] {

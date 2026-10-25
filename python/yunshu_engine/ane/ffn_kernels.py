@@ -63,6 +63,30 @@ inline float ane_quant_value(device const uchar *w, device const S *scales, devi
   const ulong g = ulong(row) * (K / gs) + col / gs;
   return code * float(scales[g]) + float(biases[g]);
 }
+
+// Value (row, col) of a Yunshu tiled quantized matrix ([N/32][K/gs][32 rows][gs*bits/32 words], scale/bias
+// pairs sb[(group * N + row) * 2 + {0, 1}], K inputs per row, N rows).
+template <typename S>
+inline float ane_tiled_value(device const uchar *w, device const S *sb, uint N, uint K, uint bits, uint gs,
+                             uint row, uint col) {
+  const uint groups = K / gs, g = col / gs, words = gs * bits / 32;
+  const ulong base = ((ulong(row / 32) * groups + g) * 32 + (row % 32)) * words * 4;
+  const uint inbit = (col % gs) * bits;
+  device const uchar *b = w + base + (inbit >> 3);
+  const uint shift = inbit & 7;
+  uint v = uint(b[0]);
+  if (shift + bits > 8) v |= uint(b[1]) << 8;
+  const float code = float((v >> shift) & ((1u << bits) - 1u));
+  const ulong si = (ulong(g) * N + row) * 2;
+  return code * float(sb[si]) + float(sb[si + 1]);
+}
+
+template <typename S>
+inline float ane_value(device const uchar *w, device const S *scales, device const S *biases, uint tiled,
+                       uint N, uint K, uint bits, uint gs, uint row, uint col) {
+  return tiled ? ane_tiled_value(w, scales, N, K, bits, gs, row, col)
+               : ane_quant_value(w, scales, biases, K, bits, gs, row, col);
+}
 """
 
 ROTATE = """
@@ -119,8 +143,8 @@ const uint row = tile.x * 8 + simd_group, block = tile.y * K * ROT_UNIT;
 float value[K][4];
 for (uint k = 0; k < K; ++k)
   for (uint e = 0; e < 4; ++e)
-    value[k][e] = ane_quant_value(reinterpret_cast<device const uchar *>(w), scales, biases, KIN, BITS, GS,
-                                  ROW0 + row, IN0 + block + k * ROT_UNIT + lane * 4 + e);
+    value[k][e] = ane_value(reinterpret_cast<device const uchar *>(w), scales, biases, TILED, NROWS, KIN, BITS, GS,
+                              ROW0 + row, IN0 + block + k * ROT_UNIT + lane * 4 + e);
 ane_rotate_block<K>(value, lane, sign);
 const float inverse = INT8_UNIT / float(row_scale[row]);
 device char *out = (device char *)(surface);
@@ -145,8 +169,8 @@ for (uint block = 0; block < WIDTH; block += K * ROT_UNIT) {
   float value[K][4];
   for (uint k = 0; k < K; ++k)
     for (uint e = 0; e < 4; ++e)
-      value[k][e] = ane_quant_value(reinterpret_cast<device const uchar *>(w), scales, biases, KIN, BITS, GS,
-                                    ROW0 + row, IN0 + block + k * ROT_UNIT + lane * 4 + e);
+      value[k][e] = ane_value(reinterpret_cast<device const uchar *>(w), scales, biases, TILED, NROWS, KIN, BITS, GS,
+                                ROW0 + row, IN0 + block + k * ROT_UNIT + lane * 4 + e);
   ane_rotate_block<K>(value, lane, sign);
   for (uint k = 0; k < K; ++k)
     for (uint e = 0; e < 4; ++e) peak = max(peak, fabs(value[k][e]));
@@ -206,7 +230,12 @@ def kernel(name: str):
             WEIGHTS,
             False,
         ),
-        "row_scale": (["w", "scales", "biases", "sign"], ["row_scale"], ROW_SCALE, True),
+        "row_scale": (
+            ["w", "scales", "biases", "sign"],
+            ["row_scale"],
+            ROW_SCALE,
+            True,
+        ),
         "join": (["gpu", "partial", "token_scale"], ["out", "status"], JOIN, False),
     }
     inputs, outputs, source, contiguous = table[name]

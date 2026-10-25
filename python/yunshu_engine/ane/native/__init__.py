@@ -148,6 +148,12 @@ def _configure_library(lib, with_mlx=False):
     if with_mlx:
         lib.ys_ane_mlx_begin_binding.argtypes = [c.c_void_p, c.c_int]
         lib.ys_ane_mlx_begin_binding.restype = c.c_void_p
+        lib.ys_ane_mlx_times.argtypes = [
+            c.c_void_p,
+            c.POINTER(c.c_double),
+            c.POINTER(c.c_double),
+        ]
+        lib.ys_ane_mlx_times.restype = c.c_int
         lib.ys_ane_mlx_begin.argtypes = [c.c_void_p]
         lib.ys_ane_mlx_begin.restype = c.c_void_p
         for name in ("ys_ane_mlx_wait", "ys_ane_mlx_finish"):
@@ -364,6 +370,12 @@ class MlxTicket:
             return False
         return True
 
+    def times(self) -> tuple[float, float]:
+        """(ready noticed, ANE reported) in host uptime milliseconds; 0 until they happen."""
+        ready, report = c.c_double(), c.c_double()
+        self._lib.ys_ane_mlx_times(self._handle, c.byref(ready), c.byref(report))
+        return ready.value, report.value
+
     def close(self):
         if self._handle:
             self._lib.ys_ane_mlx_destroy(self._handle)
@@ -403,7 +415,14 @@ class PoolSession:
             rows = (c.c_uint32 * n)(*(r for _, r, _ in specs))
             widths = (c.c_uint32 * n)(*(w for _, _, w in specs))
             handle = lib.ys_ane_pool_create(
-                mil.encode(), weights, len(weights), str(cache).encode(), elements, rows, widths, n
+                mil.encode(),
+                weights,
+                len(weights),
+                str(cache).encode(),
+                elements,
+                rows,
+                widths,
+                n,
             )
             if not handle:
                 return None, lib.ys_ane_error().decode()
@@ -419,7 +438,9 @@ class PoolSession:
 
     def bind(self, function: str, indices: list[int], out: int) -> int:
         arr = (c.c_uint32 * len(indices))(*indices)
-        bid = self._lib.ys_ane_pool_bind(self._handle, function.encode(), arr, len(indices), out)
+        bid = self._lib.ys_ane_pool_bind(
+            self._handle, function.encode(), arr, len(indices), out
+        )
         if bid < 0:
             raise RuntimeError(self._lib.ys_ane_error().decode())
         return bid
@@ -432,16 +453,17 @@ class PoolSession:
 
     def alias(self, index: int):
         """MLX array over surface `index` (shape [rows, width], row stride padded)."""
-        import numpy as np
-
         import mlx.core as mx
+        import numpy as np
 
         element, rows, width = self.specs[index]
         dtype = np.int8 if element == "int8" else np.float16
         item = 1 if element == "int8" else 2
         stride = self.stride_bytes(index)
         buf = (c.c_uint8 * (rows * stride)).from_address(self.address(index))
-        view = np.ndarray((rows, width), dtype=dtype, buffer=buf, strides=(stride, item))
+        view = np.ndarray(
+            (rows, width), dtype=dtype, buffer=buf, strides=(stride, item)
+        )
         retained = self._lib.ys_ane_retain(self._handle)
         if not retained:
             raise RuntimeError(self._lib.ys_ane_error().decode())

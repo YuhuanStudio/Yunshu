@@ -32,7 +32,9 @@ INTERMEDIATE_FLOOR = 2.0**-9
 MINIMUM_ROWS = 512
 PROGRAM_STEP = 128
 MAXIMUM_ROWS = 2048  # Splash's prefill token budget
-CHANNEL_UNIT = 512  # max(QUANT_TILE_ROWS, intermediate block); 512 divides 17408 = 34 units
+CHANNEL_UNIT = (
+    512  # max(QUANT_TILE_ROWS, intermediate block); 512 divides 17408 = 34 units
+)
 SIGN_SEED = 20260930
 
 
@@ -115,13 +117,17 @@ class Shape:
     @staticmethod
     def of(hidden: int, intermediate: int, layers: int, ane_units: int) -> Shape:
         if hidden % SEGMENT:
-            raise ValueError("ANE FFN split needs a hidden size of whole 2560-channel segments")
+            raise ValueError(
+                "ANE FFN split needs a hidden size of whole 2560-channel segments"
+            )
         if intermediate % CHANNEL_UNIT or intermediate < 2 * CHANNEL_UNIT:
             raise ValueError("ANE FFN split needs two or more whole rotation blocks")
         if not ane_units or ane_units >= intermediate // CHANNEL_UNIT:
             raise ValueError("ANE FFN split leaves the GPU or the ANE no channels")
         ane = ane_units * CHANNEL_UNIT
-        return Shape(hidden, intermediate, layers, intermediate - ane, ane, tuple(segments(ane)))
+        return Shape(
+            hidden, intermediate, layers, intermediate - ane, ane, tuple(segments(ane))
+        )
 
 
 @dataclass
@@ -136,7 +142,9 @@ class Surf:
 
     @property
     def stride_elems(self) -> int:
-        return row_bytes(self.width, self.element) // (1 if self.element == "int8" else 2)
+        return row_bytes(self.width, self.element) // (
+            1 if self.element == "int8" else 2
+        )
 
     def strides(self, rows: int) -> str:
         plane = rows * self.stride_elems
@@ -202,12 +210,30 @@ def program_inputs(shape: Shape, m: Memory) -> list[Input]:
         out.append(Input(f"x{k}", (s, s), SEGMENT, 0))
     out.append(Input("tx", (m.token_scale, m.token_scale), 1, 0))
     for k in range(len(m.inputs)):
-        out.append(Input(f"wg{k}", (m.sets[0]["gate"][k], m.sets[1]["gate"][k]), shape.ane, SEGMENT))
-        out.append(Input(f"wu{k}", (m.sets[0]["up"][k], m.sets[1]["up"][k]), shape.ane, SEGMENT))
+        out.append(
+            Input(
+                f"wg{k}",
+                (m.sets[0]["gate"][k], m.sets[1]["gate"][k]),
+                shape.ane,
+                SEGMENT,
+            )
+        )
+        out.append(
+            Input(
+                f"wu{k}", (m.sets[0]["up"][k], m.sets[1]["up"][k]), shape.ane, SEGMENT
+            )
+        )
     out.append(Input("sg", both("gate_scale"), shape.ane, 1))
     out.append(Input("su", both("up_scale"), shape.ane, 1))
     for i, width in enumerate(shape.down_segments):
-        out.append(Input(f"wd{i}", (m.sets[0]["down"][i], m.sets[1]["down"][i]), shape.hidden, width))
+        out.append(
+            Input(
+                f"wd{i}",
+                (m.sets[0]["down"][i], m.sets[1]["down"][i]),
+                shape.hidden,
+                width,
+            )
+        )
     out.append(Input("sd", both("down_scale"), shape.hidden, 1))
     return out
 
@@ -243,7 +269,12 @@ def function_text(shape: Shape, inputs: list[Input], output: Surf, rows: int) ->
         )
 
     def matmul(name: str, weights: str, values: str, height: int, width: int) -> None:
-        f16(f"{weights}_d", height, width, f"dequantize(input = {weights}_t, scale = {unit})")
+        f16(
+            f"{weights}_d",
+            height,
+            width,
+            f"dequantize(input = {weights}_t, scale = {unit})",
+        )
         line(
             f"{_tensor('fp16', height, rows)} {name} = matmul(transpose_x = bool(false), "
             f"transpose_y = bool(false), x = {weights}_d, y = {values})"
@@ -263,7 +294,12 @@ def function_text(shape: Shape, inputs: list[Input], output: Surf, rows: int) ->
     for p in ("g", "u"):
         for k in range(input_segments):
             matmul(f"{p}m{k}", f"w{p}{k}", f"x{k}_d", channels, SEGMENT)
-        f16(f"{p}s", channels, rows, f"mul(x = {total(p + 'm', input_segments, channels)}, y = s{p}_t)")
+        f16(
+            f"{p}s",
+            channels,
+            rows,
+            f"mul(x = {total(p + 'm', input_segments, channels)}, y = s{p}_t)",
+        )
     c, r, block = channels, rows, INTERMEDIATE_BLOCK
     f16("gt", c, r, "mul(x = gs, y = tx_t)")
     f16("gh", c, r, f"mul(x = gt, y = {fp16(0.5)})")
@@ -271,20 +307,27 @@ def function_text(shape: Shape, inputs: list[Input], output: Surf, rows: int) ->
     f16("tp", c, r, f"add(x = th, y = {fp16(1.0)})")
     f16("silu", c, r, "mul(x = gh, y = tp)")
     f16("h", c, r, "mul(x = silu, y = us)")
-    line(f"tensor<fp16, [1, {c}, 1, {r}]> h4 = reshape(x = h, shape = tensor<int32, [4]>([1, {c}, 1, {r}]))")
     line(
-        f"tensor<fp16, [{c}, {block}, 1, 1]> rotation = const()[name = string(\"rotation\"), "
-        f"val = tensor<fp16, [{c}, {block}, 1, 1]>(BLOBFILE(path = string(\"@model_path/weights.bin\"), "
+        f"tensor<fp16, [1, {c}, 1, {r}]> h4 = reshape(x = h, shape = tensor<int32, [4]>([1, {c}, 1, {r}]))"
+    )
+    line(
+        f'tensor<fp16, [{c}, {block}, 1, 1]> rotation = const()[name = string("rotation"), '
+        f'val = tensor<fp16, [{c}, {block}, 1, 1]>(BLOBFILE(path = string("@model_path/weights.bin"), '
         f"offset = uint64(64)))]"
     )
     line(
         f"tensor<fp16, [1, {c}, 1, {r}]> hr4 = conv(dilations = tensor<int32, [2]>([1, 1]), "
         f"groups = int32({c // block}), pad = tensor<int32, [4]>([0, 0, 0, 0]), "
-        f"pad_type = string(\"valid\"), strides = tensor<int32, [2]>([1, 1]), weight = rotation, x = h4)"
+        f'pad_type = string("valid"), strides = tensor<int32, [2]>([1, 1]), weight = rotation, x = h4)'
     )
     f16("hr", c, r, f"reshape(x = hr4, shape = {_dims(c, r)})")
     f16("habs", c, r, "abs(x = hr)")
-    f16("peak", 1, r, "reduce_max(x = habs, axes = tensor<int32, [1]>([2]), keep_dims = bool(true))")
+    f16(
+        "peak",
+        1,
+        r,
+        "reduce_max(x = habs, axes = tensor<int32, [1]>([2]), keep_dims = bool(true))",
+    )
     f16("floor", 1, r, f"maximum(x = peak, y = {fp16(INTERMEDIATE_FLOOR)})")
     f16("inverse", 1, r, f"real_div(x = {fp16(INT8_PEAK)}, y = floor)")
     f16("hs", c, r, "mul(x = hr, y = inverse)")
@@ -305,15 +348,35 @@ def function_text(shape: Shape, inputs: list[Input], output: Surf, rows: int) ->
         )
         matmul(f"dm{i}", f"wd{i}", slice_name, shape.hidden, width)
         begin += width
-    f16("ds", shape.hidden, r, f"mul(x = {total('dm', len(shape.down_segments), shape.hidden)}, y = sd_t)")
-    f16("yt", shape.hidden + 1, r, "concat(axis = int32(2), interleave = bool(false), values = (ds, hscale))")
+    f16(
+        "ds",
+        shape.hidden,
+        r,
+        f"mul(x = {total('dm', len(shape.down_segments), shape.hidden)}, y = sd_t)",
+    )
+    f16(
+        "yt",
+        shape.hidden + 1,
+        r,
+        "concat(axis = int32(2), interleave = bool(false), values = (ds, hscale))",
+    )
     line(
         f"{output.buffer_type(shape.hidden + 1, r)} y = tensor_to_tensor_buffer<ios17>(input = yt, "
         f"interleave_factors = tensor<uint8, [4]>([1, 1, 1, 1]), "
         f"strides = tensor<int64, [4]>({output.strides(shape.hidden + 1)}))"
     )
-    return f"    func {function_name(rows)}<ios18>({', '.join(params)}) {{\n" + "\n".join(body) + "\n    } -> (y);\n"
+    return (
+        f"    func {function_name(rows)}<ios18>({', '.join(params)}) {{\n"
+        + "\n".join(body)
+        + "\n    } -> (y);\n"
+    )
 
 
-def program_text(shape: Shape, inputs: list[Input], output: Surf, rows: list[int]) -> str:
-    return "program(1.3)\n{\n" + "".join(function_text(shape, inputs, output, n) for n in rows) + "}\n"
+def program_text(
+    shape: Shape, inputs: list[Input], output: Surf, rows: list[int]
+) -> str:
+    return (
+        "program(1.3)\n{\n"
+        + "".join(function_text(shape, inputs, output, n) for n in rows)
+        + "}\n"
+    )

@@ -26,10 +26,25 @@ def test_signs_and_rotation_are_orthogonal():
 
 def test_shape_surfaces_and_inputs():
     shape = prog.Shape.of(5120, 17408, 64, 8)
-    assert shape.ane == 4096 and shape.gpu == 13312 and shape.down_segments == (2560, 1536)
+    assert (
+        shape.ane == 4096 and shape.gpu == 13312 and shape.down_segments == (2560, 1536)
+    )
     mem = prog.allocate(shape)
     names = [i.name for i in prog.program_inputs(shape, mem)]
-    assert names == ["x0", "x1", "tx", "wg0", "wu0", "wg1", "wu1", "sg", "su", "wd0", "wd1", "sd"]
+    assert names == [
+        "x0",
+        "x1",
+        "tx",
+        "wg0",
+        "wu0",
+        "wg1",
+        "wu1",
+        "sg",
+        "su",
+        "wd0",
+        "wd1",
+        "sd",
+    ]
     assert mem.partial.rows == 5121 and mem.inputs[0].element == "int8"
     with pytest.raises(ValueError):
         prog.Shape.of(5120, 17408, 64, 34)
@@ -47,7 +62,10 @@ def test_function_text_structure():
     assert "values = (ds, hscale)" in text
     assert prog.fp16(0.5) == "fp16(0x1p-1)" and prog.fp16(2.0**-9) == "fp16(0x1p-9)"
     # narrower function reads leading columns of the max-row surface (stride of 2048 rows)
-    assert "strides=[5242880, 5242880, 2048, 1]" in text.split("func ffn512")[1].split("\n")[0]
+    assert (
+        "strides=[5242880, 5242880, 2048, 1]"
+        in text.split("func ffn512")[1].split("\n")[0]
+    )
 
 
 def test_calibration_model_and_choice():

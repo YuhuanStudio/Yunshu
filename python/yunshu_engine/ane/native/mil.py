@@ -221,7 +221,7 @@ def w8a8_program(gate, up, down, rows: int, segment: int = 2560, act: bool = Tru
         # fixed grid: values in [-1, 1) * 2^-4 ... speed probe only
         emit(name + "s", h, rows, f"mul(x = {src}, y = fp16(64))")
         lines.append(
-            f"        {tensor('int8', h, rows)} {name}q = quantize(input = {name}s, scale = fp16(1), output_dtype = string(\"int8\"));"
+            f'        {tensor("int8", h, rows)} {name}q = quantize(input = {name}s, scale = fp16(1), output_dtype = string("int8"));'
         )
         return emit(
             name, h, rows, f"dequantize(input = {name}q, scale = fp16({float(unit)}))"
@@ -251,9 +251,7 @@ def w8a8_program(gate, up, down, rows: int, segment: int = 2560, act: bool = Tru
                     f"{proj}sum{k}", channels, rows, f"add(x = {total}, y = {proj}m{k})"
                 )
         const(f"{proj}sc", sc)  # last segment scale; speed probe uses one scale vector
-        outs[proj] = emit(
-            f"{proj}s", channels, rows, f"mul(x = {total}, y = {proj}sc)"
-        )
+        outs[proj] = emit(f"{proj}s", channels, rows, f"mul(x = {total}, y = {proj}sc)")
     emit("gh", channels, rows, f"mul(x = {outs['g']}, y = fp16(0.5))")
     emit("th", channels, rows, "tanh(x = gh)")
     emit("tp", channels, rows, "add(x = th, y = fp16(1))")

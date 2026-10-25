@@ -81,7 +81,9 @@ def fit(low: Timing, high: Timing) -> Model:
     return Model(gpu_line, ane_line, u)
 
 
-def choose(model: Model, gpu_alone: float, units: int, max_ane_units: int) -> int | None:
+def choose(
+    model: Model, gpu_alone: float, units: int, max_ane_units: int
+) -> int | None:
     if not max_ane_units or max_ane_units >= units:
         raise ValueError("ANE FFN choice of no feasible units")
     at = [0.0] * units
@@ -200,7 +202,9 @@ class Breaker:
         if gpu is not None:
             low, high = gpu
             if not low.rows < high.rows:
-                raise ValueError("ANE FFN breaker needs the GPU alone at two row counts")
+                raise ValueError(
+                    "ANE FFN breaker needs the GPU alone at two row counts"
+                )
             usable(low.milliseconds)
             usable(high.milliseconds)
             self._gpu = gpu_alone_line(gpu)

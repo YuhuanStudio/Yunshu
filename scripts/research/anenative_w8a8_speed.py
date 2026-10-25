@@ -2,6 +2,7 @@
 
 Speed only (no accuracy claim). Run under gpuq; the first variant failing stops the run.
 """
+
 from __future__ import annotations
 
 import argparse

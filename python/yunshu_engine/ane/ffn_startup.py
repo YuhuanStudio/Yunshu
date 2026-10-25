@@ -11,6 +11,7 @@ model is remembered; a split that later loses to the GPU alone forgets it.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import platform
@@ -23,14 +24,21 @@ from pathlib import Path
 import numpy as np
 
 from yunshu_engine.ane import ffn_calibration as cal
-from yunshu_engine.ane import ffn_program as P
-from yunshu_engine.ane.ffn_split import AneFfn, AneRetired, AneUnavailable, Layer, planned_bytes, units
+from yunshu_engine.ane import ffn_program as prog
+from yunshu_engine.ane.ffn_split import (
+    AneFfn,
+    AneRetired,
+    AneUnavailable,
+    Layer,
+    planned_bytes,
+    units,
+)
 
 log = logging.getLogger(__name__)
 
 TIMED_SHARES = (0.4, 0.8)
 SAMPLED_LAYERS = 5
-COMMAND_ROWS = 2 * P.MAXIMUM_ROWS
+COMMAND_ROWS = 2 * prog.MAXIMUM_ROWS
 RUNS = 3
 
 
@@ -53,13 +61,22 @@ class Measurement:
         mx = self._mx
         if rows not in self._inputs:
             rng = np.random.default_rng(20261001)
-            x = mx.array(rng.uniform(-2.0, 2.0, (rows, self.hidden)).astype(np.float32)).astype(mx.bfloat16)
+            x = mx.array(
+                rng.uniform(-2.0, 2.0, (rows, self.hidden)).astype(np.float32)
+            ).astype(mx.bfloat16)
             zero = mx.zeros((rows, self.hidden), dtype=mx.bfloat16)
             mx.eval(x, zero)
             self._inputs[rows] = (x, zero)
         return self._inputs[rows]
 
-    def layer(self, layers_idx: Sequence[int], count: int, rows: int, split: AneFfn | None, stand_in: float = 0.0):
+    def layer(
+        self,
+        layers_idx: Sequence[int],
+        count: int,
+        rows: int,
+        split: AneFfn | None,
+        stand_in: float = 0.0,
+    ):
         """Median milliseconds of a layer in commands of `count` layers; `split` runs the split.
         Each split layer follows the GPU alone's FFN of the same layer, which stands in for the
         mixer before it in a prefill; `stand_in` (the GPU alone timed alike) is subtracted."""
@@ -89,7 +106,7 @@ class Measurement:
 
     def gpu_part(self, split: AneFfn) -> float:
         mx = self._mx
-        x, zero = self._data(P.MAXIMUM_ROWS)
+        x, zero = self._data(prog.MAXIMUM_ROWS)
         n = len(split.layers)
 
         def cmd(count: int) -> float:
@@ -98,7 +115,13 @@ class Measurement:
                 h = zero
                 start = time.perf_counter()
                 for i in range(count):
-                    h = split.add(i, AneFfn.after(x, h) if i else x, h, P.MAXIMUM_ROWS, ane=False)
+                    h = split.add(
+                        i,
+                        AneFfn.after(x, h) if i else x,
+                        h,
+                        prog.MAXIMUM_ROWS,
+                        ane=False,
+                    )
                 mx.eval(h)
                 return (time.perf_counter() - start) * 1000
 
@@ -109,11 +132,14 @@ class Measurement:
     def time(self, cache: Path) -> cal.Timings:
         n_units = units(self.layers)
         count = SAMPLED_LAYERS - 1
-        sampled_idx = [i * (len(self.layers) - 1) // (SAMPLED_LAYERS - 1) for i in range(SAMPLED_LAYERS)]
+        sampled_idx = [
+            i * (len(self.layers) - 1) // (SAMPLED_LAYERS - 1)
+            for i in range(SAMPLED_LAYERS)
+        ]
         sampled = [self.layers[i] for i in sampled_idx]
         sub = Measurement(sampled)
         sub._inputs = self._inputs
-        rows = P.MAXIMUM_ROWS
+        rows = prog.MAXIMUM_ROWS
         gpu_alone = sub.layer(range(len(sampled)), count, rows, None)
 
         def measure(share: float) -> cal.Timing:
@@ -139,7 +165,9 @@ class Measurement:
             return int(min(max(COMMAND_ROWS // chunk, 1), len(self.layers) - 1))
 
         def gpu(chunk: int) -> cal.GpuPoint:
-            return cal.GpuPoint(chunk, self.layer(range(len(self.layers)), count(chunk), chunk, None))
+            return cal.GpuPoint(
+                chunk, self.layer(range(len(self.layers)), count(chunk), chunk, None)
+            )
 
         low, high = gpu(rows_list[0]), gpu(rows_list[-1])
         timings = cal.ChunkTimings((low, high), [])
@@ -154,12 +182,10 @@ class Measurement:
 
 
 def _gpu_alone(split: AneFfn | None, layer: Layer, x, residual):
-    import mlx.core as mx
-
-    from yunshu_engine.ane.ffn_split import _qmm
+    from yunshu_engine.ane.ffn_split import _qmm, _swiglu
 
     gate, up = _qmm(x, layer.gate), _qmm(x, layer.up)
-    y = _qmm((gate * mx.sigmoid(gate)) * up, layer.down)
+    y = _qmm(_swiglu(gate, up), layer.down)
     return residual + y
 
 
@@ -180,18 +206,14 @@ def recall(cache: Path, key: str) -> cal.Calibration | None:
 
 
 def remember(cache: Path, key: str, calibration: cal.Calibration) -> None:
-    try:
+    with contextlib.suppress(OSError):
         cache.mkdir(parents=True, exist_ok=True)
         (cache / key).write_text(calibration.text() + "\n")
-    except OSError:
-        pass
 
 
 def forget(cache: Path, key: str) -> None:
-    try:
+    with contextlib.suppress(OSError):
         (cache / key).unlink()
-    except OSError:
-        pass
 
 
 @dataclass
@@ -225,7 +247,7 @@ def start(
         if given_share is not None:
             ane_units = cal.nearest_units(given_share, n_units)
             split = AneFfn(layers, ane_units, cache)
-            minimum = given_minimum_rows or P.MINIMUM_ROWS
+            minimum = given_minimum_rows or prog.MINIMUM_ROWS
             split.set_minimum_rows(minimum)
             err = split.verify()
             return Outcome(
@@ -239,7 +261,10 @@ def start(
             calibration = None
         if calibration:
             if not calibration.ane_units:
-                return Outcome("no_gain", "no Neural Engine split beat it by enough when this Mac calibrated it")
+                return Outcome(
+                    "no_gain",
+                    "no Neural Engine split beat it by enough when this Mac calibrated it",
+                )
             split = AneFfn(layers, calibration.ane_units, cache)
             _take(split, calibration, cache, key)
             err = split.verify()
@@ -251,17 +276,25 @@ def start(
             )
         measurement = Measurement(layers)
         timings = measurement.time(cache)
-        chosen = cal.choose(cal.fit(timings.low, timings.high), timings.gpu_alone, n_units, max_units)
+        chosen = cal.choose(
+            cal.fit(timings.low, timings.high), timings.gpu_alone, n_units, max_units
+        )
         if chosen is None:
             remember(cache, key, cal.Calibration())
-            return Outcome("no_gain", f"no Neural Engine split beats its {timings.gpu_alone:.1f} ms per 2048-row FFN layer by enough")
+            return Outcome(
+                "no_gain",
+                f"no Neural Engine split beats its {timings.gpu_alone:.1f} ms per 2048-row FFN layer by enough",
+            )
         split = AneFfn(layers, chosen, cache)
         chunks = measurement.chunks(split)
         minimum = cal.minimum_rows(chunks)
         if minimum is None:
             split.close()
             remember(cache, key, cal.Calibration())
-            return Outcome("no_gain", "no chunk of the Neural Engine split beats the GPU alone by enough")
+            return Outcome(
+                "no_gain",
+                "no chunk of the Neural Engine split beats the GPU alone by enough",
+            )
         made = cal.Calibration(chosen, minimum, chunks.gpu)
         _take(split, made, cache, key)
         err = split.verify()
