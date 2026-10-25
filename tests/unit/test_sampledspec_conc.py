@@ -6,8 +6,9 @@ import sampledspec_conc as c  # noqa: E402
 
 
 def test_arm_order_alternates():
-    assert c.arm_order(0) == ("base", "cand")
-    assert c.arm_order(1) == ("cand", "base")
+    assert c.arm_order(0) == ("base", "cand", "off")
+    assert c.arm_order(1) == ("cand", "off", "base")
+    assert c.arm_order(2) == ("off", "base", "cand")
 
 
 def test_plans():

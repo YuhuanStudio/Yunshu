@@ -27,7 +27,8 @@ KEYED = "DFlash fast verification: keyed=True"
 
 
 def arm_order(rep):
-    return ("base", "cand") if rep % 2 == 0 else ("cand", "base")
+    arms = ("base", "cand", "off")
+    return arms[rep % 3 :] + arms[: rep % 3]
 
 
 def plans(scenario, tokens, join):
@@ -197,7 +198,7 @@ def main():
                 "YUNSHU_VLM_APC_DISK": "0",
                 "YUNSHU_VLM_APC_MEMORY_GB": "0",
                 "YUNSHU_VLM_APC_DISK_DIR": str(apc),
-                "YUNSHU_VLM_DRAFT": t.D,
+                "YUNSHU_VLM_DRAFT": "off" if arm == "off" else t.D,
                 "YUNSHU_NEXT_TURN_PREFILL": "off",
                 "YUNSHU_CONSOLE": "0",
             },
@@ -239,7 +240,8 @@ def main():
                         json.dumps({k: v for k, v in res.items() if k != "a_x_yunshu"}),
                         flush=True,
                     )
-            server.verify_spec_mode()
+            if arm != "off":
+                server.verify_spec_mode()
         finally:
             server.kill()
             shutil.rmtree(apc, ignore_errors=True)
