@@ -105,13 +105,17 @@ def configure_lane(lm: Any, drafter: Any, block: int | None) -> tuple[dict, int 
     if not all(callable(getattr(lm, name, None)) for name in required):
         raise RuntimeError("mlx-vlm lacks the Qwen4 hyper-state speculative verifier")
     supports = getattr(lm, "_supports_batch_invariant_decode", None)
-    head_ok = callable(supports) and bool(supports())
+
+    def head_supported() -> bool:
+        return callable(supports) and bool(supports())
+
+    head_ok = head_supported()
     kernels: dict = {"qwen4_native": True}
     if settings.get_bool("YUNSHU_QWEN4_LANE") or not head_ok:
         kernels.update(lane_projections(lm, head=not head_ok))
         if not kernels.get("lane_linear"):
             raise RuntimeError("Qwen4 target cannot use batch-invariant plain decode")
-        head_ok = bool(supports())
+        head_ok = head_supported()
     if not head_ok:
         raise RuntimeError("Qwen4 target cannot use batch-invariant plain decode")
     # Block includes the target seed: two rows propose one draft token.  Measured on Flash-Next oQ4e

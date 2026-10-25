@@ -126,6 +126,7 @@ class LaneLinear(nn.Module):
     @classmethod
     def from_quantized(cls, linear: nn.QuantizedLinear) -> LaneLinear:
         scales, biases, group = linear.scales, linear.biases, int(linear.group_size)
+        assert biases is not None  # eligible() requires affine weights with biases
         if group == WIDE_GROUP:
             # the same dequantized values: each 128-group's scale and bias serve both of its 64-groups
             scales, biases, group = (
