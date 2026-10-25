@@ -441,12 +441,18 @@ def replay_path(layer, state, rows, path_arr, count_arr):
     return out
 
 
-def _gdn_layer(verifier, layer, x, cache, shape: TreeShape):
+def _gdn_layer(
+    verifier, layer, x, cache, shape: TreeShape, *, projected=None, project_output=True
+):
     """One GDN layer over the window; returns the out-projection output and
     the record ``tree_commit`` needs."""
     w = shape.width
-    mixed, z, b, a = verifier._linears(
-        (layer.in_proj_qkv, layer.in_proj_z, layer.in_proj_b, layer.in_proj_a), x
+    mixed, z, b, a = (
+        verifier._linears(
+            (layer.in_proj_qkv, layer.in_proj_z, layer.in_proj_b, layer.in_proj_a), x
+        )
+        if projected is None
+        else projected
     )
     dtype = x.dtype
     hk, hv = layer.num_k_heads, layer.num_v_heads
@@ -534,7 +540,7 @@ def _gdn_layer(verifier, layer, x, cache, shape: TreeShape):
         )
         vq.register_group_sums(out, sums)
     record = ("gdn", layer, state, conv_prev, mixed, rows)
-    return verifier._linear(layer.out_proj, out), record
+    return (verifier._linear(layer.out_proj, out) if project_output else out), record
 
 
 # ── attention ───────────────────────────────────────────────────────────────
