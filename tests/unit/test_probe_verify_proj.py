@@ -59,3 +59,15 @@ def test_boundary_probe_params():
     assert last[3] == 0 and last[5] == 0  # no next slice: no prefetch threads
     assert pb.params_list(3, 48, n16, 0, 0, 1 << 18, 1 << 14)[3] == 0
     assert pb.params_list(0, 4, n16, 0, 0, 8, 8, big=True)[1] == 4 * n16
+
+
+def test_lane_stream_geometry():
+    spec4 = importlib.util.spec_from_file_location(
+        "probe_lane_stream", PROBE.with_name("probe_lane_stream.py")
+    )
+    pl = importlib.util.module_from_spec(spec4)
+    spec4.loader.exec_module(pl)
+    g = pl.geometry(17408, 5120, 2)
+    assert g["tiles"] == 544 and g["kg"] == 80 and g["cb"] == 32 and g["nv"] == 2
+    assert g["bytes"] == 17408 * 5120 // 2
+    assert pl.geometry(5120, 17408, 8)["kg"] == 272

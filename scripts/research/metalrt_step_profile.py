@@ -315,6 +315,7 @@ def run_flashverify(a, mx, tracer):
     from yunshu_engine.vlm_engine import VLMEngine
 
     async def go():
+        settings.set_override("YUNSHU_VLM_DRAFT", "off")
         settings.set_override("YUNSHU_VLM_APC_MEMORY_GB", 1.0)
         engine = VLMEngine(
             str(a.model), EngineConfig(prefill_step_size=512, completion_batch_size=1)

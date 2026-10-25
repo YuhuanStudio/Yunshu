@@ -113,7 +113,7 @@ def main():
     p.add_argument("--sks", nargs="+", default=["default"])
     p.add_argument("--only", nargs="*", default=None)
     p.add_argument(
-        "--variants", nargs="+", default=["default"], choices=["default", "pipe"]
+        "--variants", nargs="+", default=["default"], choices=["default", "pipe", "coop64"]
     )
     p.add_argument(
         "--shape", action="append", default=[], help="extra name:n:k:bits:group[:count]"
@@ -160,6 +160,19 @@ def main():
             m.sbt = mx.contiguous(proto.sbt * 1)
             mods.append(m)
         mx.eval([m.weight for m in mods] + [m.sbt for m in mods])
+        mods64 = []
+        if "coop64" in a.variants and bits == 4 and n % 64 == 0 and group == 64:
+            p64 = q.tile_weight(base.weight, 64, group, bits=bits)
+            for c in range(nc):
+                m = lane_linear.LaneLinear.from_quantized(base)
+                m.weight = mx.contiguous(
+                    p64 ^ mx.array(c * 2654435761 % 2**32, dtype=mx.uint32)
+                )
+                m.sbt = mx.contiguous(proto.sbt * 1)
+                m.nt = 64
+                mods64.append(m)
+            mx.eval([m.weight for m in mods64])
+        variants = [v for v in a.variants if v != "coop64" or mods64]
         xs = {
             m_: (mx.random.normal((m_, k)) * 0.5).astype(mx.bfloat16) for m_ in a.rows
         }
@@ -172,7 +185,7 @@ def main():
         ref_default = {}
         for sk in a.sks:
             skv = None if sk == "default" else int(sk)
-            for mod in mods:
+            for mod in mods + mods64:
                 mod.sk = skv
             for m_ in a.rows:
                 x = x32[:m_]
@@ -192,19 +205,20 @@ def main():
                     )
                     continue
 
-                def graph():
+                def graph(mm):
                     outs, prev = [], None
-                    for mod in mods:
+                    for mod in mm:
                         xi = x if prev is None else mx.depends(x, prev)
                         prev = mod._rows(xi)
                         outs.append(prev)
                     return outs
 
                 results, samples, graphs = {}, {}, {}
-                for variant in a.variants:
+                for variant in variants:
                     q.PIPE[0] = variant == "pipe"
-                    y_m = mods[0]._rows(x)
-                    y_32 = mods[0]._rows(x32)
+                    vm = mods64 if variant == "coop64" else mods
+                    y_m = vm[0]._rows(x)
+                    y_32 = vm[0]._rows(x32)
                     mx.eval(y_m, y_32)
                     results[variant] = (
                         y_m,
@@ -213,20 +227,20 @@ def main():
                     if skv is None and variant == "default":
                         ref_default[m_] = y_m
                     for _ in range(2):
-                        mx.eval(graph())
+                        mx.eval(graph(vm))
                     graphs[variant] = None
                     samples[variant] = []
                 for rep in range(a.reps):
-                    order = a.variants if rep % 2 == 0 else a.variants[::-1]
+                    order = variants if rep % 2 == 0 else variants[::-1]
                     for variant in order:
                         q.PIPE[0] = variant == "pipe"
-                        g = graph()
+                        g = graph(mods64 if variant == "coop64" else mods)
                         mx.synchronize()
                         t0 = time.perf_counter()
                         mx.eval(g)
                         samples[variant].append((time.perf_counter() - t0) / nc)
                 q.PIPE[0] = False
-                for variant in a.variants:
+                for variant in variants:
                     y_m, invariant = results[variant]
                     ref = ref_default.get(m_)
                     s = summarize(samples[variant])

@@ -167,6 +167,7 @@ class LaneLinear(nn.Module):
             self.weight,
             self.sbt,
             tiled=self.tiled,
+            nt=getattr(self, "nt", lane_qmm.NT),
             group=self.group_size,
             row_block=block,
             row_limit=PIECE,
