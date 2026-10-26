@@ -3013,7 +3013,7 @@
       "commit": "991266ad300f47a3b9f21e62ff5bdb679215e758",
       "reviewed_commit": "991266ad300f47a3b9f21e62ff5bdb679215e758",
       "reviewed_date": "2026-10-26",
-      "review_reason": "First review 2026-10-26; nothing adopted. Candidates to audit: GDN q/k L2-norm eps (c408452), exact prefix rewind in rotating KV caches (12d935f), clearing the buffer cache after each prefill chunk (991266a), flushing held-back stop text at stream end (4ea4225), Qwen reasoning history for cache reuse (e9c8500)."
+      "review_reason": "First review 2026-10-26; nothing adopted. Candidates to audit: GDN q/k L2-norm eps (c408452), exact prefix rewind in rotating KV caches (12d935f), clearing the buffer cache after each prefill chunk (991266a), flushing held-back stop text at stream end (4ea4225), Qwen reasoning history for cache reuse (e9c8500). Audited 2026-10-26: c408452 (q/k norm eps D times too large) is the same fix as mlx-vlm b8bf04c; kernels/gdn_qk_eps.py renders the installed mlx-vlm's epsilon into the fused norm and the prework RMS arm (unchanged on the pinned 0.7.8); the L2 arms already use mlx-lm's sum + 1e-6."
     },
     {
       "repo": "https://github.com/vllm-project/vllm-metal",
@@ -3026,7 +3026,7 @@
       "commit": "7f95a63fee91153cf4f0def3927119aa3e28704b",
       "reviewed_commit": "7f95a63fee91153cf4f0def3927119aa3e28704b",
       "reviewed_date": "2026-10-26",
-      "review_reason": "Moved to watch 2026-10-26 from the kernelstudy prior_art entry (kept there for its bit-parity study; its status is unchanged, no qualified winner). Nothing adopted. Candidates to audit: n-gram drafts capped at checkpoint boundaries (ddca466), GDN decay kept in FP32 (b9a5167), swap-out pressure signal at startup (ca27320)."
+      "review_reason": "Moved to watch 2026-10-26 from the kernelstudy prior_art entry (kept there for its bit-parity study; its status is unchanged, no qualified winner). Nothing adopted. Candidates to audit: n-gram drafts capped at checkpoint boundaries (ddca466), GDN decay kept in FP32 (b9a5167), swap-out pressure signal at startup (ca27320). Audited 2026-10-26: b9a5167 (GDN decay kept FP32) needs no change; the stock compute_g keeps the decay FP32 after a bf16 softplus and every Yunshu GDN kernel (prework g_out float32, verify/tree/dflash gdn_decay float, tg_g float) does the same; tests/unit/test_gdn_decay_precision.py pins it."
     },
     {
       "repo": "https://github.com/lablup/mlxcel",
