@@ -84,7 +84,8 @@ import {
   StatValue,
 } from "./ui";
 import type { Perform } from "./Models";
-import { finishLabel, outcomeLabel, useRecentRequests } from "./recentRequests";
+import { finishLabel, outcomeLabel } from "./recentRequests";
+import { useSignals } from "./signals";
 import {
   RequestBreakdown,
   RequestTimeline,
@@ -274,15 +275,7 @@ export function Requests({
       if (timer) clearTimeout(timer);
     };
   }, [detail?.id, connection.baseUrl, connection.token]);
-  const recent = useRecentRequests(
-    connection,
-    engine.status?.last?.request_id,
-    // A page opened while the engine is away has no status yet, but the console still answers its record.
-    engine.status?.console_process === true ||
-      (engine.status == null &&
-        engine.failures > 0 &&
-        engine.phase !== "unauthorized"),
-  );
+  const { recent } = useSignals();
   const sampled = useMemo(
     () =>
       finishedFromHistory(engine.history).map(

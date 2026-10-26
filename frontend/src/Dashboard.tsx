@@ -1,4 +1,3 @@
-import { useRecentRequests } from "./recentRequests";
 import { prefixHit, prefixHitWindow } from "./request-kpi";
 import { gbTotalText } from "./byte-format";
 import { LiveNumber } from "./LiveNumber";
@@ -348,7 +347,7 @@ export function Dashboard({
     [copied, setCopied] = useState<string | null>(null);
   const status = engine.status,
     online = engine.phase === "online";
-  const { verdict } = useSignals();
+  const { verdict, recent: recentRequests } = useSignals();
   // Offline with data on screen: the numbers stop moving, so they are dimmed and stamped.
   const stale = engine.phase === "offline" && status != null;
   const dim = stale ? "opacity-60" : "";
@@ -456,14 +455,6 @@ export function Dashboard({
   const totals = useMemo(() => totalsFrom(engine.finished), [engine.finished]);
   // Prefix reuse: the same definition and window as the Requests page (request-kpi.ts), over the
   // finished requests the console holds, so the two pages can never show different numbers.
-  const recentRequests = useRecentRequests(
-    connection,
-    status?.last?.request_id,
-    status?.console_process === true ||
-      (status == null &&
-        engine.failures > 0 &&
-        engine.phase !== "unauthorized"),
-  );
   const hit = useMemo(
     () =>
       prefixHit(
