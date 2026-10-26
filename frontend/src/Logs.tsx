@@ -25,8 +25,10 @@ import {
 } from "lucide-react";
 import { ApiError, type Connection } from "./api";
 import {
+  cursorStale,
   fetchLogs,
   formatLine,
+  resumeCursor,
   saveBlob,
   streamLogs,
   type LogRecord,
@@ -55,7 +57,9 @@ function useHashRange() {
       const next = parseRange(location.hash);
       // the same window keeps its object, so the fetch keyed on it does not run again
       setRange((cur) =>
-        cur && next && cur.from === next.from && cur.to === next.to ? cur : next,
+        cur && next && cur.from === next.from && cur.to === next.to
+          ? cur
+          : next,
       );
     };
     // A hash written between the first render and this effect fired its hashchange before anyone listened.
@@ -121,6 +125,14 @@ export default function Logs({ connection }: { connection: Connection }) {
     recordsRef.current =
       next.length > CLIENT_CAP ? next.slice(-CLIENT_CAP) : next;
     setRecords(recordsRef.current);
+  }, []);
+
+  // The engine restarted: its ids began again, so the old rows (and their ids) no longer belong to the tail.
+  const restarted = useCallback(() => {
+    cursor.current = 0;
+    recordsRef.current = [];
+    setRecords([]);
+    setUnseen(0);
   }, []);
 
   const sinceFor = useCallback(
@@ -198,6 +210,17 @@ export default function Logs({ connection }: { connection: Connection }) {
       setLive("connecting");
       while (!controller.signal.aborted) {
         if (!poll) {
+          try {
+            const resumed = await resumeCursor(
+              connection,
+              cursor.current,
+              controller.signal,
+            );
+            if (controller.signal.aborted) return;
+            if (resumed !== cursor.current) restarted();
+          } catch {
+            /* the stream below reports an unreachable engine */
+          }
           let batch: LogRecord[] = [];
           const flush = setInterval(() => {
             if (!batch.length) return;
@@ -233,6 +256,10 @@ export default function Logs({ connection }: { connection: Connection }) {
               { ...filters, since_id: cursor.current, limit: RING_LIMIT },
               controller.signal,
             );
+            if (cursorStale(cursor.current, page.next_id)) {
+              restarted();
+              continue;
+            }
             cursor.current = Math.max(cursor.current, page.next_id);
             append(page.records);
           } catch {
@@ -243,7 +270,15 @@ export default function Logs({ connection }: { connection: Connection }) {
       }
     })();
     return () => controller.abort();
-  }, [streaming, connection.baseUrl, connection.token, level, query, append]);
+  }, [
+    streaming,
+    connection.baseUrl,
+    connection.token,
+    level,
+    query,
+    append,
+    restarted,
+  ]);
 
   useLayoutEffect(() => {
     const el = scroller.current;
