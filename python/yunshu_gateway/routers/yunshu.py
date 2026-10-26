@@ -329,13 +329,26 @@ async def memory_ledger(request: Request) -> dict:
     return _ledger.collect(get_model_manager(), get_engine(), get_display_model_id())
 
 
+def _settings_auth_token() -> str | None:
+    from yunshu_engine import settings as _s
+
+    return _s.get("YUNSHU_AUTH_TOKEN")
+
+
 @router.get("/yunshu/config")
 async def effective_config(
     request: Request, include: Literal["stable", "all"] = "stable"
 ) -> dict:
     """Every setting with its effective value, default and source (cli / env / file /
-    default), as ``yunshu config`` shows them. Secrets are masked."""
-    _check_permission(request, "can_infer")
+    default), as ``yunshu config`` shows them. Secrets are masked (and URL user info).
+
+    This is operator configuration (paths, endpoints, which tools are on), so when
+    auth is configured it needs the ``admin`` scope: a managed key with only
+    ``infer`` gets 403. With no auth configured it stays readable like inference."""
+    from yunshu_gateway import api_keys
+
+    auth_on = bool(_settings_auth_token()) or api_keys.get_store().has_keys()
+    _check_permission(request, "admin" if auth_on else "can_infer")
     from yunshu_engine import settings as _settings
 
     levels = (

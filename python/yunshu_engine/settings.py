@@ -37,6 +37,7 @@ import json
 import logging
 import math
 import os
+import re
 import tempfile
 import tomllib
 from collections.abc import Mapping
@@ -903,6 +904,20 @@ def validate(
     return warnings
 
 
+_URL_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s@]*@")
+
+
+def mask_url_userinfo(value: Any) -> Any:
+    """Replace ``user:pass@`` in URL-shaped strings with ``***@`` (host stays visible).
+
+    A URL setting (SearXNG, gateway, Hub endpoint, console engine) can embed
+    basic-auth credentials; the effective-config views must not echo them.
+    """
+    if isinstance(value, str) and "@" in value and "://" in value:
+        return _URL_USERINFO.sub(r"\g<scheme>***@", value)
+    return value
+
+
 def effective(include: tuple[str, ...] = ("stable",)) -> list[dict[str, Any]]:
     """Rows for ``yunshu config``: name, value, source, stability, category."""
     rows = []
@@ -916,6 +931,8 @@ def effective(include: tuple[str, ...] = ("stable",)) -> list[dict[str, Any]]:
             value = f"<invalid: {exc}>"
         if s.secret and text:
             value = "***"
+        else:
+            value = mask_url_userinfo(value)
         rows.append(
             {
                 "name": s.name,
