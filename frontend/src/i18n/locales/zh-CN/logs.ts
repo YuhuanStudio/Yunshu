@@ -11,6 +11,7 @@ const logs: Shape<typeof zh> = {
   "action.copyLine": "复制这一行",
   "action.jump": "跳到最新",
   "action.jumpNew": "跳到最新（{count} 条新记录）",
+  "action.showEarlier": "显示更早的 {count} 行（另有 {hidden} 行未显示）",
   copiedAll: "已复制 {count} 行",
   copiedLine: "已复制这一行",
   copyFailed: "无法写入剪贴板",

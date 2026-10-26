@@ -12,6 +12,7 @@ const logs: Shape<typeof zh> = {
   "action.copyLine": "Copy this line",
   "action.jump": "Jump to latest",
   "action.jumpNew": "Jump to latest ({count} new)",
+  "action.showEarlier": "Show {count} earlier lines ({hidden} not shown)",
   copiedAll: "Copied {count, plural, one {# line} other {# lines}}",
   copiedLine: "Line copied",
   copyFailed: "Could not write to the clipboard",

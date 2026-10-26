@@ -1,5 +1,6 @@
 import { FRESH_ROW, useFreshIds } from "./fresh-rows";
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -38,6 +39,8 @@ import { has, t, tr } from "./i18n/index.ts";
 import { UnavailableNotice, clock, dateTime, number } from "./ui";
 
 const CLIENT_CAP = 4000;
+/** Rows in the DOM: the newest ones. "Show earlier" reveals more; copy and download still take every record. */
+const WINDOW_ROWS = 300;
 const RING_LIMIT = 2000;
 const LEVELS = ["all", "INFO", "WARNING", "ERROR"] as const;
 type LevelChoice = (typeof LEVELS)[number];
@@ -81,6 +84,44 @@ const levelTone = (level: string) =>
 const stamp = (r: LogRecord) =>
   `${clock(r.t * 1000)}.${String(Math.floor((r.t % 1) * 1000)).padStart(3, "0")}`;
 
+const LogRow = memo(function LogRow({
+  r,
+  isFresh,
+  onCopy,
+}: {
+  r: LogRecord;
+  isFresh: boolean;
+  onCopy: (value: string, message: string) => void;
+}) {
+  return (
+    <div
+      className={`group flex flex-wrap items-baseline gap-x-3 px-4 py-1 text-xs hover:bg-muted/40 ${isFresh ? FRESH_ROW : ""}`}
+    >
+      <span className="w-[6.75rem] shrink-0 tabular-nums text-muted-foreground">
+        {stamp(r)}
+      </span>
+      <span className={`w-14 shrink-0 ${levelTone(r.level)}`}>
+        {levelName(r.level)}
+      </span>
+      <span
+        title={r.logger}
+        className="hidden max-w-40 shrink-0 truncate text-muted-foreground md:inline"
+      >
+        {r.logger}
+      </span>
+      <IconButton
+        icon={<Copy size={12} />}
+        label={t("logs.action.copyLine")}
+        onClick={() => onCopy(formatLine(r), t("logs.copiedLine"))}
+        className="order-2 ml-auto h-5 w-5 min-h-0 min-w-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 max-sm:w-8 md:order-last [@media(hover:none)]:opacity-60"
+      />
+      <span className="order-3 min-w-0 basis-full break-words font-mono md:order-none md:basis-0 md:flex-1">
+        {r.msg}
+      </span>
+    </div>
+  );
+});
+
 type Load = "loading" | "ready" | "missing" | "denied" | "error";
 type Live = "off" | "connecting" | "live" | "polling" | "reconnecting";
 
@@ -97,6 +138,7 @@ export default function Logs({ connection }: { connection: Connection }) {
     [live, setLive] = useState<Live>("off"),
     [dropped, setDropped] = useState(0),
     [unseen, setUnseen] = useState(0),
+    [shown, setShown] = useState(WINDOW_ROWS),
     [note, setNote] = useState<string | null>(null);
   const cursor = useRef(0),
     scroller = useRef<HTMLDivElement | null>(null),
@@ -170,6 +212,7 @@ export default function Logs({ connection }: { connection: Connection }) {
         setDropped(page.dropped);
         setLoad("ready");
         setFollow(!range);
+        setShown(WINDOW_ROWS);
       })
       .catch((e: unknown) => {
         if (controller.signal.aborted) return;
@@ -298,16 +341,31 @@ export default function Logs({ connection }: { connection: Connection }) {
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
   };
-  const flash = (message: string) => {
-    setNote(message);
-    setTimeout(() => setNote((n) => (n === message ? null : n)), 2200);
-  };
-  const copy = (value: string, message: string) => {
+  const copy = useCallback((value: string, message: string) => {
+    const show = (m: string) => {
+      setNote(m);
+      setTimeout(() => setNote((n) => (n === m ? null : n)), 2200);
+    };
     void navigator.clipboard
       ?.writeText(value)
-      .then(() => flash(message))
-      .catch(() => flash(t("logs.copyFailed")));
+      .then(() => show(message))
+      .catch(() => show(t("logs.copyFailed")));
+  }, []);
+  const hidden = Math.max(0, records.length - shown);
+  const visible = hidden ? records.slice(-shown) : records;
+  // Revealing earlier rows grows the list above the viewport: keep what the reader was looking at in place.
+  const anchor = useRef<number | null>(null);
+  const showEarlier = () => {
+    anchor.current = scroller.current?.scrollHeight ?? null;
+    setShown((n) => n + WINDOW_ROWS);
   };
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el && anchor.current !== null) {
+      el.scrollTop += el.scrollHeight - anchor.current;
+      anchor.current = null;
+    }
+  }, [shown]);
   const lines = () => records.map(formatLine).join("\n");
   const download = () =>
     saveBlob(
@@ -454,33 +512,23 @@ export default function Logs({ connection }: { connection: Connection }) {
             aria-label={t("logs.list.aria")}
             className="h-[60dvh] min-h-80 overflow-y-auto py-1"
           >
-            {records.map((r) => (
-              <div
-                key={r.id}
-                className={`group flex flex-wrap items-baseline gap-x-3 px-4 py-1 text-xs hover:bg-muted/40 ${fresh(String(r.id)) ? FRESH_ROW : ""}`}
-              >
-                <span className="w-[6.75rem] shrink-0 tabular-nums text-muted-foreground">
-                  {stamp(r)}
-                </span>
-                <span className={`w-14 shrink-0 ${levelTone(r.level)}`}>
-                  {levelName(r.level)}
-                </span>
-                <span
-                  title={r.logger}
-                  className="hidden max-w-40 shrink-0 truncate text-muted-foreground md:inline"
-                >
-                  {r.logger}
-                </span>
-                <IconButton
-                  icon={<Copy size={12} />}
-                  label={t("logs.action.copyLine")}
-                  onClick={() => copy(formatLine(r), t("logs.copiedLine"))}
-                  className="order-2 ml-auto h-5 w-5 min-h-0 min-w-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 max-sm:w-8 md:order-last [@media(hover:none)]:opacity-60"
-                />
-                <span className="order-3 min-w-0 basis-full break-words font-mono md:order-none md:basis-0 md:flex-1">
-                  {r.msg}
-                </span>
+            {hidden > 0 && (
+              <div className="px-4 py-1">
+                <Button size="sm" variant="secondary" onClick={showEarlier}>
+                  {t("logs.action.showEarlier", {
+                    count: number(Math.min(hidden, WINDOW_ROWS), 0),
+                    hidden: number(hidden, 0),
+                  })}
+                </Button>
               </div>
+            )}
+            {visible.map((r) => (
+              <LogRow
+                key={r.id}
+                r={r}
+                isFresh={fresh(String(r.id))}
+                onCopy={copy}
+              />
             ))}
           </div>
         ) : (
