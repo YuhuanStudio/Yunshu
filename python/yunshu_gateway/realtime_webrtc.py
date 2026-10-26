@@ -6,6 +6,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import logging
 import time
 import uuid
 from fractions import Fraction
@@ -16,18 +17,67 @@ from fastapi.responses import Response
 
 from . import realtime_secrets
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["realtime"])
 _calls: dict[str, tuple[Any, list[asyncio.Task], list[ChannelSocket]]] = {}
 
 
+class _AudioMessage(str):
+    """An ``input_audio_buffer.append`` event: droppable under load (control events are not)."""
+
+
+class _Inbox(asyncio.Queue):
+    def evict_oldest_audio(self) -> bool:
+        for index, message in enumerate(self._queue):
+            if isinstance(message, _AudioMessage):
+                del self._queue[index]
+                return True
+        return False
+
+
 class ChannelSocket:
-    """Bounded data-channel adapter consumed by RealtimeSession."""
+    """Bounded data-channel adapter consumed by RealtimeSession.
+
+    When the session falls behind, the oldest queued audio frames are dropped (counted in
+    ``dropped_audio``) so control events such as response.cancel still get through; the call is
+    torn down only when a client floods the queue with control events alone.
+    """
 
     def __init__(self, channel, output):
         self.channel, self.output = channel, output
-        self.incoming = asyncio.Queue(maxsize=256)
+        self.incoming = _Inbox(maxsize=256)
         self.closed = False
         self.session = None
+        self.dropped_audio = 0
+
+    def _note_dropped_audio(self):
+        self.dropped_audio += 1
+        if self.dropped_audio == 1 or self.dropped_audio % 1000 == 0:
+            logger.warning(
+                "realtime webrtc: session is behind, dropped %d audio frame(s)",
+                self.dropped_audio,
+            )
+
+    def offer(self, message, *, audio=False):
+        """Queue one inbound event without blocking. Returns False when it was dropped."""
+        if self.closed:
+            return False
+        if audio:
+            message = _AudioMessage(message)
+        try:
+            self.incoming.put_nowait(message)
+            return True
+        except asyncio.QueueFull:
+            pass
+        if audio:
+            self._note_dropped_audio()  # the newest frame goes: keeps the queue order
+            return False
+        if self.incoming.evict_oldest_audio():
+            self._note_dropped_audio()
+            self.incoming.put_nowait(message)
+            return True
+        self.disconnect()  # 256 control events pending: a flood, not a slow session
+        return False
 
     def feed(self, message):
         if self.closed:
@@ -35,8 +85,10 @@ class ChannelSocket:
         if not isinstance(message, str) or len(message) > 1024 * 1024:
             self.disconnect()
             return
+        audio = False
         try:
             event = json.loads(message)
+            audio = event.get("type") == "input_audio_buffer.append"
             # RTP supplies/consumes audio; data-channel format overrides cannot change PCM.
             for config_key in ("session", "response"):
                 config = event.get(config_key)
@@ -58,10 +110,7 @@ class ChannelSocket:
             message = json.dumps(event)
         except (ValueError, AttributeError):
             pass  # The shared session emits its ordinary invalid-JSON error.
-        try:
-            self.incoming.put_nowait(message)
-        except asyncio.QueueFull:
-            self.disconnect()
+        self.offer(message, audio=audio)
 
     def disconnect(self):
         self.closed = True
@@ -265,14 +314,15 @@ async def create_call(request: Request):
                     frame = await track.recv()
                     for converted in resampler.resample(frame):
                         pcm = bytes(converted.planes[0])[: converted.samples * 2]
-                        # The session receives all inputs serially through the bounded queue.
-                        await sockets[0].incoming.put(
+                        # Serial, bounded queue; a full queue drops this frame (counted), never the call.
+                        sockets[0].offer(
                             json.dumps(
                                 {
                                     "type": "input_audio_buffer.append",
                                     "audio": base64.b64encode(pcm).decode(),
                                 }
-                            )
+                            ),
+                            audio=True,
                         )
             except Exception:
                 await close_call(identifier)
