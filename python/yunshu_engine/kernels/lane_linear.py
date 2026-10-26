@@ -93,7 +93,9 @@ def eligible(module: Any) -> bool:
         return False
     n = int(module.weight.shape[0])
     k = int(module.weight.shape[1]) * 32 // bits
-    return k % 64 == 0 and n % 4 == 0
+    # columns not a multiple of NT stay untiled: the kernel slices the whole weight tensor
+    tiled = n % lane_qmm.NT == 0
+    return k % 64 == 0 and n % 4 == 0 and lane_qmm.slice_offset_ok(n, k, bits, tiled=tiled)
 
 
 class LaneLinear(nn.Module):
