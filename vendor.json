@@ -1910,7 +1910,7 @@
       "source_sha256": "69c266eb1eb1f5114e63d6c2a79f5a0eef27c7145c7db592984c3fe4a38e96ef",
       "installed_version": "0.7.8",
       "reviewed_date": "2026-10-15",
-      "review_reason": "sync016: KEEP: packed GDN is selected only for multi-token, scalar-gate, fp32-state/gate, Dk128 unmasked calls. Local >=64-token mx.fast chunk dispatch and explicit step_kernel bypass are still required; packed fallback stays upstream. Numerical identity must be established by GPU gates."
+      "review_reason": "sync016: KEEP: packed GDN is selected only for multi-token, scalar-gate, fp32-state/gate, Dk128 unmasked calls. Local >=64-token mx.fast chunk dispatch is still required (the step_kernel bypass went with the round driver in 03b03e7); packed fallback stays upstream. Numerical identity must be established by GPU gates."
     },
     {
       "kind": "patches",

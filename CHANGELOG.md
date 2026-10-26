@@ -186,18 +186,17 @@ and cold 32K TTFT versus Splash 1.3.2.
 - Realtime `server_vad` no longer ends a turn when short pauses add up to the silence window, idle silence no longer
   overflows the input buffer, and a cancelled reply stays in the conversation. Token budgets count natively rendered
   tool schemas. Grammar dead ends, full stream queues and failed admissions fail only their own request. The SSD
-  prefix cache no longer keeps every written prompt in RAM. Every serving path now carries the same fixes
-  ([path parity](docs/reports/HANDOFF_REVIEW_2026-10-26.md#what-a-unified-path-must-keep)).
+  prefix cache no longer keeps every written prompt in RAM. The serving paths carry the same fixes, with the
+  exceptions listed in the [handoff](docs/reports/HANDOFF_REVIEW_2026-10-26.md#what-a-unified-path-must-keep).
 
 ### Security
 
-- No security-specific changes in this release.
-
-[Full changelog: v0.1.5…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.5...main)
 - Special-token strings in message text stay text when the chat template is rendered, so a user cannot close their
   turn and open a system one; `YUNSHU_MCP_SERVERS` is masked like other secrets; the code-execution editor opens
   paths with `O_NOFOLLOW` and refuses FIFOs; decoded request media live in a private directory sandboxed code cannot
   read. The console blocks remote images in model output.
+
+[Full changelog: v0.1.5…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.5...main)
 
 ## [0.1.5] - 2026-10-15
 
