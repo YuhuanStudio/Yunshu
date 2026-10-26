@@ -187,15 +187,6 @@ class DFlashBatch:
                 mx.array([rows[b].pending for b in live], dtype=mx.int32),
                 15,
             )
-            # One drafter-head matmul over every sampled row (the lm head weights
-            # are read once, not once per row); the per-row Gumbel step stays row-wise.
-            keyed_at = [j for j, b in enumerate(live) if rows[b].keyed is not None]
-            head = {}
-            if len(keyed_at) > 1:
-                stacked = self.draft._logits(
-                    mx.concatenate([hs[j : j + 1] for j in keyed_at], axis=0)
-                )
-                head = {j: stacked[i : i + 1] for i, j in enumerate(keyed_at)}
             for j, b in enumerate(live):
                 r = rows[b]
                 lat = dflash_tree.lattice_from_hidden(
@@ -204,7 +195,6 @@ class DFlashBatch:
                     mx.array([r.pending], dtype=mx.int32),
                     keyed=r.keyed,
                     committed=r.generated,
-                    full_logits=head.get(j),
                 )
                 toks, parents = search_tree(lat, nodes[b])
                 toks, parents, ranks = reorder(toks, parents)
