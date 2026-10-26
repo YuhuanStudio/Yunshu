@@ -459,6 +459,28 @@ def _get_silero_vad():
     return _silero_vad or None
 
 
+def _accepts_language(fn) -> bool:
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return "language" in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+
+
+async def _run_on_mlx(fn, *args):
+    """Run ``fn`` on the engine's single MLX executor thread (all MLX work is serialized
+    there); where MLX is not installed there is nothing to serialize against."""
+    try:
+        from yunshu_engine.mlx_executor import get_mlx_executor
+    except ImportError:
+        return fn(*args)
+    return await asyncio.get_running_loop().run_in_executor(
+        get_mlx_executor(), fn, *args
+    )
+
+
 def _strip_wav_header(data: bytes) -> bytes:
     """Return raw PCM, stripping a leading RIFF/WAVE header if present.
 
@@ -523,6 +545,9 @@ class SessionConfig:
         self.turn_detection = _default_turn_detection()
         # {"type": "near_field" | "far_field"} or None: input noise reduction before VAD / ASR.
         self.input_audio_noise_reduction: dict | None = None
+        # {"model": ..., "language": ..., "prompt": ...} or None: which loaded ASR model
+        # transcribes committed audio, and in which language.
+        self.input_audio_transcription: dict | None = None
         self.max_response_output_tokens = 4096
         self.temperature = (
             0.7  # as reported to clients; the sampler uses _explicit_sampling
@@ -597,6 +622,9 @@ class SessionConfig:
                         isinstance(value, dict) and supported(value.get("type"))
                     ):
                         continue
+                if key == "input_audio_transcription":
+                    if value is not None and not isinstance(value, dict):
+                        continue
                 if key == "modalities":
                     # validate modalities like voice/format/turn_detection — a
                     # client could otherwise set a non-list or ["video"] and to_dict() would
@@ -643,6 +671,7 @@ class SessionConfig:
             "output_audio_format": self.output_audio_format,
             "turn_detection": self.turn_detection,
             "input_audio_noise_reduction": self.input_audio_noise_reduction,
+            "input_audio_transcription": self.input_audio_transcription,
             "max_response_output_tokens": self.max_response_output_tokens,
             "temperature": self.temperature,
             "tools": self.tools,
@@ -810,17 +839,17 @@ class RealtimeSession:
 
     def _decode_g711_ulaw(self, data: bytes) -> bytes:
         """Decode G.711 μ-law audio to 16-bit PCM."""
-        import struct
+        import numpy as np
 
-        table = self._get_ulaw_table()
-        return struct.pack(f"<{len(data)}h", *[table[b] for b in data])
+        table = np.asarray(self._get_ulaw_table(), dtype="<i2")
+        return table[np.frombuffer(data, dtype=np.uint8)].tobytes()
 
     def _decode_g711_alaw(self, data: bytes) -> bytes:
         """Decode G.711 A-law audio to 16-bit PCM."""
-        import struct
+        import numpy as np
 
-        table = self._get_alaw_table()
-        return struct.pack(f"<{len(data)}h", *[table[b] for b in data])
+        table = np.asarray(self._get_alaw_table(), dtype="<i2")
+        return table[np.frombuffer(data, dtype=np.uint8)].tobytes()
 
     # ── G.711 ENCODE — output path was decode-only, so g711 clients ──
     # got raw 24 kHz PCM16 mislabeled as 8 kHz μ-law → garbage playback. Build the
@@ -831,25 +860,24 @@ class RealtimeSession:
 
     @classmethod
     def _build_encode_lut(cls, decode_table: list[int]) -> bytes:
-        import bisect
+        import numpy as np
 
-        codes = sorted(range(256), key=lambda c: decode_table[c])
-        vals = [decode_table[c] for c in codes]
-        lut = bytearray(65536)
-        for pcm in range(-32768, 32768):
-            j = bisect.bisect_left(vals, pcm)
-            if j <= 0:
-                best = codes[0]
-            elif j >= 256:
-                best = codes[255]
-            else:
-                best = (
-                    codes[j]
-                    if abs(vals[j] - pcm) < abs(vals[j - 1] - pcm)
-                    else codes[j - 1]
-                )
-            lut[pcm & 0xFFFF] = best
-        return bytes(lut)
+        codes = np.array(sorted(range(256), key=lambda c: decode_table[c]))
+        vals = np.array([decode_table[c] for c in codes])
+        pcm = np.arange(-32768, 32768)
+        j = np.searchsorted(vals, pcm, side="left")  # bisect_left
+        hi = np.minimum(j, 255)
+        lo = np.maximum(j - 1, 0)
+        # nearest decoded value; a tie goes to the lower one. Past either end: that end.
+        pick_hi = np.abs(vals[hi] - pcm) < np.abs(vals[lo] - pcm)
+        best = np.where(
+            j <= 0,
+            codes[0],
+            np.where(j >= 256, codes[255], np.where(pick_hi, codes[hi], codes[lo])),
+        )
+        lut = np.empty(65536, dtype=np.uint8)
+        lut[pcm & 0xFFFF] = best
+        return lut.tobytes()
 
     @classmethod
     def _get_ulaw_encode_lut(cls) -> bytes:
@@ -873,17 +901,17 @@ class RealtimeSession:
         the leftover into the next chunk so resampling per streaming chunk no
         longer drops boundary samples or resets the decimation phase (which caused
         cumulative shortening + periodic clicks for g711 streaming clients)."""
-        import struct
+        import numpy as np
 
         n = len(pcm16) // 2
         if n < 3:
             return b"", pcm16[: n * 2]
-        s = struct.unpack(f"<{n}h", pcm16[: n * 2])
         groups = n // 3
         consumed = groups * 3
-        out = [(s[i] + s[i + 1] + s[i + 2]) // 3 for i in range(0, consumed, 3)]
+        s = np.frombuffer(pcm16, dtype="<i2", count=consumed).astype(np.int32)
+        out = s.reshape(groups, 3).sum(axis=1) // 3  # floor division, like int //
         leftover = pcm16[consumed * 2 : n * 2]
-        return struct.pack(f"<{len(out)}h", *out), leftover
+        return out.astype("<i2").tobytes(), leftover
 
     def _resample_pcm16_linear(
         self, pcm16: bytes, from_rate: int, to_rate: int, state_attr: str
@@ -896,26 +924,34 @@ class RealtimeSession:
         fine for speech; the 24 kHz→8 kHz g711 path keeps its dedicated box filter."""
         if from_rate == to_rate or not pcm16:
             return pcm16
-        import struct
+        import numpy as np
 
         n = len(pcm16) // 2
         if n == 0:
             return b""
-        samples = list(struct.unpack(f"<{n}h", pcm16[: n * 2]))
+        samples = np.frombuffer(pcm16, dtype="<i2", count=n).astype(np.int64)
         st = getattr(self, state_attr, None)
-        last, pos = st if st is not None else (samples[0], 0.0)
-        buf = [last] + samples  # prepend carried sample so interp spans the boundary
+        last, pos = st if st is not None else (int(samples[0]), 0.0)
+        # prepend carried sample so interp spans the boundary
+        buf = np.concatenate((np.array([last], dtype=np.int64), samples))
         step = from_rate / to_rate  # input samples consumed per output sample
-        out = []
-        i = pos
-        _last_idx = len(buf) - 1
-        while i < _last_idx:
-            i0 = int(i)
-            frac = i - i0
-            out.append(int(buf[i0] * (1.0 - frac) + buf[i0 + 1] * frac))
-            i += step
-        setattr(self, state_attr, (buf[-1], i - _last_idx))
-        return struct.pack(f"<{len(out)}h", *out) if out else b""
+        last_idx = len(buf) - 1
+        # The input position of output k is pos + step + step + ... (accumulated, not
+        # k * step) so the output is bit-identical to the former per-sample loop; cumsum
+        # adds strictly in order. One extra position is the carried state.
+        m = int(max(0.0, last_idx - pos) / step) + 3
+        steps = np.full(m, step)
+        steps[0] = pos
+        positions = np.cumsum(steps)
+        count = int(np.searchsorted(positions, last_idx, side="left"))
+        i = float(positions[count])
+        setattr(self, state_attr, (int(buf[-1]), i - last_idx))
+        if count == 0:
+            return b""
+        idx = positions[:count].astype(np.int64)
+        frac = positions[:count] - idx
+        out = (buf[idx] * (1.0 - frac) + buf[idx + 1] * frac).astype(np.int64)
+        return out.astype("<i2").tobytes()
 
     def _encode_output_audio(
         self, pcm16: bytes, in_rate: int = 24000, fmt: str | None = None
@@ -945,16 +981,17 @@ class RealtimeSession:
                 pcm8k = self._resample_pcm16_linear(
                     pcm16, in_rate, 8000, "_g711_lin_state"
                 )
-            n = len(pcm8k) // 2
-            import struct
+            import numpy as np
 
-            samples = struct.unpack(f"<{n}h", pcm8k[: n * 2]) if n else ()
-            enc = (
+            n = len(pcm8k) // 2
+            enc = np.frombuffer(
                 self._get_ulaw_encode_lut()
                 if fmt == "g711_ulaw"
-                else self._get_alaw_encode_lut()
+                else self._get_alaw_encode_lut(),
+                dtype=np.uint8,
             )
-            out = bytes(enc[sample & 0xFFFF] for sample in samples)
+            # the LUT is indexed by the sample's 16-bit two's-complement value
+            out = enc[np.frombuffer(pcm8k, dtype="<u2", count=n)].tobytes()
             return out, 160  # 20 ms @ 8 kHz, 1 byte/sample
         # pcm16 output: the OpenAI Realtime contract is 24 kHz — resample if the engine isn't.
         pcm24 = (
@@ -1022,6 +1059,14 @@ class RealtimeSession:
     _resp_audio_bytes: int = 0  # encoded audio sent for the active response
     _obuf_started: bool = False  # output_audio_buffer.started sent
     _obuf_cleared: bool = False  # the audio was cut (cancel / barge-in / clear)
+    # Text generated so far for the active response (and whether it is out-of-band):
+    # a cancel / barge-in keeps it as an incomplete assistant item.
+    _lane: asyncio.Task | None = None  # tail of the ordered commit lane
+    _audio_done_for: str | None = None  # response whose response.audio.done went out
+    _partial_text: str = ""
+    # id of the user item the utterance in progress becomes (VAD events, committed, item)
+    _pending_user_item_id: str | None = None
+    _partial_oob: bool = False
     _idle_task: asyncio.Task | None = None
     _denoiser = None
     _denoiser_key: tuple | None = None
@@ -1165,7 +1210,9 @@ class RealtimeSession:
 
     def _cancel_idle_timer(self) -> None:
         task = self._idle_task
-        if task is not None and not task.done():
+        # Never the running task: when the idle timer itself starts the response, cancelling
+        # it here would abort that response at its next suspension.
+        if task is not None and not task.done() and task is not asyncio.current_task():
             task.cancel()
         self._idle_task = None
 
@@ -1236,7 +1283,7 @@ class RealtimeSession:
     async def _send_wire(self, event: dict) -> None:
         try:
             if self.dialect == "ga":
-                for ev in realtime_ga.to_ga(event):
+                for ev in realtime_ga.to_ga(event, self._secret_kind):
                     await self.ws.send_json(ev)
             else:
                 await self.ws.send_json(event)
@@ -1318,6 +1365,11 @@ class RealtimeSession:
                 # Give the cancelled task a chance to run its finally block
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await asyncio.shield(self._active_response)
+            lane_tasks = list(self.__dict__.get("_lane_tasks", ()))
+            for lane_task in lane_tasks:
+                lane_task.cancel()
+            if lane_tasks:
+                await asyncio.gather(*lane_tasks, return_exceptions=True)
             # Release all session state to free memory on disconnect
             self._audio_buffer = bytearray()
             self.conversation.items.clear()
@@ -1364,6 +1416,42 @@ class RealtimeSession:
                 )
             )
             return
+        # A commit transcribes (seconds on a large ASR model): it runs in the ordered lane
+        # so the receive loop keeps draining audio, response.cancel and the WebRTC queue.
+        # Events that read the conversation the commit is about to extend wait behind it.
+        if event_type == "input_audio_buffer.commit" or (
+            event_type in _AFTER_COMMIT_EVENTS and self._lane_busy()
+        ):
+            self._lane_run(self._dispatch(handler, event, event_type))
+            return
+        await self._dispatch(handler, event, event_type)
+
+    def _lane_busy(self) -> bool:
+        return self._lane is not None and not self._lane.done()
+
+    def _lane_run(self, coro) -> asyncio.Task:
+        """Run ``coro`` after everything already in the lane (arrival order preserved),
+        without blocking the caller."""
+        prev = self._lane
+
+        async def _after_prev():
+            if prev is not None and not prev.done():
+                await asyncio.wait({prev})  # no cancel/exception propagation from prev
+            try:
+                await coro
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Realtime lane error: {e}", exc_info=True)
+
+        task = asyncio.create_task(_after_prev())
+        self._lane = task
+        tasks = self.__dict__.setdefault("_lane_tasks", set())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+        return task
+
+    async def _dispatch(self, handler, event: dict, event_type: str) -> None:
         try:
             await handler(self, event)
         except Exception as e:
@@ -1651,6 +1739,10 @@ class RealtimeSession:
         )
 
         self._last_usage = (0, 0)
+        # fresh response -> no terminal response.done yet. Reset here, not only in the
+        # task body: a response.cancel handled before the task's first step must not see
+        # the previous response's flag and skip its own response.done.
+        self._response_done_emitted = False
         self._active_response = asyncio.create_task(
             self._generate_response(response_id, item_id, modalities, response_config)
         )
@@ -2034,6 +2126,8 @@ class RealtimeSession:
             )
 
             full_text = ""
+            self._partial_text = ""
+            self._partial_oob = _oob
             _usage_pt = 0  # prompt tokens
             _usage_ct = 0  # completion tokens
 
@@ -2067,6 +2161,7 @@ class RealtimeSession:
                         raise EngineStreamError(str(output.error))
                     if output.new_text:
                         full_text += output.new_text
+                        self._partial_text = full_text
                         if "text" in modalities:
                             await self.send_event(
                                 _event(
@@ -2124,6 +2219,7 @@ class RealtimeSession:
                         raise EngineStreamError(str(output.error))
                     if output.token_text:
                         full_text += output.token_text
+                        self._partial_text = full_text
                         if "text" in modalities:
                             await self.send_event(
                                 _event(
@@ -2221,6 +2317,7 @@ class RealtimeSession:
                 )
                 if _snap_tool_choice != "none" and _calls:
                     tool_calls = _calls
+            self._partial_text = _visible_text  # what TTS speaks (a cancel keeps it)
 
             # persist each tool call as a function_call item so it's in history
             # WITH its call_id. The client returns a function_call_output carrying the same
@@ -2643,6 +2740,8 @@ class RealtimeSession:
             )
 
             full_text = ""
+            self._partial_text = ""
+            self._partial_oob = _oob
             self._pcm16_lin_state = None
             self._g711_lin_state = None
             self._g711_resample_remainder = b""
@@ -2662,6 +2761,7 @@ class RealtimeSession:
                     if not ch.data:
                         continue
                     full_text += ch.data
+                    self._partial_text = full_text
                     # Trip suppression as soon as the turn looks like a tool call —
                     # either <tool_call> markup OR (Qwen3-Omni) a bare-JSON payload that
                     # starts the turn with `{`/`[`. Catching the leading brace keeps the
@@ -2729,6 +2829,7 @@ class RealtimeSession:
                 _fc_items, _visible_text = self._extract_visible_and_tool_calls(
                     full_text, _snap_tools, _snap_tool_choice, _snap_model, _oob
                 )
+            self._partial_text = _visible_text
 
             if "text" in modalities:
                 # the cascade path always closed the text stream; the omni
@@ -2946,7 +3047,7 @@ class RealtimeSession:
             # 1. audio.done FIRST (if audio modality was active)
             # 2. response.done SECOND
             # Use locked send to prevent interleaving with a new response.create
-            if _had_audio:
+            if _had_audio and self._audio_done_for != response_id:
                 await self._locked_send_event(
                     _event(
                         RealtimeEvent.RESPONSE_AUDIO_DONE,
@@ -2956,10 +3057,14 @@ class RealtimeSession:
                         content_index=0,
                     )
                 )
+            # Keep what was generated as an incomplete assistant item: without it
+            # conversation.item.truncate (sent after a barge-in) finds no item and the
+            # model forgets the reply it was interrupted in.
+            _kept = await self._keep_interrupted_item(item_id, _had_audio)
             # (self-audit): close the OPEN output item (added but not yet done) so a
             # cancel/barge-in doesn't leave a dangling in-progress item for SDK clients.
             await self._close_response_item(
-                response_id, item_id, status="incomplete", locked=True
+                response_id, item_id, status="incomplete", text=_kept, locked=True
             )
             await self._locked_send_event(
                 _event(
@@ -2972,6 +3077,37 @@ class RealtimeSession:
                 )
             )
             self._response_done_emitted = True  # (self-audit R2)
+
+    async def _keep_interrupted_item(self, item_id: str, had_audio: bool) -> str:
+        """Add the interrupted response's partial assistant item (status incomplete) to the
+        conversation, as OpenAI keeps it, and return its text ("" when nothing was kept)."""
+        if self._partial_oob:
+            return ""
+        text = self._partial_text or ""
+        if "<think" in text:
+            from ..streaming import extract_thinking
+
+            with contextlib.suppress(Exception):
+                _, text = extract_thinking(text, self.session.model)
+        if not text or any(it.item_id == item_id for it in self.conversation.items):
+            return text
+        if had_audio:
+            part = {
+                "type": "audio",
+                "transcript": text,
+                "duration_ms": max(1, len(text) * 70),
+            }
+        else:
+            part = {"type": "text", "text": text}
+        item = ConversationItem(
+            item_id=item_id, item_type="message", role="assistant", content=[part]
+        )
+        item.status = "incomplete"
+        self.conversation.add_item(item)
+        await self._locked_send_event(
+            _event("conversation.item.created", item=item.to_dict())
+        )
+        return text
 
     async def _close_response_item(
         self,
@@ -3054,6 +3190,7 @@ class RealtimeSession:
             if _audio_done_sent:
                 return
             _audio_done_sent = True
+            self._audio_done_for = response_id  # the cancel handler must not repeat it
             try:
                 await self.send_event(
                     _event(
@@ -3231,7 +3368,13 @@ class RealtimeSession:
                     error={
                         "message": (
                             "input_audio_buffer exceeded the maximum size; the buffer was "
-                            "cleared. Commit more frequently or enable server VAD."
+                            "cleared. Commit more frequently"
+                            + (
+                                "."
+                                if (self.session.turn_detection or {}).get("type")
+                                == "server_vad"
+                                else " or enable server VAD."
+                            )
                         ),
                         "type": "invalid_request_error",
                         "code": "input_audio_buffer_overflow",
@@ -3248,6 +3391,24 @@ class RealtimeSession:
         turn_detection = self.session.turn_detection
         if turn_detection and turn_detection.get("type") == "server_vad":
             await self._run_vad(chunk)
+            # An always-open mic: while nobody is speaking, idle silence has no
+            # use beyond the prefix_padding_ms pre-roll the next utterance keeps, so
+            # drop the rest instead of letting it fill the cap (overflow error ~3.5 min).
+            if not self._vad_speaking:
+                self._trim_idle_audio(turn_detection)
+
+    def _trim_idle_audio(self, turn_detection: dict) -> None:
+        """Keep only ~prefix_padding_ms of trailing idle audio in the buffer."""
+        _in_fmt = str(
+            getattr(self.session, "input_audio_format", "pcm16") or "pcm16"
+        ).lower()
+        _sr = 8000 if "g711" in _in_fmt else 24000
+        _pad_ms = int(turn_detection.get("prefix_padding_ms", 300))
+        keep = max(int(_pad_ms / 1000 * _sr) * 2, 2)
+        # Trim in batches (at 2x the pre-roll) so the front delete isn't per chunk.
+        if len(self._audio_buffer) > 2 * keep:
+            del self._audio_buffer[: len(self._audio_buffer) - keep]
+            self._vad_speech_start_offset = 0
 
     def _reset_silero(self) -> None:
         """Drop Silero streaming state so the next utterance starts fresh."""
@@ -3316,7 +3477,12 @@ class RealtimeSession:
         # OpenAI `threshold` (default 0.5) is used directly. The energy fallback has
         # to map it onto normalized RMS (speech ~0.03-0.1, silence below) — a 0.5
         # direct compare against RMS would never fire, so gate at threshold*0.05.
-        _silero_prob = self._silero_speech_prob(audio_chunk)
+        if _silero_vad_enabled():
+            # Silero's first call downloads/loads the model and every feed runs MLX evals:
+            # both belong on the engine's single MLX thread, not on the event loop.
+            _silero_prob = await _run_on_mlx(self._silero_speech_prob, audio_chunk)
+        else:
+            _silero_prob = self._silero_speech_prob(audio_chunk)
         if _silero_prob is not None:
             speech = _silero_prob >= threshold
         else:
@@ -3346,10 +3512,13 @@ class RealtimeSession:
                 self._vad_speech_bytes = 0
                 self._barge_in_fired = False
                 self._cancel_idle_timer()
+                if self._pending_user_item_id is None:
+                    self._pending_user_item_id = f"item_{uuid.uuid4().hex[:8]}"
                 await self.send_event(
                     _event(
                         RealtimeEvent.INPUT_AUDIO_BUFFER_SPEECH_STARTED,
                         audio_start_ms=_pre_offset // _bytes_per_ms,
+                        item_id=self._pending_user_item_id,
                     )
                 )
             # silence_duration_ms is a CONTIGUOUS window: speech resuming mid-utterance
@@ -3400,10 +3569,12 @@ class RealtimeSession:
                         _event(
                             RealtimeEvent.INPUT_AUDIO_BUFFER_SPEECH_STOPPED,
                             audio_end_ms=_speech_end // _bytes_per_ms,
+                            item_id=self._pending_user_item_id,
                         )
                     )
-                    # Auto-commit and trigger response (OpenAI behavior with server_vad)
-                    await self._auto_commit_and_respond()
+                    # Auto-commit and trigger response (OpenAI behavior with server_vad);
+                    # in the lane so the ASR does not stall the receive loop.
+                    self._lane_run(self._auto_commit_and_respond())
             else:
                 self._vad_silence_bytes = 0
 
@@ -3459,9 +3630,30 @@ class RealtimeSession:
             if 0 < _start < len(audio_data):
                 audio_data = audio_data[_start:]
 
+        # Consume the buffer NOW: audio appended while the ASR runs belongs to the next
+        # turn. Reset VAD state too (like the clear handler): a stale
+        # _vad_speaking/_vad_silence_bytes could let the next quiet append immediately
+        # satisfy the aged silence counter -> a phantom speech_stopped + auto-response on
+        # a near-empty buffer, and the speech-start offset would mislead the next
+        # prefix-padding trim (R6).
+        self._audio_buffer = bytearray()
+        self._vad_speaking = False
+        self._vad_silence_bytes = 0
+        self._vad_speech_start_offset = 0
+        self._reset_silero()
+
+        # The user item this audio becomes: the id the VAD events already announced (or a
+        # fresh one for a manual commit); the item created after the ASR reuses it.
+        _user_item_id = self._pending_user_item_id or f"item_{uuid.uuid4().hex[:8]}"
+        self._pending_user_item_id = None
+        _prev_item_id = (
+            self.conversation.items[-1].item_id if self.conversation.items else None
+        )
         await self.send_event(
             _event(
                 RealtimeEvent.INPUT_AUDIO_BUFFER_COMMITTED,
+                item_id=_user_item_id,
+                previous_item_id=_prev_item_id,
             )
         )
 
@@ -3510,10 +3702,23 @@ class RealtimeSession:
             manager = get_model_manager()
             asr_found = False
             if manager is not None:
-                for entry in manager.list_entries():
+                # input_audio_transcription.model picks the loaded ASR model (else the
+                # first one); .language goes to engines that take a language hint.
+                _tr = self.session.input_audio_transcription or {}
+                _want = _tr.get("model")
+                _entries = sorted(
+                    manager.list_entries(),
+                    key=lambda e: bool(_want) and getattr(e, "model_id", None) != _want,
+                )
+                for entry in _entries:
                     if entry.is_loaded and hasattr(entry.engine, "transcribe"):
                         asr_found = True
-                        transcript = await entry.engine.transcribe(tmp_path)
+                        _kw = {}
+                        if _tr.get("language") and _accepts_language(
+                            entry.engine.transcribe
+                        ):
+                            _kw["language"] = _tr["language"]
+                        transcript = await entry.engine.transcribe(tmp_path, **_kw)
                         text = (
                             transcript.get("text", "")
                             if isinstance(transcript, dict)
@@ -3521,7 +3726,7 @@ class RealtimeSession:
                         )
                         if text:
                             item = ConversationItem(
-                                item_id=f"item_{uuid.uuid4().hex[:8]}",
+                                item_id=_user_item_id,
                                 item_type="message",
                                 role="user",
                                 content=[{"type": "text", "text": text}],
@@ -3574,16 +3779,6 @@ class RealtimeSession:
                 with contextlib.suppress(OSError):
                     os.unlink(tmp_path)
 
-        # reset VAD state too (like the clear handler). A manual commit that
-        # left _vad_speaking/_vad_silence_bytes stale could let the next quiet append
-        # immediately satisfy the aged silence counter → a phantom speech_stopped +
-        # auto-response on a near-empty buffer. Reset the speech-start offset too so
-        # the next turn's prefix-padding trim (R6) doesn't use a stale offset.
-        self._audio_buffer = bytearray()
-        self._vad_speaking = False
-        self._vad_silence_bytes = 0
-        self._vad_speech_start_offset = 0
-        self._reset_silero()
         return _item_created
 
     async def _handle_output_audio_buffer_clear(self, event: dict) -> None:
@@ -3612,7 +3807,9 @@ class RealtimeSession:
         self._audio_buffer = bytearray()
         self._vad_speaking = False
         self._vad_silence_bytes = 0
+        self._pending_user_item_id = None
         self._reset_silero()
+        await self.send_event(_event("input_audio_buffer.cleared"))
 
     async def _auto_commit_and_respond(self) -> None:
         """Auto-commit audio buffer and trigger response (server_vad mode).
@@ -3803,6 +4000,17 @@ class RealtimeSession:
 
 
 # ── Event dispatch ──
+
+# Events that read or extend the conversation: while a commit is still transcribing they
+# queue behind it (the user item must exist before a response.create answers it).
+_AFTER_COMMIT_EVENTS = frozenset(
+    {
+        "response.create",
+        "conversation.item.create",
+        "conversation.item.delete",
+        "conversation.item.truncate",
+    }
+)
 
 _EVENT_HANDLERS = {
     "session.update": RealtimeSession._handle_session_update,

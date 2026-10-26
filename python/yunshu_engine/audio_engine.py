@@ -271,6 +271,40 @@ def _decoded_audio_duration_s(audio_path: str) -> float | None:
     return None
 
 
+# Qwen3-TTS decodes at most this many codec frames per segment. mlx-audio <= 0.5 defaults
+# to it; 0.6+ defaults ``max_tokens=None`` -> the checkpoint's generation_config.json, else
+# 2048, which truncates long speech. Passed explicitly whenever the model leaves it open.
+TTS_DEFAULT_MAX_TOKENS = 4096
+
+
+def _tts_default_max_tokens(model_path: str, gen_params) -> int | None:
+    """The ``max_tokens`` to pass to a TTS ``generate()``, or None to pass nothing.
+
+    Only a model whose ``max_tokens`` default is None is touched (the upstream default
+    would then be 2048 or the checkpoint's own setting): an int default is already the
+    effective value, and other TTS models keep their own limits. A checkpoint that sets
+    ``max_new_tokens`` / ``max_tokens`` in generation_config.json keeps it (upstream reads
+    it when None)."""
+    param = gen_params.get("max_tokens")
+    if param is None or param.default is not None:
+        return None
+    try:
+        import json as _json
+        import os as _os
+
+        cfg_path = _os.path.join(model_path, "generation_config.json")
+        if model_path and _os.path.isfile(cfg_path):
+            with open(cfg_path, encoding="utf-8") as f:
+                cfg = _json.load(f)
+            if isinstance(cfg, dict) and (
+                cfg.get("max_new_tokens") or cfg.get("max_tokens")
+            ):
+                return None
+    except Exception:  # noqa: BLE001 - unreadable config: use our default
+        pass
+    return TTS_DEFAULT_MAX_TOKENS
+
+
 # ── Voice catalogue ───────────────────────────────────────────────────────────
 
 # Built-in voice names for VoiceDesign-style models.  When mlx-audio or a
@@ -448,6 +482,11 @@ class TTSEngine(ActiveRequestMixin):
             gen_kwargs["speed"] = speed
         if temperature is not None and "temperature" in gen_params:
             gen_kwargs["temperature"] = temperature
+        _max_tokens = _tts_default_max_tokens(
+            getattr(self, "_model_path", ""), gen_params
+        )
+        if _max_tokens is not None:
+            gen_kwargs["max_tokens"] = _max_tokens
         gen_kwargs.update(kwargs)
 
         # Seed: the API advertises `seed` for reproducibility, but most TTS models'
@@ -545,6 +584,11 @@ class TTSEngine(ActiveRequestMixin):
             gen_kwargs["speed"] = speed
         if temperature is not None and "temperature" in gen_params:
             gen_kwargs["temperature"] = temperature
+        _max_tokens = _tts_default_max_tokens(
+            getattr(self, "_model_path", ""), gen_params
+        )
+        if _max_tokens is not None:
+            gen_kwargs["max_tokens"] = _max_tokens
         gen_kwargs.update(kwargs)
 
         # Seed: the API advertises `seed` for reproducibility, but most TTS models'
@@ -906,6 +950,16 @@ class ASREngine(ActiveRequestMixin):
         if self._model is None:
             raise RuntimeError("Engine not started")
 
+        # A WAV with no samples has nothing to transcribe: an empty transcription, not an
+        # upstream "zero samples" error surfacing as a 500.
+        if _wav_audio_duration_s(audio_path) == 0:
+            return {
+                "text": "",
+                "language": language or "und",
+                "segments": [],
+                "duration": 0.0,
+            }
+
         # Read audio file once — reuse the bytes for both VAD and LID to avoid
         # double I/O and double memory allocation for large audio files.
         _audio_raw: bytes | None = None
@@ -1116,7 +1170,19 @@ class ASREngine(ActiveRequestMixin):
             _granularities = gen_kwargs.pop("timestamp_granularities", None)
             if _granularities and "word" in _granularities:
                 gen_kwargs.setdefault("word_timestamps", True)
-            result = model.generate(audio_path, **gen_kwargs)
+            try:
+                result = model.generate(audio_path, **gen_kwargs)
+            except ValueError:
+                # mlx-audio raises on a clip that decodes to zero samples (e.g. an empty
+                # mp3/flac): that is an empty transcription, any other ValueError is real.
+                if _decoded_audio_duration_s(audio_path) == 0:
+                    return {
+                        "text": "",
+                        "language": language or "und",
+                        "segments": [],
+                        "duration": 0.0,
+                    }
+                raise
 
             if hasattr(result, "text"):
                 raw_lang = getattr(result, "language", None)
