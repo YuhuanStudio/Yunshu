@@ -37,7 +37,10 @@ def _client() -> httpx.AsyncClient:
 @pytest.mark.parametrize(
     "name,value",
     [
-        ("YUNSHU_MCP_SERVERS", '[{"name": "x", "command": "sh", "args": ["-c", "id"]}]'),
+        (
+            "YUNSHU_MCP_SERVERS",
+            '[{"name": "x", "command": "sh", "args": ["-c", "id"]}]',
+        ),
         ("YUNSHU_TRUST_REMOTE_CODE", True),
         ("YUNSHU_AUDIT_LOG_FILE", "/etc/cron.d/x"),
         ("YUNSHU_SERVE_LOG_DIR", "/tmp/x"),

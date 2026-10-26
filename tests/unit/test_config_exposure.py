@@ -38,7 +38,9 @@ def test_url_user_info_is_masked(monkeypatch):
     )
     assert "hunter2" not in str(row["value"]) and "bob" not in str(row["value"])
     assert row["value"] == "http://***@searx.local:8080/x"
-    assert settings.mask_url_userinfo("http://localhost:8000") == "http://localhost:8000"
+    assert (
+        settings.mask_url_userinfo("http://localhost:8000") == "http://localhost:8000"
+    )
 
 
 @pytest.fixture

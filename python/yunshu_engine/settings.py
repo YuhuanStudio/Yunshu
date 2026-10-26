@@ -937,10 +937,7 @@ def effective(include: tuple[str, ...] = ("stable",)) -> list[dict[str, Any]]:
             value = get(s.name)
         except SettingError as exc:
             value = f"<invalid: {exc}>"
-        if s.secret and text:
-            value = "***"
-        else:
-            value = mask_url_userinfo(value)
+        value = "***" if s.secret and text else mask_url_userinfo(value)
         rows.append(
             {
                 "name": s.name,
