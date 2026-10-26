@@ -331,26 +331,9 @@ body {
   }
 }
 
-/* LiveScroll: the series layer of a time-series chart slides with the clock between samples. */
-.live-scroll svg [clip-path] > *,
-.live-scroll svg g:has(> text[data-axis="x"]) {
-  transform: translateX(calc(var(--live-shift, 0) * -1px));
-}
-@media (prefers-reduced-motion: reduce) {
-  .live-scroll svg [clip-path] > *,
-  .live-scroll svg g:has(> text[data-axis="x"]) {
-    transform: none;
-  }
-}
-
 /* A stat card's meta line keeps two lines of room: it may wrap, the card does not change height. */
 [data-stat-grid] .yunui-stat-sub {
   min-height: 2lh;
-}
-
-/* Live tick labels retain one anchor while the clock scrolls them past the plot edges. */
-.live-scroll svg text[data-axis="x"] {
-  text-anchor: middle;
 }
 
 /* Fixed live lanes: a completion frees its lane without moving surviving requests. */
