@@ -3760,7 +3760,9 @@ class RealtimeSession:
         self._audio_buffer = bytearray()
         self._vad_speaking = False
         self._vad_silence_bytes = 0
+        self._pending_user_item_id = None
         self._reset_silero()
+        await self.send_event(_event("input_audio_buffer.cleared"))
 
     async def _auto_commit_and_respond(self) -> None:
         """Auto-commit audio buffer and trigger response (server_vad mode).
