@@ -800,7 +800,17 @@ class BatchedEngine(
         if self._settings is None:
             return
         s = self._settings
-        if s.kv_cache_quant_bits is not None:
+        if s.kv_cache_quant_bits is not None and (
+            settings.is_set("YUNSHU_KV_QUANT_BITS")
+            and settings.get("YUNSHU_KV_QUANT_BITS") == "off"
+        ):
+            # An explicit YUNSHU_KV_QUANT_BITS=off always wins over model_settings.json.
+            logger.info(
+                "CONFIG: YUNSHU_KV_QUANT_BITS=off set explicitly; ignoring model_settings "
+                "kv_cache_quant_bits=%s.",
+                s.kv_cache_quant_bits,
+            )
+        elif s.kv_cache_quant_bits is not None:
             # Validate the bits BEFORE assigning. model_settings.json (and the
             # YUNSHU_MODEL_{ID}_KV_CACHE_QUANT_BITS override) flowed through here
             # WITHOUT validation, so an invalid value (e.g. 5) reached
