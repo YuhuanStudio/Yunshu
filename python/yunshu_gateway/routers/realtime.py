@@ -1191,7 +1191,9 @@ class RealtimeSession:
 
     def _cancel_idle_timer(self) -> None:
         task = self._idle_task
-        if task is not None and not task.done():
+        # Never the running task: when the idle timer itself starts the response, cancelling
+        # it here would abort that response at its next suspension.
+        if task is not None and not task.done() and task is not asyncio.current_task():
             task.cancel()
         self._idle_task = None
 
