@@ -112,16 +112,19 @@ class LogitBias:
 
 class TokenBan:
     """Set the logits of ``ids`` to -inf, optionally only while fewer than ``floor``
-    tokens were generated (``min_tokens``: ``len(tokens) - 1`` counts generated ones)."""
+    tokens were generated (``min_tokens``: ``len(tokens) - n_prompt`` counts generated ones;
+    ``n_prompt`` is 1 on the mlx-lm text path, the prompt length in the engine loop where
+    ``tokens`` is the whole prompt plus the generated ids)."""
 
-    def __init__(self, ids, floor: int | None = None):
+    def __init__(self, ids, floor: int | None = None, n_prompt: int = 1):
         self._ids = [int(t) for t in ids]
         self._floor = floor
+        self._n_prompt = n_prompt
         self._vocab = -1
         self._mask: mx.array | None = None
 
     def __call__(self, tokens, logits):
-        if self._floor is not None and (len(tokens) - 1) >= self._floor:
+        if self._floor is not None and (len(tokens) - self._n_prompt) >= self._floor:
             return logits
         vocab = logits.shape[-1]
         if self._vocab != vocab:

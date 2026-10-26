@@ -121,6 +121,27 @@ def top_logprobs_device(log_probs: mx.array, k: int) -> tuple[mx.array, mx.array
     return idx, mx.take_along_axis(log_probs, idx, axis=-1)
 
 
+def logprob_entry(log_probs: mx.array, token: int, top_k: int | None) -> dict:
+    """One per-token logprob entry in the text path's shape, from a 1-D ``log_probs``
+    that is already normalised (the engine loop gets it from the BatchGenerator).
+
+    NaN is reported as -100.0 (as ``_generate_fast`` does); with ``top_k`` the entry also
+    carries ``top_logprobs`` from :func:`top_logprobs` (no full-vocabulary sort).
+    """
+    lp = log_probs.astype(mx.float32)
+    lp = mx.where(mx.isnan(lp), mx.array(-100.0, dtype=lp.dtype), lp)
+    if top_k and top_k > 0:
+        tok_lp, ids, vals = top_logprobs(lp, top_k, token)
+        return {
+            "token_id": int(token),
+            "logprob": tok_lp,
+            "top_logprobs": [
+                {"token_id": i, "logprob": v} for i, v in zip(ids, vals, strict=True)
+            ],
+        }
+    return {"token_id": int(token), "logprob": float(lp[token])}
+
+
 def device_topk_supported() -> bool:
     """The uint64 argpartition/shift path works on the current MLX device."""
     try:
