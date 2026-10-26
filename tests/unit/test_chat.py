@@ -1,7 +1,7 @@
 """OpenAI Chat Completions API edge case tests.
 
 Covers:
-- max_tokens=0 (400, like OpenAI)
+- max_tokens=0 (prompt-only return)
 - max_tokens=1 (single token generation)
 - Empty messages array (400 error)
 - System-only messages (400 error)
@@ -10,6 +10,8 @@ Covers:
 - n>1 with streaming (400 error)
 - Empty model (400 error)
 """
+
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -156,15 +158,24 @@ class TestChatRequestValidation:
                 messages=[ChatMessage(role="user", content="Hi")],
             )
 
-    @pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens"])
-    def test_max_tokens_below_one_rejected(self, field):
-        """OpenAI answers 400 for max_tokens / max_completion_tokens < 1 on chat."""
-        with pytest.raises(ValidationError):
-            ChatCompletionRequest(
-                model="test",
-                messages=[ChatMessage(role="user", content="Hi")],
-                **{field: 0},
-            )
+    def test_max_tokens_zero_allowed(self):
+        """max_tokens=0 should be accepted (returns prompt_tokens only)."""
+        req = ChatCompletionRequest(
+            model="test",
+            messages=[ChatMessage(role="user", content="Hi")],
+            max_tokens=0,
+        )
+        assert req.max_tokens == 0
+        assert req.effective_max_tokens() == 0
+
+    def test_max_completion_tokens_zero_allowed(self):
+        """max_completion_tokens=0 should be accepted."""
+        req = ChatCompletionRequest(
+            model="test",
+            messages=[ChatMessage(role="user", content="Hi")],
+            max_completion_tokens=0,
+        )
+        assert req.effective_max_tokens() == 0
 
     def test_max_tokens_one_allowed(self):
         """max_tokens=1 should be accepted (single token generation)."""
@@ -368,6 +379,44 @@ class TestChatMessageValidation:
         # Tool role requires tool_call_id
         msg = ChatMessage(role="tool", content="result", tool_call_id="call_123")
         assert msg.role == "tool"
+
+
+class TestChatMaxTokensZeroEndpoint:
+    """Integration tests for max_tokens=0 fast path in chat endpoint."""
+
+    def test_max_tokens_zero_returns_prompt_only(self):
+        """Chat endpoint with max_tokens=0 returns empty completion with prompt_tokens."""
+        from yunshu_gateway.routers.chat import create_chat_completion
+
+        req = ChatCompletionRequest(
+            model="test",
+            messages=[ChatMessage(role="user", content="Hello")],
+            max_tokens=0,
+        )
+
+        mock_request = MagicMock()
+        mock_request.app.state = MagicMock()
+        mock_request.state = MagicMock()
+        mock_request.state.rbac_key = None
+        mock_request.state.request_id = "test"
+
+        mock_engine = MagicMock()
+        mock_engine.is_loaded = False
+        mock_engine.resolve_model_id.return_value = False
+
+        with patch("yunshu_gateway.routers.chat.get_engine", return_value=mock_engine):
+            import asyncio
+
+            result = asyncio.new_event_loop().run_until_complete(
+                create_chat_completion(req, mock_request)
+            )
+            # Should return JSONResponse with completion_tokens=0
+            assert result.status_code == 200
+            import json
+
+            body = json.loads(result.body)
+            assert body["usage"]["completion_tokens"] == 0
+            assert body["choices"][0]["finish_reason"] == "length"
 
 
 class TestSamplerFeatureSchemaW735:

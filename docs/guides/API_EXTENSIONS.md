@@ -195,7 +195,7 @@ places: appended to `error.message`, the only field many SDKs print, and structu
 `error.x_yunshu`:
 
 ```json
-{"error":{"message":"body.max_tokens: Input should be greater than or equal to 1 (hint: the request body does not match the API schema; docs/guides/API_SURFACE.md lists every accepted field)",
+{"error":{"message":"body.max_tokens: Input should be greater than or equal to 0 (hint: the request body does not match the API schema; docs/guides/API_SURFACE.md lists every accepted field)",
           "type":"invalid_request_error","param":"max_tokens","code":"validation_error",
           "x_yunshu":{"hint":"the request body does not match the API schema; ...","request_id":"smoke-err-1"}}}
 ```
