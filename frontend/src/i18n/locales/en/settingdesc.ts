@@ -200,6 +200,8 @@ const settingdesc = {
     "Engine that masks JSON-schema and `json_object` constrained decoding: `llguidance` (about 0.25 ms median per-token mask on a 248K vocabulary; properties in schema order) or `inhouse` (Python state machine, about 3 ms median; any property order). A schema llguidance cannot compile falls back to the in-house engine when it supports it.",
   YUNSHU_GRAMMAR_BITMASK:
     "Constrained decoding with the xgrammar-style bitmask engine instead of the allowlist sampler.",
+  YUNSHU_GRAMMAR_PREWARM:
+    "Build the llguidance token tables in the background when a model loads, so the first constrained request does not spend about a second walking the vocabulary. Costs about 0.45 GiB of native heap per mask width; 0 builds them on first use.",
   YUNSHU_TOOL_GRAMMAR:
     "Tool-call constrained decoding (structural tags): free text until the tool-call start marker, then the call body is masked to this request’s exact call grammar (tool name, parameter keys, typed values, closing). A forced `tool_choice` is always constrained; this flag governs only `auto`. Off: auto tool calls are decoded unconstrained and repaired afterwards.",
   YUNSHU_QUANT_MODE:

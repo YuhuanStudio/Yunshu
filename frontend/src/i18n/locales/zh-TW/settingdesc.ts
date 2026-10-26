@@ -188,6 +188,8 @@ const settingdesc = {
     "負責 JSON schema 與 `json_object` 約束解碼遮罩的引擎：`llguidance`（248K 詞表上每 token 遮罩中位數約 0.25 ms；屬性依 schema 順序）或 `inhouse`（Python 狀態機，中位數約 3 ms；屬性順序不拘）。llguidance 無法編譯的 schema，在內建引擎支援時會退回內建引擎。",
   YUNSHU_GRAMMAR_BITMASK:
     "約束解碼改用 xgrammar 風格的位元遮罩引擎，而非允許清單取樣器。",
+  YUNSHU_GRAMMAR_PREWARM:
+    "模型載入時在背景建立 llguidance 詞元表，使第一個約束請求不必花約一秒走訪詞彙表。每種遮罩寬度約佔用 0.45 GiB 原生堆積；設為 0 則於首次使用時建立。",
   YUNSHU_TOOL_GRAMMAR:
     "工具呼叫約束解碼（結構標籤）：在工具呼叫起始標記之前為自由文字，之後呼叫本體會被遮罩為本次請求精確的呼叫文法（工具名稱、參數鍵、具型別的值、結尾）。強制的 `tool_choice` 一律受約束；此旗標僅控制 `auto`。關閉時，自動選擇的工具呼叫不受約束地解碼，事後再修復。",
   YUNSHU_QUANT_MODE:
