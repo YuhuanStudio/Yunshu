@@ -162,3 +162,132 @@ def test_responses_conversation_reference_respects_ownership(env):
     assert t.get("/gate", headers=H(k["a"])).json() == {"ok": True}
     assert t.get("/gate", headers=H(k["b"])).json() == {"ok": False}
     assert t.get("/gate", headers=H(k["adm"])).json() == {"ok": True}
+
+
+# --- batch outputs, voices, computer-use screenshots ---------------------------------------
+
+
+@pytest.fixture
+def fstore(tmp_path, monkeypatch):
+    monkeypatch.setenv("YUNSHU_FILES_DIR", str(tmp_path / "files"))
+    files_store.reset_store()
+    yield files_store.get_store()
+    files_store.reset_store()
+
+
+def test_batch_output_files_belong_to_the_batch_creator(fstore):
+    from yunshu_gateway.routers.batches import BatchRunner
+
+    rec = {
+        "id": "batch_" + "a" * 24,
+        "api": "openai",
+        "counts": {"succeeded": 1, "errored": 0, "canceled": 0, "expired": 0},
+        "owner": "key:A",
+    }
+    fstore.save_batch(rec)
+    fstore.append_line(rec["id"], "out", {"custom_id": "1"})
+    BatchRunner._finalize(None, fstore, rec, [], "completed")
+    fid = fstore.load_batch(rec["id"])["output_file_id"]
+    meta = fstore.get_meta(fid)
+    assert meta["owner"] == "key:A"
+    assert files_store.visible_to(meta, "key:A", False)
+    assert not files_store.visible_to(meta, "key:B", False)
+    assert files_store.visible_to(meta, "key:B", True)
+
+
+def test_new_batch_record_carries_the_creator(env):
+    from fastapi import Request
+
+    from yunshu_gateway.routers.batches import _new_record
+
+    c, k = env
+    seen = {}
+    app = c.app
+
+    @app.get("/who-batch")
+    def who(request: Request):
+        seen["owner"] = _new_record("openai", "batch", request, 1)["owner"]
+        return {}
+
+    c.get("/who-batch", headers=H(k["a"]))
+    assert seen["owner"].startswith("key:")
+    c.get("/who-batch", headers=H(k["tok"]))
+    assert seen["owner"] == "owner"
+
+
+def test_voices_are_per_key(fstore):
+    from fastapi import HTTPException
+
+    from yunshu_gateway.routers import voices
+
+    cons = voices.put_record(
+        b"RIFF",
+        {"object": "audio.voice_consent", "name": "n", "language": "en"},
+        "key:A",
+    )
+    voice = voices.put_record(
+        b"RIFF",
+        {"object": "audio.voice", "name": "v", "_consent": cons["id"]},
+        "key:A",
+    )
+    with files_store.file_access("key:A", False):
+        assert voices.get_record(voice["id"], "voice_")["name"] == "v"
+        assert [v["id"] for v in voices.list_custom_voices()] == [voice["id"]]
+    with files_store.file_access("key:B", False):
+        with pytest.raises(HTTPException):
+            voices.get_record(voice["id"], "voice_")
+        assert voices.list_custom_voices() == []
+    with files_store.file_access("key:B", True):
+        assert voices.get_record(voice["id"], "voice_")
+    legacy = voices.put_record(
+        b"RIFF", {"object": "audio.voice_consent", "name": "n", "language": "en"}
+    )
+    with files_store.file_access("key:B", False):
+        assert voices.get_record(legacy["id"], "cons_")
+
+
+def test_computer_screenshot_file_id_respects_ownership(fstore):
+    from fastapi import HTTPException
+
+    from yunshu_gateway.server_tools.responses_loop import input_item_to_messages
+
+    meta = fstore.put(b"\x89PNG....", "s.png", "vision", "image/png", owner="key:A")
+    item = {
+        "type": "computer_call_output",
+        "call_id": "c1",
+        "output": {"type": "computer_screenshot", "file_id": meta["id"]},
+    }
+    token = files_store._ACCESS.set(("key:B", False))
+    try:
+        with pytest.raises(HTTPException) as exc:
+            input_item_to_messages(item)
+        assert exc.value.status_code == 404
+        files_store._ACCESS.set(("key:A", False))
+        assert input_item_to_messages(item)[0]["role"] == "tool"
+    finally:
+        files_store._ACCESS.reset(token)
+
+
+def test_responses_request_sets_the_file_access_of_its_caller(env, monkeypatch):
+    """create_response limits every file_id it resolves (computer screenshots included) to the
+    caller: the context var is set before anything reads a file."""
+    from fastapi import HTTPException
+
+    from yunshu_gateway.routers import responses as rr
+
+    c, k = env
+    seen = []
+
+    def spy(req):
+        seen.append(files_store._ACCESS.get())
+        raise HTTPException(418, "stop")
+
+    monkeypatch.setattr("yunshu_gateway.capability_gate.enforce_responses", spy)
+    c.app.include_router(rr.router, prefix="/v1")
+    for who in ("b", "tok"):
+        r = c.post(
+            "/v1/responses", json={"model": "m", "input": "hi"}, headers=H(k[who])
+        )
+        assert r.status_code == 418
+    assert seen[0][1] is False and seen[0][0].startswith("key:")
+    assert seen[1] == ("owner", True)

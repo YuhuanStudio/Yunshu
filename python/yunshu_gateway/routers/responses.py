@@ -1682,6 +1682,11 @@ async def create_response(req: ResponsesRequest, request: Request):
 
     resolve_sampling(req)
     _check_permission(request, "can_infer")
+    # every file_id this request resolves (inputs, computer screenshots, tool loops) is
+    # limited to what the caller may see; the context is per request task
+    from ..files_store import _ACCESS
+
+    _ACCESS.set((_resolve_owner(request), _is_admin(request)))
     from ..capability_gate import enforce_responses
 
     enforce_responses(req)
