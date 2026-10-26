@@ -725,8 +725,8 @@ class VLMBatchRunner:
         greedy = temperature is None or temperature < 1e-6
         processors = list(logits_processors or [])
         # Exact lane reports come from committed target rows, including the first token.
-        # A thinking budget forces "\n</think>" through upstream's
-        # ThinkingBudgetCriteria, which only the non-speculative batch applies.
+        # A thinking budget forces the template's own close ("\n</think>\n\n" on Qwen3.x)
+        # through upstream's ThinkingBudgetCriteria, which only the non-speculative batch applies.
         # Sampled requests draft too: their tokens are drawn by a position-keyed sampler, so
         # accepting a draft equals what serial sampling would have produced (keyed_sampling).
         keyed_ok = greedy or keyed_sampling.supports(
@@ -756,10 +756,12 @@ class VLMBatchRunner:
             processors.append(Fp32LogitsProcessor())
         budget = None
         if thinking_budget is not None:
-            from mlx_vlm.utils import ThinkingBudgetCriteria
+            from .thinking_budget import make_forced_close_criteria
 
-            budget = ThinkingBudgetCriteria(
-                getattr(self.processor, "tokenizer", self.processor),
+            _tok = getattr(self.processor, "tokenizer", self.processor)
+            budget = make_forced_close_criteria(
+                _tok,
+                self.processor,
                 int(thinking_budget),
                 thinking_end_token=thinking_end_token,
                 thinking_start_token=thinking_start_token,

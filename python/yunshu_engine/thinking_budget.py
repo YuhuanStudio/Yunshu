@@ -247,12 +247,16 @@ def resolve_think_close_pattern(
         return None, None
 
     escaped = re.escape(think_end_str)
-    match = re.search(
-        r"(\\n|\\r|[\n\r])*" + escaped + r"((?:\\n|\\r|[\n\r])*)",
-        template_text,
-    )
-    if not match:
+    pattern = re.compile(r"(\\n|\\r|[\n\r])*" + escaped + r"((?:\\n|\\r|[\n\r])*)")
+    # The first mention is usually the history-parsing literal (``'</think>' in content``),
+    # not the form the model was trained to emit (``'\n</think>\n\n'``): a bare forced close
+    # after mid-sentence reasoning is not treated as a close by Qwen3.x (omlx 746447e2).
+    # Prefer the first occurrence carrying any surrounding newline; templates whose close is
+    # really bare (DeepSeek V3.2, GLM-5) have none and resolve to the first match as before.
+    matches = list(pattern.finditer(template_text))
+    if not matches:
         return None, None
+    match = next((m for m in matches if m.group(0) != think_end_str), matches[0])
 
     raw_leading = (
         match.group(0).split(think_end_str)[0].replace("\\n", "\n").replace("\\r", "\r")
@@ -336,3 +340,68 @@ def _get_chat_template_text(tokenizer) -> str | None:
         return ct
 
     return None
+
+
+def make_forced_close_criteria(tokenizer, processor, budget: int, **kwargs):
+    """mlx-vlm ``ThinkingBudgetCriteria`` whose forced close is the template's own form.
+
+    Upstream forces ``"\\n" + </think>`` and stops there; Qwen3.x renders
+    ``\\n</think>\\n\\n`` and does not treat a close without its trailing newlines as the end
+    of reasoning, so the answer is generated right after the template's trailing tokens.
+    """
+    from mlx_vlm.utils import ThinkingBudgetCriteria
+
+    class _TemplateClose(ThinkingBudgetCriteria):
+        _trailing: list[int] = []
+        _trail_at: int | None = None
+
+        def __call__(self, token_id: int):
+            if self._trail_at is not None:
+                if self._trail_at < len(self._trailing):
+                    forced = self._trailing[self._trail_at]
+                    self._trail_at += 1
+                    self.forced_token_id = forced
+                    return forced
+                self._trail_at = None
+                self.forced_token_id = None
+                return None
+            forcing = self.budget_exceeded
+            out = super().__call__(token_id)
+            if forcing and token_id == self.thinking_end_token_id and self._trailing:
+                self._trail_at = 1
+                self.forced_token_id = self._trailing[0]
+                return self._trailing[0]
+            return out
+
+        def reset_thinking_state(self):
+            super().reset_thinking_state()
+            self._trail_at = None
+
+    crit = _TemplateClose(getattr(processor, "tokenizer", processor), budget, **kwargs)
+    try:
+        leading, trailing = resolve_think_close_pattern(
+            _TemplateSource(
+                tokenizer, processor, kwargs.get("thinking_end_token", THINK_END)
+            )
+        )
+    except Exception:
+        logger.debug("think close pattern resolution failed", exc_info=True)
+        return crit
+    if leading or trailing:
+        crit._forced_sequence = [*(leading or []), crit.thinking_end_token_id]
+        crit._trailing = list(trailing or [])
+    return crit
+
+
+class _TemplateSource:
+    """Tokenizer view that also finds the chat template on a processor."""
+
+    def __init__(self, tokenizer, processor, think_end: str = THINK_END) -> None:
+        self._tok = tokenizer
+        self.chat_template = getattr(tokenizer, "chat_template", None) or getattr(
+            processor, "chat_template", None
+        )
+        self.think_end = think_end
+
+    def encode(self, text, add_special_tokens=False):
+        return self._tok.encode(text, add_special_tokens=add_special_tokens)
