@@ -93,6 +93,8 @@ const settingdesc = {
     "Responses compaction: maximum tokens of the model-written summary.",
   YUNSHU_AUTH_TOKEN:
     "Bearer token. When set, every request except health, version and docs needs it; unset: inference is open and operational endpoints are denied.",
+  YUNSHU_ADMIN_WRITE_EXEC_SETTINGS:
+    "Let `PATCH /v1/yunshu/config` (the console settings editor) change settings that run host code or touch arbitrary host paths: every path setting, `YUNSHU_MCP_SERVERS`, `YUNSHU_TRUST_REMOTE_CODE`, `YUNSHU_CODE_EXECUTION`, `YUNSHU_ALLOW_LOCAL_FILES`. Off (default): they are read-only over HTTP; edit the config file on the host. Not writable over HTTP itself.",
   YUNSHU_AUTH_DISABLED:
     "Disable auth entirely (operational endpoints open too). Local development only.",
   YUNSHU_DEBUG_TREE_PROFILE:

@@ -355,7 +355,13 @@ async def effective_config(
         ("stable",) if include == "stable" else ("stable", "experimental", "internal")
     )
     rows = _settings.effective(levels)
+    exec_writable = _settings.get_bool("YUNSHU_ADMIN_WRITE_EXEC_SETTINGS")
     for r in rows:
+        # PATCH refuses these over HTTP (see admin_settings); the console shows them read-only.
+        r["read_only"] = r["name"] in (
+            "YUNSHU_CONFIG",
+            "YUNSHU_ADMIN_WRITE_EXEC_SETTINGS",
+        ) or (r["host_access"] and not exec_writable)
         r["description"] = (r["description"] or "")[:240]
         if _settings.REGISTRY[r["name"]].secret:
             r["default"] = None if r["default"] is None else "***"

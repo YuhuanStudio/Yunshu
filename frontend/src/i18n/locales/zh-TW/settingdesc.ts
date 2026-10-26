@@ -85,6 +85,8 @@ const settingdesc = {
   YUNSHU_COMPACT_MAX_TOKENS: "Responses 壓縮：模型所寫摘要的 token 數上限。",
   YUNSHU_AUTH_TOKEN:
     "Bearer 權杖。設定後，除 health、version 與 docs 外的所有請求都需要它；未設定時推論開放，但管理類端點被拒絕。",
+  YUNSHU_ADMIN_WRITE_EXEC_SETTINGS:
+    "允許 `PATCH /v1/yunshu/config`（主控台設定編輯器）修改會執行主機程式碼或存取任意主機路徑的設定：所有路徑類設定、`YUNSHU_MCP_SERVERS`、`YUNSHU_TRUST_REMOTE_CODE`、`YUNSHU_CODE_EXECUTION`、`YUNSHU_ALLOW_LOCAL_FILES`。預設關閉：這些設定經 HTTP 唯讀，請在主機上編輯設定檔；本設定本身也無法經 HTTP 修改。",
   YUNSHU_AUTH_DISABLED:
     "完全停用驗證（管理類端點也會開放），僅供本機開發使用。",
   YUNSHU_DEBUG_TREE_PROFILE:

@@ -430,7 +430,7 @@ function ConfigRowView({
           <div className="min-w-0 flex-1">
             <RowControl row={row} drafts={drafts} onEdit={onEdit} />
           </div>
-          {(canReset(row) || edited) && (
+          {!row.readOnly && (canReset(row) || edited) && (
             <Button
               size="sm"
               variant="ghost"
@@ -503,6 +503,17 @@ function RowControl({
   const value = shownValue(row, drafts);
   const kind = fieldKind(row);
   const label = row.name;
+  if (row.readOnly)
+    return (
+      <div>
+        <span className="break-all font-mono text-xs">
+          {formatConfigValue(row.value)}
+        </span>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t("settings.config.readOnlyHost")}
+        </p>
+      </div>
+    );
   if (kind === "bool")
     return (
       <Switch

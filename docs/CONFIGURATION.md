@@ -127,6 +127,7 @@ still wins at runtime (reported as `overridden`).
 |---|---|---|---|---|
 | `YUNSHU_HOST` | str | 127.0.0.1 | restart | Bind host of `yunshu serve` (`--host` wins). 127.0.0.1 serves this Mac only; 0.0.0.0 also serves the local network (set YUNSHU_AUTH_TOKEN then). |
 | `YUNSHU_AUTH_TOKEN` | str | unset | live | Bearer token. When set, every request except health/version/docs needs it; unset: inference is open and operational endpoints are denied. |
+| `YUNSHU_ADMIN_WRITE_EXEC_SETTINGS` | bool | off | live | Let `PATCH /v1/yunshu/config` (the console settings editor) change settings that run host code or touch arbitrary host paths: every path setting, YUNSHU_MCP_SERVERS (stdio commands), YUNSHU_TRUST_REMOTE_CODE, YUNSHU_CODE_EXECUTION, YUNSHU_ALLOW_LOCAL_FILES. Off (default): they are read-only over HTTP (403 `exec_setting_read_only`); edit the config file or `yunshu config set` on the host instead. Not writable over HTTP itself. |
 | `YUNSHU_AUTH_DISABLED` | bool | off | live | Disable auth entirely (operational endpoints open too). Local development only. |
 | `YUNSHU_ACTOR_IDENTITY` | str | owner | live | Identity recorded for authenticated requests in the audit log. |
 | `YUNSHU_RATE_LIMIT_RPM` | int | 0 | restart | Per-client request rate limit in requests per minute; 0 (default) turns rate limiting off. A local single-user engine has no need for it; set it when the server is exposed to other machines. |

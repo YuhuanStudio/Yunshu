@@ -73,6 +73,8 @@ const settings: Shape<typeof zh> = {
   "config.decrement": "减少",
   "config.secretSet": "已设置（输入新值以替换）",
   "config.secretUnset": "未设置",
+  "config.readOnlyHost":
+    "此处只读：它可执行代码或访问主机路径，请在主机上编辑配置文件。",
   "config.overriddenEnv": "环境变量 {name} 已设置，优先于此处的值。",
   "config.overriddenCli": "命令行参数已设置，优先于此处的值。",
   "config.invalidCount":

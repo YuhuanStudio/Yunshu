@@ -71,6 +71,10 @@ class Setting:
     added: str = ""  # experimental only: date added
     empty_is_value: bool = False  # "" is a real value, not "unset"
     secret: bool = False
+    # Can run host code or touch arbitrary host paths (a path setting, an MCP stdio
+    # command, trust_remote_code, the code sandbox). Not writable over HTTP unless
+    # YUNSHU_ADMIN_WRITE_EXEC_SETTINGS is on: admin scope must not equal host RCE.
+    host_access: bool = False
     # When a changed value takes effect (see ``APPLIES``): "live" (re-read on
     # each use), "reload" (next model load), "restart" (read once at startup).
     applies: str = ""
@@ -106,6 +110,8 @@ def _add(
         raise RuntimeError(f"duplicate setting {name}")
     if category not in CATEGORIES:
         raise RuntimeError(f"{name}: unknown category {category}")
+    if type_ == "path":
+        kw.setdefault("host_access", True)
     REGISTRY[name] = Setting(name, type_, default, description, category, **kw)
 
 
@@ -119,7 +125,7 @@ _add("YUNSHU_HF_CACHE_MODELS", "bool", True, "Multi-model mode: also offer model
 _add("YUNSHU_MODEL_TTL_SECONDS", "float", None, "Multi-model mode: unload a model idle for this many seconds. Unset: never.", "model", minimum=0.0)
 _add("YUNSHU_ALLOW_AUTO_LOAD", "bool", False, "Multi-model mode: let audio requests load a model that is not loaded yet (otherwise they are rejected).", "model")
 _add("YUNSHU_MAX_LORAS", "int", 4, "Maximum LoRA adapters kept loaded (text models).", "model", minimum=1)
-_add("YUNSHU_TRUST_REMOTE_CODE", "bool", False, "Allow Hugging Face tokenizers/processors that need trust_remote_code.", "model")
+_add("YUNSHU_TRUST_REMOTE_CODE", "bool", False, "Allow Hugging Face tokenizers/processors that need trust_remote_code.", "model", host_access=True)
 _add("YUNSHU_WARM_PROMPTS", "str", None, "Prompts prefilled at startup to warm the prefix cache: '||'-separated text or file paths.", "model")
 
 # ── server ─────────────────────────────────────────────────────────────
@@ -149,7 +155,7 @@ _add("YUNSHU_CORS_ORIGINS", "str", "http://localhost:3000,http://localhost:8000"
 _add("YUNSHU_RESPONSE_CACHE", "bool", False, "Cache identical non-streaming responses in memory.", "server")
 _add("YUNSHU_BATCH_MAX_ITEMS", "int", 100000, "Batch API: maximum requests per batch (also capped by the protocol limits: 50,000 OpenAI, 100,000 Anthropic).", "server", minimum=1)
 _add("YUNSHU_BATCH_TIMEOUT", "float", 0.0, "Batch API: timeout in seconds for each request a batch runs (0: no timeout); a request that times out is recorded as failed.", "server", minimum=0.0)
-_add("YUNSHU_ALLOW_LOCAL_FILES", "bool", False, "Allow requests to reference any local file path (default: only under YUNSHU_MEDIA_DIR).", "server")
+_add("YUNSHU_ALLOW_LOCAL_FILES", "bool", False, "Allow requests to reference any local file path (default: only under YUNSHU_MEDIA_DIR).", "server", host_access=True)
 _add("YUNSHU_MEDIA_DIR", "path", None, "Directory local media paths must live under. Unset: $TMPDIR/yunshu_media.", "server")
 _add("YUNSHU_FILES_DIR", "path", None, "Directory of the local Files / Batch API store. Unset: ~/.yunshu/files.", "server")
 _add("YUNSHU_FILES_MAX_BYTES", "int", 536870912, "Files API: maximum size of one uploaded file in bytes (default 512 MB).", "server", minimum=1)
@@ -165,6 +171,7 @@ _add("YUNSHU_COMPACT_MAX_TOKENS", "int", 2048, "Responses compaction: maximum to
 # ── auth ───────────────────────────────────────────────────────────────
 _add("YUNSHU_HOST", "str", "127.0.0.1", "Bind host of `yunshu serve` (`--host` wins). 127.0.0.1 serves this Mac only; 0.0.0.0 also serves the local network (set YUNSHU_AUTH_TOKEN then).", "auth")
 _add("YUNSHU_AUTH_TOKEN", "str", None, "Bearer token. When set, every request except health/version/docs needs it; unset: inference is open and operational endpoints are denied.", "auth", secret=True)
+_add("YUNSHU_ADMIN_WRITE_EXEC_SETTINGS", "bool", False, "Let `PATCH /v1/yunshu/config` (the console settings editor) change settings that run host code or touch arbitrary host paths: every path setting, YUNSHU_MCP_SERVERS (stdio commands), YUNSHU_TRUST_REMOTE_CODE, YUNSHU_CODE_EXECUTION, YUNSHU_ALLOW_LOCAL_FILES. Off (default): they are read-only over HTTP (403 `exec_setting_read_only`); edit the config file or `yunshu config set` on the host instead. Not writable over HTTP itself.", "auth")
 _add("YUNSHU_AUTH_DISABLED", "bool", False, "Disable auth entirely (operational endpoints open too). Local development only.", "auth")
 _add("YUNSHU_OBSERVE", "bool", False, "Observe mode (`yunshu serve --observe`): turn on every observability feature you did not set yourself: /debug/* routes, host telemetry, the serve log, the audit log file (~/.yunshu/logs/audit.log), exact token ids in logprobs, and the generation capture file (~/.yunshu/logs/stream_capture.jsonl). A value you set explicitly (flag, env, config file) always wins and shows its own source; the others show source 'observe'. Costs: telemetry adds about +1.8% follow-up TTFT at 1K (27B A/B), the logs and capture write small files; keep it off for speed benchmarks. Without a token, /debug/* answers loopback clients only.", "observability")
 _add("YUNSHU_DEBUG_ROUTES", "bool", False, "Mount the /debug/* diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or YUNSHU_AUTH_DISABLED. /metrics is always mounted.", "observability")
@@ -270,7 +277,7 @@ _add("YUNSHU_ANE_EMBEDDING_MODEL", "str", "intfloat/e5-small-v2", "Embedding mod
 
 # ── MCP ────────────────────────────────────────────────────────────────
 _add("YUNSHU_MCP_CONFIG", "path", None, "MCP client config file (JSON/YAML) listing tool servers.", "mcp")
-_add("YUNSHU_MCP_SERVERS", "json", None, "MCP tool servers as a JSON array (alternative to YUNSHU_MCP_CONFIG).", "mcp", secret=True)
+_add("YUNSHU_MCP_SERVERS", "json", None, "MCP tool servers as a JSON array (alternative to YUNSHU_MCP_CONFIG).", "mcp", secret=True, host_access=True)
 
 # ── server-side tools (web search / web fetch / MCP connector) ──────────
 _add("YUNSHU_WEB_SEARCH_PROVIDER", "enum", "auto", "Search backend. Auto runs lightweight DDG, Wikipedia and configured keyed providers (Mwmbl is an explicit noncommercial opt-in) in parallel with health backoff and RRF. SearXNG is optional. Queries leave the machine; none disables search.", "server-tools", choices=("auto", "none", "searxng", "brave", "tavily", "exa", "serper", "perplexity", "ddg_html", "wikipedia", "mwmbl", "mojeek", "marginalia"))
@@ -297,7 +304,7 @@ _add("YUNSHU_WEB_FETCH_ALLOW_PRIVATE", "bool", False, "Let web_fetch reach priva
 _add("YUNSHU_WEB_FETCH_MAX_BYTES", "int", 2000000, "Largest response body web_fetch downloads.", "server-tools", minimum=1024)
 _add("YUNSHU_WEB_FETCH_TIMEOUT", "float", 20.0, "Seconds web_fetch waits for a page.", "server-tools", minimum=1.0)
 _add("YUNSHU_WEB_FETCH_MAX_TEXT_CHARS", "int", 40000, "Extracted page text handed to the model is cut to this many characters (a request's max_content_tokens can lower it).", "server-tools", minimum=1000)
-_add("YUNSHU_CODE_EXECUTION", "bool", False, "Serve the server-side code execution tools on this machine (Anthropic code_execution_*; OpenAI Responses code_interpreter and hosted shell; the OpenAI /v1/containers API) inside the Anthropic sandbox-runtime (srt, optional: `npm i @anthropic-ai/sandbox-runtime`, Node >= 22.12). Off: requests that declare them get a 400. On without srt: 503, never an unsandboxed run. The sandbox writes only inside a per-container directory, reads nothing of your home, and has no network unless YUNSHU_CODE_EXECUTION_NETWORK_ALLOW lists hosts.", "server-tools")
+_add("YUNSHU_CODE_EXECUTION", "bool", False, "Serve the server-side code execution tools on this machine (Anthropic code_execution_*; OpenAI Responses code_interpreter and hosted shell; the OpenAI /v1/containers API) inside the Anthropic sandbox-runtime (srt, optional: `npm i @anthropic-ai/sandbox-runtime`, Node >= 22.12). Off: requests that declare them get a 400. On without srt: 503, never an unsandboxed run. The sandbox writes only inside a per-container directory, reads nothing of your home, and has no network unless YUNSHU_CODE_EXECUTION_NETWORK_ALLOW lists hosts.", "server-tools", host_access=True)
 _add("YUNSHU_CODE_EXECUTION_ROOT", "path", "~/.yunshu/sandbox", "Directory holding the code execution containers (one sub-directory each). Created with mode 0700.", "server-tools")
 _add("YUNSHU_CODE_EXECUTION_TIMEOUT", "float", 60.0, "Wall-clock seconds one code execution call may run before its process group is killed (execution_time_exceeded). Also the CPU-time limit. A Python cell waiting for the client's tool results does not count.", "server-tools", minimum=1.0)
 _add("YUNSHU_CODE_EXECUTION_MEMORY_MB", "int", 2048, "Resident memory a code execution call may use (whole process group, sampled every 100 ms); above it the call is killed. An OpenAI container's memory_limit can only lower it.", "server-tools", minimum=64)
@@ -367,6 +374,7 @@ _LIVE = frozenset(
         "YUNSHU_DEBUG_TREE_PROFILE",
         "YUNSHU_AUTH_TOKEN",
         "YUNSHU_AUTH_DISABLED",
+        "YUNSHU_ADMIN_WRITE_EXEC_SETTINGS",
         "YUNSHU_ACTOR_IDENTITY",
         "YUNSHU_CORS_ORIGINS",
         "YUNSHU_ALLOWED_HOSTS",
@@ -947,6 +955,7 @@ def effective(include: tuple[str, ...] = ("stable",)) -> list[dict[str, Any]]:
                 "applies": s.applies,
                 "minimum": s.minimum,
                 "secret": s.secret,
+                "host_access": s.host_access,
             }
         )
     return rows
