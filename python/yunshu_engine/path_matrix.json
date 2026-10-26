@@ -415,8 +415,13 @@
      ]
     },
     "loop": {
-     "s": "na",
-     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/scheduler.py",
+       "logprob_entry("
+      ]
+     ]
     }
    }
   },
@@ -474,8 +479,17 @@
      ]
     },
     "loop": {
-     "s": "na",
-     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/scheduler.py",
+       "_tlp.FrequencyPresencePenalty("
+      ],
+      [
+       "python/yunshu_engine/scheduler.py",
+       "_tlp.TokenBan(_eos_ids, floor=_min_tok"
+      ]
+     ]
     }
    }
   },
@@ -1836,8 +1850,13 @@
      ]
     },
     "loop": {
-     "s": "na",
-     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/scheduler.py",
+       "from .text_logprobs import logprob_entry"
+      ]
+     ]
     }
    }
   },

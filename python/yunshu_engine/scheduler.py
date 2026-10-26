@@ -574,15 +574,6 @@ class SchedulingPolicy(Enum):
     )  # Round-robin across priority levels (prevents low-priority starvation)
 
 
-def _banning_processor(ban: Any, ids: list[int]) -> Any:
-    """A logits processor that bans ``ids`` (typed, so mlx-lm's processor type accepts it)."""
-
-    def _proc(_tokens: Any, logits: Any) -> Any:
-        return ban(logits, ids)
-
-    return _proc
-
-
 class _ReasoningTracker:
     """normal <-> reasoning from the model's think start / end token sequences."""
 
@@ -3575,7 +3566,19 @@ class Scheduler:
             logprobs = None
             if hasattr(resp, "logprobs") and resp.logprobs is not None:
                 try:
-                    logprobs = resp.logprobs
+                    _sp = req.sampling_params
+                    if getattr(_sp, "logprobs", False):
+                        # the text path's per-token entry (+ top_logprobs by argpartition,
+                        # not a full-vocabulary sort); the raw vocab-wide array is not an API shape
+                        from .text_logprobs import logprob_entry
+
+                        logprobs = [
+                            logprob_entry(
+                                resp.logprobs,
+                                resp.token,
+                                getattr(_sp, "top_logprobs", None),
+                            )
+                        ]
                 except Exception:
                     logger.debug("logprobs extraction failed", exc_info=True)
 
@@ -4200,47 +4203,35 @@ class Scheduler:
         # over the GENERATED completion ONLY, across the full history. Replace the two
         # penalties with the same incremental generated-only closure (n_prompt = prompt
         # length here, since tokens = prompt + generated), leaving rep-penalty/logit_bias.
-        logits_processors = make_logits_processors(
-            repetition_penalty=sp.repetition_penalty
-            if sp.repetition_penalty != 1.0
-            else None,
-            logit_bias=getattr(sp, "logit_bias", None),
+        from . import text_logit_processors as _tlp
+
+        # Order matters (the multiplicative repetition penalty does not commute with the
+        # additive bias): logit_bias, repetition penalty, frequency/presence, as before.
+        # logit_bias / frequency+presence penalty / suppress / min_tokens use the same dense
+        # per-request vectors as the text path (text_logit_processors): one op per step
+        # instead of 2-3 per token id, and each row owns its counts.
+        logits_processors = []
+        _lbias = getattr(sp, "logit_bias", None)
+        if _lbias:
+            logits_processors.append(
+                _tlp.LogitBias({int(k): float(v) for k, v in _lbias.items()})
+            )
+        logits_processors.extend(
+            make_logits_processors(
+                repetition_penalty=sp.repetition_penalty
+                if sp.repetition_penalty != 1.0
+                else None,
+            )
         )
         _fp = sp.frequency_penalty if sp.frequency_penalty != 0.0 else 0.0
         _pp = sp.presence_penalty if sp.presence_penalty != 0.0 else 0.0
         if _fp != 0.0 or _pp != 0.0:
-            if logits_processors is None:
-                logits_processors = []
-            _fp_state: dict[str, object] = {"counts": {}, "last_len": -1}
-            _fp_nprompt = len(prompt_token_ids or [])
-
-            def _freq_pres_penalty(
-                tokens, logits, fp=_fp, pp=_pp, n_prompt=_fp_nprompt, _st=_fp_state
-            ):
-                counts: dict[int, int] = _st["counts"]  # type: ignore[assignment]
-                last_len = int(_st["last_len"])  # type: ignore[arg-type]
-                cur_len = len(tokens)
-                if cur_len <= n_prompt:
-                    _st["last_len"] = cur_len
-                    return logits
-                if cur_len < last_len or last_len < n_prompt:
-                    counts = {}
-                    for t in tokens[n_prompt:]:
-                        counts[int(t)] = counts.get(int(t), 0) + 1
-                    _st["counts"] = counts
-                else:
-                    start = max(last_len, n_prompt)
-                    for t in tokens[start:]:
-                        counts[int(t)] = counts.get(int(t), 0) + 1
-                _st["last_len"] = cur_len
-                for tid, cnt in counts.items():
-                    if fp != 0.0:
-                        logits[..., tid] = logits[..., tid] - fp * cnt
-                    if pp != 0.0 and cnt > 0:
-                        logits[..., tid] = logits[..., tid] - pp
-                return logits
-
-            logits_processors.append(_freq_pres_penalty)
+            # tokens = prompt + generated here, so the offset is the prompt length
+            logits_processors.append(
+                _tlp.FrequencyPresencePenalty(
+                    _fp, _pp, n_prompt=len(prompt_token_ids or [])
+                )
+            )
 
         # SAMP-2: Append user-provided custom logits processors
         custom_procs = getattr(sp, "logits_processors", None)
@@ -4261,23 +4252,15 @@ class Scheduler:
         )
         _n_prompt = len(prompt_token_ids or [])
 
-        def _ban(logits, ids):
-            vocab = logits.shape[-1]
-            for tid in ids:
-                if 0 <= tid < vocab:
-                    logits[..., tid] = -float("inf")
-            return logits
-
         _supp = getattr(sp, "suppress_tokens", None)
         if _supp:
-            _sup_ids = [int(t) for t in _supp]
             if logits_processors is None:
                 logits_processors = []
-            logits_processors.append(_banning_processor(_ban, _sup_ids))
+            logits_processors.append(_tlp.TokenBan(_supp))
         if getattr(sp, "ignore_eos", False) and _eos_ids:
             if logits_processors is None:
                 logits_processors = []
-            logits_processors.append(_banning_processor(_ban, _eos_ids))
+            logits_processors.append(_tlp.TokenBan(_eos_ids))
         _min_tok = int(getattr(sp, "min_tokens", 0) or 0)
         # Skip min_tokens EOS-masking when constrained — the constraint governs
         # termination and masking EOS at its DONE state yields invalid output
@@ -4290,15 +4273,9 @@ class Scheduler:
         ):
             if logits_processors is None:
                 logits_processors = []
-
-            def _min_tokens_proc(
-                toks, lg, eos=_eos_ids, floor=_min_tok, nprompt=_n_prompt
-            ):
-                if (len(toks) - nprompt) < floor:
-                    return _ban(lg, eos)
-                return lg
-
-            logits_processors.append(_min_tokens_proc)
+            logits_processors.append(
+                _tlp.TokenBan(_eos_ids, floor=_min_tok, n_prompt=_n_prompt)
+            )
 
         if logits_processors:
             # Wrap sampler to apply logits processors before sampling.
