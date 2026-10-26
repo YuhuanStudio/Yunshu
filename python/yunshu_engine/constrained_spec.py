@@ -19,6 +19,7 @@ from typing import Any
 import mlx.core as mx
 import numpy as np
 
+from .constraint_eos import GrammarDeadEndError
 from .tool_call_grammar import apply_bitmask
 
 logger = logging.getLogger(__name__)
@@ -167,7 +168,7 @@ class ConstraintGuide:
             from .constraint_eos import normalize_eos_ids
 
             if c._dead:
-                raise ValueError("Grammar constraint has no valid next token")
+                raise GrammarDeadEndError("Grammar constraint has no valid next token")
             out = np.zeros((self.words,), dtype=np.int32)
             if not c._done and not c._matcher.is_stopped():
                 # llguidance requires exactly its tokenizer width, while the
@@ -189,7 +190,7 @@ class ConstraintGuide:
                 bits[: min(len(values), self.vocab_size)] = values[: self.vocab_size]
             out = np.packbits(bits, bitorder="little").view(np.int32)
         if not np.any(out):
-            raise ValueError("Grammar constraint has no valid next token")
+            raise GrammarDeadEndError("Grammar constraint has no valid next token")
         return out
 
     def checkpoint(self):
@@ -257,7 +258,7 @@ class CombinedGuide:
             if row is not None:
                 out &= row
         if not np.any(out):
-            raise ValueError("Grammar constraint has no valid next token")
+            raise GrammarDeadEndError("Grammar constraint has no valid next token")
         return out
 
     def checkpoint(self):

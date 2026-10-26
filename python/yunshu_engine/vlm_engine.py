@@ -23,8 +23,10 @@ Architecture:
 - Streaming via tokenizer.detokenizer (per-request, never pooled)
 """
 
+import array
 import asyncio
 import base64
+import collections
 import concurrent.futures
 import contextlib
 import contextvars
@@ -228,6 +230,63 @@ SINGLE_IMAGE_ONLY_MODELS = frozenset(
 )
 
 
+def _completion_count(stats) -> int:
+    """Tokens the reply consumed: the consumer's count, else the runner's progress."""
+    return int(getattr(stats, "consumed", 0) or stats.generated)
+
+
+_UNSET: Any = object()  # "argument not given" (None is a real value for an orphan key)
+
+
+class _ThreadSafeQueue:
+    """Wraps asyncio.Queue for the MLX/consumer threads.
+
+    ``put_blocking`` bounds data by the async consumer. ``put_nowait`` carries the terminal
+    items (end sentinel, error): it never drops one when the queue is full, it parks it
+    behind the data and delivers it, in order, as soon as the consumer makes room.
+    """
+
+    def __init__(self, async_q, ev_loop):
+        self._q = async_q
+        self._loop = ev_loop
+        self._backlog: collections.deque = collections.deque()
+        self._drain: asyncio.Future | None = None
+
+    def put_nowait(self, item):
+        with contextlib.suppress(RuntimeError):  # event loop closed during shutdown
+            self._loop.call_soon_threadsafe(self._put_terminal, item)
+
+    def _put_terminal(self, item):  # event-loop thread
+        if self._backlog or self._q.full():
+            self._backlog.append(item)
+            if self._drain is None or self._drain.done():
+                self._drain = asyncio.ensure_future(self._drain_backlog())
+        else:
+            self._q.put_nowait(item)
+
+    async def _drain_backlog(self):
+        while self._backlog:
+            await self._q.put(self._backlog[0])
+            self._backlog.popleft()
+
+    def put_blocking(self, item, cancel):
+        """Bound the runner's producer by the async consumer, including slow clients."""
+        try:
+            future = asyncio.run_coroutine_threadsafe(self._q.put(item), self._loop)
+        except RuntimeError:
+            return False
+        while True:
+            try:
+                future.result(timeout=0.05)
+                return True
+            except TimeoutError:
+                if cancel is not None and cancel.is_set():
+                    future.cancel()
+                    return False
+            except Exception:
+                return False
+
+
 class _VLMTextPromptCache:
     """Thread-safe LRU cache for VLM text prompt tokenization results.
 
@@ -239,16 +298,29 @@ class _VLMTextPromptCache:
     vision path (VLM models with images/audio), keyed by messages + template
     kwargs hash.
 
-    Memory-bounded with LRU eviction. Thread-safe via internal lock.
+    Memory-bounded with LRU eviction by entry count AND total size (a few long agent
+    prompts must not pin hundreds of MB): token ids are kept as a compact int32 array
+    (4 bytes a token, a Python list costs about 36), and the cache holds at most
+    ``max_total_tokens`` tokens / ``max_total_chars`` template characters.
+    Thread-safe via internal lock.
     """
 
-    def __init__(self, max_entries: int = 256) -> None:
+    def __init__(
+        self,
+        max_entries: int = 256,
+        max_total_tokens: int = 4_000_000,
+        max_total_chars: int = 16_000_000,
+    ) -> None:
         from collections import OrderedDict
 
-        self._cache: OrderedDict[str, list[int]] = OrderedDict()
+        self._cache: OrderedDict[str, array.array] = OrderedDict()
         self._template_cache: OrderedDict[str, str] = OrderedDict()
         self._lock = threading.Lock()
         self._max_entries = max_entries
+        self._max_total_tokens = max_total_tokens
+        self._max_total_chars = max_total_chars
+        self._total_tokens = 0
+        self._total_chars = 0
         self._stats = {"hits": 0, "misses": 0, "evictions": 0}
         from .tokenizer_prefix import TokenizerPrefixCache
 
@@ -275,21 +347,28 @@ class _VLMTextPromptCache:
             if entry is not None:
                 self._cache.move_to_end(cache_key)
                 self._stats["hits"] += 1
-                return entry
+                return entry.tolist()
             self._stats["misses"] += 1
             return None
 
     def put_token_ids(self, cache_key: str, token_ids: list[int]) -> None:
         """Store token IDs for a prompt."""
+        if len(token_ids) > self._max_total_tokens:
+            return  # one prompt larger than the whole budget is not worth keeping
+        packed = array.array("i", token_ids)
         with self._lock:
-            if cache_key in self._cache:
-                self._cache.move_to_end(cache_key)
-                self._cache[cache_key] = token_ids
-                return
-            while self._cache and len(self._cache) >= self._max_entries:
-                self._cache.popitem(last=False)
+            old = self._cache.pop(cache_key, None)
+            if old is not None:
+                self._total_tokens -= len(old)
+            while self._cache and (
+                len(self._cache) >= self._max_entries
+                or self._total_tokens + len(packed) > self._max_total_tokens
+            ):
+                _, evicted = self._cache.popitem(last=False)
+                self._total_tokens -= len(evicted)
                 self._stats["evictions"] += 1
-            self._cache[cache_key] = token_ids
+            self._cache[cache_key] = packed
+            self._total_tokens += len(packed)
 
     def get_template_text(self, cache_key: str) -> str | None:
         """Look up cached chat template text for VLM vision path."""
@@ -304,22 +383,27 @@ class _VLMTextPromptCache:
 
     def put_template_text(self, cache_key: str, template_text: str) -> None:
         """Store chat template text for VLM vision path."""
+        if len(template_text) > self._max_total_chars:
+            return
         with self._lock:
-            if cache_key in self._template_cache:
-                self._template_cache.move_to_end(cache_key)
-                self._template_cache[cache_key] = template_text
-                return
-            while (
-                self._template_cache and len(self._template_cache) >= self._max_entries
+            old = self._template_cache.pop(cache_key, None)
+            if old is not None:
+                self._total_chars -= len(old)
+            while self._template_cache and (
+                len(self._template_cache) >= self._max_entries
+                or self._total_chars + len(template_text) > self._max_total_chars
             ):
-                self._template_cache.popitem(last=False)
+                _, evicted = self._template_cache.popitem(last=False)
+                self._total_chars -= len(evicted)
                 self._stats["evictions"] += 1
             self._template_cache[cache_key] = template_text
+            self._total_chars += len(template_text)
 
     def clear(self) -> None:
         with self._lock:
             self._cache.clear()
             self._template_cache.clear()
+            self._total_tokens = self._total_chars = 0
         self.prefix_tokens.clear()
 
     @property
@@ -329,6 +413,8 @@ class _VLMTextPromptCache:
             s["tokenization_entries"] = len(self._cache)
             s["template_entries"] = len(self._template_cache)
             s["max_entries"] = self._max_entries
+            s["cached_tokens"] = self._total_tokens
+            s["template_chars"] = self._total_chars
             return s
 
 
@@ -965,10 +1051,11 @@ class VLMEngine:
             top_logprobs=top_logprobs,
             **kwargs,
         )
-        if self._orphan_key(messages, _params) is not None:
+        _key = self._orphan_key(messages, _params)
+        if _key is not None:
             # One generation core for both modes: a retry that arrives non-streaming can
             # adopt a streamed orphan (and the reverse) instead of recomputing it.
-            return await self._generate_collect(messages, _params)
+            return await self._generate_collect(messages, _params, _key)
         from .structural_tag import constrains_initial_output
 
         tpl_extra = self._request_template_extra(kwargs)
@@ -1158,7 +1245,9 @@ class VLMEngine:
                         ]
             self._cleanup_temp_files(_mine)
 
-    async def _generate_collect(self, messages, params: dict) -> dict[str, Any]:
+    async def _generate_collect(
+        self, messages, params: dict, key: Any = _UNSET
+    ) -> dict[str, Any]:
         """Non-streaming result assembled from the streaming core (same shape as the
         direct path: reasoning wrapped in think tags, exact counts)."""
         parts: list[str] = []
@@ -1167,36 +1256,53 @@ class VLMEngine:
         thinking = generated = cached = prompt_tokens = 0
         finish = None
         stop_seq = False
-        async with contextlib.aclosing(  # type: ignore[type-var]  # an async generator at runtime
-            self.generate_stream(messages=messages, **params)
-        ) as stream:
-            async for out in stream:
-                if out.error:
-                    self._num_requests_processed += 1
-                    if str(out.error).startswith("Streaming timeout"):
-                        return {
-                            "text": "",
-                            "finish_reason": "timeout",
-                            "model": self.model_name,
-                            "created": int(time.time()),
-                            "reasoning_tokens": 0,
-                            "prompt_tokens": 0,
-                            "completion_tokens": 0,
-                        }
-                    raise RuntimeError(out.error)
-                if out.new_text:
-                    (reasoning if out.current_state == "reasoning" else parts).append(
-                        out.new_text
-                    )
-                if out.logprobs:
-                    lps.extend(out.logprobs)
-                thinking = max(thinking, out.reasoning_tokens or 0)
-                generated = max(generated, out.completion_tokens or 0)
-                prompt_tokens = out.prompt_tokens or prompt_tokens
-                cached = out.cached_tokens or cached
-                if out.finished:
-                    finish = out.finish_reason
-                    stop_seq = bool(out.stopped_by_stop_sequence)
+        timed_out = {
+            "text": "",
+            "finish_reason": "timeout",
+            "model": self.model_name,
+            "created": int(time.time()),
+            "reasoning_tokens": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+        }
+        # A non-streaming ``timeout`` bounds the whole call (the streaming core reads the same
+        # field as a gap between tokens): the deadline below ends a reply that keeps arriving.
+        deadline = asyncio.timeout(params.get("timeout_seconds") or None)
+        try:
+            async with (
+                deadline,
+                contextlib.aclosing(  # type: ignore[type-var]  # an async generator at runtime
+                    self.generate_stream(messages=messages, orphan_key=key, **params)
+                ) as stream,
+            ):
+                async for out in stream:
+                    if out.error:
+                        self._num_requests_processed += 1
+                        if str(out.error).startswith("Streaming timeout"):
+                            return timed_out
+                        raise RuntimeError(out.error)
+                    if out.new_text:
+                        (
+                            reasoning if out.current_state == "reasoning" else parts
+                        ).append(out.new_text)
+                    if out.logprobs:
+                        lps.extend(out.logprobs)
+                    thinking = max(thinking, out.reasoning_tokens or 0)
+                    generated = max(generated, out.completion_tokens or 0)
+                    prompt_tokens = out.prompt_tokens or prompt_tokens
+                    cached = out.cached_tokens or cached
+                    if out.finished:
+                        finish = out.finish_reason
+                        stop_seq = bool(out.stopped_by_stop_sequence)
+        except TimeoutError:
+            if not deadline.expired():
+                raise
+            self._num_requests_processed += 1
+            logger.warning(
+                "VLM non-streaming generate timed out after %ss",
+                params.get("timeout_seconds"),
+            )
+            return timed_out
         self._num_requests_processed += 1
         if finish == "cancel":
             raise asyncio.CancelledError()
@@ -1224,7 +1330,7 @@ class VLMEngine:
         return orphan_adoption.request_key(self.model_name, messages, params)
 
     async def generate_stream(
-        self, prompt=None, messages=None, cancel_event=None, **kwargs
+        self, prompt=None, messages=None, cancel_event=None, orphan_key=_UNSET, **kwargs
     ) -> AsyncIterator[RequestOutput]:
         """Streaming generation. A client that vanishes mid-way parks the generation
         for ``YUNSHU_ORPHAN_GRACE_SECONDS``; an identical request adopts it (see
@@ -1237,7 +1343,9 @@ class VLMEngine:
             msgs = prompt if prompt is not None else (messages or [])
         if cancel_event is None:
             cancel_event = threading.Event()
-        key = self._orphan_key(msgs, kwargs)
+        # ``generate`` already derived the key of the identical request: hash the
+        # conversation once, not once per layer.
+        key = self._orphan_key(msgs, kwargs) if orphan_key is _UNSET else orphan_key
 
         def start(real_cancel):
             return self._generate_stream_impl(
@@ -1251,7 +1359,8 @@ class VLMEngine:
                 cancel_event,
                 float(settings.get("YUNSHU_ORPHAN_GRACE_SECONDS")),
                 int(settings.get("YUNSHU_ORPHAN_MAX")),
-                parts=orphan_adoption.key_parts(self.model_name, msgs, kwargs)
+                # only read to log why a request did not match an orphan
+                parts=(lambda: orphan_adoption.key_parts(self.model_name, msgs, kwargs))
                 if key
                 else None,
             )
@@ -1301,18 +1410,24 @@ class VLMEngine:
         # positional-offset race that deleted concurrent/n>1 requests' files.
         _req_temp_files: list[str] = []
         _temp_token = _request_temp_files.set(_req_temp_files)
-        image_paths = await self._extract_images(messages)
-        audio_paths = await self._extract_audio(messages)
-        video_frames = await self._extract_video_frames(messages)
-        image_paths.extend(video_frames)
+        try:
+            image_paths = await self._extract_images(messages)
+            audio_paths = await self._extract_audio(messages)
+            video_frames = await self._extract_video_frames(messages)
+            image_paths.extend(video_frames)
 
-        enable_thinking = self._default_enable_thinking(
-            enable_thinking,
-            constrained=constrains_initial_output(kwargs.get("json_schema")),
-        )
-        self._track_pipeline(kwargs, messages, image_paths, audio_paths)
-        self._check_request_supported(image_paths, audio_paths, kwargs)
-        await self._settle_rehearsal_early(messages, enable_thinking, tpl_extra)
+            enable_thinking = self._default_enable_thinking(
+                enable_thinking,
+                constrained=constrains_initial_output(kwargs.get("json_schema")),
+            )
+            self._track_pipeline(kwargs, messages, image_paths, audio_paths)
+            self._check_request_supported(image_paths, audio_paths, kwargs)
+            await self._settle_rehearsal_early(messages, enable_thinking, tpl_extra)
+        except BaseException:
+            # Nothing below owns these files yet: a bad request, a failed decode or a
+            # cancel while extracting must not leave decoded media on disk.
+            self._release_request_temp_files(_req_temp_files, _temp_token)
+            raise
 
         import uuid
 
@@ -1332,61 +1447,33 @@ class VLMEngine:
         # via call_soon_threadsafe (same pattern as batched_engine.py).
         _loop_for_queue = asyncio.get_running_loop()
 
-        class _ThreadSafeQueue:
-            """Wraps asyncio.Queue with thread-safe put_nowait."""
-
-            def __init__(self, async_q, ev_loop):
-                self._q = async_q
-                self._loop = ev_loop
-
-            def put_nowait(self, item):
-                with contextlib.suppress(
-                    RuntimeError
-                ):  # event loop closed during shutdown
-                    self._loop.call_soon_threadsafe(self._q.put_nowait, item)
-
-            def put_blocking(self, item, cancel):
-                """Bound the runner's producer by the async consumer, including slow clients."""
-                try:
-                    future = asyncio.run_coroutine_threadsafe(
-                        self._q.put(item), self._loop
-                    )
-                except RuntimeError:
-                    return False
-                while True:
-                    try:
-                        future.result(timeout=0.05)
-                        return True
-                    except TimeoutError:
-                        if cancel is not None and cancel.is_set():
-                            future.cancel()
-                            return False
-                    except Exception:
-                        return False
-
         _safe_queue = _ThreadSafeQueue(queue, _loop_for_queue)
 
-        runner_params = self._runner_kwargs(
-            max_tokens=max(1, int(max_tokens)),
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            min_p=min_p,
-            seed=seed,
-            stop=stop,
-            stop_token_ids=stop_token_ids,
-            repetition_penalty=repetition_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            enable_thinking=enable_thinking,
-            thinking_budget=kwargs.get("thinking_budget"),
-            cancel_event=cancel_event,
-            kwargs={
-                **kwargs,
-                "xtc_probability": xtc_probability,
-                "xtc_threshold": xtc_threshold,
-            },
-        )
+        try:
+            runner_params = self._runner_kwargs(
+                max_tokens=max(1, int(max_tokens)),
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                seed=seed,
+                stop=stop,
+                stop_token_ids=stop_token_ids,
+                repetition_penalty=repetition_penalty,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
+                enable_thinking=enable_thinking,
+                thinking_budget=kwargs.get("thinking_budget"),
+                cancel_event=cancel_event,
+                kwargs={
+                    **kwargs,
+                    "xtc_probability": xtc_probability,
+                    "xtc_threshold": xtc_threshold,
+                },
+            )
+        except BaseException:
+            self._release_request_temp_files(_req_temp_files, _temp_token)
+            raise
 
         runner_params["first_delivery"] = first_delivery
         from .request_tracker import current_request_info
@@ -1587,17 +1674,21 @@ class VLMEngine:
             # contextvars.Context than the one .set() ran in — reset() would then
             # raise "Token was created in a different Context". File cleanup below
             # uses the closure list, not the ContextVar, so a failed reset is safe.
-            with contextlib.suppress(ValueError):
-                _request_temp_files.reset(_temp_token)
-            _mine = list(_req_temp_files)
-            if _mine:
-                _mine_set = set(_mine)
-                with self._temp_files_lock:
-                    if self._temp_files is not None:
-                        self._temp_files[:] = [
-                            f for f in self._temp_files if f not in _mine_set
-                        ]
-            self._cleanup_temp_files(_mine)
+            self._release_request_temp_files(_req_temp_files, _temp_token)
+
+    def _release_request_temp_files(self, req_files: list[str], token) -> None:
+        """Drop one request's context var and delete exactly the files it registered."""
+        with contextlib.suppress(ValueError):
+            _request_temp_files.reset(token)
+        _mine = list(req_files)
+        if _mine:
+            _mine_set = set(_mine)
+            with self._temp_files_lock:
+                if self._temp_files is not None:
+                    self._temp_files[:] = [
+                        f for f in self._temp_files if f not in _mine_set
+                    ]
+        self._cleanup_temp_files(_mine)
 
     # -- next-turn rehearsal (YUNSHU_NEXT_TURN_PREFILL) ---------------------------------
 
@@ -2871,6 +2962,8 @@ class VLMEngine:
         processors = build_penalty_processors(
             repetition_penalty, frequency_penalty, presence_penalty, logit_bias
         )
+        if not suppress_tokens:  # the request's own list wins over the model's default
+            suppress_tokens = self._generation_suppress_ids() or None
         mask_kw = {
             "suppress": suppress_tokens,
             "min_tokens": min_tokens,
@@ -2969,11 +3062,20 @@ class VLMEngine:
             first_delivery=first_delivery,
         ):
             count += 1
+            stats.consumed = count
             lp = stats.last_logprob if logprobs else None
             if token in stop_ids:
                 detok.finalize()
                 tail = holdback.feed(detok.last_segment) + holdback.flush()
-                yield tail, token, "normal", "stop", thinking_tokens, lp
+                # EOS inside an open <think> ends the reasoning: its tail is reasoning
+                yield (
+                    tail,
+                    token,
+                    "reasoning" if in_think else "normal",
+                    "stop",
+                    thinking_tokens,
+                    lp,
+                )
                 return
             if think_start is not None and token in (think_start, think_end):
                 # The tags only switch state; they are never shown as text.
@@ -3036,7 +3138,7 @@ class VLMEngine:
         yield (
             tail,
             None,
-            "normal",
+            "reasoning" if in_think else "normal",
             "stop" if count < max_tokens else "length",
             thinking_tokens,
             None,
@@ -3124,11 +3226,17 @@ class VLMEngine:
                 image_paths=image_paths,
                 audio=self._audio_arg(audio_paths) if audio_paths else None,
             )
-            return ids.tolist(), pkw, salt
+            return self._non_empty_ids(ids.tolist()), pkw, salt
         ids = self._tokenize_with_cache(
             messages, enable_thinking=enable_thinking, template_extra=template_extra
         )
-        return ids.tolist(), None, None
+        return self._non_empty_ids(ids.tolist()), None, None
+
+    @staticmethod
+    def _non_empty_ids(ids: list[int]) -> list[int]:
+        if not ids:
+            raise ValueError("empty prompt: the request renders to zero tokens")
+        return ids
 
     def _resolve_prompt_cache_plan(
         self,
@@ -3370,7 +3478,7 @@ class VLMEngine:
         return (
             "".join(parts),
             thinking,
-            stats.generated,
+            _completion_count(stats),
             finish in ("stop", "budget"),
             finish == "budget",
             stats.cached_tokens,
@@ -3393,6 +3501,7 @@ class VLMEngine:
             return True
 
         prompt_tokens = len(input_ids)
+        first_sent = False
         try:
             for text, token, state, finish, thinking, lp in self._runner_events(
                 input_ids, stats=stats, **params
@@ -3400,7 +3509,11 @@ class VLMEngine:
                 reason = {"budget": "stop"}.get(finish, finish)
                 if not (text or reason or lp is not None):
                     continue
-                first = stats.generated == 1 and token is not None
+                # the first token's own event can carry no text (a think tag, a partial
+                # character) and the runner can already be past token 1: flag the first
+                # event that has a token, once
+                first = token is not None and not first_sent
+                first_sent = first_sent or token is not None
                 ok = deliver(
                     RequestOutput(
                         request_id=req_id,
@@ -3408,7 +3521,7 @@ class VLMEngine:
                         new_token_ids=[token] if token is not None else [],
                         finish_reason=reason,
                         finished=reason is not None,
-                        completion_tokens=stats.generated,
+                        completion_tokens=_completion_count(stats),
                         prompt_tokens=prompt_tokens,
                         cached_tokens=stats.cached_tokens,
                         current_state=state,
@@ -3431,7 +3544,7 @@ class VLMEngine:
                     finished=True,
                     error=str(exc),
                     prompt_tokens=prompt_tokens,
-                    completion_tokens=stats.generated,
+                    completion_tokens=_completion_count(stats),
                 )
             )
         finally:
@@ -4174,13 +4287,13 @@ class VLMEngine:
         tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
             suffix=f".{ext}", dir=private_media_dir(), delete=False
         )
+        self._register_temp_file(tmp.name)  # a cancelled await still cleans up
 
         def _sync_decode_write() -> None:
             # MB-size base64 decode + write blocks event loop;
             # move to executor.
-            decoded = base64.b64decode(data)
             try:
-                tmp.write(decoded)
+                tmp.write(base64.b64decode(data))
                 tmp.close()
             except Exception:
                 tmp.close()
@@ -4190,7 +4303,6 @@ class VLMEngine:
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _sync_decode_write)
-        self._register_temp_file(tmp.name)
         return tmp.name
 
     async def _save_base64_image(self, data_url: str) -> str:
@@ -4206,12 +4318,12 @@ class VLMEngine:
         tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
             suffix=f".{ext}", dir=private_media_dir(), delete=False
         )
+        self._register_temp_file(tmp.name)  # a cancelled await still cleans up
 
         def _sync_decode_write() -> None:
             # offload sync I/O off the event loop.
-            decoded = base64.b64decode(data)
             try:
-                tmp.write(decoded)
+                tmp.write(base64.b64decode(data))
                 tmp.close()
             except Exception:
                 tmp.close()
@@ -4221,7 +4333,6 @@ class VLMEngine:
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _sync_decode_write)
-        self._register_temp_file(tmp.name)
         return tmp.name
 
     async def _download_video(self, url: str) -> str:
@@ -4543,12 +4654,12 @@ class VLMEngine:
         tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
             suffix=f".{ext}", dir=private_media_dir(), delete=False
         )
+        self._register_temp_file(tmp.name)  # a cancelled await still cleans up
 
         def _sync_decode_write() -> None:
             # offload sync decode+write off the event loop.
-            decoded = base64.b64decode(data)
             try:
-                tmp.write(decoded)
+                tmp.write(base64.b64decode(data))
                 tmp.close()
             except Exception:
                 tmp.close()
@@ -4558,7 +4669,6 @@ class VLMEngine:
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _sync_decode_write)
-        self._register_temp_file(tmp.name)
         return tmp.name
 
     # ── Helpers ──
@@ -4619,6 +4729,31 @@ class VLMEngine:
                     ids.update(i for i in eid if isinstance(i, int))
         self._eos_ids_cache = sorted(ids)
         return self._eos_ids_cache
+
+    def _generation_suppress_ids(self) -> list[int]:
+        """``suppress_tokens`` from the checkpoint's generation_config.json (token ids the
+        model's author bans from the output, e.g. audio/image placeholder tokens): the default
+        when a request does not set its own."""
+        cached = getattr(self, "_suppress_ids_cache", None)
+        if cached is not None:
+            return cached
+        ids: list[int] = []
+        with contextlib.suppress(Exception):
+            path = Path(getattr(self, "_model_path", "")) / "generation_config.json"
+            if path.exists():
+                raw = json.loads(path.read_text()).get("suppress_tokens")
+                if isinstance(raw, list):
+                    ids = [
+                        i for i in raw if isinstance(i, int) and not isinstance(i, bool)
+                    ]
+        if ids:
+            # The mask indexes the logits row: an id outside the vocabulary is dropped.
+            with contextlib.suppress(Exception):
+                tok = self._tokenizer
+                vocab = len(getattr(tok, "_tokenizer", tok))
+                ids = [i for i in ids if 0 <= i < vocab]
+        self._suppress_ids_cache = sorted(set(ids))
+        return self._suppress_ids_cache
 
     # ── Stats ──
 

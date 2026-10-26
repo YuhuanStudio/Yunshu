@@ -37,6 +37,7 @@ import mlx.core as mx
 import numpy as np
 
 from . import keyed_sampling, settings
+from .constraint_eos import GrammarDeadEndError
 from .idle_memory import IdleMemory
 from .kernels.preempt import PreemptedError as _Preempted
 from .keyed_sampling import top_k_filter, top_p_filter
@@ -104,6 +105,10 @@ class RunStats:
     )
     first_token_s: float = 0.0
     generated: int = 0
+    # Tokens the engine's consumer has taken so far: what usage reports (``generated`` is the
+    # runner's progress and can be ahead of it: a stop string ends the reply mid-round, the
+    # consumer lags). 0 = not tracked.
+    consumed: int = 0
     finish_reason: str | None = None
     stop_string_hit: bool = False  # a user stop string (not EOS) ended the request
     used_apc: bool = False
@@ -173,8 +178,21 @@ class ConstraintProcessor:
         self._tokenizer = tokenizer
         self._apply = apply_json_constraint
         self._generated: list[int] = []
+        # Shared batch rows set ``isolate``: a dead end is recorded in ``fault`` (the runner
+        # fails this one request) instead of raising out of the whole batch step.
+        self.isolate = False
+        self.fault: BaseException | None = None
 
     def _mask(self, logits: mx.array) -> mx.array:
+        try:
+            return self._mask_row(logits)
+        except GrammarDeadEndError as exc:
+            if not self.isolate:
+                raise
+            self.fault = exc
+            return logits
+
+    def _mask_row(self, logits: mx.array) -> mx.array:
         fast = getattr(self._constraint, "allowed_mask", None)
         if fast is not None:
             mask = fast(self._tokenizer, logits.shape[-1])
@@ -182,7 +200,7 @@ class ConstraintProcessor:
                 return mx.where(mask, logits, mx.array(float("-inf"), logits.dtype))
         allowed = self._constraint.get_allowed_tokens(self._tokenizer, self._generated)
         if not allowed:
-            raise ValueError("Grammar constraint has no valid next token")
+            raise GrammarDeadEndError("Grammar constraint has no valid next token")
         return self._apply(logits, allowed)
 
     def __call__(self, tokens: mx.array, logits: mx.array) -> mx.array:
@@ -196,6 +214,15 @@ class ConstraintProcessor:
         else:
             self._constraint.advance(self._tokenizer.decode([token]))
         return self._mask(logits)
+
+
+def _row_fault(job: Any) -> BaseException | None:
+    """The grammar dead end an isolated processor recorded for this row, if any."""
+    for proc in getattr(job, "processors", None) or ():
+        fault = getattr(proc, "fault", None)
+        if isinstance(fault, BaseException):
+            return fault
+    return None
 
 
 class Fp32LogitsProcessor:
@@ -646,6 +673,10 @@ class VLMBatchRunner:
         """
         stats = stats if stats is not None else RunStats()
         ids = input_ids.tolist() if hasattr(input_ids, "tolist") else list(input_ids)
+        if not ids:
+            # BatchGenerator.insert cannot prefill zero tokens (and one empty row would
+            # take the shared batch's step down with it): refuse before anything is queued.
+            raise ValueError("empty prompt: the request renders to zero tokens")
         from .request_tracker import current_request_id
 
         stats.request_id = (
@@ -1193,18 +1224,33 @@ class VLMBatchRunner:
         extra_hash = getattr(group.gen, "_apc_extra_hash", None)
         if extra_hash is not None:
             job.apc_salt = extra_hash(pkw)
-        (uid,) = group.gen.insert(
-            [job.ids],
-            max_tokens=job.max_tokens,
-            prompt_kwargs=[pkw],
-            logits_processors=[job.processors or None],
-            thinking_budget_criteria=[job.budget],
-        )
-        job.uid = uid
-        job.start = time.perf_counter()
-        group.jobs[uid] = job
-        if group.sampler is not None and job.sampling is not None:
-            group.sampler.add(uid, job.sampling)
+        if not group.spec:
+            for proc in job.processors:
+                if isinstance(proc, ConstraintProcessor):
+                    proc.isolate = True
+        try:
+            (uid,) = group.gen.insert(
+                [job.ids],
+                max_tokens=job.max_tokens,
+                prompt_kwargs=[pkw],
+                logits_processors=[job.processors or None],
+                thinking_budget_criteria=[job.budget],
+            )
+            job.uid = uid
+            job.start = time.perf_counter()
+            group.jobs[uid] = job
+            if group.sampler is not None and job.sampling is not None:
+                group.sampler.add(uid, job.sampling)
+        except BaseException:
+            # The request never became a row: drop what was registered for it above.
+            if job.uid is not None and group.jobs.get(job.uid) is job:
+                group.jobs.pop(job.uid, None)
+                if group.sampler is not None:
+                    group.sampler.drop(job.uid)
+                with contextlib.suppress(Exception):
+                    group.gen.remove(job.uid)
+            self._release_apc_request(group, job)
+            raise
 
     def _maybe_promote(self) -> bool:
         """Move a lone decoding row from the shared batch onto the speculative lane.
@@ -1423,6 +1469,17 @@ class VLMBatchRunner:
             from .spec_release import release_rounds
 
             release_rounds(group.gen)
+        self._release_apc_request(group, job)
+        if not group.jobs and getattr(group, "spec", False):
+            from .kernels.buffer_cache import offer_restore_buffers
+
+            batch = getattr(group.gen, "_generation_batch", None)
+            offer_restore_buffers(getattr(batch, "prompt_cache", None) or [])
+        self._emit(job, _DONE)
+
+    @staticmethod
+    def _release_apc_request(group: _Group, job: _Job) -> None:
+        """Forget the per-request APC descriptor and console id ``_admit`` registered."""
         coordinator = getattr(group.gen, "apc", None)
         if coordinator is not None and hasattr(coordinator, "release_request"):
             pending_ids = getattr(coordinator.manager, "_console_requests", {}).get(
@@ -1435,12 +1492,6 @@ class VLMBatchRunner:
                 if not pending_ids:
                     coordinator.manager._console_requests.pop(tuple(job.ids), None)
             coordinator.release_request(job.ids, job.cache_plan)
-        if not group.jobs and getattr(group, "spec", False):
-            from .kernels.buffer_cache import offer_restore_buffers
-
-            batch = getattr(group.gen, "_generation_batch", None)
-            offer_restore_buffers(getattr(batch, "prompt_cache", None) or [])
-        self._emit(job, _DONE)
 
     @staticmethod
     def _stopped(job: _Job) -> bool:
@@ -1534,6 +1585,13 @@ class VLMBatchRunner:
             _g0 = sum(j.stats.generated for j in group.jobs.values())
         try:
             self._step_generator(group, decode_only=decode_only)
+        except GrammarDeadEndError as exc:
+            if not group.spec:
+                raise
+            # A speculative lane holds exactly one row: its grammar dead end is that
+            # request's failure, not the other groups'.
+            logger.warning("speculative row failed (%s); other groups continue", exc)
+            self._fail_group(group, exc)
         finally:
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
@@ -1553,6 +1611,22 @@ class VLMBatchRunner:
                 ragged_kv.set_format(None)
                 if dense_lane:
                     ragged_kv.set_dense_lane(False)
+
+    def _fail_group(self, group: _Group, exc: BaseException) -> None:
+        """Fail every row of one group and retire it; other groups are untouched."""
+        for uid, job in list(group.jobs.items()):
+            self._emit(job, exc)
+            with contextlib.suppress(Exception):
+                self._finish(group, uid, None)
+        with contextlib.suppress(Exception):
+            close_generator(group.gen)
+        if self._spec is group:
+            self._spec = None
+        if self._aux_spec is group:
+            self._aux_spec = None
+        for key, g in list(self._batches.items()):
+            if g is group:
+                del self._batches[key]
 
     def _emit_ready_first(self, group: _Group) -> _Job | None:
         """Deliver an already sampled AR token before upstream builds its lookahead.
@@ -1718,9 +1792,17 @@ class VLMBatchRunner:
                 job.stats.prefill_known = True
                 self._note_cache(job)
         finished = []
+        faulted = []
         for response in responses:
             job = group.jobs.get(response.uid)
             if job is None:
+                continue
+            fault = _row_fault(job)
+            if fault is not None:
+                # This row's grammar hit a dead end: its token is meaningless. Fail only
+                # this request; the other rows of the batch keep decoding.
+                if all(u != response.uid for u, _ in faulted):
+                    faulted.append((response.uid, fault))
                 continue
             if job is early_first:
                 # Upstream still owns stop/length handling and all batch state.
@@ -1765,6 +1847,14 @@ class VLMBatchRunner:
         # The first token was already emitted, so this keeps stores off TTFT.
         for uid, reason in finished:
             self._finish(group, uid, reason)
+        for uid, fault in faulted:
+            logger.warning("VLM runner row failed (%s); other rows continue", fault)
+            job = group.jobs.get(uid)
+            if job is not None:
+                self._emit(job, fault)
+            with contextlib.suppress(Exception):
+                group.gen.remove(uid)
+            self._finish(group, uid, None)
 
     def _observe_prefill(self, job: _Job) -> None:
         """Tell the storage tiers how fast prefill really is (their cost model compares a
@@ -2284,6 +2374,10 @@ class VLMBatchRunner:
 
     def _drive_slice_body(self, resubmit: bool) -> None:
         _install_row_context()
+        # Jobs already popped from ``_pending`` live only in these locals until they are
+        # admitted or re-queued; the failure handler below must still reach them.
+        pending: list[_Job] = []
+        waiting: list[_Job] = []
         try:
             for group in self._groups():
                 self._prune_group(group)
@@ -2342,13 +2436,15 @@ class VLMBatchRunner:
                 and self.inflight() - auxiliary <= 1
             )
             if work_order:
-                pending.sort(key=lambda j: self._work(j).key(time.perf_counter()))
+                try:
+                    pending.sort(key=lambda j: self._work(j).key(time.perf_counter()))
+                except Exception:  # ordering is advisory; admission still happens
+                    logger.exception("VLM runner work ordering failed")
             self._prefix_producers = [
                 (j, points)
                 for j, points in self._prefix_producers
                 if not j.terminal and not j.stats.t_first
             ]
-            waiting = []
             for job in pending:
                 cancelled = job.cancel_event is not None and job.cancel_event.is_set()
                 if job.abandoned or cancelled:
@@ -2356,10 +2452,10 @@ class VLMBatchRunner:
                     job.stats.finish_reason = "cancel" if cancelled else None
                     self._emit(job, _DONE)
                     continue
-                if self._prefix_wait(job):
-                    waiting.append(job)
-                    continue
                 try:
+                    if self._prefix_wait(job):
+                        waiting.append(job)
+                        continue
                     self._admit(job, alone)
                     self._track_prefix_producer(job)
                 except Exception as exc:
@@ -2368,6 +2464,8 @@ class VLMBatchRunner:
             if waiting:
                 with self._lock:
                     self._pending = waiting + self._pending
+                waiting = []
+            pending = []
             try:
                 self._maybe_promote()
             except Exception:  # lossless fallback: the row keeps decoding in the batch
@@ -2405,6 +2503,8 @@ class VLMBatchRunner:
                     del self._batches[key]
         except Exception as exc:
             logger.exception("VLM runner step failed; failing active requests")
+            for job in [*pending, *waiting]:
+                self._emit(job, exc)
             for group in self._groups():
                 for job in group.jobs.values():
                     self._emit(job, exc)

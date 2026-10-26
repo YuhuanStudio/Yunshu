@@ -828,6 +828,26 @@ def share_prefix_rows(pending, max_tail: int = SHARE_MAX_TAIL) -> list:
     return views
 
 
+def recurrent_state_finite(prompt_cache) -> bool:
+    """False when any floating recurrent-state array of ``prompt_cache`` holds inf or nan.
+
+    One fused reduction and one host sync per checkpoint store (never per token); dense KV
+    layers are not inspected."""
+    import mlx.core as mx
+    from mlx_vlm.models.cache import ArraysCache
+
+    checks = [
+        mx.isfinite(a).all()
+        for c in prompt_cache or ()
+        if isinstance(c, ArraysCache)
+        for a in (getattr(c, "cache", None) or ())
+        if a is not None and mx.issubdtype(a.dtype, mx.floating)
+    ]
+    if not checks:
+        return True
+    return bool(mx.all(mx.stack(checks)).item())
+
+
 class _Coordinator(APCCoordinator):
     """Checkpoint positions: the prompt end, one interval boundary, the end of the system turn."""
 
@@ -1842,6 +1862,15 @@ class YunshuAPCManager(APCManager):
     ) -> bool:
         n = len(token_ids)
         if self.prefill_alignment and n % self.prefill_alignment:
+            return False
+        if not recurrent_state_finite(prompt_cache):
+            # A recurrent (GDN) state that overflowed to inf/nan in fp16 would poison every
+            # request that restores it, forever: never publish it.
+            self.stats.record_reject("non_finite_state", tokens=n)
+            logger.warning(
+                "APC: not storing a %d-token checkpoint with a non-finite recurrent state",
+                n,
+            )
             return False
         if _generation is not None:
             self.observation.request_id = self.__dict__.get(
