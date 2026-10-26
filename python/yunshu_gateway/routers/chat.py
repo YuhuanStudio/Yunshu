@@ -270,9 +270,15 @@ def _release_lora_adapter(engine, adapter_id: str | None) -> None:
     # Self-managing engines release inside their executor closure (keystone).
     if getattr(engine, "_self_manages_lora", False):
         return
-    lora_mgr = getattr(engine, "get_lora_manager", lambda: None)()
-    if lora_mgr is not None:
-        lora_mgr.release_adapter(adapter_id)
+    # Runs in the `finally` of every response path, after or instead of the terminal event: a
+    # raise here turned a finished completion into a 500 / a stream cut after [DONE] (mlx2
+    # 3dc6f0f). A release that fails is logged; the response still reaches the client.
+    try:
+        lora_mgr = getattr(engine, "get_lora_manager", lambda: None)()
+        if lora_mgr is not None:
+            lora_mgr.release_adapter(adapter_id)
+    except Exception:
+        logger.warning("LoRA adapter release failed for %s", adapter_id, exc_info=True)
 
 
 # ── Request / Response schemas (OpenAI-compatible) ──

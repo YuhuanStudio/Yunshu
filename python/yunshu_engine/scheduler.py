@@ -817,6 +817,7 @@ class Scheduler:
 
         # Per-request thinking budget processors
         self._thinking_processors: dict[str, Any] = {}
+        self.finish_cleanup_failures: dict[str, int] = {}
 
         # KV prefix cache for batch-path insert_segments (C16)
         self._prefix_cache: Any = None
@@ -3695,19 +3696,30 @@ class Scheduler:
                 self._thinking_processors.pop(req_id, None)
                 self._thinking_state.pop(req_id, None)
                 # Cleanup speculative decoding state
-                self._cleanup_spec_state(req_id)
+                self._finish_step(
+                    req_id, "spec_state", self._cleanup_spec_state, req_id
+                )
                 # Clean up chunked prefill state (request may finish while
                 # still in the middle of chunked prefill, e.g. thinking budget overflow)
-                self._pop_pending_prefill(req_id)
+                self._finish_step(
+                    req_id, "pending_prefill", self._pop_pending_prefill, req_id
+                )
                 # H2O: Remove attention score tracking for finished request
                 if self._attention_score_tracker is not None:
-                    self._attention_score_tracker.remove_request(req_id)
+                    self._finish_step(
+                        req_id,
+                        "attention_tracker",
+                        self._attention_score_tracker.remove_request,
+                        req_id,
+                    )
                 # Cleanup chunked prefill production tracking
                 self._chunked_prefill_fairness.pop(req_id, None)
                 self._chunked_prefill_enqueued_at.pop(req_id, None)
                 # Unregister mRoPE delta
                 if uid is not None:
-                    self._rope_delta_mgr.unregister(uid)
+                    self._finish_step(
+                        req_id, "rope_delta", self._rope_delta_mgr.unregister, uid
+                    )
                 if detok is not None:
                     try:
                         detok.finalize()
@@ -3753,7 +3765,9 @@ class Scheduler:
                 # before its uid is popped from _uid_to_req and its KV dropped from
                 # the BatchGenerator — so even SHORT requests' prefixes get cached
                 # for the next same-prefix request (deterministic prefix reuse).
-                self._save_one_prefix(uid, req_id)
+                self._finish_step(
+                    req_id, "save_prefix", self._save_one_prefix, uid, req_id
+                )
                 self._uid_to_req.pop(uid, None)
                 # Schedule removal from BatchGenerator so subsequent decode
                 # steps within the same step() call don't waste GPU forward
@@ -3770,7 +3784,10 @@ class Scheduler:
 
                 # Record in ServerMetrics
                 if self._server_metrics is not None:
-                    self._server_metrics.record_request_complete(
+                    self._finish_step(
+                        req_id,
+                        "server_metrics",
+                        self._server_metrics.record_request_complete,
                         prompt_tokens=req.num_prompt_tokens,
                         completion_tokens=req.num_output_tokens,
                         cached_tokens=req.cached_tokens,
@@ -3782,13 +3799,34 @@ class Scheduler:
                     itl_list = self._itl_samples.pop(req_id, [])
                     if itl_list and hasattr(self._server_metrics, "record_itl"):
                         for sample in itl_list:
-                            self._server_metrics.record_itl(sample)
+                            self._finish_step(
+                                req_id,
+                                "server_metrics",
+                                self._server_metrics.record_itl,
+                                sample,
+                            )
 
                 # Cleanup ITL tracking state
                 self._last_token_time.pop(req_id, None)
                 self._itl_samples.pop(req_id, None)
 
         return outputs
+
+    def _finish_step(self, req_id: str, step: str, fn, *args, **kwargs) -> None:
+        """Run one cleanup step of a finishing request. A raise is logged and counted: the
+        step loop would otherwise drop this step's outputs (the finished request's terminal
+        included) and fail every other active request (mlx2 3dc6f0f)."""
+        try:
+            fn(*args, **kwargs)
+        except Exception:
+            self.finish_cleanup_failures[step] = (
+                self.finish_cleanup_failures.get(step, 0) + 1
+            )
+            logger.exception(
+                "request %s: finish step %s failed; still delivering its terminal",
+                req_id,
+                step,
+            )
 
     def _process_prefill_responses(self, responses: list) -> None:
         """Handle prompt processing completion."""
