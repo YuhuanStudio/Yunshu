@@ -243,6 +243,55 @@ message adapter, so a late system note is counted as the raw template renders it
 (~line 618) still expects a 400 for `conversation=` where the server now answers 404 `conversation_not_found`; a
 malformed KV group (head_dim 32, q-group 64) produced a 200 with an empty completion instead of an error.
 
+## Last round: core-path overhead and a second independent review
+
+The optimisations above are mostly off the hot path (feature-specific processors, middleware, prep thread, APC
+bookkeeping). A last round looked at the core decode loop, the spec-lane rounds and the TTFT admission path on CPU (host
+Python time and host-sync counts; both carry over to Metal, where each sync also stalls the pipeline). It was cut short
+by budget, so most of it is a measured to-do list, not code.
+
+Landed:
+* Copy drafter: the draft and the graft lookup of the same round share one longest-match search, and candidates are
+  narrowed after 8 steps (MTP lane, DFlash fast lane, constrained DFlash chain; identical (end, length), tested against
+  the old function). About 0.1 ms per round on CPU at an 8.6K context.
+* `/tokenize` and `/apply-template` render exactly what generation renders on both engines (message adapter, late
+  `[System note]` turns, token-counter stripping, special-token defusing, tool-call normalisation); tested against the ids
+  captured at the engines' encode point. `smoke_api_extensions.py` expects `conversation_not_found`.
+* Review fixes: VLM default `suppress_tokens` now resolves hub ids like the text path (`dd3d698`); scheduler
+  `deep_reset` releases row grammar guards; `/tokenize` no longer imports MLX for messages without tool calls; a broken
+  archive link.
+
+Measured, not changed (each needs an equivalence test, and the sync ones a Mac A/B):
+* Plain VLM decode step (width 1, greedy): 2 `tolist` + 1 `eval` + 1 `async_eval` + 1 `item` per step, about 1.0-1.7 ms
+  host per step on CPU. Candidates: `settings.scheduling_enabled()` is called twice per slice and stats the settings file
+  each time (cache per slice, keep live reload); `singleton_cache.extract_rows` does `left_padding.item()` every width-1
+  step (cache as int); `kernels/preempt.py` reads a ContextVar per layer per forward; logprobs are computed and read back
+  (`compute_logprobs=not spec`) even for rows that did not ask for them (touches sampler numerics, Mac A/B).
+* MTP rounds: without logprobs already one real stall per round; with logprobs about 7.5 host reads and ~3 stalls per
+  round (`top_logprobs_rows` evals and reads separately, then `chosen.tolist()`). Folding them into the round's single
+  readback would bring it to 1 stall. Also: a guide plus processors reads the drafts twice in `mtp_lane.rounds`;
+  `spec_draft_verifier.verify_with_last_token` syncs twice with a greedy sampler; `speculative_decoder.py` (~597, ~781)
+  and the streaming n-gram CPU-fallback verify (`engine_ngram.py` ~1513) call `.item()` per draft position.
+* TTFT (VLM path, 6-8K prompt): request entry to first forward 83 ms cold, 57-221 ms on cached turns; first token to first
+  SSE byte ~2 ms. Candidates: about 15 `tuple(int(t) for t in token_ids)` per-token loops in `apc_manager.py` lookups and
+  stores; `tuple(job.ids)` hashed as a dict key in `_admit` / `_release_apc_request`; `mx.array(job.ids)` built twice in
+  `_admit`; array -> list -> list round trips between `_tokenize_with_cache`, `_runner_input` and `iter_tokens`; the
+  prompt-cache plan renders the template twice more when markers are present; a cold request's budget guard tokenizes
+  the conversation twice. APC/SSD key values must stay byte-identical.
+
+Still open from the reviews and the CPU run:
+* A malformed KV quantisation (head_dim 32 with a 64 group) still returns 200 with an empty completion instead of falling
+  back or erroring (not started).
+* Realtime: a short utterance (< `barge_in_min_ms`) while a response is active is now trimmed away by the idle-silence
+  trim (before this branch it was merged into the next turn), and the announced `_pending_user_item_id` is reused. Fix:
+  skip `_trim_idle_audio` while a response is active, or clear the pending item when speech_stopped commits nothing.
+* With a checkpoint suppress list, every VLM request carries a `TokenMaskProcessor`, so `allow_draft` is false and the
+  single-row spec promotion is off for every request (now also for hub-id models). Decide whether a static mask should
+  stay draft-compatible.
+* The n-gram reasoning-gate fallback to `_generate_fast` drops `kv_cache_breakpoints` and `priority` (not checked
+  whether it ever passed them).
+* One auth-related hardening item was reported to the owner privately (public repo).
+
 ## Not done, and known limits
 
 * Orphan adoption on the text path does not exist and was not built.
@@ -275,7 +324,8 @@ malformed KV group (head_dim 32, q-group 64) produced a 200 with an empty comple
 | `main` `47a87ab` | 135 | 12372 | 346 |
 | this branch (after the parity lanes) | 134 | 12611 | 325 |
 | this branch (after the adoption and review-fix rounds) | 134 | 12994 | 326 |
-| this branch (final, after the CPU verification merge `4dbd50c`, `-n 8`, no vocab GGUF) | 135 | 13003 | 353 |
+| this branch (after the CPU verification merge `4dbd50c`, `-n 8`, no vocab GGUF) | 135 | 13003 | 353 |
+| this branch (final, after the last round, `-n 8`) | 141 -> 136 after the `test_engine_templates` stand-in fix | 13005 | 355 |
 
 * No test fails on the branch that passes on `main`. The 134 failures are the environment set on both trees (Metal-only
   kernels, real checkpoints, gpuq, zsh, srt, tfbench, timing tests under load).
@@ -286,7 +336,9 @@ malformed KV group (head_dim 32, q-group 64) produced a 200 with an empty comple
   The final run's only extra failures were `test_api_parity` (fixed in the next commit) and a CPU-timing test that
   passes alone (`test_priority_queue::test_sort_baseline_comparison`). After the CPU merge the only failure not on
   `main` is `test_console_cpu_script::test_the_sampler_measures_a_busy_process_and_an_idle_one` (CPU timing under
-  `-n 8`; 3/3 pass alone). With the Qwen vocab GGUF present, `test_cpu_*` and the cold-prompt test pass (58).
+  `-n 8`; 3/3 pass alone). The final run's other extra failures under `-n 8` pass alone (`test_vlm_logit_bias_range` was a
+  worker crash, `test_kv_quant_autogate` a timing case); the five `test_engine_templates` failures were the test's
+  stand-in engine missing the new shared render helpers, fixed in the last commit. With the Qwen vocab GGUF present, `test_cpu_*` and the cold-prompt test pass (58).
 * `tests/unit/test_path_parity.py` is green with the new feature rows; `ruff check` / `ruff format` are clean.
 * Not covered here: Metal, real models, the console bundle-size build and the full Playwright/WebKit suite (see
   [Verify on the Mac](#verify-on-the-mac)).

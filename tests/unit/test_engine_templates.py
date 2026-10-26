@@ -87,12 +87,16 @@ class _TemplateTok:
 
 
 def _engine(tok, thinking=None):
-    return SimpleNamespace(
+    eng = SimpleNamespace(
         _tokenizer=tok,
         enable_thinking=thinking,
         model_name="test/model",
         _normalize_messages_for_chat_template=T._normalize_messages_for_chat_template,
     )
+    # the render helpers shared with /tokenize (bound to the stand-in engine)
+    eng._prepare_template_messages = lambda m: T._prepare_template_messages(eng, m)
+    eng._clean_template_messages = T._clean_template_messages
+    return eng
 
 
 def test_apply_chat_template_maps_roles_and_coerces_null_content():
