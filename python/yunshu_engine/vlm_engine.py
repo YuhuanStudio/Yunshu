@@ -1221,36 +1221,53 @@ class VLMEngine:
         thinking = generated = cached = prompt_tokens = 0
         finish = None
         stop_seq = False
-        async with contextlib.aclosing(  # type: ignore[type-var]  # an async generator at runtime
-            self.generate_stream(messages=messages, orphan_key=key, **params)
-        ) as stream:
-            async for out in stream:
-                if out.error:
-                    self._num_requests_processed += 1
-                    if str(out.error).startswith("Streaming timeout"):
-                        return {
-                            "text": "",
-                            "finish_reason": "timeout",
-                            "model": self.model_name,
-                            "created": int(time.time()),
-                            "reasoning_tokens": 0,
-                            "prompt_tokens": 0,
-                            "completion_tokens": 0,
-                        }
-                    raise RuntimeError(out.error)
-                if out.new_text:
-                    (reasoning if out.current_state == "reasoning" else parts).append(
-                        out.new_text
-                    )
-                if out.logprobs:
-                    lps.extend(out.logprobs)
-                thinking = max(thinking, out.reasoning_tokens or 0)
-                generated = max(generated, out.completion_tokens or 0)
-                prompt_tokens = out.prompt_tokens or prompt_tokens
-                cached = out.cached_tokens or cached
-                if out.finished:
-                    finish = out.finish_reason
-                    stop_seq = bool(out.stopped_by_stop_sequence)
+        timed_out = {
+            "text": "",
+            "finish_reason": "timeout",
+            "model": self.model_name,
+            "created": int(time.time()),
+            "reasoning_tokens": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+        }
+        # A non-streaming ``timeout`` bounds the whole call (the streaming core reads the same
+        # field as a gap between tokens): the deadline below ends a reply that keeps arriving.
+        deadline = asyncio.timeout(params.get("timeout_seconds") or None)
+        try:
+            async with (
+                deadline,
+                contextlib.aclosing(  # type: ignore[type-var]  # an async generator at runtime
+                    self.generate_stream(messages=messages, orphan_key=key, **params)
+                ) as stream,
+            ):
+                async for out in stream:
+                    if out.error:
+                        self._num_requests_processed += 1
+                        if str(out.error).startswith("Streaming timeout"):
+                            return timed_out
+                        raise RuntimeError(out.error)
+                    if out.new_text:
+                        (
+                            reasoning if out.current_state == "reasoning" else parts
+                        ).append(out.new_text)
+                    if out.logprobs:
+                        lps.extend(out.logprobs)
+                    thinking = max(thinking, out.reasoning_tokens or 0)
+                    generated = max(generated, out.completion_tokens or 0)
+                    prompt_tokens = out.prompt_tokens or prompt_tokens
+                    cached = out.cached_tokens or cached
+                    if out.finished:
+                        finish = out.finish_reason
+                        stop_seq = bool(out.stopped_by_stop_sequence)
+        except TimeoutError:
+            if not deadline.expired():
+                raise
+            self._num_requests_processed += 1
+            logger.warning(
+                "VLM non-streaming generate timed out after %ss",
+                params.get("timeout_seconds"),
+            )
+            return timed_out
         self._num_requests_processed += 1
         if finish == "cancel":
             raise asyncio.CancelledError()
