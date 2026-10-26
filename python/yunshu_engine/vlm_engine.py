@@ -3172,8 +3172,11 @@ class VLMEngine:
 
     @staticmethod
     def _non_empty_ids(ids: list[int]) -> list[int]:
-        if not ids:
-            raise ValueError("empty prompt: the request renders to zero tokens")
+        from .context_window import require_non_empty_prompt
+
+        require_non_empty_prompt(
+            ids
+        )  # EmptyPromptError, the gateway's 400 on every path
         return ids
 
     def _resolve_prompt_cache_plan(

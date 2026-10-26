@@ -713,7 +713,9 @@ class VLMBatchRunner:
         if not ids:
             # BatchGenerator.insert cannot prefill zero tokens (and one empty row would
             # take the shared batch's step down with it): refuse before anything is queued.
-            raise ValueError("empty prompt: the request renders to zero tokens")
+            from .context_window import require_non_empty_prompt
+
+            require_non_empty_prompt(ids)
         from .request_tracker import current_request_id
 
         stats.request_id = (
