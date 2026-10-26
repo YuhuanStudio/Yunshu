@@ -554,7 +554,7 @@
      "ev": [
       [
        "python/yunshu_engine/engine_fast.py",
-       "_freq_pres_penalty"
+       "_tlp.FrequencyPresencePenalty("
       ]
      ]
     },
@@ -2013,6 +2013,75 @@
      "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
+  },
+  "grammar_prewarm": {
+   "module": "python/yunshu_engine/tool_call_grammar.py",
+   "what": "llguidance token tables built in the background at model load (YUNSHU_GRAMMAR_PREWARM), so the first constrained request does not pay the ~1 s build",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "prewarm_for_engine(self)"
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "prewarm_for_engine(self)"
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "prewarm_for_engine(self)"
+      ]
+     ]
+    },
+    "driver": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "prewarm_for_engine(self)"
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "prewarm_for_engine(self)"
+      ]
+     ]
+    },
+    "text": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/batched_engine.py",
+       "prewarm_for_engine(self)"
+      ]
+     ]
+    },
+    "loop": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/batched_engine.py",
+       "prewarm_for_engine(self)"
+      ]
+     ]
+    }
+   }
   }
  },
  "exclusions": [
@@ -2456,7 +2525,8 @@
   "YUNSHU_DEBUG_TREE_PROFILE": "tree_drafts",
   "YUNSHU_NEXT_TURN_PREFILL": "next_turn_rehearsal",
   "YUNSHU_NEXT_TURN_DELAY_S": "next_turn_rehearsal",
-  "YUNSHU_GC_POLICY": "gc_policy"
+  "YUNSHU_GC_POLICY": "gc_policy",
+  "YUNSHU_GRAMMAR_PREWARM": "grammar_prewarm"
  },
  "gap_budget": 55,
  "settings_categories": [
