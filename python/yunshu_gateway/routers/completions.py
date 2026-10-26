@@ -145,13 +145,6 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
         )
     except Exception:
         logger.debug("metrics recording failed", exc_info=True)
-    # feed the per-request TPM box (see usage_context).
-    try:
-        from ..usage_context import record_billed_tokens
-
-        record_billed_tokens((prompt_tokens or 0) + (completion_tokens or 0))
-    except Exception:
-        logger.debug("billed-token accounting failed", exc_info=True)
 
 
 class StreamOptions(BaseModel):
