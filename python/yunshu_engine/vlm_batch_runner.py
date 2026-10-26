@@ -283,8 +283,13 @@ def build_penalty_processors(
         return []
     from mlx_lm.sample_utils import make_logits_processors
 
+    from .constrained_spec import PENALTY_CONTEXT
+
     return list(
         make_logits_processors(
+            repetition_context_size=PENALTY_CONTEXT,
+            presence_context_size=PENALTY_CONTEXT,
+            frequency_context_size=PENALTY_CONTEXT,
             logit_bias=logit_bias or None,
             repetition_penalty=(
                 repetition_penalty if repetition_penalty not in (None, 1.0) else None
