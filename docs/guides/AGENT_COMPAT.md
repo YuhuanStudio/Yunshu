@@ -7,7 +7,7 @@ should find every endpoint, header, beta, tool type and server-side tool they us
 Anthropic / OpenAI APIs, not only correct generation. This page is the evidence: what each agent
 actually calls (a census of the real CLIs), what Yunshu does with it, and what is still missing.
 
-The raw census data is private (`docs/research/runs/<date>-agent-census/`, gitignored); the tools that
+The raw census data is private (a local, ignored per-date `agent-census` directory the census scripts write to); the tools that
 produce it are in `scripts/research/agent_compat/` (below).
 
 ## Method
@@ -94,7 +94,7 @@ with `data: [DONE]` (the real API does not); every SDK and Codex stop on it, so 
 ## Verifying the claims: `scripts/dev/agentcompat`
 
 Documents drift, so the claims above are re-earned by one command with one verdict
-(`docs/research/runs/<date>-agentcompat-<commit>/verdict.json`, exit 0 only on positive evidence):
+(`verdict.json` in a local, ignored per-date `agentcompat-<commit>` directory, exit 0 only on positive evidence):
 
 | Stage | What it proves |
 |---|---|

@@ -560,7 +560,7 @@
    "cells": {
     "mtp": {
      "s": "missing",
-     "why": "the lane serves one request: spec = use_draft and alone and lane free; concurrent rows decode without drafts (multi-row spec is the open work in CLAUDE.md)",
+     "why": "the lane serves one request: spec = use_draft and alone and lane free; concurrent rows decode without drafts (multi-row spec is open work)",
      "owner": "decode16",
      "impact": "high"
     },
@@ -2298,7 +2298,7 @@
      "spec = job.use_draft and alone"
     ]
    ],
-   "why": "Open work in CLAUDE.md (multi-row spec); the measured own-driver attempt lost and is deleted."
+   "why": "Open work (multi-row spec); the measured own-driver attempt lost and is deleted."
   },
   {
    "id": "streaming-off-text-spec",
@@ -2324,7 +2324,7 @@
      "_RUNNER_UNSUPPORTED_KWARGS"
     ]
    ],
-   "why": "Documented in CLAUDE.md; the runner shares one model across rows."
+   "why": "By design: the runner shares one model across rows."
   },
   {
    "id": "tree-opt-in-mtp",
@@ -2415,7 +2415,7 @@
     "python/yunshu_engine/ssd_kv_cache.py"
    ],
    "note": "Two prefix-cache stacks (VLM APC with WARM/SSD tiers vs text prefix/SSD cache) and two disk-cache setting families (YUNSHU_VLM_APC_DISK* vs YUNSHU_SSD_CACHE*).",
-   "unify": "Text path moves to APC (the CLAUDE.md plan for unifying text onto the runner); one disk setting family."
+   "unify": "Text path moves to APC (the plan to unify text onto the runner); one disk setting family."
   },
   {
    "id": "kv-quant",

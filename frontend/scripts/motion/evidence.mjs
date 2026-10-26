@@ -1,5 +1,5 @@
-// Motion evidence: records screencast frames (every compositor frame, ~60 fps) for each scenario of
-// docs/research/notes/MOTION_SPEC.md "Acceptance", and measures CLS after first paint per page.
+// Motion evidence: records screencast frames (every compositor frame, ~60 fps) for each motion scenario
+// (the console's page transitions and reveals), and measures CLS after first paint per page.
 //
 //   node scripts/motion/evidence.mjs <label> <console-url> <out-dir> [--only a,b] [--themes dark,light] [--vps 1440,390] [--cls]
 //

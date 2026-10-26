@@ -6,7 +6,7 @@ Every target matmul for decode (1 row) and speculative verify (2-8 rows) goes
 through one kernel whose per-row result does not depend on how many rows share
 the call: oMLX's ``sg8`` simdgroup-matrix quantized matmul, fed at least 4 rows
 (zero-padded; measured row-invariant for 4..8 rows and for a padded single row,
-docs/research/runs/2026-09-28-matrix/sg8-invariance.jsonl). Layers ``sg8`` does
+2026-09-28 sg8 invariance sweep). Layers ``sg8`` does
 not cover (tiny GDN ``in_proj_a/b``) use mlx-vlm's exact verify path, whose rows
 already equal single-row decode. GatedDeltaNet and attention verify paths are the
 bit-exact ones from ``kernels.omlx``.

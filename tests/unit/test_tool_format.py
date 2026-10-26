@@ -1,7 +1,7 @@
 """Tool-call formats: detection from the chat template, parsing, streaming.
 
 Model outputs below are recorded from real checkpoints where available
-(Gemma-4 E4B: docs/research/runs/2026-09-28-families/gemma4-e4b-matrix.jsonl)
+(Gemma-4 E4B: 2026-09-28 families matrix)
 or copied from each family's documented format.
 """
 

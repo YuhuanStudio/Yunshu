@@ -222,8 +222,8 @@ def test_feature_ids_are_slugs(fid):
 
 
 # User 2026-09-28 / 2026-10-24: no more paths, and no new feature that only works on a benchmark-shaped path. The
-# guard above only recorded divergence (55 gap cells, never driven down); these two make it block. Path convergence
-# plan: docs/research/notes/PATH_CONVERGENCE.md (the path set may only shrink as paths merge into the one runner).
+# guard above only recorded divergence (55 gap cells, never driven down); these two make it block. The path set
+# may only shrink as paths merge into the one runner.
 PATHS_2026_10_24 = {"mtp", "dflash", "batch", "generic", "text", "loop"}
 FEATURES_2026_10_24 = {
     "apc_prefix_cache",
