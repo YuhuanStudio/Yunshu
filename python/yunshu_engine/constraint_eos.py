@@ -42,3 +42,8 @@ class ConstrainedDecodingError(ValueError):
     state the allowed set already contains the normalised EOS ids; reaching
     this error means no EOS is legal either, so the request fails closed.
     """
+
+
+class GrammarDeadEndError(ValueError):
+    """A request's grammar has no valid next token. The fault belongs to that one row:
+    the runner fails that request and leaves every other row of the batch running."""
