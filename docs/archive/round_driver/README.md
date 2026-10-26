@@ -11,7 +11,7 @@ Status: stage 1 behind `YUNSHU_ROUND_DRIVER` (experimental, off). Once validated
 the upstream-`BatchGenerator` shared batch and the single-request speculative lane, and the flag
 is deleted.
 
-The motivation numbers below describe earlier prototype runs, not the release 0.1.5 cross-engine snapshot. See [current measured comparisons](../BENCHMARKS.md#where-yunshu-stands); this driver remains experimental.
+The motivation numbers below describe earlier prototype runs, not the release 0.1.5 cross-engine snapshot. See [current measured comparisons](../../BENCHMARKS.md#where-yunshu-stands); this driver remains experimental.
 
 ## Why
 
