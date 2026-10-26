@@ -10,8 +10,12 @@ the op, which is what the per-id scalar arithmetic did, so the result is bit-ide
 (tests/unit/test_text_logit_processors.py checks float32 and bfloat16 against the old
 loops).
 
-Signature is mlx-lm's ``(tokens, logits) -> logits``; ``tokens`` is
-``[last_prompt_token, gen1, gen2, ...]`` (mlx-lm prefills the rest outside ``_step``).
+Signature is mlx-lm's ``(tokens, logits) -> logits``. With processors set, mlx-lm's
+``generate_step`` concatenates EVERY chunk it prefills (the whole uncached prompt suffix, last
+token included) into ``tokens`` before the generated ids, so ``tokens`` is
+``[prompt suffix..., gen1, gen2, ...]``. Processors that count generated tokens take
+``n_prompt`` = the length of the ids handed to ``generate_step`` (``set_prompt_len``, once that is
+known); ``tokens`` is not just ``[last_prompt_token, ...]`` (that held on older mlx-lm).
 """
 
 from __future__ import annotations
@@ -40,6 +44,10 @@ class FrequencyPresencePenalty:
         self._vocab = -1
         self._fpc: mx.array | None = None  # fp * count[t]
         self._pres: mx.array | None = None  # pp where count[t] > 0
+
+    def set_prompt_len(self, n: int) -> None:
+        """Length of the ids handed to ``generate_step`` (what ``tokens`` holds before gen1)."""
+        self.n_prompt = int(n)
 
     def _dense(self, ids, vocab: int) -> None:
         """Write the entries for ``ids`` (all of them when ``vocab`` changed/reset)."""
@@ -113,8 +121,9 @@ class LogitBias:
 class TokenBan:
     """Set the logits of ``ids`` to -inf, optionally only while fewer than ``floor``
     tokens were generated (``min_tokens``: ``len(tokens) - n_prompt`` counts generated ones;
-    ``n_prompt`` is 1 on the mlx-lm text path, the prompt length in the engine loop where
-    ``tokens`` is the whole prompt plus the generated ids)."""
+    ``n_prompt`` is the length of the ids given to ``generate_step`` on the mlx-lm text path
+    (``set_prompt_len``), the prompt length in the engine loop; both see the whole prompt plus
+    the generated ids in ``tokens``)."""
 
     def __init__(self, ids, floor: int | None = None, n_prompt: int = 1):
         self._ids = [int(t) for t in ids]
@@ -122,6 +131,9 @@ class TokenBan:
         self._n_prompt = n_prompt
         self._vocab = -1
         self._mask: mx.array | None = None
+
+    def set_prompt_len(self, n: int) -> None:
+        self._n_prompt = int(n)
 
     def __call__(self, tokens, logits):
         if self._floor is not None and (len(tokens) - self._n_prompt) >= self._floor:

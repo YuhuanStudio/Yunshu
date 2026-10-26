@@ -20,10 +20,36 @@ _LOCK = threading.Lock()
 _CACHE: dict[str, tuple[tuple[float, int], list[int]]] = {}
 
 
-def _raw_ids(model_path: str | Path | None) -> list[int]:
+_DIRS: dict[str, Path | None] = {}
+
+
+def _model_dir(model_path: str | Path | None) -> Path | None:
+    """The checkpoint directory for a local path, or for a hub id its already-downloaded snapshot
+    (offline lookup in the Hugging Face cache, the directory mlx-lm loaded the weights from)."""
     if not model_path:
+        return None
+    key = str(model_path)
+    with _LOCK:
+        if key in _DIRS:
+            return _DIRS[key]
+    path: Path | None = Path(key)
+    if not path.is_dir():
+        try:
+            from mlx_lm.utils import hf_repo_to_path
+
+            path = hf_repo_to_path(key)
+        except Exception:  # not a cached hub id (or no mlx-lm): nothing to read
+            path = None
+    with _LOCK:
+        _DIRS[key] = path
+    return path
+
+
+def _raw_ids(model_path: str | Path | None) -> list[int]:
+    root = _model_dir(model_path)
+    if root is None:
         return []
-    fp = Path(str(model_path)) / "generation_config.json"
+    fp = root / "generation_config.json"
     try:
         st = fp.stat()
     except OSError:

@@ -75,6 +75,7 @@ class EngineNgramMixin:
         logits_processors: list | None = None,
         timeout_seconds: float | None = None,
         lora_adapter: str | None = None,
+        suppress_tokens: list[int] | None = None,
     ) -> _engine.GenerationOutput:
         """Generate using N-gram speculative decoding (model-free).
 
@@ -140,6 +141,7 @@ class EngineNgramMixin:
                 logits_processors=logits_processors,
                 timeout_seconds=timeout_seconds,
                 lora_adapter=lora_adapter,
+                suppress_tokens=suppress_tokens,
             )
         # Fresh per-request proposer (n-gram or suffix) — avoids reset()/propose()
         # races on a shared instance under concurrency.
@@ -248,6 +250,18 @@ class EngineNgramMixin:
                 xtc_probability=xtc_probability,
                 xtc_threshold=xtc_threshold,
             )
+
+        # suppress_tokens (the request's, or the checkpoint's generation_config default): the
+        # verifier accepts a draft iff it equals the sampler's pick, so banning the ids inside
+        # the sampler keeps every token path (first token, verified drafts, bonus) honest and
+        # the output equal to the plain fast path's.
+        if suppress_tokens:
+            from .text_logit_processors import TokenBan
+
+            _ban, _base_sampler = TokenBan(suppress_tokens), sampler
+
+            def sampler(logprobs, _ban=_ban, _base=_base_sampler):  # noqa: F811
+                return _base(_ban(None, logprobs))
 
         # Grammar constraint: pre-validate draft tokens against allowed set
         _grammar_constraint = None
@@ -892,6 +906,7 @@ class EngineNgramMixin:
                 output_text = close_unterminated_reasoning(
                     output_text,
                     detect_needs_think_prefix(list(input_ids), tokenizer),
+                    constrained=json_schema is not None,
                 )
                 rp = get_reasoning_parser(self.model_name)
                 rp_out = rp.parse(output_text)

@@ -60,3 +60,53 @@ async def test_stream_tail_inside_open_think_is_reasoning():
         if o.new_text:
             states.append(o.current_state)
     assert states and set(states) == {"reasoning"}
+
+
+def _passthrough_constraint(monkeypatch):
+    """Mark the request constrained without a real grammar (the tiny fake vocab cannot compile
+    one): the sampler is untouched, so the text is whatever the model emits."""
+    import yunshu_engine.batched_engine as be
+
+    monkeypatch.setattr(be, "_build_constrained_sampler", lambda s, js, tok: s)
+
+
+def test_helper_leaves_a_constrained_reply_alone():
+    for text in ("positive", '"abc"', "42", "true", "x"):
+        assert close_unterminated_reasoning(text, True, constrained=True) == text
+        assert close_unterminated_reasoning(text, True) == text + "</think>"
+
+
+async def test_constrained_reply_under_an_open_think_is_content_non_stream(monkeypatch):
+    _passthrough_constraint(monkeypatch)
+    schema = {"type": "choice", "choices": ["a"]}
+    out = await _engine()._generate_fast(
+        prompt=PROMPT,
+        max_tokens=5,
+        temperature=0.0,
+        json_schema=schema,
+        suppress_tokens=[
+            OPEN,
+            CLOSE,
+        ],  # the tiny model loves ":", the think-start token
+    )
+    assert out.error is None
+    assert out.text and out.reasoning_tokens == 0  # was content '' / all reasoning
+
+
+async def test_constrained_reply_under_an_open_think_is_content_stream(monkeypatch):
+    _passthrough_constraint(monkeypatch)
+    schema = {"type": "choice", "choices": ["a"]}
+    states = []
+    async for o in _engine()._stream_generate_fast(
+        prompt=PROMPT,
+        max_tokens=5,
+        temperature=0.0,
+        json_schema=schema,
+        suppress_tokens=[
+            OPEN,
+            CLOSE,
+        ],  # the tiny model loves ":", the think-start token
+    ):
+        if o.new_text:
+            states.append(o.current_state)
+    assert states and set(states) == {"normal"}

@@ -242,6 +242,7 @@ class EngineStreamMixin:
         # (no stops), the buffer is pure passthrough.
         _hb_active = bool(stop_suffixes)
         _hb = StopHoldbackBuffer(stop_suffixes if _hb_active else None)
+        _tok_ends: list[int] = []  # cumulative text length per generated token (usage)
 
         # route temp>0 through _build_temp_sampler, like the non-streaming
         # fast path (3160). The bare make_sampler uses mlx-lm's categorical_sampling,
@@ -333,15 +334,16 @@ class EngineStreamMixin:
             logits_processors.append(_repetition_penalty)
         from . import text_logit_processors as _tlp
 
+        _gen_count_procs: list = []  # told len(ids_to_prefill) before generate_step runs
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
             # Dense per-request count vectors patched once per new token (see
-            # text_logit_processors). The prompt offset is 1, NOT the prompt length:
-            # mlx-lm prefills all-but-the-last prompt token OUTSIDE _step, so the
-            # `tokens` handed to logits_processors is [last_prompt_token, gen1, ...].
-            # OpenAI allows both penalties in [-2, 2]; negative ones boost the token.
-            logits_processors.append(
-                _tlp.FrequencyPresencePenalty(frequency_penalty, presence_penalty)
-            )
+            # text_logit_processors). Counts generated tokens only: the prompt offset is the
+            # length of the ids handed to generate_step (set below, once the cached prefix is
+            # known), because mlx-lm puts every prefilled chunk into the `tokens` its
+            # processors see. OpenAI allows both penalties in [-2, 2]; negative ones boost.
+            _fpp = _tlp.FrequencyPresencePenalty(frequency_penalty, presence_penalty)
+            _gen_count_procs.append(_fpp)
+            logits_processors.append(_fpp)
         if logit_bias:
             # Out-of-range ids are skipped (OpenAI ignores them) rather than crashing
             # the request with an out-of-bounds index.
@@ -357,7 +359,9 @@ class EngineStreamMixin:
         # all-(-inf) allowed set → its argmax fallback emits an INVALID non-EOS
         # token after a complete JSON value.
         if min_tokens and min_tokens > 0 and stop_ids and json_schema is None:
-            logits_processors.append(_tlp.TokenBan(stop_ids, floor=int(min_tokens)))
+            _min_ban = _tlp.TokenBan(stop_ids, floor=int(min_tokens))
+            _gen_count_procs.append(_min_ban)
+            logits_processors.append(_min_ban)
 
         # SAMP-2: Wrap user-provided custom logits processors to adapt signature.
         if _custom_logits_processors:
@@ -462,17 +466,18 @@ class EngineStreamMixin:
         prefix_cache = store_opt_out(prefix_cache, cancel_event)
         # Post-generation stores trim the live cache back to the prompt: not for hybrids.
         # Automatic (length-gated) 8-bit KV is lossy and the caches are not keyed by
-        # precision: never store it, or a later hit would differ from a miss (mirrors
-        # _generate_fast's _lossy_kv).
-        store_cache = (
-            None
-            if _stream_hybrid or self._auto_quantized_kv(_req_kv_bits)
-            else prefix_cache
-        )
+        # precision: never store a cache that really got quantised, or a later hit would
+        # differ from a miss (mirrors _generate_fast's _lossy_kv; checked per cache at store).
+        store_cache = None if _stream_hybrid else prefix_cache
+
+        def _storable(kv_cache):
+            return store_cache is not None and not self._auto_quantized_kv(
+                _req_kv_bits, kv_cache
+            )
 
         def _save_breakpoint_prefixes(token_ids, kv_cache):
             """Save KV prefix cache entries at breakpoint positions."""
-            if not _stream_kv_breakpoints or store_cache is None:
+            if not _stream_kv_breakpoints or not _storable(kv_cache):
                 return
             from .kv_prefix_cache import cache_length as _cache_len_bp
 
@@ -560,8 +565,10 @@ class EngineStreamMixin:
             # never flipped True → the ENTIRE chain-of-thought leaked into visible
             # delta.content and reasoning_tokens stayed 0 (streaming diverged from
             # the non-streaming path, which uses the closing-only reasoning parser).
-            # Pre-seed when the rendered prompt ends with an open <think>.
-            if think_end_token is not None and not _in_thinking:
+            # Pre-seed when the rendered prompt ends with an open <think>. NOT for a constrained
+            # request (json_schema / regex / choice / grammar): its first token is the answer,
+            # not reasoning (same rule as close_unterminated_reasoning).
+            if think_end_token is not None and not _in_thinking and json_schema is None:
                 try:
                     from .thinking_budget import detect_needs_think_prefix
 
@@ -662,6 +669,10 @@ class EngineStreamMixin:
                         _stream_kv_bits = None
                 except Exception:
                     pass
+            for (
+                _gp
+            ) in _gen_count_procs:  # mlx-lm's `tokens` = these ids + the generated ones
+                _gp.set_prompt_len(len(ids_to_prefill))
             _fp_stats.admit(
                 _stream_cached_tokens,
                 len(ids_to_prefill),
@@ -685,7 +696,7 @@ class EngineStreamMixin:
                     # benefit on the (default) streaming path. None → mlx-lm no-ops.
                     kv_bits=_stream_kv_bits,
                     kv_group_size=self._kv_quant_group_size,
-                    quantized_kv_start=self._kv_quant_start,
+                    quantized_kv_start=self._kv_quant_start_for(_stream_kv_bits),
                 ):
                     n_tok += 1
                     _fp_stats.token(n_tok)
@@ -846,6 +857,10 @@ class EngineStreamMixin:
                         if _itl > 0 and _itl < 10:
                             _stream_itl_samples.append(_itl)
                     new_text = "" if stop_hit else detokenizer.last_segment
+                    # cumulative text length after this token (usage when a stop string cuts)
+                    _tok_ends.append(
+                        (_tok_ends[-1] if _tok_ends else 0) + len(new_text)
+                    )
                     if suffix_hit and not stop_hit and not _hb_active:
                         # (Non-hold-back path) Trim ONLY the matched stop suffix
                         # from this segment so leading non-stop text is still
@@ -920,6 +935,9 @@ class EngineStreamMixin:
                                 detokenizer.add_token(think_end_token)
                                 _thinking_tokens.append(think_end_token)
                                 _end_text = detokenizer.last_segment
+                                _tok_ends.append(
+                                    (_tok_ends[-1] if _tok_ends else 0) + len(_end_text)
+                                )
                                 if _end_text:
                                     _put(
                                         (
@@ -958,7 +976,7 @@ class EngineStreamMixin:
                                     "normal",
                                 )
                             )
-                            if store_cache is not None:
+                            if _storable(cache):
                                 store_cache.add(ids, cache)
                             _save_breakpoint_prefixes(ids, cache)
                             mx.synchronize()
@@ -1125,13 +1143,13 @@ class EngineStreamMixin:
                         _put(
                             ("", n_tok, "stop", len(_thinking_tokens), None, _cur_state)
                         )
-                        if store_cache is not None:
+                        if _storable(cache):
                             store_cache.add(ids, cache)
                         _save_breakpoint_prefixes(ids, cache)
                         mx.synchronize()
                         _unregister_inflight()
                         return
-                if store_cache is not None:
+                if _storable(cache):
                     store_cache.add(ids, cache)
                 _save_breakpoint_prefixes(ids, cache)
                 detokenizer.finalize()
@@ -1380,7 +1398,7 @@ class EngineStreamMixin:
                     # generated but their text was never delivered. Usage counts what the
                     # consumer took (the non-streaming path re-encodes the kept text too).
                     n_tok = _engine._delivered_token_count(
-                        tokenizer, accumulated, n_tok
+                        _tok_ends, len(accumulated), n_tok
                     )
 
                 # Streaming backpressure: slow down if client can't keep up
