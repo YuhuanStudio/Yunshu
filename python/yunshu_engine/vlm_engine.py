@@ -45,6 +45,11 @@ from typing import Any
 import mlx.core as mx
 
 from . import gc_policy, netguard, next_turn, settings
+from .memory_admission import (
+    MEMORY_LIMIT_MARK,
+    MemoryAdmissionError,
+    memory_limit_error,
+)
 from .moe_pack import tensor_quantization_override, unsupported_pack_reason
 from .request import RequestOutput
 from .types import EngineConfig
@@ -1182,6 +1187,9 @@ class VLMEngine:
                             "prompt_tokens": 0,
                             "completion_tokens": 0,
                         }
+                    refusal = memory_limit_error(str(out.error))
+                    if refusal is not None:
+                        raise refusal
                     raise RuntimeError(out.error)
                 if out.new_text:
                     (reasoning if out.current_state == "reasoning" else parts).append(
@@ -3524,7 +3532,11 @@ class VLMEngine:
                     request_id=req_id,
                     finish_reason="error",
                     finished=True,
-                    error=str(exc),
+                    error=(
+                        MEMORY_LIMIT_MARK + str(exc)
+                        if isinstance(exc, MemoryAdmissionError)
+                        else str(exc)
+                    ),
                     prompt_tokens=prompt_tokens,
                     completion_tokens=stats.generated,
                 )

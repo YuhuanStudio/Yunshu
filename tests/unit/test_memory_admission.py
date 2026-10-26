@@ -305,3 +305,9 @@ def test_refusal_probe_judges_the_answer():
     ok = {"error": {"code": "memory_limit"}}
     assert mod.judge(507, ok, True) == []
     assert len(mod.judge(500, {"error": {"code": "oom"}}, False)) == 3
+
+
+def test_refusal_survives_the_engine_error_string():
+    err = ma.memory_limit_error(ma.MEMORY_LIMIT_MARK + "needs 19 GiB")
+    assert isinstance(err, ma.MemoryAdmissionError) and str(err) == "needs 19 GiB"
+    assert ma.memory_limit_error("something else") is None

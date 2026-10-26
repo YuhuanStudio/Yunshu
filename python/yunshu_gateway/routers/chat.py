@@ -2796,7 +2796,11 @@ async def _handle_vlm_chat(
                 "seed": _per_choice_seed(req.seed, idx),
             }
             r = await vlm_engine.generate(**kwargs)
-        except MemoryError:
+        except MemoryError as mem_exc:
+            from yunshu_engine.memory_admission import MemoryAdmissionError
+
+            if isinstance(mem_exc, MemoryAdmissionError):
+                return idx, None, f"memory_limit: {mem_exc}"
             return idx, None, "memory_error"
         except ValueError as e:
             # ValueError comes from image-download / input-validation; surface
@@ -2909,6 +2913,18 @@ async def _handle_vlm_chat(
 
     # Check for errors
     for _idx, _data, err in results:
+        if err is not None and err.startswith("memory_limit: "):
+            return JSONResponse(
+                status_code=507,
+                content={
+                    "error": {
+                        "message": "Request refused, it cannot fit in memory: "
+                        + err[len("memory_limit: ") :],
+                        "type": "memory_error",
+                        "code": "memory_limit",
+                    }
+                },
+            )
         if err == "memory_error":
             return JSONResponse(
                 status_code=507,
@@ -3294,6 +3310,11 @@ async def _stream_vlm_response(
             async for output in stream:
                 if getattr(output, "error", None):
                     # an engine failure is an error event, never a clean "stop"
+                    from yunshu_engine.memory_admission import memory_limit_error
+
+                    refusal = memory_limit_error(str(output.error))
+                    if refusal is not None:
+                        raise refusal
                     raise EngineStreamError(str(output.error))
                 if (
                     hasattr(output, "completion_tokens")

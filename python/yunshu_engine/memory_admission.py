@@ -229,6 +229,17 @@ def plan_load(
 
 
 # ---------------------------------------------------------------- admission gate
+MEMORY_LIMIT_MARK = "[memory_limit] "
+
+
+def memory_limit_error(text: str) -> MemoryError | None:
+    """The refusal rebuilt from an engine error string that carries the mark (the engine
+    reports failures as text through its output queue)."""
+    if text.startswith(MEMORY_LIMIT_MARK):
+        return MemoryAdmissionError(text[len(MEMORY_LIMIT_MARK) :])
+    return None
+
+
 class MemoryAdmissionError(MemoryError):
     """A request that cannot fit even on an idle server (it would run the process out of
     Metal memory and take every running request with it): refused with the numbers."""
