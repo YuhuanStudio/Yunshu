@@ -21,6 +21,7 @@ SAMP=$!
 trap 'kill -9 $SRV $SAMP 2>/dev/null; rm -rf "${H:?}/.yunshu/cache"' EXIT
 for i in $(seq 1 300); do curl -sf http://127.0.0.1:$PORT/health >/dev/null && break; kill -0 $SRV 2>/dev/null || { echo "server exited"; tail -20 "$OUT/server-$TAG.log"; exit 1; }; sleep 2; done
 curl -sf http://127.0.0.1:$PORT/health >/dev/null
+for i in $(seq 1 300); do curl -s http://127.0.0.1:$PORT/v1/models | grep -q '"id"' && break; kill -0 $SRV 2>/dev/null || exit 1; sleep 2; done
 MODEL=$(curl -s http://127.0.0.1:$PORT/v1/models | "$PY" -c 'import json,sys;print(json.load(sys.stdin)["data"][0]["id"])')
 # CTX may be a space-separated list: the probe runs once per context size (peak memory is
 # cumulative, so ascending sizes give the per-size peak).
