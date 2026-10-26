@@ -114,6 +114,8 @@ const settingdesc = {
   YUNSHU_PREFIX_HOT_LIMIT:
     "文字引擎：僅讓這麼多筆前綴 KV 項目保持完整精度，較舊的在記憶體中以 4-bit 儲存（重用時有損，以品質換記憶體）。0 表示全部完整精度。",
   YUNSHU_SSD_CACHE: "文字引擎：將前綴 KV 持久化到 SSD。",
+  YUNSHU_APC_SEAM_CHECKPOINT:
+    "VLM 執行器（APC），僅限分割不變預填：最後一則使用者訊息達 8192 token 以上時，在訊息結尾前 2048 token 處多留一個檢查點，讓「同一份長文件、不同問題」的後續請求從文件處接續。每個此類提示多一份檢查點複製；輸出不變。實驗性。",
   YUNSHU_SSD_CACHE_DIR: "文字引擎：SSD 前綴快取目錄。",
   YUNSHU_SSD_CACHE_PRECISION:
     "文字引擎：SSD 前綴快取的儲存精度：`native`（KV 與遞迴狀態位元精確，無損）或 `int8`（逐張量 int8，磁碟用量約為 bf16 的一半，重用時有損）。",
