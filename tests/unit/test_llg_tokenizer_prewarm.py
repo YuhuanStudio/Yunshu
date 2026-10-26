@@ -56,14 +56,19 @@ def _wait_cached(tok, width, timeout=5.0):
     return False
 
 
-def test_prewarm_returns_at_once_and_builds_each_width_once(slow_build):
+def test_prewarm_returns_at_once_and_builds_only_the_tokenizer_width(slow_build):
     tok = _Hf()
     t0 = time.perf_counter()
     assert tcg.prewarm_for_engine(_Engine(tok, {"vocab_size": 1024})) is True
     assert time.perf_counter() - t0 < 0.1  # nothing waits for the build
-    assert _wait_cached(tok, 1000) and _wait_cached(tok, 1024)
+    assert _wait_cached(tok, 1000)
+    time.sleep(0.5)  # a second (padded-width) table would have been built by now
+    assert slow_build == [1000]  # was [1000, 1024]: two ~0.45 GiB tables at every load
     # a later request finds the cached table: no further build
     assert tcg.llg_tokenizer(tok, 1000) == ("llt", 1000)
+    assert slow_build == [1000]
+    # the forced-tool width is built on first use, once
+    assert tcg.llg_tokenizer(tok, 1024) == ("llt", 1024)
     assert tcg.llg_tokenizer(tok, 1024) == ("llt", 1024)
     assert sorted(slow_build) == [1000, 1024]
 

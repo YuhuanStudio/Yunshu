@@ -398,11 +398,13 @@ def prewarm_llg_tokenizer(tokenizer: Any, model_vocab: int | None = None) -> boo
 
     Runs on the grammar worker pool, never on the MLX thread, and nothing waits for it:
     model readiness is unaffected, and a request that needs a table still being built
-    waits on that one build. Builds the mask widths the request paths use: the tokenizer's
-    own length (JSON schema / regex / cfg) and ``model_vocab`` (the logits width the tool
-    grammar uses) when that differs. Each width costs a native heap of the vocabulary's
-    size (~0.45 GiB at 248K tokens, listed in the memory ledger), the same cost the first
-    constrained request would pay; ``YUNSHU_GRAMMAR_PREWARM=0`` turns it off.
+    waits on that one build. Builds ONE table, at the tokenizer's own length (JSON schema /
+    regex / choice / cfg, the constrained requests an unconfigured deployment sees). The
+    forced-tool grammar masks at the model's padded logits width (``model_vocab``); when
+    that differs it is a second table of the same size, built on the first forced tool call
+    instead of at every load (a deployment that never forces a tool should not hold it).
+    Each table is a native heap of the vocabulary's size (~0.45 GiB at 248K tokens, listed
+    in the memory ledger); ``YUNSHU_GRAMMAR_PREWARM=0`` turns the prewarm off.
 
     Returns whether a build was scheduled (False without llguidance, a Hugging Face
     tokenizer, or with the setting off)."""
@@ -422,11 +424,7 @@ def prewarm_llg_tokenizer(tokenizer: Any, model_vocab: int | None = None) -> boo
         try:
             from .grammar_constraint import _LlgConstraint
 
-            widths = [_LlgConstraint._vocab_width(tokenizer)]
-            if model_vocab and int(model_vocab) > 0:
-                widths.append(int(model_vocab))
-            for width in dict.fromkeys(widths):
-                llg_tokenizer(tokenizer, width)
+            llg_tokenizer(tokenizer, _LlgConstraint._vocab_width(tokenizer))
         except Exception:  # noqa: BLE001 - a prewarm miss only costs the first request
             logger.debug("llguidance tokenizer prewarm failed", exc_info=True)
 
