@@ -999,43 +999,19 @@ class EngineFastMixin:
 
             _fp_stats.stats.latency_marks["apc_end"] = time.perf_counter()
 
-            # Inflight prefix sharing: check for in-flight
-            # prefills with matching prefix to share partial KV blocks.
-            # Skip when seed-bypass is active so seeded requests stay
-            # bit-reproducible regardless of concurrent in-flight prompts.
-            # Inflight sharing borrows a donor's live cache and
-            # trims it to the matched prefix — not safe for hybrid (non-trimmable
-            # recurrent layers). Hybrid reuse goes through boundary snapshots only.
-            _inflight_entry = None
-            if cached_kv is None and not _bypass_cache and not _hybrid_mode:
-                try:
-                    from .inflight_prefix_sharing import get_inflight_tracker
-
-                    _tracker = get_inflight_tracker()
-                    _inflight_entry = _tracker.find_prefix(
-                        [int(t) for t in ids], self.model_name or ""
-                    )
-                    # : DO NOT borrow the donor's LIVE kv_cache_ref. It was
-                    # unsnapshotted+untrimmed: a full-length match yields an empty
-                    # ids_to_prefill (generate_step on a (1,0) tensor → IndexError),
-                    # and a partial match decodes into the donor's still-growing
-                    # cache → wrong RoPE offsets / cross-request corruption. Safe
-                    # only when the donor unregisters before any other fast-path
-                    # _run — which the now-working engine loop breaks (a long-lived
-                    # engine-loop donor stays registered). The snapshot-based
-                    # persistent prefix cache already covers safe sharing, so the
-                    # live-borrow reuse is disabled (registration below is kept and
-                    # is harmless).
-                except Exception:
-                    _engine.logger.debug("inflight prefix lookup failed", exc_info=True)
-
+            # Inflight prefix sharing: register this prefill (tracker stats / TTL).
+            # No find_prefix() lookup: borrowing a donor's LIVE kv cache is disabled
+            # (untrimmed, still growing -> empty prefill on a full match, wrong RoPE
+            # offsets on a partial one; hybrid layers are not trimmable at all) and
+            # the snapshot-based prefix cache covers safe sharing, so the lookup
+            # result was dead code that copied the whole prompt token by token.
             # Register our prefill as in-flight for concurrent requests to share
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
 
                 get_inflight_tracker().register(
                     _inflight_req_id,
-                    [int(t) for t in ids],
+                    input_ids,
                     cache,
                     self.model_name or "",
                 )

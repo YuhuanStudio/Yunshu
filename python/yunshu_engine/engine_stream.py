@@ -675,32 +675,15 @@ class EngineStreamMixin:
                         exc_info=True,
                     )
 
-            # Inflight prefix sharing ()
-            _inflight_entry = None
-            if cached_kv is None and not _stream_hybrid:
-                try:
-                    from .inflight_prefix_sharing import get_inflight_tracker
-
-                    _tracker = get_inflight_tracker()
-                    _inflight_entry = _tracker.find_prefix(
-                        [int(t) for t in ids], self.model_name or ""
-                    )
-                    # BUG #1: live-borrow reuse disabled — see the
-                    # non-streaming site for the full rationale (empty-prefill
-                    # crash + cross-request corruption against a growing donor
-                    # cache, unsafe under the now-working engine loop).
-                except Exception:
-                    _engine.logger.debug(
-                        "inflight prefix lookup failed in streaming", exc_info=True
-                    )
-
+            # Inflight prefix sharing: register only (live-borrow lookup is disabled,
+            # see the non-streaming site). input_ids is already a Python list.
             # Register our prefill as in-flight for concurrent requests to share
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
 
                 get_inflight_tracker().register(
                     _inflight_req_id,
-                    [int(t) for t in ids],
+                    input_ids,
                     cache,
                     self.model_name or "",
                 )
