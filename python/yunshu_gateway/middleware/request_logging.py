@@ -9,14 +9,12 @@ Note: Active request counting for graceful shutdown is handled by
 track_active_requests middleware in main.py, not here.
 """
 
-import contextlib
 import logging
 import threading
 import time
 import uuid
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
+from starlette.datastructures import Headers, MutableHeaders
 
 from yunshu_engine import settings
 
@@ -62,8 +60,8 @@ def _check_memory_pressure() -> None:
         pass
 
 
-class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Log all requests with structured fields."""
+class RequestLoggingMiddleware:
+    """Log all requests with structured fields (pure ASGI: streamed chunks pass untouched)."""
 
     SKIP_PATHS = {
         "/health",
@@ -82,13 +80,21 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     _mem_check_interval: float = 10.0  # seconds
     _mem_check_lock = threading.Lock()
 
-    async def dispatch(self, request: Request, call_next):
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        state = scope.setdefault("state", {})
         request_id = (
-            getattr(request.state, "request_id", None)
-            or request.headers.get("X-Request-ID")
+            state.get("request_id")
+            or Headers(scope=scope).get("X-Request-ID")
             or f"req_{uuid.uuid4().hex[:24]}"
         )
-        request.state.request_id = request_id
+        state["request_id"] = request_id
+        method, path = scope["method"], scope["path"]
 
         # Periodic memory pressure check (thread-safe compare-and-swap)
         now = time.monotonic()
@@ -104,44 +110,45 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             _check_memory_pressure()
 
         t0 = time.monotonic()
+        started = False
+
+        async def send_with_id(message):
+            nonlocal started
+            if message["type"] == "http.response.start" and not started:
+                started = True
+                elapsed = time.monotonic() - t0
+                MutableHeaders(scope=message)["X-Request-ID"] = request_id
+                status = message["status"]
+                if path not in self.SKIP_PATHS:
+                    level = logging.DEBUG
+                    if status >= 500:
+                        level = logging.ERROR
+                    elif status >= 400:
+                        level = logging.WARNING
+
+                    logger.log(
+                        level,
+                        f"[{request_id}] {method} {path} {status} {elapsed * 1000:.1f}ms",
+                    )
+
+                    # Slow request warning
+                    if elapsed >= SLOW_REQUEST_THRESHOLD and status < 500:
+                        logger.warning(
+                            "SLOW_REQUEST: [%s] %s %s %.1fms (threshold: %.0fms)",
+                            request_id,
+                            method,
+                            path,
+                            elapsed * 1000,
+                            SLOW_REQUEST_THRESHOLD * 1000,
+                        )
+            await send(message)
+
         try:
-            response = await call_next(request)
+            await self.app(scope, receive, send_with_id)
         except Exception as e:
-            elapsed = time.monotonic() - t0
-            logger.error(
-                f"[{request_id}] {request.method} {request.url.path} "
-                f"ERROR {elapsed * 1000:.1f}ms — {e}"
-            )
-            raise
-
-        elapsed = time.monotonic() - t0
-        # Response headers may be immutable for some response types
-        # (e.g., StreamingResponse from certain middleware); skip gracefully.
-        with contextlib.suppress(TypeError, AttributeError):
-            response.headers["X-Request-ID"] = request_id
-
-        if request.url.path not in self.SKIP_PATHS:
-            level = logging.DEBUG
-            if response.status_code >= 500:
-                level = logging.ERROR
-            elif response.status_code >= 400:
-                level = logging.WARNING
-
-            logger.log(
-                level,
-                f"[{request_id}] {request.method} {request.url.path} "
-                f"{response.status_code} {elapsed * 1000:.1f}ms",
-            )
-
-            # Slow request warning
-            if elapsed >= SLOW_REQUEST_THRESHOLD and response.status_code < 500:
-                logger.warning(
-                    "SLOW_REQUEST: [%s] %s %s %.1fms (threshold: %.0fms)",
-                    request_id,
-                    request.method,
-                    request.url.path,
-                    elapsed * 1000,
-                    SLOW_REQUEST_THRESHOLD * 1000,
+            if not started:
+                elapsed = time.monotonic() - t0
+                logger.error(
+                    f"[{request_id}] {method} {path} ERROR {elapsed * 1000:.1f}ms — {e}"
                 )
-
-        return response
+            raise

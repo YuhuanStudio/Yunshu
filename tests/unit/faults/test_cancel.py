@@ -19,6 +19,16 @@ from .harness import (
 DIALECT_NAMES = ["openai", "anthropic", "responses"]
 
 
+def _assert_engine_stopped(eng) -> None:
+    """The engine call was cancelled and ended once; or the client was already gone before the
+    route reached the engine (the Responses route checks first), so no call was ever made."""
+    if eng.cancel_events:
+        assert eng.cancel_events[0].is_set()
+        assert len(eng.finish_reasons) == 1  # one engine call, ended once
+    else:
+        assert not eng.finish_reasons
+
+
 @pytest.mark.parametrize("tokens_before", [0, 2], ids=["prefill", "decode"])
 @pytest.mark.parametrize("dialect", DIALECT_NAMES)
 async def test_stream_client_disconnect_stops_the_engine(
@@ -35,8 +45,7 @@ async def test_stream_client_disconnect_stops_the_engine(
         )
         await a.settle()
         assert r.disconnected
-        assert eng.cancel_events and eng.cancel_events[0].is_set()
-        assert len(eng.finish_reasons) == 1  # one engine call, ended once
+        _assert_engine_stopped(eng)
         a.assert_clean()
 
 
@@ -153,5 +162,5 @@ async def test_send_failure_closes_the_stream_and_releases_the_request(
         )
         assert r.disconnected
         await a.settle()
-        assert eng.cancel_events[0].is_set()
+        _assert_engine_stopped(eng)
         a.assert_clean()

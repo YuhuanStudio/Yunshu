@@ -762,42 +762,6 @@ def create_app() -> FastAPI:
         app.add_middleware(ResponseCacheMiddleware)
         logger.info("ResponseCache middleware registered (YUNSHU_RESPONSE_CACHE=1)")
 
-    # Shutdown rejection middleware: reject new inference requests during shutdown.
-    # Reads state from app.state (set by lifespan) instead of module globals,
-    # because Starlette 1.0+ TestClient may not trigger lifespan for non-context usage.
-    @app.middleware("http")
-    async def shutdown_guard(request: Request, call_next):
-        state = getattr(request.app.state, "server_state", ServerState.RUNNING)
-        if state != ServerState.RUNNING:
-            path = request.url.path
-            # Allow health/metrics even during shutdown
-            if not path.startswith(("/health", "/metrics")):
-                # Anthropic endpoints: return Anthropic error format
-                if path in _ANTHROPIC_PATHS:
-                    return JSONResponse(
-                        status_code=503,
-                        content={
-                            "type": "error",
-                            "error": {
-                                "type": "overloaded_error",
-                                "message": "Server is shutting down",
-                            },
-                        },
-                        headers={"Retry-After": "5"},
-                    )
-                return JSONResponse(
-                    status_code=503,
-                    content={
-                        "error": {
-                            "message": "Server is shutting down",
-                            "type": "server_error",
-                            "code": "shutdown_in_progress",
-                        }
-                    },
-                    headers={"Retry-After": "5"},
-                )
-        return await call_next(request)
-
     # Active request tracking for graceful shutdown drain
     _INFERENCE_PATHS = (
         "/v1/chat/completions",
@@ -823,177 +787,230 @@ def create_app() -> FastAPI:
         "/v1/audio/speech/stream",
     )
 
-    @app.middleware("http")
-    async def profile_capture_guard(request: Request, call_next):
-        path = request.url.path
-        if path in _INFERENCE_PATHS:
-            try:
-                from .routers.profiling import is_profile_capture_active
-
-                if is_profile_capture_active():
-                    return JSONResponse(
-                        status_code=503,
-                        content={
-                            "error": {
-                                "message": "Metal capture active — inference is serialized during profiling.",
-                                "type": "server_error",
-                                "code": "profile_capture_active",
-                            }
-                        },
-                        headers={"Retry-After": "5"},
-                    )
-            except ImportError:
-                pass
-        return await call_next(request)
-
-    @app.middleware("http")
-    async def track_active_requests(request: Request, call_next):
-        global _active_requests
-        if request.url.path in _INFERENCE_PATHS:
-            _active_requests += 1
-            # Update Prometheus gauge for active requests.
-            try:
-                from .middleware.prometheus_exporter import get_prometheus_metrics
-
-                get_prometheus_metrics().set_gauge(
-                    "gateway_active_requests", float(_active_requests)
-                )
-            except Exception:
-                pass
-            try:
-                return await call_next(request)
-            finally:
-                _active_requests -= 1
-                try:
-                    from .middleware.prometheus_exporter import get_prometheus_metrics
-
-                    get_prometheus_metrics().set_gauge(
-                        "gateway_active_requests", float(_active_requests)
-                    )
-                except Exception:
-                    pass
-                if _active_requests == 0 and _drain_event is not None:
-                    _drain_event.set()
-        return await call_next(request)
-
-    # Request body size limit middleware (reject oversized payloads early)
     max_request_size = settings.get("YUNSHU_MAX_REQUEST_SIZE")
 
-    @app.middleware("http")
-    async def request_size_limit(request: Request, call_next):
-        content_length = request.headers.get("content-length")
-        if content_length is not None and not (
-            content_length.isascii() and content_length.isdigit()
-        ):
-            # Fail closed: a malformed / negative Content-Length cannot be bounded.
-            msg = f"Invalid Content-Length header: {content_length!r}"
-            if request.url.path.startswith("/tavily/"):
-                return JSONResponse(status_code=400, content={"detail": {"error": msg}})
-            if request.url.path in _ANTHROPIC_PATHS:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "type": "error",
-                        "error": {"type": "invalid_request_error", "message": msg},
-                    },
-                )
+    def _bad_content_length(path: str, content_length: str) -> JSONResponse:
+        # Fail closed: a malformed / negative Content-Length cannot be bounded.
+        msg = f"Invalid Content-Length header: {content_length!r}"
+        if path.startswith("/tavily/"):
+            return JSONResponse(status_code=400, content={"detail": {"error": msg}})
+        if path in _ANTHROPIC_PATHS:
             return JSONResponse(
                 status_code=400,
                 content={
-                    "error": {
-                        "message": msg,
-                        "type": "invalid_request_error",
-                        "code": "invalid_content_length",
-                    }
+                    "type": "error",
+                    "error": {"type": "invalid_request_error", "message": msg},
                 },
             )
-        if content_length is not None:
-            try:
-                if int(content_length) > max_request_size:
-                    path = request.url.path
-                    if path.startswith("/tavily/"):
-                        return JSONResponse(
-                            status_code=413,
-                            content={"detail": {"error": "Request body too large"}},
-                        )
-                    if path in _ANTHROPIC_PATHS:
-                        return JSONResponse(
-                            status_code=413,
-                            content={
-                                "type": "error",
-                                "error": {
-                                    "type": "invalid_request_error",
-                                    "message": f"Request body too large: {content_length} bytes (max {max_request_size})",
-                                },
-                            },
-                        )
-                    return JSONResponse(
-                        status_code=413,
-                        content={
-                            "error": {
-                                "message": f"Request body too large: {content_length} bytes (max {max_request_size})",
-                                "type": "invalid_request_error",
-                                "code": "request_too_large",
-                            }
-                        },
-                    )
-            except (ValueError, TypeError):
-                pass
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": msg,
+                    "type": "invalid_request_error",
+                    "code": "invalid_content_length",
+                }
+            },
+        )
 
-        # Any request WITHOUT a Content-Length header (chunked transfer-encoding, HTTP/2
-        # DATA frames, or a body with no declared length) must be byte-counted from the
-        # stream — the header check above can't bound it. the old condition only
-        # covered `transfer-encoding: chunked`, so a no-Content-Length HTTP/2 body (or any
-        # framing that isn't literally "chunked") bypassed the limit entirely and was read
-        # whole into memory by request.json(). Enforce on every no-Content-Length request.
-        # (A request WITH Content-Length is bounded by the server to the declared length, and
-        # the header check above rejects a declared length over the limit.)
-        if content_length is None:
-            try:
+    def _too_large(path: str, size: int | str) -> JSONResponse:
+        if path.startswith("/tavily/"):
+            return JSONResponse(
+                status_code=413, content={"detail": {"error": "Request body too large"}}
+            )
+        msg = f"Request body too large: {size} bytes (max {max_request_size})"
+        if path in _ANTHROPIC_PATHS:
+            return JSONResponse(
+                status_code=413,
+                content={
+                    "type": "error",
+                    "error": {"type": "invalid_request_error", "message": msg},
+                },
+            )
+        return JSONResponse(
+            status_code=413,
+            content={
+                "error": {
+                    "message": msg,
+                    "type": "invalid_request_error",
+                    "code": "request_too_large",
+                }
+            },
+        )
+
+    def _shutdown_response(path: str) -> JSONResponse:
+        if path in _ANTHROPIC_PATHS:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "type": "error",
+                    "error": {
+                        "type": "overloaded_error",
+                        "message": "Server is shutting down",
+                    },
+                },
+                headers={"Retry-After": "5"},
+            )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": {
+                    "message": "Server is shutting down",
+                    "type": "server_error",
+                    "code": "shutdown_in_progress",
+                }
+            },
+            headers={"Retry-After": "5"},
+        )
+
+    def _set_active_gauge() -> None:
+        try:
+            from .middleware.prometheus_exporter import get_prometheus_metrics
+
+            get_prometheus_metrics().set_gauge(
+                "gateway_active_requests", float(_active_requests)
+            )
+        except Exception:
+            pass
+
+    class GatewayGuardsMiddleware:
+        """Request-size limit, active-request counting, profile-capture and shutdown guards.
+
+        Pure ASGI, in that order from the outside in. These were four ``@app.middleware("http")``
+        functions; each BaseHTTPMiddleware layer re-pipes every streamed chunk through a memory
+        stream and a task hop (~15 us per chunk and layer), which this one layer does not.
+        """
+
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] != "http":
+                await self.app(scope, receive, send)
+                return
+            path = scope["path"]
+            content_length = None
+            for key, value in scope["headers"]:
+                if key == b"content-length":
+                    content_length = value.decode("latin-1")
+                    break
+            if content_length is not None:
+                if not (content_length.isascii() and content_length.isdigit()):
+                    await _bad_content_length(path, content_length)(
+                        scope, receive, send
+                    )
+                    return
+                if int(content_length) > max_request_size:
+                    await _too_large(path, content_length)(scope, receive, send)
+                    return
+            else:
+                # Any request WITHOUT a Content-Length header (chunked transfer-encoding, HTTP/2
+                # DATA frames, or a body with no declared length) must be byte-counted from the
+                # stream: the header check above cannot bound it. A request WITH Content-Length
+                # is bounded by the server to the declared length.
                 chunks: list[bytes] = []
-                total_size = 0
-                async for chunk in request.stream():
-                    total_size += len(chunk)
-                    if total_size > max_request_size:
-                        path = request.url.path
-                        if path.startswith("/tavily/"):
-                            return JSONResponse(
-                                status_code=413,
-                                content={"detail": {"error": "Request body too large"}},
-                            )
-                        if path in _ANTHROPIC_PATHS:
-                            return JSONResponse(
-                                status_code=413,
-                                content={
-                                    "type": "error",
-                                    "error": {
-                                        "type": "invalid_request_error",
-                                        "message": f"Request body too large: {total_size} bytes (max {max_request_size})",
-                                    },
-                                },
-                            )
-                        return JSONResponse(
-                            status_code=413,
+                total = 0
+                tail: list[dict] = []
+                try:
+                    while True:
+                        message = await receive()
+                        if message["type"] != "http.request":
+                            tail.append(
+                                message
+                            )  # http.disconnect: hand it on after the body
+                            break
+                        chunk = message.get("body", b"")
+                        total += len(chunk)
+                        if total > max_request_size:
+                            await _too_large(path, total)(scope, receive, send)
+                            return
+                        chunks.append(chunk)
+                        if not message.get("more_body", False):
+                            break
+                except Exception:
+                    pass  # Body read failed: let downstream handle it
+                # Replay the body so downstream handlers (Pydantic validators) can read it.
+                replay: list[dict] = [
+                    {
+                        "type": "http.request",
+                        "body": b"".join(chunks),
+                        "more_body": False,
+                    },
+                    *tail,
+                ]
+                real_receive = receive
+
+                async def receive(replay=replay):
+                    if replay:
+                        return replay.pop(0)
+                    return await real_receive()
+
+            await self._tracked(scope, receive, send, path)
+
+        async def _tracked(self, scope, receive, send, path):
+            global _active_requests
+            if path not in _INFERENCE_PATHS:
+                await self._gated(scope, receive, send, path)
+                return
+            _active_requests += 1
+            _set_active_gauge()
+            counted = True
+
+            def release() -> None:
+                # The BaseHTTPMiddleware this replaces released when the response STARTED
+                # (call_next returned), not when its body finished: same here.
+                global _active_requests
+                nonlocal counted
+                if not counted:
+                    return
+                counted = False
+                _active_requests -= 1
+                _set_active_gauge()
+                if _active_requests == 0 and _drain_event is not None:
+                    _drain_event.set()
+
+            async def counting_send(message):
+                if message["type"] == "http.response.start":
+                    release()
+                await send(message)
+
+            try:
+                await self._gated(scope, receive, counting_send, path)
+            finally:
+                release()
+
+        async def _gated(self, scope, receive, send, path):
+            if path in _INFERENCE_PATHS:
+                try:
+                    from .routers.profiling import is_profile_capture_active
+
+                    if is_profile_capture_active():
+                        await JSONResponse(
+                            status_code=503,
                             content={
                                 "error": {
-                                    "message": f"Request body too large: {total_size} bytes (max {max_request_size})",
-                                    "type": "invalid_request_error",
-                                    "code": "request_too_large",
+                                    "message": "Metal capture active — inference is serialized during profiling.",
+                                    "type": "server_error",
+                                    "code": "profile_capture_active",
                                 }
                             },
-                        )
-                    chunks.append(chunk)
-                body_bytes = b"".join(chunks)
+                            headers={"Retry-After": "5"},
+                        )(scope, receive, send)
+                        return
+                except ImportError:
+                    pass
+            # Reads state from app.state (set by lifespan) instead of module globals,
+            # because Starlette 1.0+ TestClient may not trigger lifespan for non-context usage.
+            state = getattr(scope["app"].state, "server_state", ServerState.RUNNING)
+            # Allow health/metrics even during shutdown
+            if state != ServerState.RUNNING and not path.startswith(
+                ("/health", "/metrics")
+            ):
+                await _shutdown_response(path)(scope, receive, send)
+                return
+            await self.app(scope, receive, send)
 
-                # Re-inject the body so downstream handlers (Pydantic validators)
-                # can access it via request.body() or request.json().
-                # BaseHTTPMiddleware's wrapped receive hands a cached ``_body`` to the
-                # downstream app once, then the real receive's http.disconnect. (A
-                # consumed stream without ``_body`` would be forwarded as EMPTY.)
-                request._body = body_bytes
-            except Exception:
-                pass  # Body read failed — let downstream handle it
-        return await call_next(request)
+    app.add_middleware(GatewayGuardsMiddleware)
 
     app.add_middleware(RequestLoggingMiddleware)
     if settings.get("YUNSHU_RATE_LIMIT_RPM") > 0:

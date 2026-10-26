@@ -27,9 +27,8 @@ import threading
 import time
 from collections import deque
 
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 from yunshu_engine import settings
 from yunshu_gateway import api_keys
@@ -118,18 +117,6 @@ class _ErrorFormatter:
         )
 
 
-async def _release_after(body, store, key_id, state=None):
-    """Yield the response body, then free the key's concurrency slot (stream end or abort),
-    unless the route moved the slot to work that outlives the response (``slot_moved``:
-    a background response releases it when its generation ends)."""
-    try:
-        async for chunk in body:
-            yield chunk
-    finally:
-        if not getattr(state, "slot_moved", False):
-            store.release(key_id)
-
-
 def _owner_identity() -> str:
     """Single-consumer owner identity, overridable via YUNSHU_ACTOR_IDENTITY."""
     return settings.get("YUNSHU_ACTOR_IDENTITY") or "owner"
@@ -207,8 +194,19 @@ def _stamp_identity(request: Request, principal=None) -> None:
         current_actor.set(actor)
 
 
-class AuthMiddleware(BaseHTTPMiddleware):
-    """Authenticate requests via a single optional static bearer token."""
+def _replay_body(body: bytes, receive):
+    """A ``receive`` that hands the already-read request body on once, then defers to ``receive``."""
+    pending = [{"type": "http.request", "body": body, "more_body": False}]
+
+    async def replay():
+        return pending.pop(0) if pending else await receive()
+
+    return replay
+
+
+class AuthMiddleware:
+    """Authenticate requests: the static bearer token and stored API keys (pure ASGI, so
+    streamed chunks pass untouched). WebSockets are not handled here."""
 
     PUBLIC_PATHS = {
         "/health",
@@ -237,32 +235,64 @@ class AuthMiddleware(BaseHTTPMiddleware):
             api_keys.get_store().has_keys()
         )  # stored keys switch auth on, like a token
 
-    async def dispatch(self, request: Request, call_next):
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope, receive)
+        response, key_id = await self._admit(request)
+        if response is not None:
+            await response(scope, receive, send)
+            return
+        body = getattr(request, "_body", None)
+        if body is not None:  # read while looking for a body-borne api_key: replay it
+            receive = _replay_body(body, receive)
+
+        if key_id is None:
+            await self.app(scope, receive, send)
+            return
+        # The key's concurrency slot is held until the response ends or aborts, unless the
+        # route moved it to work that outlives the response (``slot_moved``: a background
+        # response releases it when its generation ends).
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            if not getattr(request.state, "slot_moved", False):
+                api_keys.get_store().release(key_id)
+
+    async def _admit(self, request: Request) -> tuple[Response | None, str | None]:
+        """``(error response, None)`` to refuse, else ``(None, key id whose slot to release or None)``."""
         # Public paths never need auth
         path = request.url.path
         if path in self.PUBLIC_PATHS:
-            return await call_next(request)
+            return None, None
         if any(path.startswith(p) for p in self.PUBLIC_PREFIXES):
-            return await call_next(request)
+            return None, None
 
         # CORS preflight (OPTIONS) must pass through without auth —
         # browsers send OPTIONS without Authorization headers, and the
         # CORSMiddleware (inner) needs to respond before any auth check.
         if request.method == "OPTIONS":
-            return await call_next(request)
+            return None, None
 
         # Check if auth is enabled; without it the one local user is the owner.
         if not self._is_auth_enabled():
             _stamp_identity(request)
-            return await call_next(request)
+            return None, None
 
         if (wait := _auth_blocked(request)) is not None:
-            return format_error_response(
-                path,
-                "Too many failed authentication attempts",
-                429,
-                code="too_many_auth_failures",
-                retry_after=wait,
+            return (
+                format_error_response(
+                    path,
+                    "Too many failed authentication attempts",
+                    429,
+                    code="too_many_auth_failures",
+                    retry_after=wait,
+                ),
+                None,
             )
 
         auth_token = settings.get("YUNSHU_AUTH_TOKEN") or ""
@@ -279,7 +309,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             with contextlib.suppress(Exception):
                 request.state.principal = api_keys.ADMIN_TOKEN
             _stamp_identity(request)
-            return await call_next(request)
+            return None, None
         auth = request.headers.get("Authorization", "")
         # Anthropic SDKs send the key as x-api-key instead of a bearer token.
         api_key = request.headers.get("x-api-key", "")
@@ -305,14 +335,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
         elif api_key:
             token = api_key
         else:
-            return _auth_failed(request, "Missing or invalid Authorization header")
+            return _auth_failed(
+                request, "Missing or invalid Authorization header"
+            ), None
 
         if path == "/v1/realtime/calls" and request.method == "POST":
             from ..realtime_secrets import lookup
 
             if lookup(token) is not None:
                 _stamp_identity(request)
-                return await call_next(request)
+                return None, None
 
         # Static token auth (constant-time comparison). The single consumer
         # authenticates with the one configured bearer token.
@@ -320,7 +352,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             with contextlib.suppress(Exception):
                 request.state.principal = api_keys.ADMIN_TOKEN
             _stamp_identity(request)
-            return await call_next(request)
+            return None, None
 
         # Stored API keys: enabled / expiry, then quotas (429 + Retry-After).
         store = api_keys.get_store()
@@ -340,28 +372,23 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 if not internal:
                     store.admit(principal)
             except api_keys.AuthFailureError as exc:
-                return _auth_failed(request, str(exc), exc.status)
+                return _auth_failed(request, str(exc), exc.status), None
             except api_keys.QuotaExceededError as exc:
-                return format_error_response(
-                    request.url.path,
-                    str(exc),
-                    429,
-                    code=f"{exc.which}_exceeded",
-                    retry_after=exc.retry_after,
+                return (
+                    format_error_response(
+                        request.url.path,
+                        str(exc),
+                        429,
+                        code=f"{exc.which}_exceeded",
+                        retry_after=exc.retry_after,
+                    ),
+                    None,
                 )
             request.state.principal = principal
             request.state.api_key_id = principal.key_id
             _stamp_identity(request, principal)
             if internal:
-                return await call_next(request)
-            try:
-                response = await call_next(request)
-            except BaseException:
-                store.release(principal.key_id)
-                raise
-            response.body_iterator = _release_after(
-                response.body_iterator, store, principal.key_id, request.state
-            )
-            return response
+                return None, None
+            return None, principal.key_id
 
-        return _auth_failed(request, "Invalid or missing API key")
+        return _auth_failed(request, "Invalid or missing API key"), None

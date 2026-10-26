@@ -43,9 +43,27 @@ class DisconnectWatchMiddleware:
                 return {"type": "http.disconnect"}
             return await queue.get()
 
+        send_failed = False
+
+        async def guarded_send(message):
+            # A send that fails means the socket is gone (uvicorn may raise OSError). Treat it
+            # as a client disconnect, as a closed socket would be: the app's own disconnect
+            # listener then cancels the response (closing the stream, ending the engine call)
+            # instead of the stream being abandoned mid-iteration. Later sends are dropped.
+            nonlocal send_failed
+            if send_failed:
+                return
+            try:
+                await send(message)
+            except OSError:
+                send_failed = True
+                if not gone.is_set():
+                    gone.set()
+                    queue.put_nowait({"type": "http.disconnect"})
+
         task = asyncio.create_task(pump())
         try:
-            await self.app(scope, recv, send)
+            await self.app(scope, recv, guarded_send)
         finally:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
