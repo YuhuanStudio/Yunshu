@@ -8,6 +8,7 @@ const logs = {
   "action.copyLine": "複製這一行",
   "action.jump": "跳到最新",
   "action.jumpNew": "跳到最新（{count} 筆新紀錄）",
+  "action.showEarlier": "顯示更早的 {count} 行（另有 {hidden} 行未顯示）",
   copiedAll: "已複製 {count} 行",
   copiedLine: "已複製這一行",
   copyFailed: "無法寫入剪貼簿",

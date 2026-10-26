@@ -90,6 +90,24 @@ export async function fetchLogs(
   };
 }
 
+/**
+ * The server's ring ids restart at 1 with every engine process, so a cursor above the ring's
+ * newest id means the engine restarted: the old cursor would skip every new record.
+ */
+export const cursorStale = (cursor: number, nextId: number) =>
+  cursor > 0 && nextId < cursor;
+
+/** Before resuming a tail at `cursor`: 0 when the engine restarted since (its ids began again), else `cursor`. */
+export async function resumeCursor(
+  connection: Connection,
+  cursor: number,
+  signal?: AbortSignal,
+): Promise<number> {
+  if (cursor <= 0) return cursor;
+  const probe = await fetchLogs(connection, { limit: 1 }, signal);
+  return cursorStale(cursor, probe.next_id) ? 0 : cursor;
+}
+
 /** Feed text chunks in; get complete SSE `data:` payloads out. Comments (keepalives) are ignored. */
 export function createSseParser(onData: (data: string) => void) {
   let buffer = "";

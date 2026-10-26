@@ -9,7 +9,8 @@ import { join } from "node:path";
 export const TARGET_KB = 250;
 /** The regression guard `pnpm test` enforces today (gzip KB first load per route, and for the shared entry). */
 // +4 / +3 KB for the agent-interaction layer (ToolCall, stream pacing, soft-follow list, spring CSS), measured 2026-10-24.
-export const BUDGET_KB = 304;
+// +1 KB for the shared polls, queued refreshes and the Escape guard on Requests (304.2 KB measured 2026-10-26).
+export const BUDGET_KB = 305;
 export const ENTRY_BUDGET_KB = 273;
 
 /** Static `import ... from "./x.js"` and `import "./x.js"` edges of one chunk (dynamic imports excluded). */

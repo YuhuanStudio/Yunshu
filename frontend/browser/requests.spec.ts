@@ -217,6 +217,20 @@ test.describe("requests page trace", () => {
     expect(pageErrors).toEqual([]);
   });
 
+  test("the shell and the page share one recent-requests poller", async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    const { fixture } = await open(page, [ringEntry(1)]);
+    // quiet the status-driven kicks (its `last` settles after three polls), then count a clean window
+    await page.waitForTimeout(12_000);
+    const before = fixture.recentCalls.length;
+    await page.waitForTimeout(11_000);
+    // one poller asks every 5 s: two or three times in 11 s (two pollers would ask four to six)
+    expect(fixture.recentCalls.length - before).toBeLessThanOrEqual(3);
+    expect(fixture.recentCalls.length - before).toBeGreaterThanOrEqual(1);
+  });
+
   test("prefill detail shows stages, token proportions and live progress without invented times", async ({
     page,
   }) => {
