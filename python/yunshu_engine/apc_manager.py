@@ -580,6 +580,40 @@ class SpillDiskStore(DiskBlockStore):
         except (OSError, KeyError, TypeError, ValueError, IndexError):
             return False
 
+    _DTYPE_BYTES = {
+        "BOOL": 1, "U8": 1, "I8": 1, "F8_E4M3": 1, "F8_E5M2": 1,
+        "U16": 2, "I16": 2, "F16": 2, "BF16": 2,
+        "U32": 4, "I32": 4, "F32": 4,
+        "U64": 8, "I64": 8, "F64": 8,
+    }  # fmt: skip
+
+    def _header_matches_payload(self, path) -> bool:
+        """Every tensor's declared shape x dtype size equals its byte span, inside the file.
+
+        MLX reports a bit-flipped huge dimension as an allocation failure, which looks
+        transient; a header that does not describe its own payload is corruption."""
+        parsed = self._open_shard_header(path)
+        if parsed is None:
+            return False
+        entries, _meta, data_start = parsed
+        try:
+            size = path.stat().st_size
+            for entry in entries.values():
+                itemsize = self._DTYPE_BYTES.get(entry["dtype"])
+                begin, end = (int(x) for x in entry["data_offsets"])
+                count = 1
+                for dim in entry["shape"]:
+                    if int(dim) < 0:
+                        return False
+                    count *= int(dim)
+                if itemsize is None or end - begin != count * itemsize:
+                    return False
+                if begin < 0 or data_start + end > size:
+                    return False
+        except (OSError, KeyError, TypeError, ValueError):
+            return False
+        return True
+
     def find_exact_prefix(self, *args, **kwargs):
         try:
             return super().find_exact_prefix(*args, **kwargs)
@@ -621,7 +655,9 @@ class SpillDiskStore(DiskBlockStore):
         try:
             loaded = super().load_exact_cache(cache_hash, **kwargs)
         except Exception as e:
-            if _is_transient_load_error(e):
+            if _is_transient_load_error(e) and (
+                path is None or self._header_matches_payload(path)
+            ):
                 logger.warning("APC disk: load failed (%s), going cold", e)
             elif path is not None:
                 self.quarantine(path, f"load raised {type(e).__name__}")

@@ -307,3 +307,41 @@ def test_transient_load_errors_keep_the_file(tmp_path, monkeypatch, exc):
         assert _load(store, key) is None  # goes cold this time
     assert path.exists() and key in store._exact_index
     assert _load(store, key) is not None  # and serves once the pressure is gone
+
+
+def test_corrupt_huge_dimension_header_is_quarantined_not_kept_as_transient(
+    tmp_path, monkeypatch
+):
+    """MLX reports a bit-flipped huge dimension as an allocation failure; that is corruption."""
+    import json
+    import struct
+
+    store = _store(tmp_path)
+    key = _put(store)
+    path = _path(store, key)
+    raw = path.read_bytes()
+    (hlen,) = struct.unpack("<Q", raw[:8])
+    header = json.loads(raw[8 : 8 + hlen])
+    name = next(n for n in header if n != "__metadata__")
+    header[name]["shape"] = [1 << 40, *header[name]["shape"][1:]]
+    new = json.dumps(header).encode()
+    path.write_bytes(struct.pack("<Q", len(new)) + new + raw[8 + hlen :])
+    store._header_cache.clear()
+
+    def malloc_fail(self, *a, **k):
+        raise RuntimeError(
+            "[metal::malloc] Attempting to allocate 4398046511104 bytes which is "
+            "greater than the maximum allowed buffer size"
+        )
+
+    monkeypatch.setattr(SpillDiskStore.__mro__[1], "load_exact_cache", malloc_fail)
+    assert _load(store, key) is None
+    assert not path.exists()
+    assert key not in store._exact_index
+    assert store.invalidated == 1
+
+
+def test_header_matching_payload_stays_transient(tmp_path):
+    store = _store(tmp_path)
+    key = _put(store)
+    assert store._header_matches_payload(_path(store, key))
