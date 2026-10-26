@@ -138,7 +138,8 @@ def _restore_kv(c, min_capacity_tokens, targets):
         dst = take_restore_buffer(a, capacity) if _RESTORE_STORAGE.get() else None
         if dst is not None:
             dst[..., :rows, :] = a[..., :rows, :]
-            dst[..., rows:, :] = 0
+            # rows past the padded capacity are never read (the cache returns [:offset])
+            dst[..., rows:capacity, :] = 0
             return dst
         part = a[..., :rows, :]
         if pad <= 0:

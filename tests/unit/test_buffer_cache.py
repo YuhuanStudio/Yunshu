@@ -171,3 +171,17 @@ def test_only_exact_rehearsal_lookup_excludes_storage():
     assert manager.lookup_exact_cache([1, 2]) is True
     assert manager.lookup_exact_cache([1, 2, 3, 4]) is True
     assert _RESTORE_STORAGE.get() is True
+
+
+def test_restore_buffer_is_best_fit_and_bounded(restore):
+    buffer_cache.install(0.01)
+    big = mx.zeros((1, 1, 4096, 4))
+    mid = mx.zeros((1, 1, 512, 4))
+    small = mx.zeros((1, 1, 256, 4))
+    mx.eval(big, mid, small)
+    buffer_cache._RESTORE_BUFFERS[:] = [big, mid, small]
+    probe = mx.zeros((1, 1, 10, 4))
+    assert buffer_cache.take_restore_buffer(probe, 300) is mid  # best fit, not first fit
+    assert buffer_cache.take_restore_buffer(probe, 300) is None  # 4096 > 2 x 300
+    assert buffer_cache.take_restore_buffer(probe, 200) is small
+    assert buffer_cache.take_restore_buffer(probe, 3000) is big
