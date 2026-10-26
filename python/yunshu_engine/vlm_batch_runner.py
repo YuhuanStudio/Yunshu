@@ -686,7 +686,11 @@ class VLMBatchRunner:
                 not processors
                 or (self._lane_takes_processors() and spec_safe_processors(processors))
             )
-            and (not logprobs or self._lane_takes_guide(None))
+            and (
+                not logprobs
+                or self._lane_takes_guide(None)
+                or self._native_keyed(greedy)
+            )
             and thinking_budget is None
             and (guide is None or self._lane_takes_guide(guide))
         )
@@ -752,10 +756,15 @@ class VLMBatchRunner:
             # The gateway reaches the live stats through the cancel event it owns.
             cancel_event.run_stats = stats
         if not greedy and use_draft:
-            job.keyed = keyed_sampling.KeyedSampler(
-                job.sampling,
-                seed if seed is not None else int.from_bytes(os.urandom(8), "little"),
-            )
+            key = seed if seed is not None else int.from_bytes(os.urandom(8), "little")
+            if self._native_keyed(greedy):
+                from .qwen4_sampled import NativeKeyedSampler
+
+                job.keyed = NativeKeyedSampler(
+                    job.sampling, key, lm=self.model.language_model
+                )
+            else:
+                job.keyed = keyed_sampling.KeyedSampler(job.sampling, key)
         self._submit(job)
         try:
             while True:
@@ -784,6 +793,15 @@ class VLMBatchRunner:
 
         return self.draft_kind == "dflash" or (
             self.draft_kind == "mtp" and mtp_lane.can_guide(self.drafter)
+        )
+
+    def _native_keyed(self, greedy: bool) -> bool:
+        """A sampled request on the Qwen4 native MTP loop: position-keyed draws with coupled
+        drafts, target logprobs read from the verify window (qwen4_sampled)."""
+        return bool(
+            not greedy
+            and self.draft_kind == "mtp"
+            and getattr(self.drafter, "native_keyed", False)
         )
 
     def _lane_takes_guide(self, guide: Any) -> bool:
@@ -1104,6 +1122,9 @@ class VLMBatchRunner:
             job.spec_request = SpecRequest(job.logprobs, job.top_logprobs)
             job.spec_request.guide = job.guide
             job.spec_request.processors = list(job.spec_procs)
+            if hasattr(job.keyed, "report"):
+                job.keyed.request = job.spec_request
+                job.spec_request.native = job.keyed
             job.processors.append(job.spec_request)
             logger.info(
                 "Exact speculative request engaged: %s constrained=%s logprobs=%s",

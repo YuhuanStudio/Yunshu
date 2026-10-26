@@ -63,6 +63,8 @@ def load_native_head(
     # The process-global Qwen3.5 early-absorb patch uses this capability to
     # intercept serving. Qwen4 keeps the native loop even after another load.
     drafter.supports_greedy_draft_argmax = False
+    # Sampled requests draw position-keyed targets and coupled drafts (qwen4_sampled).
+    drafter.native_keyed = True
     mx.eval(drafter.parameters())
     return drafter
 
@@ -130,6 +132,10 @@ def configure_lane(lm: Any, drafter: Any, block: int | None) -> tuple[dict, int 
     lane matmul for decode, verify and drafting alike."""
     from . import settings
 
+    if drafter is not None and getattr(drafter, "native_keyed", False):
+        from .qwen4_sampled import install_logit_stash
+
+        install_logit_stash(lm)
     if getattr(getattr(drafter, "config", None), "target_layer_ids", None):
         from .qwen4_dflash import install
 

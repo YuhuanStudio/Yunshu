@@ -2978,6 +2978,21 @@
       "why": "Fused HC and expert loop with optional mixed layer captures; capture commits pending injection without changing target forward arithmetic.",
       "source_sha256": "078f4ac55187af39228a0f05c9d981bceec7e1b8fbe6889c2c5b4d87c7488709",
       "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/qwen4_sampled.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen4_exp.language",
+      "symbol": "LanguageModel.speculative_logits_from_hidden",
+      "signature": "(self, hidden: mx.array)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "Instance wrapper: remember the verify window's logits (float32 for a request that reports logprobs) so a sampled request's target rows are normalized one row at a time, as plain decode does; the projection itself is upstream's unchanged.",
+      "source_sha256": "81df50ed3b3f9ea43efc46e1263ba61210fe97ec1c772f1d13470c250051a9bf",
+      "installed_version": "0.7.8"
     }
   ],
   "watch": [
