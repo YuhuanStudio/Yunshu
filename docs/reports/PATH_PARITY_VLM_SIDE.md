@@ -39,3 +39,16 @@ Status words: `ok` = already equivalent, `fixed` = changed here, `gap` = left, w
 - `tests/unit/test_apc_sequence_hash_parity.py`: digest equal to `mlx_vlm.apc._sequence_hash`.
 
 CPU limits: the mtp / dflash lanes themselves need Metal kernels, so the lane-level tests exercise `apply_row_processors`, `SpecRequest.reports` and `build_penalty_processors` directly; a Mac run of `test_constrained_spec` and the real-model script is still owed for the end-to-end spec on == off check.
+
+## Update after integration (same day)
+
+* The batch / generic `top_logprobs` gap is closed: `cc0b039` takes them from one device argpartition
+  (`text_logprobs.top_logprobs_device`, hooked in the `GenerationBatch._step` / `PromptProcessingBatch.generate`
+  wrappers) with the upstream order kept bit-for-bit; it falls back to the upstream sort if the uint64 probe fails.
+  Needs a Metal A/B before claiming a speed win there.
+* `path_matrix.json` now has `fast_top_logprobs`, `special_token_text`, `empty_prompt_refusal`,
+  `finite_state_publish`, `grammar_mask_fast`, `generation_suppress_default` and `grammar_dead_end_isolation` rows with
+  a cell on every path; the two `test_path_parity` failures noted above were fixed on the branch.
+* An empty prompt on the VLM path now raises the shared `EmptyPromptError` (`cb075e1`), like the text paths.
+* Still open: the penalty-window semantics and the logprob tie order (both listed as decisions in
+  [`HANDOFF_REVIEW_2026-10-26.md`](HANDOFF_REVIEW_2026-10-26.md)).

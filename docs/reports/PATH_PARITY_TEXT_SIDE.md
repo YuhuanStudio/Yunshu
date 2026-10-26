@@ -79,3 +79,14 @@ tracked, suggested rows (text path, status `engaged`):
 | `allowed_mask_sampler` | loop | engaged (shared class) | same |
 | `row_isolated_dead_end` | loop | engaged | `python/yunshu_engine/scheduler.py`, `class _DeadEndGuardSampler` |
 | `ssd_transient_errors` | text | engaged | `python/yunshu_engine/transient_errors.py`, `def is_transient_load_error` |
+
+## Update after integration (same day)
+
+* The "not grown" loop cells were closed at the user's request (every path gets every fix before the unification):
+  `aed9970` moves the loop's penalties / logit_bias / suppress / ignore_eos / min_tokens to the shared
+  `text_logit_processors` (bit-identical to the old closures) and gives the loop real `top_logprobs` entries through
+  `text_logprobs.logprob_entry` (before, the raw vocab-wide logprobs array leaked into every output).
+* The n-gram draft grammar filter now tests membership through the constraint's mask
+  (`json_schema.allowed_membership`, `96e5815`) instead of `set(get_allowed_tokens(...))`. The draft-model speculative
+  path still drives its cross-model constraint through lists.
+* The `path_matrix.json` cells listed above were applied (plus the new feature rows), and `test_path_parity` is green.
