@@ -67,6 +67,12 @@ def _no_m3_idle_probe(monkeypatch):
     monkeypatch.setenv("GPUQ_M3_IDLE_S", "0")
 
 
+@pytest.fixture(autouse=True)
+def _mcp_connector_loopback(monkeypatch):
+    """The fake MCP servers in the tests listen on 127.0.0.1; the product default blocks that."""
+    monkeypatch.setenv("YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE", "1")
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _fast_drain():
     """Zero drain timeout for all tests — avoids 30s wait on app teardown."""
