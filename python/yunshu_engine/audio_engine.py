@@ -271,6 +271,40 @@ def _decoded_audio_duration_s(audio_path: str) -> float | None:
     return None
 
 
+# Qwen3-TTS decodes at most this many codec frames per segment. mlx-audio <= 0.5 defaults
+# to it; 0.6+ defaults ``max_tokens=None`` -> the checkpoint's generation_config.json, else
+# 2048, which truncates long speech. Passed explicitly whenever the model leaves it open.
+TTS_DEFAULT_MAX_TOKENS = 4096
+
+
+def _tts_default_max_tokens(model_path: str, gen_params) -> int | None:
+    """The ``max_tokens`` to pass to a TTS ``generate()``, or None to pass nothing.
+
+    Only a model whose ``max_tokens`` default is None is touched (the upstream default
+    would then be 2048 or the checkpoint's own setting): an int default is already the
+    effective value, and other TTS models keep their own limits. A checkpoint that sets
+    ``max_new_tokens`` / ``max_tokens`` in generation_config.json keeps it (upstream reads
+    it when None)."""
+    param = gen_params.get("max_tokens")
+    if param is None or param.default is not None:
+        return None
+    try:
+        import json as _json
+        import os as _os
+
+        cfg_path = _os.path.join(model_path, "generation_config.json")
+        if model_path and _os.path.isfile(cfg_path):
+            with open(cfg_path, encoding="utf-8") as f:
+                cfg = _json.load(f)
+            if isinstance(cfg, dict) and (
+                cfg.get("max_new_tokens") or cfg.get("max_tokens")
+            ):
+                return None
+    except Exception:  # noqa: BLE001 - unreadable config: use our default
+        pass
+    return TTS_DEFAULT_MAX_TOKENS
+
+
 # ── Voice catalogue ───────────────────────────────────────────────────────────
 
 # Built-in voice names for VoiceDesign-style models.  When mlx-audio or a
@@ -448,6 +482,11 @@ class TTSEngine(ActiveRequestMixin):
             gen_kwargs["speed"] = speed
         if temperature is not None and "temperature" in gen_params:
             gen_kwargs["temperature"] = temperature
+        _max_tokens = _tts_default_max_tokens(
+            getattr(self, "_model_path", ""), gen_params
+        )
+        if _max_tokens is not None:
+            gen_kwargs["max_tokens"] = _max_tokens
         gen_kwargs.update(kwargs)
 
         # Seed: the API advertises `seed` for reproducibility, but most TTS models'
@@ -545,6 +584,11 @@ class TTSEngine(ActiveRequestMixin):
             gen_kwargs["speed"] = speed
         if temperature is not None and "temperature" in gen_params:
             gen_kwargs["temperature"] = temperature
+        _max_tokens = _tts_default_max_tokens(
+            getattr(self, "_model_path", ""), gen_params
+        )
+        if _max_tokens is not None:
+            gen_kwargs["max_tokens"] = _max_tokens
         gen_kwargs.update(kwargs)
 
         # Seed: the API advertises `seed` for reproducibility, but most TTS models'
