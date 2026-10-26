@@ -1079,6 +1079,36 @@ class _LlgConstraint:
         self._cache_text = self._text_buffer
         return allowed
 
+    def allowed_mask(self, tokenizer: Any, vocab_size: int):
+        """Boolean ``[vocab_size]`` mask of :meth:`get_allowed_tokens`, or ``None``.
+
+        Inside a JSON string almost the whole vocabulary is allowed, and expanding the
+        bitmask into a ~240K-id list and scattering it cost ~17 ms per token; the mask
+        comes straight from the bitmask. ``None`` (dead or finished grammar) sends the
+        caller to :meth:`get_allowed_tokens`, whose answer is then empty or EOS only.
+        """
+        if self._matcher is None:
+            self._bind(tokenizer)
+        if self._dead or self._done or self._matcher.is_stopped():
+            return None
+        import llguidance.numpy as lnp
+        import mlx.core as mx
+        import numpy as np
+
+        row = np.zeros((1, self._words), dtype=np.int32)
+        lnp.fill_next_token_bitmask(self._matcher, row, 0)
+        bits = np.unpackbits(row.view(np.uint8), bitorder="little")
+        keep = np.zeros(vocab_size, dtype=np.bool_)
+        n = min(vocab_size, self._llt.vocab_size)
+        keep[:n] = bits[:n]
+        if self._matcher.is_accepting():
+            for e in normalize_eos_ids(tokenizer):
+                if 0 <= e < vocab_size:
+                    keep[e] = True
+        if not keep.any():
+            return None
+        return mx.array(keep)
+
     def checkpoint(self) -> dict[str, Any]:
         """Save current state; returns it and also pushes it on a stack so the
         no-argument ``rollback()`` / ``discard_checkpoint()`` of the JSON-schema
