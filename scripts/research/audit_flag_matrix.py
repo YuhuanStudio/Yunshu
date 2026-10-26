@@ -63,7 +63,7 @@ def ensure_tiny_mtp(src=TINY_SRC, dst=TINY):
 DRAFT = Path("/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2")
 TEXT = Path("/Volumes/P5Plus/models/Qwen2.5-3B-Instruct-bf16")
 TEXT_DRAFT = Path("/Volumes/P5Plus/models/Qwen2.5-3B-Instruct-4bit")
-AREAS = ("tree", "row_exact", "tools", "external")
+AREAS = ("tree", "tools", "external")
 
 
 def sha(value):
@@ -148,7 +148,6 @@ def launcher(port):
     import uvicorn
 
     from yunshu_engine import dflash_tree, mtp_tree
-    from yunshu_engine.kernels import omlx
     from yunshu_engine.vlm_engine import VLMEngine
 
     if os.environ.get("AUDIT_TINY_SMOKE") == "1":
@@ -192,7 +191,6 @@ def launcher(port):
                         "digest": sha(tokens),
                         "complete": complete,
                         "tree_calls": count[0] - start,
-                        "row_exact": omlx._STATE["row_exact"],
                     }
                 ),
                 flush=True,
@@ -364,7 +362,6 @@ def serving_arm(args, area, arm, rep, prepared, captured, drafter=None):
     setting = {
         "YUNSHU_TOOL_GRAMMAR": "0",
         "YUNSHU_SPEC_TREE": "off",
-        "YUNSHU_MTP_ROW_EXACT": "0",
         "YUNSHU_VLM_DRAFT": "mtp" if smoke else str(DRAFT),
     }
     flag = {
@@ -481,19 +478,6 @@ def subprocess_arm(args, area, arm, rep, context=None):
         if args.smoke:
             command.append("--smoke")
         # This subprocess itself performs all three interleaved repetitions.
-    else:
-        command = [
-            sys.executable,
-            str(ROOT / "scripts/research/sweep_mtp_depth.py"),
-            str(TINY if args.smoke else MODEL),
-            "6",
-            "--context=" + str(context),
-            "--tasks=code,prose",
-            "--tokens=" + ("16" if args.smoke else "128"),
-            "--yunshu-kernels=" + ("row_exact" if arm else "exact"),
-        ]
-        if not arm:
-            command += ["--invariant", "--lane-linear", "--ragged-lane", "--mtp-lane"]
     if args.dry_run:
         command.append("--dry-run")
     with path.open("w") as output:
@@ -515,20 +499,6 @@ def subprocess_arm(args, area, arm, rep, context=None):
         if not data.get("complete"):
             raise RuntimeError("external output incomplete")
         return data["rows"]
-    records = [
-        json.loads(line)
-        for line in path.read_text().splitlines()
-        if line.startswith("{")
-    ]
-    if not records or not records[-1].get("complete"):
-        raise RuntimeError("sweep output incomplete")
-    if not args.dry_run:
-        cells = [r for r in records if "task" in r]
-        if len(cells) != 4 or any(
-            r.get("parity") is not True or not r.get("token_digest") for r in cells
-        ):
-            raise RuntimeError("missing cells, full-token parity, or digest")
-    return records
 
 
 def summarize(arms):
@@ -685,7 +655,7 @@ def main():
                 if area == "external":
                     arms = (0,)
                 for arm in arms:
-                    for ctx in contexts if area == "row_exact" else [None]:
+                    for ctx in [None]:
                         receipt = {
                             "area": area,
                             "arm": arm,
@@ -694,7 +664,7 @@ def main():
                             "rc": 1,
                         }
                         try:
-                            if area in ("external", "row_exact"):
+                            if area == "external":
                                 receipt["rows"] = subprocess_arm(
                                     args, area, arm, rep, ctx
                                 )

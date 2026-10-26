@@ -25,16 +25,6 @@ EVIDENCE = {
         ],
         "The registry records a partial replay result, but no complete audited three-client greedy/sampled on/off receipt was found. Native/prev jobs are compatibility comparisons, not a complete grammar flag matrix.",
     ),
-    "YUNSHU_MTP_ROW_EXACT": (
-        "row_exact",
-        "partial",
-        [
-            "docs/research/runs/2026-09-28-matrix/invariant-packed-mtp-sweep.jsonl",
-            "docs/research/runs/2026-09-28-matrix/mtp-depth-sweep-exact-fixed.jsonl",
-            "audit-sweep-inv-* / audit-sweep-rowexact-* pending",
-        ],
-        "Old invariant receipts have parity and speed advantage, but current-source long-context paired decision is incomplete. Sweep now emits full-token digests and a final complete record; new job repeats 1K/8K/32K/131K code+prose with AR references.",
-    ),
     "YUNSHU_GPU_SAMPLER": (
         "gpu_sampler",
         "pending",

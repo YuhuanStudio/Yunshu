@@ -27,9 +27,7 @@ def _build(monkeypatch, model_type):
     import yunshu_engine.kernels.tensorfold.lane_qmm as qmm
     from yunshu_engine.kernels import buffer_cache
 
-    monkeypatch.setattr(
-        omlx, "apply", lambda row_exact=False: calls.append("omlx") or {}
-    )
+    monkeypatch.setattr(omlx, "apply", lambda: calls.append("omlx") or {})
     monkeypatch.setattr(bi, "install", lambda *a, **k: calls.append("install") or True)
     monkeypatch.setattr(bi, "set_active", lambda v: calls.append(("active", v)))
     monkeypatch.setattr(qmm, "ready", lambda: False)

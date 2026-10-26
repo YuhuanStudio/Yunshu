@@ -1981,7 +1981,8 @@
  "orphans": {
   "python/yunshu_engine/dflash_draft.py": "Quantized DFlash context-KV fusion and the trained-selector greedy readout; unit tested, never installed (quantize_drafter does not call it). Wire or delete after an A/B.",
   "python/yunshu_engine/dflash_conv.py": "One-dispatch private DFlash convolution candidate; unit tested, never installed. Wire or delete after an A/B.",
-  "python/yunshu_engine/gpu_ngram.py": "GPU n-gram table and proposer; its only importer (the removed spec_interface strategy factory) is gone, so nothing installs it. Wire or delete."
+  "python/yunshu_engine/gpu_ngram.py": "GPU n-gram table and proposer; its only importer (the removed spec_interface strategy factory) is gone, so nothing installs it. Wire or delete.",
+  "python/yunshu_engine/kernels/verify_select.py": "exact-kernel streamed5 verify select; only research scripts and test_qmv_compat use it since the YUNSHU_MTP_ROW_EXACT path was deleted"
  },
  "modules_other": {
   "python/yunshu_engine/apc_restore_cost.py": "media checkpoint restore admission (APC media path; cost model only, decides reuse not numerics)",
@@ -2022,7 +2023,6 @@
   "python/yunshu_engine/kernels/lane_virtual.py": "virtual-GPU lane variants",
   "python/yunshu_engine/kernels/int_code_linear.py": "packed integer-code linear",
   "python/yunshu_engine/kernels/qmv_compat.py": "qmv compatibility shim",
-  "python/yunshu_engine/kernels/verify_select.py": "exact-kernel streamed5 verify select",
   "python/yunshu_engine/kernels/buffer_cache.py": "prefill buffer cache (VLM runner)",
   "python/yunshu_engine/kernels/cache_restore.py": "APC restore kernels",
   "python/yunshu_engine/kernels/singleton_cache.py": "singleton cache install",
@@ -2083,7 +2083,6 @@
   "YUNSHU_PREFILL_GDN": "prefill_kernels",
   "YUNSHU_PREFILL_ATTENTION": "prefill_kernels",
   "YUNSHU_PREFILL_BUFFER_CACHE_GB": "prefill_kernels",
-  "YUNSHU_MTP_ROW_EXACT": "batch_invariant_kernels",
   "YUNSHU_GPU_SAMPLER": "gpu_sampler",
   "YUNSHU_JUMP_FORWARD": "jump_forward",
   "YUNSHU_JSON_SCHEMA_ENGINE": "constrained_bitmask_engine",

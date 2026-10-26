@@ -212,8 +212,6 @@ const settingdesc = {
     "VLM plain-text chats: while idle after a reply, prefill its rendered assistant text and store APC checkpoints; decode-time KV is never reused. Default stride on qualified split-invariant 27B stops at the last absolute 64-token boundary at or before assistant end; without split-invariant kernels it retains the full prefill-atom grid. A matching arriving request adopts in-flight work; other requests cancel at a preemptible boundary. off disables rehearsal. boundary/exact retain the legacy assistant-end split policy on unsupported configurations and may change their cold rounding. Costs idle GPU time and one cached prefix.",
   YUNSHU_NEXT_TURN_DELAY_S:
     "Seconds between a finished reply and next-turn rehearsal. Default 0.3 lets an immediate follow-up (agent loops) arrive before rehearsal starts and prefill once, while a later one adopts running work; 0 starts as soon as idle, which costs an immediate follow-up about 0.15-0.25 s (rehearsal plus a short tail request). No GPU work is started while foreground requests are waiting.",
-  YUNSHU_MTP_ROW_EXACT:
-    "Qwen3.5-family runner: oMLX row-exact verify (verify rows bit-identical to one-row decode) instead of batch-invariant kernels.",
   YUNSHU_ENGINE_LOOP:
     "Text models: EngineCore continuous-batching loop instead of the single-request fast path.",
   YUNSHU_OVERLAP:

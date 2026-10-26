@@ -4,7 +4,6 @@ import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import pytest
 from scripts.research import audit_flag_matrix as audit
 
 
@@ -39,34 +38,6 @@ def test_a_dry_run_can_never_authorize_a_27b_sweep():
     assert not audit.validate_smoke(receipt, "new-source", ["external"])
     receipt["arms"] = []
     assert not audit.validate_smoke(receipt, "s", ["external"])
-
-
-@pytest.mark.parametrize("bad", ["parity", "digest", "complete", "missing_cell"])
-def test_sweep_rc_zero_is_insufficient(monkeypatch, tmp_path, bad):
-    records = [
-        {"task": task, "block": block, "parity": True, "token_digest": "s"}
-        for task in ("code", "prose")
-        for block in (0, 6)
-    ]
-    records.append({"complete": True})
-    if bad == "parity":
-        records[0]["parity"] = False
-    elif bad == "digest":
-        records[0].pop("token_digest")
-    elif bad == "complete":
-        records.pop()
-    else:
-        records.pop(0)
-
-    def run(command, *, cwd, stdout, stderr):
-        stdout.write("\n".join(json.dumps(r) for r in records) + "\n")
-        stdout.flush()
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(audit.subprocess, "run", run)
-    args = SimpleNamespace(out=tmp_path / "result.json", smoke=False, dry_run=False)
-    with pytest.raises(RuntimeError):
-        audit.subprocess_arm(args, "row_exact", 0, 0, 1024)
 
 
 def test_tool_quality_counts_schema_errors_and_drops():
@@ -196,7 +167,6 @@ def test_dispatch_requires_real_success_and_submits_only_timing_quiet(tmp_path):
 
 
 def test_tiny_smoke_checkpoint_indexes_its_mtp_head(tmp_path):
-    import json
     import struct
 
     src, dst = tmp_path / "src", tmp_path / "dst"

@@ -200,8 +200,6 @@ const settingdesc = {
     "回覆後閒置時，以 prefill 算術預演下一輪 assistant 文字並存 APC，不重用 decode KV。預設 stride 在通過資格的 27B 路徑停在 assistant 結束前最後的絕對 64 對齊位置；其他路徑保留完整 atom。相同對話可接手執行中預演，其他請求取消。off 停用；boundary／exact 在舊路徑保留額外 assistant-end 切分且可能改變浮點捨入。",
   YUNSHU_NEXT_TURN_DELAY_S:
     "回覆後至開始下一輪預演的秒數。預設 0.3，讓立即追問（代理迴圈）在預演開始前抵達而只需預填一次，較晚的相符追問則接手執行中的工作；0 表示閒置即開始，立即追問會多花約 0.15–0.25 秒（預演加一次短尾請求）。有前景請求等待時不啟動預演。",
-  YUNSHU_MTP_ROW_EXACT:
-    "Qwen3.5 系列執行器：使用 oMLX 逐列精確驗證（驗證列與單列解碼位元相同），取代批次不變核心。",
   YUNSHU_ENGINE_LOOP:
     "文字模型：使用 EngineCore 連續批次迴圈，取代單一請求快速路徑。",
   YUNSHU_OVERLAP:

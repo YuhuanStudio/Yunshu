@@ -238,7 +238,6 @@ _add("YUNSHU_QUANT_MODE", "enum", "", "Quantize weights in memory at load (lossy
 _add("YUNSHU_QUANT_CONFIG", "str", None, "Bits/group for affine in-memory quantization: JSON ({\"bits\":4,\"group_size\":64}) or 'bits' / 'bits,group'.", "text-engine")
 
 # ── kernels / experiments ──────────────────────────────────────────────
-_add("YUNSHU_MTP_ROW_EXACT", "bool", False, "Qwen3.5-family runner: oMLX row-exact verify (verify rows bit-identical to one-row decode) instead of batch-invariant kernels.", "kernels", stability="experimental", decide="sweep_mtp_depth parity at long contexts vs decode tok/s (currently 30-50% slower than batch-invariant)", added="2026-09-28")
 _add("YUNSHU_ENGINE_LOOP", "bool", False, "Text models: EngineCore continuous-batching loop instead of the single-request fast path. Option (not the default): faster aggregate throughput with several concurrent requests on text models (measured 2026-10-24: +60/190/280% at 2/4/8 requests, -4% at one), but batched outputs are not token-identical to the single-request path.", "text-engine", stability="stable")
 _add("YUNSHU_OVERLAP", "enum", "", "Text engine loop: overlap CPU and GPU work ('cpu_gpu') or split a batch into two overlapping halves ('two_batch'). Option (not the default); no measurable effect on a 3B text model (2026-10-24).", "text-engine", stability="stable", choices=("", "cpu_gpu", "two_batch"))
 _add("YUNSHU_SPEC_UNVERIFIED", "enum", "", "Text models: explicitly enable the unverified external mlx-lm draft experiment. 'eagle' is the historical route name; an ordinary LM draft works, no trained EAGLE head is required. Greedy, non-streaming ordinary requests with default sampling/penalties only; schema, custom processors, stop strings, thinking budgets, LoRA and token-mask options keep the regular fast path. Native MTP/DFlash belongs to the VLM runner. Option (not the default): output is not guaranteed token-identical to plain decode (2026-10-24: differed on 4/4 prompts; speed -5..+33%).", "speculative", stability="stable", choices=("", "eagle"))
@@ -502,7 +501,6 @@ _RELOAD = frozenset(
         "YUNSHU_GEMMA4_ASSISTANT",
         "YUNSHU_QUANT_MODE",
         "YUNSHU_QUANT_CONFIG",
-        "YUNSHU_MTP_ROW_EXACT",
         "YUNSHU_ENGINE_LOOP",
         "YUNSHU_OVERLAP",
         "YUNSHU_SPEC_UNVERIFIED",
