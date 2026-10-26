@@ -242,8 +242,10 @@ async def patch_config(body: ConfigPatch, request: Request) -> dict:
             experimental.append(name)
     if errors:
         raise _err(422, "invalid_settings", "no setting was changed", errors=errors)
-    # Settings that run host code or touch arbitrary paths: admin scope is not host access.
-    if not settings.get_bool("YUNSHU_ADMIN_WRITE_EXEC_SETTINGS"):
+    # Settings that run host code or touch arbitrary paths: a managed key's admin scope is
+    # not host access. The owner (static token, or no auth configured) already runs the host.
+    _owner = getattr(getattr(request, "state", None), "role", None) == "owner"
+    if not _owner and not settings.get_bool("YUNSHU_ADMIN_WRITE_EXEC_SETTINGS"):
         locked = sorted(
             n
             for n, v in clean.items()

@@ -83,3 +83,24 @@ async def test_get_flags_host_access_rows_read_only():
     assert rows["YUNSHU_MCP_SERVERS"]["read_only"] is True
     assert rows["YUNSHU_AUDIT_LOG_FILE"]["read_only"] is True
     assert rows["YUNSHU_QUEUE_LIMIT"]["read_only"] is False
+
+
+@pytest.mark.asyncio
+async def test_owner_may_write_host_access_settings():
+    # the owner (static token / no auth configured) already runs the host: the lock is for
+    # managed keys whose admin scope must not become host access
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def _owner(request, call_next):
+        request.state.role = "owner"
+        return await call_next(request)
+
+    app.include_router(adm.router, prefix="/v1")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        r = await c.patch(
+            "/v1/yunshu/config", json={"settings": {"YUNSHU_SERVE_LOG_DIR": "/tmp/x"}}
+        )
+        assert r.status_code == 200, r.text
