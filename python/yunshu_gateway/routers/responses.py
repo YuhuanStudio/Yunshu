@@ -990,6 +990,62 @@ def _extract_input_text(content) -> str | list:
     return "\n".join(text_parts)
 
 
+def _coalesce_assistant_turns(
+    messages: list[dict], *, drop_trailing_empty: bool = False
+) -> list[dict]:
+    """Rebuild one assistant turn from the Responses items one response generated.
+
+    A response with parallel tool calls is output as [reasoning, message(text=""),
+    function_call, function_call ...]; replayed item by item that becomes a blank assistant
+    turn plus one assistant turn per call, whereas the model generated ONE turn. The chat
+    template then renders a history the model never produced (and the prefix cache diverges
+    at the previous turn on every tool loop). Here an empty-text assistant message is dropped
+    (its reasoning moves to the following assistant message) and a tool-call-only assistant
+    message joins the assistant message right before it. A trailing empty message is kept
+    unless ``drop_trailing_empty`` (a chain replay is always followed by the new input)."""
+    out: list[dict] = []
+    carry: str | None = None
+    last = len(messages) - 1
+    for i, m in enumerate(messages):
+        if m.get("role") != "assistant":
+            out.append(m)
+            continue
+        if carry:
+            rc = m.get("reasoning_content")
+            m = {**m, "reasoning_content": f"{carry}\n{rc}" if rc else carry}
+            carry = None
+        tool_calls = m.get("tool_calls")
+        if not tool_calls and m.get("content") == "":
+            nxt = messages[i + 1] if i < last else None
+            if nxt is not None and nxt.get("role") == "assistant":
+                carry = m.get("reasoning_content")
+                continue
+            if (nxt is not None or drop_trailing_empty) and not m.get(
+                "reasoning_content"
+            ):
+                continue
+        prev = out[-1] if out else None
+        if (
+            tool_calls
+            and m.get("content") == ""
+            and prev is not None
+            and prev.get("role") == "assistant"
+        ):
+            merged = {
+                **prev,
+                "tool_calls": [*(prev.get("tool_calls") or []), *tool_calls],
+            }
+            if m.get("reasoning_content"):
+                rc = prev.get("reasoning_content")
+                merged["reasoning_content"] = (
+                    f"{rc}\n{m['reasoning_content']}" if rc else m["reasoning_content"]
+                )
+            out[-1] = merged
+            continue
+        out.append(m)
+    return out
+
+
 def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
     """Convert Responses API input to OpenAI chat messages."""
     messages: list[dict[str, Any]] = []
@@ -1087,7 +1143,7 @@ def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
                 _take_reasoning({"role": role, "content": _extract_input_text(content)})
             )
 
-    return messages
+    return _coalesce_assistant_turns(messages)
 
 
 def _parse_response_format(rf: dict | None, grammar: dict | None = None) -> dict | None:
@@ -1570,6 +1626,7 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
                 "previous_response_chain_too_long",
                 "previous_response_id",
             )
+    chain = _coalesce_assistant_turns(chain, drop_trailing_empty=True)
     if chain:
         # Inject chain after any system message but before the new user input
         if messages and messages[0].get("role") == "system":
