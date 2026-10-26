@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 _MAX_STREAMING_TEXT_BUFFER = 1 * 1024 * 1024
 _TRUNCATE_KEEP = 512 * 1024
+_TOOL_ARG_CHUNK = 4096  # input_json_delta frame size (the whole call is known; 8-char frames cost ~100x SSE sends)
 import contextlib
 import os
 
@@ -3215,8 +3216,8 @@ async def _stream_anthropic(
                                         and _args_str != "{}"
                                         and not _tc_args_streamed
                                     ):
-                                        for _ci in range(0, len(_args_str), 8):
-                                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + 8]}})}\n\n"
+                                        for _ci in range(0, len(_args_str), _TOOL_ARG_CHUNK):
+                                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + _TOOL_ARG_CHUNK]}})}\n\n"
                                     yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                     block_index += 1
                                     tool_use_block_started = False
@@ -3396,8 +3397,8 @@ async def _stream_anthropic(
                                 _tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                                 yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': _tool_id, 'name': _tc_out.tool_call.name, 'input': {}}})}\n\n"
                                 _args_str = _tc_out.tool_call.arguments or "{}"
-                                for _ci in range(0, len(_args_str), 8):
-                                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + 8]}})}\n\n"
+                                for _ci in range(0, len(_args_str), _TOOL_ARG_CHUNK):
+                                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + _TOOL_ARG_CHUNK]}})}\n\n"
                                 yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                 block_index += 1
                                 tool_use_block_started = False
@@ -3480,8 +3481,8 @@ async def _stream_anthropic(
                     _tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                     yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': _tool_id, 'name': _tc_out.tool_call.name, 'input': {}}})}\n\n"
                     _args_str = _tc_out.tool_call.arguments or "{}"
-                    for _ci in range(0, len(_args_str), 8):
-                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + 8]}})}\n\n"
+                    for _ci in range(0, len(_args_str), _TOOL_ARG_CHUNK):
+                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + _TOOL_ARG_CHUNK]}})}\n\n"
                     yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                     block_index += 1
                     tool_use_block_started = False
