@@ -693,6 +693,10 @@ class ResponsesRequest(BaseModel):
     # max_output_tokens so old client code doesn't run unbounded against
     # /v1/responses. Caught by validate_request hook below.
     max_completion_tokens: int | None = Field(default=None, ge=1, le=1048576)
+    # Compatibility alias of max_output_tokens (Rapid-MLX 3de1c6c4): without it the field fell
+    # into extra="allow" and the reply ran to the model's output limit. Conflicting values are
+    # a 400, like max_tokens vs max_completion_tokens on chat.
+    max_tokens: int | None = Field(default=None, ge=1, le=1048576)
     temperature: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
     top_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
     top_k: int = Field(default=None, ge=0)  # type: ignore[assignment]  # None until resolve_sampling
@@ -834,6 +838,16 @@ class ResponsesRequest(BaseModel):
             object.__setattr__(
                 self, "max_output_tokens", int(self.max_completion_tokens)
             )
+        if self.max_tokens is not None:
+            if (
+                "max_output_tokens" in self.model_fields_set
+                and self.max_output_tokens != self.max_tokens
+            ):
+                raise ValueError(
+                    "max_tokens: conflicts with max_output_tokens "
+                    f"({self.max_tokens} != {self.max_output_tokens}); send one"
+                )
+            object.__setattr__(self, "max_output_tokens", int(self.max_tokens))
         # Map the canonical nested reasoning:{effort} → flat reasoning_effort (the form
         # the engine reads) when the flat alias wasn't also sent.
         if self.reasoning_effort is None and isinstance(self.reasoning, dict):
@@ -1917,7 +1931,8 @@ async def create_response(req: ResponsesRequest, request: Request):
             engine,
             source=(
                 SOURCE_REQUEST
-                if {"max_output_tokens", "max_completion_tokens"} & req.model_fields_set
+                if {"max_output_tokens", "max_completion_tokens", "max_tokens"}
+                & req.model_fields_set
                 else default_source()
             ),
         )

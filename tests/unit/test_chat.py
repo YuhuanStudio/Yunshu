@@ -11,7 +11,6 @@ Covers:
 - Empty model (400 error)
 """
 
-
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
