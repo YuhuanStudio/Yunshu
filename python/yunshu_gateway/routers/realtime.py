@@ -1022,6 +1022,10 @@ class RealtimeSession:
     _resp_audio_bytes: int = 0  # encoded audio sent for the active response
     _obuf_started: bool = False  # output_audio_buffer.started sent
     _obuf_cleared: bool = False  # the audio was cut (cancel / barge-in / clear)
+    # Text generated so far for the active response (and whether it is out-of-band):
+    # a cancel / barge-in keeps it as an incomplete assistant item.
+    _partial_text: str = ""
+    _partial_oob: bool = False
     _idle_task: asyncio.Task | None = None
     _denoiser = None
     _denoiser_key: tuple | None = None
@@ -2034,6 +2038,8 @@ class RealtimeSession:
             )
 
             full_text = ""
+            self._partial_text = ""
+            self._partial_oob = _oob
             _usage_pt = 0  # prompt tokens
             _usage_ct = 0  # completion tokens
 
@@ -2067,6 +2073,7 @@ class RealtimeSession:
                         raise EngineStreamError(str(output.error))
                     if output.new_text:
                         full_text += output.new_text
+                        self._partial_text = full_text
                         if "text" in modalities:
                             await self.send_event(
                                 _event(
@@ -2124,6 +2131,7 @@ class RealtimeSession:
                         raise EngineStreamError(str(output.error))
                     if output.token_text:
                         full_text += output.token_text
+                        self._partial_text = full_text
                         if "text" in modalities:
                             await self.send_event(
                                 _event(
@@ -2221,6 +2229,7 @@ class RealtimeSession:
                 )
                 if _snap_tool_choice != "none" and _calls:
                     tool_calls = _calls
+            self._partial_text = _visible_text  # what TTS speaks (a cancel keeps it)
 
             # persist each tool call as a function_call item so it's in history
             # WITH its call_id. The client returns a function_call_output carrying the same
@@ -2643,6 +2652,8 @@ class RealtimeSession:
             )
 
             full_text = ""
+            self._partial_text = ""
+            self._partial_oob = _oob
             self._pcm16_lin_state = None
             self._g711_lin_state = None
             self._g711_resample_remainder = b""
@@ -2662,6 +2673,7 @@ class RealtimeSession:
                     if not ch.data:
                         continue
                     full_text += ch.data
+                    self._partial_text = full_text
                     # Trip suppression as soon as the turn looks like a tool call —
                     # either <tool_call> markup OR (Qwen3-Omni) a bare-JSON payload that
                     # starts the turn with `{`/`[`. Catching the leading brace keeps the
@@ -2729,6 +2741,7 @@ class RealtimeSession:
                 _fc_items, _visible_text = self._extract_visible_and_tool_calls(
                     full_text, _snap_tools, _snap_tool_choice, _snap_model, _oob
                 )
+            self._partial_text = _visible_text
 
             if "text" in modalities:
                 # the cascade path always closed the text stream; the omni
@@ -2956,10 +2969,14 @@ class RealtimeSession:
                         content_index=0,
                     )
                 )
+            # Keep what was generated as an incomplete assistant item: without it
+            # conversation.item.truncate (sent after a barge-in) finds no item and the
+            # model forgets the reply it was interrupted in.
+            _kept = await self._keep_interrupted_item(item_id, _had_audio)
             # (self-audit): close the OPEN output item (added but not yet done) so a
             # cancel/barge-in doesn't leave a dangling in-progress item for SDK clients.
             await self._close_response_item(
-                response_id, item_id, status="incomplete", locked=True
+                response_id, item_id, status="incomplete", text=_kept, locked=True
             )
             await self._locked_send_event(
                 _event(
@@ -2972,6 +2989,37 @@ class RealtimeSession:
                 )
             )
             self._response_done_emitted = True  # (self-audit R2)
+
+    async def _keep_interrupted_item(self, item_id: str, had_audio: bool) -> str:
+        """Add the interrupted response's partial assistant item (status incomplete) to the
+        conversation, as OpenAI keeps it, and return its text ("" when nothing was kept)."""
+        if self._partial_oob:
+            return ""
+        text = self._partial_text or ""
+        if "<think" in text:
+            from ..streaming import extract_thinking
+
+            with contextlib.suppress(Exception):
+                _, text = extract_thinking(text, self.session.model)
+        if not text or any(it.item_id == item_id for it in self.conversation.items):
+            return text
+        if had_audio:
+            part = {
+                "type": "audio",
+                "transcript": text,
+                "duration_ms": max(1, len(text) * 70),
+            }
+        else:
+            part = {"type": "text", "text": text}
+        item = ConversationItem(
+            item_id=item_id, item_type="message", role="assistant", content=[part]
+        )
+        item.status = "incomplete"
+        self.conversation.add_item(item)
+        await self._locked_send_event(
+            _event("conversation.item.created", item=item.to_dict())
+        )
+        return text
 
     async def _close_response_item(
         self,
