@@ -515,3 +515,11 @@ async def test_config_patch_validates_cors_origins():
         )
         assert ok.status_code == 200
     assert settings.get("YUNSHU_CORS_ORIGINS") == "http://x.example,http://y.example"
+
+
+def test_mcp_servers_json_is_masked_like_other_credentials():
+    # the JSON carries stdio env / HTTP headers with tokens; /v1/yunshu/config is readable
+    # with infer scope (or by anyone without a token), so it must mask like an API key
+    from yunshu_engine import settings
+
+    assert settings.REGISTRY["YUNSHU_MCP_SERVERS"].secret
