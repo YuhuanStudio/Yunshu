@@ -3477,6 +3477,10 @@ class EngineCore:
                         ]
                         content = "\n".join(t for t in text_parts if t)
                     clean.append({"role": m.get("role", "user"), "content": content})
+                # special-token strings typed in message text stay text (never control ids)
+                from .special_tokens import neutralize_special_text
+
+                clean = neutralize_special_text(clean, self._tokenizer)
                 kwargs: dict[str, Any] = {
                     "tokenize": False,
                     "add_generation_prompt": True,
