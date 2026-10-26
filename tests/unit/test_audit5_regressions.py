@@ -45,7 +45,7 @@ def test_external_verification_keeps_unprocessed_bonus_context():
         assert seen == [3]
 
 
-@pytest.mark.parametrize("case", ["greedy", "guide", "keyed"])
+@pytest.mark.parametrize("case", ["greedy", "guide", "keyed", "keyed-xtc"])
 def test_tree_setting_reaches_upstream_hook_instead_of_chain_lane(monkeypatch, case):
     from mlx_vlm.generate import ar
     from mlx_vlm.speculative import utils
@@ -73,7 +73,16 @@ def test_tree_setting_reaches_upstream_hook_instead_of_chain_lane(monkeypatch, c
     )
     from yunshu_engine.keyed_sampling import KeyedSampler
 
-    sampler = KeyedSampler(SimpleNamespace(), 42) if case == "keyed" else None
+    sampler = (
+        KeyedSampler(
+            SimpleNamespace(
+                temperature=0.7, xtc_probability=0.5 if case == "keyed-xtc" else 0.0
+            ),
+            42,
+        )
+        if case.startswith("keyed")
+        else None
+    )
     try:
         mtp_lane.install()
         with mx.stream(mx.cpu):
@@ -83,12 +92,12 @@ def test_tree_setting_reaches_upstream_hook_instead_of_chain_lane(monkeypatch, c
                 [],
                 None,
                 draft_kind="mtp",
-                greedy_sampling=case != "keyed",
+                greedy_sampling=sampler is None,
                 first_bonus=mx.array([1]),
                 max_tokens=4,
                 sampler=sampler,
             )
-        assert calls == (["tree"] if case == "greedy" else ["chain"])
+        assert calls == (["chain"] if case in ("guide", "keyed-xtc") else ["tree"])
     finally:
         mtp_lane._STATE.clear()
         mtp_lane._STATE.update(state)

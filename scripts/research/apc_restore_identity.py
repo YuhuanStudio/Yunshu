@@ -28,7 +28,12 @@ def assert_identity(out):
             raise RuntimeError(f"APC {mode} restore is not bit-equal: {result}")
 
 
-def ask(url, model, text, n=64):
+def ask(url, model, text, n=64, sampling=None, capture=None):
+    capture_start = (
+        len(capture.read_text().splitlines())
+        if capture is not None and capture.exists()
+        else 0
+    )
     body = dict(
         model=model,
         messages=[{"role": "user", "content": text}] if isinstance(text, str) else text,
@@ -39,6 +44,7 @@ def ask(url, model, text, n=64):
         stream_options={"include_usage": True},
         chat_template_kwargs={"enable_thinking": False},
     )
+    body.update(sampling or {})
     req = urllib.request.Request(
         url + "/v1/chat/completions",
         json.dumps(body).encode(),
@@ -68,6 +74,32 @@ def ask(url, model, text, n=64):
                 finish = ch.get("finish_reason") or finish
     if not (done and finish and usage and toks):
         raise RuntimeError("incomplete stream")
+    if capture is not None:
+        deadline = time.monotonic() + 5
+        while True:
+            rows = (
+                [
+                    json.loads(line)
+                    for line in capture.read_text().splitlines()[capture_start:]
+                ]
+                if capture.exists()
+                else []
+            )
+            row = next(
+                (
+                    r
+                    for r in reversed(rows)
+                    if r["prompt_tokens"] == usage["prompt_tokens"]
+                    and len(r["token_ids"]) == len(toks)
+                ),
+                None,
+            )
+            if row is not None:
+                toks = row["token_ids"]
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError("missing raw generated token capture")
+            time.sleep(0.01)
     return dict(
         toks=toks,
         lps=lps,
@@ -85,10 +117,18 @@ def main():
     ap.add_argument("--turn2-repeat", type=int, default=24)
     ap.add_argument("--compare-spec-off", action="store_true")
     ap.add_argument("--tokens", type=int, default=64)
+    ap.add_argument("--temperature", type=float, default=0)
+    ap.add_argument("--top-p", type=float, default=1)
+    ap.add_argument("--top-k", type=int, default=0)
+    ap.add_argument("--seed", type=int, default=17)
+    ap.add_argument("--raw-ids", action="store_true")
     ap.add_argument("--trace-tail", action="store_true")
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+    sampling = dict(
+        temperature=a.temperature, top_p=a.top_p, top_k=a.top_k, seed=a.seed
+    )
     if a.trace_tail:
         import subprocess
 
@@ -101,6 +141,10 @@ def main():
 
         subprocess.Popen = launch
     env = dict(kv.split("=", 1) for kv in a.env)
+    capture = Path(a.out).with_suffix(".raw-ids.jsonl") if a.raw_ids else None
+    if capture is not None:
+        capture.parent.mkdir(parents=True, exist_ok=True)
+        env["YUNSHU_DEBUG_STREAM_CAPTURE"] = str(capture.resolve())
     P = t.load_prompt(f"{a.kind}-{a.ctx}")
     Q = (
         P
@@ -125,22 +169,22 @@ def main():
     s = t.Srv("yunshu", env, f"apcid-A-{a.ctx}")
     try:
         t.send(s.url, t.req(s.model, "Say hi.", 8))
-        res["cold"] = ask(s.url, s.model, Q, a.tokens)
+        res["cold"] = ask(s.url, s.model, Q, a.tokens, sampling, capture)
     finally:
         s.kill()
     s = t.Srv("yunshu", env, f"apcid-B-{a.ctx}")
     try:
         t.send(s.url, t.req(s.model, "Say hi.", 8))
-        res["prime"] = ask(s.url, s.model, P, 8)
-        res["partial"] = ask(s.url, s.model, Q, a.tokens)
-        res["full"] = ask(s.url, s.model, Q, a.tokens)
+        res["prime"] = ask(s.url, s.model, P, 8, sampling, capture)
+        res["partial"] = ask(s.url, s.model, Q, a.tokens, sampling, capture)
+        res["full"] = ask(s.url, s.model, Q, a.tokens, sampling, capture)
     finally:
         s.kill()
     if a.compare_spec_off:
         s = t.Srv("yunshu", {**env, "YUNSHU_VLM_DRAFT": "off"}, f"apcid-off-{a.ctx}")
         try:
             t.send(s.url, t.req(s.model, "Say hi.", 8))
-            res["spec_off"] = ask(s.url, s.model, Q, a.tokens)
+            res["spec_off"] = ask(s.url, s.model, Q, a.tokens, sampling, capture)
         finally:
             s.kill()
     ref = res["cold"]
@@ -151,6 +195,7 @@ def main():
         requested_tokens=a.tokens,
         generated_tokens=len(ref["toks"]),
         env=env,
+        sampling=sampling,
     )
     for k in ("partial", "full", *(["spec_off"] if a.compare_spec_off else [])):
         r = res[k]

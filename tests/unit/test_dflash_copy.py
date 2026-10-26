@@ -52,6 +52,20 @@ def test_copy_uses_known_context_and_does_not_dispatch_drafter():
     assert proxy._copy.ctx[-1] == 15
 
 
+def test_sampled_copy_uses_proposal_and_catches_up_with_sampled_method():
+    raw = draft()
+    raw.draft_block = raw.draft_block_greedy
+    raw.draft_block_greedy = lambda *args: pytest.fail("sampled fallback used greedy")
+    proxy = dflash_copy.CopyDraft(raw, [], 1, 16)
+    proxy._next_copy = [5, 6]
+    hidden = np.arange(8).reshape(1, 4, 2)
+    assert proxy.draft_block(1, hidden, [], 3, None).tolist() == [[5, 6]]
+    assert not raw.calls
+    proxy._next_copy = []
+    proxy.draft_block(6, hidden, [], 8, None)
+    assert len(raw.calls) == 1
+
+
 def test_bounded_pending_taps_advance_offsets_once_at_catch_up():
     raw = draft(window=5)
     proxy = dflash_copy.CopyDraft(raw, [], 1, 16)

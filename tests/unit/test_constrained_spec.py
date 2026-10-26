@@ -423,8 +423,10 @@ def test_serial_verify_routing_restored_on_error(monkeypatch):
     monkeypatch.setitem(batch_invariant._STATE, "active", True)
     monkeypatch.setitem(omlx._STATE, "row_exact", False)
     before = qmm._is_armed(), qmm.is_row_exact_armed()
+    request = SpecRequest(True)
+    request.processors = [object()]
     with pytest.raises(RuntimeError, match="abort"):
-        with exact_verify(SpecRequest(True)):
+        with exact_verify(request):
             assert not batch_invariant._STATE["active"]
             assert omlx._STATE["row_exact"] and qmm.is_row_exact_armed()
             raise RuntimeError("abort")
@@ -435,7 +437,7 @@ def test_serial_verify_routing_restored_on_error(monkeypatch):
 
 @pytest.mark.parametrize("feature", ["guide", "logprobs", "plain"])
 @pytest.mark.parametrize("spec", [False, True])
-def test_serial_requests_preserve_ar_attention_and_projections(
+def test_report_only_requests_share_invariant_ar_attention_and_projections(
     monkeypatch, feature, spec
 ):
     from yunshu_engine import vlm_batch_runner as vbr
@@ -464,7 +466,7 @@ def test_serial_requests_preserve_ar_attention_and_projections(
         ),
     )
     runner._step_group(group)
-    assert seen == [(feature == "plain", feature == "plain")]
+    assert seen == [(feature != "guide", feature != "guide")]
     assert not batch_invariant._STATE["active"] and not ragged_kv._STATE["dense_lane"]
 
 
@@ -514,7 +516,8 @@ def test_qualified_ar_and_spec_use_same_canonical_cache_salt(monkeypatch):
         runner._batches.clear()
         runner._admit(jobs[-1], alone=True)
     assert saved[0] == 123
-    assert len(set(saved[1:])) == 1 and saved[1] != saved[0]
+    assert saved[1] == saved[2] and saved[1] != saved[0]
+    assert saved[3] == saved[4] == saved[0]
 
 
 def test_greedy_uses_serial_normalized_tie_breaking():

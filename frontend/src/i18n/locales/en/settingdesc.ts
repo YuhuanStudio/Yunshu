@@ -198,11 +198,11 @@ const settingdesc = {
   YUNSHU_MTP_BLOCK_SIZE:
     "Draft block size (for DFlash, the ceiling its acceptance-driven depth stays under). Unset: 6 for MTP, the drafter’s trained block for DFlash.",
   YUNSHU_SPEC_COPY_ROWS:
-    "Qwen3.5-family single-request speculative lane: verify rows a prompt-copy round may use (copy drafts = rows - 1). A copy round proposes the continuation of the longest earlier occurrence of the current tail in the prompt plus generated text, and the same verify checks it, so output is unchanged. Agent, code-editing and multi-turn traffic that quotes its context commits several times more tokens per round. Default 16 rows, capped to the backend’s certified width; 0 turns copy rounds off.",
+    "Qwen3.5-family single-request speculative lane: verify rows a prompt-copy round may use (copy drafts = rows - 1). A copy round proposes the continuation of the longest earlier occurrence of the current tail in the prompt plus generated text, and the same verify checks it, so output is unchanged. Agent, code-editing and multi-turn traffic that quotes its context commits several times more tokens per round. Eligible greedy and position-keyed sampled requests use copied proposals with the same exact target verifier. Default 32 rows, capped to the backend’s certified width; 0 turns copy rounds off.",
   YUNSHU_DRAFT_BITS:
     "Qwen3.5-family DFlash drafter weight bits: 8 (default), 4, or 0 to keep the shipped bf16. Drafts are verified by the target, so output is token-identical for every value; fewer bits cut the drafter’s bytes per round but can lower acceptance.",
   YUNSHU_SPEC_TREE:
-    "Qwen3.5-family single-request speculative lane: `off` keeps trained chain plus copy; `tree` forces the draft-tree verifier; `auto` uses the certified M5 Q4 DFlash2 fast tree for bounded 1K-class greedy requests and chain plus copy elsewhere. Greedy tokens stay identical to plain decode.",
+    "Qwen3.5-family single-request speculative lane: `off` keeps trained chain plus copy; `tree` forces the draft-tree verifier; `auto` uses the M5 Q4 DFlash2 fast tree for eligible greedy and sampled requests within live-context safety bounds, retaining chain plus copy elsewhere. With the same seed, speculative tokens and requested logprobs match plain decode.",
   YUNSHU_NGRAM_DEFAULT:
     "Text models: lossless n-gram speculation on greedy requests by default (per-request `spec_decode` also enables it). Wins on repetitive output.",
   YUNSHU_SPEC_PROPOSER:

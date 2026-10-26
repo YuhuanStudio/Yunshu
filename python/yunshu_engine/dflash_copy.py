@@ -9,12 +9,15 @@ readback is needed inside a copy island.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, cast
 
 import mlx.core as mx
 
 from .copy_drafter import CopyDrafter
 from .dflash_context import context_window
+
+logger = logging.getLogger(__name__)
 
 
 class CopyDraft:
@@ -65,6 +68,22 @@ class CopyDraft:
     def draft_block_greedy(
         self, bonus, hidden, cache, block, sampler, token_dtype=mx.int32
     ):
+        return self._propose(
+            self._draft.draft_block_greedy,
+            bonus,
+            hidden,
+            cache,
+            block,
+            sampler,
+            token_dtype,
+        )
+
+    def draft_block(self, bonus, hidden, cache, block, sampler, token_dtype=mx.int32):
+        return self._propose(
+            self._draft.draft_block, bonus, hidden, cache, block, sampler, token_dtype
+        )
+
+    def _propose(self, method, bonus, hidden, cache, block, sampler, token_dtype):
         if self._next_copy:
             if hidden is None:  # a promoted row's first round: nothing captured yet
                 return mx.array([self._next_copy], dtype=token_dtype)
@@ -87,9 +106,7 @@ class CopyDraft:
             for entry in cache:
                 entry.offset += self._pending_skipped
             self._pending_skipped = 0
-        return self._draft.draft_block_greedy(
-            bonus, hidden, cache, block, sampler, token_dtype
-        )
+        return method(bonus, hidden, cache, block, sampler, token_dtype)
 
     def emitted(self, token: int):
         self._copy.extend([token])
@@ -145,9 +162,10 @@ def _copy_gate(lm, draft, cache, kw) -> bool:
     from mlx_vlm.speculative.common import _dflash_block_total
 
     from . import mtp_lane, tree_verify
+    from .keyed_sampling import tree_supported
 
     return not (
-        not kw.get("greedy_sampling", True)
+        not tree_supported(kw.get("sampler"), kw.get("greedy_sampling", True))
         or mtp_lane._STATE["context"] is None
         or mtp_lane.copy_rows_for_model(lm) < 3
         or not hasattr(draft, "candidate_selector")
@@ -160,6 +178,36 @@ def _copy_gate(lm, draft, cache, kw) -> bool:
         or _dflash_block_total(draft, kw.get("draft_block_size"))
         > mtp_lane.verify_max_rows(tree_verify.lane_projections(lm), lm)
     )
+
+
+def chain_reasons(lm, draft, cache, kw) -> list[str]:
+    """Names of the fast-tree preconditions this request fails (diagnostic for the chain fallback log)."""
+    from mlx_vlm.speculative.common import _dflash_block_total
+
+    from . import dflash_fast, mtp_lane, settings, tree_verify
+    from .keyed_sampling import tree_supported
+
+    checks = {
+        "spec_tree_not_auto": settings.get("YUNSHU_SPEC_TREE") != "auto",
+        "sampler_unsupported": not tree_supported(
+            kw.get("sampler"), kw.get("greedy_sampling", True)
+        ),
+        "no_context": mtp_lane._STATE["context"] is None,
+        "copy_rows": mtp_lane.copy_rows_for_model(lm) < 3,
+        "no_candidate_selector": not hasattr(draft, "candidate_selector"),
+        "prepare_target_hidden": callable(
+            getattr(draft, "prepare_target_hidden", None)
+        ),
+        "no_context_window": context_window(draft) is None,
+        "tree_unsupported": not tree_verify.supported(lm),
+        "no_lane_projections": not tree_verify.lane_projections(lm),
+        "cache_not_lane_ready": not tree_verify.lane_ready(lm, cache),
+        "verify_rows": mtp_lane.verify_max_rows(True, lm) < 16,
+        "block_total": _dflash_block_total(draft, kw.get("draft_block_size"))
+        > mtp_lane.verify_max_rows(tree_verify.lane_projections(lm), lm),
+        "fast_ineligible": not dflash_fast.eligible(lm, draft, cache, kw),
+    }
+    return [name for name, failed in checks.items() if failed]
 
 
 def takes_guided(model, draft, cache, kw) -> bool:
@@ -223,6 +271,10 @@ def install() -> bool:
             )
             return
         if not _copy_gate(lm, draft, cache, kw):
+            logger.info(
+                "Speculative lane chain: %s",
+                ",".join(chain_reasons(lm, draft, cache, kw)),
+            )
             yield from current(model, draft, cache, hidden, **kw)
             return
         context = mtp_lane._STATE["context"]
@@ -234,6 +286,10 @@ def install() -> bool:
                 model, draft, cache, hidden, _chain=current, **kw
             )
             return
+        logger.info(
+            "Speculative lane copy chain: %s",
+            ",".join(chain_reasons(lm, draft, cache, kw)),
+        )
         proxy = CopyDraft(draft, context, int(kw["first_bonus"]), rows)
         iterator = current(model, proxy, cache, hidden, **kw)
         try:

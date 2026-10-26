@@ -17,10 +17,13 @@ def metrics(t, server):
         return t.completed_rehearsals(response.read().decode())
 
 
-def check_reply_len(row, tokens, what):
-    """Natural stop is fine once the reply reached half the budget (long budgets)."""
-    if row.get("finish") == "length" or (
-        row.get("finish") == "stop" and row.get("ct", 0) >= tokens // 2
+def check_reply_len(row, tokens, what, min_reply_tokens=None):
+    """Identity probes may accept shorter complete EOS replies than timing workloads."""
+    count = row.get("ct", 0)
+    minimum = tokens // 2 if min_reply_tokens is None else min_reply_tokens
+    if 0 < count <= tokens and (
+        row.get("finish") == "length"
+        or (row.get("finish") == "stop" and count >= minimum)
     ):
         return
     raise RuntimeError(f"{what}: finish={row.get('finish')} ct={row.get('ct')}")
@@ -52,23 +55,35 @@ def main():
     p.add_argument("--ctx", type=int, default=1024)
     p.add_argument("--kind", choices=["code", "prose"], default="code")
     p.add_argument("--reply-tokens", type=int, nargs="+", default=[256, 512, 2048])
+    p.add_argument(
+        "--min-reply-tokens",
+        type=int,
+        help="Minimum natural-stop reply length (default: half the requested budget)",
+    )
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--apc-dir", type=Path)
     p.add_argument("--dry-run", action="store_true")
-    # A logprobs request takes the stock-serial arithmetic and its own APC namespace
-    # (vlm_batch_runner._serial_rows), so it never reads the invariant checkpoints a
-    # rehearsal writes: rehearsal == plain is a raw-token-ID gate. --logprobs asks for
-    # them anyway and shows such a request missing the rehearsal (cached 0).
+    p.add_argument("--temperature", type=float, default=0)
+    p.add_argument("--top-p", type=float, default=1)
+    p.add_argument("--top-k", type=int, default=0)
+    p.add_argument("--seed", type=int, default=17)
+    p.add_argument("--apc-dir", default="/Volumes/Micron/yunshu-apc/splitinv-rehearsal")
     p.add_argument(
         "--logprobs",
         action="store_true",
-        help="Also request and compare chosen-token logprobs (served outside the rehearsal namespace)",
+        help="Also request and compare chosen-token logprobs",
     )
     a = p.parse_args()
+    if a.min_reply_tokens is not None and a.min_reply_tokens < 1:
+        p.error("--min-reply-tokens must be positive")
     if a.dry_run:
         print(json.dumps(vars(a), default=str))
         return
     import tfbench as t
+
+    sampling = dict(
+        temperature=a.temperature, top_p=a.top_p, top_k=a.top_k, seed=a.seed
+    )
 
     prompt = t.decode_prompt(a.kind, a.ctx, True)
     env = {
@@ -86,13 +101,18 @@ def main():
 
     def ask_plain(server, messages):
         body = t.req(server.model, "", 32)
+        body.update(sampling)
         body["messages"] = messages
         body["logprobs"] = a.logprobs
+        capture_start = len(capture.read_text().splitlines()) if capture.exists() else 0
         result = t.send(server.url, body)
         deadline = time.monotonic() + 3
         while True:
             rows = (
-                [json.loads(line) for line in capture.read_text().splitlines()]
+                [
+                    json.loads(line)
+                    for line in capture.read_text().splitlines()[capture_start:]
+                ]
                 if capture.exists()
                 else []
             )
@@ -134,9 +154,12 @@ def main():
                     + f"\nResponse budget: {tokens} tokens. Arrival case: {arrival}.",
                     tokens,
                 )
+                body.update(sampling)
                 before = metrics(t, server)
                 first = t.send(server.url, body)
-                check_reply_len(first, tokens, f"splitinv reply {tokens}")
+                check_reply_len(
+                    first, tokens, f"splitinv reply {tokens}", a.min_reply_tokens
+                )
                 if not first["_text"].strip():
                     raise RuntimeError("empty assistant reply")
                 if arrival == "completed":
@@ -159,12 +182,13 @@ def main():
                         ctx=a.ctx,
                         kind=a.kind,
                         reply_tokens=tokens,
+                        reply_generated_tokens=first["ct"],
                         arrival=arrival,
                         arm="rehearsal",
                         **{k: v for k, v in result.items() if k not in ("toks", "lps")},
                     )
                 )
-                fixtures.append((tokens, arrival, messages, result))
+                fixtures.append((tokens, first["ct"], arrival, messages, result))
             server.verify_spec_mode()
         finally:
             server.kill()
@@ -176,7 +200,7 @@ def main():
         f"splitinv-plain-{a.ctx}-{a.kind}",
     )
     try:
-        for tokens, arrival, messages, reference in fixtures:
+        for tokens, generated, arrival, messages, reference in fixtures:
             plain = ask_plain(server, messages)
             equal = (
                 plain["toks"] == reference["toks"]
@@ -188,6 +212,7 @@ def main():
                     ctx=a.ctx,
                     kind=a.kind,
                     reply_tokens=tokens,
+                    reply_generated_tokens=generated,
                     arrival=arrival,
                     arm="plain",
                     tokens_equal=plain["toks"] == reference["toks"],

@@ -50,6 +50,8 @@ from .serving.work_scheduler import (
     PREPARE_WAIT_MAX,
     PREPARE_WAIT_S,
     PRIMARY_HANDOFF_S,
+    SPEC_ROUND_S,
+    SPEC_SLICE_STEPS,
     Work,
     decode_quantum,
 )
@@ -1075,6 +1077,10 @@ class VLMBatchRunner:
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state
 
+        # A busy lane changes this admission, not the row's eventual eligibility.
+        # In particular, the shared batch installs a ToolCallProcessor while the
+        # same advanced guide can later continue on a lone speculative lane.
+        lane_eligible = job.use_draft
         job.stats.t_admit = time.perf_counter()
         job.stats.tracks_prefill_start = True
         job.stats.prefill_total = len(job.ids)
@@ -1108,14 +1114,13 @@ class VLMBatchRunner:
         spec_lane = self._aux_spec if job.priority < 0 else self._spec
         spec = job.use_draft and alone and spec_lane is None
         job.promotable = bool(
-            job.use_draft
+            lane_eligible
             and not spec
             and self.draft_kind == "dflash"
             and job.priority >= 0
-            and job.greedy
-            and job.guide is None
-            and not job.logprobs
-            and static_masks_only(job.processors)
+            and (job.greedy or isinstance(job.keyed, keyed_sampling.KeyedSampler))
+            and not _serial_rows(job)
+            and static_masks_only(job.spec_procs)
             and job.budget is None
             and job.cache_plan is None
             and job.prompt_kwargs is None
@@ -1264,7 +1269,10 @@ class VLMBatchRunner:
             job.start = time.perf_counter()
             group.jobs[uid] = job
             if group.sampler is not None and job.sampling is not None:
-                group.sampler.add(uid, job.sampling)
+                if job.keyed is not None:
+                    group.sampler.add(uid, job.sampling, keyed=job.keyed)
+                else:
+                    group.sampler.add(uid, job.sampling)
         except BaseException:
             # The request never became a row: drop what was registered for it above.
             if job.uid is not None and group.jobs.get(job.uid) is job:
@@ -1302,6 +1310,8 @@ class VLMBatchRunner:
         ((uid, job),) = group.jobs.items()
         gen = group.gen
         batch = gen._generation_batch
+        from .tool_call_grammar import ToolCallProcessor
+
         if (
             not job.promotable
             or not job.stats.t_first
@@ -1311,19 +1321,69 @@ class VLMBatchRunner:
             or getattr(batch, "is_speculative", False)
             or list(batch.uids) != [uid]
             or batch._next_tokens is None
-            or not static_masks_only((batch.logits_processors or [None])[0])
+            or any(
+                not (
+                    isinstance(processor, (Fp32LogitsProcessor, ToolCallProcessor))
+                    or static_masks_only([processor])
+                )
+                for slot in batch.logits_processors
+                for processor in (slot or ())
+            )
+            or (job.logprobs and getattr(batch, "_next_lps", None) is None)
+            or (
+                job.logprobs
+                and job.top_logprobs
+                and (
+                    getattr(batch, "_next_top_idx", None) is None
+                    or getattr(batch, "_next_top_lp", None) is None
+                )
+            )
         ):
             return False
-        row_procs = list(
-            (batch.logits_processors or [None])[0] or []
-        )  # filter() clears
         remaining = int(batch.max_tokens[0]) - int(batch._num_tokens[0])
         if remaining < 2:
             return False
         from mlx_vlm.generate.ar import SpeculativeGenerationBatch
 
+        from .constrained_spec import SpecRequest, install
+
         batch._eval_pending_state()
+        request = SpecRequest(job.logprobs, job.top_logprobs)
+        request.guide = job.guide
+        request.processors = list(job.spec_procs)
+        context = getattr(batch, "token_context", None)
+        if context:
+            request.context = list(context[0])
+        if job.logprobs:
+            top = []
+            if batch._next_top_idx is not None:
+                top = list(
+                    zip(
+                        batch._next_top_idx[0].tolist(),
+                        batch._next_top_lp[0].tolist(),
+                        strict=True,
+                    )
+                )
+            request.pending.append(
+                (
+                    int(batch._next_tokens[0].item()),
+                    float(batch._next_lps[0].item()),
+                    top,
+                )
+            )
+        if job.keyed is not None:
+            # Pending token n has already been sampled; the first verify row
+            # predicts local index 1, i.e. absolute generation index n + 1.
+            job.keyed.position_base = int(batch._num_tokens[0])
         cache = list(batch.prompt_cache)  # the filter below clears the batch's own list
+        from .kernels import ragged_kv
+
+        for i, entry in enumerate(cache):
+            if isinstance(entry, ragged_kv.RaggedKVCache):
+                lane_cache = ragged_kv.to_lane_cache(entry)
+                if lane_cache is None:
+                    return False
+                cache[i] = lane_cache
         spec_batch = SpeculativeGenerationBatch(
             self.model,
             self.drafter,
@@ -1331,7 +1391,7 @@ class VLMBatchRunner:
             [uid],
             batch._next_tokens,
             cache,
-            batch.sampler,
+            job.keyed if job.keyed is not None else batch.sampler,
             batch.stop_criteria,
             [remaining],
             None,
@@ -1339,22 +1399,20 @@ class VLMBatchRunner:
             None,
             draft_block_size=self.draft_block_size,
             token_dtype=batch._next_tokens.dtype,
-            greedy_sampling=True,
+            greedy_sampling=job.greedy,
         )
         new_gen = self._new_generator(
             spec=True,
             use_apc=job.stats.used_apc,
             top_logprobs=0,
-            sampler=None,
-            greedy=True,
+            sampler=job.keyed,
+            greedy=job.greedy,
         )
         new_gen._generation_batch = spec_batch
         gen._generation_batch.filter([])
         group.jobs.pop(uid, None)
         if group.sampler is not None:
             group.sampler.drop(uid)
-        from .constrained_spec import SpecRequest, install
-
         install()
         job.use_draft = True
         job.promotable = False
@@ -1363,11 +1421,7 @@ class VLMBatchRunner:
         job.stats.spec_mode = _spec_mode(self.drafter)
         job.spec_base = _spec_counters(self.drafter)
         job.spec_last = job.spec_base
-        job.spec_request = SpecRequest(False, 0)
-        job.spec_request.guide = None
-        # a static ban (the only processors that get here) keeps applying to the lane's
-        # verify rows, so the lane equals the batch row it replaces
-        job.spec_request.processors = row_procs
+        job.spec_request = request
         vocab = getattr(self.drafter, "_draft_vocab", None)
         if vocab is not None:
             vocab.set_context(job.ids)
@@ -2340,6 +2394,19 @@ class VLMBatchRunner:
                 self._begin_prefill(selected_job)
             before = time.perf_counter()
             self._step_group(group, decode_only=not selected)
+            if group.spec and not selected and len(groups) > 1:
+                # The lane yields one token per step: the rest of a round's tokens leave in
+                # near-free release steps and the next round's verify runs in the step after.
+                # One step per slice would pair each lane token with a peer step (1:1), so a
+                # lane row would decode at the peer's rate; run the lane until a real round ran.
+                steps = 1
+                while (
+                    steps < SPEC_SLICE_STEPS
+                    and group.jobs
+                    and time.perf_counter() - before < SPEC_ROUND_S
+                ):
+                    self._step_group(group, decode_only=True)
+                    steps += 1
             elapsed = time.perf_counter() - before
             if any(j.priority < 0 for j in allowed):
                 self._primary_handoff_at = None
@@ -2686,12 +2753,17 @@ def _serial_rows(job) -> bool:
     combined guides). A tool-call guide alone keeps the invariant kernels, the dense
     lane and the ordinary APC namespace (constrained_spec.invariant_guide): agent
     requests declare tools on every turn, and free text under that guide is unmasked."""
-    from .constrained_spec import invariant_guide
+    from .constrained_spec import SpecRequest, invariant_guide
 
     guide = getattr(job, "guide", None)
     logprobs = getattr(job, "logprobs", None)
     if guide is None:
-        return bool(logprobs)
+        # Reporting alone does not change model arithmetic. Both AR and tree verify
+        # use the invariant kernels; only the readout is promoted to float32.
+        processors = getattr(job, "processors", ())
+        return bool(logprobs) and any(
+            not isinstance(p, (Fp32LogitsProcessor, SpecRequest)) for p in processors
+        )
     return not invariant_guide(guide, logprobs)
 
 
@@ -2832,13 +2904,15 @@ class RowSampler:
         # generation index of the next draw)
         self._rows: dict[int, list] = {}
 
-    def add(self, uid: int, params: RowParams) -> None:
+    def add(self, uid: int, params: RowParams, *, keyed=None) -> None:
         if keyed_sampling.supports(params):
             # Position-keyed draws: the token at generation index g is a function of
             # (logits, seed, g) only, so a seeded request gives the same stream here as on
             # the speculative lane, alone or in a mixed batch.
             seed = (
-                params.seed
+                keyed.seed
+                if keyed is not None
+                else params.seed
                 if params.seed is not None
                 else int.from_bytes(os.urandom(8), "little")
             )

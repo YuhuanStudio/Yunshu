@@ -833,3 +833,40 @@ def test_admitted_request_is_queued_until_its_own_first_atom_runs(atoms):
     assert (
         b.stats.t_prefill_start >= a.stats.t_first - 1e-9 or b.stats.t_prefill_start > 0
     )
+
+
+def test_spec_lane_runs_until_a_real_round_when_a_peer_decodes(atoms):
+    """The lane yields one token per step (held tokens leave in near-free steps, the verify
+    in the third); one step per slice would cap the lane at the peer's token rate."""
+    r, clock = atoms
+    lane_job = job(0)
+    lane_job.use_draft = True
+    lane_job.max_tokens = 1000
+    r._submit(lane_job)
+    r._drive_slice(False)
+    peer = job(0)
+    peer.max_tokens = 1000
+    r._submit(peer)
+    for _ in range(3):
+        r._drive_slice(False)
+    lane = r._spec
+    assert lane is not None and lane.gen._generation_batch
+    steps = [0]
+    real_next = lane.gen.next
+
+    def next_with_rounds():
+        steps[0] += 1
+        out = real_next()
+        if steps[0] % 3:
+            clock[0] -= 0.05  # a release step: no GPU time
+        return out
+
+    lane.gen.next = next_with_rounds
+    before_lane = lane.gen.rows[lane_job.uid][0]
+    before_peer = (
+        r._groups()[-1].gen.rows[peer.uid][0] if r._groups()[-1] is not lane else 0
+    )
+    steps[0] = 0
+    r._drive_slice(False)
+    assert lane.gen.rows[lane_job.uid][0] - before_lane >= 3
+    assert before_peer >= 0

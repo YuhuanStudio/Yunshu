@@ -145,11 +145,19 @@ def _isolate_native_tool_context():
 @pytest.fixture(autouse=True)
 def _restore_mlx_default_device():
     """A test that moves MLX to the CPU must not leave it there: a later test's Metal kernels would then run
-    on the CPU (test_lane_linear failed only in suite order this way)."""
-    mx = _sys.modules.get("mlx.core")
+    on the CPU (test_lane_linear failed only in suite order this way). A stub mlx.core some tests swap in is
+    left alone."""
+
+    def real_mx():
+        mx = _sys.modules.get("mlx.core")
+        if hasattr(mx, "default_device") and hasattr(mx, "set_default_device"):
+            return mx
+        return None
+
+    mx = real_mx()
     previous = mx.default_device() if mx is not None else None
     yield
-    mx = _sys.modules.get("mlx.core")
+    mx = real_mx()
     if mx is None:
         return
     if previous is None:

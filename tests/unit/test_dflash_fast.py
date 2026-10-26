@@ -28,6 +28,50 @@ def test_measured_short_request_is_admitted(admission):
     assert fast.eligible(None, None, [], admission)
 
 
+def test_keyed_sampled_request_is_admitted(admission):
+    from yunshu_engine.keyed_sampling import KeyedSampler
+    from yunshu_engine.vlm_batch_runner import RowParams
+
+    admission.update(
+        greedy_sampling=False, sampler=KeyedSampler(RowParams(0.7, 0.95, 20, 0.0), 17)
+    )
+    assert fast.eligible(None, None, [], admission)
+    admission["sampler"].params.xtc_probability = 0.5
+    assert not fast.eligible(None, None, [], admission)
+
+
+def test_keyed_tool_guide_uses_explicit_guided_admission(monkeypatch, admission):
+    from yunshu_engine.keyed_sampling import KeyedSampler
+    from yunshu_engine.vlm_batch_runner import RowParams
+
+    admission.update(
+        greedy_sampling=False, sampler=KeyedSampler(RowParams(0.7, 1, 0, 0), 11)
+    )
+    monkeypatch.setitem(mtp_lane._STATE, "guide", object())
+    assert not fast.eligible(None, None, [], admission)
+    assert fast.eligible(None, None, [], admission, guided=True)
+
+
+@pytest.mark.parametrize("sampled", [False, True])
+def test_positioned_or_reported_requests_cannot_reach_relative_chain_handoff(
+    monkeypatch, admission, sampled
+):
+    from yunshu_engine import constrained_spec as cs
+    from yunshu_engine.keyed_sampling import KeyedSampler
+    from yunshu_engine.vlm_batch_runner import RowParams
+
+    monkeypatch.setattr(fast, "context_length", lambda *_: fast.CONTEXT_LIMIT - 300)
+    if sampled:
+        admission.update(
+            greedy_sampling=False, sampler=KeyedSampler(RowParams(0.7, 1, 0, 0), 11)
+        )
+    else:
+        monkeypatch.setattr(cs, "_REQUEST", cs.SpecRequest(True))
+    assert fast.eligible(None, None, [], admission)
+    admission["max_tokens"] = 512
+    assert not fast.eligible(None, None, [], admission)
+
+
 @pytest.mark.parametrize(
     "damage",
     [

@@ -348,6 +348,32 @@ class RaggedKVCache:
         return n
 
 
+def to_lane_cache(cache: Any) -> Any | None:
+    """A one-live-row bf16 ``RaggedKVCache`` as the speculative lane's single-row stock cache.
+
+    The lane's fast tree reads ``KVCache`` / one-row ``BatchKVCache`` buffers (``_lane_length``);
+    a shared batch that once held a peer keeps ragged caches after the peer leaves. The buffer
+    slot holds the same data (keys at ``0 .. n - 1``), so this is a view, not a recompute. None
+    when the cache is not convertible (several live rows, int8 format, empty)."""
+    if (
+        not isinstance(cache, RaggedKVCache)
+        or cache.quantized
+        or cache.keys is None
+        or cache.values is None
+        or len(cache.lengths) != 1
+    ):
+        return None
+    from mlx_vlm.models.cache import BatchKVCache
+
+    slot, n = cache.slots[0], cache.lengths[0]
+    lane = BatchKVCache([0])
+    lane.keys = cache.keys[slot : slot + 1]
+    lane.values = cache.values[slot : slot + 1]
+    lane._idx = n
+    lane.offset = mx.array([n])
+    return lane
+
+
 # ── single-row lane: the kernel over a stock KVCache ─────────────────────────
 
 

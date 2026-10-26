@@ -884,7 +884,10 @@
       "why": "position-keyed Gumbel-max sampling, so a drafted token is accepted exactly when serial sampling would draw it",
       "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
       "reviewed_date": "2026-10-08",
-      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B.",
+      "local_changes": [
+        "Depth-indexed tree target draws and full-vocabulary coupled draft scores reuse the existing request seed and RowSampler filter order."
+      ]
     },
     {
       "kind": "inspired",
@@ -918,7 +921,8 @@
       "reviewed_date": "2026-10-08",
       "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B.",
       "local_changes": [
-        "drafter K|V and gate|up stacked into single matmuls (stack_projections, after TensorFold lane_fuse attn_kv / mlp_gate_up); lattice candidates from the reduced draft vocabulary (after DFlashDrafter.draft_vocab)"
+        "drafter K|V and gate|up stacked into single matmuls (stack_projections, after TensorFold lane_fuse attn_kv / mlp_gate_up); lattice candidates from the reduced draft vocabulary (after DFlashDrafter.draft_vocab)",
+        "Supported keyed sampled proposals rank the full vocabulary after filtering and shared Gumbel perturbation; greedy proposals retain the reduced vocabulary and trained pairwise calibration."
       ]
     },
     {
