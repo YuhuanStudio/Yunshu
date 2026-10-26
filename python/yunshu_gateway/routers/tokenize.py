@@ -72,7 +72,9 @@ def _with_dict_tool_arguments(messages: list[dict]) -> list[dict]:
     """``messages`` with OpenAI's JSON-string ``function.arguments`` parsed to mappings, as the
     engines do before rendering (templates iterate the arguments; a string raised in the preview
     while generation rendered it). Not mutated."""
-    from yunshu_engine.vlm_engine import VLMEngine
+    if not any(isinstance(m, dict) and m.get("tool_calls") for m in messages):
+        return messages
+    from yunshu_engine.vlm_engine import VLMEngine  # imports MLX: only when needed
 
     out = []
     for m in messages:
