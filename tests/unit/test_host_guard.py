@@ -153,7 +153,10 @@ def test_custom_scheme_origins_via_cors_origins(monkeypatch):
     for origin in ("app://.", "vscode-webview://abc-123", "null"):
         assert c.post("/x", headers={**h, "Origin": origin}).status_code == 403
     monkeypatch.setenv("YUNSHU_CORS_ORIGINS", "vscode-webview://*,app://.")
-    assert c.post("/x", headers={**h, "Origin": "vscode-webview://abc-123"}).status_code == 200
+    assert (
+        c.post("/x", headers={**h, "Origin": "vscode-webview://abc-123"}).status_code
+        == 200
+    )
     assert c.post("/x", headers={**h, "Origin": "app://."}).status_code == 200
     assert c.post("/x", headers={**h, "Origin": "app://other"}).status_code == 403
     assert c.post("/x", headers={**h, "Origin": "null"}).status_code == 403
@@ -161,6 +164,8 @@ def test_custom_scheme_origins_via_cors_origins(monkeypatch):
     assert c.post("/x", headers={**h, "Origin": "null"}).status_code == 403
     # credentials-bearing clients were never affected
     assert (
-        c.post("/x", headers={**h, "Origin": "null", "Authorization": "Bearer t"}).status_code
+        c.post(
+            "/x", headers={**h, "Origin": "null", "Authorization": "Bearer t"}
+        ).status_code
         == 200
     )

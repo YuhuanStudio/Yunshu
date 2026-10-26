@@ -122,7 +122,9 @@ def origin_ok(origin: str, host_header: str | None) -> bool:
     """Whether a cross-origin-capable request from ``origin`` may change state."""
     from .live_cors import current_origins
 
-    if origin.strip().lower() == "null":  # sandboxed iframe, file://: never a known origin
+    if (
+        origin.strip().lower() == "null"
+    ):  # sandboxed iframe, file://: never a known origin
         return False
     allowed = current_origins()
     if "*" in allowed or origin in allowed:

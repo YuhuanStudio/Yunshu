@@ -2171,7 +2171,9 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                 from ..token_budget import estimate_tools_tokens
 
                 _tools_tok = estimate_tools_tokens(req.tools)
-                char_upper += _tools_tok  # already tokens: not scaled into the bound's unit
+                char_upper += (
+                    _tools_tok  # already tokens: not scaled into the bound's unit
+                )
             _max_ctx = get_max_context_window(req.model, engine) or 0
             _cap = get_max_prefill_tokens()
             # Provably safe if the upper bound clears both limits with 10% headroom

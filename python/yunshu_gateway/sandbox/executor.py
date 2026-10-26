@@ -442,7 +442,7 @@ class CodeExecutor:
         if p is None or cmd not in ("view", "create", "str_replace"):
             return ExecResult(False, "invalid_tool_input", text="bad command or path")
         async with self._lock(c.id):
-            r = await asyncio.to_thread(self._edit, p, cmd, args)
+            r = await asyncio.to_thread(self._edit, p, cmd, args, str(c.path))
         r.elapsed = time.monotonic() - t0
         logger.info("code_exec_editor container=%s cmd=%s ok=%s", c.id, cmd, r.ok)
         return r
@@ -465,8 +465,28 @@ class CodeExecutor:
             view = view[os.write(fd, view) :]
         return None
 
-    def _edit(self, p: tuple[Path, list[str]], cmd: str, a: dict) -> ExecResult:
+    def _edit(
+        self, p: tuple[Path, list[str]], cmd: str, a: dict, unresolved_root: str = ""
+    ) -> ExecResult:
         root, parts = p
+        extra = (str(root), unresolved_root) if unresolved_root else (str(root),)
+
+        def _open(path_parts, flags, **kw):
+            return cfiles.open_confined(
+                root, path_parts, flags, extra_roots=extra, **kw
+            )
+
+        def _refused(verb: str, err: OSError) -> ExecResult:
+            if isinstance(err, cfiles.LinkEscapeError):
+                return ExecResult(
+                    False,
+                    "invalid_tool_input",
+                    text=f"cannot {verb} that path: a link on the way leads outside the container",
+                )
+            return ExecResult(
+                False, "invalid_tool_input", text=f"cannot {verb} that path"
+            )
+
         name = parts[-1] if parts else ""
         if cmd == "create":
             text = a.get("file_text")
@@ -481,20 +501,16 @@ class CodeExecutor:
             existed = True
             try:
                 try:
-                    fd = cfiles.open_confined(root, parts, os.O_WRONLY)
+                    fd = _open(parts, os.O_WRONLY)
                 except FileNotFoundError:
                     existed = False
-                    fd = cfiles.open_confined(
-                        root, parts, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mkdirs=True
-                    )
+                    fd = _open(parts, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mkdirs=True)
             except IsADirectoryError:
                 return ExecResult(
                     False, "invalid_tool_input", text="path is a directory"
                 )
-            except OSError:
-                return ExecResult(
-                    False, "invalid_tool_input", text="cannot write to that path"
-                )
+            except OSError as err:
+                return _refused("write to", err)
             try:
                 bad = self._replace_fd(fd, text.encode())
             finally:
@@ -509,11 +525,11 @@ class CodeExecutor:
                 text=f"{'Updated' if existed else 'Created'} {a['path']}",
             )
         try:
-            fd = cfiles.open_confined(root, parts, os.O_RDONLY)
+            fd = _open(parts, os.O_RDONLY)
         except FileNotFoundError:
             return ExecResult(False, "file_not_found", text=str(a.get("path")))
-        except OSError:
-            return ExecResult(False, "invalid_tool_input", text="cannot read that path")
+        except OSError as err:
+            return _refused("read", err)
         try:
             mode = os.fstat(fd).st_mode
             if stat_mod.S_ISDIR(mode):
@@ -592,11 +608,9 @@ class CodeExecutor:
             )
         start_line = text[: text.index(old)].count("\n") + 1
         try:
-            wfd = cfiles.open_confined(root, parts, os.O_WRONLY)
-        except OSError:
-            return ExecResult(
-                False, "invalid_tool_input", text="cannot write to that path"
-            )
+            wfd = _open(parts, os.O_WRONLY)
+        except OSError as err:
+            return _refused("write to", err)
         try:
             bad = self._replace_fd(wfd, text.replace(old, new, 1).encode())
         finally:

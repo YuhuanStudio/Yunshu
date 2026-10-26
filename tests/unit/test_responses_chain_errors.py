@@ -73,7 +73,10 @@ def test_missing_middle_parent_is_404_naming_the_missing_id(monkeypatch):
     assert "'r1'" in str(ei.value.message)
     # actionable: says it was an ancestor, the store limit, and how to continue
     assert "chain of 'r2'" in ei.value.message
-    assert "1024" in ei.value.message and "without `previous_response_id`" in ei.value.message
+    assert (
+        "1024" in ei.value.message
+        and "without `previous_response_id`" in ei.value.message
+    )
 
 
 def test_cancelled_and_failed_parents_replay_input_but_no_assistant_turn(monkeypatch):

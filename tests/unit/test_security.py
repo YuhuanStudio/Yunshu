@@ -167,7 +167,9 @@ def _managed_keys_case(store):
 
     c = _metrics_client()
     assert c.get("/metrics").status_code == 401
-    assert c.get("/metrics", headers={"Authorization": "Bearer nope"}).status_code == 401
+    assert (
+        c.get("/metrics", headers={"Authorization": "Bearer nope"}).status_code == 401
+    )
     r_infer = c.get("/metrics", headers={"x-api-key": secret(infer)})
     assert r_infer.status_code == 403
     r_admin = c.get("/metrics", headers={"Authorization": f"Bearer {secret(admin)}"})

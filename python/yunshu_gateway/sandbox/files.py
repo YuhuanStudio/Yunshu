@@ -9,6 +9,7 @@ OpenAI's ``/mnt/data`` is the working directory: ``/mnt/data/a/b.csv`` is ``work
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import stat as stat_mod
@@ -90,38 +91,105 @@ def _walk(c: Container, parts: list[str], create: bool) -> int:
         raise
 
 
+class LinkEscapeError(PermissionError):
+    """A link met on the way leads out of the container root (or loops)."""
+
+
+MAX_LINK_HOPS = 16
+
+
+def _link_target_parts(
+    target: str, root: Path, extra_roots: tuple[str, ...]
+) -> tuple[bool, list[str]]:
+    """``(absolute, components)`` of a link target; an absolute target counts only when it names
+    a place inside the container (its real path, or OpenAI's ``/mnt/data`` = ``work/``)."""
+    if not target.startswith("/"):
+        return False, [p for p in target.split("/") if p not in ("", ".")]
+    for prefix, base in ((MNT, ["work"]),) + tuple((r, []) for r in extra_roots):
+        if target == prefix or target.startswith(prefix.rstrip("/") + "/"):
+            rest = target[len(prefix) :].split("/")
+            return True, base + [p for p in rest if p not in ("", ".")]
+    raise LinkEscapeError(errno.EACCES, "link leaves the container")
+
+
 def open_confined(
-    root: Path, parts: list[str], flags: int, *, mode: int = 0o600, mkdirs: bool = False
+    root: Path,
+    parts: list[str],
+    flags: int,
+    *,
+    mode: int = 0o600,
+    mkdirs: bool = False,
+    extra_roots: tuple[str, ...] = (),
 ) -> int:
     """Open ``root/parts`` with every component relative to a directory descriptor and
     ``O_NOFOLLOW``: a link swapped in at any point is an error (ELOOP / ENOTDIR), never a detour
     out of ``root``. ``O_NONBLOCK`` keeps a FIFO from hanging the open; the caller still checks
-    ``fstat`` for the kind of object it got. Raises OSError (FileNotFoundError when missing)."""
-    fd = os.open(str(root), os.O_RDONLY | os.O_DIRECTORY)
+    ``fstat`` for the kind of object it got. Raises OSError (FileNotFoundError when missing).
+
+    A symlink the sandboxed code made is followed by hand, one hop at a time, as long as its
+    target stays inside ``root`` (relative targets, ``..`` never above ``root``, absolute targets
+    under ``root``, ``extra_roots`` or ``/mnt/data``); anything that leaves the container, or more
+    than ``MAX_LINK_HOPS`` links, raises :class:`LinkEscapeError` (an ``OSError``)."""
+    stack = [os.open(str(root), os.O_RDONLY | os.O_DIRECTORY)]
+    pending = list(parts) or ["."]
+    hops = 0
     try:
-        for comp in parts[:-1]:
+        while pending:
+            comp = pending.pop(0)
+            last = not pending
+            if comp == "." or comp == "":
+                if last:
+                    return os.open(
+                        ".",
+                        flags | os.O_NOFOLLOW | os.O_NONBLOCK,
+                        mode,
+                        dir_fd=stack[-1],
+                    )
+                continue
+            if comp == "..":
+                if len(stack) == 1:
+                    raise LinkEscapeError(errno.EACCES, "link leaves the container")
+                os.close(stack.pop())
+                if last:
+                    return os.open(
+                        ".",
+                        flags | os.O_NOFOLLOW | os.O_NONBLOCK,
+                        mode,
+                        dir_fd=stack[-1],
+                    )
+                continue
+            cur = stack[-1]
             try:
-                nxt = os.open(
-                    comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
-                )
+                is_link = stat_mod.S_ISLNK(os.lstat(comp, dir_fd=cur).st_mode)
             except FileNotFoundError:
-                if not mkdirs:
-                    raise
-                os.mkdir(comp, 0o700, dir_fd=fd)
-                nxt = os.open(
-                    comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
+                is_link = False
+                if not last and mkdirs:
+                    os.mkdir(comp, 0o700, dir_fd=cur)
+            if is_link:
+                hops += 1
+                if hops > MAX_LINK_HOPS:
+                    raise LinkEscapeError(errno.ELOOP, "too many links")
+                absolute, tparts = _link_target_parts(
+                    os.readlink(comp, dir_fd=cur), root, extra_roots
                 )
-            os.close(fd)
-            fd = nxt
-        last = os.open(
-            parts[-1] if parts else ".",
-            flags | os.O_NOFOLLOW | os.O_NONBLOCK,
-            mode,
-            dir_fd=fd,
-        )
-        return last
+                if absolute:
+                    while len(stack) > 1:
+                        os.close(stack.pop())
+                pending = tparts + pending
+                if not pending:
+                    pending = ["."]
+                continue
+            if last:
+                return os.open(
+                    comp, flags | os.O_NOFOLLOW | os.O_NONBLOCK, mode, dir_fd=cur
+                )
+            stack.append(
+                os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=cur)
+            )
+        raise FileNotFoundError(errno.ENOENT, "empty path")
     finally:
-        os.close(fd)
+        for fd in stack:
+            os.close(fd)
 
 
 def write_file(
