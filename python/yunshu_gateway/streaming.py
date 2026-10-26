@@ -438,6 +438,7 @@ class ThinkingParser:
 
 _THINKING_PATTERN = re.compile(r"<think\s*/?\s*>(.*?)</think\s*/?\s*>", re.DOTALL)
 _THINKING_TAIL_PATTERN = re.compile(r"^(.*?)</think\s*/?\s*>", re.DOTALL)
+_TOOL_CALL_BLOCK = re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL)
 _GEMMA_THINK_PATTERN = re.compile(
     r"<start_think\s*/?\s*>(.*?)</end_think\s*/?\s*>(.*)", re.DOTALL
 )
@@ -503,8 +504,17 @@ def extract_thinking(text: str, model_name: str | None = None) -> tuple[str, str
     # no close: what follows it is still reasoning, as the streaming split reports it.
     unclosed = _OPEN_RE.search(remaining)
     if unclosed is not None and not _CLOSE_RE.search(remaining[unclosed.end() :]):
-        thinking_parts.append(remaining[unclosed.end() :])
-        remaining = remaining[: unclosed.start()]
+        rest = remaining[unclosed.end() :]
+        # Qwen3.x sometimes opens a tool call inside reasoning it never closes: a COMPLETE
+        # call block there is the implicit end of the reasoning (vLLM / SGLang Qwen3 parsers,
+        # and the engines' own marker handling), not thinking text the client never sees.
+        call = _TOOL_CALL_BLOCK.search(rest)
+        if call is not None:
+            thinking_parts.append(rest[: call.start()])
+            remaining = remaining[: unclosed.start()] + rest[call.start() :]
+        else:
+            thinking_parts.append(rest)
+            remaining = remaining[: unclosed.start()]
 
     if thinking_parts:
         thinking = "\n".join(thinking_parts).strip()

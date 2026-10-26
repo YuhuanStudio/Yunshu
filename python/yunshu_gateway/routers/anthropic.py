@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 _MAX_STREAMING_TEXT_BUFFER = 1 * 1024 * 1024
 _TRUNCATE_KEEP = 512 * 1024
+_TOOL_ARG_CHUNK = 4096  # input_json_delta frame size (the whole call is known; 8-char frames cost ~100x SSE sends)
 import contextlib
 import os
 
@@ -46,6 +47,7 @@ from ..engine import get_engine
 from ..error_envelope import EngineStreamError
 from ..responses_context import ContextError
 from ..streaming import (
+    ClosingStreamingResponse,
     run_with_disconnect_guard,
     with_sse_keepalive,
 )
@@ -173,13 +175,6 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
         get_metrics().record_inference()
     except Exception:
         logger.debug("metrics recording failed", exc_info=True)
-    # feed the per-request TPM box (see usage_context).
-    try:
-        from ..usage_context import record_billed_tokens
-
-        record_billed_tokens((prompt_tokens or 0) + (completion_tokens or 0))
-    except Exception:
-        logger.debug("billed-token accounting failed", exc_info=True)
 
 
 # ── Request / Response schemas ──
@@ -302,6 +297,21 @@ class AnthropicMessagesRequest(BaseModel):
             raise ValueError("stop_sequences: individual sequences must be non-empty")
         if self.stop_token_ids and len(self.stop_token_ids) > 16:
             raise ValueError("stop_token_ids: maximum 16 stop token IDs")
+        # A malformed tool_choice used to fall through as "auto"; Anthropic answers 400.
+        if self.tool_choice is not None:
+            _tc = self.tool_choice
+            _kinds = ("auto", "any", "none", "tool")
+            _kind = _tc.get("type") if isinstance(_tc, dict) else _tc
+            if _kind not in _kinds:
+                raise ValueError(
+                    f"tool_choice.type must be one of {', '.join(_kinds)}, got {_kind!r}"
+                )
+            if _kind == "tool" and not (
+                isinstance(_tc, dict)
+                and isinstance(_tc.get("name"), str)
+                and _tc["name"]
+            ):
+                raise ValueError("tool_choice.name is required when type is 'tool'")
         # Validate thinking configuration per Anthropic spec
         if self.thinking:
             if self.thinking.get("display") not in (
@@ -796,6 +806,14 @@ def _split_thinking(content: list) -> tuple[list, str]:
         elif t != "redacted_thinking":
             keep.append(b)
     return keep, "\n".join(think)
+
+
+def _clamped_thinking_budget(granted: int | None, max_tokens: int) -> int | None:
+    """Thinking budget after the context clamp: strictly below ``max_tokens`` so the answer
+    keeps at least one token (the request validator enforces budget_tokens < max_tokens)."""
+    if granted is None:
+        return None
+    return min(granted, max(1, max_tokens - 1))
 
 
 def _thinking_switches(req) -> tuple[bool | None, int | None]:
@@ -2100,6 +2118,11 @@ async def _create_message(
             engine, "tokenizer", None
         )
         _pf_est = count_message_tokens(messages, _pf_tok)
+        if getattr(req, "_native_active", False):
+            # native tool schemas are rendered by the template, outside `messages`
+            from ..token_budget import estimate_tools_tokens
+
+            _pf_est += estimate_tools_tokens(req.tools)
         validate_context_window(_pf_est, req.model, engine)
         validate_prefill_memory(_pf_est)
         from ..token_budget import plan_for_engine
@@ -2112,7 +2135,10 @@ async def _create_message(
             if _th is not None and req.thinking is not None:
                 req.thinking = {
                     **req.thinking,
-                    "budget_tokens": _tb.thinking_budget_granted,
+                    # the validator's own rule: budget_tokens < max_tokens
+                    "budget_tokens": _clamped_thinking_budget(
+                        _tb.thinking_budget_granted, req.max_tokens
+                    ),
                 }
     except HTTPException as e:
         return JSONResponse(
@@ -2145,7 +2171,7 @@ async def _create_message(
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
 
     if req.stream:
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             _stream_anthropic(
                 engine,
                 messages,
@@ -3211,8 +3237,10 @@ async def _stream_anthropic(
                                         and _args_str != "{}"
                                         and not _tc_args_streamed
                                     ):
-                                        for _ci in range(0, len(_args_str), 8):
-                                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + 8]}})}\n\n"
+                                        for _ci in range(
+                                            0, len(_args_str), _TOOL_ARG_CHUNK
+                                        ):
+                                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + _TOOL_ARG_CHUNK]}})}\n\n"
                                     yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                     block_index += 1
                                     tool_use_block_started = False
@@ -3392,8 +3420,8 @@ async def _stream_anthropic(
                                 _tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                                 yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': _tool_id, 'name': _tc_out.tool_call.name, 'input': {}}})}\n\n"
                                 _args_str = _tc_out.tool_call.arguments or "{}"
-                                for _ci in range(0, len(_args_str), 8):
-                                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + 8]}})}\n\n"
+                                for _ci in range(0, len(_args_str), _TOOL_ARG_CHUNK):
+                                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + _TOOL_ARG_CHUNK]}})}\n\n"
                                 yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                 block_index += 1
                                 tool_use_block_started = False
@@ -3476,8 +3504,8 @@ async def _stream_anthropic(
                     _tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                     yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': _tool_id, 'name': _tc_out.tool_call.name, 'input': {}}})}\n\n"
                     _args_str = _tc_out.tool_call.arguments or "{}"
-                    for _ci in range(0, len(_args_str), 8):
-                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + 8]}})}\n\n"
+                    for _ci in range(0, len(_args_str), _TOOL_ARG_CHUNK):
+                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + _TOOL_ARG_CHUNK]}})}\n\n"
                     yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                     block_index += 1
                     tool_use_block_started = False

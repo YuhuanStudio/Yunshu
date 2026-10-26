@@ -441,3 +441,24 @@ def test_engine_error_reaches_openai_streams(engine, path):
     with patch.object(engine, "stream_chat", failing):
         r = client.post(path, json=body)
     assert "template exploded" in r.text
+
+
+def test_large_tool_input_streams_in_large_json_deltas(engine):
+    """A 60 KB Write body used to go out as ~7500 eight-character input_json_delta frames."""
+    body = "x" * 60_000
+    call = (
+        "<tool_call>\n<function=Bash>\n<parameter=command>\n"
+        + body
+        + "\n</parameter>\n</function>\n</tool_call>"
+    )
+    events = _raw_events(engine, call)
+    parts = [
+        d["delta"]["partial_json"]
+        for n, d in events
+        if n == "content_block_delta" and d["delta"]["type"] == "input_json_delta"
+    ]
+    assert json.loads("".join(parts)) == {"command": body}
+    assert len(parts) <= 60_000 // 1024
+    names = [n for n, _ in events]
+    assert names.index("content_block_start") < names.index("content_block_delta")
+    assert names[-3:] == ["content_block_stop", "message_delta", "message_stop"]

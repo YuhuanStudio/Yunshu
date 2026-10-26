@@ -586,6 +586,7 @@ from ..server_tools.responses_loop import (
     input_item_to_messages,
 )
 from ..streaming import (
+    ClosingStreamingResponse,
     format_responses_completed,
     format_responses_content_part_added,
     format_responses_content_part_done,
@@ -989,6 +990,62 @@ def _extract_input_text(content) -> str | list:
     return "\n".join(text_parts)
 
 
+def _coalesce_assistant_turns(
+    messages: list[dict], *, drop_trailing_empty: bool = False
+) -> list[dict]:
+    """Rebuild one assistant turn from the Responses items one response generated.
+
+    A response with parallel tool calls is output as [reasoning, message(text=""),
+    function_call, function_call ...]; replayed item by item that becomes a blank assistant
+    turn plus one assistant turn per call, whereas the model generated ONE turn. The chat
+    template then renders a history the model never produced (and the prefix cache diverges
+    at the previous turn on every tool loop). Here an empty-text assistant message is dropped
+    (its reasoning moves to the following assistant message) and a tool-call-only assistant
+    message joins the assistant message right before it. A trailing empty message is kept
+    unless ``drop_trailing_empty`` (a chain replay is always followed by the new input)."""
+    out: list[dict] = []
+    carry: str | None = None
+    last = len(messages) - 1
+    for i, m in enumerate(messages):
+        if m.get("role") != "assistant":
+            out.append(m)
+            continue
+        if carry:
+            rc = m.get("reasoning_content")
+            m = {**m, "reasoning_content": f"{carry}\n{rc}" if rc else carry}
+            carry = None
+        tool_calls = m.get("tool_calls")
+        if not tool_calls and m.get("content") == "":
+            nxt = messages[i + 1] if i < last else None
+            if nxt is not None and nxt.get("role") == "assistant":
+                carry = m.get("reasoning_content")
+                continue
+            if (nxt is not None or drop_trailing_empty) and not m.get(
+                "reasoning_content"
+            ):
+                continue
+        prev = out[-1] if out else None
+        if (
+            tool_calls
+            and m.get("content") == ""
+            and prev is not None
+            and prev.get("role") == "assistant"
+        ):
+            merged = {
+                **prev,
+                "tool_calls": [*(prev.get("tool_calls") or []), *tool_calls],
+            }
+            if m.get("reasoning_content"):
+                rc = prev.get("reasoning_content")
+                merged["reasoning_content"] = (
+                    f"{rc}\n{m['reasoning_content']}" if rc else m["reasoning_content"]
+                )
+            out[-1] = merged
+            continue
+        out.append(m)
+    return out
+
+
 def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
     """Convert Responses API input to OpenAI chat messages."""
     messages: list[dict[str, Any]] = []
@@ -1086,7 +1143,7 @@ def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
                 _take_reasoning({"role": role, "content": _extract_input_text(content)})
             )
 
-    return messages
+    return _coalesce_assistant_turns(messages)
 
 
 def _parse_response_format(rf: dict | None, grammar: dict | None = None) -> dict | None:
@@ -1336,7 +1393,7 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
     _bg_tasks.add(task := asyncio.create_task(_runner()))
     task.add_done_callback(_bg_tasks.discard)
     if bg is not None:
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             bg.follow(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},
@@ -1481,14 +1538,15 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
         # replay (and then exfiltrate) its private input/output. Mirrors the
         # GET /responses/{id} ownership guard. A foreign id reads as unknown.
         if not _prev or not _owns_stored(request, _prev):
-            if len(_seen) == 1:
-                raise ContextError(
-                    404,
-                    f"Previous response with id '{req.previous_response_id}' not found.",
-                    "previous_response_not_found",
-                    "previous_response_id",
-                )
-            break
+            # Any missing hop (evicted from the LRU, deleted mid-chain, foreign) is an
+            # error: walking on with the newest turns only would answer from a silently
+            # truncated history (the task statement is usually in the oldest turn).
+            raise ContextError(
+                404,
+                f"Previous response with id '{_prev_id}' not found.",
+                "previous_response_not_found",
+                "previous_response_id",
+            )
         # Build this hop's turn as a UNIT in natural
         # order (user input(s) then the assistant reply) and prepend the whole unit.
         # The old code prepended user input but APPENDED assistant output, so a
@@ -1501,7 +1559,14 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
         if _stored_input:
             _turn.extend(_stored_input)
         _rs_pending: list[str] = []
-        for out in _prev.get("output") or []:
+        # a failed / cancelled response has no finished assistant turn to replay (its
+        # input still happened); incomplete (max_output_tokens) output is real history
+        _outputs = (
+            []
+            if _prev.get("status") in ("failed", "cancelled")
+            else _prev.get("output") or []
+        )
+        for out in _outputs:
             if out.get("type") == "reasoning":
                 _rt = reasoning_text_of(out)
                 if _rt:
@@ -1561,6 +1626,7 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
                 "previous_response_chain_too_long",
                 "previous_response_id",
             )
+    chain = _coalesce_assistant_turns(chain, drop_trailing_empty=True)
     if chain:
         # Inject chain after any system message but before the new user input
         if messages and messages[0].get("role") == "system":
@@ -1801,7 +1867,11 @@ async def create_response(req: ResponsesRequest, request: Request):
         from ..streaming import validate_context_window, validate_prefill_memory
 
         _tok = getattr(engine, "_tokenizer", None) or getattr(engine, "tokenizer", None)
-        _est = count_message_tokens(messages, _tok)
+        # tool definitions (rendered natively or injected below) are not in `messages` yet
+        from ..token_budget import estimate_tools_tokens
+
+        _tools_est = estimate_tools_tokens(req.tools)
+        _est = count_message_tokens(messages, _tok) + _tools_est
         if req.truncation == "auto":
             from ..streaming import get_max_context_window
 
@@ -1813,7 +1883,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                     messages,
                     _est,
                     _room,
-                    lambda ms: count_message_tokens(ms, _tok),
+                    lambda ms: count_message_tokens(ms, _tok) + _tools_est,
                 )
                 if len(messages) < len(_before):
                     # never silent: what was dropped goes to x_yunshu.context_policy
@@ -1963,7 +2033,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 detail="n>1 is not supported with stream=True for the Responses API. "
                 "Use stream=False for multiple completions, or stream=True with n=1.",
             )
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             _stream_response(
                 engine,
                 req,
@@ -3627,7 +3697,7 @@ async def get_response(
                     }
                 },
             )
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             bg.follow(starting_after),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},

@@ -11,6 +11,7 @@ asked. A request that fits is untouched and reports nothing.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -68,6 +69,23 @@ class TokenBudget:
                 info.budget = self.report()
             except Exception:
                 logger.debug("budget report not attached", exc_info=True)
+
+
+def estimate_tools_tokens(tools: Any) -> int:
+    """Cheap token estimate (about 4 characters per token, no encode) for tool definitions the
+    chat template renders itself (native tools): they sit outside ``messages``, so a guard that
+    counts only messages overstates the room an agent with 15-25K tokens of schemas has."""
+    if not tools:
+        return 0
+    try:
+        items = [
+            t.model_dump(exclude_none=True) if hasattr(t, "model_dump") else t
+            for t in tools
+        ]
+        return len(json.dumps(items, ensure_ascii=False, default=str)) // 4
+    except Exception:
+        logger.debug("tool size estimate failed", exc_info=True)
+        return 0
 
 
 def plan(

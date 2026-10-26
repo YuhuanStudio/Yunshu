@@ -214,14 +214,6 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
         )
     except Exception:
         logger.debug("metrics recording failed", exc_info=True)
-    # Attribute this request's tokens to the per-request box so the auth
-    # middleware can enforce the tenant's tokens_per_minute quota at settle.
-    try:
-        from ..usage_context import record_billed_tokens
-
-        record_billed_tokens((prompt_tokens or 0) + (completion_tokens or 0))
-    except Exception:
-        logger.debug("billed-token accounting failed", exc_info=True)
 
 
 def _apply_lora_adapter(engine, adapter_id: str | None) -> str | None:
@@ -355,14 +347,6 @@ class ChatMessage(BaseModel):
         # extraction normalizes it to an empty string; only explicit empty
         # content is a malformed request.
         if self.role in ("user", "system", "developer"):
-            if (
-                isinstance(self.content, str)
-                and self.content != ""
-                and not self.content.strip()
-            ):
-                raise ValueError(
-                    f"messages: {self.role} message content cannot be whitespace-only"
-                )
             if isinstance(self.content, list) and len(self.content) == 0:
                 raise ValueError(
                     f"messages: {self.role} message content list cannot be empty"
@@ -543,15 +527,15 @@ class ChatCompletionRequest(BaseModel):
                 "messages: must contain at least one message with role 'user'"
             )
 
-        # Reject if EVERY user message has empty content (str that
-        # is empty/whitespace). List content (multimodal w/ images) is allowed
+        # Reject if EVERY user message has empty content (None or ""; OpenAI
+        # accepts whitespace-only strings such as "\n"). List content (multimodal w/ images) is allowed
         # even with empty text. Prevents the degenerate "nothing to respond to"
         # request that produces zero-token output.
         def _is_empty_content(c) -> bool:
             if c is None:
                 return True
             if isinstance(c, str):
-                return not c.strip()
+                return c == ""
             return False  # list content (multimodal) is non-empty by structure
 
         if all(_is_empty_content(m.content) for m in _user_msgs):
@@ -2164,6 +2148,13 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                             ):
                                 image_count += 1
             char_upper += image_count * IMAGE_TOKEN_ESTIMATE
+            # tools a native chat template renders itself are not in `messages`
+            _tools_tok = 0
+            if req.tools and _native_tools_active():
+                from ..token_budget import estimate_tools_tokens
+
+                _tools_tok = estimate_tools_tokens(req.tools)
+                char_upper += _tools_tok * 4  # chars, the unit of this bound
             _max_ctx = get_max_context_window(req.model, engine) or 0
             _cap = get_max_prefill_tokens()
             # Provably safe if the upper bound clears both limits with 10% headroom
@@ -2172,14 +2163,27 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                 char_upper + (req.effective_max_tokens() or 0) < _max_ctx * 0.9
             )
             _cap_safe = char_upper < _cap * 0.9
-            if not (_ctx_safe and _cap_safe):
+            if (
+                not _ctx_safe
+                and _cap_safe
+                and _max_ctx
+                and char_upper < _max_ctx * 0.9
+                and req.max_tokens_source() != SOURCE_REQUEST
+            ):
+                # No max_tokens from the client: the default is the model limit (as large as
+                # the window), so `char_upper + max_tokens` can never clear it and every such
+                # request paid a full encode. The prompt provably fits (tokens <= chars), and
+                # the room it leaves is at least ctx - char_upper: clamp the default to that
+                # instead of encoding (a request's own max_tokens keeps the exact path).
+                _apply_token_budget(req, char_upper, engine)
+            elif not (_ctx_safe and _cap_safe):
                 # Near a limit — compute the precise count and enforce both guards.
                 # count_message_tokens already adds IMAGE_TOKEN_ESTIMATE
                 # per image block, so the old `+= image_count * IMAGE_TOKEN_ESTIMATE`
                 # here double-counted images — a multi-image prompt just under the
                 # window could be spuriously rejected. (The VLM sibling at ~1775
                 # already does this correctly.)
-                est_tokens = count_message_tokens(messages, tokenizer)
+                est_tokens = count_message_tokens(messages, tokenizer) + _tools_tok
                 validate_context_window(est_tokens, req.model, engine)
                 # Reject huge under-window prompts that would OOM-crash the prefill
                 # (uncatchable process death) before we attempt them.
@@ -2214,7 +2218,7 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
 
     if req.stream:
         if req.n > 1:
-            return StreamingResponse(
+            return ClosingStreamingResponse(
                 _stream_response_multi(
                     engine,
                     messages,
@@ -2231,7 +2235,7 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                     "X-Accel-Buffering": "no",
                 },
             )
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             _stream_response(
                 engine,
                 messages,
@@ -2645,12 +2649,20 @@ async def _handle_vlm_chat(
             f"(VLM) model '{req.model}'",
         )
 
+    # Tools: a chat template that renders `tools` itself (Qwen3.x) gets the
+    # definitions natively — the model's own tool-call format. Forced
+    # tool_choice (none/required/named) keeps the injected prompt, which
+    # carries those instructions.
+    # (decided before the budget guards below, which must see the tools' size too)
+    messages, native_tools = _vlm_tool_plan(req, vlm_engine, messages)
+
     # VLM/multimodal chat previously BYPASSED the context + prefill
     # guards entirely (dispatched here before the text-path validation block),
     # yet multimodal prompts (long video/image token expansions) are the most
     # likely to be huge. Enforce the same guards; VLM context now resolves via
     # the engine _config dict path. Safe no-op if context can't be
     # resolved (won't false-reject) — only catches egregiously over-window prompts.
+    _vlm_est = 0  # the guard's prompt-token estimate, reused below
     try:
         from yunshu_control.token_counter import (
             IMAGE_TOKEN_ESTIMATE,
@@ -2686,6 +2698,11 @@ async def _handle_vlm_chat(
             )
             _vlm_est = sum(len(str(m.get("content", ""))) for m in messages) // 4
             _vlm_est += _img * IMAGE_TOKEN_ESTIMATE
+        if native_tools:
+            # rendered by the template outside `messages`: count them like count_tokens does
+            from ..token_budget import estimate_tools_tokens
+
+            _vlm_est += estimate_tools_tokens(native_tools)
         validate_context_window(_vlm_est, req.model, vlm_engine)
         validate_prefill_memory(_vlm_est)
         _apply_token_budget(req, _vlm_est, vlm_engine)
@@ -2695,12 +2712,6 @@ async def _handle_vlm_chat(
         logger.debug("VLM context/prefill guard estimate failed", exc_info=True)
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
-
-    # Tools: a chat template that renders `tools` itself (Qwen3.x) gets the
-    # definitions natively — the model's own tool-call format. Forced
-    # tool_choice (none/required/named) keeps the injected prompt, which
-    # carries those instructions.
-    messages, native_tools = _vlm_tool_plan(req, vlm_engine, messages)
 
     if req.stream:
         return ClosingStreamingResponse(
@@ -2764,13 +2775,23 @@ async def _handle_vlm_chat(
     # returns 0 (e.g., timeout path). The authoritative count comes from the
     # engine result `r["prompt_tokens"]`, which already includes the per-image
     # vision-token estimate via vlm_engine._estimate_image_tokens().
-    fallback_prompt_tok = 0
-    if tok:
-        try:
-            prompt_text = vlm_engine._format_prompt(messages)
-            fallback_prompt_tok = len(tok.encode(prompt_text))
-        except Exception:
-            logger.debug("prompt token count failed", exc_info=True)
+    # Computed only when the engine reported 0 (a full template render + encode of the
+    # prompt on the event loop): the guard above already counted it (``_vlm_est``).
+    _fallback_cache: list[int] = []
+
+    def _fallback_prompt_tok() -> int:
+        if _vlm_est:
+            return _vlm_est
+        if not _fallback_cache:
+            n = 0
+            if tok:
+                try:
+                    n = len(tok.encode(vlm_engine._format_prompt(messages)))
+                except Exception:
+                    logger.debug("prompt token count failed", exc_info=True)
+            _fallback_cache.append(n)
+        return _fallback_cache[0]
+
     prompt_tok = 0
 
     async def _vlm_gen_one(idx: int):
@@ -2799,7 +2820,7 @@ async def _handle_vlm_chat(
         )
         # Use engine-reported prompt_tokens, which includes image-token estimate
         # from vlm_engine._estimate_image_tokens() .
-        pt = r.get("prompt_tokens", 0) or fallback_prompt_tok
+        pt = r.get("prompt_tokens", 0) or _fallback_prompt_tok()
         finish_reason = _normalize_finish_reason(r.get("finish_reason"))
 
         # Extract thinking content. the LLM text path calls extract_thinking
@@ -2973,7 +2994,7 @@ async def _handle_vlm_chat(
 
     # If every choice returned 0 (e.g., timeout), fall back to text-only count
     if prompt_tok == 0:
-        prompt_tok = fallback_prompt_tok
+        prompt_tok = _fallback_prompt_tok()
     # VLM completion count is len(tokens): every generated token, reasoning included.
     vlm_usage = openai_usage(
         prompt_tok, total_completion_tok, total_reasoning_tok, vlm_cached_tok
