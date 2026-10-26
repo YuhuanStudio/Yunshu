@@ -54,7 +54,12 @@ def install(*, plain=False):
             if not active:
                 return fn(*args, **kwargs)
             # Resolve producers before the span; nested spans remain exclusive.
-            evaluate((tuple(a for a in args if not isinstance(a, nn.Module)), kwargs))
+            try:
+                evaluate(
+                    (tuple(a for a in args if not isinstance(a, nn.Module)), kwargs)
+                )
+            except ValueError:  # traced inside a compiled function: run unprofiled
+                return fn(*args, **kwargs)
             key = label(*args, **kwargs) if callable(label) else label
             frame = [0.0]
             stack.append(frame)
@@ -95,7 +100,6 @@ def install(*, plain=False):
         LaneLinear.__call__ = wrap(LaneLinear.__call__, projection_key)
         mx.fast.rms_norm = wrap(mx.fast.rms_norm, "norm.rms")
         lang.swiglu = wrap(lang.swiglu, "elementwise.swiglu")
-        nn.silu = wrap(nn.silu, "elementwise.silu")
         for name in ("contiguous", "concatenate", "pad"):
             setattr(mx, name, wrap(getattr(mx, name), "copy." + name))
         nn.Conv1d.__call__ = wrap(nn.Conv1d.__call__, "gdn.conv")
@@ -169,6 +173,55 @@ def install(*, plain=False):
         return result
 
     PromptProcessingBatch.prompt_step = step
+    gen_original = PromptProcessingBatch.generate
+
+    def gen(self, *args, **kwargs):
+        nonlocal active
+        if not plain:
+            hooks()
+        mx.synchronize()
+        totals.clear()
+        metal.metalrt_begin()
+        start = time.perf_counter()
+        active = not plain
+        host_s = 0.0
+        try:
+            result = gen_original(self, *args, **kwargs)
+            host_s = time.perf_counter() - start
+            mx.synchronize()
+        finally:
+            active = False
+        tbuf = ctypes.create_string_buffer(16384)
+        tsize = metal.metalrt_end(tbuf, len(tbuf))
+        gen_timeline = json.loads(tbuf.value) if 0 <= tsize < len(tbuf) else {}
+        gen_timeline["host_return_ms"] = host_s * 1e3
+        print(
+            "COLDTTFT_PROFILE "
+            + json.dumps(
+                dict(
+                    start=-1,
+                    rows=1,
+                    cached=list(self._cached_tokens_per_row),
+                    wall_s=time.perf_counter() - start,
+                    attributed_s=sum(v[0] for v in totals.values()),
+                    spans={
+                        k: dict(
+                            exclusive_s=v[0],
+                            count=v[1],
+                            inclusive_s=v[2],
+                            minimum_tensor_bytes=v[3],
+                        )
+                        for k, v in totals.items()
+                    },
+                    timeline=gen_timeline,
+                    method="generate-final-row",
+                )
+            ),
+            flush=True,
+        )
+        return result
+
+    PromptProcessingBatch.generate = gen
 
 
 def main():
