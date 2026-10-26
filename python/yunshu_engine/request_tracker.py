@@ -88,6 +88,7 @@ class RequestTracker:
             client_request_id=current_request_id.get(),
         )
         gen.cancel_event.client_request_id = gen.client_request_id or request_id  # type: ignore[attr-defined]
+        gen.cancel_event.engine_request_id = request_id  # type: ignore[attr-defined]
         with self._lock:
             self._active[request_id] = gen
             if gen.client_request_id and gen.client_request_id != request_id:
@@ -164,7 +165,11 @@ class RequestTracker:
         with self._lock:
             gen = self._active.get(self._aliases.get(request_id, request_id))
         if gen is None:
-            return False
+            # The client may already have disconnected (Stop): a generation parked for
+            # orphan adoption is no longer registered here but is still decoding.
+            from .orphan_adoption import get_registry
+
+            return get_registry().cancel_request(request_id)
         gen.cancelled = True
         gen.cancel_event.set()
         logger.info(f"Generation cancelled: {request_id}")
@@ -179,6 +184,9 @@ class RequestTracker:
             gen.cancelled = True
             gen.cancel_event.set()
             count += 1
+        from .orphan_adoption import get_registry
+
+        get_registry().cancel_all()
         logger.info(f"Cancelled all generations: {count}")
         return count
 

@@ -150,6 +150,7 @@ class Generation:
         self.pump: asyncio.Task | None = None
         self.timer: asyncio.TimerHandle | None = None
         self.adopted = 0
+        self.request_ids: set[str] = set()  # ids a cancel request may name this run by
         self.parts: Any = {}  # dict of field hashes, or a callable that makes it (resolved at detach)
         self.delivered = 0  # outputs the first consumer has taken AND resumed after
         self.gated = False
@@ -277,6 +278,14 @@ class OrphanRegistry:
         for gen in list(self._orphans.values()):
             self._drop(gen, cancel=True)
 
+    def cancel_request(self, request_id: str) -> bool:
+        """An explicit cancel (Stop, the cancel endpoints) naming a parked generation: stop
+        it now instead of letting it decode through the window or replay to a regenerate."""
+        hit = [g for g in self._orphans.values() if request_id in g.request_ids]
+        for gen in hit:
+            self._drop(gen, cancel=True)
+        return bool(hit)
+
 
 _registry = OrphanRegistry()
 
@@ -401,6 +410,14 @@ async def run(
             if hasattr(caller_cancel, attr):
                 setattr(real_cancel, attr, getattr(caller_cancel, attr))
         gen = Generation(key or "", real_cancel)
+        gen.request_ids = {
+            str(i)
+            for i in (
+                getattr(caller_cancel, "client_request_id", None),
+                getattr(caller_cancel, "engine_request_id", None),
+            )
+            if i
+        }
         gen.parts = parts or {}  # resolved at detach when given lazily
         gen.pump = asyncio.ensure_future(_pump(gen, start(real_cancel).__aiter__()))
     index = 0
