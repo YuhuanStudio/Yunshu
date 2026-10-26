@@ -311,7 +311,7 @@ class EngineSpeculativeMixin:
         json_schema: dict | str | None = None,
         cancel_event: asyncio.Event | None = None,
         logits_processors: list | None = None,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float | None = None,
         lora_adapter: str | None = None,
     ) -> _engine.GenerationOutput:
         """Generate using speculative decoding (unverified external LM path).

@@ -267,7 +267,7 @@ class EngineFastMixin:
         logprobs: bool = False,
         top_logprobs: int | None = None,
         thinking_budget: int | None = None,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float | None = None,
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         json_schema: dict | str | None = None,
@@ -1043,7 +1043,7 @@ class EngineFastMixin:
                 _engine.logger.debug("inflight prefix register failed", exc_info=True)
 
             gen_t0 = time.perf_counter()
-            _timeout_deadline = gen_t0 + timeout_seconds
+            _timeout_deadline = gen_t0 + timeout_seconds if timeout_seconds else None
             first = True
             _itl_samples: list[float] = []
             _last_tok_time = 0.0
@@ -1131,7 +1131,10 @@ class EngineFastMixin:
                     tokens.append(token)
                     _fp_stats.token(len(tokens))
                     # Request-level timeout: check every N tokens
-                    if len(tokens) % _timeout_check_interval == 0:
+                    if (
+                        _timeout_deadline is not None
+                        and len(tokens) % _timeout_check_interval == 0
+                    ):
                         if time.perf_counter() > _timeout_deadline:
                             _engine.logger.warning(
                                 f"Generation timed out after {timeout_seconds}s ({len(tokens)} tokens)"

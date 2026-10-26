@@ -44,7 +44,7 @@ class EngineStreamMixin:
         top_logprobs: int | None = None,
         logits_processors: list | None = None,
         priority: int = 0,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float | None = None,
         lora_adapter: str | None = None,
         kv_cache_breakpoints: list[int] | None = None,
         min_tokens: int = 0,

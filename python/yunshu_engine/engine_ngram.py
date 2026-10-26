@@ -70,7 +70,7 @@ class EngineNgramMixin:
         thinking_budget: int | None = None,
         cancel_event: asyncio.Event | None = None,
         logits_processors: list | None = None,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float | None = None,
         lora_adapter: str | None = None,
     ) -> _engine.GenerationOutput:
         """Generate using N-gram speculative decoding (model-free).
@@ -374,7 +374,9 @@ class EngineNgramMixin:
 
             try:
                 gen_t0 = time.perf_counter()
-                _timeout_deadline = gen_t0 + timeout_seconds
+                _timeout_deadline = (
+                    gen_t0 + timeout_seconds if timeout_seconds else None
+                )
                 _timeout_check_interval = 32
                 detokenizer = tokenizer.detokenizer
                 detokenizer.reset()
@@ -425,7 +427,10 @@ class EngineNgramMixin:
                         # Request-level timeout: check every N tokens to bound
                         # generation time. Without this, a pathological N-gram
                         # proposal/accept cycle can loop indefinitely.
-                        if len(tokens) % _timeout_check_interval == 0:
+                        if (
+                            _timeout_deadline is not None
+                            and len(tokens) % _timeout_check_interval == 0
+                        ):
                             if time.perf_counter() > _timeout_deadline:
                                 _engine.logger.warning(
                                     f"N-gram spec generation timed out after "
@@ -900,7 +905,7 @@ class EngineNgramMixin:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         cancel_event: asyncio.Event | None = None,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float | None = None,
         logits_processors: list | None = None,
         enable_thinking: bool | None = None,
         thinking_budget: int | None = None,

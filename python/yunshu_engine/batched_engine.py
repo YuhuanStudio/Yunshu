@@ -1362,9 +1362,9 @@ class BatchedEngine(
                              (defaults to False if not set).
             logprobs: If True, return log probabilities for each generated token.
             top_logprobs: Number of top logprobs to return per token (max 20).
-            timeout_seconds: Per-request generation timeout. If None, uses the
-                             engine's default (300s). Overrides the engine default
-                             for this request only.
+            timeout_seconds: Per-request generation timeout (total wall time). None:
+                             no deadline, as on the VLM path; a gone client is
+                             handled by the disconnect cancel.
         """
         if not self._loaded:
             await self.start()
@@ -1624,7 +1624,7 @@ class BatchedEngine(
                 json_schema=json_schema,
                 cancel_event=cancel_event,
                 logits_processors=logits_processors,
-                timeout_seconds=timeout_seconds or 300.0,
+                timeout_seconds=timeout_seconds,
                 lora_adapter=lora_adapter,
             )
 
@@ -1665,7 +1665,7 @@ class BatchedEngine(
                 thinking_budget=thinking_budget,
                 cancel_event=cancel_event,
                 logits_processors=logits_processors,
-                timeout_seconds=timeout_seconds or 300.0,
+                timeout_seconds=timeout_seconds,
                 lora_adapter=lora_adapter,
             )
 
@@ -1695,7 +1695,7 @@ class BatchedEngine(
                 cancel_event=cancel_event,
                 logits_processors=logits_processors,
                 priority=priority,
-                timeout_seconds=timeout_seconds or 300.0,
+                timeout_seconds=timeout_seconds,
                 lora_adapter=lora_adapter,
                 kv_cache_breakpoints=kv_cache_breakpoints,
                 min_tokens=min_tokens,
@@ -2033,7 +2033,7 @@ class BatchedEngine(
                     top_logprobs=top_logprobs,
                     logits_processors=logits_processors,
                     priority=priority,
-                    timeout_seconds=timeout_seconds or 300.0,
+                    timeout_seconds=timeout_seconds,
                     lora_adapter=lora_adapter,
                     kv_cache_breakpoints=kv_cache_breakpoints,
                     min_tokens=min_tokens,
