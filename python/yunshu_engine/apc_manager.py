@@ -973,6 +973,8 @@ class _Coordinator(APCCoordinator):
                     "extra_hash": extra_hash,
                     "full_input_ids": list(token_ids),
                 }
+            # Refused after the restore: it served nothing, so it is not a hit.
+            self.manager.retract_lookup(n)
             maximum = n - 1
         return None
 
@@ -2498,6 +2500,15 @@ class YunshuAPCManager(APCManager):
             )
         )
         return cache, n
+
+    def retract_lookup(self, cached: int) -> None:
+        """Take back the stats of the newest hit of ``cached`` tokens: the coordinator's
+        acceptance checks refused the restore, so it served no request."""
+        for rec in reversed(self.lookups):
+            if rec.cached == cached and rec.tier != "none":
+                self.lookups.remove(rec)
+                self.tier_hits[rec.tier] -= 1
+                return
 
     def probe_exact_length(self, token_ids, extra_hash, maximum, minimum) -> int:
         """Length the next lookup_exact_cache would restore (HOT / WARM / SSD index), read from
