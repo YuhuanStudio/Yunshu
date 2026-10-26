@@ -199,7 +199,9 @@ class EngineFastMixin:
             # first decode token.
             if p % block == 0 and p >= prefix_cache._min_prefix:
                 try:
-                    prefix_cache.add(full_ids[:p], cache)
+                    prefix_cache.add(
+                        full_ids[:p], cache, defer_finite_check=True
+                    )
                 except Exception:
                     _engine.logger.debug(
                         "hybrid boundary snapshot add failed", exc_info=True

@@ -41,6 +41,39 @@ def test_dense_kv_only_cache_is_not_inspected():
     assert recurrent_state_finite([kv]) is True
 
 
+def _boundary_run(monkeypatch, bad=None):
+    """Drive the real ``_capture_hybrid_prefix`` (lazy mid-prefill snapshots) and count the
+    blocking finite checks it triggers."""
+    import yunshu_engine.kv_prefix_cache as kpc
+    from yunshu_engine.engine_fast import EngineFastMixin
+
+    syncs = []
+    real = kpc.recurrent_state_finite
+    monkeypatch.setattr(
+        kpc, "recurrent_state_finite", lambda c: syncs.append(1) or real(c)
+    )
+    pc = KVPrefixCache(max_entries=8, min_prefix_length=8)
+    cache = _cache(bad if bad is not None else 0.5)
+    model = lambda chunk, cache: None  # noqa: E731 - recurrent state is fixed above
+    ids = mx.arange(8 * 5 + 1)
+    EngineFastMixin._capture_hybrid_prefix(None, model, ids, cache, pc, 0, 8)
+    return pc, syncs
+
+
+def test_hybrid_boundary_snapshots_do_not_sync_per_boundary(monkeypatch):
+    pc, syncs = _boundary_run(monkeypatch)
+    assert pc.size == 5  # one snapshot per block boundary
+    assert syncs == []  # was one host sync per boundary
+    assert pc.get(mx.arange(8 * 5 + 1))[0] is not None  # restorable; flags read in one batch
+
+
+def test_deferred_check_still_drops_a_poisoned_boundary_before_any_restore(monkeypatch):
+    pc, syncs = _boundary_run(monkeypatch, bad=float("nan"))
+    assert syncs == []
+    assert pc.get(mx.arange(8 * 5 + 1))[0] is None
+    assert pc.size == 0
+
+
 def test_prompt_cache_store_refuses_a_non_finite_state():
     from yunshu_engine.prompt_cache import PromptCacheManager
 

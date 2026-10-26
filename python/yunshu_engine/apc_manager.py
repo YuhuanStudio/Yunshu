@@ -855,7 +855,9 @@ def recurrent_state_finite(prompt_cache) -> bool:
     """False when any floating recurrent-state array of ``prompt_cache`` holds inf or nan.
 
     One fused reduction and one host sync per checkpoint store (never per token); dense KV
-    layers are not inspected."""
+    layers are not inspected. Every store reaches here through ``flush_deferred_checkpoints``,
+    which runs after the first emitted token and ``materialize``s the snapshot first, so the
+    read is of already-evaluated arrays and adds nothing to TTFT."""
     import mlx.core as mx
     from mlx_vlm.models.cache import ArraysCache
 

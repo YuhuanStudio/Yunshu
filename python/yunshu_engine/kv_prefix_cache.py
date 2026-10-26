@@ -57,14 +57,14 @@ def _canonical_block_hash(
     return compute_block_hash(parent_hash, token_ids)
 
 
-def recurrent_state_finite(cache) -> bool:
-    """False when any floating recurrent-state array (mlx-lm ``ArraysCache``) of ``cache`` holds
-    inf or nan. One fused reduction and one host sync per store (never per token); dense KV layers
-    are not inspected. A state that overflowed in fp16 would poison every request that restores it."""
+def recurrent_state_finite_flag(cache):
+    """Lazy scalar bool (``mx.array``) that is True when every floating recurrent-state array
+    (mlx-lm ``ArraysCache``) of ``cache`` is finite; ``None`` when there is nothing to inspect.
+    Builds graph only (no evaluation, no host sync), so a caller mid-prefill can defer the read."""
     try:
         from mlx_lm.models.cache import ArraysCache
     except Exception:  # no mlx-lm: nothing recurrent to inspect
-        return True
+        return None
     checks = [
         mx.isfinite(a).all()
         for c in cache or ()
@@ -73,8 +73,17 @@ def recurrent_state_finite(cache) -> bool:
         if a is not None and mx.issubdtype(a.dtype, mx.floating)
     ]
     if not checks:
-        return True
-    return bool(mx.all(mx.stack(checks)).item())
+        return None
+    return mx.all(mx.stack(checks))
+
+
+def recurrent_state_finite(cache) -> bool:
+    """False when any floating recurrent-state array (mlx-lm ``ArraysCache``) of ``cache`` holds
+    inf or nan. One fused reduction and one host sync; dense KV layers are not inspected. A state
+    that overflowed in fp16 would poison every request that restores it. Mid-prefill boundary
+    snapshots use ``KVPrefixCache.add(..., defer_finite_check=True)`` instead (no sync there)."""
+    flag = recurrent_state_finite_flag(cache)
+    return True if flag is None else bool(flag.item())
 
 
 def get_prefix_length(prompt: mx.array, cached_prompt: mx.array) -> int:
@@ -373,6 +382,8 @@ class KVPrefixCache:
         self._access_counts: list[int] = []  # For SLRU promotion tracking
         # Hash-chain prefix index: block_hash → (entry_index, block_index)
         self._hash_index: dict[str, int] = {}
+        # (token hash, lazy finite flag) of deferred-check boundary snapshots, see add()
+        self._pending_finite: list[tuple[str, mx.array]] = []
         self._prefix_index: dict[int, list[tuple[int, int]]] = {}
         # Block dedup: block_hash → reference count (COW)
         self._block_refcount: dict[int, int] = {}
@@ -451,8 +462,15 @@ class KVPrefixCache:
         self,
         prompt_tokens: mx.array,
         cache: list,
+        *,
+        defer_finite_check: bool = False,
     ) -> None:
         """Store a completed request's KV cache.
+
+        ``defer_finite_check``: mid-prefill boundary snapshots (hybrid fast path) keep the
+        prefill graph lazy on purpose, so the non-finite recurrent-state guard is built as a lazy
+        flag here and read in ONE batch at the next point that syncs anyway (the next ``get`` or
+        checked ``add``); a poisoned entry is dropped then, before anything can restore it.
 
         IMPORTANT: cache may contain MORE entries than prompt_tokens when the
         caller has already advanced through generated tokens (BatchedEngine
@@ -464,7 +482,12 @@ class KVPrefixCache:
         """
         if len(prompt_tokens) < self._min_prefix:
             return
-        if not recurrent_state_finite(cache):
+        pending_flag = None
+        if defer_finite_check:
+            pending_flag = recurrent_state_finite_flag(cache)
+        else:
+            self.resolve_pending_finite()  # this store syncs anyway: settle earlier flags too
+        if not defer_finite_check and not recurrent_state_finite(cache):
             # Every route stores through here (fast, stream, n-gram, speculative, loop).
             logger.warning(
                 "KV prefix cache: not storing a %d-token entry with a non-finite "
@@ -527,6 +550,9 @@ class KVPrefixCache:
             self._access_counts.append(1)
             self._maybe_demote_to_warm()
             self._hash_index[h] = idx
+            if pending_flag is not None:
+                self._pending_finite.append((h, pending_flag))
+                del self._pending_finite[:-64]  # bounded: oldest unread flags are dropped
 
             # Add to prefix index with block dedup refcounting
             for bi, bh in enumerate(block_hashes):
@@ -541,6 +567,33 @@ class KVPrefixCache:
             )
 
         mx.eval(prompt_copy)
+
+    def resolve_pending_finite(self) -> int:
+        """Read the deferred non-finite flags in one evaluation and drop every poisoned entry.
+        Returns the number dropped. Cheap no-op when nothing is pending."""
+        with self._lock:
+            pending, self._pending_finite = self._pending_finite, []
+            if not pending:
+                return 0
+            try:
+                mx.eval(*[f for _, f in pending])
+                bad = [h for h, f in pending if not bool(f.item())]
+            except Exception:
+                logger.debug("deferred finite check failed", exc_info=True)
+                bad = [h for h, _ in pending]  # unverifiable: do not keep
+            dropped = 0
+            for h in bad:
+                idx = self._hash_index.get(h)
+                if idx is not None:
+                    self._remove_entry(idx)
+                    dropped += 1
+            if dropped:
+                logger.warning(
+                    "KV prefix cache: dropped %d boundary snapshot(s) with a non-finite "
+                    "recurrent state",
+                    dropped,
+                )
+            return dropped
 
     def note_prefill_tps(self, tps: float) -> None:
         """Feed the engine's observed cold-prefill throughput (tokens/sec) so the
@@ -581,6 +634,7 @@ class KVPrefixCache:
             (cached_kv, remaining_token_count, matched_token_count)
             cached_kv is None if no useful match found.
         """
+        self.resolve_pending_finite()
         with self._lock:
             self._total_lookups += 1
             _t0 = time.perf_counter()
