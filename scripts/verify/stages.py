@@ -2682,7 +2682,7 @@ def stage_phaseb(ctx: Ctx, *, speed: bool = False) -> StageResult:
 
     name = "phaseb-speed" if speed else "phaseb-identity"
     reps = max(3, int(ctx.suite.get("reps", 3))) if speed else 1
-    contexts = ctx.suite.get("phaseb_ctx_chars", [16000, 128000])
+    contexts = ctx.suite.get("phaseb_ctx_chars", [16000, 85000, 128000])
     arms = ctx.suite.get(
         "phaseb_arms", ["base", "cand"] if speed else ["base", "cand", "off"]
     )
