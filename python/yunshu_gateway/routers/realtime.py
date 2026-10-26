@@ -1047,6 +1047,8 @@ class RealtimeSession:
     _lane: asyncio.Task | None = None  # tail of the ordered commit lane
     _audio_done_for: str | None = None  # response whose response.audio.done went out
     _partial_text: str = ""
+    # id of the user item the utterance in progress becomes (VAD events, committed, item)
+    _pending_user_item_id: str | None = None
     _partial_oob: bool = False
     _idle_task: asyncio.Task | None = None
     _denoiser = None
@@ -3493,10 +3495,13 @@ class RealtimeSession:
                 self._vad_speech_bytes = 0
                 self._barge_in_fired = False
                 self._cancel_idle_timer()
+                if self._pending_user_item_id is None:
+                    self._pending_user_item_id = f"item_{uuid.uuid4().hex[:8]}"
                 await self.send_event(
                     _event(
                         RealtimeEvent.INPUT_AUDIO_BUFFER_SPEECH_STARTED,
                         audio_start_ms=_pre_offset // _bytes_per_ms,
+                        item_id=self._pending_user_item_id,
                     )
                 )
             # silence_duration_ms is a CONTIGUOUS window: speech resuming mid-utterance
@@ -3547,6 +3552,7 @@ class RealtimeSession:
                         _event(
                             RealtimeEvent.INPUT_AUDIO_BUFFER_SPEECH_STOPPED,
                             audio_end_ms=_speech_end // _bytes_per_ms,
+                            item_id=self._pending_user_item_id,
                         )
                     )
                     # Auto-commit and trigger response (OpenAI behavior with server_vad);
@@ -3619,9 +3625,18 @@ class RealtimeSession:
         self._vad_speech_start_offset = 0
         self._reset_silero()
 
+        # The user item this audio becomes: the id the VAD events already announced (or a
+        # fresh one for a manual commit); the item created after the ASR reuses it.
+        _user_item_id = self._pending_user_item_id or f"item_{uuid.uuid4().hex[:8]}"
+        self._pending_user_item_id = None
+        _prev_item_id = (
+            self.conversation.items[-1].item_id if self.conversation.items else None
+        )
         await self.send_event(
             _event(
                 RealtimeEvent.INPUT_AUDIO_BUFFER_COMMITTED,
+                item_id=_user_item_id,
+                previous_item_id=_prev_item_id,
             )
         )
 
@@ -3681,7 +3696,7 @@ class RealtimeSession:
                         )
                         if text:
                             item = ConversationItem(
-                                item_id=f"item_{uuid.uuid4().hex[:8]}",
+                                item_id=_user_item_id,
                                 item_type="message",
                                 role="user",
                                 content=[{"type": "text", "text": text}],
