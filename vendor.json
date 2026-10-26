@@ -2531,6 +2531,36 @@
       "why": "split-invariant prefill only: 128-wide BF16 RMS followed by BF16 Q/K scale in one kernel, preserving the intermediate BF16 rounding; decode/verify and other shapes call upstream",
       "source_sha256": "8f16e229aec08b7a1ca6eaf2bd15e61ade47061d7225925096b857955fe93ca9",
       "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/image_processor_fixes.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.gemma4.processing_gemma4",
+      "symbol": "Gemma4ImageProcessor.preprocess",
+      "signature": "(self, images: ImageInput, **kwargs)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "PIL images read channels-last: a 1- or 3-pixel-tall image is not channels-first (8dd7746); module helpers wrapped, preprocess unchanged",
+      "source_sha256": "02b82adab31b13af412506ebd706f93aaf33075f64bead5739af31c24dfdf6ac",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/image_processor_fixes.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.embedding_gemma2.image_processing_embedding_gemma2",
+      "symbol": "EmbeddingGemma2ImageProcessor.preprocess",
+      "signature": "(self, images, return_tensors=None, input_data_format=None, **kwargs)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "PIL images read channels-last for EmbeddingGemma 2 (1e64ba4); module helpers wrapped, preprocess unchanged",
+      "source_sha256": "2e7b2659f14f1daaaf8665aac2ca872fc45d518d9a8d735b735c28e3e57f0add",
+      "installed_version": "0.7.8"
     }
   ],
   "watch": [

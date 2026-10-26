@@ -856,6 +856,9 @@ class VLMEngine:
         try:
             from mlx_vlm.utils import load_processor
 
+            from .image_processor_fixes import install as install_image_fixes
+
+            install_image_fixes()  # PIL images read channels-last (mlx-vlm 8dd7746)
             self._processor = load_processor(Path(model_path))
         except Exception as e:
             logger.warning(f"Could not load VLM processor: {e}")

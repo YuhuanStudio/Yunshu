@@ -2219,6 +2219,56 @@
      ]
     }
    }
+  },
+  "pil_channels_last": {
+   "module": "python/yunshu_engine/image_processor_fixes.py",
+   "what": "PIL images keep their height x width x channels layout in the Gemma 4 / EmbeddingGemma 2 image processors (a 1- or 3-pixel-tall image is not channels-first)",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "install_image_fixes"
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "install_image_fixes"
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "install_image_fixes"
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "install_image_fixes"
+      ]
+     ]
+    },
+    "text": {
+     "s": "na",
+     "why": "text-only models take no images"
+    },
+    "loop": {
+     "s": "na",
+     "why": "text-only models take no images"
+    }
+   }
   }
  },
  "exclusions": [
