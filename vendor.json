@@ -861,6 +861,20 @@
       "local_changes": [
         "Python port of the measurement and start decision; calibration kept as a file beside the compiled programs; no memory planner."
       ]
+    },
+    {
+      "kind": "derived",
+      "path": "python/yunshu_engine/qwen4_norms.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_paths": [
+        "omlx/patches/mlx_vlm_qwen4_exp_compat/vendor/mlx_vlm/models/qwen4_exp/qwen4_exp.py"
+      ],
+      "commit": "23b671f64f0a64f532e38d692a6c480ea704418d",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "Separate checkpoint-wide anchor classifier from per-module recentering; preserve FP32 residual when BF16 cannot represent direct gamma minus one; MTP receives base convention explicitly."
+      ]
     }
   ],
   "inspired": [
@@ -2930,6 +2944,36 @@
       "why": "class patch routing the dense FFN of qualified prompt steps through the ANE split",
       "source_sha256": "ec6fbfefb1f0b4c0319f9e2178a70afadfeb06a591620757b0b86c754ed938eb",
       "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/qwen4_dflash.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen4_exp.language",
+      "symbol": "LanguageModel.__call__",
+      "signature": "(self, inputs, inputs_embeds=None, mask=None, cache=None, **kwargs)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "Preserve DFlash mixed layer captures during invariant decode and transactional verify; the native MTP hyper-state contract stays separate. Features follow incoai/Qwen3.8-Flash-Next-DFlash2 patches/qwen38-dflash2-capture.patch (Apache-2.0): completed layers averaged over HC streams, not the learned final mixer.",
+      "source_sha256": "4d6b4f4dabbc76c7905c1bb78c10bd9bd21f294aa5fb5cd86d358755004ba781",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/tf_hc_forward.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen4_exp.language",
+      "symbol": "Qwen4ExpBatchInvariantForward._model",
+      "signature": "(self, model, inputs, cache, inputs_embeds, position_ids)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "Fused HC and expert loop with optional mixed layer captures; capture commits pending injection without changing target forward arithmetic.",
+      "source_sha256": "078f4ac55187af39228a0f05c9d981bceec7e1b8fbe6889c2c5b4d87c7488709",
+      "installed_version": "0.7.8"
     }
   ],
   "watch": [
@@ -3793,6 +3837,36 @@
         "https://github.com/tmc/autoresearch-mlx-go-ane"
       ],
       "reason": "Existing Splash client has full selector type checks and bounded shared-event handoff; retain that defensive implementation for phase 1."
+    },
+    {
+      "id": "flashnext-1025-incoai",
+      "owner": "flashnext",
+      "url": "https://huggingface.co/incoai/Qwen3.8-Flash-Next-DFlash2",
+      "revision": "a22a1744e85c17364dcc54a6a420af7135d4c7f6",
+      "kind": "discovery-only",
+      "reviewed_date": "2026-10-25",
+      "status": "Complete local asset; serving sanity and identity pending; no quant conversion needed.",
+      "license": "See checkpoint repository model card"
+    },
+    {
+      "id": "flashnext-1025-jundot",
+      "owner": "flashnext",
+      "url": "https://huggingface.co/Jundot/Qwen3.8-Flash-Next-oQ3e-mtp",
+      "revision": "934f71d2879d459ccecb641eccb970fe9fa4cb3e",
+      "kind": "discovery-only",
+      "reviewed_date": "2026-10-25",
+      "status": "Complete local asset; serving sanity and identity pending; no quant conversion needed.",
+      "license": "See checkpoint repository model card"
+    },
+    {
+      "id": "flashnext-1025-tensorfold",
+      "owner": "flashnext",
+      "url": "https://huggingface.co/TensorFold/Qwen3.8-Flash-Next-MLX-2bit-MTP",
+      "revision": "28b109043ec5576f8ad5a3192a66467915c76736",
+      "kind": "discovery-only",
+      "reviewed_date": "2026-10-25",
+      "status": "Complete local asset; serving sanity and identity pending; no quant conversion needed.",
+      "license": "See checkpoint repository model card"
     }
   ],
   "websearch_prior_art": [

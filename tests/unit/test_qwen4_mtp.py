@@ -211,3 +211,29 @@ def test_native_tiny_rounds_on_cpu(monkeypatch):
         assert len(result["checks"]) == 7
     finally:
         mx.set_default_device(previous)
+
+
+def _quantized_head(bits):
+    import mlx.nn as nn
+
+    head = nn.QuantizedLinear(512, 512, bias=False, group_size=64, bits=bits)
+    head.scales = head.scales.astype(mx.bfloat16)
+    head.biases = head.biases.astype(mx.bfloat16)
+    return head
+
+
+def test_adapt_head_swaps_only_a_head_the_exact_kernel_cannot_read(monkeypatch):
+    from yunshu_engine import qwen4_mtp
+    from yunshu_engine.kernels import lane_linear
+
+    swapped = object()
+    monkeypatch.setattr(lane_linear, "eligible", lambda module: True)
+    monkeypatch.setattr(
+        lane_linear.LaneLinear, "from_quantized", classmethod(lambda cls, m: swapped)
+    )
+    six = SimpleNamespace(lm_head=_quantized_head(6))
+    assert qwen4_mtp.adapt_head(six) is True and six.lm_head is swapped
+    four = SimpleNamespace(lm_head=_quantized_head(4))
+    head = four.lm_head
+    assert qwen4_mtp.adapt_head(four) is False and four.lm_head is head
+    assert qwen4_mtp.adapt_head(SimpleNamespace()) is False

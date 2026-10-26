@@ -177,3 +177,36 @@ def test_job_temp_files_stay_off_the_system_disk(tmp_path, monkeypatch):
     assert job["state"] == "done"
     assert seen.read_text() == str(tmp_path / "tmp" / "tmpjob")
     assert not (tmp_path / "tmp" / "tmpjob").exists()
+
+
+def test_finished_job_records_its_result_summary(tmp_path, monkeypatch):
+    """A finished job keeps its last meaningful output in its record, so its result survives a dead reader."""
+    import importlib
+    import os
+    import sys
+
+    monkeypatch.setenv("GPUQ_DIR", str(tmp_path))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "dev"))
+    import gpuq
+
+    gpuq = importlib.reload(gpuq)
+    gpuq.JOBS.mkdir(parents=True, exist_ok=True)
+    gpuq.LOGS.mkdir(parents=True, exist_ok=True)
+    code = "print('loading'); print('{\"tps\": 41.5, \"complete\": true}')"
+    job = {
+        "id": "sumjob",
+        "cmd": [sys.executable, "-c", code],
+        "cwd": str(tmp_path),
+        "env": dict(os.environ),
+        "timeout_s": 60,
+        "stall_s": 60,
+        "priority": 0,
+        "submitted": 0.0,
+        "state": "pending",
+    }
+    path = gpuq.JOBS / "sumjob.json"
+    gpuq._write(path, job)
+    gpuq._run_one(job, path)
+    stored = gpuq._read(path)
+    assert '"tps": 41.5' in stored["summary"]
+    assert "gpuq:" not in stored["summary"]

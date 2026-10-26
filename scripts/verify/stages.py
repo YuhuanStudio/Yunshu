@@ -130,9 +130,7 @@ def _tfbench_argv(
         "--out",
         "{out}",
         f"--tag=-{stage}-{key}",
-        *_env_flags(
-            with_observe(ctx, stage, ctx.arm_env(arm) if env is None else env)
-        ),
+        *_env_flags(with_observe(ctx, stage, ctx.arm_env(arm) if env is None else env)),
         *extra,
     ]
 
