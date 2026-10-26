@@ -950,6 +950,16 @@ class ASREngine(ActiveRequestMixin):
         if self._model is None:
             raise RuntimeError("Engine not started")
 
+        # A WAV with no samples has nothing to transcribe: an empty transcription, not an
+        # upstream "zero samples" error surfacing as a 500.
+        if _wav_audio_duration_s(audio_path) == 0:
+            return {
+                "text": "",
+                "language": language or "und",
+                "segments": [],
+                "duration": 0.0,
+            }
+
         # Read audio file once — reuse the bytes for both VAD and LID to avoid
         # double I/O and double memory allocation for large audio files.
         _audio_raw: bytes | None = None
@@ -1160,7 +1170,19 @@ class ASREngine(ActiveRequestMixin):
             _granularities = gen_kwargs.pop("timestamp_granularities", None)
             if _granularities and "word" in _granularities:
                 gen_kwargs.setdefault("word_timestamps", True)
-            result = model.generate(audio_path, **gen_kwargs)
+            try:
+                result = model.generate(audio_path, **gen_kwargs)
+            except ValueError:
+                # mlx-audio raises on a clip that decodes to zero samples (e.g. an empty
+                # mp3/flac): that is an empty transcription, any other ValueError is real.
+                if _decoded_audio_duration_s(audio_path) == 0:
+                    return {
+                        "text": "",
+                        "language": language or "und",
+                        "segments": [],
+                        "duration": 0.0,
+                    }
+                raise
 
             if hasattr(result, "text"):
                 raw_lang = getattr(result, "language", None)
