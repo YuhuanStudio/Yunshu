@@ -365,3 +365,20 @@ def test_admin_clear_discards_pending_warm_results_and_preserves_workers():
         assert m.warm.entries and m.warm.mode == "lossless"
     finally:
         m.warm.close()
+
+
+def test_failed_promotion_keeps_the_warm_copy(monkeypatch):
+    """No HOT room for the decoded copy must not destroy the only (lossless) WARM entry."""
+    m = _mgr()
+    a, b = _toks(200, 1), _toks(200, 2)
+    _store(m, a, 1)
+    _store(m, b, 2)  # a is demoted to WARM
+    _settle(m)
+    assert m.warm.snapshot()["warm_entries"] == 1
+    with monkeypatch.context() as mp:
+        mp.setattr(m, "_make_room", lambda *a, **k: False)
+        m.lookup_exact_cache(list(a) + [5, 6, 7])
+    assert m.warm.snapshot()["warm_entries"] == 1
+    cache, n = m.lookup_exact_cache(list(a) + [5, 6, 7])
+    assert n == 200 and m.lookups[-1].tier == "warm"
+    _same(cache, _cache(200, 1))

@@ -1548,6 +1548,13 @@ class YunshuAPCManager(APCManager):
             )
             if longer is not None:
                 return
+        # HOT room is settled before the WARM copy is taken: take() removes it, so a failed
+        # promotion afterwards would destroy the only (lossless) copy.
+        size = warm.peek_nbytes(key)
+        if size is None:
+            return
+        if size > self.memory_max_bytes or not self._make_room(size, retain_bytes=size):
+            return  # no HOT room: the entry stays in WARM, the lookup goes on to SSD / recompute
         t0 = time.perf_counter()
         if where == "inflight":
             inf = warm.take_inflight(key)
@@ -1563,13 +1570,8 @@ class YunshuAPCManager(APCManager):
                 return
             cache, ent = got
             born, head = ent.born, ent.head
-        from mlx_vlm.apc import APCExactCacheEntry, _cache_nbytes
+        from mlx_vlm.apc import APCExactCacheEntry
 
-        size = _cache_nbytes(cache)
-        if size > self.memory_max_bytes or not self._make_room(size, retain_bytes=size):
-            # no HOT room for the decoded copy: it is discarded and the lookup goes on to
-            # SSD / recompute
-            return
         with self.lock:
             self._exact_cache[key] = APCExactCacheEntry(
                 tokens[:n], int(extra_hash), cache
