@@ -74,3 +74,30 @@ test("withTimeout works without AbortSignal.any / AbortSignal.timeout (older Saf
     AbortSignal.timeout = timeout;
   }
 });
+
+test("forced callers that arrive during one poll share a single queued run", async () => {
+  let release!: () => void;
+  const inFlight = new Promise<void>((r) => (release = r));
+  let started = 0;
+  const start = async () => {
+    started++;
+  };
+  const slot = { current: null as Promise<void> | null };
+  const a = joinOrQueue(inFlight, true, start, slot);
+  const b = joinOrQueue(inFlight, true, start, slot);
+  const c = joinOrQueue(inFlight, true, start, slot);
+  assert.equal(a, b);
+  assert.equal(b, c);
+  assert.equal(started, 0);
+  release();
+  await Promise.all([a, b, c]);
+  assert.equal(started, 1);
+  assert.equal(slot.current, null);
+  // after it started, a later forced caller can queue again
+  let release2!: () => void;
+  const inFlight2 = new Promise<void>((r) => (release2 = r));
+  const d = joinOrQueue(inFlight2, true, start, slot);
+  release2();
+  await d;
+  assert.equal(started, 2);
+});

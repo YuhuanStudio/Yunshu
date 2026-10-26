@@ -67,7 +67,17 @@ export function joinOrQueue(
   inFlight: Promise<void> | null,
   force: boolean,
   start: () => Promise<void>,
+  /** Holds the queued forced run: forced callers that arrive before it starts share it instead of queueing their own. */
+  slot?: { current: Promise<void> | null },
 ): Promise<void> {
   if (!inFlight) return start();
-  return force ? inFlight.then(start, start) : inFlight;
+  if (!force) return inFlight;
+  if (!slot) return inFlight.then(start, start);
+  if (slot.current) return slot.current;
+  const run = () => {
+    slot.current = null;
+    return start();
+  };
+  slot.current = inFlight.then(run, run);
+  return slot.current;
 }
