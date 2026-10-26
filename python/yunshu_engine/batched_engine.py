@@ -165,6 +165,9 @@ from .engine_embeddings import EngineEmbeddingsMixin
 from .engine_fast import EngineFastMixin
 from .engine_ngram import EngineNgramMixin
 from .engine_policy import (
+    _delivered_token_count as _delivered_token_count,
+)
+from .engine_policy import (
     _is_cancelled as _is_cancelled,
 )
 from .engine_policy import (
@@ -215,6 +218,7 @@ from .engine_text import (
 from .engine_text import (
     _template_supports_tools as _template_supports_tools,
 )
+from .generation_suppress import resolve_suppress_tokens
 
 
 def _reload_dropped_weights(model, mp) -> None:
@@ -1276,8 +1280,11 @@ class BatchedEngine(
         use_engine_loop: bool,
         gemma4_eligible=None,
         external_eligible: bool = True,
+        plain_only: bool = False,
     ) -> str | None:
-        if use_engine_loop or logprobs:
+        # plain_only: the request sets min_tokens / ignore_eos / suppress_tokens, which
+        # only the plain fast path (and the loop) honor; a spec route would drop them.
+        if use_engine_loop or logprobs or plain_only:
             return None
         greedy = temperature is None or temperature <= 0.0
         if (
@@ -1381,6 +1388,14 @@ class BatchedEngine(
         if not self._loaded:
             await self.start()
 
+        # The checkpoint's generation_config.json suppress_tokens is the default mask
+        # when the request sets none (same rule as the VLM path).
+        suppress_tokens = resolve_suppress_tokens(
+            suppress_tokens,
+            getattr(self, "model_name", None),
+            getattr(self, "_tokenizer", None),
+        )
+
         # Early return: max_tokens <= 0 produces no output
         if max_tokens <= 0:
             _pt = 0
@@ -1418,6 +1433,7 @@ class BatchedEngine(
             temperature=temperature,
             logprobs=bool(logprobs),
             use_engine_loop=_use_engine_loop,
+            plain_only=bool(min_tokens or ignore_eos or suppress_tokens),
             # The external adapter does not implement the full fast-path
             # parameter contract. Never drop a client's requested behavior.
             external_eligible=(
@@ -1909,6 +1925,14 @@ class BatchedEngine(
         """
         if not self._loaded:
             await self.start()
+
+        # The checkpoint's generation_config.json suppress_tokens is the default mask
+        # when the request sets none (same rule as the VLM path).
+        suppress_tokens = resolve_suppress_tokens(
+            suppress_tokens,
+            getattr(self, "model_name", None),
+            getattr(self, "_tokenizer", None),
+        )
 
         # publish per-request top-nσ for _build_temp_sampler (same event-loop task)
         _REQUEST_TOP_N_SIGMA.set(

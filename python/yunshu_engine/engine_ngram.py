@@ -12,6 +12,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
 
+from .context_window import require_non_empty_prompt
 from .stream_bridge import StreamBridge, make_stream_queue
 
 
@@ -155,6 +156,7 @@ class EngineNgramMixin:
         else:
             text = prompt if isinstance(prompt, str) else str(prompt)
             input_ids = tokenizer.encode(text)
+        require_non_empty_prompt(input_ids)
         prompt_tokens = len(input_ids)
 
         # Build stop token sets
@@ -363,7 +365,7 @@ class EngineNgramMixin:
 
                 get_inflight_tracker().register(
                     _ng_inflight_req_id,
-                    [int(t) for t in ids],
+                    list(input_ids),
                     cache,
                     self.model_name or "",
                 )
@@ -377,7 +379,6 @@ class EngineNgramMixin:
                 _timeout_deadline = (
                     gen_t0 + timeout_seconds if timeout_seconds else None
                 )
-                _timeout_check_interval = 32
                 detokenizer = tokenizer.detokenizer
                 detokenizer.reset()
                 all_token_ids = list(
@@ -427,10 +428,9 @@ class EngineNgramMixin:
                         # Request-level timeout: check every N tokens to bound
                         # generation time. Without this, a pathological N-gram
                         # proposal/accept cycle can loop indefinitely.
-                        if (
-                            _timeout_deadline is not None
-                            and len(tokens) % _timeout_check_interval == 0
-                        ):
+                        if _timeout_deadline is not None:
+                            # every token / cycle: a modulo check skips multiples when a spec cycle
+                            # accepts several tokens, and overshoots by seconds on a slow model
                             if time.perf_counter() > _timeout_deadline:
                                 _engine.logger.warning(
                                     f"N-gram spec generation timed out after "
@@ -846,8 +846,17 @@ class EngineNgramMixin:
         _ng_reasoning_tok = len(_ch_reason)
         if output_text:
             try:
-                from .reasoning_parser import get_reasoning_parser
+                from .reasoning_parser import (
+                    close_unterminated_reasoning,
+                    get_reasoning_parser,
+                )
+                from .thinking_budget import detect_needs_think_prefix
 
+                # EOS / stop / length inside the prompt-opened <think> keeps the tail reasoning
+                output_text = close_unterminated_reasoning(
+                    output_text,
+                    detect_needs_think_prefix(list(input_ids), tokenizer),
+                )
                 rp = get_reasoning_parser(self.model_name)
                 rp_out = rp.parse(output_text)
                 if rp_out.reasoning and rp_out.reasoning_tokens > 0:
@@ -996,6 +1005,7 @@ class EngineNgramMixin:
         else:
             text = prompt if isinstance(prompt, str) else str(prompt)
             input_ids = tokenizer.encode(text)
+        require_non_empty_prompt(input_ids)
         prompt_tokens = len(input_ids)
 
         stop_ids: set[int] = set()
@@ -1238,7 +1248,7 @@ class EngineNgramMixin:
 
                 get_inflight_tracker().register(
                     _ng_s_inflight_req_id,
-                    [int(t) for t in ids],
+                    list(input_ids),
                     cache,
                     self.model_name or "",
                 )

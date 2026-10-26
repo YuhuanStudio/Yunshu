@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
 from yunshu_kv.thinking_segment import ThinkingSegmentConfig, ThinkingSegmentSubstore
 
+from .constraint_eos import ConstrainedDecodingError, GrammarDeadEndError
 from .ngram_proposer import NgramConfig, NgramProposer
 from .priority_queue import RequestPriorityQueue, make_waiting_queue
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
@@ -726,6 +727,35 @@ class _LogitsProcessorSampler:
         self._tokens.clear()
 
 
+class _DeadEndGuardSampler:
+    """One row's constrained sampler: a grammar dead end fails THIS request only.
+
+    An exception from a row's sampler propagates out of the shared ``BatchGenerator.next()`` and
+    the engine loop would fail every active request. The guard records the fault, ends the row by
+    returning EOS (or the plain argmax when the model has none) and lets ``_process_responses``
+    finish the request with ``finish_reason="error"``."""
+
+    def __init__(self, inner, eos_id: int | None) -> None:
+        self._inner = inner
+        self._eos_id = eos_id
+        self.fault: str | None = None
+
+    def __call__(self, logits):
+        try:
+            return self._inner(logits)
+        except (ConstrainedDecodingError, GrammarDeadEndError) as exc:
+            import mlx.core as mx
+
+            self.fault = str(exc) or "constrained decoding dead end"
+            tok = mx.argmax(logits, axis=-1)
+            if self._eos_id is None:
+                return tok
+            return mx.full(tok.shape, self._eos_id, dtype=tok.dtype)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
 class _RequestSpecStats(TypedDict):
     proposals: int
     accepted: int
@@ -774,6 +804,10 @@ class Scheduler:
 
         # Requests that failed to insert (error outputs generated in step())
         self._failed_insert_ids: list[str] = []
+
+        # req_id -> _DeadEndGuardSampler for constrained rows (a grammar dead end ends only
+        # that request, with finish_reason="error")
+        self._row_guards: dict[str, _DeadEndGuardSampler] = {}
 
         # BatchGenerator integration
         self._batch_gen = None
@@ -1967,7 +2001,9 @@ class Scheduler:
                     )
                     continue
 
-                sampler = self._make_sampler(sp, req.prompt_token_ids)
+                sampler = self._guard_row_sampler(
+                    req, self._make_sampler(sp, req.prompt_token_ids)
+                )
                 sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
 
                 # ── Thinking-segment KV lookup before prefill ──
@@ -2939,8 +2975,9 @@ class Scheduler:
                         )
                         try:
                             sp = req.sampling_params
-                            sampler = self._make_sampler(
-                                sp, state.get("all_prompt_tokens")
+                            sampler = self._guard_row_sampler(
+                                req,
+                                self._make_sampler(sp, state.get("all_prompt_tokens")),
                             )
                             sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
                             # Use insert_segments for KV continuity if cache available
@@ -3155,7 +3192,9 @@ class Scheduler:
 
             try:
                 sp = req.sampling_params
-                sampler = self._make_sampler(sp, state.get("all_prompt_tokens"))
+                sampler = self._guard_row_sampler(
+                    req, self._make_sampler(sp, state.get("all_prompt_tokens"))
+                )
                 sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
 
                 # KV continuity: if we have a cached KV from a previous chunk,
@@ -3612,6 +3651,13 @@ class Scheduler:
                     if uid not in self._uids_to_remove:
                         self._uids_to_remove.append(uid)
 
+            _row_guard = self._row_guards.get(req_id)
+            _row_error = _row_guard.fault if _row_guard is not None else None
+            if _row_error is not None:
+                # The row's grammar hit a dead end: fail this request alone
+                finish_reason = "error"
+                is_finished = True
+
             output = RequestOutput(
                 request_id=req_id,
                 new_token_ids=new_token_ids,
@@ -3620,6 +3666,7 @@ class Scheduler:
                 output_text=req.output_text,
                 finished=is_finished,
                 finish_reason=finish_reason,
+                error=_row_error,
                 prompt_tokens=req.num_prompt_tokens,
                 completion_tokens=req.num_output_tokens,
                 logprobs=logprobs,
@@ -3639,6 +3686,7 @@ class Scheduler:
             outputs.append(output)
 
             if finish_reason:
+                self._row_guards.pop(req_id, None)
                 # Finalize detokenizer
                 detok = self._detokenizers.pop(req_id, None)
                 self._thinking_processors.pop(req_id, None)
@@ -4089,6 +4137,20 @@ class Scheduler:
         detok = self.tokenizer.detokenizer
         detok.reset()
         return detok
+
+    def _guard_row_sampler(self, req, sampler):
+        """Isolate a constrained request's grammar dead end to that request (see
+        ``_DeadEndGuardSampler``); unconstrained samplers are returned as they are."""
+        sp = req.sampling_params
+        if (
+            getattr(sp, "json_schema", None) is None
+            and getattr(sp, "grammar", None) is None
+        ):
+            return sampler
+        eos = list(getattr(self.tokenizer, "eos_token_ids", None) or [])
+        guard = _DeadEndGuardSampler(sampler, int(eos[0]) if eos else None)
+        self._row_guards[req.request_id] = guard
+        return guard
 
     def _make_sampler(
         self, sp: SamplingParams, prompt_token_ids: list[int] | None = None

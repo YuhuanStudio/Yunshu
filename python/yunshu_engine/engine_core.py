@@ -1242,15 +1242,10 @@ class EngineCore:
         else:
             token_ids = list(prompt)
 
-        # Guard against empty prompt: inject BOS/EOS so the scheduler
-        # doesn't crash with a zero-length token sequence.
-        if not token_ids:
-            bos_id = getattr(self._tokenizer, "bos_token_id", None)
-            if bos_id is not None:
-                token_ids = [bos_id]
-            else:
-                eos_id = getattr(self._tokenizer, "eos_token_id", 1)
-                token_ids = [eos_id]
+        # A zero-token prompt is refused (the scheduler cannot prefill nothing).
+        from .context_window import require_non_empty_prompt
+
+        require_non_empty_prompt(token_ids)
 
         num_prompt_tokens = len(token_ids)
 
@@ -3482,6 +3477,10 @@ class EngineCore:
                         ]
                         content = "\n".join(t for t in text_parts if t)
                     clean.append({"role": m.get("role", "user"), "content": content})
+                # special-token strings typed in message text stay text (never control ids)
+                from .special_tokens import neutralize_special_text
+
+                clean = neutralize_special_text(clean, self._tokenizer)
                 kwargs: dict[str, Any] = {
                     "tokenize": False,
                     "add_generation_prompt": True,

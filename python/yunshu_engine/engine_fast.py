@@ -10,7 +10,11 @@ import asyncio
 import time
 
 from . import settings
-from .context_window import ContextBudgetError, reject_overlong_prompt
+from .context_window import (
+    ContextBudgetError,
+    reject_overlong_prompt,
+    require_non_empty_prompt,
+)
 from .fast_path_stats import FastPathStats
 
 
@@ -396,14 +400,7 @@ class EngineFastMixin:
         prompt_tokens = len(input_ids)
         _latency_marks["template_end"] = time.perf_counter()
 
-        if not input_ids:
-            bos_id = getattr(tokenizer, "bos_token_id", None)
-            if bos_id is not None:
-                input_ids = [bos_id]
-            else:
-                eos_id = getattr(tokenizer, "eos_token_id", 1)
-                input_ids = [eos_id]
-            prompt_tokens = len(input_ids)
+        require_non_empty_prompt(input_ids)
 
         # ── Context window: clamp generation + truncate over-long prompt ──
         # Resolve the REAL context window. The old code read ONLY the
@@ -830,6 +827,9 @@ class EngineFastMixin:
             # snapshots only.
             _fp_stats.stats.latency_marks["apc_start"] = time.perf_counter()
             _pc_hit = False
+            _pc_hash: str | None = (
+                None  # the rendered prompt is hashed once per request
+            )
             # The prompt cache borrows the prefix cache's snapshot/trim; without it a hit would
             # share (and later mutate) the stored post-generation KV.
             if (
@@ -989,7 +989,6 @@ class EngineFastMixin:
                         exc_info=True,
                     )
 
-            _timeout_check_interval = 32
             _fp_stats.admit(
                 cached_tokens,
                 len(ids_to_prefill),
@@ -1045,10 +1044,9 @@ class EngineFastMixin:
                     tokens.append(token)
                     _fp_stats.token(len(tokens))
                     # Request-level timeout: check every N tokens
-                    if (
-                        _timeout_deadline is not None
-                        and len(tokens) % _timeout_check_interval == 0
-                    ):
+                    if _timeout_deadline is not None:
+                        # every token / cycle: a modulo check skips multiples when a spec cycle
+                        # accepts several tokens, and overshoots by seconds on a slow model
                         if time.perf_counter() > _timeout_deadline:
                             _engine.logger.warning(
                                 f"Generation timed out after {timeout_seconds}s ({len(tokens)} tokens)"
@@ -1234,10 +1232,11 @@ class EngineFastMixin:
                     from .kv_prefix_cache import cache_length as _cache_len
                     from .prompt_cache import compute_messages_hash
 
-                    _pc_hash = compute_messages_hash(
-                        [{"role": "user", "content": text}],
-                        model=self.model_name,
-                    )
+                    if _pc_hash is None:
+                        _pc_hash = compute_messages_hash(
+                            [{"role": "user", "content": text}],
+                            model=self.model_name,
+                        )
                     _prompt_only_len = int(len(ids))
                     _full_cache_len = int(_cache_len(cache))
                     _trim = max(0, _full_cache_len - _prompt_only_len)
@@ -1632,17 +1631,23 @@ class EngineFastMixin:
                 try:
                     from .reasoning_parser import (
                         close_reasoning_at_tool_call,
+                        close_unterminated_reasoning,
                         get_reasoning_parser,
                     )
+                    from .thinking_budget import detect_needs_think_prefix
 
+                    _prompt_opens_think = detect_needs_think_prefix(
+                        list(input_ids), tokenizer
+                    )
                     if _tools_declared:
                         # a tool call opened inside unclosed reasoning ends the reasoning
-                        from .thinking_budget import detect_needs_think_prefix
-
                         output_text = close_reasoning_at_tool_call(
-                            output_text,
-                            detect_needs_think_prefix(list(input_ids), tokenizer),
+                            output_text, _prompt_opens_think
                         )
+                    # EOS / stop / length inside the open <think> keeps the tail reasoning
+                    output_text = close_unterminated_reasoning(
+                        output_text, _prompt_opens_think
+                    )
                     rp = get_reasoning_parser(self.model_name)
                     rp_out = rp.parse(output_text)
                     if rp_out.reasoning:

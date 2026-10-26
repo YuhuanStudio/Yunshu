@@ -651,6 +651,28 @@ def create_app() -> FastAPI:
             }
         return JSONResponse(status_code=400, content=content)
 
+    from yunshu_engine.context_window import EmptyPromptError
+
+    @app.exception_handler(EmptyPromptError)
+    async def empty_prompt_handler(request: Request, exc: EmptyPromptError):
+        """The request renders to zero prompt tokens: a client error, not a server fault."""
+        message = str(exc)
+        if request.url.path in _ANTHROPIC_PATHS:
+            content = {
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": message},
+            }
+        else:
+            content = {
+                "error": {
+                    "message": message,
+                    "type": "invalid_request_error",
+                    "param": "messages",
+                    "code": "empty_prompt",
+                }
+            }
+        return JSONResponse(status_code=400, content=content)
+
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
         """Catch-all for unhandled exceptions — prevents stack trace leakage.

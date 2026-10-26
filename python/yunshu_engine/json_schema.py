@@ -2519,6 +2519,29 @@ def apply_json_constraint(
     return result
 
 
+def apply_allowed_mask_from(constraint: Any, tokenizer: Any, logits: Any) -> Any | None:
+    """Mask ``logits`` with the constraint's ``allowed_mask`` when it offers one, else ``None``
+    (the caller then uses ``get_allowed_tokens``). An all-``-inf`` result is a dead end."""
+    fast = getattr(constraint, "allowed_mask", None)
+    if fast is None:
+        return None
+    import mlx.core as mx
+
+    try:
+        mask = fast(tokenizer, logits.shape[-1])
+    except Exception:
+        logger.debug("allowed_mask failed; using the allowed-token list", exc_info=True)
+        return None
+    if not isinstance(mask, mx.array) or mask.shape[-1] != logits.shape[-1]:
+        return None
+    result = mx.where(mask, logits, mx.array(float("-inf"), dtype=logits.dtype))
+    if not mx.all(mx.any(mx.isfinite(result), axis=-1)).item():
+        raise ConstrainedDecodingError(
+            "constrained decoding dead end: every allowed token has a -inf logit"
+        )
+    return result
+
+
 # ── Constrained Sampler ────────────────────────────────────────────────────
 
 
@@ -2553,12 +2576,23 @@ class ConstrainedSampler:
         Returns:
             mx.array with sampled token ID
         """
+        # A constraint that can hand over a boolean mask (llguidance, JSON string states)
+        # skips expanding the allowed set into a ~240K-id list and scattering it back.
+        masked_logits = apply_allowed_mask_from(
+            self._constraint, self._tokenizer, logits
+        )
         # Get allowed tokens for current state
-        allowed = self._constraint.get_allowed_tokens(
-            self._tokenizer, self._generated_ids
+        allowed = (
+            None
+            if masked_logits is not None
+            else self._constraint.get_allowed_tokens(
+                self._tokenizer, self._generated_ids
+            )
         )
 
-        if allowed:
+        if masked_logits is not None:
+            pass
+        elif allowed:
             # Mask disallowed tokens
             masked_logits = apply_json_constraint(logits, allowed)
         else:
