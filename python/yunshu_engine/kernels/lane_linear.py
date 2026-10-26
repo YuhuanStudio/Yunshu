@@ -447,7 +447,7 @@ def convert(language_model: Any, *, skip: tuple[str, ...] = ()) -> dict:
         updates = {}
         for key, child in children:
             path = f"{name}.{key}" if name else key
-            if any(path.endswith(tail) for tail in skip):
+            if any(tail in path for tail in skip):
                 continue
             if eligible(child):
                 lane = LaneLinear.from_quantized(child)

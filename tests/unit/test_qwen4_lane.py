@@ -75,3 +75,37 @@ def test_refuses_when_the_lane_cannot_take_an_unsupported_head(monkeypatch):
     settings.set_override("YUNSHU_QWEN4_LANE", False)
     with pytest.raises(RuntimeError, match="batch-invariant plain decode"):
         qwen4_mtp.configure_lane(FakeLM(False), None, None)
+
+
+def test_dense_skip_keeps_fused_kernel_owned_modules_quantized():
+    import mlx.nn as nn
+
+    from yunshu_engine.kernels import lane_linear
+
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = [nn.Module() for _ in range(1)]
+            self.layers[0].mlp = nn.Module()
+            self.layers[0].mlp.shared_expert = nn.Module()
+            self.layers[0].mlp.shared_expert.gate_proj = nn.Linear(128, 64, bias=False)
+            self.layers[0].attn_hyper_connection = nn.Module()
+            self.layers[0].attn_hyper_connection.input_mix_weight_down = nn.Linear(
+                128, 64, bias=False
+            )
+            self.layers[0].linear_attn = nn.Module()
+            self.layers[0].linear_attn.in_proj_qkv = nn.Linear(128, 64, bias=False)
+
+    m = M()
+    m.set_dtype(nn.Linear(1, 1).weight.dtype)
+    import mlx.core as mx
+
+    m.set_dtype(mx.bfloat16)
+    nn.quantize(m, group_size=64, bits=8)
+    out = lane_linear.convert(m, skip=qwen4_mtp.DENSE_SKIP)
+    assert out["converted"] == 1
+    assert isinstance(m.layers[0].linear_attn.in_proj_qkv, lane_linear.LaneLinear)
+    assert isinstance(m.layers[0].mlp.shared_expert.gate_proj, nn.QuantizedLinear)
+    assert isinstance(
+        m.layers[0].attn_hyper_connection.input_mix_weight_down, nn.QuantizedLinear
+    )

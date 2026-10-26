@@ -62,6 +62,8 @@ def load_native_head(config: dict, weights: dict | None) -> Any:
     return drafter
 
 
+# modules whose fused kernels (hyper-connection, MoE router/experts, PLE) read the raw quantized tensors
+DENSE_SKIP = ("hyper_connection", "shared_expert", "switch_mlp", ".ple.", ".mlp.gate")
 STOCK_ROWS = 32  # lane projections serve calls up to this many rows (decode, MTP / draft verify); prefill chunks stay stock
 
 
@@ -80,7 +82,7 @@ def lane_projections(lm: Any, *, head: bool, group: bool = True) -> dict:
 
     if not hasattr(lm, "named_modules") or not lane_qmm.ready():
         return {}
-    report = lane_linear.convert(lm, skip=() if head else ("lm_head",))
+    report = lane_linear.convert(lm, skip=DENSE_SKIP + (() if head else ("lm_head",)))
     lane_linear.set_stock_rows(STOCK_ROWS)
     if group:
         from .kernels import lane_virtual
