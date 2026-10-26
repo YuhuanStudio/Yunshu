@@ -10,8 +10,14 @@ the op, which is what the per-id scalar arithmetic did, so the result is bit-ide
 (tests/unit/test_text_logit_processors.py checks float32 and bfloat16 against the old
 loops).
 
-Signature is mlx-lm's ``(tokens, logits) -> logits``; ``tokens`` is
-``[last_prompt_token, gen1, gen2, ...]`` (mlx-lm prefills the rest outside ``_step``).
+Signature is mlx-lm's ``(tokens, logits) -> logits``. What ``tokens`` holds depends on the
+mlx-lm release: older ones passed ``[last_prompt_token, gen1, ...]`` (the rest of the prompt was
+prefilled outside ``_step``), current ones (0.32) append every prefill chunk too, so ``tokens`` is
+``[prompt..., gen1, ...]`` and its first length is the prompt length that THIS request prefilled
+(1 after a prefix-cache hit, the whole prompt on a miss). ``n_prompt=None`` (what the mlx-lm
+text paths pass) reads the offset off the first call, which is made before any token is generated,
+so both shapes work; an int is the explicit offset (the default 1 is the old shape; the engine loop
+passes the prompt length of its prompt + generated ``tokens``).
 """
 
 from __future__ import annotations
@@ -58,6 +64,8 @@ class FrequencyPresencePenalty:
 
     def __call__(self, tokens, logits):
         cur_len = len(tokens)
+        if self.n_prompt is None:  # the first call precedes the first generated token
+            self.n_prompt = cur_len
         if cur_len <= self.n_prompt:
             self._last_len = cur_len
             return logits
@@ -113,10 +121,10 @@ class LogitBias:
 class TokenBan:
     """Set the logits of ``ids`` to -inf, optionally only while fewer than ``floor``
     tokens were generated (``min_tokens``: ``len(tokens) - n_prompt`` counts generated ones;
-    ``n_prompt`` is 1 on the mlx-lm text path, the prompt length in the engine loop where
-    ``tokens`` is the whole prompt plus the generated ids)."""
+    ``n_prompt`` is read off the first call on the mlx-lm text path, and is the prompt length
+    in the engine loop where ``tokens`` is the whole prompt plus the generated ids)."""
 
-    def __init__(self, ids, floor: int | None = None, n_prompt: int = 1):
+    def __init__(self, ids, floor: int | None = None, n_prompt: int | None = 1):
         self._ids = [int(t) for t in ids]
         self._floor = floor
         self._n_prompt = n_prompt
@@ -124,6 +132,8 @@ class TokenBan:
         self._mask: mx.array | None = None
 
     def __call__(self, tokens, logits):
+        if self._n_prompt is None:  # the first call precedes the first generated token
+            self._n_prompt = len(tokens)
         if self._floor is not None and (len(tokens) - self._n_prompt) >= self._floor:
             return logits
         vocab = logits.shape[-1]

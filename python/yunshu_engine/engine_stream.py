@@ -335,12 +335,14 @@ class EngineStreamMixin:
 
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
             # Dense per-request count vectors patched once per new token (see
-            # text_logit_processors). The prompt offset is 1, NOT the prompt length:
-            # mlx-lm prefills all-but-the-last prompt token OUTSIDE _step, so the
-            # `tokens` handed to logits_processors is [last_prompt_token, gen1, ...].
+            # text_logit_processors). The prompt offset is read off the first call
+            # (n_prompt=None): the `tokens` mlx-lm hands over start with the prompt it
+            # prefilled for THIS request (1 token after a cache hit, all of it on a miss).
             # OpenAI allows both penalties in [-2, 2]; negative ones boost the token.
             logits_processors.append(
-                _tlp.FrequencyPresencePenalty(frequency_penalty, presence_penalty)
+                _tlp.FrequencyPresencePenalty(
+                    frequency_penalty, presence_penalty, n_prompt=None
+                )
             )
         if logit_bias:
             # Out-of-range ids are skipped (OpenAI ignores them) rather than crashing
@@ -357,7 +359,9 @@ class EngineStreamMixin:
         # all-(-inf) allowed set → its argmax fallback emits an INVALID non-EOS
         # token after a complete JSON value.
         if min_tokens and min_tokens > 0 and stop_ids and json_schema is None:
-            logits_processors.append(_tlp.TokenBan(stop_ids, floor=int(min_tokens)))
+            logits_processors.append(
+                _tlp.TokenBan(stop_ids, floor=int(min_tokens), n_prompt=None)
+            )
 
         # SAMP-2: Wrap user-provided custom logits processors to adapt signature.
         if _custom_logits_processors:
