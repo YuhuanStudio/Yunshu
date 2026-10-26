@@ -596,6 +596,10 @@ class BatchedEngine(
         if _qmode:
             await loop.run_in_executor(executor, self._quantize_on_load, _qmode)
         _cache_tokenizer_vocab(self._tokenizer)
+        # Background build of the llguidance token tables (does not delay readiness).
+        from .tool_call_grammar import prewarm_for_engine
+
+        prewarm_for_engine(self)
 
         try:
             await self._finish_start(loop, executor)

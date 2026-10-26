@@ -226,10 +226,11 @@ _add("YUNSHU_SPEC_PROPOSER", "enum", "ngram", "Text models: speculative proposer
 _add("YUNSHU_GEMMA4_ASSISTANT", "path", None, "Text Gemma-4 models: assistant drafter directory (KV-shared speculative drafter).", "speculative")
 
 # ── text engine ────────────────────────────────────────────────────────
-_add("YUNSHU_GPU_SAMPLER", "bool", False, "Text models: on-GPU Gumbel-max sampling (no per-token GPU->CPU sync).", "text-engine")
+_add("YUNSHU_GPU_SAMPLER", "bool", False, "Text models: on-GPU Gumbel-max sampling for temperature > 0 (no per-token GPU->CPU sync) instead of the float64 NumPy sampler that copies the logits to the CPU every token.", "text-engine", stability="experimental", decide="scripts/research/ab_gpu_sampler.py on a text-only checkpoint: decode tok/s gpu/numpy >= 1.05 in every sampling config, first-token TV(numpy, gpu) within the numpy-vs-numpy noise floor, seeded reruns identical; if it wins the GPU sampler becomes the only one (NumPy sampler and this flag deleted), else the GPU sampler and flag are deleted", added="2026-10-26")
 _add("YUNSHU_JUMP_FORWARD", "bool", False, "Text models: emit grammar-forced structural tokens of JSON-schema output without a forward pass.", "text-engine")
 _add("YUNSHU_JSON_SCHEMA_ENGINE", "enum", "llguidance", "Engine that masks JSON-schema / json_object constrained decoding: 'llguidance' (per-token mask about 0.25 ms median on a 248K vocabulary; properties in schema order, forced literals in canonical tokenization) or 'inhouse' (the Python state machine, about 3 ms median; any property order). A schema llguidance cannot compile falls back to the in-house engine when that supports it.", "text-engine", choices=("llguidance", "inhouse"))
 _add("YUNSHU_GRAMMAR_BITMASK", "bool", False, "Constrained decoding with the xgrammar-style bitmask engine instead of the allowlist sampler.", "text-engine")
+_add("YUNSHU_GRAMMAR_PREWARM", "bool", True, "Build the llguidance token tables in the background when a model loads, so the first constrained request (response_format, regex, choice, cfg, forced tool_choice) does not spend about a second walking the vocabulary. Costs the native heap the first constrained request would take anyway (about 0.45 GiB per mask width at a 248K vocabulary); 0 builds them on first use instead. Needs llguidance and a Hugging Face tokenizer.", "text-engine")
 _add("YUNSHU_TOOL_GRAMMAR", "bool", False, "Tool-call constrained decoding (structural tags): free text until the model emits the tool-call start marker, then the call body is masked to the exact call grammar of this request's tools (tool name, that tool's parameter keys, schema-typed values, correct closing); a forced tool_choice (required / any / a named tool) starts constrained. A forced tool_choice is always constrained, whatever this flag says (OpenAI and Anthropic both guarantee the call); the flag governs only auto. Lossless for a call the model would have written validly. Off: auto-choice tool calls are decoded unconstrained and repaired after the fact.", "text-engine", stability="experimental", decide="malformed / dropped tool calls with vs without the grammar on the agentic matrix (Claude Code, Codex, opencode; greedy and sampled) against the call-decode cost (27B replays: lossless 12/12, 0 malformed both ways, call decode -0..10%); forced tool_choice already ships always-on (guarantee, M3 sweep); for auto: on only if it removes failures the repair does not", added="2026-10-01")
 _add("YUNSHU_QUANT_MODE", "enum", "", "Quantize weights in memory at load (lossy; memory vs quality): mxfp4, nvfp4, mxfp8 or affine ('' keeps the checkpoint).", "text-engine", choices=("", "mxfp4", "nvfp4", "mxfp8", "affine"))
 _add("YUNSHU_QUANT_CONFIG", "str", None, "Bits/group for affine in-memory quantization: JSON ({\"bits\":4,\"group_size\":64}) or 'bits' / 'bits,group'.", "text-engine")
@@ -400,6 +401,7 @@ _LIVE = frozenset(
         "YUNSHU_JUMP_FORWARD",
         "YUNSHU_JSON_SCHEMA_ENGINE",
         "YUNSHU_GRAMMAR_BITMASK",
+        "YUNSHU_GRAMMAR_PREWARM",
         "YUNSHU_TOOL_GRAMMAR",
         "YUNSHU_OMNI_PERSONA",
         "YUNSHU_REALTIME_SILENCE_MS",

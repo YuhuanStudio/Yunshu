@@ -636,6 +636,9 @@ class VLMEngine:
         from .text_utils import cache_tokenizer_vocab
 
         cache_tokenizer_vocab(self._tokenizer)  # avoid ~98ms/req get_vocab rebuild
+        from .tool_call_grammar import prewarm_for_engine
+
+        prewarm_for_engine(self)  # background llguidance token tables
         self._resolve_reasoning_channel_ids()
         self._is_vlm = True
         logger.info("Loaded model via mlx_vlm (vision=%s)", self._has_vision)

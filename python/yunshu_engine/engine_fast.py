@@ -370,21 +370,29 @@ class EngineFastMixin:
         _latency_info = current_request_info.get()
         _latency_marks = getattr(_latency_info, "latency_marks", {})
         _latency_marks["template_start"] = time.perf_counter()
-        # Encode prompt
-        if isinstance(prompt, str):
-            text = prompt
-        elif isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
-            # Route through _apply_chat_template (NOT raw tokenizer.apply_chat_template)
-            # so the fast path — the DEFAULT serving path — also gets: tool_calls.
-            # arguments str→dict normalization (multi-turn tool history otherwise
-            # double-encodes or raises in Jinja → silent degraded fallback), the
-            # family message adapter (Gemma4/Mistral/Harmony role rules), dangling
-            # <think> closing, and the enable_thinking-unsupported retry.
-            text = self._apply_chat_template(prompt, enable_thinking=enable_thinking)
-        else:
-            text = str(prompt)
 
-        input_ids = self._encode_prompt(tokenizer, text)
+        # Encode prompt (template render + tokenize run on the text-prep thread, not
+        # the event loop: see text_prep).
+        def _render_and_encode():
+            if isinstance(prompt, str):
+                text = prompt
+            elif isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+                # Route through _apply_chat_template (NOT raw tokenizer.apply_chat_template)
+                # so the fast path — the DEFAULT serving path — also gets: tool_calls.
+                # arguments str→dict normalization (multi-turn tool history otherwise
+                # double-encodes or raises in Jinja → silent degraded fallback), the
+                # family message adapter (Gemma4/Mistral/Harmony role rules), dangling
+                # <think> closing, and the enable_thinking-unsupported retry.
+                text = self._apply_chat_template(
+                    prompt, enable_thinking=enable_thinking
+                )
+            else:
+                text = str(prompt)
+            return text, self._encode_prompt(tokenizer, text)
+
+        from .text_prep import run_text_prep
+
+        text, input_ids = await run_text_prep(_render_and_encode)
         prompt_tokens = len(input_ids)
         _latency_marks["template_end"] = time.perf_counter()
 
@@ -639,85 +647,25 @@ class EngineFastMixin:
                 return logits
 
             logits_processors.append(_rep_penalty)
+        from . import text_logit_processors as _tlp
+
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
-            # Maintain incremental counts dict instead of rebuilding
-            # from full tokens list every step (O(T²) → O(T) total). The
-            # closure captures a mutable state dict so successive calls only
-            # observe the newest token.
-            _fp_state: dict[str, object] = {"counts": {}, "last_len": -1}
-
-            # The prompt offset inside the processor is 1, NOT the full
-            # prompt length. mlx-lm prefills all-but-the-last prompt token OUTSIDE
-            # _step, so the `tokens` accumulator handed to logits_processors is
-            # [last_prompt_token, gen1, gen2, ...]. With n_prompt=prompt_tokens the
-            # guard `cur_len <= n_prompt` made frequency/presence penalty INERT for
-            # the first ~prompt_len generated tokens (short completions never
-            # penalized at all) and then tokens[n_prompt:] under-counted repeats.
-            def _freq_pres_penalty(
-                tokens,
-                logits,
-                fp=frequency_penalty,
-                pp=presence_penalty,
-                n_prompt=1,
-                _st=_fp_state,
-            ):
-                counts: dict[int, int] = _st["counts"]  # type: ignore[assignment]
-                last_len = int(_st["last_len"])  # type: ignore[arg-type]
-                cur_len = len(tokens)
-                if cur_len <= n_prompt:
-                    _st["last_len"] = cur_len
-                    return logits
-                # Reset/rebuild if tokens shrank (spec-decode rollback) or
-                # we have not yet started incremental accounting.
-                if cur_len < last_len or last_len < n_prompt:
-                    counts = {}
-                    for t in tokens[n_prompt:]:
-                        counts[int(t)] = counts.get(int(t), 0) + 1
-                    _st["counts"] = counts
-                else:
-                    start = max(last_len, n_prompt)
-                    for t in tokens[start:]:
-                        counts[int(t)] = counts.get(int(t), 0) + 1
-                _st["last_len"] = cur_len
-                for tid, cnt in counts.items():
-                    # OpenAI permits frequency/presence penalty in [-2.0, 2.0];
-                    # negative values BOOST the token (encourage repetition).
-                    # Guarding with `> 0` silently dropped negative penalties
-                    # (verified: fp=-2.0 produced output identical to fp=0).
-                    if fp != 0.0:
-                        logits[..., tid] = logits[..., tid] - fp * cnt
-                    if pp != 0.0 and cnt > 0:
-                        logits[..., tid] = logits[..., tid] - pp
-                return logits
-
-            logits_processors.append(_freq_pres_penalty)
+            # Dense per-request count vectors patched once per new token (see
+            # text_logit_processors). The prompt offset is 1, NOT the prompt length:
+            # mlx-lm prefills all-but-the-last prompt token OUTSIDE _step, so the
+            # `tokens` handed to logits_processors is [last_prompt_token, gen1, ...].
+            # OpenAI allows both penalties in [-2, 2]; negative ones boost the token.
+            logits_processors.append(
+                _tlp.FrequencyPresencePenalty(frequency_penalty, presence_penalty)
+            )
         if logit_bias:
-
-            def _logit_bias_proc(_tokens, logits, biases=logit_bias):
-                # Skip token ids outside [0, vocab) — a user-supplied out-of-range
-                # or negative id would otherwise index out of bounds and crash the
-                # request (MLX: "Cannot squeeze axis 1 with size 0"). OpenAI ignores
-                # invalid logit_bias token ids rather than erroring.
-                vocab = logits.shape[-1]
-                for tid, bias in biases.items():
-                    if 0 <= tid < vocab:
-                        logits[..., tid] = logits[..., tid] + bias
-                return logits
-
-            logits_processors.append(_logit_bias_proc)
+            # Out-of-range ids are skipped (OpenAI ignores them) rather than crashing
+            # the request with an out-of-bounds index.
+            logits_processors.append(_tlp.LogitBias(logit_bias))
 
         # suppress_tokens — hard-ban specific token ids (logits → -inf).
         if suppress_tokens:
-            _sup = [int(t) for t in suppress_tokens]
-
-            def _suppress_proc(_tokens, logits, sup=_sup):
-                vocab = logits.shape[-1]
-                for tid in sup:
-                    if 0 <= tid < vocab:
-                        logits[..., tid] = -float("inf")
-                return logits
-
-            logits_processors.append(_suppress_proc)
+            logits_processors.append(_tlp.TokenBan(suppress_tokens))
 
         # min_tokens — mask EOS + single-token stops to -inf until at
         # least min_tokens have been GENERATED, so generation can't end early.
@@ -730,17 +678,7 @@ class EngineFastMixin:
         # emits an INVALID non-EOS token after a complete JSON value. Valid JSON
         # must win over min_tokens (which can't lengthen structured output anyway).
         if min_tokens and min_tokens > 0 and stop_ids and json_schema is None:
-            _mask_ids = list(stop_ids)
-
-            def _min_tokens_proc(tokens, logits, ids=_mask_ids, floor=int(min_tokens)):
-                if (len(tokens) - 1) < floor:
-                    vocab = logits.shape[-1]
-                    for tid in ids:
-                        if 0 <= tid < vocab:
-                            logits[..., tid] = -float("inf")
-                return logits
-
-            logits_processors.append(_min_tokens_proc)
+            logits_processors.append(_tlp.TokenBan(stop_ids, floor=int(min_tokens)))
 
         # SAMP-2: Wrap user-provided custom logits processors to adapt signature.
         # User processors take (token_ids: list[int], logits: mx.array) -> mx.array
@@ -999,43 +937,19 @@ class EngineFastMixin:
 
             _fp_stats.stats.latency_marks["apc_end"] = time.perf_counter()
 
-            # Inflight prefix sharing: check for in-flight
-            # prefills with matching prefix to share partial KV blocks.
-            # Skip when seed-bypass is active so seeded requests stay
-            # bit-reproducible regardless of concurrent in-flight prompts.
-            # Inflight sharing borrows a donor's live cache and
-            # trims it to the matched prefix — not safe for hybrid (non-trimmable
-            # recurrent layers). Hybrid reuse goes through boundary snapshots only.
-            _inflight_entry = None
-            if cached_kv is None and not _bypass_cache and not _hybrid_mode:
-                try:
-                    from .inflight_prefix_sharing import get_inflight_tracker
-
-                    _tracker = get_inflight_tracker()
-                    _inflight_entry = _tracker.find_prefix(
-                        [int(t) for t in ids], self.model_name or ""
-                    )
-                    # : DO NOT borrow the donor's LIVE kv_cache_ref. It was
-                    # unsnapshotted+untrimmed: a full-length match yields an empty
-                    # ids_to_prefill (generate_step on a (1,0) tensor → IndexError),
-                    # and a partial match decodes into the donor's still-growing
-                    # cache → wrong RoPE offsets / cross-request corruption. Safe
-                    # only when the donor unregisters before any other fast-path
-                    # _run — which the now-working engine loop breaks (a long-lived
-                    # engine-loop donor stays registered). The snapshot-based
-                    # persistent prefix cache already covers safe sharing, so the
-                    # live-borrow reuse is disabled (registration below is kept and
-                    # is harmless).
-                except Exception:
-                    _engine.logger.debug("inflight prefix lookup failed", exc_info=True)
-
+            # Inflight prefix sharing: register this prefill (tracker stats / TTL).
+            # No find_prefix() lookup: borrowing a donor's LIVE kv cache is disabled
+            # (untrimmed, still growing -> empty prefill on a full match, wrong RoPE
+            # offsets on a partial one; hybrid layers are not trimmable at all) and
+            # the snapshot-based prefix cache covers safe sharing, so the lookup
+            # result was dead code that copied the whole prompt token by token.
             # Register our prefill as in-flight for concurrent requests to share
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
 
                 get_inflight_tracker().register(
                     _inflight_req_id,
-                    [int(t) for t in ids],
+                    input_ids,
                     cache,
                     self.model_name or "",
                 )
@@ -1163,19 +1077,20 @@ class EngineFastMixin:
                             mx.array(-100.0, dtype=log_probs.dtype),
                             log_probs,
                         )
-                        tok_lp = float(log_probs[token])
-                        entry = {"token_id": int(token), "logprob": tok_lp}
                         if top_logprobs and top_logprobs > 0:
-                            k = min(top_logprobs, log_probs.shape[0])
-                            sorted_idx = mx.argsort(-log_probs)
-                            top_k_idx = sorted_idx[:k]
+                            from .text_logprobs import top_logprobs as _top_lp
+
+                            tok_lp, _top_ids, _top_vals = _top_lp(
+                                log_probs, top_logprobs, token
+                            )
+                            entry = {"token_id": int(token), "logprob": tok_lp}
                             entry["top_logprobs"] = [
-                                {
-                                    "token_id": int(top_k_idx[j]),
-                                    "logprob": float(log_probs[int(top_k_idx[j])]),
-                                }
-                                for j in range(k)
+                                {"token_id": i, "logprob": v}
+                                for i, v in zip(_top_ids, _top_vals, strict=True)
                             ]
+                        else:
+                            tok_lp = float(log_probs[token])
+                            entry = {"token_id": int(token), "logprob": tok_lp}
                         token_logprobs.append(entry)
                     # Stop ID check — must happen before thinking budget so that
                     # a stop token gets finish_reason="stop" even during thinking.

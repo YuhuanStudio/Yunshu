@@ -128,13 +128,9 @@ def _compute_block_hashes(tokens) -> list[int]:
     Uses the canonical hash from yunshu_kv.hash for cross-subsystem
     compatibility.
     """
-    hashes = []
-    parent: int | None = None
-    for i in range(0, len(tokens), _BLOCK_SIZE):
-        block = tokens[i : i + _BLOCK_SIZE]
-        parent = _canonical_block_hash(parent, block)
-        hashes.append(parent)
-    return hashes
+    from yunshu_kv.hash import compute_chain_hashes
+
+    return compute_chain_hashes(tokens, _BLOCK_SIZE, partial_tail=True)
 
 
 # ── Eviction Strategies ──────────────────────────────────────────────────────
