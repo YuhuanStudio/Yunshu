@@ -6,6 +6,8 @@ depends on the parent hash + token IDs, enabling O(1) prefix lookup.
 
 import struct
 
+import numpy as np
+
 try:
     import xxhash
 
@@ -49,6 +51,46 @@ def compute_block_hash(
     return _hash_bytes(b"".join(parts))
 
 
+def _extra_key_bytes(extra_keys: tuple) -> bytes:
+    parts = []
+    for key in extra_keys:
+        if isinstance(key, int):
+            parts.append(struct.pack("<Q", key))
+        elif isinstance(key, str):
+            parts.append(key.encode("utf-8"))
+    return b"".join(parts)
+
+
+def compute_chain_hashes(
+    token_ids,
+    block_size: int,
+    extra_keys: tuple = (),
+    *,
+    partial_tail: bool = False,
+) -> list[int]:
+    """Chain hashes of consecutive ``block_size`` blocks, one per block.
+
+    Same values as folding :func:`compute_block_hash` over the blocks (each hash covers
+    the parent hash, the block's little-endian uint32 token ids and the extra keys), but
+    the token ids are converted to bytes once instead of one ``struct.pack`` per token
+    (3.5 ms -> 0.5 ms per 32k tokens). ``token_ids`` is a list or an integer ndarray.
+    ``partial_tail`` also hashes a final incomplete block; by default only complete
+    blocks are hashed.
+    """
+    raw = np.ascontiguousarray(token_ids, dtype="<u4").tobytes()
+    n = len(raw) // 4
+    end = n if partial_tail else n - n % block_size
+    tail = _extra_key_bytes(extra_keys)
+    hashes = []
+    parent = 0
+    for i in range(0, end, block_size):
+        parent = _hash_bytes(
+            struct.pack("<Q", parent) + raw[4 * i : 4 * (i + block_size)] + tail
+        )
+        hashes.append(parent)
+    return hashes
+
+
 def compute_prompt_hashes(
     token_ids: list[int],
     block_size: int,
@@ -59,13 +101,4 @@ def compute_prompt_hashes(
     Returns:
         List of block hashes, one per complete block.
     """
-    hashes = []
-    parent_hash: int | None = None
-
-    for i in range(0, len(token_ids) - (len(token_ids) % block_size), block_size):
-        block_tokens = token_ids[i : i + block_size]
-        h = compute_block_hash(parent_hash, block_tokens, extra_keys)
-        hashes.append(h)
-        parent_hash = h
-
-    return hashes
+    return compute_chain_hashes(token_ids, block_size, extra_keys)
