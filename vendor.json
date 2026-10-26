@@ -1664,7 +1664,7 @@
       "signature": "(self)",
       "license": "MIT",
       "commit": "v0.7.3",
-      "why": "reads self.uids for per-row sampling",
+      "why": "reads self.uids for per-row sampling; top_logprobs taken from the sampler's logprobs by one batched device argpartition instead of the upstream full-vocab argsort",
       "source_sha256": "f4aa6a2b6644c0875f1bbb240ad1676e873bdd12c2396c3388caf5e50b8d180d",
       "installed_version": "0.7.8"
     },
@@ -1679,7 +1679,7 @@
       "signature": "(self, *args, **kwargs)",
       "license": "MIT",
       "commit": "v0.7.3",
-      "why": "reads self.uids for per-row sampling",
+      "why": "reads self.uids for per-row sampling; top_logprobs taken from the sampler's logprobs by one batched device argpartition instead of the upstream full-vocab argsort",
       "source_sha256": "b7bbcf0a76ad32bfc5d61b125ffdad67c7e27057c8611693aad40c7601a6fe1c",
       "installed_version": "0.7.8",
       "reviewed_date": "2026-10-15",
