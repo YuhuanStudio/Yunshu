@@ -125,7 +125,7 @@
     },
     "dflash": {
      "s": "partial",
-     "why": "dflash_copy.rounds falls back to the chain for sampled requests, guided requests and when lane projections are not ready",
+     "why": "dflash_copy.rounds supports greedy and position-keyed sampled requests; unsupported guides, stateful sampling and unavailable lane projections retain chain verification",
      "owner": "decode16",
      "impact": "high",
      "ev": [
@@ -204,7 +204,8 @@
        "python/yunshu_engine/dflash_copy.py",
        "dflash_fast.eligible("
       ]
-     ]
+     ],
+     "why": "Greedy and supported position-keyed sampled rows use depth-indexed target draws and coupled full-vocabulary proposals; XTC and unsupported constraints retain the chain."
     },
     "driver": {
      "s": "missing",
@@ -303,7 +304,7 @@
     },
     "dflash": {
      "s": "partial",
-     "why": "chain only; copy islands and the fast tree require greedy (dflash_copy.py, dflash_fast.eligible)",
+     "why": "Keyed tree verify, coupled full-vocabulary draft candidates and sampled copy proposals passed M5 1K/32K/128K seeded token/logprob identity and three-rep 16K/32K/128K speed checks. Stateful XTC and unsupported constraints retain chain fallback.",
      "owner": "decode16",
      "impact": "high",
      "ev": [
@@ -1822,7 +1823,7 @@
   },
   "lane_promotion": {
    "module": "python/yunshu_engine/vlm_batch_runner.py",
-   "what": "A lone decoding row of the shared batch moves onto the speculative lane at a step boundary (batch to lane transition). Eligibility mirrors the lane's limits (greedy, no guide/processors/logprobs/thinking budget): widen it in the same change when sampled/guided DFlash lands",
+   "what": "A lone decoding row of the shared batch moves onto the speculative lane at a step boundary (batch to lane transition). Eligible greedy or position-keyed sampled DFlash rows preserve absolute generation positions and pending token probabilities on promotion, including invariant tool guides and reporting-only rows. Unsupported processors, combined serial guides, budgets and media retain the shared batch; M5 promotion certification pending",
    "cells": {
     "mtp": {
      "s": "missing",
@@ -2191,29 +2192,16 @@
   },
   {
    "id": "guide-off-copy-tree",
-   "a": "guided (grammar/tool-call) requests",
+   "a": "response-format / combined guides, or tool-call guides with logprobs or penalties",
    "b": "DFlash copy islands and fast tree",
    "kind": "unimplemented",
    "ev": [
     [
-     "python/yunshu_engine/dflash_fast.py",
-     "_STATE[\"guide\"] is None"
+     "python/yunshu_engine/constrained_spec.py",
+     "isinstance(guide, ToolCallGuide) and not logprobs and not processors"
     ]
    ],
-   "why": "MTP copy rounds already run under a guide; the DFlash wrappers just refuse."
-  },
-  {
-   "id": "sampled-off-dflash-copy",
-   "a": "sampled requests",
-   "b": "DFlash copy islands and fast tree",
-   "kind": "unimplemented",
-   "ev": [
-    [
-     "python/yunshu_engine/dflash_copy.py",
-     "kw.get(\"greedy_sampling\", True)"
-    ]
-   ],
-   "why": "MTP copy rounds are keyed-sampler exact; same trick applies."
+   "why": "Tool-call guides alone can use keyed fast-tree and copy rounds; these additional constraints retain the serial chain."
   },
   {
    "id": "concurrency-off-lane",

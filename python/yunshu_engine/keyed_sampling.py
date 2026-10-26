@@ -136,12 +136,56 @@ def supports(params: Any) -> bool:
     return not getattr(params, "xtc_probability", 0.0)
 
 
+def tree_supported(sampler: Any, greedy: bool) -> bool:
+    """Trees can verify greedy rows or explicitly position-keyed draws only."""
+    if isinstance(sampler, KeyedSampler):
+        return supports(sampler.params) and sampler.params.temperature > 0
+    return bool(greedy)
+
+
+def tree_target_rows(logits, shape, committed: int, sampler, request=None):
+    """Draw after every tree node, using depth rather than storage row order.
+
+    The pending root token has already been emitted: its distribution predicts token
+    ``committed``. Siblings at a depth share the same noise. This function also handles
+    copy windows, represented as chains. It never advances the sampler's serial cursor.
+    Return unfiltered target logprobs for accepted-token reporting.
+    """
+    from .constrained_spec import normalize_rows
+
+    if request is not None and request.logprobs:
+        logits = logits.astype(mx.float32)
+    probs = normalize_rows(logits)
+    target = (
+        sampler.sample_positions(probs, shape.depth_array() + committed)
+        if sampler is not None
+        else mx.argmax(probs, axis=-1)
+    )
+    return target, probs
+
+
+def coupled_scores(logprobs, sampler, positions):
+    """Proposal scores sharing the target draw's noise; no sampler cursor mutation.
+
+    Filtering precedes perturbation, exactly as in sample_rows. Ranking these scores
+    gives distinct sibling candidates, with the serial keyed draw ranked first.
+    """
+    row = filter_logprobs(logprobs.astype(mx.float32), sampler.params)
+    if sampler.position_base:
+        positions = positions + sampler.position_base
+    noise = gumbel(sampler.seed, positions, row.shape[-1])
+    return mx.where(row == -mx.inf, -mx.inf, row + noise)
+
+
 class KeyedSampler:
     """Sampler for one request: ``sample_target`` draws for explicit generation indices."""
 
     def __init__(self, params: Any, seed: int):
         self.params = params
         self.seed = int(seed) & 0xFFFFFFFFFFFFFFFF
+        # A promoted lane counts locally from its pending token; keep its draws
+        # at the original request's absolute generation indices.
+        self.position_base = 0
         self._next = 0
         from .utils.hardware import is_paravirtual_metal
 
@@ -168,6 +212,8 @@ class KeyedSampler:
         pos = (
             positions if isinstance(positions, mx.array) else mx.array(list(positions))
         )
+        if self.position_base:
+            pos = pos + self.position_base
         bases = mx.array(
             np.full((int(pos.size),), seed_base(self.seed), dtype=np.uint64)
         )

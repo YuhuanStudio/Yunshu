@@ -752,3 +752,17 @@ def test_dense_lane_head_dim_128_takes_the_per_head_kernel():
     finally:
         set_dense_lane(False)
     assert out is not None and out.shape == q.shape
+
+
+def test_to_lane_cache_is_the_lanes_one_row_layout():
+    mx.random.seed(6)
+    stock, k, v, pads = _stock_cache([10, 3])
+    rc = ragged_kv.RaggedKVCache.from_cache(stock)
+    assert ragged_kv.to_lane_cache(rc) is None  # two live rows
+    rc.filter(mx.array([1]))
+    lane = ragged_kv.to_lane_cache(rc)
+    assert ragged_kv._lane_length(lane) == 3 == rc.lengths[0]
+    assert mx.array_equal(lane.keys[0, :, :3], k[1, :, pads[1] :])
+    assert mx.array_equal(lane.values[0, :, :3], v[1, :, pads[1] :])
+    assert lane.offset.tolist() == [3]
+    assert ragged_kv.to_lane_cache(object()) is None

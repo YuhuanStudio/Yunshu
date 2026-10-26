@@ -560,13 +560,23 @@ def rounds(
 
     from . import dflash_tree as dt
     from . import mtp_lane
+    from .constrained_spec import current_request
     from .copy_drafter import CopyDrafter
     from .copy_graft import GraftBudget, longest_verified_path, plan_tree_graft
     from .dflash_context import context_window
     from .dflash_plan import FastShape, graft_copy, remap_landed, reorder, search_tree
     from .kernels import lane_linear
+    from .keyed_sampling import KeyedSampler, tree_target_rows
     from .spec_metrics import record as _record_speculative_round
     from .spec_schedule import NodeBudget
+
+    keyed = sampler if isinstance(sampler, KeyedSampler) else None
+    request = current_request()
+    logger.info(
+        "DFlash fast verification: keyed=%s logprobs=%s",
+        keyed is not None,
+        bool(request is not None and request.logprobs),
+    )
 
     lm = getattr(model, "language_model", model)
     # one attention-cache growth per 2048 decoded rows, not one (a full copy) per 256
@@ -780,6 +790,8 @@ def rounds(
                                 fast_draft,
                                 dflash_ring.draft_hidden(fast_draft, ring, anchor, 15),
                                 anchor,
+                                keyed=keyed,
+                                committed=emitted,
                             )
                         lattice = ready
                     else:
@@ -788,7 +800,13 @@ def rounds(
                                 entry.offset += skipped
                             skipped = 0
                         lattice = dt.compute_lattice_gpu(
-                            fast_draft, bonus, hidden, draft_cache, 15
+                            fast_draft,
+                            bonus,
+                            hidden,
+                            draft_cache,
+                            15,
+                            keyed=keyed,
+                            committed=emitted,
                         )
                     gpu_window.mark("search_start")
                     tokens, parents = search_tree(lattice, n)
@@ -849,9 +867,19 @@ def rounds(
                             lm.speculative_logits_from_hidden(result.hidden),
                             guide.plan(copied, n + 1),
                             emitted,
-                            None,
+                            keyed,
                         )
                         target = target.reshape(-1)
+                    elif keyed is not None or (
+                        request is not None and request.logprobs
+                    ):
+                        target, probs = tree_target_rows(
+                            lm.speculative_logits_from_hidden(result.hidden),
+                            shape,
+                            emitted,
+                            keyed,
+                            request,
+                        )
                     else:
                         target = lm.speculative_argmax_from_hidden(result.hidden)
                     packed = pack_readback(
@@ -883,6 +911,8 @@ def rounds(
                             fast_draft,
                             dflash_ring.draft_hidden(fast_draft, ring, bonus_g, 15),
                             bonus_g,
+                            keyed=keyed,
+                            committed=emitted + count_g,
                         )
                         mx.async_eval(prebuilt.cands, prebuilt.unary, prebuilt.anchor)
                         gpu_window.mark("prebuilt")
@@ -906,6 +936,11 @@ def rounds(
                 new_tokens = [window_ids[row] for row in path[1:]] + [
                     target_ids_row[path[-1]]
                 ]
+                if request is not None and request.logprobs:
+                    request.record(
+                        probs[mx.array(path, dtype=mx.int32)],
+                        new_tokens[: max_tokens - emitted],
+                    )
                 if guide is not None:
                     # rows after a call-opening token were not masked: that token ends
                     # the round as its bonus (it is the unmasked target of the row before)
@@ -1134,12 +1169,16 @@ def eligible(lm, draft, cache, kwargs, *, guided=False):
     """Admit by live context; request output budgets do not predict cost. ``guided``: the
     request's tool-call guide is masked here (constrained_spec.invariant_guide)."""
     from . import mtp_lane
-    from .keyed_sampling import KeyedSampler
+    from .constrained_spec import current_request
+    from .keyed_sampling import KeyedSampler, tree_supported
 
+    request = current_request()
+    position_sensitive = isinstance(kwargs.get("sampler"), KeyedSampler) or bool(
+        request is not None and request.logprobs
+    )
     context = mtp_lane._STATE["context"]
     return bool(
-        kwargs.get("greedy_sampling", True)
-        and not isinstance(kwargs.get("sampler"), KeyedSampler)
+        tree_supported(kwargs.get("sampler"), kwargs.get("greedy_sampling", True))
         and (mtp_lane._STATE["guide"] is None or guided)
         and context is not None
         and kwargs.get("draft_block_size") in (None, 8)
@@ -1147,5 +1186,12 @@ def eligible(lm, draft, cache, kwargs, *, guided=False):
         and tv.lane_ready(lm, cache)
         and (length := context_length(lm, cache)) is not None
         and live_eligible(length + 1)
+        # The upstream handoff starts its generation indices at one and does not
+        # publish tree probability reports. Keep these requests on chain from the
+        # start if their budget could reach that boundary.
+        and (
+            not position_sensitive
+            or live_eligible(length + int(kwargs.get("max_tokens") or 0))
+        )
         and supported(lm, draft)
     )

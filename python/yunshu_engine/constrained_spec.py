@@ -106,6 +106,7 @@ def exact_verify(request=None, guide=None):
 
     if (
         not batch_invariant.is_installed()
+        or (guide is None and not (request and request.processors))
         or not (
             guide is not None or (request and (request.logprobs or request.processors))
         )
@@ -689,12 +690,43 @@ def install():
             and kw.get("draft_kind") == "dflash"
             and kw["first_bonus"].size == 1
         ):
-            from . import dflash_copy
+            from . import dflash_copy, dflash_fast, settings
+
+            if (
+                request.guide is None
+                and not request.processors
+                and settings.get("YUNSHU_SPEC_TREE") == "auto"
+                and dflash_copy._copy_gate(
+                    getattr(model, "language_model", model),
+                    draft_model,
+                    prompt_cache,
+                    kw,
+                )
+                and dflash_fast.eligible(
+                    getattr(model, "language_model", model),
+                    draft_model,
+                    prompt_cache,
+                    kw,
+                )
+            ):
+                return original(model, draft_model, prompt_cache, hidden, **kw)
 
             if invariant_request(request) and dflash_copy.takes_guided(
                 model, draft_model, prompt_cache, kw
             ):
                 return original(model, draft_model, prompt_cache, hidden, **kw)
+            if request.guide is None and not request.processors:
+                logger.info(
+                    "Exact speculative chain (fast tree unavailable): %s",
+                    ",".join(
+                        dflash_copy.chain_reasons(
+                            getattr(model, "language_model", model),
+                            draft_model,
+                            prompt_cache,
+                            kw,
+                        )
+                    ),
+                )
             return dflash_rounds(
                 model, draft_model, prompt_cache, hidden, request=request, **kw
             )

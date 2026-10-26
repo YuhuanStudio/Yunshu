@@ -576,6 +576,8 @@ def install() -> bool:
     original = ar.run_speculative_server_rounds
 
     def run(model, draft_model, prompt_cache, hidden, **kw):
+        from .keyed_sampling import tree_supported
+
         first = kw.get("first_bonus")
         if (
             _STATE["enabled"]
@@ -583,9 +585,8 @@ def install() -> bool:
             # intercept its eligible requests before that hook is reached.
             and not (
                 settings.get("YUNSHU_SPEC_TREE") == "tree"
-                and kw.get("greedy_sampling")
+                and tree_supported(kw.get("sampler"), kw.get("greedy_sampling", False))
                 and _STATE["guide"] is None
-                and not isinstance(kw.get("sampler"), KeyedSampler)
                 and not _request_needs_chain()
             )
             and kw.get("draft_kind") == "mtp"
