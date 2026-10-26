@@ -1,3 +1,5 @@
+# Patches upstream (MIT): mlx-vlm qwen4_exp LanguageModel.speculative_logits_from_hidden gains a logit stash
+# (tracked in vendor.json; Blaizzy/mlx-vlm).
 """Position-keyed sampled speculative decode for the Qwen4 native MTP loop.
 
 Upstream's native loop already draws verify targets through ``sampler.sample_target(...,
