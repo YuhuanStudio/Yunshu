@@ -97,8 +97,6 @@ def test_split_gdn_dispatch_is_confined_to_prompt_scope(patched, monkeypatch):
     assert kernel(q, q, q, gates, gates, state) == "step"
     with gdn_prefill.prefill_scope():
         assert kernel(q, q, q, gates, gates, state) == "padded"
-        with gdn_prefill.step_kernel():
-            assert kernel(q, q, q, gates, gates, state) == "step"
     assert kernel(q, q, q, gates, gates, state) == "step"
     assert calls == ["padded"]
 

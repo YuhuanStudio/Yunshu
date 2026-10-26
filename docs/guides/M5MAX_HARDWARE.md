@@ -158,7 +158,7 @@ On the real 27B round driver (since deleted; one MTP row decoding at 129 tok/s, 
 Smaller spans gave 3.8x more decode rate while prefilling, at 28% longer TTFT for the arriving prompt
 (prefill work per step falls with the span because each chunk rereads the weights). The prompt's
 tokens are identical to running it alone (`b_tokens_equal_alone`), and the same for both chunk sizes.
-The driver and its `YUNSHU_ROUND_PREFILL_CHUNK` knob were later deleted (measured loser).
+The driver and its prefill-chunk setting were later deleted (measured loser).
 
 ## Proposals, ranked by expected gain per effort
 
