@@ -450,7 +450,14 @@ class EngineStreamMixin:
         )
         prefix_cache = None if _stream_bypass_cache else self._kv_prefix_cache
         # Post-generation stores trim the live cache back to the prompt: not for hybrids.
-        store_cache = None if _stream_hybrid else prefix_cache
+        # Automatic (length-gated) 8-bit KV is lossy and the caches are not keyed by
+        # precision: never store it, or a later hit would differ from a miss (mirrors
+        # _generate_fast's _lossy_kv).
+        store_cache = (
+            None
+            if _stream_hybrid or self._auto_quantized_kv(_req_kv_bits)
+            else prefix_cache
+        )
 
         def _save_breakpoint_prefixes(token_ids, kv_cache):
             """Save KV prefix cache entries at breakpoint positions."""
