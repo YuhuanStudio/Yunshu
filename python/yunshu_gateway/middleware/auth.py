@@ -21,7 +21,11 @@ it holds the admin scope, so one infer key cannot touch another key's objects.
 """
 
 import contextlib
+import ipaddress
 import logging
+import threading
+import time
+from collections import deque
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -131,6 +135,62 @@ def _owner_identity() -> str:
     return settings.get("YUNSHU_ACTOR_IDENTITY") or "owner"
 
 
+# Failed-auth backoff: a client address that fails _FAIL_LIMIT times within _FAIL_WINDOW_S gets
+# 429 + Retry-After until the oldest failure ages out. Loopback clients are exempt. The
+# peer address is used (not X-Forwarded-For, which a client can forge to dodge or poison it).
+_FAIL_LIMIT = 20
+_FAIL_WINDOW_S = 60.0
+_FAIL_MAX_CLIENTS = 4096
+_failures: dict[str, deque] = {}
+_failures_lock = threading.Lock()
+
+
+def _client_ip(request: Request) -> str | None:
+    """The peer IP, or None for loopback and non-IP peers (Unix socket, in-process): never throttled."""
+    host = request.client.host if request.client else ""
+    try:
+        return None if ipaddress.ip_address(host).is_loopback else host
+    except ValueError:
+        return None
+
+
+def _auth_blocked(request: Request) -> int | None:
+    """Seconds to wait when this client has failed authentication too often, else None."""
+    ip = _client_ip(request)
+    if ip is None:
+        return None
+    now = time.monotonic()
+    with _failures_lock:
+        q = _failures.get(ip)
+        if q is None:
+            return None
+        while q and now - q[0] > _FAIL_WINDOW_S:
+            q.popleft()
+        if not q:
+            del _failures[ip]
+            return None
+        if len(q) >= _FAIL_LIMIT:
+            return int(_FAIL_WINDOW_S - (now - q[0])) + 1
+    return None
+
+
+def _auth_failed(request: Request, message: str, status: int = 401) -> JSONResponse:
+    """Count a failed authentication against the client, then build the error response."""
+    ip = _client_ip(request)
+    if ip is not None:
+        now = time.monotonic()
+        with _failures_lock:
+            if len(_failures) >= _FAIL_MAX_CLIENTS and ip not in _failures:
+                for k in [
+                    k for k, q in _failures.items() if now - q[-1] > _FAIL_WINDOW_S
+                ]:
+                    del _failures[k]
+                if len(_failures) >= _FAIL_MAX_CLIENTS:  # all recent: drop the oldest
+                    del _failures[next(iter(_failures))]
+            _failures.setdefault(ip, deque(maxlen=_FAIL_LIMIT)).append(now)
+    return _ErrorFormatter.auth_error(request, message, status)
+
+
 def _stamp_identity(request: Request, principal=None) -> None:
     """Record who the request is (see the module docstring); ``None`` = the local owner."""
     if principal is not None and principal.key_id:
@@ -196,6 +256,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
             _stamp_identity(request)
             return await call_next(request)
 
+        if (wait := _auth_blocked(request)) is not None:
+            return format_error_response(
+                path,
+                "Too many failed authentication attempts",
+                429,
+                code="too_many_auth_failures",
+                retry_after=wait,
+            )
+
         auth_token = settings.get("YUNSHU_AUTH_TOKEN") or ""
         # A queued job's line (batches) runs as the key that submitted it.
         act_as = (
@@ -236,9 +305,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         elif api_key:
             token = api_key
         else:
-            return _ErrorFormatter.auth_error(
-                request, "Missing or invalid Authorization header"
-            )
+            return _auth_failed(request, "Missing or invalid Authorization header")
 
         if path == "/v1/realtime/calls" and request.method == "POST":
             from ..realtime_secrets import lookup
@@ -273,7 +340,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 if not internal:
                     store.admit(principal)
             except api_keys.AuthFailureError as exc:
-                return _ErrorFormatter.auth_error(request, str(exc), exc.status)
+                return _auth_failed(request, str(exc), exc.status)
             except api_keys.QuotaExceededError as exc:
                 return format_error_response(
                     request.url.path,
@@ -297,4 +364,4 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
             return response
 
-        return _ErrorFormatter.auth_error(request, "Invalid or missing API key")
+        return _auth_failed(request, "Invalid or missing API key")
