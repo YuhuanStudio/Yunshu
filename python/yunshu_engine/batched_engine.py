@@ -956,11 +956,36 @@ class BatchedEngine(
         # Dims unreadable — fall back to the conservative token threshold.
         return 8 if total_tokens >= 16384 else None
 
-    def _auto_quantized_kv(self, req_bits: int | None) -> bool:
+    def _kv_quant_start_for(self, req_bits: int | None) -> int:
+        """Cache offset at which KV quantisation starts for THIS request. Explicit config keeps
+        ``_kv_quant_start``. The automatic gate is on the REAL cache size: ``req_bits`` was decided
+        from prompt + the max_tokens cap, so quantising from token 0 would make a short reply on a
+        big model lossy (and uncacheable) for nothing. Start where the KV estimate reaches the
+        gate instead (same 2 GiB / 16384-token rule as ``_effective_kv_quant_bits``)."""
+        if req_bits is None or self._kv_quant_bits is not None:
+            return self._kv_quant_start
+        per_tok = self._kv_bytes_per_token()
+        gate = -(-(2 * 1024**3) // per_tok) if per_tok > 0 else 16384
+        return max(self._kv_quant_start, gate)
+
+    @staticmethod
+    def _cache_is_quantized(cache) -> bool:
+        """True when any layer of ``cache`` actually holds quantised KV."""
+        try:
+            from mlx_lm.models.cache import QuantizedKVCache
+        except Exception:  # no mlx-lm: nothing can be quantised
+            return False
+        return any(isinstance(c, QuantizedKVCache) for c in cache or ())
+
+    def _auto_quantized_kv(self, req_bits: int | None, cache=None) -> bool:
         """True when this request's KV got the length-gated automatic quantisation. The RAM prefix
         and prompt caches are keyed by tokens only, so they must not store that lossy KV: a hit
-        would differ from a miss. A fixed (explicit) precision is the same for every request."""
-        return req_bits is not None and self._kv_quant_bits is None
+        would differ from a miss. A fixed (explicit) precision is the same for every request.
+        With ``cache`` the answer is whether that cache ACTUALLY holds quantised layers: a short
+        reply, or a sliding-window model that never quantises, stays storable."""
+        if req_bits is None or self._kv_quant_bits is not None:
+            return False
+        return True if cache is None else self._cache_is_quantized(cache)
 
     def _apply_auto_tuner_kv_quant(self) -> None:
         """KV-5: Apply auto-tuner's kv_quantization_bits recommendation.

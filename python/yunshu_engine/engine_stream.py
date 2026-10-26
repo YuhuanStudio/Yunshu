@@ -448,17 +448,18 @@ class EngineStreamMixin:
         prefix_cache = None if _stream_bypass_cache else self._kv_prefix_cache
         # Post-generation stores trim the live cache back to the prompt: not for hybrids.
         # Automatic (length-gated) 8-bit KV is lossy and the caches are not keyed by
-        # precision: never store it, or a later hit would differ from a miss (mirrors
-        # _generate_fast's _lossy_kv).
-        store_cache = (
-            None
-            if _stream_hybrid or self._auto_quantized_kv(_req_kv_bits)
-            else prefix_cache
-        )
+        # precision: never store a cache that really got quantised, or a later hit would
+        # differ from a miss (mirrors _generate_fast's _lossy_kv; checked per cache at store).
+        store_cache = None if _stream_hybrid else prefix_cache
+
+        def _storable(kv_cache):
+            return store_cache is not None and not self._auto_quantized_kv(
+                _req_kv_bits, kv_cache
+            )
 
         def _save_breakpoint_prefixes(token_ids, kv_cache):
             """Save KV prefix cache entries at breakpoint positions."""
-            if not _stream_kv_breakpoints or store_cache is None:
+            if not _stream_kv_breakpoints or not _storable(kv_cache):
                 return
             from .kv_prefix_cache import cache_length as _cache_len_bp
 
@@ -671,7 +672,7 @@ class EngineStreamMixin:
                     # benefit on the (default) streaming path. None → mlx-lm no-ops.
                     kv_bits=_stream_kv_bits,
                     kv_group_size=self._kv_quant_group_size,
-                    quantized_kv_start=self._kv_quant_start,
+                    quantized_kv_start=self._kv_quant_start_for(_stream_kv_bits),
                 ):
                     n_tok += 1
                     _fp_stats.token(n_tok)
@@ -944,7 +945,7 @@ class EngineStreamMixin:
                                     "normal",
                                 )
                             )
-                            if store_cache is not None:
+                            if _storable(cache):
                                 store_cache.add(ids, cache)
                             _save_breakpoint_prefixes(ids, cache)
                             mx.synchronize()
@@ -1111,13 +1112,13 @@ class EngineStreamMixin:
                         _put(
                             ("", n_tok, "stop", len(_thinking_tokens), None, _cur_state)
                         )
-                        if store_cache is not None:
+                        if _storable(cache):
                             store_cache.add(ids, cache)
                         _save_breakpoint_prefixes(ids, cache)
                         mx.synchronize()
                         _unregister_inflight()
                         return
-                if store_cache is not None:
+                if _storable(cache):
                     store_cache.add(ids, cache)
                 _save_breakpoint_prefixes(ids, cache)
                 detokenizer.finalize()

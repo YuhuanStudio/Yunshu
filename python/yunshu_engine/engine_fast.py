@@ -1058,7 +1058,7 @@ class EngineFastMixin:
                     if _req_kv_bits is not None:
                         _engine._progressive_quantize_kv_cache(
                             cache,
-                            self._kv_quant_start,
+                            self._kv_quant_start_for(_req_kv_bits),
                             self._kv_quant_group_size,
                             _req_kv_bits,
                             len(tokens),
@@ -1161,7 +1161,7 @@ class EngineFastMixin:
             if _req_kv_bits is not None:
                 _engine._maybe_quantize_kv_cache(
                     cache,
-                    self._kv_quant_start,
+                    self._kv_quant_start_for(_req_kv_bits),
                     self._kv_quant_group_size,
                     _req_kv_bits,
                 )
@@ -1173,8 +1173,9 @@ class EngineFastMixin:
             # polluted by generated tokens and corrupt future reuse. So skip the
             # trim-based adds for hybrid; the boundary snapshots are correct.
             # automatic (length-gated) 8-bit KV is lossy and the caches are not keyed by
-            # precision: never store it, or a later hit would differ from a miss
-            _lossy_kv = self._auto_quantized_kv(_req_kv_bits)
+            # precision: never store a cache that really got quantised, or a later hit would
+            # differ from a miss (a reply that stayed under the gate is stored as usual)
+            _lossy_kv = self._auto_quantized_kv(_req_kv_bits, cache)
             if prefix_cache is not None and not _hybrid_mode and not _lossy_kv:
                 prefix_cache.add(ids, cache)
 
