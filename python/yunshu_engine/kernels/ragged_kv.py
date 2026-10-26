@@ -359,6 +359,7 @@ def to_lane_cache(cache: Any) -> Any | None:
         not isinstance(cache, RaggedKVCache)
         or cache.quantized
         or cache.keys is None
+        or cache.values is None
         or len(cache.lengths) != 1
     ):
         return None
