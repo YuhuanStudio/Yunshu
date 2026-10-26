@@ -255,6 +255,7 @@ def rounds(
         return out, bs - 2
 
     emitted = 1  # the caller already emitted the first bonus
+    cleared_at = 0
     b = int(first_bonus)
     window_procs = ProcessorWindow.for_request(request, b)
     copy = None
@@ -550,7 +551,10 @@ def rounds(
             if finished:
                 break
         b = new_tokens[-1] if new_tokens else b
-        if emitted % 256 == 0:
+        # a round emits several tokens, so an exact-multiple test only held when a round
+        # happened to end on the boundary and the buffer cache grew unchecked between
+        if emitted // 256 > cleared_at:
+            cleared_at = emitted // 256
             mx.clear_cache()
 
 
