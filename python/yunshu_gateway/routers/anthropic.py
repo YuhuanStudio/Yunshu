@@ -3940,8 +3940,10 @@ async def count_tokens(req: AnthropicCountTokensRequest, request: Request):
     messages.extend(m for m in converted_msgs if m.get("role") != "system")
     try:
         try:
+            from yunshu_engine.special_tokens import neutralize_special_text
+
             prompt = tokenizer.apply_chat_template(
-                messages,
+                neutralize_special_text(messages, tokenizer),
                 tokenize=False,
                 add_generation_prompt=True,
                 **({"tools": _native_tools} if _native_tools else {}),

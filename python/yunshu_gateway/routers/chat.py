@@ -1946,8 +1946,12 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
             # max_tokens>0 would report). Fall back to the heuristic
             # count_message_tokens if the tokenizer can't apply a template.
             try:
+                from yunshu_engine.special_tokens import neutralize_special_text
+
                 templated = _tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
+                    neutralize_special_text(messages, _tokenizer),
+                    tokenize=False,
+                    add_generation_prompt=True,
                 )
                 if isinstance(templated, str):
                     # avoid double-BOS so this probe matches the

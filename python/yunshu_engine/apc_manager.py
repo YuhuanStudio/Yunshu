@@ -31,6 +31,7 @@ from __future__ import annotations
 import collections
 import contextlib
 import contextvars
+import hashlib
 import json
 import logging
 import os
@@ -42,10 +43,32 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import mlx_vlm.apc as _upstream_apc
-from mlx_vlm.apc import APCManager, DiskBlockStore, _sequence_hash
+import numpy as np
+from mlx_vlm.apc import APCManager, DiskBlockStore
+from mlx_vlm.apc import _sequence_hash as _upstream_sequence_hash
 from mlx_vlm.apc_coordinator import APCCoordinator
 
 logger = logging.getLogger(__name__)
+
+
+def _sequence_hash(token_ids, extra_hash: int, block_size: int) -> int:
+    """``mlx_vlm.apc._sequence_hash`` without its per-token ``int(t)`` loop (b9f5305: convert
+    the ids to bytes once). Same digest: the upstream builds the same int32 array, just from
+    a Python-level copy of every id. Other inputs (mx arrays, generators) take the upstream."""
+    if isinstance(token_ids, (list, tuple)):
+        try:
+            arr = np.asarray(token_ids, dtype=np.int32)
+        except (TypeError, ValueError, OverflowError):
+            return _upstream_sequence_hash(token_ids, extra_hash, block_size)
+        if arr.ndim == 1:
+            h = hashlib.sha256()
+            h.update(int(extra_hash & ((1 << 64) - 1)).to_bytes(8, "little"))
+            h.update(int(block_size).to_bytes(4, "little", signed=False))
+            h.update(int(arr.size).to_bytes(8, "little", signed=False))
+            h.update(arr.tobytes())
+            return int.from_bytes(h.digest()[:8], "little", signed=True)
+    return _upstream_sequence_hash(token_ids, extra_hash, block_size)
+
 
 _CANONICAL_LOOKUP: contextvars.ContextVar[
     tuple[int, int, int, int, frozenset[int]] | None
@@ -1821,7 +1844,6 @@ class YunshuAPCManager(APCManager):
         extends a recent one (the next turn of one conversation) is not a divergence. The answer is
         fixed per prompt, so every checkpoint_lengths call of one request agrees.
         """
-        import numpy as np
 
         # the whole sequence is hashed: two prompts sharing length, head and tail (a changed
         # middle) must not share an answer

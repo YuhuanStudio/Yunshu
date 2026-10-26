@@ -3964,8 +3964,10 @@ def _count_prompt_tokens(tok, messages: list[dict], tools=None) -> int:
     the engines render it: template, generation prompt, no double BOS; images at the engine's
     conservative per-image estimate."""
     from yunshu_control.token_counter import IMAGE_TOKEN_ESTIMATE
+    from yunshu_engine.special_tokens import neutralize_special_text
 
     kw = {"tools": tools} if tools else {}
+    messages = neutralize_special_text(messages, tok)
     try:
         prompt = tok.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True, **kw

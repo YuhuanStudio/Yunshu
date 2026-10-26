@@ -329,6 +329,17 @@ def normalize_rows(logits):
     )
 
 
+# Context length every penalty processor built by ``vlm_batch_runner.build_penalty_processors``
+# looks at (it passes this as repetition/presence/frequency_context_size).
+PENALTY_CONTEXT = 20
+
+
+def _windowed_penalty(proc) -> bool:
+    return bool(getattr(proc, "context_free", False)) or getattr(
+        proc, "__module__", ""
+    ).startswith("mlx_lm.sample_utils")
+
+
 def apply_row_processors(processors, logits, context, drafted, calls):
     """Run the request's logits processors over every row of a verify window.
 
@@ -336,6 +347,13 @@ def apply_row_processors(processors, logits, context, drafted, calls):
     committed context (which already ends with the bonus token) plus ``drafted[:j]``;
     stateful token masks count ``calls + j + 1`` generated tokens, as ``j + 1`` serial
     ``process_last_token`` calls would. ``logits`` is ``[1, T, V]``."""
+    if len(context) > PENALTY_CONTEXT and all(
+        hasattr(p, "pure_at") or _windowed_penalty(p) for p in processors
+    ):
+        # mlx-lm's penalties read ``tokens[-PENALTY_CONTEXT:]`` and the token mask ignores
+        # the tokens, so only the context tail matters: converting a whole 32k-token
+        # prompt to an array every verify window was O(context) per round.
+        context = context[-PENALTY_CONTEXT:]
     base = mx.array(context, dtype=mx.int32)
     rows = []
     for j in range(logits.shape[1]):
@@ -434,9 +452,9 @@ class SpecRequest:
         k = min(self.top_logprobs, probs.shape[-1])
         if k:
             # Match AR ordering, including ties; reduce only committed rows.
-            top = mx.argsort(probs, axis=-1)[:, -k:][:, ::-1].astype(mx.int32)
-            vals = mx.take_along_axis(probs, top, -1)
-            top_ids, top_vals = top.tolist(), vals.tolist()
+            from .text_logprobs import top_logprobs_rows
+
+            top_ids, top_vals = top_logprobs_rows(probs, k)
         else:
             top_ids = top_vals = [[] for _ in tokens]
         return [

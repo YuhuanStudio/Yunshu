@@ -264,6 +264,9 @@ class MLXVLMMtp:
             elif role == "function":
                 m = {**m, "role": "tool"}
             norm.append(m)
+        from .special_tokens import neutralize_special_text
+
+        norm = neutralize_special_text(norm, self.tokenizer)
         txt = self.tokenizer.apply_chat_template(
             norm, add_generation_prompt=True, tokenize=False
         )
