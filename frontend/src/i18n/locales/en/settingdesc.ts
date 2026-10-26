@@ -121,7 +121,11 @@ const settingdesc = {
   YUNSHU_FOOTPRINT_SAMPLE_MS:
     "Sample this process’s `phys_footprint` every N ms on a background thread and export the peak as `yunshu_process_footprint_bytes` on `/metrics`. 0 (default) = off.",
   YUNSHU_MAX_MEMORY_GB:
-    "Multi-model mode memory ceiling in GiB, e.g. `48` or `48GB`; `disabled` turns the enforcer off. Unset: 80% of unified memory.",
+    "Memory ceiling in GiB, e.g. `48` or `48GB` (multi-model mode, and the VLM runner's load-time budget and request admission: a request waits in the queue instead of growing past the ceiling); `disabled` turns the enforcer off. Unset: 80% of unified memory.",
+  YUNSHU_MEMORY_ADMISSION:
+    "VLM runner: hold a new request in the queue while the host has no memory headroom for its KV and prefill workspace (live macOS available memory, kernel pressure, swap growth, the memory ceiling), shed APC RAM entries when available memory falls below the reserve, and shrink the APC budget at load to fit the weights. The first request of an idle server is always admitted. Scheduling only; outputs are unchanged. 0 turns it off.",
+  YUNSHU_MEMORY_RESERVE_GB:
+    "Memory kept free for macOS in GiB. Unset: 5% of physical RAM, at least 4 GiB. Also the line below which APC RAM entries are shed.",
   YUNSHU_PREFILL_STEP_SIZE:
     "Text engine: prompt tokens per prefill forward pass; lower it to cap the prefill activation peak on small-memory machines.",
   YUNSHU_MEM_PRESSURE_THRESHOLD:

@@ -112,3 +112,35 @@ def test_metrics_endpoint_serves_apc_gauges(monkeypatch):
     body = TestClient(app).get("/metrics").text
     assert float(_resident_line(body).rsplit(" ", 1)[1]) == 3 * 2**30
     reset_prometheus_metrics()
+
+
+def test_memory_admission_reaches_metrics(monkeypatch):
+    snap = {
+        "holds": 3,
+        "sheds": 1,
+        "shed_bytes": 2**30,
+        "held_now": 2,
+        "available_bytes": 9 * 2**30,
+        "reserve_bytes": 6 * 2**30,
+    }
+    engine = SimpleNamespace(memory_admission_snapshot=lambda: snap)
+    monkeypatch.setattr(
+        "yunshu_gateway.engine.get_engine", lambda: engine, raising=False
+    )
+    monkeypatch.setattr(
+        "yunshu_gateway.engine.get_model_manager", lambda: None, raising=False
+    )
+    pm = PrometheusMetrics()
+    monitoring._populate_memory_admission_metrics(pm)
+    text = pm.generate()
+    assert 'yunshu_memory_admission_holds_total{model_id="default"} 3' in text
+    assert 'yunshu_memory_admission_held{model_id="default"} 2' in text
+    assert "yunshu_memory_pressure_shed_bytes_total" in text
+
+
+def test_metrics_middleware_populates_memory_admission():
+    import inspect
+
+    from yunshu_gateway.middleware import metrics
+
+    assert "_populate_memory_admission_metrics" in inspect.getsource(metrics)

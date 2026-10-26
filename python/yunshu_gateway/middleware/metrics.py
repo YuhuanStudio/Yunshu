@@ -515,10 +515,12 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                 from ..routers.monitoring import (
                     _populate_apc_metrics,
                     _populate_busy_metrics,
+                    _populate_memory_admission_metrics,
                 )
 
                 _populate_apc_metrics(pm)
                 _populate_busy_metrics(pm)
+                _populate_memory_admission_metrics(pm)
                 pm_text = pm.generate()
                 if pm_text:
                     parts.append(pm_text)

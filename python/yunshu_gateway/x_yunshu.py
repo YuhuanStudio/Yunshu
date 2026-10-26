@@ -404,6 +404,9 @@ def progress_payload(info: RequestInfo) -> dict:
         ahead, wait_ms = queue_snapshot(info)
         out["queue_position"] = ahead
         out["queue_est_wait_ms"] = wait_ms
+        if getattr(st, "queue_reason", None):
+            out["queue_reason"] = st.queue_reason
+            out["queue_detail"] = st.queue_detail
     elif st.phase == "prefill":
         done, total = st.prefill_done, max(st.prefill_total, 1)
         if not getattr(st, "prefill_known", True):
@@ -638,6 +641,15 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
         "reasons": {
             "cache": getattr(st, "cache_reason", None),
             "spec": getattr(st, "spec_reason", None),
+            "queue": (
+                {
+                    "reason": "memory",
+                    "waited_ms": st.extra["memory_wait_ms"],
+                }
+                if st is not None
+                and getattr(st, "extra", {}).get("memory_wait_ms") is not None
+                else None
+            ),
         },
         "structured_output": getattr(st, "structured_output", None)
         or info.structured_output

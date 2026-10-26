@@ -176,7 +176,9 @@ _add("YUNSHU_TRUSTED_PROXIES", "list", (), "Comma-separated proxy IPs whose X-Fo
 
 # ── memory ─────────────────────────────────────────────────────────────
 _add("YUNSHU_FOOTPRINT_SAMPLE_MS", "int", 0, "Sample this process's phys_footprint every N ms on a background thread and export the peak as yunshu_process_footprint_bytes on /metrics (the memory benchmarks set 20). 0 (default) = off.", "memory", minimum=0)
-_add("YUNSHU_MAX_MEMORY_GB", "gb", None, "Multi-model mode memory ceiling in GiB, e.g. '48' or '48GB'; 'disabled' turns the enforcer off. Unset: 80% of unified memory.", "memory")
+_add("YUNSHU_MAX_MEMORY_GB", "gb", None, "Memory ceiling in GiB (multi-model mode, and the VLM runner's load-time budget and request admission: a request waits in the queue instead of growing past the ceiling), e.g. '48' or '48GB'; 'disabled' turns the enforcer off. Unset: 80% of unified memory.", "memory")
+_add("YUNSHU_MEMORY_ADMISSION", "bool", True, "VLM runner: hold a new request in the queue while the host has no memory headroom for its KV and prefill workspace (live macOS available memory + reclaimable MLX buffers, kernel pressure level, swap growth, and the YUNSHU_MAX_MEMORY_GB ceiling), shed APC RAM entries (to SSD where configured) when available memory falls below the reserve, and at load shrink the APC budget to fit weights + reserve + minimum KV (refusing with a clear error only when even that does not fit). The first request of an idle server is always admitted. Scheduling only: outputs are unchanged, and the held reason is reported in `x_yunshu.reasons.queue`, the console queue and `/metrics`. 0 = off.", "memory")
+_add("YUNSHU_MEMORY_RESERVE_GB", "float", None, "Memory the admission gate keeps free for macOS (page cache, compressor, other apps) in GiB. Unset: 5% of physical RAM, at least 4 GiB (128 GiB machine: 6.4; 16 GiB: 4). Also the line below which APC RAM entries are shed.", "memory", minimum=0.0)
 _add("YUNSHU_PREFILL_STEP_SIZE", "int", 2048, "Text engine: prompt tokens per prefill forward pass; lower it to cap the prefill activation peak on small-memory machines.", "memory", minimum=1)
 _add("YUNSHU_MEM_PRESSURE_THRESHOLD", "float", 85.0, "Text engine: evict prefix-cache entries above this memory use (percent, or a fraction <= 1).", "memory", minimum=0.0)
 
@@ -463,6 +465,8 @@ _LIVE = frozenset(
 )
 _RELOAD = frozenset(
     {
+        "YUNSHU_MEMORY_ADMISSION",
+        "YUNSHU_MEMORY_RESERVE_GB",
         "YUNSHU_GC_POLICY",
         "YUNSHU_NEXT_TURN_PREFILL",
         "YUNSHU_PLE_READ_THREADS",

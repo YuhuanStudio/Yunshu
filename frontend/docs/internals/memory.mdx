@@ -74,6 +74,14 @@ The RAM and SSD budgets are single budgets: the optional WARM tier takes `YUNSHU
 
 In single-model mode the model is reported as pinned and is never freed.
 
+## Memory admission
+
+The engine degrades or waits instead of swapping, and says why (`YUNSHU_MEMORY_ADMISSION`, on by default; scheduling only, outputs are unchanged).
+
+1. **Load time.** Before the weights are read, `plan_load` checks weights + OS reserve (`YUNSHU_MEMORY_RESERVE_GB`, default 5% of RAM, at least 4 GiB) + a minimum KV and working set against physical memory (or `YUNSHU_MAX_MEMORY_GB`). A load that cannot fit is refused with a clear `MemoryError` that names a `-ple-ssd` view of the checkpoint when one sits next to it. After the load the APC RAM budget shrinks to what the resident weights leave, and the log line `Memory plan:` says by how much.
+2. **Request admission.** A new request's KV (prompt + `max_tokens`) and prefill workspace are checked against the live headroom: macOS free + inactive + purgeable pages, MLX's reclaimable buffer cache, the kernel pressure level, swap growth, minus the part the running requests will still grow into. A request without headroom waits in the queue. The first request of an idle server is always admitted, unless it cannot fit even alone (its KV and prefill workspace exceed what the Metal recommended working set leaves after the weights): it is refused with HTTP 507, `error.code: memory_limit` and the numbers, instead of running every request out of Metal memory. The wait is visible as `queue_reason: "memory"` and `queue_detail` in the live progress payload, `x_yunshu.reasons.queue.waited_ms` in the response, and the `yunshu_memory_admission_*` metrics.
+3. **Shedding.** When available memory falls below the reserve (or the kernel reports warning pressure), APC RAM entries are dropped oldest first, to the SSD tier where it is configured, before anything swaps (`yunshu_memory_pressure_sheds_total`, `yunshu_memory_pressure_shed_bytes_total`).
+
 ## Guarantees
 
 - Idle return, buffer-pool sizing and the keep-warm heartbeat do not change output. The heartbeat's matmul touches no model array, and the pool setting is described in the registry as "allocator only; output unchanged".
@@ -87,6 +95,8 @@ In single-model mode the model is reported as pinned and is never freed.
 | `YUNSHU_MAX_MEMORY_GB` | unset (80% of unified memory in multi-model mode) | Process memory ceiling for the enforcer; `disabled` turns it off |
 | `YUNSHU_MODEL_TTL_SECONDS` | unset | Multi-model: unload a model idle for this long |
 | `YUNSHU_MEMORY_PRESSURE_REJECT` | 0.95 | Refuse new requests above this share of the Metal working set while busy |
+| `YUNSHU_MEMORY_ADMISSION` | on | Queue requests without memory headroom, shed APC RAM under pressure, fit the APC budget at load |
+| `YUNSHU_MEMORY_RESERVE_GB` | 5% of RAM, min 4 | Memory kept free for macOS |
 | `YUNSHU_VLM_APC_MEMORY_GB` | computed | APC RAM budget; 0 disables the cache |
 | `YUNSHU_PREFILL_BUFFER_CACHE_GB` | computed | Freed-buffer pool kept across prefill steps |
 | `YUNSHU_PREFILL_STEP_SIZE` | 2048 | Text engine prefill chunk; lower to cap the activation peak |

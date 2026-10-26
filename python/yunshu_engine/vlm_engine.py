@@ -45,6 +45,11 @@ from typing import Any
 import mlx.core as mx
 
 from . import gc_policy, netguard, next_turn, settings
+from .memory_admission import (
+    MEMORY_LIMIT_MARK,
+    MemoryAdmissionError,
+    memory_limit_error,
+)
 from .moe_pack import tensor_quantization_override, unsupported_pack_reason
 from .request import RequestOutput
 from .types import EngineConfig
@@ -521,6 +526,7 @@ class VLMEngine:
             model_path = Path(_download(self._model_path))
 
         self._config = load_config(model_path)
+        self._preflight_memory(model_path)
 
         thinker_cfg = self._config.get("thinker_config", {})
         self._has_vision = bool(
@@ -1185,6 +1191,9 @@ class VLMEngine:
                             "prompt_tokens": 0,
                             "completion_tokens": 0,
                         }
+                    refusal = memory_limit_error(str(out.error))
+                    if refusal is not None:
+                        raise refusal
                     raise RuntimeError(out.error)
                 if out.new_text:
                     (reasoning if out.current_state == "reasoning" else parts).append(
@@ -1907,21 +1916,95 @@ class VLMEngine:
     # batch-invariant kernels) is validated. Every family uses the runner.
     _SPEC_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe", "qwen4_exp")
 
+    def _memory_total_bytes(self) -> int:
+        from .apc_manager import total_memory_bytes
+        from .memory_admission import effective_total_bytes
+
+        return effective_total_bytes(
+            total_memory_bytes(), settings.get("YUNSHU_MAX_MEMORY_GB")
+        )
+
+    def _memory_plan(self, weights: int, apc_gb: float, model_path):
+        from .memory_admission import (
+            GIB,
+            default_reserve_bytes,
+            kv_bytes_per_token,
+            plan_load,
+        )
+
+        total = self._memory_total_bytes()
+        reserve = settings.get("YUNSHU_MEMORY_RESERVE_GB")
+        return plan_load(
+            total,
+            weights,
+            apc_gb,
+            kv_per_token=kv_bytes_per_token(getattr(self, "_config", {}) or {}),
+            reserve_bytes=(
+                int(float(reserve) * GIB)
+                if reserve is not None
+                else default_reserve_bytes(total)
+            ),
+            model_path=model_path,
+        )
+
+    def _build_memory_gate(self):
+        if not settings.get("YUNSHU_MEMORY_ADMISSION"):
+            return None
+        from .memory_admission import build_gate
+
+        gate = build_gate(
+            self._config,
+            total_bytes=self._memory_total_bytes(),
+            ceiling_gb=settings.get("YUNSHU_MAX_MEMORY_GB"),
+            reserve_gb=settings.get("YUNSHU_MEMORY_RESERVE_GB"),
+        )
+        if gate is not None:
+            logger.info(
+                "Memory admission: KV %.0f KiB/token, keeping %.1f GiB free",
+                gate.kv_per_token / 1024,
+                gate.reserve / (1 << 30),
+            )
+        return gate
+
+    def _preflight_memory(self, model_path: Path) -> None:
+        """Refuse a load that cannot fit before touching the weights: a model whose weights
+        leave no room for the OS reserve and a minimum KV only ends in swap."""
+        if not settings.get("YUNSHU_MEMORY_ADMISSION"):
+            return
+        from .memory_admission import weights_bytes_on_disk
+
+        plan = self._memory_plan(weights_bytes_on_disk(model_path), 0.0, model_path)
+        if plan.error:
+            raise MemoryError(f"Cannot load {model_path.name}: {plan.error}")
+        for note in plan.notes:
+            logger.warning("Memory plan: %s", note)
+
     def _apc_memory_gb(self) -> float:
         """APC RAM budget in GiB: ``YUNSHU_VLM_APC_MEMORY_GB``, else sized from the
-        machine's memory and the model's weights (0 disables the cache)."""
-        budget = settings.get("YUNSHU_VLM_APC_MEMORY_GB")
-        if budget is not None:
-            return float(budget)
-        from .apc_manager import auto_memory_gb, total_memory_bytes
+        machine's memory and the model's weights (0 disables the cache). Either way it
+        shrinks to what the resident weights, the OS reserve and a minimum KV leave."""
+        from .apc_manager import auto_memory_gb
 
+        budget = settings.get("YUNSHU_VLM_APC_MEMORY_GB")
         weights = 0
         with contextlib.suppress(OSError):
             weights = sum(
                 p.stat().st_size for p in Path(self._model_path).glob("*.safetensors")
             )
-        gb = auto_memory_gb(total_memory_bytes(), weights)
-        logger.info("APC RAM budget: %.0f GiB (auto)", gb)
+        if budget is not None:
+            gb = float(budget)
+        else:
+            gb = auto_memory_gb(self._memory_total_bytes(), weights)
+            logger.info("APC RAM budget: %.0f GiB (auto)", gb)
+        if gb > 0 and settings.get("YUNSHU_MEMORY_ADMISSION"):
+            import mlx.core as mx
+
+            plan = self._memory_plan(
+                int(mx.get_active_memory()) or weights, gb, self._model_path
+            )
+            for note in plan.notes:
+                logger.warning("Memory plan: %s", note)
+            gb = plan.apc_gb
         return gb
 
     def _chatml_head_marker(self) -> tuple[int, int] | None:
@@ -2683,6 +2766,7 @@ class VLMEngine:
         runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
         runner.stop_tokens = set(self._get_eos_ids())
         runner.inflight = lambda: self._active_count
+        runner.memory_gate = self._build_memory_gate()
         # Per-row-length (ragged) KV + ragged decode attention for the shared
         # batch and the speculative lane: the layout for every model with
         # qwen3_5 attention (lossless; docs/research/runs/2026-09-29-ragged-idle).
@@ -3459,7 +3543,11 @@ class VLMEngine:
                     request_id=req_id,
                     finish_reason="error",
                     finished=True,
-                    error=str(exc),
+                    error=(
+                        MEMORY_LIMIT_MARK + str(exc)
+                        if isinstance(exc, MemoryAdmissionError)
+                        else str(exc)
+                    ),
                     prompt_tokens=prompt_tokens,
                     completion_tokens=stats.generated,
                 )
@@ -4662,6 +4750,16 @@ class VLMEngine:
         apc = self._apc_backend
         fn = getattr(apc, "clear_tier", None)
         return fn(tier) if callable(fn) else None
+
+    def memory_admission_snapshot(self) -> dict | None:
+        """Memory-admission counters and live headroom (None when the gate is off)."""
+        runner = self._batch_runner
+        gate = getattr(runner, "memory_gate", None)
+        if runner is None or gate is None:
+            return None
+        snap: dict = gate.snapshot()
+        snap["held_now"] = runner.memory_held()
+        return snap
 
     def busy_snapshot(self) -> dict | None:
         """GPU-busy accounting of the batch runner (None before a model is loaded)."""
