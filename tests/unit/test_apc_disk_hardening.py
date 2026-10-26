@@ -256,3 +256,13 @@ def test_checkpoint_shorter_than_its_tokens_is_rejected():
     assert check_loaded_cache(TOKENS, cache, None)
     cache[1].offset = 16
     assert not check_loaded_cache(TOKENS, cache, None)
+
+
+def test_exact_load_refreshes_mtime_for_the_budget_lru(tmp_path):
+    """The root budget evicts by file mtime: a checkpoint that was just served must look recent."""
+    store = _store(tmp_path)
+    key = _put(store)
+    path = _path(store, key)
+    os.utime(path, (1_000_000, 1_000_000))
+    assert _load(store, key) is not None
+    assert path.stat().st_mtime > 1_000_000 + 3600
