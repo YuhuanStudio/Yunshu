@@ -36,6 +36,9 @@ class StopHoldbackBuffer:
         # always equals len(_buf). Only populated/consumed via feed_lp(); the
         # plain feed() path never touches it.
         self._pend: list[list] = []
+        # True once flush()/take_stopped() dropped a COMPLETE stop string (so a stop that
+        # completed only in the final detokenizer flush is still reported as a stop).
+        self.stop_hit = False
 
     def _first_stop_pos(self) -> int:
         """Index of the first COMPLETE stop occurrence in the buffer, or -1.
@@ -170,9 +173,11 @@ class StopHoldbackBuffer:
             if i >= 0 and (first < 0 or i < first):
                 first = i
         if first >= 0:
+            self.stop_hit = True
             return buf[:first]
         for s in self._stops:  # fall back to suffix-prefix (partial tail)
             if buf.endswith(s):
+                self.stop_hit = True
                 return buf[: -len(s)]
         return buf
 
@@ -186,7 +191,10 @@ class StopHoldbackBuffer:
             i = buf.find(s)
             if i >= 0 and (first < 0 or i < first):
                 first = i
-        return buf[:first] if first >= 0 else buf
+        if first >= 0:
+            self.stop_hit = True
+            return buf[:first]
+        return buf
 
 
 # Pattern matching common special tokens that should be removed from output.
