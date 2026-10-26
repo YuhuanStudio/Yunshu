@@ -861,6 +861,20 @@
       "local_changes": [
         "Python port of the measurement and start decision; calibration kept as a file beside the compiled programs; no memory planner."
       ]
+    },
+    {
+      "kind": "derived",
+      "path": "python/yunshu_engine/qwen4_norms.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_paths": [
+        "omlx/patches/mlx_vlm_qwen4_exp_compat/vendor/mlx_vlm/models/qwen4_exp/qwen4_exp.py"
+      ],
+      "commit": "23b671f64f0a64f532e38d692a6c480ea704418d",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "Separate checkpoint-wide anchor classifier from per-module recentering; preserve FP32 residual when BF16 cannot represent direct gamma minus one; MTP receives base convention explicitly."
+      ]
     }
   ],
   "inspired": [
@@ -1625,6 +1639,36 @@
       "license": "MIT",
       "local_changes": [
         "Research-only canonical per-query TK4 adapter imports the registered harvester, preserving absolute prefix lengths and split geometry across T=1..7. FP64 reference reports both kernels absolute/relative errors; deterministic and reconstructed-cache tensor checks. No serving connection or full APC/accuracy qualification."
+      ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_console/docs_ask.py",
+      "repo": "https://github.com/oramasearch/orama",
+      "clone": "/Volumes/Micron/yunshu-refsync/orama",
+      "upstream_paths": [
+        "packages/orama/src/components/algorithms.ts",
+        "packages/orama/src/components/index.ts"
+      ],
+      "commit": "2fe41e163c2bdd7830eed7496c69134aea8ee3ba",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "Independent Python implementation of the installed docs search BM25 formula, tokenizer and field boosts; pinned cross-runtime ranking fixture. No vector service or implicit model loads."
+      ]
+    },
+    {
+      "kind": "inspired",
+      "path": "frontend/src/docs/AskAI.tsx",
+      "repo": "https://github.com/YuhuanStudio/Yunxin",
+      "clone": "/Users/yuhuan/Documents/YuhuanStudio/Yunxin",
+      "upstream_paths": [
+        "frontend/src/components/docs/ai-search.tsx",
+        "backend/app/api/internal/docs_chat.py"
+      ],
+      "commit": "6d671e87871bffc1ba203bca1b5e5973efcbd420",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "UX reference only: independent YunUI dialog, Markdown stream, sources/follow-up/feedback. Local attached Yunshu engine with caller credentials instead of hosted models, Redis, shared secret or AI SDK transport."
       ]
     },
     {
@@ -2889,6 +2933,36 @@
       "why": "class patch routing the dense FFN of qualified prompt steps through the ANE split",
       "source_sha256": "ec6fbfefb1f0b4c0319f9e2178a70afadfeb06a591620757b0b86c754ed938eb",
       "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/qwen4_dflash.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen4_exp.language",
+      "symbol": "LanguageModel.__call__",
+      "signature": "(self, inputs, inputs_embeds=None, mask=None, cache=None, **kwargs)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "Preserve DFlash mixed layer captures during invariant decode and transactional verify; the native MTP hyper-state contract stays separate. Features follow incoai/Qwen3.8-Flash-Next-DFlash2 patches/qwen38-dflash2-capture.patch (Apache-2.0): completed layers averaged over HC streams, not the learned final mixer.",
+      "source_sha256": "4d6b4f4dabbc76c7905c1bb78c10bd9bd21f294aa5fb5cd86d358755004ba781",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/tf_hc_forward.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen4_exp.language",
+      "symbol": "Qwen4ExpBatchInvariantForward._model",
+      "signature": "(self, model, inputs, cache, inputs_embeds, position_ids)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "Fused HC and expert loop with optional mixed layer captures; capture commits pending injection without changing target forward arithmetic.",
+      "source_sha256": "078f4ac55187af39228a0f05c9d981bceec7e1b8fbe6889c2c5b4d87c7488709",
+      "installed_version": "0.7.8"
     }
   ],
   "watch": [
@@ -3260,6 +3334,27 @@
       ],
       "why": "Neural Engine runtime and FFN split (YUNSHU_ANE_FFN_SPLIT=splash)",
       "commit": "1482f6bbc2abf12375332725302019594150b6cb"
+    },
+    {
+      "repo": "https://github.com/oramasearch/orama",
+      "clone": "/Volumes/Micron/yunshu-refsync/orama",
+      "globs": [
+        "packages/orama/src/components/algorithms.ts",
+        "packages/orama/src/components/index.ts",
+        "packages/orama/src/components/tokenizer/**"
+      ],
+      "why": "docs search BM25 formula, tokenizer and field boosts mirrored by console Ask AI (python/yunshu_console/docs_ask.py)",
+      "commit": "2fe41e163c2bdd7830eed7496c69134aea8ee3ba"
+    },
+    {
+      "repo": "https://github.com/YuhuanStudio/Yunxin",
+      "clone": "/Users/yuhuan/Documents/YuhuanStudio/Yunxin",
+      "globs": [
+        "frontend/src/components/docs/ai-search.tsx",
+        "backend/app/api/internal/docs_chat.py"
+      ],
+      "why": "docs Ask AI UX reference for the console (frontend/src/docs/AskAI.tsx); Yunxin is the sibling YuhuanStudio project",
+      "commit": "6d671e87871bffc1ba203bca1b5e5973efcbd420"
     }
   ],
   "packages": [
@@ -3731,6 +3826,36 @@
         "https://github.com/tmc/autoresearch-mlx-go-ane"
       ],
       "reason": "Existing Splash client has full selector type checks and bounded shared-event handoff; retain that defensive implementation for phase 1."
+    },
+    {
+      "id": "flashnext-1025-incoai",
+      "owner": "flashnext",
+      "url": "https://huggingface.co/incoai/Qwen3.8-Flash-Next-DFlash2",
+      "revision": "a22a1744e85c17364dcc54a6a420af7135d4c7f6",
+      "kind": "discovery-only",
+      "reviewed_date": "2026-10-25",
+      "status": "Complete local asset; serving sanity and identity pending; no quant conversion needed.",
+      "license": "See checkpoint repository model card"
+    },
+    {
+      "id": "flashnext-1025-jundot",
+      "owner": "flashnext",
+      "url": "https://huggingface.co/Jundot/Qwen3.8-Flash-Next-oQ3e-mtp",
+      "revision": "934f71d2879d459ccecb641eccb970fe9fa4cb3e",
+      "kind": "discovery-only",
+      "reviewed_date": "2026-10-25",
+      "status": "Complete local asset; serving sanity and identity pending; no quant conversion needed.",
+      "license": "See checkpoint repository model card"
+    },
+    {
+      "id": "flashnext-1025-tensorfold",
+      "owner": "flashnext",
+      "url": "https://huggingface.co/TensorFold/Qwen3.8-Flash-Next-MLX-2bit-MTP",
+      "revision": "28b109043ec5576f8ad5a3192a66467915c76736",
+      "kind": "discovery-only",
+      "reviewed_date": "2026-10-25",
+      "status": "Complete local asset; serving sanity and identity pending; no quant conversion needed.",
+      "license": "See checkpoint repository model card"
     }
   ],
   "websearch_prior_art": [

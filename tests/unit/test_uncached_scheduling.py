@@ -723,7 +723,7 @@ def test_early_rows_keep_the_generous_decode_share(atoms):
     from yunshu_engine.serving.work_scheduler import decode_quantum
 
     assert decode_quantum(2.0, early=True) == 2.0
-    assert decode_quantum(2.0, early=False) <= 0.5
+    assert decode_quantum(2.0, early=False) < decode_quantum(2.0, early=True)
 
 
 def test_equal_cold_prompts_are_served_in_arrival_order_without_ping_pong(atoms):

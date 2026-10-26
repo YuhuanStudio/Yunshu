@@ -1,4 +1,11 @@
 const settingdesc = {
+  YUNSHU_DOCS_ASK_MAX_QUESTION:
+    "Maximum question and history-message length for local documentation Ask AI (characters).",
+  YUNSHU_DOCS_ASK_MAX_HISTORY:
+    "Maximum prior user/assistant messages for documentation Ask AI; also bounded by model context.",
+  YUNSHU_DOCS_ASK_MAX_TOKENS:
+    "Maximum answer tokens for local documentation Ask AI. Only an already loaded model is used; measurement pause blocks questions.",
+
   YUNSHU_MODEL:
     "Model path or Hugging Face id served in single-model mode; every requested model name maps to it.",
   YUNSHU_MULTI_MODEL:
@@ -22,6 +29,8 @@ const settingdesc = {
     "Cap on concurrently admitted requests. Unset: adaptive, starting at 8.",
   YUNSHU_UNCACHED_SCHEDULING:
     "Order VLM prefill atoms by estimated uncached work and wait time, protect interactive prefills, and reserve measured decode time between atoms, without changing any token span. On by default only with qualified batch-invariant kernels; other backends keep FIFO unless enabled. Disable to restore upstream ordering.",
+  YUNSHU_DECODE_TAIL_SHARE:
+    "Share of GPU time owed to running replies after each prefill atom of a newcomer (once they are past their first 48 tokens). Higher keeps a running reply faster; lower gives the newcomer its first token sooner. Measured on the 27B: 0.25 gave 5.0 tok/s, 0.5 (default) 7.6 tok/s, for a first token about 0.8 s later at 4K.",
   YUNSHU_AUXILIARY_SCHEDULING:
     "Deprioritize captured opencode title requests: interactive VLM jobs run first, and auxiliary rows pause between GPU slices and never read or write the APC. On by default only with qualified batch-invariant kernels; other backends need explicit opt-in. In-flight GPU operations cannot be interrupted.",
   YUNSHU_QUEUE_LIMIT:

@@ -632,6 +632,10 @@ class VLMEngine:
                     model, model_class, model_config, w
                 ),
             )
+            from .qwen4_norms import infer_direct_gamma, normalize
+
+            self._qwen4_direct_norms = infer_direct_gamma(weights)
+            normalize(model, weights, direct=self._qwen4_direct_norms)
         else:
             weights = _prepare_vlm_weights(model, model_class, model_config, weights)
 
@@ -1957,6 +1961,11 @@ class VLMEngine:
                 "kv_precision": settings.get("YUNSHU_KV_PRECISION"),
                 "apc_adapter_schema": ADAPTER_SCHEMA_VERSION,
                 "apc_layout": "exact_cache_v1",
+                **(
+                    {"qwen4_norms": "direct-gamma-v1"}
+                    if getattr(self, "_qwen4_direct_norms", False)
+                    else {}
+                ),
                 "prefill_kernel": self._prefill_kernel_id(),
                 "shared_prefix_invariant": bool(
                     getattr(self, "_prefix_invariant_dispatch", False)
@@ -2341,7 +2350,9 @@ class VLMEngine:
                     from .qwen4_mtp import load_native_head
 
                     drafter = load_native_head(
-                        self._config, getattr(self, "_qwen4_mtp_weights", None)
+                        self._config,
+                        getattr(self, "_qwen4_mtp_weights", None),
+                        direct_norms=getattr(self, "_qwen4_direct_norms", False),
                     )
                     self._qwen4_mtp_weights = None
                 else:

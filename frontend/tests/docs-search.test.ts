@@ -86,3 +86,19 @@ test("doc links become console routes", () => {
   assert.equal(resolveDocLink("/docs", "x"), "#/docs");
   assert.equal(resolveDocLink("https://example.com", "x"), null);
 });
+
+test("natural-language questions: function words and Han question words are ignored", () => {
+  const hits = searchDocs(entries, "What is the prompt cache?");
+  assert.deepEqual(
+    hits.map((h) => h.slug),
+    ["guides/prompt-caching"],
+  );
+  const zh = [
+    e("guides/prompt-caching", "提示詞快取", "APC 快取命中會顯示在 usage。"),
+    e("guides/cli", "命令列", "每個指令與選項。"),
+  ];
+  assert.deepEqual(
+    searchDocs(zh, "如何查看快取命中？").map((h) => h.slug),
+    ["guides/prompt-caching"],
+  );
+});

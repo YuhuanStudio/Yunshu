@@ -54,3 +54,15 @@ def test_pattern_kills_are_blocked():
         assert guard.verdict(cmd), cmd
     assert guard.verdict(stash + " list") is None
     assert guard.verdict("grep pk" + "ill notes.md") is None
+
+
+def test_cpu_report_tools_pass_but_their_gpu_actions_do_not():
+    # gapboard reads finished results and gaptable summary only tabulates them (no MLX); gaptable run times engines
+    assert (
+        guard.verdict("python3 scripts/research/gaptable.py summary --root /x") is None
+    )
+    assert (
+        guard.verdict(".venv/bin/python scripts/research/gapboard.py --out /x.md")
+        is None
+    )
+    assert guard.verdict("python3 scripts/research/gaptable.py run --cells 1")

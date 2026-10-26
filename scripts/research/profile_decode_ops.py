@@ -112,7 +112,7 @@ def count_graph(out) -> dict:
 
     with tempfile.NamedTemporaryFile("w+", suffix=".dot") as f:
         mx.export_to_dot(f.name, out)
-        text = open(f.name).read()
+        text = Path(f.name).read_text()
     names = Counter(re.findall(r'label ="([^"]+)", shape=rectangle', text))
     kernels = sum(v for k, v in names.items() if k not in VIEW_OPS)
     return {
@@ -156,11 +156,54 @@ def weight_bytes(m):
     return tot
 
 
+def wrap_qwen4(lm):
+    """Instrument the actual invariant forward, whose fused kernels bypass leaf modules.
+
+    Router/gather/projections are separate categories. Nested categories are
+    intentionally avoided: these are serial attribution barriers, not timings
+    to add to the uninstrumented total. No module is replaced (plans inspect
+    quantization attributes and must keep the original weight objects).
+    """
+    from mlx_vlm.models.qwen4_exp.language import Qwen4ExpBatchInvariantForward
+
+    from yunshu_engine.kernels.tf_flash_next import experts, hc
+
+    def wrap(owner, name, label, input_index):
+        original = getattr(owner, name)
+
+        def measured(*args, **kwargs):
+            B.enter(label, args[input_index])
+            out = original(*args, **kwargs)
+            B.leave(label, out)
+            return out
+
+        setattr(owner, name, measured)
+
+    for name, label in (
+        ("_gated_delta", "gdn"),
+        ("_qsa_attention", "attention"),
+        ("_ple", "ple"),
+        ("_switch_glu", "moe.gather_qmm"),
+        ("_hyper_connection", "hc.fallback"),
+    ):
+        wrap(Qwen4ExpBatchInvariantForward, name, label, 2)
+    for name, label in (
+        ("router", "moe.router"),
+        ("expert_gateup", "moe.expert_gateup"),
+        ("expert_down_y", "moe.expert_down"),
+    ):
+        wrap(experts, name, label, 0)
+    wrap(hc, "hc_norm", "hc.norm", 0)
+    wrap(hc, "hc_project", "hc.project", 0)
+    return []
+
+
 def wrap_model(lm):
     """Replace the leaf modules of interest by Timed wrappers; return the list."""
+    if getattr(lm, "model_type", "") == "qwen4_exp":
+        return wrap_qwen4(lm)
     wrapped = []
     for i, layer in enumerate(lm.model.layers):
-        kind = "gdn" if layer.is_linear else "attn"
 
         def w(parent, name, label, k="other"):
             inner = getattr(parent, name)
@@ -209,9 +252,20 @@ def main():
     from yunshu_engine.kernels.batch_invariant import install as install_invariant
     from yunshu_engine.kernels.batch_invariant import set_active
 
-    model, processor = load(a.model_dir)
+    config = json.loads((Path(a.model_dir) / "config.json").read_text())
+    qwen4 = config.get("model_type") == "qwen4_exp"
+    if qwen4:
+        from yunshu_engine.qwen4_mtp import configure_lane
+        from yunshu_engine.vlm_engine import VLMEngine
+
+        engine = VLMEngine(a.model_dir)
+        engine.load()
+        model, processor = engine._model, engine._processor
+        configure_lane(model.language_model, None, None)
+    else:
+        model, processor = load(a.model_dir)
     lm = model.language_model
-    if not a.stock:
+    if not a.stock and not qwen4:
         omlx.apply(row_exact=False)
         if a.lane_linear:
             from yunshu_engine.kernels import lane_linear
@@ -230,7 +284,7 @@ def main():
     ids_all = tok.encode(FILLER, add_special_tokens=False)
     args = lm.args
     print(json.dumps({"layers": args.num_hidden_layers}), flush=True)
-    wrapped = wrap_model(lm)
+    wrap_model(lm)
 
     def fresh_cache(ctx):
         cache = lm.make_cache()
@@ -243,7 +297,11 @@ def main():
         return cache
 
     def run_step(cache, toks):
-        out = lm(toks, cache=cache)
+        out = (
+            lm._batch_invariant_decode(toks, cache=cache)
+            if qwen4 and not a.stock
+            else lm(toks, cache=cache)
+        )
         logits = out.logits[:, -1]
         return mx.argmax(logits, axis=-1)
 
@@ -319,7 +377,6 @@ def main():
             for label, items in B.inputs.items():
                 groups[label] = items
             for label, items in groups.items():
-                mods = [m for m, _ in items]
                 # bit width groups within a label
                 by_bits = defaultdict(list)
                 for m, x in items:
@@ -392,6 +449,11 @@ def main():
                 f.write(json.dumps(row) + "\n")
             print(json.dumps(row), flush=True)
             mx.clear_cache()
+    with a.output.open("a") as f:
+        f.write(
+            json.dumps({"complete": True, "model_type": config.get("model_type")})
+            + "\n"
+        )
 
 
 if __name__ == "__main__":
