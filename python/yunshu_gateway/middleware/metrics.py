@@ -373,8 +373,11 @@ def _check_metrics_auth(request: Request) -> None:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    from .auth import _auth_blocked, _auth_succeeded, _record_failure
+
     # Static token (constant-time compare).
     if static_token and tokens_equal(token, static_token):
+        _auth_succeeded(request)
         return
 
     # A stored key reads the metrics only with the admin scope (no quota is charged).
@@ -383,12 +386,22 @@ def _check_metrics_auth(request: Request) -> None:
     except api_keys.AuthFailureError:
         pass
     else:
+        _auth_succeeded(request)
         if "admin" in principal.scopes:
             return
         raise HTTPException(
             status_code=403, detail="Metrics need an API key with the admin scope"
         )
 
+    # A wrong credential here counts toward the same per-client backoff as every other route.
+    wait = _auth_blocked(request)
+    if wait is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed authentication attempts",
+            headers={"Retry-After": str(wait)},
+        )
+    _record_failure(request)
     raise HTTPException(
         status_code=401,
         detail="Invalid API key",

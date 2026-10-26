@@ -174,3 +174,33 @@ def _managed_keys_case(store):
     assert r_infer.status_code == 403
     r_admin = c.get("/metrics", headers={"Authorization": f"Bearer {secret(admin)}"})
     assert r_admin.status_code == 200
+
+
+def test_metrics_wrong_tokens_share_the_auth_backoff(monkeypatch):
+    """/metrics answers before AuthMiddleware runs; a wrong token there must count and throttle like everywhere else."""
+    from fastapi import HTTPException
+
+    from yunshu_gateway.middleware import auth as auth_mod
+    from yunshu_gateway.middleware.metrics import _check_metrics_auth
+
+    monkeypatch.setenv("YUNSHU_AUTH_TOKEN", "right-token-123456")
+    auth_mod._failures.clear()
+    peer = types.SimpleNamespace(host="203.0.113.7")
+
+    def req(token):
+        r = _req({"Authorization": f"Bearer {token}"})
+        r.client = peer
+        return r
+
+    for _ in range(auth_mod._FAIL_LIMIT):
+        with pytest.raises(HTTPException) as e:
+            _check_metrics_auth(req("wrong"))
+        assert e.value.status_code == 401
+    with pytest.raises(HTTPException) as e:
+        _check_metrics_auth(req("wrong"))
+    assert e.value.status_code == 429 and "Retry-After" in e.value.headers
+    _check_metrics_auth(
+        req("right-token-123456")
+    )  # a correct token always passes and resets
+    assert "203.0.113.7" not in auth_mod._failures
+    auth_mod._failures.clear()

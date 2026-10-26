@@ -137,7 +137,8 @@ _failures_lock = threading.Lock()
 
 def _client_ip(request: Request) -> str | None:
     """The peer IP, or None for loopback and non-IP peers (Unix socket, in-process): never throttled."""
-    host = request.client.host if request.client else ""
+    client = getattr(request, "client", None)
+    host = client.host if client else ""
     if host and host in settings.get("YUNSHU_TRUSTED_PROXIES"):
         forwarded = request.headers.get("x-forwarded-for", "")
         if forwarded.strip():
@@ -190,7 +191,14 @@ def _auth_failed(
             code="too_many_auth_failures",
             retry_after=wait,
         )
-    ip = _client_ip(request) if count else None
+    if count:
+        _record_failure(request)
+    return _ErrorFormatter.auth_error(request, message, status)
+
+
+def _record_failure(request: Request) -> None:
+    """Count one wrong credential from this client (loopback and non-IP peers are never counted)."""
+    ip = _client_ip(request)
     if ip is not None:
         now = time.monotonic()
         with _failures_lock:
@@ -202,7 +210,6 @@ def _auth_failed(
                 if len(_failures) >= _FAIL_MAX_CLIENTS:  # all recent: drop the oldest
                     del _failures[next(iter(_failures))]
             _failures.setdefault(ip, deque(maxlen=_FAIL_LIMIT)).append(now)
-    return _ErrorFormatter.auth_error(request, message, status)
 
 
 def _stamp_identity(request: Request, principal=None) -> None:
