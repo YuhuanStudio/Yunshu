@@ -41,6 +41,17 @@ A request can opt out of storing with `X-Yunshu-Cache-Store: off` (see `API_EXTE
 paths are unchanged and the checkpoint plan is untouched, only the stores are skipped (`_Coordinator.store_checkpoint`
 on the VLM runner, a lookup-only `store_opt_out` view of the prefix cache on the text path).
 
+Restore versus eviction (re-checked against Rapid-MLX 66b39f56, which lost a restored hybrid boundary to RAM
+pressure right after the restore): a HOT hit makes its entry the newest, clones it (the restored cache shares
+nothing with the stored one) and only then lets `_make_room` evict, oldest first, so other entries go before the
+one being restored; an evicted HOT entry spills to the SSD tier instead of vanishing, and the request's own
+longer checkpoints supersede the restored boundary by design. One case is left as upstream has it: when the
+clone cannot get room even after every other entry is gone, `_make_room` evicts the source as well (to SSD
+when there is a tier) and the restore is refused (`memory_skips`). A feasibility pre-check would keep the HOT
+entry in that case, but the free-memory reading after `mx.clear_cache()` cannot be predicted off the Mac, so it
+is not changed here. The text prefix cache evicts under pressure before its lookup and hands out snapshots, so
+a lookup cannot lose its source. `tests/unit/test_apc_restore_eviction.py` pins all of this.
+
 ### VLM runner (APC) policy
 
 mlx-vlm's APC keeps exact checkpoints for hybrid (GDN) models: a full copy of the attention KV plus the
