@@ -2058,31 +2058,6 @@ class BatchedEngine(
             _cancel_event = None
             _tracker = None
 
-        # If the gateway passes an external cancel_event, wrap both events
-        # so that checking .is_set() on the wrapper detects either source.
-        if cancel_event is not None and _tracker is not None:
-            _internal = _cancel_event
-            _external = cancel_event
-
-            class _CompositeCancelEvent:
-                """Proxy that returns True if either the internal or external event is set.
-
-                Thread-safe: reads asyncio.Event._value directly (GIL-protected bool)
-                instead of calling .is_set() which is not safe from executor threads.
-                """
-
-                def is_set(self):
-                    if _internal is not None:
-                        # asyncio.Event: read _value (GIL-protected bool)
-                        if hasattr(_internal, "_value"):
-                            if _internal._value:
-                                return True
-                        elif _internal.is_set():
-                            return True
-                    return _is_cancelled(_external)
-
-            _cancel_event = _CompositeCancelEvent()
-
         # Fast path: bypass EngineCore for single-request streaming
         if not _use_engine_loop:
             try:
