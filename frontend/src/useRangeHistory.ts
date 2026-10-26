@@ -49,6 +49,19 @@ export interface RangeHistory {
 }
 
 /**
+ * The state when a new range / service starts loading: the previous one's points answer a different
+ * question, so they are dropped (a failed load then reads as unavailable, never as the old series).
+ */
+export const beginLoad = (): RangeHistory => ({
+  active: true,
+  points: [],
+  loading: true,
+  unavailable: false,
+  gaps: [],
+  resolutionS: null,
+});
+
+/**
  * The recorded history for the long ranges (6 h to 30 d) from the console process, refreshed about
  * as often as a point is wide. Gaps come back as outage markers, so a chart breaks where the engine
  * was down and never interpolates across it.
@@ -107,7 +120,7 @@ export function useRangeHistory(
         }));
       timer = setTimeout(() => void load(), Math.max(10_000, step * 1000));
     };
-    setState((s) => ({ ...s, active: true, loading: s.points.length === 0 }));
+    setState(beginLoad());
     void load();
     return () => {
       controller.abort();
