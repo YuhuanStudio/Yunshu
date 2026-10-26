@@ -173,6 +173,8 @@ _add("YUNSHU_ACTOR_IDENTITY", "str", "owner", "Identity recorded for authenticat
 _add("YUNSHU_RATE_LIMIT_RPM", "int", 0, "Per-client request rate limit in requests per minute; 0 (default) turns rate limiting off. A local single-user engine has no need for it; set it when the server is exposed to other machines.", "auth", minimum=0)
 _add("YUNSHU_TRUSTED_PROXIES", "list", (), "Comma-separated proxy IPs whose X-Forwarded-For header is trusted.", "auth")
 
+_add("YUNSHU_ALLOWED_HOSTS", "list", (), "Comma-separated Host names this server answers, besides loopback names. Empty (default): a server bound to a loopback address answers only loopback Host headers (localhost, 127.0.0.1, [::1]; this stops DNS rebinding) and one bound to 0.0.0.0 checks nothing. Set it to turn the check on for any bind address; '*' turns it off.", "auth")
+
 # ── memory ─────────────────────────────────────────────────────────────
 _add("YUNSHU_FOOTPRINT_SAMPLE_MS", "int", 0, "Sample this process's phys_footprint every N ms on a background thread and export the peak as yunshu_process_footprint_bytes on /metrics (the memory benchmarks set 20). 0 (default) = off.", "memory", minimum=0)
 _add("YUNSHU_MAX_MEMORY_GB", "gb", None, "Multi-model mode memory ceiling in GiB, e.g. '48' or '48GB'; 'disabled' turns the enforcer off. Unset: 80% of unified memory.", "memory")
@@ -367,6 +369,7 @@ _LIVE = frozenset(
         "YUNSHU_AUTH_DISABLED",
         "YUNSHU_ACTOR_IDENTITY",
         "YUNSHU_CORS_ORIGINS",
+        "YUNSHU_ALLOWED_HOSTS",
         "YUNSHU_HF_CACHE_MODELS",
         "YUNSHU_QUEUE_LIMIT",
         "YUNSHU_MEMORY_PRESSURE_REJECT",

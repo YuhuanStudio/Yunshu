@@ -134,6 +134,7 @@ The descriptions below come straight from the settings registry and are in Engli
 | `YUNSHU_ACTOR_IDENTITY` | str | owner | live | Identity recorded for authenticated requests in the audit log. |
 | `YUNSHU_RATE_LIMIT_RPM` | int | 0 | restart | Per-client request rate limit in requests per minute; 0 (default) turns rate limiting off. A local single-user engine has no need for it; set it when the server is exposed to other machines. |
 | `YUNSHU_TRUSTED_PROXIES` | list | unset | restart | Comma-separated proxy IPs whose X-Forwarded-For header is trusted. |
+| `YUNSHU_ALLOWED_HOSTS` | list | unset | live | Comma-separated Host names this server answers, besides loopback names. Empty (default): a server bound to a loopback address answers only loopback Host headers (localhost, 127.0.0.1, [::1]; this stops DNS rebinding) and one bound to 0.0.0.0 checks nothing. Set it to turn the check on for any bind address; '*' turns it off. |
 
 ### memory
 

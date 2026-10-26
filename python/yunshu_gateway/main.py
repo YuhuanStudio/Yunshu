@@ -1026,6 +1026,10 @@ def create_app() -> FastAPI:
     from .middleware.disconnect import DisconnectWatchMiddleware
 
     app.add_middleware(DisconnectWatchMiddleware)
+    # Before anything else runs: a rebinding or cross-site request never reaches a route.
+    from .middleware.host_guard import HostGuardMiddleware
+
+    app.add_middleware(HostGuardMiddleware)
 
     # ── Gateway optimizer wiring ──
     from yunshu_engine.gateway_optimizer import (

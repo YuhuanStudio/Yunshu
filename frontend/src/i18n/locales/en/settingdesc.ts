@@ -109,6 +109,8 @@ const settingdesc = {
     "Per-client request rate limit in requests per minute; 0 (default) turns it off. A local single-user engine does not need it; set it when the server is exposed to other machines.",
   YUNSHU_TRUSTED_PROXIES:
     "Comma-separated proxy IPs whose `X-Forwarded-For` header is trusted.",
+  YUNSHU_ALLOWED_HOSTS:
+    "Comma-separated Host names this server answers, besides loopback names. Empty (default): a server bound to a loopback address answers only loopback Host headers (localhost, 127.0.0.1, [::1]; this stops DNS rebinding) and one bound to 0.0.0.0 checks nothing. Set it to turn the check on for any bind address; '*' turns it off.",
   YUNSHU_FOOTPRINT_SAMPLE_MS:
     "Sample this process’s `phys_footprint` every N ms on a background thread and export the peak as `yunshu_process_footprint_bytes` on `/metrics`. 0 (default) = off.",
   YUNSHU_MAX_MEMORY_GB:

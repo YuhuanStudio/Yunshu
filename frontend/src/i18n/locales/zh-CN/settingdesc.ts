@@ -100,6 +100,8 @@ const settingdesc = {
     "每个客户端的请求速率上限（每分钟请求数）；0（默认）表示关闭。本地单用户的引擎不需要，服务器对其他机器开放时再设置。",
   YUNSHU_TRUSTED_PROXIES:
     "以逗号分隔的代理 IP，其 `X-Forwarded-For` 头会被信任。",
+  YUNSHU_ALLOWED_HOSTS:
+    "除了回环地址名称外，本服务器接受的 Host 名称（以逗号分隔）。留空（默认）：绑定在回环地址的服务器只接受回环地址的 Host 头（localhost、127.0.0.1、[::1]；可防 DNS rebinding），绑定 0.0.0.0 则不检查。设置后，任何绑定地址都会检查；'*' 表示关闭检查。",
   YUNSHU_FOOTPRINT_SAMPLE_MS:
     "在后台线程中每 N ms 采样本进程的 `phys_footprint`，并将峰值以 `yunshu_process_footprint_bytes` 导出到 `/metrics`；0（默认）表示关闭。",
   YUNSHU_MAX_MEMORY_GB:

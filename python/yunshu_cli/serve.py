@@ -247,6 +247,9 @@ def serve(
     except settings.SettingError as exc:
         fail(str(exc), code=2)
     host = host or settings.get("YUNSHU_HOST") or "127.0.0.1"
+    settings.set_override(
+        "YUNSHU_HOST", host
+    )  # the Host check follows the real bind address
 
     # Fail before importing/loading a checkpoint when the chosen TCP endpoint
     # cannot bind. Uvicorn remains the authority at startup (another process
@@ -264,6 +267,7 @@ def serve(
 
     env = os.environ.copy()
     env.update({k: settings._to_text(v) for k, v in overrides.items()})
+    env["YUNSHU_HOST"] = host  # reload / worker processes see the real bind address too
     hf = settings.get("YUNSHU_HF_ENDPOINT")
     if hf:
         env["HF_ENDPOINT"] = hf
