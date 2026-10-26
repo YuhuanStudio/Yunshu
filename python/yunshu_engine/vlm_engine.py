@@ -25,6 +25,7 @@ Architecture:
 
 import asyncio
 import base64
+import collections
 import concurrent.futures
 import contextlib
 import contextvars
@@ -224,6 +225,55 @@ SINGLE_IMAGE_ONLY_MODELS = frozenset(
         "paligemma",
     }
 )
+
+
+class _ThreadSafeQueue:
+    """Wraps asyncio.Queue for the MLX/consumer threads.
+
+    ``put_blocking`` bounds data by the async consumer. ``put_nowait`` carries the terminal
+    items (end sentinel, error): it never drops one when the queue is full, it parks it
+    behind the data and delivers it, in order, as soon as the consumer makes room.
+    """
+
+    def __init__(self, async_q, ev_loop):
+        self._q = async_q
+        self._loop = ev_loop
+        self._backlog: collections.deque = collections.deque()
+        self._drain: asyncio.Future | None = None
+
+    def put_nowait(self, item):
+        with contextlib.suppress(RuntimeError):  # event loop closed during shutdown
+            self._loop.call_soon_threadsafe(self._put_terminal, item)
+
+    def _put_terminal(self, item):  # event-loop thread
+        if self._backlog or self._q.full():
+            self._backlog.append(item)
+            if self._drain is None or self._drain.done():
+                self._drain = asyncio.ensure_future(self._drain_backlog())
+        else:
+            self._q.put_nowait(item)
+
+    async def _drain_backlog(self):
+        while self._backlog:
+            await self._q.put(self._backlog[0])
+            self._backlog.popleft()
+
+    def put_blocking(self, item, cancel):
+        """Bound the runner's producer by the async consumer, including slow clients."""
+        try:
+            future = asyncio.run_coroutine_threadsafe(self._q.put(item), self._loop)
+        except RuntimeError:
+            return False
+        while True:
+            try:
+                future.result(timeout=0.05)
+                return True
+            except TimeoutError:
+                if cancel is not None and cancel.is_set():
+                    future.cancel()
+                    return False
+            except Exception:
+                return False
 
 
 class _VLMTextPromptCache:
@@ -1329,38 +1379,6 @@ class VLMEngine:
         # asyncio.Queue.put_nowait() is NOT thread-safe — must schedule puts
         # via call_soon_threadsafe (same pattern as batched_engine.py).
         _loop_for_queue = asyncio.get_running_loop()
-
-        class _ThreadSafeQueue:
-            """Wraps asyncio.Queue with thread-safe put_nowait."""
-
-            def __init__(self, async_q, ev_loop):
-                self._q = async_q
-                self._loop = ev_loop
-
-            def put_nowait(self, item):
-                with contextlib.suppress(
-                    RuntimeError
-                ):  # event loop closed during shutdown
-                    self._loop.call_soon_threadsafe(self._q.put_nowait, item)
-
-            def put_blocking(self, item, cancel):
-                """Bound the runner's producer by the async consumer, including slow clients."""
-                try:
-                    future = asyncio.run_coroutine_threadsafe(
-                        self._q.put(item), self._loop
-                    )
-                except RuntimeError:
-                    return False
-                while True:
-                    try:
-                        future.result(timeout=0.05)
-                        return True
-                    except TimeoutError:
-                        if cancel is not None and cancel.is_set():
-                            future.cancel()
-                            return False
-                    except Exception:
-                        return False
 
         _safe_queue = _ThreadSafeQueue(queue, _loop_for_queue)
 
