@@ -3059,7 +3059,15 @@ class VLMEngine:
             if token in stop_ids:
                 detok.finalize()
                 tail = holdback.feed(detok.last_segment) + holdback.flush()
-                yield tail, token, "normal", "stop", thinking_tokens, lp
+                # EOS inside an open <think> ends the reasoning: its tail is reasoning
+                yield (
+                    tail,
+                    token,
+                    "reasoning" if in_think else "normal",
+                    "stop",
+                    thinking_tokens,
+                    lp,
+                )
                 return
             if think_start is not None and token in (think_start, think_end):
                 # The tags only switch state; they are never shown as text.
@@ -3122,7 +3130,7 @@ class VLMEngine:
         yield (
             tail,
             None,
-            "normal",
+            "reasoning" if in_think else "normal",
             "stop" if count < max_tokens else "length",
             thinking_tokens,
             None,
