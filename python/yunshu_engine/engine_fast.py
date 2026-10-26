@@ -1688,7 +1688,9 @@ class EngineFastMixin:
                     output_text = close_unterminated_reasoning(
                         output_text,
                         _prompt_opens_think,
-                        constrained=json_schema is not None,
+                        # gated: the grammar never bound, so the unclosed text is reasoning
+                        constrained=json_schema is not None
+                        and not isinstance(sampler, _ThinkGatedSampler),
                     )
                     rp = get_reasoning_parser(self.model_name)
                     rp_out = rp.parse(output_text)

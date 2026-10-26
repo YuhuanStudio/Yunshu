@@ -566,9 +566,19 @@ class EngineStreamMixin:
             # delta.content and reasoning_tokens stayed 0 (streaming diverged from
             # the non-streaming path, which uses the closing-only reasoning parser).
             # Pre-seed when the rendered prompt ends with an open <think>. NOT for a constrained
-            # request (json_schema / regex / choice / grammar): its first token is the answer,
-            # not reasoning (same rule as close_unterminated_reasoning).
-            if think_end_token is not None and not _in_thinking and json_schema is None:
+            # request whose grammar binds from the first token (json_schema / regex / choice /
+            # grammar): that token is the answer (same rule as close_unterminated_reasoning).
+            # A reasoning-gated grammar binds after </think>, so its prompt does reason first.
+            from .reasoning_gate import ThinkGatedSampler
+
+            _grammar_from_first = json_schema is not None and not isinstance(
+                sampler, ThinkGatedSampler
+            )
+            if (
+                think_end_token is not None
+                and not _in_thinking
+                and not _grammar_from_first
+            ):
                 try:
                     from .thinking_budget import detect_needs_think_prefix
 
