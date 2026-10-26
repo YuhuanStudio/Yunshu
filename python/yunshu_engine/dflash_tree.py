@@ -149,7 +149,15 @@ def compute_lattice_gpu(
 
 
 def lattice_from_hidden(
-    drafter, dh, anchor, *, prof=False, t0=0.0, keyed=None, committed=0
+    drafter,
+    dh,
+    anchor,
+    *,
+    prof=False,
+    t0=0.0,
+    keyed=None,
+    committed=0,
+    full_logits=None,
 ) -> GpuLattice:
     """The lattice from the proposal rows' hidden states ``dh`` [1, D, H]; ``anchor`` is the
     round's bonus token as a [1] array (it may still be on the GPU)."""
@@ -172,7 +180,8 @@ def lattice_from_hidden(
         cands = mx.take(ids, part)  # [D, K]
         unary = mx.take_along_axis(logits, part, axis=-1).astype(mx.float32)
     else:
-        logits = drafter._logits(dh)
+        # ``full_logits`` is the same head matmul batched over rows by the caller.
+        logits = drafter._logits(dh) if full_logits is None else full_logits
         if keyed is not None:
             from .constrained_spec import normalize_rows
             from .keyed_sampling import coupled_scores
