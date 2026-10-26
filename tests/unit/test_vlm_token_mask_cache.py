@@ -52,3 +52,9 @@ def test_masks_built_once_and_vocab_change_rebuilds():
     out = proc(None, mx.zeros((1, 32)))
     assert out[0, 1].item() == float("-inf") and out[0, 4].item() == float("-inf")
     assert out[0, 0].item() == 0.0
+
+
+def test_out_of_range_suppress_and_eos_ids_are_ignored():
+    proc = TokenMaskProcessor(suppress=[-1, 2, 99], eos_ids=[-3, 4], ignore_eos=True)
+    out = proc(None, mx.zeros((1, 8)))
+    assert [i for i in range(8) if out[0, i].item() == float("-inf")] == [2, 4]

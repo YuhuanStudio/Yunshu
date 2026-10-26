@@ -370,7 +370,11 @@ class TokenMaskProcessor:
         key = (id(ids), vocab)
         cached = self._block_cache.get(key)
         if cached is None:
-            cached = mx.zeros((vocab,), dtype=mx.bool_).at[ids].add(True)
+            # ids outside [0, vocab) are ignored (a negative one would wrap onto the tail)
+            keep = [t for t in ids.tolist() if 0 <= t < vocab]
+            cached = mx.zeros((vocab,), dtype=mx.bool_)
+            if keep:
+                cached = cached.at[mx.array(keep, dtype=mx.int32)].add(True)
             self._block_cache[key] = cached
         return cached
 
