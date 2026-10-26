@@ -315,6 +315,7 @@ class TokenMaskProcessor:
         self._ignore_eos = bool(ignore_eos)
         self._n_sigma = float(top_n_sigma or 0.0)
         self._generated = 0
+        self._block_cache: dict[tuple[int, int], mx.array] = {}
 
     @staticmethod
     def active(**kw) -> bool:
@@ -326,7 +327,14 @@ class TokenMaskProcessor:
         )
 
     def _block(self, ids: mx.array, vocab: int) -> mx.array:
-        return mx.zeros((vocab,), dtype=mx.bool_).at[ids].add(True)
+        # The id set is fixed for the request, so the (vocab,) bool mask is built once
+        # per vocab width instead of zeros + scatter on every decoded token.
+        key = (id(ids), vocab)
+        cached = self._block_cache.get(key)
+        if cached is None:
+            cached = mx.zeros((vocab,), dtype=mx.bool_).at[ids].add(True)
+            self._block_cache[key] = cached
+        return cached
 
     def _mask(self, logits: mx.array, generated: int | None = None) -> mx.array:
         # Functional (never writes into the caller's logits).
