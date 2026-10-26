@@ -102,6 +102,10 @@ async def tokenize(req: TokenizeRequest, request: Request):
             {**m, "content": _flatten_content(m.get("content"))} for m in req.messages
         ]
         kwargs = dict(req.chat_template_kwargs or {})
+        from yunshu_engine.special_tokens import neutralize_special_text
+
+        # Same defusing as the engines' renders, so counts equal generation's.
+        msgs = neutralize_special_text(msgs, tokenizer)
         try:
             text = tokenizer.apply_chat_template(
                 msgs,
@@ -308,9 +312,11 @@ async def apply_template(req: ApplyTemplateRequest, request: Request):
     if req.model:
         _check_model_access(request, req.model)
     tokenizer = _resolve_tokenizer(req.model or "")
+    from yunshu_engine.special_tokens import neutralize_special_text
+
     try:
         prompt = tokenizer.apply_chat_template(
-            req.messages,
+            neutralize_special_text(req.messages, tokenizer),
             tools=req.tools,
             tokenize=False,
             add_generation_prompt=req.add_generation_prompt,
