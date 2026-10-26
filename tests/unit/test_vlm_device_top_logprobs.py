@@ -1,8 +1,9 @@
 """VLM shared-batch top_logprobs without the upstream full-vocab argsort.
 
-``top_logprobs_device`` must equal mlx-vlm's ``argsort`` + reverse slice bit for bit (descending
-value, equal values by DESCENDING token id, NaN above everything), and the GenerationBatch
-hook in ``vlm_batch_runner`` must report the same top_logprobs as the upstream sort did.
+``top_logprobs_device`` orders like the text path: descending value, equal values by ASCENDING
+token id (mlx-vlm's own ``argsort`` + reverse slice breaks ties by descending id), NaN above
+everything. The VALUES must equal the upstream sort bit for bit; only the tie order differs.
+The GenerationBatch hook in ``vlm_batch_runner`` must report that order.
 """
 
 import mlx.core as mx
@@ -20,16 +21,34 @@ def upstream_top(lp, k):
     return top_idx, mx.take_along_axis(lp, top_idx, axis=-1)
 
 
+def canonical_top(lp, k):
+    """Descending value, equal values by ascending id, NaN first (numpy, whole vocabulary)."""
+    a = np.array(lp.astype(mx.float32))
+    ids = np.empty((a.shape[0], min(k, a.shape[1])), dtype=np.int32)
+    for r, row in enumerate(a):
+        nan = np.isnan(row)
+        order = np.lexsort((np.arange(row.size), -np.where(nan, 0, row), ~nan))
+        ids[r] = order[: ids.shape[1]]
+    return ids
+
+
 def _same(lp, k):
     want_i, want_v = upstream_top(lp, k)
     got_i, got_v = top_logprobs_device(lp, k)
     mx.eval(want_i, want_v, got_i, got_v)
     assert got_i.dtype == want_i.dtype and got_v.dtype == want_v.dtype
-    assert np.array_equal(np.array(got_i), np.array(want_i))
+    assert np.array_equal(np.array(got_i), canonical_top(lp, k))
     wv, gv = np.array(want_v.astype(mx.float32)), np.array(got_v.astype(mx.float32))
-    assert np.array_equal(
-        wv.view(np.uint32), gv.view(np.uint32)
-    )  # bit-for-bit, NaN too
+    # same values (NaN equal to NaN; -0.0 == 0.0 -- which of the two zeros sits at a tie
+    # position follows the id order, so their sign bit may differ)
+    assert np.array_equal(wv, gv, equal_nan=True)
+    # within a run of equal values the ids ascend
+    gi, f = np.array(got_i), np.array(lp.astype(mx.float32))
+    for r in range(gi.shape[0]):
+        v = np.array(got_v.astype(mx.float32))[r]
+        for j in range(1, gi.shape[1]):
+            if v[j] == v[j - 1] or (np.isnan(v[j]) and np.isnan(v[j - 1])):
+                assert gi[r, j] > gi[r, j - 1]
 
 
 def _rows(vocab, seed):
@@ -68,7 +87,7 @@ def test_low_precision_logprobs(dtype):
     lp = (_rows(4096, 9) * 0.5).astype(dtype)
     want_i, want_v = upstream_top(lp, 5)
     got_i, got_v = top_logprobs_device(lp, 5)
-    assert np.array_equal(np.array(got_i), np.array(want_i))
+    assert np.array_equal(np.array(got_i), canonical_top(lp, 5))
     assert got_v.dtype == dtype
     assert np.array_equal(
         np.array(want_v.astype(mx.float32)).view(np.uint32),
@@ -86,6 +105,15 @@ def test_batched_row_equals_single_row():
         assert np.array_equal(
             np.array(one_v[0]).view(np.uint32), np.array(batch_v[r]).view(np.uint32)
         )
+
+
+def test_tie_order_is_ascending_id_and_values_match_upstream():
+    lp = mx.array([[0.0, 1.0, 1.0, 1.0, -2.0, 1.0]])
+    ids, vals = top_logprobs_device(lp, 3)
+    up_i, up_v = upstream_top(lp, 3)
+    assert ids.tolist() == [[1, 2, 3]]  # upstream: [5, 3, 2]
+    assert up_i.tolist() == [[5, 3, 2]]
+    assert vals.tolist() == up_v.tolist()
 
 
 def test_probe_reports_support():
@@ -141,12 +169,11 @@ def test_generation_batch_reports_the_upstream_top_logprobs(k):
         for i in range(n):
             tok_prev = responses[s - 1][i].token
             row = table[tok_prev][None]
-            want_i, want_v = upstream_top(
-                row - mx.logsumexp(row, axis=-1, keepdims=True), k
-            )
+            norm = row - mx.logsumexp(row, axis=-1, keepdims=True)
+            want_i, want_v = upstream_top(norm, k)
             got = responses[s][i].top_logprobs
             assert got is not None
-            assert [t for t, _ in got] == want_i[0].tolist()
+            assert [t for t, _ in got] == canonical_top(norm, k)[0].tolist()
             assert [v for _, v in got] == want_v[0].tolist()
 
 

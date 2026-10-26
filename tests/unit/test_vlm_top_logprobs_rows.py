@@ -12,8 +12,17 @@ def _lsm(x):
 
 
 def _ref(lp, k):
-    top = mx.argsort(lp, axis=-1)[:, -k:][:, ::-1].astype(mx.int32)
-    return top.tolist(), mx.take_along_axis(lp, top, -1).tolist()
+    """Descending value, equal values by ascending id (NaN first)."""
+    import numpy as np
+
+    a = np.array(lp)
+    ids = []
+    for row in a:
+        nan = np.isnan(row)
+        order = np.lexsort((np.arange(row.size), -np.where(nan, 0, row), ~nan))
+        ids.append(order[:k].astype(int).tolist())
+    top = mx.array(ids)
+    return ids, mx.take_along_axis(lp, top, -1).tolist()
 
 
 @pytest.mark.parametrize("k", [1, 3, 5, 20])

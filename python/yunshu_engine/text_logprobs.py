@@ -47,14 +47,13 @@ def top_logprobs(
 def top_logprobs_rows(
     log_probs: mx.array, k: int
 ) -> tuple[list[list[int]], list[list[float]]]:
-    """Top-k ids/values per row of ``[N, V]`` ``log_probs`` in the mlx-vlm ``BatchGenerator``
-    order: ``argsort`` ascending, last k reversed, i.e. descending value and, for equal
-    values, DESCENDING token id (the opposite tie order of :func:`top_logprobs`).
+    """Top-k ids/values per row of ``[N, V]`` ``log_probs``: descending value and, for equal
+    values, ASCENDING token id (the order of :func:`top_logprobs`; NaN ranks above everything).
 
     One batched ``argpartition`` and one ``tolist`` per array replace the full-vocab sort.
     Rows whose k-th value ties with outsiders (``>= min`` count != k, which includes ``-inf``
-    tails) or that contain NaN are re-done with the original stable argsort, so every row
-    equals what the sort would have produced.
+    tails) or that contain NaN are re-done with the exact device selection, so every row
+    equals the exact order (:func:`top_logprobs_device`).
     """
     n, vocab = log_probs.shape
     k = max(0, min(int(k), vocab))
@@ -73,8 +72,7 @@ def top_logprobs_rows(
     if any(amb):
         rows = [i for i, a in enumerate(amb) if a]
         sub = log_probs[mx.array(rows)]
-        full = mx.argsort(sub, axis=-1)[:, -k:][:, ::-1].astype(mx.int32)
-        full_v = mx.take_along_axis(sub, full, axis=-1)
+        full, full_v = top_logprobs_device(sub, k)
         mx.eval(full, full_v)
         for r, fi, fv in zip(
             rows,
@@ -91,7 +89,7 @@ def top_logprobs_rows(
             out_i.append(ids[r])
             out_v.append(vs[r])
             continue
-        order = sorted(range(k), key=lambda j: (-vs[r][j], -ids[r][j]))
+        order = sorted(range(k), key=lambda j: (-vs[r][j], ids[r][j]))
         out_i.append([ids[r][j] for j in order])
         out_v.append([vs[r][j] for j in order])
     return out_i, out_v
@@ -108,11 +106,11 @@ def _orderable_u32(x: mx.array) -> mx.array:
 def top_logprobs_device(log_probs: mx.array, k: int) -> tuple[mx.array, mx.array]:
     """Top-k ``(ids int32 [N, k], values [N, k])`` of ``[N, V]`` ``log_probs``, lazily.
 
-    Same result, bit for bit, as the mlx-vlm ``GenerationBatch`` code it replaces
-    (``argsort`` ascending, last k reversed: descending value, equal values by DESCENDING
-    token id; NaN ranks above everything, -inf tails and ties included) but without the
-    full-vocab sort and without a host sync. Each element becomes one uint64 key
-    ``order(value) << 32 | token_id``; the keys are unique, so a single ``argpartition``
+    Order: descending value, equal values by ASCENDING token id (the text path's order;
+    mlx-vlm's own ``GenerationBatch`` sort breaks ties by descending id, the values are the
+    same bit for bit); NaN ranks above everything, -inf tails and ties included. No
+    full-vocab sort and no host sync. Each element becomes one uint64 key
+    ``order(value) << 32 | (0xFFFFFFFF - token_id)``; the keys are unique, so a single ``argpartition``
     selects exactly the right k and a k-wide sort orders them -- no ambiguity to detect.
     Rows are independent, so a batched row equals the same row alone. Nothing is
     evaluated here: the caller keeps the double-buffered decode pipelining.
@@ -121,7 +119,7 @@ def top_logprobs_device(log_probs: mx.array, k: int) -> tuple[mx.array, mx.array
     k = max(1, min(int(k), vocab))
     key = (
         _orderable_u32(log_probs.astype(mx.float32)).astype(mx.uint64) << 32
-    ) | mx.arange(vocab, dtype=mx.uint64)[None]
+    ) | (mx.array(0xFFFFFFFF, mx.uint64) - mx.arange(vocab, dtype=mx.uint64))[None]
     inv = ~key  # smallest inverted key == largest key
     part = mx.argpartition(inv, k - 1, axis=-1)[:, :k]
     order = mx.argsort(mx.take_along_axis(inv, part, axis=-1), axis=-1)
@@ -155,6 +153,6 @@ def device_topk_supported() -> bool:
     try:
         i, v = top_logprobs_device(mx.array([[0.0, 1.0, 1.0, float("nan")]]), 2)
         mx.eval(i, v)
-        return i.tolist() == [[3, 2]]
+        return i.tolist() == [[3, 1]]
     except Exception:  # noqa: BLE001
         return False
