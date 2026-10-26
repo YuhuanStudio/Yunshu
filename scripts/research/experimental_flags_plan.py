@@ -47,6 +47,16 @@ EVIDENCE = {
         ],
         "Old invariant receipts have parity and speed advantage, but current-source long-context paired decision is incomplete. Sweep now emits full-token digests and a final complete record; new job repeats 1K/8K/32K/131K code+prose with AR references.",
     ),
+    "YUNSHU_QWEN4_LANE": (
+        "lane",
+        "partial",
+        [
+            "settings.py decide: dense projection microbench, Flash-Next oQ3e (probe_singleton.py)",
+            "scripts/research/metalrt_step_profile.py flashverify --lane",
+            "scripts/research/check_virtual_group.py",
+        ],
+        "Per-projection microbench shows the lane matmul flat in rows where upstream's per-row singleton qmv scales with them; the verify-forward timing and the engine identity (spec on == off) receipts are the open items.",
+    ),
 }
 
 

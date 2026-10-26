@@ -112,7 +112,11 @@ const settingdesc = {
   YUNSHU_FOOTPRINT_SAMPLE_MS:
     "在后台线程中每 N ms 采样本进程的 `phys_footprint`，并将峰值以 `yunshu_process_footprint_bytes` 导出到 `/metrics`；0（默认）表示关闭。",
   YUNSHU_MAX_MEMORY_GB:
-    "多模型模式的内存上限（GiB），例如 `48` 或 `48GB`；`disabled` 会关闭强制机制。未设置时为统一内存的 80%。",
+    "内存上限（GiB），例如 `48` 或 `48GB`（多模型模式，以及 VLM runner 的加载预算与请求准入：请求会在队列等待，而不是超出上限）；`disabled` 会关闭强制机制。未设置时为统一内存的 80%。",
+  YUNSHU_MEMORY_ADMISSION:
+    "VLM runner：主机没有足够内存余量容纳新请求的 KV 与预填工作区时（实时 macOS 可用内存、内核压力、swap 增长、内存上限），请求留在队列等待；可用内存低于保留量时释放 APC RAM 条目；加载时按权重缩小 APC 预算。空闲服务器的第一个请求一律放行。只影响调度，输出不变。0 表示关闭。",
+  YUNSHU_MEMORY_RESERVE_GB:
+    "为 macOS 保留的空闲内存（GiB）。未设置时为物理内存的 5%，至少 4 GiB。也是释放 APC RAM 条目的阈值。",
   YUNSHU_PREFILL_STEP_SIZE:
     "文本引擎：每次预填充前向传递处理的提示词 token 数；在内存较小的机器上调低可限制预填充激活值的峰值。",
   YUNSHU_MEM_PRESSURE_THRESHOLD:
@@ -213,6 +217,8 @@ const settingdesc = {
     "稠密 Qwen3.5 系列 VLM：以Yunshu的回合驱动器处理文本请求（对所有解码行做打包前向传递，与批量预填充步骤交替；每行都有 MTP 草稿；按位置键采样；见 `docs/guides/ROUND_DRIVER.md`）。关闭时使用上游 BatchGenerator 加单请求推测解码通道。图片提示词、int8 KV 和 MoE 无论如何都走上游路径。",
   YUNSHU_MTP_ROW_EXACT:
     "Qwen3.5 系列运行器：使用 oMLX 逐行精确验证（验证行与单行解码按位相同），取代批不变内核。",
+  YUNSHU_QWEN4_LANE:
+    "Qwen3.8-Flash-Next（qwen4_exp）：解码、推测验证与草稿统一以行不变的 lane 矩阵乘处理稠密量化投影，取代上游逐行的单行 qmv。多一行验证不再成倍增加稠密权重读取量；推测输出仍与普通解码相同。输出与默认算术相差最后一位。上游融合 head 内核读不了的 head 格式（如 6-bit）会强制启用。宽于 32 行的预填块仍用 MLX 的量化矩阵乘。",
   YUNSHU_ENGINE_LOOP:
     "文本模型：使用 EngineCore 连续批处理循环，取代单请求快速路径。",
   YUNSHU_OVERLAP:

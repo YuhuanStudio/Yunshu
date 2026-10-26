@@ -121,7 +121,11 @@ const settingdesc = {
   YUNSHU_FOOTPRINT_SAMPLE_MS:
     "Sample this process’s `phys_footprint` every N ms on a background thread and export the peak as `yunshu_process_footprint_bytes` on `/metrics`. 0 (default) = off.",
   YUNSHU_MAX_MEMORY_GB:
-    "Multi-model mode memory ceiling in GiB, e.g. `48` or `48GB`; `disabled` turns the enforcer off. Unset: 80% of unified memory.",
+    "Memory ceiling in GiB, e.g. `48` or `48GB` (multi-model mode, and the VLM runner's load-time budget and request admission: a request waits in the queue instead of growing past the ceiling); `disabled` turns the enforcer off. Unset: 80% of unified memory.",
+  YUNSHU_MEMORY_ADMISSION:
+    "VLM runner: hold a new request in the queue while the host has no memory headroom for its KV and prefill workspace (live macOS available memory, kernel pressure, swap growth, the memory ceiling), shed APC RAM entries when available memory falls below the reserve, and shrink the APC budget at load to fit the weights. The first request of an idle server is always admitted. Scheduling only; outputs are unchanged. 0 turns it off.",
+  YUNSHU_MEMORY_RESERVE_GB:
+    "Memory kept free for macOS in GiB. Unset: 5% of physical RAM, at least 4 GiB. Also the line below which APC RAM entries are shed.",
   YUNSHU_PREFILL_STEP_SIZE:
     "Text engine: prompt tokens per prefill forward pass; lower it to cap the prefill activation peak on small-memory machines.",
   YUNSHU_MEM_PRESSURE_THRESHOLD:
@@ -225,6 +229,8 @@ const settingdesc = {
     "Dense Qwen3.5-family VLMs: serve text requests with Yunshu’s round driver (packed forwards over every decoding row, alternating with batched prefill steps; MTP drafts for every row; position-keyed sampling; see `docs/guides/ROUND_DRIVER.md`). Off: upstream BatchGenerator plus the single-request speculative lane. Image prompts, int8 KV and MoE stay on the upstream path either way.",
   YUNSHU_MTP_ROW_EXACT:
     "Qwen3.5-family runner: oMLX row-exact verify (verify rows bit-identical to one-row decode) instead of batch-invariant kernels.",
+  YUNSHU_QWEN4_LANE:
+    "Qwen3.8-Flash-Next (qwen4_exp): run the dense quantized projections as the row-invariant lane matmul for decode, speculative verify and drafting instead of upstream’s per-row singleton qmv. Extra verify rows no longer multiply the dense weight traffic; speculative output still equals plain decode. Output differs from the default arithmetic in the last bit. A head format the upstream fused head kernel cannot read (6-bit) turns it on regardless. Prefill chunks wider than 32 rows keep MLX’s quantized matmul.",
   YUNSHU_ENGINE_LOOP:
     "Text models: EngineCore continuous-batching loop instead of the single-request fast path.",
   YUNSHU_OVERLAP:

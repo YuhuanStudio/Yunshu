@@ -1887,6 +1887,21 @@
     },
     {
       "kind": "patches",
+      "path": "python/yunshu_engine/kernels/lane_virtual.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen3_5.speculative_verifier",
+      "symbol": "Qwen3_5BatchInvariantForward._linears",
+      "signature": "(self, linears, x: mx.array)",
+      "license": "MIT",
+      "commit": "v0.7.6",
+      "why": "Qwen4-Exp's verify forward inherits this method; lane_virtual wraps the inherited method on Qwen4ExpBatchInvariantForward (not the base class) so the GDN qkv|z|b|a and attention q|k|v projections of lane-converted layers share one launch per split and format, bit-identical to the separate lane calls; any other member mix falls through to this method",
+      "source_sha256": "1f44efb5714938afee3c700508cafd98770f1e6ab1a84718ef59fdf444ca782b",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
       "path": "python/yunshu_engine/dflash_context.py",
       "repo": "https://github.com/Blaizzy/mlx-vlm",
       "clone": "reference/mlx-vlm",
