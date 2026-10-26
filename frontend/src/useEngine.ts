@@ -1,4 +1,5 @@
 import { activity, type ActivityPhase } from "./engineView";
+import { joinOrQueue } from "./single-flight.ts";
 import {
   emaStep,
   initialStablePhase,
@@ -226,7 +227,8 @@ export function useEngine(connection: Connection): UseEngineResult {
   const refresh = useCallback(
     (force = false): Promise<void> => {
       const existing = inFlightRef.current;
-      if (existing?.connectionKey === connectionKey) return existing.promise;
+      if (existing?.connectionKey === connectionKey)
+        return joinOrQueue(existing.promise, force, () => refresh(force));
 
       const generation = generationRef.current;
       const controller = new AbortController();

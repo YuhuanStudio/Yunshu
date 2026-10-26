@@ -29,3 +29,17 @@ export function createSingleFlight(run: () => Promise<void>) {
 /** A signal that aborts with the caller's `signal` or after `ms`, so one hung response cannot stall a poller. */
 export const withTimeout = (signal: AbortSignal, ms: number): AbortSignal =>
   AbortSignal.any([signal, AbortSignal.timeout(ms)]);
+
+/**
+ * A poll is already in flight: a background request shares its answer, but a forced one (the user's
+ * refresh, or a read after a change) needs a fetch that starts after the change, so it runs when the
+ * in-flight one is done.
+ */
+export function joinOrQueue(
+  inFlight: Promise<void> | null,
+  force: boolean,
+  start: () => Promise<void>,
+): Promise<void> {
+  if (!inFlight) return start();
+  return force ? inFlight.then(start, start) : inFlight;
+}

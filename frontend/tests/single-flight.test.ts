@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSingleFlight, withTimeout } from "../src/single-flight.ts";
+import {
+  createSingleFlight,
+  joinOrQueue,
+  withTimeout,
+} from "../src/single-flight.ts";
 
 test("a trigger during a run queues exactly one follow-up run", async () => {
   let runs = 0;
@@ -27,4 +31,19 @@ test("withTimeout aborts a hung request", async () => {
   await new Promise((r) => s.addEventListener("abort", r));
   assert.equal(s.aborted, true);
   clearTimeout(keepAlive);
+});
+
+test("a forced refresh waits for the poll in flight and then fetches again; a background one shares it", async () => {
+  let starts = 0;
+  const start = async () => void starts++;
+  let done!: () => void;
+  const inFlight = new Promise<void>((r) => (done = r));
+  const shared = joinOrQueue(inFlight, false, start);
+  const forced = joinOrQueue(inFlight, true, start);
+  assert.equal(starts, 0);
+  done();
+  await Promise.all([shared, forced]);
+  assert.equal(starts, 1);
+  await joinOrQueue(null, false, start);
+  assert.equal(starts, 2);
 });
