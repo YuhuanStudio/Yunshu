@@ -1159,3 +1159,29 @@ def test_anchor_size_memo_does_not_keep_an_evicted_checkpoint_alive():
     gc.collect()
     assert 7 in m._anchors
     assert held() is None
+
+
+def test_checkpoints_never_land_before_or_inside_media_tokens():
+    """A snapshot must sit at/after the last media token (a text-only suffix): never inside an
+    image/video/audio span, nor before one (the suffix would re-embed media)."""
+    from mlx_vlm.apc import media_safe_prefix_min
+
+    from tests.unit.test_apc_divergence_point import _coordinator
+
+    media = {5000, 5001}
+    m = _mgr(prefill_alignment=64)
+    c = _coordinator(m)
+    head = list(range(100, 400))
+    body_a = list(range(200, 900))
+    img = [5000] * 300  # spans the interval/aligned points below it
+    body_b = list(range(1000, 3500))
+    prompts = [
+        _prompt(head, body_a + img + body_b),  # image after the head
+        _prompt(head + img, body_a + body_b),  # image inside the system turn
+        _prompt(head, body_a + body_b + [5001] * 40 + [9, 8, 7]),  # image near the end
+    ]
+    for ids in prompts:
+        floor = media_safe_prefix_min(ids, media)
+        for n in c.checkpoint_lengths(ids, media):
+            assert n >= floor and n % 64 == 0, (n, floor)
+            assert not media.intersection(ids[n:]), n
