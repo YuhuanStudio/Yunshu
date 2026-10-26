@@ -56,6 +56,16 @@ tested memory guidance for 128 GB and tight hosts. Outputs of speculation on and
 - New setting `YUNSHU_CONSOLE_PAUSE_FILE`: the console sends no request to any engine while the file says so; gpuq
   writes it for timing jobs, so an A/B is not perturbed by a one-sided monitor.
 - Dependencies were synced (28 upgrades, nothing pinned).
+- Loopback-bound servers refuse a non-loopback `Host` and cross-site POST/PUT/PATCH/DELETE (DNS rebinding);
+  `YUNSHU_ALLOWED_HOSTS` adds names, `*` disables. Managed API keys are their own actors: an infer-scope key no longer
+  reads or cancels other keys' stored responses, containers or requests. 20 failed authentications a minute from one
+  address give `429`. Request-supplied MCP connector servers may not reach private or loopback addresses unless
+  `YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE` is on.
+- Text-only requests have no default 300 s generation deadline; a zero-token prompt is a `400 empty_prompt` on every
+  path; a missing `previous_response_id` ancestor is a `404`; a malformed Anthropic `tool_choice` is a `400`.
+- Removed: `YUNSHU_ROUND_DRIVER`, `YUNSHU_ROUND_PREFILL_CHUNK` and `YUNSHU_MTP_ROW_EXACT` (measured slower than the
+  default), and unused dependencies; mlx-lm is now >= 0.32.2. New: `YUNSHU_GRAMMAR_PREWARM` (on; about 0.45 GiB per
+  mask width). Review notes and the per-path merge checklist: [handoff](docs/reports/HANDOFF_REVIEW_2026-10-26.md).
 
 ### Performance
 
@@ -173,12 +183,21 @@ and cold 32K TTFT versus Splash 1.3.2.
   (2x32K concurrent decode no longer drops to 11-13 tok/s).
 - CI: console layout under load, focus races and a hybrid SSD budget test that read the real volume.
 - Verified code-review fixes in the gateway, infrastructure and remaining modules.
+- Realtime `server_vad` no longer ends a turn when short pauses add up to the silence window, idle silence no longer
+  overflows the input buffer, and a cancelled reply stays in the conversation. Token budgets count natively rendered
+  tool schemas. Grammar dead ends, full stream queues and failed admissions fail only their own request. The SSD
+  prefix cache no longer keeps every written prompt in RAM. Every serving path now carries the same fixes
+  ([path parity](docs/reports/HANDOFF_REVIEW_2026-10-26.md#what-a-unified-path-must-keep)).
 
 ### Security
 
 - No security-specific changes in this release.
 
 [Full changelog: v0.1.5…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.5...main)
+- Special-token strings in message text stay text when the chat template is rendered, so a user cannot close their
+  turn and open a system one; `YUNSHU_MCP_SERVERS` is masked like other secrets; the code-execution editor opens
+  paths with `O_NOFOLLOW` and refuses FIFOs; decoded request media live in a private directory sandboxed code cannot
+  read. The console blocks remote images in model output.
 
 ## [0.1.5] - 2026-10-15
 
