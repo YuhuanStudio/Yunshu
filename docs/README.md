@@ -61,6 +61,7 @@ docs/
   archive/
     mlx_vlm_omni_audio/ ← real omni/audio findings (speech-to-speech capability)
     legacy_vlm_loop/    ← how the deleted pre-runner VLM generation loop worked (+ its KV-prefix notes)
+    round_driver/       ← the deleted experimental multi-row round driver (design, measurements, why it lost)
     reports/omlx_scheduler_gaps.md  ← competitive notes on oMLX
 ```
 
