@@ -274,3 +274,19 @@ def test_decoded_request_media_sit_in_a_private_dir_the_sandbox_cannot_read(
     assert (
         private_media_path() in build_settings(tmp_path / "c")["filesystem"]["denyRead"]
     )
+
+
+def test_private_media_deny_names_the_symlink_and_its_real_path(tmp_path, monkeypatch):
+    """macOS TMPDIR lives under /var/folders, a symlink to /private/var/folders."""
+    import tempfile
+
+    real_tmp = tmp_path / "private_var"
+    real_tmp.mkdir()
+    link = tmp_path / "var"
+    link.symlink_to(real_tmp)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(link))
+    given = os.path.join(str(link), f"yunshu_decoded_{os.getuid()}")
+    real = os.path.join(os.path.realpath(str(link)), f"yunshu_decoded_{os.getuid()}")
+    assert given != real
+    deny = build_settings(tmp_path / "c")["filesystem"]["denyRead"]
+    assert given in deny and real in deny
