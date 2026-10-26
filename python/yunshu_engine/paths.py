@@ -83,6 +83,17 @@ def private_media_path() -> str:
     return os.path.join(tempfile.gettempdir(), f"yunshu_decoded_{os.getuid()}")
 
 
+def private_media_paths() -> list[str]:
+    """``private_media_path()`` as given and with symlinks resolved (macOS ``TMPDIR`` is under
+    ``/var/folders``, a symlink to ``/private/var/folders``): a deny list must name both, as
+    the sandbox may compare either spelling. One entry when they agree."""
+    import os
+
+    given = private_media_path()
+    real = os.path.realpath(given)
+    return [given] if real == given else [given, real]
+
+
 def private_media_dir() -> str:
     """``private_media_path()``, created 0700 (a symlink or someone else's directory is refused)."""
     import contextlib

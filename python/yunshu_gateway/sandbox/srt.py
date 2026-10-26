@@ -13,7 +13,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from yunshu_engine.paths import private_media_path
+from yunshu_engine.paths import private_media_paths
 
 MIN_NODE = (22, 12)
 
@@ -161,7 +161,7 @@ def build_settings(
             "denyRead": [
                 *DENY_READ_ROOTS,
                 str(container_dir.parent),
-                private_media_path(),
+                *private_media_paths(),
             ],
             "allowRead": allow_read,
             "allowWrite": [str(container_dir)],

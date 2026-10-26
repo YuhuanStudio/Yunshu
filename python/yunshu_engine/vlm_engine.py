@@ -251,12 +251,23 @@ class _ThreadSafeQueue:
         self._loop = ev_loop
         self._backlog: collections.deque = collections.deque()
         self._drain: asyncio.Future | None = None
+        self._closed = False
+
+    def close(self):  # event-loop thread
+        """The consumer is gone: drop parked terminal items and stop the drain task, which
+        would otherwise wait forever on a queue nobody reads."""
+        self._closed = True
+        self._backlog.clear()
+        if self._drain is not None and not self._drain.done():
+            self._drain.cancel()
 
     def put_nowait(self, item):
         with contextlib.suppress(RuntimeError):  # event loop closed during shutdown
             self._loop.call_soon_threadsafe(self._put_terminal, item)
 
     def _put_terminal(self, item):  # event-loop thread
+        if self._closed:
+            return
         if self._backlog or self._q.full():
             self._backlog.append(item)
             if self._drain is None or self._drain.done():
@@ -267,7 +278,8 @@ class _ThreadSafeQueue:
     async def _drain_backlog(self):
         while self._backlog:
             await self._q.put(self._backlog[0])
-            self._backlog.popleft()
+            if self._backlog:
+                self._backlog.popleft()
 
     def put_blocking(self, item, cancel):
         """Bound the runner's producer by the async consumer, including slow clients."""
@@ -1653,6 +1665,7 @@ class VLMEngine:
                     cancel_event.set()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await asyncio.shield(stream_task)
+            _safe_queue.close()
             # Drain remaining queue items to unblock the executor thread
             # so it can observe the cancellation and exit promptly.
             while not queue.empty():

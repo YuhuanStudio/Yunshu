@@ -38,6 +38,8 @@ from typing import Any
 
 import numpy as np
 
+from .constraint_eos import GrammarDeadEndError
+
 logger = logging.getLogger(__name__)
 
 # Special / added tokens that may appear inside a string value (a file that
@@ -972,9 +974,21 @@ class ToolCallProcessor:
 
     def __init__(self, guide: ToolCallGuide):
         self.guide = guide
+        # A shared batch row sets ``isolate``: a grammar dead end is recorded in ``fault``
+        # (the runner fails that one request) instead of raising out of the batch step.
+        self.isolate = False
+        self.fault: BaseException | None = None
 
     def _apply(self, logits):
-        row = self.guide.mask()
+        if self.fault is not None:
+            return logits
+        try:
+            row = self.guide.mask()
+        except GrammarDeadEndError as exc:
+            if not self.isolate:
+                raise
+            self.fault = exc
+            return logits
         if row is None:
             return logits
         return apply_bitmask(logits, row)

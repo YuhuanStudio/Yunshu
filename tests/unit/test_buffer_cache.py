@@ -187,3 +187,39 @@ def test_restore_buffer_is_best_fit_and_bounded(restore):
     assert buffer_cache.take_restore_buffer(probe, 300) is None  # 4096 > 2 x 300
     assert buffer_cache.take_restore_buffer(probe, 200) is small
     assert buffer_cache.take_restore_buffer(probe, 3000) is big
+
+
+def _finished(rows):
+    from mlx_vlm.models.cache import KVCache
+
+    c = KVCache()
+    c.keys = mx.ones((1, 1, rows, 4))
+    c.values = mx.ones((1, 1, rows, 4))
+    mx.eval(c.state)
+    return c
+
+
+def test_pooled_set_nobody_takes_is_released(restore):
+    """After one long turn, short chats (under half its capacity) must not pin it forever."""
+    buffer_cache.install(0.01)
+    buffer_cache.offer_restore_buffers([_finished(2048)])
+    big = buffer_cache.restore_buffer_bytes()
+    assert big > 0
+    small = _finished(64)
+    small_bytes = small.keys.nbytes + small.values.nbytes
+    for _ in range(buffer_cache.MAX_IDLE_OFFERS - 1):
+        buffer_cache.offer_restore_buffers([_finished(64)])
+        assert buffer_cache.restore_buffer_bytes() == big  # still waiting for a taker
+    buffer_cache.offer_restore_buffers([small])
+    assert buffer_cache.restore_buffer_bytes() == small_bytes
+    assert buffer_cache._STATE["limit"] - small_bytes >= 0
+
+
+def test_pooled_set_that_is_taken_stays(restore):
+    buffer_cache.install(0.01)
+    buffer_cache.offer_restore_buffers([_finished(512)])
+    probe = mx.zeros((1, 1, 10, 4))
+    assert buffer_cache.take_restore_buffer(probe, 400) is not None  # the keys
+    for _ in range(buffer_cache.MAX_IDLE_OFFERS - 1):
+        buffer_cache.offer_restore_buffers([_finished(8)])
+    assert buffer_cache.restore_buffer_bytes() > 0  # the take reset the idle count

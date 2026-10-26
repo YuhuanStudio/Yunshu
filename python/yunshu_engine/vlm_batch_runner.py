@@ -1199,14 +1199,17 @@ class VLMBatchRunner:
                 while len(manager._console_requests) > 512:
                     manager._console_requests.popitem(last=False)
             group.gen.apc.set_request(job.ids, job.cache_plan)
-        extra_hash = getattr(group.gen, "_apc_extra_hash", None)
-        if extra_hash is not None:
-            job.apc_salt = extra_hash(pkw)
         if not group.spec:
+            from .tool_call_grammar import ToolCallProcessor
+
             for proc in job.processors:
-                if isinstance(proc, ConstraintProcessor):
+                if isinstance(proc, ConstraintProcessor | ToolCallProcessor):
                     proc.isolate = True
         try:
+            # Inside the try: a raise here must still release the descriptor above.
+            extra_hash = getattr(group.gen, "_apc_extra_hash", None)
+            if extra_hash is not None:
+                job.apc_salt = extra_hash(pkw)
             (uid,) = group.gen.insert(
                 [job.ids],
                 max_tokens=job.max_tokens,
@@ -1566,6 +1569,9 @@ class VLMBatchRunner:
         sampler/cache update unchanged; only publish the ready token earlier.
         """
         if group.spec or len(group.jobs) != 1:
+            return None
+        if _row_fault(next(iter(group.jobs.values()))) is not None:
+            # The token was sampled from unmasked logits: never publish it.
             return None
         from mlx_vlm.generate.ar import GenerationBatch
 
@@ -2350,22 +2356,27 @@ class VLMBatchRunner:
                 for j, points in self._prefix_producers
                 if not j.terminal and not j.stats.t_first
             ]
-            for job in pending:
+            for job in list(pending):
+                # A job leaves ``pending`` once it is admitted, parked in ``waiting`` or
+                # terminal, so the failure handler below only reaches jobs not yet handled.
                 cancelled = job.cancel_event is not None and job.cancel_event.is_set()
                 if job.abandoned or cancelled:
                     # Never prefill a request nobody is waiting for.
                     job.stats.finish_reason = "cancel" if cancelled else None
                     self._emit(job, _DONE)
+                    pending.remove(job)
                     continue
                 try:
                     if self._prefix_wait(job):
                         waiting.append(job)
+                        pending.remove(job)
                         continue
                     self._admit(job, alone)
                     self._track_prefix_producer(job)
                 except Exception as exc:
                     logger.exception("VLM runner admission failed")
                     self._emit(job, exc)
+                pending.remove(job)
             if waiting:
                 with self._lock:
                     self._pending = waiting + self._pending

@@ -437,6 +437,32 @@ def test_manager_stats_count_only_restores_the_coordinator_accepts(monkeypatch):
     assert [r.cached for r in m.lookups if r.tier == "ram"] == [113]
 
 
+def test_refused_restore_takes_back_every_hit_counter(monkeypatch):
+    from mlx_vlm.apc import _sequence_hash
+
+    m = _mgr()
+    c = _coordinator(m)
+    ids = list(range(2000, 2200))
+    c.set_request(ids, {"points": [(113, 300)], "written": 0})
+    m.store_exact_cache(ids[:113], _cache(113))
+    key = _sequence_hash(tuple(ids[:113]), 0, m.block_size)
+    m._span_plans[key] = (17,)  # a different earlier split: the checks refuse it
+    monkeypatch.setattr(m, "probe_exact_length", lambda *a: 0)
+    before = (m.stats.hits, m.stats.exact_hits, m.stats.matched_tokens)
+    entry_hits = dict(m._entry_hits)
+    observed = dict(m.observation.hits)
+    args = dict(extra_hash=0, safe_lookup_min=0, suffix_is_text_only=lambda n: True)
+    assert c.lookup(ids, **args) is None
+    assert (m.stats.hits, m.stats.exact_hits, m.stats.matched_tokens) == before
+    assert dict(m._entry_hits) == entry_hits
+    assert dict(m.observation.hits) == observed
+    m._span_plans[key] = ()  # accepted this time: it counts once
+    assert c.lookup(ids, **args)["prefix_len"] == 113
+    assert m.stats.hits == before[0] + 1
+    assert m.stats.matched_tokens == before[2] + 113
+    assert sum(v[0] for v in m._entry_hits.values()) == 1
+
+
 def test_canonical_seams_without_a_write_do_not_clone(monkeypatch):
     from mlx_vlm.apc_coordinator import APCCoordinator
 
