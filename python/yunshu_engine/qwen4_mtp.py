@@ -8,7 +8,9 @@ captures GDN, QSA indexer and PLE history in upstream speculative transactions.
 from typing import Any
 
 
-def load_native_head(config: dict, weights: dict | None) -> Any:
+def load_native_head(
+    config: dict, weights: dict | None, *, direct_norms: bool = False
+) -> Any:
     """Strictly load the retained head, respecting mixed per-module quantization."""
     import mlx.core as mx
     import mlx.nn as nn
@@ -23,6 +25,9 @@ def load_native_head(config: dict, weights: dict | None) -> Any:
         Qwen4ExpMTPConfig.from_dict({"text_config": config["text_config"]})
     )
     weights = drafter.sanitize(weights)
+    from .qwen4_norms import normalize
+
+    normalize(drafter, weights, direct=direct_norms)
     quant = config.get("mtplx_mtp_quantization") or config.get("quantization") or {}
 
     def predicate(path, module):
@@ -62,8 +67,34 @@ def load_native_head(config: dict, weights: dict | None) -> Any:
     return drafter
 
 
+def adapt_head(lm: Any) -> bool:
+    """Give a quantized LM head the upstream exact kernel cannot read a row-invariant lane matmul.
+
+    mlx-vlm's exact affine head kernel takes 4/5/8-bit heads only. A pack with another head width (the oQ3e
+    Flash-Next pack has a 6-bit one) would make ``_supports_batch_invariant_decode`` false, and the server
+    refuses to start. The lane matmul reads 2..8-bit affine weights and a row's result does not depend on how
+    many rows share the call, so decode, verify and shared-batch rows still agree. True when swapped."""
+    import mlx.nn as nn
+    from mlx_vlm.models.quantized_verifier import supports_optimized_affine_head
+
+    head = getattr(lm, "lm_head", None)
+    if not isinstance(head, nn.QuantizedLinear) or supports_optimized_affine_head(head):
+        return False
+    from .kernels import lane_linear
+
+    if not lane_linear.eligible(head):
+        return False
+    lm.lm_head = lane_linear.LaneLinear.from_quantized(head)
+    return True
+
+
 def configure_lane(lm: Any, drafter: Any, block: int | None) -> tuple[dict, int | None]:
     """Keep plain decode and verify on the family-specific upstream arithmetic."""
+    adapt_head(lm)
+    if getattr(getattr(drafter, "config", None), "target_layer_ids", None):
+        from .qwen4_dflash import install
+
+        install(lm)
     required = ("speculative_verify_hidden", "speculative_draft_hidden")
     if not all(callable(getattr(lm, name, None)) for name in required):
         raise RuntimeError("mlx-vlm lacks the Qwen4 hyper-state speculative verifier")

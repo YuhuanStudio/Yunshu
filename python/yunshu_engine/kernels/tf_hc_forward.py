@@ -167,16 +167,50 @@ def eligible(model: Any) -> bool:
     return bool(found)
 
 
-def _tf_model(self, model, inputs, cache, inputs_embeds, position_ids):
+def _tf_model(
+    self,
+    model,
+    inputs,
+    cache,
+    inputs_embeds,
+    position_ids,
+    *,
+    capture_layer_ids=(),
+    hidden_sink=None,
+):
     from mlx_vlm.models.qwen4_exp import language as ql
 
     from .tf_flash_next import hc as tf_hc
 
     hidden = model.embed_tokens(inputs) if inputs_embeds is None else inputs_embeds
     if hidden.dtype != mx.bfloat16 or not eligible(model):
-        return _STATE["original"](
-            self, model, inputs, cache, inputs_embeds, position_ids
-        )
+        if hidden_sink is None:
+            return _STATE["original"](
+                self, model, inputs, cache, inputs_embeds, position_ids
+            )
+        # The upstream loop has no capture argument. Retain its arithmetic for
+        # packs whose HC weights cannot use the fused kernels.
+        hidden = mx.tile(hidden, (1, 1, model.args.hc_count))
+        cache = cache if cache is not None else [None] * len(model.layers)
+        fa_mask = ql._create_qwen3_5_attention_mask(hidden, cache[model.fa_idx])
+        ssm_mask = ql._create_qwen3_5_ssm_mask(hidden, cache[model.ssm_idx])
+        for index, (layer, entry) in enumerate(zip(model.layers, cache, strict=True)):
+            hidden = self._layer(
+                layer,
+                hidden,
+                inputs,
+                ssm_mask if layer.is_linear else fa_mask,
+                entry,
+                position_ids,
+            )
+            if index in capture_layer_ids:
+                hidden_sink.append(
+                    hidden.reshape(
+                        *hidden.shape[:-1], model.args.hc_count, model.args.hidden_size
+                    ).mean(axis=-2)
+                )
+            mx.async_eval(hidden)
+        return hidden
     hidden = mx.tile(hidden, (1, 1, model.args.hc_count))
     if cache is None:
         cache = [None] * len(model.layers)
@@ -212,7 +246,7 @@ def _tf_model(self, model, inputs, cache, inputs_embeds, position_ids):
     pending = (
         None  # (branch [rows, dims], inject gates) of the previous layer's MoE block
     )
-    for layer, layer_cache in zip(model.layers, cache, strict=True):
+    for index, (layer, layer_cache) in enumerate(zip(model.layers, cache, strict=True)):
         layer_mask = ssm_mask if layer.is_linear else fa_mask
         hn, ssp = norm(h, pending)
         if "ple" in layer:
@@ -240,6 +274,11 @@ def _tf_model(self, model, inputs, cache, inputs_embeds, position_ids):
             fused = ("plain", (branch2.reshape(rows, dims),))
         h = hn2
         pending = (fused[0], fused[1], inject2)
+        if hidden_sink is not None and index in capture_layer_ids:
+            committed, _ = norm(h, pending)
+            hidden_sink.append(
+                committed.reshape(batch, length, streams, dims).mean(axis=-2)
+            )
         mx.async_eval(h, *fused[1])
     hn, _ = norm(h, pending)
     return hn.reshape(batch, length, width)

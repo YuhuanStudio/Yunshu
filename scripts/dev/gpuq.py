@@ -1298,6 +1298,22 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     )
 
 
+
+_NOISE = ("gpuq:", "[transformers]", "Traceback", "  File ")
+
+
+def result_summary(log: Path, lines: int = 3) -> str:
+    """The job's last meaningful output lines, stored in its record at the end so its result survives without a reader.
+
+    Workers die on usage limits and the lead's watchdog was once silenced by marking ~11,850 jobs read unread
+    (2026-10-25); `watchdog.py backlog` and `gpuq status` show this summary for every finished job nobody has read."""
+    try:
+        tail = log.read_bytes()[-8000:].decode("utf-8", "replace").splitlines()
+    except OSError:
+        return ""
+    keep = [t.strip() for t in tail if t.strip() and not t.startswith(_NOISE) and " INFO " not in t]
+    return " | ".join(x[:160] for x in keep[-lines:])[:480]
+
 def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     gate = gate or ServingGate()
     _release_quiet_hold(job, _now())
@@ -1418,6 +1434,7 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     log.write(monitor.summary() + "\n")
     log.close()
     _write(LOGS / f"{job['id']}.pauses.json", {"pauses": pauser.pauses})
+    job["summary"] = result_summary(LOGS / f"{job['id']}.log")
     _write(path, job)
     _stamp_local_outputs(job)
 
