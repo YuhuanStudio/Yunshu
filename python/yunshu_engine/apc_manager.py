@@ -238,6 +238,29 @@ def total_memory_bytes() -> int:
     return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
 
 
+def _is_transient_load_error(e: BaseException) -> bool:
+    """A failure that says nothing about the file: out of memory, an interrupted or exhausted
+    system call, an MLX allocation failure. The checkpoint stays; the lookup goes cold."""
+    import errno
+
+    if isinstance(e, MemoryError):
+        return True
+    if isinstance(e, OSError):
+        return e.errno in {
+            errno.ENOMEM,
+            errno.EINTR,
+            errno.EAGAIN,
+            errno.EMFILE,
+            errno.ENFILE,
+            errno.ENOSPC,
+            errno.EBUSY,
+        }
+    if isinstance(e, RuntimeError):
+        text = str(e).lower()
+        return "allocat" in text or "out of memory" in text
+    return False
+
+
 def check_loaded_cache(
     token_ids, prompt_cache, template=None, kv_heads=None, head_dim=None
 ):
@@ -567,7 +590,9 @@ class SpillDiskStore(DiskBlockStore):
         try:
             loaded = super().load_exact_cache(cache_hash, **kwargs)
         except Exception as e:
-            if path is not None:
+            if _is_transient_load_error(e):
+                logger.warning("APC disk: load failed (%s), going cold", e)
+            elif path is not None:
                 self.quarantine(path, f"load raised {type(e).__name__}")
             return None
         if loaded is None:

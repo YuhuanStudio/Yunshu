@@ -266,3 +266,27 @@ def test_exact_load_refreshes_mtime_for_the_budget_lru(tmp_path):
     os.utime(path, (1_000_000, 1_000_000))
     assert _load(store, key) is not None
     assert path.stat().st_mtime > 1_000_000 + 3600
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        MemoryError(),
+        OSError(12, "Cannot allocate memory"),
+        OSError(4, "Interrupted system call"),
+        RuntimeError("[metal::malloc] Unable to allocate 4096 bytes"),
+    ],
+)
+def test_transient_load_errors_keep_the_file(tmp_path, monkeypatch, exc):
+    store = _store(tmp_path)
+    key = _put(store)
+    path = _path(store, key)
+
+    def boom(self, *a, **k):
+        raise exc
+
+    with monkeypatch.context() as mp:
+        mp.setattr(SpillDiskStore.__mro__[1], "load_exact_cache", boom)
+        assert _load(store, key) is None  # goes cold this time
+    assert path.exists() and key in store._exact_index
+    assert _load(store, key) is not None  # and serves once the pressure is gone
