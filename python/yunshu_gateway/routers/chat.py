@@ -93,8 +93,8 @@ def _validate_sampling_params(
 
     Returns normally if valid, raises HTTPException(422) if invalid.
 
-    Note: max_tokens=0 is allowed here (OpenAI API returns prompt_tokens only).
-    The gateway handles this as a fast-path returning an empty completion.
+    Note: max_tokens=0 passes here because /v1/completions takes it (echo-only scoring); the
+    chat request model rejects it with a 400 before this runs.
     """
     if temperature < 0 or temperature > 2:
         raise HTTPException(
@@ -412,12 +412,14 @@ class ChatCompletionRequest(BaseModel):
     logit_bias: dict[int, float] | None = None
     # Omitted -> the model's output limit (OpenAI: up to the model / context limit; see
     # yunshu_engine.output_limits), clamped to the context room by token_budget.
+    # OpenAI rejects max_tokens / max_completion_tokens below 1 with a 400 (the legacy
+    # completions endpoint is the one that takes 0, for echo-only scoring).
     max_tokens: int = Field(
         default_factory=default_max_output,
-        ge=0,
+        ge=1,
         le=1048576,
     )
-    max_completion_tokens: int | None = Field(default=None, ge=0, le=1048576)
+    max_completion_tokens: int | None = Field(default=None, ge=1, le=1048576)
     stream: bool = False
     stream_options: StreamOptions | None = None
     stop: list[str] | None = None
@@ -1899,108 +1901,6 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
     apply_keep_alive(req.model, req.keep_alive)
     _validate_sampling_params(req.temperature, req.effective_max_tokens(), req.top_p)
 
-    # Fast path: max_tokens=0 returns prompt_tokens only (OpenAI API behavior).
-    # Estimate prompt tokens from tokenizer if available.
-    _effective_mt = req.effective_max_tokens()
-    if _effective_mt == 0:
-        messages = _extract_messages(req.messages)
-        # Inject the tool system prompt BEFORE counting, so this prompt_tokens probe
-        # matches what a real max_tokens>0 call reports (it injects at ~line 1241).
-        # Without this, the documented "send max_tokens:0 to get prompt_tokens" probe
-        # under-counts by the whole tool-prompt size when tools are present. .
-        if req.tools:
-            try:
-                messages = _inject_tool_system_prompt(
-                    messages, req.tools, req.tool_choice, req.parallel_tool_calls
-                )
-            except Exception:
-                logger.debug("max_tokens=0 tool-prompt injection failed", exc_info=True)
-        completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
-        prompt_tok = 0
-        # Resolve tokenizer in priority order: single-engine, then multi-model manager
-        _tokenizer = None
-        engine = get_engine()
-        if engine and getattr(engine, "is_loaded", False):
-            _tokenizer = getattr(engine, "_tokenizer", None)
-        if _tokenizer is None:
-            try:
-                manager = get_model_manager()
-                if manager is not None:
-                    entry = manager.get_entry(req.model)
-                    if entry is not None:
-                        if entry.is_loaded and entry.engine is not None:
-                            _tokenizer = getattr(entry.engine, "_tokenizer", None)
-                        # Fallback: load tokenizer-only via HF transformers
-                        if _tokenizer is None:
-                            try:
-                                # SECURITY: gate trust_remote_code (RCE from a
-                                # model dir's *.py) behind an explicit opt-in, default OFF.
-                                _trc = settings.get_bool("YUNSHU_TRUST_REMOTE_CODE")
-                                from transformers import AutoTokenizer
-
-                                _tokenizer = AutoTokenizer.from_pretrained(
-                                    entry.model_path, trust_remote_code=_trc
-                                )
-                            except Exception as _err:
-                                logger.debug(
-                                    f"max_tokens=0 fallback tokenizer load failed: {_err}"
-                                )
-            except Exception:
-                pass
-        if _tokenizer is not None:
-            # Prefer chat template encoding (matches what generate() with
-            # max_tokens>0 would report). Fall back to the heuristic
-            # count_message_tokens if the tokenizer can't apply a template.
-            try:
-                from yunshu_engine.special_tokens import neutralize_special_text
-
-                templated = _tokenizer.apply_chat_template(
-                    neutralize_special_text(messages, _tokenizer),
-                    tokenize=False,
-                    add_generation_prompt=True,
-                )
-                if isinstance(templated, str):
-                    # avoid double-BOS so this probe matches the
-                    # generation path's prompt_tokens (which now applies the same guard).
-                    _bos = getattr(_tokenizer, "bos_token", None)
-                    _add = not (
-                        isinstance(_bos, str) and _bos and templated.startswith(_bos)
-                    )
-                    try:
-                        prompt_tok = len(
-                            _tokenizer.encode(templated, add_special_tokens=_add)
-                        )
-                    except TypeError:
-                        prompt_tok = len(_tokenizer.encode(templated))
-            except Exception:
-                logger.debug("max_tokens=0 chat-template encode failed", exc_info=True)
-            if prompt_tok == 0:
-                try:
-                    from yunshu_control.token_counter import count_message_tokens
-
-                    prompt_tok = count_message_tokens(messages, _tokenizer)
-                except Exception:
-                    pass
-        return JSONResponse(
-            {
-                "id": completion_id,
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": req.model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": ""},
-                        "finish_reason": "length",
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": prompt_tok,
-                    "completion_tokens": 0,
-                    "total_tokens": prompt_tok,
-                },
-            }
-        )
     # Validate stop strings: reject empty strings (would match immediately)
     if req.stop:
         req.stop = [s for s in req.stop if s]

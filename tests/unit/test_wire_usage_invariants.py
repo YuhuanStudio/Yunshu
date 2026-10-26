@@ -93,13 +93,37 @@ def test_thinking_controls_reach_the_engine_the_same_way(monkeypatch):
 
 
 def test_zero_max_tokens_reports_the_prompt_and_no_output(monkeypatch):
+    # /v1/completions takes max_tokens=0 (echo-only scoring); chat answers 400 like OpenAI
+    cl, eng = _serve(monkeypatch, pieces=["a", "b"], prompt_tokens=4)
+    r = cl.oa.completions.create(model="m", prompt="hi", max_tokens=0)
+    assert r.usage.completion_tokens == 0
+    assert r.usage.total_tokens == r.usage.prompt_tokens
+    assert r.choices[0].finish_reason == "length"
+    assert not eng.calls, "max_tokens=0 must not generate"
+
+
+def test_non_positive_max_tokens_is_a_400_on_every_api_but_completions(monkeypatch):
+    import openai
+
     cl, eng = _serve(monkeypatch, pieces=["a", "b"], prompt_tokens=4)
     for create in (
         lambda: cl.oa.chat.completions.create(model="m", messages=USER, max_tokens=0),
-        lambda: cl.oa.completions.create(model="m", prompt="hi", max_tokens=0),
+        lambda: cl.oa.chat.completions.create(
+            model="m", messages=USER, max_completion_tokens=0
+        ),
+        lambda: cl.oa.responses.create(model="m", input="hi", max_output_tokens=0),
     ):
-        r = create()
-        assert r.usage.completion_tokens == 0
-        assert r.usage.total_tokens == r.usage.prompt_tokens
-        assert r.choices[0].finish_reason == "length"
-    assert not eng.calls, "max_tokens=0 must not generate"
+        try:
+            create()
+        except openai.BadRequestError:
+            continue
+        raise AssertionError("expected a 400")
+    import anthropic
+
+    try:
+        cl.an.messages.create(model="m", messages=USER, max_tokens=0)
+    except anthropic.BadRequestError:
+        pass
+    else:
+        raise AssertionError("expected a 400")
+    assert not eng.calls
