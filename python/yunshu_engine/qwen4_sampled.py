@@ -37,7 +37,7 @@ def install_logit_stash(lm: Any) -> bool:
     def stashing(hidden: mx.array) -> mx.array:
         from .constrained_spec import current_request
 
-        logits = project(hidden)
+        logits: mx.array = project(hidden)
         request = current_request()
         if request is not None and getattr(request, "logprobs", False):
             logits = logits.astype(mx.float32)
@@ -61,9 +61,9 @@ class _Draw:
     def chosen(self) -> list[float]:
         if self._chosen is None:
             ids = self.tokens.reshape(-1, 1).astype(mx.int32)
-            self._chosen = (
-                mx.take_along_axis(self.rows, ids, axis=-1).reshape(-1).tolist()
-            )
+            picked = mx.take_along_axis(self.rows, ids, axis=-1).reshape(-1)
+            values: Any = picked.tolist()
+            self._chosen = [float(x) for x in values]
         return self._chosen
 
 
@@ -110,7 +110,8 @@ class NativeKeyedSampler(KeyedSampler):
         self.lm._yunshu_logit_stash = None
         from .constrained_spec import normalize_rows
 
-        return normalize_rows(stash)
+        rows: mx.array = normalize_rows(stash)
+        return rows
 
     def sample_target(self, logprobs, row_ids=None, positions=None):
         if positions is None:
@@ -150,7 +151,7 @@ class NativeKeyedSampler(KeyedSampler):
         for stale in [k for k in self._draws if k < index]:
             del self._draws[stale]
         draw, row = self._draws.pop(index)
-        if self.request is not None and getattr(self.request, "top_logprobs", 0):
+        if self.request is not None and getattr(self.request, "top_logprobs", None):
             _, lp, top = self.request.reports(draw.rows[row : row + 1], [token])[0]
             return lp, top
         return draw.chosen()[row], []
