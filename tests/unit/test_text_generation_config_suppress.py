@@ -58,9 +58,9 @@ async def test_request_suppress_tokens_win_over_the_model_default(tmp_path):
     assert await _gen(eng, suppress_tokens=[63]) == base
 
 
-async def test_ngram_route_is_skipped_when_the_request_needs_the_plain_path():
-    """The n-gram route does not honor suppress_tokens / min_tokens / ignore_eos, so a request
-    (or a model default) that sets one is served by the plain fast path."""
+async def test_ngram_route_is_skipped_only_for_min_tokens_and_ignore_eos():
+    """The n-gram route bans suppress_tokens itself (test_ngram_suppress_tokens.py) but does not
+    honor min_tokens / ignore_eos, so a request that sets one is served by the plain fast path."""
     eng = make_engine()
     eng._ngram_proposer = object()
     called = []
@@ -70,12 +70,34 @@ async def test_ngram_route_is_skipped_when_the_request_needs_the_plain_path():
         raise AssertionError("ngram route taken")
 
     eng._generate_ngram_spec = fake_ngram
-    for extra in ({"suppress_tokens": [63]}, {"min_tokens": 2}, {"ignore_eos": True}):
+    for extra in ({"min_tokens": 2}, {"ignore_eos": True}):
         out = await eng.generate(
             prompt=PROMPT, max_tokens=4, temperature=0.0, spec_decode=True, **extra
         )
         assert out.error is None and out.text
     assert not called
+
+
+async def test_ngram_route_receives_the_request_and_the_model_default_suppress(
+    tmp_path,
+):
+    eng = make_engine()
+    eng._ngram_proposer = object()
+    got = []
+
+    async def fake_ngram(**kw):
+        got.append(kw["suppress_tokens"])
+        return await eng._generate_fast(**{k: v for k, v in kw.items()})
+
+    eng._generate_ngram_spec = fake_ngram
+    kw = dict(prompt=PROMPT, max_tokens=4, temperature=0.0, spec_decode=True)
+    await eng.generate(suppress_tokens=[63], **kw)
+    (tmp_path / "generation_config.json").write_text(
+        json.dumps({"suppress_tokens": [5]})
+    )
+    eng.model_name = str(tmp_path)
+    await eng.generate(**kw)
+    assert got == [[63], [5]]
 
 
 def test_default_ids_drop_out_of_vocab_and_bad_entries(tmp_path):

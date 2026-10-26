@@ -75,6 +75,7 @@ class EngineSpeculativeMixin:
         k: int = 4,
         temperature: float = 0.0,
         seed: int | None = None,
+        suppress_tokens: list[int] | None = None,
     ) -> list[int]:
         """Single-sequence generation via the Gemma-4 assistant drafter.
 
@@ -119,6 +120,16 @@ class EngineSpeculativeMixin:
                 return _mx.tanh(_f(_h) / _c) * _c
         else:
             _lm_head = _base_head
+        if suppress_tokens:
+            # Every target token (first, verified, bonus) comes from this head, so a ban here
+            # is exact; a banned draft simply fails verification.
+            from .text_logit_processors import TokenBan
+
+            _ban, _head = TokenBan(suppress_tokens), _lm_head
+
+            def _lm_head(_h, _head=_head, _ban=_ban):
+                return _ban(None, _head(_h))
+
         return self._gemma4_assistant_proposer.spec_decode_generate(
             tm,
             _lm_head,
@@ -187,6 +198,7 @@ class EngineSpeculativeMixin:
         enable_thinking: bool | None = None,
         stop_token_ids: list[int] | None = None,
         k: int = 4,
+        suppress_tokens: list[int] | None = None,
     ) -> _engine.GenerationOutput:
         """n=1 serving via the Gemma-4 assistant drafter (validated ~2.5x, lossless).
 
@@ -239,6 +251,7 @@ class EngineSpeculativeMixin:
                 k=k,
                 temperature=temperature or 0.0,
                 seed=seed,
+                suppress_tokens=suppress_tokens,
             )
             finished_by_eos = bool(gen_ids) and gen_ids[-1] in eos_ids
             visible_ids = gen_ids[:-1] if finished_by_eos else gen_ids

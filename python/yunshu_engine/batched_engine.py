@@ -1307,8 +1307,10 @@ class BatchedEngine(
         external_eligible: bool = True,
         plain_only: bool = False,
     ) -> str | None:
-        # plain_only: the request sets min_tokens / ignore_eos / suppress_tokens, which
-        # only the plain fast path (and the loop) honor; a spec route would drop them.
+        # plain_only: the request sets min_tokens / ignore_eos, which only the plain fast
+        # path (and the loop) honor; a spec route would drop them. suppress_tokens is not
+        # one of them: the n-gram and Gemma-4 routes ban the ids themselves, and the opt-in
+        # external-draft route excludes it in ``external_eligible``.
         if use_engine_loop or logprobs or plain_only:
             return None
         greedy = temperature is None or temperature <= 0.0
@@ -1458,7 +1460,9 @@ class BatchedEngine(
             temperature=temperature,
             logprobs=bool(logprobs),
             use_engine_loop=_use_engine_loop,
-            plain_only=bool(min_tokens or ignore_eos or suppress_tokens),
+            # min_tokens / ignore_eos only the plain path honors; suppress_tokens (the request's
+            # or the checkpoint's default) the n-gram and Gemma-4 routes apply themselves
+            plain_only=bool(min_tokens or ignore_eos),
             # The external adapter does not implement the full fast-path
             # parameter contract. Never drop a client's requested behavior.
             external_eligible=(
@@ -1646,6 +1650,7 @@ class BatchedEngine(
                     seed=seed,
                     enable_thinking=enable_thinking,
                     stop_token_ids=stop_token_ids,
+                    suppress_tokens=suppress_tokens,
                 )
             except Exception:
                 logger.warning(
@@ -1720,6 +1725,7 @@ class BatchedEngine(
                 logits_processors=logits_processors,
                 timeout_seconds=timeout_seconds,
                 lora_adapter=lora_adapter,
+                suppress_tokens=suppress_tokens,
             )
 
         # Fast path: direct generate_step on executor thread for full GPU utilization
