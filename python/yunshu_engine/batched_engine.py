@@ -523,6 +523,11 @@ class BatchedEngine(
         def _load():
             from mlx_lm.utils import load as load_model
 
+            from .kernels import sdpa_chunk
+
+            # M1-M4 only; bounds the unfused head-dim-256 prefill score matrix
+            sdpa_chunk.install()
+
             kwargs = {}
             # Check for quantization override from env or settings.
             # The old code did kwargs["quantization"] = <str> and passed it to

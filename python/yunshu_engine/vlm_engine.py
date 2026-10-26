@@ -2404,6 +2404,10 @@ class VLMEngine:
                 validate_drafter_compatibility(self._model, drafter, "mtp")
         block = settings.get("YUNSHU_MTP_BLOCK_SIZE")
         kernels = None
+        from .kernels import sdpa_chunk
+
+        # M1-M4 only; bounds the unfused head-dim-256 prefill score matrix
+        sdpa_chunk.install()
         # Spec off on a spec family still runs the lane's plain-decode arithmetic
         # (invariant kernels), so spec on == spec off token-for-token.
         if qwen4:

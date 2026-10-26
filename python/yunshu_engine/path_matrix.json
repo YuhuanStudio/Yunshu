@@ -2481,6 +2481,7 @@
   "python/yunshu_engine/kernels/verify_select.py": "exact-kernel streamed5 verify select; only research scripts and test_qmv_compat use it since the YUNSHU_MTP_ROW_EXACT path was deleted"
  },
  "modules_other": {
+  "python/yunshu_engine/kernels/sdpa_chunk.py": "M1-M4 only memory bound: query-chunks MLX's own unfused head-dim-256 SDPA when its score matrix exceeds a budget (stock arithmetic per row; installed at load in vlm_engine and batched_engine; engages on no path on M5/CPU)",
   "python/yunshu_engine/apc_restore_cost.py": "media checkpoint restore admission (APC media path; cost model only, decides reuse not numerics)",
   "python/yunshu_engine/dflash_context.py": "DFlash prefill capture and context window (part of dflash path)",
   "python/yunshu_engine/dflash_fast.py": "DFlash fast tree (tree_drafts)",

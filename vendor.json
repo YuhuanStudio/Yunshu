@@ -1347,6 +1347,21 @@
       "local_changes": [
         "Research-only canonical per-query TK4 adapter imports the registered harvester, preserving absolute prefix lengths and split geometry across T=1..7. FP64 reference reports both kernels absolute/relative errors; deterministic and reconstructed-cache tensor checks. No serving connection or full APC/accuracy qualification."
       ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/kernels/sdpa_chunk.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_paths": [
+        "omlx/patches/sdpa256_attention.py"
+      ],
+      "commit": "03bc3dd7",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "omlx forces MLX's fused kernel (different arithmetic from the unfused fallback); Yunshu keeps the stock fallback and only splits query rows against the full key axis under a score budget, so per-row arithmetic is unchanged",
+        "gated to Apple GPU generation < 17; no memory_monitor registration"
+      ]
     }
   ],
   "patches": [
@@ -2533,6 +2548,36 @@
       "why": "split-invariant prefill only: 128-wide BF16 RMS followed by BF16 Q/K scale in one kernel, preserving the intermediate BF16 rounding; decode/verify and other shapes call upstream",
       "source_sha256": "8f16e229aec08b7a1ca6eaf2bd15e61ade47061d7225925096b857955fe93ca9",
       "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/sdpa_chunk.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.base",
+      "symbol": "scaled_dot_product_attention",
+      "signature": "(queries, keys, values, cache, scale: float, mask: Optional[mx.array], sinks: Optional[mx.array]=None)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "M1-M4 query-chunking of head-dim-256 SDPA; wraps and rebinds model modules",
+      "source_sha256": "2bc5644af48b66c94f7ab1488e5807a9e2f5c2700fd32d06185eeb246bda667c",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/sdpa_chunk.py",
+      "repo": "https://github.com/ml-explore/mlx-lm",
+      "clone": "reference/mlx-lm",
+      "package": "mlx-lm",
+      "module": "mlx_lm.models.base",
+      "symbol": "scaled_dot_product_attention",
+      "signature": "(queries, keys, values, cache, scale: float, mask: Optional[mx.array], sinks: Optional[mx.array]=None)",
+      "license": "MIT",
+      "commit": "v0.32.2",
+      "why": "M1-M4 query-chunking of head-dim-256 SDPA (text-only fast path)",
+      "source_sha256": "9b23a7140848b1724f0298191ca64f9d0ae3e313e22df1c48a313779c5c80507",
+      "installed_version": "0.32.2"
     }
   ],
   "watch": [
