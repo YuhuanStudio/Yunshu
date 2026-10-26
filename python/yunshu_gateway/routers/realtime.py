@@ -1422,6 +1422,8 @@ class RealtimeSession:
         if event_type == "input_audio_buffer.commit" or (
             event_type in _AFTER_COMMIT_EVENTS and self._lane_busy()
         ):
+            if event_type == "input_audio_buffer.commit":
+                event = {**event, "_snapshot": self._take_commit_snapshot()}
             self._lane_run(self._dispatch(handler, event, event_type))
             return
         await self._dispatch(handler, event, event_type)
@@ -3574,45 +3576,24 @@ class RealtimeSession:
                     )
                     # Auto-commit and trigger response (OpenAI behavior with server_vad);
                     # in the lane so the ASR does not stall the receive loop.
-                    self._lane_run(self._auto_commit_and_respond())
+                    if self._active_response is None or self._active_response.done():
+                        snap = self._take_commit_snapshot(vad_trim=True)
+                        self._lane_run(self._auto_commit_and_respond(snap))
             else:
                 self._vad_silence_bytes = 0
 
-    async def _handle_input_audio_buffer_commit(
-        self, event: dict, *, vad_trim: bool = False
-    ) -> bool:
-        """Handle input_audio_buffer.commit — finalize and transcribe audio.
+    def _take_commit_snapshot(self, *, vad_trim: bool = False) -> tuple[bytes, str]:
+        """Take the audio a commit transcribes, at the moment the commit happens.
 
-                Sends the accumulated audio buffer through ASR, then adds the
-                transcribed text as a user conversation item. ``vad_trim`` (server_vad
-                auto-commit only) trims leading pre-speech silence to ~prefix_padding_ms
-                before the VAD-detected speech start.
-
-                Returns True iff a user conversation item was actually created (non-empty
-                transcript). The server_vad auto-commit path gates the auto-response on this
-                so a VAD false-trigger (noise/breath → empty transcript) or a missing ASR
-                engine does NOT fire a phantom response that re-answers the previous turn
-        .
+        The ASR runs later in the ordered lane; the buffer must be cut when the commit (or
+        the VAD speech_stopped) arrives, or the idle-silence trim and audio appended
+        meanwhile would change what gets transcribed (an utterance trimmed to its last
+        pre-roll, two utterances merged, commit + clear turned into commit_empty).
+        Returns ``(audio, user_item_id)``; empty audio leaves the buffer untouched.
         """
-        # Snapshot the buffer as bytes immediately to prevent race conditions
-        # where audio appended during await yields is incorrectly included.
         audio_data = bytes(self._audio_buffer)
         if not audio_data:
-            # a MANUAL commit of an empty buffer must return the OpenAI
-            # protocol error so the client isn't left hanging with no terminal
-            # event. A server_vad auto-commit (vad_trim) on empty stays silent.
-            if not vad_trim:
-                await self.send_event(
-                    _event(
-                        RealtimeEvent.ERROR,
-                        error={
-                            "type": "invalid_request_error",
-                            "code": "input_audio_buffer_commit_empty",
-                            "message": "Cannot commit an empty input audio buffer.",
-                        },
-                    )
-                )
-            return False
+            return b"", ""
         # (R6): on a VAD auto-commit, drop the leading idle/pre-speech audio
         # (keeping prefix_padding_ms before speech start) — prefix_padding_ms was
         # recorded but never applied, so seconds of accumulated silence were sent to
@@ -3646,6 +3627,44 @@ class RealtimeSession:
         # fresh one for a manual commit); the item created after the ASR reuses it.
         _user_item_id = self._pending_user_item_id or f"item_{uuid.uuid4().hex[:8]}"
         self._pending_user_item_id = None
+        return audio_data, _user_item_id
+
+    async def _handle_input_audio_buffer_commit(
+        self, event: dict, *, vad_trim: bool = False
+    ) -> bool:
+        """Handle input_audio_buffer.commit — finalize and transcribe audio.
+
+                Sends the accumulated audio buffer through ASR, then adds the
+                transcribed text as a user conversation item. ``vad_trim`` (server_vad
+                auto-commit only) trims leading pre-speech silence to ~prefix_padding_ms
+                before the VAD-detected speech start.
+
+                Returns True iff a user conversation item was actually created (non-empty
+                transcript). The server_vad auto-commit path gates the auto-response on this
+                so a VAD false-trigger (noise/breath → empty transcript) or a missing ASR
+                engine does NOT fire a phantom response that re-answers the previous turn
+        .
+        """
+        snap = event.pop("_snapshot", None) if isinstance(event, dict) else None
+        if snap is None:
+            snap = self._take_commit_snapshot(vad_trim=vad_trim)
+        audio_data, _user_item_id = snap
+        if not audio_data:
+            # a MANUAL commit of an empty buffer must return the OpenAI
+            # protocol error so the client isn't left hanging with no terminal
+            # event. A server_vad auto-commit (vad_trim) on empty stays silent.
+            if not vad_trim:
+                await self.send_event(
+                    _event(
+                        RealtimeEvent.ERROR,
+                        error={
+                            "type": "invalid_request_error",
+                            "code": "input_audio_buffer_commit_empty",
+                            "message": "Cannot commit an empty input audio buffer.",
+                        },
+                    )
+                )
+            return False
         _prev_item_id = (
             self.conversation.items[-1].item_id if self.conversation.items else None
         )
@@ -3811,7 +3830,7 @@ class RealtimeSession:
         self._reset_silero()
         await self.send_event(_event("input_audio_buffer.cleared"))
 
-    async def _auto_commit_and_respond(self) -> None:
+    async def _auto_commit_and_respond(self, snapshot: tuple | None = None) -> None:
         """Auto-commit audio buffer and trigger response (server_vad mode).
 
         Called when VAD detects speech has ended. Commits the accumulated audio
@@ -3823,16 +3842,19 @@ class RealtimeSession:
         """
         # Check response availability first — if a response is already running,
         # do NOT commit the buffer (audio would be lost with no response generated).
-        if self._active_response is not None and not self._active_response.done():
+        if snapshot is None and (
+            self._active_response is not None and not self._active_response.done()
+        ):
             return
         # only fire the auto-response when the commit actually produced a user
         # item. A VAD false-trigger (noise/breath → empty transcript) or a missing ASR engine
         # creates no item; responding anyway would re-answer the PREVIOUS user turn (the new
         # "turn" is invisible to the model) or burn a full generation on a misconfigured
         # server. OpenAI emits response.created only after a real conversation.item.created.
-        created = await self._handle_input_audio_buffer_commit(
-            {"type": "input_audio_buffer.commit"}, vad_trim=True
-        )
+        event: dict = {"type": "input_audio_buffer.commit"}
+        if snapshot is not None:
+            event["_snapshot"] = snapshot
+        created = await self._handle_input_audio_buffer_commit(event, vad_trim=True)
         # Native speech-to-speech produces NO conversation item — the raw PCM is fed
         # straight to the omni model (no ASR transcript), so `created` is False even
         # though a real spoken turn just happened. Without firing on the stashed audio,

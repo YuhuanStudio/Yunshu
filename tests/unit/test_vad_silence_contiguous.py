@@ -33,7 +33,7 @@ def _session():
     async def _send(ev):
         s._events.append(ev)
 
-    async def _noop():
+    async def _noop(*_a, **_k):
         return None
 
     s.send_event = _send
