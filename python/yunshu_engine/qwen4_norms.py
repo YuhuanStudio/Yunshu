@@ -40,7 +40,7 @@ def infer_direct_gamma(weights: dict) -> bool:
         mx.mean(v.astype(mx.float32)) for k, v in weights.items() if _ANCHOR.search(k)
     ]
     mx.eval(anchors)
-    return direct_gamma([float(x.item()) for x in anchors])
+    return direct_gamma([float(x.astype(mx.float32).item().real) for x in anchors])
 
 
 def normalize(model, weights: dict, *, direct: bool) -> int:
