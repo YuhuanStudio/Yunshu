@@ -1802,7 +1802,7 @@
     },
     "fast_top_logprobs": {
       "module": "python/yunshu_engine/text_logprobs.py",
-      "what": "top_logprobs without a full-vocabulary argsort or per-id syncs (argpartition; tie order kept per path)",
+      "what": "top_logprobs without a full-vocabulary argsort or per-id syncs (argpartition; one tie order everywhere: descending value, ascending id)",
       "cells": {
         "mtp": {
           "s": "engaged",
