@@ -1198,8 +1198,10 @@ class VLMBatchRunner:
         if extra_hash is not None:
             job.apc_salt = extra_hash(pkw)
         if not group.spec:
+            from .tool_call_grammar import ToolCallProcessor
+
             for proc in job.processors:
-                if isinstance(proc, ConstraintProcessor):
+                if isinstance(proc, ConstraintProcessor | ToolCallProcessor):
                     proc.isolate = True
         try:
             (uid,) = group.gen.insert(
@@ -1526,6 +1528,9 @@ class VLMBatchRunner:
         sampler/cache update unchanged; only publish the ready token earlier.
         """
         if group.spec or len(group.jobs) != 1:
+            return None
+        if _row_fault(next(iter(group.jobs.values()))) is not None:
+            # The token was sampled from unmasked logits: never publish it.
             return None
         from mlx_vlm.generate.ar import GenerationBatch
 
