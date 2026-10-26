@@ -100,6 +100,8 @@ const settingdesc = {
     "每個用戶端的請求速率上限（每分鐘請求數）；0（預設）表示關閉。本機單人使用的引擎不需要，伺服器對其他機器開放時再設定。",
   YUNSHU_TRUSTED_PROXIES:
     "以逗號分隔的代理 IP，其 `X-Forwarded-For` 標頭會被信任。",
+  YUNSHU_ALLOWED_HOSTS:
+    "除了迴圈位址名稱外，本伺服器接受的 Host 名稱（以逗號分隔）。留空（預設）：綁定在迴圈位址的伺服器只接受迴圈位址的 Host 標頭（localhost、127.0.0.1、[::1]；可防 DNS rebinding），綁定 0.0.0.0 則不檢查。設定後，任何綁定位址都會檢查；'*' 表示關閉檢查。",
   YUNSHU_FOOTPRINT_SAMPLE_MS:
     "在背景執行緒中每 N ms 取樣本行程的 `phys_footprint`，並將峰值以 `yunshu_process_footprint_bytes` 匯出到 `/metrics`；0（預設）表示關閉。",
   YUNSHU_MAX_MEMORY_GB:

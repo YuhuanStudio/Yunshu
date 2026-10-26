@@ -30,10 +30,16 @@ metrics_router = APIRouter(tags=["metrics"])
 
 
 def _is_loopback_request(request: Request) -> bool:
-    """True for a direct loopback client (no proxy header)."""
+    """True for a direct loopback client: no proxy header, and a loopback ``Host`` (a
+    DNS-rebinding page connects from 127.0.0.1 too, but names its own host)."""
     import ipaddress
 
+    from ..middleware.host_guard import is_loopback_host
+
     if any(h in request.headers for h in ("x-forwarded-for", "forwarded", "x-real-ip")):
+        return False
+    host = request.headers.get("host")
+    if host and not is_loopback_host(host):
         return False
     client = request.client.host if request.client else ""
     try:

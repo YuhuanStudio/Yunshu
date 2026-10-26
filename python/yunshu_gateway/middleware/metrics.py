@@ -20,7 +20,6 @@ from dataclasses import dataclass, field
 from threading import Lock
 
 from fastapi import HTTPException
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -374,168 +373,193 @@ def _check_metrics_auth(request: Request) -> None:
     )
 
 
-class MetricsMiddleware(BaseHTTPMiddleware):
-    """Collect request metrics for Prometheus."""
+class MetricsMiddleware:
+    """Collect request metrics for Prometheus (pure ASGI: streamed chunks pass untouched)."""
 
-    async def dispatch(self, request: Request, call_next):
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
         # Serve metrics endpoint
-        if request.url.path == "/metrics":
-            _check_metrics_auth(request)
-            parts = [_metrics.to_prometheus()]
-            from yunshu_engine.telemetry.sampler import get as get_telemetry
-
-            host_telemetry = get_telemetry()
-            if host_telemetry is not None:
-                parts.append(host_telemetry.prometheus())
-            # Append Prometheus exporter gauges (engine-level metrics)
-            try:
-                from .prometheus_exporter import get_prometheus_metrics
-
-                pm = get_prometheus_metrics()
-                # Collect RadixTree eviction metrics from loaded engines
-                try:
-                    from yunshu_engine.batched_engine import BatchedEngine
-
-                    from ..engine import get_engine, get_model_manager
-
-                    engines = []
-                    engine = get_engine()
-                    if engine and hasattr(engine, "is_loaded") and engine.is_loaded:
-                        engines.append(("default", engine))
-                    manager = get_model_manager()
-                    if manager:
-                        for entry in manager.list_entries():
-                            if entry.is_loaded and entry.engine:
-                                engines.append((entry.model_id, entry.engine))
-                    for mid, eng in engines:
-                        ml = {"model_id": mid}
-                        if isinstance(eng, BatchedEngine):
-                            radix_stats = eng.get_radix_tree_stats()
-                            ev = radix_stats.get("eviction_stats", {})
-                            pm.set_counter(
-                                "radix_evictions_lru", ev.get("lru", 0), labels=ml
-                            )
-                            pm.set_counter(
-                                "radix_evictions_lfu", ev.get("lfu", 0), labels=ml
-                            )
-                            pm.set_counter(
-                                "radix_evictions_fifo", ev.get("fifo", 0), labels=ml
-                            )
-                            pm.set_counter(
-                                "radix_evictions_freed_blocks",
-                                ev.get("total_freed_blocks", 0),
-                                labels=ml,
-                            )
-                            pm.set_gauge(
-                                "radix_total_nodes",
-                                radix_stats.get("total_nodes", 0),
-                                labels=ml,
-                            )
-                            pm.set_gauge(
-                                "radix_total_tokens",
-                                radix_stats.get("total_tokens", 0),
-                                labels=ml,
-                            )
-                            # RadixTree blocks and match rate
-                            pm.set_gauge(
-                                "radix_tree_blocks",
-                                radix_stats.get("total_blocks", 0),
-                                labels=ml,
-                            )
-                            pm.set_gauge(
-                                "radix_tree_match_rate",
-                                radix_stats.get("match_rate", 0.0),
-                                labels=ml,
-                            )
-                            pm.set_counter(
-                                "radix_tree_match_total",
-                                radix_stats.get("match_total", 0),
-                                labels=ml,
-                            )
-                            pm.set_counter(
-                                "radix_tree_match_hits",
-                                radix_stats.get("match_hits", 0),
-                                labels=ml,
-                            )
-                            # Scheduler monitoring gauges from engine_core
-                            try:
-                                core = getattr(eng, "_engine_core", None)
-                                if core is not None:
-                                    pm.set_gauge(
-                                        "scheduler_waiting_queue_depth",
-                                        getattr(core, "_last_queue_depth", 0),
-                                        labels=ml,
-                                    )
-                                    pm.set_gauge(
-                                        "scheduler_batch_size",
-                                        getattr(core, "_last_batch_size", 0),
-                                        labels=ml,
-                                    )
-                                    pm.set_gauge(
-                                        "compute_utilization_pct",
-                                        core.get_compute_utilization()
-                                        if hasattr(core, "get_compute_utilization")
-                                        else 0,
-                                        labels=ml,
-                                    )
-                                    pm.set_gauge(
-                                        "step_duration_ms",
-                                        getattr(core, "_last_step_wall_ms", 0.0),
-                                        labels=ml,
-                                    )
-                            except Exception:
-                                logger.debug(
-                                    "scheduler monitoring gauge population failed",
-                                    exc_info=True,
-                                )
-                            # Response cache
-                            try:
-                                s = eng.get_stats() if hasattr(eng, "get_stats") else {}
-                                rc = s.get("response_cache")
-                                if rc:
-                                    pm.set_counter(
-                                        "response_cache_hits_total",
-                                        rc.get("hits", 0),
-                                        labels=ml,
-                                    )
-                                    pm.set_counter(
-                                        "response_cache_misses_total",
-                                        rc.get("misses", 0),
-                                        labels=ml,
-                                    )
-                            except Exception:
-                                logger.debug(
-                                    "response cache gauge population failed",
-                                    exc_info=True,
-                                )
-                except Exception:
-                    logger.debug("operation failed", exc_info=True)
-                # The prefix cache (APC) of the VLM runner: this middleware serves
-                # /metrics before the router does, so it fills these itself.
-                from ..routers.monitoring import (
-                    _populate_apc_metrics,
-                    _populate_busy_metrics,
-                )
-
-                _populate_apc_metrics(pm)
-                _populate_busy_metrics(pm)
-                pm_text = pm.generate()
-                if pm_text:
-                    parts.append(pm_text)
-            except Exception:
-                logger.debug("operation failed", exc_info=True)
-            return Response(
-                content="\n".join(parts),
-                media_type="text/plain; version=0.0.4; charset=utf-8",
-            )
+        if scope["path"] == "/metrics":
+            response = self._metrics_page(Request(scope, receive))
+            await response(scope, receive, send)
+            return
 
         t0 = time.monotonic()
-        response = await call_next(request)
-        latency = time.monotonic() - t0
+        recorded = False
 
+        async def send_recording(message):
+            nonlocal recorded
+            if message["type"] == "http.response.start" and not recorded:
+                recorded = True
+                self._record(
+                    scope["method"],
+                    scope["path"],
+                    message["status"],
+                    time.monotonic() - t0,
+                )
+            await send(message)
+
+        await self.app(scope, receive, send_recording)
+
+    def _metrics_page(self, request: Request) -> Response:
+        _check_metrics_auth(request)
+        parts = [_metrics.to_prometheus()]
+        from yunshu_engine.telemetry.sampler import get as get_telemetry
+
+        host_telemetry = get_telemetry()
+        if host_telemetry is not None:
+            parts.append(host_telemetry.prometheus())
+        # Append Prometheus exporter gauges (engine-level metrics)
+        try:
+            from .prometheus_exporter import get_prometheus_metrics
+
+            pm = get_prometheus_metrics()
+            # Collect RadixTree eviction metrics from loaded engines
+            try:
+                from yunshu_engine.batched_engine import BatchedEngine
+
+                from ..engine import get_engine, get_model_manager
+
+                engines = []
+                engine = get_engine()
+                if engine and hasattr(engine, "is_loaded") and engine.is_loaded:
+                    engines.append(("default", engine))
+                manager = get_model_manager()
+                if manager:
+                    for entry in manager.list_entries():
+                        if entry.is_loaded and entry.engine:
+                            engines.append((entry.model_id, entry.engine))
+                for mid, eng in engines:
+                    ml = {"model_id": mid}
+                    if isinstance(eng, BatchedEngine):
+                        radix_stats = eng.get_radix_tree_stats()
+                        ev = radix_stats.get("eviction_stats", {})
+                        pm.set_counter(
+                            "radix_evictions_lru", ev.get("lru", 0), labels=ml
+                        )
+                        pm.set_counter(
+                            "radix_evictions_lfu", ev.get("lfu", 0), labels=ml
+                        )
+                        pm.set_counter(
+                            "radix_evictions_fifo", ev.get("fifo", 0), labels=ml
+                        )
+                        pm.set_counter(
+                            "radix_evictions_freed_blocks",
+                            ev.get("total_freed_blocks", 0),
+                            labels=ml,
+                        )
+                        pm.set_gauge(
+                            "radix_total_nodes",
+                            radix_stats.get("total_nodes", 0),
+                            labels=ml,
+                        )
+                        pm.set_gauge(
+                            "radix_total_tokens",
+                            radix_stats.get("total_tokens", 0),
+                            labels=ml,
+                        )
+                        # RadixTree blocks and match rate
+                        pm.set_gauge(
+                            "radix_tree_blocks",
+                            radix_stats.get("total_blocks", 0),
+                            labels=ml,
+                        )
+                        pm.set_gauge(
+                            "radix_tree_match_rate",
+                            radix_stats.get("match_rate", 0.0),
+                            labels=ml,
+                        )
+                        pm.set_counter(
+                            "radix_tree_match_total",
+                            radix_stats.get("match_total", 0),
+                            labels=ml,
+                        )
+                        pm.set_counter(
+                            "radix_tree_match_hits",
+                            radix_stats.get("match_hits", 0),
+                            labels=ml,
+                        )
+                        # Scheduler monitoring gauges from engine_core
+                        try:
+                            core = getattr(eng, "_engine_core", None)
+                            if core is not None:
+                                pm.set_gauge(
+                                    "scheduler_waiting_queue_depth",
+                                    getattr(core, "_last_queue_depth", 0),
+                                    labels=ml,
+                                )
+                                pm.set_gauge(
+                                    "scheduler_batch_size",
+                                    getattr(core, "_last_batch_size", 0),
+                                    labels=ml,
+                                )
+                                pm.set_gauge(
+                                    "compute_utilization_pct",
+                                    core.get_compute_utilization()
+                                    if hasattr(core, "get_compute_utilization")
+                                    else 0,
+                                    labels=ml,
+                                )
+                                pm.set_gauge(
+                                    "step_duration_ms",
+                                    getattr(core, "_last_step_wall_ms", 0.0),
+                                    labels=ml,
+                                )
+                        except Exception:
+                            logger.debug(
+                                "scheduler monitoring gauge population failed",
+                                exc_info=True,
+                            )
+                        # Response cache
+                        try:
+                            s = eng.get_stats() if hasattr(eng, "get_stats") else {}
+                            rc = s.get("response_cache")
+                            if rc:
+                                pm.set_counter(
+                                    "response_cache_hits_total",
+                                    rc.get("hits", 0),
+                                    labels=ml,
+                                )
+                                pm.set_counter(
+                                    "response_cache_misses_total",
+                                    rc.get("misses", 0),
+                                    labels=ml,
+                                )
+                        except Exception:
+                            logger.debug(
+                                "response cache gauge population failed",
+                                exc_info=True,
+                            )
+            except Exception:
+                logger.debug("operation failed", exc_info=True)
+            # The prefix cache (APC) of the VLM runner: this middleware serves
+            # /metrics before the router does, so it fills these itself.
+            from ..routers.monitoring import (
+                _populate_apc_metrics,
+                _populate_busy_metrics,
+            )
+
+            _populate_apc_metrics(pm)
+            _populate_busy_metrics(pm)
+            pm_text = pm.generate()
+            if pm_text:
+                parts.append(pm_text)
+        except Exception:
+            logger.debug("operation failed", exc_info=True)
+        return Response(
+            content="\n".join(parts),
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+
+    def _record(self, method: str, path: str, status: int, latency: float) -> None:
         # Normalize endpoint for label cardinality bounding — raw paths like
         # /v1/chat/completions/req-abc123 would create unbounded label series.
-        normalized_ep = _normalize_endpoint(request.url.path)
+        normalized_ep = _normalize_endpoint(path)
 
         # use the bucketed endpoint (/{other} past the distinct-endpoint cap) for
         # the exporter + aggregator too, so an endpoint flood can't churn their label-series
@@ -543,8 +567,8 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         bucketed_ep = (
             _metrics.record_request(
                 endpoint=normalized_ep,
-                method=request.method,
-                status=response.status_code,
+                method=method,
+                status=status,
                 latency=latency,
             )
             or normalized_ep
@@ -556,9 +580,9 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             from .metrics_aggregator import get_metrics_aggregator
 
             get_metrics_aggregator().record_request(
-                method=request.method,
+                method=method,
                 path=bucketed_ep,
-                status=response.status_code,
+                status=status,
                 duration_ms=latency * 1000,
             )
         except Exception:
@@ -571,8 +595,8 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             pm.inc_counter(
                 "request_total",
                 {
-                    "method": request.method,
-                    "status": str(response.status_code),
+                    "method": method,
+                    "status": str(status),
                     "endpoint": bucketed_ep,
                 },
             )
@@ -585,5 +609,3 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             )
         except Exception:
             logger.debug("prometheus recording failed", exc_info=True)
-
-        return response

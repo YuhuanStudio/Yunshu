@@ -112,12 +112,12 @@ def log_operation(
 def resolve_actor(request: object) -> str:
     """Resolve the actor identity for an audit line.
 
-    Single-consumer model: the multi-tenant RBAC machinery is gone, so every
-    request maps to the constant single-owner identity (``"owner"``, overridable
-    via ``YUNSHU_ACTOR_IDENTITY``) — the single digital being (Yunmo) this engine
-    serves. ``request`` is accepted for call-site compatibility.
+    The auth middleware stamps ``request.state.actor`` (``key:<id>`` for a managed
+    API key); everything else — the static token, auth disabled, no request — is
+    the single-owner identity (``"owner"``, overridable via ``YUNSHU_ACTOR_IDENTITY``).
     """
-    return _default_actor()
+    actor = getattr(getattr(request, "state", None), "actor", None)
+    return actor if isinstance(actor, str) and actor else _default_actor()
 
 
 def _default_actor() -> str:
