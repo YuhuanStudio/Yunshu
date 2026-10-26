@@ -256,3 +256,20 @@ def test_checkpoint_shorter_than_its_tokens_is_rejected():
     assert check_loaded_cache(TOKENS, cache, None)
     cache[1].offset = 16
     assert not check_loaded_cache(TOKENS, cache, None)
+
+
+def test_dropped_files_forget_their_token_tuples(tmp_path):
+    # every written checkpoint keeps its full token tuple in RAM; budget eviction and
+    # quarantine must drop it with the file, or a long-running server grows without bound
+    store = _store(tmp_path)
+    evicted = _put(store)
+    assert evicted in store._tok_cache()
+    assert store._evict_path(_path(store, evicted))
+    assert evicted not in store._tok_cache()
+
+    other = tuple(range(100, 132))
+    bad = _put(store, other)
+    assert bad in store._tok_cache()
+    store.quarantine(_path(store, bad), "test")
+    assert bad not in store._tok_cache()
+    assert store._tok_cache() == {}

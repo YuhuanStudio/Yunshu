@@ -352,6 +352,8 @@ class SpillDiskStore(DiskBlockStore):
         except OSError:
             size = 0
         removed = [h for h, stored in list(self._exact_index.items()) if stored == path]
+        tok = self._tok_cache()
+        lengths = {key: len(tok[key][0]) if key in tok else None for key in removed}
         self._drop_index_for_path(path)
         path.unlink(missing_ok=True)
         self._disk_bytes = max(0, self._disk_bytes - size)
@@ -359,15 +361,21 @@ class SpillDiskStore(DiskBlockStore):
         from .cache_observation import disk_event
 
         for key in removed:
-            metadata = self._tok_cache().get(key)
-            disk_event(
-                self,
-                "eviction",
-                key,
-                len(metadata[0]) if metadata else None,
-                "disk_budget_or_superseded",
-            )
+            disk_event(self, "eviction", key, lengths[key], "disk_budget_or_superseded")
         return True
+
+    def _drop_index_for_path(self, path) -> None:
+        """Forget a file's index rows and the token tuples kept for its checkpoints.
+
+        Every drop (budget eviction, quarantine, tiered demotion) comes through here,
+        so the per-file token cache cannot outlive its file.
+        """
+        with self._index_lock:
+            exact = [h for h, stored in self._exact_index.items() if stored == path]
+        super()._drop_index_for_path(path)
+        tok = self._tok_cache()
+        for h in exact:
+            tok.pop(h, None)
 
     def _maybe_evict(self) -> int:
         budget = self.budget
