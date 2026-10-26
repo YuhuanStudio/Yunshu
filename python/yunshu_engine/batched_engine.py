@@ -1783,6 +1783,10 @@ class BatchedEngine(
                 timeout_seconds=timeout_seconds,
                 lora_adapter=lora_adapter,
                 suppress_tokens=suppress_tokens,
+                priority=priority,
+                kv_cache_breakpoints=kv_cache_breakpoints,
+                min_tokens=min_tokens,
+                ignore_eos=ignore_eos,
             )
 
         # Fast path: direct generate_step on executor thread for full GPU utilization

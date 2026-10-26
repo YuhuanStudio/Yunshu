@@ -76,6 +76,10 @@ class EngineNgramMixin:
         timeout_seconds: float | None = None,
         lora_adapter: str | None = None,
         suppress_tokens: list[int] | None = None,
+        priority: int = 0,
+        kv_cache_breakpoints: list[int] | None = None,
+        min_tokens: int = 0,
+        ignore_eos: bool = False,
     ) -> _engine.GenerationOutput:
         """Generate using N-gram speculative decoding (model-free).
 
@@ -142,6 +146,10 @@ class EngineNgramMixin:
                 timeout_seconds=timeout_seconds,
                 lora_adapter=lora_adapter,
                 suppress_tokens=suppress_tokens,
+                priority=priority,
+                kv_cache_breakpoints=kv_cache_breakpoints,
+                min_tokens=min_tokens,
+                ignore_eos=ignore_eos,
             )
         # Fresh per-request proposer (n-gram or suffix) — avoids reset()/propose()
         # races on a shared instance under concurrency.
@@ -195,6 +203,10 @@ class EngineNgramMixin:
                     timeout_seconds=timeout_seconds,
                     lora_adapter=lora_adapter,
                     suppress_tokens=suppress_tokens,
+                    priority=priority,
+                    kv_cache_breakpoints=kv_cache_breakpoints,
+                    min_tokens=min_tokens,
+                    ignore_eos=ignore_eos,
                 )
 
         # Build stop token sets
