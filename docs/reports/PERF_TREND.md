@@ -1426,3 +1426,38 @@ Paired interleaved runs (Codex, 3 per cell, quiet, job_swap 0): 8K 7.46 -> 7.44 
 (-87..-117 ms), 128K 186.8/187.2 -> 185.5/185.9 s (-1.31 s); 18/18 pairs positive. yv coldfuse-final-1024f (base 62b56949,
 3 reps): identity 12+12 exact, APC 4 pairs, speed PASS within noise (128K code cold +1.4% noise 4.0%, prose -0.8%; 32K prose
 -1.4% noise 1.2%). Small but real; 32K still ~2.2 s behind Splash 1.3.2 (30.5 s).
+
+### 2026-10-26 harvest of unread gpuq jobs (10-22 .. 10-25)
+
+These measurements finished earlier but never reached this log. Each is its own comparison; sources are gpuq job ids or
+yv run directories under /Volumes/P5Plus/yunshu-build/verify/runs. Qwen3.8-27B oQ4e-mtp + DFlash2, M5 Max, APC disk off.
+
+2026-10-23 tailfast (merged b30ca98f): warm 32K re-send TTFT and turn-2 right after turn 1, warmprobe, 5 paired reps
+(gpuq 1023-113351..113355, 123850/123852, 132555..132559). Base d9a63834-line tree vs cand, medians: code warm 0.279 -> 0.200 s,
+prose warm 0.264 -> 0.206 s (-26%); turn-2 0.84 -> 0.81 s (-3.5%). Identity: yv tailfast-decode FAILED base-vs-cand (6 of 12
+cells differ, spec on == off 12/12) and quality n=240 131 vs 129 (outside +-1); both accepted on 2026-10-23 as cross-version
+drift and random near-ties (DECISIONS). Earlier APC spec-off identity jobs (121503, 123849, and the untouched base 125929)
+raised max_abs_dlp 9e-5..1.3e-4 on 32K spec-off restore; tailfast4 (132551/132552/132554) passed 32K, rehearsal and 131K.
+
+2026-10-23 day1022 (17850ae1 -> 176c7086, 3 reps, 2048 decode tokens, long-ask turn 2): cold TTFT flat (32K 33.13 -> 33.07 s,
+64K 75.3 -> 75.2, 128K 187.8 -> 187.6), turn-2 TTFT -3..-13% (128K code 5.47 -> 4.75 s), warm TTFT UP 59-87%
+(32K 0.13 -> 0.24 s, 64K 0.21 -> 0.35, 128K 0.37 -> 0.59). Cause is the split-invariant prefill default (70d24961);
+tailfast later took 0.27 -> 0.20 s back, still above the 0.10-0.13 s of 17850ae1. Decode tok/s is not comparable: token
+digests differ across the numerics reset (e.g. 32K code turn 2 268 -> 133 tok/s on different text). Only 128K code matched.
+
+2026-10-22 batch1022 long (17850ae1 vs 92bd61fa, yv suite long, identity + speed 2-3 reps): 18/18 cells same digest base,
+cand and spec-off (cand-off); speed flat within +-1.5% on every cold/warm/turn-2 cell at 32K/64K/128K (cold 33.14/75.7/187.8 s,
+warm 0.13/0.21/0.37 s, turn-2 2.85/3.6/5.4 s). The exact-M64 tail change has no effect at long context. Spec on/off decode:
+code 32K 109 vs 23.5 tok/s, 128K 76 vs 17.6. The speed stage was never completed (cand r1 partly missing), no yv verdict.
+
+2026-10-24 longreg main 0152c4bb vs v0.1.5 (012149f9), identity stage only (1024-211500.., 1025-080205.., 1025-114239..):
+cand == cand-off digest on all 17 finished cells (32K/64K code+prose, 128K prose; cold/warm/turn-2); 128K code cand-off
+(1025-114246) never ran, still pending. base != cand everywhere (numerics reset). Do not use the speeds: that tree has
+presence_penalty 1.5 on greedy requests (fixed in 914a00eb), which keeps requests off the DFlash tree: 32K code 64.6 tok/s
+here against 109 on 92bd61fa; gate serve-27b server/in-process 0.677 (server code 95.2 vs 134.9 tok/s, 1025-074025) and
+0.9992 after the fix (1025-114847). Cold TTFT cand/base: 32K 32.86/34.27 s, 64K 74.6/78.7, 128K prose 187.0/209.8
+(foreign CPU load up to 950% during some cells).
+
+2026-10-23 deploy45 agentbench (33e5f4a7, MTP, 12-minute budget shards, 62 runs): Claude Code 2.1.285 19/20 pass,
+cache hit 53.8%; Codex 0.164.0 15/22, 87.1%; opencode 1.19.4 19/20, 89.6%. fix-failing-textkit failed with all three clients.
+Codex failures were mostly heredoc harness errors (19 of 22 per agentfix), so the Codex rate is a harness number.

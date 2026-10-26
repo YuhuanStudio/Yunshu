@@ -1,6 +1,6 @@
 """Measurement launcher: the engine CLI with DECODE_TAIL_SHARE overridden (a sweep adds no flag).
 
-    python serve_with_share.py SHARE <engine cli args>
+python serve_with_share.py SHARE <engine cli args>
 """
 
 import runpy
