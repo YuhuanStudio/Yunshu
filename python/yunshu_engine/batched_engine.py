@@ -935,6 +935,49 @@ class BatchedEngine(
             },
         )
 
+    def _kv_head_dims(self) -> list[int]:
+        """Head widths (K/V last axis) read from the model config; [] when unreadable."""
+        model = getattr(self, "_model", None)
+        cfg = getattr(model, "config", None) or getattr(model, "args", None)
+        if cfg is None:
+            return []
+        dims: list[int] = []
+        for obj in (getattr(cfg, "text_config", None), cfg):
+            if obj is None:
+                continue
+            hd = getattr(obj, "head_dim", None)
+            if not hd:
+                hidden = getattr(obj, "hidden_size", None)
+                heads = getattr(obj, "num_attention_heads", None)
+                hd = hidden // heads if hidden and heads else None
+            if hd:
+                dims.append(int(hd))
+            for n in ("v_head_dim", "qk_nope_head_dim"):
+                v = getattr(obj, n, None)
+                if v:
+                    dims.append(int(v))
+            if dims:
+                break
+        return dims
+
+    def _kv_quant_group_ok(self) -> bool:
+        """False when the K/V head width does not divide the quantisation group: MLX
+        ``to_quantized`` then fails mid-request (and used to end as an empty 200). Quantisation
+        is skipped for such a model, with one warning per engine."""
+        group = int(getattr(self, "_kv_quant_group_size", 64) or 64)
+        bad = [d for d in self._kv_head_dims() if d % group]
+        if not bad:
+            return True
+        if not getattr(self, "_kv_quant_warned", False):
+            self._kv_quant_warned = True
+            logger.warning(
+                "KV quantisation disabled for this model: head_dim %s is not a multiple of "
+                "the quantisation group size %d; using the unquantised KV cache.",
+                bad[0],
+                group,
+            )
+        return False
+
     def _effective_kv_quant_bits(self, total_tokens: int) -> int | None:
         """KV-quant bits for THIS request.
 
@@ -952,6 +995,12 @@ class BatchedEngine(
         on estimated total KV bytes (default >=2GB, big-model/very-long-context
         regime). YUNSHU_KV_QUANT_BITS=off disables it. Falls back to a token
         threshold (16384) only when model dims can't be read."""
+        bits = self._raw_kv_quant_bits(total_tokens)
+        if bits is not None and not self._kv_quant_group_ok():
+            return None
+        return bits
+
+    def _raw_kv_quant_bits(self, total_tokens: int) -> int | None:
         if self._kv_quant_bits is not None:
             return self._kv_quant_bits
         if not getattr(self, "_kv_quant_auto", True):
