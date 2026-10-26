@@ -802,6 +802,7 @@ class VLMBatchRunner:
             stats=stats,
             priority=getattr(cancel_event, "scheduling_priority", 0),
             cache_plan=prompt_cache_plan,
+            cache_store=bool(getattr(cancel_event, "cache_store", True)),
             budget=budget,
             first_delivery=first_delivery,
         )
@@ -1199,6 +1200,8 @@ class VLMBatchRunner:
                 while len(manager._console_requests) > 512:
                     manager._console_requests.popitem(last=False)
             group.gen.apc.set_request(job.ids, job.cache_plan)
+            if not job.cache_store and hasattr(group.gen.apc, "set_store_off"):
+                group.gen.apc.set_store_off(job.ids)
         if not group.spec:
             from .tool_call_grammar import ToolCallProcessor
 
@@ -1424,6 +1427,8 @@ class VLMBatchRunner:
                 if not pending_ids:
                     coordinator.manager._console_requests.pop(tuple(job.ids), None)
             coordinator.release_request(job.ids, job.cache_plan)
+            if not job.cache_store and hasattr(coordinator, "release_store_off"):
+                coordinator.release_store_off(job.ids)
 
     @staticmethod
     def _stopped(job: _Job) -> bool:
@@ -1973,8 +1978,8 @@ class VLMBatchRunner:
         return False
 
     def _track_prefix_producer(self, job: _Job):
-        if not job.stats.used_apc:
-            return
+        if not job.stats.used_apc or not job.cache_store:
+            return  # a request that stores nothing is no producer to wait for
         for group in self._groups():
             if job.uid not in group.jobs or group.jobs[job.uid] is not job:
                 continue
@@ -2790,6 +2795,9 @@ class _Job:
     finishing_prefill: bool = False
     handoff_graced: bool = False
     cache_plan: dict | None = None
+    cache_store: bool = (
+        True  # False: look the prefix up, store nothing (X-Yunshu-Cache-Store)
+    )
     apc_salt: int | None = None
     out: queue.Queue = field(default_factory=queue.Queue)
     uid: int | None = None

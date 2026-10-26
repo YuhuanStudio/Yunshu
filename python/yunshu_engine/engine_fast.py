@@ -16,6 +16,7 @@ from .context_window import (
     require_non_empty_prompt,
 )
 from .fast_path_stats import FastPathStats
+from .kv_prefix_cache import store_opt_out
 from .reasoning_gate import ThinkGatedSampler as _ThinkGatedSampler
 
 
@@ -901,6 +902,7 @@ class EngineFastMixin:
             # prompt cache provides full KV state which is always better,
             # and skip when seed-bypass is active for reproducibility).
             prefix_cache = None if _bypass_cache else self._kv_prefix_cache
+            prefix_cache = store_opt_out(prefix_cache, cancel_event)
             # Proactive memory pressure eviction (vllm-mlx pattern)
             if prefix_cache is not None and self._mem_pressure_threshold > 0:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
@@ -1242,6 +1244,7 @@ class EngineFastMixin:
                 and hasattr(self, "_prompt_cache")
                 and self._prompt_cache is not None
                 and prefix_cache is not None
+                and getattr(cancel_event, "cache_store", True)
             ):
                 try:
                     from .kv_prefix_cache import cache_length as _cache_len

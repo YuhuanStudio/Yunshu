@@ -87,6 +87,14 @@ terminal error event (`data: {"error": ...}` + `[DONE]`, `event: error`) ends it
 `timeout` field is different: it ends *generation* with a partial answer (`finish_reason: "length"`,
 `stop_reason: "max_tokens"`, `status: "incomplete"`).
 
+`X-Yunshu-Cache-Store: off` (any case) is for one-shot callers (summaries, titles, classifiers) whose
+prompt is never resent: the request still reuses any cached prefix, but its own prompt is not stored
+in the VLM APC (HOT/WARM/SSD) or the text prefix cache, so it cannot evict the prefixes multi-turn
+chats reuse. Any other value, or no header, stores as usual. It is a header for the same reason as the
+deadline, and it works on `/v1/chat/completions`, `/v1/completions`, `/v1/messages` and
+`/v1/responses`, streaming or not. Prefill splits are unchanged, so the answer equals what a storing
+request would produce. Two identical prompts in flight together share the opt-out. (omlx c4bb311e.)
+
 An answer cut short by `DELETE /v1/requests/{id}`, `POST /v1/cancel` or a deadline carries
 `x_yunshu.cancelled: true` (and `X-Yunshu-Cancelled: true` when not streaming); a queued request is
 cancelled the same way and never reaches the engine.

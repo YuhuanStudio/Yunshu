@@ -14,6 +14,7 @@ from contextlib import suppress
 
 from .context_window import require_non_empty_prompt
 from .json_schema import allowed_membership as _allowed_membership
+from .kv_prefix_cache import store_opt_out
 from .stream_bridge import StreamBridge, make_stream_queue
 
 
@@ -361,6 +362,7 @@ class EngineNgramMixin:
             # isn't entered with an adapter), but fail-safe if that gate ever changes.
             if lora_adapter is not None:
                 prefix_cache = None
+            prefix_cache = store_opt_out(prefix_cache, cancel_event)
             if prefix_cache is not None:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
             # Also evict from paged KV manager when enabled
@@ -1246,7 +1248,7 @@ class EngineNgramMixin:
             tokens = []
             all_token_ids = list(input_ids)
 
-            prefix_cache = self._kv_prefix_cache
+            prefix_cache = store_opt_out(self._kv_prefix_cache, cancel_event)
             if prefix_cache is not None:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
             # Also evict from paged KV manager when enabled

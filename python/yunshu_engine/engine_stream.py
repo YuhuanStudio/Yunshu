@@ -18,6 +18,7 @@ from .context_window import (
     require_non_empty_prompt,
 )
 from .fast_path_stats import FastPathStats
+from .kv_prefix_cache import store_opt_out
 from .stream_bridge import StreamBridge, make_stream_queue
 from .text_utils import StopHoldbackBuffer
 
@@ -458,6 +459,7 @@ class EngineStreamMixin:
             or (lora_adapter is not None)
         )
         prefix_cache = None if _stream_bypass_cache else self._kv_prefix_cache
+        prefix_cache = store_opt_out(prefix_cache, cancel_event)
         # Post-generation stores trim the live cache back to the prompt: not for hybrids.
         # Automatic (length-gated) 8-bit KV is lossy and the caches are not keyed by
         # precision: never store it, or a later hit would differ from a miss (mirrors

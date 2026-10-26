@@ -299,14 +299,76 @@ def is_token_counter_message(message: dict) -> bool:
     return isinstance(content, str) and _TOKEN_COUNTER.fullmatch(content) is not None
 
 
+def _is_instruction(message: dict) -> bool:
+    return message.get("role") in ("system", "developer")
+
+
+def _note_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            p.get("text", "") if isinstance(p, dict) else str(p) for p in content
+        )
+    return "" if content is None else str(content)
+
+
+def post_tool_note_indexes(messages: list[dict]) -> set[int]:
+    """Indexes of instruction messages that sit in a run right after a tool result and
+    before the next assistant turn (or the end). Those stay in place as user notes
+    (omlx 5a0a15a7); every other instruction message is hoisted. Token counters never
+    count (they are dropped)."""
+    out: set[int] = set()
+    prev_role: str | None = None
+    i, n = 0, len(messages)
+    while i < n:
+        if not _is_instruction(messages[i]):
+            prev_role = messages[i].get("role")
+            i += 1
+            continue
+        j = i
+        while j < n and _is_instruction(messages[j]):
+            j += 1
+        if prev_role == "tool" and (j >= n or messages[j].get("role") == "assistant"):
+            out.update(
+                k for k in range(i, j) if not is_token_counter_message(messages[k])
+            )
+        i = j
+    return out
+
+
 def _hoist_system(messages: list[dict]) -> list[dict]:
-    """Canonical instruction block for templates that only accept it first."""
-    systems = [
-        dict(m, role="system")
-        for m in messages
-        if m.get("role") in ("system", "developer") and not is_token_counter_message(m)
-    ]
-    turns = [dict(m) for m in messages if m.get("role") not in ("system", "developer")]
+    """Canonical instruction block for templates that only accept it first.
+
+    Exception (omlx 5a0a15a7): a system/developer note that arrives right after a tool
+    result and before the next assistant turn (or at the end) stays in place as its own
+    ``[System note]`` user turn. Claude Code sends hook/reminder notes there every turn;
+    hoisting them into the leading block rewrites the front of the prompt and re-prefills
+    the whole conversation each time. A note between a tool call and its results, or
+    between two tool results, is still hoisted (a user turn there breaks tool pairing).
+    """
+    notes = post_tool_note_indexes(messages)
+    systems: list[dict] = []
+    turns: list[dict] = []
+    pending: list[str] = []
+
+    def flush() -> None:
+        if pending:
+            note = "[System note]\n" + "\n\n".join(pending) + "\n[/System note]"
+            turns.append({"role": "user", "content": note})
+            pending.clear()
+
+    for idx, m in enumerate(messages):
+        if not _is_instruction(m):
+            flush()
+            turns.append(dict(m))
+        elif idx in notes:
+            text = _note_text(m.get("content"))
+            if text:
+                pending.append(text)
+        elif not is_token_counter_message(m):
+            systems.append(dict(m, role="system"))
+    flush()
     return _merge_leading_system(systems) + turns
 
 

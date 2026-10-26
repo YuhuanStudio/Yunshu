@@ -16,6 +16,8 @@ working unchanged:
 - ``X-Yunshu-Deadline-Ms: N`` is a per-request wall-clock deadline from arrival, queue wait
   included: past it the generation is cancelled and the client gets a 504 (or, once a stream has
   started, one terminal error event), never a hang.
+- ``X-Yunshu-Cache-Store: off`` lets a one-shot request (summary, title, classifier) reuse any
+  cached prefix but keep its own prompt out of the APC / prefix cache (omlx c4bb311e).
 - ``x_yunshu.cancelled`` (``X-Yunshu-Cancelled: true``) marks an answer cut short by a cancel
   request or a deadline, so a truncated answer is not mistaken for a finished one.
 - ``x_yunshu.budget`` says when ``max_tokens`` (and ``thinking_budget``) were clamped to the room
@@ -125,6 +127,17 @@ def normalize_usage(usage: dict | None) -> dict:
     return out
 
 
+CACHE_STORE_HEADER = "X-Yunshu-Cache-Store"
+
+
+def cache_store_off(raw: str | bytes | None) -> bool:
+    """True for ``X-Yunshu-Cache-Store: off`` (case/space-insensitive); any other value, or
+    none, keeps the default of storing."""
+    if isinstance(raw, bytes):
+        raw = raw.decode("latin-1")
+    return isinstance(raw, str) and raw.strip().lower() == "off"
+
+
 def sanitize_request_id(raw: str | bytes | None) -> str | None:
     """A client-supplied request id when it is short and header-safe, else None."""
     if raw is None:
@@ -180,6 +193,8 @@ class RequestInfo:
     cancel_requested: bool = False
     deadline_ms: int | None = None
     deadline_exceeded: bool = False
+    # False when the client sent ``X-Yunshu-Cache-Store: off``: lookups still run, nothing is stored.
+    cache_store: bool = True
     # What the context-window manager removed from the prompt (set by the engine through
     # ``ContextWindowManager.publish``); None when nothing was.
     context_policy: dict | None = None
@@ -868,6 +883,9 @@ class YunshuExtensionsMiddleware:
         tracked = scope.get("method") == "POST" and path in TRACKED_PATHS
         info = RequestInfo(request_id, scope.get("method", ""), path)
         if tracked:
+            info.cache_store = not cache_store_off(
+                raw_headers.get(CACHE_STORE_HEADER.lower().encode())
+            )
             refused = self._refuse(info, raw_headers)
             info.latency_marks["gateway_admit"] = time.perf_counter()
             if refused is not None:

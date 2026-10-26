@@ -25,6 +25,16 @@ EVIDENCE = {
         ],
         "The registry records a partial replay result, but no complete audited three-client greedy/sampled on/off receipt was found. Native/prev jobs are compatibility comparisons, not a complete grammar flag matrix.",
     ),
+    "YUNSHU_APC_SEAM_CHECKPOINT": (
+        "apc_seam",
+        "pending",
+        [
+            "scripts/research/ab_seam_checkpoint.py",
+            "tests/unit/test_apc_seam_checkpoint.py (plan, alignment, media-safety, tiny-hybrid restore == cold)",
+            "TensorFold #1262 / Rapid-MLX 421bf658 claim 125.9 s -> 9.0 s first token at 35k tokens on Qwen3.8-27B (their engines, not Yunshu)",
+        ],
+        "No Yunshu receipt: the seam cut is exact on the tiny hybrid model on CPU, but the TTFT gain, the first-request copy cost and the memory growth on Qwen3.8-27B need the Mac A/B (16k / 35k / 64k documents, off vs on).",
+    ),
     "YUNSHU_GPU_SAMPLER": (
         "gpu_sampler",
         "pending",
@@ -67,6 +77,15 @@ def plan():
                 "<text-only mlx-lm checkpoint>",
                 "--out",
                 "/Volumes/P5Plus/yunshu-build/codex/audit-flags/gpu_sampler.json",
+            ]
+        if area == "apc_seam":
+            job = [
+                job[0],
+                "scripts/research/ab_seam_checkpoint.py",
+                "--checkpoint",
+                "<Qwen3.8-27B checkpoint>",
+                "--out",
+                "/Volumes/P5Plus/yunshu-build/codex/audit-flags/apc_seam.json",
             ]
         if area == "k02":
             job = ["sh", "/Volumes/P5Plus/yunshu-build/codex/k02_matrix.sh"]

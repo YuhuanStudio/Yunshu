@@ -321,6 +321,33 @@ def _local_signature(model_name: str) -> str | None:
     return checkpoint_fingerprint(model_name, digest_size=8)
 
 
+class _StoreOffView:
+    """A request's view of the text prefix cache that looks up but never stores
+    (``X-Yunshu-Cache-Store: off``; omlx c4bb311e). Everything but ``add`` is the cache's."""
+
+    __slots__ = ("_inner",)
+
+    def __init__(self, inner):
+        object.__setattr__(self, "_inner", inner)
+
+    def add(self, *args, **kwargs) -> None:
+        return None
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def __setattr__(self, name, value):
+        setattr(self._inner, name, value)
+
+
+def store_opt_out(prefix_cache, cancel_event):
+    """``prefix_cache`` itself, or a lookup-only view when the request opted out of storing
+    (the gateway puts ``cache_store=False`` on the request's cancel event)."""
+    if prefix_cache is None or getattr(cancel_event, "cache_store", True):
+        return prefix_cache
+    return _StoreOffView(prefix_cache)
+
+
 class KVPrefixCache:
     """Cache prefilled KV states keyed by prompt token prefix.
 
@@ -766,6 +793,15 @@ class KVPrefixCache:
                     # KV entries from a previous request's generation.
                     cached_len = cache_length(cached)
                     tokens_to_trim = max(0, cached_len - matched)
+                    if cached_len < matched:
+                        # The snapshot holds fewer tokens than its key (ollama
+                        # b859a945 class): never report a hit over positions it lacks.
+                        logger.warning(
+                            "KV prefix cache exact match skipped: snapshot holds %d of %d tokens",
+                            cached_len,
+                            matched,
+                        )
+                        return None, len(prompt_tokens), 0
                     try:
                         result = self._snapshot_cache(cached, trim=tokens_to_trim)
                     except Exception:
@@ -861,7 +897,11 @@ class KVPrefixCache:
         for i, cached_prompt in enumerate(self._prompts):
             if len(cached_prompt) <= best_length:
                 continue
-            length = get_prefix_length(prompt_tokens, cached_prompt)
+            # never more than the snapshot holds (the hash-chain path caps the same way)
+            length = min(
+                get_prefix_length(prompt_tokens, cached_prompt),
+                cache_length(self._caches[i]),
+            )
             if length > best_length:
                 best_index = i
                 best_length = length

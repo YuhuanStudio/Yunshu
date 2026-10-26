@@ -98,6 +98,10 @@ class RequestTracker:
             try:
                 gen.priority = getattr(info, "scheduling_priority", 0)
                 gen.cancel_event.scheduling_priority = gen.priority  # type: ignore[attr-defined]
+                # X-Yunshu-Cache-Store: off. The engines read it from the cancel event they
+                # are handed (same route as the priority): lookups run, nothing is stored.
+                if not getattr(info, "cache_store", True):
+                    gen.cancel_event.cache_store = False  # type: ignore[attr-defined]
                 info.gen = gen  # type: ignore[attr-defined]
                 info.engine_request_id = request_id  # type: ignore[attr-defined]
                 if getattr(info, "cancel_requested", False):

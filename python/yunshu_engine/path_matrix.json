@@ -2219,6 +2219,151 @@
      ]
     }
    }
+  },
+  "cache_store_opt_out": {
+   "module": "python/yunshu_engine/kv_prefix_cache.py",
+   "what": "Per-request cache-store opt-out (X-Yunshu-Cache-Store: off): the request reuses a cached prefix but stores nothing; the prefill plan is untouched, so its output equals a storing request's",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "cache_store=bool(getattr(cancel_event"
+      ],
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "_store_off"
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "cache_store=bool(getattr(cancel_event"
+      ],
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "_store_off"
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "cache_store=bool(getattr(cancel_event"
+      ],
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "_store_off"
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "cache_store=bool(getattr(cancel_event"
+      ],
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "_store_off"
+      ]
+     ]
+    },
+    "text": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/engine_fast.py",
+       "store_opt_out("
+      ],
+      [
+       "python/yunshu_engine/engine_stream.py",
+       "store_opt_out("
+      ],
+      [
+       "python/yunshu_engine/engine_ngram.py",
+       "store_opt_out("
+      ]
+     ]
+    },
+    "loop": {
+     "s": "na",
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
+    }
+   }
+  },
+  "apc_seam_checkpoint": {
+   "module": "python/yunshu_engine/apc_manager.py",
+   "what": "Seam checkpoint (YUNSHU_APC_SEAM_CHECKPOINT, experimental): one extra 64-aligned APC checkpoint inside a long final user message so the same document with a new question resumes at the document",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "def seam_boundary"
+      ],
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "seam_checkpoint="
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "def seam_boundary"
+      ],
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "seam_checkpoint="
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "def seam_boundary"
+      ],
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "seam_checkpoint="
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "def seam_boundary"
+      ],
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "seam_checkpoint="
+      ]
+     ]
+    },
+    "text": {
+     "s": "na",
+     "why": "the text prefix cache serves any shared prefix by trimming (attention-only) and snapshots every prefill-step boundary for hybrids, so a document/question seam is already a restore point"
+    },
+    "loop": {
+     "s": "na",
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
+    }
+   }
   }
  },
  "exclusions": [
@@ -2553,6 +2698,7 @@
   "python/yunshu_engine/copy_graft.py": "Implementation helper of the registered copy_rounds feature: MTP greedy shared-prefix tree selection and request-local cost budget. Existing copy_rounds remains available on sampled/constrained MTP via its original verifier. This prototype does not claim DFlash/generic/text graft coverage; those adapters and GPU qualification remain explicitly pending in tf110/HANDOFF.md."
  },
  "settings": {
+  "YUNSHU_APC_SEAM_CHECKPOINT": "apc_seam_checkpoint",
   "YUNSHU_MTP": "draft_family_coverage",
   "YUNSHU_VLM_DRAFT": "draft_family_coverage",
   "YUNSHU_MTP_BLOCK_SIZE": "cost_aware_depth",
