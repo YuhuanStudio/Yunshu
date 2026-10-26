@@ -402,6 +402,10 @@ class TTSEngine(ActiveRequestMixin):
                 "mlx-audio is required for TTS. Install with: pip install mlx-audio"
             ) from e
 
+        from .audio_patches import install_tts
+
+        install_tts()  # mlx-audio fixes after the 0.5.9 pin (Kokoro local voices)
+
         # Extra checkpoint tensors may be ignored; a model parameter without one fails the load
         # (a blanket strict=False retry would serve it randomly initialised).
         from .checkpoint_keys import lenient_extras_load
@@ -909,6 +913,10 @@ class ASREngine(ActiveRequestMixin):
             raise ImportError(
                 "mlx-audio is required for ASR. Install with: pip install mlx-audio"
             ) from e
+
+        from .audio_patches import install_stt
+
+        install_stt()  # mlx-audio fixes after the 0.5.9 pin (whisper no_speech, Qwen3-ASR language)
 
         # Whisper repos that ship only weights lack the HF processor → fetch it first.
         _ensure_whisper_processor(self._model_path)
@@ -1533,6 +1541,10 @@ async def transcribe(audio_path: str, language: str | None = None) -> dict[str, 
             load_model as _load_stt,  # type: ignore[import-untyped]
         )
 
+        from .audio_patches import install_stt
+
+        install_stt()
+
         def _get_whisper_model():
             """Load and cache the whisper model to avoid reloading on every call."""
             global _whisper_model_cache
@@ -1631,6 +1643,10 @@ async def synthesize(
         from mlx_audio.tts.utils import (
             load_model as _load_tts,  # type: ignore[import-untyped]
         )
+
+        from .audio_patches import install_tts
+
+        install_tts()
 
         def _get_kokoro_model():
             global _kokoro_model_cache

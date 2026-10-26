@@ -24,7 +24,8 @@
       "commit": "a98d8c8c",
       "license": "Apache-2.0",
       "local_changes": [
-        "imports point at yunshu_engine.kernels.omlx"
+        "imports point at yunshu_engine.kernels.omlx",
+        "RMS-arm epsilon (Qwen3.5 q/k norm) is rendered from kernels/gdn_qk_eps (measured from the installed mlx-vlm _normalize_qk; mlx-vlm b8bf04c changes it to 1e-6/head_dim) instead of a literal"
       ],
       "kind": "vendored",
       "reviewed_commit": "6feea9f95de86c772235af765914e4abb82b236f",
@@ -95,7 +96,8 @@
       "commit": "a98d8c8c",
       "license": "Apache-2.0",
       "local_changes": [
-        "ported upstream omlx 26375259 (kernel part): qmv_fast_layout(k, n, bits) replaces the K % 512 rule (K % 256 for 6/8-bit)"
+        "ported upstream omlx 26375259 (kernel part): qmv_fast_layout(k, n, bits) replaces the K % 512 rule (K % 256 for 6/8-bit)",
+        "adopted mlx2 1436775: STOCK_QUAD_K = {64, 128} declines in _kernel_supported and _qmv_fast_layout (per-row stock call is exact there)"
       ],
       "why": "row-exact verify projections (one-row qmv arithmetic per row)",
       "kind": "vendored",
@@ -140,7 +142,8 @@
       "local_changes": [
         "imports point at yunshu_engine.kernels.tensorfold (inputs, lane_widen)",
         "lane_matmul takes row_block (rows per threadgroup; bit-identical to the default block, faster at 17-48 rows on wide projections)",
-        "hardware selected once: original M5 fragment source on g17/g18, portable get_multidimensional_index elsewhere; numerical admission only for unknown generations"
+        "hardware selected once: original M5 fragment source on g17/g18, portable get_multidimensional_index elsewhere; numerical admission only for unknown generations",
+        "adopted mlx2 b9db287: slice_offset_ok/max_tensor_slice_offset; untiled weights whose tensor slice() offsets reach 2 GiB are declined in supports(), lane_linear.eligible, int_code_linear.eligible and refused in lane_matmul (Metal slice bug, llama.cpp #28748)"
       ],
       "why": "integer-code tensor-unit matmul (5/6/8-bit via uint8 widening), used by kernels/int_code_linear.py",
       "kind": "vendored",
@@ -1345,6 +1348,21 @@
       "local_changes": [
         "Research-only canonical per-query TK4 adapter imports the registered harvester, preserving absolute prefix lengths and split geometry across T=1..7. FP64 reference reports both kernels absolute/relative errors; deterministic and reconstructed-cache tensor checks. No serving connection or full APC/accuracy qualification."
       ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/kernels/sdpa_chunk.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_paths": [
+        "omlx/patches/sdpa256_attention.py"
+      ],
+      "commit": "03bc3dd7",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "omlx forces MLX's fused kernel (different arithmetic from the unfused fallback); Yunshu keeps the stock fallback and only splits query rows against the full key axis under a score budget, so per-row arithmetic is unchanged",
+        "gated to Apple GPU generation < 17; no memory_monitor registration"
+      ]
     }
   ],
   "patches": [
@@ -2531,6 +2549,81 @@
       "why": "split-invariant prefill only: 128-wide BF16 RMS followed by BF16 Q/K scale in one kernel, preserving the intermediate BF16 rounding; decode/verify and other shapes call upstream",
       "source_sha256": "8f16e229aec08b7a1ca6eaf2bd15e61ade47061d7225925096b857955fe93ca9",
       "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/sdpa_chunk.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.base",
+      "symbol": "scaled_dot_product_attention",
+      "signature": "(queries, keys, values, cache, scale: float, mask: Optional[mx.array], sinks: Optional[mx.array]=None)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "M1-M4 query-chunking of head-dim-256 SDPA; wraps and rebinds model modules",
+      "source_sha256": "2bc5644af48b66c94f7ab1488e5807a9e2f5c2700fd32d06185eeb246bda667c",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/sdpa_chunk.py",
+      "repo": "https://github.com/ml-explore/mlx-lm",
+      "clone": "reference/mlx-lm",
+      "package": "mlx-lm",
+      "module": "mlx_lm.models.base",
+      "symbol": "scaled_dot_product_attention",
+      "signature": "(queries, keys, values, cache, scale: float, mask: Optional[mx.array], sinks: Optional[mx.array]=None)",
+      "license": "MIT",
+      "commit": "v0.32.2",
+      "why": "M1-M4 query-chunking of head-dim-256 SDPA (text-only fast path)",
+      "source_sha256": "9b23a7140848b1724f0298191ca64f9d0ae3e313e22df1c48a313779c5c80507",
+      "installed_version": "0.32.2"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/audio_patches.py",
+      "repo": "https://github.com/Blaizzy/mlx-audio",
+      "clone": "reference/mlx-audio",
+      "package": "mlx-audio",
+      "module": "mlx_audio.stt.models.qwen3_asr.qwen3_asr",
+      "symbol": "Qwen3ASRModel._generate_one",
+      "signature": "(self, audio: Union[str, mx.array, np.ndarray], *, max_tokens: int=8192, batch_size: int=1, temperature: float=0.0, top_p: float=1.0, top_k: int=0, min_p: float=0.0, min_tokens_to_keep: int=1, repetition_penalty: Optional[float]=None, repetition_context_size: int=100, language: Optional[str]=None, prefill_step_size: int=2048, chunk_duration: float=1200.0, min_chunk_duration: float=1.0, verbose: bool=False, stream: bool=False, system_prompt: str | None=None, hotwords: Optional[List[str]]=None, **kwargs)",
+      "license": "MIT",
+      "commit": "v0.5.9",
+      "why": "dbcc13c: per-chunk language auto-detection (exact source rewrite; f37c9a9 batched token history not reached: no batch_size route)",
+      "source_sha256": "e45be5f64de2efeccaa1bb2e34eb1f489ffd7cf71d8f2db2645023471e4659da",
+      "installed_version": "0.5.9"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/audio_patches.py",
+      "repo": "https://github.com/Blaizzy/mlx-audio",
+      "clone": "reference/mlx-audio",
+      "package": "mlx-audio",
+      "module": "mlx_audio.stt.models.whisper.whisper",
+      "symbol": "HFTokenizerWrapper.no_speech",
+      "signature": "(self)",
+      "license": "MIT",
+      "commit": "v0.5.9",
+      "why": "2cd66c6: <|nocaptions|> for pre-large-v3 vocabularies; unk (== eot) must not enter the suppress list",
+      "source_sha256": "c6ae300eecbb8d81646ac17cc55003fab1a96ab0629c66e2aaeeea85a9f92374",
+      "installed_version": "0.5.9"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/audio_patches.py",
+      "repo": "https://github.com/Blaizzy/mlx-audio",
+      "clone": "reference/mlx-audio",
+      "package": "mlx-audio",
+      "module": "mlx_audio.tts.models.kokoro.pipeline",
+      "symbol": "KokoroPipeline.load_single_voice",
+      "signature": "(self, voice: str)",
+      "license": "MIT",
+      "commit": "v0.5.9",
+      "why": "ebcdbfc: voices from the loaded model snapshot (post_load_hook sets _voice_model_path)",
+      "source_sha256": "2a34f61717173f3eb7e78a85961b63fd28268e81e8251e586df26078c4f49b74",
+      "installed_version": "0.5.9"
     }
   ],
   "watch": [
@@ -2920,7 +3013,7 @@
       "commit": "991266ad300f47a3b9f21e62ff5bdb679215e758",
       "reviewed_commit": "991266ad300f47a3b9f21e62ff5bdb679215e758",
       "reviewed_date": "2026-10-26",
-      "review_reason": "First review 2026-10-26; nothing adopted. Candidates to audit: GDN q/k L2-norm eps (c408452), exact prefix rewind in rotating KV caches (12d935f), clearing the buffer cache after each prefill chunk (991266a), flushing held-back stop text at stream end (4ea4225), Qwen reasoning history for cache reuse (e9c8500)."
+      "review_reason": "First review 2026-10-26; nothing adopted. Candidates to audit: GDN q/k L2-norm eps (c408452), exact prefix rewind in rotating KV caches (12d935f), clearing the buffer cache after each prefill chunk (991266a), flushing held-back stop text at stream end (4ea4225), Qwen reasoning history for cache reuse (e9c8500). Audited 2026-10-26: c408452 (q/k norm eps D times too large) is the same fix as mlx-vlm b8bf04c; kernels/gdn_qk_eps.py renders the installed mlx-vlm's epsilon into the fused norm and the prework RMS arm (unchanged on the pinned 0.7.8); the L2 arms already use mlx-lm's sum + 1e-6."
     },
     {
       "repo": "https://github.com/vllm-project/vllm-metal",
@@ -2933,7 +3026,7 @@
       "commit": "7f95a63fee91153cf4f0def3927119aa3e28704b",
       "reviewed_commit": "7f95a63fee91153cf4f0def3927119aa3e28704b",
       "reviewed_date": "2026-10-26",
-      "review_reason": "Moved to watch 2026-10-26 from the kernelstudy prior_art entry (kept there for its bit-parity study; its status is unchanged, no qualified winner). Nothing adopted. Candidates to audit: n-gram drafts capped at checkpoint boundaries (ddca466), GDN decay kept in FP32 (b9a5167), swap-out pressure signal at startup (ca27320)."
+      "review_reason": "Moved to watch 2026-10-26 from the kernelstudy prior_art entry (kept there for its bit-parity study; its status is unchanged, no qualified winner). Nothing adopted. Candidates to audit: n-gram drafts capped at checkpoint boundaries (ddca466), GDN decay kept in FP32 (b9a5167), swap-out pressure signal at startup (ca27320). Audited 2026-10-26: b9a5167 (GDN decay kept FP32) needs no change; the stock compute_g keeps the decay FP32 after a bf16 softplus and every Yunshu GDN kernel (prework g_out float32, verify/tree/dflash gdn_decay float, tg_g float) does the same; tests/unit/test_gdn_decay_precision.py pins it."
     },
     {
       "repo": "https://github.com/lablup/mlxcel",

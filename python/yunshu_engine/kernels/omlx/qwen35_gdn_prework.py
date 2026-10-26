@@ -40,6 +40,7 @@ import sys
 import mlx.core as mx
 import mlx.nn as nn
 
+from .. import gdn_qk_eps
 from . import qwen35_gdn_verify_fused
 from .module_cache import cached_per_module
 from .qwen35_verify_qmm import is_row_exact_armed
@@ -147,7 +148,7 @@ _SOURCE = """
             }
         } else {
             sumsq = simd_sum(sumsq);
-            float inv = metal::precise::rsqrt(sumsq / float(DK) + 1e-6f);
+            float inv = metal::precise::rsqrt(sumsq / float(DK) + __QK_RMS_EPS__);
             const T scale = is_q ? q_scale : k_scale;
             for (uint i = 0; i < 4; ++i) {
                 const T rms = T(1) * T(float(activated[i]) * inv);
@@ -752,7 +753,7 @@ def _kernel():
             name="omlx_qwen35_gdn_prework",
             input_names=["qkv", "conv_state", "conv_w", "q_scale", "k_scale"],
             output_names=["q_out", "k_out", "v_out", "conv_out"],
-            source=_SOURCE,
+            source=gdn_qk_eps.render(_SOURCE, "float(DK)"),
         )
     return _KERNEL
 
@@ -886,7 +887,7 @@ def qwen4_decode_prework_fused(
 def _qwen4_prefill_prework_source() -> str:
     # The verify L2 prework with the row count read at run time, so every
     # prefill width shares one pipeline.
-    source = _SOURCE
+    source = gdn_qk_eps.render(_SOURCE, "float(DK)")
     for old, new in (
         ("uint(NKEEP - S)", "uint(NKEEP) - S_rt"),
         ("S < NKEEP", "S_rt < uint(NKEEP)"),

@@ -25,3 +25,27 @@ def release_rounds(gen: Any) -> bool:
     with contextlib.suppress(Exception):
         rounds.close()
     return True
+
+
+def snapshot_caches(gen: Any, uids: list) -> list | None:
+    """The live speculative batch's cache objects, taken before a step that may finish its last row.
+
+    mlx-vlm 259802e (v0.7.9+) ``SpeculativeGenerationBatch._release()`` rebinds
+    ``batch.prompt_cache`` to ``[]`` (and drops ``hidden`` / ``shared_kv_states`` /
+    ``prompt_tokens``) the moment the last row finishes, so a read of the batch after that step
+    sees nothing. The runner offers the finished KV set to the restore-buffer pool; it reads this
+    snapshot instead. Only the batch that is exactly this request's (never an older finished one)
+    is captured, and the runner drops the snapshot at ``_finish`` so it never pins a dead context.
+    """
+    batch: Any = getattr(gen, "_generation_batch", None)
+    if batch is None or list(getattr(batch, "uids", None) or ()) != list(uids):
+        return None
+    caches = getattr(batch, "prompt_cache", None)
+    return list(caches) if caches else None
+
+
+def finished_caches(gen: Any, snapshot: list | None) -> list:
+    """Caches of a finished speculative batch: the batch's own if still held (before 259802e),
+    else the snapshot taken before its release."""
+    batch: Any = getattr(gen, "_generation_batch", None)
+    return list(getattr(batch, "prompt_cache", None) or snapshot or [])
