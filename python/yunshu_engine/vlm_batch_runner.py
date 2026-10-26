@@ -269,6 +269,16 @@ def spec_safe_processors(processors) -> bool:
     return True
 
 
+def static_masks_only(processors) -> bool:
+    """True when every processor is a static ban (a checkpoint ``suppress_tokens`` list or
+    ``ignore_eos``) -- vacuously true for none. Such a mask never needs the token history, so
+    a row that carries only it stays eligible for drafting and for lane promotion; the lane
+    applies the same ban to its verify rows (``ProcessorWindow``) and to its copy drafts."""
+    return all(
+        isinstance(p, TokenMaskProcessor) and p.is_static for p in (processors or [])
+    )
+
+
 class LogitBiasProcessor:
     """``logits[:, t] += bias[t]`` for the in-range ids only.
 
@@ -357,6 +367,19 @@ class TokenMaskProcessor:
         self._n_sigma = float(top_n_sigma or 0.0)
         self._generated = 0
         self._block_cache: dict[tuple[int, int], mx.array] = {}
+
+    @property
+    def is_static(self) -> bool:
+        """The mask does not depend on how many tokens were generated or on the logits
+        (``suppress_tokens`` and ``ignore_eos`` only): a pure ban of a fixed id set."""
+        return not self._min_tokens and not self._n_sigma
+
+    def always_banned(self) -> frozenset[int]:
+        """Ids this processor bans on every step (the fixed ban of a static mask)."""
+        ids = set(cast(list[int], self._suppress.tolist()))
+        if self._ignore_eos:
+            ids.update(cast(list[int], self._eos.tolist()))
+        return frozenset(ids)
 
     @staticmethod
     def active(**kw) -> bool:
@@ -823,7 +846,10 @@ class VLMBatchRunner:
         # Drafting needs a row without logits processors, logprobs or a tool-call
         # guide (a thinking budget is fine there).
         job.allow_draft = bool(
-            allow_draft and not processors and not logprobs and guide is None
+            allow_draft
+            and static_masks_only(processors)
+            and not logprobs
+            and guide is None
         )
         stats.used_draft = use_draft
         stats.t_submit = time.perf_counter()
@@ -1089,7 +1115,7 @@ class VLMBatchRunner:
             and job.greedy
             and job.guide is None
             and not job.logprobs
-            and not job.processors
+            and static_masks_only(job.processors)
             and job.budget is None
             and job.cache_plan is None
             and job.prompt_kwargs is None
@@ -1285,10 +1311,12 @@ class VLMBatchRunner:
             or getattr(batch, "is_speculative", False)
             or list(batch.uids) != [uid]
             or batch._next_tokens is None
-            or batch.logits_processors
-            and any(batch.logits_processors)
+            or not static_masks_only((batch.logits_processors or [None])[0])
         ):
             return False
+        row_procs = list(
+            (batch.logits_processors or [None])[0] or []
+        )  # filter() clears
         remaining = int(batch.max_tokens[0]) - int(batch._num_tokens[0])
         if remaining < 2:
             return False
@@ -1337,7 +1365,9 @@ class VLMBatchRunner:
         job.spec_last = job.spec_base
         job.spec_request = SpecRequest(False, 0)
         job.spec_request.guide = None
-        job.spec_request.processors = []
+        # a static ban (the only processors that get here) keeps applying to the lane's
+        # verify rows, so the lane equals the batch row it replaces
+        job.spec_request.processors = row_procs
         vocab = getattr(self.drafter, "_draft_vocab", None)
         if vocab is not None:
             vocab.set_context(job.ids)

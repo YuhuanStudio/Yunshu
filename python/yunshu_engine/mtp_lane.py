@@ -263,6 +263,10 @@ def rounds(
     copy_rows = copy_rows_for_model(lm)
     if copy_rows >= 3 and context is not None:
         copy = CopyDrafter(max_draft=copy_rows - 1)
+        if request is not None:
+            from .constrained_spec import static_ban
+
+            copy.banned = static_ban(request.processors)
         copy.extend(context)
         copy.extend([b])
 

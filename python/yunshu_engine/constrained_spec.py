@@ -374,6 +374,16 @@ def apply_row_processors(processors, logits, context, drafted, calls):
     return mx.stack(rows, axis=1)
 
 
+def static_ban(processors) -> frozenset[int]:
+    """Ids the request's token masks ban on every step, whatever else they do (``always_banned``)."""
+    ids: set[int] = set()
+    for p in processors or []:
+        fn = getattr(p, "always_banned", None)
+        if fn is not None:
+            ids.update(fn())
+    return frozenset(ids)
+
+
 class ProcessorWindow:
     """One request's logits processors over a chain of verify windows (shared by the DFlash
     chain and the MTP lane).
@@ -533,6 +543,8 @@ def dflash_rounds(model, draft_model, prompt_cache, hidden, *, request, **kw):
     rows = mtp_lane._STATE["copy_rows"]
     if rows >= 3 and context is not None:
         copy = CopyDrafter(max_draft=rows - 1)
+        if request is not None:
+            copy.banned = static_ban(request.processors)
         copy.extend(context)
         copy.extend([bonus])
     while emitted < maximum:

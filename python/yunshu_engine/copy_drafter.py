@@ -78,6 +78,9 @@ class CopyDrafter:
         if self.cfg.min_match < self.cfg.ngram:
             raise ValueError("min_match must be at least ngram")
         self.max_draft = max(1, int(max_draft))
+        # ids the request bans on every step: a copy draft is cut before the first one
+        # (it could only be rejected, and the cut keeps the round's window short)
+        self.banned: frozenset[int] = frozenset()
         self.ctx: list[int] = []
         self._index: dict[tuple[int, ...], list[int]] = {}
         self._indexed = 0
@@ -243,6 +246,13 @@ class CopyDrafter:
             and self._copy_gain < self._model_tpr * cfg.benefit_ratio
         ):
             return []
+        if self.banned:
+            for i, t in enumerate(prop):
+                if t in self.banned:
+                    prop = prop[:i]
+                    break
+            if len(prop) < 2:
+                return []
         if not (confident or self._wide):
             prop = prop[: cfg.first_width]
         if self.costs is not None:
