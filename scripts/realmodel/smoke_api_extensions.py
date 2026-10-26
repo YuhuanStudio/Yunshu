@@ -619,11 +619,11 @@ def more_checks(oa, an, ol, served: str) -> None:
     check("responses max_tool_calls=1 caps the calls", len(calls) <= 1, f"{len(calls)}")
     try:
         oa.responses.create(model=served, input="x", conversation="conv_1")
-        check("responses conversation rejected", False)
-    except openai.BadRequestError as e:
+        check("responses unknown conversation is a 404", False)
+    except openai.NotFoundError as e:
         check(
-            "responses conversation rejected with a pointer",
-            "previous_response_id" in str(e),
+            "responses unknown conversation is a 404 conversation_not_found",
+            "conversation_not_found" in str(e),
             str(e)[:160],
         )
     trunc_words = int(os.environ.get("YUNSHU_SMOKE_TRUNC_WORDS", "0"))
