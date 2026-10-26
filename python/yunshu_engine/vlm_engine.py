@@ -189,7 +189,7 @@ def _VALIDATE_LOCAL_PATH(path: str) -> str:
     output. With `YUNSHU_ALLOW_LOCAL_FILES` unset, only paths under
     `YUNSHU_MEDIA_DIR` (default: `$TMPDIR/yunshu_media`) are allowed. Set
     `YUNSHU_ALLOW_LOCAL_FILES=1` to opt back into the legacy unrestricted
-    behavior (NOT recommended for multi-tenant deployments).
+    behavior (NOT recommended when the API is reachable by anyone but the owner).
 
     Returns the resolved absolute path on success.
     Raises ValueError if the path escapes the allow-listed directory.
@@ -208,7 +208,7 @@ def _VALIDATE_LOCAL_PATH(path: str) -> str:
     except ValueError as e:
         raise ValueError(
             f"Local file access blocked: {path} is not under YUNSHU_MEDIA_DIR={media_root}. "
-            f"Set YUNSHU_ALLOW_LOCAL_FILES=1 to bypass (NOT recommended in multi-tenant)."
+            f"Set YUNSHU_ALLOW_LOCAL_FILES=1 to bypass (NOT recommended when the API is reachable by anyone but the owner)."
         ) from e
     return str(resolved)
 
@@ -1028,6 +1028,12 @@ class VLMEngine:
             logger.debug("APC capacity prefix check unavailable", exc_info=True)
             return False
 
+    def _release_active_lease(self, _future=None) -> None:
+        if _future is not None and not _future.cancelled():
+            _future.exception()  # mark a worker failure retrieved (the request already timed out)
+        with self._active_count_lock:
+            self._active_count = max(0, self._active_count - 1)
+
     async def generate(
         self,
         prompt: list[dict] | None = None,
@@ -1088,6 +1094,8 @@ class VLMEngine:
         # those — not a positional slice that collides with concurrent/n>1 requests.
         _req_temp_files: list[str] = []
         _temp_token = _request_temp_files.set(_req_temp_files)
+        _consumer_fut = None
+        _lease_deferred = False
 
         try:
             image_paths = await self._extract_images(messages)
@@ -1173,6 +1181,9 @@ class VLMEngine:
                     _prepare_call(),
                     timeout=_timeout_seconds,
                 )
+                # Shielded: a timeout cancels the wait, not the worker thread, which keeps its
+                # runner row until it sees the cancel event.
+                _consumer_fut = loop.run_in_executor(self._runner_consumers(), call)
                 (
                     result,
                     reasoning_tokens,
@@ -1181,12 +1192,18 @@ class VLMEngine:
                     budget_hit,
                     cached_token_count,
                 ) = await asyncio.wait_for(
-                    loop.run_in_executor(self._runner_consumers(), call),
+                    asyncio.shield(_consumer_fut),
                     timeout=_timeout_seconds,
                 )
             except TimeoutError:
                 self._num_requests_processed += 1
                 kwargs["cancel_event"].set()
+                if _consumer_fut is not None and not _consumer_fut.done():
+                    # The executor thread is still winding down: it holds the lease
+                    # (runner.inflight reads this count), so release when it exits, as the
+                    # stream path does, not now.
+                    _lease_deferred = True
+                    _consumer_fut.add_done_callback(self._release_active_lease)
                 logger.warning(
                     f"VLM non-streaming generate timed out after {_timeout_seconds}s"
                 )
@@ -1249,8 +1266,8 @@ class VLMEngine:
                 ),
             }
         finally:
-            with self._active_count_lock:
-                self._active_count = max(0, self._active_count - 1)
+            if not _lease_deferred:
+                self._release_active_lease()
             _request_temp_files.reset(_temp_token)
             # Our files are exactly those THIS request registered (identity-based).
             _mine = list(_req_temp_files)
@@ -2441,8 +2458,7 @@ class VLMEngine:
             # at 88.6/59.9/67.3 tok/s vs 57-67/50-53/58-62 for row-exact kernels
             # at block 3 (the removed row-exact alternative) and
             # 83.8/59.9/66.7 for the non-exact fast verify, with parity on every
-            # task
-            # (docs/research/runs/2026-09-28-matrix/invariant-packed-mtp-sweep.jsonl).
+            # task (measured on Qwen3.8-27B, 2026-09-28).
             # DFlash verifies through the same target forward, so it gets the
             # same guarantee.
             from .kernels.batch_invariant import install as install_invariant
@@ -2539,7 +2555,7 @@ class VLMEngine:
                 # tokens as upstream's loop; Qwen3.8-27B, single requests, HTTP
                 # decode tok/s 1K/8K/32K/131K: code_python 45.8/68.6/53.4/55.9
                 # -> 55.2/69.5/62.5/59.7, novel_en 48.5/42.2/43.3/32.7 ->
-                # 55.3/49.9/44.5/35.0 (docs/research/runs/2026-09-29-step-efficiency).
+                # 55.3/49.9/44.5/35.0 (measured 2026-09-29).
                 from . import mtp_lane
                 from .draft_vocab import DRAFT_VOCAB
                 from .draft_vocab import install as install_draft_vocab
@@ -2715,7 +2731,7 @@ class VLMEngine:
         runner.inflight = lambda: self._active_count
         # Per-row-length (ragged) KV + ragged decode attention for the shared
         # batch and the speculative lane: the layout for every model with
-        # qwen3_5 attention (lossless; docs/research/runs/2026-09-29-ragged-idle).
+        # qwen3_5 attention (lossless; measured 2026-09-29).
         # KV precision is the user's memory/quality choice.
         precision = settings.get("YUNSHU_KV_PRECISION")
         from .kernels import ragged_kv

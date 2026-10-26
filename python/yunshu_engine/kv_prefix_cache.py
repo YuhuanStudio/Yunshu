@@ -743,12 +743,18 @@ class KVPrefixCache:
             return None, len(prompt_tokens), 0
         best_index = -1
         best_length = 0
+        # Convert the query to numpy once (get_prefix_length's np.asarray is then a no-op per entry).
+        query_np = None
         for i, cached_prompt in enumerate(self._prompts):
             clen = len(cached_prompt)
             # Only consider entries that fit and improve on the best so far.
             if clen <= best_length or clen > len(prompt_tokens):
                 continue
-            matched = get_prefix_length(prompt_tokens, cached_prompt)
+            if query_np is None:
+                import numpy as np
+
+                query_np = np.asarray(prompt_tokens)
+            matched = get_prefix_length(query_np, cached_prompt)
             # Require the WHOLE stored entry to be a prefix of the query
             # (matched == clen) → reuse with zero trim.
             if matched == clen and matched >= self._min_prefix:
@@ -952,13 +958,18 @@ class KVPrefixCache:
         # Slow path: vectorized scan (fallback for short prefixes)
         best_index = -1
         best_length = 0
+        query_np = None
 
         for i, cached_prompt in enumerate(self._prompts):
             if len(cached_prompt) <= best_length:
                 continue
+            if query_np is None:
+                import numpy as np
+
+                query_np = np.asarray(prompt_tokens)
             # never more than the snapshot holds (the hash-chain path caps the same way)
             length = min(
-                get_prefix_length(prompt_tokens, cached_prompt),
+                get_prefix_length(query_np, cached_prompt),
                 cache_length(self._caches[i]),
             )
             if length > best_length:

@@ -194,6 +194,7 @@ class EngineNgramMixin:
                     logits_processors=logits_processors,
                     timeout_seconds=timeout_seconds,
                     lora_adapter=lora_adapter,
+                    suppress_tokens=suppress_tokens,
                 )
 
         # Build stop token sets

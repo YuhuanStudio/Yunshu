@@ -10,7 +10,7 @@ One decode path for a loaded VLM target that combines, per request:
 - logits processors: repetition / presence / frequency penalties, logit bias and
   Yunshu's grammar / JSON-schema constraints.
 
-Measured on Qwen3.8-27B (docs/research/runs/2026-09-28-matrix/): APC + MTP in one
+Measured on Qwen3.8-27B (2026-09-28 measurement): APC + MTP in one
 BatchGenerator stays token-identical to AR while a repeated 5K prompt drops from
 5.4 s to 0.11 s and long decode rises from 32 to ~57 tok/s.
 

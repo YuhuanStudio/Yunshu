@@ -2598,6 +2598,8 @@ class ConstrainedSampler:
         self._constraint = constraint
         self._tokenizer = tokenizer
         self._generated_ids: list[int] = []
+        # EOS ids of one tokenizer do not change within a request: normalise once, not per token.
+        self._eos_ids: frozenset[int] = frozenset(normalize_eos_ids(tokenizer))
 
     def __call__(self, logits: Any) -> Any:
         """Sample a token with JSON constraint masking.
@@ -2646,7 +2648,7 @@ class ConstrainedSampler:
         # Skip advance() for EOS tokens — their decoded text (e.g. "</s>")
         # would corrupt the constraint's text buffer and break
         # checkpoint/rollback correctness.
-        eos_ids = set(normalize_eos_ids(self._tokenizer))
+        eos_ids = self._eos_ids
 
         if token_id not in eos_ids and hasattr(self._constraint, "advance_token"):
             self._constraint.advance_token(token_id)

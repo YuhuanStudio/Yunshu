@@ -170,7 +170,7 @@ def _owns_stored(request, payload: dict) -> bool:
     """True if the caller may read/cancel this stored response.
 
     Unowned (legacy) entries stay readable to avoid breaking older
-    stores; admins bypass. Cross-tenant access to an owned entry is denied.
+    stores; admins bypass. Access by a different key to an owned entry is denied.
     """
     owner = payload.get("_owner")
     if not owner:
@@ -1558,7 +1558,7 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
         _seen.add(_prev_id)
         _prev = _get_stored_response(_prev_id)
         # SECURITY: ownership-gate the chain parent. Without this a
-        # tenant could chain off another tenant's stored response id to
+        # different API key could chain off another key's stored response id to
         # replay (and then exfiltrate) its private input/output. Mirrors the
         # GET /responses/{id} ownership guard. A foreign id reads as unknown.
         if not _prev or not _owns_stored(request, _prev):
@@ -3696,8 +3696,8 @@ async def get_response(
     """
     _check_permission(request, "can_infer")
     payload = _get_stored_response(response_id)
-    # SECURITY (cross-tenant IDOR): a stored response is owned by the
-    # tenant that created it. Treat a cross-tenant access exactly like
+    # SECURITY (cross-key IDOR): a stored response is owned by the
+    # API key that created it. Treat access by a different key exactly like
     # not-found so the id space isn't enumerable. (Every other per-handle router
     # enforces this —; Responses was missed.)
     if payload is None or not _owns_stored(request, payload):
@@ -3877,7 +3877,7 @@ async def delete_response(response_id: str, request: Request):
     the endpoint was missing entirely — a stored response/conversation could
     never be explicitly deleted (only LRU-evicted after the store cap), so clients got 405
     and a stored conversation lingered until eviction (a minor privacy gap). Returns the
-    OpenAI delete envelope. Ownership-gated exactly like GET (cross-tenant delete is denied as not-found so the id space stays non-enumerable, the IDOR class).
+    OpenAI delete envelope. Ownership-gated exactly like GET (delete by a different key is denied as not-found so the id space stays non-enumerable, the IDOR class).
     """
     _check_permission(request, "can_infer")
     payload = _get_stored_response(response_id)
@@ -3913,8 +3913,8 @@ async def cancel_response(response_id: str, request: Request):
     """
     _check_permission(request, "can_infer")
 
-    # SECURITY (cross-tenant cancel IDOR): mirror /v1/cancel's ownership
-    # guard. Without it any tenant could cancel another tenant's in-flight
+    # SECURITY (cross-key cancel IDOR): mirror /v1/cancel's ownership
+    # guard. Without it any key could cancel another key's in-flight
     # Responses generation by id (the SSE stream leaks the resp- id). Admins
     # bypass; an in-flight request with no recorded owner stays cancellable.
     cancelled = False

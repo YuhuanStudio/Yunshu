@@ -1,8 +1,8 @@
 """Yunshu Gateway — single optional bearer-token auth middleware.
 
 Authenticates requests via a single static bearer token (``YUNSHU_AUTH_TOKEN``).
-This engine serves a single consumer (the digital being Yunmo); the multi-tenant
-RBACManager / TenantManager machinery has been removed.
+This engine has one owner (the digital being Yunmo); API keys identify per-key
+actors for usage and quotas, not separate tenants.
 
 Security posture (unchanged, safe by default):
 - Auth is enabled when ``YUNSHU_AUTH_TOKEN`` is set.

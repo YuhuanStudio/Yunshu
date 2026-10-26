@@ -73,12 +73,12 @@ class ResponseCacheMiddleware:
                 return
 
             # namespace the cache by the caller's
-            # credential. The key was body-only, so under multi-tenant RBAC a HIT
-            # returned User A's cached response to User B for a byte-identical body —
-            # a cross-tenant data leak AND a model-authorization bypass (the HIT
-            # short-circuits before the route's _check_model_access runs). Folding the
+            # credential. The key was body-only, so a HIT could return one API key's
+            # cached response to another key for a byte-identical body — a
+            # cross-key data leak (the HIT short-circuits before the route
+            # handler runs, so per-key checks there would be skipped). Folding the
             # bearer token in means a HIT can only be served to the same key that
-            # cached it (and that key already passed model-access for that body).
+            # cached it (and that key already passed the route checks for that body).
             _auth = request.headers.get("Authorization", "")
             # A body that references stored state (uploaded files, earlier responses,
             # conversations) can change meaning without the body changing (file expiry
