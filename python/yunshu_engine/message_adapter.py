@@ -299,13 +299,52 @@ def is_token_counter_message(message: dict) -> bool:
     return isinstance(content, str) and _TOKEN_COUNTER.fullmatch(content) is not None
 
 
+_TOKEN_COUNTER_SUFFIX = re.compile(
+    r"\n{0,2}<total_tokens>\d+ tokens left</total_tokens>"
+)
+
+
+def strip_token_counter(message: dict) -> dict | None:
+    """The instruction message without Claude Code's ``<total_tokens>`` budget markers (omlx 38f420d9).
+
+    Besides the lone marker message, Claude Code appends the marker (with a freshly decremented number) to
+    the end of the system text, or as an extra system block, so a prompt that carries it diverges at that
+    point on every request and nothing after it is reused. The marker is informational. ``None`` when the
+    message holds nothing else; the same message object when it holds no marker.
+    """
+    content = message.get("content")
+    if isinstance(content, str):
+        if "<total_tokens>" not in content:
+            return message
+        stripped = _TOKEN_COUNTER_SUFFIX.sub("", content)
+        return dict(message, content=stripped) if stripped.strip() else None
+    if isinstance(content, list):
+        kept = []
+        for part in content:
+            block = part.get("text") if isinstance(part, dict) else None
+            if isinstance(block, str) and "<total_tokens>" in block:
+                block = _TOKEN_COUNTER_SUFFIX.sub("", block)
+                if not block.strip():
+                    continue
+                part = dict(part, text=block)
+            kept.append(part)
+        if len(kept) == len(content) and all(
+            a is b for a, b in zip(kept, content, strict=True)
+        ):
+            return message
+        return dict(message, content=kept) if kept else None
+    return message
+
+
 def _hoist_system(messages: list[dict]) -> list[dict]:
     """Canonical instruction block for templates that only accept it first."""
-    systems = [
-        dict(m, role="system")
-        for m in messages
-        if m.get("role") in ("system", "developer") and not is_token_counter_message(m)
-    ]
+    systems = []
+    for m in messages:
+        if m.get("role") not in ("system", "developer"):
+            continue
+        kept_message = strip_token_counter(m)
+        if kept_message is not None and not is_token_counter_message(kept_message):
+            systems.append(dict(kept_message, role="system"))
     turns = [dict(m) for m in messages if m.get("role") not in ("system", "developer")]
     return _merge_leading_system(systems) + turns
 

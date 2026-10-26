@@ -2329,6 +2329,61 @@
      ]
     }
    }
+  },
+  "budget_marker_strip": {
+   "module": "python/yunshu_engine/message_adapter.py",
+   "what": "Claude Code's <total_tokens>N tokens left</total_tokens> budget marker (lone message, system-text tail or extra system block) is dropped before the chat template renders, so the prompt prefix stays append-only",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "adapt_messages"
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "adapt_messages"
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "adapt_messages"
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "adapt_messages"
+      ]
+     ]
+    },
+    "text": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/engine_templates.py",
+       "adapt_messages"
+      ]
+     ]
+    },
+    "loop": {
+     "s": "na",
+     "why": "the loop renders its own messages and applies no message adapter at all (system hoisting included); off by default and not grown"
+    }
+   }
   }
  },
  "exclusions": [
