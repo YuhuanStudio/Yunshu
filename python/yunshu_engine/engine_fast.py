@@ -1629,17 +1629,23 @@ class EngineFastMixin:
                 try:
                     from .reasoning_parser import (
                         close_reasoning_at_tool_call,
+                        close_unterminated_reasoning,
                         get_reasoning_parser,
                     )
+                    from .thinking_budget import detect_needs_think_prefix
 
+                    _prompt_opens_think = detect_needs_think_prefix(
+                        list(input_ids), tokenizer
+                    )
                     if _tools_declared:
                         # a tool call opened inside unclosed reasoning ends the reasoning
-                        from .thinking_budget import detect_needs_think_prefix
-
                         output_text = close_reasoning_at_tool_call(
-                            output_text,
-                            detect_needs_think_prefix(list(input_ids), tokenizer),
+                            output_text, _prompt_opens_think
                         )
+                    # EOS / stop / length inside the open <think> keeps the tail reasoning
+                    output_text = close_unterminated_reasoning(
+                        output_text, _prompt_opens_think
+                    )
                     rp = get_reasoning_parser(self.model_name)
                     rp_out = rp.parse(output_text)
                     if rp_out.reasoning:

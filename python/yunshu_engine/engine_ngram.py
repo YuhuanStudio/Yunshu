@@ -848,8 +848,17 @@ class EngineNgramMixin:
         _ng_reasoning_tok = len(_ch_reason)
         if output_text:
             try:
-                from .reasoning_parser import get_reasoning_parser
+                from .reasoning_parser import (
+                    close_unterminated_reasoning,
+                    get_reasoning_parser,
+                )
+                from .thinking_budget import detect_needs_think_prefix
 
+                # EOS / stop / length inside the prompt-opened <think> keeps the tail reasoning
+                output_text = close_unterminated_reasoning(
+                    output_text,
+                    detect_needs_think_prefix(list(input_ids), tokenizer),
+                )
                 rp = get_reasoning_parser(self.model_name)
                 rp_out = rp.parse(output_text)
                 if rp_out.reasoning and rp_out.reasoning_tokens > 0:

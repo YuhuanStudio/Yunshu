@@ -678,8 +678,16 @@ class EngineSpeculativeMixin:
         _spec_reasoning_tok = 0
         if text:
             try:
-                from .reasoning_parser import get_reasoning_parser
+                from .reasoning_parser import (
+                    close_unterminated_reasoning,
+                    get_reasoning_parser,
+                )
+                from .thinking_budget import detect_needs_think_prefix
 
+                # EOS / stop / length inside the prompt-opened <think> keeps the tail reasoning
+                text = close_unterminated_reasoning(
+                    text, detect_needs_think_prefix(list(input_ids), tokenizer)
+                )
                 rp = get_reasoning_parser(self.model_name)
                 rp_out = rp.parse(text)
                 if rp_out.reasoning and rp_out.reasoning_tokens > 0:
