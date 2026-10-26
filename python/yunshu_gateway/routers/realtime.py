@@ -1024,6 +1024,7 @@ class RealtimeSession:
     _obuf_cleared: bool = False  # the audio was cut (cancel / barge-in / clear)
     # Text generated so far for the active response (and whether it is out-of-band):
     # a cancel / barge-in keeps it as an incomplete assistant item.
+    _lane: asyncio.Task | None = None  # tail of the ordered commit lane
     _partial_text: str = ""
     _partial_oob: bool = False
     _idle_task: asyncio.Task | None = None
@@ -1322,6 +1323,11 @@ class RealtimeSession:
                 # Give the cancelled task a chance to run its finally block
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await asyncio.shield(self._active_response)
+            lane_tasks = list(self.__dict__.get("_lane_tasks", ()))
+            for lane_task in lane_tasks:
+                lane_task.cancel()
+            if lane_tasks:
+                await asyncio.gather(*lane_tasks, return_exceptions=True)
             # Release all session state to free memory on disconnect
             self._audio_buffer = bytearray()
             self.conversation.items.clear()
@@ -1368,6 +1374,42 @@ class RealtimeSession:
                 )
             )
             return
+        # A commit transcribes (seconds on a large ASR model): it runs in the ordered lane
+        # so the receive loop keeps draining audio, response.cancel and the WebRTC queue.
+        # Events that read the conversation the commit is about to extend wait behind it.
+        if event_type == "input_audio_buffer.commit" or (
+            event_type in _AFTER_COMMIT_EVENTS and self._lane_busy()
+        ):
+            self._lane_run(self._dispatch(handler, event, event_type))
+            return
+        await self._dispatch(handler, event, event_type)
+
+    def _lane_busy(self) -> bool:
+        return self._lane is not None and not self._lane.done()
+
+    def _lane_run(self, coro) -> asyncio.Task:
+        """Run ``coro`` after everything already in the lane (arrival order preserved),
+        without blocking the caller."""
+        prev = self._lane
+
+        async def _after_prev():
+            if prev is not None and not prev.done():
+                await asyncio.wait({prev})  # no cancel/exception propagation from prev
+            try:
+                await coro
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Realtime lane error: {e}", exc_info=True)
+
+        task = asyncio.create_task(_after_prev())
+        self._lane = task
+        tasks = self.__dict__.setdefault("_lane_tasks", set())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+        return task
+
+    async def _dispatch(self, handler, event: dict, event_type: str) -> None:
         try:
             await handler(self, event)
         except Exception as e:
@@ -3474,8 +3516,9 @@ class RealtimeSession:
                             audio_end_ms=_speech_end // _bytes_per_ms,
                         )
                     )
-                    # Auto-commit and trigger response (OpenAI behavior with server_vad)
-                    await self._auto_commit_and_respond()
+                    # Auto-commit and trigger response (OpenAI behavior with server_vad);
+                    # in the lane so the ASR does not stall the receive loop.
+                    self._lane_run(self._auto_commit_and_respond())
             else:
                 self._vad_silence_bytes = 0
 
@@ -3530,6 +3573,18 @@ class RealtimeSession:
             _start = max(0, _ss - _pad_bytes)
             if 0 < _start < len(audio_data):
                 audio_data = audio_data[_start:]
+
+        # Consume the buffer NOW: audio appended while the ASR runs belongs to the next
+        # turn. Reset VAD state too (like the clear handler): a stale
+        # _vad_speaking/_vad_silence_bytes could let the next quiet append immediately
+        # satisfy the aged silence counter -> a phantom speech_stopped + auto-response on
+        # a near-empty buffer, and the speech-start offset would mislead the next
+        # prefix-padding trim (R6).
+        self._audio_buffer = bytearray()
+        self._vad_speaking = False
+        self._vad_silence_bytes = 0
+        self._vad_speech_start_offset = 0
+        self._reset_silero()
 
         await self.send_event(
             _event(
@@ -3646,16 +3701,6 @@ class RealtimeSession:
                 with contextlib.suppress(OSError):
                     os.unlink(tmp_path)
 
-        # reset VAD state too (like the clear handler). A manual commit that
-        # left _vad_speaking/_vad_silence_bytes stale could let the next quiet append
-        # immediately satisfy the aged silence counter → a phantom speech_stopped +
-        # auto-response on a near-empty buffer. Reset the speech-start offset too so
-        # the next turn's prefix-padding trim (R6) doesn't use a stale offset.
-        self._audio_buffer = bytearray()
-        self._vad_speaking = False
-        self._vad_silence_bytes = 0
-        self._vad_speech_start_offset = 0
-        self._reset_silero()
         return _item_created
 
     async def _handle_output_audio_buffer_clear(self, event: dict) -> None:
@@ -3875,6 +3920,17 @@ class RealtimeSession:
 
 
 # ── Event dispatch ──
+
+# Events that read or extend the conversation: while a commit is still transcribing they
+# queue behind it (the user item must exist before a response.create answers it).
+_AFTER_COMMIT_EVENTS = frozenset(
+    {
+        "response.create",
+        "conversation.item.create",
+        "conversation.item.delete",
+        "conversation.item.truncate",
+    }
+)
 
 _EVENT_HANDLERS = {
     "session.update": RealtimeSession._handle_session_update,
