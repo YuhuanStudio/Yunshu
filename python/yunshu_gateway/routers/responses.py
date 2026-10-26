@@ -1544,9 +1544,17 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
             # Any missing hop (evicted from the LRU, deleted mid-chain, foreign) is an
             # error: walking on with the newest turns only would answer from a silently
             # truncated history (the task statement is usually in the oldest turn).
+            _where = (
+                ""
+                if _prev_id == req.previous_response_id
+                else f" (an earlier response in the chain of '{req.previous_response_id}')"
+            )
             raise ContextError(
                 404,
-                f"Previous response with id '{_prev_id}' not found.",
+                f"Previous response with id '{_prev_id}' not found{_where}. Yunshu keeps "
+                f"the {_RESPONSE_STORE_MAX} most recent stored responses in memory and "
+                "forgets them on restart; send the conversation again in `input` without "
+                "`previous_response_id` to continue.",
                 "previous_response_not_found",
                 "previous_response_id",
             )
