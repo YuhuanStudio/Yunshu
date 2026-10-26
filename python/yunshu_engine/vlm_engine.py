@@ -23,6 +23,7 @@ Architecture:
 - Streaming via tokenizer.detokenizer (per-request, never pooled)
 """
 
+import array
 import asyncio
 import base64
 import collections
@@ -290,16 +291,29 @@ class _VLMTextPromptCache:
     vision path (VLM models with images/audio), keyed by messages + template
     kwargs hash.
 
-    Memory-bounded with LRU eviction. Thread-safe via internal lock.
+    Memory-bounded with LRU eviction by entry count AND total size (a few long agent
+    prompts must not pin hundreds of MB): token ids are kept as a compact int32 array
+    (4 bytes a token, a Python list costs about 36), and the cache holds at most
+    ``max_total_tokens`` tokens / ``max_total_chars`` template characters.
+    Thread-safe via internal lock.
     """
 
-    def __init__(self, max_entries: int = 256) -> None:
+    def __init__(
+        self,
+        max_entries: int = 256,
+        max_total_tokens: int = 4_000_000,
+        max_total_chars: int = 16_000_000,
+    ) -> None:
         from collections import OrderedDict
 
-        self._cache: OrderedDict[str, list[int]] = OrderedDict()
+        self._cache: OrderedDict[str, array.array] = OrderedDict()
         self._template_cache: OrderedDict[str, str] = OrderedDict()
         self._lock = threading.Lock()
         self._max_entries = max_entries
+        self._max_total_tokens = max_total_tokens
+        self._max_total_chars = max_total_chars
+        self._total_tokens = 0
+        self._total_chars = 0
         self._stats = {"hits": 0, "misses": 0, "evictions": 0}
         from .tokenizer_prefix import TokenizerPrefixCache
 
@@ -326,21 +340,28 @@ class _VLMTextPromptCache:
             if entry is not None:
                 self._cache.move_to_end(cache_key)
                 self._stats["hits"] += 1
-                return entry
+                return entry.tolist()
             self._stats["misses"] += 1
             return None
 
     def put_token_ids(self, cache_key: str, token_ids: list[int]) -> None:
         """Store token IDs for a prompt."""
+        if len(token_ids) > self._max_total_tokens:
+            return  # one prompt larger than the whole budget is not worth keeping
+        packed = array.array("i", token_ids)
         with self._lock:
-            if cache_key in self._cache:
-                self._cache.move_to_end(cache_key)
-                self._cache[cache_key] = token_ids
-                return
-            while self._cache and len(self._cache) >= self._max_entries:
-                self._cache.popitem(last=False)
+            old = self._cache.pop(cache_key, None)
+            if old is not None:
+                self._total_tokens -= len(old)
+            while self._cache and (
+                len(self._cache) >= self._max_entries
+                or self._total_tokens + len(packed) > self._max_total_tokens
+            ):
+                _, evicted = self._cache.popitem(last=False)
+                self._total_tokens -= len(evicted)
                 self._stats["evictions"] += 1
-            self._cache[cache_key] = token_ids
+            self._cache[cache_key] = packed
+            self._total_tokens += len(packed)
 
     def get_template_text(self, cache_key: str) -> str | None:
         """Look up cached chat template text for VLM vision path."""
@@ -355,22 +376,27 @@ class _VLMTextPromptCache:
 
     def put_template_text(self, cache_key: str, template_text: str) -> None:
         """Store chat template text for VLM vision path."""
+        if len(template_text) > self._max_total_chars:
+            return
         with self._lock:
-            if cache_key in self._template_cache:
-                self._template_cache.move_to_end(cache_key)
-                self._template_cache[cache_key] = template_text
-                return
-            while (
-                self._template_cache and len(self._template_cache) >= self._max_entries
+            old = self._template_cache.pop(cache_key, None)
+            if old is not None:
+                self._total_chars -= len(old)
+            while self._template_cache and (
+                len(self._template_cache) >= self._max_entries
+                or self._total_chars + len(template_text) > self._max_total_chars
             ):
-                self._template_cache.popitem(last=False)
+                _, evicted = self._template_cache.popitem(last=False)
+                self._total_chars -= len(evicted)
                 self._stats["evictions"] += 1
             self._template_cache[cache_key] = template_text
+            self._total_chars += len(template_text)
 
     def clear(self) -> None:
         with self._lock:
             self._cache.clear()
             self._template_cache.clear()
+            self._total_tokens = self._total_chars = 0
         self.prefix_tokens.clear()
 
     @property
@@ -380,6 +406,8 @@ class _VLMTextPromptCache:
             s["tokenization_entries"] = len(self._cache)
             s["template_entries"] = len(self._template_cache)
             s["max_entries"] = self._max_entries
+            s["cached_tokens"] = self._total_tokens
+            s["template_chars"] = self._total_chars
             return s
 
 
