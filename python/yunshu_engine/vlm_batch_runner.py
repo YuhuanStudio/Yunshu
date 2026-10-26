@@ -1228,18 +1228,29 @@ class VLMBatchRunner:
             for proc in job.processors:
                 if isinstance(proc, ConstraintProcessor):
                     proc.isolate = True
-        (uid,) = group.gen.insert(
-            [job.ids],
-            max_tokens=job.max_tokens,
-            prompt_kwargs=[pkw],
-            logits_processors=[job.processors or None],
-            thinking_budget_criteria=[job.budget],
-        )
-        job.uid = uid
-        job.start = time.perf_counter()
-        group.jobs[uid] = job
-        if group.sampler is not None and job.sampling is not None:
-            group.sampler.add(uid, job.sampling)
+        try:
+            (uid,) = group.gen.insert(
+                [job.ids],
+                max_tokens=job.max_tokens,
+                prompt_kwargs=[pkw],
+                logits_processors=[job.processors or None],
+                thinking_budget_criteria=[job.budget],
+            )
+            job.uid = uid
+            job.start = time.perf_counter()
+            group.jobs[uid] = job
+            if group.sampler is not None and job.sampling is not None:
+                group.sampler.add(uid, job.sampling)
+        except BaseException:
+            # The request never became a row: drop what was registered for it above.
+            if job.uid is not None and group.jobs.get(job.uid) is job:
+                group.jobs.pop(job.uid, None)
+                if group.sampler is not None:
+                    group.sampler.drop(job.uid)
+                with contextlib.suppress(Exception):
+                    group.gen.remove(job.uid)
+            self._release_apc_request(group, job)
+            raise
 
     def _maybe_promote(self) -> bool:
         """Move a lone decoding row from the shared batch onto the speculative lane.
@@ -1458,6 +1469,17 @@ class VLMBatchRunner:
             from .spec_release import release_rounds
 
             release_rounds(group.gen)
+        self._release_apc_request(group, job)
+        if not group.jobs and getattr(group, "spec", False):
+            from .kernels.buffer_cache import offer_restore_buffers
+
+            batch = getattr(group.gen, "_generation_batch", None)
+            offer_restore_buffers(getattr(batch, "prompt_cache", None) or [])
+        self._emit(job, _DONE)
+
+    @staticmethod
+    def _release_apc_request(group: _Group, job: _Job) -> None:
+        """Forget the per-request APC descriptor and console id ``_admit`` registered."""
         coordinator = getattr(group.gen, "apc", None)
         if coordinator is not None and hasattr(coordinator, "release_request"):
             pending_ids = getattr(coordinator.manager, "_console_requests", {}).get(
@@ -1470,12 +1492,6 @@ class VLMBatchRunner:
                 if not pending_ids:
                     coordinator.manager._console_requests.pop(tuple(job.ids), None)
             coordinator.release_request(job.ids, job.cache_plan)
-        if not group.jobs and getattr(group, "spec", False):
-            from .kernels.buffer_cache import offer_restore_buffers
-
-            batch = getattr(group.gen, "_generation_batch", None)
-            offer_restore_buffers(getattr(batch, "prompt_cache", None) or [])
-        self._emit(job, _DONE)
 
     @staticmethod
     def _stopped(job: _Job) -> bool:
