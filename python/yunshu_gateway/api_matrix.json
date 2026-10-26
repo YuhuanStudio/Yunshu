@@ -419,7 +419,8 @@
     ],
     "r": [
      "max_output_tokens",
-     "max_completion_tokens"
+     "max_completion_tokens",
+     "max_tokens"
     ],
     "m": [
      "max_tokens"
