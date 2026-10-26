@@ -466,6 +466,10 @@
       [
        "python/yunshu_engine/text_logit_processors.py",
        "FrequencyPresencePenalty"
+      ],
+      [
+       "python/yunshu_engine/engine_sampling.py",
+       "fpc = _mx.zeros"
       ]
      ]
     },
@@ -1777,6 +1781,421 @@
       [
        "python/yunshu_engine/batched_engine.py",
        "prewarm_for_engine(self)"
+      ]
+     ]
+    }
+   }
+  },
+  "fast_top_logprobs": {
+   "module": "python/yunshu_engine/text_logprobs.py",
+   "what": "top_logprobs without a full-vocabulary argsort or per-id syncs (argpartition; tie order kept per path)",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/constrained_spec.py",
+       "top_logprobs_rows"
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/constrained_spec.py",
+       "top_logprobs_rows"
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "top_logprobs_device"
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "top_logprobs_device"
+      ]
+     ]
+    },
+    "text": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/engine_fast.py",
+       "text_logprobs"
+      ]
+     ]
+    },
+    "loop": {
+     "s": "na",
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
+    }
+   }
+  },
+  "special_token_text": {
+   "module": "python/yunshu_engine/special_tokens.py",
+   "what": "Special-token strings inside message text stay text when the chat template is rendered (a user cannot close their turn and open a system one); count/preview renders match generation",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "neutralize_special_text"
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "neutralize_special_text"
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "neutralize_special_text"
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "neutralize_special_text"
+      ]
+     ]
+    },
+    "text": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/engine_templates.py",
+       "neutralize_special_text"
+      ]
+     ]
+    },
+    "loop": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/engine_core.py",
+       "neutralize_special_text"
+      ]
+     ]
+    }
+   }
+  },
+  "empty_prompt_refusal": {
+   "module": "python/yunshu_engine/context_window.py",
+   "what": "A prompt that renders to zero tokens is refused (EmptyPromptError, HTTP 400 empty_prompt) before any generation state",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "require_non_empty_prompt"
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "require_non_empty_prompt"
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "require_non_empty_prompt"
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "require_non_empty_prompt"
+      ]
+     ]
+    },
+    "text": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/engine_fast.py",
+       "require_non_empty_prompt"
+      ]
+     ]
+    },
+    "loop": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/engine_core.py",
+       "require_non_empty_prompt"
+      ]
+     ]
+    }
+   }
+  },
+  "finite_state_publish": {
+   "module": "python/yunshu_engine/apc_manager.py",
+   "what": "A checkpoint whose recurrent state is non-finite is never stored in a prefix cache",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "recurrent_state_finite"
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "recurrent_state_finite"
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "recurrent_state_finite"
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "recurrent_state_finite"
+      ]
+     ]
+    },
+    "text": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/kv_prefix_cache.py",
+       "recurrent_state_finite"
+      ]
+     ]
+    },
+    "loop": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/kv_prefix_cache.py",
+       "recurrent_state_finite"
+      ]
+     ]
+    }
+   }
+  },
+  "grammar_mask_fast": {
+   "module": "python/yunshu_engine/grammar_constraint.py",
+   "what": "Constrained decoding masks from the constraint's bitmask/allowed_mask, not a ~240K-id allowlist per token",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/constrained_spec.py",
+       "allowed_mask"
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/constrained_spec.py",
+       "allowed_mask"
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "allowed_mask"
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "allowed_mask"
+      ]
+     ]
+    },
+    "text": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/json_schema.py",
+       "apply_allowed_mask_from"
+      ]
+     ]
+    },
+    "loop": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/json_schema.py",
+       "apply_allowed_mask_from"
+      ]
+     ]
+    }
+   }
+  },
+  "generation_suppress_default": {
+   "module": "python/yunshu_engine/generation_suppress.py",
+   "what": "generation_config.json suppress_tokens is the default token mask when a request sets none",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "_generation_suppress_ids"
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "_generation_suppress_ids"
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "_generation_suppress_ids"
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "_generation_suppress_ids"
+      ]
+     ]
+    },
+    "text": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/batched_engine.py",
+       "generation_suppress"
+      ]
+     ]
+    },
+    "loop": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/batched_engine.py",
+       "generation_suppress"
+      ]
+     ]
+    }
+   }
+  },
+  "grammar_dead_end_isolation": {
+   "module": "python/yunshu_engine/constraint_eos.py",
+   "what": "A grammar dead end fails only its own request (with an error), never the other rows or a hang",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "GrammarDeadEndError"
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "GrammarDeadEndError"
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "GrammarDeadEndError"
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "GrammarDeadEndError"
+      ]
+     ]
+    },
+    "text": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/json_schema.py",
+       "ConstrainedDecodingError"
+      ]
+     ]
+    },
+    "loop": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/scheduler.py",
+       "_DeadEndGuardSampler"
       ]
      ]
     }
