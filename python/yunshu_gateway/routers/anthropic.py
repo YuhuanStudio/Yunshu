@@ -816,6 +816,18 @@ def _clamped_thinking_budget(granted: int | None, max_tokens: int) -> int | None
     return min(granted, max(1, max_tokens - 1))
 
 
+def _model_reasons_natively(model: str) -> bool:
+    """True when the served model's card says its template reasons natively (opens <think>)."""
+    try:
+        from ..model_cards import engine_card, find_card
+
+        card = find_card(model) or engine_card(None)
+        return bool(card and card.reasoning.get("supported"))
+    except Exception:  # noqa: BLE001 - a card problem must never break serving
+        logger.debug("native reasoning lookup failed", exc_info=True)
+        return False
+
+
 def _thinking_switches(req) -> tuple[bool | None, int | None]:
     """Anthropic ``thinking`` -> (enable_thinking, thinking_budget).
 
@@ -1900,44 +1912,50 @@ async def _create_message(
         and isinstance(req.thinking, dict)
         and req.thinking.get("type") == "enabled"
     ):
-        _budget = req.thinking.get("budget_tokens")
-        _think_instruction = (
-            "\n\nIMPORTANT FORMAT REQUIREMENT: You MUST begin every reply with "
-            "an opening <think> tag, write your private step-by-step reasoning, "
-            "then write a closing </think> tag, and only after that produce the "
-            "final user-facing answer. Do not skip these tags. "
-            "Example shape: <think>...reasoning...</think>final answer."
-        )
-        if isinstance(_budget, int) and _budget > 0:
-            _think_instruction += f" Keep the reasoning inside <think>...</think> to roughly {_budget} tokens."
-        if messages and messages[0].get("role") == "system":
-            messages[0]["content"] = (
-                messages[0].get("content") or ""
-            ) + _think_instruction
-        else:
-            messages.insert(
-                0, {"role": "system", "content": _think_instruction.strip()}
+        # A model whose template already opens <think> (card: reasoning.supported)
+        # reasons natively: enable_thinking/thinking_budget reach its template, and
+        # a prompt instruction or regex grammar would only fight it. Models without
+        # native reasoning get the instruction (and, without tools, the grammar).
+        _native_reasoning = _model_reasons_natively(req.model)
+        if not _native_reasoning:
+            _budget = req.thinking.get("budget_tokens")
+            _think_instruction = (
+                "\n\nIMPORTANT FORMAT REQUIREMENT: You MUST begin every reply with "
+                "an opening <think> tag, write your private step-by-step reasoning, "
+                "then write a closing </think> tag, and only after that produce the "
+                "final user-facing answer. Do not skip these tags. "
+                "Example shape: <think>...reasoning...</think>final answer."
             )
-        # Mark that we requested thinking via prompt injection — used later
-        # to apply a heuristic-based <think> wrapper around the model's
-        # natural reasoning prose if the model declined to emit literal tags.
+            if isinstance(_budget, int) and _budget > 0:
+                _think_instruction += f" Keep the reasoning inside <think>...</think> to roughly {_budget} tokens."
+            if messages and messages[0].get("role") == "system":
+                messages[0]["content"] = (
+                    messages[0].get("content") or ""
+                ) + _think_instruction
+            else:
+                messages.insert(
+                    0, {"role": "system", "content": _think_instruction.strip()}
+                )
+        # Always emit a thinking block (empty placeholder if the model stayed silent):
+        # Anthropic returns one whenever thinking={enabled}.
         req._thinking_prompt_injected = True
-        # When there are no tools and no explicit grammar already requested,
-        # force the model to start with <think>...</think> via a regex
-        # grammar. This is the most reliable way to guarantee the Anthropic
-        # response contains a "thinking" content block.
-        if (
-            not req.tools
-            and getattr(req, "json_schema", None) is None
-            and getattr(req, "grammar", None) is None
-            and getattr(req, "response_format", None) is None
-        ):
-            req._forced_thinking_grammar = {
-                "type": "regex",
-                # Require at least one non-trivial character inside <think>...</think>
-                # so the model can't satisfy the grammar with an empty block.
-                "pattern": r"<think>[\s\S]+?</think>[\s\S]*",
-            }
+        if not _native_reasoning:
+            # When there are no tools and no explicit grammar already requested,
+            # force the model to start with <think>...</think> via a regex
+            # grammar. This is the most reliable way to guarantee the Anthropic
+            # response contains a "thinking" content block.
+            if (
+                not req.tools
+                and getattr(req, "json_schema", None) is None
+                and getattr(req, "grammar", None) is None
+                and getattr(req, "response_format", None) is None
+            ):
+                req._forced_thinking_grammar = {
+                    "type": "regex",
+                    # Require at least one non-trivial character inside <think>...</think>
+                    # so the model can't satisfy the grammar with an empty block.
+                    "pattern": r"<think>[\s\S]+?</think>[\s\S]*",
+                }
 
     # Inject tool definitions into system prompt if provided
     if req.tools:
