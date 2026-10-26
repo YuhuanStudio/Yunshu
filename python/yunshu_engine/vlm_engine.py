@@ -48,6 +48,7 @@ from . import gc_policy, netguard, next_turn, settings
 from .moe_pack import tensor_quantization_override, unsupported_pack_reason
 from .paths import private_media_dir
 from .request import RequestOutput
+from .special_tokens import neutralize_special_text
 from .types import EngineConfig
 
 logger = logging.getLogger(__name__)
@@ -3705,6 +3706,7 @@ class VLMEngine:
                 messages = adapt_messages(messages, self.model_name)
         except Exception:
             logger.debug("VLM message adapter failed", exc_info=True)
+        messages = neutralize_special_text(messages, getattr(self, "_tokenizer", None))
 
         if self._tokenizer is not None and hasattr(
             self._tokenizer, "apply_chat_template"
@@ -3896,6 +3898,7 @@ class VLMEngine:
             messages = adapt_messages(messages, self.model_name)
         except Exception:
             logger.debug("VLM message adapter failed", exc_info=True)
+        messages = neutralize_special_text(messages, getattr(self, "_tokenizer", None))
         vlm_messages = self._build_vlm_messages(messages, max_images=max_images)
         tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
         if enable_thinking is not None:
