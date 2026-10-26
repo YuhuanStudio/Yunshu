@@ -370,21 +370,29 @@ class EngineFastMixin:
         _latency_info = current_request_info.get()
         _latency_marks = getattr(_latency_info, "latency_marks", {})
         _latency_marks["template_start"] = time.perf_counter()
-        # Encode prompt
-        if isinstance(prompt, str):
-            text = prompt
-        elif isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
-            # Route through _apply_chat_template (NOT raw tokenizer.apply_chat_template)
-            # so the fast path — the DEFAULT serving path — also gets: tool_calls.
-            # arguments str→dict normalization (multi-turn tool history otherwise
-            # double-encodes or raises in Jinja → silent degraded fallback), the
-            # family message adapter (Gemma4/Mistral/Harmony role rules), dangling
-            # <think> closing, and the enable_thinking-unsupported retry.
-            text = self._apply_chat_template(prompt, enable_thinking=enable_thinking)
-        else:
-            text = str(prompt)
 
-        input_ids = self._encode_prompt(tokenizer, text)
+        # Encode prompt (template render + tokenize run on the text-prep thread, not
+        # the event loop: see text_prep).
+        def _render_and_encode():
+            if isinstance(prompt, str):
+                text = prompt
+            elif isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+                # Route through _apply_chat_template (NOT raw tokenizer.apply_chat_template)
+                # so the fast path — the DEFAULT serving path — also gets: tool_calls.
+                # arguments str→dict normalization (multi-turn tool history otherwise
+                # double-encodes or raises in Jinja → silent degraded fallback), the
+                # family message adapter (Gemma4/Mistral/Harmony role rules), dangling
+                # <think> closing, and the enable_thinking-unsupported retry.
+                text = self._apply_chat_template(
+                    prompt, enable_thinking=enable_thinking
+                )
+            else:
+                text = str(prompt)
+            return text, self._encode_prompt(tokenizer, text)
+
+        from .text_prep import run_text_prep
+
+        text, input_ids = await run_text_prep(_render_and_encode)
         prompt_tokens = len(input_ids)
         _latency_marks["template_end"] = time.perf_counter()
 

@@ -130,15 +130,22 @@ class EngineStreamMixin:
                     exc_info=True,
                 )
 
-        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
-            # Route through _apply_chat_template (NOT raw) — same reason as the
-            # non-streaming fast path: tool_calls.arguments str→dict normalization,
-            # the family message adapter, dangling-<think> closing, and the
-            # enable_thinking-unsupported retry. The default streaming path otherwise
-            # broke multi-turn tool conversations / Mistral-Gemma role rules.
-            prompt = self._apply_chat_template(prompt, enable_thinking=enable_thinking)
+        # Template render + tokenize run on the text-prep thread, not the event loop
+        # (see text_prep).
+        def _render_and_encode():
+            text = prompt
+            if isinstance(text, list) and text and isinstance(text[0], dict):
+                # Route through _apply_chat_template (NOT raw) — same reason as the
+                # non-streaming fast path: tool_calls.arguments str→dict normalization,
+                # the family message adapter, dangling-<think> closing, and the
+                # enable_thinking-unsupported retry. The default streaming path otherwise
+                # broke multi-turn tool conversations / Mistral-Gemma role rules.
+                text = self._apply_chat_template(text, enable_thinking=enable_thinking)
+            return text, self._encode_prompt(tokenizer, text)
 
-        input_ids = self._encode_prompt(tokenizer, prompt)
+        from .text_prep import run_text_prep
+
+        prompt, input_ids = await run_text_prep(_render_and_encode)
         prompt_tokens = len(input_ids)
 
         # Guard against empty prompt (same as _generate_fast)
