@@ -72,25 +72,47 @@ Shared helpers written for the unified path to reuse: `text_logit_processors.py`
 * Loopback-bound servers answer 403 to a non-loopback `Host`, and to POST/PUT/PATCH/DELETE with a foreign `Origin` that
   is not in `YUNSHU_CORS_ORIGINS` (requests with `Authorization` / `x-api-key` are exempt). New setting
   `YUNSHU_ALLOWED_HOSTS` adds names (`*` disables). `yunshu serve --host` now records the bind host in `YUNSHU_HOST`.
+  Accepted `Host` forms on a loopback bind: `localhost` (also `localhost.` and `*.localhost`), any 127.0.0.0/8 form
+  (`127.0.0.1`, `127.1`), `[::1]` and its mapped form, and `0.0.0.0` / `[::]`, any port. `host.docker.internal` is not
+  accepted (a container reaches the host's loopback only when the server listens beyond it, which turns the check off).
+  A reverse proxy, `tailscale serve` or `ssh -L` that forwards a public name needs it in `YUNSHU_ALLOWED_HOSTS`; the 403
+  names the header value and the setting. `Origin: null` stays refused; custom schemes (`vscode-webview://*`, `app://.`)
+  are allowed by listing them in `YUNSHU_CORS_ORIGINS` (`scheme://*` matches every origin of a scheme). Clients that send
+  `Authorization` / `x-api-key` are unaffected.
 * Managed API keys are their own actors: an infer-scope key no longer reads/cancels objects of other keys or of the
-  static token; with a static token set, an infer-only key gets 401 on `/metrics`.
-* 20 failed authentications per minute from one non-loopback IP → 429 with `Retry-After` (also for a correct token until
-  the window clears).
+  static token; with a static token set, an infer-only key gets 401 on `/metrics`. `/metrics` answers 401/403 JSON
+  envelopes (it was a 500), and with managed keys but no static token it needs an `admin`-scope key (it is open only
+  when no auth is configured at all).
+* Failed-auth backoff: 20 WRONG credentials per minute from one non-loopback client → further wrong credentials get 429
+  with `Retry-After`. A correct token or key always passes and resets that client's count; a request with no
+  credential at all is a plain 401 and is not counted. The client is the peer IP, or the last `X-Forwarded-For` entry
+  when the peer is listed in `YUNSHU_TRUSTED_PROXIES`.
 * `YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE` defaults to false: request-supplied MCP servers on private/loopback/link-local
   addresses are refused. Operator-configured servers are unaffected.
 * Special-token strings in message text get a zero-width space after their first character, so the model sees text,
   not a control token.
 * Text-only requests have no default generation deadline (was 300 s total).
 * Zero-token prompts → 400 `empty_prompt` on every path. Whitespace-only user/system content is accepted.
-* Responses: a missing ancestor in a `previous_response_id` chain → 404 `previous_response_not_found`; failed/cancelled
-  parents replay their input only.
-* Without a client `max_tokens`, `x_yunshu.budget.prompt_tokens` is a character upper bound (the clamp is slightly more
-  conservative) because the full encode is skipped.
+* Responses: a missing ancestor in a `previous_response_id` chain → 404 `previous_response_not_found`, whose message
+  names the missing id, the in-memory store limit (1024, cleared on restart) and the fix (resend `input`);
+  failed/cancelled parents replay their input only. Coalescing of assistant items also applies to client-supplied
+  `input` (plain valid histories are unchanged; tests pin it).
+* The sandbox text editor follows symlinks the sandboxed code created when the target stays inside the container
+  (relative, `..` below the root, `/mnt/data/...`); links that leave it, and loops, are still refused with a message
+  that says why.
+* Without a client `max_tokens`, the full encode is skipped only while a UTF-8 byte upper bound still leaves at least
+  32768 tokens (or the whole default) for the answer; then `x_yunshu.budget.prompt_tokens` is that bound and
+  `prompt_tokens_basis` says `upper_bound`. Otherwise the exact count is used, so small windows are not over-clamped.
 * Auto length-gated 8-bit KV requests no longer write a prefix-cache entry.
 * `YUNSHU_GRAMMAR_PREWARM` (default on) costs about 0.45 GiB of native heap per mask width; turn it off on tight hosts.
 * Removed settings: `YUNSHU_ROUND_DRIVER`, `YUNSHU_ROUND_PREFILL_CHUNK`, `YUNSHU_MTP_ROW_EXACT`. `YUNSHU_GPU_SAMPLER` is now
   marked experimental (`decide=` points at the A/B script).
-* Console: remote images in model output are blocked by CSP; Logs shows the newest 300 rows with "show earlier".
+* Console: remote images in model output are blocked by CSP; Logs shows the newest 300 rows with "show earlier" and,
+  while you are scrolled up, grows that window by what arrives so the row you read does not move.
+* Console: an engine restart in Logs no longer wipes the screen: the old process's lines stay in a collapsed "previous
+  engine process" block above the list (the crash trace is not in the new ring); changing a filter clears it.
+* Console: Escape in the Requests inspector yields to a focused text field (it no longer closes the inspector while
+  you are typing).
 
 ## Verify on the Mac
 
