@@ -345,6 +345,7 @@ _add("YUNSHU_ARM", "str", None, "Label recorded in the serve log for the configu
 
 # ── CLI ────────────────────────────────────────────────────────────────
 _add("YUNSHU_GATEWAY_URL", "str", "http://localhost:8000", "Server URL used by the yunshu CLI client commands.", "cli")
+_add("YUNSHU_API_KEY", "str", None, "Client side: the Bearer key the yunshu CLI sends to the server (`yunshu statusline`) and passes to the coding agents `yunshu launch` starts (Codex reads it as its provider key). The server never reads it; set YUNSHU_AUTH_TOKEN there.", "cli", secret=True)
 _add("YUNSHU_HF_ENDPOINT", "str", None, "Hugging Face Hub endpoint for `yunshu serve` (exported as HF_ENDPOINT).", "cli")
 
 # fmt: on
@@ -449,6 +450,7 @@ _LIVE = frozenset(
         "YUNSHU_SERVE_LOG_RETENTION_DAYS",
         "YUNSHU_ARM",
         "YUNSHU_GATEWAY_URL",
+        "YUNSHU_API_KEY",
     }
 )
 _RELOAD = frozenset(

@@ -345,6 +345,7 @@ The descriptions below come straight from the settings registry and are in Engli
 | Setting | Type | Default | Applies | Description |
 |---|---|---|---|---|
 | `YUNSHU_GATEWAY_URL` | str | http://localhost:8000 | live | Server URL used by the yunshu CLI client commands. |
+| `YUNSHU_API_KEY` | str | unset | live | Client side: the Bearer key the yunshu CLI sends to the server (`yunshu statusline`) and passes to the coding agents `yunshu launch` starts (Codex reads it as its provider key). The server never reads it; set YUNSHU_AUTH_TOKEN there. |
 | `YUNSHU_HF_ENDPOINT` | str | unset | restart | Hugging Face Hub endpoint for `yunshu serve` (exported as HF_ENDPOINT). |
 
 ## Experimental settings

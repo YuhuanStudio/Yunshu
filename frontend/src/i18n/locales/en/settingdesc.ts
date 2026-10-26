@@ -316,6 +316,8 @@ const settingdesc = {
   YUNSHU_ARM:
     "Label recorded in the serve log for the configuration arm this server runs (for offline A/B analysis); it changes no behaviour.",
   YUNSHU_GATEWAY_URL: "Server URL used by the `yunshu` CLI client commands.",
+  YUNSHU_API_KEY:
+    "Client side: the Bearer key the `yunshu` CLI sends to the server (`yunshu statusline`) and passes to the coding agents `yunshu launch` starts (Codex reads it as its provider key). The server never reads it; set `YUNSHU_AUTH_TOKEN` there.",
   YUNSHU_HF_ENDPOINT:
     "Hugging Face Hub endpoint for `yunshu serve` (exported as `HF_ENDPOINT`).",
   YUNSHU_HISTORY_INTERVAL_S:

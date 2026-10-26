@@ -299,6 +299,8 @@ const settingdesc = {
   YUNSHU_ARM:
     "在服务记录中记录本服务器所运行配置组（arm）的标签，用于离线 A/B 分析；不会改变任何行为。",
   YUNSHU_GATEWAY_URL: "`yunshu` CLI 客户端命令所使用的服务器 URL。",
+  YUNSHU_API_KEY:
+    "客户端：`yunshu` CLI 发送给服务器的 Bearer 密钥（`yunshu statusline`），也会传给 `yunshu launch` 启动的编程代理（Codex 以它作为供应商密钥）。服务器不会读取它；服务器端请设置 `YUNSHU_AUTH_TOKEN`。",
   YUNSHU_HF_ENDPOINT:
     "`yunshu serve` 使用的 Hugging Face Hub 端点（会导出为 `HF_ENDPOINT`）。",
   YUNSHU_HISTORY_INTERVAL_S:
