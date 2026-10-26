@@ -297,6 +297,21 @@ class AnthropicMessagesRequest(BaseModel):
             raise ValueError("stop_sequences: individual sequences must be non-empty")
         if self.stop_token_ids and len(self.stop_token_ids) > 16:
             raise ValueError("stop_token_ids: maximum 16 stop token IDs")
+        # A malformed tool_choice used to fall through as "auto"; Anthropic answers 400.
+        if self.tool_choice is not None:
+            _tc = self.tool_choice
+            _kinds = ("auto", "any", "none", "tool")
+            _kind = _tc.get("type") if isinstance(_tc, dict) else _tc
+            if _kind not in _kinds:
+                raise ValueError(
+                    f"tool_choice.type must be one of {', '.join(_kinds)}, got {_kind!r}"
+                )
+            if _kind == "tool" and not (
+                isinstance(_tc, dict)
+                and isinstance(_tc.get("name"), str)
+                and _tc["name"]
+            ):
+                raise ValueError("tool_choice.name is required when type is 'tool'")
         # Validate thinking configuration per Anthropic spec
         if self.thinking:
             if self.thinking.get("display") not in (

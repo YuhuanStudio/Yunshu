@@ -789,6 +789,32 @@ class TestAnthropicEndpoint:
         )
         assert resp.status_code in (200, 404, 500, 503)
 
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"type": "bogus"},
+            {},
+            {"type": "tool"},
+            {"type": "tool", "name": ""},
+            "bogus",
+            7,
+        ],
+    )
+    def test_messages_endpoint_rejects_malformed_tool_choice(self, _setup_engine, bad):
+        """A malformed tool_choice is a 400, not silently treated as auto."""
+        resp = _client().post(
+            "/v1/messages",
+            json={
+                "model": "claude-3",
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": "Hi"}],
+                "tools": [{"name": "test", "description": "A test tool"}],
+                "tool_choice": bad,
+            },
+        )
+        assert resp.status_code == 400, resp.text
+        assert "tool_choice" in resp.text
+
     def test_messages_endpoint_with_tool_choice_dict(self, _setup_engine):
         """Should accept tool_choice as dict with name."""
         client = _client()
