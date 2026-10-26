@@ -1749,11 +1749,9 @@ class YunshuAPCManager(APCManager):
         """
         import numpy as np
 
-        key = (
-            len(token_ids),
-            hash(tuple(token_ids[:64])),
-            hash(tuple(token_ids[-64:])),
-        )
+        # the whole sequence is hashed: two prompts sharing length, head and tail (a changed
+        # middle) must not share an answer
+        key = (len(token_ids), hash(tuple(token_ids)))
         with self._plock:
             memo = self.__dict__.setdefault(
                 "_divergence_memo", collections.OrderedDict()

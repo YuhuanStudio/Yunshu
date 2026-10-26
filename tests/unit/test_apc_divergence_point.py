@@ -76,3 +76,13 @@ def test_next_turn_resumes_from_the_servers_own_prompt_end_checkpoint():
         prefix_has_media=lambda _: False,
     )
     assert got is not None and got["prefix_len"] == 256
+
+
+def test_memo_is_not_shared_by_prompts_that_differ_only_in_the_middle():
+    manager = _mgr(prefill_alignment=64)
+    base = list(range(400))
+    assert manager.divergence_point(base) == 0
+    early = base[:150] + [9001] + base[151:]  # same length, first/last 64 tokens
+    late = base[:300] + [9002] + base[301:]
+    assert manager.divergence_point(early) == 128
+    assert manager.divergence_point(late) == 256
