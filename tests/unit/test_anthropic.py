@@ -932,9 +932,7 @@ class TestToolUseStreamingOrder:
     """lock in the fix that ensures content_block_stop
     for tool_use blocks fires BEFORE message_delta. previously the
     safety-close path emitted content_block_stop AFTER message_delta,
-    violating Anthropic streaming spec.
-
-    See VALIDATION_REPORT for the live-curl verification."""
+    violating Anthropic streaming spec."""
 
     def test_tool_use_sequence_content_block_stop_before_message_delta(self):
         """Anthropic spec: ALL content_block_stop events MUST precede

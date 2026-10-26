@@ -6,7 +6,7 @@ Stores KV cache segments keyed by (conversation_id, step_hash) so that
 reasoning models (DeepSeek-R1, Qwen3) can reuse thinking KV cache across
 multi-turn conversations with shared reasoning steps.
 
-Architecture (Section 3.6 / Delta-6 from whitepaper):
+Layout:
 - Key: (conversation_id, step_hash) — identifies a reasoning step uniquely
 - Value: KV cache tensors for the thinking segment
 - Store: in-memory hot + optional SSD persistence
