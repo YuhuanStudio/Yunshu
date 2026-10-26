@@ -28,7 +28,6 @@ def __getattr__(name):
         "RequestOutputCollector": ".output_collector",
         "RequestStreamState": ".output_collector",
         "Request": ".request",
-        "RequestOutputNew": ".request",
         "RequestStatus": ".request",
         "SamplingParams": ".request",
         "Scheduler": ".scheduler",
@@ -64,15 +63,6 @@ def __getattr__(name):
         "DiffusionLoRAOffloader": ".diffusion_infra",
         "LoRAAdapter": ".diffusion_infra",
         "MemoryBudget": ".diffusion_infra",
-        # Checkpoint / Restore (fault recovery)
-        "InferenceCheckpoint": ".checkpoint",
-        "InferenceState": ".checkpoint",
-        "AutoCheckpointPolicy": ".checkpoint",
-        "FaultRecoveryManager": ".checkpoint",
-        "RecoveryStrategy": ".checkpoint",
-        "RecoveryResult": ".checkpoint",
-        "ProgressEstimator": ".checkpoint",
-        "ProgressInfo": ".checkpoint",
         # Mamba / Hybrid KV Cache
         "CacheBlockType": ".mamba_cache",
         "HybridKVCache": ".mamba_cache",
@@ -111,9 +101,6 @@ def __getattr__(name):
         # Inference Budget (token/time/cost enforcement)
         "InferenceBudget": ".inference_budget",
         "InferenceBudgetManager": ".inference_budget",
-        # Request Deduplication
-        "RequestDeduplicator": ".request_dedup",
-        "DeduplicationEntry": ".request_dedup",
     }
     if name in _lazy:
         import importlib
