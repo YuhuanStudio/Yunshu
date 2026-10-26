@@ -41,6 +41,7 @@ from .constraint_eos import GrammarDeadEndError
 from .idle_memory import IdleMemory
 from .kernels.preempt import PreemptedError as _Preempted
 from .keyed_sampling import top_k_filter, top_p_filter
+from .sampling_defaults import effective_temperature
 from .serving.busy_time import BusyMeter
 from .serving.work_scheduler import (
     AGING_S,
@@ -725,6 +726,7 @@ class VLMBatchRunner:
             getattr(cancel_event, "client_request_id", None) or current_request_id.get()
         )
         stats.prompt_tokens = len(ids)
+        temperature = effective_temperature(temperature, top_k, min_p, xtc_probability)
         greedy = temperature is None or temperature < 1e-6
         processors = list(logits_processors or [])
         # Exact lane reports come from committed target rows, including the first token.

@@ -2624,6 +2624,36 @@
       "why": "ebcdbfc: voices from the loaded model snapshot (post_load_hook sets _voice_model_path)",
       "source_sha256": "2a34f61717173f3eb7e78a85961b63fd28268e81e8251e586df26078c4f49b74",
       "installed_version": "0.5.9"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/image_processor_fixes.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.gemma4.processing_gemma4",
+      "symbol": "Gemma4ImageProcessor.preprocess",
+      "signature": "(self, images: ImageInput, **kwargs)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "PIL images read channels-last: a 1- or 3-pixel-tall image is not channels-first (8dd7746); module helpers wrapped, preprocess unchanged",
+      "source_sha256": "02b82adab31b13af412506ebd706f93aaf33075f64bead5739af31c24dfdf6ac",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/image_processor_fixes.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.embedding_gemma2.image_processing_embedding_gemma2",
+      "symbol": "EmbeddingGemma2ImageProcessor.preprocess",
+      "signature": "(self, images, return_tensors=None, input_data_format=None, **kwargs)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "PIL images read channels-last for EmbeddingGemma 2 (1e64ba4); module helpers wrapped, preprocess unchanged",
+      "source_sha256": "2e7b2659f14f1daaaf8665aac2ca872fc45d518d9a8d735b735c28e3e57f0add",
+      "installed_version": "0.7.8"
     }
   ],
   "watch": [
@@ -2636,9 +2666,9 @@
       ],
       "why": "new or changed Qwen3.5-family kernels we may want",
       "commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
-      "reviewed_date": "2026-10-15",
-      "reviewed_commit": "6feea9f95de86c772235af765914e4abb82b236f",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "78fa08bc1aef7290c93c83bb70811547763ebf33",
+      "review_reason": "2026-10-26 catch-up (210 commits to 78fa08bc), per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Adopted: the <total_tokens> budget marker strip (38f420d9), accepted-only hit counts for the text prefix cache (5628bb7e). Verified and pinned: the promoted qmv bias sums (94363f89). Not applicable: M1 verify routes (a68b6d1a), generation-prompt tail step (2b1822bf), DFlash fp16 drafter cast (ee0c8c20). Open as Mac steps: sdpa256 on M1-M4."
     },
     {
       "repo": "https://github.com/Blaizzy/mlx-vlm",
@@ -2694,7 +2724,9 @@
       ],
       "why": "exact speculative decoding, lane engine, multi-bit tensor-unit kernels for Qwen3.8",
       "commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "83af6e4aadea9ac6e27011a710d14a5f43d5e509",
+      "review_reason": "2026-10-26 catch-up, per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. No vendored lane file changed upstream (the Python engine was removed); prefix-wait (#1321) is satisfied by one-row prefill; #1262 seam checkpoint is owned elsewhere; simdgroup prompt attention (993cebd3) is a Mac step for M1-M4."
     },
     {
       "repo": "https://github.com/basecompute/baseRT",
@@ -2734,9 +2766,9 @@
       ],
       "why": "n-gram / suffix / MTP proposers, block pool, mRoPE",
       "commit": "3ca00a8261c7790ba7487e2001ab9004ad8065f2",
-      "reviewed_date": "2026-10-15",
-      "reviewed_commit": "7840bede989adc226d35e893f29deec1814734f7",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "059e2de6d81750551dc8fdc82365eb031bab1086",
+      "review_reason": "2026-10-26 catch-up to 059e2de6d, per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Stop-trimmed spec tokens (d486219fc) do not apply to prefill-only checkpoints, the last prefix block under DFlash (0bfeb8d0e) is owned elsewhere; Anthropic error vocabulary and disabled thinking (f0abb2f82, 5be4266f5, d9fcde70f) already match; safety_identifier is already accepted and echoed."
     },
     {
       "repo": "https://github.com/ggml-org/llama.cpp",
@@ -2750,9 +2782,9 @@
       ],
       "why": "n-gram speculation, samplers, grammar and chat templates",
       "commit": "bd4eeaa047006cb1fe71999fbd11134b5836e167",
-      "reviewed_date": "2026-10-15",
-      "reviewed_commit": "a0e6dc7384edb8f5d927155e1d26c10b4a310e6d",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "d854d98bae598388ecea1ed84396587e5edc326d",
+      "review_reason": "2026-10-26 catch-up (33 commits to d854d98ba), per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Server API-compat leads are covered or handled elsewhere; SWA slot-checkpoint fixes (f174553e1, 61ad80bf9) and the in-place aliasing race (098ce526b) do not apply to hash-keyed checkpoints and fresh kernel outputs."
     },
     {
       "repo": "https://github.com/incoai/splash",
@@ -2763,9 +2795,9 @@
       ],
       "why": "batch-invariant Metal kernels (decode, prefill, paged attention)",
       "commit": "0d5a035ea26d1cc566e3c7ee4e08e5e06fa68cf7",
-      "reviewed_date": "2026-10-15",
-      "reviewed_commit": "be3b083c5f413673d44e44881042e875e674e333",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "3135ab45b3da525a8a2dbb8a1aa72ce095dda8a9",
+      "review_reason": "2026-10-26 catch-up (289 commits to 3135ab4), per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Adopted: top_k 1 / min_p 1 decode greedily (8d5e05b). Not adopted: MoE verify-row budget (breaks spec on == off), YaRN from max context (not lossless). Verified: constrained and free lanes share one batch except response_format / logprobs rows, which take the stock-serial namespace by design."
     },
     {
       "repo": "https://github.com/bstnxbt/dflash-mlx",
@@ -2799,9 +2831,9 @@
       ],
       "why": "MLX serving engine: tools, caching, agent runtime",
       "commit": "082d72230417bcc5a24ff16e44d70c62a8c09049",
-      "reviewed_date": "2026-10-15",
-      "reviewed_commit": "3b574953c6e552098f983bd221e26d902643a293",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "e899b689c27e9471cd5d71c42fc00e6353a2eabe",
+      "review_reason": "2026-10-26 catch-up (328 commits to e899b689), per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Warm system+tools prefix and /prefill (90b2540f, 65eec0da) are covered by the tool-list-end checkpoint and a max_tokens 1 request; quantized argmax float bias (75add145) is covered by verify_select's version-matched header; scheduler seal (338d9e00) and vision-lane persistence (897ffab0) do not apply. Interior checkpoint (421bf658) and hybrid boundary retention (66b39f56) are owned elsewhere."
     },
     {
       "repo": "https://github.com/waybarrios/vllm-mlx",
@@ -2839,9 +2871,9 @@
       ],
       "why": "experimental Apple Silicon inference runtime for the next Qwen generation",
       "commit": "3d0b9d58",
-      "reviewed_commit": "f6b8342016576f69e3c1ce7a76bf924a0c59205f",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_commit": "c041b15f28f3b8c8c5fb9f4c6e6bd3fbf5e2a943",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 catch-up (132 commits to c041b15), per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Control-token injection (c4ab16e) and non-finite recurrent state (c250447) are fixed and verified on both text and VLM paths; padded multi-row prefill (fe3e538) does not apply (one prefill row). Mac steps: tree-size invariance check (9973c9b), q4 drafter A/B (7e1354d), cancelled-prefill progress (b69c198)."
     },
     {
       "repo": "https://github.com/VincentGourbin/qwen38-mlx-swift",
@@ -2851,7 +2883,10 @@
         "Sources/**/*.metal"
       ],
       "why": "Qwen3.8 on MLX Swift (the model Yunshu tunes first)",
-      "commit": "2bc9a23d"
+      "commit": "2bc9a23d",
+      "reviewed_commit": "2bc9a23d92354dc422804c85d32c6716352277cd",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "No commits after 2bc9a23d (2026-09-28); per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. The complete tool call inside a never-closed reasoning block (049501d) is adopted in streaming.py extract_thinking."
     },
     {
       "repo": "https://github.com/ddalcu/mlx-serve",
@@ -2862,9 +2897,9 @@
       ],
       "why": "fused add+norm and other Metal kernels in a Zig MLX server",
       "commit": "6281442d",
-      "reviewed_commit": "1015f7854fd8ee5c22e34993aaddee2443b9cfbf",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_commit": "191da71de32a65f69ebceeb6cb2e91036ab50b30",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 catch-up (70 commits to 191da71), per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Shutdown persistence (c24807e) is verified (apc.close drains the write queue, uvicorn cancels open prefills); shape-aware dequant+GEMM (c9ca219) and int8 Q/K prefill (64b6e53, lossy) are not adopted."
     },
     {
       "repo": "https://github.com/Blaizzy/mlx-audio",
@@ -2998,7 +3033,7 @@
       "commit": "d44c2581904a98430e348d89cc2af1529b1808a0",
       "reviewed_commit": "d44c2581904a98430e348d89cc2af1529b1808a0",
       "reviewed_date": "2026-10-26",
-      "review_reason": "First review 2026-10-26; nothing adopted. Candidates to audit against Yunshu: spec-round buffer release firing only on exact multiples of 256 (ec3cc230), prefix-trie eviction and merge false hits (b859a945, 6137793a), snapshot boundaries inside non-causal media (45a02807), JSON schema bound only after thinking ends (1ce2b680)."
+      "review_reason": "2026-10-26 review, per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Adopted (f9dbd60): buffer release on every 256 boundary crossed by a spec round (ec3cc230). Verified or not applicable: residency refresh (cf6c9de6, idle_memory heartbeat), snapshot boundaries inside media (45a02807, pinned test), candidate logits in fp32 (c1c53629, breaks spec on == off). Open Mac step: per-chunk clear_cache A/B (13.C2). Trie eviction and merge (b859a945, 6137793a, a5b659e6) are owned elsewhere."
     },
     {
       "repo": "https://github.com/ml-explore/mlx-swift-lm",
@@ -3013,7 +3048,7 @@
       "commit": "991266ad300f47a3b9f21e62ff5bdb679215e758",
       "reviewed_commit": "991266ad300f47a3b9f21e62ff5bdb679215e758",
       "reviewed_date": "2026-10-26",
-      "review_reason": "First review 2026-10-26; nothing adopted. Candidates to audit: GDN q/k L2-norm eps (c408452), exact prefix rewind in rotating KV caches (12d935f), clearing the buffer cache after each prefill chunk (991266a), flushing held-back stop text at stream end (4ea4225), Qwen reasoning history for cache reuse (e9c8500). Audited 2026-10-26: c408452 (q/k norm eps D times too large) is the same fix as mlx-vlm b8bf04c; kernels/gdn_qk_eps.py renders the installed mlx-vlm's epsilon into the fused norm and the prework RMS arm (unchanged on the pinned 0.7.8); the L2 arms already use mlx-lm's sum + 1e-6."
+      "review_reason": "2026-10-26 review, per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Adopted: generation_config suppress_tokens (0de8927), declared property order in the tool-grammar cache key (d02948b), last-position-only prefill in the jump-forward loop (3615fe4). Verified or pinned: Gemma nested tool arguments (0754e10), linear end-tag scan (a1f575d), held stop text flush (4ea4225). Not applicable: rotating-cache rewind (12d935f) and Qwen3-VL mask after rotation (0ea4465). Open Mac steps: reasoning-history prefix identity (e9c8500), per-chunk clear_cache (991266a). GDN eps (c408452) is bump-coupled. First review 2026-10-26; nothing adopted. Candidates to audit: GDN q/k L2-norm eps (c408452), exact prefix rewind in rotating KV caches (12d935f), clearing the buffer cache after each prefill chunk (991266a), flushing held-back stop text at stream end (4ea4225), Qwen reasoning history for cache reuse (e9c8500). Audited 2026-10-26: c408452 (q/k norm eps D times too large) is the same fix as mlx-vlm b8bf04c; kernels/gdn_qk_eps.py renders the installed mlx-vlm's epsilon into the fused norm and the prework RMS arm (unchanged on the pinned 0.7.8); the L2 arms already use mlx-lm's sum + 1e-6."
     },
     {
       "repo": "https://github.com/vllm-project/vllm-metal",
@@ -3026,7 +3061,7 @@
       "commit": "7f95a63fee91153cf4f0def3927119aa3e28704b",
       "reviewed_commit": "7f95a63fee91153cf4f0def3927119aa3e28704b",
       "reviewed_date": "2026-10-26",
-      "review_reason": "Moved to watch 2026-10-26 from the kernelstudy prior_art entry (kept there for its bit-parity study; its status is unchanged, no qualified winner). Nothing adopted. Candidates to audit: n-gram drafts capped at checkpoint boundaries (ddca466), GDN decay kept in FP32 (b9a5167), swap-out pressure signal at startup (ca27320). Audited 2026-10-26: b9a5167 (GDN decay kept FP32) needs no change; the stock compute_g keeps the decay FP32 after a bf16 softplus and every Yunshu GDN kernel (prework g_out float32, verify/tree/dflash gdn_decay float, tg_g float) does the same; tests/unit/test_gdn_decay_precision.py pins it."
+      "review_reason": "2026-10-26 review, per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Not applicable: split decode rows (dafa052, no unified launch), n-gram draft cap at checkpoint boundaries (ddca466, decode state is never checkpointed), failed KV release wake-up (3b1bc46, no sleep mode). Open Mac step: swap-out pressure signal (ca27320). GDN decay FP32 (b9a5167) is owned elsewhere. Moved here from the kernelstudy prior_art entry, whose bit-parity status is unchanged. Moved to watch 2026-10-26 from the kernelstudy prior_art entry (kept there for its bit-parity study; its status is unchanged, no qualified winner). Nothing adopted. Candidates to audit: n-gram drafts capped at checkpoint boundaries (ddca466), GDN decay kept in FP32 (b9a5167), swap-out pressure signal at startup (ca27320). Audited 2026-10-26: b9a5167 (GDN decay kept FP32) needs no change; the stock compute_g keeps the decay FP32 after a bf16 softplus and every Yunshu GDN kernel (prework g_out float32, verify/tree/dflash gdn_decay float, tg_g float) does the same; tests/unit/test_gdn_decay_precision.py pins it."
     },
     {
       "repo": "https://github.com/lablup/mlxcel",
@@ -3038,7 +3073,7 @@
       "commit": "01047d75cc2aa3ab48dd9dbc3bff9c2d4692d49a",
       "reviewed_commit": "01047d75cc2aa3ab48dd9dbc3bff9c2d4692d49a",
       "reviewed_date": "2026-10-26",
-      "review_reason": "Promoted from the Responses-API prior_art link 2026-10-26; nothing adopted. Candidates to test against Yunshu: malformed Anthropic tool_choice rejected instead of treated as auto (465299e9), singleton prompt arrays in completions (212f31e4)."
+      "review_reason": "2026-10-26 review, per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Adopted: malformed Anthropic tool_choice answers 400 (465299e9, 7e5ee46). Verified: singleton prompt arrays in completions (212f31e4) are already accepted."
     }
   ],
   "packages": [

@@ -219,6 +219,7 @@ from .engine_text import (
     _template_supports_tools as _template_supports_tools,
 )
 from .generation_suppress import resolve_suppress_tokens
+from .sampling_defaults import effective_temperature
 
 
 def _reload_dropped_weights(model, mp) -> None:
@@ -1400,6 +1401,8 @@ class BatchedEngine(
             getattr(self, "model_name", None),
             getattr(self, "_tokenizer", None),
         )
+        # top_k 1 / min_p 1 keep one token: decode greedily (fused argmax, greedy-only routes).
+        temperature = effective_temperature(temperature, top_k, min_p, xtc_probability)
 
         # Early return: max_tokens <= 0 produces no output
         if max_tokens <= 0:
@@ -1938,6 +1941,8 @@ class BatchedEngine(
             getattr(self, "model_name", None),
             getattr(self, "_tokenizer", None),
         )
+        # top_k 1 / min_p 1 keep one token: decode greedily (fused argmax, greedy-only routes).
+        temperature = effective_temperature(temperature, top_k, min_p, xtc_probability)
 
         # publish per-request top-nσ for _build_temp_sampler (same event-loop task)
         _REQUEST_TOP_N_SIGMA.set(
