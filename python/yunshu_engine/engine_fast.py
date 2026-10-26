@@ -827,6 +827,9 @@ class EngineFastMixin:
             # snapshots only.
             _fp_stats.stats.latency_marks["apc_start"] = time.perf_counter()
             _pc_hit = False
+            _pc_hash: str | None = (
+                None  # the rendered prompt is hashed once per request
+            )
             # The prompt cache borrows the prefix cache's snapshot/trim; without it a hit would
             # share (and later mutate) the stored post-generation KV.
             if (
@@ -1229,10 +1232,11 @@ class EngineFastMixin:
                     from .kv_prefix_cache import cache_length as _cache_len
                     from .prompt_cache import compute_messages_hash
 
-                    _pc_hash = compute_messages_hash(
-                        [{"role": "user", "content": text}],
-                        model=self.model_name,
-                    )
+                    if _pc_hash is None:
+                        _pc_hash = compute_messages_hash(
+                            [{"role": "user", "content": text}],
+                            model=self.model_name,
+                        )
                     _prompt_only_len = int(len(ids))
                     _full_cache_len = int(_cache_len(cache))
                     _trim = max(0, _full_cache_len - _prompt_only_len)
