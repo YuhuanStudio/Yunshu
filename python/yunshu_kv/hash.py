@@ -8,16 +8,11 @@ import struct
 
 import numpy as np
 
-try:
-    import xxhash
+import xxhash
 
-    def _hash_bytes(data: bytes) -> int:
-        return int(xxhash.xxh64(data).intdigest())
-except ImportError:
-    import hashlib
 
-    def _hash_bytes(data: bytes) -> int:
-        return int.from_bytes(hashlib.blake2b(data, digest_size=8).digest(), "little")
+def _hash_bytes(data: bytes) -> int:
+    return int(xxhash.xxh64(data).intdigest())
 
 
 def compute_block_hash(

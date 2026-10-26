@@ -4488,6 +4488,7 @@ dependencies = [
     { name = "typer" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "websockets" },
+    { name = "xxhash" },
 ]
 
 [package.optional-dependencies]
@@ -4599,6 +4600,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.15.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },
     { name = "websockets", specifier = ">=15.0.0" },
+    { name = "xxhash", specifier = ">=3.4.0" },
     { name = "yunshu", extras = ["audio"], marker = "extra == 'all'" },
     { name = "yunshu", extras = ["compression"], marker = "extra == 'all'" },
     { name = "yunshu", extras = ["embeddings"], marker = "extra == 'all'" },

@@ -93,3 +93,32 @@ class TestComputePromptHashes:
         for _ in range(5):
             hashes = compute_prompt_hashes(tokens, 64)
             assert len(hashes) == 4
+
+
+class TestSingleHash:
+    """xxhash is a required dependency: one hash, stable keys, no blake2b fallback."""
+
+    def test_golden_values_match_the_xxhash_path(self):
+        # Computed with the xxhash path before the fallback was removed; stored keys must not move.
+        assert compute_block_hash(None, [1, 2, 3]) == 1037755338023997388
+        assert compute_block_hash(12345, [1, 2, 3, 4], ("m", 7)) == 12205961868487666922
+        assert compute_block_hash(None, []) == 3803688792395291579
+
+    def test_missing_xxhash_is_an_import_error_not_a_different_hash(self):
+        import importlib
+        import sys
+
+        saved = {k: v for k, v in sys.modules.items() if k in ("xxhash", "yunshu_kv.hash")}
+        try:
+            sys.modules["xxhash"] = None  # makes ``import xxhash`` raise ImportError
+            sys.modules.pop("yunshu_kv.hash", None)
+            try:
+                importlib.import_module("yunshu_kv.hash")
+            except ImportError:
+                pass
+            else:
+                raise AssertionError("yunshu_kv.hash imported without xxhash (silent fallback)")
+        finally:
+            sys.modules.pop("xxhash", None)
+            sys.modules.pop("yunshu_kv.hash", None)
+            sys.modules.update(saved)

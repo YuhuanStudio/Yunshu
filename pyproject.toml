@@ -95,6 +95,7 @@ dependencies = [
     "websockets>=15.0.0",
     # ── Observability ──
     "prometheus-client>=0.22.0",
+    "xxhash>=3.4.0",  # KV block chain hash; the only hash (stable keys)
     # ── Numerical ──
     "numpy>=1.24.0",
     "scipy>=1.15.0",
