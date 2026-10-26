@@ -6,17 +6,29 @@ can reach it: DNS rebinding makes ``http://attacker.example:8000`` resolve to 12
 preflight and still runs the route. Two checks close both:
 
 - **Host**: when the server is bound to a loopback address, a request whose ``Host`` is not
-  a loopback name or IP (``localhost``, ``127.0.0.1``, ``[::1]``, any port) gets 403.
-  ``YUNSHU_ALLOWED_HOSTS`` adds names (and turns the check on for any bind address).
+  a loopback name or IP gets 403. Accepted: ``localhost`` (also ``localhost.`` and
+  ``*.localhost``), any 127.0.0.0/8 form (``127.0.0.1``, ``127.1``, ``0x7f.1``), ``[::1]`` and
+  its mapped form, and the unspecified address (``0.0.0.0``, ``[::]``: connecting to it reaches
+  this machine, and a rebinding page cannot make a browser send it for an attacker name), any
+  port. ``host.docker.internal`` is NOT accepted: a container reaches the host's loopback
+  server through it only if the server listens beyond loopback, and then this check is off.
+  A reverse proxy, ``tailscale serve`` or ``ssh -L`` that forwards a public ``Host`` to a
+  loopback server needs that name in ``YUNSHU_ALLOWED_HOSTS`` (which also turns the check on for
+  any bind address).
 - **Origin**: a state-changing request carrying an ``Origin`` that is not loopback, not the
-  request's own origin, and not in ``YUNSHU_CORS_ORIGINS`` gets 403. Requests that carry
-  credentials (``Authorization`` / ``x-api-key``) are exempt: a cross-site page cannot add
-  those headers without a preflight, which the CORS layer already decides.
+  request's own origin, and not in ``YUNSHU_CORS_ORIGINS`` gets 403. An entry of that setting
+  matches exactly, or as ``scheme://*`` for every origin of a scheme (``vscode-webview://*``,
+  ``app://*`` for Electron renderers). ``Origin: null`` (sandboxed iframe, ``file://``) is always
+  refused. Requests that carry credentials (``Authorization`` / ``x-api-key``) are exempt: a
+  cross-site page cannot add those headers without a preflight, which the CORS layer already
+  decides.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import re
+import socket
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -35,15 +47,42 @@ def _split_host(value: str) -> str:
     return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
 
 
+_LEGACY_IPV4 = re.compile(r"^(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+)){0,3}$")
+
+
+def _ip_of(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """An IP literal, including the short IPv4 forms browsers and ``inet_aton`` accept (``127.1``)."""
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    if _LEGACY_IPV4.match(host):
+        try:
+            return ipaddress.IPv4Address(socket.inet_aton(host))
+        except (OSError, ValueError):
+            return None
+    return None
+
+
 def is_loopback_host(value: str) -> bool:
-    """``localhost`` (and ``*.localhost``) or a loopback IP literal."""
-    host = _split_host(value)
+    """``localhost`` (also ``localhost.`` and ``*.localhost``) or a loopback IP literal."""
+    host = _split_host(value).rstrip(".")
     if host == "localhost" or host.endswith(".localhost"):
         return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
+    ip = _ip_of(host)
+    if ip is None:
         return False
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback
+
+
+def is_local_host(value: str) -> bool:
+    """A loopback host, or the unspecified address (``0.0.0.0``, ``[::]``) that reaches this machine."""
+    if is_loopback_host(value):
+        return True
+    ip = _ip_of(_split_host(value).rstrip("."))
+    return ip is not None and ip.is_unspecified
 
 
 def _server_is_loopback_socket(scope: dict) -> bool:
@@ -58,7 +97,7 @@ def _server_is_loopback_socket(scope: dict) -> bool:
 
 def _allowed_hosts() -> frozenset[str]:
     return frozenset(
-        _split_host(h)
+        _split_host(h).rstrip(".")
         for h in (settings.get("YUNSHU_ALLOWED_HOSTS") or ())
         if h.strip()
     )
@@ -76,18 +115,24 @@ def host_ok(host_header: str | None, scope: dict) -> bool:
             return True
     if not host_header:
         return True  # HTTP/1.0 without Host: not a browser
-    return is_loopback_host(host_header) or _split_host(host_header) in extra
+    return is_local_host(host_header) or _split_host(host_header).rstrip(".") in extra
 
 
 def origin_ok(origin: str, host_header: str | None) -> bool:
     """Whether a cross-origin-capable request from ``origin`` may change state."""
     from .live_cors import current_origins
 
+    if origin.strip().lower() == "null":  # sandboxed iframe, file://: never a known origin
+        return False
     allowed = current_origins()
     if "*" in allowed or origin in allowed:
         return True
-    netloc = urlsplit(origin).netloc
-    if not netloc:  # "null" (sandboxed iframe, file://) and garbage
+    parts = urlsplit(origin)
+    # custom schemes (Electron app://, vscode-webview://<random id>) listed as "scheme://*"
+    if parts.scheme and f"{parts.scheme.lower()}://*" in (o.lower() for o in allowed):
+        return True
+    netloc = parts.netloc
+    if not netloc:  # garbage
         return False
     if is_loopback_host(netloc):
         return True
@@ -107,7 +152,12 @@ class HostGuardMiddleware:
         host = headers.get(b"host", b"").decode("latin-1") or None
         reason = None
         if not host_ok(host, scope):
-            reason = "Invalid Host header"
+            shown = (host or "")[:100]
+            reason = (
+                f"Invalid Host header {shown!r}: this server answers loopback names only; "
+                "add the name to YUNSHU_ALLOWED_HOSTS to serve it (reverse proxy, "
+                "tailscale serve, ssh -L)"
+            )
         elif kind == "http" and scope["method"] not in _SAFE_METHODS:
             origin = headers.get(b"origin", b"").decode("latin-1")
             if (
