@@ -41,7 +41,10 @@ export function withTimeout(signal: AbortSignal, ms: number): AbortSignal {
     return controller.signal;
   }
   const timer = setTimeout(
-    () => controller.abort(new DOMException("The operation timed out.", "TimeoutError")),
+    () =>
+      controller.abort(
+        new DOMException("The operation timed out.", "TimeoutError"),
+      ),
     ms,
   );
   signal.addEventListener(

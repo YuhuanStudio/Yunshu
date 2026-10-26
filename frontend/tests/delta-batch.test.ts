@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createDeltaBatcher, createFrameScheduler } from "../src/delta-batch.ts";
+import {
+  createDeltaBatcher,
+  createFrameScheduler,
+} from "../src/delta-batch.ts";
 
 test("many deltas within a frame are applied once, merged in order", () => {
   const frames: (() => void)[] = [];

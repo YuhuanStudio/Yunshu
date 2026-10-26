@@ -42,6 +42,9 @@ const CLIENT_CAP = 4000;
 /** Rows in the DOM: the newest ones. "Show earlier" reveals more; copy and download still take every record. */
 const WINDOW_ROWS = 300;
 const RING_LIMIT = 2000;
+/** Earlier engine processes whose lines stay readable after a restart (newest blocks win). */
+const MAX_PREVIOUS = 3;
+type PreviousBlock = { endedAt: number; records: LogRecord[] };
 const LEVELS = ["all", "INFO", "WARNING", "ERROR"] as const;
 type LevelChoice = (typeof LEVELS)[number];
 
@@ -139,6 +142,8 @@ export default function Logs({ connection }: { connection: Connection }) {
     [dropped, setDropped] = useState(0),
     [unseen, setUnseen] = useState(0),
     [shown, setShown] = useState(WINDOW_ROWS),
+    [previous, setPrevious] = useState<PreviousBlock[]>([]),
+    [showPrevious, setShowPrevious] = useState(false),
     [note, setNote] = useState<string | null>(null);
   const cursor = useRef(0),
     scroller = useRef<HTMLDivElement | null>(null),
@@ -162,15 +167,26 @@ export default function Logs({ connection }: { connection: Connection }) {
     const seen = new Set(prev.slice(-incoming.length - 50).map((r) => r.id));
     const fresh = incoming.filter((r) => !seen.has(r.id));
     if (!fresh.length) return;
-    if (!followRef.current) setUnseen((n) => n + fresh.length);
+    if (!followRef.current) {
+      setUnseen((n) => n + fresh.length);
+      // The window is the newest `shown` rows: grow it by what was appended, so the row a reader
+      // scrolled up to stays where it is (Safari has no scroll anchoring to do it for us).
+      setShown((n) => n + fresh.length);
+    }
     const next = prev.concat(fresh);
     recordsRef.current =
       next.length > CLIENT_CAP ? next.slice(-CLIENT_CAP) : next;
     setRecords(recordsRef.current);
   }, []);
 
-  // The engine restarted: its ids began again, so the old rows (and their ids) no longer belong to the tail.
+  // The engine restarted: its ids began again, so the old rows (and their ids) no longer belong to the
+  // tail. They are kept as their own block (the crash trace is not in the new process's ring).
   const restarted = useCallback(() => {
+    const old = recordsRef.current;
+    if (old.length)
+      setPrevious((blocks) =>
+        [...blocks, { endedAt: Date.now(), records: old }].slice(-MAX_PREVIOUS),
+      );
     cursor.current = 0;
     recordsRef.current = [];
     setRecords([]);
@@ -194,6 +210,7 @@ export default function Logs({ connection }: { connection: Connection }) {
     const controller = new AbortController();
     setLoad("loading");
     setUnseen(0);
+    setPrevious([]);
     fetchLogs(
       connection,
       {
@@ -503,6 +520,77 @@ export default function Logs({ connection }: { connection: Connection }) {
         </div>
       </div>
       <Card className="relative overflow-hidden p-0">
+        {load === "ready" && previous.length > 0 && (
+          <div
+            className="border-b border-border bg-muted/20"
+            data-testid="logs-previous"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-xs text-muted-foreground">
+              <span>
+                {t("logs.previous.title", {
+                  count: number(
+                    previous.reduce((n, b) => n + b.records.length, 0),
+                    0,
+                  ),
+                })}
+              </span>
+              <Button
+                size="sm"
+                variant="secondary"
+                aria-expanded={showPrevious}
+                onClick={() => setShowPrevious((v) => !v)}
+              >
+                {showPrevious
+                  ? t("logs.previous.hide")
+                  : t("logs.previous.show")}
+              </Button>
+            </div>
+            {showPrevious && (
+              <div
+                tabIndex={0}
+                aria-label={t("logs.previous.aria")}
+                data-testid="logs-previous-list"
+                className="max-h-72 overflow-y-auto py-1 opacity-75"
+              >
+                {previous.map((block, i) => (
+                  <div key={`${block.endedAt}-${i}`}>
+                    <div className="flex items-center justify-between gap-2 px-4 py-1 text-xs text-muted-foreground">
+                      <span>
+                        {t("logs.previous.ended", {
+                          at: dateTime(block.endedAt),
+                          count: number(block.records.length, 0),
+                        })}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() =>
+                          copy(
+                            block.records.map(formatLine).join("\n"),
+                            t("logs.copiedAll", {
+                              count: block.records.length,
+                            }),
+                          )
+                        }
+                      >
+                        <Copy size={13} />
+                        {t("logs.previous.copy")}
+                      </Button>
+                    </div>
+                    {block.records.slice(-WINDOW_ROWS).map((r) => (
+                      <LogRow
+                        key={`p${i}-${r.id}`}
+                        r={r}
+                        isFresh={false}
+                        onCopy={copy}
+                      />
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {load === "ready" && records.length > 0 ? (
           <div
             ref={scroller}
