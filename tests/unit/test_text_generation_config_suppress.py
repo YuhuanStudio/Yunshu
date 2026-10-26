@@ -58,6 +58,26 @@ async def test_request_suppress_tokens_win_over_the_model_default(tmp_path):
     assert await _gen(eng, suppress_tokens=[63]) == base
 
 
+async def test_ngram_route_is_skipped_when_the_request_needs_the_plain_path():
+    """The n-gram route does not honor suppress_tokens / min_tokens / ignore_eos, so a request
+    (or a model default) that sets one is served by the plain fast path."""
+    eng = make_engine()
+    eng._ngram_proposer = object()
+    called = []
+
+    async def fake_ngram(**kw):
+        called.append(kw)
+        raise AssertionError("ngram route taken")
+
+    eng._generate_ngram_spec = fake_ngram
+    for extra in ({"suppress_tokens": [63]}, {"min_tokens": 2}, {"ignore_eos": True}):
+        out = await eng.generate(
+            prompt=PROMPT, max_tokens=4, temperature=0.0, spec_decode=True, **extra
+        )
+        assert out.error is None and out.text
+    assert not called
+
+
 def test_default_ids_drop_out_of_vocab_and_bad_entries(tmp_path):
     (tmp_path / "generation_config.json").write_text(
         json.dumps({"suppress_tokens": [9, 5, True, "x", -3, 9, 100]})

@@ -1277,8 +1277,11 @@ class BatchedEngine(
         use_engine_loop: bool,
         gemma4_eligible=None,
         external_eligible: bool = True,
+        plain_only: bool = False,
     ) -> str | None:
-        if use_engine_loop or logprobs:
+        # plain_only: the request sets min_tokens / ignore_eos / suppress_tokens, which
+        # only the plain fast path (and the loop) honor; a spec route would drop them.
+        if use_engine_loop or logprobs or plain_only:
             return None
         greedy = temperature is None or temperature <= 0.0
         if (
@@ -1425,6 +1428,7 @@ class BatchedEngine(
             temperature=temperature,
             logprobs=bool(logprobs),
             use_engine_loop=_use_engine_loop,
+            plain_only=bool(min_tokens or ignore_eos or suppress_tokens),
             # The external adapter does not implement the full fast-path
             # parameter contract. Never drop a client's requested behavior.
             external_eligible=(
