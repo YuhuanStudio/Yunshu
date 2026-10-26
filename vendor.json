@@ -2579,6 +2579,51 @@
       "why": "M1-M4 query-chunking of head-dim-256 SDPA (text-only fast path)",
       "source_sha256": "9b23a7140848b1724f0298191ca64f9d0ae3e313e22df1c48a313779c5c80507",
       "installed_version": "0.32.2"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/audio_patches.py",
+      "repo": "https://github.com/Blaizzy/mlx-audio",
+      "clone": "reference/mlx-audio",
+      "package": "mlx-audio",
+      "module": "mlx_audio.stt.models.qwen3_asr.qwen3_asr",
+      "symbol": "Qwen3ASRModel._generate_one",
+      "signature": "(self, audio: Union[str, mx.array, np.ndarray], *, max_tokens: int=8192, batch_size: int=1, temperature: float=0.0, top_p: float=1.0, top_k: int=0, min_p: float=0.0, min_tokens_to_keep: int=1, repetition_penalty: Optional[float]=None, repetition_context_size: int=100, language: Optional[str]=None, prefill_step_size: int=2048, chunk_duration: float=1200.0, min_chunk_duration: float=1.0, verbose: bool=False, stream: bool=False, system_prompt: str | None=None, hotwords: Optional[List[str]]=None, **kwargs)",
+      "license": "MIT",
+      "commit": "v0.5.9",
+      "why": "dbcc13c: per-chunk language auto-detection (exact source rewrite; f37c9a9 batched token history not reached: no batch_size route)",
+      "source_sha256": "e45be5f64de2efeccaa1bb2e34eb1f489ffd7cf71d8f2db2645023471e4659da",
+      "installed_version": "0.5.9"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/audio_patches.py",
+      "repo": "https://github.com/Blaizzy/mlx-audio",
+      "clone": "reference/mlx-audio",
+      "package": "mlx-audio",
+      "module": "mlx_audio.stt.models.whisper.whisper",
+      "symbol": "HFTokenizerWrapper.no_speech",
+      "signature": "(self)",
+      "license": "MIT",
+      "commit": "v0.5.9",
+      "why": "2cd66c6: <|nocaptions|> for pre-large-v3 vocabularies; unk (== eot) must not enter the suppress list",
+      "source_sha256": "c6ae300eecbb8d81646ac17cc55003fab1a96ab0629c66e2aaeeea85a9f92374",
+      "installed_version": "0.5.9"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/audio_patches.py",
+      "repo": "https://github.com/Blaizzy/mlx-audio",
+      "clone": "reference/mlx-audio",
+      "package": "mlx-audio",
+      "module": "mlx_audio.tts.models.kokoro.pipeline",
+      "symbol": "KokoroPipeline.load_single_voice",
+      "signature": "(self, voice: str)",
+      "license": "MIT",
+      "commit": "v0.5.9",
+      "why": "ebcdbfc: voices from the loaded model snapshot (post_load_hook sets _voice_model_path)",
+      "source_sha256": "2a34f61717173f3eb7e78a85961b63fd28268e81e8251e586df26078c4f49b74",
+      "installed_version": "0.5.9"
     }
   ],
   "watch": [
