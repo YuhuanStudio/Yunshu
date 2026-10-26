@@ -1482,14 +1482,15 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
         # replay (and then exfiltrate) its private input/output. Mirrors the
         # GET /responses/{id} ownership guard. A foreign id reads as unknown.
         if not _prev or not _owns_stored(request, _prev):
-            if len(_seen) == 1:
-                raise ContextError(
-                    404,
-                    f"Previous response with id '{req.previous_response_id}' not found.",
-                    "previous_response_not_found",
-                    "previous_response_id",
-                )
-            break
+            # Any missing hop (evicted from the LRU, deleted mid-chain, foreign) is an
+            # error: walking on with the newest turns only would answer from a silently
+            # truncated history (the task statement is usually in the oldest turn).
+            raise ContextError(
+                404,
+                f"Previous response with id '{_prev_id}' not found.",
+                "previous_response_not_found",
+                "previous_response_id",
+            )
         # Build this hop's turn as a UNIT in natural
         # order (user input(s) then the assistant reply) and prepend the whole unit.
         # The old code prepended user input but APPENDED assistant output, so a
@@ -1502,7 +1503,14 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
         if _stored_input:
             _turn.extend(_stored_input)
         _rs_pending: list[str] = []
-        for out in _prev.get("output") or []:
+        # a failed / cancelled response has no finished assistant turn to replay (its
+        # input still happened); incomplete (max_output_tokens) output is real history
+        _outputs = (
+            []
+            if _prev.get("status") in ("failed", "cancelled")
+            else _prev.get("output") or []
+        )
+        for out in _outputs:
             if out.get("type") == "reasoning":
                 _rt = reasoning_text_of(out)
                 if _rt:
