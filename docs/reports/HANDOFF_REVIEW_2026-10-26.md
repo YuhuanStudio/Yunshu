@@ -64,7 +64,9 @@ Shared helpers written for the unified path to reuse: `text_logit_processors.py`
 | APC / KV | SSD token tuples pruned with their files; failed WARM promotion keeps the entry; whole-prompt divergence memo; best-fit bounded restore buffers; probe before restore; transient SSD load errors keep the file; manager hit stats count accepted restores only; MTP lane clears the buffer cache on every 256-token boundary (multi-token rounds skipped the old check) |
 | Realtime / audio | contiguous VAD silence window; idle silence trimmed; partial assistant item kept on cancel/barge-in; store:false failed turn keeps the last good response; ASR off the receive loop (ordered lane); Silero on the MLX thread; `ws_max_size` follows `YUNSHU_MAX_REQUEST_SIZE`; numpy resample / G.711 (byte-identical); single `response.audio.done`; `input_audio_buffer.cleared`; item ids on VAD events; GA transcription session type; `input_audio_transcription` honoured; explicit TTS `max_tokens`; empty audio → empty transcription |
 | Console | Logs tail resets after an engine restart, memoised newest-300 rows; one shared recent-requests / memory poller; fetch timeouts and queued kicks; history refresh after restart; range change clears old points; Escape guard; queued manual refresh; Playground deltas once per frame and Stop cancels on the engine; curl snippet from the connection; token remembered only when applied; CSP `img-src 'self' data: blob:` (no remote images from model output); unused LiveScroll removed |
-| Cleanup | `YUNSHU_ROUND_DRIVER` + `round_driver/` and `YUNSHU_MTP_ROW_EXACT` deleted (measured losers, per the flag rule); orphan modules deleted (voice_pipeline, mtp_decoder, mtp_patch, n_confirmed_patch, spec_interface, spec_proposer, bfcl_eval, gateway/engine/engine, gpu_ngram); 12 unused dependencies removed; mlx-lm ≥ 0.32.2; dead KV event bus removed; retired-document citations removed; `YUNSHU_API_KEY` registered; README zh-TW/zh-CN passage restored; CHANGELOG links, justfile app path, layout lists fixed; doctor minimums follow pyproject; behaviour tests for previously untested modules |
+| Cleanup | `YUNSHU_ROUND_DRIVER` + `round_driver/` and `YUNSHU_MTP_ROW_EXACT` deleted (measured losers, per the flag rule); orphan modules deleted (voice_pipeline, mtp_decoder, mtp_patch, n_confirmed_patch, spec_interface, spec_proposer, bfcl_eval, gateway/engine/engine, gpu_ngram); 10 unused dependencies removed (and the duplicate `dev` extra); mlx-lm ≥ 0.32.2; dead KV event bus removed; retired-document citations removed; `YUNSHU_API_KEY` registered; README zh-TW/zh-CN passage restored; CHANGELOG links, justfile app path, layout lists fixed; doctor minimums follow pyproject; behaviour tests for previously untested modules |
+| Upstream adoptions | every peer/upstream item from the review handled row by row in [`UPSTREAM_ADOPTION_2026-10-26.md`](UPSTREAM_ADOPTION_2026-10-26.md) (adopted with commit, not applicable with reason, or Mac step): late system notes in place and cache-store opt-out (omlx), seam checkpoint flag (TensorFold / Rapid-MLX), DFlash window capture only for stored checkpoints, prefix-cache snapshot integrity (ollama), forced think close and grammar after reasoning (omlx, mlx2, vllm, ollama), cleanup steps never strand the terminal (mlx2), row_exact K=64/128 and 2 GiB guards (mlx2), chunked head_dim-256 SDPA flag (omlx), GDN eps and `_release()` readiness (mlx-vlm), mlx-audio fixes, Gemma 4 images (mlx-vlm), greedy top_k 1 (splash), budget marker in system text (omlx) |
+| Review of the branch | four independent reviews of this branch's own diff and a completeness audit found regressions that are fixed here: Realtime auto-commit lost every utterance after the idle trim (snapshot at commit time), per-row dead-end isolation was not engaged for real guides, per-boundary sync in hybrid cold prefill, the auto-quant gate disabled prefix caching for dense models, `n_prompt` offset (min_tokens never engaged), overly wide special-token neutralisation, failed-auth backoff blocking correct tokens, host-guard false positives, 22 overwritten parser tests restored, two benches restored, round driver archived in `docs/archive/round_driver/` |
 | Upstream | `vendor.json` review recorded for 2026-10-26 (KEEP for omlx `qwen35_verify_sdpa_split`, quiet watches advanced, `ollama`, `mlx-swift-lm`, `vllm-metal`, `mlxcel` added to `watch`); GPU sampler A/B script `scripts/research/ab_gpu_sampler.py` |
 
 ## Behaviour changes clients and operators will see
@@ -80,7 +82,7 @@ Shared helpers written for the unified path to reuse: `text_logit_processors.py`
   are allowed by listing them in `YUNSHU_CORS_ORIGINS` (`scheme://*` matches every origin of a scheme). Clients that send
   `Authorization` / `x-api-key` are unaffected.
 * Managed API keys are their own actors: an infer-scope key no longer reads/cancels objects of other keys or of the
-  static token; with a static token set, an infer-only key gets 401 on `/metrics`. `/metrics` answers 401/403 JSON
+  static token. `/metrics` answers 401/403 JSON
   envelopes (it was a 500), and with managed keys but no static token it needs an `admin`-scope key (it is open only
   when no auth is configured at all).
 * Failed-auth backoff: 20 WRONG credentials per minute from one non-loopback client → further wrong credentials get 429
@@ -116,8 +118,11 @@ Shared helpers written for the unified path to reuse: `text_logit_processors.py`
   off the n-gram / Gemma-4 speculative routes; they ban the ids themselves. `min_tokens` / `ignore_eos` still do.
 * Text fast/stream paths count `min_tokens` and frequency/presence penalties from the length of the ids given to
   `generate_step` (mlx-lm 0.32.2 hands its processors the whole prefilled suffix).
-* A constrained request (json_schema / regex / choice / grammar) is never split into reasoning by an open `<think>`
-  in the prompt (non-stream close and stream pre-seed).
+* Structured output and reasoning: when the prompt opens `<think>` (thinking on), the grammar stays dormant until the
+  reasoning closes and then binds from the first answer token, on every path (EOS and the implicit `<tool_call>` end are
+  masked inside the reasoning); a request whose reasoning never closes returns empty content, finish `length`, and
+  reports `enforced=false, reason=reasoning_not_closed`. When the grammar binds from the first token (thinking off),
+  the output is never relabelled reasoning. The forced thinking-budget close is the template's own `\n</think>\n\n`.
 * Removed settings: `YUNSHU_ROUND_DRIVER`, `YUNSHU_ROUND_PREFILL_CHUNK`, `YUNSHU_MTP_ROW_EXACT`. `YUNSHU_GPU_SAMPLER` is now
   marked experimental (`decide=` points at the A/B script).
 * Console: remote images in model output are blocked by CSP; Logs shows the newest 300 rows with "show earlier" and,
@@ -126,6 +131,30 @@ Shared helpers written for the unified path to reuse: `text_logit_processors.py`
   engine process" block above the list (the crash trace is not in the new ring); changing a filter clears it.
 * Console: Escape in the Requests inspector yields to a focused text field (it no longer closes the inspector while
   you are typing).
+* A system/developer note sent right after a tool result (Claude Code hook/reminder notes) stays in place as a
+  `[System note] … [/System note]` **user** turn instead of being hoisted into the leading system block (omlx
+  5a0a15a7), so earlier turns keep a stable prefix; Claude Code's `<total_tokens>` budget marker is dropped from system
+  text as well as from lone messages (omlx 38f420d9). See decision 5.
+* `X-Yunshu-Cache-Store: off` (request header): the request reuses cached prefixes but stores nothing (omlx c4bb311e).
+* `GET /v1/yunshu/config` needs the admin scope once a static token or managed keys exist (open with no auth), and
+  masks `user:pass@` in URL values. Settings that run host code or reach arbitrary host paths (`host_access`: path
+  settings, `YUNSHU_MCP_SERVERS`, `YUNSHU_TRUST_REMOTE_CODE`, `YUNSHU_CODE_EXECUTION`, `YUNSHU_ALLOW_LOCAL_FILES`) are
+  read-only over `PATCH` for managed keys unless `YUNSHU_ADMIN_WRITE_EXEC_SETTINGS` is set on the host; the owner
+  (static token or no auth) can still write them. `yunshu serve --auth-token auto` generates and prints a token;
+  startup warns on a token shorter than 16 characters and on a non-loopback bind with no auth.
+* Structured output `strict`: `true` closes every object (`additionalProperties: false` at any depth) on Chat and
+  Responses alike; `false` / omitted leaves the schema as sent (Responses used to default it to true).
+* Anthropic `thinking: {type: "enabled"}` on a model with native reasoning (model card) no longer injects a `<think>`
+  instruction and regex grammar; models without native reasoning keep them.
+* Responses accepts `max_tokens` as an alias of `max_output_tokens` (a conflicting pair is a 400).
+* `top_k: 1` or `min_p: 1` requests decode greedily on every path (splash 8d5e05b); XTC keeps a request sampled.
+* A stop string that completes in the final detokenizer flush is reported as a stop (Anthropic `stop_sequence`).
+* WebRTC Realtime under backpressure drops incoming audio frames (counted) instead of hanging up.
+* New experimental flags (default off, each with `decide=` and an A/B script): `YUNSHU_APC_SEAM_CHECKPOINT`
+  (checkpoint at the document/question seam, TensorFold #1262 / Rapid-MLX 421bf658) and `YUNSHU_SDPA_CHUNK`
+  (query-chunked head_dim-256 prefill attention on M1-M4, omlx sdpa256). Four experimental flags exist (limit 8).
+* mlx-audio fixes carried as local patches until the bump (Whisper `no_speech` on older vocabularies, Kokoro voices
+  from the loaded snapshot, Qwen3-ASR per-chunk language); Gemma 4 / EmbeddingGemma 2 PIL images keep channels-last.
 
 ## Verify on the Mac
 
@@ -148,8 +177,17 @@ Nothing here ran on Metal or with a real checkpoint. Before merging, run on the 
    304.2 KB; revert if you prefer trimming), the full Playwright suite and WebKit.
 7. mlx 0.32.4 (gates mlx-vlm ≥ 0.7.9 and mlx-audio 0.6): run the row-invariance microtest (`mx.quantized_matmul` over
    M ∈ {1, 2, 7, 16, 64, 65, 512}, 0.32.3 vs 0.32.4) to find the FP32 SSD APC token-identity break; bump with mlx-vlm
-   0.7.10 only together with the GDN `_normalize_qk` eps port (`gdn_prefill.py` and `qwen35_gdn_prework.py`) and the
-   `ScaledQuantizedLinear` gate.
+   0.7.10. The eps (`kernels/gdn_qk_eps.py` measures the installed `_normalize_qk`), the `ScaledQuantizedLinear` verify
+   rows and the post-`_release()` restore-buffer offer are already prepared; after the bump check fused GDN norm ==
+   stock bitwise, cold == warm, spec on == off, and that restore-buffer reuse still engages.
+8. Kernel guards adopted from peers: `row_exact_qmv` declines K = 64 / 128 (4- and 8-bit, group 32/64/128) and the
+   per-row fallback matches; an untiled weight near the 2 GiB slice offset is declined to stock on M5 / macOS 26.6.
+9. Experimental A/Bs: `scripts/research/ab_seam_checkpoint.py` (`YUNSHU_APC_SEAM_CHECKPOINT`) on 27B, and on an M1-M4
+   Mac a bitwise A/B of `YUNSHU_SDPA_CHUNK` against stock head_dim-256 SDPA plus prefill peak memory.
+10. mlx-audio patches with real checkpoints: Qwen3-ASR on > 20 min two-language audio, whisper-small with the patched
+   `no_speech`, Kokoro loading a local voice offline.
+11. Remaining peer rows that need a Mac are listed with their step in
+   [`UPSTREAM_ADOPTION_2026-10-26.md`](UPSTREAM_ADOPTION_2026-10-26.md).
 
 ## Decisions needed
 
@@ -162,11 +200,22 @@ Nothing here ran on Metal or with a real checkpoint. Before merging, run on the 
    when penalties are set.
 4. top_logprobs tie order: text = descending value then ascending id; VLM = descending value then descending id (both
    preserved by this branch). Pick one for the unified path.
-5. Mid-conversation system/developer messages are hoisted into the leading system block
+5. Late system notes (after a tool result) now render as a `[System note]` user turn to keep the prefix stable
+   (adopted from omlx 5a0a15a7). Confirm the role change is acceptable, or pick another placement. The original issue:
+   mid-conversation system/developer messages were hoisted into the leading system block
    (`message_adapter._hoist_system`), so a system note after a tool result changes the prefix and re-prefills
    everything after it on every turn (omlx `5a0a15a7` found the same). Options: keep the note in place where the
    template allows it, or append it to the trailing turn.
 6. Files API and conversations have no owner concept yet (per-key isolation covers responses, containers and cancels).
+7. Chat `max_tokens: 0`: this branch keeps the documented prompt-count probe (it answers usage with no output); OpenAI
+   rejects values below 1. A commit aligning it to OpenAI was reverted (`91ed94d`); decide whether to drop the probe.
+8. `xxhash` is an optional import in `yunshu_kv/hash.py` with a blake2b fallback that produces different hash values:
+   declare it as a dependency (stable keys everywhere) or drop the optional path.
+9. Deliberate non-ports, kept as they are: a plain disconnect after Stop keeps the 120 s orphan window (only an explicit
+   cancel stops it; the console's Stop now sends one); the VLM path renders/tokenizes on the MLX thread (moving it would
+   change admission order); the VLM path sets no wired limit (needs a Mac A/B, and `idle_memory.py` already manages it).
+10. Auto length-gated 8-bit KV on the text path now starts at the threshold offset instead of token 0 (less lossy, but
+   long requests' outputs change versus before); confirm.
 
 ## Not done, and known limits
 
@@ -179,7 +228,14 @@ Nothing here ran on Metal or with a real checkpoint. Before merging, run on the 
 * Realtime ordered lane: a second utterance finished before the previous commit's ASR completes can lose its start; a
   `response.cancel` while `response.create` waits behind an ASR gets "no active response".
 * Logs restart detection misses a restart if the new process logged more records than the old cursor before the probe.
-* `kernels/verify_select.py` is used only by research scripts and one test; script candidates for deletion are listed in
+* The streaming n-gram fallbacks (non-trimmable cache) do not forward `suppress_tokens`, `lora_adapter` or
+  `timeout_seconds`; `_spec_route` never sends streaming requests there, so they are unreachable today.
+* Logs window growth while scrolled up does not compensate when the 4000-row client cap trims from the front.
+* Script candidates for deletion (unreferenced but runnable): `scripts/bench/{_bench_concurrency,_bench_concurrency_omlx,
+  bench_comparison,bench_kv_prefix,bench_memory_raw,bench_memory_v2,bench_mmlu_compare,bench_perf_compare,
+  bench_throughput,bench_ttft_probe,bench_unified,fair_bench,profile_engine_loop}.py` and `scripts/realmodel/{smoke_*,
+  test_all_models,test_inversion,test_ocr_real,test_vlm_engine,verify_ane_embeddings}.py`.
+* `kernels/verify_select.py` is used only by research scripts and one test; earlier script candidates were listed in
   the cleanup lane's commit messages (`scripts/bench`, `scripts/realmodel` unreferenced but runnable).
 
 ## Test evidence
@@ -191,13 +247,17 @@ Nothing here ran on Metal or with a real checkpoint. Before merging, run on the 
 | tree | failed | passed | skipped |
 |---|---|---|---|
 | `main` `47a87ab` | 135 | 12372 | 346 |
-| this branch (final) | 134 | 12611 | 325 |
+| this branch (after the parity lanes) | 134 | 12611 | 325 |
+| this branch (final, after the adoption and review-fix rounds) | 134 | 12994 | 326 |
 
 * No test fails on the branch that passes on `main`. The 134 failures are the environment set on both trees (Metal-only
   kernels, real checkpoints, gpuq, zsh, srt, tfbench, timing tests under load).
 * One `main` failure is fixed (`test_doctor_checks::test_version_guard_ok_and_missing_packages_are_not_version_failures`,
   doctor minimums now follow pyproject).
-* About 240 more tests pass: new regression and equivalence tests for every fix, minus the tests of deleted modules.
+* About 620 more tests pass than on `main`: new regression and equivalence tests for every fix, minus the tests of the
+  deleted modules (the 22 tool-family parser tests that one cleanup commit overwrote were restored in `1d5df01`).
+  The final run's only extra failures were `test_api_parity` (fixed in the next commit) and a CPU-timing test that
+  passes alone (`test_priority_queue::test_sort_baseline_comparison`).
 * `tests/unit/test_path_parity.py` is green with the new feature rows; `ruff check` / `ruff format` are clean.
 * Not covered here: Metal, real models, the console bundle-size build and the full Playwright/WebKit suite (see
   [Verify on the Mac](#verify-on-the-mac)).

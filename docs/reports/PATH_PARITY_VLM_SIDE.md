@@ -1,10 +1,14 @@
 # Path parity, VLM side (text-path fixes ported to mtp / dflash / batch / generic)
 
+> Line numbers in this report refer to the tree when it was written (2026-10-26, before the later review-fix and
+> adoption merges) and drift; search by symbol. The "Update after integration" section at the end is the final state.
+
+
 The text fast path got a round of fixes (commits below). This records, for each one, what the
 VLM serving paths did before, what was done, and what the unified path must keep. Paths follow
 `python/yunshu_engine/path_matrix.json`: **mtp** (`mtp_lane.py`), **dflash** (`dflash_*.py`),
 **batch** (stock shared batch on `vlm_batch_runner.py`), **generic** (other mlx-vlm families on
-the same runner: Gemma, Qwen4, Omni thinker). `driver` is being deleted and was skipped.
+the same runner: Gemma, Qwen4, Omni thinker). `driver` was deleted in 03b03e7 and was skipped.
 batch and generic share one runner and one set of processors, so they have one cell each only
 where they differ.
 

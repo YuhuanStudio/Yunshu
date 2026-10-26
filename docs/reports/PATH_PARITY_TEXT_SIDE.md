@@ -1,5 +1,9 @@
 # Path parity, text side: VLM fixes checked on every text path
 
+> Line numbers in this report refer to the tree when it was written (2026-10-26, before the later review-fix and
+> adoption merges) and drift; search by symbol. The "Update after integration" section at the end is the final state.
+
+
 Scope: the VLM-path review fixes (`vlm_engine.py` / `vlm_batch_runner.py`) and the APC-lane fixes, checked and
 ported on each text serving path, so the unification of the text fast path (`BatchedEngine`) and the VLM path
 loses none of them. Paths:
@@ -31,7 +35,7 @@ Evidence for every "ported" and "ok" cell is a test under `tests/unit/` named in
 | r | temp media cleanup | 9f9f1ec | n/a: text requests carry no media files | n/a | n/a | n/a | n/a | media cleanup stays with `prepare_media` | none |
 | s | bounded prompt / template cache (tokens and characters, int32) | dc34956 | n/a: the text path has no prompt-token or template cache (it tokenizes per request). Existing caches are bounded: `PromptCacheManager` (entries and bytes), `ResponseCache` (entries, bytes, TTL), `TokenizerPrefixCache` (entries and bytes), `KVPrefixCache` (entries, memory pressure) | n/a | n/a | n/a | n/a | any cache of token ids added in the unified path needs the VLM bound (total tokens and chars, int32 `array`) | none |
 | t | hash the request key once | 5808886 | the fast path serialized and hashed the whole rendered prompt twice (prompt-cache lookup and store) | **ported**: key memoised on the request (`engine_fast.py:830`) | n/a (no prompt cache) | n/a | n/a | one conversation hash per request, shared by lookup and store | `test_text_request_hashed_once.py` |
-| u | ASGI / `ClosingStreamingResponse` | a5e6… | gateway level, shared | skipped | skipped | skipped | skipped | n/a | n/a |
+| u | ASGI / `ClosingStreamingResponse` | 82cd159 | gateway level, shared | skipped | skipped | skipped | skipped | n/a | n/a |
 | v | APC e6e56ec: failed WARM promotion keeps the entry | e6e56ec | n/a: the text WARM tier quantizes in place (`_maybe_demote_to_warm`), there is no take-then-promote; a failed quantize leaves the full-precision list in place | n/a | n/a | n/a | n/a | n/a | none |
 | w | APC 0d36e4c: whole-prompt memo keys | 0d36e4c | n/a: the text path has no divergence-point memo; `KVPrefixCache` is keyed by the full token hash and block chain, with a token-compare on collision | n/a | n/a | n/a | n/a | n/a | none |
 | x | APC ae33517: transient load errors keep the file | ae33517 | `SSDKVCache.load_block` and `HybridSnapshotStore.load` deleted the checkpoint on any exception | **ported**: new shared `transient_errors.is_transient_load_error` used by `ssd_kv_cache.py:886` and `hybrid_ssd_snapshot.py:132,:382` (scan keeps the file too); corruption still deletes | **ported** (same stores) | n/a | **ported** (same stores) | corruption is the only reason to delete a checkpoint | `test_text_ssd_transient_load_errors.py` |
