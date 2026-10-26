@@ -1,5 +1,5 @@
 """Token-counting / preview renders defuse special-token strings exactly like generation does,
-so /v1/messages/count_tokens, /tokenize, /apply-template and the max_tokens=0 probe report the
+so /v1/messages/count_tokens, /tokenize, /apply-template and the completions max_tokens=0 probe report the
 prompt the engine actually runs (969b1e9 parity for the VLM paths, incl. the MLX-MTP renderer)."""
 
 from __future__ import annotations
@@ -71,12 +71,11 @@ def test_mlx_mtp_fallback_renderer_neutralizes():
 @pytest.mark.parametrize(
     "rel",
     [
-        "yunshu_gateway/routers/chat.py",
         "yunshu_gateway/routers/anthropic.py",
     ],
 )
 def test_count_probes_call_neutralize_before_template(rel):
-    """chat max_tokens=0 and anthropic count_tokens need a running server to exercise, so
+    """the chat template count and anthropic count_tokens need a running server to exercise, so
     this is a source-level guard: every apply_chat_template there is fed neutralised text."""
     src = (ROOT / rel).read_text()
     assert "neutralize_special_text(" in src

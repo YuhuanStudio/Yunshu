@@ -341,7 +341,7 @@ print(resp.usage.completion_tokens_details.reasoning_tokens)
 - `usage.completion_tokens` already includes reasoning tokens; `reasoning_tokens` and `cached_tokens` are details inside their totals, never extra. `cached_tokens` is the prompt prefix served from the prefix cache.
 - `choices[].logprobs.content[]` items are `{token, logprob, bytes, top_logprobs: [{token, logprob, bytes}]}`.
 - `x_yunshu` is the Yunshu extension described in [API overview](/docs/api/overview). `mcp_tool_results` appears when a returned tool call matched a tool of a configured MCP client and was executed by the gateway.
-- `max_tokens: 0` returns immediately with an empty message, `finish_reason: "length"` and the prompt token count.
+- `max_tokens` and `max_completion_tokens` below 1 answer `400`, as OpenAI does (only `/v1/completions` takes 0, for echo-only scoring). To count a prompt, POST the same `messages` to `/tokenize`: `count` is the prompt length generation would run.
 - If a structured-output result still fails validation on a VLM, the answer is a `422` with `x_yunshu.validation`.
 
 ## Streaming
