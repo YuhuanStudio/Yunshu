@@ -95,13 +95,24 @@ def _special_strings(tokenizer: Any) -> list[str]:
     return [s for s in found if len(s) >= 2]
 
 
+def _added_strings(tokenizer: Any) -> list[str]:
+    """Every added-token string, special or not: Qwen3.8 registers <think> / <tool_call> with special=False."""
+    decoder = getattr(tokenizer, "added_tokens_decoder", None)
+    if not isinstance(decoder, dict):
+        return []
+    out = {getattr(t, "content", None) for t in decoder.values()}
+    return [s for s in out if isinstance(s, str) and len(s) >= 2]
+
+
 def _structural_strings(tokenizer: Any) -> list[str]:
     """The special-token strings the chat template emits as structure (see the module doc)."""
     specials = _special_strings(tokenizer)
     template = _template_text(tokenizer)
     if template is None:
         return specials  # unreadable template: defuse every special
-    keep = {s for s in specials if s in template}
+    # an added token the template writes is structure even when it is not flagged special (Qwen3.8 <think>,
+    # <tool_call>: typed in user text they would otherwise become their control ids)
+    keep = {s for s in (*specials, *_added_strings(tokenizer)) if s in template}
     for var in _TOKEN_VARS:
         if re.search(rf"\b{var}\b", template):
             val = getattr(tokenizer, var, None)
