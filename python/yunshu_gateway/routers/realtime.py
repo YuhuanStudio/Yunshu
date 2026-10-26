@@ -459,6 +459,18 @@ def _get_silero_vad():
     return _silero_vad or None
 
 
+async def _run_on_mlx(fn, *args):
+    """Run ``fn`` on the engine's single MLX executor thread (all MLX work is serialized
+    there); where MLX is not installed there is nothing to serialize against."""
+    try:
+        from yunshu_engine.mlx_executor import get_mlx_executor
+    except ImportError:
+        return fn(*args)
+    return await asyncio.get_running_loop().run_in_executor(
+        get_mlx_executor(), fn, *args
+    )
+
+
 def _strip_wav_header(data: bytes) -> bytes:
     """Return raw PCM, stripping a leading RIFF/WAVE header if present.
 
@@ -3430,7 +3442,12 @@ class RealtimeSession:
         # OpenAI `threshold` (default 0.5) is used directly. The energy fallback has
         # to map it onto normalized RMS (speech ~0.03-0.1, silence below) — a 0.5
         # direct compare against RMS would never fire, so gate at threshold*0.05.
-        _silero_prob = self._silero_speech_prob(audio_chunk)
+        if _silero_vad_enabled():
+            # Silero's first call downloads/loads the model and every feed runs MLX evals:
+            # both belong on the engine's single MLX thread, not on the event loop.
+            _silero_prob = await _run_on_mlx(self._silero_speech_prob, audio_chunk)
+        else:
+            _silero_prob = self._silero_speech_prob(audio_chunk)
         if _silero_prob is not None:
             speech = _silero_prob >= threshold
         else:
