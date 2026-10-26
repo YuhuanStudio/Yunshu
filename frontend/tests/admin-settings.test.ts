@@ -25,6 +25,7 @@ const row = (o: Partial<ConfigRow>): ConfigRow => ({
   category: "",
   description: "",
   secret: false,
+  readOnly: false,
   type: "int",
   choices: [],
   applies: "live",

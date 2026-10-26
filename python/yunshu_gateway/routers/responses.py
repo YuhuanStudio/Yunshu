@@ -820,7 +820,8 @@ class ResponsesRequest(BaseModel):
                         "json_schema": {
                             "name": fmt.get("name", "response"),
                             "schema": fmt.get("schema", {}),
-                            "strict": fmt.get("strict", True),
+                            # OpenAI default: strict false when omitted.
+                            "strict": fmt.get("strict") is True,
                         },
                     }
                 elif fmt.get("type") == "json_object":
@@ -1196,7 +1197,13 @@ def _parse_response_format_unchecked(
         return {"type": "cfg", "grammar": structural_tag_grammar(rf)}
     if rf_type == "json_schema":
         js = rf.get("json_schema", {})
-        return js.get("schema", js)
+        schema = js.get("schema")
+        if not schema:
+            return "json_object"
+        # Same strict semantics as Chat Completions (schemas/strict.py).
+        from yunshu_gateway.schemas.strict import strict_schema
+
+        return strict_schema(schema, js.get("strict"))
     elif rf_type == "json_object":
         return "json_object"
     return None

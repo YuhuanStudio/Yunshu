@@ -78,6 +78,8 @@ const settings: Shape<typeof zh> = {
   "config.decrement": "Decrease",
   "config.secretSet": "Set (enter a new value to replace)",
   "config.secretUnset": "Not set",
+  "config.readOnlyHost":
+    "Read-only here: it can run code or touch host paths. Edit the config file on the host.",
   "config.overriddenEnv":
     "Environment variable {name} is set and wins over this value.",
   "config.overriddenCli":

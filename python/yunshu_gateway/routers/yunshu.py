@@ -329,20 +329,39 @@ async def memory_ledger(request: Request) -> dict:
     return _ledger.collect(get_model_manager(), get_engine(), get_display_model_id())
 
 
+def _settings_auth_token() -> str | None:
+    from yunshu_engine import settings as _s
+
+    return _s.get("YUNSHU_AUTH_TOKEN")
+
+
 @router.get("/yunshu/config")
 async def effective_config(
     request: Request, include: Literal["stable", "all"] = "stable"
 ) -> dict:
     """Every setting with its effective value, default and source (cli / env / file /
-    default), as ``yunshu config`` shows them. Secrets are masked."""
-    _check_permission(request, "can_infer")
+    default), as ``yunshu config`` shows them. Secrets are masked (and URL user info).
+
+    This is operator configuration (paths, endpoints, which tools are on), so when
+    auth is configured it needs the ``admin`` scope: a managed key with only
+    ``infer`` gets 403. With no auth configured it stays readable like inference."""
+    from yunshu_gateway import api_keys
+
+    auth_on = bool(_settings_auth_token()) or api_keys.get_store().has_keys()
+    _check_permission(request, "admin" if auth_on else "can_infer")
     from yunshu_engine import settings as _settings
 
     levels = (
         ("stable",) if include == "stable" else ("stable", "experimental", "internal")
     )
     rows = _settings.effective(levels)
+    exec_writable = _settings.get_bool("YUNSHU_ADMIN_WRITE_EXEC_SETTINGS")
     for r in rows:
+        # PATCH refuses these over HTTP (see admin_settings); the console shows them read-only.
+        r["read_only"] = r["name"] in (
+            "YUNSHU_CONFIG",
+            "YUNSHU_ADMIN_WRITE_EXEC_SETTINGS",
+        ) or (r["host_access"] and not exec_writable)
         r["description"] = (r["description"] or "")[:240]
         if _settings.REGISTRY[r["name"]].secret:
             r["default"] = None if r["default"] is None else "***"

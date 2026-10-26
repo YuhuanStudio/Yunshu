@@ -16,6 +16,8 @@ export interface ConfigRow {
   /** When a change takes effect: live, reload or restart ("" from an older server). */
   applies: string;
   minimum: number | null;
+  /** The server will not write this over HTTP (it can run host code / touch host paths). */
+  readOnly: boolean;
 }
 
 export interface ConfigPayload {
@@ -61,6 +63,7 @@ export function parseConfig(payload: unknown): ConfigPayload | null {
         : [],
       applies: typeof item.applies === "string" ? item.applies : "",
       minimum: typeof item.minimum === "number" ? item.minimum : null,
+      readOnly: item.read_only === true,
     });
   }
   return {

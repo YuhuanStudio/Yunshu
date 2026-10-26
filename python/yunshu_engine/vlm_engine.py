@@ -2955,6 +2955,17 @@ class VLMEngine:
         holdback = StopHoldbackBuffer(stop_strings)
         detok = self._tokenizer.detokenizer
         detok.reset()
+
+        def drain_tail(reasoning: bool) -> tuple[str, bool]:
+            """The text still held back at the end, and whether a stop string completed in
+            it (only in the final detokenizer flush; stop strings never apply to reasoning)."""
+            detok.finalize()
+            tail = holdback.feed(detok.last_segment) + holdback.flush()
+            hit = holdback.stop_hit and not reasoning
+            if hit:
+                stats.stop_string_hit = True
+            return tail, hit
+
         think_start, think_end, open_text, close_text, channel = (
             self._reasoning_markers()
         )
@@ -3032,8 +3043,7 @@ class VLMEngine:
             stats.consumed = count
             lp = stats.last_logprob if logprobs else None
             if token in stop_ids:
-                detok.finalize()
-                tail = holdback.feed(detok.last_segment) + holdback.flush()
+                tail, _ = drain_tail(in_think)
                 # EOS inside an open <think> ends the reasoning: its tail is reasoning
                 yield (
                     tail,
@@ -3050,9 +3060,15 @@ class VLMEngine:
                 label_buf = "" if (channel and in_think) else None
                 state = "reasoning" if in_think else "normal"
                 if count >= max_tokens:
-                    detok.finalize()
-                    tail = holdback.feed(detok.last_segment) + holdback.flush()
-                    yield tail, token, state, "length", thinking_tokens, lp
+                    tail, hit = drain_tail(in_think)
+                    yield (
+                        tail,
+                        token,
+                        state,
+                        "stop" if hit else "length",
+                        thinking_tokens,
+                        lp,
+                    )
                     return
                 continue
             if in_think and tool_marker is not None and token == tool_marker:
@@ -3092,21 +3108,26 @@ class VLMEngine:
                         head = head[len("thought") :].lstrip("\n")
                     text, label_buf = head, None
             if count >= max_tokens:
-                detok.finalize()
-                tail = holdback.feed(detok.last_segment) + holdback.flush()
-                yield text + tail, token, state, "length", thinking_tokens, lp
+                tail, hit = drain_tail(in_think)
+                yield (
+                    text + tail,
+                    token,
+                    state,
+                    "stop" if hit else "length",
+                    thinking_tokens,
+                    lp,
+                )
                 return
             yield text, token, state, None, thinking_tokens, lp
         if stats.finish_reason == "cancel":
             yield "", None, "normal", "cancel", thinking_tokens, None
             return
-        detok.finalize()
-        tail = holdback.feed(detok.last_segment) + holdback.flush()
+        tail, hit = drain_tail(in_think)
         yield (
             tail,
             None,
             "reasoning" if in_think else "normal",
-            "stop" if count < max_tokens else "length",
+            "stop" if hit or count < max_tokens else "length",
             thinking_tokens,
             None,
         )

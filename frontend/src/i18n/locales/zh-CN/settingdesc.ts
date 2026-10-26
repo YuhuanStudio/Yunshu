@@ -85,6 +85,8 @@ const settingdesc = {
   YUNSHU_COMPACT_MAX_TOKENS: "Responses 压缩：模型所写摘要的 token 数上限。",
   YUNSHU_AUTH_TOKEN:
     "Bearer 令牌。设置后，除 health、version 和 docs 外的所有请求都需要它；未设置时推理开放，但运维类端点被拒绝。",
+  YUNSHU_ADMIN_WRITE_EXEC_SETTINGS:
+    "允许 `PATCH /v1/yunshu/config`（控制台设置编辑器）修改会执行主机代码或访问任意主机路径的设置：所有路径类设置、`YUNSHU_MCP_SERVERS`、`YUNSHU_TRUST_REMOTE_CODE`、`YUNSHU_CODE_EXECUTION`、`YUNSHU_ALLOW_LOCAL_FILES`。默认关闭：这些设置经 HTTP 只读，请在主机上编辑配置文件；本设置本身也无法经 HTTP 修改。",
   YUNSHU_AUTH_DISABLED:
     "完全禁用认证（运维类端点也会开放），仅供本地开发使用。",
   YUNSHU_DEBUG_TREE_PROFILE:

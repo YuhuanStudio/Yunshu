@@ -40,6 +40,7 @@ from .usage_shapes import openai_usage, responses_usage
 # ── Sentinel for _safe_anext ──
 
 _KEEPALIVE_SENTINEL = object()
+_ITEM, _END, _FAIL = object(), object(), object()
 
 logger = logging.getLogger(__name__)
 
@@ -105,24 +106,46 @@ async def with_sse_keepalive(
     for the next iteration.
     """
     ait = generator.__aiter__()
-    task = None
-    keepalive_elapsed = 0.0
+    reader: asyncio.Task | None = None
 
     # Send initial keepalive immediately so clients with short read
     # timeouts (e.g. openclaw ~15s) don't disconnect during prefill.
     yield ": keep-alive\n\n"
 
-    try:
+    # One long-lived reader pulls the generator, strictly on demand (it advances only
+    # after the previous chunk was handed to the client, as before) and hands each
+    # result over through a queue; waiting with a timeout on queue.get() creates no Task,
+    # where the old code created one asyncio Task per chunk.
+    results: asyncio.Queue = asyncio.Queue()
+    demand = asyncio.Event()
+
+    async def read() -> None:
         while True:
-            task = asyncio.ensure_future(_safe_anext(ait))
+            await demand.wait()
+            demand.clear()
+            try:
+                results.put_nowait((_ITEM, await ait.__anext__()))
+            except StopAsyncIteration:
+                results.put_nowait((_END, None))
+                return
+            except Exception as exc:
+                results.put_nowait((_FAIL, exc))
+                return
+
+    try:
+        reader = asyncio.ensure_future(read())
+        while True:
+            demand.set()
             keepalive_elapsed = 0.0
-            while not task.done():
+            while True:
                 # Use shorter poll interval for disconnect detection,
                 # accumulate time for keepalive emission
                 wait_time = disconnect_poll if http_request else interval
-                done, _ = await asyncio.wait({task}, timeout=wait_time)
-                if done:
+                try:
+                    kind, value = await asyncio.wait_for(results.get(), wait_time)
                     break
+                except TimeoutError:
+                    pass
                 # Check for client disconnect
                 if http_request is not None:
                     try:
@@ -131,11 +154,11 @@ async def with_sse_keepalive(
                             # Signal the engine to stop GPU work immediately
                             if cancel_event is not None:
                                 cancel_event.set()
-                            task.cancel()
+                            reader.cancel()
                             with contextlib.suppress(
                                 asyncio.CancelledError, StopAsyncIteration
                             ):
-                                await task
+                                await reader
                             return
                     except Exception:
                         logger.debug(
@@ -147,28 +170,21 @@ async def with_sse_keepalive(
                 if keepalive_elapsed >= interval:
                     keepalive_elapsed = 0.0
                     yield ": keep-alive\n\n"
-            if task.done():
-                try:
-                    result = task.result()
-                except asyncio.CancelledError:
-                    return
-                except StopAsyncIteration:
-                    return
-                except Exception:
-                    # Re-raise so the calling router (OpenAI/Anthropic) can
-                    # emit a protocol-correct error event.  Yielding OpenAI-
-                    # style data: [DONE] here breaks Anthropic streaming which
-                    # uses event: message_stop instead.
-                    raise
-                if result is _KEEPALIVE_SENTINEL:
-                    return
-                yield result
+            if kind is _END:
+                return
+            if kind is _FAIL:
+                # Re-raise so the calling router (OpenAI/Anthropic) can
+                # emit a protocol-correct error event.  Yielding OpenAI-
+                # style data: [DONE] here breaks Anthropic streaming which
+                # uses event: message_stop instead.
+                raise value
+            yield value
     finally:
         # on ANY exit — crucially a client disconnect, which starlette
         # surfaces by throwing GeneratorExit/CancelledError INTO this generator (both
         # BaseException, not Exception) so it BYPASSES the is_disconnected() poll above
         # and the routers' `except` branches that set cancel_event — signal the engine's
-        # decode loop to stop. task.cancel() alone is a no-op on a generate_step already
+        # decode loop to stop. reader.cancel() alone is a no-op on a generate_step already
         # running on the max_workers=1 MLX executor thread; only cancel_event stops it,
         # else a disconnected stream runs to max_tokens, wasting GPU AND head-of-line-
         # blocking every subsequent request on the serialized executor. Harmless on
@@ -176,10 +192,10 @@ async def with_sse_keepalive(
         if cancel_event is not None:
             with contextlib.suppress(Exception):
                 cancel_event.set()
-        if task is not None and not task.done():
-            task.cancel()
+        if reader is not None and not reader.done():
+            reader.cancel()
             with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
-                await task
+                await reader
         if hasattr(ait, "aclose"):
             await ait.aclose()
 

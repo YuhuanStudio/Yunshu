@@ -36,7 +36,10 @@ router = APIRouter(tags=["yunshu-admin"])
 _MAX_ORIGINS = 50
 _HOST = re.compile(r"[A-Za-z0-9]([A-Za-z0-9.\-]*[A-Za-z0-9])?")
 # Not writable through the API: the pointer to the config file itself.
-_READ_ONLY = {"YUNSHU_CONFIG": "choose the config file with `yunshu serve --config`"}
+_READ_ONLY = {
+    "YUNSHU_CONFIG": "choose the config file with `yunshu serve --config`",
+    "YUNSHU_ADMIN_WRITE_EXEC_SETTINGS": "only the operator on the host may enable this",
+}
 
 
 def _err(status: int, code: str, message: str, **extra: Any) -> HTTPException:
@@ -239,6 +242,22 @@ async def patch_config(body: ConfigPatch, request: Request) -> dict:
             experimental.append(name)
     if errors:
         raise _err(422, "invalid_settings", "no setting was changed", errors=errors)
+    # Settings that run host code or touch arbitrary paths: admin scope is not host access.
+    if not settings.get_bool("YUNSHU_ADMIN_WRITE_EXEC_SETTINGS"):
+        locked = sorted(
+            n
+            for n, v in clean.items()
+            if v is not None and settings.REGISTRY[n].host_access
+        )
+        if locked:
+            raise _err(
+                403,
+                "exec_setting_read_only",
+                "these settings can run code or touch host paths, so they are read-only "
+                "over HTTP; edit the config file / `yunshu config set` on the host, or "
+                "set YUNSHU_ADMIN_WRITE_EXEC_SETTINGS=true there",
+                settings=locked,
+            )
     if experimental and not body.confirm_experimental:
         raise _err(
             400,
