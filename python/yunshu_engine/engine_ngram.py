@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from contextlib import suppress
 
 from .context_window import require_non_empty_prompt
+from .json_schema import allowed_membership as _allowed_membership
 from .stream_bridge import StreamBridge, make_stream_queue
 
 
@@ -263,14 +264,14 @@ class EngineNgramMixin:
                         "grammar rollback failed in n-gram filter", exc_info=True
                     )
 
-            allowed = _grammar_constraint.get_allowed_tokens(tokenizer, generated_ids)
+            allowed = _allowed_membership(_grammar_constraint, tokenizer, generated_ids)
             if not allowed:
                 _gc_rollback()
                 return draft_ids
-            allowed_set = set(allowed)
+            allowed_set = allowed
             filtered = []
             for tid in draft_ids:
-                if tid in allowed_set:
+                if allowed_set(tid):
                     filtered.append(tid)
                     try:
                         tok_text = tokenizer.decode([tid])
@@ -280,11 +281,11 @@ class EngineNgramMixin:
                             "grammar constraint advance failed", exc_info=True
                         )
                         break
-                    allowed = _grammar_constraint.get_allowed_tokens(
-                        tokenizer, generated_ids + filtered
+                    allowed = _allowed_membership(
+                        _grammar_constraint, tokenizer, generated_ids + filtered
                     )
                     if allowed:
-                        allowed_set = set(allowed)
+                        allowed_set = allowed
                     else:
                         break
                 else:
@@ -1093,16 +1094,16 @@ class EngineNgramMixin:
             if _stream_grammar_constraint is None:
                 return draft_ids
             _stream_grammar_constraint.checkpoint()
-            allowed = _stream_grammar_constraint.get_allowed_tokens(
-                tokenizer, generated_ids
+            allowed = _allowed_membership(
+                _stream_grammar_constraint, tokenizer, generated_ids
             )
             if not allowed:
                 _stream_grammar_constraint.rollback()
                 return draft_ids
-            allowed_set = set(allowed)
+            allowed_set = allowed
             filtered = []
             for tid in draft_ids:
-                if tid in allowed_set:
+                if allowed_set(tid):
                     filtered.append(tid)
                     try:
                         tok_text = tokenizer.decode([tid])
@@ -1113,11 +1114,11 @@ class EngineNgramMixin:
                             exc_info=True,
                         )
                         break
-                    allowed = _stream_grammar_constraint.get_allowed_tokens(
-                        tokenizer, generated_ids + filtered
+                    allowed = _allowed_membership(
+                        _stream_grammar_constraint, tokenizer, generated_ids + filtered
                     )
                     if allowed:
-                        allowed_set = set(allowed)
+                        allowed_set = allowed
                     else:
                         break
                 else:

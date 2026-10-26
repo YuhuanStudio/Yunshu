@@ -2542,6 +2542,38 @@ def apply_allowed_mask_from(constraint: Any, tokenizer: Any, logits: Any) -> Any
     return result
 
 
+def allowed_membership(constraint: Any, tokenizer: Any, generated_ids: list[int]):
+    """``tid -> bool`` for the constraint's next-token set, or ``None`` when nothing is
+    allowed. Draft filters (n-gram speculation) test a few draft ids against the set;
+    building ``set(get_allowed_tokens(...))`` from a ~240K-id list cost far more than the
+    mask the constraint can hand out directly."""
+    fast = getattr(constraint, "allowed_mask", None)
+    if fast is not None:
+        raw = getattr(tokenizer, "_tokenizer", tokenizer)
+        try:
+            width = len(raw)
+        except TypeError:
+            width = int(getattr(raw, "vocab_size", 0) or 0)
+        mask = None
+        if width > 0:
+            try:
+                mask = fast(tokenizer, width)
+            except Exception:
+                logger.debug(
+                    "allowed_mask failed; using the allowed-token list", exc_info=True
+                )
+        if mask is not None:
+            import numpy as np
+
+            keep = np.array(mask, dtype=np.bool_)
+            if keep.any():
+                return lambda tid: 0 <= tid < keep.shape[0] and bool(keep[tid])
+    allowed = constraint.get_allowed_tokens(tokenizer, generated_ids)
+    if not allowed:
+        return None
+    return set(allowed).__contains__
+
+
 # ── Constrained Sampler ────────────────────────────────────────────────────
 
 
