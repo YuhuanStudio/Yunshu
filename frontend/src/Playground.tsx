@@ -1,3 +1,4 @@
+import { createDeltaBatcher } from "./delta-batch.ts";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   CustomSelect,
@@ -547,6 +548,37 @@ export function Playground({
       timing: { ...timing },
       wantedLogprobs: logprobs && dialect === "chat",
     }));
+    // Chunks are applied once per animation frame: a long reply is not re-rendered (and its
+    // Markdown re-parsed) per network chunk, and the logprob array is extended once per frame.
+    const batcher = createDeltaBatcher<{
+      content: string;
+      reasoning: string;
+      finishReason?: string | null;
+      tokens: TokenLogprob[];
+    }>(
+      (p, n) =>
+        p
+          ? {
+              content: p.content + n.content,
+              reasoning: p.reasoning + n.reasoning,
+              finishReason: n.finishReason ?? p.finishReason,
+              tokens: n.tokens.length ? p.tokens.concat(n.tokens) : p.tokens,
+            }
+          : n,
+      (b) => {
+        if (!mounted.current) return;
+        patch((m) => ({
+          ...m,
+          content: m.content + b.content,
+          reasoning: (m.reasoning ?? "") + b.reasoning,
+          finishReason: b.finishReason ?? m.finishReason,
+          tokens: b.tokens.length
+            ? (m.tokens ?? []).concat(b.tokens)
+            : m.tokens,
+          timing: { ...timing },
+        }));
+      },
+    );
     try {
       await streamCompletion(
         connection,
@@ -563,24 +595,22 @@ export function Playground({
           if (delta.content && timing.thinkStart != null)
             timing.thinkEnd ??= t;
           if (delta.usage) timing.usage = { ...timing.usage, ...delta.usage };
-          patch((m) => ({
-            ...m,
-            content: m.content + (delta.content ?? ""),
-            reasoning: (m.reasoning ?? "") + (delta.reasoning ?? ""),
-            finishReason: delta.finishReason ?? m.finishReason,
-            tokens: delta.tokens
-              ? [...(m.tokens ?? []), ...delta.tokens]
-              : m.tokens,
-            timing: { ...timing },
-          }));
+          batcher.push({
+            content: delta.content ?? "",
+            reasoning: delta.reasoning ?? "",
+            finishReason: delta.finishReason,
+            tokens: delta.tokens ?? [],
+          });
         },
         c.signal,
         dialect,
       );
+      batcher.flush();
       timing.endAt = performance.now();
       if (timing.thinkStart != null) timing.thinkEnd ??= timing.endAt;
       if (mounted.current) patch((m) => ({ ...m, timing: { ...timing } }));
     } catch (e) {
+      batcher.flush();
       timing.endAt = performance.now();
       if (mounted.current) {
         setErrorState(
