@@ -15,6 +15,13 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def _lane_everywhere(monkeypatch):
+    # STOCK_ROWS is process-global: a Qwen4 lane setup (32) or the 27B prefill mode (512) left by another test sends the
+    # 300-row call to MLX's stock matmul, which is not the lane arithmetic this file checks
+    monkeypatch.setattr(lane_linear, "STOCK_ROWS", 0)
+
+
 @pytest.mark.parametrize(
     "bits,n",
     [(4, 3072), (5, 3072), (8, 1024), (4, 48), (5, 16), (2, 48), (3, 16), (6, 48)],
