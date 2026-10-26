@@ -215,6 +215,7 @@ from .engine_text import (
 from .engine_text import (
     _template_supports_tools as _template_supports_tools,
 )
+from .generation_suppress import resolve_suppress_tokens
 
 
 def _reload_dropped_weights(model, mp) -> None:
@@ -1381,6 +1382,12 @@ class BatchedEngine(
         if not self._loaded:
             await self.start()
 
+        # The checkpoint's generation_config.json suppress_tokens is the default mask
+        # when the request sets none (same rule as the VLM path).
+        suppress_tokens = resolve_suppress_tokens(
+            suppress_tokens, self.model_name, self._tokenizer
+        )
+
         # Early return: max_tokens <= 0 produces no output
         if max_tokens <= 0:
             _pt = 0
@@ -1909,6 +1916,12 @@ class BatchedEngine(
         """
         if not self._loaded:
             await self.start()
+
+        # The checkpoint's generation_config.json suppress_tokens is the default mask
+        # when the request sets none (same rule as the VLM path).
+        suppress_tokens = resolve_suppress_tokens(
+            suppress_tokens, self.model_name, self._tokenizer
+        )
 
         # publish per-request top-nσ for _build_temp_sampler (same event-loop task)
         _REQUEST_TOP_N_SIGMA.set(
