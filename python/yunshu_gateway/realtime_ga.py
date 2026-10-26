@@ -118,13 +118,28 @@ def from_ga(event: dict) -> dict:
 # ── internal -> GA ──
 
 
-def _session_to_ga(s: dict) -> dict:
+def _session_to_ga(s: dict, session_type: str = "realtime") -> dict:
     td = s.get("turn_detection")
     if isinstance(td, dict):
         td = {k: v for k, v in td.items() if k != "barge_in_min_ms"}
         td.setdefault("create_response", True)
         td.setdefault("interrupt_response", True)
         td.setdefault("idle_timeout_ms", None)
+    if session_type == "transcription":
+        # A transcription-only session has an input side only (no model reply, voice or tools).
+        return {
+            "type": "transcription",
+            "object": "realtime.transcription_session",
+            "id": s.get("id") or "sess_yunshu",
+            "audio": {
+                "input": {
+                    "format": _fmt_to_ga(s.get("input_audio_format")),
+                    "transcription": s.get("input_audio_transcription"),
+                    "noise_reduction": s.get("input_audio_noise_reduction"),
+                    "turn_detection": td,
+                }
+            },
+        }
     return {
         "type": "realtime",
         "object": "realtime.session",
@@ -187,13 +202,19 @@ def _response_to_ga(resp: dict) -> dict:
     return resp
 
 
-def to_ga(event: dict) -> list[dict]:
-    """Translate one server event from the internal schema to zero or more GA events."""
+def to_ga(event: dict, session_type: str = "realtime") -> list[dict]:
+    """Translate one server event from the internal schema to zero or more GA events.
+    ``session_type`` ("realtime" or "transcription") shapes session.created / updated."""
     t = event.get("type", "")
     if t == "conversation.created":
         return []  # not part of GA
     if t in ("session.created", "session.updated"):
-        return [{**event, "session": _session_to_ga(event.get("session") or {})}]
+        return [
+            {
+                **event,
+                "session": _session_to_ga(event.get("session") or {}, session_type),
+            }
+        ]
     if t == "conversation.item.created":
         item = _item_to_ga(event.get("item") or {})
         base = {"previous_item_id": event.get("previous_item_id"), "item": item}

@@ -1266,7 +1266,7 @@ class RealtimeSession:
     async def _send_wire(self, event: dict) -> None:
         try:
             if self.dialect == "ga":
-                for ev in realtime_ga.to_ga(event):
+                for ev in realtime_ga.to_ga(event, self._secret_kind):
                     await self.ws.send_json(ev)
             else:
                 await self.ws.send_json(event)
