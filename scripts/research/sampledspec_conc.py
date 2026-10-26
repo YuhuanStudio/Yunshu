@@ -21,6 +21,7 @@ from pathlib import Path
 SHAPES = {
     "seeded": dict(temperature=1.0, top_p=0.95, top_k=20, seed=17, logprobs=True),
     "agent": {},
+    "seednolp": dict(temperature=1.0, top_p=0.95, top_k=20, seed=17),
 }
 PROMOTED = "Promoted request onto the speculative lane"
 KEYED = "DFlash fast verification: keyed=True"
@@ -38,7 +39,7 @@ def plans(scenario, tokens, join):
     if scenario == "stagger":
         return [("A", 0.0, tokens, 111), ("B", join, max(64, tokens // 3), 112)]
     if scenario == "solo":
-        return [("A", 0.0, tokens, 121)]
+        return [("A", 0.0, tokens, 101)]
     raise ValueError(scenario)
 
 
