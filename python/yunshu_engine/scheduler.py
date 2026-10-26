@@ -4290,6 +4290,15 @@ class Scheduler:
         # JSON schema / grammar constrained generation
         json_schema = getattr(sp, "json_schema", None)
         grammar = getattr(sp, "grammar", None)
+
+        def _gated(free, constrained):
+            # generation starts inside an open <think>: the grammar binds after </think>
+            from .reasoning_gate import gate_constrained_sampler
+
+            return gate_constrained_sampler(
+                free, constrained, prompt_token_ids or [], self.tokenizer, _eos_ids
+            )
+
         if json_schema is not None or grammar is not None:
             from .grammar_constraint import ConstraintFactory
             from .json_schema import ConstrainedSampler
@@ -4311,7 +4320,10 @@ class Scheduler:
                         constraint = ConstraintFactory.create(
                             gtype, gpayload, self.tokenizer
                         )
-                        return ConstrainedSampler(sampler, constraint, self.tokenizer)
+                        return _gated(
+                            sampler,
+                            ConstrainedSampler(sampler, constraint, self.tokenizer),
+                        )
                     except Exception:
                         logger.debug(
                             "grammar constraint setup failed, falling back",
@@ -4322,7 +4334,10 @@ class Scheduler:
 
                     schema = grammar.get("schema")
                     constraint = build_json_constraint(schema, self.tokenizer)
-                    return ConstrainedSampler(sampler, constraint, self.tokenizer)
+                    return _gated(
+                        sampler,
+                        ConstrainedSampler(sampler, constraint, self.tokenizer),
+                    )
 
             # Fallback to json_schema field
             if json_schema is not None:
@@ -4335,7 +4350,9 @@ class Scheduler:
                     tokenizer=self.tokenizer,
                     mode="json_schema" if schema else "json_object",
                 )
-                return constrained_sampler
+                return _gated(
+                    sampler if logits_processors else base_sampler, constrained_sampler
+                )
 
         return sampler
 

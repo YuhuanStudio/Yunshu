@@ -278,7 +278,7 @@ class EngineStreamMixin:
                 sampler = _engine._build_constrained_sampler(
                     sampler, json_schema, tokenizer
                 )
-                report(
+                _sr = report(
                     "mlx-lm",
                     json_schema,
                     backend_name(
@@ -290,6 +290,18 @@ class EngineStreamMixin:
                     else None,
                     enforced=sampler is not unconstrained_sampler,
                 )
+                if sampler is not unconstrained_sampler:
+                    # thinking on: the grammar binds after </think>, not inside the reasoning
+                    from .reasoning_gate import gate_constrained_sampler
+
+                    sampler = gate_constrained_sampler(
+                        unconstrained_sampler,
+                        sampler,
+                        input_ids,
+                        tokenizer,
+                        _eos_ids,
+                        _sr,
+                    )
             except Exception:
                 _engine.logger.warning(
                     "Grammar constraint setup failed in streaming", exc_info=True

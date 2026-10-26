@@ -2961,6 +2961,21 @@ class VLMEngine:
             self._tool_call_marker_id() if (tool_spec or tools_declared) else None
         )
         guide = self._tool_guide(tool_spec, in_think)
+        if constraint_guide is not None and constrains_initial_output(json_schema):
+            # Generation starts inside an open <think>: the grammar binds after the close.
+            from .reasoning_gate import ThinkGatedGuide, make_gate
+
+            gate = make_gate(
+                prompt_opens_thinking=in_think,
+                close_id=think_end,
+                eos_ids=self._get_eos_ids(),
+                implicit_end_ids=[
+                    t for t in (self._tool_call_marker_id(),) if t is not None
+                ],
+                report=stats.structured_output,
+            )
+            if gate is not None:
+                constraint_guide = ThinkGatedGuide(constraint_guide, gate)
         if constraint_guide is not None:
             from .constrained_spec import CombinedGuide
 
