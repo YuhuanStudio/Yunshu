@@ -1479,6 +1479,8 @@ class YunshuAPCManager(APCManager):
             collections.OrderedDict()
         )
         self.lookups: collections.deque[Lookup] = collections.deque(maxlen=64)
+        # What each recent hit added to the counters, so a refused restore can take it back.
+        self._hit_undo: collections.deque[dict] = collections.deque(maxlen=64)
         from .apc_restore_cost import MediaRestoreCost
 
         self.media_restore_cost = MediaRestoreCost()
@@ -2514,6 +2516,8 @@ class YunshuAPCManager(APCManager):
                 for i, (k, d) in enumerate(zip(names, defaults, strict=True))
             ]
             self._promote_warm(tokens, int(vals[0]), vals[1], vals[2])
+        stat_fields = ("hits", "exact_hits", "disk_hits", "matched_tokens")
+        stats_before = [getattr(self.stats, f, 0) for f in stat_fields]
         cache, n = super().lookup_exact_cache(token_ids, *args, **kwargs)
         extra = self._extra_of(args, kwargs)
         # A background spill may finish after drop_exact saw a busy writer.
@@ -2531,7 +2535,16 @@ class YunshuAPCManager(APCManager):
                 retry.pop("max_prefix_tokens")
             cache, n = super().lookup_exact_cache(token_ids, *positional, **retry)
         self._last_hit = (tuple(int(t) for t in token_ids[:n]), extra) if n else None
+        undo = None
         if self._last_hit is not None:
+            deltas = {
+                f: getattr(self.stats, f, 0) - b
+                for f, b in zip(stat_fields, stats_before, strict=True)
+            }
+            ekey = hash(self._last_hit)
+            with self._plock:
+                eprior = list(self._entry_hits.get(ekey) or ()) or None
+            undo = {"n": int(n), "deltas": deltas, "ekey": ekey, "eprior": eprior}
             self._note_entry_hit(*self._last_hit)
         if n and refresh_retention:
             self.touch_boundary(token_ids[:n], extra)
@@ -2546,11 +2559,16 @@ class YunshuAPCManager(APCManager):
                 tuple(int(t) for t in token_ids), int(n), self._extra_of(args, kwargs)
             )
         if n and key is not None:
+            if undo is not None:
+                undo["okey"] = key
+                undo["oprior"] = self.observation.hits.get(key)
             self.observation.hit(key)
             if tier == "ssd":
                 self.observation.event("promotion", key, n, "ram", "ssd_hit")
         self._log_lookup(token_ids, int(n), f"{tier}")
         self.tier_hits[tier] += 1
+        if undo is not None:
+            self._hit_undo.append(undo)
         device = getattr(self.disk, "last_device", None) if tier == "ssd" else None
         self.lookups.append(
             Lookup(
@@ -2566,7 +2584,27 @@ class YunshuAPCManager(APCManager):
             if rec.cached == cached and rec.tier != "none":
                 self.lookups.remove(rec)
                 self.tier_hits[rec.tier] -= 1
-                return
+                break
+        for undo in reversed(self._hit_undo):
+            if undo["n"] != cached:
+                continue
+            self._hit_undo.remove(undo)
+            with self.lock:
+                for field, delta in undo["deltas"].items():
+                    if delta and hasattr(self.stats, field):
+                        setattr(self.stats, field, getattr(self.stats, field) - delta)
+            with self._plock:
+                if undo["eprior"] is None:
+                    self._entry_hits.pop(undo["ekey"], None)
+                else:
+                    self._entry_hits[undo["ekey"]] = undo["eprior"]
+            okey = undo.get("okey")
+            if okey is not None:
+                if undo.get("oprior") is None:
+                    self.observation.hits.pop(okey, None)
+                else:
+                    self.observation.hits[okey] = undo["oprior"]
+            return
 
     def probe_exact_length(self, token_ids, extra_hash, maximum, minimum) -> int:
         """Length the next lookup_exact_cache would restore (HOT / WARM / SSD index), read from
