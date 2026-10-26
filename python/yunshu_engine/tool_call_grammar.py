@@ -756,13 +756,15 @@ def validate_forced_tools(engine, tools, choice, parallel=True):
 
 
 def grammar_key(tools: Any, tool_choice: Any, parallel: bool) -> str:
+    # Keys keep the request's order: the grammar emits object properties in the schema's declared
+    # order (mlx-swift-lm d02948b), so two tool sets that differ only in property order must not
+    # share one compiled grammar.
     payload = json.dumps(
         [
             [(t.name, t.parameters) for t in normalize_tools(tools)],
             tool_choice,
             bool(parallel),
         ],
-        sort_keys=True,
         default=str,
     )
     return hashlib.sha256(payload.encode()).hexdigest()[:24]
