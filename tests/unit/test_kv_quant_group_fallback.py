@@ -11,6 +11,15 @@ import pytest
 from yunshu_engine.batched_engine import BatchedEngine
 
 
+@pytest.fixture(autouse=True)
+def _on_cpu():
+    # restore the device: a process-wide CPU default sent later tests' Metal kernels to the CPU
+    previous = mx.default_device()
+    mx.set_default_device(mx.cpu)
+    yield
+    mx.set_default_device(previous)
+
+
 def _tiny(head_dim=32):
     from mlx_lm.models import llama
 
@@ -58,7 +67,6 @@ def _tokens(model, kv_bits, group):
 
 
 def test_misaligned_head_dim_falls_back_to_unquantised_with_same_tokens(caplog):
-    mx.set_default_device(mx.cpu)
     model = _tiny(32)
     eng = _engine(model)
     with caplog.at_level(logging.WARNING):
@@ -74,7 +82,6 @@ def test_misaligned_head_dim_falls_back_to_unquantised_with_same_tokens(caplog):
 
 
 def test_aligned_head_dim_keeps_quantisation():
-    mx.set_default_device(mx.cpu)
     eng = _engine(_tiny(64))
     assert eng._effective_kv_quant_bits(100) == 4
 
@@ -82,7 +89,6 @@ def test_aligned_head_dim_keeps_quantisation():
 def test_maybe_quantize_skips_misaligned_layers():
     from mlx_lm.models.cache import KVCache
 
-    mx.set_default_device(mx.cpu)
     from yunshu_engine.engine_cache import _maybe_quantize_kv_cache
 
     c = KVCache()

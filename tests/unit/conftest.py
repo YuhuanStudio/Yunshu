@@ -140,3 +140,20 @@ def _isolate_native_tool_context():
     yield
     _REQUEST_TOOLS.reset(tools)
     _REQUEST_TOOL_USE.reset(choice)
+
+
+@pytest.fixture(autouse=True)
+def _restore_mlx_default_device():
+    """A test that moves MLX to the CPU must not leave it there: a later test's Metal kernels would then run
+    on the CPU (test_lane_linear failed only in suite order this way)."""
+    mx = _sys.modules.get("mlx.core")
+    previous = mx.default_device() if mx is not None else None
+    yield
+    mx = _sys.modules.get("mlx.core")
+    if mx is None:
+        return
+    if previous is None:
+        # mlx was first imported during this test; the process default before it was the GPU when there is one
+        previous = mx.gpu if mx.metal.is_available() else mx.cpu
+    if mx.default_device() != previous:
+        mx.set_default_device(previous)
