@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import shutil
+import stat as stat_mod
 import sys
 import time
 import uuid
@@ -410,22 +411,29 @@ class CodeExecutor:
         return found
 
     # ── text editor (runs in the gateway, confined to the container) ─────────
-    def _resolve(self, c: Container, path: str | None) -> Path | None:
+    def _resolve(self, c: Container, path: str | None) -> tuple[Path, list[str]] | None:
+        """(container root, components below it), normalised lexically. The editor opens these
+        with ``files.open_confined`` (descriptor walk, O_NOFOLLOW), never through a resolved
+        path, so a link the sandbox swaps in between check and use cannot lead out."""
         if not isinstance(path, str) or not path or "\0" in path:
             return None
-        base = c.work.resolve()
-        p = Path(path)
-        if p.is_absolute():
-            with contextlib.suppress(ValueError):
-                p.resolve().relative_to(c.path.resolve())
-                return p.resolve()
-            p = Path(path.lstrip("/"))
-        full = (base / p).resolve()
-        try:
-            full.relative_to(c.path.resolve())
-        except ValueError:
+        roots = [c.path, c.path.resolve()]
+        rel = None
+        if path.startswith("/"):
+            for r in roots:
+                with contextlib.suppress(ValueError):
+                    rel = os.path.normpath(Path(path).relative_to(r))
+                    break
+            if rel is None:
+                rel = os.path.normpath("work/" + path.lstrip("/"))
+        else:
+            rel = os.path.normpath("work/" + path)
+        if rel == ".":
+            return roots[1], []
+        parts = rel.split("/")
+        if parts[0] == ".." or any(len(x.encode()) > cfiles.MAX_NAME for x in parts):
             return None
-        return full
+        return roots[1], parts
 
     async def editor(self, c: Container, args: dict) -> ExecResult:
         t0 = time.monotonic()
@@ -439,20 +447,60 @@ class CodeExecutor:
         logger.info("code_exec_editor container=%s cmd=%s ok=%s", c.id, cmd, r.ok)
         return r
 
-    def _edit(self, p: Path, cmd: str, a: dict) -> ExecResult:
+    @staticmethod
+    def _read_fd(fd: int) -> bytes:
+        chunks = []
+        while b := os.read(fd, 1 << 20):
+            chunks.append(b)
+        return b"".join(chunks)
+
+    @staticmethod
+    def _replace_fd(fd: int, data: bytes) -> ExecResult | None:
+        """Overwrite the regular file behind ``fd`` (None on success)."""
+        if not stat_mod.S_ISREG(os.fstat(fd).st_mode):
+            return ExecResult(False, "invalid_tool_input", text="not a regular file")
+        os.ftruncate(fd, 0)
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view) :]
+        return None
+
+    def _edit(self, p: tuple[Path, list[str]], cmd: str, a: dict) -> ExecResult:
+        root, parts = p
+        name = parts[-1] if parts else ""
         if cmd == "create":
             text = a.get("file_text")
             if not isinstance(text, str):
                 return ExecResult(
                     False, "invalid_tool_input", text="file_text required"
                 )
-            existed = p.exists()
-            if p.is_dir():
+            if not parts:
                 return ExecResult(
                     False, "invalid_tool_input", text="path is a directory"
                 )
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(text)
+            existed = True
+            try:
+                try:
+                    fd = cfiles.open_confined(root, parts, os.O_WRONLY)
+                except FileNotFoundError:
+                    existed = False
+                    fd = cfiles.open_confined(
+                        root, parts, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mkdirs=True
+                    )
+            except IsADirectoryError:
+                return ExecResult(
+                    False, "invalid_tool_input", text="path is a directory"
+                )
+            except OSError:
+                return ExecResult(
+                    False, "invalid_tool_input", text="cannot write to that path"
+                )
+            try:
+                bad = self._replace_fd(fd, text.encode())
+            finally:
+                os.close(fd)
+            if bad:
+                return bad
             return ExecResult(
                 data={
                     "type": "text_editor_code_execution_create_result",
@@ -460,11 +508,29 @@ class CodeExecutor:
                 },
                 text=f"{'Updated' if existed else 'Created'} {a['path']}",
             )
-        if not p.exists():
+        try:
+            fd = cfiles.open_confined(root, parts, os.O_RDONLY)
+        except FileNotFoundError:
             return ExecResult(False, "file_not_found", text=str(a.get("path")))
+        except OSError:
+            return ExecResult(False, "invalid_tool_input", text="cannot read that path")
+        try:
+            mode = os.fstat(fd).st_mode
+            if stat_mod.S_ISDIR(mode):
+                entries = sorted(os.listdir(fd))
+                raw = b""
+            elif stat_mod.S_ISREG(mode):
+                entries = None
+                raw = self._read_fd(fd)
+            else:  # FIFO, device, socket: never read (the open was O_NONBLOCK, a read would block)
+                return ExecResult(
+                    False, "invalid_tool_input", text="not a regular file"
+                )
+        finally:
+            os.close(fd)
         if cmd == "view":
-            if p.is_dir():
-                names = sorted(os.listdir(p))
+            if entries is not None:
+                names = entries
                 body = "\n".join(names)
                 return ExecResult(
                     data={
@@ -477,8 +543,7 @@ class CodeExecutor:
                     },
                     text=body,
                 )
-            raw = p.read_bytes()
-            ext = p.suffix.lower()
+            ext = os.path.splitext(name)[1].lower()
             if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf"):
                 kind = "pdf" if ext == ".pdf" else "image"
                 return ExecResult(
@@ -515,7 +580,9 @@ class CodeExecutor:
         old, new = a.get("old_str"), a.get("new_str", "")
         if not isinstance(old, str) or not old or not isinstance(new, str):
             return ExecResult(False, "invalid_tool_input", text="old_str required")
-        text = p.read_text(errors="replace")
+        if entries is not None:
+            return ExecResult(False, "invalid_tool_input", text="path is a directory")
+        text = raw.decode("utf-8", errors="replace")
         n = text.count(old)
         if n != 1:
             return ExecResult(
@@ -524,7 +591,18 @@ class CodeExecutor:
                 text="old_str matched " + ("nothing" if n == 0 else f"{n} places"),
             )
         start_line = text[: text.index(old)].count("\n") + 1
-        p.write_text(text.replace(old, new, 1))
+        try:
+            wfd = cfiles.open_confined(root, parts, os.O_WRONLY)
+        except OSError:
+            return ExecResult(
+                False, "invalid_tool_input", text="cannot write to that path"
+            )
+        try:
+            bad = self._replace_fd(wfd, text.replace(old, new, 1).encode())
+        finally:
+            os.close(wfd)
+        if bad:
+            return bad
         old_l, new_l = old.split("\n"), new.split("\n")
         return ExecResult(
             data={

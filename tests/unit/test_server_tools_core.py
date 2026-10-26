@@ -471,3 +471,16 @@ async def test_mcp_timeout():
 
 def test_mcp_module_exports():
     assert mcp_connector.PROTOCOL_VERSION
+
+
+async def test_mcp_connector_blocks_private_by_default(monkeypatch):
+    """A request-supplied MCP url may not reach loopback / private hosts unless the operator opts in."""
+    monkeypatch.delenv("YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE")
+    srv = FakeMcpHttp()
+    try:
+        with pytest.raises(McpError) as e:
+            await McpConnection(srv.url).connect()
+        assert "not allowed" in e.value.message
+        assert srv.requests == []
+    finally:
+        srv.stop()

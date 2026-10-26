@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+from yunshu_engine.paths import private_media_path
 from yunshu_gateway.sandbox import containers as cont
 from yunshu_gateway.sandbox.executor import CodeExecutor, ExecResult, model_text
 from yunshu_gateway.sandbox.srt import (
@@ -42,7 +43,7 @@ def test_settings_default_is_closed(tmp_path):
     fs = s["filesystem"]
     assert fs["allowWrite"] == [str(tmp_path / "c")]
     assert (
-        fs["denyRead"] == [*DENY_READ_ROOTS, str(tmp_path)]
+        fs["denyRead"] == [*DENY_READ_ROOTS, str(tmp_path), private_media_path()]
         and "/Users" in fs["denyRead"]
     )
     assert str(tmp_path / "c") in fs["allowRead"]
@@ -251,3 +252,25 @@ def test_doctor_check_states(monkeypatch):
         srt_mod, "find_srt", lambda: SrtInfo("/n", "/c", problem="Node 20.1 is too old")
     )
     assert "too old" in doctor.check_code_execution().detail
+
+
+def test_decoded_request_media_sit_in_a_private_dir_the_sandbox_cannot_read(
+    tmp_path, monkeypatch
+):
+    """Decoded base64 media used to land in the shared system temp dir, readable by sandboxed code."""
+    import stat
+
+    from yunshu_engine.vlm_engine import VLMEngine
+
+    monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
+    eng = VLMEngine.__new__(VLMEngine)
+    eng._temp_files = None
+    import threading
+
+    eng._temp_files_lock = threading.Lock()
+    path = asyncio.run(eng._save_base64_file("aGVsbG8=", "png"))
+    assert os.path.dirname(path) == private_media_path()
+    assert stat.S_IMODE(os.stat(private_media_path()).st_mode) == 0o700
+    assert (
+        private_media_path() in build_settings(tmp_path / "c")["filesystem"]["denyRead"]
+    )

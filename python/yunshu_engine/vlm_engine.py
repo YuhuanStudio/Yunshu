@@ -46,7 +46,9 @@ import mlx.core as mx
 
 from . import gc_policy, netguard, next_turn, settings
 from .moe_pack import tensor_quantization_override, unsupported_pack_reason
+from .paths import private_media_dir
 from .request import RequestOutput
+from .special_tokens import neutralize_special_text
 from .types import EngineConfig
 
 logger = logging.getLogger(__name__)
@@ -3704,6 +3706,7 @@ class VLMEngine:
                 messages = adapt_messages(messages, self.model_name)
         except Exception:
             logger.debug("VLM message adapter failed", exc_info=True)
+        messages = neutralize_special_text(messages, getattr(self, "_tokenizer", None))
 
         if self._tokenizer is not None and hasattr(
             self._tokenizer, "apply_chat_template"
@@ -3895,6 +3898,7 @@ class VLMEngine:
             messages = adapt_messages(messages, self.model_name)
         except Exception:
             logger.debug("VLM message adapter failed", exc_info=True)
+        messages = neutralize_special_text(messages, getattr(self, "_tokenizer", None))
         vlm_messages = self._build_vlm_messages(messages, max_images=max_images)
         tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
         if enable_thinking is not None:
@@ -4167,7 +4171,9 @@ class VLMEngine:
             (fmt or "").lower().strip(), (fmt or "").lower().strip()
         )
         ext = _norm if _norm in ("wav", "mp3", "ogg", "flac", "pcm") else "wav"
-        tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+            suffix=f".{ext}", dir=private_media_dir(), delete=False
+        )
 
         def _sync_decode_write() -> None:
             # MB-size base64 decode + write blocks event loop;
@@ -4197,7 +4203,9 @@ class VLMEngine:
         _mime = header.split("/", 1)
         ext = _mime[1].split(";")[0] if len(_mime) > 1 else "png"
         ext = ext if ext in ("png", "jpg", "jpeg", "webp", "gif") else "png"
-        tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+            suffix=f".{ext}", dir=private_media_dir(), delete=False
+        )
 
         def _sync_decode_write() -> None:
             # offload sync I/O off the event loop.
@@ -4224,7 +4232,9 @@ class VLMEngine:
         ext = Path(urlsplit(url).path).suffix.lower()
         if ext not in (".mp4", ".webm", ".mov", ".mkv", ".avi"):
             ext = ".mp4"
-        tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)  # noqa: SIM115
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115
+            suffix=ext, dir=private_media_dir(), delete=False
+        )
         tmp.close()
         self._register_temp_file(tmp.name)
         try:
@@ -4250,7 +4260,9 @@ class VLMEngine:
         ext = url.rsplit(".", 1)[-1].lower() if "." in url.split("?")[0] else "png"
         ext = ext if ext in ("png", "jpg", "jpeg", "webp", "gif") else "png"
 
-        tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+            suffix=f".{ext}", dir=private_media_dir(), delete=False
+        )
         tmp.close()  # Close FD immediately — urlretrieve writes by path, not handle
         # Register temp file eagerly so cleanup happens even if download fails
         self._register_temp_file(tmp.name)
@@ -4434,7 +4446,7 @@ class VLMEngine:
         """Extract frames from a video file using ffmpeg."""
         import subprocess
 
-        tmpdir = tempfile.mkdtemp(prefix="yunshu_video_")
+        tmpdir = tempfile.mkdtemp(prefix="yunshu_video_", dir=private_media_dir())
         # LEAK fix: eager-register tmpdir into _temp_files BEFORE
         # the await call so asyncio.CancelledError from a client disconnect
         # mid-extract doesn't orphan a directory full of frames on disk.
@@ -4528,7 +4540,9 @@ class VLMEngine:
 
     async def _save_base64_file(self, data: str, ext: str = "mp4") -> str:
         """Save base64-encoded data to a temp file."""
-        tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+            suffix=f".{ext}", dir=private_media_dir(), delete=False
+        )
 
         def _sync_decode_write() -> None:
             # offload sync decode+write off the event loop.

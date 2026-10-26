@@ -183,3 +183,69 @@ def test_container_ttl_is_per_container_and_capped_by_the_setting(env, monkeypat
     assert a.ttl_s == 60 and b.ttl_s == 600
     m.ttl_s = 30  # the operator lowers YUNSHU_CODE_EXECUTION_TTL_MIN
     assert m.get(a.id, touch=False).ttl_s == 30 and m.get(b.id, touch=False).ttl_s == 30
+
+
+def test_editor_does_not_follow_a_link_on_the_way(env):
+    """A directory component swapped for a link (the sandbox owns work/) is refused, not followed."""
+    e, c, _, tmp = env
+    outside = tmp / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("SECRET")
+    os.symlink(outside, c.work / "d")
+    r = asyncio.run(e.editor(c, {"command": "view", "path": "d/secret.txt"}))
+    assert not r.ok and "SECRET" not in r.text
+    r = asyncio.run(
+        e.editor(c, {"command": "create", "path": "d/new.txt", "file_text": "X"})
+    )
+    assert not r.ok and not (outside / "new.txt").exists()
+    r = asyncio.run(
+        e.editor(
+            c,
+            {
+                "command": "str_replace",
+                "path": "d/secret.txt",
+                "old_str": "SECRET",
+                "new_str": "x",
+            },
+        )
+    )
+    assert not r.ok and (outside / "secret.txt").read_text() == "SECRET"
+
+
+def test_editor_refuses_a_fifo_without_hanging(env):
+    import threading
+
+    e, c, _, _ = env
+    os.mkfifo(c.work / "f")
+    out = []
+    t = threading.Thread(
+        target=lambda: out.append(
+            asyncio.run(e.editor(c, {"command": "view", "path": "f"}))
+        ),
+        daemon=True,
+    )
+    t.start()
+    t.join(5)
+    assert not t.is_alive(), "view on a FIFO blocked"
+    assert not out[0].ok
+
+
+def test_open_confined_refuses_links_at_every_step(tmp_path):
+    """The check-then-use race the editor used to have: a link in the path is never followed."""
+    from yunshu_gateway.sandbox import files as cfiles
+
+    root = tmp_path / "root"
+    (root / "work").mkdir(parents=True)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "f").write_text("S")
+    os.symlink(out, root / "work" / "d")
+    os.symlink(out / "f", root / "work" / "l")
+    for parts in (["work", "d", "f"], ["work", "l"]):
+        with pytest.raises(OSError):
+            cfiles.open_confined(root, parts, os.O_RDONLY)
+    with pytest.raises(OSError):
+        cfiles.open_confined(
+            root, ["work", "d", "n"], os.O_WRONLY | os.O_CREAT, mkdirs=True
+        )
+    assert not (out / "n").exists()

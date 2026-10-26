@@ -8,6 +8,8 @@ retain the shared BatchedEngine state; misc ignores allow that mixin self type.
 
 from collections.abc import AsyncIterator
 
+from yunshu_engine.special_tokens import neutralize_special_text
+
 
 class EngineTemplatesMixin:
     async def chat(  # type: ignore[misc]
@@ -203,6 +205,9 @@ class EngineTemplatesMixin:
             messages = adapt_messages(messages, self.model_name)
         except Exception:
             _engine.logger.debug("message adapter failed", exc_info=True)
+
+        # special-token strings typed in message text stay text (never control ids)
+        messages = neutralize_special_text(messages, tokenizer)
 
         # Safety normalization: close dangling <think> before <tool_call>,
         # convert tool-call argument strings to dicts (vllm-mlx pattern)
