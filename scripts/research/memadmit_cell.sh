@@ -11,6 +11,7 @@ PORT=${PORT:-18996}
 PY=/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python
 export TMPDIR=/Volumes/P5Plus/yunshu-build/tmp/memadmit
 mkdir -p "$TMPDIR"
+[ -d "${MODEL_DIR:-/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp}" ] || { echo "model dir missing: ${MODEL_DIR:-default}"; exit 2; }
 vmv() { vm_stat | awk -v k="$1" '$0 ~ k {gsub(/\./,"",$NF); print $NF}'; }
 env ${ENVX:-} HOME=$H YUNSHU_HOME=$H/.yunshu YUNSHU_VLM_APC_DISK=0 YUNSHU_CONSOLE=0 YUNSHU_OBSERVE=1 YUNSHU_LOG_LEVEL=INFO \
   YUNSHU_AUTH_DISABLED=true PYTHONPATH=$WT/python \
