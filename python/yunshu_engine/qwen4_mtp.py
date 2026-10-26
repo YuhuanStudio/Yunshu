@@ -67,6 +67,39 @@ def load_native_head(
     return drafter
 
 
+# modules whose fused kernels (hyper-connection, MoE router/experts, PLE) read the raw quantized tensors
+DENSE_SKIP = ("hyper_connection", "shared_expert", "switch_mlp", ".ple.", ".mlp.gate")
+STOCK_ROWS = 32  # lane projections serve calls up to this many rows (decode, MTP / draft verify); prefill chunks stay stock
+
+
+def lane_projections(lm: Any, *, head: bool, group: bool = True) -> dict:
+    """Run the dense quantized projections as the row-invariant lane matmul (``kernels.lane_linear``).
+
+    Upstream's verify forward computes every dense projection of T rows as T singleton ``gather_qmm`` calls so
+    that each row gets the one-row decode bits; the weight is read once per row, so T rows cost T-fold dense
+    traffic (27B-sized Flash-Next dense side: 1 / 1.4 / 2.4 / 8.1 x the one-row time at 1 / 2 / 4 / 16 rows). The
+    lane matmul gives a row the same bits at any row count and reads the weight once. Decode, verify and
+    drafting all run through these modules, so speculative output equals plain decode. ``head`` also converts
+    the LM head (used when upstream's fused head kernel does not take the checkpoint's head format).
+    Calls wider than STOCK_ROWS (prefill chunks) run MLX's quantized matmul on a transient stock-layout copy."""
+    from .kernels import lane_linear
+    from .kernels.tensorfold import lane_qmm
+
+    if not hasattr(lm, "named_modules") or not lane_qmm.ready():
+        return {}
+    report = lane_linear.convert(lm, skip=DENSE_SKIP + (() if head else ("lm_head",)))
+    lane_linear.set_stock_rows(STOCK_ROWS)
+    if group:
+        from .kernels import lane_virtual
+
+        lane_virtual.install_qwen4()
+    return {
+        "lane_linear": report["converted"],
+        "lane_skipped": len(report["skipped"]),
+        "prefill_matmul": lane_linear.prefill_kernel_id(),
+    }
+
+
 def adapt_head(lm: Any) -> bool:
     """Give a quantized LM head the upstream exact kernel cannot read a row-invariant lane matmul.
 
@@ -89,8 +122,14 @@ def adapt_head(lm: Any) -> bool:
 
 
 def configure_lane(lm: Any, drafter: Any, block: int | None) -> tuple[dict, int | None]:
-    """Keep plain decode and verify on the family-specific upstream arithmetic."""
-    adapt_head(lm)
+    """Keep plain decode and verify on one family-specific arithmetic.
+
+    Default: upstream's singleton qmv arithmetic; a head format upstream's fused head kernel cannot take (the 6-bit
+    head of the oQ3e pack) gets a lane LM head only (``adapt_head``), since lane dense projections measured slower
+    for MTP decode at one row (verifykern 2026-10-26). ``YUNSHU_QWEN4_LANE`` moves every dense projection to the
+    lane matmul for decode, verify and drafting alike."""
+    from . import settings
+
     if getattr(getattr(drafter, "config", None), "target_layer_ids", None):
         from .qwen4_dflash import install
 
@@ -99,11 +138,23 @@ def configure_lane(lm: Any, drafter: Any, block: int | None) -> tuple[dict, int 
     if not all(callable(getattr(lm, name, None)) for name in required):
         raise RuntimeError("mlx-vlm lacks the Qwen4 hyper-state speculative verifier")
     supports = getattr(lm, "_supports_batch_invariant_decode", None)
-    if not callable(supports) or not supports():
+
+    def head_supported() -> bool:
+        return callable(supports) and bool(supports())
+
+    head_ok = head_supported()
+    kernels: dict = {"qwen4_native": True}
+    if not head_ok and not settings.get_bool("YUNSHU_QWEN4_LANE") and adapt_head(lm):
+        head_ok = head_supported()
+        kernels["lane_head"] = True
+    if settings.get_bool("YUNSHU_QWEN4_LANE") or not head_ok:
+        kernels.update(lane_projections(lm, head=not head_ok))
+        if not kernels.get("lane_linear"):
+            raise RuntimeError("Qwen4 target cannot use batch-invariant plain decode")
+        head_ok = head_supported()
+    if not head_ok:
         raise RuntimeError("Qwen4 target cannot use batch-invariant plain decode")
     # Block includes the target seed: two rows propose one draft token.  Measured on Flash-Next oQ4e
     # (docs/research/flashnext80/PLAN.md): the first draft is accepted 70-81% of the time, later ones 22-48%,
     # and every extra verify row reads more distinct experts, so block 2 decodes fastest at 1K and 8K.
-    return {"qwen4_native": True}, (
-        2 if block is None and drafter is not None else block
-    )
+    return kernels, (2 if block is None and drafter is not None else block)

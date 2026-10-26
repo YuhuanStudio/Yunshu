@@ -150,6 +150,8 @@ def run(a):
             "--env",
             "YUNSHU_VLM_DRAFT=" + tb.D,
         ]
+        for extra in filter(None, os.environ.get("GAPTABLE_EXTRA_ENV", "").split(",")):
+            args += ["--env", extra]
         if part == "decode":
             args += [
                 "--only-ctx",
@@ -188,7 +190,8 @@ def run(a):
                         line
                         for line in log.read_text(errors="replace").splitlines()
                         if re.search(
-                            r"prompt cache: .*GiB|streams of .* tokens|DFlash drafter (loaded|attached)|Neural Engine FFN split|Neural Engine program ready|(?i:kflash)",
+                            r"prompt cache: .*GiB|streams of .* tokens|DFlash drafter (loaded|attached)|Neural Engine FFN split|Neural Engine program ready|(?i:kflash)|"
+                            + os.environ.get("GAPTABLE_EVIDENCE_RE", "(?!)"),
                             line,
                         )
                     )

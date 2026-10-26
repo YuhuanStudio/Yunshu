@@ -41,6 +41,11 @@ def tick() -> None:
         return
     _STATE["n"] += 1
     n = _STATE["n"]
+    capture = hasattr(lib, "metalrt_profile")
+    if capture and n == START - 1:
+        lib.metalrt_cap_begin()
+    elif capture and n == START:
+        _log_kernel_profile(lib)
     if n == START:
         lib.metalrt_begin()
         _STATE["t0"] = time.perf_counter()
@@ -84,6 +89,21 @@ def tick() -> None:
             )
     elif START < n < END and _STATE["marks"] is not None:
         _STATE["marks"].append((time.monotonic(), "tick"))
+
+
+def _log_kernel_profile(lib) -> None:
+    """Per-kernel durations of the one round captured since the previous tick (interposer build with
+    ``metalrt_profile``): the captured dispatches are replayed one encoder each with timestamps, by function
+    name. The replay runs on the live buffers, so generation after this point is meaningless (profiling runs)."""
+    lib.metalrt_cap_end.restype = ctypes.c_int
+    lib.metalrt_profile.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+    lib.metalrt_profile.restype = ctypes.c_int
+    count = lib.metalrt_cap_end()
+    buf = ctypes.create_string_buffer(1 << 17)
+    n = lib.metalrt_profile(80, buf, 1 << 17)
+    logger.info(
+        "GPU per-kernel (%d captured dispatches): %s", count, buf.raw[:n].decode()
+    )
 
 
 def mark(name: str) -> None:
