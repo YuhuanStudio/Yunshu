@@ -24,7 +24,8 @@
       "commit": "a98d8c8c",
       "license": "Apache-2.0",
       "local_changes": [
-        "imports point at yunshu_engine.kernels.omlx"
+        "imports point at yunshu_engine.kernels.omlx",
+        "RMS-arm epsilon (Qwen3.5 q/k norm) is rendered from kernels/gdn_qk_eps (measured from the installed mlx-vlm _normalize_qk; mlx-vlm b8bf04c changes it to 1e-6/head_dim) instead of a literal"
       ],
       "kind": "vendored",
       "reviewed_commit": "6feea9f95de86c772235af765914e4abb82b236f",

@@ -20,6 +20,8 @@ from typing import Any
 
 import mlx.core as mx
 
+from . import gdn_qk_eps
+
 logger = logging.getLogger(__name__)
 
 MIN_TOKENS = 64
@@ -128,7 +130,7 @@ for (uint i=0; i<4; ++i) {
     ss += vals[i] * vals[i];
 }
 ss = simd_sum(ss);
-float inv = metal::precise::rsqrt(ss / 128.0f + 1e-6f);
+float inv = metal::precise::rsqrt(ss / 128.0f + __QK_RMS_EPS__);
 for (uint i=0; i<4; ++i) {
     bfloat16_t normed = bfloat16_t(vals[i] * inv);
     out[row * 128 + lane * 4 + i] = bfloat16_t(float(normed) * float(bfloat16_t(INVERSE ? 0.0078125f : 0.08838834764831845f)));
@@ -145,7 +147,7 @@ def fused_norm_scale(x, *, inverse: bool):
             name="yunshu_gdn_norm_scale",
             input_names=["x"],
             output_names=["out"],
-            source=_NORM_SCALE_SOURCE,
+            source=gdn_qk_eps.render(_NORM_SCALE_SOURCE),
             ensure_row_contiguous=False,
         )
     rows = x.size // 128

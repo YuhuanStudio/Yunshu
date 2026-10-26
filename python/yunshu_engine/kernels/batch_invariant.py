@@ -45,6 +45,34 @@ def set_active(active: bool) -> None:
     _STATE["active"] = bool(active)
 
 
+def scaled_linear_types() -> tuple:
+    """mlx-vlm's ``ScaledQuantizedLinear`` (NVFP4 wrapper with a global scale) if the installed
+    version has it; mlx-vlm 63fc979 admits it to the verify-linear gate (all-singleton rows)."""
+    try:
+        from mlx_vlm.quantization.nvfp4 import ScaledQuantizedLinear
+    except ImportError:
+        return ()
+    return (ScaledQuantizedLinear,)
+
+
+def scaled_rows(linear: Any, x: mx.array) -> mx.array | None:
+    """Rows of a scaled NVFP4 projection, each through the single-token call decode makes
+    (mlx-vlm ``_target_verify_singletons``: its FP32 projection and global scale round once per
+    row). None when ``linear`` is not one or the call is a single row."""
+    types = scaled_linear_types()
+    if not types or not isinstance(linear, types) or x.ndim != 3 or x.shape[0] * x.shape[1] == 1:
+        return None
+    return mx.concatenate(
+        [
+            mx.concatenate(
+                [linear(x[b : b + 1, t : t + 1]) for t in range(x.shape[1])], axis=1
+            )
+            for b in range(x.shape[0])
+        ],
+        axis=0,
+    )
+
+
 def is_installed() -> bool:
     return bool(_STATE["installed"])
 
@@ -160,6 +188,9 @@ def install(language_model: Any, model: Any = None, packed: bool = False) -> dic
                 return mx.concatenate(
                     [linear(x[:, t : t + 1]) for t in range(x.shape[1])], axis=1
                 )
+            scaled = scaled_rows(linear, x)
+            if scaled is not None:
+                return scaled
             if not isinstance(linear, nn.QuantizedLinear):
                 return linear(x)
             if x.ndim != 3 or x.shape[0] * x.shape[1] == 1:
