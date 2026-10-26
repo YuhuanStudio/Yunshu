@@ -379,7 +379,6 @@ class EngineNgramMixin:
                 _timeout_deadline = (
                     gen_t0 + timeout_seconds if timeout_seconds else None
                 )
-                _timeout_check_interval = 32
                 detokenizer = tokenizer.detokenizer
                 detokenizer.reset()
                 all_token_ids = list(
@@ -429,10 +428,9 @@ class EngineNgramMixin:
                         # Request-level timeout: check every N tokens to bound
                         # generation time. Without this, a pathological N-gram
                         # proposal/accept cycle can loop indefinitely.
-                        if (
-                            _timeout_deadline is not None
-                            and len(tokens) % _timeout_check_interval == 0
-                        ):
+                        if _timeout_deadline is not None:
+                            # every token / cycle: a modulo check skips multiples when a spec cycle
+                            # accepts several tokens, and overshoots by seconds on a slow model
                             if time.perf_counter() > _timeout_deadline:
                                 _engine.logger.warning(
                                     f"N-gram spec generation timed out after "

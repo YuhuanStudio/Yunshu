@@ -986,7 +986,6 @@ class EngineFastMixin:
                         exc_info=True,
                     )
 
-            _timeout_check_interval = 32
             _fp_stats.admit(
                 cached_tokens,
                 len(ids_to_prefill),
@@ -1042,10 +1041,9 @@ class EngineFastMixin:
                     tokens.append(token)
                     _fp_stats.token(len(tokens))
                     # Request-level timeout: check every N tokens
-                    if (
-                        _timeout_deadline is not None
-                        and len(tokens) % _timeout_check_interval == 0
-                    ):
+                    if _timeout_deadline is not None:
+                        # every token / cycle: a modulo check skips multiples when a spec cycle
+                        # accepts several tokens, and overshoots by seconds on a slow model
                         if time.perf_counter() > _timeout_deadline:
                             _engine.logger.warning(
                                 f"Generation timed out after {timeout_seconds}s ({len(tokens)} tokens)"
