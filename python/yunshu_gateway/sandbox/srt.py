@@ -13,6 +13,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from yunshu_engine.paths import private_media_path
+
 MIN_NODE = (22, 12)
 
 # Allowed names may not resolve to these (srt already blocks loopback / link-local / own addresses).
@@ -154,7 +156,13 @@ def build_settings(
         },
         "filesystem": {
             # the shared root too, whatever the user set it to: other containers stay unreadable
-            "denyRead": [*DENY_READ_ROOTS, str(container_dir.parent)],
+            # decoded request media (other requests' images / audio / video) live in the system
+            # temp dir, which is otherwise readable: they get a private directory that is denied
+            "denyRead": [
+                *DENY_READ_ROOTS,
+                str(container_dir.parent),
+                private_media_path(),
+            ],
             "allowRead": allow_read,
             "allowWrite": [str(container_dir)],
             "denyWrite": [],
