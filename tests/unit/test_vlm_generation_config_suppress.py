@@ -102,3 +102,21 @@ def test_no_generation_config_adds_no_processor(tmp_path):
     eng, seen = _engine(tmp_path, None)
     _run(eng)
     assert not any(isinstance(p, TokenMaskProcessor) for p in seen["logits_processors"])
+
+
+def test_hub_id_resolves_to_the_cached_snapshot(tmp_path, monkeypatch):
+    """A model loaded by hub id reads the snapshot's generation_config.json (the text path did,
+    the VLM path looked for a relative directory named after the repo id and found nothing)."""
+    import mlx_lm.utils
+
+    from yunshu_engine import generation_suppress
+
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    (snap / "generation_config.json").write_text(
+        json.dumps({"suppress_tokens": [5, 3]})
+    )
+    monkeypatch.setattr(mlx_lm.utils, "hf_repo_to_path", lambda repo: snap)
+    monkeypatch.setattr(generation_suppress, "_DIRS", {})
+    eng = SimpleNamespace(_model_path="org/not-a-local-dir", _tokenizer=Tok())
+    assert VLMEngine._generation_suppress_ids(eng) == [3, 5]

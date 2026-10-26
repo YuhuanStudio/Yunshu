@@ -4766,22 +4766,15 @@ class VLMEngine:
         cached = getattr(self, "_suppress_ids_cache", None)
         if cached is not None:
             return cached
+        # Shared with the text path: a hub id resolves to its cached snapshot directory.
+        from .generation_suppress import default_suppress_ids
+
         ids: list[int] = []
         with contextlib.suppress(Exception):
-            path = Path(getattr(self, "_model_path", "")) / "generation_config.json"
-            if path.exists():
-                raw = json.loads(path.read_text()).get("suppress_tokens")
-                if isinstance(raw, list):
-                    ids = [
-                        i for i in raw if isinstance(i, int) and not isinstance(i, bool)
-                    ]
-        if ids:
-            # The mask indexes the logits row: an id outside the vocabulary is dropped.
-            with contextlib.suppress(Exception):
-                tok = self._tokenizer
-                vocab = len(getattr(tok, "_tokenizer", tok))
-                ids = [i for i in ids if 0 <= i < vocab]
-        self._suppress_ids_cache = sorted(set(ids))
+            ids = default_suppress_ids(
+                getattr(self, "_model_path", None), getattr(self, "_tokenizer", None)
+            )
+        self._suppress_ids_cache = ids
         return self._suppress_ids_cache
 
     # ── Stats ──
