@@ -1361,9 +1361,12 @@ class VLMBatchRunner:
         self._release_apc_request(group, job)
         if not group.jobs and getattr(group, "spec", False):
             from .kernels.buffer_cache import offer_restore_buffers
+            from .spec_release import finished_caches
 
-            batch = getattr(group.gen, "_generation_batch", None)
-            offer_restore_buffers(getattr(batch, "prompt_cache", None) or [])
+            # mlx-vlm 259802e empties the finished batch's prompt_cache in its own release
+            offer_restore_buffers(finished_caches(group.gen, group.last_caches))
+        if not group.jobs:
+            group.last_caches = None
         self._emit(job, _DONE)
 
     @staticmethod
@@ -1401,6 +1404,10 @@ class VLMBatchRunner:
                 )
                 if discard is not None:
                     discard()
+                if group.spec:
+                    from .spec_release import snapshot_caches
+
+                    group.last_caches = snapshot_caches(group.gen, list(group.jobs))
                 with contextlib.suppress(Exception):
                     group.gen.remove(uid)
                 self._finish(group, uid, "cancel" if cancelled else None)
@@ -1608,6 +1615,10 @@ class VLMBatchRunner:
             # been delivered yet; that admission keeps synchronous stores.
             apc.defer_checkpoint_stores = len(group.jobs) == 1
         early_first = None
+        if group.spec:
+            from .spec_release import snapshot_caches
+
+            group.last_caches = snapshot_caches(group.gen, list(group.jobs))
         try:
             early_first = self._emit_ready_first(group)
             if decode_only:
@@ -2770,3 +2781,4 @@ class _Group:
     sampler: RowSampler | None = None
     jobs: dict = field(default_factory=dict)
     prefills: dict = field(default_factory=dict)
+    last_caches: list | None = None
