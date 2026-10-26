@@ -686,23 +686,31 @@ class EngineStreamMixin:
                         _log_probs = _lp_logits - _mx.logsumexp(
                             _lp_logits, axis=-1, keepdims=True
                         )
-                        _tok_lp = float(_log_probs[token])
+                        if top_logprobs and top_logprobs > 0:
+                            from .text_logprobs import top_logprobs as _top_lp
+
+                            _tok_lp, _top_ids, _top_vals = _top_lp(
+                                _log_probs, top_logprobs, token
+                            )
+                        else:
+                            _tok_lp, _top_ids, _top_vals = (
+                                float(_log_probs[token]),
+                                None,
+                                None,
+                            )
                         if _tok_lp != _tok_lp or _tok_lp == float("-inf"):
                             _tok_lp = -100.0
                         _lp_entry = {"token_id": int(token), "logprob": _tok_lp}
-                        if top_logprobs and top_logprobs > 0:
-                            _k = min(top_logprobs, _log_probs.shape[0])
-                            _sorted_idx = _mx.argsort(-_log_probs)
-                            _top_k_idx = _sorted_idx[:_k]
-                            _top_entries = []
-                            for j in range(_k):
-                                _tlp = float(_log_probs[int(_top_k_idx[j])])
-                                if _tlp != _tlp or _tlp == float("-inf"):
-                                    _tlp = -100.0
-                                _top_entries.append(
-                                    {"token_id": int(_top_k_idx[j]), "logprob": _tlp}
-                                )
-                            _lp_entry["top_logprobs"] = _top_entries
+                        if _top_ids is not None:
+                            _lp_entry["top_logprobs"] = [
+                                {
+                                    "token_id": i,
+                                    "logprob": -100.0
+                                    if v != v or v == float("-inf")
+                                    else v,
+                                }
+                                for i, v in zip(_top_ids, _top_vals, strict=True)
+                            ]
                     # Check cancellation
                     if _engine._is_cancelled(cancel_event):
                         mx.synchronize()

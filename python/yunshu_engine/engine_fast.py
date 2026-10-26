@@ -1066,19 +1066,20 @@ class EngineFastMixin:
                             mx.array(-100.0, dtype=log_probs.dtype),
                             log_probs,
                         )
-                        tok_lp = float(log_probs[token])
-                        entry = {"token_id": int(token), "logprob": tok_lp}
                         if top_logprobs and top_logprobs > 0:
-                            k = min(top_logprobs, log_probs.shape[0])
-                            sorted_idx = mx.argsort(-log_probs)
-                            top_k_idx = sorted_idx[:k]
+                            from .text_logprobs import top_logprobs as _top_lp
+
+                            tok_lp, _top_ids, _top_vals = _top_lp(
+                                log_probs, top_logprobs, token
+                            )
+                            entry = {"token_id": int(token), "logprob": tok_lp}
                             entry["top_logprobs"] = [
-                                {
-                                    "token_id": int(top_k_idx[j]),
-                                    "logprob": float(log_probs[int(top_k_idx[j])]),
-                                }
-                                for j in range(k)
+                                {"token_id": i, "logprob": v}
+                                for i, v in zip(_top_ids, _top_vals, strict=True)
                             ]
+                        else:
+                            tok_lp = float(log_probs[token])
+                            entry = {"token_id": int(token), "logprob": tok_lp}
                         token_logprobs.append(entry)
                     # Stop ID check — must happen before thinking budget so that
                     # a stop token gets finish_reason="stop" even during thinking.

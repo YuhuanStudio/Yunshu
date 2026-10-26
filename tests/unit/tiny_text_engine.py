@@ -71,9 +71,13 @@ def make_engine(seed: int = 0):
 
 
 async def collect_stream(eng, **kw):
-    """Concatenate a ``_stream_generate_fast`` run: (text, final GenerationOutput)."""
-    text, last = "", None
+    """Run ``_stream_generate_fast``: (text, final GenerationOutput). Per-token logprob
+    entries of every chunk are gathered on ``final.logprobs`` (the engine yields them
+    chunk by chunk)."""
+    text, last, lps = "", None, []
     async for out in eng._stream_generate_fast(**kw):
         text += out.new_text or ""
+        lps.extend(out.logprobs or [])
         last = out
+    last.logprobs = lps or None
     return text, last
