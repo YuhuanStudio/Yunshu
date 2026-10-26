@@ -25,7 +25,7 @@ checkout, pick just the extras you need instead of `--all-extras`:
 uv sync --extra omni          # mlx-vlm + torch — native Qwen3-Omni speech-to-speech (a supported capability)
 uv sync --extra vision        # mlx-vlm (VLM / OCR)
 uv sync --extra audio         # mlx-audio (ASR / TTS / Realtime voice cascade)
-uv sync --extra generation    # diffusers + torch (image generation)
+uv sync --extra generation    # torch + Pillow (image generation)
 uv sync --extra embeddings    # mlx-embeddings (/v1/embeddings, /v1/rerank)
 uv sync --all-extras          # everything — what most contributors want
 ```

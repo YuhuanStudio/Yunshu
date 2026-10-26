@@ -2645,7 +2645,9 @@
       "why": "text path, caches, samplers",
       "pin_package": "mlx-lm",
       "commit": "259b8dd0418b687e31ce53258775dff35f879440",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "93e6d4a6447b3080861985947f0820e76fcb957d",
+      "review_reason": "Adopted v0.32.2 through the lock (mlx-lm>=0.32.2; its mlx>=0.32.2 floor is met by the 0.32.3 pin). No patched mlx-lm symbol remains after n_confirmed_patch.py was removed, and the used API (generate_step, BatchGenerator, make_prompt_cache, trim_prompt_cache, load_tokenizer) is unchanged. Commits after the v0.32.2 tag (HEAD 4cfc6478) are not adopted or reviewed for adoption."
     },
     {
       "repo": "https://github.com/ml-explore/mlx",
@@ -3516,11 +3518,10 @@
       "installed_version": "1.33.0",
       "latest_version": "2.2.0",
       "blocked_by": [
-        "tokenizers",
-        "diffusers"
+        "tokenizers"
       ],
       "reviewed_date": "2026-10-08",
-      "reason": "Installed tokenizers 0.23.2 and diffusers 0.41.0 both require huggingface-hub<2.0; keep the resolver-valid 1.33.0. Recheck when either wheel or latest hub version changes."
+      "reason": "Installed tokenizers 0.23.2 requires huggingface-hub<2.0; keep the resolver-valid 1.33.0. Recheck when the wheel or latest hub version changes."
     },
     "trafilatura": {
       "installed_version": "2.1.0",
