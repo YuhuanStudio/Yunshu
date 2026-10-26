@@ -1343,6 +1343,7 @@ class Scheduler:
         outputs = []
         if self._failed_insert_ids:
             for fail_id in self._failed_insert_ids:
+                self._row_guards.pop(fail_id, None)  # sampler + matcher of a dead row
                 fail_req = self.requests.get(fail_id)
                 actual_reason = getattr(fail_req, "finish_reason", None) or "error"
                 outputs.append(
@@ -2614,6 +2615,7 @@ class Scheduler:
                 self._rope_delta_mgr.unregister(uid)
             self._detokenizers.pop(request.request_id, None)
             self._thinking_processors.pop(request.request_id, None)
+            self._row_guards.pop(request.request_id, None)
             self._thinking_state.pop(request.request_id, None)
             # Save chunked prefill progress before discarding, so the request
             # can resume (not restart) when re-scheduled after preemption.
@@ -3657,7 +3659,8 @@ class Scheduler:
             _row_guard = self._row_guards.get(req_id)
             _row_error = _row_guard.fault if _row_guard is not None else None
             if _row_error is not None:
-                # The row's grammar hit a dead end: fail this request alone
+                # The row's grammar hit a dead end: fail this request alone (finishing it
+                # schedules its BatchGenerator row for removal below, EOS or not)
                 finish_reason = "error"
                 is_finished = True
 
@@ -3867,6 +3870,7 @@ class Scheduler:
             self.running.pop(req_id, None)
             self._detokenizers.pop(req_id, None)
             self._thinking_processors.pop(req_id, None)
+            self._row_guards.pop(req_id, None)
             self._thinking_state.pop(req_id, None)
             self._pop_pending_prefill(req_id)
             self._cleanup_spec_state(req_id)
@@ -4053,6 +4057,7 @@ class Scheduler:
                 # _process_responses (e.g. chunked prefill timeout paths).
                 self._detokenizers.pop(req_id, None)
                 self._thinking_processors.pop(req_id, None)
+                self._row_guards.pop(req_id, None)
                 self._thinking_state.pop(req_id, None)
                 self._spec_drafts.pop(req_id, None)
                 self._spec_draft_start_pos.pop(req_id, None)
@@ -4430,6 +4435,7 @@ class Scheduler:
         for rid in failed:
             self._detokenizers.pop(rid, None)
             self._thinking_processors.pop(rid, None)
+            self._row_guards.pop(rid, None)
             self._thinking_state.pop(rid, None)
             self._pending_prefill.pop(rid, None)
             self._spec_drafts.pop(rid, None)
