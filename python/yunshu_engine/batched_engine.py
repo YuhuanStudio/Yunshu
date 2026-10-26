@@ -165,6 +165,9 @@ from .engine_embeddings import EngineEmbeddingsMixin
 from .engine_fast import EngineFastMixin
 from .engine_ngram import EngineNgramMixin
 from .engine_policy import (
+    _delivered_token_count as _delivered_token_count,
+)
+from .engine_policy import (
     _is_cancelled as _is_cancelled,
 )
 from .engine_policy import (

@@ -1354,6 +1354,13 @@ class EngineStreamMixin:
                     )
                     break
                 n_tok = tok_count
+                if done and finish_reason == "stop" and _user_stop_hit[0]:
+                    # A stop string spanning tokens: the held-back stop prefix's tokens were
+                    # generated but their text was never delivered. Usage counts what the
+                    # consumer took (the non-streaming path re-encodes the kept text too).
+                    n_tok = _engine._delivered_token_count(
+                        tokenizer, accumulated, n_tok
+                    )
 
                 # Streaming backpressure: slow down if client can't keep up
                 if _backpressure.check_backpressure(_q.qsize()):

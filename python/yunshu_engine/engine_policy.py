@@ -60,6 +60,16 @@ def _read_config_eos_ids(model_path: str) -> frozenset:
     return result
 
 
+def _delivered_token_count(tokenizer, delivered_text: str, generated: int) -> int:
+    """Completion tokens for a reply cut at a stop string: the tokens of the text the client
+    received, never more than were generated (held-back stop-prefix tokens are not billed)."""
+    try:
+        n = len(tokenizer.encode(delivered_text, add_special_tokens=False))
+    except Exception:
+        return generated
+    return n if n < generated else generated
+
+
 def _parse_quant_config_env(s: str) -> dict | None:
     """Parse YUNSHU_QUANT_CONFIG into an mlx-lm quantization dict.
 
