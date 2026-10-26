@@ -329,9 +329,9 @@ def _check_metrics_auth(request: Request) -> None:
     so AuthMiddleware (innermost) never runs for this path. Therefore
     validate the static bearer token independently here.
 
-    Single-consumer model: the static ``YUNSHU_AUTH_TOKEN`` and stored API keys with the
+    Single-owner model: the static ``YUNSHU_AUTH_TOKEN`` and stored API keys with the
     ``admin`` scope are honored (stored keys switch auth on, like a token, everywhere else);
-    the RBAC / legacy-tenant paths have been removed. With no token and no stored key the
+    there are no roles beyond the ``admin`` scope. With no token and no stored key the
     endpoint stays open for Prometheus scrapers.
 
     Raises ``HTTPException``; ``MetricsMiddleware`` turns it into the JSON error envelope

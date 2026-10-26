@@ -4134,7 +4134,7 @@ class Scheduler:
         that's a SINGLETON @property on mlx-lm's tokenizer wrapper. All
         concurrent requests shared the same detokenizer; one request's
         `.reset()` wiped another's byte buffer mid-stream, corrupting
-        streaming output. CLAUDE.md explicitly warns: "never pool".
+        streaming output. A detokenizer is never pooled across requests.
 
         Now instantiate a fresh detokenizer via the tokenizer's
         detokenizer_class when available; fall back to the singleton +

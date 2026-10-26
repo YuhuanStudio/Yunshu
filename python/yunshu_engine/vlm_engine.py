@@ -189,7 +189,7 @@ def _VALIDATE_LOCAL_PATH(path: str) -> str:
     output. With `YUNSHU_ALLOW_LOCAL_FILES` unset, only paths under
     `YUNSHU_MEDIA_DIR` (default: `$TMPDIR/yunshu_media`) are allowed. Set
     `YUNSHU_ALLOW_LOCAL_FILES=1` to opt back into the legacy unrestricted
-    behavior (NOT recommended for multi-tenant deployments).
+    behavior (NOT recommended when the API is reachable by anyone but the owner).
 
     Returns the resolved absolute path on success.
     Raises ValueError if the path escapes the allow-listed directory.
@@ -208,7 +208,7 @@ def _VALIDATE_LOCAL_PATH(path: str) -> str:
     except ValueError as e:
         raise ValueError(
             f"Local file access blocked: {path} is not under YUNSHU_MEDIA_DIR={media_root}. "
-            f"Set YUNSHU_ALLOW_LOCAL_FILES=1 to bypass (NOT recommended in multi-tenant)."
+            f"Set YUNSHU_ALLOW_LOCAL_FILES=1 to bypass (NOT recommended when the API is reachable by anyone but the owner)."
         ) from e
     return str(resolved)
 
@@ -2458,8 +2458,7 @@ class VLMEngine:
             # at 88.6/59.9/67.3 tok/s vs 57-67/50-53/58-62 for row-exact kernels
             # at block 3 (the removed row-exact alternative) and
             # 83.8/59.9/66.7 for the non-exact fast verify, with parity on every
-            # task
-            # (docs/research/runs/2026-09-28-matrix/invariant-packed-mtp-sweep.jsonl).
+            # task (measured on Qwen3.8-27B, 2026-09-28).
             # DFlash verifies through the same target forward, so it gets the
             # same guarantee.
             from .kernels.batch_invariant import install as install_invariant
@@ -2556,7 +2555,7 @@ class VLMEngine:
                 # tokens as upstream's loop; Qwen3.8-27B, single requests, HTTP
                 # decode tok/s 1K/8K/32K/131K: code_python 45.8/68.6/53.4/55.9
                 # -> 55.2/69.5/62.5/59.7, novel_en 48.5/42.2/43.3/32.7 ->
-                # 55.3/49.9/44.5/35.0 (docs/research/runs/2026-09-29-step-efficiency).
+                # 55.3/49.9/44.5/35.0 (measured 2026-09-29).
                 from . import mtp_lane
                 from .draft_vocab import DRAFT_VOCAB
                 from .draft_vocab import install as install_draft_vocab
@@ -2732,7 +2731,7 @@ class VLMEngine:
         runner.inflight = lambda: self._active_count
         # Per-row-length (ragged) KV + ragged decode attention for the shared
         # batch and the speculative lane: the layout for every model with
-        # qwen3_5 attention (lossless; docs/research/runs/2026-09-29-ragged-idle).
+        # qwen3_5 attention (lossless; measured 2026-09-29).
         # KV precision is the user's memory/quality choice.
         precision = settings.get("YUNSHU_KV_PRECISION")
         from .kernels import ragged_kv
