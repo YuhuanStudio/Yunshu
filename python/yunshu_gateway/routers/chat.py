@@ -15,7 +15,6 @@ Supports:
 """
 
 import contextlib
-import copy
 import json
 import logging
 import math
@@ -745,14 +744,10 @@ def _parse_response_format_unchecked(
         js = response_format.get("json_schema", {})
         schema = js.get("schema")
         if schema:
-            # OpenAI strict mode: when strict=true, force additionalProperties=false
-            # on the root schema so the constrained decoder rejects any keys not
-            # declared in properties. We mutate a copy to avoid leaking changes
-            # back to the request body.
-            if js.get("strict") is True and isinstance(schema, dict):
-                schema = copy.deepcopy(schema)
-                if schema.get("type") == "object" or "properties" in schema:
-                    schema["additionalProperties"] = False
+            # OpenAI strict mode (shared with Responses): strict=true closes every object.
+            from yunshu_gateway.schemas.strict import strict_schema
+
+            schema = strict_schema(schema, js.get("strict"))
             return schema
         return "json_object"
 
