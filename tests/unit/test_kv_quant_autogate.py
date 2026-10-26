@@ -59,3 +59,20 @@ def test_fallback_token_threshold_when_dims_unreadable():
     e = _eng(model=None)
     assert e._effective_kv_quant_bits(16384) == 8
     assert e._effective_kv_quant_bits(8192) is None
+
+
+def test_auto_quantized_kv_is_never_stored_in_token_keyed_caches():
+    """The RAM prefix/prompt caches have no precision in their key: KV that the length gate
+    quantized must not be stored (a hit would differ from a miss); a fixed precision may."""
+    import inspect
+
+    from yunshu_engine import engine_fast
+
+    auto = _eng(model=_fake_model(64, 8, 128))
+    assert auto._auto_quantized_kv(auto._effective_kv_quant_bits(16384))
+    assert not auto._auto_quantized_kv(auto._effective_kv_quant_bits(100))
+    fixed = _eng(explicit_bits=4, model=_fake_model(64, 8, 128))
+    assert not fixed._auto_quantized_kv(fixed._effective_kv_quant_bits(16384))
+    src = inspect.getsource(engine_fast)
+    assert "_lossy_kv = self._auto_quantized_kv(_req_kv_bits)" in src
+    assert src.count("and not _lossy_kv") >= 3

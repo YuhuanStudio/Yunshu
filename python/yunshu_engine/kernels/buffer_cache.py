@@ -59,18 +59,25 @@ def offer_restore_buffers(caches) -> None:
 
 
 def take_restore_buffer(a, capacity):
-    """A sole-owner destination with identical layout and sufficient capacity."""
+    """A sole-owner destination with identical layout and sufficient capacity.
+
+    Best fit, at most twice the requested capacity: a small request must not pin (and
+    zero-fill) a buffer sized for a much longer finished prompt."""
+    best = None
     for i, dst in enumerate(_RESTORE_BUFFERS):
         if (
             dst.dtype == a.dtype
             and dst.shape[:2] == a.shape[:2]
             and dst.shape[3:] == a.shape[3:]
-            and dst.shape[2] >= capacity
+            and capacity <= dst.shape[2] <= 2 * capacity
+            and (best is None or dst.shape[2] < _RESTORE_BUFFERS[best].shape[2])
         ):
-            out = _RESTORE_BUFFERS.pop(i)
-            _restore_pool_limit()
-            return out
-    return None
+            best = i
+    if best is None:
+        return None
+    out = _RESTORE_BUFFERS.pop(best)
+    _restore_pool_limit()
+    return out
 
 
 def auto_limit_gib(total_bytes: int) -> float:

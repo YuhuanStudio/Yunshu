@@ -1257,7 +1257,10 @@ class EngineFastMixin:
             # recurrent state isn't sliceable) — adding it would store a state
             # polluted by generated tokens and corrupt future reuse. So skip the
             # trim-based adds for hybrid; the boundary snapshots are correct.
-            if prefix_cache is not None and not _hybrid_mode:
+            # automatic (length-gated) 8-bit KV is lossy and the caches are not keyed by
+            # precision: never store it, or a later hit would differ from a miss
+            _lossy_kv = self._auto_quantized_kv(_req_kv_bits)
+            if prefix_cache is not None and not _hybrid_mode and not _lossy_kv:
                 prefix_cache.add(ids, cache)
 
             # KV cache breakpoints: save prefix entries at Anthropic
@@ -1267,6 +1270,7 @@ class EngineFastMixin:
                 _kv_breakpoint_token_positions
                 and prefix_cache is not None
                 and not _hybrid_mode
+                and not _lossy_kv
             ):
                 from .kv_prefix_cache import cache_length as _cache_len_bp
 
@@ -1306,6 +1310,7 @@ class EngineFastMixin:
                 not _pc_hit
                 and not _bypass_cache
                 and not _hybrid_mode
+                and not _lossy_kv
                 and hasattr(self, "_prompt_cache")
                 and self._prompt_cache is not None
                 and prefix_cache is not None

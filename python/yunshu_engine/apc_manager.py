@@ -138,7 +138,8 @@ def _restore_kv(c, min_capacity_tokens, targets):
         dst = take_restore_buffer(a, capacity) if _RESTORE_STORAGE.get() else None
         if dst is not None:
             dst[..., :rows, :] = a[..., :rows, :]
-            dst[..., rows:, :] = 0
+            # rows past the padded capacity are never read (the cache returns [:offset])
+            dst[..., rows:capacity, :] = 0
             return dst
         part = a[..., :rows, :]
         if pad <= 0:
@@ -235,6 +236,29 @@ def total_memory_bytes() -> int:
     import os
 
     return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+
+
+def _is_transient_load_error(e: BaseException) -> bool:
+    """A failure that says nothing about the file: out of memory, an interrupted or exhausted
+    system call, an MLX allocation failure. The checkpoint stays; the lookup goes cold."""
+    import errno
+
+    if isinstance(e, MemoryError):
+        return True
+    if isinstance(e, OSError):
+        return e.errno in {
+            errno.ENOMEM,
+            errno.EINTR,
+            errno.EAGAIN,
+            errno.EMFILE,
+            errno.ENFILE,
+            errno.ENOSPC,
+            errno.EBUSY,
+        }
+    if isinstance(e, RuntimeError):
+        text = str(e).lower()
+        return "allocat" in text or "out of memory" in text
+    return False
 
 
 def check_loaded_cache(
@@ -574,7 +598,9 @@ class SpillDiskStore(DiskBlockStore):
         try:
             loaded = super().load_exact_cache(cache_hash, **kwargs)
         except Exception as e:
-            if path is not None:
+            if _is_transient_load_error(e):
+                logger.warning("APC disk: load failed (%s), going cold", e)
+            elif path is not None:
                 self.quarantine(path, f"load raised {type(e).__name__}")
             return None
         if loaded is None:
@@ -879,12 +905,38 @@ class _Coordinator(APCCoordinator):
         candidates = policy.get("lookup_points", [n for n, _ in policy["points"]])
         maximum = max(candidates, default=0)
         extra_hash = kwargs["extra_hash"]
+        minimum = kwargs.get("safe_lookup_min", 0)
+
+        def acceptable(n, key):
+            # Restoring at a noncanonical point, or from a different earlier
+            # split plan, changes the hybrid recurrence's numerical spans.
+            signature = tuple(p for p in points if p < n and p % 2048)
+            return (
+                (n in candidates or key in self.manager.__dict__.get("_tail_keys", ()))
+                and (
+                    self.manager.prefill_alignment
+                    or self.manager._span_plans.get(key) == signature
+                )
+                and kwargs["suffix_is_text_only"](n)
+            )
+
         while maximum > 0:
+            # Decide on the candidate before restoring it: a restore copies the whole KV.
+            probed = self.manager.probe_exact_length(
+                token_ids, extra_hash, maximum, minimum
+            )
+            if probed:
+                pkey = _sequence_hash(
+                    tuple(token_ids[:probed]), extra_hash, self.manager.block_size
+                )
+                if not acceptable(probed, pkey):
+                    maximum = probed - 1
+                    continue
             cache, n = self.manager.lookup_exact_cache(
                 token_ids,
                 extra_hash=extra_hash,
                 max_prefix_tokens=maximum,
-                min_prefix_tokens=kwargs.get("safe_lookup_min", 0),
+                min_prefix_tokens=minimum,
                 refresh_retention=False,
             )
             if cache is None or not n:
@@ -892,15 +944,7 @@ class _Coordinator(APCCoordinator):
             key = _sequence_hash(
                 tuple(token_ids[:n]), extra_hash, self.manager.block_size
             )
-            # Restoring at a noncanonical point, or from a different earlier
-            # split plan, changes the hybrid recurrence's numerical spans.
-            signature = tuple(p for p in points if p < n and p % 2048)
-            source = self.manager._span_plans.get(key)
-            if (
-                (n in candidates or key in self.manager.__dict__.get("_tail_keys", ()))
-                and (self.manager.prefill_alignment or source == signature)
-                and kwargs["suffix_is_text_only"](n)
-            ):
+            if acceptable(n, key):
                 self.manager.touch_boundary(token_ids[:n], extra_hash)
                 return {
                     "matched_blocks": [],
@@ -1556,6 +1600,13 @@ class YunshuAPCManager(APCManager):
             )
             if longer is not None:
                 return
+        # HOT room is settled before the WARM copy is taken: take() removes it, so a failed
+        # promotion afterwards would destroy the only (lossless) copy.
+        size = warm.peek_nbytes(key)
+        if size is None:
+            return
+        if size > self.memory_max_bytes or not self._make_room(size, retain_bytes=size):
+            return  # no HOT room: the entry stays in WARM, the lookup goes on to SSD / recompute
         t0 = time.perf_counter()
         if where == "inflight":
             inf = warm.take_inflight(key)
@@ -1571,13 +1622,8 @@ class YunshuAPCManager(APCManager):
                 return
             cache, ent = got
             born, head = ent.born, ent.head
-        from mlx_vlm.apc import APCExactCacheEntry, _cache_nbytes
+        from mlx_vlm.apc import APCExactCacheEntry
 
-        size = _cache_nbytes(cache)
-        if size > self.memory_max_bytes or not self._make_room(size, retain_bytes=size):
-            # no HOT room for the decoded copy: it is discarded and the lookup goes on to
-            # SSD / recompute
-            return
         with self.lock:
             self._exact_cache[key] = APCExactCacheEntry(
                 tokens[:n], int(extra_hash), cache
@@ -1755,11 +1801,9 @@ class YunshuAPCManager(APCManager):
         """
         import numpy as np
 
-        key = (
-            len(token_ids),
-            hash(tuple(token_ids[:64])),
-            hash(tuple(token_ids[-64:])),
-        )
+        # the whole sequence is hashed: two prompts sharing length, head and tail (a changed
+        # middle) must not share an answer
+        key = (len(token_ids), hash(tuple(token_ids)))
         with self._plock:
             memo = self.__dict__.setdefault(
                 "_divergence_memo", collections.OrderedDict()
@@ -2425,6 +2469,45 @@ class YunshuAPCManager(APCManager):
             )
         )
         return cache, n
+
+    def probe_exact_length(self, token_ids, extra_hash, maximum, minimum) -> int:
+        """Length the next lookup_exact_cache would restore (HOT / WARM / SSD index), read from
+        metadata only: no restore, no promotion. 0 when nothing qualifies."""
+        tokens = tuple(int(t) for t in token_ids)
+        maximum = min(len(tokens) - 1, int(maximum))
+        if maximum <= minimum:
+            return 0
+        best = 0
+        with self.lock:
+            for e in self._exact_cache.values():
+                if e.extra_hash != extra_hash:
+                    continue
+                n = _upstream_apc._checkpoint_match_len(
+                    tokens,
+                    e.token_ids,
+                    maximum,
+                    self.block_size,
+                    _upstream_apc._dense_checkpoint_trimmable(
+                        e.prompt_cache, len(e.token_ids)
+                    ),
+                )
+                if n > max(minimum, best):
+                    best = n
+        if self.warm is not None:
+            found = self.warm.find(tokens, extra_hash, maximum, max(minimum, best))
+            if found is not None:
+                best = found[1]
+        if self.disk is not None:
+            found = self.disk.find_exact_prefix(
+                tokens,
+                extra_hash=extra_hash,
+                max_prefix_tokens=maximum,
+                min_prefix_tokens=max(minimum, best),
+                block_size=self.block_size,
+            )
+            if found is not None:
+                best = found[1]
+        return best
 
     def _skip_media_restore(self, token_ids, args, kwargs):
         """Inspect HOT metadata before upstream allocates/copies the restore.

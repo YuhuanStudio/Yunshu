@@ -76,3 +76,59 @@ def test_next_turn_resumes_from_the_servers_own_prompt_end_checkpoint():
         prefix_has_media=lambda _: False,
     )
     assert got is not None and got["prefix_len"] == 256
+
+
+def test_memo_is_not_shared_by_prompts_that_differ_only_in_the_middle():
+    manager = _mgr(prefill_alignment=64)
+    base = list(range(400))
+    assert manager.divergence_point(base) == 0
+    early = base[:150] + [9001] + base[151:]  # same length, first/last 64 tokens
+    late = base[:300] + [9002] + base[301:]
+    assert manager.divergence_point(early) == 128
+    assert manager.divergence_point(late) == 256
+
+
+def test_explicit_lookup_rejects_an_undeclared_checkpoint_before_restoring_it(
+    monkeypatch,
+):
+    from mlx_vlm.models.cache import ArraysCache
+
+    manager = _mgr(prefill_alignment=64)
+    c = _coordinator(manager)
+    first = list(range(300))
+    policy = {"points": [(128, 300), (256, 300)], "writes": [(128, 300), (256, 300)]}
+    policy["lookup_points"] = [128, 256]
+    c.set_request(first, policy)
+    c.checkpoint_lengths(first, set())
+    rec = ArraysCache(1)
+    rec.cache = [mx.ones((1, 2, 3))]
+    assert c.store_checkpoint(first[:128], [rec])
+    assert manager.store_exact_cache(first[:192], [rec])  # aligned, undeclared
+    second = first + list(range(1000, 1200))
+    # 192 is stored but this request does not declare it: only 128 may be restored
+    c.set_request(
+        second,
+        {
+            "points": [(128, 300), (256, 300)],
+            "writes": [(128, 300), (256, 300)],
+            "lookup_points": [128, 256],
+        },
+    )
+    restored = []
+    real = manager.lookup_exact_cache
+
+    def spy(*a, **kw):
+        cache, n = real(*a, **kw)
+        restored.append(n)  # a nonzero n is a full restore
+        return cache, n
+
+    monkeypatch.setattr(manager, "lookup_exact_cache", spy)
+    got = c.lookup(
+        second,
+        extra_hash=0,
+        safe_lookup_min=0,
+        suffix_is_text_only=lambda _: True,
+        prefix_has_media=lambda _: False,
+    )
+    assert got is not None and got["prefix_len"] == 128
+    assert restored == [128]
