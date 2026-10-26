@@ -3805,12 +3805,9 @@ class VLMEngine:
             )
         }
 
-    def _format_prompt(
-        self,
-        messages: list[dict],
-        enable_thinking: bool | None = None,
-        template_extra: dict | None = None,
-    ) -> str:
+    def _prepare_template_messages(self, messages: list[dict]) -> list[dict]:
+        """Role remap, family adapter and special-token defusing: every text render of a
+        conversation (generation, ``/tokenize``, ``/apply-template``) starts here."""
         # this text-only-chat path (a VLM model serving a non-image chat
         # turn) was a stale clone missing three BatchedEngine fixes — role
         # normalization, family adapter, and the assistant-prefill gate
@@ -3834,34 +3831,52 @@ class VLMEngine:
         except Exception:
             logger.debug("VLM message adapter failed", exc_info=True)
         messages = neutralize_special_text(messages, getattr(self, "_tokenizer", None))
+        return messages
+
+    def _template_messages_clean(self, messages: list[dict]) -> list[dict]:
+        """The ``{role, content, tool fields}`` list handed to ``apply_chat_template``."""
+        clean = []
+        for msg in messages:
+            _c = {
+                "role": msg.get("role", "user"),
+                "content": self._extract_text(msg.get("content", "")),
+            }
+            # preserve tool-related fields so a VLM + tools conversation
+            # (e.g. GLM-4V) keeps prior assistant tool-call turns in the prompt. The
+            # old code rebuilt {role, content} ONLY → every tool_call/tool_call_id/
+            # name was dropped (tool-use history vanished), and string-form tool args
+            # left intact would trip a GLM template's `is not mapping` raise → the
+            # whole prompt collapsing to the plaintext fallback. Mirror the
+            # BatchedEngine path: keep the fields + normalize string args to dicts.
+            _tcs = msg.get("tool_calls")
+            if isinstance(_tcs, list):
+                _c["tool_calls"] = self._normalize_vlm_tool_calls(_tcs)
+            if msg.get("tool_call_id"):
+                _c["tool_call_id"] = msg["tool_call_id"]
+            if msg.get("name"):
+                _c["name"] = msg["name"]
+            if msg.get("reasoning_content"):
+                _c["reasoning_content"] = msg["reasoning_content"]
+            clean.append(_c)
+        return clean
+
+    def _template_messages(self, messages: list[dict]) -> list[dict]:
+        """Exactly the messages generation passes to ``apply_chat_template``."""
+        return self._template_messages_clean(self._prepare_template_messages(messages))
+
+    def _format_prompt(
+        self,
+        messages: list[dict],
+        enable_thinking: bool | None = None,
+        template_extra: dict | None = None,
+    ) -> str:
+        messages = self._prepare_template_messages(messages)
 
         if self._tokenizer is not None and hasattr(
             self._tokenizer, "apply_chat_template"
         ):
             try:
-                clean = []
-                for msg in messages:
-                    _c = {
-                        "role": msg.get("role", "user"),
-                        "content": self._extract_text(msg.get("content", "")),
-                    }
-                    # preserve tool-related fields so a VLM + tools conversation
-                    # (e.g. GLM-4V) keeps prior assistant tool-call turns in the prompt. The
-                    # old code rebuilt {role, content} ONLY → every tool_call/tool_call_id/
-                    # name was dropped (tool-use history vanished), and string-form tool args
-                    # left intact would trip a GLM template's `is not mapping` raise → the
-                    # whole prompt collapsing to the plaintext fallback. Mirror the
-                    # BatchedEngine path: keep the fields + normalize string args to dicts.
-                    _tcs = msg.get("tool_calls")
-                    if isinstance(_tcs, list):
-                        _c["tool_calls"] = self._normalize_vlm_tool_calls(_tcs)
-                    if msg.get("tool_call_id"):
-                        _c["tool_call_id"] = msg["tool_call_id"]
-                    if msg.get("name"):
-                        _c["name"] = msg["name"]
-                    if msg.get("reasoning_content"):
-                        _c["reasoning_content"] = msg["reasoning_content"]
-                    clean.append(_c)
+                clean = self._template_messages_clean(messages)
                 # assistant-prefill gate — a trailing assistant
                 # message with non-empty STRING content means "continue THIS turn"
                 # (Anthropic/OpenAI prefill); add_generation_prompt=True would close the

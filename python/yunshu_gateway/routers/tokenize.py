@@ -83,6 +83,53 @@ def _with_dict_tool_arguments(messages: list[dict]) -> list[dict]:
     return out
 
 
+def _owning_engine(tokenizer):
+    """The loaded engine whose tokenizer this is, or None."""
+    manager = get_model_manager()
+    engines = []
+    if manager is not None:
+        engines += [
+            e.engine for e in manager.list_entries() if e.is_loaded and e.engine
+        ]
+    engines.append(get_engine())
+    for eng in engines:
+        if (
+            eng is not None
+            and getattr(eng, "_tokenizer", None) is tokenizer
+            and hasattr(eng, "_template_messages")
+        ):
+            return eng
+    return None
+
+
+def _template_input(tokenizer, messages: list[dict]) -> list[dict]:
+    """``messages`` as generation hands them to the chat template: the owning engine's own
+    preparation (role remap, family adapter with late ``[System note]`` turns and token-counter
+    stripping, special-token defusing, tool-call normalisation), so counts and previews equal what
+    is prefilled. Without an engine (a bare tokenizer) only the generic steps run."""
+    eng = _owning_engine(tokenizer)
+    if eng is not None:
+        # the chat route's own request normalisation (null content, text-part joins) first
+        from .chat import ChatMessage, _extract_messages
+
+        try:
+            messages = _extract_messages([ChatMessage(**m) for m in messages])
+        except Exception:
+            messages = [
+                {**m, "content": _flatten_content(m.get("content"))} for m in messages
+            ]
+        return eng._template_messages(messages)
+    from yunshu_engine.special_tokens import neutralize_special_text
+
+    return neutralize_special_text(
+        [
+            {**m, "content": _flatten_content(m.get("content"))}
+            for m in _with_dict_tool_arguments(messages)
+        ],
+        tokenizer,
+    )
+
+
 def _encode(tokenizer, text: str, add_special_tokens: bool) -> list[int]:
     if add_special_tokens:
         return list(tokenizer.encode(text))
@@ -113,15 +160,8 @@ async def tokenize(req: TokenizeRequest, request: Request):
         _check_model_access(request, model)
     tokenizer = _resolve_tokenizer(model)
     if req.messages is not None:
-        msgs = [
-            {**m, "content": _flatten_content(m.get("content"))}
-            for m in _with_dict_tool_arguments(req.messages)
-        ]
         kwargs = dict(req.chat_template_kwargs or {})
-        from yunshu_engine.special_tokens import neutralize_special_text
-
-        # Same defusing as the engines' renders, so counts equal generation's.
-        msgs = neutralize_special_text(msgs, tokenizer)
+        msgs = _template_input(tokenizer, req.messages)
         try:
             text = tokenizer.apply_chat_template(
                 msgs,
@@ -328,11 +368,9 @@ async def apply_template(req: ApplyTemplateRequest, request: Request):
     if req.model:
         _check_model_access(request, req.model)
     tokenizer = _resolve_tokenizer(req.model or "")
-    from yunshu_engine.special_tokens import neutralize_special_text
-
     try:
         prompt = tokenizer.apply_chat_template(
-            neutralize_special_text(_with_dict_tool_arguments(req.messages), tokenizer),
+            _template_input(tokenizer, req.messages),
             tools=req.tools,
             tokenize=False,
             add_generation_prompt=req.add_generation_prompt,
