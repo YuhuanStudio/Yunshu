@@ -194,8 +194,9 @@ and cold 32K TTFT versus Splash 1.3.2.
 - No security-specific changes in this release.
 
 [Full changelog: v0.1.5…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.5...main)
-- Special-token strings in message text stay text when the chat template is rendered, so a user cannot close their
-  turn and open a system one; `YUNSHU_MCP_SERVERS` is masked like other secrets; the code-execution editor opens
+- Special-token strings the chat template itself writes (turn/role markers) stay text when they appear in user or
+  tool-result text, so a user cannot close their turn and open a system one (system and assistant text, including
+  replayed tool calls, is left as written); `YUNSHU_MCP_SERVERS` is masked like other secrets; the code-execution editor opens
   paths with `O_NOFOLLOW` and refuses FIFOs; decoded request media live in a private directory sandboxed code cannot
   read. The console blocks remote images in model output.
 

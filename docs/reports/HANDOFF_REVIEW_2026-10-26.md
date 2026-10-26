@@ -41,7 +41,7 @@ New `path_matrix.json` features added by this branch (every path has a cell; a u
 |---|---|
 | `grammar_prewarm` | llguidance token tables built in the background at model load (`YUNSHU_GRAMMAR_PREWARM`) |
 | `fast_top_logprobs` | top_logprobs without a full-vocabulary argsort or per-id syncs; each path keeps its tie order |
-| `special_token_text` | special-token strings inside message text stay text in every render, including count/preview routes |
+| `special_token_text` | the chat template's own structural special-token strings (turn/role markers it writes) typed in `user` / tool-result text stay text in every render, including count/preview routes; `system`, `developer` and `assistant` text (and `tool_calls` arguments) is never touched |
 | `empty_prompt_refusal` | a zero-token prompt raises `EmptyPromptError` (HTTP 400 `empty_prompt`) before generation |
 | `finite_state_publish` | a checkpoint with non-finite recurrent state is never stored in a prefix cache |
 | `grammar_mask_fast` | constrained decoding masks from the bitmask / `allowed_mask`, not a ~240K-id list per token |
@@ -57,7 +57,7 @@ Shared helpers written for the unified path to reuse: `text_logit_processors.py`
 
 | area | main changes |
 |---|---|
-| Security | per-key actor and admin scope (an infer key no longer acts as admin over other keys' responses/containers/cancels); loopback servers refuse foreign `Host` and cross-site state-changing requests (DNS rebinding); failed-auth backoff (20/min per IP, 429); request-supplied MCP connector cannot reach private/loopback addresses by default; code-execution editor I/O confined with `O_NOFOLLOW` and non-regular files refused; decoded request media in a private 0700 dir denied to srt; special-token injection neutralised; `YUNSHU_MCP_SERVERS` masked as secret |
+| Security | per-key actor and admin scope (an infer key no longer acts as admin over other keys' responses/containers/cancels); loopback servers refuse foreign `Host` and cross-site state-changing requests (DNS rebinding); failed-auth backoff (20/min per IP, 429); request-supplied MCP connector cannot reach private/loopback addresses by default; code-execution editor I/O confined with `O_NOFOLLOW` and non-regular files refused; decoded request media in a private 0700 dir denied to srt; special-token injection neutralised (template-structural strings in user/tool text); `YUNSHU_MCP_SERVERS` masked as secret |
 | Gateway | pure-ASGI middleware stack (~120 → ~8 µs per streamed chunk, CPU); `ClosingStreamingResponse` on every inference stream; native tool schemas counted in the token budget; Responses replay rebuilds one assistant turn; missing `previous_response_id` ancestor is a 404; malformed Anthropic `tool_choice` is a 400; Anthropic thinking budget kept below `max_tokens`; 4 KB `input_json_delta` frames; whitespace-only content accepted; requests without `max_tokens` skip the full prompt encode; dead `usage_context` billing box removed |
 | Engine (VLM) | a grammar dead end fails only its row; jobs popped from pending always get a terminal; terminal stream items never dropped by a full queue; temp media cleaned on early failure; orphan key hashed once; non-stream timeout is a total deadline; a cancel after disconnect stops the parked orphan; bounded text-prompt cache; `generation_config` suppress_tokens; think tail stays reasoning; empty prompt refused; non-finite state never published; usage counts consumed tokens; batch top_logprobs by device argpartition; token masks built once per vocab; out-of-range `logit_bias`/suppress ids ignored (mlx-lm wrapped `-1` onto the last token) |
 | Engine (text) | no default 300 s deadline; wired limit sized correctly; dense penalties/bias/ban; argpartition top_logprobs; inflight register takes the list; llguidance `allowed_mask`; render/tokenize off the event loop; byte-once block hashes; auto-quantised KV not stored in token-keyed caches (fast, stream); the VLM-side fixes above ported (see TEXT_SIDE doc); per-row dead end in the loop; n-gram draft filter tests membership through the mask |
@@ -78,16 +78,29 @@ Shared helpers written for the unified path to reuse: `text_logit_processors.py`
   the window clears).
 * `YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE` defaults to false: request-supplied MCP servers on private/loopback/link-local
   addresses are refused. Operator-configured servers are unaffected.
-* Special-token strings in message text get a zero-width space after their first character, so the model sees text,
-  not a control token.
+* Special-token strings in `user` and tool-result text get a zero-width space after their first character, so the
+  model sees text, not a control token. Scope: only the special tokens the chat template itself writes as structure
+  (found literally in the template, or the `bos_token`/`eos_token`... it references), so `<pad>`, `<unk>` and the like
+  are left alone; only outside-input roles (`user`, `tool`/`function`/`ipython`, unknown roles), never `system` /
+  `developer` (operator text) or `assistant` content and `tool_calls` arguments (replayed model output: for models
+  whose tool/channel markers are special tokens, e.g. Mistral `[TOOL_CALLS]`, defusing them would corrupt history).
+  An unreadable template falls back to every special string. Raw `/v1/completions` string prompts are not changed.
 * Text-only requests have no default generation deadline (was 300 s total).
 * Zero-token prompts → 400 `empty_prompt` on every path. Whitespace-only user/system content is accepted.
 * Responses: a missing ancestor in a `previous_response_id` chain → 404 `previous_response_not_found`; failed/cancelled
   parents replay their input only.
 * Without a client `max_tokens`, `x_yunshu.budget.prompt_tokens` is a character upper bound (the clamp is slightly more
   conservative) because the full encode is skipped.
-* Auto length-gated 8-bit KV requests no longer write a prefix-cache entry.
-* `YUNSHU_GRAMMAR_PREWARM` (default on) costs about 0.45 GiB of native heap per mask width; turn it off on tight hosts.
+* Auto length-gated 8-bit KV starts at the offset where the KV estimate reaches the gate (not token 0, and not decided by
+  `max_tokens`), and a request skips its prefix/prompt-cache store only when its cache actually holds quantised layers.
+* `YUNSHU_GRAMMAR_PREWARM` (default on) builds one llguidance table at the tokenizer width (about 0.45 GiB native heap);
+  the forced-tool grammar's padded-width table is built on its first use. Turn it off on tight hosts.
+* `suppress_tokens` (request or checkpoint `generation_config.json`, also for hub-id models) no longer takes a request
+  off the n-gram / Gemma-4 speculative routes; they ban the ids themselves. `min_tokens` / `ignore_eos` still do.
+* Text fast/stream paths count `min_tokens` and frequency/presence penalties from the length of the ids given to
+  `generate_step` (mlx-lm 0.32.2 hands its processors the whole prefilled suffix).
+* A constrained request (json_schema / regex / choice / grammar) is never split into reasoning by an open `<think>`
+  in the prompt (non-stream close and stream pre-seed).
 * Removed settings: `YUNSHU_ROUND_DRIVER`, `YUNSHU_ROUND_PREFILL_CHUNK`, `YUNSHU_MTP_ROW_EXACT`. `YUNSHU_GPU_SAMPLER` is now
   marked experimental (`decide=` points at the A/B script).
 * Console: remote images in model output are blocked by CSP; Logs shows the newest 300 rows with "show earlier".
@@ -107,7 +120,8 @@ Nothing here ran on Metal or with a real checkpoint. Before merging, run on the 
 4. `scripts/research/ab_gpu_sampler.py --checkpoint $TEXT_CKPT --src python --out ab_gpu_sampler.json` to settle
    `YUNSHU_GPU_SAMPLER`.
 5. Control-token neutralisation with the real Qwen tokenizer (`tok.encode("<|im_end|>")` inside user text must not yield
-   the special id after rendering).
+   the special id after rendering), and with a Mistral-style tokenizer (`[TOOL_CALLS]` in a replayed assistant turn keeps its
+   control id).
 6. Console: `pnpm test` including the bundle-size check (route budget raised 304 → 305 KB in `3e8a442`, measured once at
    304.2 KB; revert if you prefer trimming), the full Playwright suite and WebKit.
 7. mlx 0.32.4 (gates mlx-vlm ≥ 0.7.9 and mlx-audio 0.6): run the row-invariance microtest (`mx.quantized_matmul` over
