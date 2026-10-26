@@ -323,7 +323,9 @@ def test_extra_hash_failure_releases_the_apc_request(runner, monkeypatch):  # no
         raise RuntimeError("extra_hash exploded")
 
     monkeypatch.setattr(FakeGen, "apc", apc, raising=False)
-    monkeypatch.setattr(FakeGen, "_apc_extra_hash", staticmethod(bad_hash), raising=False)
+    monkeypatch.setattr(
+        FakeGen, "_apc_extra_hash", staticmethod(bad_hash), raising=False
+    )
     job = _plain_job()
     with runner._lock:
         runner._pending.append(job)

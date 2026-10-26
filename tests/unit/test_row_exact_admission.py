@@ -45,5 +45,8 @@ def test_declined_layer_takes_exact_per_row_form():
 def test_group_and_one_row_paths_decline():
     q = _linear(128)
     assert rq._group_plan([q, q], mx.zeros((3, 128), mx.bfloat16), 3) is None
-    assert rq.one_row_qmv(q.weight, q.scales, q.biases, 4, 32, "affine", mx.bfloat16, 4) is None
-    assert rq.STOCK_QUAD_K == frozenset({64, 128})
+    assert (
+        rq.one_row_qmv(q.weight, q.scales, q.biases, 4, 32, "affine", mx.bfloat16, 4)
+        is None
+    )
+    assert frozenset({64, 128}) == rq.STOCK_QUAD_K

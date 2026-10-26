@@ -36,13 +36,17 @@ def candidates(head_dim: int = HEAD_DIM) -> dict[str, float]:
 
 def _matches(fn, eps: float, head_dim: int) -> bool:
     # A tiny-magnitude input: mean(x^2) is of the order of eps, so a wrong eps changes every output.
-    x = mx.full((1, 2, 2, head_dim), 1e-3, dtype=mx.float32) * mx.arange(1, 5).reshape(1, 2, 2, 1)
+    x = mx.full((1, 2, 2, head_dim), 1e-3, dtype=mx.float32) * mx.arange(1, 5).reshape(
+        1, 2, 2, 1
+    )
     with mx.stream(mx.cpu):
         q, k = fn(x, x)
         inv = head_dim**-0.5
         want_q = (inv**2) * mx.fast.rms_norm(x, None, eps)
         want_k = inv * mx.fast.rms_norm(x, None, eps)
-        return bool(mx.array_equal(q, want_q).item() and mx.array_equal(k, want_k).item())
+        return bool(
+            mx.array_equal(q, want_q).item() and mx.array_equal(k, want_k).item()
+        )
 
 
 def measure(normalize_qk=None, head_dim: int = HEAD_DIM) -> str | None:
@@ -52,7 +56,11 @@ def measure(normalize_qk=None, head_dim: int = HEAD_DIM) -> str | None:
 
         cls = Qwen3_5GatedDeltaNet
         normalize_qk = lambda q, k: cls._normalize_qk(None, q, k)  # noqa: E731
-    found = [kind for kind, eps in candidates(head_dim).items() if _matches(normalize_qk, eps, head_dim)]
+    found = [
+        kind
+        for kind, eps in candidates(head_dim).items()
+        if _matches(normalize_qk, eps, head_dim)
+    ]
     return found[0] if len(found) == 1 else None
 
 
@@ -62,7 +70,9 @@ def qk_norm_kind() -> str | None:
     try:
         return measure()
     except Exception:
-        logger.warning("GDN q/k norm epsilon could not be measured from mlx-vlm", exc_info=True)
+        logger.warning(
+            "GDN q/k norm epsilon could not be measured from mlx-vlm", exc_info=True
+        )
         return None
 
 
@@ -77,7 +87,9 @@ def expression(head_dim: str | int = HEAD_DIM, kind: str | None = None) -> str:
     for the power-of-two widths Qwen uses). Unrecognised upstream keeps the pinned fixed value."""
     kind = kind or qk_norm_kind()
     if kind is None:
-        logger.warning("GDN q/k norm epsilon not recognised in mlx-vlm; kernels keep %g", BASE_EPS)
+        logger.warning(
+            "GDN q/k norm epsilon not recognised in mlx-vlm; kernels keep %g", BASE_EPS
+        )
         kind = FIXED
     if kind == FIXED:
         return f"{BASE_EPS!r}f"

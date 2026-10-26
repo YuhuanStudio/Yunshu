@@ -52,7 +52,7 @@ def _conv(turns, note_each=True):
 @pytest.mark.parametrize("model", ["Qwen3.8-27B", "unknown-model"])
 def test_consecutive_agent_turns_are_prefix_stable(model):
     prompts = [_render(adapt_messages(_conv(t), model)) for t in (1, 2, 3)]
-    for a, b in zip(prompts, prompts[1:]):
+    for a, b in zip(prompts, prompts[1:], strict=False):
         head = a[: a.rindex("hook note")]
         assert b.startswith(head)
     assert "hook note 0" in prompts[0] and "hook note 2" in prompts[2]

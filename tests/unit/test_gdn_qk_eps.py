@@ -31,9 +31,14 @@ def test_eps_matches_installed_upstream_function_exactly():
         assert mx.array_equal(k, inv * mx.fast.rms_norm(x * 2, None, eps)).item()
     # the pinned mlx-vlm (0.7.8) is the fixed form; 0.7.10 flips to per_head_dim with no code change
     import importlib.metadata as md
+
     from packaging.version import Version
 
-    expected = "per_head_dim" if Version(md.version("mlx-vlm")) >= Version("0.7.10") else "fixed"
+    expected = (
+        "per_head_dim"
+        if Version(md.version("mlx-vlm")) >= Version("0.7.10")
+        else "fixed"
+    )
     assert kind == expected
 
 
@@ -56,7 +61,9 @@ def test_measure_recognises_both_upstream_forms(eps_fn, kind):
 def test_measure_rejects_unknown_eps():
     def normalize(q, k):
         s = k.shape[-1] ** -0.5
-        return (s**2) * mx.fast.rms_norm(q, None, 1e-5), s * mx.fast.rms_norm(k, None, 1e-5)
+        return (s**2) * mx.fast.rms_norm(q, None, 1e-5), s * mx.fast.rms_norm(
+            k, None, 1e-5
+        )
 
     assert gdn_qk_eps.measure(normalize) is None
 
@@ -96,7 +103,9 @@ def test_scaled_quantized_linear_rows_are_singleton_calls():
     assert out.shape == (2, 3, 32)
     for b in range(2):
         for t in range(3):
-            assert mx.array_equal(out[b : b + 1, t : t + 1], scaled(x[b : b + 1, t : t + 1])).item()
+            assert mx.array_equal(
+                out[b : b + 1, t : t + 1], scaled(x[b : b + 1, t : t + 1])
+            ).item()
     # not a scaled layer, or a single row: left to the caller
     assert batch_invariant.scaled_rows(ql, x) is None
     assert batch_invariant.scaled_rows(scaled, x[:1, :1]) is None

@@ -44,7 +44,11 @@ def eligible(linear: Any) -> bool:
         return False
     n = int(linear.weight.shape[0])
     k = int(linear.weight.shape[1]) * 32 // int(linear.bits)
-    return n % 4 == 0 and k % 64 == 0 and lane_qmm.slice_offset_ok(n, k, int(linear.bits), tiled=False)
+    return (
+        n % 4 == 0
+        and k % 64 == 0
+        and lane_qmm.slice_offset_ok(n, k, int(linear.bits), tiled=False)
+    )
 
 
 class IntCodeLinear(nn.Module):

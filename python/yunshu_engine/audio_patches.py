@@ -95,12 +95,18 @@ def patch_qwen3_asr_chunk_language() -> bool:
     original = cls._generate_one
     if getattr(original, "_yunshu_chunk_language", False):
         return False
-    source = rewrite_qwen3_generate_one(inspect.getsource(original))  # class-body indentation
+    source = rewrite_qwen3_generate_one(
+        inspect.getsource(original)
+    )  # class-body indentation
     if source is None:
         return False
     source = textwrap.dedent(source)
     namespace: dict[str, Any] = {}
-    exec(compile(source, f"<yunshu patch of {module.__name__}._generate_one>", "exec"), vars(module), namespace)
+    exec(
+        compile(source, f"<yunshu patch of {module.__name__}._generate_one>", "exec"),
+        vars(module),
+        namespace,
+    )
     patched = namespace["_generate_one"]
     patched._yunshu_chunk_language = True  # type: ignore[attr-defined]
     cls._generate_one = patched

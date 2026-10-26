@@ -60,7 +60,12 @@ def scaled_rows(linear: Any, x: mx.array) -> mx.array | None:
     (mlx-vlm ``_target_verify_singletons``: its FP32 projection and global scale round once per
     row). None when ``linear`` is not one or the call is a single row."""
     types = scaled_linear_types()
-    if not types or not isinstance(linear, types) or x.ndim != 3 or x.shape[0] * x.shape[1] == 1:
+    if (
+        not types
+        or not isinstance(linear, types)
+        or x.ndim != 3
+        or x.shape[0] * x.shape[1] == 1
+    ):
         return None
     return mx.concatenate(
         [

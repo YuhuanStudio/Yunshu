@@ -114,10 +114,10 @@ def test_snapshot_ignores_other_or_missing_batches():
 def test_offer_after_release_uses_the_snapshot():
     """The runner's _finish offers the finished KV set; after 259802e only the snapshot has it."""
     import mlx.core as mx
+    from mlx_vlm.models.cache import KVCache
 
     from yunshu_engine.kernels import buffer_cache
     from yunshu_engine.spec_release import finished_caches, snapshot_caches
-    from mlx_vlm.models.cache import KVCache
 
     kv = KVCache()
     kv.keys = mx.zeros((1, 1, 8, 4))
