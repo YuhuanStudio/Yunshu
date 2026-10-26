@@ -259,13 +259,46 @@ def spec_safe_processors(processors) -> bool:
     penalty / logit-bias closures and the pure token mask. Anything else keeps the request
     off the speculative lane."""
     for p in processors:
-        if isinstance(p, TokenMaskProcessor):
+        if isinstance(p, (TokenMaskProcessor, LogitBiasProcessor)):
             continue
         if hasattr(p, "process_last_token"):
             return False
         if not getattr(p, "__module__", "").startswith("mlx_lm.sample_utils"):
             return False
     return True
+
+
+class LogitBiasProcessor:
+    """``logits[:, t] += bias[t]`` for the in-range ids only.
+
+    mlx-lm's own bias closure scatters every key it is given, so a user id of ``-1`` wrapped
+    to the LAST vocabulary entry (biasing a token nobody asked about) and one past the head
+    was left to the scatter's undefined behaviour; OpenAI ignores ids outside the
+    vocabulary and the text path does too (4634f98). In-range ids run the identical
+    ``at[...].add`` scatter, so their logits are unchanged bit for bit. Stateless and
+    context-free: safe for speculative verify rows and shared-batch rows alike.
+    """
+
+    context_free = True
+
+    def __init__(self, biases: dict[int, float]):
+        self._biases = {int(k): float(v) for k, v in biases.items()}
+        self._vocab = -1
+        self._scatter: tuple[mx.array, mx.array] | None = None
+
+    def __call__(self, tokens, logits: mx.array) -> mx.array:
+        vocab = logits.shape[-1]
+        if vocab != self._vocab:
+            self._vocab = vocab
+            ids = [t for t in self._biases if 0 <= t < vocab]
+            self._scatter = (
+                (mx.array(ids), mx.array([self._biases[t] for t in ids]))
+                if ids
+                else None
+            )
+        if self._scatter is None:
+            return logits
+        return logits.at[:, self._scatter[0]].add(self._scatter[1])
 
 
 def build_penalty_processors(
@@ -285,12 +318,12 @@ def build_penalty_processors(
 
     from .constrained_spec import PENALTY_CONTEXT
 
-    return list(
+    bias = [LogitBiasProcessor(logit_bias)] if logit_bias else []
+    return bias + list(
         make_logits_processors(
             repetition_context_size=PENALTY_CONTEXT,
             presence_context_size=PENALTY_CONTEXT,
             frequency_context_size=PENALTY_CONTEXT,
-            logit_bias=logit_bias or None,
             repetition_penalty=(
                 repetition_penalty if repetition_penalty not in (None, 1.0) else None
             ),

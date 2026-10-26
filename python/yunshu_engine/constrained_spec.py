@@ -335,7 +335,9 @@ PENALTY_CONTEXT = 20
 
 
 def _windowed_penalty(proc) -> bool:
-    return getattr(proc, "__module__", "").startswith("mlx_lm.sample_utils")
+    return bool(getattr(proc, "context_free", False)) or getattr(
+        proc, "__module__", ""
+    ).startswith("mlx_lm.sample_utils")
 
 
 def apply_row_processors(processors, logits, context, drafted, calls):
