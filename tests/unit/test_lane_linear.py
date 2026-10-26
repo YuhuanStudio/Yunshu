@@ -227,3 +227,45 @@ def test_measured_projection_rows_match_the_unmodified_wide_path(bits, n, k):
             bits,
             rows,
         )
+
+
+@pytest.mark.parametrize("bits,n", [(5, 256), (8, 48), (4, 512)])
+def test_group_128_is_read_as_two_64_groups(bits, n):
+    """A checkpoint's 128-groups run the lane kernel as 64-groups with the scale and bias repeated: the
+    dequantized weight is the same, and rows are invariant to the row count."""
+    mx.random.seed(2)
+    lin = nn.Linear(512, n, bias=False)
+    lin.set_dtype(mx.bfloat16)
+    q = nn.QuantizedLinear.from_linear(lin, group_size=128, bits=bits)
+    assert lane_linear.eligible(q)
+    lane = lane_linear.LaneLinear.from_quantized(q)
+    assert lane.group_size == 64
+    wide = mx.dequantize(q.weight, q.scales, q.biases, group_size=128, bits=bits)
+    split = mx.dequantize(
+        q.weight,
+        mx.repeat(q.scales, 2, axis=1),
+        mx.repeat(q.biases, 2, axis=1),
+        group_size=64,
+        bits=bits,
+    )
+    assert mx.array_equal(wide, split).item()
+    x = mx.random.normal((40, 512)).astype(mx.bfloat16)
+    full = lane(x)
+    for m in (1, 2, 16, 33):
+        assert mx.array_equal(lane(x[:m]), full[:m]).item(), m
+    assert float(mx.abs(full.astype(mx.float32) - q(x).astype(mx.float32)).max()) < 0.1
+
+
+def test_convert_skip_keeps_named_projections():
+    class Tiny(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.body = nn.Linear(256, 128, bias=False)
+            self.lm_head = nn.Linear(256, 128, bias=False)
+
+    m = Tiny()
+    m.set_dtype(mx.bfloat16)
+    nn.quantize(m, group_size=64, bits=4)
+    out = lane_linear.convert(m, skip=("lm_head",))
+    assert out["converted"] == 1 and isinstance(m.lm_head, nn.QuantizedLinear)
+    assert isinstance(m.body, lane_linear.LaneLinear)

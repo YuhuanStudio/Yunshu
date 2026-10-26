@@ -229,6 +229,8 @@ const settingdesc = {
     "Dense Qwen3.5-family VLMs: serve text requests with Yunshu’s round driver (packed forwards over every decoding row, alternating with batched prefill steps; MTP drafts for every row; position-keyed sampling; see `docs/guides/ROUND_DRIVER.md`). Off: upstream BatchGenerator plus the single-request speculative lane. Image prompts, int8 KV and MoE stay on the upstream path either way.",
   YUNSHU_MTP_ROW_EXACT:
     "Qwen3.5-family runner: oMLX row-exact verify (verify rows bit-identical to one-row decode) instead of batch-invariant kernels.",
+  YUNSHU_QWEN4_LANE:
+    "Qwen3.8-Flash-Next (qwen4_exp): run the dense quantized projections as the row-invariant lane matmul for decode, speculative verify and drafting instead of upstream’s per-row singleton qmv. Extra verify rows no longer multiply the dense weight traffic; speculative output still equals plain decode. Output differs from the default arithmetic in the last bit. A head format the upstream fused head kernel cannot read (6-bit) turns it on regardless. Prefill chunks wider than 32 rows keep MLX’s quantized matmul.",
   YUNSHU_ENGINE_LOOP:
     "Text models: EngineCore continuous-batching loop instead of the single-request fast path.",
   YUNSHU_OVERLAP:

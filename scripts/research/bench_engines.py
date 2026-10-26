@@ -38,8 +38,8 @@ OMLX_BIN = str(ENVS / "omlx-bench/venv/bin/omlx")
 LLAMA_BIN = str(ENVS / "llamacpp/build/bin/llama-server")
 SPLASH_BIN = "/opt/homebrew/bin/splash"
 # refsync (2026-10-12): latest engines in their own envs under ENVS (the ids above stay for the 0.1.4 snapshot)
-FN_CHECKPOINT = "/Volumes/P5Plus/models/Jundot/Qwen3.8-Flash-Next-oQ4e-mtp"
-FN_CHECKPOINT_PLE = "/Volumes/P5Plus/models/Jundot/Qwen3.8-Flash-Next-oQ4e-mtp-ple-ssd"
+FN_CHECKPOINT = "/Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ3e-mtp"
+FN_CHECKPOINT_PLE = "/Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ3e-mtp"
 FN_GGUF = "/Volumes/Micron/yunshu-refsync/gguf-flashnext/UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf"
 FN_GGUF_MTP = (
     "/Volumes/Micron/yunshu-refsync/gguf-flashnext/MTP/mtp-Qwen3.8-Flash-Next-Q8_0.gguf"

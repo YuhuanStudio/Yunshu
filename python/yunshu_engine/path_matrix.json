@@ -2499,7 +2499,9 @@
   "python/yunshu_engine/kernels/attn_prefill.py": "prefill_kernels",
   "python/yunshu_engine/copy_graft.py": "Implementation helper of the registered copy_rounds feature: MTP greedy shared-prefix tree selection and request-local cost budget. Existing copy_rounds remains available on sampled/constrained MTP via its original verifier. This prototype does not claim DFlash/driver/generic/text graft coverage; those adapters and GPU qualification remain explicitly pending in tf110/HANDOFF.md.",
   "python/yunshu_engine/ane/native/__init__.py": "Phase 1 research-only optional native ANE runtime; no serving importer or setting. GPU default unchanged; private API failures return unavailable.",
-  "python/yunshu_engine/ane/native/mil.py": "CPU-only native ANE benchmark MIL builder; fp16/int8 numerics unqualified for serving."
+  "python/yunshu_engine/ane/native/mil.py": "CPU-only native ANE benchmark MIL builder; fp16/int8 numerics unqualified for serving.",
+  "python/yunshu_engine/qwen4_dflash.py": "Flash-Next mixed layer capture adapter on its existing invariant forward; qwen4 native MTP retains full hyper-state.",
+  "python/yunshu_engine/qwen4_norms.py": "Read legacy direct-gamma and residual Qwen4 norm formats; ordinary GDN/vision RMSNorm tensors are unchanged; MTP inherits base convention."
  },
  "settings": {
   "YUNSHU_MTP": "draft_family_coverage",
@@ -2530,6 +2532,7 @@
   "YUNSHU_ROUND_DRIVER": "spec_under_concurrency",
   "YUNSHU_ROUND_PREFILL_CHUNK": "spec_under_concurrency",
   "YUNSHU_MTP_ROW_EXACT": "batch_invariant_kernels",
+  "YUNSHU_QWEN4_LANE": "batch_invariant_kernels",
   "YUNSHU_GPU_SAMPLER": "gpu_sampler",
   "YUNSHU_JUMP_FORWARD": "jump_forward",
   "YUNSHU_JSON_SCHEMA_ENGINE": "constrained_bitmask_engine",
@@ -2581,5 +2584,257 @@
   "kernels",
   "text-engine",
   "memory"
- ]
+ ],
+ "architecture_columns": {
+  "_doc": "Architecture audit columns, not additional serving paths. Entries record wiring; numerical/performance qualification is a separate real-checkpoint gate.",
+  "flashnext": {
+   "draft_vocab": {
+    "s": "missing",
+    "owner": "flashnext80",
+    "impact": "medium",
+    "why": "The Qwen3.5-only optimized hook is not installed on qwen4; family-specific serving evidence and adaptation remain open."
+   },
+   "draft_topk_tree": {
+    "s": "missing",
+    "owner": "flashnext80",
+    "impact": "medium",
+    "why": "The Qwen3.5-only optimized hook is not installed on qwen4; family-specific serving evidence and adaptation remain open."
+   },
+   "copy_rounds": {
+    "s": "missing",
+    "why": "copy proposals need only a rollback-safe batch-invariant verify, no drafter weights; no non-Qwen3.5 family has the verify",
+    "owner": "flashnext80",
+    "impact": "medium"
+   },
+   "tree_drafts": {
+    "s": "missing",
+    "owner": "flashnext80",
+    "impact": "medium",
+    "why": "The Qwen3.5-only optimized hook is not installed on qwen4; family-specific serving evidence and adaptation remain open."
+   },
+   "cost_aware_depth": {
+    "s": "missing",
+    "owner": "flashnext80",
+    "impact": "medium",
+    "why": "The Qwen3.5-only optimized hook is not installed on qwen4; family-specific serving evidence and adaptation remain open."
+   },
+   "sampled_spec": {
+    "s": "engaged",
+    "ev": [
+     [
+      "python/yunshu_engine/vlm_batch_runner.py",
+      "class RowSampler"
+     ]
+    ]
+   },
+   "guided_spec": {
+    "s": "engaged",
+    "ev": [
+     [
+      "python/yunshu_engine/vlm_batch_runner.py",
+      "ToolCallProcessor(job.guide)"
+     ]
+    ]
+   },
+   "logprobs": {
+    "s": "engaged",
+    "ev": [
+     [
+      "python/yunshu_engine/vlm_batch_runner.py",
+      "Fp32LogitsProcessor"
+     ]
+    ]
+   },
+   "penalties_in_spec": {
+    "s": "engaged",
+    "ev": [
+     [
+      "python/yunshu_engine/vlm_batch_runner.py",
+      "def build_penalty_processors"
+     ]
+    ]
+   },
+   "thinking_budget": {
+    "s": "engaged",
+    "ev": [
+     [
+      "python/yunshu_engine/vlm_batch_runner.py",
+      "ThinkingBudgetCriteria"
+     ]
+    ]
+   },
+   "spec_under_concurrency": {
+    "s": "missing",
+    "owner": "flashnext80",
+    "impact": "medium",
+    "why": "The Qwen3.5-only optimized hook is not installed on qwen4; family-specific serving evidence and adaptation remain open."
+   },
+   "batch_invariant_kernels": {
+    "s": "partial",
+    "why": "Qwen4 uses its native Qwen4ExpBatchInvariantForward, not the Qwen3.5 class patch.",
+    "owner": "flashnext80",
+    "impact": "medium"
+   },
+   "lane_linear": {
+    "s": "partial",
+    "why": "Only the unsupported affine LM head is adapted; Qwen4 GDN, QSA and experts keep family-native invariant projections.",
+    "owner": "flashnext80",
+    "impact": "medium"
+   },
+   "lane_layers": {
+    "s": "na",
+    "why": "Qwen3.5 layer layout lacks Qwen4 hyper-connections, PLE and QSA; applying that class patch would be incorrect."
+   },
+   "ragged_kv": {
+    "s": "missing",
+    "why": "ragged_kv.supports() is true only for qwen3_5 attention; Gemma/Qwen4 keep the stock batched KV (only a warning when YUNSHU_KV_PRECISION != bf16)",
+    "owner": "flashnext80",
+    "impact": "medium"
+   },
+   "kv_precision": {
+    "s": "missing",
+    "why": "YUNSHU_KV_PRECISION is silently a warning on non-Qwen3.5 attention; no KV quantization for Gemma/Qwen4",
+    "owner": "flashnext80",
+    "impact": "medium"
+   },
+   "weight_quant_on_load": {
+    "s": "missing",
+    "why": "same (bf16 Gemma/Qwen4 checkpoints are the case it was made for)",
+    "owner": "unassigned",
+    "impact": "medium"
+   },
+   "prefill_kernels": {
+    "s": "na",
+    "why": "Dense Qwen3.5 prefill is not wired into Qwen4 HC/MoE layers. Expert batching and invariant prefill qualification remain open."
+   },
+   "apc_prefix_cache": {
+    "s": "engaged",
+    "ev": [
+     [
+      "python/yunshu_engine/vlm_engine.py",
+      "APCManager("
+     ]
+    ],
+    "why": "Qwen4 hybrid caches are on the shared runner; same-checkpoint hit/miss gate remains required."
+   },
+   "prefill_stride_rule": {
+    "s": "missing",
+    "why": "stride is 0 unless spec_family and invariant kernels: hit-vs-cold numerics are not pinned for other families",
+    "owner": "unassigned",
+    "impact": "low"
+   },
+   "media_input": {
+    "s": "engaged",
+    "ev": [
+     [
+      "python/yunshu_engine/vlm_batch_runner.py",
+      "def prepare_media"
+     ]
+    ]
+   },
+   "draft_family_coverage": {
+    "s": "partial",
+    "owner": "flashnext80",
+    "impact": "high",
+    "why": "Native MTP is wired. DFlash mixed-layer capture adapter has CPU tests; four-arm real checkpoint gate is pending.",
+    "ev": [
+     [
+      "python/yunshu_engine/qwen4_mtp.py",
+      "configure_lane"
+     ],
+     [
+      "python/yunshu_engine/qwen4_dflash.py",
+      "def capture_forward"
+     ]
+    ]
+   },
+   "constrained_bitmask_engine": {
+    "s": "missing",
+    "why": "same",
+    "owner": "unassigned",
+    "impact": "medium"
+   },
+   "jump_forward": {
+    "s": "missing",
+    "why": "same as batch",
+    "owner": "unassigned",
+    "impact": "low"
+   },
+   "gpu_sampler": {
+    "s": "missing",
+    "why": "same as batch",
+    "owner": "unassigned",
+    "impact": "low"
+   },
+   "lora_adapters": {
+    "s": "missing",
+    "why": "same",
+    "owner": "unassigned",
+    "impact": "low"
+   },
+   "idle_memory_return": {
+    "s": "engaged",
+    "ev": [
+     [
+      "python/yunshu_engine/vlm_batch_runner.py",
+      "IdleMemory"
+     ]
+    ]
+   },
+   "cancel": {
+    "s": "engaged",
+    "ev": [
+     [
+      "python/yunshu_engine/vlm_batch_runner.py",
+      "cancel_event"
+     ]
+    ]
+   },
+   "ple_ssd_rows": {
+    "s": "engaged",
+    "ev": [
+     [
+      "python/yunshu_engine/vlm_engine.py",
+      "ple_parallel.install("
+     ]
+    ]
+   },
+   "lane_promotion": {
+    "s": "missing",
+    "owner": "flashnext80",
+    "impact": "medium",
+    "why": "The Qwen3.5-only optimized hook is not installed on qwen4; family-specific serving evidence and adaptation remain open."
+   },
+   "qwen4_fused_hc": {
+    "s": "engaged",
+    "ev": [
+     [
+      "python/yunshu_engine/vlm_engine.py",
+      "tf_hc_forward.install("
+     ]
+    ]
+   },
+   "next_turn_rehearsal": {
+    "s": "na",
+    "why": "The preemption wrapper targets Qwen3.5 decoder layers; Qwen4 needs its PLE/QSA/GDN snapshot contract before reuse."
+   },
+   "gc_policy": {
+    "s": "engaged",
+    "ev": [
+     [
+      "python/yunshu_engine/vlm_engine.py",
+      "gc_policy.install("
+     ]
+    ]
+   },
+   "docs_ask": {
+    "s": "na",
+    "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
+   },
+   "ane_ffn_split": {
+    "s": "na",
+    "why": "The ANE split patches a dense Qwen3.5 MLP. Routed experts need routing-aware offload and a separate bandwidth/accuracy gate."
+   }
+  }
+ }
 }
