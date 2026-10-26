@@ -860,18 +860,6 @@
     },
     {
       "kind": "inspired",
-      "path": "python/yunshu_engine/gpu_ngram.py",
-      "repo": "https://github.com/vllm-project/vllm",
-      "clone": "reference/vllm",
-      "upstream_paths": [
-        "vllm/v1/spec_decode/ngram_proposer_gpu.py"
-      ],
-      "commit": "924707f1",
-      "license": "Apache-2.0",
-      "why": "GPU batch n-gram propose"
-    },
-    {
-      "kind": "inspired",
       "path": "python/yunshu_engine/suffix_proposer.py",
       "repo": "https://github.com/vllm-project/vllm",
       "clone": "reference/vllm",

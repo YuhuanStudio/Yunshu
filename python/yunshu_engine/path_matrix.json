@@ -1876,10 +1876,9 @@
     "python/yunshu_engine/copy_drafter.py",
     "python/yunshu_engine/dflash_copy.py",
     "python/yunshu_engine/ngram_proposer.py",
-    "python/yunshu_engine/suffix_proposer.py",
-    "python/yunshu_engine/gpu_ngram.py"
+    "python/yunshu_engine/suffix_proposer.py"
    ],
-   "note": "Context lookup proposers: copy_drafter (VLM lane, shared by MTP and DFlash), ngram/suffix/gpu_ngram (text path and loop). Different matching rules, cost model and acceptance statistics.",
+   "note": "Context lookup proposers: copy_drafter (VLM lane, shared by MTP and DFlash), ngram/suffix (text path and loop). Different matching rules, cost model and acceptance statistics.",
    "unify": "A Proposer protocol (propose(tokens, k) -> list[int], observe(accepted)) with copy_drafter as the implementation; text path gains it and drops ngram_proposer."
   },
   {
@@ -1981,7 +1980,6 @@
  "orphans": {
   "python/yunshu_engine/dflash_draft.py": "Quantized DFlash context-KV fusion and the trained-selector greedy readout; unit tested, never installed (quantize_drafter does not call it). Wire or delete after an A/B.",
   "python/yunshu_engine/dflash_conv.py": "One-dispatch private DFlash convolution candidate; unit tested, never installed. Wire or delete after an A/B.",
-  "python/yunshu_engine/gpu_ngram.py": "GPU n-gram table and proposer; its only importer (the removed spec_interface strategy factory) is gone, so nothing installs it. Wire or delete.",
   "python/yunshu_engine/kernels/verify_select.py": "exact-kernel streamed5 verify select; only research scripts and test_qmv_compat use it since the YUNSHU_MTP_ROW_EXACT path was deleted"
  },
  "modules_other": {
@@ -2012,7 +2010,6 @@
   "python/yunshu_engine/engine_ngram.py": "text n-gram speculation loop (proposers duplicate group)",
   "python/yunshu_engine/ngram_proposer.py": "text n-gram (proposers duplicate group)",
   "python/yunshu_engine/suffix_proposer.py": "text suffix proposer (proposers duplicate group)",
-  "python/yunshu_engine/gpu_ngram.py": "orphan (see orphans)",
   "python/yunshu_engine/kernels/batch_invariant.py": "batch_invariant_kernels",
   "python/yunshu_engine/kernels/lane_linear.py": "lane_linear",
   "python/yunshu_engine/kernels/lane_layers.py": "lane_layers",
