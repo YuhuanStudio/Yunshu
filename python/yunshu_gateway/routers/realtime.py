@@ -822,17 +822,17 @@ class RealtimeSession:
 
     def _decode_g711_ulaw(self, data: bytes) -> bytes:
         """Decode G.711 μ-law audio to 16-bit PCM."""
-        import struct
+        import numpy as np
 
-        table = self._get_ulaw_table()
-        return struct.pack(f"<{len(data)}h", *[table[b] for b in data])
+        table = np.asarray(self._get_ulaw_table(), dtype="<i2")
+        return table[np.frombuffer(data, dtype=np.uint8)].tobytes()
 
     def _decode_g711_alaw(self, data: bytes) -> bytes:
         """Decode G.711 A-law audio to 16-bit PCM."""
-        import struct
+        import numpy as np
 
-        table = self._get_alaw_table()
-        return struct.pack(f"<{len(data)}h", *[table[b] for b in data])
+        table = np.asarray(self._get_alaw_table(), dtype="<i2")
+        return table[np.frombuffer(data, dtype=np.uint8)].tobytes()
 
     # ── G.711 ENCODE — output path was decode-only, so g711 clients ──
     # got raw 24 kHz PCM16 mislabeled as 8 kHz μ-law → garbage playback. Build the
@@ -843,25 +843,24 @@ class RealtimeSession:
 
     @classmethod
     def _build_encode_lut(cls, decode_table: list[int]) -> bytes:
-        import bisect
+        import numpy as np
 
-        codes = sorted(range(256), key=lambda c: decode_table[c])
-        vals = [decode_table[c] for c in codes]
-        lut = bytearray(65536)
-        for pcm in range(-32768, 32768):
-            j = bisect.bisect_left(vals, pcm)
-            if j <= 0:
-                best = codes[0]
-            elif j >= 256:
-                best = codes[255]
-            else:
-                best = (
-                    codes[j]
-                    if abs(vals[j] - pcm) < abs(vals[j - 1] - pcm)
-                    else codes[j - 1]
-                )
-            lut[pcm & 0xFFFF] = best
-        return bytes(lut)
+        codes = np.array(sorted(range(256), key=lambda c: decode_table[c]))
+        vals = np.array([decode_table[c] for c in codes])
+        pcm = np.arange(-32768, 32768)
+        j = np.searchsorted(vals, pcm, side="left")  # bisect_left
+        hi = np.minimum(j, 255)
+        lo = np.maximum(j - 1, 0)
+        # nearest decoded value; a tie goes to the lower one. Past either end: that end.
+        pick_hi = np.abs(vals[hi] - pcm) < np.abs(vals[lo] - pcm)
+        best = np.where(
+            j <= 0,
+            codes[0],
+            np.where(j >= 256, codes[255], np.where(pick_hi, codes[hi], codes[lo])),
+        )
+        lut = np.empty(65536, dtype=np.uint8)
+        lut[pcm & 0xFFFF] = best
+        return lut.tobytes()
 
     @classmethod
     def _get_ulaw_encode_lut(cls) -> bytes:
@@ -885,17 +884,17 @@ class RealtimeSession:
         the leftover into the next chunk so resampling per streaming chunk no
         longer drops boundary samples or resets the decimation phase (which caused
         cumulative shortening + periodic clicks for g711 streaming clients)."""
-        import struct
+        import numpy as np
 
         n = len(pcm16) // 2
         if n < 3:
             return b"", pcm16[: n * 2]
-        s = struct.unpack(f"<{n}h", pcm16[: n * 2])
         groups = n // 3
         consumed = groups * 3
-        out = [(s[i] + s[i + 1] + s[i + 2]) // 3 for i in range(0, consumed, 3)]
+        s = np.frombuffer(pcm16, dtype="<i2", count=consumed).astype(np.int32)
+        out = s.reshape(groups, 3).sum(axis=1) // 3  # floor division, like int //
         leftover = pcm16[consumed * 2 : n * 2]
-        return struct.pack(f"<{len(out)}h", *out), leftover
+        return out.astype("<i2").tobytes(), leftover
 
     def _resample_pcm16_linear(
         self, pcm16: bytes, from_rate: int, to_rate: int, state_attr: str
@@ -908,26 +907,34 @@ class RealtimeSession:
         fine for speech; the 24 kHz→8 kHz g711 path keeps its dedicated box filter."""
         if from_rate == to_rate or not pcm16:
             return pcm16
-        import struct
+        import numpy as np
 
         n = len(pcm16) // 2
         if n == 0:
             return b""
-        samples = list(struct.unpack(f"<{n}h", pcm16[: n * 2]))
+        samples = np.frombuffer(pcm16, dtype="<i2", count=n).astype(np.int64)
         st = getattr(self, state_attr, None)
-        last, pos = st if st is not None else (samples[0], 0.0)
-        buf = [last] + samples  # prepend carried sample so interp spans the boundary
+        last, pos = st if st is not None else (int(samples[0]), 0.0)
+        # prepend carried sample so interp spans the boundary
+        buf = np.concatenate((np.array([last], dtype=np.int64), samples))
         step = from_rate / to_rate  # input samples consumed per output sample
-        out = []
-        i = pos
-        _last_idx = len(buf) - 1
-        while i < _last_idx:
-            i0 = int(i)
-            frac = i - i0
-            out.append(int(buf[i0] * (1.0 - frac) + buf[i0 + 1] * frac))
-            i += step
-        setattr(self, state_attr, (buf[-1], i - _last_idx))
-        return struct.pack(f"<{len(out)}h", *out) if out else b""
+        last_idx = len(buf) - 1
+        # The input position of output k is pos + step + step + ... (accumulated, not
+        # k * step) so the output is bit-identical to the former per-sample loop; cumsum
+        # adds strictly in order. One extra position is the carried state.
+        m = int(max(0.0, last_idx - pos) / step) + 3
+        steps = np.full(m, step)
+        steps[0] = pos
+        positions = np.cumsum(steps)
+        count = int(np.searchsorted(positions, last_idx, side="left"))
+        i = float(positions[count])
+        setattr(self, state_attr, (int(buf[-1]), i - last_idx))
+        if count == 0:
+            return b""
+        idx = positions[:count].astype(np.int64)
+        frac = positions[:count] - idx
+        out = (buf[idx] * (1.0 - frac) + buf[idx + 1] * frac).astype(np.int64)
+        return out.astype("<i2").tobytes()
 
     def _encode_output_audio(
         self, pcm16: bytes, in_rate: int = 24000, fmt: str | None = None
@@ -957,16 +964,17 @@ class RealtimeSession:
                 pcm8k = self._resample_pcm16_linear(
                     pcm16, in_rate, 8000, "_g711_lin_state"
                 )
-            n = len(pcm8k) // 2
-            import struct
+            import numpy as np
 
-            samples = struct.unpack(f"<{n}h", pcm8k[: n * 2]) if n else ()
-            enc = (
+            n = len(pcm8k) // 2
+            enc = np.frombuffer(
                 self._get_ulaw_encode_lut()
                 if fmt == "g711_ulaw"
-                else self._get_alaw_encode_lut()
+                else self._get_alaw_encode_lut(),
+                dtype=np.uint8,
             )
-            out = bytes(enc[sample & 0xFFFF] for sample in samples)
+            # the LUT is indexed by the sample's 16-bit two's-complement value
+            out = enc[np.frombuffer(pcm8k, dtype="<u2", count=n)].tobytes()
             return out, 160  # 20 ms @ 8 kHz, 1 byte/sample
         # pcm16 output: the OpenAI Realtime contract is 24 kHz — resample if the engine isn't.
         pcm24 = (
