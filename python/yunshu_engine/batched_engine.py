@@ -946,6 +946,12 @@ class BatchedEngine(
         # Dims unreadable — fall back to the conservative token threshold.
         return 8 if total_tokens >= 16384 else None
 
+    def _auto_quantized_kv(self, req_bits: int | None) -> bool:
+        """True when this request's KV got the length-gated automatic quantisation. The RAM prefix
+        and prompt caches are keyed by tokens only, so they must not store that lossy KV: a hit
+        would differ from a miss. A fixed (explicit) precision is the same for every request."""
+        return req_bits is not None and self._kv_quant_bits is None
+
     def _apply_auto_tuner_kv_quant(self) -> None:
         """KV-5: Apply auto-tuner's kv_quantization_bits recommendation.
 
