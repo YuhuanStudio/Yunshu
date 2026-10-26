@@ -63,6 +63,13 @@ logger = logging.getLogger(__name__)
 # Upstream prefill default; APC checkpoints land on these chunk boundaries and
 # cancellation is honoured between chunks (~2 s at 2K tokens on a 27B model).
 PREFILL_STEP = 2048
+# A text request enters the round driver only when this many requests are in flight.
+DRIVER_MIN_CONCURRENCY = 2
+# ...and its prompt has at most this many uncached tokens: the driver's cold prefill
+# is ~6% slower per token than upstream's at 4-8K (27B; 512-token attention grid),
+# which makes 32K c=2/4 mean TTFT +9% (8K c=2 equal, c=4 +8%). Longer cold prompts
+# keep the upstream path.
+DRIVER_MAX_UNCACHED_TOKENS = 12288
 
 
 def media_token_ids(model) -> set[int]:
@@ -514,7 +521,7 @@ class VLMBatchRunner:
         # Callable(input_ids) -> bool: skip APC when its checkpoints cannot fit,
         # so a cold request does not pay APC bookkeeping for nothing.
         self._apc_admit = apc_admit
-        # The serialized MLX executor the runner steps on (None: drive inline).
+        # The serialized MLX executor the driver runs on (None: drive inline).
         self._executor = executor
         self._lock = threading.Lock()
         self._pending: list[_Job] = []
@@ -544,9 +551,15 @@ class VLMBatchRunner:
         # precision, "bf16" / "int8" (YUNSHU_KV_PRECISION).
         self.ragged_kv: str | None = None
         self._ragged_logged = False
-        # GPU-busy seconds: every executor slice
-        # (``/v1/yunshu/status`` and ``/metrics`` report the cumulative counter).
+        # Yunshu's round driver (YUNSHU_ROUND_DRIVER, round_driver/): serves
+        # text requests of dense Qwen3.5-family models; None = upstream only.
+        self.driver: Any = None
+        self._aux_driver: Any = None
+        self._driver_jobs: dict[int, _Job] = {}
+        # GPU-busy seconds: every executor slice, and the round driver's steps inside them
+        # (``/v1/yunshu/status`` and ``/metrics`` report the cumulative counters).
         self.busy_meter = BusyMeter()
+        self.driver_busy_meter = BusyMeter()
 
     def _processor_fingerprint(self) -> str | None:
         """Everything that turns image bytes into pixel values, or None if unknown."""
@@ -712,8 +725,8 @@ class VLMBatchRunner:
     #   exclusive lane; spec on == spec off holds there (batch-invariant
     #   kernels). Requests arriving meanwhile go to the shared batch.
     #   Upstream keeps drafter/round state for exactly one speculative batch
-    #   and cannot add rows to it, so multi-row speculation is not done
-    #   (the measured own-driver attempt lost and is deleted).
+    #   and cannot add rows to it, so multi-row speculation needs our own
+    #   round driver (not done yet).
 
     def iter_tokens(
         self,
@@ -845,8 +858,10 @@ class VLMBatchRunner:
             budget=budget,
             first_delivery=first_delivery,
         )
-        # Drafting needs a row without logits processors, logprobs or a tool-call
-        # guide (a thinking budget is fine there).
+        # The round driver drafts for any row without logits processors, logprobs
+        # or a tool-call guide (a thinking budget is fine there); sampled rows draw
+        # with the position-keyed sampler, so a draft is accepted exactly when serial
+        # sampling would have produced it.
         job.allow_draft = bool(
             allow_draft
             and static_masks_only(processors)
@@ -960,6 +975,7 @@ class VLMBatchRunner:
         with self._lock:
             pending, self._pending = self._pending, []
             groups = list(self._groups())
+            drivers, self._driver_jobs = self._driver_jobs, {}
             self._batches.clear()
             self._spec = None
             self._aux_spec = None
@@ -967,11 +983,17 @@ class VLMBatchRunner:
         for group in groups:
             with contextlib.suppress(Exception):
                 close_generator(group.gen)
+        for job in drivers.values():
+            if self.driver is not None:
+                with contextlib.suppress(Exception):
+                    (job.driver or self.driver).remove(job)
         for job in pending:
             self._emit(job, exc)
         for group in groups:
             for job in group.jobs.values():
                 self._emit(job, exc)
+        for job in drivers.values():
+            self._emit(job, exc)
 
     def _schedule(self) -> None:
         try:
@@ -988,6 +1010,7 @@ class VLMBatchRunner:
                 or self._spec
                 or self._aux_spec
                 or self._driving
+                or self._driver_jobs
             )
 
     def _submit(self, job: _Job) -> None:
@@ -1014,7 +1037,7 @@ class VLMBatchRunner:
         )
 
     def _active_jobs(self) -> int:
-        return sum(len(g.jobs) for g in self._groups())
+        return sum(len(g.jobs) for g in self._groups()) + len(self._driver_jobs)
 
     def _new_generator(
         self,
@@ -1074,6 +1097,54 @@ class VLMBatchRunner:
             gen.apc_mode = gen.apc.legacy_mode
         return gen
 
+    def _driver_takes(self, job: _Job, alone: bool) -> bool:
+        """Text request goes to the round driver
+        when at least ``DRIVER_MIN_CONCURRENCY`` requests are in flight and
+        its uncached prompt is short; a lone request keeps the single-row
+        speculative lane, a long cold prompt the upstream prefill."""
+        if self.driver is None or job.prompt_kwargs is not None:
+            return False
+        if alone and DRIVER_MIN_CONCURRENCY >= 2:
+            return False
+        return self._driver_uncached(job) <= DRIVER_MAX_UNCACHED_TOKENS
+
+    def _driver_uncached(self, job: _Job) -> int:
+        """Prompt tokens the round driver would prefill: the driver reads its own
+        APC namespace (its prefill arithmetic and head KV differ from the upstream
+        path's), so a prefix cached by the upstream path is cold for it."""
+        n = len(job.ids)
+        drv, mgr = self.driver, self.apc_manager
+        entries = getattr(mgr, "_exact_cache", None)
+        lock = getattr(mgr, "lock", None)
+        if (
+            drv is None
+            or getattr(drv, "apc", None) is None
+            or lock is None
+            or not isinstance(entries, dict)
+            or job.priority < 0
+        ):
+            return n
+        drafting = drv.will_draft(
+            sampling=job.sampling,
+            processors=job.processors,
+            logprobs=job.logprobs,
+            draft=job.allow_draft,
+        )
+        salt = drv.apc_salt(self.apc_semantic_hash or 0, drafting)
+        tokens = tuple(job.ids)
+        with lock:
+            hit = max(
+                (
+                    len(e.token_ids)
+                    for e in entries.values()
+                    if e.extra_hash == salt
+                    and 0 < len(e.token_ids) < n
+                    and tokens[: len(e.token_ids)] == e.token_ids
+                ),
+                default=0,
+            )
+        return n - hit
+
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state
 
@@ -1089,7 +1160,12 @@ class VLMBatchRunner:
         )
 
         if job.guide is not None:
-            lane = job.use_draft and alone and self._spec is None
+            lane = (
+                job.use_draft
+                and alone
+                and self._spec is None
+                and not self._driver_takes(job, alone)
+            )
             if not lane:
                 job.use_draft = job.allow_draft = False
             # Preserve serial processor order: penalties / suppression first,
@@ -1107,6 +1183,9 @@ class VLMBatchRunner:
                 use_apc = bool(self._apc_admit(mx.array(job.ids)))
             except Exception:
                 logger.debug("APC admission check failed; using APC", exc_info=True)
+        if self._driver_takes(job, alone) and job.cache_plan is None:
+            self._admit_driver(job, use_apc)
+            return
         job.stats.cache_reason = (
             "lookup_pending" if use_apc else "apc_disabled_or_admission_refused"
         )
@@ -1299,6 +1378,7 @@ class VLMBatchRunner:
             self.drafter is None
             or self._spec is not None
             or self._aux_spec is not None
+            or self._driver_jobs
             or self._pending
             or self.inflight() != 1
         ):
@@ -1434,6 +1514,89 @@ class VLMBatchRunner:
             remaining,
         )
         return True
+
+    # ── round driver ────────────────────────────────────────────────────
+    def _admit_driver(self, job: _Job, use_apc: bool) -> None:
+        from .round_driver.driver import Request
+
+        driver = self.driver
+        if job.priority < 0:
+            if self._aux_driver is None:
+                from .round_driver.driver import RoundDriver
+
+                self._aux_driver = RoundDriver(
+                    self.model,
+                    drafter=self.drafter if self.draft_kind == "mtp" else None,
+                    stop_tokens=self.stop_tokens,
+                    chunk=self.driver.chunk,
+                    apc=None,
+                )
+            driver = self._aux_driver
+        job.driver = driver
+        hit = driver.add(
+            Request(
+                ids=job.ids,
+                max_tokens=job.max_tokens,
+                sampling=job.sampling,
+                processors=list(job.processors or []),
+                logprobs=job.logprobs,
+                top_logprobs=job.top_logprobs,
+                draft=job.allow_draft,
+                budget=job.budget,
+                handle=job,
+                extra_hash=self.apc_semantic_hash or 0,
+                use_apc=use_apc,
+            )
+        )
+        self._vocab_owner = driver
+        job.start = job.stats.t_admit = job.stats.t_prefill_start = time.perf_counter()
+        job.stats.tracks_prefill_start = True
+        hit = int(hit or 0)
+        job.stats.cached_tokens = hit
+        job.stats.prefill_total = len(job.ids) - hit
+        job.stats.prefill_known = True
+        job.stats.used_apc = use_apc
+        job.stats.used_draft = bool(job.allow_draft and driver.head is not None)
+        if job.stats.used_draft:
+            job.stats.spec_mode = "mtp"
+        self._driver_jobs[id(job)] = job
+
+    def _step_driver(self, primary: bool = False) -> None:
+        for key, job in list(self._driver_jobs.items()):
+            cancelled = job.cancel_event is not None and job.cancel_event.is_set()
+            if job.abandoned or cancelled:
+                (job.driver or self.driver).remove(job)
+                del self._driver_jobs[key]
+                job.stats.finish_reason = "cancel" if cancelled else None
+                self._emit(job, _DONE)
+        if not self._driver_jobs:
+            return
+        events = []
+        for driver in (self.driver, self._aux_driver):
+            if driver is None or (primary and driver is self._aux_driver):
+                continue
+            vocab = getattr(self.drafter, "_draft_vocab", None)
+            if vocab is not None and self._vocab_owner is not driver and driver.rows:
+                vocab.set_context([t for row in driver.rows for t in row.req.ids])
+                self._vocab_owner = driver
+            with self.driver_busy_meter.span():
+                events.extend(driver.step())
+            self._note_driver_prefill(driver)
+        for event in events:
+            job = event.handle
+            stats = job.stats
+            now = time.perf_counter()
+            if stats.generated == 0:
+                stats.first_token_s = now - job.start
+                stats.t_first = now
+                stats.prefill_done = stats.prefill_total
+            stats.t_last = now
+            stats.generated += 1
+            self._emit(job, (int(event.token), event.logprob))
+            if event.finish is not None:
+                stats.finish_reason = event.finish
+                self._driver_jobs.pop(id(job), None)
+                self._emit(job, _DONE)
 
     def _finish(self, group: _Group, uid: int, reason: str | None) -> None:
         job = group.jobs.pop(uid, None)
@@ -1975,6 +2138,18 @@ class VLMBatchRunner:
         if uid is not None:
             self._begin_prefill(group.jobs.get(uid))
 
+    def _note_driver_prefill(self, driver=None) -> None:
+        """Publish prefill progress of the round driver's rows."""
+        try:
+            for row in (driver or self.driver).rows:
+                st = row.req.handle.stats
+                if st.t_first == 0.0:
+                    st.prefill_done = min(row.done - row.hit, st.prefill_total)
+                    if st.prefill_done >= st.prefill_total and not st.t_prefill_end:
+                        st.t_prefill_end = time.perf_counter()
+        except Exception:
+            logger.debug("driver prefill progress unavailable", exc_info=True)
+
     @staticmethod
     def _note_prefill(group: _Group) -> None:
         """Publish prefill progress (uncached tokens computed / to compute) for
@@ -2020,12 +2195,16 @@ class VLMBatchRunner:
         with self._lock:
             queued = len(self._pending)
         jobs = [j for g in self._groups() for j in g.jobs.values()]
+        jobs += list(self._driver_jobs.values())
         prefill = sum(1 for j in jobs if not j.stats.t_first)
         return {"queued": queued, "prefill": prefill, "decode": len(jobs) - prefill}
 
     def busy_snapshot(self) -> dict:
-        """Cumulative GPU-busy accounting over every executor slice."""
-        return {"slices": self.busy_meter.snapshot()}
+        """Cumulative GPU-busy accounting: all slices and the round driver's share."""
+        return {
+            "slices": self.busy_meter.snapshot(),
+            "round_driver": self.driver_busy_meter.snapshot(),
+        }
 
     def _committed_bytes(self, running: list) -> int:
         """Memory the running requests will still grow into: their reservation minus what
@@ -2168,8 +2347,12 @@ class VLMBatchRunner:
         return False
 
     def _track_prefix_producer(self, job: _Job):
-        if not job.stats.used_apc or not job.cache_store:
-            return  # a request that stores nothing is no producer to wait for
+        if (
+            not job.stats.used_apc
+            or not job.cache_store
+            or id(job) in self._driver_jobs
+        ):
+            return  # stores nothing / the driver owns its APC: no producer to wait for
         for group in self._groups():
             if job.uid not in group.jobs or group.jobs[job.uid] is not job:
                 continue
@@ -2367,7 +2550,7 @@ class VLMBatchRunner:
             if not allowed:
                 continue
             # Generators without the upstream atom API (test fakes) retain
-            # ordinary dispatch.
+            # ordinary dispatch. The optional round driver has its own policy.
             if not hasattr(group.gen, "_unprocessed_sequences"):
                 self._begin_prefill_front(group)
                 self._step_group(group)
@@ -2468,8 +2651,11 @@ class VLMBatchRunner:
         self._schedule()
 
     def _handoff_delay(self) -> float:
-        if not settings.scheduling_enabled(
-            "YUNSHU_UNCACHED_SCHEDULING", qualified=self.prefix_invariant
+        if (
+            not settings.scheduling_enabled(
+                "YUNSHU_UNCACHED_SCHEDULING", qualified=self.prefix_invariant
+            )
+            or self._driver_jobs
         ):
             return 0.0
         # A call that has finished templating on the executor but has not yet
@@ -2509,6 +2695,7 @@ class VLMBatchRunner:
                 cancelled_pending = [j for j in self._pending if self._stopped(j)]
                 self._pending = [j for j in self._pending if not self._stopped(j)]
                 active = [j for g in self._groups() for j in g.jobs.values()]
+                active += list(self._driver_jobs.values())
                 # A call still preparing on the MLX executor has no row yet.
                 # Conservatively treat it as primary until its metadata arrives.
                 preparing = self.inflight() > len(active) + len(self._pending)
@@ -2520,6 +2707,7 @@ class VLMBatchRunner:
                     settings.scheduling_enabled(
                         "YUNSHU_UNCACHED_SCHEDULING", qualified=self.prefix_invariant
                     )
+                    and not self._driver_jobs
                     and self._primary_handoff_at is not None
                     and now - self._primary_handoff_at < PRIMARY_HANDOFF_S
                 )
@@ -2533,8 +2721,11 @@ class VLMBatchRunner:
                 ]
                 selected_ids = {id(j) for j in pending}
                 self._pending = [j for j in self._pending if id(j) not in selected_ids]
-                work_order = settings.scheduling_enabled(
-                    "YUNSHU_UNCACHED_SCHEDULING", qualified=self.prefix_invariant
+                work_order = (
+                    settings.scheduling_enabled(
+                        "YUNSHU_UNCACHED_SCHEDULING", qualified=self.prefix_invariant
+                    )
+                    and not self._driver_jobs
                 )
                 auxiliary = sum(
                     j.priority < 0 for j in [*active, *self._pending, *pending]
@@ -2627,6 +2818,8 @@ class VLMBatchRunner:
                         self._step_group(group)
                         for j in group.jobs.values():
                             j.last_service = time.perf_counter()
+            if self._driver_jobs:
+                self._step_driver(primary)
             if self._spec is not None and not self._spec.jobs:
                 if not self._spec.gen.has_work:
                     close_generator(self._spec.gen)
@@ -2651,6 +2844,11 @@ class VLMBatchRunner:
             self._batches.clear()
             self._spec = None
             self._aux_spec = None
+            for job in self._driver_jobs.values():
+                self._emit(job, exc)
+                if self.driver is not None:
+                    (job.driver or self.driver).remove(job)
+            self._driver_jobs.clear()
         if not resubmit:
             return
         with self._lock:
@@ -2659,6 +2857,7 @@ class VLMBatchRunner:
                 or self._batches
                 or self._spec is not None
                 or self._aux_spec is not None
+                or self._driver_jobs
             ):
                 again = True
             else:
@@ -3020,6 +3219,7 @@ class _Job:
     prefill_skips: int = 0
     finishing_prefill: bool = False
     handoff_graced: bool = False
+    driver: Any = None
     cache_plan: dict | None = None
     cache_store: bool = (
         True  # False: look the prefix up, store nothing (X-Yunshu-Cache-Store)

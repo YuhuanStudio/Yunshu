@@ -2399,6 +2399,28 @@ class VLMEngine:
                 )
         disk.start_mover()
 
+    def _round_driver_wanted(self, lm) -> bool:
+        """``YUNSHU_ROUND_DRIVER`` on a dense Qwen3.5-family text decoder with
+        bf16 KV (int8 KV precision keeps the upstream path)."""
+        if not settings.get_bool("YUNSHU_ROUND_DRIVER"):
+            return False
+        from .round_driver import forward as rd_forward
+
+        if not rd_forward.supports(lm):
+            logger.warning("YUNSHU_ROUND_DRIVER: not a dense Qwen3.5-family model")
+            return False
+        if settings.get("YUNSHU_KV_PRECISION") != "bf16":
+            logger.warning("YUNSHU_ROUND_DRIVER: int8 KV keeps the upstream path")
+            return False
+        from .kernels.tensorfold.lane_qmm import ready
+
+        if not ready():
+            logger.warning(
+                "YUNSHU_ROUND_DRIVER: lane arithmetic self-test failed; using upstream runner"
+            )
+            return False
+        return True
+
     def _build_batch_runner(self, model_path: str):
         """Build the runner that serves every request of this model.
 
@@ -2442,6 +2464,23 @@ class VLMEngine:
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
         qwen4 = self._config.get("model_type") == "qwen4_exp"
+        use_driver = not qwen4 and self._round_driver_wanted(lm)
+        driver_lanes = 0
+        if use_driver:
+            # Row-invariant lane projections everywhere (before any verify
+            # kernel install repacks them): the round driver's rows, and the
+            # upstream paths that still serve image prompts, both use them.
+            from .kernels import lane_linear
+
+            lanes = lane_linear.convert(lm)
+            driver_lanes = lanes["converted"]
+            if lm.args.tie_word_embeddings:
+                lm._yunshu_lane_head = lane_linear.lane_head(lm.model.embed_tokens)
+            logger.info(
+                "Round driver: %d lane projections (%d skipped)",
+                lanes["converted"],
+                len(lanes["skipped"]),
+            )
         drafter = None
         draft_kind = "mtp"
         from . import spec_select
@@ -2544,7 +2583,7 @@ class VLMEngine:
 
             kernels, block = configure_lane(lm, drafter, block)
             self._qwen4_mtp_weights = None
-        if not qwen4 and (drafter is not None or spec_family):
+        if not qwen4 and (drafter is not None or (spec_family and not use_driver)):
             from .kernels.omlx import apply as apply_verify_kernels
 
             kernels = apply_verify_kernels()
@@ -2569,9 +2608,11 @@ class VLMEngine:
             if ready():
                 from .kernels import lane_linear
 
-                kernels["lane_linear"] = lane_linear.convert(
-                    self._model.language_model
-                )["converted"]
+                # (a second convert finds the driver's lanes already in place)
+                kernels["lane_linear"] = (
+                    lane_linear.convert(self._model.language_model)["converted"]
+                    or driver_lanes
+                )
                 if settings.get("YUNSHU_PREFILL_MATMUL") == "stock":
                     lane_linear.set_stock_rows(lane_linear.STOCK_MIN_ROWS)
                     text_cfg = self._config.get("text_config", self._config)
@@ -2861,6 +2902,16 @@ class VLMEngine:
                 "YUNSHU_KV_PRECISION=%s applies to Qwen3.5-family attention "
                 "only; this model's KV stays bf16",
                 precision,
+            )
+        if use_driver:
+            from .round_driver.driver import RoundDriver
+
+            runner.driver = RoundDriver(
+                self._model,
+                drafter=drafter if draft_kind == "mtp" else None,
+                stop_tokens=runner.stop_tokens,
+                chunk=settings.get("YUNSHU_ROUND_PREFILL_CHUNK"),
+                apc=self._apc_backend,
             )
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
