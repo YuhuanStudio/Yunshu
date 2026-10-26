@@ -636,6 +636,9 @@ class KVPrefixCache:
                             "exact-hit refeed trim failed — signalling full prefill",
                             exc_info=True,
                         )
+                        # A hit counts only once the reuse is accepted (omlx 5628bb7e): this
+                        # lookup ends as a miss.
+                        self._total_hits -= 1
                         return None, 0, 0
             return result
 
