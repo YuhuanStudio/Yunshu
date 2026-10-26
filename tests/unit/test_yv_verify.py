@@ -207,6 +207,8 @@ def test_full_suite_has_every_stage():
     assert set(suites.STAGES) - set(suites.LADDER) == {
         "longqa",
         "conc",
+        "phaseb-identity",
+        "phaseb-speed",
         "ttft_profile",
         "ssd_ttft",
         "ssd_ttft_profile",

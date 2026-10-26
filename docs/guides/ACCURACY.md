@@ -41,7 +41,7 @@ The method behind llama.cpp `perplexity --kl-divergence` and vLLM's logprob-clos
 50 fixed chat prompts (English, code, math, Chinese, eight 2-3K-token summarization
 prompts), greedy, up to 256 tokens. Scored by exact match of the whole continuation and by
 the first differing position. `engine` runs each prompt with speculation off and on
-(`allow_draft`); `YUNSHU_ROUND_DRIVER=1` runs the round driver.
+(`allow_draft`).
 
 ## Noise floors and thresholds
 

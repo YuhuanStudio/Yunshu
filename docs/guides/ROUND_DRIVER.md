@@ -2,12 +2,13 @@
 
 
 > Console docs: the maintained, translated version of this page is `/docs/developers/round-driver` (source `frontend/docs/developers/round-driver.mdx`). This file stays as the repository-side reference read by tooling.
-Status: stage 1 behind `YUNSHU_ROUND_DRIVER` (experimental, off). Once validated on Qwen3.8-27B
-(`scripts/research/validate_round_driver.sh`) it replaces, for dense Qwen3.5-family models, both
-the upstream-`BatchGenerator` shared batch and the single-request speculative lane, and the flag
-is deleted.
+Status: the unified multi-row runner for dense Qwen3.5-family text requests when speculation is on (checkpoint
+MTP head or DFlash2 drafter, bf16 KV); no flag. With `YUNSHU_VLM_DRAFT=off` the stock shared batch serves
+every request and is the identity reference (spec on == spec off, token for token). DFlash rows share a fair
+32-node verify budget (`allocate.fair_nodes`) and verify through `verify.py` (packed windows; every matmul
+through `lane_linear`); scheduling uses `serving.work_scheduler.decode_quantum`.
 
-The motivation numbers below describe earlier prototype runs, not the release 0.1.5 cross-engine snapshot. See [current measured comparisons](../BENCHMARKS.md#where-yunshu-stands); this driver remains experimental.
+The motivation numbers below describe earlier prototype runs, not the release 0.1.5 cross-engine snapshot. See [current measured comparisons](../BENCHMARKS.md#where-yunshu-stands).
 
 ## Why
 
@@ -142,5 +143,12 @@ time between steps; it has not been isolated.
 ## Not yet
 
 - Image / audio prompts (mRoPE), int8 KV, MoE: those requests stay on the upstream path.
-- DFlash2 drafting (block drafts from the target's layer taps; same allocation).
-- Tree drafts.
+- Phase B performance/identity qualification on 27B, including 32K concurrency.
+
+## Phase B adapter (WIP, still opt-in)
+
+With a bounded-context DFlash2 drafter, the existing driver captures target layer taps during prefill, retains the drafter's trailing window, and keeps each row's target KV/GDN caches as lane transactions. Every decode step reserves each row's root and fairly splits a shared 32-node budget; the remainder rotates between rows. DFlash proposals share one batched drafter forward, while rings, RoPE positions and convolution sequences remain independent. CopyDrafter chains reuse the same budget. Target projections, MLP and the output head run over packed nodes; attention and GDN keep per-sequence state. Each row accepts using argmax or position-keyed Gumbel, then commits its own path through the existing tree replay.
+
+Invariant tool-call guides draft in free text, cut a round at grammar entry, and use masked one-token steps in a constrained body. Logprob reporting uses float32 readout. Other processors, media and int8 KV keep their established paths. Flash-Next native MTP admission is unfinished: `verify.native_chain_forward` packs HC, target projections, router and routed/shared experts, with native per-row QSA/GDN/PLE transactions. Its small-array parity checks include QSA boundaries, PLE history and partial commit/abort; these are not a real-checkpoint or serving verdict. DFlash target APC checkpoints share the driver's target-only layout; proposal rings are reconstructed from the available suffix after a cache hit. The experiment remains off by default. No 27B speed or merge verdict is claimed here.
+
+Verification: `yv ab --base <sha> --cand <sha> --suite phaseb-pilot --label phaseb-pilot`; then `phaseb-identity` (4K/32K matched solo, burst2/4, stagger, greedy/seeded, spec on/off) and `phaseb-speed` (three interleaved quiet repetitions, also agent defaults). Standard long, APC and serve-27b gates remain required.

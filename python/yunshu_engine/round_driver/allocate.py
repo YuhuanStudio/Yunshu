@@ -116,3 +116,31 @@ class CostCurve:
 
 
 __all__ = ["CostCurve", "allocate", "chain"]
+
+
+def fair_nodes(rooms: Sequence[int], budget: int = 32, turn: int = 0) -> list[int]:
+    """Draft nodes per decoding row after reserving every row's root.
+
+    Each live row receives one node before any receives its next; capped or
+    non-drafting rows return their unused share. Rotate the first recipient
+    each round so a remainder does not always favor an older request.
+    """
+    if budget < len(rooms) or any(room < 0 for room in rooms):
+        raise ValueError(
+            "node budget must cover every root and rooms must be nonnegative"
+        )
+    counts = [0] * len(rooms)
+    if not rooms:
+        return counts
+    order = [(turn + b) % len(rooms) for b in range(len(rooms))]
+    left = budget - len(rooms)
+    while left:
+        live = [b for b in order if counts[b] < rooms[b]]
+        if not live:
+            break
+        for b in live:
+            counts[b] += 1
+            left -= 1
+            if not left:
+                break
+    return counts

@@ -58,7 +58,7 @@ def main() -> None:
 
     model, processor = load(a.model_dir)
     lm = model.language_model
-    omlx.apply(row_exact=False)
+    omlx.apply()
     lane_linear.convert(lm)
     install_invariant(lm, model=model, packed=False)
     ragged_kv.install()

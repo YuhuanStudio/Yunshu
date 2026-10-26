@@ -1,9 +1,9 @@
 ---
 title: Round driver
-description: The experimental packed-row engine for dense Qwen3.5-family models: one forward per step over every decoding row, row-invariant arithmetic, and cost-aware MTP drafting for several rows at once.
+description: The packed-row engine for dense Qwen3.5-family models: one forward per step over every decoding row, row-invariant arithmetic, and cost-aware MTP or DFlash drafting for several rows at once.
 ---
 
-The round driver (`python/yunshu_engine/round_driver/`) is an **experimental** serving path behind `YUNSHU_ROUND_DRIVER` (default off, registered as experimental in `python/yunshu_engine/settings.py`). It exists to let concurrent requests on a dense Qwen3.5-family model draft with MTP too. The default VLM batch runner drafts only while a request is alone. This page is a maintainer reference; for the default serving paths see [Architecture](/docs/developers/architecture).
+The round driver (`python/yunshu_engine/round_driver/`) is the multi-row serving path for dense Qwen3.5-family models when speculation is on. It lets concurrent requests draft too (MTP chains, or DFlash2 trees and copy chains sharing a fair 32-node verify budget), where the single-request lane drafts only while a request is alone. With speculation off (`YUNSHU_VLM_DRAFT=off`) the stock shared batch serves every request and is the identity reference: speculation on equals speculation off, token for token. This page is a maintainer reference; for the other serving paths see [Architecture](/docs/developers/architecture).
 
 ## What it does
 
@@ -16,7 +16,7 @@ Every request is a **row**. A row prefills on its own single-row caches (a `KVCa
 `RoundDriver` (`driver.py`) advances rows in **steps**, each one forward of one kind:
 
 - **Decode step**: every decoding row's window (the pending token plus `d >= 0` drafts), right-padded to the longest window. Norms, projections and the MLP run over the packed rows; attention writes all rows' keys with one scatter and reads them with one ragged-attention launch (`kernels/ragged_attention.py`); the GDN conv and recurrence are one batched launch (`kernels/gdn_rows.py`).
-- **Prefill step**: waiting prompts' fixed-size **atoms** (`YUNSHU_ROUND_PREFILL_CHUNK`, default 512 tokens, on a grid from the prompt start, cut at the prompt's checkpoints and end). One atom while rows decode; more consecutive full atoms together when no row decodes.
+- **Prefill step**: waiting prompts' fixed-size **atoms** (`ROUND_PREFILL_CHUNK` in `vlm_engine.py`, 512 tokens, on a grid from the prompt start, cut at the prompt's checkpoints and end). One atom while rows decode; more consecutive full atoms together when no row decodes.
 
 While rows decode and prompts wait, prefill and decode steps alternate one to one. Steps stay single-kind: packing decode rows into the prefill forward measured no better than alternating at the same chunk size on Qwen3.8-27B (2026-09-29).
 
@@ -35,7 +35,7 @@ flowchart LR
 
 ### Routing
 
-`VLMEngine._round_driver_wanted` enables the driver only when `YUNSHU_ROUND_DRIVER` is on, the language model is a dense Qwen3.5-family decoder (`round_driver.forward.supports`; MoE layers do not qualify), `YUNSHU_KV_PRECISION` is `bf16`, and the lane-arithmetic self test passes. Otherwise a warning is logged and the upstream runner serves. Inside the runner (`VLMBatchRunner._driver_takes`), a text request goes to the driver only when at least `DRIVER_MIN_CONCURRENCY` (2) requests are in flight and its uncached prompt is at most `DRIVER_MAX_UNCACHED_TOKENS` (12288) tokens. A lone request keeps the single-request speculative lane; a long cold prompt keeps the upstream prefill. Image and audio prompts stay on the upstream path.
+`VLMEngine._round_driver_wanted` enables the driver when speculation is on (checkpoint MTP head or a DFlash2 drafter), the language model is a dense Qwen3.5-family decoder (`round_driver.forward.supports`; MoE layers do not qualify), `YUNSHU_KV_PRECISION` is `bf16`, and the lane-arithmetic self test passes. Otherwise the upstream runner serves. Inside the runner (`VLMBatchRunner._driver_takes`), DFlash text requests with no processors other than float32 reporting (solo, long, logprobs, invariant tool-call guides) go to the driver; MTP text requests go to it when at least `DRIVER_MIN_CONCURRENCY` (2) requests are in flight and the uncached prompt is at most `DRIVER_MAX_UNCACHED_TOKENS` (12288) tokens. Other requests keep the single-request speculative lane or the upstream prefill. Image and audio prompts stay on the upstream path.
 
 ## Why
 
@@ -60,16 +60,14 @@ The driver shares the `APCManager` prefix cache with the default runner (through
 
 | Setting | Default | Effect |
 |---|---|---|
-| `YUNSHU_ROUND_DRIVER` | `false` (experimental) | Serve eligible text requests with the round driver instead of the upstream shared batch plus the single-request lane |
-| `YUNSHU_ROUND_PREFILL_CHUNK` | `512` (minimum 16) | Prompt tokens per prefill atom; smaller keeps decoding rows running beside a long prompt at some prefill-speed cost. Prompts prefilled with different chunk sizes are each self-consistent but not bit-identical to each other |
 | `YUNSHU_KV_PRECISION` | `bf16` | Anything else keeps the upstream path |
 | `YUNSHU_MTP` | `true` | Draft with the checkpoint MTP head; shared with the default runner |
 
 ## Limits
 
 - Image and audio prompts (mRoPE), int8 KV and MoE models stay on the upstream path.
-- DFlash drafting and tree drafts are not implemented in the driver.
-- The flag stays experimental until it matches the default lane for single-request greedy decode and passes the validation list recorded in its `decide=` field in the registry. If it wins, it becomes the path and the flag, the upstream shared batch and the speculative lane are deleted.
+- MTP rows verify chains only; logprobs, processors and penalties on an MTP row run one token a step. Schema, regex and grammar constraints stay on the lane or the shared batch.
+- Open work: a per-row cost of about 25 ms per round (draft, verify, draw) keeps four-row seeded decoding level with the shared batch.
 
 ## How to verify
 

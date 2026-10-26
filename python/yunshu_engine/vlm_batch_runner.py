@@ -551,8 +551,8 @@ class VLMBatchRunner:
         # precision, "bf16" / "int8" (YUNSHU_KV_PRECISION).
         self.ragged_kv: str | None = None
         self._ragged_logged = False
-        # Yunshu's round driver (YUNSHU_ROUND_DRIVER, round_driver/): serves
-        # text requests of dense Qwen3.5-family models; None = upstream only.
+        # Yunshu's round driver (round_driver/): serves text requests of dense
+        # Qwen3.5-family models with speculation on; None = upstream only.
         self.driver: Any = None
         self._aux_driver: Any = None
         self._driver_jobs: dict[int, _Job] = {}
@@ -858,15 +858,23 @@ class VLMBatchRunner:
             budget=budget,
             first_delivery=first_delivery,
         )
-        # The round driver drafts for any row without logits processors, logprobs
-        # or a tool-call guide (a thinking budget is fine there); sampled rows draw
+        from .constrained_spec import invariant_guide
+
+        # The DFlash driver accepts reporting and invariant tool-call guides;
+        # other processors retain their established path. Sampled rows draw
         # with the position-keyed sampler, so a draft is accepted exactly when serial
         # sampling would have produced it.
         job.allow_draft = bool(
             allow_draft
-            and static_masks_only(processors)
-            and not logprobs
-            and guide is None
+            and (
+                (static_masks_only(processors) and not logprobs and guide is None)
+                or (
+                    self.driver is not None
+                    and getattr(self.driver, "dflash", None) is not None
+                    and all(isinstance(p, Fp32LogitsProcessor) for p in processors)
+                    and (guide is None or invariant_guide(guide, logprobs, processors))
+                )
+            )
         )
         stats.used_draft = use_draft
         stats.t_submit = time.perf_counter()
@@ -1104,6 +1112,14 @@ class VLMBatchRunner:
         speculative lane, a long cold prompt the upstream prefill."""
         if self.driver is None or job.prompt_kwargs is not None:
             return False
+        if getattr(self.driver, "dflash", None) is not None:
+            from .constrained_spec import invariant_guide
+
+            if any(not isinstance(p, Fp32LogitsProcessor) for p in job.processors):
+                return False
+            return job.guide is None or invariant_guide(
+                job.guide, job.logprobs, job.processors
+            )
         if alone and DRIVER_MIN_CONCURRENCY >= 2:
             return False
         return self._driver_uncached(job) <= DRIVER_MAX_UNCACHED_TOKENS
@@ -1166,14 +1182,19 @@ class VLMBatchRunner:
                 and self._spec is None
                 and not self._driver_takes(job, alone)
             )
-            if not lane:
+            driver_guide = (
+                self._driver_takes(job, alone)
+                and getattr(self.driver, "dflash", None) is not None
+            )
+            if not lane and not driver_guide:
                 job.use_draft = job.allow_draft = False
             # Preserve serial processor order: penalties / suppression first,
             # grammar next, fp32 reporting last. Spec runs these at prefill only.
             from .tool_call_grammar import ToolCallProcessor
 
             pos = len(job.processors) - int(job.logprobs)
-            job.processors.insert(pos, ToolCallProcessor(job.guide))
+            if not driver_guide:
+                job.processors.insert(pos, ToolCallProcessor(job.guide))
 
         use_apc = self.apc_manager is not None and job.priority >= 0
         if job.cache_plan is not None and job.cache_plan.get("writes") == []:
@@ -1276,6 +1297,7 @@ class VLMBatchRunner:
                 gen=self._new_generator(
                     spec=True,
                     use_apc=use_apc,
+                    cache_store=job.cache_store,
                     top_logprobs=0,
                     sampler=job.keyed,
                     greedy=job.keyed is None,
@@ -1527,6 +1549,9 @@ class VLMBatchRunner:
                 self._aux_driver = RoundDriver(
                     self.model,
                     drafter=self.drafter if self.draft_kind == "mtp" else None,
+                    dflash_drafter=self.drafter
+                    if self.draft_kind == "dflash"
+                    else None,
                     stop_tokens=self.stop_tokens,
                     chunk=self.driver.chunk,
                     apc=None,
@@ -1538,10 +1563,18 @@ class VLMBatchRunner:
                 ids=job.ids,
                 max_tokens=job.max_tokens,
                 sampling=job.sampling,
-                processors=list(job.processors or []),
+                processors=[
+                    p
+                    for p in (job.processors or [])
+                    if getattr(driver, "dflash", None) is None
+                    or not isinstance(p, Fp32LogitsProcessor)
+                ],
                 logprobs=job.logprobs,
                 top_logprobs=job.top_logprobs,
                 draft=job.allow_draft,
+                guide=job.guide
+                if getattr(driver, "dflash", None) is not None
+                else None,
                 budget=job.budget,
                 handle=job,
                 extra_hash=self.apc_semantic_hash or 0,
@@ -1556,9 +1589,14 @@ class VLMBatchRunner:
         job.stats.prefill_total = len(job.ids) - hit
         job.stats.prefill_known = True
         job.stats.used_apc = use_apc
-        job.stats.used_draft = bool(job.allow_draft and driver.head is not None)
+        job.stats.used_draft = bool(
+            job.allow_draft
+            and (driver.head is not None or getattr(driver, "dflash", None) is not None)
+        )
         if job.stats.used_draft:
-            job.stats.spec_mode = "mtp"
+            job.stats.spec_mode = (
+                "dflash" if getattr(driver, "dflash", None) is not None else "mtp"
+            )
         self._driver_jobs[id(job)] = job
 
     def _step_driver(self, primary: bool = False) -> None:

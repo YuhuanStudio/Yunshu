@@ -96,7 +96,7 @@ def body(model, prompt, tokens, shape):
     return b
 
 
-def stream(url, b, t_zero):
+def stream(url, b, t_zero, *, on_first_token=None):
     import httpx
 
     times, text, lps = [], [], []
@@ -119,6 +119,8 @@ def stream(url, b, t_zero):
                         or delta.get("reasoning")
                     )
                     if piece:
+                        if not times and on_first_token is not None:
+                            on_first_token()
                         times.append(time.perf_counter())
                         text.append(piece)
                     for item in (ch.get("logprobs") or {}).get("content") or []:

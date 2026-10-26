@@ -1,9 +1,9 @@
 ---
 title: Round driver
-description: 针对 dense Qwen3.5 系列模型的实验性 packed-row 引擎：每一步对所有解码中的 row 做一次 forward、row 不变的运算，以及同时为多个 row 做成本感知的 MTP 草稿。
+description: 针对 dense Qwen3.5 系列模型的 packed-row 引擎：每一步对所有解码中的 row 做一次 forward、row 不变的运算，以及同时为多个 row 做成本感知的 MTP 或 DFlash 草稿。
 ---
 
-Round driver（`python/yunshu_engine/round_driver/`）是受 `YUNSHU_ROUND_DRIVER` 控制的**实验性**服务路径（默认关闭，在 `python/yunshu_engine/settings.py` 中登记为 experimental）。它的目的是让 dense Qwen3.5 系列模型上的并行请求也能用 MTP 做草稿；默认的 VLM batch runner 只在请求独自运行时才做草稿。本页是维护者参考；默认服务路径请见[架构](/docs/developers/architecture)。
+Round driver（`python/yunshu_engine/round_driver/`）是 dense Qwen3.5 系列模型在推测解码开启时的多 row 服务路径。并行请求也能做草稿（MTP 链，或共享公平 32 节点验证预算的 DFlash2 树与复制链）；单请求 lane 只在请求独自运行时才做草稿。关闭推测（`YUNSHU_VLM_DRAFT=off`）时由原始共用 batch 服务所有请求，也是 identity 的对照：推测开启与关闭的输出逐 token 相同。本页是维护者参考；其他服务路径请见[架构](/docs/developers/architecture)。
 
 ## 它做什么
 
@@ -16,7 +16,7 @@ Round driver（`python/yunshu_engine/round_driver/`）是受 `YUNSHU_ROUND_DRIVE
 `RoundDriver`（`driver.py`）以**步（step）**推进各 row，每一步是一种 forward：
 
 - **解码步**：每个解码中 row 的窗口（待处理 token 加上 `d >= 0` 个草稿），右侧补齐到最长窗口。norm、投影与 MLP 在 packed 的 row 上运行；attention 用一次 scatter 写入所有 row 的 key，再用一次 ragged-attention launch 读取（`kernels/ragged_attention.py`）；GDN 的 conv 与递归各是一次 batch launch（`kernels/gdn_rows.py`）。
-- **Prefill 步**：等待中 prompt 的固定大小 **atom**（`YUNSHU_ROUND_PREFILL_CHUNK`，默认 512 token，从 prompt 起点对齐网格，在 prompt 的 checkpoint 与结尾处切开）。有 row 在解码时一次一个 atom；没有 row 解码时可把连续的完整 atom 一起运行。
+- **Prefill 步**：等待中 prompt 的固定大小 **atom**（`vlm_engine.py` 中的 `ROUND_PREFILL_CHUNK`，512 token，从 prompt 起点对齐网格，在 prompt 的 checkpoint 与结尾处切开）。有 row 在解码时一次一个 atom；没有 row 解码时可把连续的完整 atom 一起运行。
 
 当有 row 在解码且有 prompt 在等待时，prefill 步与解码步一对一交替。每一步只做一种工作：在 Qwen3.8-27B 上，把解码 row 并入 prefill forward，并不比相同 chunk 大小下的交替运行更好（2026-09-29）。
 
@@ -35,7 +35,7 @@ flowchart LR
 
 ### 路由
 
-只有在 `YUNSHU_ROUND_DRIVER` 打开、语言模型是 dense Qwen3.5 系列解码器（`round_driver.forward.supports`；含 MoE 层的模型不符合条件）、`YUNSHU_KV_PRECISION` 为 `bf16`，且 lane 运算自我测试通过时，`VLMEngine._round_driver_wanted` 才会启用 driver；否则记录警告，改由 upstream runner 处理。在 runner 内（`VLMBatchRunner._driver_takes`），文本请求只有在至少 `DRIVER_MIN_CONCURRENCY`（2）个请求进行中、且未缓存的 prompt 不超过 `DRIVER_MAX_UNCACHED_TOKENS`（12288）token 时才进入 driver。单独的请求维持单请求推测 lane；很长的冷 prompt 维持 upstream 的 prefill。图像与音频 prompt 留在 upstream 路径。
+`VLMEngine._round_driver_wanted` 在推测开启（checkpoint 的 MTP head 或 DFlash2 草稿模型）、语言模型是 dense Qwen3.5 系列解码器（`round_driver.forward.supports`；含 MoE 层的模型不符合条件）、`YUNSHU_KV_PRECISION` 为 `bf16`，且 lane 运算自我测试通过时启用 driver；否则由 upstream runner 处理。在 runner 内（`VLMBatchRunner._driver_takes`），除 float32 回报外没有其他 processor 的 DFlash 文本请求（单独、长 prompt、logprobs、invariant 工具调用 guide）进入 driver；MTP 文本请求在至少 `DRIVER_MIN_CONCURRENCY`（2）个请求进行中、且未缓存的 prompt 不超过 `DRIVER_MAX_UNCACHED_TOKENS`（12288）token 时进入 driver。其余请求维持单请求推测 lane 或 upstream 的 prefill。图像与音频 prompt 留在 upstream 路径。
 
 ## 为什么
 
@@ -60,16 +60,14 @@ Driver 与默认 runner 共用 `APCManager` 前缀缓存（通过 `APCCoordinato
 
 | 设置 | 默认 | 效果 |
 |---|---|---|
-| `YUNSHU_ROUND_DRIVER` | `false`（experimental） | 以 round driver 取代 upstream 共用 batch 加单请求 lane，服务符合条件的文本请求 |
-| `YUNSHU_ROUND_PREFILL_CHUNK` | `512`（最小 16） | 每个 prefill atom 的 prompt token 数；较小的值让长 prompt 旁的解码 row 持续运行，但 prefill 速度会下降。以不同 chunk 大小 prefill 的 prompt 各自一致，但彼此不保证位级相同 |
 | `YUNSHU_KV_PRECISION` | `bf16` | 其他值会维持 upstream 路径 |
 | `YUNSHU_MTP` | `true` | 使用 checkpoint 的 MTP head 做草稿；与默认 runner 共用 |
 
 ## 限制
 
 - 图像与音频 prompt（mRoPE）、int8 KV 与 MoE 模型留在 upstream 路径。
-- Driver 尚未实现 DFlash 草稿与树状草稿。
-- 在单请求贪婪解码追上默认 lane、并通过登记表 `decide=` 字段记录的验证清单之前，此旗标维持 experimental。若胜出，它会成为正式路径，旗标、upstream 共用 batch 与推测 lane 会被删除。
+- MTP row 只验证链；MTP row 的 logprobs、processor 与惩罚每步只跑一个 token。schema、regex 与 grammar 约束留在 lane 或共用 batch。
+- 待办：每个 row 每轮约 25 ms 的成本（草稿、验证、抽样）使四 row 的 seeded 解码仅与共用 batch 持平。
 
 ## 如何验证
 

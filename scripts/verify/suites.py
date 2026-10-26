@@ -19,6 +19,8 @@ STAGES = (
     "memory",
     "longqa",
     "conc",
+    "phaseb-identity",
+    "phaseb-speed",
     "ttft_profile",
     "ssd_ttft",
     "ssd_ttft_profile",
@@ -47,6 +49,8 @@ LADDER = tuple(
     not in (
         "longqa",
         "conc",
+        "phaseb-identity",
+        "phaseb-speed",
         "ttft_profile",
         "ssd_ttft",
         "ssd_ttft_profile",
@@ -76,6 +80,14 @@ LADDER = tuple(
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
+    "phaseb-pilot": {
+        "stages": ["phaseb-identity"],
+        "phaseb_ctx_chars": [16000],
+        "phaseb_scenarios": ["burst2"],
+        "phaseb_shapes": ["greedy"],
+        "phaseb_arms": ["cand"],
+        "phaseb_tokens": 128,
+    },
     # Diagnostic instrumentation only; does not judge speed or token identity.
     "ttft_profile": {
         "stages": ["preflight", "ttft_profile"],

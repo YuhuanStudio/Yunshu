@@ -2676,7 +2676,90 @@ def stage_lane_bandwidth(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult(name, not reasons, reasons, numbers))
 
 
+def stage_phaseb(ctx: Ctx, *, speed: bool = False) -> StageResult:
+    """Agent-shaped 1/2/4-row drafting and stagger, matched against solo."""
+    from scripts.research.phaseb_conc import speed_verdict, validate_records
+
+    name = "phaseb-speed" if speed else "phaseb-identity"
+    reps = max(3, int(ctx.suite.get("reps", 3))) if speed else 1
+    contexts = ctx.suite.get("phaseb_ctx_chars", [16000, 85000, 128000])
+    arms = ctx.suite.get(
+        "phaseb_arms", ["base", "cand"] if speed else ["base", "cand", "off"]
+    )
+    scenarios = ctx.suite.get(
+        "phaseb_scenarios", ["solo", "burst2", "burst4", "stagger"]
+    )
+    shapes = ctx.suite.get(
+        "phaseb_shapes",
+        ["greedy", "seeded", "agent"] if speed else ["greedy", "seeded"],
+    )
+    cells = []
+    for chars in contexts:
+        for rep in range(reps):
+            for scen in scenarios:
+                cells.append(
+                    Cell(
+                        name,
+                        f"c{chars}-r{rep}-{scen}",
+                        [
+                            ctx.py,
+                            str(REPO / "scripts/research/phaseb_conc.py"),
+                            "--base-src",
+                            str(ctx.base.path / "python"),
+                            "--cand-src",
+                            str(ctx.cand.path / "python"),
+                            "--model",
+                            ctx.model,
+                            "--mode",
+                            "speed" if speed else "identity",
+                            "--ctx-chars",
+                            str(chars),
+                            "--rep",
+                            str(rep),
+                            "--tokens",
+                            str(ctx.suite.get("phaseb_tokens", 1500 if speed else 256)),
+                            "--arms",
+                            *arms,
+                            "--scenarios",
+                            scen,
+                            "--shapes",
+                            *shapes,
+                            "--out",
+                            "{out}",
+                        ],
+                        mem_gb=ctx.mem_gb,
+                        timeout_min=120,
+                        stall_min=20,
+                        quiet=speed,
+                        validate=lambda path, scen=scen: validate_records(
+                            read_jsonl(path),
+                            arms=arms,
+                            scenarios=(scen,),
+                            shapes=shapes,
+                        ),
+                    )
+                )
+    results = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(results)
+    if set(results) != {cell.key for cell in cells}:
+        reasons.append("Phase B cells did not all complete")
+    rows = []
+    for result in results.values():
+        if result.ok and result.evidence:
+            rows.extend(read_jsonl(result.evidence))
+    numbers = {"cells": rows}
+    if speed and not reasons:
+        failures, comparisons = speed_verdict(
+            rows, reps, float(ctx.suite.get("speed_tol_pct", 2.0)) / 100
+        )
+        reasons.extend(failures)
+        numbers["comparisons"] = comparisons
+    return _finish(ctx, StageResult(name, not reasons, reasons, numbers))
+
+
 STAGE_FUNCS = {
+    "phaseb-identity": stage_phaseb,
+    "phaseb-speed": lambda ctx: stage_phaseb(ctx, speed=True),
     "lane_bandwidth": stage_lane_bandwidth,
     "ssd_ttft": stage_ssd_ttft,
     "ssd_ttft_profile": lambda ctx: stage_ttft_profile(ctx, ssd=True),

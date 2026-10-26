@@ -60,6 +60,12 @@ from .types import EngineConfig
 
 logger = logging.getLogger(__name__)
 
+# Prompt tokens per round-driver prefill atom: a decoding row only steps between prefill
+# forwards, so small atoms keep it running next to a long prompt (Qwen3.8-27B, M5 Max:
+# 512 -> 6 tok/s, 128 -> 24 tok/s for one MTP row beside an 8K prompt, ~20% less prefill
+# speed). The atom grid is fixed per prompt, so output never depends on what else runs.
+ROUND_PREFILL_CHUNK = 512
+
 # Per-request temp-file registry. Set to a fresh list at the start of each
 # generate()/generate_stream() call so cleanup deletes EXACTLY the files THIS request
 # created — identity-based, not the old positional `_temp_files[offset:]` slice that
@@ -2399,24 +2405,35 @@ class VLMEngine:
                 )
         disk.start_mover()
 
-    def _round_driver_wanted(self, lm) -> bool:
-        """``YUNSHU_ROUND_DRIVER`` on a dense Qwen3.5-family text decoder with
-        bf16 KV (int8 KV precision keeps the upstream path)."""
-        if not settings.get_bool("YUNSHU_ROUND_DRIVER"):
+    def _round_driver_wanted(self, lm, model_path: str, spec_family: bool) -> bool:
+        """The multi-row round driver serves a dense Qwen3.5-family text decoder when
+        speculative decoding is on (checkpoint MTP head or a DFlash2 drafter) and the
+        KV is bf16. With speculation off (``YUNSHU_VLM_DRAFT=off``) the stock shared
+        batch serves every request: that path is the identity reference."""
+        if not spec_family:
             return False
+        from . import spec_select
+        from .mlxvlm_mtp import is_mtp_capable
         from .round_driver import forward as rd_forward
 
+        choice = spec_select.choose(
+            self._config,
+            spec_family=spec_family,
+            mtp_capable=is_mtp_capable(model_path),
+        )
+        if choice.kind == "none":
+            return False
         if not rd_forward.supports(lm):
-            logger.warning("YUNSHU_ROUND_DRIVER: not a dense Qwen3.5-family model")
+            logger.info("Round driver: not a dense Qwen3.5-family model")
             return False
         if settings.get("YUNSHU_KV_PRECISION") != "bf16":
-            logger.warning("YUNSHU_ROUND_DRIVER: int8 KV keeps the upstream path")
+            logger.info("Round driver: int8 KV keeps the stock runner")
             return False
         from .kernels.tensorfold.lane_qmm import ready
 
         if not ready():
             logger.warning(
-                "YUNSHU_ROUND_DRIVER: lane arithmetic self-test failed; using upstream runner"
+                "Round driver: lane arithmetic self-test failed; using the stock runner"
             )
             return False
         return True
@@ -2464,7 +2481,9 @@ class VLMEngine:
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
         qwen4 = self._config.get("model_type") == "qwen4_exp"
-        use_driver = not qwen4 and self._round_driver_wanted(lm)
+        use_driver = not qwen4 and self._round_driver_wanted(
+            lm, model_path, spec_family
+        )
         driver_lanes = 0
         if use_driver:
             # Row-invariant lane projections everywhere (before any verify
@@ -2909,8 +2928,9 @@ class VLMEngine:
             runner.driver = RoundDriver(
                 self._model,
                 drafter=drafter if draft_kind == "mtp" else None,
+                dflash_drafter=drafter if draft_kind == "dflash" else None,
                 stop_tokens=runner.stop_tokens,
-                chunk=settings.get("YUNSHU_ROUND_PREFILL_CHUNK"),
+                chunk=ROUND_PREFILL_CHUNK,
                 apc=self._apc_backend,
             )
         logger.info(

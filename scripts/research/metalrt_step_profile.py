@@ -237,7 +237,7 @@ def run_dense(a, mx, tracer):
 
     model, processor = load(str(a.model))
     lm = model.language_model
-    omlx.apply(row_exact=False)
+    omlx.apply()
     install_invariant(lm, model=model, packed=omlx.is_nax_available())
     set_active(True)
     ragged_kv.install()
