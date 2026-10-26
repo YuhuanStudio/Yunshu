@@ -474,21 +474,6 @@
     },
     {
       "kind": "derived",
-      "path": "python/yunshu_engine/mtp_patch.py",
-      "repo": "https://github.com/jundot/omlx",
-      "clone": "reference/omlx",
-      "upstream_paths": [
-        "omlx/patches/mlx_lm_mtp"
-      ],
-      "commit": "deb9f00a",
-      "license": "Apache-2.0",
-      "why": "deprecated port of the oMLX MTP patch (PR 990)",
-      "reviewed_commit": "6feea9f95de86c772235af765914e4abb82b236f",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 source diff review: KEEP; BACKLOG wide: upstream unifies batched DFlash, clips block drafts before grouping, sizes depth stats to drafted window, extends rotating rollback and removes priming switches. Yunshu owns a VLM lane and separate request transactions; wholesale mlx-lm batch-generator transplant is not applicable."
-    },
-    {
-      "kind": "derived",
       "path": "python/yunshu_engine/dflash_context.py",
       "repo": "https://github.com/Blaizzy/mlx-vlm",
       "clone": "reference/mlx-vlm",
@@ -1168,22 +1153,6 @@
     },
     {
       "kind": "inspired",
-      "path": "python/yunshu_engine/spec_proposer.py",
-      "repo": "https://github.com/ggml-org/llama.cpp",
-      "clone": "reference/llama.cpp",
-      "upstream_paths": [
-        "common/speculative.cpp",
-        "common/speculative.h"
-      ],
-      "commit": "dc9879cf",
-      "license": "MIT",
-      "why": "common_speculative_state: one proposer interface for n-gram, draft model and MTP",
-      "reviewed_commit": "a0e6dc7384edb8f5d927155e1d26c10b4a310e6d",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 source diff review: KEEP; BACKLOG spec: llama.cpp now forwards image embeddings into MTP and separates draft microbatch size; Yunshu uses prepare_media and native MLX cache transactions, not llama_batch."
-    },
-    {
-      "kind": "inspired",
       "path": "python/yunshu_gateway/schemas/structured_outputs.py",
       "repo": "https://github.com/vllm-project/vllm",
       "clone": "reference/vllm",
@@ -1786,51 +1755,6 @@
       "installed_version": "0.7.8",
       "reviewed_date": "2026-10-15",
       "review_reason": "sync016: KEEP: completed prompt logits are now keyed by UID so cancelled rows do not shift ownership. Local wrappers call upstream generate/prompt_step and do not read that dict; per-row sampling, absolute prefill seams, buffer reuse and DFlash capture remain required."
-    },
-    {
-      "kind": "patches",
-      "path": "python/yunshu_engine/n_confirmed_patch.py",
-      "repo": "https://github.com/ml-explore/mlx-lm",
-      "clone": "reference/mlx-lm",
-      "package": "mlx-lm",
-      "module": "mlx_lm.models.qwen3_5",
-      "symbol": "GatedDeltaNet.__call__",
-      "signature": "(self, inputs, mask=None, cache=None)",
-      "license": "MIT",
-      "commit": "v0.31.3",
-      "why": "n_confirmed rollback for GatedDeltaNet (experimental route)",
-      "source_sha256": "0d6f97f05c2abfdcf8eced32e538808df08947338ab1f0ef1d660a4d3547c86d",
-      "installed_version": "0.32.0"
-    },
-    {
-      "kind": "patches",
-      "path": "python/yunshu_engine/n_confirmed_patch.py",
-      "repo": "https://github.com/ml-explore/mlx-lm",
-      "clone": "reference/mlx-lm",
-      "package": "mlx-lm",
-      "module": "mlx_lm.models.qwen3_5",
-      "symbol": "Qwen3_5TextModel.__call__",
-      "signature": "(self, inputs, cache=None, ...)",
-      "license": "MIT",
-      "commit": "v0.31.3",
-      "why": "n_confirmed rollback for GatedDeltaNet (experimental route)",
-      "source_sha256": "6acb548f006a114cca650dbbf15dbdb8f8f3991f9a754e586ea780b58468e568",
-      "installed_version": "0.32.0"
-    },
-    {
-      "kind": "patches",
-      "path": "python/yunshu_engine/n_confirmed_patch.py",
-      "repo": "https://github.com/ml-explore/mlx-lm",
-      "clone": "reference/mlx-lm",
-      "package": "mlx-lm",
-      "module": "mlx_lm.models.qwen3_5",
-      "symbol": "DecoderLayer.__call__",
-      "signature": "(self, x, mask=None, cache=None)",
-      "license": "MIT",
-      "commit": "v0.31.3",
-      "why": "n_confirmed rollback for GatedDeltaNet (experimental route)",
-      "source_sha256": "b1f708d4fa7825a66240e9b04115bf52ae2bf420ab7cb5484c62beabcc6e7a30",
-      "installed_version": "0.32.0"
     },
     {
       "kind": "patches",

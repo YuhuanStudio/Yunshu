@@ -2318,10 +2318,7 @@
  "orphans": {
   "python/yunshu_engine/dflash_draft.py": "Quantized DFlash context-KV fusion and the trained-selector greedy readout; unit tested, never installed (quantize_drafter does not call it). Wire or delete after an A/B.",
   "python/yunshu_engine/dflash_conv.py": "One-dispatch private DFlash convolution candidate; unit tested, never installed. Wire or delete after an A/B.",
-  "python/yunshu_engine/mtp_patch.py": "oMLX MTP patch for mlx-lm Qwen3.5 (text path); no importer, superseded by the VLM runner's MTP.",
-  "python/yunshu_engine/mtp_decoder.py": "Old MTP decoder referenced by scheduler.py only through an argument; no importer.",
-  "python/yunshu_engine/spec_interface.py": "Proposer interface with no implementer importing it.",
-  "python/yunshu_engine/spec_proposer.py": "Proposer interface reached only by string from scheduler_mixins."
+  "python/yunshu_engine/gpu_ngram.py": "GPU n-gram table and proposer; its only importer (the removed spec_interface strategy factory) is gone, so nothing installs it. Wire or delete."
  },
  "modules_other": {
   "python/yunshu_engine/apc_restore_cost.py": "media checkpoint restore admission (APC media path; cost model only, decides reuse not numerics)",
@@ -2348,11 +2345,10 @@
   "python/yunshu_engine/apc_storage.py": "apc_prefix_cache storage",
   "python/yunshu_engine/apc_warm.py": "apc_prefix_cache WARM tier",
   "python/yunshu_engine/mlxvlm_mtp.py": "standalone EXPERIMENTAL MTP backend (mtp-rounds duplicate group)",
-  "python/yunshu_engine/n_confirmed_patch.py": "n_confirmed rollback patch for mtp_decoder route",
   "python/yunshu_engine/engine_ngram.py": "text n-gram speculation loop (proposers duplicate group)",
   "python/yunshu_engine/ngram_proposer.py": "text n-gram (proposers duplicate group)",
   "python/yunshu_engine/suffix_proposer.py": "text suffix proposer (proposers duplicate group)",
-  "python/yunshu_engine/gpu_ngram.py": "text GPU n-gram (proposers duplicate group)",
+  "python/yunshu_engine/gpu_ngram.py": "orphan (see orphans)",
   "python/yunshu_engine/kernels/batch_invariant.py": "batch_invariant_kernels",
   "python/yunshu_engine/kernels/lane_linear.py": "lane_linear",
   "python/yunshu_engine/kernels/lane_layers.py": "lane_layers",
@@ -2389,10 +2385,6 @@
   "python/yunshu_engine/copy_drafter.py": "copy_rounds",
   "python/yunshu_engine/dflash_conv.py": "orphan (see orphans)",
   "python/yunshu_engine/dflash_draft.py": "orphan (see orphans)",
-  "python/yunshu_engine/mtp_patch.py": "orphan (see orphans)",
-  "python/yunshu_engine/mtp_decoder.py": "orphan (see orphans)",
-  "python/yunshu_engine/spec_interface.py": "orphan (see orphans)",
-  "python/yunshu_engine/spec_proposer.py": "orphan (see orphans)",
   "python/yunshu_engine/dflash_apc_window.py": "DFlash drafter context window kept beside APC checkpoints (dflash path; apc_prefix_cache)",
   "python/yunshu_engine/penalty_context.py": "Penalty context = full prompt on an APC hit (hit == miss; part of penalties_in_spec / apc)",
   "python/yunshu_engine/gpu_window.py": "debug GPU busy/idle window (Metal interposer), inert unless DYLD_INSERT_LIBRARIES loads it",

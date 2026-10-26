@@ -248,7 +248,7 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
 # --- documented intentional style categories ---
 # N801/N802 invalid-class/function-name: camelCase mirrors JSON-schema keywords
 #      (_flatten_allOf, _process_anyOf) + dunder methods defined inside monkey-patch
-#      functions (mtp_patch.py) which ruff misreads.
+#      functions which ruff misreads.
 # N807 dunder-function-name: __init__/__call__ assigned inside patch closures.
 # N814/N817 camelcase-imported-as-constant/acronym: matrix-math + protocol acronyms.
 # SIM102 collapsible-if: nested ifs kept separate for MLX tensor-condition readability.
