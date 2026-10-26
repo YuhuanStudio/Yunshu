@@ -791,6 +791,14 @@ def _split_thinking(content: list) -> tuple[list, str]:
     return keep, "\n".join(think)
 
 
+def _clamped_thinking_budget(granted: int | None, max_tokens: int) -> int | None:
+    """Thinking budget after the context clamp: strictly below ``max_tokens`` so the answer
+    keeps at least one token (the request validator enforces budget_tokens < max_tokens)."""
+    if granted is None:
+        return None
+    return min(granted, max(1, max_tokens - 1))
+
+
 def _thinking_switches(req) -> tuple[bool | None, int | None]:
     """Anthropic ``thinking`` -> (enable_thinking, thinking_budget).
 
@@ -2105,7 +2113,10 @@ async def _create_message(
             if _th is not None and req.thinking is not None:
                 req.thinking = {
                     **req.thinking,
-                    "budget_tokens": _tb.thinking_budget_granted,
+                    # the validator's own rule: budget_tokens < max_tokens
+                    "budget_tokens": _clamped_thinking_budget(
+                        _tb.thinking_budget_granted, req.max_tokens
+                    ),
                 }
     except HTTPException as e:
         return JSONResponse(
