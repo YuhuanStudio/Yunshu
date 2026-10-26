@@ -27,6 +27,11 @@ def parser():
     p.add_argument("--ctx-chars", type=int, default=16000)
     p.add_argument("--tokens", type=int, default=128)
     p.add_argument("--rep", type=int, default=0)
+    p.add_argument(
+        "--draft",
+        default=None,
+        help="YUNSHU_VLM_DRAFT value: a drafter directory, or mtp (checkpoint MTP head)",
+    )
     p.add_argument("--join", type=float, default=0.5)
     p.add_argument("--scenarios", nargs="+", default=["burst2", "burst4", "stagger"])
     p.add_argument("--shapes", nargs="+", default=["greedy", "seeded"])
@@ -324,7 +329,7 @@ def main():
                 YUNSHU_VLM_APC_DISK="0",
                 YUNSHU_VLM_APC_MEMORY_GB="0",
                 YUNSHU_VLM_APC_DISK_DIR=str(home),
-                YUNSHU_VLM_DRAFT="off" if arm == "off" else t.D,
+                YUNSHU_VLM_DRAFT="off" if arm == "off" else (a.draft or t.D),
                 YUNSHU_NEXT_TURN_PREFILL="off",
                 YUNSHU_CONSOLE="0",
             )
