@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 _STATE = {"limit": 0}
 # Storage only: checkpoints always overwrite every row before using these arrays.
 _RESTORE_BUFFERS: list = []
+# A pooled set nobody takes (every later request is under half its capacity) is
+# released after this many finished requests, so it cannot pin memory forever.
+MAX_IDLE_OFFERS = 3
 
 
 def restore_buffer_bytes() -> int:
@@ -34,6 +37,19 @@ def clear_restore_buffers() -> None:
     _restore_pool_limit()
 
 
+def _age_pool() -> None:
+    """One finished request passed: release a pooled set that none of them took."""
+    if not _RESTORE_BUFFERS:
+        return
+    if _STATE.get("pool_used"):
+        _STATE["idle_offers"] = 0
+    else:
+        _STATE["idle_offers"] = _STATE.get("idle_offers", 0) + 1
+    _STATE["pool_used"] = False
+    if _STATE["idle_offers"] >= MAX_IDLE_OFFERS:
+        clear_restore_buffers()
+
+
 def offer_restore_buffers(caches) -> None:
     """Retain at most one finished KV set within the existing allocator budget.
 
@@ -42,6 +58,7 @@ def offer_restore_buffers(caches) -> None:
     """
     from mlx_vlm.models.cache import BatchKVCache, KVCache
 
+    _age_pool()
     candidates = [c for c in caches if type(c) in (KVCache, BatchKVCache)]
     arrays = [a for c in candidates for a in (c.keys, c.values)]
     if not arrays or any(a is None for a in arrays):
@@ -50,6 +67,8 @@ def offer_restore_buffers(caches) -> None:
     if not restore_buffer_bytes() < size <= _STATE["limit"]:
         return
     _RESTORE_BUFFERS[:] = arrays
+    _STATE["idle_offers"] = 0
+    _STATE["pool_used"] = False
     for c in candidates:
         c.keys = c.values = None
     _restore_pool_limit()
@@ -76,6 +95,7 @@ def take_restore_buffer(a, capacity):
     if best is None:
         return None
     out = _RESTORE_BUFFERS.pop(best)
+    _STATE["pool_used"] = True
     _restore_pool_limit()
     return out
 
