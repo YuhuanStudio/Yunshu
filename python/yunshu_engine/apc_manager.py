@@ -1144,14 +1144,6 @@ class _Coordinator(APCCoordinator):
         ):
             return False
         full_ids = getattr(self, "_current_ids", tokens)
-        try:
-            from . import dflash_apc_window
-
-            dflash_apc_window.capture(
-                tokens, extra_hash, prompt_end=len(tokens) >= len(full_ids) - 1
-            )
-        except Exception:  # the drafter window is an optimisation only
-            logger.debug("drafter window capture failed", exc_info=True)
         if tuple(full_ids) in self.__dict__.get("_store_off", ()):
             return False
         policy = self.request(full_ids)
@@ -1169,6 +1161,18 @@ class _Coordinator(APCCoordinator):
             and len(token_ids) not in self._store_lengths
         ):
             return False  # deterministic forward boundary, not an extra snapshot
+        # Only a checkpoint that is going to be stored can be restored from, so only its window
+        # is kept: forward-split boundaries (every stride in split-invariant prefill) and
+        # opted-out requests used to concatenate and store a window each, evicting the windows
+        # of real checkpoints from the small budget.
+        try:
+            from . import dflash_apc_window
+
+            dflash_apc_window.capture(
+                tokens, extra_hash, prompt_end=len(tokens) >= len(full_ids) - 1
+            )
+        except Exception:  # the drafter window is an optimisation only
+            logger.debug("drafter window capture failed", exc_info=True)
         from mlx_vlm.apc import _cache_nbytes
         from mlx_vlm.apc_adapters import clone_cache_entry
         from mlx_vlm.models.cache import (
