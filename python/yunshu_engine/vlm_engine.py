@@ -1349,18 +1349,24 @@ class VLMEngine:
         # positional-offset race that deleted concurrent/n>1 requests' files.
         _req_temp_files: list[str] = []
         _temp_token = _request_temp_files.set(_req_temp_files)
-        image_paths = await self._extract_images(messages)
-        audio_paths = await self._extract_audio(messages)
-        video_frames = await self._extract_video_frames(messages)
-        image_paths.extend(video_frames)
+        try:
+            image_paths = await self._extract_images(messages)
+            audio_paths = await self._extract_audio(messages)
+            video_frames = await self._extract_video_frames(messages)
+            image_paths.extend(video_frames)
 
-        enable_thinking = self._default_enable_thinking(
-            enable_thinking,
-            constrained=constrains_initial_output(kwargs.get("json_schema")),
-        )
-        self._track_pipeline(kwargs, messages, image_paths, audio_paths)
-        self._check_request_supported(image_paths, audio_paths, kwargs)
-        await self._settle_rehearsal_early(messages, enable_thinking, tpl_extra)
+            enable_thinking = self._default_enable_thinking(
+                enable_thinking,
+                constrained=constrains_initial_output(kwargs.get("json_schema")),
+            )
+            self._track_pipeline(kwargs, messages, image_paths, audio_paths)
+            self._check_request_supported(image_paths, audio_paths, kwargs)
+            await self._settle_rehearsal_early(messages, enable_thinking, tpl_extra)
+        except BaseException:
+            # Nothing below owns these files yet: a bad request, a failed decode or a
+            # cancel while extracting must not leave decoded media on disk.
+            self._release_request_temp_files(_req_temp_files, _temp_token)
+            raise
 
         import uuid
 
@@ -1382,27 +1388,31 @@ class VLMEngine:
 
         _safe_queue = _ThreadSafeQueue(queue, _loop_for_queue)
 
-        runner_params = self._runner_kwargs(
-            max_tokens=max(1, int(max_tokens)),
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            min_p=min_p,
-            seed=seed,
-            stop=stop,
-            stop_token_ids=stop_token_ids,
-            repetition_penalty=repetition_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            enable_thinking=enable_thinking,
-            thinking_budget=kwargs.get("thinking_budget"),
-            cancel_event=cancel_event,
-            kwargs={
-                **kwargs,
-                "xtc_probability": xtc_probability,
-                "xtc_threshold": xtc_threshold,
-            },
-        )
+        try:
+            runner_params = self._runner_kwargs(
+                max_tokens=max(1, int(max_tokens)),
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                seed=seed,
+                stop=stop,
+                stop_token_ids=stop_token_ids,
+                repetition_penalty=repetition_penalty,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
+                enable_thinking=enable_thinking,
+                thinking_budget=kwargs.get("thinking_budget"),
+                cancel_event=cancel_event,
+                kwargs={
+                    **kwargs,
+                    "xtc_probability": xtc_probability,
+                    "xtc_threshold": xtc_threshold,
+                },
+            )
+        except BaseException:
+            self._release_request_temp_files(_req_temp_files, _temp_token)
+            raise
 
         runner_params["first_delivery"] = first_delivery
         from .request_tracker import current_request_info
@@ -1603,17 +1613,21 @@ class VLMEngine:
             # contextvars.Context than the one .set() ran in — reset() would then
             # raise "Token was created in a different Context". File cleanup below
             # uses the closure list, not the ContextVar, so a failed reset is safe.
-            with contextlib.suppress(ValueError):
-                _request_temp_files.reset(_temp_token)
-            _mine = list(_req_temp_files)
-            if _mine:
-                _mine_set = set(_mine)
-                with self._temp_files_lock:
-                    if self._temp_files is not None:
-                        self._temp_files[:] = [
-                            f for f in self._temp_files if f not in _mine_set
-                        ]
-            self._cleanup_temp_files(_mine)
+            self._release_request_temp_files(_req_temp_files, _temp_token)
+
+    def _release_request_temp_files(self, req_files: list[str], token) -> None:
+        """Drop one request's context var and delete exactly the files it registered."""
+        with contextlib.suppress(ValueError):
+            _request_temp_files.reset(token)
+        _mine = list(req_files)
+        if _mine:
+            _mine_set = set(_mine)
+            with self._temp_files_lock:
+                if self._temp_files is not None:
+                    self._temp_files[:] = [
+                        f for f in self._temp_files if f not in _mine_set
+                    ]
+        self._cleanup_temp_files(_mine)
 
     # -- next-turn rehearsal (YUNSHU_NEXT_TURN_PREFILL) ---------------------------------
 
@@ -4186,13 +4200,13 @@ class VLMEngine:
         )
         ext = _norm if _norm in ("wav", "mp3", "ogg", "flac", "pcm") else "wav"
         tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+        self._register_temp_file(tmp.name)  # a cancelled await still cleans up
 
         def _sync_decode_write() -> None:
             # MB-size base64 decode + write blocks event loop;
             # move to executor.
-            decoded = base64.b64decode(data)
             try:
-                tmp.write(decoded)
+                tmp.write(base64.b64decode(data))
                 tmp.close()
             except Exception:
                 tmp.close()
@@ -4202,7 +4216,6 @@ class VLMEngine:
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _sync_decode_write)
-        self._register_temp_file(tmp.name)
         return tmp.name
 
     async def _save_base64_image(self, data_url: str) -> str:
@@ -4216,12 +4229,12 @@ class VLMEngine:
         ext = _mime[1].split(";")[0] if len(_mime) > 1 else "png"
         ext = ext if ext in ("png", "jpg", "jpeg", "webp", "gif") else "png"
         tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+        self._register_temp_file(tmp.name)  # a cancelled await still cleans up
 
         def _sync_decode_write() -> None:
             # offload sync I/O off the event loop.
-            decoded = base64.b64decode(data)
             try:
-                tmp.write(decoded)
+                tmp.write(base64.b64decode(data))
                 tmp.close()
             except Exception:
                 tmp.close()
@@ -4231,7 +4244,6 @@ class VLMEngine:
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _sync_decode_write)
-        self._register_temp_file(tmp.name)
         return tmp.name
 
     async def _download_video(self, url: str) -> str:
@@ -4547,12 +4559,12 @@ class VLMEngine:
     async def _save_base64_file(self, data: str, ext: str = "mp4") -> str:
         """Save base64-encoded data to a temp file."""
         tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+        self._register_temp_file(tmp.name)  # a cancelled await still cleans up
 
         def _sync_decode_write() -> None:
             # offload sync decode+write off the event loop.
-            decoded = base64.b64decode(data)
             try:
-                tmp.write(decoded)
+                tmp.write(base64.b64decode(data))
                 tmp.close()
             except Exception:
                 tmp.close()
@@ -4562,7 +4574,6 @@ class VLMEngine:
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _sync_decode_write)
-        self._register_temp_file(tmp.name)
         return tmp.name
 
     # ── Helpers ──
