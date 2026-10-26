@@ -252,6 +252,7 @@ def stage_preflight(ctx: Ctx) -> StageResult:
             "-p",
             "no:cacheprovider",
             "-x",
+            "-rfE",
             *tests,
         ]
         r = subprocess.run(
@@ -262,7 +263,10 @@ def stage_preflight(ctx: Ctx) -> StageResult:
             text=True,
             timeout=30 * 60,
         )
-        tail = "\n".join((r.stdout + r.stderr).strip().splitlines()[-8:])
+        lines = (r.stdout + r.stderr).strip().splitlines()
+        # the failing test names first: log noise printed after a failure must not push them out of the record
+        failed = [ln for ln in lines if ln.startswith(("FAILED ", "ERROR "))][:20]
+        tail = "\n".join([*failed, *lines[-8:]])
         ctx.run.append(
             name, {"ev": "pytest", "rc": r.returncode, "tail": tail, "tests": tests}
         )
