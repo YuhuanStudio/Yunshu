@@ -3231,7 +3231,13 @@ class RealtimeSession:
                     error={
                         "message": (
                             "input_audio_buffer exceeded the maximum size; the buffer was "
-                            "cleared. Commit more frequently or enable server VAD."
+                            "cleared. Commit more frequently"
+                            + (
+                                "."
+                                if (self.session.turn_detection or {}).get("type")
+                                == "server_vad"
+                                else " or enable server VAD."
+                            )
                         ),
                         "type": "invalid_request_error",
                         "code": "input_audio_buffer_overflow",
@@ -3248,6 +3254,24 @@ class RealtimeSession:
         turn_detection = self.session.turn_detection
         if turn_detection and turn_detection.get("type") == "server_vad":
             await self._run_vad(chunk)
+            # An always-open mic: while nobody is speaking, idle silence has no
+            # use beyond the prefix_padding_ms pre-roll the next utterance keeps, so
+            # drop the rest instead of letting it fill the cap (overflow error ~3.5 min).
+            if not self._vad_speaking:
+                self._trim_idle_audio(turn_detection)
+
+    def _trim_idle_audio(self, turn_detection: dict) -> None:
+        """Keep only ~prefix_padding_ms of trailing idle audio in the buffer."""
+        _in_fmt = str(
+            getattr(self.session, "input_audio_format", "pcm16") or "pcm16"
+        ).lower()
+        _sr = 8000 if "g711" in _in_fmt else 24000
+        _pad_ms = int(turn_detection.get("prefix_padding_ms", 300))
+        keep = max(int(_pad_ms / 1000 * _sr) * 2, 2)
+        # Trim in batches (at 2x the pre-roll) so the front delete isn't per chunk.
+        if len(self._audio_buffer) > 2 * keep:
+            del self._audio_buffer[: len(self._audio_buffer) - keep]
+            self._vad_speech_start_offset = 0
 
     def _reset_silero(self) -> None:
         """Drop Silero streaming state so the next utterance starts fresh."""
