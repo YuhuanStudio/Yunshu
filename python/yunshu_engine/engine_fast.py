@@ -10,7 +10,11 @@ import asyncio
 import time
 
 from . import settings
-from .context_window import ContextBudgetError, reject_overlong_prompt
+from .context_window import (
+    ContextBudgetError,
+    reject_overlong_prompt,
+    require_non_empty_prompt,
+)
 from .fast_path_stats import FastPathStats
 
 
@@ -396,14 +400,7 @@ class EngineFastMixin:
         prompt_tokens = len(input_ids)
         _latency_marks["template_end"] = time.perf_counter()
 
-        if not input_ids:
-            bos_id = getattr(tokenizer, "bos_token_id", None)
-            if bos_id is not None:
-                input_ids = [bos_id]
-            else:
-                eos_id = getattr(tokenizer, "eos_token_id", 1)
-                input_ids = [eos_id]
-            prompt_tokens = len(input_ids)
+        require_non_empty_prompt(input_ids)
 
         # ── Context window: clamp generation + truncate over-long prompt ──
         # Resolve the REAL context window. The old code read ONLY the

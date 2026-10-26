@@ -73,6 +73,16 @@ class ContextBudgetError(ValueError):
     """The protected messages plus the latest user turn exceed the budget."""
 
 
+class EmptyPromptError(ValueError):
+    """The request renders to zero prompt tokens (nothing to condition generation on)."""
+
+
+def require_non_empty_prompt(prompt_tokens) -> None:
+    """Refuse a zero-token prompt before any generation state is built (every serving path)."""
+    if not prompt_tokens:
+        raise EmptyPromptError("empty prompt: the request renders to zero tokens")
+
+
 def reject_overlong_prompt(prompt_tokens: int, max_ctx: int) -> None:
     """Refuse a prompt that fills the model's context window.
 

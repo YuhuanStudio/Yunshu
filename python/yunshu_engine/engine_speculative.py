@@ -9,6 +9,8 @@ retain the shared BatchedEngine state; misc ignores allow that mixin self type.
 import asyncio
 import time
 
+from .context_window import require_non_empty_prompt
+
 
 class EngineSpeculativeMixin:
     async def _warm_prompt_prefill(self: _engine.BatchedEngine) -> None:  # type: ignore[misc]
@@ -212,6 +214,7 @@ class EngineSpeculativeMixin:
         else:
             text = str(prompt)
             input_ids = tokenizer.encode(text)
+        require_non_empty_prompt(input_ids)
         prompt_tokens = len(input_ids)
 
         eos_ids: set[int] = set()
@@ -366,6 +369,7 @@ class EngineSpeculativeMixin:
         else:
             text = prompt if isinstance(prompt, str) else str(prompt)
             input_ids = tokenizer.encode(text)
+        require_non_empty_prompt(input_ids)
         import mlx.core as mx
 
         # Build EOS + stop token sets

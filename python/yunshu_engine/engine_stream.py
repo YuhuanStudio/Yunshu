@@ -12,7 +12,11 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
 
-from .context_window import ContextBudgetError, reject_overlong_prompt
+from .context_window import (
+    ContextBudgetError,
+    reject_overlong_prompt,
+    require_non_empty_prompt,
+)
 from .fast_path_stats import FastPathStats
 from .stream_bridge import StreamBridge, make_stream_queue
 from .text_utils import StopHoldbackBuffer
@@ -149,14 +153,7 @@ class EngineStreamMixin:
         prompt_tokens = len(input_ids)
 
         # Guard against empty prompt (same as _generate_fast)
-        if not input_ids:
-            bos_id = getattr(tokenizer, "bos_token_id", None)
-            if bos_id is not None:
-                input_ids = [bos_id]
-            else:
-                eos_id = getattr(tokenizer, "eos_token_id", 1)
-                input_ids = [eos_id]
-            prompt_tokens = len(input_ids)
+        require_non_empty_prompt(input_ids)
 
         # ── Context window: clamp generation + truncate over-long prompt ──
         # Same fix as the non-streaming fast path — resolve the REAL

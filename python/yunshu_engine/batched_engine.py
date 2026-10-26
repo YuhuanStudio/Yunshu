@@ -1388,7 +1388,9 @@ class BatchedEngine(
         # The checkpoint's generation_config.json suppress_tokens is the default mask
         # when the request sets none (same rule as the VLM path).
         suppress_tokens = resolve_suppress_tokens(
-            suppress_tokens, self.model_name, self._tokenizer
+            suppress_tokens,
+            getattr(self, "model_name", None),
+            getattr(self, "_tokenizer", None),
         )
 
         # Early return: max_tokens <= 0 produces no output
@@ -1924,7 +1926,9 @@ class BatchedEngine(
         # The checkpoint's generation_config.json suppress_tokens is the default mask
         # when the request sets none (same rule as the VLM path).
         suppress_tokens = resolve_suppress_tokens(
-            suppress_tokens, self.model_name, self._tokenizer
+            suppress_tokens,
+            getattr(self, "model_name", None),
+            getattr(self, "_tokenizer", None),
         )
 
         # publish per-request top-nσ for _build_temp_sampler (same event-loop task)

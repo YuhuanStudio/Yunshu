@@ -12,6 +12,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
 
+from .context_window import require_non_empty_prompt
 from .stream_bridge import StreamBridge, make_stream_queue
 
 
@@ -155,6 +156,7 @@ class EngineNgramMixin:
         else:
             text = prompt if isinstance(prompt, str) else str(prompt)
             input_ids = tokenizer.encode(text)
+        require_non_empty_prompt(input_ids)
         prompt_tokens = len(input_ids)
 
         # Build stop token sets
@@ -996,6 +998,7 @@ class EngineNgramMixin:
         else:
             text = prompt if isinstance(prompt, str) else str(prompt)
             input_ids = tokenizer.encode(text)
+        require_non_empty_prompt(input_ids)
         prompt_tokens = len(input_ids)
 
         stop_ids: set[int] = set()
