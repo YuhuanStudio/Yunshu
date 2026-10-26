@@ -459,6 +459,16 @@ def _get_silero_vad():
     return _silero_vad or None
 
 
+def _accepts_language(fn) -> bool:
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return "language" in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+
+
 async def _run_on_mlx(fn, *args):
     """Run ``fn`` on the engine's single MLX executor thread (all MLX work is serialized
     there); where MLX is not installed there is nothing to serialize against."""
@@ -535,6 +545,9 @@ class SessionConfig:
         self.turn_detection = _default_turn_detection()
         # {"type": "near_field" | "far_field"} or None: input noise reduction before VAD / ASR.
         self.input_audio_noise_reduction: dict | None = None
+        # {"model": ..., "language": ..., "prompt": ...} or None: which loaded ASR model
+        # transcribes committed audio, and in which language.
+        self.input_audio_transcription: dict | None = None
         self.max_response_output_tokens = 4096
         self.temperature = (
             0.7  # as reported to clients; the sampler uses _explicit_sampling
@@ -609,6 +622,9 @@ class SessionConfig:
                         isinstance(value, dict) and supported(value.get("type"))
                     ):
                         continue
+                if key == "input_audio_transcription":
+                    if value is not None and not isinstance(value, dict):
+                        continue
                 if key == "modalities":
                     # validate modalities like voice/format/turn_detection — a
                     # client could otherwise set a non-list or ["video"] and to_dict() would
@@ -655,6 +671,7 @@ class SessionConfig:
             "output_audio_format": self.output_audio_format,
             "turn_detection": self.turn_detection,
             "input_audio_noise_reduction": self.input_audio_noise_reduction,
+            "input_audio_transcription": self.input_audio_transcription,
             "max_response_output_tokens": self.max_response_output_tokens,
             "temperature": self.temperature,
             "tools": self.tools,
@@ -3685,10 +3702,23 @@ class RealtimeSession:
             manager = get_model_manager()
             asr_found = False
             if manager is not None:
-                for entry in manager.list_entries():
+                # input_audio_transcription.model picks the loaded ASR model (else the
+                # first one); .language goes to engines that take a language hint.
+                _tr = self.session.input_audio_transcription or {}
+                _want = _tr.get("model")
+                _entries = sorted(
+                    manager.list_entries(),
+                    key=lambda e: bool(_want) and getattr(e, "model_id", None) != _want,
+                )
+                for entry in _entries:
                     if entry.is_loaded and hasattr(entry.engine, "transcribe"):
                         asr_found = True
-                        transcript = await entry.engine.transcribe(tmp_path)
+                        _kw = {}
+                        if _tr.get("language") and _accepts_language(
+                            entry.engine.transcribe
+                        ):
+                            _kw["language"] = _tr["language"]
+                        transcript = await entry.engine.transcribe(tmp_path, **_kw)
                         text = (
                             transcript.get("text", "")
                             if isinstance(transcript, dict)

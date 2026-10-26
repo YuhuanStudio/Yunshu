@@ -87,6 +87,8 @@ def _session_from_ga(s: dict) -> dict:
         out["turn_detection"] = td
     if "noise_reduction" in inp:
         out["input_audio_noise_reduction"] = inp["noise_reduction"]
+    if "transcription" in inp:
+        out["input_audio_transcription"] = inp["transcription"]
     return out
 
 
