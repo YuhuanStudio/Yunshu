@@ -96,6 +96,23 @@ test("parses fragmented UTF-8 SSE, CRLF, comments, content and reasoning deltas"
   ]);
 });
 
+test("sends the caller's request id as X-Request-ID so Stop can cancel it", async (t) => {
+  let sent: string | null = null;
+  installFetch(t, (async (_input, init) => {
+    sent = new Headers(init?.headers).get("x-request-id");
+    return responseWithChunks([new TextEncoder().encode("data: [DONE]\n\n")]);
+  }) as typeof fetch);
+  await streamCompletion(
+    connection,
+    body,
+    () => {},
+    new AbortController().signal,
+    "chat",
+    "req-from-the-playground",
+  );
+  assert.equal(sent, "req-from-the-playground");
+});
+
 test("surfaces structured HTTP errors", async (t) => {
   installFetch(
     t,
@@ -519,7 +536,12 @@ test("a server that keeps the body open after the done event is cancelled, not w
   const { state, response } = tailStream("data: [DONE]\n\n", 5_000, false);
   installFetch(t, (async () => response) as typeof fetch);
   const started = Date.now();
-  await streamCompletion(connection, body, () => {}, new AbortController().signal);
+  await streamCompletion(
+    connection,
+    body,
+    () => {},
+    new AbortController().signal,
+  );
   assert.ok(Date.now() - started < 3_000);
   assert.equal(state.cancelled, true);
 });

@@ -997,7 +997,7 @@ _APC_COUNTERS = (
 
 def _populate_busy_metrics(pm) -> None:
     """Cumulative GPU-busy seconds per engine: ``yunshu_gpu_busy_seconds_total`` (all runner
-    slices) and ``yunshu_round_driver_busy_seconds_total``; idle fraction = 1 - rate() of the counter."""
+    slices); idle fraction = 1 - rate() of the counter."""
     try:
         from ..engine import get_engine, get_model_manager
 
@@ -1009,11 +1009,6 @@ def _populate_busy_metrics(pm) -> None:
             ml = {"model_id": model_id}
             pm.set_counter(
                 "gpu_busy_seconds", snap["slices"]["busy_seconds"], labels=ml
-            )
-            pm.set_counter(
-                "round_driver_busy_seconds",
-                snap["round_driver"]["busy_seconds"],
-                labels=ml,
             )
     except Exception:
         logger.debug("busy-time metrics population failed", exc_info=True)

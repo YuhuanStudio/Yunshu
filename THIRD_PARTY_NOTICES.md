@@ -9,8 +9,8 @@ comment. Summary of upstreams and licenses:
 | Upstream | License | Used as |
 |---|---|---|
 | jundot/omlx | Apache-2.0 | vendored `kernels/omlx/`; derived `ragged_attention.py` tile kernel; inspired `spec_prefill.py`, `routers/decisions.py` (route design only), `lane_layers.py`, `model_settings.py`, `mrope.py`, `mlx_executor.py`, `prefill_progress.py`, `yunshu_kv/mlx_cache.py`; derived `process_memory_enforcer.py` |
-| ashhart/TensorFold | MIT | vendored `kernels/tensorfold/`; derived `lane_linear.py`, `int_code_linear.py`, `round_driver/allocate.py`, `copy_drafter.py`; inspired draft vocabulary, DFlash/tree drafting, tree verify, round driver, ordered chunk merge |
-| Blaizzy/mlx-vlm | MIT | patched (speculative verifier, DFlash/MTP rounds, batch generator, audio patches, APC checkpoint policy and lookup provenance); derived `dflash_context.py`, patched `penalty_context.py`, `dflash_apc_window.py`, `dflash_copy.py`, `mtp_lane.py`, `mtp_tree.py`, `round_driver/mtp.py`; tool-format registry, DFlash chain depth, structured-output wiring |
+| ashhart/TensorFold | MIT | vendored `kernels/tensorfold/`; derived `lane_linear.py`, `int_code_linear.py`, `copy_drafter.py`; inspired draft vocabulary, DFlash/tree drafting, tree verify, ordered chunk merge |
+| Blaizzy/mlx-vlm | MIT | patched (speculative verifier, DFlash/MTP rounds, batch generator, audio patches, APC checkpoint policy and lookup provenance); derived `dflash_context.py`, patched `penalty_context.py`, `dflash_apc_window.py`, `dflash_copy.py`, `mtp_lane.py`, `mtp_tree.py`; tool-format registry, DFlash chain depth, structured-output wiring |
 | ml-explore/mlx-lm | MIT | tool parsers; speculative verification (`spec_draft_verifier.py`), sampler order (`batched_engine.py`) |
 | ml-explore/mlx | MIT | patched `nn.QuantizedLinear.__call__` for batch-invariant decode; derived native NAX prefill loader (`nax_prefill.py`) |
 | vllm-project/vllm, vllm-omni | Apache-2.0 | derived `gemma4_assistant.py`; inspired Qwen3 reasoning ends at a tool-call marker (`vlm_engine.py`), `structured_outputs` request field and entrypoint request-validation / route checks (`schemas/structured_outputs.py`, `scripts/research/route_checks_vllm.py`), n-gram / suffix proposers, block pool, mRoPE state, TeaCache |
@@ -51,8 +51,7 @@ The exact source commit and our intended local changes for every vendored file a
 `34bae79ac97da6c3ab3fe10159cf49633ce8112a`. Only intra-package imports were changed. Yunshu calls
 their integer-code tensor-unit matmul from `python/yunshu_engine/kernels/int_code_linear.py`
 (the default for 5/6/8-bit projections when packed) and from `python/yunshu_engine/kernels/lane_linear.py`
-(every projection under the round driver). `python/yunshu_engine/round_driver/allocate.py` adapts the
-draft-allocation rule of TensorFold's `src/tensorfold/engine/allocate.py` (same commit).
+(row-invariant projections for the speculative lane).
 TensorFold's own notices credit MLX (MIT) for code it derives.
 
 ```

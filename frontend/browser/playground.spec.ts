@@ -481,6 +481,67 @@ test("chat reply shows per-reply stats with TTFT and cache badge", async ({
   await verifyClean();
 });
 
+test("Stop cancels the in-flight request on the engine, not just the fetch", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const verifyClean = await installDiagnostics(
+    page,
+    api.expectedResponses,
+    "stop",
+  );
+  const playground = await openPlayground(page, api);
+  // After the page is up: the shared SSE stub installed by openPlayground is replaced by one that never ends.
+  await page.evaluate(() => {
+    const nativeFetch = window.fetch.bind(window);
+    const w = window as unknown as { __sentIds: string[] };
+    w.__sentIds = [];
+    window.fetch = async (input, init = {}) => {
+      const raw =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      if (
+        !new URL(raw, location.href).pathname.endsWith("/v1/chat/completions")
+      )
+        return nativeFetch(input, init);
+      w.__sentIds.push(new Headers(init.headers).get("x-request-id") ?? "");
+      const encoder = new TextEncoder();
+      // One chunk, then the stream stays open until the caller aborts it.
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ choices: [{ delta: { content: "partial " } }] })}\n\n`,
+              ),
+            );
+            init.signal?.addEventListener("abort", () =>
+              controller.error(new DOMException("aborted", "AbortError")),
+            );
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+      );
+    };
+  });
+  await playground.locator("textarea").first().fill("long answer please");
+  await page.getByRole("button", { name: "傳送測試", exact: true }).click();
+  await expect(playground).toContainText("partial");
+  expect(api.cancelCount).toBe(0);
+  await page.getByRole("button", { name: "停止生成", exact: true }).click();
+  await expect.poll(() => api.cancelCount).toBe(1);
+  const ids = await page.evaluate(
+    () => (window as unknown as { __sentIds: string[] }).__sentIds,
+  );
+  expect(ids).toHaveLength(1);
+  expect(ids[0]).toMatch(/^[0-9a-f-]{36}$/i);
+  await verifyClean();
+});
+
 test("compare mode runs sequentially and reports identical greedy output", async ({
   page,
 }) => {

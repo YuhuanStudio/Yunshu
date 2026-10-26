@@ -212,7 +212,7 @@ def main():
     model, processor = load(a.model_dir)
     lm = model.language_model
     if not a.stock:
-        omlx.apply(row_exact=False)
+        omlx.apply()
         if a.lane_linear:
             from yunshu_engine.kernels import lane_linear
 

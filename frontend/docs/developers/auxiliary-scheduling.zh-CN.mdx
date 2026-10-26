@@ -34,7 +34,7 @@ sequenceDiagram
 
 ### Runner 行为
 
-- VLM runner 在有主要工作时保留待处理的辅助 row，把两种优先级放在不同 batch，并在有主要请求时暂停进行中的辅助 batch。推测 lane 保有自己的缓存与采样状态，切换时会还原共用 drafter 的状态。实验性的 [round driver](/docs/developers/round-driver) 有独立的辅助 driver，使用相同的模型、chunk 与采样路径。
+- VLM runner 在有主要工作时保留待处理的辅助 row，把两种优先级放在不同 batch，并在有主要请求时暂停进行中的辅助 batch。推测 lane 保有自己的缓存与采样状态，切换时会还原共用 drafter 的状态。
 - 自上次服务起已等待 10 秒的辅助 row 会得到一次服务机会。这不是完成期限：进行中的 atom、较旧的工作、客户端取消与期限仍然适用。
 - 交互式 prefill 在被一个 atom 超越后获得持续的 FIFO 保护，所以之后到达的短请求，不能一再插到长的冷请求前面。被选中的请求会先完成最后 2048 token 的窗口并送出第一个 token，才偿还解码负债。
 - prefill atom 之后欠解码中 row 的解码时间至少 75 ms（`DECODE_QUANTUM_S`），上限为 `DECODE_QUANTUM_MAX_S`，仍在前几个 token 的 row 获得较大的份额。简短的主要请求完成交接（`PRIMARY_HANDOFF_S`，100 ms）让即将完成的主要请求排在辅助请求进入之前，并使用只在 CPU 上的计时器，使 MLX 工作留在单一 executor 线程。
@@ -66,7 +66,6 @@ sequenceDiagram
 - 只识别已捕获的 opencode 标题指纹。模型名称、输出上限或 system 文本不同的请求都是交互式。
 - 测量结果只涵盖 27B VLM runner。证据来自一次捕获的 session，在交错的全新服务器配对中重播；这是调度取舍，不是通用的速度提升。打开策略后，捕获数据的首 token 时间中位数略差，而尾部、六回合完成时间与长 prefill 混合负载有改善（见下）。
 - 辅助请求的延迟是刻意牺牲的：重播中，打开策略后标题的平均首 token 时间较高。
-- round driver 维持严格的辅助优先级且没有老化，所以持续不断的主要 driver 流量可能无限期延后辅助服务。
 - 未捕获的客户端与 API（Responses、Messages）不会被分类。
 
 ## 如何验证

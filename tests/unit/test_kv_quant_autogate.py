@@ -76,3 +76,34 @@ def test_auto_quantized_kv_is_never_stored_in_token_keyed_caches():
     src = inspect.getsource(engine_fast)
     assert "_lossy_kv = self._auto_quantized_kv(_req_kv_bits)" in src
     assert src.count("and not _lossy_kv") >= 3
+
+
+def test_streaming_path_never_stores_auto_quantized_kv():
+    """Every store on the streaming fast path (post-generation add and the
+    breakpoint prefixes) goes through ``store_cache``, which the length-gated 8-bit
+    KV disables, like ``_lossy_kv`` on the non-stream path."""
+    import inspect
+    import re
+
+    from yunshu_engine import engine_stream
+
+    src = inspect.getsource(engine_stream)
+    assert re.search(
+        r"store_cache = \(\s*None\s*if _stream_hybrid or "
+        r"self\._auto_quantized_kv\(_req_kv_bits\)\s*else prefix_cache\s*\)",
+        src,
+    )
+    # no other KV prefix-cache store may bypass store_cache
+    assert len(re.findall(r"\bprefix_cache\.add\(", src)) == 0
+
+
+def test_ngram_path_only_stores_fixed_precision_kv():
+    """The n-gram path quantizes with the engine-wide ``_kv_quant_bits`` only (never
+    the per-request length gate), so what it stores is the same for every request."""
+    import inspect
+
+    from yunshu_engine import engine_ngram
+
+    src = inspect.getsource(engine_ngram)
+    assert "_effective_kv_quant_bits" not in src
+    assert "if self._kv_quant_bits is not None:" in src

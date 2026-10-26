@@ -56,7 +56,7 @@ docs/
     img/                ← trend charts
   guides/               # hand-written guides and reference notes
     CLIENTS.md, SERVICE.md, TROUBLESHOOTING.md, RELEASE_READINESS.md, RELEASE_GATE.md, VERIFY.md
-    KV_CACHE_MATRIX.md, PROMPT_CACHING_APIS.md, ROUND_DRIVER.md
+    KV_CACHE_MATRIX.md, PROMPT_CACHING_APIS.md
   results/              # raw bench JSON artifacts (historical; framework_comparison etc.)
   archive/
     mlx_vlm_omni_audio/ ← real omni/audio findings (speech-to-speech capability)

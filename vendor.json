@@ -435,21 +435,6 @@
     },
     {
       "kind": "derived",
-      "path": "python/yunshu_engine/round_driver/allocate.py",
-      "repo": "https://github.com/ashhart/TensorFold",
-      "clone": "reference/TensorFold",
-      "upstream_paths": [
-        "src/tensorfold/engine/allocate.py"
-      ],
-      "commit": "34bae79a",
-      "license": "MIT",
-      "why": "cost-aware draft allocation across rows",
-      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
-    },
-    {
-      "kind": "derived",
       "path": "python/yunshu_engine/kernels/ragged_attention.py",
       "repo": "https://github.com/jundot/omlx",
       "clone": "reference/omlx",
@@ -530,21 +515,6 @@
       "reviewed_commit": "6feea9f95de86c772235af765914e4abb82b236f",
       "reviewed_date": "2026-10-15",
       "review_reason": "sync016 source diff review: KEEP; BACKLOG memory: new requeue-on-pressure and Splash child-process accounting depend on upstream scheduler/engine-pool contracts; Yunshu is in-process and retains its existing reclaim/abort contract."
-    },
-    {
-      "kind": "derived",
-      "path": "python/yunshu_engine/round_driver/mtp.py",
-      "repo": "https://github.com/Blaizzy/mlx-vlm",
-      "clone": "reference/mlx-vlm",
-      "upstream_paths": [
-        "mlx_vlm/speculative/drafters/qwen3_5_mtp/qwen3_5_mtp.py"
-      ],
-      "commit": "00093678",
-      "license": "MIT",
-      "why": "Qwen3.5 MTP head weights driven per row, upstream draft loop",
-      "reviewed_commit": "4623cf9d2633c5ee2b1ac125eeae51423447c41f",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 source diff review: KEEP + TAKE via mlx-vlm: MoE drafter class selection now uses MoeTextConfig type and bundled-drafter loading. Local round driver still owns exact per-request cache/verify transactions."
     },
     {
       "path": "python/yunshu_engine/constrained_spec.py",
@@ -776,38 +746,6 @@
     },
     {
       "kind": "inspired",
-      "path": "python/yunshu_engine/round_driver/driver.py",
-      "repo": "https://github.com/ashhart/TensorFold",
-      "clone": "reference/TensorFold",
-      "upstream_paths": [
-        "src/tensorfold/engine/lane_engine.py",
-        "src/tensorfold/engine/lane_family.py"
-      ],
-      "commit": "34bae79a",
-      "license": "MIT",
-      "why": "lane round driver structure",
-      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
-    },
-    {
-      "kind": "inspired",
-      "path": "python/yunshu_engine/round_driver/forward.py",
-      "repo": "https://github.com/ashhart/TensorFold",
-      "clone": "reference/TensorFold",
-      "upstream_paths": [
-        "src/tensorfold/kernels/qwen/dense/v1/lane_multi.py",
-        "src/tensorfold/kernels/qwen/dense/v1/lane_glue.py"
-      ],
-      "commit": "34bae79a",
-      "license": "MIT",
-      "why": "packed segment forward over rows",
-      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
-    },
-    {
-      "kind": "inspired",
       "path": "python/yunshu_engine/kernels/ragged_attention.py",
       "repo": "https://github.com/ashhart/TensorFold",
       "clone": "reference/TensorFold",
@@ -919,18 +857,6 @@
       "commit": "dc9879cf",
       "license": "MIT",
       "why": "LCG hash pool (ngram-mod)"
-    },
-    {
-      "kind": "inspired",
-      "path": "python/yunshu_engine/gpu_ngram.py",
-      "repo": "https://github.com/vllm-project/vllm",
-      "clone": "reference/vllm",
-      "upstream_paths": [
-        "vllm/v1/spec_decode/ngram_proposer_gpu.py"
-      ],
-      "commit": "924707f1",
-      "license": "Apache-2.0",
-      "why": "GPU batch n-gram propose"
     },
     {
       "kind": "inspired",

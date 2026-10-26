@@ -57,7 +57,7 @@ def main():
     from yunshu_engine.kernels.batch_invariant import install, set_active
     from yunshu_engine.kernels.omlx import apply, is_nax_available
 
-    apply(row_exact=False)
+    apply()
     info = install(lm, model=model, packed=is_nax_available())
     out(kind="installed", **info)
     cache = lm.make_cache()

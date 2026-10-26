@@ -26,7 +26,7 @@ This is the method behind llama.cpp `perplexity --kl-divergence` and vLLM's logp
 
 ### Tier 2: greedy divergence
 
-50 fixed chat prompts (English, code, math, Chinese and long summarization prompts), greedy, up to 256 tokens (`N_PROMPTS, MAX_TOKENS = 50, 256` in `greedy_div.py`). Each pair of runs is scored by exact match of the whole continuation and by the first differing position. The `engine` configuration runs each prompt with speculation off and on (`allow_draft`); `YUNSHU_ROUND_DRIVER=1` runs the round driver.
+50 fixed chat prompts (English, code, math, Chinese and long summarization prompts), greedy, up to 256 tokens (`N_PROMPTS, MAX_TOKENS = 50, 256` in `greedy_div.py`). Each pair of runs is scored by exact match of the whole continuation and by the first differing position. The `engine` configuration runs each prompt with speculation off and on (`allow_draft`).
 
 ### Tier 3: paired downstream evaluation
 
@@ -65,7 +65,6 @@ Measured score tables are kept out of this page on purpose: they go stale with e
 
 | Setting or option | Default | Effect |
 |---|---|---|
-| `YUNSHU_ROUND_DRIVER` | off | Tier 2 `engine` runs also exercise the round driver when set to `1` |
 | `YUNSHU_KV_PRECISION` | `bf16` | `decb8` runs with int8 KV codes; this is a lossy option judged on its own gap |
 | `paired_eval.py report --bench B --ref ref --cand default` | n/a | Recomputes a benchmark row from the resumable arm files |
 | `kld.py run --config stock\|serve --part ...` | n/a | Selects which arm and which parts to run |

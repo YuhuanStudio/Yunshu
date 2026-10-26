@@ -54,7 +54,7 @@ from yunshu_engine.mrope import clear_rope_state
 
 M = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
 D = "/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2"
-omlx.apply(row_exact=False)
+omlx.apply()
 model, processor = load(M)
 lm = model.language_model
 tok = processor.tokenizer

@@ -41,7 +41,7 @@ The method behind llama.cpp `perplexity --kl-divergence` and vLLM's logprob-clos
 50 fixed chat prompts (English, code, math, Chinese, eight 2-3K-token summarization
 prompts), greedy, up to 256 tokens. Scored by exact match of the whole continuation and by
 the first differing position. `engine` runs each prompt with speculation off and on
-(`allow_draft`); `YUNSHU_ROUND_DRIVER=1` runs the round driver.
+(`allow_draft`).
 
 ## Noise floors and thresholds
 
@@ -84,8 +84,7 @@ Recorded first measurement (Qwen3.8-27B oQ4e; not a rerun after the 2026-10-02 p
 kernels inside the runner) and speculative-on path (invariant kernels) match each other in
 26/50 prompts, and each matches the stock reference in 26-27/50. The spec-on == spec-off
 gate therefore fails when "off" means the runner's plain decode; it holds inside the
-invariant path (Tier 1 `dec6` == `dec1`) and with the round driver (spec on and off
-identical). The round-driver vs upstream-runner comparison is 27/50.
+invariant path (Tier 1 `dec6` == `dec1`).
 
 ## Tier 3: paired downstream evaluation
 

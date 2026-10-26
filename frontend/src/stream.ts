@@ -478,6 +478,8 @@ export async function streamCompletion(
   onDelta: (delta: CompletionDelta) => void,
   signal: AbortSignal,
   dialect: Dialect = "chat",
+  /** Sent as `X-Request-ID`, so the caller can cancel this generation server-side. */
+  requestId: string | undefined = globalThis.crypto?.randomUUID?.(),
 ): Promise<void> {
   throwIfAborted(signal);
 
@@ -487,7 +489,6 @@ export async function streamCompletion(
   });
   if (connection.token.trim())
     headers.set("Authorization", `Bearer ${connection.token}`);
-  const requestId = globalThis.crypto?.randomUUID?.();
   if (requestId) headers.set("X-Request-ID", requestId);
 
   const response = await fetch(endpointUrl(connection.baseUrl, dialect), {

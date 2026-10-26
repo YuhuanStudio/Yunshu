@@ -200,6 +200,8 @@ const settingdesc = {
     "Engine that masks JSON-schema and `json_object` constrained decoding: `llguidance` (about 0.25 ms median per-token mask on a 248K vocabulary; properties in schema order) or `inhouse` (Python state machine, about 3 ms median; any property order). A schema llguidance cannot compile falls back to the in-house engine when it supports it.",
   YUNSHU_GRAMMAR_BITMASK:
     "Constrained decoding with the xgrammar-style bitmask engine instead of the allowlist sampler.",
+  YUNSHU_GRAMMAR_PREWARM:
+    "Build the llguidance token tables in the background when a model loads, so the first constrained request does not spend about a second walking the vocabulary. Costs about 0.45 GiB of native heap per mask width; 0 builds them on first use.",
   YUNSHU_TOOL_GRAMMAR:
     "Tool-call constrained decoding (structural tags): free text until the tool-call start marker, then the call body is masked to this request’s exact call grammar (tool name, parameter keys, typed values, closing). A forced `tool_choice` is always constrained; this flag governs only `auto`. Off: auto tool calls are decoded unconstrained and repaired afterwards.",
   YUNSHU_QUANT_MODE:
@@ -212,12 +214,6 @@ const settingdesc = {
     "VLM plain-text chats: while idle after a reply, prefill its rendered assistant text and store APC checkpoints; decode-time KV is never reused. Default stride on qualified split-invariant 27B stops at the last absolute 64-token boundary at or before assistant end; without split-invariant kernels it retains the full prefill-atom grid. A matching arriving request adopts in-flight work; other requests cancel at a preemptible boundary. off disables rehearsal. boundary/exact retain the legacy assistant-end split policy on unsupported configurations and may change their cold rounding. Costs idle GPU time and one cached prefix.",
   YUNSHU_NEXT_TURN_DELAY_S:
     "Seconds between a finished reply and next-turn rehearsal. Default 0.3 lets an immediate follow-up (agent loops) arrive before rehearsal starts and prefill once, while a later one adopts running work; 0 starts as soon as idle, which costs an immediate follow-up about 0.15-0.25 s (rehearsal plus a short tail request). No GPU work is started while foreground requests are waiting.",
-  YUNSHU_ROUND_PREFILL_CHUNK:
-    "Round driver: prompt tokens per prefill span. A decoding request only steps between prefill forwards, so smaller spans keep it running next to a long prompt, at about 20% lower prefill speed. Spans are fixed per prompt, so output is independent of what else is running; prompts prefilled with different sizes are self-consistent but not bit-identical to each other.",
-  YUNSHU_ROUND_DRIVER:
-    "Dense Qwen3.5-family VLMs: serve text requests with Yunshu’s round driver (packed forwards over every decoding row, alternating with batched prefill steps; MTP drafts for every row; position-keyed sampling; see `docs/guides/ROUND_DRIVER.md`). Off: upstream BatchGenerator plus the single-request speculative lane. Image prompts, int8 KV and MoE stay on the upstream path either way.",
-  YUNSHU_MTP_ROW_EXACT:
-    "Qwen3.5-family runner: oMLX row-exact verify (verify rows bit-identical to one-row decode) instead of batch-invariant kernels.",
   YUNSHU_ENGINE_LOOP:
     "Text models: EngineCore continuous-batching loop instead of the single-request fast path.",
   YUNSHU_OVERLAP:

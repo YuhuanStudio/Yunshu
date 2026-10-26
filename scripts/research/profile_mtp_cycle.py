@@ -71,7 +71,7 @@ def main():
     from yunshu_engine.mlxvlm_mtp import _load_drafter_in_memory
     from yunshu_engine.mrope import clear_rope_state
 
-    omlx.apply(row_exact=False)
+    omlx.apply()
     model, processor = load(a.model_dir)
     lm = model.language_model
     install_invariant(lm, model=model, packed=omlx.is_nax_available())

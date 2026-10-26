@@ -415,6 +415,28 @@ def test_rejected_span_plan_does_not_refresh_retention(monkeypatch):
     assert m._retention[key][0] == 400.0
 
 
+def test_manager_stats_count_only_restores_the_coordinator_accepts(monkeypatch):
+    from mlx_vlm.apc import _sequence_hash
+
+    m = _mgr()
+    c = _coordinator(m)
+    ids = list(range(2000, 2200))
+    c.set_request(ids, {"points": [(113, 300)], "written": 0})
+    m.store_exact_cache(ids[:113], _cache(113))
+    key = _sequence_hash(tuple(ids[:113]), 0, m.block_size)
+    m._span_plans[key] = (17,)  # a different earlier split: the checks refuse it
+    # skip the metadata pre-check so the refusal happens after the restore
+    monkeypatch.setattr(m, "probe_exact_length", lambda *a: 0)
+    args = dict(extra_hash=0, safe_lookup_min=0, suffix_is_text_only=lambda n: True)
+    assert c.lookup(ids, **args) is None
+    assert m.tier_hits["ram"] == 0
+    assert not [r for r in m.lookups if r.tier == "ram"]
+    m._span_plans[key] = ()  # the plan now matches: this restore is accepted
+    assert c.lookup(ids, **args)["prefix_len"] == 113
+    assert m.tier_hits["ram"] == 1
+    assert [r.cached for r in m.lookups if r.tier == "ram"] == [113]
+
+
 def test_canonical_seams_without_a_write_do_not_clone(monkeypatch):
     from mlx_vlm.apc_coordinator import APCCoordinator
 
