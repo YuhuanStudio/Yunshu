@@ -1,4 +1,5 @@
 import { prefixHit, prefixHitWindow } from "./request-kpi";
+import { pageOwnsEscape } from "./escape-guard.ts";
 import { liveSlots } from "./live-slots";
 import { FRESH_ROW, useFreshIds } from "./fresh-rows";
 import { ErrorNote } from "./error-note";
@@ -480,7 +481,8 @@ export function Requests({
   useEffect(() => {
     if (!xl || !detail) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (!pageOwnsEscape(e, !!document.querySelector('[role="dialog"]')))
+        return;
       setDetail(null);
       detailOpener.current?.focus();
     };
@@ -1147,7 +1149,9 @@ export function Requests({
                               <Td
                                 className={`hidden whitespace-nowrap tabular-nums md:table-cell ${slowAt.ttft ? "text-warning" : ""}`}
                                 title={
-                                  slowAt.ttft ? t("requests.list.slowMark") : undefined
+                                  slowAt.ttft
+                                    ? t("requests.list.slowMark")
+                                    : undefined
                                 }
                               >
                                 {percent != null ? (
