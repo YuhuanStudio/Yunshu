@@ -1028,6 +1028,12 @@ class VLMEngine:
             logger.debug("APC capacity prefix check unavailable", exc_info=True)
             return False
 
+    def _release_active_lease(self, _future=None) -> None:
+        if _future is not None and not _future.cancelled():
+            _future.exception()  # mark a worker failure retrieved (the request already timed out)
+        with self._active_count_lock:
+            self._active_count = max(0, self._active_count - 1)
+
     async def generate(
         self,
         prompt: list[dict] | None = None,
@@ -1088,6 +1094,8 @@ class VLMEngine:
         # those — not a positional slice that collides with concurrent/n>1 requests.
         _req_temp_files: list[str] = []
         _temp_token = _request_temp_files.set(_req_temp_files)
+        _consumer_fut = None
+        _lease_deferred = False
 
         try:
             image_paths = await self._extract_images(messages)
@@ -1173,6 +1181,9 @@ class VLMEngine:
                     _prepare_call(),
                     timeout=_timeout_seconds,
                 )
+                # Shielded: a timeout cancels the wait, not the worker thread, which keeps its
+                # runner row until it sees the cancel event.
+                _consumer_fut = loop.run_in_executor(self._runner_consumers(), call)
                 (
                     result,
                     reasoning_tokens,
@@ -1181,12 +1192,18 @@ class VLMEngine:
                     budget_hit,
                     cached_token_count,
                 ) = await asyncio.wait_for(
-                    loop.run_in_executor(self._runner_consumers(), call),
+                    asyncio.shield(_consumer_fut),
                     timeout=_timeout_seconds,
                 )
             except TimeoutError:
                 self._num_requests_processed += 1
                 kwargs["cancel_event"].set()
+                if _consumer_fut is not None and not _consumer_fut.done():
+                    # The executor thread is still winding down: it holds the lease
+                    # (runner.inflight reads this count), so release when it exits, as the
+                    # stream path does, not now.
+                    _lease_deferred = True
+                    _consumer_fut.add_done_callback(self._release_active_lease)
                 logger.warning(
                     f"VLM non-streaming generate timed out after {_timeout_seconds}s"
                 )
@@ -1249,8 +1266,8 @@ class VLMEngine:
                 ),
             }
         finally:
-            with self._active_count_lock:
-                self._active_count = max(0, self._active_count - 1)
+            if not _lease_deferred:
+                self._release_active_lease()
             _request_temp_files.reset(_temp_token)
             # Our files are exactly those THIS request registered (identity-based).
             _mine = list(_req_temp_files)
