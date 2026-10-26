@@ -793,6 +793,15 @@ class KVPrefixCache:
                     # KV entries from a previous request's generation.
                     cached_len = cache_length(cached)
                     tokens_to_trim = max(0, cached_len - matched)
+                    if cached_len < matched:
+                        # The snapshot holds fewer tokens than its key (ollama
+                        # b859a945 class): never report a hit over positions it lacks.
+                        logger.warning(
+                            "KV prefix cache exact match skipped: snapshot holds %d of %d tokens",
+                            cached_len,
+                            matched,
+                        )
+                        return None, len(prompt_tokens), 0
                     try:
                         result = self._snapshot_cache(cached, trim=tokens_to_trim)
                     except Exception:
@@ -888,7 +897,11 @@ class KVPrefixCache:
         for i, cached_prompt in enumerate(self._prompts):
             if len(cached_prompt) <= best_length:
                 continue
-            length = get_prefix_length(prompt_tokens, cached_prompt)
+            # never more than the snapshot holds (the hash-chain path caps the same way)
+            length = min(
+                get_prefix_length(prompt_tokens, cached_prompt),
+                cache_length(self._caches[i]),
+            )
             if length > best_length:
                 best_index = i
                 best_length = length

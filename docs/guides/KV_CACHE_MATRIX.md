@@ -52,6 +52,19 @@ entry in that case, but the free-memory reading after `mx.clear_cache()` cannot 
 is not changed here. The text prefix cache evicts under pressure before its lookup and hands out snapshots, so
 a lookup cannot lose its source. `tests/unit/test_apc_restore_eviction.py` pins all of this.
 
+Snapshot integrity (re-checked against ollama b859a945 / 6137793a / a5b659e6): neither cache merges or splits
+snapshots. The APC keeps whole checkpoints keyed by the full token tuple (a hit needs `tokens[:n] == entry.token_ids`),
+and superseding a checkpoint deletes it, never concatenates it; the text prefix cache keeps flat entries, verifies the
+token-exact prefix on every path and, for hybrids, serves only a snapshot that is exactly its key. One real gap was
+found and closed: the exact-key and slow-scan paths of `KVPrefixCache.get` reported a hit longer than the snapshot
+held when an entry's buffer was shorter than its key (they now cap at what the snapshot holds, or decline).
+a5b659e6 (a restored recurrent state is a view into the per-step buffer after a speculative rollback, so a cache kept
+past the request retains the whole buffer) does not reach a retained cache here: the tree/MTP/DFlash lanes commit with a
+fresh kernel output and a gather (`tree_verify.tree_commit`), and no cache is stored after generation on the VLM
+runner (APC stores prompt checkpoints during prefill; the text path skips post-generation stores for hybrids). The
+upstream mlx-vlm transaction (`ArraysCache.commit_speculation`, `intermediate[:, keep - 1]`) does hand back a view, but
+it lives only until the next model step replaces the state.
+
 ### VLM runner (APC) policy
 
 mlx-vlm's APC keeps exact checkpoints for hybrid (GDN) models: a full copy of the attention KV plus the
