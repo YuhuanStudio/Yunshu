@@ -16,6 +16,8 @@ def _reference(processors, logits, context, drafted, calls):
         for proc in processors:
             if hasattr(proc, "pure_at"):
                 row = proc.pure_at(calls + j + 1, row)
+            elif hasattr(proc, "window_row"):
+                row = proc.window_row([context[-1], *drafted[:j]], row)
             else:
                 row = proc(hist, row)
         rows.append(row)

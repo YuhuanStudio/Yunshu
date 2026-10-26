@@ -137,7 +137,9 @@ def test_accepted_logprobs_match_serial_rows(toy, monkeypatch, k, accuracy):
         expected = probs[0, token].item()
         lp, top = request.take(token)
         assert lp == expected
-        idx = mx.argsort(probs, axis=-1)[0, -k:][::-1].tolist() if k else []
+        idx = (
+            mx.argsort(-probs, axis=-1)[0, :k].tolist() if k else []
+        )  # ties: ascending id
         assert [t for t, _ in top] == idx
         assert [v for _, v in top] == [probs[0, t].item() for t in idx]
         refguide.feed(token)

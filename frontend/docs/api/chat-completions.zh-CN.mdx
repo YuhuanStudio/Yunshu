@@ -42,9 +42,9 @@ description: OpenAI Chat Completions 端点，支持 tools、结构化输出、l
 | `top_p` | number | `1.0` | `0` 至 `1`。 | 支持 |
 | `top_k` | integer | `0` | `0` 表示禁用。 | 支持 |
 | `min_p` | number | `0.0` | `0` 至 `1`。 | 支持 |
-| `repetition_penalty` | number | `1.0` | `0` 至 `2`。 | 支持 |
-| `frequency_penalty` | number | `0.0` | `-2` 至 `2`。 | 支持 |
-| `presence_penalty` | number | `0.0` | `-2` 至 `2`。 | 支持 |
+| `repetition_penalty` | number | `1.0` | `0` 至 `2`。非 OpenAI 字段：沿用 mlx-lm，只看最近 20 个提示词与生成的 token。 | 支持 |
+| `frequency_penalty` | number | `0.0` | `-2` 至 `2`。与 OpenAI 相同：计入每个已生成的 token（不含提示词）。 | 支持 |
+| `presence_penalty` | number | `0.0` | `-2` 至 `2`。与 OpenAI 相同：token 一旦生成过就套用。 | 支持 |
 | `logit_bias` | object | 无 | token id 到偏移量的映射，每个值介于 `-100` 至 `100`。键为字符串形式的 token id。 | 支持 |
 | `seed` | integer | 无 | 64 位有符号整数。让采样可复现。 | 支持 |
 | `top_n_sigma` | number | `0.0` | `0` 至 `10`。只保留 logit 落在最大值 n 个标准差内的 token；`0` 为关闭。 | 扩展 |

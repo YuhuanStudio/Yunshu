@@ -42,9 +42,9 @@ Unknown top-level fields are ignored, so a client can keep sending OpenAI fields
 | `top_p` | number | `1.0` | `0` to `1`. | supported |
 | `top_k` | integer | `0` | `0` disables. | supported |
 | `min_p` | number | `0.0` | `0` to `1`. | supported |
-| `repetition_penalty` | number | `1.0` | `0` to `2`. | supported |
-| `frequency_penalty` | number | `0.0` | `-2` to `2`. | supported |
-| `presence_penalty` | number | `0.0` | `-2` to `2`. | supported |
+| `repetition_penalty` | number | `1.0` | `0` to `2`. Not an OpenAI field: it follows mlx-lm and looks at the last 20 prompt and generated tokens. | supported |
+| `frequency_penalty` | number | `0.0` | `-2` to `2`. As OpenAI: counts every generated token (the prompt is not counted). | supported |
+| `presence_penalty` | number | `0.0` | `-2` to `2`. As OpenAI: applies once a token has been generated. | supported |
 | `logit_bias` | object | none | Map of token id to bias, each `-100` to `100`. Keys are token ids as strings. | supported |
 | `seed` | integer | none | 64-bit signed. Makes sampling reproducible. | supported |
 | `top_n_sigma` | number | `0.0` | `0` to `10`. Keeps tokens whose logit is within n sigma of the maximum; `0` is off. | extension |

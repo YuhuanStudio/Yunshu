@@ -53,6 +53,7 @@ from .serving.work_scheduler import (
     Work,
     decode_quantum,
 )
+from .text_logit_processors import GeneratedTokenPenalty
 
 logger = logging.getLogger(__name__)
 
@@ -254,10 +255,12 @@ def build_sampler(temperature: float, top_p: float, top_k: int, min_p: float):
 
 def spec_safe_processors(processors) -> bool:
     """Every processor can be applied per row of a speculative window: mlx-lm's stateless
-    penalty / logit-bias closures and the pure token mask. Anything else keeps the request
-    off the speculative lane."""
+    repetition-penalty / logit-bias closures, the pure token mask and the generated-token
+    penalty (``window_row``). Anything else keeps the request off the speculative lane."""
     for p in processors:
-        if isinstance(p, (TokenMaskProcessor, LogitBiasProcessor)):
+        if isinstance(
+            p, (TokenMaskProcessor, LogitBiasProcessor, GeneratedTokenPenalty)
+        ):
             continue
         if hasattr(p, "process_last_token"):
             return False
@@ -305,6 +308,12 @@ def build_penalty_processors(
     presence_penalty: float,
     logit_bias: dict[int, float] | None,
 ) -> list:
+    """Logit bias, repetition penalty, then frequency / presence penalty.
+
+    frequency / presence follow OpenAI (and the text path): every generated token counts
+    (``GeneratedTokenPenalty``). ``repetition_penalty`` is not an OpenAI field; it stays
+    mlx-lm's, over the last ``PENALTY_CONTEXT`` (20) prompt + generated tokens.
+    """
     if (
         repetition_penalty in (None, 1.0)
         and not frequency_penalty
@@ -316,19 +325,15 @@ def build_penalty_processors(
 
     from .constrained_spec import PENALTY_CONTEXT
 
-    bias = [LogitBiasProcessor(logit_bias)] if logit_bias else []
-    return bias + list(
-        make_logits_processors(
+    out: list = [LogitBiasProcessor(logit_bias)] if logit_bias else []
+    if repetition_penalty not in (None, 1.0):
+        out += make_logits_processors(
             repetition_context_size=PENALTY_CONTEXT,
-            presence_context_size=PENALTY_CONTEXT,
-            frequency_context_size=PENALTY_CONTEXT,
-            repetition_penalty=(
-                repetition_penalty if repetition_penalty not in (None, 1.0) else None
-            ),
-            presence_penalty=presence_penalty or None,
-            frequency_penalty=frequency_penalty or None,
+            repetition_penalty=repetition_penalty,
         )
-    )
+    if frequency_penalty or presence_penalty:
+        out.append(GeneratedTokenPenalty(frequency_penalty, presence_penalty))
+    return out
 
 
 class TokenMaskProcessor:

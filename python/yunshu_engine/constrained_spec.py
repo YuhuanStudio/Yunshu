@@ -348,7 +348,8 @@ def apply_row_processors(processors, logits, context, drafted, calls):
     stateful token masks count ``calls + j + 1`` generated tokens, as ``j + 1`` serial
     ``process_last_token`` calls would. ``logits`` is ``[1, T, V]``."""
     if len(context) > PENALTY_CONTEXT and all(
-        hasattr(p, "pure_at") or _windowed_penalty(p) for p in processors
+        hasattr(p, "pure_at") or hasattr(p, "window_row") or _windowed_penalty(p)
+        for p in processors
     ):
         # mlx-lm's penalties read ``tokens[-PENALTY_CONTEXT:]`` and the token mask ignores
         # the tokens, so only the context tail matters: converting a whole 32k-token
@@ -364,6 +365,9 @@ def apply_row_processors(processors, logits, context, drafted, calls):
         for proc in processors:
             if hasattr(proc, "pure_at"):
                 row = proc.pure_at(calls + j + 1, row)
+            elif hasattr(proc, "window_row"):
+                # the tokens a serial run would have fed by this row: the bonus + drafts
+                row = proc.window_row([*context[-1:], *drafted[:j]], row)
             else:
                 row = proc(history, row)
         rows.append(row)
@@ -399,9 +403,13 @@ class ProcessorWindow:
         )
 
     def commit(self, tokens) -> None:
+        # a serial run feeds the old bonus and every accepted draft (all but the new bonus)
+        fed = [self.history[-1], *(int(t) for t in tokens[:-1])]
         self.history.extend(int(t) for t in tokens)
         for proc in self.processors:
-            if hasattr(proc, "advance"):
+            if hasattr(proc, "commit_tokens"):
+                proc.commit_tokens(fed)
+            elif hasattr(proc, "advance"):
                 proc.advance(len(tokens))
 
 
