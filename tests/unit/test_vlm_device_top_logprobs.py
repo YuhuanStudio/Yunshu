@@ -43,7 +43,7 @@ def _same(lp, k):
     # position follows the id order, so their sign bit may differ)
     assert np.array_equal(wv, gv, equal_nan=True)
     # within a run of equal values the ids ascend
-    gi, f = np.array(got_i), np.array(lp.astype(mx.float32))
+    gi = np.array(got_i)
     for r in range(gi.shape[0]):
         v = np.array(got_v.astype(mx.float32))[r]
         for j in range(1, gi.shape[1]):

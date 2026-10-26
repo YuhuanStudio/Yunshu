@@ -67,14 +67,14 @@ def test_every_hardware_tier_is_lossless_kv():
 
     for gb in (8.0, 16.0, 36.0, 64.0):
         hw = HardwareInfo(
-            chip_name="Apple M1", total_memory_gb=gb, max_working_set_bytes=int(gb * 0.7 * 1024**3)
+            chip_name="Apple M1",
+            total_memory_gb=gb,
+            max_working_set_bytes=int(gb * 0.7 * 1024**3),
         )
         assert "kv_cache_quant_bits" not in compute_adaptive_defaults(hw), gb
 
 
 def test_explicit_off_beats_model_settings(monkeypatch):
-    from yunshu_engine import settings
-
     monkeypatch.setenv("YUNSHU_KV_QUANT_BITS", "off")
     eng = _engine()
     eng._settings = _settings(4)

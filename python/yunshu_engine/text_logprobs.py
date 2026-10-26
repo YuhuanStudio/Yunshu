@@ -117,9 +117,9 @@ def top_logprobs_device(log_probs: mx.array, k: int) -> tuple[mx.array, mx.array
     """
     n, vocab = log_probs.shape
     k = max(1, min(int(k), vocab))
-    key = (
-        _orderable_u32(log_probs.astype(mx.float32)).astype(mx.uint64) << 32
-    ) | (mx.array(0xFFFFFFFF, mx.uint64) - mx.arange(vocab, dtype=mx.uint64))[None]
+    key = (_orderable_u32(log_probs.astype(mx.float32)).astype(mx.uint64) << 32) | (
+        mx.array(0xFFFFFFFF, mx.uint64) - mx.arange(vocab, dtype=mx.uint64)
+    )[None]
     inv = ~key  # smallest inverted key == largest key
     part = mx.argpartition(inv, k - 1, axis=-1)[:, :k]
     order = mx.argsort(mx.take_along_axis(inv, part, axis=-1), axis=-1)

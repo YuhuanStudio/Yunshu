@@ -193,7 +193,9 @@ def test_stream_equals_non_stream_and_a_cached_repeat(model_dir):
 
 def _argsort_top_logprobs(log_probs, k):
     """What upstream mlx-vlm's GenerationBatch does (sort the whole vocabulary), with the text path's tie order."""
-    idx = mx.argsort(-log_probs, axis=-1)[:, :k].astype(mx.int32)  # stable: ties by ascending id
+    idx = mx.argsort(-log_probs, axis=-1)[:, :k].astype(
+        mx.int32
+    )  # stable: ties by ascending id
     return idx, mx.take_along_axis(log_probs, idx, axis=-1)
 
 

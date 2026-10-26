@@ -108,7 +108,9 @@ class TestSingleHash:
         import importlib
         import sys
 
-        saved = {k: v for k, v in sys.modules.items() if k in ("xxhash", "yunshu_kv.hash")}
+        saved = {
+            k: v for k, v in sys.modules.items() if k in ("xxhash", "yunshu_kv.hash")
+        }
         try:
             sys.modules["xxhash"] = None  # makes ``import xxhash`` raise ImportError
             sys.modules.pop("yunshu_kv.hash", None)
@@ -117,7 +119,9 @@ class TestSingleHash:
             except ImportError:
                 pass
             else:
-                raise AssertionError("yunshu_kv.hash imported without xxhash (silent fallback)")
+                raise AssertionError(
+                    "yunshu_kv.hash imported without xxhash (silent fallback)"
+                )
         finally:
             sys.modules.pop("xxhash", None)
             sys.modules.pop("yunshu_kv.hash", None)
