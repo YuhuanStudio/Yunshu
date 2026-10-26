@@ -274,7 +274,8 @@ malformed KV group (head_dim 32, q-group 64) produced a 200 with an empty comple
 |---|---|---|---|
 | `main` `47a87ab` | 135 | 12372 | 346 |
 | this branch (after the parity lanes) | 134 | 12611 | 325 |
-| this branch (final, after the adoption and review-fix rounds) | 134 | 12994 | 326 |
+| this branch (after the adoption and review-fix rounds) | 134 | 12994 | 326 |
+| this branch (final, after the CPU verification merge `4dbd50c`, `-n 8`, no vocab GGUF) | 135 | 13003 | 353 |
 
 * No test fails on the branch that passes on `main`. The 134 failures are the environment set on both trees (Metal-only
   kernels, real checkpoints, gpuq, zsh, srt, tfbench, timing tests under load).
@@ -283,7 +284,9 @@ malformed KV group (head_dim 32, q-group 64) produced a 200 with an empty comple
 * About 620 more tests pass than on `main`: new regression and equivalence tests for every fix, minus the tests of the
   deleted modules (the 22 tool-family parser tests that one cleanup commit overwrote were restored in `1d5df01`).
   The final run's only extra failures were `test_api_parity` (fixed in the next commit) and a CPU-timing test that
-  passes alone (`test_priority_queue::test_sort_baseline_comparison`).
+  passes alone (`test_priority_queue::test_sort_baseline_comparison`). After the CPU merge the only failure not on
+  `main` is `test_console_cpu_script::test_the_sampler_measures_a_busy_process_and_an_idle_one` (CPU timing under
+  `-n 8`; 3/3 pass alone). With the Qwen vocab GGUF present, `test_cpu_*` and the cold-prompt test pass (58).
 * `tests/unit/test_path_parity.py` is green with the new feature rows; `ruff check` / `ruff format` are clean.
 * Not covered here: Metal, real models, the console bundle-size build and the full Playwright/WebKit suite (see
   [Verify on the Mac](#verify-on-the-mac)).
