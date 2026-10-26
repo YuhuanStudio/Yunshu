@@ -3400,7 +3400,17 @@ class RealtimeSession:
                 self._trim_idle_audio(turn_detection)
 
     def _trim_idle_audio(self, turn_detection: dict) -> None:
-        """Keep only ~prefix_padding_ms of trailing idle audio in the buffer."""
+        """Keep only ~prefix_padding_ms of trailing idle audio in the buffer.
+
+        While a response is active, a finished utterance that did not commit (shorter than
+        ``barge_in_min_ms``, so no barge-in; speech_stopped skips the commit) stays buffered:
+        trimming would cut it away and leave its announced item id dangling. It is merged into
+        the next turn. Once the response is over and the audio is trimmed anyway, the stale id
+        is dropped so the next utterance gets a fresh one."""
+        _resp = self._active_response
+        _active = _resp is not None and not _resp.done()
+        if _active and self._pending_user_item_id is not None:
+            return
         _in_fmt = str(
             getattr(self.session, "input_audio_format", "pcm16") or "pcm16"
         ).lower()
@@ -3411,6 +3421,7 @@ class RealtimeSession:
         if len(self._audio_buffer) > 2 * keep:
             del self._audio_buffer[: len(self._audio_buffer) - keep]
             self._vad_speech_start_offset = 0
+            self._pending_user_item_id = None
 
     def _reset_silero(self) -> None:
         """Drop Silero streaming state so the next utterance starts fresh."""

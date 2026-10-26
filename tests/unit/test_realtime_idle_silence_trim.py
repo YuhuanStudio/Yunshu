@@ -73,3 +73,36 @@ def test_overflow_message_does_not_tell_vad_users_to_enable_vad(monkeypatch):
         _append(s, SPEECH)
     errs = [e for e in events if e.get("type") == "error"]
     assert errs and "enable server VAD" not in errs[0]["error"]["message"]
+
+
+class _Running:
+    def done(self):
+        return False
+
+
+def test_short_utterance_during_active_response_survives_idle_trim(monkeypatch):
+    """Shorter than barge_in_min_ms: no barge-in, no commit at speech_stopped. The idle trim must
+    not cut the utterance away (it merges into the next turn) and its item id stays the one
+    announced; after the response ends the stale id is dropped with the trimmed audio."""
+    monkeypatch.setenv("YUNSHU_REALTIME_MAX_INPUT_AUDIO_BYTES", "2000000")
+    events = []
+    s = _session(events)
+    s._active_response = _Running()
+    s._pending_user_item_id = None
+    for _ in range(5):
+        _append(s, SILENCE)
+    _append(s, SPEECH)  # 100 ms < 120 ms barge_in_min_ms
+    announced = s._pending_user_item_id
+    assert announced
+    for _ in range(
+        40
+    ):  # > silence_duration_ms and far over the 2x pre-roll trim threshold
+        _append(s, SILENCE)
+    assert any(e.get("type") == "input_audio_buffer.speech_stopped" for e in events)
+    assert SPEECH in bytes(s._audio_buffer)
+    assert s._pending_user_item_id == announced
+    s._active_response = None  # response over: trimming resumes, stale id dropped
+    for _ in range(10):
+        _append(s, SILENCE)
+    assert SPEECH not in bytes(s._audio_buffer)
+    assert s._pending_user_item_id is None
