@@ -2198,7 +2198,7 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
 
     if req.stream:
         if req.n > 1:
-            return StreamingResponse(
+            return ClosingStreamingResponse(
                 _stream_response_multi(
                     engine,
                     messages,
@@ -2215,7 +2215,7 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                     "X-Accel-Buffering": "no",
                 },
             )
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             _stream_response(
                 engine,
                 messages,

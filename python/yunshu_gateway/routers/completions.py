@@ -15,7 +15,7 @@ import uuid
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from yunshu_engine.output_limits import (
@@ -45,6 +45,7 @@ _TRUNCATE_KEEP = 512 * 1024
 import contextlib
 
 from ..streaming import (
+    ClosingStreamingResponse,
     format_openai_completion_chunk,
     format_openai_completion_usage_chunk,
     format_openai_done,
@@ -578,7 +579,7 @@ async def create_completion(req: CompletionRequest, request: Request):
     )
 
     if req.stream:
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             _stream_completion(
                 engine,
                 prompt,

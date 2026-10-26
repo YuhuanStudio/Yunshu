@@ -47,6 +47,7 @@ from ..engine import get_engine
 from ..error_envelope import EngineStreamError
 from ..responses_context import ContextError
 from ..streaming import (
+    ClosingStreamingResponse,
     run_with_disconnect_guard,
     with_sse_keepalive,
 )
@@ -2150,7 +2151,7 @@ async def _create_message(
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
 
     if req.stream:
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             _stream_anthropic(
                 engine,
                 messages,
@@ -3216,7 +3217,9 @@ async def _stream_anthropic(
                                         and _args_str != "{}"
                                         and not _tc_args_streamed
                                     ):
-                                        for _ci in range(0, len(_args_str), _TOOL_ARG_CHUNK):
+                                        for _ci in range(
+                                            0, len(_args_str), _TOOL_ARG_CHUNK
+                                        ):
                                             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + _TOOL_ARG_CHUNK]}})}\n\n"
                                     yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                     block_index += 1

@@ -586,6 +586,7 @@ from ..server_tools.responses_loop import (
     input_item_to_messages,
 )
 from ..streaming import (
+    ClosingStreamingResponse,
     format_responses_completed,
     format_responses_content_part_added,
     format_responses_content_part_done,
@@ -1336,7 +1337,7 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
     _bg_tasks.add(task := asyncio.create_task(_runner()))
     task.add_done_callback(_bg_tasks.discard)
     if bg is not None:
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             bg.follow(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},
@@ -1963,7 +1964,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 detail="n>1 is not supported with stream=True for the Responses API. "
                 "Use stream=False for multiple completions, or stream=True with n=1.",
             )
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             _stream_response(
                 engine,
                 req,
@@ -3627,7 +3628,7 @@ async def get_response(
                     }
                 },
             )
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             bg.follow(starting_after),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},
