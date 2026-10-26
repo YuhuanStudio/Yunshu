@@ -241,6 +241,7 @@ class EngineStreamMixin:
         # (no stops), the buffer is pure passthrough.
         _hb_active = bool(stop_suffixes)
         _hb = StopHoldbackBuffer(stop_suffixes if _hb_active else None)
+        _tok_ends: list[int] = []  # cumulative text length per generated token (usage)
 
         # route temp>0 through _build_temp_sampler, like the non-streaming
         # fast path (3160). The bare make_sampler uses mlx-lm's categorical_sampling,
@@ -842,6 +843,10 @@ class EngineStreamMixin:
                         if _itl > 0 and _itl < 10:
                             _stream_itl_samples.append(_itl)
                     new_text = "" if stop_hit else detokenizer.last_segment
+                    # cumulative text length after this token (usage when a stop string cuts)
+                    _tok_ends.append(
+                        (_tok_ends[-1] if _tok_ends else 0) + len(new_text)
+                    )
                     if suffix_hit and not stop_hit and not _hb_active:
                         # (Non-hold-back path) Trim ONLY the matched stop suffix
                         # from this segment so leading non-stop text is still
@@ -916,6 +921,9 @@ class EngineStreamMixin:
                                 detokenizer.add_token(think_end_token)
                                 _thinking_tokens.append(think_end_token)
                                 _end_text = detokenizer.last_segment
+                                _tok_ends.append(
+                                    (_tok_ends[-1] if _tok_ends else 0) + len(_end_text)
+                                )
                                 if _end_text:
                                     _put(
                                         (
@@ -1376,7 +1384,7 @@ class EngineStreamMixin:
                     # generated but their text was never delivered. Usage counts what the
                     # consumer took (the non-streaming path re-encodes the kept text too).
                     n_tok = _engine._delivered_token_count(
-                        tokenizer, accumulated, n_tok
+                        _tok_ends, len(accumulated), n_tok
                     )
 
                 # Streaming backpressure: slow down if client can't keep up
