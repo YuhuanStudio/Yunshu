@@ -10,14 +10,10 @@ import {
   Tr,
 } from "@yuhuanowo/yunui";
 import type { BarMark, BarSegment, SegmentTone } from "@yuhuanowo/yunui";
-import type { Connection } from "./api";
 import { gb, number } from "./i18n/format.ts";
 import { has, t, tr, useLocale } from "./i18n/index.ts";
-import {
-  useMemoryLedger,
-  type MemoryLedgerData,
-  type MemoryOwner,
-} from "./memory-api";
+import type { MemoryLedgerData, MemoryOwner } from "./memory-api";
+import { useSignals } from "./signals.tsx";
 
 /** Capacity tones, as in Strata: warning from 80%, danger above 92% of unified memory. */
 export const LEDGER_WARN = 0.8,
@@ -245,18 +241,13 @@ export function MemoryLedgerView({
   );
 }
 
-/** Fetches and renders the ledger; an older server without the route gets a one-line note. */
-export function MemoryLedger({
-  connection,
-  enabled = true,
-  compact = false,
-}: {
-  connection: Connection;
-  enabled?: boolean;
-  compact?: boolean;
-}) {
+/**
+ * Renders the ledger the shell already polls (`useSignals().ledgerState`; a second poll here would
+ * double the requests); an older server without the route gets a one-line note.
+ */
+export function MemoryLedger({ compact = false }: { compact?: boolean }) {
   useLocale();
-  const { data, unsupported, error } = useMemoryLedger(connection, enabled);
+  const { data, unsupported, error } = useSignals().ledgerState;
   if (unsupported)
     return (
       <p
