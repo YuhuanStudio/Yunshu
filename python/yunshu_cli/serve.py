@@ -396,6 +396,9 @@ def serve(
         # NB: uvicorn.run has no request-size limit kwarg; the limit is enforced
         # by the gateway middleware via YUNSHU_MAX_REQUEST_SIZE (set above).
         server_header="Yunshu" if server_header else None,
+        # uvicorn closes a WebSocket frame over ws_max_size (default 16 MiB) with 1009
+        # before the app sees it: keep it level with what HTTP accepts.
+        ws_max_size=settings.get("YUNSHU_MAX_REQUEST_SIZE"),
     )
 
 
