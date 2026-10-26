@@ -2118,6 +2118,11 @@ async def _create_message(
             engine, "tokenizer", None
         )
         _pf_est = count_message_tokens(messages, _pf_tok)
+        if getattr(req, "_native_active", False):
+            # native tool schemas are rendered by the template, outside `messages`
+            from ..token_budget import estimate_tools_tokens
+
+            _pf_est += estimate_tools_tokens(req.tools)
         validate_context_window(_pf_est, req.model, engine)
         validate_prefill_memory(_pf_est)
         from ..token_budget import plan_for_engine

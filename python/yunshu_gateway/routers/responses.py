@@ -1867,7 +1867,11 @@ async def create_response(req: ResponsesRequest, request: Request):
         from ..streaming import validate_context_window, validate_prefill_memory
 
         _tok = getattr(engine, "_tokenizer", None) or getattr(engine, "tokenizer", None)
-        _est = count_message_tokens(messages, _tok)
+        # tool definitions (rendered natively or injected below) are not in `messages` yet
+        from ..token_budget import estimate_tools_tokens
+
+        _tools_est = estimate_tools_tokens(req.tools)
+        _est = count_message_tokens(messages, _tok) + _tools_est
         if req.truncation == "auto":
             from ..streaming import get_max_context_window
 
@@ -1879,7 +1883,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                     messages,
                     _est,
                     _room,
-                    lambda ms: count_message_tokens(ms, _tok),
+                    lambda ms: count_message_tokens(ms, _tok) + _tools_est,
                 )
                 if len(messages) < len(_before):
                     # never silent: what was dropped goes to x_yunshu.context_policy

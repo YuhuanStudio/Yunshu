@@ -2148,6 +2148,13 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                             ):
                                 image_count += 1
             char_upper += image_count * IMAGE_TOKEN_ESTIMATE
+            # tools a native chat template renders itself are not in `messages`
+            _tools_tok = 0
+            if req.tools and _native_tools_active():
+                from ..token_budget import estimate_tools_tokens
+
+                _tools_tok = estimate_tools_tokens(req.tools)
+                char_upper += _tools_tok * 4  # chars, the unit of this bound
             _max_ctx = get_max_context_window(req.model, engine) or 0
             _cap = get_max_prefill_tokens()
             # Provably safe if the upper bound clears both limits with 10% headroom
@@ -2163,7 +2170,7 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                 # here double-counted images — a multi-image prompt just under the
                 # window could be spuriously rejected. (The VLM sibling at ~1775
                 # already does this correctly.)
-                est_tokens = count_message_tokens(messages, tokenizer)
+                est_tokens = count_message_tokens(messages, tokenizer) + _tools_tok
                 validate_context_window(est_tokens, req.model, engine)
                 # Reject huge under-window prompts that would OOM-crash the prefill
                 # (uncatchable process death) before we attempt them.
@@ -2629,6 +2636,13 @@ async def _handle_vlm_chat(
             f"(VLM) model '{req.model}'",
         )
 
+    # Tools: a chat template that renders `tools` itself (Qwen3.x) gets the
+    # definitions natively — the model's own tool-call format. Forced
+    # tool_choice (none/required/named) keeps the injected prompt, which
+    # carries those instructions.
+    # (decided before the budget guards below, which must see the tools' size too)
+    messages, native_tools = _vlm_tool_plan(req, vlm_engine, messages)
+
     # VLM/multimodal chat previously BYPASSED the context + prefill
     # guards entirely (dispatched here before the text-path validation block),
     # yet multimodal prompts (long video/image token expansions) are the most
@@ -2670,6 +2684,11 @@ async def _handle_vlm_chat(
             )
             _vlm_est = sum(len(str(m.get("content", ""))) for m in messages) // 4
             _vlm_est += _img * IMAGE_TOKEN_ESTIMATE
+        if native_tools:
+            # rendered by the template outside `messages`: count them like count_tokens does
+            from ..token_budget import estimate_tools_tokens
+
+            _vlm_est += estimate_tools_tokens(native_tools)
         validate_context_window(_vlm_est, req.model, vlm_engine)
         validate_prefill_memory(_vlm_est)
         _apply_token_budget(req, _vlm_est, vlm_engine)
@@ -2679,12 +2698,6 @@ async def _handle_vlm_chat(
         logger.debug("VLM context/prefill guard estimate failed", exc_info=True)
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
-
-    # Tools: a chat template that renders `tools` itself (Qwen3.x) gets the
-    # definitions natively — the model's own tool-call format. Forced
-    # tool_choice (none/required/named) keeps the injected prompt, which
-    # carries those instructions.
-    messages, native_tools = _vlm_tool_plan(req, vlm_engine, messages)
 
     if req.stream:
         return ClosingStreamingResponse(
