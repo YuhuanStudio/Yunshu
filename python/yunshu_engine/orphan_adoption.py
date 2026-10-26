@@ -150,7 +150,7 @@ class Generation:
         self.pump: asyncio.Task | None = None
         self.timer: asyncio.TimerHandle | None = None
         self.adopted = 0
-        self.parts: dict[str, str] = {}
+        self.parts: Any = {}  # dict of field hashes, or a callable that makes it (resolved at detach)
         self.delivered = 0  # outputs the first consumer has taken AND resumed after
         self.gated = False
 
@@ -368,7 +368,7 @@ async def run(
     grace: float,
     limit: int,
     registry: OrphanRegistry | None = None,
-    parts: dict[str, str] | None = None,
+    parts: dict[str, str] | Callable[[], dict[str, str]] | None = None,
 ) -> AsyncIterator[Any]:
     """Serve one request: adopt an orphan with ``key`` or start ``start(real_cancel)``.
 
@@ -386,6 +386,8 @@ async def run(
         )
     else:
         if key and grace > 0 and reg._orphans and parts:
+            # hashing every field costs as much as the key: only when a mismatch is logged
+            parts = parts() if callable(parts) else parts
             for other in reg._orphans.values():
                 diff = sorted(
                     k
@@ -399,7 +401,7 @@ async def run(
             if hasattr(caller_cancel, attr):
                 setattr(real_cancel, attr, getattr(caller_cancel, attr))
         gen = Generation(key or "", real_cancel)
-        gen.parts = parts or {}
+        gen.parts = parts or {}  # resolved at detach when given lazily
         gen.pump = asyncio.ensure_future(_pump(gen, start(real_cancel).__aiter__()))
     index = 0
     clean = False
@@ -451,4 +453,6 @@ async def run(
                 with contextlib.suppress(BaseException):
                     await asyncio.wait_for(asyncio.shield(gen.pump), timeout=30.0)
         else:
+            if callable(gen.parts):
+                gen.parts = gen.parts()
             reg.detach(gen, grace, limit)

@@ -227,6 +227,9 @@ SINGLE_IMAGE_ONLY_MODELS = frozenset(
 )
 
 
+_UNSET: Any = object()  # "argument not given" (None is a real value for an orphan key)
+
+
 class _ThreadSafeQueue:
     """Wraps asyncio.Queue for the MLX/consumer threads.
 
@@ -1013,10 +1016,11 @@ class VLMEngine:
             top_logprobs=top_logprobs,
             **kwargs,
         )
-        if self._orphan_key(messages, _params) is not None:
+        _key = self._orphan_key(messages, _params)
+        if _key is not None:
             # One generation core for both modes: a retry that arrives non-streaming can
             # adopt a streamed orphan (and the reverse) instead of recomputing it.
-            return await self._generate_collect(messages, _params)
+            return await self._generate_collect(messages, _params, _key)
         from .structural_tag import constrains_initial_output
 
         tpl_extra = self._request_template_extra(kwargs)
@@ -1206,7 +1210,9 @@ class VLMEngine:
                         ]
             self._cleanup_temp_files(_mine)
 
-    async def _generate_collect(self, messages, params: dict) -> dict[str, Any]:
+    async def _generate_collect(
+        self, messages, params: dict, key: Any = _UNSET
+    ) -> dict[str, Any]:
         """Non-streaming result assembled from the streaming core (same shape as the
         direct path: reasoning wrapped in think tags, exact counts)."""
         parts: list[str] = []
@@ -1216,7 +1222,7 @@ class VLMEngine:
         finish = None
         stop_seq = False
         async with contextlib.aclosing(  # type: ignore[type-var]  # an async generator at runtime
-            self.generate_stream(messages=messages, **params)
+            self.generate_stream(messages=messages, orphan_key=key, **params)
         ) as stream:
             async for out in stream:
                 if out.error:
@@ -1272,7 +1278,7 @@ class VLMEngine:
         return orphan_adoption.request_key(self.model_name, messages, params)
 
     async def generate_stream(
-        self, prompt=None, messages=None, cancel_event=None, **kwargs
+        self, prompt=None, messages=None, cancel_event=None, orphan_key=_UNSET, **kwargs
     ) -> AsyncIterator[RequestOutput]:
         """Streaming generation. A client that vanishes mid-way parks the generation
         for ``YUNSHU_ORPHAN_GRACE_SECONDS``; an identical request adopts it (see
@@ -1285,7 +1291,9 @@ class VLMEngine:
             msgs = prompt if prompt is not None else (messages or [])
         if cancel_event is None:
             cancel_event = threading.Event()
-        key = self._orphan_key(msgs, kwargs)
+        # ``generate`` already derived the key of the identical request: hash the
+        # conversation once, not once per layer.
+        key = self._orphan_key(msgs, kwargs) if orphan_key is _UNSET else orphan_key
 
         def start(real_cancel):
             return self._generate_stream_impl(
@@ -1299,7 +1307,8 @@ class VLMEngine:
                 cancel_event,
                 float(settings.get("YUNSHU_ORPHAN_GRACE_SECONDS")),
                 int(settings.get("YUNSHU_ORPHAN_MAX")),
-                parts=orphan_adoption.key_parts(self.model_name, msgs, kwargs)
+                # only read to log why a request did not match an orphan
+                parts=(lambda: orphan_adoption.key_parts(self.model_name, msgs, kwargs))
                 if key
                 else None,
             )
