@@ -25,6 +25,11 @@ TEMPLATES = FIXTURES / "glmspark_templates"
 
 
 def qwen_vocab_gguf() -> Path | None:
+    # transformers builds a tokenizer from a GGUF only through torch, which Yunshu does not install
+    import importlib.util
+
+    if importlib.util.find_spec("torch") is None:
+        return None
     for cand in (os.environ.get("QWEN_VOCAB_GGUF"), str(DEFAULT_GGUF)):
         if cand and Path(cand).is_file():
             return Path(cand)
