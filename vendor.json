@@ -95,7 +95,8 @@
       "commit": "a98d8c8c",
       "license": "Apache-2.0",
       "local_changes": [
-        "ported upstream omlx 26375259 (kernel part): qmv_fast_layout(k, n, bits) replaces the K % 512 rule (K % 256 for 6/8-bit)"
+        "ported upstream omlx 26375259 (kernel part): qmv_fast_layout(k, n, bits) replaces the K % 512 rule (K % 256 for 6/8-bit)",
+        "adopted mlx2 1436775: STOCK_QUAD_K = {64, 128} declines in _kernel_supported and _qmv_fast_layout (per-row stock call is exact there)"
       ],
       "why": "row-exact verify projections (one-row qmv arithmetic per row)",
       "kind": "vendored",
