@@ -35,6 +35,9 @@ def hybrid_snapshot_mode(
     )
 
 
+_JUMP_PREFILL_STEP = 2048
+
+
 class EngineFastMixin:
     def _jump_forward_generate_sync(
         self, input_ids, constraint, max_tokens, eos_ids, stop=None
@@ -77,7 +80,18 @@ class EngineFastMixin:
             return best
 
         cache = make_prompt_cache(model)
-        logits = model(mx.array([input_ids]), cache=cache)[:, -1, :]
+        # Only the last position's logits are read. A long prompt runs all but its last token in
+        # chunks whose output is dropped (lazy evaluation never builds their [chunk, vocab] head
+        # matmul; one unchunked forward materialized N x 248k logits), then the last token alone.
+        # A prompt of one chunk or less stays one forward.
+        done = 0
+        if len(input_ids) > _JUMP_PREFILL_STEP:
+            while len(input_ids) - 1 - done > 0:
+                end = min(done + _JUMP_PREFILL_STEP, len(input_ids) - 1)
+                model(mx.array([input_ids[done:end]]), cache=cache)
+                mx.eval([c.state for c in cache])
+                done = end
+        logits = model(mx.array([input_ids[done:]]), cache=cache)[:, -1, :]
         gen_ids: list[int] = []
         pieces: list[str] = []
         acc = ""  # running detokenized text, for incremental stop scanning
