@@ -3352,6 +3352,9 @@ class RealtimeSession:
                         audio_start_ms=_pre_offset // _bytes_per_ms,
                     )
                 )
+            # silence_duration_ms is a CONTIGUOUS window: speech resuming mid-utterance
+            # restarts it, or short pauses would add up and end the turn early.
+            self._vad_silence_bytes = 0
             # Barge-in. If the assistant is mid-response when the user speaks, INTERRUPT
             # it (cancel + response.done status=cancelled) so the user isn't talked over,
             # AND _auto_commit_and_respond (fired on the following speech_stopped) then
