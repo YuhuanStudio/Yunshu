@@ -2219,6 +2219,85 @@
      ]
     }
    }
+  },
+  "cache_store_opt_out": {
+   "module": "python/yunshu_engine/kv_prefix_cache.py",
+   "what": "Per-request cache-store opt-out (X-Yunshu-Cache-Store: off): the request reuses a cached prefix but stores nothing; the prefill plan is untouched, so its output equals a storing request's",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "cache_store=bool(getattr(cancel_event"
+      ],
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "_store_off"
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "cache_store=bool(getattr(cancel_event"
+      ],
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "_store_off"
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "cache_store=bool(getattr(cancel_event"
+      ],
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "_store_off"
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "cache_store=bool(getattr(cancel_event"
+      ],
+      [
+       "python/yunshu_engine/apc_manager.py",
+       "_store_off"
+      ]
+     ]
+    },
+    "text": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/engine_fast.py",
+       "store_opt_out("
+      ],
+      [
+       "python/yunshu_engine/engine_stream.py",
+       "store_opt_out("
+      ],
+      [
+       "python/yunshu_engine/engine_ngram.py",
+       "store_opt_out("
+      ]
+     ]
+    },
+    "loop": {
+     "s": "na",
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
+    }
+   }
   }
  },
  "exclusions": [

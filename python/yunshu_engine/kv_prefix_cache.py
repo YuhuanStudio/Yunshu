@@ -321,6 +321,33 @@ def _local_signature(model_name: str) -> str | None:
     return checkpoint_fingerprint(model_name, digest_size=8)
 
 
+class _StoreOffView:
+    """A request's view of the text prefix cache that looks up but never stores
+    (``X-Yunshu-Cache-Store: off``; omlx c4bb311e). Everything but ``add`` is the cache's."""
+
+    __slots__ = ("_inner",)
+
+    def __init__(self, inner):
+        object.__setattr__(self, "_inner", inner)
+
+    def add(self, *args, **kwargs) -> None:
+        return None
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def __setattr__(self, name, value):
+        setattr(self._inner, name, value)
+
+
+def store_opt_out(prefix_cache, cancel_event):
+    """``prefix_cache`` itself, or a lookup-only view when the request opted out of storing
+    (the gateway puts ``cache_store=False`` on the request's cancel event)."""
+    if prefix_cache is None or getattr(cancel_event, "cache_store", True):
+        return prefix_cache
+    return _StoreOffView(prefix_cache)
+
+
 class KVPrefixCache:
     """Cache prefilled KV states keyed by prompt token prefix.
 

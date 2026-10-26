@@ -37,6 +37,10 @@ tier configured an `ssd` hit also carries `"device"`, the volume it came from (`
 `apc_warm_*`, `apc_storage_tier_*{tier}`) report occupancy, entries, hits by tier, evictions, disk bytes and
 each storage tier's usage, measured bandwidth and availability for the VLM runner.
 
+A request can opt out of storing with `X-Yunshu-Cache-Store: off` (see `API_EXTENSIONS.md`): lookups on both
+paths are unchanged and the checkpoint plan is untouched, only the stores are skipped (`_Coordinator.store_checkpoint`
+on the VLM runner, a lookup-only `store_opt_out` view of the prefix cache on the text path).
+
 ### VLM runner (APC) policy
 
 mlx-vlm's APC keeps exact checkpoints for hybrid (GDN) models: a full copy of the attention KV plus the

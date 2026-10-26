@@ -1848,9 +1848,10 @@ async def _create_message(
     _filtered_messages: list[dict] = []
     _in_place = _keeps_mid_system(req.model)
     _lead = True
-    from yunshu_engine.message_adapter import is_token_counter_message
-
-    from yunshu_engine.message_adapter import post_tool_note_indexes
+    from yunshu_engine.message_adapter import (
+        is_token_counter_message,
+        post_tool_note_indexes,
+    )
 
     messages = [m for m in messages if not is_token_counter_message(m)]
     # A note right after a tool result stays in place (omlx 5a0a15a7): lifting it into the

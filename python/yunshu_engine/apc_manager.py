@@ -923,6 +923,26 @@ class _Coordinator(APCCoordinator):
         policies = self.__dict__.setdefault("_requests", {})
         policies.setdefault(tuple(token_ids), collections.deque()).append(policy)
 
+    def set_store_off(self, token_ids):
+        """A request with these tokens opted out of storing (``X-Yunshu-Cache-Store: off``).
+
+        Kept apart from the per-request policy on purpose: the policy changes the checkpoint
+        plan (and with it the prefill split points), this must not. Lookup and the plan are
+        exactly an ordinary request's; only ``store_checkpoint`` is refused. Identical
+        prompts in flight at once share the opt-out (a store skipped, never a wrong one)."""
+        counts = self.__dict__.setdefault("_store_off", {})
+        key = tuple(token_ids)
+        counts[key] = counts.get(key, 0) + 1
+
+    def release_store_off(self, token_ids):
+        counts = self.__dict__.get("_store_off", {})
+        key = tuple(token_ids)
+        left = counts.get(key, 0) - 1
+        if left > 0:
+            counts[key] = left
+        else:
+            counts.pop(key, None)
+
     def request(self, token_ids):
         pending = self.__dict__.get("_requests", {}).get(tuple(token_ids))
         return pending[0] if pending else None
@@ -1128,6 +1148,8 @@ class _Coordinator(APCCoordinator):
             )
         except Exception:  # the drafter window is an optimisation only
             logger.debug("drafter window capture failed", exc_info=True)
+        if tuple(full_ids) in self.__dict__.get("_store_off", ()):
+            return False
         policy = self.request(full_ids)
         signature = ()
         if policy is not None:

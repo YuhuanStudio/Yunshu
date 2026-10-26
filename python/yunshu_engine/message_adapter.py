@@ -330,7 +330,9 @@ def post_tool_note_indexes(messages: list[dict]) -> set[int]:
         while j < n and _is_instruction(messages[j]):
             j += 1
         if prev_role == "tool" and (j >= n or messages[j].get("role") == "assistant"):
-            out.update(k for k in range(i, j) if not is_token_counter_message(messages[k]))
+            out.update(
+                k for k in range(i, j) if not is_token_counter_message(messages[k])
+            )
         i = j
     return out
 
