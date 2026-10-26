@@ -7,7 +7,7 @@
   "batch": "Stock shared batch on the VLM runner: spec off (concurrent rows, ineligible requests, spec disabled)",
   "generic": "Other mlx-vlm families on the generic runner (Gemma, Qwen4/Flash-Next, Omni thinker, ...)",
   "text": "Text-only mlx-lm single-request fast path (_generate_fast)",
-  "loop": "Legacy EngineCore loop (YUNSHU_ENGINE_LOOP, experimental, not grown)"
+  "loop": "Text-model EngineCore continuous-batching loop (YUNSHU_ENGINE_LOOP, off by default, not grown)"
  },
  "features": {
   "draft_vocab": {
@@ -58,7 +58,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -102,7 +102,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -177,7 +177,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -232,7 +232,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -284,7 +284,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -354,7 +354,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -432,7 +432,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -499,7 +499,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -560,7 +560,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -630,7 +630,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -676,7 +676,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -730,7 +730,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -784,7 +784,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -831,7 +831,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -893,7 +893,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -1124,7 +1124,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -1191,7 +1191,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -1247,7 +1247,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -1309,7 +1309,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -1369,7 +1369,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -1529,7 +1529,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -1638,7 +1638,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -1777,7 +1777,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -1863,7 +1863,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -1951,7 +1951,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop, not grown"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   },
@@ -2010,7 +2010,7 @@
     },
     "loop": {
      "s": "na",
-     "why": "legacy loop, not grown"
+     "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
   }

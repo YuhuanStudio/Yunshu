@@ -489,15 +489,15 @@ M1–M4 Macs.
 ### Highlights
 
 - Get complete JSON responses faster: warm decode **23.4 → 111.4 tok/s** with
-  identical output and logprobs in the recorded Qwen3.8-27B test. [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+  identical output and logprobs in the recorded Qwen3.8-27B test. [Measurements](docs/reports/PERF_TREND.md#2026-10-03-constrained-speculation-與-accepted-target-logprobscodex-cspec).
 - Start follow-up answers sooner: 32K code first-token latency **900 → 721 ms**;
-  8K code **569 → 512 ms**. [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+  8K code **569 → 512 ms**. [Measurements](docs/reports/PERF_TREND.md#2026-10-03----native-singleton-kv-capacity-bounded-allocator-pool-wider-invariant-prefill-dispatch).
 - Speed up repetitive follow-up code: raising the verified prompt-copy cap from
   8 to 16 improved the measured 8K code turn from **106.1 → 129.2 tok/s**.
-  [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+  [Measurements](docs/reports/PERF_TREND.md#2026-10-03--prompt-copy-maximum-8--16-rows-codex-wide3).
 - Generate repetitive code faster with verified prompt copies: DFlash 32K code
   **72.74 → 82.56 tok/s**; prose results vary by context.
-  [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+  [Measurements](docs/reports/PERF_TREND.md#2026-10-03--prompt-copy-maximum-8--16-rows-codex-wide3).
 - Correct speculative decoding on M1–M4 Macs: output now matches plain decoding there
   too, with M5 speed unchanged (27B, 20 cells digest-equal, −0.4% to +3.0%).
 
@@ -524,7 +524,7 @@ M1–M4 Macs.
 All rows use M5 Max and Jundot/Qwen3.8-27B-oQ4e-mtp. These are separate
 same-checkpoint experiments, not cumulative gains or promises for every model.
 October 3 results use three interleaved clean repetitions. Sources and limitations:
-[BENCHMARKS](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+[PERF_TREND](docs/reports/PERF_TREND.md).
 
 | Machine | Model / mode | Metric / workload | Before → after | Recorded source |
 |---|---|---|---|---|
