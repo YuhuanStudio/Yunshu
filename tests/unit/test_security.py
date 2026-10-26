@@ -120,3 +120,55 @@ def test_batch_owner_isolation():
     assert owns({"owner": "alice"}, "alice") is True
     assert owns({"owner": "alice"}, "bob") is False
     assert owns({"owner": "anonymous"}, "bob") is True  # permissive when unstamped
+
+
+def _metrics_client():
+    from starlette.testclient import TestClient
+
+    from yunshu_gateway.middleware.metrics import MetricsMiddleware
+
+    async def inner(scope, receive, send):
+        raise AssertionError("not reached")
+
+    return TestClient(MetricsMiddleware(inner), raise_server_exceptions=False)
+
+
+def test_metrics_endpoint_answers_401_envelope_not_500():
+    os.environ["YUNSHU_AUTH_TOKEN"] = "owner-static-secret"
+    try:
+        c = _metrics_client()
+        for headers in ({}, {"Authorization": "Bearer wrong"}):
+            r = c.get("/metrics", headers=headers)
+            assert r.status_code == 401, r.text
+            assert r.json()["error"]["type"] == "authentication_error"
+            assert r.headers["www-authenticate"] == "Bearer"
+        ok = c.get("/metrics", headers={"Authorization": "Bearer owner-static-secret"})
+        assert ok.status_code == 200
+    finally:
+        os.environ.pop("YUNSHU_AUTH_TOKEN", None)
+
+
+def test_metrics_need_auth_when_only_managed_keys_exist(tmp_path):
+    from yunshu_gateway import api_keys
+
+    store = api_keys.configure(tmp_path / "keys.json")
+    try:
+        _managed_keys_case(store)
+    finally:
+        api_keys._store = None
+
+
+def _managed_keys_case(store):
+    admin = store.create("ops", ["admin"])
+    infer = store.create("app", ["infer"])
+
+    def secret(created):
+        return created[1]
+
+    c = _metrics_client()
+    assert c.get("/metrics").status_code == 401
+    assert c.get("/metrics", headers={"Authorization": "Bearer nope"}).status_code == 401
+    r_infer = c.get("/metrics", headers={"x-api-key": secret(infer)})
+    assert r_infer.status_code == 403
+    r_admin = c.get("/metrics", headers={"Authorization": f"Bearer {secret(admin)}"})
+    assert r_admin.status_code == 200

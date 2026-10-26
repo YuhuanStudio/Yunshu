@@ -329,8 +329,13 @@ def _check_metrics_auth(request: Request) -> None:
     so AuthMiddleware (innermost) never runs for this path. Therefore
     validate the static bearer token independently here.
 
-    Single-consumer model: only the static ``YUNSHU_AUTH_TOKEN`` gate is
-    honored; the RBAC / legacy-tenant paths have been removed.
+    Single-consumer model: the static ``YUNSHU_AUTH_TOKEN`` and stored API keys with the
+    ``admin`` scope are honored (stored keys switch auth on, like a token, everywhere else);
+    the RBAC / legacy-tenant paths have been removed. With no token and no stored key the
+    endpoint stays open for Prometheus scrapers.
+
+    Raises ``HTTPException``; ``MetricsMiddleware`` turns it into the JSON error envelope
+    (it runs outside the exception handlers, so letting it escape would be a 500).
     """
     from yunshu_gateway.token_compare import tokens_equal
 
@@ -347,24 +352,42 @@ def _check_metrics_auth(request: Request) -> None:
         if _role in ("admin", "system", "owner"):
             return
 
+    from yunshu_gateway import api_keys
+
+    store = api_keys.get_store()
     # No auth configured at all → allow for Prometheus scraper compatibility.
-    if not static_token:
+    if not static_token and not store.has_keys():
         return
 
     # Auth IS configured but the per-request state was never set (see docstring) —
-    # validate the Authorization header ourselves.
+    # validate the credential ourselves.
     auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+    else:
+        token = request.headers.get("x-api-key", "")
+    if not token:
         raise HTTPException(
             status_code=401,
             detail="Missing or invalid Authorization header",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    token = auth_header[7:]
 
     # Static token (constant-time compare).
-    if tokens_equal(token, static_token):
+    if static_token and tokens_equal(token, static_token):
         return
+
+    # A stored key reads the metrics only with the admin scope (no quota is charged).
+    try:
+        principal = store.authenticate(token)
+    except api_keys.AuthFailureError:
+        pass
+    else:
+        if "admin" in principal.scopes:
+            return
+        raise HTTPException(
+            status_code=403, detail="Metrics need an API key with the admin scope"
+        )
 
     raise HTTPException(
         status_code=401,
@@ -385,7 +408,17 @@ class MetricsMiddleware:
             return
         # Serve metrics endpoint
         if scope["path"] == "/metrics":
-            response = self._metrics_page(Request(scope, receive))
+            try:
+                response = self._metrics_page(Request(scope, receive))
+            except HTTPException as exc:
+                from ..error_envelope import format_error_response
+
+                response = format_error_response(
+                    scope["path"],
+                    str(exc.detail),
+                    exc.status_code,
+                    extra_headers=dict(exc.headers or {}),
+                )
             await response(scope, receive, send)
             return
 
