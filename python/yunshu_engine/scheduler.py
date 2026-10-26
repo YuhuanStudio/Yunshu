@@ -5093,6 +5093,7 @@ class Scheduler:
         self._uid_to_req.clear()
         self._detokenizers.clear()
         self._thinking_processors.clear()
+        self._row_guards.clear()  # each holds a constrained sampler and a grammar matcher
         self._thinking_state.clear()
         self._pending_abort_ids.clear()
         self._uids_to_remove.clear()
