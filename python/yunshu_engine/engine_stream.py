@@ -314,85 +314,25 @@ class EngineStreamMixin:
                 return logits
 
             logits_processors.append(_repetition_penalty)
+        from . import text_logit_processors as _tlp
+
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
-            # Maintain incremental counts dict instead of rebuilding
-            # from full tokens list every step (O(T²) → O(T) total). The
-            # closure captures a mutable state dict so successive calls only
-            # observe the newest token.
-            _fp_state: dict[str, object] = {"counts": {}, "last_len": -1}
-
-            # The prompt offset inside the processor is 1, NOT the full
-            # prompt length. mlx-lm prefills all-but-the-last prompt token OUTSIDE
-            # _step, so the `tokens` accumulator handed to logits_processors is
-            # [last_prompt_token, gen1, gen2, ...]. With n_prompt=prompt_tokens the
-            # guard `cur_len <= n_prompt` made frequency/presence penalty INERT for
-            # the first ~prompt_len generated tokens (short completions never
-            # penalized at all) and then tokens[n_prompt:] under-counted repeats.
-            def _freq_pres_penalty(
-                tokens,
-                logits,
-                fp=frequency_penalty,
-                pp=presence_penalty,
-                n_prompt=1,
-                _st=_fp_state,
-            ):
-                counts: dict[int, int] = _st["counts"]  # type: ignore[assignment]
-                last_len = int(_st["last_len"])  # type: ignore[arg-type]
-                cur_len = len(tokens)
-                if cur_len <= n_prompt:
-                    _st["last_len"] = cur_len
-                    return logits
-                # Reset/rebuild if tokens shrank (spec-decode rollback) or
-                # we have not yet started incremental accounting.
-                if cur_len < last_len or last_len < n_prompt:
-                    counts = {}
-                    for t in tokens[n_prompt:]:
-                        counts[int(t)] = counts.get(int(t), 0) + 1
-                    _st["counts"] = counts
-                else:
-                    start = max(last_len, n_prompt)
-                    for t in tokens[start:]:
-                        counts[int(t)] = counts.get(int(t), 0) + 1
-                _st["last_len"] = cur_len
-                for tid, cnt in counts.items():
-                    # OpenAI permits frequency/presence penalty in [-2.0, 2.0];
-                    # negative values BOOST the token (encourage repetition).
-                    # Guarding with `> 0` silently dropped negative penalties
-                    # (verified: fp=-2.0 produced output identical to fp=0).
-                    if fp != 0.0:
-                        logits[..., tid] = logits[..., tid] - fp * cnt
-                    if pp != 0.0 and cnt > 0:
-                        logits[..., tid] = logits[..., tid] - pp
-                return logits
-
-            logits_processors.append(_freq_pres_penalty)
+            # Dense per-request count vectors patched once per new token (see
+            # text_logit_processors). The prompt offset is 1, NOT the prompt length:
+            # mlx-lm prefills all-but-the-last prompt token OUTSIDE _step, so the
+            # `tokens` handed to logits_processors is [last_prompt_token, gen1, ...].
+            # OpenAI allows both penalties in [-2, 2]; negative ones boost the token.
+            logits_processors.append(
+                _tlp.FrequencyPresencePenalty(frequency_penalty, presence_penalty)
+            )
         if logit_bias:
-
-            def _logit_bias_proc(_tokens, logits, biases=logit_bias):
-                # Skip token ids outside [0, vocab) — a user-supplied out-of-range
-                # or negative id would otherwise index out of bounds and crash the
-                # request (MLX: "Cannot squeeze axis 1 with size 0"). OpenAI ignores
-                # invalid logit_bias token ids rather than erroring.
-                vocab = logits.shape[-1]
-                for tid, bias in biases.items():
-                    if 0 <= tid < vocab:
-                        logits[..., tid] = logits[..., tid] + bias
-                return logits
-
-            logits_processors.append(_logit_bias_proc)
+            # Out-of-range ids are skipped (OpenAI ignores them) rather than crashing
+            # the request with an out-of-bounds index.
+            logits_processors.append(_tlp.LogitBias(logit_bias))
 
         # suppress_tokens + min_tokens (mirror _generate_fast).
         if suppress_tokens:
-            _sup = [int(t) for t in suppress_tokens]
-
-            def _suppress_proc(_tokens, logits, sup=_sup):
-                vocab = logits.shape[-1]
-                for tid in sup:
-                    if 0 <= tid < vocab:
-                        logits[..., tid] = -float("inf")
-                return logits
-
-            logits_processors.append(_suppress_proc)
+            logits_processors.append(_tlp.TokenBan(suppress_tokens))
         # skip min_tokens EOS-masking when a JSON/grammar constraint is
         # active — the un-propagated streaming sibling of the non-streaming
         # fix (3336). The constraint already enforces a structural minimum, and
@@ -400,17 +340,7 @@ class EngineStreamMixin:
         # all-(-inf) allowed set → its argmax fallback emits an INVALID non-EOS
         # token after a complete JSON value.
         if min_tokens and min_tokens > 0 and stop_ids and json_schema is None:
-            _mask_ids = list(stop_ids)
-
-            def _min_tokens_proc(tokens, logits, ids=_mask_ids, floor=int(min_tokens)):
-                if (len(tokens) - 1) < floor:
-                    vocab = logits.shape[-1]
-                    for tid in ids:
-                        if 0 <= tid < vocab:
-                            logits[..., tid] = -float("inf")
-                return logits
-
-            logits_processors.append(_min_tokens_proc)
+            logits_processors.append(_tlp.TokenBan(stop_ids, floor=int(min_tokens)))
 
         # SAMP-2: Wrap user-provided custom logits processors to adapt signature.
         if _custom_logits_processors:
