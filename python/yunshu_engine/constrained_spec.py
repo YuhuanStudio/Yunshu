@@ -434,9 +434,9 @@ class SpecRequest:
         k = min(self.top_logprobs, probs.shape[-1])
         if k:
             # Match AR ordering, including ties; reduce only committed rows.
-            top = mx.argsort(probs, axis=-1)[:, -k:][:, ::-1].astype(mx.int32)
-            vals = mx.take_along_axis(probs, top, -1)
-            top_ids, top_vals = top.tolist(), vals.tolist()
+            from .text_logprobs import top_logprobs_rows
+
+            top_ids, top_vals = top_logprobs_rows(probs, k)
         else:
             top_ids = top_vals = [[] for _ in tokens]
         return [

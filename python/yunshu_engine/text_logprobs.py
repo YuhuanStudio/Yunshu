@@ -40,3 +40,50 @@ def top_logprobs(
     ids, vs = idx.tolist(), vals.tolist()
     order = sorted(range(k), key=lambda j: (-vs[j], ids[j]))
     return tok_lp, [ids[j] for j in order], [vs[j] for j in order]
+
+
+def top_logprobs_rows(
+    log_probs: mx.array, k: int
+) -> tuple[list[list[int]], list[list[float]]]:
+    """Top-k ids/values per row of ``[N, V]`` ``log_probs`` in the mlx-vlm ``BatchGenerator``
+    order: ``argsort`` ascending, last k reversed, i.e. descending value and, for equal
+    values, DESCENDING token id (the opposite tie order of :func:`top_logprobs`).
+
+    One batched ``argpartition`` and one ``tolist`` per array replace the full-vocab sort.
+    Rows whose k-th value ties with outsiders (``>= min`` count != k, which includes ``-inf``
+    tails) or that contain NaN are re-done with the original stable argsort, so every row
+    equals what the sort would have produced.
+    """
+    n, vocab = log_probs.shape
+    k = max(0, min(int(k), vocab))
+    if k == 0 or n == 0:
+        return [[] for _ in range(n)], [[] for _ in range(n)]
+    idx = mx.argpartition(-log_probs, k - 1, axis=-1)[:, :k]
+    vals = mx.take_along_axis(log_probs, idx, axis=-1)
+    ambiguous = mx.logical_or(
+        mx.sum(log_probs >= mx.min(vals, axis=-1, keepdims=True), axis=-1) != k,
+        mx.any(mx.isnan(log_probs), axis=-1),
+    )
+    mx.eval(idx, vals, ambiguous)
+    amb: list = ambiguous.tolist()
+    ids, vs = idx.tolist(), vals.tolist()
+    if any(amb):
+        rows = [i for i, a in enumerate(amb) if a]
+        sub = log_probs[mx.array(rows)]
+        full = mx.argsort(sub, axis=-1)[:, -k:][:, ::-1].astype(mx.int32)
+        full_v = mx.take_along_axis(sub, full, axis=-1)
+        mx.eval(full, full_v)
+        for r, fi, fv in zip(rows, full.tolist(), full_v.tolist(), strict=True):
+            ids[r], vs[r] = fi, fv
+            amb[r] = None  # already in final order
+    out_i: list[list[int]] = []
+    out_v: list[list[float]] = []
+    for r in range(n):
+        if amb[r] is None:
+            out_i.append(ids[r])
+            out_v.append(vs[r])
+            continue
+        order = sorted(range(k), key=lambda j: (-vs[r][j], -ids[r][j]))
+        out_i.append([ids[r][j] for j in order])
+        out_v.append([vs[r][j] for j in order])
+    return out_i, out_v
