@@ -47,3 +47,30 @@ test("a forced refresh waits for the poll in flight and then fetches again; a ba
   await joinOrQueue(null, false, start);
   assert.equal(starts, 2);
 });
+
+test("withTimeout works without AbortSignal.any / AbortSignal.timeout (older Safari and Chrome)", async () => {
+  const any = AbortSignal.any;
+  const timeout = AbortSignal.timeout;
+  // @ts-expect-error simulate a browser that predates both
+  AbortSignal.any = undefined;
+  // @ts-expect-error simulate a browser that predates both
+  AbortSignal.timeout = undefined;
+  try {
+    const caller = new AbortController();
+    const s = withTimeout(caller.signal, 20);
+    assert.equal(s.aborted, false);
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(s.aborted, true);
+    assert.equal((s.reason as DOMException).name, "TimeoutError");
+    const c2 = new AbortController();
+    const s2 = withTimeout(c2.signal, 10_000);
+    c2.abort(new Error("stop"));
+    assert.equal(s2.aborted, true);
+    const done = new AbortController();
+    done.abort();
+    assert.equal(withTimeout(done.signal, 10_000).aborted, true);
+  } finally {
+    AbortSignal.any = any;
+    AbortSignal.timeout = timeout;
+  }
+});

@@ -27,8 +27,36 @@ export function createSingleFlight(run: () => Promise<void>) {
 }
 
 /** A signal that aborts with the caller's `signal` or after `ms`, so one hung response cannot stall a poller. */
-export const withTimeout = (signal: AbortSignal, ms: number): AbortSignal =>
-  AbortSignal.any([signal, AbortSignal.timeout(ms)]);
+export function withTimeout(signal: AbortSignal, ms: number): AbortSignal {
+  // AbortSignal.any / .timeout need Safari 17.4 / Chrome 116; older browsers get the same thing by hand.
+  if (
+    typeof AbortSignal.any === "function" &&
+    typeof AbortSignal.timeout === "function"
+  ) {
+    return AbortSignal.any([signal, AbortSignal.timeout(ms)]);
+  }
+  const controller = new AbortController();
+  if (signal.aborted) {
+    controller.abort(signal.reason);
+    return controller.signal;
+  }
+  const timer = setTimeout(
+    () => controller.abort(new DOMException("The operation timed out.", "TimeoutError")),
+    ms,
+  );
+  signal.addEventListener(
+    "abort",
+    () => {
+      clearTimeout(timer);
+      controller.abort(signal.reason);
+    },
+    { once: true },
+  );
+  controller.signal.addEventListener("abort", () => clearTimeout(timer), {
+    once: true,
+  });
+  return controller.signal;
+}
 
 /**
  * A poll is already in flight: a background request shares its answer, but a forced one (the user's
