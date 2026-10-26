@@ -67,7 +67,7 @@ def test_misaligned_head_dim_falls_back_to_unquantised_with_same_tokens(caplog):
     assert bits is None
     assert sum("head_dim" in r.getMessage() for r in caplog.records) == 1
     # the raw mlx-lm call with the configured bits really fails ...
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         _tokens(model, 4, 64)
     # ... and the fallback bits give exactly the quant-off tokens
     assert _tokens(model, bits, 64) == _tokens(model, None, 64)
