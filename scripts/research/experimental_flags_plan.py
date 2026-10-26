@@ -35,6 +35,15 @@ EVIDENCE = {
         ],
         "No Yunshu receipt: the seam cut is exact on the tiny hybrid model on CPU, but the TTFT gain, the first-request copy cost and the memory growth on Qwen3.8-27B need the Mac A/B (16k / 35k / 64k documents, off vs on).",
     ),
+    "YUNSHU_SDPA_CHUNK": (
+        "sdpa_chunk",
+        "pending",
+        [
+            "tests/unit/test_sdpa_chunk.py (chunked == stock bit for bit on CPU, gate and install logic)",
+            "omlx sdpa256_attention (their fused route; Yunshu keeps the stock fallback per chunk)",
+        ],
+        "No Metal receipt: exactness on Apple GPUs rests on batched matmul without split-K, which CPU cannot show; needs the M1-M4 bitwise A/B and peak-memory measurement.",
+    ),
     "YUNSHU_GPU_SAMPLER": (
         "gpu_sampler",
         "pending",

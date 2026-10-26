@@ -75,7 +75,13 @@ def _stock_is_fused(queries, keys, mask) -> bool:
 def score_bytes(queries, keys) -> int:
     """Bytes of one fallback score tensor [B, n_q_heads, q_len, kv_len] in the query dtype."""
     batch = int(queries.shape[0]) if queries.ndim == 4 else 1
-    return batch * int(queries.shape[-3]) * int(queries.shape[-2]) * int(keys.shape[-2]) * queries.dtype.size
+    return (
+        batch
+        * int(queries.shape[-3])
+        * int(queries.shape[-2])
+        * int(keys.shape[-2])
+        * queries.dtype.size
+    )
 
 
 def rows_per_chunk(queries, keys, budget: int | None = None) -> int:
@@ -87,11 +93,17 @@ def rows_per_chunk(queries, keys, budget: int | None = None) -> int:
 def should_chunk(queries, keys, cache, mask, budget: int | None = None) -> bool:
     """Never raises: any odd input keeps the stock call."""
     try:
-        if queries.ndim != 4 or queries.shape[-1] != HEAD_DIM or keys.shape[-1] != HEAD_DIM:
+        if (
+            queries.ndim != 4
+            or queries.shape[-1] != HEAD_DIM
+            or keys.shape[-1] != HEAD_DIM
+        ):
             return False
         if queries.shape[-2] < MIN_Q_LEN:
             return False
-        if cache is not None and (hasattr(cache, "bits") or "TurboQuant" in type(cache).__name__):
+        if cache is not None and (
+            hasattr(cache, "bits") or "TurboQuant" in type(cache).__name__
+        ):
             return False
         if mask is not None and not isinstance(mask, (str, mx.array)):
             return False
@@ -108,12 +120,24 @@ def should_chunk(queries, keys, cache, mask, budget: int | None = None) -> bool:
         return False
 
 
-def chunked_sdpa(stock, queries, keys, values, cache, scale, mask, sinks=None, budget: int | None = None):
+def chunked_sdpa(
+    stock,
+    queries,
+    keys,
+    values,
+    cache,
+    scale,
+    mask,
+    sinks=None,
+    budget: int | None = None,
+):
     """``stock`` over query-row chunks; each chunk keeps all keys (see module docstring)."""
     q_len, kv_len = int(queries.shape[-2]), int(keys.shape[-2])
     rows = rows_per_chunk(queries, keys, budget)
     causal = isinstance(mask, str)
-    per_row_mask = isinstance(mask, mx.array) and mask.ndim >= 2 and mask.shape[-2] == q_len
+    per_row_mask = (
+        isinstance(mask, mx.array) and mask.ndim >= 2 and mask.shape[-2] == q_len
+    )
     k_idx = mx.arange(kv_len)[None, :] if causal else None
     outs = []
     for start in range(0, q_len, rows):
@@ -126,7 +150,9 @@ def chunked_sdpa(stock, queries, keys, values, cache, scale, mask, sinks=None, b
             chunk_mask = mask[..., start:stop, :]
         else:
             chunk_mask = mask
-        out = stock(queries[..., start:stop, :], keys, values, cache, scale, chunk_mask, sinks)
+        out = stock(
+            queries[..., start:stop, :], keys, values, cache, scale, chunk_mask, sinks
+        )
         # Evaluate each chunk so its scores are freed before the next is built.
         mx.eval(out)
         outs.append(out)
@@ -142,7 +168,9 @@ def chunked_sdpa(stock, queries, keys, values, cache, scale, mask, sinks=None, b
 
 
 def wrap(stock):
-    def scaled_dot_product_attention(queries, keys, values, cache, scale, mask=None, sinks=None):
+    def scaled_dot_product_attention(
+        queries, keys, values, cache, scale, mask=None, sinks=None
+    ):
         if should_chunk(queries, keys, cache, mask):
             return chunked_sdpa(stock, queries, keys, values, cache, scale, mask, sinks)
         return stock(queries, keys, values, cache, scale, mask, sinks)
@@ -154,9 +182,16 @@ def wrap(stock):
 def install() -> bool:
     """Wrap mlx-vlm's and mlx-lm's base SDPA and rebind the model modules that copied it.
     No-op (False) off pre-NAX hardware, so M5 and CPU hosts run the stock functions untouched."""
+    from .. import settings
+
     if _STATE["installed"] or not pre_nax_device():
         return False
-    for base_name, prefix in (("mlx_vlm.models.base", "mlx_vlm.models."), ("mlx_lm.models.base", "mlx_lm.models.")):
+    if not settings.get_bool("YUNSHU_SDPA_CHUNK"):
+        return False  # experimental until the M1-M4 bitwise A/B (see the setting's decide=)
+    for base_name, prefix in (
+        ("mlx_vlm.models.base", "mlx_vlm.models."),
+        ("mlx_lm.models.base", "mlx_lm.models."),
+    ):
         try:
             base = __import__(base_name, fromlist=["scaled_dot_product_attention"])
         except ImportError:
@@ -167,7 +202,11 @@ def install() -> bool:
         wrapped = wrap(original)
         base.scaled_dot_product_attention = wrapped
         for name, mod in list(sys.modules.items()):
-            if mod is not None and name.startswith(prefix) and getattr(mod, "scaled_dot_product_attention", None) is original:
+            if (
+                mod is not None
+                and name.startswith(prefix)
+                and getattr(mod, "scaled_dot_product_attention", None) is original
+            ):
                 mod.scaled_dot_product_attention = wrapped
     _STATE["installed"] = True
     return True

@@ -14,7 +14,9 @@ H, HKV, D = 8, 2, 256
 
 
 def stock(q, k, v, cache, scale, mask, sinks=None):
-    return mx.fast.scaled_dot_product_attention(q, k, v, scale=scale, mask=mask, sinks=sinks)
+    return mx.fast.scaled_dot_product_attention(
+        q, k, v, scale=scale, mask=mask, sinks=sinks
+    )
 
 
 def _qkv(q_len, kv_len, dtype, seed=0):
@@ -58,7 +60,9 @@ def test_array_masks_equal_stock(mask_kind):
     else:  # one row broadcast over queries
         mask = keep[:1][None, None]
     want = stock(q, k, v, None, D**-0.5, mask)
-    got = sc.chunked_sdpa(stock, q, k, v, None, D**-0.5, mask, None, H * kv_len * 2 * 16)
+    got = sc.chunked_sdpa(
+        stock, q, k, v, None, D**-0.5, mask, None, H * kv_len * 2 * 16
+    )
     assert mx.array_equal(got, want).item()
 
 
@@ -66,7 +70,9 @@ def test_sinks_equal_stock():
     q, k, v = _qkv(40, 90, mx.bfloat16, seed=2)
     sinks = mx.random.normal((H,)).astype(mx.bfloat16)
     want = stock(q, k, v, None, D**-0.5, "causal", sinks)
-    got = sc.chunked_sdpa(stock, q, k, v, None, D**-0.5, "causal", sinks, H * 90 * 2 * 16)
+    got = sc.chunked_sdpa(
+        stock, q, k, v, None, D**-0.5, "causal", sinks, H * 90 * 2 * 16
+    )
     assert mx.array_equal(got, want).item()
 
 
@@ -105,9 +111,17 @@ def test_install_is_noop_off_pre_nax():
     assert sc.install() is False
 
 
+def test_install_is_off_by_default_even_on_pre_nax(monkeypatch):
+    # experimental until the M1-M4 bitwise A/B (YUNSHU_SDPA_CHUNK decide=)
+    monkeypatch.delenv("YUNSHU_SDPA_CHUNK", raising=False)
+    sc._STATE["installed"] = False
+    assert sc.install() is False
+
+
 def test_install_wraps_and_rebinds(monkeypatch):
     import mlx_vlm.models.base as base
 
+    monkeypatch.setenv("YUNSHU_SDPA_CHUNK", "1")
     original = base.scaled_dot_product_attention
     sc._STATE["installed"] = False
     try:
@@ -124,7 +138,12 @@ def test_install_wraps_and_rebinds(monkeypatch):
         import sys
 
         for name, mod in list(sys.modules.items()):
-            if name.startswith("mlx_vlm.models.") and getattr(mod, "scaled_dot_product_attention", None) is not None:
-                if getattr(mod.scaled_dot_product_attention, "_yunshu_sdpa_chunk", False):
+            if (
+                name.startswith("mlx_vlm.models.")
+                and getattr(mod, "scaled_dot_product_attention", None) is not None
+            ):
+                if getattr(
+                    mod.scaled_dot_product_attention, "_yunshu_sdpa_chunk", False
+                ):
                     mod.scaled_dot_product_attention = original
         sc._STATE["installed"] = False

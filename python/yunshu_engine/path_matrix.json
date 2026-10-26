@@ -2364,6 +2364,66 @@
      "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
     }
    }
+  },
+  "sdpa_chunk_pre_nax": {
+   "module": "python/yunshu_engine/kernels/sdpa_chunk.py",
+   "what": "Query-chunked head_dim-256 long-prefill attention on M1-M4 (YUNSHU_SDPA_CHUNK, experimental, default off)",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "sdpa_chunk.install()"
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "sdpa_chunk.install()"
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "sdpa_chunk.install()"
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "sdpa_chunk.install()"
+      ]
+     ]
+    },
+    "text": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/batched_engine.py",
+       "sdpa_chunk.install()"
+      ]
+     ]
+    },
+    "loop": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/batched_engine.py",
+       "sdpa_chunk.install()"
+      ]
+     ]
+    }
+   }
   }
  },
  "exclusions": [
@@ -2627,7 +2687,6 @@
  },
  "modules_other": {
   "python/yunshu_engine/kernels/gdn_qk_eps.py": "GDN q/k RMS epsilon measured from the installed mlx-vlm and rendered into gdn_prefill._NORM_SCALE_SOURCE and the RMS arm of qwen35_gdn_prework, so a mlx-vlm bump (b8bf04c) flips stock and fused together (value unchanged on 0.7.8)",
-  "python/yunshu_engine/kernels/sdpa_chunk.py": "M1-M4 only memory bound: query-chunks MLX's own unfused head-dim-256 SDPA when its score matrix exceeds a budget (stock arithmetic per row; installed at load in vlm_engine and batched_engine; engages on no path on M5/CPU)",
   "python/yunshu_engine/apc_restore_cost.py": "media checkpoint restore admission (APC media path; cost model only, decides reuse not numerics)",
   "python/yunshu_engine/dflash_context.py": "DFlash prefill capture and context window (part of dflash path)",
   "python/yunshu_engine/dflash_fast.py": "DFlash fast tree (tree_drafts)",
@@ -2758,7 +2817,8 @@
   "YUNSHU_NEXT_TURN_PREFILL": "next_turn_rehearsal",
   "YUNSHU_NEXT_TURN_DELAY_S": "next_turn_rehearsal",
   "YUNSHU_GC_POLICY": "gc_policy",
-  "YUNSHU_GRAMMAR_PREWARM": "grammar_prewarm"
+  "YUNSHU_GRAMMAR_PREWARM": "grammar_prewarm",
+  "YUNSHU_SDPA_CHUNK": "sdpa_chunk_pre_nax"
  },
  "gap_budget": 41,
  "settings_categories": [

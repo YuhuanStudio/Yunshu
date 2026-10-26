@@ -184,6 +184,8 @@ const settingdesc = {
   YUNSHU_SPEC_PROPOSER: "文本模型：n-gram 推测解码所用的提案器类型。",
   YUNSHU_GEMMA4_ASSISTANT:
     "文本 Gemma-4 模型：辅助草稿模型目录（共享 KV 的推测解码草稿模型）。",
+  YUNSHU_SDPA_CHUNK:
+    "M1–M4、head_dim 256：将原生长 prefill 注意力的后备路径按查询行分块，使分数张量保持在 1 GiB 以下（实验性）。",
   YUNSHU_GPU_SAMPLER:
     "文本模型：在 GPU 上进行 Gumbel-max 采样（每个 token 无需 GPU 到 CPU 的同步）。",
   YUNSHU_JUMP_FORWARD:
