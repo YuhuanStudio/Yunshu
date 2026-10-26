@@ -857,6 +857,7 @@ class EngineNgramMixin:
                 output_text = close_unterminated_reasoning(
                     output_text,
                     detect_needs_think_prefix(list(input_ids), tokenizer),
+                    constrained=json_schema is not None,
                 )
                 rp = get_reasoning_parser(self.model_name)
                 rp_out = rp.parse(output_text)

@@ -64,7 +64,9 @@ def test_hybrid_boundary_snapshots_do_not_sync_per_boundary(monkeypatch):
     pc, syncs = _boundary_run(monkeypatch)
     assert pc.size == 5  # one snapshot per block boundary
     assert syncs == []  # was one host sync per boundary
-    assert pc.get(mx.arange(8 * 5 + 1))[0] is not None  # restorable; flags read in one batch
+    assert (
+        pc.get(mx.arange(8 * 5 + 1))[0] is not None
+    )  # restorable; flags read in one batch
 
 
 def test_deferred_check_still_drops_a_poisoned_boundary_before_any_restore(monkeypatch):

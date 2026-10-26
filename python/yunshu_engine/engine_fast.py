@@ -199,9 +199,7 @@ class EngineFastMixin:
             # first decode token.
             if p % block == 0 and p >= prefix_cache._min_prefix:
                 try:
-                    prefix_cache.add(
-                        full_ids[:p], cache, defer_finite_check=True
-                    )
+                    prefix_cache.add(full_ids[:p], cache, defer_finite_check=True)
                 except Exception:
                     _engine.logger.debug(
                         "hybrid boundary snapshot add failed", exc_info=True
@@ -994,7 +992,9 @@ class EngineFastMixin:
                         exc_info=True,
                     )
 
-            for _gp in _gen_count_procs:  # mlx-lm's `tokens` = these ids + the generated ones
+            for (
+                _gp
+            ) in _gen_count_procs:  # mlx-lm's `tokens` = these ids + the generated ones
                 _gp.set_prompt_len(len(ids_to_prefill))
             _fp_stats.admit(
                 cached_tokens,
@@ -1654,7 +1654,9 @@ class EngineFastMixin:
                         )
                     # EOS / stop / length inside the open <think> keeps the tail reasoning
                     output_text = close_unterminated_reasoning(
-                        output_text, _prompt_opens_think
+                        output_text,
+                        _prompt_opens_think,
+                        constrained=json_schema is not None,
                     )
                     rp = get_reasoning_parser(self.model_name)
                     rp_out = rp.parse(output_text)

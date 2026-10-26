@@ -70,7 +70,9 @@ def test_auto_quantized_kv_is_only_lossy_when_the_cache_really_is_quantized():
 
     auto = _eng(model=_fake_model(64, 8, 128))
     bits = auto._effective_kv_quant_bits(16384)
-    assert bits == 8 and auto._auto_quantized_kv(bits)  # decided, nothing known about the cache
+    assert bits == 8 and auto._auto_quantized_kv(
+        bits
+    )  # decided, nothing known about the cache
     assert not auto._auto_quantized_kv(auto._effective_kv_quant_bits(100))
     assert not auto._auto_quantized_kv(bits, [KVCache(), KVCache()])
     assert not auto._auto_quantized_kv(bits, [RotatingKVCache(max_size=8)])
@@ -142,7 +144,9 @@ async def test_short_reply_under_a_long_max_tokens_is_still_stored_non_stream():
     assert eng._effective_kv_quant_bits(19 + 40) == 8  # the cap alone trips the gate
     out = await eng._generate_fast(max_tokens=40, stop=await _short_stop(eng), **_KW)
     assert out.error is None and out.completion_tokens < 10
-    assert eng._kv_prefix_cache.add.call_count >= 1  # was 0: the estimate skipped the store
+    assert (
+        eng._kv_prefix_cache.add.call_count >= 1
+    )  # was 0: the estimate skipped the store
 
 
 async def test_really_quantized_cache_is_not_stored_non_stream():

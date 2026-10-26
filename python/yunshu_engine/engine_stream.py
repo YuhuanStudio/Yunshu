@@ -550,8 +550,10 @@ class EngineStreamMixin:
             # never flipped True → the ENTIRE chain-of-thought leaked into visible
             # delta.content and reasoning_tokens stayed 0 (streaming diverged from
             # the non-streaming path, which uses the closing-only reasoning parser).
-            # Pre-seed when the rendered prompt ends with an open <think>.
-            if think_end_token is not None and not _in_thinking:
+            # Pre-seed when the rendered prompt ends with an open <think>. NOT for a constrained
+            # request (json_schema / regex / choice / grammar): its first token is the answer,
+            # not reasoning (same rule as close_unterminated_reasoning).
+            if think_end_token is not None and not _in_thinking and json_schema is None:
                 try:
                     from .thinking_budget import detect_needs_think_prefix
 
@@ -652,7 +654,9 @@ class EngineStreamMixin:
                         _stream_kv_bits = None
                 except Exception:
                     pass
-            for _gp in _gen_count_procs:  # mlx-lm's `tokens` = these ids + the generated ones
+            for (
+                _gp
+            ) in _gen_count_procs:  # mlx-lm's `tokens` = these ids + the generated ones
                 _gp.set_prompt_len(len(ids_to_prefill))
             _fp_stats.admit(
                 _stream_cached_tokens,

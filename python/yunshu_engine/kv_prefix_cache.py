@@ -552,7 +552,9 @@ class KVPrefixCache:
             self._hash_index[h] = idx
             if pending_flag is not None:
                 self._pending_finite.append((h, pending_flag))
-                del self._pending_finite[:-64]  # bounded: oldest unread flags are dropped
+                del self._pending_finite[
+                    :-64
+                ]  # bounded: oldest unread flags are dropped
 
             # Add to prefix index with block dedup refcounting
             for bi, bh in enumerate(block_hashes):

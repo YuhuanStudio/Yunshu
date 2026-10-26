@@ -25,9 +25,7 @@ async def test_min_tokens_holds_the_eos_ban_with_a_long_prompt_non_stream():
 
 
 async def test_min_tokens_holds_the_eos_ban_with_a_long_prompt_stream():
-    _, last = await collect_stream(
-        make_engine(), max_tokens=30, min_tokens=5, **_kw()
-    )
+    _, last = await collect_stream(make_engine(), max_tokens=30, min_tokens=5, **_kw())
     assert last.error is None
     assert last.completion_tokens >= 5
 
@@ -60,5 +58,7 @@ async def test_penalties_count_generated_tokens_only(monkeypatch, stream):
         await make_engine()._generate_fast(**kw)
     assert seen
     n_prompt, first_len = seen[0]
-    assert first_len == n_prompt == len(PROMPT)  # nothing generated yet: no prompt token is counted
+    assert (
+        first_len == n_prompt == len(PROMPT)
+    )  # nothing generated yet: no prompt token is counted
     assert [ln - n for n, ln in seen] == list(range(len(seen)))
