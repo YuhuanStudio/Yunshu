@@ -2163,7 +2163,20 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                 char_upper + (req.effective_max_tokens() or 0) < _max_ctx * 0.9
             )
             _cap_safe = char_upper < _cap * 0.9
-            if not (_ctx_safe and _cap_safe):
+            if (
+                not _ctx_safe
+                and _cap_safe
+                and _max_ctx
+                and char_upper < _max_ctx * 0.9
+                and req.max_tokens_source() != SOURCE_REQUEST
+            ):
+                # No max_tokens from the client: the default is the model limit (as large as
+                # the window), so `char_upper + max_tokens` can never clear it and every such
+                # request paid a full encode. The prompt provably fits (tokens <= chars), and
+                # the room it leaves is at least ctx - char_upper: clamp the default to that
+                # instead of encoding (a request's own max_tokens keeps the exact path).
+                _apply_token_budget(req, char_upper, engine)
+            elif not (_ctx_safe and _cap_safe):
                 # Near a limit — compute the precise count and enforce both guards.
                 # count_message_tokens already adds IMAGE_TOKEN_ESTIMATE
                 # per image block, so the old `+= image_count * IMAGE_TOKEN_ESTIMATE`
@@ -2649,6 +2662,7 @@ async def _handle_vlm_chat(
     # likely to be huge. Enforce the same guards; VLM context now resolves via
     # the engine _config dict path. Safe no-op if context can't be
     # resolved (won't false-reject) — only catches egregiously over-window prompts.
+    _vlm_est = 0  # the guard's prompt-token estimate, reused below
     try:
         from yunshu_control.token_counter import (
             IMAGE_TOKEN_ESTIMATE,
@@ -2761,13 +2775,23 @@ async def _handle_vlm_chat(
     # returns 0 (e.g., timeout path). The authoritative count comes from the
     # engine result `r["prompt_tokens"]`, which already includes the per-image
     # vision-token estimate via vlm_engine._estimate_image_tokens().
-    fallback_prompt_tok = 0
-    if tok:
-        try:
-            prompt_text = vlm_engine._format_prompt(messages)
-            fallback_prompt_tok = len(tok.encode(prompt_text))
-        except Exception:
-            logger.debug("prompt token count failed", exc_info=True)
+    # Computed only when the engine reported 0 (a full template render + encode of the
+    # prompt on the event loop): the guard above already counted it (``_vlm_est``).
+    _fallback_cache: list[int] = []
+
+    def _fallback_prompt_tok() -> int:
+        if _vlm_est:
+            return _vlm_est
+        if not _fallback_cache:
+            n = 0
+            if tok:
+                try:
+                    n = len(tok.encode(vlm_engine._format_prompt(messages)))
+                except Exception:
+                    logger.debug("prompt token count failed", exc_info=True)
+            _fallback_cache.append(n)
+        return _fallback_cache[0]
+
     prompt_tok = 0
 
     async def _vlm_gen_one(idx: int):
@@ -2796,7 +2820,7 @@ async def _handle_vlm_chat(
         )
         # Use engine-reported prompt_tokens, which includes image-token estimate
         # from vlm_engine._estimate_image_tokens() .
-        pt = r.get("prompt_tokens", 0) or fallback_prompt_tok
+        pt = r.get("prompt_tokens", 0) or _fallback_prompt_tok()
         finish_reason = _normalize_finish_reason(r.get("finish_reason"))
 
         # Extract thinking content. the LLM text path calls extract_thinking
@@ -2970,7 +2994,7 @@ async def _handle_vlm_chat(
 
     # If every choice returned 0 (e.g., timeout), fall back to text-only count
     if prompt_tok == 0:
-        prompt_tok = fallback_prompt_tok
+        prompt_tok = _fallback_prompt_tok()
     # VLM completion count is len(tokens): every generated token, reasoning included.
     vlm_usage = openai_usage(
         prompt_tok, total_completion_tok, total_reasoning_tok, vlm_cached_tok
