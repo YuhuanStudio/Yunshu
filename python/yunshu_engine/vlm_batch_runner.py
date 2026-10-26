@@ -669,6 +669,10 @@ class VLMBatchRunner:
         """
         stats = stats if stats is not None else RunStats()
         ids = input_ids.tolist() if hasattr(input_ids, "tolist") else list(input_ids)
+        if not ids:
+            # BatchGenerator.insert cannot prefill zero tokens (and one empty row would
+            # take the shared batch's step down with it): refuse before anything is queued.
+            raise ValueError("empty prompt: the request renders to zero tokens")
         from .request_tracker import current_request_id
 
         stats.request_id = (

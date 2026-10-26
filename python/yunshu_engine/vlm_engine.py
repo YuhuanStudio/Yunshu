@@ -3218,11 +3218,17 @@ class VLMEngine:
                 image_paths=image_paths,
                 audio=self._audio_arg(audio_paths) if audio_paths else None,
             )
-            return ids.tolist(), pkw, salt
+            return self._non_empty_ids(ids.tolist()), pkw, salt
         ids = self._tokenize_with_cache(
             messages, enable_thinking=enable_thinking, template_extra=template_extra
         )
-        return ids.tolist(), None, None
+        return self._non_empty_ids(ids.tolist()), None, None
+
+    @staticmethod
+    def _non_empty_ids(ids: list[int]) -> list[int]:
+        if not ids:
+            raise ValueError("empty prompt: the request renders to zero tokens")
+        return ids
 
     def _resolve_prompt_cache_plan(
         self,
