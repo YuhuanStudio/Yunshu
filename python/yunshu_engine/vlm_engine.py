@@ -2955,6 +2955,8 @@ class VLMEngine:
         processors = build_penalty_processors(
             repetition_penalty, frequency_penalty, presence_penalty, logit_bias
         )
+        if not suppress_tokens:  # the request's own list wins over the model's default
+            suppress_tokens = self._generation_suppress_ids() or None
         mask_kw = {
             "suppress": suppress_tokens,
             "min_tokens": min_tokens,
@@ -4688,6 +4690,31 @@ class VLMEngine:
                     ids.update(i for i in eid if isinstance(i, int))
         self._eos_ids_cache = sorted(ids)
         return self._eos_ids_cache
+
+    def _generation_suppress_ids(self) -> list[int]:
+        """``suppress_tokens`` from the checkpoint's generation_config.json (token ids the
+        model's author bans from the output, e.g. audio/image placeholder tokens): the default
+        when a request does not set its own."""
+        cached = getattr(self, "_suppress_ids_cache", None)
+        if cached is not None:
+            return cached
+        ids: list[int] = []
+        with contextlib.suppress(Exception):
+            path = Path(getattr(self, "_model_path", "")) / "generation_config.json"
+            if path.exists():
+                raw = json.loads(path.read_text()).get("suppress_tokens")
+                if isinstance(raw, list):
+                    ids = [
+                        i for i in raw if isinstance(i, int) and not isinstance(i, bool)
+                    ]
+        if ids:
+            # The mask indexes the logits row: an id outside the vocabulary is dropped.
+            with contextlib.suppress(Exception):
+                tok = self._tokenizer
+                vocab = len(getattr(tok, "_tokenizer", tok))
+                ids = [i for i in ids if 0 <= i < vocab]
+        self._suppress_ids_cache = sorted(set(ids))
+        return self._suppress_ids_cache
 
     # ── Stats ──
 
