@@ -92,11 +92,22 @@ def _find_longest_ngram_and_propose(
     for n in range(min(max_n, total - 1), min_n - 1, -1):
         suffix = token_ids[total - n :]
         start = max(0, total - n - _SCAN_WINDOW)
-        for i in range(start, total - n):
+        # list.index jumps (in C) between occurrences of the first suffix
+        # token; only those candidates pay for a slice compare. Same oldest
+        # match as the plain range scan.
+        first = suffix[0]
+        end = total - n
+        i = start
+        while i < end:
+            try:
+                i = token_ids.index(first, i, end)
+            except ValueError:
+                break
             if token_ids[i : i + n] == suffix:
                 cont_start = i + n
                 cont_end = min(cont_start + k, total)
                 return token_ids[cont_start:cont_end]
+            i += 1
 
     return []
 
