@@ -1850,9 +1850,18 @@ async def _create_message(
     _lead = True
     from yunshu_engine.message_adapter import is_token_counter_message
 
+    from yunshu_engine.message_adapter import post_tool_note_indexes
+
     messages = [m for m in messages if not is_token_counter_message(m)]
-    for msg in messages:
-        if msg.get("role") == "system" and (_lead or not _in_place):
+    # A note right after a tool result stays in place (omlx 5a0a15a7): lifting it into the
+    # system block would rewrite the prompt's front every turn.
+    _post_tool = post_tool_note_indexes(messages)
+    for _idx, msg in enumerate(messages):
+        if (
+            msg.get("role") == "system"
+            and (_lead or not _in_place)
+            and _idx not in _post_tool
+        ):
             _c = msg.get("content", "")
             # With image blocks anywhere in the request every message's content is a list
             # of parts (Claude Code's mid-conversation system reminders included).
