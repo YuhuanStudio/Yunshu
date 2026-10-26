@@ -311,8 +311,6 @@
 1	python/yunshu_engine/ssd_kv_cache.py	no-any-return	Returning Any from function declared to return "dict[str, Any]"
 1	python/yunshu_engine/streaming_optimizer.py	no-any-return	Returning Any from function declared to return "PipelineToken | None"
 1	python/yunshu_engine/streaming_optimizer.py	no-any-return	Returning Any from function declared to return "ndarray[tuple[Any, ...], dtype[Any]]"
-1	python/yunshu_engine/teacache.py	arg-type	Argument 1 to "float" has incompatible type "int | float | complex"; expected "str | Buffer | SupportsFloat | SupportsIndex"
-1	python/yunshu_engine/teacache.py	arg-type	Argument 1 to "poly1d" has incompatible type "list[float] | None"; expected "Buffer | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | complex | bytes | str | _NestedSequence[complex | bytes | str]"
 1	python/yunshu_engine/text_utils.py	attr-defined	"def _cached_get_vocab(*args: Any, **kwargs: Any) -> Any" has no attribute "_yunshu_cached"
 1	python/yunshu_engine/text_utils.py	no-any-return	Returning Any from function declared to return "bool"
 1	python/yunshu_engine/thinking_budget.py	no-any-return	Returning Any from function declared to return "int | None"

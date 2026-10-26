@@ -598,7 +598,7 @@ def project(linears, x: mx.array):
 # tensor-unit matmul (kernels/int_code_linear.py); 4-bit layers keep the
 # packed kernels above. Measured end to end on Qwen3.8-27B (M5 Max, lossless
 # MTP block 6): code/prose/json 88.9/60.2/67.1 -> 91.6/61.9/68.8 tok/s with
-# parity (docs/research/runs/2026-09-28-parity).
+# parity (2026-09-28 parity run).
 def int_mode() -> str | None:
     return "int"
 

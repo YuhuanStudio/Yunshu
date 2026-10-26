@@ -33,7 +33,6 @@ MODEL = os.environ.get("YUNSHU_BENCH_MODEL", "./models/Qwen2.5-3B-Instruct-bf16"
 # SSD tier. Per-tier hot_limit/max_entries are set programmatically below.
 os.environ.setdefault("YUNSHU_SSD_CACHE", "1")
 os.environ.setdefault("YUNSHU_SSD_CACHE_DIR", "/tmp/yunshu_ssd_4tier")
-os.environ.setdefault("YUNSHU_VLM_KV_PREFIX", "1")  # VLM text-path 4-tier
 
 QUERY = "List the first 6 even numbers, comma separated."
 

@@ -656,7 +656,7 @@ def get_max_prefill_tokens() -> int:
 
     This cap exists only as an OPT-IN operator control: a single huge prompt
     monopolizes the single-threaded MLX executor for the duration of its prefill,
-    so a multi-tenant / latency-sensitive deployment may want to bound it. Default
+    so a latency-sensitive deployment with several clients may want to bound it. Default
     is effectively unlimited (the context-window check is the real bound); set
     YUNSHU_MAX_PREFILL_TOKENS to a positive value to enforce a cap.
     """
@@ -670,8 +670,8 @@ def validate_prefill_memory(num_prompt_tokens: int) -> None:
     """Enforce the OPTIONAL operator prefill cap (YUNSHU_MAX_PREFILL_TOKENS).
 
     OFF by default — prompts up to the context window prefill fine (just slowly);
-    see get_max_prefill_tokens(). When an operator sets a cap (e.g. for multi-
-    tenant latency/fairness, so one huge prompt can't monopolize the executor),
+    see get_max_prefill_tokens(). When an operator sets a cap (e.g. for
+    latency/fairness across clients, so one huge prompt can't monopolize the executor),
     an over-cap prompt is rejected 413. Runs AFTER validate_context_window so a
     genuinely over-window prompt still gets the 400 "context window" error.
     """
@@ -1236,50 +1236,3 @@ def format_responses_incomplete(
 
 
 # ── Anthropic SSE Formatter ──
-
-
-def format_anthropic_chunk(
-    message_id: str,
-    model: str,
-    delta_text: str,
-    event_type: str = "content_block_delta",
-    input_tokens: int = 0,
-    output_tokens: int = 0,
-    stop_reason: str = "end_turn",
-) -> str:
-    """Format a single SSE chunk in Anthropic Messages format.
-
-    Supports event types:
-    - content_block_delta: text delta (delta_text carries the text)
-    - message_start: initial message with usage (input_tokens/output_tokens)
-    - message_delta: final delta with stop_reason and output_tokens
-    - ping: keepalive event (Anthropic uses this instead of SSE comments)
-    """
-    data = {
-        "type": event_type,
-        "index": 0,
-    }
-    if event_type == "content_block_delta":
-        data["delta"] = {"type": "text_delta", "text": delta_text}
-    elif event_type == "message_start":
-        data["message"] = {
-            "id": message_id,
-            "type": "message",
-            "role": "assistant",
-            "content": [],
-            "model": model,
-            "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
-        }
-    elif event_type == "message_delta":
-        # real Anthropic's message_delta always carries BOTH stop_reason and
-        # stop_sequence (null unless a custom stop sequence fired). This standalone
-        # formatter omitted stop_sequence — the live router builds message_delta inline
-        # (with stop_sequence), but keep this spec-correct so a future caller can't ship
-        # a malformed event.
-        data["delta"] = {"stop_reason": stop_reason, "stop_sequence": None}
-        data["usage"] = {"output_tokens": output_tokens}
-    elif event_type == "ping":
-        # Anthropic keepalive event — used instead of SSE comments
-        data = {"type": "ping"}
-
-    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"

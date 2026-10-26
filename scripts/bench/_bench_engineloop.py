@@ -12,8 +12,6 @@ import time
 
 logging.basicConfig(level=logging.ERROR)
 os.environ.setdefault("YUNSHU_ENGINE_LOOP", "1")
-os.environ.setdefault("YUNSHU_KV_OFFLOAD", "1")
-os.environ.setdefault("YUNSHU_KV_OFFLOAD_THRESHOLD", "0.02")
 MODEL = os.environ["YBENCH_MODEL"]
 QUERY = "List the first 6 even numbers, comma separated."
 

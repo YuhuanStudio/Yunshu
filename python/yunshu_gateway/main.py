@@ -1080,10 +1080,9 @@ def create_app() -> FastAPI:
     app.state.request_coalescer = get_request_coalescer()
     app.state.streaming_buffer = get_streaming_buffer()
 
-    # Auth: single optional bearer-token gate (YUNSHU_AUTH_TOKEN). The
-    # multi-tenant RBACManager / TenantManager initialization has been removed
-    # — this engine serves a single consumer. AuthMiddleware now only
-    # validates the static token; the per-tenant/RBAC branches are gone.
+    # Auth: AuthMiddleware validates the static bearer token (YUNSHU_AUTH_TOKEN)
+    # or a managed API key; the caller is the owner or ``key:<id>`` (see
+    # middleware/auth.py). There is no tenant or RBAC layer.
 
     # Response cache: opt-in via YUNSHU_RESPONSE_CACHE=1
     if settings.get_bool("YUNSHU_RESPONSE_CACHE"):

@@ -357,7 +357,3 @@ def mime_for(rel: str) -> str:
     import mimetypes
 
     return mimetypes.guess_type(rel)[0] or "application/octet-stream"
-
-
-def is_image(rel: str) -> bool:
-    return rel.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))

@@ -875,21 +875,6 @@
     },
     {
       "kind": "inspired",
-      "path": "python/yunshu_engine/teacache.py",
-      "repo": "https://github.com/vllm-project/vllm-omni",
-      "clone": "reference/vllm-omni",
-      "upstream_paths": [
-        "vllm_omni/diffusion/cache/teacache"
-      ],
-      "commit": "1b97ff11",
-      "license": "Apache-2.0",
-      "why": "TeaCache config and hook",
-      "reviewed_commit": "ee81f33001922f8d91dd09da0a57ee1531a8df82",
-      "reviewed_date": "2026-10-09",
-      "review_reason": "Reviewed upstream subjects: [Bugfix] Fix missing SenseNova-U1 TeaCache position embeddings (#8260); [Bugfix] Calibrate Z-Image TeaCache coefficients and add ZImageAdapter (#8408). Candidate logged for the backlog: d8fa463e hybrid Mamba prefix-cache boundary fix, compare with the local exact hybrid checkpoint boundaries. Other commits are server-scale frontend work."
-    },
-    {
-      "kind": "inspired",
       "path": "python/yunshu_kv/block.py",
       "repo": "https://github.com/vllm-project/vllm",
       "clone": "reference/vllm",

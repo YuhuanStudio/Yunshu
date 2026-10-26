@@ -4514,13 +4514,6 @@ compression = [
     { name = "lz4" },
     { name = "zstandard" },
 ]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-timeout" },
-    { name = "ruff" },
-]
 embeddings = [
     { name = "mlx-embeddings" },
 ]
@@ -4576,7 +4569,6 @@ requires-dist = [
     { name = "mlx-lm", specifier = ">=0.32.2" },
     { name = "mlx-vlm", marker = "extra == 'omni'", specifier = ">=0.7.6" },
     { name = "mlx-vlm", marker = "extra == 'vision'", specifier = ">=0.7.6" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.15.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "openai", specifier = ">=2.33.0" },
     { name = "packaging", specifier = ">=24.0" },
@@ -4590,13 +4582,9 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.11.0" },
     { name = "pypdf", specifier = ">=6.0.0" },
     { name = "pypdfium2", specifier = ">=5.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24.0" },
-    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.3.0" },
     { name = "python-multipart", specifier = ">=0.0.27" },
     { name = "regex", specifier = ">=2024.11.6" },
     { name = "rich", specifier = ">=13.0.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.0" },
     { name = "safetensors", specifier = ">=0.5.0" },
     { name = "scipy", specifier = ">=1.15.0" },
     { name = "soundfile", marker = "extra == 'audio'", specifier = ">=0.12" },
@@ -4619,7 +4607,7 @@ requires-dist = [
     { name = "yunshu", extras = ["vision"], marker = "extra == 'all'" },
     { name = "zstandard", marker = "extra == 'compression'", specifier = ">=0.22.0" },
 ]
-provides-extras = ["webrtc", "web-render", "vision", "audio", "omni", "embeddings", "generation", "compression", "all", "dev", "bench"]
+provides-extras = ["webrtc", "web-render", "vision", "audio", "omni", "embeddings", "generation", "compression", "all", "bench"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -6773,7 +6773,6 @@
   "python/yunshu_gateway/server_tools/anthropic_loop.py": "loop driver for the Messages server tools (rows server_*; see the server-tool-loops duplicate)",
   "python/yunshu_gateway/server_tools/responses_loop.py": "loop driver for the Responses server tools (rows server_*)",
   "python/yunshu_gateway/server_tools/metasearch.py": "search provider backend behind web_search",
-  "python/yunshu_gateway/server_tools/netguard.py": "private-address guard shared by web_fetch and the connectors",
   "python/yunshu_gateway/server_tools/research": "deep-research helper behind web_search",
   "python/yunshu_gateway/server_tools/__init__.py": "package status() for /v1/models"
  },

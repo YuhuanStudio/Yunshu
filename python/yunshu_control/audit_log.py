@@ -15,11 +15,10 @@ Log format::
 
     audit: op=<operation> actor=<who> resource=<what> result=<success|failure> [key=value ...]
 
-Single-consumer note: this module is self-contained — it has no dependency on
-the (removed) RBAC / multi-tenant stack. ``resolve_actor`` returns a sensible
-single-owner identity for the local single-consumer deployment (constant
-``"owner"`` when no per-request identity is attached, mirroring the
-``current_actor`` value stamped by the simplified static-token auth middleware).
+Note: this module is self-contained. ``resolve_actor`` returns the caller's
+identity as stamped by the auth middleware (``owner`` for the static token or
+auth-disabled mode, ``key:<id>`` for a managed API key) and the default
+actor (``"owner"``, or ``YUNSHU_ACTOR_IDENTITY``) when no per-request identity is attached.
 """
 
 import logging
@@ -79,7 +78,7 @@ def log_operation(
     ----------
     operation:
         Short verb describing the action, e.g. ``model_load``, ``lora_unload``,
-        ``rbac_key_create``, ``batch_create``.
+        ``batch_create``.
     resource:
         Target of the operation, e.g. model name, adapter ID, key name.
     result:

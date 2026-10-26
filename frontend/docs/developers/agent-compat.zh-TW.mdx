@@ -18,7 +18,7 @@ description: Claude Code、Codex CLI 與 opencode 實際會呼叫什麼、Yunshu
 | `e2e_agents.py`、`e2e_sdk.py`、`capture_proxy.py`、`fake_searxng.py`、`tiny_mcp.py` | 用真實 agent 與官方 SDK 搭配真實模型做端到端執行，附帶假的 SearXNG（有可檢查事實的固定語料）、一個小型 MCP 伺服器與完整擷取代理 |
 | `stream_check.py`、`synthetic_requests.py` | 串流驗證，以及重播階段使用的 SDK 形狀合成請求 |
 
-原始普查資料為私有（`docs/research/runs/<date>-agent-census/`，已列入 gitignore）。
+原始普查資料為私有（本機依日期命名的 `agent-census` 目錄，已被忽略）。
 
 ## 各 agent 呼叫什麼
 
@@ -147,7 +147,7 @@ description: Claude Code、Codex CLI 與 opencode 實際會呼叫什麼、Yunshu
 
 ## 如何驗證
 
-文件會過時，所以上述主張用一個指令、一個結論重新驗證（只有在有正面證據時才以 0 結束，並寫入 `docs/research/runs/<date>-agentcompat-<commit>/verdict.json`）：
+文件會過時，所以上述主張用一個指令、一個結論重新驗證（只有在有正面證據時才以 0 結束，並將 `verdict.json` 寫入本機依日期命名、已被忽略的 `agentcompat-<commit>` 目錄）：
 
 ```bash
 scripts/dev/agentcompat                      # census,m3

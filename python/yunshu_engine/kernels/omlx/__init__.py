@@ -20,7 +20,7 @@ forward MTP runs to check drafted tokens):
   never armed as a fast path; its ``row_exact`` mode (``row_exact_qmv``) is
   armed only for serial target-row verify (``constrained_spec``).
 
-Measured on Qwen3.8-27B (docs/research/runs/2026-09-28-matrix/): upstream MTP
+Measured on Qwen3.8-27B (2026-09-28 engine matrix): upstream MTP
 ~57 tok/s; exact kernels ~65; all kernels ~78-84 on code.
 """
 

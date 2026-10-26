@@ -8,7 +8,8 @@ import threading
 import httpx
 import pytest
 
-from yunshu_gateway.server_tools import mcp_connector, netguard, search, webfetch
+from yunshu_engine import netguard
+from yunshu_gateway.server_tools import mcp_connector, search, webfetch
 from yunshu_gateway.server_tools.mcp_connector import McpConnection, McpError
 from yunshu_gateway.server_tools.runtime import ServerToolDef, ServerToolRuntime
 

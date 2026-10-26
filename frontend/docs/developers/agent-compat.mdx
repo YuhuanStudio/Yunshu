@@ -18,7 +18,7 @@ A census harness runs the real CLIs against a recording mock server, so the list
 | `e2e_agents.py`, `e2e_sdk.py`, `capture_proxy.py`, `fake_searxng.py`, `tiny_mcp.py` | End-to-end runs of the real agents and official SDKs against a real model, with a fake SearXNG (fixed corpus with a checkable fact), a tiny MCP server and a full-capture proxy |
 | `stream_check.py`, `synthetic_requests.py` | Stream validation and SDK-shaped synthetic requests used by the replay stages |
 
-Raw census data is private (`docs/research/runs/<date>-agent-census/`, gitignored).
+Raw census data is private (a local, ignored per-date `agent-census` directory).
 
 ## What each agent calls
 
@@ -147,7 +147,7 @@ Search queries leave the machine. Model-generated query text can contain convers
 
 ## How to verify
 
-Documents drift, so the claims above are re-earned by one command with one verdict (exit 0 only on positive evidence, written to `docs/research/runs/<date>-agentcompat-<commit>/verdict.json`):
+Documents drift, so the claims above are re-earned by one command with one verdict (exit 0 only on positive evidence, written as `verdict.json` to a local, ignored per-date `agentcompat-<commit>` directory):
 
 ```bash
 scripts/dev/agentcompat                      # census,m3

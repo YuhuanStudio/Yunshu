@@ -3,7 +3,6 @@
 from yunshu_control.token_counter import (
     count_message_tokens,
     count_tokens,
-    estimate_cost,
 )
 
 
@@ -121,41 +120,3 @@ class TestCountMessageToolCalls:
     def test_content_list_of_strings(self):
         messages = [{"role": "user", "content": ["hello", "world"]}]
         assert count_message_tokens(messages) > 0
-
-
-class TestEstimateCost:
-    def test_zero_cost(self):
-        result = estimate_cost(0, 0)
-        assert result["total_cost_usd"] == 0.0
-
-    def test_with_tokens(self):
-        result = estimate_cost(100, 50)
-        assert result["prompt_tokens"] == 100
-        assert result["completion_tokens"] == 50
-        assert "total_cost_usd" in result
-
-    def test_exact_match_pricing(self):
-        # exact key match (gpt-4o-mini)
-        result = estimate_cost(1_000_000, 1_000_000, "gpt-4o-mini")
-        assert result["prompt_cost_usd"] == 0.15
-        assert result["completion_cost_usd"] == 0.60
-        assert result["total_cost_usd"] == 0.75
-
-    def test_substring_match_pricing(self):
-        # "qwen" is a substring of the model id -> open-source pricing
-        result = estimate_cost(1_000_000, 1_000_000, "Qwen2.5-0.5B-Instruct-4bit")
-        assert result["prompt_cost_usd"] == 0.05
-        assert result["completion_cost_usd"] == 0.10
-
-    def test_anthropic_substring(self):
-        result = estimate_cost(1_000_000, 0, "claude-opus-4-1")
-        assert result["prompt_cost_usd"] == 15.00
-
-    def test_unknown_model_falls_back_to_default(self):
-        result = estimate_cost(1_000_000, 1_000_000, "totally-unknown-model")
-        assert result["prompt_cost_usd"] == 0.05
-        assert result["completion_cost_usd"] == 0.10
-
-    def test_empty_model_id_uses_default(self):
-        result = estimate_cost(1_000_000, 0, "")
-        assert result["prompt_cost_usd"] == 0.05
