@@ -87,3 +87,45 @@ def top_logprobs_rows(
         out_i.append([ids[r][j] for j in order])
         out_v.append([vs[r][j] for j in order])
     return out_i, out_v
+
+
+def _orderable_u32(x: mx.array) -> mx.array:
+    """float32 -> uint32 whose unsigned order is the sort order ``mx.argsort`` gives:
+    -inf < finite < +inf < NaN (every NaN equal), -0.0 == +0.0."""
+    bits = (x + 0.0).view(mx.uint32)  # +0.0 folds -0.0 into +0.0
+    key = mx.where((bits >> 31) == 1, ~bits, bits | mx.array(0x80000000, mx.uint32))
+    return mx.where(mx.isnan(x), mx.array(0xFFFFFFFF, mx.uint32), key)
+
+
+def top_logprobs_device(log_probs: mx.array, k: int) -> tuple[mx.array, mx.array]:
+    """Top-k ``(ids int32 [N, k], values [N, k])`` of ``[N, V]`` ``log_probs``, lazily.
+
+    Same result, bit for bit, as the mlx-vlm ``GenerationBatch`` code it replaces
+    (``argsort`` ascending, last k reversed: descending value, equal values by DESCENDING
+    token id; NaN ranks above everything, -inf tails and ties included) but without the
+    full-vocab sort and without a host sync. Each element becomes one uint64 key
+    ``order(value) << 32 | token_id``; the keys are unique, so a single ``argpartition``
+    selects exactly the right k and a k-wide sort orders them -- no ambiguity to detect.
+    Rows are independent, so a batched row equals the same row alone. Nothing is
+    evaluated here: the caller keeps the double-buffered decode pipelining.
+    """
+    n, vocab = log_probs.shape
+    k = max(1, min(int(k), vocab))
+    key = (
+        _orderable_u32(log_probs.astype(mx.float32)).astype(mx.uint64) << 32
+    ) | mx.arange(vocab, dtype=mx.uint64)[None]
+    inv = ~key  # smallest inverted key == largest key
+    part = mx.argpartition(inv, k - 1, axis=-1)[:, :k]
+    order = mx.argsort(mx.take_along_axis(inv, part, axis=-1), axis=-1)
+    idx = mx.take_along_axis(part, order, axis=-1).astype(mx.int32)
+    return idx, mx.take_along_axis(log_probs, idx, axis=-1)
+
+
+def device_topk_supported() -> bool:
+    """The uint64 argpartition/shift path works on the current MLX device."""
+    try:
+        i, v = top_logprobs_device(mx.array([[0.0, 1.0, 1.0, float("nan")]]), 2)
+        mx.eval(i, v)
+        return i.tolist() == [[3, 2]]
+    except Exception:  # noqa: BLE001
+        return False

@@ -36,7 +36,7 @@ from typing import Any
 import mlx.core as mx
 import numpy as np
 
-from . import keyed_sampling, settings
+from . import keyed_sampling, settings, text_logprobs
 from .constraint_eos import GrammarDeadEndError
 from .idle_memory import IdleMemory
 from .kernels.preempt import PreemptedError as _Preempted
@@ -2509,20 +2509,91 @@ def _install_row_context() -> None:
         return
     step = ar.GenerationBatch._step
     generate = ar.PromptProcessingBatch.generate
+    device_topk = text_logprobs.device_topk_supported()
 
     def _step(self):
         global _STEP_UIDS
         _STEP_UIDS = list(self.uids)
-        return step(self)
+        k = self.top_logprobs_k
+        # Only a batch that reports top_logprobs pays; the fused greedy step (no
+        # logprobs at all) never reaches the sort either.
+        if (
+            k <= 0
+            or not device_topk
+            or (self.greedy_sampling and not self.compute_logprobs)
+        ):
+            return step(self)
+        # Upstream sorts the whole vocabulary of every row to fill _next_top_*. With k = 0
+        # it returns the previous buffers' lists and clears them; the new buffers are then
+        # filled from the very logprobs the sampler saw, lazily, so decode stays pipelined.
+        sampler, tap = self.sampler, _LogprobTap(self.sampler)
+        self.sampler, self.top_logprobs_k = tap, 0
+        try:
+            out = step(self)
+        finally:
+            self.sampler, self.top_logprobs_k = sampler, k
+        if tap.logprobs is not None:
+            top_idx, top_lp = text_logprobs.top_logprobs_device(tap.logprobs, k)
+            self._next_top_idx, self._next_top_lp = top_idx, top_lp
+            mx.async_eval(top_idx, top_lp)
+        return out
 
     def _generate(self, *args, **kwargs):
         global _STEP_UIDS
         _STEP_UIDS = list(self.uids)
-        return generate(self, *args, **kwargs)
+        k = kwargs.get("top_logprobs_k", args[3] if len(args) > 3 else 0)
+        if k <= 0 or not device_topk:
+            return generate(self, *args, **kwargs)
+        # Same for the prefill's first token: the prime buffers come from the logprobs the
+        # sampler saw instead of upstream's full-vocab argsort.
+        args = list(args)
+        if "sampler" in kwargs:
+            kwargs["sampler"] = tap = _LogprobTap(kwargs["sampler"])
+        else:
+            args[0] = tap = _LogprobTap(args[0])
+        if "top_logprobs_k" in kwargs:
+            kwargs["top_logprobs_k"] = 0
+        else:
+            args[3] = 0
+        batch = generate(self, *args, **kwargs)
+        if isinstance(batch, ar.GenerationBatch):
+            batch.sampler = tap._inner
+        if tap.logprobs is not None and isinstance(batch, ar.GenerationBatch):
+            batch.top_logprobs_k = k
+            batch._next_top_idx, batch._next_top_lp = text_logprobs.top_logprobs_device(
+                tap.logprobs, k
+            )
+            mx.async_eval(batch._next_top_idx, batch._next_top_lp)
+        return batch
 
     ar.GenerationBatch._step = _step
     ar.PromptProcessingBatch.generate = _generate
     ar._yunshu_row_context = True
+
+
+class _LogprobTap:
+    """Hands every call through to the real sampler and keeps the ``[B, V]`` logprobs it
+    saw (the array upstream sorts for top_logprobs), so the top-k can be taken from it."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.logprobs = None
+
+    def __call__(self, logprobs):
+        self.logprobs = logprobs
+        return self._inner(logprobs)
+
+    @property
+    def sample_target(self):
+        target = getattr(self._inner, "sample_target", None)
+        if target is None:
+            raise AttributeError("sample_target")
+
+        def sample_target(logprobs, *args, **kwargs):
+            self.logprobs = logprobs
+            return target(logprobs, *args, **kwargs)
+
+        return sample_target
 
 
 @dataclass
