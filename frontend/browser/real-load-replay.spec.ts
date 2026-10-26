@@ -86,6 +86,9 @@ for (const [name, project] of [
     test(`${name} ${route} (${kind}): real load does not move the page`, async ({
       browser,
     }) => {
+      // The scripted run is 4.5 s settle + SECONDS of sampling (about 25.4 s alone): the default 30 s
+      // budget leaves no room for CPU contention, which ended a run mid-sample ("Test ended").
+      test.setTimeout(90_000);
       const ctx = await browser.newContext(project);
       const page = await ctx.newPage();
       await replay(page, kind);
