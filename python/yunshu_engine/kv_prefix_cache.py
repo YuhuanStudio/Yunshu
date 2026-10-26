@@ -57,6 +57,26 @@ def _canonical_block_hash(
     return compute_block_hash(parent_hash, token_ids)
 
 
+def recurrent_state_finite(cache) -> bool:
+    """False when any floating recurrent-state array (mlx-lm ``ArraysCache``) of ``cache`` holds
+    inf or nan. One fused reduction and one host sync per store (never per token); dense KV layers
+    are not inspected. A state that overflowed in fp16 would poison every request that restores it."""
+    try:
+        from mlx_lm.models.cache import ArraysCache
+    except Exception:  # no mlx-lm: nothing recurrent to inspect
+        return True
+    checks = [
+        mx.isfinite(a).all()
+        for c in cache or ()
+        if isinstance(c, ArraysCache)
+        for a in (getattr(c, "cache", None) or ())
+        if a is not None and mx.issubdtype(a.dtype, mx.floating)
+    ]
+    if not checks:
+        return True
+    return bool(mx.all(mx.stack(checks)).item())
+
+
 def get_prefix_length(prompt: mx.array, cached_prompt: mx.array) -> int:
     """Find the length of the common prefix between two token arrays.
 
@@ -443,6 +463,14 @@ class KVPrefixCache:
         state leakage).
         """
         if len(prompt_tokens) < self._min_prefix:
+            return
+        if not recurrent_state_finite(cache):
+            # Every route stores through here (fast, stream, n-gram, speculative, loop).
+            logger.warning(
+                "KV prefix cache: not storing a %d-token entry with a non-finite "
+                "recurrent state",
+                len(prompt_tokens),
+            )
             return
 
         # Compute trim amount: how many tokens cache is ahead of prompt

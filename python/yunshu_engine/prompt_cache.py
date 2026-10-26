@@ -190,6 +190,11 @@ class PromptCacheManager:
         Returns:
             True if stored, False if rejected (e.g., too large).
         """
+        from .kv_prefix_cache import recurrent_state_finite
+
+        if isinstance(kv_state, (list, tuple)) and not recurrent_state_finite(kv_state):
+            return False  # a poisoned recurrent state must never be restored
+
         # Estimate size if not provided
         if size_bytes == 0:
             size_bytes = self._estimate_size(kv_state)
