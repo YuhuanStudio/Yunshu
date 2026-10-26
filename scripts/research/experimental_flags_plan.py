@@ -45,6 +45,16 @@ EVIDENCE = {
         ],
         "Old invariant receipts have parity and speed advantage, but current-source long-context paired decision is incomplete. Sweep now emits full-token digests and a final complete record; new job repeats 1K/8K/32K/131K code+prose with AR references.",
     ),
+    "YUNSHU_GPU_SAMPLER": (
+        "gpu_sampler",
+        "pending",
+        [
+            "scripts/research/ab_gpu_sampler.py",
+            "tests/unit/test_gpu_sampler.py (distribution equivalence on a toy vocabulary)",
+            "scripts/realmodel/smoke_gpu_sampler.py (one-prompt smoke, not a decision)",
+        ],
+        "No real-checkpoint receipt: the per-token host sync of the NumPy sampler was measured on CPU only (3.7-21.7 ms per token at 152K-248K vocabulary, host side). Needs the Mac A/B on a text-only checkpoint (decode tok/s, first-token TV against the numpy-vs-numpy noise floor, seeded reruns) before the default can change.",
+    ),
 }
 
 
@@ -69,6 +79,15 @@ def plan():
             "--require-smoke",
             "/Volumes/P5Plus/yunshu-build/codex/audit-flags/smoke.json",
         ]
+        if area == "gpu_sampler":
+            job = [
+                job[0],
+                "scripts/research/ab_gpu_sampler.py",
+                "--checkpoint",
+                "<text-only mlx-lm checkpoint>",
+                "--out",
+                "/Volumes/P5Plus/yunshu-build/codex/audit-flags/gpu_sampler.json",
+            ]
         if area == "k02":
             job = ["sh", "/Volumes/P5Plus/yunshu-build/codex/k02_matrix.sh"]
         rows.append(
