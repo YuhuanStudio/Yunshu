@@ -51,7 +51,7 @@ def test_apc_snapshot_populates_metrics(monkeypatch):
 
 
 def test_busy_seconds_reach_metrics(monkeypatch):
-    snap = {"slices": {"busy_seconds": 12.5}, "round_driver": {"busy_seconds": 9.0}}
+    snap = {"slices": {"busy_seconds": 12.5}}
     engine = SimpleNamespace(busy_snapshot=lambda: snap)
     monkeypatch.setattr(
         "yunshu_gateway.engine.get_engine", lambda: engine, raising=False
@@ -66,7 +66,7 @@ def test_busy_seconds_reach_metrics(monkeypatch):
         x for x in text.splitlines() if x.startswith("yunshu_gpu_busy_seconds_total{")
     )
     assert float(line.rsplit(" ", 1)[1]) == 12.5
-    assert "yunshu_round_driver_busy_seconds_total" in text
+    assert "round_driver" not in text
 
 
 def test_warm_and_storage_tiers_reach_metrics(monkeypatch):

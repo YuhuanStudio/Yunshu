@@ -111,16 +111,8 @@ if _yk:
     # Vendored copy under python/yunshu_engine/kernels/omlx.
     from yunshu_engine.kernels import omlx as yk  # noqa: E402
 
-    # exact | row_exact (oMLX d403e460: verify rows == stock serial decode)
-    print(
-        json.dumps(
-            {
-                "yunshu_kernels": yk.apply(row_exact=_yk == "row_exact"),
-                "mode": _yk,
-            }
-        ),
-        flush=True,
-    )
+    # "exact": the vendored verify kernels (row-exact mode is only armed by serial verify)
+    print(json.dumps({"yunshu_kernels": yk.apply(), "mode": _yk}), flush=True)
     use_omlx, omlx_set = True, {f"yunshu:{_yk}"}
 
 

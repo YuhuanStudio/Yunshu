@@ -103,3 +103,14 @@ def test_zero_max_tokens_reports_the_prompt_and_no_output(monkeypatch):
         assert r.usage.total_tokens == r.usage.prompt_tokens
         assert r.choices[0].finish_reason == "length"
     assert not eng.calls, "max_tokens=0 must not generate"
+
+
+def test_completions_singleton_prompt_array_equals_the_string(monkeypatch):
+    # mlxcel 212f31e4: ["hello"] is handled exactly like "hello", streaming or not
+    cl, _ = _serve(monkeypatch, pieces=["a", "b"], prompt_tokens=4)
+    one = cl.oa.completions.create(model="m", prompt="hello", max_tokens=4)
+    arr = cl.oa.completions.create(model="m", prompt=["hello"], max_tokens=4)
+    assert [c.text for c in arr.choices] == [c.text for c in one.choices] == ["ab"]
+    assert arr.usage.prompt_tokens == one.usage.prompt_tokens
+    s = cl.oa.completions.create(model="m", prompt=["hello"], max_tokens=4, stream=True)
+    assert "".join(c.choices[0].text for c in s if c.choices) == "ab"

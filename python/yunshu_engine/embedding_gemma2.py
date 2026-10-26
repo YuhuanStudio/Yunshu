@@ -450,6 +450,9 @@ class EmbeddingGemma2:
         if self._processor is None:
             from transformers import AutoProcessor
 
+            from .image_processor_fixes import install as install_image_fixes
+
+            install_image_fixes()  # PIL images read channels-last (mlx-vlm 1e64ba4)
             self._processor = AutoProcessor.from_pretrained(self.dir)
         return self._processor
 

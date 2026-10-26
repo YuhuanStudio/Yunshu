@@ -26,7 +26,7 @@ description: Yunshu 如何以三個層級（logit 分歧、貪婪分歧、成對
 
 ### 層級 2：貪婪分歧
 
-50 個固定的對話提示詞（英文、程式碼、數學、中文與長文摘要），貪婪解碼，最多 256 個 token（`greedy_div.py` 中的 `N_PROMPTS, MAX_TOKENS = 50, 256`）。每一對執行以整段續寫是否完全相同，以及第一個不同位置評分。`engine` 設定會讓每個提示詞各以關閉與開啟推測（`allow_draft`）執行；`YUNSHU_ROUND_DRIVER=1` 則執行 round driver。
+50 個固定的對話提示詞（英文、程式碼、數學、中文與長文摘要），貪婪解碼，最多 256 個 token（`greedy_div.py` 中的 `N_PROMPTS, MAX_TOKENS = 50, 256`）。每一對執行以整段續寫是否完全相同，以及第一個不同位置評分。`engine` 設定會讓每個提示詞各以關閉與開啟推測（`allow_draft`）執行。
 
 ### 層級 3：成對下游評測
 
@@ -65,7 +65,6 @@ description: Yunshu 如何以三個層級（logit 分歧、貪婪分歧、成對
 
 | 設定或選項 | 預設 | 效果 |
 |---|---|---|
-| `YUNSHU_ROUND_DRIVER` | off | 設為 `1` 時，層級 2 的 `engine` 執行也會跑 round driver |
 | `YUNSHU_KV_PRECISION` | `bf16` | `decb8` 以 int8 KV 編碼執行；這是有損選項，以其自身差距判斷 |
 | `paired_eval.py report --bench B --ref ref --cand default` | n/a | 由可續跑的各 arm 檔案重新計算某個基準的結果列 |
 | `kld.py run --config stock\|serve --part ...` | n/a | 選擇要執行哪個 arm 與哪些部分 |

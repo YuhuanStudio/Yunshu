@@ -8,7 +8,6 @@ import pytest
 from yunshu_engine.model_discovery import (
     detect_model_type,
     discover_models,
-    discover_models_from_dirs,
     estimate_model_size,
 )
 
@@ -182,30 +181,3 @@ class TestDiscoverModels:
     def test_nonexistent_dir_raises(self):
         with pytest.raises(ValueError):
             discover_models(Path("/nonexistent/path"))
-
-
-class TestDiscoverModelsFromDirs:
-    def test_multiple_dirs(self, tmp_path):
-        dir1 = tmp_path / "dir1"
-        dir2 = tmp_path / "dir2"
-        dir1.mkdir()
-        dir2.mkdir()
-        _make_model_dir(dir1, "model-a", {"model_type": "qwen2"})
-        _make_model_dir(dir2, "model-b", {"model_type": "llama"})
-        models = discover_models_from_dirs([dir1, dir2])
-        assert "model-a" in models
-        assert "model-b" in models
-
-    def test_first_wins_on_conflict(self, tmp_path):
-        dir1 = tmp_path / "dir1"
-        dir2 = tmp_path / "dir2"
-        dir1.mkdir()
-        dir2.mkdir()
-        _make_model_dir(dir1, "model", {"model_type": "qwen2"})
-        _make_model_dir(dir2, "model", {"model_type": "llama"})
-        models = discover_models_from_dirs([dir1, dir2])
-        assert models["model"].config_model_type == "qwen2"
-
-    def test_nonexistent_dirs_skipped(self, tmp_path):
-        models = discover_models_from_dirs([tmp_path / "nope"])
-        assert models == {}

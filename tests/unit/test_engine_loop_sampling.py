@@ -45,10 +45,9 @@ def test_scheduler_freq_pres_penalty_is_generated_only():
     # presence/frequency are no longer handed to mlx-lm's window-based factory
     assert "presence_penalty=sp.presence_penalty" not in src
     assert "frequency_penalty=sp.frequency_penalty" not in src
-    # the generated-only closure is present and keyed off the prompt length
-    assert "_freq_pres_penalty" in src
-    assert "n_prompt=_fp_nprompt" in src
-    assert "tokens[n_prompt:]" in src
+    # the shared generated-only processor, keyed off the prompt length
+    assert "FrequencyPresencePenalty" in src
+    assert "n_prompt=len(prompt_token_ids or [])" in src
 
 
 def test_scheduler_freq_penalty_ignores_prompt_tokens_behaviorally():

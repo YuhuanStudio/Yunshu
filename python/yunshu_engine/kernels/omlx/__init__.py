@@ -17,10 +17,10 @@ forward MTP runs to check drafted tokens):
   call per row. Bit-exact.
 - ``verify_qmm`` (+ ``verify_linear`` routing): one-weight-pass quantized
   matmuls for 4-8 verify rows. Not bit-exact (tail-ULP differences), so it is
-  never armed as a fast path; its ``row_exact`` mode (``row_exact_qmv``) is the
-  experimental ``YUNSHU_MTP_ROW_EXACT`` alternative to batch-invariant decode.
+  never armed as a fast path; its ``row_exact`` mode (``row_exact_qmv``) is
+  armed only for serial target-row verify (``constrained_spec``).
 
-Measured on Qwen3.8-27B (docs/research/runs/2026-09-28-matrix/): upstream MTP
+Measured on Qwen3.8-27B (2026-09-28 engine matrix): upstream MTP
 ~57 tok/s; exact kernels ~65; all kernels ~78-84 on code.
 """
 
@@ -89,16 +89,13 @@ def pack_projections(model) -> int:
     return int(qwen35_packed_linear.pack_model(model) or 0)
 
 
-def apply(row_exact: bool = False) -> dict:
+def apply() -> dict:
     """Install the verify kernels once.
 
-    ``row_exact`` arms upstream's row-exact mode: every multi-row verify
-    projection runs one-row
-    decode arithmetic per row (``row_exact_qmv``) and verify attention keeps
-    each row on its own one-row SDPA plan, so verify rows equal serial decode
-    with stock kernels (no change to the decode path).
+    Row-exact verify (every multi-row projection on one-row decode arithmetic,
+    each row on its own one-row SDPA plan) is not a setting: serial target-row
+    verify turns ``_STATE["row_exact"]`` on around a round.
     """
-    _STATE["row_exact"] = bool(row_exact)
     if _STATE["applied"] is not None:
         return _STATE["applied"]
     import mlx_vlm.speculative.mtp as mtp

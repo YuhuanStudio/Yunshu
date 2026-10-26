@@ -299,14 +299,117 @@ def is_token_counter_message(message: dict) -> bool:
     return isinstance(content, str) and _TOKEN_COUNTER.fullmatch(content) is not None
 
 
+_TOKEN_COUNTER_SUFFIX = re.compile(
+    r"\n{0,2}<total_tokens>\d+ tokens left</total_tokens>"
+)
+
+
+def strip_token_counter(message: dict) -> dict | None:
+    """The instruction message without Claude Code's ``<total_tokens>`` budget markers (omlx 38f420d9).
+
+    Besides the lone marker message, Claude Code appends the marker (with a freshly decremented number) to
+    the end of the system text, or as an extra system block, so a prompt that carries it diverges at that
+    point on every request and nothing after it is reused. The marker is informational. ``None`` when the
+    message holds nothing else; the same message object when it holds no marker.
+    """
+    content = message.get("content")
+    if isinstance(content, str):
+        if "<total_tokens>" not in content:
+            return message
+        stripped = _TOKEN_COUNTER_SUFFIX.sub("", content)
+        return dict(message, content=stripped) if stripped.strip() else None
+    if isinstance(content, list):
+        kept = []
+        for part in content:
+            block = part.get("text") if isinstance(part, dict) else None
+            if isinstance(block, str) and "<total_tokens>" in block:
+                block = _TOKEN_COUNTER_SUFFIX.sub("", block)
+                if not block.strip():
+                    continue
+                part = dict(part, text=block)
+            kept.append(part)
+        if len(kept) == len(content) and all(
+            a is b for a, b in zip(kept, content, strict=True)
+        ):
+            return message
+        return dict(message, content=kept) if kept else None
+    return message
+
+
+def _is_instruction(message: dict) -> bool:
+    return message.get("role") in ("system", "developer")
+
+
+def _note_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            p.get("text", "") if isinstance(p, dict) else str(p) for p in content
+        )
+    return "" if content is None else str(content)
+
+
+def post_tool_note_indexes(messages: list[dict]) -> set[int]:
+    """Indexes of instruction messages that sit in a run right after a tool result and
+    before the next assistant turn (or the end). Those stay in place as user notes
+    (omlx 5a0a15a7); every other instruction message is hoisted. Token counters never
+    count (they are dropped)."""
+    out: set[int] = set()
+    prev_role: str | None = None
+    i, n = 0, len(messages)
+    while i < n:
+        if not _is_instruction(messages[i]):
+            prev_role = messages[i].get("role")
+            i += 1
+            continue
+        j = i
+        while j < n and _is_instruction(messages[j]):
+            j += 1
+        if prev_role == "tool" and (j >= n or messages[j].get("role") == "assistant"):
+            out.update(
+                k for k in range(i, j) if not is_token_counter_message(messages[k])
+            )
+        i = j
+    return out
+
+
 def _hoist_system(messages: list[dict]) -> list[dict]:
-    """Canonical instruction block for templates that only accept it first."""
-    systems = [
-        dict(m, role="system")
-        for m in messages
-        if m.get("role") in ("system", "developer") and not is_token_counter_message(m)
-    ]
-    turns = [dict(m) for m in messages if m.get("role") not in ("system", "developer")]
+    """Canonical instruction block for templates that only accept it first.
+
+    Exception (omlx 5a0a15a7): a system/developer note that arrives right after a tool
+    result and before the next assistant turn (or at the end) stays in place as its own
+    ``[System note]`` user turn. Claude Code sends hook/reminder notes there every turn;
+    hoisting them into the leading block rewrites the front of the prompt and re-prefills
+    the whole conversation each time. A note between a tool call and its results, or
+    between two tool results, is still hoisted (a user turn there breaks tool pairing).
+    """
+    notes = post_tool_note_indexes(messages)
+    systems: list[dict] = []
+    turns: list[dict] = []
+    pending: list[str] = []
+
+    def flush() -> None:
+        if pending:
+            note = "[System note]\n" + "\n\n".join(pending) + "\n[/System note]"
+            turns.append({"role": "user", "content": note})
+            pending.clear()
+
+    for idx, m in enumerate(messages):
+        if not _is_instruction(m):
+            flush()
+            turns.append(dict(m))
+        else:
+            kept = strip_token_counter(m)
+            if kept is None or is_token_counter_message(kept):
+                continue
+            if idx in notes:
+                text = _note_text(kept.get("content"))
+                if text:
+                    pending.append(text)
+            else:
+                systems.append(dict(kept, role="system"))
+    flush()
     return _merge_leading_system(systems) + turns
 
 

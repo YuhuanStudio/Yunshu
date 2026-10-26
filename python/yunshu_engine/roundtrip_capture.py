@@ -26,9 +26,15 @@ def flatten_ids(ids) -> list[int]:
     return out
 
 
+_CHUNK = 256
+
+
 def common_prefix(a: list[int], b: list[int]) -> int:
     n = min(len(a), len(b))
     i = 0
+    # whole-chunk list compares run in C; only the chunk holding the first mismatch is walked per item
+    while i + _CHUNK <= n and a[i : i + _CHUNK] == b[i : i + _CHUNK]:
+        i += _CHUNK
     while i < n and a[i] == b[i]:
         i += 1
     return i

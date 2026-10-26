@@ -47,7 +47,7 @@ def test_virtual_runner_uses_cold_stock_path(monkeypatch):
     runner = eng._build_batch_runner("/models/qwen3_5")
     assert runner.model is eng._model
     assert runner.apc_manager is None and runner.drafter is None
-    assert runner.driver is None and runner.ragged_kv is None
+    assert runner.ragged_kv is None
     assert not runner.prefix_invariant and not eng._prefix_invariant_dispatch
     assert runner.stop_tokens == {2} and runner.inflight() == 1
 

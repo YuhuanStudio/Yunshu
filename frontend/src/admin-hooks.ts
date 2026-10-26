@@ -1,4 +1,5 @@
 import { connectionScope, useScopedState } from "./scoped-state.ts";
+import { createSingleFlight } from "./single-flight.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Connection } from "./api.ts";
 import {
@@ -49,12 +50,10 @@ export function usePolled<T>(
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined,
       last: T | null = null,
-      running = false;
-    const tick = async () => {
-      if (running) return;
-      running = true;
-      if (timer) clearTimeout(timer);
-      let stop = false;
+      stop = false;
+    // A refresh asked for while a poll is in flight queues one more load (the poll in flight may
+    // have been issued before the change the caller is refreshing for).
+    const once = createSingleFlight(async () => {
       if (document.visibilityState === "visible") {
         try {
           const v = await loadRef.current(connection, controller.signal);
@@ -74,9 +73,14 @@ export function usePolled<T>(
           }));
         }
       }
-      running = false;
-      if (!stop && !controller.signal.aborted)
+    });
+    const tick = async () => {
+      if (timer) clearTimeout(timer);
+      await once();
+      if (!stop && !controller.signal.aborted) {
+        if (timer) clearTimeout(timer);
         timer = setTimeout(() => void tick(), intervalRef.current(last));
+      }
     };
     kick.current = () => void tick();
     void tick();

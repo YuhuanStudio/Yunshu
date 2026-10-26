@@ -576,10 +576,10 @@ def check_prefix_tiers() -> Check | None:
 # schemas), so it is a failure with the upgrade command, not a warning.
 MIN_VERSIONS = {
     "mlx": "0.32.3",
-    "mlx-lm": "0.31.3",
-    "mlx-vlm": "0.7.4",
-    "mlx-audio": "0.5.7",
-    "llguidance": "1.8",
+    "mlx-lm": "0.32.2",
+    "mlx-vlm": "0.7.6",
+    "mlx-audio": "0.5.8",
+    "llguidance": "1.9.1",
 }
 # extra name -> (package, what it enables)
 EXTRAS = {

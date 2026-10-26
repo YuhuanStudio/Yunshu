@@ -72,9 +72,11 @@ def _wired_limit_ctx(model):
     old_limit = None
     try:
         import mlx.core as mx
+        from mlx.utils import tree_flatten
 
         max_rec = mx.metal.recommended_max_working_memory_size()
-        model_bytes = sum(p.nbytes for p in model.parameters())
+        # parameters() is a nested dict: iterating it directly yields key strings
+        model_bytes = sum(p.nbytes for _, p in tree_flatten(model.parameters()))
         old_limit = mx.set_wired_limit(max_rec) if model_bytes > max_rec * 0.5 else None
     except Exception:
         logger.debug("wired limit setup failed", exc_info=True)
@@ -163,6 +165,9 @@ from .engine_embeddings import EngineEmbeddingsMixin
 from .engine_fast import EngineFastMixin
 from .engine_ngram import EngineNgramMixin
 from .engine_policy import (
+    _delivered_token_count as _delivered_token_count,
+)
+from .engine_policy import (
     _is_cancelled as _is_cancelled,
 )
 from .engine_policy import (
@@ -213,6 +218,8 @@ from .engine_text import (
 from .engine_text import (
     _template_supports_tools as _template_supports_tools,
 )
+from .generation_suppress import resolve_suppress_tokens
+from .sampling_defaults import effective_temperature
 
 
 def _reload_dropped_weights(model, mp) -> None:
@@ -517,6 +524,11 @@ class BatchedEngine(
         def _load():
             from mlx_lm.utils import load as load_model
 
+            from .kernels import sdpa_chunk
+
+            # M1-M4 only; bounds the unfused head-dim-256 prefill score matrix
+            sdpa_chunk.install()
+
             kwargs = {}
             # Check for quantization override from env or settings.
             # The old code did kwargs["quantization"] = <str> and passed it to
@@ -594,6 +606,10 @@ class BatchedEngine(
         if _qmode:
             await loop.run_in_executor(executor, self._quantize_on_load, _qmode)
         _cache_tokenizer_vocab(self._tokenizer)
+        # Background build of the llguidance token tables (does not delay readiness).
+        from .tool_call_grammar import prewarm_for_engine
+
+        prewarm_for_engine(self)
 
         try:
             await self._finish_start(loop, executor)
@@ -946,6 +962,37 @@ class BatchedEngine(
         # Dims unreadable — fall back to the conservative token threshold.
         return 8 if total_tokens >= 16384 else None
 
+    def _kv_quant_start_for(self, req_bits: int | None) -> int:
+        """Cache offset at which KV quantisation starts for THIS request. Explicit config keeps
+        ``_kv_quant_start``. The automatic gate is on the REAL cache size: ``req_bits`` was decided
+        from prompt + the max_tokens cap, so quantising from token 0 would make a short reply on a
+        big model lossy (and uncacheable) for nothing. Start where the KV estimate reaches the
+        gate instead (same 2 GiB / 16384-token rule as ``_effective_kv_quant_bits``)."""
+        if req_bits is None or self._kv_quant_bits is not None:
+            return self._kv_quant_start
+        per_tok = self._kv_bytes_per_token()
+        gate = -(-(2 * 1024**3) // per_tok) if per_tok > 0 else 16384
+        return max(self._kv_quant_start, gate)
+
+    @staticmethod
+    def _cache_is_quantized(cache) -> bool:
+        """True when any layer of ``cache`` actually holds quantised KV."""
+        try:
+            from mlx_lm.models.cache import QuantizedKVCache
+        except Exception:  # no mlx-lm: nothing can be quantised
+            return False
+        return any(isinstance(c, QuantizedKVCache) for c in cache or ())
+
+    def _auto_quantized_kv(self, req_bits: int | None, cache=None) -> bool:
+        """True when this request's KV got the length-gated automatic quantisation. The RAM prefix
+        and prompt caches are keyed by tokens only, so they must not store that lossy KV: a hit
+        would differ from a miss. A fixed (explicit) precision is the same for every request.
+        With ``cache`` the answer is whether that cache ACTUALLY holds quantised layers: a short
+        reply, or a sliding-window model that never quantises, stays storable."""
+        if req_bits is None or self._kv_quant_bits is not None:
+            return False
+        return True if cache is None else self._cache_is_quantized(cache)
+
     def _apply_auto_tuner_kv_quant(self) -> None:
         """KV-5: Apply auto-tuner's kv_quantization_bits recommendation.
 
@@ -1264,8 +1311,13 @@ class BatchedEngine(
         use_engine_loop: bool,
         gemma4_eligible=None,
         external_eligible: bool = True,
+        plain_only: bool = False,
     ) -> str | None:
-        if use_engine_loop or logprobs:
+        # plain_only: the request sets min_tokens / ignore_eos, which only the plain fast
+        # path (and the loop) honor; a spec route would drop them. suppress_tokens is not
+        # one of them: the n-gram and Gemma-4 routes ban the ids themselves, and the opt-in
+        # external-draft route excludes it in ``external_eligible``.
+        if use_engine_loop or logprobs or plain_only:
             return None
         greedy = temperature is None or temperature <= 0.0
         if (
@@ -1362,12 +1414,22 @@ class BatchedEngine(
                              (defaults to False if not set).
             logprobs: If True, return log probabilities for each generated token.
             top_logprobs: Number of top logprobs to return per token (max 20).
-            timeout_seconds: Per-request generation timeout. If None, uses the
-                             engine's default (300s). Overrides the engine default
-                             for this request only.
+            timeout_seconds: Per-request generation timeout (total wall time). None:
+                             no deadline, as on the VLM path; a gone client is
+                             handled by the disconnect cancel.
         """
         if not self._loaded:
             await self.start()
+
+        # The checkpoint's generation_config.json suppress_tokens is the default mask
+        # when the request sets none (same rule as the VLM path).
+        suppress_tokens = resolve_suppress_tokens(
+            suppress_tokens,
+            getattr(self, "model_name", None),
+            getattr(self, "_tokenizer", None),
+        )
+        # top_k 1 / min_p 1 keep one token: decode greedily (fused argmax, greedy-only routes).
+        temperature = effective_temperature(temperature, top_k, min_p, xtc_probability)
 
         # Early return: max_tokens <= 0 produces no output
         if max_tokens <= 0:
@@ -1406,6 +1468,9 @@ class BatchedEngine(
             temperature=temperature,
             logprobs=bool(logprobs),
             use_engine_loop=_use_engine_loop,
+            # min_tokens / ignore_eos only the plain path honors; suppress_tokens (the request's
+            # or the checkpoint's default) the n-gram and Gemma-4 routes apply themselves
+            plain_only=bool(min_tokens or ignore_eos),
             # The external adapter does not implement the full fast-path
             # parameter contract. Never drop a client's requested behavior.
             external_eligible=(
@@ -1593,6 +1658,7 @@ class BatchedEngine(
                     seed=seed,
                     enable_thinking=enable_thinking,
                     stop_token_ids=stop_token_ids,
+                    suppress_tokens=suppress_tokens,
                 )
             except Exception:
                 logger.warning(
@@ -1624,7 +1690,7 @@ class BatchedEngine(
                 json_schema=json_schema,
                 cancel_event=cancel_event,
                 logits_processors=logits_processors,
-                timeout_seconds=timeout_seconds or 300.0,
+                timeout_seconds=timeout_seconds,
                 lora_adapter=lora_adapter,
             )
 
@@ -1665,8 +1731,9 @@ class BatchedEngine(
                 thinking_budget=thinking_budget,
                 cancel_event=cancel_event,
                 logits_processors=logits_processors,
-                timeout_seconds=timeout_seconds or 300.0,
+                timeout_seconds=timeout_seconds,
                 lora_adapter=lora_adapter,
+                suppress_tokens=suppress_tokens,
             )
 
         # Fast path: direct generate_step on executor thread for full GPU utilization
@@ -1695,7 +1762,7 @@ class BatchedEngine(
                 cancel_event=cancel_event,
                 logits_processors=logits_processors,
                 priority=priority,
-                timeout_seconds=timeout_seconds or 300.0,
+                timeout_seconds=timeout_seconds,
                 lora_adapter=lora_adapter,
                 kv_cache_breakpoints=kv_cache_breakpoints,
                 min_tokens=min_tokens,
@@ -1898,6 +1965,16 @@ class BatchedEngine(
         if not self._loaded:
             await self.start()
 
+        # The checkpoint's generation_config.json suppress_tokens is the default mask
+        # when the request sets none (same rule as the VLM path).
+        suppress_tokens = resolve_suppress_tokens(
+            suppress_tokens,
+            getattr(self, "model_name", None),
+            getattr(self, "_tokenizer", None),
+        )
+        # top_k 1 / min_p 1 keep one token: decode greedily (fused argmax, greedy-only routes).
+        temperature = effective_temperature(temperature, top_k, min_p, xtc_probability)
+
         # publish per-request top-nσ for _build_temp_sampler (same event-loop task)
         _REQUEST_TOP_N_SIGMA.set(
             top_n_sigma if top_n_sigma and top_n_sigma > 0 else None
@@ -1981,31 +2058,6 @@ class BatchedEngine(
             _cancel_event = None
             _tracker = None
 
-        # If the gateway passes an external cancel_event, wrap both events
-        # so that checking .is_set() on the wrapper detects either source.
-        if cancel_event is not None and _tracker is not None:
-            _internal = _cancel_event
-            _external = cancel_event
-
-            class _CompositeCancelEvent:
-                """Proxy that returns True if either the internal or external event is set.
-
-                Thread-safe: reads asyncio.Event._value directly (GIL-protected bool)
-                instead of calling .is_set() which is not safe from executor threads.
-                """
-
-                def is_set(self):
-                    if _internal is not None:
-                        # asyncio.Event: read _value (GIL-protected bool)
-                        if hasattr(_internal, "_value"):
-                            if _internal._value:
-                                return True
-                        elif _internal.is_set():
-                            return True
-                    return _is_cancelled(_external)
-
-            _cancel_event = _CompositeCancelEvent()
-
         # Fast path: bypass EngineCore for single-request streaming
         if not _use_engine_loop:
             try:
@@ -2033,7 +2085,7 @@ class BatchedEngine(
                     top_logprobs=top_logprobs,
                     logits_processors=logits_processors,
                     priority=priority,
-                    timeout_seconds=timeout_seconds or 300.0,
+                    timeout_seconds=timeout_seconds,
                     lora_adapter=lora_adapter,
                     kv_cache_breakpoints=kv_cache_breakpoints,
                     min_tokens=min_tokens,

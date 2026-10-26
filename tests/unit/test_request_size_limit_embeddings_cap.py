@@ -22,7 +22,8 @@ def test_byte_count_on_any_no_content_length():
 
     src = inspect.getsource(main)
     # the byte-count branch fires on ANY missing Content-Length (not only chunked)
-    assert "if content_length is None:" in src
+    assert "total > max_request_size" in src
+    assert "if content_length is not None:" in src
     assert 'if transfer_encoding == "chunked" and content_length is None:' not in src
 
 

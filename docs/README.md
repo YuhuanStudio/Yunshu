@@ -43,6 +43,8 @@ pin their measured source independently of release status. Start at the top-leve
 - [Roadmap and RFC process](ROADMAP.md)
 - [Hardware validation plan](guides/HARDWARE_VALIDATION.md) and [M5 Max notes](guides/M5MAX_HARDWARE.md)
 - [Auxiliary scheduling](guides/AUXILIARY_SCHEDULING.md) and [upstream tracking](guides/UPSTREAM_TRACKING.md)
+- [Cross-engine gap table](guides/GAPTABLE.md): how the pinned comparison against other engines is planned and run
+- [Native tool formats and structural tags](guides/TOOL_FORMATS.md): repository-side reference for tool-call parsing (the console page is the maintained copy)
 
 [RELEASING.md](../RELEASING.md) (cutting a release),
 [guides/RELEASE_GATE.md](guides/RELEASE_GATE.md) (the end-to-end acceptance run a release must pass) and
@@ -56,11 +58,12 @@ docs/
     img/                ← trend charts
   guides/               # hand-written guides and reference notes
     CLIENTS.md, SERVICE.md, TROUBLESHOOTING.md, RELEASE_READINESS.md, RELEASE_GATE.md, VERIFY.md
-    KV_CACHE_MATRIX.md, PROMPT_CACHING_APIS.md, ROUND_DRIVER.md
-  results/              # raw bench JSON artifacts (historical; framework_comparison etc.)
+    KV_CACHE_MATRIX.md, PROMPT_CACHING_APIS.md
   archive/
+    results/            ← raw bench JSON from early sweeps (comprehensive_sweep, framework_comparison, kv_cache_matrix); historical, kept as evidence, not cited by current docs
     mlx_vlm_omni_audio/ ← real omni/audio findings (speech-to-speech capability)
     legacy_vlm_loop/    ← how the deleted pre-runner VLM generation loop worked (+ its KV-prefix notes)
+    round_driver/       ← the deleted experimental multi-row round driver (design, measurements, why it lost)
     reports/omlx_scheduler_gaps.md  ← competitive notes on oMLX
 ```
 

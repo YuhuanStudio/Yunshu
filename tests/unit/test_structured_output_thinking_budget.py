@@ -26,7 +26,9 @@ def _run(monkeypatch, *, schema, enable_thinking, budget):
     eng._reasoning_markers.return_value = (5, 6, "<think>", "</think>", False)
     eng._batch_runner.iter_tokens = iter_tokens
     monkeypatch.setattr(vlm_batch_runner, "ConstraintProcessor", MagicMock())
-    monkeypatch.setattr(constrained_spec, "ConstraintGuide", MagicMock())
+    monkeypatch.setattr(
+        constrained_spec, "ConstraintGuide", MagicMock(return_value=MagicMock(words=2))
+    )
     gen = VLMEngine._runner_events_impl(
         eng,
         mx.array([[1, 5]])[0],

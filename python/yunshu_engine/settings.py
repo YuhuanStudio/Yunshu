@@ -37,6 +37,7 @@ import json
 import logging
 import math
 import os
+import re
 import tempfile
 import tomllib
 from collections.abc import Mapping
@@ -70,6 +71,10 @@ class Setting:
     added: str = ""  # experimental only: date added
     empty_is_value: bool = False  # "" is a real value, not "unset"
     secret: bool = False
+    # Can run host code or touch arbitrary host paths (a path setting, an MCP stdio
+    # command, trust_remote_code, the code sandbox). Not writable over HTTP unless
+    # YUNSHU_ADMIN_WRITE_EXEC_SETTINGS is on: admin scope must not equal host RCE.
+    host_access: bool = False
     # When a changed value takes effect (see ``APPLIES``): "live" (re-read on
     # each use), "reload" (next model load), "restart" (read once at startup).
     applies: str = ""
@@ -105,6 +110,8 @@ def _add(
         raise RuntimeError(f"duplicate setting {name}")
     if category not in CATEGORIES:
         raise RuntimeError(f"{name}: unknown category {category}")
+    if type_ == "path":
+        kw.setdefault("host_access", True)
     REGISTRY[name] = Setting(name, type_, default, description, category, **kw)
 
 
@@ -118,7 +125,7 @@ _add("YUNSHU_HF_CACHE_MODELS", "bool", True, "Multi-model mode: also offer model
 _add("YUNSHU_MODEL_TTL_SECONDS", "float", None, "Multi-model mode: unload a model idle for this many seconds. Unset: never.", "model", minimum=0.0)
 _add("YUNSHU_ALLOW_AUTO_LOAD", "bool", False, "Multi-model mode: let audio requests load a model that is not loaded yet (otherwise they are rejected).", "model")
 _add("YUNSHU_MAX_LORAS", "int", 4, "Maximum LoRA adapters kept loaded (text models).", "model", minimum=1)
-_add("YUNSHU_TRUST_REMOTE_CODE", "bool", False, "Allow Hugging Face tokenizers/processors that need trust_remote_code.", "model")
+_add("YUNSHU_TRUST_REMOTE_CODE", "bool", False, "Allow Hugging Face tokenizers/processors that need trust_remote_code.", "model", host_access=True)
 _add("YUNSHU_WARM_PROMPTS", "str", None, "Prompts prefilled at startup to warm the prefix cache: '||'-separated text or file paths.", "model")
 
 # ── server ─────────────────────────────────────────────────────────────
@@ -149,7 +156,7 @@ _add("YUNSHU_CORS_ORIGINS", "str", "http://localhost:3000,http://localhost:8000"
 _add("YUNSHU_RESPONSE_CACHE", "bool", False, "Cache identical non-streaming responses in memory.", "server")
 _add("YUNSHU_BATCH_MAX_ITEMS", "int", 100000, "Batch API: maximum requests per batch (also capped by the protocol limits: 50,000 OpenAI, 100,000 Anthropic).", "server", minimum=1)
 _add("YUNSHU_BATCH_TIMEOUT", "float", 0.0, "Batch API: timeout in seconds for each request a batch runs (0: no timeout); a request that times out is recorded as failed.", "server", minimum=0.0)
-_add("YUNSHU_ALLOW_LOCAL_FILES", "bool", False, "Allow requests to reference any local file path (default: only under YUNSHU_MEDIA_DIR).", "server")
+_add("YUNSHU_ALLOW_LOCAL_FILES", "bool", False, "Allow requests to reference any local file path (default: only under YUNSHU_MEDIA_DIR).", "server", host_access=True)
 _add("YUNSHU_MEDIA_DIR", "path", None, "Directory local media paths must live under. Unset: $TMPDIR/yunshu_media.", "server")
 _add("YUNSHU_FILES_DIR", "path", None, "Directory of the local Files / Batch API store. Unset: ~/.yunshu/files.", "server")
 _add("YUNSHU_FILES_MAX_BYTES", "int", 536870912, "Files API: maximum size of one uploaded file in bytes (default 512 MB).", "server", minimum=1)
@@ -165,6 +172,7 @@ _add("YUNSHU_COMPACT_MAX_TOKENS", "int", 2048, "Responses compaction: maximum to
 # ── auth ───────────────────────────────────────────────────────────────
 _add("YUNSHU_HOST", "str", "127.0.0.1", "Bind host of `yunshu serve` (`--host` wins). 127.0.0.1 serves this Mac only; 0.0.0.0 also serves the local network (set YUNSHU_AUTH_TOKEN then).", "auth")
 _add("YUNSHU_AUTH_TOKEN", "str", None, "Bearer token. When set, every request except health/version/docs needs it; unset: inference is open and operational endpoints are denied.", "auth", secret=True)
+_add("YUNSHU_ADMIN_WRITE_EXEC_SETTINGS", "bool", False, "Let `PATCH /v1/yunshu/config` (the console settings editor) change settings that run host code or touch arbitrary host paths: every path setting, YUNSHU_MCP_SERVERS (stdio commands), YUNSHU_TRUST_REMOTE_CODE, YUNSHU_CODE_EXECUTION, YUNSHU_ALLOW_LOCAL_FILES. Off (default): they are read-only over HTTP (403 `exec_setting_read_only`); edit the config file or `yunshu config set` on the host instead. Not writable over HTTP itself.", "auth")
 _add("YUNSHU_AUTH_DISABLED", "bool", False, "Disable auth entirely (operational endpoints open too). Local development only.", "auth")
 _add("YUNSHU_OBSERVE", "bool", False, "Observe mode (`yunshu serve --observe`): turn on every observability feature you did not set yourself: /debug/* routes, host telemetry, the serve log, the audit log file (~/.yunshu/logs/audit.log), exact token ids in logprobs, and the generation capture file (~/.yunshu/logs/stream_capture.jsonl). A value you set explicitly (flag, env, config file) always wins and shows its own source; the others show source 'observe'. Costs: telemetry adds about +1.8% follow-up TTFT at 1K (27B A/B), the logs and capture write small files; keep it off for speed benchmarks. Without a token, /debug/* answers loopback clients only.", "observability")
 _add("YUNSHU_DEBUG_ROUTES", "bool", False, "Mount the /debug/* diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or YUNSHU_AUTH_DISABLED. /metrics is always mounted.", "observability")
@@ -173,6 +181,8 @@ _add("YUNSHU_DEBUG_STREAM_CAPTURE", "path", None, "Debugging aid: append one JSO
 _add("YUNSHU_ACTOR_IDENTITY", "str", "owner", "Identity recorded for authenticated requests in the audit log.", "auth")
 _add("YUNSHU_RATE_LIMIT_RPM", "int", 0, "Per-client request rate limit in requests per minute; 0 (default) turns rate limiting off. A local single-user engine has no need for it; set it when the server is exposed to other machines.", "auth", minimum=0)
 _add("YUNSHU_TRUSTED_PROXIES", "list", (), "Comma-separated proxy IPs whose X-Forwarded-For header is trusted.", "auth")
+
+_add("YUNSHU_ALLOWED_HOSTS", "list", (), "Comma-separated Host names this server answers, besides loopback names. Empty (default): a server bound to a loopback address answers only loopback Host headers (localhost, 127.0.0.1, [::1]; this stops DNS rebinding) and one bound to 0.0.0.0 checks nothing. Set it to turn the check on for any bind address; '*' turns it off.", "auth")
 
 # ── memory ─────────────────────────────────────────────────────────────
 _add("YUNSHU_FOOTPRINT_SAMPLE_MS", "int", 0, "Sample this process's phys_footprint every N ms on a background thread and export the peak as yunshu_process_footprint_bytes on /metrics (the memory benchmarks set 20). 0 (default) = off.", "memory", minimum=0)
@@ -186,6 +196,7 @@ _add("YUNSHU_MEM_PRESSURE_THRESHOLD", "float", 85.0, "Text engine: evict prefix-
 _add("YUNSHU_PREFIX_MAX_ENTRIES", "int", 64, "Text engine: prefix KV cache entries.", "cache", minimum=1)
 _add("YUNSHU_PREFIX_HOT_LIMIT", "int", 0, "Text engine: keep only this many prefix KV entries full precision and store older ones 4-bit in RAM (lossy on reuse; memory vs quality). 0 = every entry full precision.", "cache", minimum=0)
 _add("YUNSHU_SSD_CACHE", "bool", False, "Text engine: persist prefix KV to SSD.", "cache")
+_add("YUNSHU_APC_SEAM_CHECKPOINT", "bool", False, "VLM runner (APC), split-invariant prefill only: keep one more checkpoint inside a final user message of at least 8192 tokens, 2048 tokens (rounded down to a 64-token boundary) before its end, so a follow-up that sends the same long document with a different question resumes at the document instead of recomputing it. Costs one extra checkpoint copy (RAM, SSD) per such prompt; media spans are never cut. Output is unchanged (an aligned cut is split-invariant, a restore equals a cold prefill).", "cache", stability="experimental", decide="scripts/research/ab_seam_checkpoint.py on Qwen3.8-27B (16k / 35k / 64k-token document, then the same document with a new question): TTFT of the second request on vs off must drop >= 3x with identical greedy tokens (cold, restored and off), the first request's TTFT cost <= 3% and peak MLX memory growth within the APC budget; if it wins it becomes the default and the flag is deleted, else the seam cut and flag are deleted", added="2026-10-26")
 _add("YUNSHU_SSD_CACHE_DIR", "path", "~/.cache/yunshu/kv-ssd", "Text engine: SSD prefix-cache directory.", "cache")
 _add("YUNSHU_SSD_CACHE_PRECISION", "enum", "native", "Text engine: SSD prefix-cache storage precision: 'native' (KV and recurrent state stored bit-exact; lossless) or 'int8' (per-tensor int8, about half the disk bytes of bf16; lossy on reuse; memory vs quality).", "cache", choices=("native", "int8"))
 _add("YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS", "float", 20000.0, "Text engine: skip an SSD prefix restore when the model's observed prefill speed exceeds this (tokens/s): re-prefilling is then as fast as reading the KV back.", "cache", minimum=0.0)
@@ -234,18 +245,17 @@ _add("YUNSHU_SPEC_PROPOSER", "enum", "ngram", "Text models: speculative proposer
 _add("YUNSHU_GEMMA4_ASSISTANT", "path", None, "Text Gemma-4 models: assistant drafter directory (KV-shared speculative drafter).", "speculative")
 
 # ── text engine ────────────────────────────────────────────────────────
-_add("YUNSHU_GPU_SAMPLER", "bool", False, "Text models: on-GPU Gumbel-max sampling (no per-token GPU->CPU sync).", "text-engine")
+_add("YUNSHU_SDPA_CHUNK", "bool", False, "M1-M4 (pre-NAX GPUs), head_dim 256: run MLX 0.32.3's unfused long-prefill attention fallback on query-row chunks so its score tensor stays under 1 GiB instead of growing with context squared (adopted from omlx sdpa256_attention). Same arithmetic per row as the stock fallback; no effect on M5 or CPU.", "kernels", stability="experimental", decide="On an M1-M4 Mac: bitwise A/B of chunked vs stock SDPA at head_dim 256 over a long chunked prefill (causal and array masks, bf16) plus 27B-class prefill peak memory and TTFT; if bit-identical with lower peak memory it becomes the default and the flag is deleted, else kernels/sdpa_chunk.py and the flag are deleted", added="2026-10-26")
+_add("YUNSHU_GPU_SAMPLER", "bool", False, "Text models: on-GPU Gumbel-max sampling for temperature > 0 (no per-token GPU->CPU sync) instead of the float64 NumPy sampler that copies the logits to the CPU every token.", "text-engine", stability="experimental", decide="scripts/research/ab_gpu_sampler.py on a text-only checkpoint: decode tok/s gpu/numpy >= 1.05 in every sampling config, first-token TV(numpy, gpu) within the numpy-vs-numpy noise floor, seeded reruns identical; if it wins the GPU sampler becomes the only one (NumPy sampler and this flag deleted), else the GPU sampler and flag are deleted", added="2026-10-26")
 _add("YUNSHU_JUMP_FORWARD", "bool", False, "Text models: emit grammar-forced structural tokens of JSON-schema output without a forward pass.", "text-engine")
 _add("YUNSHU_JSON_SCHEMA_ENGINE", "enum", "llguidance", "Engine that masks JSON-schema / json_object constrained decoding: 'llguidance' (per-token mask about 0.25 ms median on a 248K vocabulary; properties in schema order, forced literals in canonical tokenization) or 'inhouse' (the Python state machine, about 3 ms median; any property order). A schema llguidance cannot compile falls back to the in-house engine when that supports it.", "text-engine", choices=("llguidance", "inhouse"))
 _add("YUNSHU_GRAMMAR_BITMASK", "bool", False, "Constrained decoding with the xgrammar-style bitmask engine instead of the allowlist sampler.", "text-engine")
+_add("YUNSHU_GRAMMAR_PREWARM", "bool", True, "Build the llguidance token tables in the background when a model loads, so the first constrained request (response_format, regex, choice, cfg, forced tool_choice) does not spend about a second walking the vocabulary. Builds one table at the tokenizer width (about 0.45 GiB native heap at a 248K vocabulary, what the first constrained request would take anyway); the forced-tool grammar's padded-width table, when it differs, is built on its first use. 0 builds on first use instead. Needs llguidance and a Hugging Face tokenizer.", "text-engine")
 _add("YUNSHU_TOOL_GRAMMAR", "bool", False, "Tool-call constrained decoding (structural tags): free text until the model emits the tool-call start marker, then the call body is masked to the exact call grammar of this request's tools (tool name, that tool's parameter keys, schema-typed values, correct closing); a forced tool_choice (required / any / a named tool) starts constrained. A forced tool_choice is always constrained, whatever this flag says (OpenAI and Anthropic both guarantee the call); the flag governs only auto. Lossless for a call the model would have written validly. Off: auto-choice tool calls are decoded unconstrained and repaired after the fact.", "text-engine", stability="experimental", decide="malformed / dropped tool calls with vs without the grammar on the agentic matrix (Claude Code, Codex, opencode; greedy and sampled) against the call-decode cost (27B replays: lossless 12/12, 0 malformed both ways, call decode -0..10%); forced tool_choice already ships always-on (guarantee, M3 sweep); for auto: on only if it removes failures the repair does not", added="2026-10-01")
 _add("YUNSHU_QUANT_MODE", "enum", "", "Quantize weights in memory at load (lossy; memory vs quality): mxfp4, nvfp4, mxfp8 or affine ('' keeps the checkpoint).", "text-engine", choices=("", "mxfp4", "nvfp4", "mxfp8", "affine"))
 _add("YUNSHU_QUANT_CONFIG", "str", None, "Bits/group for affine in-memory quantization: JSON ({\"bits\":4,\"group_size\":64}) or 'bits' / 'bits,group'.", "text-engine")
 
 # ── kernels / experiments ──────────────────────────────────────────────
-_add("YUNSHU_ROUND_PREFILL_CHUNK", "int", 512, "Round driver: prompt tokens per prefill span. A decoding request only steps between prefill forwards, so smaller spans keep it running next to a long prompt (Qwen3.8-27B, M5 Max, one MTP row beside an 8K prompt: 512 -> 6 tok/s, 128 -> 24 tok/s, ~20% lower prefill speed). Atoms are fixed per prompt (idle steps merge consecutive full atoms without changing any bit), so output stays independent of what else is running; prompts prefilled with different chunk sizes are each self-consistent but not bit-identical to each other.", "vlm-runner", minimum=16)
-_add("YUNSHU_ROUND_DRIVER", "bool", False, "Dense Qwen3.5-family VLMs: Yunshu's round driver serves text requests (packed forwards over every decoding row's window, alternating with prefill steps that batch several prompts' fixed chunks; row-invariant lane projections; MTP drafts for every row with cost-aware per-row depth; sampled rows draw with the position-keyed sampler; see docs/guides/ROUND_DRIVER.md). Off: upstream BatchGenerator shared batch + single-request speculative lane. APC prefix reuse (exact hybrid checkpoints) runs in the driver; image prompts, int8 KV and MoE stay on the upstream path either way.", "vlm-runner", stability="experimental", decide="needs single-request greedy decode >= the default lane (2026-10-01: 10-40% behind; serial draft chain + verify, overlap them), sampled-row seed + digest identity vs keyed serial on 27B, then 27B idle GPU, off vs on: sweep_round_driver.py parity, bench_batch_spec-style rows 1/2/4/8, probe_concurrency, bench_engine_matrix, bench_context_batch b1-b8 + 32K/131K, bench_mixed_load 16K/32K, MMLU-Pro 300 b8 (scripts/research/validate_round_driver.sh); if it wins it becomes the path (with APC / images moved) and this flag, the upstream shared batch and the spec lane are deleted", added="2026-09-29")
-_add("YUNSHU_MTP_ROW_EXACT", "bool", False, "Qwen3.5-family runner: oMLX row-exact verify (verify rows bit-identical to one-row decode) instead of batch-invariant kernels.", "kernels", stability="experimental", decide="sweep_mtp_depth parity at long contexts vs decode tok/s (currently 30-50% slower than batch-invariant)", added="2026-09-28")
 _add("YUNSHU_QWEN4_LANE", "bool", False, "Qwen3.8-Flash-Next (qwen4_exp): run the dense quantized projections (GDN and attention mixers, out projections, indexer) as the row-invariant lane matmul for plain decode, speculative verify and drafting, instead of upstream's per-row singleton qmv. Upstream reads a dense weight once per verify row (T rows cost 1.4 / 2.4 / 8x the one-row dense time at T = 2 / 4 / 16); the lane matmul reads it once at any row count, with the same one-row time, and a row keeps its bits at every row count, so speculative output still equals plain decode. The output differs from the default arithmetic (last-bit drift, not a quality change). A head format upstream's fused head kernel cannot read (the oQ3e pack's 6-bit head) turns it on regardless, for the head and the dense projections. Prefill chunks wider than 32 rows keep MLX's quantized matmul.", "kernels", stability="experimental", decide="Flash-Next oQ3e verify/decode step time at 1/2/4/16 rows lane vs singleton (microbench: dense 8-bit projections 1.0x vs 1.4-1.55x at 2 rows, 2.1-2.6x at 4, 7-9x at 16), spec on == spec off identity, MMLU drift, cold/warm TTFT with the 32-row prefill split; then default on and this flag deleted", added="2026-10-25")
 _add("YUNSHU_ENGINE_LOOP", "bool", False, "Text models: EngineCore continuous-batching loop instead of the single-request fast path. Option (not the default): faster aggregate throughput with several concurrent requests on text models (measured 2026-10-24: +60/190/280% at 2/4/8 requests, -4% at one), but batched outputs are not token-identical to the single-request path.", "text-engine", stability="stable")
 _add("YUNSHU_OVERLAP", "enum", "", "Text engine loop: overlap CPU and GPU work ('cpu_gpu') or split a batch into two overlapping halves ('two_batch'). Option (not the default); no measurable effect on a 3B text model (2026-10-24).", "text-engine", stability="stable", choices=("", "cpu_gpu", "two_batch"))
@@ -278,7 +288,7 @@ _add("YUNSHU_ANE_EMBEDDING_MODEL", "str", "intfloat/e5-small-v2", "Embedding mod
 
 # ── MCP ────────────────────────────────────────────────────────────────
 _add("YUNSHU_MCP_CONFIG", "path", None, "MCP client config file (JSON/YAML) listing tool servers.", "mcp")
-_add("YUNSHU_MCP_SERVERS", "json", None, "MCP tool servers as a JSON array (alternative to YUNSHU_MCP_CONFIG).", "mcp")
+_add("YUNSHU_MCP_SERVERS", "json", None, "MCP tool servers as a JSON array (alternative to YUNSHU_MCP_CONFIG).", "mcp", secret=True, host_access=True)
 
 # ── server-side tools (web search / web fetch / MCP connector) ──────────
 _add("YUNSHU_WEB_SEARCH_PROVIDER", "enum", "auto", "Search backend. Auto runs lightweight DDG, Wikipedia and configured keyed providers (Mwmbl is an explicit noncommercial opt-in) in parallel with health backoff and RRF. SearXNG is optional. Queries leave the machine; none disables search.", "server-tools", choices=("auto", "none", "searxng", "brave", "tavily", "exa", "serper", "perplexity", "ddg_html", "wikipedia", "mwmbl", "mojeek", "marginalia"))
@@ -305,14 +315,14 @@ _add("YUNSHU_WEB_FETCH_ALLOW_PRIVATE", "bool", False, "Let web_fetch reach priva
 _add("YUNSHU_WEB_FETCH_MAX_BYTES", "int", 2000000, "Largest response body web_fetch downloads.", "server-tools", minimum=1024)
 _add("YUNSHU_WEB_FETCH_TIMEOUT", "float", 20.0, "Seconds web_fetch waits for a page.", "server-tools", minimum=1.0)
 _add("YUNSHU_WEB_FETCH_MAX_TEXT_CHARS", "int", 40000, "Extracted page text handed to the model is cut to this many characters (a request's max_content_tokens can lower it).", "server-tools", minimum=1000)
-_add("YUNSHU_CODE_EXECUTION", "bool", False, "Serve the server-side code execution tools on this machine (Anthropic code_execution_*; OpenAI Responses code_interpreter and hosted shell; the OpenAI /v1/containers API) inside the Anthropic sandbox-runtime (srt, optional: `npm i @anthropic-ai/sandbox-runtime`, Node >= 22.12). Off: requests that declare them get a 400. On without srt: 503, never an unsandboxed run. The sandbox writes only inside a per-container directory, reads nothing of your home, and has no network unless YUNSHU_CODE_EXECUTION_NETWORK_ALLOW lists hosts.", "server-tools")
+_add("YUNSHU_CODE_EXECUTION", "bool", False, "Serve the server-side code execution tools on this machine (Anthropic code_execution_*; OpenAI Responses code_interpreter and hosted shell; the OpenAI /v1/containers API) inside the Anthropic sandbox-runtime (srt, optional: `npm i @anthropic-ai/sandbox-runtime`, Node >= 22.12). Off: requests that declare them get a 400. On without srt: 503, never an unsandboxed run. The sandbox writes only inside a per-container directory, reads nothing of your home, and has no network unless YUNSHU_CODE_EXECUTION_NETWORK_ALLOW lists hosts.", "server-tools", host_access=True)
 _add("YUNSHU_CODE_EXECUTION_ROOT", "path", "~/.yunshu/sandbox", "Directory holding the code execution containers (one sub-directory each). Created with mode 0700.", "server-tools")
 _add("YUNSHU_CODE_EXECUTION_TIMEOUT", "float", 60.0, "Wall-clock seconds one code execution call may run before its process group is killed (execution_time_exceeded). Also the CPU-time limit. A Python cell waiting for the client's tool results does not count.", "server-tools", minimum=1.0)
 _add("YUNSHU_CODE_EXECUTION_MEMORY_MB", "int", 2048, "Resident memory a code execution call may use (whole process group, sampled every 100 ms); above it the call is killed. An OpenAI container's memory_limit can only lower it.", "server-tools", minimum=64)
 _add("YUNSHU_CODE_EXECUTION_NETWORK_ALLOW", "str", None, "Comma-separated hosts the sandbox may reach (`example.com`, `*.example.com`, `host:443`). Unset: no network at all, loopback included. Private address ranges stay blocked even for allowed names. An OpenAI container's network_policy can only narrow this list.", "server-tools")
 _add("YUNSHU_CODE_EXECUTION_TTL_MIN", "float", 20.0, "Minutes a code execution container may sit unused before it and its files are deleted. An OpenAI container's expires_after.minutes can only shorten it.", "server-tools", minimum=1.0)
 _add("YUNSHU_MCP_CONNECTOR", "bool", True, "Serve the MCP connector: Anthropic mcp_servers and OpenAI Responses {type: mcp} tools are executed by this server, which connects to the named MCP servers over streamable HTTP / SSE.", "server-tools")
-_add("YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE", "bool", True, "Let the MCP connector reach private and loopback MCP servers (local tool servers are the common case). Off: only public addresses.", "server-tools")
+_add("YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE", "bool", False, "Let the MCP connector reach private, loopback and link-local MCP servers named in a request (Anthropic mcp_servers / Responses {type: mcp}). Off (default): only public addresses, so an inference caller cannot probe the LAN or this Mac. MCP servers you configure yourself (YUNSHU_MCP_SERVERS / YUNSHU_MCP_CONFIG) are unaffected.", "server-tools")
 _add("YUNSHU_MCP_CONNECTOR_TIMEOUT", "float", 30.0, "Seconds an MCP connector call (initialize, tools/list, tools/call) may take, DNS included.", "server-tools", minimum=1.0)
 _add("YUNSHU_MCP_CONNECTOR_MAX_BYTES", "int", 8 * 1024 * 1024, "Largest single reply (JSON body, or one SSE event) an MCP connector server may send, after decompression.", "server-tools", minimum=1024)
 _add("YUNSHU_SERVER_TOOL_MAX_ITERATIONS", "int", 8, "Most generate, run-tool, continue rounds one request may take.", "server-tools", minimum=1)
@@ -357,6 +367,7 @@ _add("YUNSHU_ARM", "str", None, "Label recorded in the serve log for the configu
 
 # ── CLI ────────────────────────────────────────────────────────────────
 _add("YUNSHU_GATEWAY_URL", "str", "http://localhost:8000", "Server URL used by the yunshu CLI client commands.", "cli")
+_add("YUNSHU_API_KEY", "str", None, "Client side: the Bearer key the yunshu CLI sends to the server (`yunshu statusline`) and passes to the coding agents `yunshu launch` starts (Codex reads it as its provider key). The server never reads it; set YUNSHU_AUTH_TOKEN there.", "cli", secret=True)
 _add("YUNSHU_HF_ENDPOINT", "str", None, "Hugging Face Hub endpoint for `yunshu serve` (exported as HF_ENDPOINT).", "cli")
 
 # fmt: on
@@ -377,8 +388,10 @@ _LIVE = frozenset(
         "YUNSHU_DEBUG_TREE_PROFILE",
         "YUNSHU_AUTH_TOKEN",
         "YUNSHU_AUTH_DISABLED",
+        "YUNSHU_ADMIN_WRITE_EXEC_SETTINGS",
         "YUNSHU_ACTOR_IDENTITY",
         "YUNSHU_CORS_ORIGINS",
+        "YUNSHU_ALLOWED_HOSTS",
         "YUNSHU_HF_CACHE_MODELS",
         "YUNSHU_QUEUE_LIMIT",
         "YUNSHU_MEMORY_PRESSURE_REJECT",
@@ -412,6 +425,7 @@ _LIVE = frozenset(
         "YUNSHU_JUMP_FORWARD",
         "YUNSHU_JSON_SCHEMA_ENGINE",
         "YUNSHU_GRAMMAR_BITMASK",
+        "YUNSHU_GRAMMAR_PREWARM",
         "YUNSHU_TOOL_GRAMMAR",
         "YUNSHU_OMNI_PERSONA",
         "YUNSHU_REALTIME_SILENCE_MS",
@@ -461,12 +475,15 @@ _LIVE = frozenset(
         "YUNSHU_SERVE_LOG_RETENTION_DAYS",
         "YUNSHU_ARM",
         "YUNSHU_GATEWAY_URL",
+        "YUNSHU_API_KEY",
     }
 )
 _RELOAD = frozenset(
     {
         "YUNSHU_MEMORY_ADMISSION",
         "YUNSHU_MEMORY_RESERVE_GB",
+        "YUNSHU_APC_SEAM_CHECKPOINT",
+        "YUNSHU_SDPA_CHUNK",
         "YUNSHU_GC_POLICY",
         "YUNSHU_NEXT_TURN_PREFILL",
         "YUNSHU_PLE_READ_THREADS",
@@ -512,9 +529,6 @@ _RELOAD = frozenset(
         "YUNSHU_GEMMA4_ASSISTANT",
         "YUNSHU_QUANT_MODE",
         "YUNSHU_QUANT_CONFIG",
-        "YUNSHU_ROUND_PREFILL_CHUNK",
-        "YUNSHU_ROUND_DRIVER",
-        "YUNSHU_MTP_ROW_EXACT",
         "YUNSHU_QWEN4_LANE",
         "YUNSHU_ENGINE_LOOP",
         "YUNSHU_OVERLAP",
@@ -926,6 +940,20 @@ def validate(
     return warnings
 
 
+_URL_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s@]*@")
+
+
+def mask_url_userinfo(value: Any) -> Any:
+    """Replace ``user:pass@`` in URL-shaped strings with ``***@`` (host stays visible).
+
+    A URL setting (SearXNG, gateway, Hub endpoint, console engine) can embed
+    basic-auth credentials; the effective-config views must not echo them.
+    """
+    if isinstance(value, str) and "@" in value and "://" in value:
+        return _URL_USERINFO.sub(r"\g<scheme>***@", value)
+    return value
+
+
 def effective(include: tuple[str, ...] = ("stable",)) -> list[dict[str, Any]]:
     """Rows for ``yunshu config``: name, value, source, stability, category."""
     rows = []
@@ -937,8 +965,7 @@ def effective(include: tuple[str, ...] = ("stable",)) -> list[dict[str, Any]]:
             value = get(s.name)
         except SettingError as exc:
             value = f"<invalid: {exc}>"
-        if s.secret and text:
-            value = "***"
+        value = "***" if s.secret and text else mask_url_userinfo(value)
         rows.append(
             {
                 "name": s.name,
@@ -953,6 +980,7 @@ def effective(include: tuple[str, ...] = ("stable",)) -> list[dict[str, Any]]:
                 "applies": s.applies,
                 "minimum": s.minimum,
                 "secret": s.secret,
+                "host_access": s.host_access,
             }
         )
     return rows

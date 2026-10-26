@@ -28,3 +28,13 @@ YunUI components when extending this application; do not recreate its controls.
 
 Current agent validation is CPU/fixture-only: do not use GPU inference or restart
 the test engine without renewed explicit owner instruction.
+
+## Markdown dependencies
+
+`package.json` lists `react-markdown`, `remark-gfm`, `remark-math`, `rehype-raw`, `rehype-katex` and
+`rehype-slug` although no file in `src/` imports them. They are peer dependencies (marked optional) of the pinned
+`@yuhuanowo/yunui`, and its `dist/content.js` imports `react-markdown`, `remark-math`, `rehype-raw` and `rehype-katex`
+at module top level. The console loads that module (`src/Playground.tsx` imports `@yuhuanowo/yunui/content`, and
+`main.tsx` imports `content.css`) to render assistant Markdown, including math and raw HTML (sanitized by the
+package). Removing any of them breaks the Playground chunk's build, so keep them; recheck when the pinned
+YunUI package changes.

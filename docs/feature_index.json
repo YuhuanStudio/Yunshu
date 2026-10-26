@@ -56,14 +56,6 @@
       "status": "partial"
     },
     {
-      "id": "round-driver",
-      "group": "inference",
-      "title": "Round driver (experimental)",
-      "summary": "own speculative round driver for dense Qwen3.5-family models",
-      "doc": "docs/guides/ROUND_DRIVER.md",
-      "status": "experimental"
-    },
-    {
       "id": "model-support",
       "group": "inference",
       "title": "Model support",

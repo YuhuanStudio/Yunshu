@@ -55,8 +55,7 @@ async def main():
 
     print("=== engine-loop correctness verify ===")
     print(
-        f"model: {MODEL}  ENGINE_LOOP={os.environ.get('YUNSHU_ENGINE_LOOP')} "
-        f"OFFLOAD_THRESHOLD={os.environ.get('YUNSHU_KV_OFFLOAD_THRESHOLD')}"
+        f"model: {MODEL}  ENGINE_LOOP={os.environ.get('YUNSHU_ENGINE_LOOP')}"
     )
     engine = BatchedEngine(model_name=MODEL)
     await engine.start()

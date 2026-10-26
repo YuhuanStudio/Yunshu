@@ -70,28 +70,36 @@ def _apply_spec_bonus_penalties(
         sel = _mx.where(sel < 0, sel * repetition_penalty, sel / repetition_penalty)
         logits[..., _mx.array(unique_recent)] = sel
 
+    vocab = logits.shape[-1]
     if (frequency_penalty != 0.0 or presence_penalty != 0.0) and len(gen_tokens) > 0:
         counts: dict[int, int] = {}
         for t in gen_tokens:
             counts[t] = counts.get(t, 0) + 1
-        for tid, cnt in counts.items():
-            # OpenAI permits frequency/presence penalty in [-2.0, 2.0].
-            # Negative values BOOST the token (encourage repetition); the
-            # earlier code only applied when > 0 which silently dropped
-            # negative penalties — confirmed via curl with pp=-2.0 producing
-            # identical output to pp=0. Apply for any non-zero value.
+        ids = [t for t in counts if 0 <= t < vocab]
+        if ids:
+            # One dense vector and one elementwise op per penalty, not 2-3 tiny MLX ops
+            # per distinct token (same arithmetic: the vector is cast to the logits dtype).
+            # OpenAI permits both penalties in [-2.0, 2.0]; a negative value boosts the
+            # token, so neither is gated on its sign.
+            idx = _mx.array(ids)
+            dt = logits.dtype
             if frequency_penalty != 0.0:
-                logits[..., tid] = logits[..., tid] - frequency_penalty * cnt
-            if presence_penalty != 0.0 and cnt > 0:
-                logits[..., tid] = logits[..., tid] - presence_penalty
+                fpc = _mx.zeros((vocab,), dtype=_mx.float32)
+                fpc[idx] = _mx.array([frequency_penalty * counts[t] for t in ids])
+                logits = logits - fpc.astype(dt)
+            if presence_penalty != 0.0:
+                pres = _mx.zeros((vocab,), dtype=_mx.float32)
+                pres[idx] = _mx.array([presence_penalty] * len(ids))
+                logits = logits - pres.astype(dt)
 
     if logit_bias:
         # Guard against out-of-range / negative token ids (see _logit_bias_proc):
         # an invalid user-supplied id would index out of bounds and crash.
-        vocab = logits.shape[-1]
-        for tid, bias in logit_bias.items():
-            if 0 <= tid < vocab:
-                logits[..., tid] = logits[..., tid] + bias
+        bias_ids = [t for t in logit_bias if 0 <= t < vocab]
+        if bias_ids:
+            vec = _mx.zeros((vocab,), dtype=_mx.float32)
+            vec[_mx.array(bias_ids)] = _mx.array([logit_bias[t] for t in bias_ids])
+            logits = logits + vec.astype(logits.dtype)
 
     return logits
 

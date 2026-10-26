@@ -11,6 +11,7 @@ asked. A request that fits is untouched and reports nothing.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -29,6 +30,9 @@ class TokenBudget:
     # where max_tokens_requested came from: "request", "model_limit", "operator_cap",
     # "api_spec_default" (yunshu_engine.output_limits)
     source: str = "request"
+    # how prompt_tokens was obtained: "exact" (tokenizer count) or "upper_bound" (a cheap bound
+    # that over-states the prompt; the grant is then a lower bound of what an exact count grants)
+    prompt_tokens_basis: str = "exact"
 
     @property
     def clamped(self) -> bool:
@@ -45,6 +49,8 @@ class TokenBudget:
             "max_tokens_granted": self.max_tokens_granted,
             "max_tokens_source": self.source,
         }
+        if self.prompt_tokens_basis != "exact":
+            out["prompt_tokens_basis"] = self.prompt_tokens_basis
         if self.max_tokens_granted < self.max_tokens_requested:
             out["clamped_by"] = "context_window"
         if self.thinking_budget_requested is not None:
@@ -70,12 +76,30 @@ class TokenBudget:
                 logger.debug("budget report not attached", exc_info=True)
 
 
+def estimate_tools_tokens(tools: Any) -> int:
+    """Cheap token estimate (about 4 characters per token, no encode) for tool definitions the
+    chat template renders itself (native tools): they sit outside ``messages``, so a guard that
+    counts only messages overstates the room an agent with 15-25K tokens of schemas has."""
+    if not tools:
+        return 0
+    try:
+        items = [
+            t.model_dump(exclude_none=True) if hasattr(t, "model_dump") else t
+            for t in tools
+        ]
+        return len(json.dumps(items, ensure_ascii=False, default=str)) // 4
+    except Exception:
+        logger.debug("tool size estimate failed", exc_info=True)
+        return 0
+
+
 def plan(
     context_window: int | None,
     prompt_tokens: int,
     max_tokens: int,
     thinking_budget: int | None = None,
     source: str = "request",
+    basis: str = "exact",
 ) -> TokenBudget | None:
     """The budget for one request; None when the window is unknown (nothing to enforce).
 
@@ -101,6 +125,7 @@ def plan(
         thinking_budget_requested=thinking_budget,
         thinking_budget_granted=thinking,
         source=source,
+        prompt_tokens_basis=basis,
     )
 
 
@@ -111,6 +136,7 @@ def plan_for_engine(
     model_id: str | None,
     engine: Any,
     source: str = "request",
+    basis: str = "exact",
 ) -> TokenBudget | None:
     """:func:`plan` with the window looked up the way ``validate_context_window`` does; an
     exhausted window is the same 400 as an over-long prompt."""
@@ -125,6 +151,7 @@ def plan_for_engine(
             max_tokens,
             thinking_budget,
             source,
+            basis,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None

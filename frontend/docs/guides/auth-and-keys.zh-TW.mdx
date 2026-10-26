@@ -71,6 +71,18 @@ curl -s localhost:8000/v1/yunshu/usage -H "Authorization: Bearer $YUNSHU_AUTH_TO
 - 同一份清單也用來檢查 Realtime 與文字 WebSocket 的 `Origin` 標頭。
 - 綁定位址與區域網路暴露在此 API 中為唯讀。
 
+## Host 與 Origin 檢查
+
+綁定在 loopback 位址的伺服器會檢查 `Host` 標頭，網頁因此無法經 DNS rebinding 連到它。接受 `localhost`（含 `localhost.` 與 `*.localhost`）、任何 `127.0.0.0/8` 寫法（`127.0.0.1`、`127.1`）、`[::1]` 與未指定位址（`0.0.0.0`、`[::]`），任何埠號。其他一律回 `403`，訊息會指出該標頭值與對應設定。綁定 `0.0.0.0` 的伺服器在未設定 `YUNSHU_ALLOWED_HOSTS` 時不做檢查。
+
+- 反向代理、`tailscale serve`、cloudflared 通道或 `ssh -L` 若把對外名稱當作 `Host` 轉給 loopback 伺服器，必須把該名稱加入 `YUNSHU_ALLOWED_HOSTS`（以逗號分隔；`*` 關閉檢查）。
+- loopback 綁定不接受 `host.docker.internal`：容器要連到主機 loopback，伺服器必須監聽 loopback 以外（`YUNSHU_HOST=0.0.0.0`），此時檢查本來就關閉。
+- 帶有 `Origin` 且不帶憑證的狀態變更請求，必須來自 loopback、請求自身的 origin 或 `YUNSHU_CORS_ORIGINS`。自訂協定請列 `scheme://*`（例如 `vscode-webview://*`）或完整 origin（`app://.`）。`Origin: null` 一律拒絕。帶 `Authorization` 或 `x-api-key` 的請求不受影響。
+
+## 登入失敗
+
+非 loopback 的用戶端位址在 60 秒內送出 20 次錯誤憑證後，後續錯誤憑證會得到 `429` 與 `Retry-After`。正確的 token 或金鑰一律通過並清除該用戶端的計數；完全沒有憑證的請求回 `401`，不計次。`YUNSHU_TRUSTED_PROXIES` 列出連線的代理時，以 `X-Forwarded-For` 的最後一項為用戶端位址，否則用連線對端位址。
+
 ## 其他防護
 
 - 模型下載重新導向到其他來源時，會丟棄 Authorization、API 金鑰與 cookie 標頭。

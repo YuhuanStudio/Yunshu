@@ -1,11 +1,10 @@
 """GPU-busy accounting: how much wall time the serving threads spent doing work.
 
-A :class:`BusyMeter` wraps each unit of GPU work (one executor slice of the VLM batch runner,
-one step of the round driver) and keeps a cumulative busy-seconds counter. The idle fraction
+A :class:`BusyMeter` wraps each unit of GPU work (one executor slice of the VLM batch runner) and keeps a cumulative busy-seconds counter. The idle fraction
 over a window is ``1 - busy / wall`` from two snapshots of the counter, so a scrape of
 ``/metrics`` (``yunshu_gpu_busy_seconds_total``) is enough to compute it with ``rate()``.
 
-Nested spans on one thread (a slice that contains a driver step) are counted once; spans from
+Nested spans on one thread (a span inside a slice) are counted once; spans from
 different threads are merged as a union of intervals, not summed. The clock is injectable
 (tests use a fake one).
 """

@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
 from yunshu_kv.thinking_segment import ThinkingSegmentConfig, ThinkingSegmentSubstore
 
+from .constraint_eos import ConstrainedDecodingError, GrammarDeadEndError
 from .ngram_proposer import NgramConfig, NgramProposer
 from .priority_queue import RequestPriorityQueue, make_waiting_queue
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
@@ -573,15 +574,6 @@ class SchedulingPolicy(Enum):
     )  # Round-robin across priority levels (prevents low-priority starvation)
 
 
-def _banning_processor(ban: Any, ids: list[int]) -> Any:
-    """A logits processor that bans ``ids`` (typed, so mlx-lm's processor type accepts it)."""
-
-    def _proc(_tokens: Any, logits: Any) -> Any:
-        return ban(logits, ids)
-
-    return _proc
-
-
 class _ReasoningTracker:
     """normal <-> reasoning from the model's think start / end token sequences."""
 
@@ -726,6 +718,35 @@ class _LogitsProcessorSampler:
         self._tokens.clear()
 
 
+class _DeadEndGuardSampler:
+    """One row's constrained sampler: a grammar dead end fails THIS request only.
+
+    An exception from a row's sampler propagates out of the shared ``BatchGenerator.next()`` and
+    the engine loop would fail every active request. The guard records the fault, ends the row by
+    returning EOS (or the plain argmax when the model has none) and lets ``_process_responses``
+    finish the request with ``finish_reason="error"``."""
+
+    def __init__(self, inner, eos_id: int | None) -> None:
+        self._inner = inner
+        self._eos_id = eos_id
+        self.fault: str | None = None
+
+    def __call__(self, logits):
+        try:
+            return self._inner(logits)
+        except (ConstrainedDecodingError, GrammarDeadEndError) as exc:
+            import mlx.core as mx
+
+            self.fault = str(exc) or "constrained decoding dead end"
+            tok = mx.argmax(logits, axis=-1)
+            if self._eos_id is None:
+                return tok
+            return mx.full(tok.shape, self._eos_id, dtype=tok.dtype)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
 class _RequestSpecStats(TypedDict):
     proposals: int
     accepted: int
@@ -775,6 +796,10 @@ class Scheduler:
         # Requests that failed to insert (error outputs generated in step())
         self._failed_insert_ids: list[str] = []
 
+        # req_id -> _DeadEndGuardSampler for constrained rows (a grammar dead end ends only
+        # that request, with finish_reason="error")
+        self._row_guards: dict[str, _DeadEndGuardSampler] = {}
+
         # BatchGenerator integration
         self._batch_gen = None
         self._uid_to_req: dict[int, str] = {}
@@ -792,6 +817,7 @@ class Scheduler:
 
         # Per-request thinking budget processors
         self._thinking_processors: dict[str, Any] = {}
+        self.finish_cleanup_failures: dict[str, int] = {}
 
         # KV prefix cache for batch-path insert_segments (C16)
         self._prefix_cache: Any = None
@@ -1318,6 +1344,7 @@ class Scheduler:
         outputs = []
         if self._failed_insert_ids:
             for fail_id in self._failed_insert_ids:
+                self._row_guards.pop(fail_id, None)  # sampler + matcher of a dead row
                 fail_req = self.requests.get(fail_id)
                 actual_reason = getattr(fail_req, "finish_reason", None) or "error"
                 outputs.append(
@@ -1967,7 +1994,9 @@ class Scheduler:
                     )
                     continue
 
-                sampler = self._make_sampler(sp, req.prompt_token_ids)
+                sampler = self._guard_row_sampler(
+                    req, self._make_sampler(sp, req.prompt_token_ids)
+                )
                 sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
 
                 # ── Thinking-segment KV lookup before prefill ──
@@ -2587,6 +2616,7 @@ class Scheduler:
                 self._rope_delta_mgr.unregister(uid)
             self._detokenizers.pop(request.request_id, None)
             self._thinking_processors.pop(request.request_id, None)
+            self._row_guards.pop(request.request_id, None)
             self._thinking_state.pop(request.request_id, None)
             # Save chunked prefill progress before discarding, so the request
             # can resume (not restart) when re-scheduled after preemption.
@@ -2939,8 +2969,9 @@ class Scheduler:
                         )
                         try:
                             sp = req.sampling_params
-                            sampler = self._make_sampler(
-                                sp, state.get("all_prompt_tokens")
+                            sampler = self._guard_row_sampler(
+                                req,
+                                self._make_sampler(sp, state.get("all_prompt_tokens")),
                             )
                             sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
                             # Use insert_segments for KV continuity if cache available
@@ -3155,7 +3186,9 @@ class Scheduler:
 
             try:
                 sp = req.sampling_params
-                sampler = self._make_sampler(sp, state.get("all_prompt_tokens"))
+                sampler = self._guard_row_sampler(
+                    req, self._make_sampler(sp, state.get("all_prompt_tokens"))
+                )
                 sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
 
                 # KV continuity: if we have a cached KV from a previous chunk,
@@ -3536,7 +3569,19 @@ class Scheduler:
             logprobs = None
             if hasattr(resp, "logprobs") and resp.logprobs is not None:
                 try:
-                    logprobs = resp.logprobs
+                    _sp = req.sampling_params
+                    if getattr(_sp, "logprobs", False):
+                        # the text path's per-token entry (+ top_logprobs by argpartition,
+                        # not a full-vocabulary sort); the raw vocab-wide array is not an API shape
+                        from .text_logprobs import logprob_entry
+
+                        logprobs = [
+                            logprob_entry(
+                                resp.logprobs,
+                                resp.token,
+                                getattr(_sp, "top_logprobs", None),
+                            )
+                        ]
                 except Exception:
                     logger.debug("logprobs extraction failed", exc_info=True)
 
@@ -3612,6 +3657,14 @@ class Scheduler:
                     if uid not in self._uids_to_remove:
                         self._uids_to_remove.append(uid)
 
+            _row_guard = self._row_guards.get(req_id)
+            _row_error = _row_guard.fault if _row_guard is not None else None
+            if _row_error is not None:
+                # The row's grammar hit a dead end: fail this request alone (finishing it
+                # schedules its BatchGenerator row for removal below, EOS or not)
+                finish_reason = "error"
+                is_finished = True
+
             output = RequestOutput(
                 request_id=req_id,
                 new_token_ids=new_token_ids,
@@ -3620,6 +3673,7 @@ class Scheduler:
                 output_text=req.output_text,
                 finished=is_finished,
                 finish_reason=finish_reason,
+                error=_row_error,
                 prompt_tokens=req.num_prompt_tokens,
                 completion_tokens=req.num_output_tokens,
                 logprobs=logprobs,
@@ -3639,24 +3693,36 @@ class Scheduler:
             outputs.append(output)
 
             if finish_reason:
+                self._row_guards.pop(req_id, None)
                 # Finalize detokenizer
                 detok = self._detokenizers.pop(req_id, None)
                 self._thinking_processors.pop(req_id, None)
                 self._thinking_state.pop(req_id, None)
                 # Cleanup speculative decoding state
-                self._cleanup_spec_state(req_id)
+                self._finish_step(
+                    req_id, "spec_state", self._cleanup_spec_state, req_id
+                )
                 # Clean up chunked prefill state (request may finish while
                 # still in the middle of chunked prefill, e.g. thinking budget overflow)
-                self._pop_pending_prefill(req_id)
+                self._finish_step(
+                    req_id, "pending_prefill", self._pop_pending_prefill, req_id
+                )
                 # H2O: Remove attention score tracking for finished request
                 if self._attention_score_tracker is not None:
-                    self._attention_score_tracker.remove_request(req_id)
+                    self._finish_step(
+                        req_id,
+                        "attention_tracker",
+                        self._attention_score_tracker.remove_request,
+                        req_id,
+                    )
                 # Cleanup chunked prefill production tracking
                 self._chunked_prefill_fairness.pop(req_id, None)
                 self._chunked_prefill_enqueued_at.pop(req_id, None)
                 # Unregister mRoPE delta
                 if uid is not None:
-                    self._rope_delta_mgr.unregister(uid)
+                    self._finish_step(
+                        req_id, "rope_delta", self._rope_delta_mgr.unregister, uid
+                    )
                 if detok is not None:
                     try:
                         detok.finalize()
@@ -3702,7 +3768,9 @@ class Scheduler:
                 # before its uid is popped from _uid_to_req and its KV dropped from
                 # the BatchGenerator — so even SHORT requests' prefixes get cached
                 # for the next same-prefix request (deterministic prefix reuse).
-                self._save_one_prefix(uid, req_id)
+                self._finish_step(
+                    req_id, "save_prefix", self._save_one_prefix, uid, req_id
+                )
                 self._uid_to_req.pop(uid, None)
                 # Schedule removal from BatchGenerator so subsequent decode
                 # steps within the same step() call don't waste GPU forward
@@ -3719,7 +3787,10 @@ class Scheduler:
 
                 # Record in ServerMetrics
                 if self._server_metrics is not None:
-                    self._server_metrics.record_request_complete(
+                    self._finish_step(
+                        req_id,
+                        "server_metrics",
+                        self._server_metrics.record_request_complete,
                         prompt_tokens=req.num_prompt_tokens,
                         completion_tokens=req.num_output_tokens,
                         cached_tokens=req.cached_tokens,
@@ -3731,13 +3802,34 @@ class Scheduler:
                     itl_list = self._itl_samples.pop(req_id, [])
                     if itl_list and hasattr(self._server_metrics, "record_itl"):
                         for sample in itl_list:
-                            self._server_metrics.record_itl(sample)
+                            self._finish_step(
+                                req_id,
+                                "server_metrics",
+                                self._server_metrics.record_itl,
+                                sample,
+                            )
 
                 # Cleanup ITL tracking state
                 self._last_token_time.pop(req_id, None)
                 self._itl_samples.pop(req_id, None)
 
         return outputs
+
+    def _finish_step(self, req_id: str, step: str, fn, *args, **kwargs) -> None:
+        """Run one cleanup step of a finishing request. A raise is logged and counted: the
+        step loop would otherwise drop this step's outputs (the finished request's terminal
+        included) and fail every other active request (mlx2 3dc6f0f)."""
+        try:
+            fn(*args, **kwargs)
+        except Exception:
+            self.finish_cleanup_failures[step] = (
+                self.finish_cleanup_failures.get(step, 0) + 1
+            )
+            logger.exception(
+                "request %s: finish step %s failed; still delivering its terminal",
+                req_id,
+                step,
+            )
 
     def _process_prefill_responses(self, responses: list) -> None:
         """Handle prompt processing completion."""
@@ -3816,6 +3908,7 @@ class Scheduler:
             self.running.pop(req_id, None)
             self._detokenizers.pop(req_id, None)
             self._thinking_processors.pop(req_id, None)
+            self._row_guards.pop(req_id, None)
             self._thinking_state.pop(req_id, None)
             self._pop_pending_prefill(req_id)
             self._cleanup_spec_state(req_id)
@@ -4002,6 +4095,7 @@ class Scheduler:
                 # _process_responses (e.g. chunked prefill timeout paths).
                 self._detokenizers.pop(req_id, None)
                 self._thinking_processors.pop(req_id, None)
+                self._row_guards.pop(req_id, None)
                 self._thinking_state.pop(req_id, None)
                 self._spec_drafts.pop(req_id, None)
                 self._spec_draft_start_pos.pop(req_id, None)
@@ -4040,7 +4134,7 @@ class Scheduler:
         that's a SINGLETON @property on mlx-lm's tokenizer wrapper. All
         concurrent requests shared the same detokenizer; one request's
         `.reset()` wiped another's byte buffer mid-stream, corrupting
-        streaming output. CLAUDE.md explicitly warns: "never pool".
+        streaming output. A detokenizer is never pooled across requests.
 
         Now instantiate a fresh detokenizer via the tokenizer's
         detokenizer_class when available; fall back to the singleton +
@@ -4090,6 +4184,20 @@ class Scheduler:
         detok.reset()
         return detok
 
+    def _guard_row_sampler(self, req, sampler):
+        """Isolate a constrained request's grammar dead end to that request (see
+        ``_DeadEndGuardSampler``); unconstrained samplers are returned as they are."""
+        sp = req.sampling_params
+        if (
+            getattr(sp, "json_schema", None) is None
+            and getattr(sp, "grammar", None) is None
+        ):
+            return sampler
+        eos = list(getattr(self.tokenizer, "eos_token_ids", None) or [])
+        guard = _DeadEndGuardSampler(sampler, int(eos[0]) if eos else None)
+        self._row_guards[req.request_id] = guard
+        return guard
+
     def _make_sampler(
         self, sp: SamplingParams, prompt_token_ids: list[int] | None = None
     ):
@@ -4138,47 +4246,35 @@ class Scheduler:
         # over the GENERATED completion ONLY, across the full history. Replace the two
         # penalties with the same incremental generated-only closure (n_prompt = prompt
         # length here, since tokens = prompt + generated), leaving rep-penalty/logit_bias.
-        logits_processors = make_logits_processors(
-            repetition_penalty=sp.repetition_penalty
-            if sp.repetition_penalty != 1.0
-            else None,
-            logit_bias=getattr(sp, "logit_bias", None),
+        from . import text_logit_processors as _tlp
+
+        # Order matters (the multiplicative repetition penalty does not commute with the
+        # additive bias): logit_bias, repetition penalty, frequency/presence, as before.
+        # logit_bias / frequency+presence penalty / suppress / min_tokens use the same dense
+        # per-request vectors as the text path (text_logit_processors): one op per step
+        # instead of 2-3 per token id, and each row owns its counts.
+        logits_processors: list[Any] = []
+        _lbias = getattr(sp, "logit_bias", None)
+        if _lbias:
+            logits_processors.append(
+                _tlp.LogitBias({int(k): float(v) for k, v in _lbias.items()})
+            )
+        logits_processors.extend(
+            make_logits_processors(
+                repetition_penalty=sp.repetition_penalty
+                if sp.repetition_penalty != 1.0
+                else None,
+            )
         )
         _fp = sp.frequency_penalty if sp.frequency_penalty != 0.0 else 0.0
         _pp = sp.presence_penalty if sp.presence_penalty != 0.0 else 0.0
         if _fp != 0.0 or _pp != 0.0:
-            if logits_processors is None:
-                logits_processors = []
-            _fp_state: dict[str, object] = {"counts": {}, "last_len": -1}
-            _fp_nprompt = len(prompt_token_ids or [])
-
-            def _freq_pres_penalty(
-                tokens, logits, fp=_fp, pp=_pp, n_prompt=_fp_nprompt, _st=_fp_state
-            ):
-                counts: dict[int, int] = _st["counts"]  # type: ignore[assignment]
-                last_len = int(_st["last_len"])  # type: ignore[arg-type]
-                cur_len = len(tokens)
-                if cur_len <= n_prompt:
-                    _st["last_len"] = cur_len
-                    return logits
-                if cur_len < last_len or last_len < n_prompt:
-                    counts = {}
-                    for t in tokens[n_prompt:]:
-                        counts[int(t)] = counts.get(int(t), 0) + 1
-                    _st["counts"] = counts
-                else:
-                    start = max(last_len, n_prompt)
-                    for t in tokens[start:]:
-                        counts[int(t)] = counts.get(int(t), 0) + 1
-                _st["last_len"] = cur_len
-                for tid, cnt in counts.items():
-                    if fp != 0.0:
-                        logits[..., tid] = logits[..., tid] - fp * cnt
-                    if pp != 0.0 and cnt > 0:
-                        logits[..., tid] = logits[..., tid] - pp
-                return logits
-
-            logits_processors.append(_freq_pres_penalty)
+            # tokens = prompt + generated here, so the offset is the prompt length
+            logits_processors.append(
+                _tlp.FrequencyPresencePenalty(
+                    _fp, _pp, n_prompt=len(prompt_token_ids or [])
+                )
+            )
 
         # SAMP-2: Append user-provided custom logits processors
         custom_procs = getattr(sp, "logits_processors", None)
@@ -4199,23 +4295,15 @@ class Scheduler:
         )
         _n_prompt = len(prompt_token_ids or [])
 
-        def _ban(logits, ids):
-            vocab = logits.shape[-1]
-            for tid in ids:
-                if 0 <= tid < vocab:
-                    logits[..., tid] = -float("inf")
-            return logits
-
         _supp = getattr(sp, "suppress_tokens", None)
         if _supp:
-            _sup_ids = [int(t) for t in _supp]
             if logits_processors is None:
                 logits_processors = []
-            logits_processors.append(_banning_processor(_ban, _sup_ids))
+            logits_processors.append(_tlp.TokenBan(_supp))
         if getattr(sp, "ignore_eos", False) and _eos_ids:
             if logits_processors is None:
                 logits_processors = []
-            logits_processors.append(_banning_processor(_ban, _eos_ids))
+            logits_processors.append(_tlp.TokenBan(_eos_ids))
         _min_tok = int(getattr(sp, "min_tokens", 0) or 0)
         # Skip min_tokens EOS-masking when constrained — the constraint governs
         # termination and masking EOS at its DONE state yields invalid output
@@ -4228,15 +4316,9 @@ class Scheduler:
         ):
             if logits_processors is None:
                 logits_processors = []
-
-            def _min_tokens_proc(
-                toks, lg, eos=_eos_ids, floor=_min_tok, nprompt=_n_prompt
-            ):
-                if (len(toks) - nprompt) < floor:
-                    return _ban(lg, eos)
-                return lg
-
-            logits_processors.append(_min_tokens_proc)
+            logits_processors.append(
+                _tlp.TokenBan(_eos_ids, floor=_min_tok, n_prompt=_n_prompt)
+            )
 
         if logits_processors:
             # Wrap sampler to apply logits processors before sampling.
@@ -4251,6 +4333,15 @@ class Scheduler:
         # JSON schema / grammar constrained generation
         json_schema = getattr(sp, "json_schema", None)
         grammar = getattr(sp, "grammar", None)
+
+        def _gated(free, constrained):
+            # generation starts inside an open <think>: the grammar binds after </think>
+            from .reasoning_gate import gate_constrained_sampler
+
+            return gate_constrained_sampler(
+                free, constrained, prompt_token_ids or [], self.tokenizer, _eos_ids
+            )
+
         if json_schema is not None or grammar is not None:
             from .grammar_constraint import ConstraintFactory
             from .json_schema import ConstrainedSampler
@@ -4272,7 +4363,10 @@ class Scheduler:
                         constraint = ConstraintFactory.create(
                             gtype, gpayload, self.tokenizer
                         )
-                        return ConstrainedSampler(sampler, constraint, self.tokenizer)
+                        return _gated(
+                            sampler,
+                            ConstrainedSampler(sampler, constraint, self.tokenizer),
+                        )
                     except Exception:
                         logger.debug(
                             "grammar constraint setup failed, falling back",
@@ -4283,7 +4377,10 @@ class Scheduler:
 
                     schema = grammar.get("schema")
                     constraint = build_json_constraint(schema, self.tokenizer)
-                    return ConstrainedSampler(sampler, constraint, self.tokenizer)
+                    return _gated(
+                        sampler,
+                        ConstrainedSampler(sampler, constraint, self.tokenizer),
+                    )
 
             # Fallback to json_schema field
             if json_schema is not None:
@@ -4296,7 +4393,9 @@ class Scheduler:
                     tokenizer=self.tokenizer,
                     mode="json_schema" if schema else "json_object",
                 )
-                return constrained_sampler
+                return _gated(
+                    sampler if logits_processors else base_sampler, constrained_sampler
+                )
 
         return sampler
 
@@ -4391,6 +4490,7 @@ class Scheduler:
         for rid in failed:
             self._detokenizers.pop(rid, None)
             self._thinking_processors.pop(rid, None)
+            self._row_guards.pop(rid, None)
             self._thinking_state.pop(rid, None)
             self._pending_prefill.pop(rid, None)
             self._spec_drafts.pop(rid, None)
@@ -4993,6 +5093,7 @@ class Scheduler:
         self._uid_to_req.clear()
         self._detokenizers.clear()
         self._thinking_processors.clear()
+        self._row_guards.clear()  # each holds a constrained sampler and a grammar matcher
         self._thinking_state.clear()
         self._pending_abort_ids.clear()
         self._uids_to_remove.clear()

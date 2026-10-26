@@ -61,7 +61,7 @@ def main():
     from yunshu_engine.kernels.batch_invariant import set_active
     from yunshu_engine.kernels.omlx import qwen35_packed_linear as pl
 
-    omlx.apply(row_exact=False)
+    omlx.apply()
     model, processor = load(a.model_dir)
     lm = model.language_model
     if a.lane_linear:

@@ -19,7 +19,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -151,10 +151,13 @@ def _resolve_owner(request) -> str:
 
 
 def _is_admin(request) -> bool:
-    """Admin/static-token/auth-disabled check (matches cancel.py:101-107)."""
+    """Admin/static-token/auth-disabled check: a managed key is admin only with the admin scope."""
 
     if settings.get_bool("YUNSHU_AUTH_DISABLED"):
         return True
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    if principal is not None:
+        return "admin" in principal.scopes
     role_str = str(getattr(getattr(request, "state", None), "role", "") or "")
     return role_str.lower() in (
         "admin",
@@ -167,7 +170,7 @@ def _owns_stored(request, payload: dict) -> bool:
     """True if the caller may read/cancel this stored response.
 
     Unowned (legacy) entries stay readable to avoid breaking older
-    stores; admins bypass. Cross-tenant access to an owned entry is denied.
+    stores; admins bypass. Access by a different key to an owned entry is denied.
     """
     owner = payload.get("_owner")
     if not owner:
@@ -586,6 +589,7 @@ from ..server_tools.responses_loop import (
     input_item_to_messages,
 )
 from ..streaming import (
+    ClosingStreamingResponse,
     format_responses_completed,
     format_responses_content_part_added,
     format_responses_content_part_done,
@@ -689,6 +693,10 @@ class ResponsesRequest(BaseModel):
     # max_output_tokens so old client code doesn't run unbounded against
     # /v1/responses. Caught by validate_request hook below.
     max_completion_tokens: int | None = Field(default=None, ge=1, le=1048576)
+    # Compatibility alias of max_output_tokens (Rapid-MLX 3de1c6c4): without it the field fell
+    # into extra="allow" and the reply ran to the model's output limit. Conflicting values are
+    # a 400, like max_tokens vs max_completion_tokens on chat.
+    max_tokens: int | None = Field(default=None, ge=1, le=1048576)
     temperature: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
     top_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
     top_k: int = Field(default=None, ge=0)  # type: ignore[assignment]  # None until resolve_sampling
@@ -812,7 +820,8 @@ class ResponsesRequest(BaseModel):
                         "json_schema": {
                             "name": fmt.get("name", "response"),
                             "schema": fmt.get("schema", {}),
-                            "strict": fmt.get("strict", True),
+                            # OpenAI default: strict false when omitted.
+                            "strict": fmt.get("strict") is True,
                         },
                     }
                 elif fmt.get("type") == "json_object":
@@ -830,6 +839,16 @@ class ResponsesRequest(BaseModel):
             object.__setattr__(
                 self, "max_output_tokens", int(self.max_completion_tokens)
             )
+        if self.max_tokens is not None:
+            if (
+                "max_output_tokens" in self.model_fields_set
+                and self.max_output_tokens != self.max_tokens
+            ):
+                raise ValueError(
+                    "max_tokens: conflicts with max_output_tokens "
+                    f"({self.max_tokens} != {self.max_output_tokens}); send one"
+                )
+            object.__setattr__(self, "max_output_tokens", int(self.max_tokens))
         # Map the canonical nested reasoning:{effort} → flat reasoning_effort (the form
         # the engine reads) when the flat alias wasn't also sent.
         if self.reasoning_effort is None and isinstance(self.reasoning, dict):
@@ -989,6 +1008,62 @@ def _extract_input_text(content) -> str | list:
     return "\n".join(text_parts)
 
 
+def _coalesce_assistant_turns(
+    messages: list[dict], *, drop_trailing_empty: bool = False
+) -> list[dict]:
+    """Rebuild one assistant turn from the Responses items one response generated.
+
+    A response with parallel tool calls is output as [reasoning, message(text=""),
+    function_call, function_call ...]; replayed item by item that becomes a blank assistant
+    turn plus one assistant turn per call, whereas the model generated ONE turn. The chat
+    template then renders a history the model never produced (and the prefix cache diverges
+    at the previous turn on every tool loop). Here an empty-text assistant message is dropped
+    (its reasoning moves to the following assistant message) and a tool-call-only assistant
+    message joins the assistant message right before it. A trailing empty message is kept
+    unless ``drop_trailing_empty`` (a chain replay is always followed by the new input)."""
+    out: list[dict] = []
+    carry: str | None = None
+    last = len(messages) - 1
+    for i, m in enumerate(messages):
+        if m.get("role") != "assistant":
+            out.append(m)
+            continue
+        if carry:
+            rc = m.get("reasoning_content")
+            m = {**m, "reasoning_content": f"{carry}\n{rc}" if rc else carry}
+            carry = None
+        tool_calls = m.get("tool_calls")
+        if not tool_calls and m.get("content") == "":
+            nxt = messages[i + 1] if i < last else None
+            if nxt is not None and nxt.get("role") == "assistant":
+                carry = m.get("reasoning_content")
+                continue
+            if (nxt is not None or drop_trailing_empty) and not m.get(
+                "reasoning_content"
+            ):
+                continue
+        prev = out[-1] if out else None
+        if (
+            tool_calls
+            and m.get("content") == ""
+            and prev is not None
+            and prev.get("role") == "assistant"
+        ):
+            merged = {
+                **prev,
+                "tool_calls": [*(prev.get("tool_calls") or []), *tool_calls],
+            }
+            if m.get("reasoning_content"):
+                rc = prev.get("reasoning_content")
+                merged["reasoning_content"] = (
+                    f"{rc}\n{m['reasoning_content']}" if rc else m["reasoning_content"]
+                )
+            out[-1] = merged
+            continue
+        out.append(m)
+    return out
+
+
 def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
     """Convert Responses API input to OpenAI chat messages."""
     messages: list[dict[str, Any]] = []
@@ -1086,7 +1161,7 @@ def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
                 _take_reasoning({"role": role, "content": _extract_input_text(content)})
             )
 
-    return messages
+    return _coalesce_assistant_turns(messages)
 
 
 def _parse_response_format(rf: dict | None, grammar: dict | None = None) -> dict | None:
@@ -1111,7 +1186,7 @@ def _parse_response_format_unchecked(
             schema = grammar.get("schema")
             if schema:
                 return schema
-            return "json_object"
+            return cast(dict, "json_object")
         return grammar
     if rf is None:
         return None
@@ -1122,7 +1197,13 @@ def _parse_response_format_unchecked(
         return {"type": "cfg", "grammar": structural_tag_grammar(rf)}
     if rf_type == "json_schema":
         js = rf.get("json_schema", {})
-        return js.get("schema", js)
+        schema = js.get("schema")
+        if not schema:
+            return "json_object"
+        # Same strict semantics as Chat Completions (schemas/strict.py).
+        from yunshu_gateway.schemas.strict import strict_schema
+
+        return strict_schema(schema, js.get("strict"))
     elif rf_type == "json_object":
         return "json_object"
     return None
@@ -1336,7 +1417,7 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
     _bg_tasks.add(task := asyncio.create_task(_runner()))
     task.add_done_callback(_bg_tasks.discard)
     if bg is not None:
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             bg.follow(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},
@@ -1477,18 +1558,27 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
         _seen.add(_prev_id)
         _prev = _get_stored_response(_prev_id)
         # SECURITY: ownership-gate the chain parent. Without this a
-        # tenant could chain off another tenant's stored response id to
+        # different API key could chain off another key's stored response id to
         # replay (and then exfiltrate) its private input/output. Mirrors the
         # GET /responses/{id} ownership guard. A foreign id reads as unknown.
         if not _prev or not _owns_stored(request, _prev):
-            if len(_seen) == 1:
-                raise ContextError(
-                    404,
-                    f"Previous response with id '{req.previous_response_id}' not found.",
-                    "previous_response_not_found",
-                    "previous_response_id",
-                )
-            break
+            # Any missing hop (evicted from the LRU, deleted mid-chain, foreign) is an
+            # error: walking on with the newest turns only would answer from a silently
+            # truncated history (the task statement is usually in the oldest turn).
+            _where = (
+                ""
+                if _prev_id == req.previous_response_id
+                else f" (an earlier response in the chain of '{req.previous_response_id}')"
+            )
+            raise ContextError(
+                404,
+                f"Previous response with id '{_prev_id}' not found{_where}. Yunshu keeps "
+                f"the {_RESPONSE_STORE_MAX} most recent stored responses in memory and "
+                "forgets them on restart; send the conversation again in `input` without "
+                "`previous_response_id` to continue.",
+                "previous_response_not_found",
+                "previous_response_id",
+            )
         # Build this hop's turn as a UNIT in natural
         # order (user input(s) then the assistant reply) and prepend the whole unit.
         # The old code prepended user input but APPENDED assistant output, so a
@@ -1501,7 +1591,14 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
         if _stored_input:
             _turn.extend(_stored_input)
         _rs_pending: list[str] = []
-        for out in _prev.get("output") or []:
+        # a failed / cancelled response has no finished assistant turn to replay (its
+        # input still happened); incomplete (max_output_tokens) output is real history
+        _outputs = (
+            []
+            if _prev.get("status") in ("failed", "cancelled")
+            else _prev.get("output") or []
+        )
+        for out in _outputs:
             if out.get("type") == "reasoning":
                 _rt = reasoning_text_of(out)
                 if _rt:
@@ -1561,6 +1658,7 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
                 "previous_response_chain_too_long",
                 "previous_response_id",
             )
+    chain = _coalesce_assistant_turns(chain, drop_trailing_empty=True)
     if chain:
         # Inject chain after any system message but before the new user input
         if messages and messages[0].get("role") == "system":
@@ -1801,7 +1899,11 @@ async def create_response(req: ResponsesRequest, request: Request):
         from ..streaming import validate_context_window, validate_prefill_memory
 
         _tok = getattr(engine, "_tokenizer", None) or getattr(engine, "tokenizer", None)
-        _est = count_message_tokens(messages, _tok)
+        # tool definitions (rendered natively or injected below) are not in `messages` yet
+        from ..token_budget import estimate_tools_tokens
+
+        _tools_est = estimate_tools_tokens(req.tools)
+        _est = count_message_tokens(messages, _tok) + _tools_est
         if req.truncation == "auto":
             from ..streaming import get_max_context_window
 
@@ -1813,7 +1915,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                     messages,
                     _est,
                     _room,
-                    lambda ms: count_message_tokens(ms, _tok),
+                    lambda ms: count_message_tokens(ms, _tok) + _tools_est,
                 )
                 if len(messages) < len(_before):
                     # never silent: what was dropped goes to x_yunshu.context_policy
@@ -1844,7 +1946,8 @@ async def create_response(req: ResponsesRequest, request: Request):
             engine,
             source=(
                 SOURCE_REQUEST
-                if {"max_output_tokens", "max_completion_tokens"} & req.model_fields_set
+                if {"max_output_tokens", "max_completion_tokens", "max_tokens"}
+                & req.model_fields_set
                 else default_source()
             ),
         )
@@ -1963,7 +2066,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 detail="n>1 is not supported with stream=True for the Responses API. "
                 "Use stream=False for multiple completions, or stream=True with n=1.",
             )
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             _stream_response(
                 engine,
                 req,
@@ -3593,8 +3696,8 @@ async def get_response(
     """
     _check_permission(request, "can_infer")
     payload = _get_stored_response(response_id)
-    # SECURITY (cross-tenant IDOR): a stored response is owned by the
-    # tenant that created it. Treat a cross-tenant access exactly like
+    # SECURITY (cross-key IDOR): a stored response is owned by the
+    # API key that created it. Treat access by a different key exactly like
     # not-found so the id space isn't enumerable. (Every other per-handle router
     # enforces this —; Responses was missed.)
     if payload is None or not _owns_stored(request, payload):
@@ -3627,7 +3730,7 @@ async def get_response(
                     }
                 },
             )
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             bg.follow(starting_after),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},
@@ -3774,7 +3877,7 @@ async def delete_response(response_id: str, request: Request):
     the endpoint was missing entirely — a stored response/conversation could
     never be explicitly deleted (only LRU-evicted after the store cap), so clients got 405
     and a stored conversation lingered until eviction (a minor privacy gap). Returns the
-    OpenAI delete envelope. Ownership-gated exactly like GET (cross-tenant delete is denied as not-found so the id space stays non-enumerable, the IDOR class).
+    OpenAI delete envelope. Ownership-gated exactly like GET (delete by a different key is denied as not-found so the id space stays non-enumerable, the IDOR class).
     """
     _check_permission(request, "can_infer")
     payload = _get_stored_response(response_id)
@@ -3810,8 +3913,8 @@ async def cancel_response(response_id: str, request: Request):
     """
     _check_permission(request, "can_infer")
 
-    # SECURITY (cross-tenant cancel IDOR): mirror /v1/cancel's ownership
-    # guard. Without it any tenant could cancel another tenant's in-flight
+    # SECURITY (cross-key cancel IDOR): mirror /v1/cancel's ownership
+    # guard. Without it any key could cancel another key's in-flight
     # Responses generation by id (the SSE stream leaks the resp- id). Admins
     # bypass; an in-flight request with no recorded owner stays cancellable.
     cancelled = False
@@ -3891,8 +3994,10 @@ def _count_prompt_tokens(tok, messages: list[dict], tools=None) -> int:
     the engines render it: template, generation prompt, no double BOS; images at the engine's
     conservative per-image estimate."""
     from yunshu_control.token_counter import IMAGE_TOKEN_ESTIMATE
+    from yunshu_engine.special_tokens import neutralize_special_text
 
     kw = {"tools": tools} if tools else {}
+    messages = neutralize_special_text(messages, tok)
     try:
         prompt = tok.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True, **kw

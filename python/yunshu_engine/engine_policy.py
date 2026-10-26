@@ -60,6 +60,28 @@ def _read_config_eos_ids(model_path: str) -> frozenset:
     return result
 
 
+def _delivered_token_count(token_ends, delivered_len: int, generated: int) -> int:
+    """Completion tokens for a reply cut at a stop string, from the token stream itself:
+    ``token_ends[i]`` is the cumulative text length after the i-th generated token. A token whose
+    text is fully delivered counts, and so does one the cut falls inside; tokens that only made up
+    the held-back stop text are not billed. No re-tokenising of the delivered text (that merges
+    differently from the generated ids, and a long reply would block the event loop)."""
+    if len(token_ends) < generated:
+        return (
+            generated  # the stream's token log is incomplete: bill what was generated
+        )
+    count, prev = 0, 0
+    for end in token_ends[:generated]:
+        if end <= delivered_len:
+            count += 1
+        else:
+            if prev < delivered_len:
+                count += 1  # the cut falls inside this token: part of it was delivered
+            break
+        prev = end
+    return count
+
+
 def _parse_quant_config_env(s: str) -> dict | None:
     """Parse YUNSHU_QUANT_CONFIG into an mlx-lm quantization dict.
 

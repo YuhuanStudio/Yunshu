@@ -69,6 +69,8 @@ const settings = {
   "config.decrement": "減少",
   "config.secretSet": "已設定（輸入新值以取代）",
   "config.secretUnset": "未設定",
+  "config.readOnlyHost":
+    "此處唯讀：它可執行程式碼或存取主機路徑，請在主機上編輯設定檔。",
   "config.overriddenEnv": "環境變數 {name} 已設定，優先於此處的值。",
   "config.overriddenCli": "命令列參數已設定，優先於此處的值。",
   "config.invalidCount":

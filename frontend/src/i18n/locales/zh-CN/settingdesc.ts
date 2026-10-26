@@ -94,6 +94,8 @@ const settingdesc = {
   YUNSHU_COMPACT_MAX_TOKENS: "Responses 压缩：模型所写摘要的 token 数上限。",
   YUNSHU_AUTH_TOKEN:
     "Bearer 令牌。设置后，除 health、version 和 docs 外的所有请求都需要它；未设置时推理开放，但运维类端点被拒绝。",
+  YUNSHU_ADMIN_WRITE_EXEC_SETTINGS:
+    "允许 `PATCH /v1/yunshu/config`（控制台设置编辑器）修改会执行主机代码或访问任意主机路径的设置：所有路径类设置、`YUNSHU_MCP_SERVERS`、`YUNSHU_TRUST_REMOTE_CODE`、`YUNSHU_CODE_EXECUTION`、`YUNSHU_ALLOW_LOCAL_FILES`。默认关闭：这些设置经 HTTP 只读，请在主机上编辑配置文件；本设置本身也无法经 HTTP 修改。",
   YUNSHU_AUTH_DISABLED:
     "完全禁用认证（运维类端点也会开放），仅供本地开发使用。",
   YUNSHU_DEBUG_TREE_PROFILE:
@@ -109,6 +111,8 @@ const settingdesc = {
     "每个客户端的请求速率上限（每分钟请求数）；0（默认）表示关闭。本地单用户的引擎不需要，服务器对其他机器开放时再设置。",
   YUNSHU_TRUSTED_PROXIES:
     "以逗号分隔的代理 IP，其 `X-Forwarded-For` 头会被信任。",
+  YUNSHU_ALLOWED_HOSTS:
+    "除了回环地址名称外，本服务器接受的 Host 名称（以逗号分隔）。留空（默认）：绑定在回环地址的服务器只接受回环地址的 Host 头（localhost、127.0.0.1、[::1]；可防 DNS rebinding），绑定 0.0.0.0 则不检查。设置后，任何绑定地址都会检查；'*' 表示关闭检查。",
   YUNSHU_FOOTPRINT_SAMPLE_MS:
     "在后台线程中每 N ms 采样本进程的 `phys_footprint`，并将峰值以 `yunshu_process_footprint_bytes` 导出到 `/metrics`；0（默认）表示关闭。",
   YUNSHU_MAX_MEMORY_GB:
@@ -125,6 +129,8 @@ const settingdesc = {
   YUNSHU_PREFIX_HOT_LIMIT:
     "文本引擎：仅让这么多条前缀 KV 条目保持完整精度，较旧的在内存中以 4-bit 存储（复用时有损，以质量换内存）。0 表示全部完整精度。",
   YUNSHU_SSD_CACHE: "文本引擎：将前缀 KV 持久化到 SSD。",
+  YUNSHU_APC_SEAM_CHECKPOINT:
+    "VLM 运行器（APC），仅限分割不变预填：最后一条用户消息达 8192 token 以上时，在消息结尾前 2048 token 处多留一个检查点，让“同一份长文档、不同问题”的后续请求从文档处接续。每个此类提示多一份检查点复制；输出不变。实验性。",
   YUNSHU_SSD_CACHE_DIR: "文本引擎：SSD 前缀缓存目录。",
   YUNSHU_SSD_CACHE_PRECISION:
     "文本引擎：SSD 前缀缓存的存储精度：`native`（KV 和循环状态按位精确，无损）或 `int8`（逐张量 int8，磁盘占用约为 bf16 的一半，复用时有损）。",
@@ -191,6 +197,8 @@ const settingdesc = {
   YUNSHU_SPEC_PROPOSER: "文本模型：n-gram 推测解码所用的提案器类型。",
   YUNSHU_GEMMA4_ASSISTANT:
     "文本 Gemma-4 模型：辅助草稿模型目录（共享 KV 的推测解码草稿模型）。",
+  YUNSHU_SDPA_CHUNK:
+    "M1–M4、head_dim 256：将原生长 prefill 注意力的后备路径按查询行分块，使分数张量保持在 1 GiB 以下（实验性）。",
   YUNSHU_GPU_SAMPLER:
     "文本模型：在 GPU 上进行 Gumbel-max 采样（每个 token 无需 GPU 到 CPU 的同步）。",
   YUNSHU_JUMP_FORWARD:
@@ -199,6 +207,8 @@ const settingdesc = {
     "负责 JSON schema 和 `json_object` 约束解码掩码的引擎：`llguidance`（248K 词表上每 token 掩码中位数约 0.25 ms；属性按 schema 顺序）或 `inhouse`（Python 状态机，中位数约 3 ms；属性顺序不限）。llguidance 无法编译的 schema，在内置引擎支持时会回退到内置引擎。",
   YUNSHU_GRAMMAR_BITMASK:
     "约束解码改用 xgrammar 风格的位掩码引擎，而非允许列表采样器。",
+  YUNSHU_GRAMMAR_PREWARM:
+    "模型加载时在后台构建 llguidance 词元表，使第一个约束请求不必花约一秒遍历词表。每种掩码宽度约占用 0.45 GiB 原生堆；设为 0 则在首次使用时构建。",
   YUNSHU_TOOL_GRAMMAR:
     "工具调用约束解码（结构标签）：在工具调用起始标记之前为自由文本，之后调用体会被掩码为本次请求精确的调用语法（工具名称、参数键、带类型的值、结尾）。强制的 `tool_choice` 始终受约束；此开关仅控制 `auto`。关闭时，自动选择的工具调用不受约束地解码，事后再修复。",
   YUNSHU_QUANT_MODE:
@@ -211,12 +221,6 @@ const settingdesc = {
     "回复后空闲时，以 prefill 算术预演下一轮 assistant 文字并存 APC，不重用 decode KV。默认 stride 在通过资格的 27B 路径停在 assistant 结束前最后的绝对 64 对齐位置；其他路径保留完整 atom。相同对话可接手执行中预演，其他请求取消。off 停用；boundary／exact 在旧路径保留额外 assistant-end 切分且可能改变浮点舍入。",
   YUNSHU_NEXT_TURN_DELAY_S:
     "回复后至开始下一轮预演的秒数。默认 0.3，让立即追问（代理循环）在预演开始前抵达而只需预填一次，较晚的相符追问则接手执行中的工作；0 表示空闲即开始，立即追问会多花约 0.15–0.25 秒（预演加一次短尾请求）。有前台请求等待时不启动预演。",
-  YUNSHU_ROUND_PREFILL_CHUNK:
-    "回合驱动器：每个预填充区间的提示词 token 数。解码中的请求只在预填充前向传递之间推进，因此区间越小，越能在长提示词旁保持运行，代价是预填充速度约降低 20%。区间按提示词固定，输出不受其他运行中任务影响；以不同大小预填充的提示词各自一致，但彼此并非按位相同。",
-  YUNSHU_ROUND_DRIVER:
-    "稠密 Qwen3.5 系列 VLM：以Yunshu的回合驱动器处理文本请求（对所有解码行做打包前向传递，与批量预填充步骤交替；每行都有 MTP 草稿；按位置键采样；见 `docs/guides/ROUND_DRIVER.md`）。关闭时使用上游 BatchGenerator 加单请求推测解码通道。图片提示词、int8 KV 和 MoE 无论如何都走上游路径。",
-  YUNSHU_MTP_ROW_EXACT:
-    "Qwen3.5 系列运行器：使用 oMLX 逐行精确验证（验证行与单行解码按位相同），取代批不变内核。",
   YUNSHU_QWEN4_LANE:
     "Qwen3.8-Flash-Next（qwen4_exp）：解码、推测验证与草稿统一以行不变的 lane 矩阵乘处理稠密量化投影，取代上游逐行的单行 qmv。多一行验证不再成倍增加稠密权重读取量；推测输出仍与普通解码相同。输出与默认算术相差最后一位。上游融合 head 内核读不了的 head 格式（如 6-bit）会强制启用。宽于 32 行的预填块仍用 MLX 的量化矩阵乘。",
   YUNSHU_ENGINE_LOOP:
@@ -314,6 +318,8 @@ const settingdesc = {
   YUNSHU_ARM:
     "在服务记录中记录本服务器所运行配置组（arm）的标签，用于离线 A/B 分析；不会改变任何行为。",
   YUNSHU_GATEWAY_URL: "`yunshu` CLI 客户端命令所使用的服务器 URL。",
+  YUNSHU_API_KEY:
+    "客户端：`yunshu` CLI 发送给服务器的 Bearer 密钥（`yunshu statusline`），也会传给 `yunshu launch` 启动的编程代理（Codex 以它作为供应商密钥）。服务器不会读取它；服务器端请设置 `YUNSHU_AUTH_TOKEN`。",
   YUNSHU_HF_ENDPOINT:
     "`yunshu serve` 使用的 Hugging Face Hub 端点（会导出为 `HF_ENDPOINT`）。",
   YUNSHU_HISTORY_INTERVAL_S:

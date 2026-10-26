@@ -2,7 +2,7 @@
  {
   "match": "openai * /organization/*",
   "status": "not_applicable",
-  "reason": "OpenAI organization administration (keys, users, projects, usage, audit logs, certificates, spend limits). Yunshu is a single-user local server: the admin API and multi-tenant RBAC were removed on purpose (CLAUDE.md refocus)."
+  "reason": "OpenAI organization administration (keys, users, projects, usage, audit logs, certificates, spend limits). Yunshu is a single-user local server: the admin API and multi-tenant RBAC were removed on purpose (single-node refocus, see AGENTS.md)."
  },
  {
   "match": "openai * /projects/*",
@@ -47,7 +47,7 @@
  {
   "match": "openai * /videos*",
   "status": "not_applicable",
-  "reason": "Video generation (Sora) is a parked modality in this engine (CLAUDE.md: other modalities are supported capabilities, not the identity)."
+  "reason": "Video generation (Sora) is a parked modality in this engine (AGENTS.md: other modalities are supported capabilities, not the identity)."
  },
  {
   "match": "openai * /webhook_endpoints*",

@@ -1,5 +1,5 @@
 # Upstream (derived): ashhart/TensorFold (MIT) src/tensorfold/kernels/qwen/dense/v1/lane_qmm.py @ 34bae79a
-"""Row-invariant quantized projections for the round driver (any row count).
+"""Row-invariant quantized projections for the speculative lane (any row count).
 
 TensorFold's lane matmul (``kernels.tensorfold.lane_qmm``, MIT) multiplies bf16
 rows by MLX affine-quantized weights (2..8 bits) with hardware-selected cooperative tensor fragment layouts and a
@@ -12,9 +12,8 @@ biases, so memory does not grow) and cuts calls wider than 128 rows into
 verify rows and prefill chunks packed into one forward get the bits each row
 would get alone.
 
-``convert`` swaps a language model's eligible ``nn.QuantizedLinear`` layers
-(and, for tied embeddings, builds a lane head from the quantized embedding) —
-the round driver's forward and every other caller of those modules then use it.
+``convert`` swaps a language model's eligible ``nn.QuantizedLinear`` layers —
+every caller of those modules then uses it.
 """
 
 from __future__ import annotations
@@ -97,7 +96,14 @@ def eligible(module: Any) -> bool:
         return False
     n = int(module.weight.shape[0])
     k = int(module.weight.shape[1]) * 32 // bits
-    return k % int(module.group_size) == 0 and k % 64 == 0 and n % 4 == 0
+    # columns not a multiple of NT stay untiled: the kernel slices the whole weight tensor
+    tiled = n % lane_qmm.NT == 0
+    return (
+        k % int(module.group_size) == 0
+        and k % 64 == 0
+        and n % 4 == 0
+        and lane_qmm.slice_offset_ok(n, k, bits, tiled=tiled)
+    )
 
 
 class LaneLinear(nn.Module):
@@ -435,8 +441,7 @@ def lane_head(embedding: Any) -> LaneLinear | None:
 def convert(language_model: Any, *, skip: tuple[str, ...] = ()) -> dict:
     """Replace the eligible quantized projections of ``language_model`` (the
     decoder and ``lm_head``) with ``LaneLinear``; returns counts. Layers the
-    kernel cannot read stay as they are (``skipped``) — the round driver runs
-    those one row at a time."""
+    kernel cannot read stay as they are (``skipped``)."""
     converted, skipped, pending = 0, [], []
     for name, module in list(language_model.named_modules()):
         children = [
@@ -472,4 +477,4 @@ def convert(language_model: Any, *, skip: tuple[str, ...] = ()) -> dict:
     return {"converted": converted, "skipped": skipped}
 
 
-__all__ = ["LaneLinear", "convert", "eligible", "lane_head"]
+__all__ = ["LaneLinear", "convert", "eligible"]

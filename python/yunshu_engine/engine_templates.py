@@ -8,6 +8,8 @@ retain the shared BatchedEngine state; misc ignores allow that mixin self type.
 
 from collections.abc import AsyncIterator
 
+from yunshu_engine.special_tokens import neutralize_special_text
+
 
 class EngineTemplatesMixin:
     async def chat(  # type: ignore[misc]
@@ -160,25 +162,49 @@ class EngineTemplatesMixin:
             # Tokenizer.encode doesn't accept the kwarg — fall back (no double-BOS guard).
             return tokenizer.encode(text)
 
-    def _apply_chat_template(  # type: ignore[misc]
-        self: _engine.BatchedEngine,
-        messages: list[dict],
-        enable_thinking: bool | None = None,
-        tools: list | None = None,
-    ) -> str:
-        """Apply chat template to convert messages to text.
+    @staticmethod
+    def _clean_template_messages(messages: list[dict]) -> list[dict]:
+        """The ``{role, content, tool fields}`` list handed to ``apply_chat_template``."""
+        clean = []
+        for m in messages:
+            # coerce content=None → "" BEFORE the template. m.get("content",
+            # "") returns the default only when the key is MISSING; an explicit
+            # content=None (the canonical OpenAI agent-loop assistant turn
+            # {"role":"assistant","content":null,"tool_calls":[...]}) passes None through.
+            # A Jinja `{{ content }}` then renders Python None as the literal text "None"
+            # (verified) — corrupting every GLM/Llama/Qwen tool-calling turn with history;
+            # a `{{ "x" + content }}` template instead raises TypeError → plaintext
+            # fallback. The Gemma adapter and VLMEngine._format_prompt already coerce
+            # None→"" via _extract_text; this is the un-swept BatchedEngine text sibling.
+            _content = m.get("content")
+            msg = {
+                "role": m.get("role", "user"),
+                "content": "" if _content is None else _content,
+            }
+            # Preserve tool-related fields for correct template rendering
+            if m.get("tool_calls"):
+                msg["tool_calls"] = m["tool_calls"]
+            if m.get("tool_call_id"):
+                msg["tool_call_id"] = m["tool_call_id"]
+            if m.get("name"):
+                msg["name"] = m["name"]
+            # preserve reasoning_content — the family
+            # adapters thread it through, but this clean step dropped it, so
+            # DeepSeek-v3.2's thinking template (which asserts
+            # `reasoning_content or tool_calls` for an assistant turn after the
+            # last user msg) raised AssertionError → whole prompt collapsed to the
+            # plaintext fallback.
+            if m.get("reasoning_content"):
+                msg["reasoning_content"] = m["reasoning_content"]
+            clean.append(msg)
+        return clean
 
-        ``tools`` (OpenAI function schemas), when the model's chat template natively
-        supports a ``tools`` variable, are rendered in the model's OWN tool format +
-        special tokens (better adherence/parse rates than a generic injected system
-        prompt). Callers pass tools ONLY when they've skipped the prompt-injection
-        fallback (see _engine_supports_native_tools); otherwise None keeps the old path.
-        """
-        thinking = (
-            enable_thinking if enable_thinking is not None else self.enable_thinking
-        )
+    def _prepare_template_messages(  # type: ignore[misc]
+        self: _engine.BatchedEngine, messages: list[dict]
+    ) -> list[dict]:
+        """Role remap, family adapter, special-token defusing and tool-call normalisation: every
+        render of a conversation (generation, ``/tokenize``, ``/apply-template``) starts here."""
         tokenizer = self._tokenizer
-
         # normalize OpenAI's `developer` role → `system` and the
         # legacy `function` role → `tool` BEFORE the family adapter + template run. Request
         # validation accepts both, but no chat template knows them → apply_chat_template
@@ -204,44 +230,44 @@ class EngineTemplatesMixin:
         except Exception:
             _engine.logger.debug("message adapter failed", exc_info=True)
 
+        # special-token strings typed in message text stay text (never control ids)
+        messages = neutralize_special_text(messages, tokenizer)
+
         # Safety normalization: close dangling <think> before <tool_call>,
         # convert tool-call argument strings to dicts (vllm-mlx pattern)
         messages = self._normalize_messages_for_chat_template(messages)
+        return messages
+
+    def _template_messages(  # type: ignore[misc]
+        self: _engine.BatchedEngine, messages: list[dict]
+    ) -> list[dict]:
+        """Exactly the messages generation passes to ``apply_chat_template``."""
+        return self._clean_template_messages(self._prepare_template_messages(messages))
+
+    def _apply_chat_template(  # type: ignore[misc]
+        self: _engine.BatchedEngine,
+        messages: list[dict],
+        enable_thinking: bool | None = None,
+        tools: list | None = None,
+    ) -> str:
+        """Apply chat template to convert messages to text.
+
+        ``tools`` (OpenAI function schemas), when the model's chat template natively
+        supports a ``tools`` variable, are rendered in the model's OWN tool format +
+        special tokens (better adherence/parse rates than a generic injected system
+        prompt). Callers pass tools ONLY when they've skipped the prompt-injection
+        fallback (see _engine_supports_native_tools); otherwise None keeps the old path.
+        """
+        thinking = (
+            enable_thinking if enable_thinking is not None else self.enable_thinking
+        )
+        tokenizer = self._tokenizer
+
+        messages = self._prepare_template_messages(messages)
 
         if tokenizer and hasattr(tokenizer, "apply_chat_template"):
             try:
-                clean = []
-                for m in messages:
-                    # coerce content=None → "" BEFORE the template. m.get("content",
-                    # "") returns the default only when the key is MISSING; an explicit
-                    # content=None (the canonical OpenAI agent-loop assistant turn
-                    # {"role":"assistant","content":null,"tool_calls":[...]}) passes None through.
-                    # A Jinja `{{ content }}` then renders Python None as the literal text "None"
-                    # (verified) — corrupting every GLM/Llama/Qwen tool-calling turn with history;
-                    # a `{{ "x" + content }}` template instead raises TypeError → plaintext
-                    # fallback. The Gemma adapter and VLMEngine._format_prompt already coerce
-                    # None→"" via _extract_text; this is the un-swept BatchedEngine text sibling.
-                    _content = m.get("content")
-                    msg = {
-                        "role": m.get("role", "user"),
-                        "content": "" if _content is None else _content,
-                    }
-                    # Preserve tool-related fields for correct template rendering
-                    if m.get("tool_calls"):
-                        msg["tool_calls"] = m["tool_calls"]
-                    if m.get("tool_call_id"):
-                        msg["tool_call_id"] = m["tool_call_id"]
-                    if m.get("name"):
-                        msg["name"] = m["name"]
-                    # preserve reasoning_content — the family
-                    # adapters thread it through, but this clean step dropped it, so
-                    # DeepSeek-v3.2's thinking template (which asserts
-                    # `reasoning_content or tool_calls` for an assistant turn after the
-                    # last user msg) raised AssertionError → whole prompt collapsed to the
-                    # plaintext fallback.
-                    if m.get("reasoning_content"):
-                        msg["reasoning_content"] = m["reasoning_content"]
-                    clean.append(msg)
+                clean = self._clean_template_messages(messages)
                 # ASSISTANT PREFILL. A trailing assistant message means
                 # "continue THIS turn" (Anthropic prefill, also OpenAI's) — the model
                 # must continue from the prefilled text and NOT have a fresh assistant

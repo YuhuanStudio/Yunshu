@@ -28,7 +28,7 @@ from yunshu_engine.keyed_sampling import KeyedSampler
 from yunshu_engine.request_tracker import RequestTracker, current_request_id
 from yunshu_engine.vlm_engine import _VALIDATE_URL
 from yunshu_gateway.server_tools.mcp_connector import McpConnection
-from yunshu_gateway.server_tools.netguard import Target, resolve_target
+from yunshu_engine.netguard import Target, resolve_target
 
 
 def context_repro():

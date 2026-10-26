@@ -48,15 +48,15 @@ format:
 # use case, prefer multi-model mode so brain + VLM + ASR + TTS can co-reside.
 
 dev:
-    uv run uvicorn python.yunshu_gateway.main:app --host 127.0.0.1 --port 8000
+    uv run uvicorn --app-dir python yunshu_gateway.main:app --host 127.0.0.1 --port 8000
 
 # Multi-model mode (discovers all models in ./models/)
 dev-multi:
-    YUNSHU_MULTI_MODEL=1 YUNSHU_MODELS_DIR=./models uv run uvicorn python.yunshu_gateway.main:app --host 127.0.0.1 --port 8000
+    YUNSHU_MULTI_MODEL=1 YUNSHU_MODELS_DIR=./models uv run uvicorn --app-dir python yunshu_gateway.main:app --host 127.0.0.1 --port 8000
 
 # Load a specific model
 dev-model MODEL:
-    YUNSHU_MODEL=./models/{{ MODEL }} uv run uvicorn python.yunshu_gateway.main:app --host 127.0.0.1 --port 8000
+    YUNSHU_MODEL=./models/{{ MODEL }} uv run uvicorn --app-dir python yunshu_gateway.main:app --host 127.0.0.1 --port 8000
 
 # CLI
 cli *ARGS:

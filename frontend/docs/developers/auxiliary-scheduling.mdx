@@ -34,7 +34,7 @@ A recognized auxiliary request waits 500 ms (`defer_auxiliary`) so the companion
 
 ### Runner behavior
 
-- The VLM runner holds pending auxiliary rows while primary work exists, keeps the two priorities in separate batches, and pauses an active auxiliary batch while a primary is present. Speculative lanes keep their own cache and sampling state, and the shared drafter's state is restored when switching. The experimental [round driver](/docs/developers/round-driver) has a separate auxiliary driver with the same model, chunking and sampling path.
+- The VLM runner holds pending auxiliary rows while primary work exists, keeps the two priorities in separate batches, and pauses an active auxiliary batch while a primary is present. Speculative lanes keep their own cache and sampling state, and the shared drafter's state is restored when switching.
 - An auxiliary row that has waited 10 seconds since its last service gets a service opportunity. That is not a completion deadline: in-flight atoms, older work, client cancellation and deadlines still apply.
 - Interactive prefills gain persistent FIFO protection after one overtaking atom, so later short arrivals cannot repeatedly skip a long cold request. A selected request finishes its last 2048-token window and delivers its first token before decode debt is repaid.
 - Decode time owed to running rows after a prefill atom is at least 75 ms (`DECODE_QUANTUM_S`) and at most `DECODE_QUANTUM_MAX_S`, with a larger share for rows still in their first tokens. A short primary completion handoff (`PRIMARY_HANDOFF_S`, 100 ms) keeps a finishing primary ahead of auxiliary admission, with a CPU-only timer so MLX work stays on the single executor thread.
@@ -66,7 +66,6 @@ The default resolves in `settings.scheduling_enabled`: when the value comes from
 - Only the captured opencode title fingerprint is recognized. Requests that differ in model name, output limit or system text are interactive.
 - The measured claim is the 27B VLM runner. Evidence comes from one captured session replayed in interleaved fresh-server pairs; it is a scheduling tradeoff, not a general speed improvement. The captured median time to first token was slightly worse with the policy on, while the tail, the six-turn completion time and a long-prefill mix improved (below).
 - Auxiliary latency gets worse by design: the mean title time to first token was higher with the policy on in the replay.
-- The round driver retains strict auxiliary priority without aging, so endless primary driver traffic can defer auxiliary service indefinitely.
 - Non-captured clients and APIs (Responses, Messages) are not classified.
 
 ## How to verify

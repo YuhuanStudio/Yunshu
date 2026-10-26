@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildIntegrations, serviceRoot } from "../src/integrations.ts";
+import {
+  buildIntegrations,
+  neverConfigured,
+  serviceRoot,
+} from "../src/integrations.ts";
 
 test("every integration carries the base URL and model", () => {
   const rows = buildIntegrations("http://10.0.0.2:8000/", "Qwen3.8-27B");
@@ -30,4 +34,13 @@ test("tokens are referenced by environment variable, never embedded", () => {
   for (const row of buildIntegrations("http://h:8000", "")) {
     assert.ok(row.code.includes("local") || row.code.includes("YUNSHU_"));
   }
+});
+
+test("first run is only an unsaved address that is still the console's own origin", () => {
+  const o = "http://127.0.0.1:8000";
+  assert.equal(neverConfigured(null, o, o), true);
+  assert.equal(neverConfigured(null, o + "/", o), true);
+  assert.equal(neverConfigured(o, o, o), false);
+  // typed but not saved (blocked storage): configured
+  assert.equal(neverConfigured(null, "http://10.0.0.2:8000", o), false);
 });

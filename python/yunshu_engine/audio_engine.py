@@ -271,6 +271,40 @@ def _decoded_audio_duration_s(audio_path: str) -> float | None:
     return None
 
 
+# Qwen3-TTS decodes at most this many codec frames per segment. mlx-audio <= 0.5 defaults
+# to it; 0.6+ defaults ``max_tokens=None`` -> the checkpoint's generation_config.json, else
+# 2048, which truncates long speech. Passed explicitly whenever the model leaves it open.
+TTS_DEFAULT_MAX_TOKENS = 4096
+
+
+def _tts_default_max_tokens(model_path: str, gen_params) -> int | None:
+    """The ``max_tokens`` to pass to a TTS ``generate()``, or None to pass nothing.
+
+    Only a model whose ``max_tokens`` default is None is touched (the upstream default
+    would then be 2048 or the checkpoint's own setting): an int default is already the
+    effective value, and other TTS models keep their own limits. A checkpoint that sets
+    ``max_new_tokens`` / ``max_tokens`` in generation_config.json keeps it (upstream reads
+    it when None)."""
+    param = gen_params.get("max_tokens")
+    if param is None or param.default is not None:
+        return None
+    try:
+        import json as _json
+        import os as _os
+
+        cfg_path = _os.path.join(model_path, "generation_config.json")
+        if model_path and _os.path.isfile(cfg_path):
+            with open(cfg_path, encoding="utf-8") as f:
+                cfg = _json.load(f)
+            if isinstance(cfg, dict) and (
+                cfg.get("max_new_tokens") or cfg.get("max_tokens")
+            ):
+                return None
+    except Exception:  # noqa: BLE001 - unreadable config: use our default
+        pass
+    return TTS_DEFAULT_MAX_TOKENS
+
+
 # ── Voice catalogue ───────────────────────────────────────────────────────────
 
 # Built-in voice names for VoiceDesign-style models.  When mlx-audio or a
@@ -368,6 +402,10 @@ class TTSEngine(ActiveRequestMixin):
                 "mlx-audio is required for TTS. Install with: pip install mlx-audio"
             ) from e
 
+        from .audio_patches import install_tts
+
+        install_tts()  # mlx-audio fixes after the 0.5.9 pin (Kokoro local voices)
+
         # Extra checkpoint tensors may be ignored; a model parameter without one fails the load
         # (a blanket strict=False retry would serve it randomly initialised).
         from .checkpoint_keys import lenient_extras_load
@@ -448,6 +486,11 @@ class TTSEngine(ActiveRequestMixin):
             gen_kwargs["speed"] = speed
         if temperature is not None and "temperature" in gen_params:
             gen_kwargs["temperature"] = temperature
+        _max_tokens = _tts_default_max_tokens(
+            getattr(self, "_model_path", ""), gen_params
+        )
+        if _max_tokens is not None:
+            gen_kwargs["max_tokens"] = _max_tokens
         gen_kwargs.update(kwargs)
 
         # Seed: the API advertises `seed` for reproducibility, but most TTS models'
@@ -545,6 +588,11 @@ class TTSEngine(ActiveRequestMixin):
             gen_kwargs["speed"] = speed
         if temperature is not None and "temperature" in gen_params:
             gen_kwargs["temperature"] = temperature
+        _max_tokens = _tts_default_max_tokens(
+            getattr(self, "_model_path", ""), gen_params
+        )
+        if _max_tokens is not None:
+            gen_kwargs["max_tokens"] = _max_tokens
         gen_kwargs.update(kwargs)
 
         # Seed: the API advertises `seed` for reproducibility, but most TTS models'
@@ -866,6 +914,10 @@ class ASREngine(ActiveRequestMixin):
                 "mlx-audio is required for ASR. Install with: pip install mlx-audio"
             ) from e
 
+        from .audio_patches import install_stt
+
+        install_stt()  # mlx-audio fixes after the 0.5.9 pin (whisper no_speech, Qwen3-ASR language)
+
         # Whisper repos that ship only weights lack the HF processor → fetch it first.
         _ensure_whisper_processor(self._model_path)
         self._model = load_model(self._model_path)
@@ -905,6 +957,16 @@ class ASREngine(ActiveRequestMixin):
         """Transcribe audio file. Returns {text, language, segments, duration}."""
         if self._model is None:
             raise RuntimeError("Engine not started")
+
+        # A WAV with no samples has nothing to transcribe: an empty transcription, not an
+        # upstream "zero samples" error surfacing as a 500.
+        if _wav_audio_duration_s(audio_path) == 0:
+            return {
+                "text": "",
+                "language": language or "und",
+                "segments": [],
+                "duration": 0.0,
+            }
 
         # Read audio file once — reuse the bytes for both VAD and LID to avoid
         # double I/O and double memory allocation for large audio files.
@@ -1116,7 +1178,19 @@ class ASREngine(ActiveRequestMixin):
             _granularities = gen_kwargs.pop("timestamp_granularities", None)
             if _granularities and "word" in _granularities:
                 gen_kwargs.setdefault("word_timestamps", True)
-            result = model.generate(audio_path, **gen_kwargs)
+            try:
+                result = model.generate(audio_path, **gen_kwargs)
+            except ValueError:
+                # mlx-audio raises on a clip that decodes to zero samples (e.g. an empty
+                # mp3/flac): that is an empty transcription, any other ValueError is real.
+                if _decoded_audio_duration_s(audio_path) == 0:
+                    return {
+                        "text": "",
+                        "language": language or "und",
+                        "segments": [],
+                        "duration": 0.0,
+                    }
+                raise
 
             if hasattr(result, "text"):
                 raw_lang = getattr(result, "language", None)
@@ -1467,6 +1541,10 @@ async def transcribe(audio_path: str, language: str | None = None) -> dict[str, 
             load_model as _load_stt,  # type: ignore[import-untyped]
         )
 
+        from .audio_patches import install_stt
+
+        install_stt()
+
         def _get_whisper_model():
             """Load and cache the whisper model to avoid reloading on every call."""
             global _whisper_model_cache
@@ -1565,6 +1643,10 @@ async def synthesize(
         from mlx_audio.tts.utils import (
             load_model as _load_tts,  # type: ignore[import-untyped]
         )
+
+        from .audio_patches import install_tts
+
+        install_tts()
 
         def _get_kokoro_model():
             global _kokoro_model_cache

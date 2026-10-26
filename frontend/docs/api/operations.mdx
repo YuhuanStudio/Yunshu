@@ -59,7 +59,7 @@ Use `GET /health/live` as the liveness check and `GET /health/ready` as the read
 | `yunshu_kv_cache_*`, `yunshu_kv_prefix_cache_*`, `yunshu_radix_*` | KV block usage, prefix cache entries, hits, misses and evictions. |
 | `yunshu_apc_*` | The automatic prefix cache of the VLM runner: RAM and SSD tiers, lookups by tier, matched tokens, evictions, WARM tier bytes and compression ratio. |
 | `yunshu_spec_*`, `yunshu_mtp_*` | Speculative decoding: draft and accepted tokens, acceptance rate, MTP cycles, n-gram proposals. Labeled with `model_id`. |
-| `yunshu_gpu_busy_seconds_total`, `yunshu_round_driver_busy_seconds_total` | Cumulative GPU-busy seconds; the idle fraction over a window is one minus the rate of the first. |
+| `yunshu_gpu_busy_seconds_total` | Cumulative GPU-busy seconds; the idle fraction over a window is one minus its rate. |
 | `yunshu_scheduler_*`, `yunshu_chunked_prefill_*`, `yunshu_attention_eviction_*` | Scheduler and prefill gauges of the batched engine. |
 | `yunshu_model_warmup_*`, `yunshu_lora_*`, `yunshu_response_cache_*` | Warm-up runs, LoRA adapter bookkeeping, response cache hits and misses. |
 

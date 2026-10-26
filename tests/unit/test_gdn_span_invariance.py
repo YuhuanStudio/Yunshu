@@ -1,4 +1,4 @@
-"""Span invariance of the prefill kernels the round driver may use: a token's
+"""Span invariance of the prefill kernels: a token's
 bits must not depend on whether its atom (512 tokens on the absolute grid) ran
 alone or inside a longer run of full atoms."""
 

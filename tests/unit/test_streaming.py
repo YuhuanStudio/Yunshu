@@ -11,7 +11,6 @@ from yunshu_gateway.streaming import (
     ClosingStreamingResponse,
     ThinkingParser,
     extract_thinking,
-    format_anthropic_chunk,
     format_openai_chunk,
     format_openai_done,
     format_openai_non_stream,
@@ -206,43 +205,6 @@ class TestOpenAIFormat:
 
 
 # ── Anthropic SSE Formatter ──
-
-
-class TestAnthropicFormat:
-    def test_content_block_delta(self):
-        chunk = format_anthropic_chunk(
-            message_id="msg-123",
-            model="claude-3",
-            delta_text="Hello",
-        )
-        lines = chunk.split("\n")
-        assert lines[0] == "event: content_block_delta"
-        data = json.loads(lines[1][len("data: ") :])
-        assert data["delta"]["text"] == "Hello"
-        assert data["delta"]["type"] == "text_delta"
-
-    def test_message_start(self):
-        chunk = format_anthropic_chunk(
-            message_id="msg-123",
-            model="claude-3",
-            delta_text="",
-            event_type="message_start",
-        )
-        data = json.loads(chunk.split("\n")[1][len("data: ") :])
-        assert data["message"]["id"] == "msg-123"
-        assert data["message"]["role"] == "assistant"
-
-    def test_message_delta(self):
-        chunk = format_anthropic_chunk(
-            message_id="msg-123",
-            model="claude-3",
-            delta_text="",
-            event_type="message_delta",
-        )
-        data = json.loads(chunk.split("\n")[1][len("data: ") :])
-        assert data["delta"]["stop_reason"] == "end_turn"
-        # Anthropic message_delta must include stop_sequence (null here).
-        assert data["delta"]["stop_sequence"] is None
 
 
 # ── extract_thinking ──

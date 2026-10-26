@@ -40,6 +40,9 @@ if TYPE_CHECKING:
 
 _TOKEN_BITS = 21
 _TOKEN_LIMIT = 1 << _TOKEN_BITS
+_HEAD = (
+    8  # backward steps compared for every candidate before only the survivors continue
+)
 
 
 @dataclass
@@ -90,6 +93,12 @@ class CopyDrafter:
         self._copy_gain = float(self.max_draft)  # optimistic until judged
         self._model_tpr = 3.0
         self.last_match = 0
+        # the longest-match search depends only on the context, so a second lookup of the same
+        # tail (a graft lookup after the round's draft, a different width) reuses it:
+        # (context length, extend count) -> (best end, best length)
+        self._memo_key: tuple[int, int] | None = None
+        self._memo: tuple[int, int] = (-1, 0)
+        self._extends = 0
         self.rounds = 0
         self.proposed = 0
         self.accepted = 0
@@ -99,6 +108,7 @@ class CopyDrafter:
     def extend(self, tokens: Sequence[int]) -> None:
         """Append tokens (the prompt first, then each committed token)."""
         self.ctx.extend(int(t) for t in tokens)
+        self._extends += 1
 
     def _sync_vec(self) -> bool:
         """Grow the numpy token/key buffers; False if the dict path must be used."""
@@ -150,18 +160,27 @@ class CopyDrafter:
         self.last_match = 0
         if width <= 0 or size < n + 1:
             return []
+        key = (size, self._extends)
+        if self._memo_key != key:
+            self._memo = self._search(size)
+            self._memo_key = key
+        best_end, best_len = self._memo
+        self.last_match = best_len
+        return ctx[best_end : best_end + width] if best_end >= 0 else []
+
+    def _search(self, size: int) -> tuple[int, int]:
+        """(end, length) of the longest earlier match of the context tail, (-1, 0) if none."""
+        cfg, ctx, n = self.cfg, self.ctx, self.cfg.ngram
         self._sync_index()
         if self._vec:
             ends = np.flatnonzero(self._keys[n:size] == self._keys[size]) + n
             ends = ends[ends < size][-cfg.max_candidates :]
             if not len(ends):
-                return []
-            best_end, best_len = self._longest(ends, size)
-            self.last_match = best_len
-            return ctx[best_end : best_end + width] if best_end >= 0 else []
+                return -1, 0
+            return self._longest(ends, size)
         cands = self._index.get(tuple(ctx[size - n :])) or []
         if not cands:
-            return []
+            return -1, 0
         best_end, best_len = -1, 0
         for end in reversed(cands[-cfg.max_candidates :]):
             if end >= size:
@@ -174,25 +193,37 @@ class CopyDrafter:
                 best_len, best_end = k, end
                 if k >= cfg.max_extension:
                     break
-        self.last_match = best_len
-        if best_end < 0:
-            return []
-        return ctx[best_end : best_end + width]
+        return best_end, best_len
 
     def _longest(self, ends: np.ndarray, size: int) -> tuple[int, int]:
         """(end, length) of the longest backward match among ``ends``, the most recent on a
-        tie: the scalar loop's choice, for every candidate at once."""
+        tie: the scalar loop's choice, for every candidate at once.
+
+        Most candidates share only the n-gram key, so the first ``_HEAD`` steps are compared
+        for all of them and only the full-length survivors go on to the rest of the reach."""
         reach = self.cfg.max_extension
-        tok = self._tok
-        steps = np.arange(reach)
-        back = ends[:, None] - 1 - steps[None, :]  # [C, reach]
-        tail = size - 1 - steps
-        valid = (back >= 0) & (tail >= 0)[None, :]
-        same = valid & (tok[np.maximum(back, 0)] == tok[np.maximum(tail, 0)][None, :])
-        lengths = np.cumprod(same, axis=1).sum(axis=1)
+        head = min(reach, _HEAD)
+        lengths = self._match_lengths(ends, size, 0, head)
+        if reach > head:
+            alive = np.flatnonzero(lengths == head)
+            if len(alive):
+                lengths[alive] += self._match_lengths(ends[alive], size, head, reach)
         pick = len(ends) - 1 - int(np.argmax(lengths[::-1]))
         best = int(lengths[pick])
         return (int(ends[pick]), best) if best > 0 else (-1, 0)
+
+    def _match_lengths(
+        self, ends: np.ndarray, size: int, lo: int, hi: int
+    ) -> np.ndarray:
+        """Leading run of equal tokens per end over backward steps ``lo..hi - 1``."""
+        tok = self._tok
+        steps = np.arange(lo, hi)
+        back = ends[:, None] - 1 - steps[None, :]  # [C, hi - lo]
+        tail = size - 1 - steps
+        valid = (back >= 0) & (tail >= 0)[None, :]
+        same = valid & (tok[np.maximum(back, 0)] == tok[np.maximum(tail, 0)][None, :])
+        lengths: np.ndarray = np.cumprod(same, axis=1).sum(axis=1)
+        return lengths
 
     # -- round choice --------------------------------------------------
     def draft(self, max_draft: int | None = None) -> list[int]:

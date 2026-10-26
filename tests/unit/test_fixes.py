@@ -66,6 +66,18 @@ class TestWave44SchedulerShutdown:
         batch_gen.close.assert_called_once()
         assert scheduler._batch_gen is None
 
+    def test_deep_reset_releases_row_grammar_guards(self):
+        from yunshu_engine.scheduler import Scheduler, SchedulerConfig
+
+        tok = MagicMock()
+        tok.eos_token_ids = [2]
+        scheduler = Scheduler(MagicMock(), tok, config=SchedulerConfig())
+        scheduler._row_guards["r1"] = (
+            MagicMock()
+        )  # holds a sampler and a grammar matcher
+        scheduler.deep_reset()
+        assert scheduler._row_guards == {}
+
 
 class TestWave44MemoryAwareScheduler:
     """3. MemoryAwareScheduler reserve/release lifecycle."""

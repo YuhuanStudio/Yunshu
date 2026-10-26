@@ -47,7 +47,7 @@ description: Yunshu 跨 Apple Silicon 世代的驗證計畫，以及 M5 Max 硬�
 | GPU 啟動與同步 | `launch_overhead.py` | 啟動成本透過 `async_eval` 藏在 GPU 工作之後 |
 | ANE | `ane_probe.py`、`pick_best_ane.py`、`bg_gpu_concurrency.py`、`session_ane_prefill.sh` | 僅作為嵌入協同處理器（`ane_embedding.py`） |
 | CPU | `cpu_probe.py` | 把 token 轉回文字（detokenization）、文法與取樣的銜接工作 |
-| 解碼旁的 prefill | `gpu_stream_overlap.py`、`bench_prefill_interleave.py` | 以 prefill 區塊大小作為策略（`YUNSHU_ROUND_PREFILL_CHUNK`） |
+| 解碼旁的 prefill | `gpu_stream_overlap.py` | 曾以已删除的 round driver 量测；不再是设定项 |
 
 ### 發現
 
@@ -57,17 +57,14 @@ description: Yunshu 跨 Apple Silicon 世代的驗證計畫，以及 M5 Max 硬�
 - **ANE 不是免費的頻寬。** GPU 解碼時它幾乎保有自己全部的速率，但每次 ANE 呼叫都從同一個 DRAM 串流權重，會拖慢 GPU 解碼。單獨使用時它的 prefill 約為閒置 GPU 速率的三分之一，所以最多只適用於「另一個請求正在串流輸出時才到達」的提示詞，而且它的數值與 MLX 的 4 位元權重不同（屬於有損選項，不是預設）。
 - **CPU 幫不上解碼。** 對單列而言，在大詞彙表上取樣很便宜（argmax 藏在下一步之後），但多列的 top-k 或排序就不是了，所以取樣留在 GPU 上（`YUNSHU_GPU_SAMPLER`）。CPU 的記憶體流量也會拖慢 GPU，因此用 CPU 產生草稿並不實際。
 - **Wired 記憶體與電源。** `mx.set_wired_limit` 與快取上限的調整，在 128 GB 的機器上沒有增益；持續解碼迴圈中看不到降頻。
-- **Prefill 與解碼互相競爭。** 兩個 GPU 命令佇列不會讓 prefill 與解碼重疊，而且解碼沒有優先權。在單一佇列上，較小的 prefill 區段能讓執行中的請求解碼快很多，代價是新抵達的提示詞首個 token 的時間變長。兩種區塊大小下，提示詞的 token 都與單獨執行時相同。`YUNSHU_ROUND_PREFILL_CHUNK` 設定區段大小。
+- **Prefill 與解碼互相競爭。** 兩個 GPU 命令佇列不會讓 prefill 與解碼重疊，而且解碼沒有優先權。在單一佇列上，較小的 prefill 區段能讓執行中的請求解碼快很多，代價是新抵達的提示詞首個 token 的時間變長。兩種區塊大小下，提示詞的 token 都與單獨執行時相同。
 
 ### 提案與結果
 
 | 想法 | 結果 |
 |---|---|
-| 以 prefill 區塊作為策略 | 完成：`YUNSHU_ROUND_PREFILL_CHUNK`，預設 512；依解碼列數自適應調整尚未完成 |
 | 讓解碼 kernel 維持在頻寬線上（融合小型投影） | 未完成 |
-| 更寬的驗證與多列解碼 | 透過 round driver 進行中；見 [Round driver](/docs/developers/round-driver) |
 | 張量單元上的 int8 activation prefill | 有損，所以只能是使用者選項；未採用 |
-| round driver 中的批次序列混合器 | 未完成，預期增益小 |
 | 在 GPU 解碼旁進行 ANE prefill | 有損選項，投入極高；排在最後 |
 | 在 CPU 上取樣 | 否決：留在 GPU 上 |
 | ANE 上的草稿器與 GPU 驗證重疊 | 放棄：草稿取決於上一輪接受的 token，而且 ANE 會佔用 GPU 頻寬 |
@@ -77,7 +74,6 @@ description: Yunshu 跨 Apple Silicon 世代的驗證計畫，以及 M5 Max 硬�
 
 | 設定 | 預設值 | 效果 |
 |---|---|---|
-| `YUNSHU_ROUND_PREFILL_CHUNK` | 512 | Round driver：每個 prefill 區段的提示詞 token 數；較小的區段能讓長提示詞旁的解碼列持續運行。以不同區塊大小 prefill 的提示詞各自前後一致，但彼此並非位元相同 |
 | `YUNSHU_GPU_SAMPLER` | off | 文字模型：GPU 上的 Gumbel-max 取樣 |
 
 ### 如何驗證
