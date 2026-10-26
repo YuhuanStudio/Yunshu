@@ -151,10 +151,13 @@ def _resolve_owner(request) -> str:
 
 
 def _is_admin(request) -> bool:
-    """Admin/static-token/auth-disabled check (matches cancel.py:101-107)."""
+    """Admin/static-token/auth-disabled check: a managed key is admin only with the admin scope."""
 
     if settings.get_bool("YUNSHU_AUTH_DISABLED"):
         return True
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    if principal is not None:
+        return "admin" in principal.scopes
     role_str = str(getattr(getattr(request, "state", None), "role", "") or "")
     return role_str.lower() in (
         "admin",

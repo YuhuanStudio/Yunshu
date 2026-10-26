@@ -12,11 +12,12 @@ Security posture (unchanged, safe by default):
   inference endpoints stay accessible.
 - Health/docs endpoints remain public.
 
-On every authenticated request the single-owner identity (constant ``"owner"``,
-overridable via ``YUNSHU_ACTOR_IDENTITY``) is stamped on
-``request.state.role="owner"`` and on ``current_actor`` so that the
-``request_tracker`` ownership / ``engine_core`` dedup keys keep working in the
-single-consumer model.
+After authentication the caller's identity is stamped on ``request.state.actor`` /
+``role`` and on ``current_actor`` (``request_tracker`` ownership, ``engine_core`` dedup,
+stored-response / container ownership): the static token and auth-disabled single-user
+mode are the owner (constant ``"owner"``, overridable via ``YUNSHU_ACTOR_IDENTITY``,
+role ``"owner"``, admin); a managed key is ``key:<id>`` with role ``"admin"`` only when
+it holds the admin scope, so one infer key cannot touch another key's objects.
 """
 
 import contextlib
@@ -130,6 +131,22 @@ def _owner_identity() -> str:
     return settings.get("YUNSHU_ACTOR_IDENTITY") or "owner"
 
 
+def _stamp_identity(request: Request, principal=None) -> None:
+    """Record who the request is (see the module docstring); ``None`` = the local owner."""
+    if principal is not None and principal.key_id:
+        actor = f"key:{principal.key_id}"
+        role = "admin" if "admin" in principal.scopes else "key"
+    else:
+        actor, role = _owner_identity(), "owner"
+    with contextlib.suppress(Exception):
+        request.state.actor = actor
+        request.state.role = role
+    with contextlib.suppress(Exception):
+        from yunshu_engine.request_tracker import current_actor
+
+        current_actor.set(actor)
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     """Authenticate requests via a single optional static bearer token."""
 
@@ -174,19 +191,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        # Stamp the single-owner identity for every request so downstream
-        # ownership (request_tracker) and dedup (engine_core) keep working
-        # even when auth is disabled — single consumer, no isolation needed.
-        owner = _owner_identity()
-        with contextlib.suppress(Exception):
-            request.state.role = "owner"
-        with contextlib.suppress(Exception):
-            from yunshu_engine.request_tracker import current_actor
-
-            current_actor.set(owner)
-
-        # Check if auth is enabled
+        # Check if auth is enabled; without it the one local user is the owner.
         if not self._is_auth_enabled():
+            _stamp_identity(request)
             return await call_next(request)
 
         auth_token = settings.get("YUNSHU_AUTH_TOKEN") or ""
@@ -202,6 +209,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if act_as == api_keys.ADMIN_TOKEN.name:
             with contextlib.suppress(Exception):
                 request.state.principal = api_keys.ADMIN_TOKEN
+            _stamp_identity(request)
             return await call_next(request)
         auth = request.headers.get("Authorization", "")
         # Anthropic SDKs send the key as x-api-key instead of a bearer token.
@@ -236,6 +244,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             from ..realtime_secrets import lookup
 
             if lookup(token) is not None:
+                _stamp_identity(request)
                 return await call_next(request)
 
         # Static token auth (constant-time comparison). The single consumer
@@ -243,6 +252,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if auth_token and token and tokens_equal(token, auth_token):
             with contextlib.suppress(Exception):
                 request.state.principal = api_keys.ADMIN_TOKEN
+            _stamp_identity(request)
             return await call_next(request)
 
         # Stored API keys: enabled / expiry, then quotas (429 + Retry-After).
@@ -274,6 +284,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 )
             request.state.principal = principal
             request.state.api_key_id = principal.key_id
+            _stamp_identity(request, principal)
             if internal:
                 return await call_next(request)
             try:
