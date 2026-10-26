@@ -1045,6 +1045,7 @@ class RealtimeSession:
     # Text generated so far for the active response (and whether it is out-of-band):
     # a cancel / barge-in keeps it as an incomplete assistant item.
     _lane: asyncio.Task | None = None  # tail of the ordered commit lane
+    _audio_done_for: str | None = None  # response whose response.audio.done went out
     _partial_text: str = ""
     _partial_oob: bool = False
     _idle_task: asyncio.Task | None = None
@@ -1717,6 +1718,10 @@ class RealtimeSession:
         )
 
         self._last_usage = (0, 0)
+        # fresh response -> no terminal response.done yet. Reset here, not only in the
+        # task body: a response.cancel handled before the task's first step must not see
+        # the previous response's flag and skip its own response.done.
+        self._response_done_emitted = False
         self._active_response = asyncio.create_task(
             self._generate_response(response_id, item_id, modalities, response_config)
         )
@@ -3021,7 +3026,7 @@ class RealtimeSession:
             # 1. audio.done FIRST (if audio modality was active)
             # 2. response.done SECOND
             # Use locked send to prevent interleaving with a new response.create
-            if _had_audio:
+            if _had_audio and self._audio_done_for != response_id:
                 await self._locked_send_event(
                     _event(
                         RealtimeEvent.RESPONSE_AUDIO_DONE,
@@ -3164,6 +3169,7 @@ class RealtimeSession:
             if _audio_done_sent:
                 return
             _audio_done_sent = True
+            self._audio_done_for = response_id  # the cancel handler must not repeat it
             try:
                 await self.send_event(
                     _event(
