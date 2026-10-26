@@ -41,4 +41,6 @@ def test_random_sequences_identical():
 
 def test_window_edge_identical():
     toks = [7, 8, 9] + [0] * 4100 + [7, 8, 9]
-    assert _find_longest_ngram_and_propose(toks, 1, 5, 99999, 4) == _old(toks, 1, 5, 99999, 4)
+    assert _find_longest_ngram_and_propose(toks, 1, 5, 99999, 4) == _old(
+        toks, 1, 5, 99999, 4
+    )

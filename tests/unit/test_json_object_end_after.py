@@ -37,7 +37,22 @@ def test_no_candidate():
 
 def test_fuzz_identical():
     rng = random.Random(9)
-    pieces = ['{', '}', '"', ':', ',', '1', 'a', ' ', '[', ']', '\\', '{"k": ', '"v"}', 'null']
+    pieces = [
+        "{",
+        "}",
+        '"',
+        ":",
+        ",",
+        "1",
+        "a",
+        " ",
+        "[",
+        "]",
+        "\\",
+        '{"k": ',
+        '"v"}',
+        "null",
+    ]
     for _ in range(3000):
         text = "".join(rng.choice(pieces) for _ in range(rng.randrange(1, 60)))
         at = rng.randrange(0, len(text) + 1)

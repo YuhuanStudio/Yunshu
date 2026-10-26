@@ -20,9 +20,9 @@ def test_get_prefix_length_numpy_query_same_as_mx_query():
     for _ in range(200):
         a = [rng.randrange(3) for _ in range(rng.randrange(0, 30))]
         b = [rng.randrange(3) for _ in range(rng.randrange(0, 30))]
-        assert get_prefix_length(np.asarray(a, dtype=np.int32), mx.array(b)) == get_prefix_length(
-            mx.array(a), mx.array(b)
-        )
+        assert get_prefix_length(
+            np.asarray(a, dtype=np.int32), mx.array(b)
+        ) == get_prefix_length(mx.array(a), mx.array(b))
 
 
 def test_no_trim_picks_longest_full_prefix_entry():
@@ -41,7 +41,11 @@ def test_no_trim_picks_longest_full_prefix_entry():
         q = base[:qlen]
         hit, remaining, matched = cache.get(mx.array(q))
         # oracle: longest stored entry that is a full prefix of q and shorter than q
-        cands = [len(e) for e in entries if len(e) <= qlen and q[: len(e)] == e and len(e) >= 4]
+        cands = [
+            len(e)
+            for e in entries
+            if len(e) <= qlen and q[: len(e)] == e and len(e) >= 4
+        ]
         expect = max(cands) if cands and max(cands) < qlen else 0
         assert matched == expect, (qlen, matched, expect)
         assert (hit is not None) == (expect > 0)
