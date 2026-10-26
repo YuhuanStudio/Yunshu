@@ -401,8 +401,8 @@ is whitespace-trimmed, a stream's concatenated deltas are not.
   batch, alone or mixed with other requests) the token drawn at generation index `g` is a function
   of `(logits, seed, g)` only, so the same `seed` gives the same stream whatever the admission
   path or concurrency, given batch-invariant logits. Unseeded requests draw a random seed.
-  Exceptions that stay stateful: XTC (`xtc_probability > 0`), the text-only `mlx-lm` fast path,
-  and the round driver's own sampler. Different paths are different (equally correct) random
+  Exceptions that stay stateful: XTC (`xtc_probability > 0`) and the text-only `mlx-lm` fast path.
+  Different paths are different (equally correct) random
   streams, not a distribution bias.
 - **`top_p`** always keeps the most probable token; `top_p = 0` therefore means greedy over the
   filtered row.

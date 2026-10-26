@@ -17,7 +17,6 @@ def _build(monkeypatch, model_type):
     monkeypatch.setattr(
         "yunshu_engine.utils.hardware.is_paravirtual_metal", lambda: False
     )
-    monkeypatch.setattr(VLMEngine, "_round_driver_wanted", lambda *_: False)
     monkeypatch.setattr(
         spec_select,
         "choose",

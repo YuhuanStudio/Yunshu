@@ -996,7 +996,7 @@ class _Coordinator(APCCoordinator):
                 tails.pop(next(iter(tails)))
         policy["written"] = max(policy.get("written", 0), len(tokens))
 
-    # Enabled only around a runner generator step. Round-driver and external APC
+    # Enabled only around a runner generator step. External APC
     # callers retain synchronous admission until they supply the same flush boundary.
     defer_checkpoint_stores = False
 

@@ -271,27 +271,6 @@
 1	python/yunshu_engine/priority_queue.py	attr-defined	Module has no attribute "_siftup"
 1	python/yunshu_engine/priority_queue.py	no-any-return	Returning Any from function declared to return "T"
 1	python/yunshu_engine/prompt_cache.py	assignment	Incompatible types in assignment (expression has type "dict[str, Any]", target has type "list[dict[Any, Any]]")
-2	python/yunshu_engine/round_driver/batch.py	arg-type	Argument 1 to "_scatter_rows" has incompatible type "array | None"; expected "array"
-2	python/yunshu_engine/round_driver/batch.py	arg-type	Argument 1 to "take" has incompatible type "array | None"; expected "array"
-1	python/yunshu_engine/round_driver/batch.py	arg-type	Argument 2 to "ragged_decode_attention" has incompatible type "array | None"; expected "array"
-1	python/yunshu_engine/round_driver/batch.py	arg-type	Argument 3 to "ragged_decode_attention" has incompatible type "array | None"; expected "array"
-2	python/yunshu_engine/round_driver/batch.py	index	Unsupported target for indexed assignment ("array | None")
-2	python/yunshu_engine/round_driver/batch.py	index	Value of type "dict[Any, Any] | None" is not indexable
-3	python/yunshu_engine/round_driver/batch.py	no-any-return	Returning Any from function declared to return "array"
-1	python/yunshu_engine/round_driver/driver.py	arg-type	Argument 1 to "Segment" has incompatible type "list[Any] | None"; expected "list[Any]"
-1	python/yunshu_engine/round_driver/driver.py	arg-type	Argument 1 to "append" of "list" has incompatible type "int | None"; expected "int"
-1	python/yunshu_engine/round_driver/driver.py	arg-type	Argument 1 to "append" of "list" has incompatible type "tuple[_Item, array, list[array] | None]"; expected "tuple[_Item, array, None]"
-1	python/yunshu_engine/round_driver/driver.py	arg-type	Argument 1 to "cache_buffers" has incompatible type "list[Any] | None"; expected "list[Any]"
-1	python/yunshu_engine/round_driver/driver.py	arg-type	Argument 1 to "len" has incompatible type "list[Any] | None"; expected "Sized"
-1	python/yunshu_engine/round_driver/driver.py	arg-type	Argument 1 to "list" has incompatible type "list[Any] | None"; expected "Iterable[Any]"
-1	python/yunshu_engine/round_driver/driver.py	misc	List comprehension has incompatible type List[Segment | None]; expected List[Segment]
-1	python/yunshu_engine/round_driver/driver.py	union-attr	Item "None" of "MTPHead | None" has no attribute "absorb_prompt"
-1	python/yunshu_engine/round_driver/driver.py	union-attr	Item "None" of "MTPHead | None" has no attribute "join"
-2	python/yunshu_engine/round_driver/driver.py	union-attr	Item "None" of "MTPHead | None" has no attribute "make_cache"
-1	python/yunshu_engine/round_driver/driver.py	union-attr	Item "None" of "MTPHead | None" has no attribute "slots"
-1	python/yunshu_engine/round_driver/driver.py	var-annotated	Need type annotation for "pick" (hint: "pick: list[<type>] = ...")
-5	python/yunshu_engine/round_driver/forward.py	no-any-return	Returning Any from function declared to return "array"
-1	python/yunshu_engine/round_driver/mtp.py	no-any-return	Returning Any from function declared to return "array"
 1	python/yunshu_engine/scheduler.py	arg-type	Argument 1 to "_snapshot_cache" of "SpeculativeDecoder" has incompatible type "None"; expected "list[Any]"
 2	python/yunshu_engine/scheduler.py	arg-type	Argument 1 to "pop" of "dict" has incompatible type "Any | None"; expected "int"
 1	python/yunshu_engine/scheduler.py	arg-type	Argument 1 to "pop" of "dict" has incompatible type "int | None"; expected "int"

@@ -47,7 +47,7 @@ description: Yunshu 跨 Apple Silicon 世代的验证计划，以及 M5 Max 硬�
 | GPU 启动与同步 | `launch_overhead.py` | 启动成本通过 `async_eval` 藏在 GPU 工作之后 |
 | ANE | `ane_probe.py`、`pick_best_ane.py`、`bg_gpu_concurrency.py`、`session_ane_prefill.sh` | 仅作为嵌入协处理器（`ane_embedding.py`） |
 | CPU | `cpu_probe.py` | 把 token 转回文本（detokenization）、文法与采样的衔接工作 |
-| 解码旁的 prefill | `gpu_stream_overlap.py`、`bench_prefill_interleave.py` | 以 prefill 块大小作为策略（`YUNSHU_ROUND_PREFILL_CHUNK`） |
+| 解码旁的 prefill | `gpu_stream_overlap.py` | 曾以已删除的 round driver 量测；不再是设定项 |
 
 ### 发现
 
@@ -57,17 +57,14 @@ description: Yunshu 跨 Apple Silicon 世代的验证计划，以及 M5 Max 硬�
 - **ANE 不是免费的带宽。** GPU 解码时它几乎保有自己全部的速率，但每次 ANE 调用都从同一个 DRAM 流式读取权重，会拖慢 GPU 解码。单独使用时它的 prefill 约为空闲 GPU 速率的三分之一，所以最多只适用于“另一个请求正在流式输出时才到达”的提示词，而且它的数值与 MLX 4 位权重不同（是有损选项，不是默认）。
 - **CPU 帮不上解码。** 对单行而言，在大词表上采样很便宜（argmax 藏在下一步之后），但多行的 top-k 或排序就不是了，所以采样留在 GPU 上（`YUNSHU_GPU_SAMPLER`）。CPU 的内存流量也会拖慢 GPU，因此用 CPU 生成草稿并不实际。
 - **Wired 内存与电源。** `mx.set_wired_limit` 与缓存上限的调整，在 128 GB 的机器上没有增益；持续解码循环中看不到降频。
-- **Prefill 与解码互相竞争。** 两个 GPU 命令队列不会让 prefill 与解码重叠，而且解码没有优先级。在单一队列上，较小的 prefill 区段能让运行中的请求解码快很多，代价是新到达的提示词首个 token 的时间变长。两种块大小下，提示词的 token 都与单独运行时相同。`YUNSHU_ROUND_PREFILL_CHUNK` 设置区段大小。
+- **Prefill 与解码互相竞争。** 两个 GPU 命令队列不会让 prefill 与解码重叠，而且解码没有优先级。在单一队列上，较小的 prefill 区段能让运行中的请求解码快很多，代价是新到达的提示词首个 token 的时间变长。两种块大小下，提示词的 token 都与单独运行时相同。
 
 ### 提案与结果
 
 | 想法 | 结果 |
 |---|---|
-| 以 prefill 块作为策略 | 完成：`YUNSHU_ROUND_PREFILL_CHUNK`，默认 512；依解码行数自适应调整尚未完成 |
 | 让解码 kernel 保持在带宽线上（融合小型投影） | 未完成 |
-| 更宽的验证与多行解码 | 通过 round driver 进行中；见 [Round driver](/docs/developers/round-driver) |
 | 张量单元上的 Int8 启用 prefill | 有损，所以只能是用户选项；未采用 |
-| round driver 中的批量序列混合器 | 未完成，预期增益小 |
 | 在 GPU 解码旁进行 ANE prefill | 有损选项，投入极高；排在最后 |
 | 在 CPU 上采样 | 否决：留在 GPU 上 |
 | ANE 上的草稿器与 GPU 验证重叠 | 放弃：草稿取决于上一回合接受的 token，而且 ANE 会占用 GPU 带宽 |
@@ -77,7 +74,6 @@ description: Yunshu 跨 Apple Silicon 世代的验证计划，以及 M5 Max 硬�
 
 | 设置 | 默认值 | 效果 |
 |---|---|---|
-| `YUNSHU_ROUND_PREFILL_CHUNK` | 512 | Round driver：每个 prefill 区段的提示词 token 数；较小的区段能让长提示词旁的解码行持续运行。以不同块大小 prefill 的提示词各自保持一致，但彼此并非位级相同 |
 | `YUNSHU_GPU_SAMPLER` | off | 文本模型：GPU 上的 Gumbel-max 采样 |
 
 ### 如何验证

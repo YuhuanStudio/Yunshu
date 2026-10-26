@@ -1,5 +1,5 @@
 # Upstream (derived): ashhart/TensorFold (MIT) src/tensorfold/kernels/qwen/dense/v1/lane_qmm.py @ 34bae79a
-"""Row-invariant quantized projections for the round driver (any row count).
+"""Row-invariant quantized projections for the speculative lane (any row count).
 
 TensorFold's lane matmul (``kernels.tensorfold.lane_qmm``, MIT) multiplies bf16
 rows by MLX affine-quantized weights (2..8 bits) with hardware-selected cooperative tensor fragment layouts and a
@@ -12,9 +12,8 @@ biases, so memory does not grow) and cuts calls wider than 128 rows into
 verify rows and prefill chunks packed into one forward get the bits each row
 would get alone.
 
-``convert`` swaps a language model's eligible ``nn.QuantizedLinear`` layers
-(and, for tied embeddings, builds a lane head from the quantized embedding) —
-the round driver's forward and every other caller of those modules then use it.
+``convert`` swaps a language model's eligible ``nn.QuantizedLinear`` layers —
+every caller of those modules then uses it.
 """
 
 from __future__ import annotations
@@ -398,37 +397,10 @@ class LaneLinear(nn.Module):
         return y.reshape(*lead, self.output_dims).astype(dtype)
 
 
-def lane_head(embedding: Any) -> LaneLinear | None:
-    """A lane projection with a quantized embedding's table (tied LM head)."""
-    if not isinstance(embedding, nn.QuantizedEmbedding):
-        return None
-    if getattr(embedding, "mode", "affine") != "affine":
-        return None
-    probe = nn.QuantizedLinear.__new__(nn.QuantizedLinear)
-    nn.Module.__init__(probe)
-    probe.weight, probe.scales = embedding.weight, embedding.scales
-    probe.biases = embedding.biases
-    probe.bits, probe.group_size, probe.mode = (
-        embedding.bits,
-        embedding.group_size,
-        "affine",
-    )
-    if not eligible(probe):
-        return None
-    return LaneLinear(
-        embedding.weight,
-        embedding.scales,
-        embedding.biases,
-        embedding.bits,
-        embedding.group_size,
-    )
-
-
 def convert(language_model: Any) -> dict:
     """Replace the eligible quantized projections of ``language_model`` (the
     decoder and ``lm_head``) with ``LaneLinear``; returns counts. Layers the
-    kernel cannot read stay as they are (``skipped``) — the round driver runs
-    those one row at a time."""
+    kernel cannot read stay as they are (``skipped``)."""
     converted, skipped, pending = 0, [], []
     for name, module in list(language_model.named_modules()):
         children = [
@@ -461,4 +433,4 @@ def convert(language_model: Any) -> dict:
     return {"converted": converted, "skipped": skipped}
 
 
-__all__ = ["LaneLinear", "convert", "eligible", "lane_head"]
+__all__ = ["LaneLinear", "convert", "eligible"]

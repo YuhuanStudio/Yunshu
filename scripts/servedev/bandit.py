@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 DEFAULT_SPACE = {
-    # Only registered knobs; YUNSHU_ROUND_PREFILL_CHUNK is deliberately absent (not bit-identical across sizes).
+    # Only registered knobs.
     # Add YUNSHU_GC_POLICY once the ttftfloor line lands it in the registry.
     "YUNSHU_MTP_BLOCK_SIZE": ["4", "6", "8"],
 }

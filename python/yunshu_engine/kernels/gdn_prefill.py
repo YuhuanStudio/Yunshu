@@ -8,7 +8,7 @@ outputs differ by at most one ulp; the fp32 state by ~0.2% of its scale), so it 
 chunks of at least ``MIN_TOKENS`` tokens on the legacy path. Qualified split-invariant
 prefill uses it for every length inside an explicit prompt scope, with identity padding to 64
 rows. Its id is part of every APC
-key (``kernel_id``). Decode, speculative verify and the round driver never take it.
+key (``kernel_id``). Decode and speculative verify never take it.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import mlx.core as mx
 logger = logging.getLogger(__name__)
 
 MIN_TOKENS = 64
-_STATE = {"installed": False, "enabled": False, "bypass": 0, "split": False}
+_STATE = {"installed": False, "enabled": False, "split": False}
 
 
 _PREFILL: ContextVar[bool] = ContextVar("split_invariant_prefill", default=False)
@@ -347,18 +347,6 @@ def chunked_padded(q, k, v, g, beta, state, mask=None):
     return out[:, :rows], state
 
 
-@contextlib.contextmanager
-def step_kernel():
-    """Run ``gated_delta_kernel`` calls inside the block on the per-token step
-    kernel (the round driver's prefill: a token's bits must not depend on how
-    the prompt was cut into spans)."""
-    _STATE["bypass"] += 1
-    try:
-        yield
-    finally:
-        _STATE["bypass"] -= 1
-
-
 def kernel_id() -> str:
     if split_enabled():
         return "gdn-chunked-pad64-v1"
@@ -375,7 +363,7 @@ def install() -> bool:
         step = gd.gated_delta_kernel
 
         def gated_delta_kernel(q, k, v, g, beta, state, mask=None):
-            if split_enabled() and in_prefill_math() and not _STATE["bypass"]:
+            if split_enabled() and in_prefill_math():
                 if g.ndim != 3 or state is None:
                     raise ValueError(
                         "split-invariant prefill needs scalar gates and fp32 state"
@@ -383,7 +371,6 @@ def install() -> bool:
                 return chunked_padded(q, k, v, g, beta, state, mask)
             if (
                 _STATE["enabled"]
-                and not _STATE["bypass"]
                 and q.shape[1] >= MIN_TOKENS
                 and g.ndim == 3
                 and state is not None

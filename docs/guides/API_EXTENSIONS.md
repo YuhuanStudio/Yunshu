@@ -58,7 +58,7 @@ it off) and stops at the first token. The comment doubles as the proxy keep-aliv
 
 `percent` counts only tokens that are actually computed: a prefix-cache hit is reported as
 `cached_tokens` and is not part of the denominator. Progress comes from the engine's own prefill loop
-(one step per 2048 tokens on the batch path, one span per round on the round driver), not from a
+(one step per 2048 tokens on the batch path), not from a
 timer. Measured: 93K-token prompt on Qwen3.5-0.8B, 32 comments over 8 s; 11.6K tokens on the 27B,
 48 comments.
 
@@ -137,7 +137,7 @@ own nanosecond fields (below). Real response, Qwen3.8-27B (MTP):
 | `prefill_tps` | Uncached prompt tokens / prefill time. |
 | `decode_tps` | (completion tokens - 1) / time between first and last token. |
 | `cached_tokens` | Prompt tokens served from the prefix cache. |
-| `speculative` | `mode` (`mtp` / `dflash`) when a drafter served the request. `drafted` / `accepted` / `acceptance_rate` count the draft tokens of this request: the round driver counts them per row, the single-row lane (`mtp_lane`, the MTP / DFlash tree rounds, upstream's loops) bumps the drafter's lifetime counters and the runner takes the per-request difference. `null` when nothing was drafted. |
+| `speculative` | `mode` (`mtp` / `dflash`) when a drafter served the request. `drafted` / `accepted` / `acceptance_rate` count the draft tokens of this request: the single-row lane (`mtp_lane`, the MTP / DFlash tree rounds, upstream's loops) bumps the drafter's lifetime counters and the runner takes the per-request difference. `null` when nothing was drafted. |
 
 Fields are `null` when a path cannot measure them. The text-only mlx-lm fast path fills the same
 engine-side clocks as the VLM runner (queue wait, prefill progress from `generate_step`'s callback,

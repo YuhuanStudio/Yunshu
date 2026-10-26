@@ -25,16 +25,6 @@ EVIDENCE = {
         ],
         "The registry records a partial replay result, but no complete audited three-client greedy/sampled on/off receipt was found. Native/prev jobs are compatibility comparisons, not a complete grammar flag matrix.",
     ),
-    "YUNSHU_ROUND_DRIVER": (
-        "driver",
-        "partial",
-        [
-            "docs/reports/PERF_TREND.md:2026-10-01 and 2026-10-02 round driver",
-            "scripts/research/validate_round_driver.sh",
-            "OWNERS.md: i6-lead round_driver/*",
-        ],
-        "Historical single-request 87.3 vs 93.0 loses, while concurrency has value. Today's pre-contention numbers cannot promote a default. New stage rejects on slow single-request/parity; a positive stage runs the full validator three times. Image/int8/MoE completeness must also be verified before path deletion.",
-    ),
     "YUNSHU_MTP_ROW_EXACT": (
         "row_exact",
         "partial",

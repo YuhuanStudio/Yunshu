@@ -63,7 +63,7 @@ def ensure_tiny_mtp(src=TINY_SRC, dst=TINY):
 DRAFT = Path("/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2")
 TEXT = Path("/Volumes/P5Plus/models/Qwen2.5-3B-Instruct-bf16")
 TEXT_DRAFT = Path("/Volumes/P5Plus/models/Qwen2.5-3B-Instruct-4bit")
-AREAS = ("tree", "row_exact", "tools", "driver", "external")
+AREAS = ("tree", "row_exact", "tools", "external")
 
 
 def sha(value):
@@ -193,8 +193,6 @@ def launcher(port):
                         "complete": complete,
                         "tree_calls": count[0] - start,
                         "row_exact": omlx._STATE["row_exact"],
-                        "driver": getattr(self._batch_runner, "driver", None)
-                        is not None,
                     }
                 ),
                 flush=True,
@@ -364,16 +362,14 @@ def serving_arm(args, area, arm, rep, prepared, captured, drafter=None):
     smoke = args.smoke
     checkpoint = TINY if smoke else MODEL
     setting = {
-        "YUNSHU_ROUND_DRIVER": "0",
         "YUNSHU_TOOL_GRAMMAR": "0",
         "YUNSHU_SPEC_TREE": "off",
         "YUNSHU_MTP_ROW_EXACT": "0",
-        "YUNSHU_VLM_DRAFT": "mtp" if smoke or area == "driver" else str(DRAFT),
+        "YUNSHU_VLM_DRAFT": "mtp" if smoke else str(DRAFT),
     }
     flag = {
         "tree": "YUNSHU_SPEC_TREE",
         "tools": "YUNSHU_TOOL_GRAMMAR",
-        "driver": "YUNSHU_ROUND_DRIVER",
     }[area]
     if drafter is not None:
         setting["YUNSHU_VLM_DRAFT"] = drafter
@@ -429,43 +425,6 @@ def serving_arm(args, area, arm, rep, prepared, captured, drafter=None):
                         32 if smoke else 512
                     )
                     cases.append((f"{client}-{temp}", route, body))
-        if area == "driver":
-            base = cases[0][2]
-            lengths = [512] if smoke else [1024, 32768]
-            for length in lengths:
-                prompt = next(
-                    p for label, p in prepared if label == f"code_python-{length}"
-                )
-                for batch in [2] if smoke else [2, 4, 8]:
-                    cases.append(
-                        (
-                            f"batch-{length}-{batch}",
-                            "/v1/chat/completions",
-                            [
-                                {
-                                    **base,
-                                    "messages": [{"role": "user", "content": prompt}],
-                                }
-                                for _ in range(batch)
-                            ],
-                        )
-                    )
-        if area == "driver":
-            sample_prompt = prepared[0][1]
-            sampled = {
-                **cases[0][2],
-                "temperature": 0.7,
-                "seed": 42,
-                "messages": [{"role": "user", "content": sample_prompt}],
-            }
-            cases.append(("sampled-solo", "/v1/chat/completions", sampled))
-            cases.append(
-                (
-                    "sampled-batch",
-                    "/v1/chat/completions",
-                    [dict(sampled) for _ in range(2 if smoke else 4)],
-                )
-            )
         for label, route, body in cases:
             offset = len(log.read_text())
             start = time.perf_counter()
@@ -480,8 +439,6 @@ def serving_arm(args, area, arm, rep, prepared, captured, drafter=None):
             traces, guides = trace_rows(log, offset)
             if area == "tree" and arm and not any(t["tree_calls"] for t in traces):
                 raise RuntimeError("tree flag set but actual tree search did not run")
-            if area == "driver" and arm and not all(t["driver"] for t in traces):
-                raise RuntimeError("round driver not engaged")
             if area == "tools" and arm and not any(g["active"] for g in guides):
                 raise RuntimeError("tool grammar flag set but per-request guide absent")
             row = {
@@ -577,7 +534,7 @@ def subprocess_arm(args, area, arm, rep, context=None):
 def summarize(arms):
     """Evidence table only: never interpret a missing/failed cell as a win."""
     summary = {}
-    for area in ("tree", "driver"):
+    for area in ("tree",):
         grouped = {}
         for arm in arms:
             if arm["area"] != area or arm.get("rc") != 0:
@@ -629,49 +586,6 @@ def summarize(arms):
     return summary
 
 
-def driver_full_validation(args, rep=0):
-    # The owner's existing full exit matrix supplies the remaining gates.
-    script = ROOT / "scripts/research/validate_round_driver.sh"
-    output = args.out.parent / f"driver-full-r{rep}"
-    env = dict(
-        os.environ,
-        M=str(MODEL),
-        PY=sys.executable,
-        OUT=str(output),
-        PHASE="list" if args.dry_run else "all",
-        BASE_PORT="18990",
-        PYTHONPATH=str(ROOT / "python"),
-    )
-    log = args.out.parent / f"driver-full-r{rep}.log"
-    with log.open("w") as stream:
-        rc = subprocess.run(
-            ["zsh", str(script)],
-            cwd=ROOT,
-            env=env,
-            stdout=stream,
-            stderr=subprocess.STDOUT,
-        ).returncode
-    text = log.read_text()
-    if rc or re.search(r"FAILED|NOT ENGAGED|server .*failed|unknown phase", text):
-        raise RuntimeError(f"full driver matrix failed rc={rc}; read {log}")
-    if not args.dry_run:
-        required = (
-            "parity-1k.jsonl",
-            "rows-1k.jsonl",
-            "parity-32k.jsonl",
-            "rows-32k.jsonl",
-            "context-batch.jsonl",
-            "mixed-load.jsonl",
-            "matrix.jsonl",
-        )
-        if any(not (output / name).is_file() for name in required):
-            raise RuntimeError("full driver matrix output missing")
-        accuracy = list(output.glob("mmlu-rd?-?.jsonl"))
-        if len(accuracy) != 6:
-            raise RuntimeError("driver MMLU-Pro 300 paired shards missing")
-    return {"rc": rc, "log": str(log), "full_matrix": str(script), "complete": True}
-
-
 def validate_smoke(receipt, digest, areas):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from device_evidence import require_same_device
@@ -685,7 +599,7 @@ def validate_smoke(receipt, digest, areas):
             summary.get(area)
             and all(cell.get("token_parity") is True for cell in summary[area])
         )
-        for area in ("tree", "driver")
+        for area in ("tree",)
     )
     return (
         parity_ok
@@ -821,36 +735,7 @@ def main():
                             flush=True,
                         )
         result["summary"] = summarize(result["arms"])
-        if "driver" in args.areas and not args.smoke:
-            cells = result["summary"]["driver"]
-            singles = [
-                c for c in cells if c["case"].startswith(("code_python-", "novel_en-"))
-            ]
-            if args.dry_run or (
-                singles
-                and all(
-                    c.get("token_parity") and c.get("wall_speedup", 0) >= 1
-                    for c in singles
-                )
-            ):
-                try:
-                    result["driver_full"] = {
-                        "rc": 0,
-                        "runs": [
-                            driver_full_validation(args, rep)
-                            for rep in range(1 if args.dry_run else 3)
-                        ],
-                    }
-                except Exception as exc:
-                    result["driver_full"] = {"rc": 1, "error": str(exc)}
-            else:
-                result["driver_full"] = {
-                    "skipped": "single-request speed/parity gate did not pass; current driver is not eligible for promotion"
-                }
-        result["complete"] = (
-            all(arm["rc"] == 0 for arm in result["arms"])
-            and result.get("driver_full", {}).get("rc", 0) == 0
-        )
+        result["complete"] = all(arm["rc"] == 0 for arm in result["arms"])
         if args.smoke and not args.dry_run:
             result["smoke_token_parity"] = all(
                 area not in args.areas
@@ -861,7 +746,7 @@ def main():
                         for cell in result["summary"][area]
                     )
                 )
-                for area in ("tree", "driver")
+                for area in ("tree",)
             )
             result["complete"] = result["complete"] and result["smoke_token_parity"]
         result["load_end"] = os.getloadavg()

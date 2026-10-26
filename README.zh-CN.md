@@ -60,7 +60,6 @@ Yunshu 提供的所有能力，分组列出。每一行链接到有示例与限�
 | [结构化输出](docs/guides/INFERENCE.md) | JSON schema、regex、选项与文法在解码时强制，含工具参数 |
 | [有损内存选项](docs/guides/INFERENCE.md) | int8 KV、压缩 WARM 层与载入时量化；默认关闭 |
 | [大型 MoE 加载（部分）](docs/guides/INFERENCE.md) | 社区 DeepSeek-V4-Flash 权重包的位数与 group size 由张量形状推得；加载前有容纳检查 |
-| [Round driver（实验）](docs/guides/ROUND_DRIVER.md) | 稠密 Qwen3.5 系列模型的自有推测回合驱动 |
 | [模型支持](docs/guides/MODEL_SUPPORT.md) | 各系列哪些是调校、通用与已验证 |
 | [下一轮预填](docs/guides/INFERENCE.md) | 符合条件的文本回复以标准 stride 边界预填 APC；boundary/exact 会改变数值运算，须明确选用 |
 | [单请求转入推测路径](docs/guides/INFERENCE.md) | 共享批次剩下一个符合条件的贪婪请求时转入推测；尚无多行推测 |

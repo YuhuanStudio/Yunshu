@@ -115,7 +115,6 @@ def test_unindexed_head_warns_in_doctor_and_startup(caplog, monkeypatch, tmp_pat
     monkeypatch.setattr(
         "yunshu_engine.utils.hardware.is_paravirtual_metal", lambda: False
     )
-    monkeypatch.setattr(VLMEngine, "_round_driver_wanted", lambda *_: False)
     monkeypatch.setattr(spec_select, "choose", stop_at_selection)
     with pytest.raises(SelectionReachedError):
         engine._build_batch_runner(str(tmp_path))

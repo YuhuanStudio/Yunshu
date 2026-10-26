@@ -1,4 +1,4 @@
-"""Row-invariant lane projections (round driver): a row's bits do not depend
+"""Row-invariant lane projections (speculative lane): a row's bits do not depend
 on how many rows share the call, including calls cut into 128-row pieces."""
 
 import pytest
@@ -138,8 +138,8 @@ def test_wide_prefill_does_not_expand_other_lane_callers_guard():
 
 
 def test_prefill_narrow_projection_never_takes_the_row_count_dispatch(monkeypatch):
-    """The engine turns stock / NAX prefill on for the upstream path; the round
-    driver's narrow projections (GDN a / b) must stay on the lane kernel for
+    """The engine turns stock / NAX prefill on for the upstream path; narrow
+    projections (GDN a / b) must stay on the lane kernel for
     any run length, or a prompt's bits would follow how its atoms were merged."""
     from yunshu_engine.kernels import nax_prefill
 
