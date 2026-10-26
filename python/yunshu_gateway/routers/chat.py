@@ -347,14 +347,6 @@ class ChatMessage(BaseModel):
         # extraction normalizes it to an empty string; only explicit empty
         # content is a malformed request.
         if self.role in ("user", "system", "developer"):
-            if (
-                isinstance(self.content, str)
-                and self.content != ""
-                and not self.content.strip()
-            ):
-                raise ValueError(
-                    f"messages: {self.role} message content cannot be whitespace-only"
-                )
             if isinstance(self.content, list) and len(self.content) == 0:
                 raise ValueError(
                     f"messages: {self.role} message content list cannot be empty"
@@ -535,15 +527,15 @@ class ChatCompletionRequest(BaseModel):
                 "messages: must contain at least one message with role 'user'"
             )
 
-        # Reject if EVERY user message has empty content (str that
-        # is empty/whitespace). List content (multimodal w/ images) is allowed
+        # Reject if EVERY user message has empty content (None or ""; OpenAI
+        # accepts whitespace-only strings such as "\n"). List content (multimodal w/ images) is allowed
         # even with empty text. Prevents the degenerate "nothing to respond to"
         # request that produces zero-token output.
         def _is_empty_content(c) -> bool:
             if c is None:
                 return True
             if isinstance(c, str):
-                return not c.strip()
+                return c == ""
             return False  # list content (multimodal) is non-empty by structure
 
         if all(_is_empty_content(m.content) for m in _user_msgs):
