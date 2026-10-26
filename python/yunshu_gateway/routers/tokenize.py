@@ -68,6 +68,21 @@ def _flatten_content(content) -> str:
     )
 
 
+def _with_dict_tool_arguments(messages: list[dict]) -> list[dict]:
+    """``messages`` with OpenAI's JSON-string ``function.arguments`` parsed to mappings, as the
+    engines do before rendering (templates iterate the arguments; a string raised in the preview
+    while generation rendered it). Not mutated."""
+    from yunshu_engine.vlm_engine import VLMEngine
+
+    out = []
+    for m in messages:
+        calls = m.get("tool_calls") if isinstance(m, dict) else None
+        if isinstance(calls, list):
+            m = {**m, "tool_calls": VLMEngine._normalize_vlm_tool_calls(calls)}
+        out.append(m)
+    return out
+
+
 def _encode(tokenizer, text: str, add_special_tokens: bool) -> list[int]:
     if add_special_tokens:
         return list(tokenizer.encode(text))
@@ -99,7 +114,8 @@ async def tokenize(req: TokenizeRequest, request: Request):
     tokenizer = _resolve_tokenizer(model)
     if req.messages is not None:
         msgs = [
-            {**m, "content": _flatten_content(m.get("content"))} for m in req.messages
+            {**m, "content": _flatten_content(m.get("content"))}
+            for m in _with_dict_tool_arguments(req.messages)
         ]
         kwargs = dict(req.chat_template_kwargs or {})
         from yunshu_engine.special_tokens import neutralize_special_text
@@ -316,7 +332,7 @@ async def apply_template(req: ApplyTemplateRequest, request: Request):
 
     try:
         prompt = tokenizer.apply_chat_template(
-            neutralize_special_text(req.messages, tokenizer),
+            neutralize_special_text(_with_dict_tool_arguments(req.messages), tokenizer),
             tools=req.tools,
             tokenize=False,
             add_generation_prompt=req.add_generation_prompt,

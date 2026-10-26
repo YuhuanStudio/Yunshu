@@ -78,3 +78,6 @@ scripts/research/local.env
 
 # Generated Yunshu Console assets; built before wheel packaging.
 /python/yunshu_gateway/console_static/
+
+# Downloaded test vocabularies (tests/unit/cpu_models.py)
+/tests/fixtures/.cache/

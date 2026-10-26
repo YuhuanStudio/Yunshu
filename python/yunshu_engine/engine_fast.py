@@ -697,8 +697,8 @@ class EngineFastMixin:
 
         # min_tokens — mask EOS + single-token stops to -inf until at
         # least min_tokens have been GENERATED, so generation can't end early.
-        # mlx-lm's tokens accumulator is [last_prompt_token, gen1, ...] so the
-        # generated count is len(tokens) - 1 (the prompt-offset insight).
+        # mlx-lm's tokens accumulator is [prefilled prompt..., gen1, ...]: the processor
+        # reads the prompt length off its first call (n_prompt=None).
         # SKIP when a JSON/grammar constraint is active. The constraint
         # only permits EOS once the document is structurally COMPLETE (so it
         # already enforces a minimum), and masking EOS at the DONE state leaves the

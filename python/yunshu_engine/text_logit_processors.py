@@ -66,6 +66,8 @@ class FrequencyPresencePenalty:
 
     def __call__(self, tokens, logits):
         cur_len = len(tokens)
+        if self.n_prompt is None:  # the first call precedes the first generated token
+            self.n_prompt = cur_len
         if cur_len <= self.n_prompt:
             self._last_len = cur_len
             return logits
@@ -125,7 +127,7 @@ class TokenBan:
     (``set_prompt_len``), the prompt length in the engine loop; both see the whole prompt plus
     the generated ids in ``tokens``)."""
 
-    def __init__(self, ids, floor: int | None = None, n_prompt: int = 1):
+    def __init__(self, ids, floor: int | None = None, n_prompt: int | None = 1):
         self._ids = [int(t) for t in ids]
         self._floor = floor
         self._n_prompt = n_prompt
@@ -136,6 +138,8 @@ class TokenBan:
         self._n_prompt = int(n)
 
     def __call__(self, tokens, logits):
+        if self._n_prompt is None:  # the first call precedes the first generated token
+            self._n_prompt = len(tokens)
         if self._floor is not None and (len(tokens) - self._n_prompt) >= self._floor:
             return logits
         vocab = logits.shape[-1]

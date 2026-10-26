@@ -170,8 +170,8 @@ Nothing here ran on Metal or with a real checkpoint. Before merging, run on the 
    fails); pure-ASGI middleware; text prep thread; dense penalties; llguidance prewarm memory.
 4. `scripts/research/ab_gpu_sampler.py --checkpoint $TEXT_CKPT --src python --out ab_gpu_sampler.json` to settle
    `YUNSHU_GPU_SAMPLER`.
-5. Control-token neutralisation with the real Qwen tokenizer (`tok.encode("<|im_end|>")` inside user text must not yield
-   the special id after rendering), and with a Mistral-style tokenizer (`[TOOL_CALLS]` in a replayed assistant turn keeps its
+5. Control-token neutralisation: the real Qwen2 vocabulary was checked on CPU (see below); still check with the full
+   Qwen3.8 tokenizer (`<think>`/`<tool_call>` as added tokens), and with a Mistral-style tokenizer (`[TOOL_CALLS]` in a replayed assistant turn keeps its
    control id).
 6. Console: `pnpm test` including the bundle-size check (route budget raised 304 → 305 KB in `3e8a442`, measured once at
    304.2 KB; revert if you prefer trimming), the full Playwright suite and WebKit.
@@ -186,7 +186,9 @@ Nothing here ran on Metal or with a real checkpoint. Before merging, run on the 
    Mac a bitwise A/B of `YUNSHU_SDPA_CHUNK` against stock head_dim-256 SDPA plus prefill peak memory.
 10. mlx-audio patches with real checkpoints: Qwen3-ASR on > 20 min two-language audio, whisper-small with the patched
    `no_speech`, Kokoro loading a local voice offline.
-11. Remaining peer rows that need a Mac are listed with their step in
+11. What the CPU run could not reach (Metal mask kernel, invariant kernels, media, quantized weights, SSD tier): the
+   list at the end of [`CPU_VERIFICATION_2026-10-26.md`](CPU_VERIFICATION_2026-10-26.md).
+12. Remaining peer rows that need a Mac are listed with their step in
    [`UPSTREAM_ADOPTION_2026-10-26.md`](UPSTREAM_ADOPTION_2026-10-26.md).
 
 ## Decisions needed
@@ -216,6 +218,30 @@ Nothing here ran on Metal or with a real checkpoint. Before merging, run on the 
    change admission order); the VLM path sets no wired limit (needs a Mac A/B, and `idle_memory.py` already manages it).
 10. Auto length-gated 8-bit KV on the text path now starts at the threshold offset instead of token 0 (less lossy, but
    long requests' outputs change versus before); confirm.
+11. Off a Mac (and on a real 8 GB Mac) `detect_hardware()` picks the 8 GB tier, whose adaptive default is 4-bit KV and
+   overrides `YUNSHU_KV_QUANT_BITS=off`; a prompt-cache hit then differs from a miss. That contradicts "lossless unless
+   opted in": keep it, or let an explicit `off` win.
+
+## MLX CPU verification
+
+The serving code was run end to end on the MLX CPU backend (`mlx[cpu]` 0.32.3): gateway app with the production
+lifespan, a live `yunshu serve`, `BatchedEngine`, `VLMEngine`, `VLMBatchRunner`, MTP and DFlash2 lanes. The models have
+random weights built from real configs; the tokenizer is the real Qwen2 vocabulary. Only identities are checked
+(stream == non-stream, APC hit == miss, batched row == solo, spec on == off with tokens and logprobs bit-identical).
+Full table, commands and limits: [`CPU_VERIFICATION_2026-10-26.md`](CPU_VERIFICATION_2026-10-26.md). Fetch the vocab
+once with `python -m tests.unit.cpu_models` (and `uv pip install gguf`); without it the `test_cpu_*` tests skip.
+
+Bugs it found, fixed with tests:
+* `min_tokens` and frequency/presence penalties ignored or wrong on a cold prompt (mlx-lm 0.32 passes the whole
+  prefilled prompt to processors). This is the same bug the text lane fixed with `set_prompt_len`; the merge keeps that version, and
+  the CPU lane's regression test passes against it.
+* `X-Yunshu-Cache-Store: off` lost on the VLM path when orphan adoption relinks the cancel event (`859aba5`).
+* `/tokenize` and `/apply-template` returned 400 for a tool-call history with JSON-string `arguments` (`3dd9c4f`).
+
+Observed, not changed: the 8 GB-tier 4-bit KV (decision 11); `/tokenize` and `/apply-template` do not run the family
+message adapter, so a late system note is counted as the raw template renders it; `scripts/realmodel/smoke_api_extensions.py`
+(~line 618) still expects a 400 for `conversation=` where the server now answers 404 `conversation_not_found`; a
+malformed KV group (head_dim 32, q-group 64) produced a 200 with an empty completion instead of an error.
 
 ## Not done, and known limits
 
