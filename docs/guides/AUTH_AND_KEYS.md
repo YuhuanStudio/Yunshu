@@ -50,6 +50,18 @@ with other origins and disables credentials: browsers that send cookies or autho
 must use explicit `YUNSHU_CORS_ORIGINS`. The same list is checked against the Realtime WebSocket
 `Origin` header. Bind address and LAN exposure are read-only here.
 
+## Host and Origin checks
+
+A server bound to a loopback address checks the `Host` header, so a web page cannot reach it through DNS rebinding. Accepted: `localhost` (also `localhost.` and `*.localhost`), any `127.0.0.0/8` form (`127.0.0.1`, `127.1`), `[::1]`, and the unspecified address (`0.0.0.0`, `[::]`), with any port. Anything else gets `403` naming the header value and the setting. A server bound to `0.0.0.0` checks nothing unless `YUNSHU_ALLOWED_HOSTS` is set.
+
+- A reverse proxy, `tailscale serve`, a cloudflared tunnel or `ssh -L` that forwards a public name as `Host` to a loopback server needs that name in `YUNSHU_ALLOWED_HOSTS` (comma-separated; `*` turns the check off).
+- `host.docker.internal` is not accepted on a loopback bind: a container reaches the host's loopback only if the server listens beyond it (`YUNSHU_HOST=0.0.0.0`), and then the check is off anyway.
+- A state-changing request with an `Origin` header and no credentials must come from loopback, the request's own origin, or `YUNSHU_CORS_ORIGINS`. For custom schemes list `scheme://*` (for example `vscode-webview://*`) or the exact origin (`app://.`). `Origin: null` is always refused. Requests that carry `Authorization` or `x-api-key` are exempt.
+
+## Failed sign-ins
+
+A non-loopback client address that presents a wrong credential 20 times within 60 seconds gets `429` with `Retry-After` for further wrong credentials. A correct token or key is always accepted and clears that client's count, and a request without any credential is answered `401` and not counted. When `YUNSHU_TRUSTED_PROXIES` lists the connecting proxy, the last `X-Forwarded-For` entry is the client address; otherwise the peer address is used.
+
 ## Other protections
 
 - Authorization, API-key and cookie headers are dropped when a model download redirects to another origin.

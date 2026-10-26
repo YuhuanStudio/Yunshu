@@ -30,6 +30,9 @@ class TokenBudget:
     # where max_tokens_requested came from: "request", "model_limit", "operator_cap",
     # "api_spec_default" (yunshu_engine.output_limits)
     source: str = "request"
+    # how prompt_tokens was obtained: "exact" (tokenizer count) or "upper_bound" (a cheap bound
+    # that over-states the prompt; the grant is then a lower bound of what an exact count grants)
+    prompt_tokens_basis: str = "exact"
 
     @property
     def clamped(self) -> bool:
@@ -46,6 +49,8 @@ class TokenBudget:
             "max_tokens_granted": self.max_tokens_granted,
             "max_tokens_source": self.source,
         }
+        if self.prompt_tokens_basis != "exact":
+            out["prompt_tokens_basis"] = self.prompt_tokens_basis
         if self.max_tokens_granted < self.max_tokens_requested:
             out["clamped_by"] = "context_window"
         if self.thinking_budget_requested is not None:
@@ -94,6 +99,7 @@ def plan(
     max_tokens: int,
     thinking_budget: int | None = None,
     source: str = "request",
+    basis: str = "exact",
 ) -> TokenBudget | None:
     """The budget for one request; None when the window is unknown (nothing to enforce).
 
@@ -119,6 +125,7 @@ def plan(
         thinking_budget_requested=thinking_budget,
         thinking_budget_granted=thinking,
         source=source,
+        prompt_tokens_basis=basis,
     )
 
 
@@ -129,6 +136,7 @@ def plan_for_engine(
     model_id: str | None,
     engine: Any,
     source: str = "request",
+    basis: str = "exact",
 ) -> TokenBudget | None:
     """:func:`plan` with the window looked up the way ``validate_context_window`` does; an
     exhausted window is the same 400 as an over-long prompt."""
@@ -143,6 +151,7 @@ def plan_for_engine(
             max_tokens,
             thinking_budget,
             source,
+            basis,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None

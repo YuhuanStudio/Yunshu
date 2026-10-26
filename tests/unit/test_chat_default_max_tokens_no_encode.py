@@ -57,8 +57,8 @@ def test_default_max_tokens_does_not_encode_the_prompt(engine, monkeypatch):
     monkeypatch.setattr(streaming, "get_max_context_window", lambda *a, **k: 262144)
     counted: list[int] = []
 
-    def stop(req, prompt_tokens, eng):
-        counted.append(prompt_tokens)
+    def stop(req, prompt_tokens, eng, basis="exact"):
+        counted.append((prompt_tokens, basis))
         raise HTTPException(status_code=418, detail="stop")
 
     monkeypatch.setattr(chat, "_apply_token_budget", stop)
@@ -71,14 +71,47 @@ def test_default_max_tokens_does_not_encode_the_prompt(engine, monkeypatch):
     )
     assert r.status_code == 418, r.text
     assert engine._tokenizer.calls == 0
-    assert counted == [len("hello world " * 200)]  # the char upper bound, not an encode
+    # the byte upper bound, not an encode, and the budget says so
+    assert counted == [(len("hello world " * 200), "upper_bound")]
+
+
+def test_small_window_does_not_over_clamp_from_the_bound(engine, monkeypatch):
+    """32K window, ~5K-token prompt of 20K chars: the bound would leave ~12K for the answer; the
+    exact count decides instead, so the grant is not cut to 12K."""
+    monkeypatch.setattr(streaming, "get_max_context_window", lambda *a, **k: 32768)
+    seen: list[tuple[int, str]] = []
+
+    def stop(req, prompt_tokens, eng, basis="exact"):
+        seen.append((prompt_tokens, basis))
+        raise HTTPException(status_code=418, detail="stop")
+
+    monkeypatch.setattr(chat, "_apply_token_budget", stop)
+    r = _client().post(
+        "/v1/chat/completions",
+        json={
+            "model": "claude-test",
+            "messages": [{"role": "user", "content": "x" * 20000}],
+        },
+    )
+    assert r.status_code == 418, r.text
+    assert engine._tokenizer.calls >= 1 and seen[0][1] == "exact"
+
+
+def test_budget_report_names_its_basis():
+    from yunshu_gateway.token_budget import plan
+
+    assert "prompt_tokens_basis" not in plan(1000, 10, 50).report()
+    assert (
+        plan(1000, 10, 50, basis="upper_bound").report()["prompt_tokens_basis"]
+        == "upper_bound"
+    )
 
 
 def test_explicit_max_tokens_near_the_window_still_counts_exactly(engine, monkeypatch):
     monkeypatch.setattr(streaming, "get_max_context_window", lambda *a, **k: 262144)
     seen_exact: list[int] = []
 
-    def stop(req, prompt_tokens, eng):
+    def stop(req, prompt_tokens, eng, basis="exact"):
         seen_exact.append(prompt_tokens)
         raise HTTPException(status_code=418, detail="stop")
 

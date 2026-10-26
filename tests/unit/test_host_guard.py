@@ -43,6 +43,31 @@ def test_loopback_host_allowed(host):
 
 
 @pytest.mark.parametrize(
+    "host",
+    [
+        "0.0.0.0:8000",
+        "[::]:8000",
+        "localhost.:8000",
+        "127.1",
+        "127.1:8000",
+        "0x7f.1",
+        "[::ffff:127.0.0.1]:8000",
+    ],
+)
+def test_other_local_host_forms_allowed(host):
+    assert _client().get("/x", headers={"Host": host}).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "host", ["host.docker.internal", "128.0.0.1", "1.1", "localhost.evil.com."]
+)
+def test_lookalike_hosts_still_refused(host):
+    r = _client().get("/x", headers={"Host": host})
+    assert r.status_code == 403
+    assert "YUNSHU_ALLOWED_HOSTS" in r.json()["error"]["message"]
+
+
+@pytest.mark.parametrize(
     "host", ["attacker.example:8000", "192.168.1.5", "localhost.evil.com"]
 )
 def test_rebinding_host_refused(host):
@@ -120,3 +145,27 @@ def test_observe_loopback_needs_a_loopback_host_header():
     assert _is_loopback_request(req("localhost:8000"))
     assert _is_loopback_request(req(""))
     assert not _is_loopback_request(req("attacker.example:8000"))  # rebinding page
+
+
+def test_custom_scheme_origins_via_cors_origins(monkeypatch):
+    c = _client()
+    h = {"Host": "127.0.0.1:8000"}
+    for origin in ("app://.", "vscode-webview://abc-123", "null"):
+        assert c.post("/x", headers={**h, "Origin": origin}).status_code == 403
+    monkeypatch.setenv("YUNSHU_CORS_ORIGINS", "vscode-webview://*,app://.")
+    assert (
+        c.post("/x", headers={**h, "Origin": "vscode-webview://abc-123"}).status_code
+        == 200
+    )
+    assert c.post("/x", headers={**h, "Origin": "app://."}).status_code == 200
+    assert c.post("/x", headers={**h, "Origin": "app://other"}).status_code == 403
+    assert c.post("/x", headers={**h, "Origin": "null"}).status_code == 403
+    monkeypatch.setenv("YUNSHU_CORS_ORIGINS", "null,vscode-webview://*")
+    assert c.post("/x", headers={**h, "Origin": "null"}).status_code == 403
+    # credentials-bearing clients were never affected
+    assert (
+        c.post(
+            "/x", headers={**h, "Origin": "null", "Authorization": "Bearer t"}
+        ).status_code
+        == 200
+    )

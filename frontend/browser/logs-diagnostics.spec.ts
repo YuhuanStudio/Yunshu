@@ -194,7 +194,17 @@ test.describe("logs page", () => {
     await expect(logs.getByText("boot line two")).toBeVisible({
       timeout: 8000,
     });
+    // collapsed: the old lines are not in the live list, but they are kept as a previous-process block
     await expect(logs.getByText("before restart")).toHaveCount(0);
+    const previous = logs.getByTestId("logs-previous");
+    await expect(previous).toBeVisible();
+    await previous.getByRole("button", { name: "顯示" }).click();
+    await expect(
+      previous.getByTestId("logs-previous-list").getByText("before restart"),
+    ).toBeVisible();
+    await expect(
+      logs.getByTestId("logs-scroller").getByText("before restart"),
+    ).toHaveCount(0);
   });
 
   test("copy a line and download the visible lines", async ({ page }) => {

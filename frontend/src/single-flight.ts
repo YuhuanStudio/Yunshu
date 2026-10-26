@@ -27,8 +27,39 @@ export function createSingleFlight(run: () => Promise<void>) {
 }
 
 /** A signal that aborts with the caller's `signal` or after `ms`, so one hung response cannot stall a poller. */
-export const withTimeout = (signal: AbortSignal, ms: number): AbortSignal =>
-  AbortSignal.any([signal, AbortSignal.timeout(ms)]);
+export function withTimeout(signal: AbortSignal, ms: number): AbortSignal {
+  // AbortSignal.any / .timeout need Safari 17.4 / Chrome 116; older browsers get the same thing by hand.
+  if (
+    typeof AbortSignal.any === "function" &&
+    typeof AbortSignal.timeout === "function"
+  ) {
+    return AbortSignal.any([signal, AbortSignal.timeout(ms)]);
+  }
+  const controller = new AbortController();
+  if (signal.aborted) {
+    controller.abort(signal.reason);
+    return controller.signal;
+  }
+  const timer = setTimeout(
+    () =>
+      controller.abort(
+        new DOMException("The operation timed out.", "TimeoutError"),
+      ),
+    ms,
+  );
+  signal.addEventListener(
+    "abort",
+    () => {
+      clearTimeout(timer);
+      controller.abort(signal.reason);
+    },
+    { once: true },
+  );
+  controller.signal.addEventListener("abort", () => clearTimeout(timer), {
+    once: true,
+  });
+  return controller.signal;
+}
 
 /**
  * A poll is already in flight: a background request shares its answer, but a forced one (the user's
@@ -39,7 +70,17 @@ export function joinOrQueue(
   inFlight: Promise<void> | null,
   force: boolean,
   start: () => Promise<void>,
+  /** Holds the queued forced run: forced callers that arrive before it starts share it instead of queueing their own. */
+  slot?: { current: Promise<void> | null },
 ): Promise<void> {
   if (!inFlight) return start();
-  return force ? inFlight.then(start, start) : inFlight;
+  if (!force) return inFlight;
+  if (!slot) return inFlight.then(start, start);
+  if (slot.current) return slot.current;
+  const run = () => {
+    slot.current = null;
+    return start();
+  };
+  slot.current = inFlight.then(run, run);
+  return slot.current;
 }

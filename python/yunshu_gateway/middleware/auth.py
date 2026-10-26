@@ -122,9 +122,12 @@ def _owner_identity() -> str:
     return settings.get("YUNSHU_ACTOR_IDENTITY") or "owner"
 
 
-# Failed-auth backoff: a client address that fails _FAIL_LIMIT times within _FAIL_WINDOW_S gets
-# 429 + Retry-After until the oldest failure ages out. Loopback clients are exempt. The
-# peer address is used (not X-Forwarded-For, which a client can forge to dodge or poison it).
+# Failed-auth backoff: a client address that presents a WRONG credential _FAIL_LIMIT times within
+# _FAIL_WINDOW_S gets 429 + Retry-After on further wrong credentials until the oldest failure ages
+# out. Only presented-but-wrong credentials count (a missing header is not a guess) and a correct
+# credential is always admitted and resets that client's counter, so a stale key on one machine
+# cannot lock the owner out. Loopback clients are exempt. The peer address is used; X-Forwarded-For
+# (its last entry, appended by the proxy) only when the peer is listed in YUNSHU_TRUSTED_PROXIES.
 _FAIL_LIMIT = 20
 _FAIL_WINDOW_S = 60.0
 _FAIL_MAX_CLIENTS = 4096
@@ -135,10 +138,22 @@ _failures_lock = threading.Lock()
 def _client_ip(request: Request) -> str | None:
     """The peer IP, or None for loopback and non-IP peers (Unix socket, in-process): never throttled."""
     host = request.client.host if request.client else ""
+    if host and host in settings.get("YUNSHU_TRUSTED_PROXIES"):
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded.strip():
+            host = forwarded.split(",")[-1].strip()
     try:
         return None if ipaddress.ip_address(host).is_loopback else host
     except ValueError:
         return None
+
+
+def _auth_succeeded(request: Request) -> None:
+    """A correct credential clears this client's failure count."""
+    ip = _client_ip(request)
+    if ip is not None:
+        with _failures_lock:
+            _failures.pop(ip, None)
 
 
 def _auth_blocked(request: Request) -> int | None:
@@ -161,9 +176,21 @@ def _auth_blocked(request: Request) -> int | None:
     return None
 
 
-def _auth_failed(request: Request, message: str, status: int = 401) -> JSONResponse:
-    """Count a failed authentication against the client, then build the error response."""
-    ip = _client_ip(request)
+def _auth_failed(
+    request: Request, message: str, status: int = 401, *, count: bool = True
+) -> Response:
+    """A wrong credential: 429 once the client is over the limit, else count it and answer 401.
+
+    ``count=False`` (no credential presented at all) answers 401 without counting or throttling."""
+    if count and (wait := _auth_blocked(request)) is not None:
+        return format_error_response(
+            request.url.path,
+            "Too many failed authentication attempts",
+            429,
+            code="too_many_auth_failures",
+            retry_after=wait,
+        )
+    ip = _client_ip(request) if count else None
     if ip is not None:
         now = time.monotonic()
         with _failures_lock:
@@ -283,18 +310,6 @@ class AuthMiddleware:
             _stamp_identity(request)
             return None, None
 
-        if (wait := _auth_blocked(request)) is not None:
-            return (
-                format_error_response(
-                    path,
-                    "Too many failed authentication attempts",
-                    429,
-                    code="too_many_auth_failures",
-                    retry_after=wait,
-                ),
-                None,
-            )
-
         auth_token = settings.get("YUNSHU_AUTH_TOKEN") or ""
         # A queued job's line (batches) runs as the key that submitted it.
         act_as = (
@@ -336,19 +351,21 @@ class AuthMiddleware:
             token = api_key
         else:
             return _auth_failed(
-                request, "Missing or invalid Authorization header"
+                request, "Missing or invalid Authorization header", count=False
             ), None
 
         if path == "/v1/realtime/calls" and request.method == "POST":
             from ..realtime_secrets import lookup
 
             if lookup(token) is not None:
+                _auth_succeeded(request)
                 _stamp_identity(request)
                 return None, None
 
         # Static token auth (constant-time comparison). The single consumer
         # authenticates with the one configured bearer token.
         if auth_token and token and tokens_equal(token, auth_token):
+            _auth_succeeded(request)
             with contextlib.suppress(Exception):
                 request.state.principal = api_keys.ADMIN_TOKEN
             _stamp_identity(request)
@@ -384,6 +401,7 @@ class AuthMiddleware:
                     ),
                     None,
                 )
+            _auth_succeeded(request)
             request.state.principal = principal
             request.state.api_key_id = principal.key_id
             _stamp_identity(request, principal)

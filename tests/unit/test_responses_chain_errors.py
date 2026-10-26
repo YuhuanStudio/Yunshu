@@ -71,6 +71,12 @@ def test_missing_middle_parent_is_404_naming_the_missing_id(monkeypatch):
     assert ei.value.status == 404
     assert ei.value.code == "previous_response_not_found"
     assert "'r1'" in str(ei.value.message)
+    # actionable: says it was an ancestor, the store limit, and how to continue
+    assert "chain of 'r2'" in ei.value.message
+    assert (
+        "1024" in ei.value.message
+        and "without `previous_response_id`" in ei.value.message
+    )
 
 
 def test_cancelled_and_failed_parents_replay_input_but_no_assistant_turn(monkeypatch):
@@ -101,3 +107,43 @@ def test_cancelled_and_failed_parents_replay_input_but_no_assistant_turn(monkeyp
         "a-incomplete",
         "u-failed",
     ]
+
+
+def test_client_supplied_history_is_only_normalised_to_the_shape_the_model_produced():
+    """_coalesce_assistant_turns also runs on client `input`: plain valid histories pass
+    unchanged, only the model's own parallel-tool-call output shape is merged."""
+    from yunshu_gateway.routers.responses import _coalesce_assistant_turns as co
+
+    plain = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "again"},
+        {"role": "assistant", "content": "sure"},
+    ]
+    assert co(list(plain)) == plain
+    # a tool call with a user turn in between is never merged into the earlier answer
+    sep = [
+        {"role": "assistant", "content": "answer"},
+        {"role": "user", "content": "now call"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+    ]
+    assert co(list(sep)) == sep
+    # text + the tool call it announced in the same generation: one assistant turn
+    joined = co(
+        [
+            {"role": "assistant", "content": "checking"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+        ]
+    )
+    assert joined == [
+        {"role": "assistant", "content": "checking", "tool_calls": [{"id": "c1"}]}
+    ]
+    # a lone empty assistant message with reasoning, or the last message, is kept
+    keep = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "", "reasoning_content": "thought"},
+        {"role": "user", "content": "q2"},
+    ]
+    assert co(list(keep)) == keep
+    tail = [{"role": "user", "content": "q"}, {"role": "assistant", "content": ""}]
+    assert co(list(tail)) == tail

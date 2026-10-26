@@ -41,8 +41,9 @@ def test_repeated_failures_get_429_with_retry_after():
     r = c.get("/v1/ping", headers=bad)
     assert r.status_code == 429
     assert int(r.headers["Retry-After"]) >= 1
-    # the lockout covers a correct token too, until the window passes
-    assert c.get("/v1/ping", headers={"Authorization": "Bearer tok"}).status_code == 429
+    # a correct token still passes (and clears the count); only wrong credentials are throttled
+    assert c.get("/v1/ping", headers={"Authorization": "Bearer tok"}).status_code == 200
+    assert c.get("/v1/ping", headers=bad).status_code == 401
     # another client is unaffected
     assert (
         _client("203.0.113.10")
@@ -52,11 +53,39 @@ def test_repeated_failures_get_429_with_retry_after():
     )
 
 
+def test_missing_header_is_not_a_guess():
+    c = _client("203.0.113.9")
+    for _ in range(auth_mod._FAIL_LIMIT + 5):
+        assert c.get("/v1/ping").status_code == 401
+    assert not auth_mod._failures
+    assert c.get("/v1/ping", headers={"Authorization": "Bearer tok"}).status_code == 200
+
+
+def test_trusted_proxy_uses_forwarded_client(monkeypatch):
+    monkeypatch.setenv("YUNSHU_TRUSTED_PROXIES", "203.0.113.1")
+    c = _client("203.0.113.1")
+    bad = {"Authorization": "Bearer nope", "X-Forwarded-For": "198.51.100.7"}
+    for _ in range(auth_mod._FAIL_LIMIT):
+        assert c.get("/v1/ping", headers=bad).status_code == 401
+    assert c.get("/v1/ping", headers=bad).status_code == 429
+    # another client behind the same proxy has its own bucket
+    other = {"Authorization": "Bearer nope", "X-Forwarded-For": "198.51.100.8"}
+    assert c.get("/v1/ping", headers=other).status_code == 401
+    # an untrusted peer cannot pick its bucket with a forged header
+    monkeypatch.setenv("YUNSHU_TRUSTED_PROXIES", "")
+    forged = {"Authorization": "Bearer nope", "X-Forwarded-For": "198.51.100.9"}
+    for _ in range(auth_mod._FAIL_LIMIT):
+        c.get("/v1/ping", headers=forged)
+    assert "198.51.100.9" not in auth_mod._failures
+    assert "203.0.113.1" in auth_mod._failures
+
+
 def test_failures_age_out(monkeypatch):
     c = _client("203.0.113.9")
+    bad = {"Authorization": "Bearer nope"}
     for _ in range(auth_mod._FAIL_LIMIT):
-        c.get("/v1/ping")  # no Authorization header at all
-    assert c.get("/v1/ping").status_code == 429
+        c.get("/v1/ping", headers=bad)
+    assert c.get("/v1/ping", headers=bad).status_code == 429
     for q in auth_mod._failures.values():
         q.clear()
         q.append(auth_mod.time.monotonic() - auth_mod._FAIL_WINDOW_S - 1)

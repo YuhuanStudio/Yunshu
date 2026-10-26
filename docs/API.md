@@ -155,6 +155,9 @@ mounted with `YUNSHU_DEBUG_ROUTES=1`.
 
 ---
 
+Responses stored with `store: true` (the default) live in memory: the 1024 most recent, gone after a
+restart. A `previous_response_id` whose chain reaches a response that is no longer stored is a 404
+`previous_response_not_found` naming the missing id; resend the history in `input` to continue.
 Health: `GET /health`. Prometheus metrics: `GET /metrics`. Endpoint shapes are verified against the
 routers in `python/yunshu_gateway/routers/`.
 

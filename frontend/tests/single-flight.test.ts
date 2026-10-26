@@ -47,3 +47,57 @@ test("a forced refresh waits for the poll in flight and then fetches again; a ba
   await joinOrQueue(null, false, start);
   assert.equal(starts, 2);
 });
+
+test("withTimeout works without AbortSignal.any / AbortSignal.timeout (older Safari and Chrome)", async () => {
+  const any = AbortSignal.any;
+  const timeout = AbortSignal.timeout;
+  // @ts-expect-error simulate a browser that predates both
+  AbortSignal.any = undefined;
+  // @ts-expect-error simulate a browser that predates both
+  AbortSignal.timeout = undefined;
+  try {
+    const caller = new AbortController();
+    const s = withTimeout(caller.signal, 20);
+    assert.equal(s.aborted, false);
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(s.aborted, true);
+    assert.equal((s.reason as DOMException).name, "TimeoutError");
+    const c2 = new AbortController();
+    const s2 = withTimeout(c2.signal, 10_000);
+    c2.abort(new Error("stop"));
+    assert.equal(s2.aborted, true);
+    const done = new AbortController();
+    done.abort();
+    assert.equal(withTimeout(done.signal, 10_000).aborted, true);
+  } finally {
+    AbortSignal.any = any;
+    AbortSignal.timeout = timeout;
+  }
+});
+
+test("forced callers that arrive during one poll share a single queued run", async () => {
+  let release!: () => void;
+  const inFlight = new Promise<void>((r) => (release = r));
+  let started = 0;
+  const start = async () => {
+    started++;
+  };
+  const slot = { current: null as Promise<void> | null };
+  const a = joinOrQueue(inFlight, true, start, slot);
+  const b = joinOrQueue(inFlight, true, start, slot);
+  const c = joinOrQueue(inFlight, true, start, slot);
+  assert.equal(a, b);
+  assert.equal(b, c);
+  assert.equal(started, 0);
+  release();
+  await Promise.all([a, b, c]);
+  assert.equal(started, 1);
+  assert.equal(slot.current, null);
+  // after it started, a later forced caller can queue again
+  let release2!: () => void;
+  const inFlight2 = new Promise<void>((r) => (release2 = r));
+  const d = joinOrQueue(inFlight2, true, start, slot);
+  release2();
+  await d;
+  assert.equal(started, 2);
+});

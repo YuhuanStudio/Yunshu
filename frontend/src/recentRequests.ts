@@ -181,6 +181,42 @@ export const historyStale = (
 ) => previous !== null && (previous.failed || ringRows < previous.ringRows);
 
 /**
+ * When the recorded history must be read again. A poll that failed before the first history load
+ * finished says nothing new (that load is still on its way and covers it), so only an outage that
+ * began after a snapshot, a ring that shrank, or a load that itself failed asks for another one.
+ */
+export function createHistoryTracker() {
+  let last: { failed: boolean; ringRows: number } | null = null;
+  let load: "inflight" | "done" | "failed" = "inflight";
+  return {
+    /** A history load was started (the first one, or a re-read). */
+    started() {
+      load = "inflight";
+    },
+    /** The load finished: the snapshot covers any outage so far. */
+    loaded() {
+      load = "done";
+      if (last) last = { ...last, failed: false };
+    },
+    loadFailed() {
+      load = "failed";
+    },
+    pollFailed() {
+      last = {
+        failed: load === "done" ? true : (last?.failed ?? false),
+        ringRows: last?.ringRows ?? 0,
+      };
+    },
+    /** A poll answered: true when the history should be read again. */
+    pollOk(ringRows: number): boolean {
+      const stale = load === "failed" || historyStale(last, ringRows);
+      last = { failed: false, ringRows };
+      return stale;
+    },
+  };
+}
+
+/**
  * Finished requests from the server ring. Refetches every 5 s while the tab is visible and
  * whenever `signal` (the latest finished id seen in status) changes. A 404 means an older
  * server without the endpoint: report `supported: false` and stop asking.
@@ -207,22 +243,26 @@ export function useRecentRequests(
     missing.current = false;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let last: { failed: boolean; ringRows: number } | null = null;
-    const loadHistory = () =>
-      (recorded
-        ? getHistory(connection, controller.signal)
-        : Promise.resolve([])
+    const staleness = createHistoryTracker();
+    const loadHistory = () => {
+      staleness.started();
+      return (
+        recorded
+          ? getHistory(connection, controller.signal)
+          : Promise.resolve([])
       ).then(
         (entries) => {
           if (controller.signal.aborted) return;
           historyRef.current = entries
             .filter((e) => e?.request_id)
             .map(historyToRow);
+          staleness.loaded();
           // `kick` re-reads the ring; with the engine away it fails and the recorded rows stand in.
           kick.current?.();
         },
-        () => undefined,
+        () => staleness.loadFailed(),
       );
+    };
     const schedule = () => {
       if (timer) clearTimeout(timer);
       if (!controller.signal.aborted && !missing.current)
@@ -237,9 +277,8 @@ export function useRecentRequests(
         const ring = data.filter((e) => e?.request_id).map(recentToRow);
         const ids = new Set(ring.map((r) => r.id));
         // after an engine restart the console process has recorded what the old ring held
-        const stale = recorded && historyStale(last, ring.length);
-        last = { failed: false, ringRows: ring.length };
-        if (stale) void loadHistory();
+        const stale = staleness.pollOk(ring.length);
+        if (recorded && stale) void loadHistory();
         setState({
           supported: true,
           // the recorded log fills in what finished before the ring (or before this page opened)
@@ -249,7 +288,7 @@ export function useRecentRequests(
         });
       } catch (e) {
         if (controller.signal.aborted) return;
-        last = { failed: true, ringRows: last?.ringRows ?? 0 };
+        staleness.pollFailed();
         if (e instanceof ApiError && (e.status === 404 || e.status === 405)) {
           missing.current = true;
           setState((s) => ({ ...s, supported: false, rows: [], error: null }));

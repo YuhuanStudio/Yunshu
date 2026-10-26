@@ -64,9 +64,17 @@ _MAX_STREAMING_TEXT_BUFFER = 1 * 1024 * 1024  # 1MB safety limit
 _TRUNCATE_KEEP = 512 * 1024  # Keep last 512KB for stop-sequence detection
 
 
-def _apply_token_budget(req: ChatCompletionRequest, prompt_tokens: int, engine) -> None:
+# The cheap prompt-size bound may clamp a default max_tokens only while it still leaves this much
+# room for the answer; a smaller window/larger prompt pays the exact encode instead.
+_BOUND_CLAMP_MIN_ROOM = 32768
+
+
+def _apply_token_budget(
+    req: ChatCompletionRequest, prompt_tokens: int, engine, basis: str = "exact"
+) -> None:
     """Clamp ``max_tokens`` / ``thinking_budget`` to the room the prompt leaves in the context
-    window (reported in ``x_yunshu.budget``); a request that fits is untouched."""
+    window (reported in ``x_yunshu.budget``, with ``prompt_tokens_basis`` when ``prompt_tokens``
+    is an upper bound rather than a tokenizer count); a request that fits is untouched."""
     from ..token_budget import plan_for_engine
 
     budget = plan_for_engine(
@@ -76,6 +84,7 @@ def _apply_token_budget(req: ChatCompletionRequest, prompt_tokens: int, engine) 
         req.model,
         engine,
         source=req.max_tokens_source(),
+        basis=basis,
     )
     if budget is None or not budget.clamped:
         return
@@ -2140,17 +2149,21 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
             # prompt length), so only pay for the exact count when the cheap upper bound
             # is actually near a limit. The vast majority of prompts sit far below the
             # context window and are provably safe without any encode.
+            # Bytes, not characters: a byte-fallback / byte-level tokenizer can spend several
+            # tokens on one non-ASCII character, but never more tokens than UTF-8 bytes.
             char_upper = 0
             image_count = 0
             for m in messages:
                 content = m.get("content", "")
                 if isinstance(content, str):
-                    char_upper += len(content)
+                    char_upper += len(content.encode("utf-8", "ignore"))
                 elif isinstance(content, list):
                     for block in content:
                         if isinstance(block, dict):
                             if block.get("type") == "text":
-                                char_upper += len(block.get("text", ""))
+                                char_upper += len(
+                                    str(block.get("text", "")).encode("utf-8", "ignore")
+                                )
                             elif block.get("type") in (
                                 "image_url",
                                 "image",
@@ -2164,7 +2177,9 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                 from ..token_budget import estimate_tools_tokens
 
                 _tools_tok = estimate_tools_tokens(req.tools)
-                char_upper += _tools_tok * 4  # chars, the unit of this bound
+                char_upper += (
+                    _tools_tok  # already tokens: not scaled into the bound's unit
+                )
             _max_ctx = get_max_context_window(req.model, engine) or 0
             _cap = get_max_prefill_tokens()
             # Provably safe if the upper bound clears both limits with 10% headroom
@@ -2179,13 +2194,18 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                 and _max_ctx
                 and char_upper < _max_ctx * 0.9
                 and req.max_tokens_source() != SOURCE_REQUEST
+                and _max_ctx - char_upper
+                >= min(req.effective_max_tokens() or 0, _BOUND_CLAMP_MIN_ROOM)
             ):
                 # No max_tokens from the client: the default is the model limit (as large as
                 # the window), so `char_upper + max_tokens` can never clear it and every such
-                # request paid a full encode. The prompt provably fits (tokens <= chars), and
+                # request paid a full encode. The prompt provably fits (tokens <= bytes), and
                 # the room it leaves is at least ctx - char_upper: clamp the default to that
-                # instead of encoding (a request's own max_tokens keeps the exact path).
-                _apply_token_budget(req, char_upper, engine)
+                # instead of encoding (a request's own max_tokens keeps the exact path). The
+                # bound over-states the prompt, so this is only taken while it still leaves a
+                # generous answer (_BOUND_CLAMP_MIN_ROOM); otherwise the exact count below
+                # decides, and a clamp from the bound says so (`prompt_tokens_basis`).
+                _apply_token_budget(req, char_upper, engine, basis="upper_bound")
             elif not (_ctx_safe and _cap_safe):
                 # Near a limit — compute the precise count and enforce both guards.
                 # count_message_tokens already adds IMAGE_TOKEN_ESTIMATE
