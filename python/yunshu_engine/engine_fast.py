@@ -648,15 +648,16 @@ class EngineFastMixin:
             logits_processors.append(_rep_penalty)
         from . import text_logit_processors as _tlp
 
+        _gen_count_procs: list = []  # told len(ids_to_prefill) before generate_step runs
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
             # Dense per-request count vectors patched once per new token (see
-            # text_logit_processors). The prompt offset is 1, NOT the prompt length:
-            # mlx-lm prefills all-but-the-last prompt token OUTSIDE _step, so the
-            # `tokens` handed to logits_processors is [last_prompt_token, gen1, ...].
-            # OpenAI allows both penalties in [-2, 2]; negative ones boost the token.
-            logits_processors.append(
-                _tlp.FrequencyPresencePenalty(frequency_penalty, presence_penalty)
-            )
+            # text_logit_processors). Counts generated tokens only: the prompt offset is the
+            # length of the ids handed to generate_step (set below, once the cached prefix is
+            # known), because mlx-lm puts every prefilled chunk into the `tokens` its
+            # processors see. OpenAI allows both penalties in [-2, 2]; negative ones boost.
+            _fpp = _tlp.FrequencyPresencePenalty(frequency_penalty, presence_penalty)
+            _gen_count_procs.append(_fpp)
+            logits_processors.append(_fpp)
         if logit_bias:
             # Out-of-range ids are skipped (OpenAI ignores them) rather than crashing
             # the request with an out-of-bounds index.
@@ -677,7 +678,9 @@ class EngineFastMixin:
         # emits an INVALID non-EOS token after a complete JSON value. Valid JSON
         # must win over min_tokens (which can't lengthen structured output anyway).
         if min_tokens and min_tokens > 0 and stop_ids and json_schema is None:
-            logits_processors.append(_tlp.TokenBan(stop_ids, floor=int(min_tokens)))
+            _min_ban = _tlp.TokenBan(stop_ids, floor=int(min_tokens))
+            _gen_count_procs.append(_min_ban)
+            logits_processors.append(_min_ban)
 
         # SAMP-2: Wrap user-provided custom logits processors to adapt signature.
         # User processors take (token_ids: list[int], logits: mx.array) -> mx.array
@@ -991,6 +994,8 @@ class EngineFastMixin:
                         exc_info=True,
                     )
 
+            for _gp in _gen_count_procs:  # mlx-lm's `tokens` = these ids + the generated ones
+                _gp.set_prompt_len(len(ids_to_prefill))
             _fp_stats.admit(
                 cached_tokens,
                 len(ids_to_prefill),
