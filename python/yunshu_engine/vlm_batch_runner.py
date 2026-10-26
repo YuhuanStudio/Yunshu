@@ -466,6 +466,9 @@ class VLMBatchRunner:
         self.drafter = drafter
         self.draft_kind = draft_kind
         self.promotions = 0  # shared-batch rows moved onto the speculative lane
+        self.finish_cleanup_failures: dict[
+            str, int
+        ] = {}  # cleanup step -> raises (isolated)
         from . import penalty_context
 
         penalty_context.install()  # penalty context = the full prompt on an APC hit too
@@ -725,8 +728,8 @@ class VLMBatchRunner:
         greedy = temperature is None or temperature < 1e-6
         processors = list(logits_processors or [])
         # Exact lane reports come from committed target rows, including the first token.
-        # A thinking budget forces "\n</think>" through upstream's
-        # ThinkingBudgetCriteria, which only the non-speculative batch applies.
+        # A thinking budget forces the template's own close ("\n</think>\n\n" on Qwen3.x)
+        # through upstream's ThinkingBudgetCriteria, which only the non-speculative batch applies.
         # Sampled requests draft too: their tokens are drawn by a position-keyed sampler, so
         # accepting a draft equals what serial sampling would have produced (keyed_sampling).
         keyed_ok = greedy or keyed_sampling.supports(
@@ -756,10 +759,12 @@ class VLMBatchRunner:
             processors.append(Fp32LogitsProcessor())
         budget = None
         if thinking_budget is not None:
-            from mlx_vlm.utils import ThinkingBudgetCriteria
+            from .thinking_budget import make_forced_close_criteria
 
-            budget = ThinkingBudgetCriteria(
-                getattr(self.processor, "tokenizer", self.processor),
+            _tok = getattr(self.processor, "tokenizer", self.processor)
+            budget = make_forced_close_criteria(
+                _tok,
+                self.processor,
                 int(thinking_budget),
                 thinking_end_token=thinking_end_token,
                 thinking_start_token=thinking_start_token,
@@ -1332,39 +1337,74 @@ class VLMBatchRunner:
             group.sampler.drop(uid)
         if job is None:
             return
-        if reason is not None:
-            job.stats.finish_reason = reason
-        if (
-            self.prefix_invariant
-            and job.priority >= 0
-            and reason != "cancel"
-            and not job.abandoned
-        ):
-            now = time.perf_counter()
-            auxiliary = [
-                j for g in self._groups() for j in g.jobs.values() if j.priority < 0
-            ]
-            auxiliary += [j for j in self._pending if j.priority < 0]
-            aged = [j for j in auxiliary if now - j.last_service >= AGING_S]
-            oldest = min(aged, key=lambda j: j.queued, default=None)
-            if oldest is None or not oldest.handoff_graced:
-                self._primary_handoff_at = now
-                if oldest is not None:
-                    oldest.handoff_graced = True
-        self._observe_prefill(job)
-        if not group.jobs and getattr(group, "spec", False):
-            # before the APC sees the cache: closing the rounds drops a window the fast
-            # DFlash tree has in flight (its tokens reach the consumer one round late)
-            from .spec_release import release_rounds
+        # The row is already out of group.jobs, so the slice's failure handler can no longer
+        # reach it: a cleanup step that raised here left the client without a terminal forever
+        # (mlx2 3dc6f0f). Every step is isolated and the terminal is always emitted.
+        try:
+            if reason is not None:
+                job.stats.finish_reason = reason
+            if (
+                self.prefix_invariant
+                and job.priority >= 0
+                and reason != "cancel"
+                and not job.abandoned
+            ):
+                self._cleanup_step(job, "handoff", self._note_handoff)
+            self._cleanup_step(
+                job, "observe_prefill", lambda: self._observe_prefill(job)
+            )
+            if not group.jobs and getattr(group, "spec", False):
+                # before the APC sees the cache: closing the rounds drops a window the fast
+                # DFlash tree has in flight (its tokens reach the consumer one round late)
+                from .spec_release import release_rounds
 
-            release_rounds(group.gen)
-        self._release_apc_request(group, job)
-        if not group.jobs and getattr(group, "spec", False):
-            from .kernels.buffer_cache import offer_restore_buffers
+                self._cleanup_step(
+                    job, "release_rounds", lambda: release_rounds(group.gen)
+                )
+            self._cleanup_step(
+                job,
+                "release_apc_request",
+                lambda: self._release_apc_request(group, job),
+            )
+            if not group.jobs and getattr(group, "spec", False):
+                from .kernels.buffer_cache import offer_restore_buffers
 
-            batch = getattr(group.gen, "_generation_batch", None)
-            offer_restore_buffers(getattr(batch, "prompt_cache", None) or [])
-        self._emit(job, _DONE)
+                def _offer():
+                    batch = getattr(group.gen, "_generation_batch", None)
+                    offer_restore_buffers(getattr(batch, "prompt_cache", None) or [])
+
+                self._cleanup_step(job, "offer_restore_buffers", _offer)
+        finally:
+            self._emit(job, _DONE)
+
+    def _cleanup_step(self, job: _Job, step: str, fn) -> bool:
+        """Run one finish cleanup step; a raise is logged and counted, never propagated."""
+        try:
+            fn()
+        except Exception:
+            self.finish_cleanup_failures[step] = (
+                self.finish_cleanup_failures.get(step, 0) + 1
+            )
+            logger.exception(
+                "request %s: finish step %s failed; still publishing its terminal",
+                getattr(job.stats, "request_id", None),
+                step,
+            )
+            return False
+        return True
+
+    def _note_handoff(self) -> None:
+        now = time.perf_counter()
+        auxiliary = [
+            j for g in self._groups() for j in g.jobs.values() if j.priority < 0
+        ]
+        auxiliary += [j for j in self._pending if j.priority < 0]
+        aged = [j for j in auxiliary if now - j.last_service >= AGING_S]
+        oldest = min(aged, key=lambda j: j.queued, default=None)
+        if oldest is None or not oldest.handoff_graced:
+            self._primary_handoff_at = now
+            if oldest is not None:
+                oldest.handoff_graced = True
 
     @staticmethod
     def _release_apc_request(group: _Group, job: _Job) -> None:

@@ -16,6 +16,7 @@ from .context_window import (
     require_non_empty_prompt,
 )
 from .fast_path_stats import FastPathStats
+from .reasoning_gate import ThinkGatedSampler as _ThinkGatedSampler
 
 
 def hybrid_snapshot_mode(
@@ -511,7 +512,7 @@ class EngineFastMixin:
                 sampler = _engine._build_constrained_sampler(
                     sampler, json_schema, tokenizer
                 )
-                report(
+                _sr = report(
                     "mlx-lm",
                     json_schema,
                     backend_name(
@@ -523,6 +524,18 @@ class EngineFastMixin:
                     else None,
                     enforced=sampler is not unconstrained_sampler,
                 )
+                if sampler is not unconstrained_sampler:
+                    # thinking on: the grammar binds after </think>, not inside the reasoning
+                    from .reasoning_gate import gate_constrained_sampler
+
+                    sampler = gate_constrained_sampler(
+                        unconstrained_sampler,
+                        sampler,
+                        input_ids,
+                        tokenizer,
+                        _eos_ids,
+                        _sr,
+                    )
             except Exception:
                 _engine.logger.warning(
                     "Grammar constraint setup failed, falling back to unconstrained",
@@ -553,6 +566,8 @@ class EngineFastMixin:
                 isinstance(json_schema, dict)
                 and json_schema.get("type") in ("regex", "choice", "cfg")
             )
+            # the custom loop masks from token 1; with an open <think> the grammar waits
+            and not isinstance(sampler, _ThinkGatedSampler)
         ):
             try:
                 import json as _json

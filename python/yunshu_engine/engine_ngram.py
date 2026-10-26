@@ -160,6 +160,39 @@ class EngineNgramMixin:
         require_non_empty_prompt(input_ids)
         prompt_tokens = len(input_ids)
 
+        if json_schema is not None:
+            from .reasoning_gate import prompt_opens_reasoning
+
+            if prompt_opens_reasoning(input_ids, tokenizer)[0]:
+                # The grammar binds after </think>: the plain path owns that gate (the draft
+                # pre-filter here walks the grammar from the first token).
+                return await self._generate_fast(
+                    prompt=prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    min_p=min_p,
+                    repetition_penalty=repetition_penalty,
+                    frequency_penalty=frequency_penalty,
+                    presence_penalty=presence_penalty,
+                    logit_bias=logit_bias,
+                    stop=stop,
+                    stop_token_ids=stop_token_ids,
+                    seed=seed,
+                    enable_thinking=enable_thinking,
+                    logprobs=logprobs,
+                    top_logprobs=top_logprobs,
+                    thinking_budget=thinking_budget,
+                    xtc_probability=xtc_probability,
+                    xtc_threshold=xtc_threshold,
+                    json_schema=json_schema,
+                    cancel_event=cancel_event,
+                    logits_processors=logits_processors,
+                    timeout_seconds=timeout_seconds,
+                    lora_adapter=lora_adapter,
+                )
+
         # Build stop token sets
         stop_ids: set[int] = set()
         stop_suffixes = []
