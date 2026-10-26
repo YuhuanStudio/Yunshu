@@ -245,3 +245,89 @@ def test_faulted_row_never_publishes_its_unmasked_first_token(pgen_runner, monke
     )
     assert pgen_runner._emit_ready_first(group) is None
     assert emitted == []
+
+
+def _plain_job():
+    return vbr._Job(
+        ids=[1],
+        max_tokens=3,
+        greedy=True,
+        sampling=None,
+        use_draft=False,
+        logprobs=False,
+        top_logprobs=0,
+        processors=[],
+        prompt_kwargs={},
+        salt=None,
+        seed=None,
+        cancel_event=None,
+        stats=vbr.RunStats(),
+    )
+
+
+def test_admitted_jobs_are_not_reached_again_by_the_failure_handler(
+    runner,  # noqa: F811
+    monkeypatch,
+):
+    """A fails nothing; B's own bookkeeping raises after A was admitted, outside the per-job try."""
+    admitted = []
+
+    class Cancel:
+        def is_set(self):
+            if admitted:
+                raise RuntimeError("bookkeeping exploded")
+            return False
+
+    first, second = _plain_job(), _plain_job()
+    second.cancel_event = Cancel()
+    with runner._lock:
+        runner._pending.extend([first, second])
+    real_admit = runner._admit
+
+    def admit(job, alone):
+        real_admit(job, alone)
+        admitted.append(job)
+
+    monkeypatch.setattr(runner, "_admit", admit)
+    seen = []
+    real_emit = runner._emit
+
+    def spy(j, item):
+        if isinstance(item, BaseException):
+            seen.append(j)
+        real_emit(j, item)
+
+    monkeypatch.setattr(runner, "_emit", spy)
+    runner._drive_slice_body(resubmit=False)
+    assert admitted == [first]
+    assert sorted(map(id, seen)) == sorted(map(id, [first, second]))  # each once
+
+
+def test_extra_hash_failure_releases_the_apc_request(runner, monkeypatch):  # noqa: F811
+    from tests.unit.test_vlm_runner_batching import FakeGen
+
+    class Apc:
+        def __init__(self):
+            self.manager = SimpleNamespace(_console_requests={})
+            self.set, self.released = [], []
+
+        def set_request(self, ids, plan):
+            self.set.append(tuple(ids))
+
+        def release_request(self, ids, plan):
+            self.released.append(tuple(ids))
+
+    apc = Apc()
+
+    def bad_hash(pkw):
+        raise RuntimeError("extra_hash exploded")
+
+    monkeypatch.setattr(FakeGen, "apc", apc, raising=False)
+    monkeypatch.setattr(FakeGen, "_apc_extra_hash", staticmethod(bad_hash), raising=False)
+    job = _plain_job()
+    with runner._lock:
+        runner._pending.append(job)
+    runner._drive_slice_body(resubmit=False)
+    assert isinstance(job.out.get(timeout=1), RuntimeError)
+    assert apc.set == [(1,)]
+    assert apc.released == [(1,)]
