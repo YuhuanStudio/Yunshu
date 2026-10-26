@@ -181,7 +181,9 @@ def test_restore_buffer_is_best_fit_and_bounded(restore):
     mx.eval(big, mid, small)
     buffer_cache._RESTORE_BUFFERS[:] = [big, mid, small]
     probe = mx.zeros((1, 1, 10, 4))
-    assert buffer_cache.take_restore_buffer(probe, 300) is mid  # best fit, not first fit
+    assert (
+        buffer_cache.take_restore_buffer(probe, 300) is mid
+    )  # best fit, not first fit
     assert buffer_cache.take_restore_buffer(probe, 300) is None  # 4096 > 2 x 300
     assert buffer_cache.take_restore_buffer(probe, 200) is small
     assert buffer_cache.take_restore_buffer(probe, 3000) is big
