@@ -72,9 +72,11 @@ def _wired_limit_ctx(model):
     old_limit = None
     try:
         import mlx.core as mx
+        from mlx.utils import tree_flatten
 
         max_rec = mx.metal.recommended_max_working_memory_size()
-        model_bytes = sum(p.nbytes for p in model.parameters())
+        # parameters() is a nested dict: iterating it directly yields key strings
+        model_bytes = sum(p.nbytes for _, p in tree_flatten(model.parameters()))
         old_limit = mx.set_wired_limit(max_rec) if model_bytes > max_rec * 0.5 else None
     except Exception:
         logger.debug("wired limit setup failed", exc_info=True)
