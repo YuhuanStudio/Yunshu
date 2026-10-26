@@ -72,7 +72,7 @@ import {
 } from "./OverviewParts";
 import { useSignals } from "./signals";
 import type { Connection, RequestRow } from "./api";
-import { buildIntegrations, serviceRoot } from "./integrations";
+import { buildIntegrations, neverConfigured, serviceRoot } from "./integrations";
 import {
   clock,
   elapsed,
@@ -290,11 +290,11 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
   );
 }
 
-function savedBaseUrl() {
+function savedBaseUrl(): string | null {
   try {
-    return localStorage.getItem("yunshu.console.url") || location.origin;
+    return localStorage.getItem("yunshu.console.url");
   } catch {
-    return location.origin;
+    return null;
   }
 }
 
@@ -477,7 +477,7 @@ export function Dashboard({
     const v = p.values.decode;
     return typeof v === "number" && Number.isFinite(v) && v !== 0;
   });
-  const baseUrl = serviceRoot(savedBaseUrl());
+  const baseUrl = serviceRoot(connection.baseUrl);
   const quickModel = (loaded.find(supportsChat) ?? loaded[0])?.id ?? "";
   const curl =
     buildIntegrations(baseUrl, quickModel).find((i) => i.id === "curl")?.code ??
@@ -507,17 +507,15 @@ export function Dashboard({
   // refused. A restart (502, refused, timeout) keeps the skeleton and the banner.
   // A refused token on a console that was configured keeps the page: the shell
   // shows the banner with a token prompt in place (App.tsx).
-  const neverConfigured = (() => {
-    try {
-      return localStorage.getItem("yunshu.console.url") === null;
-    } catch {
-      return true;
-    }
-  })();
+  const firstRun = neverConfigured(
+    savedBaseUrl(),
+    connection.baseUrl,
+    location.origin,
+  );
   // A console following engines (--engine auto) is always configured: its own address is the connection.
   if (
     !status &&
-    neverConfigured &&
+    firstRun &&
     engine.outage.kind === "none" &&
     (engine.phase === "unauthorized" || engine.phase === "offline")
   )
