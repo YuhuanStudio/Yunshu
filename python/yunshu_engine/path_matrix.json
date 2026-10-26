@@ -2269,6 +2269,66 @@
      "why": "text-only models take no images"
     }
    }
+  },
+  "one_token_greedy": {
+   "module": "python/yunshu_engine/sampling_defaults.py",
+   "what": "A request whose filters keep one token (top_k 1, min_p 1, no XTC) decodes greedily: fused argmax, the exact speculative lane and greedy-only routes instead of a sampler over one token",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "effective_temperature("
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "effective_temperature("
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "effective_temperature("
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "effective_temperature("
+      ]
+     ]
+    },
+    "text": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/batched_engine.py",
+       "effective_temperature("
+      ]
+     ]
+    },
+    "loop": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/batched_engine.py",
+       "effective_temperature("
+      ]
+     ]
+    }
+   }
   }
  },
  "exclusions": [
