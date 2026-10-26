@@ -365,7 +365,7 @@ class EngineNgramMixin:
 
                 get_inflight_tracker().register(
                     _ng_inflight_req_id,
-                    [int(t) for t in ids],
+                    list(input_ids),
                     cache,
                     self.model_name or "",
                 )
@@ -1248,7 +1248,7 @@ class EngineNgramMixin:
 
                 get_inflight_tracker().register(
                     _ng_s_inflight_req_id,
-                    [int(t) for t in ids],
+                    list(input_ids),
                     cache,
                     self.model_name or "",
                 )
