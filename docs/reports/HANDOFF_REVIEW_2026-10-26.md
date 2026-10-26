@@ -148,4 +148,27 @@ Nothing here ran on Metal or with a real checkpoint. Before merging, run on the 
 
 ## Test evidence
 
-See [Full-suite comparison](#full-suite-comparison) (filled in at the end of the branch).
+### Full-suite comparison
+
+`pytest -n 6 tests/unit` in the same container (Linux, MLX CPU backend, shared venv synced to this branch's lock):
+
+| tree | failed | passed | skipped |
+|---|---|---|---|
+| `main` `47a87ab` | 135 | 12372 | 346 |
+| this branch (final) | 134 | 12611 | 325 |
+
+* No test fails on the branch that passes on `main`. The 134 failures are the environment set on both trees (Metal-only
+  kernels, real checkpoints, gpuq, zsh, srt, tfbench, timing tests under load).
+* One `main` failure is fixed (`test_doctor_checks::test_version_guard_ok_and_missing_packages_are_not_version_failures`,
+  doctor minimums now follow pyproject).
+* About 240 more tests pass: new regression and equivalence tests for every fix, minus the tests of deleted modules.
+* `tests/unit/test_path_parity.py` is green with the new feature rows; `ruff check` / `ruff format` are clean.
+* Not covered here: Metal, real models, the console bundle-size build and the full Playwright/WebKit suite (see
+  [Verify on the Mac](#verify-on-the-mac)).
+
+### After the parity lanes
+
+* The EngineCore `loop` got the same dense penalty / logit_bias / suppress / min_tokens processors and real
+  `top_logprobs` entries (`aed9970`); before, the raw vocab-wide logprobs array went into every output whether or not
+  logprobs were requested. Every row of the table in [What a unified path must keep](#what-a-unified-path-must-keep) is
+  now engaged on every path.
