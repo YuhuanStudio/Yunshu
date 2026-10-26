@@ -54,7 +54,7 @@ curl -s localhost:8000/v1/yunshu/usage -H "Authorization: Bearer $YUNSHU_AUTH_TO
 
 对密钥使用 `PATCH` 与 `DELETE` 可编辑与移除，`POST /v1/yunshu/keys/{id}/rotate` 会重新签发。超过配额时，会以该路由自己的错误格式返回 `429` 并附 `Retry-After`。这些路由列于 [Yunshu 扩展](/docs/api/extensions)与[运维](/docs/api/operations)。
 
-密钥不是租户。通过验证的客户端共用 Files、已保存的 completions 与 Evals 数据，没有逐密钥隔离，也没有 RBAC。Realtime WebSocket 接受密钥，但不计算配额。
+密钥不是租户。infer 密钥只看得到自己创建的 Files 与 Conversations（其他密钥的对象返回 404）；静态 token、关闭验证模式与 admin 密钥看得到全部。已保存的 completions 与 Evals 数据仍共用，没有 RBAC。Realtime WebSocket 接受密钥，但不计算配额。
 
 ## 写入设置
 

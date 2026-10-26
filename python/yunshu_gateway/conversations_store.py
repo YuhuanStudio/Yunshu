@@ -4,6 +4,11 @@ Layout under the store root (default ``~/.yunshu/conversations``)::
 
     <conv_id>.json   {"id", "object", "created_at", "metadata", "items": [...]}
 
+A conversation records the actor that created it (``owner``: ``owner`` for the static token or
+auth-disabled mode, ``key:<id>`` for a managed key). :meth:`check_access` hides one from every
+other infer key as not found; admin-scope keys and the owner see all, and conversations stored
+before this field existed stay open.
+
 One JSON file per conversation; every write is atomic (temp file + ``os.replace``) and serialised by a
 process-wide lock. Ids are validated against a strict pattern before they touch a path, so traversal
 is impossible. Items are kept in insertion order (oldest first); the API layer reverses for ``desc``.
@@ -228,7 +233,16 @@ class ConversationStore:
         }
 
     # -- conversations -------------------------------------------------------
-    def create(self, items: list | None = None, metadata: Any = None) -> dict:
+    def check_access(self, conv_id: str, actor: str, admin: bool) -> None:
+        """Raise ``ConversationNotFound`` unless ``actor`` may use this conversation."""
+        with _lock:
+            owner = self._load(conv_id).get("owner")
+        if owner and not admin and owner != actor:
+            raise ConversationNotFound(conv_id)
+
+    def create(
+        self, items: list | None = None, metadata: Any = None, owner: str = ""
+    ) -> dict:
         meta = check_metadata(metadata)
         items = items or []
         if not isinstance(items, list):
@@ -254,6 +268,8 @@ class ConversationStore:
             "metadata": meta,
             "items": norm,
         }
+        if owner:
+            rec["owner"] = owner
         with _lock:
             self._save(rec)
         return self.public(rec)

@@ -166,6 +166,13 @@ def _is_admin(request) -> bool:
     ) or role_str.upper().endswith("ADMIN")
 
 
+def _file_access(request):
+    """Context manager: file references in this request resolve only to files the caller may see."""
+    from ..files_store import file_access
+
+    return file_access(_resolve_owner(request), _is_admin(request))
+
+
 def _owns_stored(request, payload: dict) -> bool:
     """True if the caller may read/cancel this stored response.
 
@@ -1699,13 +1706,10 @@ async def create_response(req: ResponsesRequest, request: Request):
         ]
         if has_file_refs(_raw_items):
             try:
+                with _file_access(request):
+                    _resolved = resolve_file_refs(_raw_items)
                 req = req.model_copy(
-                    update={
-                        "input": [
-                            ResponseInputText(**i)
-                            for i in resolve_file_refs(_raw_items)
-                        ]
-                    }
+                    update={"input": [ResponseInputText(**i) for i in _resolved]}
                 )
             except FileRefError as exc:
                 return JSONResponse(

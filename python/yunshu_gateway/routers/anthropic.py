@@ -1784,17 +1784,20 @@ async def _create_message(
     # Files API references ({"source": {"type": "file", "file_id": ...}}) become inline sources.
     if has_file_refs([m.content for m in req.messages]) or has_file_refs(req.system):
         try:
-            req = req.model_copy(
-                update={
-                    "messages": [
-                        AnthropicMessage(
-                            role=m.role, content=resolve_file_refs(m.content)
-                        )
-                        for m in req.messages
-                    ],
-                    "system": resolve_file_refs(req.system),
-                }
-            )
+            from .responses import _file_access
+
+            with _file_access(request):
+                req = req.model_copy(
+                    update={
+                        "messages": [
+                            AnthropicMessage(
+                                role=m.role, content=resolve_file_refs(m.content)
+                            )
+                            for m in req.messages
+                        ],
+                        "system": resolve_file_refs(req.system),
+                    }
+                )
         except FileRefError as exc:
             return JSONResponse(
                 status_code=exc.status,
@@ -3778,14 +3781,19 @@ async def count_tokens(req: AnthropicCountTokensRequest, request: Request):
     from ..files_store import has_file_refs, resolve_file_refs
 
     if has_file_refs([m.content for m in req.messages]):
-        req = req.model_copy(
-            update={
-                "messages": [
-                    AnthropicMessage(role=m.role, content=resolve_file_refs(m.content))
-                    for m in req.messages
-                ]
-            }
-        )
+        from .responses import _file_access
+
+        with _file_access(request):
+            req = req.model_copy(
+                update={
+                    "messages": [
+                        AnthropicMessage(
+                            role=m.role, content=resolve_file_refs(m.content)
+                        )
+                        for m in req.messages
+                    ]
+                }
+            )
     if has_documents([m.content for m in req.messages]):
         req, _ = await prepare_documents(
             req, bool(getattr(get_engine(), "has_vision", False))

@@ -164,7 +164,8 @@ class CodeExecutor:
         from ..files_store import FileStoreError, get_store
 
         store = get_store()
-        meta = store.get_meta(file_id)
+        # the container's owner is the actor; an unowned container is the single-user case
+        meta = store.get_meta_for(file_id, c.owner, not c.owner)
         name = os.path.basename(meta.get("filename") or file_id) or file_id
         rel = cfiles.clean_relpath(name) or file_id
         try:
@@ -211,7 +212,7 @@ class CodeExecutor:
                         timeout=limit,
                         mem_bytes=mem,
                     )
-                files = self._capture(out_dir)
+                files = self._capture(out_dir, c.owner)
             finally:
                 shutil.rmtree(out_dir, ignore_errors=True)
         res = ExecResult(
@@ -250,7 +251,7 @@ class CodeExecutor:
         res.text = res.text or model_text(res)
         return res
 
-    def _capture(self, out_dir: Path) -> list[dict]:
+    def _capture(self, out_dir: Path, owner: str = "") -> list[dict]:
         """Top-level regular files left in $OUTPUT_DIR become Files API entries."""
         from ..files_store import FileStoreError, get_store
 
@@ -264,6 +265,7 @@ class CodeExecutor:
                     p.name,
                     purpose="code_execution_output",
                     downloadable=True,
+                    owner=owner,
                 )
             except FileStoreError as e:
                 logger.warning("code_exec output %s not stored: %s", p.name, e)
@@ -403,6 +405,7 @@ class CodeExecutor:
                     os.path.basename(e.rel),
                     purpose="code_execution_output",
                     downloadable=True,
+                    owner=c.owner,
                 )
             except (cfiles.FileOpError, FileStoreError) as err:
                 logger.warning("code_exec output not stored: %s", err)

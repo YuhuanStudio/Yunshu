@@ -54,7 +54,7 @@ curl -s localhost:8000/v1/yunshu/usage -H "Authorization: Bearer $YUNSHU_AUTH_TO
 
 `PATCH` and `DELETE` on a key edit and remove it, and `POST /v1/yunshu/keys/{id}/rotate` re-issues it. Over a quota the answer is `429` in the route's own error dialect with `Retry-After`. The routes are listed in [Yunshu extensions](/docs/api/extensions) and [Operations](/docs/api/operations).
 
-Keys are not tenants. Authenticated clients share Files, stored completions and Evals data; there is no per-key isolation or RBAC. The Realtime WebSocket accepts keys but does not count quotas.
+Keys are not tenants. An infer key sees only the Files and Conversations it created (another key's object answers 404); the static token, auth-disabled mode and admin-scope keys see all. Stored completions and Evals data are still shared; there is no RBAC. The Realtime WebSocket accepts keys but does not count quotas.
 
 ## Write settings
 

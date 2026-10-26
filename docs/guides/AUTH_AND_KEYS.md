@@ -30,8 +30,10 @@ usage (requests, prompt, completion and cached tokens, errors) is under `GET /v1
 Over a quota the answer is `429` in the route's own error dialect with `Retry-After`. Details:
 [API surface](API_SURFACE.md#api-keys-and-quotas).
 
-Limits: keys are not tenants. Authenticated clients share Files, stored completions and Evals data;
-there is no per-key isolation or RBAC. The Realtime WebSocket accepts keys but does not count quotas.
+Limits: keys are not tenants. An infer key sees only the Files and Conversations it created (another
+key's object answers 404); the static token, auth-disabled mode and admin-scope keys see all. Stored
+completions and Evals data are still shared; there is no RBAC. The Realtime WebSocket accepts keys but
+does not count quotas.
 
 ## Writing settings
 
