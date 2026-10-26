@@ -450,6 +450,10 @@ def _lane_length(cache: Any) -> int | None:
     or a one-row ``BatchKVCache`` without left padding (the speculative lane's
     verify cache). None for anything else."""
     kind = type(cache)
+    # QSA caches own an inner KV cache plus index state; they are not dense
+    # lane layouts. Eligibility probes must reject them before reading keys.
+    if kind not in _dense_kv_classes() and kind not in _stock_batch_kv_classes():
+        return None
     if cache is None or cache.keys is None or cache.keys.shape[0] != 1:
         return None
     if kind in _dense_kv_classes():
