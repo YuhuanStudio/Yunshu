@@ -105,6 +105,10 @@ class RunStats:
     )
     first_token_s: float = 0.0
     generated: int = 0
+    # Tokens the engine's consumer has taken so far: what usage reports (``generated`` is the
+    # runner's progress and can be ahead of it: a stop string ends the reply mid-round, the
+    # consumer lags). 0 = not tracked.
+    consumed: int = 0
     finish_reason: str | None = None
     stop_string_hit: bool = False  # a user stop string (not EOS) ended the request
     used_apc: bool = False

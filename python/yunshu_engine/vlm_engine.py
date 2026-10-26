@@ -228,6 +228,11 @@ SINGLE_IMAGE_ONLY_MODELS = frozenset(
 )
 
 
+def _completion_count(stats) -> int:
+    """Tokens the reply consumed: the consumer's count, else the runner's progress."""
+    return int(getattr(stats, "consumed", 0) or stats.generated)
+
+
 _UNSET: Any = object()  # "argument not given" (None is a real value for an orphan key)
 
 
@@ -3055,6 +3060,7 @@ class VLMEngine:
             first_delivery=first_delivery,
         ):
             count += 1
+            stats.consumed = count
             lp = stats.last_logprob if logprobs else None
             if token in stop_ids:
                 detok.finalize()
@@ -3470,7 +3476,7 @@ class VLMEngine:
         return (
             "".join(parts),
             thinking,
-            stats.generated,
+            _completion_count(stats),
             finish in ("stop", "budget"),
             finish == "budget",
             stats.cached_tokens,
@@ -3493,6 +3499,7 @@ class VLMEngine:
             return True
 
         prompt_tokens = len(input_ids)
+        first_sent = False
         try:
             for text, token, state, finish, thinking, lp in self._runner_events(
                 input_ids, stats=stats, **params
@@ -3500,7 +3507,11 @@ class VLMEngine:
                 reason = {"budget": "stop"}.get(finish, finish)
                 if not (text or reason or lp is not None):
                     continue
-                first = stats.generated == 1 and token is not None
+                # the first token's own event can carry no text (a think tag, a partial
+                # character) and the runner can already be past token 1: flag the first
+                # event that has a token, once
+                first = token is not None and not first_sent
+                first_sent = first_sent or token is not None
                 ok = deliver(
                     RequestOutput(
                         request_id=req_id,
@@ -3508,7 +3519,7 @@ class VLMEngine:
                         new_token_ids=[token] if token is not None else [],
                         finish_reason=reason,
                         finished=reason is not None,
-                        completion_tokens=stats.generated,
+                        completion_tokens=_completion_count(stats),
                         prompt_tokens=prompt_tokens,
                         cached_tokens=stats.cached_tokens,
                         current_state=state,
@@ -3531,7 +3542,7 @@ class VLMEngine:
                     finished=True,
                     error=str(exc),
                     prompt_tokens=prompt_tokens,
-                    completion_tokens=stats.generated,
+                    completion_tokens=_completion_count(stats),
                 )
             )
         finally:
