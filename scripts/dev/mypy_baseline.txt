@@ -58,8 +58,6 @@
 1	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "GenerationOutput"
 1	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "int"
 1	python/yunshu_engine/batched_engine.py	union-attr	Item "None" of "Any | None" has no attribute "embed_tokens"
-1	python/yunshu_engine/bfcl_eval.py	no-any-return	Returning Any from function declared to return "str"
-1	python/yunshu_engine/bfcl_eval.py	no-redef	Name "results" already defined on line N
 1	python/yunshu_engine/deltanet_inversion.py	arg-type	Argument 1 to "float" has incompatible type "int | float | complex"; expected "str | Buffer | SupportsFloat | SupportsIndex"
 1	python/yunshu_engine/dflash_tree.py	attr-defined	"def rounds(*args: Any, **kwargs: Any) -> Any" has no attribute "_yunshu_tree"
 1	python/yunshu_engine/draft_vocab.py	arg-type	Argument 1 to "zip" has incompatible type "tuple[Any, ...] | None"; expected "Iterable[Any]"
@@ -254,28 +252,14 @@
 1	python/yunshu_engine/model_preprocessor.py	abstract	Cannot instantiate abstract class "ModelPreprocessor" with abstract attributes "input_type", "model_family" and "preprocess"
 2	python/yunshu_engine/model_preprocessor.py	no-any-return	Returning Any from function declared to return "bool"
 1	python/yunshu_engine/mrope.py	arg-type	Argument "sections" to "MRoPEInfo" has incompatible type "tuple[int, ...]"; expected "tuple[int, int, int] | None"
-1	python/yunshu_engine/mtp_decoder.py	arg-type	Argument 1 to "append" of "list" has incompatible type "tuple[None, None]"; expected "tuple[str, list[Any]]"
-1	python/yunshu_engine/mtp_decoder.py	arg-type	Argument 1 to "int" has incompatible type "int | float | complex"; expected "str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc"
 3	python/yunshu_engine/mtp_lane.py	index	Value of type "int | float | complex | list[list_or_scalar]" is not indexable
 1	python/yunshu_engine/mtp_lane.py	no-any-return	Returning Any from function declared to return "dict[Any, Any] | None"
-1	python/yunshu_engine/mtp_patch.py	arg-type	Argument 1 to "load_model" has incompatible type "str"; expected "Path"
-1	python/yunshu_engine/mtp_patch.py	assignment	Incompatible types in assignment (expression has type "Path", variable has type "str")
-1	python/yunshu_engine/mtp_patch.py	attr-defined	Module has no attribute "MTPModule"
-1	python/yunshu_engine/mtp_patch.py	operator	Unsupported left operand type for / ("str")
-1	python/yunshu_engine/mtp_patch.py	union-attr	Item "array" of "array | dict[str, array] | tuple[dict[str, array], dict[str, Any]]" has no attribute "items"
-1	python/yunshu_engine/mtp_patch.py	union-attr	Item "dict[Any, Any]" of "Any | dict[Any, Any]" has no attribute "args"
-1	python/yunshu_engine/mtp_patch.py	union-attr	Item "dict[Any, Any]" of "Any | dict[Any, Any]" has no attribute "load_weights"
-1	python/yunshu_engine/mtp_patch.py	union-attr	Item "dict[Any, Any]" of "Any | dict[Any, Any]" has no attribute "make_mtp_cache"
-1	python/yunshu_engine/mtp_patch.py	union-attr	Item "dict[Any, Any]" of "Any | dict[Any, Any]" has no attribute "mtp"
-1	python/yunshu_engine/mtp_patch.py	union-attr	Item "tuple[dict[str, array] | dict[str, Any], ...]" of "array | dict[str, array] | tuple[dict[str, array], dict[str, Any]]" has no attribute "items"
 1	python/yunshu_engine/mtp_tree.py	arg-type	Argument 1 to "take" has incompatible type "array | None"; expected "array"
 1	python/yunshu_engine/mtp_tree.py	assignment	Incompatible types in assignment (expression has type "None", variable has type "array")
 1	python/yunshu_engine/mtp_tree.py	assignment	Incompatible types in assignment (expression has type "array | None", variable has type "array")
 1	python/yunshu_engine/mtp_tree.py	attr-defined	"def rounds(*args: Any, **kwargs: Any) -> Any" has no attribute "_yunshu_tree"
 1	python/yunshu_engine/mtp_tree.py	list-item	List item 0 has incompatible type "array | None"; expected "array"
 1	python/yunshu_engine/mtp_tree.py	operator	Unsupported operand types for + ("int" and "None")
-1	python/yunshu_engine/n_confirmed_patch.py	attr-defined	"type[ArraysCache]" has no attribute "rollback_state"
-2	python/yunshu_engine/n_confirmed_patch.py	no-any-return	Returning Any from function declared to return "array"
 1	python/yunshu_engine/ocr_engine.py	assignment	Incompatible types in assignment (expression has type "ThreadPoolExecutor", variable has type "None")
 1	python/yunshu_engine/ocr_engine.py	attr-defined	"None" has no attribute "config"
 1	python/yunshu_engine/ocr_engine.py	attr-defined	"None" has no attribute "tokenizer"
@@ -400,7 +384,6 @@
 1	python/yunshu_engine/vlm_engine.py	no-any-return	Returning Any from function declared to return "list[int]"
 1	python/yunshu_engine/vlm_engine.py	no-any-return	Returning Any from function declared to return "str"
 1	python/yunshu_engine/vlm_engine.py	operator	Unsupported operand types for + ("str" and "list[array]")
-2	python/yunshu_engine/voice_pipeline.py	no-any-return	Returning Any from function declared to return "str"
 1	python/yunshu_engine/zimage_controlnet.py	union-attr	Item "array" of "array | dict[str, array] | tuple[dict[str, array], dict[str, Any]]" has no attribute "items"
 1	python/yunshu_engine/zimage_controlnet.py	union-attr	Item "tuple[dict[str, array] | dict[str, Any], ...]" of "array | dict[str, array] | tuple[dict[str, array], dict[str, Any]]" has no attribute "items"
 1	python/yunshu_gateway/conversations_store.py	no-any-return	Returning Any from function declared to return "dict[Any, Any]"

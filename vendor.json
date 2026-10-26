@@ -57,7 +57,10 @@
       "local_changes": [
         "imports point at yunshu_engine.kernels.omlx"
       ],
-      "kind": "vendored"
+      "kind": "vendored",
+      "reviewed_commit": "78fa08bc1aef7290c93c83bb70811547763ebf33",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "KEEP. Upstream changed after the copied commit: 277aad04 makes row_exact_causal_sdpa public with an array keep-mask (MiniMax), and a68b6d1a / 6f243abb size the M1 key splits by real GPU core count. Neither is adopted: Yunshu serves the Qwen3.5 family on M5/NAX, has no M1 route and no MiniMax path, and the local copy is unchanged."
     },
     {
       "path": "python/yunshu_engine/kernels/omlx/qwen35_packed_linear.py",
@@ -471,21 +474,6 @@
       "reviewed_commit": "2c99ee9333821030daf84718b2a76ea28d94ba3c",
       "reviewed_date": "2026-10-09",
       "review_reason": "Reviewed upstream subjects: [Chore] Remove vendored code made redundant by Transformers 5.16.1 (#60623). Candidate logged for the backlog: d8fa463e hybrid Mamba prefix-cache boundary fix, compare with the local exact hybrid checkpoint boundaries. Other commits are server-scale frontend work."
-    },
-    {
-      "kind": "derived",
-      "path": "python/yunshu_engine/mtp_patch.py",
-      "repo": "https://github.com/jundot/omlx",
-      "clone": "reference/omlx",
-      "upstream_paths": [
-        "omlx/patches/mlx_lm_mtp"
-      ],
-      "commit": "deb9f00a",
-      "license": "Apache-2.0",
-      "why": "deprecated port of the oMLX MTP patch (PR 990)",
-      "reviewed_commit": "6feea9f95de86c772235af765914e4abb82b236f",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 source diff review: KEEP; BACKLOG wide: upstream unifies batched DFlash, clips block drafts before grouping, sizes depth stats to drafted window, extends rotating rollback and removes priming switches. Yunshu owns a VLM lane and separate request transactions; wholesale mlx-lm batch-generator transplant is not applicable."
     },
     {
       "kind": "derived",
@@ -1168,22 +1156,6 @@
     },
     {
       "kind": "inspired",
-      "path": "python/yunshu_engine/spec_proposer.py",
-      "repo": "https://github.com/ggml-org/llama.cpp",
-      "clone": "reference/llama.cpp",
-      "upstream_paths": [
-        "common/speculative.cpp",
-        "common/speculative.h"
-      ],
-      "commit": "dc9879cf",
-      "license": "MIT",
-      "why": "common_speculative_state: one proposer interface for n-gram, draft model and MTP",
-      "reviewed_commit": "a0e6dc7384edb8f5d927155e1d26c10b4a310e6d",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 source diff review: KEEP; BACKLOG spec: llama.cpp now forwards image embeddings into MTP and separates draft microbatch size; Yunshu uses prepare_media and native MLX cache transactions, not llama_batch."
-    },
-    {
-      "kind": "inspired",
       "path": "python/yunshu_gateway/schemas/structured_outputs.py",
       "repo": "https://github.com/vllm-project/vllm",
       "clone": "reference/vllm",
@@ -1786,51 +1758,6 @@
       "installed_version": "0.7.8",
       "reviewed_date": "2026-10-15",
       "review_reason": "sync016: KEEP: completed prompt logits are now keyed by UID so cancelled rows do not shift ownership. Local wrappers call upstream generate/prompt_step and do not read that dict; per-row sampling, absolute prefill seams, buffer reuse and DFlash capture remain required."
-    },
-    {
-      "kind": "patches",
-      "path": "python/yunshu_engine/n_confirmed_patch.py",
-      "repo": "https://github.com/ml-explore/mlx-lm",
-      "clone": "reference/mlx-lm",
-      "package": "mlx-lm",
-      "module": "mlx_lm.models.qwen3_5",
-      "symbol": "GatedDeltaNet.__call__",
-      "signature": "(self, inputs, mask=None, cache=None)",
-      "license": "MIT",
-      "commit": "v0.31.3",
-      "why": "n_confirmed rollback for GatedDeltaNet (experimental route)",
-      "source_sha256": "0d6f97f05c2abfdcf8eced32e538808df08947338ab1f0ef1d660a4d3547c86d",
-      "installed_version": "0.32.0"
-    },
-    {
-      "kind": "patches",
-      "path": "python/yunshu_engine/n_confirmed_patch.py",
-      "repo": "https://github.com/ml-explore/mlx-lm",
-      "clone": "reference/mlx-lm",
-      "package": "mlx-lm",
-      "module": "mlx_lm.models.qwen3_5",
-      "symbol": "Qwen3_5TextModel.__call__",
-      "signature": "(self, inputs, cache=None, ...)",
-      "license": "MIT",
-      "commit": "v0.31.3",
-      "why": "n_confirmed rollback for GatedDeltaNet (experimental route)",
-      "source_sha256": "6acb548f006a114cca650dbbf15dbdb8f8f3991f9a754e586ea780b58468e568",
-      "installed_version": "0.32.0"
-    },
-    {
-      "kind": "patches",
-      "path": "python/yunshu_engine/n_confirmed_patch.py",
-      "repo": "https://github.com/ml-explore/mlx-lm",
-      "clone": "reference/mlx-lm",
-      "package": "mlx-lm",
-      "module": "mlx_lm.models.qwen3_5",
-      "symbol": "DecoderLayer.__call__",
-      "signature": "(self, x, mask=None, cache=None)",
-      "license": "MIT",
-      "commit": "v0.31.3",
-      "why": "n_confirmed rollback for GatedDeltaNet (experimental route)",
-      "source_sha256": "b1f708d4fa7825a66240e9b04115bf52ae2bf420ab7cb5484c62beabcc6e7a30",
-      "installed_version": "0.32.0"
     },
     {
       "kind": "patches",
@@ -2721,7 +2648,9 @@
       "why": "text path, caches, samplers",
       "pin_package": "mlx-lm",
       "commit": "259b8dd0418b687e31ce53258775dff35f879440",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "93e6d4a6447b3080861985947f0820e76fcb957d",
+      "review_reason": "Adopted v0.32.2 through the lock (mlx-lm>=0.32.2; its mlx>=0.32.2 floor is met by the 0.32.3 pin). No patched mlx-lm symbol remains after n_confirmed_patch.py was removed, and the used API (generate_step, BatchGenerator, make_prompt_cache, trim_prompt_cache, load_tokenizer) is unchanged. Commits after the v0.32.2 tag (HEAD 4cfc6478) are not adopted or reviewed for adoption."
     },
     {
       "repo": "https://github.com/ml-explore/mlx",
@@ -2756,9 +2685,9 @@
       ],
       "why": "native Metal runtime using M5 Neural Accelerators (MPP) for prefill/GEMM",
       "commit": "128bdd73",
-      "reviewed_commit": "24badc8dd173e4111b64996a718d0e056405ea62",
-      "reviewed_date": "2026-10-09",
-      "review_reason": "Reviewed upstream subjects: sync: open-core source for 0.3.0. Independent local code retained; no port in this sync."
+      "reviewed_commit": "1bbd81e2af183e02e9c1ad7cbd9fe131e02520c1",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 peer catch-up review: 7 commits (CLI, installer, hub sync; the core stays closed) touch nothing Yunshu uses. Nothing to adopt."
     },
     {
       "repo": "https://github.com/sgl-project/sglang",
@@ -2770,9 +2699,9 @@
       ],
       "why": "radix prefix cache, speculative decoding, structured output",
       "commit": "7760d5264ac16b85392aefb1bf5c13ce38d9632e",
-      "reviewed_date": "2026-10-15",
-      "reviewed_commit": "97d3150a6a3c412f9445d33c7a91238e590f8b10",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "0cd2a63b3634477ff50b5f614362259978a8e7df",
+      "review_reason": "2026-10-26 peer catch-up review: CUDA, NPU and data-parallel changes; spec-rollback and radix-cache commits are reading material, nothing to port. Nothing to adopt."
     },
     {
       "repo": "https://github.com/vllm-project/vllm",
@@ -2826,7 +2755,10 @@
         "dflash_mlx/**/*.py"
       ],
       "why": "DFlash block-diffusion drafter engine on MLX",
-      "commit": "60803233"
+      "commit": "60803233",
+      "reviewed_commit": "60803233af4589e18588b9bacbb03880801c828a",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 peer catch-up review: no upstream commits since the pinned commit (HEAD 2026-08-20). Nothing to adopt."
     },
     {
       "repo": "https://github.com/youssofal/MTPLX",
@@ -2836,7 +2768,9 @@
       ],
       "why": "MTP speculative decoding on MLX",
       "commit": "9882703f3105363ddc37eca9f97aa09a1d387112",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "9882703f3105363ddc37eca9f97aa09a1d387112",
+      "review_reason": "2026-10-26 peer catch-up review: no upstream commits since the pinned commit (HEAD 2026-10-03). Nothing to adopt."
     },
     {
       "repo": "https://github.com/raullenchai/Rapid-MLX",
@@ -2861,9 +2795,9 @@
       ],
       "why": "prefix cache, warm prompts, constrained decoding on MLX",
       "commit": "f5d7e00a",
-      "reviewed_commit": "9a939f8b59bddaf98ccab865f4fa7e2fe48c6d65",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_commit": "d4f90f439ee5aab52b48f41565e145f9be511491",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 peer catch-up review: 17 commits (Omni video audio-extraction order, MLLM usage propagation, memory release on unload) need nothing here. Nothing to adopt."
     },
     {
       "repo": "https://github.com/nRanzo/MLX-MTP",
@@ -2872,7 +2806,10 @@
         "mlx_mtp/**/*.py"
       ],
       "why": "native MTP head speculative decoding on MLX",
-      "commit": "5bd77836"
+      "commit": "5bd77836",
+      "reviewed_commit": "5bd77836317c4c7025ff90cd233933676a1dbaa0",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 peer catch-up review: no upstream commits since the pinned commit (HEAD 2026-08-19). Nothing to adopt."
     },
     {
       "repo": "https://github.com/pierre427/mlx2",
@@ -2932,7 +2869,10 @@
         "mlx_embeddings/models/**/*.py"
       ],
       "why": "embeddings backend we depend on (GPL-3.0: ideas only, never copy code)",
-      "commit": "9b28270b"
+      "commit": "9b28270b",
+      "reviewed_commit": "9b28270be81211f2b8daed0041aec65ea5dc4b28",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 peer catch-up review: no upstream commits since the pinned commit (HEAD 2026-05-13); GPL-3.0, ideas only. Nothing to adopt."
     },
     {
       "repo": "https://github.com/vllm-project/vllm-omni",
@@ -2942,9 +2882,9 @@
       ],
       "why": "TeaCache diffusion step cache",
       "commit": "c32a26a8450b553d60436d211fa4f67fca31bf52",
-      "reviewed_date": "2026-10-09",
-      "reviewed_commit": "ee81f33001922f8d91dd09da0a57ee1531a8df82",
-      "review_reason": "Reviewed upstream subjects: [Bugfix] Fix missing SenseNova-U1 TeaCache position embeddings (#8260); [Bugfix] Calibrate Z-Image TeaCache coefficients and add ZImageAdapter (#8408). Candidate logged for the backlog: d8fa463e hybrid Mamba prefix-cache boundary fix, compare with the local exact hybrid checkpoint boundaries. Other commits are server-scale frontend work."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "81d8516f0373d6216a2871bdba2599001ae6005f",
+      "review_reason": "2026-10-26 peer catch-up review: TeaCache and Cache-DiT fixes only (diffusion is parked). Nothing to adopt."
     },
     {
       "repo": "https://github.com/guidance-ai/llguidance",
@@ -2956,8 +2896,8 @@
       "why": "grammar / JSON-schema engine we depend on",
       "commit": "e7c69004",
       "reviewed_commit": "6cef6ed9c973c2a155a85f2bb1996320af28b289",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 peer catch-up review: no upstream commits since the last review (HEAD 2026-10-14). Nothing to adopt."
     },
     {
       "repo": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731",
@@ -2992,9 +2932,9 @@
         "src/metrics.rs"
       ],
       "why": "Qualified unprivileged CLPC energy IDs and Apple telemetry compatibility; CPU/ANE legacy counters may freeze on macOS 27.",
-      "reviewed_commit": "a09a8a6177bacb395d27adf1f48801075732188b",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_commit": "39e98aa73e49256e6281b2a228f6ef3499ae3209",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 peer catch-up review: docs, roadmap and release CI only; clpc.rs, sources.rs and metrics.rs unchanged. Nothing to adopt."
     },
     {
       "repo": "https://huggingface.co/mlx-community/Qwen3-Reranker-0.6B-4bit",
@@ -3015,9 +2955,9 @@
       ],
       "why": "Independent Z-Image parity bridge depends on unchanged HF raw cache, mapper and applier APIs; watch native quantized-format support and arithmetic drift.",
       "commit": "465df30a3965b38c9c64fa853e26df140ddd5c55",
-      "reviewed_date": "2026-10-15",
-      "reviewed_commit": "b534021a9c8c45bb064959d754870fd98322e447",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "a3b21fcaa88726b2267bd42bfc2e2d722f7d5a47",
+      "review_reason": "2026-10-26 peer catch-up review: Z-Image weights-path fixes only; the mapper and applier APIs behind the probe are unchanged (image generation is parked). Nothing to adopt."
     },
     {
       "repo": "https://github.com/ml-explore/mlx",
@@ -3028,6 +2968,58 @@
         "mlx/backend/metal/kernels/steel/attn/**/*.h"
       ],
       "why": "Pinned external release source for research-only kernelstudy screen; external disk clone, no inference port."
+    },
+    {
+      "repo": "https://github.com/ollama/ollama",
+      "clone": "reference/ollama",
+      "globs": [
+        "mlxrunner/**/*.go"
+      ],
+      "why": "single-node Apple MLX runner: prefix-cache trie, DFlash / MTP speculative decode, grammar-constrained output",
+      "commit": "d44c2581904a98430e348d89cc2af1529b1808a0",
+      "reviewed_commit": "d44c2581904a98430e348d89cc2af1529b1808a0",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "First review 2026-10-26; nothing adopted. Candidates to audit against Yunshu: spec-round buffer release firing only on exact multiples of 256 (ec3cc230), prefix-trie eviction and merge false hits (b859a945, 6137793a), snapshot boundaries inside non-causal media (45a02807), JSON schema bound only after thinking ends (1ce2b680)."
+    },
+    {
+      "repo": "https://github.com/ml-explore/mlx-swift-lm",
+      "clone": "reference/mlx-swift-lm",
+      "globs": [
+        "Libraries/MLXLLM/Models/Qwen3*.swift",
+        "Libraries/MLXLLM/Models/Qwen35*.swift",
+        "Libraries/MLXLMCommon/Evaluate.swift",
+        "Libraries/MLXLMCommon/KVCache*.swift"
+      ],
+      "why": "Qwen3.5/3.8 model, cache and decode loop fixes from a second MLX implementation",
+      "commit": "991266ad300f47a3b9f21e62ff5bdb679215e758",
+      "reviewed_commit": "991266ad300f47a3b9f21e62ff5bdb679215e758",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "First review 2026-10-26; nothing adopted. Candidates to audit: GDN q/k L2-norm eps (c408452), exact prefix rewind in rotating KV caches (12d935f), clearing the buffer cache after each prefill chunk (991266a), flushing held-back stop text at stream end (4ea4225), Qwen reasoning history for cache reuse (e9c8500)."
+    },
+    {
+      "repo": "https://github.com/vllm-project/vllm-metal",
+      "clone": "reference/vllm-metal",
+      "globs": [
+        "vllm_metal/attention/**/*.py",
+        "vllm_metal/**/spec_decode*.py"
+      ],
+      "why": "Apple-silicon vLLM backend: hybrid GDN n-gram spec decode, prefix caching with DFlash, memory-pressure probe",
+      "commit": "7f95a63fee91153cf4f0def3927119aa3e28704b",
+      "reviewed_commit": "7f95a63fee91153cf4f0def3927119aa3e28704b",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "Moved to watch 2026-10-26 from the kernelstudy prior_art entry (kept there for its bit-parity study; its status is unchanged, no qualified winner). Nothing adopted. Candidates to audit: n-gram drafts capped at checkpoint boundaries (ddca466), GDN decay kept in FP32 (b9a5167), swap-out pressure signal at startup (ca27320)."
+    },
+    {
+      "repo": "https://github.com/lablup/mlxcel",
+      "clone": "reference/mlxcel",
+      "globs": [
+        "src/server/**/*.rs"
+      ],
+      "why": "API-compat reference: Responses / Anthropic / completions request validation fixes",
+      "commit": "01047d75cc2aa3ab48dd9dbc3bff9c2d4692d49a",
+      "reviewed_commit": "01047d75cc2aa3ab48dd9dbc3bff9c2d4692d49a",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "Promoted from the Responses-API prior_art link 2026-10-26; nothing adopted. Candidates to test against Yunshu: malformed Anthropic tool_choice rejected instead of treated as auto (465299e9), singleton prompt arrays in completions (212f31e4)."
     }
   ],
   "packages": [
@@ -3592,11 +3584,10 @@
       "installed_version": "1.33.0",
       "latest_version": "2.2.0",
       "blocked_by": [
-        "tokenizers",
-        "diffusers"
+        "tokenizers"
       ],
       "reviewed_date": "2026-10-08",
-      "reason": "Installed tokenizers 0.23.2 and diffusers 0.41.0 both require huggingface-hub<2.0; keep the resolver-valid 1.33.0. Recheck when either wheel or latest hub version changes."
+      "reason": "Installed tokenizers 0.23.2 requires huggingface-hub<2.0; keep the resolver-valid 1.33.0. Recheck when the wheel or latest hub version changes."
     },
     "trafilatura": {
       "installed_version": "2.1.0",

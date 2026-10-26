@@ -275,7 +275,11 @@ token，所以一般的前綴快取無法使用。Yunshu 在前綴邊界保存**
 
 重複或修改過的長 prompt、多輪對話與 agent 迴圈，會從最近的 checkpoint 還原，不必重新預填。
 對話變長時，同一段對話較舊的 checkpoint 會被取代，不會越堆越多。`yunshu cache status` 與
-`yunshu cache gc` 可檢視與清理 SSD 快取。
+`yunshu cache gc` 可檢視與清理 SSD 快取。SSD 命中會經由 MLX 原生的 safetensors 讀取器還原
+（32K 命中的 TTFT 由 440 ms 降到 272 ms）。在通過驗證的 27B / M5 Max 路徑上，預填預設為 split-invariant：
+checkpoint 位於絕對 64-token 邊界，所以快取命中或下一輪預填過的前綴，產生的 token 與冷預填相同
+（[詳情](docs/guides/INFERENCE.md#split-invariant-prefill-and-idle-keep-warm)）。記憶體吃緊的主機：設定
+`YUNSHU_VLM_APC_MEMORY_GB=4` 與 `YUNSHU_PREFILL_BUFFER_CACHE_GB=1`（27B 峰值 37.2 -> 31.5 GiB）；128 GB 主機維持預設值。
 
 ### 結構化輸出
 

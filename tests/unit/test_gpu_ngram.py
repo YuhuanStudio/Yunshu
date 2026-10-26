@@ -1,18 +1,11 @@
 """Tests for GPU-accelerated N-gram speculative decoding."""
 
 import mlx.core as mx
-import pytest
 
 from yunshu_engine.gpu_ngram import (
     GPUNgramConfig,
     GPUNgramProposer,
     GPUNgramTable,
-)
-from yunshu_engine.spec_interface import (
-    CompositeStrategy,
-    DraftProposal,
-    GPUNgramStrategy,
-    SpecStrategyFactory,
 )
 
 # ── GPUNgramTable ──────────────────────────────────────────────────
@@ -229,108 +222,6 @@ class TestGPUNgramProposer:
         proposer.propose([7, 8, 9, 7, 8, 9])
         stats = proposer.get_stats()
         assert stats["total_gpu_used"] >= 1
-
-
-# ── GPUNgramStrategy ───────────────────────────────────────────────
-
-
-class TestGPUNgramStrategy:
-    def test_lifecycle(self):
-        strategy = GPUNgramStrategy(GPUNgramConfig(min_n=1, max_n=3, k=3))
-        strategy.begin("req-1")
-        # Build table with repeated pattern
-        strategy._proposer.build_from_sequences([[1, 2, 3, 1, 2, 3]])
-        proposal = strategy.draft([99, 1, 2, 3], n=5)
-        assert isinstance(proposal, DraftProposal)
-        assert proposal.strategy_name == "gpu_ngram"
-        strategy.accept(proposal.tokens, min(2, len(proposal.tokens)))
-        stats = strategy.stats()
-        assert stats["name"] == "gpu_ngram"
-        assert stats["total_drafts"] == 1
-        strategy.end("req-1")
-
-    def test_empty_proposal(self):
-        strategy = GPUNgramStrategy(
-            GPUNgramConfig(
-                min_n=2,
-                max_n=3,
-                k=3,
-                gpu_fallback=False,
-            )
-        )
-        strategy.begin("req-2")
-        proposal = strategy.draft([1, 2], n=5)
-        assert proposal.tokens == []
-        strategy.end("req-2")
-
-    def test_name(self):
-        strategy = GPUNgramStrategy()
-        assert strategy.name == "gpu_ngram"
-
-    def test_reset(self):
-        strategy = GPUNgramStrategy(GPUNgramConfig(min_n=1, max_n=3, k=3))
-        strategy.begin("req-3")
-        strategy._proposer.build_from_sequences([[1, 2, 3, 1, 2, 3]])
-        strategy.draft([99, 1, 2, 3], n=3)
-        strategy.reset()
-        stats = strategy.stats()
-        assert stats["total_drafts"] == 0
-
-    def test_accept_adds_to_table(self):
-        strategy = GPUNgramStrategy(GPUNgramConfig(min_n=1, max_n=3, k=3))
-        strategy.begin("req-4")
-        # Accept tokens — they get added to the GPU table
-        strategy.accept([1, 2, 3, 4, 5], 3)
-        # Now the table should have entries
-        assert strategy._proposer.table.total_entries > 0
-        strategy.end("req-4")
-
-
-# ── Factory Integration ────────────────────────────────────────────
-
-
-class TestGPUNgramFactory:
-    def test_create_gpu_ngram(self):
-        strategy = SpecStrategyFactory.create(
-            {
-                "type": "gpu_ngram",
-                "min_n": 1,
-                "max_n": 3,
-                "k": 5,
-            }
-        )
-        assert isinstance(strategy, GPUNgramStrategy)
-        assert strategy.name == "gpu_ngram"
-
-    def test_create_suffix(self):
-        from yunshu_engine.spec_interface import SuffixStrategy
-
-        strategy = SpecStrategyFactory.create(
-            {
-                "type": "suffix",
-                "min_suffix_length": 3,
-                "max_window": 256,
-            }
-        )
-        assert isinstance(strategy, SuffixStrategy)
-        assert strategy.name == "suffix"
-
-    def test_composite_with_gpu_ngram(self):
-        strategy = SpecStrategyFactory.create(
-            {
-                "type": "composite",
-                "strategies": [
-                    {"type": "gpu_ngram", "min_n": 1, "max_n": 3, "k": 3},
-                    {"type": "ngram", "mode": "lps"},
-                ],
-            }
-        )
-        assert isinstance(strategy, CompositeStrategy)
-        assert "gpu_ngram" in strategy.name
-
-    def test_unknown_type(self):
-        with pytest.raises(ValueError, match="Unknown spec strategy type"):
-            SpecStrategyFactory.create({"type": "nonexistent"})
 
 
 # ── GPU Vectorized Matching Correctness ────────────────────────────

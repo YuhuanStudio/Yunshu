@@ -37,7 +37,7 @@ OPT_PATTERNS = re.compile(
     r"^(draft_vocab|copy_.*|dflash_.*|spec_.*|adaptive_spec|apc_.*|mtp_.*|tree_.*|"
     r".*ngram.*|suffix_.*|cache_(?:decode|prefill|restore)|keyed_sampling|"
     r"constrained_spec|grammar_.*|kv_(?:quantization|optimizations)|turbo_quant|"
-    r"n_confirmed_patch|mlxvlm_mtp|tool_.*grammar|tool_call_grammar)$"
+    r"mlxvlm_mtp|tool_.*grammar|tool_call_grammar)$"
 )
 
 

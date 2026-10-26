@@ -42,27 +42,6 @@ class TestCompletionsSpecDecode:
         assert req.logprobs >= 1
 
 
-class TestMTPPatchImport:
-    """Verify mtp_patch functions are importable and callable."""
-
-    def test_apply_mtp_patch_importable(self):
-        from yunshu_engine.mtp_patch import apply_mtp_patch
-
-        assert callable(apply_mtp_patch)
-
-    def test_load_model_with_mtp_importable(self):
-        from yunshu_engine.mtp_patch import load_model_with_mtp
-
-        assert callable(load_model_with_mtp)
-
-    def test_apply_mtp_patch_idempotent(self):
-        from yunshu_engine.mtp_patch import apply_mtp_patch
-
-        result1 = apply_mtp_patch()
-        result2 = apply_mtp_patch()
-        assert result1 == result2
-
-
 class TestChatRouterMultiChoiceSpecDecode:
     """Verify multi-choice streaming path accepts spec_decode."""
 

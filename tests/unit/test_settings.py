@@ -207,7 +207,7 @@ def test_no_raw_yunshu_env_reads():
 
 def test_every_mentioned_name_is_registered():
     """Code and docstrings only name real settings (catches stale flags)."""
-    allowed = {"YUNSHU_API_KEY", "YUNSHU_NAME", "YUNSHU_LOGGERS"}
+    allowed = {"YUNSHU_NAME", "YUNSHU_LOGGERS"}
     stale = set()
     for path in (ROOT / "python").rglob("*.py"):
         for name in re.findall(r"YUNSHU_[A-Z0-9_]*[A-Z0-9]", path.read_text()):
