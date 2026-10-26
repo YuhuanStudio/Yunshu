@@ -13,6 +13,7 @@ import hashlib
 import os
 import stat as stat_mod
 from dataclasses import dataclass
+from pathlib import Path
 
 from .containers import Container
 
@@ -87,6 +88,40 @@ def _walk(c: Container, parts: list[str], create: bool) -> int:
     except BaseException:
         os.close(fd)
         raise
+
+
+def open_confined(
+    root: Path, parts: list[str], flags: int, *, mode: int = 0o600, mkdirs: bool = False
+) -> int:
+    """Open ``root/parts`` with every component relative to a directory descriptor and
+    ``O_NOFOLLOW``: a link swapped in at any point is an error (ELOOP / ENOTDIR), never a detour
+    out of ``root``. ``O_NONBLOCK`` keeps a FIFO from hanging the open; the caller still checks
+    ``fstat`` for the kind of object it got. Raises OSError (FileNotFoundError when missing)."""
+    fd = os.open(str(root), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for comp in parts[:-1]:
+            try:
+                nxt = os.open(
+                    comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
+                )
+            except FileNotFoundError:
+                if not mkdirs:
+                    raise
+                os.mkdir(comp, 0o700, dir_fd=fd)
+                nxt = os.open(
+                    comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
+                )
+            os.close(fd)
+            fd = nxt
+        last = os.open(
+            parts[-1] if parts else ".",
+            flags | os.O_NOFOLLOW | os.O_NONBLOCK,
+            mode,
+            dir_fd=fd,
+        )
+        return last
+    finally:
+        os.close(fd)
 
 
 def write_file(
