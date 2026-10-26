@@ -129,6 +129,8 @@ def test_chat_text_path_guard_counts_native_tools(engine, seen, monkeypatch):
     # native rendering: the tools stay out of `messages` (the template adds them)
     monkeypatch.setattr(chat, "_inject_tool_system_prompt", lambda m, *a, **k: m)
     monkeypatch.setattr(chat, "_native_tools_active", lambda: True)
+    # a window the tool schemas alone (about 900+ tokens) push past the cheap-bound shortcut
+    monkeypatch.setattr(streaming, "get_max_context_window", lambda *a, **k: 1000)
     base = {
         "model": "claude-test",
         "max_tokens": 64,
