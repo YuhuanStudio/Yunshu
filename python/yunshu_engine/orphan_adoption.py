@@ -406,7 +406,9 @@ async def run(
                 logger.info("orphan not adopted: request differs in %s", diff)
         real_cancel = _LinkedEvent()
         real_cancel.mirror = caller_cancel
-        for attr in ("scheduling_priority", "client_request_id"):
+        # what the gateway put on the request's cancel event and the engines read from the one
+        # they are handed: priority, ids, and the X-Yunshu-Cache-Store: off opt-out
+        for attr in ("scheduling_priority", "client_request_id", "cache_store"):
             if hasattr(caller_cancel, attr):
                 setattr(real_cancel, attr, getattr(caller_cancel, attr))
         gen = Generation(key or "", real_cancel)

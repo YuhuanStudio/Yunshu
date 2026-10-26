@@ -317,3 +317,23 @@ def test_run_stats_reach_the_request_before_its_first_token():
         await task
 
     _run(main())
+
+
+def test_the_generation_inherits_the_request_s_cache_store_opt_out():
+    """X-Yunshu-Cache-Store: off lives on the caller's cancel event; the engine is handed the
+    linked event, so it must carry it (the VLM path stored the prompt of an opted-out request)."""
+
+    async def main():
+        eng = FakeEngine(n=2)
+        caller = threading.Event()
+        caller.cache_store = False
+        caller.scheduling_priority = 3
+        await _take(oa.run("k", eng.start, caller, 5.0, 2, oa.OrphanRegistry()), 2)
+        real = eng.cancels[0]
+        assert real.cache_store is False and real.scheduling_priority == 3
+        plain = threading.Event()  # no attribute: the engines default to storing
+        eng2 = FakeEngine(n=1)
+        await _take(oa.run("k2", eng2.start, plain, 5.0, 2, oa.OrphanRegistry()), 1)
+        assert getattr(eng2.cancels[0], "cache_store", True) is True
+
+    _run(main())
