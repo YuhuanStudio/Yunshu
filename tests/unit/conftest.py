@@ -145,3 +145,26 @@ def _restore_environment():
     if dict(os.environ) != saved:
         os.environ.clear()
         os.environ.update(saved)
+
+
+@pytest.fixture(autouse=True)
+def _restore_gateway_engine_globals():
+    """The gateway keeps its engine and model manager in module globals (init_model_manager, set_engine).
+    A test that leaves a manager behind turned /health/ready into 503 for a later test that sets only an
+    engine (random-order seed 4244: test_readiness_probe_with_model)."""
+    import sys
+
+    mod = sys.modules.get("yunshu_gateway.engine")
+    names = ("_engine", "_display_model_id", "_model_manager")
+    saved = {n: getattr(mod, n) for n in names if hasattr(mod, n)} if mod else {}
+    yield
+    mod = sys.modules.get("yunshu_gateway.engine")
+    if mod is not None:
+        for n, v in saved.items():
+            setattr(mod, n, v)
+        if (
+            not saved
+        ):  # the module was first imported by this test: back to its import-time state
+            for n in names:
+                if hasattr(mod, n):
+                    setattr(mod, n, None)
