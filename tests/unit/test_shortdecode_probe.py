@@ -86,7 +86,8 @@ def test_chain_trace_counts_bonus_and_observes_final_round(monkeypatch, caplog):
     proxy = Proxy()
     proxy.choose(8, 512)
     proxy._draft.accept_lens.append(3)
-    with caplog.at_level(logging.DEBUG):
+    # name the logger: an earlier test (the e2e app) can leave "yunshu_engine" at INFO, which drops these DEBUG lines
+    with caplog.at_level(logging.DEBUG, logger="yunshu_engine"):
         proxy.observe()
         proxy.observe()  # no duplicate at close
     summary = probe.summarize_rounds(caplog.text)
@@ -111,7 +112,8 @@ def test_raw_receipt_uses_ids_and_plain_switch(caplog):
             yield from [42, 7, 999]
 
     trace.install_receipts(Runner, plain=True)
-    with caplog.at_level(logging.DEBUG):
+    # name the logger: an earlier test (the e2e app) can leave "yunshu_engine" at INFO, which drops these DEBUG lines
+    with caplog.at_level(logging.DEBUG, logger="yunshu_engine"):
         assert list(Runner().iter_tokens([1, 2])) == [42, 7, 999]
     assert calls == [{"allow_draft": False}]
     assert "Raw token receipt: count=3 sha256=" in caplog.text
