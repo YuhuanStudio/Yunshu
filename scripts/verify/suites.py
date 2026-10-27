@@ -321,3 +321,14 @@ def parse_suite(spec: str) -> dict:
     cfg["stages"] = [s for s in STAGES if s in parts]
     cfg["name"] = ",".join(cfg["stages"])
     return cfg
+
+
+# One (context, scenario) per suite: three speed reps = three queued jobs at a time.
+for _chars in (16000, 85000):
+    for _scen in ("burst2", "stagger", "burst4"):
+        SUITES[f"phaseb2-speed-{_chars // 1000}k-{_scen}"] = {
+            "stages": ["phaseb-speed"],
+            "phaseb_ctx_chars": [_chars],
+            "phaseb_scenarios": [_scen],
+            "phaseb_shapes": ["greedy", "seeded"],
+        }

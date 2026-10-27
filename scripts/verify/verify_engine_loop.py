@@ -54,9 +54,7 @@ async def main():
     from yunshu_engine.batched_engine import BatchedEngine
 
     print("=== engine-loop correctness verify ===")
-    print(
-        f"model: {MODEL}  ENGINE_LOOP={os.environ.get('YUNSHU_ENGINE_LOOP')}"
-    )
+    print(f"model: {MODEL}  ENGINE_LOOP={os.environ.get('YUNSHU_ENGINE_LOOP')}")
     engine = BatchedEngine(model_name=MODEL)
     await engine.start()
     await ask(engine, "hi")  # warmup
