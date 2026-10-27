@@ -594,9 +594,16 @@ class VLMEngine:
         if not weight_files:
             raise FileNotFoundError(f"No safetensors in {model_path}")
 
+        from .ple_ssd import external_ple, is_ple_tensor
+
+        ple_from_files = external_ple(config, model_path)
         weights = {}
         for wf in weight_files:
             weights.update(mx.load(wf))
+        if ple_from_files:
+            # the n-gram table is read row by row from these files (ple_ssd); mx.load is lazy, so
+            # dropping the entries here means the table is never read into memory
+            weights = {k: v for k, v in weights.items() if not is_ple_tensor(k)}
         ple_table_scales = {}
         if config.get("model_type") == "qwen4_exp":
             from .ple_scale import collect_table_scales

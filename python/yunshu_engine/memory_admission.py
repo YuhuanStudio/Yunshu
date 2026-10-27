@@ -156,10 +156,15 @@ def activation_bytes_per_token(config: dict) -> int:
 
 
 def weights_bytes_on_disk(model_path: str | Path) -> int:
+    """Bytes the weights will occupy: the safetensors files, less a Flash-Next PLE table that is read
+    from the files instead of loaded (ple_ssd)."""
+    from .ple_ssd import bytes_read_from_files
+
     try:
-        return sum(p.stat().st_size for p in Path(model_path).glob("*.safetensors"))
+        on_disk = sum(p.stat().st_size for p in Path(model_path).glob("*.safetensors"))
     except OSError:
         return 0
+    return max(0, on_disk - bytes_read_from_files(model_path))
 
 
 def sibling_view(model_path: str | Path) -> Path | None:
