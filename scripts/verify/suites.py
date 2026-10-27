@@ -80,6 +80,12 @@ LADDER = tuple(
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
+    "phaseb2": {
+        "stages": ["phaseb-identity", "phaseb-speed"],
+        "phaseb_ctx_chars": [16000, 85000],
+        "phaseb_scenarios": ["burst2", "stagger", "burst4"],
+        "phaseb_shapes": ["greedy", "seeded"],
+    },
     "phaseb-pilot": {
         "stages": ["phaseb-identity"],
         "phaseb_ctx_chars": [16000],
