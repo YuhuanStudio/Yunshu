@@ -30,6 +30,19 @@ SLOW_REQUEST_THRESHOLD = settings.get("YUNSHU_SLOW_REQUEST_THRESHOLD")
 _MEMORY_PRESSURE_THRESHOLD = 0.85
 
 
+_TOTAL_MEMORY: int | None = None
+
+
+def _total_memory() -> int:
+    global _TOTAL_MEMORY
+    if _TOTAL_MEMORY is None:
+        from yunshu_engine.memory_admission import _sysctl_bytes
+
+        raw = _sysctl_bytes("hw.memsize", 8)
+        _TOTAL_MEMORY = int.from_bytes(raw, "little") if raw else 0
+    return _TOTAL_MEMORY
+
+
 def _check_memory_pressure() -> None:
     """Log a warning if GPU memory usage is above the pressure threshold."""
     try:
@@ -38,17 +51,8 @@ def _check_memory_pressure() -> None:
         active = mx.get_active_memory()
         if active <= 0:
             return
-        # Only check against threshold if we can read system memory
-        import subprocess
-
-        result = subprocess.run(
-            ["sysctl", "-n", "hw.memsize"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            return
-        total = int(result.stdout.strip())
+        # hw.memsize never changes: read once, without the per-request fork+exec of `sysctl`
+        total = _total_memory()
         if total > 0:
             ratio = active / total
             if ratio >= _MEMORY_PRESSURE_THRESHOLD:
