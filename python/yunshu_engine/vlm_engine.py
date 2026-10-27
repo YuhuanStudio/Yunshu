@@ -2589,7 +2589,7 @@ class VLMEngine:
 
             kernels, block = configure_lane(lm, drafter, block)
             self._qwen4_mtp_weights = None
-        if not qwen4 and (drafter is not None or (spec_family and not use_driver)):
+        if not qwen4 and (drafter is not None or spec_family):
             from .kernels.omlx import apply as apply_verify_kernels
 
             kernels = apply_verify_kernels()

@@ -1603,6 +1603,12 @@ class VLMBatchRunner:
             job.stats.spec_mode = (
                 "dflash" if getattr(driver, "dflash", None) is not None else "mtp"
             )
+        if not job.stats.used_draft:
+            self._driver_plain_rows = getattr(self, "_driver_plain_rows", 0) + 1
+            logger.info(
+                "Round driver engaged without drafting (plain row #%d)",
+                self._driver_plain_rows,
+            )
         self._driver_jobs[id(job)] = job
 
     def _step_driver(self, primary: bool = False) -> None:
