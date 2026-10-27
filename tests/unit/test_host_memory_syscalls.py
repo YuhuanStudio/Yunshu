@@ -16,14 +16,23 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.serial  # other tests allocate between the reads when run in parallel
 def test_available_bytes_matches_vm_stat():
+    def slow():
+        return memory_admission.parse_vm_stat(
+            subprocess.run(
+                ["vm_stat"], capture_output=True, text=True, check=True
+            ).stdout
+        )
+
+    # the same formula read a moment apart: the syscall value must fall between two vm_stat reads
+    # taken around it (plus slack for pages that move while vm_stat itself runs)
+    before = slow()
     fast = memory_admission.available_bytes()
-    slow = memory_admission.parse_vm_stat(
-        subprocess.run(["vm_stat"], capture_output=True, text=True, check=True).stdout
-    )
-    assert fast is not None and slow is not None
-    # the two reads are a moment apart; page counts drift a little between them
-    assert abs(fast - slow) <= max(256 * 2**20, 0.02 * slow)
+    after = slow()
+    assert fast is not None and before is not None and after is not None
+    slack = 2**30
+    assert min(before, after) - slack <= fast <= max(before, after) + slack
 
 
 def test_read_host_does_not_spawn_a_process(monkeypatch):
