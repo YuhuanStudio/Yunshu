@@ -88,6 +88,13 @@ class NativeKeyedSampler(KeyedSampler):
     def wants_logprobs(self) -> bool:
         return bool(getattr(self.request, "logprobs", False))
 
+    def sample_positions(self, logprobs: mx.array, positions: Any) -> mx.array:
+        """Greedy reporting (``params is None``): the serial path's argmax over the float32 logprobs, which
+        is what a greedy request that asks for logprobs uses when speculation is off."""
+        if self.params is None:
+            return mx.argmax(logprobs, axis=-1)
+        return super().sample_positions(logprobs, positions)
+
     def __call__(self, logprobs: mx.array) -> mx.array:
         """Draft draw: the noise of the position this draft token will occupy."""
         shape = logprobs.shape
