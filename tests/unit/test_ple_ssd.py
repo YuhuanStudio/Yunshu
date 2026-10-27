@@ -98,6 +98,8 @@ def test_memory_plan_does_not_count_the_table(pack, monkeypatch):
 
 
 def test_scale_tensors_are_recognised():
-    scale = "language_model.model.layers.3.ple.ple_embedding.ngram_embedding.weight_scale"
+    scale = (
+        "language_model.model.layers.3.ple.ple_embedding.ngram_embedding.weight_scale"
+    )
     assert ple_ssd.is_ple_scale(scale) and not ple_ssd.is_ple_tensor(scale)
     assert not ple_ssd.is_ple_scale(PLE)

@@ -1,5 +1,11 @@
 """A bench run whose server turned a tuned fast path off fails instead of measuring it."""
 
+import sys
+from pathlib import Path
+
+# tfbench lives in scripts/research; another test used to put it on sys.path first (order-dependent pass)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "research"))
+
 
 def test_disabled_fast_path_is_found_in_the_server_log():
     import tfbench
