@@ -1112,6 +1112,12 @@ class VLMBatchRunner:
         speculative lane, a long cold prompt the upstream prefill."""
         if self.driver is None or job.prompt_kwargs is not None:
             return False
+        if self.driver.head is None and getattr(self.driver, "dflash", None) is None:
+            # Speculation off: the driver decodes without drafting, the identity
+            # reference for speculation on (same arithmetic as the DFlash driver).
+            return job.guide is None and all(
+                isinstance(p, Fp32LogitsProcessor) for p in job.processors
+            )
         if getattr(self.driver, "dflash", None) is not None:
             from .constrained_spec import invariant_guide
 
