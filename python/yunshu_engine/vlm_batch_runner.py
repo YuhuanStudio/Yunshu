@@ -1102,9 +1102,13 @@ class VLMBatchRunner:
         use_apc = self.apc_manager is not None and job.priority >= 0
         if job.cache_plan is not None and job.cache_plan.get("writes") == []:
             use_apc = False
+        ids_mx = (
+            None  # the prompt as one device array, built at most once per admission
+        )
         if use_apc and self._apc_admit is not None:
             try:
-                use_apc = bool(self._apc_admit(mx.array(job.ids)))
+                ids_mx = mx.array(job.ids)
+                use_apc = bool(self._apc_admit(ids_mx))
             except Exception:
                 logger.debug("APC admission check failed; using APC", exc_info=True)
         job.stats.cache_reason = (
@@ -1158,8 +1162,10 @@ class VLMBatchRunner:
         if pkw is None:
             if alone:
                 clear_rope_state(self.model)
+            if ids_mx is None:
+                ids_mx = mx.array(job.ids)
             pkw = self.model.get_input_embeddings(
-                mx.array(job.ids)[None], None, mask=None
+                ids_mx[None], None, mask=None
             ).to_dict()
         salt = job.salt if job.salt is not None else self.apc_semantic_hash
         if _serial_rows(job):
