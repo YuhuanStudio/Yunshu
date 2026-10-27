@@ -274,6 +274,7 @@ class FakeDriver:
 
     def __init__(self):
         self.rows, self.removed, self.head = [], [], object()
+        self.can_draft = True
 
     def add(self, req):
         self.rows.append([req, 0])

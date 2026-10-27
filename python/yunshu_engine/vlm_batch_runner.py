@@ -1112,7 +1112,7 @@ class VLMBatchRunner:
         speculative lane, a long cold prompt the upstream prefill."""
         if self.driver is None or job.prompt_kwargs is not None:
             return False
-        if self.driver.head is None and getattr(self.driver, "dflash", None) is None:
+        if not self.driver.can_draft:
             # Speculation off: the driver decodes without drafting, the identity
             # reference for speculation on (same arithmetic as the DFlash driver).
             return job.guide is None and all(
@@ -1557,6 +1557,7 @@ class VLMBatchRunner:
                     dflash_drafter=self.drafter
                     if self.draft_kind == "dflash"
                     else None,
+                    plain_verify=self.drafter is None,
                     stop_tokens=self.stop_tokens,
                     chunk=self.driver.chunk,
                     apc=None,
@@ -1595,10 +1596,7 @@ class VLMBatchRunner:
         job.stats.prefill_total = len(job.ids) - hit
         job.stats.prefill_known = True
         job.stats.used_apc = use_apc
-        job.stats.used_draft = bool(
-            job.allow_draft
-            and (driver.head is not None or getattr(driver, "dflash", None) is not None)
-        )
+        job.stats.used_draft = bool(job.allow_draft and driver.can_draft)
         if job.stats.used_draft:
             job.stats.spec_mode = (
                 "dflash" if getattr(driver, "dflash", None) is not None else "mtp"

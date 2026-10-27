@@ -38,13 +38,19 @@ class DFlashBatch:
 
         self.model = model
         self.lm = getattr(model, "language_model", model)
-        draft.reset(model)
-        self.draft = prepare(draft).view_of(draft)
-        keep = context_window(draft)
-        if keep is None:
-            raise ValueError("packed DFlash requires a bounded sliding context")
-        self.keep = keep
-        self.capture_ids = list(draft.config.target_layer_ids)
+        # draft None: speculation off. Rows decode through the very same packed verify
+        # forward (a one-token window) but never draft, so spec on == spec off.
+        self.can_draft = draft is not None
+        if draft is None:
+            self.draft, self.keep, self.capture_ids = None, 0, []
+        else:
+            draft.reset(model)
+            self.draft = prepare(draft).view_of(draft)
+            keep = context_window(draft)
+            if keep is None:
+                raise ValueError("packed DFlash requires a bounded sliding context")
+            self.keep = keep
+            self.capture_ids = list(draft.config.target_layer_ids)
         self.verifier = Verifier(q35._EXACT_SPECULATIVE_VERIFIER)
         self.rows = []
         self.hidden = {}
@@ -57,6 +63,8 @@ class DFlashBatch:
 
     def absorb(self, items, captures):
         """Retain only the drafter's trailing context during target prefill."""
+        if not self.can_draft:
+            return
         packed = mx.concatenate(captures, axis=-1)
         for it in items:
             key = id(it.row)
@@ -71,6 +79,11 @@ class DFlashBatch:
 
     def join(self, rows):
         for row in rows:
+            if not self.can_draft:
+                row.slot = id(row)
+                self.rows.append(row)
+                tree_verify.reserve_decode(row.cache, row.req.max_tokens + 32)
+                continue
             hidden = self.hidden.pop(id(row), None)
             ring = dflash_ring.Ring(self.draft, self.keep + 64, self.keep)
             count = 0 if hidden is None else int(hidden.shape[1])

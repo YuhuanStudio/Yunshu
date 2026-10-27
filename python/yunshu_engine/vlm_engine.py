@@ -2916,6 +2916,7 @@ class VLMEngine:
                 self._model,
                 drafter=drafter if draft_kind == "mtp" else None,
                 dflash_drafter=drafter if draft_kind == "dflash" else None,
+                plain_verify=drafter is None,
                 stop_tokens=runner.stop_tokens,
                 chunk=ROUND_PREFILL_CHUNK,
                 apc=self._apc_backend,

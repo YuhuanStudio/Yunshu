@@ -168,6 +168,7 @@ class RoundDriver:
         *,
         drafter: Any = None,
         dflash_drafter: Any = None,
+        plain_verify: bool = False,
         stop_tokens=None,
         chunk: int | None = None,
         apc: Any = None,
@@ -198,7 +199,7 @@ class RoundDriver:
         if prev < CACHE_LIMIT:
             mx.set_cache_limit(prev)  # a tighter limit set by the host stays
         self.dflash = None
-        if dflash_drafter is not None:
+        if dflash_drafter is not None or (plain_verify and drafter is None):
             from .dflash import DFlashBatch
 
             self.dflash = DFlashBatch(model, dflash_drafter)
@@ -259,7 +260,7 @@ class RoundDriver:
             )
         draft = bool(
             req.draft
-            and (self.head is not None or self.dflash is not None)
+            and self.can_draft
             and not req.processors
             and (req.sampling is None or keyed is not None)
         )
@@ -303,11 +304,17 @@ class RoundDriver:
 
         return APCCoordinator(manager, self.lm)
 
+    @property
+    def can_draft(self) -> bool:
+        return self.head is not None or (
+            self.dflash is not None and self.dflash.can_draft
+        )
+
     def will_draft(self, *, sampling, processors, logprobs, draft: bool) -> bool:
         """Whether a request with these fields gets an MTP head row (as ``add``)."""
         return bool(
             draft
-            and (self.head is not None or self.dflash is not None)
+            and self.can_draft
             and (
                 sampling is None
                 or (

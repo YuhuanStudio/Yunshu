@@ -20,7 +20,11 @@ from yunshu_engine.vlm_batch_runner import VLMBatchRunner
 )
 def test_driver_takes(alone, pkw, has_driver, uncached, expect):
     r = object.__new__(VLMBatchRunner)
-    r.driver = SimpleNamespace(head=object(), dflash=None) if has_driver else None
+    r.driver = (
+        SimpleNamespace(can_draft=True, head=object(), dflash=None)
+        if has_driver
+        else None
+    )
     r._driver_uncached = lambda job: uncached
     assert r._driver_takes(SimpleNamespace(prompt_kwargs=pkw), alone) is expect
 
@@ -66,6 +70,6 @@ def test_spec_off_driver_takes_a_lone_plain_request(processors, guide, expect):
     """Speculation off: the driver (no drafter) decodes plain rows, lone ones included,
     so spec on == spec off shares one arithmetic; processors and guides stay stock."""
     r = object.__new__(VLMBatchRunner)
-    r.driver = SimpleNamespace(head=None, dflash=None)
+    r.driver = SimpleNamespace(can_draft=False)
     job = SimpleNamespace(prompt_kwargs=None, processors=processors, guide=guide)
     assert r._driver_takes(job, True) is expect
