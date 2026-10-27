@@ -85,7 +85,9 @@ def test_stream_record_listed_before_the_response_ends(rig, monkeypatch):
     c.request("POST", "/v1/responses", json.dumps(body))
     c.getresponse().read()
     c.close()
-    recs = px.snapshot()
+    # only this request's record: a stray client (a recycled ephemeral port was probed with GET /health
+    # in the random-order run) also lands in the proxy's list
+    recs = [r for r in px.snapshot() if r["method"] == "POST"]
     assert len(recs) == 1 and recs[0]["prompt_tokens"] == 100
 
 
@@ -100,7 +102,8 @@ def test_wait_idle_covers_content_length_replies(rig, monkeypatch):
     c.getresponse().read()
     c.close()
     assert px.wait_idle()
-    assert px.snapshot()[0]["prompt_tokens"] == 100
+    recs = [r for r in px.snapshot() if r["method"] == "POST"]
+    assert recs and recs[0]["prompt_tokens"] == 100
 
 
 def test_error_never_saves_prompt_or_response(rig):
