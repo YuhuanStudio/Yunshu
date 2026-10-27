@@ -438,12 +438,25 @@ def lane_head(embedding: Any) -> LaneLinear | None:
     )
 
 
+EVAL_BATCH_BYTES = (
+    2 * 1024**3
+)  # converted weights materialised per batch (old copies free after each)
+
+
 def convert(language_model: Any, *, skip: tuple[str, ...] = ()) -> dict:
     """Replace the eligible quantized projections of ``language_model`` (the
     decoder and ``lm_head``) with ``LaneLinear``; returns counts. Layers the
     kernel cannot read stay as they are (``skipped``)."""
     converted, skipped, pending = 0, [], []
-    for name, module in list(language_model.named_modules()):
+    # Only the parents are kept: a snapshot of every module (leaves included) held each replaced
+    # QuantizedLinear, and so its full weight, until the end, so the model's projections existed twice
+    # at the load peak (+12 GiB on the 27B: 17 -> 30 GiB for 0.3 s).
+    parents = [
+        (name, module)
+        for name, module in language_model.named_modules()
+        if any(isinstance(c, nn.QuantizedLinear) for c in module.children().values())
+    ]
+    for name, module in parents:
         children = [
             (key, child)
             for key, child in module.children().items()
@@ -463,7 +476,8 @@ def convert(language_model: Any, *, skip: tuple[str, ...] = ()) -> dict:
                 skipped.append(f"{name}.{key}" if name else key)
         if updates:
             module.update_modules(updates)
-        if sum(a.nbytes for a in pending) > 2 * 1024**3:
+        children = child = updates = None  # the replaced layers' last references
+        if sum(a.nbytes for a in pending) > EVAL_BATCH_BYTES:
             mx.eval(pending)
             pending = []
     if pending:
