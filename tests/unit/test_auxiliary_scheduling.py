@@ -152,6 +152,7 @@ def test_round_driver_auxiliary_never_joins_primary_driver(runner, monkeypatch):
 
     class Driver:
         head = None
+        can_draft = False
         chunk = 2048
 
         def __init__(self):
