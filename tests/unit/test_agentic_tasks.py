@@ -48,18 +48,23 @@ def test_summarize(tmp_path, capsys):
 
 
 @pytest.mark.skipif(not Path(tasklib.PYTHON).exists(), reason="agentic pyenv missing")
-def test_custom_tasks_reference_passes(tmp_path):
+@pytest.mark.parametrize(
+    "t",
+    tasklib.custom_tasks() if Path(tasklib.PYTHON).exists() else [],
+    ids=lambda t: t.id,
+)
+def test_custom_tasks_reference_passes(tmp_path, t):
+    """One test per task (they were one 78 s test: it ran longest on one xdist worker)."""
     import shutil
     import subprocess
 
-    for t in tasklib.custom_tasks():
-        w = tmp_path / t.id
-        t.stage(w)
-        assert not t.grade(w)[0], f"{t.id}: starting repo must fail"
-        ref = t.src / "reference"
-        shutil.copytree(ref, w, dirs_exist_ok=True)
-        if (w / "apply.py").exists():
-            (w / "apply.py").unlink()
-            subprocess.run([tasklib.PYTHON, str(ref / "apply.py"), str(w)], check=True)
-        ok, tail = t.grade(w)
-        assert ok, f"{t.id}: reference must pass\n{tail}"
+    w = tmp_path / t.id
+    t.stage(w)
+    assert not t.grade(w)[0], f"{t.id}: starting repo must fail"
+    ref = t.src / "reference"
+    shutil.copytree(ref, w, dirs_exist_ok=True)
+    if (w / "apply.py").exists():
+        (w / "apply.py").unlink()
+        subprocess.run([tasklib.PYTHON, str(ref / "apply.py"), str(w)], check=True)
+    ok, tail = t.grade(w)
+    assert ok, f"{t.id}: reference must pass\n{tail}"
