@@ -304,6 +304,7 @@ function feedFor(c: Conn): Feed {
 
 /** Disabled where the page runs without fetch streaming (tests set this to opt out). */
 let disabled = false;
+export const pushEnabled = () => !disabled;
 export const setPushEnabled = (on: boolean) => {
   disabled = !on;
 };

@@ -20,7 +20,7 @@ import {
   type RestartMark,
 } from "./history-api";
 import { retryDelayMs } from "./backoff";
-import { pushLive, subscribePush } from "./push";
+import { pushEnabled, pushLive, subscribePush } from "./push";
 import { useOutage, type OutageView } from "./outage";
 import {
   gapPoint,
@@ -82,6 +82,8 @@ const POLL_INTERVAL_MS = 3_000;
 export const BUSY_POLL_INTERVAL_MS = 250;
 const BUSY_LINGER_MS = 2_000;
 const ALERTS_MAX_AGE_MS = 3_000;
+/** The recorder is read once per status only while polling (push off): the previous behaviour. */
+const alertsMaxAgeMs = () => (pushEnabled() ? ALERTS_MAX_AGE_MS : 0);
 /** The history and chart series keep their old density however often the status is read. */
 const SAMPLE_EVERY_MS = 2_500;
 /** Offline is shown only after this many consecutive failed polls. */
@@ -256,7 +258,7 @@ export function useEngine(connection: Connection): UseEngineResult {
             // The recorder's alerts change on the scale of seconds, not at the 4 Hz the status moves.
             const cached = alertsRef.current;
             const recorder =
-              !force && cached && Date.now() - cached.at < ALERTS_MAX_AGE_MS
+              !force && cached && Date.now() - cached.at < alertsMaxAgeMs()
                 ? cached.value
                 : await fetchConsoleState(apiConnection, controller.signal);
             if (recorder)
