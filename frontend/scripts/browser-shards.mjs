@@ -7,6 +7,8 @@
 // worst shard's. Never start more than the machine can take: timing specs (layout stability, motion)
 // are CPU-sensitive, so keep SHARDS at or below the performance-core count.
 import { spawn } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import { createServer } from "node:net";
 
 export function shardArgs(index, total, extra = []) {
@@ -25,6 +27,23 @@ export function shardEnv(index, port, env = process.env) {
   };
 }
 
+/**
+ * A node_modules that resolves outside this tree (a symlink to another checkout) makes vite serve
+ * assets from outside its fs root as raw files: every spec that renders a model icon then logs
+ * "Failed to load module script ... image/webp" and fails (periph-pw-shards2: 11 false failures).
+ * Returns the reason, or null when node_modules is fine.
+ */
+export function nodeModulesProblem(root) {
+  const dir = resolve(root, "node_modules");
+  if (!existsSync(dir))
+    return `no node_modules in ${root} (run pnpm install --frozen-lockfile)`;
+  const real = realpathSync(dir);
+  const tree = realpathSync(root);
+  if (real !== tree + sep + "node_modules")
+    return `node_modules resolves to ${real}, outside ${tree}: install it in the tree`;
+  return null;
+}
+
 function freePort() {
   return new Promise((resolve, reject) => {
     const s = createServer();
@@ -37,6 +56,11 @@ function freePort() {
 }
 
 async function main() {
+  const problem = nodeModulesProblem(process.cwd());
+  if (problem) {
+    console.error(`browser-shards: ${problem}`);
+    process.exit(2);
+  }
   const argv = process.argv.slice(2);
   const dash = argv.indexOf("--");
   const head = dash < 0 ? argv : argv.slice(0, dash);
