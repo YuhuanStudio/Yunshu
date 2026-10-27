@@ -29,6 +29,7 @@ export const topicOfPath = (path: string): PushTopic | undefined =>
 export const LIVE_WITHIN_MS = 13_000;
 export const HIDDEN_CLOSE_MS = 20_000;
 const OPEN_DEBOUNCE_MS = 30;
+const MIN_HEALTHY_MS = 2_000;
 /** A refusing server (old engine, auth) is asked again only this rarely. */
 const REFUSED_RETRY_MS = 60_000;
 
@@ -178,9 +179,18 @@ class Feed {
         const topics = this.topics();
         this.opened = topics.join(",");
         let refused = false;
+        const openedAt = Date.now();
+        const eventsBefore = this.stats.events;
         try {
           await this.stream(topics);
-          this.failures = 0;
+          // A stream that gave nothing, or died within seconds, is a failure (a mock or a proxy that
+          // answers 200 with a plain body must not turn this loop into a reconnect spin).
+          if (
+            this.stats.events === eventsBefore ||
+            Date.now() - openedAt < MIN_HEALTHY_MS
+          )
+            this.failures++;
+          else this.failures = 0;
         } catch (e) {
           this.stats.failures++;
           this.failures++;
