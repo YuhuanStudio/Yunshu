@@ -1083,7 +1083,7 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
 
 
 def _forced_by_grammar(tc) -> bool:
-    """tool_choice any / tool that the tool-call grammar enforces (YUNSHU_TOOL_GRAMMAR)."""
+    """tool_choice any / tool that the tool-call grammar enforces."""
     return isinstance(tc, dict) and tc.get("type") in ("any", "tool")
 
 

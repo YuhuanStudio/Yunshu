@@ -63,7 +63,7 @@ WARM int8/int4 encodings and KV precision are lossy and off by default.
 enforced while decoding, including tool-call arguments. By default an in-house allowlist sampler is
 used, with llguidance for schemas outside its subset. Options: `YUNSHU_GRAMMAR_BITMASK=1`
 (xgrammar-style bitmask engine), `YUNSHU_JUMP_FORWARD=1` (emit grammar-forced tokens without a
-forward pass), `YUNSHU_TOOL_GRAMMAR=1` (mask tool-call bodies). Unsupported constructs are an error,
+forward pass). Unsupported constructs are an error,
 not silently ignored. Responses report `x_yunshu.structured_output` (`requested`, `enforced`, engine).
 Limit: enforcement guarantees the grammar, not that a `max_tokens` cut-off output is complete.
 

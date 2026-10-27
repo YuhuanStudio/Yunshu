@@ -207,8 +207,6 @@ const settingdesc = {
     "約束解碼改用 xgrammar 風格的位元遮罩引擎，而非允許清單取樣器。",
   YUNSHU_GRAMMAR_PREWARM:
     "模型載入時在背景建立 llguidance 詞元表，使第一個約束請求不必花約一秒走訪詞彙表。每種遮罩寬度約佔用 0.45 GiB 原生堆積；設為 0 則於首次使用時建立。",
-  YUNSHU_TOOL_GRAMMAR:
-    "工具呼叫約束解碼（結構標籤）：在工具呼叫起始標記之前為自由文字，之後呼叫本體會被遮罩為本次請求精確的呼叫文法（工具名稱、參數鍵、具型別的值、結尾）。強制的 `tool_choice` 一律受約束；此旗標僅控制 `auto`。關閉時，自動選擇的工具呼叫不受約束地解碼，事後再修復。",
   YUNSHU_QUANT_MODE:
     "載入時在記憶體中量化權重（有損，以品質換記憶體）：`mxfp4`、`nvfp4`、`mxfp8` 或 `affine`（留空則維持檢查點原樣）。",
   YUNSHU_QUANT_CONFIG:

@@ -207,8 +207,6 @@ const settingdesc = {
     "约束解码改用 xgrammar 风格的位掩码引擎，而非允许列表采样器。",
   YUNSHU_GRAMMAR_PREWARM:
     "模型加载时在后台构建 llguidance 词元表，使第一个约束请求不必花约一秒遍历词表。每种掩码宽度约占用 0.45 GiB 原生堆；设为 0 则在首次使用时构建。",
-  YUNSHU_TOOL_GRAMMAR:
-    "工具调用约束解码（结构标签）：在工具调用起始标记之前为自由文本，之后调用体会被掩码为本次请求精确的调用语法（工具名称、参数键、带类型的值、结尾）。强制的 `tool_choice` 始终受约束；此开关仅控制 `auto`。关闭时，自动选择的工具调用不受约束地解码，事后再修复。",
   YUNSHU_QUANT_MODE:
     "加载时在内存中量化权重（有损，以质量换内存）：`mxfp4`、`nvfp4`、`mxfp8` 或 `affine`（留空则保持检查点原样）。",
   YUNSHU_QUANT_CONFIG:

@@ -184,7 +184,6 @@ def test_vlm_tool_plan_native_for_auto(choice):
 def test_vlm_tool_plan_injects_for_forced_choice_without_grammar(choice, monkeypatch):
     from yunshu_gateway.routers.chat import _vlm_tool_plan
 
-    monkeypatch.setenv("YUNSHU_TOOL_GRAMMAR", "0")
     msgs = [{"role": "user", "content": "hi"}]
     out, native = _vlm_tool_plan(_chat_req(choice), _Engine(True), msgs)
     assert native is None
@@ -207,8 +206,6 @@ def test_vlm_tool_plan_forced_choice_is_native_when_grammar_enforces_it(
     choice, monkeypatch
 ):
     from yunshu_gateway.routers.chat import _vlm_tool_plan
-
-    monkeypatch.setenv("YUNSHU_TOOL_GRAMMAR", "1")
 
     msgs = [{"role": "user", "content": "hi"}]
     out, native = _vlm_tool_plan(_chat_req(choice), _Engine(True), msgs)

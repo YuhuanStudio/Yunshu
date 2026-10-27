@@ -1,8 +1,8 @@
-"""A forced tool_choice is a guarantee: always constrained by the tool grammar, flag or not.
+"""A forced tool_choice is a guarantee: always constrained by the tool grammar.
 
 OpenAI (required / named) and Anthropic (any / tool) both promise a tool call. Found by the M3
-sweep: without YUNSHU_TOOL_GRAMMAR a small model answered a forced choice with prose; the flag
-now governs only auto. Usage reports what the client sent (the server's own prefill is not
+sweep: a small model answered a forced choice with prose when only auto was guided; auto is now
+unguided and a forced choice always guided. Usage reports what the client sent (the server's own prefill is not
 counted), and /v1/completions text agrees between stream and non-stream.
 """
 
@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import contextlib
 from types import SimpleNamespace
-
-import pytest
 
 from yunshu_engine import tool_call_grammar as tcg
 from yunshu_gateway import usage_shapes
@@ -24,18 +22,6 @@ def _req(choice, tools=True):
         tool_choice=choice,
         parallel_tool_calls=False,
         _native_tools=[{"type": "function"}] if tools else None,
-    )
-
-
-@pytest.fixture(autouse=True)
-def _flag_off(monkeypatch):
-    from yunshu_engine import settings
-
-    orig = settings.get_bool
-    monkeypatch.setattr(
-        settings,
-        "get_bool",
-        lambda k, *a, **kw: False if k == "YUNSHU_TOOL_GRAMMAR" else orig(k, *a, **kw),
     )
 
 

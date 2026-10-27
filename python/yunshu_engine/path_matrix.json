@@ -3046,7 +3046,6 @@
     "YUNSHU_JUMP_FORWARD": "jump_forward",
     "YUNSHU_JSON_SCHEMA_ENGINE": "constrained_bitmask_engine",
     "YUNSHU_GRAMMAR_BITMASK": "constrained_bitmask_engine",
-    "YUNSHU_TOOL_GRAMMAR": "guided_spec",
     "YUNSHU_QUANT_MODE": "weight_quant_on_load",
     "YUNSHU_QUANT_CONFIG": "weight_quant_on_load",
     "YUNSHU_ENGINE_LOOP": "loop",
