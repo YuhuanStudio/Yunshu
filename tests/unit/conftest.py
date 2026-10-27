@@ -134,3 +134,14 @@ def _isolate_native_tool_context():
     yield
     _REQUEST_TOOLS.reset(tools)
     _REQUEST_TOOL_USE.reset(choice)
+
+
+@pytest.fixture(autouse=True)
+def _restore_environment():
+    """A test that exports to os.environ (serve --uds exports YUNSHU_UDS) must not change the next one's
+    world: the random-order pass found test_cli_bind_preflight failing behind such a leak."""
+    saved = dict(os.environ)
+    yield
+    if dict(os.environ) != saved:
+        os.environ.clear()
+        os.environ.update(saved)
