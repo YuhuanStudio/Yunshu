@@ -22,6 +22,7 @@ const { values: a } = parseArgs({
     "idle-s": { type: "string", default: "40" },
     cycles: { type: "string", default: "3" },
     "load-model": { type: "string", default: "" },
+    tokens: { type: "string", default: "700" },
     seconds: { type: "string", default: "80" },
     out: { type: "string", default: "" },
   },
@@ -173,6 +174,10 @@ if (a.mode === "events") {
     firstToken_clientFirstToken_to_decodePill: stats(first),
     requestEnd_to_idlePill: stats(idleBack),
     clientTtftMs: stats(runs.map((r) => (r.first ? r.first - r.t0 : null))),
+    clientRunMs: stats(runs.map((r) => r.end - r.t0)),
+    // a tab that never saw the request at all (poll interval longer than the request)
+    arrivalMissed: arrive.filter((x) => x == null).length,
+    arrivalSamples: arrive.length,
   };
   if (a["load-model"]) {
     const t0 = Date.now();

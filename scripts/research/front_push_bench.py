@@ -235,7 +235,7 @@ def run_events(
         )
     if not push and flat:
         raise SystemExit(f"FAIL poll cell opened a stream: {flat}")
-    if not res["latencyMs"]["requestArrival_sent_to_pill"]:
+    if push and not res["latencyMs"]["requestArrival_sent_to_pill"]:
         raise SystemExit(f"FAIL no arrival latency measured tabs={tabs} push={push}")
     out.write_text(json.dumps(res, indent=1))
     return res
