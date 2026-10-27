@@ -164,6 +164,8 @@ const settingdesc = {
     "服務程序：一個 Python 執行緒持有 GIL 多久（毫秒）後，要讓給其他想用的執行緒。CPython 預設的 5 ms 會讓事件迴圈在生成執行緒跑 Python 時最多晚 5 ms 才醒（27B 解碼：迴圈延遲 p99 5.3 ms，0.5 ms 降為 2.0 ms；tokens/s 不變）。僅影響排程，輸出不變；0 表示沿用 CPython 預設。",
   YUNSHU_PLE_READ_THREADS:
     "Qwen3.8-Flash-Next 從 SSD 讀取 n-gram 嵌入（PLE）時，用多少執行緒平行讀取每個 token 的 48 列 PLE，而不是逐列讀取（新文字每個 token 約省 7 ms）。讀出的資料逐位元相同，輸出不變；0 表示沿用上游逐列讀取。",
+  YUNSHU_PLE_STORAGE:
+    "Qwen3.8-Flash-Next 的 n-gram 嵌入（PLE）表放在哪裡。ssd（預設）直接從模型檔讀取需要的列，約 30 GB 的表不進記憶體（oQ2.5e 峰值 82.9 → 54.5 GB，輸出不變）；memory 則像一般權重一樣載入。",
   YUNSHU_PREFILL_BUFFER_CACHE_GB:
     "VLM 執行器：在預填步驟之間保留的 MLX 已釋放緩衝快取大小（GiB）。未設定時為實體記憶體的 5%，最多 6 GiB；常駐權重讓記憶體餘裕很少時改為 0.5 GiB（可壓低超大模型長預填的峰值）。可讓長前綴還原的緩衝在請求之間保持熱狀態；0 表示沿用上游每個區塊後清除。僅影響配置器，輸出不變。",
   YUNSHU_PREFILL_GDN:

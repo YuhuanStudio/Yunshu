@@ -173,6 +173,8 @@ const settingdesc = {
     "Serving process: how long (ms) a Python thread may hold the GIL before another thread that wants it gets it. CPython's 5 ms made the event loop wake up to 5 ms late while the generation thread ran Python (27B decode: loop lag p99 5.3 ms, 0.5 ms gives 2.0 ms; tokens/s unchanged). Scheduling only; output unchanged. 0 = CPython default.",
   YUNSHU_PLE_READ_THREADS:
     "Qwen3.8-Flash-Next with the n-gram embedding (PLE) read from SSD: threads that read a token's 48 PLE rows in parallel instead of one after another (about 7 ms per token on fresh text). Rows are byte-identical, so output is unchanged. 0 = upstream serial reads.",
+  YUNSHU_PLE_STORAGE:
+    "Qwen3.8-Flash-Next: where the n-gram embedding (PLE) table lives. ssd (default) reads its rows from the checkpoint files, so the ~30 GB table never enters memory (peak 82.9 → 54.5 GB on oQ2.5e, output unchanged); memory loads it like any weight.",
   YUNSHU_PREFILL_BUFFER_CACHE_GB:
     "VLM runner: GiB of MLX’s freed-buffer cache kept across prefill steps. Unset: 5% of physical RAM, at most 6 GiB, but 0.5 GiB when the resident weights leave little memory headroom (cuts the long-prefill peak of very large models). Keeps long-prefix restore buffers warm across requests; 0 = upstream clear after every chunk. Allocator only; output unchanged.",
   YUNSHU_PREFILL_GDN:

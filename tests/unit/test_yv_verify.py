@@ -11,6 +11,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -328,6 +329,22 @@ def test_identity_equal_diff_and_missing():
     miss = analyze.compare_identity(rows(), rows(phases=("cold",)))
     assert not miss["ok"] and "missing" in miss["mismatches"][0]["why"]
     assert not analyze.compare_identity([], [])["ok"]  # nothing compared fails closed
+
+
+def test_identity_separates_a_changed_input_from_changed_arithmetic():
+    """A cell whose prompt token count differs had a different input (a deliberate tokenization
+    change, e.g. special-token neutralisation): it fails by default and is listed as input_changed
+    only when the run says the change is deliberate; other cells still compare."""
+    base = rows("a") + [dict(r, kind="prose", sha="p", pt=8203) for r in rows()]
+    cand = rows("a") + [dict(r, kind="prose", sha="q", pt=8206) for r in rows()]
+    strict = analyze.compare_identity(base, cand)
+    assert not strict["ok"]
+    assert {m["why"] for m in strict["mismatches"]} == {"prompt tokens differ"}
+    ok = analyze.compare_identity(base, cand, input_change_ok=True)
+    assert ok["ok"] and ok["compared"] == 3 and len(ok["input_changed"]) == 3
+    # same prompt, different digest still fails with the flag
+    worse = rows("b") + [dict(r, kind="prose", sha="q", pt=8206) for r in rows()]
+    assert not analyze.compare_identity(base, worse, input_change_ok=True)["ok"]
 
 
 def test_apc_requires_equal_digest_and_a_real_hit():
@@ -1107,6 +1124,44 @@ def test_memory_base_shared_and_speed_base_only_on_request(world):
         == 0
     )
     assert not [j for j in jobs(world)[n:] if "-speed-base" in j]
+
+
+def test_longqa_base_cells_share_evidence_and_candidate_never(tmp_path, monkeypatch):
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "prose-1024.txt").write_text("one")
+    monkeypatch.setattr(stages, "PROMPTS", prompts)
+    monkeypatch.setattr(stages, "_check_prompts", lambda *a, **k: None)
+    ctx = _share_ctx(tmp_path, monkeypatch)
+    ctx.suite = {"needle_ctx": [1024]}
+    ctx.run = types.SimpleNamespace(path=tmp_path / "run")
+    ctx.observe = False
+    ctx.mem_gb = 8
+    ctx.big = False
+    seen = []
+
+    class CapturedStopError(Exception):
+        pass
+
+    class Capture:
+        def run_cells(self, cells):
+            seen.append({c.key: c.share_key for c in cells})
+            raise CapturedStopError
+
+    ctx.exe = Capture()
+
+    def keys():
+        with pytest.raises(CapturedStopError):
+            stages.stage_longqa(ctx)
+        return seen[-1]
+
+    k0 = keys()
+    base = {k: v for k, v in k0.items() if k.startswith("base@")}
+    assert base and all(base.values())
+    assert all(v == "" for k, v in k0.items() if k.startswith("cand@"))
+    assert keys() == k0  # stable across runs
+    (prompts / "prose-1024.txt").write_text("two")  # the prompt bytes changed
+    assert {k: v for k, v in keys().items() if k.startswith("base@")} != base
 
 
 def test_one_server_per_arm_for_identity_and_small_model_smoke_uses_any_device(world):
