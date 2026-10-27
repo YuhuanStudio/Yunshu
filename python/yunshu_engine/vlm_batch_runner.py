@@ -63,13 +63,6 @@ logger = logging.getLogger(__name__)
 # Upstream prefill default; APC checkpoints land on these chunk boundaries and
 # cancellation is honoured between chunks (~2 s at 2K tokens on a 27B model).
 PREFILL_STEP = 2048
-# A text request enters the round driver only when this many requests are in flight.
-DRIVER_MIN_CONCURRENCY = 2
-# ...and its prompt has at most this many uncached tokens: the driver's cold prefill
-# is ~6% slower per token than upstream's at 4-8K (27B; 512-token attention grid),
-# which makes 32K c=2/4 mean TTFT +9% (8K c=2 equal, c=4 +8%). Longer cold prompts
-# keep the upstream path.
-DRIVER_MAX_UNCACHED_TOKENS = 12288
 
 
 def media_token_ids(model) -> set[int]:
@@ -1105,67 +1098,24 @@ class VLMBatchRunner:
             gen.apc_mode = gen.apc.legacy_mode
         return gen
 
-    def _driver_takes(self, job: _Job, alone: bool) -> bool:
-        """Text request goes to the round driver
-        when at least ``DRIVER_MIN_CONCURRENCY`` requests are in flight and
-        its uncached prompt is short; a lone request keeps the single-row
-        speculative lane, a long cold prompt the upstream prefill."""
-        if self.driver is None or job.prompt_kwargs is not None:
+    def _driver_guide(self, job: _Job) -> bool:
+        """The DFlash driver advances an invariant tool-call guide itself (free text drafts,
+        the call's rows are masked); any other guide runs as a ToolCallProcessor row."""
+        if getattr(self.driver, "dflash", None) is None or not self.driver.can_draft:
             return False
-        if not self.driver.can_draft:
-            # Speculation off: the driver decodes without drafting, the identity
-            # reference for speculation on (same arithmetic as the DFlash driver).
-            return job.guide is None and all(
-                isinstance(p, Fp32LogitsProcessor) for p in job.processors
-            )
-        if getattr(self.driver, "dflash", None) is not None:
-            from .constrained_spec import invariant_guide
+        from .constrained_spec import invariant_guide
 
-            if any(not isinstance(p, Fp32LogitsProcessor) for p in job.processors):
-                return False
-            return job.guide is None or invariant_guide(
-                job.guide, job.logprobs, job.processors
-            )
-        if alone and DRIVER_MIN_CONCURRENCY >= 2:
-            return False
-        return self._driver_uncached(job) <= DRIVER_MAX_UNCACHED_TOKENS
-
-    def _driver_uncached(self, job: _Job) -> int:
-        """Prompt tokens the round driver would prefill: the driver reads its own
-        APC namespace (its prefill arithmetic and head KV differ from the upstream
-        path's), so a prefix cached by the upstream path is cold for it."""
-        n = len(job.ids)
-        drv, mgr = self.driver, self.apc_manager
-        entries = getattr(mgr, "_exact_cache", None)
-        lock = getattr(mgr, "lock", None)
-        if (
-            drv is None
-            or getattr(drv, "apc", None) is None
-            or lock is None
-            or not isinstance(entries, dict)
-            or job.priority < 0
-        ):
-            return n
-        drafting = drv.will_draft(
-            sampling=job.sampling,
-            processors=job.processors,
-            logprobs=job.logprobs,
-            draft=job.allow_draft,
+        return job.guide is not None and invariant_guide(
+            job.guide, job.logprobs, job.processors
         )
-        salt = drv.apc_salt(self.apc_semantic_hash or 0, drafting)
-        tokens = tuple(job.ids)
-        with lock:
-            hit = max(
-                (
-                    len(e.token_ids)
-                    for e in entries.values()
-                    if e.extra_hash == salt
-                    and 0 < len(e.token_ids) < n
-                    and tokens[: len(e.token_ids)] == e.token_ids
-                ),
-                default=0,
-            )
-        return n - hit
+
+    def _driver_takes(self, job: _Job, alone: bool = False) -> bool:
+        """The round driver is the path for every text request of a dense Qwen3.5-family
+        model, one row or many, speculation on or off. Rows it cannot draft for
+        (processors, constraints, non-invariant guides) still decode in it, one token a
+        round through their own processors. Media prompts keep the stock runner (their
+        prompt embeddings carry mRoPE positions the driver does not pack)."""
+        return self.driver is not None and job.prompt_kwargs is None
 
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state
@@ -1182,15 +1132,16 @@ class VLMBatchRunner:
         )
 
         if job.guide is not None:
+            driver_guide = (
+                self._driver_takes(job, alone)
+                and job.cache_plan is None
+                and self._driver_guide(job)
+            )
             lane = (
                 job.use_draft
                 and alone
                 and self._spec is None
                 and not self._driver_takes(job, alone)
-            )
-            driver_guide = (
-                self._driver_takes(job, alone)
-                and getattr(self.driver, "dflash", None) is not None
             )
             if not lane and not driver_guide:
                 job.use_draft = job.allow_draft = False
@@ -1578,9 +1529,7 @@ class VLMBatchRunner:
                 logprobs=job.logprobs,
                 top_logprobs=job.top_logprobs,
                 draft=job.allow_draft,
-                guide=job.guide
-                if getattr(driver, "dflash", None) is not None
-                else None,
+                guide=job.guide if self._driver_guide(job) else None,
                 budget=job.budget,
                 handle=job,
                 extra_hash=self.apc_semantic_hash or 0,

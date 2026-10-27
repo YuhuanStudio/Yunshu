@@ -301,7 +301,6 @@ class FakeDriver:
 
 
 def test_text_requests_go_to_the_round_driver(monkeypatch):
-    monkeypatch.setattr(vbr, "DRIVER_MIN_CONCURRENCY", 1)  # a lone request drives
     runner = vbr.VLMBatchRunner(
         SimpleNamespace(language_model=object()), processor=None
     )
@@ -315,7 +314,6 @@ def test_text_requests_go_to_the_round_driver(monkeypatch):
 
 
 def test_round_driver_drops_cancelled_rows(monkeypatch):
-    monkeypatch.setattr(vbr, "DRIVER_MIN_CONCURRENCY", 1)  # a lone request drives
     runner = vbr.VLMBatchRunner(
         SimpleNamespace(language_model=object()), processor=None
     )

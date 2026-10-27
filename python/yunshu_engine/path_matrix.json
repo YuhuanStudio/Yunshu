@@ -1,11 +1,8 @@
 {
   "_doc": "Path-parity matrix. Every optimization or capability, on every serving path where it applies: engaged (with evidence), na (with reason), partial/missing (with owner and impact). tests/unit/test_path_parity.py enforces it; see that test for the rules. A new optimization module or performance setting fails CI until it has a row here.",
   "paths": {
-    "mtp": "Qwen3.5-family single-request speculative lane, MTP head (mtp_lane.py)",
-    "dflash": "Qwen3.5-family single-request speculative lane, DFlash2 drafter: chain, copy islands, fast tree (dflash_*.py)",
-    "driver": "RoundDriver multi-row packed forwards (round_driver/, the unified runner for dense Qwen3.5-family text requests when speculation is on)",
-    "batch": "Stock shared batch on the VLM runner: spec off (concurrent rows, ineligible requests, spec disabled)",
-    "generic": "Other mlx-vlm families on the generic runner (Gemma, Qwen4/Flash-Next, Omni thinker, ...)",
+    "batch": "Round driver, the unified runner for dense Qwen3.5-family text requests: spec on or off, one row or many (round_driver/; replaces the speculative lane and the shared batch for them)",
+    "generic": "Stock runner (mlx-vlm BatchGenerator + the retained single-request lane): other mlx-vlm families (Gemma, Qwen4/Flash-Next, Omni thinker, ...) and the requests the driver excludes (media prompts, explicit cache plans, int8 KV, MoE)",
     "text": "Text-only mlx-lm single-request fast path (_generate_fast)",
     "loop": "Text-model EngineCore continuous-batching loop (YUNSHU_ENGINE_LOOP, off by default, not grown)"
   },
@@ -14,25 +11,7 @@
       "module": "python/yunshu_engine/draft_vocab.py",
       "what": "Reduced draft vocabulary: draft readout over a small learned vocabulary instead of the full 248k lm_head",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "install_draft_vocab("
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/dflash_tree.py",
-              "_draft_vocab"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "partial",
           "why": "used only when one row drafts (round_driver/mtp.py single=True)",
           "owner": "decode16",
@@ -43,10 +22,6 @@
               "_draft_vocab"
             ]
           ]
-        },
-        "batch": {
-          "s": "na",
-          "why": "no drafter on this path"
         },
         "generic": {
           "s": "na",
@@ -66,31 +41,9 @@
       "module": "python/yunshu_engine/mtp_tree.py",
       "what": "Reduced-vocabulary top-k for tree/lattice candidates (MTP tree, DFlash lattice)",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/mtp_tree.py",
-              "_draft_vocab"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/dflash_tree.py",
-              "_draft_vocab"
-            ]
-          ]
-        },
-        "driver": {
-          "s": "na",
-          "why": "round driver drafts chains only"
-        },
         "batch": {
           "s": "na",
-          "why": "no drafter on this path"
+          "why": "round driver drafts chains only"
         },
         "generic": {
           "s": "na",
@@ -110,32 +63,7 @@
       "module": "python/yunshu_engine/copy_drafter.py",
       "what": "Prompt/context copy drafting verified by the batch-invariant verify",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/mtp_lane.py",
-              "copy_drafter"
-            ],
-            [
-              "python/yunshu_engine/mtp_lane.py",
-              "verify_graft("
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "partial",
-          "why": "dflash_copy.rounds supports greedy and position-keyed sampled requests; unsupported guides, stateful sampling and unavailable lane projections retain chain verification",
-          "owner": "decode16",
-          "impact": "high",
-          "ev": [
-            [
-              "python/yunshu_engine/dflash_copy.py",
-              "copy_drafter"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "partial",
           "why": "DFlash driver rows verify copy chains from a per-row CopyDrafter inside the fair 32-node budget; MTP driver rows draft through the head only",
           "owner": "decode16",
@@ -146,10 +74,6 @@
               "CopyDrafter("
             ]
           ]
-        },
-        "batch": {
-          "s": "na",
-          "why": "no drafter on this path"
         },
         "generic": {
           "s": "missing",
@@ -185,29 +109,7 @@
       "module": "python/yunshu_engine/dflash_tree.py",
       "what": "Tree-shaped drafts through tree_verify",
       "cells": {
-        "mtp": {
-          "s": "partial",
-          "why": "mtp_tree installs only when YUNSHU_SPEC_TREE=tree; 'auto' never selects it for MTP",
-          "owner": "decode16",
-          "impact": "medium",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "mtp_tree import install"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/dflash_copy.py",
-              "dflash_fast.eligible("
-            ]
-          ],
-          "why": "Greedy and supported position-keyed sampled rows use depth-indexed target draws and coupled full-vocabulary proposals; XTC and unsupported constraints retain the chain."
-        },
-        "driver": {
+        "batch": {
           "s": "engaged",
           "ev": [
             [
@@ -215,10 +117,6 @@
               "search_tree("
             ]
           ]
-        },
-        "batch": {
-          "s": "na",
-          "why": "no drafter on this path"
         },
         "generic": {
           "s": "na",
@@ -238,28 +136,7 @@
       "module": "python/yunshu_engine/spec_schedule.py",
       "what": "Expected-tokens-per-ms draft depth instead of a fixed block",
       "cells": {
-        "mtp": {
-          "s": "missing",
-          "why": "MTP chain uses a fixed block (6 invariant); mtp_lane has no NodeBudget; spec_schedule is imported by trees only",
-          "owner": "decode16",
-          "impact": "medium",
-          "absent": [
-            [
-              "python/yunshu_engine/mtp_lane.py",
-              "spec_schedule"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "install_chain_budget()"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "engaged",
           "ev": [
             [
@@ -267,10 +144,6 @@
               "allocate"
             ]
           ]
-        },
-        "batch": {
-          "s": "na",
-          "why": "no drafter on this path"
         },
         "generic": {
           "s": "na",
@@ -290,42 +163,12 @@
       "module": "python/yunshu_engine/keyed_sampling.py",
       "what": "Position-keyed sampler so sampled requests draft and equal serial sampling",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/mtp_lane.py",
-              "keyed_sampling"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "partial",
-          "why": "Keyed tree verify, coupled full-vocabulary draft candidates and sampled copy proposals passed M5 1K/32K/128K seeded token/logprob identity and three-rep 16K/32K/128K speed checks. Stateful XTC and unsupported constraints retain chain fallback.",
-          "owner": "decode16",
-          "impact": "high",
-          "ev": [
-            [
-              "python/yunshu_engine/dflash_fast.py",
-              "KeyedSampler"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "engaged",
           "ev": [
             [
               "python/yunshu_engine/round_driver/driver.py",
               "keyed_sampling"
-            ]
-          ]
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "class RowSampler"
             ]
           ]
         },
@@ -360,36 +203,7 @@
       "module": "python/yunshu_engine/constrained_spec.py",
       "what": "Grammar/tool-call guide applied inside speculative verify (exact target-row masks)",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/mtp_lane.py",
-              "can_guide"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "partial",
-          "why": "tool-call guides alone run the fast tree and copy rounds on free text and mask the call's rows on its chain (constrained_spec.invariant_guide, dflash_copy.takes_guided); response-format / combined guides, logprobs and penalties still verify on the serial chain",
-          "owner": "decode16",
-          "impact": "high",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "speculative_verify_dflash_hidden"
-            ],
-            [
-              "python/yunshu_engine/dflash_fast.py",
-              "guide.plan(copied, n + 1)"
-            ],
-            [
-              "python/yunshu_engine/dflash_copy.py",
-              "def takes_guided"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "partial",
           "why": "DFlash driver rows with an invariant tool-call guide draft free text and mask the call's rows (round_driver/driver.py req.guide.mask()); schema/regex/grammar guides never enter the driver and use the lane or shared batch",
           "owner": "decode16",
@@ -398,15 +212,6 @@
             [
               "python/yunshu_engine/round_driver/driver.py",
               "req.guide.mask()"
-            ]
-          ]
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "ToolCallProcessor(job.guide)"
             ]
           ]
         },
@@ -438,25 +243,7 @@
       "module": "python/yunshu_engine/vlm_batch_runner.py",
       "what": "Per-token logprobs / top_logprobs",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "_lane_takes_guide(None)"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "speculative_verify_dflash_hidden"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "partial",
           "why": "DFlash driver rows report logprobs while drafting; MTP driver rows with logprobs run one token a step",
           "owner": "decode16",
@@ -465,15 +252,6 @@
             [
               "python/yunshu_engine/round_driver/driver.py",
               "top_logprobs_device"
-            ]
-          ]
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "Fp32LogitsProcessor"
             ]
           ]
         },
@@ -510,38 +288,11 @@
       "module": "python/yunshu_engine/vlm_batch_runner.py",
       "what": "repetition/presence/frequency penalty, logit_bias, min_tokens, suppress, ignore_eos while drafting (ProcessorWindow: per-row processors in a serial-arithmetic verify window)",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/mtp_lane.py",
-              "ProcessorWindow"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/constrained_spec.py",
-              "class ProcessorWindow"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "missing",
           "why": "rows with processors run one token a step through their own sampler",
           "owner": "decode16",
           "impact": "high"
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "def build_penalty_processors"
-            ]
-          ]
         },
         "generic": {
           "s": "engaged",
@@ -584,45 +335,12 @@
       "module": "python/yunshu_engine/thinking_budget.py",
       "what": "Thinking-token budget that forces the closing marker",
       "cells": {
-        "mtp": {
-          "s": "missing",
-          "why": "thinking_budget is not None sets use_draft False (the forced token is applied only by the non-spec batch)",
-          "owner": "decode16",
-          "impact": "high",
-          "absent": [
-            [
-              "python/yunshu_engine/mtp_lane.py",
-              "thinking_budget"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "missing",
-          "why": "same as MTP",
-          "owner": "decode16",
-          "impact": "high",
-          "absent": [
-            [
-              "python/yunshu_engine/dflash_copy.py",
-              "thinking_budget"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "engaged",
           "ev": [
             [
               "python/yunshu_engine/round_driver/driver.py",
               "row.req.budget"
-            ]
-          ]
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "ThinkingBudgetCriteria"
             ]
           ]
         },
@@ -654,19 +372,7 @@
       "module": "python/yunshu_engine/vlm_batch_runner.py",
       "what": "Speculative decoding while other requests are in flight",
       "cells": {
-        "mtp": {
-          "s": "missing",
-          "why": "the lane serves one request: spec = use_draft and alone and lane free; concurrent rows decode without drafts (multi-row spec is open work)",
-          "owner": "decode16",
-          "impact": "high"
-        },
-        "dflash": {
-          "s": "missing",
-          "why": "same single-request lane",
-          "owner": "decode16",
-          "impact": "high"
-        },
-        "driver": {
+        "batch": {
           "s": "engaged",
           "ev": [
             [
@@ -674,10 +380,6 @@
               "fair_nodes"
             ]
           ]
-        },
-        "batch": {
-          "s": "na",
-          "why": "this path is the no-draft fallback"
         },
         "generic": {
           "s": "na",
@@ -697,39 +399,12 @@
       "module": "python/yunshu_engine/kernels/batch_invariant.py",
       "what": "Row-invariant decode/verify kernels so spec on == spec off",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "install_invariant("
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "install_invariant("
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "engaged",
           "ev": [
             [
               "python/yunshu_engine/vlm_engine.py",
               "lane_linear.convert(lm)"
-            ]
-          ]
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "batch_invariant"
             ]
           ]
         },
@@ -751,39 +426,12 @@
       "module": "python/yunshu_engine/kernels/lane_linear.py",
       "what": "TensorFold row-invariant lane matmul (M5-class tensor ops)",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "kernels[\"lane_linear\"]"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "kernels[\"lane_linear\"]"
-            ]
-          ]
-        },
-        "driver": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "_yunshu_lane_head"
-            ]
-          ]
-        },
         "batch": {
           "s": "engaged",
           "ev": [
             [
               "python/yunshu_engine/vlm_engine.py",
-              "kernels[\"lane_linear\"]"
+              "_yunshu_lane_head"
             ]
           ]
         },
@@ -805,34 +453,9 @@
       "module": "python/yunshu_engine/kernels/lane_layers.py",
       "what": "Fused residual+RMSNorm and early async_eval inside the verify forward",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "lane_layers.install()"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "missing",
-          "why": "installed only inside the draft_kind == 'mtp' branch; it patches Qwen3_5BatchInvariantForward, which the DFlash verify path (dflash_context.py, tree_verify) does not call; no equivalent fusion there (applicability needs a probe)",
-          "owner": "decode16",
-          "impact": "medium",
-          "absent": [
-            [
-              "python/yunshu_engine/dflash_context.py",
-              "lane_layers"
-            ]
-          ]
-        },
-        "driver": {
-          "s": "na",
-          "why": "round_driver/forward.py has its own packed forward"
-        },
         "batch": {
           "s": "na",
-          "why": "verify-window kernel (MAX_ROWS), not single-row decode"
+          "why": "round_driver/forward.py has its own packed forward"
         },
         "generic": {
           "s": "na",
@@ -852,39 +475,12 @@
       "module": "python/yunshu_engine/kernels/ragged_kv.py",
       "what": "Per-row-length KV and ragged decode attention (lossless layout)",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "ragged_kv.install()"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "ragged_kv.install()"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "engaged",
           "ev": [
             [
               "python/yunshu_engine/round_driver/batch.py",
               "ragged_attention"
-            ]
-          ]
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "RaggedKVCache"
             ]
           ]
         },
@@ -914,36 +510,9 @@
       "module": "python/yunshu_engine/kernels/ragged_kv.py",
       "what": "KV cache precision option (lossy, user setting): VLM YUNSHU_KV_PRECISION vs text YUNSHU_KV_QUANT_BITS",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "settings.get(\"YUNSHU_KV_PRECISION\")"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "settings.get(\"YUNSHU_KV_PRECISION\")"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "na",
           "why": "int8 KV keeps the stock runner (exclusion int8-kv-off-driver): the driver's slot buffers are bf16"
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "ragged_kv.set_format"
-            ]
-          ]
         },
         "generic": {
           "s": "missing",
@@ -975,47 +544,11 @@
       "module": "python/yunshu_engine/batched_engine.py",
       "what": "In-memory weight quantization at load (YUNSHU_QUANT_MODE / YUNSHU_QUANT_CONFIG, lossy user option)",
       "cells": {
-        "mtp": {
-          "s": "missing",
-          "why": "setting is read only by BatchedEngine; VLMEngine ignores it silently",
-          "owner": "unassigned",
-          "impact": "medium",
-          "absent": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "YUNSHU_QUANT_MODE"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "missing",
-          "why": "same",
-          "owner": "unassigned",
-          "impact": "medium",
-          "absent": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "YUNSHU_QUANT_MODE"
-            ]
-          ]
-        },
-        "driver": {
-          "s": "missing",
-          "why": "same",
-          "owner": "unassigned",
-          "impact": "low",
-          "absent": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "YUNSHU_QUANT_MODE"
-            ]
-          ]
-        },
         "batch": {
           "s": "missing",
           "why": "same",
           "owner": "unassigned",
-          "impact": "medium",
+          "impact": "low",
           "absent": [
             [
               "python/yunshu_engine/vlm_engine.py",
@@ -1059,51 +592,12 @@
       "module": "python/yunshu_engine/kernels/nax_prefill.py",
       "what": "Qualified 27B split-invariant prompt scopes: NAX rows padded to 64, BQ32 every query length, identity-padded chunked GDN, fused conv1d+silu (no concatenate); absolute 64-aligned APC checkpoints, distinct arithmetic namespace; decode/verify unchanged (YUNSHU_PREFILL_MATMUL, YUNSHU_PREFILL_ATTENTION, YUNSHU_PREFILL_GDN)",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "gdn_prefill.install()"
-            ],
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "attn_prefill.enable()"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "gdn_prefill.install()"
-            ],
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "attn_prefill.enable()"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "engaged",
           "ev": [
             [
               "python/yunshu_engine/round_driver/driver.py",
               "gdn_prefill"
-            ],
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "attn_prefill.enable()"
-            ]
-          ]
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "gdn_prefill.install()"
             ],
             [
               "python/yunshu_engine/vlm_engine.py",
@@ -1137,44 +631,15 @@
       "module": "python/yunshu_engine/apc_manager.py",
       "what": "Exact hybrid-checkpoint prefix cache (RAM, WARM, SSD tiers)",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "YunshuAPCManager("
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "YunshuAPCManager("
-            ]
-          ]
-        },
-        "driver": {
-          "s": "partial",
-          "why": "own APC namespace: a prefix cached by the lane/upstream path is cold for the driver and vice versa (vlm_batch_runner._driver_uncached)",
-          "owner": "decode16",
-          "impact": "medium",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "_driver_uncached"
-            ]
-          ]
-        },
         "batch": {
           "s": "engaged",
           "ev": [
             [
-              "python/yunshu_engine/vlm_engine.py",
-              "YunshuAPCManager("
+              "python/yunshu_engine/round_driver/driver.py",
+              "apc.store_checkpoint"
             ]
-          ]
+          ],
+          "why": "the driver restores and stores exact hybrid checkpoints for every request it serves; the retained stock lane/batch (media, explicit cache plans, int8 KV, MoE) keeps the ordinary namespace"
         },
         "generic": {
           "s": "missing",
@@ -1204,39 +669,12 @@
       "module": "python/yunshu_engine/apc_manager.py",
       "what": "Fixed prefill stride and boundary tokens so a cache hit equals a cold prefill (exact numerics)",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "_apc_prefill_stride"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "_apc_prefill_stride"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "engaged",
           "ev": [
             [
               "python/yunshu_engine/round_driver/driver.py",
               "chunk"
-            ]
-          ]
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "_apc_prefill_stride"
             ]
           ]
         },
@@ -1260,36 +698,9 @@
       "module": "python/yunshu_engine/vlm_batch_runner.py",
       "what": "Image / audio / video prompts (prepare_media, prompt_kwargs)",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "def prepare_media"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "def prepare_media"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "na",
           "why": "prompts with media never enter the driver (exclusion media-off-driver): they take the lane or the shared batch, where media input is engaged"
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "def prepare_media"
-            ]
-          ]
         },
         "generic": {
           "s": "engaged",
@@ -1314,31 +725,9 @@
       "module": "python/yunshu_engine/spec_select.py",
       "what": "Drafter families upstream mlx-vlm ships (gemma4_assistant, eagle3, dspark, qwen4_exp_mtp, ...) reachable from the runner",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/spec_select.py",
-              "def choose"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/spec_select.py",
-              "def find_dflash_drafter"
-            ]
-          ]
-        },
-        "driver": {
-          "s": "na",
-          "why": "Dense Qwen3.5 family MTP or bounded-context DFlash2 only; other families retain established runner paths"
-        },
         "batch": {
           "s": "na",
-          "why": "no drafter"
+          "why": "Dense Qwen3.5 family MTP or bounded-context DFlash2 only; other families retain established runner paths"
         },
         "generic": {
           "s": "missing",
@@ -1374,42 +763,6 @@
       "module": "python/yunshu_engine/grammar_bitmask.py",
       "what": "xgrammar-style bitmask constrained decoding (YUNSHU_GRAMMAR_BITMASK)",
       "cells": {
-        "mtp": {
-          "s": "missing",
-          "why": "VLM paths mask through ConstraintProcessor (allowed_mask / allowlist); the bitmask engine is imported only by engine_sampling",
-          "owner": "unassigned",
-          "impact": "medium",
-          "absent": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "grammar_bitmask"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "missing",
-          "why": "same",
-          "owner": "unassigned",
-          "impact": "medium",
-          "absent": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "grammar_bitmask"
-            ]
-          ]
-        },
-        "driver": {
-          "s": "missing",
-          "why": "same",
-          "owner": "unassigned",
-          "impact": "medium",
-          "absent": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "grammar_bitmask"
-            ]
-          ]
-        },
         "batch": {
           "s": "missing",
           "why": "same",
@@ -1458,28 +811,7 @@
       "module": "python/yunshu_engine/engine_fast.py",
       "what": "Emit grammar-forced tokens without a forward (YUNSHU_JUMP_FORWARD)",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/mtp_lane.py",
-              "forced_tokens("
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "partial",
-          "why": "forced runs only through the chain verify",
-          "owner": "decode16",
-          "impact": "low",
-          "ev": [
-            [
-              "python/yunshu_engine/constrained_spec.py",
-              "singleton"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "missing",
           "why": "guided rows do not draft or jump",
           "owner": "decode16",
@@ -1487,18 +819,6 @@
           "absent": [
             [
               "python/yunshu_engine/round_driver/driver.py",
-              "forced_tokens"
-            ]
-          ]
-        },
-        "batch": {
-          "s": "missing",
-          "why": "ConstraintProcessor masks one token per forward",
-          "owner": "unassigned",
-          "impact": "medium",
-          "absent": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
               "forced_tokens"
             ]
           ]
@@ -1534,29 +854,9 @@
       "module": "python/yunshu_engine/engine_sampling.py",
       "what": "On-GPU Gumbel-max sampling without a per-token sync (YUNSHU_GPU_SAMPLER)",
       "cells": {
-        "mtp": {
-          "s": "na",
-          "why": "position-keyed Gumbel sampler (keyed_sampling) is the GPU sampler here"
-        },
-        "dflash": {
-          "s": "na",
-          "why": "same"
-        },
-        "driver": {
+        "batch": {
           "s": "na",
           "why": "same keyed Gumbel path"
-        },
-        "batch": {
-          "s": "missing",
-          "why": "RowSampler runs filters per row and syncs per step",
-          "owner": "unassigned",
-          "impact": "low",
-          "absent": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "YUNSHU_GPU_SAMPLER"
-            ]
-          ]
         },
         "generic": {
           "s": "missing",
@@ -1594,24 +894,6 @@
       "module": "python/yunshu_engine/lora_manager.py",
       "what": "Per-request LoRA adapter and custom logits_processors",
       "cells": {
-        "mtp": {
-          "s": "missing",
-          "why": "VLM runner rejects lora_adapter / logits_processors (_RUNNER_UNSUPPORTED_KWARGS)",
-          "owner": "unassigned",
-          "impact": "low"
-        },
-        "dflash": {
-          "s": "missing",
-          "why": "same",
-          "owner": "unassigned",
-          "impact": "low"
-        },
-        "driver": {
-          "s": "missing",
-          "why": "same",
-          "owner": "unassigned",
-          "impact": "low"
-        },
         "batch": {
           "s": "missing",
           "why": "same",
@@ -1643,33 +925,6 @@
       "module": "python/yunshu_engine/idle_memory.py",
       "what": "Return idle MLX buffer pools to the OS after a request",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "IdleMemory"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "IdleMemory"
-            ]
-          ]
-        },
-        "driver": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "IdleMemory"
-            ]
-          ]
-        },
         "batch": {
           "s": "engaged",
           "ev": [
@@ -1718,33 +973,6 @@
       "module": "python/yunshu_engine/request_lifecycle.py",
       "what": "Client disconnect / cancel stops generation",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "cancel_event"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "cancel_event"
-            ]
-          ]
-        },
-        "driver": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "cancel_event"
-            ]
-          ]
-        },
         "batch": {
           "s": "engaged",
           "ev": [
@@ -1782,18 +1010,6 @@
       "module": "python/yunshu_engine/ple_parallel.py",
       "what": "Per-layer n-gram embedding rows read from SSD in parallel (byte-identical to upstream), with the pack table scale applied",
       "cells": {
-        "mtp": {
-          "s": "na",
-          "why": "PLE tables exist only in qwen4_exp (Flash-Next), which is served on the generic runner"
-        },
-        "dflash": {
-          "s": "na",
-          "why": "PLE tables exist only in qwen4_exp (Flash-Next), which is served on the generic runner"
-        },
-        "driver": {
-          "s": "na",
-          "why": "PLE tables exist only in qwen4_exp (Flash-Next), which is served on the generic runner"
-        },
         "batch": {
           "s": "na",
           "why": "PLE tables exist only in qwen4_exp (Flash-Next), which is served on the generic runner"
@@ -1821,34 +1037,9 @@
       "module": "python/yunshu_engine/vlm_batch_runner.py",
       "what": "A lone decoding row of the shared batch moves onto the speculative lane at a step boundary (batch to lane transition). Eligible greedy or position-keyed sampled DFlash rows preserve absolute generation positions and pending token probabilities on promotion, including invariant tool guides and reporting-only rows. Unsupported processors, combined serial guides, budgets and media retain the shared batch; M5 promotion certification pending",
       "cells": {
-        "mtp": {
-          "s": "missing",
-          "why": "MTP head needs prompt hidden states the batch row never captured; capturing last-layer hidden states on the batch path would unlock it later",
-          "owner": "decode16",
-          "impact": "low",
-          "absent": [
-            [
-              "python/yunshu_engine/mtp_lane.py",
-              "_maybe_promote"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "def _maybe_promote"
-            ]
-          ]
-        },
-        "driver": {
-          "s": "na",
-          "why": "rows of the round driver have no shared-batch phase"
-        },
         "batch": {
           "s": "na",
-          "why": "this is the batch side of the transition"
+          "why": "rows of the round driver have no shared-batch phase"
         },
         "generic": {
           "s": "na",
@@ -1868,18 +1059,6 @@
       "module": "python/yunshu_engine/kernels/tf_hc_forward.py",
       "what": "TensorFold flash_next fused hyper-connection + router/experts kernels for the qwen4_exp layer loop (always on for qwen4_exp; single-request plain decode 26 -> 14.4 ms)",
       "cells": {
-        "mtp": {
-          "s": "na",
-          "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
-        },
-        "dflash": {
-          "s": "na",
-          "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
-        },
-        "driver": {
-          "s": "na",
-          "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
-        },
         "batch": {
           "s": "na",
           "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
@@ -1907,36 +1086,9 @@
       "module": "python/yunshu_engine/kernels/preempt.py",
       "what": "Next-turn rehearsal (YUNSHU_NEXT_TURN_PREFILL): while idle after a reply, prefill the assistant reply as the next turn renders it through the last absolute 64-aligned assistant-end position on qualified 27B; preemptible per decoder-layer group (kernels/preempt.py), matching follow-ups adopt work, off disables rehearsal",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "_maybe_rehearse("
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "_maybe_rehearse("
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "na",
           "why": "a lone background rehearsal is below DRIVER_MIN_CONCURRENCY, so it runs on the stock batch runner; the driver itself is experimental and default off"
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "_maybe_rehearse("
-            ]
-          ]
         },
         "generic": {
           "s": "na",
@@ -1956,33 +1108,6 @@
       "module": "python/yunshu_engine/gc_policy.py",
       "what": "Python GC policy of the VLM runner (YUNSHU_GC_POLICY=defer): freeze the startup heap and hold the collector from request arrival to the first token, so a ~110 ms generation-2 pass cannot delay the first token (27B 32K warm -2.3%)",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "gc_policy.install("
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "gc_policy.install("
-            ]
-          ]
-        },
-        "driver": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "gc_policy.install("
-            ]
-          ]
-        },
         "batch": {
           "s": "engaged",
           "ev": [
@@ -2015,33 +1140,6 @@
       "module": "python/yunshu_engine/tool_call_grammar.py",
       "what": "llguidance token tables built in the background at model load (YUNSHU_GRAMMAR_PREWARM), so the first constrained request does not pay the ~1 s build",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "prewarm_for_engine(self)"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "prewarm_for_engine(self)"
-            ]
-          ]
-        },
-        "driver": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "prewarm_for_engine(self)"
-            ]
-          ]
-        },
         "batch": {
           "s": "engaged",
           "ev": [
@@ -2084,38 +1182,11 @@
       "module": "python/yunshu_engine/text_logprobs.py",
       "what": "top_logprobs without a full-vocabulary argsort or per-id syncs (argpartition; one tie order everywhere: descending value, ascending id)",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/constrained_spec.py",
-              "top_logprobs_rows"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/constrained_spec.py",
-              "top_logprobs_rows"
-            ]
-          ]
-        },
-        "driver": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/round_driver/driver.py",
-              "top_logprobs_device"
-            ]
-          ]
-        },
         "batch": {
           "s": "engaged",
           "ev": [
             [
-              "python/yunshu_engine/vlm_batch_runner.py",
+              "python/yunshu_engine/round_driver/driver.py",
               "top_logprobs_device"
             ]
           ]
@@ -2153,33 +1224,6 @@
       "module": "python/yunshu_engine/special_tokens.py",
       "what": "Special-token strings inside message text stay text when the chat template is rendered (a user cannot close their turn and open a system one); count/preview renders match generation",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "neutralize_special_text"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "neutralize_special_text"
-            ]
-          ]
-        },
-        "driver": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "neutralize_special_text"
-            ]
-          ]
-        },
         "batch": {
           "s": "engaged",
           "ev": [
@@ -2222,33 +1266,6 @@
       "module": "python/yunshu_engine/context_window.py",
       "what": "A prompt that renders to zero tokens is refused (EmptyPromptError, HTTP 400 empty_prompt) before any generation state",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "require_non_empty_prompt"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "require_non_empty_prompt"
-            ]
-          ]
-        },
-        "driver": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "require_non_empty_prompt"
-            ]
-          ]
-        },
         "batch": {
           "s": "engaged",
           "ev": [
@@ -2291,39 +1308,12 @@
       "module": "python/yunshu_engine/apc_manager.py",
       "what": "A checkpoint whose recurrent state is non-finite is never stored in a prefix cache",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/apc_manager.py",
-              "recurrent_state_finite"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/apc_manager.py",
-              "recurrent_state_finite"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "engaged",
           "ev": [
             [
               "python/yunshu_engine/round_driver/driver.py",
               "apc.store_checkpoint"
-            ]
-          ]
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/apc_manager.py",
-              "recurrent_state_finite"
             ]
           ]
         },
@@ -2360,36 +1350,9 @@
       "module": "python/yunshu_engine/grammar_constraint.py",
       "what": "Constrained decoding masks from the constraint's bitmask/allowed_mask, not a ~240K-id allowlist per token",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/constrained_spec.py",
-              "allowed_mask"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/constrained_spec.py",
-              "allowed_mask"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "na",
           "why": "constrained (schema/regex/grammar) requests never enter the driver: _driver_takes admits only invariant tool-call guides, which mask through the guide bitmask (tool_call_grammar.apply_bitmask)"
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "allowed_mask"
-            ]
-          ]
         },
         "generic": {
           "s": "engaged",
@@ -2424,36 +1387,9 @@
       "module": "python/yunshu_engine/generation_suppress.py",
       "what": "generation_config.json suppress_tokens is the default token mask when a request sets none",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "_generation_suppress_ids"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "_generation_suppress_ids"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "na",
           "why": "a row carrying the static suppress mask keeps the speculative lane (_driver_takes admits only Fp32 reporting processors)"
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "_generation_suppress_ids"
-            ]
-          ]
         },
         "generic": {
           "s": "engaged",
@@ -2488,36 +1424,9 @@
       "module": "python/yunshu_engine/constraint_eos.py",
       "what": "A grammar dead end fails only its own request (with an error), never the other rows or a hang",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "GrammarDeadEndError"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "GrammarDeadEndError"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "na",
           "why": "constrained requests never enter the driver (_driver_takes); an invariant tool guide has no dead end by construction"
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "GrammarDeadEndError"
-            ]
-          ]
         },
         "generic": {
           "s": "engaged",
@@ -2552,51 +1461,12 @@
       "module": "python/yunshu_engine/kv_prefix_cache.py",
       "what": "Per-request cache-store opt-out (X-Yunshu-Cache-Store: off): the request reuses a cached prefix but stores nothing; the prefill plan is untouched, so its output equals a storing request's",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "cache_store=bool(getattr(cancel_event"
-            ],
-            [
-              "python/yunshu_engine/apc_manager.py",
-              "_store_off"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "cache_store=bool(getattr(cancel_event"
-            ],
-            [
-              "python/yunshu_engine/apc_manager.py",
-              "_store_off"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "engaged",
           "ev": [
             [
               "python/yunshu_engine/round_driver/driver.py",
               "if not row.req.cache_store"
-            ]
-          ]
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "cache_store=bool(getattr(cancel_event"
-            ],
-            [
-              "python/yunshu_engine/apc_manager.py",
-              "_store_off"
             ]
           ]
         },
@@ -2640,51 +1510,12 @@
       "module": "python/yunshu_engine/apc_manager.py",
       "what": "Seam checkpoint (YUNSHU_APC_SEAM_CHECKPOINT, experimental): one extra 64-aligned APC checkpoint inside a long final user message so the same document with a new question resumes at the document",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/apc_manager.py",
-              "def seam_boundary"
-            ],
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "seam_checkpoint="
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/apc_manager.py",
-              "def seam_boundary"
-            ],
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "seam_checkpoint="
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "engaged",
           "ev": [
             [
               "python/yunshu_engine/round_driver/driver.py",
               "checkpoint_lengths"
-            ]
-          ]
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/apc_manager.py",
-              "def seam_boundary"
-            ],
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "seam_checkpoint="
             ]
           ]
         },
@@ -2715,33 +1546,6 @@
       "module": "python/yunshu_engine/kernels/sdpa_chunk.py",
       "what": "Query-chunked head_dim-256 long-prefill attention on M1-M4 (YUNSHU_SDPA_CHUNK, experimental, default off)",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "sdpa_chunk.install()"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "sdpa_chunk.install()"
-            ]
-          ]
-        },
-        "driver": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "sdpa_chunk.install()"
-            ]
-          ]
-        },
         "batch": {
           "s": "engaged",
           "ev": [
@@ -2784,36 +1588,9 @@
       "module": "python/yunshu_engine/image_processor_fixes.py",
       "what": "PIL images keep their height x width x channels layout in the Gemma 4 / EmbeddingGemma 2 image processors (a 1- or 3-pixel-tall image is not channels-first)",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "install_image_fixes"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "install_image_fixes"
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "na",
           "why": "image prompts never enter the driver (job.prompt_kwargs is not None)"
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "install_image_fixes"
-            ]
-          ]
         },
         "generic": {
           "s": "engaged",
@@ -2838,33 +1615,6 @@
       "module": "python/yunshu_engine/sampling_defaults.py",
       "what": "A request whose filters keep one token (top_k 1, min_p 1, no XTC) decodes greedily: fused argmax, the exact speculative lane and greedy-only routes instead of a sampler over one token",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "effective_temperature("
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "effective_temperature("
-            ]
-          ]
-        },
-        "driver": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "effective_temperature("
-            ]
-          ]
-        },
         "batch": {
           "s": "engaged",
           "ev": [
@@ -2907,33 +1657,6 @@
       "module": "python/yunshu_engine/message_adapter.py",
       "what": "Claude Code's <total_tokens>N tokens left</total_tokens> budget marker (lone message, system-text tail or extra system block) is dropped before the chat template renders, so the prompt prefix stays append-only",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "adapt_messages"
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "adapt_messages"
-            ]
-          ]
-        },
-        "driver": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "adapt_messages"
-            ]
-          ]
-        },
         "batch": {
           "s": "engaged",
           "ev": [
@@ -2971,18 +1694,6 @@
       "module": "python/yunshu_console/docs_ask.py",
       "what": "Console docs retrieval and local engine SSE answers; request limits apply before proxy inference.",
       "cells": {
-        "mtp": {
-          "s": "na",
-          "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
-        },
-        "dflash": {
-          "s": "na",
-          "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
-        },
-        "driver": {
-          "s": "na",
-          "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
-        },
         "batch": {
           "s": "na",
           "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
@@ -3005,48 +1716,9 @@
       "module": "python/yunshu_engine/ane_ffn_runtime.py",
       "what": "Opt-in lossy Neural Engine share of each dense FFN layer in single-row prompt steps (YUNSHU_ANE_FFN_SPLIT=splash, Splash scheme, W8A8 + Hadamard, IOSurface + shared-event handoff); decode, verify and short tails unchanged; APC states kept apart by the kernel id",
       "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/cache_prefill.py",
-              "ane_ffn_runtime.guarded"
-            ],
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "ane_ffn_runtime.install("
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/cache_prefill.py",
-              "ane_ffn_runtime.guarded"
-            ],
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "ane_ffn_runtime.install("
-            ]
-          ]
-        },
-        "driver": {
+        "batch": {
           "s": "na",
           "why": "the round driver prefills its own fixed 512-row spans through packed forwards, not PromptProcessingBatch; the split's calibrated rows start above that"
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/cache_prefill.py",
-              "ane_ffn_runtime.guarded"
-            ],
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "ane_ffn_runtime.install("
-            ]
-          ]
         },
         "generic": {
           "s": "na",
@@ -3128,19 +1800,6 @@
         ]
       ],
       "why": "MTP copy rounds are keyed-sampler exact; same trick applies."
-    },
-    {
-      "id": "concurrency-off-lane",
-      "a": "a second in-flight request",
-      "b": "single-request lane drafting",
-      "kind": "unimplemented",
-      "ev": [
-        [
-          "python/yunshu_engine/vlm_batch_runner.py",
-          "spec = job.use_draft and alone"
-        ]
-      ],
-      "why": "Open work (multi-row spec); the measured own-driver attempt lost and is deleted."
     },
     {
       "id": "streaming-off-text-spec",
@@ -3513,7 +2172,7 @@
     "YUNSHU_GRAMMAR_PREWARM": "grammar_prewarm",
     "YUNSHU_SDPA_CHUNK": "sdpa_chunk_pre_nax"
   },
-  "gap_budget": 51,
+  "gap_budget": 27,
   "settings_categories": [
     "speculative",
     "vlm-runner",
