@@ -1,4 +1,5 @@
 import { BYTES_PER_GB, binaryGb, readGb } from "./byte-format.ts";
+import { pushLive, subscribePush } from "./push.ts";
 import { connectionScope, useScopedState } from "./scoped-state.ts";
 import { useEffect, useState } from "react";
 import { fixed } from "./i18n/format.ts";
@@ -134,8 +135,11 @@ export function useMemoryLedger(
     if (!enabled) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const tick = async () => {
-      if (document.visibilityState === "visible") {
+    const tick = async (fromPush = false) => {
+      if (
+        document.visibilityState === "visible" &&
+        (fromPush || !pushLive(connection, "memory"))
+      ) {
         try {
           const v = await getMemory(connection, controller.signal);
           if (controller.signal.aborted) return;
@@ -155,7 +159,12 @@ export function useMemoryLedger(
       timer = setTimeout(() => void tick(), intervalMs);
     };
     void tick();
+    const off = subscribePush(connection, "memory", () => {
+      if (timer) clearTimeout(timer);
+      void tick(true);
+    });
     return () => {
+      off();
       controller.abort();
       if (timer) clearTimeout(timer);
     };

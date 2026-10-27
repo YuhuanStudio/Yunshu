@@ -20,6 +20,7 @@ import {
   type RestartMark,
 } from "./history-api";
 import { retryDelayMs } from "./backoff";
+import { pushLive, subscribePush } from "./push";
 import { useOutage, type OutageView } from "./outage";
 import {
   gapPoint,
@@ -80,6 +81,7 @@ const POLL_INTERVAL_MS = 3_000;
  */
 export const BUSY_POLL_INTERVAL_MS = 250;
 const BUSY_LINGER_MS = 2_000;
+const ALERTS_MAX_AGE_MS = 3_000;
 /** The history and chart series keep their old density however often the status is read. */
 const SAMPLE_EVERY_MS = 2_500;
 /** Offline is shown only after this many consecutive failed polls. */
@@ -181,6 +183,10 @@ export function useEngine(connection: Connection): UseEngineResult {
   const stableRef = useRef<StablePhaseState>(initialStablePhase("idle"));
   const emaRef = useRef<{ v: number | null; at: number }>({ v: null, at: 0 });
   const lastBusyRef = useRef(0);
+  const alertsRef = useRef<{
+    at: number;
+    value: Awaited<ReturnType<typeof fetchConsoleState>>;
+  } | null>(null);
   const lastSampleRef = useRef(0);
   const memEmaRef = useRef<{ v: number | null; at: number }>({
     v: null,
@@ -206,6 +212,7 @@ export function useEngine(connection: Connection): UseEngineResult {
     failuresRef.current = 0;
     failStartRef.current = null;
     lastLiveRef.current = 0;
+    alertsRef.current = null;
     setNextRetryAt(null);
     // Smoothing carries nothing over from another service.
     stableRef.current = initialStablePhase("idle");
@@ -246,10 +253,14 @@ export function useEngine(connection: Connection): UseEngineResult {
           )
             return;
           if (status.console_process) {
-            const recorder = await fetchConsoleState(
-              apiConnection,
-              controller.signal,
-            );
+            // The recorder's alerts change on the scale of seconds, not at the 4 Hz the status moves.
+            const cached = alertsRef.current;
+            const recorder =
+              !force && cached && Date.now() - cached.at < ALERTS_MAX_AGE_MS
+                ? cached.value
+                : await fetchConsoleState(apiConnection, controller.signal);
+            if (recorder)
+              alertsRef.current = { at: Date.now(), value: recorder };
             if (
               controller.signal.aborted ||
               generation !== generationRef.current ||
@@ -578,11 +589,15 @@ export function useEngine(connection: Connection): UseEngineResult {
         }, delay);
       }
     };
-    const poll = async () => {
+    const poll = async (fromPush = false) => {
       if (disposed || document.visibilityState !== "visible") return;
-      await refresh();
+      // While the change feed is healthy it wakes this hook; the timer stays idle (no request).
+      if (fromPush || !pushLive(apiConnection, "status")) await refresh();
       schedule();
     };
+    const offPush = subscribePush(apiConnection, "status", () => {
+      if (failuresRef.current === 0) void poll(true);
+    });
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") void poll();
       else clearTimer();
@@ -601,12 +616,13 @@ export function useEngine(connection: Connection): UseEngineResult {
     if (document.visibilityState === "visible") void poll();
     return () => {
       disposed = true;
+      offPush();
       clearTimer();
       document.removeEventListener("visibilitychange", onVisibilityChange);
       removeEventListener("online", retryNow);
       removeEventListener("focus", retryNow);
     };
-  }, [polling, refresh]);
+  }, [polling, refresh, apiConnection]);
 
   const manualRefresh = useCallback(() => refresh(true), [refresh]);
   // The status handed to the pages carries the steady phase and smoothed speed (see phase-stability.ts).

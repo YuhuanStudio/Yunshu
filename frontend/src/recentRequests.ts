@@ -1,3 +1,4 @@
+import { pushLive, pushedPayload, subscribePush } from "./push.ts";
 import { connectionScope, useScopedState } from "./scoped-state.ts";
 import { useEffect, useRef, useState } from "react";
 import { has, t, tr } from "./i18n/index.ts";
@@ -113,6 +114,8 @@ const POLL_MS = 5000;
 
 /** `requestJson` rejects query strings, so this one GET builds its own URL (same base, same bearer). */
 async function getRecent(connection: Connection, signal: AbortSignal) {
+  const pushed = pushedPayload(connection, "/yunshu/requests/recent");
+  if (pushed) return pushed.data as { data?: RecentEntry[]; capacity?: number };
   const url = new URL(connection.baseUrl.trim());
   const path = url.pathname.replace(/\/+$/, "");
   url.pathname = `${path.endsWith("/v1") ? path : `${path}/v1`}/yunshu/requests/recent`;
@@ -186,9 +189,12 @@ export function useRecentRequests(
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined,
       flying = false;
-    const load = async () => {
+    const load = async (fromPush = false) => {
       if (missing.current || flying || controller.signal.aborted) return;
-      if (document.visibilityState === "hidden") {
+      if (
+        document.visibilityState === "hidden" ||
+        (!fromPush && pushLive(connection, "requests"))
+      ) {
         timer = setTimeout(() => void load(), POLL_MS);
         return;
       }
@@ -250,7 +256,12 @@ export function useRecentRequests(
       () => undefined,
     );
     void load();
+    const off = subscribePush(connection, "requests", () => {
+      if (timer) clearTimeout(timer);
+      void load(true);
+    });
     return () => {
+      off();
       controller.abort();
       if (timer) clearTimeout(timer);
     };

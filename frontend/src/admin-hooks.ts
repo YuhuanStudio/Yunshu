@@ -10,6 +10,7 @@ import {
   type LocalInventory,
   type Unsupported,
 } from "./admin-models-api.ts";
+import { pushLive, subscribePush, type PushTopic } from "./push.ts";
 import { getCache, type CacheOverview } from "./admin-cache-api.ts";
 
 export type Polled<T> = {
@@ -34,6 +35,7 @@ export function usePolled<T>(
   ) => Promise<T | Unsupported>,
   intervalMs: (data: T | null) => number,
   key = "",
+  topic?: PushTopic,
 ): Polled<T> {
   const [state, setState] = useScopedState<Omit<Polled<T>, "refresh">>(
     connectionScope(connection),
@@ -50,12 +52,15 @@ export function usePolled<T>(
     let timer: ReturnType<typeof setTimeout> | undefined,
       last: T | null = null,
       running = false;
-    const tick = async () => {
+    const tick = async (fromPush = false) => {
       if (running) return;
       running = true;
       if (timer) clearTimeout(timer);
       let stop = false;
-      if (document.visibilityState === "visible") {
+      if (
+        document.visibilityState === "visible" &&
+        (fromPush || !topic || !pushLive(connection, topic))
+      ) {
         try {
           const v = await loadRef.current(connection, controller.signal);
           if (controller.signal.aborted) return;
@@ -80,7 +85,11 @@ export function usePolled<T>(
     };
     kick.current = () => void tick();
     void tick();
+    const off = topic
+      ? subscribePush(connection, topic, () => void tick(true))
+      : () => undefined;
     return () => {
+      off();
       controller.abort();
       if (timer) clearTimeout(timer);
     };
@@ -97,6 +106,8 @@ export const useDownloads = (c: Connection, enabled: boolean) =>
     enabled,
     (conn, signal) => listDownloads(conn, signal),
     (d) => (d && d.jobs.some(isActive) ? 1500 : 8000),
+    "",
+    "downloads",
   );
 
 /** The disk scan is expensive server-side (cached 15 s), so poll lazily. */
