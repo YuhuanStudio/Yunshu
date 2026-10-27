@@ -315,7 +315,7 @@ class DFlashBatch:
                         st.spec_accepted += max(0, used - 1)
                         st.spec_rounds += 1
                         observe(st, max(0, used - 1), n)
-                if not r.finished:
+                if not r.finished and self.can_draft:
                     hidden = mx.concatenate(res.captured, axis=-1)[
                         :, mx.array(kept, dtype=mx.int32)
                     ]

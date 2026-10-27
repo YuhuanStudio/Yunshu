@@ -301,3 +301,39 @@ def test_prefill_service_credit_reuses_shared_policy_and_bounds_dispatch(monkeyp
     driver._credit_prefill(4.0, True)
     assert driver._decode_credit == 0
     assert not driver._will_decode()
+
+
+@pytest.mark.parametrize("sampled", [False, True])
+def test_plain_verify_driver_without_a_drafter_equals_drafting_rows(target, sampled):
+    """Speculation off: a draft-less DFlash batch decodes through the same verify forward and
+    emits exactly the tokens of the drafting rows (it used to crash on res.captured and, with
+    DecodeBatch, to use a different forward)."""
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    prompts = [list(range(4 + b, 25 + 7 * b)) for b in range(2)]
+    want, _ = _run(target, prompts, draft=True, sampled=sampled, logprobs=False)
+    driver = RoundDriver(target, plain_verify=True, chunk=16)
+    assert driver.dflash is not None and not driver.can_draft
+    got = [[] for _ in prompts]
+    for i, prompt in enumerate(prompts):
+        params = (
+            SimpleNamespace(
+                temperature=1.0,
+                top_p=0.95,
+                top_k=20,
+                min_p=0.0,
+                xtc_probability=0.0,
+                seed=17 + prompt[0],
+            )
+            if sampled
+            else None
+        )
+        driver.add(Request(prompt, 12, sampling=params, handle=i, draft=False))
+    steps = 0
+    while driver.busy():
+        for event in driver.step():
+            got[event.handle].append((event.token, event.logprob))
+        steps += 1
+        assert steps < 200
+    assert got == want
+    assert driver.drafted == 0
