@@ -8,4 +8,4 @@ export TFB_WORK=/Volumes/P5Plus/yunshu-build/snapshot014/corpus TFB_YUNSHU_SRC="
 export PYTHONPATH="$ROOT/python" TMPDIR="$OUT/tmp"
 mkdir -p "$TMPDIR"
 exec "$ROOT/.venv/bin/python" "$ROOT/scripts/research/fnspec_probe.py" --arm "$ARM" \
-  --model /Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ3e-mtp --out "$OUT/$ARM.json" "$@"
+  --model /Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ2.5e-mtp-ple-ssd --out "$OUT/$ARM.json" "$@"
