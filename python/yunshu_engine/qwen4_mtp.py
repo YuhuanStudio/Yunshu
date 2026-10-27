@@ -132,10 +132,6 @@ def configure_lane(lm: Any, drafter: Any, block: int | None) -> tuple[dict, int 
     lane matmul for decode, verify and drafting alike."""
     from . import settings
 
-    if drafter is not None and getattr(drafter, "native_keyed", False):
-        from .qwen4_sampled import install_logit_stash
-
-        install_logit_stash(lm)
     if getattr(getattr(drafter, "config", None), "target_layer_ids", None):
         from .qwen4_dflash import install
 

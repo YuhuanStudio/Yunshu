@@ -758,8 +758,10 @@ class VLMBatchRunner:
         if not greedy and use_draft:
             key = seed if seed is not None else int.from_bytes(os.urandom(8), "little")
             if self._native_keyed(greedy):
-                from .qwen4_sampled import NativeKeyedSampler
+                from .qwen4_sampled import NativeKeyedSampler, install_logit_stash
 
+                # only a sampled request needs the verify window's logits; greedy requests never wrap them
+                install_logit_stash(self.model.language_model)
                 job.keyed = NativeKeyedSampler(
                     job.sampling, key, lm=self.model.language_model
                 )

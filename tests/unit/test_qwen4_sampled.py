@@ -204,3 +204,24 @@ def test_other_paths_keep_their_gates(monkeypatch):
         runner.iter_tokens([1, 2], max_tokens=3, temperature=0.8, seed=4, logprobs=True)
     )
     assert not captured[0].use_draft
+
+
+def test_greedy_admission_never_runs_the_sampled_setup(monkeypatch):
+    import yunshu_engine.qwen4_sampled as sampled
+
+    calls = []
+    monkeypatch.setattr(sampled, "install_logit_stash", lambda lm: calls.append(lm))
+    runner, captured = _runner(monkeypatch, True)
+    list(runner.iter_tokens([1, 2], max_tokens=3))
+    list(runner.iter_tokens([1, 2], max_tokens=3, logprobs=True))
+    assert calls == [] and captured[0].keyed is None
+    list(runner.iter_tokens([1, 2], max_tokens=3, temperature=0.8, seed=4))
+    assert len(calls) == 1
+
+
+def test_loading_the_lane_does_not_wrap_the_target_logits():
+    import inspect
+
+    from yunshu_engine import qwen4_mtp
+
+    assert "install_logit_stash" not in inspect.getsource(qwen4_mtp)
