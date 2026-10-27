@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from console_real_server import stop_tree  # noqa: E402
 
 MODEL = "/Volumes/P5Plus/models/Qwen2.5-3B-Instruct-4bit"
-STATIC = Path("/Volumes/P5Plus/yunshu-build/front-dist")
+STATIC = Path("/Volumes/P5Plus/yunshu-build/front-dist-b")
 
 
 def window_cpu(samples: list[tuple[float, float]], t0: float, t1: float) -> dict:

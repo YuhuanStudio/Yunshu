@@ -117,10 +117,14 @@ class Feed {
     }
   };
 
+  /**
+   * One stream carries every topic as soon as any hook listens: hooks mount a page at a time, and
+   * reopening the stream for each new topic cost three connections on the overview alone. The extra
+   * samplers are cheap (host and memory every 2 s, requests 0.5 s) and stop when the tab goes away.
+   */
   private topics(): PushTopic[] {
-    return [...this.listeners.keys()]
-      .filter((t) => (this.listeners.get(t)?.size ?? 0) > 0)
-      .sort();
+    const any = [...this.listeners.values()].some((set) => set.size > 0);
+    return any ? (Object.keys(TOPICS).sort() as PushTopic[]) : [];
   }
 
   live(topic: PushTopic): boolean {

@@ -56,7 +56,7 @@ test("a healthy stream answers polls from the pushed payload and wakes listeners
   const off = subscribePush(conn, "status", () => woke++);
   await sleep(80);
   assert.equal(s.calls.length, 1);
-  assert.match(s.calls[0].url, /\/v1\/yunshu\/events\?topics=status$/);
+  assert.match(s.calls[0].url, /\/v1\/yunshu\/events\?topics=downloads%2Chost%2Cmemory%2Crequests%2Cstatus$/);
   assert.equal(s.calls[0].auth, "Bearer tok");
   assert.equal(pushLive(conn, "status"), false); // no snapshot yet: poll for real
   s.send("hello", { boot_id: "B", topics: ["status"] });
@@ -113,7 +113,7 @@ test("a new boot id drops what the old engine process held", async () => {
   resetPushForTests();
 });
 
-test("topics joining within the debounce share one stream", async () => {
+test("every topic rides one stream however the hooks join", async () => {
   resetPushForTests();
   const s = fakeStream();
   subscribePush(conn, "status", () => undefined);
@@ -121,6 +121,9 @@ test("topics joining within the debounce share one stream", async () => {
   subscribePush(conn, "host", () => undefined);
   await sleep(100);
   assert.equal(s.calls.length, 1);
-  assert.match(s.calls[0].url, /topics=host%2Cmemory%2Cstatus$/);
+  assert.match(
+    s.calls[0].url,
+    /topics=downloads%2Chost%2Cmemory%2Crequests%2Cstatus$/,
+  );
   resetPushForTests();
 });
