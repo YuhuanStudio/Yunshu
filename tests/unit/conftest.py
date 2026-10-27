@@ -165,3 +165,24 @@ def _restore_mlx_default_device():
         previous = mx.gpu if mx.metal.is_available() else mx.cpu
     if mx.default_device() != previous:
         mx.set_default_device(previous)
+
+
+@pytest.fixture(autouse=True)
+def _yunshu_loggers_inherit_levels():
+    """Each test starts with the yunshu_* package loggers at NOTSET, so ``caplog.at_level(DEBUG)`` reaches them: an earlier
+    import or test that configured them (the gateway sets yunshu_engine to INFO) made caplog miss DEBUG lines in
+    suite order only (test_shortdecode_probe, test_vlm_next_turn). Their levels are restored afterwards."""
+    import logging
+
+    loggers = [
+        lg
+        for name, lg in logging.root.manager.loggerDict.items()
+        # package loggers only: "yunshu.audit" is INFO by design from import time and must keep it
+        if name.startswith("yunshu_") and isinstance(lg, logging.Logger)
+    ]
+    saved = [(lg, lg.level) for lg in loggers]
+    for lg in loggers:
+        lg.setLevel(logging.NOTSET)
+    yield
+    for lg, level in saved:
+        lg.setLevel(level)
