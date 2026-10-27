@@ -241,7 +241,7 @@ def stage_preflight(ctx: Ctx) -> StageResult:
     numbers.update(changed_files=len(changed), related_tests=len(tests))
     ctx.run.append(name, {"ev": "mapping", "changed": changed, "tests": tests})
     if not reasons and tests:
-        cmd = [
+        base_cmd = [
             "nice",
             "-n",
             "15",
@@ -253,16 +253,52 @@ def stage_preflight(ctx: Ctx) -> StageResult:
             "no:cacheprovider",
             "-x",
             "-rfE",
-            *tests,
         ]
-        r = subprocess.run(
-            cmd,
-            cwd=str(ctx.cand.path),
-            env=dict(env, PYTHONPATH=str(ctx.cand.path / "python")),
-            capture_output=True,
-            text=True,
-            timeout=30 * 60,
+        run_env = dict(env, PYTHONPATH=str(ctx.cand.path / "python"))
+        workers = int(os.environ.get("YV_PREFLIGHT_WORKERS", "6"))
+        has_xdist = workers > 1 and (
+            subprocess.run(
+                [ctx.py, "-c", "import xdist"],
+                cwd=str(ctx.cand.path),
+                env=run_env,
+                capture_output=True,
+            ).returncode
+            == 0
         )
+        if has_xdist:
+            # as ci-local: one test file per worker, then the tests marked serial on their own
+            # (was single-process: ~8 min for ~1000 files, ~1 min this way)
+            runs = [
+                base_cmd
+                + [
+                    "-n",
+                    str(workers),
+                    "--dist",
+                    "loadfile",
+                    "-m",
+                    "not serial",
+                    *tests,
+                ],
+                base_cmd + ["-m", "serial", *tests],
+            ]
+        else:
+            runs = [base_cmd + tests]
+        out, rc = "", 0
+        for cmd in runs:
+            r = subprocess.run(
+                cmd,
+                cwd=str(ctx.cand.path),
+                env=run_env,
+                capture_output=True,
+                text=True,
+                timeout=30 * 60,
+            )
+            out += r.stdout + r.stderr
+            # 5 = nothing collected (no serial-marked test among the related ones)
+            if r.returncode not in (0, 5):
+                rc = r.returncode
+                break
+        r = subprocess.CompletedProcess(runs[-1], rc, out, "")
         lines = (r.stdout + r.stderr).strip().splitlines()
         # the failing test names first: log noise printed after a failure must not push them out of the record
         failed = [ln for ln in lines if ln.startswith(("FAILED ", "ERROR "))][:20]
