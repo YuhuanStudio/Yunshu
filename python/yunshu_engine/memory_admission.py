@@ -160,8 +160,11 @@ def available_bytes() -> int | None:
         page = _sysctl_int("hw.pagesize") or _sysctl_int("vm.pagesize")
         if not page:
             return None
+        # vm_stat prints "Pages free" as free_count - speculative_count (speculative pages have their own
+        # line), so the free + inactive + speculative + purgeable sum must not count them twice
+        free = stats.free_count - stats.speculative_count
         pages = (
-            stats.free_count
+            free
             + stats.inactive_count
             + stats.speculative_count
             + stats.purgeable_count
