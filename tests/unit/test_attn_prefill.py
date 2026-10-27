@@ -80,3 +80,61 @@ def test_short_attention_is_only_enabled_inside_prompt_scope(monkeypatch):
     with gdn_prefill.prefill_scope():
         assert ap.eligible(*args)
     assert not ap.eligible(*args)
+
+
+@pytest.mark.parametrize(
+    "tail,rows,short,warps",
+    [
+        (True, 1, True, 2),
+        (True, 16, True, 2),
+        (True, 17, False, 4),
+        (False, 16, False, 4),
+    ],
+)
+def test_short_tail_schedule_matches_kernel_geometry(
+    monkeypatch, tail, rows, short, warps
+):
+    from types import SimpleNamespace
+
+    calls = []
+    launches = []
+
+    def kernel(*args):
+        calls.append(args)
+
+        def launch(**kwargs):
+            launches.append(kwargs)
+            return ["output"]
+
+        return launch
+
+    monkeypatch.setattr(ap, "kernel", kernel)
+    monkeypatch.setattr(ap.gdn_prefill, "in_tail", lambda: tail)
+    q = SimpleNamespace(shape=(1, 24, rows, 256))
+    k = SimpleNamespace(shape=(1, 4, 32768 + rows, 256))
+    assert ap.attend(q, k, k) == "output"
+    tile = 16 if short else 32
+    assert calls == [(rows % tile == 0, (32768 + rows) % 32 == 0, 24, 4, short)]
+    assert launches[0]["grid"] == ((rows + tile - 1) // tile * 32, 24 * warps, 1)
+    assert launches[0]["threadgroup"] == (32, warps, 1)
+
+
+def test_short_kernel_uses_same_bk_and_d_split_with_one_query_simdgroup(monkeypatch):
+    captured = {}
+
+    def compile_kernel(**kwargs):
+        captured.update(kwargs)
+        return "compiled"
+
+    ap.kernel.cache_clear()
+    monkeypatch.setattr(ap, "header", lambda aq, ak: "unchanged header")
+    monkeypatch.setattr(mx.fast, "metal_kernel", compile_kernel)
+    try:
+        assert ap.kernel(True, False, 24, 2, True) == "compiled"
+        assert captured["header"] == "unchanged header"
+        source = captured["source"]
+        assert "threadgroup float s_xchg[1][2][32 * 16]" in source
+        assert "yunshu_attn_dsplit<bfloat, 16, 32, 256, 1, 2, float, float>" in source
+        assert "params.qL_rem = params.qL % 16" in source
+    finally:
+        ap.kernel.cache_clear()
