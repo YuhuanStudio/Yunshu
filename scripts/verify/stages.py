@@ -1161,6 +1161,28 @@ def needle_slices(ctxs: list) -> list:
     return out
 
 
+def _longqa_share_key(ctx: Ctx, arm: str, c: int, lo: int, hi: int) -> str:
+    """Base needle answers (greedy, scored for correctness only) are reusable across runs on the same
+    base commit, env, checkpoint, prompt bytes, runtime and harness; the candidate is always re-run."""
+    if arm != "base":
+        return ""
+    return _sha(
+        "longqa",
+        ctx.base.key,
+        ctx.arm_env("base"),
+        ctx.model,
+        checkpoint_identity(ctx.model),
+        c,
+        lo,
+        hi,
+        _prompt_hashes([c], ["prose"]),
+        _runtime_key(ctx, "base"),
+        _harness_hash(),
+        os.environ.get("GPUQ_DEVICE", "m5"),
+        n=24,
+    )
+
+
 def stage_longqa(ctx: Ctx) -> StageResult:
     cfg = ctx.suite
     ctxs = list(cfg.get("needle_ctx") or [32768, 65536, 131072])
@@ -1185,6 +1207,7 @@ def stage_longqa(ctx: Ctx) -> StageResult:
                     timeout_min=tmo if ctx.big else 6,
                     stall_min=12 if ctx.big else 4,
                     quiet=True,
+                    share_key=_longqa_share_key(ctx, arm, c, lo, hi),
                 )
             )
     res = ctx.exe.run_cells(cells)

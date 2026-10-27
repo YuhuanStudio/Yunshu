@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import types
 import subprocess
 import sys
 from pathlib import Path
@@ -1123,6 +1124,44 @@ def test_memory_base_shared_and_speed_base_only_on_request(world):
         == 0
     )
     assert not [j for j in jobs(world)[n:] if "-speed-base" in j]
+
+
+def test_longqa_base_cells_share_evidence_and_candidate_never(tmp_path, monkeypatch):
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "prose-1024.txt").write_text("one")
+    monkeypatch.setattr(stages, "PROMPTS", prompts)
+    monkeypatch.setattr(stages, "_check_prompts", lambda *a, **k: None)
+    ctx = _share_ctx(tmp_path, monkeypatch)
+    ctx.suite = {"needle_ctx": [1024]}
+    ctx.run = types.SimpleNamespace(path=tmp_path / "run")
+    ctx.observe = False
+    ctx.mem_gb = 8
+    ctx.big = False
+    seen = []
+
+    class CapturedStopError(Exception):
+        pass
+
+    class Capture:
+        def run_cells(self, cells):
+            seen.append({c.key: c.share_key for c in cells})
+            raise CapturedStopError
+
+    ctx.exe = Capture()
+
+    def keys():
+        with pytest.raises(CapturedStopError):
+            stages.stage_longqa(ctx)
+        return seen[-1]
+
+    k0 = keys()
+    base = {k: v for k, v in k0.items() if k.startswith("base@")}
+    assert base and all(base.values())
+    assert all(v == "" for k, v in k0.items() if k.startswith("cand@"))
+    assert keys() == k0  # stable across runs
+    (prompts / "prose-1024.txt").write_text("two")  # the prompt bytes changed
+    assert {k: v for k, v in keys().items() if k.startswith("base@")} != base
 
 
 def test_one_server_per_arm_for_identity_and_small_model_smoke_uses_any_device(world):
