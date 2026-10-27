@@ -197,9 +197,11 @@ def test_sampled_request_without_logprobs_uses_coupled_drafts(monkeypatch):
 
 def test_other_paths_keep_their_gates(monkeypatch):
     runner, captured = _runner(monkeypatch, True)
-    list(runner.iter_tokens([1, 2], max_tokens=3, logprobs=True))  # greedy
-    assert not captured[0].use_draft
+    list(runner.iter_tokens([1, 2], max_tokens=3))  # greedy without logprobs
+    assert captured[0].use_draft and captured[0].keyed is None
     runner, captured = _runner(monkeypatch, False)  # not the native loop
+    list(runner.iter_tokens([1, 2], max_tokens=3, logprobs=True))
+    assert not captured[0].use_draft
     list(
         runner.iter_tokens([1, 2], max_tokens=3, temperature=0.8, seed=4, logprobs=True)
     )
@@ -213,7 +215,6 @@ def test_greedy_admission_never_runs_the_sampled_setup(monkeypatch):
     monkeypatch.setattr(sampled, "install_logit_stash", lambda lm: calls.append(lm))
     runner, captured = _runner(monkeypatch, True)
     list(runner.iter_tokens([1, 2], max_tokens=3))
-    list(runner.iter_tokens([1, 2], max_tokens=3, logprobs=True))
     assert calls == [] and captured[0].keyed is None
     list(runner.iter_tokens([1, 2], max_tokens=3, temperature=0.8, seed=4))
     assert len(calls) == 1
@@ -225,3 +226,32 @@ def test_loading_the_lane_does_not_wrap_the_target_logits():
     from yunshu_engine import qwen4_mtp
 
     assert "install_logit_stash" not in inspect.getsource(qwen4_mtp)
+
+
+def test_greedy_logprob_request_keeps_native_speculation(monkeypatch):
+    runner, captured = _runner(monkeypatch, True)
+    list(runner.iter_tokens([1, 2], max_tokens=3, logprobs=True))
+    job = captured[0]
+    assert job.use_draft and isinstance(job.keyed, NativeKeyedSampler)
+    assert job.keyed.params is None
+
+
+def test_greedy_reports_equal_the_serial_argmax_stream():
+    tbl, first = table(), table()[3]
+    request = SpecRequest(logprobs=True, top_logprobs=2)
+    sampler = NativeKeyedSampler(None, 0, request=request)
+    got, drafted, accepted = speculate(tbl, sampler, first, 60)
+    # serial greedy: argmax of the one-row normalized float32 logprobs, then its reports
+    logits, want, rows = mx.array(first)[None], [], []
+    for _ in range(60):
+        row = normalize_rows(logits[None])
+        tok = int(mx.argmax(row, axis=-1)[0].item())
+        want.append(tok)
+        rows.append(row)
+        logits = mx.array(tbl[tok])[None]
+    assert got == want
+    assert accepted == drafted  # the toy drafter equals the target
+    for index in range(1, 56):
+        lp, top = sampler.report(index, got[index])
+        ref = request.reports(rows[index], [got[index]])[0]
+        assert (got[index], lp, top) == ref

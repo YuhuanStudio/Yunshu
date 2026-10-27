@@ -690,6 +690,7 @@ class VLMBatchRunner:
                 not logprobs
                 or self._lane_takes_guide(None)
                 or self._native_keyed(greedy)
+                or self._native_greedy_report(greedy)
             )
             and thinking_budget is None
             and (guide is None or self._lane_takes_guide(guide))
@@ -755,7 +756,12 @@ class VLMBatchRunner:
         with contextlib.suppress(Exception):
             # The gateway reaches the live stats through the cancel event it owns.
             cancel_event.run_stats = stats
-        if not greedy and use_draft:
+        if greedy and use_draft and logprobs and self._native_greedy_report(greedy):
+            from .qwen4_sampled import NativeKeyedSampler, install_logit_stash
+
+            install_logit_stash(self.model.language_model)
+            job.keyed = NativeKeyedSampler(None, 0, lm=self.model.language_model)
+        elif not greedy and use_draft:
             key = seed if seed is not None else int.from_bytes(os.urandom(8), "little")
             if self._native_keyed(greedy):
                 from .qwen4_sampled import NativeKeyedSampler, install_logit_stash
@@ -802,6 +808,15 @@ class VLMBatchRunner:
         drafts, target logprobs read from the verify window (qwen4_sampled)."""
         return bool(
             not greedy
+            and self.draft_kind == "mtp"
+            and getattr(self.drafter, "native_keyed", False)
+        )
+
+    def _native_greedy_report(self, greedy: bool) -> bool:
+        """A greedy request that asks for logprobs on the Qwen4 native MTP loop: targets are the argmax of
+        the verify window's float32 rows, so tokens and reports equal the serial path's (qwen4_sampled)."""
+        return bool(
+            greedy
             and self.draft_kind == "mtp"
             and getattr(self.drafter, "native_keyed", False)
         )
