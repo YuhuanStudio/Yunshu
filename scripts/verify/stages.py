@@ -643,7 +643,16 @@ def stage_identity(ctx: Ctx) -> StageResult:
                     reasons.append(f"{tag}{why}")
             reasons += spec_mode_failures(base, cand, ctx.suite, f"identity {mode}")
             planned = analyze.planned_identity(ctx.suite["ctx"], ctx.suite["kinds"])
-            cmp_ = analyze.compare_identity(base, cand, "base", "cand", planned=planned)
+            cmp_ = analyze.compare_identity(
+                base,
+                cand,
+                "base",
+                "cand",
+                planned=planned,
+                input_change_ok=bool(ctx.suite.get("input_change_ok")),
+            )
+            if cmp_["input_changed"]:
+                numbers[f"{tag}input_changed".strip()] = cmp_["input_changed"]
             numbers[f"{tag}base_vs_cand".strip()] = {
                 "compared": cmp_["compared"],
                 "mismatches": len(cmp_["mismatches"]),

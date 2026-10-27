@@ -330,6 +330,22 @@ def test_identity_equal_diff_and_missing():
     assert not analyze.compare_identity([], [])["ok"]  # nothing compared fails closed
 
 
+def test_identity_separates_a_changed_input_from_changed_arithmetic():
+    """A cell whose prompt token count differs had a different input (a deliberate tokenization
+    change, e.g. special-token neutralisation): it fails by default and is listed as input_changed
+    only when the run says the change is deliberate; other cells still compare."""
+    base = rows("a") + [dict(r, kind="prose", sha="p", pt=8203) for r in rows()]
+    cand = rows("a") + [dict(r, kind="prose", sha="q", pt=8206) for r in rows()]
+    strict = analyze.compare_identity(base, cand)
+    assert not strict["ok"]
+    assert {m["why"] for m in strict["mismatches"]} == {"prompt tokens differ"}
+    ok = analyze.compare_identity(base, cand, input_change_ok=True)
+    assert ok["ok"] and ok["compared"] == 3 and len(ok["input_changed"]) == 3
+    # same prompt, different digest still fails with the flag
+    worse = rows("b") + [dict(r, kind="prose", sha="q", pt=8206) for r in rows()]
+    assert not analyze.compare_identity(base, worse, input_change_ok=True)["ok"]
+
+
 def test_apc_requires_equal_digest_and_a_real_hit():
     assert analyze.check_apc(rows(cached=1024))["ok"]
     assert not analyze.check_apc(rows(cached=0))["ok"]
