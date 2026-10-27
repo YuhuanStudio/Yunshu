@@ -174,7 +174,7 @@ class RoundDriver:
     ):
         from .mtp import MTPHead
 
-        # Fixed prefill span per prompt (YUNSHU_ROUND_PREFILL_CHUNK). While rows
+        # Fixed prefill span per prompt (ROUND_PREFILL_CHUNK in vlm_engine.py). While rows
         # decode a prefill step is one span, so this is also the longest a
         # decoding row waits behind a prompt.
         self.chunk = int(chunk or CHUNK)

@@ -1297,7 +1297,6 @@ class VLMBatchRunner:
                 gen=self._new_generator(
                     spec=True,
                     use_apc=use_apc,
-                    cache_store=job.cache_store,
                     top_logprobs=0,
                     sampler=job.keyed,
                     greedy=job.keyed is None,
@@ -1579,6 +1578,7 @@ class VLMBatchRunner:
                 handle=job,
                 extra_hash=self.apc_semantic_hash or 0,
                 use_apc=use_apc,
+                cache_store=job.cache_store,
             )
         )
         self._vocab_owner = driver
