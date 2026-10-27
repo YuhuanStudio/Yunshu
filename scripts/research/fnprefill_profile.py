@@ -64,7 +64,10 @@ def category(key: str) -> str:
         "norm": "norms",
         "embed": "embedding",
     }
-    return table.get(head, "other (" + head + ")")
+    for prefix, name in table.items():
+        if head == prefix or head.startswith(prefix + "."):
+            return name
+    return "other (" + head + ")"
 
 
 def aggregate(lines: list[dict]) -> dict:
