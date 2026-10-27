@@ -246,7 +246,6 @@ _add("YUNSHU_GEMMA4_ASSISTANT", "path", None, "Text Gemma-4 models: assistant dr
 
 # ── text engine ────────────────────────────────────────────────────────
 _add("YUNSHU_SDPA_CHUNK", "bool", False, "M1-M4 (pre-NAX GPUs), head_dim 256: run MLX 0.32.3's unfused long-prefill attention fallback on query-row chunks so its score tensor stays under 1 GiB instead of growing with context squared (adopted from omlx sdpa256_attention). Same arithmetic per row as the stock fallback; no effect on M5 or CPU.", "kernels", stability="experimental", decide="On an M1-M4 Mac: bitwise A/B of chunked vs stock SDPA at head_dim 256 over a long chunked prefill (causal and array masks, bf16) plus 27B-class prefill peak memory and TTFT; if bit-identical with lower peak memory it becomes the default and the flag is deleted, else kernels/sdpa_chunk.py and the flag are deleted", added="2026-10-26")
-_add("YUNSHU_GPU_SAMPLER", "bool", False, "Text models: on-GPU Gumbel-max sampling for temperature > 0 (no per-token GPU->CPU sync) instead of the float64 NumPy sampler that copies the logits to the CPU every token.", "text-engine", stability="experimental", decide="scripts/research/ab_gpu_sampler.py on a text-only checkpoint: decode tok/s gpu/numpy >= 1.05 in every sampling config, first-token TV(numpy, gpu) within the numpy-vs-numpy noise floor, seeded reruns identical; if it wins the GPU sampler becomes the only one (NumPy sampler and this flag deleted), else the GPU sampler and flag are deleted", added="2026-10-26")
 _add("YUNSHU_JUMP_FORWARD", "bool", False, "Text models: emit grammar-forced structural tokens of JSON-schema output without a forward pass.", "text-engine")
 _add("YUNSHU_JSON_SCHEMA_ENGINE", "enum", "llguidance", "Engine that masks JSON-schema / json_object constrained decoding: 'llguidance' (per-token mask about 0.25 ms median on a 248K vocabulary; properties in schema order, forced literals in canonical tokenization) or 'inhouse' (the Python state machine, about 3 ms median; any property order). A schema llguidance cannot compile falls back to the in-house engine when that supports it.", "text-engine", choices=("llguidance", "inhouse"))
 _add("YUNSHU_GRAMMAR_BITMASK", "bool", False, "Constrained decoding with the xgrammar-style bitmask engine instead of the allowlist sampler.", "text-engine")
@@ -421,7 +420,6 @@ _LIVE = frozenset(
         "YUNSHU_CACHE_STALE_DAYS",
         "YUNSHU_VLM_MAX_IMAGE_BYTES",
         "YUNSHU_VLM_INSECURE_SSL",
-        "YUNSHU_GPU_SAMPLER",
         "YUNSHU_JUMP_FORWARD",
         "YUNSHU_JSON_SCHEMA_ENGINE",
         "YUNSHU_GRAMMAR_BITMASK",

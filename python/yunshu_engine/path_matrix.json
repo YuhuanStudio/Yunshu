@@ -1315,7 +1315,7 @@
     },
     "gpu_sampler": {
       "module": "python/yunshu_engine/engine_sampling.py",
-      "what": "On-GPU Gumbel-max sampling without a per-token sync (YUNSHU_GPU_SAMPLER)",
+      "what": "On-GPU Gumbel-max sampling without a per-token sync (the only temp>0 text sampler)",
       "cells": {
         "mtp": {
           "s": "na",
@@ -1333,7 +1333,7 @@
           "absent": [
             [
               "python/yunshu_engine/vlm_batch_runner.py",
-              "YUNSHU_GPU_SAMPLER"
+              "_build_gpu_sampler_text"
             ]
           ]
         },
@@ -1345,7 +1345,7 @@
           "absent": [
             [
               "python/yunshu_engine/vlm_batch_runner.py",
-              "YUNSHU_GPU_SAMPLER"
+              "_build_gpu_sampler_text"
             ]
           ]
         },
@@ -1354,7 +1354,7 @@
           "ev": [
             [
               "python/yunshu_engine/engine_sampling.py",
-              "settings.get_bool(\"YUNSHU_GPU_SAMPLER\")"
+              "_engine._build_gpu_sampler_text("
             ]
           ]
         },
@@ -1363,7 +1363,7 @@
           "ev": [
             [
               "python/yunshu_engine/engine_sampling.py",
-              "settings.get_bool(\"YUNSHU_GPU_SAMPLER\")"
+              "_engine._build_gpu_sampler_text("
             ]
           ]
         }
@@ -3043,7 +3043,6 @@
     "YUNSHU_PREFILL_ATTENTION": "prefill_kernels",
     "YUNSHU_PREFILL_BUFFER_CACHE_GB": "prefill_kernels",
     "YUNSHU_QWEN4_LANE": "batch_invariant_kernels",
-    "YUNSHU_GPU_SAMPLER": "gpu_sampler",
     "YUNSHU_JUMP_FORWARD": "jump_forward",
     "YUNSHU_JSON_SCHEMA_ENGINE": "constrained_bitmask_engine",
     "YUNSHU_GRAMMAR_BITMASK": "constrained_bitmask_engine",

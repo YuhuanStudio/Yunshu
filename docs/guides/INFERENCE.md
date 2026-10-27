@@ -101,7 +101,7 @@ A lossy option never becomes a default because of a benchmark.
 
 ## Other engine options
 
-- `YUNSHU_GPU_SAMPLER=1`: on-GPU sampling for text models. `YUNSHU_OVERLAP` (experimental): CPU/GPU overlap.
+- `YUNSHU_OVERLAP` (experimental): CPU/GPU overlap.
 - `YUNSHU_PREFILL_STEP_SIZE`: prefill chunk size (lower it to cap the activation peak on small Macs).
 - Large mixture-of-experts checkpoints load with quantization bits and group size derived from the
   tensor shapes when a community pack's config disagrees (DeepSeek-V4-Flash packs); custom TurboQuant

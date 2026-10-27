@@ -1461,3 +1461,5 @@ here against 109 on 92bd61fa; gate serve-27b server/in-process 0.677 (server cod
 2026-10-23 deploy45 agentbench (33e5f4a7, MTP, 12-minute budget shards, 62 runs): Claude Code 2.1.285 19/20 pass,
 cache hit 53.8%; Codex 0.164.0 15/22, 87.1%; opencode 1.19.4 19/20, 89.6%. fix-failing-textkit failed with all three clients.
 Codex failures were mostly heredoc harness errors (19 of 22 per agentfix), so the Codex rate is a harness number.
+
+2026-10-28 YUNSHU_GPU_SAMPLER A/B (flag removed, the GPU sampler is the only one), M5 Max, Qwen2.5-3B-Instruct-4bit text path, streamed decode tok/s, 2 rounds alternating arms (gpuq 1028-000726): NumPy 116/145 (t0.7), 69/81 (t0.7 top_p 0.95), 71/79 (t0.6 top_p 0.8 top_k 20) vs GPU 223/223, 213/215, 211/211, ratio 1.7 / 2.8 / 2.8. First-token TV(numpy, gpu) 0.057 against a numpy-vs-numpy floor of 0.055 (limit 0.083); seeded reruns identical in both arms. Qwen3.8-27B (VLM runner, which never used the text sampler; gpuq 1028-000727, 3 of 4 server arms finished before the 20 min limit): 51.5 / 51.4 / 50.5 tok/s NumPy arm vs 52.3 / 51.3 / 50.8 GPU arm, no difference.

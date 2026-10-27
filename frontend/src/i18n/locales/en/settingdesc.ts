@@ -211,8 +211,6 @@ const settingdesc = {
     "Text Gemma-4 models: assistant drafter directory (KV-shared speculative drafter).",
   YUNSHU_SDPA_CHUNK:
     "M1-M4, head_dim 256: chunk the stock long-prefill attention fallback by query rows so its score tensor stays under 1 GiB (experimental).",
-  YUNSHU_GPU_SAMPLER:
-    "Text models: on-GPU Gumbel-max sampling (no per-token GPU-to-CPU sync).",
   YUNSHU_JUMP_FORWARD:
     "Text models: emit grammar-forced structural tokens of JSON-schema output without a forward pass.",
   YUNSHU_JSON_SCHEMA_ENGINE:
