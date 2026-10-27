@@ -94,6 +94,11 @@ def is_ple_tensor(key: str) -> bool:
     return PLE_MARKER in key
 
 
+def is_ple_scale(key: str) -> bool:
+    """The per-table scale tensor (``...ngram_embedding.weight_scale``, see ple_scale)."""
+    return key.endswith(".ple.ple_embedding.ngram_embedding.weight_scale")
+
+
 def bytes_read_from_files(model_path) -> int:
     """Bytes of the PLE table ``external_ple`` will leave on disk for this pack (0 when it does not
     apply), from the safetensors headers alone, so the load-time memory plan does not count them."""

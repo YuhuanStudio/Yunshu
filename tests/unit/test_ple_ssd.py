@@ -95,3 +95,9 @@ def test_memory_plan_does_not_count_the_table(pack, monkeypatch):
     assert memory_admission.weights_bytes_on_disk(path) == on_disk - 5000
     monkeypatch.setenv("YUNSHU_PLE_STORAGE", "memory")
     assert memory_admission.weights_bytes_on_disk(path) == on_disk
+
+
+def test_scale_tensors_are_recognised():
+    scale = "language_model.model.layers.3.ple.ple_embedding.ngram_embedding.weight_scale"
+    assert ple_ssd.is_ple_scale(scale) and not ple_ssd.is_ple_tensor(scale)
+    assert not ple_ssd.is_ple_scale(PLE)
