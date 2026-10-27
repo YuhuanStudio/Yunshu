@@ -6,6 +6,8 @@ Replicate qwen3_5's singleton extract/merge metadata while leaving custom,
 quantized, padded, multi-row, and speculative state on upstream's path.
 """
 
+import contextlib
+
 
 def _left_pad_is_zero(source) -> bool:
     """``left_padding`` of a one-row cache is zero. Reading it is a device sync per layer per step, but
@@ -15,10 +17,8 @@ def _left_pad_is_zero(source) -> bool:
     memo = getattr(source, "_yv_left_pad_zero", None)
     if memo is None or memo[0] is not pad:
         memo = (pad, int(pad.item()) == 0)
-        try:
+        with contextlib.suppress(AttributeError):
             source._yv_left_pad_zero = memo
-        except AttributeError:
-            pass
     return memo[1]
 
 
