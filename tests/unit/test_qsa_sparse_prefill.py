@@ -97,3 +97,37 @@ def test_short_prefix_rows_attend_every_key():
     got = np.array(qsp.attend(q, k, v, blocks, ends, scale).astype(mx.float32))
     ref = reference(q, k, v, blocks, ends, scale)
     assert np.abs(got - ref).max() < 3e-2
+
+
+def test_dispatch_routes_eligible_prefill_and_falls_back_otherwise(monkeypatch):
+    from mlx_vlm.models.qwen4_exp import language as lang
+
+    seen = []
+
+    def original(queries, keys, values, block_indices, query_ends, **kw):
+        seen.append(kw)
+        return queries
+
+    monkeypatch.setattr(lang, "dispatch_qsa_attention", original)
+    monkeypatch.setitem(qsp.COUNTS, "engaged", 0)
+    monkeypatch.setitem(qsp.COUNTS, "fallback", 0)
+    assert qsp.install() and qsp.install()
+    scale = D**-0.5
+    q, k, v, blocks, ends = make(rows=64, keys=1200, seed=4)
+    kw = dict(
+        cache=None,
+        scale=scale,
+        block_size=BLOCK,
+        causal=True,
+        mask=None,
+        mask_factory=None,
+    )
+    got = lang.dispatch_qsa_attention(q, k, v, blocks, ends, **kw)
+    assert mx.array_equal(got, qsp.attend(q, k, v, blocks, ends, scale)).item()
+    assert qsp.COUNTS == {"engaged": 1, "fallback": 0} and not seen
+    # a quantized cache hands over tuples; a decode step is not a prefill call: both keep upstream's path
+    lang.dispatch_qsa_attention(q, (k, k), (v, v), blocks, ends, **kw)
+    lang.dispatch_qsa_attention(
+        q[:, :, :1], k, v, blocks[:, :1], ends[:, :1], allow_sparse_decode=True, **kw
+    )
+    assert qsp.COUNTS == {"engaged": 1, "fallback": 1} and len(seen) == 2

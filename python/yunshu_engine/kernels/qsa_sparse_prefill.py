@@ -106,6 +106,7 @@ _SOURCE = r"""
   constexpr int D = 256, H = 24, GQA = 12, BK = 32, DS = 64, NB = 512;
   constexpr float masked = -3.402823466e+38f;
   const int T = int(Q_shape[2]);
+  const long KROW = long(K_strides[2]), VROW = long(V_strides[2]);   // the cache's row stride; columns are contiguous
   const int r = int(threadgroup_position_in_grid.x), g = int(threadgroup_position_in_grid.y);
   const ushort lane = thread_index_in_simdgroup;
   const ushort sg = simdgroup_index_in_threadgroup;
@@ -143,8 +144,8 @@ _SOURCE = r"""
       TF_UNROLL
       for (short e = 0; e < 8; e++) {
         const int c = 16 * d + home.x + (e & 3);
-        k0[e] = Kh[long(key[(e >> 2)]) * D + c];
-        k1[e] = Kh[long(key[2 + (e >> 2)]) * D + c];
+        k0[e] = Kh[long(key[(e >> 2)]) * KROW + c];
+        k1[e] = Kh[long(key[2 + (e >> 2)]) * KROW + c];
       }
       tfp::mma_16x32<false, true>(s[0], s[1], q[d], k0, k1);
     }
@@ -192,7 +193,7 @@ _SOURCE = r"""
         tfp::frag<bfloat> v0, v1;
         TF_UNROLL
         for (short e = 0; e < 8; e++) {
-          const long row = long(key[2 * k + (e >> 2)]) * D;
+          const long row = long(key[2 * k + (e >> 2)]) * VROW;
           const int c = 16 * d + home.x + TF_COL(e);
           v0[e] = Vh[row + c];
           v1[e] = Vh[row + c + 16];
@@ -258,15 +259,13 @@ def eligible(
         and queries.shape[2] > 2
         and queries.shape[3] == D
         and queries.dtype == mx.bfloat16
+        and isinstance(keys, mx.array)
+        and isinstance(values, mx.array)
         and keys.dtype == mx.bfloat16
         and values.dtype == mx.bfloat16
         and keys.shape[:2] == (1, KV)
         and keys.shape[3] == D
         and keys.shape == values.shape
-        and keys.strides[3] == 1
-        and keys.strides[2] == D
-        and values.strides[3] == 1
-        and values.strides[2] == D
         and block_indices.shape[-1] == TOPK
         and block_size == BLOCK
         and ready()
