@@ -42,8 +42,6 @@ const docs: Shape<typeof zh> = {
   "actions.claude": "Claude",
   "reference.link": "OpenAPI ↗",
   sse: "服务器发送事件（SSE）",
-  "nav.label": "文档目录",
-  "nav.jump": "跳到文档页面",
   "toc.title": "本页内容",
   prev: "上一页",
   next: "下一页",
@@ -61,13 +59,18 @@ const docs: Shape<typeof zh> = {
   "actions.copy": "复制 Markdown",
   "actions.copied": "已复制",
   "actions.failed": "无法复制此页",
-  breadcrumb: "文档路径",
   updated: "最后更新",
   reference: "自动生成的 API 参考",
   "reference.description":
     "由引擎 OpenAPI schema 生成的交互参考。请求通过此 console 的同源代理。",
   "reference.guides": "端点指南",
   "reference.operation": "API 操作",
+  "fd.openSidebar": "打开文档目录",
+  "fd.closeSidebar": "关闭文档目录",
+  "fd.noHeadings": "这一页没有章节",
+  "fd.copyText": "复制代码",
+  "fd.copiedText": "已复制代码",
+  "fd.collapse": "收起文档目录",
 };
 
 export default docs;
