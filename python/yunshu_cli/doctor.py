@@ -333,7 +333,9 @@ def check_speculative(model: str) -> list[Check]:
     warning = unindexed_mtp_warning(str(cfg_path.parent))
     if warning:
         return [Check("speculative", "warn", warning)]
-    family = cfg.get("model_type") in ("qwen3_5", "qwen3_6", "qwen3_5_moe")
+    from yunshu_engine.vlm_engine import VLMEngine
+
+    family = cfg.get("model_type") in VLMEngine._SPEC_MODEL_TYPES
     choice = spec_select.choose(
         cfg,
         spec_family=family,
