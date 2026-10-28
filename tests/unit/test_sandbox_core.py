@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from yunshu_engine.paths import private_media_path
+from yunshu_engine.paths import private_media_path, private_media_paths
 from yunshu_gateway.sandbox import containers as cont
 from yunshu_gateway.sandbox.executor import CodeExecutor, ExecResult, model_text
 from yunshu_gateway.sandbox.srt import (
@@ -43,7 +43,7 @@ def test_settings_default_is_closed(tmp_path):
     fs = s["filesystem"]
     assert fs["allowWrite"] == [str(tmp_path / "c")]
     assert (
-        fs["denyRead"] == [*DENY_READ_ROOTS, str(tmp_path), private_media_path()]
+        fs["denyRead"] == [*DENY_READ_ROOTS, str(tmp_path), *private_media_paths()]
         and "/Users" in fs["denyRead"]
     )
     assert str(tmp_path / "c") in fs["allowRead"]
