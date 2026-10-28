@@ -6,6 +6,21 @@ Replicate qwen3_5's singleton extract/merge metadata while leaving custom,
 quantized, padded, multi-row, and speculative state on upstream's path.
 """
 
+import contextlib
+
+
+def _left_pad_is_zero(source) -> bool:
+    """``left_padding`` of a one-row cache is zero. Reading it is a device sync per layer per step, but
+    the array is only ever replaced (filter / extend / prepare), never edited in place, so the answer
+    is kept with the array object it was read from."""
+    pad = source.left_padding
+    memo = getattr(source, "_yv_left_pad_zero", None)
+    if memo is None or memo[0] is not pad:
+        memo = (pad, int(pad.item()) == 0)
+        with contextlib.suppress(AttributeError):
+            source._yv_left_pad_zero = memo
+    return memo[1]
+
 
 def extract_rows(caches):
     import weakref
@@ -18,7 +33,7 @@ def extract_rows(caches):
         if type(source) is BatchKVCache:
             if (
                 source.left_padding.size != 1
-                or int(source.left_padding.item()) != 0
+                or not _left_pad_is_zero(source)
                 or source._right_padding is not None
                 or (source.keys is None) != (source.values is None)
             ):

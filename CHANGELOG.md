@@ -56,6 +56,16 @@ tested memory guidance for 128 GB and tight hosts. Outputs of speculation on and
 - New setting `YUNSHU_CONSOLE_PAUSE_FILE`: the console sends no request to any engine while the file says so; gpuq
   writes it for timing jobs, so an A/B is not perturbed by a one-sided monitor.
 - Dependencies were synced (28 upgrades, nothing pinned).
+- Loopback-bound servers refuse a non-loopback `Host` and cross-site POST/PUT/PATCH/DELETE (DNS rebinding);
+  `YUNSHU_ALLOWED_HOSTS` adds names, `*` disables. Managed API keys are their own actors: an infer-scope key no longer
+  reads or cancels other keys' stored responses, containers or requests. 20 failed authentications a minute from one
+  address give `429`. Request-supplied MCP connector servers may not reach private or loopback addresses unless
+  `YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE` is on.
+- Text-only requests have no default 300 s generation deadline; a zero-token prompt is a `400 empty_prompt` on every
+  path; a missing `previous_response_id` ancestor is a `404`; a malformed Anthropic `tool_choice` is a `400`.
+- Removed: `YUNSHU_ROUND_DRIVER`, `YUNSHU_ROUND_PREFILL_CHUNK` and `YUNSHU_MTP_ROW_EXACT` (measured slower than the
+  default), and unused dependencies; mlx-lm is now >= 0.32.2. New: `YUNSHU_GRAMMAR_PREWARM` (on; about 0.45 GiB per
+  mask width). Review notes and the per-path merge checklist: [handoff](docs/reports/HANDOFF_REVIEW_2026-10-26.md).
 
 ### Performance
 
@@ -86,6 +96,18 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Added
 
+- Qwen3.8-Flash-Next reads its n-gram embedding (PLE) table from the checkpoint files on demand by default
+  (`YUNSHU_PLE_STORAGE=ssd`, stable; `memory` loads the table like any weight). Measured on the raw Jundot
+  oQ2.5e-mtp pack: peak 82.9 -> 54.5 GB, macOS-compressed memory 30 GB -> 0, text identical to the in-memory pack for
+  DFlash2 and MTP. In 3 interleaved reps, DFlash2 81.6 vs 82.4 and MTP 84.3 vs 85.4 tok/s (noise). The memory plan no
+  longer counts the table. [Guide](docs/guides/MODEL_SUPPORT.md).
+- Qwen3.8-Flash-Next sampled requests keep MTP speculative decode (position-keyed sampled verify; the logits wrapper
+  installs on the first sampled request, so greedy-only servers never wrap). Flash-Next oQ2.5e PLE-SSD, solo seeded
+  sampled: spec on == spec off in 18 of 18 cells at 4K/32K, +12-20% tok/s (4K 62-70 vs 55-59; 32K 53-55 vs 47-48).
+  Concurrent row-QSA identity remains open until the batched sparse-QSA kernel.
+- Qwen3.8-Flash-Next greedy requests that ask for `logprobs` keep MTP speculative decode. Targets are the argmax of the
+  verify window's float32 normalized rows, and `logprobs` and `top_logprobs` are read from committed rows; spec on and
+  off give bit-equal logprobs. Greedy requests without logprobs are unchanged, and 27B is unchanged.
 - `YUNSHU_ANE_FFN_SPLIT=splash` (off by default, lossy): a port of Splash's Neural Engine FFN split. Each dense FFN layer of a
   Qwen3.5-family prefill step runs about three quarters of its channels on the GPU and the rest as a W8A8 program on the Apple
   Neural Engine at the same time, through the private AppleNeuralEngine API on IOSurface memory shared with Metal and a
@@ -156,9 +178,32 @@ and cold 32K TTFT versus Splash 1.3.2.
 - Development infrastructure: the unit suite runs on 2 x 12 pytest-xdist workers with serial tests
   afterwards (`ci-local` 595 -> 157 s).
 - gpuq jobs pending at priority >= 0 rise one step after 30 min; swap contention is attributed to the job's own memory.
+- Host memory reads no longer start a subprocess on the request path: memory admission reads the page counts with
+  `host_statistics64` (was `vm_stat`, a fork and exec of the serving process on the MLX executor at every admission),
+  and the request logging middleware reads `hw.memsize` once (was `sysctl` per request). The found cost on back-to-back
+  27B requests was 8-17 ms from submit to admit for warm 1K code (prose 0.3 ms). `vm_stat` stays as the fallback.
+- Prompt tails of at most 16 rows use BQ16 attention with one query simdgroup (BK32 and the D-split order are unchanged).
+  27B + DFlash2 at 32K-128K: identity, APC, speed, memory and longqa (30/30) pass; the measured gain is small (32K code
+  warm TTFT 0.197 -> 0.195 s, -1.0%; decode and cold unchanged).
+- Sampled requests keep speculative decode under concurrency on 27B: the lane runs a full round per slice when a peer
+  is present instead of one token, and a promoted single ragged row becomes a lane cache view so the keyed fast tree
+  engages. 3-rep medians: candidate >= base in every stagger and uneven cell at 4K/32K; seeded digests equal spec off.
+- Test and CI speed: `just test-unit` runs pytest-xdist with a serial pass after it, as `ci-local` does (full unit
+  suite 15 min -> about 2.75 min); a nightly random-order pass (`scripts/dev/ci-random-order`) finds order dependence.
+  Order-dependence fixes cover leaked `YUNSHU_UDS`, gateway engine globals and fake-engine cancel accounting.
+  `test_custom_tasks_reference_passes` 78 s -> 2 s. `memory_census` now skips a dead `weakref.proxy` instead of
+  failing `/memory-census`.
+- `yv` speed: the base arm's longqa needle cells are shared across runs on the same base commit, environment,
+  checkpoint, prompt bytes, runtime and harness (the candidate always re-runs; speed stays interleaved).
 
 ### Fixed
 
+- Console docs pages: the Tailwind utilities stylesheet is imported into the utilities layer, so it no longer overrides
+  console and YunUI styles once the docs chunk prewarms (the iPhone burst replay moved 3 px; the WebKit log tail lost
+  its scroll). Full browser suite 631 passed.
+- Flash-Next: QSA caches are rejected before the dense speculative-lane field probe, which raised on them.
+- Memory admission: the free-page sum counted speculative pages twice (about 1.9 GB optimistic on an M5); it now agrees
+  with `vm_stat` to within a few MB.
 - `GET /v1/yunshu/host` is a console read like `/v1/yunshu/status`: with no token configured it answers 200
   (it answered 401 on every console poll); with a token it still needs the token.
 - Console round 2: Requests no longer reserves 42 rem of empty table (Active shows recent finished requests, the details column defaults to the newest request); Diagnostics, Models and the health line read a pause / restart as "waiting", never as a fault; history shows on a page opened during an outage; the usual-restart estimate ignores outages over 10 min; pipeline chips no longer reserve a count slot; new Playwright spec for paused / restarting states.
@@ -178,10 +223,19 @@ and cold 32K TTFT versus Splash 1.3.2.
   (2x32K concurrent decode no longer drops to 11-13 tok/s).
 - CI: console layout under load, focus races and a hybrid SSD budget test that read the real volume.
 - Verified code-review fixes in the gateway, infrastructure and remaining modules.
+- Realtime `server_vad` no longer ends a turn when short pauses add up to the silence window, idle silence no longer
+  overflows the input buffer, and a cancelled reply stays in the conversation. Token budgets count natively rendered
+  tool schemas. Grammar dead ends, full stream queues and failed admissions fail only their own request. The SSD
+  prefix cache no longer keeps every written prompt in RAM. The serving paths carry the same fixes, with the
+  exceptions listed in the [handoff](docs/reports/HANDOFF_REVIEW_2026-10-26.md#what-a-unified-path-must-keep).
 
 ### Security
 
-- No security-specific changes in this release.
+- Special-token strings the chat template itself writes (turn/role markers) stay text when they appear in user or
+  tool-result text, so a user cannot close their turn and open a system one (system and assistant text, including
+  replayed tool calls, is left as written); `YUNSHU_MCP_SERVERS` is masked like other secrets; the code-execution editor opens
+  paths with `O_NOFOLLOW` and refuses FIFOs; decoded request media live in a private directory sandboxed code cannot
+  read. The console blocks remote images in model output.
 
 [Full changelog: v0.1.5…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.5...main)
 
@@ -494,15 +548,15 @@ M1–M4 Macs.
 ### Highlights
 
 - Get complete JSON responses faster: warm decode **23.4 → 111.4 tok/s** with
-  identical output and logprobs in the recorded Qwen3.8-27B test. [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+  identical output and logprobs in the recorded Qwen3.8-27B test. [Measurements](docs/reports/PERF_TREND.md#2026-10-03-constrained-speculation-與-accepted-target-logprobscodex-cspec).
 - Start follow-up answers sooner: 32K code first-token latency **900 → 721 ms**;
-  8K code **569 → 512 ms**. [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+  8K code **569 → 512 ms**. [Measurements](docs/reports/PERF_TREND.md#2026-10-03----native-singleton-kv-capacity-bounded-allocator-pool-wider-invariant-prefill-dispatch).
 - Speed up repetitive follow-up code: raising the verified prompt-copy cap from
   8 to 16 improved the measured 8K code turn from **106.1 → 129.2 tok/s**.
-  [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+  [Measurements](docs/reports/PERF_TREND.md#2026-10-03--prompt-copy-maximum-8--16-rows-codex-wide3).
 - Generate repetitive code faster with verified prompt copies: DFlash 32K code
   **72.74 → 82.56 tok/s**; prose results vary by context.
-  [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+  [Measurements](docs/reports/PERF_TREND.md#2026-10-03--prompt-copy-maximum-8--16-rows-codex-wide3).
 - Correct speculative decoding on M1–M4 Macs: output now matches plain decoding there
   too, with M5 speed unchanged (27B, 20 cells digest-equal, −0.4% to +3.0%).
 
@@ -529,7 +583,7 @@ M1–M4 Macs.
 All rows use M5 Max and Jundot/Qwen3.8-27B-oQ4e-mtp. These are separate
 same-checkpoint experiments, not cumulative gains or promises for every model.
 October 3 results use three interleaved clean repetitions. Sources and limitations:
-[BENCHMARKS](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+[PERF_TREND](docs/reports/PERF_TREND.md).
 
 | Machine | Model / mode | Metric / workload | Before → after | Recorded source |
 |---|---|---|---|---|

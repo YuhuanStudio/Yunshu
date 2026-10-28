@@ -139,7 +139,7 @@ SUITES = {
         "stages": ["preflight", "smoke", "identity", "apc", "speed"],
         "ctx": [1024, 8192],
         # spec on == off is opt-in (--spec-off): on main the server-level 'off' path differs
-        # from MTP and DFlash in every 27B 1K cell (docs/research/notes/BACKLOG.md)
+        # from MTP and DFlash in every 27B 1K cell (2026-10 measurement)
         "spec_off": False,
         "reps": 3,
     },

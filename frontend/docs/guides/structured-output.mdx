@@ -213,7 +213,7 @@ How the tools reach the model depends on its chat template, and `contract.tools.
 | must call some tool | `"required"` | `"required"` | `{"type": "any"}` |
 | must call this tool | `{"type": "function", "function": {"name": "..."}}` | `{"type": "function", "name": "..."}` | `{"type": "tool", "name": "..."}` |
 
-A `tool_choice` of `required` or a named function needs a non-empty `tools` list, and a named function must be one of the declared tools; otherwise the request is a `400`. The `allowed_tools` form is folded into `tools` plus a mode on the chat and Responses routes. A forced choice is always enforced by constrained decoding, so the call is guaranteed to exist and to name the right tool with arguments matching its schema. For `auto`, calls are decoded freely and repaired after the fact; the experimental setting `YUNSHU_TOOL_GRAMMAR` extends the constrained decoding to `auto` as well and is off by default.
+A `tool_choice` of `required` or a named function needs a non-empty `tools` list, and a named function must be one of the declared tools; otherwise the request is a `400`. The `allowed_tools` form is folded into `tools` plus a mode on the chat and Responses routes. A forced choice is always enforced by constrained decoding, so the call is guaranteed to exist and to name the right tool with arguments matching its schema.  For `auto`, calls are decoded freely and repaired after the fact.
 
 ### Parallel tool calls
 

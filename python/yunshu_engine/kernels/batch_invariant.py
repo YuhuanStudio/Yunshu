@@ -6,7 +6,7 @@ Every target matmul for decode (1 row) and speculative verify (2-8 rows) goes
 through one kernel whose per-row result does not depend on how many rows share
 the call: oMLX's ``sg8`` simdgroup-matrix quantized matmul, fed at least 4 rows
 (zero-padded; measured row-invariant for 4..8 rows and for a padded single row,
-docs/research/runs/2026-09-28-matrix/sg8-invariance.jsonl). Layers ``sg8`` does
+2026-09-28 sg8 invariance sweep). Layers ``sg8`` does
 not cover (tiny GDN ``in_proj_a/b``) use mlx-vlm's exact verify path, whose rows
 already equal single-row decode. GatedDeltaNet and attention verify paths are the
 bit-exact ones from ``kernels.omlx``.
@@ -43,6 +43,39 @@ def set_active(active: bool) -> None:
     per request on the single MLX thread, before its graphs are built.
     """
     _STATE["active"] = bool(active)
+
+
+def scaled_linear_types() -> tuple:
+    """mlx-vlm's ``ScaledQuantizedLinear`` (NVFP4 wrapper with a global scale) if the installed
+    version has it; mlx-vlm 63fc979 admits it to the verify-linear gate (all-singleton rows)."""
+    try:
+        from mlx_vlm.quantization.nvfp4 import ScaledQuantizedLinear
+    except ImportError:
+        return ()
+    return (ScaledQuantizedLinear,)
+
+
+def scaled_rows(linear: Any, x: mx.array) -> mx.array | None:
+    """Rows of a scaled NVFP4 projection, each through the single-token call decode makes
+    (mlx-vlm ``_target_verify_singletons``: its FP32 projection and global scale round once per
+    row). None when ``linear`` is not one or the call is a single row."""
+    types = scaled_linear_types()
+    if (
+        not types
+        or not isinstance(linear, types)
+        or x.ndim != 3
+        or x.shape[0] * x.shape[1] == 1
+    ):
+        return None
+    return mx.concatenate(
+        [
+            mx.concatenate(
+                [linear(x[b : b + 1, t : t + 1]) for t in range(x.shape[1])], axis=1
+            )
+            for b in range(x.shape[0])
+        ],
+        axis=0,
+    )
 
 
 def is_installed() -> bool:
@@ -160,6 +193,9 @@ def install(language_model: Any, model: Any = None, packed: bool = False) -> dic
                 return mx.concatenate(
                     [linear(x[:, t : t + 1]) for t in range(x.shape[1])], axis=1
                 )
+            scaled = scaled_rows(linear, x)
+            if scaled is not None:
+                return scaled
             if not isinstance(linear, nn.QuantizedLinear):
                 return linear(x)
             if x.ndim != 3 or x.shape[0] * x.shape[1] == 1:

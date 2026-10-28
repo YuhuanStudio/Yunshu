@@ -8,7 +8,7 @@ outputs differ by at most one ulp; the fp32 state by ~0.2% of its scale), so it 
 chunks of at least ``MIN_TOKENS`` tokens on the legacy path. Qualified split-invariant
 prefill uses it for every length inside an explicit prompt scope, with identity padding to 64
 rows. Its id is part of every APC
-key (``kernel_id``). Decode, speculative verify and the round driver never take it.
+key (``kernel_id``). Decode and speculative verify never take it.
 """
 
 from __future__ import annotations
@@ -20,10 +20,12 @@ from typing import Any
 
 import mlx.core as mx
 
+from . import gdn_qk_eps
+
 logger = logging.getLogger(__name__)
 
 MIN_TOKENS = 64
-_STATE = {"installed": False, "enabled": False, "bypass": 0, "split": False}
+_STATE = {"installed": False, "enabled": False, "split": False}
 
 
 _PREFILL: ContextVar[bool] = ContextVar("split_invariant_prefill", default=False)
@@ -128,7 +130,7 @@ for (uint i=0; i<4; ++i) {
     ss += vals[i] * vals[i];
 }
 ss = simd_sum(ss);
-float inv = metal::precise::rsqrt(ss / 128.0f + 1e-6f);
+float inv = metal::precise::rsqrt(ss / 128.0f + __QK_RMS_EPS__);
 for (uint i=0; i<4; ++i) {
     bfloat16_t normed = bfloat16_t(vals[i] * inv);
     out[row * 128 + lane * 4 + i] = bfloat16_t(float(normed) * float(bfloat16_t(INVERSE ? 0.0078125f : 0.08838834764831845f)));
@@ -145,7 +147,7 @@ def fused_norm_scale(x, *, inverse: bool):
             name="yunshu_gdn_norm_scale",
             input_names=["x"],
             output_names=["out"],
-            source=_NORM_SCALE_SOURCE,
+            source=gdn_qk_eps.render(_NORM_SCALE_SOURCE),
             ensure_row_contiguous=False,
         )
     rows = x.size // 128
@@ -347,18 +349,6 @@ def chunked_padded(q, k, v, g, beta, state, mask=None):
     return out[:, :rows], state
 
 
-@contextlib.contextmanager
-def step_kernel():
-    """Run ``gated_delta_kernel`` calls inside the block on the per-token step
-    kernel (the round driver's prefill: a token's bits must not depend on how
-    the prompt was cut into spans)."""
-    _STATE["bypass"] += 1
-    try:
-        yield
-    finally:
-        _STATE["bypass"] -= 1
-
-
 def kernel_id() -> str:
     if split_enabled():
         return "gdn-chunked-pad64-v1"
@@ -375,7 +365,7 @@ def install() -> bool:
         step = gd.gated_delta_kernel
 
         def gated_delta_kernel(q, k, v, g, beta, state, mask=None):
-            if split_enabled() and in_prefill_math() and not _STATE["bypass"]:
+            if split_enabled() and in_prefill_math():
                 if g.ndim != 3 or state is None:
                     raise ValueError(
                         "split-invariant prefill needs scalar gates and fp32 state"
@@ -383,7 +373,6 @@ def install() -> bool:
                 return chunked_padded(q, k, v, g, beta, state, mask)
             if (
                 _STATE["enabled"]
-                and not _STATE["bypass"]
                 and q.shape[1] >= MIN_TOKENS
                 and g.ndim == 3
                 and state is not None

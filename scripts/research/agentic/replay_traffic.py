@@ -2,7 +2,7 @@
 fresh server and report per-request TTFT, decode rate and speculative counters.
 
     replay_traffic.py --serve yunshu --checkpoint $M --bodies A.json B.json --n 3 \
-        [--temperature 0] [--title BODY.json] [--env YUNSHU_ROUND_DRIVER=1] --out result.jsonl
+        [--temperature 0] [--title BODY.json] [--env NAME=VALUE] --out result.jsonl
 
 Each body is sent ``--n`` times serially (the first one is cold, later ones hit the prefix cache).
 ``--title`` fires a second request concurrently with the first send of every body, like the

@@ -59,6 +59,10 @@ def _maybe_quantize_kv_cache(
             continue
         if hasattr(c, "to_quantized") and hasattr(c, "offset"):
             if c.offset >= quantized_kv_start:
+                keys = getattr(c, "keys", None)
+                if keys is not None and keys.shape[-1] % kv_group_size:
+                    # head width not divisible by the group: to_quantized would fail
+                    continue
                 prompt_cache[i] = c.to_quantized(group_size=kv_group_size, bits=kv_bits)
 
 

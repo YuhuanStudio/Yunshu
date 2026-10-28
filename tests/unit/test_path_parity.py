@@ -37,7 +37,7 @@ OPT_PATTERNS = re.compile(
     r"^(draft_vocab|copy_.*|dflash_.*|spec_.*|adaptive_spec|apc_.*|mtp_.*|tree_.*|"
     r".*ngram.*|suffix_.*|cache_(?:decode|prefill|restore)|keyed_sampling|"
     r"constrained_spec|grammar_.*|kv_(?:quantization|optimizations)|turbo_quant|"
-    r"n_confirmed_patch|mlxvlm_mtp|tool_.*grammar|tool_call_grammar)$"
+    r"mlxvlm_mtp|tool_.*grammar|tool_call_grammar)$"
 )
 
 
@@ -160,8 +160,7 @@ def test_new_optimization_modules_need_a_decision():
         if parts[0] != "yunshu_engine" or p.name == "__init__.py":
             continue
         in_kernels = len(parts) > 1 and parts[1] == "kernels"
-        in_driver = len(parts) > 1 and parts[1] == "round_driver"
-        if not (in_kernels or in_driver or OPT_PATTERNS.match(parts[-1])):
+        if not (in_kernels or OPT_PATTERNS.match(parts[-1])):
             continue
         if rel in known or any(rel.startswith(k.rstrip("/") + "/") for k in known):
             continue
@@ -179,10 +178,7 @@ def test_orphan_modules_are_exactly_the_declared_ones():
         for name, p in _modules().items()
         if name.startswith("yunshu_engine.")
         and p.name != "__init__.py"
-        and (
-            name.split(".")[1] in ("kernels", "round_driver")
-            or OPT_PATTERNS.match(name.split(".")[-1])
-        )
+        and (name.split(".")[1] == "kernels" or OPT_PATTERNS.match(name.split(".")[-1]))
     }
     orphans = {rel for rel, name in pattern_modules.items() if not users[name]}
     declared = set(MATRIX["orphans"])
@@ -226,9 +222,9 @@ def test_feature_ids_are_slugs(fid):
 
 
 # User 2026-09-28 / 2026-10-24: no more paths, and no new feature that only works on a benchmark-shaped path. The
-# guard above only recorded divergence (55 gap cells, never driven down); these two make it block. Path convergence
-# plan: docs/research/notes/PATH_CONVERGENCE.md (the path set may only shrink as paths merge into the one runner).
-PATHS_2026_10_24 = {"mtp", "dflash", "driver", "batch", "generic", "text", "loop"}
+# guard above only recorded divergence (55 gap cells, never driven down); these two make it block. The path set
+# may only shrink as paths merge into the one runner.
+PATHS_2026_10_24 = {"mtp", "dflash", "batch", "generic", "text", "loop"}
 FEATURES_2026_10_24 = {
     "apc_prefix_cache",
     "batch_invariant_kernels",

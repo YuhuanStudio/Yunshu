@@ -1,0 +1,21 @@
+#!/bin/sh
+# Nightly order-dependence pass: the unit suite in a random order (pytest-randomly), parallel like ci-local.
+#   scripts/dev/ci-random-order [SEED]        # SEED defaults to today's date number, printed so a failure replays
+# A test that passes in the normal order and fails here depends on what ran before it (shared module state,
+# logger levels, sys.path, MLX device). Replay with the same SEED and `-p randomly` (pytest --randomly-seed=SEED); a failing seed is a bug in the test or the code, never retried to green.
+# pytest-randomly is installed outside the lockfile into YUNSHU_RANDOM_TOOLS (uv pip install --no-deps --target).
+# Heavy CPU: run it through gpuq (gpuq run --label ci-random-order -- scripts/dev/ci-random-order).
+set -u
+SEED="${1:-$(date +%Y%m%d)}"
+TOOLS="${YUNSHU_RANDOM_TOOLS:-/Volumes/P5Plus/yunshu-build/periph-pytools}"
+PY="${YUNSHU_PY:-/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python}"
+[ -d "$TOOLS/pytest_randomly" ] || { echo "ci-random-order: no pytest-randomly in $TOOLS"; exit 2; }
+echo "ci-random-order: seed $SEED"
+PYTHONPATH="python:$TOOLS" "$PY" -m pytest tests/unit -q --tb=short -p no:cacheprovider -p randomly \
+  -n "${YUNSHU_CI_WORKERS:-8}" --dist loadfile -m "not serial" \
+  --randomly-seed="$SEED" --durations=40
+rc=$?
+PYTHONPATH="python:$TOOLS" "$PY" -m pytest tests/unit -q --tb=short -p no:cacheprovider -p randomly -m serial --randomly-seed="$SEED"
+s=$?; [ "$rc" -ne 0 ] || rc=$s
+echo "ci-random-order: seed $SEED rc $rc"
+exit "$rc"

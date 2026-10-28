@@ -2519,6 +2519,61 @@ def apply_json_constraint(
     return result
 
 
+def apply_allowed_mask_from(constraint: Any, tokenizer: Any, logits: Any) -> Any | None:
+    """Mask ``logits`` with the constraint's ``allowed_mask`` when it offers one, else ``None``
+    (the caller then uses ``get_allowed_tokens``). An all-``-inf`` result is a dead end."""
+    fast = getattr(constraint, "allowed_mask", None)
+    if fast is None:
+        return None
+    import mlx.core as mx
+
+    try:
+        mask = fast(tokenizer, logits.shape[-1])
+    except Exception:
+        logger.debug("allowed_mask failed; using the allowed-token list", exc_info=True)
+        return None
+    if not isinstance(mask, mx.array) or mask.shape[-1] != logits.shape[-1]:
+        return None
+    result = mx.where(mask, logits, mx.array(float("-inf"), dtype=logits.dtype))
+    if not mx.all(mx.any(mx.isfinite(result), axis=-1)).item():
+        raise ConstrainedDecodingError(
+            "constrained decoding dead end: every allowed token has a -inf logit"
+        )
+    return result
+
+
+def allowed_membership(constraint: Any, tokenizer: Any, generated_ids: list[int]):
+    """``tid -> bool`` for the constraint's next-token set, or ``None`` when nothing is
+    allowed. Draft filters (n-gram speculation) test a few draft ids against the set;
+    building ``set(get_allowed_tokens(...))`` from a ~240K-id list cost far more than the
+    mask the constraint can hand out directly."""
+    fast = getattr(constraint, "allowed_mask", None)
+    if fast is not None:
+        raw = getattr(tokenizer, "_tokenizer", tokenizer)
+        try:
+            width = len(raw)
+        except TypeError:
+            width = int(getattr(raw, "vocab_size", 0) or 0)
+        mask = None
+        if width > 0:
+            try:
+                mask = fast(tokenizer, width)
+            except Exception:
+                logger.debug(
+                    "allowed_mask failed; using the allowed-token list", exc_info=True
+                )
+        if mask is not None:
+            import numpy as np
+
+            keep = np.array(mask, dtype=np.bool_)
+            if keep.any():
+                return lambda tid: 0 <= tid < keep.shape[0] and bool(keep[tid])
+    allowed = constraint.get_allowed_tokens(tokenizer, generated_ids)
+    if not allowed:
+        return None
+    return set(allowed).__contains__
+
+
 # ── Constrained Sampler ────────────────────────────────────────────────────
 
 
@@ -2543,6 +2598,8 @@ class ConstrainedSampler:
         self._constraint = constraint
         self._tokenizer = tokenizer
         self._generated_ids: list[int] = []
+        # EOS ids of one tokenizer do not change within a request: normalise once, not per token.
+        self._eos_ids: frozenset[int] = frozenset(normalize_eos_ids(tokenizer))
 
     def __call__(self, logits: Any) -> Any:
         """Sample a token with JSON constraint masking.
@@ -2553,12 +2610,23 @@ class ConstrainedSampler:
         Returns:
             mx.array with sampled token ID
         """
+        # A constraint that can hand over a boolean mask (llguidance, JSON string states)
+        # skips expanding the allowed set into a ~240K-id list and scattering it back.
+        masked_logits = apply_allowed_mask_from(
+            self._constraint, self._tokenizer, logits
+        )
         # Get allowed tokens for current state
-        allowed = self._constraint.get_allowed_tokens(
-            self._tokenizer, self._generated_ids
+        allowed = (
+            None
+            if masked_logits is not None
+            else self._constraint.get_allowed_tokens(
+                self._tokenizer, self._generated_ids
+            )
         )
 
-        if allowed:
+        if masked_logits is not None:
+            pass
+        elif allowed:
             # Mask disallowed tokens
             masked_logits = apply_json_constraint(logits, allowed)
         else:
@@ -2580,7 +2648,7 @@ class ConstrainedSampler:
         # Skip advance() for EOS tokens — their decoded text (e.g. "</s>")
         # would corrupt the constraint's text buffer and break
         # checkpoint/rollback correctness.
-        eos_ids = set(normalize_eos_ids(self._tokenizer))
+        eos_ids = self._eos_ids
 
         if token_id not in eos_ids and hasattr(self._constraint, "advance_token"):
             self._constraint.advance_token(token_id)

@@ -630,6 +630,13 @@ def _patch_event(
     return "\n".join(lines).encode("utf-8")
 
 
+def _gate_conversation(request: Request, conv_id: str) -> None:
+    """A conversation another infer key owns is not found (same rule as /v1/conversations)."""
+    from .routers.responses import _is_admin, _resolve_owner
+
+    get_store().check_access(conv_id, _resolve_owner(request), _is_admin(request))
+
+
 def count_state_items(req, request: Request) -> tuple[list[dict], str | None]:
     """The input items a stateful request would send (conversation items first, compaction items
     expanded) and its remaining ``previous_response_id``, without generating or writing anything:
@@ -646,6 +653,7 @@ def count_state_items(req, request: Request) -> tuple[list[dict], str | None]:
     conv_items: list[dict] = []
     if conv_id:
         try:
+            _gate_conversation(request, conv_id)
             conv_items = _window(get_store().all_items(conv_id))
         except ConversationError as exc:
             exc.param = "conversation"
@@ -671,6 +679,7 @@ async def run_stateful_response(req, request: Request, inner):
         conv_items: list[dict] = []
         if conv_id:
             try:
+                _gate_conversation(request, conv_id)
                 conv_items = _window(get_store().all_items(conv_id))
             except ConversationError as exc:
                 exc.param = "conversation"

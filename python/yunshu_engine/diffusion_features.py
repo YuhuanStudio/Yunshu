@@ -131,9 +131,9 @@ def resolve_lora_file(name: str, search_dir: str = "models") -> str | None:
 
     # Security: this is reachable from an UNTRUSTED image-generation prompt via
     # <lora:NAME:WEIGHT>, so a bare os.path.isfile(name) would load ANY .safetensors on
-    # the host — an absolute path (/Volumes/secret/other_tenant.safetensors) or a ..
-    # escape — letting any authenticated tenant read another tenant's private adapter or
-    # an arbitrary file. Honor a direct path ONLY when it resolves INSIDE search_dir;
+    # the host — an absolute path (/Volumes/secret/other.safetensors) or a ..
+    # escape — letting any authenticated client read an adapter outside the LoRA
+    # directory or an arbitrary file. Honor a direct path ONLY when it resolves INSIDE search_dir;
     # otherwise fall through to the stem/substring search within search_dir.
     _root = os.path.realpath(search_dir)
     if os.path.isfile(name):

@@ -24,7 +24,8 @@
       "commit": "a98d8c8c",
       "license": "Apache-2.0",
       "local_changes": [
-        "imports point at yunshu_engine.kernels.omlx"
+        "imports point at yunshu_engine.kernels.omlx",
+        "RMS-arm epsilon (Qwen3.5 q/k norm) is rendered from kernels/gdn_qk_eps (measured from the installed mlx-vlm _normalize_qk; mlx-vlm b8bf04c changes it to 1e-6/head_dim) instead of a literal"
       ],
       "kind": "vendored",
       "reviewed_commit": "6feea9f95de86c772235af765914e4abb82b236f",
@@ -57,7 +58,10 @@
       "local_changes": [
         "imports point at yunshu_engine.kernels.omlx"
       ],
-      "kind": "vendored"
+      "kind": "vendored",
+      "reviewed_commit": "78fa08bc1aef7290c93c83bb70811547763ebf33",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "KEEP. Upstream changed after the copied commit: 277aad04 makes row_exact_causal_sdpa public with an array keep-mask (MiniMax), and a68b6d1a / 6f243abb size the M1 key splits by real GPU core count. Neither is adopted: Yunshu serves the Qwen3.5 family on M5/NAX, has no M1 route and no MiniMax path, and the local copy is unchanged."
     },
     {
       "path": "python/yunshu_engine/kernels/omlx/qwen35_packed_linear.py",
@@ -92,7 +96,8 @@
       "commit": "a98d8c8c",
       "license": "Apache-2.0",
       "local_changes": [
-        "ported upstream omlx 26375259 (kernel part): qmv_fast_layout(k, n, bits) replaces the K % 512 rule (K % 256 for 6/8-bit)"
+        "ported upstream omlx 26375259 (kernel part): qmv_fast_layout(k, n, bits) replaces the K % 512 rule (K % 256 for 6/8-bit)",
+        "adopted mlx2 1436775: STOCK_QUAD_K = {64, 128} declines in _kernel_supported and _qmv_fast_layout (per-row stock call is exact there)"
       ],
       "why": "row-exact verify projections (one-row qmv arithmetic per row)",
       "kind": "vendored",
@@ -137,7 +142,8 @@
       "local_changes": [
         "imports point at yunshu_engine.kernels.tensorfold (inputs, lane_widen)",
         "lane_matmul takes row_block (rows per threadgroup; bit-identical to the default block, faster at 17-48 rows on wide projections)",
-        "hardware selected once: original M5 fragment source on g17/g18, portable get_multidimensional_index elsewhere; numerical admission only for unknown generations"
+        "hardware selected once: original M5 fragment source on g17/g18, portable get_multidimensional_index elsewhere; numerical admission only for unknown generations",
+        "adopted mlx2 b9db287: slice_offset_ok/max_tensor_slice_offset; untiled weights whose tensor slice() offsets reach 2 GiB are declined in supports(), lane_linear.eligible, int_code_linear.eligible and refused in lane_matmul (Metal slice bug, llama.cpp #28748)"
       ],
       "why": "integer-code tensor-unit matmul (5/6/8-bit via uint8 widening), used by kernels/int_code_linear.py",
       "kind": "vendored",
@@ -432,21 +438,6 @@
     },
     {
       "kind": "derived",
-      "path": "python/yunshu_engine/round_driver/allocate.py",
-      "repo": "https://github.com/ashhart/TensorFold",
-      "clone": "reference/TensorFold",
-      "upstream_paths": [
-        "src/tensorfold/engine/allocate.py"
-      ],
-      "commit": "34bae79a",
-      "license": "MIT",
-      "why": "cost-aware draft allocation across rows",
-      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
-    },
-    {
-      "kind": "derived",
       "path": "python/yunshu_engine/kernels/ragged_attention.py",
       "repo": "https://github.com/jundot/omlx",
       "clone": "reference/omlx",
@@ -471,21 +462,6 @@
       "reviewed_commit": "2c99ee9333821030daf84718b2a76ea28d94ba3c",
       "reviewed_date": "2026-10-09",
       "review_reason": "Reviewed upstream subjects: [Chore] Remove vendored code made redundant by Transformers 5.16.1 (#60623). Candidate logged for the backlog: d8fa463e hybrid Mamba prefix-cache boundary fix, compare with the local exact hybrid checkpoint boundaries. Other commits are server-scale frontend work."
-    },
-    {
-      "kind": "derived",
-      "path": "python/yunshu_engine/mtp_patch.py",
-      "repo": "https://github.com/jundot/omlx",
-      "clone": "reference/omlx",
-      "upstream_paths": [
-        "omlx/patches/mlx_lm_mtp"
-      ],
-      "commit": "deb9f00a",
-      "license": "Apache-2.0",
-      "why": "deprecated port of the oMLX MTP patch (PR 990)",
-      "reviewed_commit": "6feea9f95de86c772235af765914e4abb82b236f",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 source diff review: KEEP; BACKLOG wide: upstream unifies batched DFlash, clips block drafts before grouping, sizes depth stats to drafted window, extends rotating rollback and removes priming switches. Yunshu owns a VLM lane and separate request transactions; wholesale mlx-lm batch-generator transplant is not applicable."
     },
     {
       "kind": "derived",
@@ -542,21 +518,6 @@
       "reviewed_commit": "6feea9f95de86c772235af765914e4abb82b236f",
       "reviewed_date": "2026-10-15",
       "review_reason": "sync016 source diff review: KEEP; BACKLOG memory: new requeue-on-pressure and Splash child-process accounting depend on upstream scheduler/engine-pool contracts; Yunshu is in-process and retains its existing reclaim/abort contract."
-    },
-    {
-      "kind": "derived",
-      "path": "python/yunshu_engine/round_driver/mtp.py",
-      "repo": "https://github.com/Blaizzy/mlx-vlm",
-      "clone": "reference/mlx-vlm",
-      "upstream_paths": [
-        "mlx_vlm/speculative/drafters/qwen3_5_mtp/qwen3_5_mtp.py"
-      ],
-      "commit": "00093678",
-      "license": "MIT",
-      "why": "Qwen3.5 MTP head weights driven per row, upstream draft loop",
-      "reviewed_commit": "4623cf9d2633c5ee2b1ac125eeae51423447c41f",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 source diff review: KEEP + TAKE via mlx-vlm: MoE drafter class selection now uses MoeTextConfig type and bundled-drafter loading. Local round driver still owns exact per-request cache/verify transactions."
     },
     {
       "path": "python/yunshu_engine/constrained_spec.py",
@@ -997,38 +958,6 @@
     },
     {
       "kind": "inspired",
-      "path": "python/yunshu_engine/round_driver/driver.py",
-      "repo": "https://github.com/ashhart/TensorFold",
-      "clone": "reference/TensorFold",
-      "upstream_paths": [
-        "src/tensorfold/engine/lane_engine.py",
-        "src/tensorfold/engine/lane_family.py"
-      ],
-      "commit": "34bae79a",
-      "license": "MIT",
-      "why": "lane round driver structure",
-      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
-    },
-    {
-      "kind": "inspired",
-      "path": "python/yunshu_engine/round_driver/forward.py",
-      "repo": "https://github.com/ashhart/TensorFold",
-      "clone": "reference/TensorFold",
-      "upstream_paths": [
-        "src/tensorfold/kernels/qwen/dense/v1/lane_multi.py",
-        "src/tensorfold/kernels/qwen/dense/v1/lane_glue.py"
-      ],
-      "commit": "34bae79a",
-      "license": "MIT",
-      "why": "packed segment forward over rows",
-      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
-    },
-    {
-      "kind": "inspired",
       "path": "python/yunshu_engine/kernels/ragged_attention.py",
       "repo": "https://github.com/ashhart/TensorFold",
       "clone": "reference/TensorFold",
@@ -1143,18 +1072,6 @@
     },
     {
       "kind": "inspired",
-      "path": "python/yunshu_engine/gpu_ngram.py",
-      "repo": "https://github.com/vllm-project/vllm",
-      "clone": "reference/vllm",
-      "upstream_paths": [
-        "vllm/v1/spec_decode/ngram_proposer_gpu.py"
-      ],
-      "commit": "924707f1",
-      "license": "Apache-2.0",
-      "why": "GPU batch n-gram propose"
-    },
-    {
-      "kind": "inspired",
       "path": "python/yunshu_engine/suffix_proposer.py",
       "repo": "https://github.com/vllm-project/vllm",
       "clone": "reference/vllm",
@@ -1164,21 +1081,6 @@
       "commit": "924707f1",
       "license": "Apache-2.0",
       "why": "suffix decoding proposer"
-    },
-    {
-      "kind": "inspired",
-      "path": "python/yunshu_engine/teacache.py",
-      "repo": "https://github.com/vllm-project/vllm-omni",
-      "clone": "reference/vllm-omni",
-      "upstream_paths": [
-        "vllm_omni/diffusion/cache/teacache"
-      ],
-      "commit": "1b97ff11",
-      "license": "Apache-2.0",
-      "why": "TeaCache config and hook",
-      "reviewed_commit": "ee81f33001922f8d91dd09da0a57ee1531a8df82",
-      "reviewed_date": "2026-10-09",
-      "review_reason": "Reviewed upstream subjects: [Bugfix] Fix missing SenseNova-U1 TeaCache position embeddings (#8260); [Bugfix] Calibrate Z-Image TeaCache coefficients and add ZImageAdapter (#8408). Candidate logged for the backlog: d8fa463e hybrid Mamba prefix-cache boundary fix, compare with the local exact hybrid checkpoint boundaries. Other commits are server-scale frontend work."
     },
     {
       "kind": "inspired",
@@ -1374,22 +1276,6 @@
       "reviewed_commit": "5cfec4cb39deba54210b3ff4d86f2337c7bc10b5",
       "reviewed_date": "2026-10-04",
       "review_reason": "Installed mlx-lm 0.32.0 supplies sampler fixes; local batched engine is legacy opt-in and its request-local sampler remains authoritative. No new batching default."
-    },
-    {
-      "kind": "inspired",
-      "path": "python/yunshu_engine/spec_proposer.py",
-      "repo": "https://github.com/ggml-org/llama.cpp",
-      "clone": "reference/llama.cpp",
-      "upstream_paths": [
-        "common/speculative.cpp",
-        "common/speculative.h"
-      ],
-      "commit": "dc9879cf",
-      "license": "MIT",
-      "why": "common_speculative_state: one proposer interface for n-gram, draft model and MTP",
-      "reviewed_commit": "a0e6dc7384edb8f5d927155e1d26c10b4a310e6d",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 source diff review: KEEP; BACKLOG spec: llama.cpp now forwards image embeddings into MTP and separates draft microbatch size; Yunshu uses prepare_media and native MLX cache transactions, not llama_batch."
     },
     {
       "kind": "inspired",
@@ -1659,6 +1545,21 @@
     },
     {
       "kind": "inspired",
+      "path": "python/yunshu_engine/kernels/sdpa_chunk.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_paths": [
+        "omlx/patches/sdpa256_attention.py"
+      ],
+      "commit": "03bc3dd7",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "omlx forces MLX's fused kernel (different arithmetic from the unfused fallback); Yunshu keeps the stock fallback and only splits query rows against the full key axis under a score budget, so per-row arithmetic is unchanged",
+        "gated to Apple GPU generation < 17; no memory_monitor registration"
+      ]
+    },
+    {
+      "kind": "inspired",
       "path": "python/yunshu_console/docs_ask.py",
       "repo": "https://github.com/oramasearch/orama",
       "clone": "/Volumes/Micron/yunshu-refsync/orama",
@@ -1903,21 +1804,6 @@
     },
     {
       "kind": "patches",
-      "path": "python/yunshu_engine/kernels/lane_virtual.py",
-      "repo": "https://github.com/Blaizzy/mlx-vlm",
-      "clone": "reference/mlx-vlm",
-      "package": "mlx-vlm",
-      "module": "mlx_vlm.models.qwen3_5.speculative_verifier",
-      "symbol": "Qwen3_5BatchInvariantForward._linears",
-      "signature": "(self, linears, x: mx.array)",
-      "license": "MIT",
-      "commit": "v0.7.6",
-      "why": "Qwen4-Exp's verify forward inherits this method; lane_virtual wraps the inherited method on Qwen4ExpBatchInvariantForward (not the base class) so the GDN qkv|z|b|a and attention q|k|v projections of lane-converted layers share one launch per split and format, bit-identical to the separate lane calls; any other member mix falls through to this method",
-      "source_sha256": "1f44efb5714938afee3c700508cafd98770f1e6ab1a84718ef59fdf444ca782b",
-      "installed_version": "0.7.8"
-    },
-    {
-      "kind": "patches",
       "path": "python/yunshu_engine/dflash_context.py",
       "repo": "https://github.com/Blaizzy/mlx-vlm",
       "clone": "reference/mlx-vlm",
@@ -2037,7 +1923,7 @@
       "signature": "(self)",
       "license": "MIT",
       "commit": "v0.7.3",
-      "why": "reads self.uids for per-row sampling",
+      "why": "reads self.uids for per-row sampling; top_logprobs taken from the sampler's logprobs by one batched device argpartition instead of the upstream full-vocab argsort",
       "source_sha256": "f4aa6a2b6644c0875f1bbb240ad1676e873bdd12c2396c3388caf5e50b8d180d",
       "installed_version": "0.7.8"
     },
@@ -2052,56 +1938,11 @@
       "signature": "(self, *args, **kwargs)",
       "license": "MIT",
       "commit": "v0.7.3",
-      "why": "reads self.uids for per-row sampling",
+      "why": "reads self.uids for per-row sampling; top_logprobs taken from the sampler's logprobs by one batched device argpartition instead of the upstream full-vocab argsort",
       "source_sha256": "b7bbcf0a76ad32bfc5d61b125ffdad67c7e27057c8611693aad40c7601a6fe1c",
       "installed_version": "0.7.8",
       "reviewed_date": "2026-10-15",
       "review_reason": "sync016: KEEP: completed prompt logits are now keyed by UID so cancelled rows do not shift ownership. Local wrappers call upstream generate/prompt_step and do not read that dict; per-row sampling, absolute prefill seams, buffer reuse and DFlash capture remain required."
-    },
-    {
-      "kind": "patches",
-      "path": "python/yunshu_engine/n_confirmed_patch.py",
-      "repo": "https://github.com/ml-explore/mlx-lm",
-      "clone": "reference/mlx-lm",
-      "package": "mlx-lm",
-      "module": "mlx_lm.models.qwen3_5",
-      "symbol": "GatedDeltaNet.__call__",
-      "signature": "(self, inputs, mask=None, cache=None)",
-      "license": "MIT",
-      "commit": "v0.31.3",
-      "why": "n_confirmed rollback for GatedDeltaNet (experimental route)",
-      "source_sha256": "0d6f97f05c2abfdcf8eced32e538808df08947338ab1f0ef1d660a4d3547c86d",
-      "installed_version": "0.32.0"
-    },
-    {
-      "kind": "patches",
-      "path": "python/yunshu_engine/n_confirmed_patch.py",
-      "repo": "https://github.com/ml-explore/mlx-lm",
-      "clone": "reference/mlx-lm",
-      "package": "mlx-lm",
-      "module": "mlx_lm.models.qwen3_5",
-      "symbol": "Qwen3_5TextModel.__call__",
-      "signature": "(self, inputs, cache=None, ...)",
-      "license": "MIT",
-      "commit": "v0.31.3",
-      "why": "n_confirmed rollback for GatedDeltaNet (experimental route)",
-      "source_sha256": "6acb548f006a114cca650dbbf15dbdb8f8f3991f9a754e586ea780b58468e568",
-      "installed_version": "0.32.0"
-    },
-    {
-      "kind": "patches",
-      "path": "python/yunshu_engine/n_confirmed_patch.py",
-      "repo": "https://github.com/ml-explore/mlx-lm",
-      "clone": "reference/mlx-lm",
-      "package": "mlx-lm",
-      "module": "mlx_lm.models.qwen3_5",
-      "symbol": "DecoderLayer.__call__",
-      "signature": "(self, x, mask=None, cache=None)",
-      "license": "MIT",
-      "commit": "v0.31.3",
-      "why": "n_confirmed rollback for GatedDeltaNet (experimental route)",
-      "source_sha256": "b1f708d4fa7825a66240e9b04115bf52ae2bf420ab7cb5484c62beabcc6e7a30",
-      "installed_version": "0.32.0"
     },
     {
       "kind": "patches",
@@ -2310,7 +2151,7 @@
       "license": "MIT",
       "commit": "v0.7.3",
       "why": "prefill attention of 1024+ query rows (causal, plain KV cache) runs the BQ32 tile kernel; everything else calls the original",
-      "installed_version": "0.7.8",
+      "installed_version": "0.7.6",
       "source_sha256": "2bc5644af48b66c94f7ab1488e5807a9e2f5c2700fd32d06185eeb246bda667c"
     },
     {
@@ -2328,7 +2169,7 @@
       "source_sha256": "69c266eb1eb1f5114e63d6c2a79f5a0eef27c7145c7db592984c3fe4a38e96ef",
       "installed_version": "0.7.8",
       "reviewed_date": "2026-10-15",
-      "review_reason": "sync016: KEEP: packed GDN is selected only for multi-token, scalar-gate, fp32-state/gate, Dk128 unmasked calls. Local >=64-token mx.fast chunk dispatch and explicit step_kernel bypass are still required; packed fallback stays upstream. Numerical identity must be established by GPU gates."
+      "review_reason": "sync016: KEEP: packed GDN is selected only for multi-token, scalar-gate, fp32-state/gate, Dk128 unmasked calls. Local >=64-token mx.fast chunk dispatch is still required (the step_kernel bypass went with the round driver in 03b03e7); packed fallback stays upstream. Numerical identity must be established by GPU gates."
     },
     {
       "kind": "patches",
@@ -2952,6 +2793,126 @@
     },
     {
       "kind": "patches",
+      "path": "python/yunshu_engine/kernels/sdpa_chunk.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.base",
+      "symbol": "scaled_dot_product_attention",
+      "signature": "(queries, keys, values, cache, scale: float, mask: Optional[mx.array], sinks: Optional[mx.array]=None)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "M1-M4 query-chunking of head-dim-256 SDPA; wraps and rebinds model modules",
+      "source_sha256": "2bc5644af48b66c94f7ab1488e5807a9e2f5c2700fd32d06185eeb246bda667c",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/sdpa_chunk.py",
+      "repo": "https://github.com/ml-explore/mlx-lm",
+      "clone": "reference/mlx-lm",
+      "package": "mlx-lm",
+      "module": "mlx_lm.models.base",
+      "symbol": "scaled_dot_product_attention",
+      "signature": "(queries, keys, values, cache, scale: float, mask: Optional[mx.array], sinks: Optional[mx.array]=None)",
+      "license": "MIT",
+      "commit": "v0.32.2",
+      "why": "M1-M4 query-chunking of head-dim-256 SDPA (text-only fast path)",
+      "source_sha256": "9b23a7140848b1724f0298191ca64f9d0ae3e313e22df1c48a313779c5c80507",
+      "installed_version": "0.32.2"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/audio_patches.py",
+      "repo": "https://github.com/Blaizzy/mlx-audio",
+      "clone": "reference/mlx-audio",
+      "package": "mlx-audio",
+      "module": "mlx_audio.stt.models.qwen3_asr.qwen3_asr",
+      "symbol": "Qwen3ASRModel._generate_one",
+      "signature": "(self, audio: Union[str, mx.array, np.ndarray], *, max_tokens: int=8192, batch_size: int=1, temperature: float=0.0, top_p: float=1.0, top_k: int=0, min_p: float=0.0, min_tokens_to_keep: int=1, repetition_penalty: Optional[float]=None, repetition_context_size: int=100, language: Optional[str]=None, prefill_step_size: int=2048, chunk_duration: float=1200.0, min_chunk_duration: float=1.0, verbose: bool=False, stream: bool=False, system_prompt: str | None=None, hotwords: Optional[List[str]]=None, **kwargs)",
+      "license": "MIT",
+      "commit": "v0.5.9",
+      "why": "dbcc13c: per-chunk language auto-detection (exact source rewrite; f37c9a9 batched token history not reached: no batch_size route)",
+      "source_sha256": "e45be5f64de2efeccaa1bb2e34eb1f489ffd7cf71d8f2db2645023471e4659da",
+      "installed_version": "0.5.9"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/audio_patches.py",
+      "repo": "https://github.com/Blaizzy/mlx-audio",
+      "clone": "reference/mlx-audio",
+      "package": "mlx-audio",
+      "module": "mlx_audio.stt.models.whisper.whisper",
+      "symbol": "HFTokenizerWrapper.no_speech",
+      "signature": "(self)",
+      "license": "MIT",
+      "commit": "v0.5.9",
+      "why": "2cd66c6: <|nocaptions|> for pre-large-v3 vocabularies; unk (== eot) must not enter the suppress list",
+      "source_sha256": "c6ae300eecbb8d81646ac17cc55003fab1a96ab0629c66e2aaeeea85a9f92374",
+      "installed_version": "0.5.9"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/audio_patches.py",
+      "repo": "https://github.com/Blaizzy/mlx-audio",
+      "clone": "reference/mlx-audio",
+      "package": "mlx-audio",
+      "module": "mlx_audio.tts.models.kokoro.pipeline",
+      "symbol": "KokoroPipeline.load_single_voice",
+      "signature": "(self, voice: str)",
+      "license": "MIT",
+      "commit": "v0.5.9",
+      "why": "ebcdbfc: voices from the loaded model snapshot (post_load_hook sets _voice_model_path)",
+      "source_sha256": "2a34f61717173f3eb7e78a85961b63fd28268e81e8251e586df26078c4f49b74",
+      "installed_version": "0.5.9"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/image_processor_fixes.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.gemma4.processing_gemma4",
+      "symbol": "Gemma4ImageProcessor.preprocess",
+      "signature": "(self, images: ImageInput, **kwargs)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "PIL images read channels-last: a 1- or 3-pixel-tall image is not channels-first (8dd7746); module helpers wrapped, preprocess unchanged",
+      "source_sha256": "02b82adab31b13af412506ebd706f93aaf33075f64bead5739af31c24dfdf6ac",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/image_processor_fixes.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.embedding_gemma2.image_processing_embedding_gemma2",
+      "symbol": "EmbeddingGemma2ImageProcessor.preprocess",
+      "signature": "(self, images, return_tensors=None, input_data_format=None, **kwargs)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "PIL images read channels-last for EmbeddingGemma 2 (1e64ba4); module helpers wrapped, preprocess unchanged",
+      "source_sha256": "2e7b2659f14f1daaaf8665aac2ca872fc45d518d9a8d735b735c28e3e57f0add",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/lane_virtual.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen3_5.speculative_verifier",
+      "symbol": "Qwen3_5BatchInvariantForward._linears",
+      "signature": "(self, linears, x: mx.array)",
+      "license": "MIT",
+      "commit": "v0.7.6",
+      "why": "Qwen4-Exp's verify forward inherits this method; lane_virtual wraps the inherited method on Qwen4ExpBatchInvariantForward (not the base class) so the GDN qkv|z|b|a and attention q|k|v projections of lane-converted layers share one launch per split and format, bit-identical to the separate lane calls; any other member mix falls through to this method",
+      "source_sha256": "1f44efb5714938afee3c700508cafd98770f1e6ab1a84718ef59fdf444ca782b",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
       "path": "python/yunshu_engine/ane_ffn_runtime.py",
       "repo": "https://github.com/Blaizzy/mlx-vlm",
       "clone": "reference/mlx-vlm",
@@ -3021,9 +2982,9 @@
       ],
       "why": "new or changed Qwen3.5-family kernels we may want",
       "commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
-      "reviewed_date": "2026-10-15",
-      "reviewed_commit": "6feea9f95de86c772235af765914e4abb82b236f",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "78fa08bc1aef7290c93c83bb70811547763ebf33",
+      "review_reason": "2026-10-26 catch-up (210 commits to 78fa08bc), per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Adopted: the <total_tokens> budget marker strip (38f420d9), accepted-only hit counts for the text prefix cache (5628bb7e). Verified and pinned: the promoted qmv bias sums (94363f89). Not applicable: M1 verify routes (a68b6d1a), generation-prompt tail step (2b1822bf), DFlash fp16 drafter cast (ee0c8c20). Open as Mac steps: sdpa256 on M1-M4."
     },
     {
       "repo": "https://github.com/Blaizzy/mlx-vlm",
@@ -3052,7 +3013,9 @@
       "why": "text path, caches, samplers",
       "pin_package": "mlx-lm",
       "commit": "259b8dd0418b687e31ce53258775dff35f879440",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "93e6d4a6447b3080861985947f0820e76fcb957d",
+      "review_reason": "Adopted v0.32.2 through the lock (mlx-lm>=0.32.2; its mlx>=0.32.2 floor is met by the 0.32.3 pin). No patched mlx-lm symbol remains after n_confirmed_patch.py was removed, and the used API (generate_step, BatchGenerator, make_prompt_cache, trim_prompt_cache, load_tokenizer) is unchanged. Commits after the v0.32.2 tag (HEAD 4cfc6478) are not adopted or reviewed for adoption."
     },
     {
       "repo": "https://github.com/ml-explore/mlx",
@@ -3060,11 +3023,7 @@
       "globs": [
         "mlx/backend/metal/kernels/quantized*",
         "mlx/backend/metal/kernels/steel/**",
-        "python/mlx/nn/layers/quantized.py",
-        "mlx/backend/metal/device.*",
-        "mlx/backend/metal/event.*",
-        "mlx/transforms.cpp",
-        "python/src/convert.cpp"
+        "python/mlx/nn/layers/quantized.py"
       ],
       "why": "quantized matmul / NAX kernels",
       "pin_package": "mlx",
@@ -3081,7 +3040,9 @@
       ],
       "why": "exact speculative decoding, lane engine, multi-bit tensor-unit kernels for Qwen3.8",
       "commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "83af6e4aadea9ac6e27011a710d14a5f43d5e509",
+      "review_reason": "2026-10-26 catch-up, per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. No vendored lane file changed upstream (the Python engine was removed); prefix-wait (#1321) is satisfied by one-row prefill; #1262 seam checkpoint is owned elsewhere; simdgroup prompt attention (993cebd3) is a Mac step for M1-M4."
     },
     {
       "repo": "https://github.com/basecompute/baseRT",
@@ -3091,9 +3052,9 @@
       ],
       "why": "native Metal runtime using M5 Neural Accelerators (MPP) for prefill/GEMM",
       "commit": "128bdd73",
-      "reviewed_commit": "24badc8dd173e4111b64996a718d0e056405ea62",
-      "reviewed_date": "2026-10-09",
-      "review_reason": "Reviewed upstream subjects: sync: open-core source for 0.3.0. Independent local code retained; no port in this sync."
+      "reviewed_commit": "1bbd81e2af183e02e9c1ad7cbd9fe131e02520c1",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 peer catch-up review: 7 commits (CLI, installer, hub sync; the core stays closed) touch nothing Yunshu uses. Nothing to adopt."
     },
     {
       "repo": "https://github.com/sgl-project/sglang",
@@ -3105,9 +3066,9 @@
       ],
       "why": "radix prefix cache, speculative decoding, structured output",
       "commit": "7760d5264ac16b85392aefb1bf5c13ce38d9632e",
-      "reviewed_date": "2026-10-15",
-      "reviewed_commit": "97d3150a6a3c412f9445d33c7a91238e590f8b10",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "0cd2a63b3634477ff50b5f614362259978a8e7df",
+      "review_reason": "2026-10-26 peer catch-up review: CUDA, NPU and data-parallel changes; spec-rollback and radix-cache commits are reading material, nothing to port. Nothing to adopt."
     },
     {
       "repo": "https://github.com/vllm-project/vllm",
@@ -3121,9 +3082,9 @@
       ],
       "why": "n-gram / suffix / MTP proposers, block pool, mRoPE",
       "commit": "3ca00a8261c7790ba7487e2001ab9004ad8065f2",
-      "reviewed_date": "2026-10-15",
-      "reviewed_commit": "7840bede989adc226d35e893f29deec1814734f7",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "059e2de6d81750551dc8fdc82365eb031bab1086",
+      "review_reason": "2026-10-26 catch-up to 059e2de6d, per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Stop-trimmed spec tokens (d486219fc) do not apply to prefill-only checkpoints, the last prefix block under DFlash (0bfeb8d0e) is owned elsewhere; Anthropic error vocabulary and disabled thinking (f0abb2f82, 5be4266f5, d9fcde70f) already match; safety_identifier is already accepted and echoed."
     },
     {
       "repo": "https://github.com/ggml-org/llama.cpp",
@@ -3137,9 +3098,9 @@
       ],
       "why": "n-gram speculation, samplers, grammar and chat templates",
       "commit": "bd4eeaa047006cb1fe71999fbd11134b5836e167",
-      "reviewed_date": "2026-10-15",
-      "reviewed_commit": "a0e6dc7384edb8f5d927155e1d26c10b4a310e6d",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "d854d98bae598388ecea1ed84396587e5edc326d",
+      "review_reason": "2026-10-26 catch-up (33 commits to d854d98ba), per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Server API-compat leads are covered or handled elsewhere; SWA slot-checkpoint fixes (f174553e1, 61ad80bf9) and the in-place aliasing race (098ce526b) do not apply to hash-keyed checkpoints and fresh kernel outputs."
     },
     {
       "repo": "https://github.com/incoai/splash",
@@ -3150,9 +3111,9 @@
       ],
       "why": "batch-invariant Metal kernels (decode, prefill, paged attention)",
       "commit": "0d5a035ea26d1cc566e3c7ee4e08e5e06fa68cf7",
-      "reviewed_date": "2026-10-15",
-      "reviewed_commit": "be3b083c5f413673d44e44881042e875e674e333",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "3135ab45b3da525a8a2dbb8a1aa72ce095dda8a9",
+      "review_reason": "2026-10-26 catch-up (289 commits to 3135ab4), per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Adopted: top_k 1 / min_p 1 decode greedily (8d5e05b). Not adopted: MoE verify-row budget (breaks spec on == off), YaRN from max context (not lossless). Verified: constrained and free lanes share one batch except response_format / logprobs rows, which take the stock-serial namespace by design."
     },
     {
       "repo": "https://github.com/bstnxbt/dflash-mlx",
@@ -3161,7 +3122,10 @@
         "dflash_mlx/**/*.py"
       ],
       "why": "DFlash block-diffusion drafter engine on MLX",
-      "commit": "60803233"
+      "commit": "60803233",
+      "reviewed_commit": "60803233af4589e18588b9bacbb03880801c828a",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 peer catch-up review: no upstream commits since the pinned commit (HEAD 2026-08-20). Nothing to adopt."
     },
     {
       "repo": "https://github.com/youssofal/MTPLX",
@@ -3171,7 +3135,9 @@
       ],
       "why": "MTP speculative decoding on MLX",
       "commit": "9882703f3105363ddc37eca9f97aa09a1d387112",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "9882703f3105363ddc37eca9f97aa09a1d387112",
+      "review_reason": "2026-10-26 peer catch-up review: no upstream commits since the pinned commit (HEAD 2026-10-03). Nothing to adopt."
     },
     {
       "repo": "https://github.com/raullenchai/Rapid-MLX",
@@ -3181,9 +3147,9 @@
       ],
       "why": "MLX serving engine: tools, caching, agent runtime",
       "commit": "082d72230417bcc5a24ff16e44d70c62a8c09049",
-      "reviewed_date": "2026-10-15",
-      "reviewed_commit": "3b574953c6e552098f983bd221e26d902643a293",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "e899b689c27e9471cd5d71c42fc00e6353a2eabe",
+      "review_reason": "2026-10-26 catch-up (328 commits to e899b689), per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Warm system+tools prefix and /prefill (90b2540f, 65eec0da) are covered by the tool-list-end checkpoint and a max_tokens 1 request; quantized argmax float bias (75add145) is covered by verify_select's version-matched header; scheduler seal (338d9e00) and vision-lane persistence (897ffab0) do not apply. Interior checkpoint (421bf658) and hybrid boundary retention (66b39f56) are owned elsewhere."
     },
     {
       "repo": "https://github.com/waybarrios/vllm-mlx",
@@ -3196,9 +3162,9 @@
       ],
       "why": "prefix cache, warm prompts, constrained decoding on MLX",
       "commit": "f5d7e00a",
-      "reviewed_commit": "9a939f8b59bddaf98ccab865f4fa7e2fe48c6d65",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_commit": "d4f90f439ee5aab52b48f41565e145f9be511491",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 peer catch-up review: 17 commits (Omni video audio-extraction order, MLLM usage propagation, memory release on unload) need nothing here. Nothing to adopt."
     },
     {
       "repo": "https://github.com/nRanzo/MLX-MTP",
@@ -3207,7 +3173,10 @@
         "mlx_mtp/**/*.py"
       ],
       "why": "native MTP head speculative decoding on MLX",
-      "commit": "5bd77836"
+      "commit": "5bd77836",
+      "reviewed_commit": "5bd77836317c4c7025ff90cd233933676a1dbaa0",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 peer catch-up review: no upstream commits since the pinned commit (HEAD 2026-08-19). Nothing to adopt."
     },
     {
       "repo": "https://github.com/pierre427/mlx2",
@@ -3218,9 +3187,9 @@
       ],
       "why": "experimental Apple Silicon inference runtime for the next Qwen generation",
       "commit": "3d0b9d58",
-      "reviewed_commit": "f6b8342016576f69e3c1ce7a76bf924a0c59205f",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_commit": "c041b15f28f3b8c8c5fb9f4c6e6bd3fbf5e2a943",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 catch-up (132 commits to c041b15), per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Control-token injection (c4ab16e) and non-finite recurrent state (c250447) are fixed and verified on both text and VLM paths; padded multi-row prefill (fe3e538) does not apply (one prefill row). Mac steps: tree-size invariance check (9973c9b), q4 drafter A/B (7e1354d), cancelled-prefill progress (b69c198)."
     },
     {
       "repo": "https://github.com/VincentGourbin/qwen38-mlx-swift",
@@ -3230,7 +3199,10 @@
         "Sources/**/*.metal"
       ],
       "why": "Qwen3.8 on MLX Swift (the model Yunshu tunes first)",
-      "commit": "2bc9a23d"
+      "commit": "2bc9a23d",
+      "reviewed_commit": "2bc9a23d92354dc422804c85d32c6716352277cd",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "No commits after 2bc9a23d (2026-09-28); per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. The complete tool call inside a never-closed reasoning block (049501d) is adopted in streaming.py extract_thinking."
     },
     {
       "repo": "https://github.com/ddalcu/mlx-serve",
@@ -3241,9 +3213,9 @@
       ],
       "why": "fused add+norm and other Metal kernels in a Zig MLX server",
       "commit": "6281442d",
-      "reviewed_commit": "1015f7854fd8ee5c22e34993aaddee2443b9cfbf",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_commit": "191da71de32a65f69ebceeb6cb2e91036ab50b30",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 catch-up (70 commits to 191da71), per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Shutdown persistence (c24807e) is verified (apc.close drains the write queue, uvicorn cancels open prefills); shape-aware dequant+GEMM (c9ca219) and int8 Q/K prefill (64b6e53, lossy) are not adopted."
     },
     {
       "repo": "https://github.com/Blaizzy/mlx-audio",
@@ -3267,7 +3239,10 @@
         "mlx_embeddings/models/**/*.py"
       ],
       "why": "embeddings backend we depend on (GPL-3.0: ideas only, never copy code)",
-      "commit": "9b28270b"
+      "commit": "9b28270b",
+      "reviewed_commit": "9b28270be81211f2b8daed0041aec65ea5dc4b28",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 peer catch-up review: no upstream commits since the pinned commit (HEAD 2026-05-13); GPL-3.0, ideas only. Nothing to adopt."
     },
     {
       "repo": "https://github.com/vllm-project/vllm-omni",
@@ -3277,9 +3252,9 @@
       ],
       "why": "TeaCache diffusion step cache",
       "commit": "c32a26a8450b553d60436d211fa4f67fca31bf52",
-      "reviewed_date": "2026-10-09",
-      "reviewed_commit": "ee81f33001922f8d91dd09da0a57ee1531a8df82",
-      "review_reason": "Reviewed upstream subjects: [Bugfix] Fix missing SenseNova-U1 TeaCache position embeddings (#8260); [Bugfix] Calibrate Z-Image TeaCache coefficients and add ZImageAdapter (#8408). Candidate logged for the backlog: d8fa463e hybrid Mamba prefix-cache boundary fix, compare with the local exact hybrid checkpoint boundaries. Other commits are server-scale frontend work."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "81d8516f0373d6216a2871bdba2599001ae6005f",
+      "review_reason": "2026-10-26 peer catch-up review: TeaCache and Cache-DiT fixes only (diffusion is parked). Nothing to adopt."
     },
     {
       "repo": "https://github.com/guidance-ai/llguidance",
@@ -3291,8 +3266,8 @@
       "why": "grammar / JSON-schema engine we depend on",
       "commit": "e7c69004",
       "reviewed_commit": "6cef6ed9c973c2a155a85f2bb1996320af28b289",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 peer catch-up review: no upstream commits since the last review (HEAD 2026-10-14). Nothing to adopt."
     },
     {
       "repo": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731",
@@ -3327,9 +3302,9 @@
         "src/metrics.rs"
       ],
       "why": "Qualified unprivileged CLPC energy IDs and Apple telemetry compatibility; CPU/ANE legacy counters may freeze on macOS 27.",
-      "reviewed_commit": "a09a8a6177bacb395d27adf1f48801075732188b",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_commit": "39e98aa73e49256e6281b2a228f6ef3499ae3209",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 peer catch-up review: docs, roadmap and release CI only; clpc.rs, sources.rs and metrics.rs unchanged. Nothing to adopt."
     },
     {
       "repo": "https://huggingface.co/mlx-community/Qwen3-Reranker-0.6B-4bit",
@@ -3350,9 +3325,9 @@
       ],
       "why": "Independent Z-Image parity bridge depends on unchanged HF raw cache, mapper and applier APIs; watch native quantized-format support and arithmetic drift.",
       "commit": "465df30a3965b38c9c64fa853e26df140ddd5c55",
-      "reviewed_date": "2026-10-15",
-      "reviewed_commit": "b534021a9c8c45bb064959d754870fd98322e447",
-      "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+      "reviewed_date": "2026-10-26",
+      "reviewed_commit": "a3b21fcaa88726b2267bd42bfc2e2d722f7d5a47",
+      "review_reason": "2026-10-26 peer catch-up review: Z-Image weights-path fixes only; the mapper and applier APIs behind the probe are unchanged (image generation is parked). Nothing to adopt."
     },
     {
       "repo": "https://github.com/ml-explore/mlx",
@@ -3360,13 +3335,61 @@
       "commit": "36969c094354086e15d2a327a9c50feb20b9cf11",
       "globs": [
         "mlx/backend/metal/kernels/sdpa_vector.h",
-        "mlx/backend/metal/kernels/steel/attn/**/*.h",
-        "mlx/backend/metal/device.*",
-        "mlx/backend/metal/event.*",
-        "mlx/transforms.cpp",
-        "python/src/convert.cpp"
+        "mlx/backend/metal/kernels/steel/attn/**/*.h"
       ],
       "why": "Pinned external release source for research-only kernelstudy screen; external disk clone, no inference port."
+    },
+    {
+      "repo": "https://github.com/ollama/ollama",
+      "clone": "reference/ollama",
+      "globs": [
+        "mlxrunner/**/*.go"
+      ],
+      "why": "single-node Apple MLX runner: prefix-cache trie, DFlash / MTP speculative decode, grammar-constrained output",
+      "commit": "d44c2581904a98430e348d89cc2af1529b1808a0",
+      "reviewed_commit": "d44c2581904a98430e348d89cc2af1529b1808a0",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 review, per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Adopted (f9dbd60): buffer release on every 256 boundary crossed by a spec round (ec3cc230). Verified or not applicable: residency refresh (cf6c9de6, idle_memory heartbeat), snapshot boundaries inside media (45a02807, pinned test), candidate logits in fp32 (c1c53629, breaks spec on == off). Open Mac step: per-chunk clear_cache A/B (13.C2). Trie eviction and merge (b859a945, 6137793a, a5b659e6) are owned elsewhere."
+    },
+    {
+      "repo": "https://github.com/ml-explore/mlx-swift-lm",
+      "clone": "reference/mlx-swift-lm",
+      "globs": [
+        "Libraries/MLXLLM/Models/Qwen3*.swift",
+        "Libraries/MLXLLM/Models/Qwen35*.swift",
+        "Libraries/MLXLMCommon/Evaluate.swift",
+        "Libraries/MLXLMCommon/KVCache*.swift"
+      ],
+      "why": "Qwen3.5/3.8 model, cache and decode loop fixes from a second MLX implementation",
+      "commit": "991266ad300f47a3b9f21e62ff5bdb679215e758",
+      "reviewed_commit": "991266ad300f47a3b9f21e62ff5bdb679215e758",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 review, per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Adopted: generation_config suppress_tokens (0de8927), declared property order in the tool-grammar cache key (d02948b), last-position-only prefill in the jump-forward loop (3615fe4). Verified or pinned: Gemma nested tool arguments (0754e10), linear end-tag scan (a1f575d), held stop text flush (4ea4225). Not applicable: rotating-cache rewind (12d935f) and Qwen3-VL mask after rotation (0ea4465). Open Mac steps: reasoning-history prefix identity (e9c8500), per-chunk clear_cache (991266a). GDN eps (c408452) is bump-coupled. First review 2026-10-26; nothing adopted. Candidates to audit: GDN q/k L2-norm eps (c408452), exact prefix rewind in rotating KV caches (12d935f), clearing the buffer cache after each prefill chunk (991266a), flushing held-back stop text at stream end (4ea4225), Qwen reasoning history for cache reuse (e9c8500). Audited 2026-10-26: c408452 (q/k norm eps D times too large) is the same fix as mlx-vlm b8bf04c; kernels/gdn_qk_eps.py renders the installed mlx-vlm's epsilon into the fused norm and the prework RMS arm (unchanged on the pinned 0.7.8); the L2 arms already use mlx-lm's sum + 1e-6."
+    },
+    {
+      "repo": "https://github.com/vllm-project/vllm-metal",
+      "clone": "reference/vllm-metal",
+      "globs": [
+        "vllm_metal/attention/**/*.py",
+        "vllm_metal/**/spec_decode*.py"
+      ],
+      "why": "Apple-silicon vLLM backend: hybrid GDN n-gram spec decode, prefix caching with DFlash, memory-pressure probe",
+      "commit": "7f95a63fee91153cf4f0def3927119aa3e28704b",
+      "reviewed_commit": "7f95a63fee91153cf4f0def3927119aa3e28704b",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 review, per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Not applicable: split decode rows (dafa052, no unified launch), n-gram draft cap at checkpoint boundaries (ddca466, decode state is never checkpointed), failed KV release wake-up (3b1bc46, no sleep mode). Open Mac step: swap-out pressure signal (ca27320). GDN decay FP32 (b9a5167) is owned elsewhere. Moved here from the kernelstudy prior_art entry, whose bit-parity status is unchanged. Moved to watch 2026-10-26 from the kernelstudy prior_art entry (kept there for its bit-parity study; its status is unchanged, no qualified winner). Nothing adopted. Candidates to audit: n-gram drafts capped at checkpoint boundaries (ddca466), GDN decay kept in FP32 (b9a5167), swap-out pressure signal at startup (ca27320). Audited 2026-10-26: b9a5167 (GDN decay kept FP32) needs no change; the stock compute_g keeps the decay FP32 after a bf16 softplus and every Yunshu GDN kernel (prework g_out float32, verify/tree/dflash gdn_decay float, tg_g float) does the same; tests/unit/test_gdn_decay_precision.py pins it."
+    },
+    {
+      "repo": "https://github.com/lablup/mlxcel",
+      "clone": "reference/mlxcel",
+      "globs": [
+        "src/server/**/*.rs"
+      ],
+      "why": "API-compat reference: Responses / Anthropic / completions request validation fixes",
+      "commit": "01047d75cc2aa3ab48dd9dbc3bff9c2d4692d49a",
+      "reviewed_commit": "01047d75cc2aa3ab48dd9dbc3bff9c2d4692d49a",
+      "reviewed_date": "2026-10-26",
+      "review_reason": "2026-10-26 review, per-row outcome in docs/reports/UPSTREAM_ADOPTION_2026-10-26.md. Adopted: malformed Anthropic tool_choice answers 400 (465299e9, 7e5ee46). Verified: singleton prompt arrays in completions (212f31e4) are already accepted."
     },
     {
       "repo": "https://github.com/incoai/splash",
@@ -3872,36 +3895,6 @@
         "https://github.com/tmc/autoresearch-mlx-go-ane"
       ],
       "reason": "Existing Splash client has full selector type checks and bounded shared-event handoff; retain that defensive implementation for phase 1."
-    },
-    {
-      "id": "flashnext-1025-incoai",
-      "owner": "flashnext",
-      "url": "https://huggingface.co/incoai/Qwen3.8-Flash-Next-DFlash2",
-      "revision": "a22a1744e85c17364dcc54a6a420af7135d4c7f6",
-      "kind": "discovery-only",
-      "reviewed_date": "2026-10-25",
-      "status": "Complete local asset; serving sanity and identity pending; no quant conversion needed.",
-      "license": "See checkpoint repository model card"
-    },
-    {
-      "id": "flashnext-1025-jundot",
-      "owner": "flashnext",
-      "url": "https://huggingface.co/Jundot/Qwen3.8-Flash-Next-oQ3e-mtp",
-      "revision": "934f71d2879d459ccecb641eccb970fe9fa4cb3e",
-      "kind": "discovery-only",
-      "reviewed_date": "2026-10-25",
-      "status": "Complete local asset; serving sanity and identity pending; no quant conversion needed.",
-      "license": "See checkpoint repository model card"
-    },
-    {
-      "id": "flashnext-1025-tensorfold",
-      "owner": "flashnext",
-      "url": "https://huggingface.co/TensorFold/Qwen3.8-Flash-Next-MLX-2bit-MTP",
-      "revision": "28b109043ec5576f8ad5a3192a66467915c76736",
-      "kind": "discovery-only",
-      "reviewed_date": "2026-10-25",
-      "status": "Complete local asset; serving sanity and identity pending; no quant conversion needed.",
-      "license": "See checkpoint repository model card"
     }
   ],
   "websearch_prior_art": [
@@ -4008,11 +4001,10 @@
       "installed_version": "1.33.0",
       "latest_version": "2.2.0",
       "blocked_by": [
-        "tokenizers",
-        "diffusers"
+        "tokenizers"
       ],
       "reviewed_date": "2026-10-08",
-      "reason": "Installed tokenizers 0.23.2 and diffusers 0.41.0 both require huggingface-hub<2.0; keep the resolver-valid 1.33.0. Recheck when either wheel or latest hub version changes."
+      "reason": "Installed tokenizers 0.23.2 requires huggingface-hub<2.0; keep the resolver-valid 1.33.0. Recheck when the wheel or latest hub version changes."
     },
     "trafilatura": {
       "installed_version": "2.1.0",

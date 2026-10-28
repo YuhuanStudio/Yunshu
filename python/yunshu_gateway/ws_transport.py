@@ -628,8 +628,14 @@ class Connection:
                     await asyncio.shield(job.call.close())
             self.jobs.pop(job.id, None)
             if job.ephemeral and job.response_id:
-                self._ephemeral_ids.append(job.response_id)
-                self._drop_ephemeral(keep_last=True)
+                from .routers.responses import _get_stored_response
+
+                # Only a response that reached the store replaces the kept one: a turn
+                # that was cancelled or failed after response.created has nothing to
+                # chain from, and evicting the last good response would break the next turn.
+                if _get_stored_response(job.response_id) is not None:
+                    self._ephemeral_ids.append(job.response_id)
+                    self._drop_ephemeral(keep_last=True)
             if job.stream_id is not None and not any(
                 j.stream_id == job.stream_id for j in self.jobs.values()
             ):

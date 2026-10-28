@@ -71,3 +71,41 @@ def stage_media_file(suffix: str):
     d = media_dir()
     os.makedirs(d, exist_ok=True)
     return tempfile.NamedTemporaryFile(suffix=suffix, dir=d, delete=False)  # noqa: SIM115
+
+
+def private_media_path() -> str:
+    """Where decoded request media (base64 / downloaded images, audio, video) are written.
+    A fixed per-user name under the system temp dir, so the sandbox deny list can name it
+    without creating it. Shared system temp is readable by sandboxed code; this directory is not."""
+    import os
+    import tempfile
+
+    return os.path.join(tempfile.gettempdir(), f"yunshu_decoded_{os.getuid()}")
+
+
+def private_media_paths() -> list[str]:
+    """``private_media_path()`` as given and with symlinks resolved (macOS ``TMPDIR`` is under
+    ``/var/folders``, a symlink to ``/private/var/folders``): a deny list must name both, as
+    the sandbox may compare either spelling. One entry when they agree."""
+    import os
+
+    given = private_media_path()
+    real = os.path.realpath(given)
+    return [given] if real == given else [given, real]
+
+
+def private_media_dir() -> str:
+    """``private_media_path()``, created 0700 (a symlink or someone else's directory is refused)."""
+    import contextlib
+    import os
+    import stat
+
+    d = private_media_path()
+    with contextlib.suppress(FileExistsError):
+        os.mkdir(d, 0o700)
+    st = os.lstat(d)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        raise RuntimeError(f"{d} is not a private directory owned by this user")
+    if stat.S_IMODE(st.st_mode) != 0o700:
+        os.chmod(d, 0o700)
+    return d

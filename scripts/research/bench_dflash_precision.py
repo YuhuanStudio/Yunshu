@@ -99,7 +99,7 @@ def main():
                 flush=True,
             )
 
-    omlx.apply(row_exact=False)
+    omlx.apply()
     model, processor = load(a.model)
     lm, tok = model.language_model, processor.tokenizer
     lane_linear.convert(lm)

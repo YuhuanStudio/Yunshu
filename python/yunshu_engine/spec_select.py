@@ -54,6 +54,22 @@ def drafter_matches(drafter_dir: Path, target_config: dict) -> bool:
     ) == text.get("hidden_size")
 
 
+def forced_mismatch(drafter_dir: Path, target_config: dict) -> str | None:
+    """Why a forced local drafter cannot serve this target, before any weight loads (None: fine or not local)."""
+    cfg = _read_json(drafter_dir / "config.json")
+    if not cfg or "dflash_config" not in cfg:
+        return None
+    text = _text_config(target_config)
+    for key, want in (
+        ("hidden_size", "hidden_size"),
+        ("num_target_layers", "num_hidden_layers"),
+    ):
+        have, need = cfg.get(key), text.get(want)
+        if have is not None and need is not None and have != need:
+            return f"does not match this model: drafter {key} {have} != target {want} {need}"
+    return None
+
+
 def is_27b_class(target_config: dict) -> bool:
     text = _text_config(target_config)
     return text.get("num_hidden_layers") == 64 and text.get("hidden_size") == 5120
@@ -100,6 +116,9 @@ def choose(
             if mtp_capable and settings.get_bool("YUNSHU_MTP"):
                 return SpecChoice("mtp", None, "YUNSHU_VLM_DRAFT=mtp")
             return SpecChoice("none", None, "MTP forced but the checkpoint has no head")
+        mismatch = forced_mismatch(Path(str(override)).expanduser(), target_config)
+        if mismatch:
+            raise ValueError(f"YUNSHU_VLM_DRAFT={override} {mismatch}")
         return SpecChoice("dflash", str(override), "YUNSHU_VLM_DRAFT")
     found = find_dflash_drafter(target_config, models_dir)
     if found:

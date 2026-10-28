@@ -63,7 +63,6 @@ On the Qwen3.5 speculative lanes (MTP and DFlash) the same constraint object ser
 ## Jump-forward and tool grammar
 
 - `YUNSHU_JUMP_FORWARD` (off): for greedy JSON-schema generation on the text path, tokens the grammar forces are emitted without a forward pass. The code turns it off for LoRA, cancel events, logit bias, suppressed tokens, `min_tokens`, logprobs, sampling and regex/choice/grammar constraints, so those requests use the normal constrained decode.
-- `YUNSHU_TOOL_GRAMMAR` (off, experimental): tool-call structural tags for `auto` tool choice. A forced `tool_choice` (`required`, `any` or a named tool) is always constrained, whatever this flag says. A mask never removes a token from a call the model could have written validly, so a well-formed unconstrained call is reproduced token for token.
 
 ## Guarantees
 
@@ -79,7 +78,6 @@ On the Qwen3.5 speculative lanes (MTP and DFlash) the same constraint object ser
 | `YUNSHU_JSON_SCHEMA_ENGINE` | `llguidance` | Preferred engine for JSON schema and `json_object`; `inhouse` selects the Python state machine |
 | `YUNSHU_GRAMMAR_BITMASK` | off | Text engine: bitmask sampler instead of the allowlist sampler |
 | `YUNSHU_JUMP_FORWARD` | off | Text engine: emit grammar-forced tokens without a forward pass |
-| `YUNSHU_TOOL_GRAMMAR` | off | Constrain `auto` tool calls with structural tags (experimental) |
 
 ## Limits
 

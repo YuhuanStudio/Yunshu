@@ -183,3 +183,139 @@ def test_container_ttl_is_per_container_and_capped_by_the_setting(env, monkeypat
     assert a.ttl_s == 60 and b.ttl_s == 600
     m.ttl_s = 30  # the operator lowers YUNSHU_CODE_EXECUTION_TTL_MIN
     assert m.get(a.id, touch=False).ttl_s == 30 and m.get(b.id, touch=False).ttl_s == 30
+
+
+def test_editor_does_not_follow_a_link_on_the_way(env):
+    """A directory component swapped for a link (the sandbox owns work/) is refused, not followed."""
+    e, c, _, tmp = env
+    outside = tmp / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("SECRET")
+    os.symlink(outside, c.work / "d")
+    r = asyncio.run(e.editor(c, {"command": "view", "path": "d/secret.txt"}))
+    assert not r.ok and "SECRET" not in r.text
+    r = asyncio.run(
+        e.editor(c, {"command": "create", "path": "d/new.txt", "file_text": "X"})
+    )
+    assert not r.ok and not (outside / "new.txt").exists()
+    r = asyncio.run(
+        e.editor(
+            c,
+            {
+                "command": "str_replace",
+                "path": "d/secret.txt",
+                "old_str": "SECRET",
+                "new_str": "x",
+            },
+        )
+    )
+    assert not r.ok and (outside / "secret.txt").read_text() == "SECRET"
+
+
+def test_editor_refuses_a_fifo_without_hanging(env):
+    import threading
+
+    e, c, _, _ = env
+    os.mkfifo(c.work / "f")
+    out = []
+    t = threading.Thread(
+        target=lambda: out.append(
+            asyncio.run(e.editor(c, {"command": "view", "path": "f"}))
+        ),
+        daemon=True,
+    )
+    t.start()
+    t.join(5)
+    assert not t.is_alive(), "view on a FIFO blocked"
+    assert not out[0].ok
+
+
+def test_open_confined_refuses_links_at_every_step(tmp_path):
+    """The check-then-use race the editor used to have: a link in the path is never followed."""
+    from yunshu_gateway.sandbox import files as cfiles
+
+    root = tmp_path / "root"
+    (root / "work").mkdir(parents=True)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "f").write_text("S")
+    os.symlink(out, root / "work" / "d")
+    os.symlink(out / "f", root / "work" / "l")
+    for parts in (["work", "d", "f"], ["work", "l"]):
+        with pytest.raises(OSError):
+            cfiles.open_confined(root, parts, os.O_RDONLY)
+    with pytest.raises(OSError):
+        cfiles.open_confined(
+            root, ["work", "d", "n"], os.O_WRONLY | os.O_CREAT, mkdirs=True
+        )
+    assert not (out / "n").exists()
+
+
+def test_open_confined_follows_links_that_stay_inside(tmp_path):
+    from yunshu_gateway.sandbox import files as cfiles
+
+    root = tmp_path / "root"
+    (root / "work" / "sub").mkdir(parents=True)
+    (root / "work" / "data.csv").write_text("D")
+    (root / "work" / "sub" / "deep.txt").write_text("deep")
+    os.symlink("data.csv", root / "work" / "latest.csv")  # relative, same dir
+    os.symlink("sub", root / "work" / "alias")  # directory link
+    os.symlink("../data.csv", root / "work" / "sub" / "up.csv")  # .. stays inside
+    os.symlink(
+        "/mnt/data/data.csv", root / "work" / "mnt.csv"
+    )  # the sandbox's own view
+    os.symlink(str(root / "work" / "data.csv"), root / "work" / "abs.csv")
+    os.symlink("loop2", root / "work" / "loop1")
+    os.symlink("loop1", root / "work" / "loop2")
+
+    def read(parts):
+        fd = cfiles.open_confined(root, parts, os.O_RDONLY, extra_roots=(str(root),))
+        try:
+            return os.read(fd, 100).decode()
+        finally:
+            os.close(fd)
+
+    assert read(["work", "latest.csv"]) == "D"
+    assert read(["work", "alias", "deep.txt"]) == "deep"
+    assert read(["work", "sub", "up.csv"]) == "D"
+    assert read(["work", "mnt.csv"]) == "D"
+    assert read(["work", "abs.csv"]) == "D"
+    with pytest.raises(cfiles.LinkEscapeError):
+        read(["work", "loop1"])
+    # escapes stay refused: above the root, absolute outside, and through a directory link
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "f").write_text("S")
+    os.symlink("../../../out/f", root / "work" / "up_out")
+    os.symlink(str(out / "f"), root / "work" / "abs_out")
+    os.symlink(str(out), root / "work" / "dir_out")
+    for parts in (["work", "up_out"], ["work", "abs_out"], ["work", "dir_out", "f"]):
+        with pytest.raises(cfiles.LinkEscapeError):
+            read(parts)
+
+
+def test_editor_follows_a_link_the_code_made_inside_the_container(env):
+    e, c, _, tmp = env
+    (c.work / "data.csv").write_text("a,b\n")
+    os.symlink("data.csv", c.work / "latest.csv")
+    r = asyncio.run(e.editor(c, {"command": "view", "path": "latest.csv"}))
+    assert r.ok and "a,b" in r.text
+    r = asyncio.run(
+        e.editor(
+            c,
+            {
+                "command": "str_replace",
+                "path": "latest.csv",
+                "old_str": "a,b",
+                "new_str": "x,y",
+            },
+        )
+    )
+    assert r.ok and (c.work / "data.csv").read_text() == "x,y\n"
+    assert (c.work / "latest.csv").is_symlink()  # the link itself is kept
+    # a link out of the container is refused with a message that says why
+    target = tmp / "host-secret"
+    target.write_text("SECRET")
+    os.symlink(target, c.work / "out")
+    r = asyncio.run(e.editor(c, {"command": "view", "path": "out"}))
+    assert not r.ok and "outside the container" in r.text and "SECRET" not in r.text

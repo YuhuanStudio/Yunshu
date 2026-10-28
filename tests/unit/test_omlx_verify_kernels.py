@@ -15,7 +15,7 @@ def test_apply_installs_and_is_idempotent(monkeypatch):
     assert applied["gdn_prework"] and applied["sdpa_split"] and applied["verify_qmm"]
     wrapped = mtp._mtp_verify_target
     assert getattr(wrapped, "_yunshu_armed", False)
-    assert omlx.apply(row_exact=True) is applied
+    assert omlx.apply() is applied
     assert mtp._mtp_verify_target is wrapped
 
     seen = []

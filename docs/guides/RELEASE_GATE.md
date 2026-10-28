@@ -30,8 +30,8 @@ A family whose variable is unset is reported as `SKIP` with the reason.
 
 The gate keeps everything it installs and writes under `$GATE_ROOT`: HOME, the uv tool
 directories, uv's cache and Python installs. It never touches your `~/.yunshu` or `~/.local`.
-Results and server logs go to `$OUT`, which defaults to `docs/research/runs/<date>-release-gate/`
-(local, not in git).
+Results and server logs go to `$OUT`, which defaults to a dated `release-gate` directory under the
+ignored `docs/research/runs/` (see `scripts/release/gate.sh`; local only).
 
 | Stage | What must hold | Time |
 |---|---|---|

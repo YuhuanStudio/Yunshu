@@ -284,14 +284,41 @@ def readable(bits: int, group_size: int, mode: str = "affine") -> bool:
     return mode == "affine" and bits in BITS and group_size in ((32, 64) if bits == 4 else (64,))
 
 
-def supports(weight: mx.array, scales: mx.array, x: mx.array, bits: int, group_size: int, mode: str) -> bool:
+# Metal 4 tensor ``slice()`` at a byte offset of 2 GiB or more lands 4 GiB low on M5 / macOS 26.6
+# (llama.cpp #28748; mlx2 b9db287). The untiled kernels slice the whole [N, K] weight tensor at
+# column offset n0, so a weight whose last tile starts that deep must not run them.
+SLICE_OFFSET_LIMIT = 2**31
+
+
+def max_tensor_slice_offset(n: int, k: int, bits: int, *, tiled: bool = False, nt: int = NT) -> int:
+    """Upper bound in bytes of the offset the kernels pass to a tensor ``slice()`` for an (n, k) weight.
+
+    Tiled weights (and the 64-wide coop kernel) build each tile's tensor from a 64-bit pointer, so
+    only their small in-row slices remain; untiled ones slice ``tB`` at the last tile's first row,
+    bounded here by that row plus one whole row (a safe over-count).
+    """
+    row_bytes = (int(k) * int(bits) + 7) // 8
+    if tiled:
+        return row_bytes
+    last_n0 = ((max(int(n), 1) - 1) // int(nt)) * int(nt)
+    return (last_n0 + 1) * row_bytes
+
+
+def slice_offset_ok(n: int, k: int, bits: int, *, tiled: bool = False, nt: int = NT) -> bool:
+    """False when the lane kernel's tensor slices would reach SLICE_OFFSET_LIMIT: route to stock."""
+    return max_tensor_slice_offset(n, k, bits, tiled=tiled, nt=nt) < SLICE_OFFSET_LIMIT
+
+
+def supports(weight: mx.array, scales: mx.array, x: mx.array, bits: int, group_size: int, mode: str,
+             *, tiled: bool = False, nt: int = NT) -> bool:
     if not readable(bits, group_size, mode):
         return False
     if x.dtype != mx.bfloat16 or scales.dtype != mx.bfloat16 or weight.dtype != mx.uint32 or weight.ndim != 2:
         return False
     k = int(x.shape[-1])
     n = int(weight.shape[0])
-    return k % 64 == 0 and int(weight.shape[1]) * 32 == k * bits and n % 4 == 0
+    return (k % 64 == 0 and int(weight.shape[1]) * 32 == k * bits and n % 4 == 0
+            and slice_offset_ok(n, k, bits, tiled=tiled, nt=nt))
 
 
 
@@ -325,6 +352,9 @@ def lane_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, tiled: bool = F
     if M > row_limit:
         raise ValueError(f"lane_matmul takes at most {row_limit} rows, got {M}")
     bits = weight_bits(weight, K)
+    if not slice_offset_ok(N, K, bits, tiled=tiled, nt=nt if tiled else NT):
+        raise ValueError(f"lane_matmul: tensor slice offsets of an untiled {N}x{K} {bits}-bit weight reach 2 GiB "
+                         "(Metal slice() bug); the caller must stay on MLX's quantized matmul")
     if not readable(bits, group):
         raise ValueError(f"lane_matmul takes {'/'.join(map(str, BITS))}-bit weights in groups of 64 (4-bit also 32), "
                          f"got {bits}-bit in groups of {group}")
@@ -439,7 +469,8 @@ def _call(self: Any, x: mx.array) -> mx.array:
     tiled = getattr(self, "_lane_tiled", False)
     nt = getattr(self, "_lane_nt", NT)
     if enabled and rows <= max_rows and supports(self["weight"], self["scales"], x, self.bits,
-                                                 self.group_size, getattr(self, "mode", "affine")):
+                                                 self.group_size, getattr(self, "mode", "affine"),
+                                                 tiled=tiled, nt=nt):
         sbt = getattr(self, "_lane_sbt", None)
         if sbt is None:
             sbt = pack_scales(self["scales"], self["biases"])

@@ -213,7 +213,7 @@ JSON schema 与 `json_object` 限制由两个引擎之一强制运行。`YUNSHU_
 | 必须调用某个工具 | `"required"` | `"required"` | `{"type": "any"}` |
 | 必须调用指定工具 | `{"type": "function", "function": {"name": "..."}}` | `{"type": "function", "name": "..."}` | `{"type": "tool", "name": "..."}` |
 
-`tool_choice` 为 `required` 或指定函数时，`tools` 不能是空的，而且指定的函数必须是已声明的工具之一，否则请求会得到 `400`。`allowed_tools` 形式在 chat 与 Responses 路由中会折叠成 `tools` 加上一个模式。强制的选择一律由受限解码来保证，所以调用一定存在、一定指向正确的工具，且参数符合它的 schema。`auto` 的调用则是自由解码，事后再修复；实验性配置 `YUNSHU_TOOL_GRAMMAR` 可把受限解码延伸到 `auto`，缺省关闭。
+`tool_choice` 为 `required` 或指定函数时，`tools` 不能是空的，而且指定的函数必须是已声明的工具之一，否则请求会得到 `400`。`allowed_tools` 形式在 chat 与 Responses 路由中会折叠成 `tools` 加上一个模式。强制的选择一律由受限解码来保证，所以调用一定存在、一定指向正确的工具，且参数符合它的 schema。`auto` 的调用则是自由解码，事后再修复。
 
 ### 平行工具调用
 

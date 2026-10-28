@@ -38,6 +38,8 @@ from typing import Any
 
 import numpy as np
 
+from .constraint_eos import GrammarDeadEndError
+
 logger = logging.getLogger(__name__)
 
 # Special / added tokens that may appear inside a string value (a file that
@@ -352,6 +354,7 @@ def detect_style(tokenizer: Any) -> str | None:
 _TOKENIZERS: dict[tuple[int, int], tuple[Any, Any]] = {}
 _TOKENIZER_LOCK = threading.Lock()
 _TOKENIZER_BYTES: dict[tuple[int, int], int] = {}
+_BUILD_LOCKS: dict[tuple[int, int], threading.Lock] = {}
 
 
 def _hf_tokenizer(tokenizer: Any) -> Any:
@@ -371,15 +374,64 @@ def llg_tokenizer(tokenizer: Any, vocab_size: int):
         hit = _TOKENIZERS.get(key)
         if hit is not None:
             return hit[1]
-    import llguidance.hf
+        build_lock = _BUILD_LOCKS.setdefault(key, threading.Lock())
+    # One build per key: a request that arrives while the load-time prewarm is still
+    # walking the vocabulary waits for it instead of building (and holding) a second copy.
+    with build_lock:
+        with _TOKENIZER_LOCK:
+            hit = _TOKENIZERS.get(key)
+            if hit is not None:
+                return hit[1]
+        import llguidance.hf
 
-    before = _heap_pages_bytes()
-    built = llguidance.hf.from_tokenizer(hf, n_vocab=int(vocab_size))
-    grown = max(0, _heap_pages_bytes() - before)
-    with _TOKENIZER_LOCK:
-        _TOKENIZERS[key] = (hf, built)  # keeps ``hf`` alive so its id stays unique
-        _TOKENIZER_BYTES[key] = grown
+        before = _heap_pages_bytes()
+        built = llguidance.hf.from_tokenizer(hf, n_vocab=int(vocab_size))
+        grown = max(0, _heap_pages_bytes() - before)
+        with _TOKENIZER_LOCK:
+            _TOKENIZERS[key] = (hf, built)  # keeps ``hf`` alive so its id stays unique
+            _TOKENIZER_BYTES[key] = grown
     return built
+
+
+def prewarm_llg_tokenizer(tokenizer: Any, model_vocab: int | None = None) -> bool:
+    """Build the llguidance token tables for ``tokenizer`` in the background, so the first
+    constrained request (response_format, regex, choice, cfg, forced tool_choice) does
+    not spend about a second walking the vocabulary on its own TTFT.
+
+    Runs on the grammar worker pool, never on the MLX thread, and nothing waits for it:
+    model readiness is unaffected, and a request that needs a table still being built
+    waits on that one build. Builds ONE table, at the tokenizer's own length (JSON schema /
+    regex / choice / cfg, the constrained requests an unconfigured deployment sees). The
+    forced-tool grammar masks at the model's padded logits width (``model_vocab``); when
+    that differs it is a second table of the same size, built on the first forced tool call
+    instead of at every load (a deployment that never forces a tool should not hold it).
+    Each table is a native heap of the vocabulary's size (~0.45 GiB at 248K tokens, listed
+    in the memory ledger); ``YUNSHU_GRAMMAR_PREWARM=0`` turns the prewarm off.
+
+    Returns whether a build was scheduled (False without llguidance, a Hugging Face
+    tokenizer, or with the setting off)."""
+    import importlib.util
+
+    from . import settings
+
+    if not settings.get("YUNSHU_GRAMMAR_PREWARM"):
+        return False
+    if tokenizer is None or importlib.util.find_spec("llguidance") is None:
+        return False
+    if not hasattr(_hf_tokenizer(tokenizer), "backend_tokenizer"):
+        return False
+    from .grammar_compile import _WORKERS
+
+    def _build() -> None:
+        try:
+            from .grammar_constraint import _LlgConstraint
+
+            llg_tokenizer(tokenizer, _LlgConstraint._vocab_width(tokenizer))
+        except Exception:  # noqa: BLE001 - a prewarm miss only costs the first request
+            logger.debug("llguidance tokenizer prewarm failed", exc_info=True)
+
+    _WORKERS.submit(_build)
+    return True
 
 
 def _heap_pages_bytes() -> int:
@@ -509,7 +561,8 @@ def _eos_ids(tokenizer: Any) -> tuple[int, ...]:
 def is_forced(choice: Any) -> bool:
     """True when ``tool_choice`` forces a call (required / any / a named function). A forced
     choice is a guarantee in both the OpenAI and the Anthropic API, so it is always
-    constrained by the tool grammar; ``YUNSHU_TOOL_GRAMMAR`` governs only auto."""
+    constrained by the tool grammar; auto stays unconstrained (measured: lossless, no failures
+    removed, 3-16% slower decode)."""
     c = normalize_tool_choice(choice)
     return c == "required" or isinstance(c, dict)
 
@@ -655,6 +708,30 @@ def require_tool_grammar(grammar, choice):
     return grammar
 
 
+def engine_vocab_width(engine, tok) -> int:
+    """Logits width of ``engine``'s model, the mask width the tool grammar compiles for."""
+    cfg = getattr(engine, "_config", None) or {}
+    args = getattr(getattr(engine, "_model", None), "args", None)
+    return int(
+        (cfg.get("text_config") or {}).get("vocab_size")
+        or cfg.get("vocab_size")
+        or getattr(args, "vocab_size", None)
+        or len(getattr(tok, "_tokenizer", tok))
+    )
+
+
+def prewarm_for_engine(engine) -> bool:
+    """:func:`prewarm_llg_tokenizer` for a freshly loaded engine; never raises."""
+    try:
+        tok = getattr(engine, "_tokenizer", None)
+        return tok is not None and prewarm_llg_tokenizer(
+            tok, engine_vocab_width(engine, tok)
+        )
+    except Exception:  # noqa: BLE001 - load must not depend on a cache warm-up
+        logger.debug("llguidance tokenizer prewarm skipped", exc_info=True)
+        return False
+
+
 def validate_forced_tools(engine, tools, choice, parallel=True):
     """CPU-only preflight, before response headers; reuse the engine's grammar cache."""
     choice = normalize_tool_choice(choice)
@@ -663,19 +740,12 @@ def validate_forced_tools(engine, tools, choice, parallel=True):
     cache = engine.__dict__.setdefault("_tool_grammars", {})
     key = grammar_key(tools, choice, parallel)
     if key not in cache:
-        cfg = getattr(engine, "_config", None) or {}
-        args = getattr(getattr(engine, "_model", None), "args", None)
         tok = engine._tokenizer
         if tok is None:
             raise ValueError(
                 "Cannot guarantee forced tool_choice: model tokenizer is unavailable"
             )
-        vocab = (
-            (cfg.get("text_config") or {}).get("vocab_size")
-            or cfg.get("vocab_size")
-            or getattr(args, "vocab_size", None)
-            or len(getattr(tok, "_tokenizer", tok))
-        )
+        vocab = engine_vocab_width(engine, tok)
         if len(cache) >= 8:
             cache.pop(next(iter(cache)))
         cache[key] = compile_tool_grammar(
@@ -685,13 +755,15 @@ def validate_forced_tools(engine, tools, choice, parallel=True):
 
 
 def grammar_key(tools: Any, tool_choice: Any, parallel: bool) -> str:
+    # Keys keep the request's order: the grammar emits object properties in the schema's declared
+    # order (mlx-swift-lm d02948b), so two tool sets that differ only in property order must not
+    # share one compiled grammar.
     payload = json.dumps(
         [
             [(t.name, t.parameters) for t in normalize_tools(tools)],
             tool_choice,
             bool(parallel),
         ],
-        sort_keys=True,
         default=str,
     )
     return hashlib.sha256(payload.encode()).hexdigest()[:24]
@@ -903,9 +975,21 @@ class ToolCallProcessor:
 
     def __init__(self, guide: ToolCallGuide):
         self.guide = guide
+        # A shared batch row sets ``isolate``: a grammar dead end is recorded in ``fault``
+        # (the runner fails that one request) instead of raising out of the batch step.
+        self.isolate = False
+        self.fault: BaseException | None = None
 
     def _apply(self, logits):
-        row = self.guide.mask()
+        if self.fault is not None:
+            return logits
+        try:
+            row = self.guide.mask()
+        except GrammarDeadEndError as exc:
+            if not self.isolate:
+                raise
+            self.fault = exc
+            return logits
         if row is None:
             return logits
         return apply_bitmask(logits, row)

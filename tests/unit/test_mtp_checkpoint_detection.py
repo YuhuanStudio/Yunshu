@@ -3,6 +3,7 @@
 import json
 
 import mlx.core as mx
+import pytest
 
 from yunshu_engine.mlxvlm_mtp import _build_drafter, is_mtp_capable
 
@@ -115,8 +116,30 @@ def test_unindexed_head_warns_in_doctor_and_startup(caplog, monkeypatch, tmp_pat
     monkeypatch.setattr(
         "yunshu_engine.utils.hardware.is_paravirtual_metal", lambda: False
     )
-    monkeypatch.setattr(VLMEngine, "_round_driver_wanted", lambda *_: False)
     monkeypatch.setattr(spec_select, "choose", stop_at_selection)
     with pytest.raises(SelectionReachedError):
         engine._build_batch_runner(str(tmp_path))
     assert warning in caplog.text
+
+
+@pytest.mark.parametrize("model_type", ["qwen3_5", "qwen4_exp"])
+def test_doctor_reports_speculation_for_every_engine_spec_family(
+    monkeypatch, tmp_path, model_type
+):
+    # doctor must use the engine's own family list: Flash-Next (qwen4_exp) was reported as "none"
+    from yunshu_cli.doctor import check_speculative
+    from yunshu_engine import mlxvlm_mtp, spec_select
+
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": model_type,
+                "text_config": {"hidden_size": 2560, "num_hidden_layers": 48},
+            }
+        )
+    )
+    monkeypatch.setattr(spec_select, "find_dflash_drafter", lambda *a, **k: None)
+    monkeypatch.setattr(mlxvlm_mtp, "is_mtp_capable", lambda _p: True)
+    monkeypatch.setattr(mlxvlm_mtp, "unindexed_mtp_warning", lambda _p: None)
+    checks = check_speculative(str(tmp_path))
+    assert checks and checks[0].detail.startswith("MTP head"), checks

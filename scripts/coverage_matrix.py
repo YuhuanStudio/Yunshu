@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Yunshu coverage matrix — the honest map of what is actually verified.
 
-This is the ANTITHESIS of docs/archive/VALIDATION_REPORT.md (a 577-wave narrative
-of uncertain reliability). It is pure metadata (no model loading — runs in <1s,
-crashes nothing) that maps every technique × model × interface to its EVIDENCE:
+It is pure metadata (no model loading — runs in <1s, crashes nothing) that maps
+every technique × model × interface to its EVIDENCE:
 
   ✅ GATED   — a scripts/regression.py section verifies it on EVERY run.
   🟢 VERIFIED— proven by a real-model run (cited), but NOT yet in the regression

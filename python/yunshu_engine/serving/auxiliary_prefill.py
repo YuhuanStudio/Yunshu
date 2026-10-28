@@ -45,6 +45,13 @@ class AuxiliaryPrefillPolicy(SimpleNamespace):
     def note_head(self, token_ids):
         pass
 
+    def seam_boundary(self, token_ids, final):
+        # Auxiliary prefills store nothing and a 64-aligned extra cut is split-invariant.
+        return 0
+
+    def last_user_boundary(self, token_ids):
+        return 0
+
     def divergence_point(self, token_ids):
         # Auxiliary prefills store no checkpoints, and 64-aligned cuts are split-invariant, so the shared-head
         # checkpoint of the primary manager is not needed here; nor may an auxiliary prompt enter its recent list.

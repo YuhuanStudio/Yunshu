@@ -24,3 +24,17 @@ def test_census_skips_small_arrays():
     small = mx.zeros((8,))
     mx.eval(small)
     assert all(g["mib"] >= 1.0 for g in census(min_mib=1.0)["holders"])
+
+
+def test_census_survives_a_dead_weak_proxy_of_an_array():
+    """isinstance() on a dead weakref.proxy raises ReferenceError: the walk over every tracked object
+    must skip it (found by the random-order pass: another test left such a proxy in the heap)."""
+    import weakref
+
+    a = mx.zeros((8,))
+    proxy = weakref.proxy(a)
+    del a
+    keep = [proxy]
+    out = census(min_mib=1.0)
+    assert "holders" in out
+    del keep

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   LIVE_RANGE_MAX_S,
+  beginLoad,
   RANGES,
   rangeSeconds,
   stepFor,
@@ -69,4 +70,11 @@ test("a status answer stamped by the console process says so; an engine's own an
     true,
   );
   assert.equal((await withFetch({})).console_process, undefined);
+});
+
+test("a new range starts empty and loading, so the previous range's points are never shown under it", () => {
+  const s = beginLoad();
+  assert.deepEqual(s.points, []);
+  assert.equal(s.loading, true);
+  assert.equal(s.unavailable, false);
 });

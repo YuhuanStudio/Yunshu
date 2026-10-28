@@ -30,7 +30,7 @@ There are 20 tasks: 12 Exercism Python exercises from the Aider polyglot benchma
 
 - The verdict of the repeatable run fails closed: API errors, malformed tool calls, markup leaks and missing runs all fail it.
 - Output files begin with a `meta` row (engine, checkpoint, git SHA, agent version, flags). Runs are resumable: a task and repeat already present in `--output` is skipped.
-- Only dated, aggregate results with snapshot SHAs, denominators, timeouts and uncertainty are published; raw run metadata, agent artifacts and JSONL stay private under `docs/research/`.
+- Only dated, aggregate results with snapshot SHAs, denominators, timeouts and uncertainty are published; raw run metadata, agent artifacts and JSONL stay private in an ignored local directory.
 
 ## Knobs
 

@@ -30,8 +30,8 @@ def _clean(monkeypatch):
 
 @pytest.mark.parametrize("text", ["1", "true", "YES", "on"])
 def test_bool_true(monkeypatch, text):
-    monkeypatch.setenv("YUNSHU_GPU_SAMPLER", text)
-    assert settings.get_bool("YUNSHU_GPU_SAMPLER") is True
+    monkeypatch.setenv("YUNSHU_GRAMMAR_BITMASK", text)
+    assert settings.get_bool("YUNSHU_GRAMMAR_BITMASK") is True
 
 
 @pytest.mark.parametrize("text", ["0", "false", "No", "off"])
@@ -207,7 +207,7 @@ def test_no_raw_yunshu_env_reads():
 
 def test_every_mentioned_name_is_registered():
     """Code and docstrings only name real settings (catches stale flags)."""
-    allowed = {"YUNSHU_API_KEY", "YUNSHU_NAME", "YUNSHU_LOGGERS"}
+    allowed = {"YUNSHU_NAME", "YUNSHU_LOGGERS"}
     stale = set()
     for path in (ROOT / "python").rglob("*.py"):
         for name in re.findall(r"YUNSHU_[A-Z0-9_]*[A-Z0-9]", path.read_text()):
@@ -233,7 +233,7 @@ def test_cli_config_json(tmp_path, monkeypatch):
     assert rows["YUNSHU_DEFAULT_MAX_TOKENS"]["value"] == 77
     assert rows["YUNSHU_DEFAULT_MAX_TOKENS"]["source"] == "file"
     assert rows["YUNSHU_AUTH_TOKEN"]["value"] == "***"
-    assert "YUNSHU_MTP_ROW_EXACT" not in rows  # experimental: only with --all
+    assert "YUNSHU_QWEN4_LANE" not in rows  # experimental: only with --all
     # KV precision is the user's memory/quality choice: a stable setting
     assert rows["YUNSHU_KV_PRECISION"]["value"] == "bf16"
 
@@ -245,7 +245,7 @@ def test_cli_config_all_table():
 
     r = CliRunner().invoke(app, ["config", "--all"])
     assert r.exit_code == 0, r.output
-    assert "YUNSHU_MTP_ROW_EXACT" in r.output
+    assert "YUNSHU_QWEN4_LANE" in r.output
 
 
 def test_cli_serve_set_rejects_unknown_key():

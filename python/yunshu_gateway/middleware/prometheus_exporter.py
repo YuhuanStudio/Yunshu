@@ -752,10 +752,6 @@ class PrometheusMetrics:
                 "gpu_busy_seconds",
                 "Cumulative seconds the runner's GPU slices were executing",
             ),
-            (
-                "round_driver_busy_seconds",
-                "Cumulative seconds spent in round-driver steps",
-            ),
         ):
             self._counters[key] = _Counter(f"yunshu_{key}_total", text)
 

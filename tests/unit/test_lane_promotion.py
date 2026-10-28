@@ -118,6 +118,45 @@ def test_no_promotion_while_anything_else_is_in_flight_or_the_row_is_not_eligibl
         assert runner._spec is None
 
 
+# --- static suppress lists keep speculative decoding ---------------------------------------
+
+
+def _with_row_processors(procs):
+    runner, group, batch, job = _runner()
+    batch.logits_processors = [procs]
+    job.spec_procs = list(
+        procs
+    )  # admission keeps the request's processors for the lane (spec_procs)
+    return runner, batch, job
+
+
+def test_a_static_suppress_mask_does_not_block_promotion_and_rides_the_lane():
+    from yunshu_engine.vlm_batch_runner import TokenMaskProcessor
+
+    mask = TokenMaskProcessor(suppress=[5, 6], eos_ids=[2])
+    runner, batch, job = _with_row_processors([mask])
+    assert VLMBatchRunner._maybe_promote(runner) is True
+    # the lane applies the same ban to its verify rows
+    assert job.spec_request.processors == [mask]
+
+
+def test_a_stateful_or_penalty_row_still_stays_off_the_lane():
+    from yunshu_engine.vlm_batch_runner import (
+        TokenMaskProcessor,
+        build_penalty_processors,
+    )
+
+    for procs in (
+        [TokenMaskProcessor(suppress=[5], eos_ids=[2], min_tokens=4)],
+        [TokenMaskProcessor(suppress=[5], eos_ids=[2], top_n_sigma=1.0)],
+        build_penalty_processors(1.0, 0.4, 0.0, None),
+        [lambda tokens, logits: logits],
+    ):
+        runner, batch, job = _with_row_processors(procs)
+        assert VLMBatchRunner._maybe_promote(runner) is False, procs
+        assert runner._spec is None
+
+
 def test_sampled_promotion_moves_the_same_sampler_with_the_committed_position_base():
     from yunshu_engine.keyed_sampling import KeyedSampler
     from yunshu_engine.vlm_batch_runner import RowParams
@@ -226,3 +265,40 @@ def test_sampled_admission_retains_precise_promotion_eligibility(
     if expected:
         group = next(iter(runner._batches.values()))
         assert group.sampler._rows[7][2] == seed_base(job.keyed.seed)
+
+
+def test_admit_builds_the_prompt_array_once_and_feeds_the_same_one(monkeypatch):
+    """The APC admission check and the embedding call share one device array of the prompt ids."""
+    from yunshu_engine import vlm_batch_runner as vbr
+    from yunshu_engine.vlm_batch_runner import _DONE
+
+    seen = []
+    model = SimpleNamespace(
+        language_model=SimpleNamespace(
+            speculative_verify_dflash_hidden=lambda *a: None
+        ),
+        get_input_embeddings=lambda ids, *a, **kw: (
+            seen.append(("embed", ids)) or SimpleNamespace(to_dict=lambda: {})
+        ),
+    )
+    runner = VLMBatchRunner(model, None, drafter=_Drafter(), draft_kind="dflash")
+    runner.apc_manager = SimpleNamespace()
+    runner._apc_admit = lambda ids: seen.append(("admit", ids)) or True
+    jobs = []
+    monkeypatch.setattr(
+        runner, "_submit", lambda job: (jobs.append(job), job.out.put(_DONE))
+    )
+    monkeypatch.setattr(
+        runner,
+        "_new_generator",
+        lambda **kw: SimpleNamespace(insert=lambda *a, **kw: [7]),
+    )
+    list(runner.iter_tokens([1, 2, 3], max_tokens=4, temperature=0.0, seed=None))
+    built = []
+    real = vbr.mx.array
+    monkeypatch.setattr(
+        vbr.mx, "array", lambda x, *a, **k: (built.append(x), real(x, *a, **k))[1]
+    )
+    runner._admit(jobs[0], alone=True)
+    assert [k for k, _ in seen] == ["admit", "embed"]
+    assert [x for x in built if x == [1, 2, 3]] == [[1, 2, 3]]

@@ -10,8 +10,14 @@ import asyncio
 import time
 
 from . import settings
-from .context_window import ContextBudgetError, reject_overlong_prompt
+from .context_window import (
+    ContextBudgetError,
+    reject_overlong_prompt,
+    require_non_empty_prompt,
+)
 from .fast_path_stats import FastPathStats
+from .kv_prefix_cache import store_opt_out
+from .reasoning_gate import ThinkGatedSampler as _ThinkGatedSampler
 
 
 def hybrid_snapshot_mode(
@@ -28,6 +34,9 @@ def hybrid_snapshot_mode(
         and lora_adapter is None
         and prefix_cache is not None
     )
+
+
+_JUMP_PREFILL_STEP = 2048
 
 
 class EngineFastMixin:
@@ -72,7 +81,18 @@ class EngineFastMixin:
             return best
 
         cache = make_prompt_cache(model)
-        logits = model(mx.array([input_ids]), cache=cache)[:, -1, :]
+        # Only the last position's logits are read. A long prompt runs all but its last token in
+        # chunks whose output is dropped (lazy evaluation never builds their [chunk, vocab] head
+        # matmul; one unchunked forward materialized N x 248k logits), then the last token alone.
+        # A prompt of one chunk or less stays one forward.
+        done = 0
+        if len(input_ids) > _JUMP_PREFILL_STEP:
+            while len(input_ids) - 1 - done > 0:
+                end = min(done + _JUMP_PREFILL_STEP, len(input_ids) - 1)
+                model(mx.array([input_ids[done:end]]), cache=cache)
+                mx.eval([c.state for c in cache])
+                done = end
+        logits = model(mx.array([input_ids[done:]]), cache=cache)[:, -1, :]
         gen_ids: list[int] = []
         pieces: list[str] = []
         acc = ""  # running detokenized text, for incremental stop scanning
@@ -195,7 +215,7 @@ class EngineFastMixin:
             # first decode token.
             if p % block == 0 and p >= prefix_cache._min_prefix:
                 try:
-                    prefix_cache.add(full_ids[:p], cache)
+                    prefix_cache.add(full_ids[:p], cache, defer_finite_check=True)
                 except Exception:
                     _engine.logger.debug(
                         "hybrid boundary snapshot add failed", exc_info=True
@@ -210,7 +230,7 @@ class EngineFastMixin:
     def _tool_call_processor(self: _engine.BatchedEngine, input_ids: list[int]):  # type: ignore[misc]
         """Structural-tag logits processor for the request's native tools (free until
         the tool-call marker, then the call body is masked to this request's tool
-        grammar), or None: no native tools, ``YUNSHU_TOOL_GRAMMAR`` off for auto (a forced choice is always constrained), or a model /
+        grammar), or None: no native tools, auto choice (only a forced choice is constrained), or a model /
         tool set the grammar cannot cover."""
         tools = _engine._REQUEST_TOOLS.get()
         if not tools:
@@ -219,7 +239,7 @@ class EngineFastMixin:
 
         use = _engine._REQUEST_TOOL_USE.get() or {}
         choice = tcg.normalize_tool_choice(use.get("tool_choice"))
-        if not (tcg.is_forced(choice) or settings.get_bool("YUNSHU_TOOL_GRAMMAR")):
+        if not tcg.is_forced(choice):
             return None
         if choice == "none":
             return None
@@ -267,7 +287,7 @@ class EngineFastMixin:
         logprobs: bool = False,
         top_logprobs: int | None = None,
         thinking_budget: int | None = None,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float | None = None,
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         json_schema: dict | str | None = None,
@@ -370,32 +390,33 @@ class EngineFastMixin:
         _latency_info = current_request_info.get()
         _latency_marks = getattr(_latency_info, "latency_marks", {})
         _latency_marks["template_start"] = time.perf_counter()
-        # Encode prompt
-        if isinstance(prompt, str):
-            text = prompt
-        elif isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
-            # Route through _apply_chat_template (NOT raw tokenizer.apply_chat_template)
-            # so the fast path — the DEFAULT serving path — also gets: tool_calls.
-            # arguments str→dict normalization (multi-turn tool history otherwise
-            # double-encodes or raises in Jinja → silent degraded fallback), the
-            # family message adapter (Gemma4/Mistral/Harmony role rules), dangling
-            # <think> closing, and the enable_thinking-unsupported retry.
-            text = self._apply_chat_template(prompt, enable_thinking=enable_thinking)
-        else:
-            text = str(prompt)
 
-        input_ids = self._encode_prompt(tokenizer, text)
+        # Encode prompt (template render + tokenize run on the text-prep thread, not
+        # the event loop: see text_prep).
+        def _render_and_encode():
+            if isinstance(prompt, str):
+                text = prompt
+            elif isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+                # Route through _apply_chat_template (NOT raw tokenizer.apply_chat_template)
+                # so the fast path — the DEFAULT serving path — also gets: tool_calls.
+                # arguments str→dict normalization (multi-turn tool history otherwise
+                # double-encodes or raises in Jinja → silent degraded fallback), the
+                # family message adapter (Gemma4/Mistral/Harmony role rules), dangling
+                # <think> closing, and the enable_thinking-unsupported retry.
+                text = self._apply_chat_template(
+                    prompt, enable_thinking=enable_thinking
+                )
+            else:
+                text = str(prompt)
+            return text, self._encode_prompt(tokenizer, text)
+
+        from .text_prep import run_text_prep
+
+        text, input_ids = await run_text_prep(_render_and_encode)
         prompt_tokens = len(input_ids)
         _latency_marks["template_end"] = time.perf_counter()
 
-        if not input_ids:
-            bos_id = getattr(tokenizer, "bos_token_id", None)
-            if bos_id is not None:
-                input_ids = [bos_id]
-            else:
-                eos_id = getattr(tokenizer, "eos_token_id", 1)
-                input_ids = [eos_id]
-            prompt_tokens = len(input_ids)
+        require_non_empty_prompt(input_ids)
 
         # ── Context window: clamp generation + truncate over-long prompt ──
         # Resolve the REAL context window. The old code read ONLY the
@@ -506,7 +527,7 @@ class EngineFastMixin:
                 sampler = _engine._build_constrained_sampler(
                     sampler, json_schema, tokenizer
                 )
-                report(
+                _sr = report(
                     "mlx-lm",
                     json_schema,
                     backend_name(
@@ -518,6 +539,18 @@ class EngineFastMixin:
                     else None,
                     enforced=sampler is not unconstrained_sampler,
                 )
+                if sampler is not unconstrained_sampler:
+                    # thinking on: the grammar binds after </think>, not inside the reasoning
+                    from .reasoning_gate import gate_constrained_sampler
+
+                    sampler = gate_constrained_sampler(
+                        unconstrained_sampler,
+                        sampler,
+                        input_ids,
+                        tokenizer,
+                        _eos_ids,
+                        _sr,
+                    )
             except Exception:
                 _engine.logger.warning(
                     "Grammar constraint setup failed, falling back to unconstrained",
@@ -548,6 +581,8 @@ class EngineFastMixin:
                 isinstance(json_schema, dict)
                 and json_schema.get("type") in ("regex", "choice", "cfg")
             )
+            # the custom loop masks from token 1; with an open <think> the grammar waits
+            and not isinstance(sampler, _ThinkGatedSampler)
         ):
             try:
                 import json as _json
@@ -639,90 +674,31 @@ class EngineFastMixin:
                 return logits
 
             logits_processors.append(_rep_penalty)
+        from . import text_logit_processors as _tlp
+
+        _gen_count_procs: list = []  # told len(ids_to_prefill) before generate_step runs
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
-            # Maintain incremental counts dict instead of rebuilding
-            # from full tokens list every step (O(T²) → O(T) total). The
-            # closure captures a mutable state dict so successive calls only
-            # observe the newest token.
-            _fp_state: dict[str, object] = {"counts": {}, "last_len": -1}
-
-            # The prompt offset inside the processor is 1, NOT the full
-            # prompt length. mlx-lm prefills all-but-the-last prompt token OUTSIDE
-            # _step, so the `tokens` accumulator handed to logits_processors is
-            # [last_prompt_token, gen1, gen2, ...]. With n_prompt=prompt_tokens the
-            # guard `cur_len <= n_prompt` made frequency/presence penalty INERT for
-            # the first ~prompt_len generated tokens (short completions never
-            # penalized at all) and then tokens[n_prompt:] under-counted repeats.
-            def _freq_pres_penalty(
-                tokens,
-                logits,
-                fp=frequency_penalty,
-                pp=presence_penalty,
-                n_prompt=1,
-                _st=_fp_state,
-            ):
-                counts: dict[int, int] = _st["counts"]  # type: ignore[assignment]
-                last_len = int(_st["last_len"])  # type: ignore[arg-type]
-                cur_len = len(tokens)
-                if cur_len <= n_prompt:
-                    _st["last_len"] = cur_len
-                    return logits
-                # Reset/rebuild if tokens shrank (spec-decode rollback) or
-                # we have not yet started incremental accounting.
-                if cur_len < last_len or last_len < n_prompt:
-                    counts = {}
-                    for t in tokens[n_prompt:]:
-                        counts[int(t)] = counts.get(int(t), 0) + 1
-                    _st["counts"] = counts
-                else:
-                    start = max(last_len, n_prompt)
-                    for t in tokens[start:]:
-                        counts[int(t)] = counts.get(int(t), 0) + 1
-                _st["last_len"] = cur_len
-                for tid, cnt in counts.items():
-                    # OpenAI permits frequency/presence penalty in [-2.0, 2.0];
-                    # negative values BOOST the token (encourage repetition).
-                    # Guarding with `> 0` silently dropped negative penalties
-                    # (verified: fp=-2.0 produced output identical to fp=0).
-                    if fp != 0.0:
-                        logits[..., tid] = logits[..., tid] - fp * cnt
-                    if pp != 0.0 and cnt > 0:
-                        logits[..., tid] = logits[..., tid] - pp
-                return logits
-
-            logits_processors.append(_freq_pres_penalty)
+            # Dense per-request count vectors patched once per new token (see
+            # text_logit_processors). Counts generated tokens only: the prompt offset is the
+            # length of the ids handed to generate_step (set below, once the cached prefix is
+            # known), because mlx-lm puts every prefilled chunk into the `tokens` its
+            # processors see. OpenAI allows both penalties in [-2, 2]; negative ones boost.
+            _fpp = _tlp.FrequencyPresencePenalty(frequency_penalty, presence_penalty)
+            _gen_count_procs.append(_fpp)
+            logits_processors.append(_fpp)
         if logit_bias:
-
-            def _logit_bias_proc(_tokens, logits, biases=logit_bias):
-                # Skip token ids outside [0, vocab) — a user-supplied out-of-range
-                # or negative id would otherwise index out of bounds and crash the
-                # request (MLX: "Cannot squeeze axis 1 with size 0"). OpenAI ignores
-                # invalid logit_bias token ids rather than erroring.
-                vocab = logits.shape[-1]
-                for tid, bias in biases.items():
-                    if 0 <= tid < vocab:
-                        logits[..., tid] = logits[..., tid] + bias
-                return logits
-
-            logits_processors.append(_logit_bias_proc)
+            # Out-of-range ids are skipped (OpenAI ignores them) rather than crashing
+            # the request with an out-of-bounds index.
+            logits_processors.append(_tlp.LogitBias(logit_bias))
 
         # suppress_tokens — hard-ban specific token ids (logits → -inf).
         if suppress_tokens:
-            _sup = [int(t) for t in suppress_tokens]
-
-            def _suppress_proc(_tokens, logits, sup=_sup):
-                vocab = logits.shape[-1]
-                for tid in sup:
-                    if 0 <= tid < vocab:
-                        logits[..., tid] = -float("inf")
-                return logits
-
-            logits_processors.append(_suppress_proc)
+            logits_processors.append(_tlp.TokenBan(suppress_tokens))
 
         # min_tokens — mask EOS + single-token stops to -inf until at
         # least min_tokens have been GENERATED, so generation can't end early.
-        # mlx-lm's tokens accumulator is [last_prompt_token, gen1, ...] so the
-        # generated count is len(tokens) - 1 (the prompt-offset insight).
+        # mlx-lm's tokens accumulator is [prefilled prompt..., gen1, ...]: the processor
+        # reads the prompt length off its first call (n_prompt=None).
         # SKIP when a JSON/grammar constraint is active. The constraint
         # only permits EOS once the document is structurally COMPLETE (so it
         # already enforces a minimum), and masking EOS at the DONE state leaves the
@@ -730,17 +706,9 @@ class EngineFastMixin:
         # emits an INVALID non-EOS token after a complete JSON value. Valid JSON
         # must win over min_tokens (which can't lengthen structured output anyway).
         if min_tokens and min_tokens > 0 and stop_ids and json_schema is None:
-            _mask_ids = list(stop_ids)
-
-            def _min_tokens_proc(tokens, logits, ids=_mask_ids, floor=int(min_tokens)):
-                if (len(tokens) - 1) < floor:
-                    vocab = logits.shape[-1]
-                    for tid in ids:
-                        if 0 <= tid < vocab:
-                            logits[..., tid] = -float("inf")
-                return logits
-
-            logits_processors.append(_min_tokens_proc)
+            _min_ban = _tlp.TokenBan(stop_ids, floor=int(min_tokens))
+            _gen_count_procs.append(_min_ban)
+            logits_processors.append(_min_ban)
 
         # SAMP-2: Wrap user-provided custom logits processors to adapt signature.
         # User processors take (token_ids: list[int], logits: mx.array) -> mx.array
@@ -892,6 +860,9 @@ class EngineFastMixin:
             # snapshots only.
             _fp_stats.stats.latency_marks["apc_start"] = time.perf_counter()
             _pc_hit = False
+            _pc_hash: str | None = (
+                None  # the rendered prompt is hashed once per request
+            )
             # The prompt cache borrows the prefix cache's snapshot/trim; without it a hit would
             # share (and later mutate) the stored post-generation KV.
             if (
@@ -948,6 +919,7 @@ class EngineFastMixin:
             # prompt cache provides full KV state which is always better,
             # and skip when seed-bypass is active for reproducibility).
             prefix_cache = None if _bypass_cache else self._kv_prefix_cache
+            prefix_cache = store_opt_out(prefix_cache, cancel_event)
             # Proactive memory pressure eviction (vllm-mlx pattern)
             if prefix_cache is not None and self._mem_pressure_threshold > 0:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
@@ -999,43 +971,19 @@ class EngineFastMixin:
 
             _fp_stats.stats.latency_marks["apc_end"] = time.perf_counter()
 
-            # Inflight prefix sharing: check for in-flight
-            # prefills with matching prefix to share partial KV blocks.
-            # Skip when seed-bypass is active so seeded requests stay
-            # bit-reproducible regardless of concurrent in-flight prompts.
-            # Inflight sharing borrows a donor's live cache and
-            # trims it to the matched prefix — not safe for hybrid (non-trimmable
-            # recurrent layers). Hybrid reuse goes through boundary snapshots only.
-            _inflight_entry = None
-            if cached_kv is None and not _bypass_cache and not _hybrid_mode:
-                try:
-                    from .inflight_prefix_sharing import get_inflight_tracker
-
-                    _tracker = get_inflight_tracker()
-                    _inflight_entry = _tracker.find_prefix(
-                        [int(t) for t in ids], self.model_name or ""
-                    )
-                    # : DO NOT borrow the donor's LIVE kv_cache_ref. It was
-                    # unsnapshotted+untrimmed: a full-length match yields an empty
-                    # ids_to_prefill (generate_step on a (1,0) tensor → IndexError),
-                    # and a partial match decodes into the donor's still-growing
-                    # cache → wrong RoPE offsets / cross-request corruption. Safe
-                    # only when the donor unregisters before any other fast-path
-                    # _run — which the now-working engine loop breaks (a long-lived
-                    # engine-loop donor stays registered). The snapshot-based
-                    # persistent prefix cache already covers safe sharing, so the
-                    # live-borrow reuse is disabled (registration below is kept and
-                    # is harmless).
-                except Exception:
-                    _engine.logger.debug("inflight prefix lookup failed", exc_info=True)
-
+            # Inflight prefix sharing: register this prefill (tracker stats / TTL).
+            # No find_prefix() lookup: borrowing a donor's LIVE kv cache is disabled
+            # (untrimmed, still growing -> empty prefill on a full match, wrong RoPE
+            # offsets on a partial one; hybrid layers are not trimmable at all) and
+            # the snapshot-based prefix cache covers safe sharing, so the lookup
+            # result was dead code that copied the whole prompt token by token.
             # Register our prefill as in-flight for concurrent requests to share
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
 
                 get_inflight_tracker().register(
                     _inflight_req_id,
-                    [int(t) for t in ids],
+                    input_ids,
                     cache,
                     self.model_name or "",
                 )
@@ -1043,7 +991,7 @@ class EngineFastMixin:
                 _engine.logger.debug("inflight prefix register failed", exc_info=True)
 
             gen_t0 = time.perf_counter()
-            _timeout_deadline = gen_t0 + timeout_seconds
+            _timeout_deadline = gen_t0 + timeout_seconds if timeout_seconds else None
             first = True
             _itl_samples: list[float] = []
             _last_tok_time = 0.0
@@ -1075,7 +1023,10 @@ class EngineFastMixin:
                         exc_info=True,
                     )
 
-            _timeout_check_interval = 32
+            for (
+                _gp
+            ) in _gen_count_procs:  # mlx-lm's `tokens` = these ids + the generated ones
+                _gp.set_prompt_len(len(ids_to_prefill))
             _fp_stats.admit(
                 cached_tokens,
                 len(ids_to_prefill),
@@ -1131,7 +1082,9 @@ class EngineFastMixin:
                     tokens.append(token)
                     _fp_stats.token(len(tokens))
                     # Request-level timeout: check every N tokens
-                    if len(tokens) % _timeout_check_interval == 0:
+                    if _timeout_deadline is not None:
+                        # every token / cycle: a modulo check skips multiples when a spec cycle
+                        # accepts several tokens, and overshoots by seconds on a slow model
                         if time.perf_counter() > _timeout_deadline:
                             _engine.logger.warning(
                                 f"Generation timed out after {timeout_seconds}s ({len(tokens)} tokens)"
@@ -1141,7 +1094,7 @@ class EngineFastMixin:
                     if _req_kv_bits is not None:
                         _engine._progressive_quantize_kv_cache(
                             cache,
-                            self._kv_quant_start,
+                            self._kv_quant_start_for(_req_kv_bits),
                             self._kv_quant_group_size,
                             _req_kv_bits,
                             len(tokens),
@@ -1160,19 +1113,20 @@ class EngineFastMixin:
                             mx.array(-100.0, dtype=log_probs.dtype),
                             log_probs,
                         )
-                        tok_lp = float(log_probs[token])
-                        entry = {"token_id": int(token), "logprob": tok_lp}
                         if top_logprobs and top_logprobs > 0:
-                            k = min(top_logprobs, log_probs.shape[0])
-                            sorted_idx = mx.argsort(-log_probs)
-                            top_k_idx = sorted_idx[:k]
+                            from .text_logprobs import top_logprobs as _top_lp
+
+                            tok_lp, _top_ids, _top_vals = _top_lp(
+                                log_probs, top_logprobs, token
+                            )
+                            entry = {"token_id": int(token), "logprob": tok_lp}
                             entry["top_logprobs"] = [
-                                {
-                                    "token_id": int(top_k_idx[j]),
-                                    "logprob": float(log_probs[int(top_k_idx[j])]),
-                                }
-                                for j in range(k)
+                                {"token_id": i, "logprob": v}
+                                for i, v in zip(_top_ids, _top_vals, strict=True)
                             ]
+                        else:
+                            tok_lp = float(log_probs[token])
+                            entry = {"token_id": int(token), "logprob": tok_lp}
                         token_logprobs.append(entry)
                     # Stop ID check — must happen before thinking budget so that
                     # a stop token gets finish_reason="stop" even during thinking.
@@ -1243,7 +1197,7 @@ class EngineFastMixin:
             if _req_kv_bits is not None:
                 _engine._maybe_quantize_kv_cache(
                     cache,
-                    self._kv_quant_start,
+                    self._kv_quant_start_for(_req_kv_bits),
                     self._kv_quant_group_size,
                     _req_kv_bits,
                 )
@@ -1254,7 +1208,11 @@ class EngineFastMixin:
             # recurrent state isn't sliceable) — adding it would store a state
             # polluted by generated tokens and corrupt future reuse. So skip the
             # trim-based adds for hybrid; the boundary snapshots are correct.
-            if prefix_cache is not None and not _hybrid_mode:
+            # automatic (length-gated) 8-bit KV is lossy and the caches are not keyed by
+            # precision: never store a cache that really got quantised, or a later hit would
+            # differ from a miss (a reply that stayed under the gate is stored as usual)
+            _lossy_kv = self._auto_quantized_kv(_req_kv_bits, cache)
+            if prefix_cache is not None and not _hybrid_mode and not _lossy_kv:
                 prefix_cache.add(ids, cache)
 
             # KV cache breakpoints: save prefix entries at Anthropic
@@ -1264,6 +1222,7 @@ class EngineFastMixin:
                 _kv_breakpoint_token_positions
                 and prefix_cache is not None
                 and not _hybrid_mode
+                and not _lossy_kv
             ):
                 from .kv_prefix_cache import cache_length as _cache_len_bp
 
@@ -1303,18 +1262,21 @@ class EngineFastMixin:
                 not _pc_hit
                 and not _bypass_cache
                 and not _hybrid_mode
+                and not _lossy_kv
                 and hasattr(self, "_prompt_cache")
                 and self._prompt_cache is not None
                 and prefix_cache is not None
+                and getattr(cancel_event, "cache_store", True)
             ):
                 try:
                     from .kv_prefix_cache import cache_length as _cache_len
                     from .prompt_cache import compute_messages_hash
 
-                    _pc_hash = compute_messages_hash(
-                        [{"role": "user", "content": text}],
-                        model=self.model_name,
-                    )
+                    if _pc_hash is None:
+                        _pc_hash = compute_messages_hash(
+                            [{"role": "user", "content": text}],
+                            model=self.model_name,
+                        )
                     _prompt_only_len = int(len(ids))
                     _full_cache_len = int(_cache_len(cache))
                     _trim = max(0, _full_cache_len - _prompt_only_len)
@@ -1709,17 +1671,27 @@ class EngineFastMixin:
                 try:
                     from .reasoning_parser import (
                         close_reasoning_at_tool_call,
+                        close_unterminated_reasoning,
                         get_reasoning_parser,
                     )
+                    from .thinking_budget import detect_needs_think_prefix
 
+                    _prompt_opens_think = detect_needs_think_prefix(
+                        list(input_ids), tokenizer
+                    )
                     if _tools_declared:
                         # a tool call opened inside unclosed reasoning ends the reasoning
-                        from .thinking_budget import detect_needs_think_prefix
-
                         output_text = close_reasoning_at_tool_call(
-                            output_text,
-                            detect_needs_think_prefix(list(input_ids), tokenizer),
+                            output_text, _prompt_opens_think
                         )
+                    # EOS / stop / length inside the open <think> keeps the tail reasoning
+                    output_text = close_unterminated_reasoning(
+                        output_text,
+                        _prompt_opens_think,
+                        # gated: the grammar never bound, so the unclosed text is reasoning
+                        constrained=json_schema is not None
+                        and not isinstance(sampler, _ThinkGatedSampler),
+                    )
                     rp = get_reasoning_parser(self.model_name)
                     rp_out = rp.parse(output_text)
                     if rp_out.reasoning:

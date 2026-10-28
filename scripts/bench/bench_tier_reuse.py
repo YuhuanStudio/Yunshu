@@ -12,7 +12,7 @@ path. Driving the engine directly removes that ambiguity.
 Run:
   PYTHONPATH=. uv run python scripts/bench_tier_reuse.py
 Env (set before run to exercise the 4-tier engine loop):
-  YUNSHU_ENGINE_LOOP=1 YUNSHU_KV_OFFLOAD=1 YUNSHU_SSD_CACHE=1
+  YUNSHU_ENGINE_LOOP=1 YUNSHU_SSD_CACHE=1
   YUNSHU_SSD_CACHE_DIR=/tmp/yunshu_ssd
 """
 
@@ -128,7 +128,6 @@ async def main():
     print(f"model: {MODEL}")
     print(
         f"env: ENGINE_LOOP={os.environ.get('YUNSHU_ENGINE_LOOP')} "
-        f"KV_OFFLOAD={os.environ.get('YUNSHU_KV_OFFLOAD')} "
         f"SSD={os.environ.get('YUNSHU_SSD_CACHE')}"
     )
     _patch()

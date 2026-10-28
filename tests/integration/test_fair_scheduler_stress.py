@@ -1,9 +1,8 @@
-"""FAIR scheduler multi-tenant stress test.
+"""FAIR scheduler mixed-priority stress test.
 
-VALIDATION_REPORT.md line 1282 documented "FAIR multi-tenant 需 priority-queue
-stress (long-soak deferred)". This is the short-duration substitute that
-actually drives the scheduler's FAIR round-robin rotation across many rounds
-and verifies that low-priority requests do NOT starve.
+A short-duration test that drives the scheduler's FAIR round-robin rotation
+across many rounds with a mix of priorities and verifies that low-priority
+requests do NOT starve (a long soak is not run here).
 
 Strategy: rather than spin up a full BatchGenerator + model, we drive the
 exact FAIR rotation code in Scheduler._schedule_waiting (lines 1429-1472)

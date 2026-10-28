@@ -12,7 +12,11 @@ import {
 import { toast } from "@yuhuanowo/yunui";
 import { ApiError, requestJson, type Connection } from "./api.ts";
 import { factsFromRows, healthVerdict, type Verdict } from "./health.ts";
-import { useMemoryLedger, type MemoryLedgerData } from "./memory-api.ts";
+import {
+  useMemoryLedger,
+  type LedgerState,
+  type MemoryLedgerData,
+} from "./memory-api.ts";
 import {
   STORAGE_KEY,
   TOAST_TONES,
@@ -26,16 +30,21 @@ import {
   type NotifRecord,
 } from "./notifications.ts";
 import { describeNotification } from "./notification-text.ts";
-import { useRecentRequests } from "./recentRequests.ts";
+import { useRecentRequests, type Recent } from "./recentRequests.ts";
 import type { Engine } from "./ui.tsx";
 
 /**
  * What the shell derives from polling and shares with every page: the host
  * memory ledger, the health verdict and the notification list. One poller
  * each, here, so the status band, the overview and the bell cannot disagree.
+ * Pages read the same ledger and finished-request polls from here instead of polling again.
  */
 export interface Signals {
   ledger: MemoryLedgerData | null;
+  /** The ledger poll itself (data, unsupported, error), shared with the pages that show it. */
+  ledgerState: LedgerState;
+  /** Finished requests (ring plus the console's recorded history), shared with Overview and Requests. */
+  recent: Recent;
   verdict: Verdict;
   notifications: readonly NotifRecord[];
   unread: number;
@@ -45,6 +54,8 @@ export interface Signals {
 
 const quiet: Signals = {
   ledger: null,
+  ledgerState: { data: null, unsupported: false, error: "" },
+  recent: { supported: null, rows: [], capacity: 512, error: null },
   verdict: { level: "ok", reasons: [] },
   notifications: [],
   unread: 0,
@@ -151,10 +162,17 @@ export function useShellSignals(
   // A routine restart / engine switch (--engine auto) is neither a health fault nor a notification.
   const calm = isCalm(engine.outage.kind);
   const healthPhase = calm ? "connecting" : engine.phase;
-  const ledger = useMemoryLedger(connection, online, 5000).data;
+  const ledgerState = useMemoryLedger(connection, online, 5000);
+  const ledger = ledgerState.data;
   const recent = useRecentRequests(
     connection,
-    online ? engine.status?.last?.request_id : null,
+    engine.status?.last?.request_id,
+    // The answers come through the console process, which keeps the recorded log; a page opened
+    // while the engine is away has no status yet, but the console still answers its record.
+    engine.status?.console_process === true ||
+      (engine.status == null &&
+        engine.failures > 0 &&
+        engine.phase !== "unauthorized"),
   );
   const downloads = useDownloadFacts(connection, online);
   const swapGrowth = useGrowth(ledger?.host.swap_used_gb);
@@ -255,12 +273,14 @@ export function useShellSignals(
   return useMemo(
     () => ({
       ledger,
+      ledgerState,
+      recent,
       verdict,
       notifications,
       unread: unreadCount(notifications),
       markRead,
       clearAll,
     }),
-    [ledger, verdict, notifications, markRead, clearAll],
+    [ledger, ledgerState, recent, verdict, notifications, markRead, clearAll],
   );
 }

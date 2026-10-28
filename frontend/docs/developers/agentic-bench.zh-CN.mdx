@@ -30,7 +30,7 @@ agent 是由 `scripts/research/agentic/install_agents.sh` 安装在 `/Volumes/P5
 
 - 可重复运行的结论遵循失败即关闭原则：API 错误、格式错误的工具调用、标记泄漏与缺失的运行都会使其失败。
 - 输出文件以一行 `meta`（引擎、检查点、git SHA、agent 版本、标志）开头。运行可续跑：`--output` 中已存在的任务与重复会被跳过。
-- 只公布有日期的汇总结果，并附上快照 SHA、分母、超时与不确定性；原始运行元数据、agent 产物与 JSONL 保持私有，放在 `docs/research/` 下。
+- 只公布有日期的汇总结果，并附上快照 SHA、分母、超时与不确定性；原始运行元数据、agent 产物与 JSONL 保持私有，放在被忽略的本地目录。
 
 ## 设置
 

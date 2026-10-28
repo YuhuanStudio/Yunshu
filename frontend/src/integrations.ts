@@ -24,6 +24,18 @@ export const LAUNCH_COMMAND: Record<string, string> = {
   opencode: "yunshu launch opencode",
 };
 
+/**
+ * First run: no address was ever saved and the console still points at its own origin. An address the
+ * user typed counts as configured even where it could not be saved (private window, blocked storage).
+ */
+export const neverConfigured = (
+  savedUrl: string | null,
+  baseUrl: string,
+  origin: string,
+) =>
+  savedUrl === null &&
+  baseUrl.replace(/\/+$/, "") === origin.replace(/\/+$/, "");
+
 export const serviceRoot = (baseUrl: string) =>
   baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
 
