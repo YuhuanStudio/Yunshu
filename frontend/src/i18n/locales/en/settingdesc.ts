@@ -138,8 +138,6 @@ const settingdesc = {
   YUNSHU_PREFIX_HOT_LIMIT:
     "Text engine: keep only this many prefix KV entries at full precision and store older ones in 4-bit in RAM (lossy on reuse; memory vs quality). 0 = every entry full precision.",
   YUNSHU_SSD_CACHE: "Text engine: persist prefix KV to SSD.",
-  YUNSHU_APC_SEAM_CHECKPOINT:
-    "VLM runner (APC), split-invariant prefill only: keep one more checkpoint inside a final user message of at least 8192 tokens, 2048 tokens before its end, so the same long document with a new question resumes at the document. One extra checkpoint copy per such prompt; output unchanged. Experimental.",
   YUNSHU_SSD_CACHE_DIR: "Text engine: SSD prefix-cache directory.",
   YUNSHU_SSD_CACHE_PRECISION:
     "Text engine: SSD prefix-cache precision: `native` (bit-exact KV and recurrent state; lossless) or `int8` (per-tensor int8, about half the disk bytes of bf16; lossy on reuse).",

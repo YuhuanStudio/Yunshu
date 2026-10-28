@@ -227,10 +227,6 @@ _BORN_MAX = 20000
 _BORN_KEEP_GENERATIONS = 5000
 # Entry-count cap: the byte budget decides, this only bounds bookkeeping.
 MAX_ENTRIES = 16
-# Seam checkpoint (YUNSHU_APC_SEAM_CHECKPOINT): a final user message at least this long keeps one
-# more cut this many tokens before its end (TensorFold #1262 uses 8192 / 2048 on Qwen3.8-27B).
-SEAM_MIN_MESSAGE_TOKENS = 8192
-SEAM_QUESTION_TOKENS = 2048
 ENTRY_HITS_MAX = 4096  # bound of the per-entry hit side table (accounting only)
 # Shutdown spill budget: a service stop must not hang on a 32 GiB cache.
 CLOSE_FLUSH_SECONDS = 20.0
@@ -1424,19 +1420,6 @@ class _Coordinator(APCCoordinator):
         if head and mgr.exact_cache_min_tokens <= head < final:
             lengths.add(head)
             mgr.note_head(token_ids[:head])
-        seam = mgr.seam_boundary(token_ids, final)
-        if seam:
-            seam = self._aligned_media_safe(token_ids, seam, media_token_ids)
-            start = mgr.last_user_boundary(token_ids)
-            covered = any(
-                start < n <= final - mgr.seam_question_tokens for n in lengths
-            )
-            if (
-                seam > start
-                and not covered
-                and mgr.exact_cache_min_tokens <= seam < final
-            ):
-                lengths.add(seam)
         div = mgr.divergence_point(token_ids) if mgr.prefill_alignment else 0
         if div:
             from mlx_vlm.apc import adjust_prefix_to_text_suffix_boundary
@@ -1499,9 +1482,6 @@ class YunshuAPCManager(APCManager):
         prefill_assistant_header: tuple[int, int] | None = None,
         prefill_message_end: int | None = None,
         prefill_turn_boundary: bool = False,
-        seam_checkpoint: bool = False,
-        seam_min_message_tokens: int = SEAM_MIN_MESSAGE_TOKENS,
-        seam_question_tokens: int = SEAM_QUESTION_TOKENS,
         **kwargs: Any,
     ):
         overrides = dict(kwargs.pop("overrides", None) or {})
@@ -1520,10 +1500,6 @@ class YunshuAPCManager(APCManager):
         # next-turn rehearsal: the end of every earlier assistant turn (the position of the
         # next turn's header) is a forward boundary and a restore point
         self.prefill_turn_boundary = bool(prefill_turn_boundary)
-        # YUNSHU_APC_SEAM_CHECKPOINT (experimental): see seam_boundary
-        self.seam_checkpoint = bool(seam_checkpoint)
-        self.seam_min_message_tokens = int(seam_min_message_tokens)
-        self.seam_question_tokens = int(seam_question_tokens)
         from .cache_observation import Observation
 
         self.observation = Observation()
@@ -1893,25 +1869,6 @@ class YunshuAPCManager(APCManager):
             if token_ids[i] == a and token_ids[i + 1] == b:
                 return i
         return 0
-
-    def seam_boundary(self, token_ids, final: int) -> int:
-        """A 64-aligned cut inside a long final user message, ``seam_question_tokens`` before its end.
-
-        "Same document, new question" (TensorFold #1262, Rapid-MLX 421bf658): the next request keeps
-        the document and changes the question, so the longest reusable prefix is the document, not
-        the prompt end (the question differs) and not the system turn. The interval checkpoint lands
-        there only by luck: it can sit inside a long question, or right at the prompt end. Only a
-        message of at least ``seam_min_message_tokens`` pays the extra copy, and only in the
-        split-invariant (64-aligned) mode, where an extra cut cannot change the output.
-        Returns 0 when off, not aligned, or the message is short.
-        """
-        if not self.seam_checkpoint or not self.prefill_alignment:
-            return 0
-        start = self.last_user_boundary(token_ids)
-        if start <= 0 or final - start < self.seam_min_message_tokens:
-            return 0
-        at = self.align_prefill_boundary(final - self.seam_question_tokens)
-        return at if at > start else 0
 
     def resident_prefix_len(self, token_ids, extra_hash=0) -> int:
         """Longest resident exact checkpoint that is a prefix of ``token_ids`` (no MLX work)."""

@@ -2781,7 +2781,6 @@ class VLMEngine:
                         settings.get("YUNSHU_NEXT_TURN_PREFILL")
                         in ("boundary", "exact")
                     ),
-                    seam_checkpoint=settings.get("YUNSHU_APC_SEAM_CHECKPOINT"),
                 )
                 self._install_apc_identity(lm)
                 self._apc_semantic_hash = semantic_extra_hash(

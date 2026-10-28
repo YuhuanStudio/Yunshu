@@ -196,7 +196,6 @@ _add("YUNSHU_MEM_PRESSURE_THRESHOLD", "float", 85.0, "Text engine: evict prefix-
 _add("YUNSHU_PREFIX_MAX_ENTRIES", "int", 64, "Text engine: prefix KV cache entries.", "cache", minimum=1)
 _add("YUNSHU_PREFIX_HOT_LIMIT", "int", 0, "Text engine: keep only this many prefix KV entries full precision and store older ones 4-bit in RAM (lossy on reuse; memory vs quality). 0 = every entry full precision.", "cache", minimum=0)
 _add("YUNSHU_SSD_CACHE", "bool", False, "Text engine: persist prefix KV to SSD.", "cache")
-_add("YUNSHU_APC_SEAM_CHECKPOINT", "bool", False, "VLM runner (APC), split-invariant prefill only: keep one more checkpoint inside a final user message of at least 8192 tokens, 2048 tokens (rounded down to a 64-token boundary) before its end, so a follow-up that sends the same long document with a different question resumes at the document instead of recomputing it. Costs one extra checkpoint copy (RAM, SSD) per such prompt; media spans are never cut. Output is unchanged (an aligned cut is split-invariant, a restore equals a cold prefill).", "cache", stability="experimental", decide="scripts/research/ab_seam_checkpoint.py on Qwen3.8-27B (16k / 35k / 64k-token document, then the same document with a new question): TTFT of the second request on vs off must drop >= 3x with identical greedy tokens (cold, restored and off), the first request's TTFT cost <= 3% and peak MLX memory growth within the APC budget; if it wins it becomes the default and the flag is deleted, else the seam cut and flag are deleted", added="2026-10-26")
 _add("YUNSHU_SSD_CACHE_DIR", "path", "~/.cache/yunshu/kv-ssd", "Text engine: SSD prefix-cache directory.", "cache")
 _add("YUNSHU_SSD_CACHE_PRECISION", "enum", "native", "Text engine: SSD prefix-cache storage precision: 'native' (KV and recurrent state stored bit-exact; lossless) or 'int8' (per-tensor int8, about half the disk bytes of bf16; lossy on reuse; memory vs quality).", "cache", choices=("native", "int8"))
 _add("YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS", "float", 20000.0, "Text engine: skip an SSD prefix restore when the model's observed prefill speed exceeds this (tokens/s): re-prefilling is then as fast as reading the KV back.", "cache", minimum=0.0)
@@ -478,7 +477,6 @@ _RELOAD = frozenset(
     {
         "YUNSHU_MEMORY_ADMISSION",
         "YUNSHU_MEMORY_RESERVE_GB",
-        "YUNSHU_APC_SEAM_CHECKPOINT",
         "YUNSHU_SDPA_CHUNK",
         "YUNSHU_GC_POLICY",
         "YUNSHU_NEXT_TURN_PREFILL",

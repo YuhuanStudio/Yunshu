@@ -2300,72 +2300,6 @@
         }
       }
     },
-    "apc_seam_checkpoint": {
-      "module": "python/yunshu_engine/apc_manager.py",
-      "what": "Seam checkpoint (YUNSHU_APC_SEAM_CHECKPOINT, experimental): one extra 64-aligned APC checkpoint inside a long final user message so the same document with a new question resumes at the document",
-      "cells": {
-        "mtp": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/apc_manager.py",
-              "def seam_boundary"
-            ],
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "seam_checkpoint="
-            ]
-          ]
-        },
-        "dflash": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/apc_manager.py",
-              "def seam_boundary"
-            ],
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "seam_checkpoint="
-            ]
-          ]
-        },
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/apc_manager.py",
-              "def seam_boundary"
-            ],
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "seam_checkpoint="
-            ]
-          ]
-        },
-        "generic": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/apc_manager.py",
-              "def seam_boundary"
-            ],
-            [
-              "python/yunshu_engine/vlm_engine.py",
-              "seam_checkpoint="
-            ]
-          ]
-        },
-        "text": {
-          "s": "na",
-          "why": "the text prefix cache serves any shared prefix by trimming (attention-only) and snapshots every prefill-step boundary for hybrids, so a document/question seam is already a restore point"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
-        }
-      }
-    },
     "sdpa_chunk_pre_nax": {
       "module": "python/yunshu_engine/kernels/sdpa_chunk.py",
       "what": "Query-chunked head_dim-256 long-prefill attention on M1-M4 (YUNSHU_SDPA_CHUNK, experimental, default off)",
@@ -3016,7 +2950,6 @@
     "python/yunshu_engine/qwen4_norms.py": "Read legacy direct-gamma and residual Qwen4 norm formats; ordinary GDN/vision RMSNorm tensors are unchanged; MTP inherits base convention."
   },
   "settings": {
-    "YUNSHU_APC_SEAM_CHECKPOINT": "apc_seam_checkpoint",
     "YUNSHU_MTP": "draft_family_coverage",
     "YUNSHU_VLM_DRAFT": "draft_family_coverage",
     "YUNSHU_MTP_BLOCK_SIZE": "cost_aware_depth",
@@ -3344,10 +3277,6 @@
       "ane_ffn_split": {
         "s": "na",
         "why": "The ANE split patches a dense Qwen3.5 MLP. Routed experts need routing-aware offload and a separate bandwidth/accuracy gate."
-      },
-      "apc_seam_checkpoint": {
-        "s": "na",
-        "why": "the seam checkpoint is a 64-aligned split-invariant prefill checkpoint; Flash-Next (qwen4_exp) has no split-invariant prefill (only the qualified 27B geometry enters it), so the flag is inert there"
       },
       "budget_marker_strip": {
         "s": "engaged",
