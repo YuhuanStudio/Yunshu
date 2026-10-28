@@ -4,6 +4,7 @@ import { installAsk, installEngine } from "./support/chat-fixture";
 
 // Screenshot tour of the conversation surfaces for design review. Off unless CHAT_SHOTS=<dir>.
 const dir = process.env.CHAT_SHOTS;
+const theme = process.env.CHAT_THEME === "dark" ? "dark" : "light";
 test.skip(!dir, "set CHAT_SHOTS=<dir> to take the tour");
 
 const sizes = {
@@ -19,9 +20,17 @@ for (const [name, viewport] of Object.entries(sizes)) {
         ? { deviceScaleFactor: 3, isMobile: true, hasTouch: true }
         : {}),
     });
+    test.beforeEach(async ({ page }) => {
+      await page.addInitScript(
+        (t) => localStorage.setItem("yunshu.console.theme", t),
+        theme,
+      );
+    });
     const shot = async (page: Page, label: string) => {
       mkdirSync(dir!, { recursive: true });
-      await page.screenshot({ path: `${dir}/${name}-${label}.png` });
+      await page.screenshot({
+        path: `${dir}/${name}-${label}${theme === "dark" ? "-dark" : ""}.png`,
+      });
     };
 
     test("playground", async ({ page, browserName }) => {

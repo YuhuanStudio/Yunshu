@@ -996,7 +996,7 @@ export function Playground({
   ];
   const header = (
     <div
-      className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-2 pb-2"
+      className="mt-3 flex flex-wrap items-center max-sm:mt-0 gap-x-2 gap-y-2 pb-2"
       data-testid="playground-toolbar"
     >
       <div className="flex min-w-0 items-center gap-2 max-sm:order-1 max-sm:flex-1 max-sm:flex-col max-sm:items-stretch">
@@ -1028,7 +1028,7 @@ export function Playground({
           ]}
         />
       </div>
-      <div className="ml-auto flex shrink-0 items-center gap-0.5 max-sm:order-2 max-sm:ml-0">
+      <div className="ml-auto flex shrink-0 items-center gap-0.5 max-sm:order-2 max-sm:ml-0 max-sm:self-start">
         {tools.map((tool) => (
           <IconButton
             key={tool.label}
@@ -1208,7 +1208,7 @@ export function Playground({
       )}
       {compare && (
         <p
-          className="mb-2 text-xs text-muted-foreground"
+          className="mb-2 text-xs text-muted-foreground max-sm:sr-only"
           data-testid="spec-note"
         >
           {t("playground.compare.specNote")}
