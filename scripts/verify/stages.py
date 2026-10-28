@@ -2751,6 +2751,142 @@ def stage_lane_bandwidth(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult(name, not reasons, reasons, numbers))
 
 
+# ── k. kld: teacher-forced KL divergence of base and candidate against a reference ──
+def _kld_cell(
+    ctx: Ctx,
+    arm: str,
+    tree: str,
+    key: str,
+    directory: Path,
+    shard: str,
+    env: dict,
+    mem_gb: float,
+):
+    """One capture job: the windows of ``shard`` for ``arm`` ("base"/"cand"/"ref") from ``tree``'s engine."""
+    src = ctx.tree(tree)
+    tfb_out = ctx.run.path / "tfb" / f"kld.{key}"
+    return Cell(
+        "kld",
+        key,
+        [
+            "env",
+            f"PYTHONPATH={src.path / 'python'}:{REPO / 'scripts'}",
+            f"TFB_YUNSHU_SRC={src.path / 'python'}",
+            f"TFB_OUT={tfb_out}",
+            f"TFB_PORT_LAST={PORT_LAST}",
+            "TFB_WORK=/Volumes/P5Plus/yunshu-build/tfnew",
+            ctx.py,
+            "-m",
+            "verify.kld.capture",
+            "run",
+            "--arm",
+            arm,
+            "--model",
+            ctx.model,
+            "--cache-dir",
+            str(directory),
+            "--shard",
+            shard,
+            *_env_flags(env),
+            "--out",
+            "{out}",
+        ],
+        mem_gb=mem_gb,
+        timeout_min=int(ctx.suite.get("kld_timeout_min", 25)),
+        stall_min=12,
+    )
+
+
+def stage_kld(ctx: Ctx) -> StageResult:
+    from .kld import corpus
+    from .kld import stage as kld
+
+    if ctx.suite.get("kld_decode"):
+        return _finish(
+            ctx,
+            StageResult(
+                "kld",
+                False,
+                ["--kld-decode (teacher-forced decode path) is not implemented"],
+            ),
+        )
+    manifest = corpus.load_manifest()
+    corpus.load_texts()  # fails closed when the text under /Volumes/P5Plus is missing or altered
+    ident = checkpoint_identity(ctx.model)
+    arms = {
+        "base": ("base", ctx.arm_env("base"), ctx.base),
+        "cand": ("cand", ctx.arm_env("cand"), ctx.cand),
+        # the reference always runs the base source tree with fp32 attention (independent of the candidate)
+        "ref": (
+            "base",
+            ctx.arm_env("base", {"KLD_MODE": "ref-fp32-attention"}),
+            ctx.base,
+        ),
+    }
+    dirs = {
+        name: kld.cache_dir(
+            kld.cache_key(name, src.key, ident, env, manifest["corpus_sha"])
+        )
+        for name, (_t, env, src) in arms.items()
+    }
+    n_ref = int(ctx.suite.get("kld_ref_shards", 2))
+    cells = []
+    for name, (tree, env, _src) in arms.items():
+        gone = kld.missing_windows(dirs[name], manifest)
+        if not gone:
+            ctx.log(f"kld/{name}: cache complete ({dirs[name].name})")
+            continue
+        shards = n_ref if name == "ref" else 1
+        env = {k: v for k, v in env.items() if k != "KLD_MODE"}
+        for k in range(shards):
+            cells.append(
+                _kld_cell(
+                    ctx,
+                    name,
+                    tree,
+                    f"{name}-{k}of{shards}",
+                    dirs[name],
+                    f"{k}/{shards}",
+                    env,
+                    ctx.mem_gb,
+                )
+            )
+    reasons: list = []
+    if cells:
+        res = ctx.exe.run_cells(cells)
+        reasons += _failed_cells(res)
+    numbers: dict = {
+        "cache": {n: d.name for n, d in dirs.items()},
+        "corpus_sha": manifest["corpus_sha"],
+    }
+    if not reasons:
+        argv = [ctx.py, "-m", "verify.kld.analyze"] + [
+            x for n in ("ref", "base", "cand") for x in (f"--{n}", str(dirs[n]))
+        ]
+        for flag, key in (("--eps", "kld_eps"), ("--top1-noise", "kld_top1_noise")):
+            if key in ctx.suite:
+                argv += [flag, str(ctx.suite[key])]
+        proc = subprocess.run(
+            argv,
+            cwd=str(REPO),
+            env=dict(os.environ, PYTHONPATH=str(REPO / "scripts")),
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:  # incomplete or malformed windows fail closed
+            reasons.append(
+                "kld analysis failed: "
+                + (proc.stderr.strip().splitlines() or ["?"])[-1]
+            )
+        else:
+            result = json.loads(proc.stdout.strip().splitlines()[-1])
+            numbers.update(
+                {k: v for k, v in result.items() if k not in ("passed", "reasons")}
+            )
+            reasons += result["reasons"]
+    return _finish(ctx, StageResult("kld", not reasons, reasons, numbers))
+
+
 STAGE_FUNCS = {
     "lane_bandwidth": stage_lane_bandwidth,
     "ssd_ttft": stage_ssd_ttft,
@@ -2779,6 +2915,7 @@ STAGE_FUNCS = {
     "identity": stage_identity,
     "apc": stage_apc,
     "quality": stage_quality,
+    "kld": stage_kld,
     "speed": stage_speed,
     "memory": stage_memory,
     "longqa": stage_longqa,

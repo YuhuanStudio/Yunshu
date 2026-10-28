@@ -15,6 +15,7 @@ STAGES = (
     "identity",
     "apc",
     "quality",
+    "kld",
     "speed",
     "memory",
     "longqa",
@@ -262,6 +263,9 @@ SUITES = {
 SUITES["long-speed"] = {**SUITES["long"], "stages": ["speed"]}
 
 # Thinking-mode MMLU-Pro 300 (the Flash-Next protocol behind MODEL_SUPPORT's 261/300): paired, greedy, long replies.
+# Teacher-forced KL divergence of base and candidate against a reference (docs/guides/VERIFY.md, "kld").
+SUITES["kld"] = {"stages": ["kld"], "ctx": [1024], "kld_ref_shards": 2}
+
 SUITES["quality-think"] = {
     "stages": ["quality"],
     "ctx": [1024],
