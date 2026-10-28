@@ -1515,6 +1515,16 @@ class VLMBatchRunner:
                 )
             driver = self._aux_driver
         job.driver = driver
+        vocab = getattr(self.drafter, "_draft_vocab", None)
+        if vocab is not None and driver.can_draft:
+            # The reduced draft readout must cover this prompt's ids (the lane sets it at
+            # every speculative start): a prompt's own tokens (code identifiers) are what its
+            # continuation repeats. First row of an idle driver replaces the context; a row
+            # joining running ones adds to it.
+            if driver.rows:
+                vocab.add_context(job.ids)
+            else:
+                vocab.set_context(job.ids)
         hit = driver.add(
             Request(
                 ids=job.ids,
@@ -1573,7 +1583,12 @@ class VLMBatchRunner:
             if driver is None or (primary and driver is self._aux_driver):
                 continue
             vocab = getattr(self.drafter, "_draft_vocab", None)
-            if vocab is not None and self._vocab_owner is not driver and driver.rows:
+            if (
+                vocab is not None
+                and driver.can_draft
+                and self._vocab_owner is not driver
+                and driver.rows
+            ):
                 vocab.set_context([t for row in driver.rows for t in row.req.ids])
                 self._vocab_owner = driver
             with self.driver_busy_meter.span():

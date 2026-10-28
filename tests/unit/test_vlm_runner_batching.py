@@ -411,3 +411,25 @@ def test_early_ar_delivery_leaves_logprob_requests_on_original_path(runner):
     )
     assert runner._emit_ready_first(group) is None
     assert stats.generated == 0 and batch._num_tokens == [0]
+
+
+def test_driver_rows_set_and_extend_the_draft_vocab_context():
+    """Regression: the driver never told the reduced draft readout about the prompt's ids (the
+    lane does at every speculative start), so code prompts drafted from the base set only:
+    8K code decode 3.8 instead of 5 tokens/round."""
+    calls = []
+
+    class Vocab:
+        def set_context(self, ids):
+            calls.append(("set", list(ids)))
+
+        def add_context(self, ids):
+            calls.append(("add", list(ids)))
+
+    runner = vbr.VLMBatchRunner(
+        SimpleNamespace(language_model=object()), processor=None
+    )
+    runner.driver = FakeDriver()
+    runner.drafter = SimpleNamespace(_draft_vocab=Vocab())
+    list(runner.iter_tokens([1, 2, 3], max_tokens=1, stats=vbr.RunStats()))
+    assert calls[0] == ("set", [1, 2, 3])
