@@ -182,6 +182,13 @@ if (a.mode === "events") {
     arrivalSamples: arrive.length,
   };
   if (a["load-model"]) {
+    // a cell must load for real: drop the model a previous cell left loaded
+    await fetch(`${a.base}/v1/models/unload`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: a["load-model"] }),
+    }).catch(() => undefined);
+    await sleep(2000);
     const t0 = Date.now();
     const res = await fetch(`${a.base}/v1/models/load`, {
       method: "POST",

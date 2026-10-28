@@ -92,16 +92,30 @@ class Stack:
         self.engine_url = f"http://127.0.0.1:{a.engine_port}"
         self.console_url = f"http://127.0.0.1:{a.console_port}"
 
+    def models_dir(self) -> Path:
+        """Multi-model mode (a model load needs the manager): one folder of symlinks, ids = names."""
+        d = self.home / "models"
+        d.mkdir(exist_ok=True)
+        for src in (self.a.model, self.a.load_model):
+            link = d / Path(src).name
+            if not link.exists():
+                link.symlink_to(src)
+        return d
+
     def start_engine(self) -> None:
         log = open(self.home / "engine.log", "ab")  # noqa: SIM115
+        which = (
+            ["--models-dir", str(self.models_dir())]
+            if self.a.load_model
+            else ["-m", self.a.model]
+        )
         self.engine = subprocess.Popen(
             [
                 sys.executable,
                 "-m",
                 "yunshu_cli",
                 "serve",
-                "-m",
-                self.a.model,
+                *which,
                 "--port",
                 str(self.a.engine_port),
                 "--no-console",
@@ -204,7 +218,7 @@ def run_events(
         str(a.cycles),
     ]
     if a.load_model:
-        extra += ["--load-model", a.load_model]
+        extra += ["--load-model", Path(a.load_model).name]
     p = node(a, out, extra)
     try:
         text, _ = p.communicate(timeout=900)
@@ -295,7 +309,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         stack.start_engine()
         stack.start_console()
-        model_id = get(f"{stack.engine_url}/v1/models")["data"][0]["id"]
+        ids = [m["id"] for m in get(f"{stack.engine_url}/v1/models")["data"]]
+        model_id = Path(a.model).name if a.load_model else ids[0]
+        if model_id not in ids:
+            raise SystemExit(f"FAIL model {model_id} not in {ids}")
         # warm the model once so the first cell does not pay for it
         urllib.request.urlopen(
             urllib.request.Request(
