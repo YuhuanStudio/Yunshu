@@ -47,9 +47,12 @@ def reference_attend(
         b, e = bi[r0:r1], qe[r0:r1]
         ids_sel = (b[:, :, None] * QBLOCK + offs).reshape(r1 - r0, -1)
         valid_sel = mx.repeat(b >= 0, QBLOCK, axis=1)
-        ids_tail = ((e // QBLOCK) * QBLOCK)[:, None] + tail_offs
+        ids_tail = mx.minimum(
+            ((e // QBLOCK) * QBLOCK)[:, None] + tail_offs, kf.shape[1] - 1
+        )  # invalid tail slots stay inside the keys
+        tail_valid = ((e // QBLOCK) * QBLOCK)[:, None] + tail_offs < e[:, None]
         ids = mx.concatenate([mx.maximum(ids_sel, 0), ids_tail], axis=1)
-        valid = mx.concatenate([valid_sel, ids_tail < e[:, None]], axis=1)
+        valid = mx.concatenate([valid_sel, tail_valid], axis=1)
         heads = []
         for g in range(KV):
             k_c, v_c = kf[g][ids], vf[g][ids]

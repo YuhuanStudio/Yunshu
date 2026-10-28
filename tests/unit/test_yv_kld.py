@@ -181,3 +181,32 @@ def test_capture_detects_the_architecture_and_fails_closed(tmp_path):
     (tmp_path / "config.json").write_text(json.dumps({"model_type": "llama"}))
     with pytest.raises(RuntimeError, match="no hooks"):
         capture.detect_arch(str(tmp_path))
+
+
+def test_reference_attention_stays_finite_when_the_last_row_ends_on_a_block_boundary():
+    import mlx.core as mx
+
+    from verify.kld import capture
+
+    if not mx.metal.is_available():
+        pytest.skip("needs a GPU")
+    rng = np.random.default_rng(0)
+    rows, length = (
+        64,
+        2048,
+    )  # the last row's query end (2048) is a multiple of 4 and equals the key count
+    q = mx.array(rng.normal(size=(1, 24, rows, 256)).astype(np.float32)).astype(
+        mx.bfloat16
+    )
+    k = mx.array(rng.normal(size=(1, 2, length, 256)).astype(np.float32)).astype(
+        mx.bfloat16
+    )
+    ends = np.arange(length - rows + 1, length + 1, dtype=np.int32)
+    blocks = np.full((1, rows, 512), -1, dtype=np.int32)
+    for i, e in enumerate(ends):
+        pick = rng.permutation(int(e) // 4)[:512]
+        blocks[0, i, : len(pick)] = pick
+    out = capture.reference_attend(
+        q, k, k, mx.array(blocks), mx.array(ends[None]), 256**-0.5
+    )
+    assert np.isfinite(np.array(out.astype(mx.float32))).all()

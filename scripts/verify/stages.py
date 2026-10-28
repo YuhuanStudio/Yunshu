@@ -2819,7 +2819,7 @@ def stage_kld(ctx: Ctx) -> StageResult:
         # the reference always runs the base source tree with fp32 attention (independent of the candidate)
         "ref": (
             "base",
-            ctx.arm_env("base", {"KLD_MODE": "ref-fp32-attention"}),
+            ctx.arm_env("base", {"KLD_MODE": "ref-fp32-attention-v2"}),
             ctx.base,
         ),
     }
