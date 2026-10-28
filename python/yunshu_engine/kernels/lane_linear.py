@@ -476,7 +476,8 @@ def convert(language_model: Any, *, skip: tuple[str, ...] = ()) -> dict:
                 skipped.append(f"{name}.{key}" if name else key)
         if updates:
             module.update_modules(updates)
-        children = child = updates = None  # the replaced layers' last references
+        # the replaced layers' last references (rebinding, not del: child is unbound when a module has none)
+        children = child = updates = None  # type: ignore[assignment]
         if sum(a.nbytes for a in pending) > EVAL_BATCH_BYTES:
             mx.eval(pending)
             pending = []
