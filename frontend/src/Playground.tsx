@@ -1,12 +1,18 @@
 import { createDeltaBatcher } from "./delta-batch.ts";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   CustomSelect,
   toast,
   StatusIndicator,
   Button,
   Card,
-  EmptyState,
   IconButton,
   Input,
   FileDropzone,
@@ -26,12 +32,10 @@ import {
 } from "@yuhuanowo/yunui";
 import {
   ChatComposer,
-  ChatHeader,
-  ChatMessage,
-  ChatMessageList,
   GenerationStats,
   useStreamReveal,
 } from "@yuhuanowo/yunui/chat";
+import { ChatEmpty, ChatSurface, ChatTurn } from "./chat/ChatSurface";
 import {
   CapabilityIcon,
   getModelDeveloperId,
@@ -52,6 +56,8 @@ import {
   ScanText,
   Wrench,
   Code2,
+  Copy,
+  RefreshCw,
 } from "lucide-react";
 import {
   describeStreamError,
@@ -656,10 +662,20 @@ export function Playground({
         temperature,
         ...(image ? { image } : {}),
       };
-    const c = new AbortController();
-    controller.current = c;
     setDraft("");
     setImage(null);
+    await start(user, messages);
+  }
+  /** Ask the last question again: the newest reply is dropped and generated anew. */
+  async function regenerate() {
+    if (!canSend || controller.current || compare) return;
+    const at = messages.map((m) => m.role).lastIndexOf("user");
+    if (at < 0) return;
+    await start({ ...messages[at], model, temperature }, messages.slice(0, at));
+  }
+  async function start(user: Message, base: Message[]) {
+    const c = new AbortController();
+    controller.current = c;
     setLoading(true);
     setError("");
     toast.dismiss(UNDO_TOAST_ID);
@@ -690,9 +706,9 @@ export function Playground({
         }
       } else {
         const id = crypto.randomUUID(),
-          history = [...messages.filter((m) => !m.incomplete), user];
+          history = [...base.filter((m) => !m.incomplete), user];
         setMessages([
-          ...messages,
+          ...base,
           user,
           { id, role: "assistant", content: "", model, temperature },
         ]);
@@ -783,7 +799,7 @@ export function Playground({
       aria-label={label}
     >
       <ModelSelect
-        className="w-60 max-sm:w-full"
+        className="w-60 max-sm:w-full [&_button]:h-8 [&_button]:text-xs"
         options={modelOptions}
         value={value}
         onChange={onChange}
@@ -919,9 +935,12 @@ export function Playground({
     setError("");
     conversationId.current = newId();
   }
+  const suggestions = (["a", "b", "c"] as const).map((k) =>
+    tr(`playground.empty.example.${k}`),
+  );
   const empty = (
-    <EmptyState
-      icon={<Sparkles size={25} />}
+    <ChatEmpty
+      icon={<Sparkles size={22} />}
       title={
         compare
           ? t("playground.empty.compareTitle")
@@ -932,422 +951,415 @@ export function Playground({
           ? t("playground.empty.compareBody")
           : t("playground.empty.chatBody")
       }
-      action={
-        <div
-          className="flex max-w-xl flex-wrap justify-center gap-2"
-          role="group"
-          aria-label={t("playground.empty.examples")}
-          data-testid="playground-examples"
-        >
-          {(["a", "b", "c"] as const).map((k) => (
-            <Button
-              key={k}
-              size="sm"
-              variant="secondary"
-              className="h-auto max-w-full whitespace-normal py-1.5 text-left"
-              disabled={loading}
-              onClick={() => setDraft(tr(`playground.empty.example.${k}`))}
-            >
-              {tr(`playground.empty.example.${k}`)}
-            </Button>
-          ))}
-        </div>
-      }
+      suggestions={suggestions}
+      onPick={setDraft}
+      disabled={loading}
+      groupLabel={t("playground.empty.examples")}
+      data-testid="playground-examples"
     />
   );
-  return (
-    <section
-      className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col px-4 pb-2 pt-4 lg:px-6 lg:pt-6"
-      data-testid="playground"
+  const tools: Array<{
+    icon: ReactNode;
+    label: string;
+    onClick: () => void;
+    disabled?: boolean;
+    title?: string;
+  }> = [
+    {
+      icon: <BookMarked size={15} />,
+      label: t("playground.library.open"),
+      onClick: () => setLibraryOpen(true),
+    },
+    {
+      icon: <ScanText size={15} />,
+      label: t("playground.ocr.open"),
+      onClick: () => setOcrOpen(true),
+      disabled: !ocrModel,
+      title: ocrModel ? undefined : t("playground.ocr.unavailable"),
+    },
+    {
+      icon: <Wrench size={15} />,
+      label: t("playground.tools.open"),
+      onClick: () => setToolsOpen(true),
+    },
+    {
+      icon: <Code2 size={15} />,
+      label: t("playground.header.viewCode"),
+      onClick: () => setCodeOpen(true),
+    },
+    {
+      icon: <Plus size={15} />,
+      label: t("playground.header.newTest"),
+      onClick: newTest,
+      disabled: loading,
+    },
+  ];
+  const header = (
+    <div
+      className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-2 pb-2"
+      data-testid="playground-toolbar"
     >
-      <PageHeader
-        title={t("shell.page.playground")}
-        description={t("playground.page.desc")}
-      />
-      <ChatHeader
-        className="flex-wrap gap-3 border-0 bg-transparent px-0 py-3 sm:h-auto sm:px-0 sm:py-3 max-sm:[&>*]:w-full"
-        left={
-          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-            {modelSelect(model, setModel, t("playground.model.testModel"))}
-            {compare &&
-              modelSelect(
-                modelB,
-                setModelB,
-                t("playground.model.compareModel"),
-              )}
-          </div>
-        }
-        status={
-          <div className="flex flex-wrap items-center gap-2 max-sm:flex-nowrap">
-            <div
-              role="group"
-              aria-label={t("playground.header.apiFormat")}
-              className="max-sm:min-w-0 max-sm:flex-1"
-            >
-              <CustomSelect
-                className="w-44 max-sm:w-full [&_button]:h-8 [&_button]:text-xs"
-                value={dialect}
-                disabled={loading}
-                onChange={(v) => setDialect(v as Dialect)}
-                options={dialectOptions}
+      <div className="flex min-w-0 items-center gap-2 max-sm:order-1 max-sm:flex-1 max-sm:flex-col max-sm:items-stretch">
+        {modelSelect(model, setModel, t("playground.model.testModel"))}
+        {compare &&
+          modelSelect(modelB, setModelB, t("playground.model.compareModel"))}
+      </div>
+      <div className="flex items-center gap-2 max-sm:order-3 max-sm:w-full">
+        <div
+          role="group"
+          aria-label={t("playground.header.apiFormat")}
+          className="max-sm:min-w-0 max-sm:flex-1"
+        >
+          <CustomSelect
+            className="w-44 max-sm:w-full [&_button]:h-8 [&_button]:text-xs"
+            value={dialect}
+            disabled={loading}
+            onChange={(v) => setDialect(v as Dialect)}
+            options={dialectOptions}
+          />
+        </div>
+        <SegmentedTray
+          aria-label={t("playground.header.mode")}
+          value={mode}
+          onChange={(v) => !loading && setMode(v as Mode)}
+          options={[
+            { value: "chat", label: t("playground.header.modeChat") },
+            { value: "compare", label: t("playground.header.modeCompare") },
+          ]}
+        />
+      </div>
+      <div className="ml-auto flex shrink-0 items-center gap-0.5 max-sm:order-2 max-sm:ml-0">
+        {tools.map((tool) => (
+          <IconButton
+            key={tool.label}
+            icon={tool.icon}
+            label={tool.title ?? tool.label}
+            aria-label={tool.label}
+            title={tool.title}
+            disabled={tool.disabled}
+            onClick={tool.onClick}
+          />
+        ))}
+      </div>
+    </div>
+  );
+  const promptTurn = (m: Message) => (
+    <ChatTurn role="user" key={m.id}>
+      {m.image && (
+        <img
+          src={m.image.url}
+          alt={m.image.name}
+          className="mb-2 max-h-56 max-w-full rounded-lg object-contain"
+        />
+      )}
+      {m.content}
+    </ChatTurn>
+  );
+  const transcript = compare ? (
+    pairPrompt ? (
+      <div className="space-y-4" data-testid="compare">
+        {promptTurn(pairPrompt)}
+        <div className="grid gap-3 md:grid-cols-2">
+          {([0, 1] as const).map((i) => {
+            const run = pair[i];
+            return (
+              <Card
+                key={i}
+                className="min-w-0 space-y-3 p-4"
+                data-testid={`compare-col-${i === 0 ? "a" : "b"}`}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    {i === 0 ? "A" : "B"}
+                  </span>
+                  <span className="min-w-0 truncate text-sm font-medium">
+                    {modelLabel(i === 0 ? model : modelB)}
+                  </span>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    T={number(run?.temperature ?? columnTemp(i), 1)}
+                  </span>
+                </div>
+                {run ? (
+                  <>
+                    <ReplyBody
+                      run={run}
+                      streaming={loading && !run.timing?.endAt}
+                      now={now}
+                    />
+                    <ReplyStats run={run} now={now} />
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {loading
+                      ? t("playground.compare.queued")
+                      : t("playground.compare.notRun")}
+                  </p>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+        {(deltas || verdict) && (
+          <Card
+            className="flex flex-wrap items-center gap-2 p-3 tabular-nums"
+            data-testid="compare-delta"
+          >
+            <span className="text-xs text-muted-foreground">
+              {t("playground.compare.bVsA")}
+            </span>
+            {deltas?.tps !== undefined && (
+              <span className="text-xs text-muted-foreground">
+                Δ tok/s {signed(deltas.tps, 1)}
+              </span>
+            )}
+            {deltas?.ttft !== undefined && (
+              <span className="text-xs text-muted-foreground">
+                {t("playground.compare.deltaTtft", {
+                  value: signed(deltas.ttft, 0),
+                })}
+              </span>
+            )}
+            {verdict?.kind === "identical" &&
+              (verdict.greedy ? (
+                <StatusIndicator
+                  status="online"
+                  className="gap-1.5 text-xs text-muted-foreground"
+                >
+                  {t("playground.compare.identical")}
+                </StatusIndicator>
+              ) : (
+                <span className="text-xs text-muted-foreground">
+                  {t("playground.compare.sameText")}
+                </span>
+              ))}
+            {verdict?.kind === "diverged" && (
+              <StatusIndicator
+                status="away"
+                className="gap-1.5 text-xs text-muted-foreground"
+              >
+                {t("playground.compare.diverged", {
+                  offset: number(verdict.offset, 0),
+                })}
+              </StatusIndicator>
+            )}
+          </Card>
+        )}
+      </div>
+    ) : undefined
+  ) : messages.length ? (
+    <div className="space-y-2">
+      {messages.map((m) =>
+        m.role === "user" ? (
+          promptTurn(m)
+        ) : (
+          <ChatTurn
+            key={m.id}
+            role="assistant"
+            name={modelLabel(m.model)}
+            footer={<ReplyStats run={m} now={now} />}
+            actions={
+              m.content && !(loading && lastId === m.id) ? (
+                <>
+                  <IconButton
+                    icon={<Copy size={14} />}
+                    label={t("playground.reply.copy")}
+                    onClick={() =>
+                      void navigator.clipboard
+                        .writeText(m.content)
+                        .then(() => toast.success(t("playground.reply.copied")))
+                        .catch(() => {})
+                    }
+                  />
+                  {lastId === m.id && (
+                    <IconButton
+                      icon={<RefreshCw size={14} />}
+                      label={t("playground.reply.regenerate")}
+                      disabled={!canSend}
+                      onClick={() => void regenerate()}
+                    />
+                  )}
+                </>
+              ) : undefined
+            }
+          >
+            <ReplyBody
+              run={m}
+              streaming={loading && lastId === m.id}
+              now={now}
+            />
+          </ChatTurn>
+        ),
+      )}
+    </div>
+  ) : undefined;
+  const dock = (
+    <>
+      {error && (
+        <ErrorNote
+          className="mb-2"
+          message={error.message}
+          detail={error.detail}
+        />
+      )}
+      {!supportsImage && hasImage && (
+        <p className="mb-2 text-xs text-warning">
+          {t("playground.composer.needVision")}
+        </p>
+      )}
+      {compare && (
+        <p
+          className="mb-2 text-xs text-muted-foreground"
+          data-testid="spec-note"
+        >
+          {t("playground.compare.specNote")}
+        </p>
+      )}
+      {compare && (
+        <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+          {([0, 1] as const).map((i) => (
+            <div key={i} className="flex items-center gap-2">
+              <span>
+                {t("playground.compare.sampling", {
+                  side: i === 0 ? "A" : "B",
+                })}
+              </span>
+              <SegmentedTray
+                aria-label={t("playground.compare.samplingLabel", {
+                  side: i === 0 ? "A" : "B",
+                })}
+                value={tempMode[i]}
+                onChange={(v) =>
+                  !loading &&
+                  setTempMode(i === 0 ? [v, tempMode[1]] : [tempMode[0], v])
+                }
+                options={[
+                  {
+                    value: "shared",
+                    label: t("playground.compare.shared", {
+                      t: number(temperature, 1),
+                    }),
+                  },
+                  { value: "greedy", label: t("playground.compare.greedy") },
+                ]}
               />
             </div>
-            <SegmentedTray
-              aria-label={t("playground.header.mode")}
-              value={mode}
-              onChange={(v) => !loading && setMode(v as Mode)}
-              options={[
-                { value: "chat", label: t("playground.header.modeChat") },
-                { value: "compare", label: t("playground.header.modeCompare") },
-              ]}
+          ))}
+        </div>
+      )}
+      {!canSend && (
+        <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted-foreground">
+          <p>
+            {engine.phase !== "online"
+              ? t("playground.composer.offline")
+              : !supportsChat(chosen) || (compare && !supportsChat(chosenB))
+                ? t("playground.composer.notChat")
+                : t("playground.composer.notLoaded")}
+          </p>
+          {engine.phase === "online" &&
+            [chosen, ...(compare ? [chosenB] : [])]
+              .filter(
+                (m, i, all) =>
+                  m && !m.loaded && supportsChat(m) && all.indexOf(m) === i,
+              )
+              .map((m) => (
+                <Button
+                  key={m!.id}
+                  size="sm"
+                  variant="secondary"
+                  disabled={loadingModels.has(m!.id) || m!.loading}
+                  data-testid="load-inline"
+                  onClick={() => void loadHere(m!.id)}
+                >
+                  {loadingModels.has(m!.id) || m!.loading
+                    ? t("playground.model.loadingNow", {
+                        name: modelLabel(m!.id),
+                      })
+                    : t("playground.model.loadAction", {
+                        name: modelLabel(m!.id),
+                        size: sizeGb(m!.size_gb),
+                      })}
+                </Button>
+              ))}
+        </div>
+      )}
+      <ChatComposer
+        value={draft}
+        onChange={setDraft}
+        onSend={() => void send()}
+        onStop={stopRun}
+        loading={loading}
+        maxRows={6}
+        sendDisabled={!canSend || readingImage || (hasImage && !supportsImage)}
+        attachments={
+          image ? (
+            <div className="flex items-center gap-2 text-xs">
+              <img
+                src={image.url}
+                alt={t("playground.composer.pendingImage")}
+                className="size-10 rounded object-cover"
+              />
+              <span className="min-w-0 truncate">{image.name}</span>
+              <IconButton
+                icon={<X size={13} />}
+                label={t("playground.composer.removeImage")}
+                disabled={loading}
+                onClick={() => setImage(null)}
+              />
+            </div>
+          ) : undefined
+        }
+        placeholder={t("playground.composer.placeholder")}
+        labels={{
+          send: t("playground.composer.send"),
+          stop: t("playground.composer.stop"),
+        }}
+        toolbar={
+          <div className="flex items-center gap-1">
+            <IconButton
+              icon={<ImagePlus size={15} />}
+              label={t("playground.composer.addImage")}
+              disabled={loading || !supportsImage}
+              onClick={(e) => {
+                e.currentTarget.focus();
+                setAttachmentOpen(true);
+              }}
+            />
+            <IconButton
+              icon={<SlidersHorizontal size={15} />}
+              label={t("playground.composer.params")}
+              disabled={loading}
+              onClick={(e) => {
+                e.currentTarget.focus();
+                setSettings(true);
+              }}
             />
           </div>
         }
-        actions={
-          <>
-            <div className="flex flex-wrap items-center gap-1">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setLibraryOpen(true)}
-              >
-                <BookMarked size={13} />
-                {t("playground.library.open")}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={!ocrModel}
-                title={ocrModel ? undefined : t("playground.ocr.unavailable")}
-                onClick={() => setOcrOpen(true)}
-              >
-                <ScanText size={13} />
-                {t("playground.ocr.open")}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setToolsOpen(true)}
-              >
-                <Wrench size={13} />
-                {t("playground.tools.open")}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setCodeOpen(true)}
-              >
-                <Code2 size={13} />
-                {t("playground.header.viewCode")}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={loading}
-                onClick={newTest}
-              >
-                <Plus size={13} />
-                {t("playground.header.newTest")}
-              </Button>
-            </div>
-          </>
-        }
       />
-      <ChatMessageList
+      <p className="mt-1.5 truncate text-center text-[11px] text-muted-foreground">
+        {t("playground.composer.note")}
+      </p>
+    </>
+  );
+  return (
+    <section
+      className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col px-3 pb-1 pt-3 sm:px-4 lg:px-6 lg:pt-6"
+      data-testid="playground"
+    >
+      <PageHeader
+        className="max-sm:sr-only"
+        title={t("shell.page.playground")}
+        description={t("playground.page.desc")}
+      />
+      <ChatSurface
+        header={header}
+        empty={empty}
+        wide={compare}
         jumpToLatestLabel={t("playground.jumpLatest")}
-        className="px-4 sm:px-7"
-        empty={<div className="m-auto max-w-lg py-16">{empty}</div>}
+        dock={dock}
       >
-        {compare ? (
-          <div
-            className="mx-auto w-full max-w-5xl space-y-4 py-6"
-            data-testid="compare"
-          >
-            {!pairPrompt && empty}
-            {pairPrompt && (
-              <ChatMessage role="user" density="compact">
-                {pairPrompt.image && (
-                  <img
-                    src={pairPrompt.image.url}
-                    alt={pairPrompt.image.name}
-                    className="mb-3 max-h-56 max-w-full rounded-lg object-contain"
-                  />
-                )}
-                {pairPrompt.content}
-              </ChatMessage>
-            )}
-            {pairPrompt && (
-              <div className="grid gap-4 md:grid-cols-2">
-                {([0, 1] as const).map((i) => {
-                  const run = pair[i];
-                  return (
-                    <Card
-                      key={i}
-                      className="min-w-0 space-y-3 p-4"
-                      data-testid={`compare-col-${i === 0 ? "a" : "b"}`}
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-xs font-medium text-muted-foreground">
-                          {i === 0 ? "A" : "B"}
-                        </span>
-                        <span className="min-w-0 truncate text-sm font-medium">
-                          {modelLabel(i === 0 ? model : modelB)}
-                        </span>
-                        <span className="text-xs tabular-nums text-muted-foreground">
-                          T={number(run?.temperature ?? columnTemp(i), 1)}
-                        </span>
-                      </div>
-                      {run ? (
-                        <>
-                          <ReplyBody
-                            run={run}
-                            streaming={loading && !run.timing?.endAt}
-                            now={now}
-                          />
-                          <ReplyStats run={run} now={now} />
-                        </>
-                      ) : (
-                        <p className="text-xs text-muted-foreground">
-                          {loading
-                            ? t("playground.compare.queued")
-                            : t("playground.compare.notRun")}
-                        </p>
-                      )}
-                    </Card>
-                  );
-                })}
-              </div>
-            )}
-            {(deltas || verdict) && (
-              <Card
-                className="flex flex-wrap items-center gap-2 p-3 tabular-nums"
-                data-testid="compare-delta"
-              >
-                <span className="text-xs text-muted-foreground">
-                  {t("playground.compare.bVsA")}
-                </span>
-                {deltas?.tps !== undefined && (
-                  <span className="text-xs text-muted-foreground">
-                    Δ tok/s {signed(deltas.tps, 1)}
-                  </span>
-                )}
-                {deltas?.ttft !== undefined && (
-                  <span className="text-xs text-muted-foreground">
-                    {t("playground.compare.deltaTtft", {
-                      value: signed(deltas.ttft, 0),
-                    })}
-                  </span>
-                )}
-                {verdict?.kind === "identical" &&
-                  (verdict.greedy ? (
-                    <StatusIndicator
-                      status="online"
-                      className="gap-1.5 text-xs text-muted-foreground"
-                    >
-                      {t("playground.compare.identical")}
-                    </StatusIndicator>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">
-                      {t("playground.compare.sameText")}
-                    </span>
-                  ))}
-                {verdict?.kind === "diverged" && (
-                  <StatusIndicator
-                    status="away"
-                    className="gap-1.5 text-xs text-muted-foreground"
-                  >
-                    {t("playground.compare.diverged", {
-                      offset: number(verdict.offset, 0),
-                    })}
-                  </StatusIndicator>
-                )}
-              </Card>
-            )}
-          </div>
-        ) : (
-          <div className="mx-auto max-w-3xl space-y-6 py-6">
-            {!messages.length && empty}
-            {messages.map((m) => (
-              <ChatMessage
-                key={m.id}
-                role={m.role}
-                density="compact"
-                name={m.role === "assistant" ? modelLabel(m.model) : undefined}
-                footer={
-                  m.role === "assistant" ? (
-                    <ReplyStats run={m} now={now} />
-                  ) : undefined
-                }
-              >
-                {m.image && (
-                  <img
-                    src={m.image.url}
-                    alt={m.image.name}
-                    className="mb-3 max-h-56 max-w-full rounded-lg object-contain"
-                  />
-                )}
-                {m.role === "assistant" ? (
-                  <ReplyBody
-                    run={m}
-                    streaming={loading && lastId === m.id}
-                    now={now}
-                  />
-                ) : (
-                  m.content
-                )}
-              </ChatMessage>
-            ))}
-          </div>
-        )}
-      </ChatMessageList>
-      <div className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-5 pt-3">
-        {error && (
-          <ErrorNote
-            className="mb-3"
-            message={error.message}
-            detail={error.detail}
-          />
-        )}
-        {!supportsImage && hasImage && (
-          <p className="mb-3 text-xs text-warning">
-            {t("playground.composer.needVision")}
-          </p>
-        )}
-        {compare && (
-          <p
-            className="mb-3 text-xs text-muted-foreground"
-            data-testid="spec-note"
-          >
-            {t("playground.compare.specNote")}
-          </p>
-        )}
-        {compare && (
-          <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
-            {([0, 1] as const).map((i) => (
-              <div key={i} className="flex items-center gap-2">
-                <span>
-                  {t("playground.compare.sampling", {
-                    side: i === 0 ? "A" : "B",
-                  })}
-                </span>
-                <SegmentedTray
-                  aria-label={t("playground.compare.samplingLabel", {
-                    side: i === 0 ? "A" : "B",
-                  })}
-                  value={tempMode[i]}
-                  onChange={(v) =>
-                    !loading &&
-                    setTempMode(i === 0 ? [v, tempMode[1]] : [tempMode[0], v])
-                  }
-                  options={[
-                    {
-                      value: "shared",
-                      label: t("playground.compare.shared", {
-                        t: number(temperature, 1),
-                      }),
-                    },
-                    { value: "greedy", label: t("playground.compare.greedy") },
-                  ]}
-                />
-              </div>
-            ))}
-          </div>
-        )}
-        {!canSend && (
-          <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted-foreground">
-            <p>
-              {engine.phase !== "online"
-                ? t("playground.composer.offline")
-                : !supportsChat(chosen) || (compare && !supportsChat(chosenB))
-                  ? t("playground.composer.notChat")
-                  : t("playground.composer.notLoaded")}
-            </p>
-            {engine.phase === "online" &&
-              [chosen, ...(compare ? [chosenB] : [])]
-                .filter(
-                  (m, i, all) =>
-                    m && !m.loaded && supportsChat(m) && all.indexOf(m) === i,
-                )
-                .map((m) => (
-                  <Button
-                    key={m!.id}
-                    size="sm"
-                    variant="secondary"
-                    disabled={loadingModels.has(m!.id) || m!.loading}
-                    data-testid="load-inline"
-                    onClick={() => void loadHere(m!.id)}
-                  >
-                    {loadingModels.has(m!.id) || m!.loading
-                      ? t("playground.model.loadingNow", {
-                          name: modelLabel(m!.id),
-                        })
-                      : t("playground.model.loadAction", {
-                          name: modelLabel(m!.id),
-                          size: sizeGb(m!.size_gb),
-                        })}
-                  </Button>
-                ))}
-          </div>
-        )}
-        <ChatComposer
-          value={draft}
-          onChange={setDraft}
-          onSend={() => void send()}
-          onStop={stopRun}
-          loading={loading}
-          sendDisabled={
-            !canSend || readingImage || (hasImage && !supportsImage)
-          }
-          attachments={
-            image ? (
-              <div className="flex items-center gap-2 text-xs">
-                <img
-                  src={image.url}
-                  alt={t("playground.composer.pendingImage")}
-                  className="size-10 rounded object-cover"
-                />
-                <span className="min-w-0 truncate">{image.name}</span>
-                <IconButton
-                  icon={<X size={13} />}
-                  label={t("playground.composer.removeImage")}
-                  disabled={loading}
-                  onClick={() => setImage(null)}
-                />
-              </div>
-            ) : undefined
-          }
-          placeholder={t("playground.composer.placeholder")}
-          labels={{
-            send: t("playground.composer.send"),
-            stop: t("playground.composer.stop"),
-          }}
-          toolbar={
-            <div className="flex items-center gap-1">
-              <IconButton
-                icon={<ImagePlus size={15} />}
-                label={t("playground.composer.addImage")}
-                disabled={loading || !supportsImage}
-                onClick={(e) => {
-                  e.currentTarget.focus();
-                  setAttachmentOpen(true);
-                }}
-              />
-              <IconButton
-                icon={<SlidersHorizontal size={15} />}
-                label={t("playground.composer.params")}
-                disabled={loading}
-                onClick={(e) => {
-                  e.currentTarget.focus();
-                  setSettings(true);
-                }}
-              />
-            </div>
-          }
-        />
-        <p className="mt-2 text-center text-xs text-muted-foreground">
-          {t("playground.composer.note")}
-        </p>
-      </div>
+        {transcript}
+      </ChatSurface>
       <Sheet
         open={settings}
         onClose={() => setSettings(false)}

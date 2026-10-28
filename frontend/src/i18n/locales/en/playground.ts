@@ -14,7 +14,7 @@ const playground: Shape<typeof zh> = {
   "reply.thinkDone": "Done",
   "reply.thinkProgress": "In progress",
   "reply.thoughtFor": "Thought for {s} s",
-  "jumpLatest": "Jump to latest",
+  jumpLatest: "Jump to latest",
   "tools.call.args": "Arguments",
   "tools.call.copy": "Copy",
   "tools.call.copied": "Copied",
@@ -26,6 +26,9 @@ const playground: Shape<typeof zh> = {
   "reply.lengthLimit":
     "Output limit reached. Raise max output tokens or turn off thinking and try again.",
   "reply.incomplete": "Incomplete reply",
+  "reply.copy": "Copy reply",
+  "reply.copied": "Reply copied",
+  "reply.regenerate": "Regenerate",
   "error.imageType": "Choose a PNG, JPEG or WebP image under 8 MB.",
   "error.imageRead": "Could not read the image",
   "error.stopped": "Generation stopped. The partial reply is kept below.",
@@ -134,14 +137,18 @@ const playground: Shape<typeof zh> = {
   "library.preset.delete": "Delete preset {name}",
   "library.preset.saved": "Saved preset “{name}”.",
   "library.preset.applied": "Applied preset “{name}”.",
-  "library.preset.empty": "No custom presets yet. They stay in this browser and apply to this service address only.",
-  "library.history.messages": "{count, plural, one {# message} other {# messages}}",
+  "library.preset.empty":
+    "No custom presets yet. They stay in this browser and apply to this service address only.",
+  "library.history.messages":
+    "{count, plural, one {# message} other {# messages}}",
   "library.history.resume": "Resume",
   "library.history.delete": "Delete conversation {title}",
   "library.history.clear": "Clear all history",
-  "library.history.empty": "No history yet. Finished conversations are kept in this browser and never sent to the server.",
+  "library.history.empty":
+    "No history yet. Finished conversations are kept in this browser and never sent to the server.",
   "library.history.untitled": "(untitled)",
-  "library.storageFailed": "The browser refused to store this; the lists live only on this page.",
+  "library.storageFailed":
+    "The browser refused to store this; the lists live only on this page.",
   "library.preset.edit": "Edit preset {name}",
   "library.preset.rename": "Preset name",
   "library.preset.renameSave": "Save name",
@@ -151,33 +158,42 @@ const playground: Shape<typeof zh> = {
   "library.history.branchAt": "Branch after turn {n}",
   "library.history.branchCreate": "Create branch",
   "library.history.branchTitle": "{title} (branch)",
-  "library.history.branched": "Branch created; continue it from the history list.",
+  "library.history.branched":
+    "Branch created; continue it from the history list.",
   "library.transfer.export": "Export",
   "library.transfer.import": "Import",
-  "library.transfer.help": "The exported JSON holds presets and conversations (message text as written) and no access token; keep it as a private file.",
-  "library.transfer.imported": "Imported {presets} presets and {history} conversations.",
+  "library.transfer.help":
+    "The exported JSON holds presets and conversations (message text as written) and no access token; keep it as a private file.",
+  "library.transfer.imported":
+    "Imported {presets} presets and {history} conversations.",
   "library.transfer.undo": "Undo import",
-  "library.transfer.rejected": "That file is not a Playground export, or its version does not match.",
+  "library.transfer.rejected":
+    "That file is not a Playground export, or its version does not match.",
   "tools.open": "Tools",
   "tools.title": "Tool-call and structured-output tester",
-  "tools.desc": "Check first, then send with the selected model: does the engine call a tool, and do the arguments follow the schema you wrote?",
+  "tools.desc":
+    "Check first, then send with the selected model: does the engine call a tool, and do the arguments follow the schema you wrote?",
   "tools.tab.tools": "Tool calls",
   "tools.tab.schema": "Structured output",
   "tools.defs.label": "Tool definitions (JSON)",
   "tools.defs.ok": "{n} tools, well formed",
   "tools.defs.err.json": "Not valid JSON: {detail}",
   "tools.defs.err.array": "Needs an array with at least one tool.",
-  "tools.defs.err.shape": "Item {n} is not a tool with type function and a function object.",
-  "tools.defs.err.name": "Tool {n}: the name must be 1 to 64 letters, digits, underscores or hyphens.",
+  "tools.defs.err.shape":
+    "Item {n} is not a tool with type function and a function object.",
+  "tools.defs.err.name":
+    "Tool {n}: the name must be 1 to 64 letters, digits, underscores or hyphens.",
   "tools.defs.err.duplicate": "Duplicate tool name: {name}",
-  "tools.defs.err.parameters": "{name}: parameters must be a schema with type object.",
+  "tools.defs.err.parameters":
+    "{name}: parameters must be a schema with type object.",
   "tools.prompt.label": "Prompt",
   "tools.run": "Send first round",
   "tools.cancel": "Cancel",
   "tools.continue": "Send results and continue",
   "tools.reset": "Start over",
   "tools.disabled.noModel": "Pick a test model first.",
-  "tools.disabled.invalid": "The tool definitions have errors; fix them to send.",
+  "tools.disabled.invalid":
+    "The tool definitions have errors; fix them to send.",
   "tools.disabled.empty": "Enter a prompt first.",
   "tools.round": "Round {n}",
   "tools.round.calls": "The engine called {n} tools",
@@ -201,27 +217,35 @@ const playground: Shape<typeof zh> = {
   "tools.schema.notJson": "The reply is not valid JSON: {detail}",
   "tools.schema.bad": "The reply does not follow the schema: {n} problems",
   "tools.schema.empty": "The engine returned empty content.",
-  "tools.schema.note": "The response does not say whether the engine enforced the schema with constrained decoding; only the result is checked here.",
+  "tools.schema.note":
+    "The response does not say whether the engine enforced the schema with constrained decoding; only the result is checked here.",
   "tools.raw": "Raw reply",
   "tools.stopped": "Stopped.",
   "tools.prompt.default": "What is the weather in Taipei today?",
   "params.logprobs": "Token confidence (logprobs)",
-  "params.logprobsNote": "Asks the engine for each token's probability and shades the reply token by token. Chat Completions only; it adds some data to the stream.",
-  "params.logprobsOther": "Responses and Messages have no logprobs, so this is not sent.",
+  "params.logprobsNote":
+    "Asks the engine for each token's probability and shades the reply token by token. Chat Completions only; it adds some data to the stream.",
+  "params.logprobsOther":
+    "Responses and Messages have no logprobs, so this is not sent.",
   "conf.title": "Token confidence",
-  "conf.summary": "{count} tokens · mean probability {mean}% · {below} under 50%",
+  "conf.summary":
+    "{count} tokens · mean probability {mean}% · {below} under 50%",
   "conf.high": "90% or more",
   "conf.medium": "50–90%",
   "conf.low": "20–50%",
   "conf.veryLow": "under 20%",
   "conf.token": "“{token}” {pct}%",
   "conf.alt": " · alternatives: {alts}",
-  "conf.note": "How sure the model was when it picked this token, not whether the answer is right.",
-  "conf.unavailable": "This reply carried no logprobs: the engine or this model does not support them, so there is no confidence shading.",
+  "conf.note":
+    "How sure the model was when it picked this token, not whether the answer is right.",
+  "conf.unavailable":
+    "This reply carried no logprobs: the engine or this model does not support them, so there is no confidence shading.",
   "ocr.open": "Image to text",
-  "ocr.unavailable": "No OCR or vision model is loaded, so image to text is unavailable",
+  "ocr.unavailable":
+    "No OCR or vision model is loaded, so image to text is unavailable",
   "ocr.title": "Image to text",
-  "ocr.desc": "Sends the image to /v1/ocr and reads its text with {model}. The image goes to the engine only and is not kept.",
+  "ocr.desc":
+    "Sends the image to /v1/ocr and reads its text with {model}. The image goes to the engine only and is not kept.",
   "ocr.drop": "Drop or choose an image",
   "ocr.hint": "PNG, JPG, WEBP, TIFF or BMP, up to 10 MB",
   "ocr.preview": "Image",
@@ -231,7 +255,8 @@ const playground: Shape<typeof zh> = {
   "ocr.empty": "The engine read no text.",
   "ocr.run": "Run",
   "ocr.another": "Another image",
-  "ocr.noBoxes": "The engine returns text only: no position for each piece of text, so it cannot be marked on the image, and no trustworthy confidence, so none is shown.",
+  "ocr.noBoxes":
+    "The engine returns text only: no position for each piece of text, so it cannot be marked on the image, and no trustworthy confidence, so none is shown.",
   "ocr.usage": "{model} · {prompt} in / {completion} out tokens",
   "ocr.failed": "It failed; see the engine log.",
 };

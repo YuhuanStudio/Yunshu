@@ -7,20 +7,14 @@ import {
   DialogContent,
   DialogDescription,
   DialogTitle,
-  Textarea,
+  IconButton,
   Spinner,
 } from "@yuhuanowo/yunui";
-import {
-  Bot,
-  Copy,
-  Check,
-  ThumbsUp,
-  ThumbsDown,
-  Send,
-  Square,
-} from "lucide-react";
+import { ChatComposer, ContextCards } from "@yuhuanowo/yunui/chat";
+import { Bot, Copy, Check, ThumbsUp, ThumbsDown } from "lucide-react";
 import type { Connection } from "../api";
 import { t, tr, useLocale } from "../i18n";
+import { ChatEmpty, ChatSurface, ChatTurn } from "../chat/ChatSurface";
 import { docHref } from "./links";
 import {
   docsRequest,
@@ -66,11 +60,14 @@ export default function AskAI({
   onClose,
   connection,
   initialQuestion,
+  variant = "dialog",
 }: {
   open: boolean;
   onClose: () => void;
   connection: Connection;
   initialQuestion: string;
+  /** `panel` renders the conversation bare, to dock it (fumadocs `aiChat.panel`); the host owns its frame. */
+  variant?: "dialog" | "panel";
 }) {
   const locale = useLocale();
   const [input, setInput] = useState("");
@@ -82,9 +79,6 @@ export default function AskAI({
   const [copied, setCopied] = useState<number | null>(null);
   const controller = useRef<AbortController | null>(null);
   const [tabId] = useState(makeTabId);
-  const scroll = useRef<HTMLDivElement>(null);
-  const content = useRef<HTMLDivElement>(null);
-  const pinned = useRef(true);
   const stop = () => controller.current?.abort();
   useEffect(
     () => () => {
@@ -115,20 +109,6 @@ export default function AskAI({
       });
     return () => abort.abort();
   }, [open, retry, locale, connection.baseUrl, connection.token]);
-  useEffect(() => {
-    if (pinned.current && scroll.current)
-      scroll.current.scrollTop = scroll.current.scrollHeight;
-  }, [turns, running]);
-
-  useEffect(() => {
-    if (!open || !content.current) return;
-    const observer = new ResizeObserver(() => {
-      if (pinned.current && scroll.current)
-        scroll.current.scrollTop = scroll.current.scrollHeight;
-    });
-    observer.observe(content.current);
-    return () => observer.disconnect();
-  }, [open]);
 
   async function send(question = input.trim()) {
     if (!question || controller.current || !state?.ready) return;
@@ -137,7 +117,6 @@ export default function AskAI({
     setRunning(true);
     setError("");
     setInput("");
-    pinned.current = true;
     const at = turns.length;
     const history: ChatMessage[] = turns
       .filter((turn) => turn.complete)
@@ -194,6 +173,223 @@ export default function AskAI({
   }
   const unavailable =
     state && !state.ready ? errorKey(state.code ?? "no_engine") : null;
+  const limit = state?.question ?? 2000;
+  const dock = (
+    <>
+      {unavailable && (
+        <div
+          role="status"
+          className="mb-2 rounded-xl border border-border bg-(--bg-elevated) p-3 text-sm"
+        >
+          <p>{tr(`docs.ask.error.${unavailable}`)}</p>
+          {["no_engine", "no_model"].includes(unavailable) && (
+            <pre className="mt-2 overflow-x-auto">
+              <code>
+                {state?.command ?? "yunshu serve -m /path/to/mlx-model"}
+              </code>
+            </pre>
+          )}
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="mb-2 text-sm text-destructive">
+          {tr(`docs.ask.error.${error}`)}
+        </p>
+      )}
+      {(unavailable || error) && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="mb-2"
+          disabled={running}
+          onClick={() => {
+            setError("");
+            setRetry((v) => v + 1);
+          }}
+        >
+          {t("docs.ask.retry")}
+        </Button>
+      )}
+      <ChatComposer
+        value={input}
+        onChange={(value) => setInput(value.slice(0, limit))}
+        onSend={() => void send()}
+        onStop={stop}
+        loading={running}
+        disabled={!state?.ready}
+        sendDisabled={!state?.ready || !input.trim()}
+        maxRows={5}
+        placeholder={t("docs.ask.placeholder")}
+        labels={{ send: t("docs.ask.send"), stop: t("docs.ask.stop") }}
+      />
+      <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+        <p className="min-w-0 truncate">{t("docs.ask.disclaimer")}</p>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="shrink-0"
+          disabled={running || !turns.length}
+          onClick={() => {
+            setTurns([]);
+            setError("");
+          }}
+        >
+          {t("docs.ask.clear")}
+        </Button>
+      </div>
+    </>
+  );
+  const panel = variant === "panel";
+  const body = (
+    <>
+      <div className="shrink-0 px-4 pb-1 pr-12 pt-4 sm:px-6 sm:pt-5">
+        {panel ? (
+          <h2 className="flex items-center gap-2 text-sm font-semibold">
+            <Bot size={16} />
+            {t("docs.ask.title")}
+          </h2>
+        ) : (
+          <DialogTitle className="flex items-center gap-2 text-sm font-semibold">
+            <Bot size={16} />
+            {t("docs.ask.title")}
+          </DialogTitle>
+        )}
+        {panel ? (
+          <p className="text-xs text-muted-foreground">
+            {t("docs.ask.subtitle")}
+          </p>
+        ) : (
+          <DialogDescription className="text-xs">
+            {t("docs.ask.subtitle")}
+          </DialogDescription>
+        )}
+      </div>
+      <ChatSurface
+        jumpToLatestLabel={t("playground.jumpLatest")}
+        empty={
+          <ChatEmpty
+            icon={<Bot size={22} />}
+            title={t("docs.ask.welcome")}
+            description={t("docs.ask.local")}
+            suggestions={["start", "models", "api"].map((key) =>
+              tr(`docs.ask.suggestion.${key}`),
+            )}
+            onPick={(text) => void send(text)}
+            disabled={!state?.ready || running}
+            groupLabel={t("playground.empty.examples")}
+          />
+        }
+        dock={dock}
+      >
+        {turns.length ? (
+          <div role="log" aria-label={t("docs.ask.answers")}>
+            {turns.map((turn, i) => {
+              const last = running && i === turns.length - 1;
+              return (
+                <section key={i} className="space-y-1 motion-enter">
+                  <ChatTurn role="user">{turn.question}</ChatTurn>
+                  <ChatTurn
+                    role="assistant"
+                    name={t("docs.ask.title")}
+                    avatar={<Bot size={16} aria-hidden="true" />}
+                    actions={
+                      turn.answer ? (
+                        <>
+                          <IconButton
+                            icon={
+                              copied === i ? (
+                                <Check size={14} />
+                              ) : (
+                                <Copy size={14} />
+                              )
+                            }
+                            label={t("docs.ask.copy")}
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(
+                                  turn.answer,
+                                );
+                                setCopied(i);
+                              } catch {
+                                setError("copy_failed");
+                              }
+                            }}
+                          />
+                          {turn.complete && (
+                            <>
+                              <IconButton
+                                icon={<ThumbsUp size={14} />}
+                                label={t("docs.ask.good")}
+                                aria-pressed={turn.feedback === "good"}
+                                onClick={() => void feedback(turn, "good")}
+                              />
+                              <IconButton
+                                icon={<ThumbsDown size={14} />}
+                                label={t("docs.ask.bad")}
+                                aria-pressed={turn.feedback === "bad"}
+                                onClick={() => void feedback(turn, "bad")}
+                              />
+                            </>
+                          )}
+                        </>
+                      ) : undefined
+                    }
+                    footer={
+                      turn.sources.length > 0 ? (
+                        <nav aria-label={t("docs.ask.sources")}>
+                          <ContextCards
+                            chunks={turn.sources.map((source, n) => ({
+                              id: source.id,
+                              title: source.title,
+                              body: source.heading ?? "",
+                              source: source.slug,
+                              badge: `[${n + 1}]`,
+                              href: docHref(source.slug, source.anchor),
+                            }))}
+                            onSourceOpen={onClose}
+                            labels={{ header: null, count: null }}
+                          />
+                        </nav>
+                      ) : undefined
+                    }
+                  >
+                    <div
+                      className="min-w-0 overflow-x-auto"
+                      data-testid="docs-ask-answer"
+                    >
+                      <Suspense
+                        fallback={
+                          <p className="whitespace-pre-wrap">{turn.answer}</p>
+                        }
+                      >
+                        <Markdown content={turn.answer} streaming={last} />
+                      </Suspense>
+                      {last && !turn.answer && (
+                        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Spinner className="size-4" />
+                          {t("docs.ask.waiting")}
+                        </p>
+                      )}
+                    </div>
+                  </ChatTurn>
+                </section>
+              );
+            })}
+          </div>
+        ) : undefined}
+      </ChatSurface>
+    </>
+  );
+  if (panel)
+    return (
+      <div
+        className="flex h-full min-h-0 flex-col"
+        data-testid="docs-ask"
+        hidden={!open}
+      >
+        {body}
+      </div>
+    );
   return (
     <Dialog
       open={open}
@@ -205,241 +401,10 @@ export default function AskAI({
       }}
     >
       <DialogContent
-        className="flex h-[min(46rem,90dvh)] max-w-2xl flex-col gap-3 overflow-hidden"
+        className="flex h-[min(44rem,92dvh)] max-w-2xl flex-col gap-0 overflow-hidden p-0 max-sm:h-[calc(100dvh-1rem)] max-sm:w-[calc(100%-1rem)]"
         data-testid="docs-ask"
       >
-        <DialogTitle className="flex items-center gap-2">
-          <Bot size={18} />
-          {t("docs.ask.title")}
-        </DialogTitle>
-        <DialogDescription>{t("docs.ask.subtitle")}</DialogDescription>
-        <div
-          ref={scroll}
-          onScroll={() => {
-            const el = scroll.current;
-            if (el)
-              pinned.current =
-                el.scrollHeight - el.scrollTop - el.clientHeight < 64;
-          }}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-2"
-          role="log"
-          aria-label={t("docs.ask.answers")}
-        >
-          <div ref={content} className="space-y-5">
-            {!turns.length && (
-              <div className="space-y-3 py-6 text-center">
-                <p className="font-medium">{t("docs.ask.welcome")}</p>
-                <p className="text-sm text-muted-foreground">
-                  {t("docs.ask.local")}
-                </p>
-                <div className="flex flex-wrap justify-center gap-2">
-                  {["start", "models", "api"].map((key) => (
-                    <Button
-                      key={key}
-                      size="sm"
-                      variant="outline"
-                      disabled={!state?.ready || running}
-                      onClick={() =>
-                        void send(tr(`docs.ask.suggestion.${key}`))
-                      }
-                    >
-                      {tr(`docs.ask.suggestion.${key}`)}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {unavailable && (
-              <div
-                role="status"
-                className="rounded-xl border border-border bg-(--bg-elevated) p-4 text-sm"
-              >
-                <p>{tr(`docs.ask.error.${unavailable}`)}</p>
-                {["no_engine", "no_model"].includes(unavailable) && (
-                  <pre className="mt-3 overflow-x-auto">
-                    <code>
-                      {state?.command ?? "yunshu serve -m /path/to/mlx-model"}
-                    </code>
-                  </pre>
-                )}
-              </div>
-            )}
-            {turns.map((turn, i) => (
-              <section key={i} className="space-y-3 motion-enter">
-                <p className="ml-8 whitespace-pre-wrap break-words rounded-xl bg-(--bg-elevated) p-3 text-sm">
-                  {turn.question}
-                </p>
-                <div
-                  className="min-w-0 overflow-x-auto"
-                  data-testid="docs-ask-answer"
-                >
-                  <Suspense
-                    fallback={
-                      <p className="whitespace-pre-wrap">{turn.answer}</p>
-                    }
-                  >
-                    <Markdown
-                      content={turn.answer}
-                      streaming={running && i === turns.length - 1}
-                    />
-                  </Suspense>
-                  {running && i === turns.length - 1 && !turn.answer && (
-                    <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Spinner className="size-4" />
-                      {t("docs.ask.waiting")}
-                    </p>
-                  )}
-                </div>
-                {turn.sources.length > 0 && (
-                  <nav
-                    aria-label={t("docs.ask.sources")}
-                    className="grid gap-2 sm:grid-cols-2"
-                  >
-                    {turn.sources.map((source, n) => (
-                      <a
-                        key={source.id}
-                        href={docHref(source.slug, source.anchor)}
-                        onClick={onClose}
-                        className="rounded-lg border border-border px-3 py-2 text-xs transition-colors duration-(--dur-fast) hover:bg-(--bg-elevated)"
-                      >
-                        <span className="text-muted-foreground">
-                          [{n + 1}]{" "}
-                        </span>
-                        {source.title}
-                        {source.heading && (
-                          <span className="mt-1 block truncate text-muted-foreground">
-                            {source.heading}
-                          </span>
-                        )}
-                      </a>
-                    ))}
-                  </nav>
-                )}
-                {turn.answer && (
-                  <div className="flex gap-1">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      aria-label={t("docs.ask.copy")}
-                      onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(turn.answer);
-                          setCopied(i);
-                        } catch {
-                          setError("copy_failed");
-                        }
-                      }}
-                    >
-                      {copied === i ? <Check size={14} /> : <Copy size={14} />}
-                    </Button>
-                    {turn.complete && (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          aria-label={t("docs.ask.good")}
-                          aria-pressed={turn.feedback === "good"}
-                          onClick={() => void feedback(turn, "good")}
-                        >
-                          <ThumbsUp size={14} />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          aria-label={t("docs.ask.bad")}
-                          aria-pressed={turn.feedback === "bad"}
-                          onClick={() => void feedback(turn, "bad")}
-                        >
-                          <ThumbsDown size={14} />
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                )}
-              </section>
-            ))}
-          </div>
-        </div>
-        {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {tr(`docs.ask.error.${error}`)}
-          </p>
-        )}
-        {(unavailable || error) && (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={running}
-            onClick={() => {
-              setError("");
-              setRetry((v) => v + 1);
-            }}
-          >
-            {t("docs.ask.retry")}
-          </Button>
-        )}
-        <form
-          className="flex items-end gap-2 border-t border-border pt-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send();
-          }}
-        >
-          <Textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={t("docs.ask.placeholder")}
-            aria-label={t("docs.ask.placeholder")}
-            maxLength={state?.question ?? 2000}
-            rows={2}
-            disabled={!state?.ready}
-            onKeyDown={(e) => {
-              if (
-                e.key === "Enter" &&
-                !e.shiftKey &&
-                !e.nativeEvent.isComposing
-              ) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-          />
-          {running ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={(event) => {
-                event.preventDefault();
-                stop();
-              }}
-              aria-label={t("docs.ask.stop")}
-            >
-              <Square size={16} />
-            </Button>
-          ) : (
-            <Button
-              type="submit"
-              disabled={!state?.ready || !input.trim()}
-              aria-label={t("docs.ask.send")}
-            >
-              <Send size={16} />
-            </Button>
-          )}
-        </form>
-        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-          <p>{t("docs.ask.disclaimer")}</p>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={running || !turns.length}
-            onClick={() => {
-              setTurns([]);
-              setError("");
-            }}
-          >
-            {t("docs.ask.clear")}
-          </Button>
-        </div>
+        {body}
       </DialogContent>
     </Dialog>
   );

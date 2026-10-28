@@ -232,7 +232,9 @@ for (const name of PAGES) {
   });
 }
 
-test("footer island opens on tap and is not a full-height sheet", async ({ page }) => {
+test("footer island opens on tap and is not a full-height sheet", async ({
+  page,
+}) => {
   await install(page);
   await page.goto("/console/#/overview");
   await page.getByTestId("footer-compact").click();
@@ -294,7 +296,7 @@ test("overview: stat cards are 2-up and short; the phase strip is not cut", asyn
   );
 });
 
-test("playground toolbar: model full width, dialect and mode on one row, actions in a menu", async ({
+test("playground toolbar: model beside the action icons, dialect and mode on one row below", async ({
   page,
 }) => {
   await install(page);
@@ -308,13 +310,20 @@ test("playground toolbar: model full width, dialect and mode on one row, actions
   const mode = await page
     .getByRole("tablist", { name: "測試模式" })
     .boundingBox();
-  expect(model!.width).toBeGreaterThan(300);
+  expect(model!.width).toBeGreaterThan(170);
   expect(dialect!.y).toBeGreaterThan(model!.y + model!.height - 2);
   expect(Math.abs(dialect!.y - mode!.y)).toBeLessThan(12);
-  // No lone overflow dot: the two actions are plain labelled buttons on their own row.
-  await expect(page.getByRole("button", { name: "更多動作" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "檢視程式碼" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "新測試" })).toBeVisible();
+  // The five actions are icon buttons on the model's row, so the whole toolbar is two rows.
+  const code = await page
+    .getByRole("button", { name: "檢視程式碼" })
+    .boundingBox();
+  const fresh = await page
+    .getByRole("button", { name: "新測試" })
+    .boundingBox();
+  expect(Math.abs(code!.y - model!.y)).toBeLessThan(12);
+  expect(fresh!.x + fresh!.width).toBeLessThanOrEqual(
+    page.viewportSize()!.width,
+  );
 });
 
 test("requests: the phone list fits the width with its actions reachable (no sideways scroll)", async ({
