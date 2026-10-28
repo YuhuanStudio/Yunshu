@@ -19,4 +19,4 @@ def test_rows_are_sorted_and_cover_experts():
     assert len(ids) == 20480 and (np.diff(ids.astype(np.int64)) >= 0).all()
     assert len(set(ids.tolist())) > 500  # uniform: nearly every expert gets rows
     skewed = bench.rows_per_expert(20480, 0.5, rng)
-    assert len(set(skewed.tolist())) < len(set(ids.tolist()))
+    assert np.bincount(skewed.astype(np.int64)).max() > 2 * np.bincount(ids.astype(np.int64)).max()
