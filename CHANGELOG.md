@@ -69,6 +69,8 @@ tested memory guidance for 128 GB and tight hosts. Outputs of speculation on and
 
 ### Performance
 
+- Qwen3.8-Flash-Next prefill attention runs on the tensor units (`YUNSHU_QSA_SPARSE_PREFILL`, on by default; set `0` for upstream's kernel): cold TTFT on oQ2.5e 8K/32K/128K 8.80/26.28/133.8 -> 6.57/19.99/107.0 s. Output stays identical with speculation on and off and with a cache hit or miss; against an fp32-attention reference it is closer than the stock kernel (KLD 0.0685 vs 0.0731).
+
 Machine M5 Max, Qwen3.8-27B oQ4e-mtp + DFlash2, interleaved reps as stated, APC disk off unless noted.
 Each row is its own experiment; do not add them.
 
@@ -95,6 +97,9 @@ in [PERF_TREND](docs/reports/PERF_TREND.md): warm and turn-2 TTFT at 32K, Tensor
 and cold 32K TTFT versus Splash 1.3.2.
 
 ### Added
+
+- `yv` has a `kld` stage (`--suite kld`): teacher-forced KL divergence of base and candidate against an fp32 reference over
+  a fixed corpus of long documents, for changes that alter arithmetic. [Guide](docs/guides/VERIFY.md#kld-teacher-forced-kl-divergence).
 
 - Qwen3.8-Flash-Next reads its n-gram embedding (PLE) table from the checkpoint files on demand by default
   (`YUNSHU_PLE_STORAGE=ssd`, stable; `memory` loads the table like any weight). Measured on the raw Jundot

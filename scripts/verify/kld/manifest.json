@@ -1,0 +1,98 @@
+{
+ "version": "v1",
+ "tokenizer": "Qwen3.8-Flash-Next-oQ2.5e-mtp",
+ "total_tokens": 196608,
+ "corpus_sha": "e6c5375da2fda8abb1773497fa1d97789c702a5ea0f73ab0ee54c222cef00d1f",
+ "windows": [
+  {
+   "id": "prose-8k-0",
+   "group": "prose",
+   "tokens": 8192,
+   "sha256": "fd6dca537b99c33e013b7866d2807c35147a018ccb59b5eb77a3e34acf15871e"
+  },
+  {
+   "id": "prose-8k-1",
+   "group": "prose",
+   "tokens": 8192,
+   "sha256": "578186e93d1cb5f6ddd26c5742ed780cde164dad208c208edbda89e973b9645b"
+  },
+  {
+   "id": "prose-8k-2",
+   "group": "prose",
+   "tokens": 8192,
+   "sha256": "eb164af311748e9aba34e8d25aaab9ee58dd32276d6ef72e46cea4ab2849f785"
+  },
+  {
+   "id": "prose-8k-3",
+   "group": "prose",
+   "tokens": 8192,
+   "sha256": "15d4d8d13b7d98f1136725af4af61f4a1fe45d69e8f5343aafd9f3364f68f720"
+  },
+  {
+   "id": "prose-32k-0",
+   "group": "prose",
+   "tokens": 32768,
+   "sha256": "84e4e1ae07913b46c7fbf6340f77ab777580a1a949a77eff38f03c0bda5866e3"
+  },
+  {
+   "id": "code-8k-0",
+   "group": "code",
+   "tokens": 8192,
+   "sha256": "74e5ddab01b450b5b42ffa7a78fa598c7903452b4ff005a449d5e04c136d0f11"
+  },
+  {
+   "id": "code-8k-1",
+   "group": "code",
+   "tokens": 8192,
+   "sha256": "7a0199a2681c7748d69d465db031f45a9c649994ccc7fb5f0b432160510f544b"
+  },
+  {
+   "id": "code-8k-2",
+   "group": "code",
+   "tokens": 8192,
+   "sha256": "b38fdca4d3132856fa6ec02f46c767b9423856423a6912bbe66e76556a5027fb"
+  },
+  {
+   "id": "code-8k-3",
+   "group": "code",
+   "tokens": 8192,
+   "sha256": "13b761dcf667fac769645c925feb0c3e6808b182d6416f8b487bee1247f4aa65"
+  },
+  {
+   "id": "code-32k-0",
+   "group": "code",
+   "tokens": 32768,
+   "sha256": "463f38dd47b1565f326c86695fc02ded478d540cd739565da2cc3da2b3181cf2"
+  },
+  {
+   "id": "agent-8k-0",
+   "group": "agent",
+   "tokens": 8192,
+   "sha256": "f8ade9f4bee9d6e725b5b72aa08edf20d77e6b1dc5cdc880b2d15aca8e6136c0"
+  },
+  {
+   "id": "agent-8k-1",
+   "group": "agent",
+   "tokens": 8192,
+   "sha256": "1bb37295fea90d47457dfbbdc57db06df4f262ca757b469c9a98c17f3a602807"
+  },
+  {
+   "id": "agent-8k-2",
+   "group": "agent",
+   "tokens": 8192,
+   "sha256": "0ff8d9bc337b604b9b0b31095a2c9ab136b0f5ec8911fd9a2d5e4ca263e81272"
+  },
+  {
+   "id": "agent-8k-3",
+   "group": "agent",
+   "tokens": 8192,
+   "sha256": "a566e1d760c94b25bdb43d99b87d78f989fe1f75b37418eec26b72f8e9476065"
+  },
+  {
+   "id": "agent-32k-0",
+   "group": "agent",
+   "tokens": 32768,
+   "sha256": "68f29f943315c4787e1af5abe8f9fd38f3efd21f9fdad09e856379eb25f4656d"
+  }
+ ]
+}

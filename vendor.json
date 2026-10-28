@@ -836,6 +836,22 @@
       "local_changes": [
         "Separate checkpoint-wide anchor classifier from per-module recentering; preserve FP32 residual when BF16 cannot represent direct gamma minus one; MTP receives base convention explicitly."
       ]
+    },
+    {
+      "kind": "derived",
+      "path": "python/yunshu_engine/kernels/qsa_sparse_prefill.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_paths": [
+        "zig/kernels/metal/prefill/fn_attn.metal",
+        "zig/kernels/metal/nax.h"
+      ],
+      "commit": "7c22033",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "tf_sattn_nax and the M5 fragment helpers of nax.h ported to an mx.fast.metal_kernel; the key list is formed in the kernel from the sorted QSA block indices and the incomplete tail block instead of a precomputed id table; the fused output gate is dropped (bf16 attention output only, the model's own gate and o_proj follow); queries are read in the [1, heads, rows, dim] layout the model produces"
+      ],
+      "why": "Flash-Next prefill attention on the tensor units: one threadgroup per (row, key head), 12 query heads as one operand, selected keys read once"
     }
   ],
   "inspired": [

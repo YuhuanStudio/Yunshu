@@ -223,6 +223,12 @@ still wins at runtime (reported as `overridden`).
 | `YUNSHU_ENGINE_LOOP` | bool | off | reload | Text models: EngineCore continuous-batching loop instead of the single-request fast path. Option (not the default): faster aggregate throughput with several concurrent requests on text models (measured 2026-10-24: +60/190/280% at 2/4/8 requests, -4% at one), but batched outputs are not token-identical to the single-request path. |
 | `YUNSHU_OVERLAP` | `''` \| `cpu_gpu` \| `two_batch` | unset | reload | Text engine loop: overlap CPU and GPU work ('cpu_gpu') or split a batch into two overlapping halves ('two_batch'). Option (not the default); no measurable effect on a 3B text model (2026-10-24). |
 
+### kernels
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_QSA_SPARSE_PREFILL` | bool | on | reload | Qwen3.8-Flash-Next (qwen4_exp), M5-class GPUs: run the prompt rows' indexed-sparse QSA attention on the tensor units, one threadgroup per (row, key head) with the 12 query heads that share a key head as one matmul operand and the selected keys read once, instead of upstream's scalar kernel that re-reads the selected keys for every query head. Each row's result depends on that row alone, so prefill stays independent of chunking; the arithmetic differs from upstream's (fp32 accumulate in a different order, not a quality change). Decode and speculative verify are untouched. On by default: cold TTFT 8K/32K/128K -25/-24/-20% on Flash-Next oQ2.5e; within-version identity holds (spec on == off, APC hit == miss) and the kld gate has the output closer to an fp32-attention reference than the stock kernel (KLD 0.0685 vs 0.0731). Off: upstream's scalar kernel. |
+
 ### voice
 
 | Setting | Type | Default | Applies | Description |

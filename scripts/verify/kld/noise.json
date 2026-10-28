@@ -1,0 +1,5 @@
+{
+  "eps": 0.002,
+  "top1_noise": 0.001,
+  "source": "2026-10-28, Flash-Next oQ2.5e-mtp-ple-ssd, 15 windows / 197K positions: the same main engine with prefill chunking 1024 instead of 2048 tokens moved KLD(ref||arm) by 0.00167 (0.07312 -> 0.07479) and top-1 vs ref by 0.0003; eps rounds the KLD shift up, top1_noise is about 3x the measured shift"
+}

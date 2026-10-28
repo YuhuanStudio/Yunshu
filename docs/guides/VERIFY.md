@@ -46,6 +46,7 @@ did. `--env K=V` applies to both arms, `--cand-env` to the candidate only, `--ba
 | `identity` | Greedy decode digests base == cand over code and prose at each suite context (cold, warm, follow-up turn); with `--spec-off` also cand with `YUNSHU_VLM_DRAFT=off` == cand (spec on == off). The digest is over text, reasoning, tool calls and finish reason plus the token count (`tfbench.py` `sha`). | every cell equal |
 | `apc` | From the candidate's identity cells: the warm request (served from the prefix cache) must equal the cold request, and report `cached_tokens > 0` (a request that never hit the cache fails: APC not engaged). `--no-apc-hit-required` for paths without APC. | hit == miss |
 | `quality` | 200-item paired MMLU-Pro through `paired_eval.py` (resumable rounds of 14 min per arm, base and cand interleaved). | all items scored in both arms, net difference in correct answers within +-1 |
+| `kld` | Teacher-forced KL divergence of base and candidate against a reference, over a fixed corpus of real long documents (`--suite kld`). See [kld](#kld-teacher-forced-kl-divergence). | KLD(ref‖cand) ≤ KLD(ref‖base) × 1.1 + ε and top-1 vs ref not lower beyond noise |
 | `speed` | `tfbench.py` decode cells (cold decode tok/s, cold TTFT, follow-up TTFT) in N quiet reps (default 3), interleaved base, cand, base, cand. Medians, per-rep paired deltas and a noise estimate (half range of the paired deltas) are reported. | no median worsening beyond `max(2%, noise)` (`--speed-tol`); a contended rep is rerun once, then the stage fails. **Confirmation:** when a cell regresses, only the regressing `(ctx, kind)` cells run `speed_confirm_reps` more paired reps (suite setting, default 2; arms still alternate, cells `base-r3@c1024prose`) and the metric is re-judged on all reps with the median of the per-rep paired deltas and noise = 1.4826 x the larger of the deltas' MAD and each arm's own MAD (percent of its median), so an intermittent ~100 ms GPU stall in one or two reps cannot decide; a real regression repeats in every rep and still fails. Stage numbers and `verdict.md` carry both verdicts (`initial: regression ...; confirmed: neutral`). Resume reuses finished confirmation cells |
 | `memory` | `memory_ab.py`, one job per arm and rep (default 2 reps, alternating order): peak footprint, footprint after idle, footprint held after a short follow-up. | no metric above base by more than 3% + 0.25 GiB |
 | `longqa` | `tfbench.py --part needle`: 10 deterministic key-value needles spliced into the 32K / 64K / 128K prose prompts, one greedy question each (the prefix is cached after the first). Long suites only. | every item scored in both arms, correct count within +-1 |
@@ -56,6 +57,36 @@ method (`mtp` / `dflash` set `YUNSHU_VLM_DRAFT`; `dflash` needs the drafter path
 `local.env` or `YV_DRAFTER`). The base arm's identity cells are deterministic, so they are shared
 across runs through `/Volumes/P5Plus/yunshu-build/verify/cellcache/` (key: base commit, env, model,
 context, harness hash, device): the next candidate against the same base reruns only its own arm.
+
+## `kld`: teacher-forced KL divergence
+
+A layer-specific quality check for changes that alter arithmetic (a new kernel, a different reduction order),
+where token-for-token identity against main cannot hold but "no further from the exact answer than main" can be
+measured in minutes instead of an MMLU run.
+
+- **Corpus** (`scripts/verify/kld/manifest.json`, text under `/Volumes/P5Plus/yunshu-build/kld-corpus/v1/`):
+  12 windows of 8K and 3 of 32K tokens (about 197K tokens) of real prose (docs), code (engine sources) and
+  recorded agent-client transcripts. The manifest holds every window's id, token count and sha256 and the corpus
+  sha; a missing or altered window fails the stage closed. Rebuild with
+  `python -m verify.kld.corpus <model dir>` (deterministic for a tokenizer).
+- **Capture** (`scripts/verify/kld/capture.py`): one cold prefill per window through the real server; hooks put every
+  prefill chunk's final hidden state through the model's own `lm_head` in blocks and keep, at every position, the
+  top-32 ids and normalized logprobs and the logprob of the token that follows. Each arm runs the engine of its own
+  source tree. The **reference** arm runs the base tree with dense fp32 attention over the same selected keys
+  (Flash-Next only; other architectures have no reference mode yet).
+- **Cache:** `/Volumes/Micron/yunshu-kld-cache/<key>/`, key = engine source key, model identity, the arm's
+  environment, corpus sha, mode and tool version, so base and reference run once per main SHA.
+- **Metrics:** mean and p99 KLD (over the reference's top-32 tokens plus a remainder bucket; a reference token
+  missing from the arm's top-32 takes the arm's smallest listed probability), top-1 agreement, top-5 overlap,
+  perplexity delta, and the KLD curve by context depth; cand vs ref, base vs ref and cand vs base.
+- **Verdict:** PASS when `KLD(ref‖cand) ≤ KLD(ref‖base) × 1.1 + ε` and top-1 vs ref is not lower than base's beyond
+  the noise. ε and the top-1 noise come from `scripts/verify/kld/noise.json` (source recorded there) or the
+  defaults (0.002 / 0.003). Incomplete or malformed windows fail the stage.
+- **Decode mode** (`--kld-decode`, teacher-forced through the decode / verify path) is not implemented and fails closed.
+
+```
+yv ab --base main --cand <dir> --suite kld --model <Flash-Next dir> --cand-env YUNSHU_QSA_SPARSE_PREFILL=1 --label <topic>
+```
 
 ## Suites
 
