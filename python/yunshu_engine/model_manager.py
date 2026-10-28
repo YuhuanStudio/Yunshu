@@ -25,6 +25,7 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
@@ -79,6 +80,18 @@ def lease_scope():
 
 
 logger = logging.getLogger(__name__)
+
+#: Callables run (cheaply, possibly from the asyncio thread) when a model starts or finishes
+#: loading or is unloaded: the console change feed samples the status again at once.
+state_listeners: list[Callable[[], None]] = []
+
+
+def notify_state_change() -> None:
+    for fn in list(state_listeners):
+        try:
+            fn()
+        except Exception:  # noqa: BLE001 - a listener must never break a load
+            logger.debug("model state listener failed", exc_info=True)
 
 
 class ModelType(Enum):
@@ -725,6 +738,7 @@ class ModelManager:
 
             # Load using the appropriate engine type
             entry.is_loading = True
+            notify_state_change()
             try:
                 engine = await self._create_and_load_engine(entry, engine_config)
 
@@ -739,6 +753,7 @@ class ModelManager:
                 entry.last_access = time.monotonic()
                 entry.load_time = time.time()  # wall-clock for /models endpoint
                 entry.load_error = None
+                notify_state_change()
 
                 # _current_memory_bytes is also mutated by
                 # track_lora_memory on the MLX executor THREAD under _sync_lock.
@@ -791,6 +806,7 @@ class ModelManager:
                 entry.is_loaded = False
                 entry.engine = None
                 entry.load_error = str(e)
+                notify_state_change()
                 logger.error(f"Failed to load model {model_id}: {e}")
                 # Clean up any partial Metal buffers from the failed load.
                 # Weight loading may have allocated Metal buffer temporaries
@@ -902,6 +918,7 @@ class ModelManager:
         # Mark as not loaded early to prevent concurrent get_engine() from
         # seeing an inconsistent state (loading=False, is_loaded=True, engine=None)
         entry.is_loaded = False
+        notify_state_change()
 
         pre_unload_active = mx.get_active_memory()
         estimated_bytes = entry.estimated_bytes

@@ -96,6 +96,10 @@ def get_hub() -> Hub:
         hub = _hub
         # A request arriving, leaving or being recorded is reported at once, not at the next tick.
         registry.add_listener(lambda: hub.poke("status", "requests"))
+        # A model starting or finishing a load (or unloading) moves the status and the memory ledger.
+        from yunshu_engine import model_manager
+
+        model_manager.state_listeners.append(lambda: hub.poke("status", "memory"))
     return _hub
 
 

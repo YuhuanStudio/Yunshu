@@ -227,3 +227,16 @@ def test_registry_listener_fires_on_add_remove_and_record_done():
     assert len(hits) == 3
     reg.add_listener(lambda: 1 / 0)  # a failing listener never breaks a request
     reg.remove(info)  # type: ignore[arg-type]
+
+
+def test_model_state_change_notifies_listeners():
+    from yunshu_engine import model_manager
+
+    hits: list[int] = []
+    model_manager.state_listeners.append(lambda: hits.append(1))
+    model_manager.state_listeners.append(lambda: 1 / 0)  # never breaks a load
+    try:
+        model_manager.notify_state_change()
+        assert hits == [1]
+    finally:
+        model_manager.state_listeners.clear()
