@@ -332,3 +332,10 @@ for _chars in (16000, 85000):
             "phaseb_scenarios": [_scen],
             "phaseb_shapes": ["greedy", "seeded"],
         }
+
+SUITES["phaseb2-ident"] = {
+    "stages": ["phaseb-identity"],
+    "phaseb_ctx_chars": [16000],
+    "phaseb_scenarios": ["solo", "burst2", "stagger", "burst4"],
+    "phaseb_shapes": ["greedy", "seeded"],
+}
