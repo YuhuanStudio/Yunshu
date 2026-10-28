@@ -200,19 +200,23 @@ def install(arm: str) -> None:
     PromptProcessingBatch.generate = finish
 
 
-def ask(url: str, text: str) -> tuple[int, float]:
+def ask(url: str, model: str, text: str) -> tuple[int, float]:
     """One completion of one token; (prompt tokens, wall seconds)."""
+    import urllib.error
     import urllib.request
 
-    body = dict(prompt=text, max_tokens=1, temperature=0)
+    body = dict(model=model, prompt=text, max_tokens=1, temperature=0)
     req = urllib.request.Request(
         url + "/v1/completions",
         json.dumps(body).encode(),
         {"Content-Type": "application/json", "Authorization": "Bearer k"},
     )
     t0 = time.perf_counter()
-    with urllib.request.urlopen(req, timeout=3600) as r:
-        reply = json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=3600) as r:
+            reply = json.load(r)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"/v1/completions {exc.code}: {exc.read()[:300]!r}") from exc
     return int((reply.get("usage") or {})["prompt_tokens"]), time.perf_counter() - t0
 
 
@@ -261,7 +265,7 @@ def run(args) -> None:
             t.send(srv.url, t.req(srv.model, "Say hi.", 8))
             for w in todo:
                 (cache / "_current.json").write_text(json.dumps(dict(wid=w["id"])))
-                tokens, wall = ask(srv.url, w["text"])
+                tokens, wall = ask(srv.url, srv.model, w["text"])
                 if not (cache / f"{w['id']}.npz").exists():
                     raise RuntimeError(
                         f"{w['id']}: the capture hook wrote no window (prompt_tokens={tokens})"
