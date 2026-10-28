@@ -84,6 +84,7 @@ class Stack:
             "PYTHONPATH": str(ROOT / "python"),
             "YUNSHU_CONSOLE_DB": str(home / "history.sqlite"),
             "YUNSHU_DEBUG_ROUTES": "1",
+            "YUNSHU_AUTH_DISABLED": "true",  # loopback bench: model load is an admin route
         }
         (home / "home").mkdir(parents=True, exist_ok=True)
         self.engine: subprocess.Popen | None = None
@@ -237,6 +238,8 @@ def run_events(
         raise SystemExit(f"FAIL poll cell opened a stream: {flat}")
     if push and not res["latencyMs"]["requestArrival_sent_to_pill"]:
         raise SystemExit(f"FAIL no arrival latency measured tabs={tabs} push={push}")
+    if a.load_model and (res.get("modelLoad") or {}).get("http") != 200:
+        raise SystemExit(f"FAIL model load did not succeed: {res.get('modelLoad')}")
     out.write_text(json.dumps(res, indent=1))
     return res
 

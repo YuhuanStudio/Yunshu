@@ -64,6 +64,7 @@ async function streamChat(maxTokens, prompt) {
       model: a.model,
       stream: true,
       max_tokens: maxTokens,
+      ignore_eos: true,
       messages: [{ role: "user", content: prompt }],
     }),
   });
@@ -72,7 +73,8 @@ async function streamChat(maxTokens, prompt) {
   const dec = new TextDecoder();
   for await (const chunk of res.body) {
     const text = dec.decode(chunk);
-    if (first === null && /"content":"[^"]/.test(text)) first = Date.now();
+    if (first === null && /"content"\s*:\s*"[^"]/.test(text))
+      first = Date.now();
   }
   return { t0, first, end: Date.now() };
 }
