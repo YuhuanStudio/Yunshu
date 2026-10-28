@@ -101,10 +101,19 @@ class DFlashBatch:
             hidden = self.hidden.pop(id(row), None)
             ring = dflash_ring.Ring(self.draft, self.keep + 64, self.keep)
             count = 0 if hidden is None else int(hidden.shape[1])
-            ring.pos = mx.array([row.n - count], dtype=mx.int32)
+            # Window-relative drafter positions, like the lane's ring: RoPE only needs
+            # differences, and the drafter never saw 8K+ absolute offsets in training.
+            ring.pos = mx.array([0], dtype=mx.int32)
             if count:
                 ring.append(self.draft, hidden, mx.array([count], dtype=mx.int32))
             self.rings[id(row)] = ring
+            logger.info(
+                "DIAG ring pos=%d count=%d absmean0=%.6f absmeanL=%.6f",
+                int(ring.pos.item()),
+                count,
+                float(mx.abs(ring.keys[0].astype(mx.float32)).mean().item()),
+                float(mx.abs(ring.keys[-1].astype(mx.float32)).mean().item()),
+            )
             from ..mtp_lane import copy_rows_for_model
 
             copy_rows = min(copy_rows_for_model(self.lm), tree_verify.FAST_MAX_ROWS)
@@ -225,6 +234,8 @@ class DFlashBatch:
                     committed=r.generated,
                 )
                 toks, parents = search_tree(lat, nodes[b])
+                if r.generated == 1:
+                    logger.info("DIAG first draft %s", toks[:8].tolist())
                 toks, parents, ranks = reorder(toks, parents)
                 proposals[b] = (
                     mx.concatenate([mx.array([r.pending], dtype=mx.int32), toks])[None],
