@@ -255,3 +255,21 @@ def test_greedy_reports_equal_the_serial_argmax_stream():
         lp, top = sampler.report(index, got[index])
         ref = request.reports(rows[index], [got[index]])[0]
         assert (got[index], lp, top) == ref
+
+
+def test_paravirtual_binding_keeps_the_greedy_override(monkeypatch):
+    # A VM's Metal binds the chunked sampler per instance; it must still dispatch to the subclass's sample_positions.
+    from yunshu_engine.utils import hardware
+
+    monkeypatch.setattr(hardware, "is_paravirtual_metal", lambda: True)
+    tbl, first = table(), table()[3]
+    request = SpecRequest(logprobs=True, top_logprobs=2)
+    virtual = NativeKeyedSampler(None, 0, request=request)
+    assert virtual.sample_positions.__func__ is KeyedSampler._sample_positions_virtual
+    monkeypatch.setattr(hardware, "is_paravirtual_metal", lambda: False)
+    physical = NativeKeyedSampler(
+        None, 0, request=SpecRequest(logprobs=True, top_logprobs=2)
+    )
+    assert (
+        speculate(tbl, virtual, first, 20)[0] == speculate(tbl, physical, first, 20)[0]
+    )
