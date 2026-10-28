@@ -1,3 +1,4 @@
+import { pushedPayload } from "./push.ts";
 import { readGb } from "./byte-format.ts";
 import { failureMessage, statusMessage } from "./errors.ts";
 import { t } from "./i18n/index.ts";
@@ -156,6 +157,17 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The server refused the credentials (401/403): repeating the same request cannot succeed until the
+ * token changes, so a poller stops here (its effect restarts when the connection's token changes)
+ * instead of asking again every few seconds.
+ */
+export function needsToken(error: unknown): boolean {
+  return (
+    error instanceof ApiError && (error.status === 401 || error.status === 403)
+  );
+}
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -235,6 +247,14 @@ export async function requestJson<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
+  if (!options.method || options.method === "GET") {
+    // The change feed already holds the answer: no request (see push.ts).
+    const pushed = options.search ? undefined : pushedPayload(connection, path);
+    if (pushed) {
+      options.onHeaders?.(pushed.headers);
+      return pushed.data as T;
+    }
+  }
   const url = buildUrl(connection, path);
   for (const [k, v] of Object.entries(options.search ?? {}))
     url.searchParams.set(k, v);

@@ -13,7 +13,9 @@ probe scripts/research/prefillspeed_attn_identity.py); only the schedule changes
 Engaged only for: MLX 0.32.3, M5-generation GPU, bf16, batch 1, causal mask, no sinks, a plain (not
 quantized) KV cache, 24/4 heads of D=256 (any GQA factor), and at least ``MIN_ROWS`` query rows on the legacy path. Qualified split-invariant 27B
 prompt scopes use BQ32 at every positive query length, including unaligned tails; their arithmetic
-is explicitly named in APC keys. Short-piece outputs can differ from old stock MLX. Decode and
+is explicitly named in APC keys. Tails of at most 16 rows use BQ16 with one query simdgroup, preserving the
+BK32 and D-split arithmetic (canonical64/split component identity on both dense
+and Flash-Next head geometries). Short-piece outputs can differ from old stock MLX. Decode and
 speculative verify keep their original dispatch. Everything else calls the stock function.
 """
 
@@ -105,18 +107,21 @@ def header(align_q: bool, align_k: bool) -> str:
 
 
 @cache
-def kernel(align_q: bool, align_k: bool, heads: int, kv_heads: int) -> Any:
+def kernel(
+    align_q: bool, align_k: bool, heads: int, kv_heads: int, short: bool = False
+) -> Any:
+    bq, wm = (16, 1) if short else (BQ, WM)
     h = header(align_q, align_k)
     source = f"""
-    threadgroup float s_xchg[{WM}][{WN}][{BK} * 16];
+    threadgroup float s_xchg[{wm}][{WN}][{BK} * 16];
     AttnParams params;
     params.B = 1; params.H = {heads}; params.D = {BD};
     params.qL = Q_shape[2]; params.kL = K_shape[2]; params.gqa_factor = {heads // kv_heads};
     params.scale = {_SCALE}f;
-    params.NQ = (params.qL + {BQ} - 1) / {BQ};
+    params.NQ = (params.qL + {bq} - 1) / {bq};
     params.NK = (params.kL + {BK} - 1) / {BK};
-    params.NQ_aligned = params.qL / {BQ}; params.NK_aligned = params.kL / {BK};
-    params.qL_rem = params.qL % {BQ}; params.kL_rem = params.kL % {BK};
+    params.NQ_aligned = params.qL / {bq}; params.NK_aligned = params.kL / {BK};
+    params.qL_rem = params.qL % {bq}; params.kL_rem = params.kL % {BK};
     params.qL_off = params.kL - params.qL;
     for (int i = 0; i < 3; i++) {{
       params.Q_strides[i] = Q_strides[i];
@@ -125,7 +130,7 @@ def kernel(align_q: bool, align_k: bool, heads: int, kv_heads: int) -> Any:
     }}
     params.O_strides[0] = {heads} * params.qL * {BD};
     params.O_strides[1] = params.qL * {BD}; params.O_strides[2] = {BD};
-    yunshu_attn_dsplit<bfloat, {BQ}, {BK}, {BD}, {WM}, {WN}, float, float>(Q, K, V, O, &params,
+    yunshu_attn_dsplit<bfloat, {bq}, {BK}, {BD}, {wm}, {WN}, float, float>(Q, K, V, O, &params,
       nullptr, nullptr, nullptr, thread_index_in_simdgroup,
       simdgroup_index_in_threadgroup, threadgroup_position_in_grid,
       thread_position_in_threadgroup, s_xchg);
@@ -133,6 +138,10 @@ def kernel(align_q: bool, align_k: bool, heads: int, kv_heads: int) -> Any:
     name = (
         "yunshu_attn_prefill_" + hashlib.sha256((h + source).encode()).hexdigest()[:16]
     )
+    if short:
+        logger.info(
+            "Prefill attention short BQ16 compiled: heads=%d/%d", heads, kv_heads
+        )
     return mx.fast.metal_kernel(
         name=name,
         input_names=["Q", "K", "V"],
@@ -204,12 +213,16 @@ def stats() -> dict[str, Any]:
 def attend(q: mx.array, k: mx.array, v: mx.array) -> mx.array:
     _, h, rows, _ = q.shape
     _, hk, keys, _ = k.shape
-    fn = kernel(rows % BQ == 0, keys % BK == 0, h, hk)
+    # A short restored tail has no work for the second query simdgroup.
+    # Keep BK32 and the two D partials in their canonical reduction order.
+    short = gdn_prefill.in_tail() and 1 <= rows <= 16
+    bq, wm = (16, 1) if short else (BQ, WM)
+    fn = kernel(rows % bq == 0, keys % BK == 0, h, hk, short)
     _STATE["dispatches"] += 1
     if _STATE["dispatches"] == 1:
         logger.info(
             "Prefill attention BQ%d engaged: rows=%d keys=%d heads=%d/%d",
-            BQ,
+            bq,
             rows,
             keys,
             h,
@@ -217,8 +230,8 @@ def attend(q: mx.array, k: mx.array, v: mx.array) -> mx.array:
         )
     out = fn(
         inputs=[q, k, v],
-        grid=((rows + BQ - 1) // BQ * 32, h * WM * WN, 1),
-        threadgroup=(32, WM * WN, 1),
+        grid=((rows + bq - 1) // bq * 32, h * wm * WN, 1),
+        threadgroup=(32, wm * WN, 1),
         output_shapes=[q.shape],
         output_dtypes=[mx.bfloat16],
     )

@@ -67,7 +67,7 @@ Shared helpers written for the unified path to reuse: `text_logit_processors.py`
 | Cleanup | `YUNSHU_ROUND_DRIVER` + `round_driver/` and `YUNSHU_MTP_ROW_EXACT` deleted (measured losers, per the flag rule); orphan modules deleted (voice_pipeline, mtp_decoder, mtp_patch, n_confirmed_patch, spec_interface, spec_proposer, bfcl_eval, gateway/engine/engine, gpu_ngram); 10 unused dependencies removed (and the duplicate `dev` extra); mlx-lm ≥ 0.32.2; dead KV event bus removed; retired-document citations removed; `YUNSHU_API_KEY` registered; README zh-TW/zh-CN passage restored; CHANGELOG links, justfile app path, layout lists fixed; doctor minimums follow pyproject; behaviour tests for previously untested modules |
 | Upstream adoptions | every peer/upstream item from the review handled row by row in [`UPSTREAM_ADOPTION_2026-10-26.md`](UPSTREAM_ADOPTION_2026-10-26.md) (adopted with commit, not applicable with reason, or Mac step): late system notes in place and cache-store opt-out (omlx), seam checkpoint flag (TensorFold / Rapid-MLX), DFlash window capture only for stored checkpoints, prefix-cache snapshot integrity (ollama), forced think close and grammar after reasoning (omlx, mlx2, vllm, ollama), cleanup steps never strand the terminal (mlx2), row_exact K=64/128 and 2 GiB guards (mlx2), chunked head_dim-256 SDPA flag (omlx), GDN eps and `_release()` readiness (mlx-vlm), mlx-audio fixes, Gemma 4 images (mlx-vlm), greedy top_k 1 (splash), budget marker in system text (omlx) |
 | Review of the branch | four independent reviews of this branch's own diff and a completeness audit found regressions that are fixed here: Realtime auto-commit lost every utterance after the idle trim (snapshot at commit time), per-row dead-end isolation was not engaged for real guides, per-boundary sync in hybrid cold prefill, the auto-quant gate disabled prefix caching for dense models, `n_prompt` offset (min_tokens never engaged), overly wide special-token neutralisation, failed-auth backoff blocking correct tokens, host-guard false positives, 22 overwritten parser tests restored, two benches restored, round driver archived in `docs/archive/round_driver/` |
-| Upstream | `vendor.json` review recorded for 2026-10-26 (KEEP for omlx `qwen35_verify_sdpa_split`, quiet watches advanced, `ollama`, `mlx-swift-lm`, `vllm-metal`, `mlxcel` added to `watch`); GPU sampler A/B script `scripts/research/ab_gpu_sampler.py` |
+| Upstream | `vendor.json` review recorded for 2026-10-26 (KEEP for omlx `qwen35_verify_sdpa_split`, quiet watches advanced, `ollama`, `mlx-swift-lm`, `vllm-metal`, `mlxcel` added to `watch`) |
 
 ## Behaviour changes clients and operators will see
 
@@ -150,9 +150,8 @@ Shared helpers written for the unified path to reuse: `text_logit_processors.py`
 * `top_k: 1` or `min_p: 1` requests decode greedily on every path (splash 8d5e05b); XTC keeps a request sampled.
 * A stop string that completes in the final detokenizer flush is reported as a stop (Anthropic `stop_sequence`).
 * WebRTC Realtime under backpressure drops incoming audio frames (counted) instead of hanging up.
-* New experimental flags (default off, each with `decide=` and an A/B script): `YUNSHU_APC_SEAM_CHECKPOINT`
-  (checkpoint at the document/question seam, TensorFold #1262 / Rapid-MLX 421bf658) and `YUNSHU_SDPA_CHUNK`
-  (query-chunked head_dim-256 prefill attention on M1-M4, omlx sdpa256). Four experimental flags exist (limit 8).
+* New experimental flag (default off, with `decide=`): `YUNSHU_SDPA_CHUNK` (query-chunked head_dim-256 prefill
+  attention on M1-M4, omlx sdpa256). `YUNSHU_APC_SEAM_CHECKPOINT` was measured on the M5 (no gain) and removed.
 * mlx-audio fixes carried as local patches until the bump (Whisper `no_speech` on older vocabularies, Kokoro voices
   from the loaded snapshot, Qwen3-ASR per-chunk language); Gemma 4 / EmbeddingGemma 2 PIL images keep channels-last.
 
@@ -168,8 +167,9 @@ Nothing here ran on Metal or with a real checkpoint. Before merging, run on the 
 3. Perf A/B for the changes whose CPU numbers do not transfer: wired limit now applied on the text path (`71c183e`); VLM
    batch `top_logprobs_device` (uint64 keys + argpartition on Metal; it falls back to the upstream sort if the probe
    fails); pure-ASGI middleware; text prep thread; dense penalties; llguidance prewarm memory.
-4. `scripts/research/ab_gpu_sampler.py --checkpoint $TEXT_CKPT --src python --out ab_gpu_sampler.json` to settle
-   `YUNSHU_GPU_SAMPLER`.
+4. (settled on the M5, 2026-10-28: the GPU sampler is now the only temperature > 0 text sampler, 1.7-2.8x decode,
+   and `YUNSHU_GPU_SAMPLER` is gone; `YUNSHU_TOOL_GRAMMAR` and `YUNSHU_APC_SEAM_CHECKPOINT` were measured and
+   removed too, see `docs/reports/PERF_TREND.md`.)
 5. Control-token neutralisation: the real Qwen2 vocabulary was checked on CPU (see below); still check with the full
    Qwen3.8 tokenizer (`<think>`/`<tool_call>` as added tokens), and with a Mistral-style tokenizer (`[TOOL_CALLS]` in a replayed assistant turn keeps its
    control id).
@@ -182,8 +182,8 @@ Nothing here ran on Metal or with a real checkpoint. Before merging, run on the 
    stock bitwise, cold == warm, spec on == off, and that restore-buffer reuse still engages.
 8. Kernel guards adopted from peers: `row_exact_qmv` declines K = 64 / 128 (4- and 8-bit, group 32/64/128) and the
    per-row fallback matches; an untiled weight near the 2 GiB slice offset is declined to stock on M5 / macOS 26.6.
-9. Experimental A/Bs: `scripts/research/ab_seam_checkpoint.py` (`YUNSHU_APC_SEAM_CHECKPOINT`) on 27B, and on an M1-M4
-   Mac a bitwise A/B of `YUNSHU_SDPA_CHUNK` against stock head_dim-256 SDPA plus prefill peak memory.
+9. Experimental A/B: on an M1-M4 Mac a bitwise A/B of `YUNSHU_SDPA_CHUNK` against stock head_dim-256 SDPA plus
+   prefill peak memory (the seam checkpoint half was settled on the M5 and removed).
 10. mlx-audio patches with real checkpoints: Qwen3-ASR on > 20 min two-language audio, whisper-small with the patched
    `no_speech`, Kokoro loading a local voice offline.
 11. What the CPU run could not reach (Metal mask kernel, invariant kernels, media, quantized weights, SSD tier): the

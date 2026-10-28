@@ -11,6 +11,7 @@ STAGE_ORDER = [
     "identity",
     "apc",
     "quality",
+    "kld",
     "speed",
     "memory",
     "longqa",
@@ -131,6 +132,13 @@ def _numbers_en(s: dict) -> str:
         )
     if nm == "quality" and "base_correct" in n:
         return f"n={n['n']} base {n['base_correct']} cand {n['cand_correct']} net {n['net']:+d}"
+    if nm == "kld" and "ref_vs_cand" in n:
+        a, b = n["ref_vs_base"], n["ref_vs_cand"]
+        return (
+            f"KLD(ref||base) {a['kld_mean']:.5f} (p99 {a['kld_p99']:.4f}) vs cand {b['kld_mean']:.5f} (p99 {b['kld_p99']:.4f}); "
+            f"top-1 vs ref {a['top1']:.4f} -> {b['top1']:.4f}; dPPL {a['delta_ppl']:+.4f} -> {b['delta_ppl']:+.4f}; "
+            f"{b['windows']} windows, {b['positions']} positions"
+        )
     if nm == "identity":
         bits = []
         for k in ("base_vs_cand", "spec_on_vs_off"):

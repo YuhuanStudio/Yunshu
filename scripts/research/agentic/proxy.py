@@ -330,6 +330,17 @@ class RecordingProxy:
         with self._lock:
             self.records = []
 
+    def wait_idle(self, timeout: float = 10.0) -> bool:
+        """Block until every request seen so far has its record listed (Content-Length replies reach
+        the client before the proxy finalizes the record)."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            with self._lock:
+                if self.pending == 0:
+                    return True
+            time.sleep(0.005)
+        return False
+
     def snapshot(self) -> list[dict]:
         with self._lock:
             return list(self.records)
@@ -401,6 +412,7 @@ class RecordingProxy:
         self.active[rid] = (rec, tr, t0)
         resp_buf = bytearray()
         conn = None
+        chunked = False
         try:
             conn = http.client.HTTPConnection(self.up_host, self.up_port, timeout=3600)
             hdr = {k: v for k, v in h.headers.items() if k.lower() not in HOP}
@@ -448,9 +460,6 @@ class RecordingProxy:
                             elif d:
                                 with contextlib.suppress(ValueError):
                                     tr.feed_event(json.loads(d), t)
-            if chunked:
-                h.wfile.write(b"0\r\n\r\n")
-                h.wfile.flush()
             t_end = time.perf_counter()
             if kind and not sse and resp.status < 400 and resp_buf:
                 try:
@@ -491,4 +500,10 @@ class RecordingProxy:
             self.records.append(rec)
             self.active.pop(rid, None)
             self.pending -= 1
+        # The terminating chunk goes out only after the record is complete and listed: a client that reads
+        # to the end of the response and then calls snapshot() must find it (it raced before, under load).
+        if chunked and h.command != "HEAD" and not rec.get("client_aborted"):
+            with contextlib.suppress(OSError):
+                h.wfile.write(b"0\r\n\r\n")
+                h.wfile.flush()
         h.close_connection = True

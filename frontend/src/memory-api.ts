@@ -1,9 +1,10 @@
 import { BYTES_PER_GB, binaryGb, readGb } from "./byte-format.ts";
+import { pushLive, subscribePush } from "./push.ts";
 import { connectionScope, useScopedState } from "./scoped-state.ts";
 import { useEffect, useState } from "react";
 import { fixed } from "./i18n/format.ts";
 import { t } from "./i18n/index.ts";
-import { ApiError, requestJson, type Connection } from "./api.ts";
+import { ApiError, needsToken, requestJson, type Connection } from "./api.ts";
 
 export type MemoryOwner = {
   kind: string;
@@ -134,8 +135,11 @@ export function useMemoryLedger(
     if (!enabled) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const tick = async () => {
-      if (document.visibilityState === "visible") {
+    const tick = async (fromPush = false) => {
+      if (
+        document.visibilityState === "visible" &&
+        (fromPush || !pushLive(connection, "memory"))
+      ) {
         try {
           const v = await getMemory(connection, controller.signal);
           if (controller.signal.aborted) return;
@@ -150,12 +154,18 @@ export function useMemoryLedger(
             ...s,
             error: e instanceof Error ? e.message : String(e),
           }));
+          if (needsToken(e)) return;
         }
       }
       timer = setTimeout(() => void tick(), intervalMs);
     };
     void tick();
+    const off = subscribePush(connection, "memory", () => {
+      if (timer) clearTimeout(timer);
+      void tick(true);
+    });
     return () => {
+      off();
       controller.abort();
       if (timer) clearTimeout(timer);
     };

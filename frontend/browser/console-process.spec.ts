@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { connect, createServer } from "node:net";
+import { connect, createServer, type Server } from "node:net";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -83,10 +83,39 @@ async function freePort(not = 0): Promise<number> {
 
 const json = async (url: string, init?: RequestInit) =>
   (await fetch(url, init)).json() as Promise<any>;
+// A killed engine's port must stay dead for the test. The ports 18990-18999 are shared with other jobs
+// on this machine (a real engine from a gpuq run binds the first free one): without a holder, one of
+// them took the port seconds after the kill, the console proxied to that engine, said "online", and
+// the offline line never appeared (ci-local 7ea4fc095, WebKit; Chromium simply ran at another moment).
+// The holder accepts and drops every connection, which is what a dead engine looks like to the proxy.
+let hold: Server | null = null;
+const holdPort = async (port: number) => {
+  for (let i = 0; i < 40 && !hold; i++) {
+    const s = createServer((c) => c.destroy());
+    const ok = await new Promise<boolean>((done) => {
+      s.once("error", () => done(false));
+      s.listen(port, "127.0.0.1", () => done(true));
+    });
+    if (ok) hold = s;
+    else await new Promise((r) => setTimeout(r, 25));
+  }
+};
+const releasePort = () =>
+  new Promise<void>((r) => {
+    const s = hold;
+    hold = null;
+    if (s) s.close(() => r());
+    else r();
+  });
 const killAndWait = async (p: ChildProcess) => {
   const done = new Promise((r) => p.once("exit", r));
   p.kill("SIGKILL");
   await done;
+  await holdPort(E);
+};
+const startEngine = async () => {
+  await releasePort();
+  engineProc = start([join(__dirname, "support/fake_engine.py"), String(E)]);
 };
 
 test.describe.configure({ mode: "serial" });
@@ -140,6 +169,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+  await releasePort();
   for (const p of procs) if (p.exitCode === null) p.kill("SIGKILL");
   rmSync(home, { recursive: true, force: true });
   rmSync(dist, { recursive: true, force: true });
@@ -278,7 +308,7 @@ test("restarting the engine: the session reconnects, the data resumes and the ga
   });
   const downAt = Date.now() / 1000;
   await new Promise((r) => setTimeout(r, 2500));
-  engineProc = start([join(__dirname, "support/fake_engine.py"), String(E)]);
+  await startEngine();
   await until(
     "the engine back",
     async () => (await fetch(`${engineUrl()}/health`)).ok,
@@ -355,7 +385,7 @@ test("the console process is a proxy: one origin reaches the engine API", async 
   const r = await fetch(`${consoleUrl()}/v1/yunshu/status`);
   expect(r.status).toBe(502);
   expect((await r.json()).error.type).toBe("engine_unreachable");
-  engineProc = start([join(__dirname, "support/fake_engine.py"), String(E)]);
+  await startEngine();
   await until(
     "the engine back",
     async () => (await fetch(`${engineUrl()}/health`)).ok,

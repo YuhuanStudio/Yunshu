@@ -561,7 +561,8 @@ def _eos_ids(tokenizer: Any) -> tuple[int, ...]:
 def is_forced(choice: Any) -> bool:
     """True when ``tool_choice`` forces a call (required / any / a named function). A forced
     choice is a guarantee in both the OpenAI and the Anthropic API, so it is always
-    constrained by the tool grammar; ``YUNSHU_TOOL_GRAMMAR`` governs only auto."""
+    constrained by the tool grammar; auto stays unconstrained (measured: lossless, no failures
+    removed, 3-16% slower decode)."""
     c = normalize_tool_choice(choice)
     return c == "required" or isinstance(c, dict)
 

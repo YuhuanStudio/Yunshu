@@ -663,6 +663,9 @@ def chat(url: str, bench: Bench, item: dict, model: str, timeout: float) -> dict
         "chat_template_kwargs": {"enable_thinking": bench.thinking},
         **bench.request(item),
     }
+    if os.environ.get("PAIRED_SAMPLING"):
+        # extra request fields (e.g. {"presence_penalty": 1.5}): the model card's penalties
+        body.update(json.loads(os.environ["PAIRED_SAMPLING"]))
     if bench.thinking:
         body["reasoning_effort"] = "medium"
         body["chat_template_kwargs"]["reasoning_effort"] = "medium"

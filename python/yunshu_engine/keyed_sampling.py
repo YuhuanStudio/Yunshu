@@ -200,7 +200,8 @@ class KeyedSampler:
         )
         draws = []
         for start in range(0, int(pos.size), 64):
-            draw = KeyedSampler.sample_positions(
+            # type(self): a subclass's own sample_positions (e.g. the qwen4 greedy reports) keeps its behaviour
+            draw = type(self).sample_positions(
                 self, logprobs[start : start + 64], pos[start : start + 64]
             )
             mx.eval(draw)  # submit before building the next graph

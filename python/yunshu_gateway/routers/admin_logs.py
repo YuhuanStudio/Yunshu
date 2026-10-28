@@ -10,6 +10,7 @@ Logs can hold paths and error text, so they need the ``admin`` permission.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from typing import Any
@@ -23,6 +24,7 @@ from .models import _check_permission
 router = APIRouter(tags=["yunshu"])
 
 _STREAM_POLL_S = 1.0
+_WAKE_COALESCE_S = 0.05
 _STREAM_KEEPALIVE_S = 15.0
 
 
@@ -67,6 +69,21 @@ async def logs_stream(
     async def events():
         nonlocal cursor
         last_send = time.monotonic()
+        loop = asyncio.get_running_loop()
+        wake = asyncio.Event()
+
+        def poke() -> None:  # called from any logging thread
+            loop.call_soon_threadsafe(wake.set)
+
+        ring.add_listener(poke)
+        try:
+            async for chunk in _tail(request, ring, level, q, wake, last_send):
+                yield chunk
+        finally:
+            ring.remove_listener(poke)
+
+    async def _tail(request, ring, level, q, wake, last_send):
+        nonlocal cursor
         while not await request.is_disconnected():
             res = ring.query(level=level, since_id=cursor, q=q, limit=500)
             cursor = res["next_id"]
@@ -76,7 +93,12 @@ async def logs_stream(
             if time.monotonic() - last_send > _STREAM_KEEPALIVE_S:
                 yield ": keepalive\n\n"
                 last_send = time.monotonic()
-            await asyncio.sleep(_STREAM_POLL_S)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(wake.wait(), timeout=_STREAM_POLL_S)
+            wake.clear()
+            await asyncio.sleep(
+                _WAKE_COALESCE_S
+            )  # a burst of records goes out as one batch
 
     return StreamingResponse(
         events(),

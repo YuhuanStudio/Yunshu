@@ -1191,6 +1191,9 @@ def create_app() -> FastAPI:
     from .routers import yunshu as yunshu_mod
 
     app.include_router(yunshu_mod.router, prefix="/v1")  # status, requests, warmup
+    from .routers import events as events_mod
+
+    app.include_router(events_mod.router, prefix="/v1")  # console change feed (SSE)
     from .routers import admin_routes as admin_routes_mod
 
     admin_routes_mod.register(app)  # downloads, local models, fit, cache, logs, bundle

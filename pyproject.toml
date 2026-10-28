@@ -132,6 +132,8 @@ vision = [
 # Audio: speech-to-text (ASR) + text-to-speech (TTS) via mlx-audio.
 # Also the backbone for the Realtime voice WebSocket.
 audio = [
+    # Kokoro TTS text processing (mlx-audio imports it lazily; Apache-2.0, hexgrad/misaki).
+    "misaki[en]>=0.9.4,<1",
     "mlx-audio>=0.5.8",
     # Voice enrollment decodes recordings directly; mlx-audio no longer pulls this in.
     "soundfile>=0.12",

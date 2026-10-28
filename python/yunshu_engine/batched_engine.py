@@ -195,9 +195,6 @@ from .engine_sampling import (
     _build_grammar_constraint as _build_grammar_constraint,
 )
 from .engine_sampling import (
-    _build_noncached_sampler_text as _build_noncached_sampler_text,
-)
-from .engine_sampling import (
     _build_temp_sampler as _build_temp_sampler,
 )
 from .engine_sampling import (

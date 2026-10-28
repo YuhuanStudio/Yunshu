@@ -1,4 +1,5 @@
 import { isCalm } from "./outage-view.ts";
+import { pushLive, subscribePush } from "./push.ts";
 import { connectionScope, useScopedState } from "./scoped-state.ts";
 import {
   createContext,
@@ -82,9 +83,12 @@ function useDownloadFacts(
     if (!enabled) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const tick = async () => {
+    const tick = async (fromPush = false) => {
       let next = DOWNLOAD_POLL_IDLE_MS;
-      if (document.visibilityState === "visible") {
+      if (
+        document.visibilityState === "visible" &&
+        (fromPush || !pushLive(connection, "downloads"))
+      ) {
         try {
           const body = await requestJson<{ downloads?: unknown }>(
             connection,
@@ -122,7 +126,12 @@ function useDownloadFacts(
       timer = setTimeout(() => void tick(), next);
     };
     void tick();
+    const off = subscribePush(connection, "downloads", () => {
+      if (timer) clearTimeout(timer);
+      void tick(true);
+    });
     return () => {
+      off();
       controller.abort();
       if (timer) clearTimeout(timer);
     };

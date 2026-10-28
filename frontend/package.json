@@ -11,6 +11,7 @@
     "check:i18n": "node scripts/check-i18n.mjs",
     "preview": "vite preview",
     "test:browser": "playwright test",
+    "test:browser:shards": "node scripts/browser-shards.mjs",
     "format": "prettier --write src tests browser *.ts *.json index.html"
   },
   "dependencies": {

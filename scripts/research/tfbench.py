@@ -765,9 +765,13 @@ LONG_ASK = (
 )
 
 
-def check_decode_len(r, n, what):
+def check_decode_len(r, n, what, allow_eos=False):
     """A decode cell measures exactly n tokens; a short reply is an error (a request that died
-    mid-stream must not count as a result)."""
+    mid-stream must not count as a result). Identity cells (allow_eos) accept the model's own end of
+    reply: finish=stop with 1..n tokens; the paired comparison then requires both arms to stop at the
+    same token (same sha and count), so an early stop can never hide a divergence."""
+    if allow_eos and r.get("finish") == "stop" and 1 <= (r.get("ct") or 0) <= n:
+        return
     if r.get("finish") != "length" or r.get("ct") != n:
         raise RuntimeError(
             f"{what}: finish={r.get('finish')} ct={r.get('ct')} (want length/{n})"
@@ -864,7 +868,12 @@ def part_decode(s, out, a):
                 r = send(s.url, b)
                 r.update(extra_rec)
                 if not a.smoke:
-                    check_decode_len(r, want, f"decode {kind}-{ctx} {phase}")
+                    check_decode_len(
+                        r,
+                        want,
+                        f"decode {kind}-{ctx} {phase}",
+                        getattr(a, "allow_eos", False),
+                    )
                 if phase == "cold":
                     reply = r["_text"]
                 r["text"] = r.pop("_text")
@@ -1353,6 +1362,11 @@ def parse_args(argv=None):
         "--logprobs",
         action="store_true",
         help="decode part: request chosen-token logprobs (identity evidence compares them)",
+    )
+    ap.add_argument(
+        "--allow-eos",
+        action="store_true",
+        help="decode part: accept a reply the model ends itself (finish=stop); identity cells compare both arms' streams",
     )
     ap.add_argument(
         "--request-extra",

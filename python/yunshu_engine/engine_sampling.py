@@ -104,142 +104,6 @@ def _apply_spec_bonus_penalties(
     return logits
 
 
-def _build_noncached_sampler_text(
-    temperature: float,
-    top_p: float,
-    top_k: int,
-    min_p: float,
-    seed: int | None,
-    xtc_probability: float = 0.0,
-    xtc_threshold: float = 0.0,
-    top_n_sigma: float = 0.0,
-):
-    """Numpy-backed sampler that bypasses mlx-lm's @mx.compile cache.
-
-    mlx-lm's `categorical_sampling` is wrapped with
-    `@mx.compile(inputs=mx.random.state, outputs=mx.random.state)`. The
-    compile cache traps the first call's PRNG state, so subsequent
-    requests with temperature>0 produce identical token streams even
-    after `mx.random.seed()` between them — the cause of the repeated-output
-    bug for VLM and the n>1 collapse seen on /v1/chat/completions.
-
-    For temperature>0 use `numpy.random.Generator` (independent RNG per
-    request). Always returns an mx.array compatible with mlx-lm's
-    generate_step.
-    """
-    import time as _t
-
-    import numpy as _np
-
-    base = (
-        int(seed) & ((1 << 63) - 1)
-        if seed is not None
-        else _t.time_ns() & ((1 << 63) - 1)
-    )
-    rng = _np.random.default_rng(base)
-    _t_ = float(temperature)
-    _tp = float(top_p) if top_p else 1.0
-    _tk = int(top_k) if top_k and top_k > 0 else 0
-    _mp = float(min_p) if min_p else 0.0
-    # XTC (eXclude Top Choices) was silently dropped on this
-    # default non-streaming fast path — the request was accepted but produced non-XTC
-    # output (the streaming path applied it, so behavior diverged by the `stream` flag).
-    _xtc_p = float(xtc_probability) if xtc_probability else 0.0
-    _xtc_thr = float(xtc_threshold) if xtc_threshold else 0.0
-    # top-nσ (ACL 2025): keep only tokens whose RAW logit is within n·σ of the max
-    # logit (σ = std of the logit row). Temperature-invariant (operates on logits,
-    # not the tempered distribution); a pure-quality reasoning filter applied FIRST,
-    # before the prob-based nucleus/min_p filters.
-    _nsig = float(top_n_sigma) if top_n_sigma and top_n_sigma > 0 else 0.0
-
-    def _sampler(logits):
-        import mlx.core as _mx
-
-        arr = _np.asarray(logits.astype(_mx.float32))
-        flat = arr.reshape(-1, arr.shape[-1])
-        out = _np.empty(flat.shape[0], dtype=_np.int64)
-        for i in range(flat.shape[0]):
-            # Build the surviving-token set on the UN-tempered softmax,
-            # then apply temperature LAST (only when forming the final categorical
-            # distribution). mlx-lm's make_sampler runs apply_top_p/min_p/xtc/top_k
-            # on the raw logprobs and applies temp inside categorical_sampling
-            # (`logprobs * (1/temp)`) — temp LAST. The old code divided by temp
-            # FIRST, so for temp!=1 + any filter the nucleus/min_p/XTC threshold
-            # selected a DIFFERENT token set than the streaming path → same request
-            # sampled from a materially different distribution depending on the
-            # `stream` flag. An earlier fix only corrected the order AMONG the filters.
-            raw = flat[i].astype(_np.float64)
-            l = raw - _np.max(raw)
-            p = _np.exp(l)
-            p = p / p.sum()
-            # top-nσ FIRST (logit-statistics filter): drop tokens whose raw logit
-            # is more than n·σ below the max logit. σ is the std of the full logit
-            # row; the threshold is temperature-independent.
-            if _nsig > 0:
-                thr = raw.max() - _nsig * raw.std()
-                m = (raw >= thr).astype(_np.float64)
-                p = p * m
-                _s = p.sum()
-                if _s > 0:
-                    p = p / _s
-            # Apply filters in mlx-lm make_sampler's ORDER — top_p → min_p →
-            # XTC → top_k — so this non-streaming temp>0 sampler produces the SAME
-            # distribution as the streaming path (which uses make_sampler) for the same
-            # params. The old order (top_k first) gave a different surviving token set
-            # when both top_k and top_p were set → stream/non-stream diverged.
-            if 0 < _tp < 1:
-                order = _np.argsort(-p)
-                cum = _np.cumsum(p[order])
-                # Nucleus = smallest set whose cumulative prob >= top_p, INCLUDING
-                # the token that crosses the threshold (matches mlx-lm apply_top_p).
-                # `order[cum <= _tp]` dropped the crossing token → nucleus too narrow.
-                k = int(_np.searchsorted(cum, _tp, side="left")) + 1
-                keep = order[: max(1, min(k, len(order)))]
-                m = _np.zeros_like(p)
-                m[keep] = 1.0
-                p = p * m
-                p = p / p.sum()
-            if _mp > 0:
-                pmax = p.max()
-                m = (p >= _mp * pmax).astype(_np.float64)
-                p = p * m
-                p = p / p.sum()
-            # XTC: with probability _xtc_p, remove every token whose prob is above the
-            # threshold EXCEPT the least-probable one among them (matches mlx-lm
-            # apply_xtc: mask = probs > min(probs where probs > threshold)). Keeps the
-            # low-confidence tail, dropping the high-prob cluster → more diverse output.
-            if _xtc_p > 0.0 and rng.random() < _xtc_p:
-                above = p > _xtc_thr
-                if above.any():
-                    min_above = p[above].min()
-                    remove = p > min_above
-                    if remove.any() and not remove.all():
-                        p = p * (~remove).astype(_np.float64)
-                        _s = p.sum()
-                        if _s > 0:
-                            p = p / _s
-            if _tk and _tk < len(p):
-                idx = _np.argpartition(p, -_tk)[-_tk:]
-                m = _np.zeros_like(p)
-                m[idx] = 1.0
-                p = p * m
-                p = p / p.sum()
-            # Apply temperature LAST, restricted to the survivor set (p>0), exactly
-            # like mlx-lm's categorical_sampling(masked_logprobs, temp). Sampling
-            # the un-tempered survivor `p` directly would ignore temperature; sample
-            # from softmax(raw_logits/temp) over the kept tokens instead.
-            keep = p > 0
-            lf = _np.where(keep, raw / _t_, -_np.inf)
-            lf = lf - _np.max(lf)
-            pf = _np.exp(lf)
-            _sf = pf.sum()
-            pf = pf / _sf if _sf > 0 else p
-            out[i] = int(rng.choice(len(pf), p=pf))
-        return _mx.array(out.reshape(arr.shape[:-1]).astype(_np.int64))
-
-    return _sampler
-
-
 def _build_gpu_sampler_text(
     temperature: float,
     top_p: float,
@@ -250,9 +114,10 @@ def _build_gpu_sampler_text(
     xtc_threshold: float = 0.0,
     top_n_sigma: float = 0.0,
 ):
-    """On-GPU temp>0 sampler (opt-in via YUNSHU_GPU_SAMPLER=1).
+    """On-GPU temp>0 sampler (the only one; it replaced a float64 NumPy sampler, which measured
+    1.7-2.8x slower on a 3B text model, see docs/reports/PERF_TREND.md).
 
-    The default numpy sampler (_build_noncached_sampler_text) does
+    The old NumPy sampler did
     `np.asarray(logits)` INSIDE mlx-lm's _step → a forced GPU→CPU sync EVERY
     token, which breaks generate_step's async pipeline (it can no longer overlap
     the next forward with token consumption) and runs a full-vocab numpy softmax
@@ -260,7 +125,7 @@ def _build_gpu_sampler_text(
 
     - Uses mlx-lm's OWN filter functions (apply_top_p/min_p/xtc/top_k) — the exact
       chain the streaming make_sampler uses — so the distribution is identical to
-      both the streaming path and the numpy path.
+      the streaming path.
     - Replaces mlx-lm's categorical_sampling (the @mx.compile(inputs=mx.random.state)
       one whose compile-cache traps the PRNG → the n>1 collapse the numpy sampler
       exists to avoid) with Gumbel-max keyed by an EXPLICIT per-request mx.random.key
@@ -356,9 +221,8 @@ def _build_temp_sampler(
     xtc_threshold=0.0,
     top_n_sigma=0.0,
 ):
-    """Pick the temp>0 sampler. Default = numpy (proven, avoids the
-    @mx.compile PRNG trap). YUNSHU_GPU_SAMPLER=1 = on-GPU Gumbel-max (no per-token
-    GPU→CPU sync, preserves mlx-lm's async pipeline; same distribution)."""
+    """The temp>0 sampler: on-GPU Gumbel-max (no per-token GPU->CPU sync, keeps mlx-lm's async
+    pipeline, avoids the @mx.compile PRNG trap)."""
     # top-nσ resolution order: explicit call arg → per-request value (set on the
     # ContextVar by generate()/stream_generate()).
     # The sampler is built on the request's event-loop task BEFORE the executor
@@ -369,18 +233,7 @@ def _build_temp_sampler(
         _req_nsig = _engine._REQUEST_TOP_N_SIGMA.get()
         top_n_sigma = _req_nsig if _req_nsig and _req_nsig > 0 else 0.0
 
-    if _engine.settings.get_bool("YUNSHU_GPU_SAMPLER"):
-        return _engine._build_gpu_sampler_text(
-            temperature,
-            top_p,
-            top_k,
-            min_p,
-            seed,
-            xtc_probability,
-            xtc_threshold,
-            top_n_sigma,
-        )
-    return _engine._build_noncached_sampler_text(
+    return _engine._build_gpu_sampler_text(
         temperature,
         top_p,
         top_k,

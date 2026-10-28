@@ -230,7 +230,7 @@ class EngineFastMixin:
     def _tool_call_processor(self: _engine.BatchedEngine, input_ids: list[int]):  # type: ignore[misc]
         """Structural-tag logits processor for the request's native tools (free until
         the tool-call marker, then the call body is masked to this request's tool
-        grammar), or None: no native tools, ``YUNSHU_TOOL_GRAMMAR`` off for auto (a forced choice is always constrained), or a model /
+        grammar), or None: no native tools, auto choice (only a forced choice is constrained), or a model /
         tool set the grammar cannot cover."""
         tools = _engine._REQUEST_TOOLS.get()
         if not tools:
@@ -239,7 +239,7 @@ class EngineFastMixin:
 
         use = _engine._REQUEST_TOOL_USE.get() or {}
         choice = tcg.normalize_tool_choice(use.get("tool_choice"))
-        if not (tcg.is_forced(choice) or settings.get_bool("YUNSHU_TOOL_GRAMMAR")):
+        if not tcg.is_forced(choice):
             return None
         if choice == "none":
             return None

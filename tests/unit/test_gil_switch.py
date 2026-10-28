@@ -5,7 +5,12 @@ from yunshu_engine import gil_switch, settings
 
 def test_apply_sets_and_zero_keeps(monkeypatch):
     old = sys.getswitchinterval()
+    # module state: an earlier apply() in this process leaves the interval it first changed in
+    # _original, and "0" would restore that instead of this test's 5 ms (random-order pass)
+    monkeypatch.setattr(gil_switch, "_original", None)
     try:
+        # and the interval itself is process state: an earlier test that started the app left it at 0.5 ms
+        sys.setswitchinterval(0.005)
         settings.set_override("YUNSHU_GIL_SWITCH_MS", "0.5")
         assert abs(gil_switch.apply() - 0.0005) < 1e-9
         sys.setswitchinterval(0.005)

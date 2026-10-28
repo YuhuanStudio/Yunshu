@@ -366,6 +366,7 @@ class ContentionMonitor:
         self.total = job.get("foreign_cpu_sum_pct", 0.0)
         self.maximum = job.get("foreign_cpu_max_pct", 0.0)
         self.memory_processes = dict(job.get("memory_processes", {}))
+        self.swap_live_peak_bytes = int((job.get("job_swap_mb") or 0) * 1e6)
         self.last_poll = None
         self.last_saved_sample = None
         if job.get("quiet_timeout"):
@@ -488,11 +489,17 @@ class ContentionMonitor:
             readable = False
         if phase != "start" and not self.memory_processes:
             readable = False
-        # Sum per-process peaks, including exited children: conservative for
-        # non-overlapping lifetimes; never subtract a child's swap when it exits.
-        own_mb = (
-            sum(r["swapped_peak_bytes"] for r in self.memory_processes.values()) / 1e6
+        # Peak over time of the swap held by processes alive together. Summing
+        # per-process peaks counted every server restart and every transient
+        # load-phase spike of the same GPU buffers again (223 GB from three
+        # 70-78 GB servers on a 128 GB host).
+        live = sum(
+            r["swapped_bytes"]
+            for r in self.memory_processes.values()
+            if r["pid"] in self.sampler.owned
         )
+        self.swap_live_peak_bytes = max(self.swap_live_peak_bytes, live)
+        own_mb = self.swap_live_peak_bytes / 1e6
         self.job["job_swap_mb"] = round(own_mb, 6) if readable else None
         failures = memory_verdict(
             self.job.get("swap_mb") if cur is not None else None,

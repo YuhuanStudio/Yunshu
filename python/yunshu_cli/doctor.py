@@ -333,12 +333,17 @@ def check_speculative(model: str) -> list[Check]:
     warning = unindexed_mtp_warning(str(cfg_path.parent))
     if warning:
         return [Check("speculative", "warn", warning)]
-    family = cfg.get("model_type") in ("qwen3_5", "qwen3_6", "qwen3_5_moe")
-    choice = spec_select.choose(
-        cfg,
-        spec_family=family,
-        mtp_capable=family and is_mtp_capable(str(cfg_path.parent)),
-    )
+    from yunshu_engine.vlm_engine import VLMEngine
+
+    family = cfg.get("model_type") in VLMEngine._SPEC_MODEL_TYPES
+    try:
+        choice = spec_select.choose(
+            cfg,
+            spec_family=family,
+            mtp_capable=family and is_mtp_capable(str(cfg_path.parent)),
+        )
+    except ValueError as exc:
+        return [Check("speculative", "fail", str(exc))]
     if choice.kind == "dflash":
         detail = f"DFlash2 drafter: {choice.drafter} ({choice.reason})"
         return [Check("speculative", "ok", detail)]

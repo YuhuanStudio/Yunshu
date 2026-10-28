@@ -703,14 +703,26 @@ class VLMEngine:
         if not weight_files:
             raise FileNotFoundError(f"No safetensors in {model_path}")
 
+        from .ple_ssd import external_ple, is_ple_scale, is_ple_tensor
+
+        ple_from_files = external_ple(config, model_path)
         weights = {}
         for wf in weight_files:
             weights.update(mx.load(wf))
+        if ple_from_files:
+            # the n-gram table is read row by row from these files (ple_ssd); mx.load is lazy, so
+            # dropping the entries here means the table is never read into memory
+            weights = {k: v for k, v in weights.items() if not is_ple_tensor(k)}
         ple_table_scales = {}
         if config.get("model_type") == "qwen4_exp":
             from .ple_scale import collect_table_scales
 
             ple_table_scales = collect_table_scales(weights)
+            if ple_from_files:
+                # the per-table scales are applied by apply_table_scales below; left in place without
+                # their shards, upstream's FP8 conversion would take them for an FP8 PLE pack (upstream
+                # drops them anyway when the shards are loaded)
+                weights = {k: v for k, v in weights.items() if not is_ple_scale(k)}
 
         reason = unsupported_pack_reason(config, weights)
         if reason:
@@ -729,6 +741,10 @@ class VLMEngine:
             from .kernels import tf_hc_forward
 
             tf_hc_forward.install()
+            if settings.get_bool("YUNSHU_QSA_SPARSE_PREFILL"):
+                from .kernels import qsa_sparse_prefill
+
+                qsa_sparse_prefill.install()
 
         model_config = model_class.ModelConfig.from_dict(config)
         modules = ["text", "vision", "perceiver", "projector", "audio"]
@@ -1953,7 +1969,7 @@ class VLMEngine:
             )
             state.set_ids(ids)
             if manager is not None:
-                manager.keep_prior_for = tuple(int(t) for t in ids)
+                manager.keep_prior_for = tuple(map(int, ids))
             return _RunnerCall(
                 self._generate_vlm_runner_text,
                 ids,
@@ -2828,7 +2844,6 @@ class VLMEngine:
                         settings.get("YUNSHU_NEXT_TURN_PREFILL")
                         in ("boundary", "exact")
                     ),
-                    seam_checkpoint=settings.get("YUNSHU_APC_SEAM_CHECKPOINT"),
                 )
                 self._install_apc_identity(lm)
                 self._apc_semantic_hash = semantic_extra_hash(
@@ -3608,7 +3623,7 @@ class VLMEngine:
 
     def _tool_guide(self, spec: dict | None, thinking_open: bool):
         """A ``ToolCallGuide`` for this request's tools (structural-tag constrained
-        decoding), or None: no tools, ``YUNSHU_TOOL_GRAMMAR`` off, or a model / tool
+        decoding), or None: no tools, auto choice (only a forced choice is constrained), or a model / tool
         set the grammar cannot cover (the reply is then decoded unconstrained)."""
         if not spec:
             return None
@@ -3920,9 +3935,7 @@ class VLMEngine:
                 raise ValueError(
                     "structural_tag cannot be combined with forced tool_choice"
                 )
-            if is_forced(choice) or (
-                settings.get_bool("YUNSHU_TOOL_GRAMMAR") and not lazy
-            ):
+            if is_forced(choice):
                 choice = normalize_tool_choice(choice)
                 if choice != "none":
                     kwargs["_tool_spec"] = {

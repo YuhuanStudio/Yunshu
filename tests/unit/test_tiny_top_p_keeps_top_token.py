@@ -48,18 +48,14 @@ def test_keyed_top_p_keeps_top_token(top_p):
 
 @pytest.mark.parametrize("top_p", TINY)
 @pytest.mark.parametrize("temp", [1e-3, 0.05, 1.0])
-def test_numpy_and_gpu_samplers_pick_valid_token(top_p, temp):
+def test_sampler_picks_valid_token(top_p, temp):
     raw = _logits(2, rows=1)
     lp = mx.array(raw - np.log(np.exp(raw).sum(-1, keepdims=True)))
-    for build in (
-        engine_sampling._build_noncached_sampler_text,
-        engine_sampling._build_gpu_sampler_text,
-    ):
-        s = build(temp, top_p, 0, 0.0, 3)
-        tok = int(np.array(s(lp)).reshape(-1)[0])
-        assert 0 <= tok < raw.shape[-1]
-        if top_p <= 1e-6:
-            assert tok == int(raw.argmax())
+    s = engine_sampling._build_gpu_sampler_text(temp, top_p, 0, 0.0, 3)
+    tok = int(np.array(s(lp)).reshape(-1)[0])
+    assert 0 <= tok < raw.shape[-1]
+    if top_p <= 1e-6:
+        assert tok == int(raw.argmax())
 
 
 @pytest.mark.parametrize("top_p", TINY)
@@ -73,12 +69,9 @@ def test_top_p_with_grammar_mask_keeps_allowed_token(top_p):
     keep[allowed] = True
     masked[0, ~keep] = -np.inf
     lp = mx.array(masked) - mx.logsumexp(mx.array(masked), axis=-1, keepdims=True)
-    for build in (
-        engine_sampling._build_noncached_sampler_text,
-        engine_sampling._build_gpu_sampler_text,
-    ):
-        tok = int(np.array(build(0.7, top_p, 0, 0.0, 1)(lp)).reshape(-1)[0])
-        assert tok in allowed
+    build = engine_sampling._build_gpu_sampler_text
+    tok = int(np.array(build(0.7, top_p, 0, 0.0, 1)(lp)).reshape(-1)[0])
+    assert tok in allowed
     out = np.array(BatchSampler()._apply_batch_top_p(mx.array(masked), [top_p]))
     assert np.isfinite(out[0]).any()
     out = np.array(top_p_filter(lp, top_p))

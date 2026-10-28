@@ -114,6 +114,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ab.add_argument("--no-apc-hit-required", action="store_true")
     ab.add_argument(
+        "--input-change-ok",
+        action="store_true",
+        help="cells whose prompt token count differs between base and cand (a deliberate tokenization "
+        "change) are listed as input_changed instead of failing identity; spec on/off stays strict",
+    )
+    ab.add_argument(
         "--mem-gb",
         type=float,
         default=0,

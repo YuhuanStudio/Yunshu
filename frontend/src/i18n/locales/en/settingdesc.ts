@@ -138,8 +138,6 @@ const settingdesc = {
   YUNSHU_PREFIX_HOT_LIMIT:
     "Text engine: keep only this many prefix KV entries at full precision and store older ones in 4-bit in RAM (lossy on reuse; memory vs quality). 0 = every entry full precision.",
   YUNSHU_SSD_CACHE: "Text engine: persist prefix KV to SSD.",
-  YUNSHU_APC_SEAM_CHECKPOINT:
-    "VLM runner (APC), split-invariant prefill only: keep one more checkpoint inside a final user message of at least 8192 tokens, 2048 tokens before its end, so the same long document with a new question resumes at the document. One extra checkpoint copy per such prompt; output unchanged. Experimental.",
   YUNSHU_SSD_CACHE_DIR: "Text engine: SSD prefix-cache directory.",
   YUNSHU_SSD_CACHE_PRECISION:
     "Text engine: SSD prefix-cache precision: `native` (bit-exact KV and recurrent state; lossless) or `int8` (per-tensor int8, about half the disk bytes of bf16; lossy on reuse).",
@@ -173,6 +171,8 @@ const settingdesc = {
     "Serving process: how long (ms) a Python thread may hold the GIL before another thread that wants it gets it. CPython's 5 ms made the event loop wake up to 5 ms late while the generation thread ran Python (27B decode: loop lag p99 5.3 ms, 0.5 ms gives 2.0 ms; tokens/s unchanged). Scheduling only; output unchanged. 0 = CPython default.",
   YUNSHU_PLE_READ_THREADS:
     "Qwen3.8-Flash-Next with the n-gram embedding (PLE) read from SSD: threads that read a token's 48 PLE rows in parallel instead of one after another (about 7 ms per token on fresh text). Rows are byte-identical, so output is unchanged. 0 = upstream serial reads.",
+  YUNSHU_PLE_STORAGE:
+    "Qwen3.8-Flash-Next: where the n-gram embedding (PLE) table lives. ssd (default) reads its rows from the checkpoint files, so the ~30 GB table never enters memory (peak 82.9 → 54.5 GB on oQ2.5e, output unchanged); memory loads it like any weight.",
   YUNSHU_PREFILL_BUFFER_CACHE_GB:
     "VLM runner: GiB of MLX’s freed-buffer cache kept across prefill steps. Unset: 5% of physical RAM, at most 6 GiB, but 0.5 GiB when the resident weights leave little memory headroom (cuts the long-prefill peak of very large models). Keeps long-prefix restore buffers warm across requests; 0 = upstream clear after every chunk. Allocator only; output unchanged.",
   YUNSHU_PREFILL_GDN:
@@ -211,8 +211,6 @@ const settingdesc = {
     "Text Gemma-4 models: assistant drafter directory (KV-shared speculative drafter).",
   YUNSHU_SDPA_CHUNK:
     "M1-M4, head_dim 256: chunk the stock long-prefill attention fallback by query rows so its score tensor stays under 1 GiB (experimental).",
-  YUNSHU_GPU_SAMPLER:
-    "Text models: on-GPU Gumbel-max sampling (no per-token GPU-to-CPU sync).",
   YUNSHU_JUMP_FORWARD:
     "Text models: emit grammar-forced structural tokens of JSON-schema output without a forward pass.",
   YUNSHU_JSON_SCHEMA_ENGINE:
@@ -221,8 +219,6 @@ const settingdesc = {
     "Constrained decoding with the xgrammar-style bitmask engine instead of the allowlist sampler.",
   YUNSHU_GRAMMAR_PREWARM:
     "Build the llguidance token tables in the background when a model loads, so the first constrained request does not spend about a second walking the vocabulary. Costs about 0.45 GiB of native heap per mask width; 0 builds them on first use.",
-  YUNSHU_TOOL_GRAMMAR:
-    "Tool-call constrained decoding (structural tags): free text until the tool-call start marker, then the call body is masked to this request’s exact call grammar (tool name, parameter keys, typed values, closing). A forced `tool_choice` is always constrained; this flag governs only `auto`. Off: auto tool calls are decoded unconstrained and repaired afterwards.",
   YUNSHU_QUANT_MODE:
     "Quantize weights in memory at load (lossy; memory vs quality): `mxfp4`, `nvfp4`, `mxfp8` or `affine` (empty keeps the checkpoint).",
   YUNSHU_QUANT_CONFIG:
@@ -233,6 +229,8 @@ const settingdesc = {
     "VLM plain-text chats: while idle after a reply, prefill its rendered assistant text and store APC checkpoints; decode-time KV is never reused. Default stride on qualified split-invariant 27B stops at the last absolute 64-token boundary at or before assistant end; without split-invariant kernels it retains the full prefill-atom grid. A matching arriving request adopts in-flight work; other requests cancel at a preemptible boundary. off disables rehearsal. boundary/exact retain the legacy assistant-end split policy on unsupported configurations and may change their cold rounding. Costs idle GPU time and one cached prefix.",
   YUNSHU_NEXT_TURN_DELAY_S:
     "Seconds between a finished reply and next-turn rehearsal. Default 0.3 lets an immediate follow-up (agent loops) arrive before rehearsal starts and prefill once, while a later one adopts running work; 0 starts as soon as idle, which costs an immediate follow-up about 0.15-0.25 s (rehearsal plus a short tail request). No GPU work is started while foreground requests are waiting.",
+  YUNSHU_QSA_SPARSE_PREFILL:
+    "Qwen3.8-Flash-Next (qwen4_exp), M5-class GPUs: run the prompt rows’ indexed-sparse QSA attention on the tensor units, one threadgroup per (row, key head) with the 12 query heads that share a key head as one matmul operand and the selected keys read once, instead of upstream’s scalar kernel that re-reads the selected keys for every query head. Each row’s result depends on that row alone, so prefill stays independent of chunking; the arithmetic differs from upstream’s (fp32 accumulate in a different order, not a quality change). Decode and speculative verify are untouched. On by default: cold TTFT at 8K/32K/128K drops 25/24/20% on Flash-Next oQ2.5e, spec on == off and cache hit == miss hold, and the output is closer to an fp32-attention reference than the stock kernel (KLD 0.0685 vs 0.0731). Off: upstream’s scalar kernel.",
   YUNSHU_QWEN4_LANE:
     "Qwen3.8-Flash-Next (qwen4_exp): run the dense quantized projections as the row-invariant lane matmul for decode, speculative verify and drafting instead of upstream’s per-row singleton qmv. Extra verify rows no longer multiply the dense weight traffic; speculative output still equals plain decode. Output differs from the default arithmetic in the last bit. A head format the upstream fused head kernel cannot read (6-bit) turns it on regardless. Prefill chunks wider than 32 rows keep MLX’s quantized matmul.",
   YUNSHU_ENGINE_LOOP:

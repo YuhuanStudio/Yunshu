@@ -158,6 +158,9 @@ def _dec_args(ctx: Ctx, stage_logprobs: bool = False) -> list:
     out = ["--decode-tokens", str(int(ctx.suite.get("decode_tokens", 256)))]
     if stage_logprobs:
         out.append("--logprobs")
+        out.append(
+            "--allow-eos"
+        )  # identity: a model-ended reply counts; arms must end at the same token
     if ctx.suite.get("long_ask"):
         out.append("--long-ask")
     if ctx.suite.get("turn2_tokens"):
@@ -241,7 +244,7 @@ def stage_preflight(ctx: Ctx) -> StageResult:
     numbers.update(changed_files=len(changed), related_tests=len(tests))
     ctx.run.append(name, {"ev": "mapping", "changed": changed, "tests": tests})
     if not reasons and tests:
-        cmd = [
+        base_cmd = [
             "nice",
             "-n",
             "15",
@@ -252,17 +255,57 @@ def stage_preflight(ctx: Ctx) -> StageResult:
             "-p",
             "no:cacheprovider",
             "-x",
-            *tests,
+            "-rfE",
         ]
-        r = subprocess.run(
-            cmd,
-            cwd=str(ctx.cand.path),
-            env=dict(env, PYTHONPATH=str(ctx.cand.path / "python")),
-            capture_output=True,
-            text=True,
-            timeout=30 * 60,
+        run_env = dict(env, PYTHONPATH=str(ctx.cand.path / "python"))
+        workers = int(os.environ.get("YV_PREFLIGHT_WORKERS", "6"))
+        has_xdist = workers > 1 and (
+            subprocess.run(
+                [ctx.py, "-c", "import xdist"],
+                cwd=str(ctx.cand.path),
+                env=run_env,
+                capture_output=True,
+            ).returncode
+            == 0
         )
-        tail = "\n".join((r.stdout + r.stderr).strip().splitlines()[-8:])
+        if has_xdist:
+            # as ci-local: one test file per worker, then the tests marked serial on their own
+            # (was single-process: ~8 min for ~1000 files, ~1 min this way)
+            runs = [
+                base_cmd
+                + [
+                    "-n",
+                    str(workers),
+                    "--dist",
+                    "loadfile",
+                    "-m",
+                    "not serial",
+                    *tests,
+                ],
+                base_cmd + ["-m", "serial", *tests],
+            ]
+        else:
+            runs = [base_cmd + tests]
+        out, rc = "", 0
+        for cmd in runs:
+            r = subprocess.run(
+                cmd,
+                cwd=str(ctx.cand.path),
+                env=run_env,
+                capture_output=True,
+                text=True,
+                timeout=30 * 60,
+            )
+            out += r.stdout + r.stderr
+            # 5 = nothing collected (no serial-marked test among the related ones)
+            if r.returncode not in (0, 5):
+                rc = r.returncode
+                break
+        r = subprocess.CompletedProcess(runs[-1], rc, out, "")
+        lines = (r.stdout + r.stderr).strip().splitlines()
+        # the failing test names first: log noise printed after a failure must not push them out of the record
+        failed = [ln for ln in lines if ln.startswith(("FAILED ", "ERROR "))][:20]
+        tail = "\n".join([*failed, *lines[-8:]])
         ctx.run.append(
             name, {"ev": "pytest", "rc": r.returncode, "tail": tail, "tests": tests}
         )
@@ -639,7 +682,16 @@ def stage_identity(ctx: Ctx) -> StageResult:
                     reasons.append(f"{tag}{why}")
             reasons += spec_mode_failures(base, cand, ctx.suite, f"identity {mode}")
             planned = analyze.planned_identity(ctx.suite["ctx"], ctx.suite["kinds"])
-            cmp_ = analyze.compare_identity(base, cand, "base", "cand", planned=planned)
+            cmp_ = analyze.compare_identity(
+                base,
+                cand,
+                "base",
+                "cand",
+                planned=planned,
+                input_change_ok=bool(ctx.suite.get("input_change_ok")),
+            )
+            if cmp_["input_changed"]:
+                numbers[f"{tag}input_changed".strip()] = cmp_["input_changed"]
             numbers[f"{tag}base_vs_cand".strip()] = {
                 "compared": cmp_["compared"],
                 "mismatches": len(cmp_["mismatches"]),
@@ -1112,6 +1164,28 @@ def needle_slices(ctxs: list) -> list:
     return out
 
 
+def _longqa_share_key(ctx: Ctx, arm: str, c: int, lo: int, hi: int) -> str:
+    """Base needle answers (greedy, scored for correctness only) are reusable across runs on the same
+    base commit, env, checkpoint, prompt bytes, runtime and harness; the candidate is always re-run."""
+    if arm != "base":
+        return ""
+    return _sha(
+        "longqa",
+        ctx.base.key,
+        ctx.arm_env("base"),
+        ctx.model,
+        checkpoint_identity(ctx.model),
+        c,
+        lo,
+        hi,
+        _prompt_hashes([c], ["prose"]),
+        _runtime_key(ctx, "base"),
+        _harness_hash(),
+        os.environ.get("GPUQ_DEVICE", "m5"),
+        n=24,
+    )
+
+
 def stage_longqa(ctx: Ctx) -> StageResult:
     cfg = ctx.suite
     ctxs = list(cfg.get("needle_ctx") or [32768, 65536, 131072])
@@ -1136,6 +1210,7 @@ def stage_longqa(ctx: Ctx) -> StageResult:
                     timeout_min=tmo if ctx.big else 6,
                     stall_min=12 if ctx.big else 4,
                     quiet=True,
+                    share_key=_longqa_share_key(ctx, arm, c, lo, hi),
                 )
             )
     res = ctx.exe.run_cells(cells)
@@ -2757,6 +2832,142 @@ def stage_phaseb(ctx: Ctx, *, speed: bool = False) -> StageResult:
     return _finish(ctx, StageResult(name, not reasons, reasons, numbers))
 
 
+# ── k. kld: teacher-forced KL divergence of base and candidate against a reference ──
+def _kld_cell(
+    ctx: Ctx,
+    arm: str,
+    tree: str,
+    key: str,
+    directory: Path,
+    shard: str,
+    env: dict,
+    mem_gb: float,
+):
+    """One capture job: the windows of ``shard`` for ``arm`` ("base"/"cand"/"ref") from ``tree``'s engine."""
+    src = ctx.tree(tree)
+    tfb_out = ctx.run.path / "tfb" / f"kld.{key}"
+    return Cell(
+        "kld",
+        key,
+        [
+            "env",
+            f"PYTHONPATH={src.path / 'python'}:{REPO / 'scripts'}",
+            f"TFB_YUNSHU_SRC={src.path / 'python'}",
+            f"TFB_OUT={tfb_out}",
+            f"TFB_PORT_LAST={PORT_LAST}",
+            "TFB_WORK=/Volumes/P5Plus/yunshu-build/tfnew",
+            ctx.py,
+            "-m",
+            "verify.kld.capture",
+            "run",
+            "--arm",
+            arm,
+            "--model",
+            ctx.model,
+            "--cache-dir",
+            str(directory),
+            "--shard",
+            shard,
+            *_env_flags(env),
+            "--out",
+            "{out}",
+        ],
+        mem_gb=mem_gb,
+        timeout_min=int(ctx.suite.get("kld_timeout_min", 25)),
+        stall_min=12,
+    )
+
+
+def stage_kld(ctx: Ctx) -> StageResult:
+    from .kld import corpus
+    from .kld import stage as kld
+
+    if ctx.suite.get("kld_decode"):
+        return _finish(
+            ctx,
+            StageResult(
+                "kld",
+                False,
+                ["--kld-decode (teacher-forced decode path) is not implemented"],
+            ),
+        )
+    manifest = corpus.load_manifest()
+    corpus.load_texts()  # fails closed when the text under /Volumes/P5Plus is missing or altered
+    ident = checkpoint_identity(ctx.model)
+    arms = {
+        "base": ("base", ctx.arm_env("base"), ctx.base),
+        "cand": ("cand", ctx.arm_env("cand"), ctx.cand),
+        # the reference always runs the base source tree with fp32 attention (independent of the candidate)
+        "ref": (
+            "base",
+            ctx.arm_env("base", {"KLD_MODE": "ref-fp32-attention-v2"}),
+            ctx.base,
+        ),
+    }
+    dirs = {
+        name: kld.cache_dir(
+            kld.cache_key(name, src.key, ident, env, manifest["corpus_sha"])
+        )
+        for name, (_t, env, src) in arms.items()
+    }
+    n_ref = int(ctx.suite.get("kld_ref_shards", 2))
+    cells = []
+    for name, (tree, env, _src) in arms.items():
+        gone = kld.missing_windows(dirs[name], manifest)
+        if not gone:
+            ctx.log(f"kld/{name}: cache complete ({dirs[name].name})")
+            continue
+        shards = n_ref if name == "ref" else 1
+        env = {k: v for k, v in env.items() if k != "KLD_MODE"}
+        for k in range(shards):
+            cells.append(
+                _kld_cell(
+                    ctx,
+                    name,
+                    tree,
+                    f"{name}-{k}of{shards}",
+                    dirs[name],
+                    f"{k}/{shards}",
+                    env,
+                    ctx.mem_gb,
+                )
+            )
+    reasons: list = []
+    if cells:
+        res = ctx.exe.run_cells(cells)
+        reasons += _failed_cells(res)
+    numbers: dict = {
+        "cache": {n: d.name for n, d in dirs.items()},
+        "corpus_sha": manifest["corpus_sha"],
+    }
+    if not reasons:
+        argv = [ctx.py, "-m", "verify.kld.analyze"] + [
+            x for n in ("ref", "base", "cand") for x in (f"--{n}", str(dirs[n]))
+        ]
+        for flag, key in (("--eps", "kld_eps"), ("--top1-noise", "kld_top1_noise")):
+            if key in ctx.suite:
+                argv += [flag, str(ctx.suite[key])]
+        proc = subprocess.run(
+            argv,
+            cwd=str(REPO),
+            env=dict(os.environ, PYTHONPATH=str(REPO / "scripts")),
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:  # incomplete or malformed windows fail closed
+            reasons.append(
+                "kld analysis failed: "
+                + (proc.stderr.strip().splitlines() or ["?"])[-1]
+            )
+        else:
+            result = json.loads(proc.stdout.strip().splitlines()[-1])
+            numbers.update(
+                {k: v for k, v in result.items() if k not in ("passed", "reasons")}
+            )
+            reasons += result["reasons"]
+    return _finish(ctx, StageResult("kld", not reasons, reasons, numbers))
+
+
 STAGE_FUNCS = {
     "phaseb-identity": stage_phaseb,
     "phaseb-speed": lambda ctx: stage_phaseb(ctx, speed=True),
@@ -2787,6 +2998,7 @@ STAGE_FUNCS = {
     "identity": stage_identity,
     "apc": stage_apc,
     "quality": stage_quality,
+    "kld": stage_kld,
     "speed": stage_speed,
     "memory": stage_memory,
     "longqa": stage_longqa,

@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { pushLive, subscribePush } from "./push";
 import type { Connection } from "./api";
 import {
   appendSample,
@@ -36,8 +37,11 @@ export function useHostTelemetry(
     if (!enabled) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const tick = async () => {
-      if (document.visibilityState === "visible") {
+    const tick = async (fromPush = false) => {
+      if (
+        document.visibilityState === "visible" &&
+        (fromPush || !pushLive(connection, "host"))
+      ) {
         try {
           const r = await fetchHost(connection, controller.signal);
           if (controller.signal.aborted) return;
@@ -58,7 +62,12 @@ export function useHostTelemetry(
       timer = setTimeout(() => void tick(), intervalMs);
     };
     void tick();
+    const off = subscribePush(connection, "host", () => {
+      if (timer) clearTimeout(timer);
+      void tick(true);
+    });
     return () => {
+      off();
       controller.abort();
       if (timer) clearTimeout(timer);
     };

@@ -31,7 +31,7 @@ type RequestFixture = {
 
 /** Engine routes the console treats as optional (history, memory ledger, effective config, recent requests). */
 const OPTIONAL_ROUTE =
-  /\/v1\/yunshu\/(history|memory|config|downloads|service|cors|keys|requests\/recent)(\?|$)/;
+  /\/v1\/yunshu\/(history|memory|config|downloads|events|service|cors|keys|requests\/recent)(\?|$)/;
 
 function createApiFixture() {
   const token = "playwright-only-token";

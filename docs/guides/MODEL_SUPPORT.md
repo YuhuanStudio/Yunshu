@@ -54,8 +54,8 @@ One `yunshu serve` per checkpoint on the M5 (default settings), then through the
 
 `Jundot/Qwen3.8-Flash-Next-oQ4e-mtp` is 106 GB on disk, of which 32 GB is the per-layer n-gram embedding (PLE). Yunshu reads PLE rows from the SSD instead of loading the table, which leaves 74.3 GB of resident weights (the 1.5 GB MTP head included).
 
-1. Build the external-PLE view once (hard links, nothing is copied, the original pack is untouched; source and view must be on the same volume): `python scripts/research/flashnext80_prepare_view.py <pack> <pack>-ple-ssd`.
-2. Serve the view: `YUNSHU_MAX_MEMORY_GB=74.5 yunshu serve -m <pack>-ple-ssd`. The MTP head is used automatically (one draft per round); the APC SSD tier is on by default.
+1. Serve the pack as it is: `yunshu serve -m <pack>`. Since 2026-10-28 the PLE table is read from the pack's own files by default (`YUNSHU_PLE_STORAGE=ssd`): the first load builds a small row manifest under `~/.yunshu/cache/ple/`, nothing is copied and the pack is untouched. Measured on Jundot oQ2.5e-mtp: peak memory 82.9 → 54.5 GB, identical text, speed unchanged (DFlash2 81.6, MTP 84.3 tok/s against 82.4 / 85.4 with a hand-built view, 3 interleaved reps). `YUNSHU_PLE_STORAGE=memory` loads the table like any weight.
+2. A hand-built external-PLE view (`python scripts/research/flashnext80_prepare_view.py <pack> <pack>-ple-ssd`, hard links on the same volume) still works and is used as it is. The MTP head is used automatically (one draft per round); the APC SSD tier is on by default.
 
 With a memory ceiling set, Yunshu keeps the freed-buffer pool at 0.5 GiB and leaves the vision tower unloaded until the first image request. Both are lossless; set `YUNSHU_PREFILL_BUFFER_CACHE_GB` to override the pool.
 

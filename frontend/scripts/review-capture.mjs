@@ -95,8 +95,10 @@ async function main() {
     await page.evaluate(() => window.__review?.reset());
     const end = Date.now() + seconds * 1000;
     let n = 0;
+    const times = [];
     while (Date.now() < end) {
       n += 1;
+      times.push(Date.now());
       await page.screenshot({
         path: join(dir, `f-${String(n).padStart(4, "0")}.jpg`),
         type: "jpeg",
@@ -114,7 +116,7 @@ async function main() {
     writeFileSync(
       join(dir, "shifts.json"),
       JSON.stringify(
-        { ...s, entries: rec.entries, deltas: rec.frames.length },
+        { ...s, entries: rec.entries, deltas: rec.frames.length, times },
         null,
         1,
       ),

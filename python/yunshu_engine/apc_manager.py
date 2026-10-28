@@ -227,10 +227,6 @@ _BORN_MAX = 20000
 _BORN_KEEP_GENERATIONS = 5000
 # Entry-count cap: the byte budget decides, this only bounds bookkeeping.
 MAX_ENTRIES = 16
-# Seam checkpoint (YUNSHU_APC_SEAM_CHECKPOINT): a final user message at least this long keeps one
-# more cut this many tokens before its end (TensorFold #1262 uses 8192 / 2048 on Qwen3.8-27B).
-SEAM_MIN_MESSAGE_TOKENS = 8192
-SEAM_QUESTION_TOKENS = 2048
 ENTRY_HITS_MAX = 4096  # bound of the per-entry hit side table (accounting only)
 # Shutdown spill budget: a service stop must not hang on a 32 GiB cache.
 CLOSE_FLUSH_SECONDS = 20.0
@@ -447,7 +443,7 @@ class SpillDiskStore(DiskBlockStore):
         ok = self._write_payload_impl(shard_id, block_hashes, payload)
         h = getattr(payload, "cache_hash", None)
         if ok and h is not None:
-            tokens = tuple(int(t) for t in payload.token_ids)
+            tokens = tuple(map(int, payload.token_ids))
             self._tok_cache()[int(h)] = (tokens, int(payload.extra_hash))
             from .cache_observation import disk_event
 
@@ -1424,19 +1420,6 @@ class _Coordinator(APCCoordinator):
         if head and mgr.exact_cache_min_tokens <= head < final:
             lengths.add(head)
             mgr.note_head(token_ids[:head])
-        seam = mgr.seam_boundary(token_ids, final)
-        if seam:
-            seam = self._aligned_media_safe(token_ids, seam, media_token_ids)
-            start = mgr.last_user_boundary(token_ids)
-            covered = any(
-                start < n <= final - mgr.seam_question_tokens for n in lengths
-            )
-            if (
-                seam > start
-                and not covered
-                and mgr.exact_cache_min_tokens <= seam < final
-            ):
-                lengths.add(seam)
         div = mgr.divergence_point(token_ids) if mgr.prefill_alignment else 0
         if div:
             from mlx_vlm.apc import adjust_prefix_to_text_suffix_boundary
@@ -1499,9 +1482,6 @@ class YunshuAPCManager(APCManager):
         prefill_assistant_header: tuple[int, int] | None = None,
         prefill_message_end: int | None = None,
         prefill_turn_boundary: bool = False,
-        seam_checkpoint: bool = False,
-        seam_min_message_tokens: int = SEAM_MIN_MESSAGE_TOKENS,
-        seam_question_tokens: int = SEAM_QUESTION_TOKENS,
         **kwargs: Any,
     ):
         overrides = dict(kwargs.pop("overrides", None) or {})
@@ -1520,10 +1500,6 @@ class YunshuAPCManager(APCManager):
         # next-turn rehearsal: the end of every earlier assistant turn (the position of the
         # next turn's header) is a forward boundary and a restore point
         self.prefill_turn_boundary = bool(prefill_turn_boundary)
-        # YUNSHU_APC_SEAM_CHECKPOINT (experimental): see seam_boundary
-        self.seam_checkpoint = bool(seam_checkpoint)
-        self.seam_min_message_tokens = int(seam_min_message_tokens)
-        self.seam_question_tokens = int(seam_question_tokens)
         from .cache_observation import Observation
 
         self.observation = Observation()
@@ -1724,7 +1700,7 @@ class YunshuAPCManager(APCManager):
         """A checkpoint came back from an SSD tier: it belongs to this request's generation (its
         next, longer checkpoint supersedes it), and it is a head when it ends the system turn."""
         key: int = _sequence_hash(
-            tuple(int(t) for t in tokens[:n]), extra_hash, self.block_size
+            tuple(map(int, tokens[:n])), extra_hash, self.block_size
         )
         with self._plock:
             self._born.setdefault(key, self._generation)
@@ -1815,7 +1791,7 @@ class YunshuAPCManager(APCManager):
     def _load_span_plans(self) -> None:
         try:
             raw = json.loads((self.disk.dir / self._SPAN_PLANS_FILE).read_text())
-            plans = {int(k): tuple(int(p) for p in v) for k, v in raw.items()}
+            plans = {int(k): tuple(map(int, v)) for k, v in raw.items()}
         except (OSError, ValueError, TypeError, AttributeError):
             return
         self._span_plans.update(list(plans.items())[-_BORN_MAX:])
@@ -1893,25 +1869,6 @@ class YunshuAPCManager(APCManager):
             if token_ids[i] == a and token_ids[i + 1] == b:
                 return i
         return 0
-
-    def seam_boundary(self, token_ids, final: int) -> int:
-        """A 64-aligned cut inside a long final user message, ``seam_question_tokens`` before its end.
-
-        "Same document, new question" (TensorFold #1262, Rapid-MLX 421bf658): the next request keeps
-        the document and changes the question, so the longest reusable prefix is the document, not
-        the prompt end (the question differs) and not the system turn. The interval checkpoint lands
-        there only by luck: it can sit inside a long question, or right at the prompt end. Only a
-        message of at least ``seam_min_message_tokens`` pays the extra copy, and only in the
-        split-invariant (64-aligned) mode, where an extra cut cannot change the output.
-        Returns 0 when off, not aligned, or the message is short.
-        """
-        if not self.seam_checkpoint or not self.prefill_alignment:
-            return 0
-        start = self.last_user_boundary(token_ids)
-        if start <= 0 or final - start < self.seam_min_message_tokens:
-            return 0
-        at = self.align_prefill_boundary(final - self.seam_question_tokens)
-        return at if at > start else 0
 
     def resident_prefix_len(self, token_ids, extra_hash=0) -> int:
         """Longest resident exact checkpoint that is a prefix of ``token_ids`` (no MLX work)."""
@@ -2074,9 +2031,7 @@ class YunshuAPCManager(APCManager):
                 # not yet: the anchors view a cache that is about to be copied and stored,
                 # and its bytes are not theirs; the budget is enforced once the copy exists
                 self.finish_anchor_sharing(enforce=False)
-        key = _sequence_hash(
-            tuple(int(t) for t in token_ids), extra_hash, self.block_size
-        )
+        key = _sequence_hash(tuple(map(int, token_ids)), extra_hash, self.block_size)
         # recorded first: a checkpoint too big for RAM is written to the SSD inside the call
         # below, and the write hook needs its generation to tell what it supersedes
         with self._plock:
@@ -2138,7 +2093,7 @@ class YunshuAPCManager(APCManager):
         retained set stays a handful of checkpoints. Anchors sit at the oldest end of the LRU,
         so the byte and entry budgets evict them before anything newer.
         """
-        tokens = tuple(int(t) for t in token_ids)
+        tokens = tuple(map(int, token_ids))
         keep_for = self.keep_prior_for
         if keep_for is not None and tokens == keep_for[: len(tokens)]:
             # A next-turn rehearsal prefills a conversation nobody has asked for yet: it must
@@ -2380,7 +2335,7 @@ class YunshuAPCManager(APCManager):
         from mlx_vlm.models.cache import KVCache
 
         self._last_shared_keys = []
-        donor_tokens = tuple(int(t) for t in donor_tokens)
+        donor_tokens = tuple(map(int, donor_tokens))
         hit = self._last_hit
         if hit is None or hit[1] != extra_hash or donor_tokens[: len(hit[0])] != hit[0]:
             return 0, [], 0
@@ -2545,7 +2500,7 @@ class YunshuAPCManager(APCManager):
         (the idle-resend root cause of yv gate agent.restart_idle was invisible without it)."""
         if len(token_ids) < 4096 or not logger.isEnabledFor(logging.DEBUG):
             return  # the scan below hashes prefixes: only pay for it when it is read
-        tokens = tuple(int(t) for t in token_ids)
+        tokens = tuple(map(int, token_ids))
         with self.lock:
             held = sorted(
                 len(e.token_ids)
@@ -2624,7 +2579,7 @@ class YunshuAPCManager(APCManager):
         before = self.stats.disk_hits
         t0 = time.perf_counter()
         if self.warm is not None:
-            tokens = tuple(int(t) for t in token_ids)
+            tokens = tuple(map(int, token_ids))
             names = ("extra_hash", "max_prefix_tokens", "min_prefix_tokens")
             defaults = (0, None, 0)
             vals = [
@@ -2650,7 +2605,7 @@ class YunshuAPCManager(APCManager):
                 positional[1] = maximum
                 retry.pop("max_prefix_tokens")
             cache, n = super().lookup_exact_cache(token_ids, *positional, **retry)
-        self._last_hit = (tuple(int(t) for t in token_ids[:n]), extra) if n else None
+        self._last_hit = (tuple(map(int, token_ids[:n])), extra) if n else None
         undo = None
         if self._last_hit is not None:
             deltas = {
@@ -2672,7 +2627,7 @@ class YunshuAPCManager(APCManager):
         key = self._exact_cache.last_access_key
         if tier == "ssd" and n:
             key = self._note_disk_hit(
-                tuple(int(t) for t in token_ids), int(n), self._extra_of(args, kwargs)
+                tuple(map(int, token_ids)), int(n), self._extra_of(args, kwargs)
             )
         if n and key is not None:
             if undo is not None:
@@ -2725,7 +2680,7 @@ class YunshuAPCManager(APCManager):
     def probe_exact_length(self, token_ids, extra_hash, maximum, minimum) -> int:
         """Length the next lookup_exact_cache would restore (HOT / WARM / SSD index), read from
         metadata only: no restore, no promotion. 0 when nothing qualifies."""
-        tokens = tuple(int(t) for t in token_ids)
+        tokens = tuple(map(int, token_ids))
         maximum = min(len(tokens) - 1, int(maximum))
         if maximum <= minimum:
             return 0
@@ -2769,7 +2724,7 @@ class YunshuAPCManager(APCManager):
         """
         from mlx_vlm.apc import _cache_nbytes
 
-        tokens = tuple(int(t) for t in token_ids)
+        tokens = tuple(map(int, token_ids))
         extra = self._extra_of(args, kwargs)
         maximum = kwargs.get("max_prefix_tokens", args[1] if len(args) > 1 else None)
         minimum = kwargs.get("min_prefix_tokens", args[2] if len(args) > 2 else 0)

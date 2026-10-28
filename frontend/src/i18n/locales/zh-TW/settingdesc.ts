@@ -129,8 +129,6 @@ const settingdesc = {
   YUNSHU_PREFIX_HOT_LIMIT:
     "文字引擎：僅讓這麼多筆前綴 KV 項目保持完整精度，較舊的在記憶體中以 4-bit 儲存（重用時有損，以品質換記憶體）。0 表示全部完整精度。",
   YUNSHU_SSD_CACHE: "文字引擎：將前綴 KV 持久化到 SSD。",
-  YUNSHU_APC_SEAM_CHECKPOINT:
-    "VLM 執行器（APC），僅限分割不變預填：最後一則使用者訊息達 8192 token 以上時，在訊息結尾前 2048 token 處多留一個檢查點，讓「同一份長文件、不同問題」的後續請求從文件處接續。每個此類提示多一份檢查點複製；輸出不變。實驗性。",
   YUNSHU_SSD_CACHE_DIR: "文字引擎：SSD 前綴快取目錄。",
   YUNSHU_SSD_CACHE_PRECISION:
     "文字引擎：SSD 前綴快取的儲存精度：`native`（KV 與遞迴狀態位元精確，無損）或 `int8`（逐張量 int8，磁碟用量約為 bf16 的一半，重用時有損）。",
@@ -164,6 +162,8 @@ const settingdesc = {
     "服務程序：一個 Python 執行緒持有 GIL 多久（毫秒）後，要讓給其他想用的執行緒。CPython 預設的 5 ms 會讓事件迴圈在生成執行緒跑 Python 時最多晚 5 ms 才醒（27B 解碼：迴圈延遲 p99 5.3 ms，0.5 ms 降為 2.0 ms；tokens/s 不變）。僅影響排程，輸出不變；0 表示沿用 CPython 預設。",
   YUNSHU_PLE_READ_THREADS:
     "Qwen3.8-Flash-Next 從 SSD 讀取 n-gram 嵌入（PLE）時，用多少執行緒平行讀取每個 token 的 48 列 PLE，而不是逐列讀取（新文字每個 token 約省 7 ms）。讀出的資料逐位元相同，輸出不變；0 表示沿用上游逐列讀取。",
+  YUNSHU_PLE_STORAGE:
+    "Qwen3.8-Flash-Next 的 n-gram 嵌入（PLE）表放在哪裡。ssd（預設）直接從模型檔讀取需要的列，約 30 GB 的表不進記憶體（oQ2.5e 峰值 82.9 → 54.5 GB，輸出不變）；memory 則像一般權重一樣載入。",
   YUNSHU_PREFILL_BUFFER_CACHE_GB:
     "VLM 執行器：在預填步驟之間保留的 MLX 已釋放緩衝快取大小（GiB）。未設定時為實體記憶體的 5%，最多 6 GiB；常駐權重讓記憶體餘裕很少時改為 0.5 GiB（可壓低超大模型長預填的峰值）。可讓長前綴還原的緩衝在請求之間保持熱狀態；0 表示沿用上游每個區塊後清除。僅影響配置器，輸出不變。",
   YUNSHU_PREFILL_GDN:
@@ -199,8 +199,6 @@ const settingdesc = {
     "文字 Gemma-4 模型：輔助草稿模型目錄（共用 KV 的推測解碼草稿模型）。",
   YUNSHU_SDPA_CHUNK:
     "M1–M4、head_dim 256：將原生長 prefill 注意力的後備路徑依查詢列分塊，讓分數張量維持在 1 GiB 以下（實驗性）。",
-  YUNSHU_GPU_SAMPLER:
-    "文字模型：在 GPU 上進行 Gumbel-max 取樣（每個 token 無需 GPU 到 CPU 的同步）。",
   YUNSHU_JUMP_FORWARD:
     "文字模型：JSON schema 輸出中由文法強制決定的結構性 token 直接輸出，不經過前向傳遞。",
   YUNSHU_JSON_SCHEMA_ENGINE:
@@ -209,8 +207,6 @@ const settingdesc = {
     "約束解碼改用 xgrammar 風格的位元遮罩引擎，而非允許清單取樣器。",
   YUNSHU_GRAMMAR_PREWARM:
     "模型載入時在背景建立 llguidance 詞元表，使第一個約束請求不必花約一秒走訪詞彙表。每種遮罩寬度約佔用 0.45 GiB 原生堆積；設為 0 則於首次使用時建立。",
-  YUNSHU_TOOL_GRAMMAR:
-    "工具呼叫約束解碼（結構標籤）：在工具呼叫起始標記之前為自由文字，之後呼叫本體會被遮罩為本次請求精確的呼叫文法（工具名稱、參數鍵、具型別的值、結尾）。強制的 `tool_choice` 一律受約束；此旗標僅控制 `auto`。關閉時，自動選擇的工具呼叫不受約束地解碼，事後再修復。",
   YUNSHU_QUANT_MODE:
     "載入時在記憶體中量化權重（有損，以品質換記憶體）：`mxfp4`、`nvfp4`、`mxfp8` 或 `affine`（留空則維持檢查點原樣）。",
   YUNSHU_QUANT_CONFIG:
@@ -221,6 +217,8 @@ const settingdesc = {
     "回覆後閒置時，以 prefill 算術預演下一輪 assistant 文字並存 APC，不重用 decode KV。預設 stride 在通過資格的 27B 路徑停在 assistant 結束前最後的絕對 64 對齊位置；其他路徑保留完整 atom。相同對話可接手執行中預演，其他請求取消。off 停用；boundary／exact 在舊路徑保留額外 assistant-end 切分且可能改變浮點捨入。",
   YUNSHU_NEXT_TURN_DELAY_S:
     "回覆後至開始下一輪預演的秒數。預設 0.3，讓立即追問（代理迴圈）在預演開始前抵達而只需預填一次，較晚的相符追問則接手執行中的工作；0 表示閒置即開始，立即追問會多花約 0.15–0.25 秒（預演加一次短尾請求）。有前景請求等待時不啟動預演。",
+  YUNSHU_QSA_SPARSE_PREFILL:
+    "Qwen3.8-Flash-Next（qwen4_exp），M5 級 GPU：在張量單元上執行提示列的索引稀疏 QSA 注意力，每個（列，key 頭）一個執行緒群組，共用同一 key 頭的 12 個 query 頭作為一個矩陣乘運算元，選中的 key 只讀一次，取代上游對每個 query 頭重複讀取選中 key 的純量核心。每一列的結果只取決於該列，因此預填與分塊方式無關；算術與上游不同（fp32 累加順序不同，並非品質變化）。解碼與推測驗證不受影響。預設開啟：Flash-Next oQ2.5e 的 8K/32K/128K 冷 TTFT 分別降低 25/24/20%，推測開關一致與快取命中一致仍成立，輸出比原生核心更接近 fp32 注意力參考（KLD 0.0685 對 0.0731）。關閉：使用上游純量核心。",
   YUNSHU_QWEN4_LANE:
     "Qwen3.8-Flash-Next（qwen4_exp）：解碼、推測驗證與草稿一律以列不變的 lane 矩陣乘處理稠密量化投影，取代上游逐列的單列 qmv。多一列驗證不再倍增稠密權重讀取量；推測輸出仍與一般解碼相同。輸出與預設算術相差最後一位。上游融合 head 核心讀不了的 head 格式（如 6-bit）會強制啟用。寬於 32 列的預填區塊仍用 MLX 的量化矩陣乘。",
   YUNSHU_ENGINE_LOOP:

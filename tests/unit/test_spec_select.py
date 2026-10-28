@@ -50,3 +50,15 @@ def test_non_spec_family(tmp_path):
         {}, spec_family=False, mtp_capable=False, models_dir=tmp_path
     )
     assert c.kind == "none"
+
+
+def test_forced_drafter_for_another_target_fails_before_loading(tmp_path, monkeypatch):
+    import pytest
+
+    wrong = _drafter(tmp_path / "Flash-DFlash", layers=48, hidden=2560)
+    monkeypatch.setenv("YUNSHU_VLM_DRAFT", str(wrong))
+    with pytest.raises(ValueError, match="hidden_size 2560 != target hidden_size 5120"):
+        _choose(tmp_path, monkeypatch)
+    right = _drafter(tmp_path / "Right-DFlash")
+    monkeypatch.setenv("YUNSHU_VLM_DRAFT", str(right))
+    assert _choose(tmp_path, monkeypatch).drafter == str(right)

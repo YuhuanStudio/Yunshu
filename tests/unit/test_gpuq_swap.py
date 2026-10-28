@@ -245,3 +245,39 @@ def test_zombie_counts_as_gone(monkeypatch):
         lambda *a, **kw: h.subprocess.CompletedProcess(a, 0, stdout="Z+\n"),
     )
     assert h._process_gone(4242)
+
+
+def test_job_swap_is_concurrent_peak_not_sum_of_process_peaks(tmp_path, monkeypatch):
+    job = dict(id="restarts", pid=10, env={})
+    path = tmp_path / "job.json"
+    path.write_text(json.dumps(job))
+    m = h.ContentionMonitor(
+        job,
+        path,
+        tmp_path,
+        lambda p, d: p.write_text(json.dumps(d)),
+        lambda p: json.loads(p.read_text()),
+    )
+    monkeypatch.setattr(h, "host_available_bytes", lambda: 100_000_000_000)
+    monkeypatch.setattr(h, "swapout_bytes", lambda: 0)
+    monkeypatch.setattr(
+        m.sampler,
+        "sample",
+        lambda *a, **kw: dict(time=kw["now"], since=kw["now"] - 2, foreign_cpu_pct=0),
+    )
+    # Three server restarts, each peaking at 50 MB while alone: 50 MB, not 150.
+    for i, pid in enumerate((11, 12, 13)):
+        m.sampler.owned = {10, pid}
+        monkeypatch.setattr(
+            h,
+            "process_memory",
+            lambda p, pid=pid: dict(
+                pid=p,
+                start=pid,
+                pageins=0,
+                swapped_bytes=50_000_000 if p == pid else 0,
+                regions=1,
+            ),
+        )
+        m.record("start" if i == 0 else "poll", 100 + 2 * i)
+    assert job["job_swap_mb"] == 50

@@ -102,6 +102,11 @@ class _Budget:
 @pytest.fixture
 def disk(tmp_path):
     w._DISK.update(dir=None, budget=None, tag=None)
+    # the counters are module-global: another test's writes must not leak into this one's assertions
+    # (found by the random-order pass: disk_written was 4, not 1)
+    for k in w._STATS:
+        w._STATS[k] = 0
+    w.clear()
     yield tmp_path
     w.flush()
     w._DISK.update(dir=None, budget=None, tag=None)

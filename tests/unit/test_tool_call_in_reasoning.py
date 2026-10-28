@@ -98,7 +98,7 @@ def test_without_declared_tools_reasoning_keeps_the_marker():
 
 
 def test_tools_declared_without_grammar_spec_also_ends_reasoning():
-    # YUNSHU_TOOL_GRAMMAR off (or tool_choice none handled elsewhere): no _tool_spec,
+    # auto choice (or tool_choice none handled elsewhere): no _tool_spec,
     # but the request still declares tools and its calls are parsed from normal text.
     reasoning, content = _split(_events([10, TOOL, 11, 12, EOS], tools_declared=True))
     assert reasoning == "I will read it. "

@@ -212,7 +212,10 @@ test.describe("requests page trace", () => {
     ).toBeVisible();
     // The shell also asks for the downloads list (another page's endpoint); not this page's concern.
     expect(
-      fixture.unexpected.filter((u) => !u.includes("/yunshu/downloads")),
+      fixture.unexpected.filter(
+        (u) =>
+          !u.includes("/yunshu/downloads") && !u.includes("/yunshu/events"),
+      ),
     ).toEqual([]);
     expect(pageErrors).toEqual([]);
   });
@@ -345,7 +348,10 @@ test.describe("requests page finished-request ring", () => {
     await expect(first).toContainText("命中 1,000 · 25%");
     // The shell also asks for the downloads list (another page's endpoint); not this page's concern.
     expect(
-      fixture.unexpected.filter((u) => !u.includes("/yunshu/downloads")),
+      fixture.unexpected.filter(
+        (u) =>
+          !u.includes("/yunshu/downloads") && !u.includes("/yunshu/events"),
+      ),
     ).toEqual([]);
     expect(pageErrors).toEqual([]);
   });
@@ -385,7 +391,9 @@ test.describe("requests page finished-request ring", () => {
       .getByRole("dialog", { name: "請求詳情" })
       .or(page.getByRole("complementary", { name: "請求詳情" }));
     const breakdown = panel.getByRole("region", { name: "耗時分解" });
-    await expect(breakdown.locator("p", { hasText: /^排隊至預填開始$/ })).toBeVisible();
+    await expect(
+      breakdown.locator("p", { hasText: /^排隊至預填開始$/ }),
+    ).toBeVisible();
     await expect(breakdown).toContainText("40 ms");
     await expect(breakdown).toContainText("300 ms");
     await expect(breakdown).toContainText("2 s");
@@ -432,7 +440,10 @@ test.describe("requests page finished-request ring", () => {
     expect(fixture.recentCalls.length).toBeLessThanOrEqual(early + 2);
     // The shell also asks for the downloads list (another page's endpoint); not this page's concern.
     expect(
-      fixture.unexpected.filter((u) => !u.includes("/yunshu/downloads")),
+      fixture.unexpected.filter(
+        (u) =>
+          !u.includes("/yunshu/downloads") && !u.includes("/yunshu/events"),
+      ),
     ).toEqual([]);
     expect(pageErrors).toEqual([]);
   });

@@ -1000,7 +1000,7 @@ class TieredDiskStore(SpillDiskStore):
         min_prefix_tokens=0,
         block_size=16,
     ):
-        tokens = tuple(int(t) for t in token_ids)
+        tokens = tuple(map(int, token_ids))
         max_len = len(tokens) - 1
         if max_prefix_tokens is not None and max_prefix_tokens > 0:
             max_len = min(max_len, int(max_prefix_tokens))
