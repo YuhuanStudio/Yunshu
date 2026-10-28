@@ -118,6 +118,8 @@ def _attention_mix(attn, q, k, v, seg: Segment, cache) -> mx.array:
 def _gdn_mix(layer, qkv, z, b, a, cache) -> mx.array:
     from mlx_vlm.models.qwen3_5.gated_delta import gated_delta_update
 
+    from ..kernels import gdn_prefill
+
     _, S, _ = qkv.shape
     z = z.reshape(1, S, -1, layer.head_v_dim)
     conv_state = cache[0]
@@ -125,9 +127,21 @@ def _gdn_mix(layer, qkv, z, b, a, cache) -> mx.array:
         conv_state = mx.zeros(
             (1, layer.conv_kernel_size - 1, layer.conv_dim), dtype=qkv.dtype
         )
-    conv_input = mx.concatenate([conv_state, qkv], axis=1)
-    cache.update_window(0, conv_input, layer.conv_kernel_size - 1)
-    conv_out = nn.silu(layer.conv1d(conv_input))
+    fused = (
+        S >= 3
+        and qkv.dtype == mx.bfloat16
+        and layer.conv_kernel_size == 4
+        and layer.conv1d.weight.dtype == mx.bfloat16
+        and getattr(layer.conv1d, "bias", None) is None
+        and mx.default_device() == mx.gpu
+    )
+    if fused:
+        cache.update_window(0, qkv[:, S - 3 :], 3)
+        conv_out = gdn_prefill.fused_conv_silu(conv_state, qkv, layer.conv1d.weight)
+    else:
+        conv_input = mx.concatenate([conv_state, qkv], axis=1)
+        cache.update_window(0, conv_input, layer.conv_kernel_size - 1)
+        conv_out = nn.silu(layer.conv1d(conv_input))
     q, k, v = [
         t.reshape(1, S, h, d)
         for t, h, d in zip(
@@ -137,9 +151,13 @@ def _gdn_mix(layer, qkv, z, b, a, cache) -> mx.array:
             strict=True,
         )
     ]
-    inv = k.shape[-1] ** -0.5
-    q = (inv**2) * mx.fast.rms_norm(q, None, 1e-6)
-    k = inv * mx.fast.rms_norm(k, None, 1e-6)
+    if fused and q.shape[-1] == k.shape[-1] == 128:
+        q = gdn_prefill.fused_norm_scale(q, inverse=True)
+        k = gdn_prefill.fused_norm_scale(k, inverse=False)
+    else:
+        inv = k.shape[-1] ** -0.5
+        q = (inv**2) * mx.fast.rms_norm(q, None, 1e-6)
+        k = inv * mx.fast.rms_norm(k, None, 1e-6)
     out, _ = gated_delta_update(
         q, k, v, a, b, layer.A_log, layer.dt_bias, use_kernel=True, cache=cache
     )
