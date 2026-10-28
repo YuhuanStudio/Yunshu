@@ -267,7 +267,7 @@ SUITES["quality-think"] = {
     "ctx": [1024],
     "mmlu_n": 300,
     "quality_thinking": True,
-    "quality_max_tokens": 8192,
+    "quality_max_tokens": 16384,
 }
 
 DEFAULTS = {
