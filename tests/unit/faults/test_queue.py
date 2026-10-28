@@ -98,3 +98,17 @@ async def test_full_queue_refuses_the_next_request_and_a_cancel_makes_room(
             assert_one_terminal("openai", (await asyncio.wait_for(t, 5)).text)
         await a.settle()
         a.assert_clean()
+
+
+async def test_cancelled_waiter_leaves_the_queue_when_its_final_chunk_is_delivered():
+    """The fake engine's `waiting` must drop before the cancel chunk is yielded, not when the consumer
+    next resumes the generator (a test read it in between under load)."""
+    eng = FakeBatchedEngine(Script.hang_after(1))
+    eng.serial = asyncio.Semaphore(0)  # never available: the request can only wait
+    cancel = asyncio.Event()
+    cancel.set()
+    gen = eng._run({"cancel_event": cancel})
+    chunk = await gen.__anext__()
+    assert chunk.finish_reason == "cancel"
+    assert eng.waiting == 0
+    await gen.aclose()

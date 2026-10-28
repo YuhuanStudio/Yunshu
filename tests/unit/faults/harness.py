@@ -85,6 +85,7 @@ class FakeBatchedEngine(BatchedEngine):
         sem = self.serial
         if sem is not None:
             self.waiting += 1
+            queued = True
             try:
                 while True:
                     try:
@@ -93,6 +94,11 @@ class FakeBatchedEngine(BatchedEngine):
                     except TimeoutError:
                         if cancel is not None and cancel.is_set():
                             self.finish_reasons.append("cancel")
+                            # the request leaves the queue now, not when the consumer next resumes
+                            # this generator: a test (and the gateway) reads `waiting` right after the
+                            # final chunk arrives (flaky under load: waiting still 1)
+                            self.waiting -= 1
+                            queued = False
                             yield SimpleNamespace(
                                 new_text="",
                                 finish_reason="cancel",
@@ -104,7 +110,8 @@ class FakeBatchedEngine(BatchedEngine):
                             )
                             return
             finally:
-                self.waiting -= 1
+                if queued:
+                    self.waiting -= 1
             try:
                 async for o in self._run_inner(kwargs):
                     yield o
