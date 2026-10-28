@@ -45,29 +45,6 @@ def test_external_verification_keeps_unprocessed_bonus_context():
         assert seen == [3]
 
 
-def test_fp32_round_attention_preserves_dtype_and_causal_prefix():
-    from yunshu_engine.round_driver.batch import KVPlan, Slots, attend
-
-    with mx.stream(mx.cpu):
-        q = mx.ones((1, 1, 2, 256), dtype=mx.float32)
-        k = mx.ones((1, 1, 2, 256), dtype=mx.float32)
-        v = mx.broadcast_to(mx.array([2.0, 6.0])[None, None, :, None], (1, 1, 2, 256))
-        at = SimpleNamespace(
-            q_proj=lambda x: x,
-            k_proj=lambda x: x,
-            v_proj=lambda x: x,
-            _prepare_projected_qkv=lambda *a: (q, k, v, mx.zeros((1, 2, 256)), None),
-            scale=0.5,
-            o_proj=lambda x: x,
-        )
-        slots = Slots(1)
-        slot = slots.alloc()
-        slots.reserve(2)
-        out = attend(at, mx.zeros((1, 2, 256)), slots, 0, KVPlan.make([slot], [0], 2))
-        assert out.dtype == mx.float32
-        assert out.tolist() == [[[1.0] * 256, [2.0] * 256]]
-
-
 @pytest.mark.parametrize("case", ["greedy", "guide", "keyed", "keyed-xtc"])
 def test_tree_setting_reaches_upstream_hook_instead_of_chain_lane(monkeypatch, case):
     from mlx_vlm.generate import ar

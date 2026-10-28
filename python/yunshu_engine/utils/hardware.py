@@ -457,10 +457,9 @@ def compute_adaptive_defaults(hw: HardwareInfo | None = None) -> dict:
         overrides["prefix_cache_min_prefix"] = 32
 
     # ── KV quantization ──
-    # Auto-enable 4-bit KV quant on 8GB devices
-    if mem_gb <= 8:
-        overrides["kv_cache_quant_bits"] = 4
-        overrides["kv_cache_quant_group_size"] = 64
+    # No tier turns KV quantization on: a lossy KV is an explicit user option
+    # (YUNSHU_KV_QUANT_BITS / model_settings.json), never a hardware default, so a prompt-cache
+    # hit stays identical to a miss on every tier (8 GB included).
 
     # ── Spec decode ──
     # N-gram spec decode is cheap — enable on 16GB+

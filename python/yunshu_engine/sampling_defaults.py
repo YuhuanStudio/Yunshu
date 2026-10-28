@@ -264,6 +264,29 @@ def defaults_by_mode(model_path: str | Path | None) -> dict[str, Any]:
     }
 
 
+def keeps_one_token(top_k: Any, min_p: Any, xtc_probability: Any = 0.0) -> bool:
+    """True when the request's filters leave only the most likely token (top_k 1, min_p 1).
+
+    Sampling over one token is greedy except for exact ties, which argmax resolves to the lowest id. XTC removes
+    top tokens, so any XTC probability keeps the request sampled.
+    """
+    if xtc_probability and float(xtc_probability) > 0:
+        return False
+    return int(top_k or 0) == 1 or float(min_p or 0.0) >= 1.0
+
+
+def effective_temperature(
+    temperature: Any, top_k: Any, min_p: Any, xtc_probability: Any = 0.0
+) -> Any:
+    """0.0 for a request whose filters keep one token (it decodes greedily: the fused argmax step, the exact
+    speculative lane and greedy-only routes instead of a sampler over a distribution of one token; splash
+    8d5e05b), else ``temperature`` unchanged. Penalties, biases and grammar masks act on the logits before the
+    filters, so the kept token is the same one."""
+    if temperature is None or float(temperature) <= 0.0:
+        return temperature
+    return 0.0 if keeps_one_token(top_k, min_p, xtc_probability) else temperature
+
+
 def fill_sampling(
     values: dict[str, Any], model_path: str | Path | None, mode: str | None = None
 ) -> dict[str, dict[str, Any]]:

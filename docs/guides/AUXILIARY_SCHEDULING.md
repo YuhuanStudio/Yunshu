@@ -4,8 +4,8 @@
 > Console docs: the maintained, translated version of this page is `/docs/developers/auxiliary-scheduling` (source `frontend/docs/developers/auxiliary-scheduling.mdx`). This file stays as the repository-side reference read by tooling.
 Evidence is the saved traffic, not a client-name / small-model heuristic. Run
 `scripts/research/agentic/characterize_auxiliary.py MAIN/docs/research/runs --out inventory.json`
-to inventory physical captured bodies. The inventory snapshot is in
-`../research/runs/2026-10-02-i8/fingerprints.json`; later concurrently captured files may change counts.
+to inventory physical captured bodies. The inventory snapshot
+(2026-10-02) is kept privately; later concurrently captured files may change counts.
 
 | Client | Captured request classification | Client model | Output limit | Tools |
 | --- | --- | --- | --- | --- |
@@ -63,8 +63,7 @@ primary is present until that row has waited 10 seconds since its last service. 
 the shared drafter's prompt readout and mRoPE context are restored on switching.
 Per-request speculative counters exclude the other lane's work; gateway queue positions
 follow the same priority ordering.
-The experimental round driver has a separate auxiliary driver with the same model,
-chunking and sampling path. Neither implementation cancels, drops, restarts or truncates
+Neither implementation cancels, drops, restarts or truncates
 the auxiliary output. Cancelled paused rows are still cleaned up at the next slice.
 
 Auxiliary requests have APC disabled (lookup and store); they cannot supersede / evict
@@ -78,10 +77,7 @@ auxiliary generation. The text-only mlx-lm fast path still runs an already-start
 request to completion; its gateway deferral and cache protection do not turn it into a
 preemptible runner. The measured claim here is the 27B VLM runner. On the default runner, aging admits and services an auxiliary row after 10 seconds of waiting,
 but this is a service opportunity rather than a completion deadline: in-flight atoms,
-other older work, client cancellation and existing deadlines still apply. The
-experimental round driver retains strict auxiliary priority and does not use this
-work-ordering policy; endless primary driver traffic can still defer auxiliary
-service. Existing queue limits, errors and deadlines remain in force.
+other older work, client cancellation and existing deadlines still apply. Existing queue limits, errors and deadlines remain in force.
 
 `YUNSHU_AUXILIARY_SCHEDULING` is a stable deployment override. The default is enabled only for loaded backends with qualified batch-invariant kernels; other backends retain ordinary admission / APC behavior. Explicit 0 opts out, and explicit 1 opts an unqualified backend in. See the current decision below.
 
@@ -91,7 +87,7 @@ Regression tests failed on an isolated original HEAD: 16 failures, 1 passing can
 (`../research/runs/2026-10-02-i8/unit-before.log`). The final regressions additionally check
 pending cancellation, gateway grace, APC cost-model isolation and Responses inventory sources. Tests cover fingerprint near misses, opt-out,
 worker propagation, pending and active priority inversion, state-preserving resume,
-separate speculative / round-driver lanes, and APC exclusion.
+separate speculative lanes, and APC exclusion.
 
 GPU jobs `1002-184051-00-i8-before` and `1002-184051-00-i8-after` were submitted at
 priority -1, timeout 20 minutes, stall 5 minutes. Each mode runs three fresh servers

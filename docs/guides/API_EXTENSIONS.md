@@ -58,7 +58,7 @@ it off) and stops at the first token. The comment doubles as the proxy keep-aliv
 
 `percent` counts only tokens that are actually computed: a prefix-cache hit is reported as
 `cached_tokens` and is not part of the denominator. Progress comes from the engine's own prefill loop
-(one step per 2048 tokens on the batch path, one span per round on the round driver), not from a
+(one step per 2048 tokens on the batch path), not from a
 timer. Measured: 93K-token prompt on Qwen3.5-0.8B, 32 comments over 8 s; 11.6K tokens on the 27B,
 48 comments.
 
@@ -86,6 +86,14 @@ header next to `X-Request-Id`. Past the deadline the generation is cancelled and
 terminal error event (`data: {"error": ...}` + `[DONE]`, `event: error`) ends it. The existing
 `timeout` field is different: it ends *generation* with a partial answer (`finish_reason: "length"`,
 `stop_reason: "max_tokens"`, `status: "incomplete"`).
+
+`X-Yunshu-Cache-Store: off` (any case) is for one-shot callers (summaries, titles, classifiers) whose
+prompt is never resent: the request still reuses any cached prefix, but its own prompt is not stored
+in the VLM APC (HOT/WARM/SSD) or the text prefix cache, so it cannot evict the prefixes multi-turn
+chats reuse. Any other value, or no header, stores as usual. It is a header for the same reason as the
+deadline, and it works on `/v1/chat/completions`, `/v1/completions`, `/v1/messages` and
+`/v1/responses`, streaming or not. Prefill splits are unchanged, so the answer equals what a storing
+request would produce. Two identical prompts in flight together share the opt-out. (omlx c4bb311e.)
 
 An answer cut short by `DELETE /v1/requests/{id}`, `POST /v1/cancel` or a deadline carries
 `x_yunshu.cancelled: true` (and `X-Yunshu-Cancelled: true` when not streaming); a queued request is
@@ -137,7 +145,7 @@ own nanosecond fields (below). Real response, Qwen3.8-27B (MTP):
 | `prefill_tps` | Uncached prompt tokens / prefill time. |
 | `decode_tps` | (completion tokens - 1) / time between first and last token. |
 | `cached_tokens` | Prompt tokens served from the prefix cache. |
-| `speculative` | `mode` (`mtp` / `dflash`) when a drafter served the request. `drafted` / `accepted` / `acceptance_rate` count the draft tokens of this request: the round driver counts them per row, the single-row lane (`mtp_lane`, the MTP / DFlash tree rounds, upstream's loops) bumps the drafter's lifetime counters and the runner takes the per-request difference. `null` when nothing was drafted. |
+| `speculative` | `mode` (`mtp` / `dflash`) when a drafter served the request. `drafted` / `accepted` / `acceptance_rate` count the draft tokens of this request: the single-row lane (`mtp_lane`, the MTP / DFlash tree rounds, upstream's loops) bumps the drafter's lifetime counters and the runner takes the per-request difference. `null` when nothing was drafted. |
 
 Fields are `null` when a path cannot measure them. The text-only mlx-lm fast path fills the same
 engine-side clocks as the VLM runner (queue wait, prefill progress from `generate_step`'s callback,
@@ -195,7 +203,7 @@ places: appended to `error.message`, the only field many SDKs print, and structu
 `error.x_yunshu`:
 
 ```json
-{"error":{"message":"body.max_tokens: Input should be greater than or equal to 0 (hint: the request body does not match the API schema; docs/guides/API_SURFACE.md lists every accepted field)",
+{"error":{"message":"body.max_tokens: Input should be greater than or equal to 1 (hint: the request body does not match the API schema; docs/guides/API_SURFACE.md lists every accepted field)",
           "type":"invalid_request_error","param":"max_tokens","code":"validation_error",
           "x_yunshu":{"hint":"the request body does not match the API schema; ...","request_id":"smoke-err-1"}}}
 ```

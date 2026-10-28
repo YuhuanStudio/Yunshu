@@ -27,25 +27,34 @@ EVIDENCE = {
         ],
         "The registry records a partial replay result, but no complete audited three-client greedy/sampled on/off receipt was found. Native/prev jobs are compatibility comparisons, not a complete grammar flag matrix.",
     ),
-    "YUNSHU_ROUND_DRIVER": (
-        "driver",
-        "partial",
+    "YUNSHU_APC_SEAM_CHECKPOINT": (
+        "apc_seam",
+        "pending",
         [
-            "docs/reports/PERF_TREND.md:2026-10-01 and 2026-10-02 round driver",
-            "scripts/research/validate_round_driver.sh",
-            "OWNERS.md: i6-lead round_driver/*",
+            "scripts/research/ab_seam_checkpoint.py",
+            "tests/unit/test_apc_seam_checkpoint.py (plan, alignment, media-safety, tiny-hybrid restore == cold)",
+            "TensorFold #1262 / Rapid-MLX 421bf658 claim 125.9 s -> 9.0 s first token at 35k tokens on Qwen3.8-27B (their engines, not Yunshu)",
         ],
-        "Historical single-request 87.3 vs 93.0 loses, while concurrency has value. Today's pre-contention numbers cannot promote a default. New stage rejects on slow single-request/parity; a positive stage runs the full validator three times. Image/int8/MoE completeness must also be verified before path deletion.",
+        "No Yunshu receipt: the seam cut is exact on the tiny hybrid model on CPU, but the TTFT gain, the first-request copy cost and the memory growth on Qwen3.8-27B need the Mac A/B (16k / 35k / 64k documents, off vs on).",
     ),
-    "YUNSHU_MTP_ROW_EXACT": (
-        "row_exact",
-        "partial",
+    "YUNSHU_SDPA_CHUNK": (
+        "sdpa_chunk",
+        "pending",
         [
-            "docs/research/runs/2026-09-28-matrix/invariant-packed-mtp-sweep.jsonl",
-            "docs/research/runs/2026-09-28-matrix/mtp-depth-sweep-exact-fixed.jsonl",
-            "audit-sweep-inv-* / audit-sweep-rowexact-* pending",
+            "tests/unit/test_sdpa_chunk.py (chunked == stock bit for bit on CPU, gate and install logic)",
+            "omlx sdpa256_attention (their fused route; Yunshu keeps the stock fallback per chunk)",
         ],
-        "Old invariant receipts have parity and speed advantage, but current-source long-context paired decision is incomplete. Sweep now emits full-token digests and a final complete record; new job repeats 1K/8K/32K/131K code+prose with AR references.",
+        "No Metal receipt: exactness on Apple GPUs rests on batched matmul without split-K, which CPU cannot show; needs the M1-M4 bitwise A/B and peak-memory measurement.",
+    ),
+    "YUNSHU_GPU_SAMPLER": (
+        "gpu_sampler",
+        "pending",
+        [
+            "scripts/research/ab_gpu_sampler.py",
+            "tests/unit/test_gpu_sampler.py (distribution equivalence on a toy vocabulary)",
+            "scripts/realmodel/smoke_gpu_sampler.py (one-prompt smoke, not a decision)",
+        ],
+        "No real-checkpoint receipt: the per-token host sync of the NumPy sampler was measured on CPU only (3.7-21.7 ms per token at 152K-248K vocabulary, host side). Needs the Mac A/B on a text-only checkpoint (decode tok/s, first-token TV against the numpy-vs-numpy noise floor, seeded reruns) before the default can change.",
     ),
     "YUNSHU_QWEN4_LANE": (
         "lane",
@@ -81,6 +90,24 @@ def plan():
             "--require-smoke",
             "/Volumes/P5Plus/yunshu-build/codex/audit-flags/smoke.json",
         ]
+        if area == "gpu_sampler":
+            job = [
+                job[0],
+                "scripts/research/ab_gpu_sampler.py",
+                "--checkpoint",
+                "<text-only mlx-lm checkpoint>",
+                "--out",
+                "/Volumes/P5Plus/yunshu-build/codex/audit-flags/gpu_sampler.json",
+            ]
+        if area == "apc_seam":
+            job = [
+                job[0],
+                "scripts/research/ab_seam_checkpoint.py",
+                "--checkpoint",
+                "<Qwen3.8-27B checkpoint>",
+                "--out",
+                "/Volumes/P5Plus/yunshu-build/codex/audit-flags/apc_seam.json",
+            ]
         if area == "k02":
             job = ["sh", "/Volumes/P5Plus/yunshu-build/codex/k02_matrix.sh"]
         rows.append(

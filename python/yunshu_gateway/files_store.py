@@ -7,7 +7,11 @@ Layout under the store root (default ``~/.yunshu/files``)::
     batches/<id>.json   batch record; ``<id>.in.jsonl`` normalized input,
                         ``<id>.out.jsonl`` / ``<id>.err.jsonl`` partial outputs
 
-Single-consumer model: whoever presents the static token owns every file.
+Ownership: a file records the actor that uploaded it (``owner``; the static token and
+auth-disabled mode are the actor ``owner``, a managed key is ``key:<id>``). A key with only the
+infer scope sees its own files; the static token, auth-disabled mode and admin-scope keys see
+all; files without an owner (stored before this field existed) stay open. A file the caller
+may not see reads as not found.
 Ids are validated against a strict pattern before they ever touch a path, so
 traversal is impossible. All writes are atomic (temp file + ``os.replace``).
 """
@@ -16,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import contextvars
 import copy
 import json
 import mimetypes
@@ -31,6 +36,29 @@ from yunshu_engine import settings
 
 _ID_RE = re.compile(r"^(file|batch|msgbatch)[_-][0-9a-f]{24}$")
 _lock = threading.RLock()
+
+
+def visible_to(meta: dict[str, Any], actor: str, admin: bool) -> bool:
+    """May ``actor`` see this file? Unowned (legacy) files are open; admins see everything."""
+    owner = meta.get("owner")
+    return not owner or admin or owner == actor
+
+
+# (actor, admin) of the request resolving file references; None = no per-caller check
+_ACCESS: contextvars.ContextVar[tuple[str, bool] | None] = contextvars.ContextVar(
+    "yunshu_file_access", default=None
+)
+
+
+@contextlib.contextmanager
+def file_access(actor: str, admin: bool):
+    """Within the block, ``resolve_file_refs`` / ``resolve_file_block`` only see files the
+    caller owns (or all, for an admin)."""
+    token = _ACCESS.set((actor, admin))
+    try:
+        yield
+    finally:
+        _ACCESS.reset(token)
 
 
 class FileStoreError(Exception):
@@ -202,6 +230,7 @@ class FileStore:
         mime_type: str | None = None,
         expires_after: int | None = None,
         downloadable: bool = False,
+        owner: str = "",
     ) -> dict[str, Any]:
         if len(data) > self.max_bytes:
             raise FileTooLarge(self.max_bytes)
@@ -222,6 +251,8 @@ class FileStore:
             "expires_at": expires_at,
             "downloadable": bool(downloadable),
         }
+        if owner:
+            meta["owner"] = owner
         with _lock:
             if self.max_total_bytes:
                 if self.total_bytes() + len(data) > self.max_total_bytes:
@@ -238,6 +269,13 @@ class FileStore:
             except BaseException:
                 self._blob(fid).unlink(missing_ok=True)
                 raise
+        return meta
+
+    def get_meta_for(self, file_id: str, actor: str, admin: bool) -> dict[str, Any]:
+        """``get_meta`` for a caller: a file it may not see reads as not found."""
+        meta = self.get_meta(file_id)
+        if not visible_to(meta, actor, admin):
+            raise FileNotFound(file_id)
         return meta
 
     def get_meta(self, file_id: str) -> dict[str, Any]:
@@ -394,6 +432,9 @@ class FileRefError(FileStoreError):
 def _store_or_error(file_id: str) -> tuple[FileStore, dict[str, Any]]:
     store = get_store()
     try:
+        access = _ACCESS.get()
+        if access is not None:
+            return store, store.get_meta_for(file_id, *access)
         return store, store.get_meta(file_id)
     except FileNotFound:
         raise FileRefError(
@@ -403,6 +444,9 @@ def _store_or_error(file_id: str) -> tuple[FileStore, dict[str, Any]]:
 
 def read_file_bytes(file_id: str) -> bytes:
     try:
+        access = _ACCESS.get()
+        if access is not None:
+            get_store().get_meta_for(file_id, *access)
         return get_store().read(file_id)
     except FileNotFound:
         raise FileRefError(

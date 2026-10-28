@@ -12,7 +12,16 @@ const logs: Shape<typeof zh> = {
   "action.copyLine": "Copy this line",
   "action.jump": "Jump to latest",
   "action.jumpNew": "Jump to latest ({count} new)",
+  "action.showEarlier": "Show {count} earlier lines ({hidden} not shown)",
   copiedAll: "Copied {count, plural, one {# line} other {# lines}}",
+  "previous.title":
+    "{count, plural, one {# line} other {# lines}} from a previous engine process",
+  "previous.show": "Show",
+  "previous.hide": "Hide",
+  "previous.aria": "Log lines from a previous engine process",
+  "previous.ended":
+    "Process ended {at} ({count, plural, one {# line} other {# lines}})",
+  "previous.copy": "Copy these lines",
   copiedLine: "Line copied",
   copyFailed: "Could not write to the clipboard",
   "search.aria": "Search logs",

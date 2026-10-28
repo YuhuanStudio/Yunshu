@@ -167,6 +167,22 @@ def close_reasoning_at_tool_call(text: str, prompt_opens_think: bool) -> str:
     return head + "</think>" + text[idx:]
 
 
+def close_unterminated_reasoning(
+    text: str, prompt_opens_think: bool, constrained: bool = False
+) -> str:
+    """A reply that ends (EOS, stop, length) inside the reasoning block the PROMPT opened has no
+    ``</think>``: all of it is reasoning, not content (the VLM path and the streaming split
+    already agree). Append the missing close so the parser reports it as reasoning. Text that
+    carries any close tag, or that is a structured payload, is returned unchanged. A
+    ``constrained`` request (json_schema / regex / choice / grammar) never reasons: its first
+    token is already the answer (``positive``, ``42``, ``"abc"``), so it is returned unchanged."""
+    if constrained or not prompt_opens_think or not text or not text.strip():
+        return text
+    if _THINK_CLOSE.search(text) or _THINK_OPEN.search(text) or _looks_structured(text):
+        return text
+    return text + "</think>"
+
+
 def tool_call_marker_id(tokenizer) -> int | None:
     """Token id of ``<tool_call>`` when the tokenizer has it as one token, else None."""
     try:

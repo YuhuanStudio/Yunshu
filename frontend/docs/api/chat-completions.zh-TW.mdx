@@ -42,9 +42,9 @@ description: OpenAI Chat Completions 端點，支援 tools、結構化輸出、l
 | `top_p` | number | `1.0` | `0` 至 `1`。 | 支援 |
 | `top_k` | integer | `0` | `0` 表示停用。 | 支援 |
 | `min_p` | number | `0.0` | `0` 至 `1`。 | 支援 |
-| `repetition_penalty` | number | `1.0` | `0` 至 `2`。 | 支援 |
-| `frequency_penalty` | number | `0.0` | `-2` 至 `2`。 | 支援 |
-| `presence_penalty` | number | `0.0` | `-2` 至 `2`。 | 支援 |
+| `repetition_penalty` | number | `1.0` | `0` 至 `2`。非 OpenAI 欄位：沿用 mlx-lm，只看最近 20 個提示詞與生成的 token。 | 支援 |
+| `frequency_penalty` | number | `0.0` | `-2` 至 `2`。與 OpenAI 相同：計入每個已生成的 token（不含提示詞）。 | 支援 |
+| `presence_penalty` | number | `0.0` | `-2` 至 `2`。與 OpenAI 相同：token 一旦生成過就套用。 | 支援 |
 | `logit_bias` | object | 無 | token id 對偏移量的對照，每個值介於 `-100` 至 `100`。鍵為字串形式的 token id。 | 支援 |
 | `seed` | integer | 無 | 64 位元有號整數。讓取樣可重現。 | 支援 |
 | `top_n_sigma` | number | `0.0` | `0` 至 `10`。只保留 logit 落在最大值 n 個標準差內的 token；`0` 為關閉。 | 擴充 |
@@ -341,7 +341,7 @@ print(resp.usage.completion_tokens_details.reasoning_tokens)
 - `usage.completion_tokens` 已經包含推理 token；`reasoning_tokens` 與 `cached_tokens` 是各自總數內的細項，不會另外加總。`cached_tokens` 是由前綴快取提供的提示詞前綴長度。
 - `choices[].logprobs.content[]` 的每一項為 `{token, logprob, bytes, top_logprobs: [{token, logprob, bytes}]}`。
 - `x_yunshu` 是 [API 總覽](/docs/api/overview)中說明的 Yunshu 擴充。當回傳的工具呼叫對應到已設定的 MCP 用戶端的工具，並由閘道代為執行時，會出現 `mcp_tool_results`。
-- `max_tokens: 0` 會立即回傳空訊息、`finish_reason: "length"` 與提示詞的 token 數。
+- `max_tokens` 與 `max_completion_tokens` 小於 1 會回 `400`，與 OpenAI 相同（只有 `/v1/completions` 接受 0，用於 echo 評分）。要計算提示詞長度，請把相同的 `messages` POST 到 `/tokenize`：`count` 就是生成實際會跑的提示詞長度。
 - 若 VLM 的結構化輸出結果仍未通過驗證，會回應 `422` 並附上 `x_yunshu.validation`。
 
 ## 串流

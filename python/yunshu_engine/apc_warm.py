@@ -462,6 +462,15 @@ class WarmTier:
                 best = (key, n, where)
         return best
 
+    def peek_nbytes(self, key: int) -> int | None:
+        """Decoded (HOT) size of an entry, without removing it; None if absent."""
+        with self._lock:
+            inf = self._inflight.get(key)
+        if inf is not None:
+            return inf.raw_nbytes
+        ent = self.entries.get(key)
+        return None if ent is None else ent.raw_nbytes
+
     def take_inflight(self, key: int):
         """The HOT arrays of an entry still being compressed (the encode result is discarded)."""
         with self._lock:

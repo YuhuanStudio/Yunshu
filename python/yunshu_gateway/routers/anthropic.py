@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 _MAX_STREAMING_TEXT_BUFFER = 1 * 1024 * 1024
 _TRUNCATE_KEEP = 512 * 1024
+_TOOL_ARG_CHUNK = 4096  # input_json_delta frame size (the whole call is known; 8-char frames cost ~100x SSE sends)
 import contextlib
 import os
 
@@ -46,6 +47,7 @@ from ..engine import get_engine
 from ..error_envelope import EngineStreamError
 from ..responses_context import ContextError
 from ..streaming import (
+    ClosingStreamingResponse,
     run_with_disconnect_guard,
     with_sse_keepalive,
 )
@@ -173,13 +175,6 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
         get_metrics().record_inference()
     except Exception:
         logger.debug("metrics recording failed", exc_info=True)
-    # feed the per-request TPM box (see usage_context).
-    try:
-        from ..usage_context import record_billed_tokens
-
-        record_billed_tokens((prompt_tokens or 0) + (completion_tokens or 0))
-    except Exception:
-        logger.debug("billed-token accounting failed", exc_info=True)
 
 
 # ── Request / Response schemas ──
@@ -302,6 +297,21 @@ class AnthropicMessagesRequest(BaseModel):
             raise ValueError("stop_sequences: individual sequences must be non-empty")
         if self.stop_token_ids and len(self.stop_token_ids) > 16:
             raise ValueError("stop_token_ids: maximum 16 stop token IDs")
+        # A malformed tool_choice used to fall through as "auto"; Anthropic answers 400.
+        if self.tool_choice is not None:
+            _tc = self.tool_choice
+            _kinds = ("auto", "any", "none", "tool")
+            _kind = _tc.get("type") if isinstance(_tc, dict) else _tc
+            if _kind not in _kinds:
+                raise ValueError(
+                    f"tool_choice.type must be one of {', '.join(_kinds)}, got {_kind!r}"
+                )
+            if _kind == "tool" and not (
+                isinstance(_tc, dict)
+                and isinstance(_tc.get("name"), str)
+                and _tc["name"]
+            ):
+                raise ValueError("tool_choice.name is required when type is 'tool'")
         # Validate thinking configuration per Anthropic spec
         if self.thinking:
             if self.thinking.get("display") not in (
@@ -796,6 +806,26 @@ def _split_thinking(content: list) -> tuple[list, str]:
         elif t != "redacted_thinking":
             keep.append(b)
     return keep, "\n".join(think)
+
+
+def _clamped_thinking_budget(granted: int | None, max_tokens: int) -> int | None:
+    """Thinking budget after the context clamp: strictly below ``max_tokens`` so the answer
+    keeps at least one token (the request validator enforces budget_tokens < max_tokens)."""
+    if granted is None:
+        return None
+    return min(granted, max(1, max_tokens - 1))
+
+
+def _model_reasons_natively(model: str) -> bool:
+    """True when the served model's card says its template reasons natively (opens <think>)."""
+    try:
+        from ..model_cards import engine_card, find_card
+
+        card = find_card(model) or engine_card(None)
+        return bool(card and card.reasoning.get("supported"))
+    except Exception:  # noqa: BLE001 - a card problem must never break serving
+        logger.debug("native reasoning lookup failed", exc_info=True)
+        return False
 
 
 def _thinking_switches(req) -> tuple[bool | None, int | None]:
@@ -1754,17 +1784,20 @@ async def _create_message(
     # Files API references ({"source": {"type": "file", "file_id": ...}}) become inline sources.
     if has_file_refs([m.content for m in req.messages]) or has_file_refs(req.system):
         try:
-            req = req.model_copy(
-                update={
-                    "messages": [
-                        AnthropicMessage(
-                            role=m.role, content=resolve_file_refs(m.content)
-                        )
-                        for m in req.messages
-                    ],
-                    "system": resolve_file_refs(req.system),
-                }
-            )
+            from .responses import _file_access
+
+            with _file_access(request):
+                req = req.model_copy(
+                    update={
+                        "messages": [
+                            AnthropicMessage(
+                                role=m.role, content=resolve_file_refs(m.content)
+                            )
+                            for m in req.messages
+                        ],
+                        "system": resolve_file_refs(req.system),
+                    }
+                )
         except FileRefError as exc:
             return JSONResponse(
                 status_code=exc.status,
@@ -1830,11 +1863,21 @@ async def _create_message(
     _filtered_messages: list[dict] = []
     _in_place = _keeps_mid_system(req.model)
     _lead = True
-    from yunshu_engine.message_adapter import is_token_counter_message
+    from yunshu_engine.message_adapter import (
+        is_token_counter_message,
+        post_tool_note_indexes,
+    )
 
     messages = [m for m in messages if not is_token_counter_message(m)]
-    for msg in messages:
-        if msg.get("role") == "system" and (_lead or not _in_place):
+    # A note right after a tool result stays in place (omlx 5a0a15a7): lifting it into the
+    # system block would rewrite the prompt's front every turn.
+    _post_tool = post_tool_note_indexes(messages)
+    for _idx, msg in enumerate(messages):
+        if (
+            msg.get("role") == "system"
+            and (_lead or not _in_place)
+            and _idx not in _post_tool
+        ):
             _c = msg.get("content", "")
             # With image blocks anywhere in the request every message's content is a list
             # of parts (Claude Code's mid-conversation system reminders included).
@@ -1882,44 +1925,50 @@ async def _create_message(
         and isinstance(req.thinking, dict)
         and req.thinking.get("type") == "enabled"
     ):
-        _budget = req.thinking.get("budget_tokens")
-        _think_instruction = (
-            "\n\nIMPORTANT FORMAT REQUIREMENT: You MUST begin every reply with "
-            "an opening <think> tag, write your private step-by-step reasoning, "
-            "then write a closing </think> tag, and only after that produce the "
-            "final user-facing answer. Do not skip these tags. "
-            "Example shape: <think>...reasoning...</think>final answer."
-        )
-        if isinstance(_budget, int) and _budget > 0:
-            _think_instruction += f" Keep the reasoning inside <think>...</think> to roughly {_budget} tokens."
-        if messages and messages[0].get("role") == "system":
-            messages[0]["content"] = (
-                messages[0].get("content") or ""
-            ) + _think_instruction
-        else:
-            messages.insert(
-                0, {"role": "system", "content": _think_instruction.strip()}
+        # A model whose template already opens <think> (card: reasoning.supported)
+        # reasons natively: enable_thinking/thinking_budget reach its template, and
+        # a prompt instruction or regex grammar would only fight it. Models without
+        # native reasoning get the instruction (and, without tools, the grammar).
+        _native_reasoning = _model_reasons_natively(req.model)
+        if not _native_reasoning:
+            _budget = req.thinking.get("budget_tokens")
+            _think_instruction = (
+                "\n\nIMPORTANT FORMAT REQUIREMENT: You MUST begin every reply with "
+                "an opening <think> tag, write your private step-by-step reasoning, "
+                "then write a closing </think> tag, and only after that produce the "
+                "final user-facing answer. Do not skip these tags. "
+                "Example shape: <think>...reasoning...</think>final answer."
             )
-        # Mark that we requested thinking via prompt injection — used later
-        # to apply a heuristic-based <think> wrapper around the model's
-        # natural reasoning prose if the model declined to emit literal tags.
+            if isinstance(_budget, int) and _budget > 0:
+                _think_instruction += f" Keep the reasoning inside <think>...</think> to roughly {_budget} tokens."
+            if messages and messages[0].get("role") == "system":
+                messages[0]["content"] = (
+                    messages[0].get("content") or ""
+                ) + _think_instruction
+            else:
+                messages.insert(
+                    0, {"role": "system", "content": _think_instruction.strip()}
+                )
+        # Always emit a thinking block (empty placeholder if the model stayed silent):
+        # Anthropic returns one whenever thinking={enabled}.
         req._thinking_prompt_injected = True
-        # When there are no tools and no explicit grammar already requested,
-        # force the model to start with <think>...</think> via a regex
-        # grammar. This is the most reliable way to guarantee the Anthropic
-        # response contains a "thinking" content block.
-        if (
-            not req.tools
-            and getattr(req, "json_schema", None) is None
-            and getattr(req, "grammar", None) is None
-            and getattr(req, "response_format", None) is None
-        ):
-            req._forced_thinking_grammar = {
-                "type": "regex",
-                # Require at least one non-trivial character inside <think>...</think>
-                # so the model can't satisfy the grammar with an empty block.
-                "pattern": r"<think>[\s\S]+?</think>[\s\S]*",
-            }
+        if not _native_reasoning:
+            # When there are no tools and no explicit grammar already requested,
+            # force the model to start with <think>...</think> via a regex
+            # grammar. This is the most reliable way to guarantee the Anthropic
+            # response contains a "thinking" content block.
+            if (
+                not req.tools
+                and getattr(req, "json_schema", None) is None
+                and getattr(req, "grammar", None) is None
+                and getattr(req, "response_format", None) is None
+            ):
+                req._forced_thinking_grammar = {
+                    "type": "regex",
+                    # Require at least one non-trivial character inside <think>...</think>
+                    # so the model can't satisfy the grammar with an empty block.
+                    "pattern": r"<think>[\s\S]+?</think>[\s\S]*",
+                }
 
     # Inject tool definitions into system prompt if provided
     if req.tools:
@@ -2100,6 +2149,11 @@ async def _create_message(
             engine, "tokenizer", None
         )
         _pf_est = count_message_tokens(messages, _pf_tok)
+        if getattr(req, "_native_active", False):
+            # native tool schemas are rendered by the template, outside `messages`
+            from ..token_budget import estimate_tools_tokens
+
+            _pf_est += estimate_tools_tokens(req.tools)
         validate_context_window(_pf_est, req.model, engine)
         validate_prefill_memory(_pf_est)
         from ..token_budget import plan_for_engine
@@ -2112,7 +2166,10 @@ async def _create_message(
             if _th is not None and req.thinking is not None:
                 req.thinking = {
                     **req.thinking,
-                    "budget_tokens": _tb.thinking_budget_granted,
+                    # the validator's own rule: budget_tokens < max_tokens
+                    "budget_tokens": _clamped_thinking_budget(
+                        _tb.thinking_budget_granted, req.max_tokens
+                    ),
                 }
     except HTTPException as e:
         return JSONResponse(
@@ -2145,7 +2202,7 @@ async def _create_message(
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
 
     if req.stream:
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             _stream_anthropic(
                 engine,
                 messages,
@@ -3211,8 +3268,10 @@ async def _stream_anthropic(
                                         and _args_str != "{}"
                                         and not _tc_args_streamed
                                     ):
-                                        for _ci in range(0, len(_args_str), 8):
-                                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + 8]}})}\n\n"
+                                        for _ci in range(
+                                            0, len(_args_str), _TOOL_ARG_CHUNK
+                                        ):
+                                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + _TOOL_ARG_CHUNK]}})}\n\n"
                                     yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                     block_index += 1
                                     tool_use_block_started = False
@@ -3392,8 +3451,8 @@ async def _stream_anthropic(
                                 _tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                                 yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': _tool_id, 'name': _tc_out.tool_call.name, 'input': {}}})}\n\n"
                                 _args_str = _tc_out.tool_call.arguments or "{}"
-                                for _ci in range(0, len(_args_str), 8):
-                                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + 8]}})}\n\n"
+                                for _ci in range(0, len(_args_str), _TOOL_ARG_CHUNK):
+                                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + _TOOL_ARG_CHUNK]}})}\n\n"
                                 yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                 block_index += 1
                                 tool_use_block_started = False
@@ -3476,8 +3535,8 @@ async def _stream_anthropic(
                     _tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                     yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': _tool_id, 'name': _tc_out.tool_call.name, 'input': {}}})}\n\n"
                     _args_str = _tc_out.tool_call.arguments or "{}"
-                    for _ci in range(0, len(_args_str), 8):
-                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + 8]}})}\n\n"
+                    for _ci in range(0, len(_args_str), _TOOL_ARG_CHUNK):
+                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + _TOOL_ARG_CHUNK]}})}\n\n"
                     yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                     block_index += 1
                     tool_use_block_started = False
@@ -3722,14 +3781,19 @@ async def count_tokens(req: AnthropicCountTokensRequest, request: Request):
     from ..files_store import has_file_refs, resolve_file_refs
 
     if has_file_refs([m.content for m in req.messages]):
-        req = req.model_copy(
-            update={
-                "messages": [
-                    AnthropicMessage(role=m.role, content=resolve_file_refs(m.content))
-                    for m in req.messages
-                ]
-            }
-        )
+        from .responses import _file_access
+
+        with _file_access(request):
+            req = req.model_copy(
+                update={
+                    "messages": [
+                        AnthropicMessage(
+                            role=m.role, content=resolve_file_refs(m.content)
+                        )
+                        for m in req.messages
+                    ]
+                }
+            )
     if has_documents([m.content for m in req.messages]):
         req, _ = await prepare_documents(
             req, bool(getattr(get_engine(), "has_vision", False))
@@ -3912,8 +3976,10 @@ async def count_tokens(req: AnthropicCountTokensRequest, request: Request):
     messages.extend(m for m in converted_msgs if m.get("role") != "system")
     try:
         try:
+            from yunshu_engine.special_tokens import neutralize_special_text
+
             prompt = tokenizer.apply_chat_template(
-                messages,
+                neutralize_special_text(messages, tokenizer),
                 tokenize=False,
                 add_generation_prompt=True,
                 **({"tools": _native_tools} if _native_tools else {}),

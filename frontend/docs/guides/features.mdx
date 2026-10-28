@@ -21,7 +21,6 @@ This index lists every shipped feature by area. Each row names the feature, what
 | Structured output | JSON schema, regex, choice and grammar enforced during decoding, including tool arguments | Stable | [Structured output](/docs/guides/structured-output), [Constrained decoding internals](/docs/internals/constrained-decoding) |
 | Lossy memory options | int8 KV, compressed WARM tier and load-time quantization; off by default | Stable | [Options](/docs/guides/options), [Memory accounting](/docs/internals/memory), [Configuration](/docs/guides/configuration) |
 | Large MoE loading (partial) | bits and group size derived from tensor shapes for community DeepSeek-V4-Flash packs; fit check before loading | Partial | [Model support](/docs/guides/model-support) |
-| Round driver (experimental) | own speculative round driver for dense Qwen3.5-family models | Experimental | [Round driver](/docs/developers/round-driver) |
 | Model support | what is tuned, generic and validated, per family | Stable | [Model support](/docs/guides/model-support) |
 | Next-turn rehearsal | Canonical stride APC rehearsal after eligible text replies; boundary/exact are explicit numeric-changing opt-ins | Stable | [Prefill and rehearsal](/docs/internals/prefill-and-rehearsal) |
 | Batch-to-lane promotion | An eligible greedy request moves to speculation when the shared batch drains to one row; multi-row speculation is not implemented | Stable | [Speculative decoding](/docs/internals/speculative-decoding) |

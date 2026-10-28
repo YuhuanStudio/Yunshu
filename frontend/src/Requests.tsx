@@ -1,4 +1,5 @@
 import { prefixHit, prefixHitWindow } from "./request-kpi";
+import { pageOwnsEscape } from "./escape-guard.ts";
 import { liveSlots } from "./live-slots";
 import { FRESH_ROW, useFreshIds } from "./fresh-rows";
 import { ErrorNote } from "./error-note";
@@ -83,7 +84,8 @@ import {
   StatValue,
 } from "./ui";
 import type { Perform } from "./Models";
-import { finishLabel, outcomeLabel, useRecentRequests } from "./recentRequests";
+import { finishLabel, outcomeLabel } from "./recentRequests";
+import { useSignals } from "./signals";
 import {
   RequestBreakdown,
   RequestTimeline,
@@ -273,15 +275,7 @@ export function Requests({
       if (timer) clearTimeout(timer);
     };
   }, [detail?.id, connection.baseUrl, connection.token]);
-  const recent = useRecentRequests(
-    connection,
-    engine.status?.last?.request_id,
-    // A page opened while the engine is away has no status yet, but the console still answers its record.
-    engine.status?.console_process === true ||
-      (engine.status == null &&
-        engine.failures > 0 &&
-        engine.phase !== "unauthorized"),
-  );
+  const { recent } = useSignals();
   const sampled = useMemo(
     () =>
       finishedFromHistory(engine.history).map(
@@ -480,7 +474,8 @@ export function Requests({
   useEffect(() => {
     if (!xl || !detail) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (!pageOwnsEscape(e, !!document.querySelector('[role="dialog"]')))
+        return;
       setDetail(null);
       detailOpener.current?.focus();
     };
@@ -1148,7 +1143,9 @@ export function Requests({
                               <Td
                                 className={`hidden whitespace-nowrap tabular-nums md:table-cell ${slowAt.ttft ? "text-warning" : ""}`}
                                 title={
-                                  slowAt.ttft ? t("requests.list.slowMark") : undefined
+                                  slowAt.ttft
+                                    ? t("requests.list.slowMark")
+                                    : undefined
                                 }
                               >
                                 {percent != null ? (

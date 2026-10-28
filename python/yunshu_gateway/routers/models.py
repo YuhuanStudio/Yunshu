@@ -22,8 +22,7 @@ router = APIRouter(tags=["models"])
 def _check_permission(request: Request, permission: str) -> None:
     """Check auth on gateway endpoints (deny-by-default).
 
-    Single-consumer model: the multi-tenant RBAC machinery is gone, so this
-    enforces the static-token contract.
+    Single-owner model: this enforces the static-token / stored-key contract.
 
     1. If YUNSHU_AUTH_DISABLED=true, allow (dev opt-in, logged at startup)
     2. If YUNSHU_AUTH_TOKEN is set, verify request actually presents it
@@ -88,8 +87,8 @@ def _check_permission(request: Request, permission: str) -> None:
 def _check_model_access(request: Request, model: str | None) -> None:
     """No-op model-access gate (retained as a stable call seam).
 
-    The per-key model-isolation it once enforced was part of the multi-tenant
-    RBAC machinery, which has been removed (single-consumer model). Kept so the
+    There is no per-key model isolation (single-owner model: every
+    authenticated key may use every model). Kept so the
     many model-serving routes that call it stay unchanged.
     """
     return None

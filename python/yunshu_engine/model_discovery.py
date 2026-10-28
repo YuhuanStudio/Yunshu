@@ -211,21 +211,6 @@ def resolve_model_ref(ref: str | None, models_dir: Path | None = None) -> str | 
     return ref
 
 
-def discover_models_from_dirs(model_dirs: list[Path]) -> dict[str, DiscoveredModel]:
-    """Scan multiple directories and merge results (first wins on conflicts)."""
-    merged: dict[str, DiscoveredModel] = {}
-    for d in model_dirs:
-        if not d.exists() or not d.is_dir():
-            continue
-        try:
-            for mid, info in discover_models(d).items():
-                if mid not in merged:
-                    merged[mid] = info
-        except ValueError:
-            continue
-    return merged
-
-
 def _register(
     models: dict[str, DiscoveredModel],
     model_dir: Path,

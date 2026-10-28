@@ -25,7 +25,13 @@ const base = [
   ...Array.from({ length: 60 }, (_, i) => rec(4 + i, "INFO", `step ${i}`)),
 ];
 
-async function mock(page: Page, opts: { logs?: "ok" | 404 | 403 } = {}) {
+async function mock(
+  page: Page,
+  opts: { logs?: "ok" | 404 | 403; rows?: ReturnType<typeof rec>[] } = {},
+) {
+  const rowsAll = opts.rows ?? base;
+  // The ring's newest id, as the real server reports it (the live batches below raise it).
+  const state = { high: rowsAll.length };
   const calls: string[] = [];
   const queue: ReturnType<typeof rec>[] = [];
   const pageErrors: string[] = [];
@@ -49,6 +55,7 @@ async function mock(page: Page, opts: { logs?: "ok" | 404 | 403 } = {}) {
         ": keepalive\n\n" +
         queue
           .splice(0)
+          .map((r) => (state.high = Math.max(state.high, r.id)) && r)
           .map((r) => `id: ${r.id}\ndata: ${JSON.stringify(r)}\n\n`)
           .join("");
       return route.fulfill({
@@ -64,13 +71,13 @@ async function mock(page: Page, opts: { logs?: "ok" | 404 | 403 } = {}) {
       const level = url.searchParams.get("level");
       const q = url.searchParams.get("q");
       const rank: Record<string, number> = { INFO: 20, WARNING: 30, ERROR: 40 };
-      const rows = base.filter(
+      const rows = rowsAll.filter(
         (r) =>
           (!level || rank[r.level] >= rank[level]) && (!q || r.msg.includes(q)),
       );
       return json(route, {
         records: rows,
-        next_id: 63,
+        next_id: state.high,
         dropped: 0,
         capacity: 2000,
         server_time: T + 70,
@@ -78,7 +85,7 @@ async function mock(page: Page, opts: { logs?: "ok" | 404 | 403 } = {}) {
     }
     return json(route, { detail: "nf" }, 404);
   });
-  return { calls, queue, pageErrors };
+  return { calls, queue, pageErrors, state };
 }
 
 test.describe("logs page", () => {
@@ -141,6 +148,63 @@ test.describe("logs page", () => {
     await expect(logs.getByText("while paused")).toHaveCount(0);
     await logs.getByRole("button", { name: "繼續" }).click();
     await expect(logs.getByText("while paused")).toBeVisible({ timeout: 8000 });
+  });
+
+  test("a long log keeps only the newest rows in the page and reveals earlier ones on request", async ({
+    page,
+  }) => {
+    const rows = Array.from({ length: 700 }, (_, i) =>
+      rec(i + 1, "INFO", `row ${i + 1}`),
+    );
+    await mock(page, { rows });
+    await page.goto(LOGS_URL);
+    const logs = page.getByTestId("logs");
+    await expect(logs.getByText("row 700", { exact: true })).toBeVisible();
+    await expect(logs.getByText("row 1", { exact: true })).toHaveCount(0);
+    const scroller = logs.getByTestId("logs-scroller");
+    expect(await scroller.locator("> div").count()).toBeLessThan(320);
+    await logs.getByRole("button", { name: /顯示更早/ }).click();
+    await expect(logs.getByText("row 399", { exact: true })).toHaveCount(1);
+    await expect(logs.getByText("row 700", { exact: true })).toHaveCount(1);
+    // copy still covers every record, not only the rendered ones
+    await logs.getByRole("button", { name: "複製可見行" }).click();
+    const copied = await page.evaluate(() =>
+      (window as unknown as { __copied: string[] }).__copied.at(-1),
+    );
+    expect(copied?.split("\n").length).toBe(700);
+  });
+
+  test("the live tail starts over when the engine restarts (ids begin again at 1)", async ({
+    page,
+  }) => {
+    const m = await mock(page);
+    await page.goto(LOGS_URL);
+    const logs = page.getByTestId("logs");
+    await expect(logs.getByText("step 59")).toBeVisible();
+    m.queue.push(rec(64, "INFO", "before restart"));
+    await expect(logs.getByText("before restart")).toBeVisible({
+      timeout: 8000,
+    });
+    // a new process: the ring begins again; the stream is asked for since_id=0 and replays it
+    m.state.high = 2;
+    m.queue.push(
+      rec(1, "INFO", "boot line one"),
+      rec(2, "INFO", "boot line two"),
+    );
+    await expect(logs.getByText("boot line two")).toBeVisible({
+      timeout: 8000,
+    });
+    // collapsed: the old lines are not in the live list, but they are kept as a previous-process block
+    await expect(logs.getByText("before restart")).toHaveCount(0);
+    const previous = logs.getByTestId("logs-previous");
+    await expect(previous).toBeVisible();
+    await previous.getByRole("button", { name: "顯示" }).click();
+    await expect(
+      previous.getByTestId("logs-previous-list").getByText("before restart"),
+    ).toBeVisible();
+    await expect(
+      logs.getByTestId("logs-scroller").getByText("before restart"),
+    ).toHaveCount(0);
   });
 
   test("copy a line and download the visible lines", async ({ page }) => {

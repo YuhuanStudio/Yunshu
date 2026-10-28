@@ -67,6 +67,12 @@ def _no_m3_idle_probe(monkeypatch):
     monkeypatch.setenv("GPUQ_M3_IDLE_S", "0")
 
 
+@pytest.fixture(autouse=True)
+def _mcp_connector_loopback(monkeypatch):
+    """The fake MCP servers in the tests listen on 127.0.0.1; the product default blocks that."""
+    monkeypatch.setenv("YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE", "1")
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _fast_drain():
     """Zero drain timeout for all tests — avoids 30s wait on app teardown."""
@@ -168,3 +174,49 @@ def _restore_gateway_engine_globals():
             for n in names:
                 if hasattr(mod, n):
                     setattr(mod, n, None)
+
+
+@pytest.fixture(autouse=True)
+def _restore_mlx_default_device():
+    """A test that moves MLX to the CPU must not leave it there: a later test's Metal kernels would then run
+    on the CPU (test_lane_linear failed only in suite order this way). A stub mlx.core some tests swap in is
+    left alone."""
+
+    def real_mx():
+        mx = _sys.modules.get("mlx.core")
+        if hasattr(mx, "default_device") and hasattr(mx, "set_default_device"):
+            return mx
+        return None
+
+    mx = real_mx()
+    previous = mx.default_device() if mx is not None else None
+    yield
+    mx = real_mx()
+    if mx is None:
+        return
+    if previous is None:
+        # mlx was first imported during this test; the process default before it was the GPU when there is one
+        previous = mx.gpu if mx.metal.is_available() else mx.cpu
+    if mx.default_device() != previous:
+        mx.set_default_device(previous)
+
+
+@pytest.fixture(autouse=True)
+def _yunshu_loggers_inherit_levels():
+    """Each test starts with the yunshu_* package loggers at NOTSET, so ``caplog.at_level(DEBUG)`` reaches them: an earlier
+    import or test that configured them (the gateway sets yunshu_engine to INFO) made caplog miss DEBUG lines in
+    suite order only (test_shortdecode_probe, test_vlm_next_turn). Their levels are restored afterwards."""
+    import logging
+
+    loggers = [
+        lg
+        for name, lg in logging.root.manager.loggerDict.items()
+        # package loggers only: "yunshu.audit" is INFO by design from import time and must keep it
+        if name.startswith("yunshu_") and isinstance(lg, logging.Logger)
+    ]
+    saved = [(lg, lg.level) for lg in loggers]
+    for lg in loggers:
+        lg.setLevel(logging.NOTSET)
+    yield
+    for lg, level in saved:
+        lg.setLevel(level)

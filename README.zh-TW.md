@@ -60,7 +60,6 @@ Yunshu 提供的所有能力，分組列出。每一列連到有範例與限制�
 | [結構化輸出](docs/guides/INFERENCE.md) | JSON schema、regex、選項與文法在解碼時強制，含工具參數 |
 | [有損記憶體選項](docs/guides/INFERENCE.md) | int8 KV、壓縮 WARM 層與載入時量化；預設關閉 |
 | [大型 MoE 載入（部分）](docs/guides/INFERENCE.md) | 社群 DeepSeek-V4-Flash 權重包的位元與 group size 由張量形狀推得；載入前有容納檢查 |
-| [Round driver（實驗）](docs/guides/ROUND_DRIVER.md) | 稠密 Qwen3.5 系列模型的自有推測回合驅動 |
 | [Neural Engine FFN 分擔（實驗、有損）](docs/guides/ANE_FFN_SPLIT.md) | 選用：27B prefill 時，把每層稠密 FFN 的 W8A8 一部分交給 Apple Neural Engine 與 GPU 並行（Splash 方案）；冷 TTFT 約降 5 至 10% |
 | [模型支援](docs/guides/MODEL_SUPPORT.md) | 各系列哪些是調校、通用與已驗證 |
 | [下一輪預填](docs/guides/INFERENCE.md) | 符合條件的文字回覆以標準 stride 邊界預填 APC；boundary/exact 會改變數值運算，須明確選用 |
@@ -276,7 +275,11 @@ token，所以一般的前綴快取無法使用。Yunshu 在前綴邊界保存**
 
 重複或修改過的長 prompt、多輪對話與 agent 迴圈，會從最近的 checkpoint 還原，不必重新預填。
 對話變長時，同一段對話較舊的 checkpoint 會被取代，不會越堆越多。`yunshu cache status` 與
-`yunshu cache gc` 可檢視與清理 SSD 快取。
+`yunshu cache gc` 可檢視與清理 SSD 快取。SSD 命中會經由 MLX 原生的 safetensors 讀取器還原
+（32K 命中的 TTFT 由 440 ms 降到 272 ms）。在通過驗證的 27B / M5 Max 路徑上，預填預設為 split-invariant：
+checkpoint 位於絕對 64-token 邊界，所以快取命中或下一輪預填過的前綴，產生的 token 與冷預填相同
+（[詳情](docs/guides/INFERENCE.md#split-invariant-prefill-and-idle-keep-warm)）。記憶體吃緊的主機：設定
+`YUNSHU_VLM_APC_MEMORY_GB=4` 與 `YUNSHU_PREFILL_BUFFER_CACHE_GB=1`（27B 峰值 37.2 -> 31.5 GiB）；128 GB 主機維持預設值。
 
 ### 結構化輸出
 

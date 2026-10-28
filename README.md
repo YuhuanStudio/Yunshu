@@ -65,7 +65,6 @@ Everything Yunshu serves, grouped. Each row links to the guide with an example a
 | [Structured output](docs/guides/INFERENCE.md) | JSON schema, regex, choice and grammar enforced during decoding, including tool arguments |
 | [Lossy memory options](docs/guides/INFERENCE.md) | int8 KV, compressed WARM tier and load-time quantization; off by default |
 | [Large MoE loading (partial)](docs/guides/INFERENCE.md) | bits and group size derived from tensor shapes for community DeepSeek-V4-Flash packs; fit check before loading |
-| [Round driver (experimental)](docs/guides/ROUND_DRIVER.md) | own speculative round driver for dense Qwen3.5-family models |
 | [Neural Engine FFN split (experimental, lossy)](docs/guides/ANE_FFN_SPLIT.md) | opt-in W8A8 share of each dense FFN layer on the Apple Neural Engine beside the GPU during 27B prefill (Splash scheme); cold TTFT -5 to -10% |
 | [Model support](docs/guides/MODEL_SUPPORT.md) | what is tuned, generic and validated, per family |
 | [Next-turn rehearsal](docs/guides/INFERENCE.md) | Canonical stride APC rehearsal after eligible text replies; boundary/exact are explicit numeric-changing opt-ins |

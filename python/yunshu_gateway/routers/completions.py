@@ -15,7 +15,7 @@ import uuid
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from yunshu_engine.output_limits import (
@@ -45,6 +45,7 @@ _TRUNCATE_KEEP = 512 * 1024
 import contextlib
 
 from ..streaming import (
+    ClosingStreamingResponse,
     format_openai_completion_chunk,
     format_openai_completion_usage_chunk,
     format_openai_done,
@@ -145,13 +146,6 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
         )
     except Exception:
         logger.debug("metrics recording failed", exc_info=True)
-    # feed the per-request TPM box (see usage_context).
-    try:
-        from ..usage_context import record_billed_tokens
-
-        record_billed_tokens((prompt_tokens or 0) + (completion_tokens or 0))
-    except Exception:
-        logger.debug("billed-token accounting failed", exc_info=True)
 
 
 class StreamOptions(BaseModel):
@@ -585,7 +579,7 @@ async def create_completion(req: CompletionRequest, request: Request):
     )
 
     if req.stream:
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             _stream_completion(
                 engine,
                 prompt,

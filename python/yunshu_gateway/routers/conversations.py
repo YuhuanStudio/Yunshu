@@ -91,12 +91,31 @@ def _int_param(request: Request, name: str, default: int, lo: int, hi: int) -> i
     return v
 
 
+async def _gate(request: Request, conversation_id: str) -> None:
+    """A conversation another infer key owns reads as not found."""
+    from .responses import _is_admin, _resolve_owner
+
+    await _io(
+        get_store().check_access,
+        conversation_id,
+        _resolve_owner(request),
+        _is_admin(request),
+    )
+
+
 @router.post("/conversations")
 async def create_conversation(request: Request):
     _check_permission(request, "can_infer")
     try:
+        from .responses import _resolve_owner
+
         body = await _body(request)
-        return await _io(get_store().create, body.get("items"), body.get("metadata"))
+        return await _io(
+            get_store().create,
+            body.get("items"),
+            body.get("metadata"),
+            _resolve_owner(request),
+        )
     except ConversationError as exc:
         return _err(exc)
 
@@ -105,6 +124,7 @@ async def create_conversation(request: Request):
 async def get_conversation(conversation_id: str, request: Request):
     _check_permission(request, "can_infer")
     try:
+        await _gate(request, conversation_id)
         return await _io(get_store().get, conversation_id)
     except ConversationError as exc:
         return _err(exc)
@@ -114,6 +134,7 @@ async def get_conversation(conversation_id: str, request: Request):
 async def update_conversation(conversation_id: str, request: Request):
     _check_permission(request, "can_infer")
     try:
+        await _gate(request, conversation_id)
         body = await _body(request)
         if "metadata" not in body:
             raise ConversationError(
@@ -128,6 +149,7 @@ async def update_conversation(conversation_id: str, request: Request):
 async def delete_conversation(conversation_id: str, request: Request):
     _check_permission(request, "can_infer")
     try:
+        await _gate(request, conversation_id)
         await _io(get_store().delete, conversation_id)
     except ConversationError as exc:
         return _err(exc)
@@ -138,6 +160,7 @@ async def delete_conversation(conversation_id: str, request: Request):
 async def create_items(conversation_id: str, request: Request):
     _check_permission(request, "can_infer")
     try:
+        await _gate(request, conversation_id)
         body = await _body(request)
         items = body.get("items")
         if not isinstance(items, list):
@@ -162,6 +185,7 @@ async def create_items(conversation_id: str, request: Request):
 async def list_items(conversation_id: str, request: Request):
     _check_permission(request, "can_infer")
     try:
+        await _gate(request, conversation_id)
         limit = _int_param(request, "limit", 20, 1, 100)
         order = request.query_params.get("order", "desc")
         if order not in ("asc", "desc"):
@@ -183,6 +207,7 @@ async def list_items(conversation_id: str, request: Request):
 async def get_item(conversation_id: str, item_id: str, request: Request) -> Any:
     _check_permission(request, "can_infer")
     try:
+        await _gate(request, conversation_id)
         return await _io(get_store().get_item, conversation_id, item_id)
     except ConversationError as exc:
         return _err(exc)
@@ -192,6 +217,7 @@ async def get_item(conversation_id: str, item_id: str, request: Request) -> Any:
 async def delete_item(conversation_id: str, item_id: str, request: Request):
     _check_permission(request, "can_infer")
     try:
+        await _gate(request, conversation_id)
         return await _io(get_store().delete_item, conversation_id, item_id)
     except ConversationError as exc:
         return _err(exc)

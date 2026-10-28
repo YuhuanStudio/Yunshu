@@ -45,7 +45,7 @@ curl http://localhost:8000/v1/models -H "x-api-key: $YUNSHU_AUTH_TOKEN"
 
 两个请求头都存在时，采用 `Authorization: Bearer` 的值。比较采用常数时间。缺少 token 时返回 `401`，消息为 `Missing or invalid Authorization header`；token 错误时返回 `401`，消息为 `Invalid or missing API key`。两者都会带 `WWW-Authenticate: Bearer` 头。
 
-具名 API 密钥使用相同标头；`infer` 与 `admin` 限制访问范围，过期或撤销的密钥无效，超出配额返回 `429`。密钥共享这台服务器的数据，没有租户隔离。
+具名 API 密钥使用相同标头；`infer` 与 `admin` 限制访问范围，过期或撤销的密钥无效，超出配额返回 `429`。密钥共享这台服务器的数据，但 Files 与 Conversations 除外：infer 密钥只看得到自己的。
 
 <Callout type="info">
 没有设置 token 与 API 密钥时，SDK 发送的密钥会被忽略，所以 `not-needed` 或 `sk-local` 之类的任何占位字符串都可以。要让服务器对外网开放之前，请保持默认的 localhost 绑定，或先设置 token。

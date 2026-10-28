@@ -299,6 +299,7 @@ class BatchRunner:
                         f"{rec['id']}_{'output' if kind == 'out' else 'error'}.jsonl",
                         "batch_output" if kind == "out" else "batch_error",
                         "application/x-jsonl",
+                        owner=rec.get("owner") or "",
                     )["id"]
         ts_key = {
             "completed": "completed_at",
@@ -356,6 +357,16 @@ def _submitter(request: Request) -> str | None:
     return cast("str | None", principal.key_id or principal.name)
 
 
+def _actor(request) -> tuple[str, bool]:
+    from .responses import _is_admin, _resolve_owner
+
+    return _resolve_owner(request), _is_admin(request)
+
+
+def _owner(request) -> str:
+    return _actor(request)[0] if request is not None else ""
+
+
 def _new_record(api: str, prefix: str, request: Request, total: int) -> dict[str, Any]:
     now = int(time.time())
     return {
@@ -375,6 +386,7 @@ def _new_record(api: str, prefix: str, request: Request, total: int) -> dict[str
         "errors": None,
         "output_file_id": None,
         "error_file_id": None,
+        "owner": _owner(request),
         "metadata": None,
         "total": total,
         "counts": {"succeeded": 0, "errored": 0, "canceled": 0, "expired": 0},
@@ -551,7 +563,7 @@ async def create_batch(request: Request):
             False,
         )
     try:
-        info = store.get_meta(fid)
+        info = store.get_meta_for(fid, *_actor(request))
         if info["purpose"] != "batch":
             return error_response(
                 request,

@@ -1,3 +1,4 @@
+import { createDeltaBatcher } from "./delta-batch.ts";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   CustomSelect,
@@ -68,7 +69,7 @@ import {
   DIALECT_LABEL,
   type CodeLanguage,
 } from "./playground-code";
-import { loadModel, type Connection } from "./api";
+import { cancelRequest, loadModel, type Connection } from "./api";
 import {
   LocalModelIcon,
   modelLabel,
@@ -299,9 +300,7 @@ function ReplyBody({
       {!waiting && (
         <Suspense
           fallback={
-            <div className="whitespace-pre-wrap text-sm leading-7">
-              {shown}
-            </div>
+            <div className="whitespace-pre-wrap text-sm leading-7">{shown}</div>
           }
         >
           <Markdown
@@ -378,12 +377,26 @@ export function Playground({
   const setError = (message: string) =>
     setErrorState(message ? { message } : null);
   const controller = useRef<AbortController | null>(null),
+    // X-Request-ID of the generation in flight, so Stop can cancel it server-side too.
+    inflightId = useRef<string | null>(null),
+    connectionRef = useRef(connection),
     mounted = useRef(true);
+  connectionRef.current = connection;
+  /** Abort the fetch and tell the engine to stop decoding: a dropped connection alone
+   *  leaves the request parked for orphan adoption, still generating. */
+  const stopRun = () => {
+    const id = inflightId.current;
+    controller.current?.abort();
+    if (id)
+      void cancelRequest(connectionRef.current, id, { timeoutMs: 5000 }).catch(
+        () => {},
+      );
+  };
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      controller.current?.abort();
+      stopRun();
     };
   }, []);
   useEffect(() => () => toast.dismiss(UNDO_TOAST_ID), []);
@@ -398,7 +411,7 @@ export function Playground({
         document.querySelector('[role="dialog"]')
       )
         return;
-      controller.current.abort();
+      stopRun();
     };
     addEventListener("keydown", onKey);
     if (matchMedia("(pointer: fine)").matches)
@@ -547,6 +560,39 @@ export function Playground({
       timing: { ...timing },
       wantedLogprobs: logprobs && dialect === "chat",
     }));
+    // Chunks are applied once per animation frame: a long reply is not re-rendered (and its
+    // Markdown re-parsed) per network chunk, and the logprob array is extended once per frame.
+    const batcher = createDeltaBatcher<{
+      content: string;
+      reasoning: string;
+      finishReason?: string | null;
+      tokens: TokenLogprob[];
+    }>(
+      (p, n) =>
+        p
+          ? {
+              content: p.content + n.content,
+              reasoning: p.reasoning + n.reasoning,
+              finishReason: n.finishReason ?? p.finishReason,
+              tokens: n.tokens.length ? p.tokens.concat(n.tokens) : p.tokens,
+            }
+          : n,
+      (b) => {
+        if (!mounted.current) return;
+        patch((m) => ({
+          ...m,
+          content: m.content + b.content,
+          reasoning: (m.reasoning ?? "") + b.reasoning,
+          finishReason: b.finishReason ?? m.finishReason,
+          tokens: b.tokens.length
+            ? (m.tokens ?? []).concat(b.tokens)
+            : m.tokens,
+          timing: { ...timing },
+        }));
+      },
+    );
+    const requestId = crypto.randomUUID();
+    inflightId.current = requestId;
     try {
       await streamCompletion(
         connection,
@@ -560,27 +606,25 @@ export function Playground({
           }
           if (delta.reasoning && !delta.content && timing.thinkEnd == null)
             timing.thinkStart ??= t;
-          if (delta.content && timing.thinkStart != null)
-            timing.thinkEnd ??= t;
+          if (delta.content && timing.thinkStart != null) timing.thinkEnd ??= t;
           if (delta.usage) timing.usage = { ...timing.usage, ...delta.usage };
-          patch((m) => ({
-            ...m,
-            content: m.content + (delta.content ?? ""),
-            reasoning: (m.reasoning ?? "") + (delta.reasoning ?? ""),
-            finishReason: delta.finishReason ?? m.finishReason,
-            tokens: delta.tokens
-              ? [...(m.tokens ?? []), ...delta.tokens]
-              : m.tokens,
-            timing: { ...timing },
-          }));
+          batcher.push({
+            content: delta.content ?? "",
+            reasoning: delta.reasoning ?? "",
+            finishReason: delta.finishReason,
+            tokens: delta.tokens ?? [],
+          });
         },
         c.signal,
         dialect,
+        requestId,
       );
+      batcher.flush();
       timing.endAt = performance.now();
       if (timing.thinkStart != null) timing.thinkEnd ??= timing.endAt;
       if (mounted.current) patch((m) => ({ ...m, timing: { ...timing } }));
     } catch (e) {
+      batcher.flush();
       timing.endAt = performance.now();
       if (mounted.current) {
         setErrorState(
@@ -590,6 +634,8 @@ export function Playground({
         );
         patch((m) => ({ ...m, incomplete: true, timing: { ...timing } }));
       }
+    } finally {
+      if (inflightId.current === requestId) inflightId.current = null;
     }
   }
   async function send() {
@@ -1247,7 +1293,7 @@ export function Playground({
           value={draft}
           onChange={setDraft}
           onSend={() => void send()}
-          onStop={() => controller.current?.abort()}
+          onStop={stopRun}
           loading={loading}
           sendDisabled={
             !canSend || readingImage || (hasImage && !supportsImage)

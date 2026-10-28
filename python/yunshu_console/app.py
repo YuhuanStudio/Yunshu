@@ -237,6 +237,11 @@ def create_app(
         lifespan=lifespan,
     )
     app.add_middleware(StampConsole)
+    # The console proxies to the engine with Host/Origin dropped, so the engine cannot tell a
+    # rebinding page from the console UI: refuse it here, at the browser-facing port.
+    from yunshu_gateway.middleware.host_guard import HostGuardMiddleware
+
+    app.add_middleware(HostGuardMiddleware)
     app.state.store = store
     app.state.poller = poller
     app.state.http = http

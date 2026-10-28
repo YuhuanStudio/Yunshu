@@ -57,7 +57,36 @@ def _canonical_block_hash(
     return compute_block_hash(parent_hash, token_ids)
 
 
-def get_prefix_length(prompt: mx.array, cached_prompt: mx.array) -> int:
+def recurrent_state_finite_flag(cache):
+    """Lazy scalar bool (``mx.array``) that is True when every floating recurrent-state array
+    (mlx-lm ``ArraysCache``) of ``cache`` is finite; ``None`` when there is nothing to inspect.
+    Builds graph only (no evaluation, no host sync), so a caller mid-prefill can defer the read."""
+    try:
+        from mlx_lm.models.cache import ArraysCache
+    except Exception:  # no mlx-lm: nothing recurrent to inspect
+        return None
+    checks = [
+        mx.isfinite(a).all()
+        for c in cache or ()
+        if isinstance(c, ArraysCache)
+        for a in (getattr(c, "cache", None) or ())
+        if a is not None and mx.issubdtype(a.dtype, mx.floating)
+    ]
+    if not checks:
+        return None
+    return mx.all(mx.stack(checks))
+
+
+def recurrent_state_finite(cache) -> bool:
+    """False when any floating recurrent-state array (mlx-lm ``ArraysCache``) of ``cache`` holds
+    inf or nan. One fused reduction and one host sync; dense KV layers are not inspected. A state
+    that overflowed in fp16 would poison every request that restores it. Mid-prefill boundary
+    snapshots use ``KVPrefixCache.add(..., defer_finite_check=True)`` instead (no sync there)."""
+    flag = recurrent_state_finite_flag(cache)
+    return True if flag is None else bool(flag.item())
+
+
+def get_prefix_length(prompt: Any, cached_prompt: Any) -> int:
     """Find the length of the common prefix between two token arrays.
 
     PERF: done on the CPU via numpy, NOT MLX. The old version ran
@@ -128,13 +157,9 @@ def _compute_block_hashes(tokens) -> list[int]:
     Uses the canonical hash from yunshu_kv.hash for cross-subsystem
     compatibility.
     """
-    hashes = []
-    parent: int | None = None
-    for i in range(0, len(tokens), _BLOCK_SIZE):
-        block = tokens[i : i + _BLOCK_SIZE]
-        parent = _canonical_block_hash(parent, block)
-        hashes.append(parent)
-    return hashes
+    from yunshu_kv.hash import compute_chain_hashes
+
+    return compute_chain_hashes(tokens, _BLOCK_SIZE, partial_tail=True)
 
 
 # ── Eviction Strategies ──────────────────────────────────────────────────────
@@ -305,6 +330,33 @@ def _local_signature(model_name: str) -> str | None:
     return checkpoint_fingerprint(model_name, digest_size=8)
 
 
+class _StoreOffView:
+    """A request's view of the text prefix cache that looks up but never stores
+    (``X-Yunshu-Cache-Store: off``; omlx c4bb311e). Everything but ``add`` is the cache's."""
+
+    __slots__ = ("_inner",)
+
+    def __init__(self, inner):
+        object.__setattr__(self, "_inner", inner)
+
+    def add(self, *args, **kwargs) -> None:
+        return None
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def __setattr__(self, name, value):
+        setattr(self._inner, name, value)
+
+
+def store_opt_out(prefix_cache, cancel_event):
+    """``prefix_cache`` itself, or a lookup-only view when the request opted out of storing
+    (the gateway puts ``cache_store=False`` on the request's cancel event)."""
+    if prefix_cache is None or getattr(cancel_event, "cache_store", True):
+        return prefix_cache
+    return _StoreOffView(prefix_cache)
+
+
 class KVPrefixCache:
     """Cache prefilled KV states keyed by prompt token prefix.
 
@@ -357,6 +409,8 @@ class KVPrefixCache:
         self._access_counts: list[int] = []  # For SLRU promotion tracking
         # Hash-chain prefix index: block_hash → (entry_index, block_index)
         self._hash_index: dict[str, int] = {}
+        # (token hash, lazy finite flag) of deferred-check boundary snapshots, see add()
+        self._pending_finite: list[tuple[str, mx.array]] = []
         self._prefix_index: dict[int, list[tuple[int, int]]] = {}
         # Block dedup: block_hash → reference count (COW)
         self._block_refcount: dict[int, int] = {}
@@ -435,8 +489,15 @@ class KVPrefixCache:
         self,
         prompt_tokens: mx.array,
         cache: list,
+        *,
+        defer_finite_check: bool = False,
     ) -> None:
         """Store a completed request's KV cache.
+
+        ``defer_finite_check``: mid-prefill boundary snapshots (hybrid fast path) keep the
+        prefill graph lazy on purpose, so the non-finite recurrent-state guard is built as a lazy
+        flag here and read in ONE batch at the next point that syncs anyway (the next ``get`` or
+        checked ``add``); a poisoned entry is dropped then, before anything can restore it.
 
         IMPORTANT: cache may contain MORE entries than prompt_tokens when the
         caller has already advanced through generated tokens (BatchedEngine
@@ -447,6 +508,19 @@ class KVPrefixCache:
         state leakage).
         """
         if len(prompt_tokens) < self._min_prefix:
+            return
+        pending_flag = None
+        if defer_finite_check:
+            pending_flag = recurrent_state_finite_flag(cache)
+        else:
+            self.resolve_pending_finite()  # this store syncs anyway: settle earlier flags too
+        if not defer_finite_check and not recurrent_state_finite(cache):
+            # Every route stores through here (fast, stream, n-gram, speculative, loop).
+            logger.warning(
+                "KV prefix cache: not storing a %d-token entry with a non-finite "
+                "recurrent state",
+                len(prompt_tokens),
+            )
             return
 
         # Compute trim amount: how many tokens cache is ahead of prompt
@@ -503,6 +577,11 @@ class KVPrefixCache:
             self._access_counts.append(1)
             self._maybe_demote_to_warm()
             self._hash_index[h] = idx
+            if pending_flag is not None:
+                self._pending_finite.append((h, pending_flag))
+                del self._pending_finite[
+                    :-64
+                ]  # bounded: oldest unread flags are dropped
 
             # Add to prefix index with block dedup refcounting
             for bi, bh in enumerate(block_hashes):
@@ -517,6 +596,33 @@ class KVPrefixCache:
             )
 
         mx.eval(prompt_copy)
+
+    def resolve_pending_finite(self) -> int:
+        """Read the deferred non-finite flags in one evaluation and drop every poisoned entry.
+        Returns the number dropped. Cheap no-op when nothing is pending."""
+        with self._lock:
+            pending, self._pending_finite = self._pending_finite, []
+            if not pending:
+                return 0
+            try:
+                mx.eval(*[f for _, f in pending])
+                bad = [h for h, f in pending if not bool(f.item())]
+            except Exception:
+                logger.debug("deferred finite check failed", exc_info=True)
+                bad = [h for h, _ in pending]  # unverifiable: do not keep
+            dropped = 0
+            for h in bad:
+                idx = self._hash_index.get(h)
+                if idx is not None:
+                    self._remove_entry(idx)
+                    dropped += 1
+            if dropped:
+                logger.warning(
+                    "KV prefix cache: dropped %d boundary snapshot(s) with a non-finite "
+                    "recurrent state",
+                    dropped,
+                )
+            return dropped
 
     def note_prefill_tps(self, tps: float) -> None:
         """Feed the engine's observed cold-prefill throughput (tokens/sec) so the
@@ -557,6 +663,7 @@ class KVPrefixCache:
             (cached_kv, remaining_token_count, matched_token_count)
             cached_kv is None if no useful match found.
         """
+        self.resolve_pending_finite()
         with self._lock:
             self._total_lookups += 1
             _t0 = time.perf_counter()
@@ -612,6 +719,9 @@ class KVPrefixCache:
                             "exact-hit refeed trim failed — signalling full prefill",
                             exc_info=True,
                         )
+                        # A hit counts only once the reuse is accepted (omlx 5628bb7e): this
+                        # lookup ends as a miss.
+                        self._total_hits -= 1
                         return None, 0, 0
             return result
 
@@ -633,12 +743,18 @@ class KVPrefixCache:
             return None, len(prompt_tokens), 0
         best_index = -1
         best_length = 0
+        # Convert the query to numpy once (get_prefix_length's np.asarray is then a no-op per entry).
+        query_np = None
         for i, cached_prompt in enumerate(self._prompts):
             clen = len(cached_prompt)
             # Only consider entries that fit and improve on the best so far.
             if clen <= best_length or clen > len(prompt_tokens):
                 continue
-            matched = get_prefix_length(prompt_tokens, cached_prompt)
+            if query_np is None:
+                import numpy as np
+
+                query_np = np.asarray(prompt_tokens)
+            matched = get_prefix_length(query_np, cached_prompt)
             # Require the WHOLE stored entry to be a prefix of the query
             # (matched == clen) → reuse with zero trim.
             if matched == clen and matched >= self._min_prefix:
@@ -742,6 +858,15 @@ class KVPrefixCache:
                     # KV entries from a previous request's generation.
                     cached_len = cache_length(cached)
                     tokens_to_trim = max(0, cached_len - matched)
+                    if cached_len < matched:
+                        # The snapshot holds fewer tokens than its key (ollama
+                        # b859a945 class): never report a hit over positions it lacks.
+                        logger.warning(
+                            "KV prefix cache exact match skipped: snapshot holds %d of %d tokens",
+                            cached_len,
+                            matched,
+                        )
+                        return None, len(prompt_tokens), 0
                     try:
                         result = self._snapshot_cache(cached, trim=tokens_to_trim)
                     except Exception:
@@ -833,11 +958,20 @@ class KVPrefixCache:
         # Slow path: vectorized scan (fallback for short prefixes)
         best_index = -1
         best_length = 0
+        query_np = None
 
         for i, cached_prompt in enumerate(self._prompts):
             if len(cached_prompt) <= best_length:
                 continue
-            length = get_prefix_length(prompt_tokens, cached_prompt)
+            if query_np is None:
+                import numpy as np
+
+                query_np = np.asarray(prompt_tokens)
+            # never more than the snapshot holds (the hash-chain path caps the same way)
+            length = min(
+                get_prefix_length(query_np, cached_prompt),
+                cache_length(self._caches[i]),
+            )
             if length > best_length:
                 best_index = i
                 best_length = length

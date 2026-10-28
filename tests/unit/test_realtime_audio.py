@@ -348,6 +348,7 @@ class TestSessionConfig:
             "output_audio_format",
             "turn_detection",
             "input_audio_noise_reduction",
+            "input_audio_transcription",
             "max_response_output_tokens",
             "temperature",
             "tools",

@@ -46,7 +46,9 @@ class TestComputeAdaptiveDefaults:
         overrides = compute_adaptive_defaults(hw)
         assert overrides["batch_size"] == 1
         assert overrides["memory_pressure_threshold"] == 70.0
-        assert overrides["kv_cache_quant_bits"] == 4
+        assert (
+            "kv_cache_quant_bits" not in overrides
+        )  # lossy KV is opt-in on every tier
         assert overrides["prefix_cache_max_entries"] == 16
         assert overrides["prefill_chunk_size"] == 1024
         assert overrides["ssd_cache_enabled"] is True

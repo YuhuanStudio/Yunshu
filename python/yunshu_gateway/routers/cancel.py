@@ -147,7 +147,7 @@ async def cancel_generation(req: CancelRequest, request: Request):
 @router.get("/active-generations")
 async def list_active_generations(request: Request):
     """List currently active (in-progress) generations — the caller's own unless
-    admin (was leaking every tenant's live request_id + model)."""
+    admin (otherwise every key's live request_id + model would leak)."""
     _check_auth(request)
     actor = resolve_actor(request)
     is_admin = _is_admin(request)
@@ -156,7 +156,7 @@ async def list_active_generations(request: Request):
 
     tracker = get_request_tracker()
     active = tracker.list_active()
-    # Don't disclose other tenants' in-flight requests. Mirror the per-request
+    # Don't disclose other keys' in-flight requests. Mirror the per-request
     # cancel ownership semantics: deny only entries owned by a DIFFERENT actor
     # (owner None = best-effort/unattributed → visible, matching cancel).
     if not is_admin and hasattr(tracker, "get_owner"):

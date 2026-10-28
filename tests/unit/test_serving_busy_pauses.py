@@ -69,32 +69,16 @@ def test_idle_fraction_missing_data_is_none():
     assert busy_time.window_idle_fraction(5, 10, 8, 20) == pytest.approx(0.7)
 
 
-def test_runner_slice_and_driver_step_are_metered():
+def test_runner_slice_is_metered():
     from yunshu_engine.vlm_batch_runner import VLMBatchRunner
 
     c = Clock()
     runner = VLMBatchRunner(model=None, processor=None)
     runner.busy_meter = busy_time.BusyMeter(c)
-    runner.driver_busy_meter = busy_time.BusyMeter(c)
-
-    class Driver:
-        def step(self):
-            c.t += 0.5
-            return []
-
-    runner.driver = Driver()
-    runner._driver_jobs = {}
-    runner._note_driver_prefill = lambda driver=None: None
-    runner._driver_jobs[1] = type(
-        "J", (), {"abandoned": False, "cancel_event": None, "stats": None}
-    )()
-    runner._step_driver()
-    assert runner.driver_busy_meter.busy_seconds() == 0.5
     # a whole slice with nothing pending costs (fake) zero but is counted as a span
-    runner._driver_jobs.clear()
     runner._drive_slice(resubmit=False)
     snap = runner.busy_snapshot()
-    assert snap["slices"]["spans"] == 1 and snap["round_driver"]["busy_seconds"] == 0.5
+    assert snap["slices"]["spans"] == 1 and "round_driver" not in snap
 
 
 # ── pause contract ──────────────────────────────────────────────────────

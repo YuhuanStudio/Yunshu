@@ -62,3 +62,13 @@ export function setRememberedToken(
 }
 
 export const forgetRememberedToken = () => setRememberedToken("", null);
+
+/** Persist a token the user asked to remember, but only once the connection actually took it. */
+export function rememberIfApplied(
+  applied: boolean,
+  remember: boolean,
+  baseUrl: string,
+  token: string,
+): boolean {
+  return applied && remember ? setRememberedToken(baseUrl, token) : false;
+}

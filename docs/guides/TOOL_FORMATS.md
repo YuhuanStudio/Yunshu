@@ -15,7 +15,7 @@ of multiple tokenizer tokens. The XML-like and Python parameter grammars use sch
 Python optional parameters can be included or omitted. Unsupported grammar/tokenizer combinations
 retain the existing unconstrained fallback (a parsed call is not a strict-schema proof).
 New families without locally available checkpoints are tested with fixtures, not claimed
-as real-model validated. See the worker report for the checkpoints actually exercised.
+as real-model validated.
 
 ```json
 {

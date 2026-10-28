@@ -56,6 +56,16 @@ tested memory guidance for 128 GB and tight hosts. Outputs of speculation on and
 - New setting `YUNSHU_CONSOLE_PAUSE_FILE`: the console sends no request to any engine while the file says so; gpuq
   writes it for timing jobs, so an A/B is not perturbed by a one-sided monitor.
 - Dependencies were synced (28 upgrades, nothing pinned).
+- Loopback-bound servers refuse a non-loopback `Host` and cross-site POST/PUT/PATCH/DELETE (DNS rebinding);
+  `YUNSHU_ALLOWED_HOSTS` adds names, `*` disables. Managed API keys are their own actors: an infer-scope key no longer
+  reads or cancels other keys' stored responses, containers or requests. 20 failed authentications a minute from one
+  address give `429`. Request-supplied MCP connector servers may not reach private or loopback addresses unless
+  `YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE` is on.
+- Text-only requests have no default 300 s generation deadline; a zero-token prompt is a `400 empty_prompt` on every
+  path; a missing `previous_response_id` ancestor is a `404`; a malformed Anthropic `tool_choice` is a `400`.
+- Removed: `YUNSHU_ROUND_DRIVER`, `YUNSHU_ROUND_PREFILL_CHUNK` and `YUNSHU_MTP_ROW_EXACT` (measured slower than the
+  default), and unused dependencies; mlx-lm is now >= 0.32.2. New: `YUNSHU_GRAMMAR_PREWARM` (on; about 0.45 GiB per
+  mask width). Review notes and the per-path merge checklist: [handoff](docs/reports/HANDOFF_REVIEW_2026-10-26.md).
 
 ### Performance
 
@@ -213,10 +223,19 @@ and cold 32K TTFT versus Splash 1.3.2.
   (2x32K concurrent decode no longer drops to 11-13 tok/s).
 - CI: console layout under load, focus races and a hybrid SSD budget test that read the real volume.
 - Verified code-review fixes in the gateway, infrastructure and remaining modules.
+- Realtime `server_vad` no longer ends a turn when short pauses add up to the silence window, idle silence no longer
+  overflows the input buffer, and a cancelled reply stays in the conversation. Token budgets count natively rendered
+  tool schemas. Grammar dead ends, full stream queues and failed admissions fail only their own request. The SSD
+  prefix cache no longer keeps every written prompt in RAM. The serving paths carry the same fixes, with the
+  exceptions listed in the [handoff](docs/reports/HANDOFF_REVIEW_2026-10-26.md#what-a-unified-path-must-keep).
 
 ### Security
 
-- No security-specific changes in this release.
+- Special-token strings the chat template itself writes (turn/role markers) stay text when they appear in user or
+  tool-result text, so a user cannot close their turn and open a system one (system and assistant text, including
+  replayed tool calls, is left as written); `YUNSHU_MCP_SERVERS` is masked like other secrets; the code-execution editor opens
+  paths with `O_NOFOLLOW` and refuses FIFOs; decoded request media live in a private directory sandboxed code cannot
+  read. The console blocks remote images in model output.
 
 [Full changelog: v0.1.5…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.5...main)
 
@@ -529,15 +548,15 @@ M1–M4 Macs.
 ### Highlights
 
 - Get complete JSON responses faster: warm decode **23.4 → 111.4 tok/s** with
-  identical output and logprobs in the recorded Qwen3.8-27B test. [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+  identical output and logprobs in the recorded Qwen3.8-27B test. [Measurements](docs/reports/PERF_TREND.md#2026-10-03-constrained-speculation-與-accepted-target-logprobscodex-cspec).
 - Start follow-up answers sooner: 32K code first-token latency **900 → 721 ms**;
-  8K code **569 → 512 ms**. [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+  8K code **569 → 512 ms**. [Measurements](docs/reports/PERF_TREND.md#2026-10-03----native-singleton-kv-capacity-bounded-allocator-pool-wider-invariant-prefill-dispatch).
 - Speed up repetitive follow-up code: raising the verified prompt-copy cap from
   8 to 16 improved the measured 8K code turn from **106.1 → 129.2 tok/s**.
-  [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+  [Measurements](docs/reports/PERF_TREND.md#2026-10-03--prompt-copy-maximum-8--16-rows-codex-wide3).
 - Generate repetitive code faster with verified prompt copies: DFlash 32K code
   **72.74 → 82.56 tok/s**; prose results vary by context.
-  [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+  [Measurements](docs/reports/PERF_TREND.md#2026-10-03--prompt-copy-maximum-8--16-rows-codex-wide3).
 - Correct speculative decoding on M1–M4 Macs: output now matches plain decoding there
   too, with M5 speed unchanged (27B, 20 cells digest-equal, −0.4% to +3.0%).
 
@@ -564,7 +583,7 @@ M1–M4 Macs.
 All rows use M5 Max and Jundot/Qwen3.8-27B-oQ4e-mtp. These are separate
 same-checkpoint experiments, not cumulative gains or promises for every model.
 October 3 results use three interleaved clean repetitions. Sources and limitations:
-[BENCHMARKS](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+[PERF_TREND](docs/reports/PERF_TREND.md).
 
 | Machine | Model / mode | Metric / workload | Before → after | Recorded source |
 |---|---|---|---|---|

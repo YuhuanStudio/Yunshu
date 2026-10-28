@@ -36,6 +36,9 @@ class StopHoldbackBuffer:
         # always equals len(_buf). Only populated/consumed via feed_lp(); the
         # plain feed() path never touches it.
         self._pend: list[list] = []
+        # True once flush()/take_stopped() dropped a COMPLETE stop string (so a stop that
+        # completed only in the final detokenizer flush is still reported as a stop).
+        self.stop_hit = False
 
     def _first_stop_pos(self) -> int:
         """Index of the first COMPLETE stop occurrence in the buffer, or -1.
@@ -170,9 +173,11 @@ class StopHoldbackBuffer:
             if i >= 0 and (first < 0 or i < first):
                 first = i
         if first >= 0:
+            self.stop_hit = True
             return buf[:first]
         for s in self._stops:  # fall back to suffix-prefix (partial tail)
             if buf.endswith(s):
+                self.stop_hit = True
                 return buf[: -len(s)]
         return buf
 
@@ -186,7 +191,10 @@ class StopHoldbackBuffer:
             i = buf.find(s)
             if i >= 0 and (first < 0 or i < first):
                 first = i
-        return buf[:first] if first >= 0 else buf
+        if first >= 0:
+            self.stop_hit = True
+            return buf[:first]
+        return buf
 
 
 # Pattern matching common special tokens that should be removed from output.
@@ -196,13 +204,6 @@ SPECIAL_TOKENS_PATTERN = re.compile(
     r"<\|end\|>|<\|eot_id\|>|<\|start_header_id\|>|<\|end_header_id\|>|"
     r"</s>|<s>|<pad>|\[PAD\]|\[SEP\]|\[CLS\]"
 )
-
-
-def clean_special_tokens(text: str) -> str:
-    """Remove special tokens from model output."""
-    if not text:
-        return text
-    return SPECIAL_TOKENS_PATTERN.sub("", text).strip()
 
 
 def cache_tokenizer_vocab(tok) -> None:
@@ -247,32 +248,6 @@ def cache_tokenizer_vocab(tok) -> None:
         _log.debug("tokenizer vocab cache setup failed", exc_info=True)
 
 
-def chunk_prompt_tokens(
-    token_ids: list[int],
-    chunk_size: int = 2048,
-) -> list[list[int]]:
-    """Split prompt tokens into chunks for chunked prefill.
-
-    Chunked prefill breaks long prompts into manageable pieces that
-    fit within GPU memory constraints. Each chunk is processed
-    sequentially, accumulating KV cache across chunks.
-
-    Args:
-        token_ids: Full prompt token IDs.
-        chunk_size: Maximum tokens per chunk (default from prefill_step_size).
-
-    Returns:
-        List of token ID chunks.
-    """
-    if not token_ids:
-        return []
-
-    chunks = []
-    for i in range(0, len(token_ids), chunk_size):
-        chunks.append(token_ids[i : i + chunk_size])
-    return chunks
-
-
 def estimate_prefill_memory(
     num_tokens: int,
     num_layers: int = 32,
@@ -299,30 +274,6 @@ def estimate_prefill_memory(
         attention = num_attention_heads * num_tokens * head_dim * 4
 
     return kv_memory + attention
-
-
-def should_chunk_prefill(
-    num_tokens: int,
-    available_memory: int,
-    model_config: dict | None = None,
-    safety_factor: float = 0.8,
-) -> bool:
-    """Determine if a prompt should be chunked for prefill.
-
-    Returns True if the prompt is too large for single-pass prefill.
-    """
-    if model_config is None:
-        model_config = {}
-
-    estimate = estimate_prefill_memory(
-        num_tokens,
-        num_layers=model_config.get("num_layers", 32),
-        num_kv_heads=model_config.get("num_kv_heads", 8),
-        head_dim=model_config.get("head_dim", 128),
-        num_attention_heads=model_config.get("num_attention_heads", 32),
-    )
-
-    return estimate * safety_factor > available_memory
 
 
 def get_eos_token_ids(tokenizer) -> list[int]:

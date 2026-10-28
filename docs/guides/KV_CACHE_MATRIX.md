@@ -37,6 +37,34 @@ tier configured an `ssd` hit also carries `"device"`, the volume it came from (`
 `apc_warm_*`, `apc_storage_tier_*{tier}`) report occupancy, entries, hits by tier, evictions, disk bytes and
 each storage tier's usage, measured bandwidth and availability for the VLM runner.
 
+A request can opt out of storing with `X-Yunshu-Cache-Store: off` (see `API_EXTENSIONS.md`): lookups on both
+paths are unchanged and the checkpoint plan is untouched, only the stores are skipped (`_Coordinator.store_checkpoint`
+on the VLM runner, a lookup-only `store_opt_out` view of the prefix cache on the text path).
+
+Restore versus eviction (re-checked against Rapid-MLX 66b39f56, which lost a restored hybrid boundary to RAM
+pressure right after the restore): a HOT hit makes its entry the newest, clones it (the restored cache shares
+nothing with the stored one) and only then lets `_make_room` evict, oldest first, so other entries go before the
+one being restored; an evicted HOT entry spills to the SSD tier instead of vanishing, and the request's own
+longer checkpoints supersede the restored boundary by design. One case is left as upstream has it: when the
+clone cannot get room even after every other entry is gone, `_make_room` evicts the source as well (to SSD
+when there is a tier) and the restore is refused (`memory_skips`). A feasibility pre-check would keep the HOT
+entry in that case, but the free-memory reading after `mx.clear_cache()` cannot be predicted off the Mac, so it
+is not changed here. The text prefix cache evicts under pressure before its lookup and hands out snapshots, so
+a lookup cannot lose its source. `tests/unit/test_apc_restore_eviction.py` pins all of this.
+
+Snapshot integrity (re-checked against ollama b859a945 / 6137793a / a5b659e6): neither cache merges or splits
+snapshots. The APC keeps whole checkpoints keyed by the full token tuple (a hit needs `tokens[:n] == entry.token_ids`),
+and superseding a checkpoint deletes it, never concatenates it; the text prefix cache keeps flat entries, verifies the
+token-exact prefix on every path and, for hybrids, serves only a snapshot that is exactly its key. One real gap was
+found and closed: the exact-key and slow-scan paths of `KVPrefixCache.get` reported a hit longer than the snapshot
+held when an entry's buffer was shorter than its key (they now cap at what the snapshot holds, or decline).
+a5b659e6 (a restored recurrent state is a view into the per-step buffer after a speculative rollback, so a cache kept
+past the request retains the whole buffer) does not reach a retained cache here: the tree/MTP/DFlash lanes commit with a
+fresh kernel output and a gather (`tree_verify.tree_commit`), and no cache is stored after generation on the VLM
+runner (APC stores prompt checkpoints during prefill; the text path skips post-generation stores for hybrids). The
+upstream mlx-vlm transaction (`ArraysCache.commit_speculation`, `intermediate[:, keep - 1]`) does hand back a view, but
+it lives only until the next model step replaces the state.
+
 ### VLM runner (APC) policy
 
 mlx-vlm's APC keeps exact checkpoints for hybrid (GDN) models: a full copy of the attention KV plus the
@@ -51,6 +79,11 @@ recurrent state at one token position, reusable only by a prompt that starts wit
   grew), so a long session holds one copy, not one per turn;
 - the end of the system turn (system prompt + tool list) is a checkpoint of its own, kept per distinct
   head: a new session in the same project reuses it;
+- experimental, off (`YUNSHU_APC_SEAM_CHECKPOINT`, split-invariant prefill only): a final user message of
+  at least 8192 tokens keeps one more checkpoint 2048 tokens before its end (64-aligned, never inside a media
+  span, skipped when the interval checkpoint already sits there), so "same document, new question" resumes at
+  the document (TensorFold #1262, Rapid-MLX 421bf658). Not measured on Yunshu yet:
+  `scripts/research/ab_seam_checkpoint.py` decides it; on the tiny hybrid model the restore equals a cold run;
 - the SSD tier receives a checkpoint when RAM evicts it (and resident ones at shutdown, newest first, within
   20 s), not on every store. It is **on by default** (measured below: a reload is 15-40x faster than
   re-prefilling; the cache also survives a restart). States are namespaced by the checkpoint's weights

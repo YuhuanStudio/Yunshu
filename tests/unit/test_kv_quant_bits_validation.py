@@ -60,3 +60,31 @@ def test_none_bits_leaves_unchanged():
     eng._settings = _settings(None)
     eng._apply_settings()
     assert eng._kv_quant_bits == 4  # None settings doesn't clobber
+
+
+def test_every_hardware_tier_is_lossless_kv():
+    from yunshu_engine.utils.hardware import HardwareInfo, compute_adaptive_defaults
+
+    for gb in (8.0, 16.0, 36.0, 64.0):
+        hw = HardwareInfo(
+            chip_name="Apple M1",
+            total_memory_gb=gb,
+            max_working_set_bytes=int(gb * 0.7 * 1024**3),
+        )
+        assert "kv_cache_quant_bits" not in compute_adaptive_defaults(hw), gb
+
+
+def test_explicit_off_beats_model_settings(monkeypatch):
+    monkeypatch.setenv("YUNSHU_KV_QUANT_BITS", "off")
+    eng = _engine()
+    eng._settings = _settings(4)
+    eng._apply_settings()
+    assert eng._kv_quant_bits is None
+
+
+def test_model_settings_still_applies_when_env_unset(monkeypatch):
+    monkeypatch.delenv("YUNSHU_KV_QUANT_BITS", raising=False)
+    eng = _engine()
+    eng._settings = _settings(4)
+    eng._apply_settings()
+    assert eng._kv_quant_bits == 4

@@ -24,6 +24,38 @@ serve_app = typer.Typer(
 )
 
 
+MIN_TOKEN_CHARS = 16
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def expand_auto_token(value: str | None) -> tuple[str | None, bool]:
+    """``--auth-token auto`` becomes a fresh random token (the caller prints it once)."""
+    if value is not None and value.strip().lower() == "auto":
+        import secrets
+
+        return secrets.token_urlsafe(32), True
+    return value, False
+
+
+def auth_startup_warnings(
+    host: str, token: str | None, has_managed_keys: bool, auth_disabled: bool = False
+) -> list[str]:
+    """Warnings for a weak or missing credential at startup."""
+    out: list[str] = []
+    exposed = host not in _LOOPBACK_HOSTS
+    if exposed and (auth_disabled or not (token or has_managed_keys)):
+        out.append(
+            f"serving on {host} without authentication: anyone who can reach this "
+            "port can use the model. Set --auth-token (or --auth-token auto)."
+        )
+    if token and len(token) < MIN_TOKEN_CHARS:
+        out.append(
+            f"the auth token is only {len(token)} characters; use at least "
+            f"{MIN_TOKEN_CHARS} (`--auth-token auto` generates one)."
+        )
+    return out
+
+
 def _is_omni_model(model: str | None) -> bool:
     """Best-effort: does this model have a Talker (native speech-to-speech)?
 
@@ -98,7 +130,7 @@ def serve(
     auth_token: str | None = typer.Option(
         None,
         "--auth-token",
-        help="API bearer token for authentication.",
+        help="API bearer token for authentication. 'auto' generates a random one and prints it once.",
     ),
     mcp_config: str | None = typer.Option(
         None,
@@ -204,6 +236,13 @@ def serve(
         )
     model = model_ref or model
 
+    auth_token, _generated_token = expand_auto_token(auth_token)
+    if _generated_token:
+        console.print(
+            f"[bold]Generated API token (shown once):[/] {auth_token}\n"
+            "Clients send it as `Authorization: Bearer <token>`."
+        )
+
     # Flags and --set become highest-precedence settings. They are also
     # exported so worker/reload subprocesses see them.
     overrides: dict[str, object] = {}
@@ -247,6 +286,9 @@ def serve(
     except settings.SettingError as exc:
         fail(str(exc), code=2)
     host = host or settings.get("YUNSHU_HOST") or "127.0.0.1"
+    settings.set_override(
+        "YUNSHU_HOST", host
+    )  # the Host check follows the real bind address
 
     # Fail before importing/loading a checkpoint when the chosen TCP endpoint
     # cannot bind. Uvicorn remains the authority at startup (another process
@@ -264,6 +306,7 @@ def serve(
 
     env = os.environ.copy()
     env.update({k: settings._to_text(v) for k, v in overrides.items()})
+    env["YUNSHU_HOST"] = host  # reload / worker processes see the real bind address too
     hf = settings.get("YUNSHU_HF_ENDPOINT")
     if hf:
         env["HF_ENDPOINT"] = hf
@@ -301,13 +344,15 @@ def serve(
             env["YUNSHU_MODEL"] = local
             effective_model = local
         _preflight_model(effective_model)
-    if host not in ("127.0.0.1", "localhost", "::1") and not settings.get(
-        "YUNSHU_AUTH_TOKEN"
+    from yunshu_gateway import api_keys
+
+    for warning in auth_startup_warnings(
+        host,
+        settings.get("YUNSHU_AUTH_TOKEN"),
+        api_keys.get_store().has_keys(),
+        settings.get_bool("YUNSHU_AUTH_DISABLED"),
     ):
-        console.print(
-            f"[yellow]Warning:[/] serving on {host} without --auth-token: anyone "
-            "who can reach this port can use the model."
-        )
+        console.print(f"[yellow]Warning:[/] {warning}")
     is_multi = not effective_model and (
         effective_dir is not None or settings.get_bool("YUNSHU_MULTI_MODEL")
     )
@@ -396,6 +441,9 @@ def serve(
         # NB: uvicorn.run has no request-size limit kwarg; the limit is enforced
         # by the gateway middleware via YUNSHU_MAX_REQUEST_SIZE (set above).
         server_header="Yunshu" if server_header else None,
+        # uvicorn closes a WebSocket frame over ws_max_size (default 16 MiB) with 1009
+        # before the app sees it: keep it level with what HTTP accepts.
+        ws_max_size=settings.get("YUNSHU_MAX_REQUEST_SIZE"),
     )
 
 

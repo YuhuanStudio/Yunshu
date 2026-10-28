@@ -54,7 +54,7 @@ curl -s localhost:8000/v1/yunshu/usage -H "Authorization: Bearer $YUNSHU_AUTH_TO
 
 对密钥使用 `PATCH` 与 `DELETE` 可编辑与移除，`POST /v1/yunshu/keys/{id}/rotate` 会重新签发。超过配额时，会以该路由自己的错误格式返回 `429` 并附 `Retry-After`。这些路由列于 [Yunshu 扩展](/docs/api/extensions)与[运维](/docs/api/operations)。
 
-密钥不是租户。通过验证的客户端共用 Files、已保存的 completions 与 Evals 数据，没有逐密钥隔离，也没有 RBAC。Realtime WebSocket 接受密钥，但不计算配额。
+密钥不是租户。infer 密钥只看得到自己创建的 Files 与 Conversations（其他密钥的对象返回 404）；静态 token、关闭验证模式与 admin 密钥看得到全部。已保存的 completions 与 Evals 数据仍共用，没有 RBAC。Realtime WebSocket 接受密钥，但不计算配额。
 
 ## 写入设置
 
@@ -70,6 +70,18 @@ curl -s localhost:8000/v1/yunshu/usage -H "Authorization: Bearer $YUNSHU_AUTH_TO
 - 通配符（`*`）需要明确确认，不能与其他来源并用，且会停用 credentials。会发送 cookie 或 authorization 标头的浏览器必须使用明确的来源。
 - 同一份清单也用来检查 Realtime 与文本 WebSocket 的 `Origin` 标头。
 - 绑定地址与局域网暴露在此 API 中为唯读。
+
+## Host 与 Origin 检查
+
+绑定在 loopback 地址的服务器会检查 `Host` 头，网页因此无法经 DNS rebinding 连到它。接受 `localhost`（含 `localhost.` 与 `*.localhost`）、任何 `127.0.0.0/8` 写法（`127.0.0.1`、`127.1`）、`[::1]` 与未指定地址（`0.0.0.0`、`[::]`），任意端口。其他一律返回 `403`，消息会指出该头的值与对应设置。绑定 `0.0.0.0` 的服务器在未设置 `YUNSHU_ALLOWED_HOSTS` 时不做检查。
+
+- 反向代理、`tailscale serve`、cloudflared 隧道或 `ssh -L` 若把对外名称作为 `Host` 转给 loopback 服务器，必须把该名称加入 `YUNSHU_ALLOWED_HOSTS`（逗号分隔；`*` 关闭检查）。
+- loopback 绑定不接受 `host.docker.internal`：容器要连到主机 loopback，服务器必须监听 loopback 以外（`YUNSHU_HOST=0.0.0.0`），此时检查本来就关闭。
+- 带有 `Origin` 且不带凭证的状态变更请求，必须来自 loopback、请求自身的 origin 或 `YUNSHU_CORS_ORIGINS`。自定义协议请列 `scheme://*`（例如 `vscode-webview://*`）或完整 origin（`app://.`）。`Origin: null` 一律拒绝。带 `Authorization` 或 `x-api-key` 的请求不受影响。
+
+## 登录失败
+
+非 loopback 的客户端地址在 60 秒内提交 20 次错误凭证后，后续错误凭证会得到 `429` 与 `Retry-After`。正确的 token 或密钥一律通过并清除该客户端的计数；完全没有凭证的请求返回 `401`，不计数。`YUNSHU_TRUSTED_PROXIES` 列出连接的代理时，以 `X-Forwarded-For` 的最后一项为客户端地址，否则使用连接对端地址。
 
 ## 其他防护
 

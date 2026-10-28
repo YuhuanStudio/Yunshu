@@ -148,7 +148,7 @@ for 128 / 512 / 2048-token chunks. A chunk of 2048 tokens takes 160 ms in the pr
 TFLOPS), a 512-token chunk 41 ms. Nothing in the hardware runs them side by side: the GPU is bandwidth-bound
 in decode and compute-bound in prefill, but both fill every core, and the tensor units are shared.
 
-On the real 27B round driver (one MTP row decoding at 129 tok/s, an 8K-token prompt arrives):
+On the real 27B round driver (since deleted; one MTP row decoding at 129 tok/s, an 8K-token prompt arrives):
 
 | prefill chunk | decode during prefill | prompt TTFT alone | prompt TTFT beside decode | worst decode gap |
 |---|---|---|---|---|
@@ -158,7 +158,7 @@ On the real 27B round driver (one MTP row decoding at 129 tok/s, an 8K-token pro
 Smaller spans gave 3.8x more decode rate while prefilling, at 28% longer TTFT for the arriving prompt
 (prefill work per step falls with the span because each chunk rereads the weights). The prompt's
 tokens are identical to running it alone (`b_tokens_equal_alone`), and the same for both chunk sizes.
-Now `YUNSHU_ROUND_PREFILL_CHUNK` sets it (default 512, unchanged behaviour).
+The driver and its prefill-chunk setting were later deleted (measured loser).
 
 ## Proposals, ranked by expected gain per effort
 
@@ -176,13 +176,13 @@ Each has a one-line roofline argument; proposals that fail it are listed last.
 3. **Wider verify / multi-row decode.** One weight read serves up to ~58 rows before compute binds
    (4-bit, 65 TFLOPS / 560 GB/s), and measured qmm at M=1..4 costs the same 91-101 us as M=1: decode
    with 4-8 drafts per step multiplies tokens per read, no new hardware needed. Ceiling: acceptance
-   (MTP block 6 at 88 tok/s vs 32 plain). Already in progress (round driver).
+   (MTP block 6 at 88 tok/s vs 32 plain). The round driver attempt lost and was deleted.
 4. **Int8-activation prefill (W4A8/W8A8) on the tensor units.** Compute-bound prefill at ~750 tok/s
    uses 40 of 65 TFLOPS; int8 matmul2d peaks at 119 TOPS, so the compute floor could fall ~1.8x, but a
    qmm reading 4-bit weights and quantizing activations changes outputs (lossy): only as a user
    option, and only if the GPU is compute-bound, which it is above M~64. Expected TTFT -25% at best.
    Effort high, lossy.
-5. **Batched sequence mixers in the round driver.** Per-row attention/GDN launches at 8 rows are ~2.5
+5. **Batched sequence mixers for multi-row decode.** Per-row attention/GDN launches at 8 rows are ~2.5
    us/kernel x 100 x rows: 2 ms at 8 rows against a 40-ms step (5%). Effort medium.
 6. **ANE prefill beside GPU decode (lossy option).** Measured above: 250 tok/s prefill for the whole
    model while decode keeps 89-92%; roofline holds only for prompts arriving during a stream, and the

@@ -789,6 +789,32 @@ class TestAnthropicEndpoint:
         )
         assert resp.status_code in (200, 404, 500, 503)
 
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"type": "bogus"},
+            {},
+            {"type": "tool"},
+            {"type": "tool", "name": ""},
+            "bogus",
+            7,
+        ],
+    )
+    def test_messages_endpoint_rejects_malformed_tool_choice(self, _setup_engine, bad):
+        """A malformed tool_choice is a 400, not silently treated as auto."""
+        resp = _client().post(
+            "/v1/messages",
+            json={
+                "model": "claude-3",
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": "Hi"}],
+                "tools": [{"name": "test", "description": "A test tool"}],
+                "tool_choice": bad,
+            },
+        )
+        assert resp.status_code == 400, resp.text
+        assert "tool_choice" in resp.text
+
     def test_messages_endpoint_with_tool_choice_dict(self, _setup_engine):
         """Should accept tool_choice as dict with name."""
         client = _client()
@@ -932,9 +958,7 @@ class TestToolUseStreamingOrder:
     """lock in the fix that ensures content_block_stop
     for tool_use blocks fires BEFORE message_delta. previously the
     safety-close path emitted content_block_stop AFTER message_delta,
-    violating Anthropic streaming spec.
-
-    See VALIDATION_REPORT for the live-curl verification."""
+    violating Anthropic streaming spec."""
 
     def test_tool_use_sequence_content_block_stop_before_message_delta(self):
         """Anthropic spec: ALL content_block_stop events MUST precede

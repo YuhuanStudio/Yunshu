@@ -31,7 +31,7 @@ are in [Benchmarks](../BENCHMARKS.md) and [PERF_TREND](../reports/PERF_TREND.md)
 - Text models: `YUNSHU_NGRAM_DEFAULT=1` enables lossless n-gram speculation on greedy requests
   (`YUNSHU_SPEC_PROPOSER` = `ngram` or `suffix`); a request can also ask for it with `spec_decode`.
   Gemma 4 text models can use an assistant drafter directory via `YUNSHU_GEMMA4_ASSISTANT`.
-- Experimental: `YUNSHU_ROUND_DRIVER` ([guide](ROUND_DRIVER.md)), `YUNSHU_MTP_ROW_EXACT`, `YUNSHU_QWEN4_LANE`
+- Experimental: `YUNSHU_QWEN4_LANE`
   (Flash-Next dense projections as the row-invariant lane matmul: extra verify rows stop multiplying dense traffic),
   `YUNSHU_SPEC_UNVERIFIED` with `YUNSHU_DRAFT_MODEL`. Experimental flags may be removed after measurement.
 - Counters: `GET /v1/yunshu/spec-decode`, Prometheus `yunshu_spec_decode_*`, and per-request

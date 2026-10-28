@@ -118,6 +118,45 @@ def test_no_promotion_while_anything_else_is_in_flight_or_the_row_is_not_eligibl
         assert runner._spec is None
 
 
+# --- static suppress lists keep speculative decoding ---------------------------------------
+
+
+def _with_row_processors(procs):
+    runner, group, batch, job = _runner()
+    batch.logits_processors = [procs]
+    job.spec_procs = list(
+        procs
+    )  # admission keeps the request's processors for the lane (spec_procs)
+    return runner, batch, job
+
+
+def test_a_static_suppress_mask_does_not_block_promotion_and_rides_the_lane():
+    from yunshu_engine.vlm_batch_runner import TokenMaskProcessor
+
+    mask = TokenMaskProcessor(suppress=[5, 6], eos_ids=[2])
+    runner, batch, job = _with_row_processors([mask])
+    assert VLMBatchRunner._maybe_promote(runner) is True
+    # the lane applies the same ban to its verify rows
+    assert job.spec_request.processors == [mask]
+
+
+def test_a_stateful_or_penalty_row_still_stays_off_the_lane():
+    from yunshu_engine.vlm_batch_runner import (
+        TokenMaskProcessor,
+        build_penalty_processors,
+    )
+
+    for procs in (
+        [TokenMaskProcessor(suppress=[5], eos_ids=[2], min_tokens=4)],
+        [TokenMaskProcessor(suppress=[5], eos_ids=[2], top_n_sigma=1.0)],
+        build_penalty_processors(1.0, 0.4, 0.0, None),
+        [lambda tokens, logits: logits],
+    ):
+        runner, batch, job = _with_row_processors(procs)
+        assert VLMBatchRunner._maybe_promote(runner) is False, procs
+        assert runner._spec is None
+
+
 def test_sampled_promotion_moves_the_same_sampler_with_the_committed_position_base():
     from yunshu_engine.keyed_sampling import KeyedSampler
     from yunshu_engine.vlm_batch_runner import RowParams

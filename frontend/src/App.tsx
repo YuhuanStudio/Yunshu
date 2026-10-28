@@ -83,7 +83,7 @@ import {
 import { NotificationCenter } from "./NotificationCenter";
 import { ShortcutsSheet } from "./Shortcuts";
 import { SignalsProvider, useShellSignals } from "./signals";
-import { setRememberedToken, rememberedToken } from "./token-store";
+import { rememberedToken, rememberIfApplied } from "./token-store";
 import {
   CHORDS,
   PAGES,
@@ -620,8 +620,8 @@ export default function App() {
   }
   /** The in-place token prompt: keep the page, take the token, optionally remember it. */
   function unlock(token: string, remember: boolean) {
-    save({ baseUrl: connection.baseUrl, token });
-    if (remember) setRememberedToken(connection.baseUrl, token);
+    const applied = save({ baseUrl: connection.baseUrl, token });
+    rememberIfApplied(applied, remember, connection.baseUrl, token);
   }
   async function perform(key: string, action: () => Promise<unknown>) {
     if (busy) return;
@@ -645,8 +645,9 @@ export default function App() {
       setBusy(null);
     }
   }
-  function save(next: Connection) {
-    if (busy) return;
+  /** False when the change was refused (the engine is busy): nothing was applied. */
+  function save(next: Connection): boolean {
+    if (busy) return false;
     setConnection(next);
     setRevision((v) => v + 1);
     setNotice(null);
@@ -659,6 +660,7 @@ export default function App() {
         text: t("errors.operation.saveAddressFailed"),
       });
     }
+    return true;
   }
   return (
     <YunUIProvider adapters={adapters}>

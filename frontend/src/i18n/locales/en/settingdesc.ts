@@ -102,6 +102,8 @@ const settingdesc = {
     "Responses compaction: maximum tokens of the model-written summary.",
   YUNSHU_AUTH_TOKEN:
     "Bearer token. When set, every request except health, version and docs needs it; unset: inference is open and operational endpoints are denied.",
+  YUNSHU_ADMIN_WRITE_EXEC_SETTINGS:
+    "Let `PATCH /v1/yunshu/config` (the console settings editor) change settings that run host code or touch arbitrary host paths: every path setting, `YUNSHU_MCP_SERVERS`, `YUNSHU_TRUST_REMOTE_CODE`, `YUNSHU_CODE_EXECUTION`, `YUNSHU_ALLOW_LOCAL_FILES`. Off (default): they are read-only over HTTP; edit the config file on the host. Not writable over HTTP itself.",
   YUNSHU_AUTH_DISABLED:
     "Disable auth entirely (operational endpoints open too). Local development only.",
   YUNSHU_DEBUG_TREE_PROFILE:
@@ -118,6 +120,8 @@ const settingdesc = {
     "Per-client request rate limit in requests per minute; 0 (default) turns it off. A local single-user engine does not need it; set it when the server is exposed to other machines.",
   YUNSHU_TRUSTED_PROXIES:
     "Comma-separated proxy IPs whose `X-Forwarded-For` header is trusted.",
+  YUNSHU_ALLOWED_HOSTS:
+    "Comma-separated Host names this server answers, besides loopback names. Empty (default): a server bound to a loopback address answers only loopback Host headers (localhost, 127.0.0.1, [::1]; this stops DNS rebinding) and one bound to 0.0.0.0 checks nothing. Set it to turn the check on for any bind address; '*' turns it off.",
   YUNSHU_FOOTPRINT_SAMPLE_MS:
     "Sample this process’s `phys_footprint` every N ms on a background thread and export the peak as `yunshu_process_footprint_bytes` on `/metrics`. 0 (default) = off.",
   YUNSHU_MAX_MEMORY_GB:
@@ -134,6 +138,8 @@ const settingdesc = {
   YUNSHU_PREFIX_HOT_LIMIT:
     "Text engine: keep only this many prefix KV entries at full precision and store older ones in 4-bit in RAM (lossy on reuse; memory vs quality). 0 = every entry full precision.",
   YUNSHU_SSD_CACHE: "Text engine: persist prefix KV to SSD.",
+  YUNSHU_APC_SEAM_CHECKPOINT:
+    "VLM runner (APC), split-invariant prefill only: keep one more checkpoint inside a final user message of at least 8192 tokens, 2048 tokens before its end, so the same long document with a new question resumes at the document. One extra checkpoint copy per such prompt; output unchanged. Experimental.",
   YUNSHU_SSD_CACHE_DIR: "Text engine: SSD prefix-cache directory.",
   YUNSHU_SSD_CACHE_PRECISION:
     "Text engine: SSD prefix-cache precision: `native` (bit-exact KV and recurrent state; lossless) or `int8` (per-tensor int8, about half the disk bytes of bf16; lossy on reuse).",
@@ -205,6 +211,8 @@ const settingdesc = {
     "Text models: speculative proposer family for n-gram speculation.",
   YUNSHU_GEMMA4_ASSISTANT:
     "Text Gemma-4 models: assistant drafter directory (KV-shared speculative drafter).",
+  YUNSHU_SDPA_CHUNK:
+    "M1-M4, head_dim 256: chunk the stock long-prefill attention fallback by query rows so its score tensor stays under 1 GiB (experimental).",
   YUNSHU_GPU_SAMPLER:
     "Text models: on-GPU Gumbel-max sampling (no per-token GPU-to-CPU sync).",
   YUNSHU_JUMP_FORWARD:
@@ -213,6 +221,8 @@ const settingdesc = {
     "Engine that masks JSON-schema and `json_object` constrained decoding: `llguidance` (about 0.25 ms median per-token mask on a 248K vocabulary; properties in schema order) or `inhouse` (Python state machine, about 3 ms median; any property order). A schema llguidance cannot compile falls back to the in-house engine when it supports it.",
   YUNSHU_GRAMMAR_BITMASK:
     "Constrained decoding with the xgrammar-style bitmask engine instead of the allowlist sampler.",
+  YUNSHU_GRAMMAR_PREWARM:
+    "Build the llguidance token tables in the background when a model loads, so the first constrained request does not spend about a second walking the vocabulary. Costs about 0.45 GiB of native heap per mask width; 0 builds them on first use.",
   YUNSHU_TOOL_GRAMMAR:
     "Tool-call constrained decoding (structural tags): free text until the tool-call start marker, then the call body is masked to this request’s exact call grammar (tool name, parameter keys, typed values, closing). A forced `tool_choice` is always constrained; this flag governs only `auto`. Off: auto tool calls are decoded unconstrained and repaired afterwards.",
   YUNSHU_QUANT_MODE:
@@ -225,12 +235,6 @@ const settingdesc = {
     "VLM plain-text chats: while idle after a reply, prefill its rendered assistant text and store APC checkpoints; decode-time KV is never reused. Default stride on qualified split-invariant 27B stops at the last absolute 64-token boundary at or before assistant end; without split-invariant kernels it retains the full prefill-atom grid. A matching arriving request adopts in-flight work; other requests cancel at a preemptible boundary. off disables rehearsal. boundary/exact retain the legacy assistant-end split policy on unsupported configurations and may change their cold rounding. Costs idle GPU time and one cached prefix.",
   YUNSHU_NEXT_TURN_DELAY_S:
     "Seconds between a finished reply and next-turn rehearsal. Default 0.3 lets an immediate follow-up (agent loops) arrive before rehearsal starts and prefill once, while a later one adopts running work; 0 starts as soon as idle, which costs an immediate follow-up about 0.15-0.25 s (rehearsal plus a short tail request). No GPU work is started while foreground requests are waiting.",
-  YUNSHU_ROUND_PREFILL_CHUNK:
-    "Round driver: prompt tokens per prefill span. A decoding request only steps between prefill forwards, so smaller spans keep it running next to a long prompt, at about 20% lower prefill speed. Spans are fixed per prompt, so output is independent of what else is running; prompts prefilled with different sizes are self-consistent but not bit-identical to each other.",
-  YUNSHU_ROUND_DRIVER:
-    "Dense Qwen3.5-family VLMs: serve text requests with Yunshu’s round driver (packed forwards over every decoding row, alternating with batched prefill steps; MTP drafts for every row; position-keyed sampling; see `docs/guides/ROUND_DRIVER.md`). Off: upstream BatchGenerator plus the single-request speculative lane. Image prompts, int8 KV and MoE stay on the upstream path either way.",
-  YUNSHU_MTP_ROW_EXACT:
-    "Qwen3.5-family runner: oMLX row-exact verify (verify rows bit-identical to one-row decode) instead of batch-invariant kernels.",
   YUNSHU_QWEN4_LANE:
     "Qwen3.8-Flash-Next (qwen4_exp): run the dense quantized projections as the row-invariant lane matmul for decode, speculative verify and drafting instead of upstream’s per-row singleton qmv. Extra verify rows no longer multiply the dense weight traffic; speculative output still equals plain decode. Output differs from the default arithmetic in the last bit. A head format the upstream fused head kernel cannot read (6-bit) turns it on regardless. Prefill chunks wider than 32 rows keep MLX’s quantized matmul.",
   YUNSHU_ENGINE_LOOP:
@@ -333,6 +337,8 @@ const settingdesc = {
   YUNSHU_ARM:
     "Label recorded in the serve log for the configuration arm this server runs (for offline A/B analysis); it changes no behaviour.",
   YUNSHU_GATEWAY_URL: "Server URL used by the `yunshu` CLI client commands.",
+  YUNSHU_API_KEY:
+    "Client side: the Bearer key the `yunshu` CLI sends to the server (`yunshu statusline`) and passes to the coding agents `yunshu launch` starts (Codex reads it as its provider key). The server never reads it; set `YUNSHU_AUTH_TOKEN` there.",
   YUNSHU_HF_ENDPOINT:
     "Hugging Face Hub endpoint for `yunshu serve` (exported as `HF_ENDPOINT`).",
   YUNSHU_HISTORY_INTERVAL_S:

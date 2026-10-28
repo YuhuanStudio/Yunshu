@@ -45,7 +45,7 @@ curl http://localhost:8000/v1/models -H "x-api-key: $YUNSHU_AUTH_TOKEN"
 
 If both headers are present the `Authorization: Bearer` value is used. The comparison is constant time. A missing token answers `401` with the message `Missing or invalid Authorization header`; a wrong token answers `401` with `Invalid or missing API key`. Both carry a `WWW-Authenticate: Bearer` header.
 
-Named API keys use the same headers; `infer` and `admin` scopes restrict access, expired/revoked keys fail, and exceeded quotas return `429`. Keys share one server’s data, without per-key tenant isolation.
+Named API keys use the same headers; `infer` and `admin` scopes restrict access, expired/revoked keys fail, and exceeded quotas return `429`. Keys share one server’s data, except Files and Conversations: an infer key sees only its own.
 
 <Callout type="info">
 When neither a token nor API keys are configured the key your SDK sends is ignored, so any placeholder such as `not-needed` or `sk-local` works. Bind to localhost (the default) or set a token before exposing the server to a network.

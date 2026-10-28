@@ -37,7 +37,7 @@ import { useCache } from "./admin-hooks";
 import { bytesText } from "./byte-format";
 import { ByteValue } from "./ByteValue";
 import { Reasoned } from "./Reasoned";
-import { useMemoryLedger } from "./memory-api";
+import { useSignals } from "./signals";
 import { useRouteAction } from "./useRouteAction";
 import { CacheLifecyclePanel } from "./CacheLifecyclePanel";
 import { number, percent, relative } from "./i18n/format";
@@ -294,7 +294,7 @@ export default function Cache({
 }) {
   const online = engine.status != null;
   const polled = useCache(connection, online);
-  const ledger = useMemoryLedger(connection, online);
+  const ledger = useSignals().ledgerState;
   const [target, setTarget] = useState<ClearTarget | null>(null),
     [clearing, setClearing] = useState(false),
     [result, setResult] = useState<{

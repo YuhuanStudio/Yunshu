@@ -163,44 +163,6 @@ def test_row_sampler_mixed_params_match_solo_streams():
         vbr._STEP_UIDS = None
 
 
-def _driver_row(params, seed, generated=0):
-    from yunshu_engine.round_driver import driver as drv
-
-    req = drv.Request([1, 2, 3], 8, sampling=params)
-    row = drv._Row(req=req, cache=None, mtp_cache=None, generated=generated)
-    if keyed_sampling.supports(params):
-        row.base = keyed_sampling.seed_base(seed)
-    return drv, row
-
-
-def test_round_driver_sample_matches_the_keyed_stream():
-    params = _params(top_p=0.9, top_k=20, temperature=0.8)
-    rng = np.random.default_rng(3)
-    steps = [_lp(rng.normal(size=(1, 64)).astype(np.float32)) for _ in range(8)]
-    drv, row = _driver_row(params, 7)
-    d = object.__new__(drv.RoundDriver)
-    got = []
-    for lp in steps:
-        got.append(int(d._sample(row, lp)[0]))
-        row.generated += 1
-    keyed = KeyedSampler(params, seed=7)
-    assert got == [int(keyed.sample_positions(x, [i])[0]) for i, x in enumerate(steps)]
-
-
-@pytest.mark.parametrize("top_p,top_k", [(1e-10, 0), (1.0, 10**9), (0.0, 33)])
-def test_round_driver_sample_survives_edge_filters(top_p, top_k):
-    lp = _lp(np.linspace(0, 3, 32)[None])
-    for params in (
-        _params(top_p=top_p, top_k=top_k),
-        _params(top_p=top_p, top_k=top_k, min_p=0.0),
-    ):
-        drv, row = _driver_row(params, 1)
-        d = object.__new__(drv.RoundDriver)
-        assert 0 <= int(d._sample(row, lp)[0]) < 32
-        row.base = None  # stateful path (XTC-style) takes the same filters
-        assert 0 <= int(d._sample(row, lp)[0]) < 32
-
-
 def test_one_logical_request_cancels_every_choice():
     """n>1 choices share the one tracker entry (and cancel event) of their request id."""
     from yunshu_engine.request_tracker import RequestTracker
