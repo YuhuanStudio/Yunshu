@@ -256,3 +256,92 @@ def test_checkpoint_shorter_than_its_tokens_is_rejected():
     assert check_loaded_cache(TOKENS, cache, None)
     cache[1].offset = 16
     assert not check_loaded_cache(TOKENS, cache, None)
+
+
+def test_dropped_files_forget_their_token_tuples(tmp_path):
+    # every written checkpoint keeps its full token tuple in RAM; budget eviction and
+    # quarantine must drop it with the file, or a long-running server grows without bound
+    store = _store(tmp_path)
+    evicted = _put(store)
+    assert evicted in store._tok_cache()
+    assert store._evict_path(_path(store, evicted))
+    assert evicted not in store._tok_cache()
+
+    other = tuple(range(100, 132))
+    bad = _put(store, other)
+    assert bad in store._tok_cache()
+    store.quarantine(_path(store, bad), "test")
+    assert bad not in store._tok_cache()
+    assert store._tok_cache() == {}
+
+
+def test_exact_load_refreshes_mtime_for_the_budget_lru(tmp_path):
+    """The root budget evicts by file mtime: a checkpoint that was just served must look recent."""
+    store = _store(tmp_path)
+    key = _put(store)
+    path = _path(store, key)
+    os.utime(path, (1_000_000, 1_000_000))
+    assert _load(store, key) is not None
+    assert path.stat().st_mtime > 1_000_000 + 3600
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        MemoryError(),
+        OSError(12, "Cannot allocate memory"),
+        OSError(4, "Interrupted system call"),
+        RuntimeError("[metal::malloc] Unable to allocate 4096 bytes"),
+    ],
+)
+def test_transient_load_errors_keep_the_file(tmp_path, monkeypatch, exc):
+    store = _store(tmp_path)
+    key = _put(store)
+    path = _path(store, key)
+
+    def boom(self, *a, **k):
+        raise exc
+
+    with monkeypatch.context() as mp:
+        mp.setattr(SpillDiskStore.__mro__[1], "load_exact_cache", boom)
+        assert _load(store, key) is None  # goes cold this time
+    assert path.exists() and key in store._exact_index
+    assert _load(store, key) is not None  # and serves once the pressure is gone
+
+
+def test_corrupt_huge_dimension_header_is_quarantined_not_kept_as_transient(
+    tmp_path, monkeypatch
+):
+    """MLX reports a bit-flipped huge dimension as an allocation failure; that is corruption."""
+    import json
+    import struct
+
+    store = _store(tmp_path)
+    key = _put(store)
+    path = _path(store, key)
+    raw = path.read_bytes()
+    (hlen,) = struct.unpack("<Q", raw[:8])
+    header = json.loads(raw[8 : 8 + hlen])
+    name = next(n for n in header if n != "__metadata__")
+    header[name]["shape"] = [1 << 40, *header[name]["shape"][1:]]
+    new = json.dumps(header).encode()
+    path.write_bytes(struct.pack("<Q", len(new)) + new + raw[8 + hlen :])
+    store._header_cache.clear()
+
+    def malloc_fail(self, *a, **k):
+        raise RuntimeError(
+            "[metal::malloc] Attempting to allocate 4398046511104 bytes which is "
+            "greater than the maximum allowed buffer size"
+        )
+
+    monkeypatch.setattr(SpillDiskStore.__mro__[1], "load_exact_cache", malloc_fail)
+    assert _load(store, key) is None
+    assert not path.exists()
+    assert key not in store._exact_index
+    assert store.invalidated == 1
+
+
+def test_header_matching_payload_stays_transient(tmp_path):
+    store = _store(tmp_path)
+    key = _put(store)
+    assert store._header_matches_payload(_path(store, key))

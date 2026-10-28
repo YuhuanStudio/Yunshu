@@ -258,6 +258,25 @@ def token_boundaries(prompt, char_points, tokenizer, ids, *, return_map=False):
     return (points, endpoint_map) if return_map else points
 
 
+def _json_object_end_after(text: str, at: int) -> int | None:
+    """Largest end offset of a JSON value that starts at a ``{`` before ``at`` and ends past it.
+
+    ``raw_decode(text, start)`` parses in place (the old ``text[start:]`` copied the whole tail for
+    every brace) and ``str.find`` jumps between braces."""
+    decoder = json.JSONDecoder()
+    best = None
+    start = text.find("{", 0, at)
+    while start >= 0:
+        try:
+            _, end = decoder.raw_decode(text, start)
+        except ValueError:
+            end = -1
+        if end > at and (best is None or end > best):
+            best = end
+        start = text.find("{", start + 1, at)
+    return best
+
+
 def rendered_boundaries(
     prompt,
     marked_prompt,
@@ -288,22 +307,11 @@ def rendered_boundaries(
             if close >= 0:
                 end = close + len("</tool_call>")
             else:
-                decoder = json.JSONDecoder()
-                candidates = []
-                for start in range(at):
-                    if marked_prompt[start] != "{":
-                        continue
-                    try:
-                        _, length = decoder.raw_decode(marked_prompt[start:])
-                    except ValueError:
-                        continue
-                    if start + length > at:
-                        candidates.append(start + length)
-                if not candidates:
+                end = _json_object_end_after(marked_prompt, at)
+                if end is None:
                     raise ValueError(
                         "tool_use cache endpoint is absent from rendered template"
                     )
-                end = max(candidates)
         end -= sum(len(m) for m, pos in positions.items() if 0 <= pos < end)
         chars.append((end, duration))
         marker_chars[marker] = end

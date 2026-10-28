@@ -42,6 +42,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from .transient_errors import is_transient_load_error
+
 logger = logging.getLogger(__name__)
 
 _CACHE_FORMAT_VERSION = "1"
@@ -880,7 +882,13 @@ class SSDKVCache:
 
             return cache_data
 
-        except Exception:
+        except Exception as e:
+            if is_transient_load_error(e):
+                # out of memory / interrupted call: the block is fine, this lookup goes cold
+                logger.warning(
+                    "SSD KV load failed for %s (%s); block kept", hex_hash[:16], e
+                )
+                return None
             logger.debug(f"SSD KV load failed for {hex_hash[:16]}", exc_info=True)
             # Prune stale entries: either file_size > 0 (corrupted/missing file)
             # or file_size == 0 but old enough that the writer should have finished

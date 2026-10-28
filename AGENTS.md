@@ -25,8 +25,10 @@ Describe only what the code verifiably does.
 
 ## Layout & commands
 
-Flat layout: `python/{yunshu_gateway,yunshu_engine,yunshu_kv,yunshu_cli}/`, `tests/`, `scripts/`, `docs/`.
-(`yunshu_control` stays only for `audit_log` and `token_counter`; the mesh/API/multi-tenant packages are gone.)
+Flat layout: `python/{yunshu_gateway,yunshu_engine,yunshu_kv,yunshu_cli,yunshu_console,yunshu_client}/`, `frontend/`,
+`tests/`, `scripts/`, `docs/`. (`yunshu_control` stays only for `audit_log` and `token_counter`; the mesh/API/multi-tenant
+packages are gone. `yunshu_console` is the light console process and never imports MLX; `yunshu_client` is the small
+WebSocket client.)
 
 Settings: every `YUNSHU_*` setting goes through `python/yunshu_engine/settings.py` — never read one with
 `os.environ`/`getenv` (a unit test enforces it). Add a new flag there, then run

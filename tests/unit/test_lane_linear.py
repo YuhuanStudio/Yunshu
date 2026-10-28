@@ -1,4 +1,4 @@
-"""Row-invariant lane projections (round driver): a row's bits do not depend
+"""Row-invariant lane projections (speculative lane): a row's bits do not depend
 on how many rows share the call, including calls cut into 128-row pieces."""
 
 import pytest
@@ -13,6 +13,13 @@ pytestmark = pytest.mark.skipif(
     not ready(),
     reason="lane tensor-op arithmetic self-test failed on this GPU / Metal compiler",
 )
+
+
+@pytest.fixture(autouse=True)
+def _lane_everywhere(monkeypatch):
+    # STOCK_ROWS is process-global: a Qwen4 lane setup (32) or the 27B prefill mode (512) left by another test sends the
+    # 300-row call to MLX's stock matmul, which is not the lane arithmetic this file checks
+    monkeypatch.setattr(lane_linear, "STOCK_ROWS", 0)
 
 
 @pytest.mark.parametrize(
@@ -138,8 +145,8 @@ def test_wide_prefill_does_not_expand_other_lane_callers_guard():
 
 
 def test_prefill_narrow_projection_never_takes_the_row_count_dispatch(monkeypatch):
-    """The engine turns stock / NAX prefill on for the upstream path; the round
-    driver's narrow projections (GDN a / b) must stay on the lane kernel for
+    """The engine turns stock / NAX prefill on for the upstream path; narrow
+    projections (GDN a / b) must stay on the lane kernel for
     any run length, or a prompt's bits would follow how its atoms were merged."""
     from yunshu_engine.kernels import nax_prefill
 
@@ -269,3 +276,35 @@ def test_convert_skip_keeps_named_projections():
     out = lane_linear.convert(m, skip=("lm_head",))
     assert out["converted"] == 1 and isinstance(m.lm_head, nn.QuantizedLinear)
     assert isinstance(m.body, lane_linear.LaneLinear)
+
+
+def test_convert_frees_replaced_layers_batch_by_batch(monkeypatch):
+    """The conversion must not keep every replaced QuantizedLinear alive until it returns: at each
+    materialisation the earlier batches' old layers are already gone (it doubled the projections at the
+    27B load peak)."""
+    import gc
+    import weakref
+
+    class Stack(nn.Module):
+        def __init__(self):
+            super().__init__()
+            for i in range(12):
+                setattr(self, f"l{i}", nn.Linear(512, 256, bias=False))
+
+    m = Stack()
+    m.set_dtype(mx.bfloat16)
+    nn.quantize(m, group_size=64, bits=4)
+    olds = [weakref.ref(getattr(m, f"l{i}")) for i in range(12)]
+    alive_at_eval = []
+    real_eval = mx.eval
+
+    def spy(*a, **k):
+        real_eval(*a, **k)
+        gc.collect()
+        alive_at_eval.append(sum(r() is not None for r in olds))
+
+    monkeypatch.setattr(lane_linear, "EVAL_BATCH_BYTES", 1)  # one layer per batch
+    monkeypatch.setattr(lane_linear.mx, "eval", spy)
+    assert lane_linear.convert(m)["converted"] == 12
+    # layer k's eval happens with at most the layer being converted still referenced
+    assert alive_at_eval and max(alive_at_eval) <= 2, alive_at_eval

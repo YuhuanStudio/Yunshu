@@ -393,7 +393,7 @@ async def create_container_file(container_id: str, request: Request):
 async def _copy_from_store(c: Container, fid: str):
     try:
         store = get_store()
-        meta = store.get_meta(fid)
+        meta = store.get_meta_for(fid, c.owner, not c.owner)
         data = await asyncio.to_thread(store.read, fid)
     except FileStoreError as exc:
         return _err(404 if exc.status == 404 else 400, exc.message, exc.code, "file_id")

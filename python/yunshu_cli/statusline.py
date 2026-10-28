@@ -16,6 +16,8 @@ from typing import Any
 
 import typer
 
+from yunshu_engine import settings
+
 statusline_app = typer.Typer(
     help="One-line engine status for coding-agent status lines."
 )
@@ -127,11 +129,13 @@ def statusline(
         envvar="YUNSHU_GATEWAY_URL",
         help="Server URL.",
     ),
-    api_key: str = typer.Option("", "--api-key", "-k", envvar="YUNSHU_API_KEY"),
+    api_key: str = typer.Option(
+        "", "--api-key", "-k", help="Bearer key. Default: YUNSHU_API_KEY."
+    ),
 ) -> None:
     """Print one status line (reads Claude Code's session JSON from stdin when piped)."""
     from ._output import emit
 
-    status = fetch_status(url, api_key)
+    status = fetch_status(url, api_key or settings.get("YUNSHU_API_KEY") or "")
     line = render(status, _read_session())
     emit({"status": status, "line": line}, human=lambda: typer.echo(line))

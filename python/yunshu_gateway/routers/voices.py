@@ -70,11 +70,23 @@ async def recording(value):
     return await asyncio.to_thread(decode)
 
 
-def put_record(data, record):
+def _meta(store, fid):
+    """File metadata as the calling request may see it (files_store.file_access)."""
+    from ..files_store import _ACCESS
+
+    access = _ACCESS.get()
+    return store.get_meta_for(fid, *access) if access else store.get_meta(fid)
+
+
+def put_record(data, record, owner=""):
     store = get_store()
     try:
         blob = store.put(
-            data, "recording.wav", purpose="user_data", mime_type="audio/wav"
+            data,
+            "recording.wav",
+            purpose="user_data",
+            mime_type="audio/wav",
+            owner=owner,
         )
         record["_recording"] = blob["id"]
         # JSON is a normal bounded file, so Files quota and TTL apply to both parts.
@@ -83,6 +95,7 @@ def put_record(data, record):
             "voice.json",
             purpose="user_data",
             mime_type="application/vnd.yunshu.voice+json",
+            owner=owner,
         )
     except FileStoreError as exc:
         if "blob" in locals():
@@ -98,21 +111,33 @@ def get_record(identifier, prefix):
     store = get_store()
     try:
         fid = "file_" + identifier[len(prefix) :]
-        meta = store.get_meta(fid)
+        meta = _meta(store, fid)
         if meta["mime_type"] != "application/vnd.yunshu.voice+json":
             raise ValueError("Not voice metadata")
         record = json.loads(store.read(fid))
         expected = "audio.voice_consent" if prefix == "cons_" else "audio.voice"
         if record["object"] != expected:
             raise ValueError("Wrong enrollment type")
-        store.get_meta(record["_recording"])
+        _meta(store, record["_recording"])
         return {**record, "id": identifier}
     except (FileStoreError, ValueError, KeyError) as exc:
         raise HTTPException(404, "Local voice or consent not found or expired") from exc
 
 
+def _file_access(request):
+    from .responses import _file_access as fa
+
+    return fa(request)
+
+
 def public(record):
     return {k: v for k, v in record.items() if not k.startswith("_")}
+
+
+def _owner(request) -> str:
+    from .responses import _resolve_owner
+
+    return _resolve_owner(request)
 
 
 @router.post("/audio/voice_consents")
@@ -134,6 +159,7 @@ async def create_consent(request: Request):
             "language": language,
             "created_at": int(time.time()),
         },
+        _owner(request),
     )
     return public(record)
 
@@ -150,7 +176,8 @@ async def create_voice(request: Request):
         name = form.get("name")
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 256:
             raise HTTPException(400, "name must contain 1–256 characters")
-        consent = get_record(form.get("consent"), "cons_")
+        with _file_access(request):
+            consent = get_record(form.get("consent"), "cons_")
         ref_text = form.get("ref_text")
         if ref_text is not None and (
             not isinstance(ref_text, str)
@@ -173,6 +200,7 @@ async def create_voice(request: Request):
             "_consent": consent["id"],
             "_ref_text": ref_text,
         },
+        _owner(request),
     )
     return public(record)
 

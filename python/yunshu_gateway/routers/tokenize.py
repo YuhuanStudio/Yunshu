@@ -7,7 +7,7 @@ resolves tokenizer from loaded engine or model manager with
 case-insensitive and provider-prefix fallbacks.
 """
 
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, model_validator
@@ -68,6 +68,70 @@ def _flatten_content(content) -> str:
     )
 
 
+def _with_dict_tool_arguments(messages: list[dict]) -> list[dict]:
+    """``messages`` with OpenAI's JSON-string ``function.arguments`` parsed to mappings, as the
+    engines do before rendering (templates iterate the arguments; a string raised in the preview
+    while generation rendered it). Not mutated."""
+    if not any(isinstance(m, dict) and m.get("tool_calls") for m in messages):
+        return messages
+    from yunshu_engine.vlm_engine import VLMEngine  # imports MLX: only when needed
+
+    out = []
+    for m in messages:
+        calls = m.get("tool_calls") if isinstance(m, dict) else None
+        if isinstance(calls, list):
+            m = {**m, "tool_calls": VLMEngine._normalize_vlm_tool_calls(calls)}
+        out.append(m)
+    return out
+
+
+def _owning_engine(tokenizer):
+    """The loaded engine whose tokenizer this is, or None."""
+    manager = get_model_manager()
+    engines = []
+    if manager is not None:
+        engines += [
+            e.engine for e in manager.list_entries() if e.is_loaded and e.engine
+        ]
+    engines.append(get_engine())
+    for eng in engines:
+        if (
+            eng is not None
+            and getattr(eng, "_tokenizer", None) is tokenizer
+            and hasattr(eng, "_template_messages")
+        ):
+            return eng
+    return None
+
+
+def _template_input(tokenizer, messages: list[dict]) -> list[dict]:
+    """``messages`` as generation hands them to the chat template: the owning engine's own
+    preparation (role remap, family adapter with late ``[System note]`` turns and token-counter
+    stripping, special-token defusing, tool-call normalisation), so counts and previews equal what
+    is prefilled. Without an engine (a bare tokenizer) only the generic steps run."""
+    eng = _owning_engine(tokenizer)
+    if eng is not None:
+        # the chat route's own request normalisation (null content, text-part joins) first
+        from .chat import ChatMessage, _extract_messages
+
+        try:
+            messages = _extract_messages([ChatMessage(**m) for m in messages])
+        except Exception:
+            messages = [
+                {**m, "content": _flatten_content(m.get("content"))} for m in messages
+            ]
+        return cast("list[dict]", eng._template_messages(messages))
+    from yunshu_engine.special_tokens import neutralize_special_text
+
+    return neutralize_special_text(
+        [
+            {**m, "content": _flatten_content(m.get("content"))}
+            for m in _with_dict_tool_arguments(messages)
+        ],
+        tokenizer,
+    )
+
+
 def _encode(tokenizer, text: str, add_special_tokens: bool) -> list[int]:
     if add_special_tokens:
         return list(tokenizer.encode(text))
@@ -98,10 +162,8 @@ async def tokenize(req: TokenizeRequest, request: Request):
         _check_model_access(request, model)
     tokenizer = _resolve_tokenizer(model)
     if req.messages is not None:
-        msgs = [
-            {**m, "content": _flatten_content(m.get("content"))} for m in req.messages
-        ]
         kwargs = dict(req.chat_template_kwargs or {})
+        msgs = _template_input(tokenizer, req.messages)
         try:
             text = tokenizer.apply_chat_template(
                 msgs,
@@ -310,7 +372,7 @@ async def apply_template(req: ApplyTemplateRequest, request: Request):
     tokenizer = _resolve_tokenizer(req.model or "")
     try:
         prompt = tokenizer.apply_chat_template(
-            req.messages,
+            _template_input(tokenizer, req.messages),
             tools=req.tools,
             tokenize=False,
             add_generation_prompt=req.add_generation_prompt,

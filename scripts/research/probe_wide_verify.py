@@ -76,7 +76,7 @@ def setup(model_dir: str, lane_linear: bool = True):
     from yunshu_engine.kernels.batch_invariant import install as install_invariant
     from yunshu_engine.kernels.batch_invariant import set_active
 
-    omlx.apply(row_exact=False)
+    omlx.apply()
     model, processor = load(model_dir)
     lm = model.language_model
     if lane_linear:

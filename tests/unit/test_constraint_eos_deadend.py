@@ -88,3 +88,45 @@ def test_bitmask_padding_positions_stay_blocked():
     app = BitmaskApplicator(2)
     out = app.apply(mx.array([1.0, 2.0, 99.0]), mx.array([True, True]))
     assert float(out[2]) == float("-inf")
+
+
+class _MaskConstraint:
+    """A constraint that hands out a boolean mask (llguidance-style) next to its allowed list."""
+
+    def __init__(self, allowed, width):
+        self.allowed = allowed
+        self.width = width
+
+    def allowed_mask(self, tokenizer, vocab):
+        return mx.array([i in self.allowed for i in range(vocab)])
+
+    def get_allowed_tokens(self, tokenizer, generated):
+        return list(self.allowed)
+
+
+@pytest.mark.parametrize(
+    "allowed, logits",
+    [
+        ([], [1.0, 5.0, 3.0]),  # no allowed token
+        ([0], [float("-inf"), 5.0, 3.0]),  # every allowed token banned by a processor
+        ([1], [1.0, 5.0, 3.0]),  # fine
+        ([0, 2], [1.0, 5.0, 3.0]),  # fine
+    ],
+)
+def test_mask_path_is_the_same_dead_end_rule_as_the_allowlist_path(allowed, logits):
+    """The mask fast path (ConstrainedSampler) must fail exactly where the allowlist path
+    (apply_json_constraint, unchanged since before the mask path) fails, and mask the same."""
+    from yunshu_engine.json_schema import apply_allowed_mask_from
+
+    x = mx.array([logits])
+    try:
+        want = apply_json_constraint(x, allowed)
+    except ConstrainedDecodingError:
+        want = None
+    try:
+        got = apply_allowed_mask_from(_MaskConstraint(allowed, 3), None, x)
+    except ConstrainedDecodingError:
+        got = None
+    assert (got is None) == (want is None)
+    if want is not None:
+        assert got.tolist() == want.tolist()

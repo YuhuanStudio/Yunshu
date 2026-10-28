@@ -254,7 +254,6 @@ def test_vlm_auto_tools_can_use_lazy_tags_but_forced_contract_is_preserved():
 
 
 def test_lazy_defaults_and_native_auto_guide_do_not_conflict(monkeypatch):
-    from yunshu_engine import settings
     from yunshu_engine.structural_tag import constrains_initial_output
     from yunshu_engine.vlm_engine import VLMEngine
 
@@ -274,12 +273,14 @@ def test_lazy_defaults_and_native_auto_guide_do_not_conflict(monkeypatch):
         )
         is False
     )
-    monkeypatch.setattr(settings, "get_bool", lambda key: key == "YUNSHU_TOOL_GRAMMAR")
     tools = [{"name": "weather", "parameters": {"type": "object"}}]
     kwargs = {"tools": tools, "tool_choice": "auto", "json_schema": spec}
     assert engine._request_template_extra(kwargs)["tools"] == tools
     assert "_tool_spec" not in kwargs
     kwargs = {"tools": tools, "tool_choice": "auto"}
+    engine._request_template_extra(kwargs)
+    assert "_tool_spec" not in kwargs  # auto stays unconstrained
+    kwargs = {"tools": tools, "tool_choice": "required"}
     engine._request_template_extra(kwargs)
     assert "_tool_spec" in kwargs
     with pytest.raises(ValueError, match="forced tool_choice"):

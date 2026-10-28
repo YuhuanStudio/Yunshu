@@ -21,7 +21,6 @@ description: 依領域列出 Yunshu 的每一項功能，附上狀態與涵蓋�
 | 結構化輸出 | 在解碼期間強制 JSON schema、regex、選項與 grammar，包含工具參數 | 穩定 | [結構化輸出](/docs/guides/structured-output), [約束解碼](/docs/internals/constrained-decoding) |
 | 有損記憶體選項 | int8 KV、壓縮的 WARM 層與載入時量化；預設關閉 | 穩定 | [選項](/docs/guides/options), [記憶體管理](/docs/internals/memory), [設定](/docs/guides/configuration) |
 | 大型 MoE 載入（部分支援） | 從張量形狀推導社群版 DeepSeek-V4-Flash 的位元數與 group size；載入前先做容量檢查 | 部分支援 | [模型支援](/docs/guides/model-support) |
-| Round driver（實驗性） | Yunshu 自有、針對 dense Qwen3.5 系列模型的推測 round driver | 實驗性 | [Round driver](/docs/developers/round-driver) |
 | 模型支援 | 依系列說明哪些已調校、哪些走通用路徑、哪些已驗證 | 穩定 | [模型支援](/docs/guides/model-support) |
 | 下一回合預演 | 符合條件的文字回覆之後，以標準 stride 做 APC 預演；boundary/exact 是會改變數值、須明確啟用的選項 | 穩定 | [預填與預演](/docs/internals/prefill-and-rehearsal) |
 | Batch 轉 lane 升級 | 共用 batch 縮減到一個 row 時，符合條件的貪婪請求會移到推測 lane；多 row 推測尚未實作 | 穩定 | [推測解碼](/docs/internals/speculative-decoding) |

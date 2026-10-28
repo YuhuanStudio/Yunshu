@@ -42,9 +42,9 @@ Unknown top-level fields are ignored, so a client can keep sending OpenAI fields
 | `top_p` | number | `1.0` | `0` to `1`. | supported |
 | `top_k` | integer | `0` | `0` disables. | supported |
 | `min_p` | number | `0.0` | `0` to `1`. | supported |
-| `repetition_penalty` | number | `1.0` | `0` to `2`. | supported |
-| `frequency_penalty` | number | `0.0` | `-2` to `2`. | supported |
-| `presence_penalty` | number | `0.0` | `-2` to `2`. | supported |
+| `repetition_penalty` | number | `1.0` | `0` to `2`. Not an OpenAI field: it follows mlx-lm and looks at the last 20 prompt and generated tokens. | supported |
+| `frequency_penalty` | number | `0.0` | `-2` to `2`. As OpenAI: counts every generated token (the prompt is not counted). | supported |
+| `presence_penalty` | number | `0.0` | `-2` to `2`. As OpenAI: applies once a token has been generated. | supported |
 | `logit_bias` | object | none | Map of token id to bias, each `-100` to `100`. Keys are token ids as strings. | supported |
 | `seed` | integer | none | 64-bit signed. Makes sampling reproducible. | supported |
 | `top_n_sigma` | number | `0.0` | `0` to `10`. Keeps tokens whose logit is within n sigma of the maximum; `0` is off. | extension |
@@ -341,7 +341,7 @@ print(resp.usage.completion_tokens_details.reasoning_tokens)
 - `usage.completion_tokens` already includes reasoning tokens; `reasoning_tokens` and `cached_tokens` are details inside their totals, never extra. `cached_tokens` is the prompt prefix served from the prefix cache.
 - `choices[].logprobs.content[]` items are `{token, logprob, bytes, top_logprobs: [{token, logprob, bytes}]}`.
 - `x_yunshu` is the Yunshu extension described in [API overview](/docs/api/overview). `mcp_tool_results` appears when a returned tool call matched a tool of a configured MCP client and was executed by the gateway.
-- `max_tokens: 0` returns immediately with an empty message, `finish_reason: "length"` and the prompt token count.
+- `max_tokens` and `max_completion_tokens` below 1 answer `400`, as OpenAI does (only `/v1/completions` takes 0, for echo-only scoring). To count a prompt, POST the same `messages` to `/tokenize`: `count` is the prompt length generation would run.
 - If a structured-output result still fails validation on a VLM, the answer is a `422` with `x_yunshu.validation`.
 
 ## Streaming

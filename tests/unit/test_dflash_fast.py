@@ -511,6 +511,15 @@ def test_gathered_prework_reads_the_window_in_kernel():
         assert line in gp._SOURCE and line in source
 
 
+def test_gathered_prework_carries_the_rendered_qk_epsilon():
+    # the raw omlx source holds a marker Metal cannot compile; the 27B server's tree verify failed on it
+    from yunshu_engine.kernels import gdn_qk_eps
+
+    source = fast.prework_source()
+    assert gdn_qk_eps.MARKER not in source
+    assert gdn_qk_eps.expression("float(DK)") in source
+
+
 def test_drafter_bits_setting_defaults_to_the_measured_eight_bits(monkeypatch):
     from yunshu_engine import settings
 

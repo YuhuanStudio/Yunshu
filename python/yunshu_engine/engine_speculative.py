@@ -9,6 +9,8 @@ retain the shared BatchedEngine state; misc ignores allow that mixin self type.
 import asyncio
 import time
 
+from .context_window import require_non_empty_prompt
+
 
 class EngineSpeculativeMixin:
     async def _warm_prompt_prefill(self: _engine.BatchedEngine) -> None:  # type: ignore[misc]
@@ -73,6 +75,7 @@ class EngineSpeculativeMixin:
         k: int = 4,
         temperature: float = 0.0,
         seed: int | None = None,
+        suppress_tokens: list[int] | None = None,
     ) -> list[int]:
         """Single-sequence generation via the Gemma-4 assistant drafter.
 
@@ -117,6 +120,16 @@ class EngineSpeculativeMixin:
                 return _mx.tanh(_f(_h) / _c) * _c
         else:
             _lm_head = _base_head
+        if suppress_tokens:
+            # Every target token (first, verified, bonus) comes from this head, so a ban here
+            # is exact; a banned draft simply fails verification.
+            from .text_logit_processors import TokenBan
+
+            _ban, _head = TokenBan(suppress_tokens), _lm_head
+
+            def _lm_head(_h, _head=_head, _ban=_ban):
+                return _ban(None, _head(_h))
+
         return self._gemma4_assistant_proposer.spec_decode_generate(
             tm,
             _lm_head,
@@ -185,6 +198,7 @@ class EngineSpeculativeMixin:
         enable_thinking: bool | None = None,
         stop_token_ids: list[int] | None = None,
         k: int = 4,
+        suppress_tokens: list[int] | None = None,
     ) -> _engine.GenerationOutput:
         """n=1 serving via the Gemma-4 assistant drafter (validated ~2.5x, lossless).
 
@@ -212,6 +226,7 @@ class EngineSpeculativeMixin:
         else:
             text = str(prompt)
             input_ids = tokenizer.encode(text)
+        require_non_empty_prompt(input_ids)
         prompt_tokens = len(input_ids)
 
         eos_ids: set[int] = set()
@@ -236,6 +251,7 @@ class EngineSpeculativeMixin:
                 k=k,
                 temperature=temperature or 0.0,
                 seed=seed,
+                suppress_tokens=suppress_tokens,
             )
             finished_by_eos = bool(gen_ids) and gen_ids[-1] in eos_ids
             visible_ids = gen_ids[:-1] if finished_by_eos else gen_ids
@@ -311,7 +327,7 @@ class EngineSpeculativeMixin:
         json_schema: dict | str | None = None,
         cancel_event: asyncio.Event | None = None,
         logits_processors: list | None = None,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float | None = None,
         lora_adapter: str | None = None,
     ) -> _engine.GenerationOutput:
         """Generate using speculative decoding (unverified external LM path).
@@ -366,6 +382,7 @@ class EngineSpeculativeMixin:
         else:
             text = prompt if isinstance(prompt, str) else str(prompt)
             input_ids = tokenizer.encode(text)
+        require_non_empty_prompt(input_ids)
         import mlx.core as mx
 
         # Build EOS + stop token sets
@@ -674,8 +691,18 @@ class EngineSpeculativeMixin:
         _spec_reasoning_tok = 0
         if text:
             try:
-                from .reasoning_parser import get_reasoning_parser
+                from .reasoning_parser import (
+                    close_unterminated_reasoning,
+                    get_reasoning_parser,
+                )
+                from .thinking_budget import detect_needs_think_prefix
 
+                # EOS / stop / length inside the prompt-opened <think> keeps the tail reasoning
+                text = close_unterminated_reasoning(
+                    text,
+                    detect_needs_think_prefix(list(input_ids), tokenizer),
+                    constrained=json_schema is not None,
+                )
                 rp = get_reasoning_parser(self.model_name)
                 rp_out = rp.parse(text)
                 if rp_out.reasoning and rp_out.reasoning_tokens > 0:

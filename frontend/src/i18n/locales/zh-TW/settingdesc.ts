@@ -94,6 +94,8 @@ const settingdesc = {
   YUNSHU_COMPACT_MAX_TOKENS: "Responses 壓縮：模型所寫摘要的 token 數上限。",
   YUNSHU_AUTH_TOKEN:
     "Bearer 權杖。設定後，除 health、version 與 docs 外的所有請求都需要它；未設定時推論開放，但管理類端點被拒絕。",
+  YUNSHU_ADMIN_WRITE_EXEC_SETTINGS:
+    "允許 `PATCH /v1/yunshu/config`（主控台設定編輯器）修改會執行主機程式碼或存取任意主機路徑的設定：所有路徑類設定、`YUNSHU_MCP_SERVERS`、`YUNSHU_TRUST_REMOTE_CODE`、`YUNSHU_CODE_EXECUTION`、`YUNSHU_ALLOW_LOCAL_FILES`。預設關閉：這些設定經 HTTP 唯讀，請在主機上編輯設定檔；本設定本身也無法經 HTTP 修改。",
   YUNSHU_AUTH_DISABLED:
     "完全停用驗證（管理類端點也會開放），僅供本機開發使用。",
   YUNSHU_DEBUG_TREE_PROFILE:
@@ -109,6 +111,8 @@ const settingdesc = {
     "每個用戶端的請求速率上限（每分鐘請求數）；0（預設）表示關閉。本機單人使用的引擎不需要，伺服器對其他機器開放時再設定。",
   YUNSHU_TRUSTED_PROXIES:
     "以逗號分隔的代理 IP，其 `X-Forwarded-For` 標頭會被信任。",
+  YUNSHU_ALLOWED_HOSTS:
+    "除了迴圈位址名稱外，本伺服器接受的 Host 名稱（以逗號分隔）。留空（預設）：綁定在迴圈位址的伺服器只接受迴圈位址的 Host 標頭（localhost、127.0.0.1、[::1]；可防 DNS rebinding），綁定 0.0.0.0 則不檢查。設定後，任何綁定位址都會檢查；'*' 表示關閉檢查。",
   YUNSHU_FOOTPRINT_SAMPLE_MS:
     "在背景執行緒中每 N ms 取樣本行程的 `phys_footprint`，並將峰值以 `yunshu_process_footprint_bytes` 匯出到 `/metrics`；0（預設）表示關閉。",
   YUNSHU_MAX_MEMORY_GB:
@@ -193,16 +197,16 @@ const settingdesc = {
   YUNSHU_SPEC_PROPOSER: "文字模型：n-gram 推測解碼所用的提案器類型。",
   YUNSHU_GEMMA4_ASSISTANT:
     "文字 Gemma-4 模型：輔助草稿模型目錄（共用 KV 的推測解碼草稿模型）。",
-  YUNSHU_GPU_SAMPLER:
-    "文字模型：在 GPU 上進行 Gumbel-max 取樣（每個 token 無需 GPU 到 CPU 的同步）。",
+  YUNSHU_SDPA_CHUNK:
+    "M1–M4、head_dim 256：將原生長 prefill 注意力的後備路徑依查詢列分塊，讓分數張量維持在 1 GiB 以下（實驗性）。",
   YUNSHU_JUMP_FORWARD:
     "文字模型：JSON schema 輸出中由文法強制決定的結構性 token 直接輸出，不經過前向傳遞。",
   YUNSHU_JSON_SCHEMA_ENGINE:
     "負責 JSON schema 與 `json_object` 約束解碼遮罩的引擎：`llguidance`（248K 詞表上每 token 遮罩中位數約 0.25 ms；屬性依 schema 順序）或 `inhouse`（Python 狀態機，中位數約 3 ms；屬性順序不拘）。llguidance 無法編譯的 schema，在內建引擎支援時會退回內建引擎。",
   YUNSHU_GRAMMAR_BITMASK:
     "約束解碼改用 xgrammar 風格的位元遮罩引擎，而非允許清單取樣器。",
-  YUNSHU_TOOL_GRAMMAR:
-    "工具呼叫約束解碼（結構標籤）：在工具呼叫起始標記之前為自由文字，之後呼叫本體會被遮罩為本次請求精確的呼叫文法（工具名稱、參數鍵、具型別的值、結尾）。強制的 `tool_choice` 一律受約束；此旗標僅控制 `auto`。關閉時，自動選擇的工具呼叫不受約束地解碼，事後再修復。",
+  YUNSHU_GRAMMAR_PREWARM:
+    "模型載入時在背景建立 llguidance 詞元表，使第一個約束請求不必花約一秒走訪詞彙表。每種遮罩寬度約佔用 0.45 GiB 原生堆積；設為 0 則於首次使用時建立。",
   YUNSHU_QUANT_MODE:
     "載入時在記憶體中量化權重（有損，以品質換記憶體）：`mxfp4`、`nvfp4`、`mxfp8` 或 `affine`（留空則維持檢查點原樣）。",
   YUNSHU_QUANT_CONFIG:
@@ -213,12 +217,6 @@ const settingdesc = {
     "回覆後閒置時，以 prefill 算術預演下一輪 assistant 文字並存 APC，不重用 decode KV。預設 stride 在通過資格的 27B 路徑停在 assistant 結束前最後的絕對 64 對齊位置；其他路徑保留完整 atom。相同對話可接手執行中預演，其他請求取消。off 停用；boundary／exact 在舊路徑保留額外 assistant-end 切分且可能改變浮點捨入。",
   YUNSHU_NEXT_TURN_DELAY_S:
     "回覆後至開始下一輪預演的秒數。預設 0.3，讓立即追問（代理迴圈）在預演開始前抵達而只需預填一次，較晚的相符追問則接手執行中的工作；0 表示閒置即開始，立即追問會多花約 0.15–0.25 秒（預演加一次短尾請求）。有前景請求等待時不啟動預演。",
-  YUNSHU_ROUND_PREFILL_CHUNK:
-    "回合驅動器：每個預填區段的提示詞 token 數。解碼中的請求只在預填前向傳遞之間推進，因此區段越小，越能在長提示詞旁維持執行，代價是預填速度約降低 20%。區段依提示詞固定，輸出不受其他執行中工作影響；以不同大小預填的提示詞各自一致，但彼此並非位元相同。",
-  YUNSHU_ROUND_DRIVER:
-    "稠密 Qwen3.5 系列 VLM：以Yunshu的回合驅動器處理文字請求（對所有解碼列做打包前向傳遞，與批次預填步驟交替；每列皆有 MTP 草稿；依位置鍵取樣；見 `docs/guides/ROUND_DRIVER.md`）。關閉時使用上游 BatchGenerator 加單一請求推測解碼通道。圖片提示詞、int8 KV 與 MoE 無論如何都走上游路徑。",
-  YUNSHU_MTP_ROW_EXACT:
-    "Qwen3.5 系列執行器：使用 oMLX 逐列精確驗證（驗證列與單列解碼位元相同），取代批次不變核心。",
   YUNSHU_QWEN4_LANE:
     "Qwen3.8-Flash-Next（qwen4_exp）：解碼、推測驗證與草稿一律以列不變的 lane 矩陣乘處理稠密量化投影，取代上游逐列的單列 qmv。多一列驗證不再倍增稠密權重讀取量；推測輸出仍與一般解碼相同。輸出與預設算術相差最後一位。上游融合 head 核心讀不了的 head 格式（如 6-bit）會強制啟用。寬於 32 列的預填區塊仍用 MLX 的量化矩陣乘。",
   YUNSHU_ENGINE_LOOP:
@@ -316,6 +314,8 @@ const settingdesc = {
   YUNSHU_ARM:
     "在服務紀錄中記錄本伺服器所執行設定組（arm）的標籤，用於離線 A/B 分析；不會改變任何行為。",
   YUNSHU_GATEWAY_URL: "`yunshu` CLI 用戶端指令所使用的伺服器 URL。",
+  YUNSHU_API_KEY:
+    "用戶端：`yunshu` CLI 送給伺服器的 Bearer 金鑰（`yunshu statusline`），也會傳給 `yunshu launch` 啟動的程式開發代理（Codex 以它作為供應商金鑰）。伺服器不會讀取它；伺服器端請設定 `YUNSHU_AUTH_TOKEN`。",
   YUNSHU_HF_ENDPOINT:
     "`yunshu serve` 使用的 Hugging Face Hub 端點（會匯出為 `HF_ENDPOINT`）。",
   YUNSHU_HISTORY_INTERVAL_S:

@@ -147,49 +147,6 @@ def test_spec_lanes_retain_both_caches_and_restore_readout(runner):  # noqa: F81
     assert not runner.busy()
 
 
-def test_round_driver_auxiliary_never_joins_primary_driver(runner, monkeypatch):  # noqa: F811
-    monkeypatch.setattr(vbr, "DRIVER_MIN_CONCURRENCY", 1)  # a lone request drives
-
-    class Driver:
-        head = None
-        chunk = 2048
-
-        def __init__(self):
-            self.rows = []
-            self.steps = 0
-
-        def add(self, req):
-            self.rows.append(SimpleNamespace(req=req, done=0, hit=0))
-            return 0
-
-        def step(self):
-            self.steps += bool(self.rows)
-            return []
-
-        def remove(self, handle):
-            self.rows = [r for r in self.rows if r.req.handle is not handle]
-
-    runner.driver = Driver()
-    runner._aux_driver = Driver()
-    aux = job(-1)
-    aux.prompt_kwargs = None
-    runner._submit(aux)
-    runner._drive_slice(resubmit=False)
-    assert runner._aux_driver.steps == 1
-    main = job(0)
-    main.prompt_kwargs = None
-    runner._submit(main)
-    runner._drive_slice(resubmit=False)
-    assert runner._aux_driver.steps == 1
-    assert runner.driver.steps == 1
-    assert runner.driver.rows[0].req.handle is main
-    assert not runner._aux_driver.rows[0].req.use_apc
-    main.abandoned = True
-    runner._drive_slice(resubmit=False)
-    runner._drive_slice(resubmit=False)
-    assert runner._aux_driver.steps == 2
-
-
 def test_tracker_transfers_priority_to_worker_event():
     from yunshu_engine.request_tracker import RequestTracker, current_request_info
     from yunshu_gateway.x_yunshu import RequestInfo

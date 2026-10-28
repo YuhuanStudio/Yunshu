@@ -15,8 +15,9 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from yunshu_kv.disk_budget import is_enospc
 
-from ..files_store import FileStore, FileStoreError, get_store
+from ..files_store import FileStore, FileStoreError, get_store, visible_to
 from .models import _check_permission
+from .responses import _is_admin, _resolve_owner
 
 router = APIRouter(tags=["files"])
 
@@ -66,6 +67,12 @@ def auth(request: Request, anthropic: bool | None = None) -> JSONResponse | None
             request, exc.status_code, str(exc.detail), anthropic=anthropic
         )
     return None
+
+
+def _actor(request: Request) -> tuple[str, bool]:
+    """(actor, may-see-everything): the static token, auth-disabled mode and admin-scope keys
+    see all files; an infer key sees its own."""
+    return _resolve_owner(request), _is_admin(request)
 
 
 def iso(ts: int | float) -> str:
@@ -191,6 +198,7 @@ async def create_file(request: Request):
             purpose or "user_data",
             upload.content_type,
             expires_after,
+            owner=_actor(request)[0],
         )
     except FileStoreError as exc:
         return error_response(request, exc.status, exc.message, exc.code)
@@ -253,7 +261,12 @@ async def list_files(request: Request):
     if isinstance(limit, JSONResponse):
         return limit
     q = request.query_params
-    items = store.list(None if anth else q.get("purpose"))
+    actor, admin = _actor(request)
+    items = [
+        m
+        for m in store.list(None if anth else q.get("purpose"))
+        if visible_to(m, actor, admin)
+    ]
     if anth:
         page, more = paginate_ids(items, limit, q.get("after_id"), q.get("before_id"))
         data = [anthropic_file(m) for m in page]
@@ -291,7 +304,7 @@ async def retrieve_file(file_id: str, request: Request):
     if (r := auth(request)) is not None:
         return r
     try:
-        meta = get_store().get_meta(file_id)
+        meta = get_store().get_meta_for(file_id, *_actor(request))
     except FileStoreError as exc:
         return error_response(request, exc.status, exc.message, exc.code)
     return anthropic_file(meta) if is_anthropic(request) else openai_file(meta)
@@ -302,7 +315,7 @@ async def delete_file(file_id: str, request: Request):
     if (r := auth(request)) is not None:
         return r
     try:
-        meta = get_store().get_meta(file_id)
+        meta = get_store().get_meta_for(file_id, *_actor(request))
         get_store().delete(file_id)
     except FileStoreError as exc:
         return error_response(request, exc.status, exc.message, exc.code)
@@ -317,7 +330,7 @@ async def file_content(file_id: str, request: Request):
         return r
     store = get_store()
     try:
-        meta = store.get_meta(file_id)
+        meta = store.get_meta_for(file_id, *_actor(request))
     except FileStoreError as exc:
         return error_response(request, exc.status, exc.message, exc.code)
     if is_anthropic(request) and not meta.get("downloadable"):

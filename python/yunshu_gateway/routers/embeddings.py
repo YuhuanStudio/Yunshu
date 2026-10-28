@@ -600,13 +600,6 @@ def _record_embedding_metrics(prompt_tokens: int) -> None:
         get_metrics().record_inference()
     except Exception:
         pass
-    # feed the per-request TPM box (embeddings bill prompt tokens only).
-    try:
-        from ..usage_context import record_billed_tokens
-
-        record_billed_tokens(prompt_tokens or 0)
-    except Exception:
-        pass
 
 
 async def _resolve_embedding_engine(model_id: str):

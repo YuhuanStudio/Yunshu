@@ -1,6 +1,6 @@
 """Lossy optimizations are user options with a lossless default.
 
-Rule (CLAUDE.md, Settings): anything that changes output quality (KV / state
+Rule (AGENTS.md, Settings): anything that changes output quality (KV / state
 quantization, weight quantization) is opt-in; only lossless optimizations may be
 on by default. This pins the defaults of every lossy knob in the registry.
 """

@@ -25,7 +25,7 @@ checkout, pick just the extras you need instead of `--all-extras`:
 uv sync --extra omni          # mlx-vlm + torch — native Qwen3-Omni speech-to-speech (a supported capability)
 uv sync --extra vision        # mlx-vlm (VLM / OCR)
 uv sync --extra audio         # mlx-audio (ASR / TTS / Realtime voice cascade)
-uv sync --extra generation    # diffusers + torch (image generation)
+uv sync --extra generation    # torch + Pillow (image generation)
 uv sync --extra embeddings    # mlx-embeddings (/v1/embeddings, /v1/rerank)
 uv sync --all-extras          # everything — what most contributors want
 ```
@@ -48,14 +48,16 @@ release/manual triggers. Run the full unit suite locally before handoff. See
 
 Yunshu is a flat monorepo (no `yunshu/` subdir):
 
-| Layer | Directory | Responsibility |
-|:-----:|-----------|----------------|
-| L1 | `python/yunshu_gateway/` | FastAPI HTTP server, OpenAI/Anthropic/MCP/Realtime routers |
-| L2 | `python/yunshu_control/` | Audit log and token counting |
-| L4 | `python/yunshu_engine/` | Inference engine (text + vision + audio + image) |
-| L5 | `python/yunshu_kv/` | KV prefix cache |
+| Package | Directory | Responsibility |
+|---------|-----------|----------------|
+| Gateway | `python/yunshu_gateway/` | FastAPI HTTP server, OpenAI/Anthropic/MCP/Realtime routers |
+| Control | `python/yunshu_control/` | Audit log and token counting |
+| Engine | `python/yunshu_engine/` | Inference engine (text + vision + audio + image) |
+| KV | `python/yunshu_kv/` | KV prefix cache |
 | CLI | `python/yunshu_cli/` | `yunshu serve / chat / model / ...` |
-| Console | `frontend/` | Web console and its docs section (`frontend/docs/`, MDX in en, zh-TW and zh-CN) |
+| Console server | `python/yunshu_console/` | The console process: serves the web console and docs, proxies to the engine, records history; never imports MLX |
+| Client | `python/yunshu_client/` | Minimal Python client for the text WebSocket (`/v1/stream`) |
+| Console UI | `frontend/` | Web console and its docs section (`frontend/docs/`, MDX in en, zh-TW and zh-CN) |
 
 > **Note:** `python/yunshu_engine/` is being actively refactored by the owner. If your change is
 > engine-side, coordinate before opening a large PR.

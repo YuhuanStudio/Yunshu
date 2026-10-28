@@ -23,8 +23,10 @@ Architecture:
 - Streaming via tokenizer.detokenizer (per-request, never pooled)
 """
 
+import array
 import asyncio
 import base64
+import collections
 import concurrent.futures
 import contextlib
 import contextvars
@@ -40,7 +42,7 @@ import threading
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import mlx.core as mx
 
@@ -51,7 +53,9 @@ from .memory_admission import (
     memory_limit_error,
 )
 from .moe_pack import tensor_quantization_override, unsupported_pack_reason
+from .paths import private_media_dir
 from .request import RequestOutput
+from .special_tokens import neutralize_special_text
 from .types import EngineConfig
 
 logger = logging.getLogger(__name__)
@@ -190,7 +194,7 @@ def _VALIDATE_LOCAL_PATH(path: str) -> str:
     output. With `YUNSHU_ALLOW_LOCAL_FILES` unset, only paths under
     `YUNSHU_MEDIA_DIR` (default: `$TMPDIR/yunshu_media`) are allowed. Set
     `YUNSHU_ALLOW_LOCAL_FILES=1` to opt back into the legacy unrestricted
-    behavior (NOT recommended for multi-tenant deployments).
+    behavior (NOT recommended when the API is reachable by anyone but the owner).
 
     Returns the resolved absolute path on success.
     Raises ValueError if the path escapes the allow-listed directory.
@@ -209,7 +213,7 @@ def _VALIDATE_LOCAL_PATH(path: str) -> str:
     except ValueError as e:
         raise ValueError(
             f"Local file access blocked: {path} is not under YUNSHU_MEDIA_DIR={media_root}. "
-            f"Set YUNSHU_ALLOW_LOCAL_FILES=1 to bypass (NOT recommended in multi-tenant)."
+            f"Set YUNSHU_ALLOW_LOCAL_FILES=1 to bypass (NOT recommended when the API is reachable by anyone but the owner)."
         ) from e
     return str(resolved)
 
@@ -231,6 +235,75 @@ SINGLE_IMAGE_ONLY_MODELS = frozenset(
 )
 
 
+def _completion_count(stats) -> int:
+    """Tokens the reply consumed: the consumer's count, else the runner's progress."""
+    return int(getattr(stats, "consumed", 0) or stats.generated)
+
+
+_UNSET: Any = object()  # "argument not given" (None is a real value for an orphan key)
+
+
+class _ThreadSafeQueue:
+    """Wraps asyncio.Queue for the MLX/consumer threads.
+
+    ``put_blocking`` bounds data by the async consumer. ``put_nowait`` carries the terminal
+    items (end sentinel, error): it never drops one when the queue is full, it parks it
+    behind the data and delivers it, in order, as soon as the consumer makes room.
+    """
+
+    def __init__(self, async_q, ev_loop):
+        self._q = async_q
+        self._loop = ev_loop
+        self._backlog: collections.deque = collections.deque()
+        self._drain: asyncio.Future | None = None
+        self._closed = False
+
+    def close(self):  # event-loop thread
+        """The consumer is gone: drop parked terminal items and stop the drain task, which
+        would otherwise wait forever on a queue nobody reads."""
+        self._closed = True
+        self._backlog.clear()
+        if self._drain is not None and not self._drain.done():
+            self._drain.cancel()
+
+    def put_nowait(self, item):
+        with contextlib.suppress(RuntimeError):  # event loop closed during shutdown
+            self._loop.call_soon_threadsafe(self._put_terminal, item)
+
+    def _put_terminal(self, item):  # event-loop thread
+        if self._closed:
+            return
+        if self._backlog or self._q.full():
+            self._backlog.append(item)
+            if self._drain is None or self._drain.done():
+                self._drain = asyncio.ensure_future(self._drain_backlog())
+        else:
+            self._q.put_nowait(item)
+
+    async def _drain_backlog(self):
+        while self._backlog:
+            await self._q.put(self._backlog[0])
+            if self._backlog:
+                self._backlog.popleft()
+
+    def put_blocking(self, item, cancel):
+        """Bound the runner's producer by the async consumer, including slow clients."""
+        try:
+            future = asyncio.run_coroutine_threadsafe(self._q.put(item), self._loop)
+        except RuntimeError:
+            return False
+        while True:
+            try:
+                future.result(timeout=0.05)
+                return True
+            except TimeoutError:
+                if cancel is not None and cancel.is_set():
+                    future.cancel()
+                    return False
+            except Exception:
+                return False
+
+
 class _VLMTextPromptCache:
     """Thread-safe LRU cache for VLM text prompt tokenization results.
 
@@ -242,16 +315,29 @@ class _VLMTextPromptCache:
     vision path (VLM models with images/audio), keyed by messages + template
     kwargs hash.
 
-    Memory-bounded with LRU eviction. Thread-safe via internal lock.
+    Memory-bounded with LRU eviction by entry count AND total size (a few long agent
+    prompts must not pin hundreds of MB): token ids are kept as a compact int32 array
+    (4 bytes a token, a Python list costs about 36), and the cache holds at most
+    ``max_total_tokens`` tokens / ``max_total_chars`` template characters.
+    Thread-safe via internal lock.
     """
 
-    def __init__(self, max_entries: int = 256) -> None:
+    def __init__(
+        self,
+        max_entries: int = 256,
+        max_total_tokens: int = 4_000_000,
+        max_total_chars: int = 16_000_000,
+    ) -> None:
         from collections import OrderedDict
 
-        self._cache: OrderedDict[str, list[int]] = OrderedDict()
+        self._cache: OrderedDict[str, array.array] = OrderedDict()
         self._template_cache: OrderedDict[str, str] = OrderedDict()
         self._lock = threading.Lock()
         self._max_entries = max_entries
+        self._max_total_tokens = max_total_tokens
+        self._max_total_chars = max_total_chars
+        self._total_tokens = 0
+        self._total_chars = 0
         self._stats = {"hits": 0, "misses": 0, "evictions": 0}
         from .tokenizer_prefix import TokenizerPrefixCache
 
@@ -278,21 +364,28 @@ class _VLMTextPromptCache:
             if entry is not None:
                 self._cache.move_to_end(cache_key)
                 self._stats["hits"] += 1
-                return entry
+                return entry.tolist()
             self._stats["misses"] += 1
             return None
 
     def put_token_ids(self, cache_key: str, token_ids: list[int]) -> None:
         """Store token IDs for a prompt."""
+        if len(token_ids) > self._max_total_tokens:
+            return  # one prompt larger than the whole budget is not worth keeping
+        packed = array.array("i", token_ids)
         with self._lock:
-            if cache_key in self._cache:
-                self._cache.move_to_end(cache_key)
-                self._cache[cache_key] = token_ids
-                return
-            while self._cache and len(self._cache) >= self._max_entries:
-                self._cache.popitem(last=False)
+            old = self._cache.pop(cache_key, None)
+            if old is not None:
+                self._total_tokens -= len(old)
+            while self._cache and (
+                len(self._cache) >= self._max_entries
+                or self._total_tokens + len(packed) > self._max_total_tokens
+            ):
+                _, evicted = self._cache.popitem(last=False)
+                self._total_tokens -= len(evicted)
                 self._stats["evictions"] += 1
-            self._cache[cache_key] = token_ids
+            self._cache[cache_key] = packed
+            self._total_tokens += len(packed)
 
     def get_template_text(self, cache_key: str) -> str | None:
         """Look up cached chat template text for VLM vision path."""
@@ -307,22 +400,27 @@ class _VLMTextPromptCache:
 
     def put_template_text(self, cache_key: str, template_text: str) -> None:
         """Store chat template text for VLM vision path."""
+        if len(template_text) > self._max_total_chars:
+            return
         with self._lock:
-            if cache_key in self._template_cache:
-                self._template_cache.move_to_end(cache_key)
-                self._template_cache[cache_key] = template_text
-                return
-            while (
-                self._template_cache and len(self._template_cache) >= self._max_entries
+            old = self._template_cache.pop(cache_key, None)
+            if old is not None:
+                self._total_chars -= len(old)
+            while self._template_cache and (
+                len(self._template_cache) >= self._max_entries
+                or self._total_chars + len(template_text) > self._max_total_chars
             ):
-                self._template_cache.popitem(last=False)
+                _, evicted = self._template_cache.popitem(last=False)
+                self._total_chars -= len(evicted)
                 self._stats["evictions"] += 1
             self._template_cache[cache_key] = template_text
+            self._total_chars += len(template_text)
 
     def clear(self) -> None:
         with self._lock:
             self._cache.clear()
             self._template_cache.clear()
+            self._total_tokens = self._total_chars = 0
         self.prefix_tokens.clear()
 
     @property
@@ -332,6 +430,8 @@ class _VLMTextPromptCache:
             s["tokenization_entries"] = len(self._cache)
             s["template_entries"] = len(self._template_cache)
             s["max_entries"] = self._max_entries
+            s["cached_tokens"] = self._total_tokens
+            s["template_chars"] = self._total_chars
             return s
 
 
@@ -554,6 +654,9 @@ class VLMEngine:
         from .text_utils import cache_tokenizer_vocab
 
         cache_tokenizer_vocab(self._tokenizer)  # avoid ~98ms/req get_vocab rebuild
+        from .tool_call_grammar import prewarm_for_engine
+
+        prewarm_for_engine(self)  # background llguidance token tables
         self._resolve_reasoning_channel_ids()
         self._is_vlm = True
         logger.info("Loaded model via mlx_vlm (vision=%s)", self._has_vision)
@@ -775,6 +878,9 @@ class VLMEngine:
         try:
             from mlx_vlm.utils import load_processor
 
+            from .image_processor_fixes import install as install_image_fixes
+
+            install_image_fixes()  # PIL images read channels-last (mlx-vlm 8dd7746)
             self._processor = load_processor(Path(model_path))
         except Exception as e:
             logger.warning(f"Could not load VLM processor: {e}")
@@ -944,6 +1050,12 @@ class VLMEngine:
             logger.debug("APC capacity prefix check unavailable", exc_info=True)
             return False
 
+    def _release_active_lease(self, _future=None) -> None:
+        if _future is not None and not _future.cancelled():
+            _future.exception()  # mark a worker failure retrieved (the request already timed out)
+        with self._active_count_lock:
+            self._active_count = max(0, self._active_count - 1)
+
     async def generate(
         self,
         prompt: list[dict] | None = None,
@@ -985,10 +1097,11 @@ class VLMEngine:
             top_logprobs=top_logprobs,
             **kwargs,
         )
-        if self._orphan_key(messages, _params) is not None:
+        _key = self._orphan_key(messages, _params)
+        if _key is not None:
             # One generation core for both modes: a retry that arrives non-streaming can
             # adopt a streamed orphan (and the reverse) instead of recomputing it.
-            return await self._generate_collect(messages, _params)
+            return await self._generate_collect(messages, _params, _key)
         from .structural_tag import constrains_initial_output
 
         tpl_extra = self._request_template_extra(kwargs)
@@ -1003,6 +1116,8 @@ class VLMEngine:
         # those — not a positional slice that collides with concurrent/n>1 requests.
         _req_temp_files: list[str] = []
         _temp_token = _request_temp_files.set(_req_temp_files)
+        _consumer_fut = None
+        _lease_deferred = False
 
         try:
             image_paths = await self._extract_images(messages)
@@ -1088,6 +1203,9 @@ class VLMEngine:
                     _prepare_call(),
                     timeout=_timeout_seconds,
                 )
+                # Shielded: a timeout cancels the wait, not the worker thread, which keeps its
+                # runner row until it sees the cancel event.
+                _consumer_fut = loop.run_in_executor(self._runner_consumers(), call)
                 (
                     result,
                     reasoning_tokens,
@@ -1096,12 +1214,18 @@ class VLMEngine:
                     budget_hit,
                     cached_token_count,
                 ) = await asyncio.wait_for(
-                    loop.run_in_executor(self._runner_consumers(), call),
+                    asyncio.shield(_consumer_fut),
                     timeout=_timeout_seconds,
                 )
             except TimeoutError:
                 self._num_requests_processed += 1
                 kwargs["cancel_event"].set()
+                if _consumer_fut is not None and not _consumer_fut.done():
+                    # The executor thread is still winding down: it holds the lease
+                    # (runner.inflight reads this count), so release when it exits, as the
+                    # stream path does, not now.
+                    _lease_deferred = True
+                    _consumer_fut.add_done_callback(self._release_active_lease)
                 logger.warning(
                     f"VLM non-streaming generate timed out after {_timeout_seconds}s"
                 )
@@ -1164,8 +1288,8 @@ class VLMEngine:
                 ),
             }
         finally:
-            with self._active_count_lock:
-                self._active_count = max(0, self._active_count - 1)
+            if not _lease_deferred:
+                self._release_active_lease()
             _request_temp_files.reset(_temp_token)
             # Our files are exactly those THIS request registered (identity-based).
             _mine = list(_req_temp_files)
@@ -1178,7 +1302,9 @@ class VLMEngine:
                         ]
             self._cleanup_temp_files(_mine)
 
-    async def _generate_collect(self, messages, params: dict) -> dict[str, Any]:
+    async def _generate_collect(
+        self, messages, params: dict, key: Any = _UNSET
+    ) -> dict[str, Any]:
         """Non-streaming result assembled from the streaming core (same shape as the
         direct path: reasoning wrapped in think tags, exact counts)."""
         parts: list[str] = []
@@ -1187,39 +1313,56 @@ class VLMEngine:
         thinking = generated = cached = prompt_tokens = 0
         finish = None
         stop_seq = False
-        async with contextlib.aclosing(  # type: ignore[type-var]  # an async generator at runtime
-            self.generate_stream(messages=messages, **params)
-        ) as stream:
-            async for out in stream:
-                if out.error:
-                    self._num_requests_processed += 1
-                    if str(out.error).startswith("Streaming timeout"):
-                        return {
-                            "text": "",
-                            "finish_reason": "timeout",
-                            "model": self.model_name,
-                            "created": int(time.time()),
-                            "reasoning_tokens": 0,
-                            "prompt_tokens": 0,
-                            "completion_tokens": 0,
-                        }
-                    refusal = memory_limit_error(str(out.error))
-                    if refusal is not None:
-                        raise refusal
-                    raise RuntimeError(out.error)
-                if out.new_text:
-                    (reasoning if out.current_state == "reasoning" else parts).append(
-                        out.new_text
-                    )
-                if out.logprobs:
-                    lps.extend(out.logprobs)
-                thinking = max(thinking, out.reasoning_tokens or 0)
-                generated = max(generated, out.completion_tokens or 0)
-                prompt_tokens = out.prompt_tokens or prompt_tokens
-                cached = out.cached_tokens or cached
-                if out.finished:
-                    finish = out.finish_reason
-                    stop_seq = bool(out.stopped_by_stop_sequence)
+        timed_out = {
+            "text": "",
+            "finish_reason": "timeout",
+            "model": self.model_name,
+            "created": int(time.time()),
+            "reasoning_tokens": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+        }
+        # A non-streaming ``timeout`` bounds the whole call (the streaming core reads the same
+        # field as a gap between tokens): the deadline below ends a reply that keeps arriving.
+        deadline = asyncio.timeout(params.get("timeout_seconds") or None)
+        try:
+            async with (
+                deadline,
+                contextlib.aclosing(  # type: ignore[type-var]  # an async generator at runtime
+                    self.generate_stream(messages=messages, orphan_key=key, **params)
+                ) as stream,
+            ):
+                async for out in stream:
+                    if out.error:
+                        self._num_requests_processed += 1
+                        if str(out.error).startswith("Streaming timeout"):
+                            return timed_out
+                        refusal = memory_limit_error(str(out.error))
+                        if refusal is not None:
+                            raise refusal
+                        raise RuntimeError(out.error)
+                    if out.new_text:
+                        (
+                            reasoning if out.current_state == "reasoning" else parts
+                        ).append(out.new_text)
+                    if out.logprobs:
+                        lps.extend(out.logprobs)
+                    thinking = max(thinking, out.reasoning_tokens or 0)
+                    generated = max(generated, out.completion_tokens or 0)
+                    prompt_tokens = out.prompt_tokens or prompt_tokens
+                    cached = out.cached_tokens or cached
+                    if out.finished:
+                        finish = out.finish_reason
+                        stop_seq = bool(out.stopped_by_stop_sequence)
+        except TimeoutError:
+            if not deadline.expired():
+                raise
+            self._num_requests_processed += 1
+            logger.warning(
+                "VLM non-streaming generate timed out after %ss",
+                params.get("timeout_seconds"),
+            )
+            return timed_out
         self._num_requests_processed += 1
         if finish == "cancel":
             raise asyncio.CancelledError()
@@ -1247,7 +1390,7 @@ class VLMEngine:
         return orphan_adoption.request_key(self.model_name, messages, params)
 
     async def generate_stream(
-        self, prompt=None, messages=None, cancel_event=None, **kwargs
+        self, prompt=None, messages=None, cancel_event=None, orphan_key=_UNSET, **kwargs
     ) -> AsyncIterator[RequestOutput]:
         """Streaming generation. A client that vanishes mid-way parks the generation
         for ``YUNSHU_ORPHAN_GRACE_SECONDS``; an identical request adopts it (see
@@ -1260,7 +1403,9 @@ class VLMEngine:
             msgs = prompt if prompt is not None else (messages or [])
         if cancel_event is None:
             cancel_event = threading.Event()
-        key = self._orphan_key(msgs, kwargs)
+        # ``generate`` already derived the key of the identical request: hash the
+        # conversation once, not once per layer.
+        key = self._orphan_key(msgs, kwargs) if orphan_key is _UNSET else orphan_key
 
         def start(real_cancel):
             return self._generate_stream_impl(
@@ -1274,7 +1419,8 @@ class VLMEngine:
                 cancel_event,
                 float(settings.get("YUNSHU_ORPHAN_GRACE_SECONDS")),
                 int(settings.get("YUNSHU_ORPHAN_MAX")),
-                parts=orphan_adoption.key_parts(self.model_name, msgs, kwargs)
+                # only read to log why a request did not match an orphan
+                parts=(lambda: orphan_adoption.key_parts(self.model_name, msgs, kwargs))
                 if key
                 else None,
             )
@@ -1324,18 +1470,24 @@ class VLMEngine:
         # positional-offset race that deleted concurrent/n>1 requests' files.
         _req_temp_files: list[str] = []
         _temp_token = _request_temp_files.set(_req_temp_files)
-        image_paths = await self._extract_images(messages)
-        audio_paths = await self._extract_audio(messages)
-        video_frames = await self._extract_video_frames(messages)
-        image_paths.extend(video_frames)
+        try:
+            image_paths = await self._extract_images(messages)
+            audio_paths = await self._extract_audio(messages)
+            video_frames = await self._extract_video_frames(messages)
+            image_paths.extend(video_frames)
 
-        enable_thinking = self._default_enable_thinking(
-            enable_thinking,
-            constrained=constrains_initial_output(kwargs.get("json_schema")),
-        )
-        self._track_pipeline(kwargs, messages, image_paths, audio_paths)
-        self._check_request_supported(image_paths, audio_paths, kwargs)
-        await self._settle_rehearsal_early(messages, enable_thinking, tpl_extra)
+            enable_thinking = self._default_enable_thinking(
+                enable_thinking,
+                constrained=constrains_initial_output(kwargs.get("json_schema")),
+            )
+            self._track_pipeline(kwargs, messages, image_paths, audio_paths)
+            self._check_request_supported(image_paths, audio_paths, kwargs)
+            await self._settle_rehearsal_early(messages, enable_thinking, tpl_extra)
+        except BaseException:
+            # Nothing below owns these files yet: a bad request, a failed decode or a
+            # cancel while extracting must not leave decoded media on disk.
+            self._release_request_temp_files(_req_temp_files, _temp_token)
+            raise
 
         import uuid
 
@@ -1355,61 +1507,33 @@ class VLMEngine:
         # via call_soon_threadsafe (same pattern as batched_engine.py).
         _loop_for_queue = asyncio.get_running_loop()
 
-        class _ThreadSafeQueue:
-            """Wraps asyncio.Queue with thread-safe put_nowait."""
-
-            def __init__(self, async_q, ev_loop):
-                self._q = async_q
-                self._loop = ev_loop
-
-            def put_nowait(self, item):
-                with contextlib.suppress(
-                    RuntimeError
-                ):  # event loop closed during shutdown
-                    self._loop.call_soon_threadsafe(self._q.put_nowait, item)
-
-            def put_blocking(self, item, cancel):
-                """Bound the runner's producer by the async consumer, including slow clients."""
-                try:
-                    future = asyncio.run_coroutine_threadsafe(
-                        self._q.put(item), self._loop
-                    )
-                except RuntimeError:
-                    return False
-                while True:
-                    try:
-                        future.result(timeout=0.05)
-                        return True
-                    except TimeoutError:
-                        if cancel is not None and cancel.is_set():
-                            future.cancel()
-                            return False
-                    except Exception:
-                        return False
-
         _safe_queue = _ThreadSafeQueue(queue, _loop_for_queue)
 
-        runner_params = self._runner_kwargs(
-            max_tokens=max(1, int(max_tokens)),
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            min_p=min_p,
-            seed=seed,
-            stop=stop,
-            stop_token_ids=stop_token_ids,
-            repetition_penalty=repetition_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            enable_thinking=enable_thinking,
-            thinking_budget=kwargs.get("thinking_budget"),
-            cancel_event=cancel_event,
-            kwargs={
-                **kwargs,
-                "xtc_probability": xtc_probability,
-                "xtc_threshold": xtc_threshold,
-            },
-        )
+        try:
+            runner_params = self._runner_kwargs(
+                max_tokens=max(1, int(max_tokens)),
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                seed=seed,
+                stop=stop,
+                stop_token_ids=stop_token_ids,
+                repetition_penalty=repetition_penalty,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
+                enable_thinking=enable_thinking,
+                thinking_budget=kwargs.get("thinking_budget"),
+                cancel_event=cancel_event,
+                kwargs={
+                    **kwargs,
+                    "xtc_probability": xtc_probability,
+                    "xtc_threshold": xtc_threshold,
+                },
+            )
+        except BaseException:
+            self._release_request_temp_files(_req_temp_files, _temp_token)
+            raise
 
         runner_params["first_delivery"] = first_delivery
         from .request_tracker import current_request_info
@@ -1586,6 +1710,7 @@ class VLMEngine:
                     cancel_event.set()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await asyncio.shield(stream_task)
+            _safe_queue.close()
             # Drain remaining queue items to unblock the executor thread
             # so it can observe the cancellation and exit promptly.
             while not queue.empty():
@@ -1610,17 +1735,21 @@ class VLMEngine:
             # contextvars.Context than the one .set() ran in — reset() would then
             # raise "Token was created in a different Context". File cleanup below
             # uses the closure list, not the ContextVar, so a failed reset is safe.
-            with contextlib.suppress(ValueError):
-                _request_temp_files.reset(_temp_token)
-            _mine = list(_req_temp_files)
-            if _mine:
-                _mine_set = set(_mine)
-                with self._temp_files_lock:
-                    if self._temp_files is not None:
-                        self._temp_files[:] = [
-                            f for f in self._temp_files if f not in _mine_set
-                        ]
-            self._cleanup_temp_files(_mine)
+            self._release_request_temp_files(_req_temp_files, _temp_token)
+
+    def _release_request_temp_files(self, req_files: list[str], token) -> None:
+        """Drop one request's context var and delete exactly the files it registered."""
+        with contextlib.suppress(ValueError):
+            _request_temp_files.reset(token)
+        _mine = list(req_files)
+        if _mine:
+            _mine_set = set(_mine)
+            with self._temp_files_lock:
+                if self._temp_files is not None:
+                    self._temp_files[:] = [
+                        f for f in self._temp_files if f not in _mine_set
+                    ]
+        self._cleanup_temp_files(_mine)
 
     # -- next-turn rehearsal (YUNSHU_NEXT_TURN_PREFILL) ---------------------------------
 
@@ -1830,7 +1959,7 @@ class VLMEngine:
             )
             state.set_ids(ids)
             if manager is not None:
-                manager.keep_prior_for = tuple(int(t) for t in ids)
+                manager.keep_prior_for = tuple(map(int, ids))
             return _RunnerCall(
                 self._generate_vlm_runner_text,
                 ids,
@@ -2282,28 +2411,6 @@ class VLMEngine:
                 )
         disk.start_mover()
 
-    def _round_driver_wanted(self, lm) -> bool:
-        """``YUNSHU_ROUND_DRIVER`` on a dense Qwen3.5-family text decoder with
-        bf16 KV (int8 KV precision keeps the upstream path)."""
-        if not settings.get_bool("YUNSHU_ROUND_DRIVER"):
-            return False
-        from .round_driver import forward as rd_forward
-
-        if not rd_forward.supports(lm):
-            logger.warning("YUNSHU_ROUND_DRIVER: not a dense Qwen3.5-family model")
-            return False
-        if settings.get("YUNSHU_KV_PRECISION") != "bf16":
-            logger.warning("YUNSHU_ROUND_DRIVER: int8 KV keeps the upstream path")
-            return False
-        from .kernels.tensorfold.lane_qmm import ready
-
-        if not ready():
-            logger.warning(
-                "YUNSHU_ROUND_DRIVER: lane arithmetic self-test failed; using upstream runner"
-            )
-            return False
-        return True
-
     def _build_batch_runner(self, model_path: str):
         """Build the runner that serves every request of this model.
 
@@ -2347,23 +2454,6 @@ class VLMEngine:
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
         qwen4 = self._config.get("model_type") == "qwen4_exp"
-        use_driver = not qwen4 and self._round_driver_wanted(lm)
-        driver_lanes = 0
-        if use_driver:
-            # Row-invariant lane projections everywhere (before any verify
-            # kernel install repacks them): the round driver's rows, and the
-            # upstream paths that still serve image prompts, both use them.
-            from .kernels import lane_linear
-
-            lanes = lane_linear.convert(lm)
-            driver_lanes = lanes["converted"]
-            if lm.args.tie_word_embeddings:
-                lm._yunshu_lane_head = lane_linear.lane_head(lm.model.embed_tokens)
-            logger.info(
-                "Round driver: %d lane projections (%d skipped)",
-                lanes["converted"],
-                len(lanes["skipped"]),
-            )
         drafter = None
         draft_kind = "mtp"
         from . import spec_select
@@ -2455,6 +2545,10 @@ class VLMEngine:
                 validate_drafter_compatibility(self._model, drafter, "mtp")
         block = settings.get("YUNSHU_MTP_BLOCK_SIZE")
         kernels = None
+        from .kernels import sdpa_chunk
+
+        # M1-M4 only; bounds the unfused head-dim-256 prefill score matrix
+        sdpa_chunk.install()
         # Spec off on a spec family still runs the lane's plain-decode arithmetic
         # (invariant kernels), so spec on == spec off token-for-token.
         if qwen4:
@@ -2462,132 +2556,116 @@ class VLMEngine:
 
             kernels, block = configure_lane(lm, drafter, block)
             self._qwen4_mtp_weights = None
-        if not qwen4 and (drafter is not None or (spec_family and not use_driver)):
+        if not qwen4 and (drafter is not None or spec_family):
             from .kernels.omlx import apply as apply_verify_kernels
 
-            # Experimental alternative (YUNSHU_MTP_ROW_EXACT): upstream oMLX
-            # row-exact verify keeps the stock decode path and computes each
-            # verify row with one-row decode arithmetic.
-            row_exact = settings.get_bool("YUNSHU_MTP_ROW_EXACT")
-            kernels = apply_verify_kernels(row_exact=row_exact)
+            kernels = apply_verify_kernels()
             # Lossless MTP decode: decode and verify share row-invariant kernels,
             # so speculative output == this engine's plain decode. On Qwen3.8-27B
             # (M5 Max) invariant + NAX-packed at block 6 decodes code/prose/json
-            # at 88.6/59.9/67.3 tok/s vs 57-67/50-53/58-62 for exact kernels at
-            # block 3 and 83.8/59.9/66.7 for the non-exact fast verify, with
-            # parity on every task
-            # (docs/research/runs/2026-09-28-matrix/invariant-packed-mtp-sweep.jsonl).
+            # at 88.6/59.9/67.3 tok/s vs 57-67/50-53/58-62 for row-exact kernels
+            # at block 3 (the removed row-exact alternative) and
+            # 83.8/59.9/66.7 for the non-exact fast verify, with parity on every
+            # task (measured on Qwen3.8-27B, 2026-09-28).
             # DFlash verifies through the same target forward, so it gets the
             # same guarantee.
-            invariant = not row_exact
-            if invariant:
-                from .kernels.batch_invariant import install as install_invariant
-                from .kernels.batch_invariant import set_active
+            from .kernels.batch_invariant import install as install_invariant
+            from .kernels.batch_invariant import set_active
 
-                # Target projections run TensorFold's row-invariant lane matmul
-                # (M5-class tensor ops; sg8 elsewhere). 27B, in-process vs the
-                # NAX packed kernel: MTP / DFlash2 decode +0..+17% at 1K-131K
-                # with identical tokens, and 0.6 GiB less memory (no repacked copy).
-                from .kernels.tensorfold.lane_qmm import ready
+            # Target projections run TensorFold's row-invariant lane matmul
+            # (M5-class tensor ops; sg8 elsewhere). 27B, in-process vs the
+            # NAX packed kernel: MTP / DFlash2 decode +0..+17% at 1K-131K
+            # with identical tokens, and 0.6 GiB less memory (no repacked copy).
+            from .kernels.tensorfold.lane_qmm import ready
 
-                if ready():
-                    from .kernels import lane_linear
+            if ready():
+                from .kernels import lane_linear
 
-                    # (a second convert finds the driver's lanes already in place)
-                    kernels["lane_linear"] = (
-                        lane_linear.convert(self._model.language_model)["converted"]
-                        or driver_lanes
-                    )
-                    # The round driver's own prefill calls LaneLinear.prefill and
-                    # never reaches the row-count dependent dispatch of __call__,
-                    # so the upstream path (lone and long cold prompts) keeps it.
-                    if settings.get("YUNSHU_PREFILL_MATMUL") == "stock":
-                        lane_linear.set_stock_rows(lane_linear.STOCK_MIN_ROWS)
-                        text_cfg = self._config.get("text_config", self._config)
-                        if (
-                            kernels["lane_linear"]
-                            and text_cfg.get("hidden_size") == 5120
-                            and text_cfg.get("num_hidden_layers") == 64
-                            and nax_prefill.enable()
-                        ):
-                            nax_prefill.warmup(
-                                {
-                                    module.bits
-                                    for _, module in lm.named_modules()
-                                    if isinstance(module, lane_linear.LaneLinear)
-                                }
-                            )
-                            kernels["nax_prefill"] = nax_prefill.arithmetic_id()
-                    kernels["prefill_matmul"] = lane_linear.prefill_kernel_id()
-                if settings.get("YUNSHU_PREFILL_GDN") == "chunked":
-                    from .kernels import gdn_prefill
-
-                    gdn_prefill.install()
-                if settings.get("YUNSHU_PREFILL_ATTENTION") == "tile":
-                    # Bit-identical to stock MLX attention, so no APC key change.
-                    kernels["attn_prefill"] = (
-                        attn_prefill.arithmetic_id() if attn_prefill.enable() else None
-                    )
-                kernels["invariant"] = install_invariant(
-                    self._model.language_model, model=self._model, packed=False
-                )
-                # Every prompt piece uses the same arithmetic, while decode and
-                # speculative verify retain their own invariant kernels. Only the
-                # jointly qualified 27B device/ABI/weight geometry can enter it.
-                split_ready = bool(
-                    kernels.get("nax_prefill")
-                    and kernels.get("attn_prefill")
-                    and settings.get("YUNSHU_PREFILL_GDN") == "chunked"
-                    and settings.get("YUNSHU_KV_PRECISION") == "bf16"
-                    and all(
-                        module.output_dims < lane_linear.NARROW
-                        or module.output_dims >= 100_000
-                        or nax_prefill.split_eligible(
-                            64,
-                            module.input_dims,
-                            module.output_dims,
-                            module.bits,
-                            module.group_size,
-                            module.tiled,
+                kernels["lane_linear"] = lane_linear.convert(
+                    self._model.language_model
+                )["converted"]
+                if settings.get("YUNSHU_PREFILL_MATMUL") == "stock":
+                    lane_linear.set_stock_rows(lane_linear.STOCK_MIN_ROWS)
+                    text_cfg = self._config.get("text_config", self._config)
+                    if (
+                        kernels["lane_linear"]
+                        and text_cfg.get("hidden_size") == 5120
+                        and text_cfg.get("num_hidden_layers") == 64
+                        and nax_prefill.enable()
+                    ):
+                        nax_prefill.warmup(
+                            {
+                                module.bits
+                                for _, module in lm.named_modules()
+                                if isinstance(module, lane_linear.LaneLinear)
+                            }
                         )
-                        for _, module in lm.named_modules()
-                        if isinstance(module, lane_linear.LaneLinear)
-                    )
+                        kernels["nax_prefill"] = nax_prefill.arithmetic_id()
+                kernels["prefill_matmul"] = lane_linear.prefill_kernel_id()
+            if settings.get("YUNSHU_PREFILL_GDN") == "chunked":
+                from .kernels import gdn_prefill
+
+                gdn_prefill.install()
+            if settings.get("YUNSHU_PREFILL_ATTENTION") == "tile":
+                # Bit-identical to stock MLX attention, so no APC key change.
+                kernels["attn_prefill"] = (
+                    attn_prefill.arithmetic_id() if attn_prefill.enable() else None
                 )
-                gdn_prefill.configure_split(split_ready)
-                if split_ready:
-                    gdn_prefill.install_split_forward(lm)
-                    kernels["split_prefill"] = "split64-v1"
-                    logger.info(
-                        "Split-invariant prefill engaged: NAX/BQ32/GDN, alignment=64"
+            kernels["invariant"] = install_invariant(
+                self._model.language_model, model=self._model, packed=False
+            )
+            # Every prompt piece uses the same arithmetic, while decode and
+            # speculative verify retain their own invariant kernels. Only the
+            # jointly qualified 27B device/ABI/weight geometry can enter it.
+            split_ready = bool(
+                kernels.get("nax_prefill")
+                and kernels.get("attn_prefill")
+                and settings.get("YUNSHU_PREFILL_GDN") == "chunked"
+                and settings.get("YUNSHU_KV_PRECISION") == "bf16"
+                and all(
+                    module.output_dims < lane_linear.NARROW
+                    or module.output_dims >= 100_000
+                    or nax_prefill.split_eligible(
+                        64,
+                        module.input_dims,
+                        module.output_dims,
+                        module.bits,
+                        module.group_size,
+                        module.tiled,
                     )
-                if settings.get("YUNSHU_ANE_FFN_SPLIT") == "splash" and split_ready:
-                    from . import ane_ffn_runtime
+                    for _, module in lm.named_modules()
+                    if isinstance(module, lane_linear.LaneLinear)
+                )
+            )
+            gdn_prefill.configure_split(split_ready)
+            if split_ready:
+                gdn_prefill.install_split_forward(lm)
+                kernels["split_prefill"] = "split64-v1"
+                logger.info(
+                    "Split-invariant prefill engaged: NAX/BQ32/GDN, alignment=64"
+                )
+            if settings.get("YUNSHU_ANE_FFN_SPLIT") == "splash" and split_ready:
+                from . import ane_ffn_runtime
 
-                    runtime = ane_ffn_runtime.install(
-                        lm,
-                        Path(
-                            settings.get("YUNSHU_ANE_FFN_CACHE")
-                            or Path.home() / ".yunshu" / "ane_cache" / "ffn"
-                        ),
-                        str(model_path),
-                        share=settings.get("YUNSHU_ANE_FFN_SHARE"),
-                        minimum_rows=settings.get("YUNSHU_ANE_FFN_MIN_ROWS"),
-                    )
-                    if runtime and settings.get("YUNSHU_ANE_FFN_TRACE"):
-                        runtime.trace = True
-                        runtime.split.profile(True)
-                    kernels["ane_ffn_split"] = (
-                        ane_ffn_runtime.kernel_suffix() if runtime else None
-                    )
-                # The runner turns them on for spec and lone AR target steps.
-                set_active(False)
-            else:
-                # Exact: 5-bit layers use the fixed streamed kernel for >= 5 verify rows.
-                from .kernels.verify_select import install as install_streamed5
-
-                kernels["streamed5"] = install_streamed5()
-            if draft_kind == "dflash" and invariant and drafter is not None:
+                runtime = ane_ffn_runtime.install(
+                    lm,
+                    Path(
+                        settings.get("YUNSHU_ANE_FFN_CACHE")
+                        or Path.home() / ".yunshu" / "ane_cache" / "ffn"
+                    ),
+                    str(model_path),
+                    share=settings.get("YUNSHU_ANE_FFN_SHARE"),
+                    minimum_rows=settings.get("YUNSHU_ANE_FFN_MIN_ROWS"),
+                )
+                if runtime and settings.get("YUNSHU_ANE_FFN_TRACE"):
+                    runtime.trace = True
+                    runtime.split.profile(True)
+                kernels["ane_ffn_split"] = (
+                    ane_ffn_runtime.kernel_suffix() if runtime else None
+                )
+            # The runner turns them on for spec and lone AR target steps.
+            set_active(False)
+            if draft_kind == "dflash" and drafter is not None:
                 # Reduced candidate vocabulary for the DFlash lattice (draft_vocab.logits_subset).
                 from .draft_vocab import DRAFT_VOCAB as DFLASH_KEEP
                 from .draft_vocab import install as _install_dflash_vocab
@@ -2597,14 +2675,14 @@ class VLMEngine:
                     drafter, self._model.language_model, DFLASH_KEEP
                 )
                 kernels["draft_vocab"] = DFLASH_KEEP if found else None
-            if draft_kind == "mtp" and invariant and drafter is not None:
+            if draft_kind == "mtp" and drafter is not None:
                 # The lane's own MTP rounds (one host read per cycle, the head
                 # run over every verify row inside the verify's graph), fused
                 # residual+norm layers and a reduced draft vocabulary. Same
                 # tokens as upstream's loop; Qwen3.8-27B, single requests, HTTP
                 # decode tok/s 1K/8K/32K/131K: code_python 45.8/68.6/53.4/55.9
                 # -> 55.2/69.5/62.5/59.7, novel_en 48.5/42.2/43.3/32.7 ->
-                # 55.3/49.9/44.5/35.0 (docs/research/runs/2026-09-29-step-efficiency).
+                # 55.3/49.9/44.5/35.0 (measured 2026-09-29).
                 from . import mtp_lane
                 from .draft_vocab import DRAFT_VOCAB
                 from .draft_vocab import install as install_draft_vocab
@@ -2621,15 +2699,14 @@ class VLMEngine:
                 )
                 kernels["draft_vocab"] = DRAFT_VOCAB if found else None
             # Invariant kernels cost little per extra verify row and peak at 6
-            # for MTP; exact kernels peak at 3: at 5 rows a cycle jumps to
-            # ~108 ms. A DFlash drafter proposes a whole block in one forward
+            # for MTP. A DFlash drafter proposes a whole block in one forward
             # and upstream adapts the depth to acceptance under this ceiling,
             # so the ceiling is the block it was trained on.
             if block is None and drafter is not None:
                 if draft_kind == "dflash":
                     block = int(getattr(drafter.config, "block_size", 0)) or None
                 else:
-                    block = 6 if invariant else 3
+                    block = 6
         self._prefix_invariant_dispatch = bool(kernels and kernels.get("invariant"))
         # After the kernels: the identity names the prefill matmul they installed.
         from .vlm_batch_runner import PREFILL_STEP
@@ -2781,7 +2858,7 @@ class VLMEngine:
         runner.memory_gate = self._build_memory_gate()
         # Per-row-length (ragged) KV + ragged decode attention for the shared
         # batch and the speculative lane: the layout for every model with
-        # qwen3_5 attention (lossless; docs/research/runs/2026-09-29-ragged-idle).
+        # qwen3_5 attention (lossless; measured 2026-09-29).
         # KV precision is the user's memory/quality choice.
         precision = settings.get("YUNSHU_KV_PRECISION")
         from .kernels import ragged_kv
@@ -2795,16 +2872,6 @@ class VLMEngine:
                 "YUNSHU_KV_PRECISION=%s applies to Qwen3.5-family attention "
                 "only; this model's KV stays bf16",
                 precision,
-            )
-        if use_driver:
-            from .round_driver.driver import RoundDriver
-
-            runner.driver = RoundDriver(
-                self._model,
-                drafter=drafter if draft_kind == "mtp" else None,
-                stop_tokens=runner.stop_tokens,
-                chunk=settings.get("YUNSHU_ROUND_PREFILL_CHUNK"),
-                apc=self._apc_backend,
             )
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
@@ -2997,6 +3064,8 @@ class VLMEngine:
         processors = build_penalty_processors(
             repetition_penalty, frequency_penalty, presence_penalty, logit_bias
         )
+        if not suppress_tokens:  # the request's own list wins over the model's default
+            suppress_tokens = self._generation_suppress_ids() or None
         mask_kw = {
             "suppress": suppress_tokens,
             "min_tokens": min_tokens,
@@ -3036,6 +3105,17 @@ class VLMEngine:
         holdback = StopHoldbackBuffer(stop_strings)
         detok = self._tokenizer.detokenizer
         detok.reset()
+
+        def drain_tail(reasoning: bool) -> tuple[str, bool]:
+            """The text still held back at the end, and whether a stop string completed in
+            it (only in the final detokenizer flush; stop strings never apply to reasoning)."""
+            detok.finalize()
+            tail = holdback.feed(detok.last_segment) + holdback.flush()
+            hit = holdback.stop_hit and not reasoning
+            if hit:
+                stats.stop_string_hit = True
+            return tail, hit
+
         think_start, think_end, open_text, close_text, channel = (
             self._reasoning_markers()
         )
@@ -3056,6 +3136,21 @@ class VLMEngine:
             self._tool_call_marker_id() if (tool_spec or tools_declared) else None
         )
         guide = self._tool_guide(tool_spec, in_think)
+        if constraint_guide is not None and constrains_initial_output(json_schema):
+            # Generation starts inside an open <think>: the grammar binds after the close.
+            from .reasoning_gate import ThinkGatedGuide, make_gate
+
+            gate = make_gate(
+                prompt_opens_thinking=in_think,
+                close_id=think_end,
+                eos_ids=self._get_eos_ids(),
+                implicit_end_ids=[
+                    t for t in (self._tool_call_marker_id(),) if t is not None
+                ],
+                report=stats.structured_output,
+            )
+            if gate is not None:
+                constraint_guide = ThinkGatedGuide(constraint_guide, gate)
         if constraint_guide is not None:
             from .constrained_spec import CombinedGuide
 
@@ -3095,11 +3190,19 @@ class VLMEngine:
             first_delivery=first_delivery,
         ):
             count += 1
+            stats.consumed = count
             lp = stats.last_logprob if logprobs else None
             if token in stop_ids:
-                detok.finalize()
-                tail = holdback.feed(detok.last_segment) + holdback.flush()
-                yield tail, token, "normal", "stop", thinking_tokens, lp
+                tail, _ = drain_tail(in_think)
+                # EOS inside an open <think> ends the reasoning: its tail is reasoning
+                yield (
+                    tail,
+                    token,
+                    "reasoning" if in_think else "normal",
+                    "stop",
+                    thinking_tokens,
+                    lp,
+                )
                 return
             if think_start is not None and token in (think_start, think_end):
                 # The tags only switch state; they are never shown as text.
@@ -3107,9 +3210,15 @@ class VLMEngine:
                 label_buf = "" if (channel and in_think) else None
                 state = "reasoning" if in_think else "normal"
                 if count >= max_tokens:
-                    detok.finalize()
-                    tail = holdback.feed(detok.last_segment) + holdback.flush()
-                    yield tail, token, state, "length", thinking_tokens, lp
+                    tail, hit = drain_tail(in_think)
+                    yield (
+                        tail,
+                        token,
+                        state,
+                        "stop" if hit else "length",
+                        thinking_tokens,
+                        lp,
+                    )
                     return
                 continue
             if in_think and tool_marker is not None and token == tool_marker:
@@ -3149,21 +3258,26 @@ class VLMEngine:
                         head = head[len("thought") :].lstrip("\n")
                     text, label_buf = head, None
             if count >= max_tokens:
-                detok.finalize()
-                tail = holdback.feed(detok.last_segment) + holdback.flush()
-                yield text + tail, token, state, "length", thinking_tokens, lp
+                tail, hit = drain_tail(in_think)
+                yield (
+                    text + tail,
+                    token,
+                    state,
+                    "stop" if hit else "length",
+                    thinking_tokens,
+                    lp,
+                )
                 return
             yield text, token, state, None, thinking_tokens, lp
         if stats.finish_reason == "cancel":
             yield "", None, "normal", "cancel", thinking_tokens, None
             return
-        detok.finalize()
-        tail = holdback.feed(detok.last_segment) + holdback.flush()
+        tail, hit = drain_tail(in_think)
         yield (
             tail,
             None,
-            "normal",
-            "stop" if count < max_tokens else "length",
+            "reasoning" if in_think else "normal",
+            "stop" if hit or count < max_tokens else "length",
             thinking_tokens,
             None,
         )
@@ -3250,11 +3364,20 @@ class VLMEngine:
                 image_paths=image_paths,
                 audio=self._audio_arg(audio_paths) if audio_paths else None,
             )
-            return ids.tolist(), pkw, salt
+            return self._non_empty_ids(cast(list[int], ids.tolist())), pkw, salt
         ids = self._tokenize_with_cache(
             messages, enable_thinking=enable_thinking, template_extra=template_extra
         )
-        return ids.tolist(), None, None
+        return self._non_empty_ids(cast(list[int], ids.tolist())), None, None
+
+    @staticmethod
+    def _non_empty_ids(ids: list[int]) -> list[int]:
+        from .context_window import require_non_empty_prompt
+
+        require_non_empty_prompt(
+            ids
+        )  # EmptyPromptError, the gateway's 400 on every path
+        return ids
 
     def _resolve_prompt_cache_plan(
         self,
@@ -3437,7 +3560,7 @@ class VLMEngine:
 
     def _tool_guide(self, spec: dict | None, thinking_open: bool):
         """A ``ToolCallGuide`` for this request's tools (structural-tag constrained
-        decoding), or None: no tools, ``YUNSHU_TOOL_GRAMMAR`` off, or a model / tool
+        decoding), or None: no tools, auto choice (only a forced choice is constrained), or a model / tool
         set the grammar cannot cover (the reply is then decoded unconstrained)."""
         if not spec:
             return None
@@ -3496,7 +3619,7 @@ class VLMEngine:
         return (
             "".join(parts),
             thinking,
-            stats.generated,
+            _completion_count(stats),
             finish in ("stop", "budget"),
             finish == "budget",
             stats.cached_tokens,
@@ -3519,6 +3642,7 @@ class VLMEngine:
             return True
 
         prompt_tokens = len(input_ids)
+        first_sent = False
         try:
             for text, token, state, finish, thinking, lp in self._runner_events(
                 input_ids, stats=stats, **params
@@ -3526,7 +3650,11 @@ class VLMEngine:
                 reason = {"budget": "stop"}.get(finish, finish)
                 if not (text or reason or lp is not None):
                     continue
-                first = stats.generated == 1 and token is not None
+                # the first token's own event can carry no text (a think tag, a partial
+                # character) and the runner can already be past token 1: flag the first
+                # event that has a token, once
+                first = token is not None and not first_sent
+                first_sent = first_sent or token is not None
                 ok = deliver(
                     RequestOutput(
                         request_id=req_id,
@@ -3534,7 +3662,7 @@ class VLMEngine:
                         new_token_ids=[token] if token is not None else [],
                         finish_reason=reason,
                         finished=reason is not None,
-                        completion_tokens=stats.generated,
+                        completion_tokens=_completion_count(stats),
                         prompt_tokens=prompt_tokens,
                         cached_tokens=stats.cached_tokens,
                         current_state=state,
@@ -3561,7 +3689,7 @@ class VLMEngine:
                         else str(exc)
                     ),
                     prompt_tokens=prompt_tokens,
-                    completion_tokens=stats.generated,
+                    completion_tokens=_completion_count(stats),
                 )
             )
         finally:
@@ -3744,9 +3872,7 @@ class VLMEngine:
                 raise ValueError(
                     "structural_tag cannot be combined with forced tool_choice"
                 )
-            if is_forced(choice) or (
-                settings.get_bool("YUNSHU_TOOL_GRAMMAR") and not lazy
-            ):
+            if is_forced(choice):
                 choice = normalize_tool_choice(choice)
                 if choice != "none":
                     kwargs["_tool_spec"] = {
@@ -3808,12 +3934,9 @@ class VLMEngine:
             )
         }
 
-    def _format_prompt(
-        self,
-        messages: list[dict],
-        enable_thinking: bool | None = None,
-        template_extra: dict | None = None,
-    ) -> str:
+    def _prepare_template_messages(self, messages: list[dict]) -> list[dict]:
+        """Role remap, family adapter and special-token defusing: every text render of a
+        conversation (generation, ``/tokenize``, ``/apply-template``) starts here."""
         # this text-only-chat path (a VLM model serving a non-image chat
         # turn) was a stale clone missing three BatchedEngine fixes — role
         # normalization, family adapter, and the assistant-prefill gate
@@ -3836,34 +3959,53 @@ class VLMEngine:
                 messages = adapt_messages(messages, self.model_name)
         except Exception:
             logger.debug("VLM message adapter failed", exc_info=True)
+        messages = neutralize_special_text(messages, getattr(self, "_tokenizer", None))
+        return messages
+
+    def _template_messages_clean(self, messages: list[dict]) -> list[dict]:
+        """The ``{role, content, tool fields}`` list handed to ``apply_chat_template``."""
+        clean = []
+        for msg in messages:
+            _c = {
+                "role": msg.get("role", "user"),
+                "content": self._extract_text(msg.get("content", "")),
+            }
+            # preserve tool-related fields so a VLM + tools conversation
+            # (e.g. GLM-4V) keeps prior assistant tool-call turns in the prompt. The
+            # old code rebuilt {role, content} ONLY → every tool_call/tool_call_id/
+            # name was dropped (tool-use history vanished), and string-form tool args
+            # left intact would trip a GLM template's `is not mapping` raise → the
+            # whole prompt collapsing to the plaintext fallback. Mirror the
+            # BatchedEngine path: keep the fields + normalize string args to dicts.
+            _tcs = msg.get("tool_calls")
+            if isinstance(_tcs, list):
+                _c["tool_calls"] = self._normalize_vlm_tool_calls(_tcs)
+            if msg.get("tool_call_id"):
+                _c["tool_call_id"] = msg["tool_call_id"]
+            if msg.get("name"):
+                _c["name"] = msg["name"]
+            if msg.get("reasoning_content"):
+                _c["reasoning_content"] = msg["reasoning_content"]
+            clean.append(_c)
+        return clean
+
+    def _template_messages(self, messages: list[dict]) -> list[dict]:
+        """Exactly the messages generation passes to ``apply_chat_template``."""
+        return self._template_messages_clean(self._prepare_template_messages(messages))
+
+    def _format_prompt(
+        self,
+        messages: list[dict],
+        enable_thinking: bool | None = None,
+        template_extra: dict | None = None,
+    ) -> str:
+        messages = self._prepare_template_messages(messages)
 
         if self._tokenizer is not None and hasattr(
             self._tokenizer, "apply_chat_template"
         ):
             try:
-                clean = []
-                for msg in messages:
-                    _c = {
-                        "role": msg.get("role", "user"),
-                        "content": self._extract_text(msg.get("content", "")),
-                    }
-                    # preserve tool-related fields so a VLM + tools conversation
-                    # (e.g. GLM-4V) keeps prior assistant tool-call turns in the prompt. The
-                    # old code rebuilt {role, content} ONLY → every tool_call/tool_call_id/
-                    # name was dropped (tool-use history vanished), and string-form tool args
-                    # left intact would trip a GLM template's `is not mapping` raise → the
-                    # whole prompt collapsing to the plaintext fallback. Mirror the
-                    # BatchedEngine path: keep the fields + normalize string args to dicts.
-                    _tcs = msg.get("tool_calls")
-                    if isinstance(_tcs, list):
-                        _c["tool_calls"] = self._normalize_vlm_tool_calls(_tcs)
-                    if msg.get("tool_call_id"):
-                        _c["tool_call_id"] = msg["tool_call_id"]
-                    if msg.get("name"):
-                        _c["name"] = msg["name"]
-                    if msg.get("reasoning_content"):
-                        _c["reasoning_content"] = msg["reasoning_content"]
-                    clean.append(_c)
+                clean = self._template_messages_clean(messages)
                 # assistant-prefill gate — a trailing assistant
                 # message with non-empty STRING content means "continue THIS turn"
                 # (Anthropic/OpenAI prefill); add_generation_prompt=True would close the
@@ -4027,6 +4169,7 @@ class VLMEngine:
             messages = adapt_messages(messages, self.model_name)
         except Exception:
             logger.debug("VLM message adapter failed", exc_info=True)
+        messages = neutralize_special_text(messages, getattr(self, "_tokenizer", None))
         vlm_messages = self._build_vlm_messages(messages, max_images=max_images)
         tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
         if enable_thinking is not None:
@@ -4299,14 +4442,16 @@ class VLMEngine:
             (fmt or "").lower().strip(), (fmt or "").lower().strip()
         )
         ext = _norm if _norm in ("wav", "mp3", "ogg", "flac", "pcm") else "wav"
-        tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+            suffix=f".{ext}", dir=private_media_dir(), delete=False
+        )
+        self._register_temp_file(tmp.name)  # a cancelled await still cleans up
 
         def _sync_decode_write() -> None:
             # MB-size base64 decode + write blocks event loop;
             # move to executor.
-            decoded = base64.b64decode(data)
             try:
-                tmp.write(decoded)
+                tmp.write(base64.b64decode(data))
                 tmp.close()
             except Exception:
                 tmp.close()
@@ -4316,7 +4461,6 @@ class VLMEngine:
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _sync_decode_write)
-        self._register_temp_file(tmp.name)
         return tmp.name
 
     async def _save_base64_image(self, data_url: str) -> str:
@@ -4329,13 +4473,15 @@ class VLMEngine:
         _mime = header.split("/", 1)
         ext = _mime[1].split(";")[0] if len(_mime) > 1 else "png"
         ext = ext if ext in ("png", "jpg", "jpeg", "webp", "gif") else "png"
-        tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+            suffix=f".{ext}", dir=private_media_dir(), delete=False
+        )
+        self._register_temp_file(tmp.name)  # a cancelled await still cleans up
 
         def _sync_decode_write() -> None:
             # offload sync I/O off the event loop.
-            decoded = base64.b64decode(data)
             try:
-                tmp.write(decoded)
+                tmp.write(base64.b64decode(data))
                 tmp.close()
             except Exception:
                 tmp.close()
@@ -4345,7 +4491,6 @@ class VLMEngine:
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _sync_decode_write)
-        self._register_temp_file(tmp.name)
         return tmp.name
 
     async def _download_video(self, url: str) -> str:
@@ -4356,7 +4501,9 @@ class VLMEngine:
         ext = Path(urlsplit(url).path).suffix.lower()
         if ext not in (".mp4", ".webm", ".mov", ".mkv", ".avi"):
             ext = ".mp4"
-        tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)  # noqa: SIM115
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115
+            suffix=ext, dir=private_media_dir(), delete=False
+        )
         tmp.close()
         self._register_temp_file(tmp.name)
         try:
@@ -4382,7 +4529,9 @@ class VLMEngine:
         ext = url.rsplit(".", 1)[-1].lower() if "." in url.split("?")[0] else "png"
         ext = ext if ext in ("png", "jpg", "jpeg", "webp", "gif") else "png"
 
-        tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+            suffix=f".{ext}", dir=private_media_dir(), delete=False
+        )
         tmp.close()  # Close FD immediately — urlretrieve writes by path, not handle
         # Register temp file eagerly so cleanup happens even if download fails
         self._register_temp_file(tmp.name)
@@ -4566,7 +4715,7 @@ class VLMEngine:
         """Extract frames from a video file using ffmpeg."""
         import subprocess
 
-        tmpdir = tempfile.mkdtemp(prefix="yunshu_video_")
+        tmpdir = tempfile.mkdtemp(prefix="yunshu_video_", dir=private_media_dir())
         # LEAK fix: eager-register tmpdir into _temp_files BEFORE
         # the await call so asyncio.CancelledError from a client disconnect
         # mid-extract doesn't orphan a directory full of frames on disk.
@@ -4660,13 +4809,15 @@ class VLMEngine:
 
     async def _save_base64_file(self, data: str, ext: str = "mp4") -> str:
         """Save base64-encoded data to a temp file."""
-        tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 — file must outlive function; cleanup via _temp_files registry
+            suffix=f".{ext}", dir=private_media_dir(), delete=False
+        )
+        self._register_temp_file(tmp.name)  # a cancelled await still cleans up
 
         def _sync_decode_write() -> None:
             # offload sync decode+write off the event loop.
-            decoded = base64.b64decode(data)
             try:
-                tmp.write(decoded)
+                tmp.write(base64.b64decode(data))
                 tmp.close()
             except Exception:
                 tmp.close()
@@ -4676,7 +4827,6 @@ class VLMEngine:
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _sync_decode_write)
-        self._register_temp_file(tmp.name)
         return tmp.name
 
     # ── Helpers ──
@@ -4719,7 +4869,7 @@ class VLMEngine:
         ends turns with <turn|>, which only generation_config lists)."""
         cached = getattr(self, "_eos_ids_cache", None)
         if cached is not None:
-            return cached
+            return cast(list[int], cached)
         from .text_utils import get_eos_token_ids
 
         ids = set(get_eos_token_ids(getattr(self, "_tokenizer", None)))
@@ -4737,6 +4887,24 @@ class VLMEngine:
                     ids.update(i for i in eid if isinstance(i, int))
         self._eos_ids_cache = sorted(ids)
         return self._eos_ids_cache
+
+    def _generation_suppress_ids(self) -> list[int]:
+        """``suppress_tokens`` from the checkpoint's generation_config.json (token ids the
+        model's author bans from the output, e.g. audio/image placeholder tokens): the default
+        when a request does not set its own."""
+        cached = getattr(self, "_suppress_ids_cache", None)
+        if cached is not None:
+            return cast(list[int], cached)
+        # Shared with the text path: a hub id resolves to its cached snapshot directory.
+        from .generation_suppress import default_suppress_ids
+
+        ids: list[int] = []
+        with contextlib.suppress(Exception):
+            ids = default_suppress_ids(
+                getattr(self, "_model_path", None), getattr(self, "_tokenizer", None)
+            )
+        self._suppress_ids_cache = ids
+        return self._suppress_ids_cache
 
     # ── Stats ──
 

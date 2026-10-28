@@ -72,9 +72,7 @@ def stage(stack):
             return "template_tokenize"
         if any(x in lower for x in ("prefill", "forward.py")):
             return "new_token_prefill"
-        if any(
-            x in lower for x in ("round_driver", "mtp_lane", "dflash", "tree_verify")
-        ):
+        if any(x in lower for x in ("mtp_lane", "dflash", "tree_verify")):
             return "first_round"
     return "other"
 

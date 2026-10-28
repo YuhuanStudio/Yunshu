@@ -44,30 +44,6 @@ class FakeModel:
         yield from self._children.items()
 
 
-class TestDetectMoEConfig:
-    def test_detects_moe_model(self):
-        from yunshu_engine.moe_optimization import detect_moe_config
-
-        model = FakeModel(
-            {
-                "layer.0.mlp": FakeMoeGate(top_k=8),
-                "layer.0.mlp.switch_mlp": FakeSwitchGLU(),
-                "layer.1.mlp": FakeMoeGate(top_k=8),
-                "layer.1.mlp.switch_mlp": FakeSwitchGLU(),
-            }
-        )
-        config = detect_moe_config(model)
-        assert config is not None
-        assert config["moe_layers"] == 2  # two gates
-        assert config["top_k"] == 8  # read from the gate, not the container
-
-    def test_no_moe_model(self):
-        from yunshu_engine.moe_optimization import detect_moe_config
-
-        model = FakeModel({"layer.0": FakeLinear(), "layer.1": FakeLinear()})
-        assert detect_moe_config(model) is None
-
-
 class TestApplyMoETopK:
     def test_reduces_top_k_on_renormalizing_gates(self):
         from yunshu_engine.moe_optimization import apply_moe_top_k
@@ -118,14 +94,3 @@ class TestApplyMoETopK:
 
         model = FakeModel({"layer.0": FakeLinear()})
         assert apply_moe_top_k(model, target_top_k=2)["patched_layers"] == 0
-
-
-class TestRestoreMoETopK:
-    def test_restore(self):
-        from yunshu_engine.moe_optimization import restore_moe_top_k
-
-        g1, g2 = FakeMoeGate(top_k=4), FakeMoeGate(top_k=4)
-        model = FakeModel({"layer.0.mlp": g1, "layer.1.mlp": g2})
-        restored = restore_moe_top_k(model, 8)
-        assert restored == 2
-        assert g1.top_k == 8 and g2.top_k == 8

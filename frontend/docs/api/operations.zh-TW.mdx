@@ -59,7 +59,7 @@ description: 健康檢查探針、Prometheus 指標、即時請求檢視與取�
 | `yunshu_kv_cache_*`、`yunshu_kv_prefix_cache_*`、`yunshu_radix_*` | KV 區塊使用量、前綴快取項目數、命中、未命中與逐出。 |
 | `yunshu_apc_*` | VLM runner 的自動前綴快取：RAM 與 SSD 層、各層查詢、命中的 token 數、逐出、WARM 層位元組數與壓縮比。 |
 | `yunshu_spec_*`、`yunshu_mtp_*` | 推測解碼：草稿與被接受的 token 數、接受率、MTP 週期、n-gram 提案。帶有 `model_id` 標籤。 |
-| `yunshu_gpu_busy_seconds_total`、`yunshu_round_driver_busy_seconds_total` | 累計的 GPU 忙碌秒數；一段時間內的閒置比例等於 1 減去第一個指標的變化率。 |
+| `yunshu_gpu_busy_seconds_total` | 累計的 GPU 忙碌秒數；一段時間內的閒置比例等於 1 減去該指標的變化率。 |
 | `yunshu_scheduler_*`、`yunshu_chunked_prefill_*`、`yunshu_attention_eviction_*` | batched 引擎的排程器與 prefill gauge。 |
 | `yunshu_model_warmup_*`、`yunshu_lora_*`、`yunshu_response_cache_*` | 預熱次數、LoRA adapter 記帳、回應快取的命中與未命中。 |
 

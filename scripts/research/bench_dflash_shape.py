@@ -123,7 +123,7 @@ def main():
     from yunshu_engine.mrope import clear_rope_state
     from yunshu_engine.spec_schedule import install_chain_budget
 
-    omlx.apply(row_exact=False)
+    omlx.apply()
     model, processor = load(a.model)
     lm, tok = model.language_model, processor.tokenizer
     lane_linear.convert(lm)

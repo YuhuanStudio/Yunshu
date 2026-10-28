@@ -34,7 +34,7 @@ sequenceDiagram
 
 ### Runner 行為
 
-- VLM runner 在有主要工作時保留待處理的輔助 row，把兩種優先權放在不同 batch，並在有主要請求時暫停進行中的輔助 batch。推測 lane 保有自己的快取與取樣狀態，切換時會還原共用 drafter 的狀態。實驗性的 [round driver](/docs/developers/round-driver) 有獨立的輔助 driver，使用相同的模型、chunk 與取樣路徑。
+- VLM runner 在有主要工作時保留待處理的輔助 row，把兩種優先權放在不同 batch，並在有主要請求時暫停進行中的輔助 batch。推測 lane 保有自己的快取與取樣狀態，切換時會還原共用 drafter 的狀態。
 - 自上次服務起已等待 10 秒的輔助 row 會得到一次服務機會。這不是完成期限：進行中的 atom、較舊的工作、用戶端取消與期限仍然適用。
 - 互動式 prefill 在被一個 atom 超越後獲得持續的 FIFO 保護，所以之後到達的短請求，不能一再插到長的冷請求前面。被選中的請求會先完成最後 2048 token 的視窗並送出第一個 token，才償還解碼負債。
 - prefill atom 之後欠解碼中 row 的解碼時間至少 75 ms（`DECODE_QUANTUM_S`），上限為 `DECODE_QUANTUM_MAX_S`，仍在前幾個 token 的 row 獲得較大的份額。簡短的主要請求完成交接（`PRIMARY_HANDOFF_S`，100 ms）讓即將完成的主要請求排在輔助請求進入之前，並使用只在 CPU 上的計時器，使 MLX 工作留在單一 executor 執行緒。
@@ -66,7 +66,6 @@ sequenceDiagram
 - 只辨識已擷取的 opencode 標題指紋。模型名稱、輸出上限或 system 文字不同的請求都是互動式。
 - 量測結果只涵蓋 27B VLM runner。證據來自一次擷取的 session，在交錯的全新伺服器配對中重播；這是排程取捨，不是通用的速度提升。開啟策略後，擷取資料的首 token 時間中位數略差，而尾部、六回合完成時間與長 prefill 混合負載有改善（見下）。
 - 輔助請求的延遲是刻意犧牲的：重播中，開啟策略後標題的平均首 token 時間較高。
-- round driver 維持嚴格的輔助優先權且沒有老化，所以持續不斷的主要 driver 流量可能無限期延後輔助服務。
 - 未擷取的用戶端與 API（Responses、Messages）不會被分類。
 
 ## 如何驗證

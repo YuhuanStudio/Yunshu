@@ -3,8 +3,8 @@ from __future__ import annotations
 """Yunshu Gateway — Rate limiting middleware.
 
 Token bucket rate limiter per client IP. Configurable RPM + token limits.
-(The former per-key RBAC override was removed with the multi-tenant machinery —
-this engine serves a single consumer; limiting is purely per-IP now.)
+(There is no per-key override: this engine has one owner, so limiting is purely
+per-IP.)
 
 Memory safety: LRU eviction + TTL expiry prevents unbounded growth from
 unique-IP DoS. Configurable via environment:

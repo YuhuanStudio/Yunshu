@@ -582,9 +582,11 @@ async def create_speech(request: Request) -> Response:
             detail=f"Unsupported response_format '{req.response_format}'. "
             f"Allowed: {', '.join(_OPENAI_SUPPORTED)}.",
         )
+    from .responses import _file_access
     from .voices import resolve_voice
 
-    req = resolve_voice(req, tts_engine)
+    with _file_access(request):
+        req = resolve_voice(req, tts_engine)
     try:
         # VoiceDesign models require 'instruct' for voice description
         instruct = req.instruct
@@ -674,9 +676,11 @@ async def stream_speech(req: TTSRequest, request: Request):
             ),
         )
 
+    from .responses import _file_access
     from .voices import resolve_voice
 
-    req = resolve_voice(req, tts_engine)
+    with _file_access(request):
+        req = resolve_voice(req, tts_engine)
 
     # advertise the model's REAL output rate (was hardcoded 24000
     # in both the SSE header event and X-Sample-Rate — non-24k models like dia=44100
@@ -1099,6 +1103,13 @@ async def create_translation(
     return resp
 
 
+async def _list_custom_as(request, fn):
+    from .responses import _file_access
+
+    with _file_access(request):
+        return await asyncio.to_thread(fn)
+
+
 @router.get("/audio/voices")
 async def list_voices(request: Request) -> dict:
     """List available TTS voices."""
@@ -1109,7 +1120,7 @@ async def list_voices(request: Request) -> dict:
     return {
         "object": "list",
         "data": [{"id": v, "object": "voice"} for v in _list_tts_voices()]
-        + await asyncio.to_thread(list_custom_voices),
+        + await _list_custom_as(request, list_custom_voices),
     }
 
 

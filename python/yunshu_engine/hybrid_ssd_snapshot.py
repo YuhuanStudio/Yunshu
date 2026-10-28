@@ -32,6 +32,8 @@ from typing import Any, cast
 
 import mlx.core as mx
 
+from .transient_errors import is_transient_load_error
+
 logger = logging.getLogger(__name__)
 
 
@@ -96,7 +98,10 @@ class HybridSnapshotStore:
                     with contextlib.suppress(OSError):
                         f.unlink()
                     continue
-                meta = self._read_header_meta(f)
+                try:
+                    meta = self._read_header_meta(f)
+                except Exception:
+                    continue  # transient (out of descriptors / memory): neither index nor delete
                 if meta is None or not self._meta_ok(meta):
                     self._drop_file(f, f.stem)  # torn, foreign or old-schema file
                     continue
@@ -123,7 +128,9 @@ class HybridSnapshotStore:
                 hdr = json.loads(fh.read(_n).decode("utf-8"))
             meta = hdr.get("__metadata__", {})
             return meta if isinstance(meta, dict) else None
-        except Exception:
+        except Exception as e:
+            if is_transient_load_error(e):
+                raise  # not a verdict on the file: the caller keeps it
             return None
 
     def _meta_ok(self, meta: dict) -> bool:
@@ -371,7 +378,11 @@ class HybridSnapshotStore:
             return None, 0
         try:
             out, token_count = self._load_validated(path)
-        except Exception:
+        except Exception as e:
+            if is_transient_load_error(e):
+                # out of memory / interrupted call: the file is fine, this lookup goes cold
+                logger.warning("hybrid snapshot load failed (%s); file kept", e)
+                return None, 0
             logger.debug("hybrid snapshot load failed", exc_info=True)
             out, token_count = None, 0
         if out is None:

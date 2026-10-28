@@ -31,6 +31,7 @@ from __future__ import annotations
 import collections
 import contextlib
 import contextvars
+import hashlib
 import json
 import logging
 import os
@@ -42,10 +43,32 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import mlx_vlm.apc as _upstream_apc
-from mlx_vlm.apc import APCManager, DiskBlockStore, _sequence_hash
+import numpy as np
+from mlx_vlm.apc import APCManager, DiskBlockStore
+from mlx_vlm.apc import _sequence_hash as _upstream_sequence_hash
 from mlx_vlm.apc_coordinator import APCCoordinator
 
 logger = logging.getLogger(__name__)
+
+
+def _sequence_hash(token_ids, extra_hash: int, block_size: int) -> int:
+    """``mlx_vlm.apc._sequence_hash`` without its per-token ``int(t)`` loop (b9f5305: convert
+    the ids to bytes once). Same digest: the upstream builds the same int32 array, just from
+    a Python-level copy of every id. Other inputs (mx arrays, generators) take the upstream."""
+    if isinstance(token_ids, (list, tuple)):
+        try:
+            arr = np.asarray(token_ids, dtype=np.int32)
+        except (TypeError, ValueError, OverflowError):
+            return int(_upstream_sequence_hash(token_ids, extra_hash, block_size))
+        if arr.ndim == 1:
+            h = hashlib.sha256()
+            h.update(int(extra_hash & ((1 << 64) - 1)).to_bytes(8, "little"))
+            h.update(int(block_size).to_bytes(4, "little", signed=False))
+            h.update(int(arr.size).to_bytes(8, "little", signed=False))
+            h.update(arr.tobytes())
+            return int.from_bytes(h.digest()[:8], "little", signed=True)
+    return int(_upstream_sequence_hash(token_ids, extra_hash, block_size))
+
 
 _CANONICAL_LOOKUP: contextvars.ContextVar[
     tuple[int, int, int, int, frozenset[int]] | None
@@ -138,7 +161,8 @@ def _restore_kv(c, min_capacity_tokens, targets):
         dst = take_restore_buffer(a, capacity) if _RESTORE_STORAGE.get() else None
         if dst is not None:
             dst[..., :rows, :] = a[..., :rows, :]
-            dst[..., rows:, :] = 0
+            # rows past the padded capacity are never read (the cache returns [:offset])
+            dst[..., rows:capacity, :] = 0
             return dst
         part = a[..., :rows, :]
         if pad <= 0:
@@ -235,6 +259,29 @@ def total_memory_bytes() -> int:
     import os
 
     return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+
+
+def _is_transient_load_error(e: BaseException) -> bool:
+    """A failure that says nothing about the file: out of memory, an interrupted or exhausted
+    system call, an MLX allocation failure. The checkpoint stays; the lookup goes cold."""
+    import errno
+
+    if isinstance(e, MemoryError):
+        return True
+    if isinstance(e, OSError):
+        return e.errno in {
+            errno.ENOMEM,
+            errno.EINTR,
+            errno.EAGAIN,
+            errno.EMFILE,
+            errno.ENFILE,
+            errno.ENOSPC,
+            errno.EBUSY,
+        }
+    if isinstance(e, RuntimeError):
+        text = str(e).lower()
+        return "allocat" in text or "out of memory" in text
+    return False
 
 
 def check_loaded_cache(
@@ -352,6 +399,8 @@ class SpillDiskStore(DiskBlockStore):
         except OSError:
             size = 0
         removed = [h for h, stored in list(self._exact_index.items()) if stored == path]
+        tok = self._tok_cache()
+        lengths = {key: len(tok[key][0]) if key in tok else None for key in removed}
         self._drop_index_for_path(path)
         path.unlink(missing_ok=True)
         self._disk_bytes = max(0, self._disk_bytes - size)
@@ -359,15 +408,21 @@ class SpillDiskStore(DiskBlockStore):
         from .cache_observation import disk_event
 
         for key in removed:
-            metadata = self._tok_cache().get(key)
-            disk_event(
-                self,
-                "eviction",
-                key,
-                len(metadata[0]) if metadata else None,
-                "disk_budget_or_superseded",
-            )
+            disk_event(self, "eviction", key, lengths[key], "disk_budget_or_superseded")
         return True
+
+    def _drop_index_for_path(self, path) -> None:
+        """Forget a file's index rows and the token tuples kept for its checkpoints.
+
+        Every drop (budget eviction, quarantine, tiered demotion) comes through here,
+        so the per-file token cache cannot outlive its file.
+        """
+        with self._index_lock:
+            exact = [h for h, stored in self._exact_index.items() if stored == path]
+        super()._drop_index_for_path(path)
+        tok = self._tok_cache()
+        for h in exact:
+            tok.pop(h, None)
 
     def _maybe_evict(self) -> int:
         budget = self.budget
@@ -388,7 +443,7 @@ class SpillDiskStore(DiskBlockStore):
         ok = self._write_payload_impl(shard_id, block_hashes, payload)
         h = getattr(payload, "cache_hash", None)
         if ok and h is not None:
-            tokens = tuple(int(t) for t in payload.token_ids)
+            tokens = tuple(map(int, payload.token_ids))
             self._tok_cache()[int(h)] = (tokens, int(payload.extra_hash))
             from .cache_observation import disk_event
 
@@ -525,6 +580,40 @@ class SpillDiskStore(DiskBlockStore):
         except (OSError, KeyError, TypeError, ValueError, IndexError):
             return False
 
+    _DTYPE_BYTES = {
+        "BOOL": 1, "U8": 1, "I8": 1, "F8_E4M3": 1, "F8_E5M2": 1,
+        "U16": 2, "I16": 2, "F16": 2, "BF16": 2,
+        "U32": 4, "I32": 4, "F32": 4,
+        "U64": 8, "I64": 8, "F64": 8,
+    }  # fmt: skip
+
+    def _header_matches_payload(self, path) -> bool:
+        """Every tensor's declared shape x dtype size equals its byte span, inside the file.
+
+        MLX reports a bit-flipped huge dimension as an allocation failure, which looks
+        transient; a header that does not describe its own payload is corruption."""
+        parsed = self._open_shard_header(path)
+        if parsed is None:
+            return False
+        entries, _meta, data_start = parsed
+        try:
+            size = path.stat().st_size
+            for entry in entries.values():
+                itemsize = self._DTYPE_BYTES.get(entry["dtype"])
+                begin, end = (int(x) for x in entry["data_offsets"])
+                count = 1
+                for dim in entry["shape"]:
+                    if int(dim) < 0:
+                        return False
+                    count *= int(dim)
+                if itemsize is None or end - begin != count * itemsize:
+                    return False
+                if begin < 0 or data_start + end > size:
+                    return False
+        except (OSError, KeyError, TypeError, ValueError):
+            return False
+        return True
+
     def find_exact_prefix(self, *args, **kwargs):
         try:
             return super().find_exact_prefix(*args, **kwargs)
@@ -566,7 +655,11 @@ class SpillDiskStore(DiskBlockStore):
         try:
             loaded = super().load_exact_cache(cache_hash, **kwargs)
         except Exception as e:
-            if path is not None:
+            if _is_transient_load_error(e) and (
+                path is None or self._header_matches_payload(path)
+            ):
+                logger.warning("APC disk: load failed (%s), going cold", e)
+            elif path is not None:
                 self.quarantine(path, f"load raised {type(e).__name__}")
             return None
         if loaded is None:
@@ -794,6 +887,28 @@ def share_prefix_rows(pending, max_tail: int = SHARE_MAX_TAIL) -> list:
     return views
 
 
+def recurrent_state_finite(prompt_cache) -> bool:
+    """False when any floating recurrent-state array of ``prompt_cache`` holds inf or nan.
+
+    One fused reduction and one host sync per checkpoint store (never per token); dense KV
+    layers are not inspected. Every store reaches here through ``flush_deferred_checkpoints``,
+    which runs after the first emitted token and ``materialize``s the snapshot first, so the
+    read is of already-evaluated arrays and adds nothing to TTFT."""
+    import mlx.core as mx
+    from mlx_vlm.models.cache import ArraysCache
+
+    checks = [
+        mx.isfinite(a).all()
+        for c in prompt_cache or ()
+        if isinstance(c, ArraysCache)
+        for a in (getattr(c, "cache", None) or ())
+        if a is not None and mx.issubdtype(a.dtype, mx.floating)
+    ]
+    if not checks:
+        return True
+    return bool(mx.all(mx.stack(checks)).item())
+
+
 class _Coordinator(APCCoordinator):
     """Checkpoint positions: the prompt end, one interval boundary, the end of the system turn."""
 
@@ -846,6 +961,26 @@ class _Coordinator(APCCoordinator):
         policies = self.__dict__.setdefault("_requests", {})
         policies.setdefault(tuple(token_ids), collections.deque()).append(policy)
 
+    def set_store_off(self, token_ids):
+        """A request with these tokens opted out of storing (``X-Yunshu-Cache-Store: off``).
+
+        Kept apart from the per-request policy on purpose: the policy changes the checkpoint
+        plan (and with it the prefill split points), this must not. Lookup and the plan are
+        exactly an ordinary request's; only ``store_checkpoint`` is refused. Identical
+        prompts in flight at once share the opt-out (a store skipped, never a wrong one)."""
+        counts = self.__dict__.setdefault("_store_off", {})
+        key = tuple(token_ids)
+        counts[key] = counts.get(key, 0) + 1
+
+    def release_store_off(self, token_ids):
+        counts = self.__dict__.get("_store_off", {})
+        key = tuple(token_ids)
+        left = counts.get(key, 0) - 1
+        if left > 0:
+            counts[key] = left
+        else:
+            counts.pop(key, None)
+
     def request(self, token_ids):
         pending = self.__dict__.get("_requests", {}).get(tuple(token_ids))
         return pending[0] if pending else None
@@ -871,12 +1006,38 @@ class _Coordinator(APCCoordinator):
         candidates = policy.get("lookup_points", [n for n, _ in policy["points"]])
         maximum = max(candidates, default=0)
         extra_hash = kwargs["extra_hash"]
+        minimum = kwargs.get("safe_lookup_min", 0)
+
+        def acceptable(n, key):
+            # Restoring at a noncanonical point, or from a different earlier
+            # split plan, changes the hybrid recurrence's numerical spans.
+            signature = tuple(p for p in points if p < n and p % 2048)
+            return (
+                (n in candidates or key in self.manager.__dict__.get("_tail_keys", ()))
+                and (
+                    self.manager.prefill_alignment
+                    or self.manager._span_plans.get(key) == signature
+                )
+                and kwargs["suffix_is_text_only"](n)
+            )
+
         while maximum > 0:
+            # Decide on the candidate before restoring it: a restore copies the whole KV.
+            probed = self.manager.probe_exact_length(
+                token_ids, extra_hash, maximum, minimum
+            )
+            if probed:
+                pkey = _sequence_hash(
+                    tuple(token_ids[:probed]), extra_hash, self.manager.block_size
+                )
+                if not acceptable(probed, pkey):
+                    maximum = probed - 1
+                    continue
             cache, n = self.manager.lookup_exact_cache(
                 token_ids,
                 extra_hash=extra_hash,
                 max_prefix_tokens=maximum,
-                min_prefix_tokens=kwargs.get("safe_lookup_min", 0),
+                min_prefix_tokens=minimum,
                 refresh_retention=False,
             )
             if cache is None or not n:
@@ -884,15 +1045,7 @@ class _Coordinator(APCCoordinator):
             key = _sequence_hash(
                 tuple(token_ids[:n]), extra_hash, self.manager.block_size
             )
-            # Restoring at a noncanonical point, or from a different earlier
-            # split plan, changes the hybrid recurrence's numerical spans.
-            signature = tuple(p for p in points if p < n and p % 2048)
-            source = self.manager._span_plans.get(key)
-            if (
-                (n in candidates or key in self.manager.__dict__.get("_tail_keys", ()))
-                and (self.manager.prefill_alignment or source == signature)
-                and kwargs["suffix_is_text_only"](n)
-            ):
+            if acceptable(n, key):
                 self.manager.touch_boundary(token_ids[:n], extra_hash)
                 return {
                     "matched_blocks": [],
@@ -901,6 +1054,8 @@ class _Coordinator(APCCoordinator):
                     "extra_hash": extra_hash,
                     "full_input_ids": list(token_ids),
                 }
+            # Refused after the restore: it served nothing, so it is not a hit.
+            self.manager.retract_lookup(n)
             maximum = n - 1
         return None
 
@@ -924,7 +1079,7 @@ class _Coordinator(APCCoordinator):
                 tails.pop(next(iter(tails)))
         policy["written"] = max(policy.get("written", 0), len(tokens))
 
-    # Enabled only around a runner generator step. Round-driver and external APC
+    # Enabled only around a runner generator step. External APC
     # callers retain synchronous admission until they supply the same flush boundary.
     defer_checkpoint_stores = False
 
@@ -1023,14 +1178,8 @@ class _Coordinator(APCCoordinator):
         ):
             return False
         full_ids = getattr(self, "_current_ids", tokens)
-        try:
-            from . import dflash_apc_window
-
-            dflash_apc_window.capture(
-                tokens, extra_hash, prompt_end=len(tokens) >= len(full_ids) - 1
-            )
-        except Exception:  # the drafter window is an optimisation only
-            logger.debug("drafter window capture failed", exc_info=True)
+        if tuple(full_ids) in self.__dict__.get("_store_off", ()):
+            return False
         policy = self.request(full_ids)
         signature = ()
         if policy is not None:
@@ -1046,6 +1195,18 @@ class _Coordinator(APCCoordinator):
             and len(token_ids) not in self._store_lengths
         ):
             return False  # deterministic forward boundary, not an extra snapshot
+        # Only a checkpoint that is going to be stored can be restored from, so only its window
+        # is kept: forward-split boundaries (every stride in split-invariant prefill) and
+        # opted-out requests used to concatenate and store a window each, evicting the windows
+        # of real checkpoints from the small budget.
+        try:
+            from . import dflash_apc_window
+
+            dflash_apc_window.capture(
+                tokens, extra_hash, prompt_end=len(tokens) >= len(full_ids) - 1
+            )
+        except Exception:  # the drafter window is an optimisation only
+            logger.debug("drafter window capture failed", exc_info=True)
         from mlx_vlm.apc import _cache_nbytes
         from mlx_vlm.apc_adapters import clone_cache_entry
         from mlx_vlm.models.cache import (
@@ -1346,6 +1507,8 @@ class YunshuAPCManager(APCManager):
             collections.OrderedDict()
         )
         self.lookups: collections.deque[Lookup] = collections.deque(maxlen=64)
+        # What each recent hit added to the counters, so a refused restore can take it back.
+        self._hit_undo: collections.deque[dict] = collections.deque(maxlen=64)
         from .apc_restore_cost import MediaRestoreCost
 
         self.media_restore_cost = MediaRestoreCost()
@@ -1537,7 +1700,7 @@ class YunshuAPCManager(APCManager):
         """A checkpoint came back from an SSD tier: it belongs to this request's generation (its
         next, longer checkpoint supersedes it), and it is a head when it ends the system turn."""
         key: int = _sequence_hash(
-            tuple(int(t) for t in tokens[:n]), extra_hash, self.block_size
+            tuple(map(int, tokens[:n])), extra_hash, self.block_size
         )
         with self._plock:
             self._born.setdefault(key, self._generation)
@@ -1583,6 +1746,13 @@ class YunshuAPCManager(APCManager):
             )
             if longer is not None:
                 return
+        # HOT room is settled before the WARM copy is taken: take() removes it, so a failed
+        # promotion afterwards would destroy the only (lossless) copy.
+        size = warm.peek_nbytes(key)
+        if size is None:
+            return
+        if size > self.memory_max_bytes or not self._make_room(size, retain_bytes=size):
+            return  # no HOT room: the entry stays in WARM, the lookup goes on to SSD / recompute
         t0 = time.perf_counter()
         if where == "inflight":
             inf = warm.take_inflight(key)
@@ -1598,13 +1768,8 @@ class YunshuAPCManager(APCManager):
                 return
             cache, ent = got
             born, head = ent.born, ent.head
-        from mlx_vlm.apc import APCExactCacheEntry, _cache_nbytes
+        from mlx_vlm.apc import APCExactCacheEntry
 
-        size = _cache_nbytes(cache)
-        if size > self.memory_max_bytes or not self._make_room(size, retain_bytes=size):
-            # no HOT room for the decoded copy: it is discarded and the lookup goes on to
-            # SSD / recompute
-            return
         with self.lock:
             self._exact_cache[key] = APCExactCacheEntry(
                 tokens[:n], int(extra_hash), cache
@@ -1626,7 +1791,7 @@ class YunshuAPCManager(APCManager):
     def _load_span_plans(self) -> None:
         try:
             raw = json.loads((self.disk.dir / self._SPAN_PLANS_FILE).read_text())
-            plans = {int(k): tuple(int(p) for p in v) for k, v in raw.items()}
+            plans = {int(k): tuple(map(int, v)) for k, v in raw.items()}
         except (OSError, ValueError, TypeError, AttributeError):
             return
         self._span_plans.update(list(plans.items())[-_BORN_MAX:])
@@ -1693,6 +1858,16 @@ class YunshuAPCManager(APCManager):
         for i in range(1, n - 1):
             if token_ids[i] == a and token_ids[i + 1] == b:
                 return self.align_prefill_boundary(i)
+        return 0
+
+    def last_user_boundary(self, token_ids) -> int:
+        """Token index where the last user turn starts (0: no marker, or it is the first turn)."""
+        if self.head_marker is None:
+            return 0
+        a, b = self.head_marker
+        for i in range(len(token_ids) - 2, 0, -1):
+            if token_ids[i] == a and token_ids[i + 1] == b:
+                return i
         return 0
 
     def resident_prefix_len(self, token_ids, extra_hash=0) -> int:
@@ -1780,13 +1955,10 @@ class YunshuAPCManager(APCManager):
         extends a recent one (the next turn of one conversation) is not a divergence. The answer is
         fixed per prompt, so every checkpoint_lengths call of one request agrees.
         """
-        import numpy as np
 
-        key = (
-            len(token_ids),
-            hash(tuple(token_ids[:64])),
-            hash(tuple(token_ids[-64:])),
-        )
+        # the whole sequence is hashed: two prompts sharing length, head and tail (a changed
+        # middle) must not share an answer
+        key = (len(token_ids), hash(tuple(token_ids)))
         with self._plock:
             memo = self.__dict__.setdefault(
                 "_divergence_memo", collections.OrderedDict()
@@ -1826,6 +1998,15 @@ class YunshuAPCManager(APCManager):
         n = len(token_ids)
         if self.prefill_alignment and n % self.prefill_alignment:
             return False
+        if not recurrent_state_finite(prompt_cache):
+            # A recurrent (GDN) state that overflowed to inf/nan in fp16 would poison every
+            # request that restores it, forever: never publish it.
+            self.stats.record_reject("non_finite_state", tokens=n)
+            logger.warning(
+                "APC: not storing a %d-token checkpoint with a non-finite recurrent state",
+                n,
+            )
+            return False
         if _generation is not None:
             self.observation.request_id = self.__dict__.get(
                 "_console_generations", {}
@@ -1850,9 +2031,7 @@ class YunshuAPCManager(APCManager):
                 # not yet: the anchors view a cache that is about to be copied and stored,
                 # and its bytes are not theirs; the budget is enforced once the copy exists
                 self.finish_anchor_sharing(enforce=False)
-        key = _sequence_hash(
-            tuple(int(t) for t in token_ids), extra_hash, self.block_size
-        )
+        key = _sequence_hash(tuple(map(int, token_ids)), extra_hash, self.block_size)
         # recorded first: a checkpoint too big for RAM is written to the SSD inside the call
         # below, and the write hook needs its generation to tell what it supersedes
         with self._plock:
@@ -1914,7 +2093,7 @@ class YunshuAPCManager(APCManager):
         retained set stays a handful of checkpoints. Anchors sit at the oldest end of the LRU,
         so the byte and entry budgets evict them before anything newer.
         """
-        tokens = tuple(int(t) for t in token_ids)
+        tokens = tuple(map(int, token_ids))
         keep_for = self.keep_prior_for
         if keep_for is not None and tokens == keep_for[: len(tokens)]:
             # A next-turn rehearsal prefills a conversation nobody has asked for yet: it must
@@ -2121,7 +2300,7 @@ class YunshuAPCManager(APCManager):
                 import mlx.core as mx
 
                 mx.eval(views)
-            return shared
+            return int(shared)
         finally:
             self.enforce_anchor_budget()
 
@@ -2156,7 +2335,7 @@ class YunshuAPCManager(APCManager):
         from mlx_vlm.models.cache import KVCache
 
         self._last_shared_keys = []
-        donor_tokens = tuple(int(t) for t in donor_tokens)
+        donor_tokens = tuple(map(int, donor_tokens))
         hit = self._last_hit
         if hit is None or hit[1] != extra_hash or donor_tokens[: len(hit[0])] != hit[0]:
             return 0, [], 0
@@ -2321,7 +2500,7 @@ class YunshuAPCManager(APCManager):
         (the idle-resend root cause of yv gate agent.restart_idle was invisible without it)."""
         if len(token_ids) < 4096 or not logger.isEnabledFor(logging.DEBUG):
             return  # the scan below hashes prefixes: only pay for it when it is read
-        tokens = tuple(int(t) for t in token_ids)
+        tokens = tuple(map(int, token_ids))
         with self.lock:
             held = sorted(
                 len(e.token_ids)
@@ -2400,7 +2579,7 @@ class YunshuAPCManager(APCManager):
         before = self.stats.disk_hits
         t0 = time.perf_counter()
         if self.warm is not None:
-            tokens = tuple(int(t) for t in token_ids)
+            tokens = tuple(map(int, token_ids))
             names = ("extra_hash", "max_prefix_tokens", "min_prefix_tokens")
             defaults = (0, None, 0)
             vals = [
@@ -2408,6 +2587,8 @@ class YunshuAPCManager(APCManager):
                 for i, (k, d) in enumerate(zip(names, defaults, strict=True))
             ]
             self._promote_warm(tokens, int(vals[0]), vals[1], vals[2])
+        stat_fields = ("hits", "exact_hits", "disk_hits", "matched_tokens")
+        stats_before = [getattr(self.stats, f, 0) for f in stat_fields]
         cache, n = super().lookup_exact_cache(token_ids, *args, **kwargs)
         extra = self._extra_of(args, kwargs)
         # A background spill may finish after drop_exact saw a busy writer.
@@ -2424,8 +2605,17 @@ class YunshuAPCManager(APCManager):
                 positional[1] = maximum
                 retry.pop("max_prefix_tokens")
             cache, n = super().lookup_exact_cache(token_ids, *positional, **retry)
-        self._last_hit = (tuple(int(t) for t in token_ids[:n]), extra) if n else None
+        self._last_hit = (tuple(map(int, token_ids[:n])), extra) if n else None
+        undo = None
         if self._last_hit is not None:
+            deltas = {
+                f: getattr(self.stats, f, 0) - b
+                for f, b in zip(stat_fields, stats_before, strict=True)
+            }
+            ekey = hash(self._last_hit)
+            with self._plock:
+                eprior = list(self._entry_hits.get(ekey) or ()) or None
+            undo = {"n": int(n), "deltas": deltas, "ekey": ekey, "eprior": eprior}
             self._note_entry_hit(*self._last_hit)
         if n and refresh_retention:
             self.touch_boundary(token_ids[:n], extra)
@@ -2437,14 +2627,19 @@ class YunshuAPCManager(APCManager):
         key = self._exact_cache.last_access_key
         if tier == "ssd" and n:
             key = self._note_disk_hit(
-                tuple(int(t) for t in token_ids), int(n), self._extra_of(args, kwargs)
+                tuple(map(int, token_ids)), int(n), self._extra_of(args, kwargs)
             )
         if n and key is not None:
+            if undo is not None:
+                undo["okey"] = key
+                undo["oprior"] = self.observation.hits.get(key)
             self.observation.hit(key)
             if tier == "ssd":
                 self.observation.event("promotion", key, n, "ram", "ssd_hit")
         self._log_lookup(token_ids, int(n), f"{tier}")
         self.tier_hits[tier] += 1
+        if undo is not None:
+            self._hit_undo.append(undo)
         device = getattr(self.disk, "last_device", None) if tier == "ssd" else None
         self.lookups.append(
             Lookup(
@@ -2452,6 +2647,74 @@ class YunshuAPCManager(APCManager):
             )
         )
         return cache, n
+
+    def retract_lookup(self, cached: int) -> None:
+        """Take back the stats of the newest hit of ``cached`` tokens: the coordinator's
+        acceptance checks refused the restore, so it served no request."""
+        for rec in reversed(self.lookups):
+            if rec.cached == cached and rec.tier != "none":
+                self.lookups.remove(rec)
+                self.tier_hits[rec.tier] -= 1
+                break
+        for undo in reversed(self._hit_undo):
+            if undo["n"] != cached:
+                continue
+            self._hit_undo.remove(undo)
+            with self.lock:
+                for field, delta in undo["deltas"].items():
+                    if delta and hasattr(self.stats, field):
+                        setattr(self.stats, field, getattr(self.stats, field) - delta)
+            with self._plock:
+                if undo["eprior"] is None:
+                    self._entry_hits.pop(undo["ekey"], None)
+                else:
+                    self._entry_hits[undo["ekey"]] = undo["eprior"]
+            okey = undo.get("okey")
+            if okey is not None:
+                if undo.get("oprior") is None:
+                    self.observation.hits.pop(okey, None)
+                else:
+                    self.observation.hits[okey] = undo["oprior"]
+            return
+
+    def probe_exact_length(self, token_ids, extra_hash, maximum, minimum) -> int:
+        """Length the next lookup_exact_cache would restore (HOT / WARM / SSD index), read from
+        metadata only: no restore, no promotion. 0 when nothing qualifies."""
+        tokens = tuple(map(int, token_ids))
+        maximum = min(len(tokens) - 1, int(maximum))
+        if maximum <= minimum:
+            return 0
+        best = 0
+        with self.lock:
+            for e in self._exact_cache.values():
+                if e.extra_hash != extra_hash:
+                    continue
+                n = _upstream_apc._checkpoint_match_len(
+                    tokens,
+                    e.token_ids,
+                    maximum,
+                    self.block_size,
+                    _upstream_apc._dense_checkpoint_trimmable(
+                        e.prompt_cache, len(e.token_ids)
+                    ),
+                )
+                if n > max(minimum, best):
+                    best = n
+        if self.warm is not None:
+            found = self.warm.find(tokens, extra_hash, maximum, max(minimum, best))
+            if found is not None:
+                best = found[1]
+        if self.disk is not None:
+            found = self.disk.find_exact_prefix(
+                tokens,
+                extra_hash=extra_hash,
+                max_prefix_tokens=maximum,
+                min_prefix_tokens=max(minimum, best),
+                block_size=self.block_size,
+            )
+            if found is not None:
+                best = found[1]
+        return best
 
     def _skip_media_restore(self, token_ids, args, kwargs):
         """Inspect HOT metadata before upstream allocates/copies the restore.
@@ -2461,7 +2724,7 @@ class YunshuAPCManager(APCManager):
         """
         from mlx_vlm.apc import _cache_nbytes
 
-        tokens = tuple(int(t) for t in token_ids)
+        tokens = tuple(map(int, token_ids))
         extra = self._extra_of(args, kwargs)
         maximum = kwargs.get("max_prefix_tokens", args[1] if len(args) > 1 else None)
         minimum = kwargs.get("min_prefix_tokens", args[2] if len(args) > 2 else 0)

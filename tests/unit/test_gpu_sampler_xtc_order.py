@@ -1,10 +1,6 @@
-"""the opt-in GPU sampler (YUNSHU_GPU_SAMPLER=1) applied top_k BEFORE XTC, so
-XTC computed its cutoff over a top_k-truncated distribution — masking a different token
-set than mlx-lm and the default numpy sampler (top_p→min_p→XTC→top_k), breaking the
-sampler's own "identical to the numpy path" invariant. top_k now applies LAST (after XTC).
-
-(The default served sampler is the numpy one and was already correct; this only affected
-the opt-in GPU sampler.)"""
+"""the GPU sampler applied top_k BEFORE XTC, so XTC computed its cutoff over a top_k-truncated
+distribution — masking a different token set than mlx-lm (top_p→min_p→XTC→top_k).
+top_k now applies LAST (after XTC)."""
 
 from __future__ import annotations
 

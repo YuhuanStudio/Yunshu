@@ -35,7 +35,7 @@ def _session():
 
     s.send_event = _send
 
-    async def _noop():
+    async def _noop(*_a, **_k):
         return None
 
     s._auto_commit_and_respond = _noop

@@ -12,8 +12,13 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
 
-from .context_window import ContextBudgetError, reject_overlong_prompt
+from .context_window import (
+    ContextBudgetError,
+    reject_overlong_prompt,
+    require_non_empty_prompt,
+)
 from .fast_path_stats import FastPathStats
+from .kv_prefix_cache import store_opt_out
 from .stream_bridge import StreamBridge, make_stream_queue
 from .text_utils import StopHoldbackBuffer
 
@@ -44,7 +49,7 @@ class EngineStreamMixin:
         top_logprobs: int | None = None,
         logits_processors: list | None = None,
         priority: int = 0,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float | None = None,
         lora_adapter: str | None = None,
         kv_cache_breakpoints: list[int] | None = None,
         min_tokens: int = 0,
@@ -130,26 +135,26 @@ class EngineStreamMixin:
                     exc_info=True,
                 )
 
-        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
-            # Route through _apply_chat_template (NOT raw) — same reason as the
-            # non-streaming fast path: tool_calls.arguments str→dict normalization,
-            # the family message adapter, dangling-<think> closing, and the
-            # enable_thinking-unsupported retry. The default streaming path otherwise
-            # broke multi-turn tool conversations / Mistral-Gemma role rules.
-            prompt = self._apply_chat_template(prompt, enable_thinking=enable_thinking)
+        # Template render + tokenize run on the text-prep thread, not the event loop
+        # (see text_prep).
+        def _render_and_encode():
+            text = prompt
+            if isinstance(text, list) and text and isinstance(text[0], dict):
+                # Route through _apply_chat_template (NOT raw) — same reason as the
+                # non-streaming fast path: tool_calls.arguments str→dict normalization,
+                # the family message adapter, dangling-<think> closing, and the
+                # enable_thinking-unsupported retry. The default streaming path otherwise
+                # broke multi-turn tool conversations / Mistral-Gemma role rules.
+                text = self._apply_chat_template(text, enable_thinking=enable_thinking)
+            return text, self._encode_prompt(tokenizer, text)
 
-        input_ids = self._encode_prompt(tokenizer, prompt)
+        from .text_prep import run_text_prep
+
+        prompt, input_ids = await run_text_prep(_render_and_encode)
         prompt_tokens = len(input_ids)
 
         # Guard against empty prompt (same as _generate_fast)
-        if not input_ids:
-            bos_id = getattr(tokenizer, "bos_token_id", None)
-            if bos_id is not None:
-                input_ids = [bos_id]
-            else:
-                eos_id = getattr(tokenizer, "eos_token_id", 1)
-                input_ids = [eos_id]
-            prompt_tokens = len(input_ids)
+        require_non_empty_prompt(input_ids)
 
         # ── Context window: clamp generation + truncate over-long prompt ──
         # Same fix as the non-streaming fast path — resolve the REAL
@@ -237,6 +242,7 @@ class EngineStreamMixin:
         # (no stops), the buffer is pure passthrough.
         _hb_active = bool(stop_suffixes)
         _hb = StopHoldbackBuffer(stop_suffixes if _hb_active else None)
+        _tok_ends: list[int] = []  # cumulative text length per generated token (usage)
 
         # route temp>0 through _build_temp_sampler, like the non-streaming
         # fast path (3160). The bare make_sampler uses mlx-lm's categorical_sampling,
@@ -274,7 +280,7 @@ class EngineStreamMixin:
                 sampler = _engine._build_constrained_sampler(
                     sampler, json_schema, tokenizer
                 )
-                report(
+                _sr = report(
                     "mlx-lm",
                     json_schema,
                     backend_name(
@@ -286,6 +292,18 @@ class EngineStreamMixin:
                     else None,
                     enforced=sampler is not unconstrained_sampler,
                 )
+                if sampler is not unconstrained_sampler:
+                    # thinking on: the grammar binds after </think>, not inside the reasoning
+                    from .reasoning_gate import gate_constrained_sampler
+
+                    sampler = gate_constrained_sampler(
+                        unconstrained_sampler,
+                        sampler,
+                        input_ids,
+                        tokenizer,
+                        _eos_ids,
+                        _sr,
+                    )
             except Exception:
                 _engine.logger.warning(
                     "Grammar constraint setup failed in streaming", exc_info=True
@@ -314,85 +332,26 @@ class EngineStreamMixin:
                 return logits
 
             logits_processors.append(_repetition_penalty)
+        from . import text_logit_processors as _tlp
+
+        _gen_count_procs: list = []  # told len(ids_to_prefill) before generate_step runs
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
-            # Maintain incremental counts dict instead of rebuilding
-            # from full tokens list every step (O(T²) → O(T) total). The
-            # closure captures a mutable state dict so successive calls only
-            # observe the newest token.
-            _fp_state: dict[str, object] = {"counts": {}, "last_len": -1}
-
-            # The prompt offset inside the processor is 1, NOT the full
-            # prompt length. mlx-lm prefills all-but-the-last prompt token OUTSIDE
-            # _step, so the `tokens` accumulator handed to logits_processors is
-            # [last_prompt_token, gen1, gen2, ...]. With n_prompt=prompt_tokens the
-            # guard `cur_len <= n_prompt` made frequency/presence penalty INERT for
-            # the first ~prompt_len generated tokens (short completions never
-            # penalized at all) and then tokens[n_prompt:] under-counted repeats.
-            def _freq_pres_penalty(
-                tokens,
-                logits,
-                fp=frequency_penalty,
-                pp=presence_penalty,
-                n_prompt=1,
-                _st=_fp_state,
-            ):
-                counts: dict[int, int] = _st["counts"]  # type: ignore[assignment]
-                last_len = int(_st["last_len"])  # type: ignore[arg-type]
-                cur_len = len(tokens)
-                if cur_len <= n_prompt:
-                    _st["last_len"] = cur_len
-                    return logits
-                # Reset/rebuild if tokens shrank (spec-decode rollback) or
-                # we have not yet started incremental accounting.
-                if cur_len < last_len or last_len < n_prompt:
-                    counts = {}
-                    for t in tokens[n_prompt:]:
-                        counts[int(t)] = counts.get(int(t), 0) + 1
-                    _st["counts"] = counts
-                else:
-                    start = max(last_len, n_prompt)
-                    for t in tokens[start:]:
-                        counts[int(t)] = counts.get(int(t), 0) + 1
-                _st["last_len"] = cur_len
-                for tid, cnt in counts.items():
-                    # OpenAI permits frequency/presence penalty in [-2.0, 2.0];
-                    # negative values BOOST the token (encourage repetition).
-                    # Guarding with `> 0` silently dropped negative penalties
-                    # (verified: fp=-2.0 produced output identical to fp=0).
-                    if fp != 0.0:
-                        logits[..., tid] = logits[..., tid] - fp * cnt
-                    if pp != 0.0 and cnt > 0:
-                        logits[..., tid] = logits[..., tid] - pp
-                return logits
-
-            logits_processors.append(_freq_pres_penalty)
+            # Dense per-request count vectors patched once per new token (see
+            # text_logit_processors). Counts generated tokens only: the prompt offset is the
+            # length of the ids handed to generate_step (set below, once the cached prefix is
+            # known), because mlx-lm puts every prefilled chunk into the `tokens` its
+            # processors see. OpenAI allows both penalties in [-2, 2]; negative ones boost.
+            _fpp = _tlp.FrequencyPresencePenalty(frequency_penalty, presence_penalty)
+            _gen_count_procs.append(_fpp)
+            logits_processors.append(_fpp)
         if logit_bias:
-
-            def _logit_bias_proc(_tokens, logits, biases=logit_bias):
-                # Skip token ids outside [0, vocab) — a user-supplied out-of-range
-                # or negative id would otherwise index out of bounds and crash the
-                # request (MLX: "Cannot squeeze axis 1 with size 0"). OpenAI ignores
-                # invalid logit_bias token ids rather than erroring.
-                vocab = logits.shape[-1]
-                for tid, bias in biases.items():
-                    if 0 <= tid < vocab:
-                        logits[..., tid] = logits[..., tid] + bias
-                return logits
-
-            logits_processors.append(_logit_bias_proc)
+            # Out-of-range ids are skipped (OpenAI ignores them) rather than crashing
+            # the request with an out-of-bounds index.
+            logits_processors.append(_tlp.LogitBias(logit_bias))
 
         # suppress_tokens + min_tokens (mirror _generate_fast).
         if suppress_tokens:
-            _sup = [int(t) for t in suppress_tokens]
-
-            def _suppress_proc(_tokens, logits, sup=_sup):
-                vocab = logits.shape[-1]
-                for tid in sup:
-                    if 0 <= tid < vocab:
-                        logits[..., tid] = -float("inf")
-                return logits
-
-            logits_processors.append(_suppress_proc)
+            logits_processors.append(_tlp.TokenBan(suppress_tokens))
         # skip min_tokens EOS-masking when a JSON/grammar constraint is
         # active — the un-propagated streaming sibling of the non-streaming
         # fix (3336). The constraint already enforces a structural minimum, and
@@ -400,17 +359,9 @@ class EngineStreamMixin:
         # all-(-inf) allowed set → its argmax fallback emits an INVALID non-EOS
         # token after a complete JSON value.
         if min_tokens and min_tokens > 0 and stop_ids and json_schema is None:
-            _mask_ids = list(stop_ids)
-
-            def _min_tokens_proc(tokens, logits, ids=_mask_ids, floor=int(min_tokens)):
-                if (len(tokens) - 1) < floor:
-                    vocab = logits.shape[-1]
-                    for tid in ids:
-                        if 0 <= tid < vocab:
-                            logits[..., tid] = -float("inf")
-                return logits
-
-            logits_processors.append(_min_tokens_proc)
+            _min_ban = _tlp.TokenBan(stop_ids, floor=int(min_tokens))
+            _gen_count_procs.append(_min_ban)
+            logits_processors.append(_min_ban)
 
         # SAMP-2: Wrap user-provided custom logits processors to adapt signature.
         if _custom_logits_processors:
@@ -512,12 +463,21 @@ class EngineStreamMixin:
             or (lora_adapter is not None)
         )
         prefix_cache = None if _stream_bypass_cache else self._kv_prefix_cache
+        prefix_cache = store_opt_out(prefix_cache, cancel_event)
         # Post-generation stores trim the live cache back to the prompt: not for hybrids.
+        # Automatic (length-gated) 8-bit KV is lossy and the caches are not keyed by
+        # precision: never store a cache that really got quantised, or a later hit would
+        # differ from a miss (mirrors _generate_fast's _lossy_kv; checked per cache at store).
         store_cache = None if _stream_hybrid else prefix_cache
+
+        def _storable(kv_cache):
+            return store_cache is not None and not self._auto_quantized_kv(
+                _req_kv_bits, kv_cache
+            )
 
         def _save_breakpoint_prefixes(token_ids, kv_cache):
             """Save KV prefix cache entries at breakpoint positions."""
-            if not _stream_kv_breakpoints or store_cache is None:
+            if not _stream_kv_breakpoints or not _storable(kv_cache):
                 return
             from .kv_prefix_cache import cache_length as _cache_len_bp
 
@@ -605,8 +565,20 @@ class EngineStreamMixin:
             # never flipped True → the ENTIRE chain-of-thought leaked into visible
             # delta.content and reasoning_tokens stayed 0 (streaming diverged from
             # the non-streaming path, which uses the closing-only reasoning parser).
-            # Pre-seed when the rendered prompt ends with an open <think>.
-            if think_end_token is not None and not _in_thinking:
+            # Pre-seed when the rendered prompt ends with an open <think>. NOT for a constrained
+            # request whose grammar binds from the first token (json_schema / regex / choice /
+            # grammar): that token is the answer (same rule as close_unterminated_reasoning).
+            # A reasoning-gated grammar binds after </think>, so its prompt does reason first.
+            from .reasoning_gate import ThinkGatedSampler
+
+            _grammar_from_first = json_schema is not None and not isinstance(
+                sampler, ThinkGatedSampler
+            )
+            if (
+                think_end_token is not None
+                and not _in_thinking
+                and not _grammar_from_first
+            ):
                 try:
                     from .thinking_budget import detect_needs_think_prefix
 
@@ -675,32 +647,15 @@ class EngineStreamMixin:
                         exc_info=True,
                     )
 
-            # Inflight prefix sharing ()
-            _inflight_entry = None
-            if cached_kv is None and not _stream_hybrid:
-                try:
-                    from .inflight_prefix_sharing import get_inflight_tracker
-
-                    _tracker = get_inflight_tracker()
-                    _inflight_entry = _tracker.find_prefix(
-                        [int(t) for t in ids], self.model_name or ""
-                    )
-                    # BUG #1: live-borrow reuse disabled — see the
-                    # non-streaming site for the full rationale (empty-prefill
-                    # crash + cross-request corruption against a growing donor
-                    # cache, unsafe under the now-working engine loop).
-                except Exception:
-                    _engine.logger.debug(
-                        "inflight prefix lookup failed in streaming", exc_info=True
-                    )
-
+            # Inflight prefix sharing: register only (live-borrow lookup is disabled,
+            # see the non-streaming site). input_ids is already a Python list.
             # Register our prefill as in-flight for concurrent requests to share
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
 
                 get_inflight_tracker().register(
                     _inflight_req_id,
-                    [int(t) for t in ids],
+                    input_ids,
                     cache,
                     self.model_name or "",
                 )
@@ -724,6 +679,10 @@ class EngineStreamMixin:
                         _stream_kv_bits = None
                 except Exception:
                     pass
+            for (
+                _gp
+            ) in _gen_count_procs:  # mlx-lm's `tokens` = these ids + the generated ones
+                _gp.set_prompt_len(len(ids_to_prefill))
             _fp_stats.admit(
                 _stream_cached_tokens,
                 len(ids_to_prefill),
@@ -747,7 +706,7 @@ class EngineStreamMixin:
                     # benefit on the (default) streaming path. None → mlx-lm no-ops.
                     kv_bits=_stream_kv_bits,
                     kv_group_size=self._kv_quant_group_size,
-                    quantized_kv_start=self._kv_quant_start,
+                    quantized_kv_start=self._kv_quant_start_for(_stream_kv_bits),
                 ):
                     n_tok += 1
                     _fp_stats.token(n_tok)
@@ -773,23 +732,31 @@ class EngineStreamMixin:
                         _log_probs = _lp_logits - _mx.logsumexp(
                             _lp_logits, axis=-1, keepdims=True
                         )
-                        _tok_lp = float(_log_probs[token])
+                        if top_logprobs and top_logprobs > 0:
+                            from .text_logprobs import top_logprobs as _top_lp
+
+                            _tok_lp, _top_ids, _top_vals = _top_lp(
+                                _log_probs, top_logprobs, token
+                            )
+                        else:
+                            _tok_lp, _top_ids, _top_vals = (
+                                float(_log_probs[token]),
+                                None,
+                                None,
+                            )
                         if _tok_lp != _tok_lp or _tok_lp == float("-inf"):
                             _tok_lp = -100.0
                         _lp_entry = {"token_id": int(token), "logprob": _tok_lp}
-                        if top_logprobs and top_logprobs > 0:
-                            _k = min(top_logprobs, _log_probs.shape[0])
-                            _sorted_idx = _mx.argsort(-_log_probs)
-                            _top_k_idx = _sorted_idx[:_k]
-                            _top_entries = []
-                            for j in range(_k):
-                                _tlp = float(_log_probs[int(_top_k_idx[j])])
-                                if _tlp != _tlp or _tlp == float("-inf"):
-                                    _tlp = -100.0
-                                _top_entries.append(
-                                    {"token_id": int(_top_k_idx[j]), "logprob": _tlp}
-                                )
-                            _lp_entry["top_logprobs"] = _top_entries
+                        if _top_ids is not None:
+                            _lp_entry["top_logprobs"] = [
+                                {
+                                    "token_id": i,
+                                    "logprob": -100.0
+                                    if v != v or v == float("-inf")
+                                    else v,
+                                }
+                                for i, v in zip(_top_ids, _top_vals, strict=True)
+                            ]
                     # Check cancellation
                     if _engine._is_cancelled(cancel_event):
                         mx.synchronize()
@@ -900,6 +867,10 @@ class EngineStreamMixin:
                         if _itl > 0 and _itl < 10:
                             _stream_itl_samples.append(_itl)
                     new_text = "" if stop_hit else detokenizer.last_segment
+                    # cumulative text length after this token (usage when a stop string cuts)
+                    _tok_ends.append(
+                        (_tok_ends[-1] if _tok_ends else 0) + len(new_text)
+                    )
                     if suffix_hit and not stop_hit and not _hb_active:
                         # (Non-hold-back path) Trim ONLY the matched stop suffix
                         # from this segment so leading non-stop text is still
@@ -974,6 +945,9 @@ class EngineStreamMixin:
                                 detokenizer.add_token(think_end_token)
                                 _thinking_tokens.append(think_end_token)
                                 _end_text = detokenizer.last_segment
+                                _tok_ends.append(
+                                    (_tok_ends[-1] if _tok_ends else 0) + len(_end_text)
+                                )
                                 if _end_text:
                                     _put(
                                         (
@@ -1012,7 +986,7 @@ class EngineStreamMixin:
                                     "normal",
                                 )
                             )
-                            if store_cache is not None:
+                            if _storable(cache):
                                 store_cache.add(ids, cache)
                             _save_breakpoint_prefixes(ids, cache)
                             mx.synchronize()
@@ -1179,13 +1153,13 @@ class EngineStreamMixin:
                         _put(
                             ("", n_tok, "stop", len(_thinking_tokens), None, _cur_state)
                         )
-                        if store_cache is not None:
+                        if _storable(cache):
                             store_cache.add(ids, cache)
                         _save_breakpoint_prefixes(ids, cache)
                         mx.synchronize()
                         _unregister_inflight()
                         return
-                if store_cache is not None:
+                if _storable(cache):
                     store_cache.add(ids, cache)
                 _save_breakpoint_prefixes(ids, cache)
                 detokenizer.finalize()
@@ -1429,6 +1403,13 @@ class EngineStreamMixin:
                     )
                     break
                 n_tok = tok_count
+                if done and finish_reason == "stop" and _user_stop_hit[0]:
+                    # A stop string spanning tokens: the held-back stop prefix's tokens were
+                    # generated but their text was never delivered. Usage counts what the
+                    # consumer took (the non-streaming path re-encodes the kept text too).
+                    n_tok = _engine._delivered_token_count(
+                        _tok_ends, len(accumulated), n_tok
+                    )
 
                 # Streaming backpressure: slow down if client can't keep up
                 if _backpressure.check_backpressure(_q.qsize()):

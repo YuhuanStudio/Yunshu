@@ -45,7 +45,7 @@ import {
   type Model,
 } from "./ui";
 import { ModelSize } from "./ModelSize";
-import { useMemoryLedger } from "./memory-api";
+import { useSignals } from "./signals";
 import { useDownloads, useLocalInventory } from "./admin-hooks";
 import { isActive } from "./admin-models-api";
 import { LocalInventory } from "./LocalInventory";
@@ -90,7 +90,7 @@ export function Models({
   const online = isOnline(engine);
   const impact = unloadImpact(engine.status, unloading?.id ?? "");
   const interrupts = impact.rows.length + impact.unattributed > 0;
-  const ledger = useMemoryLedger(connection, online);
+  const ledger = useSignals().ledgerState;
   const downloads = useDownloads(connection, online);
   const local = useLocalInventory(connection, online);
   const running = downloads.data?.jobs.filter(isActive).length ?? 0;

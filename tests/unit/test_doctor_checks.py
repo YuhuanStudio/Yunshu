@@ -29,7 +29,7 @@ def test_version_guard_fails_below_minimum_with_upgrade_command():
 
 
 def test_version_guard_ok_and_missing_packages_are_not_version_failures():
-    fake = {"mlx": "0.40.0", "mlx-lm": "0.32.0", "llguidance": "2.0"}
+    fake = {"mlx": "0.40.0", "mlx-lm": "0.32.2", "llguidance": "2.0"}
     (c,) = doctor.check_versions(pkg=fake.get)
     assert c.status == "ok"
 
@@ -39,6 +39,28 @@ def test_minimums_come_from_the_dependency_metadata():
     assert set(mins) <= set(doctor.CHECKED_PACKAGES)
     assert {"mlx", "mlx-lm", "llguidance", "transformers"} <= set(mins)
     assert tuple(map(int, mins["mlx-lm"].split("."))) >= (0, 32, 0)
+
+
+def test_fallback_minimums_mirror_pyproject():
+    import tomllib
+    from pathlib import Path
+
+    from packaging.requirements import Requirement
+
+    meta = tomllib.loads((Path(__file__).parents[2] / "pyproject.toml").read_text())[
+        "project"
+    ]
+    reqs = list(meta["dependencies"])
+    for extra in meta.get("optional-dependencies", {}).values():
+        reqs += extra
+    floors: dict[str, str] = {}
+    for line in reqs:
+        r = Requirement(line)
+        for spec in r.specifier:
+            if spec.operator == ">=":
+                floors[r.name] = spec.version
+    for name, minimum in doctor.MIN_VERSIONS.items():
+        assert floors[name] == minimum, name
 
 
 def test_extras_missing_audio_and_llguidance_have_fixes():

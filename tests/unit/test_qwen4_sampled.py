@@ -197,9 +197,11 @@ def test_sampled_request_without_logprobs_uses_coupled_drafts(monkeypatch):
 
 def test_other_paths_keep_their_gates(monkeypatch):
     runner, captured = _runner(monkeypatch, True)
-    list(runner.iter_tokens([1, 2], max_tokens=3, logprobs=True))  # greedy
-    assert not captured[0].use_draft
+    list(runner.iter_tokens([1, 2], max_tokens=3))  # greedy without logprobs
+    assert captured[0].use_draft and captured[0].keyed is None
     runner, captured = _runner(monkeypatch, False)  # not the native loop
+    list(runner.iter_tokens([1, 2], max_tokens=3, logprobs=True))
+    assert not captured[0].use_draft
     list(
         runner.iter_tokens([1, 2], max_tokens=3, temperature=0.8, seed=4, logprobs=True)
     )
@@ -213,7 +215,6 @@ def test_greedy_admission_never_runs_the_sampled_setup(monkeypatch):
     monkeypatch.setattr(sampled, "install_logit_stash", lambda lm: calls.append(lm))
     runner, captured = _runner(monkeypatch, True)
     list(runner.iter_tokens([1, 2], max_tokens=3))
-    list(runner.iter_tokens([1, 2], max_tokens=3, logprobs=True))
     assert calls == [] and captured[0].keyed is None
     list(runner.iter_tokens([1, 2], max_tokens=3, temperature=0.8, seed=4))
     assert len(calls) == 1
@@ -225,3 +226,50 @@ def test_loading_the_lane_does_not_wrap_the_target_logits():
     from yunshu_engine import qwen4_mtp
 
     assert "install_logit_stash" not in inspect.getsource(qwen4_mtp)
+
+
+def test_greedy_logprob_request_keeps_native_speculation(monkeypatch):
+    runner, captured = _runner(monkeypatch, True)
+    list(runner.iter_tokens([1, 2], max_tokens=3, logprobs=True))
+    job = captured[0]
+    assert job.use_draft and isinstance(job.keyed, NativeKeyedSampler)
+    assert job.keyed.params is None
+
+
+def test_greedy_reports_equal_the_serial_argmax_stream():
+    tbl, first = table(), table()[3]
+    request = SpecRequest(logprobs=True, top_logprobs=2)
+    sampler = NativeKeyedSampler(None, 0, request=request)
+    got, drafted, accepted = speculate(tbl, sampler, first, 60)
+    # serial greedy: argmax of the one-row normalized float32 logprobs, then its reports
+    logits, want, rows = mx.array(first)[None], [], []
+    for _ in range(60):
+        row = normalize_rows(logits[None])
+        tok = int(mx.argmax(row, axis=-1)[0].item())
+        want.append(tok)
+        rows.append(row)
+        logits = mx.array(tbl[tok])[None]
+    assert got == want
+    assert accepted == drafted  # the toy drafter equals the target
+    for index in range(1, 56):
+        lp, top = sampler.report(index, got[index])
+        ref = request.reports(rows[index], [got[index]])[0]
+        assert (got[index], lp, top) == ref
+
+
+def test_paravirtual_binding_keeps_the_greedy_override(monkeypatch):
+    # A VM's Metal binds the chunked sampler per instance; it must still dispatch to the subclass's sample_positions.
+    from yunshu_engine.utils import hardware
+
+    monkeypatch.setattr(hardware, "is_paravirtual_metal", lambda: True)
+    tbl, first = table(), table()[3]
+    request = SpecRequest(logprobs=True, top_logprobs=2)
+    virtual = NativeKeyedSampler(None, 0, request=request)
+    assert virtual.sample_positions.__func__ is KeyedSampler._sample_positions_virtual
+    monkeypatch.setattr(hardware, "is_paravirtual_metal", lambda: False)
+    physical = NativeKeyedSampler(
+        None, 0, request=SpecRequest(logprobs=True, top_logprobs=2)
+    )
+    assert (
+        speculate(tbl, virtual, first, 20)[0] == speculate(tbl, physical, first, 20)[0]
+    )

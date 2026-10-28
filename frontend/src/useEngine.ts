@@ -1,4 +1,5 @@
 import { activity, type ActivityPhase } from "./engineView";
+import { joinOrQueue } from "./single-flight.ts";
 import {
   emaStep,
   initialStablePhase,
@@ -204,12 +205,18 @@ export function useEngine(connection: Connection): UseEngineResult {
     connectionKey: symbol;
     promise: Promise<void>;
   } | null>(null);
+  /** The one forced refresh waiting for the poll in flight; forced callers arriving meanwhile share it. */
+  const queuedForcedRef = useRef<Promise<void> | null>(null);
+  const refreshRef = useRef<(force?: boolean) => Promise<void>>(() =>
+    Promise.resolve(),
+  );
 
   useEffect(() => {
     const generation = ++generationRef.current;
     activeControllerRef.current?.abort();
     activeControllerRef.current = null;
     inFlightRef.current = null;
+    queuedForcedRef.current = null;
     // Failures counted against the previous service say nothing about this one.
     failuresRef.current = 0;
     failStartRef.current = null;
@@ -235,7 +242,18 @@ export function useEngine(connection: Connection): UseEngineResult {
   const refresh = useCallback(
     (force = false): Promise<void> => {
       const existing = inFlightRef.current;
-      if (existing?.connectionKey === connectionKey) return existing.promise;
+      if (existing?.connectionKey === connectionKey)
+        return joinOrQueue(
+          existing.promise,
+          force,
+          // The queued run starts later: it must be the latest refresh, and only for this connection
+          // (an old closure would abort the new connection's request and register under the old key).
+          () =>
+            connectionKeyRef.current === connectionKey
+              ? refreshRef.current(force)
+              : Promise.resolve(),
+          queuedForcedRef,
+        );
 
       const generation = generationRef.current;
       const controller = new AbortController();
@@ -564,6 +582,7 @@ export function useEngine(connection: Connection): UseEngineResult {
     },
     [apiConnection, connectionKey],
   );
+  refreshRef.current = refresh;
 
   useEffect(() => {
     if (!polling) return;

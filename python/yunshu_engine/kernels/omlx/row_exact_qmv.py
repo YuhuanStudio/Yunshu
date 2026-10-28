@@ -31,6 +31,12 @@ import mlx.nn as nn
 from .moe_verify_gather import _BITS, _GROUP_SIZES, _HEADER, qmv_fast_layout
 
 MAX_ROWS = 8
+# K values whose stock one-row call does not take the qmv traversal this file
+# transcribes (MLX's small-K quad dispatch). mlx2 1436775 measured about 1e-4 of
+# outputs differing at exactly K = 64 and 128 on MLX 0.32.4; those layers decline
+# and take the per-row form, which is the one-row stock call itself and exact.
+# Applied on every MLX version (a decline is always exact; admission is not).
+STOCK_QUAD_K = frozenset({64, 128})
 # Output columns per simdgroup (qmv's own tile: a threadgroup owns 8).
 _RPS = 4
 # Verify projections run in a dependent chain, so latency wins: below this
@@ -328,6 +334,7 @@ def _kernel_supported(linear: nn.QuantizedLinear, x: mx.array) -> bool:
     return (
         x.shape[-1] == k
         and k % 8 == 0
+        and k not in STOCK_QUAD_K
         and group_size % _values_per_thread(bits, fast) == 0
     )
 
@@ -547,7 +554,8 @@ def _qmv_fast_layout(weight, scales, biases, bits, group_size, mode, dtype, rps)
     n = int(weight.shape[0])
     k = int(scales.shape[-1]) * group_size
     return not (
-        not qmv_fast_layout(k, n, bits)
+        k in STOCK_QUAD_K
+        or not qmv_fast_layout(k, n, bits)
         or n % (2 * rps)
         or scales.shape != (n, k // group_size)
         or weight.shape[1] * 32 != k * bits

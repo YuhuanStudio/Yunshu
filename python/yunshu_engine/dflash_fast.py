@@ -115,9 +115,11 @@ def prework_source():
     values straight from the cached conv tail and the window rows leaves every
     product and sum untouched. The conv-state output is unused here, so its
     writes are dropped. Derived from omlx's qwen35_gdn_prework (Apache-2.0)."""
+    from .kernels import gdn_qk_eps
     from .kernels.omlx import qwen35_gdn_prework as gp
 
-    source = gp._SOURCE
+    # the q/k RMS epsilon marker is filled exactly as for the omlx kernel itself
+    source = gdn_qk_eps.render(gp._SOURCE, "float(DK)")
     if source.count(_GATHER_OLD) != 1 or source.count(_STATE_TAIL) != 1:
         raise RuntimeError("prework source changed")
     source = source.replace(_GATHER_OLD, _GATHER_NEW)

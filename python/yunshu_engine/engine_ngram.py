@@ -12,6 +12,9 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
 
+from .context_window import require_non_empty_prompt
+from .json_schema import allowed_membership as _allowed_membership
+from .kv_prefix_cache import store_opt_out
 from .stream_bridge import StreamBridge, make_stream_queue
 
 
@@ -70,8 +73,13 @@ class EngineNgramMixin:
         thinking_budget: int | None = None,
         cancel_event: asyncio.Event | None = None,
         logits_processors: list | None = None,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float | None = None,
         lora_adapter: str | None = None,
+        suppress_tokens: list[int] | None = None,
+        priority: int = 0,
+        kv_cache_breakpoints: list[int] | None = None,
+        min_tokens: int = 0,
+        ignore_eos: bool = False,
     ) -> _engine.GenerationOutput:
         """Generate using N-gram speculative decoding (model-free).
 
@@ -137,6 +145,11 @@ class EngineNgramMixin:
                 logits_processors=logits_processors,
                 timeout_seconds=timeout_seconds,
                 lora_adapter=lora_adapter,
+                suppress_tokens=suppress_tokens,
+                priority=priority,
+                kv_cache_breakpoints=kv_cache_breakpoints,
+                min_tokens=min_tokens,
+                ignore_eos=ignore_eos,
             )
         # Fresh per-request proposer (n-gram or suffix) — avoids reset()/propose()
         # races on a shared instance under concurrency.
@@ -155,7 +168,46 @@ class EngineNgramMixin:
         else:
             text = prompt if isinstance(prompt, str) else str(prompt)
             input_ids = tokenizer.encode(text)
+        require_non_empty_prompt(input_ids)
         prompt_tokens = len(input_ids)
+
+        if json_schema is not None:
+            from .reasoning_gate import prompt_opens_reasoning
+
+            if prompt_opens_reasoning(input_ids, tokenizer)[0]:
+                # The grammar binds after </think>: the plain path owns that gate (the draft
+                # pre-filter here walks the grammar from the first token).
+                return await self._generate_fast(
+                    prompt=prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    min_p=min_p,
+                    repetition_penalty=repetition_penalty,
+                    frequency_penalty=frequency_penalty,
+                    presence_penalty=presence_penalty,
+                    logit_bias=logit_bias,
+                    stop=stop,
+                    stop_token_ids=stop_token_ids,
+                    seed=seed,
+                    enable_thinking=enable_thinking,
+                    logprobs=logprobs,
+                    top_logprobs=top_logprobs,
+                    thinking_budget=thinking_budget,
+                    xtc_probability=xtc_probability,
+                    xtc_threshold=xtc_threshold,
+                    json_schema=json_schema,
+                    cancel_event=cancel_event,
+                    logits_processors=logits_processors,
+                    timeout_seconds=timeout_seconds,
+                    lora_adapter=lora_adapter,
+                    suppress_tokens=suppress_tokens,
+                    priority=priority,
+                    kv_cache_breakpoints=kv_cache_breakpoints,
+                    min_tokens=min_tokens,
+                    ignore_eos=ignore_eos,
+                )
 
         # Build stop token sets
         stop_ids: set[int] = set()
@@ -212,6 +264,18 @@ class EngineNgramMixin:
                 xtc_threshold=xtc_threshold,
             )
 
+        # suppress_tokens (the request's, or the checkpoint's generation_config default): the
+        # verifier accepts a draft iff it equals the sampler's pick, so banning the ids inside
+        # the sampler keeps every token path (first token, verified drafts, bonus) honest and
+        # the output equal to the plain fast path's.
+        if suppress_tokens:
+            from .text_logit_processors import TokenBan
+
+            _ban, _base_sampler = TokenBan(suppress_tokens), sampler
+
+            def sampler(logprobs, _ban=_ban, _base=_base_sampler):  # noqa: F811
+                return _base(_ban(None, logprobs))
+
         # Grammar constraint: pre-validate draft tokens against allowed set
         _grammar_constraint = None
         if json_schema is not None:
@@ -261,14 +325,14 @@ class EngineNgramMixin:
                         "grammar rollback failed in n-gram filter", exc_info=True
                     )
 
-            allowed = _grammar_constraint.get_allowed_tokens(tokenizer, generated_ids)
+            allowed = _allowed_membership(_grammar_constraint, tokenizer, generated_ids)
             if not allowed:
                 _gc_rollback()
                 return draft_ids
-            allowed_set = set(allowed)
+            allowed_set = allowed
             filtered = []
             for tid in draft_ids:
-                if tid in allowed_set:
+                if allowed_set(tid):
                     filtered.append(tid)
                     try:
                         tok_text = tokenizer.decode([tid])
@@ -278,11 +342,11 @@ class EngineNgramMixin:
                             "grammar constraint advance failed", exc_info=True
                         )
                         break
-                    allowed = _grammar_constraint.get_allowed_tokens(
-                        tokenizer, generated_ids + filtered
+                    allowed = _allowed_membership(
+                        _grammar_constraint, tokenizer, generated_ids + filtered
                     )
                     if allowed:
-                        allowed_set = set(allowed)
+                        allowed_set = allowed
                     else:
                         break
                 else:
@@ -325,6 +389,7 @@ class EngineNgramMixin:
             # isn't entered with an adapter), but fail-safe if that gate ever changes.
             if lora_adapter is not None:
                 prefix_cache = None
+            prefix_cache = store_opt_out(prefix_cache, cancel_event)
             if prefix_cache is not None:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
             # Also evict from paged KV manager when enabled
@@ -363,7 +428,7 @@ class EngineNgramMixin:
 
                 get_inflight_tracker().register(
                     _ng_inflight_req_id,
-                    [int(t) for t in ids],
+                    list(input_ids),
                     cache,
                     self.model_name or "",
                 )
@@ -374,8 +439,9 @@ class EngineNgramMixin:
 
             try:
                 gen_t0 = time.perf_counter()
-                _timeout_deadline = gen_t0 + timeout_seconds
-                _timeout_check_interval = 32
+                _timeout_deadline = (
+                    gen_t0 + timeout_seconds if timeout_seconds else None
+                )
                 detokenizer = tokenizer.detokenizer
                 detokenizer.reset()
                 all_token_ids = list(
@@ -425,7 +491,9 @@ class EngineNgramMixin:
                         # Request-level timeout: check every N tokens to bound
                         # generation time. Without this, a pathological N-gram
                         # proposal/accept cycle can loop indefinitely.
-                        if len(tokens) % _timeout_check_interval == 0:
+                        if _timeout_deadline is not None:
+                            # every token / cycle: a modulo check skips multiples when a spec cycle
+                            # accepts several tokens, and overshoots by seconds on a slow model
                             if time.perf_counter() > _timeout_deadline:
                                 _engine.logger.warning(
                                     f"N-gram spec generation timed out after "
@@ -841,8 +909,18 @@ class EngineNgramMixin:
         _ng_reasoning_tok = len(_ch_reason)
         if output_text:
             try:
-                from .reasoning_parser import get_reasoning_parser
+                from .reasoning_parser import (
+                    close_unterminated_reasoning,
+                    get_reasoning_parser,
+                )
+                from .thinking_budget import detect_needs_think_prefix
 
+                # EOS / stop / length inside the prompt-opened <think> keeps the tail reasoning
+                output_text = close_unterminated_reasoning(
+                    output_text,
+                    detect_needs_think_prefix(list(input_ids), tokenizer),
+                    constrained=json_schema is not None,
+                )
                 rp = get_reasoning_parser(self.model_name)
                 rp_out = rp.parse(output_text)
                 if rp_out.reasoning and rp_out.reasoning_tokens > 0:
@@ -900,7 +978,7 @@ class EngineNgramMixin:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         cancel_event: asyncio.Event | None = None,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float | None = None,
         logits_processors: list | None = None,
         enable_thinking: bool | None = None,
         thinking_budget: int | None = None,
@@ -991,6 +1069,7 @@ class EngineNgramMixin:
         else:
             text = prompt if isinstance(prompt, str) else str(prompt)
             input_ids = tokenizer.encode(text)
+        require_non_empty_prompt(input_ids)
         prompt_tokens = len(input_ids)
 
         stop_ids: set[int] = set()
@@ -1078,16 +1157,16 @@ class EngineNgramMixin:
             if _stream_grammar_constraint is None:
                 return draft_ids
             _stream_grammar_constraint.checkpoint()
-            allowed = _stream_grammar_constraint.get_allowed_tokens(
-                tokenizer, generated_ids
+            allowed = _allowed_membership(
+                _stream_grammar_constraint, tokenizer, generated_ids
             )
             if not allowed:
                 _stream_grammar_constraint.rollback()
                 return draft_ids
-            allowed_set = set(allowed)
+            allowed_set = allowed
             filtered = []
             for tid in draft_ids:
-                if tid in allowed_set:
+                if allowed_set(tid):
                     filtered.append(tid)
                     try:
                         tok_text = tokenizer.decode([tid])
@@ -1098,11 +1177,11 @@ class EngineNgramMixin:
                             exc_info=True,
                         )
                         break
-                    allowed = _stream_grammar_constraint.get_allowed_tokens(
-                        tokenizer, generated_ids + filtered
+                    allowed = _allowed_membership(
+                        _stream_grammar_constraint, tokenizer, generated_ids + filtered
                     )
                     if allowed:
-                        allowed_set = set(allowed)
+                        allowed_set = allowed
                     else:
                         break
                 else:
@@ -1197,7 +1276,7 @@ class EngineNgramMixin:
             tokens = []
             all_token_ids = list(input_ids)
 
-            prefix_cache = self._kv_prefix_cache
+            prefix_cache = store_opt_out(self._kv_prefix_cache, cancel_event)
             if prefix_cache is not None:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
             # Also evict from paged KV manager when enabled
@@ -1233,7 +1312,7 @@ class EngineNgramMixin:
 
                 get_inflight_tracker().register(
                     _ng_s_inflight_req_id,
-                    [int(t) for t in ids],
+                    list(input_ids),
                     cache,
                     self.model_name or "",
                 )

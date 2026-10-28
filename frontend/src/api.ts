@@ -157,6 +157,17 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The server refused the credentials (401/403): repeating the same request cannot succeed until the
+ * token changes, so a poller stops here (its effect restarts when the connection's token changes)
+ * instead of asking again every few seconds.
+ */
+export function needsToken(error: unknown): boolean {
+  return (
+    error instanceof ApiError && (error.status === 401 || error.status === 403)
+  );
+}
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {

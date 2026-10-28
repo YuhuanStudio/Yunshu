@@ -15,14 +15,13 @@ Supports:
 """
 
 import contextlib
-import copy
 import json
 import logging
 import math
 import time
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -64,9 +63,17 @@ _MAX_STREAMING_TEXT_BUFFER = 1 * 1024 * 1024  # 1MB safety limit
 _TRUNCATE_KEEP = 512 * 1024  # Keep last 512KB for stop-sequence detection
 
 
-def _apply_token_budget(req: ChatCompletionRequest, prompt_tokens: int, engine) -> None:
+# The cheap prompt-size bound may clamp a default max_tokens only while it still leaves this much
+# room for the answer; a smaller window/larger prompt pays the exact encode instead.
+_BOUND_CLAMP_MIN_ROOM = 32768
+
+
+def _apply_token_budget(
+    req: ChatCompletionRequest, prompt_tokens: int, engine, basis: str = "exact"
+) -> None:
     """Clamp ``max_tokens`` / ``thinking_budget`` to the room the prompt leaves in the context
-    window (reported in ``x_yunshu.budget``); a request that fits is untouched."""
+    window (reported in ``x_yunshu.budget``, with ``prompt_tokens_basis`` when ``prompt_tokens``
+    is an upper bound rather than a tokenizer count); a request that fits is untouched."""
     from ..token_budget import plan_for_engine
 
     budget = plan_for_engine(
@@ -76,6 +83,7 @@ def _apply_token_budget(req: ChatCompletionRequest, prompt_tokens: int, engine) 
         req.model,
         engine,
         source=req.max_tokens_source(),
+        basis=basis,
     )
     if budget is None or not budget.clamped:
         return
@@ -93,8 +101,8 @@ def _validate_sampling_params(
 
     Returns normally if valid, raises HTTPException(422) if invalid.
 
-    Note: max_tokens=0 is allowed here (OpenAI API returns prompt_tokens only).
-    The gateway handles this as a fast-path returning an empty completion.
+    Note: max_tokens=0 passes here because /v1/completions takes it (echo-only scoring); the
+    chat request model rejects it with a 400 before this runs.
     """
     if temperature < 0 or temperature > 2:
         raise HTTPException(
@@ -214,14 +222,6 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
         )
     except Exception:
         logger.debug("metrics recording failed", exc_info=True)
-    # Attribute this request's tokens to the per-request box so the auth
-    # middleware can enforce the tenant's tokens_per_minute quota at settle.
-    try:
-        from ..usage_context import record_billed_tokens
-
-        record_billed_tokens((prompt_tokens or 0) + (completion_tokens or 0))
-    except Exception:
-        logger.debug("billed-token accounting failed", exc_info=True)
 
 
 def _apply_lora_adapter(engine, adapter_id: str | None) -> str | None:
@@ -278,9 +278,15 @@ def _release_lora_adapter(engine, adapter_id: str | None) -> None:
     # Self-managing engines release inside their executor closure (keystone).
     if getattr(engine, "_self_manages_lora", False):
         return
-    lora_mgr = getattr(engine, "get_lora_manager", lambda: None)()
-    if lora_mgr is not None:
-        lora_mgr.release_adapter(adapter_id)
+    # Runs in the `finally` of every response path, after or instead of the terminal event: a
+    # raise here turned a finished completion into a 500 / a stream cut after [DONE] (mlx2
+    # 3dc6f0f). A release that fails is logged; the response still reaches the client.
+    try:
+        lora_mgr = getattr(engine, "get_lora_manager", lambda: None)()
+        if lora_mgr is not None:
+            lora_mgr.release_adapter(adapter_id)
+    except Exception:
+        logger.warning("LoRA adapter release failed for %s", adapter_id, exc_info=True)
 
 
 # ── Request / Response schemas (OpenAI-compatible) ──
@@ -355,14 +361,6 @@ class ChatMessage(BaseModel):
         # extraction normalizes it to an empty string; only explicit empty
         # content is a malformed request.
         if self.role in ("user", "system", "developer"):
-            if (
-                isinstance(self.content, str)
-                and self.content != ""
-                and not self.content.strip()
-            ):
-                raise ValueError(
-                    f"messages: {self.role} message content cannot be whitespace-only"
-                )
             if isinstance(self.content, list) and len(self.content) == 0:
                 raise ValueError(
                     f"messages: {self.role} message content list cannot be empty"
@@ -422,12 +420,14 @@ class ChatCompletionRequest(BaseModel):
     logit_bias: dict[int, float] | None = None
     # Omitted -> the model's output limit (OpenAI: up to the model / context limit; see
     # yunshu_engine.output_limits), clamped to the context room by token_budget.
+    # OpenAI rejects max_tokens / max_completion_tokens below 1 with a 400 (the legacy
+    # completions endpoint is the one that takes 0, for echo-only scoring).
     max_tokens: int = Field(
         default_factory=default_max_output,
-        ge=0,
+        ge=1,
         le=1048576,
     )
-    max_completion_tokens: int | None = Field(default=None, ge=0, le=1048576)
+    max_completion_tokens: int | None = Field(default=None, ge=1, le=1048576)
     stream: bool = False
     stream_options: StreamOptions | None = None
     stop: list[str] | None = None
@@ -543,15 +543,15 @@ class ChatCompletionRequest(BaseModel):
                 "messages: must contain at least one message with role 'user'"
             )
 
-        # Reject if EVERY user message has empty content (str that
-        # is empty/whitespace). List content (multimodal w/ images) is allowed
+        # Reject if EVERY user message has empty content (None or ""; OpenAI
+        # accepts whitespace-only strings such as "\n"). List content (multimodal w/ images) is allowed
         # even with empty text. Prevents the degenerate "nothing to respond to"
         # request that produces zero-token output.
         def _is_empty_content(c) -> bool:
             if c is None:
                 return True
             if isinstance(c, str):
-                return not c.strip()
+                return c == ""
             return False  # list content (multimodal) is non-empty by structure
 
         if all(_is_empty_content(m.content) for m in _user_msgs):
@@ -723,7 +723,7 @@ def _parse_response_format_unchecked(
         if gtype == "json":
             schema = grammar.get("schema")
             if schema:
-                return schema
+                return cast("dict | str | None", schema)
             return "json_object"
         if gtype == "regex":
             return grammar  # Pass through for ConstraintFactory
@@ -746,15 +746,11 @@ def _parse_response_format_unchecked(
         js = response_format.get("json_schema", {})
         schema = js.get("schema")
         if schema:
-            # OpenAI strict mode: when strict=true, force additionalProperties=false
-            # on the root schema so the constrained decoder rejects any keys not
-            # declared in properties. We mutate a copy to avoid leaking changes
-            # back to the request body.
-            if js.get("strict") is True and isinstance(schema, dict):
-                schema = copy.deepcopy(schema)
-                if schema.get("type") == "object" or "properties" in schema:
-                    schema["additionalProperties"] = False
-            return schema
+            # OpenAI strict mode (shared with Responses): strict=true closes every object.
+            from yunshu_gateway.schemas.strict import strict_schema
+
+            schema = strict_schema(schema, js.get("strict"))
+            return cast("dict | str | None", schema)
         return "json_object"
 
     return None
@@ -1924,104 +1920,6 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
     apply_keep_alive(req.model, req.keep_alive)
     _validate_sampling_params(req.temperature, req.effective_max_tokens(), req.top_p)
 
-    # Fast path: max_tokens=0 returns prompt_tokens only (OpenAI API behavior).
-    # Estimate prompt tokens from tokenizer if available.
-    _effective_mt = req.effective_max_tokens()
-    if _effective_mt == 0:
-        messages = _extract_messages(req.messages)
-        # Inject the tool system prompt BEFORE counting, so this prompt_tokens probe
-        # matches what a real max_tokens>0 call reports (it injects at ~line 1241).
-        # Without this, the documented "send max_tokens:0 to get prompt_tokens" probe
-        # under-counts by the whole tool-prompt size when tools are present. .
-        if req.tools:
-            try:
-                messages = _inject_tool_system_prompt(
-                    messages, req.tools, req.tool_choice, req.parallel_tool_calls
-                )
-            except Exception:
-                logger.debug("max_tokens=0 tool-prompt injection failed", exc_info=True)
-        completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
-        prompt_tok = 0
-        # Resolve tokenizer in priority order: single-engine, then multi-model manager
-        _tokenizer = None
-        engine = get_engine()
-        if engine and getattr(engine, "is_loaded", False):
-            _tokenizer = getattr(engine, "_tokenizer", None)
-        if _tokenizer is None:
-            try:
-                manager = get_model_manager()
-                if manager is not None:
-                    entry = manager.get_entry(req.model)
-                    if entry is not None:
-                        if entry.is_loaded and entry.engine is not None:
-                            _tokenizer = getattr(entry.engine, "_tokenizer", None)
-                        # Fallback: load tokenizer-only via HF transformers
-                        if _tokenizer is None:
-                            try:
-                                # SECURITY: gate trust_remote_code (RCE from a
-                                # model dir's *.py) behind an explicit opt-in, default OFF.
-                                _trc = settings.get_bool("YUNSHU_TRUST_REMOTE_CODE")
-                                from transformers import AutoTokenizer
-
-                                _tokenizer = AutoTokenizer.from_pretrained(
-                                    entry.model_path, trust_remote_code=_trc
-                                )
-                            except Exception as _err:
-                                logger.debug(
-                                    f"max_tokens=0 fallback tokenizer load failed: {_err}"
-                                )
-            except Exception:
-                pass
-        if _tokenizer is not None:
-            # Prefer chat template encoding (matches what generate() with
-            # max_tokens>0 would report). Fall back to the heuristic
-            # count_message_tokens if the tokenizer can't apply a template.
-            try:
-                templated = _tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
-                )
-                if isinstance(templated, str):
-                    # avoid double-BOS so this probe matches the
-                    # generation path's prompt_tokens (which now applies the same guard).
-                    _bos = getattr(_tokenizer, "bos_token", None)
-                    _add = not (
-                        isinstance(_bos, str) and _bos and templated.startswith(_bos)
-                    )
-                    try:
-                        prompt_tok = len(
-                            _tokenizer.encode(templated, add_special_tokens=_add)
-                        )
-                    except TypeError:
-                        prompt_tok = len(_tokenizer.encode(templated))
-            except Exception:
-                logger.debug("max_tokens=0 chat-template encode failed", exc_info=True)
-            if prompt_tok == 0:
-                try:
-                    from yunshu_control.token_counter import count_message_tokens
-
-                    prompt_tok = count_message_tokens(messages, _tokenizer)
-                except Exception:
-                    pass
-        return JSONResponse(
-            {
-                "id": completion_id,
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": req.model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": ""},
-                        "finish_reason": "length",
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": prompt_tok,
-                    "completion_tokens": 0,
-                    "total_tokens": prompt_tok,
-                },
-            }
-        )
     # Validate stop strings: reject empty strings (would match immediately)
     if req.stop:
         req.stop = [s for s in req.stop if s]
@@ -2161,17 +2059,21 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
             # prompt length), so only pay for the exact count when the cheap upper bound
             # is actually near a limit. The vast majority of prompts sit far below the
             # context window and are provably safe without any encode.
+            # Bytes, not characters: a byte-fallback / byte-level tokenizer can spend several
+            # tokens on one non-ASCII character, but never more tokens than UTF-8 bytes.
             char_upper = 0
             image_count = 0
             for m in messages:
                 content = m.get("content", "")
                 if isinstance(content, str):
-                    char_upper += len(content)
+                    char_upper += len(content.encode("utf-8", "ignore"))
                 elif isinstance(content, list):
                     for block in content:
                         if isinstance(block, dict):
                             if block.get("type") == "text":
-                                char_upper += len(block.get("text", ""))
+                                char_upper += len(
+                                    str(block.get("text", "")).encode("utf-8", "ignore")
+                                )
                             elif block.get("type") in (
                                 "image_url",
                                 "image",
@@ -2179,6 +2081,15 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                             ):
                                 image_count += 1
             char_upper += image_count * IMAGE_TOKEN_ESTIMATE
+            # tools a native chat template renders itself are not in `messages`
+            _tools_tok = 0
+            if req.tools and _native_tools_active():
+                from ..token_budget import estimate_tools_tokens
+
+                _tools_tok = estimate_tools_tokens(req.tools)
+                char_upper += (
+                    _tools_tok  # already tokens: not scaled into the bound's unit
+                )
             _max_ctx = get_max_context_window(req.model, engine) or 0
             _cap = get_max_prefill_tokens()
             # Provably safe if the upper bound clears both limits with 10% headroom
@@ -2187,14 +2098,32 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                 char_upper + (req.effective_max_tokens() or 0) < _max_ctx * 0.9
             )
             _cap_safe = char_upper < _cap * 0.9
-            if not (_ctx_safe and _cap_safe):
+            if (
+                not _ctx_safe
+                and _cap_safe
+                and _max_ctx
+                and char_upper < _max_ctx * 0.9
+                and req.max_tokens_source() != SOURCE_REQUEST
+                and _max_ctx - char_upper
+                >= min(req.effective_max_tokens() or 0, _BOUND_CLAMP_MIN_ROOM)
+            ):
+                # No max_tokens from the client: the default is the model limit (as large as
+                # the window), so `char_upper + max_tokens` can never clear it and every such
+                # request paid a full encode. The prompt provably fits (tokens <= bytes), and
+                # the room it leaves is at least ctx - char_upper: clamp the default to that
+                # instead of encoding (a request's own max_tokens keeps the exact path). The
+                # bound over-states the prompt, so this is only taken while it still leaves a
+                # generous answer (_BOUND_CLAMP_MIN_ROOM); otherwise the exact count below
+                # decides, and a clamp from the bound says so (`prompt_tokens_basis`).
+                _apply_token_budget(req, char_upper, engine, basis="upper_bound")
+            elif not (_ctx_safe and _cap_safe):
                 # Near a limit — compute the precise count and enforce both guards.
                 # count_message_tokens already adds IMAGE_TOKEN_ESTIMATE
                 # per image block, so the old `+= image_count * IMAGE_TOKEN_ESTIMATE`
                 # here double-counted images — a multi-image prompt just under the
                 # window could be spuriously rejected. (The VLM sibling at ~1775
                 # already does this correctly.)
-                est_tokens = count_message_tokens(messages, tokenizer)
+                est_tokens = count_message_tokens(messages, tokenizer) + _tools_tok
                 validate_context_window(est_tokens, req.model, engine)
                 # Reject huge under-window prompts that would OOM-crash the prefill
                 # (uncatchable process death) before we attempt them.
@@ -2229,7 +2158,7 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
 
     if req.stream:
         if req.n > 1:
-            return StreamingResponse(
+            return ClosingStreamingResponse(
                 _stream_response_multi(
                     engine,
                     messages,
@@ -2246,7 +2175,7 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                     "X-Accel-Buffering": "no",
                 },
             )
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             _stream_response(
                 engine,
                 messages,
@@ -2661,12 +2590,20 @@ async def _handle_vlm_chat(
             f"(VLM) model '{req.model}'",
         )
 
+    # Tools: a chat template that renders `tools` itself (Qwen3.x) gets the
+    # definitions natively — the model's own tool-call format. Forced
+    # tool_choice (none/required/named) keeps the injected prompt, which
+    # carries those instructions.
+    # (decided before the budget guards below, which must see the tools' size too)
+    messages, native_tools = _vlm_tool_plan(req, vlm_engine, messages)
+
     # VLM/multimodal chat previously BYPASSED the context + prefill
     # guards entirely (dispatched here before the text-path validation block),
     # yet multimodal prompts (long video/image token expansions) are the most
     # likely to be huge. Enforce the same guards; VLM context now resolves via
     # the engine _config dict path. Safe no-op if context can't be
     # resolved (won't false-reject) — only catches egregiously over-window prompts.
+    _vlm_est = 0  # the guard's prompt-token estimate, reused below
     try:
         from yunshu_control.token_counter import (
             IMAGE_TOKEN_ESTIMATE,
@@ -2702,6 +2639,11 @@ async def _handle_vlm_chat(
             )
             _vlm_est = sum(len(str(m.get("content", ""))) for m in messages) // 4
             _vlm_est += _img * IMAGE_TOKEN_ESTIMATE
+        if native_tools:
+            # rendered by the template outside `messages`: count them like count_tokens does
+            from ..token_budget import estimate_tools_tokens
+
+            _vlm_est += estimate_tools_tokens(native_tools)
         validate_context_window(_vlm_est, req.model, vlm_engine)
         validate_prefill_memory(_vlm_est)
         _apply_token_budget(req, _vlm_est, vlm_engine)
@@ -2711,12 +2653,6 @@ async def _handle_vlm_chat(
         logger.debug("VLM context/prefill guard estimate failed", exc_info=True)
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
-
-    # Tools: a chat template that renders `tools` itself (Qwen3.x) gets the
-    # definitions natively — the model's own tool-call format. Forced
-    # tool_choice (none/required/named) keeps the injected prompt, which
-    # carries those instructions.
-    messages, native_tools = _vlm_tool_plan(req, vlm_engine, messages)
 
     if req.stream:
         return ClosingStreamingResponse(
@@ -2780,13 +2716,23 @@ async def _handle_vlm_chat(
     # returns 0 (e.g., timeout path). The authoritative count comes from the
     # engine result `r["prompt_tokens"]`, which already includes the per-image
     # vision-token estimate via vlm_engine._estimate_image_tokens().
-    fallback_prompt_tok = 0
-    if tok:
-        try:
-            prompt_text = vlm_engine._format_prompt(messages)
-            fallback_prompt_tok = len(tok.encode(prompt_text))
-        except Exception:
-            logger.debug("prompt token count failed", exc_info=True)
+    # Computed only when the engine reported 0 (a full template render + encode of the
+    # prompt on the event loop): the guard above already counted it (``_vlm_est``).
+    _fallback_cache: list[int] = []
+
+    def _fallback_prompt_tok() -> int:
+        if _vlm_est:
+            return _vlm_est
+        if not _fallback_cache:
+            n = 0
+            if tok:
+                try:
+                    n = len(tok.encode(vlm_engine._format_prompt(messages)))
+                except Exception:
+                    logger.debug("prompt token count failed", exc_info=True)
+            _fallback_cache.append(n)
+        return _fallback_cache[0]
+
     prompt_tok = 0
 
     async def _vlm_gen_one(idx: int):
@@ -2819,7 +2765,7 @@ async def _handle_vlm_chat(
         )
         # Use engine-reported prompt_tokens, which includes image-token estimate
         # from vlm_engine._estimate_image_tokens() .
-        pt = r.get("prompt_tokens", 0) or fallback_prompt_tok
+        pt = r.get("prompt_tokens", 0) or _fallback_prompt_tok()
         finish_reason = _normalize_finish_reason(r.get("finish_reason"))
 
         # Extract thinking content. the LLM text path calls extract_thinking
@@ -3005,7 +2951,7 @@ async def _handle_vlm_chat(
 
     # If every choice returned 0 (e.g., timeout), fall back to text-only count
     if prompt_tok == 0:
-        prompt_tok = fallback_prompt_tok
+        prompt_tok = _fallback_prompt_tok()
     # VLM completion count is len(tokens): every generated token, reasoning included.
     vlm_usage = openai_usage(
         prompt_tok, total_completion_tok, total_reasoning_tok, vlm_cached_tok

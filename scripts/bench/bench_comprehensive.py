@@ -20,7 +20,6 @@ import time
 
 logging.basicConfig(level=logging.ERROR)
 MODEL = os.environ.get("YUNSHU_BENCH_MODEL", "./models/Qwen2.5-3B-Instruct-bf16")
-os.environ.setdefault("YUNSHU_VLM_KV_PREFIX", "1")
 os.environ.setdefault("YUNSHU_SSD_CACHE", "0")
 
 _FILLER = "Photosynthesis converts sunlight into chemical energy stored in glucose. "

@@ -12,7 +12,7 @@ This module carries a fixed streamed kernel (5-bit weights read through the
 device-pointer ``qdot_exact`` the base kernel uses, so each row's accumulation
 order equals single-row decode) and routes 5-bit layers with >= 5 verify rows to
 it. M5 Max, 17408->5120 5-bit projection
-(docs/research/runs/2026-09-28-matrix/verify-streamed-fixed.jsonl):
+(2026-09-28 streamed-verify sweep):
 
     rows              5        6        8
     base           503 us   873 us  2434 us

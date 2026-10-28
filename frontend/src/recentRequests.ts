@@ -2,9 +2,10 @@ import { pushLive, pushedPayload, subscribePush } from "./push.ts";
 import { connectionScope, useScopedState } from "./scoped-state.ts";
 import { useEffect, useRef, useState } from "react";
 import { has, t, tr } from "./i18n/index.ts";
-import { ApiError, type Connection } from "./api";
+import { ApiError, type Connection } from "./api.ts";
 import type { Offsets, Outcome, Row } from "./RequestTrace";
-import { parseEnergy, parseLatency } from "./latency-api";
+import { createSingleFlight, withTimeout } from "./single-flight.ts";
+import { parseEnergy, parseLatency } from "./latency-api.ts";
 
 /** One entry of `GET /v1/yunshu/requests/recent` (numbers and enums only, never prompt text). */
 export type RecentEntry = {
@@ -111,9 +112,15 @@ export type Recent = {
 };
 
 const POLL_MS = 5000;
+/** One answer may take this long; a wedged engine must not leave the poller waiting for ever. */
+export const FETCH_TIMEOUT_MS = 10_000;
 
 /** `requestJson` rejects query strings, so this one GET builds its own URL (same base, same bearer). */
-async function getRecent(connection: Connection, signal: AbortSignal) {
+export async function getRecent(
+  connection: Connection,
+  signal: AbortSignal,
+  timeoutMs = FETCH_TIMEOUT_MS,
+) {
   const pushed = pushedPayload(connection, "/yunshu/requests/recent");
   if (pushed) return pushed.data as { data?: RecentEntry[]; capacity?: number };
   const url = new URL(connection.baseUrl.trim());
@@ -124,7 +131,10 @@ async function getRecent(connection: Connection, signal: AbortSignal) {
   const headers = new Headers({ Accept: "application/json" });
   if (connection.token.trim())
     headers.set("Authorization", `Bearer ${connection.token.trim()}`);
-  const response = await fetch(url, { headers, signal });
+  const response = await fetch(url, {
+    headers,
+    signal: withTimeout(signal, timeoutMs),
+  });
   if (!response.ok)
     throw new ApiError(`HTTP ${response.status}`, response.status);
   return (await response.json()) as { data?: RecentEntry[]; capacity?: number };
@@ -147,7 +157,10 @@ async function getHistory(
     const headers = new Headers({ Accept: "application/json" });
     if (connection.token.trim())
       headers.set("Authorization", `Bearer ${connection.token.trim()}`);
-    const response = await fetch(url, { headers, signal });
+    const response = await fetch(url, {
+      headers,
+      signal: withTimeout(signal, FETCH_TIMEOUT_MS),
+    });
     if (!response.ok)
       throw new ApiError(`HTTP ${response.status}`, response.status);
     const body = (await response.json()) as {
@@ -159,6 +172,51 @@ async function getHistory(
     if (!before) break;
   }
   return out;
+}
+
+/**
+ * The recorded history is a snapshot; it is read again when the engine may have restarted since:
+ * the last poll failed (the engine was away), or the ring holds fewer rows than before (it was emptied).
+ */
+export const historyStale = (
+  previous: { failed: boolean; ringRows: number } | null,
+  ringRows: number,
+) => previous !== null && (previous.failed || ringRows < previous.ringRows);
+
+/**
+ * When the recorded history must be read again. A poll that failed before the first history load
+ * finished says nothing new (that load is still on its way and covers it), so only an outage that
+ * began after a snapshot, a ring that shrank, or a load that itself failed asks for another one.
+ */
+export function createHistoryTracker() {
+  let last: { failed: boolean; ringRows: number } | null = null;
+  let load: "inflight" | "done" | "failed" = "inflight";
+  return {
+    /** A history load was started (the first one, or a re-read). */
+    started() {
+      load = "inflight";
+    },
+    /** The load finished: the snapshot covers any outage so far. */
+    loaded() {
+      load = "done";
+      if (last) last = { ...last, failed: false };
+    },
+    loadFailed() {
+      load = "failed";
+    },
+    pollFailed() {
+      last = {
+        failed: load === "done" ? true : (last?.failed ?? false),
+        ringRows: last?.ringRows ?? 0,
+      };
+    },
+    /** A poll answered: true when the history should be read again. */
+    pollOk(ringRows: number): boolean {
+      const stale = load === "failed" || historyStale(last, ringRows);
+      last = { failed: false, ringRows };
+      return stale;
+    },
+  };
 }
 
 /**
@@ -187,24 +245,43 @@ export function useRecentRequests(
   useEffect(() => {
     missing.current = false;
     const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined,
-      flying = false;
-    const load = async (fromPush = false) => {
-      if (missing.current || flying || controller.signal.aborted) return;
-      if (
-        document.visibilityState === "hidden" ||
-        (!fromPush && pushLive(connection, "requests"))
-      ) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const staleness = createHistoryTracker();
+    const loadHistory = () => {
+      staleness.started();
+      return (
+        recorded
+          ? getHistory(connection, controller.signal)
+          : Promise.resolve([])
+      ).then(
+        (entries) => {
+          if (controller.signal.aborted) return;
+          historyRef.current = entries
+            .filter((e) => e?.request_id)
+            .map(historyToRow);
+          staleness.loaded();
+          // `kick` re-reads the ring; with the engine away it fails and the recorded rows stand in.
+          kick.current?.();
+        },
+        () => staleness.loadFailed(),
+      );
+    };
+    const schedule = () => {
+      if (timer) clearTimeout(timer);
+      if (!controller.signal.aborted && !missing.current)
         timer = setTimeout(() => void load(), POLL_MS);
-        return;
-      }
-      flying = true;
+    };
+    // A kick while a fetch is in flight queues one more fetch instead of being dropped.
+    const fetchOnce = createSingleFlight(async () => {
       try {
         const body = await getRecent(connection, controller.signal);
         if (controller.signal.aborted) return;
         const data = Array.isArray(body.data) ? body.data : [];
         const ring = data.filter((e) => e?.request_id).map(recentToRow);
         const ids = new Set(ring.map((r) => r.id));
+        // after an engine restart the console process has recorded what the old ring held
+        const stale = staleness.pollOk(ring.length);
+        if (recorded && stale) void loadHistory();
         setState({
           supported: true,
           // the recorded log fills in what finished before the ring (or before this page opened)
@@ -214,6 +291,7 @@ export function useRecentRequests(
         });
       } catch (e) {
         if (controller.signal.aborted) return;
+        staleness.pollFailed();
         if (e instanceof ApiError && (e.status === 404 || e.status === 405)) {
           missing.current = true;
           setState((s) => ({ ...s, supported: false, rows: [], error: null }));
@@ -229,32 +307,27 @@ export function useRecentRequests(
           error:
             e instanceof Error ? e.message : t("requests.recent.loadFailed"),
         }));
-      } finally {
-        flying = false;
-        if (!controller.signal.aborted && !missing.current) {
-          timer = setTimeout(() => void load(), POLL_MS);
-        }
       }
+    });
+    // `wanted`: a kick or a push wake-up; the timer alone idles while the change feed is live.
+    const load = async (wanted = false) => {
+      if (missing.current || controller.signal.aborted) return;
+      if (
+        document.visibilityState === "hidden" ||
+        (!wanted && pushLive(connection, "requests"))
+      ) {
+        schedule();
+        return;
+      }
+      await fetchOnce();
+      schedule();
     };
     kick.current = () => {
       if (timer) clearTimeout(timer);
-      void load();
+      void load(true);
     };
-    // Once per connection: what the console process recorded while nobody was looking.
-    (recorded
-      ? getHistory(connection, controller.signal)
-      : Promise.resolve([])
-    ).then(
-      (entries) => {
-        if (controller.signal.aborted) return;
-        historyRef.current = entries
-          .filter((e) => e?.request_id)
-          .map(historyToRow);
-        // `kick` re-reads the ring; with the engine away it fails and the recorded rows stand in.
-        kick.current?.();
-      },
-      () => undefined,
-    );
+    // At the start of a connection: what the console process recorded while nobody was looking.
+    void loadHistory();
     void load();
     const off = subscribePush(connection, "requests", () => {
       if (timer) clearTimeout(timer);
