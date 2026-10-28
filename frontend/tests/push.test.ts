@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createEventParser,
+  newFeedForTests,
   pushLive,
   pushedPayload,
   resetPushForTests,
@@ -56,7 +57,10 @@ test("a healthy stream answers polls from the pushed payload and wakes listeners
   const off = subscribePush(conn, "status", () => woke++);
   await sleep(80);
   assert.equal(s.calls.length, 1);
-  assert.match(s.calls[0].url, /\/v1\/yunshu\/events\?topics=downloads%2Chost%2Cmemory%2Crequests%2Cstatus$/);
+  assert.match(
+    s.calls[0].url,
+    /\/v1\/yunshu\/events\?topics=downloads%2Chost%2Cmemory%2Crequests%2Cstatus$/,
+  );
   assert.equal(s.calls[0].auth, "Bearer tok");
   assert.equal(pushLive(conn, "status"), false); // no snapshot yet: poll for real
   s.send("hello", { boot_id: "B", topics: ["status"] });
@@ -126,4 +130,74 @@ test("every topic rides one stream however the hooks join", async () => {
     /topics=downloads%2Chost%2Cmemory%2Crequests%2Cstatus$/,
   );
   resetPushForTests();
+});
+
+// ── several tabs of one browser: one leader owns the stream ─────────────────────────────────
+function fakeLocks() {
+  const queues = new Map<string, { run: () => Promise<void> }[]>();
+  const held = new Set<string>();
+  const next = async (name: string) => {
+    if (held.has(name)) return;
+    const job = queues.get(name)?.shift();
+    if (!job) return;
+    held.add(name);
+    await job.run();
+    held.delete(name);
+    void next(name);
+  };
+  Object.defineProperty(globalThis.navigator, "locks", {
+    configurable: true,
+    value: {
+      request: (name: string, cb: () => Promise<void>) =>
+        new Promise<void>((resolve) => {
+          const q = queues.get(name) ?? [];
+          queues.set(name, q);
+          q.push({ run: async () => (await cb(), resolve()) });
+          void next(name);
+        }),
+    },
+  });
+}
+
+test("tabs elect one leader: one stream, every tab is woken, a closing leader hands over", async () => {
+  resetPushForTests();
+  fakeLocks();
+  const s = fakeStream();
+  const a = newFeedForTests(conn);
+  const b = newFeedForTests(conn);
+  let wokeA = 0,
+    wokeB = 0;
+  a.subscribe("status", () => wokeA++);
+  b.subscribe("status", () => wokeB++);
+  await sleep(150);
+  assert.equal(s.calls.length, 1, "one stream for two tabs");
+  assert.equal(a.role, "leader");
+  assert.equal(b.role, "follower");
+  s.send("hello", { boot_id: "B" });
+  s.send("status", { v: 1, skipped: 0, d: { n: 1 } });
+  await sleep(60);
+  assert.equal(wokeA, 1);
+  assert.equal(wokeB, 1);
+  assert.equal(
+    b.live("status"),
+    true,
+    "the follower trusts the leader's stream",
+  );
+  // a tab opened later gets the snapshot the leader already holds
+  const c = newFeedForTests(conn);
+  let wokeC = 0;
+  c.subscribe("status", () => wokeC++);
+  await sleep(100);
+  assert.equal(wokeC, 1);
+  assert.equal(c.live("status"), true);
+  // the leader closes: a follower takes the lock and opens its own stream
+  a.dispose();
+  await sleep(300);
+  assert.equal(s.calls.length, 2, "the successor opened a stream");
+  b.dispose();
+  c.dispose();
+  Object.defineProperty(globalThis.navigator, "locks", {
+    configurable: true,
+    value: undefined,
+  });
 });

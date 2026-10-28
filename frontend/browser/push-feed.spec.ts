@@ -191,4 +191,41 @@ test.describe("console change feed", () => {
       await engine.stop();
     }
   });
+
+  test("ten tabs of one browser share one stream (HTTP/1.1 allows six connections per origin)", async ({
+    browser,
+  }) => {
+    const engine = new Engine();
+    await engine.start();
+    const context = await browser.newContext({ locale: "en-US" });
+    try {
+      await context.addInitScript((url) => {
+        localStorage.setItem("yunshu.console.url", url);
+      }, engine.url);
+      const pages = [];
+      for (let i = 0; i < 10; i++) {
+        const page = await context.newPage();
+        await page.goto("/console/?lang=en#/overview", { timeout: 20000 });
+        pages.push(page);
+      }
+      for (const page of pages)
+        await expect(page.getByTestId("live-phase")).toBeVisible();
+      await expect.poll(() => engine.streams.size).toBe(1);
+      expect(engine.eventOpens).toBe(1);
+      engine.push(prefilling);
+      for (const page of pages)
+        await expect(page.getByTestId("live-phase")).toContainText(
+          /prefill|預填/i,
+          { timeout: 4000 },
+        );
+      const polls = engine.statusGets;
+      await page0Wait(pages[0]);
+      expect(engine.statusGets - polls).toBeLessThanOrEqual(2);
+    } finally {
+      await context.close();
+      await engine.stop();
+    }
+  });
 });
+
+const page0Wait = (page: Page) => page.waitForTimeout(6000);

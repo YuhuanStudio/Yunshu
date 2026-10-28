@@ -7,7 +7,11 @@
  *   payload while the stream is healthy, so existing parse code is unchanged and no request is sent.
  * - Anything wrong (old engine, 4xx, network, stale stream) makes `pushLive` false: the hooks'
  *   own timers poll again, exactly as before. The stream retries with backoff.
- * - A tab hidden for more than HIDDEN_CLOSE_MS closes the stream; showing it reopens (snapshot first).
+ * - Browsers allow six HTTP/1.1 connections per origin and every open stream holds one, so with
+ *   Web Locks + BroadcastChannel the tabs of one browser elect a single leader that owns the stream
+ *   and relays every event; the other tabs listen on the channel (and take over when the leader
+ *   closes). Without those APIs each tab keeps its own stream.
+ * - The stream closes after HIDDEN_CLOSE_MS with no visible tab; a visible tab reopens it (snapshot first).
  */
 import { retryDelayMs } from "./backoff.ts";
 
@@ -30,6 +34,7 @@ export const LIVE_WITHIN_MS = 13_000;
 export const HIDDEN_CLOSE_MS = 20_000;
 const OPEN_DEBOUNCE_MS = 30;
 const MIN_HEALTHY_MS = 2_000;
+const VIS_PING_MS = 5_000;
 /** A refusing server (old engine, auth) is asked again only this rarely. */
 const REFUSED_RETRY_MS = 60_000;
 
@@ -82,6 +87,28 @@ interface Entry {
   at: number;
 }
 
+type Msg =
+  | { t: "sync" }
+  | { t: "vis" }
+  | { t: "conn"; c: boolean; console?: boolean }
+  | { t: "hello"; boot: string | null }
+  | { t: "event"; topic: PushTopic; d: unknown }
+  | {
+      t: "snap";
+      c: boolean;
+      console: boolean;
+      boot: string | null;
+      entries: [string, unknown][];
+    };
+
+/** A short stable name for a channel / lock: the token never goes into either. */
+function hashKey(key: string): string {
+  let h = 5381;
+  for (let i = 0; i < key.length; i++)
+    h = ((h << 5) + h + key.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
 class Feed {
   readonly listeners = new Map<PushTopic, Set<Listener>>();
   readonly entries = new Map<PushTopic, Entry>();
@@ -93,29 +120,138 @@ class Feed {
   private controller: AbortController | null = null;
   private running = false;
   private openTimer: ReturnType<typeof setTimeout> | undefined;
-  private hiddenTimer: ReturnType<typeof setTimeout> | undefined;
   private wake: (() => void) | null = null;
   private failures = 0;
   private opened = "";
+  /** solo: this tab owns its stream (no election APIs); leader: owns the shared one; follower: listens. */
+  role: "solo" | "leader" | "follower" = "solo";
+  private chan: BroadcastChannel | null = null;
+  private competing = false;
+  private release: (() => void) | null = null;
+  private lastVisibleAt = Date.now();
+  private viaConsole = false;
+  private tick: ReturnType<typeof setInterval> | undefined;
 
   readonly connection: Conn;
   constructor(connection: Conn) {
     this.connection = connection;
-    if (typeof document !== "undefined")
+    const nav = globalThis.navigator as
+      | { locks?: { request: (...a: unknown[]) => Promise<unknown> } }
+      | undefined;
+    if (nav?.locks && typeof BroadcastChannel !== "undefined") {
+      this.role = "follower";
+      this.chan = new BroadcastChannel(
+        `yunshu-push:${hashKey(keyOf(connection))}`,
+      );
+      this.chan.onmessage = (m) => this.onMessage(m.data as Msg);
+      this.chan.postMessage({ t: "sync" } satisfies Msg);
+    }
+    if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", this.onVisibility);
+      addEventListener("pagehide", this.onPageHide);
+    }
+    this.tick = setInterval(() => this.housekeeping(), VIS_PING_MS);
+  }
+
+  private ownVisible = () =>
+    typeof document === "undefined" || document.visibilityState === "visible";
+
+  /** Is any tab of this browser looking? (the leader asks; followers ping while visible) */
+  private anyVisible = () =>
+    this.ownVisible() || Date.now() - this.lastVisibleAt < HIDDEN_CLOSE_MS;
+
+  private housekeeping() {
+    if (this.ownVisible()) {
+      this.lastVisibleAt = Date.now();
+      if (this.role === "follower")
+        this.chan?.postMessage({ t: "vis" } satisfies Msg);
+    }
+    // the stream's owner closes it when nobody has looked for a while (the server stops sampling)
+    if (this.role !== "follower" && this.connected && !this.anyVisible()) {
+      this.controller?.abort();
+      this.connected = false;
+    }
   }
 
   private onVisibility = () => {
-    if (document.visibilityState === "hidden") {
-      this.hiddenTimer = setTimeout(() => {
-        this.controller?.abort();
-        this.connected = false;
-      }, HIDDEN_CLOSE_MS);
-    } else {
-      clearTimeout(this.hiddenTimer);
-      if (!this.connected) this.kick();
+    if (this.ownVisible()) {
+      this.lastVisibleAt = Date.now();
+      if (this.role === "follower")
+        this.chan?.postMessage({ t: "vis" } satisfies Msg);
+      else if (!this.connected) this.kick();
     }
   };
+
+  private onPageHide = () => {
+    // a closing leader says so, so followers stop trusting a stream nobody feeds
+    if (this.role === "leader")
+      this.chan?.postMessage({ t: "conn", c: false } satisfies Msg);
+  };
+
+  private onMessage(m: Msg) {
+    if (m.t === "sync") {
+      if (this.role !== "follower" && this.chan && this.role === "leader")
+        this.chan.postMessage({
+          t: "snap",
+          c: this.connected,
+          console: this.viaConsole,
+          boot: this.bootId,
+          entries: [...this.entries].map(([k, v]) => [k, v.data]),
+        } satisfies Msg);
+      return;
+    }
+    if (this.role === "leader" || this.role === "solo") {
+      if (m.t === "vis") {
+        this.lastVisibleAt = Date.now();
+        if (!this.connected) this.kick();
+      }
+      return;
+    }
+    // follower
+    this.lastMessageAt = Date.now();
+    if (m.t === "conn") this.setConn(m.c, m.console);
+    else if (m.t === "hello") this.applyHello(m.boot);
+    else if (m.t === "snap") {
+      this.applyHello(m.boot);
+      this.setConn(m.c, m.console);
+      for (const [k, d] of m.entries) this.applyEvent(k as PushTopic, d);
+    } else if (m.t === "event") this.applyEvent(m.topic, m.d);
+  }
+
+  private setConn(c: boolean, viaConsole?: boolean) {
+    this.connected = c;
+    this.stats.live = c;
+    if (viaConsole !== undefined)
+      this.headers = new Headers(viaConsole ? { "x-yunshu-console": "1" } : {});
+  }
+
+  /** Enter the election: the lock's holder owns the stream until this tab has no listener left. */
+  private compete() {
+    if (this.competing || !this.chan) return;
+    this.competing = true;
+    const locks = (
+      globalThis.navigator as unknown as {
+        locks: {
+          request: (name: string, cb: () => Promise<void>) => Promise<unknown>;
+        };
+      }
+    ).locks;
+    void locks
+      .request(`yunshu-push:${hashKey(keyOf(this.connection))}`, async () => {
+        this.role = "leader";
+        this.chan?.postMessage({ t: "conn", c: false } satisfies Msg);
+        this.kick();
+        await new Promise<void>((r) => (this.release = r));
+        this.release = null;
+        this.controller?.abort();
+        this.connected = false;
+        this.role = "follower";
+      })
+      .finally(() => {
+        this.competing = false;
+        if (this.topics().length) this.compete();
+      });
+  }
 
   /**
    * One stream carries every topic as soon as any hook listens: hooks mount a page at a time, and
@@ -152,6 +288,11 @@ class Feed {
     clearTimeout(this.openTimer);
     this.openTimer = setTimeout(() => {
       const want = this.topics().join(",");
+      if (this.chan) {
+        if (want) this.compete();
+        else this.release?.();
+        if (this.role !== "leader") return;
+      }
       if (want === this.opened && (this.connected || this.running)) return;
       this.controller?.abort();
       if (!want) {
@@ -164,18 +305,18 @@ class Feed {
   }
 
   private kick() {
+    if (this.role === "follower") return;
     if (this.wake) this.wake();
     else if (!this.running) void this.run();
   }
 
+  private isFollower = () => this.role === "follower";
+
   private async run() {
     this.running = true;
     try {
-      while (this.topics().length) {
-        if (
-          typeof document !== "undefined" &&
-          document.visibilityState === "hidden"
-        ) {
+      while (this.topics().length && !this.isFollower()) {
+        if (!this.anyVisible()) {
           await new Promise<void>((r) => (this.wake = r));
           this.wake = null;
           continue;
@@ -205,6 +346,7 @@ class Feed {
         }
         this.connected = false;
         this.stats.live = false;
+        this.chan?.postMessage({ t: "conn", c: false } satisfies Msg);
         if (this.opened !== this.topics().join(",")) continue; // topic set changed: reopen now
         const delay = refused
           ? REFUSED_RETRY_MS
@@ -246,6 +388,12 @@ class Feed {
     this.connected = true;
     this.lastMessageAt = Date.now();
     this.stats.live = true;
+    this.viaConsole = response.headers.get("x-yunshu-console") === "1";
+    this.chan?.postMessage({
+      t: "conn",
+      c: true,
+      console: this.viaConsole,
+    } satisfies Msg);
     const parse = createEventParser((e) => this.onEvent(e));
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -270,14 +418,27 @@ class Feed {
     }
     this.stats.events++;
     if (e.event === "hello") {
-      // A new engine process starts every sequence over: nothing held from the old one is valid.
-      if (this.bootId && body.boot_id !== this.bootId) this.entries.clear();
-      this.bootId = body.boot_id ?? null;
+      this.applyHello(body.boot_id ?? null);
+      this.chan?.postMessage({
+        t: "hello",
+        boot: body.boot_id ?? null,
+      } satisfies Msg);
       return;
     }
     if (!(e.event in TOPICS)) return;
     const topic = e.event as PushTopic;
-    this.entries.set(topic, { data: body.d, at: Date.now() });
+    this.applyEvent(topic, body.d);
+    this.chan?.postMessage({ t: "event", topic, d: body.d } satisfies Msg);
+  }
+
+  /** A new engine process starts every sequence over: nothing held from the old one is valid. */
+  private applyHello(boot: string | null) {
+    if (this.bootId && boot !== this.bootId) this.entries.clear();
+    this.bootId = boot;
+  }
+
+  private applyEvent(topic: PushTopic, d: unknown) {
+    this.entries.set(topic, { data: d, at: Date.now() });
     for (const cb of [...(this.listeners.get(topic) ?? [])]) {
       try {
         cb();
@@ -291,10 +452,16 @@ class Feed {
     this.listeners.clear();
     this.controller?.abort();
     this.wake?.();
+    this.release?.();
     clearTimeout(this.openTimer);
-    clearTimeout(this.hiddenTimer);
-    if (typeof document !== "undefined")
+    clearInterval(this.tick);
+    const chan = this.chan;
+    this.chan = null; // later posts (a lock handover finishing) go nowhere
+    chan?.close();
+    if (typeof document !== "undefined") {
       document.removeEventListener("visibilitychange", this.onVisibility);
+      removeEventListener("pagehide", this.onPageHide);
+    }
   }
 }
 
@@ -365,6 +532,9 @@ export function exposePushStats() {
       live: f.connected,
     }));
 }
+
+/** Two tabs of one browser are two Feeds on one channel: tests build them directly. */
+export const newFeedForTests = (c: Conn) => new Feed(c);
 
 export function resetPushForTests() {
   for (const f of feeds.values()) f.dispose();
