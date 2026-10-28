@@ -24,7 +24,10 @@ CAP = 32768
 
 
 def is_length(q: dict) -> bool:
-    return q.get("finish_reason") in ("length", "max_tokens") or (q.get("completion_tokens") or 0) >= CAP
+    return (
+        q.get("finish_reason") in ("length", "max_tokens")
+        or (q.get("completion_tokens") or 0) >= CAP
+    )
 
 
 def reasoning_lengths(d: str) -> dict[str, list[int]]:
@@ -57,7 +60,9 @@ def extra(runs: list[dict]) -> dict:
         for i, q in enumerate(log):
             a, b = q.get("t") or 0, (q.get("t") or 0) + (q.get("total_s") or 0)
             conc = any(
-                j != i and (p.get("t") or 0) < b and (p.get("t") or 0) + (p.get("total_s") or 0) > a
+                j != i
+                and (p.get("t") or 0) < b
+                and (p.get("t") or 0) + (p.get("total_s") or 0) > a
                 for j, p in enumerate(log)
             )
             ov += conc
@@ -67,11 +72,26 @@ def extra(runs: list[dict]) -> dict:
                 (tps_conc if conc else tps_solo).append(t)
                 if (q.get("completion_tokens") or 0) >= 2000:
                     tps_long.append(t)
-            if i and q.get("n_messages") == log[i - 1].get("n_messages") and q.get("prompt_tokens") == log[i - 1].get("prompt_tokens"):
+            if (
+                i
+                and q.get("n_messages") == log[i - 1].get("n_messages")
+                and q.get("prompt_tokens") == log[i - 1].get("prompt_tokens")
+            ):
                 rt += 1
-                rt_cold += (q.get("cached_tokens") or 0) < 0.5 * (q.get("prompt_tokens") or 1)
+                rt_cold += (q.get("cached_tokens") or 0) < 0.5 * (
+                    q.get("prompt_tokens") or 1
+                )
     med = lambda x: round(statistics.median(x), 1) if x else None  # noqa: E731
-    return dict(overlap_reqs=ov, tps_med=med(tps_all), tps_long_med=med(tps_long), tps_solo=med(tps_solo), tps_conc=med(tps_conc), n_conc=len(tps_conc), retries=rt, retries_cold=rt_cold)
+    return dict(
+        overlap_reqs=ov,
+        tps_med=med(tps_all),
+        tps_long_med=med(tps_long),
+        tps_solo=med(tps_solo),
+        tps_conc=med(tps_conc),
+        n_conc=len(tps_conc),
+        retries=rt,
+        retries_cold=rt_cold,
+    )
 
 
 def summarize(d: str) -> dict:
@@ -91,7 +111,13 @@ def summarize(d: str) -> dict:
         for q in reqs:
             x = q.get("x_yunshu") or {}
             s = x.get("sampling") or {}
-            samp[json.dumps({k2: s.get(k2) for k2 in sorted(s) if k2 != "source"} | {"mode": s.get("mode") or x.get("mode")}, sort_keys=True)[:300]] += 1
+            samp[
+                json.dumps(
+                    {k2: s.get(k2) for k2 in sorted(s) if k2 != "source"}
+                    | {"mode": s.get("mode") or x.get("mode")},
+                    sort_keys=True,
+                )[:300]
+            ] += 1
         res[a] = dict(
             n=n,
             k=k,
@@ -101,10 +127,15 @@ def summarize(d: str) -> dict:
             wall=round(statistics.median([r["wall_s"] for r in runs]), 0),
             reqs=len(reqs),
             len_reqs=sum(is_length(q) for q in reqs),
-            len_runs=sum(any(is_length(q) for q in (r.get("request_log") or [])) for r in runs),
+            len_runs=sum(
+                any(is_length(q) for q in (r.get("request_log") or [])) for r in runs
+            ),
             timeouts=sum(bool(r.get("timed_out")) for r in runs),
             stalled_fail=sum((not r.get("passed")) and stalled(r) for r in runs),
-            fail_other=sum((not r.get("passed")) and not stalled(r) and not r.get("timed_out") for r in runs),
+            fail_other=sum(
+                (not r.get("passed")) and not stalled(r) and not r.get("timed_out")
+                for r in runs
+            ),
             reason=dict(
                 n=len(rl.get(a, [])),
                 p50=pct(rl.get(a, []), 0.5),
@@ -115,7 +146,20 @@ def summarize(d: str) -> dict:
             ),
             extra=extra(runs),
             sampling=samp.most_common(6),
-            fails=[(r["task"], r["repeat"], r.get("wall_s"), "timeout" if r.get("timed_out") else "stalled" if stalled(r) else "other") for r in runs if not r.get("passed")],
+            fails=[
+                (
+                    r["task"],
+                    r["repeat"],
+                    r.get("wall_s"),
+                    "timeout"
+                    if r.get("timed_out")
+                    else "stalled"
+                    if stalled(r)
+                    else "other",
+                )
+                for r in runs
+                if not r.get("passed")
+            ],
         )
     return res
 
