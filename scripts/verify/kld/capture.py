@@ -291,6 +291,14 @@ def main(argv=None) -> int:
     if argv[:1] == ["serve"]:
         argv.pop(0)
         arm = argv.pop(0)
+        if os.environ.get(
+            "KLD_PREFILL_STEP"
+        ):  # noise measurement: the same arithmetic with another chunking
+            from yunshu_engine import memory_admission, vlm_batch_runner
+
+            vlm_batch_runner.PREFILL_STEP = memory_admission.PREFILL_STEP = int(
+                os.environ["KLD_PREFILL_STEP"]
+            )
         install(arm)
         from yunshu_cli import main as cli
 

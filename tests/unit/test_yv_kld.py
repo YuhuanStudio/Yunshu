@@ -138,10 +138,10 @@ def test_incomplete_or_malformed_arm_cache_fails_closed(tmp_path):
         stage.load_arm(tmp_path, manifest)
     np.savez(
         tmp_path / "b.npz",
-        ids=np.zeros((40, 2), np.int32),
-        lp=np.full((40, 2), -1.0, np.float32),
-        next_lp=np.zeros(40, np.float32),
-        tokens=np.arange(40, dtype=np.int32),
+        ids=np.zeros((400, 2), np.int32),
+        lp=np.full((400, 2), -1.0, np.float32),
+        next_lp=np.zeros(400, np.float32),
+        tokens=np.arange(400, dtype=np.int32),
     )
     with pytest.raises(RuntimeError, match="positions"):
         stage.load_arm(tmp_path, manifest)
@@ -160,3 +160,9 @@ def test_suite_and_decode_mode_fail_closed():
     from verify import suites
 
     assert suites.parse_suite("kld")["stages"] == ["kld"]
+
+
+def test_arms_with_different_position_counts_fail_closed():
+    a, b = one([1, 2], [0.5, 0.4]), window([[1, 2]] * 5, [[0.5, 0.4]] * 5)
+    with pytest.raises(RuntimeError, match="positions"):
+        metrics.summarize({"w": a}, {"w": b})

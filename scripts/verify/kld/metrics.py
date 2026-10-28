@@ -92,7 +92,7 @@ def perplexity(window: Window) -> float:
 def depth_curve(per_position: np.ndarray) -> dict[str, float]:
     """Mean of a per-position series by context depth bucket (position index = context depth)."""
     out = {}
-    for lo, hi in zip(DEPTH_EDGES[:-1], DEPTH_EDGES[1:]):
+    for lo, hi in zip(DEPTH_EDGES[:-1], DEPTH_EDGES[1:], strict=True):
         chunk = per_position[lo:hi]
         if len(chunk):
             out[f"{lo}-{hi if hi < 1 << 29 else 'end'}"] = float(chunk.mean())
@@ -104,6 +104,11 @@ def summarize(ref: dict[str, Window], arm: dict[str, Window]) -> dict:
     missing = sorted(set(ref) - set(arm))
     if missing:
         raise RuntimeError(f"arm lacks windows: {missing[:5]}")
+    for wid in ref:
+        if abs(ref[wid].ids.shape[0] - arm[wid].ids.shape[0]) > 2:
+            raise RuntimeError(
+                f"{wid}: the arms captured {ref[wid].ids.shape[0]} and {arm[wid].ids.shape[0]} positions"
+            )
     kl, t1, t5 = [], [], []
     per_depth: dict[str, list[float]] = {}
     ppl_ref, ppl_arm = [], []

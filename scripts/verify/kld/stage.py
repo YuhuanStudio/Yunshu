@@ -17,9 +17,7 @@ CACHE_ROOT = Path("/Volumes/Micron/yunshu-kld-cache")
 NOISE_FILE = Path(__file__).with_name("noise.json")
 DEFAULT_EPS = 0.002
 DEFAULT_TOP1_NOISE = 0.003
-POSITION_SLACK = (
-    16  # the server retokenizes the window text; its count may differ by a few tokens
-)
+POSITION_SLACK = 128  # the server retokenizes the window text (and adds its own prefix tokens): a few dozen more
 
 
 def cache_key(
