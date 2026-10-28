@@ -9,4 +9,4 @@ mkdir -p "$TMPDIR"
 cd "$ROOT"
 EXTRA=()
 [ "$ARM" = cand ] && EXTRA=(--env YUNSHU_QSA_SPARSE_PREFILL=1)
-exec "$ROOT/.venv/bin/python" -m verify.kld.capture run --arm "$ARM" --model /Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ2.5e-mtp-ple-ssd --cache-dir "$CACHE/$ARM" --shard "$SHARD" ${EXTRA[@]+"${EXTRA[@]}"} --out "$CACHE/$ARM-pilot.jsonl"
+exec "$ROOT/.venv/bin/python" -m verify.kld.capture run --arm "$ARM" --model "${MODEL:-/Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ2.5e-mtp-ple-ssd}" --cache-dir "$CACHE/$ARM" --shard "$SHARD" ${EXTRA[@]+"${EXTRA[@]}"} --out "$CACHE/$ARM-pilot.jsonl"

@@ -166,3 +166,18 @@ def test_arms_with_different_position_counts_fail_closed():
     a, b = one([1, 2], [0.5, 0.4]), window([[1, 2]] * 5, [[0.5, 0.4]] * 5)
     with pytest.raises(RuntimeError, match="positions"):
         metrics.summarize({"w": a}, {"w": b})
+
+
+def test_capture_detects_the_architecture_and_fails_closed(tmp_path):
+    from verify.kld import capture
+
+    for kind, arch in (
+        ("qwen4_exp", "qwen4_exp"),
+        ("qwen3_5", "qwen3_5"),
+        ("qwen3_5_moe", "qwen3_5"),
+    ):
+        (tmp_path / "config.json").write_text(json.dumps({"model_type": kind}))
+        assert capture.detect_arch(str(tmp_path)) == arch
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "llama"}))
+    with pytest.raises(RuntimeError, match="no hooks"):
+        capture.detect_arch(str(tmp_path))

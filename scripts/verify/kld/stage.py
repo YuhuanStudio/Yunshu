@@ -11,7 +11,6 @@ import hashlib
 import json
 from pathlib import Path
 
-
 TOOL_VERSION = "1"
 CACHE_ROOT = Path("/Volumes/Micron/yunshu-kld-cache")
 NOISE_FILE = Path(__file__).with_name("noise.json")

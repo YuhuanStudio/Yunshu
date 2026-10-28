@@ -85,10 +85,52 @@ def _eligible(queries, keys, values, block_indices, kw) -> bool:
     )
 
 
-def install(arm: str) -> None:
+def detect_arch(model_dir: str) -> str:
+    """The architecture family the capture hooks know; anything else fails closed."""
+    config = json.loads((Path(model_dir) / "config.json").read_text())
+    kind = config.get("model_type") or config.get("text_config", {}).get("model_type")
+    if kind in ("qwen4_exp", "qwen4_exp_text"):
+        return "qwen4_exp"
+    if kind in ("qwen3_5", "qwen3_5_moe", "qwen3_5_text", "qwen3_5_moe_text"):
+        return "qwen3_5"
+    raise RuntimeError(f"kld capture has no hooks for model_type {kind!r}")
+
+
+def upcast_attention() -> None:
+    """Reference mode for every architecture: standard attention accumulates in fp32."""
+    import mlx.core as mx
+
+    original = mx.fast.scaled_dot_product_attention
+
+    def sdpa(queries, keys, values, *args, **kwargs):
+        mask = kwargs.get("mask")
+        if isinstance(mask, mx.array) and mask.dtype != mx.bool_:
+            kwargs["mask"] = mask.astype(mx.float32)
+        out = original(
+            queries.astype(mx.float32),
+            keys.astype(mx.float32),
+            values.astype(mx.float32),
+            *args,
+            **kwargs,
+        )
+        return out.astype(queries.dtype)
+
+    mx.fast.scaled_dot_product_attention = sdpa
+
+
+def install(arm: str, arch: str = "qwen4_exp") -> None:
     import mlx.core as mx
     from mlx_vlm.generate.ar import PromptProcessingBatch
-    from mlx_vlm.models.qwen4_exp import language as l4
+
+    if arch == "qwen4_exp":
+        from mlx_vlm.models.qwen4_exp import language as l4
+    elif arch == "qwen3_5":
+        from mlx_vlm.models.qwen3_5 import (
+            language as l4,
+        )  # same hook names: LanguageModel and the *Model body
+    else:
+        raise RuntimeError(f"no capture hooks for {arch}")
+    body_class = l4.Qwen4ExpModel if arch == "qwen4_exp" else l4.Qwen3_5Model
 
     outdir = Path(os.environ["KLD_CACHE_DIR"])
     expect_file = outdir / "_current.json"
@@ -103,6 +145,8 @@ def install(arm: str) -> None:
     }
 
     if arm == "ref":
+        upcast_attention()
+    if arm == "ref" and arch == "qwen4_exp":
         original = l4.dispatch_qsa_attention
 
         def dispatch(queries, keys, values, block_indices, query_ends, **kw):
@@ -123,11 +167,11 @@ def install(arm: str) -> None:
         return lm_call(self, *args, **kwargs)
 
     l4.LanguageModel.__call__ = language_model_call
-    model_call = l4.Qwen4ExpModel.__call__
+    model_call = body_class.__call__
 
     def record(inputs, hidden):
         lm = state["lm"]
-        head = lm.lm_head
+        head = getattr(lm, "lm_head", None) or lm.model.embed_tokens.as_linear
         tokens = inputs[0]
         rows = int(tokens.shape[0])
         tok_np = [int(x) for x in tokens.tolist()]
@@ -170,7 +214,7 @@ def install(arm: str) -> None:
             record(inputs, out)
         return out
 
-    l4.Qwen4ExpModel.__call__ = qwen4_model_call
+    body_class.__call__ = qwen4_model_call
 
     generate = PromptProcessingBatch.generate
 
@@ -228,6 +272,7 @@ def run(args) -> None:
 
     from . import corpus
 
+    arch = detect_arch(args.model)
     cache = Path(args.cache_dir)
     cache.mkdir(parents=True, exist_ok=True)
     os.environ["KLD_CACHE_DIR"] = str(cache)
@@ -243,6 +288,7 @@ def run(args) -> None:
                 str(Path(__file__).resolve()),
                 "serve",
                 args.arm,
+                arch,
                 *command[1:],
             ]
         return popen(command, *a, **kw)
@@ -258,6 +304,8 @@ def run(args) -> None:
             "YUNSHU_NEXT_TURN_PREFILL": "off",
             "YUNSHU_CONSOLE": "0",
             "KLD_CACHE_DIR": str(cache),
+            # the reference must not use Yunshu's tile attention kernel: stock attention is what gets upcast
+            **({"YUNSHU_PREFILL_ATTENTION": "stock"} if args.arm == "ref" else {}),
             **dict(kv.split("=", 1) for kv in args.env),
         }
         srv = t.Srv("yunshu", env, f"kld-{args.arm}-{k}of{n}", model=args.model)
@@ -291,6 +339,7 @@ def main(argv=None) -> int:
     if argv[:1] == ["serve"]:
         argv.pop(0)
         arm = argv.pop(0)
+        arch = argv.pop(0)
         if os.environ.get(
             "KLD_PREFILL_STEP"
         ):  # noise measurement: the same arithmetic with another chunking
@@ -299,7 +348,7 @@ def main(argv=None) -> int:
             vlm_batch_runner.PREFILL_STEP = memory_admission.PREFILL_STEP = int(
                 os.environ["KLD_PREFILL_STEP"]
             )
-        install(arm)
+        install(arm, arch)
         from yunshu_cli import main as cli
 
         sys.argv = [sys.argv[0], *argv]
