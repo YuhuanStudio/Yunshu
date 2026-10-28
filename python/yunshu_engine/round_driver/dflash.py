@@ -53,6 +53,7 @@ class DFlashBatch:
             self.capture_ids = list(draft.config.target_layer_ids)
         self.verifier = Verifier(q35._EXACT_SPECULATIVE_VERIFIER)
         self.rows = []
+        self.stats = {}
         self.hidden = {}
         self.rings = {}
         self.copiers = {}
@@ -76,6 +77,19 @@ class DFlashBatch:
             if old is not None:
                 h = mx.concatenate([old, h], axis=1)
             self.hidden[key] = h[:, -self.keep :]
+
+    def window(self, row):
+        """The drafter's trailing prompt context as one capture list per target layer, or
+        None. Stored beside an APC checkpoint so a hit restores the drafter's context
+        (without it a follow-up turn drafts with only the uncached suffix's positions)."""
+        hidden = self.hidden.get(id(row))
+        if hidden is None or not self.capture_ids:
+            return None
+        return list(mx.split(hidden, len(self.capture_ids), axis=-1))
+
+    def seed(self, row, layers):
+        """Restore the window a checkpoint stored (see ``window``)."""
+        self.hidden[id(row)] = mx.concatenate(list(layers), axis=-1)[:, -self.keep :]
 
     def join(self, rows):
         for row in rows:
@@ -290,6 +304,15 @@ class DFlashBatch:
                     ):
                         break
                 kept = path[:used]
+                st = self.stats.setdefault(
+                    id(r), dict(rounds=0, nodes=0, used=0, copy=0, copy_used=0)
+                )
+                st["rounds"] += 1
+                st["nodes"] += n
+                st["used"] += used
+                if b in copies:
+                    st["copy"] += 1
+                    st["copy_used"] += used
                 tree_verify.tree_commit(self.lm, r.cache, res, kept)
                 committed_rows.add(id(r))
                 r.n += used
@@ -328,6 +351,18 @@ class DFlashBatch:
                     tree_verify.tree_abort(w.cache, res)
             raise
         gone = [r for r in rows if r.finished]
+        for r in gone:
+            st = self.stats.pop(id(r), None)
+            if st and st["rounds"]:
+                logger.info(
+                    "Round driver DFlash row: %d rounds, %.2f tokens/round, %.1f nodes/round, "
+                    "%d copy rounds (%.2f tokens/copy round)",
+                    st["rounds"],
+                    st["used"] / st["rounds"],
+                    st["nodes"] / st["rounds"],
+                    st["copy"],
+                    st["copy_used"] / max(1, st["copy"]),
+                )
         driver.rows = [r for r in driver.rows if not r.finished]
         driver._release(gone)
         mx.eval(*self.arrays())

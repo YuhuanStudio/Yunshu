@@ -376,6 +376,7 @@ class RoundDriver:
             row.apc.prepare_prefill(
                 [len(ids)], prefill_step_size=self.chunk, prefix_lengths=[row.hit]
             )
+            self._seed_window(row)
             floor = row.apc.manager.exact_cache_min_tokens
             row.ckpts = [
                 c
@@ -434,9 +435,43 @@ class RoundDriver:
             end = nxt
         return end
 
+    def _store_window(self, row: _Row, end: int) -> None:
+        if self.dflash is None or not self.dflash.can_draft:
+            return
+        try:
+            from .. import dflash_apc_window as win
+
+            layers = self.dflash.window(row)
+            if layers is None:
+                return
+            win.put(
+                win.key_for(row.salt, row.req.ids[:end]),
+                layers,
+                sum(int(x.nbytes) for x in layers),
+            )
+        except Exception:  # an optimisation only: a miss leaves the suffix-only context
+            logger.debug("drafter window store failed", exc_info=True)
+
+    def _seed_window(self, row: _Row) -> None:
+        if self.dflash is None or not self.dflash.can_draft or row.hit <= 0:
+            return
+        from .. import dflash_apc_window as win
+
+        layers = win.get(win.key_for(row.salt, row.req.ids[: row.hit]))
+        if layers is None:
+            return
+        self.dflash.seed(row, layers)
+        logger.info(
+            "Round driver: DFlash drafter window restored from APC hit: %d positions"
+            " (prefix %d)",
+            int(layers[0].shape[1]),
+            row.hit,
+        )
+
     def _store_checkpoint(self, row: _Row, end: int) -> None:
         if not row.req.cache_store:
             return  # X-Yunshu-Cache-Store: off: the plan and lookup stay an ordinary request's
+        self._store_window(row, end)
         caches = list(row.cache)
         if row.mtp_cache is not None:
             caches += row.mtp_cache

@@ -211,6 +211,41 @@ def test_dflash_apc_hit_matches_cold_and_uses_target_layout_salt(target):
     assert warm == cold
 
 
+def test_apc_hit_restores_the_drafters_context_window(target):
+    """A prefix hit seeds the drafter with the window stored beside the checkpoint (the lane
+    does this; without it a follow-up turn drafts from the uncached suffix only)."""
+    from yunshu_engine import dflash_apc_window as win
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    from .test_round_driver_apc import _manager
+
+    win.clear()
+    win.set_budget(1 << 30)
+    apc = _manager()
+    prompt = [4 + (7 * i) % 500 for i in range(700)]
+    draft = _draft(target)
+    seen = []
+    for _ in range(2):
+        driver = RoundDriver(target, dflash_drafter=draft, chunk=128, apc=apc)
+        hit = driver.add(Request(prompt, 4, handle=0))
+        row = driver.rows[0]
+        seen.append(
+            (
+                hit,
+                int(driver.dflash.hidden[id(row)].shape[1])
+                if id(row) in driver.dflash.hidden
+                else 0,
+            )
+        )
+        while driver.busy():
+            driver.step()
+    assert seen[0][0] == 0 and seen[1][0] > 0
+    # the hit's context is the stored window (>= the checkpoint's positions up to the draft keep)
+    assert seen[1][1] == min(seen[1][0], driver.dflash.keep)
+    assert win.stats()["stored"] > 0
+    win.clear()
+
+
 def test_oracle_copy_windows_commit_more_than_one_token(target, monkeypatch):
     from yunshu_engine.copy_drafter import CopyDrafter
 
