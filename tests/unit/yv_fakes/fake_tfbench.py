@@ -21,6 +21,7 @@ ap.add_argument("--turn2-tokens", type=int, default=0)
 ap.add_argument("--long-ask", action="store_true")
 ap.add_argument("--items", default="")
 ap.add_argument("--logprobs", action="store_true")
+ap.add_argument("--allow-eos", action="store_true")
 a = ap.parse_args()
 env = dict(kv.split("=", 1) for kv in a.env)
 if env.get("FAKE_CRASH") == "1":

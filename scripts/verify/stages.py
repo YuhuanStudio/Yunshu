@@ -158,6 +158,9 @@ def _dec_args(ctx: Ctx, stage_logprobs: bool = False) -> list:
     out = ["--decode-tokens", str(int(ctx.suite.get("decode_tokens", 256)))]
     if stage_logprobs:
         out.append("--logprobs")
+        out.append(
+            "--allow-eos"
+        )  # identity: a model-ended reply counts; arms must end at the same token
     if ctx.suite.get("long_ask"):
         out.append("--long-ask")
     if ctx.suite.get("turn2_tokens"):
