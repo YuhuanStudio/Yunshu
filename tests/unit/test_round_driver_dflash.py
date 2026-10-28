@@ -253,7 +253,9 @@ def test_committed_tokens_are_learned_by_the_draft_vocabulary(target):
 
     draft = _draft(target)
     learned = []
-    draft.__dict__["_draft_vocab"] = SimpleNamespace(learn=learned.extend)
+    draft.__dict__["_draft_vocab"] = SimpleNamespace(
+        learn=learned.extend, logits_subset=lambda hidden: None
+    )
     driver = RoundDriver(target, dflash_drafter=draft, chunk=16)
     emitted = []
     driver.add(Request([5, 6, 7, 8, 9, 10], 12, handle=0))
