@@ -358,6 +358,7 @@ def driver(args) -> dict:
             "YUNSHU_VLM_APC_MEMORY_GB": "0",
             "YUNSHU_NEXT_TURN_PREFILL": "off",
             "YUNSHU_CONSOLE": "0",
+            **dict(kv.split("=", 1) for kv in args.env),
         },
         "fnprefill-plain" if args.plain else "fnprefill",
         model=args.model,
@@ -423,6 +424,7 @@ def main(argv=None):
     p.add_argument("--model", required=True)
     p.add_argument("--ctx", type=int, nargs="+", default=[8192, 32768])
     p.add_argument("--plain", action="store_true")
+    p.add_argument("--env", action="append", default=[])
     p.add_argument("--out", type=Path, required=True)
     args = p.parse_args(argv)
     result = driver(args)

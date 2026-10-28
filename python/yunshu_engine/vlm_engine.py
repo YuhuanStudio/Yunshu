@@ -632,6 +632,10 @@ class VLMEngine:
             from .kernels import tf_hc_forward
 
             tf_hc_forward.install()
+            if settings.get_bool("YUNSHU_QSA_SPARSE_PREFILL"):
+                from .kernels import qsa_sparse_prefill
+
+                qsa_sparse_prefill.install()
 
         model_config = model_class.ModelConfig.from_dict(config)
         modules = ["text", "vision", "perceiver", "projector", "audio"]
