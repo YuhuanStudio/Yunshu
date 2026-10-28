@@ -22,7 +22,7 @@ const { values: a } = parseArgs({
     "idle-s": { type: "string", default: "40" },
     cycles: { type: "string", default: "3" },
     "load-model": { type: "string", default: "" },
-    tokens: { type: "string", default: "700" },
+    tokens: { type: "string", default: "4000" },
     seconds: { type: "string", default: "80" },
     out: { type: "string", default: "" },
   },
@@ -183,11 +183,13 @@ if (a.mode === "events") {
   };
   if (a["load-model"]) {
     // a cell must load for real: drop the model a previous cell left loaded
-    await fetch(`${a.base}/v1/models/unload`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: a["load-model"] }),
-    }).catch(() => undefined);
+    await fetch(
+      `${a.base}/v1/models/unload/${encodeURIComponent(a["load-model"])}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      },
+    ).catch(() => undefined);
     await sleep(2000);
     const t0 = Date.now();
     const res = await fetch(`${a.base}/v1/models/load`, {
