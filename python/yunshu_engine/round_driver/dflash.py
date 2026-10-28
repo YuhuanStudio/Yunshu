@@ -234,8 +234,7 @@ class DFlashBatch:
                     committed=r.generated,
                 )
                 toks, parents = search_tree(lat, nodes[b])
-                if r.generated == 1:
-                    logger.info("DIAG first draft %s", toks[:8].tolist())
+                logger.info("DIAG draft at %d %s", r.generated, toks[:15].tolist())
                 toks, parents, ranks = reorder(toks, parents)
                 proposals[b] = (
                     mx.concatenate([mx.array([r.pending], dtype=mx.int32), toks])[None],
@@ -315,6 +314,9 @@ class DFlashBatch:
                     ):
                         break
                 kept = path[:used]
+                logger.info(
+                    "DIAG acc %d n %d at %d", len(path) - 1, n, r.generated - used
+                )
                 st = self.stats.setdefault(
                     id(r),
                     dict(rounds=0, nodes=0, used=0, copy=0, copy_used=0, hist=[0] * 17),
