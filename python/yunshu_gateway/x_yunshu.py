@@ -41,6 +41,7 @@ import re
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -217,15 +218,30 @@ class _Registry:
         self._seq = 0
         self._active: dict[str, RequestInfo] = {}
         self._recent: collections.deque[dict] = collections.deque(maxlen=512)
+        self._listeners: list[Callable[[], None]] = []
+
+    def add_listener(self, fn: Callable[[], None]) -> None:
+        """``fn()`` runs (on the calling thread, after the lock is released) whenever a request
+        arrives, leaves or is recorded: the console change feed wakes its samplers with it."""
+        self._listeners.append(fn)
+
+    def _notify(self) -> None:
+        for fn in list(self._listeners):
+            with contextlib.suppress(
+                Exception
+            ):  # a listener must never break a request
+                fn()
 
     def add(self, info: RequestInfo) -> None:
         with self._lock:
             self._active[info.request_id] = info
+        self._notify()
 
     def remove(self, info: RequestInfo) -> None:
         with self._lock:
             if self._active.get(info.request_id) is info:
                 del self._active[info.request_id]
+        self._notify()
 
     def get(self, request_id: str) -> RequestInfo | None:
         with self._lock:
@@ -246,6 +262,7 @@ class _Registry:
             self._seq += 1
             entry["seq"] = self._seq
             self._recent.append(entry)
+        self._notify()
 
     @property
     def latest_seq(self) -> int:

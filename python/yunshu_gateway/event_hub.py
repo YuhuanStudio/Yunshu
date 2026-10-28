@@ -11,6 +11,7 @@ always receives the newest payload: there is no per-tab queue, so a slow tab ski
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from collections.abc import Awaitable, Callable, Iterable
@@ -47,6 +48,8 @@ class _Sampler:
     task: asyncio.Task | None = None
     wanted: int = 0
     request: Any = None
+    loop: asyncio.AbstractEventLoop | None = None
+    nudge: asyncio.Event | None = None
 
 
 @dataclass
@@ -95,6 +98,8 @@ class Hub:
         sampler = self._samplers[topic.name]
         payload: Any = None
         while sampler.wanted > 0:
+            if sampler.nudge is not None:
+                sampler.nudge.clear()  # before the sample, so a poke during it is not lost
             try:
                 payload = await topic.fetch(sampler.request)
                 await self._publish(topic, payload, False)
@@ -107,16 +112,30 @@ class Hub:
                 delay = max(0.05, float(topic.interval(payload)))
             except Exception:  # noqa: BLE001
                 delay = 2.0
-            await asyncio.sleep(delay)
+            # sleep until the next sample is due, or until poke() says something changed
+            nudge = sampler.nudge
+            if nudge is None:
+                await asyncio.sleep(delay)
+                continue
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(nudge.wait(), timeout=delay)
+
+    def poke(self, *names: str) -> None:
+        """Sample these topics now (thread-safe): something they report just changed."""
+        for n in names:
+            s = self._samplers.get(n)
+            if s is not None and s.loop is not None and s.nudge is not None:
+                with contextlib.suppress(RuntimeError):  # the loop is closing
+                    s.loop.call_soon_threadsafe(s.nudge.set)
 
     def _want(self, name: str, request: Any) -> None:
         s = self._samplers.setdefault(name, _Sampler())
         s.wanted += 1
         s.request = request
         if s.task is None or s.task.done():
-            s.task = asyncio.get_running_loop().create_task(
-                self._run(self.topics[name])
-            )
+            s.loop = asyncio.get_running_loop()
+            s.nudge = asyncio.Event()
+            s.task = s.loop.create_task(self._run(self.topics[name]))
 
     def _release(self, name: str) -> None:
         s = self._samplers[name]

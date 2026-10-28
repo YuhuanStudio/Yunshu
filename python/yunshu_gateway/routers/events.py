@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from ..event_hub import Hub, Topic
-from ..x_yunshu import BOOT_ID
+from ..x_yunshu import BOOT_ID, registry
 from .models import _check_permission
 
 router = APIRouter(tags=["yunshu"])
@@ -93,6 +93,9 @@ def get_hub() -> Hub:
     global _hub
     if _hub is None:
         _hub = build_hub()
+        hub = _hub
+        # A request arriving, leaving or being recorded is reported at once, not at the next tick.
+        registry.add_listener(lambda: hub.poke("status", "requests"))
     return _hub
 
 

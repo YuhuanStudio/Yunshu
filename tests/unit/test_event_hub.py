@@ -166,3 +166,64 @@ def test_default_hub_has_every_polled_topic():
         "requests",
         "downloads",
     }
+
+
+@pytest.mark.asyncio
+async def test_poke_samples_now_instead_of_waiting_for_the_tick():
+    hub, st = make_hub(lambda s: {"n": s["calls"]}, interval=30.0, heartbeat_s=999)
+    gen = hub.subscribe(["t"], None, boot_id="B")
+    await take(gen, 2)  # hello + first snapshot; the next tick is 30 s away
+    t0 = asyncio.get_running_loop().time()
+    hub.poke("t")
+    (frame,) = await take(gen, 1, timeout=2.0)
+    assert asyncio.get_running_loop().time() - t0 < 0.5
+    assert parse(frame)[1]["v"] == 2
+    await gen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_poke_from_another_thread_and_during_a_sample_is_not_lost():
+    import threading
+
+    gate = asyncio.Event()
+    calls = {"n": 0}
+
+    async def fetch(_req):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            await gate.wait()
+        return {"n": calls["n"]}
+
+    hub = Hub()
+    hub.register(Topic("t", fetch, lambda _p: 30.0, heartbeat_s=999))
+    gen = hub.subscribe(["t"], None, boot_id="B")
+    first = asyncio.ensure_future(take(gen, 2))
+    await asyncio.sleep(0.1)  # the first sample is in flight
+    threading.Thread(target=hub.poke, args=("t",)).start()
+    await asyncio.sleep(0.1)
+    gate.set()
+    frames = await first
+    # the poke that landed during the first sample made the second one immediate (the tick is
+    # 30 s): the subscriber, which was behind, got the newest payload straight away (coalesced).
+    assert parse(frames[1])[1]["d"] == {"n": 2} and calls["n"] == 2
+    await gen.aclose()
+
+
+def test_registry_listener_fires_on_add_remove_and_record_done():
+    from yunshu_gateway.x_yunshu import _Registry
+
+    reg = _Registry()
+    hits = []
+    reg.add_listener(lambda: hits.append(1))
+
+    class Info:
+        request_id = "r1"
+        engine_request_id = None
+
+    info = Info()
+    reg.add(info)  # type: ignore[arg-type]
+    reg.record_done({"request_id": "r1"})
+    reg.remove(info)  # type: ignore[arg-type]
+    assert len(hits) == 3
+    reg.add_listener(lambda: 1 / 0)  # a failing listener never breaks a request
+    reg.remove(info)  # type: ignore[arg-type]
