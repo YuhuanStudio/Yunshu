@@ -482,6 +482,54 @@ def _console_manage(c: Ctx):
     expect(not (c.token and c.token in b.text), "bundle leaked the token")
 
 
+@check("console_events", "GET /v1/yunshu/events", served=True)
+def _console_events(c: Ctx):
+    """The console change feed: hello with the engine's boot id, then a full snapshot of every
+    requested topic whose payload is the polled endpoint's own JSON; an unknown topic is a 400."""
+    topics = "status,host,memory,requests,downloads"
+    seen: dict[str, dict] = {}
+    hello: dict = {}
+    t0 = time.time()
+    with c.http.stream(
+        "GET", f"/v1/yunshu/events?topics={topics}", headers=c.auth(), timeout=20
+    ) as st:
+        expect(st.status_code == 200, f"events {st.status_code}")
+        expect(
+            st.headers.get("content-type", "").startswith("text/event-stream"),
+            f"events type {st.headers.get('content-type')}",
+        )
+        event = None
+        for line in st.iter_lines():
+            if line.startswith("event: "):
+                event = line[7:]
+            elif line.startswith("data: ") and event:
+                body = json.loads(line[6:])
+                if event == "hello":
+                    hello = body
+                else:
+                    seen[event] = body
+                if len(seen) == 5 or time.time() - t0 > 15:
+                    break
+    expect(hello.get("boot_id"), f"events: no hello boot_id: {hello}")
+    expect(
+        set(seen) == set(topics.split(",")), f"events snapshot topics {sorted(seen)}"
+    )
+    expect(
+        seen["status"]["d"].get("object") == "yunshu.status",
+        f"events status payload {list(seen['status']['d'])[:6]}",
+    )
+    expect(
+        seen["requests"]["d"].get("boot_id") == hello["boot_id"],
+        "events: requests boot_id differs from hello",
+    )
+    expect(
+        all(isinstance(v["v"], int) and v["v"] >= 1 for v in seen.values()),
+        "events: a snapshot without a version",
+    )
+    bad = c.req("GET", "/v1/yunshu/events?topics=nope")
+    expect(bad.status_code == 400, f"events unknown topic {bad.status_code}")
+
+
 @check(
     "console_downloads",
     "POST /v1/yunshu/downloads",

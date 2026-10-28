@@ -1,3 +1,4 @@
+import { pushedPayload } from "./push.ts";
 import { readGb } from "./byte-format.ts";
 import { failureMessage, statusMessage } from "./errors.ts";
 import { t } from "./i18n/index.ts";
@@ -246,6 +247,14 @@ export async function requestJson<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
+  if (!options.method || options.method === "GET") {
+    // The change feed already holds the answer: no request (see push.ts).
+    const pushed = options.search ? undefined : pushedPayload(connection, path);
+    if (pushed) {
+      options.onHeaders?.(pushed.headers);
+      return pushed.data as T;
+    }
+  }
   const url = buildUrl(connection, path);
   for (const [k, v] of Object.entries(options.search ?? {}))
     url.searchParams.set(k, v);

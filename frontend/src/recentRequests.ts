@@ -1,3 +1,4 @@
+import { pushLive, pushedPayload, subscribePush } from "./push.ts";
 import { connectionScope, useScopedState } from "./scoped-state.ts";
 import { useEffect, useRef, useState } from "react";
 import { has, t, tr } from "./i18n/index.ts";
@@ -120,6 +121,8 @@ export async function getRecent(
   signal: AbortSignal,
   timeoutMs = FETCH_TIMEOUT_MS,
 ) {
+  const pushed = pushedPayload(connection, "/yunshu/requests/recent");
+  if (pushed) return pushed.data as { data?: RecentEntry[]; capacity?: number };
   const url = new URL(connection.baseUrl.trim());
   const path = url.pathname.replace(/\/+$/, "");
   url.pathname = `${path.endsWith("/v1") ? path : `${path}/v1`}/yunshu/requests/recent`;
@@ -306,9 +309,13 @@ export function useRecentRequests(
         }));
       }
     });
-    const load = async () => {
+    // `wanted`: a kick or a push wake-up; the timer alone idles while the change feed is live.
+    const load = async (wanted = false) => {
       if (missing.current || controller.signal.aborted) return;
-      if (document.visibilityState === "hidden") {
+      if (
+        document.visibilityState === "hidden" ||
+        (!wanted && pushLive(connection, "requests"))
+      ) {
         schedule();
         return;
       }
@@ -317,12 +324,17 @@ export function useRecentRequests(
     };
     kick.current = () => {
       if (timer) clearTimeout(timer);
-      void load();
+      void load(true);
     };
     // At the start of a connection: what the console process recorded while nobody was looking.
     void loadHistory();
     void load();
+    const off = subscribePush(connection, "requests", () => {
+      if (timer) clearTimeout(timer);
+      void load(true);
+    });
     return () => {
+      off();
       controller.abort();
       if (timer) clearTimeout(timer);
     };

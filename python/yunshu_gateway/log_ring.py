@@ -10,6 +10,7 @@ to disk. Memory is bounded by ``CAPACITY * MAX_MESSAGE`` characters.
 from __future__ import annotations
 
 import collections
+import contextlib
 import logging
 import threading
 import time
@@ -53,6 +54,15 @@ class RingHandler(logging.Handler):
         self._ring_lock = threading.Lock()
         self._next_id = 1
         self.dropped = 0
+        self._listeners: list[Any] = []
+
+    def add_listener(self, fn: Any) -> None:
+        """Call ``fn()`` (from the logging thread, so it must be cheap and thread-safe) after each record."""
+        self._listeners.append(fn)
+
+    def remove_listener(self, fn: Any) -> None:
+        with contextlib.suppress(ValueError):
+            self._listeners.remove(fn)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -74,6 +84,9 @@ class RingHandler(logging.Handler):
             row["id"] = self._next_id
             self._next_id += 1
             self._ring.append(row)
+        for fn in list(self._listeners):
+            with contextlib.suppress(Exception):
+                fn()
 
     def query(
         self,
