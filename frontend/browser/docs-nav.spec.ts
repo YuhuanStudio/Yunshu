@@ -130,3 +130,29 @@ test.describe("desktop", () => {
     await expect(page.locator(`[id="${id}"]`)).toBeInViewport();
   });
 });
+
+test.describe("API reference operation picker on a phone", () => {
+  test.use({
+    viewport: { width: 402, height: 874 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  test("the 177-operation list is capped to the screen, scrolls, and an operation far down can be picked", async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== "webkit");
+    await installEngine(page);
+    await page.goto("/console/#/docs/api/reference");
+    await page.getByRole("combobox").first().tap();
+    const list = page.locator("[role=listbox]");
+    await expect(list).toBeVisible();
+    const box = (await list.boundingBox())!;
+    expect(box.height).toBeLessThanOrEqual(874);
+    expect(box.x + box.width).toBeLessThanOrEqual(402);
+    const far = page.locator("[role=option]").nth(120);
+    await far.scrollIntoViewIfNeeded();
+    await far.tap();
+    await expect(page).toHaveURL(/reference\?operation=/);
+  });
+});

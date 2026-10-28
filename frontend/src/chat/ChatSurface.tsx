@@ -102,7 +102,7 @@ export function ChatEmpty({
     <div className="flex flex-col items-center gap-3 text-center">
       {icon && <div className="text-muted-foreground">{icon}</div>}
       <div className="space-y-1">
-        <p className="text-sm font-semibold">{title}</p>
+        <p className="text-base font-semibold">{title}</p>
         {description && (
           <p className="text-[13px] text-muted-foreground">{description}</p>
         )}

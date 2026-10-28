@@ -10,7 +10,7 @@ import {
   IconButton,
   Spinner,
 } from "@yuhuanowo/yunui";
-import { ChatComposer, ContextCards } from "@yuhuanowo/yunui/chat";
+import { ChatComposer } from "@yuhuanowo/yunui/chat";
 import { Bot, Copy, Check, ThumbsUp, ThumbsDown } from "lucide-react";
 import type { Connection } from "../api";
 import { t, tr, useLocale } from "../i18n";
@@ -244,12 +244,12 @@ export default function AskAI({
     <>
       <div className="shrink-0 px-4 pb-1 pr-12 pt-4 sm:px-6 sm:pt-5">
         {panel ? (
-          <h2 className="flex items-center gap-2 text-sm font-semibold">
+          <h2 className="flex items-center gap-2 text-base font-semibold">
             <Bot size={16} />
             {t("docs.ask.title")}
           </h2>
         ) : (
-          <DialogTitle className="flex items-center gap-2 text-sm font-semibold">
+          <DialogTitle className="flex items-center gap-2 text-base font-semibold">
             <Bot size={16} />
             {t("docs.ask.title")}
           </DialogTitle>
@@ -336,19 +336,37 @@ export default function AskAI({
                     }
                     footer={
                       turn.sources.length > 0 ? (
-                        <nav aria-label={t("docs.ask.sources")}>
-                          <ContextCards
-                            chunks={turn.sources.map((source, n) => ({
-                              id: source.id,
-                              title: source.title,
-                              body: source.heading ?? "",
-                              source: source.slug,
-                              badge: `[${n + 1}]`,
-                              href: docHref(source.slug, source.anchor),
-                            }))}
-                            onSourceOpen={onClose}
-                            labels={{ header: null, count: null }}
-                          />
+                        <nav
+                          aria-label={t("docs.ask.sources")}
+                          className="flex flex-wrap gap-1.5"
+                        >
+                          {turn.sources.map((source, n) => (
+                            <Button
+                              key={source.id}
+                              asChild
+                              size="sm"
+                              variant="secondary"
+                              className="h-auto max-w-full justify-start py-1 text-left"
+                            >
+                              <a
+                                href={docHref(source.slug, source.anchor)}
+                                onClick={onClose}
+                              >
+                                <span className="text-muted-foreground">
+                                  [{n + 1}]
+                                </span>
+                                <span className="min-w-0 truncate">
+                                  {source.title}
+                                  {source.heading && (
+                                    <span className="text-muted-foreground">
+                                      {" · "}
+                                      {source.heading}
+                                    </span>
+                                  )}
+                                </span>
+                              </a>
+                            </Button>
+                          ))}
                         </nav>
                       ) : undefined
                     }
