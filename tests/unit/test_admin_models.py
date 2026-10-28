@@ -33,6 +33,8 @@ class FakeHub:
         self.first_chunk = threading.Event()
         self.gate = threading.Event()
         self.gate.set()
+        # close the gate inside the writer after the first chunk, so a test that pauses there cannot lose the race
+        self.hold_after_first = False
         self.listed = 0
 
     def list_files(self, repo, revision, patterns):
@@ -66,6 +68,8 @@ class FakeHub:
                 have += len(piece)
                 self.written += len(piece)
                 on_bytes(name, len(piece))
+                if self.hold_after_first and not self.first_chunk.is_set():
+                    self.gate.clear()
                 self.first_chunk.set()
             part.rename(final)
         return out
@@ -122,11 +126,9 @@ def test_download_runs_with_real_progress_and_lands_in_models_dir(env):
 def test_progress_is_visible_midway_with_rate_and_eta(env):
     client, hub, *_ = env
     hub.chunk = 50
-    hub.gate.clear()
+    hub.hold_after_first = True
     job = client.post("/v1/yunshu/downloads", json={"repo": "org/tiny"}).json()
-    hub.gate.set()
     assert hub.first_chunk.wait(5)
-    hub.gate.clear()
     time.sleep(0.05)
     mid = client.get(f"/v1/yunshu/downloads/{job['id']}").json()
     assert mid["state"] == "running"
@@ -139,10 +141,9 @@ def test_progress_is_visible_midway_with_rate_and_eta(env):
 def test_cancel_stops_the_transfer_and_resume_continues_it(env):
     client, hub, reg, tmp = env
     hub.chunk = 100
-    hub.gate.set()
+    hub.hold_after_first = True
     job = client.post("/v1/yunshu/downloads", json={"repo": "org/tiny"}).json()
     assert hub.first_chunk.wait(5)
-    hub.gate.clear()
     r = client.delete(f"/v1/yunshu/downloads/{job['id']}")
     assert r.status_code == 200
     hub.gate.set()

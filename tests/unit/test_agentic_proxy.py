@@ -30,11 +30,7 @@ def post(px, path, body):
     r = c.getresponse()
     data = r.read()
     c.close()
-    n = len(px.snapshot())
-    for _ in range(100):  # the record lands just after the last byte is forwarded
-        if len(px.snapshot()) > n or px.pending == 0:
-            break
-        time.sleep(0.01)
+    assert px.wait_idle(), "the proxy never listed the record"
     return r.status, data
 
 
@@ -71,6 +67,43 @@ def test_tool_calls_and_malformed(rig, path, stream):
     if path == "/v1/messages" and not stream:
         return  # Messages returns parsed input objects, so it cannot be malformed
     assert bad["malformed_tool_calls"] == 1
+
+
+def test_stream_record_listed_before_the_response_ends(rig, monkeypatch):
+    """A client that read a stream to its end finds the finished record at once (the terminating chunk
+    used to go out first, so a slow summary left snapshot() empty or half-built: G1)."""
+    fake, px = rig
+    real = Tracker.summary
+
+    def slow(self, t_end):
+        time.sleep(0.3)
+        return real(self, t_end)
+
+    monkeypatch.setattr(Tracker, "summary", slow)
+    c = http.client.HTTPConnection("127.0.0.1", px.port, timeout=10)
+    body = {"model": "fake", "stream": True, "messages": []}
+    c.request("POST", "/v1/responses", json.dumps(body))
+    c.getresponse().read()
+    c.close()
+    # only this request's record: a stray client (a recycled ephemeral port was probed with GET /health
+    # in the random-order run) also lands in the proxy's list
+    recs = [r for r in px.snapshot() if r["method"] == "POST"]
+    assert len(recs) == 1 and recs[0]["prompt_tokens"] == 100
+
+
+def test_wait_idle_covers_content_length_replies(rig, monkeypatch):
+    fake, px = rig
+    real = Tracker.summary
+    monkeypatch.setattr(
+        Tracker, "summary", lambda self, t: (time.sleep(0.3), real(self, t))[1]
+    )
+    c = http.client.HTTPConnection("127.0.0.1", px.port, timeout=10)
+    c.request("POST", "/v1/responses", json.dumps({"model": "fake"}))
+    c.getresponse().read()
+    c.close()
+    assert px.wait_idle()
+    recs = [r for r in px.snapshot() if r["method"] == "POST"]
+    assert recs and recs[0]["prompt_tokens"] == 100
 
 
 def test_error_never_saves_prompt_or_response(rig):

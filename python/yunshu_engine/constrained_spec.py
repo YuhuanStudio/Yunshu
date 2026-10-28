@@ -453,6 +453,10 @@ class SpecRequest:
         )
         self.forced_windows = 0
         self.serial_verify_rounds = 0
+        self.native = (
+            None  # NativeKeyedSampler of a Qwen4 native-loop request: reports by index
+        )
+        self.taken = 0
 
     def __call__(self, tokens, logits):
         if self.logprobs:
@@ -484,9 +488,13 @@ class SpecRequest:
         ]
 
     def take(self, token):
+        index = self.taken
+        self.taken += 1
         if self.first_probs is not None:
             self.record(self.first_probs, [token])
             self.first_probs = None
+        if self.native is not None and index > 0:
+            return self.native.report(index, token)
         tok, lp, top = self.pending.popleft()
         if tok != token:
             raise RuntimeError("speculative logprob row/token mismatch")

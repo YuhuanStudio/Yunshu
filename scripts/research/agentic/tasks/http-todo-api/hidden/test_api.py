@@ -24,6 +24,8 @@ def api():
         stderr=subprocess.DEVNULL,
     )
     for _ in range(100):
+        if proc.poll() is not None:  # the server already exited (no server.py yet): fail now, not in 10 s
+            pytest.fail(f"server exited with {proc.returncode}")
         try:
             socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
             break

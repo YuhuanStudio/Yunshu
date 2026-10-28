@@ -64,9 +64,23 @@ def _holder(container: Any, array: Any) -> str:
     return _label(container)
 
 
+def _array_bytes(obj: Any, floor: int) -> int:
+    """nbytes of ``obj`` when it is an mx.array of at least ``floor`` bytes, else 0. A dead
+    ``weakref.proxy`` of an array raises ReferenceError from isinstance() itself; the census walks
+    every tracked object, so it must treat that as "not an array" (it crashed the endpoint and a test
+    that ran after another one left such a proxy behind)."""
+    import mlx.core as mx
+
+    try:
+        if isinstance(obj, mx.array) and obj.nbytes >= floor:
+            return int(obj.nbytes)
+    except ReferenceError:
+        pass
+    return 0
+
+
 def _array_holders(floor: int) -> dict[int, tuple[str, int]]:
     """id -> (type, bytes) of every tracked object that directly references a big array."""
-    import mlx.core as mx
 
     out: dict[int, tuple[str, int]] = {}
     for obj in gc.get_objects():
@@ -74,9 +88,7 @@ def _array_holders(floor: int) -> dict[int, tuple[str, int]]:
             refs = gc.get_referents(obj)
         except Exception:  # noqa: BLE001
             continue
-        total = sum(
-            r.nbytes for r in refs if isinstance(r, mx.array) and r.nbytes >= floor
-        )
+        total = sum(_array_bytes(r, floor) for r in refs)
         if total:
             name = _label(obj)
             if isinstance(obj, dict):
@@ -141,7 +153,7 @@ def cyclic_garbage(top: int = 15) -> dict[str, Any]:
             name = _label(obj)
             types[name] = types.get(name, 0) + 1
             for ref in gc.get_referents(obj):
-                if isinstance(ref, mx.array) and ref.nbytes >= _MIB:
+                if _array_bytes(ref, _MIB):
                     owner = name
                     if isinstance(obj, dict):
                         who = next(
@@ -210,9 +222,9 @@ def census(
         except Exception:  # noqa: BLE001
             continue
         for r in refs:
-            if isinstance(r, mx.array) and id(r) not in seen:
-                n = r.nbytes
-                if n >= floor:
+            if id(r) not in seen:
+                n = _array_bytes(r, floor)
+                if n:
                     seen[id(r)] = (r, n)
     internal = {id(seen)} | {id(v) for v in seen.values()}
     groups: dict[str, dict[str, Any]] = {}

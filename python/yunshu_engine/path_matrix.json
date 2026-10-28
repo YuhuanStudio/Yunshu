@@ -3017,7 +3017,8 @@
     "YUNSHU_ANE_FFN_CACHE": "ane_ffn_split",
     "YUNSHU_ANE_FFN_TRACE": "ane_ffn_split",
     "YUNSHU_GRAMMAR_PREWARM": "grammar_prewarm",
-    "YUNSHU_SDPA_CHUNK": "sdpa_chunk_pre_nax"
+    "YUNSHU_SDPA_CHUNK": "sdpa_chunk_pre_nax",
+    "YUNSHU_PLE_STORAGE": "ple_ssd_rows"
   },
   "gap_budget": 41,
   "settings_categories": [

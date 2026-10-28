@@ -119,7 +119,11 @@ def test_resolve_is_idempotent_and_reads_are_cached(model_dir, monkeypatch):
         req = _build("chat")
         sd.resolve_sampling(req)
         sd.resolve_sampling(req)
-    assert len(reads) == 1
+    # only the generation config: the template-mode probe reads other files, and whether it does depends
+    # on what an earlier test left in the module's mode cache (this failed alone and in random order)
+    assert [p.name for p in reads if p.name == "generation_config.json"] == [
+        "generation_config.json"
+    ]
     (d / "generation_config.json").write_text(json.dumps({"temperature": 0.3}))
     req = _build("chat")
     sd.resolve_sampling(req)

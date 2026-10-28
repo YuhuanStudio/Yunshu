@@ -789,7 +789,12 @@ class VLMBatchRunner:
                 not processors
                 or (self._lane_takes_processors() and spec_safe_processors(processors))
             )
-            and (not logprobs or self._lane_takes_guide(None))
+            and (
+                not logprobs
+                or self._lane_takes_guide(None)
+                or self._native_keyed(greedy)
+                or self._native_greedy_report(greedy)
+            )
             and thinking_budget is None
             and (guide is None or self._lane_takes_guide(guide))
         )
@@ -858,11 +863,23 @@ class VLMBatchRunner:
         with contextlib.suppress(Exception):
             # The gateway reaches the live stats through the cancel event it owns.
             cancel_event.run_stats = stats
-        if not greedy and use_draft:
-            job.keyed = keyed_sampling.KeyedSampler(
-                job.sampling,
-                seed if seed is not None else int.from_bytes(os.urandom(8), "little"),
-            )
+        if greedy and use_draft and logprobs and self._native_greedy_report(greedy):
+            from .qwen4_sampled import NativeKeyedSampler, install_logit_stash
+
+            install_logit_stash(self.model.language_model)
+            job.keyed = NativeKeyedSampler(None, 0, lm=self.model.language_model)
+        elif not greedy and use_draft:
+            key = seed if seed is not None else int.from_bytes(os.urandom(8), "little")
+            if self._native_keyed(greedy):
+                from .qwen4_sampled import NativeKeyedSampler, install_logit_stash
+
+                # only a sampled request needs the verify window's logits; greedy requests never wrap them
+                install_logit_stash(self.model.language_model)
+                job.keyed = NativeKeyedSampler(
+                    job.sampling, key, lm=self.model.language_model
+                )
+            else:
+                job.keyed = keyed_sampling.KeyedSampler(job.sampling, key)
         self._submit(job)
         try:
             while True:
@@ -891,6 +908,24 @@ class VLMBatchRunner:
 
         return self.draft_kind == "dflash" or (
             self.draft_kind == "mtp" and mtp_lane.can_guide(self.drafter)
+        )
+
+    def _native_keyed(self, greedy: bool) -> bool:
+        """A sampled request on the Qwen4 native MTP loop: position-keyed draws with coupled
+        drafts, target logprobs read from the verify window (qwen4_sampled)."""
+        return bool(
+            not greedy
+            and self.draft_kind == "mtp"
+            and getattr(self.drafter, "native_keyed", False)
+        )
+
+    def _native_greedy_report(self, greedy: bool) -> bool:
+        """A greedy request that asks for logprobs on the Qwen4 native MTP loop: targets are the argmax of
+        the verify window's float32 rows, so tokens and reports equal the serial path's (qwen4_sampled)."""
+        return bool(
+            greedy
+            and self.draft_kind == "mtp"
+            and getattr(self.drafter, "native_keyed", False)
         )
 
     def _lane_takes_guide(self, guide: Any) -> bool:
@@ -1102,9 +1137,13 @@ class VLMBatchRunner:
         use_apc = self.apc_manager is not None and job.priority >= 0
         if job.cache_plan is not None and job.cache_plan.get("writes") == []:
             use_apc = False
+        ids_mx = (
+            None  # the prompt as one device array, built at most once per admission
+        )
         if use_apc and self._apc_admit is not None:
             try:
-                use_apc = bool(self._apc_admit(mx.array(job.ids)))
+                ids_mx = mx.array(job.ids)
+                use_apc = bool(self._apc_admit(ids_mx))
             except Exception:
                 logger.debug("APC admission check failed; using APC", exc_info=True)
         job.stats.cache_reason = (
@@ -1147,6 +1186,9 @@ class VLMBatchRunner:
             job.spec_request = SpecRequest(job.logprobs, job.top_logprobs)
             job.spec_request.guide = job.guide
             job.spec_request.processors = list(job.spec_procs)
+            if hasattr(job.keyed, "report"):
+                job.keyed.request = job.spec_request
+                job.spec_request.native = job.keyed
             job.processors.append(job.spec_request)
             logger.info(
                 "Exact speculative request engaged: %s constrained=%s logprobs=%s",
@@ -1158,8 +1200,10 @@ class VLMBatchRunner:
         if pkw is None:
             if alone:
                 clear_rope_state(self.model)
+            if ids_mx is None:
+                ids_mx = mx.array(job.ids)
             pkw = self.model.get_input_embeddings(
-                mx.array(job.ids)[None], None, mask=None
+                ids_mx[None], None, mask=None
             ).to_dict()
         salt = job.salt if job.salt is not None else self.apc_semantic_hash
         if _serial_rows(job):

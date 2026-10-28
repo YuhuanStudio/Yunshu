@@ -25,8 +25,10 @@ build-python:
 
 test: test-unit
 
+# Parallel like scripts/dev/ci-local: one test file per xdist worker, then the serial-marked tests alone.
 test-unit:
-    uv run pytest tests/ -v
+    uv run pytest tests/ -q -n 8 --dist loadfile -m "not serial"
+    uv run pytest tests/ -q -m serial
 
 test-integration:
     uv run pytest tests/integration -v

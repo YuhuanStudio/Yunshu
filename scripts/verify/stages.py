@@ -241,7 +241,7 @@ def stage_preflight(ctx: Ctx) -> StageResult:
     numbers.update(changed_files=len(changed), related_tests=len(tests))
     ctx.run.append(name, {"ev": "mapping", "changed": changed, "tests": tests})
     if not reasons and tests:
-        cmd = [
+        base_cmd = [
             "nice",
             "-n",
             "15",
@@ -252,17 +252,57 @@ def stage_preflight(ctx: Ctx) -> StageResult:
             "-p",
             "no:cacheprovider",
             "-x",
-            *tests,
+            "-rfE",
         ]
-        r = subprocess.run(
-            cmd,
-            cwd=str(ctx.cand.path),
-            env=dict(env, PYTHONPATH=str(ctx.cand.path / "python")),
-            capture_output=True,
-            text=True,
-            timeout=30 * 60,
+        run_env = dict(env, PYTHONPATH=str(ctx.cand.path / "python"))
+        workers = int(os.environ.get("YV_PREFLIGHT_WORKERS", "6"))
+        has_xdist = workers > 1 and (
+            subprocess.run(
+                [ctx.py, "-c", "import xdist"],
+                cwd=str(ctx.cand.path),
+                env=run_env,
+                capture_output=True,
+            ).returncode
+            == 0
         )
-        tail = "\n".join((r.stdout + r.stderr).strip().splitlines()[-8:])
+        if has_xdist:
+            # as ci-local: one test file per worker, then the tests marked serial on their own
+            # (was single-process: ~8 min for ~1000 files, ~1 min this way)
+            runs = [
+                base_cmd
+                + [
+                    "-n",
+                    str(workers),
+                    "--dist",
+                    "loadfile",
+                    "-m",
+                    "not serial",
+                    *tests,
+                ],
+                base_cmd + ["-m", "serial", *tests],
+            ]
+        else:
+            runs = [base_cmd + tests]
+        out, rc = "", 0
+        for cmd in runs:
+            r = subprocess.run(
+                cmd,
+                cwd=str(ctx.cand.path),
+                env=run_env,
+                capture_output=True,
+                text=True,
+                timeout=30 * 60,
+            )
+            out += r.stdout + r.stderr
+            # 5 = nothing collected (no serial-marked test among the related ones)
+            if r.returncode not in (0, 5):
+                rc = r.returncode
+                break
+        r = subprocess.CompletedProcess(runs[-1], rc, out, "")
+        lines = (r.stdout + r.stderr).strip().splitlines()
+        # the failing test names first: log noise printed after a failure must not push them out of the record
+        failed = [ln for ln in lines if ln.startswith(("FAILED ", "ERROR "))][:20]
+        tail = "\n".join([*failed, *lines[-8:]])
         ctx.run.append(
             name, {"ev": "pytest", "rc": r.returncode, "tail": tail, "tests": tests}
         )
@@ -639,7 +679,16 @@ def stage_identity(ctx: Ctx) -> StageResult:
                     reasons.append(f"{tag}{why}")
             reasons += spec_mode_failures(base, cand, ctx.suite, f"identity {mode}")
             planned = analyze.planned_identity(ctx.suite["ctx"], ctx.suite["kinds"])
-            cmp_ = analyze.compare_identity(base, cand, "base", "cand", planned=planned)
+            cmp_ = analyze.compare_identity(
+                base,
+                cand,
+                "base",
+                "cand",
+                planned=planned,
+                input_change_ok=bool(ctx.suite.get("input_change_ok")),
+            )
+            if cmp_["input_changed"]:
+                numbers[f"{tag}input_changed".strip()] = cmp_["input_changed"]
             numbers[f"{tag}base_vs_cand".strip()] = {
                 "compared": cmp_["compared"],
                 "mismatches": len(cmp_["mismatches"]),
@@ -1112,6 +1161,28 @@ def needle_slices(ctxs: list) -> list:
     return out
 
 
+def _longqa_share_key(ctx: Ctx, arm: str, c: int, lo: int, hi: int) -> str:
+    """Base needle answers (greedy, scored for correctness only) are reusable across runs on the same
+    base commit, env, checkpoint, prompt bytes, runtime and harness; the candidate is always re-run."""
+    if arm != "base":
+        return ""
+    return _sha(
+        "longqa",
+        ctx.base.key,
+        ctx.arm_env("base"),
+        ctx.model,
+        checkpoint_identity(ctx.model),
+        c,
+        lo,
+        hi,
+        _prompt_hashes([c], ["prose"]),
+        _runtime_key(ctx, "base"),
+        _harness_hash(),
+        os.environ.get("GPUQ_DEVICE", "m5"),
+        n=24,
+    )
+
+
 def stage_longqa(ctx: Ctx) -> StageResult:
     cfg = ctx.suite
     ctxs = list(cfg.get("needle_ctx") or [32768, 65536, 131072])
@@ -1136,6 +1207,7 @@ def stage_longqa(ctx: Ctx) -> StageResult:
                     timeout_min=tmo if ctx.big else 6,
                     stall_min=12 if ctx.big else 4,
                     quiet=True,
+                    share_key=_longqa_share_key(ctx, arm, c, lo, hi),
                 )
             )
     res = ctx.exe.run_cells(cells)

@@ -6,6 +6,7 @@ import {
   fetchStatus,
   getModel,
   loadModel,
+  needsToken,
   parseEngineStatus,
   requestJson,
   unloadModel,
@@ -279,4 +280,12 @@ test("operation helpers use the documented methods, encoded IDs, and JSON bodies
     max_tokens: 1,
     keep_alive: "10m",
   });
+});
+
+test("a refused token stops pollers; other failures keep them polling", () => {
+  assert.equal(needsToken(new ApiError("HTTP 401", 401)), true);
+  assert.equal(needsToken(new ApiError("HTTP 403", 403)), true);
+  assert.equal(needsToken(new ApiError("HTTP 500", 500)), false);
+  assert.equal(needsToken(new ApiError("offline")), false);
+  assert.equal(needsToken(new Error("401")), false);
 });

@@ -443,7 +443,7 @@ class SpillDiskStore(DiskBlockStore):
         ok = self._write_payload_impl(shard_id, block_hashes, payload)
         h = getattr(payload, "cache_hash", None)
         if ok and h is not None:
-            tokens = tuple(int(t) for t in payload.token_ids)
+            tokens = tuple(map(int, payload.token_ids))
             self._tok_cache()[int(h)] = (tokens, int(payload.extra_hash))
             from .cache_observation import disk_event
 
@@ -1700,7 +1700,7 @@ class YunshuAPCManager(APCManager):
         """A checkpoint came back from an SSD tier: it belongs to this request's generation (its
         next, longer checkpoint supersedes it), and it is a head when it ends the system turn."""
         key: int = _sequence_hash(
-            tuple(int(t) for t in tokens[:n]), extra_hash, self.block_size
+            tuple(map(int, tokens[:n])), extra_hash, self.block_size
         )
         with self._plock:
             self._born.setdefault(key, self._generation)
@@ -1791,7 +1791,7 @@ class YunshuAPCManager(APCManager):
     def _load_span_plans(self) -> None:
         try:
             raw = json.loads((self.disk.dir / self._SPAN_PLANS_FILE).read_text())
-            plans = {int(k): tuple(int(p) for p in v) for k, v in raw.items()}
+            plans = {int(k): tuple(map(int, v)) for k, v in raw.items()}
         except (OSError, ValueError, TypeError, AttributeError):
             return
         self._span_plans.update(list(plans.items())[-_BORN_MAX:])
@@ -2031,9 +2031,7 @@ class YunshuAPCManager(APCManager):
                 # not yet: the anchors view a cache that is about to be copied and stored,
                 # and its bytes are not theirs; the budget is enforced once the copy exists
                 self.finish_anchor_sharing(enforce=False)
-        key = _sequence_hash(
-            tuple(int(t) for t in token_ids), extra_hash, self.block_size
-        )
+        key = _sequence_hash(tuple(map(int, token_ids)), extra_hash, self.block_size)
         # recorded first: a checkpoint too big for RAM is written to the SSD inside the call
         # below, and the write hook needs its generation to tell what it supersedes
         with self._plock:
@@ -2095,7 +2093,7 @@ class YunshuAPCManager(APCManager):
         retained set stays a handful of checkpoints. Anchors sit at the oldest end of the LRU,
         so the byte and entry budgets evict them before anything newer.
         """
-        tokens = tuple(int(t) for t in token_ids)
+        tokens = tuple(map(int, token_ids))
         keep_for = self.keep_prior_for
         if keep_for is not None and tokens == keep_for[: len(tokens)]:
             # A next-turn rehearsal prefills a conversation nobody has asked for yet: it must
@@ -2337,7 +2335,7 @@ class YunshuAPCManager(APCManager):
         from mlx_vlm.models.cache import KVCache
 
         self._last_shared_keys = []
-        donor_tokens = tuple(int(t) for t in donor_tokens)
+        donor_tokens = tuple(map(int, donor_tokens))
         hit = self._last_hit
         if hit is None or hit[1] != extra_hash or donor_tokens[: len(hit[0])] != hit[0]:
             return 0, [], 0
@@ -2502,7 +2500,7 @@ class YunshuAPCManager(APCManager):
         (the idle-resend root cause of yv gate agent.restart_idle was invisible without it)."""
         if len(token_ids) < 4096 or not logger.isEnabledFor(logging.DEBUG):
             return  # the scan below hashes prefixes: only pay for it when it is read
-        tokens = tuple(int(t) for t in token_ids)
+        tokens = tuple(map(int, token_ids))
         with self.lock:
             held = sorted(
                 len(e.token_ids)
@@ -2581,7 +2579,7 @@ class YunshuAPCManager(APCManager):
         before = self.stats.disk_hits
         t0 = time.perf_counter()
         if self.warm is not None:
-            tokens = tuple(int(t) for t in token_ids)
+            tokens = tuple(map(int, token_ids))
             names = ("extra_hash", "max_prefix_tokens", "min_prefix_tokens")
             defaults = (0, None, 0)
             vals = [
@@ -2607,7 +2605,7 @@ class YunshuAPCManager(APCManager):
                 positional[1] = maximum
                 retry.pop("max_prefix_tokens")
             cache, n = super().lookup_exact_cache(token_ids, *positional, **retry)
-        self._last_hit = (tuple(int(t) for t in token_ids[:n]), extra) if n else None
+        self._last_hit = (tuple(map(int, token_ids[:n])), extra) if n else None
         undo = None
         if self._last_hit is not None:
             deltas = {
@@ -2629,7 +2627,7 @@ class YunshuAPCManager(APCManager):
         key = self._exact_cache.last_access_key
         if tier == "ssd" and n:
             key = self._note_disk_hit(
-                tuple(int(t) for t in token_ids), int(n), self._extra_of(args, kwargs)
+                tuple(map(int, token_ids)), int(n), self._extra_of(args, kwargs)
             )
         if n and key is not None:
             if undo is not None:
@@ -2682,7 +2680,7 @@ class YunshuAPCManager(APCManager):
     def probe_exact_length(self, token_ids, extra_hash, maximum, minimum) -> int:
         """Length the next lookup_exact_cache would restore (HOT / WARM / SSD index), read from
         metadata only: no restore, no promotion. 0 when nothing qualifies."""
-        tokens = tuple(int(t) for t in token_ids)
+        tokens = tuple(map(int, token_ids))
         maximum = min(len(tokens) - 1, int(maximum))
         if maximum <= minimum:
             return 0
@@ -2726,7 +2724,7 @@ class YunshuAPCManager(APCManager):
         """
         from mlx_vlm.apc import _cache_nbytes
 
-        tokens = tuple(int(t) for t in token_ids)
+        tokens = tuple(map(int, token_ids))
         extra = self._extra_of(args, kwargs)
         maximum = kwargs.get("max_prefix_tokens", args[1] if len(args) > 1 else None)
         minimum = kwargs.get("min_prefix_tokens", args[2] if len(args) > 2 else 0)
