@@ -185,7 +185,6 @@ def test_capture_detects_the_architecture_and_fails_closed(tmp_path):
 
 def test_reference_attention_stays_finite_when_the_last_row_ends_on_a_block_boundary():
     import mlx.core as mx
-
     from verify.kld import capture
 
     if not mx.metal.is_available():
