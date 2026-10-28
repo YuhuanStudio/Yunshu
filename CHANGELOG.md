@@ -96,6 +96,9 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Added
 
+- `yv` has a `kld` stage (`--suite kld`): teacher-forced KL divergence of base and candidate against an fp32 reference over
+  a fixed corpus of long documents, for changes that alter arithmetic. [Guide](docs/guides/VERIFY.md#kld-teacher-forced-kl-divergence).
+
 - Qwen3.8-Flash-Next reads its n-gram embedding (PLE) table from the checkpoint files on demand by default
   (`YUNSHU_PLE_STORAGE=ssd`, stable; `memory` loads the table like any weight). Measured on the raw Jundot
   oQ2.5e-mtp pack: peak 82.9 -> 54.5 GB, macOS-compressed memory 30 GB -> 0, text identical to the in-memory pack for
