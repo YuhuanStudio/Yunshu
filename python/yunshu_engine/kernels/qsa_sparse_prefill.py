@@ -300,7 +300,8 @@ def attend(
         output_shapes=[queries.shape],
         output_dtypes=[queries.dtype],
     )
-    return out[0]
+    result: mx.array = out[0]
+    return result
 
 
 def install() -> bool:
