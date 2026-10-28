@@ -131,3 +131,51 @@ def test_dispatch_routes_eligible_prefill_and_falls_back_otherwise(monkeypatch):
         q[:, :, :1], k, v, blocks[:, :1], ends[:, :1], allow_sparse_decode=True, **kw
     )
     assert qsp.COUNTS == {"engaged": 1, "fallback": 1} and len(seen) == 2
+
+
+def make_exact(rows=64, keys=2048, seed=7):
+    """Keys in a buffer of exactly ``keys`` rows (nothing readable past them); the last row's query end equals
+    the key count and is a multiple of 4, and the rows cover every tail length 0..3."""
+    rng = np.random.default_rng(seed)
+    q = mx.array(rng.normal(size=(1, H, rows, D)).astype(np.float32)).astype(
+        mx.bfloat16
+    )
+    k = mx.array(rng.normal(size=(1, KV, keys, D)).astype(np.float32)).astype(
+        mx.bfloat16
+    )
+    v = mx.array(rng.normal(size=(1, KV, keys, D)).astype(np.float32)).astype(
+        mx.bfloat16
+    )
+    ends = np.arange(keys - rows + 1, keys + 1, dtype=np.int32)
+    assert ends[-1] % 4 == 0 and {int(e) % 4 for e in ends} == {0, 1, 2, 3}
+    blocks = np.full((1, rows, TOPK), -1, dtype=np.int32)
+    for i, end in enumerate(ends):
+        pick = rng.permutation(int(end) // BLOCK)[:TOPK]
+        blocks[0, i, : len(pick)] = pick
+    return q, k, v, mx.array(blocks), mx.array(ends[None])
+
+
+def test_chunk_end_on_a_block_boundary_reads_nothing_past_the_keys():
+    import sys
+    from pathlib import Path
+
+    from mlx_vlm.models.qwen4_exp.qsa_kernel import qsa_sparse_attention
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    from verify.kld import capture
+
+    scale = D**-0.5
+    q, k, v, blocks, ends = make_exact()
+    ref = np.array(
+        capture.reference_attend(q, k, v, blocks, ends, scale).astype(mx.float32)
+    )
+    new = np.array(qsp.attend(q, k, v, blocks, ends, scale).astype(mx.float32))
+    up = np.array(
+        qsa_sparse_attention(
+            q, k, v, blocks, ends, scale=scale, block_size=BLOCK
+        ).astype(mx.float32)
+    )
+    for name, got in (("tensor-unit kernel", new), ("upstream kernel", up)):
+        assert np.isfinite(got).all(), name
+        assert np.abs(got - ref).max() < 2e-3, name
+    assert np.isfinite(ref).all()
