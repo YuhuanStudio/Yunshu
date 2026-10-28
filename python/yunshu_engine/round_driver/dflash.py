@@ -305,9 +305,11 @@ class DFlashBatch:
                         break
                 kept = path[:used]
                 st = self.stats.setdefault(
-                    id(r), dict(rounds=0, nodes=0, used=0, copy=0, copy_used=0)
+                    id(r),
+                    dict(rounds=0, nodes=0, used=0, copy=0, copy_used=0, hist=[0] * 17),
                 )
                 st["rounds"] += 1
+                st["hist"][min(16, max(0, used - 1))] += 1
                 st["nodes"] += n
                 st["used"] += used
                 if b in copies:
@@ -356,12 +358,13 @@ class DFlashBatch:
             if st and st["rounds"]:
                 logger.info(
                     "Round driver DFlash row: %d rounds, %.2f tokens/round, %.1f nodes/round, "
-                    "%d copy rounds (%.2f tokens/copy round)",
+                    "%d copy rounds (%.2f tokens/copy round); accepted-length histogram %s",
                     st["rounds"],
                     st["used"] / st["rounds"],
                     st["nodes"] / st["rounds"],
                     st["copy"],
                     st["copy_used"] / max(1, st["copy"]),
+                    st["hist"],
                 )
         driver.rows = [r for r in driver.rows if not r.finished]
         driver._release(gone)

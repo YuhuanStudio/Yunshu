@@ -1521,10 +1521,12 @@ class VLMBatchRunner:
             # every speculative start): a prompt's own tokens (code identifiers) are what its
             # continuation repeats. First row of an idle driver replaces the context; a row
             # joining running ones adds to it.
-            if driver.rows:
+            extra = (
                 vocab.add_context(job.ids)
-            else:
-                vocab.set_context(job.ids)
+                if driver.rows
+                else vocab.set_context(job.ids)
+            )
+            logger.info("Round driver: draft vocabulary context +%s ids", extra)
         hit = driver.add(
             Request(
                 ids=job.ids,
