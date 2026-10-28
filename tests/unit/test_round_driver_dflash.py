@@ -246,6 +246,24 @@ def test_apc_hit_restores_the_drafters_context_window(target):
     win.clear()
 
 
+def test_committed_tokens_are_learned_by_the_draft_vocabulary(target):
+    """The lane learns every committed token into the reduced draft vocabulary; the
+    driver must too (otherwise its drafts lose tokens the output just introduced)."""
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    draft = _draft(target)
+    learned = []
+    draft.__dict__["_draft_vocab"] = SimpleNamespace(learn=learned.extend)
+    driver = RoundDriver(target, dflash_drafter=draft, chunk=16)
+    emitted = []
+    driver.add(Request([5, 6, 7, 8, 9, 10], 12, handle=0))
+    while driver.busy():
+        emitted += [e.token for e in driver.step()]
+    assert len(emitted) == 12
+    assert learned == emitted[1 : 1 + len(learned)]
+    assert len(learned) >= len(emitted) - 2
+
+
 def test_oracle_copy_windows_commit_more_than_one_token(target, monkeypatch):
     from yunshu_engine.copy_drafter import CopyDrafter
 

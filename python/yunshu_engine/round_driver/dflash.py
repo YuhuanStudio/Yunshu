@@ -107,13 +107,6 @@ class DFlashBatch:
             if count:
                 ring.append(self.draft, hidden, mx.array([count], dtype=mx.int32))
             self.rings[id(row)] = ring
-            logger.info(
-                "DIAG ring pos=%d count=%d absmean0=%.6f absmeanL=%.6f",
-                int(ring.pos.item()),
-                count,
-                float(mx.abs(ring.keys[0].astype(mx.float32)).mean().item()),
-                float(mx.abs(ring.keys[-1].astype(mx.float32)).mean().item()),
-            )
             from ..mtp_lane import copy_rows_for_model
 
             copy_rows = min(copy_rows_for_model(self.lm), tree_verify.FAST_MAX_ROWS)
@@ -234,7 +227,6 @@ class DFlashBatch:
                     committed=r.generated,
                 )
                 toks, parents = search_tree(lat, nodes[b])
-                logger.info("DIAG draft at %d %s", r.generated, toks[:15].tolist())
                 toks, parents, ranks = reorder(toks, parents)
                 proposals[b] = (
                     mx.concatenate([mx.array([r.pending], dtype=mx.int32), toks])[None],
@@ -260,6 +252,7 @@ class DFlashBatch:
         results = forward(self.lm, windows, self.capture_ids, verifier=self.verifier)
         draws = []
         committed_rows = set()
+        vocab = getattr(self.draft, "_draft_vocab", None) if self.can_draft else None
         try:
             packed_logits = logits(
                 self.lm, mx.concatenate([res.hidden[0] for res in results])
@@ -314,9 +307,6 @@ class DFlashBatch:
                     ):
                         break
                 kept = path[:used]
-                logger.info(
-                    "DIAG acc %d n %d at %d", len(path) - 1, n, r.generated - used
-                )
                 st = self.stats.setdefault(
                     id(r),
                     dict(rounds=0, nodes=0, used=0, copy=0, copy_used=0, hist=[0] * 17),
@@ -353,6 +343,8 @@ class DFlashBatch:
                         st.spec_accepted += max(0, used - 1)
                         st.spec_rounds += 1
                         observe(st, max(0, used - 1), n)
+                if vocab is not None:
+                    vocab.learn(committed[:used])
                 if not r.finished and self.can_draft:
                     hidden = mx.concatenate(res.captured, axis=-1)[
                         :, mx.array(kept, dtype=mx.int32)
