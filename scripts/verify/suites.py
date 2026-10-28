@@ -261,6 +261,15 @@ SUITES = {
 # rather than falling back to the short stage-list defaults of `--suite speed`.
 SUITES["long-speed"] = {**SUITES["long"], "stages": ["speed"]}
 
+# Thinking-mode MMLU-Pro 300 (the Flash-Next protocol behind MODEL_SUPPORT's 261/300): paired, greedy, long replies.
+SUITES["quality-think"] = {
+    "stages": ["preflight", "quality"],
+    "ctx": [1024],
+    "mmlu_n": 300,
+    "quality_thinking": True,
+    "quality_max_tokens": 8192,
+}
+
 DEFAULTS = {
     "ctx": [1024, 8192],
     "kinds": ["prose", "code"],
