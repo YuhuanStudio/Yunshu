@@ -86,6 +86,18 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Added
 
+- Qwen3.8-Flash-Next reads its n-gram embedding (PLE) table from the checkpoint files on demand by default
+  (`YUNSHU_PLE_STORAGE=ssd`, stable; `memory` loads the table like any weight). Measured on the raw Jundot
+  oQ2.5e-mtp pack: peak 82.9 -> 54.5 GB, macOS-compressed memory 30 GB -> 0, text identical to the in-memory pack for
+  DFlash2 and MTP. In 3 interleaved reps, DFlash2 81.6 vs 82.4 and MTP 84.3 vs 85.4 tok/s (noise). The memory plan no
+  longer counts the table. [Guide](docs/guides/MODEL_SUPPORT.md).
+- Qwen3.8-Flash-Next sampled requests keep MTP speculative decode (position-keyed sampled verify; the logits wrapper
+  installs on the first sampled request, so greedy-only servers never wrap). Flash-Next oQ2.5e PLE-SSD, solo seeded
+  sampled: spec on == spec off in 18 of 18 cells at 4K/32K, +12-20% tok/s (4K 62-70 vs 55-59; 32K 53-55 vs 47-48).
+  Concurrent row-QSA identity remains open until the batched sparse-QSA kernel.
+- Qwen3.8-Flash-Next greedy requests that ask for `logprobs` keep MTP speculative decode. Targets are the argmax of the
+  verify window's float32 normalized rows, and `logprobs` and `top_logprobs` are read from committed rows; spec on and
+  off give bit-equal logprobs. Greedy requests without logprobs are unchanged, and 27B is unchanged.
 - `YUNSHU_ANE_FFN_SPLIT=splash` (off by default, lossy): a port of Splash's Neural Engine FFN split. Each dense FFN layer of a
   Qwen3.5-family prefill step runs about three quarters of its channels on the GPU and the rest as a W8A8 program on the Apple
   Neural Engine at the same time, through the private AppleNeuralEngine API on IOSurface memory shared with Metal and a
@@ -156,9 +168,32 @@ and cold 32K TTFT versus Splash 1.3.2.
 - Development infrastructure: the unit suite runs on 2 x 12 pytest-xdist workers with serial tests
   afterwards (`ci-local` 595 -> 157 s).
 - gpuq jobs pending at priority >= 0 rise one step after 30 min; swap contention is attributed to the job's own memory.
+- Host memory reads no longer start a subprocess on the request path: memory admission reads the page counts with
+  `host_statistics64` (was `vm_stat`, a fork and exec of the serving process on the MLX executor at every admission),
+  and the request logging middleware reads `hw.memsize` once (was `sysctl` per request). The found cost on back-to-back
+  27B requests was 8-17 ms from submit to admit for warm 1K code (prose 0.3 ms). `vm_stat` stays as the fallback.
+- Prompt tails of at most 16 rows use BQ16 attention with one query simdgroup (BK32 and the D-split order are unchanged).
+  27B + DFlash2 at 32K-128K: identity, APC, speed, memory and longqa (30/30) pass; the measured gain is small (32K code
+  warm TTFT 0.197 -> 0.195 s, -1.0%; decode and cold unchanged).
+- Sampled requests keep speculative decode under concurrency on 27B: the lane runs a full round per slice when a peer
+  is present instead of one token, and a promoted single ragged row becomes a lane cache view so the keyed fast tree
+  engages. 3-rep medians: candidate >= base in every stagger and uneven cell at 4K/32K; seeded digests equal spec off.
+- Test and CI speed: `just test-unit` runs pytest-xdist with a serial pass after it, as `ci-local` does (full unit
+  suite 15 min -> about 2.75 min); a nightly random-order pass (`scripts/dev/ci-random-order`) finds order dependence.
+  Order-dependence fixes cover leaked `YUNSHU_UDS`, gateway engine globals and fake-engine cancel accounting.
+  `test_custom_tasks_reference_passes` 78 s -> 2 s. `memory_census` now skips a dead `weakref.proxy` instead of
+  failing `/memory-census`.
+- `yv` speed: the base arm's longqa needle cells are shared across runs on the same base commit, environment,
+  checkpoint, prompt bytes, runtime and harness (the candidate always re-runs; speed stays interleaved).
 
 ### Fixed
 
+- Console docs pages: the Tailwind utilities stylesheet is imported into the utilities layer, so it no longer overrides
+  console and YunUI styles once the docs chunk prewarms (the iPhone burst replay moved 3 px; the WebKit log tail lost
+  its scroll). Full browser suite 631 passed.
+- Flash-Next: QSA caches are rejected before the dense speculative-lane field probe, which raised on them.
+- Memory admission: the free-page sum counted speculative pages twice (about 1.9 GB optimistic on an M5); it now agrees
+  with `vm_stat` to within a few MB.
 - `GET /v1/yunshu/host` is a console read like `/v1/yunshu/status`: with no token configured it answers 200
   (it answered 401 on every console poll); with a token it still needs the token.
 - Console round 2: Requests no longer reserves 42 rem of empty table (Active shows recent finished requests, the details column defaults to the newest request); Diagnostics, Models and the health line read a pause / restart as "waiting", never as a fault; history shows on a page opened during an outage; the usual-restart estimate ignores outages over 10 min; pipeline chips no longer reserve a count slot; new Playwright spec for paused / restarting states.
