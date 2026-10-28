@@ -63,7 +63,6 @@ flowchart TD
 ## Jump-forward 與工具文法
 
 - `YUNSHU_JUMP_FORWARD`（關閉）：對純文字路徑上的貪婪 JSON schema 生成，文法強制的 token 不經前向傳遞直接輸出。對於 LoRA、取消事件、logit bias、被抑制的 token、`min_tokens`、logprobs、取樣，以及 regex/選項/文法約束，程式碼會關閉此功能，所以這些請求使用一般的約束解碼。
-- `YUNSHU_TOOL_GRAMMAR`（關閉，實驗性）：用於 `auto` 工具選擇的工具呼叫結構標籤。強制的 `tool_choice`（`required`、`any` 或指名的工具）一律受約束，不論此旗標為何。遮罩絕不會移除模型本來能合法寫出的呼叫中的任何 token，所以格式正確的無約束呼叫會逐 token 重現。
 
 ## 保證
 
@@ -79,7 +78,6 @@ flowchart TD
 | `YUNSHU_JSON_SCHEMA_ENGINE` | `llguidance` | JSON schema 與 `json_object` 偏好的引擎；`inhouse` 選用 Python 狀態機 |
 | `YUNSHU_GRAMMAR_BITMASK` | 關閉 | 純文字引擎：用位元遮罩取樣器取代允許清單取樣器 |
 | `YUNSHU_JUMP_FORWARD` | 關閉 | 純文字引擎：不經前向傳遞直接輸出文法強制的 token |
-| `YUNSHU_TOOL_GRAMMAR` | 關閉 | 以結構標籤約束 `auto` 工具呼叫（實驗性） |
 
 ## 限制
 

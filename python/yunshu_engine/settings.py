@@ -196,7 +196,6 @@ _add("YUNSHU_MEM_PRESSURE_THRESHOLD", "float", 85.0, "Text engine: evict prefix-
 _add("YUNSHU_PREFIX_MAX_ENTRIES", "int", 64, "Text engine: prefix KV cache entries.", "cache", minimum=1)
 _add("YUNSHU_PREFIX_HOT_LIMIT", "int", 0, "Text engine: keep only this many prefix KV entries full precision and store older ones 4-bit in RAM (lossy on reuse; memory vs quality). 0 = every entry full precision.", "cache", minimum=0)
 _add("YUNSHU_SSD_CACHE", "bool", False, "Text engine: persist prefix KV to SSD.", "cache")
-_add("YUNSHU_APC_SEAM_CHECKPOINT", "bool", False, "VLM runner (APC), split-invariant prefill only: keep one more checkpoint inside a final user message of at least 8192 tokens, 2048 tokens (rounded down to a 64-token boundary) before its end, so a follow-up that sends the same long document with a different question resumes at the document instead of recomputing it. Costs one extra checkpoint copy (RAM, SSD) per such prompt; media spans are never cut. Output is unchanged (an aligned cut is split-invariant, a restore equals a cold prefill).", "cache", stability="experimental", decide="scripts/research/ab_seam_checkpoint.py on Qwen3.8-27B (16k / 35k / 64k-token document, then the same document with a new question): TTFT of the second request on vs off must drop >= 3x with identical greedy tokens (cold, restored and off), the first request's TTFT cost <= 3% and peak MLX memory growth within the APC budget; if it wins it becomes the default and the flag is deleted, else the seam cut and flag are deleted", added="2026-10-26")
 _add("YUNSHU_SSD_CACHE_DIR", "path", "~/.cache/yunshu/kv-ssd", "Text engine: SSD prefix-cache directory.", "cache")
 _add("YUNSHU_SSD_CACHE_PRECISION", "enum", "native", "Text engine: SSD prefix-cache storage precision: 'native' (KV and recurrent state stored bit-exact; lossless) or 'int8' (per-tensor int8, about half the disk bytes of bf16; lossy on reuse; memory vs quality).", "cache", choices=("native", "int8"))
 _add("YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS", "float", 20000.0, "Text engine: skip an SSD prefix restore when the model's observed prefill speed exceeds this (tokens/s): re-prefilling is then as fast as reading the KV back.", "cache", minimum=0.0)
@@ -247,12 +246,10 @@ _add("YUNSHU_GEMMA4_ASSISTANT", "path", None, "Text Gemma-4 models: assistant dr
 
 # ── text engine ────────────────────────────────────────────────────────
 _add("YUNSHU_SDPA_CHUNK", "bool", False, "M1-M4 (pre-NAX GPUs), head_dim 256: run MLX 0.32.3's unfused long-prefill attention fallback on query-row chunks so its score tensor stays under 1 GiB instead of growing with context squared (adopted from omlx sdpa256_attention). Same arithmetic per row as the stock fallback; no effect on M5 or CPU.", "kernels", stability="experimental", decide="On an M1-M4 Mac: bitwise A/B of chunked vs stock SDPA at head_dim 256 over a long chunked prefill (causal and array masks, bf16) plus 27B-class prefill peak memory and TTFT; if bit-identical with lower peak memory it becomes the default and the flag is deleted, else kernels/sdpa_chunk.py and the flag are deleted", added="2026-10-26")
-_add("YUNSHU_GPU_SAMPLER", "bool", False, "Text models: on-GPU Gumbel-max sampling for temperature > 0 (no per-token GPU->CPU sync) instead of the float64 NumPy sampler that copies the logits to the CPU every token.", "text-engine", stability="experimental", decide="scripts/research/ab_gpu_sampler.py on a text-only checkpoint: decode tok/s gpu/numpy >= 1.05 in every sampling config, first-token TV(numpy, gpu) within the numpy-vs-numpy noise floor, seeded reruns identical; if it wins the GPU sampler becomes the only one (NumPy sampler and this flag deleted), else the GPU sampler and flag are deleted", added="2026-10-26")
 _add("YUNSHU_JUMP_FORWARD", "bool", False, "Text models: emit grammar-forced structural tokens of JSON-schema output without a forward pass.", "text-engine")
 _add("YUNSHU_JSON_SCHEMA_ENGINE", "enum", "llguidance", "Engine that masks JSON-schema / json_object constrained decoding: 'llguidance' (per-token mask about 0.25 ms median on a 248K vocabulary; properties in schema order, forced literals in canonical tokenization) or 'inhouse' (the Python state machine, about 3 ms median; any property order). A schema llguidance cannot compile falls back to the in-house engine when that supports it.", "text-engine", choices=("llguidance", "inhouse"))
 _add("YUNSHU_GRAMMAR_BITMASK", "bool", False, "Constrained decoding with the xgrammar-style bitmask engine instead of the allowlist sampler.", "text-engine")
 _add("YUNSHU_GRAMMAR_PREWARM", "bool", True, "Build the llguidance token tables in the background when a model loads, so the first constrained request (response_format, regex, choice, cfg, forced tool_choice) does not spend about a second walking the vocabulary. Builds one table at the tokenizer width (about 0.45 GiB native heap at a 248K vocabulary, what the first constrained request would take anyway); the forced-tool grammar's padded-width table, when it differs, is built on its first use. 0 builds on first use instead. Needs llguidance and a Hugging Face tokenizer.", "text-engine")
-_add("YUNSHU_TOOL_GRAMMAR", "bool", False, "Tool-call constrained decoding (structural tags): free text until the model emits the tool-call start marker, then the call body is masked to the exact call grammar of this request's tools (tool name, that tool's parameter keys, schema-typed values, correct closing); a forced tool_choice (required / any / a named tool) starts constrained. A forced tool_choice is always constrained, whatever this flag says (OpenAI and Anthropic both guarantee the call); the flag governs only auto. Lossless for a call the model would have written validly. Off: auto-choice tool calls are decoded unconstrained and repaired after the fact.", "text-engine", stability="experimental", decide="malformed / dropped tool calls with vs without the grammar on the agentic matrix (Claude Code, Codex, opencode; greedy and sampled) against the call-decode cost (27B replays: lossless 12/12, 0 malformed both ways, call decode -0..10%); forced tool_choice already ships always-on (guarantee, M3 sweep); for auto: on only if it removes failures the repair does not", added="2026-10-01")
 _add("YUNSHU_QUANT_MODE", "enum", "", "Quantize weights in memory at load (lossy; memory vs quality): mxfp4, nvfp4, mxfp8 or affine ('' keeps the checkpoint).", "text-engine", choices=("", "mxfp4", "nvfp4", "mxfp8", "affine"))
 _add("YUNSHU_QUANT_CONFIG", "str", None, "Bits/group for affine in-memory quantization: JSON ({\"bits\":4,\"group_size\":64}) or 'bits' / 'bits,group'.", "text-engine")
 
@@ -422,12 +419,10 @@ _LIVE = frozenset(
         "YUNSHU_CACHE_STALE_DAYS",
         "YUNSHU_VLM_MAX_IMAGE_BYTES",
         "YUNSHU_VLM_INSECURE_SSL",
-        "YUNSHU_GPU_SAMPLER",
         "YUNSHU_JUMP_FORWARD",
         "YUNSHU_JSON_SCHEMA_ENGINE",
         "YUNSHU_GRAMMAR_BITMASK",
         "YUNSHU_GRAMMAR_PREWARM",
-        "YUNSHU_TOOL_GRAMMAR",
         "YUNSHU_OMNI_PERSONA",
         "YUNSHU_REALTIME_SILENCE_MS",
         "YUNSHU_REALTIME_BARGE_IN_MS",
@@ -483,7 +478,6 @@ _RELOAD = frozenset(
     {
         "YUNSHU_MEMORY_ADMISSION",
         "YUNSHU_MEMORY_RESERVE_GB",
-        "YUNSHU_APC_SEAM_CHECKPOINT",
         "YUNSHU_SDPA_CHUNK",
         "YUNSHU_GC_POLICY",
         "YUNSHU_NEXT_TURN_PREFILL",

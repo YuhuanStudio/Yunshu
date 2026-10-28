@@ -129,8 +129,6 @@ const settingdesc = {
   YUNSHU_PREFIX_HOT_LIMIT:
     "文字引擎：僅讓這麼多筆前綴 KV 項目保持完整精度，較舊的在記憶體中以 4-bit 儲存（重用時有損，以品質換記憶體）。0 表示全部完整精度。",
   YUNSHU_SSD_CACHE: "文字引擎：將前綴 KV 持久化到 SSD。",
-  YUNSHU_APC_SEAM_CHECKPOINT:
-    "VLM 執行器（APC），僅限分割不變預填：最後一則使用者訊息達 8192 token 以上時，在訊息結尾前 2048 token 處多留一個檢查點，讓「同一份長文件、不同問題」的後續請求從文件處接續。每個此類提示多一份檢查點複製；輸出不變。實驗性。",
   YUNSHU_SSD_CACHE_DIR: "文字引擎：SSD 前綴快取目錄。",
   YUNSHU_SSD_CACHE_PRECISION:
     "文字引擎：SSD 前綴快取的儲存精度：`native`（KV 與遞迴狀態位元精確，無損）或 `int8`（逐張量 int8，磁碟用量約為 bf16 的一半，重用時有損）。",
@@ -201,8 +199,6 @@ const settingdesc = {
     "文字 Gemma-4 模型：輔助草稿模型目錄（共用 KV 的推測解碼草稿模型）。",
   YUNSHU_SDPA_CHUNK:
     "M1–M4、head_dim 256：將原生長 prefill 注意力的後備路徑依查詢列分塊，讓分數張量維持在 1 GiB 以下（實驗性）。",
-  YUNSHU_GPU_SAMPLER:
-    "文字模型：在 GPU 上進行 Gumbel-max 取樣（每個 token 無需 GPU 到 CPU 的同步）。",
   YUNSHU_JUMP_FORWARD:
     "文字模型：JSON schema 輸出中由文法強制決定的結構性 token 直接輸出，不經過前向傳遞。",
   YUNSHU_JSON_SCHEMA_ENGINE:
@@ -211,8 +207,6 @@ const settingdesc = {
     "約束解碼改用 xgrammar 風格的位元遮罩引擎，而非允許清單取樣器。",
   YUNSHU_GRAMMAR_PREWARM:
     "模型載入時在背景建立 llguidance 詞元表，使第一個約束請求不必花約一秒走訪詞彙表。每種遮罩寬度約佔用 0.45 GiB 原生堆積；設為 0 則於首次使用時建立。",
-  YUNSHU_TOOL_GRAMMAR:
-    "工具呼叫約束解碼（結構標籤）：在工具呼叫起始標記之前為自由文字，之後呼叫本體會被遮罩為本次請求精確的呼叫文法（工具名稱、參數鍵、具型別的值、結尾）。強制的 `tool_choice` 一律受約束；此旗標僅控制 `auto`。關閉時，自動選擇的工具呼叫不受約束地解碼，事後再修復。",
   YUNSHU_QUANT_MODE:
     "載入時在記憶體中量化權重（有損，以品質換記憶體）：`mxfp4`、`nvfp4`、`mxfp8` 或 `affine`（留空則維持檢查點原樣）。",
   YUNSHU_QUANT_CONFIG:

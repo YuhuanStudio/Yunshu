@@ -188,7 +188,7 @@ Each has a one-line roofline argument; proposals that fail it are listed last.
    model while decode keeps 89-92%; roofline holds only for prompts arriving during a stream, and the
    numerics differ from MLX 4-bit. Effort very high.
 7. **Sampling glue: leave on GPU.** argmax over 248K is 76 us on CPU and fully hidden; top-k/sort at
-   16 rows costs 19-44 ms on CPU, so it stays GPU-side (`YUNSHU_GPU_SAMPLER`). No action.
+   16 rows costs 19-44 ms on CPU, so it stays GPU-side. No action.
 
 Dropped, with the reason:
 

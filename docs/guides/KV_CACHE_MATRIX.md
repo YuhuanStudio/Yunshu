@@ -79,11 +79,9 @@ recurrent state at one token position, reusable only by a prompt that starts wit
   grew), so a long session holds one copy, not one per turn;
 - the end of the system turn (system prompt + tool list) is a checkpoint of its own, kept per distinct
   head: a new session in the same project reuses it;
-- experimental, off (`YUNSHU_APC_SEAM_CHECKPOINT`, split-invariant prefill only): a final user message of
-  at least 8192 tokens keeps one more checkpoint 2048 tokens before its end (64-aligned, never inside a media
-  span, skipped when the interval checkpoint already sits there), so "same document, new question" resumes at
-  the document (TensorFold #1262, Rapid-MLX 421bf658). Not measured on Yunshu yet:
-  `scripts/research/ab_seam_checkpoint.py` decides it; on the tiny hybrid model the restore equals a cold run;
+- no extra "seam" checkpoint inside a long final user message: measured on Qwen3.8-27B, a repeat of the same
+  document with a new question already resumes at the same cached length without it (18432 / 42752 / 79872
+  tokens at 16K / 35K / 65K, TTFT 1.7 / 0.3 / 1.6 s), so the extra checkpoint bought nothing;
 - the SSD tier receives a checkpoint when RAM evicts it (and resident ones at shutdown, newest first, within
   20 s), not on every store. It is **on by default** (measured below: a reload is 15-40x faster than
   re-prefilling; the cache also survives a restart). States are namespaced by the checkpoint's weights

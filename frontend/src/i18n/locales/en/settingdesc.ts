@@ -138,8 +138,6 @@ const settingdesc = {
   YUNSHU_PREFIX_HOT_LIMIT:
     "Text engine: keep only this many prefix KV entries at full precision and store older ones in 4-bit in RAM (lossy on reuse; memory vs quality). 0 = every entry full precision.",
   YUNSHU_SSD_CACHE: "Text engine: persist prefix KV to SSD.",
-  YUNSHU_APC_SEAM_CHECKPOINT:
-    "VLM runner (APC), split-invariant prefill only: keep one more checkpoint inside a final user message of at least 8192 tokens, 2048 tokens before its end, so the same long document with a new question resumes at the document. One extra checkpoint copy per such prompt; output unchanged. Experimental.",
   YUNSHU_SSD_CACHE_DIR: "Text engine: SSD prefix-cache directory.",
   YUNSHU_SSD_CACHE_PRECISION:
     "Text engine: SSD prefix-cache precision: `native` (bit-exact KV and recurrent state; lossless) or `int8` (per-tensor int8, about half the disk bytes of bf16; lossy on reuse).",
@@ -213,8 +211,6 @@ const settingdesc = {
     "Text Gemma-4 models: assistant drafter directory (KV-shared speculative drafter).",
   YUNSHU_SDPA_CHUNK:
     "M1-M4, head_dim 256: chunk the stock long-prefill attention fallback by query rows so its score tensor stays under 1 GiB (experimental).",
-  YUNSHU_GPU_SAMPLER:
-    "Text models: on-GPU Gumbel-max sampling (no per-token GPU-to-CPU sync).",
   YUNSHU_JUMP_FORWARD:
     "Text models: emit grammar-forced structural tokens of JSON-schema output without a forward pass.",
   YUNSHU_JSON_SCHEMA_ENGINE:
@@ -223,8 +219,6 @@ const settingdesc = {
     "Constrained decoding with the xgrammar-style bitmask engine instead of the allowlist sampler.",
   YUNSHU_GRAMMAR_PREWARM:
     "Build the llguidance token tables in the background when a model loads, so the first constrained request does not spend about a second walking the vocabulary. Costs about 0.45 GiB of native heap per mask width; 0 builds them on first use.",
-  YUNSHU_TOOL_GRAMMAR:
-    "Tool-call constrained decoding (structural tags): free text until the tool-call start marker, then the call body is masked to this request’s exact call grammar (tool name, parameter keys, typed values, closing). A forced `tool_choice` is always constrained; this flag governs only `auto`. Off: auto tool calls are decoded unconstrained and repaired afterwards.",
   YUNSHU_QUANT_MODE:
     "Quantize weights in memory at load (lossy; memory vs quality): `mxfp4`, `nvfp4`, `mxfp8` or `affine` (empty keeps the checkpoint).",
   YUNSHU_QUANT_CONFIG:

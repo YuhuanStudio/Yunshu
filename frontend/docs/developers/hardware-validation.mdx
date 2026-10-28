@@ -55,7 +55,7 @@ This section is a historical probe record for one machine (M5 Max, 40-core GPU, 
 - **Wide verify is nearly free.** Quantized matmul stays weight-bandwidth bound through a few rows, and compute only binds past a few dozen rows, so one weight read serves several verify rows. This is why speculative and multi-row decode pay.
 - **Launch overhead is not the bottleneck.** The CPU builds the next step's graph while the GPU runs the previous one. `mx.compile` on a decode layer, `MLX_MAX_OPS_PER_BUFFER` and `MLX_METAL_FAST_SYNCH` changed nothing measurable, and MLX has no graph replay to exploit.
 - **The ANE is not free bandwidth.** It keeps nearly all of its own rate while the GPU decodes, but each ANE call streams its weights from the same DRAM and slows GPU decode. Alone it prefills at roughly a third of the idle GPU rate, so it is useful at most for a prompt arriving while another request streams, and its numerics differ from the MLX 4-bit weights (a lossy option, not a default).
-- **The CPU cannot help decode.** Sampling over a large vocabulary is cheap for one row (argmax is hidden behind the next step) but not for top-k or sort over many rows, so sampling stays on the GPU (`YUNSHU_GPU_SAMPLER`). CPU memory traffic also slows the GPU, and CPU drafting is impractical.
+- **The CPU cannot help decode.** Sampling over a large vocabulary is cheap for one row (argmax is hidden behind the next step) but not for top-k or sort over many rows, so sampling stays on the GPU. CPU memory traffic also slows the GPU, and CPU drafting is impractical.
 - **Wired memory and power.** `mx.set_wired_limit` and cache-limit changes gave no gain on a 128 GB machine; no throttling was visible in sustained decode loops.
 - **Prefill and decode contend.** Two GPU command queues do not overlap prefill and decode, and decode gets no priority. On one queue, a smaller prefill span keeps a running request decoding much faster at the cost of a longer time to first token for the arriving prompt. The prompt's tokens are identical to running it alone for both chunk sizes.
 
@@ -74,7 +74,6 @@ This section is a historical probe record for one machine (M5 Max, 40-core GPU, 
 
 | Setting | Default | Effect |
 |---|---|---|
-| `YUNSHU_GPU_SAMPLER` | off | Text models: on-GPU Gumbel-max sampling |
 
 ### How to verify
 

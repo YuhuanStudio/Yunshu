@@ -63,7 +63,6 @@ flowchart TD
 ## Jump-forward 与工具语法
 
 - `YUNSHU_JUMP_FORWARD`（关闭）：对文本路径上的贪婪 JSON schema 生成，语法强制的 token 不经前向传播就直接输出。代码在 LoRA、取消事件、logit bias、被抑制的 token、`min_tokens`、logprobs、采样以及 regex/choice/grammar 约束时会关闭它，因此这些请求使用一般的约束解码。
-- `YUNSHU_TOOL_GRAMMAR`（关闭，实验性）：对 `auto` 工具选择使用工具调用结构标签。强制的 `tool_choice`（`required`、`any` 或指定工具）无论此开关如何都一律受约束。掩码绝不会从模型本可有效写出的调用中移除 token，所以格式正确的无约束调用会被逐 token 重现。
 
 ## 保证
 
@@ -79,7 +78,6 @@ flowchart TD
 | `YUNSHU_JSON_SCHEMA_ENGINE` | `llguidance` | JSON schema 与 `json_object` 的首选引擎；`inhouse` 选择 Python 状态机 |
 | `YUNSHU_GRAMMAR_BITMASK` | 关闭 | 文本引擎：用位掩码采样器取代白名单采样器 |
 | `YUNSHU_JUMP_FORWARD` | 关闭 | 文本引擎：语法强制的 token 不经前向传播直接输出 |
-| `YUNSHU_TOOL_GRAMMAR` | 关闭 | 用结构标签约束 `auto` 工具调用（实验性） |
 
 ## 限制
 

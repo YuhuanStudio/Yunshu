@@ -129,8 +129,6 @@ const settingdesc = {
   YUNSHU_PREFIX_HOT_LIMIT:
     "文本引擎：仅让这么多条前缀 KV 条目保持完整精度，较旧的在内存中以 4-bit 存储（复用时有损，以质量换内存）。0 表示全部完整精度。",
   YUNSHU_SSD_CACHE: "文本引擎：将前缀 KV 持久化到 SSD。",
-  YUNSHU_APC_SEAM_CHECKPOINT:
-    "VLM 运行器（APC），仅限分割不变预填：最后一条用户消息达 8192 token 以上时，在消息结尾前 2048 token 处多留一个检查点，让“同一份长文档、不同问题”的后续请求从文档处接续。每个此类提示多一份检查点复制；输出不变。实验性。",
   YUNSHU_SSD_CACHE_DIR: "文本引擎：SSD 前缀缓存目录。",
   YUNSHU_SSD_CACHE_PRECISION:
     "文本引擎：SSD 前缀缓存的存储精度：`native`（KV 和循环状态按位精确，无损）或 `int8`（逐张量 int8，磁盘占用约为 bf16 的一半，复用时有损）。",
@@ -201,8 +199,6 @@ const settingdesc = {
     "文本 Gemma-4 模型：辅助草稿模型目录（共享 KV 的推测解码草稿模型）。",
   YUNSHU_SDPA_CHUNK:
     "M1–M4、head_dim 256：将原生长 prefill 注意力的后备路径按查询行分块，使分数张量保持在 1 GiB 以下（实验性）。",
-  YUNSHU_GPU_SAMPLER:
-    "文本模型：在 GPU 上进行 Gumbel-max 采样（每个 token 无需 GPU 到 CPU 的同步）。",
   YUNSHU_JUMP_FORWARD:
     "文本模型：JSON schema 输出中由语法强制决定的结构性 token 直接输出，不经过前向传递。",
   YUNSHU_JSON_SCHEMA_ENGINE:
@@ -211,8 +207,6 @@ const settingdesc = {
     "约束解码改用 xgrammar 风格的位掩码引擎，而非允许列表采样器。",
   YUNSHU_GRAMMAR_PREWARM:
     "模型加载时在后台构建 llguidance 词元表，使第一个约束请求不必花约一秒遍历词表。每种掩码宽度约占用 0.45 GiB 原生堆；设为 0 则在首次使用时构建。",
-  YUNSHU_TOOL_GRAMMAR:
-    "工具调用约束解码（结构标签）：在工具调用起始标记之前为自由文本，之后调用体会被掩码为本次请求精确的调用语法（工具名称、参数键、带类型的值、结尾）。强制的 `tool_choice` 始终受约束；此开关仅控制 `auto`。关闭时，自动选择的工具调用不受约束地解码，事后再修复。",
   YUNSHU_QUANT_MODE:
     "加载时在内存中量化权重（有损，以质量换内存）：`mxfp4`、`nvfp4`、`mxfp8` 或 `affine`（留空则保持检查点原样）。",
   YUNSHU_QUANT_CONFIG:

@@ -2793,7 +2793,6 @@ class VLMEngine:
                         settings.get("YUNSHU_NEXT_TURN_PREFILL")
                         in ("boundary", "exact")
                     ),
-                    seam_checkpoint=settings.get("YUNSHU_APC_SEAM_CHECKPOINT"),
                 )
                 self._install_apc_identity(lm)
                 self._apc_semantic_hash = semantic_extra_hash(
@@ -3561,7 +3560,7 @@ class VLMEngine:
 
     def _tool_guide(self, spec: dict | None, thinking_open: bool):
         """A ``ToolCallGuide`` for this request's tools (structural-tag constrained
-        decoding), or None: no tools, ``YUNSHU_TOOL_GRAMMAR`` off, or a model / tool
+        decoding), or None: no tools, auto choice (only a forced choice is constrained), or a model / tool
         set the grammar cannot cover (the reply is then decoded unconstrained)."""
         if not spec:
             return None
@@ -3873,9 +3872,7 @@ class VLMEngine:
                 raise ValueError(
                     "structural_tag cannot be combined with forced tool_choice"
                 )
-            if is_forced(choice) or (
-                settings.get_bool("YUNSHU_TOOL_GRAMMAR") and not lazy
-            ):
+            if is_forced(choice):
                 choice = normalize_tool_choice(choice)
                 if choice != "none":
                     kwargs["_tool_spec"] = {

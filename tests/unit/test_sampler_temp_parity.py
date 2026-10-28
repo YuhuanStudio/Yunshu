@@ -1,4 +1,4 @@
-"""the custom non-streaming temp>0 sampler must produce the SAME
+"""the on-GPU temp>0 sampler must produce the SAME
 distribution as the streaming path (mlx-lm make_sampler) for the same params.
 
 mlx-lm applies the top_p/min_p/xtc/top_k filters on the UN-tempered logprobs and
@@ -13,7 +13,7 @@ from __future__ import annotations
 import mlx.core as mx
 import numpy as np
 import pytest
-from python.yunshu_engine.batched_engine import _build_noncached_sampler_text
+from python.yunshu_engine.batched_engine import _build_gpu_sampler_text
 
 
 def _empirical_dist(sampler, logits, vocab, n=20000):
@@ -44,7 +44,7 @@ def _reference_dist(logits, temp, top_p, vocab):
 def test_sampler_matches_mlxlm_with_temp_and_top_p(temp, top_p):
     logits = np.array([3.0, 2.0, 1.0, 0.5, -1.0, -2.0, -3.0, -4.0], dtype=np.float64)
     vocab = len(logits)
-    sampler = _build_noncached_sampler_text(temp, top_p, 0, 0.0, seed=1234)
+    sampler = _build_gpu_sampler_text(temp, top_p, 0, 0.0, seed=1234)
     emp = _empirical_dist(sampler, logits, vocab)
     ref = _reference_dist(logits, temp, top_p, vocab)
     # Empirical should be close to the mlx-lm reference distribution.
@@ -61,10 +61,10 @@ def test_sampler_temp_changes_within_nucleus_weighting():
     (proves temp is applied, not dropped)."""
     logits = np.array([2.0, 1.0, 0.0, -5.0, -6.0], dtype=np.float64)
     hot = _empirical_dist(
-        _build_noncached_sampler_text(4.0, 1.0, 0, 0.0, seed=7), logits, len(logits)
+        _build_gpu_sampler_text(4.0, 1.0, 0, 0.0, seed=7), logits, len(logits)
     )
     cold = _empirical_dist(
-        _build_noncached_sampler_text(0.3, 1.0, 0, 0.0, seed=7), logits, len(logits)
+        _build_gpu_sampler_text(0.3, 1.0, 0, 0.0, seed=7), logits, len(logits)
     )
     # Colder temp concentrates mass on the top token; hotter spreads it.
     assert cold[0] > hot[0]
