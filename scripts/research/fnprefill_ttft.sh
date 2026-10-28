@@ -8,6 +8,7 @@ export TFB_WORK=/Volumes/P5Plus/yunshu-build/tfnew TFB_YUNSHU_SRC="$SRC/python" 
 export PYTHONPATH="$SRC/python" TMPDIR="$OUT/tmp"
 mkdir -p "$TMPDIR"
 ENVARG=()
-[ "$ARM" = cand ] && ENVARG=(--env YUNSHU_QSA_SPARSE_PREFILL=1)
+[ "$ARM" != base ] && ENVARG=(--env YUNSHU_QSA_SPARSE_PREFILL=1)
+[ "$ARM" = step4096 ] && export FNPREFILL_STEP=4096
 cd "$ROOT/scripts/research"
 "$ROOT/.venv/bin/python" fnprefill_profile.py --model /Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ2.5e-mtp --ctx $CTX --plain ${ENVARG[@]+"${ENVARG[@]}"} --out "$OUT/$ARM.json"

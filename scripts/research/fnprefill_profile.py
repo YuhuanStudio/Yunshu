@@ -413,6 +413,14 @@ def main(argv=None):
     if argv[:1] in (["--serve"], ["--serve-plain"]):
         mode = argv.pop(0)
         install(plain=mode == "--serve-plain")
+        import os
+
+        if os.environ.get("FNPREFILL_STEP"):  # experiment: prompt tokens per prefill forward
+            from yunshu_engine import memory_admission, vlm_batch_runner
+
+            vlm_batch_runner.PREFILL_STEP = memory_admission.PREFILL_STEP = int(
+                os.environ["FNPREFILL_STEP"]
+            )
         from yunshu_cli import main as cli
 
         sys.argv = [sys.argv[0], *argv]
