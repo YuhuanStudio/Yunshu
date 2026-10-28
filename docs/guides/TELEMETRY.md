@@ -122,3 +122,20 @@ phases never become invented zero-joule readings. For the overhead decision use
 three interleaved reps, a zero fixed speed tolerance and per-context jobs. Native
 pilots use 10-minute timeouts; individual timing cells fit the bounded gpuq short
 lane, keeping no more than four cells pending together without raising priority.
+
+## Console change feed
+
+The web console does not poll on timers. Each open tab holds one server-sent-event stream,
+`GET /v1/yunshu/events?topics=status,host,memory,requests,downloads` (through the console process,
+which streams it unchanged). The engine runs one sampler per topic while any tab wants it, calls the
+same function the polled endpoint runs, and sends the payload only when it changed (a heartbeat
+re-send every 10 s keeps uptime and ages fresh). Status is sampled at 4 Hz while a request runs and
+1 Hz otherwise; a slow tab receives the newest payload and a `skipped` count, never a queue.
+Each connection starts with `hello` (the engine's `boot_id`) and a full snapshot, so reconnecting
+after a restart needs no cursor. Auth is the polled endpoints' own (`can_infer`).
+
+If the stream is refused (older engine), dies, or goes quiet for 13 s, the console polls exactly as
+before and retries the stream with backoff; a tab hidden for 20 s closes its stream. Open the
+console with `?push=0` to force polling. `frontend/scripts/push-bench.mjs` and
+`scripts/research/front_push_bench.py` measure requests per tab, server CPU, event-to-screen
+latency and reconnect against a real engine.

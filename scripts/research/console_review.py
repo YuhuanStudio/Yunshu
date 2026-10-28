@@ -235,6 +235,7 @@ def record_replay(engine: str, path: Path, stop: threading.Event) -> None:
                     json.dumps(
                         {
                             "t": round(now - t0, 3),
+                            "wall": round(now, 3),
                             "status": strip_meta(_get(f"{engine}/v1/yunshu/status", 2)),
                         }
                     )
