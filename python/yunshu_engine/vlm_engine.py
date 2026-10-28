@@ -1959,7 +1959,7 @@ class VLMEngine:
             )
             state.set_ids(ids)
             if manager is not None:
-                manager.keep_prior_for = tuple(int(t) for t in ids)
+                manager.keep_prior_for = tuple(map(int, ids))
             return _RunnerCall(
                 self._generate_vlm_runner_text,
                 ids,

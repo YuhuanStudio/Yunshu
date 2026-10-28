@@ -144,18 +144,33 @@ def test_short_flag_counts_as_short_and_caps_timeout(gpuq, tmp_path, monkeypatch
     assert not gpuq._lane_short(j2)
 
 
-@pytest.mark.serial  # runs a real daemon loop with wall-clock waits; flaky under xdist CPU load
-def test_priority_preemption_never_interleaves(gpuq):
+def test_priority_preemption_never_interleaves(gpuq, monkeypatch):
     """_admit(preempt=True) only considers p>=0 pending jobs and never the lane."""
     seen = []
     orig = gpuq._pick
     gpuq._pick = lambda jobs, el=None, interleave=False: (
         seen.append(interleave) or orig(jobs, el, interleave)
     )
+    # The admission reads this machine's free memory: a busy host (a 27B job running beside the suite)
+    # blocks the job as "mem" and the waiting note is written to a job file that does not exist here
+    # (FileNotFoundError on its lock). The fixture states both.
+    monkeypatch.setattr(gpuq, "free_memory_gb", lambda: 1e6)
+    gpuq.JOBS.mkdir(parents=True, exist_ok=True)
     gate = gpuq.ServingGate()
     gpuq._admit([job("p0", timeout_s=3600)], gate, preempt=True)
     gpuq._pick = orig
     assert seen == [False]
+
+
+def test_preemption_admission_with_no_free_memory_is_hermetic(gpuq, monkeypatch):
+    """Low host memory blocks the preempting job ("mem") without touching anything outside the
+    queue dir; this is the state in which the test above used to fail on a loaded machine."""
+    monkeypatch.setattr(gpuq, "free_memory_gb", lambda: 0.1)
+    gpuq.JOBS.mkdir(parents=True, exist_ok=True)
+    j = job("p0", timeout_s=3600)
+    (gpuq.JOBS / "p0.json").write_text(json.dumps(j))
+    assert gpuq._admit([j], gpuq.ServingGate(), preempt=True) is None
+    assert j["waiting"] == "mem"
 
 
 def test_timeout_kills_short_job_and_logs_reason(tmp_path, monkeypatch):

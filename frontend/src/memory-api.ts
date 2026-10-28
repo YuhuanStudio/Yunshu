@@ -3,7 +3,7 @@ import { connectionScope, useScopedState } from "./scoped-state.ts";
 import { useEffect, useState } from "react";
 import { fixed } from "./i18n/format.ts";
 import { t } from "./i18n/index.ts";
-import { ApiError, requestJson, type Connection } from "./api.ts";
+import { ApiError, needsToken, requestJson, type Connection } from "./api.ts";
 
 export type MemoryOwner = {
   kind: string;
@@ -150,6 +150,7 @@ export function useMemoryLedger(
             ...s,
             error: e instanceof Error ? e.message : String(e),
           }));
+          if (needsToken(e)) return;
         }
       }
       timer = setTimeout(() => void tick(), intervalMs);

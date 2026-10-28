@@ -1,7 +1,7 @@
 import { connectionScope, useScopedState } from "./scoped-state.ts";
 import { createSingleFlight } from "./single-flight.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Connection } from "./api.ts";
+import { needsToken, type Connection } from "./api.ts";
 import {
   UNSUPPORTED,
   isActive,
@@ -71,6 +71,7 @@ export function usePolled<T>(
             ...s,
             error: e instanceof Error ? e.message : String(e),
           }));
+          if (needsToken(e)) stop = true;
         }
       }
     });

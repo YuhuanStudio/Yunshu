@@ -265,3 +265,40 @@ def test_sampled_admission_retains_precise_promotion_eligibility(
     if expected:
         group = next(iter(runner._batches.values()))
         assert group.sampler._rows[7][2] == seed_base(job.keyed.seed)
+
+
+def test_admit_builds_the_prompt_array_once_and_feeds_the_same_one(monkeypatch):
+    """The APC admission check and the embedding call share one device array of the prompt ids."""
+    from yunshu_engine import vlm_batch_runner as vbr
+    from yunshu_engine.vlm_batch_runner import _DONE
+
+    seen = []
+    model = SimpleNamespace(
+        language_model=SimpleNamespace(
+            speculative_verify_dflash_hidden=lambda *a: None
+        ),
+        get_input_embeddings=lambda ids, *a, **kw: (
+            seen.append(("embed", ids)) or SimpleNamespace(to_dict=lambda: {})
+        ),
+    )
+    runner = VLMBatchRunner(model, None, drafter=_Drafter(), draft_kind="dflash")
+    runner.apc_manager = SimpleNamespace()
+    runner._apc_admit = lambda ids: seen.append(("admit", ids)) or True
+    jobs = []
+    monkeypatch.setattr(
+        runner, "_submit", lambda job: (jobs.append(job), job.out.put(_DONE))
+    )
+    monkeypatch.setattr(
+        runner,
+        "_new_generator",
+        lambda **kw: SimpleNamespace(insert=lambda *a, **kw: [7]),
+    )
+    list(runner.iter_tokens([1, 2, 3], max_tokens=4, temperature=0.0, seed=None))
+    built = []
+    real = vbr.mx.array
+    monkeypatch.setattr(
+        vbr.mx, "array", lambda x, *a, **k: (built.append(x), real(x, *a, **k))[1]
+    )
+    runner._admit(jobs[0], alone=True)
+    assert [k for k, _ in seen] == ["admit", "embed"]
+    assert [x for x in built if x == [1, 2, 3]] == [[1, 2, 3]]
