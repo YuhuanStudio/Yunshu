@@ -1,6 +1,8 @@
 """Recovery must not turn an interrupted benchmark into a successful run."""
 
 import importlib.util
+import time
+import types
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,8 @@ def gpuq(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location("gpuq_recovery_test", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # A private clock: patching sleep/monotonic on the shared time module would also patch other threads.
+    module.time = types.SimpleNamespace(**vars(time))
     monkeypatch.setattr(module, "LOGS", tmp_path)
     monkeypatch.setattr(module, "_alive", lambda pid: False)
     return module

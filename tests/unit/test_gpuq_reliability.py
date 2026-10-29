@@ -5,6 +5,8 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+import types
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,8 @@ def q(tmp_path, monkeypatch):
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # A private clock: patching sleep/monotonic on the shared time module would also patch other threads.
+    module.time = types.SimpleNamespace(**vars(time))
     for name, path in (
         ("ROOT", tmp_path),
         ("JOBS", tmp_path / "jobs"),
@@ -196,6 +200,13 @@ def test_wait_deadline_is_global_and_sleep_is_bounded(q, monkeypatch, capsys):
     assert q.wait(["first", "second"], max_seconds=0.1) == 2
     assert sleeps == [0.1]
     assert len(capsys.readouterr().out.splitlines()) == 2
+
+
+def test_clock_patches_stay_inside_the_module(q, monkeypatch):
+    # Under xdist a leftover thread calling time.sleep spun on the patched clock and flooded `sleeps`.
+    real_sleep = time.sleep
+    monkeypatch.setattr(q.time, "sleep", lambda seconds: None)
+    assert time.sleep is real_sleep
 
 
 def test_label_reuse_preserves_all_previous_job_artifacts(q):
