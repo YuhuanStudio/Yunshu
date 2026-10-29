@@ -340,14 +340,30 @@ export default function App() {
       /* storage may be unavailable */
     }
   }, [collapsed]);
+  // The tab title carries the live phase: written at most once a second (the status polls at 4 Hz,
+  // and a tab strip that rewrites its text four times a second flickers), at once on a page,
+  // phase or language change.
+  const titleAt = useRef({ at: 0, key: "" });
   useEffect(() => {
-    document.title =
-      engine.phase === "offline"
-        ? t("shell.engine.tab.offline", {
-            page: pageTitle(page),
-            brand: t("shell.brand.name"),
-          })
-        : tabTitle(engine.status, pageTitle(page));
+    const write = () => {
+      titleAt.current.at = Date.now();
+      document.title =
+        engine.phase === "offline"
+          ? t("shell.engine.tab.offline", {
+              page: pageTitle(page),
+              brand: t("shell.brand.name"),
+            })
+          : tabTitle(engine.status, pageTitle(page));
+    };
+    const key = `${engine.phase}|${page}|${locale}`;
+    const wait = 1000 - (Date.now() - titleAt.current.at);
+    if (key !== titleAt.current.key || wait <= 0) {
+      titleAt.current.key = key;
+      write();
+      return;
+    }
+    const id = setTimeout(write, wait);
+    return () => clearTimeout(id);
   }, [engine.status, engine.phase, page, locale]);
   // After a navigation, focus moves to the page heading so Tab continues into
   // the content instead of restarting from the top of the document.

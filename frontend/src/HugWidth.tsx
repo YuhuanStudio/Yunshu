@@ -6,16 +6,20 @@ import { WidthRatchet } from "./motion/hug-core.ts";
  * as the widest content of the last `holdMs` (see WidthRatchet): it grows at once when a digit or a
  * word needs room and gives the room back only after the content stayed narrower for the whole
  * hold, so a settled reading has no dead space and a flickering one does not resize per sample.
- * A step eases over the expand duration (styles.css `[data-hug]`, off under reduced motion) and the
- * text is revealed by the box, never drawn outside it.
+ * The width is never animated: a step is one instant change, and steps are rare (a new digit
+ * count, a new word). Use it for one NUMBER (see LiveNumber, HeldText) so the room it holds is a
+ * digit wide; wrapped around a whole sentence it would hold the whole sentence's room.
  */
 export function HugWidth({
   children,
   holdMs = 6000,
+  align,
   className = "",
 }: {
   children: ReactNode;
   holdMs?: number;
+  /** Where the content sits inside room it holds: a number is "right", so its digits stay put. */
+  align?: "right";
   className?: string;
 }) {
   const outer = useRef<HTMLSpanElement>(null);
@@ -47,19 +51,19 @@ export function HugWidth({
       arm(now);
     };
     measure();
-    const frame = requestAnimationFrame(() => {
-      box.dataset.ready = "";
-    });
     const observer = new ResizeObserver(measure);
     observer.observe(content);
     return () => {
-      cancelAnimationFrame(frame);
       observer.disconnect();
       if (timer != null) clearTimeout(timer);
     };
   }, [holdMs]);
   return (
-    <span ref={outer} data-hug="" className={`inline-block ${className}`}>
+    <span
+      ref={outer}
+      data-hug=""
+      className={`inline-block ${align === "right" ? "text-right" : ""} ${className}`}
+    >
       <span
         ref={inner}
         data-hug-natural=""

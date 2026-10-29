@@ -1145,7 +1145,10 @@ async function auditPage(
           it.label,
           `${d.changed.find((c) => c.startsWith("self."))}; transition-duration 0s`,
         );
-      if (!d.changed.length && !d.selected)
+      // A borderless field that sits inside a surface of its own (the palette's search line) has nothing
+      // to light up: the I-beam is its affordance.
+      const bare = textField && /bg-transparent/.test(it.label);
+      if (!d.changed.length && !d.selected && !bare)
         add(
           "interactive-no-hover-change",
           it.label,
@@ -1267,6 +1270,15 @@ test("hover and focus affordance: interactive things respond, static things do n
       name: "overview+language",
       route: "overview",
       open: (p) => p.getByRole("button", { name: /^語言/ }).click(),
+    },
+    {
+      name: "overview+palette",
+      route: "overview",
+      root: "[role=dialog]",
+      open: async (p) => {
+        await p.getByRole("button", { name: /^搜尋/ }).first().click();
+        await p.getByRole("dialog").first().waitFor({ timeout: 10_000 });
+      },
     },
     {
       name: "overview+island",
