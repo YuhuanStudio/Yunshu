@@ -45,7 +45,11 @@ function PillText({ pill: p }: { pill: FooterPill }) {
       {p.tween.suffix}
     </>
   ) : p.value != null && p.value !== "" ? (
-    <HeldText text={p.value} />
+    p.plain ? (
+      p.value
+    ) : (
+      <HeldText text={p.value} />
+    )
   ) : null;
   return (
     <span className="inline-block whitespace-nowrap">

@@ -9,6 +9,7 @@ import {
 } from "react";
 import { Button, Spinner } from "@yuhuanowo/yunui";
 import { Sparkles } from "lucide-react";
+import { BrandMark } from "./BrandMark";
 import { DashboardPage } from "@yuhuanowo/yunui/patterns";
 import { DocsLayout } from "fumadocs-ui/layouts/docs";
 import { useSidebar } from "fumadocs-ui/components/sidebar/base";
@@ -149,7 +150,12 @@ function DocsContent({ sub }: { sub: string | null }) {
         <DocsLayout
           tree={toc.pageTree}
           nav={{
-            title: t("docs.link.lead"),
+            title: (
+              <span className="inline-flex items-center gap-2">
+                <BrandMark size={22} />
+                {t("docs.link.lead")}
+              </span>
+            ),
             url: "/docs",
             children: (
               <Button

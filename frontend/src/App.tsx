@@ -1,7 +1,15 @@
 import { isCalm } from "./outage-view";
 import { SegmentedTray } from "./SegmentedTray";
 import { gbTotalText } from "./byte-format";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type AnchorHTMLAttributes,
+} from "react";
+import { BRAND_MARK_SRC } from "./BrandMark";
 import { lazyPage, warmPages } from "./lazy-page";
 import {
   Breadcrumb,
@@ -41,12 +49,10 @@ import {
   Play,
   ScrollText,
   Search,
-  PanelLeftClose,
   PanelLeftOpen,
   Settings as SettingsIcon,
   Stethoscope,
   Sun,
-  X,
   BookOpen,
 } from "lucide-react";
 import { useEngine } from "./useEngine";
@@ -172,6 +178,13 @@ function makeTranslator(namespace: string | undefined) {
 }
 // One stable function per namespace and locale: YunUI puts the translator in effect deps.
 const adapters = {
+  // Routes are hash routes: a root-relative href ("/overview", the sidebar's home link) is a hash link.
+  Link: ({ href, ...rest }: AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a
+      href={href?.startsWith("/") && !href.startsWith("//") ? `#${href}` : href}
+      {...rest}
+    />
+  ),
   useT: (namespace?: string) => {
     const locale = useLocale();
     const id = `${locale}:${namespace ?? ""}`;
@@ -603,6 +616,11 @@ export default function App() {
   }, []);
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
+    // The browser chrome (Safari's toolbar, an installed app's title bar) follows the console's own theme.
+    for (const meta of document.querySelectorAll<HTMLMetaElement>(
+      'meta[name="theme-color"]',
+    ))
+      meta.content = dark ? "#0b0b0d" : "#f7f7f8";
     try {
       localStorage.setItem("yunshu.console.theme", dark ? "dark" : "light");
     } catch {}
@@ -688,43 +706,18 @@ export default function App() {
           </a>
           <Sidebar
             appName="Yunshu"
+            logoSrc={BRAND_MARK_SRC}
+            className="pt-[env(safe-area-inset-top)]"
             ariaLabel={t("shell.nav.ariaLabel")}
             currentPath={"/" + topPage(page)}
             isOpen={menu}
             onClose={() => setMenu(false)}
-            closeLabel={t("shell.nav.close")}
+            closeLabel={t("shell.nav.collapse")}
             onNavigate={(href) => navigate(href.replace(/^\//, ""))}
             homeHref="/overview"
             collapsed={collapsed}
             onToggleCollapse={() => setCollapsed((v) => !v)}
             loading={engine.phase === "connecting" && !engine.status}
-            header={
-              <div className="safe-top-5 flex items-center gap-2.5 px-4 pb-4 pt-5">
-                <div className="flex min-w-0 flex-1 items-center gap-2.5 px-2">
-                  <CloudMark />
-                  <span className="flex-1 truncate text-base font-semibold tracking-tight">
-                    Yunshu
-                    {t("shell.brand.name") !== "Yunshu" && (
-                      <span className="ml-1.5 text-xs font-normal text-muted-foreground">
-                        {t("shell.brand.name")}
-                      </span>
-                    )}
-                  </span>
-                </div>
-                <IconButton
-                  className="hidden lg:inline-flex"
-                  icon={<PanelLeftClose size={17} />}
-                  label={t("shell.nav.collapse")}
-                  onClick={() => setCollapsed(true)}
-                />
-                <IconButton
-                  className="lg:hidden"
-                  icon={<X size={17} />}
-                  label={t("shell.nav.close")}
-                  onClick={() => setMenu(false)}
-                />
-              </div>
-            }
             sections={[
               {
                 title: t("shell.nav.section.monitor"),
@@ -1275,34 +1268,5 @@ function PageFallback() {
       aria-busy="true"
       data-testid="page-loading"
     />
-  );
-}
-
-/** Brand mark: a pivot (樞) with cloud arcs turning around it. Host content. */
-function CloudMark() {
-  return (
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 24 24"
-      fill="none"
-      aria-hidden="true"
-      className="text-foreground"
-    >
-      <path
-        d="M4.5 12a7.5 7.5 0 0 1 12.8-5.3"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-      <path
-        d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3"
-        stroke="currentColor"
-        strokeOpacity=".5"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-      <circle cx="12" cy="12" r="2.6" fill="currentColor" />
-    </svg>
   );
 }

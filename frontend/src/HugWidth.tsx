@@ -28,7 +28,7 @@ export function HugWidth({
     const box = outer.current;
     const content = inner.current;
     if (!box || !content || typeof ResizeObserver === "undefined") return;
-    const ratchet = new WidthRatchet(holdMs);
+    const ratchet = new WidthRatchet(holdMs, 0.5, 1.5);
     let timer: ReturnType<typeof setTimeout> | null = null;
     const apply = (w: number) => {
       box.style.width = `${w}px`;

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Button, cn } from "@yuhuanowo/yunui";
+import { BrandMark } from "../BrandMark";
 import {
   ChatComposer,
   ChatMessage,
@@ -117,6 +118,7 @@ export function ChatTurn({ className, ...props }: ChatMessageProps) {
   return (
     <ChatMessage
       density="compact"
+      avatar={props.role === "assistant" ? <BrandMark size={20} /> : undefined}
       className={cn(
         "max-w-none max-sm:[&>div:first-child:not(:only-child)]:hidden max-sm:gap-0",
         props.role === "user" && "justify-end",

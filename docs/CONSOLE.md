@@ -132,23 +132,52 @@ collapses to a single compact pill.
 
 ### Live readouts (how numbers stay still)
 
-Live figures follow one rule so a busy engine does not make the page jump.
+Live figures follow one rule set so a busy engine does not make the page jump. Our data changes a lot in
+short bursts, so the rules are about what is allowed to move when an update lands.
 
-- **Hug, then hold.** A pill or stat value is as wide as its text and no wider. Its width grows at once when a
-  digit or a word needs room and shrinks only after the text stayed narrower for 6 s (the hold doubles, up to 8x,
-  when a shrink is undone soon after). A count flickering at a digit boundary (9 / 10, 9.9 / 10.1) therefore
-  resizes once and then holds; a settled pill carries no empty room. A step eases over 180 ms and the text is
-  revealed by the box. Implemented by `HugWidth` with the pure `WidthRatchet` (`src/motion/hug-core.ts`).
-- **Digits are tabular.** Numbers use tabular figures, the unit sits right after the number inside the same
-  box, and the phase word is the last pill, so a phase change moves nothing before it.
-- **Readable pace.** Text readouts (`LiveNumber`, `src/motion/readout-core.ts`) redraw at most about 4 Hz and
-  never count through values the engine did not report. Bars and charts, which are not read digit by digit, run
-  at frame rate. Reduced motion draws every sample as it arrives.
+- **Values swap in place.** A routine update (a tick of tok/s, a count, a memory figure) changes text only: no
+  count-up, no flash, no highlight, and never an animated width or position. Text readouts (`LiveNumber`,
+  `src/motion/readout-core.ts`) redraw at most about 4 Hz; the tab title is written once a second. Bars and
+  charts, which are not read digit by digit, run at frame rate. Reduced motion draws every sample as it arrives.
+- **Hug, with a number holding its own digits.** A status pill is as wide as its text and no wider, and the
+  width never animates. Each number in it (`HeldText`, `LiveNumber`, built on `HugWidth` and the pure
+  `WidthRatchet` in `src/motion/hug-core.ts`) holds its own width: it grows at once when a digit is needed
+  and gives the room back only after the number stayed narrower for 8 s (the hold doubles, up to 8x, when a
+  shrink is undone soon after). So a count flickering at a digit boundary (9 / 10, 9.9 / 10.1) moves the pill
+  by one digit, once, and a settled pill carries no dead room after its text. A new sentence (another phase,
+  another state) starts over and hugs at once; the phase pill is last, so nothing after it is shoved.
+- **Digits are tabular**, the unit sits right after its number, and a number that sits beside a bar or a
+  flexible column keeps a slot (the prefill bar never changes length because a cache-hit count gained a digit).
+- **Animations are rationed** (`BurstGovernor`, `src/motion/burst-core.ts`). A motion that data starts (a
+  request row arriving or ending, the rows below sliding to make room, the island's prefill block, a fresh
+  table row) asks first; the answer is yes only while the screen is calm: at most 2 in 2 s, and every ask
+  counts, so a storm stays refused until it has been quiet for 2 s. A refused motion is not delayed or
+  replayed: the change is drawn in place. What the page opened with is the baseline, not an arrival.
+  Continuous motion that is not a reaction to an update (a chart sliding with the clock, a progress bar
+  advancing at its observed rate) is separate and only moves `transform`.
 - **Tables do not reflow.** Live tables use fixed column widths sized for the widest real value.
 
-`frontend/browser/live-stability.spec.ts` replays the recorded bursty status stream (and synthetic feeds that
-cross digit boundaries on purpose) and fails on a pill with empty room after its text, a box whose width goes
-A, B, A twice, frames in which something moved beyond a per-page budget, or layout shift above 0.02.
+Held by browser specs that drive a storm feed (`browser/support/storm.ts`: a request starts and ends every
+400 ms, every number changes on every poll, a finished request lands every 300 ms) and the recorded bursty
+stream: `live-animation-rate.spec.ts` counts every CSS animation, transition and `Element.animate` the page
+starts (a storm must start at most 2 in 20 s; the recorded burst at most 0.5 per second and 3 in any second),
+`live-jump.spec.ts` records the box of every visible element every 50 ms (status pills do not go A, B, A,
+change width at most 6 times in 20 s, layout shift stays under 0.02), `live-numbers.spec.ts` lists every
+number whose text changes and fails on one without tabular digits or one that changes faster than 5 Hz,
+and `live-stability.spec.ts` keeps the recorded-stream budgets. `hover-affordance.spec.ts` audits hover,
+cursor and focus on every interactive element and asserts that static things show none.
+
+## Brand
+
+One mark, one asset set. The mark is the sidebar's pivot with two cloud arcs; `frontend/scripts/brand-icons.mjs`
+draws it as a near-black tile with a light mark (readable on light and dark) and writes `public/favicon.svg`,
+`favicon.ico` (16, 32, 48), `apple-touch-icon.png` (180), maskable `web-app-manifest-192x192.png` and `-512x512.png`
+(the mark stays inside the 80 % safe zone) and `manifest.json` (`node scripts/brand-icons.mjs --check` fails on drift).
+`index.html` declares them and the light and dark `theme-color`, which follows the console's theme switch.
+The sidebar is YunUI's own `Sidebar` with `appName="Yunshu"` and `logoSrc` (the same block Yunxin uses: tile and
+name are one link home, 36 px tile, 18 px semibold name, a hover wash, a collapse button after a hairline, the
+whole rail leaves when collapsed). The tile also marks the docs title, the Ask AI dialog and the assistant's
+avatar in chat (`src/BrandMark.tsx`). `browser/brand.spec.ts` measures the block and the served files.
 
 ## Pages
 
