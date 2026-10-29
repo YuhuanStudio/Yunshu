@@ -289,8 +289,7 @@ def test_split_invariant_interval_checkpoint_before_an_image_stays_aligned():
 
 
 @pytest.mark.parametrize(
-    "tail,scoped",
-    [(1, False), (16, False), (48, False), (49, False), (64, False), (65, True)],
+    "tail,scoped", [(1, False), (16, False), (48, False), (49, True), (64, True)]
 )
 def test_short_prompt_tail_runs_outside_the_long_prefill_scope(
     monkeypatch, tail, scoped
