@@ -178,6 +178,7 @@ test("each capsule is its own island: the card grows from the capsule that was t
   await first.click();
   await expect(island).toBeVisible();
   await expect(first).toHaveAttribute("aria-expanded", "true");
+  await expect(island.getByTestId("island-memory")).toBeVisible();
   const a = (await island.boundingBox())!;
   await last.click();
   await expect(last).toHaveAttribute("aria-expanded", "true");
@@ -185,6 +186,9 @@ test("each capsule is its own island: the card grows from the capsule that was t
   await expect
     .poll(async () => (await island.boundingBox())?.x ?? a.x)
     .toBeGreaterThan(a.x);
+  // the engine capsule opens the whole picture; the others only their own detail
+  await expect(island.getByTestId("island-live")).toBeVisible();
+  await expect(island.getByTestId("island-memory")).toHaveCount(0);
   if (process.env.ISLAND_SHOTS)
     await page.screenshot({ path: `${process.env.ISLAND_SHOTS}/island-from-last.png` });
   // tapping the open capsule again closes it

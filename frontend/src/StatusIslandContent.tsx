@@ -52,9 +52,20 @@ const finite = (v: unknown): v is number =>
 
 export type IslandDot = "online" | "away" | "offline" | "neutral";
 
+/** Which cards each status capsule expands into (Dynamic Island style: a capsule opens its own detail).
+ *  The engine capsule is the whole picture, so it is not listed and opens every card. */
+const FOCUS: Record<string, readonly string[]> = {
+  now: ["live", "nav"],
+  load: ["live", "nav"],
+  memory: ["memory"],
+  swap: ["memory"],
+  gpu: ["machine"],
+};
+
 /**
  * The status island's content: header, live, memory, machine (only when the engine reports host
- * telemetry) and navigation. Every card with nothing to say is not rendered.
+ * telemetry) and navigation. Every card with nothing to say is not rendered. With `focus` (the key of the
+ * capsule that was tapped) only that capsule's cards follow the header; without it, every card.
  */
 export function StatusIslandContent({
   engine,
@@ -64,7 +75,9 @@ export function StatusIslandContent({
   dot,
   now,
   onNavigate,
+  focus = null,
 }: {
+  focus?: string | null;
   engine: Engine;
   connection?: Connection;
   ledger: MemoryLedgerData | null;
@@ -75,6 +88,8 @@ export function StatusIslandContent({
   onNavigate: () => void;
 }) {
   const status = engine.status;
+  const show = (card: string) =>
+    !focus || !FOCUS[focus] || FOCUS[focus].includes(card);
   const { list, pause, pin } = useEngineList(
     connection ?? { baseUrl: "", token: "" },
   );
@@ -183,59 +198,63 @@ export function StatusIslandContent({
         }
       />
 
-      <StatusIslandCard
-        title={t("shell.island.live.title")}
-        note={phaseLabels[a.phase]}
-        data-testid="island-live"
-      >
-        {/* Always present (— when nothing decodes): the card keeps its height when decoding starts or stops. */}
-        <div className="flex min-h-8 items-end justify-between gap-4">
-          <div
-            className="min-w-[7ch] text-[22px] font-semibold leading-none tabular-nums text-foreground"
-            data-testid="island-tps"
-          >
-            <LiveNumber value={a.decodeNow} />
-            <span className="text-xs font-normal text-muted-foreground">
-              tok/s
-            </span>
-          </div>
-          {spark.length > 0 && (
+      {show("live") && (
+        <StatusIslandCard
+          title={t("shell.island.live.title")}
+          note={phaseLabels[a.phase]}
+          data-testid="island-live"
+        >
+          {/* Always present (— when nothing decodes): the card keeps its height when decoding starts or stops. */}
+          <div className="flex min-h-8 items-end justify-between gap-4">
             <div
-              className="min-w-0 flex-1"
-              title={t("shell.island.live.sparkNote")}
+              className="min-w-[7ch] text-[22px] font-semibold leading-none tabular-nums text-foreground"
+              data-testid="island-tps"
             >
-              <LiveSparkline
-                points={spark}
-                windowMs={SPARK_WINDOW_MS}
-                width={160}
-                height={32}
-                tone="neutral"
-                area
-                label={t("shell.island.live.spark")}
-                className="block h-8 w-full"
-              />
+              <LiveNumber value={a.decodeNow} />
+              <span className="text-xs font-normal text-muted-foreground">
+                tok/s
+              </span>
             </div>
-          )}
-        </div>
-        <div className="mt-2.5 text-[13px] tabular-nums text-muted-foreground">
-          {t("shell.island.live.counts", {
-            active: a.counts.active,
-            queued: a.counts.queued,
-          })}
-        </div>
-        <Presence adaptive show={a.phase === "prefill"}>
-          <div className="mt-1.5" data-testid="island-prefill">
-            <PrefillBar row={a.prefilling ?? {}} height={6} caption />
-            <div className="mt-1 text-xs tabular-nums text-muted-foreground">
-              {a.progress != null
-                ? t("shell.island.live.prefill", { pct: number(a.progress, 0) })
-                : t("shell.island.live.prefillPlain")}
-            </div>
+            {spark.length > 0 && (
+              <div
+                className="min-w-0 flex-1"
+                title={t("shell.island.live.sparkNote")}
+              >
+                <LiveSparkline
+                  points={spark}
+                  windowMs={SPARK_WINDOW_MS}
+                  width={160}
+                  height={32}
+                  tone="neutral"
+                  area
+                  label={t("shell.island.live.spark")}
+                  className="block h-8 w-full"
+                />
+              </div>
+            )}
           </div>
-        </Presence>
-      </StatusIslandCard>
+          <div className="mt-2.5 text-[13px] tabular-nums text-muted-foreground">
+            {t("shell.island.live.counts", {
+              active: a.counts.active,
+              queued: a.counts.queued,
+            })}
+          </div>
+          <Presence adaptive show={a.phase === "prefill"}>
+            <div className="mt-1.5" data-testid="island-prefill">
+              <PrefillBar row={a.prefilling ?? {}} height={6} caption />
+              <div className="mt-1 text-xs tabular-nums text-muted-foreground">
+                {a.progress != null
+                  ? t("shell.island.live.prefill", {
+                      pct: number(a.progress, 0),
+                    })
+                  : t("shell.island.live.prefillPlain")}
+              </div>
+            </div>
+          </Presence>
+        </StatusIslandCard>
+      )}
 
-      {usage != null && finite(active) && finite(total) && (
+      {show("memory") && usage != null && finite(active) && finite(total) && (
         <StatusIslandCard
           title={t("shell.island.mem.title")}
           note={
@@ -282,14 +301,16 @@ export function StatusIslandContent({
         </StatusIslandCard>
       )}
 
-      <MachineCard host={host} now={now} />
-      {switcher}
-      <Nav
-        online
-        active={a.counts.active}
-        loaded={loaded.length}
-        onNavigate={onNavigate}
-      />
+      {show("machine") && <MachineCard host={host} now={now} />}
+      {show("switcher") && switcher}
+      {show("nav") && (
+        <Nav
+          online
+          active={a.counts.active}
+          loaded={loaded.length}
+          onNavigate={onNavigate}
+        />
+      )}
     </>
   );
 }

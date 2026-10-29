@@ -495,3 +495,69 @@ body {
     text-decoration-color: currentColor;
   }
 }
+
+/* Status island motion, Dynamic Island style (YunUI StatusIsland, data-yunui="status-island").
+   Opening grows the card out of the tapped capsule: it starts squeezed to about the capsule's size at the
+   capsule (YunUI sets transform-origin there) and springs to full size; the content fades up just after.
+   Switching capsules glides the card (left/width) and cross-fades its content. Closing is a quick shrink. */
+:root {
+  /* a critically damped spring with ~3 % overshoot, as a CSS linear() curve */
+  --island-spring: linear(
+    0,
+    0.0081,
+    0.0313 2.6%,
+    0.1234 5.4%,
+    0.4425 12.1%,
+    0.6413 16.5%,
+    0.7915 20.9%,
+    0.8993 25.3%,
+    0.9701 29.7%,
+    1.0106 34.3%,
+    1.0282 38.7%,
+    1.0316 43.1%,
+    1.0247 50.5%,
+    1.0047 63.8%,
+    0.9991 76.5%,
+    1
+  );
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-yunui="status-island"] {
+    transition:
+      left 460ms var(--island-spring),
+      width 460ms var(--island-spring);
+  }
+  [data-yunui="status-island"] > div {
+    transition:
+      opacity 180ms var(--ease-standard),
+      scale 480ms var(--island-spring),
+      translate 480ms var(--island-spring),
+      border-radius 480ms var(--island-spring);
+  }
+  [data-yunui="status-island"][data-state="closed"] > div {
+    scale: 0.42 0.14;
+    translate: 0 6px;
+    opacity: 0;
+    border-radius: 999px;
+    transition:
+      opacity 140ms var(--ease-in),
+      scale 150ms var(--ease-in),
+      translate 150ms var(--ease-in),
+      border-radius 150ms var(--ease-in);
+  }
+  [data-yunui="status-island"][data-state="open"] .island-swap {
+    animation: island-content-in 220ms var(--ease-out) 40ms both;
+  }
+}
+@keyframes island-content-in {
+  from {
+    opacity: 0;
+    translate: 0 6px;
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+    filter: blur(0);
+  }
+}

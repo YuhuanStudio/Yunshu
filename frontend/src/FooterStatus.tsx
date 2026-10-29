@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Button, StatusIndicator } from "@yuhuanowo/yunui";
 import {
   StatusIsland,
@@ -121,35 +121,54 @@ export function FooterStatus({
           ? "away"
           : "neutral";
   const toggle = () => setOpen((v) => !v);
-  // Which capsule the card grew from; tapping another capsule moves the card to it.
+  // Which capsule the card grew from. Tapping another capsule while open glides the card to it (no
+  // close and reopen): the island's outside-press close is skipped for a press that lands on a capsule,
+  // and a resize event makes the island re-measure against its new anchor.
   const [openKey, setOpenKey] = useState<string | null>(null);
+  const pressOnCapsule = useRef(false);
+  useEffect(() => {
+    const down = (e: PointerEvent) => {
+      pressOnCapsule.current = !!(e.target as Element | null)?.closest?.(
+        "[data-island-capsule]",
+      );
+    };
+    window.addEventListener("pointerdown", down, true);
+    return () => window.removeEventListener("pointerdown", down, true);
+  }, []);
+  const close = () => {
+    if (pressOnCapsule.current) return;
+    setOpen(false);
+  };
   const openFrom = (key: string, el: HTMLElement) => {
+    pressOnCapsule.current = false;
     anchorRef.current = el;
     if (open && openKey === key) return setOpen(false);
     setOpenKey(key);
-    if (open) {
-      // re-anchor: close, then grow from the new capsule on the next frame
-      setOpen(false);
-      requestAnimationFrame(() => setOpen(true));
-    } else setOpen(true);
+    if (open)
+      requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+    else setOpen(true);
   };
   const island = (
     <StatusIsland
       open={open}
-      onClose={() => setOpen(false)}
+      onClose={close}
       anchorRef={anchorRef}
       label={t("shell.footer.sheetTitle")}
     >
       <Suspense fallback={null}>
-        <StatusIslandContent
-          engine={engine}
-          connection={connection}
-          ledger={online ? ledger : null}
-          host={host}
-          dot={dot}
-          now={Date.now()}
-          onNavigate={() => setOpen(false)}
-        />
+        {/* keyed by capsule: switching capsules cross-fades the content (styles.css, island-swap) */}
+        <div key={openKey ?? ""} className="island-swap flex flex-col gap-2">
+          <StatusIslandContent
+            engine={engine}
+            connection={connection}
+            ledger={online ? ledger : null}
+            host={host}
+            dot={dot}
+            now={Date.now()}
+            focus={wide ? openKey : null}
+            onNavigate={() => setOpen(false)}
+          />
+        </div>
       </Suspense>
     </StatusIsland>
   );
@@ -172,10 +191,13 @@ export function FooterStatus({
                     <PillText pill={p} />
                     <button
                       type="button"
+                      data-island-capsule=""
                       aria-haspopup="dialog"
                       aria-expanded={open && openKey === p.key}
                       aria-label={`${t("shell.island.trigger")}: ${p.label}`}
-                      data-testid={i === 0 ? "footer-trigger" : `footer-trigger-${p.key}`}
+                      data-testid={
+                        i === 0 ? "footer-trigger" : `footer-trigger-${p.key}`
+                      }
                       className="absolute inset-0 cursor-pointer rounded-full outline-none transition-colors duration-(--dur-fast) ease-(--ease-standard) hover:bg-foreground/[0.04] focus-visible:ring-2 focus-visible:ring-(--ring)"
                       onClick={(e) => openFrom(p.key, e.currentTarget)}
                     />
