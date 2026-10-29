@@ -19,6 +19,8 @@ export interface TocNode {
 }
 export interface DocsToc {
   tree: TocNode;
+  /** The fumadocs page tree of this locale, which the layout renders as the sidebar. */
+  pageTree: import("fumadocs-core/page-tree").Root;
   pages: Record<string, PageInfo>;
 }
 export interface SearchEntry {
