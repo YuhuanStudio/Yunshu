@@ -172,3 +172,17 @@ test("analyze separates a resized element from one that was only shoved", () => 
     "scroll is not movement",
   );
 });
+
+test("a shrink smaller than the shrink tolerance is noise and is never given back", () => {
+  const r = new WidthRatchet(1000, 0.5, 1.5);
+  r.observe(80, 0);
+  // 1 px narrower (a font loading, sub-pixel layout): the room stays, nothing is pending
+  assert.equal(r.observe(79, 10), 80);
+  assert.equal(r.dueIn(10), null);
+  assert.equal(r.settle(5000), 80);
+  // a digit narrower (7 px) is given back after the hold
+  r.observe(73, 6000);
+  assert.equal(r.settle(7100), 73);
+  // growing still follows the smallest real step
+  assert.equal(r.observe(73.6, 7200), 73.6);
+});

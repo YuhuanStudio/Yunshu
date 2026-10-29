@@ -3,9 +3,11 @@ import { fixed, number } from "./i18n/format.ts";
 import { useLocale } from "./i18n/index.ts";
 import { reducedMotion } from "./motion/ticker.ts";
 import { Readout } from "./motion/readout-core.ts";
+import { HugWidth } from "./HugWidth";
 
 /**
- * A live reading drawn with tabular digits, so its width does not move, at a pace a person can
+ * A live reading drawn with tabular digits, so its width does not move (and a new digit count moves it
+ * by one digit only: the number holds its own width, see HugWidth), at a pace a person can
  * read: a new sample is drawn at once if the last draw is at least ~240 ms old (about 4 Hz), else
  * the newest sample is drawn when that interval ends. It never counts through values the engine
  * did not report (no per-frame glide: a rate that ticks every frame is unreadable), and a sample
@@ -84,5 +86,9 @@ export function LiveNumber({
   }, [value, jumpKey, digits, locale]);
   useLayoutEffect(() => stop, []);
 
-  return <span ref={el} className={`tabular-nums ${className ?? ""}`} />;
+  return (
+    <HugWidth align="right" holdMs={8000}>
+      <span ref={el} className={`tabular-nums ${className ?? ""}`} />
+    </HugWidth>
+  );
 }

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Button, cn } from "@yuhuanowo/yunui";
+import { BrandMark } from "../BrandMark";
 import {
   ChatComposer,
   ChatMessage,
@@ -79,7 +80,7 @@ export function ChatSurface({
           </ChatMessageList>
         </div>
         <div
-          className="shrink-0 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 sm:px-6"
+          className="shrink-0 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom),var(--island-clear,0px))] pt-2 sm:px-6"
           data-chat-dock=""
         >
           <div className="mx-auto w-full max-w-[44rem]">{dock}</div>
@@ -112,11 +113,22 @@ export function CompactComposer({ className, ...props }: ChatComposerProps) {
 }
 
 /** A turn in the transcript: the user's message is a right-aligned bubble, the assistant's is plain text
- *  across the column. The avatar gutter is dropped on phones, where 38 px of the width is worth more as text. */
-export function ChatTurn({ className, ...props }: ChatMessageProps) {
+ *  across the column. Its actions show on hover or focus (always on touch). The avatar gutter is dropped on phones, where 38 px of the width is worth more as text. */
+export function ChatTurn({ className, actions, ...props }: ChatMessageProps) {
   return (
     <ChatMessage
+      actions={
+        actions ? (
+          <div
+            className="flex items-center gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+            data-chat-actions=""
+          >
+            {actions}
+          </div>
+        ) : undefined
+      }
       density="compact"
+      avatar={props.role === "assistant" ? <BrandMark size={20} /> : undefined}
       className={cn(
         "max-w-none max-sm:[&>div:first-child:not(:only-child)]:hidden max-sm:gap-0",
         props.role === "user" && "justify-end",

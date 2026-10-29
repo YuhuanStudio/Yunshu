@@ -34,7 +34,8 @@ import {
   TabsTrigger,
   Textarea,
 } from "@yuhuanowo/yunui";
-import { GenerationStats, useStreamReveal } from "@yuhuanowo/yunui/chat";
+import { useStreamReveal } from "@yuhuanowo/yunui/chat";
+import { MessageStats } from "./chat/MessageStats";
 import {
   ChatEmpty,
   ChatSurface,
@@ -154,14 +155,6 @@ const codeTabs: { value: CodeLanguage; label: string; language: string }[] = [
   { value: "javascript", label: "JavaScript", language: "javascript" },
 ];
 type Pair = readonly [Run | null, Run | null];
-const statLabels = () => ({
-  tokens: "tokens",
-  speed: "tok/s",
-  latency: "ms",
-  ttft: t("playground.stat.ttft"),
-  cached: t("playground.stat.cached"),
-  prompt: t("playground.stat.prompt"),
-});
 type ToolAction = {
   icon: ReactNode;
   label: string;
@@ -193,121 +186,35 @@ function specLabel(
   return `${mode}${perRound}${rate}`;
 }
 
-/** Per-reply engine stats; live while `now` ticks, final once `endAt` is set. */
-function ReplyStats({ run, now }: { run: Run; now: number }) {
+/** A reply's numbers for the header line beside the model name (live while `now` ticks, final once `endAt` is set). */
+function ReplyStats({
+  run,
+  now,
+  jumpKey,
+}: {
+  run: Run;
+  now: number;
+  jumpKey: string;
+}) {
   if (!run.timing) return null;
   const s = runStats(run.timing, now),
-    live = run.timing.endAt === undefined;
+    live = run.timing.endAt === undefined,
+    thinkMs =
+      run.timing.thinkStart != null && run.timing.thinkEnd != null
+        ? run.timing.thinkEnd - run.timing.thinkStart
+        : undefined;
   return (
-    <div
-      className="flex flex-wrap items-center gap-1.5 tabular-nums"
-      data-testid="reply-stats"
-    >
-      <GenerationStats
-        tokens={s.tokens}
-        tokensPerSecond={s.tokensPerSecond}
-        latencyMs={Math.round(s.latencyMs)}
-        ttftMs={s.ttftMs}
-        cachedTokens={s.cachedTokens}
-        promptTokens={s.promptTokens}
-        labels={statLabels()}
-      />
-      {live && s.ttftMs === undefined && (
-        <span className="text-xs text-muted-foreground">
-          {t("playground.stat.waitingFirst")}
-        </span>
-      )}
-      {run.timing.usage?.spec && (
-        <span className="text-xs text-muted-foreground">
-          {specLabel(run.timing.usage.spec, s.tokens)}
-        </span>
-      )}
-      {s.estimated && !live && (
-        <span className="text-xs text-muted-foreground">
-          {t("playground.stat.estimated")}
-        </span>
-      )}
-    </div>
-  );
-}
-
-/** The newest request's numbers as a small table, one column per reply (A and B when comparing). */
-function PanelMetrics({
-  runs,
-  now,
-}: {
-  runs: Array<{ label: string; run: Run }>;
-  now: number;
-}) {
-  const cols = runs.flatMap(({ label, run }) =>
-    run.timing ? [{ label, s: runStats(run.timing, now), run }] : [],
-  );
-  if (!cols.length)
-    return (
-      <p className="text-xs text-muted-foreground">
-        {t("playground.panel.metricsEmpty")}
-      </p>
-    );
-  const dash = "—";
-  const rows: Array<[string, (c: (typeof cols)[number]) => string]> = [
-    [
-      t("playground.stat.ttft"),
-      (c) => (c.s.ttftMs === undefined ? dash : `${number(c.s.ttftMs, 0)} ms`),
-    ],
-    [
-      "tok/s",
-      (c) =>
-        c.s.tokensPerSecond === undefined
-          ? dash
-          : number(c.s.tokensPerSecond, 1),
-    ],
-    [t("playground.panel.tokens"), (c) => number(c.s.tokens, 0)],
-    [
-      t("playground.stat.prompt"),
-      (c) =>
-        c.s.promptTokens === undefined ? dash : number(c.s.promptTokens, 0),
-    ],
-    [
-      t("playground.panel.cacheHit"),
-      (c) =>
-        c.s.cachedTokens === undefined
-          ? dash
-          : c.s.promptTokens
-            ? `${number(c.s.cachedTokens, 0)} (${number((c.s.cachedTokens / c.s.promptTokens) * 100, 0)}%)`
-            : number(c.s.cachedTokens, 0),
-    ],
-    [t("playground.panel.latency"), (c) => `${number(c.s.latencyMs, 0)} ms`],
-  ];
-  return (
-    <dl
-      className="grid gap-x-3 gap-y-1 text-xs tabular-nums"
-      style={{ gridTemplateColumns: `1fr repeat(${cols.length}, auto)` }}
-      data-testid="panel-metrics"
-    >
-      {cols.length > 1 && (
-        <div className="contents" aria-hidden="true">
-          <span />
-          {cols.map((c) => (
-            <span
-              key={c.label}
-              className="text-right font-medium text-muted-foreground"
-            >
-              {c.label}
-            </span>
-          ))}
-        </div>
-      )}
-      {rows.map(([name, value]) => (
-        <div key={name} className="contents">
-          <dt className="text-muted-foreground">{name}</dt>
-          {cols.map((c) => (
-            <dd key={c.label} className="text-right">
-              {value(c)}
-            </dd>
-          ))}
-        </div>
-      ))}
-    </dl>
+    <MessageStats
+      stats={s}
+      live={live}
+      thinkMs={thinkMs}
+      jumpKey={jumpKey}
+      extra={
+        run.timing.usage?.spec
+          ? specLabel(run.timing.usage.spec, s.tokens).replace(/^ · /, "")
+          : undefined
+      }
+    />
   );
 }
 
@@ -1179,16 +1086,6 @@ export function Playground({
       {body}
     </section>
   );
-  const latestRuns: Array<{ label: string; run: Run }> = compare
-    ? pair.flatMap((run, i) =>
-        run ? [{ label: i === 0 ? "A" : "B", run }] : [],
-      )
-    : (() => {
-        const last = [...messages]
-          .reverse()
-          .find((m) => m.role === "assistant");
-        return last ? [{ label: "", run: last }] : [];
-      })();
   const compareSampling = compare && (
     <div className="space-y-2 text-xs text-muted-foreground">
       {([0, 1] as const).map((i) => (
@@ -1375,10 +1272,6 @@ export function Playground({
       )}
     </>
   );
-  const metricsSection = section(
-    t("playground.panel.metrics"),
-    <PanelMetrics runs={latestRuns} now={now} />,
-  );
   const promptTurn = (m: Message) => (
     <ChatTurn role="user" key={m.id}>
       {m.image && (
@@ -1414,6 +1307,13 @@ export function Playground({
                   <span className="text-xs tabular-nums text-muted-foreground">
                     T={number(run?.temperature ?? columnTemp(i), 1)}
                   </span>
+                  {run && (
+                    <ReplyStats
+                      run={run}
+                      now={now}
+                      jumpKey={`compare-${i}-${run.timing?.start}`}
+                    />
+                  )}
                 </div>
                 {run ? (
                   <>
@@ -1422,7 +1322,6 @@ export function Playground({
                       streaming={loading && !run.timing?.endAt}
                       now={now}
                     />
-                    <ReplyStats run={run} now={now} />
                   </>
                 ) : (
                   <p className="text-xs text-muted-foreground">
@@ -1492,7 +1391,7 @@ export function Playground({
             key={m.id}
             role="assistant"
             name={modelLabel(m.model)}
-            footer={<ReplyStats run={m} now={now} />}
+            badges={<ReplyStats run={m} now={now} jumpKey={m.id} />}
             actions={
               m.content && !(loading && lastId === m.id) ? (
                 <>
@@ -1661,9 +1560,6 @@ export function Playground({
           data-testid="playground-panel"
         >
           <div className="min-h-0 flex-1 overflow-y-auto">{panelBody}</div>
-          <div className="shrink-0 border-t border-border">
-            {metricsSection}
-          </div>
         </aside>
       ) : (
         <Sheet
@@ -1674,7 +1570,6 @@ export function Playground({
         >
           <div className="-mx-4 -my-2">
             {panelBody}
-            {metricsSection}
           </div>
         </Sheet>
       )}

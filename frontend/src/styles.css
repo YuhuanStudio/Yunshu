@@ -262,19 +262,6 @@ body {
   overscroll-behavior-y: contain;
 }
 
-/* Live data: the newest sparkline segment fades in (motion tokens; opacity only). */
-@keyframes live-point-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-.live-point-in {
-  animation: live-point-in var(--dur-base) var(--ease-out) both;
-}
-
 /* Presence: elements that come and go in the live feed fade in with the soft entrance (a few px,
    a little blur) and fade out on opacity alone, ~30% faster. Under reduced motion --enter-offset and
    --enter-blur are zero (tokens.css), so the same classes keep only a short opacity change. */
@@ -298,6 +285,9 @@ body {
   animation: live-presence-out var(--live-ms, var(--dur-fast)) var(--ease-in)
     both;
   pointer-events: none;
+}
+.live-presence[data-still] {
+  animation: none;
 }
 .live-appear {
   animation: live-presence-in var(--dur-base) var(--ease-out) both;
@@ -372,18 +362,10 @@ body {
   animation: fresh-row-in var(--dur-base) var(--ease-out) backwards;
 }
 
-/* HugWidth: a live reading's box eases to its new width (a step: a new digit count or a new phase word);
-   the text is clipped by the box while it grows. Off under reduced motion. */
+/* HugWidth: a live reading's box is as wide as its content held for a few seconds (HugWidth.tsx). Its width
+   is never animated; the text is clipped by the box, never drawn outside it. */
 [data-hug] {
   overflow-x: clip;
-}
-[data-hug][data-ready] {
-  transition: width var(--dur-base) var(--ease-out);
-}
-@media (prefers-reduced-motion: reduce) {
-  [data-hug][data-ready] {
-    transition: none;
-  }
 }
 
 /*
@@ -410,6 +392,10 @@ body {
     select
   ) {
     cursor: pointer;
+  }
+  /* A combobox you type into (the command palette's search field) is a text field: the I-beam. */
+  :where(input[role="combobox"], textarea[role="combobox"]) {
+    cursor: text;
   }
   :where(
     button:disabled,
@@ -507,5 +493,71 @@ body {
   }
   summary:hover {
     text-decoration-color: currentColor;
+  }
+}
+
+/* Status island motion, Dynamic Island style (YunUI StatusIsland, data-yunui="status-island").
+   Opening grows the card out of the tapped capsule: it starts squeezed to about the capsule's size at the
+   capsule (YunUI sets transform-origin there) and springs to full size; the content fades up just after.
+   Switching capsules glides the card (left/width) and cross-fades its content. Closing is a quick shrink. */
+:root {
+  /* a critically damped spring with ~3 % overshoot, as a CSS linear() curve */
+  --island-spring: linear(
+    0,
+    0.0081,
+    0.0313 2.6%,
+    0.1234 5.4%,
+    0.4425 12.1%,
+    0.6413 16.5%,
+    0.7915 20.9%,
+    0.8993 25.3%,
+    0.9701 29.7%,
+    1.0106 34.3%,
+    1.0282 38.7%,
+    1.0316 43.1%,
+    1.0247 50.5%,
+    1.0047 63.8%,
+    0.9991 76.5%,
+    1
+  );
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-yunui="status-island"] {
+    transition:
+      left 460ms var(--island-spring),
+      width 460ms var(--island-spring);
+  }
+  [data-yunui="status-island"] > div {
+    transition:
+      opacity 180ms var(--ease-standard),
+      scale 480ms var(--island-spring),
+      translate 480ms var(--island-spring),
+      border-radius 480ms var(--island-spring);
+  }
+  [data-yunui="status-island"][data-state="closed"] > div {
+    scale: 0.42 0.14;
+    translate: 0 6px;
+    opacity: 0;
+    border-radius: 999px;
+    transition:
+      opacity 140ms var(--ease-in),
+      scale 150ms var(--ease-in),
+      translate 150ms var(--ease-in),
+      border-radius 150ms var(--ease-in);
+  }
+  [data-yunui="status-island"][data-state="open"] .island-swap {
+    animation: island-content-in 220ms var(--ease-out) 40ms both;
+  }
+}
+@keyframes island-content-in {
+  from {
+    opacity: 0;
+    translate: 0 6px;
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+    filter: blur(0);
   }
 }

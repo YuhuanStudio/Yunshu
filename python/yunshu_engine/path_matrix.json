@@ -2735,18 +2735,22 @@
       "id": "penalties-tree-verify",
       "a": "logits processors (penalties, logit_bias, min_tokens, suppress)",
       "b": "tree verify (DFlash fast tree, MTP tree)",
-      "kind": "fundamental",
+      "kind": "unimplemented",
       "ev": [
         [
           "python/yunshu_engine/constrained_spec.py",
           "class ProcessorWindow"
         ],
         [
+          "python/yunshu_engine/constrained_spec.py",
+          "def tree_penalty"
+        ],
+        [
           "python/yunshu_engine/mtp_lane.py",
           "_request_needs_chain"
         ]
       ],
-      "why": "Tree verify kernels are batch-invariant (the argmax equals serial decode) but not serial-arithmetic: non-winning logits can differ in low bits. A penalty moves the winner, so a near tie could flip against serial decode. A request with processors is therefore verified by the chain under exact_verify; the tree paths stay for unprocessed greedy requests."
+      "why": "The DFlash fast tree applies a frequency / presence penalty per window row (keyed_sampling.tree_target_rows, the serial window_row arithmetic) when it is the request's only processor, so sampled requests with the model card's presence penalty keep the tree. logit_bias, the windowed repetition penalty, min_tokens / suppress masks, any guide or logprobs with a processor, and the MTP tree still verify on the chain under exact_verify."
     }
   ],
   "duplicates": [

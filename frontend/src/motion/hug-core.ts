@@ -20,10 +20,13 @@ export class WidthRatchet {
   private shrunkAt = -Infinity;
   readonly holdMs: number;
   readonly tol: number;
-  constructor(holdMs = 6000, tol = 0.5) {
+  /** Room smaller than this is not given back: sub-pixel and font-load noise, not a digit. */
+  readonly shrinkTol: number;
+  constructor(holdMs = 6000, tol = 0.5, shrinkTol = tol) {
     this.holdMs = holdMs;
     this.hold = holdMs;
     this.tol = tol;
+    this.shrinkTol = shrinkTol;
   }
 
   get width(): number | null {
@@ -43,7 +46,7 @@ export class WidthRatchet {
       this.below = false;
       return natural;
     }
-    if (natural >= this.current - this.tol) {
+    if (natural >= this.current - this.shrinkTol) {
       this.below = false;
       return this.current;
     }

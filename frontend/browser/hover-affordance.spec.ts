@@ -712,10 +712,8 @@ async function installHelpers(page: Page) {
               ...r.querySelectorAll("*"),
             ])
           : [...document.querySelectorAll("*")];
-        // The status band is one interactive thing: the overlay button's parent holds the pills.
-        const band = document.querySelector(
-          "[data-testid=footer-trigger]",
-        )?.parentElement;
+        // The status islands: each capsule's own overlay button is the interactive thing; the pills under them are not.
+        const band = document.querySelector("[data-testid=status-band]");
         const inFooter = (el: Element) => !!band?.contains(el);
         const inter: Item[] = [];
         const dis: Item[] = [];
@@ -766,7 +764,7 @@ async function installHelpers(page: Page) {
           return false;
         };
         for (const el of interactiveRoots) {
-          if (inFooter(el) && !el.matches("[data-testid=footer-trigger]"))
+          if (inFooter(el) && !el.matches("[data-testid^=footer-trigger]"))
             continue;
           const how = el.matches(INTERACTIVE_SEL)
             ? "native/role"
@@ -1145,7 +1143,10 @@ async function auditPage(
           it.label,
           `${d.changed.find((c) => c.startsWith("self."))}; transition-duration 0s`,
         );
-      if (!d.changed.length && !d.selected)
+      // A borderless field that sits inside a surface of its own (the palette's search line) has nothing
+      // to light up: the I-beam is its affordance.
+      const bare = textField && /bg-transparent/.test(it.label);
+      if (!d.changed.length && !d.selected && !bare)
         add(
           "interactive-no-hover-change",
           it.label,
@@ -1267,6 +1268,15 @@ test("hover and focus affordance: interactive things respond, static things do n
       name: "overview+language",
       route: "overview",
       open: (p) => p.getByRole("button", { name: /^語言/ }).click(),
+    },
+    {
+      name: "overview+palette",
+      route: "overview",
+      root: "[role=dialog]",
+      open: async (p) => {
+        await p.getByRole("button", { name: /^搜尋/ }).first().click();
+        await p.getByRole("dialog").first().waitFor({ timeout: 10_000 });
+      },
     },
     {
       name: "overview+island",

@@ -140,7 +140,7 @@ export function Waterfall({
   );
   const end = Math.max(0, ...latency.spans.map((s) => s.end));
   return (
-    <div className="space-y-2" data-testid="request-waterfall">
+    <div className="space-y-2 tabular-nums" data-testid="request-waterfall">
       <p className="text-xs text-muted-foreground">
         {t("requests.waterfall.title")}
       </p>

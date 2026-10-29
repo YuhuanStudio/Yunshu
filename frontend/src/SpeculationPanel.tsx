@@ -41,10 +41,14 @@ export function SpeculationPanel({
     <ChartCard
       data-testid="speculation-panel"
       title={t("requests.spec.title")}
-      description={t("requests.spec.desc", {
-        n: number(s.total, 0),
-        engaged: number(s.engaged, 0),
-      })}
+      description={
+        <span className="tabular-nums">
+          {t("requests.spec.desc", {
+            n: number(s.total, 0),
+            engaged: number(s.engaged, 0),
+          })}
+        </span>
+      }
     >
       {s.modes.length === 0 ? (
         <p className="text-sm text-muted-foreground">

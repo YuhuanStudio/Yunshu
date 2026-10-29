@@ -100,6 +100,7 @@ def compute_lattice_gpu(
     *,
     keyed=None,
     committed=0,
+    penalty=None,
 ) -> GpuLattice:
     """``compute_lattice`` without the host round trip (nothing is evaluated)."""
     inputs = mx.array(
@@ -145,11 +146,12 @@ def compute_lattice_gpu(
         t0=t0,
         keyed=keyed,
         committed=committed,
+        penalty=penalty,
     )
 
 
 def lattice_from_hidden(
-    drafter, dh, anchor, *, prof=False, t0=0.0, keyed=None, committed=0
+    drafter, dh, anchor, *, prof=False, t0=0.0, keyed=None, committed=0, penalty=None
 ) -> GpuLattice:
     """The lattice from the proposal rows' hidden states ``dh`` [1, D, H]; ``anchor`` is the
     round's bonus token as a [1] array (it may still be on the GPU)."""
@@ -173,20 +175,37 @@ def lattice_from_hidden(
         unary = mx.take_along_axis(logits, part, axis=-1).astype(mx.float32)
     else:
         logits = drafter._logits(dh)
+        coupled = None
         if keyed is not None:
             from .constrained_spec import normalize_rows
-            from .keyed_sampling import coupled_scores
+            from .keyed_sampling import coupled_candidates, coupled_scores
 
             # Perturb the complete vocabulary before selecting candidates. A token
             # omitted by a greedy shortlist can be the keyed winner.
             positions = mx.arange(int(dh.shape[1])) + committed
-            logits = (TAU * coupled_scores(normalize_rows(logits), keyed, positions))[
-                None
-            ]
-        if prof:
-            t0 = tv._tick("drafter_head_ms", logits, t0)
-        cands = top_k_ids(logits[0], sel.top_k)
-        unary = mx.take_along_axis(logits[0], cands, axis=-1).astype(mx.float32)
+            counts = None if penalty is None else penalty._cnt
+            if counts is not None and int(counts.shape[0]) == int(logits.shape[-1]):
+                # the target's penalty over the committed tokens and the bonus; the
+                # drafted path is unknown to a parallel drafter (proposal quality only)
+                counts = counts.at[anchor.astype(mx.int32)].add(1.0)
+                logits = penalty._apply(counts, logits)
+            norm = normalize_rows(logits)
+            coupled = coupled_candidates(norm, keyed, positions)
+            if coupled is None:
+                logits = (TAU * coupled_scores(norm, keyed, positions))[None]
+        if coupled is not None:
+            cand_ids, scores = coupled
+            scores = TAU * scores
+            if prof:
+                t0 = tv._tick("drafter_head_ms", scores, t0)
+            part = top_k_ids(scores, sel.top_k)
+            cands = mx.take_along_axis(cand_ids, part, axis=-1)
+            unary = mx.take_along_axis(scores, part, axis=-1).astype(mx.float32)
+        else:
+            if prof:
+                t0 = tv._tick("drafter_head_ms", logits, t0)
+            cands = top_k_ids(logits[0], sel.top_k)
+            unary = mx.take_along_axis(logits[0], cands, axis=-1).astype(mx.float32)
     if prof:
         t0 = tv._tick("drafter_topk_ms", cands, t0)
     hproj = sel.hidden_projection(dh)[0].astype(mx.float32)
