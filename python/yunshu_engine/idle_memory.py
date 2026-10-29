@@ -225,9 +225,14 @@ def _trim() -> None:
         before[1],
         after[1],
     )
-    from . import ane_ffn_runtime
+    from . import ane_ffn_runtime, prompt_end_replay
 
     ane_ffn_runtime.release_idle()
+    # exact-repeat blocks (up to 768 MiB) are worth keeping only while a client is active
+    held = prompt_end_replay.resident_bytes()
+    prompt_end_replay.clear()
+    if held:
+        logger.info("idle memory: released %d bytes of prompt-end replay blocks", held)
 
 
 def _trim_host_allocator() -> int:
