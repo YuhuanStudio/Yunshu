@@ -52,8 +52,8 @@ test("the asset set is declared and every file resolves", async ({
     ),
   }));
   expect(head.icons.map((i) => i[0])).toEqual([
-    "/console/favicon.svg",
     "/console/favicon.ico",
+    "/console/web-app-manifest-192x192.png",
   ]);
   expect(head.touch).toBe("/console/apple-touch-icon.png");
   expect(head.manifest).toBe("/console/manifest.json");
@@ -72,7 +72,7 @@ test("the asset set is declared and every file resolves", async ({
     expect((await request.get(icon.src)).status(), icon.src).toBe(200);
 });
 
-test("the tab icon is the tile, and the theme switch moves the browser theme-color", async ({
+test("the tab icon is the YuhuanStudio icon, and the theme switch moves the browser theme-color", async ({
   page,
 }) => {
   await open(page);
@@ -85,11 +85,11 @@ test("the tab icon is the tile, and the theme switch moves the browser theme-col
   expect(await color()).toEqual(["#f7f7f8", "#f7f7f8"]);
   await page.getByRole("button", { name: /深色|dark/i }).click();
   await expect.poll(color).toEqual(["#0b0b0d", "#0b0b0d"]);
-  // the icon a browser tab shows: render the svg at 16 px next to the ico's smallest entry
+  // the icon a browser tab shows: render the png at 16 px next to the ico's smallest entry
   if (SHOTS) {
     await page.setContent(
       `<body style="margin:0;padding:12px;display:flex;gap:10px;align-items:center;background:#e4e4e7;font:12px system-ui">
-        <span style="display:inline-flex;align-items:center;gap:8px;background:#fff;border-radius:8px 8px 0 0;padding:8px 12px;width:210px"><img src="/console/favicon.svg" width=16 height=16>預填 46% · 雲樞</span>
+        <span style="display:inline-flex;align-items:center;gap:8px;background:#fff;border-radius:8px 8px 0 0;padding:8px 12px;width:210px"><img src="/console/yuhuanstudio-logo.png" width=16 height=16>預填 46% · 雲樞</span>
         <span style="display:inline-flex;align-items:center;gap:8px;background:#27272a;color:#fafafa;border-radius:8px 8px 0 0;padding:8px 12px;width:210px"><img src="/console/favicon.ico" width=16 height=16>運作中 · 雲樞</span></body>`,
     );
     await page.waitForTimeout(200);
@@ -107,7 +107,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(link).toHaveAttribute("href", "#/overview");
     await expect(link.locator("img")).toHaveAttribute(
       "src",
-      "/console/favicon.svg",
+      "/console/yuhuanstudio-logo.png",
     );
     await expect(link).toContainText("Yunshu");
     const m = await page.evaluate(() => {
@@ -220,13 +220,13 @@ test("the same tile marks the docs title, the Ask AI dialog and the assistant's 
   );
   await page.goto("/console/#/docs");
   const docs = page.getByTestId("docs");
-  const title = docs.locator('img[src="/console/favicon.svg"]:visible').first();
+  const title = docs.locator('img[src="/console/yuhuanstudio-logo.png"]:visible').first();
   await expect(title).toBeVisible();
   await shot(page, "docs-nav", { x: 256, y: 0, width: 1184, height: 200 });
   await docs.getByRole("button", { name: /AI 問答/ }).click();
   const dialog = page.getByTestId("docs-ask");
   await expect(
-    dialog.locator('img[src="/console/favicon.svg"]').first(),
+    dialog.locator('img[src="/console/yuhuanstudio-logo.png"]').first(),
   ).toBeVisible();
   const field = dialog.locator("textarea");
   await field.fill("How do I enable APC?");
@@ -234,7 +234,7 @@ test("the same tile marks the docs title, the Ask AI dialog and the assistant's 
   await expect(dialog.getByTestId("docs-ask-answer")).toContainText("APC");
   // title + empty state were replaced by the turn: the avatar is the tile too
   await expect(
-    dialog.locator('img[src="/console/favicon.svg"]').first(),
+    dialog.locator('img[src="/console/yuhuanstudio-logo.png"]').first(),
   ).toBeVisible();
   expect(
     await dialog.locator("svg.lucide-bot, svg.lucide-sparkles").count(),
@@ -259,7 +259,7 @@ test("the Playground's assistant avatar is the tile", async ({ page }) => {
   await expect(
     page
       .getByTestId("playground")
-      .locator('[data-yunui="chat-message"] img[src="/console/favicon.svg"]')
+      .locator('[data-yunui="chat-message"] img[src="/console/yuhuanstudio-logo.png"]')
       .first(),
   ).toBeVisible();
   await shot(page, "chat-avatar-light");

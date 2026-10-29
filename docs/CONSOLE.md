@@ -169,14 +169,14 @@ cursor and focus on every interactive element and asserts that static things sho
 
 ## Brand
 
-One mark, one asset set. The mark is the sidebar's pivot with two cloud arcs; `frontend/scripts/brand-icons.mjs`
-draws it as a near-black tile with a light mark (readable on light and dark) and writes `public/favicon.svg`,
-`favicon.ico` (16, 32, 48), `apple-touch-icon.png` (180), maskable `web-app-manifest-192x192.png` and `-512x512.png`
-(the mark stays inside the 80 % safe zone) and `manifest.json` (`node scripts/brand-icons.mjs --check` fails on drift).
+One icon everywhere: the shared YuhuanStudio icon set, byte-identical to Yunxin, YunUI's site and YunNEWS
+(`favicon.ico`, `apple-touch-icon.png`, maskable `web-app-manifest-192x192.png` and `-512x512.png`,
+`yuhuanstudio-logo.png`). The images are copied from those projects, not drawn; `frontend/scripts/brand-icons.mjs`
+writes `manifest.json` and pins their hashes (`node scripts/brand-icons.mjs --check` fails on drift).
 `index.html` declares them and the light and dark `theme-color`, which follows the console's theme switch.
-The sidebar is YunUI's own `Sidebar` with `appName="Yunshu"` and `logoSrc` (the same block Yunxin uses: tile and
-name are one link home, 36 px tile, 18 px semibold name, a hover wash, a collapse button after a hairline, the
-whole rail leaves when collapsed). The tile also marks the docs title, the Ask AI dialog and the assistant's
+The sidebar is YunUI's own `Sidebar` with `appName="Yunshu"` and `logoSrc` (the same block Yunxin uses: icon and
+name are one link home, 36 px icon, 18 px semibold name, a hover wash, a collapse button after a hairline, the
+whole rail leaves when collapsed). The icon also marks the docs title, the Ask AI dialog and the assistant's
 avatar in chat (`src/BrandMark.tsx`). `browser/brand.spec.ts` measures the block and the served files.
 
 ## Pages

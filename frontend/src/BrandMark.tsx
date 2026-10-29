@@ -1,5 +1,5 @@
-/** The Yunshu tile (public/favicon.svg, drawn from the same source as the favicon and the touch icons). */
-export const BRAND_MARK_SRC = `${import.meta.env.BASE_URL}favicon.svg`;
+/** The YuhuanStudio icon (public/yuhuanstudio-logo.png, the shared studio icon set; scripts/brand-icons.mjs). */
+export const BRAND_MARK_SRC = `${import.meta.env.BASE_URL}yuhuanstudio-logo.png`;
 
 /** The mark as an image: sidebar, docs title, Ask AI and the assistant's avatar all show this one tile. */
 export function BrandMark({

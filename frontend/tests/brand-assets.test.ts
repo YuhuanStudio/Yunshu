@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { iconSvg, MANIFEST } from "../scripts/brand-icons.mjs";
+import { createHash } from "node:crypto";
+import { MANIFEST, SHARED } from "../scripts/brand-icons.mjs";
 
 const root = new URL("..", import.meta.url).pathname;
 const html = readFileSync(`${root}index.html`, "utf8");
@@ -34,10 +35,11 @@ test("the manifest in public/ is the generated one and points at real files", ()
   for (const icon of onDisk.icons) assert.ok(inPublic(icon.src), icon.src);
 });
 
-test("the generated tile keeps the mark inside the maskable safe zone", () => {
-  // a maskable icon keeps its mark inside the central 80 % circle: the mark's diameter is 56 % of the box
-  const svg = iconSvg({ size: 512, radius: 0, fill: 0.56 });
-  const scale = Number(svg.match(/scale\(([\d.]+)\)/)![1]);
-  assert.ok(scale * 17 <= 512 * 0.8, "mark diameter within the safe zone");
-  assert.ok(/<rect width="512" height="512" rx="0"/.test(svg), "full bleed");
+test("every brand image is the shared YuhuanStudio icon (same bytes as Yunxin / YunUI)", () => {
+  for (const [name, sha] of Object.entries(SHARED))
+    assert.equal(
+      createHash("sha1").update(readFileSync(`${root}public/${name}`)).digest("hex"),
+      sha,
+      name,
+    );
 });
