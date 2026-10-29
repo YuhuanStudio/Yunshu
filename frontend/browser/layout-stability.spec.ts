@@ -88,10 +88,10 @@ async function install(page: Page) {
 
 const ZONES: Record<string, string> = {
   "top bar": "header",
-  // Engine and memory always lead the band at a fixed width. 現在 (decode, prefill,
-  // idle) changes width with the phase and the pills after it (GPU, 請求, 交換)
-  // appear only when they have something to say, so they sit behind the stable pair.
-  "status pills": "ul[aria-label='引擎狀態'] > li:nth-child(-n+2)",
+  // The engine pill leads the band and does not change with polled digits. The pills after it hug
+  // their text (HugWidth) and step in width when a digit count changes: live-stability.spec.ts holds
+  // those (no dead room, no flip-flop, nothing before the phase pill wanders).
+  "status pills": "ul[aria-label='引擎狀態'] > li:nth-child(1)",
   sidebar: "[aria-label='控制台導覽']",
   "stat tiles":
     "[data-testid='overview-stats'], [data-testid='request-stats'], [data-testid='resource-readouts'], [data-testid='health-checks'], [data-testid='models']",
@@ -105,6 +105,9 @@ function snapshot(page: Page, selector: string) {
       for (const el of [root, ...root.querySelectorAll("*")]) {
         // Chart and bar content is data: it may move. Its frame may not.
         if (el.closest("svg")) continue;
+        // A hugging box (HugWidth) is sized by its content (data) and steps only at a new digit count or
+        // word; live-stability.spec.ts holds its steps.
+        if (el.closest("[data-hug]")) continue;
         // A rolling number is data too: its digit columns come and go with the value (its width
         // glides); the slot around it is what stays put.
         if (el.closest("[data-yunui=motion-number]")) continue;
@@ -159,7 +162,29 @@ for (const route of ["overview", "requests", "models", "diagnostics"]) {
       await page.waitForTimeout(150);
       for (const [name, selector] of Object.entries(ZONES))
         frames[name].push(await snapshot(page, selector));
-      if (process.env.LS_DEBUG) console.log(route, k, JSON.stringify(await page.evaluate(() => [...document.querySelectorAll("*")].filter((e) => e.scrollHeight > e.clientHeight + 2 && /(auto|scroll)/.test(getComputedStyle(e).overflowY)).map((e) => [e.tagName, String(e.className).slice(0, 30), e.clientWidth, e.offsetWidth, e.scrollHeight, e.clientHeight]))));
+      if (process.env.LS_DEBUG)
+        console.log(
+          route,
+          k,
+          JSON.stringify(
+            await page.evaluate(() =>
+              [...document.querySelectorAll("*")]
+                .filter(
+                  (e) =>
+                    e.scrollHeight > e.clientHeight + 2 &&
+                    /(auto|scroll)/.test(getComputedStyle(e).overflowY),
+                )
+                .map((e) => [
+                  e.tagName,
+                  String(e.className).slice(0, 30),
+                  e.clientWidth,
+                  e.offsetWidth,
+                  e.scrollHeight,
+                  e.clientHeight,
+                ]),
+            ),
+          ),
+        );
       (readings.pills ??= []).push(
         (await page.getByLabel("引擎狀態").innerText()).replace(/\s+/g, " "),
       );
@@ -168,7 +193,18 @@ for (const route of ["overview", "requests", "models", "diagnostics"]) {
     expect(new Set(readings.pills).size).toBeGreaterThan(3);
     for (const [name, list] of Object.entries(frames)) {
       expect(list[0].length, `${name} has boxes`).toBeGreaterThan(0);
-      if (process.env.LS_DEBUG) console.log(route, name, list.map((f) => f.length).join(","), JSON.stringify(list[0].filter((b) => /text-left|progress/.test(b[0]))), JSON.stringify(list.at(-1)!.filter((b) => /text-left|progress/.test(b[0]))));
+      if (process.env.LS_DEBUG)
+        console.log(
+          route,
+          name,
+          list.map((f) => f.length).join(","),
+          JSON.stringify(
+            list[0].filter((b) => /text-left|progress/.test(b[0])),
+          ),
+          JSON.stringify(
+            list.at(-1)!.filter((b) => /text-left|progress/.test(b[0])),
+          ),
+        );
       for (const f of list.slice(1)) {
         const names = (frame: typeof f) =>
           frame.map((box) => `${box[0]} ${box[3]}x${box[4]}`);

@@ -102,11 +102,12 @@ async function install(
 async function ask(page: Page, logprobs: boolean) {
   await page.goto("/console/#/playground", { waitUntil: "domcontentloaded" });
   if (logprobs) {
-    await page.getByRole("button", { name: "生成參數" }).click();
+    const open = page.getByRole("button", { name: "生成參數", exact: true });
+    if (await open.isVisible()) await open.click();
     await page.getByRole("switch", { name: "Token 信心（logprobs）" }).click();
-    await page.keyboard.press("Escape");
+    if (await open.isVisible()) await page.keyboard.press("Escape");
   }
-  await page.locator("textarea").first().fill("hi");
+  await page.getByPlaceholder("輸入測試提示詞…").fill("hi");
   await page.keyboard.press("Enter");
 }
 

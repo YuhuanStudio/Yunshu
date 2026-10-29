@@ -153,6 +153,16 @@ output {
   ):focus-visible {
   outline: 2px solid var(--text-primary);
   outline-offset: 2px;
+  /* One ring per control: YunUI controls also draw a Tailwind box-shadow ring on focus; this outline replaces it. */
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-ring-offset-shadow: 0 0 #0000;
+}
+/* A chart you can focus to read it by keyboard: YunUI sets the outline inline, so the ring needs !important. */
+[data-yunui="column-chart"]:focus-visible,
+[data-yunui="sparkline-tip"]:focus-visible,
+[data-testid="metric-plot"]:focus-visible {
+  outline: 2px solid var(--text-primary) !important;
+  outline-offset: 2px;
 }
 
 /* Tray (segmented) control: a recessed track with a raised selected segment, legible in both themes. */
@@ -224,6 +234,12 @@ h1[tabindex="-1"]:focus-visible {
 .yunui-stat-value {
   font-size: 1.375rem;
   line-height: 28px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Ages, counts and rates in a stat sub-line keep equal digit widths. */
+.yunui-stat-sub {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Stat sub-lines wrap instead of ending in an ellipsis: the copy is short enough, and a clipped number is worse than a second line. */
@@ -354,4 +370,142 @@ body {
 }
 .fresh-row {
   animation: fresh-row-in var(--dur-base) var(--ease-out) backwards;
+}
+
+/* HugWidth: a live reading's box eases to its new width (a step: a new digit count or a new phase word);
+   the text is clipped by the box while it grows. Off under reduced motion. */
+[data-hug] {
+  overflow-x: clip;
+}
+[data-hug][data-ready] {
+  transition: width var(--dur-base) var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-hug][data-ready] {
+    transition: none;
+  }
+}
+
+/*
+ * Hover, cursor and focus: one language for every control (RULES.md "Controls", "Motion and stability").
+ * Interactive things show the hand, step once on hover (0.12 s, ease-out) and carry the focus ring above.
+ * Static things (cards, stat tiles, table rows, status text) show nothing. Hover is gated on
+ * `(hover: hover)` so a touch screen never gets a stuck hover; press feedback is not gated.
+ */
+
+/* Tailwind's preflight leaves buttons on the arrow: every clickable control gets the hand, a disabled
+   one the barred cursor. Base layer, so a utility such as `cursor-default` can still win. */
+@layer base {
+  :where(
+    button,
+    [role="button"],
+    [role="tab"],
+    [role="switch"],
+    [role="checkbox"],
+    [role="radio"],
+    [role="combobox"],
+    [role="menuitem"],
+    [role="option"],
+    summary,
+    select
+  ) {
+    cursor: pointer;
+  }
+  :where(
+    button:disabled,
+    select:disabled,
+    [aria-disabled="true"],
+    [data-disabled]
+  ) {
+    cursor: not-allowed;
+  }
+  /* A hover is eased (hover 0.12 s) even where a control forgot its own transition; a utility or a YunUI
+     class still overrides this. */
+  :where(
+    button,
+    a[href],
+    summary,
+    [role="button"],
+    [role="tab"],
+    [role="menuitem"]
+  ) {
+    transition-property:
+      color, background-color, border-color, text-decoration-color, box-shadow,
+      opacity;
+    transition-duration: var(--dur-fast);
+    transition-timing-function: var(--ease-standard);
+  }
+}
+
+@media (hover: hover) {
+  @layer components {
+    /* YunUI lights every `.card` on hover as if it were clickable (`.card:hover` border step). A card is a
+     panel; only `.card-interactive` (a clickable card) answers the pointer. YunUI should scope
+     `.card:hover` to `.card-interactive`; until then the panel keeps its resting border and shadow. */
+    .card:not(.card-interactive):hover {
+      border-color: var(--border-hairline);
+      box-shadow: var(--shadow-xs);
+    }
+  }
+
+  /* YunUI's table row highlights on hover. No row in the console is clickable (actions are the buttons
+     inside it), so a highlighted row would promise a click that does nothing. */
+  tr:not([data-state="selected"]):hover {
+    background-color: transparent;
+  }
+
+  /* Fields: the border steps up one notch (the outline button's hover border). A focused or invalid
+     field keeps its own border. */
+  :where(
+      input:not(
+        [type="checkbox"],
+        [type="radio"],
+        [type="range"],
+        [type="file"]
+      ),
+      textarea,
+      select,
+      button[role="combobox"]
+    ):not(:disabled, :focus, :focus-visible, [aria-invalid="true"]):hover {
+    border-color: var(--border-strong);
+  }
+  button[role="combobox"] {
+    transition: border-color var(--dur-fast) var(--ease-standard);
+  }
+  /* Composite fields (number, password): the border is on the wrapper, the input sits inside. */
+  div[class~="border"]:has(> input:not(:disabled, [aria-invalid="true"])):not(
+      :focus-within
+    ):hover {
+    border-color: var(--border-strong);
+  }
+
+  /* Switches and boxes: a soft halo (their border and fill already carry the state). */
+  :where([role="switch"], [role="checkbox"], [role="radio"]):not(
+      :disabled,
+      :focus-visible
+    ):hover {
+    box-shadow: 0 0 0 3px
+      color-mix(in srgb, var(--text-primary) 10%, transparent);
+  }
+
+  /* Inline text links: darker and a heavier underline. */
+  a.underline {
+    transition:
+      color var(--dur-fast) var(--ease-standard),
+      text-decoration-thickness var(--dur-fast) var(--ease-standard);
+  }
+  a.underline:hover {
+    color: var(--text-primary);
+    text-decoration-thickness: 2px;
+  }
+
+  /* A disclosure label reads as a link on hover. */
+  summary {
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    text-underline-offset: 2px;
+  }
+  summary:hover {
+    text-decoration-color: currentColor;
+  }
 }

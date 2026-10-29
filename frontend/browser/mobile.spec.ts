@@ -232,7 +232,9 @@ for (const name of PAGES) {
   });
 }
 
-test("footer island opens on tap and is not a full-height sheet", async ({ page }) => {
+test("footer island opens on tap and is not a full-height sheet", async ({
+  page,
+}) => {
   await install(page);
   await page.goto("/console/#/overview");
   await page.getByTestId("footer-compact").click();
@@ -294,7 +296,7 @@ test("overview: stat cards are 2-up and short; the phase strip is not cut", asyn
   );
 });
 
-test("playground toolbar: model full width, dialect and mode on one row, actions in a menu", async ({
+test("playground toolbar: one row (model, mode, settings, more) with the new-test and code actions in the menu", async ({
   page,
 }) => {
   await install(page);
@@ -302,19 +304,26 @@ test("playground toolbar: model full width, dialect and mode on one row, actions
   const group = page.getByRole("group", { name: "測試模型" });
   await expect(group).toBeVisible();
   const model = await group.boundingBox();
-  const dialect = await page
-    .getByRole("group", { name: "API 格式" })
-    .boundingBox();
   const mode = await page
     .getByRole("tablist", { name: "測試模式" })
     .boundingBox();
-  expect(model!.width).toBeGreaterThan(300);
-  expect(dialect!.y).toBeGreaterThan(model!.y + model!.height - 2);
-  expect(Math.abs(dialect!.y - mode!.y)).toBeLessThan(12);
-  // No lone overflow dot: the two actions are plain labelled buttons on their own row.
-  await expect(page.getByRole("button", { name: "更多動作" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "檢視程式碼" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "新測試" })).toBeVisible();
+  const settings = await page
+    .getByRole("button", { name: "生成參數", exact: true })
+    .boundingBox();
+  const more = await page
+    .getByRole("button", { name: "更多操作" })
+    .boundingBox();
+  expect(model!.width).toBeGreaterThan(150);
+  for (const b of [mode, settings, more])
+    expect(
+      Math.abs(b!.y + b!.height / 2 - (model!.y + model!.height / 2)),
+    ).toBeLessThan(14);
+  expect(more!.x + more!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await page.getByRole("button", { name: "更多操作" }).click();
+  await expect(
+    page.getByRole("menuitem", { name: "檢視程式碼" }),
+  ).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "新測試" })).toBeVisible();
 });
 
 test("requests: the phone list fits the width with its actions reachable (no sideways scroll)", async ({

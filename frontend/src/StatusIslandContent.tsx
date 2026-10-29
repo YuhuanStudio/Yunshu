@@ -188,39 +188,36 @@ export function StatusIslandContent({
         note={phaseLabels[a.phase]}
         data-testid="island-live"
       >
-        {a.decodeNow != null && (
-          <div className="flex items-end justify-between gap-4">
-            <div
-              className="min-w-[7ch] text-[22px] font-semibold leading-none tabular-nums text-foreground"
-              data-testid="island-tps"
-            >
-              <LiveNumber value={a.decodeNow} glide />
-              <span className="text-xs font-normal text-muted-foreground">
-                tok/s
-              </span>
-            </div>
-            {spark.length > 0 && (
-              <div
-                className="min-w-0 flex-1"
-                title={t("shell.island.live.sparkNote")}
-              >
-                <LiveSparkline
-                  points={spark}
-                  windowMs={SPARK_WINDOW_MS}
-                  width={160}
-                  height={32}
-                  tone="neutral"
-                  area
-                  label={t("shell.island.live.spark")}
-                  className="block h-8 w-full"
-                />
-              </div>
-            )}
+        {/* Always present (— when nothing decodes): the card keeps its height when decoding starts or stops. */}
+        <div className="flex min-h-8 items-end justify-between gap-4">
+          <div
+            className="min-w-[7ch] text-[22px] font-semibold leading-none tabular-nums text-foreground"
+            data-testid="island-tps"
+          >
+            <LiveNumber value={a.decodeNow} />
+            <span className="text-xs font-normal text-muted-foreground">
+              tok/s
+            </span>
           </div>
-        )}
-        <div
-          className={`${a.decodeNow != null ? "mt-2.5 " : ""}text-[13px] tabular-nums text-muted-foreground`}
-        >
+          {spark.length > 0 && (
+            <div
+              className="min-w-0 flex-1"
+              title={t("shell.island.live.sparkNote")}
+            >
+              <LiveSparkline
+                points={spark}
+                windowMs={SPARK_WINDOW_MS}
+                width={160}
+                height={32}
+                tone="neutral"
+                area
+                label={t("shell.island.live.spark")}
+                className="block h-8 w-full"
+              />
+            </div>
+          )}
+        </div>
+        <div className="mt-2.5 text-[13px] tabular-nums text-muted-foreground">
           {t("shell.island.live.counts", {
             active: a.counts.active,
             queued: a.counts.queued,

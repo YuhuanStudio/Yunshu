@@ -20,6 +20,7 @@ import {
   type Totals,
 } from "./engineView";
 import { LiveNumber } from "./LiveNumber";
+import { HugWidth } from "./HugWidth";
 import { livePrefillTps } from "./series";
 import { t, tr, useLocale } from "./i18n/index.ts";
 import { clock, elapsed, fixed, number, Slot, useMinWidth } from "./ui";
@@ -181,11 +182,10 @@ export function SpeedPair({ status }: { status: EngineStatus }) {
         icon={icon}
         label={term}
         value={
-          <>
+          <HugWidth>
             <span className="tabular-nums">
               <LiveNumber
                 value={headline.value}
-                glide
                 format={(v) => fixed(v)}
                 jumpKey={headline.kind}
               />
@@ -193,7 +193,7 @@ export function SpeedPair({ status }: { status: EngineStatus }) {
             <span className="ml-1 text-xs font-normal text-muted-foreground">
               tok/s
             </span>
-          </>
+          </HugWidth>
         }
         subtext={
           <>

@@ -50,7 +50,14 @@ import { RealtimeHealth } from "./RealtimeHealth";
 import { SupportBundlePreview } from "./SupportBundlePreview";
 import { has, t, tr } from "./i18n/index.ts";
 import { list } from "./i18n/format.ts";
-import { SectionCard, clock, elapsed, number, type Engine } from "./ui";
+import {
+  SectionCard,
+  StatValue,
+  clock,
+  elapsed,
+  number,
+  type Engine,
+} from "./ui";
 const groups = {
   system: [
     { key: "system", path: "/debug/system" },
@@ -483,7 +490,12 @@ export function Diagnostics({
               compact
               icon={Cpu}
               label="CPU"
-              value={`${number(metric(at(system, "cpu", "percent")))}%`}
+              value={
+                <StatValue
+                  text={number(metric(at(system, "cpu", "percent")))}
+                  unit="%"
+                />
+              }
               subtext={t("diagnostics.stat.cpuCores", {
                 n: metric(at(system, "cpu", "logical_cores")) ?? 0,
               })}
@@ -494,7 +506,12 @@ export function Diagnostics({
               compact
               icon={Activity}
               label={t("diagnostics.stat.unifiedMemory")}
-              value={`${number(metric(at(system, "memory", "percent")))}%`}
+              value={
+                <StatValue
+                  text={number(metric(at(system, "memory", "percent")))}
+                  unit="%"
+                />
+              }
               subtext={t("diagnostics.stat.memoryUsed", {
                 value: number(gb(at(system, "memory", "used_bytes"))),
               })}
@@ -504,7 +521,14 @@ export function Diagnostics({
             compact
             icon={Database}
             label={t("diagnostics.stat.metalActive")}
-            value={`${number(status?.memory.active_gb ?? gb(at(system, "gpu", "active_bytes")))} GB`}
+            value={
+              <StatValue
+                text={number(
+                  status?.memory.active_gb ?? gb(at(system, "gpu", "active_bytes")),
+                )}
+                unit="GB"
+              />
+            }
             subtext={t("diagnostics.stat.metalPeak", {
               value: number(status?.memory.peak_gb),
             })}

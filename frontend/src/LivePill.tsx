@@ -1,6 +1,6 @@
 import { StatusIndicator } from "@yuhuanowo/yunui";
 import type { EngineStatus } from "./api";
-import { Slot } from "./ui";
+import { HugWidth } from "./HugWidth";
 import { livePill } from "./engineView";
 import type { EngineConnectionPhase } from "./useEngine";
 import type { OutageView } from "./outage-view";
@@ -28,16 +28,14 @@ export function LivePill({
       data-phase={pill.phase}
     >
       <StatusIndicator status={pill.tone} />
-      <Slot ch={6} className="leading-4 text-foreground">
-        {pill.phase}
-      </Slot>
-      {/* Sized by its text (tabular digits, so a changing number does not jitter); a reserved
-          30ch slot left most of the pill empty. */}
-      {pill.detail ? (
-        <span className="hidden whitespace-nowrap leading-4 tabular-nums xl:inline-block">
-          {pill.detail}
-        </span>
-      ) : null}
+      <HugWidth>
+        <span className="leading-4 text-foreground">{pill.phase}</span>
+        {pill.detail ? (
+          <span className="ml-2 hidden leading-4 tabular-nums xl:inline">
+            {pill.detail}
+          </span>
+        ) : null}
+      </HugWidth>
     </span>
   );
 }
