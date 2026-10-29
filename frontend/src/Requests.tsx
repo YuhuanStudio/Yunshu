@@ -888,7 +888,7 @@ export function Requests({
               >
                 <TooltipProvider delayDuration={200}>
                   <Table
-                    className="md:min-w-[640px]"
+                    className="table-fixed md:min-w-[640px]"
                     scrollLabel={t("requests.list.tableLabel")}
                   >
                     <Thead>
@@ -897,21 +897,21 @@ export function Requests({
                           k="time"
                           sort={sort}
                           setSort={setSort}
-                          className="w-20 min-w-20 whitespace-nowrap max-sm:hidden"
+                          className="w-20 whitespace-nowrap max-sm:hidden"
                         >
                           {t("requests.list.colTime")}
                         </SortTh>
                         <Th className="min-w-56">
                           {t("requests.list.colRequest")}
                         </Th>
-                        <Th className="hidden w-32 min-w-32 whitespace-nowrap xl:table-cell">
+                        <Th className="hidden w-32 whitespace-nowrap xl:table-cell">
                           {t("requests.list.colUsage")}
                         </Th>
                         <SortTh
                           k="ttft"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-[5.25rem] min-w-[5.25rem] whitespace-nowrap md:table-cell"
+                          className="hidden w-[5.25rem] whitespace-nowrap md:table-cell"
                         >
                           {t("requests.list.colTtft")}
                         </SortTh>
@@ -919,7 +919,7 @@ export function Requests({
                           k="total"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-24 min-w-24 whitespace-nowrap md:table-cell"
+                          className="hidden w-24 whitespace-nowrap md:table-cell"
                         >
                           {t("requests.list.colTotal")}
                         </SortTh>
@@ -927,14 +927,14 @@ export function Requests({
                           k="tps"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-16 min-w-16 whitespace-nowrap md:table-cell"
+                          className="hidden w-16 whitespace-nowrap md:table-cell"
                         >
                           tok/s
                         </SortTh>
-                        <Th className="hidden w-[5rem] min-w-[5rem] whitespace-nowrap min-[1800px]:table-cell">
+                        <Th className="hidden w-[5rem] whitespace-nowrap min-[1800px]:table-cell">
                           {t("requests.list.colSpec")}
                         </Th>
-                        <Th className="w-32 min-w-32">
+                        <Th className="w-32">
                           <span className="sr-only">
                             {t("requests.list.colActions")}
                           </span>
@@ -999,10 +999,11 @@ export function Requests({
                           >
                             {boundary && (
                               <Tr data-restart-boundary="">
-                                <Td
-                                  colSpan={8}
-                                  className="py-1 text-center text-xs text-muted-foreground"
-                                >
+                                {/* The same cells as a row, not one colSpan={8} cell: a fixed table makes
+                                    a column for every spanned slot, and with a breakpoint-hidden column
+                                    the extra one was a blank strip at the right of every row. */}
+                                <Td className="py-1 max-sm:hidden" />
+                                <Td className="whitespace-nowrap py-1 text-xs text-muted-foreground">
                                   {t(
                                     boundary.kind === "switched"
                                       ? "requests.list.switched"
@@ -1012,6 +1013,12 @@ export function Requests({
                                     { time: clock(boundary.at) },
                                   )}
                                 </Td>
+                                <Td className="hidden py-1 xl:table-cell" />
+                                <Td className="hidden py-1 md:table-cell" />
+                                <Td className="hidden py-1 md:table-cell" />
+                                <Td className="hidden py-1 md:table-cell" />
+                                <Td className="hidden py-1 min-[1800px]:table-cell" />
+                                <Td className="py-1" />
                               </Tr>
                             )}
                             <Tr
