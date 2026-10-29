@@ -1,5 +1,4 @@
 import {
-  MotionNumber,
   Alert,
   Button,
   Card,
@@ -9,6 +8,7 @@ import {
   Switch,
 } from "@yuhuanowo/yunui";
 import { Banner } from "@yuhuanowo/yunui/patterns";
+import { HugWidth } from "./HugWidth";
 import { Check, Copy, RefreshCw, type LucideIcon } from "lucide-react";
 import {
   Suspense,
@@ -577,21 +577,24 @@ export function StatValue({ text, unit }: { text: string; unit?: string }) {
   const m = unit ? null : /^(-?[\d.,]+)\s+(\S+)$/.exec(text);
   const value = m ? m[1] : text;
   const u = unit ?? m?.[2];
-  // Tabular digits, no reserved width: the unit sits right after the number (a reserved box left the
-  // unit floating far from short figures). The digits roll (MotionNumber); only the unit shifts by a digit.
-  const figure = (
-    <span className="tabular-nums">
-      <MotionNumber value={value} />
-    </span>
-  );
-  if (!u || value === "—") return figure;
-  if (u === "%") return <>{figure}%</>;
+  // Tabular digits, no reserved width: the unit sits right after the number. The number and its unit
+  // share one HugWidth box, so a changing digit count never opens a gap before the unit and a figure that
+  // flickers around a digit boundary does not resize. No rolling digits: a live figure that rolls on every
+  // sample reads as jumping (live numbers are paced readouts, see LiveNumber).
+  const figure = <span className="tabular-nums">{value}</span>;
+  if (!u || value === "—") return <HugWidth>{figure}</HugWidth>;
+  if (u === "%")
+    return (
+      <HugWidth>
+        {figure}%
+      </HugWidth>
+    );
   return (
-    <>
+    <HugWidth>
       {figure}
       <span className="ml-1 text-xs font-normal text-muted-foreground">
         {u}
       </span>
-    </>
+    </HugWidth>
   );
 }

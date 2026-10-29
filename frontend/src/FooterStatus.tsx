@@ -7,7 +7,7 @@ import {
 } from "@yuhuanowo/yunui/patterns";
 import { ChevronUp } from "lucide-react";
 import type { Connection } from "./api";
-import { Slot, useMinWidth, type Engine } from "./ui";
+import { useMinWidth, type Engine } from "./ui";
 import { footerPills, gpuBusyFraction, type FooterPill } from "./footer-status";
 import { t } from "./i18n/index.ts";
 import { useSignals } from "./signals";
@@ -21,7 +21,46 @@ const StatusIslandContent = lazy(() =>
   })),
 );
 import { LiveNumber } from "./LiveNumber";
+import { HugWidth } from "./HugWidth";
 import { useHostTelemetry } from "./host-hook";
+
+const TONE_COLOR: Record<FooterPill["tone"], string> = {
+  neutral: "var(--text-primary)",
+  success: "var(--success)",
+  warning: "var(--warning)",
+  danger: "var(--error)",
+};
+
+/**
+ * A pill's whole text (label and value) in ONE HugWidth, so the pill hugs it and keeps its width
+ * through a flickering digit count or a value that comes and goes; a separate value box would add
+ * and drop its own gap. The value is drawn like YunUI's own StatusPill value (mono, medium,
+ * tabular) because the pill's value slot cannot share a box with its label (YunUI change
+ * proposed: a `hug` prop on StatusPill).
+ */
+function PillText({ pill: p }: { pill: FooterPill }) {
+  const value = p.tween ? (
+    <>
+      <LiveNumber value={p.tween.value} digits={p.tween.digits} />
+      {p.tween.suffix}
+    </>
+  ) : (
+    p.value
+  );
+  return (
+    <HugWidth>
+      {p.label}
+      {value != null && value !== "" ? (
+        <span
+          className="ml-1.5 font-mono font-medium tabular-nums"
+          style={{ color: TONE_COLOR[p.tone] }}
+        >
+          {value}
+        </span>
+      ) : null}
+    </HugWidth>
+  );
+}
 
 /**
  * The status band: engine, what it does now, the machine. Current state only.
@@ -110,24 +149,7 @@ export function FooterStatus({
               {pills.map((p) => (
                 <StatusPill
                   key={p.key}
-                  label={
-                    p.key === "now" ? <Slot ch={7}>{p.label}</Slot> : p.label
-                  }
-                  value={
-                    p.tween ? (
-                      <>
-                        <LiveNumber
-                          value={p.tween.value}
-                          digits={p.tween.digits}
-                          glide
-                        />
-                        {p.tween.suffix}
-                      </>
-                    ) : (
-                      p.value
-                    )
-                  }
-                  valueMinCh={p.minCh}
+                  label={<PillText pill={p} />}
                   tone={p.tone}
                   dot={p.dot}
                   help={p.help}

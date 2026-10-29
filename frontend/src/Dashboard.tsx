@@ -1,6 +1,7 @@
 import { prefixHit, prefixHitWindow } from "./request-kpi";
 import { gbTotalText } from "./byte-format";
 import { LiveNumber } from "./LiveNumber";
+import { HugWidth } from "./HugWidth";
 import { SkeletonSwap } from "./motion/SkeletonSwap.tsx";
 import { rangeSeconds, sinceStartId, useRangeHistory } from "./useRangeHistory";
 import { MetricChartGroup } from "@yuhuanowo/yunui";
@@ -238,7 +239,6 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
             <Slot ch={12} align="right" className="text-foreground">
               <LiveNumber
                 value={row.tokens_per_second ?? null}
-                glide
                 format={(v) => fixed(v)}
                 jumpKey={row.request_id + phase}
               />
@@ -699,8 +699,11 @@ export function Dashboard({
                 icon={HardDrive}
                 label={t("overview.stats.metal")}
                 value={
-                  <span title={t("overview.tip.metal")}>
-                    <span className="tabular-nums">
+                  <HugWidth>
+                    <span
+                      className="tabular-nums"
+                      title={t("overview.tip.metal")}
+                    >
                       <LiveNumber
                         value={memory?.active_gb ?? null}
                         digits={1}
@@ -709,7 +712,7 @@ export function Dashboard({
                     <span className="ml-1 text-xs font-normal text-muted-foreground">
                       GB
                     </span>
-                  </span>
+                  </HugWidth>
                 }
                 subtext={t("overview.stats.metalSub", {
                   total: number(memory?.total_gb),

@@ -194,7 +194,7 @@ export function StatusIslandContent({
               className="min-w-[7ch] text-[22px] font-semibold leading-none tabular-nums text-foreground"
               data-testid="island-tps"
             >
-              <LiveNumber value={a.decodeNow} glide />
+              <LiveNumber value={a.decodeNow} />
               <span className="text-xs font-normal text-muted-foreground">
                 tok/s
               </span>
