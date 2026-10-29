@@ -24,7 +24,9 @@ async function openPlayground(page: Page, plan = {}) {
   await installEngine(page, planned);
   await page.goto("/console/#/playground");
   await page.getByTestId("playground").waitFor();
-  return page.getByTestId("playground").locator("textarea");
+  return page
+    .getByTestId("playground")
+    .locator('[data-yunui="chat-composer"] textarea');
 }
 async function ask(page: Page, input: ReturnType<Page["locator"]>, q: string) {
   await input.fill(q);
@@ -67,21 +69,35 @@ test.describe("phone", () => {
         "\n\n" + "x".repeat(400) + "\n\n```sh\n" + "y".repeat(300) + "\n```",
     });
     await page.waitForTimeout(500);
-    const list = await box(page, '[data-scroll-container="true"]');
-    // before: the title block, model, API format, mode and five wrapped buttons took 35 % of the phone.
-    expect(list.height).toBeGreaterThan(PHONE.height * 0.5);
     const toolbar = await box(page, '[data-testid="playground-toolbar"]');
     expect(toolbar.height).toBeLessThan(110);
     await ask(page, input, "Hello");
     await stop(page).waitFor({ state: "detached" });
+    const list = await box(page, '[data-scroll-container="true"]');
+    // before: the title block, model, API format, mode and five wrapped buttons took 35 % of the phone.
+    expect(list.height).toBeGreaterThan(PHONE.height * 0.5);
     await noOverflow(page);
-    const composer = await box(page, "textarea");
+    const composer = await box(page, '[data-yunui="chat-composer"] textarea');
     expect(composer.y + composer.height).toBeLessThanOrEqual(PHONE.height);
     expect(
       await page.evaluate(
         () => document.documentElement.scrollHeight - innerHeight,
       ),
     ).toBe(0);
+  });
+
+  test("playground: the settings panel is a drawer on a phone", async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== "webkit");
+    await openPlayground(page);
+    await expect(page.getByTestId("playground-panel")).toHaveCount(0);
+    await page.getByRole("button", { name: "生成參數", exact: true }).click();
+    const sheet = page.getByRole("dialog", { name: "生成參數" });
+    await expect(sheet.locator("#system")).toBeVisible();
+    await expect(sheet.getByText("最近一次請求")).toBeVisible();
+    await noOverflow(page);
   });
 
   test("ask AI: full-width composer and no horizontal overflow", async ({
@@ -106,7 +122,7 @@ test.describe("phone", () => {
     await ask(page, field, "How do I enable APC?");
     await expect(dialog.getByTestId("docs-ask-answer")).toContainText("APC");
     await noOverflow(page);
-    expect(d.height).toBeGreaterThan(PHONE.height * 0.9);
+    expect(d.y + d.height).toBeLessThanOrEqual(PHONE.height);
   });
 });
 
@@ -119,14 +135,13 @@ test.describe("desktop", () => {
   }) => {
     test.skip(browserName !== "chromium");
     const input = await openPlayground(page, { words: 200, every: 6 });
-    const before = await box(page, "textarea");
     await ask(page, input, "Explain the KV cache");
     await page.getByText("word20").first().waitFor();
-    const mid = await box(page, "textarea");
+    const mid = await box(page, '[data-yunui="chat-composer"] textarea');
     await stop(page).waitFor({ state: "detached" });
-    const after = await box(page, "textarea");
-    expect(Math.abs(mid.y - before.y)).toBeLessThan(2);
-    expect(Math.abs(after.y - before.y)).toBeLessThan(2);
+    const after = await box(page, '[data-yunui="chat-composer"] textarea');
+    expect(Math.abs(after.y - mid.y)).toBeLessThan(2);
+    expect(after.y + after.height).toBeGreaterThan(DESKTOP.height * 0.8);
     const bubble = await box(
       page,
       '[data-yunui="chat-message"][data-role="user"] > div',
@@ -217,5 +232,59 @@ test.describe("desktop", () => {
     await field.press("Enter");
     await expect(dialog.getByTestId("docs-ask-answer")).toContainText("APC");
     await expect(field).toHaveValue("");
+  });
+  test("playground: a one-line composer, a readable column, and a settings panel that owns the freed space", async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== "chromium");
+    const input = await openPlayground(page);
+    const panel = page.getByTestId("playground-panel");
+    await expect(panel).toBeVisible();
+    // The panel carries what used to hide behind composer icons: model, system prompt, sampling, tools, metrics.
+    await expect(panel.getByRole("group", { name: "測試模型" })).toBeVisible();
+    await expect(panel.locator("#system")).toBeVisible();
+    await expect(
+      panel.getByRole("slider", { name: "Temperature" }),
+    ).toBeVisible();
+    await expect(panel.getByRole("button", { name: "工具測試" })).toBeVisible();
+    await expect(panel.getByText("最近一次請求")).toBeVisible();
+    const p = (await panel.boundingBox())!;
+    expect(p.width).toBeGreaterThanOrEqual(300);
+    expect(p.width).toBeLessThanOrEqual(340);
+    expect(p.x + p.width).toBeLessThanOrEqual(DESKTOP.width);
+    // before: a ~140 px composer box under a screen-wide empty message area.
+    const composer = await box(page, '[data-yunui="chat-composer"]');
+    expect(composer.height).toBeLessThan(64);
+    await ask(page, input, "Explain the KV cache");
+    await stop(page).waitFor({ state: "detached" });
+    const column = await box(page, "[data-chat-column]");
+    expect(column.width).toBeLessThanOrEqual(720);
+    // the request numbers land in the panel once a reply is done
+    await expect(page.getByTestId("panel-metrics")).toContainText("tok/s");
+    await noOverflow(page);
+  });
+
+  test("ask AI: a compact dialog with a one-line composer", async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== "chromium");
+    await installEngine(page);
+    await installAsk(page);
+    await page.goto("/console/#/docs");
+    await page
+      .getByTestId("docs")
+      .getByRole("button", { name: /AI 問答/ })
+      .click();
+    const dialog = page.getByTestId("docs-ask");
+    await expect(dialog).toBeVisible();
+    const d = (await dialog.boundingBox())!;
+    expect(d.width).toBeLessThanOrEqual(520);
+    expect(d.height).toBeLessThan(DESKTOP.height * 0.7);
+    const composer = (await dialog
+      .locator('[data-yunui="chat-composer"]')
+      .boundingBox())!;
+    expect(composer.height).toBeLessThan(64);
   });
 });

@@ -13,6 +13,10 @@ import {
   StatusIndicator,
   Button,
   Card,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   IconButton,
   Input,
   FileDropzone,
@@ -30,12 +34,13 @@ import {
   TabsTrigger,
   Textarea,
 } from "@yuhuanowo/yunui";
+import { GenerationStats, useStreamReveal } from "@yuhuanowo/yunui/chat";
 import {
-  ChatComposer,
-  GenerationStats,
-  useStreamReveal,
-} from "@yuhuanowo/yunui/chat";
-import { ChatEmpty, ChatSurface, ChatTurn } from "./chat/ChatSurface";
+  ChatEmpty,
+  ChatSurface,
+  ChatTurn,
+  CompactComposer,
+} from "./chat/ChatSurface";
 import {
   CapabilityIcon,
   getModelDeveloperId,
@@ -57,6 +62,7 @@ import {
   Wrench,
   Code2,
   Copy,
+  MoreHorizontal,
   RefreshCw,
 } from "lucide-react";
 import {
@@ -83,6 +89,7 @@ import {
   number,
   sizeGb,
   supportsChat,
+  useMinWidth,
   type Engine,
 } from "./ui";
 import { compareOutputs, runStats, type RunTiming } from "./playground-metrics";
@@ -155,6 +162,13 @@ const statLabels = () => ({
   cached: t("playground.stat.cached"),
   prompt: t("playground.stat.prompt"),
 });
+type ToolAction = {
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+};
 const seconds = (ms: number) => `${number(ms / 1000, 2)} s`;
 const signed = (v: number, digits: number) =>
   `${v > 0 ? "+" : v < 0 ? "−" : ""}${number(Math.abs(v), digits)}`;
@@ -214,6 +228,88 @@ function ReplyStats({ run, now }: { run: Run; now: number }) {
         </span>
       )}
     </div>
+  );
+}
+
+/** The newest request's numbers as a small table, one column per reply (A and B when comparing). */
+function PanelMetrics({
+  runs,
+  now,
+}: {
+  runs: Array<{ label: string; run: Run }>;
+  now: number;
+}) {
+  const cols = runs.flatMap(({ label, run }) =>
+    run.timing ? [{ label, s: runStats(run.timing, now), run }] : [],
+  );
+  if (!cols.length)
+    return (
+      <p className="text-xs text-muted-foreground">
+        {t("playground.panel.metricsEmpty")}
+      </p>
+    );
+  const dash = "—";
+  const rows: Array<[string, (c: (typeof cols)[number]) => string]> = [
+    [
+      t("playground.stat.ttft"),
+      (c) => (c.s.ttftMs === undefined ? dash : `${number(c.s.ttftMs, 0)} ms`),
+    ],
+    [
+      "tok/s",
+      (c) =>
+        c.s.tokensPerSecond === undefined
+          ? dash
+          : number(c.s.tokensPerSecond, 1),
+    ],
+    [t("playground.panel.tokens"), (c) => number(c.s.tokens, 0)],
+    [
+      t("playground.stat.prompt"),
+      (c) =>
+        c.s.promptTokens === undefined ? dash : number(c.s.promptTokens, 0),
+    ],
+    [
+      t("playground.panel.cacheHit"),
+      (c) =>
+        c.s.cachedTokens === undefined
+          ? dash
+          : c.s.promptTokens
+            ? `${number(c.s.cachedTokens, 0)} (${number((c.s.cachedTokens / c.s.promptTokens) * 100, 0)}%)`
+            : number(c.s.cachedTokens, 0),
+    ],
+    [t("playground.panel.latency"), (c) => `${number(c.s.latencyMs, 0)} ms`],
+  ];
+  return (
+    <table className="w-full text-xs tabular-nums" data-testid="panel-metrics">
+      {cols.length > 1 && (
+        <thead>
+          <tr>
+            <th />
+            {cols.map((c) => (
+              <th
+                key={c.label}
+                className="pb-1 text-right font-medium text-muted-foreground"
+              >
+                {c.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+      )}
+      <tbody>
+        {rows.map(([name, value]) => (
+          <tr key={name}>
+            <th className="py-0.5 pr-2 text-left font-normal text-muted-foreground">
+              {name}
+            </th>
+            {cols.map((c) => (
+              <td key={c.label} className="py-0.5 text-right">
+                {value(c)}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -339,6 +435,7 @@ export function Playground({
   initialModel: string;
 }) {
   useLocale();
+  const wide = useMinWidth(1280);
   const toolsEverOpened = useRef(false);
   const ocrEverOpened = useRef(false);
   const [model, setModel] = useState(initialModel),
@@ -792,14 +889,15 @@ export function Playground({
     value: string,
     onChange: (v: string) => void,
     label: string,
+    fill = false,
   ) => (
     <div
-      className={`max-sm:w-full ${loading ? "pointer-events-none opacity-60" : ""}`}
+      className={`${fill ? "w-full" : "max-sm:w-full"} ${loading ? "pointer-events-none opacity-60" : ""}`}
       role="group"
       aria-label={label}
     >
       <ModelSelect
-        className="w-60 max-sm:w-full [&_button]:h-8 [&_button]:text-xs"
+        className={`${fill ? "w-full" : "w-60 max-sm:w-full"} [&_button]:h-8 [&_button]:text-xs`}
         options={modelOptions}
         value={value}
         onChange={onChange}
@@ -958,19 +1056,15 @@ export function Playground({
       data-testid="playground-examples"
     />
   );
-  const tools: Array<{
-    icon: ReactNode;
-    label: string;
-    onClick: () => void;
-    disabled?: boolean;
-    title?: string;
-  }> = [
+  const tools: Array<ToolAction & { key: string }> = [
     {
+      key: "library",
       icon: <BookMarked size={15} />,
       label: t("playground.library.open"),
       onClick: () => setLibraryOpen(true),
     },
     {
+      key: "ocr",
       icon: <ScanText size={15} />,
       label: t("playground.ocr.open"),
       onClick: () => setOcrOpen(true),
@@ -978,70 +1072,314 @@ export function Playground({
       title: ocrModel ? undefined : t("playground.ocr.unavailable"),
     },
     {
+      key: "tools",
       icon: <Wrench size={15} />,
       label: t("playground.tools.open"),
       onClick: () => setToolsOpen(true),
     },
-    {
-      icon: <Code2 size={15} />,
-      label: t("playground.header.viewCode"),
-      onClick: () => setCodeOpen(true),
-    },
-    {
-      icon: <Plus size={15} />,
-      label: t("playground.header.newTest"),
-      onClick: newTest,
-      disabled: loading,
-    },
   ];
+  const viewCode: ToolAction = {
+    icon: <Code2 size={15} />,
+    label: t("playground.header.viewCode"),
+    onClick: () => setCodeOpen(true),
+  };
+  const newTestAction: ToolAction = {
+    icon: <Plus size={15} />,
+    label: t("playground.header.newTest"),
+    onClick: newTest,
+    disabled: loading,
+  };
+  const modeTray = (
+    <SegmentedTray
+      aria-label={t("playground.header.mode")}
+      value={mode}
+      onChange={(v) => !loading && setMode(v as Mode)}
+      options={[
+        { value: "chat", label: t("playground.header.modeChat") },
+        { value: "compare", label: t("playground.header.modeCompare") },
+      ]}
+    />
+  );
   const header = (
     <div
-      className="mt-3 flex flex-wrap items-center max-sm:mt-0 gap-x-2 gap-y-2 pb-2"
+      className="flex flex-wrap items-center gap-x-2 gap-y-2 pb-2 max-xl:px-3 sm:max-xl:px-6 xl:h-12 xl:flex-nowrap xl:px-6"
       data-testid="playground-toolbar"
     >
-      <div className="flex min-w-0 items-center gap-2 max-sm:order-1 max-sm:flex-1 max-sm:flex-col max-sm:items-stretch">
-        {modelSelect(model, setModel, t("playground.model.testModel"))}
-        {compare &&
-          modelSelect(modelB, setModelB, t("playground.model.compareModel"))}
-      </div>
-      <div className="flex items-center gap-2 max-sm:order-3 max-sm:w-full">
-        <div
-          role="group"
-          aria-label={t("playground.header.apiFormat")}
-          className="max-sm:min-w-0 max-sm:flex-1"
-        >
-          <CustomSelect
-            className="w-44 max-sm:w-full [&_button]:h-8 [&_button]:text-xs"
-            value={dialect}
-            disabled={loading}
-            onChange={(v) => setDialect(v as Dialect)}
-            options={dialectOptions}
-          />
+      {!wide && (
+        <div className="flex min-w-0 flex-1 items-center gap-2 max-sm:flex-col max-sm:items-stretch">
+          {modelSelect(model, setModel, t("playground.model.testModel"))}
+          {compare &&
+            modelSelect(modelB, setModelB, t("playground.model.compareModel"))}
         </div>
-        <SegmentedTray
-          aria-label={t("playground.header.mode")}
-          value={mode}
-          onChange={(v) => !loading && setMode(v as Mode)}
-          options={[
-            { value: "chat", label: t("playground.header.modeChat") },
-            { value: "compare", label: t("playground.header.modeCompare") },
-          ]}
-        />
-      </div>
-      <div className="ml-auto flex shrink-0 items-center gap-0.5 max-sm:order-2 max-sm:ml-0 max-sm:self-start">
-        {tools.map((tool) => (
-          <IconButton
-            key={tool.label}
-            icon={tool.icon}
-            label={tool.title ?? tool.label}
-            aria-label={tool.label}
-            title={tool.title}
-            disabled={tool.disabled}
-            onClick={tool.onClick}
-          />
-        ))}
+      )}
+      {modeTray}
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        {wide ? (
+          <>
+            <Button variant="ghost" size="sm" onClick={viewCode.onClick}>
+              {viewCode.icon}
+              {viewCode.label}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={newTestAction.disabled}
+              onClick={newTestAction.onClick}
+            >
+              {newTestAction.icon}
+              {newTestAction.label}
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={loading}
+              aria-label={t("playground.composer.params")}
+              onClick={(e) => {
+                e.currentTarget.focus();
+                setSettings(true);
+              }}
+            >
+              <SlidersHorizontal size={15} />
+              <span className="max-sm:sr-only">
+                {t("playground.panel.toggle")}
+              </span>
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label={t("playground.menu.more")}
+                >
+                  <MoreHorizontal size={16} />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {[newTestAction, viewCode, ...tools].map((a) => (
+                  <DropdownMenuItem
+                    key={a.label}
+                    disabled={a.disabled}
+                    onSelect={a.onClick}
+                  >
+                    {a.icon}
+                    {a.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
+        )}
       </div>
     </div>
+  );
+  const section = (title: string, body: ReactNode) => (
+    <section className="space-y-2.5 border-b border-border px-4 py-3.5 last:border-b-0">
+      <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
+      {body}
+    </section>
+  );
+  const latestRuns: Array<{ label: string; run: Run }> = compare
+    ? pair.flatMap((run, i) =>
+        run ? [{ label: i === 0 ? "A" : "B", run }] : [],
+      )
+    : (() => {
+        const last = [...messages]
+          .reverse()
+          .find((m) => m.role === "assistant");
+        return last ? [{ label: "", run: last }] : [];
+      })();
+  const compareSampling = compare && (
+    <div className="space-y-2 text-xs text-muted-foreground">
+      {([0, 1] as const).map((i) => (
+        <div key={i} className="flex items-center justify-between gap-2">
+          <span>
+            {t("playground.compare.sampling", { side: i === 0 ? "A" : "B" })}
+          </span>
+          <SegmentedTray
+            aria-label={t("playground.compare.samplingLabel", {
+              side: i === 0 ? "A" : "B",
+            })}
+            value={tempMode[i]}
+            onChange={(v) =>
+              !loading &&
+              setTempMode(i === 0 ? [v, tempMode[1]] : [tempMode[0], v])
+            }
+            options={[
+              {
+                value: "shared",
+                label: t("playground.compare.shared", {
+                  t: number(temperature, 1),
+                }),
+              },
+              { value: "greedy", label: t("playground.compare.greedy") },
+            ]}
+          />
+        </div>
+      ))}
+    </div>
+  );
+  const specNote = compare && (
+    <p
+      className="text-xs text-muted-foreground max-sm:sr-only"
+      data-testid="spec-note"
+    >
+      {t("playground.compare.specNote")}
+    </p>
+  );
+  const panelBody = (
+    <>
+      {section(
+        t("playground.panel.model"),
+        <div className="space-y-2">
+          {wide &&
+            modelSelect(model, setModel, t("playground.model.testModel"), true)}
+          {wide &&
+            compare &&
+            modelSelect(
+              modelB,
+              setModelB,
+              t("playground.model.compareModel"),
+              true,
+            )}
+          <div role="group" aria-label={t("playground.header.apiFormat")}>
+            <CustomSelect
+              className="w-full [&_button]:h-8 [&_button]:text-xs"
+              value={dialect}
+              disabled={loading}
+              onChange={(v) => setDialect(v as Dialect)}
+              options={dialectOptions}
+            />
+          </div>
+        </div>,
+      )}
+      {section(
+        t("playground.panel.tools"),
+        <div className="grid grid-cols-3 gap-1.5">
+          {tools.map((tool) => (
+            <Button
+              key={tool.key}
+              variant="secondary"
+              size="sm"
+              className="h-auto flex-col gap-1 px-1 py-2 text-xs"
+              disabled={tool.disabled}
+              title={tool.title}
+              onClick={tool.onClick}
+            >
+              {tool.icon}
+              <span className="max-w-full truncate">{tool.label}</span>
+            </Button>
+          ))}
+        </div>,
+      )}
+      {section(
+        t("playground.panel.prompt"),
+        <Textarea
+          id="system"
+          aria-label={t("playground.params.system")}
+          className="min-h-16 resize-y text-xs"
+          value={system}
+          onChange={(e) => setSystem(e.target.value)}
+        />,
+      )}
+      {section(
+        t("playground.panel.sampling"),
+        <div className="space-y-4">
+          <div>
+            <div className="mb-2 flex items-center justify-between text-xs">
+              <span>Temperature</span>
+              <span className="tabular-nums text-muted-foreground">
+                {fixed(temperature, 1)}
+              </span>
+            </div>
+            <Slider
+              label="Temperature"
+              value={[temperature]}
+              onValueChange={(v) => setTemperature(v[0])}
+              min={0}
+              max={2}
+              step={0.1}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <label htmlFor="max-tokens">
+              {t("playground.params.maxTokens")}
+            </label>
+            <Input
+              id="max-tokens"
+              type="number"
+              min={1}
+              max={32768}
+              className="h-8 w-24 text-right text-xs"
+              value={maxTokens}
+              onChange={(e) =>
+                setMaxTokens(
+                  Math.max(1, Math.min(32768, Number(e.target.value) || 1)),
+                )
+              }
+            />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-xs">{t("playground.params.thinking")}</p>
+            <SegmentedTray
+              aria-label={t("playground.params.thinking")}
+              value={thinking}
+              onChange={setThinking}
+              options={[
+                { value: "auto", label: t("playground.params.thinkAuto") },
+                { value: "on", label: t("playground.params.thinkOn") },
+                { value: "off", label: t("playground.params.thinkOff") },
+              ]}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-xs">{t("playground.params.format")}</p>
+            <SegmentedTray
+              aria-label={t("playground.params.format")}
+              value={jsonMode}
+              onChange={setJsonMode}
+              options={[
+                { value: "text", label: t("playground.params.formatText") },
+                { value: "json", label: "JSON" },
+              ]}
+            />
+            {(jsonMode === "json" || dialect === "messages") && (
+              <p className="text-xs text-muted-foreground">
+                {dialect === "messages"
+                  ? t("playground.params.noJson")
+                  : t("playground.params.jsonNote")}
+              </p>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <label className="flex items-center justify-between gap-3 text-xs">
+              {t("playground.params.logprobs")}
+              <Switch
+                label={t("playground.params.logprobs")}
+                checked={logprobs}
+                onCheckedChange={setLogprobs}
+                disabled={dialect !== "chat"}
+              />
+            </label>
+            {(logprobs || dialect !== "chat") && (
+              <p className="text-xs text-muted-foreground">
+                {dialect === "chat"
+                  ? t("playground.params.logprobsNote")
+                  : t("playground.params.logprobsOther")}
+              </p>
+            )}
+          </div>
+          {wide && compareSampling}
+          {wide && specNote}
+        </div>,
+      )}
+    </>
+  );
+  const metricsSection = section(
+    t("playground.panel.metrics"),
+    <PanelMetrics runs={latestRuns} now={now} />,
   );
   const promptTurn = (m: Message) => (
     <ChatTurn role="user" key={m.id}>
@@ -1206,45 +1544,9 @@ export function Playground({
           {t("playground.composer.needVision")}
         </p>
       )}
-      {compare && (
-        <p
-          className="mb-2 text-xs text-muted-foreground max-sm:sr-only"
-          data-testid="spec-note"
-        >
-          {t("playground.compare.specNote")}
-        </p>
-      )}
-      {compare && (
-        <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
-          {([0, 1] as const).map((i) => (
-            <div key={i} className="flex items-center gap-2">
-              <span>
-                {t("playground.compare.sampling", {
-                  side: i === 0 ? "A" : "B",
-                })}
-              </span>
-              <SegmentedTray
-                aria-label={t("playground.compare.samplingLabel", {
-                  side: i === 0 ? "A" : "B",
-                })}
-                value={tempMode[i]}
-                onChange={(v) =>
-                  !loading &&
-                  setTempMode(i === 0 ? [v, tempMode[1]] : [tempMode[0], v])
-                }
-                options={[
-                  {
-                    value: "shared",
-                    label: t("playground.compare.shared", {
-                      t: number(temperature, 1),
-                    }),
-                  },
-                  { value: "greedy", label: t("playground.compare.greedy") },
-                ]}
-              />
-            </div>
-          ))}
-        </div>
+      {!wide && specNote && <div className="mb-2">{specNote}</div>}
+      {!wide && compareSampling && (
+        <div className="mb-2">{compareSampling}</div>
       )}
       {!canSend && (
         <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted-foreground">
@@ -1282,13 +1584,12 @@ export function Playground({
               ))}
         </div>
       )}
-      <ChatComposer
+      <CompactComposer
         value={draft}
         onChange={setDraft}
         onSend={() => void send()}
         onStop={stopRun}
         loading={loading}
-        maxRows={6}
         sendDisabled={!canSend || readingImage || (hasImage && !supportsImage)}
         attachments={
           image ? (
@@ -1324,15 +1625,6 @@ export function Playground({
                 setAttachmentOpen(true);
               }}
             />
-            <IconButton
-              icon={<SlidersHorizontal size={15} />}
-              label={t("playground.composer.params")}
-              disabled={loading}
-              onClick={(e) => {
-                e.currentTarget.focus();
-                setSettings(true);
-              }}
-            />
           </div>
         }
       />
@@ -1343,119 +1635,51 @@ export function Playground({
   );
   return (
     <section
-      className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col px-3 pb-1 pt-3 sm:px-4 lg:px-6 lg:pt-6"
+      className="flex min-h-0 w-full flex-1 flex-col pt-2 xl:flex-row"
       data-testid="playground"
     >
-      <PageHeader
-        className="max-sm:sr-only"
-        title={t("shell.page.playground")}
-        description={t("playground.page.desc")}
-      />
-      <ChatSurface
-        header={header}
-        empty={empty}
-        wide={compare}
-        jumpToLatestLabel={t("playground.jumpLatest")}
-        dock={dock}
-      >
-        {transcript}
-      </ChatSurface>
-      <Sheet
-        open={settings}
-        onClose={() => setSettings(false)}
-        title={t("playground.composer.params")}
-        closeLabel={t("playground.params.close")}
-      >
-        <div className="space-y-6">
-          <div>
-            <p className="mb-3 text-sm">{t("playground.params.thinking")}</p>
-            <SegmentedTray
-              aria-label={t("playground.params.thinking")}
-              value={thinking}
-              onChange={setThinking}
-              options={[
-                { value: "auto", label: t("playground.params.thinkAuto") },
-                { value: "on", label: t("playground.params.thinkOn") },
-                { value: "off", label: t("playground.params.thinkOff") },
-              ]}
-            />
-          </div>
-          <div>
-            <p className="mb-3 text-sm">{t("playground.params.format")}</p>
-            <SegmentedTray
-              aria-label={t("playground.params.format")}
-              value={jsonMode}
-              onChange={setJsonMode}
-              options={[
-                { value: "text", label: t("playground.params.formatText") },
-                { value: "json", label: "JSON" },
-              ]}
-            />
-            <p className="mt-2 text-xs text-muted-foreground">
-              {dialect === "messages"
-                ? t("playground.params.noJson")
-                : t("playground.params.jsonNote")}
-            </p>
-          </div>
-          <div>
-            <label className="flex items-center justify-between gap-3 text-sm">
-              {t("playground.params.logprobs")}
-              <Switch
-                label={t("playground.params.logprobs")}
-                checked={logprobs}
-                onCheckedChange={setLogprobs}
-                disabled={dialect !== "chat"}
-              />
-            </label>
-            <p className="mt-2 text-xs text-muted-foreground">
-              {dialect === "chat"
-                ? t("playground.params.logprobsNote")
-                : t("playground.params.logprobsOther")}
-            </p>
-          </div>
-          <div>
-            <p className="mb-4 text-sm">
-              Temperature · {fixed(temperature, 1)}
-            </p>
-            <Slider
-              label="Temperature"
-              value={[temperature]}
-              onValueChange={(v) => setTemperature(v[0])}
-              min={0}
-              max={2}
-              step={0.1}
-            />
-          </div>
-          <div>
-            <label htmlFor="max-tokens" className="text-sm">
-              {t("playground.params.maxTokens")}
-            </label>
-            <Input
-              id="max-tokens"
-              type="number"
-              min={1}
-              max={32768}
-              value={maxTokens}
-              onChange={(e) =>
-                setMaxTokens(
-                  Math.max(1, Math.min(32768, Number(e.target.value) || 1)),
-                )
-              }
-            />
-          </div>
-          <div>
-            <label htmlFor="system" className="text-sm">
-              {t("playground.params.system")}
-            </label>
-            <Textarea
-              id="system"
-              className="mt-2 min-h-40"
-              value={system}
-              onChange={(e) => setSystem(e.target.value)}
-            />
-          </div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="max-w-7xl">
+          <PageHeader
+            className="sr-only"
+            title={t("shell.page.playground")}
+            description={t("playground.page.desc")}
+          />
         </div>
-      </Sheet>
+        <ChatSurface
+          header={header}
+          empty={empty}
+          wide={compare}
+          jumpToLatestLabel={t("playground.jumpLatest")}
+          dock={dock}
+        >
+          {transcript}
+        </ChatSurface>
+      </div>
+      {wide ? (
+        <aside
+          aria-label={t("playground.composer.params")}
+          className="flex min-h-0 w-80 shrink-0 flex-col border-l border-border"
+          data-testid="playground-panel"
+        >
+          <div className="min-h-0 flex-1 overflow-y-auto">{panelBody}</div>
+          <div className="shrink-0 border-t border-border">
+            {metricsSection}
+          </div>
+        </aside>
+      ) : (
+        <Sheet
+          open={settings}
+          onClose={() => setSettings(false)}
+          title={t("playground.composer.params")}
+          closeLabel={t("playground.params.close")}
+        >
+          <div className="-mx-4 -my-2">
+            {panelBody}
+            {metricsSection}
+          </div>
+        </Sheet>
+      )}
       <Dialog open={codeOpen} onOpenChange={setCodeOpen}>
         <DialogContent
           closeLabel={t("playground.code.close")}

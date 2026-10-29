@@ -1,5 +1,5 @@
 import { test, type Page } from "@playwright/test";
-import { mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { installAsk, installEngine } from "./support/chat-fixture";
 
 // Screenshot tour of the conversation surfaces for design review. Off unless CHAT_SHOTS=<dir>.
@@ -9,6 +9,7 @@ test.skip(!dir, "set CHAT_SHOTS=<dir> to take the tour");
 
 const sizes = {
   desktop: { width: 1440, height: 900 },
+  full: { width: 1920, height: 1080 },
   phone: { width: 402, height: 874 },
 } as const;
 
@@ -41,7 +42,9 @@ for (const [name, viewport] of Object.entries(sizes)) {
       await page.getByTestId("playground").waitFor();
       await page.waitForTimeout(600);
       await shot(page, "pg-empty");
-      const box = page.getByTestId("playground").locator("textarea");
+      const box = page
+        .getByTestId("playground")
+        .locator('[data-yunui="chat-composer"] textarea');
       for (let i = 0; i < 3; i++) {
         await box.fill(`Question number ${i} about the engine`);
         await box.press("Enter");
@@ -56,6 +59,34 @@ for (const [name, viewport] of Object.entries(sizes)) {
         .getByRole("button", { name: /停止|Stop/ })
         .waitFor({ state: "detached" });
       await shot(page, "pg-done");
+      const split = await page.evaluate(() => {
+        const r = (sel: string) =>
+          document.querySelector(sel)?.getBoundingClientRect();
+        const area = (b?: DOMRect) => (b ? b.width * b.height : 0);
+        const pg = r('[data-testid="playground"]');
+        const panel = r('[data-testid="playground-panel"]');
+        const column = r("[data-chat-column]");
+        const composer = r('[data-yunui="chat-composer"]');
+        const vp = innerWidth * innerHeight;
+        const chat = area(pg) - area(panel);
+        return {
+          viewport: `${innerWidth}x${innerHeight}`,
+          chatArea: Math.round(chat),
+          panelArea: Math.round(area(panel)),
+          chromeArea: Math.round(vp - area(pg)),
+          chatPct: Math.round((chat / vp) * 100),
+          panelPct: Math.round((area(panel) / vp) * 100),
+          chromePct: Math.round(((vp - area(pg)) / vp) * 100),
+          panelWidth: Math.round(panel?.width ?? 0),
+          chatWidth: Math.round((pg?.width ?? 0) - (panel?.width ?? 0)),
+          messageColumnWidth: Math.round(column?.width ?? 0),
+          composerHeight: Math.round(composer?.height ?? 0),
+        };
+      });
+      appendFileSync(
+        `${dir}/split.jsonl`,
+        JSON.stringify({ name, ...split }) + "\n",
+      );
       await page.getByRole("tab", { name: /比較|Compare/ }).click();
       await box.fill("Compare these");
       await box.press("Enter");

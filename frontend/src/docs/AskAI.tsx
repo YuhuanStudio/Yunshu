@@ -10,11 +10,15 @@ import {
   IconButton,
   Spinner,
 } from "@yuhuanowo/yunui";
-import { ChatComposer } from "@yuhuanowo/yunui/chat";
 import { Bot, Copy, Check, ThumbsUp, ThumbsDown } from "lucide-react";
 import type { Connection } from "../api";
 import { t, tr, useLocale } from "../i18n";
-import { ChatEmpty, ChatSurface, ChatTurn } from "../chat/ChatSurface";
+import {
+  ChatEmpty,
+  ChatSurface,
+  ChatTurn,
+  CompactComposer,
+} from "../chat/ChatSurface";
 import { docHref } from "./links";
 import {
   docsRequest,
@@ -210,7 +214,7 @@ export default function AskAI({
           {t("docs.ask.retry")}
         </Button>
       )}
-      <ChatComposer
+      <CompactComposer
         value={input}
         onChange={(value) => setInput(value.slice(0, limit))}
         onSend={() => void send()}
@@ -218,7 +222,6 @@ export default function AskAI({
         loading={running}
         disabled={!state?.ready}
         sendDisabled={!state?.ready || !input.trim()}
-        maxRows={5}
         placeholder={t("docs.ask.placeholder")}
         labels={{ send: t("docs.ask.send"), stop: t("docs.ask.stop") }}
       />
@@ -265,6 +268,7 @@ export default function AskAI({
         )}
       </div>
       <ChatSurface
+        liftEmpty={panel}
         jumpToLatestLabel={t("playground.jumpLatest")}
         empty={
           <ChatEmpty
@@ -383,10 +387,10 @@ export default function AskAI({
                         <Markdown content={turn.answer} streaming={last} />
                       </Suspense>
                       {last && !turn.answer && (
-                        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
                           <Spinner className="size-4" />
                           {t("docs.ask.waiting")}
-                        </p>
+                        </div>
                       )}
                     </div>
                   </ChatTurn>
@@ -419,7 +423,7 @@ export default function AskAI({
       }}
     >
       <DialogContent
-        className="flex h-[min(44rem,92dvh)] max-w-2xl flex-col gap-0 overflow-hidden p-0 max-sm:h-[calc(100dvh-1rem)] max-sm:w-[calc(100%-1rem)]"
+        className="flex max-h-[min(36rem,90dvh)] max-w-lg flex-col gap-0 overflow-hidden p-0 max-sm:max-h-[calc(100dvh-1rem)] max-sm:w-[calc(100%-1rem)]"
         data-testid="docs-ask"
       >
         {body}

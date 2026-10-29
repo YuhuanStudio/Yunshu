@@ -296,7 +296,7 @@ test("overview: stat cards are 2-up and short; the phase strip is not cut", asyn
   );
 });
 
-test("playground toolbar: model beside the action icons, dialect and mode on one row below", async ({
+test("playground toolbar: one row (model, mode, settings, more) with the new-test and code actions in the menu", async ({
   page,
 }) => {
   await install(page);
@@ -304,26 +304,26 @@ test("playground toolbar: model beside the action icons, dialect and mode on one
   const group = page.getByRole("group", { name: "測試模型" });
   await expect(group).toBeVisible();
   const model = await group.boundingBox();
-  const dialect = await page
-    .getByRole("group", { name: "API 格式" })
-    .boundingBox();
   const mode = await page
     .getByRole("tablist", { name: "測試模式" })
     .boundingBox();
-  expect(model!.width).toBeGreaterThan(170);
-  expect(dialect!.y).toBeGreaterThan(model!.y + model!.height - 2);
-  expect(Math.abs(dialect!.y - mode!.y)).toBeLessThan(12);
-  // The five actions are icon buttons on the model's row, so the whole toolbar is two rows.
-  const code = await page
-    .getByRole("button", { name: "檢視程式碼" })
+  const settings = await page
+    .getByRole("button", { name: "生成參數", exact: true })
     .boundingBox();
-  const fresh = await page
-    .getByRole("button", { name: "新測試" })
+  const more = await page
+    .getByRole("button", { name: "更多操作" })
     .boundingBox();
-  expect(Math.abs(code!.y - model!.y)).toBeLessThan(12);
-  expect(fresh!.x + fresh!.width).toBeLessThanOrEqual(
-    page.viewportSize()!.width,
-  );
+  expect(model!.width).toBeGreaterThan(150);
+  for (const b of [mode, settings, more])
+    expect(
+      Math.abs(b!.y + b!.height / 2 - (model!.y + model!.height / 2)),
+    ).toBeLessThan(14);
+  expect(more!.x + more!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await page.getByRole("button", { name: "更多操作" }).click();
+  await expect(
+    page.getByRole("menuitem", { name: "檢視程式碼" }),
+  ).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "新測試" })).toBeVisible();
 });
 
 test("requests: the phone list fits the width with its actions reachable (no sideways scroll)", async ({
