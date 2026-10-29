@@ -31,10 +31,10 @@ _NOT_TEXT = (
     "input_features",
     "image_grid_thw",
     "video_grid_thw",
-    "position_ids",
     "inputs_embeds",
-    "attention_mask",
 )
+# position_ids / attention_mask of a text prompt are functions of its token ids, which the replay key hashes
+# (with the media hash), so they do not keep a block from replaying.
 
 
 def stats() -> dict[str, int]:
@@ -108,8 +108,9 @@ def _plan(batch) -> tuple[Any, int, int] | None:
     if kind not in (None, "dflash"):
         return _skip("draft kind")
     kwargs = getattr(batch, "_prompt_kwargs", None) or {}
-    if any(kwargs.get(k) is not None for k in _NOT_TEXT):
-        return _skip("media kwargs")
+    media = [k for k in _NOT_TEXT if kwargs.get(k) is not None]
+    if media:
+        return _skip(f"media kwargs {media}")
     embeds = getattr(batch, "_inputs_embeds", None)
     ids = meta[0].get("full_input_ids")
     cache = getattr(batch, "prompt_cache", None) or []
