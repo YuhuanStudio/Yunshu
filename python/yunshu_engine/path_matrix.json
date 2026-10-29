@@ -2939,6 +2939,7 @@
     "python/yunshu_engine/dflash_conv.py": "orphan (see orphans)",
     "python/yunshu_engine/dflash_draft.py": "orphan (see orphans)",
     "python/yunshu_engine/dflash_apc_window.py": "DFlash drafter context window kept beside APC checkpoints (dflash path; apc_prefix_cache)",
+    "python/yunshu_engine/prompt_end_replay.py": "Exact-repeat zero-forward replay of the final prompt block beside APC checkpoints (dflash and no-spec single-row text paths; apc_prefix_cache)",
     "python/yunshu_engine/penalty_context.py": "Penalty context = full prompt on an APC hit (hit == miss; part of penalties_in_spec / apc)",
     "python/yunshu_engine/gpu_window.py": "debug GPU busy/idle window (Metal interposer), inert unless DYLD_INSERT_LIBRARIES loads it",
     "python/yunshu_engine/kernels/tf_flash_next/base.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",

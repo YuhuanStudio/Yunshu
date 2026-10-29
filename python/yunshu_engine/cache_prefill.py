@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import importlib
 
+from . import prompt_end_replay
 from .kernels import gdn_prefill
 
 TAIL_FAST_ROWS = 48  # tail rows on the lane projections (LaneLinear row pieces; attention stays BQ32)
@@ -66,10 +67,21 @@ def install():
                 if coordinator is not None and hasattr(coordinator, "release_request")
                 else []
             )
+            session = prompt_end_replay.open_session(self)
             try:
                 with self._tail_scope():
-                    return super().generate(*args, **kwargs)
+                    gen_batch = super().generate(*args, **kwargs)
+                if session is not None:
+                    session.end()
+                    try:
+                        session.store(gen_batch)
+                    except Exception as exc:  # the stored block is an optimisation only
+                        prompt_end_replay.skip_reason(f"store error: {exc!r}")
+                        prompt_end_replay.clear()
+                return gen_batch
             finally:
+                if session is not None:
+                    session.end()
                 # A decoding row no longer needs its prefill descriptor. This
                 # runs before the next identical queued prompt can look up APC.
                 for ids, policy in descriptors:
