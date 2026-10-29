@@ -66,6 +66,8 @@ for (const [name, project] of PROJECTS) {
       );
       const pills = band.perElement.filter((e) => e.key.includes("li."));
       const anim = summarize(events, SECONDS);
+      // room trailing a pill's last glyph: the dead space the user sees as a wide pill
+      const dead = all.dead.filter((d) => d.px > 2.5);
       report(`${name} ${route}`, {
         bandSteps: band.steps,
         bandFlips: band.flips,
@@ -81,6 +83,8 @@ for (const [name, project] of PROJECTS) {
               .slice(0, 8)
               .map((c) => [c.t, Math.round(c.from), Math.round(c.to)]),
           ]),
+        deadFrames: dead.length,
+        deadMax: Math.max(0, ...all.dead.map((d) => d.px)),
         cls: clsOf(rec.entries),
         anim: [anim.gestures, anim.total],
       });
@@ -95,6 +99,10 @@ for (const [name, project] of PROJECTS) {
         pillSteps,
         `status pill width steps in ${SECONDS} s of storm: ${JSON.stringify(pills.map((e) => [e.key, e.steps]))}`,
       ).toBeLessThanOrEqual(6);
+      expect(
+        dead.slice(0, 3).map((d) => [d.key, d.px]),
+        "status pills with empty room after their text (px, over the whole storm)",
+      ).toEqual([]);
       expect(clsOf(rec.entries)).toBeLessThan(0.02);
       expect(
         anim.gestures,
