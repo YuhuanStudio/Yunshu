@@ -48,6 +48,7 @@ import mlx.core as mx
 import numpy as np
 
 from .. import keyed_sampling
+from ..cache_prefill import reserve_prompt_kv
 from ..keyed_sampling import top_k_filter, top_p_filter
 from ..serving.work_scheduler import (
     DECODE_EARLY_TOKENS,
@@ -57,7 +58,7 @@ from ..serving.work_scheduler import (
 from ..text_logprobs import top_logprobs_device
 from .allocate import CostCurve, allocate, chain
 from .batch import MAX_WINDOW, DecodeBatch
-from .forward import Segment, forward, logits
+from .forward import Segment, forward, lane_forward, logits
 
 logger = logging.getLogger(__name__)
 
@@ -742,7 +743,20 @@ class RoundDriver:
             return []
         captures: list[mx.array] = []
         segments = [it.seg for it in items if it.seg is not None]
-        if self.dflash is not None:
+        if len(segments) == 1:
+            # One row's span runs the engine's own prefill forward (nax matmul,
+            # prefill kernels, chunked GDN under prefill_scope) like the lane,
+            # and reserves the prompt's KV once so spans do not regrow it.
+            it = items[0]
+            reserve_prompt_kv(it.row.cache, len(it.row.req.ids))
+            need = self.dflash is not None
+            hidden = lane_forward(
+                self.lm,
+                segments[0],
+                capture_ids=self.dflash.capture_ids if need else (),
+                captured=captures if need else None,
+            )
+        elif self.dflash is not None:
             hidden = forward(
                 self.lm,
                 segments,
@@ -765,7 +779,7 @@ class RoundDriver:
         events: list[Event] = []
         for it, tok, extra in draws:
             self._emit(it.row, [int(tok.tolist()[0])], extra, events)
-        if self.dflash is not None:
+        if self.dflash is not None and captures:
             self.dflash.absorb(items, captures)
         # prompt chunks of draftable rows feed their MTP head, in order
         absorb: dict[int, tuple] = {}

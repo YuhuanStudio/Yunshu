@@ -277,6 +277,28 @@ def forward(
     return model.norm(x)[0]
 
 
+def lane_forward(language_model: Any, seg: Segment, *, capture_ids=(), captured=None):
+    from ..kernels import gdn_prefill
+
+    sink = [] if captured is not None else None
+    # short tails take the tail scope, as the lane does (cache_prefill._tail_scope)
+    scope = (
+        gdn_prefill.tail_scope()
+        if seg.tokens.shape[0] <= 48
+        else gdn_prefill.prefill_scope()
+    )
+    with scope:
+        h = language_model.model(
+            seg.tokens[None].astype(mx.int32),
+            cache=seg.cache,
+            capture_layer_ids=list(capture_ids) if sink is not None else None,
+            hidden_sink=sink,
+        )
+    if sink is not None:
+        captured.extend(x[0] for x in sink)
+    return h[0]
+
+
 def logits(language_model: Any, hidden: mx.array) -> mx.array:
     """LM head over hidden rows ``[R, D]`` (a lane projection once converted;
     tied embeddings use ``round_driver`` 's lane head when available)."""
@@ -288,4 +310,4 @@ def logits(language_model: Any, hidden: mx.array) -> mx.array:
     return language_model.lm_head(hidden)
 
 
-__all__ = ["Segment", "forward", "logits", "supports"]
+__all__ = ["Segment", "forward", "lane_forward", "logits", "supports"]
