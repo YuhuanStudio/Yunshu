@@ -2614,7 +2614,7 @@
     },
     "qwen4_gdn_fused": {
       "module": "python/yunshu_engine/kernels/qwen4_gdn.py",
-      "what": "oMLX Qwen4 fused GDN verify plan + deferred rollback for the qwen4_exp layer loop (YUNSHU_QWEN4_GDN_FUSED, experimental)",
+      "what": "oMLX Qwen4 fused GDN verify plan + deferred rollback for the qwen4_exp layer loop (default)",
       "cells": {
         "mtp": {
           "s": "na",
@@ -3067,8 +3067,7 @@
     "YUNSHU_ANE_FFN_TRACE": "ane_ffn_split",
     "YUNSHU_GRAMMAR_PREWARM": "grammar_prewarm",
     "YUNSHU_SDPA_CHUNK": "sdpa_chunk_pre_nax",
-    "YUNSHU_PLE_STORAGE": "ple_ssd_rows",
-    "YUNSHU_QWEN4_GDN_FUSED": "qwen4_gdn_fused"
+    "YUNSHU_PLE_STORAGE": "ple_ssd_rows"
   },
   "gap_budget": 41,
   "settings_categories": [

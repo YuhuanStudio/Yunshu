@@ -19,8 +19,6 @@ const settingdesc = {
   YUNSHU_ALLOW_AUTO_LOAD:
     "Multi-model mode: let audio requests load a model that is not loaded yet (otherwise they are rejected).",
   YUNSHU_MAX_LORAS: "Maximum LoRA adapters kept loaded (text models).",
-  YUNSHU_QWEN4_GDN_FUSED:
-    "Qwen3.8-Flash-Next: run the 36 Gated DeltaNet layers on oMLX's fused Qwen4 verify plan with deferred rollback (a speculative round no longer writes per-step state histories). Window rows and the serial row use one arithmetic, so speculation on equals off and prompt-cache hit equals miss; bits can differ from the unfused layer. Experimental until the long-context A/B and the paired accuracy check.",
   YUNSHU_TRUST_REMOTE_CODE:
     "Allow Hugging Face tokenizers/processors that need `trust_remote_code`.",
   YUNSHU_WARM_PROMPTS:

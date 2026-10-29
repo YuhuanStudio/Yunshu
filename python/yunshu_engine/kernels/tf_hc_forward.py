@@ -32,7 +32,6 @@ _STATE: dict[str, Any] = {
     "installed": False,
     "modules": {},
     "moe": True,
-    "q4_gdn": False,
 }
 
 
@@ -156,8 +155,6 @@ def _moe(mlp: Any, x2d: Any) -> Any:
 
 def _gdn(verifier: Any, layer: Any, mixed: Any, mask: Any, cache: Any) -> Any:
     original = type(verifier)._gated_delta
-    if not _STATE["q4_gdn"]:
-        return original(verifier, layer, mixed, mask, cache)
     from . import qwen4_gdn
 
     return qwen4_gdn.gated_delta(
@@ -170,13 +167,13 @@ def _gdn(verifier: Any, layer: Any, mixed: Any, mask: Any, cache: Any) -> Any:
     )
 
 
-def set_qwen4_gdn(enabled: bool) -> None:
-    """Run Gated DeltaNet layers on the oMLX Qwen4 fused verify plan (see kernels/qwen4_gdn.py)."""
-    if enabled:
-        from . import qwen4_gdn
+def install_qwen4_gdn() -> None:
+    """Gated DeltaNet verify rows run on the oMLX Qwen4 fused plan (see kernels/qwen4_gdn.py); the
+    ArraysCache patch adds its deferred-rollback record. Lossless, so always on (fngdn-1029c/1030long:
+    0 identity mismatches at 1K-128K, decode +2-8%)."""
+    from . import qwen4_gdn
 
-        qwen4_gdn.install_cache_patch()
-    _STATE["q4_gdn"] = bool(enabled)
+    qwen4_gdn.install_cache_patch()
 
 
 def eligible(model: Any) -> bool:
