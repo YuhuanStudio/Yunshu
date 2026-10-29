@@ -279,37 +279,35 @@ function PanelMetrics({
     [t("playground.panel.latency"), (c) => `${number(c.s.latencyMs, 0)} ms`],
   ];
   return (
-    <table className="w-full text-xs tabular-nums" data-testid="panel-metrics">
+    <dl
+      className="grid gap-x-3 gap-y-1 text-xs tabular-nums"
+      style={{ gridTemplateColumns: `1fr repeat(${cols.length}, auto)` }}
+      data-testid="panel-metrics"
+    >
       {cols.length > 1 && (
-        <thead>
-          <tr>
-            <th />
-            {cols.map((c) => (
-              <th
-                key={c.label}
-                className="pb-1 text-right font-medium text-muted-foreground"
-              >
-                {c.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
+        <div className="contents" aria-hidden="true">
+          <span />
+          {cols.map((c) => (
+            <span
+              key={c.label}
+              className="text-right font-medium text-muted-foreground"
+            >
+              {c.label}
+            </span>
+          ))}
+        </div>
       )}
-      <tbody>
-        {rows.map(([name, value]) => (
-          <tr key={name}>
-            <th className="py-0.5 pr-2 text-left font-normal text-muted-foreground">
-              {name}
-            </th>
-            {cols.map((c) => (
-              <td key={c.label} className="py-0.5 text-right">
-                {value(c)}
-              </td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
+      {rows.map(([name, value]) => (
+        <div key={name} className="contents">
+          <dt className="text-muted-foreground">{name}</dt>
+          {cols.map((c) => (
+            <dd key={c.label} className="text-right">
+              {value(c)}
+            </dd>
+          ))}
+        </div>
+      ))}
+    </dl>
   );
 }
 
