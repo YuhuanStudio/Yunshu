@@ -104,12 +104,6 @@ const playground: Shape<typeof zh> = {
   "panel.model": "Model and format",
   "panel.prompt": "System prompt",
   "panel.sampling": "Sampling",
-  "panel.metrics": "Last request",
-  "panel.metricsEmpty":
-    "Send a prompt and the time to first token, tok/s, token counts and prefix-cache hits show here.",
-  "panel.cacheHit": "Prefix cache hit",
-  "panel.latency": "Total time",
-  "panel.tokens": "Output tokens",
   "params.thinking": "Thinking mode",
   "params.thinkAuto": "Model default",
   "params.thinkOn": "On",

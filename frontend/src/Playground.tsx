@@ -218,86 +218,6 @@ function ReplyStats({
   );
 }
 
-/** The newest request's numbers as a small table, one column per reply (A and B when comparing). */
-function PanelMetrics({
-  runs,
-  now,
-}: {
-  runs: Array<{ label: string; run: Run }>;
-  now: number;
-}) {
-  const cols = runs.flatMap(({ label, run }) =>
-    run.timing ? [{ label, s: runStats(run.timing, now), run }] : [],
-  );
-  if (!cols.length)
-    return (
-      <p className="text-xs text-muted-foreground">
-        {t("playground.panel.metricsEmpty")}
-      </p>
-    );
-  const dash = "—";
-  const rows: Array<[string, (c: (typeof cols)[number]) => string]> = [
-    [
-      t("playground.stat.ttft"),
-      (c) => (c.s.ttftMs === undefined ? dash : `${number(c.s.ttftMs, 0)} ms`),
-    ],
-    [
-      "tok/s",
-      (c) =>
-        c.s.tokensPerSecond === undefined
-          ? dash
-          : number(c.s.tokensPerSecond, 1),
-    ],
-    [t("playground.panel.tokens"), (c) => number(c.s.tokens, 0)],
-    [
-      t("playground.stat.prompt"),
-      (c) =>
-        c.s.promptTokens === undefined ? dash : number(c.s.promptTokens, 0),
-    ],
-    [
-      t("playground.panel.cacheHit"),
-      (c) =>
-        c.s.cachedTokens === undefined
-          ? dash
-          : c.s.promptTokens
-            ? `${number(c.s.cachedTokens, 0)} (${number((c.s.cachedTokens / c.s.promptTokens) * 100, 0)}%)`
-            : number(c.s.cachedTokens, 0),
-    ],
-    [t("playground.panel.latency"), (c) => `${number(c.s.latencyMs, 0)} ms`],
-  ];
-  return (
-    <dl
-      className="grid gap-x-3 gap-y-1 text-xs tabular-nums"
-      style={{ gridTemplateColumns: `1fr repeat(${cols.length}, auto)` }}
-      data-testid="panel-metrics"
-    >
-      {cols.length > 1 && (
-        <div className="contents" aria-hidden="true">
-          <span />
-          {cols.map((c) => (
-            <span
-              key={c.label}
-              className="text-right font-medium text-muted-foreground"
-            >
-              {c.label}
-            </span>
-          ))}
-        </div>
-      )}
-      {rows.map(([name, value]) => (
-        <div key={name} className="contents">
-          <dt className="text-muted-foreground">{name}</dt>
-          {cols.map((c) => (
-            <dd key={c.label} className="text-right">
-              {value(c)}
-            </dd>
-          ))}
-        </div>
-      ))}
-    </dl>
-  );
-}
-
 // The tools tester is a dialog opened on demand: its schema validator and rounds loop load with it.
 const ToolsTester = lazy(() =>
   import("./ToolsTester").then((m) => ({ default: m.ToolsTester })),
@@ -1166,16 +1086,6 @@ export function Playground({
       {body}
     </section>
   );
-  const latestRuns: Array<{ label: string; run: Run }> = compare
-    ? pair.flatMap((run, i) =>
-        run ? [{ label: i === 0 ? "A" : "B", run }] : [],
-      )
-    : (() => {
-        const last = [...messages]
-          .reverse()
-          .find((m) => m.role === "assistant");
-        return last ? [{ label: "", run: last }] : [];
-      })();
   const compareSampling = compare && (
     <div className="space-y-2 text-xs text-muted-foreground">
       {([0, 1] as const).map((i) => (
@@ -1361,10 +1271,6 @@ export function Playground({
         </div>,
       )}
     </>
-  );
-  const metricsSection = section(
-    t("playground.panel.metrics"),
-    <PanelMetrics runs={latestRuns} now={now} />,
   );
   const promptTurn = (m: Message) => (
     <ChatTurn role="user" key={m.id}>
@@ -1654,9 +1560,6 @@ export function Playground({
           data-testid="playground-panel"
         >
           <div className="min-h-0 flex-1 overflow-y-auto">{panelBody}</div>
-          <div className="shrink-0 border-t border-border">
-            {metricsSection}
-          </div>
         </aside>
       ) : (
         <Sheet
@@ -1667,7 +1570,6 @@ export function Playground({
         >
           <div className="-mx-4 -my-2">
             {panelBody}
-            {metricsSection}
           </div>
         </Sheet>
       )}

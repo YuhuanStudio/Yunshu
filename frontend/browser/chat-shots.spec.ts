@@ -9,6 +9,7 @@ test.skip(!dir, "set CHAT_SHOTS=<dir> to take the tour");
 
 const sizes = {
   desktop: { width: 1440, height: 900 },
+  laptop: { width: 1440, height: 750 },
   full: { width: 1920, height: 1080 },
   phone: { width: 402, height: 874 },
 } as const;

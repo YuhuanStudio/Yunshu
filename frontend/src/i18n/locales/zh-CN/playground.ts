@@ -97,12 +97,6 @@ const playground: Shape<typeof zh> = {
   "panel.model": "模型与格式",
   "panel.prompt": "系统提示词",
   "panel.sampling": "采样",
-  "panel.metrics": "最近一次请求",
-  "panel.metricsEmpty":
-    "发送提示词后，这里显示首 token 延迟、tok/s、token 数与前缀命中。",
-  "panel.cacheHit": "前缀命中",
-  "panel.latency": "总时间",
-  "panel.tokens": "输出 token",
   "params.thinking": "思考模式",
   "params.thinkAuto": "模型默认",
   "params.thinkOn": "开启",

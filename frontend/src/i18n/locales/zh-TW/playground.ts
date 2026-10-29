@@ -94,12 +94,6 @@ const playground = {
   "panel.model": "模型與格式",
   "panel.prompt": "系統提示詞",
   "panel.sampling": "取樣",
-  "panel.metrics": "最近一次請求",
-  "panel.metricsEmpty":
-    "送出提示詞後，這裡顯示首 token 延遲、tok/s、token 數與前綴命中。",
-  "panel.cacheHit": "前綴命中",
-  "panel.latency": "總時間",
-  "panel.tokens": "輸出 token",
   "params.thinking": "思考模式",
   "params.thinkAuto": "模型預設",
   "params.thinkOn": "開啟",

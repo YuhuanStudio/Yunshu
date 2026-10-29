@@ -118,7 +118,7 @@ test.describe("phone", () => {
     await page.getByRole("button", { name: "生成參數", exact: true }).click();
     const sheet = page.getByRole("dialog", { name: "生成參數" });
     await expect(sheet.locator("#system")).toBeVisible();
-    await expect(sheet.getByText("最近一次請求")).toBeVisible();
+    await expect(sheet.getByText("最近一次請求")).toHaveCount(0);
     await noOverflow(page);
   });
 
@@ -287,14 +287,15 @@ test.describe("desktop", () => {
     const input = await openPlayground(page);
     const panel = page.getByTestId("playground-panel");
     await expect(panel).toBeVisible();
-    // The panel carries what used to hide behind composer icons: model, system prompt, sampling, tools, metrics.
+    // The panel carries what used to hide behind composer icons: model, system prompt, sampling, tools.
     await expect(panel.getByRole("group", { name: "測試模型" })).toBeVisible();
     await expect(panel.locator("#system")).toBeVisible();
     await expect(
       panel.getByRole("slider", { name: "Temperature" }),
     ).toBeVisible();
     await expect(panel.getByRole("button", { name: "工具測試" })).toBeVisible();
-    await expect(panel.getByText("最近一次請求")).toBeVisible();
+    // request numbers live on the reply line, not repeated here
+    await expect(panel.getByText("最近一次請求")).toHaveCount(0);
     const p = (await panel.boundingBox())!;
     expect(p.width).toBeGreaterThanOrEqual(300);
     expect(p.width).toBeLessThanOrEqual(340);
@@ -306,8 +307,8 @@ test.describe("desktop", () => {
     await stop(page).waitFor({ state: "detached" });
     const column = await box(page, "[data-chat-column]");
     expect(column.width).toBeLessThanOrEqual(720);
-    // the request numbers land in the panel once a reply is done
-    await expect(page.getByTestId("panel-metrics")).toContainText("tok/s");
+    // the request numbers sit on the reply's name line only; the panel does not repeat them
+    await expect(page.getByTestId("panel-metrics")).toHaveCount(0);
     await noOverflow(page);
   });
 
