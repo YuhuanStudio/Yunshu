@@ -18,7 +18,6 @@ def _client(tmp_path):
     console.mkdir()
     (console / "index.html").write_text("<main>shell</main>", encoding="utf-8")
     for name in (
-        "favicon.svg",
         "favicon.ico",
         "apple-touch-icon.png",
         "manifest.json",
@@ -40,15 +39,11 @@ def test_favicon_and_touch_icon_resolve(tmp_path):
     client = _client(tmp_path)
     ico = client.get("/console/favicon.ico")
     assert ico.status_code == 200
-    reserved, kind, count = struct.unpack("<HHH", ico.content[:6])
-    assert (reserved, kind) == (0, 1)
-    sizes = {ico.content[6 + 16 * i] for i in range(count)}
-    assert sizes == {16, 32, 48}
-    assert (
-        client.get("/console/favicon.svg")
-        .headers["content-type"]
-        .startswith("image/svg+xml")
-    )
+    # The shared YuhuanStudio favicon.ico (same bytes as Yunxin / YunUI, pinned in brand-icons.mjs) is a
+    # 32 px PNG, which every browser reads under the .ico name.
+    assert _png_size(ico.content) == (32, 32)
+    # The shared YuhuanStudio icon set is raster only (no favicon.svg since the brand change).
+    assert client.get("/console/favicon.svg").status_code == 404
     assert _png_size(client.get("/console/apple-touch-icon.png").content) == (180, 180)
 
 

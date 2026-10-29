@@ -248,7 +248,9 @@ SUITES = {
     },
     # small-model dry runs of the tool itself (and any CPU-light change): minutes, not hours
     "tiny": {
-        "stages": list(LADDER),
+        # no kld: its capture hooks know only the Qwen3.5 / Flash-Next families and it reads the fixed
+        # corpus on P5Plus, so a small model (or the unit tests' fake world) fails it closed
+        "stages": [s for s in LADDER if s != "kld"],
         "ctx": [1024],
         "spec_off": False,
         "reps": 3,
