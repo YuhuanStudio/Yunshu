@@ -1531,3 +1531,19 @@ Output checks:
 - Every warm reply equals its cold reply (the per-context sha is the same as main's).
 - Replay engaged on 12 of 12 warm requests.
 - At 128K, the remaining time is the APC restore of the long context (about 174 ms).
+
+## 2026-10-30 — Flash-Next fused GDN verify on by default
+
+Qwen3.8-Flash-Next oQ2.5e (MTP), same commit, the fused oMLX Qwen4 GDN verify plan off vs on (yv runs
+fngdn-1029c and fngdn-1030long, 2-3 interleaved reps):
+
+| cell | decode tok/s off → on | follow-up decode tok/s off → on |
+|---|---|---|
+| code 1K | 73.3 → 77.7 (+6.0%) | 60.3 → 65.3 (+8.3%) |
+| prose 8K | 60.8 → 63.5 (+3.0%) | 52.4 → 55.8 (+5.5%) |
+| code 32K | 55.2 → 57.4 (+4.0%) | 46.4 → 48.8 (+5.2%) |
+| code 64K | 50.5 → 53.3 (+5.5%) | 40.6 → 42.4 (+4.3%) |
+| prose 128K | 38.6 → 39.5 (+2.5%) | 31.0 → 31.8 (+2.4%) |
+
+Output checks: 0 identity mismatches off vs on at every context (30 cells), spec on == off, APC hit ==
+miss, KLD 0. Prefill does not use the plan; cold TTFT differences are within noise.
