@@ -37,9 +37,9 @@ const SECONDS = 20;
 // frames (of ~400 in 20 s) in which anything visible moved, by page; a new digit count or phase word
 // moves things once, a tick never does
 const BUDGET: Record<string, number> = {
-  overview: 999,
-  requests: 999,
-  cache: 999,
+  overview: 20,
+  requests: 10,
+  cache: 10,
 };
 const PROJECTS = [
   ["desktop", { viewport: { width: 1440, height: 900 } }],

@@ -95,6 +95,8 @@ export const PAGE_RECORDER = `
     let n = 0;
     for (const el of document.querySelectorAll(SEL)) {
       if (el.closest('[data-live-list]') && !el.hasAttribute('data-live-list')) continue;
+      // The status band hugs its text and steps at a new digit count; browser/live-stability.spec.ts holds it.
+      if (el.closest('[data-testid="status-band"]')) continue;
       const r = el.getBoundingClientRect();
       if (r.width < 24 || r.height < 12 || r.bottom < 0 || r.top > innerHeight) continue;
       let id = ids.get(el);

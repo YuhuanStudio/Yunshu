@@ -73,6 +73,7 @@ import {
   clock,
   dateTime,
   elapsed,
+  fixed,
   isOnline,
   modelLabel,
   number,
@@ -733,7 +734,9 @@ export function Requests({
                     <span className="tabular-nums">
                       <LiveNumber
                         value={tile.liveValue ?? null}
-                        format={(v) => number(v)}
+                        format={(v) =>
+                          tile.unit === "tok/s" ? fixed(v) : number(v)
+                        }
                       />
                     </span>
                     {tile.unit && (
@@ -1096,13 +1099,13 @@ export function Requests({
                                     ? t("requests.list.mobileLine", {
                                         ttft: ttftText,
                                         total: totalText,
-                                        tps: number(speedValue),
+                                        tps: fixed(speedValue),
                                       })
                                     : percent != null
                                       ? t("requests.list.prefillPercent", {
                                           percent: number(percent, 0),
                                         })
-                                      : `${elapsed(row.elapsed_s)} · ${number(speedValue)} tok/s`}
+                                      : `${elapsed(row.elapsed_s)} · ${fixed(speedValue)} tok/s`}
                                 </p>
                                 {/* Below lg the usage column is gone; the same numbers ride on a line of their own. */}
                                 {row.phase === "complete" && (
@@ -1171,7 +1174,7 @@ export function Requests({
                                   : elapsed(row.elapsed_s)}
                               </Td>
                               <Td className="hidden whitespace-nowrap tabular-nums md:table-cell">
-                                {number(speedValue)}
+                                {fixed(speedValue)}
                               </Td>
                               <Td className="hidden min-[1800px]:table-cell">
                                 {speculativeText(row) ?? (

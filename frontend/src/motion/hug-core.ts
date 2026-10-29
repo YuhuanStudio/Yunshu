@@ -3,7 +3,7 @@
  *
  * The box is as wide as its widest content over the last `holdMs`: it grows the moment the content
  * needs more room (a new digit, a longer phase word) and shrinks only after the content has been
- * narrower for the whole hold, and then only down to the widest it was during that hold. A value
+ * narrower for the whole hold (6 s by default), and then only down to the widest it was during that hold. A value
  * that flickers around a digit boundary (99 / 100, 9.9 / 10.1) therefore settles on the wider width
  * instead of resizing with every sample; a value that really changed for good gives its room back
  * after `holdMs`, so a settled pill carries no dead space. A shrink that is undone soon after (the
@@ -20,7 +20,7 @@ export class WidthRatchet {
   private shrunkAt = -Infinity;
   readonly holdMs: number;
   readonly tol: number;
-  constructor(holdMs = 3000, tol = 0.5) {
+  constructor(holdMs = 6000, tol = 0.5) {
     this.holdMs = holdMs;
     this.hold = holdMs;
     this.tol = tol;

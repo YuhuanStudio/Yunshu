@@ -11,7 +11,7 @@ import { WidthRatchet } from "./motion/hug-core.ts";
  */
 export function HugWidth({
   children,
-  holdMs = 3000,
+  holdMs = 6000,
   className = "",
 }: {
   children: ReactNode;
