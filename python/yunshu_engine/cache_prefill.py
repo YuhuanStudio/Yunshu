@@ -12,7 +12,7 @@ import importlib
 
 from .kernels import gdn_prefill
 
-TAIL_FAST_ROWS = 48  # tail rows on the lane projections (LaneLinear row pieces; attention stays BQ32)
+TAIL_FAST_ROWS = 64  # a whole tail (1-64 rows after the last aligned boundary) on the lane projections; attention stays BQ32 above 16 rows
 
 
 def reserve_prompt_kv(prompt_cache, end: int) -> None:
@@ -88,9 +88,8 @@ def install():
         def _tail_scope(self):
             # The final rows after the last 64-aligned boundary (1-64 tokens) always start at
             # the same absolute position for a given prompt, cold or restored, so they need
-            # no long kernels to stay split-invariant. Up to TAIL_FAST_ROWS of them run on the
-            # decode/verify kernels: a 16-row tail took 168 ms on the long prefill path
-            # (host-bound: ~2000 small ops) against ~40 ms for a verify window.
+            # no long kernels to stay split-invariant. Every tail runs on the lane projections: a
+            # 49-row tail took 70 ms longer on the long prefill scope than a 48-row one (32K).
             embeds = getattr(self, "_inputs_embeds", None)
             if (
                 gdn_prefill.split_enabled()
