@@ -99,8 +99,8 @@ def _plan(batch) -> tuple[Any, int, int] | None:
     meta = getattr(batch, "_apc_meta", None) or []
     if len(meta) != 1 or not meta[0] or len(getattr(batch, "uids", ())) != 1:
         return _skip("not one row/uid")
-    if any(getattr(batch, "logits_processors", None) or []):
-        return _skip("logits processors")
+    # logits processors (penalties, grammar guides) run on the returned logits after the forward, in
+    # PromptProcessingBatch.generate; replay only substitutes the forward's output, so they see the same input.
     if any(getattr(batch, "_right_pad_per_row", None) or []):
         return _skip("right padding")
     draft = getattr(batch, "draft_model", None)

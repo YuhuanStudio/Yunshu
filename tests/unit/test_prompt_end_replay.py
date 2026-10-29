@@ -145,7 +145,6 @@ def test_replay_restores_the_real_model_and_offsets(fake_generate):
         {"ids": tuple(range(1, BASE + ROWS + 1))},
         {"draft_kind": None, "draft_model": None},
         {"_prompt_kwargs": {"pixel_values": mx.zeros((1,))}},
-        {"logits_processors": [[lambda *_: None]]},
         {"uids": [0, 1]},
     ],
 )
@@ -155,6 +154,15 @@ def test_other_requests_run_the_forward(fake_generate, change):
     make_batch(model, **change).generate()
     assert model.calls == 2
     assert prompt_end_replay.stats()["replayed"] == 0
+
+
+def test_logits_processors_still_replay(fake_generate):
+    # processors run on the returned logits after the forward, so a replayed block feeds them the same input
+    model = Model()
+    make_batch(model, logits_processors=[[lambda _ctx, logits: logits]]).generate()
+    make_batch(model, logits_processors=[[lambda _ctx, logits: logits]]).generate()
+    assert model.calls == 1
+    assert prompt_end_replay.stats()["replayed"] == 1
 
 
 def test_different_tail_length_runs_the_forward(fake_generate):
