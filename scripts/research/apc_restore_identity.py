@@ -18,6 +18,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tfbench as t  # noqa: E402
 
+NO_LOGPROBS = False  # --no-logprobs: compare streamed text pieces (logprobs + penalty stays on the chain)
+
 
 def assert_identity(out):
     for mode in ("partial", "full", *(["spec_off"] if "spec_off" in out else [])):
@@ -39,7 +41,7 @@ def ask(url, model, text, n=64, sampling=None, capture=None):
         messages=[{"role": "user", "content": text}] if isinstance(text, str) else text,
         max_tokens=n,
         temperature=0,
-        logprobs=True,
+        logprobs=not NO_LOGPROBS,
         stream=True,
         stream_options={"include_usage": True},
         chat_template_kwargs={"enable_thinking": False},
@@ -67,6 +69,9 @@ def ask(url, model, text, n=64, sampling=None, capture=None):
                 raise RuntimeError(d["error"])
             usage = d.get("usage") or usage
             for ch in d.get("choices") or []:
+                if NO_LOGPROBS and (ch.get("delta") or {}).get("content"):
+                    toks.append(ch["delta"]["content"])
+                    first = first or time.perf_counter() - t0
                 for c in (ch.get("logprobs") or {}).get("content") or []:
                     toks.append(c["token"])
                     lps.append(c["logprob"])
@@ -122,10 +127,13 @@ def main():
     ap.add_argument("--top-k", type=int, default=0)
     ap.add_argument("--seed", type=int, default=17)
     ap.add_argument("--raw-ids", action="store_true")
+    ap.add_argument("--no-logprobs", action="store_true")
     ap.add_argument("--trace-tail", action="store_true")
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+    global NO_LOGPROBS
+    NO_LOGPROBS = a.no_logprobs
     sampling = dict(
         temperature=a.temperature, top_p=a.top_p, top_k=a.top_k, seed=a.seed
     )
@@ -208,7 +216,7 @@ def main():
             max_abs_dlp=max(
                 abs(x - y) for x, y in zip(r["lps"], ref["lps"], strict=True)
             )
-            if len(r["lps"]) == len(ref["lps"])
+            if r["lps"] and len(r["lps"]) == len(ref["lps"])
             else None,
         )
     out["cold_ttft"] = ref["ttft"]
