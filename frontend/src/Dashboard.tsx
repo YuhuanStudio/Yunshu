@@ -886,7 +886,7 @@ export function Dashboard({
               )}
             </ul>
             {lanes.every((l) => !l) && (
-              <p className="absolute inset-x-0 top-0 py-3 text-xs text-muted-foreground">
+              <p className="absolute inset-x-0 top-0 py-3 text-xs tabular-nums text-muted-foreground">
                 {memory?.cache_gb
                   ? t("overview.active.idleDescPool", {
                       gb: number(memory.cache_gb),

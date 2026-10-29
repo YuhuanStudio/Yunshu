@@ -112,3 +112,51 @@ for (const [name, project] of PROJECTS) {
     });
   }
 }
+
+// A table that takes a new row at the top moves every row below it. A request finishing every 300 ms
+// must not do that 3 times a second: the table takes arrivals at most once per 1.5 s, in one step.
+test("requests table: a stream of finished requests shifts the rows at most once per 1.5 s", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await storm(page, "");
+  await page.goto("/console/#/requests", { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(3000);
+  // the finished requests, newest first: the list a request lands on top of
+  await page.getByText("已結束", { exact: true }).first().click();
+  await page.waitForTimeout(3000);
+  await page.evaluate(`(() => {
+    const events = [];
+    let prev = new Map();
+    let busy = false;
+    window.__rows = { events, stop() { clearInterval(timer); return events; } };
+    const timer = setInterval(() => {
+      const now = new Map();
+      for (const tr of document.querySelectorAll("tbody tr[data-flip]"))
+        now.set(tr.getAttribute("data-flip"), tr.getBoundingClientRect().top);
+      let moved = false;
+      for (const [id, top] of now) {
+        const before = prev.get(id);
+        if (before !== undefined && Math.abs(top - before) > 1) moved = true;
+      }
+      if (moved && !busy) events.push(Math.round(performance.now()));
+      busy = moved;
+      prev = now;
+    }, 50);
+  })()`);
+  await page.waitForTimeout(SECONDS * 1000);
+  const events = (await page.evaluate("window.__rows.stop()")) as number[];
+  report("requests-table", { shifts: events.length, events });
+  expect(events.length, "the table has rows to move").toBeGreaterThan(3);
+  // 20 s / 1.5 s = 13 steps at most (+ the one the user's own first view may add)
+  expect(
+    events.length,
+    `row shifts in ${SECONDS} s: ${events}`,
+  ).toBeLessThanOrEqual(Math.ceil((SECONDS * 1000) / 1500) + 1);
+  const gaps = events.slice(1).map((t, i) => t - events[i]);
+  expect(
+    Math.min(...gaps),
+    "no two shifts closer than the interval",
+  ).toBeGreaterThan(1200);
+});

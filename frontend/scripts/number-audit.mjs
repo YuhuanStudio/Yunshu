@@ -14,7 +14,14 @@ export const NUMBER_RECORDER = `
   new MutationObserver((muts) => {
     for (const m of muts) {
       if (m.type === "characterData") note(m.target);
-      else for (const n of m.addedNodes) if (n.nodeType === 3 || n.nodeType === 1) note(n);
+      else for (const n of m.addedNodes) {
+        if (n.nodeType === 3) note(n);
+        else if (n.nodeType === 1) {
+          // a whole subtree arrived (a row): judge the elements that carry the digits, not the container
+          const w = document.createTreeWalker(n, NodeFilter.SHOW_TEXT);
+          for (let t = w.nextNode(), k = 0; t && k < 60; t = w.nextNode(), k++) note(t);
+        }
+      }
     }
   }).observe(document, { subtree: true, characterData: true, childList: true });
   window.__num = {

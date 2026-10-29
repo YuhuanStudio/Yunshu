@@ -70,6 +70,7 @@ export function stormRecent(ms: number): Obj[] {
     rows.push({
       ...baseRow,
       request_id: `req_done_${n - i}`,
+      seq: n - i + 1,
       t: Date.now() / 1000 - (ms - (n - i) * 300) / 1000,
     });
   return rows;

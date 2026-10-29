@@ -19,6 +19,7 @@ import {
   type ReactNode,
 } from "react";
 import { useFlip } from "./motion/flip";
+import { useCoalescedRows } from "./motion/useCoalescedRows";
 import {
   CustomSelect,
   Button,
@@ -369,10 +370,13 @@ export function Requests({
   if (previousScope.current !== laneScope) lanes.current = [];
   previousScope.current = laneScope;
   lanes.current = filter === "active" ? liveSlots(lanes.current, shown) : [];
-  const displayed = filter === "active" ? lanes.current : shown;
+  // The table takes rows arriving, leaving or re-ordering at most once per 1.5 s, in one step: a burst of
+  // arrivals must not shove every row down once per request. Another filter or sort shows at once.
+  const paced = useCoalescedRows(shown, laneScope);
+  const displayed = filter === "active" ? lanes.current : paced;
   const listRef = useRef<HTMLDivElement>(null);
   useFlip(listRef);
-  const fresh = useFreshIds(shown.map((r) => r.id));
+  const fresh = useFreshIds(paced.map((r) => r.id));
   const restore = (e: Event) => {
     if (opener.current?.isConnected) {
       e.preventDefault();
