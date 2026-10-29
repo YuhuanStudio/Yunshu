@@ -850,6 +850,11 @@ def part_decode(s, out, a):
                     }
                     or None,
                 )
+                if phase == "turn2" and not getattr(a, "allow_eos", False):
+                    # "Continue at the same length" is a weak ask: Flash-Next ends its follow-up after
+                    # ~150 tokens, and a speed cell needs its full budget. The follow-up cell measures
+                    # TTFT and decode rate, not where the model would stop.
+                    b["ignore_eos"] = True
                 if phase == "turn2":
                     b["messages"] += [
                         {"role": "assistant", "content": reply},

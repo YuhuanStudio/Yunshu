@@ -1,4 +1,10 @@
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useLayoutEffect,
+  useRef,
+  type ReactNode,
+} from "react";
 import { WidthRatchet } from "./motion/hug-core.ts";
 
 /**
@@ -9,7 +15,12 @@ import { WidthRatchet } from "./motion/hug-core.ts";
  * The width is never animated: a step is one instant change, and steps are rare (a new digit
  * count, a new word). Use it for one NUMBER (see LiveNumber, HeldText) so the room it holds is a
  * digit wide; wrapped around a whole sentence it would hold the whole sentence's room.
+ * Inside another HugWidth (a LiveNumber in a number + unit box) it is a plain box: the outer one holds
+ * the room for both, and two nested observers would resize each other in one frame (WebKit then reports
+ * "ResizeObserver loop completed with undelivered notifications").
  */
+const Hugged = createContext(false);
+
 export function HugWidth({
   children,
   holdMs = 6000,
@@ -22,12 +33,14 @@ export function HugWidth({
   align?: "right";
   className?: string;
 }) {
+  const nested = useContext(Hugged);
   const outer = useRef<HTMLSpanElement>(null);
   const inner = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
     const box = outer.current;
     const content = inner.current;
-    if (!box || !content || typeof ResizeObserver === "undefined") return;
+    if (nested || !box || !content || typeof ResizeObserver === "undefined")
+      return;
     const ratchet = new WidthRatchet(holdMs, 0.5, 1.5);
     let timer: ReturnType<typeof setTimeout> | null = null;
     const apply = (w: number) => {
@@ -51,21 +64,13 @@ export function HugWidth({
       arm(now);
     };
     measure();
-    // Resizing the box inside the observer's own callback is a layout change in the same frame, which
-    // WebKit reports as "ResizeObserver loop completed with undelivered notifications": apply on the
-    // next frame instead (one frame later, after the text it hugs has already been laid out).
-    let frame = 0;
-    const observer = new ResizeObserver(() => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(measure);
-    });
+    const observer = new ResizeObserver(measure);
     observer.observe(content);
     return () => {
       observer.disconnect();
-      cancelAnimationFrame(frame);
       if (timer != null) clearTimeout(timer);
     };
-  }, [holdMs]);
+  }, [holdMs, nested]);
   return (
     <span
       ref={outer}
@@ -77,7 +82,7 @@ export function HugWidth({
         data-hug-natural=""
         className="inline-block whitespace-nowrap"
       >
-        {children}
+        <Hugged.Provider value={true}>{children}</Hugged.Provider>
       </span>
     </span>
   );
