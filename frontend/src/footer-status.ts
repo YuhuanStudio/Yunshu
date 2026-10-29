@@ -20,6 +20,8 @@ export interface FooterPill {
   tone: PillTone;
   dot: boolean;
   help: string;
+  /** The value is a name or a cause, not a live reading: drawn as plain text (no per-number width hold). */
+  plain?: boolean;
   /** A live number the band draws (paced like every readout) instead of `value`. */
   tween?: { value: number; digits: number; suffix: string };
 }
@@ -135,6 +137,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
     pills.push({
       key: "engine",
       label: text,
+      plain: true,
       value: phase === "offline" ? cause.short : undefined,
       tone:
         phase === "connecting"
@@ -153,6 +156,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
   pills.push({
     key: "engine",
     label: t("shell.footer.engine.running"),
+    plain: true,
     value: first
       ? loaded.length > 1
         ? `${first} +${loaded.length - 1}`
@@ -240,6 +244,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
   pills.push({
     key: "now",
     label: loadingModel ? t("shell.engine.live.loading") : phaseLabels[a.phase],
+    plain: !!loadingModel,
     value,
     // The same state-to-colour map as the top pill: decode green, other work amber, idle no dot.
     tone:

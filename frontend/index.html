@@ -3,7 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-    <meta name="theme-color" content="#fafafa" />
+    <!-- The brand asset set (scripts/brand-icons.mjs): the tile as svg and multi-size ico, the iOS touch icon and a
+         manifest with maskable 192/512 icons. Vite prefixes the base (/console/) to these public paths. The
+         theme-color follows the OS here and the console's own theme switch at runtime. -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#f7f7f8" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b0b0d" media="(prefers-color-scheme: dark)" />
     <!-- Model text is rendered as Markdown, whose images load from any URL the model writes: a prompt-injected
          tracking pixel. The console shows only its own, attached (data:/blob:) images. -->
     <meta http-equiv="Content-Security-Policy" content="img-src 'self' data: blob:" />

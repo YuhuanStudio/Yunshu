@@ -223,7 +223,7 @@ export function StatusIslandContent({
             queued: a.counts.queued,
           })}
         </div>
-        <Presence show={a.phase === "prefill"}>
+        <Presence adaptive show={a.phase === "prefill"}>
           <div className="mt-1.5" data-testid="island-prefill">
             <PrefillBar row={a.prefilling ?? {}} height={6} caption />
             <div className="mt-1 text-xs tabular-nums text-muted-foreground">

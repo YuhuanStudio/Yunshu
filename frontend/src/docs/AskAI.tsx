@@ -10,7 +10,8 @@ import {
   IconButton,
   Spinner,
 } from "@yuhuanowo/yunui";
-import { Bot, Copy, Check, ThumbsUp, ThumbsDown } from "lucide-react";
+import { Copy, Check, ThumbsUp, ThumbsDown } from "lucide-react";
+import { BrandMark } from "../BrandMark";
 import type { Connection } from "../api";
 import { t, tr, useLocale } from "../i18n";
 import {
@@ -248,12 +249,12 @@ export default function AskAI({
       <div className="shrink-0 px-4 pb-1 pr-12 pt-4 sm:px-6 sm:pt-5">
         {panel ? (
           <h2 className="flex items-center gap-2 text-base font-semibold">
-            <Bot size={16} />
+            <BrandMark size={18} />
             {t("docs.ask.title")}
           </h2>
         ) : (
           <DialogTitle className="flex items-center gap-2 text-base font-semibold">
-            <Bot size={16} />
+            <BrandMark size={18} />
             {t("docs.ask.title")}
           </DialogTitle>
         )}
@@ -272,7 +273,7 @@ export default function AskAI({
         jumpToLatestLabel={t("playground.jumpLatest")}
         empty={
           <ChatEmpty
-            icon={<Bot size={22} />}
+            icon={<BrandMark size={28} />}
             title={t("docs.ask.welcome")}
             description={t("docs.ask.local")}
             suggestions={["start", "models", "api"].map((key) =>
@@ -295,7 +296,7 @@ export default function AskAI({
                   <ChatTurn
                     role="assistant"
                     name={t("docs.ask.title")}
-                    avatar={<Bot size={16} aria-hidden="true" />}
+                    avatar={<BrandMark size={20} />}
                     actions={
                       turn.answer ? (
                         <>

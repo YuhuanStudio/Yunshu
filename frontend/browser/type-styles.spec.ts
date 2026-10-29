@@ -157,6 +157,9 @@ export async function typeStyles(page: Page): Promise<Record<string, string>> {
       const text = (n.textContent ?? "").trim();
       const el = n.parentElement;
       if (!text || !el || el.closest("script,style,svg,.sr-only")) continue;
+      // The logo lockup (the tile and the name in one link, YunUI Sidebar's 18 px brand block exactly as
+      // Yunxin draws it) is a wordmark, not type content.
+      if (el.closest("a")?.querySelector("img[src$='favicon.svg']")) continue;
       const cs = getComputedStyle(el);
       const r = el.getBoundingClientRect();
       if (cs.display === "none" || cs.visibility === "hidden" || r.width < 3)

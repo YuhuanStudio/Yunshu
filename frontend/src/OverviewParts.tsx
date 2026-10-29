@@ -21,6 +21,7 @@ import {
 } from "./engineView";
 import { LiveNumber } from "./LiveNumber";
 import { HugWidth } from "./HugWidth";
+import { HeldText } from "./HeldText";
 import { livePrefillTps } from "./series";
 import { t, tr, useLocale } from "./i18n/index.ts";
 import { clock, elapsed, fixed, number, Slot, useMinWidth } from "./ui";
@@ -128,7 +129,7 @@ export function StateStrip({
                 data-phase={id}
                 data-lit={lit ? "true" : "false"}
                 aria-current={a?.phase === id ? "true" : undefined}
-                className={`inline-flex h-6 items-center gap-1.5 rounded-md px-2 text-xs transition-opacity duration-(--dur-fast) ${lit ? "bg-(--bg-elevated) text-foreground" : "text-muted-foreground opacity-50"}`}
+                className={`inline-flex h-6 items-center gap-1.5 rounded-md px-2 text-xs ${lit ? "bg-(--bg-elevated) text-foreground" : "text-muted-foreground opacity-50"}`}
               >
                 <StatusIndicator status={dot(id, lit)} />
                 {tr(`overview.phase.${id}`)}
@@ -150,7 +151,7 @@ export function StateStrip({
           align="right"
           className="min-w-0 truncate text-xs text-muted-foreground max-sm:hidden"
         >
-          {right}
+          <HeldText text={right} />
         </Slot>
       </div>
     </Card>
@@ -372,7 +373,7 @@ export function HealthLine({
         className="min-w-0 flex-1 truncate text-muted-foreground"
         title={text}
       >
-        {text}
+        <HeldText text={text} />
       </span>
     </div>
   );

@@ -21,7 +21,7 @@ const StatusIslandContent = lazy(() =>
   })),
 );
 import { LiveNumber } from "./LiveNumber";
-import { HugWidth } from "./HugWidth";
+import { HeldText } from "./HeldText";
 import { useHostTelemetry } from "./host-hook";
 
 const TONE_COLOR: Record<FooterPill["tone"], string> = {
@@ -32,11 +32,11 @@ const TONE_COLOR: Record<FooterPill["tone"], string> = {
 };
 
 /**
- * A pill's whole text (label and value) in ONE HugWidth, so the pill hugs it and keeps its width
- * through a flickering digit count or a value that comes and goes; a separate value box would add
- * and drop its own gap. The value is drawn like YunUI's own StatusPill value (mono, medium,
- * tabular) because the pill's value slot cannot share a box with its label (YunUI change
- * proposed: a `hug` prop on StatusPill).
+ * A pill's text: the label, then the value in YunUI's StatusPill value style (mono, medium, tabular;
+ * the pill's own value slot cannot share a box with a label that changes, YunUI change proposed: a
+ * `hug` prop on StatusPill). The pill is as wide as its text. Every number holds its own width
+ * (HeldText, LiveNumber), so a digit count flickering at a boundary moves the pill by one digit,
+ * never by the room of a whole sentence, and nothing animates its width.
  */
 function PillText({ pill: p }: { pill: FooterPill }) {
   const value = p.tween ? (
@@ -44,13 +44,17 @@ function PillText({ pill: p }: { pill: FooterPill }) {
       <LiveNumber value={p.tween.value} digits={p.tween.digits} />
       {p.tween.suffix}
     </>
-  ) : (
-    p.value
-  );
+  ) : p.value != null && p.value !== "" ? (
+    p.plain ? (
+      p.value
+    ) : (
+      <HeldText text={p.value} />
+    )
+  ) : null;
   return (
-    <HugWidth>
+    <span className="inline-block whitespace-nowrap">
       {p.label}
-      {value != null && value !== "" ? (
+      {value != null ? (
         <span
           className="ml-1.5 font-mono font-medium tabular-nums"
           style={{ color: TONE_COLOR[p.tone] }}
@@ -58,7 +62,7 @@ function PillText({ pill: p }: { pill: FooterPill }) {
           {value}
         </span>
       ) : null}
-    </HugWidth>
+    </span>
   );
 }
 
