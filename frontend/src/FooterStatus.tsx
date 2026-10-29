@@ -189,8 +189,8 @@ export function FooterStatus({
                 label={
                   <>
                     <PillText pill={p} />
-                    <button
-                      type="button"
+                    <Button
+                      variant="ghost"
                       data-island-capsule=""
                       aria-haspopup="dialog"
                       aria-expanded={open && openKey === p.key}
@@ -198,8 +198,10 @@ export function FooterStatus({
                       data-testid={
                         i === 0 ? "footer-trigger" : `footer-trigger-${p.key}`
                       }
-                      className="absolute inset-0 cursor-pointer rounded-full outline-none transition-colors duration-(--dur-fast) ease-(--ease-standard) hover:bg-foreground/[0.04] focus-visible:ring-2 focus-visible:ring-(--ring)"
-                      onClick={(e) => openFrom(p.key, e.currentTarget)}
+                      className="absolute inset-0 h-auto min-h-0 w-auto rounded-full border-transparent bg-transparent p-0 hover:bg-foreground/[0.04]"
+                      onClick={(e: React.MouseEvent<HTMLButtonElement>) =>
+                        openFrom(p.key, e.currentTarget)
+                      }
                     />
                   </>
                 }
