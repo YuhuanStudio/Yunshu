@@ -37,6 +37,12 @@ _NOT_TEXT = (
 # (with the media hash), so they do not keep a block from replaying.
 
 
+def _owned(a):
+    """A copy with its own buffer. ``mx.contiguous``/``mx.array`` may return the same buffer, and the decode
+    kernels update recurrent state and K/V in place, so anything kept across requests must not alias."""
+    return None if a is None else a * 1
+
+
 def stats() -> dict[str, int]:
     return {**_STATS, "entries": len(_STORE), "bytes": resident_bytes()}
 
@@ -203,7 +209,8 @@ class Session:
         for c, (_, payload) in zip(batch.prompt_cache, entry.slots, strict=True):
             if type(c) is arrays_cls:
                 c.__dict__.update(payload)
-                c.cache = list(payload["cache"])
+                # the request decodes into these in place: give it copies, keep the stored ones intact
+                c.cache = [_owned(a) for a in payload["cache"]]
             else:
                 c.update_and_fetch(*payload)
         output = types.SimpleNamespace(
@@ -239,15 +246,18 @@ class Session:
         nbytes = 0
         for c in cache:
             if type(c) is arrays_cls:
+                # c.cache is the live list the decode keeps writing: store owned copies of its arrays
                 meta = dict(c.__dict__)
+                meta["cache"] = [_owned(a) for a in c.cache]
                 slots.append(("a", meta))
-                nbytes += sum(int(a.nbytes) for a in c.cache if a is not None)
+                copies.extend(a for a in meta["cache"] if a is not None)
+                nbytes += sum(int(a.nbytes) for a in meta["cache"] if a is not None)
             elif type(c) is kv_cls and int(c._idx) == self.base + self.rows:
                 # copies: a view would pin the whole context buffer and force every
                 # decode step's in-place K/V write to copy it
                 rows = (
-                    mx.contiguous(mx.array(c.keys[..., self.base : c._idx, :])),
-                    mx.contiguous(mx.array(c.values[..., self.base : c._idx, :])),
+                    _owned(c.keys[..., self.base : c._idx, :]),
+                    _owned(c.values[..., self.base : c._idx, :]),
                 )
                 slots.append(("k", rows))
                 copies.extend(rows)

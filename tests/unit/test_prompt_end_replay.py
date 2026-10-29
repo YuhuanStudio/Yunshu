@@ -129,6 +129,29 @@ def test_repeat_replays_the_stored_block(fake_generate):
     assert state(again) == state(first)
 
 
+def test_decode_after_the_store_does_not_change_what_replays(fake_generate):
+    # The request that stored the block keeps decoding into its caches: it swaps the recurrent state
+    # list's entries and writes K/V in place. A replay must still restore the prompt-end state.
+    model = Model()
+    first = make_batch(model).generate()
+    expected = state(first)
+    for c in first.prompt_cache:
+        if isinstance(c, ArraysCache):
+            c.cache[0] = mx.full((1, 3), -1.0)
+            c.cache[1] = mx.full((1, 2), -1.0)
+        else:
+            c.keys[..., BASE : c._idx, :] = -1.0
+    again = make_batch(model).generate()
+    assert model.calls == 1
+    assert state(again) == expected
+    # and the replaying request's own decode must not reach the stored copy either
+    for c in again.prompt_cache:
+        if isinstance(c, ArraysCache):
+            c.cache[0] = mx.full((1, 3), -2.0)
+    third = make_batch(model).generate()
+    assert state(third) == expected
+
+
 def test_replay_restores_the_real_model_and_offsets(fake_generate):
     model = Model()
     make_batch(model).generate()
