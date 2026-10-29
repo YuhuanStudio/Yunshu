@@ -72,7 +72,9 @@ test.describe("shell scroll containment", () => {
     await page.waitForTimeout(1500);
     const g = await geometry(page);
     expect(g.barBottom).not.toBeNull();
-    expect(Math.round(g.barBottom!)).toBe(g.inner);
+    // the status islands float a small gap above the viewport bottom
+    expect(g.barBottom!).toBeLessThanOrEqual(g.inner);
+    expect(g.barBottom!).toBeGreaterThanOrEqual(g.inner - 20);
     expect(g.scrollY).toBe(0);
     expect(g.docScroll).toBeLessThanOrEqual(g.inner);
   });
@@ -86,7 +88,8 @@ test.describe("shell scroll containment", () => {
     await expect(page.getByTestId("requests")).toBeVisible();
     await page.waitForTimeout(1500);
     const g = await geometry(page);
-    expect(Math.round(g.barBottom!)).toBe(g.inner);
+    expect(g.barBottom!).toBeLessThanOrEqual(g.inner);
+    expect(g.barBottom!).toBeGreaterThanOrEqual(g.inner - 20);
     expect(g.docScroll).toBeLessThanOrEqual(g.inner);
   });
 });
@@ -109,28 +112,35 @@ test.describe("status band never covers content", () => {
       await page.goto(`/console/#/${route}`, { waitUntil: "domcontentloaded" });
       await page.waitForTimeout(1500);
       const r = await page.evaluate(() => {
-        const band = document.querySelector("ul[aria-label='引擎狀態']")!;
-        const footer = band.closest("footer")!;
+        // The islands float over the page bottom (no reserved row): scrolled to the end, whatever lies
+        // horizontally under them must end above their top edge.
+        const band = document
+          .querySelector("ul[aria-label='引擎狀態']")!
+          .getBoundingClientRect();
         const main = document.querySelector("main")!;
-        const scroller = [main, ...main.querySelectorAll("*")].find(
-          (e) =>
+        for (const e of [main, ...main.querySelectorAll("*")])
+          if (
             e.scrollHeight > e.clientHeight + 1 &&
-            /auto|scroll/.test(getComputedStyle(e).overflowY),
-        );
-        if (scroller) scroller.scrollTop = 1e6;
-        const top = footer.getBoundingClientRect().top;
-        const area = (scroller ?? main).getBoundingClientRect().bottom;
+            /auto|scroll/.test(getComputedStyle(e).overflowY)
+          )
+            e.scrollTop = 1e6;
         let lowest = 0;
-        for (const el of (scroller ?? main).querySelectorAll("*")) {
+        for (const el of main.querySelectorAll("*")) {
           const b = el.getBoundingClientRect();
-          if (b.height > 0 && b.bottom > lowest && b.top < area)
-            lowest = b.bottom;
+          if (
+            b.height > 0 &&
+            b.width > 0 &&
+            b.left < band.right &&
+            b.right > band.left &&
+            b.top < band.bottom &&
+            getComputedStyle(el).visibility !== "hidden" &&
+            el.children.length === 0
+          )
+            lowest = Math.max(lowest, b.bottom);
         }
-        return { top, area, lowest, scrolled: !!scroller };
+        return { top: band.top, lowest };
       });
-      expect(r.area).toBeLessThanOrEqual(r.top + 0.5);
-      // Whatever is visible inside the scroll area ends at or above the band.
-      expect(Math.min(r.lowest, r.area)).toBeLessThanOrEqual(r.top + 0.5);
+      expect(r.lowest).toBeLessThanOrEqual(r.top + 0.5);
     });
   }
 });

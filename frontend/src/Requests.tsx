@@ -888,7 +888,7 @@ export function Requests({
               >
                 <TooltipProvider delayDuration={200}>
                   <Table
-                    className="table-fixed md:min-w-[640px]"
+                    className="md:min-w-[640px]"
                     scrollLabel={t("requests.list.tableLabel")}
                   >
                     <Thead>
@@ -897,21 +897,21 @@ export function Requests({
                           k="time"
                           sort={sort}
                           setSort={setSort}
-                          className="w-20 whitespace-nowrap max-sm:hidden"
+                          className="w-20 min-w-20 whitespace-nowrap max-sm:hidden"
                         >
                           {t("requests.list.colTime")}
                         </SortTh>
                         <Th className="min-w-56">
                           {t("requests.list.colRequest")}
                         </Th>
-                        <Th className="hidden w-32 whitespace-nowrap xl:table-cell">
+                        <Th className="hidden w-32 min-w-32 whitespace-nowrap xl:table-cell">
                           {t("requests.list.colUsage")}
                         </Th>
                         <SortTh
                           k="ttft"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-[5.25rem] whitespace-nowrap md:table-cell"
+                          className="hidden w-[5.25rem] min-w-[5.25rem] whitespace-nowrap md:table-cell"
                         >
                           {t("requests.list.colTtft")}
                         </SortTh>
@@ -919,7 +919,7 @@ export function Requests({
                           k="total"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-24 whitespace-nowrap md:table-cell"
+                          className="hidden w-24 min-w-24 whitespace-nowrap md:table-cell"
                         >
                           {t("requests.list.colTotal")}
                         </SortTh>
@@ -927,14 +927,14 @@ export function Requests({
                           k="tps"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-16 whitespace-nowrap md:table-cell"
+                          className="hidden w-16 min-w-16 whitespace-nowrap md:table-cell"
                         >
                           tok/s
                         </SortTh>
-                        <Th className="hidden w-[5rem] whitespace-nowrap min-[1800px]:table-cell">
+                        <Th className="hidden w-[5rem] min-w-[5rem] whitespace-nowrap min-[1800px]:table-cell">
                           {t("requests.list.colSpec")}
                         </Th>
-                        <Th className="w-32">
+                        <Th className="w-32 min-w-32">
                           <span className="sr-only">
                             {t("requests.list.colActions")}
                           </span>

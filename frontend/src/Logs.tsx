@@ -357,7 +357,24 @@ export default function Logs({ connection }: { connection: Connection }) {
     setFollow(true);
     setUnseen(0);
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    // The list may sit partly below the page's fold: after the newest rows render, scroll the page so
+    // the list's bottom (its newest line) is on screen too. Done by hand: WebKit's scrollIntoView on
+    // a row moved only the list, not the page around it.
+    requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+      let page = el.parentElement;
+      while (page && !/auto|scroll/.test(getComputedStyle(page).overflowY))
+        page = page.parentElement;
+      if (!page) return;
+      // the page's bottom padding is the room the floating status islands take
+      const below =
+        el.getBoundingClientRect().bottom -
+        (page.getBoundingClientRect().bottom -
+          parseFloat(getComputedStyle(page).paddingBottom || "0"));
+      if (below > 0) page.scrollTop += below;
+    });
   };
   const copy = useCallback((value: string, message: string) => {
     const show = (m: string) => {

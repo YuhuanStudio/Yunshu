@@ -191,6 +191,11 @@ async function audit(page: Page): Promise<Issue[]> {
         const a = controls[i],
           b = controls[j];
         if (a.contains(b) || b.contains(a)) continue;
+        // The status island floats over the scrolling page (pages clear it at their end; shell.spec
+        // checks that): only controls in the same layer may not overlap.
+        const island = (e: HTMLElement) =>
+          !!e.closest("[data-testid='status-band']");
+        if (island(a) !== island(b)) continue;
         const ra = shown(a)!,
           rb = shown(b)!;
         const w = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left);

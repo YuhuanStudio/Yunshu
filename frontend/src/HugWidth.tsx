@@ -51,10 +51,18 @@ export function HugWidth({
       arm(now);
     };
     measure();
-    const observer = new ResizeObserver(measure);
+    // Resizing the box inside the observer's own callback is a layout change in the same frame, which
+    // WebKit reports as "ResizeObserver loop completed with undelivered notifications": apply on the
+    // next frame instead (one frame later, after the text it hugs has already been laid out).
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    });
     observer.observe(content);
     return () => {
       observer.disconnect();
+      cancelAnimationFrame(frame);
       if (timer != null) clearTimeout(timer);
     };
   }, [holdMs]);
