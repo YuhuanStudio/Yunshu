@@ -1079,7 +1079,7 @@ export default function App() {
                   engine.status != null &&
                   ENGINE_PAGES.has(page) && (
                     <p
-                      className="mx-auto w-full max-w-7xl shrink-0 px-4 pt-2 text-xs text-muted-foreground lg:px-6"
+                      className="mx-auto w-full max-w-7xl shrink-0 px-4 pt-2 text-xs tabular-nums text-muted-foreground lg:px-6"
                       data-testid="engine-needed"
                       role="status"
                     >

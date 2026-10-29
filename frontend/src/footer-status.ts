@@ -20,9 +20,7 @@ export interface FooterPill {
   tone: PillTone;
   dot: boolean;
   help: string;
-  /** Realistic width of the value in `ch`, so changing digits never move neighbours. */
-  minCh?: number;
-  /** A live number that glides between samples; when set the band draws it instead of `value`. */
+  /** A live number the band draws (paced like every readout) instead of `value`. */
   tween?: { value: number; digits: number; suffix: string };
 }
 
@@ -199,7 +197,6 @@ export function footerPills(input: FooterInput): FooterPill[] {
       value: memoryPairText(active, total),
       tone,
       dot: true,
-      minCh: 14,
       help:
         t("shell.footer.memory.help", {
           active: n(active, 1),
@@ -243,7 +240,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
   pills.push({
     key: "now",
     label: loadingModel ? t("shell.engine.live.loading") : phaseLabels[a.phase],
-    value: value ?? "\u00a0",
+    value,
     // The same state-to-colour map as the top pill: decode green, other work amber, idle no dot.
     tone:
       a.phase === "decode"
@@ -252,8 +249,6 @@ export function footerPills(input: FooterInput): FooterPill[] {
           ? "neutral"
           : "warning",
     dot: a.phase !== "idle" || !!loadingModel,
-    // room for the digits of this phase only ("999 tok/s", "100%"); the pill is last, so its width moves nothing
-    minCh: a.phase === "decode" ? 9 : a.phase === "prefill" ? 4 : undefined,
     tween,
     help:
       a.phase === "idle"
@@ -269,16 +264,14 @@ export function footerPills(input: FooterInput): FooterPill[] {
   pills.push({
     key: "load",
     label: t("shell.footer.load.label"),
-    // Always both numbers: a queue appearing or emptying, or one more digit, must not resize the pill
-    // (real-load-replay measured every pill after it moving).
+    // Always both numbers: a queue appearing or emptying must not add or drop a word. The band
+    // (HugWidth) keeps the width while a digit count flickers.
     value: t("shell.footer.load.both", {
       active: a.counts.active,
       queued: a.counts.queued,
     }),
     tone: "neutral",
     dot: false,
-    // Measured jitter (real-load-replay): one more digit ("9" -> "10 running") moved every pill after it.
-    minCh: 16,
     help: t("shell.footer.load.help", {
       active: a.counts.active,
       queued: a.counts.queued,
@@ -301,7 +294,6 @@ export function footerPills(input: FooterInput): FooterPill[] {
       value: `${n(input.gpuBusy * 100)}%`,
       tone: "neutral",
       dot: false,
-      minCh: 4,
       help: t("shell.footer.gpu.help"),
     });
   pills.push(nowPill);

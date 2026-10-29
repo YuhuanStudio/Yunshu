@@ -16,7 +16,7 @@ every complete block is selected, so the set is every key up to the row's end.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 import mlx.core as mx
 
@@ -300,7 +300,7 @@ def attend(
         output_shapes=[queries.shape],
         output_dtypes=[queries.dtype],
     )
-    return out[0]
+    return cast("mx.array", out[0])
 
 
 def install() -> bool:
