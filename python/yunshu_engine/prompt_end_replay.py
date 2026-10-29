@@ -47,6 +47,8 @@ def resident_bytes() -> int:
 
 def clear() -> None:
     _STORE.clear()
+    for k in _STATS:
+        _STATS[k] = 0
 
 
 class _Entry:
