@@ -34,7 +34,8 @@ import {
   TabsTrigger,
   Textarea,
 } from "@yuhuanowo/yunui";
-import { GenerationStats, useStreamReveal } from "@yuhuanowo/yunui/chat";
+import { useStreamReveal } from "@yuhuanowo/yunui/chat";
+import { MessageStats } from "./chat/MessageStats";
 import {
   ChatEmpty,
   ChatSurface,
@@ -154,14 +155,6 @@ const codeTabs: { value: CodeLanguage; label: string; language: string }[] = [
   { value: "javascript", label: "JavaScript", language: "javascript" },
 ];
 type Pair = readonly [Run | null, Run | null];
-const statLabels = () => ({
-  tokens: "tokens",
-  speed: "tok/s",
-  latency: "ms",
-  ttft: t("playground.stat.ttft"),
-  cached: t("playground.stat.cached"),
-  prompt: t("playground.stat.prompt"),
-});
 type ToolAction = {
   icon: ReactNode;
   label: string;
@@ -193,41 +186,35 @@ function specLabel(
   return `${mode}${perRound}${rate}`;
 }
 
-/** Per-reply engine stats; live while `now` ticks, final once `endAt` is set. */
-function ReplyStats({ run, now }: { run: Run; now: number }) {
+/** A reply's numbers for the header line beside the model name (live while `now` ticks, final once `endAt` is set). */
+function ReplyStats({
+  run,
+  now,
+  jumpKey,
+}: {
+  run: Run;
+  now: number;
+  jumpKey: string;
+}) {
   if (!run.timing) return null;
   const s = runStats(run.timing, now),
-    live = run.timing.endAt === undefined;
+    live = run.timing.endAt === undefined,
+    thinkMs =
+      run.timing.thinkStart != null && run.timing.thinkEnd != null
+        ? run.timing.thinkEnd - run.timing.thinkStart
+        : undefined;
   return (
-    <div
-      className="flex flex-wrap items-center gap-1.5 tabular-nums"
-      data-testid="reply-stats"
-    >
-      <GenerationStats
-        tokens={s.tokens}
-        tokensPerSecond={s.tokensPerSecond}
-        latencyMs={Math.round(s.latencyMs)}
-        ttftMs={s.ttftMs}
-        cachedTokens={s.cachedTokens}
-        promptTokens={s.promptTokens}
-        labels={statLabels()}
-      />
-      {live && s.ttftMs === undefined && (
-        <span className="text-xs text-muted-foreground">
-          {t("playground.stat.waitingFirst")}
-        </span>
-      )}
-      {run.timing.usage?.spec && (
-        <span className="text-xs text-muted-foreground">
-          {specLabel(run.timing.usage.spec, s.tokens)}
-        </span>
-      )}
-      {s.estimated && !live && (
-        <span className="text-xs text-muted-foreground">
-          {t("playground.stat.estimated")}
-        </span>
-      )}
-    </div>
+    <MessageStats
+      stats={s}
+      live={live}
+      thinkMs={thinkMs}
+      jumpKey={jumpKey}
+      extra={
+        run.timing.usage?.spec
+          ? specLabel(run.timing.usage.spec, s.tokens).replace(/^ · /, "")
+          : undefined
+      }
+    />
   );
 }
 
@@ -1414,6 +1401,13 @@ export function Playground({
                   <span className="text-xs tabular-nums text-muted-foreground">
                     T={number(run?.temperature ?? columnTemp(i), 1)}
                   </span>
+                  {run && (
+                    <ReplyStats
+                      run={run}
+                      now={now}
+                      jumpKey={`compare-${i}-${run.timing?.start}`}
+                    />
+                  )}
                 </div>
                 {run ? (
                   <>
@@ -1422,7 +1416,6 @@ export function Playground({
                       streaming={loading && !run.timing?.endAt}
                       now={now}
                     />
-                    <ReplyStats run={run} now={now} />
                   </>
                 ) : (
                   <p className="text-xs text-muted-foreground">
@@ -1492,7 +1485,7 @@ export function Playground({
             key={m.id}
             role="assistant"
             name={modelLabel(m.model)}
-            footer={<ReplyStats run={m} now={now} />}
+            badges={<ReplyStats run={m} now={now} jumpKey={m.id} />}
             actions={
               m.content && !(loading && lastId === m.id) ? (
                 <>

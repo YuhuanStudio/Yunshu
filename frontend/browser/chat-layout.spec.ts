@@ -86,6 +86,28 @@ test.describe("phone", () => {
     ).toBe(0);
   });
 
+  test("playground: a reply's stats share the name line and its actions are visible on touch", async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== "webkit");
+    const input = await openPlayground(page, { words: 20 });
+    await ask(page, input, "Hello");
+    await stop(page).waitFor({ state: "detached" });
+    const turn = page
+      .locator('[data-yunui="chat-message"][data-role="assistant"]')
+      .last();
+    const stats = (await turn.getByTestId("reply-stats").boundingBox())!;
+    const name = (await turn
+      .getByText("Qwen3.8-27B", { exact: true })
+      .first()
+      .boundingBox())!;
+    expect(Math.abs(stats.y - name.y)).toBeLessThan(name.height);
+    expect(stats.x + stats.width).toBeLessThanOrEqual(PHONE.width);
+    await expect(turn.locator("[data-chat-actions]")).toHaveCSS("opacity", "1");
+    await noOverflow(page);
+  });
+
   test("playground: the settings panel is a drawer on a phone", async ({
     page,
     browserName,
@@ -152,6 +174,30 @@ test.describe("desktop", () => {
       Math.abs(bubble.x + bubble.width - (composer.x + composer.width)),
     ).toBeLessThan(2);
     await noOverflow(page);
+  });
+
+  test("playground: the stats on the name line never wrap or move the text while the reply streams", async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== "chromium");
+    const input = await openPlayground(page, { words: 300, every: 10 });
+    await ask(page, input, "Stream please");
+    const turn = page
+      .locator('[data-yunui="chat-message"][data-role="assistant"]')
+      .last();
+    const stats = turn.getByTestId("reply-stats");
+    await expect(stats).toContainText("tok/s");
+    const heights = new Set<number>();
+    for (let i = 0; i < 12; i++) {
+      const b = (await stats.boundingBox())!;
+      heights.add(Math.round(b.height));
+      await page.waitForTimeout(120);
+    }
+    expect(heights.size).toBe(1);
+    await stop(page).waitFor({ state: "detached" });
+    const done = (await stats.boundingBox())!;
+    expect(Math.round(done.height)).toBe([...heights][0]);
   });
 
   test("playground: following the stream stops when the reader scrolls up, and the pill brings it back", async ({
