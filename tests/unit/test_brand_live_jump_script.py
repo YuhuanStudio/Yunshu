@@ -19,7 +19,10 @@ def test_plan_is_bursty_deterministic_and_inside_the_run():
     times = [at for at, _ in plan]
     assert times == sorted(times)
     # bursts: some requests start within 0.5 s of the previous one
-    assert sum(b - a < 0.5 for a, b in zip(times, times[1:], strict=False)) >= len(plan) // 2
+    assert (
+        sum(b - a < 0.5 for a, b in zip(times, times[1:], strict=False))
+        >= len(plan) // 2
+    )
     assert {k for _, k in plan} <= {"short", "long", "cancel"}
 
 
