@@ -1514,3 +1514,20 @@ verify fnspec-lp-27b: base af1e8b524d68 vs cand 5ee0fb7d6a61-vc39b09c0956d on /V
   speed: PASS - code@1024 decode_tps 134.9->134.9 (+0.0%, noise +-0.3%, reps [0.0, -0.59, -0.07]); code@1024 cold_ttft_s 0.962->0.962 (+0.0%, noise +-0.1%, reps [0.0, 0.0, 0.1]); code@1024 followup_ttft_s 0.332->0.332 (+0.0%, noise +-0.5%, reps [-0.9, 0.0, 0.0]); code@1024 followup_decode_tps 83.4->83.1 (-0.4%, noise +-1.7%, reps [-3.25, -0.36, 0.12]); code@1024 warm_ttft_s 0.061->0.059 (-3.3%, noise +-3.2%, reps [0.0, -3.28, -6.45]); prose@1024 decode_tps 78.6->78.7 (+0.1%, noise +-0.1%, reps [-0.13, 0.0, 0.13]); prose@1024 cold_ttft_s 0.976->0.976 (+0.0%, noise +-0.2%, reps [0.21, -0.2, -0.2]); prose@1024 followup_ttft_s 0.333->0.335 (+0.6%, noise +-0.5%, reps [0.6, 0.6, -0.3]); prose@1024 followup_decode_tps 70.0->70.4 (+0.6%, noise +-0.3%, reps [0.57, 1.15, 0.57]); prose@1024 warm_ttft_s 0.06->0.059 (-1.7%, noise +-2.5%, reps [1.72, 0.0, -3.33]); code@8192 decode_tps 80.9->81.2 (+0.4%, noise +-0.2%, reps [0.25, 0.5, 0.12]); code@8192 cold_ttft_s 7.439->7.438 (-0.0%, noise +-0.1%, reps [0.13, -0.15, -0.01]); code@8192 followup_ttft_s 0.384->0.379 (-1.3%, noise +-0.4%, reps [-1.56, -0.78, -1.04]); code@8192 followup_decode_tps 115.9->115.1 (-0.7%, noise +-7.0%, reps [-13.75, 0.26, -0.69]); code@8192 warm_ttft_s 0.084->0.083 (-1.2%, noise +-1.7%, reps [-3.49, -2.41, 0.0]); prose@8192 decode_tps 69.8->70.0 (+0.3%, noise +-1.3%, reps [1.01, -1.58, 0.29]); prose@8192 cold_ttft_s 7.435->7.442 (+0.1%, noise +-0.1%, reps [0.09, -0.05, 0.09]); prose@8192 followup_ttft_s 0.38->0.38 (+0.0%, noise +-0.5%, reps [0.27, -0.78, 0.26]); prose@8192 followup_decode_tps 64.0->63.6 (-0.6%, noise +-0.9%, reps [0.16, -1.56, -0.62]); prose@8192 warm_ttft_s 0.078->0.078 (+0.0%, noise +-1.3%, reps [1.3, 0.0, -1.28])
 jobs: 1028-025500-00-fnspec-lp-27b-smoke-base-a1-47be, 1028-025503-00-fnspec-lp-27b-smoke-cand-a1-9740, 1028-033858-00-fnspec-lp-27b-identity-base.default-a1-3d1f, 1028-033859-00-fnspec-lp-27b-identity-cand.default-a1-9e92, 1028-033901-00-fnspec-lp-27b-identity-candoff.default-a1-1e42, 1028-054706-00-fnspec-lp-27b-speed-base-r0-a1-e333, 1028-054708-00-fnspec-lp-27b-speed-cand-r0-a1-b77d, 1028-054709-00-fnspec-lp-27b-speed-base-r1-a1-4c74, 1028-054711-00-fnspec-lp-27b-speed-cand-r1-a1-10ef, 1028-054713-00-fnspec-lp-27b-speed-base-r2-a1-8141, 1028-054715-00-fnspec-lp-27b-speed-cand-r2-a1-477c  (* = reused from an earlier invocation)
 ```
+
+## 2026-10-29 — Exact-repeat prompt-end replay (warm TTFT), Qwen3.8-27B oQ4e-mtp + DFlash2, M5 Max
+
+Warm TTFT (same prompt re-sent, APC RAM hit; code prompts; cold + 3 warm per context; one run per arm).
+The base is main 6185cab89 (runs warmttft-rp2-ab-base and -base-r1). The candidate is the merge 48f1283d2 (run lead-wt-ab4).
+
+| ctx | base warm TTFT (s) | replay warm TTFT (s) | decode tok/s base → replay |
+|---|---|---|---|
+| 1K | 0.093 / 0.091 / 0.094 | 0.010 / 0.013 / 0.011 | 88.6 → 89.0 |
+| 8K | 0.116 / 0.112 / 0.117 | 0.026 / 0.023 / 0.023 | 135.5 → 136.0 |
+| 32K | 0.171 / 0.165 / 0.166 | 0.048 / 0.044 / 0.044 | 97.1 → 97.2 |
+| 128K | 0.561 / 0.571 / 0.570 | 0.279 / 0.275 / 0.274 | 90.7 → 91.1 |
+
+Output checks:
+- Every warm reply equals its cold reply (the per-context sha is the same as main's).
+- Replay engaged on 12 of 12 warm requests.
+- At 128K, the remaining time is the APC restore of the long context (about 174 ms).
