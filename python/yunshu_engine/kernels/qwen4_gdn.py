@@ -13,9 +13,12 @@ than 16 rows) falls back to the caller's original layer.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import mlx.core as mx
+
+logger = logging.getLogger(__name__)
 
 MAX_ROWS = 8
 _STATE: dict[str, Any] = {"engaged": 0, "fallback": 0}
@@ -137,8 +140,16 @@ def gated_delta(
                 cache.advance(length)
                 verifier._helpers()._qwen3_5_advance_lengths_info(cache, length)
             _STATE["engaged"] += 1
+            if _STATE["engaged"] == 1:
+                logger.info("Qwen4 fused GDN verify engaged (%d rows)", length)
             return result
     _STATE["fallback"] += 1
+    if _STATE["fallback"] == 1:
+        logger.info(
+            "Qwen4 fused GDN verify: first fallback to the composed layer (%d rows, mask %s)",
+            length,
+            mask is not None,
+        )
     return original(verifier, layer, inputs, mask, cache)
 
 
