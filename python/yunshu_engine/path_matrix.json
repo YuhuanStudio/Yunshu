@@ -2624,10 +2624,6 @@
           "s": "na",
           "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
         },
-        "driver": {
-          "s": "na",
-          "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
-        },
         "batch": {
           "s": "na",
           "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
