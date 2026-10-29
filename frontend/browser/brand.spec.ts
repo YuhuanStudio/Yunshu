@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { installAsk, installEngine } from "./support/chat-fixture";
 
 // The Yunshu brand: one real asset set (favicon, touch icon, manifest) and the same tile on every surface,
@@ -263,4 +263,43 @@ test("the Playground's assistant avatar is the tile", async ({ page }) => {
       .first(),
   ).toBeVisible();
   await shot(page, "chat-avatar-light");
+});
+
+// Picture: Yunshu's block next to Yunxin's. Both are YunUI Sidebar's own brand block (the same markup and
+// classes, see the measurements above); the Yunxin one is that markup with Yunxin's favicon and name.
+test("brand block next to Yunxin's (picture only)", async ({ page }) => {
+  test.skip(!SHOTS, "set BRAND_SHOTS to write the picture");
+  const yunxin =
+    "/Users/yuhuan/Documents/YuhuanStudio/Yunxin/frontend/public/favicon.ico";
+  test.skip(!existsSync(yunxin), "Yunxin checkout not present");
+  const icon = `data:image/x-icon;base64,${readFileSync(yunxin).toString("base64")}`;
+  for (const theme of ["light", "dark"] as const) {
+    await open(page, theme);
+    const html = await rail(page)
+      .locator("> div")
+      .first()
+      .evaluate((e) => e.outerHTML);
+    await page.evaluate(
+      ({ html, icon }) => {
+        const wrap = document.createElement("div");
+        wrap.id = "yunxin-compare";
+        wrap.style.cssText =
+          "position:fixed;left:300px;top:20px;width:256px;z-index:99;background:var(--bg-window);border:1px solid var(--border-hairline);border-radius:8px";
+        wrap.innerHTML = html;
+        const img = wrap.querySelector("img")!;
+        img.src = icon;
+        img.alt = "Yunxin";
+        img.style.borderRadius = "8px";
+        wrap.querySelector("span")!.textContent = "Yunxin";
+        document.body.appendChild(wrap);
+      },
+      { html, icon },
+    );
+    await shot(page, `compare-yunxin-${theme}`, {
+      x: 0,
+      y: 0,
+      width: 580,
+      height: 90,
+    });
+  }
 });
