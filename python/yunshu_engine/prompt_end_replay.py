@@ -104,35 +104,43 @@ def _plan(batch) -> tuple[Any, int, int] | None:
     """``(key, base, rows)`` when this batch's final block may be replayed or recorded."""
     meta = getattr(batch, "_apc_meta", None) or []
     if len(meta) != 1 or not meta[0] or len(getattr(batch, "uids", ())) != 1:
-        return _skip("not one row/uid")
+        _skip("not one row/uid")
+        return None
     # logits processors (penalties, grammar guides) run on the returned logits after the forward, in
     # PromptProcessingBatch.generate; replay only substitutes the forward's output, so they see the same input.
     if any(getattr(batch, "_right_pad_per_row", None) or []):
-        return _skip("right padding")
+        _skip("right padding")
+        return None
     draft = getattr(batch, "draft_model", None)
     kind = getattr(batch, "draft_kind", None) if draft is not None else None
     if kind not in (None, "dflash"):
-        return _skip("draft kind")
+        _skip("draft kind")
+        return None
     kwargs = getattr(batch, "_prompt_kwargs", None) or {}
     media = [k for k in _NOT_TEXT if kwargs.get(k) is not None]
     if media:
-        return _skip(f"media kwargs {media}")
+        _skip(f"media kwargs {media}")
+        return None
     embeds = getattr(batch, "_inputs_embeds", None)
     ids = meta[0].get("full_input_ids")
     cache = getattr(batch, "prompt_cache", None) or []
     arrays_cls, kv_cls = _classes()
     if embeds is None or embeds.shape[0] != 1 or ids is None or not cache:
-        return _skip("no embeds/ids/cache")
+        _skip("no embeds/ids/cache")
+        return None
     bases = set()
     for c in cache:
         if type(c) is kv_cls:
             if c.keys is None or c.keys.shape[0] != 1 or c._right_padding is not None:
-                return _skip("kv shape/padding")
+                _skip("kv shape/padding")
+                return None
             bases.add(int(c._idx))
         elif type(c) is not arrays_cls:
-            return _skip("unknown cache type")
+            _skip("unknown cache type")
+            return None
     if len(bases) != 1:
-        return _skip("mixed kv bases")
+        _skip("mixed kv bases")
+        return None
     key = (
         id(batch.model),
         kind,
@@ -285,7 +293,8 @@ def open_session(batch) -> Session | None:
     try:
         plan = _plan(batch)
     except Exception as exc:
-        return _skip(f"plan error: {exc!r}")
+        _skip(f"plan error: {exc!r}")
+        return None
     if plan is None:
         return None
     session = Session(batch, *plan)
