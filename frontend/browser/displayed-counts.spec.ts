@@ -62,7 +62,7 @@ function status(n: number) {
   };
 }
 
-test("the live token count equals the engine's count at every sample", async ({
+test("the live token count is always a count the engine reported, within one readout interval", async ({
   page,
 }) => {
   let n = 0;
@@ -98,15 +98,17 @@ test("the live token count equals the engine's count at every sample", async ({
       continue;
     }
     seen = now;
-    // Two frames after the sample is enough for any snap; a glide (about 220 ms) is still in flight.
-    await page.evaluate(
-      () =>
-        new Promise((r) =>
-          requestAnimationFrame(() => requestAnimationFrame(r)),
-        ),
+    // A readout is drawn at most every ~240 ms, so it may trail the newest sample by one interval; what
+    // it shows is always a count the engine reported (never an in-between value).
+    await page.waitForTimeout(280);
+    const reported = (k: number) => 36 + 240 * k;
+    const value = await shown();
+    const k = Math.round(((value ?? NaN) - 36) / 240);
+    expect(value, `sample ${now}`).toBe(reported(k));
+    expect(k, `sample ${now} shows an old count`).toBeGreaterThanOrEqual(
+      now - 3,
     );
-    if (n !== now) continue; // another sample landed meanwhile
-    expect(await shown(), `sample ${now}`).toBe(36 + 240 * now);
+    expect(k).toBeLessThanOrEqual(n);
     checked++;
   }
   expect(checked).toBeGreaterThanOrEqual(4);

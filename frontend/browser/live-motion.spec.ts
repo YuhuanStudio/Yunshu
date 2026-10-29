@@ -104,19 +104,22 @@ const BAR_FILL = '[data-yunui="live-bar"] > span:last-child';
 const scale =
   "Number(/scaleX\\(([^)]+)\\)/.exec(el.style.transform)?.[1] ?? 0)";
 
-test("numbers glide between samples (and only then)", async ({ page }) => {
+test("a text number shows only reported samples, at a readable pace (no per-frame glide)", async ({
+  page,
+}) => {
   await open(page, "overview", 6500);
   await expect(page.locator(DECODE).first()).toBeVisible();
-  const seen = new Set(await watch(page, DECODE, 3000, "el.textContent"));
-  const values = [...seen]
+  const frames = await watch(page, DECODE, 3000, "el.textContent");
+  const changes = frames.filter((v, i) => i > 0 && v !== frames[i - 1]).length;
+  const values = [...new Set(frames)]
     .map((v) => Number(v.replace(/[^\d.]/g, "")))
     .filter((n) => Number.isFinite(n));
-  const between = values.filter((v) => v > 42 && v < 78);
-  expect(between.length, `values seen: ${[...seen].join(" ")}`).toBeGreaterThan(
-    3,
-  );
+  // the feed alternates 40 and 80 tok/s: nothing in between was ever drawn, and the digits
+  // change at most about 4 times a second (3 s window plus one for the boundary)
+  expect(values.filter((v) => v > 42 && v < 78)).toEqual([]);
   expect(Math.min(...values)).toBeGreaterThanOrEqual(40);
   expect(Math.max(...values)).toBeLessThanOrEqual(80);
+  expect(changes, `${changes} text changes in 3 s`).toBeLessThanOrEqual(13);
 });
 
 test("reduced motion draws each sample as it is: no in-between values", async ({

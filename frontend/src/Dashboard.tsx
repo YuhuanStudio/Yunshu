@@ -1,6 +1,7 @@
 import { prefixHit, prefixHitWindow } from "./request-kpi";
 import { gbTotalText } from "./byte-format";
 import { LiveNumber } from "./LiveNumber";
+import { HugWidth } from "./HugWidth";
 import { SkeletonSwap } from "./motion/SkeletonSwap.tsx";
 import { rangeSeconds, sinceStartId, useRangeHistory } from "./useRangeHistory";
 import { MetricChartGroup } from "@yuhuanowo/yunui";
@@ -71,7 +72,11 @@ import {
 } from "./OverviewParts";
 import { useSignals } from "./signals";
 import type { Connection, RequestRow } from "./api";
-import { buildIntegrations, neverConfigured, serviceRoot } from "./integrations";
+import {
+  buildIntegrations,
+  neverConfigured,
+  serviceRoot,
+} from "./integrations";
 import {
   clock,
   elapsed,
@@ -224,7 +229,7 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
             )}
           </div>
           <div className="flex shrink-0 items-center gap-4 text-xs tabular-nums text-muted-foreground">
-            <Slot ch={9} align="right">
+            <Slot ch={11} align="right">
               {phase === "decode" ? (
                 <LiveNumber
                   value={row.completion_tokens ?? null}
@@ -235,10 +240,9 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
               )}{" "}
               tok
             </Slot>
-            <Slot ch={12} align="right" className="text-foreground">
+            <Slot ch={13} align="right" className="text-foreground">
               <LiveNumber
                 value={row.tokens_per_second ?? null}
-                glide
                 format={(v) => fixed(v)}
                 jumpKey={row.request_id + phase}
               />
@@ -699,8 +703,11 @@ export function Dashboard({
                 icon={HardDrive}
                 label={t("overview.stats.metal")}
                 value={
-                  <span title={t("overview.tip.metal")}>
-                    <span className="tabular-nums">
+                  <HugWidth>
+                    <span
+                      className="tabular-nums"
+                      title={t("overview.tip.metal")}
+                    >
                       <LiveNumber
                         value={memory?.active_gb ?? null}
                         digits={1}
@@ -709,7 +716,7 @@ export function Dashboard({
                     <span className="ml-1 text-xs font-normal text-muted-foreground">
                       GB
                     </span>
-                  </span>
+                  </HugWidth>
                 }
                 subtext={t("overview.stats.metalSub", {
                   total: number(memory?.total_gb),
@@ -1038,17 +1045,19 @@ export function Dashboard({
                 }
               >
                 <p className="text-2xl font-semibold tabular-nums">
-                  <span className="tabular-nums">
-                    {fixed(memory?.active_gb)}
-                  </span>
-                  <span className="ml-1.5 text-sm font-normal text-muted-foreground">
-                    {t("overview.memory.activeOf", {
-                      gb:
-                        memory?.total_gb != null
-                          ? gbTotalText(memory.total_gb)
-                          : fixed(memory?.total_gb),
-                    })}
-                  </span>
+                  <HugWidth>
+                    <span className="tabular-nums">
+                      {fixed(memory?.active_gb)}
+                    </span>
+                    <span className="ml-1.5 text-sm font-normal text-muted-foreground">
+                      {t("overview.memory.activeOf", {
+                        gb:
+                          memory?.total_gb != null
+                            ? gbTotalText(memory.total_gb)
+                            : fixed(memory?.total_gb),
+                      })}
+                    </span>
+                  </HugWidth>
                 </p>
                 {/* the legend wraps to a second line when the numbers get wider: both lines are reserved */}
                 <div className="mt-4 min-h-[54px]">
@@ -1200,7 +1209,7 @@ export function Dashboard({
                   <span className="w-20 text-right text-xs tabular-nums text-muted-foreground">
                     {sizeGb(model.size_gb)}
                   </span>
-                  <span className="w-24 text-right text-xs text-muted-foreground">
+                  <span className="w-28 whitespace-nowrap text-right text-xs tabular-nums text-muted-foreground">
                     {model.loading
                       ? t("overview.models.loading")
                       : model.loaded

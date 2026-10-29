@@ -98,6 +98,7 @@ const LogRow = memo(function LogRow({
 }) {
   return (
     <div
+      data-row-actions
       className={`group flex flex-wrap items-baseline gap-x-3 px-4 py-1 text-xs hover:bg-muted/40 ${isFresh ? FRESH_ROW : ""}`}
     >
       <span className="w-[6.75rem] shrink-0 tabular-nums text-muted-foreground">

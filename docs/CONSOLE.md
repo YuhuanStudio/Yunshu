@@ -130,6 +130,26 @@ collapses to a single compact pill.
   <img src="images/console/en/island-light.webp" alt="Status island opened over the overview">
 </picture>
 
+### Live readouts (how numbers stay still)
+
+Live figures follow one rule so a busy engine does not make the page jump.
+
+- **Hug, then hold.** A pill or stat value is as wide as its text and no wider. Its width grows at once when a
+  digit or a word needs room and shrinks only after the text stayed narrower for 6 s (the hold doubles, up to 8x,
+  when a shrink is undone soon after). A count flickering at a digit boundary (9 / 10, 9.9 / 10.1) therefore
+  resizes once and then holds; a settled pill carries no empty room. A step eases over 180 ms and the text is
+  revealed by the box. Implemented by `HugWidth` with the pure `WidthRatchet` (`src/motion/hug-core.ts`).
+- **Digits are tabular.** Numbers use tabular figures, the unit sits right after the number inside the same
+  box, and the phase word is the last pill, so a phase change moves nothing before it.
+- **Readable pace.** Text readouts (`LiveNumber`, `src/motion/readout-core.ts`) redraw at most about 4 Hz and
+  never count through values the engine did not report. Bars and charts, which are not read digit by digit, run
+  at frame rate. Reduced motion draws every sample as it arrives.
+- **Tables do not reflow.** Live tables use fixed column widths sized for the widest real value.
+
+`frontend/browser/live-stability.spec.ts` replays the recorded bursty status stream (and synthetic feeds that
+cross digit boundaries on purpose) and fails on a pill with empty room after its text, a box whose width goes
+A, B, A twice, frames in which something moved beyond a per-page budget, or layout shift above 0.02.
+
 ## Pages
 
 The console has six pages, plus the docs link in the top bar: **Overview**, **Requests**, **Models** (tabs

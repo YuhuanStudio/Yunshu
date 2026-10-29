@@ -1,42 +1,39 @@
 import { useLayoutEffect, useRef } from "react";
 import { fixed, number } from "./i18n/format.ts";
 import { useLocale } from "./i18n/index.ts";
-import { ticker, reducedMotion } from "./motion/ticker.ts";
-import { Tween } from "./motion/tween-core.ts";
+import { reducedMotion } from "./motion/ticker.ts";
+import { Readout } from "./motion/readout-core.ts";
 
 /**
- * A live reading drawn with tabular digits, so its width does not move. A count or any other fact
- * (the default) shows the sampled value at once: a glide would draw numbers the engine never
- * reported. A RATE (`glide`) eases to each new sample (ease-out, about one sample interval); it
- * only moves between two real samples and settles on the engine's value. Frames write the text straight into the
- * DOM from the shared ticker: no React render per frame. Under reduced motion, and whenever
- * `jumpKey` changes (another request, another phase), it shows the new value at once, because
- * gliding through values that never existed would be a lie.
+ * A live reading drawn with tabular digits, so its width does not move, at a pace a person can
+ * read: a new sample is drawn at once if the last draw is at least ~240 ms old (about 4 Hz), else
+ * the newest sample is drawn when that interval ends. It never counts through values the engine
+ * did not report (no per-frame glide: a rate that ticks every frame is unreadable), and a sample
+ * is never invented. Writes go straight to the DOM, no React render. Whenever `jumpKey` changes
+ * (another request, another phase), under reduced motion, and for a reading that goes away (null),
+ * the new value is shown at once.
  */
 export function LiveNumber({
   value,
   digits = 0,
-  ms = 220,
-  glide = false,
   jumpKey,
   format,
   className,
 }: {
   value: number | null;
   digits?: number;
-  ms?: number;
-  /** Smooth between samples; only for rates (tok/s). Counts and other facts snap. */
-  glide?: boolean;
   jumpKey?: string | number | null;
   format?: (v: number) => string;
   className?: string;
 }) {
   const locale = useLocale();
   const el = useRef<HTMLSpanElement>(null);
-  const tween = useRef<Tween | null>(null);
+  const readout = useRef(new Readout<number | null>());
   const key = useRef(jumpKey);
-  const off = useRef<(() => void) | null>(null);
+  const shown = useRef<number | null | undefined>(undefined);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draw = (v: number | null) => {
+    shown.current = v;
     if (el.current)
       el.current.textContent =
         v == null
@@ -47,38 +44,45 @@ export function LiveNumber({
               ? fixed(v, digits)
               : number(v, 0);
   };
+  const stop = () => {
+    if (timer.current != null) clearTimeout(timer.current);
+    timer.current = null;
+  };
 
   useLayoutEffect(() => {
-    const stop = () => {
-      off.current?.();
-      off.current = null;
-    };
-    if (!tween.current) tween.current = new Tween(value, ms);
-    const tw = tween.current;
-    if (!glide || reducedMotion() || key.current !== jumpKey || value == null) {
+    const now = performance.now();
+    if (
+      value == null ||
+      reducedMotion() ||
+      key.current !== jumpKey ||
+      value === shown.current
+    ) {
       key.current = jumpKey;
       stop();
-      tw.jump(value);
-      draw(value);
+      draw(readout.current.jump(value, now));
       return;
     }
-    const now = performance.now();
-    tw.retarget(value, now);
-    draw(tw.valueAt(now));
-    if (!off.current && !tw.settled(now))
-      off.current = ticker.subscribe((t) => {
-        draw(tw.valueAt(t));
-        if (tw.settled(t)) stop();
-      });
+    const v = readout.current.offer(value, now);
+    if (v != null) {
+      stop();
+      draw(v);
+      return;
+    }
+    const fire = () => {
+      timer.current = null;
+      const t = performance.now();
+      const next = readout.current.flush(t);
+      if (next != null) draw(next);
+      else {
+        const wait = readout.current.dueIn(t);
+        if (wait != null) timer.current = setTimeout(fire, wait);
+      }
+    };
+    if (timer.current == null)
+      timer.current = setTimeout(fire, readout.current.dueIn(now) ?? 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value, jumpKey, digits, locale, glide]);
-  useLayoutEffect(
-    () => () => {
-      off.current?.();
-      off.current = null;
-    },
-    [],
-  );
+  }, [value, jumpKey, digits, locale]);
+  useLayoutEffect(() => stop, []);
 
   return <span ref={el} className={`tabular-nums ${className ?? ""}`} />;
 }

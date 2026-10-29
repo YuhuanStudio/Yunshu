@@ -49,8 +49,6 @@ const docs: Shape<typeof zh> = {
   "actions.claude": "Claude",
   "reference.link": "OpenAPI ↗",
   sse: "Server-Sent Events",
-  "nav.label": "Documentation",
-  "nav.jump": "Jump to a docs page",
   "toc.title": "On this page",
   prev: "Previous",
   next: "Next",
@@ -68,13 +66,18 @@ const docs: Shape<typeof zh> = {
   "actions.copy": "Copy Markdown",
   "actions.copied": "Copied",
   "actions.failed": "Could not copy this page",
-  breadcrumb: "Breadcrumb",
   updated: "Last updated",
   reference: "Generated API reference",
   "reference.description":
     "Interactive reference generated from the engine OpenAPI schema. Requests use this console’s same-origin proxy.",
   "reference.guides": "Endpoint guides",
   "reference.operation": "API operation",
+  "fd.openSidebar": "Open page navigation",
+  "fd.closeSidebar": "Close page navigation",
+  "fd.noHeadings": "No headings on this page",
+  "fd.copyText": "Copy code",
+  "fd.copiedText": "Code copied",
+  "fd.collapse": "Collapse page navigation",
 };
 
 export default docs;
