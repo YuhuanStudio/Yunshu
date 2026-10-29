@@ -578,7 +578,7 @@ export function Requests({
           <p className="text-xs text-muted-foreground">
             {t("requests.detail.cause")}
           </p>
-          <p className="text-sm">{causeOf(view)}</p>
+          <p className="text-sm tabular-nums">{causeOf(view)}</p>
           {rowMs(view) != null && (
             <Button size="sm" variant="ghost" asChild className="-ml-2">
               <a
