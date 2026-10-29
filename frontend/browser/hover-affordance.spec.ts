@@ -712,10 +712,8 @@ async function installHelpers(page: Page) {
               ...r.querySelectorAll("*"),
             ])
           : [...document.querySelectorAll("*")];
-        // The status band is one interactive thing: the overlay button's parent holds the pills.
-        const band = document.querySelector(
-          "[data-testid=footer-trigger]",
-        )?.parentElement;
+        // The status islands: each capsule's own overlay button is the interactive thing; the pills under them are not.
+        const band = document.querySelector("[data-testid=status-band]");
         const inFooter = (el: Element) => !!band?.contains(el);
         const inter: Item[] = [];
         const dis: Item[] = [];
@@ -766,7 +764,7 @@ async function installHelpers(page: Page) {
           return false;
         };
         for (const el of interactiveRoots) {
-          if (inFooter(el) && !el.matches("[data-testid=footer-trigger]"))
+          if (inFooter(el) && !el.matches("[data-testid^=footer-trigger]"))
             continue;
           const how = el.matches(INTERACTIVE_SEL)
             ? "native/role"

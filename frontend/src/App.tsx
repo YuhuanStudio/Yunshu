@@ -886,7 +886,7 @@ export default function App() {
             }
           />
           <div
-            className={`flex h-dvh min-w-0 flex-col transition-[padding] duration-(--dur-slow) ease-(--ease-standard) ${collapsed ? "lg:pl-0" : "lg:pl-64"}`}
+            className={`relative flex h-dvh min-w-0 flex-col [--island-clear:3.75rem] transition-[padding] duration-(--dur-slow) ease-(--ease-standard) ${collapsed ? "lg:pl-0" : "lg:pl-64"}`}
           >
             <header className="safe-top-4 safe-x sticky top-0 z-30 flex shrink-0 items-center gap-2 px-4 pt-4 sm:gap-4 lg:px-6">
               <span className="relative -ml-2 inline-flex lg:hidden">
@@ -1113,7 +1113,7 @@ export default function App() {
                     ) : (
                       <ScrollFade
                         data-testid="page-scroll"
-                        className="relative min-h-0 flex-1 overflow-y-scroll p-4 pb-6 [scrollbar-gutter:stable] lg:p-6"
+                        className="relative min-h-0 flex-1 overflow-y-scroll p-4 pb-[calc(var(--island-clear)+1rem)] [scrollbar-gutter:stable] lg:p-6 lg:pb-[calc(var(--island-clear)+1rem)]"
                       >
                         <div
                           key={page}
@@ -1208,7 +1208,12 @@ export default function App() {
                 </PageBoundary>
               </div>
             </main>
-            <footer className="safe-bottom shrink-0" data-testid="status-band">
+            {/* The status island floats over the page bottom instead of taking a row: pages keep their full
+                height (the Playground panel reaches the bottom) and clear it with --island-clear. */}
+            <footer
+              className={`pointer-events-none absolute inset-x-0 bottom-0 z-20 transition-[left] duration-(--dur-slow) ease-(--ease-standard) [&>*]:pointer-events-auto ${collapsed ? "lg:left-0" : "lg:left-64"}`}
+              data-testid="status-band"
+            >
               <FooterStatus engine={engine} connection={connection} />
             </footer>
           </div>

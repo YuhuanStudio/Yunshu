@@ -162,3 +162,32 @@ test("a 128 GiB machine shows 128 GB, never 137 GB (binary units, as macOS)", as
   await expect(memory).toContainText("/ 128");
   await expect(memory).not.toContainText("137");
 });
+
+test("each capsule is its own island: the card grows from the capsule that was tapped", async ({
+  page,
+}) => {
+  test.skip(page.viewportSize()!.width < 640, "phone has one compact capsule");
+  await install(page, true);
+  await page.goto("/console/#/overview");
+  const band = page.getByTestId("status-band");
+  const capsules = band.locator("li");
+  expect(await capsules.count()).toBeGreaterThan(1);
+  const island = page.getByRole("dialog", { name: "引擎狀態" });
+  const first = capsules.first().locator("button");
+  const last = capsules.last().locator("button");
+  await first.click();
+  await expect(island).toBeVisible();
+  await expect(first).toHaveAttribute("aria-expanded", "true");
+  const a = (await island.boundingBox())!;
+  await last.click();
+  await expect(last).toHaveAttribute("aria-expanded", "true");
+  await expect(first).toHaveAttribute("aria-expanded", "false");
+  await expect
+    .poll(async () => (await island.boundingBox())?.x ?? a.x)
+    .toBeGreaterThan(a.x);
+  if (process.env.ISLAND_SHOTS)
+    await page.screenshot({ path: `${process.env.ISLAND_SHOTS}/island-from-last.png` });
+  // tapping the open capsule again closes it
+  await last.click();
+  await expect(island).toBeHidden();
+});

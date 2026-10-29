@@ -80,7 +80,7 @@ export function ChatSurface({
           </ChatMessageList>
         </div>
         <div
-          className="shrink-0 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 sm:px-6"
+          className="shrink-0 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom),var(--island-clear,0px))] pt-2 sm:px-6"
           data-chat-dock=""
         >
           <div className="mx-auto w-full max-w-[44rem]">{dock}</div>
