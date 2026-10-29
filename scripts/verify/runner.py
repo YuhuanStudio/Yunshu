@@ -10,6 +10,17 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import stages as st
+
+
+def _weights_gb(model: str) -> float:
+    """On-disk weight size of a checkpoint directory (0 when it is not a local directory).
+
+    The model name is not a size: Qwen3.8-Flash-Next (77 GB) was sized as a small model, got a 14 GB
+    budget and was dispatched to the M3 laptop, which refuses it."""
+    root = Path(model)
+    if not root.is_dir():
+        return 0.0
+    return sum(f.stat().st_size for f in root.glob("*.safetensors")) / 1e9
 from .core import (
     RUNS,
     Arm,
@@ -90,8 +101,8 @@ def run_ab(
         print(f"yv: {e}")
         return 2
     rd = RunDir(run_dir_for(a.label, cand, runs))
-    big = "27B" in a.model
-    mem_gb = a.mem_gb or (60 if big else 14)
+    big = "27B" in a.model or _weights_gb(a.model) >= 20
+    mem_gb = a.mem_gb or (max(60, round(_weights_gb(a.model) * 1.15)) if big else 14)
     fp = sha(
         base.key, cand.key, env, cand_env, base_env, suite, a.model, mem_gb, a.engaged
     )

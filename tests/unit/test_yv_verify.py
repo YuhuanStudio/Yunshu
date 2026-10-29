@@ -2034,3 +2034,13 @@ def test_spec_depth_check_accepts_the_engaged_mode_for_default_suites():
     assert not stages._spec_depth_valid(
         [{"xy": {"speculative": dict(spec, rounds=0)}}], "default"
     )[0]
+
+
+def test_model_size_comes_from_the_weights_not_the_name(tmp_path):
+    # Flash-Next has no "27B" in its name but 77 GB of weights; it must be sized as a big model
+    model = tmp_path / "Qwen3.8-Flash-Next"
+    model.mkdir()
+    with open(model / "model-00001.safetensors", "wb") as f:
+        f.truncate(25 * 10**9)  # sparse file: no disk use
+    assert runner._weights_gb(str(model)) == pytest.approx(25.0)
+    assert runner._weights_gb(str(tmp_path / "missing")) == 0.0
