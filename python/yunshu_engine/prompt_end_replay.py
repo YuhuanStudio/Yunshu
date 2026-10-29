@@ -79,38 +79,53 @@ def _classes():
     return ArraysCache, BatchKVCache
 
 
+_SKIPPED: set[str] = set()
+
+
+def _skip(reason: str) -> None:
+    """Log each skip reason once per process, so a run shows why replay did not engage."""
+    if reason not in _SKIPPED:
+        _SKIPPED.add(reason)
+        logger.info("prompt-end replay: skipped (%s)", reason)
+    return None
+
+
+def skip_reason(reason: str) -> None:
+    _skip(reason)
+
+
 def _plan(batch) -> tuple[Any, int, int] | None:
     """``(key, base, rows)`` when this batch's final block may be replayed or recorded."""
     meta = getattr(batch, "_apc_meta", None) or []
     if len(meta) != 1 or not meta[0] or len(getattr(batch, "uids", ())) != 1:
-        return None
+        return _skip("not one row/uid")
     if any(getattr(batch, "logits_processors", None) or []):
-        return None
+        return _skip("logits processors")
     if any(getattr(batch, "_right_pad_per_row", None) or []):
-        return None
+        return _skip("right padding")
     draft = getattr(batch, "draft_model", None)
     kind = getattr(batch, "draft_kind", None) if draft is not None else None
     if kind not in (None, "dflash"):
-        return None
+        return _skip("draft kind")
     kwargs = getattr(batch, "_prompt_kwargs", None) or {}
     if any(kwargs.get(k) is not None for k in _NOT_TEXT):
-        return None
+        return _skip("media kwargs")
     embeds = getattr(batch, "_inputs_embeds", None)
     ids = meta[0].get("full_input_ids")
     cache = getattr(batch, "prompt_cache", None) or []
     arrays_cls, kv_cls = _classes()
     if embeds is None or embeds.shape[0] != 1 or ids is None or not cache:
-        return None
+        return _skip("no embeds/ids/cache")
     bases = set()
     for c in cache:
         if type(c) is kv_cls:
             if c.keys is None or c.keys.shape[0] != 1 or c._right_padding is not None:
-                return None
+                return _skip("kv shape/padding")
             bases.add(int(c._idx))
         elif type(c) is not arrays_cls:
-            return None
+            return _skip("unknown cache type")
     if len(bases) != 1:
-        return None
+        return _skip("mixed kv bases")
     key = (
         id(batch.model),
         kind,
@@ -157,6 +172,10 @@ class Session:
             fits = entry is not None and self._fits(entry)
         except Exception:  # a pure check: any surprise means run the real forward
             fits = False
+        if entry is None:
+            _skip("nothing stored for this prompt yet (recording)")
+        elif not fits:
+            _skip("stored entry does not fit this batch")
         if entry is not None and fits:
             # writes the cache: a failure here must not be swallowed
             self._replay(entry)
@@ -254,8 +273,8 @@ class Session:
 def open_session(batch) -> Session | None:
     try:
         plan = _plan(batch)
-    except Exception:
-        return None
+    except Exception as exc:
+        return _skip(f"plan error: {exc!r}")
     if plan is None:
         return None
     session = Session(batch, *plan)

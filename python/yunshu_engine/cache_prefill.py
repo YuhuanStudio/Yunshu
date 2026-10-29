@@ -75,7 +75,8 @@ def install():
                     session.end()
                     try:
                         session.store(gen_batch)
-                    except Exception:  # the stored block is an optimisation only
+                    except Exception as exc:  # the stored block is an optimisation only
+                        prompt_end_replay.skip_reason(f"store error: {exc!r}")
                         prompt_end_replay.clear()
                 return gen_batch
             finally:
