@@ -1062,12 +1062,26 @@ def _add_rms(shape, h, r, norm):
     return vq.add_rms_norm(h, r, norm)
 
 
-def _tree_attention_fused(queries, keys, values, shape, rc, scale_arr, dims):
+def _tree_attention_fused(
+    queries,
+    keys,
+    values,
+    shape,
+    rc,
+    scale_arr,
+    dims,
+    *,
+    shared_partials=None,
+    tail_kv=None,
+):
     """``tree_attention`` with the query layouts, the per-row key/value tails and
     the partial tables built by one kernel each instead of a chain of copies, and
     the shared prefix read once for all of the window's 8-token groups (one launch,
     chunk-major; a launch per group re-reads the whole prefix from DRAM, about 3 ms
-    a group at 32K over 16 layers). Same values, same partials, same merge order."""
+    a group at 32K over 16 layers). Same values, same partials, same merge order.
+
+    ``shared_partials`` (``_tile_partials`` without the K / V arguments) and ``tail_kv`` (keys, values,
+    meta for the tail copy) let an int8 cache supply its own prefix kernel and a dequantized tail slice."""
     from . import tree_glue
 
     h, hkv, d = dims
@@ -1076,25 +1090,33 @@ def _tree_attention_fused(queries, keys, values, shape, rc, scale_arr, dims):
     groups = -(-w // ra.TILE_TOKENS)
     q_a, q_b = tree_glue.fuse_queries(queries, hkv, groups)
     cap2 = _tree_tail_capacity(m + shape.max_depth + 1)
+    if shared_partials is None:
+
+        def shared_partials(q, lengths, slots, scale, plan, t_tokens, nc):
+            return _tile_partials(
+                q, keys, values, lengths, slots, scale, plan, t_tokens, nc
+            )
+
+    tail_keys, tail_values, tail_meta = tail_kv or (keys, values, rc.meta)
     tail_k, tail_v = tree_glue.tail_copy(
-        keys,
-        values,
+        tail_keys,
+        tail_values,
         rc.win_idx,
-        rc.meta,
+        tail_meta,
         width=w,
         depth_rows=shape.max_depth + 1,
         cap2=cap2,
     )
     if cstar and groups >= 2:
         lengths, slots, plan, nc = _shared_plan(rc.tail_start, groups)
-        po_a, pm_a, pl_a, _ = _tile_partials(
-            q_a, keys, values, lengths, slots, scale_arr, plan, 8, nc
+        po_a, pm_a, pl_a, _ = shared_partials(
+            q_a, lengths, slots, scale_arr, plan, 8, nc
         )
         starts_a = plan[1]
     elif cstar:
         _lo, tg, len_arr, nc, plan = rc.groups_a[0]
-        po_a, pm_a, pl_a, _ = _tile_partials(
-            q_a, keys, values, len_arr, rc.slot0, scale_arr, plan, tg, nc
+        po_a, pm_a, pl_a, _ = shared_partials(
+            q_a, len_arr, rc.slot0, scale_arr, plan, tg, nc
         )
         starts_a = plan[1]
     else:

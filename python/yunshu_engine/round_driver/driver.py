@@ -227,6 +227,9 @@ class RoundDriver:
             from .dflash import DFlashBatch
 
             if kv_format == "int8":
+                from ..kernels import int8_tile
+
+                int8_tile.install()
                 # fail loudly at load: no int8 tree-attention kernel installed means no int8 serve
                 # (the in-graph reference is test-only and never a fallback)
                 tree_verify.require_int8_kernels()

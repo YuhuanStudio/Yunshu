@@ -234,11 +234,28 @@ def test_int8_apc_hit_equals_miss(target):  # noqa: F811
 
 def test_int8_driver_refuses_to_start_without_the_int8_kernels(monkeypatch, target):  # noqa: F811
     from yunshu_engine import tree_verify as tv
+    from yunshu_engine.kernels import ragged_attention as ra
     from yunshu_engine.round_driver.driver import RoundDriver
 
+    # a machine whose tile kernel cannot run (no M5-class tensor ops): nothing installs, int8 refuses
     monkeypatch.setattr(tv, "TILE_PARTIALS_Q8", None)
     monkeypatch.setattr(tv, "TREE_ATTENTION_FUSED_Q8", None)
+    monkeypatch.setattr(ra, "tile_ready", lambda: False)
     with pytest.raises(RuntimeError, match="int8 tree-attention kernels"):
         RoundDriver(
             target, plain_verify=True, stop_tokens=set(), chunk=16, kv_format="int8"
         )
+
+
+def test_int8_driver_installs_the_real_kernels_not_the_reference(monkeypatch, target):  # noqa: F811
+    from yunshu_engine import tree_verify as tv
+    from yunshu_engine.kernels import int8_tile
+    from yunshu_engine.round_driver.driver import RoundDriver
+
+    monkeypatch.setattr(tv, "TILE_PARTIALS_Q8", None)
+    monkeypatch.setattr(tv, "TREE_ATTENTION_FUSED_Q8", None)
+    RoundDriver(
+        target, plain_verify=True, stop_tokens=set(), chunk=16, kv_format="int8"
+    )
+    assert tv.TILE_PARTIALS_Q8 is int8_tile.tile_partials_q8
+    assert tv.TREE_ATTENTION_FUSED_Q8 is int8_tile.tree_attention_fused_q8
