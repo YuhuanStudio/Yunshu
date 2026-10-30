@@ -374,6 +374,30 @@ MEM_OUT = os.environ.get("PB2_MEM_OUT")
 GIB = float(1 << 30)
 
 
+
+def _dtype_gib(arrays) -> dict:
+    """GiB per dtype over distinct arrays (decode KV: int8 codes + fp16 scales vs bf16)."""
+    seen, out = set(), {}
+    for a in arrays:
+        if a is None or id(a) in seen:
+            continue
+        seen.add(id(a))
+        out[str(a.dtype)] = out.get(str(a.dtype), 0) + int(a.nbytes)
+    return {k: round(v / GIB, 4) for k, v in out.items()}
+
+
+def _row_cache_arrays(drv) -> list:
+    """K / V (and int8 scales) of the caches the driver rows still hold (the prefill caches)."""
+    out = []
+    for r in drv.rows:
+        for c in r.cache or ():
+            for name in ("keys", "values", "k_scales", "v_scales"):
+                a = getattr(c, name, None)
+                if a is not None:
+                    out.append(a)
+    return out
+
+
 def holders(runner) -> dict:
     """GiB held by the engine's known retainers (each guarded: a missing module is skipped)."""
     out: dict = {}
@@ -403,6 +427,10 @@ def holders(runner) -> dict:
                 f"{name}_batch",
                 lambda drv=drv: sum(a.nbytes for a in drv.batch.arrays()),
             )
+            with contextlib.suppress(Exception):
+                out[f"{name}_batch_dtypes"] = _dtype_gib(drv.batch.arrays())
+            with contextlib.suppress(Exception):
+                out[f"{name}_prefill_rows_dtypes"] = _dtype_gib(_row_cache_arrays(drv))
             put(
                 f"{name}_rows",
                 lambda drv=drv: sum(
