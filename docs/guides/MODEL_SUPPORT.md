@@ -52,6 +52,8 @@ One `yunshu serve` per checkpoint on the M5 (default settings), then through the
 
 ## Qwen3.8-Flash-Next under 80 GB (qwen4_exp)
 
+Concurrent Flash-Next decode rows keep the sparse QSA attention a solo request uses: each row selects its own key blocks and the batch runs one padded attention launch, so a request returns the same tokens and logprobs alone or next to others. Rows the padded kernel does not cover fall back to the per-row path.
+
 `Jundot/Qwen3.8-Flash-Next-oQ4e-mtp` is 106 GB on disk, of which 32 GB is the per-layer n-gram embedding (PLE). Yunshu reads PLE rows from the SSD instead of loading the table, which leaves 74.3 GB of resident weights (the 1.5 GB MTP head included).
 
 1. Serve the pack as it is: `yunshu serve -m <pack>`. Since 2026-10-28 the PLE table is read from the pack's own files by default (`YUNSHU_PLE_STORAGE=ssd`): the first load builds a small row manifest under `~/.yunshu/cache/ple/`, nothing is copied and the pack is untouched. Measured on Jundot oQ2.5e-mtp: peak memory 82.9 → 54.5 GB, identical text, speed unchanged (DFlash2 81.6, MTP 84.3 tok/s against 82.4 / 85.4 with a hand-built view, 3 interleaved reps). `YUNSHU_PLE_STORAGE=memory` loads the table like any weight.

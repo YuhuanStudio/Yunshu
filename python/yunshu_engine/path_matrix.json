@@ -1732,6 +1732,42 @@
           ]
         }
       }
+    },
+    "qwen4_batched_qsa": {
+      "module": "python/yunshu_engine/qwen4_rowqsa.py",
+      "what": "Qwen4 padded batched sparse QSA decode with singleton fallback",
+      "cells": {
+        "mtp": {
+          "s": "na",
+          "why": "Qwen4 QSA is specific to the generic VLM family"
+        },
+        "dflash": {
+          "s": "na",
+          "why": "Qwen4 QSA is specific to the generic VLM family"
+        },
+        "batch": {
+          "s": "na",
+          "why": "Qwen4 QSA is specific to the generic VLM family"
+        },
+        "generic": {
+          "s": "engaged",
+          "ev": [
+            [
+              "python/yunshu_engine/qwen4_mtp.py",
+              "install_row_qsa()"
+            ]
+          ],
+          "why": "Qwen4 batch sparse decode: concurrent rows equal solo (token + logprob, burst/stagger, spec off and MTP, 8K-32K)."
+        },
+        "text": {
+          "s": "na",
+          "why": "Qwen4 QSA is specific to the generic VLM family"
+        },
+        "loop": {
+          "s": "na",
+          "why": "Qwen4 QSA is specific to the generic VLM family"
+        }
+      }
     }
   },
   "exclusions": [
@@ -2109,7 +2145,8 @@
     "python/yunshu_engine/kernels/omlx_q4/qwen35_gdn_verify_fused.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
     "python/yunshu_engine/kernels/omlx_q4/qwen35_verify_qmm.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
     "python/yunshu_engine/kernels/omlx_q4/row_exact_qmv.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
-    "python/yunshu_engine/kernels/omlx_q4/__init__.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)"
+    "python/yunshu_engine/kernels/omlx_q4/__init__.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
+    "python/yunshu_engine/kernels/qwen4_qsa": "Metal source and launch wrapper for qwen4_batched_qsa."
   },
   "settings": {
     "YUNSHU_MTP": "draft_family_coverage",
@@ -2195,11 +2232,21 @@
   "architecture_columns": {
     "_doc": "Architecture audit columns, not additional serving paths. Entries record wiring; numerical/performance qualification is a separate real-checkpoint gate.",
     "flashnext": {
+      "qwen4_batched_qsa": {
+        "s": "engaged",
+        "why": "concurrent decode rows keep the solo sparse QSA (per-row block selection, one padded attention launch), so N rows == solo",
+        "ev": [
+          ["python/yunshu_engine/qwen4_mtp.py", "install_row_qsa()"]
+        ]
+      },
       "qwen4_gdn_fused": {
         "s": "engaged",
         "why": "default on both qwen4_exp layer loops; 2-bit packs keep the composed layer (no 2-bit plan tiles, identity-checked)",
         "ev": [
-          ["python/yunshu_engine/vlm_engine.py", "tf_hc_forward.install_qwen4_gdn()"]
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "tf_hc_forward.install_qwen4_gdn()"
+          ]
         ]
       },
       "draft_vocab": {
@@ -2332,10 +2379,14 @@
         "why": "Qwen4 hybrid caches are on the shared runner; same-checkpoint hit/miss gate remains required."
       },
       "prefill_stride_rule": {
-        "s": "missing",
-        "why": "stride is 0 unless spec_family and invariant kernels: hit-vs-cold numerics are not pinned for other families",
-        "owner": "unassigned",
-        "impact": "low"
+        "s": "engaged",
+        "why": "Flash-Next prefill is not split-invariant, so its APC checkpoints use the 2048 grid and semantic boundaries a cold run also splits at; turn-2 hit == cold bit-exact at 32K",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "invariant or qwen4"
+          ]
+        ]
       },
       "media_input": {
         "s": "engaged",
