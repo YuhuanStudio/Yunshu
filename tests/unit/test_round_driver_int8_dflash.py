@@ -230,3 +230,15 @@ def test_int8_apc_hit_equals_miss(target):  # noqa: F811
     while d2.busy():
         out += [e.token for e in d2.step()]
     assert hit > 0 and first[0] == cold[0] and out == cold[0]
+
+
+def test_int8_driver_refuses_to_start_without_the_int8_kernels(monkeypatch, target):  # noqa: F811
+    from yunshu_engine import tree_verify as tv
+    from yunshu_engine.round_driver.driver import RoundDriver
+
+    monkeypatch.setattr(tv, "TILE_PARTIALS_Q8", None)
+    monkeypatch.setattr(tv, "TREE_ATTENTION_FUSED_Q8", None)
+    with pytest.raises(RuntimeError, match="int8 tree-attention kernels"):
+        RoundDriver(
+            target, plain_verify=True, stop_tokens=set(), chunk=16, kv_format="int8"
+        )

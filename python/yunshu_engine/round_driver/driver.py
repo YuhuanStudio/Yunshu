@@ -223,8 +223,13 @@ class RoundDriver:
             mx.set_cache_limit(prev)  # a tighter limit set by the host stays
         self.dflash = None
         if dflash_drafter is not None or (plain_verify and drafter is None):
+            from .. import tree_verify
             from .dflash import DFlashBatch
 
+            if kv_format == "int8":
+                # fail loudly at load: no int8 tree-attention kernel installed means no int8 serve
+                # (the in-graph reference is test-only and never a fallback)
+                tree_verify.require_int8_kernels()
             self.dflash = DFlashBatch(model, dflash_drafter, kv_format)
         self.kv_format = kv_format
         self.batch: Any = (

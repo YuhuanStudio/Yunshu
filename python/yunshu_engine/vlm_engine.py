@@ -2436,16 +2436,13 @@ class VLMEngine:
 
     def _round_driver_wanted(self, lm) -> bool:
         """The multi-row round driver serves a dense Qwen3.5-family text decoder with
-        bf16 KV when the lane arithmetic is ready. With speculation off
+        bf16 or int8 KV (``YUNSHU_KV_PRECISION``) when the lane arithmetic is ready. With speculation off
         (``YUNSHU_VLM_DRAFT=off``) the same driver decodes without drafting, so speculation
         on equals speculation off bit for bit (one arithmetic, rows never draft)."""
         from .round_driver import forward as rd_forward
 
         if not rd_forward.supports(lm):
             logger.info("Round driver: not a dense Qwen3.5-family model")
-            return False
-        if settings.get("YUNSHU_KV_PRECISION") != "bf16":
-            logger.info("Round driver: int8 KV keeps the stock runner")
             return False
         from .kernels.tensorfold.lane_qmm import ready
 
@@ -2948,6 +2945,7 @@ class VLMEngine:
                 stop_tokens=runner.stop_tokens,
                 chunk=ROUND_PREFILL_CHUNK,
                 apc=self._apc_backend,
+                kv_format=precision,
             )
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",

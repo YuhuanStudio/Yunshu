@@ -737,6 +737,20 @@ TILE_PARTIALS_Q8 = None
 TREE_ATTENTION_FUSED_Q8 = None
 
 
+def int8_kernels_installed() -> bool:
+    return TILE_PARTIALS_Q8 is not None and TREE_ATTENTION_FUSED_Q8 is not None
+
+
+def require_int8_kernels() -> None:
+    """int8 KV on the DFlash / plain-verify batch needs the int8 tree-attention kernels."""
+    if not int8_kernels_installed():
+        raise RuntimeError(
+            "YUNSHU_KV_PRECISION=int8: the int8 tree-attention kernels are not installed "
+            "(tree_verify.TILE_PARTIALS_Q8 / TREE_ATTENTION_FUSED_Q8); refusing to serve int8 KV with a "
+            "fallback. Use bf16, or an engine build that ships the kernels."
+        )
+
+
 def _tile_partials_q8(
     q_fused, keys, k_scales, values, v_scales, lengths, slots, scale, plan, t_tokens, nc
 ):

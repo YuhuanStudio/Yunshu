@@ -2,7 +2,7 @@
   "_doc": "Path-parity matrix. Every optimization or capability, on every serving path where it applies: engaged (with evidence), na (with reason), partial/missing (with owner and impact). tests/unit/test_path_parity.py enforces it; see that test for the rules. A new optimization module or performance setting fails CI until it has a row here.",
   "paths": {
     "batch": "Round driver, the unified runner for dense Qwen3.5-family text requests: spec on or off, one row or many (round_driver/; replaces the speculative lane and the shared batch for them)",
-    "generic": "Stock runner (mlx-vlm BatchGenerator + the retained single-request lane): other mlx-vlm families (Gemma, Qwen4/Flash-Next, Omni thinker, ...) and the requests the driver excludes (media prompts, explicit cache plans, int8 KV, MoE)",
+    "generic": "Stock runner (mlx-vlm BatchGenerator + the retained single-request lane): other mlx-vlm families (Gemma, Qwen4/Flash-Next, Omni thinker, ...) and the requests the driver excludes (explicit cache plans, MoE)",
     "text": "Text-only mlx-lm single-request fast path (_generate_fast)",
     "loop": "Text-model EngineCore continuous-batching loop (YUNSHU_ENGINE_LOOP, off by default, not grown)"
   },
@@ -511,8 +511,18 @@
       "what": "KV cache precision option (lossy, user setting): VLM YUNSHU_KV_PRECISION vs text YUNSHU_KV_QUANT_BITS",
       "cells": {
         "batch": {
-          "s": "na",
-          "why": "int8 KV keeps the stock runner (exclusion int8-kv-off-driver): the driver's slot buffers are bf16"
+          "s": "engaged",
+          "ev": [
+            [
+              "python/yunshu_engine/round_driver/batch.py",
+              "quantize_kv_pair"
+            ],
+            [
+              "python/yunshu_engine/kernels/int8_kv.py",
+              "class Int8KVCache"
+            ]
+          ],
+          "why": "every driver row is int8 when YUNSHU_KV_PRECISION=int8: DecodeBatch slots (plain / MTP rows) and Int8KVCache rows (DFlash / plain-verify), quantized once at join; drafting and verify read the int8 KV"
         },
         "generic": {
           "s": "missing",
@@ -639,7 +649,7 @@
               "apc.store_checkpoint"
             ]
           ],
-          "why": "the driver restores and stores exact hybrid checkpoints for every request it serves; the retained stock lane/batch (media, explicit cache plans, int8 KV, MoE) keeps the ordinary namespace"
+          "why": "the driver restores and stores exact hybrid checkpoints for every request it serves; the retained stock lane/batch (explicit cache plans, MoE) keeps the ordinary namespace"
         },
         "generic": {
           "s": "missing",
@@ -1879,19 +1889,6 @@
         ]
       ],
       "why": "The DFlash fast tree applies a frequency / presence penalty per window row (keyed_sampling.tree_target_rows, the serial window_row arithmetic) when it is the request's only processor, so sampled requests with the model card's presence penalty keep the tree. logit_bias, the windowed repetition penalty, min_tokens / suppress masks, any guide or logprobs with a processor, and the MTP tree still verify on the chain under exact_verify."
-    },
-    {
-      "id": "int8-kv-off-driver",
-      "a": "YUNSHU_KV_PRECISION=int8",
-      "b": "RoundDriver",
-      "kind": "unimplemented",
-      "ev": [
-        [
-          "python/yunshu_engine/vlm_engine.py",
-          "int8 KV keeps the stock runner"
-        ]
-      ],
-      "why": "driver slot buffers are bf16; a quantized slot format is work, not a contradiction."
     },
     {
       "id": "moe-off-driver",
