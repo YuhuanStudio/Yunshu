@@ -1,7 +1,7 @@
 """Server-side per-layer prefill timer (research; enabled by PB2_PROF_OUT=<json path>).
 
 Put this directory first on PYTHONPATH. After mlx_vlm's qwen3_5 language module
-imports, every decoder layer call with >= 512 rows is evaluated and timed;
+imports, every decoder layer call with >= 2 rows is evaluated and timed;
 totals per (kind, rows) are rewritten to the json every 32 records. Same hook in
 both arms: eval-per-layer perturbs both equally.
 """
@@ -29,7 +29,7 @@ def patch(mod):
     n = [0]
 
     def timed(self, x, *args, **kw):
-        if x.ndim < 2 or x.shape[-2] < 512:
+        if x.ndim < 2 or x.shape[-2] < 2:
             return orig(self, x, *args, **kw)
         mx.eval(x)
         t0 = time.perf_counter()
@@ -40,7 +40,7 @@ def patch(mod):
         c[0] += 1
         c[1] += time.perf_counter() - t0
         n[0] += 1
-        if n[0] % 32 == 0:
+        if n[0] % 8 == 0:
             with open(OUT, "w") as f:
                 json.dump(summarize(acc), f)
         return out
