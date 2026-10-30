@@ -324,8 +324,8 @@ def test_media_prompt_checkpoints_avoid_media_spans_and_hits_match_cold(tiny):
     assert hit0 == 0
     assert planned is not None
     assert all(not (100 < c < 120) for c in planned[1])  # never inside the media span
+    d.flush_checkpoints()  # the runner flushes after the first token
     again, hit1, _, _ = run(d._apc_manager, driver=None)
-    assert (
-        hit1 == 0 or hit1 >= 120
-    )  # a restored prefix covers the whole placeholder span
+    # a restored prefix covers the whole placeholder span
+    assert hit1 >= 120
     assert again == cold
