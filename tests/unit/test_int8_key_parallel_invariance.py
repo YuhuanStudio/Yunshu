@@ -64,3 +64,80 @@ def test_a_token_attends_the_same_whatever_the_window_width(buffers, row):
     wide = _attend(buffers, [row], 8)
     one = _attend(buffers, [row], 1, qfrom=7)
     assert mx.array_equal(wide[0, :, 7], one[0, :, 0])
+
+
+@pytest.mark.parametrize("n", [700, 32700])
+@pytest.mark.parametrize("t", [1, 8])
+def test_decode_attention_bits_do_not_depend_on_the_buffer_capacity(n, t):
+    """A hit restores a row into a buffer whose capacity differs from a cold row's: same codes,
+    capacity 64-padded vs several thousand rows more, must give the same attention bits."""
+    from yunshu_engine.kernels import ragged_attention as ra
+
+    if not mx.metal.is_available():
+        pytest.skip("needs Metal")
+    mx.random.seed(11)
+    k = mx.random.normal((1, HKV, n, D)).astype(mx.bfloat16)
+    v = mx.random.normal((1, HKV, n, D)).astype(mx.bfloat16)
+    q = mx.random.normal((1, H, t, D)).astype(mx.bfloat16)
+    kq, ks, vq, vs = ra.quantize_kv_pair(k, v)
+
+    def padded(x, cap):
+        z = mx.zeros((1, HKV, cap - n, x.shape[-1]), dtype=x.dtype)
+        return mx.concatenate([x, z], axis=2)
+
+    outs = []
+    for cap in (-(-n // 64) * 64, n + 3000, n + 4096 + 17):
+        out = ra.ragged_decode_attention(
+            q,
+            padded(kq, cap),
+            padded(vq, cap),
+            mx.array([n], dtype=mx.int32),
+            D**-0.5,
+            max_length=n,
+            k_scales=padded(ks, cap),
+            v_scales=padded(vs, cap),
+            row_lengths=[n],
+        )
+        mx.eval(out)
+        outs.append(out)
+    assert all(mx.array_equal(outs[0], o) for o in outs[1:])
+
+
+@pytest.mark.parametrize("width", [1, 4, 8])
+@pytest.mark.parametrize("n0", [300, 32700])
+def test_tree_attention_int8_bits_do_not_depend_on_the_cache_capacity(
+    monkeypatch, n0, width
+):
+    from mlx_vlm.models.cache import KVCache
+
+    from yunshu_engine import tree_verify as tv
+    from yunshu_engine.kernels.int8_kv import Int8KVCache
+    from yunshu_engine.kernels.ragged_attention import tile_ready
+
+    if not mx.metal.is_available() or not tile_ready():
+        pytest.skip("needs the int8 tile kernel")
+    from yunshu_engine.kernels import int8_tile
+
+    monkeypatch.setattr(tv, "TILE_PARTIALS_Q8", int8_tile.tile_partials_q8)
+    monkeypatch.setattr(
+        tv, "TREE_ATTENTION_FUSED_Q8", int8_tile.tree_attention_fused_q8
+    )
+    mx.random.seed(2)
+    n = n0 + width
+    c = KVCache()
+    c.update_and_fetch(
+        mx.random.normal((1, HKV, n, D)).astype(mx.bfloat16),
+        mx.random.normal((1, HKV, n, D)).astype(mx.bfloat16),
+    )
+    q = mx.random.normal((1, H, width, D)).astype(mx.bfloat16)
+    outs = []
+    for extra in (0, 3000, 4096 + 17):
+        row = Int8KVCache.from_kv(c)
+        if extra:
+            row._reserve(n + extra, row.keys[..., :1, :])
+        out = tv.tree_attention(
+            q, row, D**-0.5, tv.TreeShape(list(range(-1, width - 1))), n0
+        )
+        mx.eval(out)
+        outs.append(out)
+    assert all(mx.array_equal(outs[0], o) for o in outs[1:])
