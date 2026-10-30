@@ -224,3 +224,72 @@ if TRACE_OUT:
     import importlib.util
 
     sys.meta_path.insert(0, _RunnerFinder())
+
+
+APC_OUT = os.environ.get("PB2_APC_OUT")
+APC = "yunshu_engine.apc_manager"
+
+
+def patch_apc(mod):
+    """Time APC coordinator calls (same file in both arms); calls over 20 ms also get a
+    cProfile top-12 (cumulative) so the Python-side share is visible."""
+    import cProfile
+    import io
+    import pstats
+
+    depth = [0]
+
+    def wrap(holder, name):
+        orig = getattr(holder, name)
+
+        def timed(*args, **kw):
+            # cProfile cannot nest (Python 3.12+): only the outermost APC call is profiled
+            outer = not depth[0]
+            prof = cProfile.Profile() if outer else None
+            t0 = time.perf_counter()
+            depth[0] += 1
+            if prof is not None:
+                prof.enable()
+            try:
+                return orig(*args, **kw)
+            finally:
+                depth[0] -= 1
+                if prof is not None:
+                    prof.disable()
+                dur = time.perf_counter() - t0
+                with open(APC_OUT, "a") as f:
+                    f.write(f"apc.{name} {dur:.4f} at {t0:.4f}\n")
+                    if prof is not None and dur > 0.02:
+                        buf = io.StringIO()
+                        stats = pstats.Stats(prof, stream=buf)
+                        stats.sort_stats("cumulative").print_stats(12)
+                        for ln in buf.getvalue().splitlines():
+                            if ln.strip():
+                                f.write("   | " + ln + "\n")
+
+        setattr(holder, name, timed)
+
+    for name in ("lookup", "store_checkpoint", "checkpoint_lengths", "prepare_prefill"):
+        wrap(mod._Coordinator, name)
+
+
+class _ApcFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path, target=None):
+        if name != APC:
+            return None
+        sys.meta_path.remove(self)
+        spec = importlib.util.find_spec(name)
+        orig_exec = spec.loader.exec_module
+
+        def exec_module(module):
+            orig_exec(module)
+            patch_apc(module)
+
+        spec.loader.exec_module = exec_module
+        return spec
+
+
+if APC_OUT:
+    import importlib.util
+
+    sys.meta_path.insert(0, _ApcFinder())

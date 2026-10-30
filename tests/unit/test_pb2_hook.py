@@ -48,3 +48,41 @@ def test_runner_trace_logs_stats_timestamps(tmp_path, monkeypatch):
     import sys
 
     sys.meta_path[:] = [f for f in sys.meta_path if "Finder" not in type(f).__name__]
+
+
+def test_apc_trace_times_calls_and_profiles_slow_ones(tmp_path, monkeypatch):
+    import time
+    import types
+
+    out = tmp_path / "apc.txt"
+    monkeypatch.setenv("PB2_APC_OUT", str(out))
+    p = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/research/pb2_hook/sitecustomize.py"
+    )
+    spec = importlib.util.spec_from_file_location("pb2hook_apc", p)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    class _Coordinator:
+        def checkpoint_lengths(self):
+            return [1]
+
+        def lookup(self):
+            time.sleep(0.03)
+            return self.checkpoint_lengths()
+
+        def store_checkpoint(self):
+            return None
+
+        def prepare_prefill(self):
+            return None
+
+    m.patch_apc(types.SimpleNamespace(_Coordinator=_Coordinator))
+    assert _Coordinator().lookup() == [1]
+    text = out.read_text()
+    assert "apc.lookup" in text and "apc.checkpoint_lengths" in text
+    assert "|" in text  # the slow outer call carries a profile
+    import sys
+
+    sys.meta_path[:] = [f for f in sys.meta_path if "Finder" not in type(f).__name__]
