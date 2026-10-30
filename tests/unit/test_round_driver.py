@@ -604,3 +604,101 @@ def test_cancelled_rehearsal_prefill_is_preempted_inside_the_step(tiny):
     while d.busy():
         out += d.step()
     assert len(out) == 4
+
+
+def _row_tokens(lm, drafter, prompt, processors=None, others=()):
+    from yunshu_engine.round_driver import driver as drv
+
+    d = drv.RoundDriver(lm, drafter=drafter, stop_tokens=set())
+    d.add(drv.Request(prompt, N, handle="row", processors=processors or []))
+    for i, p in enumerate(others):
+        d.add(drv.Request(p, N, handle=f"other{i}"))
+    toks = {}
+    while d.busy():
+        for e in d.step():
+            toks.setdefault(e.handle, []).append(e.token)
+    return toks["row"]
+
+
+@pytest.mark.parametrize("draft", [False, True])
+def test_driver_rows_apply_each_processor_type(tiny, draft):
+    """Logit bias, token suppression and repetition/frequency penalties act on a driver row
+    (one token a round through its processors), the same alone and beside other rows."""
+    from yunshu_engine.vlm_batch_runner import (
+        LogitBiasProcessor,
+        TokenMaskProcessor,
+        build_penalty_processors,
+    )
+
+    lm, drafter = tiny
+    dr = drafter if draft else None
+    prompt = PROMPTS[0]
+    ref = _row_tokens(lm, dr, prompt)
+    top = max(set(ref), key=ref.count)
+
+    biased = _row_tokens(lm, dr, prompt, [LogitBiasProcessor({7: 1e4})])
+    assert biased == [7] * N
+
+    masked = _row_tokens(lm, dr, prompt, [TokenMaskProcessor(suppress=[top])])
+    assert top not in masked and masked != ref
+
+    penalised = _row_tokens(
+        lm, dr, prompt, build_penalty_processors(1.0, 2.0, 1.0, None)
+    )
+    assert penalised != ref or len(set(ref)) == len(ref)
+    again = _row_tokens(
+        lm,
+        dr,
+        prompt,
+        build_penalty_processors(1.0, 2.0, 1.0, None),
+        others=PROMPTS[1:3],
+    )
+    assert again == penalised  # row invariance with other rows beside it
+
+
+def test_driver_rows_publish_spec_counters_and_phase_counts(tiny):
+    """x_yunshu / console fields: a driver row fills its RunStats speculation counters, and
+    the runner's phase counts include driver jobs."""
+    from types import SimpleNamespace
+
+    from yunshu_engine.round_driver import driver as drv
+    from yunshu_engine.vlm_batch_runner import RunStats, VLMBatchRunner
+
+    lm, drafter = tiny
+    stats = RunStats()
+    handle = SimpleNamespace(stats=stats)
+    d = drv.RoundDriver(lm, drafter=drafter, stop_tokens=set())
+    d.add(drv.Request(PROMPTS[1], N, handle=handle))
+    while d.busy():
+        d.step()
+    assert stats.spec_rounds > 0 and stats.spec_drafted > 0
+    assert 0 <= stats.spec_accepted <= stats.spec_drafted
+
+    runner = VLMBatchRunner(object(), object(), apc_manager=None)
+    job = SimpleNamespace(stats=RunStats(), terminal=False)
+    runner._driver_jobs = {1: job}
+    counts = runner.phase_counts()
+    assert sum(counts.values()) >= 1
+
+
+def test_cancel_mid_decode_leaves_the_other_row_unchanged(tiny):
+    """A row removed while decoding (client disconnect) frees its slot; the row beside it keeps
+    producing exactly the tokens it produces alone."""
+    from yunshu_engine.round_driver import driver as drv
+
+    lm, drafter = tiny
+    solo = _row_tokens(lm, drafter, PROMPTS[1])
+    d = drv.RoundDriver(lm, drafter=drafter, stop_tokens=set())
+    d.add(drv.Request(PROMPTS[1], N, handle="keep"))
+    d.add(drv.Request(PROMPTS[2], 4 * N, handle="drop"))
+    got: list[int] = []
+    steps = 0
+    while d.busy():
+        for e in d.step():
+            if e.handle == "keep":
+                got.append(e.token)
+        steps += 1
+        if steps == 6:
+            d.remove("drop")
+    assert got == solo
+    assert not d.rows
