@@ -68,6 +68,9 @@ def test_cli_accepts_every_flag_the_job_scripts_pass():
         "--out",
         "--expect-driver-media",
         "--wide",
+        "--wide-text",
+        "--text-lengths",
+        "--probe",
         "--long",
         "--env",
     ):
