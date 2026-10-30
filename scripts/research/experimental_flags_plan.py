@@ -6,6 +6,7 @@ experimental flag. Console DOCS_ASK limits are stable request bounds, not
 experimental inference paths; retrieval never loads an embedding model. Existing stock/lane, tile/stock and chunked/step options
 retain their opt-outs; NEXT_TURN_PREFILL=off disables rehearsal only.
 Native ANE phase 1 is an explicit research API, with no new setting/flag or serving hook.
+Qwen4 padded sparse QSA has no flag: concurrent rows must equal solo, so it is always on.
 """
 
 from __future__ import annotations

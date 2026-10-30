@@ -924,6 +924,20 @@
         "tf_sattn_nax and the M5 fragment helpers of nax.h ported to an mx.fast.metal_kernel; the key list is formed in the kernel from the sorted QSA block indices and the incomplete tail block instead of a precomputed id table; the fused output gate is dropped (bf16 attention output only, the model's own gate and o_proj follow); queries are read in the [1, heads, rows, dim] layout the model produces"
       ],
       "why": "Flash-Next prefill attention on the tensor units: one threadgroup per (row, key head), 12 query heads as one operand, selected keys read once"
+    },
+    {
+      "kind": "derived",
+      "path": "python/yunshu_engine/kernels/qwen4_qsa/source.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "commit": "v0.7.8",
+      "license": "MIT",
+      "local_changes": [
+        "Add per-row left padding to selected key positions and tail start; preserve reduction order."
+      ],
+      "upstream_paths": [
+        "mlx_vlm/models/qwen4_exp/qsa_kernel.py"
+      ]
     }
   ],
   "inspired": [
@@ -3041,6 +3055,21 @@
       "commit": "v0.7.8",
       "why": "Instance wrapper: remember the verify window's logits (float32 for a request that reports logprobs) so a sampled request's target rows are normalized one row at a time, as plain decode does; the projection itself is upstream's unchanged.",
       "source_sha256": "81df50ed3b3f9ea43efc46e1263ba61210fe97ec1c772f1d13470c250051a9bf",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/qwen4_rowqsa.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen4_exp.language",
+      "symbol": "Qwen4ExpBatchInvariantForward._qsa_attention",
+      "signature": "(self, attention, hidden_states, cache, position_ids, mask)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "Batched sparse QSA with left padding preserves singleton reduction; unsupported cases run each singleton row.",
+      "source_sha256": "19e3c72333ce7c729fbbbd16d76923b934658c679c14b013dde44b1a9ce3c4a0",
       "installed_version": "0.7.8"
     }
   ],

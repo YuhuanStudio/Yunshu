@@ -131,7 +131,9 @@ def configure_lane(lm: Any, drafter: Any, block: int | None) -> tuple[dict, int 
     for MTP decode at one row (verifykern 2026-10-26). ``YUNSHU_QWEN4_LANE`` moves every dense projection to the
     lane matmul for decode, verify and drafting alike."""
     from . import settings
+    from .qwen4_rowqsa import install as install_row_qsa
 
+    install_row_qsa()
     if getattr(getattr(drafter, "config", None), "target_layer_ids", None):
         from .qwen4_dflash import install
 
