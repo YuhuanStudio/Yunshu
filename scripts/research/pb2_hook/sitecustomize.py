@@ -6,6 +6,7 @@ totals per (kind, rows) are rewritten to the json every 32 records. Same hook in
 both arms: eval-per-layer perturbs both equally.
 """
 
+import contextlib
 import importlib.abc
 import json
 import os
@@ -378,10 +379,8 @@ def holders(runner) -> dict:
     out: dict = {}
 
     def put(name, fn):
-        try:
+        with contextlib.suppress(Exception):
             out[name] = round(fn() / GIB, 4)
-        except Exception:
-            pass
 
     put("apc_resident", lambda: runner.apc_manager.resident_bytes())
     from yunshu_engine.kernels import buffer_cache
@@ -442,10 +441,8 @@ def wrap_mem(cls):
     def tick():
         while True:
             time.sleep(4.0)
-            try:
+            with contextlib.suppress(Exception):
                 snap("tick")
-            except Exception:
-                pass
 
     for name in ("_admit", "_drained"):
         orig = getattr(cls, name)
