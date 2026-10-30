@@ -56,6 +56,7 @@ from ..serving.work_scheduler import (
     decode_quantum,
 )
 from ..text_logprobs import top_logprobs_device
+from . import replay
 from .allocate import CostCurve, allocate, chain
 from .batch import MAX_WINDOW, DecodeBatch
 from .forward import Segment, lane_forward, logits
@@ -69,7 +70,7 @@ FINISH_STEPS = (
 LONG_FROM = 16384  # positions from here on prefill in LONG_CHUNK atoms
 LONG_CHUNK = 2048
 CHUNK = 512  # default prefill chunk: fixed spans from the prompt start
-IDLE_BUDGET = 1024  # prefill tokens per prefill step when no row decodes
+IDLE_BUDGET = 2048  # prefill tokens per prefill step when no row decodes
 ACCEPT_PRIOR = 0.7  # per-depth draft acceptance before a row has history
 ACCEPT_EMA = 0.15
 LANE_ROWS = 128  # rows one lane-matmul call keeps row-invariant
@@ -702,6 +703,43 @@ class RoundDriver:
             credit if was_decoding else min(credit, DECODE_FIRST_BURST_S)
         )
 
+    def _replay_key(self, it: _Item):
+        """Replay key of a prompt's final block, or None when ``it`` is not one."""
+        row = it.row
+        ids = row.req.ids
+        if (
+            row.mtp_cache is not None
+            or row.finished
+            or not replay.eligible(it.start, it.end, len(ids))
+        ):
+            return None
+        from .. import dflash_apc_window
+
+        return (
+            id(self.lm),
+            self.dflash is not None,
+            dflash_apc_window.key_for(row.salt, ids),
+        )
+
+    def _record_tail(self, items: list[_Item], hidden, captures) -> None:
+        """Keep the final block a real forward produced for the next identical prompt."""
+        for it in items:
+            key = self._replay_key(it)
+            if key is None or it.seg is None:
+                continue
+            try:
+                replay.store(
+                    key,
+                    it.row.cache,
+                    it.start,
+                    it.end,
+                    hidden[it.at : it.at + it.count],
+                    [c[it.at : it.at + it.count] for c in captures],
+                )
+            except Exception:  # an optimisation only: the next repeat runs the forward
+                logger.debug("round driver replay store failed", exc_info=True)
+                replay.clear()
+
     def _prefill_step(self, waiting: list[_Row], decoding: bool) -> list[Event]:
         items: list[_Item] = []
         budget = self.chunk if decoding else self.idle_budget
@@ -741,33 +779,46 @@ class RoundDriver:
                 blocked = True
         if not items:
             return []
-        # Every segment runs the engine's own prefill forward (nax matmul, prefill
-        # kernels, chunked GDN under prefill_scope), as the lane does: a segment's
-        # bits are what it would be alone in a step, so one forward per segment
-        # keeps the arithmetic of the packed form. The prompt's KV is reserved once.
         captures: list[mx.array] = []
-        parts: list[mx.array] = []
-        per_seg: list[list[mx.array]] = []
-        for it in items:
-            if it.seg is None:
-                continue
-            reserve_prompt_kv(it.row.cache, len(it.row.req.ids))
-            got: list[mx.array] = []
-            parts.append(
-                lane_forward(
-                    self.lm,
-                    it.seg,
-                    capture_ids=self.dflash.capture_ids if self.dflash else (),
-                    captured=got if self.dflash else None,
+        entry = None
+        tail_key = None
+        if len(items) == 1 and items[0].seg is not None:
+            tail_key = self._replay_key(items[0])
+            if tail_key is not None:
+                entry = replay.lookup(
+                    tail_key, items[0].row.cache, items[0].start, items[0].end
                 )
-            )
-            per_seg.append(got)
-        hidden = parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=0)
-        if self.dflash is not None and per_seg:
-            captures = [
-                mx.concatenate([g[layer] for g in per_seg], axis=0)
-                for layer in range(len(per_seg[0]))
-            ]
+        if entry is not None:
+            replay.restore(entry, tail_key, items[0].row.cache)
+            hidden = entry.hidden
+            captures = list(entry.captures)
+        else:
+            # Every segment runs the engine's own prefill forward (nax matmul, prefill
+            # kernels, chunked GDN under prefill_scope), as the lane does: a segment's
+            # bits are what it would be alone in a step, so one forward per segment
+            # keeps the arithmetic of the packed form. The prompt's KV is reserved once.
+            parts: list[mx.array] = []
+            per_seg: list[list[mx.array]] = []
+            for it in items:
+                if it.seg is None:
+                    continue
+                reserve_prompt_kv(it.row.cache, len(it.row.req.ids))
+                got: list[mx.array] = []
+                parts.append(
+                    lane_forward(
+                        self.lm,
+                        it.seg,
+                        capture_ids=self.dflash.capture_ids if self.dflash else (),
+                        captured=got if self.dflash else None,
+                    )
+                )
+                per_seg.append(got)
+            hidden = parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=0)
+            if self.dflash is not None and per_seg:
+                captures = [
+                    mx.concatenate([g[layer] for g in per_seg], axis=0)
+                    for layer in range(len(per_seg[0]))
+                ]
         draws = self._draw(items, hidden)
         # Evaluate every cache the step advanced, not only what feeds a token:
         # a prompt chunk that emits nothing would otherwise stay a lazy graph
@@ -779,6 +830,8 @@ class RoundDriver:
             *[a for d in draws if d[2] for a in d[2]],
             *[a for r in advanced.values() for a in cache_buffers(r.cache)],
         )
+        if entry is None:
+            self._record_tail(items, hidden, captures)
         events: list[Event] = []
         for it, tok, extra in draws:
             self._emit(it.row, [int(tok.tolist()[0])], extra, events)

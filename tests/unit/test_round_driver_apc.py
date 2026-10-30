@@ -194,3 +194,22 @@ def test_long_atoms_keep_hit_equal_to_miss(tiny, draft):
     got, hits = run([long], apc)
     assert hits[0] in (256, 512)
     assert got[0] == ref
+
+
+@pytest.mark.parametrize("draft", [True, False])
+def test_exact_repeat_replays_the_final_block(tiny, draft):
+    """The second identical prompt writes the stored final block back (no forward
+    for it) and generates the same tokens as the first and as a cold run."""
+    from yunshu_engine.round_driver import replay
+
+    lm, drafter = tiny
+    dr = drafter if draft else None
+    ref = _run(lm, dr, [DOC], _manager())[0][0]
+    replay.clear()
+    apc = _manager()
+    first, _, _ = _run(lm, dr, [DOC], apc)
+    assert replay.stats()["stored"] == 1 and replay.stats()["replayed"] == 0
+    again, _, _ = _run(lm, dr, [DOC], apc)
+    assert replay.stats()["replayed"] == 1
+    assert first[0] == ref and again[0] == ref
+    replay.clear()
