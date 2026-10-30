@@ -706,8 +706,16 @@ def patch_apc(mod):
 
                 ts = time.perf_counter()
                 mx.synchronize()
+                try:
+                    from yunshu_engine.kernels import buffer_cache as _bc
+
+                    pool = f" pool_bytes={_bc.restore_buffer_bytes()} state={dict(_bc._STATE)}"
+                except Exception as e:
+                    pool = f" pool_error={e!r}"
                 with open(APC_OUT, "a") as f:
-                    f.write(f"apc.sync_before_lookup {time.perf_counter() - ts:.4f}\n")
+                    f.write(
+                        f"apc.sync_before_lookup {time.perf_counter() - ts:.4f}{pool}\n"
+                    )
             t0 = time.perf_counter()
             depth[0] += 1
             if prof is not None:
@@ -729,8 +737,18 @@ def patch_apc(mod):
                 n_ids = (
                     len(args[1]) if len(args) > 1 and hasattr(args[1], "__len__") else 0
                 )
+                pool_after = ""
+                if name == "lookup" and os.environ.get("PB2_APC_SYNC"):
+                    try:
+                        from yunshu_engine.kernels import buffer_cache as _bc
+
+                        pool_after = f" pool_after={_bc.restore_buffer_bytes()}"
+                    except Exception:
+                        pass
                 with open(APC_OUT, "a") as f:
-                    f.write(f"apc.{name} {dur:.4f} at {t0:.4f} ret={shown} n={n_ids}\n")
+                    f.write(
+                        f"apc.{name} {dur:.4f} at {t0:.4f} ret={shown} n={n_ids}{pool_after}\n"
+                    )
                     if prof is not None and dur > 0.02:
                         buf = io.StringIO()
                         stats = pstats.Stats(prof, stream=buf)
