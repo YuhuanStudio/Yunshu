@@ -42,27 +42,26 @@ def test_cost_curve_interpolates_and_extrapolates():
 
 
 def _tiny():
-    nn = pytest.importorskip("mlx.nn")
-    from mlx_vlm.models.qwen3_5.config import TextConfig
-    from mlx_vlm.models.qwen3_5.language import LanguageModel
+    """The 27B's kernel set on a tiny Qwen3.5 (128-dim GDN heads, batch-invariant verify kernels
+    installed, lane projections) plus an MTP head: every decode forward runs the production arithmetic."""
     from mlx_vlm.speculative.drafters.qwen3_5_mtp.config import Qwen3_5MTPConfig
     from mlx_vlm.speculative.drafters.qwen3_5_mtp.qwen3_5_mtp import (
         Qwen3_5MTPDraftModel,
     )
+    from scripts.research.phaseb_verify import tiny as verify_tiny
 
-    from yunshu_engine.kernels import lane_linear
-
+    lm, _ = verify_tiny()
     cfg = dict(
         model_type="qwen3_5",
         hidden_size=256,
         intermediate_size=512,
         linear_num_value_heads=4,
         linear_num_key_heads=2,
-        linear_key_head_dim=64,
-        linear_value_head_dim=64,
+        linear_key_head_dim=128,
+        linear_value_head_dim=128,
         linear_conv_kernel_dim=4,
         num_hidden_layers=4,
-        num_attention_heads=4,
+        num_attention_heads=2,
         rms_norm_eps=1e-6,
         vocab_size=512,
         num_key_value_heads=1,
@@ -71,16 +70,38 @@ def _tiny():
         tie_word_embeddings=False,
     )
     mx.random.seed(3)
-    lm = LanguageModel(TextConfig(**cfg))
-    lm.set_dtype(mx.bfloat16)
-    nn.quantize(lm, group_size=64, bits=4)
-    assert lane_linear.convert(lm)["skipped"] == []
     drafter = Qwen3_5MTPDraftModel(
         Qwen3_5MTPConfig(text_config={**cfg, "mtp_num_hidden_layers": 1})
     )
     drafter.set_dtype(mx.bfloat16)
-    mx.eval(lm.parameters(), drafter.parameters())
+    mx.eval(drafter.parameters())
     return lm, drafter
+
+
+@pytest.fixture(autouse=True)
+def one_atom_prefill_segments(monkeypatch, request):
+    """The tiny model's prefill is not split-invariant (the 27B's NAX / BQ32 / chunked-GDN prefill is):
+    a segment that merges atoms only while no row decodes would make a row's solo and beside-others
+    prefills differ. One atom per segment pins prefill, so these tests isolate the decode forwards."""
+    from yunshu_engine.round_driver.driver import RoundDriver
+
+    if any(k in request.node.name for k in ("atoms", "prompt_tail")):
+        return  # these tests are about how segments merge
+    monkeypatch.setattr(
+        RoundDriver,
+        "_run_end",
+        lambda self, row, start, budget: self._span_end(row, start),
+    )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def restore_probe_lane_mode():
+    # the production tiny model enables a process-global dense-lane route
+    from yunshu_engine.kernels import ragged_kv
+
+    previous = ragged_kv._STATE["dense_lane"]
+    yield
+    ragged_kv.set_dense_lane(previous)
 
 
 @pytest.fixture(scope="module")

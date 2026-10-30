@@ -2941,14 +2941,7 @@ class VLMEngine:
                 self._model,
                 drafter=drafter if draft_kind == "mtp" else None,
                 dflash_drafter=drafter if draft_kind == "dflash" else None,
-                # no drafter: rows decode in the batch of the drafter the model would otherwise
-                # use (MTP head: the MTP batch, one token per round; DFlash / none: plain verify)
-                plain_verify=drafter is None
-                and spec_select.plain_rows_use_dflash_batch(
-                    self._config,
-                    spec_family=spec_family,
-                    mtp_capable=spec_family and is_mtp_capable(model_path),
-                ),
+                plain_verify=drafter is None,
                 stop_tokens=runner.stop_tokens,
                 chunk=ROUND_PREFILL_CHUNK,
                 apc=self._apc_backend,
