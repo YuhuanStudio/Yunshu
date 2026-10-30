@@ -69,8 +69,25 @@ def patch_driver(mod):
 
         setattr(cls, name, timed)
 
-    for name in ("add", "_prefill_step", "_restore"):
+    for name in ("add", "_prefill_step", "_restore", "_draw", "_record_tail"):
         wrap(name)
+
+    def wrap_fn(holder, name, label):
+        orig = getattr(holder, name)
+
+        def timed(*args, **kw):
+            t0 = time.perf_counter()
+            try:
+                return orig(*args, **kw)
+            finally:
+                with open(DRV_OUT, "a") as f:
+                    f.write(f"{label} {time.perf_counter() - t0:.4f}\n")
+
+        setattr(holder, name, timed)
+
+    wrap_fn(mod, "reserve_prompt_kv", "reserve_kv")
+    wrap_fn(mod, "lane_forward", "lane_forward")
+    wrap_fn(mod.replay, "restore", "replay_restore")
 
 
 class _DrvFinder(importlib.abc.MetaPathFinder):
