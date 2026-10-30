@@ -575,3 +575,32 @@ def test_finished_lone_slot_buffers_go_to_the_restore_pool(tiny):
     finally:
         buffer_cache.clear_restore_buffers()
         buffer_cache._STATE.update(prev)
+
+
+def test_cancelled_rehearsal_prefill_is_preempted_inside_the_step(tiny):
+    """A lone preemptible (rehearsal) row whose cancel event is set stops inside its prefill
+    step (layer-group check, kernels/preempt.py): no events, the row leaves the driver, and a
+    normal row afterwards still prefills and decodes."""
+    import threading
+    from types import SimpleNamespace
+
+    from yunshu_engine.kernels import preempt
+    from yunshu_engine.round_driver import driver as drv
+
+    lm, _ = tiny
+    assert preempt.install() and preempt.supported()
+    ev = threading.Event()
+    ev.preemptible = True
+    handle = SimpleNamespace(cancel_event=ev)
+    d = drv.RoundDriver(lm, stop_tokens=set(), chunk=64)
+    ids = [(5 * i + 1) % 500 for i in range(200)]
+    d.add(drv.Request(ids, 4, handle=handle, use_apc=False))
+    ev.set()
+    assert d.step() == []
+    assert not d.rows
+    # a plain row (no preemptible event) is untouched by the scope
+    d.add(drv.Request(ids, 4, handle=SimpleNamespace(cancel_event=None), use_apc=False))
+    out = []
+    while d.busy():
+        out += d.step()
+    assert len(out) == 4

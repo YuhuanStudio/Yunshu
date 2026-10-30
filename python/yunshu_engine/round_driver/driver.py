@@ -37,6 +37,7 @@ the same alone, in any batch, with any draft depth (row-invariant forward).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
@@ -49,6 +50,7 @@ import numpy as np
 
 from .. import keyed_sampling
 from ..cache_prefill import reserve_prompt_kv
+from ..kernels import preempt
 from ..keyed_sampling import top_k_filter, top_p_filter
 from ..serving.work_scheduler import (
     DECODE_EARLY_TOKENS,
@@ -737,6 +739,36 @@ class RoundDriver:
             credit if was_decoding else min(credit, DECODE_FIRST_BURST_S)
         )
 
+    @staticmethod
+    def _preempt_event(items: list[_Item]):
+        """The cancel event of a lone background (rehearsal) request: its prefill may stop
+        between layer groups when the event is set (kernels/preempt.py, as in the runner's
+        ``_next_preemptible``). None for any other step."""
+        if len(items) != 1 or not preempt.supported():
+            return None
+        event = getattr(items[0].row.req.handle, "cancel_event", None)
+        return (
+            event
+            if event is not None and getattr(event, "preemptible", False)
+            else None
+        )
+
+    def _preempted(self, items: list[_Item], stop) -> list[Event]:
+        """A preemptible prefill was cancelled inside a span: nothing of the partial span is
+        kept; checkpoints captured by its completed spans are published, then the rows leave."""
+        from .. import next_turn
+
+        self.flush_checkpoints()
+        for it in items:
+            self.remove(it.row.req.handle)
+        logger.info(
+            "background prefill preempted at layer group %d (after %d layers)",
+            stop.group,
+            stop.layers,
+        )
+        next_turn.record("preempted")
+        return []
+
     def _replay_key(self, it: _Item):
         """Replay key of a prompt's final block, or None when ``it`` is not one."""
         row = it.row
@@ -826,32 +858,41 @@ class RoundDriver:
             hidden = entry.hidden
             captures = list(entry.captures)
         else:
-            # Every segment runs the engine's own prefill forward (nax matmul, prefill
-            # kernels, chunked GDN under prefill_scope), as the lane does: a segment's
-            # bits are what it would be alone in a step, so one forward per segment
-            # keeps the arithmetic of the packed form. The prompt's KV is reserved once.
-            parts: list[mx.array] = []
-            per_seg: list[list[mx.array]] = []
-            for it in items:
-                if it.seg is None:
-                    continue
-                reserve_prompt_kv(it.row.cache, len(it.row.req.ids))
-                got: list[mx.array] = []
-                parts.append(
-                    lane_forward(
-                        self.lm,
-                        it.seg,
-                        capture_ids=self.dflash.capture_ids if self.dflash else (),
-                        captured=got if self.dflash else None,
+            ev = self._preempt_event(items)
+            try:
+                with preempt.scope(ev) if ev is not None else contextlib.nullcontext():
+                    # Every segment runs the engine's own prefill forward (nax matmul, prefill
+                    # kernels, chunked GDN under prefill_scope), as the lane does: a segment's
+                    # bits are what it would be alone in a step, so one forward per segment
+                    # keeps the arithmetic of the packed form. The prompt's KV is reserved once.
+                    parts: list[mx.array] = []
+                    per_seg: list[list[mx.array]] = []
+                    for it in items:
+                        if it.seg is None:
+                            continue
+                        reserve_prompt_kv(it.row.cache, len(it.row.req.ids))
+                        got: list[mx.array] = []
+                        parts.append(
+                            lane_forward(
+                                self.lm,
+                                it.seg,
+                                capture_ids=self.dflash.capture_ids
+                                if self.dflash
+                                else (),
+                                captured=got if self.dflash else None,
+                            )
+                        )
+                        per_seg.append(got)
+                    hidden = (
+                        parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=0)
                     )
-                )
-                per_seg.append(got)
-            hidden = parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=0)
-            if self.dflash is not None and per_seg:
-                captures = [
-                    mx.concatenate([g[layer] for g in per_seg], axis=0)
-                    for layer in range(len(per_seg[0]))
-                ]
+                    if self.dflash is not None and per_seg:
+                        captures = [
+                            mx.concatenate([g[layer] for g in per_seg], axis=0)
+                            for layer in range(len(per_seg[0]))
+                        ]
+            except preempt.PreemptedError as stop:
+                return self._preempted(items, stop)
         draws = self._draw(items, hidden)
         # Evaluate every cache the step advanced, not only what feeds a token:
         # a prompt chunk that emits nothing would otherwise stay a lazy graph
