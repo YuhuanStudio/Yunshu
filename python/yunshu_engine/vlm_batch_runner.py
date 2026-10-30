@@ -1617,6 +1617,12 @@ class VLMBatchRunner:
             )
             logger.info("Round driver: draft vocabulary context +%s ids", extra)
         media = self._media_request(job)
+        if media:
+            logger.info(
+                "Round driver: media prompt %d tokens, rope_delta %d",
+                len(job.ids),
+                media["rope_delta"],
+            )
         hit = driver.add(
             Request(
                 **media,
