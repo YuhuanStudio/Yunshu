@@ -199,6 +199,16 @@ class RoundDriver:
 
         self.model = model
         self.lm = model.language_model if hasattr(model, "language_model") else model
+        # Placeholder ids of image / video / audio tokens (APC never cuts or restores across them)
+        self._media_ids: set[int] = set()
+        config = getattr(model, "config", None)
+        if config is not None:
+            try:
+                from mlx_vlm import apc as _apc
+
+                self._media_ids = set(_apc.multimodal_token_ids_from_config(config))
+            except Exception:  # a model without media tokens
+                self._media_ids = set()
         self.stop_tokens = set(stop_tokens or ())
         self.head = (
             MTPHead(drafter, self.lm, lambda h: logits(self.lm, h))
@@ -367,14 +377,25 @@ class RoundDriver:
         ids = row.req.ids
         # one coordinator per row: its checkpoint plan is request state
         row.apc = self._new_coordinator(self._apc_manager)
+        row.apc.media_checkpoint = row.req.embeds is not None
         row.salt = self.apc_salt(int(row.req.extra_hash), row.mtp_cache is not None)
+        media = self._media_ids
         try:
+            from mlx_vlm import apc as _apc
+
+            # A media prompt restores only a prefix that leaves a text-only suffix (the media
+            # placeholders, whose embeddings are computed per request, lie inside the cached
+            # part), and no checkpoint cuts a media span (main: PromptProcessingBatch callbacks).
             hit = row.apc.lookup(
                 ids,
                 extra_hash=row.salt,
-                safe_lookup_min=0,
-                suffix_is_text_only=lambda _n: True,
-                prefix_has_media=lambda _n: False,
+                safe_lookup_min=max(0, _apc.media_safe_prefix_min(ids, media) - 1),
+                suffix_is_text_only=lambda n: _apc.prefix_leaves_text_only_suffix(
+                    ids, n, media
+                ),
+                prefix_has_media=lambda n: _apc.prefix_contains_media_tokens(
+                    ids, n, media
+                ),
             )
             n = len(row.cache)
             want = n + (len(row.mtp_cache) if row.mtp_cache is not None else 0)
@@ -394,7 +415,7 @@ class RoundDriver:
             floor = row.apc.manager.exact_cache_min_tokens
             row.ckpts = [
                 c
-                for c in row.apc.checkpoint_lengths(ids, set())
+                for c in row.apc.checkpoint_lengths(ids, media)
                 if row.hit < c < len(ids) and c >= floor
             ]
         except Exception:

@@ -282,3 +282,50 @@ def test_row_reports_its_planned_checkpoints(tiny):
     salt, points = d.planned_checkpoints(handle)
     assert points and all(0 < p < len(DOC) for p in points) and salt == d.rows[0].salt
     assert d.planned_checkpoints(object()) is None
+
+
+def test_media_prompt_checkpoints_avoid_media_spans_and_hits_match_cold(tiny):
+    """With placeholder (media) tokens in the prompt, no planned checkpoint cuts the media span, a
+    repeat restores a prefix that leaves a text-only suffix, and its tokens equal the cold run's
+    (the prompt travels as embeddings + positions, as a media prompt does)."""
+    from yunshu_engine.apc_manager import YunshuAPCManager
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    lm, _ = tiny
+    media_id = 499
+    prompt = list(DOC)
+    prompt[100:120] = [media_id] * 20  # the placeholder span
+    embeds = lm.model.embed_tokens(mx.array(prompt, dtype=mx.int32))
+    pos = mx.tile(mx.arange(len(prompt), dtype=mx.int32)[None, :], (3, 1))
+
+    def manager():
+        return YunshuAPCManager(
+            num_blocks=64,
+            block_size=16,
+            overrides={
+                "memory_max_gb": 1,
+                "checkpoint_entries": 4,
+                "checkpoint_interval_tokens": 256,
+            },
+        )
+
+    def run(apc, driver=None):
+        d = driver or RoundDriver(lm, stop_tokens=set(), chunk=64, apc=apc)
+        d._media_ids = {media_id}
+        h = object()
+        hit = d.add(Request(prompt, N, handle=h, embeds=embeds, position_ids=pos))
+        planned = d.planned_checkpoints(h)
+        out = []
+        while d.busy():
+            out += [e.token for e in d.step()]
+        return out, hit, planned, d
+
+    cold, hit0, planned, d = run(manager())
+    assert hit0 == 0
+    assert planned is not None
+    assert all(not (100 < c < 120) for c in planned[1])  # never inside the media span
+    again, hit1, _, _ = run(d._apc_manager, driver=None)
+    assert (
+        hit1 == 0 or hit1 >= 120
+    )  # a restored prefix covers the whole placeholder span
+    assert again == cold
