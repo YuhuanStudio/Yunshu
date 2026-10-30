@@ -58,7 +58,7 @@ from ..serving.work_scheduler import (
 from ..text_logprobs import top_logprobs_device
 from .allocate import CostCurve, allocate, chain
 from .batch import MAX_WINDOW, DecodeBatch
-from .forward import Segment, forward, lane_forward, logits
+from .forward import Segment, lane_forward, logits
 
 logger = logging.getLogger(__name__)
 
@@ -741,30 +741,33 @@ class RoundDriver:
                 blocked = True
         if not items:
             return []
+        # Every segment runs the engine's own prefill forward (nax matmul, prefill
+        # kernels, chunked GDN under prefill_scope), as the lane does: a segment's
+        # bits are what it would be alone in a step, so one forward per segment
+        # keeps the arithmetic of the packed form. The prompt's KV is reserved once.
         captures: list[mx.array] = []
-        segments = [it.seg for it in items if it.seg is not None]
-        if len(segments) == 1:
-            # One row's span runs the engine's own prefill forward (nax matmul,
-            # prefill kernels, chunked GDN under prefill_scope) like the lane,
-            # and reserves the prompt's KV once so spans do not regrow it.
-            it = items[0]
+        parts: list[mx.array] = []
+        per_seg: list[list[mx.array]] = []
+        for it in items:
+            if it.seg is None:
+                continue
             reserve_prompt_kv(it.row.cache, len(it.row.req.ids))
-            need = self.dflash is not None
-            hidden = lane_forward(
-                self.lm,
-                segments[0],
-                capture_ids=self.dflash.capture_ids if need else (),
-                captured=captures if need else None,
+            got: list[mx.array] = []
+            parts.append(
+                lane_forward(
+                    self.lm,
+                    it.seg,
+                    capture_ids=self.dflash.capture_ids if self.dflash else (),
+                    captured=got if self.dflash else None,
+                )
             )
-        elif self.dflash is not None:
-            hidden = forward(
-                self.lm,
-                segments,
-                capture_ids=self.dflash.capture_ids,
-                captured=captures,
-            )
-        else:
-            hidden = forward(self.lm, segments)
+            per_seg.append(got)
+        hidden = parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=0)
+        if self.dflash is not None and per_seg:
+            captures = [
+                mx.concatenate([g[layer] for g in per_seg], axis=0)
+                for layer in range(len(per_seg[0]))
+            ]
         draws = self._draw(items, hidden)
         # Evaluate every cache the step advanced, not only what feeds a token:
         # a prompt chunk that emits nothing would otherwise stay a lazy graph
