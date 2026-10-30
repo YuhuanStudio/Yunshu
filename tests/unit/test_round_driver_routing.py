@@ -1,4 +1,4 @@
-"""Round driver routing: the driver is the path for every text request."""
+"""Round driver routing: the driver is the path for every request of a supported model, media prompts included."""
 
 from types import SimpleNamespace
 
@@ -12,7 +12,10 @@ from yunshu_engine.vlm_batch_runner import VLMBatchRunner
     [
         (True, None, True, True),  # a lone request: the driver (no lane)
         (False, None, True, True),  # concurrent text: the driver
-        (False, {"pixel_values": 1}, True, False),  # media prompt: stock runner
+        # media prompts (embeddings + mRoPE positions) ride in the driver: a deliberate change of
+        # the old routing (they used to stay on the stock runner); unsupported prompt features
+        # raise in _media_request instead of being routed away (test_round_driver_media_wiring)
+        (False, {"pixel_values": 1}, True, True),
         (False, None, False, False),  # no driver built (other family, int8 KV, MoE)
     ],
 )
