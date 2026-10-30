@@ -112,6 +112,11 @@ class Request:
     extra_hash: int = 0  # APC salt (model / processor identity)
     use_apc: bool = True  # the runner's capacity check for this prompt
     cache_store: bool = True  # False: look the prefix up, store nothing
+    # Media prompt: [L, D] prompt embeddings (visual features scattered in), [3, L] mRoPE
+    # positions and the decode position offset (``rope_deltas``); None / 0 for plain text.
+    embeds: Any = None
+    position_ids: Any = None
+    rope_delta: int = 0
 
 
 @dataclass
@@ -867,7 +872,17 @@ class RoundDriver:
                         "p",
                         r,
                         Segment(
-                            r.cache, chunk, self.chunk, self.long_from, self.long_chunk
+                            r.cache,
+                            chunk,
+                            self.chunk,
+                            self.long_from,
+                            self.long_chunk,
+                            embeds=None
+                            if r.req.embeds is None
+                            else r.req.embeds[start:end],
+                            position_ids=None
+                            if r.req.position_ids is None
+                            else r.req.position_ids[:, start:end],
                         ),
                         start,
                         end,

@@ -724,3 +724,44 @@ def test_decode_batch_join_waits_until_after_the_first_token(tiny):
     while d.busy():
         got += [e.token for e in d.step()]
     assert d.batch.rows == [] and got == solo
+
+
+def _embed_request(lm, ids, positions=None):
+    ids_mx = mx.array(ids, dtype=mx.int32)
+    embeds = lm.model.embed_tokens(ids_mx)
+    if positions is None:
+        positions = mx.tile(mx.arange(len(ids), dtype=mx.int32)[None, :], (3, 1))
+    return embeds, positions
+
+
+def test_media_prompt_embeds_and_positions_match_the_token_path(tiny):
+    """A prompt carried as embeddings + mRoPE positions (what a media prompt is once its visual
+    features are scattered in) prefills and generates exactly what the same prompt does as tokens
+    when the embeddings are the token embeddings and the positions the plain sequence; positions
+    with a gap (an image grid's jump) are consumed: the hidden states differ."""
+    from yunshu_engine.round_driver import driver as drv
+    from yunshu_engine.round_driver.forward import Segment, lane_forward
+
+    lm, drafter = tiny
+    prompt = PROMPTS[1]
+    ref = _row_tokens(lm, drafter, prompt)
+    embeds, positions = _embed_request(lm, prompt)
+    d = drv.RoundDriver(lm, drafter=drafter, stop_tokens=set())
+    d.add(drv.Request(prompt, N, handle="m", embeds=embeds, position_ids=positions))
+    got = []
+    while d.busy():
+        got += [e.token for e in d.step() if e.handle == "m"]
+    assert got == ref
+
+    def hidden(pos):
+        seg = Segment(
+            lm.make_cache(),
+            mx.array(prompt, dtype=mx.int32),
+            embeds=embeds,
+            position_ids=pos,
+        )
+        return lane_forward(lm, seg)
+
+    gap = positions + (mx.arange(len(prompt)) >= 10).astype(mx.int32) * 7
+    assert bool(mx.array_equal(hidden(positions), hidden(positions)))
+    assert not bool(mx.array_equal(hidden(positions), hidden(gap)))

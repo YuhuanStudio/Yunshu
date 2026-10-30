@@ -49,6 +49,10 @@ class Segment:
     block: int = ATTN_BLOCK  # prefill attention query block (the driver's chunk)
     long_from: int = 1 << 60  # positions from here on use the coarser grid
     long_block: int = ATTN_BLOCK
+    # Media prompt (images / video / audio): the span's prompt embeddings [T, D] (visual features
+    # already scattered in) and its mRoPE positions [3, T]; None for a plain token span.
+    embeds: mx.array | None = None
+    position_ids: mx.array | None = None
 
     @property
     def length(self) -> int:
@@ -288,11 +292,17 @@ def lane_forward(language_model: Any, seg: Segment, *, capture_ids=(), captured=
         else gdn_prefill.prefill_scope()
     )
     with scope:
+        media = {}
+        if seg.embeds is not None:
+            media["inputs_embeds"] = seg.embeds[None]
+        if seg.position_ids is not None:
+            media["position_ids"] = seg.position_ids[:, None, :]
         h = language_model.model(
             seg.tokens[None].astype(mx.int32),
             cache=seg.cache,
             capture_layer_ids=list(capture_ids) if sink is not None else None,
             hidden_sink=sink,
+            **media,
         )
     if sink is not None:
         captured.extend(x[0] for x in sink)
