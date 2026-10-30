@@ -180,10 +180,17 @@ REPLAY = "yunshu_engine.prompt_end_replay"
 
 
 def wrap_tl(holder, name, label):
-    """Time-line wrapper (start, duration) written to PB2_TL_OUT; skipped when absent."""
-    orig = getattr(holder, name, None)
-    if orig is None:
+    """Time-line wrapper (start, duration) written to PB2_TL_OUT; skipped when absent.
+
+    Keeps staticmethod / classmethod descriptors (the runner's ``_next_preemptible`` is a
+    staticmethod: wrapping it as a plain function would pass ``self`` as its argument)."""
+    import inspect
+
+    raw = inspect.getattr_static(holder, name, None)
+    if raw is None:
         return
+    kind = type(raw) if isinstance(raw, (staticmethod, classmethod)) else None
+    orig = raw.__func__ if kind is not None else raw
 
     def timed(*args, **kw):
         t0 = time.perf_counter()
@@ -193,7 +200,7 @@ def wrap_tl(holder, name, label):
             with open(TL_OUT, "a") as f:
                 f.write(f"{label} {time.perf_counter() - t0:.4f} at {t0:.4f}\n")
 
-    setattr(holder, name, timed)
+    setattr(holder, name, kind(timed) if kind is not None else timed)
 
 
 class _ReplayFinder(importlib.abc.MetaPathFinder):

@@ -110,3 +110,39 @@ def test_timeline_wrapper_logs_label_duration_and_start(tmp_path, monkeypatch):
     import sys
 
     sys.meta_path[:] = [f for f in sys.meta_path if "Finder" not in type(f).__name__]
+
+
+def test_timeline_wrapper_keeps_static_and_class_methods(tmp_path, monkeypatch):
+    out = tmp_path / "tl2.txt"
+    monkeypatch.setenv("PB2_TL_OUT", str(out))
+    p = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/research/pb2_hook/sitecustomize.py"
+    )
+    spec = importlib.util.spec_from_file_location("pb2hook_tl2", p)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    class Runner:
+        @staticmethod
+        def static(group):
+            return ("static", group)
+
+        @classmethod
+        def klass(cls, x):
+            return (cls.__name__, x)
+
+        def method(self, x):
+            return ("method", x)
+
+    for name in ("static", "klass", "method"):
+        m.wrap_tl(Runner, name, f"Runner.{name}")
+    r = Runner()
+    assert r.static(1) == ("static", 1) and Runner.static(2) == ("static", 2)
+    assert r.klass(3) == ("Runner", 3)
+    assert r.method(4) == ("method", 4)
+    labels = [ln.split()[0] for ln in out.read_text().splitlines()]
+    assert labels == ["Runner.static", "Runner.static", "Runner.klass", "Runner.method"]
+    import sys
+
+    sys.meta_path[:] = [f for f in sys.meta_path if "Finder" not in type(f).__name__]
