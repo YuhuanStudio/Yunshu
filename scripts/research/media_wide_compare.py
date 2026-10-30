@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 
 def first_divergence(a: list, b: list) -> int | None:
@@ -59,8 +60,8 @@ def main() -> None:
     ap.add_argument("--tie-gap", type=float, default=0.5)
     ap.add_argument("--max-flip-fraction", type=float, default=0.25)
     a = ap.parse_args()
-    base = json.load(open(a.base))["wide"]
-    cand = json.load(open(a.cand))["wide"]
+    base = json.loads(Path(a.base).read_text())["wide"]
+    cand = json.loads(Path(a.cand).read_text())["wide"]
     out = compare(base, cand, a.tie_gap)
     print(json.dumps({k: v for k, v in out.items() if k != "rows"}, indent=1))
     for r in out["rows"]:
