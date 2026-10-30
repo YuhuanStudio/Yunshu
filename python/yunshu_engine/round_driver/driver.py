@@ -713,7 +713,12 @@ class RoundDriver:
         mx.eval(*arrays)
 
     def step(self) -> list[Event]:
-        self.flush_checkpoints()  # the previous step's tokens have been handed out
+        # The previous step's tokens have been handed out: publish the captured checkpoints. While a
+        # row is still prefilling nothing has been handed out yet and the capture stays lazy (the
+        # runner flushes after the first token, as for the batch path): flushing at every prefill
+        # step start put a 32K checkpoint copy (~45 ms) in the middle of a rehearsal's prefill.
+        if all(r.pending is not None for r in self.rows):
+            self.flush_checkpoints()
         self._finish_join()
         if not self.rows:
             return []
