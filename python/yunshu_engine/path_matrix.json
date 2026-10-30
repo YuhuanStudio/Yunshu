@@ -3081,6 +3081,13 @@
   "architecture_columns": {
     "_doc": "Architecture audit columns, not additional serving paths. Entries record wiring; numerical/performance qualification is a separate real-checkpoint gate.",
     "flashnext": {
+      "qwen4_gdn_fused": {
+        "s": "engaged",
+        "why": "default on both qwen4_exp layer loops; 2-bit packs keep the composed layer (no 2-bit plan tiles, identity-checked)",
+        "ev": [
+          ["python/yunshu_engine/vlm_engine.py", "tf_hc_forward.install_qwen4_gdn()"]
+        ]
+      },
       "draft_vocab": {
         "s": "missing",
         "owner": "flashnext80",
