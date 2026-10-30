@@ -22,9 +22,42 @@ def summarize(acc):
     }
 
 
+LSUM = os.environ.get("PB2_LAYERSUM_OUT")
+
+
+def patch_layersum(mod):
+    """Log a checksum of every decoder layer's input and output (rows >= 2): the first layer call
+    whose output differs between two trees localizes an arithmetic difference."""
+    import mlx.core as mx
+
+    cls = mod.Qwen3_5DecoderLayer
+    orig = cls.__call__
+    count = [0]
+
+    def summed(self, x, *args, **kw):
+        out = orig(self, x, *args, **kw)
+        if x.ndim >= 2 and x.shape[-2] >= 2:
+            o = out[0] if isinstance(out, (tuple, list)) else out
+            fi, fo = x.astype(mx.float32), o.astype(mx.float32)
+            vals = mx.stack(
+                [mx.sum(fi), mx.max(mx.abs(fi)), mx.sum(fo), mx.max(mx.abs(fo))]
+            ).tolist()
+            with open(LSUM, "a") as f:
+                f.write(
+                    f"{count[0]} rows={x.shape[-2]} in={vals[0]:.9g} inmax={vals[1]:.9g} "
+                    f"out={vals[2]:.9g} outmax={vals[3]:.9g}\n"
+                )
+            count[0] += 1
+        return out
+
+    cls.__call__ = summed
+
+
 def patch(mod):
     import mlx.core as mx
 
+    if LSUM:
+        return patch_layersum(mod)
     cls = mod.Qwen3_5DecoderLayer
     orig = cls.__call__
     acc: dict = {}
@@ -168,7 +201,7 @@ if DRV_OUT:
 
     sys.meta_path.insert(0, _DrvFinder())
 
-if OUT:
+if OUT or LSUM:
     import importlib.util
 
     sys.meta_path.insert(0, _Finder())

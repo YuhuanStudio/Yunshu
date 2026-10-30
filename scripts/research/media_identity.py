@@ -254,6 +254,11 @@ def main() -> None:
         help="N text-only control prompts with logprobs",
     )
     ap.add_argument(
+        "--probe",
+        action="store_true",
+        help="one image request, one token (layer probe)",
+    )
+    ap.add_argument(
         "--long",
         type=int,
         nargs=2,
@@ -298,6 +303,12 @@ def main() -> None:
         model = json.loads(
             urllib.request.urlopen(url + "/v1/models", timeout=10).read()
         )["data"][0]["id"]
+        if a.probe:
+            # one image request, one token: the layer-checksum probe (pb2_hook PB2_LAYERSUM_OUT)
+            text = chat(url, model, image_msg(0, WIDE_QUESTIONS[0]), max_tokens=1)
+            a.out.write_text(json.dumps({"probe": text}))
+            print(json.dumps({"probe": text}), flush=True)
+            return
         result = {"model": model, "src": a.src, "cells": cells(url, model)}
         if a.long:
             result["cells"].update(cells_long(url, model, *a.long))
