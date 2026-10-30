@@ -1547,3 +1547,19 @@ fngdn-1029c and fngdn-1030long, 2-3 interleaved reps):
 
 Output checks: 0 identity mismatches off vs on at every context (30 cells), spec on == off, APC hit ==
 miss, KLD 0. Prefill does not use the plan; cold TTFT differences are within noise.
+
+## 2026-10-30 — Flash-Next APC checkpoints on the prefill grid (hit == cold)
+
+Qwen3.8-Flash-Next oQ3e (MTP), main 7948909ba vs the grid change (yv fnapc-3e-k, clean reps only):
+
+| cell | turn-2 TTFT before → after | cold TTFT | decode |
+|---|---|---|---|
+| prose 8K | 0.41 → 0.45-0.46 s | 9.0 s, unchanged | unchanged |
+| code 8K | 0.41-0.43 → 0.45-0.46 s | 8.0-8.1 s, unchanged | unchanged |
+| prose 32K | 0.49-0.51 → 0.54-0.55 s | 20.1-20.5 s, unchanged | unchanged |
+| code 32K | 0.52 → 0.56-0.57 s | 26.0-26.2 s, unchanged | unchanged |
+
+Output checks: before, a 32K turn-2 APC hit differed from a cold prefill of the same request
+(logprobs up to 0.051 apart, tokens equal); after, partial and full hits equal cold bit for bit with
+MTP on and off. KLD vs the fp32 reference unchanged (15 windows, 197,391 positions). The +40 ms is the
+extra forward at the semantic boundary a cold run now also splits at.
