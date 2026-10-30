@@ -176,6 +176,37 @@ def cells_wide(url: str, model: str, count: int) -> list:
     return out
 
 
+FILLER = (
+    "The harbour master keeps a ledger of every vessel: its name, cargo, draught and the hour it "
+    "crossed the breakwater. "
+)
+
+
+def cells_text_lengths(url: str, model: str, per_length: int) -> list:
+    """Text prompts of 65..~2000 tokens (several lengths, ``per_length`` variants each): prompts above
+    one 64-row block whose tail the driver used to merge into the previous span when no checkpoint was
+    planned (found with the layer-checksum probe)."""
+    out = []
+    for sentences in (4, 6, 10, 20, 40, 80, 160):
+        for v in range(per_length):
+            body = "".join(
+                FILLER.replace("harbour", f"harbour{v}") for _ in range(sentences)
+            )
+            text = (
+                body
+                + f"Variant {v}: in one sentence, what does the harbour master record?"
+            )
+            rec = chat(
+                url,
+                model,
+                [{"role": "user", "content": text}],
+                max_tokens=40,
+                logprobs=True,
+            )
+            out.append({"kind": sentences, "size": v, "question": text[-60:], **rec})
+    return out
+
+
 def cells_wide_text(url: str, model: str, count: int) -> list:
     """Text-only prompts of the same shape as the wide image prompts (the control: whether the two
     trees agree bit for bit on text where they do not on media)."""
@@ -254,6 +285,12 @@ def main() -> None:
         help="N text-only control prompts with logprobs",
     )
     ap.add_argument(
+        "--text-lengths",
+        type=int,
+        default=0,
+        help="N variants of each of 7 text prompt lengths (65..2000 tokens) with logprobs",
+    )
+    ap.add_argument(
         "--probe",
         action="store_true",
         help="one image request, one token (layer probe)",
@@ -316,6 +353,8 @@ def main() -> None:
             result["wide"] = cells_wide(url, model, a.wide)
         if a.wide_text:
             result["wide_text"] = cells_wide_text(url, model, a.wide_text)
+        if a.text_lengths:
+            result["text_len"] = cells_text_lengths(url, model, a.text_lengths)
         engaged = b"Round driver: media prompt" in log.read_bytes()
         result["driver_media_engaged"] = engaged
         if a.long:
