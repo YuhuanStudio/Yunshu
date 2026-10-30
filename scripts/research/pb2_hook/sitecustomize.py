@@ -345,6 +345,30 @@ def patch_attn():
 
     count = [0]
 
+    from mlx_vlm.models.qwen3_5 import language as _lang
+
+    mlp_orig = _lang.Qwen3_5MLP.__call__
+    mlp_count = [0]
+
+    def mlp_call(self, x, *a, **kw):
+        out = mlp_orig(self, x, *a, **kw)
+        try:
+            xi = x.reshape(-1, x.shape[-1])[0].astype(mx.float32)
+            oo = out.reshape(-1, out.shape[-1])[0].astype(mx.float32)
+            vals = mx.stack([mx.sum(xi), mx.sum(oo), mx.max(mx.abs(oo))]).tolist()
+            rows = int(x.reshape(-1, x.shape[-1]).shape[0])
+            with open(ATTN_OUT, "a") as f:
+                f.write(
+                    f"M{mlp_count[0]} mlp rows={rows} in={vals[0]:.9g} out={vals[1]:.9g} omax={vals[2]:.9g}\n"
+                )
+            mlp_count[0] += 1
+        except Exception as e:
+            with open(ATTN_OUT, "a") as f:
+                f.write(f"mlp-probe-error {e!r}\n")
+        return out
+
+    _lang.Qwen3_5MLP.__call__ = mlp_call
+
     def line(kind, q, k, o, n):
         vals = mx.stack(
             [
