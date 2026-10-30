@@ -65,7 +65,7 @@ def patch_driver(mod):
                 return orig(self, *args, **kw)
             finally:
                 with open(DRV_OUT, "a") as f:
-                    f.write(f"{name} {time.perf_counter() - t0:.4f}\n")
+                    f.write(f"{name} {time.perf_counter() - t0:.4f} at {t0:.4f}\n")
 
         setattr(cls, name, timed)
 
@@ -170,3 +170,57 @@ if OUT:
     import importlib.util
 
     sys.meta_path.insert(0, _Finder())
+
+
+TRACE_OUT = os.environ.get("PB2_TRACE_OUT")
+RUNNER = "yunshu_engine.vlm_batch_runner"
+_TRACED = ("t_submit", "t_admit", "t_prefill_start", "t_first", "t_last", "t_prefill_end")
+
+
+def patch_runner(mod):
+    """Log each request's stats timestamps as they are set (same runner file in both arms)."""
+    cls = next(
+        c
+        for c in vars(mod).values()
+        if isinstance(c, type) and "t_submit" in getattr(c, "__dataclass_fields__", {})
+    )
+    orig = cls.__setattr__
+    seen: dict = {}
+
+    def traced(self, name, value):
+        orig(self, name, value)
+        if name in _TRACED and value:
+            if name == "t_last":
+                seen[id(self)] = seen.get(id(self), 0) + 1
+                if seen[id(self)] > 3:
+                    return  # only the first few token stamps
+            with open(TRACE_OUT, "a") as f:
+                f.write(
+                    f"{time.perf_counter():.4f} {name} req={id(self) % 100000} "
+                    f"val={value:.4f} pt={getattr(self, 'prefill_total', 0)} "
+                    f"cached={getattr(self, 'cached_tokens', 0)}\n"
+                )
+
+    cls.__setattr__ = traced
+
+
+class _RunnerFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path, target=None):
+        if name != RUNNER:
+            return None
+        sys.meta_path.remove(self)
+        spec = importlib.util.find_spec(name)
+        orig_exec = spec.loader.exec_module
+
+        def exec_module(module):
+            orig_exec(module)
+            patch_runner(module)
+
+        spec.loader.exec_module = exec_module
+        return spec
+
+
+if TRACE_OUT:
+    import importlib.util
+
+    sys.meta_path.insert(0, _RunnerFinder())
