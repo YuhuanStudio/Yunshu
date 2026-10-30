@@ -752,7 +752,8 @@ class RoundDriver:
         """The cancel event of a lone background (rehearsal) request: its prefill may stop
         between layer groups when the event is set (kernels/preempt.py, as in the runner's
         ``_next_preemptible``). None for any other step."""
-        if len(items) != 1 or not preempt.supported():
+        # one row (a step may hold several of its segments: a span and the prompt's tail)
+        if len({id(it.row) for it in items}) != 1 or not preempt.supported():
             return None
         event = getattr(items[0].row.req.handle, "cancel_event", None)
         return (

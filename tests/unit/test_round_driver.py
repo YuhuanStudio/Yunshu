@@ -577,7 +577,8 @@ def test_finished_lone_slot_buffers_go_to_the_restore_pool(tiny):
         buffer_cache._STATE.update(prev)
 
 
-def test_cancelled_rehearsal_prefill_is_preempted_inside_the_step(tiny):
+@pytest.mark.parametrize("length", [40, 200])
+def test_cancelled_rehearsal_prefill_is_preempted_inside_the_step(tiny, length):
     """A lone preemptible (rehearsal) row whose cancel event is set stops inside its prefill
     step (layer-group check, kernels/preempt.py): no events, the row leaves the driver, and a
     normal row afterwards still prefills and decodes."""
@@ -593,7 +594,8 @@ def test_cancelled_rehearsal_prefill_is_preempted_inside_the_step(tiny):
     ev.preemptible = True
     handle = SimpleNamespace(cancel_event=ev)
     d = drv.RoundDriver(lm, stop_tokens=set(), chunk=64)
-    ids = [(5 * i + 1) % 500 for i in range(200)]
+    # 200 rows: one step holds the row's span and its tail (two segments of ONE row)
+    ids = [(5 * i + 1) % 500 for i in range(length)]
     d.add(drv.Request(ids, 4, handle=handle, use_apc=False))
     ev.set()
     assert d.step() == []
