@@ -282,41 +282,30 @@ def forward(
     return model.norm(x)[0]
 
 
-SDPA_VECTOR_ROWS = 8  # up to this many query rows the SDPA takes its vector kernel
+DENSE_LANE_ROWS = (
+    8  # main's dense lane attends this many query rows or fewer on the tile kernel
+)
 
 
 @contextlib.contextmanager
-def _stock_tail_mask(language_model: Any, seg: Segment):
-    """A 2..8-row tail attends over the cache with an explicit causal mask array, as main's
-    BatchKVCache hands it (its ``make_mask`` always returns an array), instead of the "causal"
-    string a plain KVCache returns. The two reach different SDPA kernels for so few query rows, so
-    the tail's attention (and everything after it) differed in the last bits; from 9 rows up they
-    agree. Found with the layer-checksum probe on a 135-token prompt (7-row tail): layers 0-2 of the
-    tail equal, the first full-attention layer (3) different."""
-    t = seg.length
-    cache = seg.cache[language_model.model.fa_idx] if seg.cache else None
-    usable = (
-        2 <= t <= SDPA_VECTOR_ROWS
-        and cache is not None
-        and getattr(cache, "keys", None) is not None
-    )
-    if not usable:
+def _dense_lane_tail(seg: Segment):
+    """A prompt tail of 1..8 rows attends through the ragged token-tile kernel, as in main's lone
+    (speculative) lane: ``ragged_kv.set_dense_lane`` routes a single-row KVCache's attention of up to
+    8 query rows there (the same per-token bits as decode and verify), while 9 rows and more keep
+    the prefill attention (BQ kernels). Found with the layer-checksum probe on a 135-token prompt
+    (128 + a 7-row tail): the 128-row span was identical, the tail identical through layers 0-2 and
+    different at the first full-attention layer; a 189-token prompt (61-row tail) was identical."""
+    if not 1 <= seg.length <= DENSE_LANE_ROWS:
         yield
         return
-    from mlx_vlm.models.cache import create_causal_mask
+    from ..kernels import ragged_kv
 
-    offset = int(cache.offset)
-
-    def make_mask(n, **_kw):
-        return create_causal_mask(n, offset=offset, left_padding=mx.array([0]))
-
-    cache.make_mask = (
-        make_mask  # instance attribute: shadows the method for this forward only
-    )
+    previous = ragged_kv.dense_lane_active()
+    ragged_kv.set_dense_lane(True)
     try:
         yield
     finally:
-        del cache.make_mask
+        ragged_kv.set_dense_lane(previous)
 
 
 def lane_forward(language_model: Any, seg: Segment, *, capture_ids=(), captured=None):
@@ -329,7 +318,7 @@ def lane_forward(language_model: Any, seg: Segment, *, capture_ids=(), captured=
         if seg.tokens.shape[0] <= 48
         else gdn_prefill.prefill_scope()
     )
-    with scope, _stock_tail_mask(language_model, seg):
+    with scope, _dense_lane_tail(seg):
         media = {}
         if seg.embeds is not None:
             media["inputs_embeds"] = seg.embeds[None]

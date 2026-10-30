@@ -470,6 +470,11 @@ def set_dense_lane(active: bool) -> None:
     _STATE["dense_lane"] = bool(active)
 
 
+def dense_lane_active() -> bool:
+    """Whether single-row KVCache attention currently routes through the ragged kernel."""
+    return bool(_STATE["dense_lane"])
+
+
 def _lane_length(cache: Any) -> int | None:
     """Stored keys of a one-row stock cache whose buffer already has the
     ragged layout (keys at ``0 .. n - 1`` of ``cache.keys[0]``): a ``KVCache``,

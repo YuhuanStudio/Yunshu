@@ -869,30 +869,43 @@ def test_prompt_tail_runs_apart_even_without_a_checkpoint(tiny, monkeypatch):
     assert lengths == [64, 35]
 
 
-def test_short_tail_attends_with_the_explicit_mask_main_uses(tiny):
-    """A 2..8-row tail forward sees an explicit causal mask array [1, 1, T, offset + T] on its
-    full-attention cache (what main's BatchKVCache.make_mask returns), longer and 1-row segments keep
-    the plain cache behaviour, and the override never outlives the forward."""
-    from yunshu_engine.round_driver.forward import (
-        Segment,
-        _stock_tail_mask,
-        lane_forward,
-    )
+def test_short_tail_attends_through_the_dense_lane_kernel(tiny, monkeypatch):
+    """A 1..8-row tail forward turns main's dense lane on for its duration (single-row KVCache
+    attention of <= 8 query rows on the ragged token-tile kernel) and restores the previous state;
+    9 rows and more keep the prefill attention untouched."""
+    from yunshu_engine.kernels import ragged_kv
+    from yunshu_engine.round_driver.forward import Segment, lane_forward
 
     lm, _ = tiny
     cache = lm.make_cache()
-    prompt = mx.array([(5 * i + 1) % 500 for i in range(40)], dtype=mx.int32)
-    lane_forward(lm, Segment(cache, prompt))  # a 40-row span fills the cache
-    fa = cache[lm.model.fa_idx]
-    assert int(fa.offset) == 40
+    lane_forward(
+        lm,
+        Segment(
+            cache, mx.array([(5 * i + 1) % 500 for i in range(40)], dtype=mx.int32)
+        ),
+    )
+    calls = []
+    real = ragged_kv.set_dense_lane
 
-    def mask_for(rows):
-        seg = Segment(cache, mx.array(list(range(rows)), dtype=mx.int32))
-        with _stock_tail_mask(lm, seg):
-            return fa.make_mask(rows) if "make_mask" in fa.__dict__ else None
+    def spy(active):
+        calls.append(bool(active))
+        real(active)
 
-    m7 = mask_for(7)
-    assert m7 is not None and m7.shape == (1, 1, 7, 47) and m7.dtype == mx.bool_
-    assert bool(m7[0, 0, 0, 40]) and not bool(m7[0, 0, 0, 41])  # causal from the offset
-    assert mask_for(9) is None and mask_for(1) is None  # outside 2..8: untouched
-    assert "make_mask" not in fa.__dict__  # restored after every forward
+    monkeypatch.setattr(ragged_kv, "set_dense_lane", spy)
+    for rows, expect in (
+        (1, [True, False]),
+        (7, [True, False]),
+        (8, [True, False]),
+        (9, []),
+        (30, []),
+    ):
+        calls.clear()
+        c = lm.make_cache()
+        lane_forward(
+            lm,
+            Segment(
+                c, mx.array([(3 * i + 2) % 500 for i in range(rows)], dtype=mx.int32)
+            ),
+        )
+        assert calls == expect, (rows, calls)
+        assert ragged_kv.dense_lane_active() is False
