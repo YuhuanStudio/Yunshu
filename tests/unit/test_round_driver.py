@@ -867,3 +867,32 @@ def test_prompt_tail_runs_apart_even_without_a_checkpoint(tiny, monkeypatch):
     )
     drv2.step()
     assert lengths == [64, 35]
+
+
+def test_short_tail_attends_with_the_explicit_mask_main_uses(tiny):
+    """A 2..8-row tail forward sees an explicit causal mask array [1, 1, T, offset + T] on its
+    full-attention cache (what main's BatchKVCache.make_mask returns), longer and 1-row segments keep
+    the plain cache behaviour, and the override never outlives the forward."""
+    from yunshu_engine.round_driver.forward import (
+        Segment,
+        _stock_tail_mask,
+        lane_forward,
+    )
+
+    lm, _ = tiny
+    cache = lm.make_cache()
+    prompt = mx.array([(5 * i + 1) % 500 for i in range(40)], dtype=mx.int32)
+    lane_forward(lm, Segment(cache, prompt))  # a 40-row span fills the cache
+    fa = cache[lm.model.fa_idx]
+    assert int(fa.offset) == 40
+
+    def mask_for(rows):
+        seg = Segment(cache, mx.array(list(range(rows)), dtype=mx.int32))
+        with _stock_tail_mask(lm, seg):
+            return fa.make_mask(rows) if "make_mask" in fa.__dict__ else None
+
+    m7 = mask_for(7)
+    assert m7 is not None and m7.shape == (1, 1, 7, 47) and m7.dtype == mx.bool_
+    assert bool(m7[0, 0, 0, 40]) and not bool(m7[0, 0, 0, 41])  # causal from the offset
+    assert mask_for(9) is None and mask_for(1) is None  # outside 2..8: untouched
+    assert "make_mask" not in fa.__dict__  # restored after every forward

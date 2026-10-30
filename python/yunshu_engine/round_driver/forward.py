@@ -14,6 +14,7 @@ run in ``batch.DecodeBatch``, not here.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -281,6 +282,43 @@ def forward(
     return model.norm(x)[0]
 
 
+SDPA_VECTOR_ROWS = 8  # up to this many query rows the SDPA takes its vector kernel
+
+
+@contextlib.contextmanager
+def _stock_tail_mask(language_model: Any, seg: Segment):
+    """A 2..8-row tail attends over the cache with an explicit causal mask array, as main's
+    BatchKVCache hands it (its ``make_mask`` always returns an array), instead of the "causal"
+    string a plain KVCache returns. The two reach different SDPA kernels for so few query rows, so
+    the tail's attention (and everything after it) differed in the last bits; from 9 rows up they
+    agree. Found with the layer-checksum probe on a 135-token prompt (7-row tail): layers 0-2 of the
+    tail equal, the first full-attention layer (3) different."""
+    t = seg.length
+    cache = seg.cache[language_model.model.fa_idx] if seg.cache else None
+    usable = (
+        2 <= t <= SDPA_VECTOR_ROWS
+        and cache is not None
+        and getattr(cache, "keys", None) is not None
+    )
+    if not usable:
+        yield
+        return
+    from mlx_vlm.models.cache import create_causal_mask
+
+    offset = int(cache.offset)
+
+    def make_mask(n, **_kw):
+        return create_causal_mask(n, offset=offset, left_padding=mx.array([0]))
+
+    cache.make_mask = (
+        make_mask  # instance attribute: shadows the method for this forward only
+    )
+    try:
+        yield
+    finally:
+        del cache.make_mask
+
+
 def lane_forward(language_model: Any, seg: Segment, *, capture_ids=(), captured=None):
     from ..kernels import gdn_prefill
 
@@ -291,7 +329,7 @@ def lane_forward(language_model: Any, seg: Segment, *, capture_ids=(), captured=
         if seg.tokens.shape[0] <= 48
         else gdn_prefill.prefill_scope()
     )
-    with scope:
+    with scope, _stock_tail_mask(language_model, seg):
         media = {}
         if seg.embeds is not None:
             media["inputs_embeds"] = seg.embeds[None]
