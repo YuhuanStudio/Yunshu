@@ -369,6 +369,28 @@ def patch_attn():
 
     _lang.Qwen3_5MLP.__call__ = mlp_call
 
+    vcls = type(_lang._EXACT_SPECULATIVE_VERIFIER)
+    ff_orig = vcls._feed_forward
+
+    def ff_call(self, mlp, x, *a, **kw):
+        out = ff_orig(self, mlp, x, *a, **kw)
+        try:
+            xi = x.reshape(-1, x.shape[-1])[0].astype(mx.float32)
+            oo = out.reshape(-1, out.shape[-1])[0].astype(mx.float32)
+            vals = mx.stack([mx.sum(xi), mx.sum(oo), mx.max(mx.abs(oo))]).tolist()
+            rows = int(x.reshape(-1, x.shape[-1]).shape[0])
+            with open(ATTN_OUT, "a") as f:
+                f.write(
+                    f"M{mlp_count[0]} mlp rows={rows} in={vals[0]:.9g} out={vals[1]:.9g} omax={vals[2]:.9g}\n"
+                )
+            mlp_count[0] += 1
+        except Exception as e:
+            with open(ATTN_OUT, "a") as f:
+                f.write(f"ff-probe-error {e!r}\n")
+        return out
+
+    vcls._feed_forward = ff_call
+
     def line(kind, q, k, o, n):
         vals = mx.stack(
             [
