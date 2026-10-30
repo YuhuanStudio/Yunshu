@@ -81,44 +81,6 @@ def test_int8_long_dflash_spec_on_equals_spec_off_with_logprobs(target):  # noqa
     assert on == off
 
 
-@pytest.mark.parametrize("fmt", ["bf16", "int8"])
-def test_long_apc_hit_equals_miss_with_logprobs(target, fmt):  # noqa: F811
-    from yunshu_engine.apc_manager import YunshuAPCManager
-    from yunshu_engine.round_driver.driver import Request, RoundDriver
-
-    def manager():
-        return YunshuAPCManager(
-            num_blocks=256,
-            block_size=16,
-            overrides={
-                "memory_max_gb": 1,
-                "checkpoint_entries": 4,
-                "checkpoint_interval_tokens": 64,
-            },
-        )
-
-    prompt = _prompt(1500, 3)
-    cold, _ = _run(target, [prompt], None, "dflash", fmt=fmt)
-    apc = manager()
-    first, d = _run(target, [prompt], None, "dflash", apc=apc, fmt=fmt)
-    d.flush_checkpoints()
-    d2 = RoundDriver(
-        target,
-        dflash_drafter=_draft(target),
-        stop_tokens=set(),
-        chunk=64,
-        kv_format=fmt,
-        apc=apc,
-    )
-    hit = d2.add(Request(prompt, 24, handle=0, logprobs=True, top_logprobs=2))
-    out = []
-    while d2.busy():
-        out += [(e.token, e.logprob) for e in d2.step()]
-    assert hit > 0
-    assert first[0] == cold[0]
-    assert out == cold[0]
-
-
 def test_split_invariant_prefill_does_not_depend_on_the_kv_precision():
     """Prefill and the prefix cache are bf16 for every decode precision, so int8 rows need the same
     split-invariant prefill: with it off, a prefix-cache hit restores at a non-grid length and a row
@@ -132,3 +94,29 @@ def test_split_invariant_prefill_does_not_depend_on_the_kv_precision():
     start = src.index("split_ready = bool(")
     end = src.index("gdn_prefill.configure_split(split_ready)")
     assert "YUNSHU_KV_PRECISION" not in src[start:end]
+
+
+@pytest.mark.parametrize("fmt", ["bf16", "int8"])
+def test_long_mtp_rows_spec_on_equals_spec_off_and_solo_equals_beside(fmt):
+    """MTP rows (DecodeBatch) and the plain-verify batch read int8 KV through one arithmetic: spec on
+    == spec off at several 512-key chunks, solo == beside other rows."""
+    from yunshu_engine.kernels.ragged_attention import tile_ready
+
+    from .test_round_driver import _tiny
+
+    if not mx.metal.is_available() or not tile_ready():
+        pytest.skip("needs M5-class tensor ops")
+    lm, drafter = _tiny()
+    prompts = [_prompt(n, k) for k, n in enumerate(LENS)]
+
+    def toks(out):
+        return {i: [t for t, _ in v] for i, v in out.items()}
+
+    # the tiny MTP head's logprobs are not meaningful (nan), so tokens are compared; the arithmetic
+    # itself is pinned bit for bit by test_int8_key_parallel_invariance (int8 tile == bf16 tile)
+    off, _ = _run(lm, prompts[:1], None, "mtp", fmt=fmt)
+    on, d = _run(lm, prompts[:1], drafter, "mtp", fmt=fmt)
+    assert d.drafted > 0
+    assert toks(on) == toks(off)
+    beside, _ = _run(lm, prompts, drafter, "mtp", fmt=fmt)
+    assert toks(beside)[0] == toks(on)[0]

@@ -141,3 +141,44 @@ def test_tree_attention_int8_bits_do_not_depend_on_the_cache_capacity(
         mx.eval(out)
         outs.append(out)
     assert all(mx.array_equal(outs[0], o) for o in outs[1:])
+
+
+@pytest.mark.parametrize("t", [1, 4, 8])
+def test_int8_tile_decode_equals_the_bf16_tile_kernel_on_the_dequantized_cache(
+    buffers, t
+):
+    """int8 plain decode / verify windows use the token-tile family: bit-identical to the bf16 tile
+    kernel on the dequantized buffers (so int8 decode == int8 tree verify, like bf16)."""
+    from yunshu_engine.kernels.int8_kv import dequantize_kv
+
+    ra, kq, ks, vq, vs, q = buffers
+    if not ra.tile_ready():
+        pytest.skip("needs the tile kernel")
+    rows = [0, 1, 2, 3]
+    lengths = [LENS[r] for r in rows]
+    kw = dict(
+        max_length=max(lengths),
+        row_lengths=lengths,
+        slots=mx.array(rows, dtype=mx.int32),
+        impl="tile",
+    )
+    got = ra.ragged_decode_attention(
+        q[:, :, :t],
+        kq,
+        vq,
+        mx.array(lengths, dtype=mx.int32),
+        D**-0.5,
+        k_scales=ks,
+        v_scales=vs,
+        **kw,
+    )
+    ref = ra.ragged_decode_attention(
+        q[:, :, :t],
+        dequantize_kv(kq, ks),
+        dequantize_kv(vq, vs),
+        mx.array(lengths, dtype=mx.int32),
+        D**-0.5,
+        **kw,
+    )
+    mx.eval(got, ref)
+    assert mx.array_equal(got, ref)

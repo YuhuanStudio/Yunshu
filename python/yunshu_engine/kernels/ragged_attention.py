@@ -831,8 +831,10 @@ def _attend(
     if impl == "auto":
         impl = "key_parallel" if D == 256 else "per_head"
     tile = impl == "tile"
-    if tile and (q8 or D != 256 or G > 8 or CAP < 64 or T > 8 or not tile_ready()):
-        raise ValueError("ragged_decode_attention: tile needs bf16, D=256, G<=8")
+    if tile and (D != 256 or G > 8 or CAP < 64 or T > 8 or not tile_ready()):
+        raise ValueError("ragged_decode_attention: tile needs D=256, G<=8")
+    if tile and q8 and row_lengths is None:
+        raise ValueError("ragged_decode_attention: int8 tile needs row_lengths")
     use_kp = impl == "key_parallel" and D == 256 and G * CHUNK * 4 <= 32 * 1024
     if impl == "key_parallel" and not use_kp:
         raise ValueError("ragged_decode_attention: key_parallel needs D=256")
@@ -868,7 +870,22 @@ def _attend(
         name = "partial"
         inputs = [queries, keys, values, lengths, slots, scale_arr]
     out_shapes = [(nslot * H * D,), (nslot * H,), (nslot * H,)]
-    if tile:
+    if tile and q8:
+        # the tree-attention int8 tile kernel (dequantizes each 64-key step into its own scratch and
+        # runs the bf16 tile's matmuls): the partials are the bf16 tile kernel's on the dequantized
+        # cache, so int8 plain decode, MTP verify and tree verify share one arithmetic like bf16
+        from . import int8_tile
+
+        groups = HKV * int(work.size)
+        po, pm, pl, _scratch = int8_tile._kernel()(
+            inputs=inputs + [work, wstart],
+            template=tmpl + [("WL", True)],
+            grid=(256, groups, 1),
+            threadgroup=(256, 1, 1),
+            output_shapes=out_shapes + [(groups * 2 * int8_tile.N_STEP * D,)],
+            output_dtypes=[mx.float32, mx.float32, mx.float32, mx.bfloat16],
+        )
+    elif tile:
         po, pm, pl = _kernel("tile")(
             inputs=inputs + [work, wstart],
             template=tmpl + [("WL", wl)],

@@ -250,9 +250,9 @@ def attend(
             queries, ks, vs, scale=at.scale, mask=mask[:, None, :, :]
         )
     else:
-        # the token-tile kernel reads bf16 only: int8 rows run the key-parallel kernel (one query token
-        # per threadgroup, so a token's bits do not depend on its window width, like the tile kernel's)
-        tile = H // HKV <= 8 and ra.tile_ready() and not slots.int8
+        # int8 rows run the same token-tile family as bf16 (the int8 tile kernel dequantizes in-kernel), so
+        # plain decode, MTP verify and tree verify share one arithmetic
+        tile = H // HKV <= 8 and ra.tile_ready()
         out = ra.ragged_decode_attention(
             queries,
             slots.k[i],
