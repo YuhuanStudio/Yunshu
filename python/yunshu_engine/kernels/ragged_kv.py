@@ -393,6 +393,11 @@ def _dense_kv_classes() -> tuple:
             classes.append(VlmKVCache)
         except ImportError:
             pass
+        from .int8_kv import Int8KVCache
+
+        classes.append(
+            Int8KVCache
+        )  # int8 row cache: same single-row layout (codes + scales)
         hit = _CLASSES["dense"] = tuple(classes)
     return hit
 

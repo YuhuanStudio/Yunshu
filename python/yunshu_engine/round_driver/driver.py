@@ -90,6 +90,8 @@ def cache_buffers(cache: list) -> list:
     for c in cache:
         if getattr(c, "keys", None) is not None:
             out += [c.keys, c.values]
+            if getattr(c, "k_scales", None) is not None:  # int8 row cache
+                out += [c.k_scales, c.v_scales]
         else:
             out += [a for a in getattr(c, "cache", ()) if isinstance(a, mx.array)]
     return out
@@ -223,11 +225,7 @@ class RoundDriver:
         if dflash_drafter is not None or (plain_verify and drafter is None):
             from .dflash import DFlashBatch
 
-            self.dflash = DFlashBatch(model, dflash_drafter)
-        if kv_format == "int8" and self.dflash is not None:
-            raise NotImplementedError(
-                "int8 KV on the DFlash / plain-verify batch is not built yet (row 17 stage 2)"
-            )
+            self.dflash = DFlashBatch(model, dflash_drafter, kv_format)
         self.kv_format = kv_format
         self.batch: Any = (
             self.dflash if self.dflash is not None else DecodeBatch(self.lm, kv_format)
