@@ -1,4 +1,5 @@
 import importlib.util
+import io
 from pathlib import Path
 
 import pytest
@@ -82,3 +83,55 @@ def test_identity_stage_requests_allow_eos_and_speed_does_not():
     ctx = SimpleNamespace(suite={"decode_tokens": 256})
     assert "--allow-eos" in stages._dec_args(ctx, stage_logprobs=True)
     assert "--allow-eos" not in stages._dec_args(ctx)
+
+
+@pytest.mark.parametrize("allow_eos", [False, True])
+def test_followup_speed_cell_ignores_eos_identity_cell_does_not(monkeypatch, allow_eos):
+    """Flash-Next ends "continue at the same length" after ~150 tokens, which failed every speed
+    run at the follow-up cell: a speed follow-up asks past EOS, an identity follow-up never does."""
+    from types import SimpleNamespace
+
+    sent = []
+
+    def send(_url, body):
+        sent.append(body)
+        n = body.get("max_tokens") or body.get("max_completion_tokens")
+        return dict(
+            _text="x",
+            ttft_s=1,
+            dec_tps=10,
+            cached=0,
+            pt=1024,
+            ct=n,
+            finish="length",
+            sha="s",
+        )
+
+    monkeypatch.setattr(m, "send", send)
+    monkeypatch.setattr(m, "decode_prompt", lambda *_a: "material")
+    monkeypatch.setattr(m, "check_rehearsal_engaged", lambda *_a: None)
+    monkeypatch.setattr(m, "emit", lambda *_a, **_k: None)
+    a = SimpleNamespace(
+        phases="cold,turn2",
+        decode_tokens=64,
+        turn2_tokens=32,
+        smoke=False,
+        only_ctx=[1024],
+        only_kind=["prose"],
+        long_ask=False,
+        warm_reps=1,
+        request_extra=None,
+        logprobs=False,
+        rehearse=False,
+        think_s=0,
+        allow_eos=allow_eos,
+        engine="yunshu",
+    )
+    m.part_decode(
+        SimpleNamespace(url="fake", model="fake"),
+        io.StringIO(),
+        a,
+    )
+    cold, turn2 = sent
+    assert "ignore_eos" not in cold
+    assert turn2.get("ignore_eos", False) is (not allow_eos)

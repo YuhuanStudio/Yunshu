@@ -7,7 +7,8 @@
 @source "../../node_modules/fumadocs-openapi/dist/**/*.js";
 
 /* Fumadocs uses the console's YunUI palette in both themes. */
-:root, .dark {
+:root,
+.dark {
   --color-fd-background: var(--bg-window);
   --color-fd-foreground: var(--text-primary);
   --color-fd-card: var(--bg-card);
@@ -24,6 +25,41 @@
   --color-fd-accent-foreground: var(--text-primary);
   --color-fd-border: var(--border-default);
 }
-[data-testid="docs-article"] { overflow-wrap: anywhere; }
-[data-testid="docs-article"] pre { overflow-wrap: normal; }
-[data-testid="docs-article"] .prose { max-width: none; }
+[data-testid="docs-article"] {
+  overflow-wrap: anywhere;
+}
+[data-testid="docs-article"] pre {
+  overflow-wrap: normal;
+}
+[data-testid="docs-article"] .prose {
+  max-width: none;
+}
+
+/* The docs live inside the console's page scroller (between the floating header and the status band),
+   not in a full viewport: size fumadocs' sticky columns to that room and keep its layout in the 7xl frame. */
+#nd-docs-layout {
+  --fd-docs-height: calc(100dvh - 9rem);
+  --fd-banner-height: 0.5rem;
+  --fd-layout-width: 80rem;
+}
+/* The phone drawer ends above the floating status pill. */
+#nd-sidebar-mobile {
+  padding-bottom: 5rem;
+}
+#nd-page .prose {
+  font-size: 0.9375rem;
+}
+/* Slimmer columns than fumadocs' 268 px: the article keeps room for its tables beside the console sidebar. */
+@media (min-width: 768px) {
+  #nd-docs-layout[id][data-sidebar-collapsed] {
+    --fd-sidebar-width: 15rem;
+  }
+}
+@media (min-width: 1280px) {
+  #nd-docs-layout[id][data-sidebar-collapsed] {
+    --fd-toc-width: 13rem;
+  }
+  #nd-page {
+    padding-inline: 1.5rem;
+  }
+}

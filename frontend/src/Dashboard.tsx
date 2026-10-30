@@ -1,6 +1,8 @@
 import { prefixHit, prefixHitWindow } from "./request-kpi";
 import { gbTotalText } from "./byte-format";
 import { LiveNumber } from "./LiveNumber";
+import { HugWidth } from "./HugWidth";
+import { HeldText } from "./HeldText";
 import { SkeletonSwap } from "./motion/SkeletonSwap.tsx";
 import { rangeSeconds, sinceStartId, useRangeHistory } from "./useRangeHistory";
 import { MetricChartGroup } from "@yuhuanowo/yunui";
@@ -12,6 +14,7 @@ import type {
 import { PrefillBar } from "./PrefillBar";
 import { SegmentedTray } from "./SegmentedTray";
 import { useFlip } from "./motion/flip";
+import { mayAnimate } from "./motion/burst-core";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AnimatedNumber,
@@ -71,7 +74,11 @@ import {
 } from "./OverviewParts";
 import { useSignals } from "./signals";
 import type { Connection, RequestRow } from "./api";
-import { buildIntegrations, neverConfigured, serviceRoot } from "./integrations";
+import {
+  buildIntegrations,
+  neverConfigured,
+  serviceRoot,
+} from "./integrations";
 import {
   clock,
   elapsed,
@@ -148,22 +155,25 @@ const LANE_AREA_PX = LANES_SHOWN * 65;
  * place for `ms` and is then removed, and the rows below glide up (FLIP, see useFlip). The area is
  * always `n` rows tall, so nothing around it moves, and a lone request is always the first row.
  */
-type LaneSlot = { row: RequestRow; until: number };
+type LaneSlot = { row: RequestRow; until: number; appear: boolean | null };
+/** A lane fades in and out only while the screen is calm (BurstGovernor); in a burst it is drawn and dropped in place. */
 function useLaneSlots(
   rows: readonly RequestRow[],
   n: number,
   ms = 260,
-): ({ row: RequestRow; leaving: boolean } | null)[] {
+): ({ row: RequestRow; leaving: boolean; appear: boolean } | null)[] {
   const [, bump] = useState(0);
   const list = useRef<LaneSlot[]>([]);
+  const opened = useRef(Date.now());
   const now = Date.now();
   const byId = new Map(rows.map((r) => [r.request_id, r]));
   list.current = list.current.flatMap((cur) => {
     const fresh = byId.get(cur.row.request_id);
-    if (fresh) return [{ row: fresh, until: 0 }];
+    if (fresh) return [{ row: fresh, until: 0, appear: cur.appear }];
     if (cur.until === 0) {
+      if (!mayAnimate()) return [];
       setTimeout(() => bump((x) => x + 1), ms + 20);
-      return [{ row: cur.row, until: now + ms }];
+      return [{ row: cur.row, until: now + ms, appear: cur.appear }];
     }
     return cur.until > now ? [cur] : [];
   });
@@ -171,14 +181,30 @@ function useLaneSlots(
   const waiting = rows
     .filter((r) => !placed.has(r.request_id))
     .sort((a, b) => b.elapsed_s - a.elapsed_s);
-  for (const r of waiting) list.current.push({ row: r, until: 0 });
-  const shown = list.current
-    .slice(0, n)
-    .map((x) => ({ row: x.row, leaving: x.until > 0 }));
+  for (const r of waiting)
+    list.current.push({ row: r, until: 0, appear: null });
+  // Decided when the lane is first drawn (a request waiting for a free lane has not appeared yet).
+  // What the page opened with is the baseline, not an arrival: it neither animates nor counts as a burst.
+  const baseline = Date.now() - opened.current < 2000;
+  for (const x of list.current.slice(0, n))
+    x.appear ??= !baseline && mayAnimate();
+  const shown = list.current.slice(0, n).map((x) => ({
+    row: x.row,
+    leaving: x.until > 0,
+    appear: x.appear === true,
+  }));
   return [...shown, ...Array.from({ length: n - shown.length }, () => null)];
 }
 
-function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
+function RequestLane({
+  row,
+  leaving,
+  appear,
+}: {
+  row: RequestRow;
+  leaving?: boolean;
+  appear?: boolean;
+}) {
   useLocale();
   const phase = String(row.phase);
   const prompt = row.prompt_tokens ?? 0,
@@ -199,7 +225,9 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
       aria-hidden={leaving ? true : undefined}
     >
       <div className="live-row-inner">
-        <div className="live-appear grid h-16 grid-cols-[minmax(0,1fr)_auto] grid-rows-[1.25rem_1rem] content-center items-center gap-x-4 gap-y-1">
+        <div
+          className={`${appear ? "live-appear " : ""}grid h-16 grid-cols-[minmax(0,1fr)_auto] grid-rows-[1.25rem_1rem] content-center items-center gap-x-4 gap-y-1`}
+        >
           <div className="flex min-w-0 items-center gap-2.5">
             <StatusIndicator className="shrink-0" status={phaseDot(phase)} />
             <Slot ch={7} className="shrink-0 text-sm font-medium">
@@ -224,7 +252,7 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
             )}
           </div>
           <div className="flex shrink-0 items-center gap-4 text-xs tabular-nums text-muted-foreground">
-            <Slot ch={9} align="right">
+            <Slot ch={11} align="right">
               {phase === "decode" ? (
                 <LiveNumber
                   value={row.completion_tokens ?? null}
@@ -235,10 +263,9 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
               )}{" "}
               tok
             </Slot>
-            <Slot ch={12} align="right" className="text-foreground">
+            <Slot ch={13} align="right" className="text-foreground">
               <LiveNumber
                 value={row.tokens_per_second ?? null}
-                glide
                 format={(v) => fixed(v)}
                 jumpKey={row.request_id + phase}
               />
@@ -251,11 +278,19 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
           {progress != null ? (
             <div className="col-span-2 flex h-4 items-center gap-3">
               <PrefillBar row={row} className="h-1 min-w-0 flex-1" />
-              {cached > 0 && (
-                <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
-                  {t("overview.prefill.cached", { n: number(cached, 0) })}
-                </span>
-              )}
+              <Slot
+                ch={22}
+                align="right"
+                className="shrink-0 text-xs text-muted-foreground"
+              >
+                {cached > 0 && (
+                  <HeldText
+                    text={t("overview.prefill.cached", {
+                      n: number(cached, 0),
+                    })}
+                  />
+                )}
+              </Slot>
             </div>
           ) : phase === "queued" && row.queue_position != null ? (
             <p className="col-span-2 truncate text-xs text-muted-foreground">
@@ -275,7 +310,7 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
               })}
             </p>
           ) : phase !== "prefill" && cached > 0 && prompt > 0 ? (
-            <p className="col-span-2 truncate text-xs text-muted-foreground">
+            <p className="col-span-2 truncate text-xs tabular-nums text-muted-foreground">
               {t("overview.lane.prefixHit", {
                 cached: number(cached, 0),
                 prompt: number(prompt, 0),
@@ -699,8 +734,11 @@ export function Dashboard({
                 icon={HardDrive}
                 label={t("overview.stats.metal")}
                 value={
-                  <span title={t("overview.tip.metal")}>
-                    <span className="tabular-nums">
+                  <HugWidth>
+                    <span
+                      className="tabular-nums"
+                      title={t("overview.tip.metal")}
+                    >
                       <LiveNumber
                         value={memory?.active_gb ?? null}
                         digits={1}
@@ -709,7 +747,7 @@ export function Dashboard({
                     <span className="ml-1 text-xs font-normal text-muted-foreground">
                       GB
                     </span>
-                  </span>
+                  </HugWidth>
                 }
                 subtext={t("overview.stats.metalSub", {
                   total: number(memory?.total_gb),
@@ -840,6 +878,7 @@ export function Dashboard({
                     key={`slot-${i}`}
                     row={lane.row}
                     leaving={lane.leaving}
+                    appear={lane.appear}
                   />
                 ) : (
                   <li key={`slot-${i}`} className="h-16" aria-hidden />
@@ -847,7 +886,7 @@ export function Dashboard({
               )}
             </ul>
             {lanes.every((l) => !l) && (
-              <p className="absolute inset-x-0 top-0 py-3 text-xs text-muted-foreground">
+              <p className="absolute inset-x-0 top-0 py-3 text-xs tabular-nums text-muted-foreground">
                 {memory?.cache_gb
                   ? t("overview.active.idleDescPool", {
                       gb: number(memory.cache_gb),
@@ -941,7 +980,7 @@ export function Dashboard({
                 </div>
               }
             />
-            <div className="-mt-3 space-y-0.5 text-xs text-muted-foreground">
+            <div className="-mt-3 space-y-0.5 text-xs tabular-nums text-muted-foreground">
               <p>
                 {engine.historyFrom != null
                   ? t("overview.perf.noteEngine", {
@@ -1038,17 +1077,19 @@ export function Dashboard({
                 }
               >
                 <p className="text-2xl font-semibold tabular-nums">
-                  <span className="tabular-nums">
-                    {fixed(memory?.active_gb)}
-                  </span>
-                  <span className="ml-1.5 text-sm font-normal text-muted-foreground">
-                    {t("overview.memory.activeOf", {
-                      gb:
-                        memory?.total_gb != null
-                          ? gbTotalText(memory.total_gb)
-                          : fixed(memory?.total_gb),
-                    })}
-                  </span>
+                  <HugWidth>
+                    <span className="tabular-nums">
+                      {fixed(memory?.active_gb)}
+                    </span>
+                    <span className="ml-1.5 text-sm font-normal text-muted-foreground">
+                      {t("overview.memory.activeOf", {
+                        gb:
+                          memory?.total_gb != null
+                            ? gbTotalText(memory.total_gb)
+                            : fixed(memory?.total_gb),
+                      })}
+                    </span>
+                  </HugWidth>
                 </p>
                 {/* the legend wraps to a second line when the numbers get wider: both lines are reserved */}
                 <div className="mt-4 min-h-[54px]">
@@ -1200,7 +1241,7 @@ export function Dashboard({
                   <span className="w-20 text-right text-xs tabular-nums text-muted-foreground">
                     {sizeGb(model.size_gb)}
                   </span>
-                  <span className="w-24 text-right text-xs text-muted-foreground">
+                  <span className="w-28 whitespace-nowrap text-right text-xs tabular-nums text-muted-foreground">
                     {model.loading
                       ? t("overview.models.loading")
                       : model.loaded

@@ -476,8 +476,50 @@ test("chat reply shows per-reply stats with TTFT and cache badge", async ({
   const stats = playground.getByTestId("reply-stats");
   await expect(stats).toContainText("20");
   await expect(stats).toContainText("tok/s");
-  await expect(stats).toContainText(/首 token 延遲 \d/);
-  await expect(stats).toContainText("512 / 1.02K 前綴命中");
+  await expect(stats).toContainText(/首字 \d/);
+  await expect(stats).not.toContainText("前綴命中");
+  await stats.hover();
+  const detail = page.getByTestId("reply-stats-detail");
+  await expect(detail).toContainText("前綴命中");
+  await expect(detail).toContainText("512 / 1,024");
+  await verifyClean();
+});
+
+test("reply stats sit on the model-name line; copy/regenerate appear on hover or focus only", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const verifyClean = await installDiagnostics(
+    page,
+    api.expectedResponses,
+    "stats-header",
+  );
+  const playground = await openPlayground(page, api);
+  await playground.locator("textarea").first().fill("stats please");
+  await page.getByRole("button", { name: "傳送測試", exact: true }).click();
+  await expect(playground).toContainText("is four.");
+  const turn = playground
+    .locator('[data-yunui="chat-message"][data-role="assistant"]')
+    .last();
+  const stats = turn.getByTestId("reply-stats");
+  const name = turn.getByText("Qwen3.8-27B", { exact: true }).first();
+  const [nb, sb] = await Promise.all([name.boundingBox(), stats.boundingBox()]);
+  expect(nb && sb).toBeTruthy();
+  // Same line as the name (centre within half a line), to its right; no separate chip row under the text.
+  expect(
+    Math.abs(nb!.y + nb!.height / 2 - (sb!.y + sb!.height / 2)),
+  ).toBeLessThan(12);
+  expect(sb!.x).toBeGreaterThan(nb!.x + nb!.width - 1);
+  await expect(turn.locator('[data-yunui="generation-stats"]')).toHaveCount(0);
+  const actions = turn.locator("[data-chat-actions]");
+  await expect(actions).toHaveCSS("opacity", "0");
+  await turn.hover();
+  await expect(actions).toHaveCSS("opacity", "1");
+  await page.mouse.move(2, 2);
+  await expect(actions).toHaveCSS("opacity", "0");
+  await actions.getByRole("button").first().focus();
+  await expect(actions).toHaveCSS("opacity", "1");
   await verifyClean();
 });
 
@@ -565,8 +607,13 @@ test("compare mode runs sequentially and reports identical greedy output", async
   await expect(playground.getByTestId("compare-col-a")).toContainText(
     "is four.",
   );
-  await expect(playground.getByTestId("compare-col-b")).toContainText(
-    "512 / 1.02K 前綴命中",
+  await expect(playground.getByTestId("compare-col-b")).toContainText("tok/s");
+  await playground
+    .getByTestId("compare-col-b")
+    .getByTestId("reply-stats")
+    .hover();
+  await expect(page.getByTestId("reply-stats-detail")).toContainText(
+    "512 / 1,024",
   );
   const cmp = await page.evaluate(
     () =>
@@ -761,8 +808,8 @@ for (const [dialect, label, path, text] of [
     await expect(playground).toContainText("thinking it over");
     const stats = playground.getByTestId("reply-stats");
     await expect(stats).toContainText("tok/s");
-    await expect(stats).toContainText("512");
-    await expect(stats).toContainText("首 token 延遲 80");
+    await expect(stats).toContainText("輸入 1,024");
+    await expect(stats).toContainText("首字 80 ms");
     expect(captured).toHaveLength(1);
     expect(captured[0].url.endsWith(path)).toBe(true);
     expect(captured[0].headers["authorization"]).toBe(`Bearer ${api.token}`);

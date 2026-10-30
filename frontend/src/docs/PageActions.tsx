@@ -12,7 +12,7 @@ export function PageActions({ slug }: { slug: string }) {
     `Read ${markdown} and help me understand this Yunshu documentation. Source page: ${location.href}`,
   );
   return (
-    <div className="not-prose my-4 flex flex-wrap items-center gap-2 text-xs">
+    <div className="not-prose flex flex-wrap items-center gap-2 text-xs">
       <Button
         size="sm"
         variant="outline"

@@ -274,7 +274,7 @@ test("playground: Esc stops a running generation", async ({ page }) => {
   const w = world();
   await install(page, w);
   await page.goto("/console/#/playground");
-  const box = page.getByRole("textbox").last();
+  const box = page.getByPlaceholder("輸入測試提示詞…");
   await box.fill("hello");
   await box.press("Enter");
   await expect.poll(() => w.chatPending).toBe(true);

@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
+import { mayAnimate } from "./burst-core";
 import { reducedMotion } from "./ticker";
 
 /**
@@ -6,7 +7,9 @@ import { reducedMotion } from "./ticker";
  * where they were (an inverse transform) in the same frame as the layout change, then glide to their
  * new place. The browser sees no layout shift and the eye sees the list make room.
  *
- * Mark each row with `data-flip="<stable id>"`; call with the list's container.
+ * Mark each row with `data-flip="<stable id>"`; call with the list's container. A list that
+ * keeps changing (a burst of arrivals) does not glide: the rows are simply drawn where they are
+ * (BurstGovernor), one decision per layout change.
  */
 export function useFlip(container: RefObject<HTMLElement | null>) {
   const tops = useRef(new Map<string, number>());
@@ -15,6 +18,7 @@ export function useFlip(container: RefObject<HTMLElement | null>) {
     if (!root) return;
     const rows = [...root.querySelectorAll<HTMLElement>("[data-flip]")];
     const next = new Map<string, number>();
+    let glide: boolean | null = null;
     for (const el of rows) {
       const key = el.dataset.flip!;
       const top = el.offsetTop;
@@ -28,6 +32,12 @@ export function useFlip(container: RefObject<HTMLElement | null>) {
         : 0;
       const dy = before - top + residual;
       if (Math.abs(dy) < 1) continue;
+      glide ??= mayAnimate();
+      if (!glide) {
+        el.style.transition = "none";
+        el.style.transform = "";
+        continue;
+      }
       el.style.transition = "none";
       el.style.transform = `translateY(${dy}px)`;
       void el.offsetHeight; // commit the inverted position before animating

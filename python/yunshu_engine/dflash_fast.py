@@ -562,7 +562,7 @@ def rounds(
 
     from . import dflash_tree as dt
     from . import mtp_lane
-    from .constrained_spec import current_request
+    from .constrained_spec import current_request, tree_penalty
     from .copy_drafter import CopyDrafter
     from .copy_graft import GraftBudget, longest_verified_path, plan_tree_graft
     from .dflash_context import context_window
@@ -574,10 +574,12 @@ def rounds(
 
     keyed = sampler if isinstance(sampler, KeyedSampler) else None
     request = current_request()
+    penalty = tree_penalty(request)
     logger.info(
-        "DFlash fast verification: keyed=%s logprobs=%s",
+        "DFlash fast verification: keyed=%s logprobs=%s penalty=%s",
         keyed is not None,
         bool(request is not None and request.logprobs),
+        penalty is not None,
     )
 
     lm = getattr(model, "language_model", model)
@@ -793,6 +795,7 @@ def rounds(
                                 dflash_ring.draft_hidden(fast_draft, ring, anchor, 15),
                                 anchor,
                                 keyed=keyed,
+                                penalty=penalty,
                                 committed=emitted,
                             )
                         lattice = ready
@@ -808,6 +811,7 @@ def rounds(
                             draft_cache,
                             15,
                             keyed=keyed,
+                            penalty=penalty,
                             committed=emitted,
                         )
                     gpu_window.mark("search_start")
@@ -872,8 +876,10 @@ def rounds(
                             keyed,
                         )
                         target = target.reshape(-1)
-                    elif keyed is not None or (
-                        request is not None and request.logprobs
+                    elif (
+                        keyed is not None
+                        or penalty is not None
+                        or (request is not None and request.logprobs)
                     ):
                         target, probs = tree_target_rows(
                             lm.speculative_logits_from_hidden(result.hidden),
@@ -881,6 +887,8 @@ def rounds(
                             emitted,
                             keyed,
                             request,
+                            penalty,
+                            window,
                         )
                     else:
                         target = lm.speculative_argmax_from_hidden(result.hidden)
@@ -914,6 +922,7 @@ def rounds(
                             dflash_ring.draft_hidden(fast_draft, ring, bonus_g, 15),
                             bonus_g,
                             keyed=keyed,
+                            penalty=penalty,
                             committed=emitted + count_g,
                         )
                         mx.async_eval(prebuilt.cands, prebuilt.unary, prebuilt.anchor)
@@ -943,6 +952,9 @@ def rounds(
                         probs[mx.array(path, dtype=mx.int32)],
                         new_tokens[: max_tokens - emitted],
                     )
+                if penalty is not None:
+                    # a serial run feeds the old bonus and every accepted draft
+                    penalty.commit_tokens([window_ids[row] for row in path])
                 if guide is not None:
                     # rows after a call-opening token were not masked: that token ends
                     # the round as its bonus (it is the unmasked target of the row before)
@@ -1171,12 +1183,14 @@ def eligible(lm, draft, cache, kwargs, *, guided=False):
     """Admit by live context; request output budgets do not predict cost. ``guided``: the
     request's tool-call guide is masked here (constrained_spec.invariant_guide)."""
     from . import mtp_lane
-    from .constrained_spec import current_request
+    from .constrained_spec import current_request, tree_penalty
     from .keyed_sampling import KeyedSampler, tree_supported
 
     request = current_request()
-    position_sensitive = isinstance(kwargs.get("sampler"), KeyedSampler) or bool(
-        request is not None and request.logprobs
+    position_sensitive = (
+        isinstance(kwargs.get("sampler"), KeyedSampler)
+        or bool(request is not None and request.logprobs)
+        or tree_penalty(request) is not None
     )
     context = mtp_lane._STATE["context"]
     return bool(

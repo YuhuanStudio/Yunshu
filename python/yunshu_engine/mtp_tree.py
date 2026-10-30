@@ -109,17 +109,23 @@ def _top_children(lm, hidden, count, vocab=None, *, keyed=None, position=0):
         logits = logits.astype(mx.float32)
     else:
         logits, ids = lm.speculative_logits_from_hidden(hidden).astype(mx.float32), None
+    cand_ids = None
     if keyed is not None:
-        from .keyed_sampling import coupled_scores
+        from .keyed_sampling import coupled_candidates, coupled_scores
 
         logits = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
-        logits = coupled_scores(
-            logits, keyed, mx.full((logits.shape[0],), position, dtype=mx.int32)
-        )
+        pos = mx.full((logits.shape[0],), position, dtype=mx.int32)
+        coupled = coupled_candidates(logits, keyed, pos)
+        if coupled is None:
+            logits = coupled_scores(logits, keyed, pos)
+        else:
+            cand_ids, logits = coupled
     idx = mx.argpartition(-logits, count - 1, axis=-1)[..., :count]
     vals = mx.take_along_axis(logits, idx, axis=-1)
     order = mx.argsort(-vals, axis=-1)
     idx = mx.take_along_axis(idx, order, axis=-1)
+    if cand_ids is not None:
+        idx = mx.take_along_axis(cand_ids, idx, axis=-1)
     idx = (mx.take(ids, idx) if ids is not None else idx).astype(mx.int32)
     vals = mx.take_along_axis(vals, order, axis=-1)
     lp = vals - mx.logsumexp(logits, axis=-1, keepdims=True)

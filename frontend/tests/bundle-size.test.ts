@@ -34,6 +34,6 @@ test("only deferred docs routes have the Fumadocs size allowance", () => {
   assert.equal(ENTRY_BUDGET_KB, 273); // +3 KB agent-interaction layer (2026-10-24)
   for (const name of ["Dashboard", "Requests", "Playground", "orama", "data"])
     assert.equal(budgetForRoute(name), 305); // review branch 3e8a442: measured 304.2 KB
-  assert.equal(budgetForRoute("Docs"), 305);
+  assert.equal(budgetForRoute("Docs"), 340); // fumadocs layout replaces the hand-written sidebar/TOC: 328 KB (2026-10-28)
   assert.equal(budgetForRoute("ApiReference"), 650);
 });

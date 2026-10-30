@@ -90,7 +90,11 @@ export function LatencyDistribution({ rows }: { rows: readonly Row[] }) {
     <ChartCard
       data-testid="latency-distribution"
       title={t("requests.dist.title")}
-      description={t("requests.dist.desc", { n: number(total, 0) })}
+      description={
+        <span className="tabular-nums">
+          {t("requests.dist.desc", { n: number(total, 0) })}
+        </span>
+      }
       action={
         <div className="flex flex-wrap items-center gap-2">
           <SegmentedTray

@@ -27,11 +27,16 @@ import mlx.core as mx
 
 from .tf_flash_next.base import MAX_ROWS
 
+_INHERITED = (
+    object()
+)  # qwen4_exp had no _gated_delta of its own before install_qwen4_gdn
+
 _STATE: dict[str, Any] = {
     "original": None,
     "installed": False,
     "modules": {},
     "moe": True,
+    "gdn_original": None,
 }
 
 
@@ -151,6 +156,42 @@ def _moe(mlp: Any, x2d: Any) -> Any:
     )
     y = experts.expert_down_y(act, picks, sw.down_proj, se.down_proj)
     return "grouped", (y, weights, logits)
+
+
+def install_qwen4_gdn() -> bool:
+    """Gated DeltaNet verify rows run on the oMLX Qwen4 fused plan (see kernels/qwen4_gdn.py) on
+    both qwen4_exp layer loops: the fused-HC one above and the upstream one a pack whose HC weights
+    are not affine keeps (TensorFold 2-bit). The ArraysCache patch adds the deferred-rollback record.
+    Lossless, so always on (fngdn-1029c/1030long: 0 identity mismatches at 1K-128K, decode +2-8%).
+    Idempotent; only the qwen4_exp class is patched (Qwen3.5 keeps its own)."""
+    try:
+        from mlx_vlm.models.qwen4_exp import language
+    except Exception:  # noqa: BLE001 - mlx_vlm without qwen4_exp
+        return False
+    from . import qwen4_gdn
+
+    qwen4_gdn.install_cache_patch()
+    cls = language.Qwen4ExpBatchInvariantForward
+    if _STATE["gdn_original"] is None:
+        # The composed layer is resolved per call through the MRO, as before: the oMLX prework later
+        # replaces Qwen3_5BatchInvariantForward._gated_delta, and that is the one a fallback must run.
+        _STATE["gdn_original"] = cls.__dict__.get("_gated_delta", _INHERITED)
+
+        def original(v, lyr, x, m, c):
+            return super(cls, v)._gated_delta(lyr, x, m, c)
+
+        def _gated_delta(self, layer, mixed, mask, cache):
+            return qwen4_gdn.gated_delta(
+                self,
+                layer,
+                mixed,
+                mask,
+                cache,
+                original,
+            )
+
+        cls._gated_delta = _gated_delta
+    return True
 
 
 def eligible(model: Any) -> bool:
@@ -327,5 +368,11 @@ def uninstall() -> None:
     from mlx_vlm.models.qwen4_exp import language
 
     language.Qwen4ExpBatchInvariantForward._model = _STATE["original"]
+    saved = _STATE["gdn_original"]
+    if saved is _INHERITED:
+        del language.Qwen4ExpBatchInvariantForward._gated_delta
+    elif saved is not None:
+        language.Qwen4ExpBatchInvariantForward._gated_delta = saved
+    _STATE["gdn_original"] = None
     _STATE["installed"] = False
     _STATE["modules"].clear()

@@ -5,6 +5,8 @@ import io
 import json
 import os
 import sys
+import time
+import types
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,8 @@ def load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # A private clock: patching sleep/monotonic on the shared time module would also patch other threads.
+    module.time = types.SimpleNamespace(**vars(time))
     return module
 
 

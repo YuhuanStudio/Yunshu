@@ -351,6 +351,78 @@
       "reviewed_commit": "c7137bb31a7dad924fb541a7068422127b9a94b2",
       "reviewed_date": "2026-10-15",
       "review_reason": "sync016 source diff review: KEEP: TensorFold 1.0 removes the Python engine/files in favor of Zig. Yunshu needs the retained Apache-2.0 MLX kernels; deletion is not a compatible replacement. BACKLOG flashnext: port explicit Metal-device detection for VM/CPU-default safety; current helper still concatenates architecture digits, so this is not fixed by a dependency bump. No physical-M5 fast path is changed in this sync."
+    },
+    {
+      "path": "python/yunshu_engine/kernels/omlx_q4/module_cache.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_path": "omlx/patches/module_cache.py",
+      "commit": "125ca6819ed78212cacdf70fbbbfb25c25dd5f3f",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "none (verbatim); used only by kernels/qwen4_gdn.py for the Qwen4 fused GDN verify plan and deferred rollback"
+      ],
+      "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/omlx_q4/moe_verify_gather.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_path": "omlx/patches/moe_verify_gather.py",
+      "commit": "125ca6819ed78212cacdf70fbbbfb25c25dd5f3f",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "none (verbatim); used only by kernels/qwen4_gdn.py for the Qwen4 fused GDN verify plan and deferred rollback"
+      ],
+      "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/omlx_q4/qwen35_gdn_prework.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_path": "omlx/patches/qwen35_gdn_prework.py",
+      "commit": "125ca6819ed78212cacdf70fbbbfb25c25dd5f3f",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "none (verbatim); used only by kernels/qwen4_gdn.py for the Qwen4 fused GDN verify plan and deferred rollback"
+      ],
+      "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/omlx_q4/qwen35_gdn_verify_fused.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_path": "omlx/patches/qwen35_gdn_verify_fused.py",
+      "commit": "125ca6819ed78212cacdf70fbbbfb25c25dd5f3f",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "none (verbatim); used only by kernels/qwen4_gdn.py for the Qwen4 fused GDN verify plan and deferred rollback"
+      ],
+      "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/omlx_q4/qwen35_verify_qmm.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_path": "omlx/patches/qwen35_verify_qmm.py",
+      "commit": "125ca6819ed78212cacdf70fbbbfb25c25dd5f3f",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "none (verbatim); used only by kernels/qwen4_gdn.py for the Qwen4 fused GDN verify plan and deferred rollback"
+      ],
+      "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/omlx_q4/row_exact_qmv.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_path": "omlx/patches/row_exact_qmv.py",
+      "commit": "125ca6819ed78212cacdf70fbbbfb25c25dd5f3f",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "none (verbatim); used only by kernels/qwen4_gdn.py for the Qwen4 fused GDN verify plan and deferred rollback"
+      ],
+      "kind": "vendored"
     }
   ],
   "derived": [

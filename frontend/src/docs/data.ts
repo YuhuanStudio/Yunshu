@@ -59,6 +59,7 @@ export function loadToc(locale: Locale): Promise<DocsToc> {
               },
             ]),
           ),
+          pageTree,
           tree: {
             title: "Docs",
             slug: null,

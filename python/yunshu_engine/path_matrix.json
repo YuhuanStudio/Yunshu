@@ -1697,6 +1697,41 @@
           "why": "legacy loop is not grown (CLAUDE.md)"
         }
       }
+    },
+    "qwen4_gdn_fused": {
+      "module": "python/yunshu_engine/kernels/qwen4_gdn.py",
+      "what": "oMLX Qwen4 fused GDN verify plan + deferred rollback for the qwen4_exp layer loop (default)",
+      "cells": {
+        "mtp": {
+          "s": "na",
+          "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
+        },
+        "dflash": {
+          "s": "na",
+          "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
+        },
+        "batch": {
+          "s": "na",
+          "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
+        },
+        "text": {
+          "s": "na",
+          "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
+        },
+        "loop": {
+          "s": "na",
+          "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
+        },
+        "generic": {
+          "s": "engaged",
+          "ev": [
+            [
+              "python/yunshu_engine/kernels/tf_hc_forward.py",
+              "qwen4_gdn.gated_delta("
+            ]
+          ]
+        }
+      }
     }
   },
   "exclusions": [
@@ -1808,18 +1843,22 @@
       "id": "penalties-tree-verify",
       "a": "logits processors (penalties, logit_bias, min_tokens, suppress)",
       "b": "tree verify (DFlash fast tree, MTP tree)",
-      "kind": "fundamental",
+      "kind": "unimplemented",
       "ev": [
         [
           "python/yunshu_engine/constrained_spec.py",
           "class ProcessorWindow"
         ],
         [
+          "python/yunshu_engine/constrained_spec.py",
+          "def tree_penalty"
+        ],
+        [
           "python/yunshu_engine/mtp_lane.py",
           "_request_needs_chain"
         ]
       ],
-      "why": "Tree verify kernels are batch-invariant (the argmax equals serial decode) but not serial-arithmetic: non-winning logits can differ in low bits. A penalty moves the winner, so a near tie could flip against serial decode. A request with processors is therefore verified by the chain under exact_verify; the tree paths stay for unprocessed greedy requests."
+      "why": "The DFlash fast tree applies a frequency / presence penalty per window row (keyed_sampling.tree_target_rows, the serial window_row arithmetic) when it is the request's only processor, so sampled requests with the model card's presence penalty keep the tree. logit_bias, the windowed repetition penalty, min_tokens / suppress masks, any guide or logprobs with a processor, and the MTP tree still verify on the chain under exact_verify."
     },
     {
       "id": "int8-kv-off-driver",
@@ -2047,6 +2086,7 @@
     "python/yunshu_engine/dflash_conv.py": "orphan (see orphans)",
     "python/yunshu_engine/dflash_draft.py": "orphan (see orphans)",
     "python/yunshu_engine/dflash_apc_window.py": "DFlash drafter context window kept beside APC checkpoints (dflash path; apc_prefix_cache)",
+    "python/yunshu_engine/prompt_end_replay.py": "Exact-repeat zero-forward replay of the final prompt block beside APC checkpoints (dflash and no-spec single-row text paths; apc_prefix_cache)",
     "python/yunshu_engine/penalty_context.py": "Penalty context = full prompt on an APC hit (hit == miss; part of penalties_in_spec / apc)",
     "python/yunshu_engine/gpu_window.py": "debug GPU busy/idle window (Metal interposer), inert unless DYLD_INSERT_LIBRARIES loads it",
     "python/yunshu_engine/kernels/tf_flash_next/base.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
@@ -2062,7 +2102,14 @@
     "python/yunshu_engine/qwen4_dflash.py": "Flash-Next mixed layer capture adapter on its existing invariant forward; qwen4 native MTP retains full hyper-state.",
     "python/yunshu_engine/qwen4_norms.py": "Read legacy direct-gamma and residual Qwen4 norm formats; ordinary GDN/vision RMSNorm tensors are unchanged; MTP inherits base convention.",
     "python/yunshu_engine/kernels/gdn_rows.py": "driver GDN rows",
-    "python/yunshu_engine/round_driver": "RoundDriver package (driver cells); verify.native_chain_forward is an unadmitted Flash-Next HC/QSA/PLE/MoE primitive pending native MTP lifecycle gates"
+    "python/yunshu_engine/round_driver": "RoundDriver package (driver cells); verify.native_chain_forward is an unadmitted Flash-Next HC/QSA/PLE/MoE primitive pending native MTP lifecycle gates",
+    "python/yunshu_engine/kernels/omlx_q4/module_cache.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
+    "python/yunshu_engine/kernels/omlx_q4/moe_verify_gather.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
+    "python/yunshu_engine/kernels/omlx_q4/qwen35_gdn_prework.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
+    "python/yunshu_engine/kernels/omlx_q4/qwen35_gdn_verify_fused.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
+    "python/yunshu_engine/kernels/omlx_q4/qwen35_verify_qmm.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
+    "python/yunshu_engine/kernels/omlx_q4/row_exact_qmv.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
+    "python/yunshu_engine/kernels/omlx_q4/__init__.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)"
   },
   "settings": {
     "YUNSHU_MTP": "draft_family_coverage",
@@ -2148,6 +2195,13 @@
   "architecture_columns": {
     "_doc": "Architecture audit columns, not additional serving paths. Entries record wiring; numerical/performance qualification is a separate real-checkpoint gate.",
     "flashnext": {
+      "qwen4_gdn_fused": {
+        "s": "engaged",
+        "why": "default on both qwen4_exp layer loops; 2-bit packs keep the composed layer (no 2-bit plan tiles, identity-checked)",
+        "ev": [
+          ["python/yunshu_engine/vlm_engine.py", "tf_hc_forward.install_qwen4_gdn()"]
+        ]
+      },
       "draft_vocab": {
         "s": "missing",
         "owner": "flashnext80",

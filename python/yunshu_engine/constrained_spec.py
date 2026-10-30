@@ -88,6 +88,21 @@ def invariant_guide(guide, logprobs=False, processors=()) -> bool:
     return isinstance(guide, ToolCallGuide) and not logprobs and not processors
 
 
+def tree_penalty(request):
+    """The request's frequency / presence penalty when it is its only logits processor: the
+    DFlash fast tree applies it per window row (``keyed_sampling.tree_target_rows``) with the
+    serial arithmetic, so such a request keeps the tree. Any other processor, a guide or
+    logprobs keep the chain."""
+    from .text_logit_processors import GeneratedTokenPenalty
+
+    if request is None or request.guide is not None or request.logprobs:
+        return None
+    processors = list(request.processors or [])
+    if len(processors) == 1 and isinstance(processors[0], GeneratedTokenPenalty):
+        return processors[0]
+    return None
+
+
 def invariant_request(request) -> bool:
     return request is not None and invariant_guide(
         request.guide, request.logprobs, request.processors
@@ -741,7 +756,7 @@ def install():
 
             if (
                 request.guide is None
-                and not request.processors
+                and (not request.processors or tree_penalty(request) is not None)
                 and settings.get("YUNSHU_SPEC_TREE") == "auto"
                 and dflash_copy._copy_gate(
                     getattr(model, "language_model", model),
@@ -762,7 +777,9 @@ def install():
                 model, draft_model, prompt_cache, kw
             ):
                 return original(model, draft_model, prompt_cache, hidden, **kw)
-            if request.guide is None and not request.processors:
+            if request.guide is None and (
+                not request.processors or tree_penalty(request) is not None
+            ):
                 logger.info(
                     "Exact speculative chain (fast tree unavailable): %s",
                     ",".join(

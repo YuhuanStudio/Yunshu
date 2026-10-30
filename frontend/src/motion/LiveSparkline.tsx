@@ -13,9 +13,9 @@ const STROKE: Record<string, string> = {
 
 /**
  * A sparkline whose time axis is wall-clock: between samples the whole line slides left by a
- * transform (one ticker, no React render per frame), a new sample extends it on the right and its
- * newest segment fades in for 200 ms. The line is rebuilt only when a sample arrives. Under
- * reduced motion it neither slides nor fades.
+ * transform (one ticker, no React render per frame) and a new sample extends it on the right, with
+ * no per-sample animation (a sample every 250 ms would be a flash every 250 ms). The line is
+ * rebuilt only when a sample arrives. Under reduced motion it does not slide.
  */
 export function LiveSparkline({
   points,
@@ -99,7 +99,6 @@ export function LiveSparkline({
           strokeWidth={1.5}
           strokeLinecap="round"
           vectorEffect="non-scaling-stroke"
-          className="live-point-in"
         />
       </g>
     </svg>

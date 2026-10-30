@@ -39,8 +39,6 @@ const docs = {
   "actions.claude": "Claude",
   "reference.link": "OpenAPI ↗",
   sse: "伺服器傳送事件（SSE）",
-  "nav.label": "文件目錄",
-  "nav.jump": "跳到文件頁面",
   "toc.title": "本頁內容",
   prev: "上一頁",
   next: "下一頁",
@@ -58,13 +56,18 @@ const docs = {
   "actions.copy": "複製 Markdown",
   "actions.copied": "已複製",
   "actions.failed": "無法複製此頁",
-  breadcrumb: "文件路徑",
   updated: "最後更新",
   reference: "自動產生的 API 參考",
   "reference.description":
     "由引擎 OpenAPI schema 產生的互動參考。請求經由此 console 的同源代理。",
   "reference.guides": "端點指南",
   "reference.operation": "API 操作",
+  "fd.openSidebar": "開啟文件目錄",
+  "fd.closeSidebar": "關閉文件目錄",
+  "fd.noHeadings": "這一頁沒有章節",
+  "fd.copyText": "複製程式碼",
+  "fd.copiedText": "已複製程式碼",
+  "fd.collapse": "收合文件目錄",
 };
 
 export default docs;

@@ -2,6 +2,8 @@
 
 import json
 import sys
+import time
+import types
 from pathlib import Path
 
 import pytest
@@ -147,7 +149,9 @@ def test_tree_peak_retained_after_child_exit_and_read_errors(tmp_path, monkeypat
 
     monkeypatch.setattr(h, "process_memory", denied)
     monkeypatch.setattr(h, "_process_gone", lambda pid: False)  # still alive
-    monkeypatch.setattr(h.time, "sleep", lambda s: None)
+    monkeypatch.setattr(
+        h, "time", types.SimpleNamespace(**{**vars(time), "sleep": lambda s: None})
+    )
     m.record("poll", 104)
     assert (
         job["job_swap_mb"] is None
@@ -188,7 +192,9 @@ def _monitor(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(h, "host_available_bytes", lambda: 100_000_000_000)
     monkeypatch.setattr(h, "swapout_bytes", lambda: 0)
-    monkeypatch.setattr(h.time, "sleep", lambda s: None)
+    monkeypatch.setattr(
+        h, "time", types.SimpleNamespace(**{**vars(time), "sleep": lambda s: None})
+    )
     monkeypatch.setattr(
         m.sampler,
         "sample",

@@ -1,12 +1,7 @@
-import { appendFileSync, readFileSync } from "node:fs";
-import { gunzipSync } from "node:zlib";
-import { devices, expect, test, type Page } from "@playwright/test";
-import {
-  PAGE_RECORDER,
-  summarize,
-  clsOf,
-  boxDeltas,
-} from "../scripts/review-analyze.mjs";
+import { appendFileSync } from "node:fs";
+import { devices, expect, test } from "@playwright/test";
+import { summarize, clsOf, boxDeltas } from "../scripts/review-analyze.mjs";
+import { replay as replayLoad, type LoadKind } from "./support/real-load";
 
 // What a page does while a REAL engine is busy. fixtures/real-load.jsonl.gz is 60 s of the real
 // Qwen3.8-27B engine's /v1/yunshu/status stream and finished-request stream (metadata only) from a
@@ -15,63 +10,10 @@ import {
 // Every card, row and heading is sampled every 250 ms; none may move or change size because data
 // changed, and the layout-shift score stays at 0.
 
-interface Line {
-  t: number;
-  status?: Record<string, unknown>;
-  requests?: Record<string, unknown>[];
-}
-const load = (name: string): Line[] =>
-  gunzipSync(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)))
-    .toString()
-    .trim()
-    .split("\n")
-    .map((l) => JSON.parse(l));
-// "burst": 11 concurrent requests, prefill and decode; "single": one request decoding for 40 s.
-const FIXTURES = {
-  burst: load("real-load.jsonl.gz"),
-  single: load("real-load-single.jsonl.gz"),
-};
 const SPEED = 3;
 const SECONDS = 20;
-
-async function replay(page: Page, kind: keyof typeof FIXTURES = "burst") {
-  const LINES = FIXTURES[kind];
-  const STATUS = LINES.filter((l) => l.status);
-  const t0 = Date.now();
-  const at = () => ((Date.now() - t0) / 1000) * SPEED;
-  await page.addInitScript(() =>
-    localStorage.setItem("yunshu.console.url", location.origin),
-  );
-  await page.addInitScript(PAGE_RECORDER);
-  let seq = 0;
-  await page.route("**/v1/**", (route) => {
-    const path = new URL(route.request().url()).pathname;
-    if (path === "/v1/yunshu/status") {
-      const now = at();
-      let cur = STATUS[0];
-      for (const l of STATUS) if (l.t <= now) cur = l;
-      return route.fulfill({ json: cur.status });
-    }
-    if (path === "/v1/yunshu/requests/recent") {
-      const now = at();
-      const rows = LINES.filter((l) => l.requests && l.t <= now).flatMap(
-        (l) => l.requests ?? [],
-      );
-      seq = rows.length;
-      return route.fulfill({
-        json: {
-          object: "list",
-          data: rows.slice().reverse().slice(0, 100),
-          count: rows.length,
-          capacity: 512,
-          boot_id: "real",
-          latest_seq: seq,
-        },
-      });
-    }
-    return route.fulfill({ status: 404, json: {} });
-  });
-}
+const replay = (page: Parameters<typeof replayLoad>[0], kind: LoadKind) =>
+  replayLoad(page, kind, SPEED);
 
 for (const [name, project] of [
   ["desktop", { viewport: { width: 1440, height: 900 } }],

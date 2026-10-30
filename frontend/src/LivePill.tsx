@@ -1,13 +1,14 @@
 import { StatusIndicator } from "@yuhuanowo/yunui";
 import type { EngineStatus } from "./api";
-import { Slot } from "./ui";
+import { HeldText } from "./HeldText";
 import { livePill } from "./engineView";
 import type { EngineConnectionPhase } from "./useEngine";
 import type { OutageView } from "./outage-view";
 
 /**
  * The always-visible live pill (top bar, every page): the connection when it is
- * not online, otherwise the engine phase with its own number. It never shows a
+ * not online, otherwise the engine phase with its own number (each number holds its own width,
+ * see HeldText; the pill is otherwise as wide as its text). It never shows a
  * bare tok/s that is not live. Its text is not a live region: the phase is
  * spoken only when the user reaches it.
  */
@@ -28,16 +29,14 @@ export function LivePill({
       data-phase={pill.phase}
     >
       <StatusIndicator status={pill.tone} />
-      <Slot ch={6} className="leading-4 text-foreground">
-        {pill.phase}
-      </Slot>
-      {/* Sized by its text (tabular digits, so a changing number does not jitter); a reserved
-          30ch slot left most of the pill empty. */}
-      {pill.detail ? (
-        <span className="hidden whitespace-nowrap leading-4 tabular-nums xl:inline-block">
-          {pill.detail}
-        </span>
-      ) : null}
+      <span className="inline-block whitespace-nowrap">
+        <span className="leading-4 text-foreground">{pill.phase}</span>
+        {pill.detail ? (
+          <span className="ml-2 hidden leading-4 tabular-nums xl:inline">
+            <HeldText text={pill.detail} />
+          </span>
+        ) : null}
+      </span>
     </span>
   );
 }

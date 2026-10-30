@@ -131,7 +131,7 @@ export default function ApiReference() {
         <SelectTrigger aria-label={t("docs.reference.operation")}>
           <SelectValue />
         </SelectTrigger>
-        <SelectContent>
+        <SelectContent className="max-w-[calc(100vw-1rem)] [&_[data-radix-select-viewport]]:h-auto [&_[data-radix-select-viewport]]:max-h-[min(22rem,var(--radix-select-content-available-height))]">
           {operations.map((op) => (
             <SelectItem key={op} value={op}>
               {op.toUpperCase().split(" ")[0]} {op.split(" ")[1]}

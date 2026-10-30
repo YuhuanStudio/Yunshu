@@ -79,7 +79,12 @@ test("the sidebar and in-page links navigate between pages", async ({
   await expect(page).toHaveURL(/#\/docs\/api\/overview$/);
   await expect(page.getByTestId("docs-article")).toContainText("API");
   // previous / next at the foot
-  await expect(page.getByRole("link", { name: /下一頁/ })).toBeVisible();
+  await expect(
+    page
+      .getByTestId("docs-article")
+      .getByRole("link", { name: /^Chat completions/ })
+      .last(),
+  ).toBeVisible();
 });
 
 test("English pages open on a heading anchor and scroll to it", async ({
@@ -169,16 +174,24 @@ for (const [hash, label] of [
 test.describe("phone", () => {
   test.use({ viewport: { width: 402, height: 874 } });
 
-  test("pages are chosen from a select and nothing overflows sideways", async ({
+  test("pages are chosen from the page navigation drawer and nothing overflows sideways", async ({
     page,
   }) => {
     const errors = await open(page, "docs/api/chat-completions");
     await expect(
-      page.getByTestId("docs-nav").getByRole("combobox"),
+      page.getByRole("button", { name: "開啟文件目錄" }),
     ).toBeVisible();
     await expect(
       page.getByTestId("docs-nav").getByRole("link", { name: "Responses" }),
     ).toBeHidden();
+    await page.getByRole("button", { name: "開啟文件目錄" }).click();
+    await expect(
+      page
+        .locator("#nd-sidebar-mobile")
+        .getByRole("link", { name: "Responses", exact: true }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#nd-sidebar-mobile")).toBeHidden();
     await expect(
       article(page).getByRole("heading", { level: 1 }),
     ).toBeVisible();

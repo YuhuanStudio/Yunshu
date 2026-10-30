@@ -745,6 +745,7 @@ class VLMEngine:
                 from .kernels import qsa_sparse_prefill
 
                 qsa_sparse_prefill.install()
+            tf_hc_forward.install_qwen4_gdn()
 
         model_config = model_class.ModelConfig.from_dict(config)
         modules = ["text", "vision", "perceiver", "projector", "audio"]

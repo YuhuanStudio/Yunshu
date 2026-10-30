@@ -111,11 +111,12 @@ const unitFormat = (unit: "hour" | "minute" | "second", digits = 0) => {
         style: "unit",
         unit,
         unitDisplay: "narrow",
+        minimumFractionDigits: digits,
         maximumFractionDigits: digits,
       }),
   );
 };
-/** Elapsed time as `1h 2m`, `3m 4s` or `5.2s` (narrow units from Intl). */
+/** Elapsed time as `1h 2m`, `3m 4s` or `5.2s` / `12.0s` (narrow units from Intl; one fixed decimal so a polled value keeps its width). */
 export function elapsed(seconds: number | null | undefined): string {
   if (seconds == null) return "—";
   if (seconds >= 3600)

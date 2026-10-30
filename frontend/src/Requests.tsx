@@ -19,6 +19,7 @@ import {
   type ReactNode,
 } from "react";
 import { useFlip } from "./motion/flip";
+import { useCoalescedRows } from "./motion/useCoalescedRows";
 import {
   CustomSelect,
   Button,
@@ -73,6 +74,7 @@ import {
   clock,
   dateTime,
   elapsed,
+  fixed,
   isOnline,
   modelLabel,
   number,
@@ -107,6 +109,7 @@ import {
 } from "./request-insight";
 import { logsRangeHash } from "./Logs";
 import { LiveNumber } from "./LiveNumber";
+import { HugWidth } from "./HugWidth";
 
 import { SegmentedTray } from "./SegmentedTray";
 const PAGE = 50;
@@ -367,10 +370,13 @@ export function Requests({
   if (previousScope.current !== laneScope) lanes.current = [];
   previousScope.current = laneScope;
   lanes.current = filter === "active" ? liveSlots(lanes.current, shown) : [];
-  const displayed = filter === "active" ? lanes.current : shown;
+  // The table takes rows arriving, leaving or re-ordering at most once per 1.5 s, in one step: a burst of
+  // arrivals must not shove every row down once per request. Another filter or sort shows at once.
+  const paced = useCoalescedRows(shown, laneScope);
+  const displayed = filter === "active" ? lanes.current : paced;
   const listRef = useRef<HTMLDivElement>(null);
   useFlip(listRef);
-  const fresh = useFreshIds(shown.map((r) => r.id));
+  const fresh = useFreshIds(paced.map((r) => r.id));
   const restore = (e: Event) => {
     if (opener.current?.isConnected) {
       e.preventDefault();
@@ -572,7 +578,7 @@ export function Requests({
           <p className="text-xs text-muted-foreground">
             {t("requests.detail.cause")}
           </p>
-          <p className="text-sm">{causeOf(view)}</p>
+          <p className="text-sm tabular-nums">{causeOf(view)}</p>
           {rowMs(view) != null && (
             <Button size="sm" variant="ghost" asChild className="-ml-2">
               <a
@@ -728,12 +734,13 @@ export function Requests({
               label={tile.label}
               value={
                 "liveValue" in tile ? (
-                  <>
+                  <HugWidth>
                     <span className="tabular-nums">
                       <LiveNumber
                         value={tile.liveValue ?? null}
-                        format={(v) => number(v)}
-                        glide
+                        format={(v) =>
+                          tile.unit === "tok/s" ? fixed(v) : number(v)
+                        }
                       />
                     </span>
                     {tile.unit && (
@@ -741,7 +748,7 @@ export function Requests({
                         {tile.unit}
                       </span>
                     )}
-                  </>
+                  </HugWidth>
                 ) : (
                   <StatValue text={tile.value} unit={tile.unit} />
                 )
@@ -881,7 +888,7 @@ export function Requests({
               >
                 <TooltipProvider delayDuration={200}>
                   <Table
-                    className="md:min-w-[640px]"
+                    className="table-fixed md:min-w-[640px]"
                     scrollLabel={t("requests.list.tableLabel")}
                   >
                     <Thead>
@@ -890,21 +897,21 @@ export function Requests({
                           k="time"
                           sort={sort}
                           setSort={setSort}
-                          className="w-px whitespace-nowrap max-sm:hidden"
+                          className="w-20 whitespace-nowrap max-sm:hidden"
                         >
                           {t("requests.list.colTime")}
                         </SortTh>
                         <Th className="min-w-56">
                           {t("requests.list.colRequest")}
                         </Th>
-                        <Th className="hidden w-px whitespace-nowrap xl:table-cell">
+                        <Th className="hidden w-32 whitespace-nowrap xl:table-cell">
                           {t("requests.list.colUsage")}
                         </Th>
                         <SortTh
                           k="ttft"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-px whitespace-nowrap md:table-cell"
+                          className="hidden w-[5.25rem] whitespace-nowrap md:table-cell"
                         >
                           {t("requests.list.colTtft")}
                         </SortTh>
@@ -912,7 +919,7 @@ export function Requests({
                           k="total"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-px whitespace-nowrap md:table-cell"
+                          className="hidden w-24 whitespace-nowrap md:table-cell"
                         >
                           {t("requests.list.colTotal")}
                         </SortTh>
@@ -920,14 +927,14 @@ export function Requests({
                           k="tps"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-px whitespace-nowrap md:table-cell"
+                          className="hidden w-16 whitespace-nowrap md:table-cell"
                         >
                           tok/s
                         </SortTh>
-                        <Th className="hidden w-px whitespace-nowrap min-[1800px]:table-cell">
+                        <Th className="hidden w-[5rem] whitespace-nowrap min-[1800px]:table-cell">
                           {t("requests.list.colSpec")}
                         </Th>
-                        <Th className="w-px">
+                        <Th className="w-32">
                           <span className="sr-only">
                             {t("requests.list.colActions")}
                           </span>
@@ -992,10 +999,11 @@ export function Requests({
                           >
                             {boundary && (
                               <Tr data-restart-boundary="">
-                                <Td
-                                  colSpan={8}
-                                  className="py-1 text-center text-xs text-muted-foreground"
-                                >
+                                {/* The same cells as a row, not one colSpan={8} cell: a fixed table makes
+                                    a column for every spanned slot, and with a breakpoint-hidden column
+                                    the extra one was a blank strip at the right of every row. */}
+                                <Td className="py-1 max-sm:hidden" />
+                                <Td className="whitespace-nowrap py-1 text-xs text-muted-foreground">
                                   {t(
                                     boundary.kind === "switched"
                                       ? "requests.list.switched"
@@ -1005,6 +1013,12 @@ export function Requests({
                                     { time: clock(boundary.at) },
                                   )}
                                 </Td>
+                                <Td className="hidden py-1 xl:table-cell" />
+                                <Td className="hidden py-1 md:table-cell" />
+                                <Td className="hidden py-1 md:table-cell" />
+                                <Td className="hidden py-1 md:table-cell" />
+                                <Td className="hidden py-1 min-[1800px]:table-cell" />
+                                <Td className="py-1" />
                               </Tr>
                             )}
                             <Tr
@@ -1096,13 +1110,13 @@ export function Requests({
                                     ? t("requests.list.mobileLine", {
                                         ttft: ttftText,
                                         total: totalText,
-                                        tps: number(speedValue),
+                                        tps: fixed(speedValue),
                                       })
                                     : percent != null
                                       ? t("requests.list.prefillPercent", {
                                           percent: number(percent, 0),
                                         })
-                                      : `${elapsed(row.elapsed_s)} · ${number(speedValue)} tok/s`}
+                                      : `${elapsed(row.elapsed_s)} · ${fixed(speedValue)} tok/s`}
                                 </p>
                                 {/* Below lg the usage column is gone; the same numbers ride on a line of their own. */}
                                 {row.phase === "complete" && (
@@ -1171,7 +1185,7 @@ export function Requests({
                                   : elapsed(row.elapsed_s)}
                               </Td>
                               <Td className="hidden whitespace-nowrap tabular-nums md:table-cell">
-                                {number(speedValue)}
+                                {fixed(speedValue)}
                               </Td>
                               <Td className="hidden min-[1800px]:table-cell">
                                 {speculativeText(row) ?? (

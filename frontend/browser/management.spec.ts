@@ -516,15 +516,21 @@ test.describe("fixture-only API controls", () => {
     const prompt = playground.getByPlaceholder("輸入測試提示詞…");
     await prompt.fill("Describe this fixture image");
 
-    await playground
-      .getByRole("button", { name: "生成參數", exact: true })
-      .click();
-    const settings = page.getByRole("dialog", { name: "生成參數" });
+    const opener = playground.getByRole("button", {
+      name: "生成參數",
+      exact: true,
+    });
+    const sheet = await opener.isVisible();
+    if (sheet) await opener.click();
+    const settings = sheet
+      ? page.getByRole("dialog", { name: "生成參數" })
+      : page.getByTestId("playground-panel");
     await settings.getByRole("tab", { name: "關閉", exact: true }).click();
     await settings.getByRole("tab", { name: "JSON", exact: true }).click();
-    await settings
-      .getByRole("button", { name: "關閉生成參數", exact: true })
-      .click();
+    if (sheet)
+      await settings
+        .getByRole("button", { name: "關閉生成參數", exact: true })
+        .click();
 
     await playground
       .getByRole("button", { name: "傳送測試", exact: true })
