@@ -9,6 +9,8 @@ window row and the serial row are computed by the same arithmetic.
 
 Anything the plan does not admit (other geometry or bits, padded or batched cache, masks, fp32 inputs, more
 than 16 rows) falls back to the caller's original layer.
+2-bit packs (TensorFold 2bit) are such a case: the plan has no 2-bit tiles, so those layers keep the
+composed upstream layer (identity-checked against it).
 """
 
 from __future__ import annotations
