@@ -48,6 +48,47 @@ def patch(mod):
     cls.__call__ = timed
 
 
+DRV_OUT = os.environ.get("PB2_DRV_OUT")
+DRV = "yunshu_engine.round_driver.driver"
+
+
+def patch_driver(mod):
+    """Log wall time of RoundDriver.add / _restore / _prefill_step (research timer)."""
+    cls = mod.RoundDriver
+
+    def wrap(name):
+        orig = getattr(cls, name)
+
+        def timed(self, *args, **kw):
+            t0 = time.perf_counter()
+            try:
+                return orig(self, *args, **kw)
+            finally:
+                with open(DRV_OUT, "a") as f:
+                    f.write(f"{name} {time.perf_counter() - t0:.4f}\n")
+
+        setattr(cls, name, timed)
+
+    for name in ("add", "_prefill_step", "_restore"):
+        wrap(name)
+
+
+class _DrvFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path, target=None):
+        if name != DRV:
+            return None
+        sys.meta_path.remove(self)
+        spec = importlib.util.find_spec(name)
+        orig_exec = spec.loader.exec_module
+
+        def exec_module(module):
+            orig_exec(module)
+            patch_driver(module)
+
+        spec.loader.exec_module = exec_module
+        return spec
+
+
 class _Finder(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path, target=None):
         if name != TARGET:
@@ -64,6 +105,11 @@ class _Finder(importlib.abc.MetaPathFinder):
         loader.exec_module = exec_module
         return spec
 
+
+if DRV_OUT:
+    import importlib.util
+
+    sys.meta_path.insert(0, _DrvFinder())
 
 if OUT:
     import importlib.util
