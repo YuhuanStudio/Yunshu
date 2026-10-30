@@ -23,7 +23,11 @@ def summarize(records):
     for _i, kind, s in records:
         acc[kind].append(s)
     return {
-        k: {"total": round(sum(v), 4), "calls": len(v), "mean_ms": round(1e3 * sum(v) / len(v), 3)}
+        k: {
+            "total": round(sum(v), 4),
+            "calls": len(v),
+            "mean_ms": round(1e3 * sum(v) / len(v), 3),
+        }
         for k, v in acc.items()
     }
 
@@ -51,7 +55,10 @@ def main():
     rng = random.Random(0)
     ids = [rng.randrange(1000, 20000) for _ in range(a.tokens)]
     layers = list(lm.model.layers)
-    kinds = {id(layer): ("gdn" if getattr(layer, "is_linear", False) else "attn") for layer in layers}
+    kinds = {
+        id(layer): ("gdn" if getattr(layer, "is_linear", False) else "attn")
+        for layer in layers
+    }
     index = {id(layer): i for i, layer in enumerate(layers)}
     records: list = []
     state = {"on": False}
@@ -74,7 +81,9 @@ def main():
         cache = lm.make_cache()
         for s in range(0, len(ids), a.span):
             with gdn_prefill.prefill_scope():
-                h = lm.model(mx.array(ids[s : s + a.span], dtype=mx.int32)[None], cache=cache)
+                h = lm.model(
+                    mx.array(ids[s : s + a.span], dtype=mx.int32)[None], cache=cache
+                )
             mx.eval(h[:, -1], [c.state for c in cache])
 
     def driver():
@@ -98,7 +107,10 @@ def main():
             wall = time.perf_counter() - t0
             key = f"{arm}_{'layers' if timed_run else 'wall'}"
             out.setdefault(key, []).append(
-                {"wall_s": round(wall, 3), **({"by_kind": summarize(records)} if timed_run else {})}
+                {
+                    "wall_s": round(wall, 3),
+                    **({"by_kind": summarize(records)} if timed_run else {}),
+                }
             )
             print(key, json.dumps(out[key][-1]), flush=True)
     a.out.write_text(json.dumps(out, indent=1))

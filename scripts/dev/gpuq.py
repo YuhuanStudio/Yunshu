@@ -1298,7 +1298,6 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     )
 
 
-
 _NOISE = ("gpuq:", "[transformers]", "Traceback", "  File ")
 
 
@@ -1311,8 +1310,13 @@ def result_summary(log: Path, lines: int = 3) -> str:
         tail = log.read_bytes()[-8000:].decode("utf-8", "replace").splitlines()
     except OSError:
         return ""
-    keep = [t.strip() for t in tail if t.strip() and not t.startswith(_NOISE) and " INFO " not in t]
+    keep = [
+        t.strip()
+        for t in tail
+        if t.strip() and not t.startswith(_NOISE) and " INFO " not in t
+    ]
     return " | ".join(x[:160] for x in keep[-lines:])[:480]
+
 
 def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     gate = gate or ServingGate()

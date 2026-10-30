@@ -86,9 +86,7 @@ async def main():
     from yunshu_engine.batched_engine import BatchedEngine
 
     print(f"\n╔══ DETAILED CACHE BENCH: {MODEL} ══")
-    print(
-        f"║ config: ENGINE_LOOP=1 SSD=1"
-    )
+    print(f"║ config: ENGINE_LOOP=1 SSD=1")
     engine = BatchedEngine(model_name=MODEL)
     t0 = time.perf_counter()
     await engine.start()

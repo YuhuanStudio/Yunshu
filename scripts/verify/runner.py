@@ -21,6 +21,8 @@ def _weights_gb(model: str) -> float:
     if not root.is_dir():
         return 0.0
     return sum(f.stat().st_size for f in root.glob("*.safetensors")) / 1e9
+
+
 from .core import (
     RUNS,
     Arm,

@@ -17,3 +17,11 @@ def test_images_differ_and_messages_carry_them():
     msg = m.image_msg(1, "q")
     parts = msg[0]["content"]
     assert parts[0]["type"] == "image_url" and parts[1] == {"type": "text", "text": "q"}
+
+
+def test_long_image_and_multi_image_messages():
+    m = _load()
+    assert m.image_url(0, 512, 256) != m.image_url(0, 512, 384)
+    msg = m.multi_image_msg([0, 1, 2], "q")
+    kinds = [p["type"] for p in msg[0]["content"]]
+    assert kinds == ["image_url", "image_url", "image_url", "text"]

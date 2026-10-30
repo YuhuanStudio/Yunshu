@@ -25,16 +25,22 @@ from io import BytesIO
 from pathlib import Path
 
 
-def image_url(kind: int, size: int = 224) -> str:
+def image_url(kind: int, size: int = 224, tall: int | None = None) -> str:
     from PIL import Image, ImageDraw
 
-    im = Image.new("RGB", (size, size // 2), ("blue", "green", "black")[kind % 3])
+    im = Image.new(
+        "RGB", (size, tall or size // 2), ("blue", "green", "black")[kind % 3]
+    )
+    h = im.size[1]
     boxes = [
-        (0, 0, size // 2 - 1, size // 2 - 1),
-        (size // 2, 0, size - 1, size // 2 - 1),
-        (size // 4, size // 8, 3 * size // 4, 3 * size // 8),
+        (0, 0, size // 2 - 1, h // 2),
+        (size // 2, 0, size - 1, h // 2),
+        (size // 4, h // 4, 3 * size // 4, 3 * h // 4),
     ]
-    ImageDraw.Draw(im).rectangle(boxes[kind % 3], fill="red")
+    d = ImageDraw.Draw(im)
+    d.rectangle(boxes[kind % 3], fill="red")
+    for i in range(0, max(size, h), 97):  # texture so a large image is not constant
+        d.line((i, 0, 0, i), fill=(255, 255, 0), width=3)
     buf = BytesIO()
     im.save(buf, format="PNG")
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
@@ -59,16 +65,27 @@ def chat(url: str, model: str, messages: list, max_tokens: int = 48) -> str:
     return data["choices"][0]["message"]["content"]
 
 
-def image_msg(kind: int, question: str) -> list:
+def image_msg(
+    kind: int, question: str, size: int = 224, tall: int | None = None
+) -> list:
     return [
         {
             "role": "user",
             "content": [
-                {"type": "image_url", "image_url": {"url": image_url(kind)}},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_url(kind, size, tall)},
+                },
                 {"type": "text", "text": question},
             ],
         }
     ]
+
+
+def multi_image_msg(kinds: list[int], question: str) -> list:
+    """Several images in one prompt (what a video becomes: its frames as images)."""
+    parts = [{"type": "image_url", "image_url": {"url": image_url(k)}} for k in kinds]
+    return [{"role": "user", "content": parts + [{"type": "text", "text": question}]}]
 
 
 TEXTS = [
@@ -116,6 +133,44 @@ def cells(url: str, model: str) -> dict:
     return out
 
 
+def cells_long(url: str, model: str, size: int, tall: int) -> dict:
+    """A several-thousand-token image prompt: cold, repeat, beside text rows, follow-up turn; and a
+    multi-image prompt (the frames of a video)."""
+    out: dict = {}
+    q = "Describe where the red rectangle is in this image in one sentence."
+    long_msg = image_msg(0, q, size, tall)
+    out["long_image_cold"] = chat(url, model, long_msg)
+    out["long_image_repeat"] = chat(url, model, long_msg)
+    res: dict = {}
+
+    def run(key, messages):
+        res[key] = chat(url, model, messages)
+
+    threads = [threading.Thread(target=run, args=("image", long_msg))]
+    threads += [
+        threading.Thread(
+            target=run, args=(f"text{i}", [{"role": "user", "content": t}])
+        )
+        for i, t in enumerate(TEXTS)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    out["long_image_concurrent"] = res["image"]
+    out["long_text_concurrent"] = [res[f"text{i}"] for i in range(len(TEXTS))]
+    history = long_msg + [
+        {"role": "assistant", "content": out["long_image_cold"]},
+        {"role": "user", "content": "Now name the background colour in one word."},
+    ]
+    out["long_image_followup"] = chat(url, model, history)
+    out["long_image_followup_repeat"] = chat(url, model, history)
+    mq = "How many images are there and what colour is the background of the first?"
+    out["multi_image"] = chat(url, model, multi_image_msg([0, 1, 2], mq))
+    out["multi_image_repeat"] = chat(url, model, multi_image_msg([0, 1, 2], mq))
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", required=True, help="the tree's python/ directory")
@@ -123,6 +178,13 @@ def main() -> None:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--port", type=int, default=18996)
     ap.add_argument("--expect-driver-media", action="store_true")
+    ap.add_argument(
+        "--long",
+        type=int,
+        nargs=2,
+        metavar=("W", "H"),
+        help="also run the long-image cells",
+    )
     ap.add_argument("--env", action="append", default=[])
     a = ap.parse_args()
     env = dict(os.environ, PYTHONPATH=a.src, YUNSHU_OBSERVE="0", YUNSHU_CONSOLE="0")
@@ -162,6 +224,8 @@ def main() -> None:
             urllib.request.urlopen(url + "/v1/models", timeout=10).read()
         )["data"][0]["id"]
         result = {"model": model, "src": a.src, "cells": cells(url, model)}
+        if a.long:
+            result["cells"].update(cells_long(url, model, *a.long))
         engaged = b"Round driver: media prompt" in log.read_bytes()
         result["driver_media_engaged"] = engaged
         a.out.write_text(json.dumps(result, indent=1, ensure_ascii=False))
@@ -179,6 +243,27 @@ def main() -> None:
             problems.append("text rows beside the image row changed")
         if c["image_a_cold"] == c["image_b"]:
             problems.append("two different images gave the same text (image ignored?)")
+        if a.long:
+            if c["long_image_cold"] != c["long_image_repeat"]:
+                problems.append("long image repeat differs")
+            if c["long_image_cold"] != c["long_image_concurrent"]:
+                problems.append("long image concurrent differs from solo")
+            if c["long_image_followup"] != c["long_image_followup_repeat"]:
+                problems.append("long follow-up repeat differs")
+            if c["multi_image"] != c["multi_image_repeat"]:
+                problems.append("multi-image repeat differs")
+            if c["text_solo"] != c["long_text_concurrent"]:
+                problems.append("text rows beside the long image row changed")
+        if a.long and a.expect_driver_media:
+            import re
+
+            counts = [
+                int(n)
+                for n in re.findall(rb"media prompt (\d+) tokens", log.read_bytes())
+            ]
+            result["media_prompt_tokens_max"] = max(counts, default=0)
+            if result["media_prompt_tokens_max"] < 2000:
+                problems.append("long image prompt is not several thousand tokens")
         if a.expect_driver_media and not engaged:
             problems.append("driver media path did not engage (log line missing)")
         print(json.dumps({"problems": problems, "engaged": engaged}), flush=True)
