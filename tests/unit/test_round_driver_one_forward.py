@@ -96,7 +96,7 @@ def test_decode_batch_rounds_equal_tree_forward_rounds_bit_for_bit(wide):
 
     a = _joined(wide, plain_verify=False)
     b = _joined(wide, plain_verify=True)
-    row_a, row_b = a.batch.rows[0], b.batch.rows[0]
+    row_b = b.batch.rows[0]
     for step in range(10):
         token = (7 * step + 3) % 500
         hidden_a = a.batch.forward([1], mx.array([token], dtype=mx.int32))
