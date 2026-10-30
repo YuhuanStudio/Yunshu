@@ -235,6 +235,7 @@ class RoundDriver:
                 tree_verify.require_int8_kernels()
             self.dflash = DFlashBatch(model, dflash_drafter, kv_format)
         self.kv_format = kv_format
+        self.plain_verify = plain_verify
         self.batch: Any = (
             self.dflash if self.dflash is not None else DecodeBatch(self.lm, kv_format)
         )

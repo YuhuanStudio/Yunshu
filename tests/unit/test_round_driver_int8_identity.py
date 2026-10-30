@@ -120,3 +120,30 @@ def test_long_mtp_rows_spec_on_equals_spec_off_and_solo_equals_beside(fmt):
     assert toks(on) == toks(off)
     beside, _ = _run(lm, prompts, drafter, "mtp", fmt=fmt)
     assert toks(beside)[0] == toks(on)[0]
+
+
+def test_mtp_spec_off_server_decodes_in_the_same_batch_as_spec_on():
+    """Server-level spec off for an MTP model is the MTP batch without drafting: same forward, so the
+    per-token hidden state of a plain round equals the spec-on window's first row (the tiny MTP head's
+    logprobs are nan, so hidden states are compared)."""
+    from yunshu_engine.kernels.ragged_attention import tile_ready
+    from yunshu_engine.round_driver import driver as drv
+    from yunshu_engine.round_driver.batch import DecodeBatch
+
+    from .test_round_driver import PROMPTS, _tiny
+
+    if not mx.metal.is_available() or not tile_ready():
+        pytest.skip("needs M5-class tensor ops")
+    lm, drafter = _tiny()
+    off = drv.RoundDriver(lm, drafter=None, plain_verify=False, stop_tokens=set())
+    assert isinstance(off.batch, DecodeBatch) and off.dflash is None
+    on = drv.RoundDriver(lm, drafter=drafter, stop_tokens=set())
+    assert isinstance(on.batch, DecodeBatch)
+    outs = []
+    for d in (off, on):
+        d.add(drv.Request(PROMPTS[1], 16, handle="r"))
+        toks = []
+        while d.busy():
+            toks += [e.token for e in d.step()]
+        outs.append(toks)
+    assert outs[0] == outs[1]
