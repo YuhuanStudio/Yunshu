@@ -259,3 +259,26 @@ def test_lone_row_checkpoints_are_deferred_then_flushed(tiny):
     assert d2._deferred_apcs
     d2.remove("x")
     assert not d2._deferred_apcs
+
+
+def test_row_reports_its_planned_checkpoints(tiny):
+    """The runner's prefix single-flight asks the driver which checkpoints a row will publish."""
+    from yunshu_engine.apc_manager import YunshuAPCManager
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    lm, _ = tiny
+    apc = YunshuAPCManager(
+        num_blocks=64,
+        block_size=16,
+        overrides={
+            "memory_max_gb": 1,
+            "checkpoint_entries": 4,
+            "checkpoint_interval_tokens": 256,
+        },
+    )
+    d = RoundDriver(lm, stop_tokens=set(), chunk=128, apc=apc)
+    handle = object()
+    d.add(Request(DOC, N, handle=handle))
+    salt, points = d.planned_checkpoints(handle)
+    assert points and all(0 < p < len(DOC) for p in points) and salt == d.rows[0].salt
+    assert d.planned_checkpoints(object()) is None

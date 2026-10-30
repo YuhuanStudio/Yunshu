@@ -2410,12 +2410,16 @@ class VLMBatchRunner:
         return False
 
     def _track_prefix_producer(self, job: _Job):
-        if (
-            not job.stats.used_apc
-            or not job.cache_store
-            or id(job) in self._driver_jobs
-        ):
-            return  # stores nothing / the driver owns its APC: no producer to wait for
+        if not job.stats.used_apc or not job.cache_store:
+            return  # stores nothing: no producer to wait for
+        if id(job) in self._driver_jobs:
+            # The driver owns its APC: its planned checkpoints (stored by its prefill steps and
+            # published after the first token) are what a same-prefix waiter waits for.
+            planned = (job.driver or self.driver).planned_checkpoints(job)
+            if planned is not None and planned[1]:
+                job.apc_salt = planned[0]
+                self._prefix_producers.append((job, planned[1]))
+            return
         for group in self._groups():
             if job.uid not in group.jobs or group.jobs[job.uid] is not job:
                 continue

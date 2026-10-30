@@ -82,3 +82,29 @@ def test_unqualified_numerical_configuration_keeps_original_admission():
     a = job(list(range(9000)))
     r._prefix_producers = [(a, [8192])]
     assert not r._prefix_wait(job(a.ids))
+
+
+def test_driver_job_registers_its_planned_checkpoints_as_a_producer():
+    """The round driver owns its APC: a driver job is a single-flight producer of the
+    checkpoints its row plans (published after its first token), so a same-prefix waiter waits."""
+    r = runner()
+    a = job(list(range(9000)))
+    a.stats.used_apc = True
+    a.cache_store = True
+    drv = SimpleNamespace(
+        planned_checkpoints=lambda h: (123, [8192]) if h is a else None
+    )
+    a.driver = drv
+    r._driver_jobs[id(a)] = a
+    r._track_prefix_producer(a)
+    assert r._prefix_producers == [(a, [8192])] and a.apc_salt == 123
+    b = job(list(range(8500)) + [99999])
+    assert r._prefix_wait(b)
+    # nothing planned (no APC / no checkpoints): no producer
+    r2 = runner()
+    c = job(list(range(9000)))
+    c.stats.used_apc = c.cache_store = True
+    c.driver = SimpleNamespace(planned_checkpoints=lambda h: None)
+    r2._driver_jobs[id(c)] = c
+    r2._track_prefix_producer(c)
+    assert r2._prefix_producers == []

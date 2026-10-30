@@ -498,6 +498,14 @@ class RoundDriver:
             if defer:
                 apc.defer_checkpoint_stores = False
 
+    def planned_checkpoints(self, handle: Any) -> tuple[int, list[int]] | None:
+        """``(apc salt, checkpoint lengths this row's prefill will store)`` of the row owned by
+        ``handle``, or None (the runner's prefix single-flight waits for them)."""
+        for r in self.rows:
+            if r.req.handle is handle and r.apc is not None:
+                return r.salt, list(r.ckpts)
+        return None
+
     def flush_checkpoints(self) -> None:
         """Evaluate and publish the captured checkpoints (after the step's tokens were emitted)."""
         pending, self._deferred_apcs = self._deferred_apcs, []
