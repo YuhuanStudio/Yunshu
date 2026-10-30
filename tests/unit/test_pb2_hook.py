@@ -86,3 +86,27 @@ def test_apc_trace_times_calls_and_profiles_slow_ones(tmp_path, monkeypatch):
     import sys
 
     sys.meta_path[:] = [f for f in sys.meta_path if "Finder" not in type(f).__name__]
+
+
+def test_timeline_wrapper_logs_label_duration_and_start(tmp_path, monkeypatch):
+    import types
+
+    out = tmp_path / "tl.txt"
+    monkeypatch.setenv("PB2_TL_OUT", str(out))
+    p = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/research/pb2_hook/sitecustomize.py"
+    )
+    spec = importlib.util.spec_from_file_location("pb2hook_tl", p)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    holder = types.SimpleNamespace(f=lambda: 5)
+    m.wrap_tl(holder, "f", "x.f")
+    m.wrap_tl(holder, "missing", "x.missing")  # absent attributes are skipped
+    assert holder.f() == 5
+    line = out.read_text().strip()
+    assert line.startswith("x.f ") and " at " in line
+    import sys
+
+    sys.meta_path[:] = [f for f in sys.meta_path if "Finder" not in type(f).__name__]

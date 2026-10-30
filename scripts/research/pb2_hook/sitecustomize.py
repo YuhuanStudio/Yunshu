@@ -17,7 +17,9 @@ TARGET = "mlx_vlm.models.qwen3_5.language"
 
 
 def summarize(acc):
-    return {k: {"calls": v[0], "seconds": round(v[1], 4)} for k, v in sorted(acc.items())}
+    return {
+        k: {"calls": v[0], "seconds": round(v[1], 4)} for k, v in sorted(acc.items())
+    }
 
 
 def patch(mod):
@@ -173,8 +175,59 @@ if OUT:
 
 
 TRACE_OUT = os.environ.get("PB2_TRACE_OUT")
+TL_OUT = os.environ.get("PB2_TL_OUT")
+REPLAY = "yunshu_engine.prompt_end_replay"
+
+
+def wrap_tl(holder, name, label):
+    """Time-line wrapper (start, duration) written to PB2_TL_OUT; skipped when absent."""
+    orig = getattr(holder, name, None)
+    if orig is None:
+        return
+
+    def timed(*args, **kw):
+        t0 = time.perf_counter()
+        try:
+            return orig(*args, **kw)
+        finally:
+            with open(TL_OUT, "a") as f:
+                f.write(f"{label} {time.perf_counter() - t0:.4f} at {t0:.4f}\n")
+
+    setattr(holder, name, timed)
+
+
+class _ReplayFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path, target=None):
+        if name != REPLAY:
+            return None
+        sys.meta_path.remove(self)
+        spec = importlib.util.find_spec(name)
+        orig_exec = spec.loader.exec_module
+
+        def exec_module(module):
+            orig_exec(module)
+            wrap_tl(module, "open_session", "replay.open_session")
+            wrap_tl(module.Session, "begin", "replay.begin")
+            wrap_tl(module.Session, "_replay", "replay._replay")
+            wrap_tl(module.Session, "store", "replay.store")
+
+        spec.loader.exec_module = exec_module
+        return spec
+
+
+if TL_OUT:
+    import importlib.util
+
+    sys.meta_path.insert(0, _ReplayFinder())
 RUNNER = "yunshu_engine.vlm_batch_runner"
-_TRACED = ("t_submit", "t_admit", "t_prefill_start", "t_first", "t_last", "t_prefill_end")
+_TRACED = (
+    "t_submit",
+    "t_admit",
+    "t_prefill_start",
+    "t_first",
+    "t_last",
+    "t_prefill_end",
+)
 
 
 def patch_runner(mod):
@@ -202,6 +255,17 @@ def patch_runner(mod):
                 )
 
     cls.__setattr__ = traced
+    if TL_OUT:
+        for name in (
+            "_admit",
+            "_step_driver",
+            "_drive_slice_body",
+            "_next_preemptible",
+            "_emit_ready_first",
+            "_finish",
+            "_admit_driver",
+        ):
+            wrap_tl(mod.VLMBatchRunner, name, f"runner.{name}")
 
 
 class _RunnerFinder(importlib.abc.MetaPathFinder):
@@ -244,7 +308,7 @@ def patch_apc(mod):
 
         def timed(*args, **kw):
             # cProfile cannot nest (Python 3.12+): only the outermost APC call is profiled
-            outer = not depth[0]
+            outer = not depth[0] and not os.environ.get("PB2_APC_NOPROF")
             prof = cProfile.Profile() if outer else None
             t0 = time.perf_counter()
             depth[0] += 1
@@ -259,8 +323,14 @@ def patch_apc(mod):
                 if prof is not None:
                     prof.disable()
                 dur = time.perf_counter() - t0
-                shown = result if isinstance(result, (bool, type(None))) else type(result).__name__
-                n_ids = len(args[1]) if len(args) > 1 and hasattr(args[1], "__len__") else 0
+                shown = (
+                    result
+                    if isinstance(result, (bool, type(None)))
+                    else type(result).__name__
+                )
+                n_ids = (
+                    len(args[1]) if len(args) > 1 and hasattr(args[1], "__len__") else 0
+                )
                 with open(APC_OUT, "a") as f:
                     f.write(f"apc.{name} {dur:.4f} at {t0:.4f} ret={shown} n={n_ids}\n")
                     if prof is not None and dur > 0.02:
