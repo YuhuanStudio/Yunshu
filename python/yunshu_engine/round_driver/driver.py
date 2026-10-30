@@ -97,6 +97,16 @@ def cache_buffers(cache: list) -> list:
     return out
 
 
+def static_mask_only(processors) -> bool:
+    """Every processor is a static token ban (``suppress_tokens`` / ``ignore_eos``): it never needs the
+    token history or the logits, so a drafting row applies it to every verify row (``pure_at``, the same
+    elementwise mask a plain row applies) and keeps its speculation."""
+    return bool(processors) and all(
+        getattr(p, "is_static", False) is True and hasattr(p, "pure_at")
+        for p in processors
+    )
+
+
 @dataclass
 class Request:
     """What a row needs from the caller (the runner's job)."""
@@ -281,7 +291,7 @@ class RoundDriver:
         if (
             req.sampling is not None
             and req.draft
-            and not req.processors
+            and self._processors_draft(req.processors)
             and (not req.logprobs or self.dflash is not None)
             and keyed_sampling.supports(req.sampling)
         ):
@@ -297,7 +307,7 @@ class RoundDriver:
         draft = bool(
             req.draft
             and self.can_draft
-            and not req.processors
+            and self._processors_draft(req.processors)
             and (req.sampling is None or keyed is not None)
         )
         row = _Row(
@@ -346,6 +356,12 @@ class RoundDriver:
             self.dflash is not None and self.dflash.can_draft
         )
 
+    def _processors_draft(self, processors) -> bool:
+        """A row with these processors may draft: none, or (DFlash batch) static token bans only."""
+        return not processors or (
+            self.dflash is not None and static_mask_only(processors)
+        )
+
     def will_draft(self, *, sampling, processors, logprobs, draft: bool) -> bool:
         """Whether a request with these fields gets an MTP head row (as ``add``)."""
         return bool(
@@ -354,7 +370,7 @@ class RoundDriver:
             and (
                 sampling is None
                 or (
-                    not processors
+                    self._processors_draft(processors)
                     and (not logprobs or self.dflash is not None)
                     and keyed_sampling.supports(sampling)
                 )
@@ -391,7 +407,10 @@ class RoundDriver:
         row.apc = self._new_coordinator(self._apc_manager)
         row.apc.media_checkpoint = row.req.embeds is not None
         row.salt = self.apc_salt(int(row.req.extra_hash), row.mtp_cache is not None)
-        media = self._media_ids
+        # A prompt with no media token (the usual one) needs none of the media checks, each of which
+        # walks every prompt id in Python (~34K ids at 32K context, several times per lookup): one
+        # C-level set test decides, and an empty media set makes every check trivially true / empty.
+        media = self._media_ids if not self._media_ids.isdisjoint(ids) else frozenset()
         try:
             from mlx_vlm import apc as _apc
 

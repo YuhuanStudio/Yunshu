@@ -504,3 +504,37 @@ def test_row_finishing_at_its_first_token_offers_its_kv_buffers(target):
     finally:
         buffer_cache.clear_restore_buffers()
         buffer_cache._STATE.update(prev)
+
+
+def test_static_token_bans_keep_the_dflash_row_drafting_and_equal_plain_decode(target):  # noqa: F811
+    """ignore_eos / suppress_tokens are static bans: the row still drafts (the 27B follow-up turn of the
+    bench sends ignore_eos and had lost speculation), applies the ban to every verify row, and produces
+    the tokens a plain row with the same processor does."""
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+    from yunshu_engine.vlm_batch_runner import TokenMaskProcessor
+
+    prompt = [(7 * i + 11) % 500 for i in range(120)]
+
+    def run(drafter, ban):
+        mask = TokenMaskProcessor(suppress=ban, eos_ids=[0], ignore_eos=True)
+        d = RoundDriver(
+            target,
+            dflash_drafter=_draft(target) if drafter else None,
+            plain_verify=not drafter,
+            stop_tokens=set(),
+            chunk=64,
+        )
+        d.add(Request(prompt, 24, handle=0, processors=[mask]))
+        toks = []
+        while d.busy():
+            toks += [e.token for e in d.step()]
+        return toks, d
+
+    free, _ = run(False, [])
+    ban = sorted(set(free))[:4]
+    assert ban
+    plain, _ = run(False, ban)
+    drafted, d = run(True, ban)
+    assert not set(ban) & set(drafted)
+    assert drafted == plain
+    assert d.drafted > 0  # the row speculated under the ban

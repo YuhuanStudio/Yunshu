@@ -288,8 +288,13 @@ class DFlashBatch:
                     )[0]
                     draws.append((targets, None, extra))
                 else:
+                    drawn = row_logits[None]
+                    for p in (
+                        r.req.processors
+                    ):  # static bans only (Driver._processors_draft)
+                        drawn = p.pure_at(r.generated, drawn)
                     targets, lp = keyed_sampling.tree_target_rows(
-                        row_logits[None],
+                        drawn,
                         w.shape,
                         r.generated,
                         r.keyed,
