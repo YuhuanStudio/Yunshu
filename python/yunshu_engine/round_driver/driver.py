@@ -182,6 +182,7 @@ class RoundDriver:
         stop_tokens=None,
         chunk: int | None = None,
         apc: Any = None,
+        kv_format: str = "bf16",
     ):
         from .mtp import MTPHead
 
@@ -223,8 +224,13 @@ class RoundDriver:
             from .dflash import DFlashBatch
 
             self.dflash = DFlashBatch(model, dflash_drafter)
+        if kv_format == "int8" and self.dflash is not None:
+            raise NotImplementedError(
+                "int8 KV on the DFlash / plain-verify batch is not built yet (row 17 stage 2)"
+            )
+        self.kv_format = kv_format
         self.batch: Any = (
-            self.dflash if self.dflash is not None else DecodeBatch(self.lm)
+            self.dflash if self.dflash is not None else DecodeBatch(self.lm, kv_format)
         )
         # APC prefix cache (mlx_vlm ``APCManager``): a prompt starts from the
         # longest stored checkpoint (target KV + GDN state, plus the MTP
