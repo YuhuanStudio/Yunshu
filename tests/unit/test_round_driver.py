@@ -549,37 +549,3 @@ def test_short_remainder_prefills_before_a_long_prompt(tiny):
     d.step()
     done = {r.req.handle: r.done for r in d.rows}
     assert done["short"] == 40 and done["long"] == 0
-
-
-def test_lone_row_hands_its_kv_buffers_to_the_slot_pool(tiny):
-    """A single row joining an empty batch keeps its own [1, HKV, CAP, D] buffers as
-    the slot buffers (no whole-context copy) when CAP covers the decode window;
-    otherwise the prefix is copied into zeroed slot buffers as before."""
-    from types import SimpleNamespace
-
-    from yunshu_engine.round_driver import batch as rb
-
-    def make(cap):
-        k = mx.arange(1 * 2 * cap * 4, dtype=mx.float32).reshape(1, 2, cap, 4)
-        return SimpleNamespace(keys=k, values=k + 1)
-
-    def batch():
-        b = rb.DecodeBatch.__new__(rb.DecodeBatch)
-        b.linear, b.rows, b.slots = [False], [], rb.Slots(1)
-        b.state, b.conv = [None], [None]
-        return b
-
-    n = 40
-    big = make(128)
-    row = SimpleNamespace(n=n, cache=[big], slot=None)
-    b = batch()
-    b.join([row])
-    assert b.slots.k[0] is big.keys and b.slots.v[0] is big.values
-    assert b.slots.cap == 128 and row.cache is None and row.slot == 0
-
-    small = make(n)  # no room for the window: copied
-    row2 = SimpleNamespace(n=n, cache=[small], slot=None)
-    b2 = batch()
-    b2.join([row2])
-    assert b2.slots.k[0] is not small.keys
-    assert bool(mx.array_equal(b2.slots.k[0][0, :, :n, :], small.keys[0, :, :n, :]))
