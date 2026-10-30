@@ -329,3 +329,34 @@ def test_media_prompt_checkpoints_avoid_media_spans_and_hits_match_cold(tiny):
     # a restored prefix covers the whole placeholder span
     assert hit1 >= 120
     assert again == cold
+
+
+def test_deferred_checkpoints_stay_lazy_while_the_row_prefills(tiny):
+    """A lone row's captured checkpoints are not flushed at the start of its next prefill step (a
+    flush is a context-sized copy on the first-token path); they are published once the row has its
+    first token."""
+    from yunshu_engine.apc_manager import YunshuAPCManager
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    lm, _ = tiny
+    apc = YunshuAPCManager(
+        num_blocks=64,
+        block_size=16,
+        overrides={
+            "memory_max_gb": 1,
+            "checkpoint_entries": 4,
+            "checkpoint_interval_tokens": 256,
+        },
+    )
+    d = RoundDriver(lm, stop_tokens=set(), chunk=64, apc=apc)
+    d.add(Request(DOC, N, handle=object()))
+    captured_while_prefilling = 0
+    while d.busy() and d.rows[0].pending is None:
+        d.step()
+        if d.rows and d.rows[0].pending is None and d._deferred_apcs:
+            captured_while_prefilling += 1
+    assert (
+        captured_while_prefilling >= 1
+    )  # a checkpoint was captured and kept lazy mid-prefill
+    d.step()  # the first token was handed out: this step start flushes
+    assert not d._deferred_apcs

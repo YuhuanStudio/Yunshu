@@ -182,3 +182,66 @@ def test_pool_trace_logs_takes_and_offers(tmp_path, monkeypatch):
     import sys
 
     sys.meta_path[:] = [f for f in sys.meta_path if "Finder" not in type(f).__name__]
+
+
+def test_layer_checksum_probe_logs_input_and_output_sums(tmp_path, monkeypatch):
+    import types
+
+    import pytest
+
+    mx = pytest.importorskip("mlx.core")
+    out = tmp_path / "lsum.txt"
+    monkeypatch.setenv("PB2_LAYERSUM_OUT", str(out))
+    p = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/research/pb2_hook/sitecustomize.py"
+    )
+    spec = importlib.util.spec_from_file_location("pb2hook_lsum", p)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    class Layer:
+        def __call__(self, x, *args, **kw):
+            return x * 2
+
+    m.patch_layersum(types.SimpleNamespace(Qwen3_5DecoderLayer=Layer))
+    Layer()(mx.ones((1, 4, 3)))
+    Layer()(mx.ones((1, 1, 3)))  # a single row is not logged
+    lines = out.read_text().splitlines()
+    assert len(lines) == 1
+    assert "rows=4" in lines[0] and "in=12" in lines[0] and "out=24" in lines[0]
+    import sys
+
+    sys.meta_path[:] = [f for f in sys.meta_path if "Finder" not in type(f).__name__]
+
+
+def test_memory_holders_inventory_reads_known_retainers(tmp_path, monkeypatch):
+    import types
+
+    import pytest
+
+    pytest.importorskip("mlx.core")
+    monkeypatch.setenv("PB2_MEM_OUT", str(tmp_path / "mem.txt"))
+    p = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/research/pb2_hook/sitecustomize.py"
+    )
+    spec = importlib.util.spec_from_file_location("pb2hook_mem", p)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    gib = 1 << 30
+    runner = types.SimpleNamespace(
+        apc_manager=types.SimpleNamespace(resident_bytes=lambda: 3 * gib),
+        driver=None,
+        _aux_driver=None,
+    )
+    got = m.holders(runner)
+    assert got["apc_resident"] == 3.0
+    assert {"restore_pool", "replay_main", "dflash_windows"} <= set(got)
+    # a broken retainer is skipped, not fatal
+    runner.apc_manager = types.SimpleNamespace()
+    assert "apc_resident" not in m.holders(runner)
+    import sys
+
+    sys.meta_path[:] = [f for f in sys.meta_path if "Finder" not in type(f).__name__]

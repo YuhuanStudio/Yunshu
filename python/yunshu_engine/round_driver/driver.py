@@ -437,7 +437,16 @@ class RoundDriver:
         checkpoints), so a row restored at a checkpoint on the grid continues
         with the spans a cold prefill would have run."""
         a = self.atom(start)
-        end = min((start // a + 1) * a, len(row.req.ids))
+        n = len(row.req.ids)
+        end = min((start // a + 1) * a, n)
+        # The prompt's tail (the rows after its last 64-aligned boundary) always runs apart, as in
+        # main's absolute prompt steps (boundary = min(grid, (end - 1) // 64 * 64)): a cell that
+        # contains the boundary is cut there even when no checkpoint is planned (a short prompt, a
+        # request that stores nothing). Without this cut a 99-row prompt ran as ONE span on the
+        # long kernels where main runs 64 rows + a 35-row tail on the tail kernels.
+        limit = (n - 1) // 64 * 64
+        if start < limit < end:
+            end = limit
         for c in row.ckpts:
             if start < c < end:
                 end = c
@@ -713,7 +722,12 @@ class RoundDriver:
         mx.eval(*arrays)
 
     def step(self) -> list[Event]:
-        self.flush_checkpoints()  # the previous step's tokens have been handed out
+        # The previous step's tokens have been handed out: publish the captured checkpoints. While a
+        # row is still prefilling nothing has been handed out yet and the capture stays lazy (the
+        # runner flushes after the first token, as for the batch path): flushing at every prefill
+        # step start put a 32K checkpoint copy (~45 ms) in the middle of a rehearsal's prefill.
+        if all(r.pending is not None for r in self.rows):
+            self.flush_checkpoints()
         self._finish_join()
         if not self.rows:
             return []

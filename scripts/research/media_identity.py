@@ -46,7 +46,9 @@ def image_url(kind: int, size: int = 224, tall: int | None = None) -> str:
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-def chat(url: str, model: str, messages: list, max_tokens: int = 48) -> str:
+def chat(
+    url: str, model: str, messages: list, max_tokens: int = 48, logprobs: bool = False
+):
     body = {
         "model": model,
         "messages": messages,
@@ -55,6 +57,9 @@ def chat(url: str, model: str, messages: list, max_tokens: int = 48) -> str:
         "enable_thinking": False,
         "stream": False,
     }
+    if logprobs:
+        body["logprobs"] = True
+        body["top_logprobs"] = 5
     req = urllib.request.Request(
         url + "/v1/chat/completions",
         json.dumps(body).encode(),
@@ -62,7 +67,22 @@ def chat(url: str, model: str, messages: list, max_tokens: int = 48) -> str:
     )
     with urllib.request.urlopen(req, timeout=600) as r:
         data = json.loads(r.read())
-    return data["choices"][0]["message"]["content"]
+    choice = data["choices"][0]
+    if not logprobs:
+        return choice["message"]["content"]
+    steps = []
+    for item in (choice.get("logprobs") or {}).get("content") or []:
+        top = sorted(
+            (t["logprob"] for t in item.get("top_logprobs") or []), reverse=True
+        )
+        steps.append(
+            {
+                "token": item["token"],
+                "logprob": item["logprob"],
+                "gap": (top[0] - top[1]) if len(top) > 1 else None,
+            }
+        )
+    return {"text": choice["message"]["content"], "steps": steps}
 
 
 def image_msg(
@@ -133,6 +153,83 @@ def cells(url: str, model: str) -> dict:
     return out
 
 
+WIDE_QUESTIONS = [
+    "Describe where the red rectangle is in this image in one sentence.",
+    "What colour is the background? Answer in one short sentence.",
+    "Is the red shape on the left, right or in the middle? Explain briefly.",
+    "List the colours you can see in this image.",
+]
+
+
+def cells_wide(url: str, model: str, count: int) -> list:
+    """``count`` different small-image prompts with per-token logprobs (greedy): the input of the
+    cross-version comparison (media_wide_compare.py)."""
+    out = []
+    for i in range(count):
+        kind = i % 3
+        size = (192, 224, 256, 288)[(i // 3) % 4]
+        question = WIDE_QUESTIONS[(i // 12 + i) % len(WIDE_QUESTIONS)]
+        rec = chat(
+            url, model, image_msg(kind, question, size), max_tokens=40, logprobs=True
+        )
+        out.append({"kind": kind, "size": size, "question": question, **rec})
+    return out
+
+
+FILLER = (
+    "The harbour master keeps a ledger of every vessel: its name, cargo, draught and the hour it "
+    "crossed the breakwater. "
+)
+
+
+def cells_text_lengths(url: str, model: str, per_length: int) -> list:
+    """Text prompts of 65..~2000 tokens (several lengths, ``per_length`` variants each): prompts above
+    one 64-row block whose tail the driver used to merge into the previous span when no checkpoint was
+    planned (found with the layer-checksum probe)."""
+    out = []
+    for sentences in (4, 6, 10, 20, 40, 80, 160):
+        for v in range(per_length):
+            body = "".join(
+                FILLER.replace("harbour", f"harbour{v}") for _ in range(sentences)
+            )
+            text = (
+                body
+                + f"Variant {v}: in one sentence, what does the harbour master record?"
+            )
+            rec = chat(
+                url,
+                model,
+                [{"role": "user", "content": text}],
+                max_tokens=40,
+                logprobs=True,
+            )
+            out.append({"kind": sentences, "size": v, "question": text[-60:], **rec})
+    return out
+
+
+def cells_wide_text(url: str, model: str, count: int) -> list:
+    """Text-only prompts of the same shape as the wide image prompts (the control: whether the two
+    trees agree bit for bit on text where they do not on media)."""
+    out = []
+    topics = ("a harbor", "the moon", "a violin", "a glacier", "tea", "a lighthouse")
+    for i in range(count):
+        topic = topics[i % 6]
+        question = WIDE_QUESTIONS[(i // 6) % len(WIDE_QUESTIONS)]
+        text = (
+            f"Consider {topic} number {i}. In one or two sentences: "
+            + question.replace("this image", topic)
+        )
+        rec = chat(
+            url,
+            model,
+            [{"role": "user", "content": text}],
+            max_tokens=40,
+            logprobs=True,
+        )
+        out.append({"kind": i % 6, "size": 0, "question": text, **rec})
+    return out
+
+
 def cells_long(url: str, model: str, size: int, tall: int) -> dict:
     """A several-thousand-token image prompt: cold, repeat, beside text rows, follow-up turn; and a
     multi-image prompt (the frames of a video)."""
@@ -179,6 +276,33 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=18996)
     ap.add_argument("--expect-driver-media", action="store_true")
     ap.add_argument(
+        "--wide", type=int, default=0, help="N small-image prompts with logprobs"
+    )
+    ap.add_argument(
+        "--wide-text",
+        type=int,
+        default=0,
+        help="N text-only control prompts with logprobs",
+    )
+    ap.add_argument(
+        "--text-lengths",
+        type=int,
+        default=0,
+        help="N variants of each of 7 text prompt lengths (65..2000 tokens) with logprobs",
+    )
+    ap.add_argument(
+        "--probe",
+        action="store_true",
+        help="one image request, one token (layer probe)",
+    )
+    ap.add_argument(
+        "--probe-text",
+        type=int,
+        default=0,
+        metavar="SENTENCES",
+        help="with --probe: a text prompt of this many filler sentences instead of the image",
+    )
+    ap.add_argument(
         "--long",
         type=int,
         nargs=2,
@@ -223,11 +347,44 @@ def main() -> None:
         model = json.loads(
             urllib.request.urlopen(url + "/v1/models", timeout=10).read()
         )["data"][0]["id"]
+        if a.probe:
+            # one image request, one token: the layer-checksum probe (pb2_hook PB2_LAYERSUM_OUT)
+            if a.probe_text:
+                body = "".join(
+                    FILLER.replace("harbour", "harbour0") for _ in range(a.probe_text)
+                )
+                prompt = [
+                    {
+                        "role": "user",
+                        "content": body
+                        + "Variant 0: in one sentence, what does the harbour master record?",
+                    }
+                ]
+            else:
+                prompt = image_msg(0, WIDE_QUESTIONS[0])
+            text = chat(url, model, prompt, max_tokens=1)
+            a.out.write_text(json.dumps({"probe": text}))
+            print(json.dumps({"probe": text}), flush=True)
+            return
         result = {"model": model, "src": a.src, "cells": cells(url, model)}
         if a.long:
             result["cells"].update(cells_long(url, model, *a.long))
+        if a.wide:
+            result["wide"] = cells_wide(url, model, a.wide)
+        if a.wide_text:
+            result["wide_text"] = cells_wide_text(url, model, a.wide_text)
+        if a.text_lengths:
+            result["text_len"] = cells_text_lengths(url, model, a.text_lengths)
         engaged = b"Round driver: media prompt" in log.read_bytes()
         result["driver_media_engaged"] = engaged
+        if a.long:
+            import re
+
+            counts = [
+                int(n)
+                for n in re.findall(rb"media prompt (\d+) tokens", log.read_bytes())
+            ]
+            result["media_prompt_tokens_max"] = max(counts, default=0)
         a.out.write_text(json.dumps(result, indent=1, ensure_ascii=False))
         c = result["cells"]
         problems = []
@@ -255,13 +412,6 @@ def main() -> None:
             if c["text_solo"] != c["long_text_concurrent"]:
                 problems.append("text rows beside the long image row changed")
         if a.long and a.expect_driver_media:
-            import re
-
-            counts = [
-                int(n)
-                for n in re.findall(rb"media prompt (\d+) tokens", log.read_bytes())
-            ]
-            result["media_prompt_tokens_max"] = max(counts, default=0)
             if result["media_prompt_tokens_max"] < 2000:
                 problems.append("long image prompt is not several thousand tokens")
         if a.expect_driver_media and not engaged:

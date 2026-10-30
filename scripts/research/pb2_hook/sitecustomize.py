@@ -6,6 +6,7 @@ totals per (kind, rows) are rewritten to the json every 32 records. Same hook in
 both arms: eval-per-layer perturbs both equally.
 """
 
+import contextlib
 import importlib.abc
 import json
 import os
@@ -22,9 +23,42 @@ def summarize(acc):
     }
 
 
+LSUM = os.environ.get("PB2_LAYERSUM_OUT")
+
+
+def patch_layersum(mod):
+    """Log a checksum of every decoder layer's input and output (rows >= 2): the first layer call
+    whose output differs between two trees localizes an arithmetic difference."""
+    import mlx.core as mx
+
+    cls = mod.Qwen3_5DecoderLayer
+    orig = cls.__call__
+    count = [0]
+
+    def summed(self, x, *args, **kw):
+        out = orig(self, x, *args, **kw)
+        if x.ndim >= 2 and x.shape[-2] >= 2:
+            o = out[0] if isinstance(out, (tuple, list)) else out
+            fi, fo = x.astype(mx.float32), o.astype(mx.float32)
+            vals = mx.stack(
+                [mx.sum(fi), mx.max(mx.abs(fi)), mx.sum(fo), mx.max(mx.abs(fo))]
+            ).tolist()
+            with open(LSUM, "a") as f:
+                f.write(
+                    f"{count[0]} rows={x.shape[-2]} in={vals[0]:.9g} inmax={vals[1]:.9g} "
+                    f"out={vals[2]:.9g} outmax={vals[3]:.9g}\n"
+                )
+            count[0] += 1
+        return out
+
+    cls.__call__ = summed
+
+
 def patch(mod):
     import mlx.core as mx
 
+    if LSUM:
+        return patch_layersum(mod)
     cls = mod.Qwen3_5DecoderLayer
     orig = cls.__call__
     acc: dict = {}
@@ -168,7 +202,7 @@ if DRV_OUT:
 
     sys.meta_path.insert(0, _DrvFinder())
 
-if OUT:
+if OUT or LSUM:
     import importlib.util
 
     sys.meta_path.insert(0, _Finder())
@@ -332,6 +366,102 @@ def patch_runner(mod):
             "_admit_driver",
         ):
             wrap_tl(mod.VLMBatchRunner, name, f"runner.{name}")
+    if MEM_OUT:
+        wrap_mem(mod.VLMBatchRunner)
+
+
+MEM_OUT = os.environ.get("PB2_MEM_OUT")
+GIB = float(1 << 30)
+
+
+def holders(runner) -> dict:
+    """GiB held by the engine's known retainers (each guarded: a missing module is skipped)."""
+    out: dict = {}
+
+    def put(name, fn):
+        with contextlib.suppress(Exception):
+            out[name] = round(fn() / GIB, 4)
+
+    put("apc_resident", lambda: runner.apc_manager.resident_bytes())
+    from yunshu_engine.kernels import buffer_cache
+
+    put("restore_pool", buffer_cache.restore_buffer_bytes)
+    from yunshu_engine import dflash_apc_window, prompt_end_replay
+
+    put("replay_main", prompt_end_replay.resident_bytes)
+    put("dflash_windows", dflash_apc_window.resident_bytes)
+    try:
+        from yunshu_engine.round_driver import replay as driver_replay
+
+        put("replay_driver", driver_replay.resident_bytes)
+    except Exception:
+        pass
+    for name in ("driver", "_aux_driver"):
+        drv = getattr(runner, name, None)
+        if drv is not None:
+            put(
+                f"{name}_batch",
+                lambda drv=drv: sum(a.nbytes for a in drv.batch.arrays()),
+            )
+            put(
+                f"{name}_rows",
+                lambda drv=drv: sum(
+                    a.nbytes
+                    for r in drv.rows
+                    if r.cache
+                    for c in r.cache
+                    for a in (getattr(c, "keys", None), getattr(c, "values", None))
+                    if a is not None
+                ),
+            )
+    return out
+
+
+def wrap_mem(cls):
+    """Log mlx active / cache / peak memory and the known retainers around requests and every 4 s."""
+    import threading
+
+    import mlx.core as mx
+
+    state = {"runner": None, "thread": None}
+
+    def snap(tag):
+        r = state["runner"]
+        rec = {
+            "t": round(time.perf_counter(), 3),
+            "tag": tag,
+            "active": round(mx.get_active_memory() / GIB, 3),
+            "cache": round(mx.get_cache_memory() / GIB, 3),
+            "peak": round(mx.get_peak_memory() / GIB, 3),
+        }
+        rec.update(holders(r) if r is not None else {})
+        with open(MEM_OUT, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+
+    def tick():
+        while True:
+            time.sleep(4.0)
+            with contextlib.suppress(Exception):
+                snap("tick")
+
+    for name in ("_admit", "_drained"):
+        orig = getattr(cls, name)
+
+        def wrapped(self, *args, _orig=orig, _name=name, **kw):
+            state["runner"] = self
+            if state["thread"] is None:
+                state["thread"] = threading.Thread(target=tick, daemon=True)
+                state["thread"].start()
+            if _name == "_admit":
+                snap("admit")
+                mx.reset_peak_memory()
+            try:
+                return _orig(self, *args, **kw)
+            finally:
+                if _name == "_drained":
+                    snap("drained")
+
+        setattr(cls, name, wrapped)
 
 
 class _RunnerFinder(importlib.abc.MetaPathFinder):
