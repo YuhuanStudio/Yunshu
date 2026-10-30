@@ -37,6 +37,7 @@ from ..kernels.ragged_kv import _scatter_rows
 
 CAP_STEP = 512  # key capacity granularity (a multiple of the tile's 64)
 MAX_WINDOW = 8  # the tile kernel's token window
+DECODE_GROWTH = 2048  # most keys a slot buffer grows by at once (tree_verify.DECODE_STEP_CAP's headroom)
 
 
 def _round_cap(n: int) -> int:
@@ -96,7 +97,11 @@ class Slots:
     def reserve(self, keys: int) -> None:
         """Room for ``keys`` keys per slot."""
         if keys > self.cap:
-            self._resize(self.S, _round_cap(max(keys, self.cap * 5 // 4)))
+            # growth is a quarter of the capacity up to DECODE_GROWTH keys: a 32K row asks for 2K more keys,
+            # not 8K (a 25% jump left ~0.5 GiB of unused KV per 32K row, and the pooled buffer of a finished
+            # row kept it)
+            grow = min(max(self.cap // 4, CAP_STEP), DECODE_GROWTH)
+            self._resize(self.S, _round_cap(max(keys, self.cap + grow)))
 
     def _buf(self, i: int, like: mx.array) -> None:
         if self.k[i] is None:

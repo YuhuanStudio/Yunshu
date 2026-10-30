@@ -109,3 +109,19 @@ def test_decode_batch_rounds_equal_tree_forward_rounds_bit_for_bit(wide):
         a.batch.commit([1])
         tv.tree_commit(wide, row_b.cache, res, [0])
         mx.eval(a.batch.arrays())
+
+
+def test_slot_buffers_grow_by_at_most_two_thousand_keys():
+    """A 32K row that outgrows its slot buffer asks for ~2K more keys, not 25% (8K): the extra capacity is
+    resident KV for the whole decode and is pooled with the buffer when the row leaves."""
+    from yunshu_engine.round_driver.batch import DECODE_GROWTH, Slots
+
+    slots = Slots(2)
+    slots.reserve(32768)
+    first = slots.cap
+    slots.reserve(first + 1)
+    assert first < slots.cap <= first + DECODE_GROWTH + 512
+    small = Slots(2)
+    small.reserve(100)
+    small.reserve(small.cap + 1)
+    assert small.cap <= 2 * max(100, 512)
