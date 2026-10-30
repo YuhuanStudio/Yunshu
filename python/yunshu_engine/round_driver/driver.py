@@ -1015,7 +1015,11 @@ class RoundDriver:
         for it in items:
             if it.end in it.row.ckpts and not it.row.finished:
                 self._store_checkpoint(it.row, it.end)
+        gone = [r for r in self.rows if r.finished]
         self.rows = [r for r in self.rows if not r.finished]
+        # a request that ends at its first token (a rehearsal, max_tokens 1) leaves from here: its
+        # K/V buffers go to the restore pool like those of a row that decoded to its end
+        self._release(gone)
         joined = [
             r
             for r in advanced.values()

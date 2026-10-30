@@ -484,3 +484,23 @@ def test_media_row_dflash_matches_plain_decode_beside_text_rows(target):
     plain = run(False, [])
     assert run(True, []) == plain
     assert run(True, [other]) == plain
+
+
+def test_row_finishing_at_its_first_token_offers_its_kv_buffers(target):
+    """A request that ends in its prefill step (max_tokens 1, the next-turn rehearsal) pools its
+    K/V buffers too: the following cache hit restores into them."""
+    from yunshu_engine.kernels import buffer_cache
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    buffer_cache.clear_restore_buffers()
+    prev = dict(buffer_cache._STATE)
+    buffer_cache._STATE["limit"] = 1 << 30
+    try:
+        driver = RoundDriver(target, dflash_drafter=_draft(target), chunk=16)
+        driver.add(Request(list(range(4, 60)), 1, handle=object()))
+        while driver.busy():
+            driver.step()
+        assert buffer_cache.restore_buffer_bytes() > 0
+    finally:
+        buffer_cache.clear_restore_buffers()
+        buffer_cache._STATE.update(prev)
