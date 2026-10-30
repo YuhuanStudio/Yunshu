@@ -222,10 +222,69 @@ class _ReplayFinder(importlib.abc.MetaPathFinder):
         return spec
 
 
+POOL = "yunshu_engine.kernels.buffer_cache"
+
+
+def wrap_pool(mod):
+    """Log restore-pool traffic: offers (with the pooled byte count) and takes (hit or miss)."""
+
+    def log(line):
+        with open(TL_OUT, "a") as f:
+            f.write(f"{line} at {time.perf_counter():.4f}\n")
+
+    take = mod.take_restore_buffer
+
+    def timed_take(a, capacity):
+        out = take(a, capacity)
+        log(
+            f"pool.take {'hit' if out is not None else 'miss'} shape={tuple(a.shape)} cap={capacity} 0.0000"
+        )
+        return out
+
+    mod.take_restore_buffer = timed_take
+    offer_arrays = getattr(mod, "offer_arrays", None)
+    if offer_arrays is not None:
+
+        def timed_offer(arrays, *, aged=False):
+            ok = offer_arrays(arrays, aged=aged)
+            size = sum(a.nbytes for a in arrays if a is not None)
+            log(
+                f"pool.offer {'taken' if ok else 'refused'} bytes={size} limit={mod._STATE['limit']} 0.0000"
+            )
+            return ok
+
+        mod.offer_arrays = timed_offer
+    offer = mod.offer_restore_buffers
+
+    def timed_offer_caches(caches):
+        before = mod.restore_buffer_bytes()
+        offer(caches)
+        log(f"pool.offer_caches bytes {before}->{mod.restore_buffer_bytes()} 0.0000")
+
+    mod.offer_restore_buffers = timed_offer_caches
+
+
+class _PoolFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path, target=None):
+        if name != POOL:
+            return None
+        sys.meta_path.remove(self)
+        spec = importlib.util.find_spec(name)
+        orig_exec = spec.loader.exec_module
+
+        def exec_module(module):
+            orig_exec(module)
+            wrap_pool(module)
+
+        spec.loader.exec_module = exec_module
+        return spec
+
+
 if TL_OUT:
     import importlib.util
 
     sys.meta_path.insert(0, _ReplayFinder())
+    sys.meta_path.insert(0, _PoolFinder())
 RUNNER = "yunshu_engine.vlm_batch_runner"
 _TRACED = (
     "t_submit",

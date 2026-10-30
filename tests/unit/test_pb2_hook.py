@@ -146,3 +146,39 @@ def test_timeline_wrapper_keeps_static_and_class_methods(tmp_path, monkeypatch):
     import sys
 
     sys.meta_path[:] = [f for f in sys.meta_path if "Finder" not in type(f).__name__]
+
+
+def test_pool_trace_logs_takes_and_offers(tmp_path, monkeypatch):
+    import types
+
+    out = tmp_path / "pool.txt"
+    monkeypatch.setenv("PB2_TL_OUT", str(out))
+    p = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/research/pb2_hook/sitecustomize.py"
+    )
+    spec = importlib.util.spec_from_file_location("pb2hook_pool", p)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    class A:
+        shape = (1, 2, 8, 4)
+        nbytes = 100
+
+    mod = types.SimpleNamespace(
+        take_restore_buffer=lambda a, capacity: None if capacity > 8 else a,
+        offer_arrays=lambda arrays, aged=False: True,
+        offer_restore_buffers=lambda caches: None,
+        restore_buffer_bytes=lambda: 0,
+        _STATE={"limit": 123},
+    )
+    m.wrap_pool(mod)
+    assert mod.take_restore_buffer(A(), 16) is None
+    assert mod.take_restore_buffer(A(), 4) is not None
+    assert mod.offer_arrays([A(), A()]) is True
+    text = out.read_text()
+    assert "pool.take miss" in text and "pool.take hit" in text
+    assert "pool.offer taken bytes=200 limit=123" in text
+    import sys
+
+    sys.meta_path[:] = [f for f in sys.meta_path if "Finder" not in type(f).__name__]
