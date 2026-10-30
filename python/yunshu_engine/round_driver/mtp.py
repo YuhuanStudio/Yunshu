@@ -152,7 +152,12 @@ class MTPHead:
         [B * T, D]); keys go to positions ``hn .. hn + T - 1``. [B, T, D]."""
         d = self.drafter
         self.slots.reserve(max(r.hn for r in rows) + T + 1)
-        plan = KVPlan.make([r.hslot for r in rows], [r.hn for r in rows], T)
+        plan = KVPlan.make(
+            [r.hslot for r in rows],
+            [r.hn for r in rows],
+            T,
+            [r.req.rope_delta for r in rows],
+        )
         h = mx.concatenate(
             [d.pre_fc_norm_embedding(emb), d.pre_fc_norm_hidden(hid.astype(emb.dtype))],
             axis=-1,

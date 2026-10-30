@@ -277,6 +277,9 @@ class RoundDriver:
             and self.can_draft
             and not req.processors
             and (req.sampling is None or keyed is not None)
+            # an MTP head absorbs its prompt positions from the cache index: a media prompt's
+            # mRoPE positions are not carried into the head yet, so such a row decodes plainly
+            and not (req.embeds is not None and self.head is not None)
         )
         row = _Row(
             req=req,

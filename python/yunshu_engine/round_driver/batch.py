@@ -118,9 +118,14 @@ class KVPlan:
     index: dict = field(default_factory=dict)  # (H, cap) -> scatter index
 
     @classmethod
-    def make(cls, slots: list[int], n0: list[int], T: int) -> KVPlan:
+    def make(
+        cls, slots: list[int], n0: list[int], T: int, deltas: list[int] | None = None
+    ) -> KVPlan:
+        """``deltas``: per-row mRoPE offsets added to the window's rotary positions only (a media
+        prompt's ``rope_deltas``); keys, lengths and masks stay in cache indices."""
         n = np.asarray(n0, dtype=np.int64)
-        pos = n[:, None] + np.arange(T)[None, :]
+        shift = n if deltas is None else n + np.asarray(deltas, dtype=np.int64)
+        pos = shift[:, None] + np.arange(T)[None, :]
         lengths = n + T
         return cls(
             slot_ids=mx.array(slots, dtype=mx.int32),
@@ -321,7 +326,12 @@ class DecodeBatch:
             raise ValueError("decode window longer than the tile window")
         n0 = [r.n for r in self.rows]
         self.slots.reserve(max(n0) + T + 1)
-        plan = KVPlan.make([r.slot for r in self.rows], n0, T)
+        plan = KVPlan.make(
+            [r.slot for r in self.rows],
+            n0,
+            T,
+            [r.req.rope_delta for r in self.rows],
+        )
         pack = Pack(lens, T)
         lens_arr = mx.array(lens, dtype=mx.int32)
         x = model.embed_tokens(tokens)

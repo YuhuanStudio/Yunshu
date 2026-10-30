@@ -21,6 +21,7 @@ class Window:
     tokens: Any  # [1, W] int32
     shape: Any
     cache: list
+    rope_delta: int = 0  # the row's mRoPE decode offset (media prompts); 0 for text
 
 
 def forward(lm, windows: list[Window], capture_ids=(), *, verifier=None):
@@ -43,7 +44,13 @@ def forward(lm, windows: list[Window], capture_ids=(), *, verifier=None):
         w = windows[0]
         return [
             tv.tree_forward(
-                lm, w.tokens, w.shape, w.cache, capture_ids, verifier=verifier
+                lm,
+                w.tokens,
+                w.shape,
+                w.cache,
+                capture_ids,
+                verifier=verifier,
+                rope_delta=w.rope_delta,
             )
         ]
     if not tv.lane_projections(lm):
@@ -61,7 +68,7 @@ def forward(lm, windows: list[Window], capture_ids=(), *, verifier=None):
             raise ValueError("packed verify needs single-row lane caches")
         offsets.append((at, at + w.shape.width))
         at += w.shape.width
-        base = n0 + tv._rope_delta(lm)
+        base = n0 + w.rope_delta
         positions.append(
             mx.broadcast_to(
                 (base + w.shape.depth_array())[None, None], (3, 1, w.shape.width)

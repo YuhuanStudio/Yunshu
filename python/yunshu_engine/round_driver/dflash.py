@@ -248,7 +248,7 @@ class DFlashBatch:
                 b,
                 (mx.array([[r.pending]], dtype=mx.int32), tree_verify.TreeShape([-1])),
             )
-            windows.append(Window(tokens, shape, r.cache))
+            windows.append(Window(tokens, shape, r.cache, r.req.rope_delta))
         results = forward(self.lm, windows, self.capture_ids, verifier=self.verifier)
         draws = []
         committed_rows = set()

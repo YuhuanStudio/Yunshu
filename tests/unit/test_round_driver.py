@@ -765,3 +765,44 @@ def test_media_prompt_embeds_and_positions_match_the_token_path(tiny):
     gap = positions + (mx.arange(len(prompt)) >= 10).astype(mx.int32) * 7
     assert bool(mx.array_equal(hidden(positions), hidden(positions)))
     assert not bool(mx.array_equal(hidden(positions), hidden(gap)))
+
+
+def _media_row(lm, drafter, prompt, jump, delta, others=()):
+    """Tokens of a media-style row (embeddings + positions with a jump at index 10, decode offset
+    ``delta``) run through the driver, alone or beside text rows."""
+    from yunshu_engine.round_driver import driver as drv
+
+    positions = mx.tile(mx.arange(len(prompt), dtype=mx.int32)[None, :], (3, 1))
+    positions = positions + (mx.arange(len(prompt)) >= 10).astype(mx.int32) * jump
+    embeds = lm.model.embed_tokens(mx.array(prompt, dtype=mx.int32))
+    d = drv.RoundDriver(lm, drafter=drafter, stop_tokens=set())
+    d.add(
+        drv.Request(
+            prompt,
+            N,
+            handle="m",
+            embeds=embeds,
+            position_ids=positions,
+            rope_delta=delta,
+        )
+    )
+    for i, p in enumerate(others):
+        d.add(drv.Request(p, N, handle=f"o{i}"))
+    toks: dict = {}
+    while d.busy():
+        for e in d.step():
+            toks.setdefault(e.handle, []).append(e.token)
+    return toks["m"]
+
+
+def test_media_row_decode_positions_follow_the_row_delta(tiny):
+    """Per-row mRoPE offset in decode: a media row with a position jump keeps producing the same
+    tokens alone and beside text rows (which have offset 0), and the offset is consumed (a wrong
+    delta changes the continuation)."""
+    lm, drafter = tiny
+    prompt = PROMPTS[1]
+    alone = _media_row(lm, drafter, prompt, jump=7, delta=7)
+    beside = _media_row(lm, drafter, prompt, jump=7, delta=7, others=PROMPTS[2:3])
+    assert alone == beside
+    wrong = _media_row(lm, drafter, prompt, jump=7, delta=900)
+    assert wrong != alone

@@ -1056,8 +1056,10 @@ def _tree_forward(
     capture_ids=(),
     *,
     verifier=None,
+    rope_delta: int | None = None,
 ) -> TreeResult:
-    """Run the window through the decoder. ``tokens`` [1, W]."""
+    """Run the window through the decoder. ``tokens`` [1, W]. ``rope_delta`` is the row's
+    mRoPE decode offset (a media prompt's ``rope_deltas``); None reads the model's own."""
     from mlx_vlm.models.qwen3_5 import language as q35
 
     verifier = q35._EXACT_SPECULATIVE_VERIFIER if verifier is None else verifier
@@ -1071,7 +1073,7 @@ def _tree_forward(
     n0 = ragged_kv._lane_length(cache[model.fa_idx])
     if n0 is None:
         raise ValueError("tree verify needs the single-row lane cache")
-    base = n0 + _rope_delta(lm)
+    base = n0 + (_rope_delta(lm) if rope_delta is None else int(rope_delta))
     if shape.dynamic:
         pos = mx.broadcast_to((base + shape.depth_array())[None, None], (3, 1, w))
     else:
