@@ -222,9 +222,22 @@ def test_lone_row_checkpoints_are_deferred_then_flushed(tiny):
     a removed row's captures are discarded."""
     from yunshu_engine.round_driver.driver import Request, RoundDriver
 
+    from yunshu_engine.apc_manager import YunshuAPCManager
+
+    def yunshu_manager():
+        return YunshuAPCManager(
+            num_blocks=64,
+            block_size=16,
+            overrides={
+                "memory_max_gb": 1,
+                "checkpoint_entries": 4,
+                "checkpoint_interval_tokens": 256,
+            },
+        )
+
     lm, _ = tiny
-    ref = _run(lm, None, [DOC], _manager())[0][0]
-    apc = _manager()
+    ref = _run(lm, None, [DOC], yunshu_manager())[0][0]
+    apc = yunshu_manager()
     d = RoundDriver(lm, stop_tokens=set(), chunk=128, apc=apc)
     d.add(Request(DOC, N, handle=0))
     flushed = []
@@ -240,7 +253,7 @@ def test_lone_row_checkpoints_are_deferred_then_flushed(tiny):
     again = d.add(Request(DOC, N, handle=1))
     assert again >= len(DOC) - 1  # the deferred checkpoint was published
 
-    d2 = RoundDriver(lm, stop_tokens=set(), chunk=128, apc=_manager())
+    d2 = RoundDriver(lm, stop_tokens=set(), chunk=128, apc=yunshu_manager())
     d2.add(Request(DOC, N, handle="x"))
     while d2.busy() and not d2._deferred_apcs:
         d2.step()
