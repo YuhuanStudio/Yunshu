@@ -51,6 +51,10 @@ def _tiny():
     from scripts.research.phaseb_verify import tiny as verify_tiny
 
     lm, _ = verify_tiny()
+    # production serves with the dense-lane route off (a prompt tail turns it on for its own forward)
+    from yunshu_engine.kernels import ragged_kv
+
+    ragged_kv.set_dense_lane(False)
     cfg = dict(
         model_type="qwen3_5",
         hidden_size=256,
