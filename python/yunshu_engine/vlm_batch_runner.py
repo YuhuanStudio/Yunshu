@@ -1148,9 +1148,9 @@ class VLMBatchRunner:
         """The round driver is the path for every text request of a dense Qwen3.5-family
         model, one row or many, speculation on or off. Rows it cannot draft for
         (processors, constraints, non-invariant guides) still decode in it, one token a
-        round through their own processors. Media prompts keep the stock runner (their
-        prompt embeddings carry mRoPE positions the driver does not pack)."""
-        return self.driver is not None and job.prompt_kwargs is None
+        round through their own processors. Media prompts ride in it as prompt embeddings
+        plus mRoPE positions and a per-row decode offset (``_media_request``)."""
+        return self.driver is not None
 
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state
@@ -1538,6 +1538,51 @@ class VLMBatchRunner:
         return True
 
     # ── round driver ────────────────────────────────────────────────────
+    #: prompt-kwarg keys a driver row consumes; any other non-None feature the model's
+    #: ``get_input_embeddings`` produced (deepstack features, cross attention, ...) is not
+    #: carried by the driver and must not be dropped silently
+    _MEDIA_KWARGS_USED = frozenset({"inputs_embeds", "position_ids", "rope_deltas"})
+    _MEDIA_KWARGS_FEATURES = frozenset(
+        {
+            "attention_mask_4d",
+            "visual_pos_masks",
+            "deepstack_visual_embeds",
+            "per_layer_inputs",
+            "cross_attention_states",
+            "cross_attention_mask",
+            "full_text_row_masked_out_mask",
+            "decoder_inputs_embeds",
+            "attention_mask",
+            "pos_hw",
+        }
+    )
+
+    def _media_request(self, job: _Job) -> dict:
+        """The driver ``Request`` fields of a media prompt: its embeddings (visual features
+        already scattered in), mRoPE positions and decode offset. Text prompts: nothing."""
+        pkw = job.prompt_kwargs
+        if pkw is None:
+            return {}
+        unsupported = sorted(
+            k for k in self._MEDIA_KWARGS_FEATURES if pkw.get(k) is not None
+        )
+        if unsupported:
+            raise ValueError(
+                f"round driver: prompt features {unsupported} are not carried (media model)"
+            )
+        embeds = pkw.get("inputs_embeds")
+        if embeds is None:
+            return {}
+        pos = pkw.get("position_ids")
+        rd = pkw.get("rope_deltas")
+        return {
+            "embeds": embeds[0],
+            "position_ids": None if pos is None else pos[:, 0, :],
+            "rope_delta": 0
+            if rd is None
+            else int(round(float(rd.reshape(-1)[0].item()))),
+        }
+
     def _admit_driver(self, job: _Job, use_apc: bool) -> None:
         from .round_driver.driver import Request
 
@@ -1571,8 +1616,10 @@ class VLMBatchRunner:
                 else vocab.set_context(job.ids)
             )
             logger.info("Round driver: draft vocabulary context +%s ids", extra)
+        media = self._media_request(job)
         hit = driver.add(
             Request(
+                **media,
                 ids=job.ids,
                 max_tokens=job.max_tokens,
                 sampling=job.sampling,
@@ -1588,7 +1635,11 @@ class VLMBatchRunner:
                 guide=job.guide if self._driver_guide(job) else None,
                 budget=job.budget,
                 handle=job,
-                extra_hash=self.apc_semantic_hash or 0,
+                extra_hash=(
+                    job.salt
+                    if job.prompt_kwargs is not None and job.salt is not None
+                    else self.apc_semantic_hash or 0
+                ),
                 use_apc=use_apc,
                 cache_store=job.cache_store,
             )
