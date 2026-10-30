@@ -165,10 +165,41 @@ def test_cancel_drops_prefill_capture_and_live_ring(target):
     while driver.rows[0].pending is None:
         driver.step()
     live = driver.rows[0]
+    # the first token is out; the decode-batch join (which builds the ring) runs at the next step
+    assert id(live) not in driver.dflash.rings and id(live) in driver.dflash.hidden
+    driver.step()
     assert id(live) in driver.dflash.rings
     driver.remove(b)
     assert not driver.busy()
     assert not driver.dflash.hidden and not driver.dflash.rings
+
+
+def test_cancel_between_the_first_token_and_the_deferred_join_leaks_nothing(
+    target, monkeypatch
+):
+    """A row cancelled after its first token but before its (deferred) join keeps no capture
+    window and never gets a ring; with ``dflash.leave`` broken the same sequence DOES leak, so
+    the assertions can fail on a real cancel leak."""
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    def run(break_leave):
+        driver = RoundDriver(target, dflash_drafter=_draft(target), chunk=16)
+        a = object()
+        driver.add(Request(list(range(4, 60)), 20, handle=a))
+        while driver.rows[0].pending is None:
+            driver.step()
+        assert len(driver._pending_join) == 1
+        if break_leave:
+            monkeypatch.setattr(driver.dflash, "leave", lambda gone: None)
+        driver.remove(a)
+        driver.step()  # the deferred join must skip the removed row
+        return driver
+
+    clean = run(False)
+    assert not clean.busy() and not clean.batch.rows and not clean._pending_join
+    assert not clean.dflash.hidden and not clean.dflash.rings
+    leaked = run(True)
+    assert leaked.dflash.hidden  # the negative control: a broken leave() is caught
 
 
 def test_more_than_node_budget_still_advances_every_row(monkeypatch):
@@ -392,3 +423,23 @@ def test_plain_verify_driver_without_a_drafter_equals_drafting_rows(target, samp
         assert steps < 200
     assert got == want
     assert driver.drafted == 0
+
+
+def test_last_finished_row_offers_its_kv_buffers_to_the_restore_pool(target):
+    """With the DFlash batch the row decodes in its own caches: when the last row finishes its K/V
+    buffers go to the restore pool (a following cache hit restores into them)."""
+    from yunshu_engine.kernels import buffer_cache
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    buffer_cache.clear_restore_buffers()
+    prev = dict(buffer_cache._STATE)
+    buffer_cache._STATE["limit"] = 1 << 30
+    try:
+        driver = RoundDriver(target, dflash_drafter=_draft(target), chunk=16)
+        driver.add(Request(list(range(4, 60)), 6, handle=object()))
+        while driver.busy():
+            driver.step()
+        assert buffer_cache.restore_buffer_bytes() > 0
+    finally:
+        buffer_cache.clear_restore_buffers()
+        buffer_cache._STATE.update(prev)
