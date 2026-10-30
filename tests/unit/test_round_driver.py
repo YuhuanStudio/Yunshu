@@ -818,3 +818,52 @@ def test_media_row_drafts_with_the_mtp_head_and_matches_plain_decode(tiny):
     assert drafted == plain
     beside = _media_row(lm, drafter, prompt, jump=7, delta=7, others=PROMPTS[2:3])
     assert beside == plain
+
+
+def test_prompt_tail_runs_apart_even_without_a_checkpoint(tiny, monkeypatch):
+    """A prompt whose grid cell contains its last 64-aligned boundary is cut there with no checkpoint
+    planned (main's absolute prompt steps do the same): 99 rows run as 64 + a 35-row tail, not as one
+    99-row span. The media-prompt probe (lp3) found the driver running it as one span: first-token
+    logprobs differed from main in 43 of 46 prompts while text prompts below 64 rows were identical."""
+    from types import SimpleNamespace
+
+    from yunshu_engine.round_driver import driver as drv
+
+    d = drv.RoundDriver.__new__(drv.RoundDriver)
+    d.chunk = 512
+    d.long_from, d.long_chunk = 1 << 60, 2048
+
+    def plan(n, ckpts=()):
+        row = SimpleNamespace(
+            req=SimpleNamespace(ids=list(range(n))), ckpts=list(ckpts)
+        )
+        spans, at = [], 0
+        while at < n:
+            end = d._run_end(row, at, 2048)
+            spans.append((at, end))
+            at = end
+        return spans
+
+    assert plan(99) == [(0, 64), (64, 99)]
+    assert plan(64) == [(0, 64)]  # nothing after the boundary: no tail
+    assert plan(65) == [(0, 64), (64, 65)]
+    assert plan(30) == [(0, 30)]  # below one block: a single span, as before
+    assert plan(1100) == [(0, 1088), (1088, 1100)]
+    # a planned checkpoint on the boundary gives the same plan
+    assert plan(99, [64]) == [(0, 64), (64, 99)]
+
+    lm, _ = tiny
+    lengths: list[int] = []
+    real = drv.lane_forward
+
+    def spy(model, seg, **kw):
+        lengths.append(seg.length)
+        return real(model, seg, **kw)
+
+    monkeypatch.setattr(drv, "lane_forward", spy)
+    drv2 = drv.RoundDriver(lm, stop_tokens=set(), chunk=512)
+    drv2.add(
+        drv.Request([(7 * i + 1) % 500 for i in range(99)], 2, handle=0, use_apc=False)
+    )
+    drv2.step()
+    assert lengths == [64, 35]

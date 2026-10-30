@@ -437,7 +437,16 @@ class RoundDriver:
         checkpoints), so a row restored at a checkpoint on the grid continues
         with the spans a cold prefill would have run."""
         a = self.atom(start)
-        end = min((start // a + 1) * a, len(row.req.ids))
+        n = len(row.req.ids)
+        end = min((start // a + 1) * a, n)
+        # The prompt's tail (the rows after its last 64-aligned boundary) always runs apart, as in
+        # main's absolute prompt steps (boundary = min(grid, (end - 1) // 64 * 64)): a cell that
+        # contains the boundary is cut there even when no checkpoint is planned (a short prompt, a
+        # request that stores nothing). Without this cut a 99-row prompt ran as ONE span on the
+        # long kernels where main runs 64 rows + a 35-row tail on the tail kernels.
+        limit = (n - 1) // 64 * 64
+        if start < limit < end:
+            end = limit
         for c in row.ckpts:
             if start < c < end:
                 end = c
