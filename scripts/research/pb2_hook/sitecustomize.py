@@ -699,6 +699,15 @@ def patch_apc(mod):
             # cProfile cannot nest (Python 3.12+): only the outermost APC call is profiled
             outer = not depth[0] and not os.environ.get("PB2_APC_NOPROF")
             prof = cProfile.Profile() if outer else None
+            if name == "lookup" and os.environ.get("PB2_APC_SYNC") and not depth[0]:
+                # GPU work still queued when the lookup starts is billed to its clone's eval: wait for
+                # it first and log the wait separately
+                import mlx.core as mx
+
+                ts = time.perf_counter()
+                mx.synchronize()
+                with open(APC_OUT, "a") as f:
+                    f.write(f"apc.sync_before_lookup {time.perf_counter() - ts:.4f}\n")
             t0 = time.perf_counter()
             depth[0] += 1
             if prof is not None:
