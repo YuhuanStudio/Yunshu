@@ -214,3 +214,36 @@ def test_exact_repeat_replays_the_final_block(tiny, draft):
     assert replay.stats()["replayed"] == 1
     assert first[0] == ref and again[0] == ref
     replay.clear()
+
+
+def test_lone_row_checkpoints_are_deferred_then_flushed(tiny):
+    """A lone row's checkpoint stores are captured (not copied) inside its prefill step and
+    published by flush_checkpoints; a request added afterwards hits them and matches a cold run;
+    a removed row's captures are discarded."""
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    lm, _ = tiny
+    ref = _run(lm, None, [DOC], _manager())[0][0]
+    apc = _manager()
+    d = RoundDriver(lm, stop_tokens=set(), chunk=128, apc=apc)
+    d.add(Request(DOC, N, handle=0))
+    flushed = []
+    real = d.flush_checkpoints
+    d.flush_checkpoints = lambda: (flushed.append(len(d._deferred_apcs)), real())
+    out = []
+    while d.busy():
+        out += [e.token for e in d.step()]
+    assert out == ref
+    assert any(n for n in flushed)  # something was captured and later flushed
+    d.flush_checkpoints = real
+    d.flush_checkpoints()
+    again = d.add(Request(DOC, N, handle=1))
+    assert again >= len(DOC) - 1  # the deferred checkpoint was published
+
+    d2 = RoundDriver(lm, stop_tokens=set(), chunk=128, apc=_manager())
+    d2.add(Request(DOC, N, handle="x"))
+    while d2.busy() and not d2._deferred_apcs:
+        d2.step()
+    assert d2._deferred_apcs
+    d2.remove("x")
+    assert not d2._deferred_apcs

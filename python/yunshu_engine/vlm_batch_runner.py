@@ -1655,6 +1655,11 @@ class VLMBatchRunner:
                 stats.finish_reason = event.finish
                 self._driver_jobs.pop(id(job), None)
                 self._emit(job, _DONE)
+        if events:
+            # the first tokens are out: evaluate the captured APC checkpoints now
+            for driver in (self.driver, self._aux_driver):
+                if driver is not None:
+                    driver.flush_checkpoints()
 
     def _finish(self, group: _Group, uid: int, reason: str | None) -> None:
         job = group.jobs.pop(uid, None)

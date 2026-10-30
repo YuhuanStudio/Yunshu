@@ -284,7 +284,14 @@ class DecodeBatch:
             self.state = [None] * len(self.linear)
             self.conv = [None] * len(self.linear)
             # an idle batch holds no KV: the next rows size the buffers to
-            # themselves, not to the longest row ever served
+            # themselves, not to the longest row ever served. A one-slot pool's buffers
+            # go to the restore pool (the next request's cache hit overwrites them in
+            # place instead of allocating a fresh context-sized buffer), as the other
+            # runner paths offer a finished request's buffers.
+            if self.slots.S == 1:
+                from ..kernels import buffer_cache
+
+                buffer_cache.offer_arrays(self.slots.arrays())
             self.slots = Slots(len(self.linear))
             return
         sel = mx.array(keep, dtype=mx.int32)

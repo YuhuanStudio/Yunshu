@@ -221,6 +221,7 @@ class RoundDriver:
                 self.apc = coordinator
                 self._apc_manager = apc
         self.rows: list[_Row] = []
+        self._deferred_apcs: list = []  # coordinators holding captured, unflushed checkpoints
         self.cost = CostCurve()
         self.steps = 0
         self.drafted = 0
@@ -244,6 +245,7 @@ class RoundDriver:
         """Queue a row; returns the prompt tokens restored from the APC."""
         if len(req.ids) < 1:
             raise ValueError("round driver: empty prompt")
+        self.flush_checkpoints()  # a lookup must see what earlier requests captured
         keyed = None
         if (
             req.sampling is not None
@@ -477,13 +479,39 @@ class RoundDriver:
         caches = list(row.cache)
         if row.mtp_cache is not None:
             caches += row.mtp_cache
+        apc = row.apc
+        # A lone row captures its checkpoint as lazy detached arrays and the copy is
+        # evaluated by flush_checkpoints after its first token is out (the runner's
+        # single-job protocol): the copy no longer sits on the first-token path.
+        defer = len(self.rows) == 1 and hasattr(apc, "flush_deferred_checkpoints")
         try:
-            row.apc.store_checkpoint(row.req.ids[:end], caches, extra_hash=row.salt)
+            if defer:
+                apc.defer_checkpoint_stores = True
+            apc.store_checkpoint(row.req.ids[:end], caches, extra_hash=row.salt)
+            if defer and apc not in self._deferred_apcs:
+                self._deferred_apcs.append(apc)
         except Exception:
             logger.warning("APC checkpoint store failed", exc_info=True)
+        finally:
+            if defer:
+                apc.defer_checkpoint_stores = False
+
+    def flush_checkpoints(self) -> None:
+        """Evaluate and publish the captured checkpoints (after the step's tokens were emitted)."""
+        pending, self._deferred_apcs = self._deferred_apcs, []
+        for apc in pending:
+            try:
+                apc.flush_deferred_checkpoints()
+            except Exception:
+                logger.warning("APC deferred checkpoint flush failed", exc_info=True)
 
     def remove(self, handle: Any) -> None:
         gone = [r for r in self.rows if r.req.handle is handle]
+        for r in gone:  # a cancelled prefill drops its captures, as the runner does
+            apc = getattr(r, "apc", None)
+            if apc is not None and apc in self._deferred_apcs:
+                apc.discard_deferred_checkpoints()
+                self._deferred_apcs.remove(apc)
         self.rows = [r for r in self.rows if r.req.handle is not handle]
         self._release(gone)
         if self.dflash is not None:
@@ -619,6 +647,7 @@ class RoundDriver:
 
     # ── one step ─────────────────────────────────────────────────────────
     def step(self) -> list[Event]:
+        self.flush_checkpoints()  # the previous step's tokens have been handed out
         if not self.rows:
             return []
         if self.dflash is not None:

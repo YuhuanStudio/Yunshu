@@ -549,3 +549,29 @@ def test_short_remainder_prefills_before_a_long_prompt(tiny):
     d.step()
     done = {r.req.handle: r.done for r in d.rows}
     assert done["short"] == 40 and done["long"] == 0
+
+
+def test_finished_lone_slot_buffers_go_to_the_restore_pool(tiny):
+    """When the last row leaves a one-slot batch its K/V buffers are offered to the restore
+    pool (a later cache hit overwrites them) instead of just being dropped."""
+    from types import SimpleNamespace
+
+    from yunshu_engine.kernels import buffer_cache
+    from yunshu_engine.round_driver import batch as rb
+
+    buffer_cache.clear_restore_buffers()
+    prev = dict(buffer_cache._STATE)
+    buffer_cache._STATE["limit"] = 1 << 30
+    try:
+        b = rb.DecodeBatch.__new__(rb.DecodeBatch)
+        b.linear, b.rows, b.slots = [False], [], rb.Slots(1)
+        b.state, b.conv = [None], [None]
+        k = mx.zeros((1, 2, 64, 4), dtype=mx.float32)
+        row = SimpleNamespace(n=8, cache=[SimpleNamespace(keys=k, values=k)], slot=None)
+        b.join([row])
+        buffer_cache.clear_restore_buffers()
+        b.leave([row])
+        assert buffer_cache.restore_buffer_bytes() > 0 and not b.slots.arrays()
+    finally:
+        buffer_cache.clear_restore_buffers()
+        buffer_cache._STATE.update(prev)

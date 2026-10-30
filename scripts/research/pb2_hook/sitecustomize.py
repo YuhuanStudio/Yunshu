@@ -250,15 +250,19 @@ def patch_apc(mod):
             depth[0] += 1
             if prof is not None:
                 prof.enable()
+            result = "raised"
             try:
-                return orig(*args, **kw)
+                result = orig(*args, **kw)
+                return result
             finally:
                 depth[0] -= 1
                 if prof is not None:
                     prof.disable()
                 dur = time.perf_counter() - t0
+                shown = result if isinstance(result, (bool, type(None))) else type(result).__name__
+                n_ids = len(args[1]) if len(args) > 1 and hasattr(args[1], "__len__") else 0
                 with open(APC_OUT, "a") as f:
-                    f.write(f"apc.{name} {dur:.4f} at {t0:.4f}\n")
+                    f.write(f"apc.{name} {dur:.4f} at {t0:.4f} ret={shown} n={n_ids}\n")
                     if prof is not None and dur > 0.02:
                         buf = io.StringIO()
                         stats = pstats.Stats(prof, stream=buf)

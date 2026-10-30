@@ -61,20 +61,30 @@ def offer_restore_buffers(caches) -> None:
     _age_pool()
     candidates = [c for c in caches if type(c) in (KVCache, BatchKVCache)]
     arrays = [a for c in candidates for a in (c.keys, c.values)]
-    if not arrays or any(a is None for a in arrays):
+    if not offer_arrays(arrays, aged=True):
         return
-    size = sum(a.nbytes for a in arrays)
-    if not restore_buffer_bytes() < size <= _STATE["limit"]:
-        return
-    _RESTORE_BUFFERS[:] = arrays
-    _STATE["idle_offers"] = 0
-    _STATE["pool_used"] = False
     for c in candidates:
         c.keys = c.values = None
+
+
+def offer_arrays(arrays, *, aged: bool = False) -> bool:
+    """Pool ``arrays`` (one finished request's K/V buffers) for a later restore; the caller drops
+    its own references when this returns True. ``aged`` says the pool was already aged for this finish."""
+    if not aged:
+        _age_pool()
+    if not arrays or any(a is None for a in arrays):
+        return False
+    size = sum(a.nbytes for a in arrays)
+    if not restore_buffer_bytes() < size <= _STATE["limit"]:
+        return False
+    _RESTORE_BUFFERS[:] = list(arrays)
+    _STATE["idle_offers"] = 0
+    _STATE["pool_used"] = False
     _restore_pool_limit()
     # MLX enforces a reduced cache limit on the next allocation, not at
     # set_cache_limit. Reclaim now so idle storage + allocator stay bounded.
     mx.eval(mx.empty((1,), dtype=mx.uint8))
+    return True
 
 
 def take_restore_buffer(a, capacity):
