@@ -25,3 +25,29 @@ def test_long_image_and_multi_image_messages():
     msg = m.multi_image_msg([0, 1, 2], "q")
     kinds = [p["type"] for p in msg[0]["content"]]
     assert kinds == ["image_url", "image_url", "image_url", "text"]
+
+
+def test_wide_compare_separates_near_ties_from_suspects():
+    from importlib.util import module_from_spec, spec_from_file_location
+
+    p = Path(__file__).resolve().parents[2] / "scripts/research/media_wide_compare.py"
+    spec = spec_from_file_location("media_wide_compare", p)
+    m = module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    def steps(tokens, gaps):
+        return [
+            {"token": t, "logprob": -0.1, "gap": g}
+            for t, g in zip(tokens, gaps, strict=True)
+        ]
+
+    same = {"steps": steps("abc", [2, 2, 2])}
+    out = m.compare([same, same, same], [same, same, same])
+    assert out["flips"] == 0 and not out["suspects"]
+    near_b = {"steps": steps("abc", [2, 0.1, 2])}
+    near_c = {"steps": steps("axc", [2, 0.2, 2])}
+    out = m.compare([near_b], [near_c])
+    assert out["flips"] == 1 and out["rows"][0]["near_tie"] and not out["suspects"]
+    far_c = {"steps": steps("axc", [2, 3.0, 2])}
+    out = m.compare([near_b], [far_c])
+    assert len(out["suspects"]) == 1  # a confident token in one arm is not a near tie

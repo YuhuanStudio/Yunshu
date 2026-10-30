@@ -46,7 +46,9 @@ def image_url(kind: int, size: int = 224, tall: int | None = None) -> str:
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-def chat(url: str, model: str, messages: list, max_tokens: int = 48) -> str:
+def chat(
+    url: str, model: str, messages: list, max_tokens: int = 48, logprobs: bool = False
+):
     body = {
         "model": model,
         "messages": messages,
@@ -55,6 +57,9 @@ def chat(url: str, model: str, messages: list, max_tokens: int = 48) -> str:
         "enable_thinking": False,
         "stream": False,
     }
+    if logprobs:
+        body["logprobs"] = True
+        body["top_logprobs"] = 5
     req = urllib.request.Request(
         url + "/v1/chat/completions",
         json.dumps(body).encode(),
@@ -62,7 +67,22 @@ def chat(url: str, model: str, messages: list, max_tokens: int = 48) -> str:
     )
     with urllib.request.urlopen(req, timeout=600) as r:
         data = json.loads(r.read())
-    return data["choices"][0]["message"]["content"]
+    choice = data["choices"][0]
+    if not logprobs:
+        return choice["message"]["content"]
+    steps = []
+    for item in (choice.get("logprobs") or {}).get("content") or []:
+        top = sorted(
+            (t["logprob"] for t in item.get("top_logprobs") or []), reverse=True
+        )
+        steps.append(
+            {
+                "token": item["token"],
+                "logprob": item["logprob"],
+                "gap": (top[0] - top[1]) if len(top) > 1 else None,
+            }
+        )
+    return {"text": choice["message"]["content"], "steps": steps}
 
 
 def image_msg(
@@ -130,6 +150,29 @@ def cells(url: str, model: str) -> dict:
     ]
     out["image_a_followup"] = chat(url, model, history)
     out["image_a_followup_repeat"] = chat(url, model, history)
+    return out
+
+
+WIDE_QUESTIONS = [
+    "Describe where the red rectangle is in this image in one sentence.",
+    "What colour is the background? Answer in one short sentence.",
+    "Is the red shape on the left, right or in the middle? Explain briefly.",
+    "List the colours you can see in this image.",
+]
+
+
+def cells_wide(url: str, model: str, count: int) -> list:
+    """``count`` different small-image prompts with per-token logprobs (greedy): the input of the
+    cross-version comparison (media_wide_compare.py)."""
+    out = []
+    for i in range(count):
+        kind = i % 3
+        size = (192, 224, 256, 288)[(i // 3) % 4]
+        question = WIDE_QUESTIONS[(i // 12 + i) % len(WIDE_QUESTIONS)]
+        rec = chat(
+            url, model, image_msg(kind, question, size), max_tokens=40, logprobs=True
+        )
+        out.append({"kind": kind, "size": size, "question": question, **rec})
     return out
 
 
@@ -226,6 +269,8 @@ def main() -> None:
         result = {"model": model, "src": a.src, "cells": cells(url, model)}
         if a.long:
             result["cells"].update(cells_long(url, model, *a.long))
+        if a.wide:
+            result["wide"] = cells_wide(url, model, a.wide)
         engaged = b"Round driver: media prompt" in log.read_bytes()
         result["driver_media_engaged"] = engaged
         if a.long:
