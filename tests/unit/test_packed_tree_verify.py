@@ -28,7 +28,17 @@ def test_solo_delegates_exact_lane(monkeypatch):
     )
     w = pv.Window(np.ones((1, 2)), SimpleNamespace(width=2), [])
     assert pv.forward("lm", [w], (1,), verifier="v") == [marker]
-    assert calls == [(("lm", w.tokens, w.shape, w.cache, (1,)), {"verifier": "v"})]
+    # the row's mRoPE decode offset travels explicitly (0 for text), not through the model global
+    assert calls == [
+        (
+            ("lm", w.tokens, w.shape, w.cache, (1,)),
+            {"verifier": "v", "rope_delta": 0},
+        )
+    ]
+    calls.clear()
+    media = pv.Window(np.ones((1, 2)), SimpleNamespace(width=2), [], rope_delta=-60)
+    pv.forward("lm", [media], (1,), verifier="v")
+    assert calls[0][1] == {"verifier": "v", "rope_delta": -60}
 
 
 @pytest.mark.parametrize("bad", ["width", "budget", "alias"])

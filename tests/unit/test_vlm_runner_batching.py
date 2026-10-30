@@ -286,6 +286,12 @@ class FakeDriver:
     def busy(self):
         return bool(self.rows)
 
+    def flush_checkpoints(self):
+        """The runner publishes captured APC checkpoints after emitting a step's tokens."""
+
+    def planned_checkpoints(self, handle):
+        return None
+
     def step(self):
         from yunshu_engine.round_driver.driver import Event
 

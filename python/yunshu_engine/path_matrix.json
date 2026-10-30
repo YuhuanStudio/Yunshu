@@ -1702,14 +1702,6 @@
       "module": "python/yunshu_engine/kernels/qwen4_gdn.py",
       "what": "oMLX Qwen4 fused GDN verify plan + deferred rollback for the qwen4_exp layer loop (default)",
       "cells": {
-        "mtp": {
-          "s": "na",
-          "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
-        },
-        "dflash": {
-          "s": "na",
-          "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
-        },
         "batch": {
           "s": "na",
           "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
@@ -1737,14 +1729,6 @@
       "module": "python/yunshu_engine/qwen4_rowqsa.py",
       "what": "Qwen4 padded batched sparse QSA decode with singleton fallback",
       "cells": {
-        "mtp": {
-          "s": "na",
-          "why": "Qwen4 QSA is specific to the generic VLM family"
-        },
-        "dflash": {
-          "s": "na",
-          "why": "Qwen4 QSA is specific to the generic VLM family"
-        },
         "batch": {
           "s": "na",
           "why": "Qwen4 QSA is specific to the generic VLM family"
