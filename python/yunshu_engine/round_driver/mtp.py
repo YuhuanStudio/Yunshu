@@ -57,10 +57,16 @@ class MTPHead:
 
     # ── one packed head forward over rows ────────────────────────────────
     def _forward(
-        self, caches: list[list], tokens: list[mx.array], hidden: list[mx.array]
+        self,
+        caches: list[list],
+        tokens: list[mx.array],
+        hidden: list[mx.array],
+        positions: list[mx.array | None] | None = None,
     ) -> list[mx.array]:
         """Each row's ``tokens`` [n] with target-side ``hidden`` [n, D] through
-        the head; returns each row's head output [n, D] (after its norm)."""
+        the head; returns each row's head output [n, D] (after its norm).
+        ``positions``: per row the [3, n] mRoPE positions of a media prompt chunk
+        (None: the cache index, a text row)."""
         d = self.drafter
         lengths = [int(t.shape[0]) for t in tokens]
         emb = self.embed(mx.concatenate(tokens).astype(mx.int32))
@@ -74,13 +80,14 @@ class MTPHead:
             at = layer.self_attn
             q, k, v = at.q_proj(xn), at.k_proj(xn), at.v_proj(xn)
             parts, s = [], 0
-            for cache, n in zip(caches, lengths, strict=True):
+            for b, (cache, n) in enumerate(zip(caches, lengths, strict=True)):
+                pos = None if positions is None else positions[b]
                 queries, keys, values, gate, _ = at._prepare_projected_qkv(
                     q[:, s : s + n],
                     k[:, s : s + n],
                     v[:, s : s + n],
                     cache[li],
-                    None,
+                    None if pos is None else pos[:, None, :],
                     None,
                     None,
                 )
@@ -106,19 +113,18 @@ class MTPHead:
         return res
 
     # ── prompt chunks: per row, on the row's own KV ─────────────────────
-    def absorb_prompt(
-        self, rows: list[tuple[Any, list[int], mx.array]]
-    ) -> list[mx.array]:
+    def absorb_prompt(self, rows: list[tuple]) -> list[mx.array]:
         """``rows``: (row state with ``mtp_cache``, next tokens, target hidden
-        [n, D]) of prompt chunks — position ``p`` pairs token ``p + 1`` with
-        hidden ``p``. Returns each row's head output at its last absorbed
-        position [D]."""
+        [n, D][, mRoPE positions [3, n] of a media chunk]) of prompt chunks —
+        position ``p`` pairs token ``p + 1`` with hidden ``p``. Returns each row's
+        head output at its last absorbed position [D]."""
         if not rows:
             return []
         outs = self._forward(
-            [r.mtp_cache for r, _, _ in rows],
-            [mx.array(t, dtype=mx.int32) for _, t, _ in rows],
-            [h for _, _, h in rows],
+            [r[0].mtp_cache for r in rows],
+            [mx.array(r[1], dtype=mx.int32) for r in rows],
+            [r[2] for r in rows],
+            [r[3] if len(r) > 3 else None for r in rows],
         )
         return [o[-1] for o in outs]
 

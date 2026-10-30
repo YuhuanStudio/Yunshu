@@ -443,3 +443,44 @@ def test_last_finished_row_offers_its_kv_buffers_to_the_restore_pool(target):
     finally:
         buffer_cache.clear_restore_buffers()
         buffer_cache._STATE.update(prev)
+
+
+def test_media_row_dflash_matches_plain_decode_beside_text_rows(target):
+    """DFlash tree verify takes the row's mRoPE offset per window: a media row (positions with a
+    jump, delta 7) decodes the same plainly, with the DFlash drafter, and beside a text row."""
+    import mlx.core as mx
+
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    prompt = list(range(4, 60))
+    other = list(range(8, 70))
+    n = len(prompt)
+    pos = mx.tile(mx.arange(n, dtype=mx.int32)[None, :], (3, 1))
+    pos = pos + (mx.arange(n) >= 10).astype(mx.int32) * 7
+    embeds = target.model.embed_tokens(mx.array(prompt, dtype=mx.int32))
+
+    def run(draft, others):
+        driver = RoundDriver(
+            target, dflash_drafter=_draft(target) if draft else None, chunk=16
+        )
+        driver.add(
+            Request(
+                prompt,
+                20,
+                handle="m",
+                embeds=embeds,
+                position_ids=pos,
+                rope_delta=7,
+            )
+        )
+        for i, p in enumerate(others):
+            driver.add(Request(p, 20, handle=f"o{i}"))
+        toks: dict = {}
+        while driver.busy():
+            for e in driver.step():
+                toks.setdefault(e.handle, []).append(e.token)
+        return toks["m"]
+
+    plain = run(False, [])
+    assert run(True, []) == plain
+    assert run(True, [other]) == plain

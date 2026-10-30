@@ -277,9 +277,6 @@ class RoundDriver:
             and self.can_draft
             and not req.processors
             and (req.sampling is None or keyed is not None)
-            # an MTP head absorbs its prompt positions from the cache index: a media prompt's
-            # mRoPE positions are not carried into the head yet, so such a row decodes plainly
-            and not (req.embeds is not None and self.head is not None)
         )
         row = _Row(
             req=req,
@@ -978,16 +975,22 @@ class RoundDriver:
             ids = row.req.ids
             nxt = ids[it.start + 1 : it.end]
             nxt.append(ids[it.end] if it.end < len(ids) else row.pending)
-            entry = absorb.setdefault(id(row), (row, [], []))
+            entry = absorb.setdefault(id(row), (row, [], [], []))
             entry[1].extend(nxt)
             entry[2].append(hidden[it.at : it.at + it.count])
+            if row.req.position_ids is not None:
+                entry[3].append(row.req.position_ids[:, it.start : it.end])
         live = list(absorb.values())
         heads = {}
         if live:
             outs = self.head.absorb_prompt(
-                [(r, t, mx.concatenate(h, axis=0)) for r, t, h in live]
+                [
+                    (r, t, mx.concatenate(h, axis=0))
+                    + ((mx.concatenate(pos, axis=1),) if pos else ())
+                    for r, t, h, pos in live
+                ]
             )
-            heads = {id(r): o for (r, _, _), o in zip(live, outs, strict=True)}
+            heads = {id(e[0]): o for e, o in zip(live, outs, strict=True)}
         for it in items:
             if it.end in it.row.ckpts and not it.row.finished:
                 self._store_checkpoint(it.row, it.end)

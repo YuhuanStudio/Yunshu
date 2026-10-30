@@ -806,3 +806,15 @@ def test_media_row_decode_positions_follow_the_row_delta(tiny):
     assert alone == beside
     wrong = _media_row(lm, drafter, prompt, jump=7, delta=900)
     assert wrong != alone
+
+
+def test_media_row_drafts_with_the_mtp_head_and_matches_plain_decode(tiny):
+    """The MTP head absorbs a media prompt at its real mRoPE positions and decodes at the row's
+    offset: speculation on == off for a media row (positions with a jump, delta 7)."""
+    lm, drafter = tiny
+    prompt = PROMPTS[1]
+    plain = _media_row(lm, None, prompt, jump=7, delta=7)
+    drafted = _media_row(lm, drafter, prompt, jump=7, delta=7)
+    assert drafted == plain
+    beside = _media_row(lm, drafter, prompt, jump=7, delta=7, others=PROMPTS[2:3])
+    assert beside == plain
