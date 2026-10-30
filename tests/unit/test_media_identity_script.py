@@ -51,3 +51,24 @@ def test_wide_compare_separates_near_ties_from_suspects():
     far_c = {"steps": steps("axc", [2, 3.0, 2])}
     out = m.compare([near_b], [far_c])
     assert len(out["suspects"]) == 1  # a confident token in one arm is not a near tie
+
+
+def test_cli_accepts_every_flag_the_job_scripts_pass():
+    """The exact flags phaseb2_mi.sh / phaseb2_miw.sh use must parse (a rejected flag killed a job)."""
+    import subprocess
+    import sys
+
+    p = Path(__file__).resolve().parents[2] / "scripts/research/media_identity.py"
+    help_text = subprocess.run(
+        [sys.executable, str(p), "--help"], capture_output=True, text=True, check=True
+    ).stdout
+    for flag in (
+        "--src",
+        "--model",
+        "--out",
+        "--expect-driver-media",
+        "--wide",
+        "--long",
+        "--env",
+    ):
+        assert flag in help_text

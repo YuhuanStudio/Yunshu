@@ -222,6 +222,9 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=18996)
     ap.add_argument("--expect-driver-media", action="store_true")
     ap.add_argument(
+        "--wide", type=int, default=0, help="N small-image prompts with logprobs"
+    )
+    ap.add_argument(
         "--long",
         type=int,
         nargs=2,
