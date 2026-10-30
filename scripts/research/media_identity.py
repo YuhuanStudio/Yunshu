@@ -176,6 +176,29 @@ def cells_wide(url: str, model: str, count: int) -> list:
     return out
 
 
+def cells_wide_text(url: str, model: str, count: int) -> list:
+    """Text-only prompts of the same shape as the wide image prompts (the control: whether the two
+    trees agree bit for bit on text where they do not on media)."""
+    out = []
+    topics = ("a harbor", "the moon", "a violin", "a glacier", "tea", "a lighthouse")
+    for i in range(count):
+        topic = topics[i % 6]
+        question = WIDE_QUESTIONS[(i // 6) % len(WIDE_QUESTIONS)]
+        text = (
+            f"Consider {topic} number {i}. In one or two sentences: "
+            + question.replace("this image", topic)
+        )
+        rec = chat(
+            url,
+            model,
+            [{"role": "user", "content": text}],
+            max_tokens=40,
+            logprobs=True,
+        )
+        out.append({"kind": i % 6, "size": 0, "question": text, **rec})
+    return out
+
+
 def cells_long(url: str, model: str, size: int, tall: int) -> dict:
     """A several-thousand-token image prompt: cold, repeat, beside text rows, follow-up turn; and a
     multi-image prompt (the frames of a video)."""
@@ -223,6 +246,12 @@ def main() -> None:
     ap.add_argument("--expect-driver-media", action="store_true")
     ap.add_argument(
         "--wide", type=int, default=0, help="N small-image prompts with logprobs"
+    )
+    ap.add_argument(
+        "--wide-text",
+        type=int,
+        default=0,
+        help="N text-only control prompts with logprobs",
     )
     ap.add_argument(
         "--long",
@@ -274,6 +303,8 @@ def main() -> None:
             result["cells"].update(cells_long(url, model, *a.long))
         if a.wide:
             result["wide"] = cells_wide(url, model, a.wide)
+        if a.wide_text:
+            result["wide_text"] = cells_wide_text(url, model, a.wide_text)
         engaged = b"Round driver: media prompt" in log.read_bytes()
         result["driver_media_engaged"] = engaged
         if a.long:

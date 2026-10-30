@@ -72,3 +72,27 @@ def test_cli_accepts_every_flag_the_job_scripts_pass():
         "--env",
     ):
         assert flag in help_text
+
+
+def test_paired_stats_use_only_positions_with_the_same_context():
+    from importlib.util import module_from_spec, spec_from_file_location
+
+    p = Path(__file__).resolve().parents[2] / "scripts/research/media_wide_compare.py"
+    spec = spec_from_file_location("media_wide_compare2", p)
+    m = module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    def steps(tokens, lps):
+        return [
+            {"token": t, "logprob": lp, "gap": 1.0}
+            for t, lp in zip(tokens, lps, strict=True)
+        ]
+
+    base = [{"steps": steps("abcd", [-1.0, -2.0, -3.0, -4.0])}]
+    cand = [{"steps": steps("abxd", [-1.0, -2.5, -9.0, -4.0])}]
+    out = m.paired(base, cand)
+    # positions 0 and 1 share a context; position 2 diverges (token differs): not paired
+    assert out["positions"] == 2 and out["compared"] == 3
+    assert out["exactly_zero"] == 1 and out["max"] == 0.5
+    assert abs(out["top1_agreement"] - 2 / 3) < 1e-9
+    assert out["first_token_n"] == 1 and out["first_token_nonzero"] == 0
