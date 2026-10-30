@@ -360,3 +360,34 @@ def test_deferred_checkpoints_stay_lazy_while_the_row_prefills(tiny):
     )  # a checkpoint was captured and kept lazy mid-prefill
     d.step()  # the first token was handed out: this step start flushes
     assert not d._deferred_apcs
+
+
+def test_a_prompt_without_media_tokens_skips_the_media_scans(tiny, monkeypatch):
+    """Every media check walks all prompt ids in Python (several times per lookup at 32K); a text prompt
+    needs none of them, so the lookup must not call them, and the hit still equals the cold run."""
+    import mlx_vlm.apc as apc_mod
+
+    lm, _ = tiny
+    prompt = [(7 * i + 11) % 500 for i in range(600)]
+    cold, _, _ = _run(lm, None, [prompt])
+    apc = _manager()
+    first, _, d = _run(lm, None, [prompt], apc=apc)
+    d.flush_checkpoints()
+    # a tiny-model driver has no media ids: give it some that the prompt never contains
+    d._media_ids = {900, 901}
+    calls = []
+    real = apc_mod.media_token_spans
+    monkeypatch.setattr(
+        apc_mod,
+        "media_token_spans",
+        # only walks over a non-empty media set cost anything (an empty set returns at once)
+        lambda *a, **k: (calls.append(1) if set(a[1]) else None) or real(*a, **k),
+    )
+    from yunshu_engine.round_driver.driver import Request
+
+    hit = d.add(Request(prompt, N, handle=7))
+    out = []
+    while d.busy():
+        out += [e.token for e in d.step()]
+    assert hit > 0 and out == cold[0] == first[0]
+    assert calls == []
