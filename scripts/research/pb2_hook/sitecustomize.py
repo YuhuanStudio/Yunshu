@@ -85,6 +85,24 @@ def patch_driver(mod):
 
         setattr(holder, name, timed)
 
+    class _MxProxy:
+        """The driver module's ``mx`` with a timed ``eval`` (host wait for the GPU)."""
+
+        def __init__(self, real):
+            self._real = real
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        def eval(self, *args):
+            t0 = time.perf_counter()
+            try:
+                return self._real.eval(*args)
+            finally:
+                with open(DRV_OUT, "a") as f:
+                    f.write(f"mx_eval {time.perf_counter() - t0:.4f}\n")
+
+    mod.mx = _MxProxy(mod.mx)
     wrap("_seed_window")
     orig_new = cls._new_coordinator
 
