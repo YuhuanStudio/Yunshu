@@ -2116,6 +2116,8 @@
     "python/yunshu_engine/copy_graft.py": "Implementation helper of the registered copy_rounds feature: MTP greedy shared-prefix tree selection and request-local cost budget. Existing copy_rounds remains available on sampled/constrained MTP via its original verifier. This prototype does not claim DFlash/generic/text graft coverage; those adapters and GPU qualification remain explicitly pending in tf110/HANDOFF.md.",
     "python/yunshu_engine/ane/native/__init__.py": "Phase 1 research-only optional native ANE runtime; no serving importer or setting. GPU default unchanged; private API failures return unavailable.",
     "python/yunshu_engine/ane/native/mil.py": "CPU-only native ANE benchmark MIL builder; fp16/int8 numerics unqualified for serving.",
+    "python/yunshu_engine/kernels/int8_kv.py": "int8 KV row cache (codes + per-32-dim fp16 scales) for the round driver's DFlash / plain-verify rows (kv_precision row); prefill and APC stay bf16, quantized once at join.",
+    "python/yunshu_engine/kernels/int8_tile.py": "int8 KV tree-attention tile and fused kernels for the round driver (kv_precision row); installed by RoundDriver when YUNSHU_KV_PRECISION=int8 and the tile kernel runs.",
     "python/yunshu_engine/qwen4_dflash.py": "Flash-Next mixed layer capture adapter on its existing invariant forward; qwen4 native MTP retains full hyper-state.",
     "python/yunshu_engine/qwen4_norms.py": "Read legacy direct-gamma and residual Qwen4 norm formats; ordinary GDN/vision RMSNorm tensors are unchanged; MTP inherits base convention.",
     "python/yunshu_engine/kernels/gdn_rows.py": "driver GDN rows",
