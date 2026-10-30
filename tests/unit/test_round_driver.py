@@ -253,13 +253,13 @@ def test_prefill_chunk_sets_the_span_a_decoding_row_waits_behind(tiny, monkeypat
 
     lm, _ = tiny
     steps: list[list[int]] = []
-    real_forward = drv.forward
+    real_forward = drv.lane_forward
 
-    def spy(model, segs):
-        steps.append([s.length for s in segs])
-        return real_forward(model, segs)
+    def spy(model, seg, **kw):
+        steps.append([seg.length])
+        return real_forward(model, seg, **kw)
 
-    monkeypatch.setattr(drv, "forward", spy)
+    monkeypatch.setattr(drv, "lane_forward", spy)
 
     def prefill_spans(chunk):
         d = drv.RoundDriver(lm, stop_tokens=set(), chunk=chunk)
@@ -277,6 +277,28 @@ def test_prefill_chunk_sets_the_span_a_decoding_row_waits_behind(tiny, monkeypat
     small, large = prefill_spans(32), prefill_spans(128)
     assert max(small) <= 32 and max(large) <= 128
     assert len(small) > len(large)
+
+
+def test_each_prefill_segment_runs_the_lane_forward(tiny, monkeypatch):
+    """A step holding two segments of one row (a full atom, then the partial atom
+    at the prompt's end) runs the lane forward once per segment; it must never
+    fall back to the packed multi-segment forward (stock matmul: slower and not
+    the arithmetic the lane runs)."""
+    from yunshu_engine.round_driver import driver as drv
+
+    lm, _ = tiny
+    lengths: list[int] = []
+    real = drv.lane_forward
+
+    def spy(model, seg, **kw):
+        lengths.append(seg.length)
+        return real(model, seg, **kw)
+
+    monkeypatch.setattr(drv, "lane_forward", spy)
+    d = drv.RoundDriver(lm, stop_tokens=set(), chunk=32)
+    d.add(drv.Request([(7 * i + 1) % 500 for i in range(40)], 1, handle=0))
+    d.step()
+    assert lengths == [32, 8]
 
 
 def test_prefill_atoms_merge_only_when_full():
