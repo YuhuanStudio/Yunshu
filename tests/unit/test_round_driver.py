@@ -301,10 +301,9 @@ def test_each_prefill_segment_runs_the_lane_forward(tiny, monkeypatch):
     assert lengths == [32, 8]
 
 
-def test_prefill_atoms_merge_only_when_full():
-    """A prefill segment is a run of full ``chunk`` atoms: a partial atom (cut
-    by a checkpoint, the prompt's end or a restore off the grid) stands alone,
-    and a run stops after an atom that ends at a checkpoint."""
+def test_prefill_atoms_merge_up_to_checkpoints_and_the_tail():
+    """A prefill segment is a run of atoms (a restore off the grid included) that
+    stops at a checkpoint and before the prompt's tail, which runs apart."""
     from types import SimpleNamespace
 
     from yunshu_engine.round_driver import driver as drv
@@ -322,8 +321,14 @@ def test_prefill_atoms_merge_only_when_full():
     assert d._run_end(row, 1024, 4096) == 512 * 6
     assert d._run_end(row, 512 * 6, 4096) == len(ids) - 1
     row.ckpts = []
-    assert d._run_end(row, 600, 4096) == 1024  # restored off the grid: alone
+    assert d._run_end(row, 600, 4096) == 512 * 6  # off the grid: merges to the tail
     assert d._run_end(row, 1024, 1024) == 2048
+    # a restored prompt's remainder off the grid is one forward up to its checkpoint
+    long_ids = list(range(7248))
+    row = SimpleNamespace(req=SimpleNamespace(ids=long_ids), ckpts=[7232])
+    d.long_from = 1 << 60
+    assert d._run_end(row, 6912, 2048) == 7232
+    assert d._run_end(row, 7232, 2048) == 7248  # the tail stays apart
 
 
 # ── keyed sampling: sampled rows draft and stay on their own stream ─────────
@@ -467,7 +472,8 @@ def test_single_segment_projection_is_not_copied():
 
 def test_idle_prefill_step_is_short_enough_for_a_new_arrival_to_join(tiny):
     """A request arriving mid-step waits for the step to end: with 4096 tokens
-    per step that was ~3.4 s on the 27B (c=2 mixed-length mean TTFT +21%)."""
+    per step that was ~3.4 s on the 27B (c=2 mixed-length mean TTFT +21%). One
+    idle step is IDLE_BUDGET tokens (2048, main's prefill step size)."""
     from yunshu_engine.round_driver import driver as drv
 
     lm, _ = tiny
@@ -475,7 +481,7 @@ def test_idle_prefill_step_is_short_enough_for_a_new_arrival_to_join(tiny):
     ids = [(5 * i + 1) % 500 for i in range(3000)]
     d.add(drv.Request(ids, 1, handle="a", use_apc=False))
     d.step()
-    assert d.rows[0].done <= 1024 + 64
+    assert d.rows[0].done <= drv.IDLE_BUDGET + 64
 
 
 def test_atoms_grow_with_the_absolute_position():

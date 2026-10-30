@@ -413,26 +413,19 @@ class RoundDriver:
 
     def _run_end(self, row: _Row, start: int, budget: int) -> int:
         """End of the segment a prefill step runs for ``row`` from ``start``:
-        consecutive full ``chunk`` atoms (as many as ``budget`` takes, up to
-        the row's next checkpoint) become ONE segment, so a step with no
-        decoding row runs large matmuls. A partial atom (cut by a checkpoint
-        or the prompt's end) is a segment of its own. The atoms depend on the
-        prompt alone, and a segment of full atoms computes each token's bits
-        as its own atom would (tests/unit/test_round_driver.py: stock quantized
-        matmul rows do not depend on a multiple-of-chunk row count, prefill
-        attention runs in chunk-token query blocks, narrow projections take the
-        lane kernel), so the segment size never changes a prompt's output."""
+        consecutive atoms (as many as ``budget`` takes) become ONE segment, so a
+        step runs large matmuls and a restored prompt's remainder is one forward
+        (not one per grid cell). A run stops at a checkpoint (its state is stored
+        there) and before the prompt's tail (the rows after the last 64-aligned
+        boundary: the tail runs apart, on the tail kernels, as in a restored
+        run). Prefill arithmetic is split-invariant at 64-aligned boundaries
+        (nax matmul, BQ32 attention, chunked GDN), so the segment size never
+        changes a prompt's output."""
         end = self._span_end(row, start)
-        n = len(row.req.ids)
-        a = self.atom(start)
-        while (
-            end - start >= a
-            and (end - start) % a == 0
-            and end not in row.ckpts
-            and end < n
-        ):
+        limit = (len(row.req.ids) - 1) // 64 * 64
+        while end not in row.ckpts and end < limit:
             nxt = self._span_end(row, end)
-            if self.atom(end) != a or nxt - end != a or nxt - start > budget:
+            if nxt > limit or nxt - start > budget:
                 break
             end = nxt
         return end
