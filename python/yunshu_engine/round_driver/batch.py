@@ -30,11 +30,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import mlx.core as mx
-import mlx.nn as nn
 import numpy as np
 
 from ..kernels import ragged_attention as ra
-from ..kernels.gdn_rows import gated_delta_rows
 from ..kernels.ragged_kv import _scatter_rows
 
 CAP_STEP = 512  # key capacity granularity (a multiple of the tile's 64)
@@ -210,14 +208,33 @@ class Pack:
         return a if self.uniform else mx.take(a, self.unpad_idx, axis=0)
 
 
+class _Cell(list):
+    """A GDN layer's ``[conv, state]`` pair as ``tree_commit`` reads and writes a cache entry."""
+
+    def __init__(self, conv, state):
+        super().__init__([conv, state])
+        self._omlx_gdn_pending = None
+
+
 def attend(
-    at: Any, xn: mx.array, slots: Slots, i: int, plan: KVPlan, pack: Pack | None = None
+    at: Any,
+    xn: mx.array,
+    slots: Slots,
+    i: int,
+    plan: KVPlan,
+    pack: Pack | None = None,
+    verifier: Any = None,
 ) -> mx.array:
     """One full-attention layer over the rows' windows: keys are written to
     the row's slot at ``n0 .. n0 + T - 1`` and the ragged kernel reads
     ``0 .. n0 + t`` for window token ``t``. ``xn``: [N, D] packed tokens with
     ``pack``, else [B, T, D]."""
-    q, k, v = at.q_proj(xn), at.k_proj(xn), at.v_proj(xn)
+    if verifier is not None:
+        q, k, v = (
+            t[0] for t in verifier._linears((at.q_proj, at.k_proj, at.v_proj), xn[None])
+        )
+    else:
+        q, k, v = at.q_proj(xn), at.k_proj(xn), at.v_proj(xn)
     if pack is not None:
         q, k, v = pack.pad(q), pack.pad(k), pack.pad(v)
     queries, keys, values, gate, _ = at._prepare_projected_qkv(
@@ -267,7 +284,10 @@ def attend(
             impl="tile" if tile else "auto",
         )
     out = out.transpose(0, 2, 1, 3).reshape(B, T, -1) * mx.sigmoid(gate)
-    return at.o_proj(out if pack is None else pack.unpad(out))
+    out = out if pack is None else pack.unpad(out)
+    if verifier is not None:
+        return verifier._linear(at.o_proj, out[None])[0]
+    return at.o_proj(out)
 
 
 class DecodeBatch:
@@ -280,8 +300,9 @@ class DecodeBatch:
         self.linear = [bool(layer.is_linear) for layer in layers]
         self.slots = Slots(len(layers), kv_format)
         self.rows: list = []  # decode order: index b of every batch array
-        self.state: list[mx.array | None] = [None] * len(layers)  # [B, Hv, Dv, Dk]
-        self.conv: list[mx.array | None] = [None] * len(layers)  # [B, K-1, C]
+        # GDN layers: one [1, Hv, Dv, Dk] state and one [1, K-1, C] conv window per row, in decode order
+        self.state: list[list[mx.array]] = [[] for _ in layers]
+        self.conv: list[list[mx.array]] = [[] for _ in layers]
         self._last: dict | None = None
 
     # ── membership ───────────────────────────────────────────────────────
@@ -295,18 +316,9 @@ class DecodeBatch:
         self.slots.reserve(need)
         for i, lin in enumerate(self.linear):
             if lin:
-                cs = [r.cache[i] for r in rows]
-                states = [c[1] for c in cs]
-                convs = [c[0] for c in cs]
-                if self.state[i] is not None:
-                    states.insert(0, self.state[i])
-                    convs.insert(0, self.conv[i])
-                self.state[i] = (
-                    mx.concatenate(states, axis=0) if len(states) > 1 else states[0]
-                )
-                self.conv[i] = (
-                    mx.concatenate(convs, axis=0) if len(convs) > 1 else convs[0]
-                )
+                for r in rows:
+                    self.state[i].append(r.cache[i][1])
+                    self.conv[i].append(r.cache[i][0])
             else:
                 for row in rows:
                     c = row.cache[i]
@@ -327,8 +339,8 @@ class DecodeBatch:
                 r.slot = None
         self.rows = [self.rows[b] for b in keep]
         if not keep:
-            self.state = [None] * len(self.linear)
-            self.conv = [None] * len(self.linear)
+            self.state = [[] for _ in self.linear]
+            self.conv = [[] for _ in self.linear]
             # an idle batch holds no KV: the next rows size the buffers to
             # themselves, not to the longest row ever served. A one-slot pool's buffers
             # go to the restore pool (the next request's cache hit overwrites them in
@@ -340,17 +352,16 @@ class DecodeBatch:
                 buffer_cache.offer_arrays(self.slots.arrays())
             self.slots = Slots(len(self.linear), self.slots.kv_format)
             return
-        sel = mx.array(keep, dtype=mx.int32)
         for i, lin in enumerate(self.linear):
             if lin:
-                self.state[i] = mx.take(self.state[i], sel, axis=0)
-                self.conv[i] = mx.take(self.conv[i], sel, axis=0)
+                self.state[i] = [self.state[i][b] for b in keep]
+                self.conv[i] = [self.conv[i][b] for b in keep]
 
     def arrays(self) -> list[mx.array]:
         """Everything the batch keeps between steps (evaluated each step so no
         lazy graph carries over)."""
         out = self.slots.arrays()
-        out += [a for a in self.state + self.conv if a is not None]
+        out += [a for rows in self.state + self.conv for a in rows if a is not None]
         return out
 
     # ── one decode step ──────────────────────────────────────────────────
@@ -374,79 +385,74 @@ class DecodeBatch:
             [r.req.rope_delta for r in self.rows],
         )
         pack = Pack(lens, T)
-        lens_arr = mx.array(lens, dtype=mx.int32)
-        x = model.embed_tokens(tokens)
-        hist: dict[int, tuple] = {}  # per GDN layer: what a partial commit replays
+        from mlx_vlm.models.qwen3_5 import language as q35
+
+        # The arithmetic of tree_forward / the packed verify: the verifier's row-invariant projections and
+        # feed-forward, the fused GDN prework + tree GDN kernel per row, the fused norm-gate. A plain
+        # one-token round here is therefore the same bits as a DFlash-batch plain-verify round, so spec
+        # on == spec off holds whichever batch a row is in.
+        verifier = q35._EXACT_SPECULATIVE_VERIFIER
+        x = model.embed_tokens(tokens)[None]  # [1, N, D]
+        recs: list[dict] = [
+            {} for _ in lens
+        ]  # per row: layer -> GDN record the commit replays
         for i, layer in enumerate(model.layers):
             xn = layer.input_layernorm(x)
             if self.linear[i]:
-                r = self._gdn(layer.linear_attn, xn, i, lens, lens_arr, pack, hist)
+                r = self._gdn(verifier, layer.linear_attn, xn, i, lens, recs)
             else:
-                r = attend(layer.self_attn, xn, self.slots, i, plan, pack)
+                r = attend(layer.self_attn, xn[0], self.slots, i, plan, pack, verifier)[
+                    None
+                ]
             h = x + r
-            x = h + layer.mlp(layer.post_attention_layernorm(h))
-        self._last = {"hist": hist, "lens": lens, "T": T}
-        return model.norm(x)
+            x = h + verifier._feed_forward(layer.mlp, layer.post_attention_layernorm(h))
+        self._last = {"recs": recs, "lens": lens, "T": T}
+        return model.norm(x)[0]
 
-    def _gdn(self, g, xn, i, lens, lens_arr, pack, hist) -> mx.array:
-        from mlx_vlm.models.qwen3_5.gated_delta import _compute_g_beta
+    def _gdn(self, verifier, g, xn, i, lens, recs) -> mx.array:
+        """One GDN layer over the rows' windows, row by row through ``tree_verify._gdn_layer`` (a chain
+        window); the state advance is the commit's replay, as in the DFlash batch."""
+        from .. import tree_verify as tv
 
-        B, T = pack.B, pack.T
-        K1 = g.conv_kernel_size - 1
-        qkv, z = pack.pad(g.in_proj_qkv(xn)), pack.pad(g.in_proj_z(xn))
-        b, a = pack.pad(g.in_proj_b(xn)), pack.pad(g.in_proj_a(xn))
-        conv_in = mx.concatenate([self.conv[i], qkv], axis=1)  # [B, K-1+T, C]
-        if pack.uniform:
-            self.conv[i] = conv_in[:, T:]
-        else:
-            pos = np.asarray(lens)[:, None] + np.arange(K1)[None, :]
-            self.conv[i] = conv_in[mx.arange(B)[:, None], mx.array(pos)]
-        conv_out = nn.silu(g.conv1d(conv_in))  # [B, T, C]
-        q, k, v = [
-            t.reshape(B, T, h, d)
-            for t, h, d in zip(
-                mx.split(conv_out, [g.key_dim, 2 * g.key_dim], -1),
-                [g.num_k_heads, g.num_k_heads, g.num_v_heads],
-                [g.head_k_dim, g.head_k_dim, g.head_v_dim],
-                strict=True,
-            )
-        ]
-        inv = k.shape[-1] ** -0.5
-        q = (inv**2) * mx.fast.rms_norm(q, None, 1e-6)
-        k = inv * mx.fast.rms_norm(k, None, 1e-6)
-        gate, beta = _compute_g_beta(g.A_log, a, b, g.dt_bias)
-        # No per-token state history: a row that keeps part of its window
-        # replays its first tokens from the state before this call (the
-        # history would be T - 1 states per row and layer: gigabytes at 8 rows).
-        prev = self.state[i]
-        y, self.state[i], _ = gated_delta_rows(
-            q, k, v, gate, beta, prev, lens_arr, save_hist=False
+        projected = verifier._linears(
+            (g.in_proj_qkv, g.in_proj_z, g.in_proj_b, g.in_proj_a), xn
         )
-        if T > 1:
-            hist[i] = (prev, q, k, v, gate, beta, conv_in)
-        z = z.reshape(B, T, -1, g.head_v_dim)
-        return g.out_proj(pack.unpad(g.norm(y, z).reshape(B, T, -1)))
+        mixed, at = [], 0
+        for b, w in enumerate(lens):
+            out, rec = tv._gdn_layer(
+                verifier,
+                g,
+                xn[:, at : at + w],
+                (self.conv[i][b], self.state[i][b]),
+                tv.TreeShape(list(range(-1, w - 1))),
+                projected=tuple(p[:, at : at + w] for p in projected),
+                project_output=False,
+            )
+            recs[b][i] = rec
+            mixed.append(out)
+            at += w
+        return verifier._linear(g.out_proj, mx.concatenate(mixed, axis=1))
 
     def commit(self, used: list[int]) -> None:
         """Rows keep their first ``used[b]`` window positions (``1 <= used <=
-        len(window)``): KV lengths advance, and rows that verified fewer
-        positions than they ran continue their GDN state / conv window from
-        there."""
+        len(window)``): KV lengths advance, and every row's GDN state / conv window advance by the
+        accepted chain through the tree commit's replay kernels (the state was not touched by the
+        forward, as in the DFlash batch)."""
+        from .. import tree_verify as tv
+
         last, self._last = self._last, None
-        lens = last["lens"]
         for r, u in zip(self.rows, used, strict=True):
             r.n += u
-        if all(u == w for u, w in zip(used, lens, strict=True)):
-            return
-        # Rows that verified fewer positions than they ran: every row's state
-        # is recomputed to its kept length by the same kernel from the state
-        # before the step (a row that kept its whole window gets the same bits
-        # again), the conv window is read from its kept position.
-        keep = mx.array(used, dtype=mx.int32)
-        rows = mx.arange(len(used))[:, None]
-        for i, (prev, q, k, v, gate, beta, conv_in) in last["hist"].items():
-            _, self.state[i], _ = gated_delta_rows(
-                q, k, v, gate, beta, prev, keep, save_hist=False
+        for b, (u, rec) in enumerate(zip(used, last["recs"], strict=True)):
+            if not rec:
+                continue
+            cells = {i: _Cell(self.conv[i][b], self.state[i][b]) for i in rec}
+            res = tv.TreeResult(
+                shape=tv.TreeShape(list(range(-1, last["lens"][b] - 1))),
+                n0=0,
+                hidden=None,
             )
-            K1 = self.conv[i].shape[1]
-            self.conv[i] = conv_in[rows, keep[:, None] + mx.arange(K1)[None, :]]
+            res.records = dict(rec)
+            tv.tree_commit(self.lm, cells, res, list(range(u)))
+            for i, cell in cells.items():
+                self.conv[i][b], self.state[i][b] = cell[0], cell[1]

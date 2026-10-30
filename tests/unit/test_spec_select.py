@@ -62,30 +62,3 @@ def test_forced_drafter_for_another_target_fails_before_loading(tmp_path, monkey
     right = _drafter(tmp_path / "Right-DFlash")
     monkeypatch.setenv("YUNSHU_VLM_DRAFT", str(right))
     assert _choose(tmp_path, monkeypatch).drafter == str(right)
-
-
-def _plain_dflash(tmp_path, monkeypatch, mtp=True):
-    monkeypatch.setattr("yunshu_engine.model_discovery.hf_cache_snapshots", lambda: [])
-    return spec_select.plain_rows_use_dflash_batch(
-        TARGET, spec_family=True, mtp_capable=mtp, models_dir=tmp_path
-    )
-
-
-def test_spec_off_rows_use_the_batch_of_the_drafter_the_model_would_otherwise_use(
-    tmp_path, monkeypatch
-):
-    # MTP-head model (no DFlash drafter on disk): spec off decodes in the MTP batch, so on == off is
-    # one forward, whatever YUNSHU_VLM_DRAFT says
-    for value in (None, "off", "mtp"):
-        if value is None:
-            monkeypatch.delenv("YUNSHU_VLM_DRAFT", raising=False)
-        else:
-            monkeypatch.setenv("YUNSHU_VLM_DRAFT", value)
-        assert _plain_dflash(tmp_path, monkeypatch) is False, value
-    # a DFlash model keeps the DFlash batch's plain verify
-    _drafter(tmp_path / "incoai" / "Qwen3.8-27B-DFlash2")
-    monkeypatch.setenv("YUNSHU_VLM_DRAFT", "off")
-    assert _plain_dflash(tmp_path, monkeypatch) is True
-    # no drafter and no MTP head: plain verify
-    monkeypatch.setenv("YUNSHU_VLM_DRAFT", "off")
-    assert _plain_dflash(tmp_path / "none", monkeypatch, mtp=False) is True
