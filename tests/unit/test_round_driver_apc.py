@@ -220,9 +220,8 @@ def test_lone_row_checkpoints_are_deferred_then_flushed(tiny):
     """A lone row's checkpoint stores are captured (not copied) inside its prefill step and
     published by flush_checkpoints; a request added afterwards hits them and matches a cold run;
     a removed row's captures are discarded."""
-    from yunshu_engine.round_driver.driver import Request, RoundDriver
-
     from yunshu_engine.apc_manager import YunshuAPCManager
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
 
     def yunshu_manager():
         return YunshuAPCManager(
