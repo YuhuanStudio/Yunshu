@@ -1563,3 +1563,20 @@ Output checks: before, a 32K turn-2 APC hit differed from a cold prefill of the 
 (logprobs up to 0.051 apart, tokens equal); after, partial and full hits equal cold bit for bit with
 MTP on and off. KLD vs the fp32 reference unchanged (15 windows, 197,391 positions). The +40 ms is the
 extra forward at the semantic boundary a cold run now also splits at.
+
+## 2026-10-30 — Flash-Next concurrent rows keep the solo sparse QSA
+
+Qwen3.8-Flash-Next oQ3e. Before, concurrent decode rows ran dense attention while a solo request ran
+the model's sparse QSA, so a request's output depended on what else was running. Each row now selects
+its own QSA blocks and the batch runs one padded sparse attention launch.
+
+| decode step, quiet, 3 reps (median ms) | dense batch (before) | padded sparse (now) | per-row sparse |
+|---|---|---|---|
+| 8K, 2 rows | 28.5 | 35.9 (+26%) | 51.0 |
+| 8K, 4 rows | 45.2 | 57.5 (+27%) | 86.8 |
+| 32K, 2 rows | 37.3 | 46.6 (+25%) | 77.0 |
+| 32K, 4 rows | 65.4 | 79.1 (+21%) | 137.4 |
+
+Output checks: concurrent == solo (token + logprob) in all 12 cells (burst2, burst4, stagger; greedy and
+seeded; MTP on and off; prompts 30.6K-36.7K). Solo requests unchanged (yv bqsa2-3e: identity 0
+mismatches, APC pass, decode -0.5% and cold +0.7%, within noise). The cost over the dense batch is open work.
