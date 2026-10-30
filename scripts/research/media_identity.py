@@ -228,6 +228,14 @@ def main() -> None:
             result["cells"].update(cells_long(url, model, *a.long))
         engaged = b"Round driver: media prompt" in log.read_bytes()
         result["driver_media_engaged"] = engaged
+        if a.long:
+            import re
+
+            counts = [
+                int(n)
+                for n in re.findall(rb"media prompt (\d+) tokens", log.read_bytes())
+            ]
+            result["media_prompt_tokens_max"] = max(counts, default=0)
         a.out.write_text(json.dumps(result, indent=1, ensure_ascii=False))
         c = result["cells"]
         problems = []
@@ -255,13 +263,6 @@ def main() -> None:
             if c["text_solo"] != c["long_text_concurrent"]:
                 problems.append("text rows beside the long image row changed")
         if a.long and a.expect_driver_media:
-            import re
-
-            counts = [
-                int(n)
-                for n in re.findall(rb"media prompt (\d+) tokens", log.read_bytes())
-            ]
-            result["media_prompt_tokens_max"] = max(counts, default=0)
             if result["media_prompt_tokens_max"] < 2000:
                 problems.append("long image prompt is not several thousand tokens")
         if a.expect_driver_media and not engaged:
