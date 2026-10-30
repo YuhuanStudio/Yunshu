@@ -85,6 +85,26 @@ def patch_driver(mod):
 
         setattr(holder, name, timed)
 
+    wrap("_seed_window")
+    orig_new = cls._new_coordinator
+
+    def new_coordinator(self, *args, **kw):
+        co = orig_new(self, *args, **kw)
+        for meth in ("lookup", "prepare_prefill", "checkpoint_lengths"):
+            fn = getattr(co, meth)
+
+            def timed(*a, _fn=fn, _m=meth, **k):
+                t0 = time.perf_counter()
+                try:
+                    return _fn(*a, **k)
+                finally:
+                    with open(DRV_OUT, "a") as f:
+                        f.write(f"apc_{_m} {time.perf_counter() - t0:.4f}\n")
+
+            setattr(co, meth, timed)
+        return co
+
+    cls._new_coordinator = new_coordinator
     wrap_fn(mod, "reserve_prompt_kv", "reserve_kv")
     wrap_fn(mod, "lane_forward", "lane_forward")
     wrap_fn(mod.replay, "restore", "replay_restore")

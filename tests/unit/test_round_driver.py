@@ -449,6 +449,8 @@ def test_prefill_serves_the_oldest_long_prompt_first(tiny, monkeypatch):
     rows = {r.req.handle: r for r in d.rows}
     rows["a"].ckpts = [128, 512]  # a checkpoint cuts A's span with budget left
     d.step()
+    assert rows["c"].done == 40 and rows["a"].done == 0  # the short prompt goes first
+    d.step()
     assert rows["a"].done == 128
     assert rows["b"].done == 0  # long B waits behind long A
     while rows["a"].pending is None:
