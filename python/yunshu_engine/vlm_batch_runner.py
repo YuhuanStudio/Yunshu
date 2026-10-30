@@ -1640,8 +1640,22 @@ class VLMBatchRunner:
             with self.driver_busy_meter.span():
                 events.extend(driver.step())
             self._note_driver_prefill(driver)
+        faulted: set[int] = set()
         for event in events:
             job = event.handle
+            fault = _row_fault(job)
+            if fault is not None:
+                # This row's grammar hit a dead end: its token is meaningless. Fail only
+                # this request; the other rows keep decoding (as in the batch path).
+                if id(job) not in faulted:
+                    faulted.add(id(job))
+                    logger.warning(
+                        "VLM runner row failed (%s); other rows continue", fault
+                    )
+                    (job.driver or self.driver).remove(job)
+                    self._driver_jobs.pop(id(job), None)
+                    self._emit(job, fault)
+                continue
             stats = job.stats
             now = time.perf_counter()
             if stats.generated == 0:

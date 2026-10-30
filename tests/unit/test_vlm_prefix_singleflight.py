@@ -108,3 +108,36 @@ def test_driver_job_registers_its_planned_checkpoints_as_a_producer():
     r2._driver_jobs[id(c)] = c
     r2._track_prefix_producer(c)
     assert r2._prefix_producers == []
+
+
+def test_driver_row_with_a_grammar_dead_end_fails_alone():
+    """Fault isolation on the driver path: a row whose processor recorded a fault gets the
+    error as its terminal and leaves the driver; the other row's token is still delivered."""
+    r = runner()
+    bad = job(list(range(4)))
+    good = job(list(range(5)))
+    fault = RuntimeError("grammar dead end")
+    bad.processors = [SimpleNamespace(fault=fault)]
+    removed = []
+    events = [
+        SimpleNamespace(handle=bad, token=1, logprob=None, finish=None),
+        SimpleNamespace(handle=good, token=2, logprob=None, finish=None),
+        SimpleNamespace(handle=bad, token=3, logprob=None, finish=None),
+    ]
+    drv = SimpleNamespace(
+        rows=[],
+        can_draft=False,
+        step=lambda: events,
+        remove=removed.append,
+        flush_checkpoints=lambda: None,
+    )
+    bad.driver = good.driver = drv
+    r.driver = drv
+    r._driver_jobs = {id(bad): bad, id(good): good}
+    r._note_driver_prefill = lambda driver=None: None
+    r._step_driver()
+    assert removed == [bad] and id(bad) not in r._driver_jobs
+    assert bad.terminal and good.stats.generated == 1 and not good.terminal
+    assert bad.out.get_nowait() is fault
+    assert bad.out.empty()
+    assert good.out.get_nowait() == (2, None)
