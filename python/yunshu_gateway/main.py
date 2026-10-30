@@ -147,6 +147,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global _memory_enforcer, _drain_event, _server_state, _startup_time
     global _background_tasks, _active_requests
 
+    from .event_hub import close_streams_on_signals
+
+    close_streams_on_signals()
     # Always reset state on lifespan entry — handles test isolation
     # where module-level globals persist between TestClient instances
     _drain_event = asyncio.Event()

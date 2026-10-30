@@ -13,6 +13,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
+import signal
+import threading
 import time
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
@@ -20,6 +23,40 @@ from typing import Any
 
 HEARTBEAT_S = 10.0
 KEEPALIVE_S = 15.0
+# Set when the server starts shutting down (close_streams_on_signals, from the app's startup):
+# open streams end within a second instead of holding the graceful shutdown until it times
+# out and cancels them (a remote console's stream did that: 30 s and three tracebacks).
+_CLOSING = threading.Event()
+
+
+def close_streams() -> None:
+    """End every open event stream at its next wake-up (at most ~1 s)."""
+    _CLOSING.set()
+
+
+def close_streams_on_signals(signals=(signal.SIGINT, signal.SIGTERM)) -> None:
+    """Chain ``close_streams`` in front of the server's own handlers for ``signals``.
+
+    Called from the app's startup, after uvicorn has installed its handlers, so a Ctrl-C or
+    SIGTERM ends the event streams before uvicorn starts waiting for connections to close."""
+    _CLOSING.clear()
+    if threading.current_thread() is not threading.main_thread():
+        return  # signal handlers can only be set from the main thread (tests run the app elsewhere)
+    for sig in signals:
+        previous = signal.getsignal(sig)
+        if getattr(previous, "_yunshu_closes_streams", False):
+            continue
+
+        def handler(signum, frame, previous=previous):
+            close_streams()
+            if callable(previous):
+                previous(signum, frame)
+            elif previous == signal.SIG_DFL:
+                signal.signal(signum, signal.SIG_DFL)  # the default action, as before
+                os.kill(os.getpid(), signum)
+
+        handler._yunshu_closes_streams = True  # type: ignore[attr-defined]
+        signal.signal(sig, handler)
 
 
 @dataclass
@@ -169,6 +206,8 @@ class Hub:
         last_write = time.monotonic()
         try:
             while True:
+                if _CLOSING.is_set():
+                    return
                 if is_disconnected is not None and await is_disconnected():
                     return
                 wrote = False
