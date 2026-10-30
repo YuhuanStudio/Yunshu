@@ -2948,13 +2948,14 @@ class VLMEngine:
                 kv_format=precision,
             )
         logger.info(
-            "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
+            "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s kv=%s",
             f"{self._apc_backend.memory_max_bytes / 2**30:.1f}GiB"
             if self._apc_backend is not None
             else "off",
             draft_kind if drafter is not None else "off",
             block or "default",
             kernels,
+            precision if use_driver else "bf16",
         )
         return runner
 
