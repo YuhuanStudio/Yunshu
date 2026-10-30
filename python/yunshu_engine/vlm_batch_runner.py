@@ -1597,10 +1597,11 @@ class VLMBatchRunner:
                     dflash_drafter=self.drafter
                     if self.draft_kind == "dflash"
                     else None,
-                    plain_verify=self.drafter is None,
+                    plain_verify=self.driver.plain_verify,
                     stop_tokens=self.stop_tokens,
                     chunk=self.driver.chunk,
                     apc=None,
+                    kv_format=self.driver.kv_format,
                 )
             driver = self._aux_driver
         job.driver = driver

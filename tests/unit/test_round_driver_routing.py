@@ -16,7 +16,7 @@ from yunshu_engine.vlm_batch_runner import VLMBatchRunner
         # the old routing (they used to stay on the stock runner); unsupported prompt features
         # raise in _media_request instead of being routed away (test_round_driver_media_wiring)
         (False, {"pixel_values": 1}, True, True),
-        (False, None, False, False),  # no driver built (other family, int8 KV, MoE)
+        (False, None, False, False),  # no driver built (other family, MoE)
     ],
 )
 def test_driver_takes(alone, pkw, has_driver, expect):

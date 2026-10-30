@@ -104,10 +104,11 @@ def choose(
     spec_family: bool,
     mtp_capable: bool,
     models_dir: Path | None = None,
+    ignore_override: bool = False,
 ) -> SpecChoice:
     if not spec_family:
         return SpecChoice("none", None, "model family has no speculative path")
-    override = settings.get("YUNSHU_VLM_DRAFT")
+    override = None if ignore_override else settings.get("YUNSHU_VLM_DRAFT")
     if override:
         low = str(override).lower()
         if low in FORCE_OFF:
@@ -126,3 +127,25 @@ def choose(
     if mtp_capable and settings.get_bool("YUNSHU_MTP"):
         return SpecChoice("mtp", None, "checkpoint MTP head")
     return SpecChoice("none", None, "no drafter and no MTP head")
+
+
+def plain_rows_use_dflash_batch(
+    target_config: dict,
+    *,
+    spec_family: bool,
+    mtp_capable: bool,
+    models_dir: Path | None = None,
+) -> bool:
+    """Which batch decodes the rows of a request that does not draft (``YUNSHU_VLM_DRAFT=off``, or a
+    model with no drafter): the batch of the drafter the model would otherwise use, minus drafting.
+    A model whose drafter is the checkpoint MTP head decodes plain rows in the MTP batch (one token
+    per round), so spec on == spec off is one forward; a DFlash model (or no drafter at all) keeps
+    the DFlash batch's plain verify. One function decides every on/off pair."""
+    natural = choose(
+        target_config,
+        spec_family=spec_family,
+        mtp_capable=mtp_capable,
+        models_dir=models_dir,
+        ignore_override=True,
+    )
+    return natural.kind != "mtp"

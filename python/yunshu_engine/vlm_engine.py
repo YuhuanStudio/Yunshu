@@ -2436,16 +2436,13 @@ class VLMEngine:
 
     def _round_driver_wanted(self, lm) -> bool:
         """The multi-row round driver serves a dense Qwen3.5-family text decoder with
-        bf16 KV when the lane arithmetic is ready. With speculation off
+        bf16 or int8 KV (``YUNSHU_KV_PRECISION``) when the lane arithmetic is ready. With speculation off
         (``YUNSHU_VLM_DRAFT=off``) the same driver decodes without drafting, so speculation
         on equals speculation off bit for bit (one arithmetic, rows never draft)."""
         from .round_driver import forward as rd_forward
 
         if not rd_forward.supports(lm):
             logger.info("Round driver: not a dense Qwen3.5-family model")
-            return False
-        if settings.get("YUNSHU_KV_PRECISION") != "bf16":
-            logger.info("Round driver: int8 KV keeps the stock runner")
             return False
         from .kernels.tensorfold.lane_qmm import ready
 
@@ -2680,12 +2677,12 @@ class VLMEngine:
             )
             # Every prompt piece uses the same arithmetic, while decode and
             # speculative verify retain their own invariant kernels. Only the
-            # jointly qualified 27B device/ABI/weight geometry can enter it.
+            # jointly qualified 27B device/ABI/weight geometry can enter it. The KV precision is
+            # not part of it: prefill and the prefix cache stay bf16 whatever the decode rows hold.
             split_ready = bool(
                 kernels.get("nax_prefill")
                 and kernels.get("attn_prefill")
                 and settings.get("YUNSHU_PREFILL_GDN") == "chunked"
-                and settings.get("YUNSHU_KV_PRECISION") == "bf16"
                 and all(
                     module.output_dims < lane_linear.NARROW
                     or module.output_dims >= 100_000
@@ -2944,19 +2941,28 @@ class VLMEngine:
                 self._model,
                 drafter=drafter if draft_kind == "mtp" else None,
                 dflash_drafter=drafter if draft_kind == "dflash" else None,
-                plain_verify=drafter is None,
+                # no drafter: rows decode in the batch of the drafter the model would otherwise
+                # use (MTP head: the MTP batch, one token per round; DFlash / none: plain verify)
+                plain_verify=drafter is None
+                and spec_select.plain_rows_use_dflash_batch(
+                    self._config,
+                    spec_family=spec_family,
+                    mtp_capable=spec_family and is_mtp_capable(model_path),
+                ),
                 stop_tokens=runner.stop_tokens,
                 chunk=ROUND_PREFILL_CHUNK,
                 apc=self._apc_backend,
+                kv_format=precision,
             )
         logger.info(
-            "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
+            "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s kv=%s",
             f"{self._apc_backend.memory_max_bytes / 2**30:.1f}GiB"
             if self._apc_backend is not None
             else "off",
             draft_kind if drafter is not None else "off",
             block or "default",
             kernels,
+            precision if use_driver else "bf16",
         )
         return runner
 

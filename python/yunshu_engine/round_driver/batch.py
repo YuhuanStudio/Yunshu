@@ -47,14 +47,27 @@ def _round_cap(n: int) -> int:
 
 class Slots:
     """KV buffers of ``n_layers`` layers ``[S, HKV, CAP, D]`` sharing one slot
-    pool (layers without keys keep ``None``)."""
+    pool (layers without keys keep ``None``).
 
-    def __init__(self, n_layers: int):
+    ``kv_format="int8"``: the buffers hold int8 codes and ``ks`` / ``vs`` fp16 scales per
+    (slot, KV head, token, 32-dim group) ``[S, HKV, CAP, D/32]`` (ragged_attention.quantize_kv_pair);
+    rows are quantized once on write, the kernel reads codes + scales directly."""
+
+    def __init__(self, n_layers: int, kv_format: str = "bf16"):
+        if kv_format not in ("bf16", "int8"):
+            raise ValueError(f"Slots: unknown kv_format {kv_format!r}")
+        self.kv_format = kv_format
         self.k: list[mx.array | None] = [None] * n_layers
         self.v: list[mx.array | None] = [None] * n_layers
+        self.ks: list[mx.array | None] = [None] * n_layers  # int8 only: key scales
+        self.vs: list[mx.array | None] = [None] * n_layers  # int8 only: value scales
         self.S = 0
         self.cap = 0
         self.free: list[int] = []
+
+    @property
+    def int8(self) -> bool:
+        return self.kv_format == "int8"
 
     def alloc(self) -> int:
         if not self.free:
@@ -71,7 +84,7 @@ class Slots:
         self.free.append(int(slot))
 
     def _resize(self, S2: int, cap2: int) -> None:
-        for buf in (self.k, self.v):
+        for buf in (self.k, self.v, self.ks, self.vs):
             for i, a in enumerate(buf):
                 if a is None:
                     continue
@@ -90,17 +103,32 @@ class Slots:
     def _buf(self, i: int, like: mx.array) -> None:
         if self.k[i] is None:
             shape = (self.S, like.shape[1], self.cap, like.shape[-1])
-            self.k[i] = mx.zeros(shape, like.dtype)
-            self.v[i] = mx.zeros(shape, like.dtype)
+            if self.int8:
+                scale_shape = (*shape[:-1], shape[-1] // ra.GROUP)
+                self.k[i] = mx.zeros(shape, mx.int8)
+                self.v[i] = mx.zeros(shape, mx.int8)
+                self.ks[i] = mx.zeros(scale_shape, mx.float16)
+                self.vs[i] = mx.zeros(scale_shape, mx.float16)
+            else:
+                self.k[i] = mx.zeros(shape, like.dtype)
+                self.v[i] = mx.zeros(shape, like.dtype)
 
     def write_prefix(self, i: int, slot: int, k: mx.array, v: mx.array, n: int):
-        """Store a row's first ``n`` keys (``k``, ``v`` [1, HKV, >= n, D])."""
+        """Store a row's first ``n`` keys (``k``, ``v`` [1, HKV, >= n, D], bf16): quantized
+        here once when the format is int8."""
         self._buf(i, k)
+        if self.int8:
+            kq, ks, vq, vs = ra.quantize_kv_pair(k[:, :, :n, :], v[:, :, :n, :])
+            self.k[i][slot, :, :n, :] = kq[0]
+            self.v[i][slot, :, :n, :] = vq[0]
+            self.ks[i][slot, :, :n, :] = ks[0]
+            self.vs[i][slot, :, :n, :] = vs[0]
+            return
         self.k[i][slot, :, :n, :] = k[0, :, :n, :]
         self.v[i][slot, :, :n, :] = v[0, :, :n, :]
 
     def arrays(self) -> list[mx.array]:
-        return [a for a in self.k + self.v if a is not None]
+        return [a for a in self.k + self.v + self.ks + self.vs if a is not None]
 
 
 @dataclass
@@ -199,9 +227,17 @@ def attend(
     HKV = int(keys.shape[1])
     slots._buf(i, keys)
     idx = plan.scatter_index(HKV, slots.cap)
-    slots.k[i] = _scatter_rows(slots.k[i], idx, keys)
-    slots.v[i] = _scatter_rows(slots.v[i], idx, values)
-    if queries.dtype != mx.bfloat16 or keys.dtype != mx.bfloat16:
+    if slots.int8:
+        # new rows are quantized on write; the kernel reads codes + scales
+        kq, ks, vq, vs = ra.quantize_kv_pair(keys, values)
+        slots.k[i] = _scatter_rows(slots.k[i], idx, kq)
+        slots.v[i] = _scatter_rows(slots.v[i], idx, vq)
+        slots.ks[i] = _scatter_rows(slots.ks[i], idx, ks)
+        slots.vs[i] = _scatter_rows(slots.vs[i], idx, vs)
+    else:
+        slots.k[i] = _scatter_rows(slots.k[i], idx, keys)
+        slots.v[i] = _scatter_rows(slots.v[i], idx, values)
+    if not slots.int8 and (queries.dtype != mx.bfloat16 or keys.dtype != mx.bfloat16):
         # The ragged Metal kernels accept bf16 only. MTP heads may retain
         # fp16/fp32 weights; keep their arithmetic instead of rounding to bf16.
         stored_k, stored_v = slots.k[i], slots.v[i]
@@ -214,6 +250,8 @@ def attend(
             queries, ks, vs, scale=at.scale, mask=mask[:, None, :, :]
         )
     else:
+        # int8 rows run the same token-tile family as bf16 (the int8 tile kernel dequantizes in-kernel), so
+        # plain decode, MTP verify and tree verify share one arithmetic
         tile = H // HKV <= 8 and ra.tile_ready()
         out = ra.ragged_decode_attention(
             queries,
@@ -222,6 +260,8 @@ def attend(
             plan.lengths,
             at.scale,
             max_length=plan.max_length,
+            k_scales=slots.ks[i] if slots.int8 else None,
+            v_scales=slots.vs[i] if slots.int8 else None,
             row_lengths=plan.length_list,
             slots=plan.slot_ids,
             impl="tile" if tile else "auto",
@@ -233,11 +273,12 @@ def attend(
 class DecodeBatch:
     """The decoding rows of one target model (see the module docstring)."""
 
-    def __init__(self, language_model: Any):
+    def __init__(self, language_model: Any, kv_format: str = "bf16"):
         self.lm = language_model
+        self.kv_format = kv_format
         layers = language_model.model.layers
         self.linear = [bool(layer.is_linear) for layer in layers]
-        self.slots = Slots(len(layers))
+        self.slots = Slots(len(layers), kv_format)
         self.rows: list = []  # decode order: index b of every batch array
         self.state: list[mx.array | None] = [None] * len(layers)  # [B, Hv, Dv, Dk]
         self.conv: list[mx.array | None] = [None] * len(layers)  # [B, K-1, C]
@@ -293,11 +334,11 @@ class DecodeBatch:
             # go to the restore pool (the next request's cache hit overwrites them in
             # place instead of allocating a fresh context-sized buffer), as the other
             # runner paths offer a finished request's buffers.
-            if self.slots.S == 1:
+            if self.slots.S == 1 and not self.slots.int8:
                 from ..kernels import buffer_cache
 
                 buffer_cache.offer_arrays(self.slots.arrays())
-            self.slots = Slots(len(self.linear))
+            self.slots = Slots(len(self.linear), self.slots.kv_format)
             return
         sel = mx.array(keep, dtype=mx.int32)
         for i, lin in enumerate(self.linear):

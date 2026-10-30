@@ -32,6 +32,13 @@ def parser():
         default=None,
         help="YUNSHU_VLM_DRAFT value: a drafter directory, or mtp (checkpoint MTP head)",
     )
+    p.add_argument(
+        "--cand-env",
+        action="append",
+        default=[],
+        metavar="K=V",
+        help="extra server environment for the cand arm (e.g. YUNSHU_KV_PRECISION=int8)",
+    )
     p.add_argument("--join", type=float, default=0.5)
     p.add_argument("--scenarios", nargs="+", default=["burst2", "burst4", "stagger"])
     p.add_argument("--shapes", nargs="+", default=["greedy", "seeded"])
@@ -332,6 +339,8 @@ def main():
                 YUNSHU_NEXT_TURN_PREFILL="off",
                 YUNSHU_CONSOLE="0",
             )
+            if arm == "cand":
+                env.update(kv.split("=", 1) for kv in a.cand_env)
             server = t.Srv("yunshu", env, f"phaseb-{a.out.stem}-{arm}", model=a.model)
             try:
                 for scenario in a.scenarios:
@@ -366,12 +375,13 @@ def main():
                         write(result)
                 if arm != "off":
                     server.verify_spec_mode()
-                if (
-                    arm == "cand"
-                    and "Round driver DFlash packed"
-                    not in server.log.read_text(errors="replace")
-                ):
-                    raise RuntimeError("candidate did not engage packed DFlash")
+                log = server.log.read_text(errors="replace")
+                if arm == "cand" and a.draft != "mtp":
+                    if "Round driver DFlash packed" not in log:
+                        raise RuntimeError("candidate did not engage packed DFlash")
+                if arm == "cand" and "YUNSHU_KV_PRECISION=int8" in a.cand_env:
+                    if "kv=int8" not in log:
+                        raise RuntimeError("candidate did not engage int8 KV")
             finally:
                 server.kill()
                 shutil.rmtree(home, ignore_errors=True)

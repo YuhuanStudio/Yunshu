@@ -330,8 +330,130 @@ _TRACED = (
 )
 
 
+ATTN_OUT = os.environ.get("PB2_ATTN_OUT")
+
+
+def patch_attn():
+    """Log checksums of the decode-side attention calls (query, keys, output of window token 0):
+    the DecodeBatch path (ragged_decode_attention) and the tree path (tree_verify.tree_attention)
+    see the same token over the same keys, so the first line whose output differs between two
+    runs names the first differing call."""
+    import mlx.core as mx
+
+    from yunshu_engine import tree_verify as tv
+    from yunshu_engine.kernels import ragged_attention as ra
+
+    count = [0]
+
+    from mlx_vlm.models.qwen3_5 import language as _lang
+
+    mlp_orig = _lang.Qwen3_5MLP.__call__
+    mlp_count = [0]
+
+    def mlp_call(self, x, *a, **kw):
+        out = mlp_orig(self, x, *a, **kw)
+        try:
+            xi = x.reshape(-1, x.shape[-1])[0].astype(mx.float32)
+            oo = out.reshape(-1, out.shape[-1])[0].astype(mx.float32)
+            vals = mx.stack([mx.sum(xi), mx.sum(oo), mx.max(mx.abs(oo))]).tolist()
+            rows = int(x.reshape(-1, x.shape[-1]).shape[0])
+            with open(ATTN_OUT, "a") as f:
+                f.write(
+                    f"M{mlp_count[0]} mlp rows={rows} in={vals[0]:.9g} out={vals[1]:.9g} omax={vals[2]:.9g}\n"
+                )
+            mlp_count[0] += 1
+        except Exception as e:
+            with open(ATTN_OUT, "a") as f:
+                f.write(f"mlp-probe-error {e!r}\n")
+        return out
+
+    _lang.Qwen3_5MLP.__call__ = mlp_call
+
+    vcls = type(_lang._EXACT_SPECULATIVE_VERIFIER)
+    ff_orig = vcls._feed_forward
+
+    def ff_call(self, mlp, x, *a, **kw):
+        out = ff_orig(self, mlp, x, *a, **kw)
+        try:
+            xi = x.reshape(-1, x.shape[-1])[0].astype(mx.float32)
+            oo = out.reshape(-1, out.shape[-1])[0].astype(mx.float32)
+            vals = mx.stack([mx.sum(xi), mx.sum(oo), mx.max(mx.abs(oo))]).tolist()
+            rows = int(x.reshape(-1, x.shape[-1]).shape[0])
+            with open(ATTN_OUT, "a") as f:
+                f.write(
+                    f"M{mlp_count[0]} mlp rows={rows} in={vals[0]:.9g} out={vals[1]:.9g} omax={vals[2]:.9g}\n"
+                )
+            mlp_count[0] += 1
+        except Exception as e:
+            with open(ATTN_OUT, "a") as f:
+                f.write(f"ff-probe-error {e!r}\n")
+        return out
+
+    vcls._feed_forward = ff_call
+
+    def line(kind, q, k, o, n):
+        vals = mx.stack(
+            [
+                mx.sum(q.astype(mx.float32)),
+                mx.sum(k.astype(mx.float32)),
+                mx.sum(o.astype(mx.float32)),
+                mx.max(mx.abs(o.astype(mx.float32))),
+            ]
+        ).tolist()
+        with open(ATTN_OUT, "a") as f:
+            f.write(
+                f"{count[0]} {kind} n={n} q={vals[0]:.9g} k={vals[1]:.9g} "
+                f"o={vals[2]:.9g} omax={vals[3]:.9g}\n"
+            )
+        count[0] += 1
+
+    orig_ragged = ra.ragged_decode_attention
+
+    def ragged(queries, keys, values, lengths, scale, *a, **kw):
+        out = orig_ragged(queries, keys, values, lengths, scale, *a, **kw)
+        try:
+            slots = kw.get("slots")
+            slot = int(slots[0]) if slots is not None else 0
+            n = int(lengths[0])
+            line(
+                "ragged",
+                queries[0, :, 0],
+                keys[slot, :, :n],
+                out[0, :, 0],
+                n,
+            )
+        except Exception as e:  # a probe only
+            with open(ATTN_OUT, "a") as f:
+                f.write(f"ragged-probe-error {e!r}\n")
+        return out
+
+    ra.ragged_decode_attention = ragged
+
+    orig_tree = tv.tree_attention
+
+    def tree(queries, cache, scale, shape, n0, *a, **kw):
+        out = orig_tree(queries, cache, scale, shape, n0, *a, **kw)
+        try:
+            n = int(n0) + 1
+            line(
+                "tree",
+                queries[0, :, 0],
+                cache.keys[0, :, :n],
+                out[0, :, 0],
+                n,
+            )
+        except Exception as e:
+            with open(ATTN_OUT, "a") as f:
+                f.write(f"tree-probe-error {e!r}\n")
+        return out
+
+    tv.tree_attention = tree
+
+
 def patch_runner(mod):
     """Log each request's stats timestamps as they are set (same runner file in both arms)."""
+    if ATTN_OUT:
+        patch_attn()
     cls = next(
         c
         for c in vars(mod).values()
@@ -374,6 +496,30 @@ MEM_OUT = os.environ.get("PB2_MEM_OUT")
 GIB = float(1 << 30)
 
 
+
+def _dtype_gib(arrays) -> dict:
+    """GiB per dtype over distinct arrays (decode KV: int8 codes + fp16 scales vs bf16)."""
+    seen, out = set(), {}
+    for a in arrays:
+        if a is None or id(a) in seen:
+            continue
+        seen.add(id(a))
+        out[str(a.dtype)] = out.get(str(a.dtype), 0) + int(a.nbytes)
+    return {k: round(v / GIB, 4) for k, v in out.items()}
+
+
+def _row_cache_arrays(drv) -> list:
+    """K / V (and int8 scales) of the caches the driver rows still hold (the prefill caches)."""
+    out = []
+    for r in drv.rows:
+        for c in r.cache or ():
+            for name in ("keys", "values", "k_scales", "v_scales"):
+                a = getattr(c, name, None)
+                if a is not None:
+                    out.append(a)
+    return out
+
+
 def holders(runner) -> dict:
     """GiB held by the engine's known retainers (each guarded: a missing module is skipped)."""
     out: dict = {}
@@ -403,6 +549,10 @@ def holders(runner) -> dict:
                 f"{name}_batch",
                 lambda drv=drv: sum(a.nbytes for a in drv.batch.arrays()),
             )
+            with contextlib.suppress(Exception):
+                out[f"{name}_batch_dtypes"] = _dtype_gib(drv.batch.arrays())
+            with contextlib.suppress(Exception):
+                out[f"{name}_prefill_rows_dtypes"] = _dtype_gib(_row_cache_arrays(drv))
             put(
                 f"{name}_rows",
                 lambda drv=drv: sum(

@@ -162,7 +162,7 @@ const settingdesc = {
   YUNSHU_VLM_APC_DISK_DIR:
     "Directory of the APC SSD tier. Unset: `~/.yunshu/cache/apc` (internal disk). Put it on a fast volume to keep the internal disk clean.",
   YUNSHU_KV_PRECISION:
-    "KV cache precision of the Qwen3.5-family runner’s shared decode batch: `bf16` (lossless) or `int8` (about 0.53x the KV memory and read bandwidth for a small attention error; memory vs quality). A lone request and the speculative lane stay bf16.",
+    "KV cache precision of the Qwen3.5-family runner’s decode rows: `bf16` (lossless) or `int8` (about 0.53x the KV memory and read bandwidth for a small attention error; memory vs quality). With int8 every decode row’s KV is int8, a lone request and concurrent rows alike, and speculative drafting and verification read it, so a reply never depends on whether other requests overlapped it. Prefill and the prefix cache stay bf16.",
   YUNSHU_VLM_APC_DISK_GB:
     "Size cap of the APC SSD tier in GiB, one budget for the whole directory (least recently used files go first across namespaces; 0 = no configured cap, the free-space reserve still applies). Unset: a quarter of the volume, at most 64 GiB. A 27B checkpoint costs about 130 KiB per token, so 64 GiB holds about 500K tokens.",
   YUNSHU_PREFILL_MATMUL:

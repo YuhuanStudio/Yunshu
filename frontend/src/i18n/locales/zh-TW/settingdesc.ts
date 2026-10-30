@@ -153,7 +153,7 @@ const settingdesc = {
   YUNSHU_VLM_APC_DISK_DIR:
     "APC SSD 層的目錄；未設定時為 `~/.yunshu/cache/apc`（內建磁碟）。可放到高速磁碟區以保持內建磁碟乾淨。",
   YUNSHU_KV_PRECISION:
-    "Qwen3.5 系列執行器共用解碼批次的 KV 快取精度：`bf16`（無損）或 `int8`（KV 記憶體與讀取頻寬約為 0.53 倍，注意力有小幅誤差，以品質換記憶體）。單一請求與推測解碼通道維持 bf16。",
+    "Qwen3.5 系列執行器解碼列的 KV 快取精度：`bf16`（無損）或 `int8`（KV 記憶體與讀取頻寬約為 0.53 倍，注意力有小幅誤差，以品質換記憶體）。選 int8 時每個解碼列的 KV 都是 int8，單一請求與併發請求一樣，推測解碼的草稿與驗證也讀取 int8 KV，所以回覆不會因為有沒有其他請求重疊而不同。預填與前綴快取維持 bf16。",
   YUNSHU_VLM_APC_DISK_GB:
     "APC SSD 層的大小上限（GiB），整個目錄共用一份預算（跨命名空間先淘汰最久未使用的檔案；0 表示不設上限，仍受剩餘空間保留限制）。未設定時為磁碟區的四分之一，最多 64 GiB。27B 檢查點每個 token 約 130 KiB，因此 64 GiB 約可容納 500K token。",
   YUNSHU_PREFILL_MATMUL:

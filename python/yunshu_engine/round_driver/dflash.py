@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 
 
 class DFlashBatch:
-    def __init__(self, model, draft):
+    def __init__(self, model, draft, kv_format: str = "bf16"):
+        self.kv_format = kv_format
         self._diag = dict(rounds=0, rows=0, s=0.0, nodes=0, used=0)
         from mlx_vlm.models.qwen3_5 import language as q35
 
@@ -91,8 +92,23 @@ class DFlashBatch:
         """Restore the window a checkpoint stored (see ``window``)."""
         self.hidden[id(row)] = mx.concatenate(list(layers), axis=-1)[:, -self.keep :]
 
+    @staticmethod
+    def _quantize_cache(cache: list) -> None:
+        """int8 KV: a joining row's bf16 prefill attention caches become int8 row caches (codes +
+        scales), quantized once from the same bf16 values whether the prefix was restored from the
+        APC or computed (hit == miss); GDN state is untouched."""
+        from mlx_vlm.models.cache import KVCache
+
+        from ..kernels.int8_kv import Int8KVCache
+
+        for i, c in enumerate(cache):
+            if type(c) is KVCache:
+                cache[i] = Int8KVCache.from_kv(c)
+
     def join(self, rows):
         for row in rows:
+            if self.kv_format == "int8":
+                self._quantize_cache(row.cache)
             if not self.can_draft:
                 row.slot = id(row)
                 self.rows.append(row)

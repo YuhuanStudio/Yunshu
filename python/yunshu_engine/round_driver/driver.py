@@ -90,6 +90,8 @@ def cache_buffers(cache: list) -> list:
     for c in cache:
         if getattr(c, "keys", None) is not None:
             out += [c.keys, c.values]
+            if getattr(c, "k_scales", None) is not None:  # int8 row cache
+                out += [c.k_scales, c.v_scales]
         else:
             out += [a for a in getattr(c, "cache", ()) if isinstance(a, mx.array)]
     return out
@@ -182,6 +184,7 @@ class RoundDriver:
         stop_tokens=None,
         chunk: int | None = None,
         apc: Any = None,
+        kv_format: str = "bf16",
     ):
         from .mtp import MTPHead
 
@@ -220,11 +223,21 @@ class RoundDriver:
             mx.set_cache_limit(prev)  # a tighter limit set by the host stays
         self.dflash = None
         if dflash_drafter is not None or (plain_verify and drafter is None):
+            from .. import tree_verify
             from .dflash import DFlashBatch
 
-            self.dflash = DFlashBatch(model, dflash_drafter)
+            if kv_format == "int8":
+                from ..kernels import int8_tile
+
+                int8_tile.install()
+                # fail loudly at load: no int8 tree-attention kernel installed means no int8 serve
+                # (the in-graph reference is test-only and never a fallback)
+                tree_verify.require_int8_kernels()
+            self.dflash = DFlashBatch(model, dflash_drafter, kv_format)
+        self.kv_format = kv_format
+        self.plain_verify = plain_verify
         self.batch: Any = (
-            self.dflash if self.dflash is not None else DecodeBatch(self.lm)
+            self.dflash if self.dflash is not None else DecodeBatch(self.lm, kv_format)
         )
         # APC prefix cache (mlx_vlm ``APCManager``): a prompt starts from the
         # longest stored checkpoint (target KV + GDN state, plus the MTP
