@@ -196,14 +196,15 @@ def test_long_atoms_keep_hit_equal_to_miss(tiny, draft):
     assert got[0] == ref
 
 
-def test_exact_repeat_replays_the_final_block(tiny):
-    """The second identical prompt writes the stored final block back (no forward
-    for it) and generates the same tokens as the first and as a cold run. Rows
-    with an MTP head are excluded (the head's tail state is not stored)."""
+@pytest.mark.parametrize("draft", [True, False])
+def test_exact_repeat_replays_the_final_block(tiny, draft):
+    """The second identical prompt writes the stored final block back (no target
+    forward for it) and generates the same tokens as the first and as a cold run;
+    an MTP-head row re-absorbs the tail into its head from the stored hidden rows."""
     from yunshu_engine.round_driver import replay
 
-    lm, _ = tiny
-    dr = None
+    lm, drafter = tiny
+    dr = drafter if draft else None
     ref = _run(lm, dr, [DOC], _manager())[0][0]
     replay.clear()
     apc = _manager()

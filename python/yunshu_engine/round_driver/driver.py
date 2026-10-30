@@ -700,11 +700,10 @@ class RoundDriver:
         """Replay key of a prompt's final block, or None when ``it`` is not one."""
         row = it.row
         ids = row.req.ids
-        if (
-            row.mtp_cache is not None
-            or row.finished
-            or not replay.eligible(it.start, it.end, len(ids))
-        ):
+        # An MTP head row replays too: the head's cache already holds the restored
+        # prefix and its tail is re-absorbed below from the stored hidden rows (a
+        # one-layer forward, as on a real step), so only the target forward is skipped.
+        if row.finished or not replay.eligible(it.start, it.end, len(ids)):
             return None
         from .. import dflash_apc_window
 
