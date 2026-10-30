@@ -147,3 +147,38 @@ def test_mtp_spec_off_server_decodes_in_the_same_batch_as_spec_on():
             toks += [e.token for e in d.step()]
         outs.append(toks)
     assert outs[0] == outs[1]
+
+
+def test_static_token_bans_keep_the_mtp_row_drafting_and_equal_plain_decode():
+    """ignore_eos / suppress_tokens on an MTP row: it still drafts (the ban is applied to every verify
+    row, as main's lane does), banned tokens never appear, and the tokens equal a plain row with the
+    same processor."""
+    from yunshu_engine.kernels.ragged_attention import tile_ready
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+    from yunshu_engine.vlm_batch_runner import TokenMaskProcessor
+
+    from .test_round_driver import PROMPTS, _tiny
+
+    if not mx.metal.is_available() or not tile_ready():
+        pytest.skip("needs M5-class tensor ops")
+    lm, drafter = _tiny()
+
+    def run(with_drafter, ban):
+        mask = TokenMaskProcessor(suppress=ban, eos_ids=[0], ignore_eos=True)
+        d = RoundDriver(
+            lm, drafter=drafter if with_drafter else None, stop_tokens=set()
+        )
+        d.add(Request(PROMPTS[1], 24, handle=0, processors=[mask]))
+        toks = []
+        while d.busy():
+            toks += [e.token for e in d.step()]
+        return toks, d
+
+    free, _ = run(False, [])
+    ban = sorted(set(free))[:4]
+    assert ban
+    plain, _ = run(False, ban)
+    drafted, d = run(True, ban)
+    assert not set(ban) & set(drafted)
+    assert drafted == plain
+    assert d.drafted > 0

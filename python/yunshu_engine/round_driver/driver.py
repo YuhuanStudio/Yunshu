@@ -357,10 +357,9 @@ class RoundDriver:
         )
 
     def _processors_draft(self, processors) -> bool:
-        """A row with these processors may draft: none, or (DFlash batch) static token bans only."""
-        return not processors or (
-            self.dflash is not None and static_mask_only(processors)
-        )
+        """A row with these processors may draft: none, or static token bans only (every verify row
+        gets the same ban, DFlash and MTP rows alike)."""
+        return not processors or static_mask_only(processors)
 
     def will_draft(self, *, sampling, processors, logprobs, draft: bool) -> bool:
         """Whether a request with these fields gets an MTP head row (as ``add``)."""
@@ -691,12 +690,26 @@ class RoundDriver:
                     greedy = mx.argmax(
                         lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
                     )
+            if req.processors and static_mask_only(req.processors):
+                # static bans: every window row gets the mask a plain row applies (``pure_at``), so a
+                # drafting row verifies against the same distributions
+                masked = lg[off : off + n]
+                for p in req.processors:
+                    masked = p.pure_at(row.generated, masked)
+                lg = mx.concatenate([lg[:off], masked, lg[off + n :]], axis=0)
+                greedy = mx.argmax(
+                    lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
+                )
             if row.force:
                 # the thinking budget's token at this position, not a sample
                 draws.append((it, mx.array(row.force[:1], dtype=mx.int32), None))
                 row.force = row.force[1:]
                 continue
-            if req.sampling is None and not req.processors and not req.logprobs:
+            if (
+                req.sampling is None
+                and (not req.processors or static_mask_only(req.processors))
+                and not req.logprobs
+            ):
                 draws.append((it, greedy[off : off + n], None))
                 continue
             if row.keyed is not None:
