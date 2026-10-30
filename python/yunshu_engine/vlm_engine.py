@@ -2677,12 +2677,12 @@ class VLMEngine:
             )
             # Every prompt piece uses the same arithmetic, while decode and
             # speculative verify retain their own invariant kernels. Only the
-            # jointly qualified 27B device/ABI/weight geometry can enter it.
+            # jointly qualified 27B device/ABI/weight geometry can enter it. The KV precision is
+            # not part of it: prefill and the prefix cache stay bf16 whatever the decode rows hold.
             split_ready = bool(
                 kernels.get("nax_prefill")
                 and kernels.get("attn_prefill")
                 and settings.get("YUNSHU_PREFILL_GDN") == "chunked"
-                and settings.get("YUNSHU_KV_PRECISION") == "bf16"
                 and all(
                     module.output_dims < lane_linear.NARROW
                     or module.output_dims >= 100_000

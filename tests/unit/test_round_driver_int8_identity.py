@@ -117,3 +117,18 @@ def test_long_apc_hit_equals_miss_with_logprobs(target, fmt):  # noqa: F811
     assert hit > 0
     assert first[0] == cold[0]
     assert out == cold[0]
+
+
+def test_split_invariant_prefill_does_not_depend_on_the_kv_precision():
+    """Prefill and the prefix cache are bf16 for every decode precision, so int8 rows need the same
+    split-invariant prefill: with it off, a prefix-cache hit restores at a non-grid length and a row
+    prefilled beside others splits its prompt differently from a solo one (27B 32K int8: first-token
+    logprob 0.078 off, hit != miss and solo != concurrent)."""
+    import inspect
+
+    from yunshu_engine import vlm_engine
+
+    src = inspect.getsource(vlm_engine)
+    start = src.index("split_ready = bool(")
+    end = src.index("gdn_prefill.configure_split(split_ready)")
+    assert "YUNSHU_KV_PRECISION" not in src[start:end]
