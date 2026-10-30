@@ -704,3 +704,23 @@ def test_cancel_mid_decode_leaves_the_other_row_unchanged(tiny):
             d.remove("drop")
     assert got == solo
     assert not d.rows
+
+
+def test_decode_batch_join_waits_until_after_the_first_token(tiny):
+    """The prefill step returns the first token before the row joins the decode batch (the join,
+    including the drafter's context ring, would otherwise sit on the first-token path); the next
+    step joins it and decoding continues with the tokens a run alone produces."""
+    from yunshu_engine.round_driver import driver as drv
+
+    lm, drafter = tiny
+    solo = _row_tokens(lm, drafter, PROMPTS[1])
+    d = drv.RoundDriver(lm, drafter=drafter, stop_tokens=set())
+    d.add(drv.Request(PROMPTS[1], N, handle="row"))
+    first = []
+    while not first:
+        first = [e.token for e in d.step()]
+    assert not d.batch.rows and len(d._pending_join) == 1
+    got = list(first)
+    while d.busy():
+        got += [e.token for e in d.step()]
+    assert d.batch.rows == [] and got == solo

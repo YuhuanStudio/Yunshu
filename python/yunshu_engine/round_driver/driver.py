@@ -223,6 +223,8 @@ class RoundDriver:
                 self.apc = coordinator
                 self._apc_manager = apc
         self.rows: list[_Row] = []
+        self._pending_join: list = []  # rows with their first token out, not yet in the decode batch
+        self._pending_heads: dict = {}
         self._deferred_apcs: list = []  # coordinators holding captured, unflushed checkpoints
         self.cost = CostCurve()
         self.steps = 0
@@ -656,8 +658,30 @@ class RoundDriver:
         return draws
 
     # ── one step ─────────────────────────────────────────────────────────
+    def _finish_join(self) -> None:
+        """Move rows whose prompt finished into the decode batch (deferred from the prefill
+        step so their first token is not delayed by it)."""
+        pending, self._pending_join = self._pending_join, []
+        heads, self._pending_heads = self._pending_heads, {}
+        live = [r for r in pending if r in self.rows and not r.finished]
+        if not live:
+            return
+        self.batch.join(live)
+        arrays = list(self.batch.arrays())
+        ready = [r for r in live if r.drafting] if self.head is not None else []
+        if ready:
+            self.head.join(ready)
+            arrays += self.head.slots.arrays()
+            # The first draft waits for the next decode step: the row's first token is out
+            # already, and drafting (a chain of head forwards) would only delay it.
+            for r in ready:
+                r.head_state = heads[id(r)]
+                arrays.append(r.head_state)
+        mx.eval(*arrays)
+
     def step(self) -> list[Event]:
         self.flush_checkpoints()  # the previous step's tokens have been handed out
+        self._finish_join()
         if not self.rows:
             return []
         if self.dflash is not None:
@@ -950,22 +974,19 @@ class RoundDriver:
         ]
         for r in joined:
             r.n = len(r.req.ids)
-        self.batch.join(joined)
+        # Joining the decode batch (slot copy, the drafter's context ring: a drafter forward over
+        # the window) is not needed for the first token, which is out below: it runs at the start
+        # of the next step, after the caller has handed the token on.
+        self._pending_join.extend(joined)
+        self._pending_heads.update(
+            {id(r): heads[id(r)] for r in joined if id(r) in heads}
+        )
         arrays = [a for r in self.rows if r.cache for a in cache_buffers(r.cache)]
         arrays += [
             a for r in self.rows if r.mtp_cache for a in cache_buffers(r.mtp_cache)
         ]
-        ready = [r for r in joined if r.drafting] if self.head is not None else []
-        if ready:
-            self.head.join(ready)
-            arrays += self.head.slots.arrays()
-            # The first draft waits for the next decode step: the row's first
-            # token is out already, and drafting (a chain of head forwards)
-            # would only delay it.
-            for r in ready:
-                r.head_state = heads[id(r)]
-                arrays.append(r.head_state)
-        mx.eval(*arrays, *self.batch.arrays())
+        arrays += list(self._pending_heads.values())
+        mx.eval(*arrays)
         self.steps += 1
         return events
 
