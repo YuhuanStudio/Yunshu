@@ -70,6 +70,7 @@ FINISH_STEPS = (
 LONG_FROM = 16384  # positions from here on prefill in LONG_CHUNK atoms
 LONG_CHUNK = 2048
 CHUNK = 512  # default prefill chunk: fixed spans from the prompt start
+SHORT_FIRST = 512  # a prompt with at most this many rows left runs before longer ones
 IDLE_BUDGET = 2048  # prefill tokens per prefill step when no row decodes
 ACCEPT_PRIOR = 0.7  # per-depth draft acceptance before a row has history
 ACCEPT_EMA = 0.15
@@ -654,7 +655,12 @@ class RoundDriver:
         self._prefilled_last = True
         decoding = bool(self.batch.rows)
         prefill_started = time.perf_counter()
-        out = self._prefill_step([r for r in self.rows if r.pending is None], decoding)
+        waiting = [r for r in self.rows if r.pending is None]
+        # Shortest remainder first: a restored prompt (a few rows to run) would
+        # otherwise ride behind a whole 2048-row span of a cold one (~1.9 s on the
+        # 27B); it finishes in tens of milliseconds, so it goes ahead.
+        short = [r for r in waiting if len(r.req.ids) - r.done <= SHORT_FIRST]
+        out = self._prefill_step(short or waiting, decoding)
         # A checkpoint ends a row's span for the step (the snapshot is taken from
         # the cache after it), so a prompt's last atoms arrive one step apart and
         # its first token waited a whole multi-row step per atom (8 x 1K: 8.3 s for

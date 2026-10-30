@@ -531,3 +531,19 @@ def test_sampled_bf16_rows_do_not_depend_on_drafting(tiny):
         assert got == ref
     finally:
         lm.update(original)
+
+
+def test_short_remainder_prefills_before_a_long_prompt(tiny):
+    """A prompt with few rows left (a restored one) is not queued behind a cold
+    prompt's span: after one step it is done and the long one has not started."""
+    from yunshu_engine.round_driver import driver as drv
+
+    lm, _ = tiny
+    d = drv.RoundDriver(lm, stop_tokens=set(), chunk=64)
+    long_ids = [(5 * i + 1) % 500 for i in range(1500)]
+    short_ids = [(3 * i + 2) % 500 for i in range(40)]
+    d.add(drv.Request(long_ids, 1, handle="long", use_apc=False))
+    d.add(drv.Request(short_ids, 5, handle="short", use_apc=False))
+    d.step()
+    done = {r.req.handle: r.done for r in d.rows}
+    assert done["short"] == 40 and done["long"] == 0
