@@ -244,8 +244,13 @@ class DecodeBatch:
         if not rows:
             return
         need = max(r.n for r in rows) + MAX_WINDOW + 1
+        adopt = self._adoptable(rows, need)
         for row in rows:
             row.slot = self.slots.alloc()
+        if adopt:
+            # a lone row joining an empty batch keeps its own KV buffers as the
+            # slot buffers (no copy of the whole context)
+            self.slots.cap = adopt
         self.slots.reserve(need)
         for i, lin in enumerate(self.linear):
             if lin:
@@ -264,10 +269,39 @@ class DecodeBatch:
             else:
                 for row in rows:
                     c = row.cache[i]
-                    self.slots.write_prefix(i, row.slot, c.keys, c.values, row.n)
+                    if adopt:
+                        self.slots.k[i], self.slots.v[i] = c.keys, c.values
+                    else:
+                        self.slots.write_prefix(i, row.slot, c.keys, c.values, row.n)
         for row in rows:
             row.cache = None
         self.rows.extend(rows)
+
+    def _adoptable(self, rows: list, need: int) -> int:
+        """Capacity of the buffers a lone row can hand over as the slot buffers, or 0.
+
+        Needs an empty batch and slot pool, and every attention cache of the row
+        a single-row ``[1, HKV, CAP, D]`` buffer pair with the same CAP >= ``need``."""
+        if (
+            len(rows) != 1
+            or self.rows
+            or self.slots.S
+            or self.slots.cap
+            or any(a is not None for a in self.slots.k)
+        ):
+            return 0
+        caps = set()
+        for i, lin in enumerate(self.linear):
+            if lin:
+                continue
+            c = rows[0].cache[i]
+            k, v = getattr(c, "keys", None), getattr(c, "values", None)
+            if k is None or v is None or k.ndim != 4 or k.shape[0] != 1:
+                return 0
+            if k.shape != v.shape or k.shape[2] < need or k.shape[2] % 64:
+                return 0
+            caps.add(int(k.shape[2]))
+        return caps.pop() if len(caps) == 1 else 0
 
     def leave(self, gone: list) -> None:
         """Drop rows (finished or cancelled) from the batch."""

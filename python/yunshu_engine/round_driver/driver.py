@@ -793,6 +793,9 @@ class RoundDriver:
                     tail_key, items[0].row.cache, items[0].start, items[0].end
                 )
         if entry is not None:
+            reserve_prompt_kv(
+                items[0].row.cache, len(items[0].row.req.ids) + MAX_WINDOW + 1
+            )
             replay.restore(entry, tail_key, items[0].row.cache)
             hidden = entry.hidden
             captures = list(entry.captures)
@@ -806,7 +809,7 @@ class RoundDriver:
             for it in items:
                 if it.seg is None:
                     continue
-                reserve_prompt_kv(it.row.cache, len(it.row.req.ids))
+                reserve_prompt_kv(it.row.cache, len(it.row.req.ids) + MAX_WINDOW + 1)
                 got: list[mx.array] = []
                 parts.append(
                     lane_forward(
