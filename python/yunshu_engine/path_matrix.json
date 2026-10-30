@@ -3218,10 +3218,14 @@
         "why": "Qwen4 hybrid caches are on the shared runner; same-checkpoint hit/miss gate remains required."
       },
       "prefill_stride_rule": {
-        "s": "missing",
-        "why": "stride is 0 unless spec_family and invariant kernels: hit-vs-cold numerics are not pinned for other families",
-        "owner": "unassigned",
-        "impact": "low"
+        "s": "engaged",
+        "why": "Flash-Next prefill is not split-invariant, so its APC checkpoints use the 2048 grid and semantic boundaries a cold run also splits at; turn-2 hit == cold bit-exact at 32K",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "invariant or qwen4"
+          ]
+        ]
       },
       "media_input": {
         "s": "engaged",

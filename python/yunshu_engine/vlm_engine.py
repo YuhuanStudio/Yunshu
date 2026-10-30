@@ -468,6 +468,18 @@ def _derive_vlm_quantization(config: dict) -> dict | None:
     return None
 
 
+def apc_prefill_stride(
+    spec_family: bool, invariant: bool, qwen4: bool, step: int
+) -> int:
+    """APC checkpoint grid: checkpoints sit only where a cold run of the same request also ends a forward.
+
+    Invariant kernels (Qwen3.5) make that hold at any split. Flash-Next (qwen4_exp) prefill is not
+    split-invariant, so its checkpoints need the grid: with stride 0 a turn-2 hit restored at the
+    turn-1 prompt end, the tail was prefilled as one span the cold run never had, and logprobs
+    drifted (|dlp| 0.05 at 32K; tokens equal)."""
+    return step if spec_family and (invariant or qwen4) else 0
+
+
 def resolve_external_ple_manifest(config: dict, model_path) -> None:
     """Make a relative ``text_config.ple_storage.manifest`` (qwen4_exp external PLE checkpoints)
     absolute against the model directory, as ``mlx_vlm.utils.load_model`` does; without it the
@@ -2716,8 +2728,8 @@ class VLMEngine:
         # After the kernels: the identity names the prefill matmul they installed.
         from .vlm_batch_runner import PREFILL_STEP
 
-        self._apc_prefill_stride = (
-            PREFILL_STEP if spec_family and (kernels or {}).get("invariant") else 0
+        self._apc_prefill_stride = apc_prefill_stride(
+            spec_family, bool((kernels or {}).get("invariant")), qwen4, PREFILL_STEP
         )
         from .kernels import buffer_cache
 

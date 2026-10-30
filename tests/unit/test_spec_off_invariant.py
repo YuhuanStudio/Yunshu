@@ -59,3 +59,15 @@ def test_non_spec_family_untouched(monkeypatch):
     assert calls == []
     assert eng._prefix_invariant_dispatch is False
     assert eng._apc_prefill_stride == 0
+
+
+def test_flash_next_apc_uses_the_prefill_grid():
+    # Flash-Next prefill is not split-invariant, so an APC hit is exact only where a cold run of
+    # the same request also has a forward boundary (grid multiples, semantic boundaries). With
+    # stride 0 a turn-2 hit restored at the turn-1 prompt end and logprobs drifted (|dlp| 0.05).
+    from yunshu_engine.vlm_engine import apc_prefill_stride
+
+    assert apc_prefill_stride(True, False, True, 2048) == 2048
+    assert apc_prefill_stride(True, True, False, 2048) == 2048
+    assert apc_prefill_stride(True, False, False, 2048) == 0
+    assert apc_prefill_stride(False, False, False, 2048) == 0
