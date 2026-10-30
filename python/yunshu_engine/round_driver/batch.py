@@ -250,7 +250,9 @@ def attend(
             queries, ks, vs, scale=at.scale, mask=mask[:, None, :, :]
         )
     else:
-        tile = H // HKV <= 8 and ra.tile_ready()
+        # the token-tile kernel reads bf16 only: int8 rows run the key-parallel kernel (one query token
+        # per threadgroup, so a token's bits do not depend on its window width, like the tile kernel's)
+        tile = H // HKV <= 8 and ra.tile_ready() and not slots.int8
         out = ra.ragged_decode_attention(
             queries,
             slots.k[i],
@@ -336,7 +338,7 @@ class DecodeBatch:
                 from ..kernels import buffer_cache
 
                 buffer_cache.offer_arrays(self.slots.arrays())
-            self.slots = Slots(len(self.linear), self.kv_format)
+            self.slots = Slots(len(self.linear), self.slots.kv_format)
             return
         sel = mx.array(keep, dtype=mx.int32)
         for i, lin in enumerate(self.linear):
