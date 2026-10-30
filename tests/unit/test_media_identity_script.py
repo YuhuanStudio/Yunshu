@@ -71,6 +71,7 @@ def test_cli_accepts_every_flag_the_job_scripts_pass():
         "--wide-text",
         "--text-lengths",
         "--probe",
+        "--probe-text",
         "--long",
         "--env",
     ):

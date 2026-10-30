@@ -296,6 +296,13 @@ def main() -> None:
         help="one image request, one token (layer probe)",
     )
     ap.add_argument(
+        "--probe-text",
+        type=int,
+        default=0,
+        metavar="SENTENCES",
+        help="with --probe: a text prompt of this many filler sentences instead of the image",
+    )
+    ap.add_argument(
         "--long",
         type=int,
         nargs=2,
@@ -342,7 +349,20 @@ def main() -> None:
         )["data"][0]["id"]
         if a.probe:
             # one image request, one token: the layer-checksum probe (pb2_hook PB2_LAYERSUM_OUT)
-            text = chat(url, model, image_msg(0, WIDE_QUESTIONS[0]), max_tokens=1)
+            if a.probe_text:
+                body = "".join(
+                    FILLER.replace("harbour", "harbour0") for _ in range(a.probe_text)
+                )
+                prompt = [
+                    {
+                        "role": "user",
+                        "content": body
+                        + "Variant 0: in one sentence, what does the harbour master record?",
+                    }
+                ]
+            else:
+                prompt = image_msg(0, WIDE_QUESTIONS[0])
+            text = chat(url, model, prompt, max_tokens=1)
             a.out.write_text(json.dumps({"probe": text}))
             print(json.dumps({"probe": text}), flush=True)
             return
