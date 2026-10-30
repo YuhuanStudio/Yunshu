@@ -425,7 +425,13 @@ class RoundDriver:
         limit = (len(row.req.ids) - 1) // 64 * 64
         while end not in row.ckpts and end < limit:
             nxt = self._span_end(row, end)
-            if nxt > limit or nxt - start > budget:
+            # a run keeps one atom size (the long-position atoms read the KV in
+            # fewer, larger passes)
+            if (
+                nxt > limit
+                or nxt - start > budget
+                or self.atom(end) != self.atom(start)
+            ):
                 break
             end = nxt
         return end
