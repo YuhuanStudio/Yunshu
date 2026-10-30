@@ -450,10 +450,53 @@ def patch_attn():
     tv.tree_attention = tree
 
 
+STEP_OUT = os.environ.get("PB2_STEP_OUT")
+
+
+def patch_steps():
+    """Per decode-step wall time of the driver (rows in the batch at the step, seconds, seconds spent in
+    DecodeBatch._gdn when PB2_GDN_EVAL=1: that mode evaluates around the layer, so its step times are
+    inflated and only the _gdn share is read from it)."""
+    import mlx.core as mx
+
+    from yunshu_engine.round_driver import batch as bt
+    from yunshu_engine.round_driver import driver as drv
+
+    gdn = [0.0]
+    if os.environ.get("PB2_GDN_EVAL"):
+        orig_gdn = bt.DecodeBatch._gdn
+
+        def timed_gdn(self, *args, **kw):
+            xn = next(a for a in args if hasattr(a, "ndim") and a.ndim == 3)
+            mx.eval(xn)
+            t0 = time.perf_counter()
+            out = orig_gdn(self, *args, **kw)
+            mx.eval(out)
+            gdn[0] += time.perf_counter() - t0
+            return out
+
+        bt.DecodeBatch._gdn = timed_gdn
+
+    orig = drv.RoundDriver._decode_step
+
+    def step(self):
+        gdn[0] = 0.0
+        rows = len(self.batch.rows)
+        t0 = time.perf_counter()
+        out = orig(self)
+        with open(STEP_OUT, "a") as f:
+            f.write(f"{rows} {time.perf_counter() - t0:.6f} {gdn[0]:.6f}\n")
+        return out
+
+    drv.RoundDriver._decode_step = step
+
+
 def patch_runner(mod):
     """Log each request's stats timestamps as they are set (same runner file in both arms)."""
     if ATTN_OUT:
         patch_attn()
+    if STEP_OUT:
+        patch_steps()
     cls = next(
         c
         for c in vars(mod).values()
@@ -656,6 +699,15 @@ def patch_apc(mod):
             # cProfile cannot nest (Python 3.12+): only the outermost APC call is profiled
             outer = not depth[0] and not os.environ.get("PB2_APC_NOPROF")
             prof = cProfile.Profile() if outer else None
+            if name == "lookup" and os.environ.get("PB2_APC_SYNC") and not depth[0]:
+                # GPU work still queued when the lookup starts is billed to its clone's eval: wait for
+                # it first and log the wait separately
+                import mlx.core as mx
+
+                ts = time.perf_counter()
+                mx.synchronize()
+                with open(APC_OUT, "a") as f:
+                    f.write(f"apc.sync_before_lookup {time.perf_counter() - ts:.4f}\n")
             t0 = time.perf_counter()
             depth[0] += 1
             if prof is not None:
