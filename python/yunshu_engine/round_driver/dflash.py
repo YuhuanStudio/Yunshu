@@ -17,8 +17,8 @@ import mlx.core as mx
 from .. import dflash_ring, dflash_tree, keyed_sampling, tree_verify
 from ..copy_drafter import CopyDrafter
 from ..dflash_context import context_window
-from ..dflash_fast import Verifier, prepare
-from ..dflash_plan import FastShape, reorder, search_tree
+from ..dflash_fast import Verifier, pack_readback, prepare, unpack_readback
+from ..dflash_plan import FastShape, remap_landed, reorder, search_tree
 from ..text_logprobs import top_logprobs_device
 from .allocate import fair_nodes
 from .forward import logits
@@ -61,6 +61,9 @@ class DFlashBatch:
         # A lone drafting row's next lattice, queued behind its verify before the host readback
         # (``_prebuild``): id(row) -> lattice
         self.prebuilt = {}
+        # A lone row's cost-aware node budget (the lane's NodeBudget: 0 / 7 / 15 nodes by measured
+        # landing and round cost): id(row) -> NodeBudget
+        self.budgets = {}
         self.turn = 0
         logger.info(
             "Round driver DFlash packed: shared 32-node budget, context=%d", self.keep
@@ -146,6 +149,7 @@ class DFlashBatch:
             self.copiers.pop(id(row), None)
             self.hidden.pop(id(row), None)
             self.prebuilt.pop(id(row), None)
+            self.budgets.pop(id(row), None)
 
     def arrays(self):
         from .driver import cache_buffers
@@ -204,6 +208,8 @@ class DFlashBatch:
     def _step_rows_inner(self, driver, rows) -> list[Event]:
         from .driver import _Item
 
+        t_start = time.perf_counter()
+
         copies = {}
         rooms = []
         for b, r in enumerate(rows):
@@ -228,6 +234,20 @@ class DFlashBatch:
             rooms.append(len(copied) if copied else min(15, room))
         nodes = fair_nodes(rooms, turn=self.turn)
         self.turn += 1
+        budget = None
+        if len(rows) == 1 and rooms[0] and 0 not in copies:
+            # a lone row sizes its tree as the lane does; more rows share the 32-node budget
+            from ..spec_schedule import NodeBudget
+
+            r = rows[0]
+            budget = self.budgets.get(id(r))
+            if budget is None:
+                budget = self.budgets[id(r)] = NodeBudget(
+                    15, prior=dflash_tree.PRIOR, widths=(7, 15)
+                )
+            nodes = [
+                min(nodes[0], budget.choose(max(0, r.req.max_tokens - r.generated - 1)))
+            ]
         live = [b for b, n in enumerate(nodes) if n and b not in copies]
         proposals = {}
         ready = {b: self.prebuilt.pop(id(rows[b]), None) for b in live}
@@ -321,9 +341,16 @@ class DFlashBatch:
             for b, (r, w, res, (target, lp, extra), n) in enumerate(
                 zip(rows, windows, results, draws, nodes, strict=True)
             ):
-                toks = w.tokens.reshape(-1).tolist()
-                parents = w.shape.parents_array().tolist()
-                targets = target.reshape(-1).tolist()
+                ranks_dev = getattr(w.shape, "original_ranks", None)
+                parents_dev = w.shape.parents_array()
+                # one transfer for the round (the lane's pack_readback)
+                targets, toks, parents, ranks = unpack_readback(
+                    pack_readback(target, w.tokens, parents_dev, ranks_dev).tolist(),
+                    int(target.size),
+                    int(w.tokens.size),
+                    int(parents_dev.size),
+                    ranks_dev is not None,
+                )
                 path = dflash_tree.walk(toks, parents, targets)
                 committed = [toks[p] for p in path[1:]] + [targets[path[-1]]]
                 used = 0
@@ -343,6 +370,16 @@ class DFlashBatch:
                     ):
                         break
                 kept = path[:used]
+                if budget is not None and b == 0:
+                    landed = [row - 1 for row in path[1:]]
+                    if ranks is not None:
+                        landed = [x for x in remap_landed(landed, ranks) if x < n]
+                    budget.observe(
+                        n,
+                        landed,
+                        (time.perf_counter() - t_start) * 1000,
+                        first=r.generated - used == 1,
+                    )
                 st = self.stats.setdefault(
                     id(r),
                     dict(rounds=0, nodes=0, used=0, copy=0, copy_used=0, hist=[0] * 17),
