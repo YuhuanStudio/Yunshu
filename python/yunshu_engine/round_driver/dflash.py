@@ -58,6 +58,9 @@ class DFlashBatch:
         self.hidden = {}
         self.rings = {}
         self.copiers = {}
+        # A lone drafting row's next lattice, queued behind its verify before the host readback
+        # (``_prebuild``): id(row) -> lattice
+        self.prebuilt = {}
         self.turn = 0
         logger.info(
             "Round driver DFlash packed: shared 32-node budget, context=%d", self.keep
@@ -142,6 +145,7 @@ class DFlashBatch:
             self.rings.pop(id(row), None)
             self.copiers.pop(id(row), None)
             self.hidden.pop(id(row), None)
+            self.prebuilt.pop(id(row), None)
 
     def arrays(self):
         from .driver import cache_buffers
@@ -226,16 +230,19 @@ class DFlashBatch:
         self.turn += 1
         live = [b for b, n in enumerate(nodes) if n and b not in copies]
         proposals = {}
-        if live:
+        ready = {b: self.prebuilt.pop(id(rows[b]), None) for b in live}
+        self.prebuilt.clear()  # a copy round or a row without room drops its lattice
+        fresh = [b for b in live if ready[b] is None]
+        if fresh:
             hs = dflash_ring.draft_hidden_batch(
                 self.draft,
-                [self.rings[id(rows[b])] for b in live],
-                mx.array([rows[b].pending for b in live], dtype=mx.int32),
+                [self.rings[id(rows[b])] for b in fresh],
+                mx.array([rows[b].pending for b in fresh], dtype=mx.int32),
                 15,
             )
-            for j, b in enumerate(live):
+            for j, b in enumerate(fresh):
                 r = rows[b]
-                lat = dflash_tree.lattice_from_hidden(
+                ready[b] = dflash_tree.lattice_from_hidden(
                     self.draft,
                     hs[j : j + 1],
                     mx.array([r.pending], dtype=mx.int32),
@@ -243,6 +250,10 @@ class DFlashBatch:
                     committed=r.generated,
                     penalty=r.penalty,
                 )
+        if live:
+            for b in live:
+                r = rows[b]
+                lat = ready[b]
                 toks, parents = search_tree(lat, nodes[b])
                 toks, parents, ranks = reorder(toks, parents)
                 proposals[b] = (
@@ -305,6 +316,7 @@ class DFlashBatch:
                     )
                     draws.append((targets, lp, None))
             mx.async_eval(*[d[0] for d in draws])
+            gpu_walked = self._prebuild(rows, windows, results, draws, nodes, copies)
             events: list[Event] = []
             for b, (r, w, res, (target, lp, extra), n) in enumerate(
                 zip(rows, windows, results, draws, nodes, strict=True)
@@ -369,7 +381,14 @@ class DFlashBatch:
                         observe(st, max(0, used - 1), n)
                 if vocab is not None:
                     vocab.learn(committed[:used])
-                if not r.finished and self.can_draft:
+                if b in gpu_walked:
+                    if not r.finished and used != len(path):
+                        # only a stop / length cut ends a walked row's path early (rows with a
+                        # budget or a guide are never walked on the GPU)
+                        raise RuntimeError(
+                            "round driver: a GPU-walked DFlash row was cut short"
+                        )
+                elif not r.finished and self.can_draft:
                     hidden = mx.concatenate(res.captured, axis=-1)[
                         :, mx.array(kept, dtype=mx.int32)
                     ]
@@ -395,8 +414,59 @@ class DFlashBatch:
                     st["copy_used"] / max(1, st["copy"]),
                     st["hist"],
                 )
+        for r in gone:
+            self.prebuilt.pop(id(r), None)
         driver.rows = [r for r in driver.rows if not r.finished]
         driver._release(gone)
-        mx.eval(*self.arrays())
+        # queued, not waited for: the next step builds its graph while the GPU finishes this one
+        # (and the prebuilt lattice), as the lane's round loop does
+        mx.async_eval(
+            *self.arrays(),
+            *[
+                x
+                for lat in self.prebuilt.values()
+                for x in (lat.cands, lat.unary, lat.anchor)
+            ],
+        )
         driver.steps += 1
         return events
+
+    def _prebuild(self, rows, windows, results, draws, nodes, copies) -> set:
+        """A lone drafting row (model tree round, no guide / budget / force): take its accepted path
+        on the GPU (``walk_gpu``), append it to the drafter ring and queue the next round's lattice,
+        all before the host reads the verify back -- the lane's next-round pipelining. Returns the
+        rows (indices) whose ring was appended here."""
+        from ..dflash_plan import walk_gpu
+
+        if not self.can_draft or len(rows) != 1:
+            return set()
+        b, r = 0, rows[0]
+        target, _lp, extra = draws[0]
+        if (
+            not r.drafting
+            or r.force
+            or r.req.guide is not None
+            or r.req.budget is not None
+            or b in copies
+            or not nodes[b]
+            or extra is not None
+        ):
+            return set()
+        w, res = windows[0], results[0]
+        path_g, count_g, bonus_g = walk_gpu(
+            w.tokens.reshape(-1), w.shape.parents_array(), target.reshape(-1)
+        )
+        ring = self.rings[id(r)]
+        rows_g = mx.take(mx.concatenate(res.captured, axis=-1), path_g, axis=1)
+        ring.append(self.draft, rows_g, count_g)
+        lat = dflash_tree.lattice_from_hidden(
+            self.draft,
+            dflash_ring.draft_hidden(self.draft, ring, bonus_g, 15),
+            bonus_g,
+            keyed=r.keyed,
+            committed=r.generated + count_g,
+            penalty=r.penalty,
+        )
+        mx.async_eval(lat.cands, lat.unary, lat.anchor)
+        self.prebuilt[id(r)] = lat
+        return {b}
