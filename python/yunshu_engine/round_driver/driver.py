@@ -107,6 +107,38 @@ def static_mask_only(processors) -> bool:
     )
 
 
+def draft_penalty(processors):
+    """The frequency / presence penalty of a row that keeps drafting with one: the processors are static
+    bans plus one ``GeneratedTokenPenalty`` (the non-thinking default ``presence_penalty`` 1.5 of the Qwen
+    cards). A drafting row applies it to every window row over the window's own tokens (the serial
+    ``window_row`` arithmetic, as the speculative lane does) and counts the tokens a round kept; anything
+    else returns None."""
+    from ..text_logit_processors import GeneratedTokenPenalty
+
+    pens = [p for p in processors or () if isinstance(p, GeneratedTokenPenalty)]
+    rest = [p for p in processors or () if not isinstance(p, GeneratedTokenPenalty)]
+    if len(pens) != 1 or (rest and not static_mask_only(rest)):
+        return None
+    return pens[0]
+
+
+def window_penalty(penalty, logits: mx.array, window: mx.array) -> mx.array:
+    """``penalty`` on a chain window's rows ``logits`` [n, V]: row j counts the committed tokens plus
+    ``window[: j + 1]`` (the tokens fed up to it), the counts ``window_row`` builds, then the same
+    elementwise ``_apply`` on each row."""
+    vocab = int(logits.shape[-1])
+    tokens = window.reshape(-1).astype(mx.int32)
+    n = int(tokens.shape[0])
+    valid = ((tokens >= 0) & (tokens < vocab)).astype(mx.float32)
+    hits = (
+        mx.zeros((n, vocab), dtype=mx.float32)
+        .at[mx.arange(n), mx.clip(tokens, 0, vocab - 1)]
+        .add(valid)
+    )
+    counts = penalty._counts(vocab)[None] + mx.cumsum(hits, axis=0)
+    return penalty._apply(counts, logits)
+
+
 @dataclass
 class Request:
     """What a row needs from the caller (the runner's job)."""
@@ -168,6 +200,9 @@ class _Row:
     salt: int = 0  # APC key of this row's cache layout
     apc: Any = None  # this row's APC coordinator (its checkpoint plan is per request)
     head_state: Any = None  # MTP head state of a just-joined row: its first draft
+    penalty: Any = (
+        None  # GeneratedTokenPenalty of a drafting / keyed row (applied per window row)
+    )
 
 
 @dataclass
@@ -179,6 +214,7 @@ class _Item:
     end: int = 0
     at: int = 0  # first packed / padded position of the row's tokens
     count: int = 0  # tokens of the row in the step
+    tokens: Any = None  # a decode window's tokens (pending + drafts); None: just the pending token
 
 
 class RoundDriver:
@@ -291,7 +327,7 @@ class RoundDriver:
         if (
             req.sampling is not None
             and req.draft
-            and self._processors_draft(req.processors)
+            and self._processors_draft(req.processors, req.logprobs, req.guide)
             and (not req.logprobs or self.dflash is not None)
             and keyed_sampling.supports(req.sampling)
         ):
@@ -307,7 +343,7 @@ class RoundDriver:
         draft = bool(
             req.draft
             and self.can_draft
-            and self._processors_draft(req.processors)
+            and self._processors_draft(req.processors, req.logprobs, req.guide)
             and (req.sampling is None or keyed is not None)
         )
         row = _Row(
@@ -320,6 +356,10 @@ class RoundDriver:
             context=list(req.ids),
             drafting=draft,
             keyed=keyed,
+            # a keyed row draws in the window branch (no ``_processed``) whether or not it drafts
+            penalty=draft_penalty(req.processors)
+            if draft or keyed is not None
+            else None,
         )
         seed = getattr(req.sampling, "seed", None)
         if req.sampling is not None and keyed_sampling.supports(req.sampling):
@@ -356,10 +396,13 @@ class RoundDriver:
             self.dflash is not None and self.dflash.can_draft
         )
 
-    def _processors_draft(self, processors) -> bool:
-        """A row with these processors may draft: none, or static token bans only (every verify row
-        gets the same ban, DFlash and MTP rows alike)."""
-        return not processors or static_mask_only(processors)
+    def _processors_draft(self, processors, logprobs=False, guide=None) -> bool:
+        """A row with these processors may draft: none, static token bans (every verify row gets the
+        same ban, DFlash and MTP rows alike), or bans plus one frequency / presence penalty without
+        logprobs or a guide (``draft_penalty``, as the speculative lane's ``tree_penalty``)."""
+        if not processors or static_mask_only(processors):
+            return True
+        return draft_penalty(processors) is not None and not logprobs and guide is None
 
     def will_draft(self, *, sampling, processors, logprobs, draft: bool) -> bool:
         """Whether a request with these fields gets an MTP head row (as ``add``)."""
@@ -369,7 +412,7 @@ class RoundDriver:
             and (
                 sampling is None
                 or (
-                    self._processors_draft(processors)
+                    self._processors_draft(processors, logprobs)
                     and (not logprobs or self.dflash is not None)
                     and keyed_sampling.supports(sampling)
                 )
@@ -700,6 +743,19 @@ class RoundDriver:
                 greedy = mx.argmax(
                     lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
                 )
+            if row.penalty is not None and it.kind == "d":
+                # a drafting row's penalty: every window row over the tokens fed up to it (a prompt's
+                # last position has nothing generated yet, as the serial first call)
+                window = (
+                    it.tokens
+                    if it.tokens is not None
+                    else mx.array([row.pending], dtype=mx.int32)
+                )
+                masked = window_penalty(row.penalty, lg[off : off + n], window)
+                lg = mx.concatenate([lg[:off], masked, lg[off + n :]], axis=0)
+                greedy = mx.argmax(
+                    lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
+                )
             if row.force:
                 # the thinking budget's token at this position, not a sample
                 draws.append((it, mx.array(row.force[:1], dtype=mx.int32), None))
@@ -707,7 +763,11 @@ class RoundDriver:
                 continue
             if (
                 req.sampling is None
-                and (not req.processors or static_mask_only(req.processors))
+                and (
+                    not req.processors
+                    or static_mask_only(req.processors)
+                    or row.penalty is not None
+                )
                 and not req.logprobs
             ):
                 draws.append((it, greedy[off : off + n], None))
@@ -1114,18 +1174,21 @@ class RoundDriver:
         # The drafts are still a lazy graph (the previous step queued the
         # chain and returned before it ran): the window's tokens are built on
         # the device, so this step's graph is built while the chain runs.
-        lens, parts, used_drafts = [], [], []
+        lens, parts, used_drafts, wins = [], [], [], []
         for r in rows:
             use = r.nd if r.draft_dev is not None and not r.force else 0
             parts.append(mx.array([r.pending], dtype=mx.int32))
             if use:
                 parts.append(r.draft_dev)
+            wins.append(
+                mx.concatenate(parts[-2:]) if use and r.penalty is not None else None
+            )
             lens.append(1 + use)
             used_drafts.append(use)
         hidden = self.batch.forward(lens, mx.concatenate(parts))
         items, at = [], 0
-        for r, n in zip(rows, lens, strict=True):
-            items.append(_Item("d", r, None, 0, 0, at, n))
+        for r, n, win in zip(rows, lens, wins, strict=True):
+            items.append(_Item("d", r, None, 0, 0, at, n, tokens=win))
             at += n
         draws = self._draw(items, hidden)
 
@@ -1266,6 +1329,7 @@ class RoundDriver:
                     )
                 ]
         row.drafts, row.draft_dev, row.nd = [], None, 0
+        before = row.pending
         used = 0
         for t in committed:
             used += 1
@@ -1296,6 +1360,12 @@ class RoundDriver:
             if guide_cut:
                 break
         row.pending = committed[used - 1]
+        if row.penalty is not None:
+            # count what a serial run would have fed: the old pending token and every kept token
+            # but the new pending one (``commit_tokens``)
+            fed = ([before] if before is not None else []) + committed[: used - 1]
+            if fed:
+                row.penalty.commit_tokens(fed)
         if (
             self.head is not None
             and self.head.vocab is not None

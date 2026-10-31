@@ -934,3 +934,43 @@ def test_short_tail_attends_through_the_dense_lane_kernel(tiny, monkeypatch):
         )
         assert calls == expect, (rows, calls)
         assert ragged_kv.dense_lane_active() is False
+
+
+@pytest.mark.parametrize("sampled", [False, True])
+def test_presence_penalty_keeps_the_mtp_row_drafting_and_equal_plain_decode(sampled):
+    """presence / frequency penalty on an MTP row: it drafts, each window row is penalized over the tokens
+    fed up to it (the serial ``window_row`` counts), and the tokens equal the row decoded without drafting."""
+    from yunshu_engine.kernels.ragged_attention import tile_ready
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+    from yunshu_engine.text_logit_processors import GeneratedTokenPenalty
+    from yunshu_engine.vlm_batch_runner import RowParams
+
+    if not mx.metal.is_available() or not tile_ready():
+        pytest.skip("needs M5-class tensor ops")
+    lm, drafter = _tiny()
+    params = RowParams(0.7, 0.95, 20, 0.0, seed=1234) if sampled else None
+
+    def run(draft, penalty=True, head=True):
+        d = RoundDriver(lm, drafter=drafter if head else None, stop_tokens=set())
+        # this tiny decode never repeats a token: a negative presence penalty (generated tokens
+        # favored) is what makes the penalty change it
+        procs = [GeneratedTokenPenalty(0.0, -8.0)] if penalty else []
+        d.add(
+            Request(
+                PROMPTS[1], 48, handle=0, sampling=params, processors=procs, draft=draft
+            )
+        )
+        toks = []
+        while d.busy():
+            toks += [e.token for e in d.step()]
+        return toks, d
+
+    free, _ = run(False, penalty=False)
+    plain, _ = run(False)
+    assert plain != free
+    drafted, d = run(True)
+    assert drafted == plain
+    assert d.drafted > 0
+    # a spec-off server (no head) still keys a sampled row: the penalty must apply there too
+    off, _ = run(True, head=False)
+    assert off == plain

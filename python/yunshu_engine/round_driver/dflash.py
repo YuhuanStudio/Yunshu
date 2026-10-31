@@ -241,6 +241,7 @@ class DFlashBatch:
                     mx.array([r.pending], dtype=mx.int32),
                     keyed=r.keyed,
                     committed=r.generated,
+                    penalty=r.penalty,
                 )
                 toks, parents = search_tree(lat, nodes[b])
                 toks, parents, ranks = reorder(toks, parents)
@@ -289,16 +290,18 @@ class DFlashBatch:
                     draws.append((targets, None, extra))
                 else:
                     drawn = row_logits[None]
-                    for p in (
-                        r.req.processors
-                    ):  # static bans only (Driver._processors_draft)
-                        drawn = p.pure_at(r.generated, drawn)
+                    for p in r.req.processors:
+                        # static bans (and a penalty: per window row below; Driver._processors_draft)
+                        if p is not r.penalty:
+                            drawn = p.pure_at(r.generated, drawn)
                     targets, lp = keyed_sampling.tree_target_rows(
                         drawn,
                         w.shape,
                         r.generated,
                         r.keyed,
                         SimpleNamespace(logprobs=r.req.logprobs),
+                        r.penalty,
+                        w.tokens,
                     )
                     draws.append((targets, lp, None))
             mx.async_eval(*[d[0] for d in draws])

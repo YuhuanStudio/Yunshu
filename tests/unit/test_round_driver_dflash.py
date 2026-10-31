@@ -538,3 +538,47 @@ def test_static_token_bans_keep_the_dflash_row_drafting_and_equal_plain_decode(t
     assert not set(ban) & set(drafted)
     assert drafted == plain
     assert d.drafted > 0  # the row speculated under the ban
+
+
+@pytest.mark.parametrize("sampled", [False, True])
+def test_presence_penalty_keeps_the_dflash_row_drafting_and_equal_plain_decode(
+    target, sampled
+):  # noqa: F811
+    """A non-thinking request carries the card's presence_penalty 1.5: the row still drafts (the 8K sampled
+    gapboard cell had decoded plain, 23 vs 53 tok/s), every verify row is penalized over the tokens fed up to
+    it, and the tokens equal the same row decoded without drafting."""
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+    from yunshu_engine.text_logit_processors import GeneratedTokenPenalty
+    from yunshu_engine.vlm_batch_runner import RowParams
+
+    prompt = [(7 * i + 11) % 500 for i in range(120)]
+    params = RowParams(0.7, 0.95, 20, 0.0, seed=1234) if sampled else None
+
+    def run(draft, penalty=True, drafter=True):
+        d = RoundDriver(
+            target,
+            dflash_drafter=_draft(target) if drafter else None,
+            plain_verify=not drafter,
+            stop_tokens=set(),
+            chunk=64,
+        )
+        procs = [GeneratedTokenPenalty(0.5, 1.5)] if penalty else []
+        d.add(
+            Request(
+                prompt, 32, handle=0, sampling=params, processors=procs, draft=draft
+            )
+        )
+        toks = []
+        while d.busy():
+            toks += [e.token for e in d.step()]
+        return toks, d
+
+    free, _ = run(False, penalty=False)
+    plain, _ = run(False)
+    assert plain != free  # the penalty changes this decode
+    drafted, d = run(True)
+    assert drafted == plain
+    assert d.drafted > 0
+    # a spec-off server (no drafter) still keys a sampled row: the penalty must apply there too
+    off, _ = run(True, drafter=False)
+    assert off == plain

@@ -862,10 +862,16 @@ class VLMBatchRunner:
         # other processors retain their established path. Sampled rows draw
         # with the position-keyed sampler, so a draft is accepted exactly when serial
         # sampling would have produced it.
+        from .round_driver.driver import draft_penalty
+
         job.allow_draft = bool(
             allow_draft
             and (
-                (static_masks_only(processors) and not logprobs and guide is None)
+                (
+                    (static_masks_only(processors) or draft_penalty(processors))
+                    and not logprobs
+                    and guide is None
+                )
                 or (
                     self.driver is not None
                     and getattr(self.driver, "dflash", None) is not None
