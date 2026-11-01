@@ -17,7 +17,7 @@ import logging
 import re
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -219,6 +219,9 @@ class AnthropicMessagesRequest(BaseModel):
     with comments and forwarded to the engine for additional functionality.
     """
 
+    # a count_tokens body takes no max_tokens, so the budget rule has nothing to compare against
+    _checks_budget_vs_max_tokens: ClassVar[bool] = True
+
     # ── Anthropic-native fields ──
     model: str
     messages: list[AnthropicMessage]
@@ -337,7 +340,11 @@ class AnthropicMessagesRequest(BaseModel):
                 # Anthropic mandates max_tokens > thinking.budget_tokens (the budget
                 # is the reasoning allowance, which must leave room for the visible answer);
                 # the API returns 400 otherwise. Was accepted leniently before.
-                if isinstance(self.max_tokens, int) and budget >= self.max_tokens:
+                if (
+                    self._checks_budget_vs_max_tokens
+                    and isinstance(self.max_tokens, int)
+                    and budget >= self.max_tokens
+                ):
                     raise ValueError(
                         f"thinking.budget_tokens ({budget}) must be less than max_tokens "
                         f"({self.max_tokens})"
@@ -378,10 +385,11 @@ class AnthropicMessagesRequest(BaseModel):
 
 class AnthropicCountTokensRequest(AnthropicMessagesRequest):
     """``/v1/messages/count_tokens`` takes the Messages body without ``max_tokens`` (the API's
-    count_tokens parameters do not include it): absent, so the thinking-budget rule
+    count_tokens parameters do not include it), so the thinking-budget rule
     (``budget_tokens < max_tokens``) does not reject a valid count request."""
 
-    max_tokens: int | None = Field(default=None, ge=1, le=1048576)
+    _checks_budget_vs_max_tokens: ClassVar[bool] = False
+    max_tokens: int = Field(default=1, ge=1, le=1048576)
 
 
 def _resolve_json_schema(req) -> dict | str | None:
