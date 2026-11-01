@@ -1511,19 +1511,27 @@ class VLMBatchRunner:
                 self._cleanup_step(
                     job, "release_rounds", lambda: release_rounds(group.gen)
                 )
-            if (
-                not group.jobs
-                and getattr(group, "spec", False)
-                and reason in ("stop", "length")
-                and job.cache_store
-                and not job.abandoned
-                and settings.get("YUNSHU_NEXT_TURN_PREFILL") == "decode"
+            if getattr(group, "spec", False) and (
+                settings.get("YUNSHU_NEXT_TURN_PREFILL") == "decode"
             ):
-                self._cleanup_step(
-                    job,
-                    "store_decode_cache",
-                    lambda: self._store_decode_cache(group, job),
-                )
+                skip = [
+                    why
+                    for why, bad in (
+                        ("other rows", bool(group.jobs)),
+                        (f"finish {reason}", reason not in ("stop", "length")),
+                        ("cache_store off", not job.cache_store),
+                        ("abandoned", bool(job.abandoned)),
+                    )
+                    if bad
+                ]
+                if skip:
+                    logger.info("decode cache not stored: %s", ", ".join(skip))
+                else:
+                    self._cleanup_step(
+                        job,
+                        "store_decode_cache",
+                        lambda: self._store_decode_cache(group, job),
+                    )
             self._cleanup_step(
                 job,
                 "release_apc_request",
