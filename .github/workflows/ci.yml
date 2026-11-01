@@ -114,6 +114,9 @@ jobs:
 
       - name: Browser API integration tests
         working-directory: frontend
+        env:
+          # serve the bundle built above, not the dev server (cold module transforms time out on the runner)
+          PLAYWRIGHT_SERVE: preview
         run: |
           pnpm exec playwright install --with-deps chromium webkit
           pnpm test:browser
