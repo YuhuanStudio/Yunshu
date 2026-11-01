@@ -102,3 +102,36 @@ def test_tree_penalty_gate():
     mask = TokenMaskProcessor(suppress=[1], eos_ids=[2], min_tokens=0, ignore_eos=False)
     assert tree_penalty(request([pen, mask])) is None
     assert tree_penalty(request([mask])) is None
+
+
+def test_static_bans_keep_the_fast_tree():
+    """ignore_eos / suppress_tokens alone: the fast tree bans the ids itself (gapboard turn-2
+    cells send ignore_eos and fell to the 8-token chain, 59 vs TensorFold's 132 tok/s)."""
+    from yunshu_engine.constrained_spec import tree_ban, tree_logits_ok
+
+    def request(procs, logprobs=False):
+        r = SpecRequest(logprobs)
+        r.processors = procs
+        r.guide = None
+        return r
+
+    eos = TokenMaskProcessor(suppress=[5], eos_ids=[2, 3], min_tokens=0, ignore_eos=True)
+    assert tree_ban(request([eos])) == frozenset({2, 3, 5})
+    assert tree_logits_ok(request([eos]))
+    floor = TokenMaskProcessor(eos_ids=[2], min_tokens=4, ignore_eos=False)
+    assert tree_ban(request([floor])) is None  # depends on the position: chain
+    assert not tree_logits_ok(request([floor]))
+    assert tree_ban(request([eos], logprobs=True)) is None
+    assert tree_ban(request([])) is None and tree_logits_ok(request([]))
+
+
+def test_fast_tree_ban_picks_the_serial_masked_argmax():
+    mx.random.seed(3)
+    logits = mx.random.normal((1, 16, 40)).astype(mx.bfloat16)
+    logits = logits.at[:, :, 2].add(10.0)  # the banned id would win every row
+    proc = TokenMaskProcessor(eos_ids=[2], ignore_eos=True)
+    serial = mx.argmax(proc._mask(logits, generated=7), axis=-1)
+    mask = mx.zeros((40,), dtype=mx.bool_).at[mx.array([2])].add(True)
+    fast = mx.argmax(mx.where(mask, mx.array(float("-inf"), logits.dtype), logits), axis=-1)
+    assert mx.array_equal(serial, fast).item()
+    assert not bool(mx.any(fast == 2).item())

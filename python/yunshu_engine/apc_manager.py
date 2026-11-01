@@ -1002,6 +1002,11 @@ class _Coordinator(APCCoordinator):
         policy = self.request(token_ids)
         if not policy or not self.is_checkpoint:
             return self._lookup_canonical(token_ids, **kwargs)
+        # the previous reply's decode cache first, on this path too (a 32K follow-up
+        # carries a checkpoint plan and missed it: 30720 cached of 33303)
+        tail = self._lookup_decode_tail(token_ids, **kwargs)
+        if tail is not None:
+            return tail
         points = self.checkpoint_lengths(token_ids, set(), begin=False)
         candidates = policy.get("lookup_points", [n for n, _ in policy["points"]])
         maximum = max(candidates, default=0)

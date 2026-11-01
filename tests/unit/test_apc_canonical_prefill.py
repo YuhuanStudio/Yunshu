@@ -338,3 +338,16 @@ def test_reply_cache_is_stored_off_the_grid_and_found_first():
     # a different conversation still takes the aligned checkpoint
     other = ids[:700] + [9999] * 600
     assert lookup(coordinator, other)["prefix_len"] == 640
+
+
+def test_reply_cache_is_found_on_the_checkpoint_policy_path_too():
+    """A 32K follow-up carries a checkpoint plan (``request`` returns a policy) and skipped
+    the reply cache: 30720 of 33303 cached instead of 33279 (gapboard 2026-11-02)."""
+    manager = _mgr(prefill_stride=2048, prefill_alignment=64)
+    coordinator = _coordinator(manager)
+    assert coordinator.is_checkpoint
+    ids = list(range(1300))
+    manager.store_exact_cache(ids[:640], _cache(640), extra_hash=7)
+    assert coordinator.store_decode_tail(ids[:1206], _cache(1206), extra_hash=7)
+    coordinator.set_request(ids, {"points": [(640, 1)], "written": 0})
+    assert lookup(coordinator, ids)["prefix_len"] == 1206

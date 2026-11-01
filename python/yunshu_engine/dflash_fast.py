@@ -562,7 +562,7 @@ def rounds(
 
     from . import dflash_tree as dt
     from . import mtp_lane
-    from .constrained_spec import current_request, tree_penalty
+    from .constrained_spec import current_request, tree_ban, tree_penalty
     from .copy_drafter import CopyDrafter
     from .copy_graft import GraftBudget, longest_verified_path, plan_tree_graft
     from .dflash_context import context_window
@@ -575,6 +575,9 @@ def rounds(
     keyed = sampler if isinstance(sampler, KeyedSampler) else None
     request = current_request()
     penalty = tree_penalty(request)
+    banned = tree_ban(request)
+    ban_ids = mx.array(sorted(banned), dtype=mx.int32) if banned is not None else None
+    ban_mask = None
     logger.info(
         "DFlash fast verification: keyed=%s logprobs=%s penalty=%s",
         keyed is not None,
@@ -903,6 +906,17 @@ def rounds(
                             penalty,
                             window,
                         )
+                    elif ban_ids is not None:
+                        # the serial mask (banned ids to -inf), then the greedy argmax
+                        logits = lm.speculative_logits_from_hidden(result.hidden)
+                        vocab = int(logits.shape[-1])
+                        if ban_mask is None or int(ban_mask.shape[0]) != vocab:
+                            keep = ban_ids[ban_ids < vocab]
+                            ban_mask = mx.zeros((vocab,), dtype=mx.bool_)
+                            if keep.size:
+                                ban_mask = ban_mask.at[keep].add(True)
+                        neg = mx.array(float("-inf"), logits.dtype)
+                        target = mx.argmax(mx.where(ban_mask, neg, logits), axis=-1)
                     else:
                         target = lm.speculative_argmax_from_hidden(result.hidden)
                     packed = pack_readback(

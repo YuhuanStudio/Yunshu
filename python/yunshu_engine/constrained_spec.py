@@ -103,6 +103,33 @@ def tree_penalty(request):
     return None
 
 
+def tree_ban(request):
+    """The ids a request bans on every step when its only processors are static masks
+    (``ignore_eos``, a checkpoint's ``suppress_tokens``): the DFlash fast tree sets them to
+    -inf in its target rows (the serial mask, then argmax), so such a request keeps the tree
+    instead of the 8-token chain (turn-2 cells send ignore_eos: 59 vs 132 tok/s)."""
+    if request is None or request.guide is not None or request.logprobs:
+        return None
+    processors = list(request.processors or [])
+    if not processors:
+        return None
+    from .vlm_batch_runner import static_masks_only
+
+    if not static_masks_only(processors):
+        return None
+    banned = frozenset().union(*(p.always_banned() for p in processors))
+    return banned or None
+
+
+def tree_logits_ok(request) -> bool:
+    """No processors, or only ones the fast tree applies itself (penalty, static ban)."""
+    return (
+        not request.processors
+        or tree_penalty(request) is not None
+        or tree_ban(request) is not None
+    )
+
+
 def invariant_request(request) -> bool:
     return request is not None and invariant_guide(
         request.guide, request.logprobs, request.processors
@@ -756,7 +783,7 @@ def install():
 
             if (
                 request.guide is None
-                and (not request.processors or tree_penalty(request) is not None)
+                and tree_logits_ok(request)
                 and settings.get("YUNSHU_SPEC_TREE") == "auto"
                 and dflash_copy._copy_gate(
                     getattr(model, "language_model", model),
@@ -777,9 +804,7 @@ def install():
                 model, draft_model, prompt_cache, kw
             ):
                 return original(model, draft_model, prompt_cache, hidden, **kw)
-            if request.guide is None and (
-                not request.processors or tree_penalty(request) is not None
-            ):
+            if request.guide is None and tree_logits_ok(request):
                 logger.info(
                     "Exact speculative chain (fast tree unavailable): %s",
                     ",".join(
