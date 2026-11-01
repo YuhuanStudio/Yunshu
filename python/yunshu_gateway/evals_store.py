@@ -177,7 +177,10 @@ def stored_completions() -> list[dict]:
     )
     rows = []
     for path in sorted(Path(root).expanduser().glob("*.json")):
-        if not re.fullmatch(r"[0-9]+_chatcmpl-[A-Za-z0-9_-]{1,64}\.json", path.name):
+        # <created>_<id>.json, or <created>-<store ns>_<id>.json (chat_store since 0.1.6)
+        if not re.fullmatch(
+            r"[0-9]+(-[0-9]+)?_chatcmpl-[A-Za-z0-9_-]{1,64}\.json", path.name
+        ):
             continue
         try:
             rec = json.loads(path.read_text())
