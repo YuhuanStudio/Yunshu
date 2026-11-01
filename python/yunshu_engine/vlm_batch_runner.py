@@ -1514,16 +1514,7 @@ class VLMBatchRunner:
             if getattr(group, "spec", False) and (
                 settings.get("YUNSHU_NEXT_TURN_PREFILL") == "decode"
             ):
-                skip = [
-                    why
-                    for why, bad in (
-                        ("other rows", bool(group.jobs)),
-                        (f"finish {reason}", reason not in ("stop", "length")),
-                        ("cache_store off", not job.cache_store),
-                        ("abandoned", bool(job.abandoned)),
-                    )
-                    if bad
-                ]
+                skip = self._decode_store_skip(group, job, reason)
                 if skip:
                     logger.info("decode cache not stored: %s", ", ".join(skip))
                 else:
@@ -1644,6 +1635,24 @@ class VLMBatchRunner:
             held - len(job.ids),
             "stored" if window else "none",
         )
+
+    @staticmethod
+    def _decode_store_skip(group: _Group, job: _Job, reason: str | None) -> list[str]:
+        """Why a finished speculative-lane reply's decode cache is not stored (empty: store)."""
+        return [
+            why
+            for why, bad in (
+                ("other rows", bool(group.jobs)),
+                (f"finish {reason}", reason not in ("stop", "length")),
+                ("cache_store off", not job.cache_store),
+                # A consumer that has every token closes its stream before this slice ends
+                # (max_tokens counted on its side, so ``abandoned`` is set): the row still
+                # finished here, so its cache is the reply's. An overflowed consumer is a
+                # failure, not a reply.
+                ("overflowed", bool(getattr(job, "overflowed", False))),
+            )
+            if bad
+        ]
 
     @staticmethod
     def _release_apc_request(group: _Group, job: _Job) -> None:

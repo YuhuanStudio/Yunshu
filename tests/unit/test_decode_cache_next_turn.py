@@ -88,3 +88,19 @@ def test_the_lanes_batch_cache_counts_rows_past_its_left_padding():
     group = SimpleNamespace(gen=gen, last_caches=None, spec=True, jobs={})
     VLMBatchRunner._store_decode_cache(group, _job([1, 2, 3, 4], [10, 11, 12]))
     assert coord.calls == [([1, 2, 3, 4, 10, 11], 7)]
+
+
+def test_a_reply_whose_consumer_closed_after_the_last_token_is_still_stored():
+    """Turn 3 of the 27B probe (2026-11-02): the client counted max_tokens and closed its
+    stream before the finishing slice ran, so ``abandoned`` was set and every follow-up of a
+    max_tokens reply missed the reply cache."""
+    group, _ = _group(6)
+    job = _job([1, 2, 3, 4], [10, 11, 12])
+    job.cache_store, job.abandoned, job.overflowed = True, True, False
+    assert VLMBatchRunner._decode_store_skip(group, job, "length") == []
+    assert VLMBatchRunner._decode_store_skip(group, job, "cancel") == ["finish cancel"]
+    job.overflowed = True
+    assert VLMBatchRunner._decode_store_skip(group, job, "stop") == ["overflowed"]
+    group.jobs = {2: object()}
+    job.overflowed = False
+    assert VLMBatchRunner._decode_store_skip(group, job, "stop") == ["other rows"]
