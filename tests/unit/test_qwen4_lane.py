@@ -81,6 +81,10 @@ def test_dense_skip_keeps_fused_kernel_owned_modules_quantized():
     import mlx.nn as nn
 
     from yunshu_engine.kernels import lane_linear
+    from yunshu_engine.kernels.tensorfold.lane_qmm import ready
+
+    if not ready():
+        pytest.skip("lane conversion needs the lane self-test to pass on this GPU")
 
     class M(nn.Module):
         def __init__(self):

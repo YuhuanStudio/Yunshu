@@ -50,7 +50,10 @@ def test_sidecar_samples_fast_and_windows_by_time():
     side = m.Sidecar(0, lambda: 7 * GIB, lambda: {}, fp_period=0.005, gauge_period=0.02)
     side.start()
     t0 = time.time()
-    time.sleep(0.2)
+    # 5 ms sampling: wait for ten samples (a slow hosted VM needs longer than the nominal 50 ms)
+    deadline = t0 + 3.0
+    while time.time() < deadline and len(side.take(t0, time.time())[0]) < 10:
+        time.sleep(0.05)
     t1 = time.time()
     side.close()
     fp, _ = side.take(t0, t1)

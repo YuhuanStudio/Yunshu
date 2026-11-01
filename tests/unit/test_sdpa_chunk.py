@@ -64,7 +64,13 @@ def test_causal_chunks_equal_stock(dtype, q_len, kv_len):
     assert sc.rows_per_chunk(q, k, budget) < q_len
     got = sc.chunked_sdpa(stock, q, k, v, None, scale, "causal", None, budget)
     assert got.shape == want.shape
-    assert mx.array_equal(got, want).item()
+    if dtype == mx.float32:
+        # Apple CPU float32 GEMM blocks by row count, so a chunk's rows can round 1 ulp apart from
+        # the full product, and where it does depends on the CPU (hosted macOS 15 VM: 40x100,
+        # 20x200). bf16 stays bitwise; float32 is held to a few ulp.
+        assert mx.allclose(got, want, rtol=4e-7, atol=1e-7).item()
+    else:
+        assert mx.array_equal(got, want).item()
 
 
 @pytest.mark.parametrize("mask_kind", ["bool", "additive", "broadcast_row"])
