@@ -510,5 +510,11 @@ def test_job_output_passes_the_gpuq_complete_check(tmp_path):
     out = tmp_path / "routes.json"
     jobs.write(out, {"kind": "routes", "checks": {}, "complete": True})
     assert output_problem(out, expect_complete=True) is None
+    # gpuq stamps the device into M3 outputs afterwards; the record must stay one line
+    sys.path.insert(0, str(root / "scripts/research"))
+    from device_evidence import stamp_output
+
+    stamp_output(out, "m3", "laptop")
+    assert output_problem(out, expect_complete=True) is None
     jobs.write(out, {"kind": "routes", "checks": {}, "complete": False})
     assert output_problem(out, expect_complete=True) == "no complete line"
