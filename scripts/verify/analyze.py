@@ -50,6 +50,7 @@ def compare_identity(
     planned=None,
     strict_logprobs=False,
     input_change_ok=False,
+    followup_drift_ok=False,
 ) -> dict:
     """Greedy digests equal on every planned cell (default: the cells either arm produced); a
     cell missing in either arm, or a record without sha / ct, fails closed. With
@@ -58,13 +59,16 @@ def compare_identity(
     equal digests is reported as cross-version "drift", not a failure. A cell whose prompt token count
     differs between the arms (pt) had a different input, not different arithmetic (e.g. a deliberate
     tokenization change): it is a mismatch unless input_change_ok, then it is listed under
-    "input_changed" and leaves the comparison."""
+    "input_changed" and leaves the comparison. With followup_drift_ok (base vs cand only) a turn2
+    digest difference is listed under "followup_drift": the follow-up resumes from the reply's
+    decode KV, which may differ numerically from a re-prefill (user decision 2026-11-02, same
+    class as cross-version drift); the turn2 cell still has to exist and be complete."""
     a, b = decode_index(a_rows), decode_index(b_rows)
     if planned is not None:
         keys = sorted({tuple(k) for k in planned})
     else:
         keys = sorted(k for k in set(a) | set(b) if ctxs is None or k[0] in ctxs)
-    bad, n, drift, worst, changed = [], 0, [], 0.0, []
+    bad, n, drift, worst, changed, followup = [], 0, [], 0.0, [], []
     for k in keys:
         ra, rb = a.get(k), b.get(k)
         if ra is None or rb is None:
@@ -103,6 +107,16 @@ def compare_identity(
             else:
                 bad.append(cell)
             continue
+        if (
+            followup_drift_ok
+            and k[2] == "turn2"
+            and ra.get("ct") == rb.get("ct")
+            and ra.get("sha") != rb.get("sha")
+        ):
+            followup.append(
+                {"cell": list(k), a_name: ra.get("sha"), b_name: rb.get("sha")}
+            )
+            continue
         if ra.get("sha") != rb.get("sha") or ra.get("ct") != rb.get("ct"):
             bad.append(
                 {
@@ -138,6 +152,7 @@ def compare_identity(
         "mismatches": bad,
         "drift": drift,
         "input_changed": changed,
+        "followup_drift": followup,
         "max_abs_dlp": worst,
         "ok": n > 0 and not bad,
     }

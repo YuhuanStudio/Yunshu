@@ -689,7 +689,10 @@ def stage_identity(ctx: Ctx) -> StageResult:
                 "cand",
                 planned=planned,
                 input_change_ok=bool(ctx.suite.get("input_change_ok")),
+                followup_drift_ok=bool(ctx.suite.get("followup_drift_ok")),
             )
+            if cmp_.get("followup_drift"):
+                numbers[f"{tag}followup_drift".strip()] = cmp_["followup_drift"]
             if cmp_["input_changed"]:
                 numbers[f"{tag}input_changed".strip()] = cmp_["input_changed"]
             numbers[f"{tag}base_vs_cand".strip()] = {

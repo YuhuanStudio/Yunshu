@@ -21,6 +21,8 @@ def _weights_gb(model: str) -> float:
     if not root.is_dir():
         return 0.0
     return sum(f.stat().st_size for f in root.glob("*.safetensors")) / 1e9
+
+
 from .core import (
     RUNS,
     Arm,
@@ -71,6 +73,8 @@ def apply_overrides(cfg: dict, a) -> dict:
         cfg["apc_require_hit"] = False
     if getattr(a, "input_change_ok", False):
         cfg["input_change_ok"] = True
+    if getattr(a, "followup_drift_ok", False):
+        cfg["followup_drift_ok"] = True
     return cfg
 
 
