@@ -102,11 +102,11 @@ def mark_anthropic(req) -> dict:
                     (b for b in reversed(inner) if b.get("type") == "text"), None
                 )
                 if last is None or inner[-1] is not last:
-                    if not control:
-                        continue
-                    raise ValueError(
-                        "image-only tool_result cache endpoint is not supported"
-                    )
+                    # no text endpoint to carry the marker (a tool result that ends in an
+                    # image, as Claude Code sends screenshots): the Anthropic API accepts the
+                    # breakpoint, and the prefix cache keys on the prompt anyway, so this
+                    # breakpoint is skipped instead of failing the request with a 400
+                    continue
                 last["text"] += marker
                 markers[marker] = duration
             else:
