@@ -238,7 +238,10 @@ def related_tests(files: list[str], tree: Path) -> list[str]:
             continue
         fp = Path(f)
         if fp.name.startswith("test_") and (tree / f).exists():
-            found.add(f)
+            # only the unit suite: agentbench task fixtures (scripts/research/agentic/tasks/
+            # */hidden/test_*.py) run inside their task, not under pytest here
+            if fp.parts[0] == "tests":
+                found.add(f)
             continue
         if fp.parts[0] not in ("python", "scripts"):
             continue
