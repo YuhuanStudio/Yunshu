@@ -233,6 +233,9 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Fixed
 
+- Realtime voice cascade (ASR -> LLM -> TTS) speaks again: the LLM stream's end cancelled the TTS through the
+  response's shared cancel event (0 bytes of speech). Each engine call of a response now gets its own child event.
+
 - Stored chat completions created in the same second list in the order they were stored (`GET /v1/chat/completions`
   with `order=asc`/`desc`); they came back in random id order.
 - `/v1/messages/count_tokens` counts with the thinking switch the request runs with. Without `thinking` (off since
