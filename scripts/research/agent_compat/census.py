@@ -370,7 +370,13 @@ def cx_catalog(home, launch, ctx):
     cat = home / ".codex" / "catalog.json"
     cat.write_text(json.dumps(CATALOG))
     p = home / ".codex" / "config.toml"
-    p.write_text(f'model_catalog_json = "{cat}"\n' + p.read_text())
+    # replace the launch config's own entry: Codex 0.166 rejects a duplicate key
+    rest = "".join(
+        ln
+        for ln in p.read_text().splitlines(keepends=True)
+        if not ln.startswith("model_catalog_json = ")
+    )
+    p.write_text(f'model_catalog_json = "{cat}"\n' + rest)
 
 
 def cx_ws(home, launch, ctx):
