@@ -7,7 +7,30 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-The next release (0.1.6) makes follow-up turns, SSD cache hits and short contexts of Qwen3.8-27B faster in the
+Changes on main after 0.1.6; not part of a published package yet.
+
+### Highlights
+
+### Upgrade notes / breaking changes
+
+### Performance
+
+| Machine | Model / mode | Metric / workload | Before → after | Recorded source |
+|---|---|---|---|---|
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Security
+
+[Full changelog: v0.1.6…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.6...main)
+
+## [0.1.6] - 2026-11-01
+
+0.1.6 makes follow-up turns, SSD cache hits and short contexts of Qwen3.8-27B faster in the
 `yunshu` package, with a new split-invariant prefill default, Anthropic `thinking.display` support and
 tested memory guidance for 128 GB and tight hosts. Outputs of speculation on and off stay token-identical.
 
@@ -255,7 +278,7 @@ and cold 32K TTFT versus Splash 1.3.2.
   paths with `O_NOFOLLOW` and refuses FIFOs; decoded request media live in a private directory sandboxed code cannot
   read. The console blocks remote images in model output.
 
-[Full changelog: v0.1.5…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.5...main)
+[Full changelog: v0.1.5…v0.1.6](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.5...v0.1.6)
 
 ## [0.1.5] - 2026-10-15
 
