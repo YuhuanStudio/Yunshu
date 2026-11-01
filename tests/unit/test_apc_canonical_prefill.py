@@ -222,7 +222,9 @@ def test_split_invariant_lookup_accepts_rehearsed_subatom_but_not_unaligned():
 
 @pytest.mark.parametrize(
     "total,prefix",
-    [(1, 0), (63, 0), (64, 0), (65, 0), (1001, 0), (1361, 960), (32769, 0)],
+    [(1, 0), (63, 0), (64, 0), (65, 0), (1001, 0), (1361, 960), (32769, 0)]
+    # a follow-up turn resumed from the previous reply's off-grid decode cache
+    + [(1232, 1206), (1300, 1206), (5000, 1206)],
 )
 def test_prompt_dispatch_never_splits_inside_a_recurrence_block(
     monkeypatch, total, prefix

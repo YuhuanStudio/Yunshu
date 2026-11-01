@@ -203,6 +203,12 @@ def main(argv=None) -> int:
     ap.add_argument("--drafter")
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument(
+        "--prompt-dir",
+        type=Path,
+        default=PROMPTS,
+        help="e.g. the gapboard corpus prompts",
+    )
     a = ap.parse_args(argv)
     tmp = Path(os.environ["TMPDIR"])
     tag = f"{a.engine}-{a.kind}-{a.ctx}-{os.getpid()}"
@@ -216,7 +222,7 @@ def main(argv=None) -> int:
     rows, rc = [], 1
     try:
         model = wait_ready(proc, url)
-        text = (PROMPTS / f"{a.kind}-{a.ctx}.txt").read_text()
+        text = (a.prompt_dir / f"{a.kind}-{a.ctx}.txt").read_text()
         for _ in range(
             a.warm
         ):  # compile / first-use costs stay out of the measured rounds
