@@ -205,8 +205,10 @@ def classify(failure, grammar):
 
 
 def write(path, d):
+    """One JSON line: gpuq --expect-complete (since 2026-10-20) looks for a line that is a record
+    with complete=true, and an indented file never had one, so every sweep failed its wait."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(d, indent=1, ensure_ascii=False, default=str))
+    Path(path).write_text(json.dumps(d, ensure_ascii=False, default=str) + "\n")
 
 
 def routes_online() -> bool:
