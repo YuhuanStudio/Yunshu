@@ -244,3 +244,27 @@ def test_store_accepts_jsonresponse_memoryview_body(tmp_path, monkeypatch):
         == "ok"
     )
     chat_store.reset_store()
+
+
+def test_list_keeps_insertion_order_within_one_second(tmp_path):
+    """Two completions created in the same second list in the order they were stored (the release
+    M3 sweep listed a streamed and a plain completion of one second in random id order)."""
+    store = chat_store.ChatCompletionStore(tmp_path, 100)
+    ids = [
+        f"chatcmpl-{x}" for x in ("zz9", "aa1", "mm5", "bb2")
+    ]  # id order != insertion order
+    for cid in ids:
+        store.save(
+            {
+                "id": cid,
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "m",
+                "choices": [],
+            },
+            [{"role": "user", "content": "hi"}],
+            {"tag": "t"},
+        )
+    assert [c["id"] for c in store.list(metadata={"tag": "t"})["data"]] == ids
+    assert [c["id"] for c in store.list(order="desc")["data"]] == ids[::-1]
+    assert store.get("chatcmpl-aa1")["id"] == "chatcmpl-aa1"
