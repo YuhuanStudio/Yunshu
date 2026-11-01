@@ -1583,19 +1583,39 @@ class VLMBatchRunner:
 
         coordinator = getattr(group.gen, "apc", None)
         if coordinator is None or not job.generated:
+            logger.info("decode cache not stored: no APC or no reply tokens")
             return
         caches = finished_caches(group.gen, group.last_caches)
-        offsets = {
-            int(c.offset)
-            for c in caches
-            if getattr(c, "keys", None) is not None
-            and isinstance(getattr(c, "offset", None), int)
-        }
+
+        def held_rows(c) -> int | None:
+            # KVCache: an int offset; the lane's single-row BatchKVCache: _idx past its left padding
+            if getattr(c, "keys", None) is None:
+                return None
+            idx = getattr(c, "_idx", None)
+            pad = getattr(c, "left_padding", None)
+            if idx is not None and pad is not None:
+                return int(idx) - int(pad.reshape(-1)[0].item())
+            off = getattr(c, "offset", None)
+            if off is None:
+                return None
+            return int(off) if isinstance(off, int) else int(off.reshape(-1)[0].item())
+
+        offsets = {n for n in (held_rows(c) for c in caches) if n is not None}
         tokens = list(job.ids) + list(job.generated)
         if len(offsets) != 1:
+            logger.info(
+                "decode cache not stored: attention caches hold %s rows",
+                sorted(offsets),
+            )
             return
         held = offsets.pop()
         if not len(job.ids) < held <= len(tokens):
+            logger.info(
+                "decode cache not stored: %d rows held for %d prompt + %d reply tokens",
+                held,
+                len(job.ids),
+                len(job.generated),
+            )
             return
         stored = coordinator.store_checkpoint(
             tokens[:held], caches, extra_hash=int(job.apc_salt or 0)
