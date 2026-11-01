@@ -14,6 +14,7 @@ again to see whether it returns toward the start.
 
 import argparse
 import base64
+import copy
 import hashlib
 import http.client
 import json
@@ -131,6 +132,9 @@ class Client:
         }
         body.setdefault("temperature", 0)
         body.update(extra)
+        self.last_messages = copy.deepcopy(
+            messages
+        )  # what was sent (callers append to threads)
         r = {
             "content": "",
             "reasoning": "",
@@ -273,12 +277,42 @@ def footprint_slope_gib_h(rows):
     )
 
 
+# Request types whose check is a model judgement (recall a code, multiply two numbers): a complete
+# reply can miss on a near-tie token without anything being broken. Every other type checks the
+# engine (schema, tools, images, long output, disconnects) and fails on its first miss.
+JUDGED_TYPES = ("chat", "think")
+# A few random near-tie misses pass (user 2026-10-23); more than this share is a systematic drop.
+MAX_MISS_SHARE = 0.005
+
+
+def quality_miss(kind, r, *, ok) -> bool:
+    """The reply arrived whole (HTTP 200, stream done, normal finish, no error) and only its
+    answer is wrong, on a judged type."""
+    return bool(
+        not ok
+        and kind in JUDGED_TYPES
+        and r.get("status") == 200
+        and r.get("done")
+        and not r.get("error")
+        and r.get("finish") in ("stop", "length")
+    )
+
+
 def run_verdict(reqs, elapsed_s, requested_s, start_ledger, end_ledger, aborted=False):
     problems = idle_verdict(start_ledger, end_ledger)
     if aborted or not math.isfinite(elapsed_s) or elapsed_s < requested_s:
         problems.append("soak duration incomplete")
-    if not reqs or any(not r["ok"] or r.get("error") for r in reqs):
+    failed = [
+        r
+        for r in reqs
+        if (not r["ok"] or r.get("error"))
+        and not (r.get("miss") and r.get("type") in JUDGED_TYPES)
+    ]
+    if not reqs or failed:
         problems.append("missing or failed requests")
+    misses = sum(1 for r in reqs if r.get("miss") and r.get("type") in JUDGED_TYPES)
+    if misses > max(1, int(MAX_MISS_SHARE * len(reqs))):
+        problems.append(f"{misses} quality misses in {len(reqs)} requests")
     return problems
 
 
@@ -607,6 +641,7 @@ def main():
             )
             ok = r.get("status") == 200 and len(r["content"]) > 1000
         ok = bool(ok) and not r.get("error")
+        miss = quality_miss(kind, r, ok=ok)
         n += 1
         u = r.get("usage") or {}
         emit(
@@ -615,6 +650,7 @@ def main():
                 "n": n,
                 "type": kind,
                 "ok": bool(ok),
+                "miss": miss,
                 "text_sha256": hashlib.sha256(r["content"].encode()).hexdigest(),
                 "content_chars": len(r["content"]),
                 "tool_calls": len(r["tools"]),
@@ -641,7 +677,19 @@ def main():
             )
             aborted = True
             break
-        if not ok:
+        if miss:
+            # evidence for the paired check: what was asked, what came back
+            emit(
+                {
+                    "kind": "miss",
+                    "n": n,
+                    "type": kind,
+                    "expect": expect,
+                    "content": r["content"],
+                    "messages_tail": cli.last_messages[-4:],
+                }
+            )
+        elif not ok:
             aborted = True
             break
     elapsed_s = active_seconds(started, time.time())

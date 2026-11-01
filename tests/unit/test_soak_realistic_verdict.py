@@ -187,3 +187,42 @@ def test_grammar_token_tables_explain_footprint_growth_only_once():
     assert not soak.idle_verdict(before, after)
     after["process"]["footprint_bytes"] += 0.6 * 2**30
     assert soak.idle_verdict(before, after)
+
+
+def test_a_near_tie_answer_is_a_miss_not_a_failed_run():
+    """A complete, well-formed reply that misses the expected answer (0.1.6 gate: 'J' for 'JADE', the
+    second token at im_end 56% vs ADE 44%, identical cold / cached / spec off) is a quality miss:
+    a few pass, more fail the run; transport errors still fail it."""
+    ok = {"ok": True, "type": "chat"}
+    miss = {"ok": False, "miss": True, "type": "chat"}
+    err = {"ok": False, "type": "chat", "error": "SSE error event"}
+    reqs = [ok] * 1000 + [miss]
+    assert not soak.run_verdict(reqs, 3600, 3600, ledger(), ledger())
+    assert soak.run_verdict([ok] * 1000 + [miss] * 6, 3600, 3600, ledger(), ledger())
+    assert soak.run_verdict([ok] * 1000 + [err], 3600, 3600, ledger(), ledger())
+    # a miss on a type whose answer is not a model judgement call fails as before
+    assert soak.run_verdict(
+        [ok] * 1000 + [{"ok": False, "miss": True, "type": "schema"}],
+        3600,
+        3600,
+        ledger(),
+        ledger(),
+    )
+
+
+def test_quality_miss_needs_a_complete_reply():
+    assert soak.quality_miss(
+        "chat", {"status": 200, "done": True, "finish": "stop"}, ok=False
+    )
+    assert not soak.quality_miss(
+        "chat", {"status": 200, "done": False, "finish": None}, ok=False
+    )
+    assert not soak.quality_miss(
+        "chat", {"status": 200, "done": True, "error": "x"}, ok=False
+    )
+    assert not soak.quality_miss(
+        "schema", {"status": 200, "done": True, "finish": "stop"}, ok=False
+    )
+    assert not soak.quality_miss(
+        "chat", {"status": 200, "done": True, "finish": "stop"}, ok=True
+    )
