@@ -233,6 +233,10 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Fixed
 
+- The idle trim drops the prompt-end replay blocks before it clears MLX's freed-buffer pool. It cleared the pool
+  first, so up to ~0.5 GiB of replay blocks stayed pooled on an idle server (0.1.6 release-gate soak: 505 MiB idle
+  allocator cache after the trim).
+
 - Qwen3.8-Flash-Next: concurrent decode rows keep the solo sparse QSA (each row picks its own key blocks; one padded
   sparse attention launch), so a request's output no longer depends on what else is running (concurrent == solo,
   token + logprob, greedy and seeded, spec off and MTP, 8K-32K). Cost vs the old dense batch: +21-27% per decode step.
