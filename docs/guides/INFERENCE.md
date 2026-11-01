@@ -57,6 +57,12 @@ The console Cache page and `GET /v1/yunshu/cache` show entries, tiers, hits and 
 details: [KV cache matrix](KV_CACHE_MATRIX.md). Responses report cached tokens in `usage`.
 WARM int8/int4 encodings and KV precision are lossy and off by default.
 
+A request whose prompt is exactly a prompt the cache already holds to its end (a client re-sending the same
+request, an agent retry) skips the last prefill position too: the cache keeps that prompt end's logits and
+recurrent state and hands them out (prompt-end replay). The reply is the same as a cold run's. Measured on
+Qwen3.8-27B oQ4e-mtp + DFlash2: warm TTFT 1K 0.093 -> 0.011 s, 32K 0.166 -> 0.044 s, 128K 0.570 -> 0.275 s
+(at 128K the remaining time is the cache restore). The stored entries are dropped by the idle memory trim.
+
 ## Structured output and constrained decoding
 
 `response_format` (`json_object`, strict `json_schema`), `regex`, `choice` and Lark `grammar` are
