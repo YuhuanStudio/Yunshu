@@ -32,7 +32,7 @@ env:
   PYTHON_VERSION: "3.13"
   # Keep in sync with the ruff pin in pyproject's dev group / uv.lock so Linux CI
   # matches `just lint` / `just format` locally on macOS.
-  RUFF_VERSION: "0.15.15"
+  RUFF_VERSION: "0.17.0"
 
 jobs:
   # Runs on every push/PR — Linux (1× minutes). ruff only parses source (never
@@ -57,7 +57,7 @@ jobs:
   # Needs the installed deps (mlx is macOS-only) so results match local runs.
   typecheck:
     name: Type check (mypy baseline)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -167,7 +167,7 @@ jobs:
     name: Unit Tests (macOS)
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: lint
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 

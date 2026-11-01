@@ -5,6 +5,16 @@ name: Release
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  # Re-run the release of an existing tag (e.g. the tag-push run was cancelled by a runner
+  # brownout): the workflow comes from main, the code from the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing version tag to build and publish (vX.Y.Z)"
+        required: true
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 permissions:
   contents: read
@@ -12,9 +22,11 @@ permissions:
 jobs:
   build:
     name: Build and check
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -25,11 +37,11 @@ jobs:
       - name: Tag matches pyproject version
         run: |
           version=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
-          test "v${version}" = "${GITHUB_REF_NAME}" || {
-            echo "tag ${GITHUB_REF_NAME} != pyproject version ${version}"; exit 1; }
+          test "v${version}" = "${TAG}" || {
+            echo "tag ${TAG} != pyproject version ${version}"; exit 1; }
 
       - name: Changelog has an entry for this version
-        run: grep -q "^## \[${GITHUB_REF_NAME#v}\]" CHANGELOG.md
+        run: grep -q "^## \[${TAG#v}\]" CHANGELOG.md
 
       - name: Lint and unit tests
         run: |
@@ -106,14 +118,16 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
       - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist/
       - name: Release notes from CHANGELOG.md
         run: |
-          python3 scripts/release/notes.py "${GITHUB_REF_NAME#v}" --output notes.md
+          python3 scripts/release/notes.py "${TAG#v}" --output notes.md
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --draft --title "$GITHUB_REF_NAME" --notes-file notes.md
+        run: gh release create "$TAG" dist/* --draft --title "$TAG" --notes-file notes.md
