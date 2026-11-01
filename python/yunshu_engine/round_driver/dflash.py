@@ -84,6 +84,12 @@ class DFlashBatch:
             if old is not None:
                 h = mx.concatenate([old, h], axis=1)
             self.hidden[key] = h[:, -self.keep :]
+        # Evaluate the windows now: the prefill step evaluates only the caches, and a window left
+        # lazy chained every chunk's captures (5 layers x chunk x hidden, 100 MiB per 2048 rows on
+        # the 27B) until the first token: +5 GiB at 128K over the lane, which evaluates them.
+        mx.async_eval(
+            *[self.hidden[id(it.row)] for it in items if id(it.row) in self.hidden]
+        )
 
     def window(self, row):
         """The drafter's trailing prompt context as one capture list per target layer, or

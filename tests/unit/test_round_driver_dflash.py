@@ -582,3 +582,30 @@ def test_presence_penalty_keeps_the_dflash_row_drafting_and_equal_plain_decode(
     # a spec-off server (no drafter) still keys a sampled row: the penalty must apply there too
     off, _ = run(True, drafter=False)
     assert off == plain
+
+
+def test_absorb_keeps_only_the_window_not_every_chunks_captures():
+    """The drafter window is evaluated as it is absorbed: left lazy, it chained every prefill chunk's
+    captures until the first token (27B 128K prompt: +100 MiB per 2048-row chunk, +5 GiB at the end)."""
+    from types import SimpleNamespace
+
+    from yunshu_engine.round_driver.dflash import DFlashBatch
+
+    d = DFlashBatch.__new__(DFlashBatch)
+    d.can_draft, d.keep, d.hidden = True, 64, {}
+    row = SimpleNamespace(finished=False)
+    mx.synchronize()
+    base = None
+    for step in range(24):
+        caps = [mx.random.normal((2048, 256)) for _ in range(2)]  # 4 MiB per chunk
+        mx.eval(caps)  # the forward evaluated them with the step's caches
+        d.absorb([SimpleNamespace(row=row, at=0, count=2048)], caps)
+        del caps
+        mx.synchronize()
+        if step == 3:
+            base = mx.get_active_memory()
+    grown = mx.get_active_memory() - base
+    assert grown < 8 * 2**20, (
+        f"window retained {grown / 2**20:.0f} MiB of earlier chunks"
+    )
+    assert tuple(d.hidden[id(row)].shape) == (1, 64, 512)
