@@ -378,9 +378,10 @@ class AnthropicMessagesRequest(BaseModel):
 
 class AnthropicCountTokensRequest(AnthropicMessagesRequest):
     """``/v1/messages/count_tokens`` takes the Messages body without ``max_tokens`` (the API's
-    count_tokens parameters do not include it)."""
+    count_tokens parameters do not include it): absent, so the thinking-budget rule
+    (``budget_tokens < max_tokens``) does not reject a valid count request."""
 
-    max_tokens: int = Field(default=1, ge=1, le=1048576)
+    max_tokens: int | None = Field(default=None, ge=1, le=1048576)
 
 
 def _resolve_json_schema(req) -> dict | str | None:
@@ -3978,11 +3979,19 @@ async def count_tokens(req: AnthropicCountTokensRequest, request: Request):
         try:
             from yunshu_engine.special_tokens import neutralize_special_text
 
+            # the thinking switch generation renders with (no ``thinking`` = off since 0.1.6: a
+            # Qwen template then adds an empty think block, which the count left out)
+            _enable_thinking, _ = _thinking_switches(req)
             prompt = tokenizer.apply_chat_template(
                 neutralize_special_text(messages, tokenizer),
                 tokenize=False,
                 add_generation_prompt=True,
                 **({"tools": _native_tools} if _native_tools else {}),
+                **(
+                    {"enable_thinking": _enable_thinking}
+                    if _enable_thinking is not None
+                    else {}
+                ),
             )
         except Exception:
             # Fallback: if chat template fails (e.g. missing template), use plain join.
