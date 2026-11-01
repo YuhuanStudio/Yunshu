@@ -85,12 +85,13 @@ def test_rehearsal_length_ends_one_guard_after_the_stride_multiple():
     assert nt.rehearsal_length(5000, 0, 1) == 5000  # no canonical grid: rehearse it all
 
 
-def test_next_turn_prefill_default_preserves_the_canonical_grid():
+def test_next_turn_default_reuses_the_decode_cache():
+    """User 2026-11-02: the reply's decode cache is the default; stride rehearsal stays an option."""
     from yunshu_engine import settings
 
     spec = settings.REGISTRY["YUNSHU_NEXT_TURN_PREFILL"]
-    assert spec.default == "stride" and spec.stability == "stable"
-    assert "off" in spec.choices
+    assert spec.default == "decode" and spec.stability == "stable"
+    assert {"off", "stride", "exact"} <= set(spec.choices)
 
 
 def test_stride_rehearsal_must_advance_the_completed_prompt_checkpoint():

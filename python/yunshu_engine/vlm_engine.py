@@ -1854,8 +1854,8 @@ class VLMEngine:
         prompt_tokens: int = 0,
     ) -> None:
         mode = settings.get("YUNSHU_NEXT_TURN_PREFILL")
-        if mode in (None, False, "", "off", "boundary"):
-            return
+        if mode in (None, False, "", "off", "boundary", "decode"):
+            return  # decode: the runner stored the reply's decode cache when it ended
         reason = next_turn.ineligible_reason(
             finish_reason=finish_reason,
             completion_tokens=completion_tokens,

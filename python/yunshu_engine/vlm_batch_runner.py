@@ -963,6 +963,8 @@ class VLMBatchRunner:
         # retaining its Job also retains grammar/media/cache-plan state at idle.
         if job.terminal and self._vocab_owner is job:
             self._vocab_owner = None
+        if isinstance(item, tuple) and item and isinstance(item[0], int):
+            job.generated.append(item[0])
         job.out.put(item)
         if self.gc_guard is not None:
             self.gc_guard.first_token(id(job))
@@ -1509,6 +1511,19 @@ class VLMBatchRunner:
                 self._cleanup_step(
                     job, "release_rounds", lambda: release_rounds(group.gen)
                 )
+            if (
+                not group.jobs
+                and getattr(group, "spec", False)
+                and reason in ("stop", "length")
+                and job.cache_store
+                and not job.abandoned
+                and settings.get("YUNSHU_NEXT_TURN_PREFILL") == "decode"
+            ):
+                self._cleanup_step(
+                    job,
+                    "store_decode_cache",
+                    lambda: self._store_decode_cache(group, job),
+                )
             self._cleanup_step(
                 job,
                 "release_apc_request",
@@ -1557,6 +1572,40 @@ class VLMBatchRunner:
             self._primary_handoff_at = now
             if oldest is not None:
                 oldest.handoff_graced = True
+
+    @staticmethod
+    def _store_decode_cache(group: _Group, job: _Job) -> None:
+        """Store the cache the reply was decoded into, keyed by the prompt plus the tokens it holds:
+        a follow-up that repeats the conversation then prefills only its new message
+        (YUNSHU_NEXT_TURN_PREFILL=decode, user 2026-11-02). Fewer stored tokens than the cache
+        holds never happens; a cache that disagrees with the emitted tokens is not stored."""
+        from .spec_release import finished_caches
+
+        coordinator = getattr(group.gen, "apc", None)
+        if coordinator is None or not job.generated:
+            return
+        caches = finished_caches(group.gen, group.last_caches)
+        offsets = {
+            int(c.offset)
+            for c in caches
+            if getattr(c, "keys", None) is not None
+            and isinstance(getattr(c, "offset", None), int)
+        }
+        tokens = list(job.ids) + list(job.generated)
+        if len(offsets) != 1:
+            return
+        held = offsets.pop()
+        if not len(job.ids) < held <= len(tokens):
+            return
+        stored = coordinator.store_checkpoint(
+            tokens[:held], caches, extra_hash=int(job.apc_salt or 0)
+        )
+        logger.info(
+            "decode cache %s for the next turn: %d prompt + %d reply tokens",
+            "stored" if stored else "not stored",
+            len(job.ids),
+            held - len(job.ids),
+        )
 
     @staticmethod
     def _release_apc_request(group: _Group, job: _Job) -> None:
@@ -3092,6 +3141,9 @@ class _Job:
     first_delivery_waited: bool = False
     mem_est: int = 0  # bytes the memory gate reserved for this request (KV + workspace)
     mem_held_at: float = 0.0
+    generated: list = field(
+        default_factory=list
+    )  # emitted token ids (the decode cache's tail)
 
 
 @dataclass
