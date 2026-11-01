@@ -233,6 +233,9 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Fixed
 
+- `/v1/messages`: a `cache_control` breakpoint on a tool result that holds only an image (Claude Code screenshots)
+  is accepted, as on the Anthropic API; it answered 400.
+
 - Realtime voice cascade (ASR -> LLM -> TTS) speaks again: the LLM stream's end cancelled the TTS through the
   response's shared cancel event (0 bytes of speech). Each engine call of a response now gets its own child event.
 
