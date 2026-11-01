@@ -373,7 +373,7 @@ def store_decode_window(token_ids, extra_hash: int) -> bool:
     combined = tail.trim()
     if int(combined.shape[-1]) % tail.layers:
         return False
-    layers = mx.split(combined, tail.layers, axis=-1)
+    layers = list(mx.split(combined, tail.layers, axis=-1))
     mx.async_eval(layers)
     return put(
         key_for(extra_hash, token_ids), layers, sum(int(x.nbytes) for x in layers)
