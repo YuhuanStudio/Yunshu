@@ -175,3 +175,31 @@ def test_disk_store_keeps_the_newest_within_its_cap(disk, monkeypatch):
     w.clear()
     assert w.get(w.key_for(7, [0])) is None  # the oldest went
     assert w.get(w.key_for(7, [2])) is not None
+
+
+def test_reply_window_ends_at_the_decode_cache_and_seeds_the_next_turn():
+    """Turn 2 resumes from turn 1's decode cache; without the reply's window the drafter
+    started from the 26 new positions only (half the acceptance)."""
+    mx = pytest.importorskip("mlx.core")
+    w.set_budget(1 << 30)
+    keep, layers, width = 4, 2, 3
+    # prompt window: positions 7..9 (3 rows) of a 10-token prompt; columns = 2 layers x 3
+    prompt = mx.arange(3 * layers * width, dtype=mx.float32).reshape(
+        1, 3, layers * width
+    )
+    tail = w.DecodeTail(prompt, 10, keep, layers)
+    for step in range(70):  # crosses the 64-round trim
+        tail.add(mx.full((1, 2, layers * width), float(step)), 2)
+    w.finish_decode(tail)
+    ids = list(range(10 + 140))
+    assert not w.store_decode_window(ids[:-1], 7)  # the end must match the cache
+    w.finish_decode(tail)
+    assert w.store_decode_window(ids, 7)
+    seeded = _batch(len(ids), ids + [5, 6])
+    assert w.seed(seeded)
+    got = seeded._speculative_prefill.chunks[0]
+    assert len(got) == layers and got[0].shape == (1, keep, width)
+    assert (
+        got[1][0, -1].tolist() == [69.0] * width
+        and got[0][0, 0].tolist() == [68.0] * width
+    )

@@ -622,6 +622,18 @@ def rounds(
         context_length(lm, cache),
     )
     skipped = 0
+    from . import dflash_apc_window as apc_window
+
+    decode_tail = (
+        apc_window.DecodeTail(
+            hidden, context_length(lm, cache) or 0, keep, len(target_ids)
+        )
+        if keep is not None
+        and hidden is not None
+        and settings.get("YUNSHU_NEXT_TURN_PREFILL") == "decode"
+        else None
+    )
+    apc_window.finish_decode(None)
     # The drafter context in GPU-positioned rings (dflash_ring), so the
     # next round's draft can be queued behind the verify. Only where the request cannot reach
     # the chain handoff (it takes the vendor draft cache).
@@ -710,6 +722,7 @@ def rounds(
             ):
                 from .dflash_copy import resume_chain
 
+                decode_tail = None  # the chain's rows are not tracked
                 commit_pending()
                 yield from release()
                 for entry in draft_cache:
@@ -972,6 +985,8 @@ def rounds(
                 captured = mx.concatenate(result.captured, axis=-1)[
                     :, mx.array(path, dtype=mx.int32)
                 ]
+                if decode_tail is not None:
+                    decode_tail.add(captured, len(path))
                 if ring is None:
                     hidden = (
                         captured
@@ -1078,6 +1093,9 @@ def rounds(
         commit_pending()
         yield from release()
     finally:
+        # a stop / eos closes this generator too: the window still ends at the cache
+        # (store_decode_window checks the lengths match)
+        apc_window.finish_decode(decode_tail)
         # a failure between a round and the next draft: keep the decided tokens
         if pending:
             try:

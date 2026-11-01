@@ -1621,12 +1621,20 @@ class VLMBatchRunner:
         if store is None:
             logger.info("decode cache not stored: the APC has no reply-cache store")
             return
-        stored = store(tokens[:held], caches, extra_hash=int(job.apc_salt or 0))
+        salt = int(job.apc_salt or 0)
+        stored = store(tokens[:held], caches, extra_hash=salt)
+        window = False
+        if stored:
+            from . import dflash_apc_window
+
+            # the drafter's context window that ends at this cache (DFlash lane)
+            window = dflash_apc_window.store_decode_window(tokens[:held], salt)
         logger.info(
-            "decode cache %s for the next turn: %d prompt + %d reply tokens",
+            "decode cache %s for the next turn: %d prompt + %d reply tokens (drafter window %s)",
             "stored" if stored else "not stored",
             len(job.ids),
             held - len(job.ids),
+            "stored" if window else "none",
         )
 
     @staticmethod

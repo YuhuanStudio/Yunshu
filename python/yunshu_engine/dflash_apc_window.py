@@ -317,3 +317,64 @@ def install(budget_bytes: int | None = None) -> bool:
     cls.__init__, cls.prompt_step = __init__, prompt_step
     _STATE["installed"] = True
     return True
+
+
+# -- decode window (YUNSHU_NEXT_TURN_PREFILL=decode) --------------------------------------
+
+
+class DecodeTail:
+    """The drafter's context window as a reply decodes: the target's captured states of the
+    last ``keep`` committed positions (the prompt window, then every round's accepted path).
+    The reply's decode cache is stored with the window that ends at it, so the follow-up
+    turn drafts with its whole context instead of only its few new positions (turn 2 of a
+    1K conversation: 26 positions, half the acceptance)."""
+
+    def __init__(self, hidden, kv_len: int, keep: int, layers: int):
+        self.parts = [hidden]
+        self.end = int(kv_len)  # absolute position after the newest row
+        self.keep = int(keep)
+        self.layers = int(layers)
+        self._since_trim = 0
+
+    def add(self, captured, rows: int) -> None:
+        self.parts.append(captured)
+        self.end += int(rows)
+        self._since_trim += 1
+        if self._since_trim >= 64:
+            self.trim()
+
+    def trim(self):
+        import mlx.core as mx
+
+        self._since_trim = 0
+        window = (
+            mx.concatenate(self.parts, axis=1) if len(self.parts) > 1 else self.parts[0]
+        )
+        if int(window.shape[1]) > self.keep:
+            window = window[:, -self.keep :]
+        mx.async_eval(window)
+        self.parts = [window]
+        return window
+
+
+def finish_decode(tail: DecodeTail | None) -> None:
+    """End (or start) of a reply's rounds: hold its window for ``store_decode_window``."""
+    _STATE["decode_tail"] = tail
+
+
+def store_decode_window(token_ids, extra_hash: int) -> bool:
+    """Store the finished reply's window under its decode cache's key; its end must be
+    exactly the cache's length."""
+    tail = _STATE.pop("decode_tail", None)
+    if tail is None or _STATE["budget"] <= 0 or tail.end != len(token_ids):
+        return False
+    import mlx.core as mx
+
+    combined = tail.trim()
+    if int(combined.shape[-1]) % tail.layers:
+        return False
+    layers = mx.split(combined, tail.layers, axis=-1)
+    mx.async_eval(layers)
+    return put(
+        key_for(extra_hash, token_ids), layers, sum(int(x.nbytes) for x in layers)
+    )
