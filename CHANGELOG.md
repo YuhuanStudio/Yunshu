@@ -233,6 +233,14 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Fixed
 
+- Stored chat completions created in the same second list in the order they were stored (`GET /v1/chat/completions`
+  with `order=asc`/`desc`); they came back in random id order.
+- `/v1/messages/count_tokens` counts with the thinking switch the request runs with. Without `thinking` (off since
+  0.1.6) a Qwen template adds an empty think block, which the count left out (28 vs 30 tokens). A count request
+  with `thinking: enabled` is no longer rejected for a `budget_tokens` above the `max_tokens` it does not take.
+- `stream_options.continuous_usage_stats` puts the running usage on every chunk of a single-choice VLM chat stream
+  too (Qwen3.5 family); only the multi-choice streams carried it.
+
 - The idle trim drops the prompt-end replay blocks before it clears MLX's freed-buffer pool. It cleared the pool
   first, so up to ~0.5 GiB of replay blocks stayed pooled on an idle server (0.1.6 release-gate soak: 505 MiB idle
   allocator cache after the trim).
