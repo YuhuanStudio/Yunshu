@@ -115,7 +115,9 @@ def test_static_bans_keep_the_fast_tree():
         r.guide = None
         return r
 
-    eos = TokenMaskProcessor(suppress=[5], eos_ids=[2, 3], min_tokens=0, ignore_eos=True)
+    eos = TokenMaskProcessor(
+        suppress=[5], eos_ids=[2, 3], min_tokens=0, ignore_eos=True
+    )
     assert tree_ban(request([eos])) == frozenset({2, 3, 5})
     assert tree_logits_ok(request([eos]))
     floor = TokenMaskProcessor(eos_ids=[2], min_tokens=4, ignore_eos=False)
@@ -131,7 +133,11 @@ def test_fast_tree_ban_picks_the_serial_masked_argmax():
     logits = logits.at[:, :, 2].add(10.0)  # the banned id would win every row
     proc = TokenMaskProcessor(eos_ids=[2], ignore_eos=True)
     serial = mx.argmax(proc._mask(logits, generated=7), axis=-1)
-    mask = mx.zeros((40,), dtype=mx.bool_).at[mx.array([2])].add(True)
-    fast = mx.argmax(mx.where(mask, mx.array(float("-inf"), logits.dtype), logits), axis=-1)
+    from yunshu_engine.dflash_fast import ban_vocab_mask
+
+    mask = ban_vocab_mask([2, 99], 40)  # 99 is past this vocabulary
+    fast = mx.argmax(
+        mx.where(mask, mx.array(float("-inf"), logits.dtype), logits), axis=-1
+    )
     assert mx.array_equal(serial, fast).item()
     assert not bool(mx.any(fast == 2).item())

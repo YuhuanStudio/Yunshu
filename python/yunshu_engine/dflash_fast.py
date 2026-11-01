@@ -542,6 +542,16 @@ def prepare(draft):
     return private
 
 
+def ban_vocab_mask(ids, vocab: int):
+    """``(vocab,)`` bool mask of the banned ids inside the vocabulary (a request's static
+    ban: ignore_eos's eos ids, suppress_tokens)."""
+    keep = [int(t) for t in ids if 0 <= int(t) < vocab]
+    mask = mx.zeros((vocab,), dtype=mx.bool_)
+    if keep:
+        mask = mask.at[mx.array(keep, dtype=mx.int32)].add(True)
+    return mask
+
+
 def rounds(
     model,
     draft,
@@ -576,7 +586,7 @@ def rounds(
     request = current_request()
     penalty = tree_penalty(request)
     banned = tree_ban(request)
-    ban_ids = mx.array(sorted(banned), dtype=mx.int32) if banned is not None else None
+    ban_ids = sorted(banned) if banned is not None else None
     ban_mask = None
     logger.info(
         "DFlash fast verification: keyed=%s logprobs=%s penalty=%s",
@@ -911,10 +921,7 @@ def rounds(
                         logits = lm.speculative_logits_from_hidden(result.hidden)
                         vocab = int(logits.shape[-1])
                         if ban_mask is None or int(ban_mask.shape[0]) != vocab:
-                            keep = ban_ids[ban_ids < vocab]
-                            ban_mask = mx.zeros((vocab,), dtype=mx.bool_)
-                            if keep.size:
-                                ban_mask = ban_mask.at[keep].add(True)
+                            ban_mask = ban_vocab_mask(ban_ids, vocab)
                         neg = mx.array(float("-inf"), logits.dtype)
                         target = mx.argmax(mx.where(ban_mask, neg, logits), axis=-1)
                     else:
