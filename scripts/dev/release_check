@@ -19,15 +19,15 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 
 
-def plan(sha, tree, out, prefix, priority=-1):
+def plan(sha, tree, out, prefix):
     dev = tree / "scripts/dev"
     return {
-        "gate": [str(dev / "yv"), "gate", "--priority", str(priority)],
+        "gate": [str(dev / "yv"), "gate", "--priority", "-1"],
         "m3sweep": [
             str(dev / "m3sweep"),
             sha,
             "--priority",
-            str(priority),
+            "-1",
             "--label-prefix",
             prefix + "-m3",
         ],
@@ -36,7 +36,7 @@ def plan(sha, tree, out, prefix, priority=-1):
             "--out",
             str(out / "agentcompat"),
             "--priority",
-            str(priority),
+            "-1",
             "--label-prefix",
             prefix + "-compat",
         ],
@@ -45,7 +45,7 @@ def plan(sha, tree, out, prefix, priority=-1):
             "--ref",
             sha,
             "--priority",
-            str(priority - 2),
+            "-3",
             "--label-prefix",
             prefix + "-bench",
             "--no-wait",
@@ -81,20 +81,13 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--label-prefix", default="releng015-release")
     ap.add_argument("--out", type=Path)
-    ap.add_argument(
-        "--priority",
-        type=int,
-        default=-1,
-        help="gpuq priority of gate / m3sweep / agentcompat (agentbench runs 2 lower); "
-        "above a queued backlog's priority so the release does not wait behind it",
-    )
     a = ap.parse_args(argv)
     sha = subprocess.check_output(
         ["git", "-C", str(REPO), "rev-parse", a.ref + "^{commit}"], text=True
     ).strip()
     out = a.out or Path("/Volumes/P5Plus/yunshu-build/release-check") / sha
     tree = out / "src"
-    commands = plan(sha, tree, out, f"{a.label_prefix}-{time.time_ns()}", a.priority)
+    commands = plan(sha, tree, out, f"{a.label_prefix}-{time.time_ns()}")
     rows = {
         n: {"status": "PLANNED" if a.dry_run else "NOT_RUN"}
         for n in ("ci-local", *commands)
