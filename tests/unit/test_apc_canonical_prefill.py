@@ -321,3 +321,18 @@ def test_short_prompt_tail_runs_outside_the_long_prefill_scope(
     batch._inputs_embeds = SimpleNamespace(shape=(1, tail, 1))
     batch.generate()
     assert seen == [(scoped, not scoped)]
+
+
+def test_reply_cache_is_stored_off_the_grid_and_found_first():
+    """YUNSHU_NEXT_TURN_PREFILL=decode (user 2026-11-02): the finished reply's cache (prompt +
+    reply, any length) is the follow-up's prefix, so turn 2 prefills only its new tokens."""
+    manager = _mgr(prefill_stride=2048, prefill_alignment=64)
+    coordinator = _coordinator(manager)
+    ids = list(range(1300))
+    manager.store_exact_cache(ids[:640], _cache(640), extra_hash=7)
+    assert coordinator.store_decode_tail(ids[:1206], _cache(1206), extra_hash=7)
+    hit = lookup(coordinator, ids)
+    assert hit["prefix_len"] == 1206
+    # a different conversation still takes the aligned checkpoint
+    other = ids[:700] + [9999] * 600
+    assert lookup(coordinator, other)["prefix_len"] == 640

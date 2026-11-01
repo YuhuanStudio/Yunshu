@@ -1617,9 +1617,11 @@ class VLMBatchRunner:
                 len(job.generated),
             )
             return
-        stored = coordinator.store_checkpoint(
-            tokens[:held], caches, extra_hash=int(job.apc_salt or 0)
-        )
+        store = getattr(coordinator, "store_decode_tail", None)
+        if store is None:
+            logger.info("decode cache not stored: the APC has no reply-cache store")
+            return
+        stored = store(tokens[:held], caches, extra_hash=int(job.apc_salt or 0))
         logger.info(
             "decode cache %s for the next turn: %d prompt + %d reply tokens",
             "stored" if stored else "not stored",

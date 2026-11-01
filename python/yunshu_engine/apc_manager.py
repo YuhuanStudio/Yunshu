@@ -1083,7 +1083,60 @@ class _Coordinator(APCCoordinator):
     # callers retain synchronous admission until they supply the same flush boundary.
     defer_checkpoint_stores = False
 
+    def store_decode_tail(self, token_ids, prompt_cache, *, extra_hash=0) -> bool:
+        """Store a finished reply's cache (prompt + the reply tokens it holds) at its own length,
+        off the prefill grid, and remember that length for the follow-up's lookup
+        (YUNSHU_NEXT_TURN_PREFILL=decode, user 2026-11-02)."""
+        if not self.enabled:
+            return False
+        from mlx_vlm.apc import snapshot_prompt_cache_row
+
+        snapshot = snapshot_prompt_cache_row(prompt_cache, 0, clone=False)
+        if snapshot is None:
+            return False
+        tokens = tuple(map(int, token_ids))
+        if not self.manager.store_exact_cache(
+            tokens, snapshot, extra_hash=extra_hash, _any_length=True
+        ):
+            return False
+        tails = self.manager.__dict__.setdefault("_decode_tail_lengths", {})
+        lengths = tails.setdefault(int(extra_hash), [])
+        if len(tokens) not in lengths:
+            lengths.append(len(tokens))
+            del lengths[:-64]
+        return True
+
+    def _lookup_decode_tail(self, token_ids, **kwargs):
+        """The longest stored reply cache that is a prefix of this prompt, or None."""
+        tails = self.manager.__dict__.get("_decode_tail_lengths", {})
+        extra_hash = int(kwargs.get("extra_hash", 0) or 0)
+        for n in sorted(tails.get(extra_hash, ()), reverse=True):
+            if n >= len(token_ids) or not kwargs["suffix_is_text_only"](n):
+                continue
+            cache, got = self.manager.lookup_exact_cache(
+                token_ids,
+                extra_hash=extra_hash,
+                max_prefix_tokens=n,
+                # the upstream bound is exclusive (the policy path passes n - 1 too)
+                min_prefix_tokens=n - 1,
+                refresh_retention=False,
+            )
+            if cache is not None and got == n:
+                return {
+                    "matched_blocks": [],
+                    "warm_cache": cache,
+                    "prefix_len": n,
+                    "extra_hash": extra_hash,
+                    "full_input_ids": list(token_ids),
+                }
+            if cache is not None:
+                self.manager.retract_lookup(got)
+        return None
+
     def _lookup_canonical(self, token_ids, **kwargs):
+        tail = self._lookup_decode_tail(token_ids, **kwargs)
+        if tail is not None:
+            return tail
         stride = getattr(self.manager, "prefill_stride", 0)
         # Media processors may expand / reshape positions; retain their existing
         # boundary policy. Text prefixes use the same grid in cold and warm runs.
@@ -1994,9 +2047,10 @@ class YunshuAPCManager(APCManager):
         extra_hash=0,
         _generation=None,
         _owned=False,
+        _any_length=False,
     ) -> bool:
         n = len(token_ids)
-        if self.prefill_alignment and n % self.prefill_alignment:
+        if self.prefill_alignment and n % self.prefill_alignment and not _any_length:
             return False
         if not recurrent_state_finite(prompt_cache):
             # A recurrent (GDN) state that overflowed to inf/nan in fp16 would poison every

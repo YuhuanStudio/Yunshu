@@ -17,7 +17,7 @@ class _Coord:
     def __init__(self):
         self.calls = []
 
-    def store_checkpoint(self, tokens, caches, *, extra_hash=0):
+    def store_decode_tail(self, tokens, caches, *, extra_hash=0):
         self.calls.append((list(tokens), extra_hash))
         return True
 
@@ -82,7 +82,8 @@ def test_the_lanes_batch_cache_counts_rows_past_its_left_padding():
 
     coord = _Coord()
     gen = SimpleNamespace(
-        apc=coord, _generation_batch=SimpleNamespace(prompt_cache=[_BatchKV(), object()])
+        apc=coord,
+        _generation_batch=SimpleNamespace(prompt_cache=[_BatchKV(), object()]),
     )
     group = SimpleNamespace(gen=gen, last_caches=None, spec=True, jobs={})
     VLMBatchRunner._store_decode_cache(group, _job([1, 2, 3, 4], [10, 11, 12]))
