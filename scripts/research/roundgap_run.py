@@ -148,7 +148,7 @@ def launch(a, home: Path, log: Path):
     port = free_port()
     if a.engine == "tf-native":
         cmd = [
-            TF_BIN, "serve", TF4, "--host", "127.0.0.1", "--port", str(port), "--drafter", DRAFT,
+            a.tf_bin, "serve", TF4, "--host", "127.0.0.1", "--port", str(port), "--drafter", DRAFT,
             "--no-update-check", "--no-thinking", "--parallel", "1", "--context", str(a.ctx + 4096),
         ]  # fmt: skip
     else:
@@ -203,6 +203,7 @@ def main(argv=None) -> int:
     ap.add_argument("--drafter")
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--tf-bin", default=TF_BIN, help="tensorfold-native binary")
     ap.add_argument(
         "--prompt-dir",
         type=Path,
