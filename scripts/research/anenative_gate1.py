@@ -19,6 +19,11 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 
 
+def arm_drafter(tb):
+    """The drafter the arm's target gets (tfbench's model-matched rule), not the 27B one by name."""
+    return tb.default_drafter(tb.M)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--arm", choices=["off", "splash"], required=True)
@@ -71,7 +76,7 @@ def main():
         "--env",
         "YUNSHU_VLM_APC_DISK=0",
         "--env",
-        "YUNSHU_VLM_DRAFT=" + tb.D,
+        "YUNSHU_VLM_DRAFT=" + arm_drafter(tb),
         "--env",
         f"YUNSHU_ANE_FFN_SPLIT={a.arm}",
         "--env",
