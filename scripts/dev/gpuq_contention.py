@@ -79,9 +79,14 @@ def is_foreign_model_cmd(cmd, patterns):
     if _CI_SANDBOX.search(cmd):
         return False
     program = os.path.basename(cmd.split()[0]) if cmd.split() else ""
-    if not _RUNTIME_PROGRAM.match(program):
-        return False
-    return any(rx.search(cmd) for rx in patterns)
+    runtime = bool(_RUNTIME_PROGRAM.match(program))
+    # built-in patterns name Python/launcher runtimes; GPUQ_FOREIGN_MODEL_PATTERNS entries
+    # name a user's own runner binary and match whatever program it is
+    return any(
+        rx.search(cmd)
+        for rx in patterns
+        if runtime or rx.pattern not in FOREIGN_MODEL_PATTERNS
+    )
 
 
 def foreign_model_patterns(env=None):
