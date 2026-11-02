@@ -58,3 +58,23 @@ def test_lane_stage_refuses_a_target_without_a_drafter_dir(tmp_path, monkeypatch
     res = stages.stage_lane_bandwidth(ctx)
     assert not res.passed
     assert "MTP head" in " ".join(res.reasons)
+
+
+def test_anenative_gate1_drafter_is_model_matched(tmp_path, monkeypatch):
+    """anenative_gate1 set YUNSHU_VLM_DRAFT to the 27B drafter for every target (g)."""
+    spec = importlib.util.spec_from_file_location(
+        "tfbench_gate1", ROOT / "scripts/research/tfbench.py"
+    )
+    tfbench = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tfbench)
+    spec = importlib.util.spec_from_file_location(
+        "anenative_gate1_t", ROOT / "scripts/research/anenative_gate1.py"
+    )
+    gate1 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate1)
+    drafter = _model(tmp_path / "drafter", 5120)
+    monkeypatch.setattr(tfbench, "D", drafter)
+    monkeypatch.setattr(tfbench, "M", _model(tmp_path / "fn", 2560))
+    assert gate1.arm_drafter(tfbench) == "mtp"
+    monkeypatch.setattr(tfbench, "M", _model(tmp_path / "27b", 5120))
+    assert gate1.arm_drafter(tfbench) == drafter

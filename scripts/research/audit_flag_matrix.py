@@ -25,6 +25,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tfbench  # noqa: E402  (default_drafter: the model-matched drafter rule)
+
 ROOT = Path(__file__).resolve().parents[2]
 MAIN = Path("/Users/yuhuan/Documents/YuhuanStudio/Yunshu")
 CAPTURES = MAIN / "docs/research/runs/2026-09-30-agent-census"
@@ -60,10 +63,21 @@ def ensure_tiny_mtp(src=TINY_SRC, dst=TINY):
     return dst
 
 
-DRAFT = Path("/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2")
 TEXT = Path("/Volumes/P5Plus/models/Qwen2.5-3B-Instruct-bf16")
 TEXT_DRAFT = Path("/Volumes/P5Plus/models/Qwen2.5-3B-Instruct-4bit")
 AREAS = ("tree", "tools", "external")
+
+
+def drafter_for(checkpoint):
+    """The drafter a target gets: the 27B DFlash2 drafter only for a target of its hidden size,
+    else its own MTP head (tfbench.default_drafter, the rule every other harness uses)."""
+    return tfbench.default_drafter(checkpoint)
+
+
+def tree_drafters(checkpoint):
+    """The drafters the tree A/B runs for a target: MTP, plus the matched drafter when it is not MTP."""
+    drafter = drafter_for(checkpoint)
+    return ["mtp"] if drafter == "mtp" else ["mtp", drafter]
 
 
 def sha(value):
@@ -251,7 +265,7 @@ def server(checkpoint, settings, path):
                 r"VLM batch runner: [^\n]*draft=(dflash|mtp|off)\b", log_text
             )
             expected = (
-                "dflash" if settings.get("YUNSHU_VLM_DRAFT") == str(DRAFT) else "mtp"
+                "mtp" if settings.get("YUNSHU_VLM_DRAFT", "mtp") == "mtp" else "dflash"
             )
             if not mode or mode[-1] != expected:
                 raise RuntimeError(f"engaged mode {mode} != {expected}")
@@ -362,7 +376,7 @@ def serving_arm(args, area, arm, rep, prepared, captured, drafter=None):
     setting = {
         "YUNSHU_TOOL_GRAMMAR": "0",
         "YUNSHU_SPEC_TREE": "off",
-        "YUNSHU_VLM_DRAFT": "mtp" if smoke else str(DRAFT),
+        "YUNSHU_VLM_DRAFT": "mtp" if smoke else drafter_for(checkpoint),
     }
     flag = {
         "tree": "YUNSHU_SPEC_TREE",
@@ -679,7 +693,7 @@ def main():
                                 drafters = (
                                     [None]
                                     if args.smoke or area != "tree"
-                                    else ["mtp", str(DRAFT)]
+                                    else tree_drafters(MODEL)
                                 )
                                 for drafter in drafters:
                                     receipt["rows"].extend(
