@@ -14,6 +14,10 @@ Changes on main after 0.1.6; not part of a published package yet.
 - A follow-up turn resumes from the previous reply's cache instead of prefilling the reply
   again, and its drafter keeps the conversation's context: on the 27B at 8K, follow-up first
   token 0.386 → 0.137 s and follow-up decode 130.6 → 194.7 tok/s.
+- Requests that send `ignore_eos` (benchmarks, throughput runs) or carry a checkpoint's
+  `suppress_tokens` keep the DFlash fast tree instead of the slower 8-token chain.
+- Copy rounds (a reply repeating its context: edits, quoted code) verify up to 64 rows in one
+  round, bit-equal to plain decode.
 
 ### Upgrade notes / breaking changes
 
