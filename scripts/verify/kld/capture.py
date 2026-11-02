@@ -145,6 +145,7 @@ def install(arm: str, arch: str = "qwen4_exp") -> None:
         "next": [],
         "carry": None,
         "active": False,
+        "bad": False,
     }
 
     if arm == "ref":
@@ -172,9 +173,10 @@ def install(arm: str, arch: str = "qwen4_exp") -> None:
     l4.LanguageModel.__call__ = language_model_call
     model_call = body_class.__call__
 
-    def record(inputs, hidden):
-        lm = state["lm"]
-        head = getattr(lm, "lm_head", None) or lm.model.embed_tokens.as_linear
+    def record(inputs, hidden, head=None):
+        if head is None:
+            lm = state["lm"]
+            head = getattr(lm, "lm_head", None) or lm.model.embed_tokens.as_linear
         tokens = inputs[0]
         rows = int(tokens.shape[0])
         tok_np = [int(x) for x in tokens.tolist()]
@@ -219,32 +221,98 @@ def install(arm: str, arch: str = "qwen4_exp") -> None:
 
     body_class.__call__ = qwen4_model_call
 
+    def write_window() -> None:
+        import numpy as np
+
+        wid = json.loads(expect_file.read_text())["wid"]
+        ids = np.concatenate([np.array(a) for a in state["ids"]], axis=0)
+        lp = np.concatenate([np.array(a) for a in state["lp"]], axis=0).astype(
+            np.float32
+        )
+        tmp = outdir / f"{wid}.tmp.npz"
+        np.savez(
+            tmp,
+            ids=ids.astype(np.int32),
+            lp=lp,
+            next_lp=np.array(state["next"], dtype=np.float32),
+            tokens=np.array(state["tokens"], dtype=np.int32),
+        )
+        tmp.rename(outdir / f"{wid}.npz")
+        expect_file.unlink()
+
+    def reset() -> None:
+        state.update(
+            tokens=[], ids=[], lp=[], next=[], carry=None, active=False, bad=False
+        )
+
     generate = PromptProcessingBatch.generate
 
     def finish(self, *args, **kwargs):
         result = generate(self, *args, **kwargs)
         if state["active"]:
-            import numpy as np
-
-            wid = json.loads(expect_file.read_text())["wid"]
-            ids = np.concatenate([np.array(a) for a in state["ids"]], axis=0)
-            lp = np.concatenate([np.array(a) for a in state["lp"]], axis=0).astype(
-                np.float32
-            )
-            tmp = outdir / f"{wid}.tmp.npz"
-            np.savez(
-                tmp,
-                ids=ids.astype(np.int32),
-                lp=lp,
-                next_lp=np.array(state["next"], dtype=np.float32),
-                tokens=np.array(state["tokens"], dtype=np.int32),
-            )
-            tmp.rename(outdir / f"{wid}.npz")
-            expect_file.unlink()
-            state.update(tokens=[], ids=[], lp=[], next=[], carry=None, active=False)
+            write_window()
+            reset()
         return result
 
     PromptProcessingBatch.generate = finish
+    install_driver(state, record, write_window, reset, expect_file)
+
+
+def _cache_offset(cache) -> int | None:
+    """Tokens already in a row's attention cache (None: no cache exposes an offset)."""
+    for layer in cache:
+        off = getattr(layer, "offset", None)
+        if isinstance(off, int):
+            return off
+    return None
+
+
+def install_driver(state, record, write_window, reset, expect_file) -> None:
+    """The round driver prefills through ``lane_forward`` (one segment per step) instead of the
+    upstream prefill: each segment's hidden states go through the driver's own head, in prompt order,
+    and the window is written when ``_prefill_step`` emits the row's first token (a one-token request).
+    A segment that does not continue the recorded prompt (an APC-restored prefix, a second request)
+    marks the window bad: nothing is written, so the run fails closed."""
+    try:
+        from yunshu_engine.round_driver import driver as rd
+        from yunshu_engine.round_driver import forward as fwd
+    except ImportError:
+        return  # a tree without the round driver: the upstream hooks above are the whole path
+
+    lane_forward = rd.lane_forward
+
+    def hooked_lane_forward(lm, seg, **kwargs):
+        offset = _cache_offset(seg.cache) if expect_file.exists() else None
+        out = lane_forward(lm, seg, **kwargs)
+        if expect_file.exists():
+            if offset != len(
+                state["tokens"]
+            ):  # a restored prefix, or an interleaved row
+                state["bad"] = True
+            elif not state["bad"]:
+                state["active"] = (
+                    True  # state["lm"] stays unset: the body hook must not record too
+                )
+                record(
+                    seg.tokens[None],
+                    out[None],
+                    head=lambda h: fwd.logits(lm, h[0])[None],
+                )
+        return out
+
+    rd.lane_forward = hooked_lane_forward
+    prefill_step = rd.RoundDriver._prefill_step
+
+    def hooked_prefill_step(self, *args, **kwargs):
+        events = prefill_step(self, *args, **kwargs)
+        if state["active"] or state["bad"]:
+            if events:  # the first token left: the prompt phase is over
+                if state["active"] and not state["bad"]:
+                    write_window()
+                reset()
+        return events
+
+    rd.RoundDriver._prefill_step = hooked_prefill_step
 
 
 def ask(url: str, model: str, text: str) -> tuple[int, float]:
