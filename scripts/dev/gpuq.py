@@ -945,6 +945,7 @@ def submit(
     device: str = "m5",
     gate: bool = False,
     short: bool = False,
+    precheck: str | None = None,
 ) -> str:
     if short:
         timeout_min = min(timeout_min, SHORT_MIN)
@@ -994,6 +995,20 @@ def submit(
             )
         for d in gpuq_preflight.ensure_out_dirs(cmd, os.getcwd()):
             print(f"gpuq: created output directory {d}", file=sys.stderr)
+    if precheck:
+        # CPU-only checks (lint, format, the docs/registry tests) run here, before anything is
+        # queued: inside the job they waited behind the GPU queue and failed on a stale tree.
+        rc, tail = gpuq_preflight.run_precheck(precheck, os.getcwd())
+        if rc:
+            behind = gpuq_preflight.behind_main(os.getcwd())
+            hint = (
+                f"\n  this worktree is {behind} commits behind main: merge main there, then resubmit"
+                if behind
+                else ""
+            )
+            raise ValueError(
+                f"precheck failed (rc={rc}); nothing was queued:\n{tail}{hint}"
+            )
     JOBS.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
     # Serialize label admission and id allocation across all submitters.
@@ -2130,6 +2145,11 @@ def main() -> int:
         )
         p.add_argument("--priority", type=int, default=0, help="higher runs first")
         p.add_argument(
+            "--precheck",
+            default=None,
+            help="CPU-only shell command run before queueing; a nonzero exit refuses the submit (nothing is queued)",
+        )
+        p.add_argument(
             "--gate",
             action="store_true",
             help="verdict job (release gate): runs before every ordinary job of the same priority",
@@ -2240,6 +2260,7 @@ def main() -> int:
                 device=a.device,
                 gate=a.gate,
                 short=a.short,
+                precheck=a.precheck,
             )
         except ValueError as e:
             print(f"gpuq: {e}", file=sys.stderr)

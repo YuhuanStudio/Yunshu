@@ -6,7 +6,8 @@ cd "$ROOT"
 export PYTHONPATH=$ROOT/python
 export TMPDIR=/Volumes/P5Plus/yunshu-build/tmp/anenative2
 mkdir -p "$TMPDIR"
-nice -n 15 /Volumes/P5Plus/yunshu-build/lead/precheck.sh "$ROOT" tests/unit/test_ane_native.py tests/unit/test_ane_convert.py tests/unit/test_ane_native_bench.py tests/unit/test_tfbench_spec_mode.py
+# precheck runs at submit, not in this job (it would wait behind the GPU queue):
+# gpuq submit --precheck '/Volumes/P5Plus/yunshu-build/lead/precheck.sh <root> tests/unit/test_ane_native.py tests/unit/test_ane_convert.py tests/unit/test_ane_native_bench.py tests/unit/test_tfbench_spec_mode.py' -- scripts/research/anenative_gate.sh
 # just is not installed here; this is the exact vendor-check recipe, using the existing venv.
 set +e
 nice -n 15 /Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python scripts/vendor/check_upstream.py --no-fetch > /Volumes/P5Plus/yunshu-build/codex/anenative-vendor-direct.log 2>&1
