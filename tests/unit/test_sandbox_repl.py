@@ -96,8 +96,9 @@ def orphan_marker(tmp_path) -> str:
     return str(tmp_path / "yunshu-repl-orphan-marker")
 
 
-def test_orphan_marker_is_under_the_test_tmp_dir(tmp_path):
-    assert orphan_marker(tmp_path).startswith(str(tmp_path) + os.sep)
+def test_repl_tests_use_no_fixed_tmp_path():
+    fixed = "/" + "tmp/"  # split so this guard does not match itself
+    assert fixed not in Path(__file__).read_text()
 
 
 def test_timeout_restarts_a_clean_process_and_kills_the_group(
