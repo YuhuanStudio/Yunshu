@@ -94,7 +94,9 @@ def main():
         popen = bench.subprocess.Popen
 
         def policy_server(cmd, **kwargs):
-            if policy["enabled"] and cmd[0] == bench.YUNSHU_BIN:
+            if policy["enabled"] and (
+                cmd[0] == bench.YUNSHU_BIN or bench.is_yunshu_command(cmd)
+            ):
                 cmd = [
                     sys.executable,
                     str(Path(__file__).with_name("copy_cost_server.py")),
@@ -105,7 +107,11 @@ def main():
                     ),
                     "--source-dir",
                     str(source),
-                    *cmd[1:],
+                    *(
+                        bench.yunshu_args(cmd)
+                        if bench.is_yunshu_command(cmd)
+                        else cmd[1:]
+                    ),
                 ]
             return popen(cmd, **kwargs)
 

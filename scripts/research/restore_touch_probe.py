@@ -195,12 +195,14 @@ def main():
     original = subprocess.Popen
 
     def launch(command, *a, **kw):
-        if command and Path(command[0]).name == "yunshu":
+        from tfbench import is_yunshu_command, yunshu_args
+
+        if is_yunshu_command(command):
             command = [
                 sys.executable,
                 str(Path(__file__).resolve()),
                 "--serve",
-                *command[1:],
+                *yunshu_args(command),
             ]
         return original(command, *a, **kw)
 
