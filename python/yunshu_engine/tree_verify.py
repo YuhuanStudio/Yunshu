@@ -57,7 +57,7 @@ NARROW_ROWS = (
 # the MTP chain verify, another path). It costs 90-100 ms at 32K against 71 ms at 32 rows
 # (a third 16-row projection block), which a 48-row copy round does not earn back on the
 # 32K code trace (~1.4%), so the limit stays 32.
-FAST_MAX_ROWS = 32
+FAST_MAX_ROWS = 64  # 2026-11-02: fast_chain bit-equal to one-row decode at 32/48/64 rows at 32K (probe_wide_verify job 1102-065136); the chain verify stays at 32 (not bit-equal past it)
 FUSED_ROWS = FAST_MAX_ROWS  # fast-tree windows up to this width take the fused attention (one shared-prefix launch)
 CK = ra.CHUNK
 
