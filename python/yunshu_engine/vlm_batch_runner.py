@@ -2052,7 +2052,7 @@ class VLMBatchRunner:
                 caches=caches,
                 window_tail=tail,
                 salt=getattr(group, "driver_salt", None),
-                stand=True
+                stand=True,
             ):
                 return True
         except Exception:  # fall back to the copy

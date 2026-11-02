@@ -195,3 +195,30 @@ def test_round_driver_last_finished_row_defers_its_reply_cache():
             r2.req = SimpleNamespace(**{**row.req.__dict__, "cache_store": False})
         drv._release([r2])
         assert runner._decode_pending_job() is None
+
+
+def test_driver_standing_handoff_preserves_row_salt_and_cache_ownership(monkeypatch):
+    from mlx_vlm import apc
+
+    from yunshu_engine import dflash_apc_window
+    from yunshu_engine.kernels import buffer_cache
+
+    group, coord = _group(6)
+    group.driver_salt = 5
+    standing = []
+    coord.offer_standing = lambda tokens, rows, **kw: standing.append(
+        (list(tokens), rows, kw["extra_hash"])
+    )
+    rows = [object()]
+    monkeypatch.setattr(apc, "snapshot_prompt_cache_row", lambda *a, **kw: rows)
+    monkeypatch.setattr(dflash_apc_window, "store_decode_window", lambda *a, **kw: True)
+    offered = []
+    monkeypatch.setattr(buffer_cache, "offer_restore_buffers", offered.append)
+    runner = _runner()
+    job = _job([1, 2, 3, 4], [10, 11, 12], salt=7)
+    caches = [_KV(6)]
+    runner._decode_pending = (group, job, caches, None)
+    assert runner._stand_decode_cache()
+    assert standing == [([1, 2, 3, 4, 10, 11], rows, 5)]
+    assert runner._decode_pending_job() is None
+    assert coord.calls == [] and offered == []

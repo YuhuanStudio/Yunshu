@@ -1377,8 +1377,6 @@ def real_error_line(lines: list[str]) -> str:
     return ""
 
 
-
-
 def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     gate = gate or ServingGate()
     _release_quiet_hold(job, _now())

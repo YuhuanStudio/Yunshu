@@ -157,7 +157,11 @@ def test_cpu_preflight_checks_legacy_tag_without_starting_server(
 ):
     import sys
 
-    (tmp_path / "config.json").write_text('{"model_type":"qwen3_5"}')
+    (tmp_path / "config.json").write_text('{"model_type":"qwen3_5","hidden_size":5120}')
+    drafter = tmp_path / "drafter"
+    drafter.mkdir()
+    (drafter / "config.json").write_text('{"hidden_size":5120}')
+    monkeypatch.setattr(tfbench, "D", str(drafter))
     monkeypatch.setattr(
         sys,
         "argv",

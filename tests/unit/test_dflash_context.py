@@ -88,6 +88,11 @@ def test_trimmed_hidden_matches_upstream_window():
         patched.__code__.co_freevars.index("orig_hidden")
     ].cell_contents
 
+    # Compare trimming with identical TF proposal masking on both paths.
+    for layer in d.layers:
+        object.__setattr__(
+            layer.self_attn, "_yunshu_trained_block", d.config.block_size
+        )
     ref_cache = d.make_cache()
     ref = upstream(d, inputs, target, ref_cache)
     got_cache = d.make_cache()
@@ -128,3 +133,33 @@ def test_prefill_retains_only_the_window():
     # Other drafter kinds keep everything.
     mtp = SpeculativePrefill("mtp", d)
     assert mtp._yunshu_keep is None
+
+
+def test_non_ring_hidden_applies_configured_tensorfold_mask(monkeypatch):
+    from yunshu_engine.dflash_ring import block_mask
+
+    dflash_context.install()
+    d = _drafter(window=9)
+    inputs = mx.full((1, 16), VOCAB - 1, dtype=mx.int32)
+    hidden = mx.zeros((1, 30, 2 * HIDDEN))
+    original = mx.fast.scaled_dot_product_attention
+    seen = []
+
+    def attend(*args, **kwargs):
+        mask = kwargs["mask"]
+        context = args[1].shape[2] - inputs.shape[1]
+        expected = block_mask(
+            mx.arange(context, dtype=mx.int32),
+            mx.array(context),
+            16,
+            d.config.block_size,
+            9,
+        )
+        assert mask is not None
+        assert mx.array_equal(mask, expected)
+        seen.append(mask)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(mx.fast, "scaled_dot_product_attention", attend)
+    mx.eval(d._hidden(inputs, hidden, d.make_cache()))
+    assert len(seen) == len(d.layers)

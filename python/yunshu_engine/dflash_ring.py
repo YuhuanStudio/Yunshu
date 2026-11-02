@@ -1,3 +1,4 @@
+# Upstream (derived): ashhart/TensorFold (MIT) zig/src/families/qwen27/dflash/runtime_context.zig:137-183 @ v1.2.0
 """DFlash2 drafter context in fixed-width rings, so a round's draft needs no host numbers.
 
 The vendor drafter appends each round's accepted target rows to a rotating KV cache whose
@@ -30,6 +31,7 @@ class Ring:
         cfg = drafter.config
         kvh, hd = int(cfg.num_key_value_heads), int(cfg.head_dim)
         self.cap, self.keep = int(cap), int(keep)
+        self.trained = int(cfg.block_size)
         if self.keep >= self.cap:
             raise ValueError("ring must hold more slots than the window it keeps")
         self.keys = [
@@ -67,9 +69,8 @@ class Ring:
         self.pos = self.pos + count.reshape(1).astype(mx.int32)
 
     def mask(self, rows: int) -> Any:
-        """Additive mask [1, 1, 1, cap + rows]: the last ``keep`` context rows and every
-        proposal row (the drafter's attention is not causal)."""
-        return _mask(self.slot_pos, self.pos, self.keep, rows)
+        """TF per-query sliding context and trained-block additive mask."""
+        return _mask(self.slot_pos, self.pos, self.keep, rows, self.trained)
 
 
 @mx.compile
@@ -87,16 +88,36 @@ def _slots(pos: mx.array, count: mx.array, width: int, cap: int):
     )
 
 
+def block_mask(slot_pos, pos, rows, trained, window=None):
+    """TensorFold 1.2.0 dflash/runtime_context.zig:137-146 (fillMask).
+
+    Context slots may be ring-ordered. Window advances for each query, while
+    the first trained queries cannot read proposal keys beyond training.
+    """
+    query = mx.arange(rows, dtype=mx.int32)[:, None]
+    keys = mx.arange(rows, dtype=mx.int32)[None, :]
+    return _block_mask_math(
+        slot_pos,
+        pos,
+        query,
+        keys,
+        mx.array(trained, dtype=mx.int32),
+        mx.array(window or 0, dtype=mx.int32),
+    )
+
+
 @mx.compile
-def _mask_math(slot_pos, pos, keep, props):
-    live = (slot_pos >= pos - keep) & (slot_pos >= 0)
-    ring = mx.where(live, 0.0, -mx.inf).astype(mx.bfloat16)
-    return mx.concatenate([ring, props]).reshape(1, 1, 1, -1)
+def _block_mask_math(slot_pos, pos, query, keys, trained, window):
+    live = (slot_pos[None, :] >= 0) & (slot_pos[None, :] < pos)
+    live = live & ((window == 0) | (slot_pos[None, :] >= pos + query + 1 - window))
+    props = (query >= trained) | (keys < trained)
+    return mx.where(mx.concatenate([live, props], axis=1), 0.0, -mx.inf).astype(
+        mx.bfloat16
+    )[None, None]
 
 
-def _mask(slot_pos: mx.array, pos: mx.array, keep: int, rows: int) -> Any:
-    props = mx.zeros((rows,), dtype=mx.bfloat16)
-    return _mask_math(slot_pos, pos, mx.array(keep, dtype=mx.int32), props)
+def _mask(slot_pos: mx.array, pos: mx.array, keep: int, rows: int, trained: int):
+    return block_mask(slot_pos, pos.reshape(()), rows, trained, keep + 1)
 
 
 def _context_kv(drafter: Any, h_ctx: mx.array) -> list:
