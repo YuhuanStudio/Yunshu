@@ -890,7 +890,55 @@ def _quality_cache(ctx: Ctx, n: int) -> Path:
     return ctx.exe.cache_dir / f"quality-{key}.jsonl"
 
 
+_MISSING_DEPS = r"""
+import re, sys, tomllib
+from importlib import metadata
+deps = tomllib.load(open(sys.argv[1], "rb"))["project"]["dependencies"]
+names = [re.split(r"[ <>=!~;\[]", d.strip(), maxsplit=1)[0] for d in deps]
+missing = []
+for name in names:
+    try:
+        metadata.version(name)
+    except metadata.PackageNotFoundError:
+        missing.append(name)
+print(" ".join(missing))
+"""
+
+
+def missing_deps(py: str, tree: Path) -> list:
+    """The tree's runtime dependencies (pyproject [project].dependencies) that ``py`` lacks.
+
+    The quality server runs on a pinned interpreter (not the main venv). When the project
+    gains a dependency that interpreter lacks, every quality job dies at import (2026-11-02:
+    xxhash, fn-ple-memory-1102b), so the stage refuses before it queues GPU work. A missing
+    interpreter or pyproject is left to the job itself (it fails with that error)."""
+    if not Path(py).is_file() or not (tree / "pyproject.toml").is_file():
+        return []
+    out = subprocess.run(
+        [py, "-I", "-c", _MISSING_DEPS, str(tree / "pyproject.toml")],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if out.returncode != 0:
+        raise InfraError(f"quality: cannot check {py}'s packages: {out.stderr[-300:]}")
+    return out.stdout.split()
+
+
 def stage_quality(ctx: Ctx, max_rounds: int = 6) -> StageResult:
+    for arm in ("base", "cand"):
+        py = ctx.tree(arm).python(
+            os.environ.get(
+                "PAIRED_PY", "/Volumes/P5Plus/yunshu-test-envs/paired-eval/bin/python"
+            )
+        )
+        lacking = missing_deps(py, ctx.tree(arm).path)
+        if lacking:
+            raise InfraError(
+                f"quality: {py} lacks {', '.join(lacking)} that the {arm} tree needs; "
+                "sync it to the tree's lock (uv export --frozen --no-dev --no-hashes "
+                "--no-emit-project --extra vision --extra compression | uv pip sync --python PY -)"
+            )
     n = int(ctx.suite["mmlu_n"])
     budget = 14
     reasons: list = []

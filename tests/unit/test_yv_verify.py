@@ -2229,3 +2229,15 @@ def test_base_must_be_an_ancestor_of_the_candidate(tmp_path, monkeypatch):
     )  # branch point: fine
     with pytest.raises(core.InfraError, match="1 commit"):
         runner.check_base_ancestor(arm("base", ahead), arm("cand", side))
+
+
+def test_quality_interpreter_missing_a_dependency_is_named(tmp_path):
+    """The quality server's pinned interpreter lacked xxhash and every job died at import
+    (fn-ple-memory-1102b); the check names what is missing before any GPU job."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\ndependencies = ["pytest>=7", '
+        "\"yunshu-surely-absent-pkg[extra]>=1; python_version >= '3.9'\"]\n"
+    )
+    from verify import stages
+
+    assert stages.missing_deps(sys.executable, tmp_path) == ["yunshu-surely-absent-pkg"]
