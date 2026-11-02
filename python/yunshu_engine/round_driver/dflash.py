@@ -29,7 +29,7 @@ from ..dflash_plan import FastShape, remap_landed, reorder, search_tree
 from ..text_logprobs import top_logprobs_device
 from .allocate import fair_nodes
 from .forward import logits
-from .verify import Window, forward
+from .verify import DRIVER_MAX_ROWS, Window, forward
 
 if TYPE_CHECKING:
     from .driver import Event
@@ -155,7 +155,7 @@ class DFlashBatch:
             self.rings[id(row)] = ring
             from ..mtp_lane import copy_rows_for_model
 
-            copy_rows = min(copy_rows_for_model(self.lm), tree_verify.FAST_MAX_ROWS)
+            copy_rows = min(copy_rows_for_model(self.lm), DRIVER_MAX_ROWS)
             if copy_rows >= 3:
                 copier = CopyDrafter(max_draft=copy_rows - 1)
                 copier.extend(row.context)
@@ -215,11 +215,9 @@ class DFlashBatch:
             # More than 32 live requests cannot fit even their roots in one
             # certified forward. Every row still advances in this scheduler
             # step, in bounded packs; no request loses its turn.
-            for start in range(0, len(rows), tree_verify.FAST_MAX_ROWS):
+            for start in range(0, len(rows), DRIVER_MAX_ROWS):
                 events.extend(
-                    self._step_rows(
-                        driver, rows[start : start + tree_verify.FAST_MAX_ROWS]
-                    )
+                    self._step_rows(driver, rows[start : start + DRIVER_MAX_ROWS])
                 )
             return events
         finally:

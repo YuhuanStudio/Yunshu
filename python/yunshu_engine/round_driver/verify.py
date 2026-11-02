@@ -15,6 +15,11 @@ import mlx.core as mx
 
 from .. import tree_verify as tv
 
+# The packed verify's row limit. The lane's fast tree widened to 64 rows (copy rounds,
+# tree_verify.FAST_MAX_ROWS) with a one-row bit-equality probe; the driver's multi-row packs were
+# validated at 32 and keep it until the same probe runs on a packed window.
+DRIVER_MAX_ROWS = 32
+
 
 @dataclass
 class Window:
@@ -36,7 +41,7 @@ def forward(lm, windows: list[Window], capture_ids=(), *, verifier=None):
     if len({id(w.cache) for w in windows}) != len(windows):
         raise ValueError("packed verify requires independent caches")
     total = sum(w.shape.width for w in windows)
-    if total > tv.FAST_MAX_ROWS:
+    if total > DRIVER_MAX_ROWS:
         raise ValueError("packed verify exceeds the shared node budget")
     if any(w.tokens.shape != (1, w.shape.width) for w in windows):
         raise ValueError("packed verify tokens must match each window width")
@@ -162,7 +167,7 @@ def native_chain_forward(lm, tokens, caches):
         raise ValueError("native chain requires independent caches")
     if any(t.ndim != 2 or t.shape[0] != 1 or not 1 <= t.shape[1] <= 2 for t in tokens):
         raise ValueError("native chain supports one or two positions per row")
-    if sum(t.shape[1] for t in tokens) > tv.FAST_MAX_ROWS:
+    if sum(t.shape[1] for t in tokens) > DRIVER_MAX_ROWS:
         raise ValueError("native chain exceeds the shared node budget")
 
     native = Qwen4ExpBatchInvariantForward()
