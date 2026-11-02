@@ -369,3 +369,18 @@ def test_standing_reply_cache_resumes_in_place_once():
     hit = lookup(coordinator, ids)
     assert hit["prefix_len"] == 1206 and hit["warm_cache"] is rows
     assert coordinator.take_standing() is None
+
+
+def test_standing_reply_cache_is_found_by_another_generators_coordinator():
+    """Every generator binds its own coordinator: the reply's group offered the standing cache
+    on its coordinator and the follow-up's lookup ran on a new one, so it never resumed (8K
+    turn 2 cached 8192 of 8358, t2-standdiag 2026-11-02). The slot lives on the manager."""
+    manager = _mgr(prefill_stride=2048, prefill_alignment=64)
+    first, second = _coordinator(manager), _coordinator(manager)
+    assert first is not second
+    ids = list(range(1300))
+    rows = _cache(1206)
+    first.offer_standing(ids[:1206], rows, extra_hash=7)
+    hit = lookup(second, ids)
+    assert hit["prefix_len"] == 1206 and hit["warm_cache"] is rows
+    assert first.take_standing() is None and second.take_standing() is None
