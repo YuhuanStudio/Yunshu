@@ -1354,7 +1354,27 @@ def result_summary(log: Path, lines: int = 3) -> str:
         for t in tail
         if t.strip() and not t.startswith(_NOISE) and " INFO " not in t
     ]
-    return " | ".join(x[:160] for x in keep[-lines:])[:480]
+    error = real_error_line(tail)
+    body = [x for x in keep[-lines:] if x != error]
+    return " | ".join(x[:160] for x in ([error] if error else []) + body)[:480]
+
+
+def real_error_line(lines: list[str]) -> str:
+    """The line that says what failed: the exception line closing the last Traceback, else the
+    first FATAL / Error: line. Trailing shell noise (`Killed: 9`) is never this line."""
+    last_tb = None
+    for i, t in enumerate(lines):
+        if t.startswith("Traceback (most recent call last)"):
+            for u in lines[i + 1 :]:
+                if u.strip() and not u[:1].isspace():
+                    last_tb = u.strip()
+                    break
+    if last_tb:
+        return last_tb[:160]
+    for t in lines:
+        if t.startswith("FATAL") or "Error:" in t:
+            return t.strip()[:160]
+    return ""
 
 
 def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:

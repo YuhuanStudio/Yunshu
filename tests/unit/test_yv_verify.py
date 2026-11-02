@@ -2145,3 +2145,24 @@ def test_validator_exception_fails_only_its_own_cell(world):
     assert not res["a"].ok
     assert "AttributeError" in res["a"].reason
     assert "a" in {r["cell"] for r in rd.rows("st") if r.get("ev") == "cell_done"}
+
+
+def test_failure_reason_leads_with_the_real_error(world, monkeypatch):
+    """A failed cell's reason is the job record's summary (error line first), not the raw log tail
+    whose last lines are shell noise such as `Killed: 9` (HARNESS_BUGS 20)."""
+    _, ex = mkexec(world)
+    wait = world.gq.wait
+
+    def with_summary(jid):
+        job = wait(jid)
+        return core.Job(
+            {
+                **job.d,
+                "summary": "IndexError: list index out of range | conc.sh: Killed: 9",
+            }
+        )
+
+    monkeypatch.setattr(world.gq, "wait", with_summary)
+    res = ex.run_cells([cell("a", "import sys;sys.exit(3)")])
+    assert not res["a"].ok
+    assert res["a"].reason.index("IndexError") < res["a"].reason.index("Killed")

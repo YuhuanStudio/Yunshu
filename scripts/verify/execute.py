@@ -211,7 +211,9 @@ class Executor:
         ok, reason = True, ""
         if j.state != "done" or j.rc != 0:
             ok = False
-            reason = f"job {j.id} {j.state} rc={j.rc}: " + self.gq.log_tail(j.id, 6)
+            # the job record's summary leads with the real error line (gpuq.result_summary)
+            tail = j.d.get("summary") or self.gq.log_tail(j.id, 6)
+            reason = f"job {j.id} {j.state} rc={j.rc}: " + tail
         elif cell.needs_out:
             # A validator that raises fails this cell with its exception text; it must not
             # abort the run as an infra error (the job itself finished, HARNESS_BUGS 19).
