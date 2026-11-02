@@ -960,6 +960,18 @@ def submit(
         raise ValueError("mem_gb must be finite and nonnegative")
     if device != "m5" and mem_gb > 28:
         raise ValueError("M3 admission: maximum 28 GB (36 GB minus 8 GB user reserve)")
+    # The laptop takes only its allowlisted checkpoints (gpuq_remote.M3_MODELS). A device=m3
+    # job naming any other one is refused here; an `any` job is kept off the laptop lane.
+    import gpuq_remote
+
+    m3_refused = (
+        gpuq_remote.refused_m3_models(cmd, dict(os.environ)) if device != "m5" else []
+    )
+    if device == "m3" and m3_refused:
+        raise ValueError(
+            f"M3: checkpoints {m3_refused} are not allowed on the laptop; "
+            f"allowed: {sorted(gpuq_remote.M3_MODELS)}"
+        )
     if device != "m5" and _daemon_running():
         caps = _read(ROOT / "daemon-capabilities.json")
         try:
@@ -1008,6 +1020,7 @@ def submit(
                 "id": jid,
                 "device": device,
                 "requested_device": device,
+                "m3_refused": m3_refused,
                 "remote_host": None,
                 "rc": None,
                 "pid": None,
@@ -1036,6 +1049,17 @@ def submit(
         )
     _ensure_daemon()
     return jid
+
+
+def _m3_eligible(j: dict) -> bool:
+    """Can the laptop lane take this job? Checkpoints it may not copy are refused at submit
+    (m3_refused), so an `any` job with one stays on the M5 lane."""
+    return bool(
+        not j.get("cancel")
+        and not j.get("quiet")
+        and not j.get("m3_refused")
+        and float(j.get("mem_gb", DEFAULT_MEM_GB)) <= 28
+    )
 
 
 def _claim(job: dict, lane: str) -> bool:
@@ -1298,7 +1322,6 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     )
 
 
-
 _NOISE = ("gpuq:", "[transformers]", "Traceback", "  File ")
 
 
@@ -1311,8 +1334,13 @@ def result_summary(log: Path, lines: int = 3) -> str:
         tail = log.read_bytes()[-8000:].decode("utf-8", "replace").splitlines()
     except OSError:
         return ""
-    keep = [t.strip() for t in tail if t.strip() and not t.startswith(_NOISE) and " INFO " not in t]
+    keep = [
+        t.strip()
+        for t in tail
+        if t.strip() and not t.startswith(_NOISE) and " INFO " not in t
+    ]
     return " | ".join(x[:160] for x in keep[-lines:])[:480]
+
 
 def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     gate = gate or ServingGate()
@@ -1878,11 +1906,7 @@ def daemon() -> None:
             else:
                 job = _pick(
                     eligible,
-                    lambda j: (
-                        not j.get("cancel")
-                        and not j.get("quiet")
-                        and float(j.get("mem_gb", DEFAULT_MEM_GB)) <= 28
-                    ),
+                    _m3_eligible,
                 )
             if job is None:
                 continue
