@@ -345,3 +345,46 @@ def test_token_counter_messages_never_reach_the_prompt_when_cache_control_is_act
         req.messages, has_images=False, temp_files=[]
     )
     assert [m["role"] for m in converted] == ["user"]
+
+
+def test_breakpoint_on_an_image_only_tool_result_is_accepted():
+    """Claude Code marks a screenshot tool result (content: one image) with cache_control. The
+    Anthropic API accepts it; Yunshu answered 400 (agentcompat replay cc_image, 0.1.6 sweep)."""
+    from yunshu_engine.prompt_caching import mark_anthropic
+    from yunshu_gateway.routers.anthropic import AnthropicMessagesRequest
+
+    png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    req = AnthropicMessagesRequest(
+        model="local",
+        max_tokens=1,
+        messages=[
+            {"role": "user", "content": "look"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "shot", "input": {}}
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": png,
+                                },
+                            }
+                        ],
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+        ],
+    )
+    mark_anthropic(req)  # no ValueError

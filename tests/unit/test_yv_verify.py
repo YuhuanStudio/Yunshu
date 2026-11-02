@@ -2046,3 +2046,21 @@ def test_model_size_comes_from_the_weights_not_the_name(tmp_path):
         f.truncate(25 * 10**9)  # sparse file: no disk use
     assert runner._weights_gb(str(model)) == pytest.approx(25.0)
     assert runner._weights_gb(str(tmp_path / "missing")) == 0.0
+
+
+def test_related_tests_skip_agent_task_fixtures(tmp_path):
+    """A changed agentbench task's hidden test is a task fixture, not a unit test: run under the
+    preflight it failed to import (0.1.6 release gate, gate-long preflight)."""
+    hidden = tmp_path / "scripts/research/agentic/tasks/todo/hidden"
+    hidden.mkdir(parents=True)
+    (hidden / "test_api.py").write_text("import os\nos.environ['TASK_URL']\n")
+    (tmp_path / "tests/unit").mkdir(parents=True)
+    (tmp_path / "tests/unit/test_x.py").write_text("def test_x(): pass\n")
+    got = core.related_tests(
+        [
+            "scripts/research/agentic/tasks/todo/hidden/test_api.py",
+            "tests/unit/test_x.py",
+        ],
+        tmp_path,
+    )
+    assert got == ["tests/unit/test_x.py"]

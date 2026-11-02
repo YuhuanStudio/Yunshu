@@ -32,7 +32,7 @@ env:
   PYTHON_VERSION: "3.13"
   # Keep in sync with the ruff pin in pyproject's dev group / uv.lock so Linux CI
   # matches `just lint` / `just format` locally on macOS.
-  RUFF_VERSION: "0.15.15"
+  RUFF_VERSION: "0.17.0"
 
 jobs:
   # Runs on every push/PR — Linux (1× minutes). ruff only parses source (never
@@ -57,7 +57,7 @@ jobs:
   # Needs the installed deps (mlx is macOS-only) so results match local runs.
   typecheck:
     name: Type check (mypy baseline)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -87,6 +87,14 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
+      - name: Install CPU-only console test dependencies
+        run: |
+          uv venv .console-test-venv --python ${{ env.PYTHON_VERSION }}
+          uv pip install --python .console-test-venv/bin/python fastapi==0.143.0 httpx==0.28.1 uvicorn==0.54.0 websockets==17.2 numpy==2.5.4 python-multipart==0.0.32 xxhash==4.0.1 jsonschema==4.26.0 openai==3.31.0 psutil==7.2.2 regex==2026.9.29 lxml==6.1.3 prometheus-client==0.26.0
+          echo "YUNSHU_TEST_PYTHON=$PWD/.console-test-venv/bin/python" >> "$GITHUB_ENV"
+          # the console build dumps the OpenAPI schema with a CPU-only Python (no MLX on Linux)
+          echo "DOCS_PYTHON=$PWD/.console-test-venv/bin/python" >> "$GITHUB_ENV"
+
       - name: Set up Node for the console
         uses: actions/setup-node@v4
         with:
@@ -103,12 +111,6 @@ jobs:
           pnpm build
           pnpm exec yunui doctor --strict
           pnpm exec yunui audit --strict
-
-      - name: Install CPU-only console test dependencies
-        run: |
-          uv venv .console-test-venv --python ${{ env.PYTHON_VERSION }}
-          uv pip install --python .console-test-venv/bin/python fastapi==0.143.0 httpx==0.28.1 uvicorn==0.54.0 websockets==17.2
-          echo "YUNSHU_TEST_PYTHON=$PWD/.console-test-venv/bin/python" >> "$GITHUB_ENV"
 
       - name: Browser API integration tests
         working-directory: frontend
@@ -167,7 +169,7 @@ jobs:
     name: Unit Tests (macOS)
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: lint
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 

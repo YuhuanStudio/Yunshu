@@ -36,7 +36,9 @@ class FakeEngine:
     async def generate_stream(self, prompt=None, cancel_event=None, **kw):
         words = ["Hello", " there", ",", " friend", "."]
         joined = str(prompt)
-        n = 400 if "Count from 1" in joined else len(words)
+        # long replies for the prompts the harness cancels mid-response (the essay one
+        # cancels at its 3rd delta: a 5-word reply finished first on a loaded CI host)
+        n = 400 if ("Count from 1" in joined or "essay" in joined) else len(words)
         for i in range(n):
             if cancel_event is not None and cancel_event.is_set():
                 return

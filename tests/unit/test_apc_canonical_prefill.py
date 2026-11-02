@@ -222,7 +222,9 @@ def test_split_invariant_lookup_accepts_rehearsed_subatom_but_not_unaligned():
 
 @pytest.mark.parametrize(
     "total,prefix",
-    [(1, 0), (63, 0), (64, 0), (65, 0), (1001, 0), (1361, 960), (32769, 0)],
+    [(1, 0), (63, 0), (64, 0), (65, 0), (1001, 0), (1361, 960), (32769, 0)]
+    # a follow-up turn resumed from the previous reply's off-grid decode cache
+    + [(1232, 1206), (1300, 1206), (5000, 1206)],
 )
 def test_prompt_dispatch_never_splits_inside_a_recurrence_block(
     monkeypatch, total, prefix
@@ -321,3 +323,31 @@ def test_short_prompt_tail_runs_outside_the_long_prefill_scope(
     batch._inputs_embeds = SimpleNamespace(shape=(1, tail, 1))
     batch.generate()
     assert seen == [(scoped, not scoped)]
+
+
+def test_reply_cache_is_stored_off_the_grid_and_found_first():
+    """YUNSHU_NEXT_TURN_PREFILL=decode (user 2026-11-02): the finished reply's cache (prompt +
+    reply, any length) is the follow-up's prefix, so turn 2 prefills only its new tokens."""
+    manager = _mgr(prefill_stride=2048, prefill_alignment=64)
+    coordinator = _coordinator(manager)
+    ids = list(range(1300))
+    manager.store_exact_cache(ids[:640], _cache(640), extra_hash=7)
+    assert coordinator.store_decode_tail(ids[:1206], _cache(1206), extra_hash=7)
+    hit = lookup(coordinator, ids)
+    assert hit["prefix_len"] == 1206
+    # a different conversation still takes the aligned checkpoint
+    other = ids[:700] + [9999] * 600
+    assert lookup(coordinator, other)["prefix_len"] == 640
+
+
+def test_reply_cache_is_found_on_the_checkpoint_policy_path_too():
+    """A 32K follow-up carries a checkpoint plan (``request`` returns a policy) and skipped
+    the reply cache: 30720 of 33303 cached instead of 33279 (gapboard 2026-11-02)."""
+    manager = _mgr(prefill_stride=2048, prefill_alignment=64)
+    coordinator = _coordinator(manager)
+    assert coordinator.is_checkpoint
+    ids = list(range(1300))
+    manager.store_exact_cache(ids[:640], _cache(640), extra_hash=7)
+    assert coordinator.store_decode_tail(ids[:1206], _cache(1206), extra_hash=7)
+    coordinator.set_request(ids, {"points": [(640, 1)], "written": 0})
+    assert lookup(coordinator, ids)["prefix_len"] == 1206

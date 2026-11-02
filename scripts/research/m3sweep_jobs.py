@@ -205,8 +205,10 @@ def classify(failure, grammar):
 
 
 def write(path, d):
+    """One JSON line: gpuq --expect-complete (since 2026-10-20) looks for a line that is a record
+    with complete=true, and an indented file never had one, so every sweep failed its wait."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(d, indent=1, ensure_ascii=False, default=str))
+    Path(path).write_text(json.dumps(d, ensure_ascii=False, default=str) + "\n")
 
 
 def routes_online() -> bool:
@@ -881,11 +883,22 @@ def cmd_routes(a):
             from route_checks_tools import FakeBackend
 
             fake = FakeBackend(free_port())
-            srt_bin = "/Volumes/P5Plus/yunshu-build/srt/node_modules/.bin"
-            if Path(srt_bin, "srt").exists() and srt_bin not in os.environ["PATH"]:
-                os.environ["PATH"] = (
-                    f"{srt_bin}:/opt/homebrew/bin:" + os.environ["PATH"]
-                )
+            # srt: this Mac's build disk, or the laptop's checkout (gpuq runs M3 jobs in a worktree
+            # under it; the build disk is not mounted there): .m3-tools/srt, set up once with
+            # `npm install @anthropic-ai/sandbox-runtime` in that directory
+            for srt_bin in (
+                "/Volumes/P5Plus/yunshu-build/srt/node_modules/.bin",
+                *(
+                    str(d / ".m3-tools/srt/node_modules/.bin")
+                    for d in (ROOT, *ROOT.parents)
+                ),
+            ):
+                if Path(srt_bin, "srt").exists():
+                    if srt_bin not in os.environ["PATH"]:
+                        os.environ["PATH"] = (
+                            f"{srt_bin}:/opt/homebrew/bin:" + os.environ["PATH"]
+                        )
+                    break
             cand = Path(sys.executable).parent / "yunshu"
             if "COVAUDIT_BIN" not in os.environ and cand.exists():
                 os.environ["COVAUDIT_BIN"] = str(cand)
@@ -903,6 +916,9 @@ def cmd_routes(a):
                     f"YUNSHU_SERVE_LOG_DIR={home / 'history'}",
                     f"YUNSHU_SEARXNG_URL={fake.url}",
                     "YUNSHU_WEB_SEARCH_PROVIDER=searxng",
+                    # mcp_connector names the fake backend's /mcp on 127.0.0.1: request-named MCP
+                    # servers are blocked from private addresses unless this is set
+                    "YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE=1",
                     # /v1/containers needs code execution; srt must be on PATH (see below)
                     "YUNSHU_CODE_EXECUTION=1",
                     f"YUNSHU_CODE_EXECUTION_ROOT={home / 'sandbox'}",
@@ -937,6 +953,9 @@ def cmd_routes(a):
             ctx.mm_models = sorted(ids)
             ctx.model = Path(a.multi[0]).name
             ctx.fake = fake
+            # console_registration_cancel registers a second copy of a real checkpoint and cancels
+            # its load; the larger of the two multi models loads slowly enough to be cancelled
+            ctx.notes["console_model_path"] = str(Path(a.multi[-1]).resolve())
             run_route_checks(ctx, "multi", only, res, srv, "multi")
             res["notes"]["multi"] = ctx.notes
         except BaseException as e:  # noqa: BLE001

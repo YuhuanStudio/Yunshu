@@ -7,14 +7,38 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-The next release (0.1.6) makes follow-up turns, SSD cache hits and short contexts of Qwen3.8-27B faster in the
+Changes on main after 0.1.6; not part of a published package yet.
+
+### Highlights
+
+### Upgrade notes / breaking changes
+
+### Performance
+
+| Machine | Model / mode | Metric / workload | Before → after | Recorded source |
+|---|---|---|---|---|
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Security
+
+[Full changelog: v0.1.6…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.6...main)
+
+## [0.1.6] - 2026-11-01
+
+0.1.6 makes follow-up turns, SSD cache hits and short contexts of Qwen3.8-27B faster in the
 `yunshu` package, with a new split-invariant prefill default, Anthropic `thinking.display` support and
 tested memory guidance for 128 GB and tight hosts. Outputs of speculation on and off stay token-identical.
 
 ### Highlights
 
 - Turn-2 TTFT after an idle gap drops (32K, 27B + DFlash2): 0.857/1.180 -> 0.380/0.417 s for code replies
-  of 256/512 tokens, because prefill is split-invariant and rehearsal stops at the assistant end.
+  of 256/512 tokens, because prefill is split-invariant and rehearsal stops at the assistant end. Re-sending the
+  same prompt is nearly instant: warm TTFT 1K 0.093 -> 0.011 s, 32K 0.166 -> 0.044 s, 128K 0.570 -> 0.275 s.
 - Follow-ups after 4-16 s idle no longer re-pin the weights: 32K follow-up 0.42-0.59 -> 0.23-0.26 s.
 - APC SSD hits restore faster through MLX's native safetensors reader: 32K SSD-hit TTFT 440 -> 272 ms.
 - Short contexts decode faster: the DFlash fast tree now admits 256-token contexts (+29-34%).
@@ -69,6 +93,12 @@ tested memory guidance for 128 GB and tight hosts. Outputs of speculation on and
 
 ### Performance
 
+- Exact-repeat prompt-end replay: a request whose prompt equals a stored prompt end returns the stored last logits
+  and recurrent state instead of re-running the final position (Qwen3.8-27B oQ4e-mtp + DFlash2, M5 Max, warm TTFT
+  3 reps): 1K 0.093 -> 0.011 s, 8K 0.116 -> 0.023 s, 32K 0.166 -> 0.044 s, 128K 0.570 -> 0.275 s; decode unchanged.
+- Qwen3.8-Flash-Next: the fused GDN verify (oMLX Qwen4 kernels) is the default and `YUNSHU_QWEN4_GDN_FUSED` is gone.
+  oQ2.5e MTP decode +2-6% (1K code 73.3 -> 77.7 tok/s), follow-up decode +2-8%; identity, spec on == off and
+  APC hit == miss hold, KLD 0.
 - Qwen3.8-Flash-Next prefill attention runs on the tensor units (`YUNSHU_QSA_SPARSE_PREFILL`, on by default; set `0` for upstream's kernel): cold TTFT on oQ2.5e 8K/32K/128K 8.80/26.28/133.8 -> 6.57/19.99/107.0 s. Output stays identical with speculation on and off and with a cache hit or miss; against an fp32-attention reference it is closer than the stock kernel (KLD 0.0685 vs 0.0731).
 
 Machine M5 Max, Qwen3.8-27B oQ4e-mtp + DFlash2, interleaved reps as stated, APC disk off unless noted.
@@ -109,7 +139,7 @@ and cold 32K TTFT versus Splash 1.3.2.
 - Qwen3.8-Flash-Next sampled requests keep MTP speculative decode (position-keyed sampled verify; the logits wrapper
   installs on the first sampled request, so greedy-only servers never wrap). Flash-Next oQ2.5e PLE-SSD, solo seeded
   sampled: spec on == spec off in 18 of 18 cells at 4K/32K, +12-20% tok/s (4K 62-70 vs 55-59; 32K 53-55 vs 47-48).
-  Concurrent row-QSA identity remains open until the batched sparse-QSA kernel.
+  Concurrent rows keep the solo sparse QSA (see Fixed).
 - Qwen3.8-Flash-Next greedy requests that ask for `logprobs` keep MTP speculative decode. Targets are the argmax of the
   verify window's float32 normalized rows, and `logprobs` and `top_logprobs` are read from committed rows; spec on and
   off give bit-equal logprobs. Greedy requests without logprobs are unchanged, and 27B is unchanged.
@@ -203,6 +233,30 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Fixed
 
+- `/v1/messages`: a `cache_control` breakpoint on a tool result that holds only an image (Claude Code screenshots)
+  is accepted, as on the Anthropic API; it answered 400.
+
+- Realtime voice cascade (ASR -> LLM -> TTS) speaks again: the LLM stream's end cancelled the TTS through the
+  response's shared cancel event (0 bytes of speech). Each engine call of a response now gets its own child event.
+
+- Stored chat completions created in the same second list in the order they were stored (`GET /v1/chat/completions`
+  with `order=asc`/`desc`); they came back in random id order.
+- `/v1/messages/count_tokens` counts with the thinking switch the request runs with. Without `thinking` (off since
+  0.1.6) a Qwen template adds an empty think block, which the count left out (28 vs 30 tokens). A count request
+  with `thinking: enabled` is no longer rejected for a `budget_tokens` above the `max_tokens` it does not take.
+- `stream_options.continuous_usage_stats` puts the running usage on every chunk of a single-choice VLM chat stream
+  too (Qwen3.5 family); only the multi-choice streams carried it.
+
+- The idle trim drops the prompt-end replay blocks before it clears MLX's freed-buffer pool. It cleared the pool
+  first, so up to ~0.5 GiB of replay blocks stayed pooled on an idle server (0.1.6 release-gate soak: 505 MiB idle
+  allocator cache after the trim).
+
+- Qwen3.8-Flash-Next: concurrent decode rows keep the solo sparse QSA (each row picks its own key blocks; one padded
+  sparse attention launch), so a request's output no longer depends on what else is running (concurrent == solo,
+  token + logprob, greedy and seeded, spec off and MTP, 8K-32K). Cost vs the old dense batch: +21-27% per decode step.
+- Qwen3.8-Flash-Next APC checkpoints sit on the 2048-token prefill grid, so a cache hit gives the same logprobs as a
+  cold prefill (they drifted by up to 0.051 at 32K); follow-up TTFT +40 ms from the extra boundary forward.
+- Console event streams end when the server shuts down: an open console no longer holds a restart for 30 s.
 - Console docs pages: the Tailwind utilities stylesheet is imported into the utilities layer, so it no longer overrides
   console and YunUI styles once the docs chunk prewarms (the iPhone burst replay moved 3 px; the WebKit log tail lost
   its scroll). Full browser suite 631 passed.
@@ -242,7 +296,7 @@ and cold 32K TTFT versus Splash 1.3.2.
   paths with `O_NOFOLLOW` and refuses FIFOs; decoded request media live in a private directory sandboxed code cannot
   read. The console blocks remote images in model output.
 
-[Full changelog: v0.1.5…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.5...main)
+[Full changelog: v0.1.5…v0.1.6](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.5...v0.1.6)
 
 ## [0.1.5] - 2026-10-15
 

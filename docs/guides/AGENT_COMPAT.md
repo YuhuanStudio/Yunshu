@@ -64,14 +64,18 @@ window; the cost line is Claude Code's own arithmetic and cannot be corrected fr
 ## Drift against the latest CLIs
 
 The tables above describe the pinned census CLIs. `scripts/dev/agentcompat` (below) reruns the census with
-the newest releases and fails when anything new is not written down here. Last run: Claude Code 2.1.291,
-Codex 0.160.1, opencode 1.18.34.
+the newest releases and fails when anything new is not written down here. Last run: Claude Code 2.1.316,
+Codex 0.166.0, opencode 1.19.5.
 
 | New item | Seen in | Yunshu |
 |---|---|---|
 | `anthropic-beta: thinking-display-updates-2026-08-18` | Claude Code 2.1.291, every turn | accepted; betas are never rejected |
 | `thinking.display` (`thinking: {type: "adaptive", display: "updates"}`) | Claude Code 2.1.291 | `omitted` / `updates` hide local reasoning (streaming and non-streaming); no separate progress-update channel is generated. `summarized` / absent preserve local visible reasoning. Hidden thinking round-trips through a local opaque signature envelope (base64, not encryption); streams emit the matching `signature_delta` before block stop. See API_SURFACE.md |
 | header `x-opencode-session-id` | opencode 1.18.34 | ignored (`x-session-id` already feeds the session affinity) |
+| `anthropic-beta: advanced-tool-use-2025-11-20` | Claude Code 2.1.316 | accepted; betas are never rejected |
+| `/v1/messages` `tools[].defer_loading` | Claude Code 2.1.316 | accepted and ignored on Messages: the tool stays in the prompt (Responses `tool_search` honors it, see API_SURFACE.md) |
+| `/v1/responses` `input[].status` | Codex 0.166.0 (output items sent back with their `status`) | accepted and ignored on input items |
+| `/v1/responses` custom tool `tools[].format` (`tools[].format.type` `grammar`, `tools[].format.syntax` `lark` / `regex`, `tools[].format.definition`) | Codex 0.166.0 (`apply_patch` as a freeform tool) | supported: the grammar constrains the tool input; calls come back as `custom_tool_call` items |
 
 ### Found by the latest-CLI run and the SDK-field inventory (2026-10-06)
 

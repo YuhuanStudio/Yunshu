@@ -84,4 +84,8 @@ def stamp_output(path, device, host=None):
     else:
         row = json.loads(text)
         stamp(row)
-        p.write_text(json.dumps(row, indent=2) + "\n")
+        # keep a one-line record one line: gpuq --expect-complete looks for a complete=true line
+        one_line = "\n" not in text.strip()
+        p.write_text(
+            (json.dumps(row) if one_line else json.dumps(row, indent=2)) + "\n"
+        )

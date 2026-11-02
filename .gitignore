@@ -74,6 +74,7 @@ scripts/research/local.env
 
 # Isolated laptop validation models, test home and uv cache
 /.m3-home/
+/.m3-tools/
 /.uv-cache/
 
 # Generated Yunshu Console assets; built before wheel packaging.

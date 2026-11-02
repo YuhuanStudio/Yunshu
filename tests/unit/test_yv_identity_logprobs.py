@@ -61,3 +61,48 @@ def test_apc_hit_logprob_diff_fails():
     assert not analyze.check_apc([cold, warm])["ok"]
     warm = dict(_row([-0.1, -0.2]), phase="warm", cached=100)
     assert analyze.check_apc([cold, warm])["ok"]
+
+
+def test_followup_drift_ok_lists_turn2_only():
+    """--followup-drift-ok: the follow-up resumes from the reply's decode KV (user decision
+    2026-11-02), so a base-vs-cand turn2 digest change is listed, not failed; cold / warm stay
+    strict, and a turn2 of another length still fails."""
+
+    def row(phase, sha, ct=2):
+        r = _row([-0.1] * ct, sha=sha)
+        r["phase"] = phase
+        return r
+
+    planned = [(32768, "prose", "cold"), (32768, "prose", "turn2")]
+    a = [row("cold", "x"), row("turn2", "y")]
+    ok = analyze.compare_identity(
+        a,
+        [row("cold", "x"), row("turn2", "z")],
+        "base",
+        "cand",
+        planned=planned,
+        followup_drift_ok=True,
+    )
+    assert ok["ok"] and ok["followup_drift"][0]["cell"] == [32768, "prose", "turn2"]
+    strict = analyze.compare_identity(
+        a, [row("cold", "x"), row("turn2", "z")], "base", "cand", planned=planned
+    )
+    assert not strict["ok"]
+    cold = analyze.compare_identity(
+        a,
+        [row("cold", "w"), row("turn2", "z")],
+        "base",
+        "cand",
+        planned=planned,
+        followup_drift_ok=True,
+    )
+    assert not cold["ok"]
+    short = analyze.compare_identity(
+        a,
+        [row("cold", "x"), row("turn2", "z", ct=1)],
+        "base",
+        "cand",
+        planned=planned,
+        followup_drift_ok=True,
+    )
+    assert not short["ok"]

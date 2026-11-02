@@ -128,7 +128,12 @@ def install():
                 else int((getattr(self, "_cached_tokens_per_row", None) or [0])[0])
             )
             start = self._processed_prompt_columns + prefix
-            if start % 64:
+            # A follow-up turn resumes from the previous reply's decode cache (the only
+            # store that ends off the grid; YUNSHU_NEXT_TURN_PREFILL=decode, user
+            # 2026-11-02): its first piece runs up to the next aligned boundary, and every
+            # later piece starts aligned again.
+            first_piece = self._processed_prompt_columns == 0
+            if start % 64 and not (first_piece and prefix % 64):
                 raise ValueError(
                     "split-invariant prefill cannot resume an unaligned state"
                 )

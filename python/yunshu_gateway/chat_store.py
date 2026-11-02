@@ -16,6 +16,7 @@ import os
 import re
 import secrets
 import threading
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -148,8 +149,10 @@ class ChatCompletionStore:
         created = int(comp.get("created") or 0)
         with _lock:
             self.root.mkdir(parents=True, exist_ok=True)
+            # created (seconds) then the store time in ns: completions of one second list in the
+            # order they were stored, not in random id order
             self._write(
-                self.root / f"{created:012d}_{cid}.json",
+                self.root / f"{created:012d}-{time.time_ns():020d}_{cid}.json",
                 {"completion": comp, "messages": input_messages(messages)},
             )
             files = self._files()

@@ -3103,6 +3103,7 @@ async def _stream_vlm_response_multi(
                 tracker.unregister(completion_id)
 
 
+@with_continuous_usage
 async def _stream_vlm_response(
     vlm_engine,
     messages: list[dict],

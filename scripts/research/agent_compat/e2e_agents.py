@@ -141,7 +141,14 @@ def apply_launch_config(agent: str, launch, info, run: Path, model_id: str):
         import re
 
         text = cfg.read_text()
-        for key in ("model_context_window", "model_auto_compact_token_limit"):
+        # every key written below replaces the launch config's own line: Codex 0.166 rejects a
+        # duplicate key (`yunshu launch codex` writes model_catalog_json itself)
+        for key in (
+            "model_catalog_json",
+            "model_context_window",
+            "model_auto_compact_token_limit",
+            "model_reasoning_summary",
+        ):
             text = re.sub(rf"^{key} = .*\n", "", text, flags=re.M)
         block = codex_provider_toml(info, "http://unused", str(cat)).split(
             "\n[model_providers"

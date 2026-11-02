@@ -1499,3 +1499,27 @@ def test_probe_confirmation_uses_whole_words_in_answer_text(body, word, expected
     import route_checks_agent_compat as probe
 
     assert probe._has_confirmation(body, word) is expected
+
+
+def test_every_stream_that_updates_usage_carries_continuous_usage():
+    """A stream that calls update_usage without the decorator drops continuous usage on every chunk
+    (release M3 sweep: the single-choice VLM chat stream, which Qwen3.5 serves, was not wrapped)."""
+    import ast
+    import inspect
+
+    from yunshu_gateway.routers import chat, completions
+
+    for mod in (chat, completions):
+        tree = ast.parse(inspect.getsource(mod))
+        for fn in tree.body:  # module-level streams (nested generators run inside them)
+            if not isinstance(fn, ast.AsyncFunctionDef):
+                continue
+            calls = {
+                n.func.id
+                for n in ast.walk(fn)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            }
+            if "update_usage" not in calls:
+                continue
+            decorators = {d.id for d in fn.decorator_list if isinstance(d, ast.Name)}
+            assert "with_continuous_usage" in decorators, f"{mod.__name__}.{fn.name}"

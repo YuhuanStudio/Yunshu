@@ -542,6 +542,16 @@ def prepare(draft):
     return private
 
 
+def ban_vocab_mask(ids, vocab: int):
+    """``(vocab,)`` bool mask of the banned ids inside the vocabulary (a request's static
+    ban: ignore_eos's eos ids, suppress_tokens)."""
+    keep = [int(t) for t in ids if 0 <= int(t) < vocab]
+    mask = mx.zeros((vocab,), dtype=mx.bool_)
+    if keep:
+        mask = mask.at[mx.array(keep, dtype=mx.int32)].add(True)
+    return mask
+
+
 def rounds(
     model,
     draft,
@@ -562,7 +572,7 @@ def rounds(
 
     from . import dflash_tree as dt
     from . import mtp_lane
-    from .constrained_spec import current_request, tree_penalty
+    from .constrained_spec import current_request, tree_ban, tree_penalty
     from .copy_drafter import CopyDrafter
     from .copy_graft import GraftBudget, longest_verified_path, plan_tree_graft
     from .dflash_context import context_window
@@ -575,6 +585,9 @@ def rounds(
     keyed = sampler if isinstance(sampler, KeyedSampler) else None
     request = current_request()
     penalty = tree_penalty(request)
+    banned = tree_ban(request)
+    ban_ids = sorted(banned) if banned is not None else None
+    ban_mask = None
     logger.info(
         "DFlash fast verification: keyed=%s logprobs=%s penalty=%s",
         keyed is not None,
@@ -622,6 +635,18 @@ def rounds(
         context_length(lm, cache),
     )
     skipped = 0
+    from . import dflash_apc_window as apc_window
+
+    decode_tail = (
+        apc_window.DecodeTail(
+            hidden, context_length(lm, cache) or 0, keep, len(target_ids)
+        )
+        if keep is not None
+        and hidden is not None
+        and settings.get("YUNSHU_NEXT_TURN_PREFILL") == "decode"
+        else None
+    )
+    apc_window.finish_decode(None)
     # The drafter context in GPU-positioned rings (dflash_ring), so the
     # next round's draft can be queued behind the verify. Only where the request cannot reach
     # the chain handoff (it takes the vendor draft cache).
@@ -710,6 +735,7 @@ def rounds(
             ):
                 from .dflash_copy import resume_chain
 
+                decode_tail = None  # the chain's rows are not tracked
                 commit_pending()
                 yield from release()
                 for entry in draft_cache:
@@ -890,6 +916,14 @@ def rounds(
                             penalty,
                             window,
                         )
+                    elif ban_ids is not None:
+                        # the serial mask (banned ids to -inf), then the greedy argmax
+                        logits = lm.speculative_logits_from_hidden(result.hidden)
+                        vocab = int(logits.shape[-1])
+                        if ban_mask is None or int(ban_mask.shape[0]) != vocab:
+                            ban_mask = ban_vocab_mask(ban_ids, vocab)
+                        neg = mx.array(float("-inf"), logits.dtype)
+                        target = mx.argmax(mx.where(ban_mask, neg, logits), axis=-1)
                     else:
                         target = lm.speculative_argmax_from_hidden(result.hidden)
                     packed = pack_readback(
@@ -972,6 +1006,8 @@ def rounds(
                 captured = mx.concatenate(result.captured, axis=-1)[
                     :, mx.array(path, dtype=mx.int32)
                 ]
+                if decode_tail is not None:
+                    decode_tail.add(captured, len(path))
                 if ring is None:
                     hidden = (
                         captured
@@ -1078,6 +1114,9 @@ def rounds(
         commit_pending()
         yield from release()
     finally:
+        # a stop / eos closes this generator too: the window still ends at the cache
+        # (store_decode_window checks the lengths match)
+        apc_window.finish_decode(decode_tail)
         # a failure between a round and the next draft: keep the decided tokens
         if pending:
             try:

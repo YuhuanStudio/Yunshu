@@ -985,6 +985,8 @@ class VLMBatchRunner:
         # retaining its Job also retains grammar/media/cache-plan state at idle.
         if job.terminal and self._vocab_owner is job:
             self._vocab_owner = None
+        if isinstance(item, tuple) and item and isinstance(item[0], int):
+            job.generated.append(item[0])
         job.out.put(item)
         if self.gc_guard is not None:
             self.gc_guard.first_token(id(job))
@@ -1769,6 +1771,18 @@ class VLMBatchRunner:
                 self._cleanup_step(
                     job, "release_rounds", lambda: release_rounds(group.gen)
                 )
+            if getattr(group, "spec", False) and (
+                settings.get("YUNSHU_NEXT_TURN_PREFILL") == "decode"
+            ):
+                skip = self._decode_store_skip(group, job, reason)
+                if skip:
+                    logger.info("decode cache not stored: %s", ", ".join(skip))
+                else:
+                    self._cleanup_step(
+                        job,
+                        "store_decode_cache",
+                        lambda: self._store_decode_cache(group, job),
+                    )
             self._cleanup_step(
                 job,
                 "release_apc_request",
@@ -1817,6 +1831,88 @@ class VLMBatchRunner:
             self._primary_handoff_at = now
             if oldest is not None:
                 oldest.handoff_graced = True
+
+    @staticmethod
+    def _store_decode_cache(group: _Group, job: _Job) -> None:
+        """Store the cache the reply was decoded into, keyed by the prompt plus the tokens it holds:
+        a follow-up that repeats the conversation then prefills only its new message
+        (YUNSHU_NEXT_TURN_PREFILL=decode, user 2026-11-02). Fewer stored tokens than the cache
+        holds never happens; a cache that disagrees with the emitted tokens is not stored."""
+        from .spec_release import finished_caches
+
+        coordinator = getattr(group.gen, "apc", None)
+        if coordinator is None or not job.generated:
+            logger.info("decode cache not stored: no APC or no reply tokens")
+            return
+        caches = finished_caches(group.gen, group.last_caches)
+
+        def held_rows(c) -> int | None:
+            # KVCache: an int offset; the lane's single-row BatchKVCache: _idx past its left padding
+            if getattr(c, "keys", None) is None:
+                return None
+            idx = getattr(c, "_idx", None)
+            pad = getattr(c, "left_padding", None)
+            if idx is not None and pad is not None:
+                return int(idx) - int(pad.reshape(-1)[0].item())
+            off = getattr(c, "offset", None)
+            if off is None:
+                return None
+            return int(off) if isinstance(off, int) else int(off.reshape(-1)[0].item())
+
+        offsets = {n for n in (held_rows(c) for c in caches) if n is not None}
+        tokens = list(job.ids) + list(job.generated)
+        if len(offsets) != 1:
+            logger.info(
+                "decode cache not stored: attention caches hold %s rows",
+                sorted(offsets),
+            )
+            return
+        held = offsets.pop()
+        if not len(job.ids) < held <= len(tokens):
+            logger.info(
+                "decode cache not stored: %d rows held for %d prompt + %d reply tokens",
+                held,
+                len(job.ids),
+                len(job.generated),
+            )
+            return
+        store = getattr(coordinator, "store_decode_tail", None)
+        if store is None:
+            logger.info("decode cache not stored: the APC has no reply-cache store")
+            return
+        salt = int(job.apc_salt or 0)
+        stored = store(tokens[:held], caches, extra_hash=salt)
+        window = False
+        if stored:
+            from . import dflash_apc_window
+
+            # the drafter's context window that ends at this cache (DFlash lane)
+            window = dflash_apc_window.store_decode_window(tokens[:held], salt)
+        logger.info(
+            "decode cache %s for the next turn: %d prompt + %d reply tokens (drafter window %s)",
+            "stored" if stored else "not stored",
+            len(job.ids),
+            held - len(job.ids),
+            "stored" if window else "none",
+        )
+
+    @staticmethod
+    def _decode_store_skip(group: _Group, job: _Job, reason: str | None) -> list[str]:
+        """Why a finished speculative-lane reply's decode cache is not stored (empty: store)."""
+        return [
+            why
+            for why, bad in (
+                ("other rows", bool(group.jobs)),
+                (f"finish {reason}", reason not in ("stop", "length")),
+                ("cache_store off", not job.cache_store),
+                # A consumer that has every token closes its stream before this slice ends
+                # (max_tokens counted on its side, so ``abandoned`` is set): the row still
+                # finished here, so its cache is the reply's. An overflowed consumer is a
+                # failure, not a reply.
+                ("overflowed", bool(getattr(job, "overflowed", False))),
+            )
+            if bad
+        ]
 
     @staticmethod
     def _release_apc_request(group: _Group, job: _Job) -> None:
@@ -3393,6 +3489,9 @@ class _Job:
     first_delivery_waited: bool = False
     mem_est: int = 0  # bytes the memory gate reserved for this request (KV + workspace)
     mem_held_at: float = 0.0
+    generated: list = field(
+        default_factory=list
+    )  # emitted token ids (the decode cache's tail)
 
 
 @dataclass

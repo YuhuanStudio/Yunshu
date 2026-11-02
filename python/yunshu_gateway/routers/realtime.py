@@ -131,6 +131,30 @@ class RealtimeEvent:
     ERROR = "error"
 
 
+class _ResponseCancel(asyncio.Event):
+    """A response's cancel event. Each engine call of the response gets its own ``child()``: a
+    cancel of the response reaches every child, while an engine call that ends its own stream
+    (orphan adoption sets the caller's event when a consumer stops reading) does not cancel the
+    response's later work. The cascade's LLM stream set the shared event at its end and the TTS
+    that followed stopped before its first chunk (0.1.6 release sweep: realtime voice, 0 bytes)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._children: list[asyncio.Event] = []
+
+    def child(self) -> asyncio.Event:
+        ev = asyncio.Event()
+        if self.is_set():
+            ev.set()
+        self._children.append(ev)
+        return ev
+
+    def set(self) -> None:
+        super().set()
+        for ev in self._children:
+            ev.set()
+
+
 def _event(event_type: str, **kwargs) -> dict:
     """Build a realtime event dict."""
     return {"type": event_type, "event_id": f"evt_{uuid.uuid4().hex[:16]}", **kwargs}
@@ -1911,7 +1935,7 @@ class RealtimeSession:
             await self._generate_response_omni(response_id, item_id, modalities, config)
             return
         # Create cancel_event so engine can check for cancellation
-        self._cancel_event = asyncio.Event()
+        self._cancel_event = _ResponseCancel()
         # (self-audit R2): fresh response → no terminal response.done yet.
         self._response_done_emitted = False
         try:
@@ -2157,7 +2181,7 @@ class RealtimeSession:
                     stop_token_ids=_stop_token_ids,
                     seed=getattr(self.session, "seed", None),
                     priority=_priority,
-                    cancel_event=self._cancel_event,
+                    cancel_event=self._engine_cancel(),
                 ):
                     if getattr(output, "error", None):
                         raise EngineStreamError(str(output.error))
@@ -2214,7 +2238,7 @@ class RealtimeSession:
                     stop=_stop,
                     stop_token_ids=_stop_token_ids,
                     seed=getattr(self.session, "seed", None),
-                    cancel_event=self._cancel_event,
+                    cancel_event=self._engine_cancel(),
                     **(_native_tools or {}),
                 ):
                     if getattr(output, "error", None):
@@ -2625,7 +2649,7 @@ class RealtimeSession:
         double-emit response.done (the cancel handler owns terminal teardown)."""
         import base64
 
-        self._cancel_event = asyncio.Event()
+        self._cancel_event = _ResponseCancel()
         self._response_done_emitted = False
         # Native speech-in: prefer the user's RAW committed audio over the ASR
         # transcript (consume it so it can't bleed into the next turn). When present,
@@ -3154,6 +3178,11 @@ class RealtimeSession:
                 },
             )
         )
+
+    def _engine_cancel(self) -> asyncio.Event | None:
+        """The cancel event one engine call of the active response gets (see ``_ResponseCancel``)."""
+        ev = self._cancel_event
+        return ev.child() if isinstance(ev, _ResponseCancel) else ev
 
     async def _synthesize_audio_response(
         self,

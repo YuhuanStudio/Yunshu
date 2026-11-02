@@ -465,10 +465,9 @@ def test_rehearsal_registers_its_ids_with_the_real_manager_object(monkeypatch):
     assert mgr.keep_prior_for == (9, 1, 3, 4, 9, 2, 3, 5)
 
 
-def test_default_rehearsal_uses_canonical_checkpoint_not_assistant_end(monkeypatch):
-    # Exercise the shipped default, rather than the helper's forced stride setting.
-    default = settings.REGISTRY["YUNSHU_NEXT_TURN_PREFILL"].default
-    eng, calls = _engine(monkeypatch, on=default)
+def test_stride_rehearsal_uses_canonical_checkpoint_not_assistant_end(monkeypatch):
+    # stride is no longer the default (decode is, user 2026-11-02) but keeps its contract
+    eng, calls = _engine(monkeypatch, on="stride")
     eng._apc_prefill_stride = 4
     eng._apc_backend = type("M", (), {"exact_cache_guard_tokens": 1})()
 

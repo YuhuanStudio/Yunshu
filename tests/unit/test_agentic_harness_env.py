@@ -17,8 +17,17 @@ import agents  # noqa: E402
 
 def test_tmpprefix_under_run_tmp(tmp_path):
     env = agents.base_env(tmp_path / "home")
-    assert env["TMPPREFIX"].startswith(env["TMPDIR"])
     assert env["TMPPREFIX"].startswith(str(tmp_path))
+    # the short TMPDIR link resolves into the run's own tmp (inside the sandbox write list)
+    assert str(Path(env["TMPDIR"]).resolve()).startswith(str(tmp_path.resolve()))
+
+
+def test_tmpdir_is_short_enough_for_a_unix_socket(tmp_path):
+    """Claude Code 2.1.316 binds srt-mux-<pid>-<n>.sock in TMPDIR; macOS caps socket paths at 104
+    bytes (listen EINVAL ended every agentbench task)."""
+    deep = tmp_path / ("x" * 60) / "run" / "home"
+    env = agents.base_env(deep)
+    assert len(env["TMPDIR"] + "srt-mux-99999-0.sock") < 104
 
 
 def _sandbox_usable() -> bool:

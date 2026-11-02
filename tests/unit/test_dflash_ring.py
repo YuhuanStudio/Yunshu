@@ -157,6 +157,13 @@ def test_only_the_first_append_may_fill_past_the_window():
     ("bits", "stacked"), [(None, False), (8, False), (None, True), (8, True)]
 )
 def test_fused_context_projection_matches_each_layers_own(bits, stacked):
+    if bits is not None:
+        from yunshu_engine.kernels.tensorfold.lane_qmm import ready
+
+        if not ready():
+            pytest.skip(
+                "quantized ring projections run as lane kernels: lane self-test failed on this GPU"
+            )
     # the served drafter is 8-bit with each layer's K|V stacked (dflash_tree
     # .stack_projections sets k_proj / v_proj to None; 04932a8f read their weights and
     # failed every served ring request): every layer's projection becomes one matmul

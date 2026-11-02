@@ -491,3 +491,30 @@ def test_collect_asks_the_queue_about_saved_job_ids(tmp_path, monkeypatch):
     assert d.main(["--collect", str(tmp_path)]) == 1
     assert "job9" in asked[0]
     assert json.loads((tmp_path / "verdict.json").read_text())["verdict"] == "FAIL"
+
+
+def test_job_output_passes_the_gpuq_complete_check(tmp_path):
+    """m3sweep submits with --expect-complete; gpuq wants one JSON line with complete=true."""
+    import importlib.util
+    import sys
+
+    root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(root / "scripts/dev"))
+    from gpuq_digest import output_problem
+
+    spec = importlib.util.spec_from_file_location(
+        "m3sweep_jobs_w", root / "scripts/research/m3sweep_jobs.py"
+    )
+    jobs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(jobs)
+    out = tmp_path / "routes.json"
+    jobs.write(out, {"kind": "routes", "checks": {}, "complete": True})
+    assert output_problem(out, expect_complete=True) is None
+    # gpuq stamps the device into M3 outputs afterwards; the record must stay one line
+    sys.path.insert(0, str(root / "scripts/research"))
+    from device_evidence import stamp_output
+
+    stamp_output(out, "m3", "laptop")
+    assert output_problem(out, expect_complete=True) is None
+    jobs.write(out, {"kind": "routes", "checks": {}, "complete": False})
+    assert output_problem(out, expect_complete=True) == "no complete line"

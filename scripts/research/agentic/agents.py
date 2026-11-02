@@ -75,6 +75,22 @@ class Launch:
     notes: dict = field(default_factory=dict)
 
 
+def short_tmp(tmp: Path) -> Path:
+    """``tmp`` through a short /tmp symlink when its path is long: Claude Code 2.1.316 binds its
+    sandbox mux socket in TMPDIR, and a socket path over 104 bytes fails (listen EINVAL), which ended
+    every agentbench task at 0.1 s. Writes still land in ``tmp`` (inside the sandbox write list)."""
+    if len(str(tmp)) < 48:
+        return tmp
+    import hashlib
+
+    link = Path("/tmp") / (
+        "ab-" + hashlib.blake2b(str(tmp).encode(), digest_size=6).hexdigest()
+    )
+    if not link.is_symlink():
+        link.symlink_to(tmp)
+    return link
+
+
 def base_env(home: Path, port_hint: str = "") -> dict[str, str]:
     """Scrubbed environment: only what is set here reaches the agent."""
     tmp = home / "tmp"
@@ -99,7 +115,7 @@ def base_env(home: Path, port_hint: str = "") -> dict[str, str]:
         "XDG_DATA_HOME": str(home / ".local" / "share"),
         "XDG_CACHE_HOME": str(home / ".cache"),
         "XDG_STATE_HOME": str(home / ".local" / "state"),
-        "TMPDIR": str(tmp) + "/",
+        "TMPDIR": str(short_tmp(tmp)) + "/",
         # zsh heredocs use TMPPREFIX (default /tmp/zsh), not TMPDIR; /tmp is outside the sandbox
         # write list, so every heredoc failed with "operation not permitted".
         "TMPPREFIX": str(tmp) + "/zsh",
@@ -336,7 +352,8 @@ def _claude(env, home, workdir, base_url, model, prompt, ctx, max_out):
     (cdir / ".claude.json").write_text((home / ".claude.json").read_text())
     env.update(
         CLAUDE_CONFIG_DIR=str(cdir),
-        CLAUDE_CODE_TMPDIR=str(home / "tmp"),  # else it writes /tmp/claude-<uid>/
+        # else it writes /tmp/claude-<uid>/; short: its sandbox socket lives here
+        CLAUDE_CODE_TMPDIR=str(short_tmp(home / "tmp")),
         ANTHROPIC_BASE_URL=base_url,
         ANTHROPIC_API_KEY=API_KEY,
         ANTHROPIC_MODEL=model,
