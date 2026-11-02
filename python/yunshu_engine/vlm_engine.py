@@ -2892,6 +2892,12 @@ class VLMEngine:
                     if dflash_fast.supported(lm, drafter):
                         dflash_fast.prepare(drafter)
                         kernels["dflash_fast"] = "short-context"
+                        try:
+                            kernels["dflash_warm_rows"] = dflash_fast.warm_verify(lm)
+                        except Exception:  # a failed warm-up costs the first compiles
+                            logger.warning(
+                                "fast-tree verify warm-up failed", exc_info=True
+                            )
         if drafter is not None and not qwen4:
             # Tree drafts through the tree verify (single greedy row,
             # batch-invariant kernels only; every other round keeps the loop).

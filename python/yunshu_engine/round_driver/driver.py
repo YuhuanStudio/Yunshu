@@ -649,15 +649,18 @@ class RoundDriver:
             from ..kernels import buffer_cache
 
             row = gone[0]
+            held = False
             if row.finished and self.finish_hook is not None:
-                # the reply's cache is complete here: the runner stores it for the next turn
+                # the reply's cache is complete here: the runner holds it for the next turn and
+                # offers the buffers itself once stored
                 if self.dflash is not None:
                     self.dflash.finish_tail(row)
                 try:
-                    self.finish_hook(row)
+                    held = bool(self.finish_hook(row))
                 except Exception:
                     logger.warning("decode cache store failed", exc_info=True)
-            buffer_cache.offer_restore_buffers(row.cache)
+            if not held:
+                buffer_cache.offer_restore_buffers(row.cache)
         if any(r.slot is not None for r in gone):
             self.batch.leave([r for r in gone if r.slot is not None])
         if self.head is not None and any(r.hslot is not None for r in gone):

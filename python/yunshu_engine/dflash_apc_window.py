@@ -362,10 +362,17 @@ def finish_decode(tail: DecodeTail | None) -> None:
     _STATE["decode_tail"] = tail
 
 
-def store_decode_window(token_ids, extra_hash: int) -> bool:
+def take_decode_tail():
+    """The finished reply's window, handed to a deferred decode-cache store (the next
+    request's rounds would otherwise reset it)."""
+    return _STATE.pop("decode_tail", None)
+
+
+def store_decode_window(token_ids, extra_hash: int, tail=None) -> bool:
     """Store the finished reply's window under its decode cache's key; its end must be
-    exactly the cache's length."""
-    tail = _STATE.pop("decode_tail", None)
+    exactly the cache's length. ``tail``: one taken earlier with ``take_decode_tail``."""
+    if tail is None:
+        tail = _STATE.pop("decode_tail", None)
     if tail is None or _STATE["budget"] <= 0 or tail.end != len(token_ids):
         return False
     import mlx.core as mx

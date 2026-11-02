@@ -106,15 +106,63 @@ def test_a_reply_whose_consumer_closed_after_the_last_token_is_still_stored():
     assert VLMBatchRunner._decode_store_skip(group, job, "stop") == ["other rows"]
 
 
-def test_round_driver_last_finished_row_stores_its_reply_cache():
-    """The round driver's rows never reach the runner's _finish: its hook stores the reply cache."""
+def _runner():
+    import threading
+
+    r = VLMBatchRunner.__new__(VLMBatchRunner)
+    r._lock, r._pending, r._executor = threading.Lock(), [], None
+    r._groups = lambda: []
+    return r
+
+
+def test_the_store_waits_for_the_follow_up_not_for_a_resend(monkeypatch):
+    """The copy into the APC (~45 ms at 8K) ran right after the reply, so the same prompt
+    sent again waited for it (8K warm TTFT 20 -> 58 ms). Held until the follow-up's
+    admission or an idle runner; a resend of the same prompt does not trigger it."""
+    from yunshu_engine import dflash_apc_window
+    from yunshu_engine.kernels import buffer_cache
+
+    offered = []
+    monkeypatch.setattr(buffer_cache, "offer_restore_buffers", offered.append)
+    monkeypatch.setattr(dflash_apc_window, "take_decode_tail", lambda: None)
+    stored = []
+    monkeypatch.setattr(
+        VLMBatchRunner,
+        "_store_decode_cache",
+        staticmethod(
+            lambda g, j, caches=None, window_tail=None, salt=None: stored.append(j)
+        ),
+    )
+    import yunshu_engine.spec_release as sr
+
+    monkeypatch.setattr(sr, "finished_caches", lambda gen, last: ["kv"])
+    r = _runner()
+    group, _ = _group(6)
+    reply = _job([1, 2, 3, 4], [10, 11, 12])
+    r._defer_decode_cache(group, reply)
+    assert stored == [] and offered == []
+    assert not r._decode_follows(_job([1, 2, 3, 4], []))  # the same prompt again
+    assert r._decode_follows(_job([1, 2, 3, 4, 10, 11, 12, 99], []))
+    r._flush_decode_cache_if_idle(r._decode_pending)
+    assert stored == [reply] and offered == [["kv"]]
+    # a newer reply drops an unflushed older one instead of copying it
+    r._defer_decode_cache(group, _job([5], [6]))
+    newer = _job([7], [8])
+    r._defer_decode_cache(group, newer)
+    r._flush_decode_cache()
+    assert stored == [reply, newer]
+
+
+def test_round_driver_last_finished_row_defers_its_reply_cache():
+    """The round driver's rows never reach the runner's _finish: its hook holds the reply cache
+    (the same deferred store), and the driver leaves the buffers to the store."""
     from yunshu_engine.round_driver.driver import RoundDriver
 
     coord = _Coord()
     row = SimpleNamespace(
         req=SimpleNamespace(
             ids=[1, 2, 3, 4],
-            handle=_job([], []),
+            handle=_job([1, 2, 3, 4], [10, 11, 12]),
             cache_store=True,
             use_apc=True,
             max_tokens=9,
@@ -128,20 +176,22 @@ def test_round_driver_last_finished_row_stores_its_reply_cache():
         slot=None,
         hslot=None,
     )
-    runner = VLMBatchRunner.__new__(VLMBatchRunner)
+    runner = _runner()
     drv = RoundDriver.__new__(RoundDriver)
     drv.rows, drv.head, drv.dflash = [], None, None
     drv.finish_hook = runner._driver_store_decode
     drv._release([row])
-    assert coord.calls == [([1, 2, 3, 4, 10, 11], 5)]
+    assert runner._decode_pending_job() is row.req.handle  # held, not stored yet
+    assert coord.calls == []
+    runner._flush_decode_cache()
+    assert coord.calls == [([1, 2, 3, 4, 10, 11], 5)]  # the driver's own APC salt
 
-    # a cancelled row (not finished) and a cache_store-off row store nothing
-    for tweak in ({"finished": False}, {"req_store": False}):
-        coord.calls.clear()
-        r2 = SimpleNamespace(**{**row.__dict__})
-        if "finished" in tweak:
+    # a cancelled row (not finished) and a cache_store-off row hold nothing
+    for tweak in ("finished", "cache_store"):
+        r2 = SimpleNamespace(**row.__dict__)
+        if tweak == "finished":
             r2.finished = False
         else:
             r2.req = SimpleNamespace(**{**row.req.__dict__, "cache_store": False})
         drv._release([r2])
-        assert coord.calls == []
+        assert runner._decode_pending_job() is None

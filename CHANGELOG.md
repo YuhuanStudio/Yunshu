@@ -11,18 +11,42 @@ Changes on main after 0.1.6; not part of a published package yet.
 
 ### Highlights
 
+- A follow-up turn resumes from the previous reply's cache instead of prefilling the reply
+  again, and its drafter keeps the conversation's context: on the 27B at 8K, follow-up first
+  token 0.386 → 0.137 s and follow-up decode 130.6 → 194.7 tok/s.
+- Requests that send `ignore_eos` (benchmarks, throughput runs) or carry a checkpoint's
+  `suppress_tokens` keep the DFlash fast tree instead of the slower 8-token chain.
+- Copy rounds (a reply repeating its context: edits, quoted code) verify up to 64 rows in one
+  round, bit-equal to plain decode.
+
 ### Upgrade notes / breaking changes
 
 ### Performance
 
 | Machine | Model / mode | Metric / workload | Before → after | Recorded source |
 |---|---|---|---|---|
+| M5 Max 128 GB | Qwen3.8-27B oQ4e, DFlash2 | follow-up TTFT, 8K code | 0.386 → 0.137 s | yv nextturn-cost-1102b (5 reps) |
+| M5 Max 128 GB | Qwen3.8-27B oQ4e, DFlash2 | follow-up decode, 8K code | 130.6 → 194.7 tok/s | yv nextturn-cost-1102b (5 reps) |
+| M5 Max 128 GB | Qwen3.8-27B oQ4e, DFlash2 | decode, 8K code / prose | 96.1 → 96.2 / 70.2 → 70.2 tok/s | yv nextturn-cost-1102b |
 
 ### Added
 
 ### Changed
 
+- `YUNSHU_NEXT_TURN_PREFILL` defaults to `decode`: a finished reply's cache (prompt + reply) is
+  stored at its own length with the DFlash drafter's context window, and the next turn resumes
+  from it. Its tokens may differ numerically from a re-prefill (the same class of difference as
+  between versions); `exact` keeps the bit-identical re-prefill.
+- The DFlash fast tree keeps requests whose only logits processors are static bans
+  (`ignore_eos`, a checkpoint's `suppress_tokens`) instead of falling back to the 8-token chain.
+- DFlash fast-tree copy rounds verify up to 64 rows (bit-equal to plain decode at 32K); the chain
+  verify stays at 32. Their verify kernels compile at load.
+
 ### Fixed
+
+- A reply whose client closed the stream after its last token (max_tokens counted on the
+  client's side) still stores its cache for the next turn.
+- The Linux CI browser tests serve the built console instead of the dev server.
 
 ### Security
 

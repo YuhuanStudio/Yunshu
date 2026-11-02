@@ -552,6 +552,33 @@ def ban_vocab_mask(ids, vocab: int):
     return mask
 
 
+WARM_ROWS = (48, 64)  # copy windows past 32 rows: their verify kernels compile at load
+
+
+def warm_verify(lm) -> list[int]:
+    """Compile the fast tree's verify kernels for the wide copy windows at load, so the
+    first long request does not pay the Metal compiles (a first 48-row window cost 32K cold
+    decode 188 -> 163 tok/s, copy48-1022). Runs the windows on a private 64-token cache and
+    drops them; returns the widths run."""
+    from .dflash_plan import FastShape
+
+    widths = [w for w in WARM_ROWS if w <= tv.FAST_MAX_ROWS]
+    if not widths:
+        return []
+    cache = lm.make_cache()
+    lm(mx.zeros((1, 64), dtype=mx.int32), cache=cache)
+    mx.eval([c.state for c in cache])
+    if not tv.lane_ready(lm, cache):
+        return []
+    for width in widths:
+        parents = mx.arange(-1, width - 1, dtype=mx.int32)
+        shape = FastShape(parents, width - 1, is_chain=True)
+        res = tv.tree_forward(lm, mx.zeros((1, width), dtype=mx.int32), shape, cache)
+        mx.eval(res.hidden)
+        tv.tree_abort(cache, res)
+    return widths
+
+
 def rounds(
     model,
     draft,
@@ -611,7 +638,11 @@ def rounds(
     draft_vocab = getattr(draft, "_draft_vocab", None)
     prof = {"rounds": 0, "draft": 0.0, "verify": 0.0, "commit": 0.0, "nodes": 0}
     context = mtp_lane._STATE["context"]
-    copy_rows = min(mtp_lane.copy_rows_for_model(lm), tv.FAST_MAX_ROWS)
+    # the fast tree's copy rounds run to its own width (FAST_MAX_ROWS) once the lane takes
+    # full 32-row copies; the chain verify keeps the lane's 32
+    copy_rows = mtp_lane.copy_rows_for_model(lm)
+    if copy_rows >= 32:
+        copy_rows = tv.FAST_MAX_ROWS
     copy = CopyDrafter(max_draft=copy_rows - 1) if copy_rows >= 3 else None
     if copy is not None:
         copy.extend(context)
