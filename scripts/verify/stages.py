@@ -30,6 +30,30 @@ from .core import sha as _sha
 from .execute import Cell, Executor
 from .snapshot import stage_snapshot
 
+DRAFTER_27B = "/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2"
+
+
+def _hidden_size(path) -> int | None:
+    try:
+        cfg = json.loads((Path(path) / "config.json").read_text())
+    except (OSError, ValueError):
+        return None
+    for c in (cfg, cfg.get("text_config") or {}):
+        if c.get("hidden_size"):
+            return int(c["hidden_size"])
+    return None
+
+
+def default_drafter(model) -> str:
+    """Same rule as scripts/research/tfbench.py default_drafter (a parity test keeps them equal):
+    the 27B DFlash2 drafter only for a target of its hidden size; any other target: "mtp"."""
+    if model is None:
+        return DRAFTER_27B
+    want = _hidden_size(model)
+    return (
+        DRAFTER_27B if want is not None and want == _hidden_size(DRAFTER_27B) else "mtp"
+    )
+
 
 def tfbench_script(tree: Path) -> Path:
     """The tfbench of one arm: the file at that arm's commit (its bench_engines and
@@ -2777,9 +2801,20 @@ def stage_lane_bandwidth(ctx: Ctx) -> StageResult:
     """Candidate-only in-graph projection bandwidth; no end-to-end speed verdict."""
     name = "lane_bandwidth"
     script = ctx.cand.path / "scripts/research/probe_lane_bandwidth.py"
-    draft = ctx.env.get(
-        "YUNSHU_VLM_DRAFT", "/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2"
-    )
+    draft = ctx.env.get("YUNSHU_VLM_DRAFT") or default_drafter(ctx.model)
+    if draft == "mtp" or not Path(draft).is_dir():
+        # the probe needs a drafter directory; a target that drafts with its own MTP head has none
+        return _finish(
+            ctx,
+            StageResult(
+                name,
+                False,
+                [
+                    f"no drafter directory for {ctx.model_name}: lane bandwidth probes a DFlash "
+                    f"drafter (got {draft!r}); this target drafts with its MTP head"
+                ],
+            ),
+        )
     cell = Cell(
         name,
         "cand",
