@@ -27,7 +27,9 @@ export default defineConfig({
   webServer: process.env.PLAYWRIGHT_BASE_URL
     ? undefined
     : {
-        command: `pnpm exec vite --host 127.0.0.1 --port ${port} --strictPort`,
+        // PLAYWRIGHT_SERVE=preview serves the already built bundle (CI builds it just before): the dev server
+        // transforms every docs/vendor module on first request, which a 4-core runner does 3x slower than a Mac.
+        command: `pnpm exec vite ${process.env.PLAYWRIGHT_SERVE === "preview" ? "preview" : ""} --host 127.0.0.1 --port ${port} --strictPort`,
         url: `${origin}/console/`,
         // Never adopt whatever already answers on the port: the resident console listens on 18999 too, and reusing
         // it ran the suite against a live engine and another build (32 failures, 2026-10-25). Opt in explicitly.

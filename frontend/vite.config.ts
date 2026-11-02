@@ -82,6 +82,15 @@ function consoleHost(): string {
   return "127.0.0.1";
 }
 const host = consoleHost();
+const proxy = {
+  "/console/api": engine,
+  "/v1": engine,
+  "/health": engine,
+  "/api": engine,
+  "/debug": engine,
+  "/openapi.json": engine,
+  "/docs": engine,
+};
 export default defineConfig({
   plugins: [
     docsIndex(),
@@ -99,7 +108,8 @@ export default defineConfig({
     emptyOutDir: true,
     // YunUI's ModelIcon treats any iconUrl that is not http(s) or root-relative as a file name under its CDN base, so
     // an icon small enough to be inlined as a data: URI became a broken jsDelivr request. Model icons stay files.
-    assetsInlineLimit: (file) => (file.includes("/yunui/icons/") ? false : undefined),
+    assetsInlineLimit: (file) =>
+      file.includes("/yunui/icons/") ? false : undefined,
     // Let native module imports fetch JS dependencies on demand. Keep CSS
     // preloads, without embedding every lazy docs/vendor JS URL in the shell.
     modulePreload: {
@@ -128,19 +138,6 @@ export default defineConfig({
     },
     license: { fileName: "licenses/bundled-dependencies.md" },
   },
-  preview: { host, port: 3971, strictPort: true },
-  server: {
-    host,
-    port: 3971,
-    strictPort: true,
-    proxy: {
-      "/console/api": engine,
-      "/v1": engine,
-      "/health": engine,
-      "/api": engine,
-      "/debug": engine,
-      "/openapi.json": engine,
-      "/docs": engine,
-    },
-  },
+  preview: { host, port: 3971, strictPort: true, proxy },
+  server: { host, port: 3971, strictPort: true, proxy },
 });
