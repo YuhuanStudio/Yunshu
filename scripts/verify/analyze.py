@@ -66,11 +66,17 @@ def compare_identity(
     a, b = decode_index(a_rows), decode_index(b_rows)
     if planned is not None:
         keys = sorted({tuple(k) for k in planned})
+        # a cell outside the planned grid that both arms still produced is compared too (it
+        # used to be dropped silently); a cell present in only one arm is not a failure here
+        extra = sorted(k for k in set(a) & set(b) if k not in set(keys))
     else:
         keys = sorted(k for k in set(a) | set(b) if ctxs is None or k[0] in ctxs)
+        extra = []
     bad, n, drift, worst, changed, followup = [], 0, [], 0.0, [], []
-    for k in keys:
+    for k in keys + extra:
         ra, rb = a.get(k), b.get(k)
+        if k in extra and (ra is None or rb is None):
+            continue
         if ra is None or rb is None:
             bad.append(
                 {

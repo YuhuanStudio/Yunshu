@@ -351,6 +351,36 @@ def test_identity_separates_a_changed_input_from_changed_arithmetic():
     assert not analyze.compare_identity(base, worse, input_change_ok=True)["ok"]
 
 
+def test_followup_turn2_digest_difference_fails_closed():
+    """A turn2 digest difference is excused only with followup_drift_ok, and only where the token
+    count matches. An unplanned cell that both arms produced is compared like a planned one: it used
+    to be dropped silently, so a prose turn2 flip never reached the verdict."""
+    planned = analyze.planned_identity([8192], ["code"])
+    code_base = rows("a", ctx=8192)
+    code_cand = [dict(r, sha="z") if r["phase"] == "turn2" else r for r in code_base]
+    prose_base = [dict(r, kind="prose") for r in code_base]
+    prose_cand = [dict(r, sha="z") if r["phase"] == "turn2" else r for r in prose_base]
+    # unplanned prose turn2 flip: fails with no allowance at all
+    r = analyze.compare_identity(
+        code_base + prose_base, code_base + prose_cand, planned=planned
+    )
+    assert not r["ok"]
+    assert [m["cell"] for m in r["mismatches"]] == [[8192, "prose", "turn2"]]
+    # planned code turn2 flip: fails unless followup_drift_ok is explicit
+    assert not analyze.compare_identity(code_base, code_cand, planned=planned)["ok"]
+    ok = analyze.compare_identity(
+        code_base, code_cand, planned=planned, followup_drift_ok=True
+    )
+    assert ok["ok"] and [d["cell"] for d in ok["followup_drift"]] == [
+        [8192, "code", "turn2"]
+    ]
+    # the allowance never covers a turn2 difference with a different generated token count
+    short = [dict(r, ct=8) if r["phase"] == "turn2" else r for r in code_cand]
+    assert not analyze.compare_identity(
+        code_base, short, planned=planned, followup_drift_ok=True
+    )["ok"]
+
+
 def test_apc_requires_equal_digest_and_a_real_hit():
     assert analyze.check_apc(rows(cached=1024))["ok"]
     assert not analyze.check_apc(rows(cached=0))["ok"]
