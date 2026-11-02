@@ -2080,3 +2080,16 @@ def test_a_failed_job_is_not_rerun_as_interrupted_timing(world, monkeypatch):
     monkeypatch.setattr(ex.gq, "wait", lambda jid: done)
     r2 = ex._finish(Cell("st", "k2", [], quiet=True, needs_out=False), "j2", 1)
     assert not r2.ok and r2.contended
+
+
+def test_speed_ttft_jitter_and_single_rep_spikes_are_not_regressions():
+    """Audit 2026-11-02: 25 speed FAILs were inside the noise: a 2 ms move of a 20 ms TTFT
+    (+10%) or one stalled rep. A real 20 -> 58 ms warm TTFT regression still fails."""
+    base = [rows(ttft=0.020) for _ in range(3)]
+    jitter = [rows(ttft=0.022) for _ in range(3)]
+    assert analyze.speed_compare(base, jitter)["ok"]
+    real = [rows(ttft=0.058) for _ in range(3)]
+    assert not analyze.speed_compare(base, real)["ok"]
+    spike = [rows(dec=d) for d in (100.0, 100.0, 70.0)]
+    flat = [rows(dec=100.0) for _ in range(3)]
+    assert analyze.speed_compare(flat, spike)["ok"]  # one stalled rep cannot decide
