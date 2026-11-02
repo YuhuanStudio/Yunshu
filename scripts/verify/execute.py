@@ -213,7 +213,12 @@ class Executor:
             ok = False
             reason = f"job {j.id} {j.state} rc={j.rc}: " + self.gq.log_tail(j.id, 6)
         elif cell.needs_out:
-            ok, reason = (cell.validate or default_validate)(out)
+            # A validator that raises fails this cell with its exception text; it must not
+            # abort the run as an infra error (the job itself finished, HARNESS_BUGS 19).
+            try:
+                ok, reason = (cell.validate or default_validate)(out)
+            except Exception as exc:  # noqa: BLE001
+                ok, reason = False, f"validator raised {type(exc).__name__}: {exc}"
             if not ok:
                 reason = f"job {j.id}: {reason}"
         if ok and cell.quiet and j.contended:
