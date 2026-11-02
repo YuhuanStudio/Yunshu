@@ -213,6 +213,33 @@ def _failed_cells(results: dict) -> list:
     return [f"{k}: {r.reason}" for k, r in results.items() if not r.ok]
 
 
+# pytest for the related tests: no -x (every failure is collected), short summary of failures
+def _preflight_base_cmd(py: str) -> list:
+    return [
+        "nice",
+        "-n",
+        "15",
+        py,
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-rfE",
+    ]
+
+
+def _failed_test_ids(lines: list) -> list:
+    """Full ids of the FAILED / ERROR lines of a pytest short summary (order kept, no duplicates)."""
+    ids: list = []
+    for ln in lines:
+        if ln.startswith(("FAILED ", "ERROR ")):
+            tid = ln.split(" ", 1)[1].split(" - ")[0].strip()
+            if tid and tid not in ids:
+                ids.append(tid)
+    return ids
+
+
 # ── a. preflight (CPU only; no gpuq) ─────────────────────────────────────
 def stage_preflight(ctx: Ctx) -> StageResult:
     name, reasons, numbers = "preflight", [], {}
@@ -244,19 +271,7 @@ def stage_preflight(ctx: Ctx) -> StageResult:
     numbers.update(changed_files=len(changed), related_tests=len(tests))
     ctx.run.append(name, {"ev": "mapping", "changed": changed, "tests": tests})
     if not reasons and tests:
-        base_cmd = [
-            "nice",
-            "-n",
-            "15",
-            ctx.py,
-            "-m",
-            "pytest",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-            "-x",
-            "-rfE",
-        ]
+        base_cmd = _preflight_base_cmd(ctx.py)
         run_env = dict(env, PYTHONPATH=str(ctx.cand.path / "python"))
         workers = int(os.environ.get("YV_PREFLIGHT_WORKERS", "6"))
         has_xdist = workers > 1 and (
@@ -298,21 +313,60 @@ def stage_preflight(ctx: Ctx) -> StageResult:
             )
             out += r.stdout + r.stderr
             # 5 = nothing collected (no serial-marked test among the related ones)
-            if r.returncode not in (0, 5):
+            if r.returncode not in (0, 5) and rc == 0:
                 rc = r.returncode
-                break
-        r = subprocess.CompletedProcess(runs[-1], rc, out, "")
-        lines = (r.stdout + r.stderr).strip().splitlines()
-        # the failing test names first: log noise printed after a failure must not push them out of the record
-        failed = [ln for ln in lines if ln.startswith(("FAILED ", "ERROR "))][:20]
-        tail = "\n".join([*failed, *lines[-8:]])
+        lines = out.strip().splitlines()
+        failed = _failed_test_ids(lines)
+        flaky, still = [], failed
+        if rc != 0 and failed:
+            # every failure is named in full; each failed test gets one isolated rerun
+            rerun = subprocess.run(
+                [*_preflight_base_cmd(ctx.py), "-rA", *failed],
+                cwd=str(ctx.cand.path),
+                env=run_env,
+                capture_output=True,
+                text=True,
+                timeout=30 * 60,
+            )
+            passed = {
+                ln.split(" ", 1)[1].strip()
+                for ln in (rerun.stdout + rerun.stderr).splitlines()
+                if ln.startswith("PASSED ")
+            }
+            # an id the rerun did not report as passed (crash, skip, missing) still fails
+            flaky = [t for t in failed if t in passed]
+            still = [t for t in failed if t not in passed]
+            ctx.run.append(
+                name,
+                {
+                    "ev": "pytest_rerun",
+                    "rc": rerun.returncode,
+                    "flaky": flaky,
+                    "still": still,
+                },
+            )
+        tail = "\n".join(lines[-8:])
         ctx.run.append(
-            name, {"ev": "pytest", "rc": r.returncode, "tail": tail, "tests": tests}
+            name,
+            {
+                "ev": "pytest",
+                "rc": rc,
+                "failed": failed,
+                "flaky": flaky,
+                "tail": tail,
+                "tests": tests,
+            },
         )
-        numbers["pytest_rc"] = r.returncode
-        if r.returncode != 0:
+        numbers["pytest_rc"] = rc
+        if flaky:
+            numbers["flaky"] = flaky
+        if rc != 0 and not failed:
+            # nonzero exit with no failed test id to name (crash, internal error): fail closed
+            reasons.append(f"related unit tests failed (rc {rc}): {tail[-600:]}")
+        elif still:
             reasons.append(
-                f"related unit tests failed (rc {r.returncode}): {tail[-300:]}"
+                f"related unit tests failed (rc {rc}, {len(still)} still failing after isolated rerun): "
+                + "; ".join(f"FAILED {t}" for t in still)
             )
     elif not tests and any(f.endswith(".py") for f in changed):
         numbers["note"] = "no related unit tests found for the changed python files"
