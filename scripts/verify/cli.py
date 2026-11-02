@@ -120,6 +120,13 @@ def build_parser() -> argparse.ArgumentParser:
         "decode KV, user decision 2026-11-02); they are listed as followup_drift; spec on/off stays strict",
     )
     ab.add_argument(
+        "--base-not-ancestor-ok",
+        action="store_true",
+        help="run although the base has commits the candidate lacks (their effect would count as "
+        "the candidate's change; postrel-016b 2026-11-02 read a fix missing from its branch as a "
+        "+175%% warm-TTFT regression)",
+    )
+    ab.add_argument(
         "--input-change-ok",
         action="store_true",
         help="cells whose prompt token count differs between base and cand (a deliberate tokenization "

@@ -552,8 +552,25 @@ BENCHES: dict[str, Bench] = {
 
 
 # ── servers ──────────────────────────────────────────────────────────────
+def server_failure_report(log: Path, rc=None, tail: int = 30) -> str:
+    """What a failed server start says: the ImportError (or last error line) first, then the
+    log path and its last lines. A bare "server failed to start" hid the xxhash ImportError."""
+    head = f"server exited (rc={rc})" if rc is not None else "server not ready"
+    try:
+        lines = log.read_text(errors="replace").splitlines()
+    except OSError:
+        return f"{head}; no server log at {log}"
+    errs = [ln for ln in lines if re.search(r"(Error|Exception):", ln)]
+    out = [head, f"server log: {log}"]
+    if errs:
+        out.append(f"first error: {errs[-1].strip()}")
+    out += ["--- last lines of the server log ---", *lines[-tail:]]
+    return "\n".join(out)
+
+
 class Server:
     def __init__(self, arm: str, model: str, port: int, env: dict[str, str], log: Path):
+        self.log = log
         # A busy port (e.g. a server left behind by an interrupted job) moves this run to the
         # next free one in the 10-port test range instead of failing every queued round.
         last = int(os.environ.get("PAIRED_PORT_LAST", port + 9))
@@ -740,6 +757,8 @@ def cmd_run(a) -> int:
     try:
         if not srv.wait_ready():
             print("server failed to start", flush=True)
+            rc = srv.proc.poll()
+            print(server_failure_report(srv.log, rc), flush=True)
             return 2
         print(f"server up in {time.time() - t0:.0f}s", flush=True)
         with lock:

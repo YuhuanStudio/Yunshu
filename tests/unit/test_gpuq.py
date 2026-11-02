@@ -214,3 +214,30 @@ def test_finished_job_records_its_result_summary(tmp_path, monkeypatch):
     stored = gpuq._read(path)
     assert '"tps": 41.5' in stored["summary"]
     assert "gpuq:" not in stored["summary"]
+
+
+def test_result_summary_leads_with_the_real_error_not_the_kill_noise(
+    tmp_path, monkeypatch
+):
+    """`Killed: 9` from a sampler's trap is trailing noise; the failing traceback's last line is
+    the reason (2026-10-25: a conc cell's summary showed only the noise, HARNESS_BUGS 20)."""
+    import sys
+
+    monkeypatch.setenv("GPUQ_DIR", str(tmp_path))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "dev"))
+    import gpuq
+
+    log = tmp_path / "conc.log"
+    log.write_text(
+        "loading model\n"
+        "Traceback (most recent call last):\n"
+        '  File "conc.py", line 9, in <module>\n'
+        "    rows[5]\n"
+        "IndexError: list index out of range\n"
+        "scripts/research/conc_cell.sh: line 23: 60830 Killed: 9  ( while kill -0 $SRV )\n"
+    )
+    summary = gpuq.result_summary(log)
+    assert summary.startswith("IndexError: list index out of range")
+    fatal = tmp_path / "fatal.log"
+    fatal.write_text("FATAL: no free port\nKilled: 9\n")
+    assert gpuq.result_summary(fatal).startswith("FATAL: no free port")

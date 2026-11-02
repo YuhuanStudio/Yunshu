@@ -5,6 +5,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 DEV = Path(__file__).resolve().parents[2] / "scripts/dev"
 sys.path.insert(0, str(DEV))
 spec = importlib.util.spec_from_file_location(
@@ -39,7 +41,10 @@ def test_preflight_catches_jobs_that_cannot_succeed(tmp_path):
         )[0]
     )
     assert pf.preflight(["true"], cwd, env) == []
-    assert "cwd" in pf.preflight(["true"], str(tmp_path / "gone"), env)[0]
+    assert (
+        "worktree does not exist"
+        in pf.preflight(["true"], str(tmp_path / "gone"), env)[0]
+    )
 
 
 def test_module_found_through_job_pythonpath(tmp_path):
@@ -158,3 +163,33 @@ def test_ensure_out_dirs_creates_missing_parent(tmp_path):
 
 def test_ensure_out_dirs_skips_shell_variables(tmp_path):
     assert pf.ensure_out_dirs(["x", "--out", "$D/f"], str(tmp_path)) == []
+
+
+def test_missing_worktree_is_named_with_its_fix(tmp_path):
+    """A removed or never-created worktree fails at submit with the command that creates it."""
+    gone = str(tmp_path / "wt-anenative2")
+    problems = pf.preflight([PY, "-c", "pass"], gone, dict(os.environ))
+    assert problems and "worktree does not exist" in problems[0]
+    assert "git -C <main checkout> worktree add" in problems[0]
+    assert pf.worktree_problems(gone) == problems
+    assert pf.worktree_problems(str(tmp_path)) == []
+
+
+def test_precheck_runs_before_queueing_and_refuses(tmp_path, monkeypatch):
+    """--precheck runs CPU-only in the submitter; a failure queues nothing and says so."""
+    import importlib
+
+    import gpuq
+
+    monkeypatch.setenv("GPUQ_DIR", str(tmp_path / "q"))
+    monkeypatch.setenv("GPUQ_NO_PREFLIGHT", "1")
+    q = importlib.reload(gpuq)
+    q.JOBS.mkdir(parents=True)
+    q.LOGS.mkdir(parents=True)
+    monkeypatch.setattr(q, "_ensure_daemon", lambda: None)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="precheck failed.*nothing was queued"):
+        q.submit(["true"], "pc-bad", 1, 0, precheck="echo 'ruff check FAIL'; exit 3")
+    assert not list(q.JOBS.glob("*.json"))
+    jid = q.submit(["true"], "pc-ok", 1, 0, precheck="exit 0")
+    assert (q.JOBS / (jid + ".json")).exists()

@@ -143,15 +143,31 @@ def paths(job, repo):
         for match in re.finditer(r"/[^\s:'\";]+/\.venv/bin/[^\s:'\";]+", str(value)):
             source = match.group().split("/.venv/bin/")[0] + "/.venv/bin"
             pairs.append((source, repo + "/.venv/bin"))
-    models, synced = {}, set()
+    sources, synced = model_sources(job["cmd"], job["env"])
+    models = {}
+    for source in sources:
+        dest = repo + "/.m3-home/models/" + Path(source).name
+        if dest in models.values():
+            raise ValueError("model basename collision; use distinct checkpoint names")
+        models[source] = dest
+    pairs.extend(models.items())
+    pairs.sort(key=lambda p: len(p[0]), reverse=True)
+    return top, wt, pairs, {k: v for k, v in models.items() if k in synced}
+
+
+def model_sources(cmd, env):
+    """(checkpoint dirs a job names under MODEL_ROOTS, the subset that is copied to the laptop).
+    Pure: no git, no filesystem beyond config.json probes. Shared by paths() and by
+    gpuq.submit, which refuses an M3 job here instead of after the lane was chosen."""
+    sources, synced = [], set()
     # local.env exports a catalogue of a dozen checkpoints (27B, 30B Omni, ...) into every
     # job's env. Syncing all of them stalled every M3 job (2026-10-06): only checkpoints
     # named in the command, in a non-catalogue env var, or in GPUQ_M3_SYNC (comma-separated
     # env keys) are synced; catalogue paths are still mapped.
     catalogue = _catalogue_keys() - set(
-        filter(None, job["env"].get("GPUQ_M3_SYNC", "").split(","))
+        filter(None, env.get("GPUQ_M3_SYNC", "").split(","))
     )
-    values = [(None, v) for v in job["cmd"]] + list(job["env"].items())
+    values = [(None, v) for v in cmd] + list(env.items())
     for key, value in values:
         for root in MODEL_ROOTS:
             for match in re.finditer(re.escape(root) + r"/([^\s:'\";]+)", str(value)):
@@ -162,17 +178,17 @@ def paths(job, repo):
                         source = str(candidate)
                         break
                     candidate = candidate.parent
-                dest = repo + "/.m3-home/models/" + Path(source).name
-                if dest in models.values() and models.get(source) != dest:
-                    raise ValueError(
-                        "model basename collision; use distinct checkpoint names"
-                    )
-                models[source] = dest
+                if source not in sources:
+                    sources.append(source)
                 if key is None or key not in catalogue:
                     synced.add(source)
-    pairs.extend(models.items())
-    pairs.sort(key=lambda p: len(p[0]), reverse=True)
-    return top, wt, pairs, {k: v for k, v in models.items() if k in synced}
+    return sources, synced
+
+
+def refused_m3_models(cmd, env):
+    """Basenames of the checkpoints a job would copy to the laptop that M3_MODELS does not allow."""
+    _, synced = model_sources(cmd, env)
+    return sorted(Path(s).name for s in synced if Path(s).name not in M3_MODELS)
 
 
 def _catalogue_keys():

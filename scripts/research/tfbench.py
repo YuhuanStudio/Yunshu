@@ -118,14 +118,35 @@ def start_server(engine, extra_env, tag, **kwargs):
     raise RuntimeError("port pool remained unavailable")
 
 
-def spec_request(engine, extra_env):
+def _hidden_size(path):
+    try:
+        cfg = json.loads((Path(path) / "config.json").read_text())
+    except (OSError, ValueError):
+        return None
+    for c in (cfg, cfg.get("text_config") or {}):
+        if c.get("hidden_size"):
+            return int(c["hidden_size"])
+    return None
+
+
+def default_drafter(model):
+    """The 27B DFlash2 drafter only for a target it fits (same hidden size); any other model
+    (Flash-Next: 2560) drafts with its own MTP head. Forcing the 27B drafter on it failed
+    every Flash-Next yv run at server start (2026-11-02)."""
+    if model is None:
+        return D
+    want = _hidden_size(model)
+    return D if want is not None and want == _hidden_size(D) else "mtp"
+
+
+def spec_request(engine, extra_env, model=None):
     """Make the comparison independent of drafter discovery under isolated HOME."""
     if engine != "yunshu":
         return "dflash", dict(extra_env)
     env = dict(extra_env)
     # Benchmarks own only their API port; never auto-start the console on8100.
     env.setdefault("YUNSHU_CONSOLE", "0")
-    override = env.setdefault("YUNSHU_VLM_DRAFT", D)
+    override = env.setdefault("YUNSHU_VLM_DRAFT", default_drafter(model))
     mode = {"mtp": "mtp", "force-mtp": "mtp", "off": "off", "none": "off"}.get(
         override.lower(), "dflash"
     )
@@ -195,7 +216,9 @@ class Srv:
         self, engine, extra_env, tag, model=None, ctx_tokens=140000, parallel=1
     ):
         self.engine, self.port = engine, free_port()
-        self.requested_spec_mode, extra_env = spec_request(engine, extra_env)
+        self.requested_spec_mode, extra_env = spec_request(
+            engine, extra_env, model or M
+        )
         self.launch = None
         self.probe = None
         if bench_engines.is_new_engine(engine):
@@ -1442,7 +1465,7 @@ def main():
                 raise FileNotFoundError(f"{a.engine}: missing {gone}")
         elif not (Path(a.model) / "config.json").is_file():
             raise FileNotFoundError(a.model)
-        mode, selected = spec_request(a.engine, extra_env)
+        mode, selected = spec_request(a.engine, extra_env, a.model)
         print(
             json.dumps(
                 {

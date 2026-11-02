@@ -200,3 +200,22 @@ def test_prompt_digest_accepts_serving_lists_and_array_like_inputs():
     assert audit.prompt_digest(ids) == audit.prompt_digest(
         SimpleNamespace(tolist=lambda: ids)
     )
+
+
+def _hidden_model(root, hidden):
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "config.json").write_text(json.dumps({"hidden_size": hidden}))
+    return root
+
+
+def test_audit_drafter_follows_the_target_not_the_27b(tmp_path, monkeypatch):
+    """The audit drafted every target with the 27B DFlash2 drafter; a Flash-Next target (hidden
+    2560) must draft with its MTP head (the tfbench default_drafter rule, HARNESS_BUGS 10 / g)."""
+    drafter = _hidden_model(tmp_path / "draft", 5120)
+    monkeypatch.setattr(audit.tfbench, "D", str(drafter))
+    big = _hidden_model(tmp_path / "27b", 5120)
+    small = _hidden_model(tmp_path / "fn", 2560)
+    assert audit.drafter_for(big) == str(drafter)
+    assert audit.drafter_for(small) == "mtp"
+    assert audit.tree_drafters(small) == ["mtp"]
+    assert audit.tree_drafters(big) == ["mtp", str(drafter)]

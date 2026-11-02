@@ -95,6 +95,11 @@ def world(tmp_path, monkeypatch):
         "from yunshu_engine import foo\n\ndef test_x():\n    assert foo.X >= 1\n"
     )
     (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+    # each arm runs its own commit's tfbench: the fake stands in for it in both trees
+    (repo / "scripts/research").mkdir(parents=True)
+    (repo / "scripts/research/tfbench.py").write_text(
+        (FAKES / "fake_tfbench.py").read_text()
+    )
     git(repo, "init", "-q", "-b", "main")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "base")
@@ -107,7 +112,6 @@ def world(tmp_path, monkeypatch):
     runs = tmp_path / "runs"
     monkeypatch.setenv("FAKE_GPUQ_DIR", str(tmp_path / "jobs"))
     monkeypatch.setenv("PAIRED_PY", sys.executable)
-    monkeypatch.setattr(stages, "TFBENCH", FAKES / "fake_tfbench.py")
     monkeypatch.setattr(stages, "PAIRED", FAKES / "fake_paired.py")
     monkeypatch.setattr(stages, "MEMORY_AB", FAKES / "fake_memory.py")
     monkeypatch.setattr(stages, "PROMPTS", tmp_path / "prompts")
@@ -545,14 +549,16 @@ def test_executor_failfast_and_failed_cell_costs_only_itself(world):
     rd, ex = mkexec(world)
     boom = "import sys;sys.exit(3)"
     res = ex.run_cells([cell("a", OK_BODY), cell("b", boom), cell("c", OK_BODY)])
-    assert res["a"].ok and not res["b"].ok and "c" not in res
-    assert any(
+    # c had already started (this fake queue runs at submit): it keeps its result
+    assert res["a"].ok and not res["b"].ok and res["c"].ok
+    assert not any(
         r.get("ev") == "cell_cancelled" and r["cell"] == "c" for r in rd.rows("st")
     )
-    # rerun: a is reused, b retried (now fine), c runs
+    # rerun: a and c are reused, only b is retried (now fine)
     rd2, ex2 = mkexec(world)
     res2 = ex2.run_cells([cell("a", OK_BODY), cell("b", OK_BODY), cell("c", OK_BODY)])
-    assert res2["a"].cached and res2["b"].ok and res2["c"].ok and not res2["b"].cached
+    assert res2["a"].cached and res2["c"].cached
+    assert res2["b"].ok and not res2["b"].cached
 
 
 def test_executor_fails_closed_without_complete_record(world):
@@ -1819,6 +1825,8 @@ def _share_ctx(tmp_path, monkeypatch, py=None):
     from types import SimpleNamespace
 
     arm = core.Arm("base", "b", "a" * 40, tmp_path / "arm", "")
+    (tmp_path / "arm/scripts/research").mkdir(parents=True)
+    (tmp_path / "arm/scripts/research/tfbench.py").write_text("# arm tfbench\n")
     return SimpleNamespace(
         tree=lambda a: arm,
         arm_env=lambda a, e=None: dict(e or {}),
@@ -2064,3 +2072,174 @@ def test_related_tests_skip_agent_task_fixtures(tmp_path):
         tmp_path,
     )
     assert got == ["tests/unit/test_x.py"]
+
+
+def test_a_failed_job_is_not_rerun_as_interrupted_timing(world, monkeypatch):
+    """A job that failed (server exited early) but carried a contention flag was rerun as
+    "timing interrupted" (60 reruns in 10 days, audit 2026-11-02); only a finished job's
+    timing can have been interrupted."""
+    from types import SimpleNamespace
+
+    _, ex = mkexec(world)
+    failed = SimpleNamespace(id="j1", state="failed", rc=1, contended=True, d={})
+    monkeypatch.setattr(ex.gq, "wait", lambda jid: failed)
+    monkeypatch.setattr(ex.gq, "log_tail", lambda jid, n: "server exited early")
+    r = ex._finish(Cell("st", "k", [], quiet=True), "j1", 1)
+    assert not r.ok and not r.contended
+    done = SimpleNamespace(id="j2", state="done", rc=0, contended=True, d={})
+    monkeypatch.setattr(ex.gq, "wait", lambda jid: done)
+    r2 = ex._finish(Cell("st", "k2", [], quiet=True, needs_out=False), "j2", 1)
+    assert not r2.ok and r2.contended
+
+
+def test_speed_ttft_jitter_and_single_rep_spikes_are_not_regressions():
+    """Audit 2026-11-02: 25 speed FAILs were inside the noise: a 2 ms move of a 20 ms TTFT
+    (+10%) or one stalled rep. A real 20 -> 58 ms warm TTFT regression still fails."""
+    base = [rows(ttft=0.020) for _ in range(3)]
+    jitter = [rows(ttft=0.022) for _ in range(3)]
+    assert analyze.speed_compare(base, jitter)["ok"]
+    real = [rows(ttft=0.058) for _ in range(3)]
+    assert not analyze.speed_compare(base, real)["ok"]
+    spike = [rows(dec=d) for d in (100.0, 100.0, 70.0)]
+    flat = [rows(dec=100.0) for _ in range(3)]
+    assert analyze.speed_compare(flat, spike)["ok"]  # one stalled rep cannot decide
+
+
+def test_a_failed_cell_keeps_started_siblings_results(world, monkeypatch):
+    """Audit 2026-11-02: a failing cell cancelled its whole batch, including 18 jobs that had
+    already finished; a started sibling now completes and keeps its result."""
+    from types import SimpleNamespace
+
+    from verify.execute import CellResult
+
+    _, ex = mkexec(world)
+    monkeypatch.setattr(ex, "_cached", lambda c: None)
+    monkeypatch.setattr(ex, "_shared", lambda c: None)
+    monkeypatch.setattr(ex, "_inflight", lambda c: None)
+    monkeypatch.setattr(ex, "_attempts", lambda c: 0)
+    monkeypatch.setattr(ex, "_submit", lambda c, attempt: c.key)
+    monkeypatch.setattr(
+        ex, "_finish", lambda c, jid, attempt: CellResult(c.key, c.key != "0")
+    )
+    states = {"1": "done", "2": "pending"}
+    monkeypatch.setattr(
+        ex.gq, "job", lambda jid: SimpleNamespace(state=states.get(jid, "pending"))
+    )
+    cancelled = []
+    monkeypatch.setattr(ex.gq, "cancel", cancelled.append)
+    results = ex.run_cells([Cell("st", str(i), []) for i in range(3)])
+    assert results["1"].ok and "1" not in cancelled and cancelled == ["2"]
+
+
+def test_validator_exception_fails_only_its_own_cell(world):
+    """A validator that raises (phase-B: 'str' object has no attribute 'get') used to abort the
+    whole run as INFRA_ERROR; the cell's job had finished fine (HARNESS_BUGS 19)."""
+
+    def broken_validate(path):
+        return "not a (ok, reason) pair".get(
+            "ok"
+        )  # AttributeError, like the phase-B validator
+
+    rd, ex = mkexec(world)
+    res = ex.run_cells(
+        [cell("a", OK_BODY, validate=broken_validate), cell("b", OK_BODY)]
+    )
+    assert not res["a"].ok
+    assert "AttributeError" in res["a"].reason
+    assert "a" in {r["cell"] for r in rd.rows("st") if r.get("ev") == "cell_done"}
+
+
+def test_failure_reason_leads_with_the_real_error(world, monkeypatch):
+    """A failed cell's reason is the job record's summary (error line first), not the raw log tail
+    whose last lines are shell noise such as `Killed: 9` (HARNESS_BUGS 20)."""
+    _, ex = mkexec(world)
+    wait = world.gq.wait
+
+    def with_summary(jid):
+        job = wait(jid)
+        return core.Job(
+            {
+                **job.d,
+                "summary": "IndexError: list index out of range | conc.sh: Killed: 9",
+            }
+        )
+
+    monkeypatch.setattr(world.gq, "wait", with_summary)
+    res = ex.run_cells([cell("a", "import sys;sys.exit(3)")])
+    assert not res["a"].ok
+    assert res["a"].reason.index("IndexError") < res["a"].reason.index("Killed")
+
+
+def test_base_must_be_an_ancestor_of_the_candidate(tmp_path, monkeypatch):
+    """postrel-016b (2026-11-02): a branch cut before a main fix was compared with a main that
+    had it, and the missing fix read as a +175% warm-TTFT regression of the candidate."""
+    import subprocess
+
+    from scripts.verify import core, runner
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    git(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "a",
+    )
+    root = git("rev-parse", "HEAD")
+    git("checkout", "-q", "-b", "side")
+    git(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "b",
+    )
+    side = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    git(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "c",
+    )
+    ahead = git("rev-parse", "HEAD")
+    monkeypatch.setattr(core, "REPO", tmp_path)
+
+    def arm(name, commit):
+        return core.Arm(name, commit, commit, tmp_path, "")
+
+    runner.check_base_ancestor(
+        arm("base", root), arm("cand", side)
+    )  # branch point: fine
+    with pytest.raises(core.InfraError, match="1 commit"):
+        runner.check_base_ancestor(arm("base", ahead), arm("cand", side))
+
+
+def test_quality_interpreter_missing_a_dependency_is_named(tmp_path):
+    """The quality server's pinned interpreter lacked xxhash and every job died at import
+    (fn-ple-memory-1102b); the check names what is missing before any GPU job."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\ndependencies = ["pytest>=7", '
+        "\"yunshu-surely-absent-pkg[extra]>=1; python_version >= '3.9'\"]\n"
+    )
+    from verify import stages
+
+    assert stages.missing_deps(sys.executable, tmp_path) == ["yunshu-surely-absent-pkg"]

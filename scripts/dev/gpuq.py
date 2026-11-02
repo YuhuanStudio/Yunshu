@@ -945,6 +945,7 @@ def submit(
     device: str = "m5",
     gate: bool = False,
     short: bool = False,
+    precheck: str | None = None,
 ) -> str:
     if short:
         timeout_min = min(timeout_min, SHORT_MIN)
@@ -960,6 +961,18 @@ def submit(
         raise ValueError("mem_gb must be finite and nonnegative")
     if device != "m5" and mem_gb > 28:
         raise ValueError("M3 admission: maximum 28 GB (36 GB minus 8 GB user reserve)")
+    # The laptop takes only its allowlisted checkpoints (gpuq_remote.M3_MODELS). A device=m3
+    # job naming any other one is refused here; an `any` job is kept off the laptop lane.
+    import gpuq_remote
+
+    m3_refused = (
+        gpuq_remote.refused_m3_models(cmd, dict(os.environ)) if device != "m5" else []
+    )
+    if device == "m3" and m3_refused:
+        raise ValueError(
+            f"M3: checkpoints {m3_refused} are not allowed on the laptop; "
+            f"allowed: {sorted(gpuq_remote.M3_MODELS)}"
+        )
     if device != "m5" and _daemon_running():
         caps = _read(ROOT / "daemon-capabilities.json")
         try:
@@ -982,6 +995,20 @@ def submit(
             )
         for d in gpuq_preflight.ensure_out_dirs(cmd, os.getcwd()):
             print(f"gpuq: created output directory {d}", file=sys.stderr)
+    if precheck:
+        # CPU-only checks (lint, format, the docs/registry tests) run here, before anything is
+        # queued: inside the job they waited behind the GPU queue and failed on a stale tree.
+        rc, tail = gpuq_preflight.run_precheck(precheck, os.getcwd())
+        if rc:
+            behind = gpuq_preflight.behind_main(os.getcwd())
+            hint = (
+                f"\n  this worktree is {behind} commits behind main: merge main there, then resubmit"
+                if behind
+                else ""
+            )
+            raise ValueError(
+                f"precheck failed (rc={rc}); nothing was queued:\n{tail}{hint}"
+            )
     JOBS.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
     # Serialize label admission and id allocation across all submitters.
@@ -1008,6 +1035,7 @@ def submit(
                 "id": jid,
                 "device": device,
                 "requested_device": device,
+                "m3_refused": m3_refused,
                 "remote_host": None,
                 "rc": None,
                 "pid": None,
@@ -1036,6 +1064,17 @@ def submit(
         )
     _ensure_daemon()
     return jid
+
+
+def _m3_eligible(j: dict) -> bool:
+    """Can the laptop lane take this job? Checkpoints it may not copy are refused at submit
+    (m3_refused), so an `any` job with one stays on the M5 lane."""
+    return bool(
+        not j.get("cancel")
+        and not j.get("quiet")
+        and not j.get("m3_refused")
+        and float(j.get("mem_gb", DEFAULT_MEM_GB)) <= 28
+    )
 
 
 def _claim(job: dict, lane: str) -> bool:
@@ -1315,7 +1354,29 @@ def result_summary(log: Path, lines: int = 3) -> str:
         for t in tail
         if t.strip() and not t.startswith(_NOISE) and " INFO " not in t
     ]
-    return " | ".join(x[:160] for x in keep[-lines:])[:480]
+    error = real_error_line(tail)
+    body = [x for x in keep[-lines:] if x != error]
+    return " | ".join(x[:160] for x in ([error] if error else []) + body)[:480]
+
+
+def real_error_line(lines: list[str]) -> str:
+    """The line that says what failed: the exception line closing the last Traceback, else the
+    first FATAL / Error: line. Trailing shell noise (`Killed: 9`) is never this line."""
+    last_tb = None
+    for i, t in enumerate(lines):
+        if t.startswith("Traceback (most recent call last)"):
+            for u in lines[i + 1 :]:
+                if u.strip() and not u[:1].isspace():
+                    last_tb = u.strip()
+                    break
+    if last_tb:
+        return last_tb[:160]
+    for t in lines:
+        if t.startswith("FATAL") or "Error:" in t:
+            return t.strip()[:160]
+    return ""
+
+
 
 
 def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
@@ -1882,11 +1943,7 @@ def daemon() -> None:
             else:
                 job = _pick(
                     eligible,
-                    lambda j: (
-                        not j.get("cancel")
-                        and not j.get("quiet")
-                        and float(j.get("mem_gb", DEFAULT_MEM_GB)) <= 28
-                    ),
+                    _m3_eligible,
                 )
             if job is None:
                 continue
@@ -2110,6 +2167,11 @@ def main() -> int:
         )
         p.add_argument("--priority", type=int, default=0, help="higher runs first")
         p.add_argument(
+            "--precheck",
+            default=None,
+            help="CPU-only shell command run before queueing; a nonzero exit refuses the submit (nothing is queued)",
+        )
+        p.add_argument(
             "--gate",
             action="store_true",
             help="verdict job (release gate): runs before every ordinary job of the same priority",
@@ -2220,6 +2282,7 @@ def main() -> int:
                 device=a.device,
                 gate=a.gate,
                 short=a.short,
+                precheck=a.precheck,
             )
         except ValueError as e:
             print(f"gpuq: {e}", file=sys.stderr)

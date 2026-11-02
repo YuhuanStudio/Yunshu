@@ -282,10 +282,20 @@ def speed_compare(
                 noise = 1.4826 * max([_mad(deltas), *arm])
             worse = -med if higher else med  # positive = candidate worse
             limit = max(tol_pct, noise)
+            # A few reps under-estimate noise (audit 2026-11-02: 25 speed FAILs inside it):
+            # a regression needs all but one rep pointing the same way, and a time metric
+            # (seconds) a change of at least 5 ms, below which a percentage of a 20 ms TTFT
+            # is timer jitter.
+            rep_worse = [(-d if higher else d) > 0 for d in deltas]
+            agree = sum(rep_worse) >= max(1, len(deltas) - 1)
+            small = (
+                fld.endswith("_s")
+                and abs(statistics.median(cv) - statistics.median(bv)) < 0.005
+            )
             verdict = (
                 "regression"
-                if worse > limit
-                else ("improvement" if -worse > limit else "neutral")
+                if worse > limit and agree and not small
+                else ("improvement" if -worse > limit and not small else "neutral")
             )
             row = {
                 "ctx": ctx,

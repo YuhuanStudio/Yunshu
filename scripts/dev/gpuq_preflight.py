@@ -20,6 +20,10 @@ from pathlib import Path
 
 _PY = re.compile(r"(^|/)python[\d.]*$")
 _ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# a value after a flag that names an output (may not exist yet): not an input path
+_OUTPUT_FLAG = re.compile(
+    r"out|log|save|dump|report|csv|jsonl|tee|cache", re.IGNORECASE
+)
 _MODEL_ROOTS = ("/Volumes/P5Plus/models/", "/Volumes/Micron/models/")
 
 
@@ -81,12 +85,61 @@ _CHECK = (
 )
 
 
+def worktree_problems(path: str) -> list[str]:
+    """A missing job directory (a worktree that was removed or never created) is refused at
+    submit with the command that creates it, not after the queue wait (2026-10-30: a gate
+    job's worktree was gone and it failed with a bare 'cwd does not exist')."""
+    if os.path.isdir(path):
+        return []
+    return [
+        f"worktree does not exist: {path} "
+        f"(create it: git -C <main checkout> worktree add -b <branch> {path} main)"
+    ]
+
+
+def behind_main(cwd: str) -> int | None:
+    """How many commits the checkout at ``cwd`` lacks from main; None when unknown."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", cwd, "rev-list", "--count", "HEAD..main"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode:
+        return None
+    try:
+        return int(out.stdout.strip())
+    except ValueError:
+        return None
+
+
+def run_precheck(command: str, cwd: str, timeout_s: float = 1800) -> tuple[int, str]:
+    """Run a CPU-only precheck shell command in the submitter, before anything is queued.
+    Returns (rc, last output lines). Inside a queued job it would wait behind the GPU
+    queue and fail on a stale worktree after the wait (HARNESS_BUGS 17)."""
+    try:
+        done = subprocess.run(
+            ["/bin/sh", "-c", command],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, f"precheck timed out after {timeout_s:g} s"
+    lines = (done.stdout + done.stderr).strip().splitlines()
+    return done.returncode, "\n".join(lines[-40:])
+
+
 def preflight(cmd: list[str], cwd: str, env: dict[str, str]) -> list[str]:
     """Problems that make ``cmd`` certain to fail; empty when it may run. CPU only:
     compiles the job's script with the job's interpreter (no import, no GPU)."""
     problems: list[str] = []
     if not os.path.isdir(cwd):
-        return [f"cwd does not exist: {cwd}"]
+        return worktree_problems(cwd)
     prefix, rest = _split_env(cmd)
     if not rest:
         return ["empty command"]
@@ -99,6 +152,18 @@ def preflight(cmd: list[str], cwd: str, env: dict[str, str]) -> list[str]:
             path = a if os.path.isabs(a) else os.path.join(cwd, a)
         if path and not os.path.exists(path):
             problems.append(f"model path does not exist: {a}")
+        elif i > 0:
+            # an absolute input path (prompt file, corpus, drafter dir) that is not there yet
+            flag, value = (rest[i - 1], a)
+            if a.startswith("--") and "=" in a:
+                flag, _, value = a.partition("=")
+            if (
+                value.startswith("/")
+                and not _OUTPUT_FLAG.search(flag)
+                and "{" not in value
+                and not os.path.exists(value)
+            ):
+                problems.append(f"input path does not exist: {value}")
     py, script, module = _python_target(rest)
     if py is None:
         exe = rest[0]

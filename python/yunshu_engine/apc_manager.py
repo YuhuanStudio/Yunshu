@@ -1111,10 +1111,66 @@ class _Coordinator(APCCoordinator):
             del lengths[:-64]
         return True
 
+    def offer_standing(self, token_ids, rows, *, extra_hash=0) -> None:
+        """The last reply's live cache (a single-row snapshot viewing its buffers), handed
+        to the next lookup that extends it: TensorFold's standing slot (qwen27_resume.zig),
+        the follow-up resumes in place with no store copy and no restore copy.
+
+        Held on the shared manager, not on this coordinator: each generator binds its own
+        coordinator, so the follow-up's lookup runs on another one (a standing cache kept here
+        was never found: 8K turn 2 took the 8192 checkpoint, 2026-11-02)."""
+        self.manager._standing = (tuple(map(int, token_ids)), rows, int(extra_hash))
+
+    def take_standing(self):
+        return self.manager.__dict__.pop("_standing", None)
+
     def _lookup_decode_tail(self, token_ids, **kwargs):
         """The longest stored reply cache that is a prefix of this prompt, or None."""
-        tails = self.manager.__dict__.get("_decode_tail_lengths", {})
         extra_hash = int(kwargs.get("extra_hash", 0) or 0)
+        standing = self.manager.__dict__.get("_standing")
+        if standing is not None:
+            tokens, rows, salt = standing
+            n = len(tokens)
+            if (
+                salt == extra_hash
+                and n < len(token_ids)
+                and tuple(token_ids[:n]) == tokens
+                and kwargs["suffix_is_text_only"](n)
+            ):
+                self.manager._standing = None
+                with self.manager.lock:
+                    self.manager.stats.hits += 1
+                    self.manager.stats.matched_tokens += n
+                logger.info(
+                    "APC: resumed the standing reply cache in place (%d tokens)", n
+                )
+                return {
+                    "matched_blocks": [],
+                    "warm_cache": rows,
+                    "prefix_len": n,
+                    "extra_hash": extra_hash,
+                    "full_input_ids": list(token_ids),
+                }
+            # why the follow-up did not extend the standing reply: a cache miss must name its
+            # cause (another conversation, a different salt, or a re-rendered reply)
+            same = next(
+                (
+                    i
+                    for i, (a, b) in enumerate(zip(tokens, token_ids, strict=False))
+                    if a != b
+                ),
+                min(n, len(token_ids)),
+            )
+            logger.info(
+                "APC: standing reply cache not resumed: salt %s, prompt diverges at %d of %d "
+                "(held %r, prompt %r)",
+                "same" if salt == extra_hash else "differs",
+                same,
+                n,
+                list(tokens[same : same + 4]),
+                list(token_ids[same : same + 4]),
+            )
+        tails = self.manager.__dict__.get("_decode_tail_lengths", {})
         for n in sorted(tails.get(extra_hash, ()), reverse=True):
             if n >= len(token_ids) or not kwargs["suffix_is_text_only"](n):
                 continue

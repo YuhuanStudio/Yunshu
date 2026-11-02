@@ -649,3 +649,26 @@ def test_m3_space_guard_counts_only_new_checkpoints():
     gib = 2**30
     assert space_ok((M3_MIN_FREE_GIB + 2) * gib, need)
     assert not space_ok((M3_MIN_FREE_GIB + 1) * gib, need)
+
+
+def test_m3_refuses_unlisted_checkpoint_at_submit(queue, monkeypatch):
+    """A Flash-Next checkpoint is refused when it is submitted, not after dispatch
+    (2026-10-29: device=m3 jobs failed with rc=None after their lane was chosen)."""
+    monkeypatch.setenv("GPUQ_NO_PREFLIGHT", "1")
+    flash = "/Volumes/P5Plus/models/Qwen3.8-Flash-Next-oQ2.5e-mtp"
+    with pytest.raises(ValueError, match="not allowed on the laptop"):
+        queue.submit(["true", "--model", flash], "fn-m3", 1, 0, device="m3")
+    assert not list(queue.JOBS.glob("*.json"))
+    jid = queue.submit(["true", "--model", flash], "fn-any", 1, 0, device="any")
+    row = queue._read(queue.JOBS / (jid + ".json"))
+    assert row["m3_refused"] == ["Qwen3.8-Flash-Next-oQ2.5e-mtp"]
+    # an `any` job that only the M5 can run is never claimed by the laptop lane
+    assert not queue._m3_eligible(row)
+    small = queue.submit(
+        ["true", "--model", "/Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16"],
+        "small-m3",
+        1,
+        0,
+        device="m3",
+    )
+    assert queue._read(queue.JOBS / (small + ".json")).get("m3_refused") == []

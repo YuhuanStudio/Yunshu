@@ -211,9 +211,16 @@ class Executor:
         ok, reason = True, ""
         if j.state != "done" or j.rc != 0:
             ok = False
-            reason = f"job {j.id} {j.state} rc={j.rc}: " + self.gq.log_tail(j.id, 6)
+            # the job record's summary leads with the real error line (gpuq.result_summary)
+            tail = j.d.get("summary") or self.gq.log_tail(j.id, 6)
+            reason = f"job {j.id} {j.state} rc={j.rc}: " + tail
         elif cell.needs_out:
-            ok, reason = (cell.validate or default_validate)(out)
+            # A validator that raises fails this cell with its exception text; it must not
+            # abort the run as an infra error (the job itself finished, HARNESS_BUGS 19).
+            try:
+                ok, reason = (cell.validate or default_validate)(out)
+            except Exception as exc:  # noqa: BLE001
+                ok, reason = False, f"validator raised {type(exc).__name__}: {exc}"
             if not ok:
                 reason = f"job {j.id}: {reason}"
         if ok and cell.quiet and j.contended:
@@ -256,7 +263,10 @@ class Executor:
             reason,
             j.id,
             final if ok and cell.needs_out else None,
-            j.contended,
+            # only a job that finished can have had its timing interrupted: a failed one
+            # (server exited early, rc != 0) is a failure, rerunning it changes nothing
+            # (60 such reruns in 10 days, audit 2026-11-02)
+            bool(j.contended) and j.state == "done" and j.rc == 0,
         )
 
     # -- API
@@ -314,6 +324,18 @@ class Executor:
                 if not r.ok:
                     for k2, (j2, _a) in live.items():
                         if k2 != c.key and k2 not in results:
+                            # A sibling that already started keeps its result as evidence
+                            # for a resume; only work that has not started is dropped (18 of
+                            # 29 cancelled jobs had already finished, audit 2026-11-02).
+                            try:
+                                started = self.gq.job(j2).state in ("running", "done")
+                            except Exception:  # unknown: cancel as before
+                                started = False
+                            if started:
+                                results[k2] = self._finish(
+                                    next(x for x in batch if x.key == k2), j2, _a
+                                )
+                                continue
                             self.gq.cancel(j2)
                             self.run.append(
                                 c.stage,

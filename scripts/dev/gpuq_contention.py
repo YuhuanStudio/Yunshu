@@ -65,12 +65,28 @@ _GPUQ_CMD = re.compile(r"(^|[/\s])gpuq(\.py)?(\s|$)")
 _CI_SANDBOX = re.compile(r"(^|\s)/(private/)?tmp/ycl-[0-9a-f]+/")
 
 
+#: programs that can run a model: an interpreter or a launcher. Anything else whose argv merely
+#: mentions a model runtime (grep/rg searching for `yunshu_cli.serve`, du over a test env)
+#: was flagged as a foreign model and discarded timings (13 of 17 hits, audit 2026-11-02).
+_RUNTIME_PROGRAM = re.compile(
+    r"^(python[0-9.]*|pythonw?|yunshu|uvicorn|uv|mlx_lm\.\w+|mlx_vlm\.\w+|mlx_audio\.\w+)$"
+)
+
+
 def is_foreign_model_cmd(cmd, patterns):
     """True when `cmd` looks like a model runtime that can use the GPU. Plain `yunshu` CLI
     calls (config, model info, top) are not: only `serve` loads a model in-process."""
     if _CI_SANDBOX.search(cmd):
         return False
-    return any(rx.search(cmd) for rx in patterns)
+    program = os.path.basename(cmd.split()[0]) if cmd.split() else ""
+    runtime = bool(_RUNTIME_PROGRAM.match(program))
+    # built-in patterns name Python/launcher runtimes; GPUQ_FOREIGN_MODEL_PATTERNS entries
+    # name a user's own runner binary and match whatever program it is
+    return any(
+        rx.search(cmd)
+        for rx in patterns
+        if runtime or rx.pattern not in FOREIGN_MODEL_PATTERNS
+    )
 
 
 def foreign_model_patterns(env=None):
@@ -508,6 +524,15 @@ class ContentionMonitor:
             self.cfg,
         )
         for reason in failures:
+            if reason.startswith("job_swap"):
+                # The job's OWN processes swapping is the engine's memory, not something
+                # else competing for the machine: rerunning cannot fix it (152 jobs and 725
+                # GPU-minutes were discarded and rerun for it, 10-23..11-02). Recorded for
+                # the memory review, never a contention verdict.
+                own = self.job.setdefault("own_memory_reasons", [])
+                if reason not in own:
+                    own.append(reason)
+                continue
             self.job["contended"] = True
             reasons = self.job.setdefault("contention_reasons", [])
             if reason not in reasons:

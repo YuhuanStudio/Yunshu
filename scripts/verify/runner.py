@@ -38,6 +38,79 @@ from .execute import Executor
 from .suites import parse_suite
 from .verdict import build_verdict, render_md
 
+_CHECK_SETTINGS = (
+    "import sys\n"
+    "from yunshu_engine import settings\n"
+    "try:\n"
+    "    warnings = settings.validate(warn=False)\n"
+    "except settings.SettingError as e:\n"
+    "    print(e); sys.exit(3)\n"
+    "for w in warnings:\n"
+    "    print(w)\n"
+    "sys.exit(4 if warnings else 0)\n"
+)
+
+
+def check_settings_env(tree, env: dict) -> None:
+    """Every YUNSHU_* value a run passes is parsed by that arm's own settings registry on the
+    CPU before any GPU job: a bad value (YUNSHU_PLE_STORAGE=resident) or an unregistered name
+    used to surface only as a failed server start on the GPU (2026-11-02)."""
+    import subprocess
+
+    from .core import VENV_PY
+
+    yenv = {k: v for k, v in env.items() if k.startswith("YUNSHU_")}
+    if not yenv or not (Path(tree) / "python/yunshu_engine/settings.py").is_file():
+        return  # nothing to check, or a tree without the registry (older trees, fixtures)
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("YUNSHU_")}
+    clean.update(yenv, PYTHONPATH=str(Path(tree) / "python"))
+    r = subprocess.run(
+        [VENV_PY, "-c", _CHECK_SETTINGS],
+        env=clean,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if r.returncode in (3, 4):
+        raise InfraError(
+            f"settings rejected by {tree}: {(r.stdout or r.stderr).strip()}"
+        )
+    if r.returncode != 0:
+        raise InfraError(f"settings check failed in {tree}: {r.stderr.strip()[-400:]}")
+
+
+def check_base_ancestor(base: Arm, cand: Arm) -> None:
+    """The base must be an ancestor of the candidate: otherwise the A/B also measures the base's
+    commits the candidate lacks, reversed, as the candidate's change (postrel-016b, 2026-11-02:
+    a branch cut before the deferred decode-cache store read as +175% 8K warm TTFT against a
+    main that had it). Directory arms with uncommitted changes are checked by their HEAD."""
+    import subprocess
+
+    from .core import REPO
+
+    r = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", base.commit, cand.commit],
+        cwd=str(REPO),
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode == 0:
+        return
+    if r.returncode != 1:
+        raise InfraError(f"git merge-base failed: {r.stderr.strip()[:300]}")
+    missing = subprocess.run(
+        ["git", "rev-list", "--count", f"{cand.commit}..{base.commit}"],
+        cwd=str(REPO),
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    raise InfraError(
+        f"base {base.commit[:12]} is not an ancestor of cand {cand.commit[:12]}: the base has "
+        f"{missing or '?'} commit(s) the candidate lacks, and their effect would be read as the "
+        "candidate's. Rebase the candidate onto the base, pick the branch point as base, or pass "
+        "--base-not-ancestor-ok"
+    )
+
 
 def parse_kv(items: list) -> dict:
     out = {}
@@ -101,6 +174,10 @@ def run_ab(
         )
         base = resolve_arm("base", a.base, trees)
         cand = resolve_arm("cand", a.cand, trees)
+        if not getattr(a, "base_not_ancestor_ok", False):
+            check_base_ancestor(base, cand)
+        for arm, extra in ((base, base_env), (cand, cand_env)):
+            check_settings_env(arm.path, {**env, **extra})
     except (ValueError, InfraError) as e:
         print(f"yv: {e}")
         return 2
@@ -204,6 +281,11 @@ def run_ab(
         run_dir=str(rd.path),
     )
     v["gpu_minutes"] = gpu_minutes(gq, v["jobs"])
+    # the tfbench each arm ran (its own commit's file), so a verdict names its harness
+    v["tfbench_sha256"] = {
+        arm.name: st._file_hash(arm.path / "scripts/research/tfbench.py")
+        for arm in (base, cand)
+    }
     write_json_atomic(rd.path / "verdict.json", v)
     (rd.path / "verdict.md").write_text(render_md(v))
     state.update(
