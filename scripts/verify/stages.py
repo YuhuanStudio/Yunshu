@@ -30,7 +30,16 @@ from .core import sha as _sha
 from .execute import Cell, Executor
 from .snapshot import stage_snapshot
 
-TFBENCH = REPO / "scripts/research/tfbench.py"
+
+def tfbench_script(tree: Path) -> Path:
+    """The tfbench of one arm: the file at that arm's commit (its bench_engines and
+    gpuq_contention siblings come with it), never the main checkout's working copy."""
+    p = tree / "scripts/research/tfbench.py"
+    if not p.is_file():
+        raise InfraError(f"arm tree has no scripts/research/tfbench.py: {tree}")
+    return p
+
+
 MEMORY_AB = REPO / "scripts/research/memory_ab.py"
 PAIRED = REPO / "scripts/research/accuracy/paired_eval.py"
 PROMPTS = Path("/Volumes/P5Plus/yunshu-build/tfnew/prompts")
@@ -122,7 +131,7 @@ def _tfbench_argv(
         f"TFB_OUT={tfb_out}",
         f"TFB_PORT_LAST={PORT_LAST}",
         ctx.py,
-        str(TFBENCH),
+        str(tfbench_script(ctx.tree(arm).path)),
         "--engine",
         "yunshu",
         "--model",
@@ -620,8 +629,9 @@ def _identity_cells(ctx: Ctx) -> list:
     return cells
 
 
-def _harness_hash() -> str:
-    return hashlib.sha256(TFBENCH.read_bytes()).hexdigest() if TFBENCH.exists() else ""
+def _harness_hash(tree: Path) -> str:
+    """Hash of the tfbench that the arm at ``tree`` runs (shares and verdicts key on it)."""
+    return _file_hash(tfbench_script(tree))
 
 
 def _file_hash(path: Path) -> str:
@@ -661,7 +671,7 @@ def _share_key(ctx: Ctx, arm: str, extra: dict, c, tag: str = "") -> str:
         _runtime_key(ctx, arm),
         tag,
         _dec_args(ctx, stage_logprobs=True),
-        _harness_hash(),
+        _harness_hash(ctx.tree(arm).path),
         os.environ.get("GPUQ_DEVICE", "m5"),
         n=24,
     )
@@ -1008,7 +1018,7 @@ def _speed_cells(ctx: Ctx, rep: int, units: list, only: set | None = None) -> li
                         _runtime_key(ctx, "base"),
                         _dec_args(ctx),
                         rep,
-                        _harness_hash(),
+                        _harness_hash(ctx.base.path),
                     )
                     if arm == "base" and cfg.get("reuse_base_speed") and only is None
                     else "",
@@ -1237,7 +1247,7 @@ def _longqa_share_key(ctx: Ctx, arm: str, c: int, lo: int, hi: int) -> str:
         hi,
         _prompt_hashes([c], ["prose"]),
         _runtime_key(ctx, "base"),
-        _harness_hash(),
+        _harness_hash(ctx.base.path),
         os.environ.get("GPUQ_DEVICE", "m5"),
         n=24,
     )

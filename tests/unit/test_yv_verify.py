@@ -95,6 +95,11 @@ def world(tmp_path, monkeypatch):
         "from yunshu_engine import foo\n\ndef test_x():\n    assert foo.X >= 1\n"
     )
     (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+    # each arm runs its own commit's tfbench: the fake stands in for it in both trees
+    (repo / "scripts/research").mkdir(parents=True)
+    (repo / "scripts/research/tfbench.py").write_text(
+        (FAKES / "fake_tfbench.py").read_text()
+    )
     git(repo, "init", "-q", "-b", "main")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "base")
@@ -107,7 +112,6 @@ def world(tmp_path, monkeypatch):
     runs = tmp_path / "runs"
     monkeypatch.setenv("FAKE_GPUQ_DIR", str(tmp_path / "jobs"))
     monkeypatch.setenv("PAIRED_PY", sys.executable)
-    monkeypatch.setattr(stages, "TFBENCH", FAKES / "fake_tfbench.py")
     monkeypatch.setattr(stages, "PAIRED", FAKES / "fake_paired.py")
     monkeypatch.setattr(stages, "MEMORY_AB", FAKES / "fake_memory.py")
     monkeypatch.setattr(stages, "PROMPTS", tmp_path / "prompts")
@@ -1817,6 +1821,8 @@ def _share_ctx(tmp_path, monkeypatch, py=None):
     from types import SimpleNamespace
 
     arm = core.Arm("base", "b", "a" * 40, tmp_path / "arm", "")
+    (tmp_path / "arm/scripts/research").mkdir(parents=True)
+    (tmp_path / "arm/scripts/research/tfbench.py").write_text("# arm tfbench\n")
     return SimpleNamespace(
         tree=lambda a: arm,
         arm_env=lambda a, e=None: dict(e or {}),
