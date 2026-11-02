@@ -156,3 +156,23 @@ def test_success_requires_artifacts_but_not_finished_agentbench(monkeypatch, tmp
     assert "--collect /bench/run" in checks["agentbench"]["evidence"]
     # Same SHA/output keeps the gate's successful stage evidence on a retry.
     assert rc.main(["--out", str(tmp_path)]) == 0
+
+
+def test_ci_local_runs_through_gpuq(monkeypatch, tmp_path):
+    """The unit suite uses the GPU: release_check's ci-local is a gpuq job, never a bare run
+    beside timing jobs (2026-11-02)."""
+    monkeypatch.setattr(rc.subprocess, "check_output", lambda *a, **k: "a" * 40)
+    calls = []
+
+    class Fail:
+        returncode = 1
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return Fail()
+
+    monkeypatch.setattr(rc.subprocess, "run", run)
+    rc.main(["--out", str(tmp_path)])
+    first = calls[0]
+    assert first[0].endswith("scripts/dev/gpuq") and first[1] == "run"
+    assert first[-2].endswith("scripts/dev/ci-local")

@@ -94,7 +94,12 @@ def main(argv=None):
     }
     print(f"Release commit: {sha}", flush=True)
     if a.dry_run:
-        print(shlex.join(["nice", "-n", "15", str(REPO / "scripts/dev/ci-local"), sha]))
+        print(
+            shlex.join(
+                [str(REPO / "scripts/dev/gpuq"), "run", "--gate", "--", "nice", "-n", "15",
+                 str(REPO / "scripts/dev/ci-local"), sha]
+            )
+        )
         for name, cmd in commands.items():
             print(f"{name}: {shlex.join(cmd)}")
         checklist(rows)
@@ -102,8 +107,27 @@ def main(argv=None):
     out.mkdir(parents=True, exist_ok=True)
     ci_log = out / "ci-local.log"
     with ci_log.open("w") as log:
+        # through gpuq: the unit suite uses the GPU and must not overlap a timing job
         rc = subprocess.run(
-            ["nice", "-n", "15", str(REPO / "scripts/dev/ci-local"), sha],
+            [
+                str(REPO / "scripts/dev/gpuq"),
+                "run",
+                "--label",
+                f"{a.label_prefix}-ci-local",
+                "--priority",
+                "0",
+                "--gate",
+                "--timeout",
+                "90",
+                "--mem-gb",
+                "16",
+                "--",
+                "nice",
+                "-n",
+                "15",
+                str(REPO / "scripts/dev/ci-local"),
+                sha,
+            ],
             stdout=log,
             stderr=subprocess.STDOUT,
         ).returncode
