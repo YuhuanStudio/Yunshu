@@ -938,6 +938,20 @@
       "upstream_paths": [
         "mlx_vlm/models/qwen4_exp/qsa_kernel.py"
       ]
+    },
+    {
+      "kind": "derived",
+      "path": "python/yunshu_engine/dflash_ring.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/compsync/TensorFold-src-1.2.0/TensorFold-1.2.0",
+      "upstream_paths": [
+        "zig/src/families/qwen27/dflash/runtime_context.zig"
+      ],
+      "commit": "v1.2.0",
+      "license": "MIT",
+      "local_changes": [
+        "fillMask lines 137-146 and tests 148-183: per-query sliding context and trained-block visibility, adapted to GPU-positioned rings and non-ring dflash_context attention; trained size from checkpoint config.block_size"
+      ]
     }
   ],
   "inspired": [
@@ -3074,6 +3088,15 @@
     }
   ],
   "watch": [
+    {
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/compsync/TensorFold-src-1.2.0/TensorFold-1.2.0",
+      "globs": [
+        "zig/src/families/qwen27/dflash/*.zig"
+      ],
+      "why": "DFlash trained-block attention mask and lone-path child expansion port",
+      "commit": "v1.2.0"
+    },
     {
       "repo": "https://github.com/jundot/omlx",
       "clone": "reference/omlx",

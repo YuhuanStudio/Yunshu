@@ -144,13 +144,114 @@ def neutral_context(drafter: Any):
     return mx.zeros((1, 1, width), dtype=mx.bfloat16)
 
 
+def _masked_attention(
+    self,
+    x,
+    x_ctx,
+    rope,
+    cache,
+    projected_context=None,
+):
+    import mlx.core as mx
+
+    batch, rows, _ = x.shape
+    context_rows = x_ctx.shape[1]
+    if self.is_sliding:
+        if self.sliding_window is None:
+            raise ValueError(
+                "DFlash draft config must define sliding_window for sliding layers."
+            )
+        keep_ctx = self.sliding_window - 1
+        if context_rows > keep_ctx:
+            skip = context_rows - keep_ctx
+            x_ctx = x_ctx[:, skip:]
+            if projected_context is not None:
+                projected_context = tuple(
+                    value[:, skip:] for value in projected_context
+                )
+            context_rows = x_ctx.shape[1]
+            cache.offset += skip
+
+    # Project context and proposal separately so only context KV
+    queries = self.q_proj(x)
+    ctx_keys, ctx_values = (
+        self._project_kv(x_ctx) if projected_context is None else projected_context
+    )
+    prop_keys, prop_values = self._project_kv(x)
+    queries = self.q_norm(queries.reshape(batch, rows, self.n_heads, -1)).transpose(
+        0, 2, 1, 3
+    )
+    ctx_keys = self.k_norm(
+        ctx_keys.reshape(batch, context_rows, self.n_kv_heads, -1)
+    ).transpose(0, 2, 1, 3)
+    ctx_values = ctx_values.reshape(batch, context_rows, self.n_kv_heads, -1).transpose(
+        0, 2, 1, 3
+    )
+    prop_keys = self.k_norm(
+        prop_keys.reshape(batch, rows, self.n_kv_heads, -1)
+    ).transpose(0, 2, 1, 3)
+    prop_values = prop_values.reshape(batch, rows, self.n_kv_heads, -1).transpose(
+        0, 2, 1, 3
+    )
+    queries = rope(queries, offset=cache.offset + context_rows)
+    ctx_keys = rope(ctx_keys, offset=cache.offset)
+    prop_keys = rope(prop_keys, offset=cache.offset + context_rows)
+    keys, values = cache.update_and_fetch(ctx_keys, ctx_values)
+    # A one-row append can leave RotatingKVCache physically rotated. The TF
+    # sliding mask indexes chronological keys, unlike unmasked attention.
+    from mlx_vlm.models.cache import BufferedRotatingKVCache, RotatingKVCache
+
+    if isinstance(cache, RotatingKVCache) and (
+        not isinstance(cache, BufferedRotatingKVCache) or cache.keep
+    ):
+        keys, values = cache._temporal_order(keys), cache._temporal_order(values)
+    keys = mx.concatenate([keys, prop_keys], axis=2)
+    values = mx.concatenate([values, prop_values], axis=2)
+    # TensorFold 1.2.0 dflash/runtime_context.zig:137-146.
+    from .dflash_ring import block_mask
+
+    context = int(keys.shape[2]) - rows
+    mask = block_mask(
+        mx.arange(context, dtype=mx.int32),
+        mx.array(context),
+        rows,
+        self._yunshu_trained_block,
+        self.sliding_window,
+    )
+    o = mx.fast.scaled_dot_product_attention(
+        queries,
+        keys,
+        values,
+        scale=self.scale,
+        mask=mask,
+        sinks=self.attention_sink_bias,
+    )
+    return self.o_proj(o.transpose(0, 2, 1, 3).reshape(batch, rows, -1))
+
+
 def _install_context_window() -> None:
     from mlx_vlm.speculative import utils as spec_utils
-    from mlx_vlm.speculative.drafters.qwen3_dflash.dflash import DFlashDraftModel
+    from mlx_vlm.speculative.drafters.qwen3_dflash.dflash import (
+        DFlashAttention,
+        DFlashDraftModel,
+    )
 
+    # Existing and future DFlash2 layers inherit this attention entry point.
+    original_attention = DFlashAttention.__call__
+
+    def attention(self, *args, **kwargs):
+        if not hasattr(self, "_yunshu_trained_block"):
+            return original_attention(self, *args, **kwargs)
+        return _masked_attention(self, *args, **kwargs)
+
+    DFlashAttention.__call__ = attention
     orig_hidden = DFlashDraftModel._hidden
 
     def _hidden(self, inputs, target_hidden, cache):
+        for layer in self.layers:
+            object.__setattr__(
+                layer.self_attn, "_yunshu_trained_block", int(self.config.block_size)
+            )
         if target_hidden is None:
             target_hidden = neutral_context(self)
         keep = context_window(self)
