@@ -779,6 +779,12 @@ def stage_identity(ctx: Ctx) -> StageResult:
                 input_change_ok=bool(ctx.suite.get("input_change_ok")),
                 followup_drift_ok=bool(ctx.suite.get("followup_drift_ok")),
             )
+            if ctx.suite.get("followup_drift_ok"):
+                # printed in the verdict so the allowance is never silent
+                numbers[f"{tag}followup_allowance".strip()] = (
+                    "followup_drift_ok: turn2 digest differences with equal token counts are "
+                    f"excused (cells excused: {len(cmp_['followup_drift'])})"
+                )
             if cmp_.get("followup_drift"):
                 numbers[f"{tag}followup_drift".strip()] = cmp_["followup_drift"]
             if cmp_["input_changed"]:

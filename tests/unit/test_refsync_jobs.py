@@ -75,6 +75,17 @@ def test_detect_mode_new_engines():
     )
     assert be.detect_mode("tf-native", tf) == "dflash"
     assert be.detect_mode("tf-native", "drafts: off") is None
+    # TensorFold 1.2.0 serving line (real log tail from the failed cmp-1102 job): drafts are named, not "on"
+    tf120 = (
+        "info: Qwen3.8-27B: 1 streams of 5120 tokens, DFlash2 drafts for one of them\n"
+        "[tensorfold] prompt chunks of up to 2,048 tokens, cut at replies 256+ tokens apart\n"
+        "[tensorfold] serving Qwen3.8-27B-MLX-4bit at http://127.0.0.1:18990/v1 (sampling: temperature 1.0, "
+        "top_k 20, top_p 0.95; drafts: DFlash2 (/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2); "
+        "context: 5120; loaded in 17.8s)\n"
+    )
+    assert be.detect_mode("tf-native", tf120) == "dflash"
+    assert be.detect_mode("tf-native", tf120.replace("DFlash2 (", "copies only (")) is None
+    assert be.detect_mode("tf-native", "[tensorfold] serving X (drafts: off; context: 5120)") is None
 
 
 def test_corpus_short_reply_fails_closed(tmp_path, monkeypatch):

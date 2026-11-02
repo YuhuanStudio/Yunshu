@@ -32,6 +32,32 @@ GGUF_MTP = (
 ENVS = Path("/Volumes/P5Plus/yunshu-test-envs")
 MAIN_PY = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python"
 YUNSHU_BIN = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/yunshu"
+# Benchmark servers start the CLI as `<venv python> -m yunshu_cli`, never through the shared
+# .venv/bin/yunshu console script: a plain `uv run` re-syncs .venv and rewrites that script
+# while gpuq jobs launch it (FileNotFoundError at job start).
+YUNSHU_MODULE = "yunshu_cli"
+
+
+def is_yunshu_command(cmd) -> bool:
+    """True for a server command built here: the module form or the legacy console script."""
+    return bool(cmd) and (
+        Path(cmd[0]).name == "yunshu" or list(cmd[1:3]) == ["-m", YUNSHU_MODULE]
+    )
+
+
+def yunshu_args(cmd) -> list:
+    """Arguments after the CLI entry (`serve ...`) of a command from is_yunshu_command."""
+    return list(cmd[3:] if list(cmd[1:3]) == ["-m", YUNSHU_MODULE] else cmd[1:])
+
+
+def yunshu_entry(environ) -> list:
+    """argv prefix that starts the CLI with the main checkout's venv interpreter."""
+    override = environ.get("TFB_YUNSHU_BIN")
+    if override:
+        return [override]
+    return [MAIN_PY, "-m", YUNSHU_MODULE]
+
+
 TF_BIN = str(ENVS / "tensorfold-0.6.1/bin/tensorfold")
 MTPLX_BIN = str(ENVS / "mtplx/.venv/bin/mtplx")
 OMLX_BIN = str(ENVS / "omlx-bench/venv/bin/omlx")
@@ -392,7 +418,7 @@ def build_launch(
         model = str(Path(home) / ".yunshu/models/Jundot" / Path(e.checkpoint).name)
         return Launch(
             [
-                environ.get("TFB_YUNSHU_BIN", YUNSHU_BIN),
+                *yunshu_entry(environ),
                 "serve",
                 "-m",
                 model,
@@ -785,7 +811,10 @@ def detect_mode(engine: str, log: str, probe_text: str | None = None) -> str | N
         modes = re.findall(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", log)
         return modes[-1] if modes else None
     if engine == "tf-native":
-        # 1.0.x native log: a drafter line naming DFlash2 and its block size (confirmed by the pilot)
+        # 1.2.0+ serving line names the drafter: "drafts: DFlash2 (<path>)" (or "drafts: DFlash2 (...) + copies").
+        if re.search(r"drafts: DFlash2\b", log):
+            return "dflash"
+        # 1.0.x native log: a drafter line naming DFlash2 and "drafts: on" (confirmed by the pilot)
         return (
             "dflash"
             if re.search(r"DFlash2 drafts for|drafter[^\n]*(DFlash|dflash)", log)

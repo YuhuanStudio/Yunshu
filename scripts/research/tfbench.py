@@ -32,7 +32,10 @@ TF = {
     "tf-old": "/Volumes/P5Plus/yunshu-test-envs/tensorfold-0.3.6.1/bin/tensorfold",
     "tf-new": "/Volumes/P5Plus/yunshu-test-envs/tensorfold-0.6.1/bin/tensorfold",
 }
-YUNSHU_BIN = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/yunshu"
+is_yunshu_command = bench_engines.is_yunshu_command
+yunshu_args = bench_engines.yunshu_args
+DEFAULT_YUNSHU_BIN = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/yunshu"
+YUNSHU_BIN = DEFAULT_YUNSHU_BIN
 YUNSHU_SRC = os.environ.get("TFB_YUNSHU_SRC", "")
 
 
@@ -253,12 +256,26 @@ class Srv:
                         "TFB_YUNSHU_SRC (pinned tree python/) is required"
                     )
                 env["PYTHONPATH"] = YUNSHU_SRC
-                cmd[0] = own_venv_bin(YUNSHU_SRC, "yunshu") or cmd[0]
+                own_py = own_venv_bin(YUNSHU_SRC, "python")
+                if own_py and bench_engines.is_yunshu_command(cmd):
+                    cmd = [
+                        own_py,
+                        "-m",
+                        bench_engines.YUNSHU_MODULE,
+                        *bench_engines.yunshu_args(cmd),
+                    ]
         elif engine == "yunshu":
             if YUNSHU_SRC:
                 env["PYTHONPATH"] = YUNSHU_SRC
+            own_py = own_venv_bin(YUNSHU_SRC, "python")
+            if own_py:
+                entry = [own_py, "-m", bench_engines.YUNSHU_MODULE]
+            elif YUNSHU_BIN != DEFAULT_YUNSHU_BIN:
+                entry = [YUNSHU_BIN]  # explicit launcher override (probes set it)
+            else:
+                entry = bench_engines.yunshu_entry(os.environ)
             cmd = [
-                own_venv_bin(YUNSHU_SRC, "yunshu") or YUNSHU_BIN,
+                *entry,
                 "serve",
                 "-m",
                 model or M,
