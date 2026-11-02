@@ -317,6 +317,18 @@ class Executor:
                 if not r.ok:
                     for k2, (j2, _a) in live.items():
                         if k2 != c.key and k2 not in results:
+                            # A sibling that already started keeps its result as evidence
+                            # for a resume; only work that has not started is dropped (18 of
+                            # 29 cancelled jobs had already finished, audit 2026-11-02).
+                            try:
+                                started = self.gq.job(j2).state in ("running", "done")
+                            except Exception:  # unknown: cancel as before
+                                started = False
+                            if started:
+                                results[k2] = self._finish(
+                                    next(x for x in batch if x.key == k2), j2, _a
+                                )
+                                continue
                             self.gq.cancel(j2)
                             self.run.append(
                                 c.stage,

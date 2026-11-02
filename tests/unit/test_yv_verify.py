@@ -543,14 +543,16 @@ def test_executor_failfast_and_failed_cell_costs_only_itself(world):
     rd, ex = mkexec(world)
     boom = "import sys;sys.exit(3)"
     res = ex.run_cells([cell("a", OK_BODY), cell("b", boom), cell("c", OK_BODY)])
-    assert res["a"].ok and not res["b"].ok and "c" not in res
-    assert any(
+    # c had already started (this fake queue runs at submit): it keeps its result
+    assert res["a"].ok and not res["b"].ok and res["c"].ok
+    assert not any(
         r.get("ev") == "cell_cancelled" and r["cell"] == "c" for r in rd.rows("st")
     )
-    # rerun: a is reused, b retried (now fine), c runs
+    # rerun: a and c are reused, only b is retried (now fine)
     rd2, ex2 = mkexec(world)
     res2 = ex2.run_cells([cell("a", OK_BODY), cell("b", OK_BODY), cell("c", OK_BODY)])
-    assert res2["a"].cached and res2["b"].ok and res2["c"].ok and not res2["b"].cached
+    assert res2["a"].cached and res2["c"].cached
+    assert res2["b"].ok and not res2["b"].cached
 
 
 def test_executor_fails_closed_without_complete_record(world):
@@ -2093,3 +2095,29 @@ def test_speed_ttft_jitter_and_single_rep_spikes_are_not_regressions():
     spike = [rows(dec=d) for d in (100.0, 100.0, 70.0)]
     flat = [rows(dec=100.0) for _ in range(3)]
     assert analyze.speed_compare(flat, spike)["ok"]  # one stalled rep cannot decide
+
+
+def test_a_failed_cell_keeps_started_siblings_results(world, monkeypatch):
+    """Audit 2026-11-02: a failing cell cancelled its whole batch, including 18 jobs that had
+    already finished; a started sibling now completes and keeps its result."""
+    from types import SimpleNamespace
+
+    from verify.execute import CellResult
+
+    _, ex = mkexec(world)
+    monkeypatch.setattr(ex, "_cached", lambda c: None)
+    monkeypatch.setattr(ex, "_shared", lambda c: None)
+    monkeypatch.setattr(ex, "_inflight", lambda c: None)
+    monkeypatch.setattr(ex, "_attempts", lambda c: 0)
+    monkeypatch.setattr(ex, "_submit", lambda c, attempt: c.key)
+    monkeypatch.setattr(
+        ex, "_finish", lambda c, jid, attempt: CellResult(c.key, c.key != "0")
+    )
+    states = {"1": "done", "2": "pending"}
+    monkeypatch.setattr(
+        ex.gq, "job", lambda jid: SimpleNamespace(state=states.get(jid, "pending"))
+    )
+    cancelled = []
+    monkeypatch.setattr(ex.gq, "cancel", cancelled.append)
+    results = ex.run_cells([Cell("st", str(i), []) for i in range(3)])
+    assert results["1"].ok and "1" not in cancelled and cancelled == ["2"]
