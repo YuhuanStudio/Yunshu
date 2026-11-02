@@ -914,6 +914,12 @@ def test_cli_and_ci_sandbox_commands_are_not_foreign_models():
     assert hit("/Users/u/Yunshu/.venv/bin/python -m yunshu_cli serve -m /models/27b")
     assert hit("/opt/homebrew/bin/yunshu serve -m qwen")
     assert hit("python -m mlx_lm.server --model x")
+    # a search or listing whose argv mentions a runtime is not one (audit 2026-11-02:
+    # 13 of 17 foreign-model hits were an agent's own grep)
+    assert not hit("grep -rlE (yunshu_cli\\.doctor|yunshu_cli\\.serve) python")
+    assert not hit("/usr/bin/grep -il mtp|mlx_vlm|flash_next scripts")
+    assert not hit("du -sg /Volumes/P5Plus/yunshu-test-envs/agentfail/bin/yunshu serve")
+    assert hit("uv run yunshu serve -m /models/27b")
 
 
 def test_large_host_swap_growth_during_job_latches_contended(monkeypatch, q):
