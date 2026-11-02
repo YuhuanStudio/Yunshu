@@ -638,6 +638,34 @@ def test_lone_row_copy_round_commits_past_32_tokens(target, monkeypatch):
     assert driver.accepted > 50
 
 
+def test_lone_row_64_row_round_near_max_tokens_stays_in_cache_buffers(
+    target, monkeypatch
+):
+    """reserve_decode only sets the growth step: a 64-row round starting with less than
+    64 tokens of room neither over-commits nor writes past the cache buffers."""
+    from yunshu_engine import tree_verify
+
+    prompt = list(range(4, 25))
+    for max_tokens in (40, 63, 64, 65):
+        ref, _ = _run(target, [prompt], draft=False, tokens=max_tokens)
+        tokens = [t for t, _ in ref[0]]
+        caps = []
+        _oracle_caps(monkeypatch, tokens, prompt, caps)
+        real, writes = tree_verify.compact_kv, []
+
+        def spy(caches, src, n0, m, real=real, writes=writes):
+            for c in caches:
+                writes.append((n0 + m, c.keys.shape[2]))
+            return real(caches, src, n0, m)
+
+        monkeypatch.setattr(tree_verify, "compact_kv", spy)
+        got, _ = _run(target, [prompt], draft=True, tokens=max_tokens)
+        assert got == ref
+        assert len(got[0]) <= max_tokens
+        assert max(caps) <= 63
+        assert all(end <= cap for end, cap in writes)
+
+
 def test_packed_rows_copy_round_keeps_32_row_budget(target, monkeypatch):
     from yunshu_engine.round_driver import dflash as rd
     from yunshu_engine.round_driver.driver import Request, RoundDriver
