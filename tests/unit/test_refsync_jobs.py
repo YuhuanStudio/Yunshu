@@ -84,8 +84,15 @@ def test_detect_mode_new_engines():
         "context: 5120; loaded in 17.8s)\n"
     )
     assert be.detect_mode("tf-native", tf120) == "dflash"
-    assert be.detect_mode("tf-native", tf120.replace("DFlash2 (", "copies only (")) is None
-    assert be.detect_mode("tf-native", "[tensorfold] serving X (drafts: off; context: 5120)") is None
+    assert (
+        be.detect_mode("tf-native", tf120.replace("DFlash2 (", "copies only (")) is None
+    )
+    assert (
+        be.detect_mode(
+            "tf-native", "[tensorfold] serving X (drafts: off; context: 5120)"
+        )
+        is None
+    )
 
 
 def test_corpus_short_reply_fails_closed(tmp_path, monkeypatch):
