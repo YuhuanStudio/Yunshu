@@ -42,7 +42,8 @@ def test_each_arm_runs_its_own_tfbench(tmp_path):
     argv = stages._tfbench_argv(ctx, "cand", "smoke", "cand", [])
     script = argv[argv.index(str(cand.path / "scripts/research/tfbench.py"))]
     assert script == str(cand.path / "scripts/research/tfbench.py")
-    assert str(stages.REPO) not in " ".join(argv)
+    # the interpreter may be the main venv; the benchmark script must be the arm's own
+    assert str(stages.REPO / "scripts/research/tfbench.py") not in " ".join(argv)
     base_argv = stages._tfbench_argv(ctx, "base", "smoke", "base", [])
     assert str(base.path / "scripts/research/tfbench.py") in base_argv
 
