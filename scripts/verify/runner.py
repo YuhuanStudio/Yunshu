@@ -79,6 +79,39 @@ def check_settings_env(tree, env: dict) -> None:
         raise InfraError(f"settings check failed in {tree}: {r.stderr.strip()[-400:]}")
 
 
+def check_base_ancestor(base: Arm, cand: Arm) -> None:
+    """The base must be an ancestor of the candidate: otherwise the A/B also measures the base's
+    commits the candidate lacks, reversed, as the candidate's change (postrel-016b, 2026-11-02:
+    a branch cut before the deferred decode-cache store read as +175% 8K warm TTFT against a
+    main that had it). Directory arms with uncommitted changes are checked by their HEAD."""
+    import subprocess
+
+    from .core import REPO
+
+    r = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", base.commit, cand.commit],
+        cwd=str(REPO),
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode == 0:
+        return
+    if r.returncode != 1:
+        raise InfraError(f"git merge-base failed: {r.stderr.strip()[:300]}")
+    missing = subprocess.run(
+        ["git", "rev-list", "--count", f"{cand.commit}..{base.commit}"],
+        cwd=str(REPO),
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    raise InfraError(
+        f"base {base.commit[:12]} is not an ancestor of cand {cand.commit[:12]}: the base has "
+        f"{missing or '?'} commit(s) the candidate lacks, and their effect would be read as the "
+        "candidate's. Rebase the candidate onto the base, pick the branch point as base, or pass "
+        "--base-not-ancestor-ok"
+    )
+
+
 def parse_kv(items: list) -> dict:
     out = {}
     for it in items or []:
@@ -141,6 +174,8 @@ def run_ab(
         )
         base = resolve_arm("base", a.base, trees)
         cand = resolve_arm("cand", a.cand, trees)
+        if not getattr(a, "base_not_ancestor_ok", False):
+            check_base_ancestor(base, cand)
         for arm, extra in ((base, base_env), (cand, cand_env)):
             check_settings_env(arm.path, {**env, **extra})
     except (ValueError, InfraError) as e:

@@ -2166,3 +2166,66 @@ def test_failure_reason_leads_with_the_real_error(world, monkeypatch):
     res = ex.run_cells([cell("a", "import sys;sys.exit(3)")])
     assert not res["a"].ok
     assert res["a"].reason.index("IndexError") < res["a"].reason.index("Killed")
+
+
+def test_base_must_be_an_ancestor_of_the_candidate(tmp_path, monkeypatch):
+    """postrel-016b (2026-11-02): a branch cut before a main fix was compared with a main that
+    had it, and the missing fix read as a +175% warm-TTFT regression of the candidate."""
+    import subprocess
+
+    from scripts.verify import core, runner
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    git(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "a",
+    )
+    root = git("rev-parse", "HEAD")
+    git("checkout", "-q", "-b", "side")
+    git(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "b",
+    )
+    side = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    git(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "c",
+    )
+    ahead = git("rev-parse", "HEAD")
+    monkeypatch.setattr(core, "REPO", tmp_path)
+
+    def arm(name, commit):
+        return core.Arm(name, commit, commit, tmp_path, "")
+
+    runner.check_base_ancestor(
+        arm("base", root), arm("cand", side)
+    )  # branch point: fine
+    with pytest.raises(core.InfraError, match="1 commit"):
+        runner.check_base_ancestor(arm("base", ahead), arm("cand", side))
