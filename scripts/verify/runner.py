@@ -38,6 +38,46 @@ from .execute import Executor
 from .suites import parse_suite
 from .verdict import build_verdict, render_md
 
+_CHECK_SETTINGS = (
+    "import sys\n"
+    "from yunshu_engine import settings\n"
+    "try:\n"
+    "    warnings = settings.validate(warn=False)\n"
+    "except settings.SettingError as e:\n"
+    "    print(e); sys.exit(3)\n"
+    "for w in warnings:\n"
+    "    print(w)\n"
+    "sys.exit(4 if warnings else 0)\n"
+)
+
+
+def check_settings_env(tree, env: dict) -> None:
+    """Every YUNSHU_* value a run passes is parsed by that arm's own settings registry on the
+    CPU before any GPU job: a bad value (YUNSHU_PLE_STORAGE=resident) or an unregistered name
+    used to surface only as a failed server start on the GPU (2026-11-02)."""
+    import subprocess
+
+    from .core import VENV_PY
+
+    yenv = {k: v for k, v in env.items() if k.startswith("YUNSHU_")}
+    if not yenv or not (Path(tree) / "python/yunshu_engine/settings.py").is_file():
+        return  # nothing to check, or a tree without the registry (older trees, fixtures)
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("YUNSHU_")}
+    clean.update(yenv, PYTHONPATH=str(Path(tree) / "python"))
+    r = subprocess.run(
+        [VENV_PY, "-c", _CHECK_SETTINGS],
+        env=clean,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if r.returncode in (3, 4):
+        raise InfraError(
+            f"settings rejected by {tree}: {(r.stdout or r.stderr).strip()}"
+        )
+    if r.returncode != 0:
+        raise InfraError(f"settings check failed in {tree}: {r.stderr.strip()[-400:]}")
+
 
 def parse_kv(items: list) -> dict:
     out = {}
@@ -101,6 +141,8 @@ def run_ab(
         )
         base = resolve_arm("base", a.base, trees)
         cand = resolve_arm("cand", a.cand, trees)
+        for arm, extra in ((base, base_env), (cand, cand_env)):
+            check_settings_env(arm.path, {**env, **extra})
     except (ValueError, InfraError) as e:
         print(f"yv: {e}")
         return 2
