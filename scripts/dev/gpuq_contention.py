@@ -508,6 +508,15 @@ class ContentionMonitor:
             self.cfg,
         )
         for reason in failures:
+            if reason.startswith("job_swap"):
+                # The job's OWN processes swapping is the engine's memory, not something
+                # else competing for the machine: rerunning cannot fix it (152 jobs and 725
+                # GPU-minutes were discarded and rerun for it, 10-23..11-02). Recorded for
+                # the memory review, never a contention verdict.
+                own = self.job.setdefault("own_memory_reasons", [])
+                if reason not in own:
+                    own.append(reason)
+                continue
             self.job["contended"] = True
             reasons = self.job.setdefault("contention_reasons", [])
             if reason not in reasons:

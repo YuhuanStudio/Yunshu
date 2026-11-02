@@ -139,7 +139,11 @@ def test_tree_peak_retained_after_child_exit_and_read_errors(tmp_path, monkeypat
         ),
     )
     m.record("start", 100)
-    assert job["job_swap_mb"] == 80 and "job_swap" in job["contention_reasons"]
+    # the job's own swap is recorded for the memory review, not a contention verdict
+    assert job["job_swap_mb"] == 80 and "job_swap" in job["own_memory_reasons"]
+    assert not job.get("contended") and "job_swap" not in job.get(
+        "contention_reasons", []
+    )
     m.sampler.owned = {10}
     m.record("poll", 102)
     assert job["job_swap_mb"] == 80
@@ -155,7 +159,8 @@ def test_tree_peak_retained_after_child_exit_and_read_errors(tmp_path, monkeypat
     m.record("poll", 104)
     assert (
         job["job_swap_mb"] is None
-        and "job_swap_unreadable" in job["contention_reasons"]
+        and "job_swap_unreadable" in job["own_memory_reasons"]
+        and not job.get("contended")
     )
 
 
