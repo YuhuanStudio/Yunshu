@@ -14,6 +14,7 @@ import contextlib
 import json
 import os
 import random
+import socket
 import subprocess
 import sys
 import threading
@@ -296,13 +297,28 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
         log.close()
 
 
+def free_port(first=18990, last=18999):
+    """The first free port of the shared test range, else any free one: a fixed port collided
+    with orphan servers and the arm died at start (Address already in use)."""
+    for p in range(first, last + 1):
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", p))
+            except OSError:
+                continue
+        return p
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", action="append", required=True, help="name=tree")
     ap.add_argument("--model", required=True)
     ap.add_argument(
-        "--port", type=int, default=18993
-    )  # 18997-18999 are the M3 forwards
+        "--port", type=int, default=0, help="0: a free port per arm run (the default)"
+    )
     ap.add_argument("--reps", type=int, default=2)
     ap.add_argument("--sizes", type=int, nargs="+", default=[8192, 32768, 98304])
     ap.add_argument("--out", required=True)
@@ -336,7 +352,8 @@ def main():
             rep = a.rep_offset + i
             order = arms if rep % 2 == 0 else arms[::-1]
             for name, tree in order:
-                run_arm(name, tree, a.model, a.port, rep, emit, arm_env.get(name))
+                port = a.port or free_port()
+                run_arm(name, tree, a.model, port, rep, emit, arm_env.get(name))
                 complete += 1
         emit(dict(complete=complete == a.reps * len(arms)))
 

@@ -20,6 +20,10 @@ from pathlib import Path
 
 _PY = re.compile(r"(^|/)python[\d.]*$")
 _ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# a value after a flag that names an output (may not exist yet): not an input path
+_OUTPUT_FLAG = re.compile(
+    r"out|log|save|dump|report|csv|jsonl|tee|cache", re.IGNORECASE
+)
 _MODEL_ROOTS = ("/Volumes/P5Plus/models/", "/Volumes/Micron/models/")
 
 
@@ -99,6 +103,18 @@ def preflight(cmd: list[str], cwd: str, env: dict[str, str]) -> list[str]:
             path = a if os.path.isabs(a) else os.path.join(cwd, a)
         if path and not os.path.exists(path):
             problems.append(f"model path does not exist: {a}")
+        elif i > 0:
+            # an absolute input path (prompt file, corpus, drafter dir) that is not there yet
+            flag, value = (rest[i - 1], a)
+            if a.startswith("--") and "=" in a:
+                flag, _, value = a.partition("=")
+            if (
+                value.startswith("/")
+                and not _OUTPUT_FLAG.search(flag)
+                and "{" not in value
+                and not os.path.exists(value)
+            ):
+                problems.append(f"input path does not exist: {value}")
     py, script, module = _python_target(rest)
     if py is None:
         exe = rest[0]

@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import socket
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -52,7 +53,20 @@ DEFAULT_STAGES = [
     "long",
 ]
 LONG_SUITE = "long"
-GATE_PORT = "18993"
+
+
+def _free_port(first: int = 18990, last: int = 18999) -> int:
+    """A free port of the shared test range at submit time, else any free one."""
+    for p in range(first, last + 1):
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", p))
+            except OSError:
+                continue
+        return p
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def local_env() -> dict:
@@ -324,7 +338,7 @@ def run_gate(
         job_env = {
             "STAGE": stage_sel,
             "OUT": str(out_dir),
-            "PORT": GATE_PORT,
+            "PORT": str(_free_port()),
             "PY": VENV_PY,
             "MMLU_DATA": str(
                 MAIN_CHECKOUT / "reference/omlx/omlx/eval/data/mmlu_pro_test.jsonl"

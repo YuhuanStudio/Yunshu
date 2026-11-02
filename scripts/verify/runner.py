@@ -246,6 +246,11 @@ def run_ab(
         run_dir=str(rd.path),
     )
     v["gpu_minutes"] = gpu_minutes(gq, v["jobs"])
+    # the tfbench each arm ran (its own commit's file), so a verdict names its harness
+    v["tfbench_sha256"] = {
+        arm.name: st._file_hash(arm.path / "scripts/research/tfbench.py")
+        for arm in (base, cand)
+    }
     write_json_atomic(rd.path / "verdict.json", v)
     (rd.path / "verdict.md").write_text(render_md(v))
     state.update(

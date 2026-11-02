@@ -30,7 +30,40 @@ from .core import sha as _sha
 from .execute import Cell, Executor
 from .snapshot import stage_snapshot
 
-TFBENCH = REPO / "scripts/research/tfbench.py"
+DRAFTER_27B = "/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2"
+
+
+def _hidden_size(path) -> int | None:
+    try:
+        cfg = json.loads((Path(path) / "config.json").read_text())
+    except (OSError, ValueError):
+        return None
+    for c in (cfg, cfg.get("text_config") or {}):
+        if c.get("hidden_size"):
+            return int(c["hidden_size"])
+    return None
+
+
+def default_drafter(model) -> str:
+    """Same rule as scripts/research/tfbench.py default_drafter (a parity test keeps them equal):
+    the 27B DFlash2 drafter only for a target of its hidden size; any other target: "mtp"."""
+    if model is None:
+        return DRAFTER_27B
+    want = _hidden_size(model)
+    return (
+        DRAFTER_27B if want is not None and want == _hidden_size(DRAFTER_27B) else "mtp"
+    )
+
+
+def tfbench_script(tree: Path) -> Path:
+    """The tfbench of one arm: the file at that arm's commit (its bench_engines and
+    gpuq_contention siblings come with it), never the main checkout's working copy."""
+    p = tree / "scripts/research/tfbench.py"
+    if not p.is_file():
+        raise InfraError(f"arm tree has no scripts/research/tfbench.py: {tree}")
+    return p
+
+
 MEMORY_AB = REPO / "scripts/research/memory_ab.py"
 PAIRED = REPO / "scripts/research/accuracy/paired_eval.py"
 PROMPTS = Path("/Volumes/P5Plus/yunshu-build/tfnew/prompts")
@@ -122,7 +155,7 @@ def _tfbench_argv(
         f"TFB_OUT={tfb_out}",
         f"TFB_PORT_LAST={PORT_LAST}",
         ctx.py,
-        str(TFBENCH),
+        str(tfbench_script(ctx.tree(arm).path)),
         "--engine",
         "yunshu",
         "--model",
@@ -213,6 +246,33 @@ def _failed_cells(results: dict) -> list:
     return [f"{k}: {r.reason}" for k, r in results.items() if not r.ok]
 
 
+# pytest for the related tests: no -x (every failure is collected), short summary of failures
+def _preflight_base_cmd(py: str) -> list:
+    return [
+        "nice",
+        "-n",
+        "15",
+        py,
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-rfE",
+    ]
+
+
+def _failed_test_ids(lines: list) -> list:
+    """Full ids of the FAILED / ERROR lines of a pytest short summary (order kept, no duplicates)."""
+    ids: list = []
+    for ln in lines:
+        if ln.startswith(("FAILED ", "ERROR ")):
+            tid = ln.split(" ", 1)[1].split(" - ")[0].strip()
+            if tid and tid not in ids:
+                ids.append(tid)
+    return ids
+
+
 # ── a. preflight (CPU only; no gpuq) ─────────────────────────────────────
 def stage_preflight(ctx: Ctx) -> StageResult:
     name, reasons, numbers = "preflight", [], {}
@@ -244,19 +304,7 @@ def stage_preflight(ctx: Ctx) -> StageResult:
     numbers.update(changed_files=len(changed), related_tests=len(tests))
     ctx.run.append(name, {"ev": "mapping", "changed": changed, "tests": tests})
     if not reasons and tests:
-        base_cmd = [
-            "nice",
-            "-n",
-            "15",
-            ctx.py,
-            "-m",
-            "pytest",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-            "-x",
-            "-rfE",
-        ]
+        base_cmd = _preflight_base_cmd(ctx.py)
         run_env = dict(env, PYTHONPATH=str(ctx.cand.path / "python"))
         workers = int(os.environ.get("YV_PREFLIGHT_WORKERS", "6"))
         has_xdist = workers > 1 and (
@@ -298,21 +346,60 @@ def stage_preflight(ctx: Ctx) -> StageResult:
             )
             out += r.stdout + r.stderr
             # 5 = nothing collected (no serial-marked test among the related ones)
-            if r.returncode not in (0, 5):
+            if r.returncode not in (0, 5) and rc == 0:
                 rc = r.returncode
-                break
-        r = subprocess.CompletedProcess(runs[-1], rc, out, "")
-        lines = (r.stdout + r.stderr).strip().splitlines()
-        # the failing test names first: log noise printed after a failure must not push them out of the record
-        failed = [ln for ln in lines if ln.startswith(("FAILED ", "ERROR "))][:20]
-        tail = "\n".join([*failed, *lines[-8:]])
+        lines = out.strip().splitlines()
+        failed = _failed_test_ids(lines)
+        flaky, still = [], failed
+        if rc != 0 and failed:
+            # every failure is named in full; each failed test gets one isolated rerun
+            rerun = subprocess.run(
+                [*_preflight_base_cmd(ctx.py), "-rA", *failed],
+                cwd=str(ctx.cand.path),
+                env=run_env,
+                capture_output=True,
+                text=True,
+                timeout=30 * 60,
+            )
+            passed = {
+                ln.split(" ", 1)[1].strip()
+                for ln in (rerun.stdout + rerun.stderr).splitlines()
+                if ln.startswith("PASSED ")
+            }
+            # an id the rerun did not report as passed (crash, skip, missing) still fails
+            flaky = [t for t in failed if t in passed]
+            still = [t for t in failed if t not in passed]
+            ctx.run.append(
+                name,
+                {
+                    "ev": "pytest_rerun",
+                    "rc": rerun.returncode,
+                    "flaky": flaky,
+                    "still": still,
+                },
+            )
+        tail = "\n".join(lines[-8:])
         ctx.run.append(
-            name, {"ev": "pytest", "rc": r.returncode, "tail": tail, "tests": tests}
+            name,
+            {
+                "ev": "pytest",
+                "rc": rc,
+                "failed": failed,
+                "flaky": flaky,
+                "tail": tail,
+                "tests": tests,
+            },
         )
-        numbers["pytest_rc"] = r.returncode
-        if r.returncode != 0:
+        numbers["pytest_rc"] = rc
+        if flaky:
+            numbers["flaky"] = flaky
+        if rc != 0 and not failed:
+            # nonzero exit with no failed test id to name (crash, internal error): fail closed
+            reasons.append(f"related unit tests failed (rc {rc}): {tail[-600:]}")
+        elif still:
             reasons.append(
-                f"related unit tests failed (rc {r.returncode}): {tail[-300:]}"
+                f"related unit tests failed (rc {rc}, {len(still)} still failing after isolated rerun): "
+                + "; ".join(f"FAILED {t}" for t in still)
             )
     elif not tests and any(f.endswith(".py") for f in changed):
         numbers["note"] = "no related unit tests found for the changed python files"
@@ -566,8 +653,9 @@ def _identity_cells(ctx: Ctx) -> list:
     return cells
 
 
-def _harness_hash() -> str:
-    return hashlib.sha256(TFBENCH.read_bytes()).hexdigest() if TFBENCH.exists() else ""
+def _harness_hash(tree: Path) -> str:
+    """Hash of the tfbench that the arm at ``tree`` runs (shares and verdicts key on it)."""
+    return _file_hash(tfbench_script(tree))
 
 
 def _file_hash(path: Path) -> str:
@@ -607,7 +695,7 @@ def _share_key(ctx: Ctx, arm: str, extra: dict, c, tag: str = "") -> str:
         _runtime_key(ctx, arm),
         tag,
         _dec_args(ctx, stage_logprobs=True),
-        _harness_hash(),
+        _harness_hash(ctx.tree(arm).path),
         os.environ.get("GPUQ_DEVICE", "m5"),
         n=24,
     )
@@ -741,14 +829,14 @@ def stage_apc(ctx: Ctx) -> StageResult:
             )
         per_mode[mode] = rows
     if not any(per_mode.values()):
-        return _finish(
-            ctx,
-            StageResult(
-                "apc",
-                False,
-                ["no candidate identity evidence (run the identity stage)"],
-            ),
-        )
+        # identity ran and failed (its cell evidence is partial) or never ran: say which
+        ident = [r for r in ctx.run.rows("identity") if r.get("ev") == "stage_complete"]
+        if ident and ident[-1].get("status") != "PASS":
+            why = "; ".join(map(str, ident[-1].get("reasons") or []))[:600]
+            reason = f"identity stage failed, apc not evaluated: {why}"
+        else:
+            reason = "no candidate identity evidence (identity stage not run)"
+        return _finish(ctx, StageResult("apc", False, [reason]))
     reasons, compared, hits = [], 0, []
     for mode, rows in per_mode.items():
         if not rows:
@@ -954,7 +1042,7 @@ def _speed_cells(ctx: Ctx, rep: int, units: list, only: set | None = None) -> li
                         _runtime_key(ctx, "base"),
                         _dec_args(ctx),
                         rep,
-                        _harness_hash(),
+                        _harness_hash(ctx.base.path),
                     )
                     if arm == "base" and cfg.get("reuse_base_speed") and only is None
                     else "",
@@ -1097,8 +1185,6 @@ def stage_memory(ctx: Ctx) -> StageResult:
                         ),
                         "--model",
                         ctx.model,
-                        "--port",
-                        "18993",
                         "--reps",
                         "1",
                         "--rep-offset",
@@ -1183,7 +1269,7 @@ def _longqa_share_key(ctx: Ctx, arm: str, c: int, lo: int, hi: int) -> str:
         hi,
         _prompt_hashes([c], ["prose"]),
         _runtime_key(ctx, "base"),
-        _harness_hash(),
+        _harness_hash(ctx.base.path),
         os.environ.get("GPUQ_DEVICE", "m5"),
         n=24,
     )
@@ -2715,9 +2801,20 @@ def stage_lane_bandwidth(ctx: Ctx) -> StageResult:
     """Candidate-only in-graph projection bandwidth; no end-to-end speed verdict."""
     name = "lane_bandwidth"
     script = ctx.cand.path / "scripts/research/probe_lane_bandwidth.py"
-    draft = ctx.env.get(
-        "YUNSHU_VLM_DRAFT", "/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2"
-    )
+    draft = ctx.env.get("YUNSHU_VLM_DRAFT") or default_drafter(ctx.model)
+    if draft == "mtp" or not Path(draft).is_dir():
+        # the probe needs a drafter directory; a target that drafts with its own MTP head has none
+        return _finish(
+            ctx,
+            StageResult(
+                name,
+                False,
+                [
+                    f"no drafter directory for {ctx.model_name}: lane bandwidth probes a DFlash "
+                    f"drafter (got {draft!r}); this target drafts with its MTP head"
+                ],
+            ),
+        )
     cell = Cell(
         name,
         "cand",
