@@ -91,9 +91,20 @@ def test_top_level_await_and_stderr(env):
     assert r.stdout == "b\n" and r.stderr == "a\n"
 
 
-def test_timeout_restarts_a_clean_process_and_kills_the_group(env, monkeypatch):
+def orphan_marker(tmp_path) -> str:
+    """A per-test path for the orphan report: a fixed /tmp name is shared by every run."""
+    return str(tmp_path / "yunshu-repl-orphan-marker")
+
+
+def test_orphan_marker_is_under_the_test_tmp_dir(tmp_path):
+    assert orphan_marker(tmp_path).startswith(str(tmp_path) + os.sep)
+
+
+def test_timeout_restarts_a_clean_process_and_kills_the_group(
+    env, monkeypatch, tmp_path
+):
     monkeypatch.setenv("YUNSHU_CODE_EXECUTION_TIMEOUT", "2")
-    marker = "/tmp/yunshu-repl-orphan-marker"
+    marker = orphan_marker(tmp_path)
     a, b, c = session_run(
         env,
         [
