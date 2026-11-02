@@ -217,6 +217,61 @@ class ConstraintProcessor:
         return self._mask(logits)
 
 
+def store_reply_cache(coordinator, caches, ids, generated, salt: int) -> None:
+    """Store the cache a reply was decoded into, keyed by the prompt plus the tokens it holds:
+    a follow-up that repeats the conversation then prefills only its new message
+    (YUNSHU_NEXT_TURN_PREFILL=decode, user 2026-11-02). Fewer stored tokens than the cache
+    holds never happens; a cache that disagrees with the emitted tokens is not stored."""
+
+    def held_rows(c) -> int | None:
+        # KVCache: an int offset; the lane's single-row BatchKVCache: _idx past its left padding
+        if getattr(c, "keys", None) is None:
+            return None
+        idx = getattr(c, "_idx", None)
+        pad = getattr(c, "left_padding", None)
+        if idx is not None and pad is not None:
+            return int(idx) - int(pad.reshape(-1)[0].item())
+        off = getattr(c, "offset", None)
+        if off is None:
+            return None
+        return int(off) if isinstance(off, int) else int(off.reshape(-1)[0].item())
+
+    offsets = {n for n in (held_rows(c) for c in caches) if n is not None}
+    tokens = list(ids) + list(generated)
+    if len(offsets) != 1:
+        logger.info(
+            "decode cache not stored: attention caches hold %s rows", sorted(offsets)
+        )
+        return
+    held = offsets.pop()
+    if not len(ids) < held <= len(tokens):
+        logger.info(
+            "decode cache not stored: %d rows held for %d prompt + %d reply tokens",
+            held,
+            len(ids),
+            len(generated),
+        )
+        return
+    store = getattr(coordinator, "store_decode_tail", None)
+    if store is None:
+        logger.info("decode cache not stored: the APC has no reply-cache store")
+        return
+    stored = store(tokens[:held], caches, extra_hash=salt)
+    window = False
+    if stored:
+        from . import dflash_apc_window
+
+        # the drafter's context window that ends at this cache (DFlash lane)
+        window = dflash_apc_window.store_decode_window(tokens[:held], salt)
+    logger.info(
+        "decode cache %s for the next turn: %d prompt + %d reply tokens (drafter window %s)",
+        "stored" if stored else "not stored",
+        len(ids),
+        held - len(ids),
+        "stored" if window else "none",
+    )
+
+
 def _row_fault(job: Any) -> BaseException | None:
     """The grammar dead end an isolated processor recorded for this row, if any."""
     for proc in getattr(job, "processors", None) or ():
@@ -1613,6 +1668,7 @@ class VLMBatchRunner:
                 )
             driver = self._aux_driver
         job.driver = driver
+        driver.finish_hook = self._driver_store_decode
         vocab = getattr(self.drafter, "_draft_vocab", None)
         if vocab is not None and driver.can_draft:
             # The reduced draft readout must cover this prompt's ids (the lane sets it at
@@ -1834,66 +1890,52 @@ class VLMBatchRunner:
 
     @staticmethod
     def _store_decode_cache(group: _Group, job: _Job) -> None:
-        """Store the cache the reply was decoded into, keyed by the prompt plus the tokens it holds:
-        a follow-up that repeats the conversation then prefills only its new message
-        (YUNSHU_NEXT_TURN_PREFILL=decode, user 2026-11-02). Fewer stored tokens than the cache
-        holds never happens; a cache that disagrees with the emitted tokens is not stored."""
+        """The speculative lane's reply cache (see ``store_reply_cache``)."""
         from .spec_release import finished_caches
 
         coordinator = getattr(group.gen, "apc", None)
         if coordinator is None or not job.generated:
             logger.info("decode cache not stored: no APC or no reply tokens")
             return
-        caches = finished_caches(group.gen, group.last_caches)
+        store_reply_cache(
+            coordinator,
+            finished_caches(group.gen, group.last_caches),
+            job.ids,
+            job.generated,
+            int(job.apc_salt or 0),
+        )
 
-        def held_rows(c) -> int | None:
-            # KVCache: an int offset; the lane's single-row BatchKVCache: _idx past its left padding
-            if getattr(c, "keys", None) is None:
-                return None
-            idx = getattr(c, "_idx", None)
-            pad = getattr(c, "left_padding", None)
-            if idx is not None and pad is not None:
-                return int(idx) - int(pad.reshape(-1)[0].item())
-            off = getattr(c, "offset", None)
-            if off is None:
-                return None
-            return int(off) if isinstance(off, int) else int(off.reshape(-1)[0].item())
-
-        offsets = {n for n in (held_rows(c) for c in caches) if n is not None}
-        tokens = list(job.ids) + list(job.generated)
-        if len(offsets) != 1:
+    def _driver_store_decode(self, row: Any) -> None:
+        """Round driver hook: the last row of a driver leaves finished, its K/V still in its own
+        caches. Same store as the speculative lane's ``_finish`` (the driver's rows never reach it)."""
+        job = row.req.handle
+        if (
+            settings.get("YUNSHU_NEXT_TURN_PREFILL") != "decode"
+            or row.apc is None
+            or not row.req.use_apc
+        ):
+            return
+        reason = "length" if row.generated >= row.req.max_tokens else "stop"
+        skip = [
+            why
+            for why, bad in (
+                ("cache_store off", not row.req.cache_store),
+                ("overflowed", bool(getattr(job, "overflowed", False))),
+                ("MTP batch row", row.cache is None),
+            )
+            if bad
+        ]
+        if skip:
             logger.info(
-                "decode cache not stored: attention caches hold %s rows",
-                sorted(offsets),
+                "decode cache not stored: %s (finish %s)", ", ".join(skip), reason
             )
             return
-        held = offsets.pop()
-        if not len(job.ids) < held <= len(tokens):
-            logger.info(
-                "decode cache not stored: %d rows held for %d prompt + %d reply tokens",
-                held,
-                len(job.ids),
-                len(job.generated),
-            )
+        generated = row.context[len(row.req.ids) :]
+        if not generated:
+            logger.info("decode cache not stored: no reply tokens")
             return
-        store = getattr(coordinator, "store_decode_tail", None)
-        if store is None:
-            logger.info("decode cache not stored: the APC has no reply-cache store")
-            return
-        salt = int(job.apc_salt or 0)
-        stored = store(tokens[:held], caches, extra_hash=salt)
-        window = False
-        if stored:
-            from . import dflash_apc_window
-
-            # the drafter's context window that ends at this cache (DFlash lane)
-            window = dflash_apc_window.store_decode_window(tokens[:held], salt)
-        logger.info(
-            "decode cache %s for the next turn: %d prompt + %d reply tokens (drafter window %s)",
-            "stored" if stored else "not stored",
-            len(job.ids),
-            held - len(job.ids),
-            "stored" if window else "none",
+        store_reply_cache(
+            row.apc, list(row.cache), row.req.ids, generated, int(row.salt or 0)
         )
 
     @staticmethod

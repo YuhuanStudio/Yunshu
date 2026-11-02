@@ -10,11 +10,18 @@ from __future__ import annotations
 import logging
 import time
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import mlx.core as mx
 
-from .. import dflash_ring, dflash_tree, keyed_sampling, tree_verify
+from .. import (
+    dflash_apc_window,
+    dflash_ring,
+    dflash_tree,
+    keyed_sampling,
+    settings,
+    tree_verify,
+)
 from ..copy_drafter import CopyDrafter
 from ..dflash_context import context_window
 from ..dflash_fast import Verifier, pack_readback, prepare, unpack_readback
@@ -56,6 +63,10 @@ class DFlashBatch:
         self.rows = []
         self.stats = {}
         self.hidden = {}
+        # YUNSHU_NEXT_TURN_PREFILL=decode: id(row) -> DecodeTail (the drafter window ending at the
+        # row's cache), and the GPU-walked rounds' padded captured rows
+        self.tails: dict[int, Any] = {}
+        self.walk_rows: dict[int, Any] = {}
         self.rings = {}
         self.copiers = {}
         # A lone drafting row's next lattice, queued behind its verify before the host readback
@@ -127,6 +138,13 @@ class DFlashBatch:
                 tree_verify.reserve_decode(row.cache, row.req.max_tokens + 32)
                 continue
             hidden = self.hidden.pop(id(row), None)
+            if (
+                hidden is not None
+                and settings.get("YUNSHU_NEXT_TURN_PREFILL") == "decode"
+            ):
+                self.tails[id(row)] = dflash_apc_window.DecodeTail(
+                    hidden, row.n, self.keep, len(self.capture_ids)
+                )
             ring = dflash_ring.Ring(self.draft, self.keep + 64, self.keep)
             count = 0 if hidden is None else int(hidden.shape[1])
             # Window-relative drafter positions, like the lane's ring: RoPE only needs
@@ -146,6 +164,24 @@ class DFlashBatch:
             self.rows.append(row)
             tree_verify.reserve_decode(row.cache, row.req.max_tokens + 32)
 
+    def finish_tail(self, row) -> None:
+        """A finished row's drafter window, held for ``store_decode_window`` (None: no window)."""
+        dflash_apc_window.finish_decode(self.tails.get(id(row)))
+
+    def _tail_add(self, r, res, kept, used: int) -> None:
+        tail = self.tails.get(id(r))
+        if tail is None:
+            return
+        if (
+            kept is None
+        ):  # a GPU-walked row: the padded path rows, the first ``used`` valid
+            rows = self.walk_rows.pop(id(r))[:, :used]
+        else:
+            rows = mx.concatenate(res.captured, axis=-1)[
+                :, mx.array(kept, dtype=mx.int32)
+            ]
+        tail.add(rows, used)
+
     def leave(self, rows):
         gone = {id(r) for r in rows}
         self.rows = [r for r in self.rows if id(r) not in gone]
@@ -154,6 +190,8 @@ class DFlashBatch:
             self.rings.pop(id(row), None)
             self.copiers.pop(id(row), None)
             self.hidden.pop(id(row), None)
+            self.tails.pop(id(row), None)
+            self.walk_rows.pop(id(row), None)
             self.prebuilt.pop(id(row), None)
             self.budgets.pop(id(row), None)
 
@@ -424,6 +462,7 @@ class DFlashBatch:
                         observe(st, max(0, used - 1), n)
                 if vocab is not None:
                     vocab.learn(committed[:used])
+                self._tail_add(r, res, None if b in gpu_walked else kept, used)
                 if b in gpu_walked:
                     if not r.finished and used != len(path):
                         # only a stop / length cut ends a walked row's path early (rows with a
@@ -502,6 +541,8 @@ class DFlashBatch:
         ring = self.rings[id(r)]
         rows_g = mx.take(mx.concatenate(res.captured, axis=-1), path_g, axis=1)
         ring.append(self.draft, rows_g, count_g)
+        if id(r) in self.tails:
+            self.walk_rows[id(r)] = rows_g
         lat = dflash_tree.lattice_from_hidden(
             self.draft,
             dflash_ring.draft_hidden(self.draft, ring, bonus_g, 15),

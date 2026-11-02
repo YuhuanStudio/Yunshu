@@ -246,6 +246,9 @@ class RoundDriver:
         self.long_from = LONG_FROM if self.chunk == CHUNK else 1 << 60
         self.long_chunk = LONG_CHUNK
 
+        # called with the last finished row before its K/V goes to the restore pool (the runner
+        # stores the reply's decode cache there)
+        self.finish_hook: Any = None
         self.model = model
         self.lm = model.language_model if hasattr(model, "language_model") else model
         # Placeholder ids of image / video / audio tokens (APC never cuts or restores across them)
@@ -645,7 +648,16 @@ class RoundDriver:
             # (restore writes into a pooled buffer instead of allocating a context-sized one).
             from ..kernels import buffer_cache
 
-            buffer_cache.offer_restore_buffers(gone[0].cache)
+            row = gone[0]
+            if row.finished and self.finish_hook is not None:
+                # the reply's cache is complete here: the runner stores it for the next turn
+                if self.dflash is not None:
+                    self.dflash.finish_tail(row)
+                try:
+                    self.finish_hook(row)
+                except Exception:
+                    logger.warning("decode cache store failed", exc_info=True)
+            buffer_cache.offer_restore_buffers(row.cache)
         if any(r.slot is not None for r in gone):
             self.batch.leave([r for r in gone if r.slot is not None])
         if self.head is not None and any(r.hslot is not None for r in gone):

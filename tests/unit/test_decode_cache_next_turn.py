@@ -104,3 +104,44 @@ def test_a_reply_whose_consumer_closed_after_the_last_token_is_still_stored():
     group.jobs = {2: object()}
     job.overflowed = False
     assert VLMBatchRunner._decode_store_skip(group, job, "stop") == ["other rows"]
+
+
+def test_round_driver_last_finished_row_stores_its_reply_cache():
+    """The round driver's rows never reach the runner's _finish: its hook stores the reply cache."""
+    from yunshu_engine.round_driver.driver import RoundDriver
+
+    coord = _Coord()
+    row = SimpleNamespace(
+        req=SimpleNamespace(
+            ids=[1, 2, 3, 4],
+            handle=_job([], []),
+            cache_store=True,
+            use_apc=True,
+            max_tokens=9,
+        ),
+        apc=coord,
+        cache=[_KV(6), object()],
+        context=[1, 2, 3, 4, 10, 11, 12],
+        generated=3,
+        salt=5,
+        finished=True,
+        slot=None,
+        hslot=None,
+    )
+    runner = VLMBatchRunner.__new__(VLMBatchRunner)
+    drv = RoundDriver.__new__(RoundDriver)
+    drv.rows, drv.head, drv.dflash = [], None, None
+    drv.finish_hook = runner._driver_store_decode
+    drv._release([row])
+    assert coord.calls == [([1, 2, 3, 4, 10, 11], 5)]
+
+    # a cancelled row (not finished) and a cache_store-off row store nothing
+    for tweak in ({"finished": False}, {"req_store": False}):
+        coord.calls.clear()
+        r2 = SimpleNamespace(**{**row.__dict__})
+        if "finished" in tweak:
+            r2.finished = False
+        else:
+            r2.req = SimpleNamespace(**{**row.req.__dict__, "cache_store": False})
+        drv._release([r2])
+        assert coord.calls == []
