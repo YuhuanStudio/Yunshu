@@ -2062,3 +2062,21 @@ def test_related_tests_skip_agent_task_fixtures(tmp_path):
         tmp_path,
     )
     assert got == ["tests/unit/test_x.py"]
+
+
+def test_a_failed_job_is_not_rerun_as_interrupted_timing(world, monkeypatch):
+    """A job that failed (server exited early) but carried a contention flag was rerun as
+    "timing interrupted" (60 reruns in 10 days, audit 2026-11-02); only a finished job's
+    timing can have been interrupted."""
+    from types import SimpleNamespace
+
+    _, ex = mkexec(world)
+    failed = SimpleNamespace(id="j1", state="failed", rc=1, contended=True, d={})
+    monkeypatch.setattr(ex.gq, "wait", lambda jid: failed)
+    monkeypatch.setattr(ex.gq, "log_tail", lambda jid, n: "server exited early")
+    r = ex._finish(Cell("st", "k", [], quiet=True), "j1", 1)
+    assert not r.ok and not r.contended
+    done = SimpleNamespace(id="j2", state="done", rc=0, contended=True, d={})
+    monkeypatch.setattr(ex.gq, "wait", lambda jid: done)
+    r2 = ex._finish(Cell("st", "k2", [], quiet=True, needs_out=False), "j2", 1)
+    assert not r2.ok and r2.contended

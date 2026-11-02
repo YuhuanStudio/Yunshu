@@ -256,7 +256,10 @@ class Executor:
             reason,
             j.id,
             final if ok and cell.needs_out else None,
-            j.contended,
+            # only a job that finished can have had its timing interrupted: a failed one
+            # (server exited early, rc != 0) is a failure, rerunning it changes nothing
+            # (60 such reruns in 10 days, audit 2026-11-02)
+            bool(j.contended) and j.state == "done" and j.rc == 0,
         )
 
     # -- API
