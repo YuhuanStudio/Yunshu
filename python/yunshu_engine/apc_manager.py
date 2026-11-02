@@ -1111,10 +1111,44 @@ class _Coordinator(APCCoordinator):
             del lengths[:-64]
         return True
 
+    def offer_standing(self, token_ids, rows, *, extra_hash=0) -> None:
+        """The last reply's live cache (a single-row snapshot viewing its buffers), handed
+        to the next lookup that extends it: TensorFold's standing slot (qwen27_resume.zig),
+        the follow-up resumes in place with no store copy and no restore copy."""
+        self._standing = (tuple(map(int, token_ids)), rows, int(extra_hash))
+
+    def take_standing(self):
+        standing = self.__dict__.pop("_standing", None)
+        return standing
+
     def _lookup_decode_tail(self, token_ids, **kwargs):
         """The longest stored reply cache that is a prefix of this prompt, or None."""
-        tails = self.manager.__dict__.get("_decode_tail_lengths", {})
         extra_hash = int(kwargs.get("extra_hash", 0) or 0)
+        standing = self.__dict__.get("_standing")
+        if standing is not None:
+            tokens, rows, salt = standing
+            n = len(tokens)
+            if (
+                salt == extra_hash
+                and n < len(token_ids)
+                and tuple(token_ids[:n]) == tokens
+                and kwargs["suffix_is_text_only"](n)
+            ):
+                self._standing = None
+                with self.manager.lock:
+                    self.manager.stats.hits += 1
+                    self.manager.stats.matched_tokens += n
+                logger.info(
+                    "APC: resumed the standing reply cache in place (%d tokens)", n
+                )
+                return {
+                    "matched_blocks": [],
+                    "warm_cache": rows,
+                    "prefix_len": n,
+                    "extra_hash": extra_hash,
+                    "full_input_ids": list(token_ids),
+                }
+        tails = self.manager.__dict__.get("_decode_tail_lengths", {})
         for n in sorted(tails.get(extra_hash, ()), reverse=True):
             if n >= len(token_ids) or not kwargs["suffix_is_text_only"](n):
                 continue

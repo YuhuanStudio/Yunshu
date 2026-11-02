@@ -1115,7 +1115,10 @@ class VLMBatchRunner:
         from .mrope import clear_rope_state
 
         if self._decode_follows(job):
-            self._flush_decode_cache()  # before this follow-up looks up its prefix
+            # before this follow-up looks up its prefix: resume in place when the cache can
+            # stand, else copy it into the APC as before
+            if not self._stand_decode_cache():
+                self._flush_decode_cache()
 
         # A busy lane changes this admission, not the row's eventual eligibility.
         # In particular, the shared batch installs a ToolCallProcessor while the
@@ -1580,8 +1583,8 @@ class VLMBatchRunner:
 
     @staticmethod
     def _store_decode_cache(
-        group: _Group, job: _Job, caches=None, window_tail=None
-    ) -> None:
+        group: _Group, job: _Job, caches=None, window_tail=None, stand=False
+    ) -> bool:
         """Store the cache the reply was decoded into, keyed by the prompt plus the tokens it holds:
         a follow-up that repeats the conversation then prefills only its new message
         (YUNSHU_NEXT_TURN_PREFILL=decode, user 2026-11-02). Fewer stored tokens than the cache
@@ -1591,7 +1594,7 @@ class VLMBatchRunner:
         coordinator = getattr(group.gen, "apc", None)
         if coordinator is None or not job.generated:
             logger.info("decode cache not stored: no APC or no reply tokens")
-            return
+            return False
         if caches is None:
             caches = finished_caches(group.gen, group.last_caches)
 
@@ -1615,7 +1618,7 @@ class VLMBatchRunner:
                 "decode cache not stored: attention caches hold %s rows",
                 sorted(offsets),
             )
-            return
+            return False
         held = offsets.pop()
         if not len(job.ids) < held <= len(tokens):
             logger.info(
@@ -1624,12 +1627,36 @@ class VLMBatchRunner:
                 len(job.ids),
                 len(job.generated),
             )
-            return
+            return False
+        salt = int(job.apc_salt or 0)
+        if stand:
+            # the follow-up is admitted now: hand it the live cache (no copies)
+            offer = getattr(coordinator, "offer_standing", None)
+            if offer is None:
+                return False
+            from mlx_vlm.apc import snapshot_prompt_cache_row
+
+            from . import dflash_apc_window
+
+            rows = snapshot_prompt_cache_row(caches, 0, clone=False)
+            if rows is None:
+                return False
+            offer(tokens[:held], rows, extra_hash=salt)
+            window = dflash_apc_window.store_decode_window(
+                tokens[:held], salt, tail=window_tail
+            )
+            logger.info(
+                "decode cache standing for its follow-up: %d prompt + %d reply tokens "
+                "(drafter window %s)",
+                len(job.ids),
+                held - len(job.ids),
+                "stored" if window else "none",
+            )
+            return True
         store = getattr(coordinator, "store_decode_tail", None)
         if store is None:
             logger.info("decode cache not stored: the APC has no reply-cache store")
-            return
-        salt = int(job.apc_salt or 0)
+            return False
         t0 = time.perf_counter()
         stored = store(tokens[:held], caches, extra_hash=salt)
         t1 = time.perf_counter()
@@ -1652,6 +1679,7 @@ class VLMBatchRunner:
             (t1 - t0) * 1000,
             (t2 - t1) * 1000,
         )
+        return bool(stored)
 
     def _decode_pending_job(self):
         pending = self.__dict__.get("_decode_pending")
@@ -1675,6 +1703,9 @@ class VLMBatchRunner:
 
             with contextlib.suppress(Exception):
                 offer_restore_buffers(old[2])
+        coordinator = getattr(group.gen, "apc", None)
+        if coordinator is not None and hasattr(coordinator, "take_standing"):
+            coordinator.take_standing()  # a standing cache its follow-up never claimed
         caches = finished_caches(group.gen, group.last_caches)
         pending = (group, job, list(caches), dflash_apc_window.take_decode_tail())
         self._decode_pending = pending
@@ -1705,6 +1736,24 @@ class VLMBatchRunner:
 
             with contextlib.suppress(Exception):
                 offer_restore_buffers(caches)
+
+    def _stand_decode_cache(self) -> bool:
+        """Hand the held reply's cache to its follow-up's lookup as is (TensorFold's standing
+        slot): no APC store copy, no restore copy. Its buffers then belong to the follow-up,
+        so they are not offered back to the restore pool."""
+        pending = self.__dict__.pop("_decode_pending", None)
+        if pending is None:
+            return False
+        group, job, caches, tail = pending
+        try:
+            if self._store_decode_cache(
+                group, job, caches=caches, window_tail=tail, stand=True
+            ):
+                return True
+        except Exception:  # fall back to the copy
+            logger.warning("standing decode cache failed", exc_info=True)
+        self._decode_pending = pending
+        return False
 
     def _decode_follows(self, job: _Job) -> bool:
         """``job`` continues the held reply (its prompt holds the reply's first token)."""
