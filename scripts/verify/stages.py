@@ -741,14 +741,14 @@ def stage_apc(ctx: Ctx) -> StageResult:
             )
         per_mode[mode] = rows
     if not any(per_mode.values()):
-        return _finish(
-            ctx,
-            StageResult(
-                "apc",
-                False,
-                ["no candidate identity evidence (run the identity stage)"],
-            ),
-        )
+        # identity ran and failed (its cell evidence is partial) or never ran: say which
+        ident = [r for r in ctx.run.rows("identity") if r.get("ev") == "stage_complete"]
+        if ident and ident[-1].get("status") != "PASS":
+            why = "; ".join(map(str, ident[-1].get("reasons") or []))[:600]
+            reason = f"identity stage failed, apc not evaluated: {why}"
+        else:
+            reason = "no candidate identity evidence (identity stage not run)"
+        return _finish(ctx, StageResult("apc", False, [reason]))
     reasons, compared, hits = [], 0, []
     for mode, rows in per_mode.items():
         if not rows:
