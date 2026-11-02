@@ -1114,6 +1114,9 @@ class VLMBatchRunner:
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state
 
+        if self._decode_follows(job):
+            self._flush_decode_cache()  # before this follow-up looks up its prefix
+
         # A busy lane changes this admission, not the row's eventual eligibility.
         # In particular, the shared batch installs a ToolCallProcessor while the
         # same advanced guide can later continue on a lone speculative lane.
@@ -1520,8 +1523,8 @@ class VLMBatchRunner:
                 else:
                     self._cleanup_step(
                         job,
-                        "store_decode_cache",
-                        lambda: self._store_decode_cache(group, job),
+                        "defer_decode_cache",
+                        lambda: self._defer_decode_cache(group, job),
                     )
             self._cleanup_step(
                 job,
@@ -1537,7 +1540,10 @@ class VLMBatchRunner:
                     # release
                     offer_restore_buffers(finished_caches(group.gen, group.last_caches))
 
-                self._cleanup_step(job, "offer_restore_buffers", _offer)
+                if self._decode_pending_job() is not job:
+                    # a deferred decode-cache store still reads these buffers; they are
+                    # offered once it has run (_flush_decode_cache)
+                    self._cleanup_step(job, "offer_restore_buffers", _offer)
             if not group.jobs:
                 group.last_caches = None
         finally:
@@ -1573,7 +1579,9 @@ class VLMBatchRunner:
                 oldest.handoff_graced = True
 
     @staticmethod
-    def _store_decode_cache(group: _Group, job: _Job) -> None:
+    def _store_decode_cache(
+        group: _Group, job: _Job, caches=None, window_tail=None
+    ) -> None:
         """Store the cache the reply was decoded into, keyed by the prompt plus the tokens it holds:
         a follow-up that repeats the conversation then prefills only its new message
         (YUNSHU_NEXT_TURN_PREFILL=decode, user 2026-11-02). Fewer stored tokens than the cache
@@ -1584,7 +1592,8 @@ class VLMBatchRunner:
         if coordinator is None or not job.generated:
             logger.info("decode cache not stored: no APC or no reply tokens")
             return
-        caches = finished_caches(group.gen, group.last_caches)
+        if caches is None:
+            caches = finished_caches(group.gen, group.last_caches)
 
         def held_rows(c) -> int | None:
             # KVCache: an int offset; the lane's single-row BatchKVCache: _idx past its left padding
@@ -1629,7 +1638,9 @@ class VLMBatchRunner:
             from . import dflash_apc_window
 
             # the drafter's context window that ends at this cache (DFlash lane)
-            window = dflash_apc_window.store_decode_window(tokens[:held], salt)
+            window = dflash_apc_window.store_decode_window(
+                tokens[:held], salt, tail=window_tail
+            )
         t2 = time.perf_counter()
         logger.info(
             "decode cache %s for the next turn: %d prompt + %d reply tokens (drafter window "
@@ -1641,6 +1652,68 @@ class VLMBatchRunner:
             (t1 - t0) * 1000,
             (t2 - t1) * 1000,
         )
+
+    def _decode_pending_job(self):
+        pending = self.__dict__.get("_decode_pending")
+        return pending[1] if pending is not None else None
+
+    def _defer_decode_cache(self, group: _Group, job: _Job) -> None:
+        """Hold the finished reply's cache instead of copying it into the APC now: the copy
+        (~45 ms at 8K) ran ahead of whatever request came next, so the same prompt sent again
+        waited for it (8K warm TTFT 20 -> 58 ms). It is stored when the next request is this
+        conversation's follow-up (before its lookup) or when the runner goes idle."""
+        from . import dflash_apc_window
+        from .spec_release import finished_caches
+
+        old = self.__dict__.pop("_decode_pending", None)
+        if old is not None:
+            # A newer reply finished before the runner went idle: its store would land in
+            # front of the next request too, so the older one is dropped (that conversation
+            # re-prefills its reply if it continues).
+            logger.info("decode cache not stored: superseded by a newer reply")
+            from .kernels.buffer_cache import offer_restore_buffers
+
+            with contextlib.suppress(Exception):
+                offer_restore_buffers(old[2])
+        caches = finished_caches(group.gen, group.last_caches)
+        pending = (group, job, list(caches), dflash_apc_window.take_decode_tail())
+        self._decode_pending = pending
+        executor = getattr(self, "_executor", None)
+        if executor is None:
+            return
+        import threading
+
+        def _schedule() -> None:
+            with contextlib.suppress(RuntimeError):  # the executor shut down meanwhile
+                executor.submit(self._flush_decode_cache_if_idle, pending)
+
+        timer = threading.Timer(DECODE_STORE_IDLE_S, _schedule)
+        timer.daemon = True
+        timer.start()
+
+    def _flush_decode_cache(self) -> None:
+        pending = self.__dict__.pop("_decode_pending", None)
+        if pending is None:
+            return
+        group, job, caches, tail = pending
+        try:
+            self._store_decode_cache(group, job, caches=caches, window_tail=tail)
+        except Exception:  # an optimisation only: the next turn re-prefills
+            logger.warning("deferred decode-cache store failed", exc_info=True)
+        finally:
+            from .kernels.buffer_cache import offer_restore_buffers
+
+            with contextlib.suppress(Exception):
+                offer_restore_buffers(caches)
+
+    def _decode_follows(self, job: _Job) -> bool:
+        """``job`` continues the held reply (its prompt holds the reply's first token)."""
+        pending = self.__dict__.get("_decode_pending")
+        if pending is None:
+            return False
+        prev = pending[1]
+        head = list(prev.ids) + list(prev.generated[:1])
+        return len(job.ids) > len(head) and list(job.ids[: len(head)]) == head
 
     @staticmethod
     def _decode_store_skip(group: _Group, job: _Job, reason: str | None) -> list[str]:
@@ -2338,6 +2411,18 @@ class VLMBatchRunner:
         """One scheduling slice on the MLX thread, timed into ``busy_meter``."""
         with self.busy_meter.span():
             self._drive_slice_body(resubmit)
+
+    def _busy_for_decode_store(self) -> bool:
+        with self._lock:
+            return bool(self._pending) or any(g.jobs for g in self._groups())
+
+    def _flush_decode_cache_if_idle(self, pending) -> None:
+        """The idle timer's store, on the MLX thread: only if that reply is still held and
+        nothing else is queued or running."""
+        if self.__dict__.get("_decode_pending") is pending and not (
+            self._busy_for_decode_store()
+        ):
+            self._flush_decode_cache()
 
     def _work(self, job: _Job) -> Work:
         remaining = max(
@@ -3143,6 +3228,9 @@ class RowSampler:
 _DONE = object()
 # Undelivered tokens a job may hold before it is cancelled (slow / stuck client).
 OUT_LIMIT = 65536
+# a finished reply's decode cache is copied into the APC once the runner has been idle this
+# long (or at once when its follow-up arrives): a request sent right away does not wait on it
+DECODE_STORE_IDLE_S = 0.25
 
 
 @dataclass

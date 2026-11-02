@@ -104,3 +104,48 @@ def test_a_reply_whose_consumer_closed_after_the_last_token_is_still_stored():
     group.jobs = {2: object()}
     job.overflowed = False
     assert VLMBatchRunner._decode_store_skip(group, job, "stop") == ["other rows"]
+
+
+def _runner():
+    import threading
+
+    r = VLMBatchRunner.__new__(VLMBatchRunner)
+    r._lock, r._pending, r._executor = threading.Lock(), [], None
+    r._groups = lambda: []
+    return r
+
+
+def test_the_store_waits_for_the_follow_up_not_for_a_resend(monkeypatch):
+    """The copy into the APC (~45 ms at 8K) ran right after the reply, so the same prompt
+    sent again waited for it (8K warm TTFT 20 -> 58 ms). Held until the follow-up's
+    admission or an idle runner; a resend of the same prompt does not trigger it."""
+    from yunshu_engine import dflash_apc_window
+    from yunshu_engine.kernels import buffer_cache
+
+    offered = []
+    monkeypatch.setattr(buffer_cache, "offer_restore_buffers", offered.append)
+    monkeypatch.setattr(dflash_apc_window, "take_decode_tail", lambda: None)
+    stored = []
+    monkeypatch.setattr(
+        VLMBatchRunner,
+        "_store_decode_cache",
+        staticmethod(lambda g, j, caches=None, window_tail=None: stored.append(j)),
+    )
+    import yunshu_engine.spec_release as sr
+
+    monkeypatch.setattr(sr, "finished_caches", lambda gen, last: ["kv"])
+    r = _runner()
+    group, _ = _group(6)
+    reply = _job([1, 2, 3, 4], [10, 11, 12])
+    r._defer_decode_cache(group, reply)
+    assert stored == [] and offered == []
+    assert not r._decode_follows(_job([1, 2, 3, 4], []))  # the same prompt again
+    assert r._decode_follows(_job([1, 2, 3, 4, 10, 11, 12, 99], []))
+    r._flush_decode_cache_if_idle(r._decode_pending)
+    assert stored == [reply] and offered == [["kv"]]
+    # a newer reply drops an unflushed older one instead of copying it
+    r._defer_decode_cache(group, _job([5], [6]))
+    newer = _job([7], [8])
+    r._defer_decode_cache(group, newer)
+    r._flush_decode_cache()
+    assert stored == [reply, newer]
