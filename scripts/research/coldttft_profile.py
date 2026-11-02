@@ -242,12 +242,12 @@ def main():
     popen = subprocess.Popen
 
     def launch(command, *args, **kwargs):
-        if command and Path(command[0]).name == "yunshu":
+        if tfbench.is_yunshu_command(command):
             command = [
                 sys.executable,
                 str(Path(__file__).resolve()),
                 "--serve-plain" if plain else "--serve",
-                *command[1:],
+                *tfbench.yunshu_args(command),
             ]
         return popen(command, *args, **kwargs)
 
