@@ -44,6 +44,9 @@ def _drafter(window):
 
 
 def _vendor_rounds(d, rounds, positions):
+    from yunshu_engine.dflash_context import _install_context_window
+
+    _install_context_window()
     cache = d.make_cache()
     outs = []
     for hidden, count, bonus in rounds:
@@ -220,4 +223,36 @@ def test_vendor_draft_reads_the_installed_context_projection():
     for w, g in zip(want, got, strict=True):
         err = mx.abs(w.astype(mx.float32) - g.astype(mx.float32)).max().item()
         scale = mx.abs(w.astype(mx.float32)).max().item()
+        assert err <= 0.02 * scale, (err, scale)
+
+
+@pytest.mark.parametrize("context", [0, 1, 63, 2047])
+@pytest.mark.parametrize("queries", [8, 16])
+@pytest.mark.parametrize("trained", [4, 8, 16])
+def test_tensorfold_fill_mask(context, queries, trained):
+    # TF 1.2.0 dflash/runtime_context.zig:148-183, including both sliding tests.
+    window = 2048 if context == 2047 else 64
+    slots = mx.arange(context, dtype=mx.int32)
+    mask = dflash_ring.block_mask(slots, mx.array(context), queries, trained, window)
+    visible = (mask[0, 0] == 0).tolist()
+    for query in range(queries):
+        for key in range(context + queries):
+            hidden = min(context, max(0, context + query + 1 - window))
+            late = query < trained and key >= context + trained
+            assert visible[query][key] == (key >= hidden and not late)
+    ring_mask = dflash_ring._mask(
+        slots, mx.array([context]), window - 1, queries, trained
+    )
+    assert mx.array_equal(mask, ring_mask)
+
+
+def test_non_ring_single_context_append_uses_temporal_key_order():
+    d = _drafter(window=25)
+    rounds = _rounds(16, [1] * 30, first=24)
+    # Single-row context updates wrap the vendor RotatingKVCache in-place.
+    vendor = _vendor_rounds(d, rounds, 15)
+    ring = _ring_rounds(d, rounds, 15, cap=88)
+    for want, got in zip(vendor, ring, strict=True):
+        err = mx.abs(want.astype(mx.float32) - got.astype(mx.float32)).max().item()
+        scale = mx.abs(want.astype(mx.float32)).max().item()
         assert err <= 0.02 * scale, (err, scale)
