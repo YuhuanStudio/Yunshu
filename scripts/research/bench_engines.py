@@ -811,7 +811,10 @@ def detect_mode(engine: str, log: str, probe_text: str | None = None) -> str | N
         modes = re.findall(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", log)
         return modes[-1] if modes else None
     if engine == "tf-native":
-        # 1.0.x native log: a drafter line naming DFlash2 and its block size (confirmed by the pilot)
+        # 1.2.0+ serving line names the drafter: "drafts: DFlash2 (<path>)" (or "drafts: DFlash2 (...) + copies").
+        if re.search(r"drafts: DFlash2\b", log):
+            return "dflash"
+        # 1.0.x native log: a drafter line naming DFlash2 and "drafts: on" (confirmed by the pilot)
         return (
             "dflash"
             if re.search(r"DFlash2 drafts for|drafter[^\n]*(DFlash|dflash)", log)
