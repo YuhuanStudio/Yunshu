@@ -155,7 +155,11 @@ class DFlashBatch:
             self.rings[id(row)] = ring
             from ..mtp_lane import copy_rows_for_model
 
-            copy_rows = min(copy_rows_for_model(self.lm), DRIVER_MAX_ROWS)
+            copy_rows = copy_rows_for_model(self.lm)
+            if copy_rows >= DRIVER_MAX_ROWS:
+                # a lone row's copy round runs to the fast tree's width (the lane's
+                # rule); a pack clamps each step to DRIVER_MAX_ROWS (_step_rows_inner)
+                copy_rows = tree_verify.FAST_MAX_ROWS
             if copy_rows >= 3:
                 copier = CopyDrafter(max_draft=copy_rows - 1)
                 copier.extend(row.context)
@@ -254,6 +258,8 @@ class DFlashBatch:
 
         copies = {}
         rooms = []
+        # one live row verifies up to FAST_MAX_ROWS rows; a pack shares DRIVER_MAX_ROWS
+        max_rows = tree_verify.FAST_MAX_ROWS if len(rows) == 1 else DRIVER_MAX_ROWS
         for b, r in enumerate(rows):
             room = max(0, r.req.max_tokens - r.generated - 1)
             if (
@@ -265,7 +271,9 @@ class DFlashBatch:
                 continue
             copier = self.copiers.get(id(r))
             copied = (
-                copier.draft(min(copier.max_draft, room)) if copier is not None else []
+                copier.draft(min(copier.max_draft, room, max_rows - 1))
+                if copier is not None
+                else []
             )
             if copied and (
                 r.generated == 1 or copier.last_match < copier.cfg.confident_match
@@ -274,7 +282,7 @@ class DFlashBatch:
             if copied:
                 copies[b] = copied
             rooms.append(len(copied) if copied else min(15, room))
-        nodes = fair_nodes(rooms, turn=self.turn)
+        nodes = fair_nodes(rooms, budget=max_rows, turn=self.turn)
         self.turn += 1
         budget = None
         if len(rows) == 1 and rooms[0] and 0 not in copies:

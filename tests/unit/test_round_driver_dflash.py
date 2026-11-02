@@ -609,3 +609,58 @@ def test_absorb_keeps_only_the_window_not_every_chunks_captures():
         f"window retained {grown / 2**20:.0f} MiB of earlier chunks"
     )
     assert tuple(d.hidden[id(row)].shape) == (1, 64, 512)
+
+
+def _oracle_caps(monkeypatch, tokens, prompt, caps, limit=None):
+    from yunshu_engine import mtp_lane
+    from yunshu_engine.copy_drafter import CopyDrafter
+
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda lm, rows=None: 64)
+
+    def oracle(copy, cap):
+        generated = len(copy.ctx) - len(prompt)
+        copy.last_match = 100
+        caps.append(cap)
+        return tokens[generated : generated + min(cap, limit or cap)]
+
+    monkeypatch.setattr(CopyDrafter, "draft", oracle)
+
+
+def test_lone_row_copy_round_commits_past_32_tokens(target, monkeypatch):
+    prompt = list(range(4, 25))
+    ref, _ = _run(target, [prompt], draft=False, tokens=90)
+    tokens = [t for t, _ in ref[0]]
+    caps = []
+    _oracle_caps(monkeypatch, tokens, prompt, caps)
+    got, driver = _run(target, [prompt], draft=True, tokens=90)
+    assert got == ref
+    assert max(caps) == 63
+    assert driver.accepted > 50
+
+
+def test_packed_rows_copy_round_keeps_32_row_budget(target, monkeypatch):
+    from yunshu_engine.round_driver import dflash as rd
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    prompts = [list(range(4, 25)), list(range(10, 47))]
+    ref, _ = _run(target, prompts, draft=False, tokens=64)
+    _oracle_caps(monkeypatch, [t for t, _ in ref[0]], prompts[0], [])
+    real, seen = rd.forward, []
+
+    def spy(lm, windows, *a, **k):
+        seen.append((len(windows), sum(w.shape.width for w in windows)))
+        return real(lm, windows, *a, **k)
+
+    monkeypatch.setattr(rd, "forward", spy)
+    driver = RoundDriver(target, dflash_drafter=_draft(target), chunk=16)
+    for i, p in enumerate(prompts):
+        driver.add(Request(p, 64, handle=i, draft=True))
+    got = [[] for _ in prompts]
+    for _ in range(100):
+        if not driver.busy():
+            break
+        for e in driver.step():
+            got[e.handle].append(e.token)
+    packed = [w for n, w in seen if n == 2]
+    assert packed, sorted(set(seen))
+    assert max(packed) <= 32

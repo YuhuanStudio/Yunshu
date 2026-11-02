@@ -41,7 +41,7 @@ def forward(lm, windows: list[Window], capture_ids=(), *, verifier=None):
     if len({id(w.cache) for w in windows}) != len(windows):
         raise ValueError("packed verify requires independent caches")
     total = sum(w.shape.width for w in windows)
-    if total > DRIVER_MAX_ROWS:
+    if total > DRIVER_MAX_ROWS and len(windows) > 1:
         raise ValueError("packed verify exceeds the shared node budget")
     if any(w.tokens.shape != (1, w.shape.width) for w in windows):
         raise ValueError("packed verify tokens must match each window width")
