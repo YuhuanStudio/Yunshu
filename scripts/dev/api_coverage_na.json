@@ -90,6 +90,36 @@
   "reason": "GPT-Live voice sessions, forks and sideband sockets; native voice is a parked modality (Realtime is served as a text turn)."
  },
  {
+  "match": "openai GET /audio/voice_consents",
+  "status": "planned",
+  "reason": "openai SDK 3.42 added list / get / update / delete for voice consents; only create is served (POST /audio/voice_consents). Backlog: CRUD over the stored consent records, with voice deletion cascading to the enrolled sample."
+ },
+ {
+  "match": "openai GET /audio/voice_consents/{}",
+  "status": "planned",
+  "reason": "openai SDK 3.42 added list / get / update / delete for voice consents; only create is served (POST /audio/voice_consents). Backlog: CRUD over the stored consent records, with voice deletion cascading to the enrolled sample."
+ },
+ {
+  "match": "openai POST /audio/voice_consents/{}",
+  "status": "planned",
+  "reason": "openai SDK 3.42 added list / get / update / delete for voice consents; only create is served (POST /audio/voice_consents). Backlog: CRUD over the stored consent records, with voice deletion cascading to the enrolled sample."
+ },
+ {
+  "match": "openai DELETE /audio/voice_consents/{}",
+  "status": "planned",
+  "reason": "openai SDK 3.42 added list / get / update / delete for voice consents; only create is served (POST /audio/voice_consents). Backlog: CRUD over the stored consent records, with voice deletion cascading to the enrolled sample."
+ },
+ {
+  "match": "openai DELETE /audio/voices/{}",
+  "status": "planned",
+  "reason": "openai SDK 3.42 voice deletion; enrolled custom voices can only be created today. Backlog together with the consent CRUD."
+ },
+ {
+  "match": "openai WS /realtime/translations",
+  "status": "not_applicable",
+  "reason": "Realtime speech translation sessions; voice is a parked modality."
+ },
+ {
   "match": "openai * /realtime/translations/*",
   "status": "not_applicable",
   "reason": "Realtime speech translation sessions; voice is a parked modality."

@@ -74,6 +74,8 @@ dependencies = [
     # ── Apple ML Stack (text path only) ──
     # qmv copies select version-matched arithmetic for mlx f8aaf49d (0.32.4).
     # 0.32.4 breaks FP32 SSD APC == RAM/cold parity (sync016 unit bisect).
+    # 2026-11-02 postrel-016: 0.32.4 is still the newest MLX; the cap also holds back mlx-vlm 0.7.11 and
+    # mlx-audio 0.6.3 (both require mlx>=0.32.4 / ==0.32.4). Lift together once the parity bug is fixed.
     "mlx>=0.32.3,<0.32.4",
     "mlx-lm>=0.32.2",
     # ── Model / Tokenizer ──
