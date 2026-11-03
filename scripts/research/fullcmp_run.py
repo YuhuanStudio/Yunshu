@@ -309,13 +309,15 @@ def group_slug(row: dict) -> str:
 
 
 def startup_s(engine: str) -> float:
-    """Model-load and ready budget of one server start, seconds: 1.5 x the longest ready_s seen on
-    disk for the engine; the stated per-engine default only when no header records one."""
+    """Model-load and ready budget of one server start, seconds: max(1.5 x the longest ready_s seen on
+    disk, the engine default). The default is a floor: a header on disk can be too early (a killed
+    job never writes one)."""
+    defaults = JB["startup_default_s"]["value"]
+    floor = float(defaults.get(engine, defaults["default"]))
     seen = JB["startup_seen_s"].get(engine)
     if seen:
-        return float(JB["startup_factor"]["value"]) * float(seen["value"])
-    defaults = JB["startup_default_s"]["value"]
-    return float(defaults.get(engine, defaults["default"]))
+        return max(float(JB["startup_factor"]["value"]) * float(seen["value"]), floor)
+    return floor
 
 
 def cell_budget(row: dict) -> dict:

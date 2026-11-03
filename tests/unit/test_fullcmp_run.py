@@ -514,13 +514,16 @@ def test_slow_start_engine_gets_a_long_timeout_and_no_short_lane(monkeypatch):
     assert b["stall"] >= max(5.0, 2 * 2.25)
 
 
-def test_engine_without_header_data_gets_its_default_startup(monkeypatch):
-    monkeypatch.delitem(run.JB["startup_seen_s"], "llama-cpp-b12061", raising=False)
-    assert run.startup_s("llama-cpp-b12061") == 60.0  # stated default
-    assert run.startup_s("mlx-vlm-server") == 1.5 * 8.2  # seen on disk (floor not used)
-    monkeypatch.delitem(run.JB["startup_seen_s"], "mlx-vlm-server", raising=False)
+def test_engine_default_is_a_floor_over_the_seen_ready(monkeypatch):
+    # ready_s 8 s on disk still gets the mlx-vlm default floor (90 s); 1.5 x seen is only above it
+    monkeypatch.setitem(run.JB["startup_seen_s"], "mlx-vlm-server", {"value": 8.0})
     assert run.startup_s("mlx-vlm-server") == 90.0
+    monkeypatch.setitem(run.JB["startup_seen_s"], "mlx-vlm-server", {"value": 100.0})
+    assert run.startup_s("mlx-vlm-server") == 150.0
+    monkeypatch.delitem(run.JB["startup_seen_s"], "llama-cpp-b12061", raising=False)
+    assert run.startup_s("llama-cpp-b12061") == 60.0
     assert run.startup_s("lmstudio") == 60.0
+    assert run.startup_s("splash-1.5.0") == max(1.5 * 100.7, 120.0)
 
 
 def test_fast_cells_still_budget_gate_post_finalize_and_shutdown():

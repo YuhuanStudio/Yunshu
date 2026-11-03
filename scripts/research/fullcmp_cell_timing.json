@@ -885,10 +885,11 @@
     "mlx-vlm-server": 90.0,
     "splash-1.5.0": 120.0,
     "llama-cpp-b12061": 60.0,
+    "kapitsa-0.2.26": 60.0,
     "default": 60.0
    },
    "kind": "policy (lead 11-04)",
-   "source": "used only when no header on disk has ready_s for the engine"
+   "source": "FLOOR (lead 11-04): startup = max(1.5 x longest ready_s on disk, this default); others 60 s"
   },
   "startup_seen_s": {
    "yunshu": {
