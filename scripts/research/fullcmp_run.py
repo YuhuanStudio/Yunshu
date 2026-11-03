@@ -58,6 +58,8 @@ import shlex
 import subprocess
 import sys
 import uuid
+import dataclasses
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1178,6 +1180,103 @@ def job_summary(ids: list[str], env: dict | None = None) -> list[tuple[str, str,
     return rows
 
 
+# A quiet-gate refusal (rc 3: a system scan such as XProtect holds the CPU) is not a failure: the same
+# planned slot is resubmitted after a back-off, up to MAX_TRIES attempts. Any other rc is final.
+QUIET_REFUSED_RC = 3
+RETRY_BACKOFF_MIN = (5, 10, 20, 20, 20)
+MAX_TRIES = 6
+RETRY_LOG = QUIET_DIR / "retries.jsonl"
+
+
+def quiet_holders(label: str) -> list:
+    """The foreign holders the in-job gate recorded for this label (its last refused attempt)."""
+    path = QUIET_DIR / f"{label}.jsonl"
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return []
+    for line in reversed(lines):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not rec.get("ok", True):
+            return list(rec.get("holders") or [])
+    return []
+
+
+def retry_job(job: "Job", attempt: int, pin: dict) -> "Job":
+    """The same planned slot under a new label (<label>-retry<attempt>): new wrapper, new gate log."""
+    label = f"{job.label}-retry{attempt}"
+    profile = "profile" in job.flags
+    return dataclasses.replace(
+        job,
+        label=label,
+        cmd=job_command(job.cells, job.rep, pin, label, profile=profile),
+        script=job_script(job.cells, job.rep, pin, label, profile=profile),
+        flags=[*job.flags, "retry"],
+    )
+
+
+def submit_sequential(
+    jobs: list["Job"],
+    pin: dict,
+    run_one=None,
+    sleep=time.sleep,
+    retry_log: Path | None = None,
+) -> tuple[list[str], int]:
+    """Each planned slot runs to completion before the next is submitted, so the queue never holds a
+    later slot ahead of an earlier one (gpuq orders pending jobs by priority, lane and owner). A
+    quiet-gate refusal (rc 3) resubmits the same slot after the back-off, with the foreign holders
+    logged; the gate refuses before any cell runs, so a refused attempt writes no raw. Returns the
+    job ids run and the number of slots that failed for good."""
+    run_one = run_one or _submit_and_wait
+    ids, failed = [], 0
+    for job in jobs:
+        current = job
+        for attempt in range(MAX_TRIES):
+            jid, rc, state = run_one(current)
+            ids.append(jid)
+            if rc == 0 and state == "done":
+                break
+            if rc != QUIET_REFUSED_RC or attempt + 1 == MAX_TRIES:
+                failed += 1
+                print(f"slot {job.label}: failed rc={rc} state={state} (attempt {attempt})", flush=True)
+                break
+            holders = quiet_holders(current.label)
+            wait_min = RETRY_BACKOFF_MIN[min(attempt, len(RETRY_BACKOFF_MIN) - 1)]
+            record = {
+                "slot": job.label, "attempt": attempt, "label": current.label,
+                "rc": rc, "state": state, "holders": holders, "backoff_min": wait_min,
+            }
+            print(f"QUIET REFUSED {current.label}: holders {holders}; retry in {wait_min} min", flush=True)
+            if retry_log is not None:
+                retry_log.parent.mkdir(parents=True, exist_ok=True)
+                with open(retry_log, "a") as fh:
+                    fh.write(json.dumps(record) + "\n")
+            sleep(wait_min * 60)
+            current = retry_job(job, attempt + 1, pin)
+            write_wrapper(current)
+    return ids, failed
+
+
+def _submit_and_wait(job: "Job") -> tuple[str, object, str]:
+    """Submit one job, block until gpuq is done with it, return (job id, rc, state)."""
+    write_wrapper(job)
+    res = subprocess.run(
+        job.submit_argv(), capture_output=True, text=True, env=gpuq_env(), cwd=str(REPO_ROOT)
+    )
+    if res.returncode != 0 or not res.stdout.strip():
+        print(f"SUBMIT REFUSED label={job.label} rc={res.returncode}: {res.stderr.strip()}", file=sys.stderr)
+        return "", "submit", "refused"
+    jid = res.stdout.strip().splitlines()[-1]
+    JOB_OF_ID[jid] = job
+    print(f"submitted {jid} ({job.est_min:.1f} min, {len(job.cells)} cells)", flush=True)
+    wait_all([jid])
+    _, _, rc, state, _ = job_summary([jid])[0]
+    return jid, rc, state
+
+
 def wait_all(ids: list[str]) -> int:
     """One blocking gpuq wait, then every job's own rc and state: a per-job table, and nonzero if ANY
     job failed or timed out (the wait's exit code alone reported one failure for six)."""
@@ -1700,11 +1799,7 @@ def main(argv=None) -> int:
         print("refusing: swap_stable preflight failed", file=sys.stderr)
         return 2
 
-    ids, bad = submit_all(plan.jobs)
-    if bad:
-        print(f"{a.batch}: submit refused, {len(ids)} job(s) already queued", file=sys.stderr)
-        return 1
-    failed = bad + (1 if wait_all(ids) != 0 else 0)
+    ids, failed = submit_sequential(plan.jobs, pin, retry_log=RETRY_LOG)
 
     batches = audited_batches(a.batch)
     manifest_path = AUDIT_DIR / f"{a.batch}_audit_manifest.json"
@@ -1726,8 +1821,7 @@ def main(argv=None) -> int:
         rep3_jobs = plan_jobs(
             {REP3_INDEX: subset}, plan.engine_order, pin, a.batch, label_suffix="-rep3"
         )
-        ids3, rep3_bad = submit_all(rep3_jobs)
-        rep3_bad += 1 if wait_all(ids3) != 0 else 0
+        ids3, rep3_bad = submit_sequential(rep3_jobs, pin, retry_log=RETRY_LOG)
         audit_rc = run_audit(RAW_ROOT, manifest_path) or audit_rc
 
     if failed or audit_rc or rep3_bad:

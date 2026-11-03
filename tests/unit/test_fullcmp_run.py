@@ -402,8 +402,7 @@ def test_allow_foreign_overrides_refusal(pin_file, tmp_path, monkeypatch):
     manifest.write_text(json.dumps(row("yunshu", "B1.ok")) + "\n")
     monkeypatch.setattr(run, "gpuq_status_text", lambda: STATUS_FOREIGN)
     monkeypatch.setattr(run, "swap_gate", lambda b: 0)
-    monkeypatch.setattr(run, "submit_all", lambda jobs: (["id-1"], 0))
-    monkeypatch.setattr(run, "wait_all", lambda ids: 0)
+    monkeypatch.setattr(run, "_submit_and_wait", lambda job: ("id-1", 0, "done"))
     monkeypatch.setattr(run, "run_audit", lambda root, mpath: 0)
     monkeypatch.setattr(run, "run_reps", lambda root, mpath: [])
     assert (
@@ -454,12 +453,14 @@ def test_full_run_queues_rep3_for_flagged_cells_and_fails_on_bad_job(
     monkeypatch.setattr(run, "gpuq_status_text", lambda: "")
     monkeypatch.setattr(run, "swap_gate", lambda b: 0)
 
-    def fake_submit(jobs):
-        calls["submit"].append([j.label for j in jobs])
-        return [f"id{len(calls['submit'])}-{i}" for i in range(len(jobs))], 0
+    def fake_one(job):
+        calls["submit"].append([job.label])
+        calls["wait"].append(job.label)
+        rc = calls["rc"]
+        return f"id-{len(calls['submit'])}", rc, ("done" if rc == 0 else "failed")
 
-    monkeypatch.setattr(run, "submit_all", fake_submit)
-    monkeypatch.setattr(run, "wait_all", lambda ids: calls["wait"].append(ids) or 0)
+    calls["rc"] = 0
+    monkeypatch.setattr(run, "_submit_and_wait", fake_one)
     monkeypatch.setattr(run, "run_audit", lambda root, mpath: 0)
 
     def fake_reps(root, mpath):
@@ -469,14 +470,14 @@ def test_full_run_queues_rep3_for_flagged_cells_and_fails_on_bad_job(
     monkeypatch.setattr(run, "run_reps", fake_reps)
     rc = run.main(["--batch", "B1", "--manifest", str(manifest)])
     assert rc == 0
-    assert len(calls["submit"]) == 2
-    assert calls["submit"][1] == ["fullcmp-B1-yunshu-q27-4bit-th-off-r2-rep3"]
+    assert len(calls["submit"]) == 5  # 2 engines x 2 reps, then the rep-3 cell last
+    assert calls["submit"][-1] == ["fullcmp-B1-yunshu-q27-4bit-th-off-r2-rep3"]
     manifest_out = json.loads((run.AUDIT_DIR / "B1_audit_manifest.json").read_text())
     assert {c["cell"] for c in manifest_out["cells"]} == {"B1.a", "B1.b"}
 
     # a failed wait (nonzero rc) makes the whole batch exit nonzero
     calls["reps"] = 0
-    monkeypatch.setattr(run, "wait_all", lambda ids: 1)
+    calls["rc"] = 1
     assert run.main(["--batch", "B1", "--manifest", str(manifest)]) == 1
 
 
@@ -696,3 +697,94 @@ def test_audit_requires_profile_rows_only_for_the_listed_engines():
     assert fa.profile_required(run_, "omlx-0.7.3") is False
     run_.profile_required = None  # no list in the manifest: every engine, as before
     assert fa.profile_required(run_, "omlx-0.7.3") is True
+
+
+# --- quiet-gate refusals (rc 3) are retried in the same slot ----------------------------------
+
+
+@pytest.fixture
+def retry_world(tmp_path, monkeypatch):
+    monkeypatch.setattr(run, "WRAP_ROOT", tmp_path / "wrap")
+    monkeypatch.setattr(run, "QUIET_DIR", tmp_path / "quiet")
+    monkeypatch.setattr(run, "RAW_ROOT", tmp_path / "raw")
+    return tmp_path
+
+
+def _two_slots():
+    rows = [row("yunshu", "B1.a", est=2.0), row("yunshu", "B1.b", est=2.0, ctx=8192, ctx_tokens=8192)]
+    return run.plan_batch(rows, "B1", PIN).jobs
+
+
+def _scripted(outcomes):
+    """run_one stand-in: outcomes[label] is the list of (rc, state) answers, one per attempt."""
+    calls, left = [], {k: list(v) for k, v in outcomes.items()}
+
+    def run_one(job):
+        calls.append(job.label)
+        base = job.label.split("-retry")[0]
+        rc, state = left.get(base, [(0, "done")]).pop(0) if left.get(base) else (0, "done")
+        return f"jid-{len(calls)}", rc, state
+
+    return run_one, calls
+
+
+def test_quiet_refusals_are_retried_in_the_same_slot_then_the_slot_passes(retry_world):
+    jobs = _two_slots()
+    first = jobs[0].label
+    run_one, calls = _scripted({first: [(3, "failed"), (3, "failed"), (0, "done")]})
+    sleeps = []
+    ids, failed = run.submit_sequential(jobs, PIN, run_one=run_one, sleep=sleeps.append,
+                                        retry_log=retry_world / "retries.jsonl")
+    assert failed == 0
+    assert calls == [first, f"{first}-retry1", f"{first}-retry2", jobs[1].label]  # same slot, in order
+    assert sleeps == [5 * 60, 10 * 60]  # the back-off table
+    log = [json.loads(x) for x in (retry_world / "retries.jsonl").read_text().splitlines()]
+    assert [r["attempt"] for r in log] == [0, 1] and all(r["slot"] == first for r in log)
+
+
+def test_exhausted_quiet_refusals_fail_the_slot_and_the_batch(retry_world):
+    jobs = _two_slots()
+    first = jobs[0].label
+    run_one, calls = _scripted({first: [(3, "failed")] * 6})
+    ids, failed = run.submit_sequential(jobs, PIN, run_one=run_one, sleep=lambda s: None)
+    assert failed == 1
+    assert calls.count(first) + sum(1 for c in calls if c.startswith(f"{first}-retry")) == run.MAX_TRIES
+
+
+def test_other_failures_are_not_retried(retry_world):
+    jobs = _two_slots()
+    first = jobs[0].label
+    run_one, calls = _scripted({first: [(2, "failed")]})
+    ids, failed = run.submit_sequential(jobs, PIN, run_one=run_one, sleep=lambda s: None)
+    assert failed == 1 and calls.count(first) == 1
+
+
+def test_a_stalled_or_timed_out_job_stays_a_failure(retry_world):
+    jobs = _two_slots()
+    first = jobs[0].label
+    run_one, calls = _scripted({first: [(-2, "stalled")]})
+    ids, failed = run.submit_sequential(jobs, PIN, run_one=run_one, sleep=lambda s: None)
+    assert failed == 1 and calls.count(first) == 1
+
+
+def test_retry_log_names_the_foreign_holders(retry_world):
+    jobs = _two_slots()
+    first = jobs[0].label
+    (retry_world / "quiet").mkdir()
+    (retry_world / "quiet" / f"{first}.jsonl").write_text(
+        json.dumps({"ok": False, "holders": [{"name": "XProtectRemediatorPirrit", "pct": 95.0}]}) + "\n"
+    )
+    run_one, _calls = _scripted({first: [(3, "failed"), (0, "done")]})
+    run.submit_sequential(jobs, PIN, run_one=run_one, sleep=lambda s: None,
+                          retry_log=retry_world / "retries.jsonl")
+    rec = json.loads((retry_world / "retries.jsonl").read_text().splitlines()[0])
+    assert rec["holders"][0]["name"] == "XProtectRemediatorPirrit"
+
+
+def test_retry_job_is_a_new_wrapper_with_its_own_gate_log(retry_world):
+    job = _two_slots()[0]
+    again = run.retry_job(job, 1, PIN)
+    assert again.label == f"{job.label}-retry1"
+    assert f"{job.label}-retry1" in again.script and "retry" in again.flags
+    # the gate runs before any cell in the retry too: a refused attempt writes no raw
+    assert again.script.index("fullcmp_quiet") < again.script.index("mkdir")
