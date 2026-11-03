@@ -57,7 +57,14 @@ CONTROL_FLIP = "ctl-1103-flip3-7cf5266117ae"
 TOK_S_METRICS = ("decode_tps", "followup_decode_tps")
 
 # manifest phase names -> audit phase names (FULLCMP_SCHEMA request.phase)
-PHASE_NAMES = {"cold": "cold", "warm": "warm", "fu": "turn2", "fu_idle": "turn2"}
+PHASE_NAMES = {
+    "cold": "cold",
+    "warm": "warm",
+    "fu": "turn2",
+    "fu_idle": "turn2",
+    "restart": "restart",
+    "mixed": "mixed",
+}
 
 # Per-engine probe for the expected speculative mode of the engines whose expected mode is not yet
 # established (expected "unverified" fails closed, or a mode that needs its log line confirmed). Each
@@ -568,14 +575,14 @@ def build_manifest(
         if part is None:
             not_in_harness.append({**entry, "reason": why})
             continue
-        if part not in ("decode", "conc"):
+        if part not in ("decode", "conc", "mixed"):
             not_in_audit.append(
                 {**entry, "reason": f"{part} part is not in the audit record schema"}
             )
             continue
-        if part == "conc":
-            # one conc record per trial with n requests each; the planned phase is "conc"
-            phases = ["conc"]
+        if part in ("conc", "mixed"):
+            # one conc (or mixed) record per trial with n requests each; the planned phase is the part
+            phases = [part]
             expected = int(r["conc"]) * frun.CONC_TRIALS
         else:
             phases = []
