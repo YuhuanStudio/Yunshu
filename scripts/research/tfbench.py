@@ -21,9 +21,12 @@ import time
 import urllib.request
 from pathlib import Path
 
+import jsonschema
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_engines  # noqa: E402
+import fullcmp_manifest as fm  # noqa: E402  (request families: FAMILY_KINDS, IMAGE_COUNT)
 import fullcmp_attribution  # noqa: E402  (layer-1 attribution schema)
 import fullcmp_provenance as fp  # noqa: E402
 import fullcmp_quiet as fq  # noqa: E402  (quiet-machine snapshots per cell, FULLCMP_SPEC)
@@ -311,7 +314,8 @@ def stub_server_cmd(engine, port, log, stub_dir, version=None) -> list[str]:
     version it reports on /v1/yunshu/status (the pinned version for yunshu)."""
     cmd = [
         sys.executable,
-        str(Path(stub_dir) / "fullcmp_stub_server.py"),
+        # TFB_STUB_SCRIPT picks another stub file in the same dir (tests: the request-family stub)
+        str(Path(stub_dir) / os.environ.get("TFB_STUB_SCRIPT", "fullcmp_stub_server.py")),
         "--engine",
         engine,
         "--port",
@@ -333,7 +337,14 @@ class Srv:
         )
 
     def __init__(
-        self, engine, extra_env, tag, model=None, ctx_tokens=140000, parallel=1
+        self,
+        engine,
+        extra_env,
+        tag,
+        model=None,
+        ctx_tokens=140000,
+        parallel=1,
+        reuse_home=False,
     ):
         # Fullcmp: a Yunshu server runs only from the pinned tree and venv, or not at all.
         # Checked before any port, directory or process is created.
@@ -342,6 +353,8 @@ class Srv:
             self.pin = fp.require_yunshu_pin(os.environ)
         self.engine, self.port = engine, free_port()
         assert_port_free(self.port)  # fail closed before any dir or process is created
+        self.tag, self.model_arg = tag, model
+        self.ctx_tokens, self.parallel = ctx_tokens, parallel
         self.requested_spec_mode, extra_env = spec_request(
             engine, extra_env, model or M
         )
@@ -351,8 +364,9 @@ class Srv:
             self.requested_spec_mode = bench_engines.ENGINES[engine].expected_mode
         self.extra_env = extra_env
         self.home = server_home(OUT, tag, os.environ)
-        shutil.rmtree(self.home, ignore_errors=True)
-        self.home.mkdir(parents=True)
+        if not reuse_home:  # a restart keeps HOME: the disk prefix tier lives there
+            shutil.rmtree(self.home, ignore_errors=True)
+        self.home.mkdir(parents=True, exist_ok=True)
         self.log = OUT / "out" / f"server-{tag}.log"
         self.log.parent.mkdir(parents=True, exist_ok=True)
         env = bench_engines.scrubbed_env(os.environ)
@@ -574,7 +588,7 @@ class Srv:
             # measures a different engine (2026-10-20: ragged KV off broke identity)
             raise RuntimeError(f"{off}; see {self.log}")
 
-    def kill(self):
+    def kill(self, keep_disk=False):
         if self.proc.poll() is None:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(self.proc.pid, signal.SIGKILL)
@@ -582,12 +596,41 @@ class Srv:
                 self.proc.wait(30)
         # The server's SSD prefix cache (up to ~8 GB per 128K cell) is dead once the server is:
         # the next server of this tag starts from an emptied home anyway. Left behind, finished
-        # yv runs held 362 GB of it on P5Plus (2026-10-07).
-        if self.proc.poll() is not None:
+        # yv runs held 362 GB of it on P5Plus (2026-10-07). A restart cell stops its first server
+        # with keep_disk=True: the relaunched server reads that cache from the same HOME.
+        if self.proc.poll() is not None and not keep_disk:
             for sub in (".yunshu/cache", "omlx-ssd", "mtplx-cache", "omlx-base/cache"):
                 shutil.rmtree(self.home / sub, ignore_errors=True)
         if getattr(self, "mem", None):
             self.mem.stop()
+
+
+# Every server a run started (the restart phase replaces the live one): main() kills all of them.
+_LIVE_SERVERS: list = []
+# The first raw chunk that carried a usage object (the server's own usage shape, as sent).
+_USAGE_SAMPLE: list = [None]
+
+
+def restart_server(s):
+    """Stop the live server (its disk prefix tier is kept) and launch the same engine again on the
+    same HOME: a fresh process and port, the same cache directory (restart-with-disk-cache)."""
+    s.kill(keep_disk=True)
+    if os.environ.get("TFB_STUB_SERVER") and os.environ.get(
+        "TFB_STUB_WIPE_HOME_ON_RESTART"
+    ) == "1":
+        # TEST-ONLY negative case: a restart on a wiped HOME must lose the disk tier (the audit fails)
+        shutil.rmtree(s.home, ignore_errors=True)
+    fresh = start_server(
+        s.engine,
+        s.extra_env,
+        s.tag,
+        model=s.model_arg,
+        ctx_tokens=s.ctx_tokens,
+        parallel=s.parallel,
+        reuse_home=True,
+    )
+    _LIVE_SERVERS.append(fresh)
+    return fresh
 
 
 CACHED_UNAVAILABLE = (
@@ -681,6 +724,8 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
                 raise RuntimeError(f"SSE error {d['error']}")
             if d.get("usage"):
                 usage = d["usage"]
+                if _USAGE_SAMPLE[0] is None:
+                    _USAGE_SAMPLE[0] = d  # the raw usage chunk (--log-usage-sample)
             if d.get("x_yunshu"):
                 xy = d["x_yunshu"]
             for ch in d.get("choices") or []:
@@ -749,6 +794,8 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
         prompt_sha256=prompt_sha,
         max_tokens=max_tokens,
         temperature=temperature,
+        top_p=body.get("top_p"),
+        top_k=body.get("top_k"),
         stop=stop,
         harness=HARNESS_ID,
         cached=cached_tokens(usage),
@@ -777,6 +824,8 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
         if xy
         else None,
     )
+    result["_tools"] = [tools[i] for i in sorted(tools)]
+    result["_image_tokens"] = (usage.get("prompt_tokens_details") or {}).get("image_tokens")
     result["_attr_client"] = {
         "t_receive": ew_receive,
         "t_first_token": ew_first,
@@ -894,6 +943,166 @@ def req(model, text, mt, seed=None, extra=None, temp=0):
     if extra:
         b.update(extra)
     return b
+
+
+# ---- request families (B2 kind / thinking / image cells)
+# Built on the real prose corpus plus a family ask; variant N changes only the ask, so two variants
+# give two distinct prompts (the audit's >= 2 prompts per (model, ctx, kind) guard).
+FAMILY_KINDS_LOCAL = fm.FAMILY_KINDS
+FAMILY_SYSTEM = (
+    "You are a coding agent. Use the provided tools when a file or shell command is needed. "
+    "Reply with a tool call when one is needed."
+)
+FAMILY_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a UTF-8 text file.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "max_lines": {"type": "integer"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_shell",
+            "description": "Run one shell command in the workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+                "additionalProperties": False,
+            },
+        },
+    },
+]
+FAMILY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "count": {"type": "integer"}},
+                "required": ["name", "count"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["title", "items"],
+    "additionalProperties": False,
+}
+# thinking / image cells on a plain kind: variant 0 is the corpus prompt, variant 1 adds one line
+GENERIC_ASKS = ("", "Keep the answer short.")
+FAMILY_ASKS = {
+    "tool-chat": [
+        "Read the file notes/todo.md with a tool call.",
+        "List the files under src/ with the shell tool.",
+    ],
+    "cjk": [
+        "請用中文逐段說明上面材料的主要概念，每段至少一句。",
+        "請用繁體中文總結上面材料的重點，並保留專有名詞。",
+    ],
+    "json-schema": [
+        "Summarise the material above as JSON with a title and a list of items (name, count).",
+        "Extract three terms from the material above as JSON with a title and a list of items.",
+    ],
+}
+# A valid 1x1 PNG, sent as the image_url data URI of each image part.
+IMAGE_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+def is_family_cell(kind, thinking, media):
+    return fm.is_family_cell(kind, thinking, media)
+
+
+def family_apply(body, kind, variant, thinking, media):
+    """Turn a plain decode body into the family's request, in place: the agent system prompt and
+    tool schemas (tool-chat), a JSON-schema response_format (json-schema), the Qwen chat-template
+    thinking switch (thinking on), and image_url content parts (img1 / img4)."""
+    text = body["messages"][-1]["content"]
+    asks = FAMILY_ASKS.get(kind, GENERIC_ASKS)
+    ask = asks[variant % len(asks)]
+    if ask:
+        text = f"{text}\n\n---\n{ask}"
+    msgs = [{"role": "user", "content": text}]
+    if kind == "tool-chat":
+        msgs.insert(0, {"role": "system", "content": FAMILY_SYSTEM})
+        body["tools"] = FAMILY_TOOLS
+        body["tool_choice"] = "auto"
+    if kind == "json-schema":
+        body["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {"name": "summary", "schema": FAMILY_SCHEMA, "strict": True},
+        }
+    n = fm.IMAGE_COUNT.get(media, 0)
+    if n:
+        url = "data:image/png;base64," + IMAGE_PNG_B64
+        msgs[-1]["content"] = [{"type": "text", "text": text}] + [
+            {"type": "image_url", "image_url": {"url": url}} for _ in range(n)
+        ]
+    body["messages"] = msgs
+    body["chat_template_kwargs"] = {"enable_thinking": thinking == "on"}
+    return body
+
+
+def family_problems(kind, r, thinking, media):
+    """Reasons a family reply is invalid (empty list = valid), judged from the client's stream.
+    Tool calls must name a declared tool with JSON arguments that satisfy its schema; a json-schema
+    reply must be JSON that validates; a cjk reply must be mostly CJK text; thinking on needs the
+    reasoning split (reasoning_content) and no reasoning in the content; image input must be
+    accepted and reported as image tokens."""
+    probs = []
+    content = r.get("_text") or ""
+    if kind == "tool-chat":
+        calls = r.get("tool_calls") or []
+        if not calls:
+            probs.append("no tool_calls in reply")
+        declared = {t["function"]["name"]: t["function"] for t in FAMILY_TOOLS}
+        for c in calls:
+            fn = declared.get(c.get("name"))
+            if fn is None:
+                probs.append(f"undeclared tool {c.get('name')!r}")
+                continue
+            try:
+                args = json.loads(c.get("arguments") or "")
+            except ValueError:
+                probs.append(f"tool {c['name']} arguments are not JSON")
+                continue
+            try:
+                jsonschema.validate(args, fn["parameters"])
+            except jsonschema.ValidationError as e:
+                probs.append(f"tool {c['name']} arguments: {e.message}")
+    if kind == "json-schema":
+        try:
+            obj = json.loads(content)
+        except ValueError:
+            probs.append("reply is not JSON")
+        else:
+            try:
+                jsonschema.validate(obj, FAMILY_SCHEMA)
+            except jsonschema.ValidationError as e:
+                probs.append(f"reply does not match the schema: {e.message}")
+    if kind == "cjk":
+        chars = [ch for ch in content if not ch.isspace()]
+        cjk = sum(1 for ch in chars if "一" <= ch <= "鿿")
+        if not chars or cjk * 2 < len(chars) or "�" in content:
+            probs.append(f"reply is not CJK text ({cjk}/{len(chars)} CJK characters)")
+    if "<think>" in content or "</think>" in content:
+        probs.append("reasoning leaked into the content")
+    if thinking == "on" and not r.get("reasoning_chars"):
+        probs.append("thinking on but no reasoning split (reasoning_content empty)")
+    if fm.IMAGE_COUNT.get(media, 0) and not r.get("image_tokens"):
+        probs.append("image input not accepted or no image tokens reported")
+    return probs
 
 
 def rehearsal_prefix(rendered, marker="<|im_start|>user"):
@@ -1112,10 +1321,10 @@ ALL_PHASES = ("cold", "warm", "turn2", "specoff")
 def parse_phases(text):
     """Selected decode phases; turn2 replays the cold reply, so it needs cold."""
     phases = [p.strip() for p in str(text).split(",") if p.strip()]
-    bad = [p for p in phases if p not in ALL_PHASES]
+    bad = [p for p in phases if p not in ALL_PHASES + ("restart",)]
     if bad or not phases:
         raise SystemExit(
-            f"--phases: unknown or empty selection {text!r} (use {ALL_PHASES})"
+            f"--phases: unknown or empty selection {text!r} (use {ALL_PHASES + ('restart',)})"
         )
     if "turn2" in phases and "cold" not in phases:
         raise SystemExit("--phases: turn2 needs cold (it continues the cold reply)")
@@ -1199,21 +1408,48 @@ def _yunshu_server_fields(attr, unavailable, client, spec, lat):
         attr["copy_rounds"] = int(copy["rounds"])
 
 
+GENCONFIG_KEYS = ("temperature", "top_p", "top_k")
+
+
+def genconfig_sampling(model_dir) -> dict:
+    """Sampler fields of the model's generation_config.json (the model card's defaults). Fails
+    closed: a missing file or no temperature/top_p is an error, never a silent greedy run."""
+    path = Path(str(model_dir)) / "generation_config.json"
+    try:
+        cfg = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"--sampling genconfig: cannot read {path}: {exc}")
+    picked = {k: cfg[k] for k in GENCONFIG_KEYS if k in cfg}
+    if "temperature" not in picked or "top_p" not in picked:
+        raise SystemExit(f"--sampling genconfig: {path} has no temperature/top_p")
+    return picked
+
+
 def part_decode(s, out, a):
     phases = parse_phases(a.phases)
+    samp = (
+        genconfig_sampling(a.model)
+        if getattr(a, "sampling", "greedy") == "genconfig"
+        else {}
+    )
     n_dec = int(a.decode_tokens)
     ctxs = [512] if a.smoke else a.only_ctx or [1024, 8192, 32768]
+    thinking, media = getattr(a, "thinking", "off"), getattr(a, "media", "none")
     for ctx in ctxs:
         for kind in a.only_kind or ("prose", "code"):
+            family = is_family_cell(kind, thinking, media)
+            variant = getattr(a, "prompt_variant", 0)
+            # family cells build on the real corpus (variant 0); their variants differ in the ask
+            # only, so the audit's distinct-prompt guard still sees two prompts
+            base_kind = "prose" if kind in FAMILY_KINDS_LOCAL else kind
+            base_variant = 0 if family else variant
             text = (
                 "Write a short example and explain it."
                 if a.smoke
-                else decode_prompt(
-                    kind, ctx, a.long_ask, getattr(a, "prompt_variant", 0)
-                )
+                else decode_prompt(base_kind, ctx, a.long_ask, base_variant)
             )
             reply = ""
-            order = [p for p in ("cold", "warm", "turn2") if p in phases]
+            order = [p for p in ("cold", "warm", "turn2", "restart") if p in phases]
             if (
                 "warm" in order
             ):  # repeated warm hits separate a one-time cost from a per-hit one
@@ -1221,6 +1457,10 @@ def part_decode(s, out, a):
                 order[at : at + 1] = ["warm"] * max(1, int(a.warm_reps))
             for phase in order:
                 want = (a.turn2_tokens or n_dec) if phase == "turn2" else n_dec
+                if phase == "restart":
+                    # the cold prompt again, on a relaunched server that reads the same HOME: a
+                    # disk-tier hit is the only way the prefix can be cached (the cell's proof)
+                    s = restart_server(s)
                 b = req(
                     s.model,
                     text,
@@ -1228,6 +1468,7 @@ def part_decode(s, out, a):
                     extra={
                         **(json.loads(a.request_extra) if a.request_extra else {}),
                         **({"logprobs": True} if a.logprobs else {}),
+                        **samp,
                     }
                     or None,
                 )
@@ -1251,9 +1492,28 @@ def part_decode(s, out, a):
                     )  # the user reads the reply before the follow-up
                 if phase == "turn2" and a.rehearse:
                     extra_rec = rehearse(s, b)
-                r = attribution_fields(s, send(s.url, b))
+                if family and phase == "cold":
+                    family_apply(b, kind, variant, thinking, media)
+                raw = send(s.url, b)
+                tool_calls = raw.pop("_tools", [])
+                image_tokens = raw.pop("_image_tokens", None)
+                r = attribution_fields(s, raw)
                 r.update(extra_rec)
-                if not a.smoke:
+                if family:
+                    r.update(
+                        family=kind,
+                        thinking=thinking,
+                        media=media,
+                        image_parts=fm.IMAGE_COUNT.get(media, 0),
+                        image_tokens=image_tokens,
+                        tool_calls=[
+                            {"name": c.get("name"), "arguments": c.get("arguments")}
+                            for c in tool_calls
+                        ],
+                    )
+                    probs = family_problems(kind, r, thinking, media)
+                    r.update(valid=not probs, invalid_reason="; ".join(probs) or None)
+                if not a.smoke and not family:
                     check_decode_len(
                         r,
                         want,
@@ -1618,11 +1878,12 @@ def part_conc(s, out, a):
     ns = [int(x) for x in (a.conc_ns or "2,4,8").split(",")]
     for n in (2,) if a.smoke else ns:
         for trial in range(1 if a.smoke else a.conc_trials):
+            same = bool(getattr(a, "conc_same", False))
             texts = [
                 "Say hello."
                 if a.smoke
                 else concurrent_prompt(
-                    i, trial, a.conc_ctx, getattr(a, "prompt_variant", 0)
+                    0 if same else i, trial, a.conc_ctx, getattr(a, "prompt_variant", 0)
                 )
                 for i in range(n)
             ]
@@ -1676,8 +1937,78 @@ def part_conc(s, out, a):
                 max_tokens=16 if a.smoke else a.conc_tokens,
                 temperature=rs[0]["temperature"],
                 stop=rs[0]["stop"],
+                same_prompt=same,
                 harness=HARNESS_ID,
             )
+
+
+def part_mixed(s, out, a):
+    """Mixed load: one long request (--mixed-long-ctx) and --mixed-short-n short ones started
+    together, one trial per conc trial. Request 0 is the long one; the rest are short. The
+    aggregates (dec_min/max/median, fair_max_min) summarise the SHORT requests' decode rates;
+    agg_tps is all tokens over the wall time."""
+    long_ctx = 512 if a.smoke else a.mixed_long_ctx
+    short_n = 2 if a.smoke else a.mixed_short_n
+    short_ctx = 256 if a.smoke else a.mixed_short_ctx
+    tokens = 16 if a.smoke else a.conc_tokens
+    variant = getattr(a, "prompt_variant", 0)
+    for trial in range(1 if a.smoke else a.conc_trials):
+        long_text = (
+            "Say hello." if a.smoke else load_variant_prompt(f"code-{long_ctx}", variant)
+        )
+        texts = [long_text] + [
+            "Say hello."
+            if a.smoke
+            else concurrent_prompt(i, trial, short_ctx, variant)
+            for i in range(short_n)
+        ]
+        t0 = time.perf_counter()
+        with cf.ThreadPoolExecutor(len(texts)) as ex:
+            rs = list(
+                ex.map(
+                    lambda t: send(s.url, req(s.model, t, tokens)),
+                    texts,
+                )
+            )
+        wall = time.perf_counter() - t0
+        for r in rs[1:]:
+            if not a.smoke:
+                check_decode_len(r, tokens, f"mixed short trial={trial}")
+        if not a.smoke:
+            check_decode_len(rs[0], tokens, f"mixed long trial={trial}")
+        for r in rs:
+            r.pop("_text")
+        tot = sum(r["ct"] for r in rs)
+        short_decs = [r["dec_tps"] for r in rs[1:]]
+        emit(
+            out,
+            part="mixed",
+            trial=trial,
+            n=len(rs),
+            roles=["long"] + ["short"] * short_n,
+            wall_s=round(wall, 6),
+            total_tokens=tot,
+            agg_tps=round(tot / wall, 1),
+            long_ttft_s=rs[0]["ttft_s"],
+            # summary of the short requests only (the fairness question of the mixed cell)
+            **conc_aggregates(short_decs),
+            per_req_dec=[r["dec_tps"] for r in rs],
+            ttfts=[r["ttft_s"] for r in rs],
+            cached=[r["cached"] for r in rs],
+            pts=[r["pt"] for r in rs],
+            cts=[r["ct"] for r in rs],
+            shas=[r["sha"] for r in rs],
+            total_s=[r["total_s"] for r in rs],
+            finish=[r["finish"] for r in rs],
+            prompt_ids_sha=[r["prompt_ids_sha"] for r in rs],
+            ctx=long_ctx,
+            short_ctx=short_ctx,
+            kind="mixed",
+            max_tokens=tokens,
+            temperature=rs[0]["temperature"],
+            stop=rs[0]["stop"],
+            harness=HARNESS_ID,
+        )
 
 
 def part_agent(s, out, a):
@@ -1722,7 +2053,23 @@ def parse_args(argv=None):
     ap.add_argument("--rep", type=int, default=0)
     ap.add_argument("--out", required=True)
     ap.add_argument("--only-ctx", type=int, action="append")
-    ap.add_argument("--only-kind", action="append", choices=["prose", "code"])
+    ap.add_argument(
+        "--only-kind",
+        action="append",
+        choices=["prose", "code", *fm.FAMILY_KINDS],
+    )
+    ap.add_argument(
+        "--thinking",
+        choices=("off", "on"),
+        default="off",
+        help="decode part: Qwen chat-template thinking switch (on = reasoning split required)",
+    )
+    ap.add_argument(
+        "--media",
+        choices=tuple(fm.IMAGE_COUNT),
+        default="none",
+        help="decode part: image parts per request (img1 / img4)",
+    )
     ap.add_argument(
         "--prompt-variant",
         type=int,
@@ -1777,6 +2124,35 @@ def parse_args(argv=None):
     ap.add_argument(
         "--conc-ns", default="", help="concurrency levels, e.g. 2,4 (default 2,4,8)"
     )
+    ap.add_argument(
+        "--conc-same",
+        action="store_true",
+        help="conc part: every concurrent request sends the same prompt (record same_prompt=true)",
+    )
+    ap.add_argument(
+        "--mixed-long-ctx",
+        type=int,
+        default=131072,
+        help="mixed part: rendered tokens of the one long request",
+    )
+    ap.add_argument(
+        "--mixed-short-n",
+        type=int,
+        default=7,
+        help="mixed part: number of short requests sent with the long one",
+    )
+    ap.add_argument(
+        "--mixed-short-ctx",
+        type=int,
+        default=1024,
+        help="mixed part: rendered tokens of each short request",
+    )
+    ap.add_argument(
+        "--log-usage-sample",
+        action="store_true",
+        help="keep the first raw usage chunk the server sent and write it to the session "
+        "header as usage_sample (the GPU smoke's usage-shape evidence)",
+    )
     ap.add_argument("--conc-trials", type=int, default=2)
     ap.add_argument("--conc-tokens", type=int, default=256)
     ap.add_argument(
@@ -1820,7 +2196,7 @@ def parse_args(argv=None):
     ap.add_argument(
         "--phases",
         default=",".join(ALL_PHASES),
-        help="decode phases to run (comma list of cold,warm,turn2,specoff); the checks stay "
+        help="decode phases to run (comma list of cold,warm,turn2,specoff,restart); the checks stay "
         "fail-closed for every selected phase",
     )
     ap.add_argument(
@@ -1828,6 +2204,13 @@ def parse_args(argv=None):
         type=int,
         default=1,
         help="warm (full APC hit) requests per prompt; each is recorded",
+    )
+    ap.add_argument(
+        "--sampling",
+        choices=("greedy", "genconfig"),
+        default="greedy",
+        help="decode part: greedy (temperature 0) or genconfig (temperature/top_p/top_k from the "
+        "model's generation_config.json, sent explicitly)",
     )
     ap.add_argument("--dry-run", action="store_true")
     args = list(sys.argv[1:] if argv is None else argv)
@@ -1985,9 +2368,10 @@ def main():
         "promote",
         "forced",
         "corpus",
+        "mixed",
     ):
         raise ValueError(
-            "supported parts: decode, conc, agent, ca, needle, conc32, arrive, promote, forced, corpus"
+            "supported parts: decode, conc, agent, ca, needle, conc32, arrive, promote, forced, corpus, mixed"
         )
     if a.dry_run:
         if a.part == "decode" and not a.smoke:
@@ -2131,7 +2515,10 @@ def main():
                     "promote": part_promote,
                     "forced": part_forced,
                     "corpus": part_corpus,
+                    "mixed": part_mixed,
                 }[a.part](s, out, a)
+            if _LIVE_SERVERS:
+                s = _LIVE_SERVERS[-1]  # a restart cell measured on its relaunched server
             s.verify_spec_mode()
             mem = getattr(s, "mem", None)
             if mem is not None:
@@ -2165,6 +2552,8 @@ def main():
                     "swap_end": fp.swap_snapshot(),
                     # Server still up (a descendant of this process, so not counted as foreign).
                     "quiet_post": fq.snapshot(),
+                    # the raw usage chunk of the first request (GPU smoke evidence, per engine)
+                    "usage_sample": _USAGE_SAMPLE[0] if a.log_usage_sample else None,
                 }
             emit(
                 out,
@@ -2190,6 +2579,8 @@ def main():
         raise
     finally:
         stop_cell_telemetry()
+        for live in _LIVE_SERVERS:  # a restart cell's relaunched server, then the first one
+            live.kill()
         s.kill()
 
 
