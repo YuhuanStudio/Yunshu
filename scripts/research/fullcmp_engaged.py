@@ -815,7 +815,11 @@ def acceptance_proven(ev: dict) -> bool:
     source of the acceptance verdict; the record fields (attr.accepted) are not read for it."""
     stats = ev.get("stats") or {}
     if stats.get("per_row") and not stats.get("per_row_problem"):
-        return all(float(r.get("value", 0)) > 0 for r in stats["per_row"])
+        # rows decoded without drafting (no MTP line, or calibration only) carry the label, not a failure: the
+        # cell is proven when some request drafted with accepted > 0 (oMLX drafts at <=2 active rows)
+        drafting = [r for r in stats["per_row"] if not r.get("calibrated") and r.get("mtp_line", "x") is not None]
+        return any(float(r.get("value", 0)) > 0 for r in drafting) if drafting else all(
+            float(r.get("value", 0)) > 0 for r in stats["per_row"])
     if stats.get("batch_level"):
         return _is_positive(stats.get("accepted")) and _is_positive(stats.get("drafted"))
     probe = stats.get("probe")
