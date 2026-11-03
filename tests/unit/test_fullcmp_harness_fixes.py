@@ -82,6 +82,12 @@ def _corpus(tmp_path, names):
     return str(tmp_path)
 
 
+def _shas(names):
+    """A sha table row per written prompt file (the gate takes the table as a parameter; tests pass
+    the table of their own tmp corpus, the production gate still reads the real table)."""
+    return {name: _sha("x") for name in names}
+
+
 def test_corpus_missing_dir_fails_closed(tmp_path):
     problems = fr.prompt_corpus_problems([_row()], str(tmp_path / "nope"))
     assert problems and "prompt dir missing" in problems[0]
@@ -96,14 +102,14 @@ def test_corpus_missing_prompt_file_fails_closed(tmp_path):
 def test_corpus_family_kind_reads_the_prose_file(tmp_path):
     work = _corpus(tmp_path, ["prose-4096.txt"])
     assert fr.prompt_corpus_problems(
-        [_row(prompt_kind="tool-chat", ctx_tokens=4096)], work
+        [_row(prompt_kind="tool-chat", ctx_tokens=4096)], work, sha_table=_shas(["prose-4096.txt"])
     ) == []
 
 
 def test_corpus_complete_passes_and_skips_rows_without_a_decode_prompt(tmp_path):
     work = _corpus(tmp_path, ["code-1024.txt"])
     rows = [_row(), {"id": "agent", "engine": "yunshu"}]
-    assert fr.prompt_corpus_problems(rows, work) == []
+    assert fr.prompt_corpus_problems(rows, work, sha_table=_shas(["code-1024.txt"])) == []
 
 
 # ---- 2. prompt_file_sha256 guard -----------------------------------------------------------
