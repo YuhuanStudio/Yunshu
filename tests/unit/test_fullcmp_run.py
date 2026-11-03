@@ -788,3 +788,78 @@ def test_retry_job_is_a_new_wrapper_with_its_own_gate_log(retry_world):
     assert f"{job.label}-retry1" in again.script and "retry" in again.flags
     # the gate runs before any cell in the retry too: a refused attempt writes no raw
     assert again.script.index("fullcmp_quiet") < again.script.index("mkdir")
+
+
+# --- per-cell quiet refusal, rerun of the unfinished cells, quiet-flagged requeue -------------
+
+
+def test_a_failed_per_cell_quiet_snapshot_refuses_the_cell():
+    import importlib.util as ilu
+    spec = ilu.spec_from_file_location("tfbench_q", ROOT / "scripts" / "research" / "tfbench.py")
+    tb = ilu.module_from_spec(spec)
+    sys.modules["tfbench_q"] = tb
+    spec.loader.exec_module(tb)
+    bad = {"ok": False, "total_foreign_pct": 112.8, "holders": [{"name": "mds", "pct": 48.7}]}
+    assert tb.quiet_refused(bad) is True
+    assert tb.quiet_refused({"ok": True}) is False
+    assert tb.quiet_refused(None) is False  # not a fullcmp cell: no snapshot, no refusal
+    assert tb.QUIET_REFUSED_EXIT == 3
+
+
+def _part_done(path, complete=True):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"part": "decode"}\n' + ('{"part": "part_done", "complete": true}\n' if complete else ""))
+
+
+def test_a_quiet_retry_runs_only_the_unfinished_cells(monkeypatch, tmp_path):
+    monkeypatch.setattr(run, "RAW_ROOT", tmp_path / "raw")
+    rows = [row("yunshu", "B1.first", est=2.0), row("yunshu", "B1.second", est=2.0, ctx=8192, ctx_tokens=8192)]
+    job = run.plan_batch(rows, "B1", PIN).jobs[0]
+    job = run.dataclasses.replace(job, cells=[dict(r) for r in rows], rep=0)
+    _part_done(run.raw_path("yunshu", "B1.first", 0))  # the first cell finished before the refusal
+    assert [c["id"] for c in run.remaining_cells(job)] == ["B1.second"]
+    retry = run.retry_job(job, 1, PIN, cells=run.remaining_cells(job))
+    assert [c["id"] for c in retry.cells] == ["B1.second"]
+    assert retry.label.endswith("-retry1")
+
+
+def test_a_quiet_flagged_cell_is_superseded_and_rerun_in_its_slot(monkeypatch, tmp_path):
+    import fullcmp_audit as fa
+    raw = tmp_path / "raw"
+    monkeypatch.setattr(run, "RAW_ROOT", raw)
+    rows = [row("yunshu", "B1.a", est=2.0)]
+    plan = run.plan_batch(rows, "B1", PIN)
+    rec = {"ok": False, "total_foreign_pct": 60.0, "max_single_pct": 20.0, "max_total_pct": 150.0,
+           "holders": [{"pid": 9, "name": "stray", "pct": 43.0}]}
+    head = {"part": "session", "quiet_pre": {**rec, "ok": True, "total_foreign_pct": 1.0, "holders": []},
+            "quiet_post": rec}
+    cell_file = run.raw_path("yunshu", "B1.a", 0)
+    cell_file.parent.mkdir(parents=True, exist_ok=True)
+    cell_file.write_text(json.dumps(head) + "\n" + '{"part": "part_done", "complete": true}\n')
+    manifest = run.audit_manifest(rows, ["B1"], PIN, ["yunshu"])
+    submitted = []
+    monkeypatch.setattr(run, "_submit_and_wait", lambda job: submitted.append(job.label) or ("id", 0, "done"))
+    failures = run.requeue_quiet_flagged(plan, PIN, raw, manifest)
+    assert failures == 0
+    assert not cell_file.exists()  # the flagged file moved aside, as evidence
+    assert cell_file.with_name(cell_file.name.replace(".jsonl", ".superseded-1.jsonl")).exists()
+    assert submitted and submitted[0].endswith("-qretry1")
+    # the audit does not count the superseded file as an unplanned file
+    assert fa.SUPERSEDED_TAG in cell_file.with_name(cell_file.name.replace(".jsonl", ".superseded-1.jsonl")).name
+
+
+def test_a_cell_flagged_twice_fails_the_batch(monkeypatch, tmp_path):
+    raw = tmp_path / "raw"
+    monkeypatch.setattr(run, "RAW_ROOT", raw)
+    rows = [row("yunshu", "B1.a", est=2.0)]
+    plan = run.plan_batch(rows, "B1", PIN)
+    rec = {"ok": False, "total_foreign_pct": 60.0, "max_single_pct": 20.0, "max_total_pct": 150.0,
+           "holders": [{"pid": 9, "name": "stray", "pct": 43.0}]}
+    cell_file = run.raw_path("yunshu", "B1.a", 0)
+    cell_file.parent.mkdir(parents=True, exist_ok=True)
+    cell_file.write_text(json.dumps({"part": "session", "quiet_post": rec}) + "\n")
+    cell_file.with_name(cell_file.name.replace(".jsonl", ".superseded-1.jsonl")).write_text("x\n")
+    submitted = []
+    monkeypatch.setattr(run, "_submit_and_wait", lambda job: submitted.append(job.label) or ("id", 0, "done"))
+    assert run.requeue_quiet_flagged(plan, PIN, raw, run.audit_manifest(rows, ["B1"], PIN, ["yunshu"])) == 1
+    assert submitted == []

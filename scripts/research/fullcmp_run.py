@@ -1226,17 +1226,82 @@ def quiet_holders(label: str) -> list:
     return []
 
 
-def retry_job(job: "Job", attempt: int, pin: dict) -> "Job":
-    """The same planned slot under a new label (<label>-retry<attempt>): new wrapper, new gate log."""
-    label = f"{job.label}-retry{attempt}"
+def retry_job(job: "Job", attempt: int, pin: dict, cells=None, tag: str = "retry") -> "Job":
+    """The same planned slot under a new label (<label>-<tag><attempt>): new wrapper, new gate log.
+    cells: the cells the retry runs (default: the job's own)."""
+    label = f"{job.label}-{tag}{attempt}"
     profile = "profile" in job.flags
+    cells = list(job.cells if cells is None else cells)
     return dataclasses.replace(
         job,
         label=label,
-        cmd=job_command(job.cells, job.rep, pin, label, profile=profile),
-        script=job_script(job.cells, job.rep, pin, label, profile=profile),
+        cells=cells,
+        cmd=job_command(cells, job.rep, pin, label, profile=profile),
+        script=job_script(cells, job.rep, pin, label, profile=profile),
         flags=[*job.flags, "retry"],
     )
+
+
+def cell_complete(engine: str, cell_id: str, rep: int) -> bool:
+    """A cell's raw file exists and holds its part_done record (the cell finished)."""
+    path = raw_path(engine, cell_id, rep)
+    try:
+        return '"part": "part_done"' in path.read_text()
+    except OSError:
+        return False
+
+
+def remaining_cells(job: "Job") -> list[dict]:
+    """The cells of a job that did not finish: a quiet refusal stops the chain, and the finished
+    cells must not run again (their raw files are the record). Profile jobs rerun all of their cells."""
+    if "profile" in job.flags:
+        return list(job.cells)
+    return [c for c in job.cells if not cell_complete(c["engine"], c["id"], job.rep)]
+
+
+SUPERSEDED_TAG = ".superseded-"  # same marker as fullcmp_audit.SUPERSEDED_TAG
+
+
+def quiet_flagged(raw_root: Path, manifest: dict) -> list:
+    """(cell file, violations) for every cell file whose quiet snapshots fail the audit's rule."""
+    import fullcmp_audit as fa
+
+    run = fa.load_run(raw_root, manifest)
+    flagged = []
+    for cf in run.files:
+        verdict = fa.check_quiet_machine(fa.Run(manifest, [cf], [], [], []))
+        if verdict.violations:
+            flagged.append((cf, verdict.violations))
+    return flagged
+
+
+def requeue_quiet_flagged(plan: "Plan", pin: dict, raw_root: Path, manifest: dict) -> int:
+    """Rerun each quiet-flagged cell in its own slot (label -qretry1). The flagged file is renamed to
+    <cell>-rN.superseded-1.jsonl (kept as evidence; the audit skips superseded files), so the rerun
+    writes the cell's own file. A cell flagged again (a superseded file exists) fails the batch.
+    Returns the number of failures."""
+    import fullcmp_audit as fa
+
+    failures, jobs = 0, []
+    for cf, violations in quiet_flagged(raw_root, manifest):
+        engine, cell_id, rep = cf.cell["engine"], cf.cell["cell"], cf.rep
+        if any(cf.path.parent.glob(f"{cf.path.stem}{SUPERSEDED_TAG}*")):
+            print(f"QUIET FLAGGED TWICE {cell_id} r{rep}: {violations}; the batch fails", flush=True)
+            failures += 1
+            continue
+        target = cf.path.with_name(f"{cf.path.stem}{SUPERSEDED_TAG}1.jsonl")
+        cf.path.rename(target)
+        tel = fa.telemetry_path(cf.path)
+        if tel.exists():
+            tel.rename(tel.with_name(tel.name.replace(".telemetry.jsonl", f"{SUPERSEDED_TAG}1.telemetry.jsonl")))
+        print(f"QUIET FLAGGED {cell_id} r{rep}: {violations}; requeued as -qretry1", flush=True)
+        row = next(r for r in plan.runnable if r["engine"] == engine and r["id"] == cell_id)
+        base = plan_jobs({rep: [row]}, [engine], pin, plan.batch)[0]
+        jobs.append(retry_job(base, 1, pin, tag="qretry"))
+    if jobs:
+        _ids, failed = submit_sequential(jobs, pin, retry_log=RETRY_LOG)
+        failures += failed
+    return failures
 
 
 def submit_sequential(
@@ -1264,6 +1329,11 @@ def submit_sequential(
                 failed += 1
                 print(f"slot {job.label}: failed rc={rc} state={state} (attempt {attempt})", flush=True)
                 break
+            todo = remaining_cells(current)
+            if not todo:
+                failed += 1
+                print(f"slot {job.label}: quiet refusal with no cell left to run", flush=True)
+                break
             holders = quiet_holders(current.label)
             wait_min = RETRY_BACKOFF_MIN[min(attempt, len(RETRY_BACKOFF_MIN) - 1)]
             record = {
@@ -1276,7 +1346,7 @@ def submit_sequential(
                 with open(retry_log, "a") as fh:
                     fh.write(json.dumps(record) + "\n")
             sleep(wait_min * 60)
-            current = retry_job(job, attempt + 1, pin)
+            current = retry_job(job, attempt + 1, pin, cells=todo)
             write_wrapper(current)
     return ids, failed
 
@@ -1835,11 +1905,11 @@ def main(argv=None) -> int:
     batches = audited_batches(a.batch)
     manifest_path = AUDIT_DIR / f"{a.batch}_audit_manifest.json"
     AUDIT_DIR.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
-        json.dumps(
-            audit_manifest(rows, batches, pin, plan.engine_order, profile_engines), indent=2
-        )
-        + "\n"
+    manifest_obj = audit_manifest(rows, batches, pin, plan.engine_order, profile_engines)
+    # quiet-flagged cells are rerun in their slot; the second pass catches a cell flagged twice
+    for _pass in range(2):
+        failed += requeue_quiet_flagged(plan, pin, RAW_ROOT, manifest_obj)
+    manifest_path.write_text(json.dumps(manifest_obj, indent=2) + "\n"
     )
     audit_rc = run_audit(RAW_ROOT, manifest_path)
 

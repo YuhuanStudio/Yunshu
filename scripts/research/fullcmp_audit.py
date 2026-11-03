@@ -247,6 +247,8 @@ class GuardResult:
 
 
 TELEMETRY_SUFFIX = ".telemetry.jsonl"
+# A cell file superseded by a clean rerun (quiet-flagged, kept as evidence): <cell>-rN.superseded-K.jsonl
+SUPERSEDED_TAG = ".superseded-"
 
 
 def telemetry_path(cell_path: Path) -> Path:
@@ -385,6 +387,7 @@ def load_run(root, manifest: dict) -> Run:
         for p in sorted(root.glob("*/*.jsonl"))
         if p not in expected
         and not p.name.endswith(TELEMETRY_SUFFIX)
+        and SUPERSEDED_TAG not in p.name
         and p.parent.name != BEHAVIOUR_DIR
     ]
     behaviour = {}

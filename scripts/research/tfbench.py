@@ -2580,6 +2580,14 @@ def finalize_session(path, end_fields):
     os.replace(tmp, path)
 
 
+QUIET_REFUSED_EXIT = 3  # the driver retries a quiet refusal in the same slot (fullcmp_run)
+
+
+def quiet_refused(snapshot) -> bool:
+    """True when a per-cell quiet snapshot failed the gate (fullcmp_quiet.check's own verdict)."""
+    return isinstance(snapshot, dict) and snapshot.get("ok") is False
+
+
 HEARTBEAT_S = 30.0  # a heartbeat line every 30 s: a long phase never leaves the job log silent
 HEARTBEAT_STOP_S = 600.0  # no main-thread progress this long: stop beating, so the stall watchdog fires
 _PROGRESS = {"phase": "start", "t": time.time(), "t0": time.time()}
@@ -2692,6 +2700,12 @@ def main():
         census = fp.load_json(fp.CENSUS_PATH)
     # Host CPU before the server exists (foreign holders only; the harness tree is excluded).
     quiet_pre = fq.snapshot() if fullcmp else None
+    if quiet_refused(quiet_pre):
+        # The host is busy before this cell: refuse BEFORE the server starts and before the raw file is
+        # created, so the driver can rerun this cell in the same slot (exit 3 = quiet refusal).
+        print(f"QUIET REFUSED before {a.out}: {quiet_pre.get('total_foreign_pct')}% foreign, "
+              f"holders {[h.get('name') for h in quiet_pre.get('holders', [])[:5]]}", flush=True)
+        sys.exit(QUIET_REFUSED_EXIT)
     job_start_s = time.time()
     swap_start = fp.swap_snapshot() if fullcmp else None
     s = start_server(
