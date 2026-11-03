@@ -239,3 +239,27 @@ def test_genconfig_sampling_stub_run(tmp_path):
         assert r["temperature"] == want["temperature"] == 1.0
         assert r["top_p"] == want["top_p"] == 0.95
         assert r["top_k"] == want["top_k"] == 20
+
+
+def test_log_usage_sample_records_the_raw_usage_chunk_through_the_stub(tmp_path):
+    """tfbench --log-usage-sample (the GPU smoke's usage evidence) writes the first request's raw usage
+    chunk into part_done.usage_sample. Runs the runner's real command line plus the flag, on the stub."""
+    import fullcmp_run as fr
+
+    stub_dir = Path(__file__).resolve().parent
+    fr.configure(tmp_path / "raw", tmp_path / "work")
+    pin = json.loads(fr.PIN_PATH.read_text())
+    row = next(r for r in real_manifest_rows() if r.get("ctx_tokens") == 1024)
+    row = dict(row, id=row["id"] + ".usagesample", out_len=16)
+    argv = fr.cell_command(row, 0, pin) + ["--log-usage-sample"]
+    env = dict(os.environ, GPUQ_JOB_ID="2026-110301-01-fullcmp-SMOKE", TFB_STUB_SERVER=str(stub_dir))
+    Path(fr.raw_path(row["engine"], row["id"], 0)).parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=600, cwd=str(ROOT))
+    assert proc.returncode == 0, proc.stdout[-1500:] + proc.stderr[-3000:]
+    out = Path(fr.raw_path(row["engine"], row["id"], 0))
+    # finalize_session writes the end-of-cell fields (usage_sample included) into the session header
+    head = json.loads(out.read_text().splitlines()[0])
+    assert head.get("part") == "session", head.keys()
+    sample = head.get("usage_sample")
+    assert isinstance(sample, dict) and sample, f"usage_sample not recorded: {sorted(head)}"
+    assert "usage" in sample, sorted(sample)
