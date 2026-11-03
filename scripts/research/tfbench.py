@@ -824,14 +824,14 @@ def _mark(ev, **fields):
 def send(
     url, body, timeout=600, *, capture_timestamps=False, trace_id=None, sample=False
 ):
-    _mark()
+    _progress()
     try:
         return _send_impl(
             url, body, timeout, capture_timestamps=capture_timestamps,
             trace_id=trace_id, sample=sample,
         )
     finally:
-        _mark()
+        _progress()
 
 
 def _send_impl(
@@ -2585,7 +2585,7 @@ HEARTBEAT_STOP_S = 600.0  # no main-thread progress this long: stop beating, so 
 _PROGRESS = {"phase": "start", "t": time.time(), "t0": time.time()}
 
 
-def _mark(phase: str | None = None) -> None:
+def _progress(phase: str | None = None) -> None:
     """Main-thread progress: every request completion and every phase change calls this."""
     if phase is not None:
         _PROGRESS["phase"] = phase
@@ -2619,7 +2619,7 @@ def _start_heartbeat(interval: float = HEARTBEAT_S, stop_after: float = HEARTBEA
 def main():
     _start_heartbeat()
     a = parse_args()
-    _mark(f"part-{a.part}")
+    _progress(f"part-{a.part}")
     extra_env = dict(kv.split("=", 1) for kv in a.env)
     if a.part not in (
         "decode",
@@ -2805,7 +2805,7 @@ def main():
                     for i in range(n)
                 ]
                 with cf.ThreadPoolExecutor(max(1, n)) as ex:
-                    _mark("conc-probe")
+                    _progress("conc-probe")
                     conc_probe = list(ex.map(lambda t: probe_request(s, t), texts))
                 for rid, resp in enumerate(conc_probe):
                     emit(out, part="probe_conc", engine=a.engine, rep=a.rep, rid=rid,
