@@ -82,18 +82,61 @@ def test_missing_variant_file_or_sha_row_is_refused_and_named(tmp_path):
 
 
 @pytest.mark.skipif(not REAL_MANIFEST.is_file(), reason="real fullcmp manifest not present")
-@pytest.mark.xfail(
-    strict=True,
-    reason="real matrix plans one prompt (variant 0) per (model, ctx, kind); output_sha needs >= 2",
-)
-def test_real_manifest_groups_have_two_prompt_ids_for_output_sha_guard():
-    """output_sha (fullcmp_audit.check_output_sha) needs >= 2 distinct prompt ids per (model, ctx, kind).
-    Strict xfail: it turns into a failure once the real matrix plans a second prompt per group."""
-    groups: dict[tuple, set] = {}
+def test_real_manifest_one_prompt_per_group_passes_the_narrowed_output_sha_rule():
+    """The narrowed output_sha rule (fullcmp_audit.check_output_sha): one planned prompt per (model, ctx, kind) is
+    fine when no variant is planned; the real matrix therefore has no output_sha violation from prompt counts."""
+    import sys
+    import types
+
+    import fullcmp_audit as fa
+
+    cells = []
+    seen = set()
     for r in _real_rows():
         if "ctx_tokens" not in r or not r.get("prompt_kind"):
             continue
-        key = (r.get("model"), r["ctx"], r["prompt_kind"])
-        groups.setdefault(key, set()).add(f"{r['prompt_kind']}-{r['ctx_tokens']}-v{run.prompt_variant(r)}")
-    short = sorted(k for k, ids in groups.items() if len(ids) < 2)
-    assert not short, f"groups with < 2 prompt ids: {short}"
+        cid = r.get("id")
+        if cid in seen:
+            continue
+        seen.add(cid)
+        cells.append({"cell": cid, "id": cid, "model": r.get("model"), "ctx": r["ctx"], "kind": r["prompt_kind"],
+                      "prompt_id": f"{r['prompt_kind']}-{r['ctx_tokens']}-v{run.prompt_variant(r)}"})
+    res = fa.check_output_sha(types.SimpleNamespace(files=[], manifest={"cells": cells}))
+    assert res.violations == [], res.violations[:3]
+
+
+def _sha_run(cells_rows):
+    import types
+
+    files = []
+    for engine, prompt_id, sha in cells_rows:
+        files.append(types.SimpleNamespace(
+            cell={"cell": f"{engine}-c", "engine": engine, "model": "m", "ctx": "8K", "kind": "code",
+                  "prompt_id": prompt_id},
+            rows=[{"sha": "a" * 16, "prompt_file_sha256": sha}], rep=0, path=None, header=None))
+    cells = [{"cell": f"{e}-c", "id": f"{e}-c", "model": "m", "ctx": "8K", "kind": "code", "prompt_id": p}
+             for e, p, _ in cells_rows]
+    import fullcmp_audit as fa
+
+    return fa.check_output_sha(types.SimpleNamespace(files=files, manifest={"cells": cells}))
+
+
+def test_group_with_differing_prompt_sha_across_engines_fails():
+    res = _sha_run([("yunshu", "code-8192-v0", "1" * 64), ("tf-1.2.1", "code-8192-v0", "2" * 64)])
+    assert any("differs across engines" in v for v in res.violations)
+
+
+def test_group_with_one_sha_across_engines_passes():
+    res = _sha_run([("yunshu", "code-8192-v0", "1" * 64), ("tf-1.2.1", "code-8192-v0", "1" * 64)])
+    assert not any("differs across engines" in v for v in res.violations)
+
+
+def test_planned_variant_group_with_one_prompt_fails():
+    import types
+
+    import fullcmp_audit as fa
+
+    cells = [{"cell": "c0", "id": "x.v0", "model": "m", "ctx": "1K", "kind": "code", "prompt_id": "code-1024-v0"},
+             {"cell": "c1", "id": "x.v1", "model": "m", "ctx": "1K", "kind": "code", "prompt_id": "code-1024-v0"}]
+    res = fa.check_output_sha(types.SimpleNamespace(files=[], manifest={"cells": cells}))
+    assert any("variants planned" in v for v in res.violations)

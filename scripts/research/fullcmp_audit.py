@@ -1013,7 +1013,10 @@ def check_gpu_exclusive_rotation(run: Run) -> GuardResult:
 
 
 def check_output_sha(run: Run) -> GuardResult:
-    """Guard 10: output sha recorded per request; >=2 prompts per (model, ctx, kind)."""
+    """Guard 10: output sha recorded per request, and the prompt identity of each (model, ctx, kind) group.
+    A group whose manifest cells plan prompt variants (ids .v1, .v2, ...) needs at least two prompt ids; a
+    group with one planned prompt (the real matrix, and smoke cells with v0 only) needs exactly its planned id,
+    and every engine that ran the group must have used the same prompt_file_sha256 (cross-engine fairness)."""
     res = GuardResult("output_sha")
     for cf in run.files:
         for r in cf.rows:
@@ -1025,15 +1028,31 @@ def check_output_sha(run: Run) -> GuardResult:
                 )
     prompts = defaultdict(set)
     cells_of = defaultdict(list)
+    variant_planned = defaultdict(bool)
     for c in run.manifest["cells"]:
         key = (c["model"], c["ctx"], c["kind"])
         prompts[key].add(c["prompt_id"])
         cells_of[key].append(c["cell"])
+        if re.search(r"\.v[1-9]\d*$", str(c.get("id", ""))):
+            variant_planned[key] = True  # the manifest plans a second prompt variant for this group
     for key, ids in prompts.items():
         res.checked += 1
-        if len(ids) < 2:
+        if variant_planned[key] and len(ids) < 2:
             for cid in cells_of[key]:
-                res.fail(cid, f"only {len(ids)} prompt for {key}; need >= 2 per kind")
+                res.fail(cid, f"variants planned for {key} but only {len(ids)} prompt id; need >= 2")
+    # cross-engine fairness: one prompt file sha per (model, ctx, kind) group across the engines that ran it
+    shas = defaultdict(lambda: defaultdict(set))
+    for cf in run.files:
+        key = (cf.cell.get("model"), cf.cell.get("ctx"), cf.cell.get("kind"), cf.cell.get("prompt_id"))
+        for r in cf.rows:
+            if r.get("prompt_file_sha256"):
+                shas[key][cf.cell.get("engine")].add(r["prompt_file_sha256"])
+    for key, by_engine in shas.items():
+        res.checked += 1
+        all_shas = set().union(*by_engine.values()) if by_engine else set()
+        if len(all_shas) > 1:
+            res.fail(next(iter(cells_of.get(key, ["?"]))),
+                     f"prompt file sha differs across engines for {key}: {sorted(x[:12] for x in all_shas)}")
     return res
 
 
