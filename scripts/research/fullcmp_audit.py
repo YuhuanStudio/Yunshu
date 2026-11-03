@@ -1314,6 +1314,12 @@ def server_log_slice_problem(cell_path):
     return None
 
 
+def profile_required(run: Run, engine) -> bool:
+    """Full mode demands a profile rep only for the engines the manifest names (None: all)."""
+    req = getattr(run, "profile_required", None)
+    return req is None or str(engine) in req
+
+
 def check_attribution_fields(run: Run) -> GuardResult:
     """Guard 16 (lead ruling 2026-11-03, two layers).
     Layer 1: every timed row (decode and conc) carries the layer-1 fields for its engine, each as a
@@ -1352,7 +1358,7 @@ def check_attribution_fields(run: Run) -> GuardResult:
         seen.add((engine, cell))
         path = Path(run.profile_root) / str(engine) / f"{cell}-prof.jsonl"
         if not path.is_file():
-            if run.full:
+            if run.full and profile_required(run, engine):
                 res.fail(cell, "profile rep missing: no " + str(path))
             continue
         slice_problem = server_log_slice_problem(path)
@@ -1554,6 +1560,9 @@ def run_guards(root, manifest_path, profile_root=None, full=False):
     run = load_run(root, manifest)
     run.profile_root = profile_root
     run.full = full
+    # engines whose cells must carry a profile rep in full mode (None: every engine)
+    req = manifest.get("profile_required_engines")
+    run.profile_required = set(req) if req else None
     return run, [check(run) for check in GUARD_CHECKS]
 
 

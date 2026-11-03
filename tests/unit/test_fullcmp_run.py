@@ -660,3 +660,39 @@ def test_slow_mixed_jobs_get_a_ten_minute_stall_for_every_manifest_engine():
             assert b["stall"] >= run.MIXED_SLOW_STALL_MIN, (engine, b["stall"])
         assert b["stall"] >= run.STALL_FLOOR_MIN, engine
     assert set(run.MIXED_SLOW_ENGINES) <= set(run.fm.ENGINE_IDS)
+
+
+# --- --profile-engines: -prof jobs and the audit's profile requirement for listed engines only ----
+
+
+def test_profile_engines_limits_the_prof_jobs_to_the_listed_engine():
+    rows = [row("yunshu", "B1.a", est=2.0), row("omlx-0.7.3", "B1.b", est=2.0)]
+    plan = run.plan_batch(rows, "B1", PIN, profile_rep=True, profile_engines=["yunshu"])
+    prof = [j for j in plan.jobs if "-prof" in j.label]
+    assert len(prof) == 1
+    assert prof[0].engine == "yunshu" and prof[0].label.startswith("fullcmp-B1-yunshu")
+    assert not any(j.engine == "omlx-0.7.3" and "-prof" in j.label for j in plan.jobs)
+
+
+def test_profile_default_is_every_engine():
+    rows = [row("yunshu", "B1.a", est=2.0), row("omlx-0.7.3", "B1.b", est=2.0)]
+    plan = run.plan_batch(rows, "B1", PIN, profile_rep=True)
+    assert {j.engine for j in plan.jobs if "-prof" in j.label} == {"yunshu", "omlx-0.7.3"}
+
+
+def test_audit_manifest_names_the_profile_required_engines():
+    rows = [row("yunshu", "B1.a"), row("omlx-0.7.3", "B1.b")]
+    m = run.audit_manifest(rows, ["B1"], PIN, ["yunshu", "omlx-0.7.3"], ["yunshu"])
+    assert m["profile_required_engines"] == ["yunshu"]
+    assert run.audit_manifest(rows, ["B1"], PIN, ["yunshu", "omlx-0.7.3"])["profile_required_engines"] is None
+
+
+def test_audit_requires_profile_rows_only_for_the_listed_engines():
+    import fullcmp_audit as fa
+
+    run_ = fa.Run({"groups": {}}, [], [], [], [])
+    run_.profile_required = {"yunshu"}
+    assert fa.profile_required(run_, "yunshu") is True
+    assert fa.profile_required(run_, "omlx-0.7.3") is False
+    run_.profile_required = None  # no list in the manifest: every engine, as before
+    assert fa.profile_required(run_, "omlx-0.7.3") is True

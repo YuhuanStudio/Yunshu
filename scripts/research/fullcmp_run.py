@@ -839,6 +839,7 @@ def plan_batch(
     engines=None,
     rep=None,
     profile_rep: bool = False,
+    profile_engines=None,
 ) -> Plan:
     batch_rows = [r for r in rows if r.get("batch") == batch]
     runnable, skipped = [], []
@@ -869,8 +870,10 @@ def plan_batch(
     jobs = plan_jobs(rows_by_rep, engine_order, pin, batch)
     if profile_rep and runnable:
         # One extra profile job per (engine, group, chunk), after the timed jobs; its rows never
-        # reach the audit or the table.
-        jobs += plan_jobs({0: runnable}, engine_order, pin, batch, profile=True)
+        # reach the table. --profile-engines limits them to the listed engines (default: all).
+        prof_rows = [r for r in runnable if not profile_engines or r["engine"] in profile_engines]
+        if prof_rows:
+            jobs += plan_jobs({0: prof_rows}, engine_order, pin, batch, profile=True)
     jobs = one_lane(jobs)
     return Plan(batch, runnable, skipped, engine_order, jobs)
 
@@ -965,7 +968,11 @@ def _weight_group(engine: str) -> str | None:
 
 
 def audit_manifest(
-    rows: list[dict], batches: list[str], pin: dict, engine_order: list[str]
+    rows: list[dict],
+    batches: list[str],
+    pin: dict,
+    engine_order: list[str],
+    profile_engines=None,
 ) -> dict:
     """Expected-cell manifest for fullcmp_audit (its schema, FULLCMP_SCHEMA["manifest"]).
     Fields the driver cannot know (per-engine pins other than yunshu, controls, expected records,
@@ -1014,6 +1021,8 @@ def audit_manifest(
     }
     return {
         "run_id": RUN_ID,
+        # engines whose cells must carry a profile rep under --full (None: every engine)
+        "profile_required_engines": sorted(profile_engines) if profile_engines else None,
         # A smoke manifest is a harness check, not a table: the audit then skips the A/A and
         # injected-delay controls (fullcmp_audit.check_fairness_controls). Real batches never set it.
         "smoke": any(b == "SMOKE" for b in batches),
@@ -1525,6 +1534,12 @@ def main(argv=None) -> int:
         help="also queue one layer-2 profile job per cell group (label ...-prof; excluded from tables)",
     )
     ap.add_argument(
+        "--profile-engines",
+        default="",
+        help="with --profile-rep: only these engines (comma list) get -prof jobs and are required to "
+        "have profile rows (default: every engine)",
+    )
+    ap.add_argument(
         "--raw-root",
         type=Path,
         default=None,
@@ -1596,8 +1611,24 @@ def main(argv=None) -> int:
     if misses:
         print(fullcmp_engine_tables.format_misses(misses), file=sys.stderr)
         return 2
+    profile_engines = [e for e in a.profile_engines.split(",") if e] or None
+    if profile_engines and not a.profile_rep:
+        print("refusing: --profile-engines needs --profile-rep", file=sys.stderr)
+        return 2
+    if profile_engines:
+        known = {r.get("engine") for r in rows if r.get("batch") == a.batch}
+        unknown = sorted(set(profile_engines) - known)
+        if unknown:
+            print(f"refusing: --profile-engines names no {a.batch} row: {unknown}", file=sys.stderr)
+            return 2
     plan = plan_batch(
-        rows, a.batch, pin, engines=engines, rep=a.rep, profile_rep=a.profile_rep
+        rows,
+        a.batch,
+        pin,
+        engines=engines,
+        rep=a.rep,
+        profile_rep=a.profile_rep,
+        profile_engines=profile_engines,
     )
     problems = prompt_corpus_problems(plan.runnable)
     if problems:
@@ -1679,7 +1710,9 @@ def main(argv=None) -> int:
     manifest_path = AUDIT_DIR / f"{a.batch}_audit_manifest.json"
     AUDIT_DIR.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
-        json.dumps(audit_manifest(rows, batches, pin, plan.engine_order), indent=2)
+        json.dumps(
+            audit_manifest(rows, batches, pin, plan.engine_order, profile_engines), indent=2
+        )
         + "\n"
     )
     audit_rc = run_audit(RAW_ROOT, manifest_path)
