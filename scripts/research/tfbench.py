@@ -384,6 +384,9 @@ class Srv:
             # every check after it stay the same code path.
             cmd = stub_server_cmd(self.engine, self.port, self.log, stub_dir)
             self.cmd = cmd
+            self.log.write_bytes(
+                b""
+            )  # as the real launch does: the log exists before readiness
             self.proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,

@@ -36,6 +36,11 @@ def engine_load_lines(engine: str) -> list[str]:
         return ["DFlash enabled for stub-model as a batched drafter, draft=/stub/draft"]
     if engine == "omlx-0.7.3rc1":
         return ["DFlash enabled for stub-model as a batched drafter, draft=/stub/draft"]
+    if engine == "yunshu-main":
+        # tfbench.engaged_spec_mode_line reads the initialized runner line
+        return ["VLM batch runner: model=stub-model draft=dflash"]
+    if engine.startswith("tf-"):
+        return ["drafts: DFlash2 block=16 (stub)"]
     return []
 
 
