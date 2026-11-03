@@ -1,24 +1,25 @@
 """Engaged speculative mode from evidence, never from the request (fullcmp, fail closed).
 
-A cell's engaged mode is derived only from evidence recorded per engine in an evidence table:
+Table (scripts/research/fullcmp_engaged_evidence.json, built by fullcmp_engaged_merge.py):
 
-    {engine: {"mode": "dflash" | "mtp" | "off" | "ar",
-              "evidence": [{"kind": "log_regex" | "metrics" | "response_field" | "acceptance_stat",
-                            "pattern_or_path": str, "source_ref": str, "real_example": str,
-                            "negative_example": str, "per_request": bool}, ...],
-              "fallback": [regex, ...]        # optional: a log line that says the engine fell back to AR
-              "log_source": str, "confidence": str, "notes": str}}
+    {"_meta": {...},
+     "engines": {engine: {"modes": {mode: {"evidence": [...], "fallback": [regex, ...]}},
+                          "log_source": str, "notes": str, "confidence": str}}}
 
-Evidence kinds:
-- log_regex: the engine's own server log (the cell's .server.log slice) matches the pattern.
-- metrics: the pattern matches the engine's /metrics or status probe text recorded for the cell.
-- response_field: a dotted path into the per-request records (x_yunshu.speculative fields as the
-  harness flattens them) exists with a truthy value.
+The cell's EXPECTED mode selects the mode entry; an engine with no configured mode (empty
+"modes") can never be verified. Evidence item: {kind, pattern_or_path, source_ref, real_example,
+negative_example, per_request, startup_sufficient}. Kinds:
+- log_regex: the engine log matches. The log is split at the ready offset (the byte offset after
+  readiness): a match before it is source "startup_log", after it "slice".
+- metrics: the pattern matches the engine's status/metrics probe text (source "metrics").
+- response_field: a dotted path into the per-request records holds a truthy value.
 - acceptance_stat: a dotted path into the per-request records holds a number above zero.
 
-Result: {"engaged_mode": <mode> | "ar" | "unverified", "matched_line", "evidence_kind", "stats"}.
-A fallback line in the log wins over positive evidence ("ar"). No evidence is "unverified", and
-the audit fails on it.
+Rules: a fallback line anywhere in the log -> "ar". Engagement needs per-request evidence when
+the mode has any per_request entry (a per_request log line after readiness, a response field, an
+acceptance stat or a metric); otherwise any non-startup hit counts. A startup-only line proves
+"loaded", not "engaged", unless that entry sets startup_sufficient. Loaded-only is "unverified"
+with evidence_kind "startup_only". No hit is "unverified".
 """
 
 from __future__ import annotations
@@ -31,8 +32,9 @@ DEFAULT_TABLE = Path(__file__).with_name("fullcmp_engaged_evidence.json")
 MODES = frozenset({"dflash", "mtp", "off", "ar"})
 AR_MODES = frozenset({"ar", "off"})
 KINDS = frozenset({"log_regex", "metrics", "response_field", "acceptance_stat"})
-EVIDENCE_KEYS = ("kind", "pattern_or_path", "source_ref", "real_example", "negative_example", "per_request")
+REQUIRED = ("kind", "pattern_or_path", "source_ref", "real_example", "negative_example", "per_request")
 UNVERIFIED = "unverified"
+_DOTTED = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 
 
 class EvidenceError(ValueError):
@@ -41,43 +43,44 @@ class EvidenceError(ValueError):
 
 def validate_table(table) -> list[str]:
     """Every schema problem in an evidence table (empty list when valid)."""
-    if not isinstance(table, dict):
-        return ["table is not a JSON object"]
+    if not isinstance(table, dict) or not isinstance(table.get("engines"), dict):
+        return ["table must be an object with an 'engines' object"]
     problems = []
-    for engine, entry in table.items():
-        where = f"{engine}"
-        if not isinstance(entry, dict):
-            problems.append(f"{where}: entry is not an object")
+    for engine, entry in table["engines"].items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("modes"), dict):
+            problems.append(f"{engine}: entry needs a 'modes' object")
             continue
-        if entry.get("mode") not in MODES:
-            problems.append(f"{where}: mode {entry.get('mode')!r} not in {sorted(MODES)}")
-        evidence = entry.get("evidence")
-        if not isinstance(evidence, list) or not evidence:
-            problems.append(f"{where}: evidence must be a non-empty list")
-            evidence = []
-        for i, ev in enumerate(evidence):
-            if not isinstance(ev, dict):
-                problems.append(f"{where}: evidence[{i}] is not an object")
+        for mode, m in entry["modes"].items():
+            where = f"{engine}/{mode}"
+            if mode not in MODES:
+                problems.append(f"{where}: mode not in {sorted(MODES)}")
+            if not isinstance(m, dict) or not isinstance(m.get("evidence"), list) or not m["evidence"]:
+                problems.append(f"{where}: evidence must be a non-empty list")
                 continue
-            missing = [k for k in EVIDENCE_KEYS if k not in ev]
-            if missing:
-                problems.append(f"{where}: evidence[{i}] missing {missing}")
-            if ev.get("kind") not in KINDS:
-                problems.append(f"{where}: evidence[{i}] kind {ev.get('kind')!r} not in {sorted(KINDS)}")
-            elif ev["kind"] in ("log_regex", "metrics"):
+            for i, ev in enumerate(m["evidence"]):
+                if not isinstance(ev, dict):
+                    problems.append(f"{where}: evidence[{i}] is not an object")
+                    continue
+                missing = [k for k in REQUIRED if k not in ev]
+                if missing:
+                    problems.append(f"{where}: evidence[{i}] missing {missing}")
+                    continue
+                if ev["kind"] not in KINDS:
+                    problems.append(f"{where}: evidence[{i}] kind {ev['kind']!r} not in {sorted(KINDS)}")
+                elif ev["kind"] in ("log_regex", "metrics"):
+                    try:
+                        re.compile(str(ev["pattern_or_path"]))
+                    except re.error as exc:
+                        problems.append(f"{where}: evidence[{i}] bad regex: {exc}")
+                elif not _DOTTED.match(str(ev["pattern_or_path"])):
+                    problems.append(f"{where}: evidence[{i}] path {ev['pattern_or_path']!r} is not a dotted field path")
+                if not str(ev.get("source_ref", "")).strip():
+                    problems.append(f"{where}: evidence[{i}] has no source_ref")
+            for pat in m.get("fallback", []) or []:
                 try:
-                    re.compile(str(ev.get("pattern_or_path", "")))
+                    re.compile(str(pat))
                 except re.error as exc:
-                    problems.append(f"{where}: evidence[{i}] bad regex: {exc}")
-            elif not str(ev.get("pattern_or_path", "")).strip():
-                problems.append(f"{where}: evidence[{i}] empty path")
-            if not str(ev.get("source_ref", "")).strip():
-                problems.append(f"{where}: evidence[{i}] has no source_ref")
-        for pat in entry.get("fallback", []) or []:
-            try:
-                re.compile(str(pat))
-            except re.error as exc:
-                problems.append(f"{where}: fallback bad regex: {exc}")
+                    problems.append(f"{where}: fallback bad regex: {exc}")
     return problems
 
 
@@ -91,6 +94,17 @@ def load_table(path=DEFAULT_TABLE):
     except (OSError, ValueError):
         return None
     return None if validate_table(table) else table
+
+
+def mode_entry(table, engine, mode):
+    """The mode entry the expected mode selects, or None (no entry: unverifiable)."""
+    if not isinstance(table, dict):
+        return None
+    eng = (table.get("engines") or {}).get(engine)
+    if not isinstance(eng, dict):
+        return None
+    m = (eng.get("modes") or {}).get(mode)
+    return m if isinstance(m, dict) else None
 
 
 def _line_at(text: str, start: int, end: int) -> str:
@@ -112,70 +126,86 @@ def _is_positive(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
 
 
-def acceptance_paths(entry) -> list[str]:
-    paths = [ev["pattern_or_path"] for ev in entry.get("evidence", []) if ev.get("kind") == "acceptance_stat"]
+def acceptance_paths(m) -> list[str]:
+    paths = [ev["pattern_or_path"] for ev in (m or {}).get("evidence", []) if ev.get("kind") == "acceptance_stat"]
     return paths or ["attr.accepted"]
 
 
-def evaluate(engine, log: str, rows, table, probe_text: str | None = None) -> dict:
-    """Engaged mode of one cell from its engine log slice, its request rows and its status probe."""
+def evaluate(engine, mode, log, rows, table, probe_text=None, ready_offset=None) -> dict:
+    """Engaged mode of one cell for its expected mode, from the engine log (whole server log),
+    the request rows and the status probe. ready_offset: the log byte offset after readiness
+    (None: the whole log counts as request-time evidence)."""
     log = log or ""
     rows = [r for r in (rows or []) if isinstance(r, dict)]
     stats = {"requests": len(rows)}
-    unverified = {"engaged_mode": UNVERIFIED, "matched_line": None, "evidence_kind": None, "stats": stats}
-    entry = table.get(engine) if isinstance(table, dict) else None
-    if not isinstance(entry, dict):
-        stats["table"] = "no entry for engine"
-        return unverified
-    for pat in entry.get("fallback", []) or []:
-        m = re.search(pat, log)
-        if m:
-            return {
-                "engaged_mode": "ar",
-                "matched_line": _line_at(log, m.start(), m.end()),
-                "evidence_kind": "fallback",
-                "stats": stats,
-            }
-    for ev in entry.get("evidence", []):
-        kind, pat = ev.get("kind"), str(ev.get("pattern_or_path", ""))
-        hit = None
+
+    def result(mode_out, line, kind, source):
+        return {"engaged_mode": mode_out, "matched_line": line, "evidence_kind": kind,
+                "source": source, "stats": stats}
+
+    m = mode_entry(table, engine, mode)
+    if m is None:
+        stats["table"] = f"no entry for {engine}/{mode}"
+        return result(UNVERIFIED, None, None, None)
+    for pat in m.get("fallback", []) or []:
+        hit = re.search(pat, log)
+        if hit:
+            return result("ar", _line_at(log, hit.start(), hit.end()), "fallback", "slice")
+    per_request_kinds = any(ev.get("per_request") for ev in m["evidence"])
+    good, loaded = [], []
+    for ev in m["evidence"]:
+        kind, pat = ev["kind"], str(ev["pattern_or_path"])
+        hits = []  # (line, source)
         if kind == "log_regex":
-            m = re.search(pat, log)
-            if m:
-                hit = _line_at(log, m.start(), m.end())
+            for hit in re.finditer(pat, log):
+                src = "slice"
+                if ready_offset is not None and hit.start() < ready_offset:
+                    src = "startup_log"
+                hits.append((_line_at(log, hit.start(), hit.end()), src))
+                if src == "slice":
+                    break
         elif kind == "metrics":
-            m = re.search(pat, probe_text or "")
-            if m:
-                hit = _line_at(probe_text or "", m.start(), m.end())
+            hit = re.search(pat, probe_text or "")
+            if hit:
+                hits.append((_line_at(probe_text or "", hit.start(), hit.end()), "metrics"))
         elif kind == "response_field":
             for row in rows:
                 value = _dotted(row, pat)
                 if value not in (None, False, 0, "", [], {}):
-                    hit = f"{pat}={value!r}"
+                    hits.append((f"{pat}={value!r}", "response_field"))
                     break
         elif kind == "acceptance_stat":
             positives = sum(1 for row in rows if _is_positive(_dotted(row, pat)))
             stats["acceptance_positive_rows"] = positives
             if positives:
-                hit = f"{pat} > 0 in {positives} request(s)"
-        if hit is not None:
-            return {
-                "engaged_mode": entry["mode"],
-                "matched_line": hit,
-                "evidence_kind": kind,
-                "stats": stats,
-            }
-    return unverified
+                hits.append((f"{pat} > 0 in {positives} request(s)", "acceptance_stat"))
+        for line, src in hits:
+            if src == "startup_log":
+                if ev.get("startup_sufficient"):
+                    good.append((line, kind, src))
+                else:
+                    loaded.append((line, kind, src))
+            elif per_request_kinds and not ev.get("per_request"):
+                loaded.append((line, kind, src))
+            else:
+                good.append((line, kind, src))
+    if good:
+        line, kind, src = good[0]
+        return result(mode, line, kind, src)
+    if loaded:
+        line, kind, src = loaded[0]
+        return result(UNVERIFIED, line, "startup_only", src)
+    return result(UNVERIFIED, None, None, None)
 
 
-def acceptance_problem(engaged_mode, entry, rows) -> str | None:
-    """For a speculative mode: why its per-request acceptance stats do not prove drafting, or None."""
+def acceptance_problem(engaged_mode, m, rows) -> str | None:
+    """For a speculative mode: why its per-request acceptance does not prove drafting, or None."""
     if engaged_mode in AR_MODES or engaged_mode == UNVERIFIED:
         return None
     rows = [r for r in (rows or []) if isinstance(r, dict)]
     if not rows:
         return "speculative mode but no per-request records to check acceptance"
-    paths = acceptance_paths(entry or {})
+    paths = acceptance_paths(m)
     if any(_is_positive(_dotted(row, p)) for row in rows for p in paths):
         return None
     return f"speculative mode {engaged_mode!r} but every request's acceptance stat ({', '.join(paths)}) is zero or absent"
@@ -184,16 +214,19 @@ def acceptance_problem(engaged_mode, entry, rows) -> str | None:
 YUNSHU_RUNNER = re.compile(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b")
 
 
-def yunshu_runner_evidence(log: str) -> dict:
+def yunshu_runner_evidence(log: str, ready_offset=None) -> dict:
     """Yunshu's own evidence: the initialized VLM batch runner line (the last one wins)."""
     log = log or ""
     found = list(YUNSHU_RUNNER.finditer(log))
     if not found:
-        return {"engaged_mode": UNVERIFIED, "matched_line": None, "evidence_kind": None, "stats": {}}
+        return {"engaged_mode": UNVERIFIED, "matched_line": None, "evidence_kind": None,
+                "source": None, "stats": {}}
     m = found[-1]
+    src = "startup_log" if ready_offset is not None and m.start() < ready_offset else "slice"
     return {
         "engaged_mode": m.group(1),
         "matched_line": _line_at(log, m.start(), m.end()),
         "evidence_kind": "log_regex",
+        "source": src,
         "stats": {"runner_lines": len(found)},
     }

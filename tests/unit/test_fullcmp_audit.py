@@ -168,6 +168,8 @@ def make_data():
                     "engaged_log_line": "VLM batch runner: model draft=dflash"
                     if yun
                     else FIXTURE_LOG_LINE,
+                    "engaged_evidence_source": None if yun else "slice",
+                    "server_log_ready_offset": 0,
                     "weights": [
                         {
                             "file": f"{eng}.safetensors",
@@ -282,34 +284,33 @@ FIXTURE_LOG_LINE = "speculative: dflash drafter engaged"
 
 @pytest.fixture(autouse=True)
 def _engaged_table(monkeypatch):
-    """Engaged evidence for every fixture engine: the fixture's dflash line in its log slice, and
-    positive per-request acceptance (fullcmp_engaged; the real table is merged separately)."""
-
-    class AnyEngine(dict):
-        def get(self, name, default=None):
-            return {
-                "mode": "dflash",
-                "evidence": [
-                    {
-                        "kind": "log_regex",
-                        "pattern_or_path": FIXTURE_LOG_LINE,
-                        "source_ref": "fixture",
-                        "real_example": FIXTURE_LOG_LINE,
-                        "negative_example": "speculative: mtp head engaged",
-                        "per_request": False,
-                    },
-                    {
-                        "kind": "acceptance_stat",
-                        "pattern_or_path": "attr.accepted",
-                        "source_ref": "fixture",
-                        "real_example": "attr.accepted=3",
-                        "negative_example": "attr.accepted=0",
-                        "per_request": True,
-                    },
-                ],
-            }
-
-    monkeypatch.setattr(fe, "load_table", lambda: AnyEngine())
+    """Engaged evidence for the fixture engine: the fixture's dflash line in its log slice (per
+    request) and positive per-request acceptance (fullcmp_engaged; the real table is separate)."""
+    entry = {
+        "evidence": [
+            {
+                "kind": "log_regex",
+                "pattern_or_path": FIXTURE_LOG_LINE,
+                "source_ref": "fixture",
+                "real_example": FIXTURE_LOG_LINE,
+                "negative_example": "speculative: mtp head engaged",
+                "per_request": True,
+                "startup_sufficient": False,
+            },
+            {
+                "kind": "acceptance_stat",
+                "pattern_or_path": "attr.accepted",
+                "source_ref": "fixture",
+                "real_example": "attr.accepted=3",
+                "negative_example": "attr.accepted=0",
+                "per_request": True,
+                "startup_sufficient": False,
+            },
+        ],
+        "fallback": [],
+    }
+    table = {"_meta": {"fixture": True}, "engines": {"mlx-serve": {"modes": {"dflash": entry}}}}
+    monkeypatch.setattr(fe, "load_table", lambda: table)
 
 
 def write_run(root: Path, manifest, files, telemetry=True) -> Path:

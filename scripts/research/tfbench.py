@@ -519,6 +519,8 @@ class Srv:
         else:
             self.kill()
             raise RuntimeError("not ready")
+        # the log offset after readiness: a match before it is startup evidence (loaded only)
+        self.ready_log_offset = self.log.stat().st_size if self.log.exists() else 0
         try:
             startup = getattr(bench_engines.ENGINES.get(self.engine), "extra", {})
             if pattern := startup.get("startup_ready_regex"):
@@ -568,13 +570,15 @@ class Srv:
         except Exception as e:  # noqa: BLE001
             return f"probe failed: {e!r}"
 
-    def verify_spec_mode(self):
+    def verify_spec_mode(self, final=False, rows=()):
         log = self.log.read_text(errors="replace")
         if fp.fullcmp_mode(os.environ) and not self._is_yunshu(self.engine):
             # Fullcmp: the engaged mode comes from the evidence table only (fullcmp_engaged); the
-            # request is never copied into the header. Yunshu keeps its own draft= runner line.
+            # request is never copied into the header. At startup only the load lines exist (a
+            # startup line proves 'loaded'), so only the final check (after the requests, with the
+            # cell's records) may refuse a cell.
             self.probe = self.probe_text()
-            self._verify_fullcmp_evidence(log)
+            self._verify_fullcmp_evidence(log, final=final, rows=rows)
             return
         # The engaged-mode line the audit checks (fullcmp header engaged_log_line).
         self.engaged_log_line = engaged_spec_mode_line(
@@ -606,13 +610,22 @@ class Srv:
             # measures a different engine (2026-10-20: ragged KV off broke identity)
             raise RuntimeError(f"{off}; see {self.log}")
 
-    def _verify_fullcmp_evidence(self, log):
+    def _verify_fullcmp_evidence(self, log, final=False, rows=()):
         table = fe.load_table()  # None when the table is missing or malformed: no evidence at all
-        ev = fe.evaluate(self.engine, log, [], table, probe_text=self.probe)
+        ev = fe.evaluate(
+            self.engine,
+            self.requested_spec_mode,
+            log,
+            rows,
+            table,
+            probe_text=self.probe,
+            ready_offset=getattr(self, "ready_log_offset", None),
+        )
         self.engaged_spec_mode = ev["engaged_mode"]
         self.engaged_log_line = ev["matched_line"]
         self.engaged_evidence_kind = ev["evidence_kind"]
-        if self.engaged_spec_mode != self.requested_spec_mode:
+        self.engaged_evidence_source = ev["source"]
+        if final and self.engaged_spec_mode != self.requested_spec_mode:
             raise RuntimeError(
                 f"requested spec={self.requested_spec_mode}, engaged={self.engaged_spec_mode} "
                 f"(evidence: {self.engaged_evidence_kind}, table: {'ok' if table else 'missing'}); "
@@ -2370,6 +2383,8 @@ def fullcmp_header(
         spec_mode_expected=s.requested_spec_mode,
         engaged_log_line=s.engaged_log_line,
         engaged_evidence_kind=getattr(s, "engaged_evidence_kind", None),
+        engaged_evidence_source=getattr(s, "engaged_evidence_source", None),
+        server_log_ready_offset=getattr(s, "ready_log_offset", None),
         weights=fp.weights_record(a.model, census, model_key),
         fresh_process=True,
         home=str(s.home),
@@ -2416,6 +2431,20 @@ def stop_cell_telemetry():
     sampler, _ACTIVE_TELEMETRY = _ACTIVE_TELEMETRY, None
     if sampler is not None:
         sampler.stop()
+
+
+def read_decode_rows(path):
+    """The cell's request rows (part == decode) as written, for the final engaged-mode evidence."""
+    rows = []
+    with open(path) as fh:
+        for line in fh:
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get("part") == "decode":
+                rows.append(r)
+    return rows
 
 
 def finalize_session(path, end_fields):
@@ -2606,7 +2635,7 @@ def main():
                 }[a.part](s, out, a)
             if _LIVE_SERVERS:
                 s = _LIVE_SERVERS[-1]  # a restart cell measured on its relaunched server
-            s.verify_spec_mode()
+            s.verify_spec_mode(final=True, rows=read_decode_rows(a.out))
             mem = getattr(s, "mem", None)
             if mem is not None:
                 time.sleep(a.idle_s)
@@ -2647,6 +2676,11 @@ def main():
                     "quiet_post": fq.snapshot(),
                     # the raw usage chunk of the first request (GPU smoke evidence, per engine)
                     "usage_sample": _USAGE_SAMPLE[0] if a.log_usage_sample else None,
+                    # the final engaged evidence (per-request records included), as the audit reads it
+                    "engaged_spec_mode": s.engaged_spec_mode,
+                    "engaged_log_line": s.engaged_log_line,
+                    "engaged_evidence_kind": getattr(s, "engaged_evidence_kind", None),
+                    "engaged_evidence_source": getattr(s, "engaged_evidence_source", None),
                 }
             emit(
                 out,

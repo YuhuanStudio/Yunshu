@@ -666,8 +666,13 @@ def check_record_count(run: Run) -> GuardResult:
 
 
 def check_engaged_mode(run: Run) -> GuardResult:
-    """Guard 6: engaged spec mode parsed from the engine's own log equals the configured mode."""
+    """Guard 6: the engaged spec mode is derived from evidence (fullcmp_engaged) in the cell's full
+    engine log (split at the header's ready offset) and its per-request records. The header's final
+    engaged mode, log line and source must equal the evidence. Fails closed: no table, 'unverified'
+    (loaded but not engaged, or no evidence), a mode other than the configured one, a missing ready
+    offset, and a speculative mode whose per-request acceptance is zero or absent."""
     res = GuardResult("engaged_mode")
+    table = fe.load_table()
     for cf in run.files:
         h = cf.header
         if h is None:
@@ -678,21 +683,33 @@ def check_engaged_mode(run: Run) -> GuardResult:
             # no expected mode in the manifest: a violation, never a crash (fail closed)
             res.fail(cell, f"r{cf.rep}: manifest has no expected spec mode for this cell")
             continue
-        if table is None and cf.cell.get("engine") != "yunshu":
-            res.fail(cell, f"r{cf.rep}: engaged evidence table missing or malformed (fail closed)")
-            continue
         engine = cf.cell.get("engine")
-        slice_path = server_log_slice_path(cf.path)
-        log = slice_path.read_text(errors="replace") if slice_path.is_file() else ""
         if engine == "yunshu":
-            ev = fe.yunshu_runner_evidence(log)
-            entry = {}
+            slice_path = server_log_slice_path(cf.path)
+            log = slice_path.read_text(errors="replace") if slice_path.is_file() else ""
+            ev = fe.yunshu_runner_evidence(log, h.get("server_log_ready_offset"))
+            m = None
         else:
-            ev = fe.evaluate(engine, log, cf.rows, table, probe_text=h.get("engine_probe"))
-            entry = table.get(engine) or {}
+            if table is None:
+                res.fail(cell, f"r{cf.rep}: engaged evidence table missing or malformed (fail closed)")
+                continue
+            m = fe.mode_entry(table, engine, want)
+            if m is None:
+                res.fail(cell, f"r{cf.rep}: no evidence entry for {engine}/{want} (fail closed)")
+                continue
+            slice_path = server_log_slice_path(cf.path)
+            log = slice_path.read_text(errors="replace") if slice_path.is_file() else ""
+            ready = h.get("server_log_ready_offset")
+            if not isinstance(ready, int):
+                res.fail(cell, f"r{cf.rep}: server_log_ready_offset missing (fail closed)")
+                continue
+            ev = fe.evaluate(engine, want, log, cf.rows, table,
+                             probe_text=h.get("engine_probe"), ready_offset=ready)
         got = ev["engaged_mode"]
         if got == fe.UNVERIFIED:
-            res.fail(cell, f"r{cf.rep}: engaged mode unverified: no evidence in the engine log slice or records")
+            kind = ev.get("evidence_kind")
+            why = "loaded only (startup line, no per-request evidence)" if kind == "startup_only" else "no evidence"
+            res.fail(cell, f"r{cf.rep}: engaged mode unverified: {why}")
         elif got != want:
             res.fail(cell, f"r{cf.rep}: engaged evidence says {got!r}, configured {want!r}")
         for key in ("requested_spec_mode", "spec_mode_expected"):
@@ -702,7 +719,9 @@ def check_engaged_mode(run: Run) -> GuardResult:
             res.fail(cell, f"r{cf.rep}: header engaged_spec_mode={h.get('engaged_spec_mode')!r}, evidence says {got!r}")
         if h.get("engaged_log_line") != ev["matched_line"]:
             res.fail(cell, f"r{cf.rep}: engaged_log_line is not the evidence line")
-        if (problem := fe.acceptance_problem(got, entry, cf.rows)) is not None:
+        if engine != "yunshu" and h.get("engaged_evidence_source") != ev.get("source"):
+            res.fail(cell, f"r{cf.rep}: engaged_evidence_source={h.get('engaged_evidence_source')!r}, evidence says {ev.get('source')!r}")
+        if (problem := fe.acceptance_problem(got, m or {}, cf.rows)) is not None:
             res.fail(cell, f"r{cf.rep}: {problem}")
     return res
 
