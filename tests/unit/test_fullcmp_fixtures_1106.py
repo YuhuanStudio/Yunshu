@@ -188,3 +188,18 @@ def test_every_bench_and_manifest_id_gives_the_same_shared_verdict_on_the_fixtur
             b = fe.concurrent_check(None, manifest, mode, log, conc, 0)
             assert (a[0]["engaged_mode"], a[0].get("label"), a[1]) == (b[0]["engaged_mode"], b[0].get("label"), b[1]), (
                 bench, manifest)
+
+
+def test_omlx_batch_without_any_mtp_line_is_dflash_zero_percent_drafted():
+    """A concurrent batch that ran with no MTP line at all (batch inactive for >=3 rows): the Chat completion
+    lines still match the record's pt/ct; the label is the evidence-derived '0% drafted'; not unverified."""
+    log = "".join(
+        f"2026-11-04 - omlx.server - INFO - Chat completion: model=Qwen3.8-27B-oQ4e-mtp, 64 tokens in 6.1s "
+        f"(14.3 tok/s), prompt: {p}, finish_reason=length, max_tokens=64\n"
+        for p in [20, 15, 15, 1024, 8192, 1024, 1024])  # 3 warm-up/pings + 4 measured
+    conc = [{"part": "mixed", "n": 4, "requests": [{"rid": i, "pt": p, "ct": 64}
+                                                   for i, p in enumerate([1024, 8192, 1024, 1024])]}]
+    ev, problems = fe.concurrent_check(fe.load_table(), "omlx-0.7.3rc1", "dflash", log, conc, 0)
+    assert problems == [], problems
+    assert ev["engaged_mode"] == "dflash"
+    assert ev["label"] == "dflash (0% drafted: >=3 active rows)"

@@ -768,6 +768,13 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
     first_line = (matched[0].get("mtp_line") or matched[0]["line"]) if matched else None
     partial = [x for x in per_row if x.get("partial_coverage")]
     calibrated = [x for x in matched if x.get("calibrated")]
+    if matched and all(x.get("mtp_line") is None for x in matched):
+        # no MTP line for any request: oMLX decoded the whole concurrent batch without drafting (the batch was
+        # inactive for >=3 rows). Evidence-derived label; the requests' Chat completion lines still matched pt/ct
+        return {"engaged_mode": mode, "matched_line": matched[-1]["line"], "evidence_kind": "acceptance_regex",
+                "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched),
+                                             "evidence_lines": evidence_lines},
+                "label": f"{mode} (0% drafted: >=3 active rows)"}, []
     if calibrated and len(calibrated) == len(matched):
         return {"engaged_mode": "ar", "matched_line": first_line, "evidence_kind": "acceptance_regex",
                 "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched),

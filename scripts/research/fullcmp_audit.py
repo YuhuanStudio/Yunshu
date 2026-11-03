@@ -773,12 +773,15 @@ def check_engaged_mode(run: Run) -> GuardResult:
         for key in ("requested_spec_mode", "spec_mode_expected"):
             if h.get(key) != want:
                 res.fail(cell, f"r{cf.rep}: {key}={h.get(key)!r}, configured {want!r}")
-        if h.get("engaged_spec_mode") != got:
+        if not (not cf.rows and concurrent_records) and h.get("engaged_spec_mode") != got:
             res.fail(cell, f"r{cf.rep}: header engaged_spec_mode={h.get('engaged_spec_mode')!r}, evidence says {got!r}")
-        if h.get("engaged_log_line") != ev["matched_line"]:
-            res.fail(cell, f"r{cf.rep}: engaged_log_line is not the evidence line")
-        if engine != "yunshu" and h.get("engaged_evidence_source") != ev.get("source"):
-            res.fail(cell, f"r{cf.rep}: engaged_evidence_source={h.get('engaged_evidence_source')!r}, evidence says {ev.get('source')!r}")
+        if not (not cf.rows and concurrent_records):
+            # single-request cells: the header's evidence line and source must be the evidence's. Concurrent cells
+            # take their evidence only from fe.concurrent_check (the header carries the single-request evidence)
+            if h.get("engaged_log_line") != ev["matched_line"]:
+                res.fail(cell, f"r{cf.rep}: engaged_log_line is not the evidence line")
+            if engine != "yunshu" and h.get("engaged_evidence_source") != ev.get("source"):
+                res.fail(cell, f"r{cf.rep}: engaged_evidence_source={h.get('engaged_evidence_source')!r}, evidence says {ev.get('source')!r}")
         if engine == "yunshu":
             # Yunshu's runner line is its own evidence and its records carry attr.accepted (layer-1)
             if (problem := fe.acceptance_problem(got, {}, cf.rows)) is not None:
