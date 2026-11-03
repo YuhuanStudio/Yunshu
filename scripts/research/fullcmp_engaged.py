@@ -295,6 +295,32 @@ def acceptance_problem(engaged_mode, m, rows) -> str | None:
     return f"speculative mode {engaged_mode!r} but every request's acceptance stat ({', '.join(paths)}) is zero or absent"
 
 
+# mlx-vlm 0.7.11 streamed rows carry no draft stats; their decode speed is the server's own line
+# (generation.py:397 "Request completed: ... decode=<x> tok/s"), one per request in order.
+COMPLETED_DECODE = re.compile(r"Request completed: [^\n]*?decode=([0-9.]+) tok/s")
+# the probe timings a row keeps (serving_path_vlm_omlx.json, streaming_vs_nonstreaming)
+PROBE_FIELDS = (
+    "draft_kind",
+    "draft_rounds",
+    "draft_n",
+    "draft_n_accepted",
+    "predicted_per_second",
+    "predicted_n",
+    "predicted_ms",
+)
+
+
+def completed_decode_tok_s(log: str) -> list[float]:
+    """Decode speed of each completed request in the log, in order."""
+    return [float(m.group(1)) for m in COMPLETED_DECODE.finditer(log or "")]
+
+
+def probe_fields(response) -> dict:
+    """The probe's timings subset kept in the record (None for a field the response lacks)."""
+    timings = (response or {}).get("timings") or {}
+    return {k: timings.get(k) for k in PROBE_FIELDS}
+
+
 YUNSHU_RUNNER = re.compile(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b")
 
 

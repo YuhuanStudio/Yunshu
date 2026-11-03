@@ -2662,6 +2662,11 @@ def main():
                     rep=a.rep,
                     probe=True,
                     timings=probe_response.get("timings"),
+                    probe_fields=fe.probe_fields(probe_response),
+                    # the streamed rows' decode speed, from the server's own completed-request lines
+                    completed_decode_tok_s=fe.completed_decode_tok_s(
+                        s.log.read_text(errors="replace") if s.log.exists() else ""
+                    ),
                 )
             s.verify_spec_mode(
                 final=True, rows=read_decode_rows(a.out), probe_response=probe_response

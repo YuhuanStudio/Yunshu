@@ -420,3 +420,25 @@ def test_omlx_mtp_line_is_per_row_acceptance_and_matches_the_real_log(tmp_path):
     rows = [{"pt": 1, "ct": 1}] * (len(counts) - 2)
     res = fe.evaluate("omlx-0.7.3", "dflash", text, rows, table, ready_offset=0)
     assert res["engaged_mode"] == "dflash", res["stats"]
+
+
+def test_completed_request_lines_give_the_streamed_decode_speed():
+    """generation.py:397 'Request completed: ... decode=<x> tok/s' is the streamed rows' speed."""
+    log = (
+        "2026-11-04 00:02:58,314 - INFO - Request completed: endpoint=/chat/completions stream=True "
+        "prompt_tokens=15 generated_tokens=10 elapsed=2.317s prefill=13.2 tok/s decode=9.4 tok/s finish_reason=stop\n"
+        "2026-11-04 00:02:58,656 - INFO - Request completed: endpoint=/chat/completions stream=True "
+        "prompt_tokens=15 generated_tokens=10 elapsed=0.340s prefill=126.1 tok/s decode=47.5 tok/s finish_reason=stop\n"
+    )
+    assert fe.completed_decode_tok_s(log) == [9.4, 47.5]
+    assert fe.completed_decode_tok_s("nothing") == []
+
+
+def test_probe_fields_keep_the_draft_and_speed_timings():
+    probe = {"timings": {"draft_kind": "dflash", "draft_rounds": 12, "draft_n": 80,
+                         "draft_n_accepted": 51, "predicted_per_second": 30.5, "extra": 1}}
+    fields = fe.probe_fields(probe)
+    assert fields["draft_rounds"] == 12 and fields["draft_n_accepted"] == 51
+    assert fields["predicted_per_second"] == 30.5 and fields["predicted_ms"] is None
+    assert "extra" not in fields
+    assert fe.probe_fields(None)["draft_kind"] is None

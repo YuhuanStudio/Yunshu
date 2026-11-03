@@ -85,11 +85,11 @@
               "kind": "log_regex",
               "pattern_or_path": "Starting httpd at (?P<host>\\S+) on port (?P<port>\\d+)\\.\\.\\.",
               "source_ref": "/Volumes/P5Plus/yunshu-build/competitors/venvs/mlx-lm-0.32.2/lib/python3.13/site-packages/mlx_lm/server.py:1898 (INFO)",
-              "real_example": null,
+              "real_example": "2026-11-04 00:44:04,518 - INFO - Starting httpd at 127.0.0.1 on port 18990...",
               "negative_example": "absent means the server did not start (positive server-up check only)",
               "per_request": false,
               "startup_sufficient": true,
-              "real_log": null
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1104/mlx-lm-server/SMOKE.smoke-core.mlx-lm-server.1K.c1.code.o64.single.th-off.none.greedy.v0-r0.server.log"
             }
           ],
           "fallback": []
