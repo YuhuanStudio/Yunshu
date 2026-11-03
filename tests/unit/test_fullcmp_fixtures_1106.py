@@ -225,4 +225,32 @@ def test_mlx_vlm_wire_1107_real_concurrent_probe_rows_are_read_and_drafting():
     assert problems == [], problems
     # the real probes carry draft counters (7 of 8 identical, one differs): read per response -> dflash
     assert ev["engaged_mode"] == "dflash" and ev["stats"]["probe"][0] == (56, 36)
+    assert ev["stats"].get("batch_level") is True  # 7 of 8 share the batch snapshot
+
+
+def test_mlx_vlm_probe_counters_shared_by_all_but_one_response_are_batch_level():
+    """The real wire-1107 mlx-vlm probes: 7 of 8 responses share one counter snapshot (batch level). The verdict is
+    labelled batch-level and claims no per-request acceptance."""
+    import json as _json
+
+    jl = Path("/Volumes/Micron/yunshu-fullcmp/wire-1107/mlx-vlm-server/"
+              "SMOKE.smoke-mixed.mlx-vlm-server.8K.c4.code.o64.mixed.th-off.none.greedy.v0-r0.jsonl")
+    if not jl.exists():
+        pytest.skip("no real wire-1107 mlx-vlm mixed raw on disk")
+    rows = [_json.loads(x) for x in jl.read_text().splitlines() if x.strip()]
+    responses = [{"timings": r.get("timings")} for r in rows if r.get("part") == "probe_conc"]
+    recs = [r for r in rows if r.get("part") in ("conc", "mixed")]
+    ev, problems = fe.concurrent_check(None, "mlx-vlm-server", "dflash", "", recs, 0, probe_responses=responses)
+    assert problems == []
+    assert ev["stats"]["batch_level"] is True
+    assert "batch-level counters" in ev["label"]
+    assert "per_row" not in ev["stats"] or not ev["stats"]["per_row"]
+    assert ev["stats"]["accepted"] == 176
+
+
+def test_mlx_vlm_all_distinct_probe_counters_stay_per_request():
+    responses = [{"timings": {"draft_n": 10 + i, "draft_n_accepted": 5 + i}} for i in range(4)]
+    recs = [{"part": "conc", "n": 4, "requests": [{"rid": i, "pt": 1024, "ct": 64} for i in range(4)]}]
+    ev, problems = fe.concurrent_check(None, "mlx-vlm-server", "dflash", "", recs, 0, probe_responses=responses)
+    assert problems == [] and ev["engaged_mode"] == "dflash"
     assert ev["stats"].get("batch_level") is None

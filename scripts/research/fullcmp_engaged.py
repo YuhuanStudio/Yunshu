@@ -645,12 +645,21 @@ def concurrent_probe_verdict(mode, probe_responses, records):
         t = (resp or {}).get("timings") or {}
         drafted.append((t.get("draft_n"), t.get("draft_n_accepted")))
     stats["probe"] = drafted
-    keys = [json.dumps((r or {}).get("timings") or {}, sort_keys=True) for r in probe_responses]
-    if len(set(keys)) == 1 and drafted:
+    # compare the draft counters only: the timings (ms, tok/s) differ per response by construction
+    keys = [json.dumps({k: ((r or {}).get("timings") or {}).get(k)
+                        for k in ("draft_kind", "draft_rounds", "draft_n", "draft_n_accepted")}, sort_keys=True)
+            for r in probe_responses]
+    modal = max(set(keys), key=keys.count)
+    # batch-level: the counters are one batch snapshot shared by the responses (all, or all but one: the snapshot
+    # is read at a different step for one response). A response that differs from a shared snapshot is not
+    # per-request evidence either way.
+    batch_level = len(keys) >= 2 and keys.count(modal) >= len(keys) - 1
+    if batch_level and drafted:
         # identical counters on every concurrent response: batch-level (shared across the requests), not
         # per-request acceptance. The single sequential probe is never read here (probe_conc rows only).
-        d, a = drafted[0]
-        t = (probe_responses[0] or {}).get("timings") or {}
+        idx = keys.index(modal)  # the shared snapshot, not an outlier response
+        d, a = drafted[idx]
+        t = (probe_responses[idx] or {}).get("timings") or {}
         rounds = t.get("draft_rounds")
         stats["batch_level"] = True
         stats["accepted"], stats["drafted"], stats["rounds"] = a, d, rounds
