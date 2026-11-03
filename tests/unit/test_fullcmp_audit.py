@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "research"))
 
 import fullcmp_audit as fa  # noqa: E402
+import fullcmp_engaged as fe  # noqa: E402
 import fullcmp_manifest as fm  # noqa: E402
 
 PY = "/tree/.venv/bin/python"
@@ -164,7 +165,9 @@ def make_data():
                     "requested_spec_mode": "dflash",
                     "spec_mode_expected": "dflash",
                     "engaged_spec_mode": "dflash",
-                    "engaged_log_line": "speculative: dflash drafter engaged",
+                    "engaged_log_line": "VLM batch runner: model draft=dflash"
+                    if yun
+                    else FIXTURE_LOG_LINE,
                     "weights": [
                         {
                             "file": f"{eng}.safetensors",
@@ -221,6 +224,12 @@ def make_data():
                     r_.update(attr_fixture(eng, r_))
                 # tfbench writes part_done after the decode part completes
                 rows.append({"part": "part_done", "which": "decode", "complete": True})
+                # per-request acceptance (engaged evidence): every decode row drafted and accepted
+                for r in rows:
+                    if r.get("part") == "decode":
+                        r["attr"]["accepted"] = 3
+                        r["attr"]["drafted"] = 4
+                        r["attr"]["rounds"] = 2
                 files[f"{eng}/{cell}-r{rep}.jsonl"] = rows
     return manifest, files
 
@@ -268,6 +277,41 @@ def _prompt_table(monkeypatch):
     monkeypatch.setattr(fa, "load_prompt_file_table", lambda: AnyTable())
 
 
+FIXTURE_LOG_LINE = "speculative: dflash drafter engaged"
+
+
+@pytest.fixture(autouse=True)
+def _engaged_table(monkeypatch):
+    """Engaged evidence for every fixture engine: the fixture's dflash line in its log slice, and
+    positive per-request acceptance (fullcmp_engaged; the real table is merged separately)."""
+
+    class AnyEngine(dict):
+        def get(self, name, default=None):
+            return {
+                "mode": "dflash",
+                "evidence": [
+                    {
+                        "kind": "log_regex",
+                        "pattern_or_path": FIXTURE_LOG_LINE,
+                        "source_ref": "fixture",
+                        "real_example": FIXTURE_LOG_LINE,
+                        "negative_example": "speculative: mtp head engaged",
+                        "per_request": False,
+                    },
+                    {
+                        "kind": "acceptance_stat",
+                        "pattern_or_path": "attr.accepted",
+                        "source_ref": "fixture",
+                        "real_example": "attr.accepted=3",
+                        "negative_example": "attr.accepted=0",
+                        "per_request": True,
+                    },
+                ],
+            }
+
+    monkeypatch.setattr(fe, "load_table", lambda: AnyEngine())
+
+
 def write_run(root: Path, manifest, files, telemetry=True) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     for rel, rows in files.items():
@@ -275,8 +319,15 @@ def write_run(root: Path, manifest, files, telemetry=True) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("".join(json.dumps(r) + "\n" for r in rows))
         # the cell's engine-log slice (tfbench writes <cell>-rN.server.log beside each cell file)
+        line = (
+            "VLM batch runner: model draft=dflash"
+            if rel.startswith("yunshu/")
+            else FIXTURE_LOG_LINE
+        )
+        if any(isinstance(r, dict) and r.get("_no_engine_log_evidence") for r in rows):
+            line = "[round-profile] engine=fixture round=1 tokens=4"
         fa.server_log_slice_path(path).write_text(
-            "[round-profile] engine=fixture round=1 drafts=4 accepted=3 tokens=4\n"
+            line + "\n[round-profile] engine=fixture round=1 drafts=4 accepted=3 tokens=4\n"
         )
         if telemetry:
             telemetry_file(path).write_text(
@@ -328,6 +379,19 @@ def bad_engaged_mode(m, f):
     for rows in _rows(f, "", "mlx-serve"):
         rows[0]["engaged_spec_mode"] = "mtp"
         rows[0]["engaged_log_line"] = "speculative: mtp head engaged"
+
+
+def bad_engaged_no_evidence(m, f):
+    """Header says engaged == requested, but the engine log slice has no engaged line at all and the
+    per-request acceptance is zero: the request was copied into the header (fail closed).
+    write_run reads the marker and writes an empty engine-log slice for that file."""
+    for rows in _rows(f, "", "mlx-serve"):
+        rows[0]["_no_engine_log_evidence"] = True
+        rows[0]["engaged_spec_mode"] = "dflash"
+        rows[0]["engaged_log_line"] = FIXTURE_LOG_LINE
+        for r in rows:
+            if r.get("part") == "decode":
+                r.setdefault("attr", {})["accepted"] = 0
 
 
 def bad_weight_identity(m, f):
@@ -405,6 +469,7 @@ BAD_CASES = [
     ("manifest_completeness", bad_manifest_completeness),
     ("record_count", bad_record_count),
     ("engaged_mode", bad_engaged_mode),
+    ("engaged_mode", bad_engaged_no_evidence),
     ("weight_identity", bad_weight_identity),
     ("cold_cache", bad_cold_cache),
     ("gpu_exclusive_rotation", bad_gpu_exclusive_rotation),

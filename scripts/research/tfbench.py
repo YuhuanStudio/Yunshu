@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_engines  # noqa: E402
 import fullcmp_manifest as fm  # noqa: E402  (request families: FAMILY_KINDS, IMAGE_COUNT)
 import fullcmp_attribution  # noqa: E402  (layer-1 attribution schema)
+import fullcmp_engaged as fe  # noqa: E402  (engaged spec mode from evidence, never the request)
 import fullcmp_provenance as fp  # noqa: E402
 import fullcmp_quiet as fq  # noqa: E402  (quiet-machine snapshots per cell, FULLCMP_SPEC)
 from gpuq_contention import was_contended  # noqa: E402
@@ -569,6 +570,12 @@ class Srv:
 
     def verify_spec_mode(self):
         log = self.log.read_text(errors="replace")
+        if fp.fullcmp_mode(os.environ) and not self._is_yunshu(self.engine):
+            # Fullcmp: the engaged mode comes from the evidence table only (fullcmp_engaged); the
+            # request is never copied into the header. Yunshu keeps its own draft= runner line.
+            self.probe = self.probe_text()
+            self._verify_fullcmp_evidence(log)
+            return
         # The engaged-mode line the audit checks (fullcmp header engaged_log_line).
         self.engaged_log_line = engaged_spec_mode_line(
             "yunshu" if self._is_yunshu(self.engine) else self.engine, log
@@ -598,6 +605,19 @@ class Srv:
             # the lane's spec on == spec off rests on these kernels; a run without them
             # measures a different engine (2026-10-20: ragged KV off broke identity)
             raise RuntimeError(f"{off}; see {self.log}")
+
+    def _verify_fullcmp_evidence(self, log):
+        table = fe.load_table()  # None when the table is missing or malformed: no evidence at all
+        ev = fe.evaluate(self.engine, log, [], table, probe_text=self.probe)
+        self.engaged_spec_mode = ev["engaged_mode"]
+        self.engaged_log_line = ev["matched_line"]
+        self.engaged_evidence_kind = ev["evidence_kind"]
+        if self.engaged_spec_mode != self.requested_spec_mode:
+            raise RuntimeError(
+                f"requested spec={self.requested_spec_mode}, engaged={self.engaged_spec_mode} "
+                f"(evidence: {self.engaged_evidence_kind}, table: {'ok' if table else 'missing'}); "
+                f"see {self.log}"
+            )
 
     def kill(self, keep_disk=False):
         if self.proc.poll() is None:
@@ -631,6 +651,14 @@ def server_log_path(out):
     text = str(out)
     stem = text[: -len(".jsonl")] if text.endswith(".jsonl") else text
     return stem + ".server.log"
+
+
+def cell_engine_log(log_path, end=None, prefix=()):
+    """This cell's engine log. Each launch truncates its log (open 'wb'), so the cell's slice is the
+    whole server log from byte 0: the engaged-mode evidence is printed at startup, before readiness
+    (Splash prints its drafter line there and logs nothing per request), so a slice that began at
+    readiness was empty for Splash (2026-11-04). prefix: bytes of logs a restart truncated."""
+    return cell_log_slice(log_path, 0, end, prefix=prefix)
 
 
 def cell_log_slice(log_path, start, end=None, prefix=()):
@@ -2341,6 +2369,7 @@ def fullcmp_header(
         python=(s.pin or {}).get("python"),
         spec_mode_expected=s.requested_spec_mode,
         engaged_log_line=s.engaged_log_line,
+        engaged_evidence_kind=getattr(s, "engaged_evidence_kind", None),
         weights=fp.weights_record(a.model, census, model_key),
         fresh_process=True,
         home=str(s.home),
@@ -2491,7 +2520,7 @@ def main():
     # The engine log is shared by every cell of a job (same name): this cell's slice is the byte
     # range from here to its end, written beside the cell file (server_log_path).
     first_log = s.log
-    log_start = first_log.stat().st_size if first_log.exists() else 0
+    log_start = 0  # the launch truncated this log: the cell's evidence includes the startup lines
     _LOG_PREFIX.clear()
     try:
         with open(a.out, "a") as out:
@@ -2602,7 +2631,7 @@ def main():
             # The cell's engine-log slice, written now: the next cell of the job reuses the name.
             log_end = s.log.stat().st_size if s.log.exists() else 0
             Path(server_log_path(a.out)).write_bytes(
-                cell_log_slice(s.log, log_start, log_end, prefix=_LOG_PREFIX)
+                cell_engine_log(s.log, log_end, prefix=_LOG_PREFIX)
             )
             if fullcmp:
                 # The GPU must have stayed exclusive to this cell until its last request.

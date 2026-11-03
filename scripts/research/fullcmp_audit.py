@@ -44,6 +44,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_engines  # noqa: E402  (manifest id <-> harness id registry)
 import fullcmp_attribution as fat  # noqa: E402  (layer-1 / layer-2 attribution schema)
+import fullcmp_engaged as fe  # noqa: E402  (engaged spec mode from evidence)
 
 # ---------------------------------------------------------------------------
 # Record schema. "manifest" is the expected-cell file; "header" is row 0 of each jsonl
@@ -677,12 +678,32 @@ def check_engaged_mode(run: Run) -> GuardResult:
             # no expected mode in the manifest: a violation, never a crash (fail closed)
             res.fail(cell, f"r{cf.rep}: manifest has no expected spec mode for this cell")
             continue
-        for key in ("requested_spec_mode", "spec_mode_expected", "engaged_spec_mode"):
+        if table is None and cf.cell.get("engine") != "yunshu":
+            res.fail(cell, f"r{cf.rep}: engaged evidence table missing or malformed (fail closed)")
+            continue
+        engine = cf.cell.get("engine")
+        slice_path = server_log_slice_path(cf.path)
+        log = slice_path.read_text(errors="replace") if slice_path.is_file() else ""
+        if engine == "yunshu":
+            ev = fe.yunshu_runner_evidence(log)
+            entry = {}
+        else:
+            ev = fe.evaluate(engine, log, cf.rows, table, probe_text=h.get("engine_probe"))
+            entry = table.get(engine) or {}
+        got = ev["engaged_mode"]
+        if got == fe.UNVERIFIED:
+            res.fail(cell, f"r{cf.rep}: engaged mode unverified: no evidence in the engine log slice or records")
+        elif got != want:
+            res.fail(cell, f"r{cf.rep}: engaged evidence says {got!r}, configured {want!r}")
+        for key in ("requested_spec_mode", "spec_mode_expected"):
             if h.get(key) != want:
                 res.fail(cell, f"r{cf.rep}: {key}={h.get(key)!r}, configured {want!r}")
-        line = h.get("engaged_log_line")
-        if not isinstance(line, str) or want.lower() not in line.lower():
-            res.fail(cell, f"r{cf.rep}: engaged_log_line does not show mode {want!r}")
+        if h.get("engaged_spec_mode") != got:
+            res.fail(cell, f"r{cf.rep}: header engaged_spec_mode={h.get('engaged_spec_mode')!r}, evidence says {got!r}")
+        if h.get("engaged_log_line") != ev["matched_line"]:
+            res.fail(cell, f"r{cf.rep}: engaged_log_line is not the evidence line")
+        if (problem := fe.acceptance_problem(got, entry, cf.rows)) is not None:
+            res.fail(cell, f"r{cf.rep}: {problem}")
     return res
 
 

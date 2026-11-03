@@ -222,6 +222,8 @@ def make_handler(state: StubState):
                 "model": state.model,
                 "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
                 "usage": usage,
+                # per-request acceptance: the stub drafts 4 and accepts 3 (the engaged evidence)
+                "x_yunshu": {"speculative": {"rounds": 2, "drafted": 4, "accepted": 3}},
             }
             self.wfile.write(f"data: {json.dumps(final)}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
