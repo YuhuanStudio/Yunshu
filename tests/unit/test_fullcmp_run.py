@@ -647,3 +647,16 @@ def test_fast_engine_mixed_term_is_its_model_without_the_probe():
     assert abs(run.cell_budget(r)["cells"] - run.mixed_work_min(r)) < 1e-9
     slow = _mixed("mlx-vlm-server", 131072, 8, 512)
     assert abs(run.cell_budget(slow)["cells"] - run.mixed_work_min(slow) - run.MIXED_PROBE_MIN) < 1e-9
+
+
+def test_slow_mixed_jobs_get_a_ten_minute_stall_for_every_manifest_engine():
+    # every manifest engine id: the slow-mixed set gets >= 10 min, the others keep the default rule
+    for engine in run.fm.ENGINE_IDS:
+        if engine in ("ollama",):
+            continue
+        r = _mixed(engine, 8192, 4, 64)
+        b = run.job_budget([r])
+        if engine in run.MIXED_SLOW_ENGINES:
+            assert b["stall"] >= run.MIXED_SLOW_STALL_MIN, (engine, b["stall"])
+        assert b["stall"] >= run.STALL_FLOOR_MIN, engine
+    assert set(run.MIXED_SLOW_ENGINES) <= set(run.fm.ENGINE_IDS)
