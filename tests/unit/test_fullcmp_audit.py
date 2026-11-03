@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "research"))
 
 import fullcmp_audit as fa  # noqa: E402
+import fullcmp_manifest as fm  # noqa: E402
 
 PY = "/tree/.venv/bin/python"
 MODEL = "Qwen3.8-27B"
@@ -384,7 +385,23 @@ def test_good_run_passes_all_guards(tmp_path):
     assert [r.name for r in results] == list(fa.GUARDS)
     assert len(fa.GUARDS) == len(fa.GUARD_CHECKS) and "mixed_same_prompt" in fa.GUARDS
     assert failing(results) == set()
-    assert all(r.checked > 0 for r in results)
+    # family_validity and behaviour pass with zero checks here, and only because the manifest has
+    # no family cell (no tool/json/cjk/thinking/image cell) and no behaviour section
+    assert not any(
+        fm.is_family_cell(c["kind"], c.get("thinking"), c.get("media")) for c in manifest["cells"]
+    )
+    assert not manifest.get("behaviour")
+    vacuous = {r.name for r in results if r.checked == 0}
+    assert vacuous == {"family_validity", "behaviour"}
+    assert all(r.checked > 0 for r in results if r.name not in vacuous)
+
+
+def test_family_validity_with_no_family_rows_fails_when_the_manifest_has_family_cells(tmp_path):
+    manifest, files = make_data()
+    for c in manifest["cells"]:
+        c["kind"] = "tool-chat"  # the manifest now plans family cells ...
+    _, results = _run(tmp_path, manifest, {})  # ... and no cell file (no rows) was written
+    assert "family_validity" in failing(results)
 
 
 @pytest.mark.parametrize("guard,mutate", BAD_CASES, ids=[g for g, _ in BAD_CASES])

@@ -786,6 +786,18 @@ def check_family_validity(run: Run) -> GuardResult:
             if r.get("valid") is not True:
                 why = r.get("invalid_reason") or "validity not recorded"
                 res.fail(c["cell"], f"r{cf.rep} {r.get('phase')}: family reply invalid: {why}")
+    # zero checked rows pass vacuously only when the manifest has no family cell; a family cell in
+    # the manifest with no audited rows means its replies were never validated, which fails closed
+    family_cells = [
+        c["cell"]
+        for c in (run.manifest.get("cells") or [])
+        if fm.is_family_cell(c.get("kind"), c.get("thinking"), c.get("media"))
+    ]
+    if res.checked == 0 and family_cells:
+        res.fail(
+            family_cells[0],
+            f"{len(family_cells)} family cell(s) in the manifest but no family rows were audited",
+        )
     return res
 
 

@@ -301,13 +301,15 @@ def test_build_manifest_cells_pins_and_phases():
     assert y["column"] == "1K/code/c1/o512" and y["max_tokens"] == 512
     assert y["weight_group"] == "qwen3.8-27b-4bit-jundot"
     assert by[("tf-1.1.8", "B1.core.tf-1.1.8.1K.c1.code")]["expected_records"] == 2
-    assert all(c["engine"] != "kapitsa-0.2.26" for c in m["cells"])
+    # image input is a harness cell now (tfbench runs image parts): the kapitsa image row is planned
+    img = next(c for c in m["cells"] if c["cell"] == "B1.img.kapitsa-0.2.26.1K")
+    assert img["engine"] == "kapitsa-0.2.26" and img["media"] == "image"
+    assert not any(n["cell"] == "B1.img.kapitsa-0.2.26.1K" for n in m["not_in_harness"])
     assert any(c["engine"] == "mlx-vlm-server" for c in m["cells"])
     assert (
         m["expected_mode_probe"]["mlx-serve-26.11.1"]["expected_mode"] == "unverified"
     )
     assert any(u["engine"] == "llama-cpp-b12061" for u in m["unsupported"])
-    assert any(n["cell"] == "B1.img.kapitsa-0.2.26.1K" for n in m["not_in_harness"])
     # conc cells are audited: one conc record per trial, n requests per record
     conc4 = by[("tf-1.1.8", "B1.conc.tf-1.1.8.1K.c4.code")]
     assert conc4["phases"] == ["conc"] and conc4["expected_records"] == 4 * 2

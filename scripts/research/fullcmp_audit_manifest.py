@@ -603,6 +603,9 @@ def build_manifest(
                 "group": grp,
                 "ctx": r["ctx_tokens"],
                 "kind": r["prompt_kind"],
+                # the family guard (fullcmp_audit.check_family_validity) classifies a cell by these
+                "thinking": r.get("thinking") or "off",
+                "media": r.get("media") or "none",
                 "prompt_id": f"{r['prompt_kind']}-{r['ctx_tokens']}",
                 "max_tokens": r["out_len"],
                 "phases": phases,
