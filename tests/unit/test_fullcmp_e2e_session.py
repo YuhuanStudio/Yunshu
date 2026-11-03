@@ -63,10 +63,14 @@ FOLLOW_UP_SPECS = {
     ),
     "core code": _real_spec(fm.b1_specs(), "core", ctx="1K", kind="code"),
     "core prose": _real_spec(fm.b1_specs(), "core", ctx="1K", kind="prose"),
-    "ctx code": _real_spec(fm.b2_specs(), "ctx", ctx="4K"),
+    # ctx is not a type dimension (cell_type_key): the ctx sweep's type runs at 1K, where the prompt
+    # files and the two prompt variants exist. The manifest's 4K/16K ctx rows have no prompt file
+    # in the corpus (code-4096.txt is absent): a real gap, reported, not hidden here.
+    "ctx code": dict(_real_spec(fm.b2_specs(), "ctx", ctx="4K"), ctx="1K"),
     "out code": _real_spec(fm.b2_specs(), "out", ctx="1K", out=128),
 }
-IDLE_SPEC = _real_spec(fm.b2_specs(), "idle5", ctx="8K")
+# the idle5 type at 1K (variant files exist there; ctx is not a dimension of the type)
+IDLE_SPEC = dict(_real_spec(fm.b2_specs(), "idle5", ctx="8K"), ctx="1K")
 RESTART_SPEC = _real_spec(fm.b2_specs(), "restart", ctx="32K")
 SMOKE_PROFILE_SPEC = fm.spec(sweep="smoke-profile", ctx="1K", kind="code", out=64, phases=("cold",))
 

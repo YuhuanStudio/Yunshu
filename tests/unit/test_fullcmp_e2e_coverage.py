@@ -226,6 +226,8 @@ def test_genconfig_sampling_stub_run(tmp_path):
     assert argv is not None and "--sampling" in argv
     assert argv[argv.index("--sampling") + 1] == "genconfig"
     env = dict(os.environ, GPUQ_JOB_ID="2026-110301-01-fullcmp-SMOKE", TFB_STUB_SERVER=str(stub_dir))
+    # the job wrapper makes the raw directory before tfbench appends to it; this runs argv directly
+    Path(fr.raw_path(row["engine"], row["id"], 0)).parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=600, cwd=str(ROOT))
     assert proc.returncode == 0, proc.stdout[-1500:] + proc.stderr[-3000:]
     out = Path(fr.raw_path(row["engine"], row["id"], 0))

@@ -80,7 +80,8 @@ PROFILE_SHAPES = {
     "core prose": _real_spec(fm.b1_specs(), "core", ctx="1K", kind="prose"),
     "smoke-core prose": fm.spec(sweep="smoke-core", ctx="1K", kind="prose", out=64, phases=("cold", "warm", "turn2")),
     "core code": _real_spec(fm.b1_specs(), "core", ctx="1K", kind="code"),
-    "ctx code": _real_spec(fm.b2_specs(), "ctx", ctx="4K"),
+    # ctx is not a dimension of the type; 4K has no prompt file in the corpus (see test_..._session)
+    "ctx code": dict(_real_spec(fm.b2_specs(), "ctx", ctx="4K"), ctx="1K"),
     "out code": _real_spec(fm.b2_specs(), "out", ctx="1K", out=128),
     "idle5": _real_spec(fm.b2_specs(), "idle5", ctx="8K"),
     "restart": _real_spec(fm.b2_specs(), "restart", ctx="32K"),
