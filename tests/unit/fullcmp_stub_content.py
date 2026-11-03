@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import sys
 import threading
 from http.server import ThreadingHTTPServer
@@ -220,6 +221,8 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     state = base.StubState(a.engine, a.model, a.log, a.version)
     server = ThreadingHTTPServer(("127.0.0.1", a.port), make_family_handler(state))
+    # exit with the parent (the test or tfbench that launched this stub), as the base stub does
+    base.watch_parent(os.getppid(), max_lifetime=base.MAX_LIFETIME_S)
     print(f"stub {a.engine} (families) listening on 127.0.0.1:{a.port}", flush=True)
     server.serve_forever()
     return 0

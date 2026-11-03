@@ -242,6 +242,8 @@ def main(argv=None) -> int:
         cache_dir_for_home(home) if home else None,
     )
     server = SessionServer(("127.0.0.1", a.port), make_session_handler(state))
+    # exit with the parent (the test or tfbench that launched this stub), as the base stub does
+    base.watch_parent(os.getppid(), max_lifetime=base.MAX_LIFETIME_S)
     print(f"stub {a.engine} listening on 127.0.0.1:{a.port}", flush=True)
     server.serve_forever()
     return 0
