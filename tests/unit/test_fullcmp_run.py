@@ -544,3 +544,72 @@ def test_dry_run_prints_itemized_budget_timeout_stall_and_lane(capsys):
     for key in ("startup", "gate_pre", "cells", "post", "finalize", "shutdown", "total",
                 "timeout_min", "stall_min", "lane:"):
         assert key in out, key
+
+
+# --- one gpuq lane per batch: gpuq keeps submission order only inside one lane ----------------
+
+
+def test_a_batch_with_a_short_job_and_a_normal_job_runs_in_one_lane():
+    # a tiny cell (short budget) next to a 27B cell: the batch must not mix lanes
+    rows = [row("yunshu", "B1.a-tiny", est=0.05), row("yunshu", "B1.b-big", est=30.0)]
+    plan = run.plan_batch(rows, "B1", PIN)
+    assert {j.lane for j in plan.jobs} == {"normal"}
+    assert all(j.timeout_min > run.SHORT_LANE_MIN for j in plan.jobs)
+
+
+def _gpuq_module():
+    spec = importlib.util.spec_from_file_location(
+        "gpuq_under_test", ROOT / "scripts" / "dev" / "gpuq.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _fake_gpuq_jobs(plan):
+    """gpuq job dicts for the plan's jobs in submission order (same owner, priority, device)."""
+    return [
+        {
+            "id": f"j{i:03d}",
+            "label": j.label,
+            "state": "pending",
+            "submitted": float(i),
+            "priority": 1,
+            "device": "m5",
+            "timeout_s": j.timeout_min * 60,
+            "short": False,
+            "cwd": "/w",
+            "env": {"GPUQ_OWNER": "fullcmp"},
+        }
+        for i, j in enumerate(plan.jobs)
+    ]
+
+
+def test_gpuq_picker_keeps_the_planned_order_when_one_lane(monkeypatch):
+    gq = _gpuq_module()
+    rows = [row("yunshu", "B1.a-tiny", est=0.05), row("yunshu", "B1.b-big", est=30.0)]
+    plan = run.plan_batch(rows, "B1", PIN)  # one lane after the fix
+    jobs = _fake_gpuq_jobs(plan)
+    order = []
+    while True:
+        pick = gq._pick(jobs)
+        if pick is None:
+            break
+        pick["state"] = "running"
+        pick["started"] = float(len(order))
+        order.append(pick["label"])
+    assert order == [j.label for j in plan.jobs]
+
+
+def test_gpuq_picker_reorders_a_mixed_lane_batch_so_the_guard_must_fail(monkeypatch):
+    # the cause of wire-1106: a short-named job (submitted later) is picked before a normal job
+    gq = _gpuq_module()
+    jobs = [
+        {"id": "a", "label": "fullcmp-B1-x-r0", "state": "pending", "submitted": 0.0,
+         "priority": 1, "device": "m5", "timeout_s": 20 * 60, "short": False,
+         "cwd": "/w", "env": {"GPUQ_OWNER": "fullcmp"}},
+        {"id": "b", "label": "fullcmp-tiny-y-r0", "state": "pending", "submitted": 1.0,
+         "priority": 1, "device": "m5", "timeout_s": 20 * 60, "short": False,
+         "cwd": "/w", "env": {"GPUQ_OWNER": "fullcmp"}},
+    ]
+    assert gq._pick(jobs)["id"] == "b"  # the short-lane job jumps the queue

@@ -728,6 +728,30 @@ def unknown_engines(rows: list[dict], batch: str, engines) -> list[str]:
     return [e for e in engines if e not in known]
 
 
+_GPUQ_SHORT_LABEL = re.compile(r"(^|[-_])(tiny|smoke|dry)([-_]|$)", re.I)
+
+
+def one_lane(jobs: list[Job]) -> list[Job]:
+    """One gpuq lane for every job of a batch. gpuq picks a pending job by priority, then SHORT
+    jobs first (timeout <= 10 min), then owner round-robin, then submission order (gpuq.py _pick),
+    and it runs short jobs between long ones (_interleave_choice). A batch that mixes lanes is
+    therefore reordered (2026-11-03 wire-1106: gpu_exclusive_rotation). If any job is normal, every
+    job is normal: its timeout is raised above the 10 min short limit, so gpuq keeps submission
+    order (one owner, one priority, same lane = FIFO). Fails loudly if the lanes still differ."""
+    if any(j.lane == "normal" for j in jobs):
+        for j in jobs:
+            j.lane = "normal"
+            j.timeout_min = max(j.timeout_min, SHORT_LANE_MIN + 0.5)
+    lanes = {j.lane for j in jobs}
+    if len(lanes) > 1:
+        raise ValueError(f"batch mixes gpuq lanes {sorted(lanes)}: submission order would not hold")
+    # gpuq also treats a label with a tiny/smoke/dry word as short (gpuq.py _SHORT, _is_short)
+    label_short = {bool(_GPUQ_SHORT_LABEL.search(j.label)) for j in jobs}
+    if len(label_short) > 1:
+        raise ValueError("batch mixes short-named and normal-named labels: gpuq would reorder it")
+    return jobs
+
+
 def plan_batch(
     rows: list[dict],
     batch: str,
@@ -767,6 +791,7 @@ def plan_batch(
         # One extra profile job per (engine, group, chunk), after the timed jobs; its rows never
         # reach the audit or the table.
         jobs += plan_jobs({0: runnable}, engine_order, pin, batch, profile=True)
+    jobs = one_lane(jobs)
     return Plan(batch, runnable, skipped, engine_order, jobs)
 
 
