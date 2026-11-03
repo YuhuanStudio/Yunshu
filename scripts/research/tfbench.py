@@ -186,6 +186,16 @@ def engaged_spec_mode_line(engine, log):
         start = log.rfind("\n", 0, m.start()) + 1
         end = log.find("\n", m.end())
         return m.group(1), log[start : end if end != -1 else len(log)]
+    if engine.startswith("omlx-"):
+        # omlx prints this once the DFlash drafter is attached as a batched drafter (the
+        # high-confidence pattern of fullcmp_audit_manifest.EXPECTED_MODE_PROBE)
+        m = re.search(
+            r"DFlash enabled for \S+ as a batched drafter, draft=\S+[^\n]*", log
+        )
+        if m:
+            start = log.rfind("\n", 0, m.start()) + 1
+            end = log.find("\n", m.end())
+            return "dflash", log[start : end if end != -1 else len(log)]
     m = re.search(r"\[tensorfold\] drafter [^\n]*DFlash[^\n]*block=[^\n]*", log)
     if m:
         return "dflash", m.group(0)
@@ -251,11 +261,12 @@ def wait_startup_ready(proc, log, pattern, timeout=120):
     raise RuntimeError(f"accelerator startup not ready: {pattern}")
 
 
-def stub_server_cmd(engine, port, log, stub_dir) -> list[str]:
+def stub_server_cmd(engine, port, log, stub_dir, version=None) -> list[str]:
     """TEST-ONLY: argv of the fullcmp stub server that replaces a real engine launch when
     TFB_STUB_SERVER=<dir> is set. The stub is <dir>/fullcmp_stub_server.py (the tests point it at
-    tests/unit), so no engine is started. Its engine lines go to the server log."""
-    return [
+    tests/unit), so no engine is started. Its engine lines go to the server log; version is the
+    version it reports on /v1/yunshu/status (the pinned version for yunshu)."""
+    cmd = [
         sys.executable,
         str(Path(stub_dir) / "fullcmp_stub_server.py"),
         "--engine",
@@ -265,6 +276,9 @@ def stub_server_cmd(engine, port, log, stub_dir) -> list[str]:
         "--log",
         str(log),
     ]
+    if version:
+        cmd += ["--version", str(version)]
+    return cmd
 
 
 class Srv:
@@ -382,7 +396,13 @@ class Srv:
             # TEST-ONLY (fullcmp dry run): the server is tests/unit/fullcmp_stub_server.py on
             # this port, writing its engine lines to this server's log. Launch, readiness and
             # every check after it stay the same code path.
-            cmd = stub_server_cmd(self.engine, self.port, self.log, stub_dir)
+            cmd = stub_server_cmd(
+                self.engine,
+                self.port,
+                self.log,
+                stub_dir,
+                version=(self.pin or {}).get("version"),
+            )
             self.cmd = cmd
             self.log.write_bytes(
                 b""
@@ -461,7 +481,12 @@ class Srv:
             text=True,
             timeout=10,
         )
-        fp.verify_pinned_server(status, ps.stdout, self.pin)
+        fp.verify_pinned_status(status, self.pin)
+        if os.environ.get("TFB_STUB_SERVER"):
+            # TEST-ONLY: the live process is the stub, so its command line cannot be the pinned
+            # python; every other pin check (version, binary, paths) still runs.
+            return
+        fp.verify_pinned_cmdline(ps.stdout, self.pin)
 
     def probe_text(self):
         path = self.launch.probe if self.launch else None

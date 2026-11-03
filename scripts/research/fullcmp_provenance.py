@@ -111,18 +111,28 @@ def pinned_yunshu_cmd(cmd: list, pin: dict, yunshu_args) -> list:
     return [pin["python"], "-m", "yunshu_cli", *yunshu_args(cmd)]
 
 
-def verify_pinned_server(status: dict, cmdline: str, pin: dict) -> None:
-    """After launch: the server reports the pinned version and runs from the pinned python."""
+def verify_pinned_status(status: dict, pin: dict) -> None:
+    """The server reports the pinned version."""
     if not isinstance(status, dict) or status.get("version") != pin["version"]:
         raise ProvenanceError(
             f"server reports version {status.get('version') if isinstance(status, dict) else None!r}, "
             f"pinned {pin['version']!r}"
         )
+
+
+def verify_pinned_cmdline(cmdline: str, pin: dict) -> None:
+    """The live process runs from the pinned python as -m yunshu_cli."""
     parts = (cmdline or "").split()
     if not parts or not same_path(parts[0], pin["python"]):
         raise ProvenanceError(f"server process runs {parts[:1]}, not the pinned python")
     if "yunshu_cli" not in parts:
         raise ProvenanceError("server process was not started as -m yunshu_cli")
+
+
+def verify_pinned_server(status: dict, cmdline: str, pin: dict) -> None:
+    """After launch: the server reports the pinned version and runs from the pinned python."""
+    verify_pinned_status(status, pin)
+    verify_pinned_cmdline(cmdline, pin)
 
 
 def file_sha256(path) -> str:

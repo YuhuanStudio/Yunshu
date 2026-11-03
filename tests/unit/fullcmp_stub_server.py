@@ -84,9 +84,10 @@ def prompt_text(body: dict) -> str:
 
 
 class StubState:
-    def __init__(self, engine: str, model: str, log_path: Path):
+    def __init__(self, engine: str, model: str, log_path: Path, version: str = "stub"):
         self.engine = engine
         self.model = model
+        self.version = version
         self.log_path = Path(log_path)
         self.lock = threading.Lock()
         self.round = 0
@@ -119,6 +120,8 @@ def make_handler(state: StubState):
         def do_GET(self):
             if self.path.startswith("/health"):
                 return self._json(200, {"status": "ok"})
+            if self.path.startswith("/v1/yunshu/status"):
+                return self._json(200, {"version": state.version})
             if self.path.startswith("/v1/models"):
                 return self._json(
                     200,
@@ -208,9 +211,9 @@ def make_handler(state: StubState):
     return Handler
 
 
-def start(engine: str, model: str, log_path, port: int = 0):
+def start(engine: str, model: str, log_path, port: int = 0, version: str = "stub"):
     """Start the stub in a background thread. Returns (server, port, state)."""
-    state = StubState(engine, model, Path(log_path))
+    state = StubState(engine, model, Path(log_path), version)
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(state))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, server.server_address[1], state
@@ -222,8 +225,9 @@ def main(argv=None) -> int:
     ap.add_argument("--model", default="stub-model")
     ap.add_argument("--port", type=int, required=True)
     ap.add_argument("--log", required=True, type=Path)
+    ap.add_argument("--version", default="stub")
     a = ap.parse_args(argv)
-    state = StubState(a.engine, a.model, a.log)
+    state = StubState(a.engine, a.model, a.log, a.version)
     server = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(state))
     print(f"stub {a.engine} listening on 127.0.0.1:{a.port}", flush=True)
     server.serve_forever()
