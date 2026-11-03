@@ -670,3 +670,11 @@ def test_tensorfold_1_2_engaged_line_is_recorded():
     mode, line = tfbench.engaged_spec_mode_line("tf-1.2.1", log)
     assert mode == "dflash" and "drafts: DFlash2" in line
     assert tfbench.engaged_spec_mode_line("omlx-0.7.3", log) == (None, None)
+
+
+def test_missing_gpuq_job_id_fails_closed_with_a_clear_message():
+    """gpuq exports GPUQ_JOB_ID to every job; a fullcmp cell started outside gpuq must refuse."""
+    env = {"TFB_RUN_ID": "run1", "TFB_GROUP": "g1"}
+    with pytest.raises(fp.ProvenanceError, match="GPUQ_JOB_ID"):
+        fp.check_required_env(env)
+    fp.check_required_env(dict(env, GPUQ_JOB_ID="1103-1-x"))
