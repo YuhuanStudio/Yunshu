@@ -79,3 +79,21 @@ def test_missing_variant_file_or_sha_row_is_refused_and_named(tmp_path):
         rows[:1], work_dir=str(corpus), variant_dir=variants, sha_table={}
     )
     assert any("no sha256 row" in p and "variant=1" in p for p in problems)
+
+
+@pytest.mark.skipif(not REAL_MANIFEST.is_file(), reason="real fullcmp manifest not present")
+@pytest.mark.xfail(
+    strict=True,
+    reason="real matrix plans one prompt (variant 0) per (model, ctx, kind); output_sha needs >= 2",
+)
+def test_real_manifest_groups_have_two_prompt_ids_for_output_sha_guard():
+    """output_sha (fullcmp_audit.check_output_sha) needs >= 2 distinct prompt ids per (model, ctx, kind).
+    Strict xfail: it turns into a failure once the real matrix plans a second prompt per group."""
+    groups: dict[tuple, set] = {}
+    for r in _real_rows():
+        if "ctx_tokens" not in r or not r.get("prompt_kind"):
+            continue
+        key = (r.get("model"), r["ctx"], r["prompt_kind"])
+        groups.setdefault(key, set()).add(f"{r['prompt_kind']}-{r['ctx_tokens']}-v{run.prompt_variant(r)}")
+    short = sorted(k for k, ids in groups.items() if len(ids) < 2)
+    assert not short, f"groups with < 2 prompt ids: {short}"
