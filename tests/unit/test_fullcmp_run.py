@@ -122,7 +122,7 @@ def test_single_cell_above_cap_is_flagged():
 
 
 def test_rotated_order_rep_r_starts_at_engine_r_mod_n():
-    engines = ["A", "B", "C"]
+    engines = ["yunshu", "tf-1.2.1", "splash-1.5.0"]
     rows = [row(e, f"B1.{e}", reps=3) for e in engines]
     plan = run.plan_batch(rows, "B1", PIN)
     assert plan.engine_order == engines
@@ -133,7 +133,7 @@ def test_rotated_order_rep_r_starts_at_engine_r_mod_n():
 
 
 def test_no_back_to_back_same_engine_across_reps_when_three_engines():
-    engines = ["A", "B", "C"]
+    engines = ["yunshu", "tf-1.2.1", "splash-1.5.0"]
     rows = [row(e, f"B1.{e}", reps=3) for e in engines]
     plan = run.plan_batch(rows, "B1", PIN)
     assert run.back_to_back(plan.jobs) == 0
@@ -181,10 +181,30 @@ def test_command_lines_carry_fullcmp_env_and_pin():
     assert "TFB_YUNSHU_BIN=/fake/venv/bin/yunshu" in text
     assert "TFB_YUNSHU_SRC=/fake/tree/python" in text
     assert "PYTHONPATH=/fake/tree/python" in text
-    assert "TFB_TELEMETRY_DIR=" in text
+    assert "TFB_TELEMETRY_DIR=/Volumes/Micron/yunshu-fullcmp/raw" in text
     assert "HOME=/Volumes/Micron/yunshu-fullcmp/home/yunshu" in text
-    assert "--engine yunshu" in text and "--part decode" in text
+    assert "--engine yunshu-main" in text and "--part decode" in text
+    assert "GPUQ_JOB_ID" not in text  # gpuq exports it to the job env
     assert "/Volumes/Micron/yunshu-fullcmp/raw/yunshu/B1.ok-r0.jsonl" in text
+
+
+def test_telemetry_dir_is_the_cell_file_root():
+    """The harness telemetry path for a cell is the audit's telemetry_path beside the cell file."""
+    import importlib.util as ilu
+
+    spec = ilu.spec_from_file_location(
+        "fullcmp_audit_t", ROOT / "scripts" / "research" / "fullcmp_audit.py"
+    )
+    audit = ilu.module_from_spec(spec)
+    sys.modules["fullcmp_audit_t"] = audit
+    spec.loader.exec_module(audit)
+    raw = run.raw_path("yunshu", "B1.ok", 0)
+    root = run.RAW_ROOT
+    tdir = [t for t in run.cell_env("yunshu", PIN) if t.startswith("TFB_TELEMETRY_DIR=")][0]
+    tdir = tdir.split("=", 1)[1]
+    assert Path(tdir) == root
+    harness_path = Path(root) / "yunshu" / (raw.name[: -len(".jsonl")] + ".telemetry.jsonl")
+    assert harness_path == audit.telemetry_path(raw)
 
 
 def test_submit_argv_form():
@@ -276,23 +296,23 @@ def test_parse_need_rep3_ignores_other_status_lines():
     out = "\n".join(
         [
             json.dumps({"engine": "yunshu", "cell": "B1.a", "status": "need_rep3"}),
-            json.dumps({"engine": "omlx", "cell": "B1.b", "status": "stable"}),
+            json.dumps({"engine": "omlx-0.7.3", "cell": "B1.b", "status": "stable"}),
             "not json",
-            json.dumps({"engine": "omlx", "cell": "B1.c", "status": "need_rep3"}),
+            json.dumps({"engine": "omlx-0.7.3", "cell": "B1.c", "status": "need_rep3"}),
         ]
     )
-    assert run.parse_need_rep3(out) == [("yunshu", "B1.a"), ("omlx", "B1.c")]
+    assert run.parse_need_rep3(out) == [("yunshu", "B1.a"), ("omlx-0.7.3", "B1.c")]
 
 
 def test_rep3_jobs_use_rotated_slots_and_flag(pin_file):
-    engines = ["A", "B", "C"]
+    engines = ["yunshu", "tf-1.2.1", "splash-1.5.0"]
     rows = [row(e, f"B1.{e}") for e in engines]
-    subset = [r for r in rows if r["engine"] in ("B", "C")]
+    subset = [r for r in rows if r["engine"] in ("tf-1.2.1", "splash-1.5.0")]
     jobs = run.plan_jobs(
         {run.REP3_INDEX: subset}, engines, PIN, "B1", label_suffix="-rep3"
     )
-    assert run.rotate(engines, 2) == ["C", "A", "B"]
-    assert [j.engine for j in jobs] == ["C", "B"]
+    assert run.rotate(engines, 2) == ["splash-1.5.0", "yunshu", "tf-1.2.1"]
+    assert [j.engine for j in jobs] == ["splash-1.5.0", "tf-1.2.1"]
     assert all(j.label.endswith("-r2-rep3") for j in jobs)
     assert all(j.rep == 2 for j in jobs)
     assert all("-r2.jsonl" in " ".join(j.cmd) for j in jobs)
@@ -305,7 +325,7 @@ def test_full_run_queues_rep3_for_flagged_cells_and_fails_on_bad_job(
     manifest.write_text(
         json.dumps(row("yunshu", "B1.a"))
         + "\n"
-        + json.dumps(row("omlx", "B1.b"))
+        + json.dumps(row("omlx-0.7.3", "B1.b"))
         + "\n"
     )
     calls = {"submit": [], "wait": [], "reps": 0}
@@ -339,8 +359,8 @@ def test_full_run_queues_rep3_for_flagged_cells_and_fails_on_bad_job(
 
 
 def test_audit_manifest_marks_missing_pins_as_absent(pin_file):
-    rows = [row("yunshu", "B1.a"), row("omlx", "B1.b")]
-    m = run.audit_manifest(rows, ["B1"], PIN, ["yunshu", "omlx"])
+    rows = [row("yunshu", "B1.a"), row("omlx-0.7.3", "B1.b")]
+    m = run.audit_manifest(rows, ["B1"], PIN, ["yunshu", "omlx-0.7.3"])
     assert set(m["pins"]) == {"yunshu"}
-    assert m["groups"]["B1.1024.code.c1"]["order"] == ["yunshu", "omlx"]
+    assert m["groups"]["B1.1024.code.c1"]["order"] == ["yunshu", "omlx-0.7.3"]
     assert all(c["expected_records"] is None for c in m["cells"])

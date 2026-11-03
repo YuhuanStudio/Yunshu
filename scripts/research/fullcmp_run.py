@@ -48,6 +48,9 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bench_engines  # noqa: E402
+
 SCRIPTS = Path(__file__).resolve().parent
 TFBENCH = SCRIPTS / "tfbench.py"
 AUDIT = SCRIPTS / "fullcmp_audit.py"
@@ -64,7 +67,6 @@ THRESH_PATH = RUN_DIR / "rep_thresholds.json"
 AUDIT_DIR = RUN_DIR / "audit"
 PREFLIGHT_DIR = RUN_DIR / "preflight"
 RAW_ROOT = Path("/Volumes/Micron/yunshu-fullcmp/raw")
-TELEMETRY_ROOT = Path("/Volumes/Micron/yunshu-fullcmp/telemetry")
 HOME_ROOT = Path("/Volumes/Micron/yunshu-fullcmp/home")
 MODEL_PATH = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
 
@@ -210,11 +212,14 @@ class Job:
 
 
 def cell_env(engine: str, pin: dict) -> list[str]:
-    """Env assignments every harness command carries (pinned Yunshu tree, isolated HOME)."""
+    """Env assignments every harness command carries (pinned Yunshu tree, isolated HOME).
+    TFB_TELEMETRY_DIR is the raw root: tfbench writes <root>/<engine>/<cell>-rN.telemetry.jsonl,
+    the same place the audit reads it beside each cell file. GPUQ_JOB_ID is not set here: gpuq
+    exports it to every job it runs (the env of this command)."""
     harness = pin["launch"]["harness_env"]
     return [
         "TFB_FULLCMP=1",
-        f"TFB_TELEMETRY_DIR={TELEMETRY_ROOT}",
+        f"TFB_TELEMETRY_DIR={RAW_ROOT}",
         f"TFB_YUNSHU_BIN={harness['TFB_YUNSHU_BIN']}",
         f"TFB_YUNSHU_SRC={harness['TFB_YUNSHU_SRC']}",
         f"PYTHONPATH={harness['PYTHONPATH']}",
@@ -237,7 +242,7 @@ def cell_command(row: dict, rep: int, pin: dict) -> list[str] | None:
         MAIN_PY,
         str(TFBENCH),
         "--engine",
-        row["engine"],
+        bench_engines.tfbench_engine(row["engine"]),
         "--part",
         part,
         "--rep",
