@@ -1986,6 +1986,29 @@ def part_forced(s, out, a):
         )
 
 
+def request_records(rs):
+    """The per-request list of a conc / mixed record (schema: fullcmp requests). spec is the request's own
+    speculative counters from its response (x_yunshu.speculative) when the engine sends them, otherwise
+    'unavailable (reason)': the evidence correlation fills it at finalize, per request."""
+    out = []
+    for i, r in enumerate(rs):
+        xy = r.pop("_xy_speculative", None) or {}
+        if isinstance(xy.get("accepted"), (int, float)):
+            spec = {"accepted": int(xy["accepted"]), "drafted": xy.get("drafted"), "rounds": xy.get("rounds")}
+        else:
+            spec = "unavailable (response carries no per-request speculative counters)"
+        out.append({
+            "rid": i,
+            "pt": r["pt"],
+            "ct": r["ct"],
+            "cached": r["cached"],
+            "ttft_s": r["ttft_s"],
+            "dec_tps": r["dec_tps"],
+            "spec": spec,
+        })
+    return out
+
+
 def part_conc(s, out, a):
     ns = [int(x) for x in (a.conc_ns or "2,4,8").split(",")]
     for n in (2,) if a.smoke else ns:
@@ -2013,6 +2036,7 @@ def part_conc(s, out, a):
                 if not a.smoke:
                     check_decode_len(r, a.conc_tokens, f"conc n={n} trial={trial}")
                 r.pop("_text")
+            requests = request_records(rs)
             wall = time.perf_counter() - t0
             tot = sum(r["ct"] for r in rs)
             decs = [r["dec_tps"] for r in rs]
@@ -2033,6 +2057,7 @@ def part_conc(s, out, a):
                 pts=[r["pt"] for r in rs],
                 cts=[r["ct"] for r in rs],
                 shas=[r["sha"] for r in rs],
+                requests=requests,
                 # per-request provenance for the fullcmp audit (one entry per request, in order)
                 total_s=[r["total_s"] for r in rs],
                 finish=[r["finish"] for r in rs],
@@ -2090,6 +2115,7 @@ def part_mixed(s, out, a):
             check_decode_len(rs[0], tokens, f"mixed long trial={trial}")
         for r in rs:
             r.pop("_text")
+        requests = request_records(rs)
         tot = sum(r["ct"] for r in rs)
         short_decs = [r["dec_tps"] for r in rs[1:]]
         emit(
@@ -2110,6 +2136,7 @@ def part_mixed(s, out, a):
             pts=[r["pt"] for r in rs],
             cts=[r["ct"] for r in rs],
             shas=[r["sha"] for r in rs],
+            requests=requests,
             total_s=[r["total_s"] for r in rs],
             finish=[r["finish"] for r in rs],
             prompt_ids_sha=[r["prompt_ids_sha"] for r in rs],
