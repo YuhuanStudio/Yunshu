@@ -32,7 +32,7 @@ from gpuq_contention import was_contended  # noqa: E402
 # Identifies this harness in every request row (fullcmp audit: provenance_identity).
 HARNESS_ID = "tfbench/fullcmp-1"
 
-M ="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
+M = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
 D = "/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2"
 TF = {
     "tf-old": "/Volumes/P5Plus/yunshu-test-envs/tensorfold-0.3.6.1/bin/tensorfold",
@@ -166,7 +166,9 @@ def engaged_spec_mode_line(engine, log):
     """(engaged mode, the log line it was parsed from), read from the initialized runner, not
     the earlier selection/fallback message. (None, None) when the log shows no mode."""
     if engine == "yunshu":
-        found = list(re.finditer(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", log))
+        found = list(
+            re.finditer(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", log)
+        )
         if not found:
             return None, None
         m = found[-1]
@@ -339,7 +341,9 @@ class Srv:
         if self.pin is not None:
             # Pinned: `<pinned venv python> -m yunshu_cli serve ...` from the pinned tree only.
             if not bench_engines.is_yunshu_command(cmd):
-                raise fp.ProvenanceError(f"pinned launch is not a yunshu command: {cmd[:2]}")
+                raise fp.ProvenanceError(
+                    f"pinned launch is not a yunshu command: {cmd[:2]}"
+                )
             cmd = fp.pinned_yunshu_cmd(cmd, self.pin, bench_engines.yunshu_args)
             env["PYTHONPATH"] = self.pin["src"]
         self.cmd = cmd
@@ -399,7 +403,10 @@ class Srv:
         """The running server reports the pinned version and runs from the pinned python."""
         req = urllib.request.Request(
             self.url + "/v1/yunshu/status",
-            headers={"Authorization": "Bearer " + self.extra_env.get("YUNSHU_AUTH_TOKEN", "k")},
+            headers={
+                "Authorization": "Bearer "
+                + self.extra_env.get("YUNSHU_AUTH_TOKEN", "k")
+            },
         )
         with urllib.request.urlopen(req, timeout=10) as r:
             status = json.load(r)
@@ -501,7 +508,9 @@ def prompt_digest(messages):
     ).hexdigest()
 
 
-_ACTIVE_TELEMETRY = None  # the cell's fullcmp Sampler while a cell runs (marks go to it)
+_ACTIVE_TELEMETRY = (
+    None  # the cell's fullcmp Sampler while a cell runs (marks go to it)
+)
 _REQ_SEQ = [0]
 
 
@@ -653,6 +662,7 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
         "cache_hit_tokens": result["cached"],
     }
     result["_xy_speculative"] = (xy or {}).get("speculative")
+    result["_xy_latency"] = (xy or {}).get("latency")
     if capture_timestamps:
         result["_sent_at_s"] = t0
         result["_first_at_s"] = tf
@@ -983,6 +993,7 @@ def attribution_fields(s, r):
     is estimated. Only in fullcmp mode (TFB_FULLCMP=1), where an unknown engine is an error."""
     client = r.pop("_attr_client", {}) or {}
     spec = r.pop("_xy_speculative", None) or {}
+    lat = r.pop("_xy_latency", None) or {}
     attr = {k: v for k, v in client.items() if v is not None}
     attr["engine_log_path"] = str(s.log)
     for f in ("rounds", "drafted", "accepted"):
@@ -994,9 +1005,43 @@ def attribution_fields(s, r):
             os.environ.get("TFB_ATTR_ENGINE") or s.engine
         )
         unavailable = dict(eng.unavailable)
+        if eng.engine == "yunshu":
+            _yunshu_server_fields(attr, unavailable, client, spec, lat)
     r["attr"] = attr
     r["attr_unavailable"] = unavailable
     return r
+
+
+# Yunshu milestone name -> layer-1 field (x_yunshu.latency.milestones_ms, ms since gateway arrival).
+YUNSHU_MILESTONE_FIELDS = {
+    "t_template": "template_end",
+    "t_admit": "engine_admit",
+    "t_cache_lookup": "apc_end",
+}
+
+
+def _yunshu_server_fields(attr, unavailable, client, spec, lat):
+    """Map Yunshu's exposed server stages onto layer-1 fields. A milestone is epoch seconds as
+    client t_receive + ms (the gateway clock is the request's arrival, so the loopback offset is
+    the only error). A milestone the request did not reach gets a per-row reason."""
+    ms = lat.get("milestones_ms") if isinstance(lat, dict) else None
+    ms = ms if isinstance(ms, dict) else {}
+    t_recv = client.get("t_receive")
+    for field, key in YUNSHU_MILESTONE_FIELDS.items():
+        v = ms.get(key)
+        if isinstance(v, (int, float)) and t_recv is not None:
+            attr[field] = t_recv + float(v) / 1000.0
+        else:
+            unavailable[field] = f"milestone {key} not reached by this request"
+    if "rounds" not in attr:
+        unavailable["rounds"] = (
+            "no speculative mode for this request (x_yunshu.speculative absent)"
+            if not spec
+            else "x_yunshu.speculative has no rounds (zero verify rounds)"
+        )
+    copy = spec.get("copy") if isinstance(spec, dict) else None
+    if isinstance(copy, dict) and isinstance(copy.get("rounds"), (int, float)):
+        attr["copy_rounds"] = int(copy["rounds"])
 
 
 def part_decode(s, out, a):
@@ -1657,7 +1702,9 @@ def fullcmp_header(
     host-CPU snapshot taken before the server started (fullcmp_quiet.snapshot)."""
     model_key = fp.census_model_id(census, a.model)
     version, git_sha = bench_engines.engine_version(a.engine, YUNSHU_SRC)
-    census_key = "yunshu" if Srv._is_yunshu(a.engine) else FULLCMP_CENSUS_KEY.get(a.engine)
+    census_key = (
+        "yunshu" if Srv._is_yunshu(a.engine) else FULLCMP_CENSUS_KEY.get(a.engine)
+    )
     return dict(
         run_id=environ["TFB_RUN_ID"],
         model=model_key,
@@ -1687,7 +1734,9 @@ def start_cell_telemetry(pid, port, out_path, engine, environ, *, required):
     """Sampler beside the server for this cell; its series path is returned for the record.
     Required (fullcmp): a sampler that does not start raises. Optional: warn and continue."""
     global _ACTIVE_TELEMETRY
-    tdir = environ.get("TFB_TELEMETRY_DIR") or (fp.DEFAULT_TELEMETRY_DIR if required else "")
+    tdir = environ.get("TFB_TELEMETRY_DIR") or (
+        fp.DEFAULT_TELEMETRY_DIR if required else ""
+    )
     if not tdir:
         return None
     path = fp.telemetry_out(out_path, engine, tdir)
@@ -1793,7 +1842,9 @@ def main():
         if was_contended():
             raise fp.ProvenanceError("GPU contended before the cell started (fullcmp)")
         if os.path.exists(a.out) and os.path.getsize(a.out) > 0:
-            raise fp.ProvenanceError(f"{a.out} exists; a fullcmp cell writes a fresh file")
+            raise fp.ProvenanceError(
+                f"{a.out} exists; a fullcmp cell writes a fresh file"
+            )
         census = fp.load_json(fp.CENSUS_PATH)
     # Host CPU before the server exists (foreign holders only; the harness tree is excluded).
     quiet_pre = fq.snapshot() if fullcmp else None
@@ -1812,7 +1863,12 @@ def main():
             try:
                 if fullcmp or os.environ.get("TFB_TELEMETRY_DIR"):
                     telem_path = start_cell_telemetry(
-                        s.proc.pid, s.port, a.out, a.engine, os.environ, required=fullcmp
+                        s.proc.pid,
+                        s.port,
+                        a.out,
+                        a.engine,
+                        os.environ,
+                        required=fullcmp,
                     )
                 if fullcmp:
                     fc_header = fullcmp_header(
@@ -1828,8 +1884,14 @@ def main():
                     )
             except Exception as exc:
                 if fullcmp:
-                    emit(out, part="error", stage="start", engine=a.engine,
-                         rep=a.rep, error=str(exc))
+                    emit(
+                        out,
+                        part="error",
+                        stage="start",
+                        engine=a.engine,
+                        rep=a.rep,
+                        error=str(exc),
+                    )
                 raise
             if a.engine in bench_engines.ENGINES:
                 version, sha = bench_engines.engine_version(a.engine, YUNSHU_SRC)
@@ -1923,7 +1985,14 @@ def main():
     except Exception as exc:
         if fullcmp:
             with open(a.out, "a") as out:
-                emit(out, part="error", stage="run", engine=a.engine, rep=a.rep, error=str(exc))
+                emit(
+                    out,
+                    part="error",
+                    stage="run",
+                    engine=a.engine,
+                    rep=a.rep,
+                    error=str(exc),
+                )
         raise
     finally:
         stop_cell_telemetry()

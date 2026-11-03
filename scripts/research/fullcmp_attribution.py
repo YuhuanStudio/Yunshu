@@ -36,9 +36,15 @@ LAYER1_TIMESTAMPS = {
     "t_admit": (REQUIRED, "server: admitted to the generation queue (epoch s)"),
     "t_cache_lookup": (REQUIRED, "server: prefix-cache lookup done (epoch s)"),
     "t_restore": (OPTIONAL, "server: cache restore done, if any (epoch s)"),
-    "t_prefill_chunks": (REQUIRED, "server: list of [start_s, end_s, tokens] per prefill chunk"),
+    "t_prefill_chunks": (
+        REQUIRED,
+        "server: list of [start_s, end_s, tokens] per prefill chunk",
+    ),
     "t_first_token": (REQUIRED, "client: first content token received (epoch s)"),
-    "t_rounds": (REQUIRED, "server: list of per-round end times (epoch s); [] for non-spec engines with per-step rows"),
+    "t_rounds": (
+        REQUIRED,
+        "server: list of per-round end times (epoch s); [] for non-spec engines with per-step rows",
+    ),
     "t_last_token": (REQUIRED, "client: last token received (epoch s)"),
     "t_response_end": (REQUIRED, "client: response complete (epoch s)"),
 }
@@ -50,10 +56,19 @@ LAYER1_COUNTERS = {
     "accepted": (OPTIONAL, "int: accepted draft tokens (spec engines)"),
     "copy_rounds": (OPTIONAL, "int: copy-lookup rounds (Yunshu n-gram/copy path)"),
     "tree_rounds": (OPTIONAL, "int: tree-verify rounds (DFlash tree)"),
-    "cache_hit_tokens": (REQUIRED, "int: prompt tokens served from cache (server-reported 'cached')"),
+    "cache_hit_tokens": (
+        REQUIRED,
+        "int: prompt tokens served from cache (server-reported 'cached')",
+    ),
     "chunk_sizes": (REQUIRED, "list[int]: prefill chunk sizes"),
-    "host_gaps_ms": (REQUIRED, "list[float]: gaps between consecutive GPU submissions (from timestamps)"),
-    "engine_log_path": (REQUIRED, "str: the engine's own log file for this request's server, verbose level recorded"),
+    "host_gaps_ms": (
+        REQUIRED,
+        "list[float]: gaps between consecutive GPU submissions (from timestamps)",
+    ),
+    "engine_log_path": (
+        REQUIRED,
+        "str: the engine's own log file for this request's server, verbose level recorded",
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -79,9 +94,7 @@ LAYER2_YUNSHU = {
     "host_sync_count": (REQUIRED, "int: host syncs per step (counter)"),
     "op_census": (REQUIRED, "dict: op name -> count per step"),
 }
-LAYER2_COMPETITOR_NOTE = (
-    "competitor's own debug/stats output, recorded as-is under competitor_stats (raw lines)"
-)
+LAYER2_COMPETITOR_NOTE = "competitor's own debug/stats output, recorded as-is under competitor_stats (raw lines)"
 
 
 @dataclass(frozen=True)
@@ -95,9 +108,7 @@ class EngineAttr:
     layer2: str
 
 
-_NO_SERVER_STAGES = (
-    "not exposed by the engine's HTTP API or log at this verbosity (client-side fields only)"
-)
+_NO_SERVER_STAGES = "not exposed by the engine's HTTP API or log at this verbosity (client-side fields only)"
 _NO_RESTORE = "engine has no separate cache-restore step"
 _NO_SPEC = "engine does not run speculative decoding in this mode"
 _NO_CENSUS = "engine has no op-census hook; profile rep records competitor_stats only"
@@ -119,24 +130,57 @@ _COMPETITOR_SERVER_STAGES = {
     )
 }
 
+# Yunshu exposes server stages as x_yunshu.latency.milestones_ms (ms since gateway arrival) and
+# x_yunshu.speculative (round totals, per-depth, copy rounds). The rest is not exposed: merged
+# spans, per-round lists and GPU submission times. tfbench maps the exposed milestones to
+# t_template, t_admit and t_cache_lookup (client t_receive + milestone ms); per-row reasons cover
+# the rest. Nothing is estimated.
+_YUNSHU_UNAVAILABLE = {
+    "t_tokenize": "template and tokenize are one milestone span (template_start/template_end)",
+    "t_restore": "cache lookup and restore are one milestone span (apc_start/apc_end)",
+    "t_rounds": "per-round end times not exposed; x_yunshu.speculative has only round totals",
+    "t_prefill_chunks": "per-chunk timestamps not exposed; milestones give prefill_start/prefill_end only",
+    "tokens_per_round": "per-round accepted counts not exposed; only totals (accepted / rounds)",
+    "rows_per_round": "per-round batch row counts not exposed (single-request lane)",
+    "chunk_sizes": "prefill chunk sizes not exposed by the engine",
+    "host_gaps_ms": "GPU submission timestamps not exposed by the engine",
+}
+
 ENGINE_OVERRIDES = {
-    "yunshu": EngineAttr("yunshu", {}, "stages"),
+    "yunshu": EngineAttr("yunshu", dict(_YUNSHU_UNAVAILABLE), "stages"),
     "tf-1.2.1": EngineAttr("tf-1.2.1", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"),
     "tf-1.1.8": EngineAttr("tf-1.1.8", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"),
-    "splash-1.5.0": EngineAttr("splash-1.5.0", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"),
-    "omlx-0.7.3": EngineAttr("omlx-0.7.3", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"),
-    "omlx-0.7.3rc1": EngineAttr("omlx-0.7.3rc1", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"),
-    "mlx-serve": EngineAttr("mlx-serve", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"),
+    "splash-1.5.0": EngineAttr(
+        "splash-1.5.0", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"
+    ),
+    "omlx-0.7.3": EngineAttr(
+        "omlx-0.7.3", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"
+    ),
+    "omlx-0.7.3rc1": EngineAttr(
+        "omlx-0.7.3rc1", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"
+    ),
+    "mlx-serve": EngineAttr(
+        "mlx-serve", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"
+    ),
     "mlx-lm-server": EngineAttr(
-        "mlx-lm-server", dict(_COMPETITOR_SERVER_STAGES, t_restore=_NO_RESTORE), "stats_as_is"
+        "mlx-lm-server",
+        dict(_COMPETITOR_SERVER_STAGES, t_restore=_NO_RESTORE),
+        "stats_as_is",
     ),
     "mlx-vlm-server": EngineAttr(
-        "mlx-vlm-server", dict(_COMPETITOR_SERVER_STAGES, t_restore=_NO_RESTORE), "stats_as_is"
+        "mlx-vlm-server",
+        dict(_COMPETITOR_SERVER_STAGES, t_restore=_NO_RESTORE),
+        "stats_as_is",
     ),
     "kapitsa": EngineAttr("kapitsa", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"),
     "llama-cpp": EngineAttr(
         "llama-cpp",
-        dict(_COMPETITOR_SERVER_STAGES, t_restore=_NO_RESTORE, drafted=_NO_SPEC, accepted=_NO_SPEC),
+        dict(
+            _COMPETITOR_SERVER_STAGES,
+            t_restore=_NO_RESTORE,
+            drafted=_NO_SPEC,
+            accepted=_NO_SPEC,
+        ),
         "stats_as_is",
     ),
 }
@@ -167,7 +211,9 @@ def required_layer2(engine: str) -> list[str]:
     """Layer-2 fields for the profile rep. Competitors: stats_as_is, only the rows exist."""
     eng = engine_attr(engine)
     if eng.layer2 == "stages":
-        return [name for name, (status, _) in LAYER2_YUNSHU.items() if status == REQUIRED]
+        return [
+            name for name, (status, _) in LAYER2_YUNSHU.items() if status == REQUIRED
+        ]
     return ["competitor_stats"]
 
 
@@ -236,7 +282,12 @@ def check_cell(engine: str, rows: list[dict], profile: dict | None) -> dict:
     or if there are no rows at all (no evidence is not success).
     """
     if not rows:
-        return {"ok": False, "missing": ["<no decode rows>"], "layer1": {}, "layer2": {}}
+        return {
+            "ok": False,
+            "missing": ["<no decode rows>"],
+            "layer1": {},
+            "layer2": {},
+        }
     merged: dict = {}
     for row in rows:
         for k, v in check_request(engine, row).items():
