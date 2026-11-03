@@ -402,13 +402,57 @@ def rotate(order, rep):
 # ---------------------------------------------------------------------------
 # The 12 hard guards. Each takes a Run and returns a GuardResult.
 # ---------------------------------------------------------------------------
+# sha256 of each corpus prompt FILE (`<sha>  <name>` lines). tfbench records the same bytes as
+# prompt_file_sha256 on every decode row; prompt_sha256 is the rendered request and is not a file hash.
+PROMPT_SHA_FILE = Path(
+    "/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103/prompt_files.sha256.txt"
+)
+
+
+def load_prompt_file_table() -> dict:
+    """basename -> sha256 of the prompt file. A missing or unreadable table raises (fail closed)."""
+    table = {}
+    for line in PROMPT_SHA_FILE.read_text().splitlines():
+        if line.strip():
+            sha, name = line.split(maxsplit=1)
+            table[name.strip()] = sha
+    return table
+
+
 def check_prompt_identity(run: Run) -> GuardResult:
     """Guard 1: prompt token count + sha identical across engines in a comparison group.
 
     Compared on cold and warm rows only: turn2 prompts embed each engine's own reply, so
     they are recorded per engine and not required to match.
+    Also, every decode row's prompt_file_sha256 (the bytes the cell read) must equal the entry for
+    its prompt file in PROMPT_SHA_FILE; a missing entry, a missing sha or a mismatch fails the cell.
     """
     res = GuardResult("prompt_identity")
+    try:
+        table = load_prompt_file_table()
+    except (OSError, ValueError) as exc:
+        res.checked += 1
+        for cf in run.files:
+            res.fail(cf.cell["cell"], f"prompt sha table unreadable ({PROMPT_SHA_FILE}): {exc}")
+        table = None
+    for cf in run.files:
+        if table is None:
+            break
+        res.checked += 1
+        problems = []
+        for r in cf.rows:
+            if r.get("part") != "decode":
+                continue
+            name = Path(str(r.get("prompt_file") or "")).name
+            got, want = r.get("prompt_file_sha256"), table.get(name)
+            if want is None:
+                problems.append(f"prompt file {name!r} has no entry in the sha table")
+            elif not isinstance(got, str) or not got:
+                problems.append(f"prompt_file_sha256 not recorded for {name!r}")
+            elif got != want:
+                problems.append(f"prompt file {name!r} sha {got[:12]} != table {want[:12]}")
+        for msg in sorted(set(problems)):
+            res.fail(cf.cell["cell"], msg)
     groups = defaultdict(list)  # group -> [(cell id, engine, row)]
     for cf in run.files:
         for r in cf.rows:
@@ -1047,6 +1091,23 @@ def check_round_time_outlier(run: Run) -> GuardResult:
     return res
 
 
+def server_log_slice_path(cell_path) -> Path:
+    """<cell>-rN.server.log beside <cell>-rN.jsonl (tfbench.server_log_path, kept in step)."""
+    text = str(cell_path)
+    stem = text[: -len(".jsonl")] if text.endswith(".jsonl") else text
+    return Path(stem + ".server.log")
+
+
+def server_log_slice_problem(cell_path):
+    """None when the cell's engine-log slice exists and is non-empty, else the reason (fail closed)."""
+    path = server_log_slice_path(cell_path)
+    if not path.is_file():
+        return f"engine log slice missing: {path}"
+    if path.stat().st_size == 0:
+        return f"engine log slice empty: {path}"
+    return None
+
+
 def check_attribution_fields(run: Run) -> GuardResult:
     """Guard 16 (lead ruling 2026-11-03, two layers).
     Layer 1: every timed row (decode and conc) carries the layer-1 fields for its engine, each as a
@@ -1072,6 +1133,9 @@ def check_attribution_fields(run: Run) -> GuardResult:
             res.fail(cell, f"r{cf.rep}: no decode rows")
         elif miss:
             res.fail(cell, f"r{cf.rep}: attribution fields MISSING: {', '.join(miss)}")
+        slice_problem = server_log_slice_problem(cf.path)
+        if slice_problem:
+            res.fail(cell, f"r{cf.rep}: {slice_problem}")
     if run.profile_root is None:
         return res
     seen = set()
@@ -1085,6 +1149,9 @@ def check_attribution_fields(run: Run) -> GuardResult:
             if run.full:
                 res.fail(cell, "profile rep missing: no " + str(path))
             continue
+        slice_problem = server_log_slice_problem(path)
+        if slice_problem:
+            res.fail(cell, f"profile rep: {slice_problem}")
         rows, _errs = _read_jsonl(path)
         prof = next((r for r in rows if r.get("part") == "profile"), None)
         if prof is None:

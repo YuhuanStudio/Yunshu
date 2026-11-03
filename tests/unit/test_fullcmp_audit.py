@@ -195,6 +195,7 @@ def make_data():
                             "kind": "code",
                             "cell": cell,
                             "prompt_file": f"code-1024-{p}.txt",
+                            "prompt_file_sha256": _sha(f"code-1024-{p}.txt"),
                             "harness": "tfbench-fullcmp-1",
                             "prompt_ids_sha": f"t2-{eng}-{p}"
                             if ph == "turn2"
@@ -253,12 +254,27 @@ def telemetry_file(cell_path: Path) -> Path:
     return fa.telemetry_path(cell_path)
 
 
+@pytest.fixture(autouse=True)
+def _prompt_table(monkeypatch):
+    """Every fixture prompt file's sha is what its rows record (the real table lists corpus files only)."""
+
+    class AnyTable(dict):
+        def get(self, name, default=None):
+            return _sha(name)
+
+    monkeypatch.setattr(fa, "load_prompt_file_table", lambda: AnyTable())
+
+
 def write_run(root: Path, manifest, files, telemetry=True) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     for rel, rows in files.items():
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        # the cell's engine-log slice (tfbench writes <cell>-rN.server.log beside each cell file)
+        fa.server_log_slice_path(path).write_text(
+            "[round-profile] engine=fixture round=1 drafts=4 accepted=3 tokens=4\n"
+        )
         if telemetry:
             telemetry_file(path).write_text(
                 "".join(json.dumps(r) + "\n" for r in synthetic_telemetry())
@@ -1228,12 +1244,19 @@ import fullcmp_attribution as fat  # noqa: E402
 def _attr_run(tmp_path, rows, *, profile=None, full=False, engine="yunshu"):
     cell = {"cell": "q27_decode-1024-code", "engine": engine, "group": "g", "phases": ["decode"]}
     cf = _cf(cell, 0, {"part": "session"}, rows)
+    # the cell file sits where the audit reads it, with its engine-log slice beside it
+    cf.path = tmp_path / engine / "q27_decode-1024-code-r0.jsonl"
+    fa.server_log_slice_path(cf.path).parent.mkdir(parents=True, exist_ok=True)
+    fa.server_log_slice_path(cf.path).write_text("[round-profile] engine=yunshu round=1\n")
     root = tmp_path / "profile"
     if profile is not None:
         d = root / engine
         d.mkdir(parents=True, exist_ok=True)
         (d / "q27_decode-1024-code-prof.jsonl").write_text(
             "\n".join(json.dumps(x) for x in profile) + "\n"
+        )
+        fa.server_log_slice_path(d / "q27_decode-1024-code-prof.jsonl").write_text(
+            "[round-profile] engine=yunshu round=1\n"
         )
     run = fa.Run({"groups": {}}, [cf], [], [], [])
     run.profile_root = root if (profile is not None or full) else None

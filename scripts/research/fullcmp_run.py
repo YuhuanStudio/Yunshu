@@ -84,6 +84,8 @@ TFOUT_ROOT = Path(
     "/Volumes/Micron/yunshu-fullcmp/tfout"
 )  # tfbench server homes and logs
 GPUQ_DIR_DEFAULT = "/Volumes/P5Plus/yunshu-gpuq"
+# One prompt corpus for every batch: tfbench reads TFB_WORK/prompts/<kind>-<ctx>.txt in every cell.
+TFB_WORK_DIR = "/Volumes/P5Plus/yunshu-build/snapshot014-b2"
 
 RUN_DIR = Path("/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103")
 PIN_PATH = RUN_DIR / "yunshu_pin.json"
@@ -391,6 +393,7 @@ def cell_env(
         f"PYTHONPATH={harness['PYTHONPATH']}",
         f"HOME={HOME_ROOT / engine}",
         f"GPUQ_DIR={GPUQ_DIR_DEFAULT}",
+        f"TFB_WORK={TFB_WORK_DIR}",
         f"TFB_MLXLM_PY={pin['python_executable']}",
         f"TFB_OUT={TFOUT_ROOT}",
     ]
@@ -402,6 +405,26 @@ def cell_env(
     if group:
         env.append(f"TFB_GROUP={group}")
     return env + list(extra)
+
+
+def prompt_corpus_problems(rows: list[dict], work_dir: str = TFB_WORK_DIR) -> list[str]:
+    """Fail closed before any job is written: the TFB_WORK corpus dir must exist and hold the prompt
+    file of every (kind, ctx) the given cells read (family kinds read the prose file, as tfbench does).
+    An empty list means every cell's prompt file is present."""
+    prompts = Path(work_dir) / "prompts"
+    if not prompts.is_dir():
+        return [f"TFB_WORK prompt dir missing: {prompts}"]
+    need = set()
+    for r in rows:
+        if "ctx_tokens" not in r or not r.get("prompt_kind"):
+            continue  # behaviour / agent rows carry no decode prompt
+        base = "prose" if r["prompt_kind"] in fm.FAMILY_KINDS else r["prompt_kind"]
+        need.add(f"{base}-{int(r['ctx_tokens'])}.txt")
+    return [
+        f"missing prompt file {prompts / name}"
+        for name in sorted(need)
+        if not (prompts / name).is_file()
+    ]
 
 
 def raw_path(engine: str, cell_id: str, rep: int) -> Path:
@@ -1092,6 +1115,11 @@ def main(argv=None) -> int:
     plan = plan_batch(
         rows, a.batch, pin, engines=engines, rep=a.rep, profile_rep=a.profile_rep
     )
+    problems = prompt_corpus_problems(plan.runnable)
+    if problems:
+        for p in problems:
+            print(f"refusing: {p}", file=sys.stderr)
+        return 2
 
     if a.dry_run or a.self_check:
         if a.self_check:
@@ -1106,6 +1134,9 @@ def main(argv=None) -> int:
             return 1 if bad else 0
         print("dry-run: no preflight, no queue read, no submission")
         print_plan(plan)
+        for job in plan.jobs:  # the corpus each generated job body exports (every cell)
+            works = sorted(set(re.findall(r"TFB_WORK=(\S+)", job.script)))
+            print(f"  job body {job.label}: TFB_WORK={','.join(works) or 'MISSING'}")
         return 0
 
     if a.phase == "preflight":
