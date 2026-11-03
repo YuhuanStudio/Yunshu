@@ -719,7 +719,7 @@ def agent_tasks():
 
 def batch_of(r):
     if r["table"] == "agent":
-        return "B6 agents (last)"
+        return "B5 agents (last)"
     if (
         r["model"] == PRIMARY
         and r["conc"] in (1, 8)
