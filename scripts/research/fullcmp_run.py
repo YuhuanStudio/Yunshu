@@ -155,12 +155,11 @@ def _base_harness_part(row: dict):
         return None, None, "agent task selection not in tfbench CLI"
     if row.get("table") == "behaviour":
         return None, None, "behaviour checks not in tfbench CLI"
-    if row.get("media") not in (None, "none"):
-        return None, None, "image input not in tfbench CLI"
-    if row.get("thinking") not in (None, "off"):
-        return None, None, "thinking switch not in tfbench CLI"
-    if row.get("sampling") not in (None, "greedy"):
-        return None, None, "generation_config sampling not in tfbench CLI"
+    sampling = row.get("sampling") or "greedy"
+    if sampling not in ("greedy", "genconfig"):
+        return None, None, f"sampling {sampling} not in tfbench CLI"
+    if sampling == "genconfig" and int(row["conc"]) != 1:
+        return None, None, "genconfig sampling is a conc-1 decode cell only"
     if (
         row.get("turns") == "idle5"
         and "fu_idle" in (row.get("phases") or ())
@@ -184,12 +183,50 @@ def _base_harness_part(row: dict):
             ],
             None,
         )
+    kind = row.get("prompt_kind")
+    conc = int(row["conc"])
+    if row.get("turns") == "restart":
+        # cold prefill, then the same prompt on a relaunched server that reads the same HOME
+        # (tfbench restart_server): the disk prefix tier is the only way that row can hit
+        if conc != 1 or kind not in ("code", "prose"):
+            return None, None, "restart cell is a conc-1 code/prose decode cell"
+        return (
+            "decode",
+            [
+                "--only-ctx",
+                str(row["ctx_tokens"]),
+                "--only-kind",
+                kind,
+                "--decode-tokens",
+                str(row["out_len"]),
+                "--phases",
+                "cold,restart",
+            ],
+            None,
+        )
+    if row.get("turns") == "mixed":
+        # one long request and short ones started together (tfbench part_mixed); the short
+        # requests are the conc row's n - 1
+        return (
+            "mixed",
+            [
+                "--mixed-long-ctx",
+                str(row["ctx_tokens"]),
+                "--mixed-short-n",
+                str(conc - 1),
+                "--mixed-short-ctx",
+                "1024",
+                "--conc-tokens",
+                str(row["out_len"]),
+                "--conc-trials",
+                str(CONC_TRIALS),
+            ],
+            None,
+        )
     if row.get("turns") not in (None, "single"):
         return None, None, f"turns={row.get('turns')} not in tfbench CLI"
-    kind = row.get("prompt_kind")
-    if kind not in ("code", "prose"):
+    if kind not in ("code", "prose", *fm.FAMILY_KINDS):
         return None, None, f"prompt kind {kind} not in tfbench CLI"
-    conc = int(row["conc"])
     if conc == 1:
         args = [
             "--only-ctx",
@@ -199,12 +236,21 @@ def _base_harness_part(row: dict):
             "--decode-tokens",
             str(row["out_len"]),
         ]
+        # thinking / image flags only where they differ from the defaults: plain decode command
+        # lines stay exactly as before
+        if row.get("thinking") not in (None, "off"):
+            args += ["--thinking", str(row["thinking"])]
+        if row.get("media") not in (None, "none"):
+            args += ["--media", str(row["media"])]
+        if sampling == "genconfig":
+            args += ["--sampling", "genconfig"]
         # tfbench runs every decode phase unless told otherwise: pass exactly the manifest's
         # phases (lead 2026-11-03: the audit expects the manifest phases, so the run must match)
         planned = set(row.get("phases") or ())
         if planned and planned <= {"cold", "warm", "turn2"}:
             args += ["--phases", ",".join(p for p in ("cold", "warm", "turn2") if p in planned)]
         return ("decode", args, None)
+    same = [] if row.get("sweep") != "conc-same" else ["--conc-same"]
     return (
         "conc",
         [
@@ -216,6 +262,7 @@ def _base_harness_part(row: dict):
             str(row["out_len"]),
             "--conc-trials",
             str(CONC_TRIALS),
+            *same,
         ],
         None,
     )
@@ -621,6 +668,11 @@ def comparison_group(row: dict) -> str:
     prompt, so each variant is its own group (regression, e2e 2026-11-03: variants 0 and 1 of one
     kind shared a group and the provenance guard reported their different prompts)."""
     base = f"{row['batch']}.{row['ctx']}.{row['prompt_kind']}.c{row['conc']}"
+    # a thinking or image cell sends a different request (template switch, image parts): own group
+    if row.get("thinking") not in (None, "off"):
+        base += f".th-{row['thinking']}"
+    if row.get("media") not in (None, "none"):
+        base += f".{row['media']}"
     if "prompt_variant" in row:
         return f"{base}.v{row['prompt_variant']}"
     return base
@@ -690,10 +742,18 @@ def audit_manifest(
                 "group": grp,
                 "ctx": r["ctx_tokens"],
                 "kind": r["prompt_kind"],
+                "thinking": r.get("thinking") or "off",
+                "media": r.get("media") or "none",
                 "prompt_id": prompt_id(r),
                 "max_tokens": r["out_len"],
                 # manifest phase names -> the audit's (fu -> turn2): the records carry the audit's
-                "phases": [fam_phase_names().get(p, p) for p in r.get("phases") or ()],
+                # a concurrent cell records one record per trial: its planned phase is the record
+                # part itself (conc, or mixed for the mixed-load cell), not the manifest's phases
+                "phases": (
+                    ["mixed" if r.get("turns") == "mixed" else "conc"]
+                    if int(r["conc"]) > 1
+                    else [fam_phase_names().get(p, p) for p in r.get("phases") or ()]
+                ),
                 "expected_records": expected_records(r),
                 # Same fields fullcmp_audit_manifest.build_manifest writes: the engine's expected
                 # spec mode (bench_engines) and its weight group. Null only when the engine
@@ -721,7 +781,21 @@ def audit_manifest(
         "controls": {},
         "groups": ordered,
         "cells": cells,
+        "behaviour": behaviour_expectations(rows, batches),
     }
+
+
+def behaviour_expectations(rows: list[dict], batches: list[str]) -> dict:
+    """B4 expectations for fullcmp_audit.check_behaviour: {engine: {check: status}}. A row the
+    census marks unsupported expects "unsupported" (the route must answer 404); an unverified one
+    expects "pass". Rows of other batches are left out."""
+    out: dict = {}
+    for r in rows:
+        if r.get("table") != "behaviour" or r.get("batch") not in batches:
+            continue
+        want = "unsupported" if r.get("status") == "unsupported" else "pass"
+        out.setdefault(r["engine"], {})[r["check"]] = want
+    return out
 
 
 def parse_need_rep3(stdout: str) -> list[tuple[str, str]]:

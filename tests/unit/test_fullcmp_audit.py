@@ -382,7 +382,7 @@ def test_good_run_passes_all_guards(tmp_path):
     manifest, files = make_data()
     _, results = _run(tmp_path, manifest, files)
     assert [r.name for r in results] == list(fa.GUARDS)
-    assert len(fa.GUARDS) == 17
+    assert len(fa.GUARDS) == len(fa.GUARD_CHECKS) and "mixed_same_prompt" in fa.GUARDS
     assert failing(results) == set()
     assert all(r.checked > 0 for r in results)
 

@@ -45,26 +45,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_engines  # noqa: E402  (manifest id <-> harness id registry)
 import fullcmp_attribution as fat  # noqa: E402  (layer-1 / layer-2 attribution schema)
 
-GUARDS = (
-    "usage_fields",
-    "prompt_identity",
-    "provenance_identity",
-    "pinned_versions",
-    "manifest_completeness",
-    "record_count",
-    "engaged_mode",
-    "weight_identity",
-    "cold_cache",
-    "gpu_exclusive_rotation",
-    "output_sha",
-    "measured_only",
-    "fairness_controls",
-    "telemetry",
-    "quiet_machine",
-    "attribution_fields",
-    "round_time_outlier",
-)
-
 # ---------------------------------------------------------------------------
 # Record schema. "manifest" is the expected-cell file; "header" is row 0 of each jsonl
 # (part "session"); "request" is one row per HTTP request (part "decode").
@@ -246,6 +226,7 @@ class Run:
     parse_errors: list  # str, one per unparseable line (truncated stream = error)
     profile_root: object = None  # <profile_root>/<engine>/<cell>-prof.jsonl: layer-2 rows
     full: bool = False  # full mode: every cell needs a profile rep (missing = violation)
+    behaviour: dict = field(default_factory=dict)  # engine -> rows of <root>/behaviour/<engine>.jsonl
 
 
 @dataclass
@@ -297,13 +278,17 @@ CONC_LAYER1_REASON = (
 )
 
 
-def conc_request_rows(rec: dict) -> list[dict]:
-    """One request row per request of a tfbench `conc` record (one record = n simultaneous requests
-    of one trial). Per-request lists are read by index; a missing entry stays None so the
-    measured_only / record_count guards flag it instead of counting it."""
+MIXED_PART = "mixed"
+MIXED_ROLES = ("long", "short")
+
+
+def conc_request_rows(rec: dict, part: str = CONC_PART) -> list[dict]:
+    """One request row per request of a tfbench `conc` (or `mixed`) record: one record = n
+    simultaneous requests of one trial. Per-request lists are read by index; a missing entry stays
+    None so the measured_only / record_count guards flag it instead of counting it."""
     n = rec.get("n")
     if not isinstance(n, int) or n < 1:
-        return [{"part": CONC_PART, "phase": "conc?", "error": f"conc record n={n!r}"}]
+        return [{"part": part, "phase": f"{part}?", "error": f"{part} record n={n!r}"}]
     rows = []
     for i in range(n):
 
@@ -317,10 +302,13 @@ def conc_request_rows(rec: dict) -> list[dict]:
             for f in list(fat.LAYER1_TIMESTAMPS) + list(fat.LAYER1_COUNTERS)
             if f not in attr and f != "cache_hit_tokens"
         }
+        roles = rec.get("roles") if part == MIXED_PART else None
         rows.append(
             {
-                "part": CONC_PART,
-                "phase": CONC_PART,
+                "part": part,
+                "phase": part,
+                "role": roles[i] if isinstance(roles, list) and i < len(roles) else None,
+                "same_prompt": rec.get("same_prompt"),
                 "attr": attr,
                 "attr_unavailable": unavailable,
                 "n": n,
@@ -345,9 +333,12 @@ def conc_request_rows(rec: dict) -> list[dict]:
         )
     # record-level aggregates ride on every request row of the record (checked by usage_fields)
     agg = {k: rec.get(k) for k in ("wall_s", "total_tokens", "agg_tps")}
+    decs = rec.get("per_req_dec")
+    if part == MIXED_PART and isinstance(decs, list):
+        decs = decs[1:]  # the mixed aggregates summarise the short requests (request 0 is the long one)
     for row in rows:
         row["agg"] = agg
-        row["per_req_dec_all"] = rec.get("per_req_dec")
+        row["per_req_dec_all"] = decs
         for k in ("dec_min", "dec_max", "dec_median", "fair_max_min"):
             row[k] = rec.get(k)
     return rows
@@ -374,13 +365,22 @@ def load_run(root, manifest: dict) -> Run:
         for r in rows:
             if r.get("part") == CONC_PART:
                 body += conc_request_rows(r)
+            elif r.get("part") == MIXED_PART:
+                body += conc_request_rows(r, MIXED_PART)
         files.append(CellFile(cell, rep, path, header, body))
     extra = [
         p
         for p in sorted(root.glob("*/*.jsonl"))
-        if p not in expected and not p.name.endswith(TELEMETRY_SUFFIX)
+        if p not in expected
+        and not p.name.endswith(TELEMETRY_SUFFIX)
+        and p.parent.name != BEHAVIOUR_DIR
     ]
-    return Run(manifest, files, missing, extra, parse_errors)
+    behaviour = {}
+    for p in sorted((root / BEHAVIOUR_DIR).glob("*.jsonl")):
+        rows, errs = _read_jsonl(p)
+        parse_errors += errs
+        behaviour[p.stem] = rows
+    return Run(manifest, files, missing, extra, parse_errors, behaviour=behaviour)
 
 
 def is_num(x) -> bool:
@@ -450,7 +450,9 @@ def check_provenance_identity(run: Run) -> GuardResult:
                 )
             # conc requests are a fixed prose/code mix by design (tfbench concurrent_prompt): their
             # kind is "mixed", so only ctx is compared for them.
-            kind_ok = r.get("part") == CONC_PART or r.get("kind") == cf.cell["kind"]
+            kind_ok = (
+                r.get("part") in (CONC_PART, MIXED_PART) or r.get("kind") == cf.cell["kind"]
+            )
             if r.get("ctx") != cf.cell["ctx"] or not kind_ok:
                 res.fail(cf.cell["cell"], "ctx/kind differs from the planned cell")
         if len(prov_set) > 1:
@@ -565,6 +567,8 @@ def check_manifest_completeness(run: Run) -> GuardResult:
 
 def check_record_count(run: Run) -> GuardResult:
     """Guard 5: expected record count, every phase present, complete streams, output tokens."""
+    import fullcmp_manifest as fm
+
     res = GuardResult("record_count")
     for cf in run.files:
         cell = cf.cell["cell"]
@@ -579,12 +583,19 @@ def check_record_count(run: Run) -> GuardResult:
                 cell,
                 f"r{cf.rep}: phases {sorted(map(str, set(r.get('phase') for r in cf.rows)))} != planned {cf.cell['phases']}",
             )
+        # a request-family reply ends where its shape ends (a tool call, a JSON object): its
+        # validity is check_family_validity's job, so only the stream's completeness is checked here
+        family = fm.is_family_cell(cf.cell.get("kind"), cf.cell.get("thinking"), cf.cell.get("media"))
         for r in cf.rows:
-            if r.get("finish") not in ("stop", "length"):
+            if r.get("finish") not in ("stop", "length", "tool_calls") if family else r.get("finish") not in ("stop", "length"):
                 res.fail(
                     cell,
                     f"r{cf.rep} {r.get('phase')}: incomplete stream (finish={r.get('finish')!r})",
                 )
+            if family:
+                if not r.get("ct"):
+                    res.fail(cell, f"r{cf.rep} {r.get('phase')}: no output tokens")
+                continue
             if r.get("ct") != cf.cell["max_tokens"]:
                 res.fail(
                     cell,
@@ -675,7 +686,16 @@ def check_cold_cache(run: Run) -> GuardResult:
                         cell,
                         f"r{cf.rep} cold: cached={cached!r}, must be server-reported 0",
                     )
-            elif phase in ("warm", "turn2", CONC_PART):
+            elif phase == "restart":
+                # the relaunched server serves the cold prompt from the disk prefix tier: a cache
+                # miss here means the restart did not keep the cache (HOME wiped, tier not used)
+                if isinstance(cached, bool) or not isinstance(cached, int) or cached <= 0:
+                    res.fail(
+                        cell,
+                        f"r{cf.rep} restart: cached={cached!r}, the restarted server must hit "
+                        "the disk tier (cached > 0)",
+                    )
+            elif phase in ("warm", "turn2", CONC_PART, MIXED_PART):
                 if isinstance(cached, bool) or not isinstance(cached, int):
                     res.fail(cell, f"r{cf.rep} {phase}: cached count not recorded")
             else:
@@ -747,6 +767,25 @@ def check_output_sha(run: Run) -> GuardResult:
         if len(ids) < 2:
             for cid in cells_of[key]:
                 res.fail(cid, f"only {len(ids)} prompt for {key}; need >= 2 per kind")
+    return res
+
+
+def check_family_validity(run: Run) -> GuardResult:
+    """Guard 12: every reply of a request-family cell (tool-chat / cjk / json-schema, thinking on,
+    image input) is valid: tool JSON and schema, JSON-schema conformance, CJK text, the reasoning
+    split, accepted image parts. A row flagged invalid, or one missing the flag, fails closed."""
+    import fullcmp_manifest as fm
+
+    res = GuardResult("family_validity")
+    for cf in run.files:
+        c = cf.cell
+        if not fm.is_family_cell(c.get("kind"), c.get("thinking"), c.get("media")):
+            continue
+        for r in cf.rows:
+            res.checked += 1
+            if r.get("valid") is not True:
+                why = r.get("invalid_reason") or "validity not recorded"
+                res.fail(c["cell"], f"r{cf.rep} {r.get('phase')}: family reply invalid: {why}")
     return res
 
 
@@ -1038,6 +1077,42 @@ def check_attribution_fields(run: Run) -> GuardResult:
     return res
 
 
+BEHAVIOUR_DIR = "behaviour"  # <root>/behaviour/<engine>.jsonl: B4 checks (fullcmp_behaviour.py)
+
+
+def check_behaviour(run: Run) -> GuardResult:
+    """Guard 18 (B4): each engine in manifest["behaviour"] = {engine: {check: "pass"|"unsupported"}}
+    has one file <root>/behaviour/<engine>.jsonl with a row per expected check. The status must be
+    the expected one: a check expected to pass that fails (or is unsupported) is a violation, and
+    so is a route the census calls unsupported that answers. A missing file or check fails closed.
+    A behaviour file for an engine the manifest does not plan is a violation too."""
+    res = GuardResult("behaviour")
+    expected = run.manifest.get("behaviour") or {}
+    for eng, want in expected.items():
+        res.checked += 1
+        rows = run.behaviour.get(eng)
+        if rows is None:
+            res.fail(eng, f"behaviour file missing: {BEHAVIOUR_DIR}/{eng}.jsonl")
+            continue
+        by_check = {r.get("check"): r for r in rows if r.get("part") == "behaviour"}
+        for check, status in want.items():
+            res.checked += 1
+            row = by_check.get(check)
+            if row is None:
+                res.fail(f"{eng}.{check}", "behaviour check not recorded")
+            elif row.get("status") != status:
+                reason = row.get("reason") or json.dumps(row.get("detail"), sort_keys=True)
+                res.fail(
+                    f"{eng}.{check}",
+                    f"status {row.get('status')!r}, expected {status!r}: {reason}",
+                )
+    for eng in run.behaviour:
+        if eng not in expected:
+            res.checked += 1
+            res.fail(eng, f"unplanned behaviour file {BEHAVIOUR_DIR}/{eng}.jsonl")
+    return res
+
+
 def check_usage_fields(run: Run) -> GuardResult:
     """Guard 0 (lead ruling 2026-11-03): every request row carries a real completion count and
     prompt count (int, never None), and a cached-token count that is an int or an explicit
@@ -1048,7 +1123,7 @@ def check_usage_fields(run: Run) -> GuardResult:
     for cf in run.files:
         cell = cf.cell["cell"]
         for r in cf.rows:
-            if r.get("part") not in ("decode", CONC_PART):
+            if r.get("part") not in ("decode", CONC_PART, MIXED_PART):
                 continue
             res.checked += 1
             for key in ("ct", "pt"):
@@ -1060,7 +1135,7 @@ def check_usage_fields(run: Run) -> GuardResult:
                 res.fail(cell, f"r{cf.rep}: cached={cached!r} is not a count")
             if cached is None and not str(r.get("cached_unavailable") or "").strip():
                 res.fail(cell, f"r{cf.rep}: cached is None with no cached_unavailable reason")
-            if r.get("part") == CONC_PART:
+            if r.get("part") in (CONC_PART, MIXED_PART):
                 for key in ("dec_min", "dec_max", "dec_median", "fair_max_min", "agg"):
                     if r.get(key) is None:
                         res.fail(cell, f"r{cf.rep}: conc aggregate {key} is missing or None")
@@ -1080,6 +1155,43 @@ def check_usage_fields(run: Run) -> GuardResult:
     return res
 
 
+def check_mixed_same_prompt(run: Run) -> GuardResult:
+    """Guard (mixed load and same-prompt conc): a mixed record holds exactly one long request and
+    n-1 short ones, and a same-prompt conc record sends one prompt n times (one prompt_ids_sha)."""
+    res = GuardResult("mixed_same_prompt")
+    for cf in run.files:
+        cell = cf.cell["cell"]
+        res.checked += 1  # every cell file is checked, mixed or not
+        mixed = [r for r in cf.rows if r.get("part") == MIXED_PART]
+        groups = defaultdict(list)
+        for r in mixed:
+            res.checked += 1
+            if r.get("role") not in MIXED_ROLES:
+                res.fail(cell, f"r{cf.rep} mixed: role {r.get('role')!r} is not long/short")
+            groups[r.get("trial")].append(r)
+        for trial, rows in groups.items():
+            longs = [r for r in rows if r.get("role") == "long"]
+            if len(longs) != 1 or len(rows) != rows[0].get("n"):
+                res.fail(
+                    cell,
+                    f"r{cf.rep} mixed trial {trial}: {len(longs)} long of {len(rows)} requests, "
+                    f"record n={rows[0].get('n')}",
+                )
+        for r in cf.rows:
+            if r.get("part") == CONC_PART and r.get("same_prompt") is True:
+                res.checked += 1
+                if r.get("prompt_ids_sha") is None:
+                    res.fail(cell, f"r{cf.rep} same-prompt conc: prompt_ids_sha missing")
+        same = defaultdict(set)
+        for r in cf.rows:
+            if r.get("part") == CONC_PART and r.get("same_prompt") is True:
+                same[r.get("trial")].add(r.get("prompt_ids_sha"))
+        for trial, shas in same.items():
+            if len(shas) != 1:
+                res.fail(cell, f"r{cf.rep} same-prompt conc trial {trial}: {len(shas)} prompts")
+    return res
+
+
 GUARD_CHECKS = (
     check_usage_fields,
     check_prompt_identity,
@@ -1092,13 +1204,18 @@ GUARD_CHECKS = (
     check_cold_cache,
     check_gpu_exclusive_rotation,
     check_output_sha,
+    check_family_validity,
     check_measured_only,
     check_fairness_controls,
     check_telemetry,
     check_quiet_machine,
     check_attribution_fields,
     check_round_time_outlier,
+    check_behaviour,
+    check_mixed_same_prompt,
 )
+# the guard names, in run order (fullcmp_audit's report and its tests read these)
+GUARDS = tuple(check.__name__.removeprefix("check_") for check in GUARD_CHECKS)
 
 
 def run_guards(root, manifest_path, profile_root=None, full=False):

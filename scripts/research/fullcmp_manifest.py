@@ -91,6 +91,15 @@ CTX_TOKENS = {
 }
 CORE_CTX = ["1K", "8K", "32K", "64K", "128K"]
 CORE_KINDS = ["code", "prose"]
+# Request families of the B2 kind/thinking/image cells. tfbench runs them (request construction,
+# reply validation); fullcmp_audit's family_validity guard requires every such row to be valid.
+FAMILY_KINDS = ("tool-chat", "cjk", "json-schema")
+IMAGE_COUNT = {"none": 0, "img1": 1, "img4": 4}
+
+
+def is_family_cell(kind, thinking, media) -> bool:
+    """True for a cell whose reply is validated: a request family, thinking on, or image input."""
+    return kind in FAMILY_KINDS or thinking == "on" or (media or "none") != "none"
 
 # ---------------------------------------------------------------- measured constants
 # Yunshu curve (27B 4-bit, cold prefill tok/s and decode tok/s per ctx). PROVISIONAL: from the 0.1.4
@@ -514,6 +523,10 @@ def b2_specs():
     for ctx in ("8K", "32K"):
         for conc in (2, 4, 8):
             yield "B2", spec(sweep="conc", ctx=ctx, conc=conc, phases=("cold",))
+    for conc in (2, 4, 8):
+        # same prompt on every concurrent stream (prefix sharing between streams), next to the
+        # distinct-prompt conc cells above
+        yield "B2", spec(sweep="conc-same", ctx="8K", conc=conc, phases=("cold",))
     for ctx in ("4K", "16K"):
         yield "B2", spec(sweep="ctx", ctx=ctx)
     for ctx in ("1K", "32K"):
