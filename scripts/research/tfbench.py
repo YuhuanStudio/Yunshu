@@ -2686,6 +2686,9 @@ def main():
                     "usage_sample": _USAGE_SAMPLE[0] if a.log_usage_sample else None,
                     # the final engaged evidence (per-request records included), as the audit reads it
                     "engaged_spec_mode": s.engaged_spec_mode,
+                    # the top-level spec_mode (every row's META) is the final verified mode, not the
+                    # startup value: the final check passed only when it equals the expected mode
+                    "spec_mode": s.engaged_spec_mode,
                     "engaged_log_line": s.engaged_log_line,
                     "engaged_evidence_kind": getattr(s, "engaged_evidence_kind", None),
                     "engaged_evidence_source": getattr(s, "engaged_evidence_source", None),
