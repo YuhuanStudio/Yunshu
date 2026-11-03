@@ -51,3 +51,16 @@ def test_non_profile_lines_do_not_match():
 
 def test_unknown_config_letter_is_rejected_by_the_sequence_check():
     assert [c for c in "ABX" if c not in ab.CONFIGS] == ["X"]
+
+
+def test_import_does_not_mutate_the_process_environment(monkeypatch):
+    """Importing the A/B driver must leave os.environ alone (a leaked TFB_YUNSHU_BIN broke other
+    tests' launch-command checks in the same process)."""
+    import importlib
+    import os
+
+    monkeypatch.delenv("TFB_YUNSHU_BIN", raising=False)
+    monkeypatch.delenv("TFB_YUNSHU_SRC", raising=False)
+    importlib.reload(ab)
+    assert "TFB_YUNSHU_BIN" not in os.environ and "TFB_YUNSHU_SRC" not in os.environ
+    assert ab.PIN_YUNSHU_BIN.endswith("venv-fullcmp-yunshu/bin/yunshu")

@@ -42,8 +42,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-os.environ.setdefault("TFB_YUNSHU_BIN", "/Volumes/P5Plus/yunshu-build/venv-fullcmp-yunshu/bin/yunshu")
-os.environ.setdefault("TFB_YUNSHU_SRC", "/Volumes/P5Plus/yunshu-build/wt-fullcmp-yunshu/python")
+# The pinned Yunshu tree this A/B runs (yunshu_pin.json). Defaults only: set in a copy of the
+# environment at launch, never in os.environ at import (that leaked into other tests' process env).
+PIN_YUNSHU_BIN = "/Volumes/P5Plus/yunshu-build/venv-fullcmp-yunshu/bin/yunshu"
+PIN_YUNSHU_SRC = "/Volumes/P5Plus/yunshu-build/wt-fullcmp-yunshu/python"
 
 import bench_engines as be  # noqa: E402
 import fullcmp_telemetry as tm  # noqa: E402
@@ -101,8 +103,11 @@ def run_one(letter: str, idx: int, tag: str, out_path: Path) -> dict:
     if port_open(PORT):
         raise RuntimeError(f"port {PORT} already in use before launch; refusing to continue")
 
-    environ = dict(os.environ, TFB_YUNSHU_BIN=os.environ["TFB_YUNSHU_BIN"],
-                   TFB_YUNSHU_SRC=os.environ["TFB_YUNSHU_SRC"])
+    environ = dict(
+        os.environ,
+        TFB_YUNSHU_BIN=os.environ.get("TFB_YUNSHU_BIN", PIN_YUNSHU_BIN),
+        TFB_YUNSHU_SRC=os.environ.get("TFB_YUNSHU_SRC", PIN_YUNSHU_SRC),
+    )
     launch = be.build_launch("yunshu-main", PORT, home, environ)
     for path, text in launch.files.items():
         Path(path).parent.mkdir(parents=True, exist_ok=True)
