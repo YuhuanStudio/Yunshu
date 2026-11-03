@@ -53,14 +53,26 @@ def engine_load_lines(engine: str) -> list[str]:
         # tfbench.engaged_spec_mode_line reads the initialized runner line
         return ["VLM batch runner: model=stub-model draft=dflash"]
     if engine.startswith("tf-"):
-        return ["drafts: DFlash2 block=16 (stub)"]
+        # the real TensorFold serving line (fullcmp_engaged_evidence.json tf-1.2.1 log_regex)
+        return [
+            "[tensorfold] serving stub-model at http://127.0.0.1:0/v1 (sampling: temperature 1.0; "
+            "drafts: DFlash2 (/stub/draft); context: 4096; loaded in 0.0s)"
+        ]
     return []
 
 
 def request_lines(
-    engine: str, n: int, tokens: int, drafted: int, accepted: int
+    engine: str, n: int, tokens: int, drafted: int, accepted: int, prompt_tokens: int = 0
 ) -> list[str]:
     """Per-request engagement lines: what the engine prints when a round drafted and accepted."""
+    if engine.startswith("tf-"):
+        # the real TensorFold per-request done line: the acceptance_regex carries the prompt count
+        # (matched to the row) and accepted (> min for a drafted round)
+        return [
+            f"[tensorfold] done chatcmpl-stub{n} prompt={prompt_tokens} cached=0 thinking=False "
+            f"effort=none tokens={tokens} sha=stub finish=stop rounds=1 accepted={accepted}/{drafted} "
+            "ttft=0.010 decode=0.010 elapsed=0.020 queued=0.000 tok/s=200.0"
+        ]
     if engine == "mlx-serve-26.11.1":
         return [f"[mtp-round] off0=0 t1=1 m=1 drafts={drafted} accepted={accepted}"]
     if engine == "kapitsa-0.2.26":
@@ -176,7 +188,9 @@ def make_handler(state: StubState):
                 cached = prompt_tokens - 1 if prompt in state.seen else 0
                 state.seen.add(prompt)
             state.log(
-                request_lines(state.engine, n, len(emitted), drafted=4, accepted=3)
+                request_lines(
+                    state.engine, n, len(emitted), drafted=4, accepted=3, prompt_tokens=prompt_tokens
+                )
             )
             usage = {
                 "prompt_tokens": prompt_tokens,
