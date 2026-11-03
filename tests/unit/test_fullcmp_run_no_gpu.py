@@ -51,6 +51,7 @@ VARIABLE_ARGV_ALLOWED = {
 }
 LITERAL_NON_GPUQ_ALLOWED = {
     ("fullcmp_run", "_git"): "read-only git status / rev-parse / archive of the live worktree (harness snapshot)",
+    ("fullcmp_run", "_file_blobs"): "read-only git hash-object of the snapshot files (integrity proof)",
     ("fullcmp_audit_manifest", "tree_head"): "read-only git rev-parse of the pinned worktree (fail closed)",
     ("fullcmp_quiet", "run_ps"): "quiet gate: read-only ps",
     ("fullcmp_quiet", "read_loadavg"): "quiet gate: read-only sysctl",

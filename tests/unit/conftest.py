@@ -254,4 +254,4 @@ def _driver_harness_snapshot_stub(request, monkeypatch):
         root = mod.REPO_ROOT
         monkeypatch.setattr(mod, "snapshot_harness", lambda work, repo=None, _r=root: _r)
         monkeypatch.setattr(mod, "use_harness", lambda root: None)
-        monkeypatch.setattr(mod, "pre_submit_checks", lambda root: "")
+        monkeypatch.setattr(mod, "pre_submit_checks", lambda root, repo=None: "")

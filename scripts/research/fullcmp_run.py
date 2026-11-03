@@ -461,6 +461,7 @@ def cell_env(
         f"TFB_OUT={TFOUT_ROOT}",
         f"TFB_OBSERVE={'1' if profile else '0'}",
         f"TFB_HARNESS_COMMIT={HARNESS_COMMIT}",
+        f"TFB_HARNESS_TREE={HARNESS_TREE}",
     ]
     if profile:
         env.append("TFB_PROFILE=1")
@@ -1228,6 +1229,7 @@ def print_plan(plan: Plan) -> None:
 
 HARNESS_WORK = Path("/Volumes/Micron/yunshu-fullcmp/harness")  # snapshots: harness-<HEAD7>/
 HARNESS_COMMIT = ""  # set by use_harness(): the snapshot's commit (tfbench header: harness_commit)
+HARNESS_TREE = ""  # the snapshot's HEAD^{tree} (tfbench header: harness_tree_sha)
 HARNESS_ARCHIVE = ("scripts/research", "scripts/dev", "python", "tests/unit")
 HARNESS_DIRTY_PATHS = ("scripts/research", "scripts/dev", "python", "tests/unit")
 
@@ -1272,6 +1274,12 @@ def snapshot_harness(work: Path, repo: Path = REPO_ROOT) -> Path:
         with tarfile.open(fileobj=io.BytesIO(data)) as tf:
             tf.extractall(tmp)
         (tmp / ".snapshot_commit").write_text(head + "\n")
+        tree = _git(["rev-parse", "HEAD^{tree}"], repo).decode().strip()
+        (tmp / ".snapshot_tree").write_text(tree + "\n")
+        manifest = _tree_blobs(head, repo)
+        (tmp / ".snapshot_manifest").write_text(
+            "".join(f"{blob}\t{path}\n" for path, blob in sorted(manifest.items()))
+        )
         for dirpath, dirnames, filenames in os.walk(tmp):
             for name in dirnames + filenames:
                 p = Path(dirpath) / name
@@ -1280,13 +1288,70 @@ def snapshot_harness(work: Path, repo: Path = REPO_ROOT) -> Path:
         os.rename(tmp, dest)
     if marker.read_text().strip() != head:
         raise HarnessDirty(f"snapshot {dest} records {marker.read_text().strip()}, HEAD is {head}")
+    verify_snapshot(dest, repo)
     return dest
+
+
+def _tree_blobs(commit: str, repo: Path) -> dict[str, str]:
+    """path -> blob id of every harness file at `commit` (git ls-tree)."""
+    out = _git(["ls-tree", "-r", commit, "--", *HARNESS_ARCHIVE], repo).decode()
+    blobs = {}
+    for line in out.splitlines():
+        meta, path = line.split("\t", 1)
+        blobs[path] = meta.split()[2]
+    return blobs
+
+
+def _file_blobs(root: Path, paths: list[str], repo: Path) -> dict[str, str]:
+    """path -> blob id of the files under root, hashed by git itself (git hash-object)."""
+    if not paths:
+        return {}
+    res = subprocess.run(
+        ["git", "hash-object", "--stdin-paths"],
+        cwd=str(root), input="\n".join(str(root / p) for p in paths) + "\n",
+        capture_output=True, text=True, check=True,
+    )
+    return dict(zip(paths, res.stdout.split()))
+
+
+def verify_snapshot(dest: Path, repo: Path = REPO_ROOT) -> None:
+    """Proof that the snapshot is HEAD: its files hash to the blob ids git holds for HEAD, its
+    manifest matches the tree, and no file was added, removed or edited. Raises HarnessDirty."""
+    dest = Path(dest)
+    manifest_path = dest / ".snapshot_manifest"
+    try:
+        recorded = {}
+        for line in manifest_path.read_text().splitlines():
+            blob, path = line.split("\t", 1)
+            recorded[path] = blob
+        head = (dest / ".snapshot_commit").read_text().strip()
+    except OSError as exc:
+        raise HarnessDirty(f"snapshot {dest} has no readable manifest/commit: {exc}") from exc
+    if _tree_blobs(head, repo) != recorded:
+        raise HarnessDirty(f"snapshot manifest {manifest_path} does not match git's tree at {head[:7]}")
+    present = sorted(
+        str(p.relative_to(dest))
+        for p in dest.rglob("*")
+        if p.is_file() and not p.name.startswith(".snapshot_")
+    )
+    if present != sorted(recorded):
+        extra = sorted(set(present) - set(recorded))
+        missing = sorted(set(recorded) - set(present))
+        raise HarnessDirty(f"snapshot file set differs: extra {extra[:5]} missing {missing[:5]}")
+    actual = _file_blobs(dest, present, repo)
+    bad = [p for p in present if actual[p] != recorded[p]]
+    if bad:
+        raise HarnessDirty(f"snapshot files differ from HEAD: {bad[:8]}")
+
+
+def snapshot_tree(root: Path) -> str:
+    return (Path(root) / ".snapshot_tree").read_text().strip()
 
 
 def use_harness(root: Path) -> None:
     """Point every job-building path at the snapshot. HARNESS_PY (the venv) and the pinned Yunshu
     tree are not harness code and stay as they are."""
-    global SCRIPTS, TFBENCH, AUDIT, REPS, PREFLIGHT, QUIET, PROFILE_SCRIPT, HARNESS_COMMIT
+    global SCRIPTS, TFBENCH, AUDIT, REPS, PREFLIGHT, QUIET, PROFILE_SCRIPT, HARNESS_COMMIT, HARNESS_TREE
     SCRIPTS = Path(root) / "scripts" / "research"
     TFBENCH = SCRIPTS / "tfbench.py"
     AUDIT = SCRIPTS / "fullcmp_audit.py"
@@ -1295,6 +1360,7 @@ def use_harness(root: Path) -> None:
     QUIET = SCRIPTS / "fullcmp_quiet.py"
     PROFILE_SCRIPT = SCRIPTS / "fullcmp_profile.py"
     HARNESS_COMMIT = (Path(root) / ".snapshot_commit").read_text().strip()
+    HARNESS_TREE = snapshot_tree(Path(root))
 
 
 # Explicit files only: collecting all of tests/unit fails on unrelated modules missing from the venv.
@@ -1307,25 +1373,34 @@ QUICK_TEST_FILES = (
 
 
 def quick_test_paths(root: Path) -> list[str]:
-    """The files pre_submit_checks collects: each pattern expanded inside the snapshot, sorted."""
+    """The files pre_submit_checks collects (absolute, under root), each pattern expanded, sorted."""
     out: list[str] = []
     for pat in QUICK_TEST_FILES:
-        out += sorted(str(p.relative_to(root)) for p in Path(root).glob(pat))
+        out += sorted(str(p) for p in Path(root).glob(pat))
     return out
 
 
-def pre_submit_checks(root: Path) -> str:
-    """Run the static undefined-name check and the fullcmp_quick subset against the snapshot before
-    any job is written or submitted. Returns '' when both pass, else the failing output."""
-    env = dict(os.environ, PYTHONPATH=str(Path(root) / "python"), PYTHONDONTWRITEBYTECODE="1")
-    cmds = [
-        [HARNESS_PY, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-         str(Path(root) / "tests" / "unit" / "test_fullcmp_static.py")],
-        [HARNESS_PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", "fullcmp_quick",
-         *[str(Path(root) / f) for f in quick_test_paths(Path(root))]],
-    ]
-    for cmd in cmds:
-        res = subprocess.run(cmd, cwd=str(root), env=env, capture_output=True, text=True)
+def pre_submit_checks(root: Path, repo: Path = REPO_ROOT) -> str:
+    """Before any job is written or submitted. (1) The snapshot still equals HEAD (verify_snapshot).
+    (2) The static undefined-name check runs on the snapshot: that is what the jobs import.
+    (3) The fullcmp_quick subset runs in the live worktree at the same HEAD, which is clean (the
+    snapshot refuses a dirty tree), so the tests exercise the code the snapshot contains. The
+    snapshot has no .git and lacks data files the tests read, so the subset cannot run there.
+    Returns '' when all pass, else the failure."""
+    try:
+        verify_snapshot(Path(root), repo)
+    except HarnessDirty as exc:
+        return f"snapshot integrity: {exc}"
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    static = [HARNESS_PY, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+              str(Path(root) / "tests" / "unit" / "test_fullcmp_static.py")]
+    quick = [HARNESS_PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", "fullcmp_quick",
+             *quick_test_paths(Path(repo))]
+    for cmd, cwd, env_ in (
+        (static, Path(root), dict(env, PYTHONPATH=str(Path(root) / "python"))),
+        (quick, Path(repo), dict(env, PYTHONPATH=str(Path(repo) / "python"))),
+    ):
+        res = subprocess.run(cmd, cwd=str(cwd), env=env_, capture_output=True, text=True)
         if res.returncode != 0:
             return f"{' '.join(cmd[-3:])} rc={res.returncode}\n{res.stdout[-2000:]}{res.stderr[-1000:]}"
     return ""
@@ -1412,7 +1487,7 @@ def main(argv=None) -> int:
         print(f"refusing: {exc}", file=sys.stderr)
         return 2
     use_harness(snap)
-    quick = pre_submit_checks(snap)
+    quick = pre_submit_checks(snap, REPO_ROOT)
     if quick:
         print("refusing: pre-submit checks failed on the snapshot:", file=sys.stderr)
         print(quick, file=sys.stderr)

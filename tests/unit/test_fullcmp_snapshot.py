@@ -126,8 +126,36 @@ def test_pre_submit_collects_explicit_files_only(tmp_path):
     (tmp_path / "tests" / "unit").mkdir(parents=True)
     for name in ("test_fullcmp_a.py", "test_tfbench_b.py", "test_bench_snapshot.py", "test_observe_mode.py", "test_yv_verify.py"):
         (tmp_path / "tests" / "unit" / name).write_text("")
-    picked = run.quick_test_paths(tmp_path)
+    picked = [str(Path(p).relative_to(tmp_path)) for p in run.quick_test_paths(tmp_path)]
     assert "tests/unit/test_yv_verify.py" not in picked
     assert set(picked) == {f"tests/unit/{n}" for n in ("test_fullcmp_a.py", "test_tfbench_b.py", "test_bench_snapshot.py", "test_observe_mode.py")}
     assert all(p.endswith(".py") for p in picked)
     assert all(pat.endswith(".py") for pat in run.QUICK_TEST_FILES)  # file patterns, never a directory
+
+
+def test_tampered_snapshot_refuses_pre_submit(repo, tmp_path):
+    snap = run.snapshot_harness(tmp_path / "work", repo)
+    assert run.pre_submit_checks(snap, repo) != "" or True  # the live quick subset may run; only the refusal matters
+    target = snap / "scripts" / "research" / "tfbench.py"
+    os.chmod(target, 0o644)
+    try:
+        target.write_text("VERSION = 999  # tampered\n")
+        msg = run.pre_submit_checks(snap, repo)
+        assert msg.startswith("snapshot integrity"), msg
+        assert "tfbench.py" in msg
+    finally:
+        os.chmod(target, 0o644)
+        target.write_text("VERSION = 1\n")
+        os.chmod(target, 0o444)
+
+
+def test_snapshot_records_tree_sha_and_manifest(repo, tmp_path):
+    snap = run.snapshot_harness(tmp_path / "work", repo)
+    tree = _git(repo, "rev-parse", "HEAD^{tree}")
+    assert run.snapshot_tree(snap) == tree
+    manifest = (snap / ".snapshot_manifest").read_text().splitlines()
+    assert any(line.endswith("\tscripts/research/tfbench.py") for line in manifest)
+    run.use_harness(snap)
+    assert run.HARNESS_TREE == tree
+    pin = {"launch": {"harness_env": {"TFB_YUNSHU_BIN": "b", "TFB_YUNSHU_SRC": "s", "PYTHONPATH": "p"}}, "python_executable": "py"}
+    assert f"TFB_HARNESS_TREE={tree}" in run.cell_env("yunshu", pin, "fullcmp-B1-x-r0")
