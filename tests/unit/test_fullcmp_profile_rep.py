@@ -166,3 +166,14 @@ def test_audit_manifest_reps_follow_the_rows_not_a_constant():
     assert man["reps"] == 1
     rows = [dict(_row("s1", "yunshu"), reps=3)]
     assert fr.audit_manifest(rows, ["B1"], PIN, ["yunshu"])["reps"] == 3
+
+
+def test_own_jobs_are_not_foreign_when_gpuq_prints_the_job_id():
+    # gpuq status prints the job id (<seq>-<label>), not the label: our own jobs must not refuse us.
+    text = (
+        "daemon: up\n"
+        "wait-cpu  5/20s  device=m5  1103-113543-00-fullcmp-smoke2-dryrun\n"
+        "running   device=m5  1103-113600-00-fullcmp-B1-yunshu-q27-r0\n"
+        "pending   device=m5  1103-113700-00-someone-else-job\n"
+    )
+    assert fr.foreign_jobs(text) == [("pending", "1103-113700-00-someone-else-job")]

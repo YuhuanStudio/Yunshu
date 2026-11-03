@@ -456,8 +456,9 @@ def parse_status(text: str) -> list[tuple[str, str]]:
 
 
 def foreign_jobs(status_text: str) -> list[tuple[str, str]]:
+    """gpuq prints job ids as <seq>-<label>; our labels start with fullcmp-, so match the label."""
     return [
-        (s, j) for s, j in parse_status(status_text) if not j.startswith("fullcmp-")
+        (s, j) for s, j in parse_status(status_text) if "-fullcmp-" not in f"-{j}"
     ]
 
 
