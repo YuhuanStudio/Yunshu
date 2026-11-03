@@ -153,3 +153,38 @@ def test_every_fixture_cell_has_identical_in_job_and_audit_verdicts():
         a = fe.concurrent_check(None, eng + "-main" if eng == "yunshu" else eng, "dflash", log, conc, 0)
         b = fe.concurrent_check(None, eng, "dflash", log, conc, 0)
         assert (a[0]["engaged_mode"], a[0].get("label"), a[1]) == (b[0]["engaged_mode"], b[0].get("label"), b[1])
+
+
+def _alias_pairs():
+    import bench_engines as be
+
+    seen = []
+    for bench in sorted(be.ENGINES):
+        manifest = be.manifest_id(bench)
+        if manifest in ("ollama", "lmstudio"):
+            continue
+        seen.append((bench, manifest))
+    return seen
+
+
+def test_every_bench_and_manifest_id_gives_the_same_shared_verdict_on_the_fixture_cells():
+    """The in-job path passes the bench id, the audit the manifest id: for every alias pair the shared verdict
+    (mode, label, problems) is identical on each fixture cell (the wire-1107 Yunshu cell and the real oMLX rc1
+    mixed cell here; other engines are covered by their own fixture tests)."""
+    yun = (ROOT / "tests" / "unit" / "fixtures" / "yunshu_conc_1107.server.txt").read_text(errors="replace")
+    omlx = (ROOT / "tests" / "unit" / "fixtures" / "omlx_rc1_mixed_1106d.server.txt").read_text(errors="replace")
+    reqs2 = [{"rid": i, "pt": 1024, "ct": 64, "spec": "unavailable (x)"} for i in range(2)]
+    cells = {
+        "yunshu": (yun, [{"part": "conc", "n": 2, "requests": reqs2}], "dflash"),
+        "omlx-0.7.3rc1": (omlx, [{"part": "mixed", "n": 8, "requests": [
+            {"rid": i, "pt": p, "ct": 64} for i, p in enumerate([1024, 1024, 1024, 8204, 8204, 1024, 1024, 1024])]}],
+            "dflash"),
+    }
+    for bench, manifest in _alias_pairs():
+        for key, (log, conc, mode) in cells.items():
+            if fe.manifest_key(bench) != key and manifest != key:
+                continue  # only the engine's own id pairs with its fixture
+            a = fe.concurrent_check(None, bench, mode, log, conc, 0)
+            b = fe.concurrent_check(None, manifest, mode, log, conc, 0)
+            assert (a[0]["engaged_mode"], a[0].get("label"), a[1]) == (b[0]["engaged_mode"], b[0].get("label"), b[1]), (
+                bench, manifest)

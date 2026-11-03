@@ -149,6 +149,7 @@ def acceptance_paths(m) -> list[str]:
 
 
 def evaluate(engine, mode, log, rows, table=None, probe_text=None, ready_offset=None, probe_response=None) -> dict:
+    engine = manifest_key(engine)
     if table is None:  # no table passed: the default file (None when missing: unverified)
         table = load_table()
     """Engaged mode of one cell for its expected mode, from the engine log (whole server log),
@@ -686,11 +687,23 @@ def _concurrent_item(m, log):
     return items[0] if items else None
 
 
+def manifest_key(engine) -> str:
+    """The manifest engine id for a bench id (bench_engines.manifest_id): every caller of the shared verdict
+    passes either form, and the table is keyed by the manifest id."""
+    try:
+        import bench_engines
+
+        return bench_engines.manifest_id(str(engine))
+    except Exception:  # noqa: BLE001 - an unknown id keeps its name (the table lookup then fails closed)
+        return str(engine)
+
+
 def is_yunshu(engine) -> bool:
-    return str(engine) == "yunshu" or str(engine).startswith("yunshu-")
+    return manifest_key(engine) == "yunshu"
 
 
 def concurrent_check(table, engine, mode, log, records, ready_offset, probe_responses=None):
+    engine = manifest_key(engine)  # one key for both callers (bench id and manifest id)
     """THE concurrent verdict (in-job check and audit both call this). records: the cell's conc / mixed
     rows. Returns (ev, problems): ev has the evaluate() shape (engaged_mode, matched_line, evidence_kind,
     source, stats with per_row) when every record's requests are matched; problems lists every failure
