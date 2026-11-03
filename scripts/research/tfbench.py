@@ -2448,6 +2448,10 @@ def fullcmp_header(
         ),
         weights_note=bench_engines.weights_note(a.engine),
         fresh_process=True,
+        # the harness snapshot the driver submitted from (fullcmp_run.snapshot_harness); the live
+        # worktree is never a job source, so dirty is false by construction
+        harness_commit=environ.get("TFB_HARNESS_COMMIT") or None,
+        harness_dirty=False,
         home=str(s.home),
         job_id=job_id or fp.resolve_job_id(environ),
         job_start_s=job_start_s,

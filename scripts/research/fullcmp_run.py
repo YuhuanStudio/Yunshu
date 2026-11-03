@@ -460,6 +460,7 @@ def cell_env(
         f"TFB_MLXLM_PY={pin['python_executable']}",
         f"TFB_OUT={TFOUT_ROOT}",
         f"TFB_OBSERVE={'1' if profile else '0'}",
+        f"TFB_HARNESS_COMMIT={HARNESS_COMMIT}",
     ]
     if profile:
         env.append("TFB_PROFILE=1")
@@ -1225,6 +1226,94 @@ def print_plan(plan: Plan) -> None:
 # ---------------------------------------------------------------------------
 
 
+HARNESS_WORK = Path("/Volumes/Micron/yunshu-fullcmp/harness")  # snapshots: harness-<HEAD7>/
+HARNESS_COMMIT = ""  # set by use_harness(): the snapshot's commit (tfbench header: harness_commit)
+HARNESS_ARCHIVE = ("scripts/research", "scripts/dev", "python", "tests/unit")
+HARNESS_DIRTY_PATHS = ("scripts/research", "scripts/dev", "python", "tests/unit")
+
+
+class HarnessDirty(RuntimeError):
+    """The live worktree has uncommitted harness changes: nothing may be submitted from it."""
+
+
+def _git(args: list[str], repo: Path) -> bytes:
+    return subprocess.run(
+        ["git", *args], cwd=str(repo), capture_output=True, check=True
+    ).stdout
+
+
+def live_dirty_paths(repo: Path = REPO_ROOT) -> list[str]:
+    out = _git(["status", "--porcelain", "--", *HARNESS_DIRTY_PATHS], repo).decode()
+    return [line for line in out.splitlines() if line.strip()]
+
+
+def snapshot_harness(work: Path, repo: Path = REPO_ROOT) -> Path:
+    """Freeze the harness at HEAD into work/harness-<HEAD7>/ (read-only, reused when it exists for
+    the same commit, never deleted). Refuses when the live worktree has uncommitted harness changes
+    or the snapshot's recorded commit does not match HEAD."""
+    import io
+    import tarfile
+
+    dirty = live_dirty_paths(repo)
+    if dirty:
+        raise HarnessDirty(
+            "live worktree has uncommitted harness changes (commit or stash first): "
+            + "; ".join(dirty[:8])
+        )
+    head = _git(["rev-parse", "HEAD"], repo).decode().strip()
+    dest = Path(work) / f"harness-{head[:7]}"
+    marker = dest / ".snapshot_commit"
+    if not marker.exists():
+        tmp = Path(work) / f".tmp-{head[:7]}-{os.getpid()}"
+        if tmp.exists():
+            raise HarnessDirty(f"snapshot temp dir already exists: {tmp}")
+        tmp.mkdir(parents=True)
+        data = _git(["archive", "--format=tar", head, *HARNESS_ARCHIVE], repo)
+        with tarfile.open(fileobj=io.BytesIO(data)) as tf:
+            tf.extractall(tmp)
+        (tmp / ".snapshot_commit").write_text(head + "\n")
+        for dirpath, dirnames, filenames in os.walk(tmp):
+            for name in dirnames + filenames:
+                p = Path(dirpath) / name
+                os.chmod(p, p.stat().st_mode & ~0o222)
+        os.chmod(tmp, tmp.stat().st_mode & ~0o222)
+        os.rename(tmp, dest)
+    if marker.read_text().strip() != head:
+        raise HarnessDirty(f"snapshot {dest} records {marker.read_text().strip()}, HEAD is {head}")
+    return dest
+
+
+def use_harness(root: Path) -> None:
+    """Point every job-building path at the snapshot. HARNESS_PY (the venv) and the pinned Yunshu
+    tree are not harness code and stay as they are."""
+    global SCRIPTS, TFBENCH, AUDIT, REPS, PREFLIGHT, QUIET, PROFILE_SCRIPT, HARNESS_COMMIT
+    SCRIPTS = Path(root) / "scripts" / "research"
+    TFBENCH = SCRIPTS / "tfbench.py"
+    AUDIT = SCRIPTS / "fullcmp_audit.py"
+    REPS = SCRIPTS / "fullcmp_reps.py"
+    PREFLIGHT = SCRIPTS / "fullcmp_preflight.py"
+    QUIET = SCRIPTS / "fullcmp_quiet.py"
+    PROFILE_SCRIPT = SCRIPTS / "fullcmp_profile.py"
+    HARNESS_COMMIT = (Path(root) / ".snapshot_commit").read_text().strip()
+
+
+def pre_submit_checks(root: Path) -> str:
+    """Run the static undefined-name check and the fullcmp_quick subset against the snapshot before
+    any job is written or submitted. Returns '' when both pass, else the failing output."""
+    env = dict(os.environ, PYTHONPATH=str(Path(root) / "python"), PYTHONDONTWRITEBYTECODE="1")
+    cmds = [
+        [HARNESS_PY, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         str(Path(root) / "tests" / "unit" / "test_fullcmp_static.py")],
+        [HARNESS_PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", "fullcmp_quick",
+         str(Path(root) / "tests" / "unit")],
+    ]
+    for cmd in cmds:
+        res = subprocess.run(cmd, cwd=str(root), env=env, capture_output=True, text=True)
+        if res.returncode != 0:
+            return f"{' '.join(cmd[-3:])} rc={res.returncode}\n{res.stdout[-2000:]}{res.stderr[-1000:]}"
+    return ""
+
+
 def configure(raw_root: Path | None = None, work_dir: Path | None = None) -> None:
     """Point the driver at a separate raw root and work dir (smoke runs). Defaults are the
     production paths; a smoke run must never touch RAW_ROOT or the batch audit manifests."""
@@ -1298,6 +1387,20 @@ def main(argv=None) -> int:
     global LOG_USAGE_SAMPLE
     LOG_USAGE_SAMPLE = a.log_usage_sample
     configure(a.raw_root, a.work_dir)
+    # Every job of this invocation runs from one frozen snapshot of the harness at HEAD, never the
+    # live worktree (2026-11-04: a harness edit landed mid-batch and a NameError killed a job).
+    try:
+        snap = snapshot_harness(HARNESS_WORK, REPO_ROOT)
+    except HarnessDirty as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 2
+    use_harness(snap)
+    quick = pre_submit_checks(snap)
+    if quick:
+        print("refusing: pre-submit checks failed on the snapshot:", file=sys.stderr)
+        print(quick, file=sys.stderr)
+        return 2
+    print(f"harness snapshot: {snap} (commit {HARNESS_COMMIT})", flush=True)
 
     pin = json.loads(PIN_PATH.read_text())
     rows = load_rows(a.manifest)
