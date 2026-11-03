@@ -187,3 +187,13 @@ def test_status_job_id_is_found_when_the_line_has_trailing_text():
     )
     assert fr.parse_status(text) == [("running", "1103-114230-00-observe-ab-code-8192-p0")]
     assert fr.foreign_jobs(text) == [("running", "1103-114230-00-observe-ab-code-8192-p0")]
+
+
+def test_job_shell_script_does_not_start_with_a_path():
+    # gpuq preflight treats any argument starting with "/" as an input path that must exist; the
+    # job's sh -c script must not look like one (it begins with the quiet gate's interpreter path).
+    rows = [_row("a1", "yunshu")]
+    plan = fr.plan_batch(rows, "B1", PIN, profile_rep=True)
+    for job in plan.jobs:
+        script = job.cmd[-1]
+        assert not script.startswith("/"), script[:60]

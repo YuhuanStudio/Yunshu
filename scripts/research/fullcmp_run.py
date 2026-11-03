@@ -339,7 +339,9 @@ def job_command(
                     ]
                 )
             )
-    return ["/bin/sh", "-c", " && ".join(steps)]
+    # "set -e;" first: the script must not start with "/" (gpuq preflight reads an argument that
+    # starts with "/" as an input path that has to exist). The steps are &&-chained anyway.
+    return ["/bin/sh", "-c", "set -e; " + " && ".join(steps)]
 
 
 @dataclass
