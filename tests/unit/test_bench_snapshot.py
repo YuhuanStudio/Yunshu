@@ -149,7 +149,8 @@ def test_yunshu_launch_uses_real_discovery_not_an_override(tmp_path):
     links = {Path(k).relative_to(tmp_path).as_posix(): v for k, v in la.links.items()}
     assert links[".yunshu/models/incoai/Qwen3.8-27B-DFlash2"] == be.DRAFTER
     assert links[".yunshu/models/Jundot/Qwen3.8-27B-oQ4e-mtp"] == be.CHECKPOINT
-    assert la.cmd[1:3] == ["serve", "-m"] and la.cmd[3].startswith(str(tmp_path))
+    args = be.yunshu_args(la.cmd)
+    assert args[:2] == ["serve", "-m"] and args[2].startswith(str(tmp_path))
 
 
 def test_hidden_drafter_is_caught_by_the_fail_closed_check():
