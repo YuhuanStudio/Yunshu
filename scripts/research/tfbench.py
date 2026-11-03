@@ -611,9 +611,36 @@ _LIVE_SERVERS: list = []
 _USAGE_SAMPLE: list = [None]
 
 
+# Full bytes of each engine log that a restart truncated during the current cell (restart_server).
+_LOG_PREFIX = []
+
+
+def server_log_path(out):
+    """The cell's engine-log slice: <cell>-rN.server.log beside <cell>-rN.jsonl (or -prof.jsonl)."""
+    text = str(out)
+    stem = text[: -len(".jsonl")] if text.endswith(".jsonl") else text
+    return stem + ".server.log"
+
+
+def cell_log_slice(log_path, start, end=None, prefix=()):
+    """Bytes of one cell's engine log: the shared log from offset start to end (None: its end),
+    after the full bytes of any log a restart in this cell truncated (prefix, in order)."""
+    log_path = Path(log_path)
+    data = log_path.read_bytes() if log_path.exists() else b""  # no log: an empty slice (audit fails)
+    if not prefix:
+        return data[start:end]
+    pieces = [*prefix, data]
+    pieces[0] = pieces[0][start:]
+    pieces[-1] = pieces[-1] if end is None else pieces[-1][:end]
+    return b"".join(pieces)
+
+
 def restart_server(s):
     """Stop the live server (its disk prefix tier is kept) and launch the same engine again on the
     same HOME: a fresh process and port, the same cache directory (restart-with-disk-cache)."""
+    log = getattr(s, "log", None)  # a stub server has no engine log
+    if log is not None and log.exists():
+        _LOG_PREFIX.append(log.read_bytes())  # the relaunch truncates this log: keep its bytes
     s.kill(keep_disk=True)
     if os.environ.get("TFB_STUB_SERVER") and os.environ.get(
         "TFB_STUB_WIPE_HOME_ON_RESTART"
@@ -896,6 +923,14 @@ def load_variant_prompt(name, variant=0):
 def decode_prompt_file(kind, ctx, smoke=False, variant=0):
     """The prompt source a decode cell reads (recorded as prompt_file on every decode row)."""
     return "inline:smoke" if smoke else str(prompt_path(f"{kind}-{ctx}", variant))
+
+
+def prompt_file_sha256(kind, ctx, smoke=False, variant=0):
+    """sha256 of the prompt FILE bytes a decode cell read (the bytes prompt_files.sha256.txt hashes).
+    None for a smoke cell (inline prompt). prompt_sha256 is the rendered request, not the file."""
+    if smoke:
+        return None
+    return hashlib.sha256(prompt_path(f"{kind}-{ctx}", variant).read_bytes()).hexdigest()
 
 
 def decode_prompt(kind, ctx, long_ask, variant=0):
@@ -1534,8 +1569,9 @@ def part_decode(s, out, a):
                     ctx=ctx,
                     kind=kind,
                     phase=phase,
-                    prompt_file=decode_prompt_file(
-                        kind, ctx, a.smoke, getattr(a, "prompt_variant", 0)
+                    prompt_file=decode_prompt_file(base_kind, ctx, a.smoke, base_variant),
+                    prompt_file_sha256=prompt_file_sha256(
+                        base_kind, ctx, a.smoke, base_variant
                     ),
                     cell=cell_name(getattr(a, "out", ""), getattr(a, "rep", 0)),
                     reference_prompt_tokens=ctx
@@ -2438,6 +2474,11 @@ def main():
         ctx_tokens=a.ctx_tokens,
         parallel=a.parallel,
     )
+    # The engine log is shared by every cell of a job (same name): this cell's slice is the byte
+    # range from here to its end, written beside the cell file (server_log_path).
+    first_log = s.log
+    log_start = first_log.stat().st_size if first_log.exists() else 0
+    _LOG_PREFIX.clear()
     try:
         with open(a.out, "a") as out:
             try:
@@ -2497,6 +2538,9 @@ def main():
                 engaged_spec_mode=s.engaged_spec_mode,
                 engine_probe=getattr(s, "probe", None),
                 tag=a.tag,
+                server_log=first_log.name,
+                server_log_start=log_start,
+                server_log_slice=Path(server_log_path(a.out)).name,
                 **(fc_header or {}),
             )
             for _ in range(2):
@@ -2541,11 +2585,17 @@ def main():
                     engine_probe=s.probe_text(),
                 )
             stop_cell_telemetry()
+            # The cell's engine-log slice, written now: the next cell of the job reuses the name.
+            log_end = s.log.stat().st_size if s.log.exists() else 0
+            Path(server_log_path(a.out)).write_bytes(
+                cell_log_slice(s.log, log_start, log_end, prefix=_LOG_PREFIX)
+            )
             if fullcmp:
                 # The GPU must have stayed exclusive to this cell until its last request.
                 if was_contended():
                     raise fp.ProvenanceError("GPU contended during the cell (fullcmp)")
                 end_fields = {
+                    "server_log_end": log_end,
                     "job_end_s": time.time(),
                     "gpu_exclusive": True,
                     "contended": False,
@@ -2563,8 +2613,7 @@ def main():
                 rep=a.rep,
                 complete=True,
             )
-        if fullcmp:
-            finalize_session(a.out, end_fields)
+        finalize_session(a.out, end_fields or {"server_log_end": log_end})
     except Exception as exc:
         if fullcmp:
             with open(a.out, "a") as out:
