@@ -41,6 +41,9 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bench_engines  # noqa: E402  (manifest id <-> harness id registry)
+
 GUARDS = (
     "prompt_identity",
     "provenance_identity",
@@ -387,6 +390,16 @@ def check_provenance_identity(run: Run) -> GuardResult:
     return res
 
 
+def manifest_engine(eng: str) -> str:
+    """Manifest engine id for a folder or harness id (inverse of bench_engines.MANIFEST_ENGINES).
+    Yunshu is manifest id 'yunshu' and harness id 'yunshu-main'; its pin comes from yunshu_pin.json
+    through the manifest's 'yunshu' section."""
+    if eng in bench_engines.MANIFEST_ENGINES:
+        return eng
+    inverse = {v: k for k, v in bench_engines.MANIFEST_ENGINES.items()}
+    return inverse.get(eng, eng)
+
+
 def check_pinned_versions(run: Run) -> GuardResult:
     """Guard 3: version, release date, binary sha256 / pinned tree, and this run's run_id."""
     res = GuardResult("pinned_versions")
@@ -398,7 +411,8 @@ def check_pinned_versions(run: Run) -> GuardResult:
         if h is None:
             continue
         res.checked += 1
-        cell, eng = cf.cell["cell"], cf.cell["engine"]
+        cell = cf.cell["cell"]
+        eng = manifest_engine(cf.cell["engine"])
         pin = pins.get(eng)
         if pin is None:
             res.fail(cell, f"no pin for engine {eng}")
@@ -609,7 +623,13 @@ def check_gpu_exclusive_rotation(run: Run) -> GuardResult:
         if not order:
             res.fail(anchor, f"group {group} has no interleave order in manifest")
             continue
-        observed, expected = [i[2] for i in items], rotate(order, rep)
+        # Per engine: consecutive cells of one engine are one visit (an engine with two cells
+        # runs them back to back), so the observed interleave is the engine runs in time order.
+        observed = []
+        for i in items:
+            if not observed or observed[-1] != i[2]:
+                observed.append(i[2])
+        expected = rotate(order, rep)
         if observed != expected:
             res.fail(anchor, f"rep {rep}: interleave {observed} != rotated {expected}")
     return res
@@ -670,7 +690,11 @@ def check_fairness_controls(run: Run) -> GuardResult:
     res.checked += 1
     if ctl.get("injected_delay_detected") is not True:
         res.fail("controls", "injected delay was not detected by the harness")
-    homes = defaultdict(set)
+    # HOME is isolated per server process. The harness starts one server per gpuq job (a chunk of
+    # cells cold-starts its server again), so the job id is the server key: each job has exactly one
+    # HOME, no HOME is the real one, and no two servers share a HOME. Several servers of one engine
+    # (one per job) are expected; each gets its own HOME.
+    homes = defaultdict(set)  # job_id -> {home}
     for cf in run.files:
         for r in cf.rows:
             res.checked += 1
@@ -678,23 +702,24 @@ def check_fairness_controls(run: Run) -> GuardResult:
             if not (is_num(t) and t == 0):
                 res.fail(cf.cell["cell"], f"temperature {t!r}; greedy (0) required")
         if cf.header is not None:
-            homes[cf.cell["engine"]].add(cf.header.get("home"))
+            homes[cf.header.get("job_id")].add(cf.header.get("home"))
     real_home = os.path.expanduser("~")
-    unique = []
-    for eng, hs in sorted(homes.items()):
+    owner = {}  # home -> job_id
+    for job, hs in sorted(homes.items(), key=lambda kv: str(kv[0])):
         res.checked += 1
-        if len(hs) != 1 or None in hs:
+        if job is None or len(hs) != 1 or None in hs:
             res.fail(
-                f"engine {eng}",
-                f"HOME not one isolated directory: {sorted(map(str, hs))}",
+                f"job {job}",
+                f"HOME not one isolated directory per server: {sorted(map(str, hs))}",
             )
             continue
         (home,) = hs
-        if home == real_home:
-            res.fail(f"engine {eng}", "uses the real HOME, not an isolated one")
-        unique.append(home)
-    if len(set(unique)) != len(unique):
-        res.fail("controls", "two engines share one HOME")
+        if os.path.abspath(str(home)) == os.path.abspath(real_home):
+            res.fail(f"job {job}", "server uses the real HOME, not an isolated one")
+            continue
+        if home in owner and owner[home] != job:
+            res.fail(f"job {job}", f"HOME shared with server job {owner[home]}")
+        owner[home] = job
     return res
 
 

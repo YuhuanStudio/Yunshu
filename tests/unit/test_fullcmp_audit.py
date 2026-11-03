@@ -119,7 +119,7 @@ def make_data():
                         }
                     ],
                     "fresh_process": True,
-                    "home": f"/Volumes/P5Plus/yunshu-build/homes/{eng}",
+                    "home": f"/Volumes/P5Plus/yunshu-build/homes/{eng}/job-{slot}",
                     "job_id": f"job-{slot}",
                     "job_start_s": start,
                     "job_end_s": start + 50,
@@ -746,3 +746,100 @@ def test_derived_rows_only_for_known_models_with_measured_inputs(tmp_path):
     dec = [r for r in fa.derived_rows(run, PEAKS) if r["metric"] == "decode"]
     assert dec and all(r["mbu"] is not None and r["mbu"] > 0 for r in dec)
     assert all(r["label"] == "DERIVED" for r in dec)
+
+
+# --- guards 3/4/5 regressions (smoke findings) ------------------------------
+
+
+def _cf(cell, rep, header, rows=()):
+    return fa.CellFile(cell, rep, Path("x"), header, list(rows))
+
+
+def test_pinned_versions_maps_yunshu_main_to_the_yunshu_pin():
+    """A cell folder / harness id 'yunshu-main' is the manifest 'yunshu' pin, not a binary."""
+    sha = "0f2960047855546a9f13b2631b680352b1c57cfe"
+    manifest = {
+        "run_id": "r1",
+        "pins": {
+            "yunshu": {
+                "version": "0.1.7.dev0",
+                "release_date": "2026-11-03",
+                "git_sha": sha,
+            }
+        },
+        "yunshu": {"git_sha": sha, "python": PY},
+    }
+    head = {
+        "run_id": "r1",
+        "version": "0.1.7.dev0",
+        "release_date": "2026-11-03",
+        "git_sha": sha,
+        "python": PY,
+        "cmd": [PY, "-m", "yunshu_cli", "serve"],
+        "binary_sha256": None,
+    }
+    cell = {"cell": "c", "engine": "yunshu-main", "group": "g"}
+    run = fa.Run(manifest, [_cf(cell, 0, head)], [], [], [])
+    assert fa.check_pinned_versions(run).violations == []
+    bad = dict(head, git_sha="deadbeef")
+    run = fa.Run(manifest, [_cf(cell, 0, bad)], [], [], [])
+    assert any("pinned tree" in v for v in fa.check_pinned_versions(run).violations)
+
+
+def test_manifest_engine_inverts_the_registry():
+    assert fa.manifest_engine("yunshu-main") == "yunshu"
+    assert fa.manifest_engine("yunshu") == "yunshu"
+    assert fa.manifest_engine("tf-1.2.1") == "tf-1.2.1"
+
+
+def test_rotation_dedupes_two_cells_of_one_engine():
+    """Two cells of one engine run back to back: that is one visit, not two in the interleave."""
+    order = ["yunshu", "mlx-serve-26.11.1"]
+    manifest = {"groups": {"g": {"order": order}}}
+
+    def hdr(s, e):
+        return {
+            "gpu_exclusive": True,
+            "contended": False,
+            "job_start_s": s,
+            "job_end_s": e,
+        }
+
+    c1 = {"cell": "c1", "engine": "yunshu", "group": "g"}
+    c2 = {"cell": "c2", "engine": "yunshu", "group": "g"}
+    c3 = {"cell": "c3", "engine": "mlx-serve-26.11.1", "group": "g"}
+    files = [
+        _cf(c1, 0, hdr(0, 10)),
+        _cf(c2, 0, hdr(10, 20)),
+        _cf(c3, 0, hdr(20, 30)),
+    ]
+    run = fa.Run(manifest, files, [], [], [])
+    assert fa.check_gpu_exclusive_rotation(run).violations == []
+
+
+def test_home_is_unique_per_server_job_not_per_engine():
+    def cf(cell, job, home):
+        head = {"job_id": job, "home": home, "run_id": "r"}
+        return _cf(
+            {"cell": cell, "engine": "yunshu", "group": "g"},
+            0,
+            head,
+            [{"temperature": 0}],
+        )
+
+    manifest = {
+        "controls": {
+            "aa_delta_pct": 0.0,
+            "aa_noise_pct": 1.0,
+            "injected_delay_detected": True,
+        }
+    }
+    # two cells of one server (same job, same home) plus a second server of the same engine
+    ok = [cf("a", "j1", "/h/1"), cf("b", "j1", "/h/1"), cf("c", "j2", "/h/2")]
+    assert fa.check_fairness_controls(fa.Run(manifest, ok, [], [], [])).violations == []
+    shared = [cf("a", "j1", "/h/1"), cf("c", "j2", "/h/1")]
+    res = fa.check_fairness_controls(fa.Run(manifest, shared, [], [], []))
+    assert any("shared" in v for v in res.violations)
+    real = [cf("a", "j1", fa.os.path.expanduser("~"))]
+    res = fa.check_fairness_controls(fa.Run(manifest, real, [], [], []))
+    assert any("real HOME" in v for v in res.violations)
