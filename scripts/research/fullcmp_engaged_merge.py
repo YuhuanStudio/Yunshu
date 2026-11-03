@@ -79,7 +79,7 @@ OMLX_MTP_LINE = {
     "pattern_or_path": r"MTP\[(?P<uid>[^\]]+)\] finish=(?P<finish>\S+) tokens=(?P<tokens>\d+) cycles=(?P<cycles>\d+) tok/cycle=(?P<tpc>[\d.]+) accept=(?P<accepted>\d+)/(?P<drafted>\d+) \((?P<rate>[^)]+)\)",
     "group": "accepted",
     "min": 0,
-    "match_tokens": True,
+    "match_tokens": False,  # per-request gaps reported (ct_gap); calibration-heavy requests (wire-1106d rc1) do not match by tokens
     # token_tolerance: observed gap (record ct - merged sum) on the real oMLX logs: wire-1106c conc 64-58 = 6,
     # 64-59 = 5, mixed 64-64 = 0 (rc1, wire-1106d), short 10-10 = 0; max observed gap 6 -> tolerance 6 + 2 = 8.
     # Mixed-log sums of 29..49 (wire-1106d rc1) come from segments of other cells in that log: not used.

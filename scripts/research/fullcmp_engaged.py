@@ -405,6 +405,9 @@ def correlate_multiset(item, log, requests, ready_offset, consumed=0, skip=READI
     for c in cands:
         if c.get("bad"):
             return [], f"{c['bad']}: {c['line'][:160]}"
+    # merged token sums are not the request's completion count when calibration segments are present (the
+    # wire-1106d rc1 mixed log: 8 requests of 64 tokens merge to 29..64): such items match by order and report
+    # the gap per request (ct_gap); a tolerance check applies only where item match_tokens is true
     use_ct = bool(item.get("match_tokens", True))
     tol = int(item.get("token_tolerance", 0))  # oMLX's merged token sums miss the first tokens of a request
     if len(cands) != len(requests):
@@ -432,6 +435,8 @@ def correlate_multiset(item, log, requests, ready_offset, consumed=0, skip=READI
             return [], f"request {rid}: value {c['value']} not above {minimum}"
         out.append({"rid": rid, "prompt": c["prompt"], "line": c["line"],
                     "value": 0.0 if calibrated else c["value"], "group": group,
+                    "ct_expected": req.get("ct"), "ct_merged": c.get("ct"),
+                    "ct_gap": (req.get("ct") - c.get("ct")) if (req.get("ct") is not None and c.get("ct") is not None) else None,
                     "calibration_share": round(c.get("calibration_share", 0.0), 4),
                     "calibrated": calibrated})
     return out, None
