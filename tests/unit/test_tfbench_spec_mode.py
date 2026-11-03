@@ -185,7 +185,11 @@ def test_cpu_preflight_checks_legacy_tag_without_starting_server(
     )
     tfbench.main()
     assert len(prompts) == 6
-    assert '"requested_spec_mode": "dflash"' in capsys.readouterr().out
+    # The legacy "-dflash" tag no longer selects the mode: the drafter follows the target (a94e6a593).
+    # A tmp target without a hidden size is not the 27B, so it drafts with its MTP head.
+    out = capsys.readouterr().out
+    assert '"requested_spec_mode": "mtp"' in out
+    assert '"YUNSHU_VLM_DRAFT": "mtp"' in out
     assert not (tmp_path / "result.jsonl").exists()
 
 
