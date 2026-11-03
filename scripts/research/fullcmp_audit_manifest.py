@@ -58,6 +58,106 @@ TOK_S_METRICS = ("decode_tps", "followup_decode_tps")
 # manifest phase names -> audit phase names (FULLCMP_SCHEMA request.phase)
 PHASE_NAMES = {"cold": "cold", "warm": "warm", "fu": "turn2"}
 
+# Per-engine probe for the expected speculative mode of the engines whose expected mode is not yet
+# established (expected "unverified" fails closed, or a mode that needs its log line confirmed). Each
+# candidate pattern was taken from the engine's own source or binary strings (2026-11-03); a pattern
+# is evidence only once a smoke run shows it in that engine's log. "confidence": high = a log line
+# printed only when the mode is wired for the request; medium = printed per round or per run, so it
+# also needs a count; low = a loaded-state line that is NOT engagement by itself.
+EXPECTED_MODE_PROBE = {
+    "mlx-serve-26.11.1": {
+        "expected_mode": "unverified",
+        "probe": (
+            "--mtp is the default on Metal (mlx-serve --help: 'The default on Metal and CUDA'). Engaged = "
+            "a [mtp-round] log line with drafts>0 and accepted>0 in the cell log, AND /v1/models meta.mtp_loaded "
+            "true for the served model. A sidecar-load failure line ('[mtp] failed to load sidecar' or "
+            "'sidecar incompatible with target') is a refusal, not engagement."
+        ),
+        "log_patterns": [
+            {
+                "regex": r"\[mtp-round\].*drafts=([1-9]\d*).*accepted=([1-9]\d*)",
+                "meaning": "a speculative MTP round drafted and accepted tokens",
+                "confidence": "medium",
+                "source": "mlx-serve binary strings: '[mtp-round] off0= t1= m= drafts= accepted='",
+            },
+            {
+                "regex": r"\[mtp\] failed to load sidecar|sidecar incompatible with target",
+                "meaning": "MTP head refused: the cell is not measured in MTP mode",
+                "confidence": "high",
+                "source": "mlx-serve binary strings",
+            },
+            {
+                "http": "GET /v1/models -> data[].meta.mtp_loaded == true",
+                "meaning": "head loaded for the served model (loaded, not yet engaged)",
+                "confidence": "low",
+                "source": "mlx-serve binary strings: '\"mtp_loaded\":' in the model meta",
+            },
+        ],
+    },
+    "kapitsa-0.2.26": {
+        "expected_mode": "unverified",
+        "probe": (
+            "DFlash2 is the default drafter ('--dflash auto ... takes the one downloaded with the model'). "
+            "Engaged = the DFlash2 drafter line at load AND a run summary with drafted>0 "
+            "('spec: X accepted/drafted over N cycles' with drafted>0) after the cell."
+        ),
+        "log_patterns": [
+            {
+                "regex": r"DFlash2 drafter .*loaded in [0-9.]+ ms",
+                "meaning": "DFlash2 drafter loaded (loaded, not yet engaged)",
+                "confidence": "low",
+                "source": "kapitsa binary strings: 'DFlash2 drafter %s: %d layers ... loaded in %.0f ms'",
+            },
+            {
+                "regex": r"spec: [0-9.]+ accepted/drafted over [1-9]\d* cycles",
+                "meaning": "speculative cycles ran after the cell (count drafted > 0 separately)",
+                "confidence": "medium",
+                "source": "kapitsa binary strings: 'spec: %.2f accepted/drafted over %ld cycles'",
+            },
+            {
+                "regex": r"MTP head loaded in [0-9.]+ ms",
+                "meaning": "MTP head loaded (not the DFlash2 mode; a mismatch with expected dflash fails)",
+                "confidence": "low",
+                "source": "kapitsa binary strings",
+            },
+        ],
+    },
+    "omlx-0.7.3": {
+        "expected_mode": "dflash",
+        "probe": (
+            "oMLX attaches the DFlash2 drafter only when model settings set dflash_enabled and a draft model "
+            "(omlx_model_settings in bench_engines). Engaged = the info line below; the warning lines are "
+            "refusals. The 2026-11-03 smoke showed no engagement line (model loaded as type vlm): not engaged."
+        ),
+        "log_patterns": [
+            {
+                "regex": r"DFlash enabled for \S+ as a batched drafter, draft=\S+",
+                "meaning": "DFlash drafter attached as a batched drafter",
+                "confidence": "high",
+                "source": "omlx 0.7.3 engine_pool.py:4189 logger.info",
+            },
+            {
+                "regex": r"DFlash enabled for \S+ but no draft model is set|DFlash is not supported for",
+                "meaning": "DFlash refused for this model (fails closed)",
+                "confidence": "high",
+                "source": "omlx 0.7.3 engine_pool.py:4171-4183 logger.warning (line numbers approximate)",
+            },
+        ],
+    },
+    "omlx-0.7.3rc1": {
+        "expected_mode": "dflash",
+        "probe": "same as omlx-0.7.3 (rc1 wheel, same engine_pool branch; re-check its source before the first run)",
+        "log_patterns": [
+            {
+                "regex": r"DFlash enabled for \S+ as a batched drafter, draft=\S+",
+                "meaning": "DFlash drafter attached as a batched drafter",
+                "confidence": "medium",
+                "source": "expected from the 0.7.3 source; not yet grepped in the rc1 wheel",
+            },
+        ],
+    },
+}
+
 # manifest engine id -> census weights entry (census._meta.models); None = no pinned weights in census
 WEIGHT_GROUP = {
     "yunshu": "qwen3.8-27b-4bit-jundot",
@@ -378,6 +478,7 @@ def build_manifest(
         "yunshu": {"git_sha": pin["sha"], "python": pin["python_executable"]},
         "controls": controls,
         "groups": {g: {"order": o} for g, o in groups.items()},
+        "expected_mode_probe": EXPECTED_MODE_PROBE,
         "cells": cells,
         "unsupported": unsupported,
         "not_in_harness": not_in_harness,

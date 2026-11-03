@@ -275,6 +275,9 @@ def test_build_manifest_cells_pins_and_phases():
     assert by[("tf-1.1.8", "B1.core.tf-1.1.8.1K.c1.code")]["expected_records"] == 2
     assert all(c["engine"] != "kapitsa-0.2.26" for c in m["cells"])
     assert any(c["engine"] == "mlx-vlm-server" for c in m["cells"])
+    assert (
+        m["expected_mode_probe"]["mlx-serve-26.11.1"]["expected_mode"] == "unverified"
+    )
     assert any(u["engine"] == "llama-cpp-b12061" for u in m["unsupported"])
     assert any(n["cell"] == "B1.img.kapitsa-0.2.26.1K" for n in m["not_in_harness"])
     # conc cells are audited: one conc record per trial, n requests per record
@@ -522,3 +525,37 @@ def test_tensorfold_and_splash_weights_resolve_to_one_census_entry():
         == "qwen3.8-27b-4bit-tensorfold"
     )
     assert "tf-1.1.8" not in fam.WEIGHT_UNRESOLVED
+
+
+# --- expected_mode_probe: the unverified engines carry their candidate evidence ----------------
+
+
+def test_expected_mode_probe_covers_the_unverified_and_omlx_engines():
+    import re
+
+    import fullcmp_audit_manifest as fam
+
+    probe = fam.EXPECTED_MODE_PROBE
+    assert set(probe) == {
+        "mlx-serve-26.11.1",
+        "kapitsa-0.2.26",
+        "omlx-0.7.3",
+        "omlx-0.7.3rc1",
+    }
+    # mlx-serve and kapitsa stay fail-closed until a smoke run shows their evidence
+    assert probe["mlx-serve-26.11.1"]["expected_mode"] == "unverified"
+    assert probe["kapitsa-0.2.26"]["expected_mode"] == "unverified"
+    for eng, entry in probe.items():
+        assert entry["probe"] and entry["log_patterns"], eng
+        for pat in entry["log_patterns"]:
+            assert pat["confidence"] in ("high", "medium", "low")
+            if "regex" in pat:
+                re.compile(pat["regex"])
+    omlx_regex = probe["omlx-0.7.3"]["log_patterns"][0]["regex"]
+    assert re.search(
+        omlx_regex, "DFlash enabled for m as a batched drafter, draft=/d/DFlash2"
+    )
+    assert not re.search(omlx_regex, "DFlash enabled for m but no draft model is set")
+    mtp_regex = probe["mlx-serve-26.11.1"]["log_patterns"][0]["regex"]
+    assert re.search(mtp_regex, "[mtp-round] off0=1 drafts=4 accepted=3")
+    assert not re.search(mtp_regex, "[mtp-round] drafts=4 accepted=0")
