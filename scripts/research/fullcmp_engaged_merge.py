@@ -79,6 +79,9 @@ OMLX_MTP_LINE = {
     "pattern_or_path": r"MTP\[(?P<uid>[^\]]+)\] finish=(?P<finish>\S+) tokens=(?P<tokens>\d+) cycles=(?P<cycles>\d+) tok/cycle=(?P<tpc>[\d.]+) accept=(?P<accepted>\d+)/(?P<drafted>\d+) \((?P<rate>[^)]+)\)",
     "group": "accepted",
     "min": 0,
+    # the MTP token counts (58 for a merged 16+42 request in wire-1106c) are not the request's completion
+    # count (64): the requests are matched by order, not by tokens
+    "match_tokens": False,
     "per_request": True,
     "startup_sufficient": False,
     "source_ref": "serving_path_vlm_omlx.json omlx_0.7.3_and_rc1.per_request_line; batch_generator.py:3950-3995",

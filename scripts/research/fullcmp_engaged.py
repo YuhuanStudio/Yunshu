@@ -354,7 +354,12 @@ def _merge_handoffs(raw):
     return out
 
 
-def _done_candidates(item, log, ready_offset):
+# requests the harness sends before the measured ones, beyond the two readiness pings (omlx's lazy load
+# warm-up: its first request is MTP[0] with 16 tokens, before the pings; wire-1106c omlx log)
+WARM_EXTRA = {"omlx-0.7.3": 1, "omlx-0.7.3rc1": 1}
+
+
+def _done_candidates(item, log, ready_offset, skip=READINESS_REQUESTS):
     """Every match of the item's regex after the readiness requests, in log order (oMLX's split segments
     are merged per uid first)."""
     rx = re.compile(str(item["pattern_or_path"]))
@@ -378,17 +383,18 @@ def _done_candidates(item, log, ready_offset):
     if "uid" in names and "finish" in names:
         raw = _merge_handoffs(raw)
     cands = [{"line": c["line"], "value": c["value"], "prompt": c["prompt"], "ct": c["ct"]} for c in raw]
-    return cands[READINESS_REQUESTS:]
+    return cands[skip:]
 
 
-def correlate_multiset(item, log, requests, ready_offset, consumed=0):
+def correlate_multiset(item, log, requests, ready_offset, consumed=0, skip=READINESS_REQUESTS):
     """Concurrent requests (multiset, not order) of ONE record: its requests take the next len(requests)
     post-readiness done lines after `consumed` (records of a cell run one after another), matched by
     (prompt count, token count) when the item has those groups; log order breaks ties. Fail closed on a
     shortage of lines, an unmatched request, or a value not above min. Returns (matches, None) or
     ([], reason). The caller checks the cell's total (concurrent_check)."""
     group, minimum = item.get("group"), float(item.get("min", 0))
-    cands = _done_candidates(item, log, ready_offset)[consumed:consumed + len(requests)]
+    cands = _done_candidates(item, log, ready_offset, skip)[consumed:consumed + len(requests)]
+    use_ct = bool(item.get("match_tokens", True))  # oMLX's segment token sums are not the request's count
     if len(cands) != len(requests):
         return [], f"count mismatch: {len(cands)} done lines for {len(requests)} requests"
     used, out = set(), []
@@ -399,7 +405,7 @@ def correlate_multiset(item, log, requests, ready_offset, consumed=0):
                 continue
             if c["prompt"] is not None and c["prompt"] != req.get("pt"):
                 continue
-            if c["ct"] is not None and c["ct"] != req.get("ct"):
+            if use_ct and c["ct"] is not None and c["ct"] != req.get("ct"):
                 continue
             found = j
             break
@@ -596,8 +602,10 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
     problems, matched = [], []
     consumed = 0
     total = sum(len(r.get("requests") or []) for r in records)
-    if item is not None and total != len(_done_candidates(item, log, ready_offset)):
-        problems.append(f"cell: {len(_done_candidates(item, log, ready_offset))} done lines for {total} requests")
+    skip = READINESS_REQUESTS + WARM_EXTRA.get(engine, 0)
+    if item is not None and total != len(_done_candidates(item, log, ready_offset, skip)):
+        n_lines = len(_done_candidates(item, log, ready_offset, skip))
+        problems.append(f"cell: {n_lines} done lines for {total} requests")
     for rec in records:
         reqs = rec.get("requests")
         if not isinstance(reqs, list) or not reqs:
@@ -606,7 +614,7 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
         if item is None:
             problems.append(f"no per-request acceptance item for {engine}/{mode}")
             continue
-        found, why = correlate_multiset(item, log, reqs, ready_offset, consumed=consumed)
+        found, why = correlate_multiset(item, log, reqs, ready_offset, consumed=consumed, skip=skip)
         consumed += len(reqs)
         if why is not None:
             problems.append(f"concurrent {rec.get('part')} n={rec.get('n')}: {why}")
