@@ -49,7 +49,9 @@ DEFAULT_OUT = Path(
     "/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103/manifest.jsonl"
 )
 ROOT = Path(__file__).resolve().parents[2]
-AGENTIC = ROOT / "scripts/research/agentic"  # agentbench: tasks.py + tasks/ (the task set)
+AGENTIC = (
+    ROOT / "scripts/research/agentic"
+)  # agentbench: tasks.py + tasks/ (the task set)
 
 TARGET_GPU_H = 48.0
 REPS = 3
@@ -63,7 +65,11 @@ FOLLOWUP_NEW_TOKENS = 1024  # new user turn appended to the previous reply
 THINK_TOKENS = 1024  # extra reasoning tokens with thinking on
 IDLE_S = 5.0  # spec: follow-up after 5 s idle
 RESTART_RESTORE_FRAC = 0.25  # disk-tier restore as a fraction of cold prefill (ASSUMED)
-IMAGE_TOKENS = {"none": 0, "img1": 1024, "img4": 4096}  # visual tokens per image (ASSUMED)
+IMAGE_TOKENS = {
+    "none": 0,
+    "img1": 1024,
+    "img4": 4096,
+}  # visual tokens per image (ASSUMED)
 MIXED_SHORT_N = 7  # spec: one 128K request plus 7 x 1K requests
 MIXED_SHORT_TOKENS = 1024
 MIXED_LONG_CTX = 131072
@@ -119,9 +125,15 @@ OMLX_SLOW_POINTS = {2: {None: 1.97}, 4: {None: 3.45}}
 
 TF120 = {"prefill": {1024: 962.0, 32768: 854.0}, "decode": {1024: 84.0, 32768: 112.0}}
 TF118 = {"prefill": {1024: 959.5, 32768: 847.0}, "decode": {1024: 99.4, 32768: 237.1}}
-SPLASH141 = {"prefill": {1024: 1192.5, 32768: 1065.0}, "decode": {1024: 80.2, 32768: 109.4}}
+SPLASH141 = {
+    "prefill": {1024: 1192.5, 32768: 1065.0},
+    "decode": {1024: 80.2, 32768: 109.4},
+}
 OMLX_RC = {"prefill": {1024: 772.0, 32768: 886.0}, "decode": {1024: 64.8, 32768: 71.0}}
-MLXSERVE = {"prefill": {1024: 922.5, 32768: 751.0}, "decode": {1024: 70.0, 32768: 139.8}}
+MLXSERVE = {
+    "prefill": {1024: 922.5, 32768: 751.0},
+    "decode": {1024: 70.0, 32768: 139.8},
+}
 MLXLM_CURVE = {
     "prefill": {1024: 869.0, 8192: 936.0, 32768: 838.0, 65536: 716.0, 131072: 577.0},
     "decode": {1024: 29.8, 8192: 28.6, 32768: 26.1, 65536: 23.0, 131072: 19.4},
@@ -145,64 +157,121 @@ ENGINE_PERF = {
         ],
     ),
     "tf-1.2.1": dict(
-        full=False, **TF120, slow=None, ready_s=17.5,
+        full=False,
+        **TF120,
+        slow=None,
+        ready_s=17.5,
         source="cmp-1102 tf-1.2.0 constants (1.2.1 not measured)",
-        assumed=["1.2.1 not measured: 1.2.0 constants", "1K code not run in cmp-1102 (prose only)"],
+        assumed=[
+            "1.2.1 not measured: 1.2.0 constants",
+            "1K code not run in cmp-1102 (prose only)",
+        ],
     ),
     "tf-1.1.8": dict(
-        full=False, **TF118, slow="serial", ready_s=8.5,
+        full=False,
+        **TF118,
+        slow="serial",
+        ready_s=8.5,
         source="cmp-1102 tf-1.1.8 (v1.1.8)",
-        assumed=["census: 'lone loop' build, requests serialized (slowdown = conc)",
-                 "32K decode 237 tok/s is code-only (draft acceptance)"],
+        assumed=[
+            "census: 'lone loop' build, requests serialized (slowdown = conc)",
+            "32K decode 237 tok/s is code-only (draft acceptance)",
+        ],
     ),
     "splash-1.5.0": dict(
-        full=False, **SPLASH141, slow=None, ready_s=75.9,
+        full=False,
+        **SPLASH141,
+        slow=None,
+        ready_s=75.9,
         source="cmp-1102 splash 1.4.1 constants (1.5.0 not measured); ready_s 75.9 is the 1.4.1 median",
-        assumed=["1.5.0 not measured: 1.4.1 constants", "ready_s from 1.4.1 (cold-start heavy)"],
+        assumed=[
+            "1.5.0 not measured: 1.4.1 constants",
+            "ready_s from 1.4.1 (cold-start heavy)",
+        ],
     ),
     "omlx-0.7.3": dict(
-        full=False, **OMLX_RC, slow=OMLX_SLOW_POINTS, ready_s=3.3,
+        full=False,
+        **OMLX_RC,
+        slow=OMLX_SLOW_POINTS,
+        ready_s=3.3,
         source="cmp-1102 omlx v0.7.3rc1 constants (stable 0.7.3 not measured); slowdown snapshot014 0.7.0",
-        assumed=["stable 0.7.3 not measured: rc1 constants", "slowdown from oMLX 0.7.0 (snapshot014)"],
+        assumed=[
+            "stable 0.7.3 not measured: rc1 constants",
+            "slowdown from oMLX 0.7.0 (snapshot014)",
+        ],
     ),
     "omlx-0.7.3rc1": dict(
-        full=False, **OMLX_RC, slow=OMLX_SLOW_POINTS, ready_s=3.3,
+        full=False,
+        **OMLX_RC,
+        slow=OMLX_SLOW_POINTS,
+        ready_s=3.3,
         source="cmp-1102 omlx-latest (v0.7.3rc1) constants; slowdown snapshot014 0.7.0",
         assumed=["slowdown from oMLX 0.7.0 (snapshot014)"],
     ),
     "mlx-serve-26.11.1": dict(
-        full=False, **MLXSERVE, slow=None, ready_s=8.6,
+        full=False,
+        **MLXSERVE,
+        slow=None,
+        ready_s=8.6,
         source="cmp-1102 mlx-serve v26.10.3 constants (26.11.1 not measured)",
-        assumed=["26.11.1 not measured: 26.10.3 constants", "MTP is default on Metal: not modelled separately"],
+        assumed=[
+            "26.11.1 not measured: 26.10.3 constants",
+            "MTP is default on Metal: not modelled separately",
+        ],
     ),
     "mlx-lm-server": dict(
-        full=True, **MLXLM_CURVE, slow=MLXLM_SLOW_POINTS, ready_s=2.0,
+        full=True,
+        **MLXLM_CURVE,
+        slow=MLXLM_SLOW_POINTS,
+        ready_s=2.0,
         source="snapshot014-released-v2 mlxlm (mlx-lm 0.32.0, stock AR); current PyPI 0.32.2",
-        assumed=["AR decode measured (no spec mode engaged)", "0.32.0 constants, 0.32.2 current"],
+        assumed=[
+            "AR decode measured (no spec mode engaged)",
+            "0.32.0 constants, 0.32.2 current",
+        ],
     ),
     "mlx-vlm-server": dict(
-        full=False, **NO_MEASUREMENT, slow=None, ready_s=6.1,
+        full=False,
+        **NO_MEASUREMENT,
+        slow=None,
+        ready_s=6.1,
         source="ASSUMED: no run (mlx-vlm 0.7.11 server); Yunshu curve",
         assumed=["no measurement; Yunshu curve", "ready_s from Yunshu"],
     ),
     "llama-cpp-b12061": dict(
-        full=False, **NO_MEASUREMENT, slow=None, ready_s=6.1,
+        full=False,
+        **NO_MEASUREMENT,
+        slow=None,
+        ready_s=6.1,
         source="ASSUMED: no run (b12061, UD-Q4_K_M GGUF); Yunshu curve",
-        assumed=["no measurement; Yunshu curve", "GGUF UD-Q4_K_M is not the MLX checkpoint"],
+        assumed=[
+            "no measurement; Yunshu curve",
+            "GGUF UD-Q4_K_M is not the MLX checkpoint",
+        ],
     ),
     "lmstudio": dict(
-        full=False, **NO_MEASUREMENT, slow=None, ready_s=6.1,
+        full=False,
+        **NO_MEASUREMENT,
+        slow=None,
+        ready_s=6.1,
         source="ASSUMED: no run (headless lms, not verified); Yunshu curve",
         assumed=["no measurement; Yunshu curve", "ready_s from Yunshu"],
     ),
     "kapitsa-0.2.26": dict(
-        full=False, **NO_MEASUREMENT, slow=None, ready_s=6.1,
+        full=False,
+        **NO_MEASUREMENT,
+        slow=None,
+        ready_s=6.1,
         source="ASSUMED: no run (kapitsa 0.2.26); Yunshu curve",
         assumed=["no measurement; Yunshu curve", "ready_s from Yunshu"],
     ),
     "ollama": dict(
-        full=False, **NO_MEASUREMENT, slow=None, ready_s=0.0,
-        source="n/a: unsupported, no cost", assumed=[],
+        full=False,
+        **NO_MEASUREMENT,
+        slow=None,
+        ready_s=0.0,
+        source="n/a: unsupported, no cost",
+        assumed=[],
     ),
 }
 
@@ -272,67 +341,91 @@ ENGINES = {
         label="Yunshu main 0f2960047 (0.1.7.dev0)",
         version="0.1.7.dev0 @ 0f2960047 (curve from 0.1.4 snapshot014, provisional)",
         supported=True,
-        caps=dict(images=True, json_schema=True, anthropic=True, responses=True,
-                  disk_cache=True, tools=True, concurrency=True),
+        caps=dict(
+            images=True,
+            json_schema=True,
+            anthropic=True,
+            responses=True,
+            disk_cache=True,
+            tools=True,
+            concurrency=True,
+        ),
     ),
     "tf-1.2.1": dict(
-        label="TensorFold 1.2.1 (tf-native, latest)", version="1.2.1",
+        label="TensorFold 1.2.1 (tf-native, latest)",
+        version="1.2.1",
         supported=True,
         caps=dict(anthropic=True, responses=True),
     ),
     "tf-1.1.8": dict(
-        label="TensorFold 1.1.8 (tf-native, best release row; lone loop)", version="1.1.8",
+        label="TensorFold 1.1.8 (tf-native, best release row; lone loop)",
+        version="1.1.8",
         supported=True,
         caps=dict(anthropic=True, responses=True, concurrency=False),
     ),
     "splash-1.5.0": dict(
-        label="Splash 1.5.0", version="1.5.0 (arm64-macos26)",
+        label="Splash 1.5.0",
+        version="1.5.0 (arm64-macos26)",
         supported=True,
         caps=dict(anthropic=True, responses=True),
     ),
     "omlx-0.7.3": dict(
-        label="oMLX 0.7.3 (stable)", version="0.7.3 (wheel cp313)",
+        label="oMLX 0.7.3 (stable)",
+        version="0.7.3 (wheel cp313)",
         supported=True,
         caps=dict(anthropic=True, responses=True),
     ),
     "omlx-0.7.3rc1": dict(
-        label="oMLX 0.7.3rc1", version="0.7.3rc1 (wheel cp313)",
+        label="oMLX 0.7.3rc1",
+        version="0.7.3rc1 (wheel cp313)",
         supported=True,
         caps=dict(anthropic=True, responses=True),
     ),
     "mlx-serve-26.11.1": dict(
-        label="mlx-serve 26.11.1", version="26.11.1",
+        label="mlx-serve 26.11.1",
+        version="26.11.1",
         supported=True,
         caps=dict(anthropic=True, responses=True),
     ),
     "mlx-lm-server": dict(
-        label="mlx_lm.server (stock)", version="0.32.2 (PyPI); 0.32.0 measured",
+        label="mlx_lm.server (stock)",
+        version="0.32.2 (PyPI); 0.32.0 measured",
         supported=True,
-        caps=dict(images=False, json_schema=False, anthropic=False, responses=False,
-                  disk_cache=False),
+        caps=dict(
+            images=False,
+            json_schema=False,
+            anthropic=False,
+            responses=False,
+            disk_cache=False,
+        ),
     ),
     "mlx-vlm-server": dict(
-        label="mlx-vlm server (stock)", version="0.7.11",
+        label="mlx-vlm server (stock)",
+        version="0.7.11",
         supported=True,
         caps=dict(images=True, anthropic=True, responses=True),
     ),
     "llama-cpp-b12061": dict(
-        label="llama.cpp llama-server b12061 (Metal, UD-Q4_K_M GGUF)", version="b12061",
+        label="llama.cpp llama-server b12061 (Metal, UD-Q4_K_M GGUF)",
+        version="b12061",
         supported=True,
         caps=dict(anthropic=True, responses=True),
     ),
     "lmstudio": dict(
-        label="LM Studio (headless lms)", version="0.4.28-2 (not installed; headless unverified)",
+        label="LM Studio (headless lms)",
+        version="0.4.28-2 (not installed; headless unverified)",
         supported=True,
         caps=dict(),
     ),
     "kapitsa-0.2.26": dict(
-        label="Kapitsa 0.2.26", version="0.2.26",
+        label="Kapitsa 0.2.26",
+        version="0.2.26",
         supported=True,
         caps=dict(anthropic=True),
     ),
     "ollama": dict(
-        label="Ollama 0.40.13", version="0.40.13",
+        label="Ollama 0.40.13",
+        version="0.40.13",
         supported=False,
         caps=dict(),
         reason=(
@@ -341,7 +434,8 @@ ENGINES = {
         ),
     ),
     PLACEHOLDER: dict(
-        label="Best competitor (placeholder, chosen from B1)", version="TBD",
+        label="Best competitor (placeholder, chosen from B1)",
+        version="TBD",
         supported=True,
         caps=dict(),
     ),
@@ -382,7 +476,10 @@ def cell_status(eng, sp):
     if sp["turns"] == "restart" and caps.get("disk_cache") is False:
         return UNS, "no disk prefix-cache tier (census disk_prefix_cache false)"
     if sp["conc"] > 1 and caps.get("concurrency") is False:
-        return UNV, f"serial engine (census lone loop): conc {sp['conc']} measured as serial"
+        return (
+            UNV,
+            f"serial engine (census lone loop): conc {sp['conc']} measured as serial",
+        )
     if sp["media"] != "none":
         return UNV, "image input unverified (census: VLM path not confirmed)"
     return UNV, "census support not confirmed; cell costed"
@@ -426,11 +523,23 @@ def b2_specs():
         yield "B2", spec(sweep="kind", ctx="8K", kind=kind, phases=("cold",))
     yield "B2", spec(sweep="thinking", ctx="8K", thinking="on", phases=("cold",))
     for ctx in ("1K", "32K"):
-        yield "B2", spec(sweep="sampling", ctx=ctx, sampling="genconfig", phases=("cold",))
+        yield (
+            "B2",
+            spec(sweep="sampling", ctx=ctx, sampling="genconfig", phases=("cold",)),
+        )
     for ctx in ("8K", "32K", "128K"):
-        yield "B2", spec(sweep="idle5", ctx=ctx, turns="idle5", phases=("cold", "fu_idle"))
-    yield "B2", spec(sweep="restart", ctx="32K", turns="restart", phases=("cold", "restart"))
-    yield "B2", spec(sweep="mixed", ctx="128K", conc=8, turns="mixed", phases=("mixed",))
+        yield (
+            "B2",
+            spec(sweep="idle5", ctx=ctx, turns="idle5", phases=("cold", "fu_idle")),
+        )
+    yield (
+        "B2",
+        spec(sweep="restart", ctx="32K", turns="restart", phases=("cold", "restart")),
+    )
+    yield (
+        "B2",
+        spec(sweep="mixed", ctx="128K", conc=8, turns="mixed", phases=("mixed",)),
+    )
     for media in ("img1", "img4"):
         yield "B2", spec(sweep="image", ctx="1K", media=media, phases=("cold",))
 
@@ -444,15 +553,19 @@ def _cell_row(eng, batch, sp):
     )
     work = 0.0
     if status != UNS:
-        work = REPS * wall_s(
-            eng,
-            ctx_tokens,
-            sp["conc"],
-            sp["out"],
-            sp["thinking"] == "on",
-            IMAGE_TOKENS[sp["media"]],
-            sp["phases"],
-        ) / 60.0
+        work = (
+            REPS
+            * wall_s(
+                eng,
+                ctx_tokens,
+                sp["conc"],
+                sp["out"],
+                sp["thinking"] == "on",
+                IMAGE_TOKENS[sp["media"]],
+                sp["phases"],
+            )
+            / 60.0
+        )
     return {
         "id": cid,
         "batch": batch,
@@ -527,7 +640,9 @@ def _behaviour_row(eng, check):
         "status": st,
         "reason": why,
         "reps": BEHAVIOUR_REPS,
-        "_work_min": BEHAVIOUR_MIN / len(BEHAVIOUR_CHECKS) * BEHAVIOUR_REPS if st != UNS else 0.0,
+        "_work_min": BEHAVIOUR_MIN / len(BEHAVIOUR_CHECKS) * BEHAVIOUR_REPS
+        if st != UNS
+        else 0.0,
         "_group": None,
     }
 
@@ -650,17 +765,21 @@ def _h(rows, batch=None, engine=None):
 CUT_ORDER = [
     (
         "(1) conc 8 sweep at 32K on engines without concurrency support (census: tf-1.1.8 lone loop)",
-        lambda r: r["sweep"] == "conc"
-        and r["ctx"] == "32K"
-        and r["conc"] == 8
-        and ENGINES[r["engine"]]["caps"].get("concurrency") is False,
+        lambda r: (
+            r["sweep"] == "conc"
+            and r["ctx"] == "32K"
+            and r["conc"] == 8
+            and ENGINES[r["engine"]]["caps"].get("concurrency") is False
+        ),
     ),
     (
         "(2) out 2048 at 32K on non-top engines (top = yunshu, tf-1.2.1, splash-1.5.0, mlx-serve)",
-        lambda r: r["sweep"] == "out"
-        and r["ctx"] == "32K"
-        and r["out_len"] == 2048
-        and r["engine"] not in TOP_ENGINES,
+        lambda r: (
+            r["sweep"] == "out"
+            and r["ctx"] == "32K"
+            and r["out_len"] == 2048
+            and r["engine"] not in TOP_ENGINES
+        ),
     ),
     (
         "(3) image cells (img1, img4 at 1K)",
@@ -674,7 +793,9 @@ def apply_cuts(rows, out=sys.stdout):
     Returns the list of (label, rows_cut, hours_cut, total_after)."""
     applied = []
     total = planned_h(rows)
-    out.write(f"planned total before cuts: {total:.2f} h (target {TARGET_GPU_H:.0f} h)\n")
+    out.write(
+        f"planned total before cuts: {total:.2f} h (target {TARGET_GPU_H:.0f} h)\n"
+    )
     if total <= TARGET_GPU_H:
         out.write("fits without cuts: no cut applied\n")
         return applied
@@ -713,7 +834,9 @@ def summarize(rows, out=sys.stdout):
         f"Full comparison manifest: {len(rows)} rows  unverified {c[UNV]}  "
         f"unsupported {c[UNS]}  cut {c[CUT]}\n\n"
     )
-    w("GPU hours by engine and batch (planned rows only; reps and server boots included)\n")
+    w(
+        "GPU hours by engine and batch (planned rows only; reps and server boots included)\n"
+    )
     w("| engine | B1 | B2 | B4 | B5 | total h | rows unv/unsup/cut |\n")
     w("|---|---:|---:|---:|---:|---:|---:|\n")
     for eng in ENGINE_IDS + [PLACEHOLDER]:
@@ -746,7 +869,9 @@ def constants_block():
     lines.append(
         "Yunshu slowdown (measured, default path): "
         + ", ".join(
-            f"c{c} {ctx}: {v}" for c, d in YUNSHU_SLOW_POINTS.items() for ctx, v in d.items()
+            f"c{c} {ctx}: {v}"
+            for c, d in YUNSHU_SLOW_POINTS.items()
+            for ctx, v in d.items()
         )
         + "\n"
     )

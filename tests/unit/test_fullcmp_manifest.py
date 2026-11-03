@@ -42,11 +42,23 @@ def test_engine_list_is_the_approved_twelve_plus_ollama():
 def test_no_dropped_scope_and_no_secondary_models():
     rows, _ = _rows()
     ids = " ".join(r["id"] for r in rows)
-    for banned in ("256K", "c16", "o8192", "flashnext", "q27-8bit", "q27-bf16", "soak", "B3", "B6"):
+    for banned in (
+        "256K",
+        "c16",
+        "o8192",
+        "flashnext",
+        "q27-8bit",
+        "q27-bf16",
+        "soak",
+        "B3",
+        "B6",
+    ):
         assert banned not in ids, banned
     assert {r["batch"] for r in rows} == {"B1", "B2", "B4", "B5"}
     assert {r["agent"] for r in rows if r["batch"] == "B5"} == {"claude"}
-    assert {r["ctx_tokens"] for r in rows if r["table"] == "decode"} <= set(fm.CTX_TOKENS.values())
+    assert {r["ctx_tokens"] for r in rows if r["table"] == "decode"} <= set(
+        fm.CTX_TOKENS.values()
+    )
 
 
 def test_b1_is_the_core_cross_at_conc_one_for_every_engine():
@@ -70,7 +82,11 @@ def test_b2_has_every_requested_sweep_point():
     assert {(r["ctx"], r["out_len"]) for r in yun if r["sweep"] == "out"} == {
         (c, o) for c in ("1K", "32K") for o in (128, 2048)
     }
-    assert {r["prompt_kind"] for r in yun if r["sweep"] == "kind"} == {"tool-chat", "cjk", "json-schema"}
+    assert {r["prompt_kind"] for r in yun if r["sweep"] == "kind"} == {
+        "tool-chat",
+        "cjk",
+        "json-schema",
+    }
     assert [r["thinking"] for r in yun if r["sweep"] == "thinking"] == ["on"]
     assert {r["ctx"] for r in yun if r["sweep"] == "sampling"} == {"1K", "32K"}
     assert {r["ctx"] for r in yun if r["sweep"] == "idle5"} == {"8K", "32K", "128K"}
@@ -103,11 +119,22 @@ def test_unsupported_rows_come_from_census_flags_only():
     x = [r for r in rows if r["status"] == fm.UNS]
     assert all(
         r["engine"] == "ollama"
-        or (r["engine"] == "mlx-lm-server" and (r.get("media") != "none" or r.get("prompt_kind") == "json-schema" or r.get("turns") == "restart" or r.get("agent") == "claude" or r.get("check") in ("anthropic_api", "responses_api", "json_validity")))
+        or (
+            r["engine"] == "mlx-lm-server"
+            and (
+                r.get("media") != "none"
+                or r.get("prompt_kind") == "json-schema"
+                or r.get("turns") == "restart"
+                or r.get("agent") == "claude"
+                or r.get("check") in ("anthropic_api", "responses_api", "json_validity")
+            )
+        )
         for r in x
     )
     ollama = [r for r in rows if r["engine"] == "ollama"]
-    assert ollama and all(r["status"] == fm.UNS and "GGUF" in r["reason"] for r in ollama)
+    assert ollama and all(
+        r["status"] == fm.UNS and "GGUF" in r["reason"] for r in ollama
+    )
     lm = [r for r in rows if r["engine"] == "mlx-lm-server" and r["status"] == fm.UNS]
     assert lm, "mlx-lm-server must show its census gaps as unsupported rows"
     assert not [r for r in rows if r["engine"] == "yunshu" and r["status"] == fm.UNS]
@@ -115,8 +142,14 @@ def test_unsupported_rows_come_from_census_flags_only():
 
 def test_serial_engine_is_costed_not_dropped():
     rows, _ = _rows()
-    tf118 = [r for r in rows if r["engine"] == "tf-1.1.8" and r["sweep"] == "conc" and r["conc"] == 8]
-    assert len(tf118) == 2 and all(r["status"] == fm.UNV and r["est_gpu_min"] > 0 for r in tf118)
+    tf118 = [
+        r
+        for r in rows
+        if r["engine"] == "tf-1.1.8" and r["sweep"] == "conc" and r["conc"] == 8
+    ]
+    assert len(tf118) == 2 and all(
+        r["status"] == fm.UNV and r["est_gpu_min"] > 0 for r in tf118
+    )
 
 
 def test_b4_and_b5_shape():
@@ -128,7 +161,11 @@ def test_b4_and_b5_shape():
     assert {r["engine"] for r in b5} == {"yunshu", fm.PLACEHOLDER}
     assert len(b5) == 2 * n_tasks  # one row per task; REPS is inside the cost
     assert all(r["reps"] == fm.REPS for r in b5)
-    assert all(r["est_gpu_min"] >= fm.AGENT_RUN_MIN * fm.REPS for r in b5 if r["status"] == fm.UNV)  # plus a boot share
+    assert all(
+        r["est_gpu_min"] >= fm.AGENT_RUN_MIN * fm.REPS
+        for r in b5
+        if r["status"] == fm.UNV
+    )  # plus a boot share
 
 
 def test_agent_task_count_comes_from_the_agentbench_task_set():
@@ -199,7 +236,9 @@ def test_planned_total_after_cuts_is_reported_honestly_and_batches_add_up():
     buf = io.StringIO()
     fm.apply_cuts(rows, out=buf)
     total = fm.planned_h(rows)
-    if total > fm.TARGET_GPU_H:  # over target after every cut: the remainder must be reported
+    if (
+        total > fm.TARGET_GPU_H
+    ):  # over target after every cut: the remainder must be reported
         assert "STILL OVER by" in buf.getvalue()
     else:
         assert "STILL OVER" not in buf.getvalue()
@@ -220,7 +259,9 @@ def test_cuts_apply_in_order_only_while_over_target(monkeypatch):
         assert "cut (1)" in text
     # every cut row keeps its id, cost and reason (never silently dropped)
     cut = [r for r in rows if r["status"] == fm.CUT]
-    assert all(r["reason"].startswith("cut to fit") and r["est_gpu_min"] > 0 for r in cut)
+    assert all(
+        r["reason"].startswith("cut to fit") and r["est_gpu_min"] > 0 for r in cut
+    )
 
 
 def test_output_is_deterministic():
@@ -234,7 +275,12 @@ def test_summary_prints_every_section():
     buf = io.StringIO()
     fm.summarize(rows, out=buf)
     text = buf.getvalue()
-    for needle in ("GPU hours by engine and batch", "Per batch", "GRAND TOTAL", "unverified"):
+    for needle in (
+        "GPU hours by engine and batch",
+        "Per batch",
+        "GRAND TOTAL",
+        "unverified",
+    ):
         assert needle in text
     for b in fm.BATCH_NAMES:
         assert b in text

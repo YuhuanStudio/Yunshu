@@ -127,7 +127,11 @@ def test_rep3_slot_differs_from_rep0_and_rep1_for_groups_of_three_or_more():
 
 # --- thresholds file and derivation ---------------------------------------
 def test_derive_thresholds_floor_and_three_times_max():
-    samples = {"decode_tps": [0.2, 0.3], "cold_ttft": [0.1, 0.2, 0.4], "warm_ttft": [12.0, 4.0, 1.0]}
+    samples = {
+        "decode_tps": [0.2, 0.3],
+        "cold_ttft": [0.1, 0.2, 0.4],
+        "warm_ttft": [12.0, 4.0, 1.0],
+    }
     body = reps.derive_thresholds(samples, sources=["x"])
     th = body["thresholds_pct"]
     assert th["decode_tps"] == 3.0  # max(3 x 0.3, 3) = floor
@@ -154,14 +158,30 @@ def test_thresholds_file_round_trip(tmp_path):
 
 
 # --- CLI over an audit-layout results dir ---------------------------------
-def _write_cell(root: Path, engine: str, cell: str, rep_no: int, decode: float, group="g1"):
+def _write_cell(
+    root: Path, engine: str, cell: str, rep_no: int, decode: float, group="g1"
+):
     d = root / engine
     d.mkdir(parents=True, exist_ok=True)
     rows = [
-        {"part": "session", "group": group, "engine": engine, "cell": cell, "rep": rep_no},
-        {"part": "decode", "phase": "cold", "dec_tps": decode, "ttft_s": 1.0, "finish": "length"},
+        {
+            "part": "session",
+            "group": group,
+            "engine": engine,
+            "cell": cell,
+            "rep": rep_no,
+        },
+        {
+            "part": "decode",
+            "phase": "cold",
+            "dec_tps": decode,
+            "ttft_s": 1.0,
+            "finish": "length",
+        },
     ]
-    (d / f"{cell}-r{rep_no}.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    (d / f"{cell}-r{rep_no}.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n"
+    )
 
 
 def test_cli_prints_need_rep3_and_exits_zero(tmp_path, capsys):
@@ -170,11 +190,15 @@ def test_cli_prints_need_rep3_and_exits_zero(tmp_path, capsys):
     _write_cell(tmp_path, "yunshu", "c2", 0, 50.0)
     _write_cell(tmp_path, "yunshu", "c2", 1, 50.5)
     th = tmp_path / "th.json"
-    th.write_text(json.dumps(reps.derive_thresholds({"decode_tps": [0.1, 0.2, 0.3]}, sources=[])))
+    th.write_text(
+        json.dumps(reps.derive_thresholds({"decode_tps": [0.1, 0.2, 0.3]}, sources=[]))
+    )
     rc = reps.main(["--results-dir", str(tmp_path), "--thresholds", str(th)])
     assert rc == 0
     lines = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.strip()]
-    assert [(x["engine"], x["cell"], x["status"]) for x in lines] == [("yunshu", "c1", "need_rep3")]
+    assert [(x["engine"], x["cell"], x["status"]) for x in lines] == [
+        ("yunshu", "c1", "need_rep3")
+    ]
     assert lines[0]["exceeding"] == ["decode_tps"]
     assert lines[0]["rep"] == 2
 
@@ -184,7 +208,9 @@ def test_cli_unstable_with_all_values_exits_zero(tmp_path, capsys):
     _write_cell(tmp_path, "yunshu", "c1", 1, 110.0)
     _write_cell(tmp_path, "yunshu", "c1", 2, 105.0)
     th = tmp_path / "th.json"
-    th.write_text(json.dumps(reps.derive_thresholds({"decode_tps": [0.1, 0.2, 0.3]}, sources=[])))
+    th.write_text(
+        json.dumps(reps.derive_thresholds({"decode_tps": [0.1, 0.2, 0.3]}, sources=[]))
+    )
     rc = reps.main(["--results-dir", str(tmp_path), "--thresholds", str(th)])
     assert rc == 0
     lines = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.strip()]
@@ -193,5 +219,7 @@ def test_cli_unstable_with_all_values_exits_zero(tmp_path, capsys):
 
 
 def test_cli_unreadable_thresholds_exit_two(tmp_path):
-    rc = reps.main(["--results-dir", str(tmp_path), "--thresholds", str(tmp_path / "missing.json")])
+    rc = reps.main(
+        ["--results-dir", str(tmp_path), "--thresholds", str(tmp_path / "missing.json")]
+    )
     assert rc == 2

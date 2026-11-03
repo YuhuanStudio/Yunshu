@@ -96,7 +96,11 @@ def per_rep_metrics(rows) -> dict:
         ]
         if vals:
             out[name] = statistics.median(vals)
-    mem = [r[MEMORY_METRIC] for r in rows if r.get("part") == "memory" and is_num(r.get(MEMORY_METRIC))]
+    mem = [
+        r[MEMORY_METRIC]
+        for r in rows
+        if r.get("part") == "memory" and is_num(r.get(MEMORY_METRIC))
+    ]
     if mem:
         out[MEMORY_METRIC] = mem[-1]
     return out
@@ -147,7 +151,9 @@ def decide(cell_rows, thresholds) -> dict:
             return {
                 "status": "ok",
                 "per_metric": per_metric,
-                "value": {m: statistics.median(v["values"]) for m, v in per_metric.items()},
+                "value": {
+                    m: statistics.median(v["values"]) for m, v in per_metric.items()
+                },
                 "exceeding": [],
                 "flags": [],
             }
@@ -208,7 +214,7 @@ def aa_gap_samples(cells_dir) -> dict:
             if row.get("part") == "decode":
                 groups[(row.get("ctx"), row.get("kind"))].append(row)
         per_file[(arm, rep)] = {g: per_rep_metrics(rows) for g, rows in groups.items()}
-    for (a_key, b_key) in itertools.combinations(sorted(per_file), 2):
+    for a_key, b_key in itertools.combinations(sorted(per_file), 2):
         for g in set(per_file[a_key]) & set(per_file[b_key]):
             for m in METRICS:
                 va, vb = per_file[a_key][g].get(m), per_file[b_key][g].get(m)
@@ -320,10 +326,14 @@ def scan(results_dir, thresholds: dict, manifest: dict | None = None):
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--results-dir", help="result dir: <dir>/<engine>/<cell>-rN.jsonl")
     ap.add_argument("--thresholds", help="rep_thresholds.json")
-    ap.add_argument("--manifest", help="optional audit manifest JSON (for rep-3 order slots)")
+    ap.add_argument(
+        "--manifest", help="optional audit manifest JSON (for rep-3 order slots)"
+    )
     ap.add_argument("--derive-thresholds", nargs="+", metavar="CELLS_DIR")
     ap.add_argument("--out", help="output path for --derive-thresholds")
     args = ap.parse_args(argv)
@@ -335,7 +345,9 @@ def main(argv=None) -> int:
         for d in args.derive_thresholds:
             for m, vals in aa_gap_samples(d).items():
                 samples[m].extend(vals)
-        body = derive_thresholds(dict(samples), sources=[str(Path(d)) for d in args.derive_thresholds])
+        body = derive_thresholds(
+            dict(samples), sources=[str(Path(d)) for d in args.derive_thresholds]
+        )
         Path(args.out).write_text(json.dumps(body, indent=2) + "\n")
         print(json.dumps(body["thresholds_pct"]), file=sys.stderr)
         return 0
@@ -344,7 +356,9 @@ def main(argv=None) -> int:
         ap.error("--results-dir and --thresholds are required")
     try:
         thresholds = thresholds_from_file(args.thresholds)
-        manifest = json.loads(Path(args.manifest).read_text()) if args.manifest else None
+        manifest = (
+            json.loads(Path(args.manifest).read_text()) if args.manifest else None
+        )
         results = list(scan(args.results_dir, thresholds, manifest))
     except (OSError, ValueError, KeyError) as exc:
         print(f"fullcmp_reps: unreadable input: {exc}", file=sys.stderr)
