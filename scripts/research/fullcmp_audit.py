@@ -714,8 +714,20 @@ def check_engaged_mode(run: Run) -> GuardResult:
             if not isinstance(ready, int):
                 res.fail(cell, f"r{cf.rep}: server_log_ready_offset missing (fail closed)")
                 continue
+            # the probe's response (mlx-vlm): the audit re-evaluates from the recorded part=probe row
+            probe_row = None
+            for x in (cf.path.read_text(errors="replace").splitlines() if cf.path.is_file() else []):
+                try:
+                    r = json.loads(x)
+                except ValueError:
+                    continue  # a truncated line is reported by the parse guards, not here
+                if r.get("part") == "probe":
+                    probe_row = r
+                    break
+            probe_response = {"timings": probe_row.get("timings")} if probe_row else None
             ev = fe.evaluate(engine, want, log, cf.rows, table,
-                             probe_text=h.get("engine_probe"), ready_offset=ready)
+                             probe_text=h.get("engine_probe"), ready_offset=ready,
+                             probe_response=probe_response)
         got = ev["engaged_mode"]
         if got == fe.UNVERIFIED:
             kind = ev.get("evidence_kind")

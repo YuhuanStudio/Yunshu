@@ -212,11 +212,14 @@ def evaluate(engine, mode, log, rows, table=None, probe_text=None, ready_offset=
             # otherwise the k-th row takes the k-th line) and a value above min. A readiness ping
             # that drafted, or a missing done line, never counts for a measured row.
             per_row, why = _correlate(ev, log, rows, ready_offset)
-            stats["per_row_matched"] = len(per_row)
-            stats["per_row"] = per_row
             if why is None and rows:
+                # this item proves drafting per measured row: its matches are the cell's per-row evidence
+                # (an earlier item's failure to match is not a problem of the cell)
+                stats["per_row_matched"] = len(per_row)
+                stats["per_row"] = per_row
+                stats.pop("per_row_problem", None)
                 hits.append((per_row[-1]["line"], "slice"))
-            elif why is not None:
+            elif why is not None and "per_row" not in stats:
                 stats["per_row_problem"] = why
         for line, src in hits:
             if src == "startup_log":

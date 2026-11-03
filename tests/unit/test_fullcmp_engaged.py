@@ -733,3 +733,42 @@ def test_attr_rows_on_the_real_wire_1105_records_are_filled_for_every_measured_r
                 checked.append(engine)
     if not checked:
         pytest.skip("no wire-1105 engine with per-row evidence on disk")
+
+
+def _guard_violations_for(jl):
+    """The audit's engaged_mode guard on one real cell file (read only)."""
+    import types
+
+    import fullcmp_audit as fa
+
+    rows = [json.loads(x) for x in Path(jl).read_text().splitlines() if x.strip()]
+    header = next(r for r in rows if r.get("part") == "session")
+    decode = [r for r in rows if r.get("part") == "decode"]
+    cell = {"cell": Path(jl).stem, "engine": header["engine"], "spec_mode": header.get("spec_mode_expected")}
+    cf = types.SimpleNamespace(header=header, cell=cell, rep=0, rows=decode, path=Path(jl))
+    return fa.check_engaged_mode(types.SimpleNamespace(files=[cf])).violations
+
+
+def test_kapitsa_tok_cycle_only_engine_is_proven_per_row_on_the_real_raw():
+    """Regression (wire-1105b): kapitsa's chat line has tok/cycle and 'KFlash (DFlash2): N cycles' but
+    no accepted count. The acceptance verdict is the per-row evidence (tok/cycle > 1.0), not attr.accepted.
+    A stale per-row problem from another evidence item must not fail it."""
+    jls = sorted(glob.glob("/Volumes/Micron/yunshu-fullcmp/wire-1105b/kapitsa-0.2.26/*-r0.jsonl"))
+    jls = [j for j in jls if "telemetry" not in j]
+    if not jls:
+        pytest.skip("no real kapitsa raw on disk")
+    for jl in jls:
+        bad = [v for v in _guard_violations_for(jl) if "without per-request acceptance" in v]
+        assert not bad, bad
+
+
+def test_mlx_vlm_probe_is_re_evaluated_by_the_audit_on_the_real_raw():
+    """Regression (wire-1105b): the audit did not pass the probe response; the header's engine_probe is None
+    for this engine. The recorded part=probe row must reach the evaluation: no 'unverified' violation."""
+    jls = sorted(glob.glob("/Volumes/Micron/yunshu-fullcmp/wire-1105b/mlx-vlm-server/*-r0.jsonl"))
+    jls = [j for j in jls if "telemetry" not in j]
+    if not jls:
+        pytest.skip("no real mlx-vlm raw on disk")
+    for jl in jls:
+        bad = [v for v in _guard_violations_for(jl) if "unverified" in v]
+        assert not bad, bad
