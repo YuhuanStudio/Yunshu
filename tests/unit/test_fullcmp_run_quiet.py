@@ -60,7 +60,7 @@ def row(engine, cid):
 
 def test_every_job_runs_the_quiet_gate_before_any_cell():
     job = run.plan_batch([row("yunshu", "B1.a")], "B1", PIN).jobs[0]
-    script = job.cmd[2]
+    script = job.script
     steps = script.split(" && ")
     assert "fullcmp_quiet.py" in steps[0] and " gate " in steps[0]
     assert steps[1].startswith("mkdir -p")
@@ -70,7 +70,7 @@ def test_every_job_runs_the_quiet_gate_before_any_cell():
 
 def test_gate_log_is_named_by_the_job_label():
     job = run.plan_batch([row("yunshu", "B1.a")], "B1", PIN).jobs[0]
-    first = job.cmd[2].split(" && ")[0]
+    first = job.script.split(" && ")[0]
     assert "--log" in first
     assert f"{job.label}.jsonl" in first
     assert str(run.QUIET_DIR) in first
@@ -78,7 +78,7 @@ def test_gate_log_is_named_by_the_job_label():
 
 def test_gate_argv_uses_the_main_venv_python_and_the_worktree_script():
     argv = run.quiet_gate_argv("fullcmp-B1-x-r0")
-    assert argv[0] == run.MAIN_PY
+    assert argv[0] == run.HARNESS_PY
     assert argv[1] == str(run.SCRIPTS / "fullcmp_quiet.py")
     assert argv[2] == "gate"
 
@@ -86,7 +86,7 @@ def test_gate_argv_uses_the_main_venv_python_and_the_worktree_script():
 def test_rep3_jobs_are_gated_too():
     rows = {2: [row("yunshu", "B1.a")]}
     jobs = run.plan_jobs(rows, ["yunshu"], PIN, "B1", label_suffix="-rep3")
-    assert "fullcmp_quiet.py" in jobs[0].cmd[2].split(" && ")[0]
+    assert "fullcmp_quiet.py" in jobs[0].script.split(" && ")[0]
 
 
 def test_busy_host_refuses_the_batch_before_anything_is_submitted(
@@ -123,12 +123,14 @@ def test_busy_host_refuses_the_batch_before_anything_is_submitted(
 def test_every_cell_command_carries_its_job_label_and_gpuq_dir():
     rows = [row("yunshu", "B1.a"), row("yunshu", "B1.b")]
     job = run.plan_batch(rows, "B1", PIN).jobs[0]
-    cell_cmds = [s for s in job.cmd[2].split(" && ") if "tfbench.py" in s]
+    cell_cmds = [s for s in job.script.split(" && ") if "tfbench.py" in s]
     assert len(cell_cmds) == 2
     for cmd in cell_cmds:
         assert f"TFB_JOB_LABEL={job.label}" in cmd
         assert f"GPUQ_DIR={run.GPUQ_DIR_DEFAULT}" in cmd
-        assert "GPUQ_JOB_ID" not in cmd  # never set by the driver: gpuq exports it (or it resolves)
+        assert (
+            "GPUQ_JOB_ID" not in cmd
+        )  # never set by the driver: gpuq exports it (or it resolves)
 
 
 def test_cell_env_without_a_label_sets_no_job_label():

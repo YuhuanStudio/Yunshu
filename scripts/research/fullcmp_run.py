@@ -68,8 +68,12 @@ PREFLIGHT = SCRIPTS / "fullcmp_preflight.py"
 QUIET = SCRIPTS / "fullcmp_quiet.py"
 PROFILE_SCRIPT = SCRIPTS / "fullcmp_profile.py"
 
-MAIN_PY = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python"
+# Harness commands run with THIS checkout's venv (the worktree that holds the driver), never the
+# main checkout's .venv. gpuq itself is invoked by its literal path (user rule).
+REPO_ROOT = Path(__file__).resolve().parents[2]
+HARNESS_PY = str(REPO_ROOT / ".venv" / "bin" / "python")
 GPUQ = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/scripts/dev/gpuq"
+WRAP_ROOT = Path("/Volumes/Micron/yunshu-fullcmp/wrap")
 GPUQ_DIR_DEFAULT = "/Volumes/P5Plus/yunshu-gpuq"
 
 RUN_DIR = Path("/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103")
@@ -210,6 +214,7 @@ class Job:
     cmd: list[str]  # argv after `gpuq submit ... --`
     over_cap: bool = False
     flags: list[str] = field(default_factory=list)
+    script: str = ""  # job body, written to cmd[1] by write_wrapper before submit
 
     @property
     def cell_ids(self) -> list[str]:
@@ -246,6 +251,7 @@ def cell_env(
         f"PYTHONPATH={harness['PYTHONPATH']}",
         f"HOME={HOME_ROOT / engine}",
         f"GPUQ_DIR={GPUQ_DIR_DEFAULT}",
+        f"TFB_MLXLM_PY={pin['python_executable']}",
     ]
     if label:
         env.append(f"TFB_JOB_LABEL={label}")
@@ -283,7 +289,7 @@ def cell_command(
     return [
         "env",
         *env,
-        MAIN_PY,
+        HARNESS_PY,
         str(TFBENCH),
         "--engine",
         bench_engines.tfbench_engine(row["engine"]),
@@ -303,7 +309,7 @@ def quiet_gate_argv(label: str) -> list[str]:
     """Quiet-machine gate run first inside the job: up to 3 retries 30 s apart, then the job
     fails naming the holders (fullcmp_quiet.gate). Its attempts are logged per job label."""
     return [
-        MAIN_PY,
+        HARNESS_PY,
         str(QUIET),
         "gate",
         "--log",
@@ -311,12 +317,14 @@ def quiet_gate_argv(label: str) -> list[str]:
     ]
 
 
-def job_command(
+def job_script(
     cells: list[dict], rep: int, pin: dict, label: str = "", profile: bool = False
-) -> list[str]:
-    """One gpuq job: quiet gate, then mkdir, then one tfbench invocation per cell (&&-chained,
-    so a busy machine or a failed cell stops the rest of the job). A profile job appends the
-    layer-2 row (fullcmp_profile.py) after each cell."""
+) -> str:
+    """Shell body of one gpuq job: quiet gate, then mkdir, then one tfbench invocation per cell
+    (&&-chained, so a busy machine or a failed cell stops the rest of the job). A profile job
+    appends the layer-2 row (fullcmp_profile.py) after each cell. The body is written to a
+    wrapper file (write_wrapper) and gpuq runs `/bin/sh <wrapper>`: gpuq preflight treats every
+    absolute argv element as an input path that must exist, so the gate never goes on the argv."""
     if profile:
         dirs = sorted({str(profile_path(c["engine"], c["id"]).parent) for c in cells})
     else:
@@ -330,7 +338,7 @@ def job_command(
             steps.append(
                 shlex.join(
                     [
-                        MAIN_PY,
+                        HARNESS_PY,
                         str(PROFILE_SCRIPT),
                         "--cell",
                         str(out),
@@ -339,9 +347,57 @@ def job_command(
                     ]
                 )
             )
-    # "set -e;" first: the script must not start with "/" (gpuq preflight reads an argument that
-    # starts with "/" as an input path that has to exist). The steps are &&-chained anyway.
-    return ["/bin/sh", "-c", "set -e; " + " && ".join(steps)]
+    return "set -e\n" + " && ".join(steps) + "\n"
+
+
+def wrapper_path(label: str) -> Path:
+    return WRAP_ROOT / f"{label or 'unlabelled'}.sh"
+
+
+def job_command(
+    cells: list[dict], rep: int, pin: dict, label: str = "", profile: bool = False
+) -> list[str]:
+    """The argv a job runs: /bin/sh on its wrapper file (the body is job_script)."""
+    return ["/bin/sh", str(wrapper_path(label))]
+
+
+def write_wrapper(job: Job) -> Path:
+    path = Path(job.cmd[1])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n" + job.script)
+    path.chmod(0o755)
+    return path
+
+
+def _output_roots() -> tuple[str, ...]:
+    return tuple(
+        str(p)
+        for p in (RAW_ROOT, HOME_ROOT, WRAP_ROOT, QUIET_DIR, PREFLIGHT_DIR, AUDIT_DIR)
+    )
+
+
+def script_problems(script: str) -> list[str]:
+    """What gpuq preflight cannot see inside a job body: absolute inputs (the tfbench and gate
+    scripts, the interpreter, --model, the pinned Yunshu tree) must exist, and no input may
+    point into the main checkout. Output and home paths are created by the job, not checked."""
+    problems: list[str] = []
+    outs = _output_roots()
+    for tok in shlex.split(script):
+        for part in (
+            tok.split(":") if tok.startswith(("PYTHONPATH=", "TFB_")) else [tok]
+        ):
+            value = part.partition("=")[2] if re.match(r"^[A-Z_]+=", part) else part
+            if not value.startswith("/") or "{" in value or value.startswith(outs):
+                continue
+            if "/Yunshu/.venv" in value or value.startswith(
+                "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/"
+            ):
+                problems.append(f"job references the main checkout: {value}")
+            elif not os.path.exists(value):
+                problems.append(f"input path does not exist: {value}")
+    if "/Yunshu/.venv" in script or "/Documents/YuhuanStudio/Yunshu/" in script:
+        problems.append("job body references the main checkout")
+    return sorted(set(problems))
 
 
 @dataclass
@@ -393,6 +449,7 @@ def plan_jobs(
                             cells=chunk,
                             est_min=est,
                             cmd=job_command(chunk, rep, pin, label, profile=profile),
+                            script=job_script(chunk, rep, pin, label, profile=profile),
                             over_cap=over,
                             flags=flags,
                         )
@@ -463,9 +520,7 @@ def parse_status(text: str) -> list[tuple[str, str]]:
 
 def foreign_jobs(status_text: str) -> list[tuple[str, str]]:
     """gpuq prints job ids as <seq>-<label>; our labels start with fullcmp-, so match the label."""
-    return [
-        (s, j) for s, j in parse_status(status_text) if "-fullcmp-" not in f"-{j}"
-    ]
+    return [(s, j) for s, j in parse_status(status_text) if "-fullcmp-" not in f"-{j}"]
 
 
 # ---------------------------------------------------------------------------
@@ -572,7 +627,7 @@ def swap_gate(batch: str) -> int:
         "--",
         "env",
         f"PYTHONPATH={SCRIPTS.parent.parent / 'python'}",
-        MAIN_PY,
+        HARNESS_PY,
         str(PREFLIGHT),
         "--out",
         str(out),
@@ -581,11 +636,33 @@ def swap_gate(batch: str) -> int:
     return subprocess.run(argv, env=gpuq_env()).returncode
 
 
+def self_check(jobs: list[Job]) -> dict[str, list[str]]:
+    """CPU only, no queue: writes each job's wrapper and runs gpuq's own preflight on the argv
+    that gpuq submit receives (scripts/dev/gpuq_preflight.preflight), plus the job body check.
+    Returns {label: problems}; an empty dict means every job would pass gpuq's preflight."""
+    sys.path.insert(0, str(REPO_ROOT / "scripts" / "dev"))
+    import gpuq_preflight
+
+    bad: dict[str, list[str]] = {}
+    for job in jobs:
+        write_wrapper(job)
+        problems = gpuq_preflight.preflight(job.cmd, str(REPO_ROOT), dict(os.environ))
+        problems += script_problems(job.script)
+        if problems:
+            bad[job.label] = problems
+    return bad
+
+
 def submit_all(jobs: list[Job]) -> tuple[list[str], int]:
     ids, bad = [], 0
     for job in jobs:
+        write_wrapper(job)
         res = subprocess.run(
-            job.submit_argv(), capture_output=True, text=True, env=gpuq_env()
+            job.submit_argv(),
+            capture_output=True,
+            text=True,
+            env=gpuq_env(),
+            cwd=str(REPO_ROOT),
         )
         if res.returncode != 0 or not res.stdout.strip():
             print(f"submit failed: {job.label}: {res.stderr.strip()}", file=sys.stderr)
@@ -610,7 +687,7 @@ def wait_all(ids: list[str]) -> int:
 def run_audit(raw_root: Path, manifest_path: Path) -> int:
     return subprocess.run(
         [
-            MAIN_PY,
+            HARNESS_PY,
             str(AUDIT),
             "--root",
             str(raw_root),
@@ -624,7 +701,7 @@ def run_audit(raw_root: Path, manifest_path: Path) -> int:
 def run_reps(raw_root: Path, manifest_path: Path) -> list[tuple[str, str]]:
     res = subprocess.run(
         [
-            MAIN_PY,
+            HARNESS_PY,
             str(REPS),
             "--results-dir",
             str(raw_root),
@@ -677,7 +754,7 @@ def print_plan(plan: Plan) -> None:
 def configure(raw_root: Path | None = None, work_dir: Path | None = None) -> None:
     """Point the driver at a separate raw root and work dir (smoke runs). Defaults are the
     production paths; a smoke run must never touch RAW_ROOT or the batch audit manifests."""
-    global RAW_ROOT, HOME_ROOT, AUDIT_DIR, QUIET_DIR, PREFLIGHT_DIR
+    global RAW_ROOT, HOME_ROOT, AUDIT_DIR, QUIET_DIR, PREFLIGHT_DIR, WRAP_ROOT
     if raw_root is not None:
         RAW_ROOT = Path(raw_root)
     if work_dir is not None:
@@ -686,6 +763,7 @@ def configure(raw_root: Path | None = None, work_dir: Path | None = None) -> Non
         AUDIT_DIR = work / "audit"
         QUIET_DIR = work / "quiet"
         PREFLIGHT_DIR = work / "preflight"
+        WRAP_ROOT = work / "wrap"
 
 
 def main(argv=None) -> int:
@@ -702,6 +780,11 @@ def main(argv=None) -> int:
         "--dry-run", action="store_true", help="print every job; touch no GPU, no queue"
     )
     ap.add_argument("--phase", choices=("preflight", "run"), default="run")
+    ap.add_argument(
+        "--self-check",
+        action="store_true",
+        help="no GPU, no queue: run gpuq's preflight on every job's submit argv and job body",
+    )
     ap.add_argument(
         "--allow-foreign",
         action="store_true",
@@ -734,7 +817,17 @@ def main(argv=None) -> int:
         rows, a.batch, pin, engines=engines, rep=a.rep, profile_rep=a.profile_rep
     )
 
-    if a.dry_run:
+    if a.dry_run or a.self_check:
+        if a.self_check:
+            bad = self_check(plan.jobs)
+            for label, problems in bad.items():
+                for p in problems:
+                    print(f"SELF-CHECK {label}: {p}", file=sys.stderr)
+            print(
+                f"self-check: {len(plan.jobs) - len(bad)}/{len(plan.jobs)} jobs pass gpuq preflight",
+                flush=True,
+            )
+            return 1 if bad else 0
         print("dry-run: no preflight, no queue read, no submission")
         print_plan(plan)
         return 0

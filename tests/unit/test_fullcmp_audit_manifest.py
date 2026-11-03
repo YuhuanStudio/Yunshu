@@ -78,8 +78,18 @@ def _census():
         },
         "kapitsa": {
             "latest_date": "2026-11-01T22:32:02Z",
-            "sha256": {"0.2.26 binary kapitsa": H},
+            "sha256": {"0.2.26 binary kapitsa": H, "0.2.26 tarball": H},
         },
+        "mlx_vlm_server": {
+            "latest_date": "2026-10-28T17:48:51Z",
+            "sha256": {"mlx_vlm-0.7.11-py3-none-any.whl (PyPI digest)": H},
+        },
+        "llama_cpp": {
+            "latest_date": "v0.8.0 2026-10-28T12:47:51Z; b12061 2026-11-02T23:17:24Z",
+            "sha256": {"b12061 macos-arm64 tarball": H},
+        },
+        "lm_studio": {},
+        "ollama": {},
     }
 
 

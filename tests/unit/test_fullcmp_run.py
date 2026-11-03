@@ -20,6 +20,7 @@ run = importlib.util.module_from_spec(_SPEC)
 sys.modules["fullcmp_run"] = run
 _SPEC.loader.exec_module(run)
 
+
 @pytest.fixture(autouse=True)
 def quiet_host_stub(monkeypatch):
     """The batch-level quiet gate samples the real host (10 s of ps). Stub it: quiet by default;
@@ -187,7 +188,7 @@ def test_command_lines_carry_fullcmp_env_and_pin():
     rows = [row("yunshu", "B1.ok")]
     plan = run.plan_batch(rows, "B1", PIN)
     job = plan.jobs[0]
-    text = " ".join(job.cmd)
+    text = job.script
     assert "TFB_FULLCMP=1" in text
     assert "TFB_YUNSHU_BIN=/fake/venv/bin/yunshu" in text
     assert "TFB_YUNSHU_SRC=/fake/tree/python" in text
@@ -211,10 +212,14 @@ def test_telemetry_dir_is_the_cell_file_root():
     spec.loader.exec_module(audit)
     raw = run.raw_path("yunshu", "B1.ok", 0)
     root = run.RAW_ROOT
-    tdir = [t for t in run.cell_env("yunshu", PIN) if t.startswith("TFB_TELEMETRY_DIR=")][0]
+    tdir = [
+        t for t in run.cell_env("yunshu", PIN) if t.startswith("TFB_TELEMETRY_DIR=")
+    ][0]
     tdir = tdir.split("=", 1)[1]
     assert Path(tdir) == root
-    harness_path = Path(root) / "yunshu" / (raw.name[: -len(".jsonl")] + ".telemetry.jsonl")
+    harness_path = (
+        Path(root) / "yunshu" / (raw.name[: -len(".jsonl")] + ".telemetry.jsonl")
+    )
     assert harness_path == audit.telemetry_path(raw)
 
 
@@ -256,8 +261,8 @@ def test_dry_run_touches_no_gpu_or_queue(pin_file, tmp_path, monkeypatch, capsys
 # --- exclusive GPU refusal --------------------------------------------------
 
 STATUS_FOREIGN = """daemon: up
-running  device=m5  100s  p1  wait_fn-ple-memory-1102b-35b611fbd4ec
-pending  device=m5  5s  p1  fullcmp-B1-yunshu-q27-4bit-th-off-r0
+running  device=m5  100s  p1  1102-120000-00-wait_fn-ple-memory
+pending  device=m5  5s  p1  1102-120100-00-fullcmp-B1-yunshu-q27-4bit-th-off-r0
 """
 
 STATUS_OWN = """daemon: up
@@ -268,7 +273,7 @@ done  device=m5  9s  p1  fullcmp-B1-yunshu-q27-4bit-th-off-r1
 
 def test_parse_status_and_foreign_detection():
     assert run.foreign_jobs(STATUS_FOREIGN) == [
-        ("running", "wait_fn-ple-memory-1102b-35b611fbd4ec")
+        ("running", "1102-120000-00-wait_fn-ple-memory")
     ]
     assert run.foreign_jobs(STATUS_OWN) == []
 
@@ -278,6 +283,8 @@ def test_refuses_with_foreign_job(pin_file, tmp_path, monkeypatch):
     manifest.write_text(json.dumps(row("yunshu", "B1.ok")) + "\n")
     submitted = []
     monkeypatch.setattr(run, "gpuq_status_text", lambda: STATUS_FOREIGN)
+    # a refusal must come before any GPU work: the swap gate would queue a real job
+    monkeypatch.setattr(run, "swap_gate", lambda b: pytest.fail("swap gate ran"))
     monkeypatch.setattr(
         run, "submit_all", lambda jobs: submitted.append(jobs) or ([], 0)
     )
@@ -326,7 +333,7 @@ def test_rep3_jobs_use_rotated_slots_and_flag(pin_file):
     assert [j.engine for j in jobs] == ["splash-1.5.0", "tf-1.2.1"]
     assert all(j.label.endswith("-r2-rep3") for j in jobs)
     assert all(j.rep == 2 for j in jobs)
-    assert all("-r2.jsonl" in " ".join(j.cmd) for j in jobs)
+    assert all("-r2.jsonl" in j.script for j in jobs)
 
 
 def test_full_run_queues_rep3_for_flagged_cells_and_fails_on_bad_job(

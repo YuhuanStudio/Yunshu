@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -187,72 +188,186 @@ def _date(iso) -> str | None:
     return str(iso)[:10] if iso and str(iso)[:4].isdigit() else None
 
 
-def _pin(version, date, sha, kind) -> dict:
+COMP = "/Volumes/P5Plus/yunshu-build/competitors"
+
+# Install path of the file each engine is launched from (the audit's pinned binary). The census
+# gives the release archive digest; the harness header records sha256 of the launched file, so the
+# pin carries both. "<ver>" is filled from the pin's version.
+INSTALL = {
+    "tf-1.2.1": f"{COMP}/tensorfold-<ver>/tensorfold-<ver>-macos-arm64/bin/tensorfold-native",
+    "tf-1.1.8": f"{COMP}/tensorfold-<ver>/tensorfold-<ver>-macos-arm64/bin/tensorfold-native",
+    "splash-1.5.0": f"{COMP}/splash-1.5.0/splash-1.5.0-arm64-macos26/engine/splash",
+    "omlx-0.7.3": f"{COMP}/venvs/omlx-0.7.3/bin/omlx",
+    "omlx-0.7.3rc1": f"{COMP}/venvs/omlx-0.7.3rc1/bin/omlx",
+    "mlx-serve-26.11.1": f"{COMP}/mlxserve-bin/26.11.1/mlx-serve-macos-arm64/mlx-serve",
+    "mlx-lm-server": f"{COMP}/venvs/mlx-lm-0.32.2/bin/mlx_lm.server",
+    # launched as `<venv python> -m mlx_vlm.server`: the pinned file is the interpreter
+    "mlx-vlm-server": f"{COMP}/venvs/mlx-vlm-0.7.11/bin/python",
+    "llama-cpp-b12061": f"{COMP}/llama.cpp-b12061/llama-b12061/llama-server",
+    "kapitsa-0.2.26": f"{COMP}/kapitsa-0.2.26/kapitsa-0.2.26-darwin-arm64/kapitsa",
+}
+
+
+def file_sha256(path: str) -> str | None:
+    """sha256 of the launched file (symlinks resolved), None when it is not on disk."""
+    import hashlib
+
+    real = os.path.realpath(path)
+    if not os.path.isfile(real):
+        return None
+    h = hashlib.sha256()
+    with open(real, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _expected(engine: str) -> tuple[str, str | None]:
+    """(expected engaged mode, high-confidence log regex) from EXPECTED_MODE_PROBE. Fail closed:
+    'unverified' with no regex unless a probe established one."""
+    probe = EXPECTED_MODE_PROBE.get(engine, {})
+    mode = probe.get("expected_mode", "unverified")
+    regex = None
+    if mode == "unverified":
+        # no established mode: no regex either (the probe's patterns include refusal lines)
+        return mode, None
+    for pat in probe.get("log_patterns", []):
+        if pat.get("confidence") == "high" and "regex" in pat:
+            regex = pat["regex"]
+            break
+    return mode, regex
+
+
+def _pin(engine, version, date, archive_sha, kind, sha_of) -> dict:
+    path = INSTALL.get(engine)
+    if path is not None:
+        path = path.replace("<ver>", str(version))
+    mode, regex = _expected(engine)
     return {
         "version": version,
         "release_date": date,
-        "binary_sha256": sha,
+        "archive_sha256": archive_sha,
         "sha_kind": kind,
+        # the audit compares this with the header's binary_sha256 (digest of the launched file)
+        "binary_sha256": sha_of(path) if path else None,
+        "install_path": path,
+        "expected_mode": mode,
+        "engaged_regex": regex,
     }
 
 
-def build_pins(census: dict, pin: dict) -> dict:
-    """Per-engine pins from census.json (version, release date, sha256); yunshu from yunshu_pin.json."""
+def build_pins(census: dict, pin: dict, sha_of=file_sha256) -> dict:
+    """Per-engine pins from census.json (version, release date, archive sha256, install path and
+    the launched file's sha256) and yunshu_pin.json. Every engine the census lists has an entry;
+    an engine with no harness launch recipe is present with null version and binary (fails closed)."""
     tf, sp, om = census["tensorfold"], census["splash"], census["omlx"]
     ms, ml, kp = census["mlx-serve"], census["mlx_lm_server"], census["kapitsa"]
-    return {
+    vl, lc = census["mlx_vlm_server"], census["llama_cpp"]
+    pins = {
         "yunshu": {
             "version": pin["version"],
             "release_date": _date(census["yunshu"]["latest_date"]),
             "git_sha": pin["sha"],
+            "binary_sha256": None,
+            "install_path": pin.get("worktree"),
+            "expected_mode": "unverified",
+            "engaged_regex": None,
         },
         "tf-1.2.1": _pin(
+            "tf-1.2.1",
             "1.2.1",
             _date(tf["latest_date"]),
             tf["sha256"]["1.2.1 tarball"],
             "release archive",
+            sha_of,
         ),
         # census has no release date for 1.1.8: stays None and is reported unresolved
         "tf-1.1.8": _pin(
-            "1.1.8", None, tf["sha256"]["1.1.8 tarball"], "release archive"
+            "tf-1.1.8",
+            "1.1.8",
+            None,
+            tf["sha256"]["1.1.8 tarball"],
+            "release archive",
+            sha_of,
         ),
         "splash-1.5.0": _pin(
+            "splash-1.5.0",
             "1.5.0",
             _date(sp["latest_date"]),
             sp["sha256"]["1.5.0 tarball"],
             "release archive",
+            sha_of,
         ),
         "omlx-0.7.3": _pin(
+            "omlx-0.7.3",
             "0.7.3",
             _date(om["latest_date"]),
             om["sha256"]["0.7.3 wheel cp313"],
             "wheel",
+            sha_of,
         ),
         "omlx-0.7.3rc1": _pin(
+            "omlx-0.7.3rc1",
             "0.7.3rc1",
             _date(om["latest_rc_date"]),
             om["sha256"]["0.7.3rc1 wheel cp313"],
             "wheel",
+            sha_of,
         ),
         "mlx-serve-26.11.1": _pin(
+            "mlx-serve-26.11.1",
             "26.11.1",
             _date(ms["latest_date"]),
             ms["sha256"]["26.11.1 binary mlx-serve"],
             "binary",
+            sha_of,
         ),
         "mlx-lm-server": _pin(
+            "mlx-lm-server",
             "0.32.2",
             _date(ml["latest_date"]),
             ml["sha256"]["mlx_lm-0.32.2-py3-none-any.whl (PyPI digest)"],
             "wheel",
+            sha_of,
+        ),
+        "mlx-vlm-server": _pin(
+            "mlx-vlm-server",
+            "0.7.11",
+            _date(vl["latest_date"]),
+            vl["sha256"]["mlx_vlm-0.7.11-py3-none-any.whl (PyPI digest)"],
+            "wheel",
+            sha_of,
+        ),
+        "llama-cpp-b12061": _pin(
+            "llama-cpp-b12061",
+            "b12061",
+            "2026-11-02",
+            lc["sha256"]["b12061 macos-arm64 tarball"],
+            "release archive",
+            sha_of,
         ),
         "kapitsa-0.2.26": _pin(
+            "kapitsa-0.2.26",
             "0.2.26",
             _date(kp["latest_date"]),
-            kp["sha256"]["0.2.26 binary kapitsa"],
-            "binary",
+            kp["sha256"]["0.2.26 tarball"],
+            "release archive",
+            sha_of,
         ),
     }
+    for eng in ("lmstudio", "ollama"):
+        pins[eng] = {
+            "version": None,
+            "release_date": None,
+            "binary_sha256": None,
+            "install_path": None,
+            "expected_mode": "unverified",
+            "engaged_regex": None,
+            "unsupported_reason": be.stub_reason(eng)
+            if eng in be.UNSUPPORTED_ENGINES
+            else "no harness launch recipe",
+        }
+    return pins
 
 
 def census_weights(census: dict) -> dict:

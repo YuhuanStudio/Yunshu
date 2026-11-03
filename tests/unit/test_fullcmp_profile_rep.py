@@ -77,7 +77,7 @@ def test_profile_job_writes_outside_the_table_root_and_sets_profile_env():
     rows = [_row("a1", "yunshu")]
     prof = fr.plan_batch(rows, "B1", PIN, profile_rep=True)
     job = next(j for j in prof.jobs if j.label.endswith("-prof"))
-    text = " ".join(job.cmd)
+    text = job.script
     assert "YUNSHU_DEBUG_TREE_PROFILE=1" in text
     assert "/profile/yunshu/" in text
     # never the table root's <engine>/<cell>-rN.jsonl layout
@@ -89,7 +89,7 @@ def test_competitor_profile_job_has_no_yunshu_env():
     rows = [_row("b1", "tf-1.2.1")]
     prof = fr.plan_batch(rows, "B1", PIN, profile_rep=True)
     job = next(j for j in prof.jobs if j.label.endswith("-prof"))
-    assert "YUNSHU_DEBUG_TREE_PROFILE=1" not in " ".join(job.cmd)
+    assert "YUNSHU_DEBUG_TREE_PROFILE=1" not in job.script
     assert fp.profile_env("tf-1.2.1") == []
 
 
@@ -97,7 +97,7 @@ def test_profile_append_is_after_the_tfbench_cell_in_the_job_chain():
     rows = [_row("a1", "yunshu")]
     prof = fr.plan_batch(rows, "B1", PIN, profile_rep=True)
     job = next(j for j in prof.jobs if j.label.endswith("-prof"))
-    script = job.cmd[-1]
+    script = job.script
     assert script.index("fullcmp_profile.py") > script.index("tfbench.py")
     assert " && " in script
 
@@ -185,8 +185,12 @@ def test_status_job_id_is_found_when_the_line_has_trailing_text():
         "running  device=m5  54s  p1  1103-114230-00-observe-ab-code-8192-p0  "
         "peak=32.5G/24G  held=21/300s (quiet window satisfied)\n"
     )
-    assert fr.parse_status(text) == [("running", "1103-114230-00-observe-ab-code-8192-p0")]
-    assert fr.foreign_jobs(text) == [("running", "1103-114230-00-observe-ab-code-8192-p0")]
+    assert fr.parse_status(text) == [
+        ("running", "1103-114230-00-observe-ab-code-8192-p0")
+    ]
+    assert fr.foreign_jobs(text) == [
+        ("running", "1103-114230-00-observe-ab-code-8192-p0")
+    ]
 
 
 def test_job_shell_script_does_not_start_with_a_path():
@@ -195,5 +199,5 @@ def test_job_shell_script_does_not_start_with_a_path():
     rows = [_row("a1", "yunshu")]
     plan = fr.plan_batch(rows, "B1", PIN, profile_rep=True)
     for job in plan.jobs:
-        script = job.cmd[-1]
+        script = job.script
         assert not script.startswith("/"), script[:60]
