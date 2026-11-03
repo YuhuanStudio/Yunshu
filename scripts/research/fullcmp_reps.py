@@ -178,7 +178,8 @@ def decide(cell_rows, thresholds) -> dict:
 
 def thresholds_from_file(path) -> dict:
     data = json.loads(Path(path).read_text())
-    return {m: float(v) for m, v in data["thresholds_pct"].items()}
+    known = set(METRICS) | {MEMORY_METRIC}
+    return {m: float(v) for m, v in data["thresholds_pct"].items() if m in known}
 
 
 # ---------------------------------------------------------------------------
