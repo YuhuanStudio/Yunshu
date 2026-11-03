@@ -163,7 +163,13 @@ def evaluate(engine, mode, log, rows, table=None, probe_text=None, ready_offset=
         return {"engaged_mode": mode_out, "matched_line": line, "evidence_kind": kind,
                 "source": source, "stats": stats, "label": eng.get("engaged_label")}
 
+    if mode in AR_MODES:
+        drafting = ar_drafting_line(log, ready_offset)
+        if drafting is not None:
+            return result(UNVERIFIED, drafting, "ar_drafting", "slice")
     m = mode_entry(table, engine, mode)
+    if m is None and mode in AR_MODES:
+        return result("ar", None, "ar_no_drafting", "slice")
     if m is None:
         stats["table"] = f"no entry for {engine}/{mode}"
         return result(UNVERIFIED, None, None, None)
@@ -437,6 +443,41 @@ DFLASH_ROUND = re.compile(r"DFlash round profile: (\d+) rounds")
 CONC_AR_LABEL = "ar (dev0: concurrent requests do not draft)"
 
 
+# lines a speculative engine prints per request; an engine whose mode is AR must print none of them
+AR_DRAFT_MARKERS = re.compile(
+    r"accepted=\d+|accept=\d+/|draft_n|accepted/drafted|MTP\[\S+\] finish=|DFlash round profile|"
+    r"draft acceptance =|\[spec-stats\]|vlm_mtp stats|spec: \S+ accepted/drafted"
+)
+
+
+def ar_drafting_line(log: str, ready_offset=None):
+    """The first per-request drafting line after readiness in an AR engine's log, or None."""
+    m = AR_DRAFT_MARKERS.search(log or "", ready_offset or 0)
+    return _line_at(log, m.start(), m.end()) if m else None
+
+
+def _ar_concurrent(records, log, ready_offset):
+    """AR mode (mlx-lm and other engines with no speculative path): nothing to accept. The cell's requests
+    must complete (a request list per record) and no drafting line may appear after readiness."""
+    problems = []
+    total = 0
+    for rec in records:
+        reqs = rec.get("requests")
+        if not isinstance(reqs, list) or not reqs:
+            problems.append(f"{rec.get('part')} n={rec.get('n')}: no requests list")
+            continue
+        total += len(reqs)
+    drafting = ar_drafting_line(log, ready_offset)
+    if drafting is not None:
+        problems.append(f"ar engine shows drafting: {drafting[:120]}")
+    stats = {"requests": total, "per_row": []}
+    if problems:
+        return {"engaged_mode": UNVERIFIED, "matched_line": drafting, "evidence_kind": "ar_drafting",
+                "source": "slice", "stats": stats, "label": None}, problems
+    return {"engaged_mode": "ar", "matched_line": None, "evidence_kind": "ar_no_drafting",
+            "source": "slice", "stats": stats, "label": None}, []
+
+
 def _yunshu_concurrent(records, mode, log="", ready_offset=None):
     """Yunshu conc/mixed cells. With per-request counters (x_yunshu.speculative): each request must show
     accepted > 0. Without them: the cell's DFlash rounds in the log slice decide. rounds * DFLASH_BLOCK_MAX
@@ -504,6 +545,8 @@ def concurrent_check(table, engine, mode, log, records, ready_offset):
         return None, []
     if engine == "yunshu":
         return _yunshu_concurrent(records, mode, log, ready_offset)
+    if mode in AR_MODES:
+        return _ar_concurrent(records, log, ready_offset)
     m = mode_entry(table, engine, mode)
     item = next((e for e in ((m or {}).get("evidence", []))
                  if e.get("kind") == "acceptance_regex" and e.get("group")), None)
