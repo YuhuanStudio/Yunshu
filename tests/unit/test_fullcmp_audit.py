@@ -158,6 +158,9 @@ def make_data():
                     if yun
                     else ["/bin/mlx-serve", "--serve"],
                     "python": PY if yun else None,
+                    "observe": False if yun else None,
+                    "yunshu_observe": None,
+                    "profile": False,
                     "requested_spec_mode": "dflash",
                     "spec_mode_expected": "dflash",
                     "engaged_spec_mode": "dflash",
@@ -373,7 +376,28 @@ def bad_yunshu_binary(m, f):
         rows[0]["binary_sha256"] = "c" * 64
 
 
+def bad_observe_on_timed(m, f):
+    # a timed Yunshu rep that ran observe on (YUNSHU_OBSERVE=1) must fail the cell
+    for rows in _rows(f, "", "yunshu"):
+        rows[0]["observe"] = True
+        rows[0]["yunshu_observe"] = "1"
+
+
+def bad_observe_field_missing(m, f):
+    for rows in _rows(f, "", "yunshu"):
+        del rows[0]["observe"]
+
+
+def bad_profile_flag_on_timed(m, f):
+    # a timed rep carrying profile=true (TFB_PROFILE leaked) fails: profile true needs observe on
+    for rows in _rows(f, "", "yunshu"):
+        rows[0]["profile"] = True
+
+
 BAD_CASES = [
+    ("observe_state", bad_observe_on_timed),
+    ("observe_state", bad_observe_field_missing),
+    ("observe_state", bad_profile_flag_on_timed),
     ("pinned_versions", bad_yunshu_binary),
     ("prompt_identity", bad_prompt_identity),
     ("provenance_identity", bad_provenance_identity),

@@ -349,8 +349,10 @@ class Srv:
         # Fullcmp: a Yunshu server runs only from the pinned tree and venv, or not at all.
         # Checked before any port, directory or process is created.
         self.pin = None
+        self.observe = None  # fullcmp Yunshu: True (profile) or False (timed); see observe_state
         if fp.fullcmp_mode(os.environ) and self._is_yunshu(engine):
             self.pin = fp.require_yunshu_pin(os.environ)
+            self.observe = fp.observe_state(os.environ, True)
         self.engine, self.port = engine, free_port()
         assert_port_free(self.port)  # fail closed before any dir or process is created
         self.tag, self.model_arg = tag, model
@@ -435,8 +437,17 @@ class Srv:
         # A watched engine always runs in observe mode; TFB_OBSERVE=0 (or an explicit
         # YUNSHU_OBSERVE via --env) keeps a pure timing run free of telemetry.
         is_yunshu = self._is_yunshu(engine)
-        if is_yunshu and os.environ.get("TFB_OBSERVE", "1") != "0":
+        if fp.fullcmp_mode(os.environ) and is_yunshu:
+            # Fullcmp: the server env carries exactly what observe_state decided (no leftovers,
+            # no --env override); the header records the value actually passed.
+            if "YUNSHU_OBSERVE" in extra_env:
+                raise fp.ProvenanceError("fullcmp: YUNSHU_OBSERVE must not come from --env")
+            env.pop("YUNSHU_OBSERVE", None)
+            if self.observe:
+                env["YUNSHU_OBSERVE"] = "1"
+        elif is_yunshu and os.environ.get("TFB_OBSERVE", "1") != "0":
             env.setdefault("YUNSHU_OBSERVE", "1")
+        self.yunshu_observe_env = env.get("YUNSHU_OBSERVE")
         if self.pin is not None:
             # Pinned: `<pinned venv python> -m yunshu_cli serve ...` from the pinned tree only.
             if not bench_engines.is_yunshu_command(cmd):
@@ -2340,6 +2351,9 @@ def fullcmp_header(
         quiet_pre=quiet_pre,
         engine_log_path=str(s.log),
         server_flags={"argv": [str(x) for x in s.cmd]},
+        observe=s.observe,
+        yunshu_observe=s.yunshu_observe_env,
+        profile=environ.get("TFB_PROFILE") == "1",
     )
 
 

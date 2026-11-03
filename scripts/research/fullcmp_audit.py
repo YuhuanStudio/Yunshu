@@ -89,6 +89,9 @@ FULLCMP_SCHEMA = {
         "quiet_post": "dict, quiet-machine snapshot after the cell, server still up",
         "contended": "bool, machine contention flag",
         "device": "str, machine id",
+        "observe": "bool, Yunshu only: observe mode the server ran with (timed false, profile true)",
+        "yunshu_observe": "str|null, the YUNSHU_OBSERVE value passed to the server env (\"1\" or null)",
+        "profile": "bool, true only in a profile rep (TFB_PROFILE=1)",
     },
     "request": {
         "part": '"decode"',
@@ -680,6 +683,61 @@ def check_engaged_mode(run: Run) -> GuardResult:
         line = h.get("engaged_log_line")
         if not isinstance(line, str) or want.lower() not in line.lower():
             res.fail(cell, f"r{cf.rep}: engaged_log_line does not show mode {want!r}")
+    return res
+
+
+def _observe_problems(header: dict) -> list[str]:
+    """Observe rule for one Yunshu session header: timed (profile false) runs observe OFF, profile
+    runs observe ON; the resolved YUNSHU_OBSERVE value must agree. A missing field is a problem."""
+    out = []
+    obs, prof = header.get("observe"), header.get("profile")
+    if not isinstance(obs, bool):
+        out.append("observe field missing or not bool")
+    if not isinstance(prof, bool):
+        out.append("profile field missing or not bool")
+    if isinstance(obs, bool) and isinstance(prof, bool):
+        if obs != prof:
+            out.append(f"observe={obs} but profile={prof} (timed rows observe false, profile rows true)")
+        want_env = "1" if obs else None
+        if header.get("yunshu_observe") != want_env:
+            out.append(f"yunshu_observe={header.get('yunshu_observe')!r}, observe={obs}")
+    return out
+
+
+def check_observe_state(run: Run) -> GuardResult:
+    """Guard 7b (lead ruling 2026-11-03): a Yunshu timed rep runs with observe OFF (TFB_OBSERVE=0,
+    YUNSHU_OBSERVE unset); observe, stage timers and xctrace only in the profile rep (observe ON).
+    Every Yunshu session header carries observe, profile and yunshu_observe; a missing field, a
+    timed row with observe on, or a profile row with observe off fails the cell (fail closed)."""
+    res = GuardResult("observe_state")
+    for cf in run.files:
+        cell, engine = cf.cell["cell"], cf.cell.get("engine")
+        if engine != "yunshu":
+            continue
+        res.checked += 1
+        for problem in _observe_problems(cf.header or {}):
+            res.fail(cell, f"r{cf.rep}: {problem}")
+    if run.profile_root is None:
+        return res
+    seen = set()
+    for cf in run.files:
+        cell, engine = cf.cell["cell"], cf.cell.get("engine")
+        if engine != "yunshu" or (engine, cell) in seen:
+            continue
+        seen.add((engine, cell))
+        path = Path(run.profile_root) / str(engine) / f"{cell}-prof.jsonl"
+        if not path.is_file():
+            continue  # a missing profile rep is reported by check_attribution_fields
+        rows, _errs = _read_jsonl(path)
+        session = next((r for r in rows if r.get("part") == "session"), None)
+        res.checked += 1
+        if session is None:
+            res.fail(cell, "profile rep: no session header")
+            continue
+        for problem in _observe_problems(session):
+            res.fail(cell, f"profile rep: {problem}")
+        if session.get("profile") is not True:
+            res.fail(cell, "profile rep: session profile field is not true")
     return res
 
 
@@ -1297,6 +1355,7 @@ GUARD_CHECKS = (
     check_manifest_completeness,
     check_record_count,
     check_engaged_mode,
+    check_observe_state,
     check_weight_identity,
     check_cold_cache,
     check_gpu_exclusive_rotation,

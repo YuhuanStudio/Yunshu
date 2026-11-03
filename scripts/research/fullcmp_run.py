@@ -57,6 +57,7 @@ import re
 import shlex
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -378,8 +379,11 @@ def cell_env(
     telemetry_root=None,
     extra=(),
     group: str = "",
+    profile: bool = False,
 ) -> list[str]:
     """Env assignments every harness command carries (pinned Yunshu tree, isolated HOME).
+    Observe is decided here, never left to tfbench's default: a timed cell exports TFB_OBSERVE=0
+    (YUNSHU_OBSERVE off); only a profile cell exports TFB_OBSERVE=1 with TFB_PROFILE=1.
     TFB_TELEMETRY_DIR is the raw root: tfbench writes <root>/<engine>/<cell>-rN.telemetry.jsonl,
     the same place the audit reads it beside each cell file. GPUQ_JOB_ID is not set here: gpuq
     exports it to the current daemon's jobs only. TFB_JOB_LABEL (the label this job was
@@ -396,7 +400,10 @@ def cell_env(
         f"TFB_WORK={TFB_WORK_DIR}",
         f"TFB_MLXLM_PY={pin['python_executable']}",
         f"TFB_OUT={TFOUT_ROOT}",
+        f"TFB_OBSERVE={'1' if profile else '0'}",
     ]
+    if profile:
+        env.append("TFB_PROFILE=1")
     if label:
         env.append(f"TFB_JOB_LABEL={label}")
     # tfbench fails closed without these (fullcmp_provenance.REQUIRED_ENV); the group is the
@@ -451,11 +458,14 @@ def cell_command(
             telemetry_root=RAW_ROOT / "profile",
             extra=profile_env(row["engine"]),
             group=comparison_group(row),
+            profile=True,
         )
         rep = 0
     else:
         out = raw_path(row["engine"], row["id"], rep)
-        env = cell_env(row["engine"], pin, label, group=comparison_group(row))
+        env = cell_env(
+            row["engine"], pin, label, group=comparison_group(row), profile=False
+        )
     return [
         "env",
         *env,
@@ -903,7 +913,9 @@ def swap_gate(batch: str) -> int:
         "--timeout",
         PREFLIGHT_TIMEOUT_MIN,
         "--label",
-        f"fullcmp-preflight-{batch}",
+        # unique per invocation: gpuq refuses a duplicate active label, so a second run of the
+        # same batch while a first preflight is queued would be refused at submit
+        f"fullcmp-preflight-{batch}-{uuid.uuid4().hex[:8]}",
         "--",
         "env",
         f"PYTHONPATH={SCRIPTS.parent.parent / 'python'}",
@@ -945,9 +957,13 @@ def submit_all(jobs: list[Job]) -> tuple[list[str], int]:
             cwd=str(REPO_ROOT),
         )
         if res.returncode != 0 or not res.stdout.strip():
-            print(f"submit failed: {job.label}: {res.stderr.strip()}", file=sys.stderr)
+            # a refused submit stops the batch: nothing after it is queued, and the caller exits
+            print(
+                f"SUBMIT REFUSED label={job.label} rc={res.returncode}: {res.stderr.strip()}",
+                file=sys.stderr,
+            )
             bad += 1
-            continue
+            break
         jid = res.stdout.strip().splitlines()[-1]
         ids.append(jid)
         print(
@@ -1137,6 +1153,9 @@ def main(argv=None) -> int:
         for job in plan.jobs:  # the corpus each generated job body exports (every cell)
             works = sorted(set(re.findall(r"TFB_WORK=(\S+)", job.script)))
             print(f"  job body {job.label}: TFB_WORK={','.join(works) or 'MISSING'}")
+        for job in plan.jobs:  # the observe state each job body exports (timed 0, -prof 1)
+            obs = sorted(set(re.findall(r"TFB_OBSERVE=(\S+)", job.script)))
+            print(f"  job body {job.label}: TFB_OBSERVE={','.join(obs) or 'MISSING'}")
         return 0
 
     if a.phase == "preflight":
@@ -1171,6 +1190,9 @@ def main(argv=None) -> int:
         return 2
 
     ids, bad = submit_all(plan.jobs)
+    if bad:
+        print(f"{a.batch}: submit refused, {len(ids)} job(s) already queued", file=sys.stderr)
+        return 1
     failed = bad + (1 if wait_all(ids) != 0 else 0)
 
     batches = audited_batches(a.batch)

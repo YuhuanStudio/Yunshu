@@ -304,6 +304,25 @@ def resolve_job_id(environ, jobs_dir=None) -> str:
     )
 
 
+def observe_state(environ, is_yunshu: bool) -> bool | None:
+    """Observe mode a fullcmp Yunshu cell must run with (fail closed; None for competitors).
+    Timed cells run observe OFF: TFB_OBSERVE must be exactly "0" (unset or "1" is refused, since
+    tfbench would otherwise default observe on). Profile cells (TFB_PROFILE=1) run observe ON:
+    TFB_OBSERVE must be exactly "1". Observe, stage timers and xctrace never feed table numbers."""
+    if not is_yunshu:
+        return None
+    raw = environ.get("TFB_OBSERVE")
+    if environ.get("TFB_PROFILE") == "1":
+        if raw != "1":
+            raise ProvenanceError(f"profile Yunshu cell requires TFB_OBSERVE=1 (got {raw!r})")
+        return True
+    if raw != "0":
+        raise ProvenanceError(
+            f"timed Yunshu cell requires TFB_OBSERVE=0 (got {raw!r}; unset or 1 is refused)"
+        )
+    return False
+
+
 def check_required_env(environ, jobs_dir=None) -> str:
     """Fail closed before a cell runs: REQUIRED_ENV present and a job id resolvable. Returns it."""
     missing = [k for k in REQUIRED_ENV if not environ.get(k)]
