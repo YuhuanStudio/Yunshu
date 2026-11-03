@@ -179,6 +179,8 @@ def make_data():
                         }
                     ],
                     "fresh_process": True,
+                    "harness_commit": "a" * 40,
+                    "harness_dirty": False,
                     "home": f"/Volumes/P5Plus/yunshu-build/homes/{eng}/job-{slot}",
                     "job_id": f"job-{slot}",
                     "job_start_s": start,

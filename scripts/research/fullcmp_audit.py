@@ -1490,6 +1490,35 @@ def check_mixed_same_prompt(run: Run) -> GuardResult:
     return res
 
 
+def _batch_of(cell_name: str) -> str:
+    """'B1.core.yunshu...' -> 'B1'; a smoke cell keeps its own prefix."""
+    return str(cell_name).split(".", 1)[0]
+
+
+def check_harness_identity(run: Run) -> GuardResult:
+    """Guard 22: every cell of one batch was run from one harness commit, and never from a dirty
+    tree (tfbench header: harness_commit, harness_dirty). A multi-batch union is checked per batch:
+    batches may differ from each other, cells within one batch may not."""
+    res = GuardResult("harness_identity")
+    by_batch = defaultdict(list)  # batch -> [(cell, commit)]
+    for cf in run.files:
+        res.checked += 1
+        head = cf.header or {}
+        cell = cf.cell["cell"]
+        if head.get("harness_dirty") is not False:
+            res.fail(cell, f"r{cf.rep}: harness_dirty is {head.get('harness_dirty')!r}, must be false")
+        commit = head.get("harness_commit")
+        if not commit:
+            res.fail(cell, f"r{cf.rep}: header has no harness_commit (not run from a snapshot)")
+        by_batch[_batch_of(cell)].append((cell, commit))
+    for batch, items in sorted(by_batch.items()):
+        commits = sorted({c for _, c in items if c})
+        if len(commits) > 1:
+            cells = ", ".join(f"{c} -> {m}" for c, m in items)
+            res.fail(batch, f"batch has {len(commits)} harness commits {commits}: {cells}")
+    return res
+
+
 GUARD_CHECKS = (
     check_usage_fields,
     check_prompt_identity,
@@ -1512,6 +1541,7 @@ GUARD_CHECKS = (
     check_round_time_outlier,
     check_behaviour,
     check_mixed_same_prompt,
+    check_harness_identity,
 )
 # the guard names, in run order (fullcmp_audit's report and its tests read these)
 GUARDS = tuple(check.__name__.removeprefix("check_") for check in GUARD_CHECKS)
