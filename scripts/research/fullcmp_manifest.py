@@ -19,13 +19,17 @@ Row status (never silently dropped):
                         Anthropic/Responses route, no disk prefix tier) or no checkpoint (Ollama); zero cost
   cut (reason)          removed by a cut from CUT_ORDER to fit the target; zero cost in the totals, est kept
 
-Cost model (est_gpu_min per row, REPS included, minutes):
+Cost model (est_gpu_min per row, REPS included, minutes), fitted to measured cells (2026-11-03):
   wall_s(cell) = sum over the phases the cell measures of
       cold     conc * (ctx + img) / PREFILL_TPS + out_eff * SLOW(conc) / DECODE_TPS
-      warm     conc * WARM_TTFT_S
+      warm     conc * WARM_TTFT_S + out_eff * SLOW / DECODE_TPS
       fu       conc * (out + FOLLOWUP) / PREFILL_TPS + out * SLOW / DECODE_TPS
       ...      (see wall_s)
-  est_gpu_min = REPS * wall_s / 60 + share of the server boot (ready_s x REPS per server group)
+  est_gpu_min = REPS * (wall_s + ready_s + OVERHEAD_S) / 60
+  Each cell is one tfbench invocation, so each row pays its own server start (ready_s) and the
+  memory idle + shutdown (OVERHEAD_S). The measured record is scripts/research/fullcmp_cell_timing.json
+  (per-number provenance); the 7 complete yunshu B1 cells reproduce it within about 1 s.
+  B5 agent rows still share one server per (engine, agent) group.
 
 Every measured constant is in ENGINE_PERF with its source. Engines without a measurement use the Yunshu
 curve and are flagged in 'assumed'. Concurrency slowdown: see SLOW_POINTS and slowdown().
@@ -60,7 +64,10 @@ BEHAVIOUR_MIN = 3.0  # per engine: the 7 checks plus one boot (ASSUMED budget)
 # ASSUMED per-run cap for one Claude Code agentbench run. PERF_TREND 2026-10-23 ran 62 runs in
 # 12-minute budget shards; the per-run average was not recorded, so this is an upper bound.
 AGENT_RUN_MIN = 12.0
-WARM_TTFT_S = 0.5  # per warm request (cmp-1102 warm TTFT 0.13-0.25 s at 32K; padded)
+_TIMING_PATH = Path(__file__).with_name("fullcmp_cell_timing.json")
+TIMING = json.loads(_TIMING_PATH.read_text())
+_PLAN = TIMING["yunshu"]["planning"]
+WARM_TTFT_S = float(_PLAN["warm_ttft_s"]["value"])  # measured max + margin (B1 cells)
 FOLLOWUP_NEW_TOKENS = 1024  # new user turn appended to the previous reply
 THINK_TOKENS = 1024  # extra reasoning tokens with thinking on
 IDLE_S = 5.0  # spec: follow-up after 5 s idle
@@ -102,13 +109,13 @@ def is_family_cell(kind, thinking, media) -> bool:
     return kind in FAMILY_KINDS or thinking == "on" or (media or "none") != "none"
 
 # ---------------------------------------------------------------- measured constants
-# Yunshu curve (27B 4-bit, cold prefill tok/s and decode tok/s per ctx). PROVISIONAL: from the 0.1.4
-# snapshot014 run (verify run snapshot014-released-v2-13824db790a2, cells snapshot.yunshu-new-*,
-# 'decode' part, cached == 0, median over reps; prefill = pt / ttft_s). Replace with the first B1 cells
-# measured on 0f2960047 (PERF_TREND 2026-10-23: 128K code decode 90 tok/s on newer main).
+# Yunshu curve (27B 4-bit, cold prefill tok/s and decode tok/s per ctx). Measured by the B1 cells of
+# job 1103-220358 (0f2960047, 2026-11-03; replaced the 0.1.4 snapshot014 curve). The record and its
+# per-number provenance are scripts/research/fullcmp_cell_timing.json (planning = worst kind per ctx).
+OVERHEAD_S = float(TIMING["overhead_s"]["value"])  # memory idle 30 s + shutdown, per cell
 YUNSHU_CURVE = {
-    "prefill": {1024: 836.0, 8192: 1027.0, 32768: 946.0, 65536: 825.0, 131072: 656.0},
-    "decode": {1024: 78.2, 8192: 81.8, 32768: 100.7, 65536: 79.5, 131072: 57.4},
+    "prefill": {int(k): float(v["value"]) for k, v in _PLAN["prefill_tps"].items() if k[0].isdigit()},
+    "decode": {int(k): float(v["value"]) for k, v in _PLAN["decode_tps"].items() if k[0].isdigit()},
 }
 
 # Concurrency slowdown: per-request decode time multiplier at conc N vs single request.
@@ -157,12 +164,12 @@ ENGINE_PERF = {
         prefill=YUNSHU_CURVE["prefill"],
         decode=YUNSHU_CURVE["decode"],
         slow=YUNSHU_SLOW_POINTS,
-        ready_s=6.1,  # snapshot014 yunshu-new ready_s median (n=20)
-        source="PROVISIONAL snapshot014-released-v2 yunshu-new (0.1.4 @8c099150); "
+        ready_s=float(_PLAN["ready_s_max"]["value"]),  # max measured ready in the B1 cells
+        source="B1 cells, job 1103-220358 (0f2960047; fullcmp_cell_timing.json); "
         "concurrency from PERF_TREND 2026-10-01/05 (default path)",
         assumed=[
-            "curve provisional: replace with B1 cells on 0f2960047",
-            "single-request reference at 8K/64K scaled from 32K (72/100.7)",
+            "prefill/decode curve from 1K/32K/64K/128K B1 cells; 4K/8K/16K interpolated",
+            "concurrency slowdown is not re-measured on 0f2960047 (PERF_TREND 2026-10-01/05)",
         ],
     ),
     "tf-1.2.1": dict(
@@ -615,7 +622,8 @@ def wall_s(eng, ctx_tokens, conc, out, think, img_tokens, phases):
     if "cold" in phases:
         t += conc * (ctx_tokens + img_tokens) / pf + o * s / dec
     if "warm" in phases:
-        t += conc * WARM_TTFT_S
+        # the warm reply decodes too (measured warm total = warm TTFT + the 512-token reply)
+        t += conc * WARM_TTFT_S + o * s / dec
     if "fu" in phases or "fu_idle" in phases:
         t += conc * (out + FOLLOWUP_NEW_TOKENS) / pf + out * s / dec
         if "fu_idle" in phases:
@@ -724,6 +732,13 @@ def build_rows(engines=None, tasks=None):
     for g, members in groups.items():
         eng = g[1]
         if eng not in ENGINE_PERF or ENGINE_PERF[eng]["ready_s"] <= 0:
+            continue
+        if g[0] != "B5":
+            # a cell is one tfbench invocation: it starts its own server (fresh process), then the
+            # memory idle and shutdown (OVERHEAD_S). Nothing is shared between cells.
+            boot = (ENGINE_PERF[eng]["ready_s"] + OVERHEAD_S) * REPS / 60.0
+            for r in members:
+                r["_work_min"] += boot
             continue
         boot = ENGINE_PERF[eng]["ready_s"] * REPS / 60.0
         for r in members:

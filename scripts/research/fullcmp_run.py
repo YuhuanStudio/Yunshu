@@ -7,8 +7,12 @@ evidence); "unsupported" and "cut" rows are skipped and listed. A row also needs
 (see harness_part) or it is skipped and listed with the reason.
 
 Grouping: one server configuration = (engine, model, thinking). Each group becomes one job per rep
-when its estimated time fits the job cap (20 min); a larger group is split into consecutive chunks
-of <= 20 min (each chunk cold-starts its server again).
+when its estimate fits the planning limit (70% of the 20 min cap = 14 min, JOB_LIMIT_MIN, including
+JOB_FIXED_MIN per job); a larger group is split into consecutive chunks that each fit. A cell is one
+tfbench invocation with its own server start, so cells of a chunk run back to back in one job, each
+cold-starting its server. A single cell above the 14 min limit gets a job of its own, flagged
+over_margin (it still runs; above 20 min it is refused). Each job's gpuq --timeout is est x 1.3 (floor
+1.3 x the longest same-kind measured run, capped at 20 min); see job_timeout_min.
 
 Rotation (rep r): the batch's engines, in manifest order, are rotated left by r, so rep r starts at
 engine (r mod n). Within a rep, a group's jobs for one engine are consecutive; engines follow the
@@ -47,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shlex
@@ -93,7 +98,11 @@ MODEL_PATH = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
 BATCH_ORDER = ("B1", "B2", "B4", "B5")
 SMOKE_BATCH = "SMOKE"  # pre-flight matrix (fullcmp_manifest --smoke); audits only its own rows
 BATCH_CHOICES = BATCH_ORDER + (SMOKE_BATCH,)
-JOB_CAP_MIN = 20.0
+JOB_CAP_MIN = 20.0  # gpuq job cap (default --timeout); a job above it is killed
+JOB_MARGIN = 0.7  # planned chunks stay <= 70% of the cap (>= 30% margin for estimate error)
+JOB_LIMIT_MIN = JOB_CAP_MIN * JOB_MARGIN  # 14 min: the chunk packing limit
+JOB_FIXED_MIN = float(fm.TIMING["job"]["fixed_min"]["value"])  # quiet gate, mkdir, wrapper
+TIMEOUT_FACTOR = float(fm.TIMING["job"]["timeout_factor"]["value"])  # gpuq rule (1.3 x est, floor)
 REP3_INDEX = 2  # same as fullcmp_reps.REP3_INDEX
 # seconds between the cold reply and the follow-up of an idle cell (manifest: 5 s idle)
 IDLE_THINK_S = fm.IDLE_S
@@ -285,22 +294,43 @@ def group_slug(row: dict) -> str:
     return f"{row['model']}-th-{row.get('thinking') or 'off'}"
 
 
-def pack_chunks(rows: list[dict], cap: float = JOB_CAP_MIN) -> list[list[dict]]:
-    """Consecutive chunks (in id order) whose summed per-rep estimate is <= cap. A single row above
-    the cap gets its own chunk (the caller reports it)."""
+def pack_chunks(rows: list[dict], cap: float = JOB_LIMIT_MIN) -> list[list[dict]]:
+    """Consecutive chunks (in id order) whose estimate (per-rep cell estimates + JOB_FIXED_MIN) is
+    <= cap, the 70% planning limit by default. Cells of one group share a job, not a server: each
+    cell is its own tfbench invocation with its own server start, so the estimate sums per cell.
+    A single row above the limit gets its own chunk (the caller reports it: over_margin)."""
     chunks: list[list[dict]] = []
     cur: list[dict] = []
-    total = 0.0
+    total = JOB_FIXED_MIN
     for row in sorted(rows, key=lambda r: r["id"]):
         est = cell_est(row)
         if cur and total + est > cap:
             chunks.append(cur)
-            cur, total = [], 0.0
+            cur, total = [], JOB_FIXED_MIN
         cur.append(row)
         total += est
     if cur:
         chunks.append(cur)
     return chunks
+
+
+def job_timeout_min(est_min: float, prior_min: float = 0.0) -> float:
+    """gpuq --timeout for a job: est x 1.3, never below 1.3 x the longest recent run of the same
+    kind (prior_min: gpuq's preflight raises a lower timeout anyway), capped at the 20 min cap."""
+    want = max(TIMEOUT_FACTOR * est_min, TIMEOUT_FACTOR * prior_min)
+    return min(JOB_CAP_MIN, math.ceil(round(want * 10, 6)) / 10)  # 0.1 min steps, no float drift
+
+
+def prior_wall_min(batch: str, engine: str) -> float:
+    """Longest measured wall of an earlier job of the same batch and engine (fm.TIMING history)."""
+    return max(
+        (
+            float(h["wall_min"]["value"])
+            for h in fm.TIMING["job"]["history"]
+            if h["batch"] == batch and h["engine"] == engine
+        ),
+        default=0.0,
+    )
 
 
 @dataclass
@@ -313,7 +343,9 @@ class Job:
     cells: list[dict]
     est_min: float
     cmd: list[str]  # argv after `gpuq submit ... --`
-    over_cap: bool = False
+    over_cap: bool = False  # est above the 20 min cap: refused
+    over_margin: bool = False  # est above the 70% planning limit: a single cell, run alone
+    timeout_min: float = JOB_CAP_MIN
     flags: list[str] = field(default_factory=list)
     script: str = ""  # job body, written to cmd[1] by write_wrapper before submit
 
@@ -327,6 +359,8 @@ class Job:
             "submit",
             "--label",
             self.label,
+            "--timeout",
+            f"{self.timeout_min:g}",
             "--priority",
             PRIORITY,
             "--quiet",
@@ -552,8 +586,9 @@ def plan_jobs(
                 chunks = pack_chunks(groups[slug])
                 for k, chunk in enumerate(chunks):
                     part_tag = f"-p{k + 1}" if len(chunks) > 1 else ""
-                    est = sum(cell_est(c) for c in chunk)
+                    est = sum(cell_est(c) for c in chunk) + JOB_FIXED_MIN
                     over = est > JOB_CAP_MIN + 1e-9
+                    margin = est > JOB_LIMIT_MIN + 1e-9
                     if profile:
                         label = f"fullcmp-{batch}-{engine}-{slug}{part_tag}-prof"
                         flags = ["profile"]
@@ -572,6 +607,8 @@ def plan_jobs(
                             cmd=job_command(chunk, rep, pin, label, profile=profile),
                             script=job_script(chunk, rep, pin, label, profile=profile),
                             over_cap=over,
+                            over_margin=margin,
+                            timeout_min=job_timeout_min(est, prior_wall_min(batch, engine)),
                             flags=flags,
                         )
                     )
@@ -699,16 +736,14 @@ def fam_phase_names() -> dict:
     return fam.PHASE_NAMES
 
 
-def expected_records(row: dict) -> int | None:
-    """Expected request-record rows per cell (all reps) for a smoke row, from the smoke manifest.
-    Decode: one record per planned phase per rep (warm_reps is 1). Conc: CONC_TRIALS records per rep,
-    each holding conc requests. Real-matrix rows return None: their counts are not filled here."""
-    if "prompt_variant" not in row:
-        return None
-    reps = row_reps(row)
+def expected_records(row: dict) -> int:
+    """Expected request-record rows in ONE rep's file (the audit checks each rep file on its own).
+    Decode: one record per planned phase. Conc (and mixed, conc 8 = one long + 7 short): CONC_TRIALS
+    records, each holding conc requests. Real-matrix rows get the same counts: they returned None
+    before 2026-11-03, and the record_count guard then failed every real cell ('expected None')."""
     if int(row["conc"]) > 1:
-        return reps * int(row["conc"]) * CONC_TRIALS
-    return reps * len(row.get("phases") or ())
+        return int(row["conc"]) * CONC_TRIALS
+    return len(row.get("phases") or ())
 
 
 def _expected_spec_mode(engine: str) -> str | None:
@@ -955,11 +990,12 @@ def print_plan(plan: Plan) -> None:
     for row, reason in plan.skipped:
         print(f"SKIP {row['id']}: {reason}")
     for job in plan.jobs:
-        flags = " [over-cap: single cell above 20 min]" if job.over_cap else ""
+        flags = " [over-cap: above 20 min, refused]" if job.over_cap else ""
+        flags += " [over-margin: above the 70% limit, run alone]" if job.over_margin else ""
         print(f"JOB {job.label}{flags}")
         print(f"  group: {job.engine}/{job.group} rep {job.rep}")
         print(f"  cells: {' '.join(job.cell_ids)}")
-        print(f"  est_min: {job.est_min:.2f}")
+        print(f"  est_min: {job.est_min:.2f} timeout_min: {job.timeout_min:g}")
         print(f"  command: {shlex.join(job.submit_argv())}")
     total = sum(j.est_min for j in plan.jobs)
     print(

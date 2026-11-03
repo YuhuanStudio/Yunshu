@@ -215,6 +215,8 @@ def make_data():
                     )
                 for r_ in rows[1:]:
                     r_.update(attr_fixture(eng, r_))
+                # tfbench writes part_done after the decode part completes
+                rows.append({"part": "part_done", "which": "decode", "complete": True})
                 files[f"{eng}/{cell}-r{rep}.jsonl"] = rows
     return manifest, files
 
@@ -995,6 +997,83 @@ def test_conc_request_missing_a_list_entry_is_not_silently_counted():
     assert any("incomplete stream" in v for v in res.violations)
 
 
+def _b1_decode_row(phase, ct=512):
+    return {
+        "part": "decode",
+        "phase": phase,
+        "ttft_s": 0.5,
+        "total_s": 5.0,
+        "ct": ct,
+        "pt": 1024,
+        "cached": 0,
+        "finish": "length",
+    }
+
+
+def _b1_cell(name, phases=("cold", "warm", "fu")):
+    return {
+        "cell": name,
+        "engine": "yunshu",
+        "group": "B1.64K.prose.c1",
+        "expected_records": len(phases),
+        "phases": list(phases),
+        "max_tokens": 512,
+        "ctx": 65536,
+        "kind": "prose",
+        "thinking": "off",
+        "media": "none",
+        "reps": 1,
+    }
+
+
+def test_truncated_cell_without_part_done_is_a_violation_naming_the_cell(tmp_path):
+    # the 1103-220358 shape: the 64K prose cell wrote its cold row, then the job was killed
+    # (no warm/turn2 rows, no part_done); the 8K cell never ran (no file at all)
+    trunc = _b1_cell("B1.core.yunshu.64K.c1.prose.o512")
+    missing8k = _b1_cell("B1.core.yunshu.8K.c1.code.o512")
+    missing8k["ctx"], missing8k["kind"] = 8192, "code"
+    manifest = {"reps": 1, "cells": [trunc, missing8k]}
+    d = tmp_path / "root" / "yunshu"
+    d.mkdir(parents=True)
+    lines = [
+        {"part": "session", "run_id": "r", "job_start_s": 1.0},
+        _b1_decode_row("cold"),
+    ]
+    (d / "B1.core.yunshu.64K.c1.prose.o512-r0.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in lines)
+    )
+    run = fa.load_run(tmp_path / "root", manifest)
+    assert run.files[0].truncated == ("decode",)
+    rec = fa.check_record_count(run)
+    assert any(
+        "B1.core.yunshu.64K.c1.prose.o512" in v and "truncated" in v and "part_done" in v
+        for v in rec.violations
+    )
+    assert any("record" in v or "request rows" in v for v in rec.violations)
+    comp = fa.check_manifest_completeness(run)
+    assert any(
+        "B1.core.yunshu.8K.c1.code.o512" in v and "missing" in v for v in comp.violations
+    )
+
+
+def test_complete_cell_with_part_done_has_no_truncation(tmp_path):
+    cell = _b1_cell("B1.core.yunshu.1K.c1.code.o512", phases=("cold",))
+    manifest = {"reps": 1, "cells": [cell]}
+    d = tmp_path / "root" / "yunshu"
+    d.mkdir(parents=True)
+    lines = [
+        {"part": "session", "run_id": "r"},
+        _b1_decode_row("cold"),
+        {"part": "part_done", "which": "decode", "complete": True},
+    ]
+    (d / "B1.core.yunshu.1K.c1.code.o512-r0.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in lines)
+    )
+    run = fa.load_run(tmp_path / "root", manifest)
+    assert run.files[0].truncated == ()
+    assert not any("truncated" in v for v in fa.check_record_count(run).violations)
+
+
 def test_conc_cell_is_read_from_disk_and_counts_its_requests(tmp_path):
     cell = {
         "cell": "q27_conc-1024-code",
@@ -1010,7 +1089,9 @@ def test_conc_cell_is_read_from_disk_and_counts_its_requests(tmp_path):
     d = tmp_path / "root" / "yunshu"
     d.mkdir(parents=True)
     head = {"part": "session", "run_id": "r"}
-    lines = [head, _conc_record(trial=0, n=2), _conc_record(trial=1, n=2)]
+    # tfbench writes part_done after the part; a conc part without it would be truncated
+    done = {"part": "part_done", "which": "conc", "complete": True}
+    lines = [head, _conc_record(trial=0, n=2), _conc_record(trial=1, n=2), done]
     (d / "q27_conc-1024-code-r0.jsonl").write_text(
         "\n".join(json.dumps(x) for x in lines)
     )

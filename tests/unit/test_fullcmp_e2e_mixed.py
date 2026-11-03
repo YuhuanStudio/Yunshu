@@ -242,7 +242,7 @@ def test_mixed_and_restart_phases_are_named_for_the_audit():
     assert fam.PHASE_NAMES["mixed"] == "mixed"
     assert fam.PHASE_NAMES["restart"] == "restart"
     row = _single_variant_rows("yunshu", [_mixed_spec()])[0]
-    assert fr.expected_records(row) == fr.row_reps(row) * (SHORT_N + 1) * fr.CONC_TRIALS
+    assert fr.expected_records(row) == (SHORT_N + 1) * fr.CONC_TRIALS  # one rep file
 
 
 def test_smoke_audit_manifest_names_conc_and_mixed_cells_by_their_record_part():

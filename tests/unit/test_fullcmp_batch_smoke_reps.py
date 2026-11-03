@@ -68,8 +68,9 @@ def test_real_matrix_b1_b2_cells_default_to_two_reps():
     assert {r["reps"] for r in b12} == {2}
 
 
-def test_smoke_expected_records_scale_with_two_reps():
+def test_smoke_expected_records_are_per_rep_file():
+    # the audit checks each rep's file on its own: the count does not multiply by reps
     row = dict(fm.build_smoke_rows()[0])
     row["reps"] = 2
     assert fr.row_reps(row) == 2
-    assert fr.expected_records(row) == 2 * len(row["phases"])
+    assert fr.expected_records(row) == len(row["phases"])

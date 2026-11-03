@@ -185,7 +185,7 @@ def test_yunshu_concurrency_is_measured_not_the_snapshot_artifact():
     assert fm.slowdown("yunshu", 1024, 4) == 2.66  # nearest measured ctx is 8K
     assert fm.slowdown("yunshu", 131072, 2) == 3.2  # nearest measured ctx is 64K
     assert fm.ENGINE_PERF["yunshu"]["slow"] != {2: {None: 5.9}}
-    assert fm.ENGINE_PERF["yunshu"]["source"].startswith("PROVISIONAL")
+    assert "fullcmp_cell_timing.json" in fm.ENGINE_PERF["yunshu"]["source"]  # measured, not snapshot
 
 
 def test_fallback_and_serial_slowdown_are_explicit():
@@ -210,7 +210,9 @@ def test_constants_cite_sources_and_flag_assumptions():
 def test_loglin_hits_measured_anchors_exactly():
     assert fm.prefill_tps("omlx-0.7.3rc1", 1024) == 772.0
     assert fm.decode_tps("tf-1.2.1", 32768) == 112.0
-    assert fm.prefill_tps("yunshu", 32768) == 946.0
+    # Yunshu anchors are the measured B1 planning values (fullcmp_cell_timing.json), not snapshot014
+    assert fm.prefill_tps("yunshu", 32768) == fm.TIMING["yunshu"]["planning"]["prefill_tps"]["32768"]["value"]
+    assert fm.prefill_tps("yunshu", 131072) == fm.TIMING["yunshu"]["planning"]["prefill_tps"]["131072"]["value"]
 
 
 def test_cost_monotone_in_the_obvious_directions():
@@ -286,3 +288,58 @@ def test_summary_prints_every_section():
         assert b in text
     for eng in fm.ENGINE_IDS:
         assert f"| {eng} |" in text
+
+
+# --- measured cell timing (fullcmp_cell_timing.json, job 1103-220358) -------------------------
+
+
+def _leaves_with_value(node, path=""):
+    if isinstance(node, dict):
+        if "value" in node:
+            yield path, node
+        for k, v in node.items():
+            yield from _leaves_with_value(v, f"{path}/{k}")
+
+
+def test_every_timing_number_carries_its_kind_and_source():
+    for path, leaf in _leaves_with_value(fm.TIMING):
+        assert leaf.get("kind"), path
+        assert str(leaf.get("source", "")).strip(), path
+
+
+def test_measured_yunshu_cells_reproduce_the_wall_fit():
+    # wall = ready + cold + warm + turn2 + overhead, within 1 s, for every complete cell
+    cells = fm.TIMING["yunshu"]["measured"]
+    n = 0
+    for ctx, kinds in cells.items():
+        for kind, e in kinds.items():
+            if not e["complete"]:
+                continue
+            n += 1
+            fit = (
+                e["ready_s"]["value"]
+                + e["cold_total_s"]["value"]
+                + e["warm_total_s"]["value"]
+                + e["turn2_total_s"]["value"]
+                + fm.OVERHEAD_S
+            )
+            assert abs(fit - e["job_wall_s"]["value"]) < 1.0, (ctx, kind)
+    assert n == 7  # 64K prose is the truncated cell, not measured
+
+
+def test_overhead_is_the_measured_idle_plus_shutdown():
+    assert abs(fm.OVERHEAD_S - 30.6) < 0.1
+
+
+def test_a_cell_pays_its_own_server_start_and_memory_idle():
+    rows, _meta = fm.build_rows(engines=["yunshu"])
+    r = next(x for x in rows if x["id"] == "B1.core.yunshu.1K.c1.code.o512.single.th-off.none.greedy")
+    wall = fm.wall_s("yunshu", 1024, 1, 512, False, 0, ("cold", "warm", "fu"))
+    want = fm.REPS * (wall + fm.ENGINE_PERF["yunshu"]["ready_s"] + fm.OVERHEAD_S) / 60.0
+    assert abs(r["est_gpu_min"] - want) < 0.01
+
+
+def test_warm_phase_pays_the_reply_decode():
+    warm = fm.wall_s("yunshu", 32768, 1, 512, False, 0, ("warm",))
+    dec = fm.decode_tps("yunshu", 32768)
+    assert warm > 512 / dec

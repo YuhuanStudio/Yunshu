@@ -26,7 +26,9 @@ import tfbench  # noqa: E402
 # sha256 of the full real manifest (build_rows + apply_cuts, JSONL as main writes it). Re-pinned for
 # the conc-same cells (39 new rows: same-prompt concurrency, B2); the est_gpu_min of the other rows
 # moves by float rounding. Re-pinned 11-03 after the regenerated manifest matched it byte for byte.
-REAL_MANIFEST_SHA = "9a1b7aa62fd84e53bddd1d192e70f15630e285f4b47691c53681b08fc7411471"
+# Re-pinned 11-03 again: the cost model now uses the measured cell timing (fullcmp_cell_timing.json:
+# per-cell server start + memory idle, warm decode), so every est_gpu_min moved on purpose.
+REAL_MANIFEST_SHA = "d3c4b57e800db49493b9e01dcdde4e2aae304a44ebafc1ecd90c0ad01a521f90"
 
 
 def _real_manifest_bytes() -> bytes:
@@ -117,11 +119,15 @@ def test_expected_records_for_smoke_rows_come_from_the_manifest():
     conc = next(
         r for r in rows if r["sweep"] == "smoke-conc" and r["prompt_variant"] == 0
     )
-    assert fr.expected_records(core) == fr.row_reps(core) * 3  # cold, warm, turn2
-    assert fr.expected_records(conc) == fr.row_reps(conc) * 2 * fr.CONC_TRIALS
-    # the real matrix keeps its counts unfilled (the audit fails closed on them there)
+    assert fr.expected_records(core) == 3  # cold, warm, turn2: one rep file
+    assert fr.expected_records(conc) == 2 * fr.CONC_TRIALS
+    # the real matrix gets its counts too (they were None: the record_count guard failed every cell)
     real, _ = fm.build_rows()
-    assert all(fr.expected_records(r) is None for r in real)
+    assert all(
+        isinstance(fr.expected_records(r), int)
+        for r in real
+        if r["batch"] in ("B1", "B2") and r["status"] == "unverified"
+    )
 
 
 def test_smoke_manifest_writes_to_its_own_path(tmp_path):

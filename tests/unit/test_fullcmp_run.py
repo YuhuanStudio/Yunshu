@@ -126,12 +126,58 @@ def pin_file(tmp_path, monkeypatch):
 # --- grouping and the 20-minute split -------------------------------------
 
 
-def test_group_splits_at_20_min_per_rep():
-    # reps=2, est 10 per row -> 5 min per rep per cell; 4 cells fill 20 min exactly.
+def test_group_splits_at_the_70_percent_limit_per_rep():
+    # reps=2, est 10 per row -> 5 min per rep per cell. Limit 14 min minus the 1 min job fixed
+    # cost leaves room for two cells per job.
     rows = [row("yunshu", f"B1.c{i}", est=10.0) for i in range(6)]
     chunks = run.pack_chunks(rows)
-    assert [len(c) for c in chunks] == [4, 2]
-    assert all(sum(run.cell_est(r) for r in c) <= 20.0 for c in chunks)
+    assert [len(c) for c in chunks] == [2, 2, 2]
+    assert all(
+        sum(run.cell_est(r) for r in c) + run.JOB_FIXED_MIN <= run.JOB_LIMIT_MIN
+        for c in chunks
+    )
+    assert run.JOB_LIMIT_MIN == 0.7 * run.JOB_CAP_MIN == 14.0
+
+
+def test_group_whose_measured_sum_exceeds_the_limit_is_split():
+    # two cells of 6.5 min per rep: 13 + 1 fixed fits 14, a third cell does not
+    fits = [row("yunshu", f"B1.a{i}", est=13.0) for i in range(2)]
+    assert len(run.pack_chunks(fits)) == 1
+    over = fits + [row("yunshu", "B1.a2", est=13.0)]
+    chunks = run.pack_chunks(over)
+    assert [len(c) for c in chunks] == [2, 1]
+
+
+def test_yunshu_220358_shape_splits_into_chunks_within_the_limit():
+    # the 10 core cells of job 1103-220358 (1K..128K x code/prose, yunshu, 27B, conc 1) built from
+    # the real manifest estimate: the old single job (13.5 min estimate) was killed at the cap
+    import fullcmp_manifest as fm_
+
+    rows, _meta = fm_.build_rows(engines=["yunshu"])
+    core = [
+        r
+        for r in rows
+        if r["batch"] == "B1" and r["ctx"] in fm_.CORE_CTX and r["status"] == "unverified"
+    ]
+    assert len(core) == 10
+    chunks = run.pack_chunks(core)
+    assert len(chunks) >= 2
+    assert sorted(r["id"] for c in chunks for r in c) == sorted(r["id"] for r in core)
+    for c in chunks:
+        est = sum(run.cell_est(r) for r in c) + run.JOB_FIXED_MIN
+        assert est <= 0.7 * run.JOB_CAP_MIN, (est, [r["id"] for r in c])
+        assert run.job_timeout_min(est) <= run.JOB_CAP_MIN
+
+
+def test_timeout_is_1_3_x_estimate_floored_by_the_same_kind_and_capped():
+    assert run.job_timeout_min(10.0) == 13.0  # 1.3 x est
+    assert run.job_timeout_min(14.0) == 18.2
+    assert run.job_timeout_min(30.0) == 20.0  # capped at the cap
+    # never below 1.3 x the longest same-kind run: the killed 1103-220358 job ran 20 min
+    assert run.job_timeout_min(5.0, prior_min=10.0) == 13.0
+    assert run.job_timeout_min(5.0, prior_min=20.0) == 20.0
+    assert run.prior_wall_min("B1", "yunshu") >= 20.0
+    assert run.prior_wall_min("B9", "yunshu") == 0.0
 
 
 def test_plan_labels_split_groups_and_keeps_one_group_per_server_config():
@@ -152,6 +198,16 @@ def test_single_cell_above_cap_is_flagged():
     rows = [row("yunshu", "B1.big", est=60.0)]  # 30 min per rep
     plan = run.plan_batch(rows, "B1", PIN)
     assert plan.jobs and all(j.over_cap for j in plan.jobs)
+
+
+def test_single_cell_above_the_margin_runs_alone_and_is_flagged():
+    rows = [row("yunshu", "B1.long", est=30.0), row("yunshu", "B1.short", est=2.0)]
+    plan = run.plan_batch(rows, "B1", PIN)
+    rep0 = [j for j in plan.jobs if j.rep == 0]
+    long_job = next(j for j in rep0 if "B1.long" in j.cell_ids)
+    assert long_job.cell_ids == ["B1.long"]  # alone: the next cell does not fit with it
+    assert long_job.over_margin and not long_job.over_cap
+    assert long_job.timeout_min == run.JOB_CAP_MIN  # 1.3 x 16 min, capped at 20
 
 
 # --- rotated order across reps ---------------------------------------------
@@ -264,8 +320,9 @@ def test_submit_argv_form():
     argv = job.submit_argv()
     assert argv[1:3] == ["submit", "--label"]
     assert argv[3] == "fullcmp-B1-yunshu-q27-4bit-th-off-r0"
-    assert argv[4:8] == ["--priority", "1", "--quiet", "--"]
-    assert argv[8:] == job.cmd
+    assert argv[4:6] == ["--timeout", f"{job.timeout_min:g}"]
+    assert argv[6:10] == ["--priority", "1", "--quiet", "--"]
+    assert argv[10:] == job.cmd
 
 
 # --- dry run touches nothing ------------------------------------------------
@@ -417,4 +474,14 @@ def test_audit_manifest_carries_census_pins_for_every_engine(pin_file):
     assert {"yunshu", "omlx-0.7.3"} <= set(m["pins"])
     assert m["pins"]["omlx-0.7.3"]["install_path"]
     assert m["groups"]["B1.1024.code.c1"]["order"] == ["yunshu", "omlx-0.7.3"]
-    assert all(c["expected_records"] is None for c in m["cells"])
+    assert all(isinstance(c["expected_records"], int) for c in m["cells"])  # never None
+
+
+def test_real_matrix_rows_have_expected_record_counts():
+    # regression 2026-11-03: real-matrix rows returned None, so record_count failed every cell
+    # ("expected None"); a B1 decode cell has one record per phase per rep (cold, warm, turn2)
+    rows, _meta = run.fm.build_rows(engines=["yunshu"])
+    b1 = next(r for r in rows if r["batch"] == "B1" and r["ctx"] == "1K" and r["prompt_kind"] == "code")
+    assert run.expected_records(b1) == 3  # per rep file
+    conc = next(r for r in rows if r["batch"] == "B2" and r["sweep"] == "conc" and r["conc"] == 4)
+    assert run.expected_records(conc) == 4 * run.CONC_TRIALS

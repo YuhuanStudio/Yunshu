@@ -215,6 +215,8 @@ class CellFile:
     path: Path
     header: dict | None
     rows: list  # request rows (part == "decode")
+    # parts that wrote request rows but no part_done(complete=True): a killed or timed-out job
+    truncated: tuple = ()
 
 
 @dataclass
@@ -271,6 +273,7 @@ def expected_reps(cell: dict, manifest: dict) -> int:
     return int(cell.get("reps", manifest["reps"]))
 
 
+DECODE_PART = "decode"
 CONC_PART = "conc"
 CONC_LAYER1_REASON = (
     "conc record carries relative ttfts/total_s per request, no per-request epoch timestamps "
@@ -367,7 +370,11 @@ def load_run(root, manifest: dict) -> Run:
                 body += conc_request_rows(r)
             elif r.get("part") == MIXED_PART:
                 body += conc_request_rows(r, MIXED_PART)
-        files.append(CellFile(cell, rep, path, header, body))
+        # tfbench writes part_done after each part finishes; a part with request rows but no
+        # part_done was cut short (gpuq timeout or kill), so its cell is incomplete
+        started = {r.get("part") for r in rows if r.get("part") in (DECODE_PART, CONC_PART, MIXED_PART)}
+        done = {r.get("which") for r in rows if r.get("part") == "part_done" and r.get("complete") is True}
+        files.append(CellFile(cell, rep, path, header, body, truncated=tuple(sorted(started - done))))
     extra = [
         p
         for p in sorted(root.glob("*/*.jsonl"))
@@ -575,7 +582,13 @@ def check_record_count(run: Run) -> GuardResult:
         res.checked += 1
         if cf.header is None:
             res.fail(cell, f"r{cf.rep}: no session header row")
-        exp = cf.cell["expected_records"]
+        for part in cf.truncated:
+            res.fail(
+                cell,
+                f"r{cf.rep}: truncated: part '{part}' has request rows but no part_done "
+                "(the job timed out or was killed; the cell is incomplete)",
+            )
+        exp = cf.cell["expected_records"]  # per rep file (fullcmp_run.expected_records)
         if len(cf.rows) != exp:
             res.fail(cell, f"r{cf.rep}: {len(cf.rows)} request rows, expected {exp}")
         if set(r.get("phase") for r in cf.rows) != set(cf.cell["phases"]):
