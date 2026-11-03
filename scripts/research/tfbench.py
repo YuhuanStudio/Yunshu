@@ -1390,6 +1390,18 @@ def part_conc(s, out, a):
                 pts=[r["pt"] for r in rs],
                 cts=[r["ct"] for r in rs],
                 shas=[r["sha"] for r in rs],
+                # per-request provenance for the fullcmp audit (one entry per request, in order)
+                total_s=[r["total_s"] for r in rs],
+                finish=[r["finish"] for r in rs],
+                prompt_ids_sha=[r["prompt_ids_sha"] for r in rs],
+                # the same for every request of this record (conc prompts are a code/prose mix)
+                ctx=a.conc_ctx,
+                kind="mixed",
+                prompt_file="concurrent_prompt(prose|code, index+trial parity)",
+                max_tokens=16 if a.smoke else a.conc_tokens,
+                temperature=rs[0]["temperature"],
+                stop=rs[0]["stop"],
+                harness=HARNESS_ID,
             )
 
 

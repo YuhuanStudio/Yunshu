@@ -281,6 +281,50 @@ def expected_reps(cell: dict, manifest: dict) -> int:
     return int(cell.get("reps", manifest["reps"]))
 
 
+CONC_PART = "conc"
+
+
+def conc_request_rows(rec: dict) -> list[dict]:
+    """One request row per request of a tfbench `conc` record (one record = n simultaneous requests
+    of one trial). Per-request lists are read by index; a missing entry stays None so the
+    measured_only / record_count guards flag it instead of counting it."""
+    n = rec.get("n")
+    if not isinstance(n, int) or n < 1:
+        return [{"part": CONC_PART, "phase": "conc?", "error": f"conc record n={n!r}"}]
+    rows = []
+    for i in range(n):
+
+        def at(key):
+            v = rec.get(key)
+            return v[i] if isinstance(v, list) and i < len(v) else None
+
+        rows.append(
+            {
+                "part": CONC_PART,
+                "phase": CONC_PART,
+                "n": n,
+                "trial": rec.get("trial"),
+                "ttft_s": at("ttfts"),
+                "dec_tps": at("per_req_dec"),
+                "total_s": at("total_s"),
+                "ct": at("cts"),
+                "pt": at("pts"),
+                "cached": at("cached"),
+                "sha": at("shas"),
+                "finish": at("finish"),
+                "prompt_ids_sha": at("prompt_ids_sha"),
+                "max_tokens": rec.get("max_tokens"),
+                "temperature": rec.get("temperature"),
+                "stop": rec.get("stop"),
+                "harness": rec.get("harness"),
+                "ctx": rec.get("ctx"),
+                "kind": rec.get("kind"),
+                "prompt_file": rec.get("prompt_file"),
+            }
+        )
+    return rows
+
+
 def load_run(root, manifest: dict) -> Run:
     root = Path(root)
     expected = {}
@@ -299,6 +343,9 @@ def load_run(root, manifest: dict) -> Run:
         parse_errors += errs
         header = next((r for r in rows if r.get("part") == "session"), None)
         body = [r for r in rows if r.get("part") == "decode"]
+        for r in rows:
+            if r.get("part") == CONC_PART:
+                body += conc_request_rows(r)
         files.append(CellFile(cell, rep, path, header, body))
     extra = [
         p
@@ -373,7 +420,10 @@ def check_provenance_identity(run: Run) -> GuardResult:
                     cf.cell["cell"],
                     f"max_tokens {r.get('max_tokens')} != planned {cf.cell['max_tokens']}",
                 )
-            if r.get("ctx") != cf.cell["ctx"] or r.get("kind") != cf.cell["kind"]:
+            # conc requests are a fixed prose/code mix by design (tfbench concurrent_prompt): their
+            # kind is "mixed", so only ctx is compared for them.
+            kind_ok = r.get("part") == CONC_PART or r.get("kind") == cf.cell["kind"]
+            if r.get("ctx") != cf.cell["ctx"] or not kind_ok:
                 res.fail(cf.cell["cell"], "ctx/kind differs from the planned cell")
         if len(prov_set) > 1:
             res.fail(cf.cell["cell"], "provenance differs between rows of one cell")

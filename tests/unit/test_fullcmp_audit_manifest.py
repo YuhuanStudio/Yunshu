@@ -280,7 +280,10 @@ def test_build_manifest_cells_pins_and_phases():
     )
     assert any(u["engine"] == "llama-cpp-b12061" for u in m["unsupported"])
     assert any(n["cell"] == "B1.img.kapitsa-0.2.26.1K" for n in m["not_in_harness"])
-    assert any(n["cell"] == "B1.conc.tf-1.1.8.1K.c4.code" for n in m["not_in_audit"])
+    # conc cells are audited: one conc record per trial, n requests per record
+    conc4 = by[("tf-1.1.8", "B1.conc.tf-1.1.8.1K.c4.code")]
+    assert conc4["phases"] == ["conc"] and conc4["expected_records"] == 4 * 2
+    assert not any(n["cell"].startswith("B1.conc") for n in m["not_in_audit"])
     assert m["pins"]["omlx-0.7.3"]["version"] == "0.7.3"
     assert m["pins"]["tf-1.1.8"]["release_date"] is None
     assert any(

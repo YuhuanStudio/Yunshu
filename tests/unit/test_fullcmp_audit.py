@@ -843,3 +843,83 @@ def test_home_is_unique_per_server_job_not_per_engine():
     real = [cf("a", "j1", fa.os.path.expanduser("~"))]
     res = fa.check_fairness_controls(fa.Run(manifest, real, [], [], []))
     assert any("real HOME" in v for v in res.violations)
+
+
+# --- conc cells (tfbench part=conc) are audited -------------------------------
+
+
+def _conc_record(trial=0, n=2, ct=16, drop=None):
+    rec = {
+        "part": "conc",
+        "n": n,
+        "trial": trial,
+        "ttfts": [0.5 + i for i in range(n)],
+        "per_req_dec": [30.0] * n,
+        "total_s": [3.0] * n,
+        "cts": [ct] * n,
+        "pts": [1034] * n,
+        "cached": [0] * n,
+        "shas": ["a" * 16] * n,
+        "finish": ["length"] * n,
+        "prompt_ids_sha": ["c" * 16] * n,
+        "max_tokens": 16,
+        "temperature": 0,
+        "stop": [],
+        "harness": "tfbench/fullcmp-1",
+        "ctx": 1024,
+        "kind": "mixed",
+        "prompt_file": "concurrent_prompt",
+    }
+    for k in drop or ():
+        rec.pop(k)
+    return rec
+
+
+def test_conc_record_expands_to_one_row_per_request():
+    rows = fa.conc_request_rows(_conc_record(n=3))
+    assert len(rows) == 3
+    assert all(r["part"] == "conc" and r["phase"] == "conc" for r in rows)
+    assert [r["ttft_s"] for r in rows] == [0.5, 1.5, 2.5]
+    assert all(r["finish"] == "length" and r["ct"] == 16 for r in rows)
+
+
+def test_conc_request_missing_a_list_entry_is_not_silently_counted():
+    rec = _conc_record(n=2)
+    rec["finish"] = ["length"]  # second request has no finish reason recorded
+    rows = fa.conc_request_rows(rec)
+    cell = {
+        "cell": "c",
+        "engine": "yunshu",
+        "group": "g",
+        "expected_records": 2,
+        "phases": ["conc"],
+        "max_tokens": 16,
+    }
+    run = fa.Run({"groups": {}}, [_cf(cell, 0, {"part": "session"}, rows)], [], [], [])
+    res = fa.check_record_count(run)
+    assert any("incomplete stream" in v for v in res.violations)
+
+
+def test_conc_cell_is_read_from_disk_and_counts_its_requests(tmp_path):
+    cell = {
+        "cell": "q27_conc-1024-code",
+        "engine": "yunshu",
+        "group": "g",
+        "expected_records": 4,
+        "phases": ["conc"],
+        "max_tokens": 16,
+        "ctx": 1024,
+        "kind": "mixed",
+    }
+    manifest = {"reps": 1, "cells": [cell]}
+    d = tmp_path / "root" / "yunshu"
+    d.mkdir(parents=True)
+    head = {"part": "session", "run_id": "r"}
+    lines = [head, _conc_record(trial=0, n=2), _conc_record(trial=1, n=2)]
+    (d / "q27_conc-1024-code-r0.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in lines)
+    )
+    run = fa.load_run(tmp_path / "root", manifest)
+    assert run.missing == [] and len(run.files) == 1
+    assert len(run.files[0].rows) == 4
+    assert fa.check_record_count(run).violations == []

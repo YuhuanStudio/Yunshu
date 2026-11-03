@@ -11,11 +11,12 @@ Inputs, all read here and nothing copied by hand:
 
 Output: compsync/fullcmp-1103/audit_manifest.json (fullcmp_audit.py reads it as --manifest).
 
-What is audited: decode-part cells with concurrency 1 whose engine has a harness mapping
-(bench_engines.MANIFEST_ENGINES). Everything else is listed, never dropped:
+What is audited: decode-part cells (concurrency 1) and conc-part cells (concurrency > 1: one record
+per trial, expanded to its requests by fullcmp_audit.conc_request_rows) whose engine has a harness
+mapping (bench_engines.MANIFEST_ENGINES). Everything else is listed, never dropped:
   unsupported      stubbed engines (bench_engines.UNSUPPORTED_ENGINES) and rows the manifest marks unsupported
   not_in_harness   rows tfbench cannot run yet (image, thinking, agent, behaviour, sampling, turns)
-  not_in_audit     rows that run but are not in the audit's record schema (concurrency > 1)
+  not_in_audit     rows tfbench runs under a part the audit does not read (none today)
   unresolved       inputs the builder could not fill; the audit fails on them rather than guessing
 
 Rep policy per cell (fullcmp_reps.py): rep_decision ok (2 reps) | need_rep3 (3 reps) | unstable (3 reps)
@@ -312,19 +313,22 @@ def build_manifest(
         if part is None:
             not_in_harness.append({**entry, "reason": why})
             continue
-        if part != "decode":
+        if part not in ("decode", "conc"):
             not_in_audit.append(
-                {
-                    **entry,
-                    "reason": f"{part} part (conc {r['conc']}) is not in the audit record schema",
-                }
+                {**entry, "reason": f"{part} part is not in the audit record schema"}
             )
             continue
-        phases = []
-        for p in r["phases"]:
-            if p not in PHASE_NAMES:
-                raise SystemExit(f"unknown phase {p!r} in {cid}")
-            phases.append(PHASE_NAMES[p])
+        if part == "conc":
+            # one conc record per trial with n requests each; the planned phase is "conc"
+            phases = ["conc"]
+            expected = int(r["conc"]) * frun.CONC_TRIALS
+        else:
+            phases = []
+            for p in r["phases"]:
+                if p not in PHASE_NAMES:
+                    raise SystemExit(f"unknown phase {p!r} in {cid}")
+                phases.append(PHASE_NAMES[p])
+            expected = len(phases)
         hid = be.tfbench_engine(eng)
         decision, need3 = decisions.get((eng, cid), ("pending", False))
         grp = frun.comparison_group(r)
@@ -340,7 +344,7 @@ def build_manifest(
                 "prompt_id": f"{r['prompt_kind']}-{r['ctx_tokens']}",
                 "max_tokens": r["out_len"],
                 "phases": phases,
-                "expected_records": len(phases),
+                "expected_records": expected,
                 "spec_mode": be.ENGINES[hid].expected_mode,
                 "weight_group": WEIGHT_GROUP.get(eng),
                 "reps": 2,

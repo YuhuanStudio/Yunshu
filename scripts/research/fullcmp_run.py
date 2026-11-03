@@ -73,6 +73,9 @@ MODEL_PATH = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
 BATCH_ORDER = ("B1", "B2", "B4", "B5")
 JOB_CAP_MIN = 20.0
 REP3_INDEX = 2  # same as fullcmp_reps.REP3_INDEX
+CONC_TRIALS = (
+    2  # conc records per cell per rep (tfbench --conc-trials); each holds conc requests
+)
 PRIORITY = "1"
 RUN_ID = "fullcmp-1103"
 ACTIVE_STATES = ("pending", "running", "paused")
@@ -140,6 +143,8 @@ def harness_part(row: dict):
             str(row["ctx_tokens"]),
             "--conc-tokens",
             str(row["out_len"]),
+            "--conc-trials",
+            str(CONC_TRIALS),
         ],
         None,
     )
