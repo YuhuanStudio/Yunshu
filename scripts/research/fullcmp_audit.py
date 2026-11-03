@@ -760,7 +760,8 @@ def check_engaged_mode(run: Run) -> GuardResult:
             probe_response = {"timings": probe_row.get("timings")} if probe_row else None
             if bool(concurrent_records):
                 # concurrent cell: the shared verdict (fe.concurrent_check), the same one tfbench ran in-job
-                ev, _ = fe.concurrent_check(table, engine, want, log, concurrent_records, ready)
+                ev, _ = fe.concurrent_check(table, engine, want, log, concurrent_records, ready,
+                                            probe_responses=_concurrent_probe_responses(cf.path))
             else:
                 ev = fe.evaluate(engine, want, log, cf.rows, table,
                                  probe_text=h.get("engine_probe"), ready_offset=ready,
@@ -797,7 +798,8 @@ def check_engaged_mode(run: Run) -> GuardResult:
         if engine != "yunshu" and got not in fe.AR_MODES and got != fe.UNVERIFIED:
             # concurrent records (part conc / mixed): the shared verdict, fail closed per request
             concurrent = fe.read_concurrent_records(cf.path)
-            _cev, cproblems = fe.concurrent_check(table, engine, want, log, concurrent, ready)
+            _cev, cproblems = fe.concurrent_check(table, engine, want, log, concurrent, ready,
+                                                  probe_responses=_concurrent_probe_responses(cf.path))
             for problem in cproblems:
                 res.fail(cell, f"r{cf.rep}: {problem}")
         for row in ev["stats"].get("per_row", []):

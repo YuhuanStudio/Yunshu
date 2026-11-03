@@ -715,9 +715,9 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
     if engine in PROBE_ONLY_ENGINES:
         # probe-only engine: only the concurrent probe (one response per request, with per-response draft
         # stats) is evidence for a concurrent cell; a single sequential probe proves nothing for it
-        # at least one response carries the draft counters; an absent counter on another is zero (all zero/absent)
-        has_stats = bool(probe_responses) and any(
-            isinstance((r or {}).get("timings"), dict) and "draft_n" in r["timings"] for r in probe_responses)
+        # the probe rows exist: a response without draft counters has zero drafted (absent = zero: the wire-1107
+        # mlx-vlm concurrent probes carry timings with no draft_* fields -> 'ar (concurrent path does not draft)')
+        has_stats = bool(probe_responses)
         if not has_stats:
             return {"engaged_mode": UNVERIFIED, "matched_line": None, "evidence_kind": "concurrent_probe",
                     "source": "probe", "stats": {"requests": sum(len(r.get("requests") or []) for r in records)},
@@ -807,7 +807,12 @@ def acceptance_proven(ev: dict) -> bool:
     stats = ev.get("stats") or {}
     if stats.get("per_row") and not stats.get("per_row_problem"):
         return all(float(r.get("value", 0)) > 0 for r in stats["per_row"])
+    if stats.get("batch_level"):
+        return _is_positive(stats.get("accepted")) and _is_positive(stats.get("drafted"))
     probe = stats.get("probe")
+    if probe and all(isinstance(x, (list, tuple)) and len(x) == 2 and _is_positive(x[0]) and _is_positive(x[1])
+                     for x in probe):
+        return True  # the concurrent probe: every response drafted and accepted
     if probe and all(_is_positive(v) for v in probe):
         return True
     return bool(stats.get("acceptance_positive_rows"))
