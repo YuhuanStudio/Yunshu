@@ -97,11 +97,14 @@ def competitor_stat_lines(text: str) -> list[str]:
 
 
 def _engine_log_path(cell: Path) -> str | None:
-    for line in cell.read_text().splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        path = (row.get("attr") or {}).get("engine_log_path")
+    """The engine log of a cell: the session header's engine_log_path (every cell type carries it), else the
+    attribution rows' or a decode row's (sequential cells). Conc and mixed cells have no decode rows."""
+    rows = [json.loads(line) for line in cell.read_text().splitlines() if line.strip()]
+    for row in rows:
+        if row.get("part") == "session" and row.get("engine_log_path"):
+            return row["engine_log_path"]
+    for row in rows:
+        path = (row.get("attr") or {}).get("engine_log_path") or row.get("engine_log_path")
         if path:
             return path
     return None
@@ -117,7 +120,13 @@ def append_profile_row(cell: Path, engine: str) -> dict:
         "profile_env": profile_env(engine),
     }
     log_path = _engine_log_path(cell)
-    if not log_path:
+    concurrent = any(
+        json.loads(line).get("part") in ("conc", "mixed") for line in cell.read_text().splitlines() if line.strip()
+    )
+    if not log_path and concurrent:
+        # a concurrent cell with no recorded log: a labelled result, not an error (the stages need the log)
+        row["stages_unavailable"] = "stages unavailable for concurrent path (no engine_log_path recorded)"
+    elif not log_path:
         row["error"] = "no engine_log_path in cell file"
     else:
         try:
@@ -139,6 +148,8 @@ def append_profile_row(cell: Path, engine: str) -> dict:
             else:
                 lines = competitor_stat_lines(text)
                 row["competitor_stats"] = lines or None
+    if concurrent and log_path and "error" not in row:
+        row["concurrent"] = True  # stages parsed from the engine log of the whole concurrent cell
     with cell.open("a") as fh:
         fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     return row

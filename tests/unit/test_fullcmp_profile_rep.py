@@ -210,3 +210,21 @@ def test_job_shell_script_does_not_start_with_a_path():
     for job in plan.jobs:
         script = job.script
         assert not script.startswith("/"), script[:60]
+
+
+def test_real_wire_1107y_conc_profile_cell_finds_its_log_from_the_session_header():
+    """Failing-before (wire-1107y): the conc cell's rows carry no engine_log_path (only the session header does);
+    the profile stage must read it there, not fail with 'no engine_log_path'."""
+    real = Path("/Volumes/Micron/yunshu-fullcmp/wire-1107y/profile/yunshu/"
+                "SMOKE.smoke-conc-distinct.yunshu.1K.c2.code.o64.single.th-off.none.greedy.v0-prof.jsonl")
+    if not real.exists():
+        pytest.skip("no real wire-1107y conc profile cell on disk")
+    assert fp._engine_log_path(real) is not None
+
+
+def test_concurrent_cell_without_any_log_path_is_a_labelled_result_not_an_error(tmp_path):
+    cell = tmp_path / "c-prof.jsonl"
+    cell.write_text(json.dumps({"part": "conc", "n": 2, "requests": []}) + "\n")
+    row = fp.append_profile_row(cell, "yunshu")
+    assert "error" not in row
+    assert row["stages_unavailable"].startswith("stages unavailable for concurrent path")
