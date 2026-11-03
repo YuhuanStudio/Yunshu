@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import sys
+
+import pytest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -16,6 +18,13 @@ sys.path.insert(0, str(ROOT / "scripts" / "research"))
 import fullcmp_attribution as fa  # noqa: E402
 import fullcmp_profile as fp  # noqa: E402
 import fullcmp_run as fr  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fullcmp_pin_io import stub_pin_io  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _pin_io(monkeypatch):
+    stub_pin_io(monkeypatch)
 
 PIN = {
     "version": "0.1.7.dev0",

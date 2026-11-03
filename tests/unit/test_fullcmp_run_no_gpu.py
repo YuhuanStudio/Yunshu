@@ -46,8 +46,10 @@ VARIABLE_ARGV_ALLOWED = {
     ("fullcmp_run", "swap_gate"): "gpuq run: CPU swap-stability preflight job, no engine",
     ("fullcmp_run", "submit_all"): "Job.submit_argv(): gpuq submit (checked below)",
     ("bench_engines", "tree_version"): "read-only git rev-parse on a pinned tree",
+    ("fullcmp_audit_manifest", "tree_head"): "read-only git rev-parse of the pinned worktree (fail closed)",
 }
 LITERAL_NON_GPUQ_ALLOWED = {
+    ("fullcmp_audit_manifest", "tree_head"): "read-only git rev-parse of the pinned worktree (fail closed)",
     ("fullcmp_quiet", "run_ps"): "quiet gate: read-only ps",
     ("fullcmp_quiet", "read_loadavg"): "quiet gate: read-only sysctl",
     ("bench_engines", "tree_version"): "read-only git rev-parse on a pinned tree",

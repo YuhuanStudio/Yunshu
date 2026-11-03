@@ -12,6 +12,14 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fullcmp_pin_io import stub_pin_io  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _pin_io(monkeypatch):
+    stub_pin_io(monkeypatch)
+
 
 @pytest.fixture(autouse=True)
 def _never_reach_gpuq(monkeypatch):
