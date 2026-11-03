@@ -308,3 +308,46 @@ def _fullcmp_driver_sandbox(request, monkeypatch, tmp_path):
         monkeypatch.setattr(mod, "AUDIT_DIR", sandbox / "audit")
         monkeypatch.setattr(mod, "QUIET_DIR", sandbox / "quiet")
         monkeypatch.setattr(mod, "PREFLIGHT_DIR", sandbox / "preflight")
+
+
+_REAL_QUEUE = "/Volumes/P5Plus/yunshu-gpuq"
+
+
+@pytest.fixture(autouse=True)
+def _real_paths_sandbox(tmp_path, monkeypatch):
+    """Every unit test: the GPU queue dir, telemetry dir, quiet dir and the Yunshu result output go to
+    tmp, and a call to gpuq while GPUQ_DIR is the real queue is refused (a test must not submit real
+    jobs or write real raw files). Tests that point GPUQ_DIR at their own tmp dir are unaffected."""
+    box = tmp_path / "real-paths-sandbox"
+    for d in ("gpuq", "telemetry", "quiet", "out", "home"):
+        (box / d).mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("GPUQ_DIR", str(box / "gpuq"))
+    monkeypatch.setenv("TFB_TELEMETRY_DIR", str(box / "telemetry"))
+    monkeypatch.setenv("TFB_OUT", str(box / "out"))
+    monkeypatch.setenv("QUIET_DIR", str(box / "quiet"))
+    import subprocess as _sp
+
+    real_run, real_popen = _sp.run, _sp.Popen
+
+    def _argv0(args):
+        a = args[0] if isinstance(args, (list, tuple)) and args else args
+        return str(a) if a is not None else ""
+
+    def _guard(args):
+        argv = list(args) if isinstance(args, (list, tuple)) else [str(args)]
+        if argv and argv[0].endswith("gpuq") and "fake" not in argv[0]:
+            gdir = os.environ.get("GPUQ_DIR", "")
+            if os.path.realpath(gdir) == os.path.realpath(_REAL_QUEUE):
+                raise RuntimeError(f"sandbox: a test tried gpuq {argv[1:3]} on the real queue")
+
+    def run(args, *a, **k):
+        _guard(args)
+        return real_run(args, *a, **k)
+
+    class GuardedPopen(real_popen):
+        def __init__(self, args, *a, **k):
+            _guard(args)
+            super().__init__(args, *a, **k)
+
+    monkeypatch.setattr(_sp, "run", run)
+    monkeypatch.setattr(_sp, "Popen", GuardedPopen)
