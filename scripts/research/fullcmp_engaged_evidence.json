@@ -27,11 +27,11 @@
               "kind": "log_regex",
               "pattern_or_path": "DFlash2 drafter (?P<path>\\S+): (?P<layers>\\d+) layers, hidden (?P<hidden>\\d+), (?P<bits>\\d+)-bit projections, (?P<gb>[\\d.]+) GB resident .* loaded in (?P<ms>[\\d.]+) ms",
               "source_ref": "kapitsa binary strings line 5978 (format string, DFlash2 drafter load)",
-              "real_example": null,
+              "real_example": "[kapitsa] DFlash2 drafter /Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/home/fullcmp-SMOKE-kapitsa-0.2.26-q27-4bit-th-off-r0/kapitsa-home/models/qwen3.8-27b-4bit/dflash2: 5 layers, hidden 5120, 4-bit projections, 1.61 GB resident (process footprint +1.55 GB), loaded in 1353 ms",
               "negative_example": "'DFlash2: no drafter found for %s (looked next to the model and in ~/.cache/nace-infer-models/drafters)' (strings 4253) or 'DFlash2: %s does not fit this model's embedding / LM head format; not used' (4254)",
               "per_request": false,
               "startup_sufficient": false,
-              "real_log": null
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-kapitsa-0.2.26-decode-0.log"
             },
             {
               "kind": "acceptance_regex",
@@ -44,11 +44,24 @@
               "min": 0,
               "startup_sufficient": false,
               "real_log": null
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "\\[kapitsa\\] chat: prompt (?P<prompt>[\\d,]+) \\(cached [\\d,]+\\) in [^\\n]*?, [\\d,]+ tokens in [^\\n]*?, \\S+, (?P<tpc>[\\d.]+) tok/cycle, KFlash \\(DFlash2\\): [\\d,]+ cycles",
+              "group": "tpc",
+              "min": 1.0,
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "wire-1105 kapitsa server log (chat line, KFlash tree drafting on the DFlash2 lattice)",
+              "real_example": "[kapitsa] chat: prompt 15 (cached 0) in 100 ms (+1.1 ms template/tokenize; last chunk: encoded by 0.5 ms, GPU start +17.7 ms, GPU 81.9 ms, wake +0.1 ms), 10 tokens in 80 ms (112.4 tok/s), stop, 4.50 tok/cycle, KFlash (DFlash2): 2 cycles",
+              "negative_example": "... 1.00 tok/cycle, KFlash (DFlash2): 2 cycles",
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-kapitsa-0.2.26-decode-0.log"
             }
           ],
           "fallback": []
         }
       },
+      "engaged_label": "dflash (kflash tree)",
       "log_source": "engine log at ~/.cache/kapitsa/logs/serve-<PORT>.log (KAPITSA_HOME moves it); --verbose mirrors it to the terminal (kapitsa serve --help). --timing controls the TTFT/prefill shown in the request line.",
       "notes": "from engaged_evidence_others.json; configured mode dflash; How to turn on: kapitsa serve --model 27b (dflash auto picks the downloaded DFlash2 drafter; --dflash none uses MTP; --spec 0 disables MTP). Default is dflash auto, so the harness must pass --dflash none or a DIR explicitly for a named mode. Negative: 'plain decoding' in the mode line. The 'diagnostics' object in the bench output is the bench's own, not proof of server use. Timed-run cost: the req",
       "confidence": "source-only: medium: the format fragments and file location come from the binary and help; no live line captured. Positive engagement needs the tok/cycle or KFlash cycle suffix on the chat line and the DFlash2 dra"
@@ -107,33 +120,33 @@
               "kind": "acceptance_regex",
               "pattern_or_path": "\\[spec-stats\\] mode=mtp attempts=(?P<attempts>\\d+) accepts=(?P<accepts>\\d+) avg_per_round=(?P<apr>[\\d.]+) per_draft_pct=(?P<pct>[\\d.]+)% depth=(?P<depth>\\d+) drafted=(?P<drafted>\\d+) ext_rounds=(?P<ext>\\d+) partial_rounds=(?P<partial>\\d+) runtime_disabled=(?P<dis>true|false) reason=(?P<reason>\\S+) adaptive=(?P<adaptive>\\S+)",
               "source_ref": "mlx-serve binary strings (format template at offset line 54076 of `strings -n 5`); the dashboard bundle documents '[spec-stats]' as a stable format written to ~/.mlx-serve/logs/mlx-serve-<port>.log (log.defaultLogPath; --log-file overrides)",
-              "real_example": null,
+              "real_example": "  [spec-stats] mode=mtp attempts=5 accepts=5 avg_per_round=1.00 per_draft_pct=100.0% depth=6 drafted=5 ext_rounds=0 partial_rounds=0 runtime_disabled=false reason=none adaptive=undecided serial_cell=0.00 sync_ms=0.00 round_ms=35.88 two_ms_tok=0.00 one_ms_tok=0.00 verdict_round=0 trials=0 width_trials=0 table=<2k: table_drops=t0/c0/b0/i0 serial_drops=t0/c0/b0 depth_policy=accept lookup=0/0/0",
               "negative_example": "a request with no [spec-stats] line, or mode=pld / mode=drafter / mode=dflash only; or attempts=0 accepts=0; or runtime_disabled=true reason=adaptive adaptive=serial (the adaptive controller fell back to serial decode for the rest of the request, so MTP was requested but not used past that point)",
               "per_request": true,
               "group": "accepts",
               "min": 0,
               "startup_sufficient": false,
-              "real_log": null
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-mlx-serve-26.11.1-decode-0.log"
             },
             {
               "kind": "log_regex",
               "pattern_or_path": "\\[mtp\\] loaded native MTP head \\((?P<src>[^;]+); per-weight quant, fallback bits=(?P<bits>\\d+)/gs=(?P<gs>\\d+)\\)",
               "source_ref": "mlx-serve binary strings line 54369 (startup)",
-              "real_example": null,
+              "real_example": "[mtp] loaded native MTP head (dense-mlp; per-weight quant, fallback bits=4/gs=64)",
               "negative_example": "'[mtp] no head found: no mtp/ sidecar and no [language_model.]mtp.* keys ...' or '[mtp] failed to load sidecar' / '[mtp] sidecar incompatible with target'",
               "per_request": false,
               "startup_sufficient": false,
-              "real_log": null
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-mlx-serve-26.11.1-decode-0.log"
             },
             {
               "kind": "log_regex",
               "pattern_or_path": "\\[mtp\\] (lazy predraft engaged|prompt-lookup drafts engaged|draft rerank engaged)",
               "source_ref": "binary strings (lines 18080, 21854, and the rerank lines)",
-              "real_example": null,
+              "real_example": "[mtp] draft rerank engaged (3-bit coarse -> top-32 -> trunk re-score)",
               "negative_example": "[mtp] regime gate ... two-chunk ... (a regime choice, not a failure)",
               "per_request": false,
               "startup_sufficient": false,
-              "real_log": null
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-mlx-serve-26.11.1-decode-0.log"
             }
           ],
           "fallback": []
@@ -220,21 +233,21 @@
               "kind": "log_regex",
               "pattern_or_path": "DFlash enabled for (?P<model>\\S+) as a batched drafter, draft=(?P<draft>\\S+)",
               "source_ref": "/Volumes/P5Plus/yunshu-build/competitors/venvs/omlx-0.7.3rc1/omlx-0.7.3rc1/lib/python3.13/site-packages/omlx/engine_pool.py:4187 (load-time)",
-              "real_example": null,
+              "real_example": "2026-11-04 00:59:23,467 - omlx.engine_pool - INFO - DFlash enabled for Qwen3.8-27B-oQ4e-mtp as a batched drafter, draft=/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2",
               "negative_example": "'DFlash enabled for X but no draft model is set' (engine_pool.py:4169)",
               "per_request": false,
               "startup_sufficient": false,
-              "real_log": null
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-omlx-0.7.3rc1-decode-0.log"
             },
             {
               "kind": "log_regex",
               "pattern_or_path": "DFlash drafter loaded: path=(?P<path>\\S+) kind=(?P<kind>\\S+) block=(?P<block>\\d+)",
               "source_ref": "/Volumes/P5Plus/yunshu-build/competitors/venvs/omlx-0.7.3rc1/omlx-0.7.3rc1/lib/python3.13/site-packages/omlx/speculative/dflash/__init__.py:232",
-              "real_example": null,
+              "real_example": "2026-11-04 00:59:28,130 - omlx.speculative.dflash - INFO - DFlash drafter loaded: path=/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2 kind=dflash2 block=8 adaptive=True target_layers=[5, 19, 33, 47, 61]",
               "negative_example": "absence after a 'DFlash enabled' line means the drafter was not attached",
               "per_request": false,
               "startup_sufficient": false,
-              "real_log": null
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-omlx-0.7.3rc1-decode-0.log"
             },
             {
               "kind": "acceptance_regex",
@@ -244,9 +257,9 @@
               "per_request": true,
               "startup_sufficient": false,
               "source_ref": "serving_path_vlm_omlx.json omlx_0.7.3_and_rc1.per_request_line; batch_generator.py:3950-3995",
-              "real_example": null,
+              "real_example": "2026-11-04 00:59:28,935 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - MTP[0] finish=length tokens=16 cycles=6 tok/cycle=2.67 accept=8/14 (57.1%) depth[d1=5/6,d2=3/5,d3=0/3,d4=0/0,d5=0/0,d6=0/0,d7=0/0] emits[init=2,draft=8,bonus=0,verify=6] timing[backbone=277.4ms mtp=17.4ms sample=0.5ms cache=5.1ms]",
               "negative_example": "MTP[0] ... accept=0/7 (0.0%)",
-              "real_log": null
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-omlx-0.7.3rc1-decode-0.log"
             }
           ],
           "fallback": []

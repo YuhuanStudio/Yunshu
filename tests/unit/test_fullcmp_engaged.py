@@ -586,3 +586,36 @@ def test_finalized_session_row_spec_mode_is_the_engaged_mode_not_the_startup_val
     never = srv("nothing\n")
     never._verify_fullcmp_evidence("nothing\n", final=False, rows=())
     assert tfbench.engaged_end_fields(never)["spec_mode"] == "unverified"
+
+
+KAPITSA_REAL = [
+    "[kapitsa] chat: prompt 15 (cached 0) in 100 ms (+1.1 ms template/tokenize; last chunk: encoded by 0.5 ms, GPU start +17.7 ms, GPU 81.9 ms, wake +0.1 ms), 10 tokens in 80 ms (112.4 tok/s), stop, 4.50 tok/cycle, KFlash (DFlash2): 2 cycles\n",
+    "[kapitsa] chat: prompt 15 (cached 0) in 86 ms (+0.9 ms template/tokenize; last chunk: encoded by 0.2 ms, GPU start +4.0 ms, GPU 81.2 ms, wake +0.1 ms), 10 tokens in 78 ms (115.2 tok/s), stop, 4.50 tok/cycle, KFlash (DFlash2): 2 cycles\n",
+    "[kapitsa] chat: prompt 1024 (cached 0) in 995 ms (+1.3 ms template/tokenize; last chunk: encoded by 936.1 ms, GPU start +3.7 ms, GPU 55.0 ms, wake +0.1 ms), 64 tokens in 856 ms (73.6 tok/s), length, 2.86 tok/cycle, KFlash (DFlash2): 22 cycles\n",
+    "[kapitsa] chat: prompt 1,024 (cached 1017) in 120 ms (+1.2 ms template/tokenize), 64 tokens in 700 ms (91.4 tok/s), length, 2.86 tok/cycle, KFlash (DFlash2): 22 cycles\n",
+]
+
+
+def test_kapitsa_per_row_kflash_evidence_with_label():
+    """kapitsa runs KFlash tree drafting on the DFlash2 lattice: per measured row the chat line's
+    tok/cycle (> 1.0) and 'KFlash (DFlash2)' cycle count; the label is reported with the base mode."""
+    table = fe.load_table()
+    entry = table["engines"]["kapitsa-0.2.26"]
+    assert entry["engaged_label"] == "dflash (kflash tree)"
+    log = "".join(KAPITSA_REAL)
+    rows = [{"pt": 1024, "ct": 64}, {"pt": 1024, "ct": 64}]
+    res = fe.evaluate("kapitsa-0.2.26", "dflash", log, rows, table, ready_offset=0)
+    assert res["engaged_mode"] == "dflash", res["stats"]  # the base mode; the guard compares it
+    assert res["label"] == "dflash (kflash tree)"
+    assert [r["value"] for r in res["stats"]["per_row"]] == [2.86, 2.86]
+
+
+def test_kapitsa_real_wire_1105_log_engages_per_measured_row():
+    logs = glob.glob("/Volumes/Micron/yunshu-fullcmp/wire-1105-work/*/tfout/out/server-kapitsa-0.2.26-*.log")
+    if not logs:
+        pytest.skip("no real kapitsa log on disk")
+    table = fe.load_table()
+    text = Path(logs[0]).read_text(errors="replace")
+    rows = [{"pt": 1024, "ct": 64}, {"pt": 1024, "ct": 64}]
+    res = fe.evaluate("kapitsa-0.2.26", "dflash", text, rows, table, ready_offset=0)
+    assert res["engaged_mode"] == "dflash", res["stats"]

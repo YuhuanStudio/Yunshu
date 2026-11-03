@@ -628,6 +628,7 @@ class Srv:
         self.engaged_log_line = ev["matched_line"]
         self.engaged_evidence_kind = ev["evidence_kind"]
         self.engaged_evidence_source = ev["source"]
+        self.engaged_label = ev.get("label")  # reported with the base mode (e.g. 'dflash (kflash tree)')
         if final and self.engaged_spec_mode != self.requested_spec_mode:
             raise RuntimeError(
                 f"requested spec={self.requested_spec_mode}, engaged={self.engaged_spec_mode} "
@@ -2431,6 +2432,7 @@ def engaged_end_fields(s) -> dict:
         "engaged_log_line": s.engaged_log_line,
         "engaged_evidence_kind": getattr(s, "engaged_evidence_kind", None),
         "engaged_evidence_source": getattr(s, "engaged_evidence_source", None),
+        "engaged_label": getattr(s, "engaged_label", None),
     }
 
 

@@ -44,6 +44,8 @@ ENGINE_MODE = {
     "mlx-lm-server": "ar",  # stock mlx-lm: no draft model in argv
     "llama-cpp-b12061": "mtp",  # launch spec: --spec-type draft-mtp with the MTP GGUF (-md)
 }
+# the label reported with the base mode (the guard compares the base mode only)
+ENGAGED_LABEL = {"kapitsa-0.2.26": "dflash (kflash tree)"}
 # research patterns corrected to the line the real logs print (the research regex did not match)
 PATTERN_FIX = {
     "tf-1.1.8": {"DFlash2 drafts for": r"DFlash2 drafts for one of them"},
@@ -109,6 +111,19 @@ ADD = {
         "source_ref": "serving_path_vlm_omlx.json mlx_vlm_server_0.7.11.required_evidence_per_request",
         "real_example": "(probe-based: applied on the serving path; timings.draft_rounds > 0)",
         "negative_example": "timings.draft_rounds null or 0 (drafter did not run for the probe)",
+    }],
+    # kapitsa: per-request chat line with the tokens-per-cycle and the KFlash cycle count (real lines in
+    # wire-1105-work/all/tfout/out/server-kapitsa-0.2.26-decode-0.log; 4 lines, prompts 15,15,1024,1024)
+    "kapitsa-0.2.26": [{
+        "kind": "acceptance_regex",
+        "pattern_or_path": r"\[kapitsa\] chat: prompt (?P<prompt>[\d,]+) \(cached [\d,]+\) in [^\n]*?, [\d,]+ tokens in [^\n]*?, \S+, (?P<tpc>[\d.]+) tok/cycle, KFlash \(DFlash2\): [\d,]+ cycles",
+        "group": "tpc",
+        "min": 1.0,
+        "per_request": True,
+        "startup_sufficient": False,
+        "source_ref": "wire-1105 kapitsa server log (chat line, KFlash tree drafting on the DFlash2 lattice)",
+        "real_example": "[kapitsa] chat: prompt 1024 (cached 0) in 995 ms (...), 64 tokens in 856 ms (73.6 tok/s), length, 2.86 tok/cycle, KFlash (DFlash2): 22 cycles",
+        "negative_example": "... 1.00 tok/cycle, KFlash (DFlash2): 2 cycles",
     }],
     "omlx-0.7.3": [OMLX_MTP_LINE],
     "omlx-0.7.3rc1": [OMLX_MTP_LINE],
@@ -201,6 +216,7 @@ def _evaluable(ev):
 REAL_LOG_GLOBS = (
     "/Volumes/Micron/yunshu-fullcmp/wire-1104/*/*.server.log",
     "/Volumes/Micron/yunshu-fullcmp/wire-1105/*/*.server.log",
+    "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/*/tfout/out/server-*.log",
     "/Volumes/Micron/yunshu-fullcmp/wire-1103/*/*.server.log",
     "/Volumes/Micron/yunshu-fullcmp/wire-1103-work/all6/tfout/out/server-*.log",
     "/Volumes/Micron/yunshu-fullcmp/wire-1103-work/*/tfout/out/server-*.log",
@@ -317,6 +333,7 @@ def build(sources: dict):
             confidence = "source-only: " + str(confidence)[:200]
         out[engine] = {
             "modes": modes,
+            **({"engaged_label": ENGAGED_LABEL[engine]} if engine in ENGAGED_LABEL else {}),
             "log_source": entry.get("log_source", ""),
             "notes": f"from {name}; configured mode {mode}; " + str(entry.get("notes", ""))[:400],
             "confidence": confidence,

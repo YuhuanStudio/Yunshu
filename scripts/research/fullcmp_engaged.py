@@ -159,8 +159,9 @@ def evaluate(engine, mode, log, rows, table=None, probe_text=None, ready_offset=
     stats = {"requests": len(rows)}
 
     def result(mode_out, line, kind, source):
+        eng = (table or {}).get("engines", {}).get(engine) or {}
         return {"engaged_mode": mode_out, "matched_line": line, "evidence_kind": kind,
-                "source": source, "stats": stats}
+                "source": source, "stats": stats, "label": eng.get("engaged_label")}
 
     m = mode_entry(table, engine, mode)
     if m is None:
