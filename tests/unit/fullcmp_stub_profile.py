@@ -120,8 +120,12 @@ def make_handler(state: base.StubState):
             with state.lock:
                 state.round += 1
                 n = state.round
-            state.log(base.request_lines(state.engine, n, 1, drafted=4, accepted=3))
             prompt_tokens = len(base.prompt_text(body).split())
+            state.log(
+                base.request_lines(
+                    state.engine, n, 1, drafted=4, accepted=3, prompt_tokens=prompt_tokens
+                )
+            )
             message: dict = {"role": "assistant", "content": None}
             finish = "stop"
             if body.get("tools"):

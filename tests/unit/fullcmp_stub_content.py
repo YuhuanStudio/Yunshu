@@ -159,8 +159,13 @@ def make_family_handler(state, faults=frozenset()):
             with state.lock:
                 state.round += 1
                 n = state.round
-            state.log(base.request_lines(state.engine, n, pieces, drafted=4, accepted=3))
             prompt_tokens = len(base.prompt_text(body).split()) + img
+            # the done line carries the same prompt count the usage object reports
+            state.log(
+                base.request_lines(
+                    state.engine, n, pieces, drafted=4, accepted=3, prompt_tokens=prompt_tokens
+                )
+            )
             details = {"cached_tokens": 0}
             if img:
                 details["image_tokens"] = img
