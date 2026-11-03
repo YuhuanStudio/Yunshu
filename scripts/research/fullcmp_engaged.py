@@ -391,7 +391,34 @@ def _done_candidates(item, log, ready_offset, skip=READINESS_REQUESTS):
               "bad": c.get("bad"), "calibration_tokens": c.get("calibration_tokens", 0),
               "calibration_share": (c.get("calibration_tokens", 0) / c["ct"]) if c.get("ct") else 0.0}
              for c in raw]
+    if item.get("request_line"):
+        return _request_line_candidates(item, log, ready_offset, skip, cands)
     return cands[skip:]
+
+
+def _request_line_candidates(item, log, ready_offset, skip, mtp):
+    """oMLX: one candidate per request, from the server's own 'Chat completion' line (prompt length, completion
+    tokens, finish). The MTP uid groups (merged, in terminal order) supply the acceptance and calibration of the
+    same request: paired with the chat lines by order (both are printed at completion). A count mismatch between
+    the two makes every candidate bad (fail closed)."""
+    rx = re.compile(str(item["request_line"]))
+    chats = []
+    for hit in rx.finditer(log or "", ready_offset or 0):
+        chats.append({"line": _line_at(log, hit.start(), hit.end()),
+                      "prompt": int(hit.group("prompt").replace(",", "")),
+                      "ct": int(hit.group("tokens").replace(",", ""))})
+    mtp_ok = [m for m in mtp if not m.get("bad")]
+    if len(chats) != len(mtp):
+        bad = f"{len(chats)} Chat completion lines and {len(mtp)} MTP request groups"
+        return [{"line": chats[i]["line"] if i < len(chats) else "", "value": 0.0, "prompt": None, "ct": None,
+                 "bad": bad, "calibration_tokens": 0, "calibration_share": 0.0} for i in range(max(1, len(chats)))][skip:]
+    out = []
+    for chat, m in zip(chats, mtp):
+        out.append({"line": chat["line"], "value": m["value"], "prompt": chat["prompt"], "ct": chat["ct"],
+                    "ct_merged": m.get("ct"), "bad": m.get("bad"),
+                    "calibration_tokens": m.get("calibration_tokens", 0),
+                    "calibration_share": (m.get("calibration_tokens", 0) / m["ct"]) if m.get("ct") else 0.0})
+    return out[skip:]
 
 
 def correlate_multiset(item, log, requests, ready_offset, consumed=0, skip=READINESS_REQUESTS):
@@ -435,13 +462,14 @@ def correlate_multiset(item, log, requests, ready_offset, consumed=0, skip=READI
             return [], f"request {rid}: value {c['value']} not above {minimum}"
         out.append({"rid": rid, "prompt": c["prompt"], "line": c["line"],
                     "value": 0.0 if calibrated else c["value"], "group": group,
-                    "ct_expected": req.get("ct"), "ct_merged": c.get("ct"),
-                    "ct_gap": (req.get("ct") - c.get("ct")) if (req.get("ct") is not None and c.get("ct") is not None) else None,
+                    "ct_expected": req.get("ct"), "ct_merged": c.get("ct_merged", c.get("ct")),
+                    "ct_gap": (req.get("ct") - c.get("ct_merged", c.get("ct")))
+                    if (req.get("ct") is not None and c.get("ct_merged", c.get("ct")) is not None) else None,
                     "calibration_share": round(c.get("calibration_share", 0.0), 4),
                     "calibrated": calibrated,
                     # partial log coverage: the merged MTP token sum misses more than the documented tolerance
-                    "partial_coverage": (req.get("ct") is not None and c.get("ct") is not None and
-                                         (req["ct"] - c["ct"]) > int(item.get("token_tolerance", 0)))})
+                    "partial_coverage": (req.get("ct") is not None and c.get("ct_merged", c.get("ct")) is not None and
+                                         (req["ct"] - c.get("ct_merged", c.get("ct"))) > int(item.get("token_tolerance", 0)))})
     return out, None
 
 
