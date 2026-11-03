@@ -508,7 +508,9 @@ def audit_manifest(
     }
     return {
         "run_id": RUN_ID,
-        "reps": 2,
+        "reps": max(
+            (row_reps(r) for r in rows if r.get("batch") in batches), default=1
+        ),
         "pins": {"yunshu": {"version": pin["version"], "git_sha": pin["sha"]}},
         "yunshu": {"git_sha": pin["sha"], "python": pin["python_executable"]},
         "controls": {},

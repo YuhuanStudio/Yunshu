@@ -157,3 +157,12 @@ def test_profile_row_without_log_is_recorded_as_error_not_skipped(tmp_path):
     row = fp.append_profile_row(cell, "tf-1.2.1")
     assert row["error"] == "no engine_log_path in cell file"
     assert row.get("competitor_stats") is None
+
+
+def test_audit_manifest_reps_follow_the_rows_not_a_constant():
+    # Smoke rows run one rep; the manifest must expect one rep, not a hard-coded two.
+    rows = [dict(_row("s1", "yunshu"), reps=1)]
+    man = fr.audit_manifest(rows, ["B1"], PIN, ["yunshu"])
+    assert man["reps"] == 1
+    rows = [dict(_row("s1", "yunshu"), reps=3)]
+    assert fr.audit_manifest(rows, ["B1"], PIN, ["yunshu"])["reps"] == 3
