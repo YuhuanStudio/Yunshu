@@ -328,35 +328,40 @@ def attr_rows_from(per_row, rows) -> list[dict]:
 
 
 HANDOFF_FINISH = "late-join-handoff"
+CALIBRATION_FINISH = "batch-standard-calibration"  # oMLX decoding without drafting under concurrency
+NON_TERMINAL_FINISH = frozenset({HANDOFF_FINISH, CALIBRATION_FINISH})
+TERMINAL_FINISH = frozenset({"length", "stop"})
 
 
-def _merge_handoffs(raw):
-    """oMLX splits a running request's stats when another request joins: 'MTP[uid] finish=late-join-handoff'
-    then the same uid's final segment. Consecutive segments of one uid merge (tokens, accepted, drafted are
-    summed) into the final segment's position. A handoff with no final segment is incomplete (dropped here,
-    so the cell's count fails closed). Segments of different uids never merge."""
+def _merge_segments(raw):
+    """oMLX prints a running request's stats in segments: 'late-join-handoff' (another request joined) and
+    'batch-standard-calibration' (decoding without drafting), interleaved across uids. Every segment of a uid
+    merges into one request, up to its terminal finish (length or stop), whatever the interleaving; tokens,
+    accepted and drafted are summed; the calibration tokens are kept (calibration_tokens). A uid with no
+    terminal segment is unmatched, and an unknown finish kind fails closed; both carry 'bad' with the line."""
     out, pending = [], {}
     for seg in raw:
-        uid = seg.get("uid")
-        if uid in pending or seg.get("finish") == HANDOFF_FINISH:
+        uid, fin = seg.get("uid"), seg.get("finish")
+        if uid is None:
+            out.append(seg)
+            continue
+        if fin in NON_TERMINAL_FINISH:
             pending.setdefault(uid, []).append(seg)
-            if seg.get("finish") == HANDOFF_FINISH:
-                continue
-            parts = pending.pop(uid)
+            continue
+        if fin in TERMINAL_FINISH:
+            parts = pending.pop(uid, [])
+            segs = parts + [seg]
             merged = dict(seg)
-            merged["ct"] = sum(p.get("ct") or 0 for p in parts) + (seg.get("ct") or 0)
-            merged["value"] = sum(p.get("value") or 0 for p in parts) + (seg.get("value") or 0)
-            merged["segments"] = len(parts) + 1
+            merged["ct"] = sum(p.get("ct") or 0 for p in segs)
+            merged["value"] = sum(p.get("value") or 0 for p in segs)
+            merged["calibration_tokens"] = sum(p.get("ct") or 0 for p in parts if p.get("finish") == CALIBRATION_FINISH)
+            merged["segments"] = len(segs)
             out.append(merged)
             continue
-        out.append(seg)
-    # a uid whose handoff never got its final segment: incomplete, not a request
+        out.append(dict(seg, bad=f"unknown oMLX finish kind {fin!r} for uid {uid}"))
+    for uid, parts in pending.items():
+        out.append(dict(parts[-1], bad=f"uid {uid}: {len(parts)} non-terminal segment(s) and no terminal finish"))
     return out
-
-
-# requests the harness sends before the measured ones, beyond the two readiness pings (omlx's lazy load
-# warm-up: its first request is MTP[0] with 16 tokens, before the pings; wire-1106c omlx log)
-WARM_EXTRA = {"omlx-0.7.3": 1, "omlx-0.7.3rc1": 1}
 
 
 def _done_candidates(item, log, ready_offset, skip=READINESS_REQUESTS):
@@ -381,8 +386,9 @@ def _done_candidates(item, log, ready_offset, skip=READINESS_REQUESTS):
                     "uid": hit.group("uid") if "uid" in names else None,
                     "finish": hit.group("finish") if "finish" in names else None})
     if "uid" in names and "finish" in names:
-        raw = _merge_handoffs(raw)
-    cands = [{"line": c["line"], "value": c["value"], "prompt": c["prompt"], "ct": c["ct"]} for c in raw]
+        raw = _merge_segments(raw)
+    cands = [{"line": c["line"], "value": c["value"], "prompt": c["prompt"], "ct": c["ct"],
+              "bad": c.get("bad"), "calibration_tokens": c.get("calibration_tokens", 0)} for c in raw]
     return cands[skip:]
 
 
@@ -394,7 +400,11 @@ def correlate_multiset(item, log, requests, ready_offset, consumed=0, skip=READI
     ([], reason). The caller checks the cell's total (concurrent_check)."""
     group, minimum = item.get("group"), float(item.get("min", 0))
     cands = _done_candidates(item, log, ready_offset, skip)[consumed:consumed + len(requests)]
-    use_ct = bool(item.get("match_tokens", True))  # oMLX's segment token sums are not the request's count
+    for c in cands:
+        if c.get("bad"):
+            return [], f"{c['bad']}: {c['line'][:160]}"
+    use_ct = bool(item.get("match_tokens", True))
+    tol = int(item.get("token_tolerance", 0))  # oMLX's merged token sums miss the first tokens of a request
     if len(cands) != len(requests):
         return [], f"count mismatch: {len(cands)} done lines for {len(requests)} requests"
     used, out = set(), []
@@ -405,7 +415,9 @@ def correlate_multiset(item, log, requests, ready_offset, consumed=0, skip=READI
                 continue
             if c["prompt"] is not None and c["prompt"] != req.get("pt"):
                 continue
-            if use_ct and c["ct"] is not None and c["ct"] != req.get("ct"):
+            if use_ct and c["ct"] is not None and req.get("ct") is not None and not (
+                req["ct"] - tol <= c["ct"] <= req["ct"]
+            ):
                 continue
             found = j
             break
