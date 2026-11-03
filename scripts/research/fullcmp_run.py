@@ -331,6 +331,10 @@ MIXED_SLOW_STALL_MIN = 10.0
 MIXED_PROBE_MIN = float(JB["mixed_probe_s"]["value"]) / 60.0  # the concurrent probe of a mixed cell
 
 
+def is_slow_mixed(row: dict) -> bool:
+    return row.get("turns") == "mixed" and row.get("engine") in MIXED_SLOW_ENGINES
+
+
 def cell_budget(row: dict) -> dict:
     """Itemized minutes of one cell for one rep: its own server start, the modelled work (the
     manifest estimate minus the manifest's own boot and idle, so nothing is counted twice), the
@@ -380,6 +384,13 @@ def pack_chunks(rows: list[dict], cap: float = JOB_LIMIT_MIN) -> list[list[dict]
     chunks: list[list[dict]] = []
     cur: list[dict] = []
     for row in sorted(rows, key=lambda r: r["id"]):
+        if is_slow_mixed(row):
+            # a slow engine's mixed cell (probe budget included) runs alone: v0 and v1 never share a job
+            if cur:
+                chunks.append(cur)
+                cur = []
+            chunks.append([row])
+            continue
         if cur and job_budget(cur + [row])["total"] > cap:
             chunks.append(cur)
             cur = []

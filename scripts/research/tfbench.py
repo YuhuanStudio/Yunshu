@@ -824,6 +824,19 @@ def _mark(ev, **fields):
 def send(
     url, body, timeout=600, *, capture_timestamps=False, trace_id=None, sample=False
 ):
+    _mark()
+    try:
+        return _send_impl(
+            url, body, timeout, capture_timestamps=capture_timestamps,
+            trace_id=trace_id, sample=sample,
+        )
+    finally:
+        _mark()
+
+
+def _send_impl(
+    url, body, timeout=600, *, capture_timestamps=False, trace_id=None, sample=False
+):
     # sample=True marks a real benchmark request: only it may fill --log-usage-sample. Warm-up and
     # readiness requests (short "Say hi" style probes) must not, or the sample is not the benchmark.
     prompt_sha = prompt_digest(body.get("messages"))
@@ -2568,19 +2581,37 @@ def finalize_session(path, end_fields):
 
 
 HEARTBEAT_S = 30.0  # a heartbeat line every 30 s: a long phase never leaves the job log silent
+HEARTBEAT_STOP_S = 600.0  # no main-thread progress this long: stop beating, so the stall watchdog fires
+_PROGRESS = {"phase": "start", "t": time.time(), "t0": time.time()}
 
 
-def _start_heartbeat(interval: float = HEARTBEAT_S) -> None:
-    """Daemon thread: one stdout line per interval, so gpuq's stall watchdog (silence limit) sees
-    progress during long phases (concurrent waits, the probe, idle windows). It writes no record."""
+def _mark(phase: str | None = None) -> None:
+    """Main-thread progress: every request completion and every phase change calls this."""
+    if phase is not None:
+        _PROGRESS["phase"] = phase
+    _PROGRESS["t"] = time.time()
+
+
+def _start_heartbeat(interval: float = HEARTBEAT_S, stop_after: float = HEARTBEAT_STOP_S) -> None:
+    """Daemon thread: one stdout line per interval while the main thread makes progress: phase name,
+    elapsed time and the age of the last progress. A hung main thread stops the beats after stop_after
+    seconds without progress, so gpuq's stall watchdog fires instead of a daemon hiding the hang."""
     import threading
 
-    t0 = time.time()
+    _PROGRESS["t0"] = time.time()
 
     def beat():
         while True:
             time.sleep(interval)
-            print(f"heartbeat {time.time() - t0:.0f}s", flush=True)
+            now = time.time()
+            idle = now - _PROGRESS["t"]
+            if idle > stop_after:
+                return  # silence on purpose: the watchdog must see a hang
+            print(
+                f"heartbeat {now - _PROGRESS['t0']:.0f}s phase={_PROGRESS['phase']} "
+                f"last_progress={idle:.0f}s",
+                flush=True,
+            )
 
     threading.Thread(target=beat, name="tfbench-heartbeat", daemon=True).start()
 
@@ -2588,6 +2619,7 @@ def _start_heartbeat(interval: float = HEARTBEAT_S) -> None:
 def main():
     _start_heartbeat()
     a = parse_args()
+    _mark(f"part-{a.part}")
     extra_env = dict(kv.split("=", 1) for kv in a.env)
     if a.part not in (
         "decode",
@@ -2773,6 +2805,7 @@ def main():
                     for i in range(n)
                 ]
                 with cf.ThreadPoolExecutor(max(1, n)) as ex:
+                    _mark("conc-probe")
                     conc_probe = list(ex.map(lambda t: probe_request(s, t), texts))
                 for rid, resp in enumerate(conc_probe):
                     emit(out, part="probe_conc", engine=a.engine, rep=a.rep, rid=rid,
