@@ -240,6 +240,7 @@ class GuardResult:
     name: str
     checked: int = 0
     violations: list = field(default_factory=list)
+    notes: list = field(default_factory=list)  # printed under the guard (evidence lines, not failures)
 
     def fail(self, cell, msg):
         self.violations.append(f"{self.name}: {cell}: {msg}")
@@ -733,6 +734,11 @@ def check_engaged_mode(run: Run) -> GuardResult:
             res.fail(cell, f"r{cf.rep}: engaged_evidence_source={h.get('engaged_evidence_source')!r}, evidence says {ev.get('source')!r}")
         if (problem := fe.acceptance_problem(got, m or {}, cf.rows)) is not None:
             res.fail(cell, f"r{cf.rep}: {problem}")
+        for row in ev["stats"].get("per_row", []):
+            # one line per measured request: row id, the done line it matched, its accepted value
+            res.notes.append(
+                f"{cell} r{cf.rep} row {row['row']} (prompt {row['prompt']}) accepted {row['value']}: {row['line']}"
+            )
     return res
 
 
@@ -2026,6 +2032,8 @@ def main(argv=None) -> int:
         )
         for v in r.violations:
             print(f"  {v}")
+        for note in r.notes:
+            print(f"  note: {note}")
     if a.derived:
         print(
             "DERIVED (not measured): MBU / MFU from measured inputs + model/hardware tables"

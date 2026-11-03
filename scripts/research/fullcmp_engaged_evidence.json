@@ -34,12 +34,14 @@
               "real_log": null
             },
             {
-              "kind": "log_regex",
+              "kind": "acceptance_regex",
               "pattern_or_path": "spec: (?P<acc>[\\d.]+) accepted/drafted over (?P<cycles>\\d+) cycles",
               "source_ref": "kapitsa binary strings line 4390",
               "real_example": null,
               "negative_example": "0.00 accepted/drafted",
               "per_request": true,
+              "group": "acc",
+              "min": 0,
               "startup_sufficient": false,
               "real_log": null
             }
@@ -102,12 +104,14 @@
         "mtp": {
           "evidence": [
             {
-              "kind": "log_regex",
+              "kind": "acceptance_regex",
               "pattern_or_path": "\\[spec-stats\\] mode=mtp attempts=(?P<attempts>\\d+) accepts=(?P<accepts>\\d+) avg_per_round=(?P<apr>[\\d.]+) per_draft_pct=(?P<pct>[\\d.]+)% depth=(?P<depth>\\d+) drafted=(?P<drafted>\\d+) ext_rounds=(?P<ext>\\d+) partial_rounds=(?P<partial>\\d+) runtime_disabled=(?P<dis>true|false) reason=(?P<reason>\\S+) adaptive=(?P<adaptive>\\S+)",
               "source_ref": "mlx-serve binary strings (format template at offset line 54076 of `strings -n 5`); the dashboard bundle documents '[spec-stats]' as a stable format written to ~/.mlx-serve/logs/mlx-serve-<port>.log (log.defaultLogPath; --log-file overrides)",
               "real_example": null,
               "negative_example": "a request with no [spec-stats] line, or mode=pld / mode=drafter / mode=dflash only; or attempts=0 accepts=0; or runtime_disabled=true reason=adaptive adaptive=serial (the adaptive controller fell back to serial decode for the rest of the request, so MTP was requested but not used past that point)",
               "per_request": true,
+              "group": "accepts",
+              "min": 0,
               "startup_sufficient": false,
               "real_log": null
             },
@@ -152,16 +156,6 @@
               "per_request": false,
               "startup_sufficient": false,
               "real_log": null
-            },
-            {
-              "kind": "log_regex",
-              "pattern_or_path": "Speculative decoding: .* accepted tokens/round .* over \\d+ rounds",
-              "source_ref": "mlx_vlm/speculative/common.py:414-432, printed only by generate/dispatch.py:1675 (CLI generate path)",
-              "real_example": null,
-              "negative_example": "server-mlx-vlm-server-decode-0.log contains no such line; do not use this as server evidence.",
-              "per_request": true,
-              "startup_sufficient": false,
-              "real_log": null
             }
           ],
           "fallback": []
@@ -179,11 +173,11 @@
               "kind": "log_regex",
               "pattern_or_path": "DFlash enabled for (?P<model>\\S+) as a batched drafter, draft=(?P<draft>\\S+)",
               "source_ref": "/Volumes/P5Plus/yunshu-build/competitors/venvs/omlx-0.7.3/.../engine_pool.py:4189 (load-time intent, after dflash_draft_for resolves a draft); follow with 'DFlash drafter loaded: path=.. kind=.. block=..' at speculative/dflash/__init__.py:231",
-              "real_example": null,
+              "real_example": "2026-11-04 00:35:05,887 - omlx.engine_pool - INFO - DFlash enabled for Qwen3.8-27B-oQ4e-mtp as a batched drafter, draft=/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2",
               "negative_example": "'DFlash enabled for X but no draft model is set; loading without DFlash' (engine_pool.py:4171) or 'DFlash is not supported for X (model_type=..., engine=...); loading without DFlash' (engine_pool.py:4178)",
               "per_request": false,
               "startup_sufficient": false,
-              "real_log": null
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1104/omlx-0.7.3/SMOKE.smoke-core.omlx-0.7.3.1K.c1.code.o64.single.th-off.none.greedy.v0-r0.server.log"
             }
           ],
           "fallback": []
@@ -324,9 +318,9 @@
               "per_request": true,
               "startup_sufficient": false,
               "source_ref": "engaged_evidence_tf_splash.json tf-1.2.1 acceptance_stat; real line '[tensorfold] done ... rounds=1 accepted=9/15' in wire-1103 logs",
-              "real_example": null,
+              "real_example": "[tensorfold] done chatcmpl-a9307583010044733e184f6f6c375f62 prompt=15 cached=0 thinking=False effort=none tokens=10 sha=e94588627640 finish=stop rounds=1 accepted=9/15 ttft=0.037 decode=0.043 elapsed=0.080 queued=0.000 tok/s=209.2",
               "negative_example": "[tensorfold] done … rounds=1 accepted=0/15 …",
-              "real_log": null
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1104/tf-1.2.1/SMOKE.smoke-core.tf-1.2.1.1K.c1.code.o64.single.th-off.none.greedy.v0-r0.server.log"
             }
           ],
           "fallback": [

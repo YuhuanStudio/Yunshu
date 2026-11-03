@@ -133,6 +133,29 @@ YUNSHU_ENTRY = {
 }
 
 
+def _numeric_group(pattern: str):
+    """The name of a numeric named group in a log regex (the accepted count), preferring an
+    'accept' name; None when the line carries no number that can prove drafting."""
+    names = []
+    for m in re.finditer(r"\(\?P<(\w+)>", pattern):
+        tail = pattern[m.end():]
+        if tail.startswith("[\\d") or tail.startswith("\\d"):
+            names.append(m.group(1))
+    accept = [n for n in names if "accept" in n or n == "acc"]
+    return accept[0] if accept else None  # only an accepted count proves drafting
+
+
+def _per_request_as_correlated(ev):
+    """A per-request log regex becomes an acceptance_regex (one matching line per measured row, its
+    numeric group above min), so it is correlated like the others. None when it has no such group."""
+    if ev.get("kind") != "log_regex" or not ev.get("per_request"):
+        return ev
+    group = _numeric_group(str(ev.get("pattern_or_path", "")))
+    if group is None:
+        return None
+    return dict(ev, kind="acceptance_regex", group=group, min=0)
+
+
 def _evaluable(ev):
     pat = str(ev.get("pattern_or_path", ""))
     if PLACEHOLDER.match(pat.strip()) or " found" in pat or "none for" in pat:
@@ -148,6 +171,8 @@ def _evaluable(ev):
 
 
 REAL_LOG_GLOBS = (
+    "/Volumes/Micron/yunshu-fullcmp/wire-1104/*/*.server.log",
+    "/Volumes/Micron/yunshu-fullcmp/wire-1105/*/*.server.log",
     "/Volumes/Micron/yunshu-fullcmp/wire-1103/*/*.server.log",
     "/Volumes/Micron/yunshu-fullcmp/wire-1103-work/all6/tfout/out/server-*.log",
     "/Volumes/Micron/yunshu-fullcmp/wire-1103-work/*/tfout/out/server-*.log",
@@ -241,7 +266,14 @@ def build(sources: dict):
                         fallback.append(pat)
                     report.append(f"{engine}: dropped {ev.get('kind')} {pat[:60]!r}: {why}")
                     continue
+                converted = _per_request_as_correlated(ev)
+                if converted is None:
+                    report.append(f"{engine}: dropped per-request log line {pat[:60]!r}: no numeric accepted group")
+                    continue
+                ev = converted
                 item = {k: ev.get(k, "") for k in fe.REQUIRED}
+                if ev["kind"] == "acceptance_regex":
+                    item["group"], item["min"] = ev["group"], ev["min"]
                 item["per_request"] = bool(ev.get("per_request", False))
                 item["startup_sufficient"] = bool(
                     ev.get("startup_sufficient", engine == "mlx-lm-server" and ev.get("kind") == "log_regex")

@@ -1,5 +1,58 @@
 {
   "_doc": "Usage shape per stub engine: details = usage.prompt_tokens_details.cached_tokens, unavailable = no cache count. A GPU smoke updates these from its usage_sample (tfbench --log-usage-sample).",
   "yunshu": "details",
-  "tf-1.2.1": "details"
+  "tf-1.2.1": "details",
+  "_usage_samples": {
+    "tf-1.2.1": {
+      "from": "tf-1.2.1/SMOKE.smoke-core.tf-1.2.1.1K.c1.code.o64.single.th-off.none.greedy.v0-r0.jsonl",
+      "usage_sample": {
+        "id": "chatcmpl-1d1df01bb1fe12009e724c4699fc91e8",
+        "object": "chat.completion.chunk",
+        "created": 1793723617,
+        "model": "Qwen3.8-27B-MLX-4bit",
+        "choices": [],
+        "usage": {
+          "prompt_tokens": 1024,
+          "completion_tokens": 64,
+          "total_tokens": 1088,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        }
+      }
+    },
+    "omlx-0.7.3": {
+      "from": "omlx-0.7.3/SMOKE.smoke-core.omlx-0.7.3.1K.c1.code.o64.single.th-off.none.greedy.v0-r0.jsonl",
+      "usage_sample": {
+        "id": "chatcmpl-e81997f3",
+        "object": "chat.completion.chunk",
+        "created": 1793723719,
+        "model": "Qwen3.8-27B-oQ4e-mtp",
+        "choices": [],
+        "usage": {
+          "prompt_tokens": 1024,
+          "completion_tokens": 64,
+          "total_tokens": 1088,
+          "input_tokens": 1024,
+          "output_tokens": 64,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "time_to_first_token": 1.14,
+          "time_to_first_visible_token": 1.14,
+          "total_time": 2.61,
+          "prompt_eval_duration": 1.14,
+          "generation_duration": 1.47,
+          "prompt_tokens_per_second": 898.24,
+          "generation_tokens_per_second": 43.5
+        }
+      }
+    }
+  }
 }
