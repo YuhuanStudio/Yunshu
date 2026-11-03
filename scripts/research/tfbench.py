@@ -174,6 +174,13 @@ def engaged_spec_mode_line(engine, log):
     m = re.search(r"\[tensorfold\] drafter [^\n]*DFlash[^\n]*block=[^\n]*", log)
     if m:
         return "dflash", m.group(0)
+    if engine.startswith("tf-"):
+        # TensorFold 1.2.x serving line (bench_engines.detect_mode reads the same evidence)
+        m = re.search(r"drafts: DFlash2\b[^\n]*", log)
+        if m:
+            start = log.rfind("\n", 0, m.start()) + 1
+            end = log.find("\n", m.end())
+            return "dflash", log[start : end if end != -1 else len(log)]
     return None, None
 
 

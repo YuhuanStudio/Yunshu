@@ -658,3 +658,15 @@ def test_census_named_registry_ids_have_a_census_key():
     with pytest.raises(fp.ProvenanceError):
         fp.release_date(census, key, "1.1.8", {})  # not the latest: needs TFB_RELEASE_DATE
     assert fp.release_date(census, key, "1.1.8", {"TFB_RELEASE_DATE": "2026-01-01"}) == "2026-01-01"
+
+
+def test_tensorfold_1_2_engaged_line_is_recorded():
+    """TensorFold 1.2.x names its drafter on the serving line; the audit needs that line recorded
+    (2026-11-03 smoke: engaged_log_line was None although the server ran DFlash2)."""
+    log = (
+        "[tensorfold] listening\n"
+        "[tensorfold] serving Qwen3.8-27B-MLX-4bit at http://127.0.0.1:18990/v1 (drafts: DFlash2 (/m/d); context: 140000)\n"
+    )
+    mode, line = tfbench.engaged_spec_mode_line("tf-1.2.1", log)
+    assert mode == "dflash" and "drafts: DFlash2" in line
+    assert tfbench.engaged_spec_mode_line("omlx-0.7.3", log) == (None, None)
