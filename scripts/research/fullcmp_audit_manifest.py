@@ -73,6 +73,77 @@ PHASE_NAMES = {
 # printed only when the mode is wired for the request; medium = printed per round or per run, so it
 # also needs a count; low = a loaded-state line that is NOT engagement by itself.
 EXPECTED_MODE_PROBE = {
+    # 2026-11-03 wiring smoke: expected modes come from bench_engines.ENGINES; the regexes are
+    # filled from the real smoke log (see /Volumes/P5Plus/yunshu-build/competitors/compsync/
+    # fullcmp-1103/wire_smoke.md). mlx-lm has no speculative path: its engaged mode is stock AR.
+    "tf-1.1.8": {
+        "expected_mode": "dflash",
+        "probe": "tensorfold serve --drafter DFLASH2_DIR: serving line 'drafts: DFlash2 (...)' (smoke-confirmed)",
+        "log_patterns": [
+            {
+                "regex": r"drafts: DFlash2\b",
+                "confidence": "high",
+                "note": "1.2.x-style serving line; 1.1.8 prints the same drafts field (binary strings)",
+            },
+        ],
+    },
+    "splash-1.5.0": {
+        "expected_mode": "dflash",
+        "probe": "launcher.py serve --draft-model DFlash2: /status draft field (placeholder until smoke)",
+        "log_patterns": [
+            {
+                "regex": r"DFlash2 draft",
+                "confidence": "low",
+                "note": "placeholder until the smoke log is read; /status draft field is the probe",
+            },
+        ],
+    },
+    "mlx-lm-server": {
+        "expected_mode": "ar",
+        "probe": "stock mlx_lm.server: no draft model passed; AR once the HTTP server starts",
+        "log_patterns": [
+            {
+                "regex": r"Starting httpd at 127\.0\.0\.1",
+                "confidence": "high",
+                "note": "stock mlx_lm.server, no draft model is passed: AR by construction once the HTTP server starts",
+            },
+        ],
+    },
+    "mlx-vlm-server": {
+        "expected_mode": "dflash",
+        "probe": (
+            "python -m mlx_vlm.server --draft-model <DFlash2> --draft-kind dflash. Engaged = the drafter "
+            "validated against the target ('Drafter ready; speculative decoding enabled.') after "
+            "'Loading speculative drafter (dflash)'. An incompatible drafter logs a warning and falls "
+            "back to AR, which is a refusal."
+        ),
+        "log_patterns": [
+            {
+                "regex": r"Drafter ready; speculative decoding enabled\.",
+                "confidence": "high",
+                "note": "mlx_vlm/server/generation.py 0.7.11: drafter validated against the target",
+            },
+            {
+                "regex": r"falling back to autoregressive generation",
+                "confidence": "low",
+                "note": "refusal line (drafter incompatible): not engagement",
+            },
+        ],
+    },
+    "llama-cpp-b12061": {
+        "expected_mode": "mtp",
+        "probe": (
+            "llama-server b12061 -md <MTP head> --spec-type draft-mtp. Engaged = a per-request 'draft "
+            "acceptance' line with generated > 0 (a loaded head alone is not evidence on this build)."
+        ),
+        "log_patterns": [
+            {
+                "regex": r"draft acceptance\s*=\s*[0-9.]+\s*\(\s*\d+ accepted /\s*[1-9]\d* generated",
+                "confidence": "high",
+                "note": "b12061 per-request speculative stats with at least one drafted token",
+            },
+        ],
+    },
     "mlx-serve-26.11.1": {
         "expected_mode": "unverified",
         "probe": (

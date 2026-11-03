@@ -461,13 +461,13 @@ ENGINES: dict[str, Engine] = {
         ),
         Engine(
             "mlx-vlm-server",
-            "mlx-vlm 0.7.11 server (stock)",
-            "ar",
+            "mlx-vlm 0.7.11 server (DFlash2 drafter)",
+            "dflash",
             "same",
             CHECKPOINT,
-            None,
+            DRAFTER,
             "external",
-            "python -m mlx_vlm.server, no draft model; stock baseline (census start_cmd)",
+            "python -m mlx_vlm.server --draft-model DFlash2 --draft-kind dflash; engaged only when the log shows 'Drafter ready; speculative decoding enabled.' (an incompatible drafter falls back to AR with a warning)",
             0.8,
             28.0,
         ),
@@ -1058,9 +1058,13 @@ def build_launch(
                 "127.0.0.1",
                 "--port",
                 p,
+                "--draft-model",
+                DRAFTER,
+                "--draft-kind",
+                "dflash",
             ],
             scrubbed_env(environ, base_env),
-            {"speculative": "none"},
+            {"speculative": "dflash", "draft_kind": "dflash"},
             {},
             {},
         )
@@ -1239,8 +1243,13 @@ def detect_mode(engine: str, log: str, probe_text: str | None = None) -> str | N
         text = (probe_text or "").lower()
         return "dflash" if "draft" in text or "dflash" in text else None
     if engine == "mlxvlm":
-        # mlx_vlm.server logs this once the language model is loaded (app.py); no draft model is passed
-        return "ar" if re.search(r"Language model ready", log) else None
+        # mlx_vlm/server/generation.py logs "Loading speculative drafter (<kind>): <path>", then
+        # "Drafter ready; speculative decoding enabled." once it validated against the target.
+        # An incompatible drafter logs a warning and falls back to AR, so "ready" is the evidence.
+        kind = re.search(r"Loading speculative drafter \((dflash|mtp)\)", log)
+        if kind and re.search(r"Drafter ready; speculative decoding enabled\.", log):
+            return kind.group(1)
+        return None
     if engine == "mlxlm":
         # no speculative path is configured; "ar" is by construction once the server answered
         return "ar" if re.search(r"Starting httpd|http://127\.0\.0\.1", log) else None
@@ -1386,7 +1395,7 @@ def required_paths(engine: str) -> list[str]:
             TF_NATIVE_MODEL + "/config.json",
             DRAFTER + "/config.json",
         ],
-        "mlx-vlm-server": common + [MLXVLM_PY_0711],
+        "mlx-vlm-server": common + [MLXVLM_PY_0711, DRAFTER + "/config.json"],
         "llama-cpp-b12061": [GGUF, GGUF_MTP, LLAMA_BIN_B12061],
         "omlx-0.7.3": common + [DRAFTER + "/config.json", OMLX_BIN_073],
         "omlx-0.7.3rc1": common + [DRAFTER + "/config.json", OMLX_BIN_073RC1],
