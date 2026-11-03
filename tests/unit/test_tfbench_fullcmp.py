@@ -328,6 +328,8 @@ def test_fullcmp_header_has_every_required_header_field(layout, monkeypatch):
         engaged_log_line="VLM batch runner: draft=mtp",
         home=layout.tmp / "home",
         log=layout.tmp / "server-hdr.log",
+        observe=None,  # the real Srv attribute (observe_state); None = not a fullcmp Yunshu run
+        yunshu_observe_env=None,
     )
     monkeypatch.setattr(
         tfbench.bench_engines,
@@ -484,6 +486,8 @@ class _FakeServer:
         self.requested_spec_mode = "mtp"
         self.engaged_spec_mode = "mtp"
         self.engaged_log_line = "VLM batch runner: draft=mtp"
+        self.observe = None  # real Srv attribute: fullcmp observe_state (None = unset)
+        self.yunshu_observe_env = None
         self.pin = fp.require_yunshu_pin(layout.good)
         self.extra_env = {}
         self.launch = None
@@ -492,7 +496,7 @@ class _FakeServer:
         self.ready_s = 1.0
         self.killed = False
 
-    def verify_spec_mode(self):
+    def verify_spec_mode(self, final=False, rows=(), probe_response=None):
         return None
 
     def probe_text(self):
