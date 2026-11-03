@@ -967,6 +967,7 @@ def submit_all(jobs: list[Job]) -> tuple[list[str], int]:
             break
         jid = res.stdout.strip().splitlines()[-1]
         ids.append(jid)
+        JOB_OF_ID[jid] = job
         print(
             f"submitted {jid} ({job.est_min:.1f} min, {len(job.cells)} cells)",
             flush=True,
@@ -974,11 +975,50 @@ def submit_all(jobs: list[Job]) -> tuple[list[str], int]:
     return ids, bad
 
 
+JOB_OF_ID: dict[str, "Job"] = {}  # submitted job id -> its Job (engine, label) for the summary
+
+
+def job_record(jid: str, env: dict | None = None) -> dict:
+    """gpuq's own record of a job ($GPUQ_DIR/jobs/<id>.json): state and rc. {} when unreadable."""
+    root = Path((env or gpuq_env()).get("GPUQ_DIR", GPUQ_DIR_DEFAULT))
+    try:
+        return json.loads((root / "jobs" / f"{jid}.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def job_summary(ids: list[str], env: dict | None = None) -> list[tuple[str, str, object, str, bool]]:
+    """(job id, engine, rc, state, ok) per job. ok only for state done with rc 0; no record = failed."""
+    rows = []
+    for jid in ids:
+        rec = job_record(jid, env)
+        job = JOB_OF_ID.get(jid)
+        engine = job.engine if job else str(rec.get("label", "?"))
+        state, rc = rec.get("state", "missing"), rec.get("rc")
+        rows.append((jid, engine, rc, state, state == "done" and rc == 0))
+    return rows
+
+
 def wait_all(ids: list[str]) -> int:
+    """One blocking gpuq wait, then every job's own rc and state: a per-job table, and nonzero if ANY
+    job failed or timed out (the wait's exit code alone reported one failure for six)."""
     if not ids:
         return 0
-    res = subprocess.run([GPUQ, "wait", *ids], env=gpuq_env())
-    return res.returncode
+    env = gpuq_env()
+    res = subprocess.run([GPUQ, "wait", *ids], env=env)
+    rows = job_summary(ids, env)
+    print("job id | engine | rc | state", flush=True)
+    for jid, engine, rc, state, _ok in rows:
+        print(f"{jid} | {engine} | {rc} | {state}", flush=True)
+    failing = sorted({engine for _jid, engine, _rc, _st, ok in rows if not ok})
+    bad = sum(1 for row in rows if not row[4])
+    if failing:
+        print(
+            f"FAILED: {bad} of {len(ids)} job(s) failed or timed out; engines: {', '.join(failing)}",
+            file=sys.stderr,
+            flush=True,
+        )
+    return 1 if (res.returncode != 0 or failing) else 0
 
 
 def run_audit(raw_root: Path, manifest_path: Path) -> int:
