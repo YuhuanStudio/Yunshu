@@ -46,6 +46,7 @@ import bench_engines  # noqa: E402  (manifest id <-> harness id registry)
 import fullcmp_attribution as fat  # noqa: E402  (layer-1 / layer-2 attribution schema)
 
 GUARDS = (
+    "usage_fields",
     "prompt_identity",
     "provenance_identity",
     "pinned_versions",
@@ -342,6 +343,13 @@ def conc_request_rows(rec: dict) -> list[dict]:
                 "prompt_file": rec.get("prompt_file"),
             }
         )
+    # record-level aggregates ride on every request row of the record (checked by usage_fields)
+    agg = {k: rec.get(k) for k in ("wall_s", "total_tokens", "agg_tps")}
+    for row in rows:
+        row["agg"] = agg
+        row["per_req_dec_all"] = rec.get("per_req_dec")
+        for k in ("dec_min", "dec_max", "dec_median", "fair_max_min"):
+            row[k] = rec.get(k)
     return rows
 
 
@@ -1028,7 +1036,50 @@ def check_attribution_fields(run: Run) -> GuardResult:
     return res
 
 
+def check_usage_fields(run: Run) -> GuardResult:
+    """Guard 0 (lead ruling 2026-11-03): every request row carries a real completion count and
+    prompt count (int, never None), and a cached-token count that is an int or an explicit
+    'cached_unavailable' reason. Conc requests also carry the record aggregates: the summary of
+    the per-request decode rates (dec_min / dec_max / dec_median / fair_max_min) must match the
+    per-request lists, and agg_tps must equal total_tokens / wall_s (1 %)."""
+    res = GuardResult("usage_fields")
+    for cf in run.files:
+        cell = cf.cell["cell"]
+        for r in cf.rows:
+            if r.get("part") not in ("decode", CONC_PART):
+                continue
+            res.checked += 1
+            for key in ("ct", "pt"):
+                v = r.get(key)
+                if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+                    res.fail(cell, f"r{cf.rep}: {key}={v!r} is not a recorded count")
+            cached = r.get("cached")
+            if isinstance(cached, bool) or (cached is not None and not isinstance(cached, int)):
+                res.fail(cell, f"r{cf.rep}: cached={cached!r} is not a count")
+            if cached is None and not str(r.get("cached_unavailable") or "").strip():
+                res.fail(cell, f"r{cf.rep}: cached is None with no cached_unavailable reason")
+            if r.get("part") == CONC_PART:
+                for key in ("dec_min", "dec_max", "dec_median", "fair_max_min", "agg"):
+                    if r.get(key) is None:
+                        res.fail(cell, f"r{cf.rep}: conc aggregate {key} is missing or None")
+                decs = r.get("per_req_dec_all")
+                if isinstance(decs, list) and decs and all(isinstance(d, (int, float)) for d in decs):
+                    if r.get("dec_min") != min(decs) or r.get("dec_max") != max(decs):
+                        res.fail(cell, f"r{cf.rep}: conc dec_min/dec_max differ from per-request decode")
+                    if r.get("dec_median") != statistics.median(decs):
+                        res.fail(cell, f"r{cf.rep}: conc dec_median differs from per-request decode")
+                    if r.get("fair_max_min") != round(max(decs) / min(decs), 3):
+                        res.fail(cell, f"r{cf.rep}: conc fair_max_min differs from max/min")
+                agg = r.get("agg") or {}
+                if agg.get("wall_s") and agg.get("total_tokens") is not None and agg.get("agg_tps") is not None:
+                    want = agg["total_tokens"] / agg["wall_s"]
+                    if abs(agg["agg_tps"] - want) > 0.01 * max(want, 1e-9) + 0.05:
+                        res.fail(cell, f"r{cf.rep}: conc agg_tps {agg['agg_tps']} != total/wall {want:.1f}")
+    return res
+
+
 GUARD_CHECKS = (
+    check_usage_fields,
     check_prompt_identity,
     check_provenance_identity,
     check_pinned_versions,

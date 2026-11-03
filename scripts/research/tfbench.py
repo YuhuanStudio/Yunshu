@@ -546,10 +546,18 @@ class Srv:
             self.mem.stop()
 
 
+CACHED_UNAVAILABLE = (
+    "usage has no cached-token count (prompt_tokens_details.cached_tokens or usage.cached_tokens)"
+)
+
+
 def cached_tokens(usage):
-    """Keep absent cache accounting unknown; zero is a measured cache miss."""
+    """Keep absent cache accounting unknown; zero is a measured cache miss. Two server shapes
+    carry the count: OpenAI's prompt_tokens_details.cached_tokens and a top-level usage.cached_tokens."""
     details = usage.get("prompt_tokens_details") or {}
     value = details.get("cached_tokens")
+    if value is None:
+        value = usage.get("cached_tokens")
     if value is None:
         return None
     if (
@@ -700,6 +708,7 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
         stop=stop,
         harness=HARNESS_ID,
         cached=cached_tokens(usage),
+        cached_unavailable=None if cached_tokens(usage) is not None else CACHED_UNAVAILABLE,
         dec_tps=round((ct - 1) / (t1 - tf), 1) if tf and ct > 1 and t1 > tf else None,
         finish=finish,
         sha=sha,
@@ -1473,6 +1482,22 @@ def part_conc32(s, out, a):
         )
 
 
+def conc_aggregates(decs):
+    """Per-request decode summary and fairness of one conc record (lead ruling 2026-11-03). Any
+    missing or non-positive rate makes every summary None, so the audit fails the record."""
+    import statistics
+
+    ok = bool(decs) and all(isinstance(d, (int, float)) and d > 0 for d in decs)
+    if not ok:
+        return {"dec_min": None, "dec_max": None, "dec_median": None, "fair_max_min": None}
+    return {
+        "dec_min": min(decs),
+        "dec_max": max(decs),
+        "dec_median": statistics.median(decs),
+        "fair_max_min": round(max(decs) / min(decs), 3),
+    }
+
+
 def part_promote(s, out, a):
     """A long reply A starts while a shorter reply B runs; B ends first and A then decodes alone.
 
@@ -1573,6 +1598,7 @@ def part_conc(s, out, a):
                 r.pop("_text")
             wall = time.perf_counter() - t0
             tot = sum(r["ct"] for r in rs)
+            decs = [r["dec_tps"] for r in rs]
             emit(
                 out,
                 part="conc",
@@ -1581,7 +1607,8 @@ def part_conc(s, out, a):
                 wall_s=round(wall, 3),
                 total_tokens=tot,
                 agg_tps=round(tot / wall, 1),
-                per_req_dec=[r["dec_tps"] for r in rs],
+                **conc_aggregates(decs),
+                per_req_dec=decs,
                 ttfts=[r["ttft_s"] for r in rs],
                 cached=[r["cached"] for r in rs],
                 pts=[r["pt"] for r in rs],

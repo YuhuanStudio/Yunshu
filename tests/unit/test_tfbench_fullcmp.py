@@ -753,3 +753,18 @@ def test_non_fullcmp_servers_keep_one_home_per_tag(tmp_path):
     b = tfbench.server_home(tmp_path, "x-conc-0", {"TFB_JOB_LABEL": "l"})
     assert a == tmp_path / "home" / "x-decode-0"
     assert b == tmp_path / "home" / "x-conc-0"
+
+
+def test_conc_aggregates_summarise_the_requests_and_none_on_a_bad_rate():
+    tb = tfbench
+    agg = tb.conc_aggregates([10.0, 20.0, 40.0])
+    assert agg == {"dec_min": 10.0, "dec_max": 40.0, "dec_median": 20.0, "fair_max_min": 4.0}
+    assert tb.conc_aggregates([10.0, None])["dec_median"] is None
+    assert tb.conc_aggregates([])["fair_max_min"] is None
+
+
+def test_cached_tokens_reads_both_server_shapes_and_keeps_absent_unknown():
+    tb = tfbench
+    assert tb.cached_tokens({"prompt_tokens": 10, "prompt_tokens_details": {"cached_tokens": 4}}) == 4
+    assert tb.cached_tokens({"prompt_tokens": 10, "cached_tokens": 3}) == 3
+    assert tb.cached_tokens({"prompt_tokens": 10}) is None

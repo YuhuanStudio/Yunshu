@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import statistics
 import sys
 from pathlib import Path
 
@@ -381,7 +382,7 @@ def test_good_run_passes_all_guards(tmp_path):
     manifest, files = make_data()
     _, results = _run(tmp_path, manifest, files)
     assert [r.name for r in results] == list(fa.GUARDS)
-    assert len(fa.GUARDS) == 16
+    assert len(fa.GUARDS) == 17
     assert failing(results) == set()
     assert all(r.checked > 0 for r in results)
 
@@ -1207,3 +1208,80 @@ def test_conc_row_with_unexplained_gap_fails(tmp_path):
     rows[0]["attr"].pop("t_admit", None)
     res = _attr_run(tmp_path, rows)
     assert any("t_admit" in v for v in res.violations)
+
+
+# --- usage_fields (lead ruling 2026-11-03): no None counts on decode rows, conc aggregates -----
+
+
+def _usage_run(rows):
+    cell = {"cell": "c", "engine": "yunshu", "group": "g", "phases": ["decode"]}
+    return fa.Run({"groups": {}}, [_cf(cell, 0, {"part": "session"}, rows)], [], [], [])
+
+
+def _decode_row(**kw):
+    row = {"part": "decode", "phase": "warm", "ct": 64, "pt": 1034, "cached": 1024}
+    row.update(kw)
+    return row
+
+
+def test_usage_none_completion_count_fails():
+    res = fa.check_usage_fields(_usage_run([_decode_row(ct=None)]))
+    assert any("ct=None" in v for v in res.violations)
+
+
+def test_usage_none_prompt_count_fails():
+    res = fa.check_usage_fields(_usage_run([_decode_row(pt=None)]))
+    assert any("pt=None" in v for v in res.violations)
+
+
+def test_usage_cached_none_without_reason_fails():
+    res = fa.check_usage_fields(_usage_run([_decode_row(cached=None)]))
+    assert any("no cached_unavailable reason" in v for v in res.violations)
+
+
+def test_usage_cached_none_with_reason_passes_usage_but_cold_cache_fails_it():
+    row = _decode_row(cached=None, cached_unavailable="usage has no cached count", phase="cold")
+    assert fa.check_usage_fields(_usage_run([row])).violations == []
+    cell = {"cell": "c", "engine": "yunshu", "group": "g", "phases": ["decode"]}
+    run = fa.Run({"groups": {}}, [_cf(cell, 0, {"part": "session", "fresh_process": True}, [row])], [], [], [])
+    assert any("must be server-reported 0" in v for v in fa.check_cold_cache(run).violations)
+
+
+def _conc_with_aggregates(decs=(10.0, 20.0), **override):
+    rec = _conc_record(n=len(decs))
+    rec["per_req_dec"] = list(decs)
+    rec.update(
+        {
+            "wall_s": 2.0,
+            "total_tokens": 32,
+            "agg_tps": 16.0,
+            "dec_min": min(decs),
+            "dec_max": max(decs),
+            "dec_median": statistics.median(decs),
+            "fair_max_min": round(max(decs) / min(decs), 3),
+        }
+    )
+    rec.update(override)
+    return fa.conc_request_rows(rec)
+
+
+def test_conc_aggregates_present_and_consistent_pass():
+    assert fa.check_usage_fields(_usage_run(_conc_with_aggregates())).violations == []
+
+
+def test_conc_missing_aggregate_fails():
+    rows = _conc_with_aggregates(dec_median=None)
+    res = fa.check_usage_fields(_usage_run(rows))
+    assert any("dec_median is missing or None" in v for v in res.violations)
+
+
+def test_conc_aggregate_not_matching_its_requests_fails():
+    rows = _conc_with_aggregates(dec_max=99.0)
+    res = fa.check_usage_fields(_usage_run(rows))
+    assert any("dec_min/dec_max differ" in v for v in res.violations)
+
+
+def test_conc_agg_tps_must_equal_total_over_wall():
+    rows = _conc_with_aggregates(agg_tps=40.0)
+    res = fa.check_usage_fields(_usage_run(rows))
+    assert any("agg_tps" in v for v in res.violations)
