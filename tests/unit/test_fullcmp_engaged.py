@@ -845,7 +845,9 @@ def test_yunshu_concurrent_verdict_is_each_requests_own_counters():
     assert problems and ev["engaged_mode"] == "unverified"
     absent = [{"part": "conc", "n": 1, "requests": [{"rid": 0, "pt": 1024, "ct": 16,
                "spec": "unavailable (response carries no per-request speculative counters)"}]}]
-    assert fe.concurrent_check(None, "yunshu", "dflash", "", absent, 0)[1]
+    # no per-request counters and no DFlash rounds in the slice: derived 'ar' (a label, not a violation)
+    ev, problems = fe.concurrent_check(None, "yunshu", "dflash", "", absent, 0)
+    assert problems == [] and ev["engaged_mode"] == "ar" and ev["label"].startswith("ar (")
 
 
 def test_concurrent_attr_rows_carry_rid_and_part():

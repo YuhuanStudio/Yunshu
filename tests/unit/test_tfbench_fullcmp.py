@@ -496,7 +496,7 @@ class _FakeServer:
         self.ready_s = 1.0
         self.killed = False
 
-    def verify_spec_mode(self, final=False, rows=(), probe_response=None, concurrent=()):
+    def verify_spec_mode(self, final=False, rows=(), probe_response=None, concurrent=(), concurrent_probe=None):
         return None
 
     def probe_text(self):
