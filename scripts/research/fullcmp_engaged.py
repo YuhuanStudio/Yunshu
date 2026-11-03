@@ -321,6 +321,49 @@ def attr_rows_from(per_row, rows) -> list[dict]:
     return out
 
 
+def correlate_multiset(item, log, requests, ready_offset):
+    """Concurrent requests (multiset, not order): the post-readiness done lines of the cell are matched to
+    the record's requests by (prompt count, completion count) when the item has those groups; the request
+    order breaks ties between identical pairs. Fail closed: a count mismatch (lines != requests) or an
+    unmatched request. Returns (matches [{rid, prompt, line, value}], None) or ([], reason)."""
+    rx = re.compile(str(item["pattern_or_path"]))
+    group, minimum = item.get("group"), float(item.get("min", 0))
+    start = ready_offset or 0
+    cands = []
+    for hit in rx.finditer(log or "", start):
+        try:
+            value = float(hit.group(group))
+        except (TypeError, ValueError, IndexError):
+            continue
+        names = rx.groupindex
+        prompt = int(hit.group("prompt").replace(",", "")) if "prompt" in names and hit.group("prompt") else None
+        ct = int(hit.group("ct").replace(",", "")) if "ct" in names and hit.group("ct") else None
+        cands.append({"line": _line_at(log, hit.start(), hit.end()), "value": value, "prompt": prompt, "ct": ct})
+    cands = cands[READINESS_REQUESTS:]
+    if len(cands) != len(requests):
+        return [], f"count mismatch: {len(cands)} done lines for {len(requests)} requests"
+    used, out = set(), []
+    for rid, req in enumerate(requests):
+        found = None
+        for j, c in enumerate(cands):
+            if j in used:
+                continue
+            if c["prompt"] is not None and c["prompt"] != req.get("pt"):
+                continue
+            if c["ct"] is not None and c["ct"] != req.get("ct"):
+                continue
+            found = j
+            break
+        if found is None:
+            return out, f"request {rid} (prompt {req.get('pt')}, tokens {req.get('ct')}): no done line"
+        used.add(found)
+        c = cands[found]
+        if not c["value"] > minimum:
+            return out, f"request {rid}: value {c['value']} not above {minimum}"
+        out.append({"rid": rid, "prompt": c["prompt"], "line": c["line"], "value": c["value"], "group": group})
+    return out, None
+
+
 def acceptance_proven(ev: dict) -> bool:
     """True when the evidence evaluation itself proved drafting per measured request: every row has its
     own positive matched value (per_row), or the probe's draft stats are positive. This is the single

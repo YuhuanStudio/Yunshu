@@ -753,24 +753,31 @@ def check_engaged_mode(run: Run) -> GuardResult:
             # are not populated for these engines and are not read here
             res.fail(cell, f"r{cf.rep}: speculative mode {got!r} without per-request acceptance in the evidence")
         if engine != "yunshu" and got not in fe.AR_MODES and got != fe.UNVERIFIED:
-            # every measured row of a speculative cell carries its attribution row (part=attr), filled from
-            # the matched evidence: accepted and rounds are counts, or 'unavailable (reason)'
-            attr_by_row = {}
-            for line in cf.path.read_text(errors="replace").splitlines():
+            # concurrent records (part conc / mixed): one requests list per record; each request needs its own
+            # done line (multiset by prompt and token count), value above min. Fail closed otherwise.
+            item = next((e for e in (m or {}).get("evidence", [])
+                         if e.get("kind") == "acceptance_regex" and e.get("group")), None)
+            concurrent = []
+            for line in (cf.path.read_text(errors="replace").splitlines() if cf.path.is_file() else []):
                 try:
-                    r = json.loads(line)
+                    rec = json.loads(line)
                 except ValueError:
                     continue
-                if r.get("part") == "attr":
-                    attr_by_row[r.get("row")] = r
-            for k in range(len(cf.rows)):
-                r = attr_by_row.get(k)
-                if r is None:
-                    res.fail(cell, f"r{cf.rep}: measured row {k} has no attribution row (part=attr)")
-                elif not isinstance(r.get("accepted"), (int, float)) and not str(r.get("accepted", "")).startswith("unavailable"):
-                    res.fail(cell, f"r{cf.rep}: measured row {k} attr.accepted {r.get('accepted')!r} is neither a count nor unavailable")
-                elif str(r.get("rounds", "")).startswith("unavailable") is False and not isinstance(r.get("rounds"), int):
-                    res.fail(cell, f"r{cf.rep}: measured row {k} attr.rounds {r.get('rounds')!r} is not a count")
+                if rec.get("part") in ("conc", "mixed"):
+                    concurrent.append(rec)
+            for rec in concurrent:
+                reqs = rec.get("requests")
+                if not isinstance(reqs, list) or not reqs:
+                    res.fail(cell, f"r{cf.rep}: {rec.get('part')} record has no requests list")
+                elif item is None:
+                    res.fail(cell, f"r{cf.rep}: no per-request acceptance item for {engine}/{want}")
+                else:
+                    matches, why = fe.correlate_multiset(item, log, reqs, ready)
+                    if why is not None:
+                        res.fail(cell, f"r{cf.rep}: concurrent {rec.get('part')} n={rec.get('n')}: {why}")
+                    for mt in matches:
+                        res.notes.append(
+                            f"{cell} r{cf.rep} {rec.get('part')} rid {mt['rid']} accepted {mt['value']}: {mt['line']}")
         for row in ev["stats"].get("per_row", []):
             # one line per measured request: row id, the done line it matched, its accepted value
             res.notes.append(
