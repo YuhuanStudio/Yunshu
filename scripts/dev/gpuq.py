@@ -1403,6 +1403,7 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
                 **job["env"],
                 **{ENV[k]: str(v) for k, v in monitor.cfg.items()},
                 "GPUQ_DEVICE": "m5",
+                "GPUQ_JOB_ID": str(job["id"]),
                 "GPUQ_RC": str(rc_file),
                 "GPUQ_PAUSE_FILE": str(pause_file),
                 "GPUQ_CONTENTION_FILE": str(monitor.flag),

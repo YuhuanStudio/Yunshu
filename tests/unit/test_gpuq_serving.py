@@ -308,6 +308,19 @@ def test_serving_ok_job_is_never_paused(q, prod):
     assert d["state"] == "done" and d["pauses"] == []
 
 
+def test_job_id_env_is_exported_to_the_job(q, prod):
+    """Jobs see their own id as GPUQ_JOB_ID (fullcmp cells attribute records to it)."""
+    g = _gate(q, prod)
+    out = q.ROOT / "jid.txt"
+    job, path = _job(
+        q,
+        ["sh", "-c", 'echo "$GPUQ_JOB_ID" > "$OUTF"'],
+        env={**os.environ, "OUTF": str(out), "GPUQ_JOB_ID": "submitter-spoof"},
+    )
+    q._run_one(job, path, g)
+    assert out.read_text().strip() == job["id"]
+
+
 def test_pause_file_env_and_helper(q, prod, gp, monkeypatch):
     g = _gate(q, prod)
     out = q.ROOT / "o.txt"
