@@ -11,6 +11,8 @@ value raises ProvenanceError, and the harness then writes no cell result.
   * Census lookups (census.json): model id, weight sha256 per shard, release date.
   * Weight bits / group size come from the model's own config.json (top-level quantization).
   * File sha256 of the launched binary (resolved symlinks), cached per (path, size, mtime).
+  * gpuq job id: GPUQ_JOB_ID, else TFB_JOB_LABEL resolved to the one running job with that label
+    in $GPUQ_DIR/jobs (resolve_job_id). The current daemon may not export GPUQ_JOB_ID yet.
 
 This module is CPU-only and never touches MLX or a server.
 """

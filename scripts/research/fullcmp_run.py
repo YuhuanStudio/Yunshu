@@ -24,6 +24,12 @@ cell with env TFB_FULLCMP=1, TFB_TELEMETRY_DIR, the pinned Yunshu tree (TFB_YUNS
 TFB_YUNSHU_SRC / PYTHONPATH from yunshu_pin.json) and an isolated HOME per engine. Raw output:
 <RAW_ROOT>/<engine>/<cell>-r<rep>.jsonl.
 
+Quiet machine: before a batch the driver runs fullcmp_quiet.gate on the host (refuses, exit 2,
+naming the foreign holders); each job runs the same gate first, inside the job, with 3 retries 30 s
+apart (fullcmp_quiet.py gate, log under <RUN_DIR>/quiet/<label>.jsonl). Every cell command carries
+TFB_JOB_LABEL (the job's label) and GPUQ_DIR, so tfbench can resolve the job id when gpuq does not
+export GPUQ_JOB_ID (fullcmp_provenance.resolve_job_id).
+
 Phases: the swap-stability preflight (fullcmp_preflight.py) runs before submitting, as a CPU job
 through gpuq. Then ONE blocking `gpuq wait` over all job ids, then fullcmp_audit.py over the raw
 root, then fullcmp_reps.py lists cells needing rep 3; those are queued as a second, flagged
