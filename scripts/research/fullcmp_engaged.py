@@ -321,20 +321,57 @@ def attr_rows_from(per_row, rows) -> list[dict]:
     return out
 
 
+HANDOFF_FINISH = "late-join-handoff"
+
+
+def _merge_handoffs(raw):
+    """oMLX splits a running request's stats when another request joins: 'MTP[uid] finish=late-join-handoff'
+    then the same uid's final segment. Consecutive segments of one uid merge (tokens, accepted, drafted are
+    summed) into the final segment's position. A handoff with no final segment is incomplete (dropped here,
+    so the cell's count fails closed). Segments of different uids never merge."""
+    out, pending = [], {}
+    for seg in raw:
+        uid = seg.get("uid")
+        if uid in pending or seg.get("finish") == HANDOFF_FINISH:
+            pending.setdefault(uid, []).append(seg)
+            if seg.get("finish") == HANDOFF_FINISH:
+                continue
+            parts = pending.pop(uid)
+            merged = dict(seg)
+            merged["ct"] = sum(p.get("ct") or 0 for p in parts) + (seg.get("ct") or 0)
+            merged["value"] = sum(p.get("value") or 0 for p in parts) + (seg.get("value") or 0)
+            merged["segments"] = len(parts) + 1
+            out.append(merged)
+            continue
+        out.append(seg)
+    # a uid whose handoff never got its final segment: incomplete, not a request
+    return out
+
+
 def _done_candidates(item, log, ready_offset):
-    """Every match of the item's regex after the readiness requests, in log order."""
+    """Every match of the item's regex after the readiness requests, in log order (oMLX's split segments
+    are merged per uid first)."""
     rx = re.compile(str(item["pattern_or_path"]))
     group = item.get("group")
-    cands = []
+    names = rx.groupindex
+    raw = []
     for hit in rx.finditer(log or "", ready_offset or 0):
         try:
             value = float(hit.group(group))
         except (TypeError, ValueError, IndexError):
             continue
-        names = rx.groupindex
         prompt = int(hit.group("prompt").replace(",", "")) if "prompt" in names and hit.group("prompt") else None
-        ct = int(hit.group("ct").replace(",", "")) if "ct" in names and hit.group("ct") else None
-        cands.append({"line": _line_at(log, hit.start(), hit.end()), "value": value, "prompt": prompt, "ct": ct})
+        ct = None
+        for key in ("ct", "tokens"):
+            if key in names and hit.group(key):
+                ct = int(hit.group(key).replace(",", ""))
+                break
+        raw.append({"line": _line_at(log, hit.start(), hit.end()), "value": value, "prompt": prompt, "ct": ct,
+                    "uid": hit.group("uid") if "uid" in names else None,
+                    "finish": hit.group("finish") if "finish" in names else None})
+    if "uid" in names and "finish" in names:
+        raw = _merge_handoffs(raw)
+    cands = [{"line": c["line"], "value": c["value"], "prompt": c["prompt"], "ct": c["ct"]} for c in raw]
     return cands[READINESS_REQUESTS:]
 
 
