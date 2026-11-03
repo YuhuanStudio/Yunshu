@@ -29,6 +29,12 @@ import fullcmp_manifest as fm  # noqa: E402
 import fullcmp_run as fr  # noqa: E402
 import fullcmp_attribution as fa_attr  # noqa: E402
 import gpuq_preflight  # noqa: E402
+from .test_fullcmp_e2e_coverage import cell_type_key  # noqa: E402
+
+# the smoke chain runs the smoke-core code row (cold, warm, turn2) through the whole wrapper chain
+COVERED_CELL_TYPES = {
+    cell_type_key(fm.build_smoke_rows()[0]): "test_wrapper_runs_tfbench_against_stub_and_audit_is_clean",
+}
 
 STUB_DIR = ROOT / "tests" / "unit"
 FAKE_JOB_ID = "2026-110301-01-fullcmp-SMOKE"

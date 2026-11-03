@@ -34,17 +34,35 @@ import fullcmp_manifest as fm  # noqa: E402
 import fullcmp_run as fr  # noqa: E402
 import fullcmp_stub_content as stub  # noqa: E402
 import tfbench as tb  # noqa: E402
+from .test_fullcmp_e2e_coverage import cell_type_key  # noqa: E402
 
 CHAIN_ENGINES = ("yunshu", "tf-1.2.1")
 FAMILY_SWEEPS = ("kind", "thinking", "image")
 
-COVERED_CELL_TYPES = {
-    "tools": "test_tool_chat_cell_replies_with_valid_tool_calls",
-    "json_schema": "test_json_schema_cell_replies_conformant_json",
+_FAMILY_TEST = {
+    "tool-chat": "test_tool_chat_cell_replies_with_valid_tool_calls",
+    "json-schema": "test_json_schema_cell_replies_conformant_json",
     "cjk": "test_cjk_cell_replies_cjk_text",
     "thinking": "test_thinking_cell_splits_reasoning_from_content",
-    "images": "test_image_cells_are_accepted_and_report_image_tokens",
+    "image": "test_image_cells_are_accepted_and_report_image_tokens",
 }
+
+
+def _family_cover():
+    """cell_type_key of every family spec the chain runs (the B2 kind, thinking and image sweeps),
+    mapped to the test that validates its replies. Keys come from the manifest's own specs."""
+    out = {}
+    for _batch, sp in fm.b2_specs():
+        if sp["sweep"] not in FAMILY_SWEEPS:
+            continue
+        if sp["sweep"] == "kind" and sp["kind"] not in fm.FAMILY_KINDS:
+            continue
+        name = sp["kind"] if sp["sweep"] == "kind" else sp["sweep"]
+        out[cell_type_key(fm._cell_row("yunshu", fm.SMOKE_BATCH, sp))] = _FAMILY_TEST[name]
+    return out
+
+
+COVERED_CELL_TYPES = _family_cover()
 
 
 def _family_rows(engine):

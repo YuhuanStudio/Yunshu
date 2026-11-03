@@ -56,11 +56,83 @@ BEHAVIOUR_TYPES = {
     f"part=behaviour;check={c}": "test_behaviour_full_stub_passes_every_check"
     for c in fb.CHECKS
 }
+def _real_spec(pairs, sweep, **match):
+    """The manifest's own spec of this sweep (the type itself, not a copy of its shape)."""
+    for _batch, sp in pairs:
+        if sp["sweep"] == sweep and all(sp[k] == v for k, v in match.items()):
+            return dict(sp)
+    raise AssertionError(f"manifest has no {sweep} spec {match}")
+
+
+# The profile-rep job of every manifest shape that has a timed row: the shape's own spec, one
+# prompt variant, one rep. The timed twin of each is covered by its own module (session, content,
+# mixed, the smoke chain); a rep key only belongs here.
+PROFILE_SHAPES = {
+    "conc c2": _real_spec(fm.b2_specs(), "conc", ctx="8K", conc=2),
+    "conc c4": _real_spec(fm.b2_specs(), "conc", ctx="8K", conc=4),
+    "conc c8": _real_spec(fm.b2_specs(), "conc", ctx="8K", conc=8),
+    "conc-same c2": _real_spec(fm.b2_specs(), "conc-same", conc=2),
+    "conc-same c4": _real_spec(fm.b2_specs(), "conc-same", conc=4),
+    "conc-same c8": _real_spec(fm.b2_specs(), "conc-same", conc=8),
+    "smoke-conc code": fm.spec(sweep="smoke-conc", ctx="1K", kind="code", out=64, conc=2, phases=("conc",)),
+    "smoke-conc prose": fm.spec(sweep="smoke-conc", ctx="1K", kind="prose", out=64, conc=2, phases=("conc",)),
+    "mixed": _real_spec(fm.b2_specs(), "mixed", conc=8),
+    "core prose": _real_spec(fm.b1_specs(), "core", ctx="1K", kind="prose"),
+    "smoke-core prose": fm.spec(sweep="smoke-core", ctx="1K", kind="prose", out=64, phases=("cold", "warm", "turn2")),
+    "core code": _real_spec(fm.b1_specs(), "core", ctx="1K", kind="code"),
+    "ctx code": _real_spec(fm.b2_specs(), "ctx", ctx="4K"),
+    "out code": _real_spec(fm.b2_specs(), "out", ctx="1K", out=128),
+    "idle5": _real_spec(fm.b2_specs(), "idle5", ctx="8K"),
+    "restart": _real_spec(fm.b2_specs(), "restart", ctx="32K"),
+    "image img1": _real_spec(fm.b2_specs(), "image", media="img1"),
+    "image img4": _real_spec(fm.b2_specs(), "image", media="img4"),
+    "kind cjk": _real_spec(fm.b2_specs(), "kind", kind="cjk"),
+    "kind json-schema": _real_spec(fm.b2_specs(), "kind", kind="json-schema"),
+    "kind tool-chat": _real_spec(fm.b2_specs(), "kind", kind="tool-chat"),
+    "thinking": _real_spec(fm.b2_specs(), "thinking"),
+    "genconfig": _real_spec(fm.b2_specs(), "sampling", ctx="1K", sampling="genconfig"),
+    "smoke-profile": fm.spec(sweep="smoke-profile", ctx="1K", kind="code", out=64, phases=("cold",)),
+}
+
+
+def _profile_row(sp):
+    row = fm._cell_row("yunshu", fm.SMOKE_BATCH, sp)
+    row["id"] = f"{row['id']}.v0"
+    row["reps"] = 1
+    row["prompt_variant"] = 0
+    row["est_gpu_min"] = 0.0
+    return row
+
+
 COVERED_CELL_TYPES = {
-    SMOKE_TYPE: "test_profile_chain_audit_full_is_clean",
     SMOKE_PROFILE_TYPE: "test_profile_chain_audit_full_is_clean",
+    **{
+        profile_type_key(_profile_row(sp)): f"test_profile_rep_job_runs_for_each_shape[{name}]"
+        for name, sp in PROFILE_SHAPES.items()
+    },
     **BEHAVIOUR_TYPES,
 }
+
+
+@pytest.mark.parametrize("shape", list(PROFILE_SHAPES))
+def test_profile_rep_job_runs_for_each_shape(tmp_path, shape):
+    """The layer-2 profile rep of one manifest shape: the timed job, then the -prof job, both against
+    the profile stub. The profile record lands under profile/ with no error."""
+    row = _profile_row(PROFILE_SHAPES[shape])
+    fr.configure(tmp_path / "raw", tmp_path / "work")
+    pin = json.loads(fr.PIN_PATH.read_text())
+    plan = fr.plan_batch([row], fm.SMOKE_BATCH, pin, profile_rep=True)
+    assert not plan.skipped, [why for _r, why in plan.skipped]
+    timed = [j for j in plan.jobs if not j.label.endswith("-prof")]
+    prof = [j for j in plan.jobs if j.label.endswith("-prof")]
+    assert len(timed) == 1 and len(prof) == 1, [j.label for j in plan.jobs]
+    _run_wrapper(timed[0], PROFILE_STUB_ENV)
+    _run_wrapper(prof[0], PROFILE_STUB_ENV)
+    out = tmp_path / "raw" / "profile" / "yunshu" / f"{row['id']}-prof.jsonl"
+    assert out.exists(), out
+    rows = [json.loads(x) for x in out.read_text().splitlines() if x.strip()]
+    profs = [r for r in rows if r.get("part") == "profile"]
+    assert len(profs) == 1 and not profs[0].get("error"), profs[:1]
 
 
 # ---------------------------------------------------------------- A: profile rep through the chain

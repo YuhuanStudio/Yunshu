@@ -37,25 +37,49 @@ from .test_fullcmp_e2e_coverage import cell_type_key  # noqa: E402
 ENGINES_UNDER_TEST = ("yunshu", "tf-1.2.1")
 VARIANTS = (0, 1)
 
-COVERED_CELL_TYPES = {
-    "conc": "test_conc_cells_run_through_tfbench_and_audit_is_clean",
-    "follow-up": "test_follow_up_turn2_cell_hits_the_prefix_cache",
-    "idle-follow-up": "test_idle_follow_up_cell_runs_turn2_after_the_idle_gap",
-    # the manifest's restart row shape (B2 restart at 32K): key = cell_type_key of that row
-    "restart-disk-cache": "test_restart_with_disk_cache_serves_prefix_hits",
+def _real_spec(pairs, sweep, **match):
+    """The manifest's own spec of this sweep (the type itself, not a copy of its shape)."""
+    for _batch, sp in pairs:
+        if sp["sweep"] == sweep and all(sp[k] == v for k, v in match.items()):
+            return dict(sp)
+    raise AssertionError(f"manifest has no {sweep} spec {match}")
+
+
+def _key(sp: dict) -> str:
+    """cell_type_key of a spec's row (the key is engine- and ctx-independent)."""
+    return cell_type_key(fm._cell_row("yunshu", fm.SMOKE_BATCH, sp))
+
+
+# the conc cells: B2 conc (8K, distinct prompts) and the smoke conc rows
+CONC_SPECS = [_real_spec(fm.b2_specs(), "conc", ctx="8K", conc=n) for n in (2, 4, 8)] + [
+    fm.spec(sweep="smoke-conc", ctx="1K", kind=kind, out=64, conc=2, phases=("conc",))
+    for kind in ("code", "prose")
+]
+# the cold + warm + follow-up cells (turn2 after a prefix hit). smoke-core code is covered by
+# test_fullcmp_e2e (its chain runs that row), so it is not listed here
+FOLLOW_UP_SPECS = {
+    "smoke-core prose": fm.spec(
+        sweep="smoke-core", ctx="1K", kind="prose", out=64, phases=("cold", "warm", "turn2")
+    ),
+    "core code": _real_spec(fm.b1_specs(), "core", ctx="1K", kind="code"),
+    "core prose": _real_spec(fm.b1_specs(), "core", ctx="1K", kind="prose"),
+    "ctx code": _real_spec(fm.b2_specs(), "ctx", ctx="4K"),
+    "out code": _real_spec(fm.b2_specs(), "out", ctx="1K", out=128),
 }
-# keys are cell_type_key()s (test_fullcmp_e2e_coverage); the restart row is the manifest's own
+IDLE_SPEC = _real_spec(fm.b2_specs(), "idle5", ctx="8K")
+RESTART_SPEC = _real_spec(fm.b2_specs(), "restart", ctx="32K")
+SMOKE_PROFILE_SPEC = fm.spec(sweep="smoke-profile", ctx="1K", kind="code", out=64, phases=("cold",))
+
+# keys are cell_type_key()s (test_fullcmp_e2e_coverage); every key belongs to exactly one module
 COVERED_CELL_TYPES = {
-    **{k: v for k, v in COVERED_CELL_TYPES.items() if k != "restart-disk-cache"},
-    cell_type_key(
-        fm._cell_row(
-            "yunshu",
-            fm.SMOKE_BATCH,
-            fm.spec(
-                sweep="restart", ctx="32K", turns="restart", phases=("cold", "restart")
-            ),
-        )
-    ): "test_restart_with_disk_cache_serves_prefix_hits",
+    **{_key(sp): "test_conc_cells_run_through_tfbench_and_audit_is_clean" for sp in CONC_SPECS},
+    **{
+        _key(sp): "test_follow_up_turn2_cell_hits_the_prefix_cache"
+        for sp in FOLLOW_UP_SPECS.values()
+    },
+    _key(IDLE_SPEC): "test_idle_follow_up_cell_runs_turn2_after_the_idle_gap",
+    _key(RESTART_SPEC): "test_restart_with_disk_cache_serves_prefix_hits",
+    _key(SMOKE_PROFILE_SPEC): "test_cold_single_turn_cell_runs_through_tfbench",
 }
 
 
@@ -125,17 +149,7 @@ def _decode(raw, engine, row):
 
 
 def test_conc_cells_run_through_tfbench_and_audit_is_clean(tmp_path, engine):
-    specs = [
-        fm.spec(
-            sweep="smoke-conc", ctx="1K", kind="code", out=64, conc=n, phases=("conc",)
-        )
-        for n in (2, 4, 8)
-    ] + [
-        fm.spec(
-            sweep="smoke-conc", ctx="1K", kind="prose", out=64, conc=2, phases=("conc",)
-        )
-    ]
-    rows = _rows(engine, specs)
+    rows = _rows(engine, CONC_SPECS)
     raw, plan, pin = _run_cell_rows(tmp_path, rows)
     for row in rows:
         n = row["conc"]
@@ -163,20 +177,31 @@ def test_conc_cells_run_through_tfbench_and_audit_is_clean(tmp_path, engine):
     _audit_clean(raw, rows, plan, pin, tmp_path)
 
 
-def test_follow_up_turn2_cell_hits_the_prefix_cache(tmp_path, engine):
-    sp = fm.spec(
-        sweep="smoke-core", ctx="1K", kind="code", out=64, phases=("cold", "turn2")
-    )
+@pytest.mark.parametrize("shape", list(FOLLOW_UP_SPECS))
+def test_follow_up_turn2_cell_hits_the_prefix_cache(tmp_path, engine, shape):
+    """cold, warm, then turn2 (the manifest's cold+warm+fu shape): the warm and the follow-up both
+    hit the prefix cache, the first sighting misses."""
+    sp = FOLLOW_UP_SPECS[shape]
     rows = _rows(engine, [sp])
     raw, plan, pin = _run_cell_rows(tmp_path, rows)
     for row in rows:
-        cold, turn2 = _decode(raw, engine, row)
-        assert (cold["phase"], turn2["phase"]) == ("cold", "turn2")
+        recs = _decode(raw, engine, row)
+        assert [r["phase"] for r in recs] == ["cold", "warm", "turn2"], [r["phase"] for r in recs]
+        cold, _warm, turn2 = recs
         assert cold["cached"] == 0, "a first sighting after an empty cache is a miss"
-        assert turn2["cached"] > 0, (
-            "the follow-up re-sends the cold prompt: a prefix hit"
-        )
-        assert turn2["ct"] == 64 and turn2["dec_tps"] > 0 and turn2["ttft_s"] > 0
+        assert turn2["cached"] > 0, "the follow-up re-sends the cold prompt: a prefix hit"
+        assert turn2["ct"] == row["out_len"] and turn2["dec_tps"] > 0 and turn2["ttft_s"] > 0
+    _audit_clean(raw, rows, plan, pin, tmp_path)
+
+
+def test_cold_single_turn_cell_runs_through_tfbench(tmp_path, engine):
+    """smoke-profile: one cold decode, the row the profile smoke runs (no follow-up turn)."""
+    rows = _rows(engine, [SMOKE_PROFILE_SPEC])
+    raw, plan, pin = _run_cell_rows(tmp_path, rows)
+    for row in rows:
+        (cold,) = _decode(raw, engine, row)
+        assert cold["phase"] == "cold" and cold["cached"] == 0
+        assert cold["ct"] == row["out_len"] and cold["dec_tps"] > 0
     _audit_clean(raw, rows, plan, pin, tmp_path)
 
 
@@ -186,22 +211,14 @@ def test_idle_follow_up_cell_runs_turn2_after_the_idle_gap(
     """The manifest's idle5 cell (cold, then the follow-up after 5 s idle). The gap is patched to
     0.05 s in the runner so the test stays fast; the job's argv carries --think-s 0.05."""
     monkeypatch.setattr(fr, "IDLE_THINK_S", 0.05)
-    sp = fm.spec(
-        sweep="smoke-idle",
-        ctx="1K",
-        kind="code",
-        out=64,
-        turns="idle5",
-        phases=("cold", "fu_idle"),
-    )
-    rows = _rows(engine, [sp])
+    rows = _rows(engine, [IDLE_SPEC])
     raw, plan, pin = _run_cell_rows(tmp_path, rows)
     assert "--think-s 0.05" in plan.jobs[0].script
     for row in rows:
         cold, turn2 = _decode(raw, engine, row)
         assert (cold["phase"], turn2["phase"]) == ("cold", "turn2")
         assert turn2["cached"] > 0, "the idle follow-up still hits the cached prefix"
-        assert turn2["ct"] == 64
+        assert turn2["ct"] == row["out_len"]
     _audit_clean(raw, rows, plan, pin, tmp_path)
 
 
@@ -209,15 +226,7 @@ def test_restart_with_disk_cache_serves_prefix_hits(tmp_path, engine):
     """The restart cell in one run: cold prefill, then tfbench stops the server (keeping its HOME)
     and relaunches it on the same HOME (restart_server, a real Srv launch). The relaunched stub
     serves the cold prompt from the disk tier; the audit requires cached > 0 on the restart row."""
-    sp = fm.spec(
-        sweep="restart",
-        ctx="1K",
-        kind="code",
-        out=64,
-        turns="restart",
-        phases=("cold", "restart"),
-    )
-    rows = _rows(engine, [sp])
+    rows = _rows(engine, [RESTART_SPEC])
     raw, plan, pin = _run_cell_rows(tmp_path, rows)
     for row in rows:
         cold, restart = _decode(raw, engine, row)
@@ -226,7 +235,7 @@ def test_restart_with_disk_cache_serves_prefix_hits(tmp_path, engine):
         assert restart["cached"] > 0, (
             "the relaunched server reads the same HOME's disk tier"
         )
-        assert restart["ct"] == 64
+        assert restart["ct"] == row["out_len"]
     _audit_clean(raw, rows, plan, pin, tmp_path)
 
 
