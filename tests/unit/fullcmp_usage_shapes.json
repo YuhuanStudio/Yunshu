@@ -1,0 +1,5 @@
+{
+  "_doc": "Usage shape per stub engine: details = usage.prompt_tokens_details.cached_tokens, unavailable = no cache count. A GPU smoke updates these from its usage_sample (tfbench --log-usage-sample).",
+  "yunshu": "details",
+  "tf-1.2.1": "details"
+}

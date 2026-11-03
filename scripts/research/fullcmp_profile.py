@@ -34,6 +34,9 @@ HOST_RE = re.compile(
 )
 TREE_RE = re.compile(r"Tree verify stage profile \((\d+) rounds, ms/round\): (\{.*\})")
 COMPETITOR_RE = re.compile(r"(?i)(stat|prof|timing|tok/s|\bms\b)")
+# Structured layer-2 line: stage fields the profile lines do not carry, plus the host-sync counter
+# and the op census (fullcmp_attribution.LAYER2_YUNSHU). The engine must print it for --full to pass.
+LAYER2_RE = re.compile(r"^YUNSHU_LAYER2 (\{.*\})\s*$", re.M)
 
 
 def profile_env(engine: str) -> list[str]:
@@ -70,6 +73,19 @@ def parse_yunshu_stages(text: str) -> dict:
                 str(k): float(v) for k, v in parts.items()
             }
     return stages
+
+
+def parse_yunshu_layer2(text: str) -> dict:
+    """The YUNSHU_LAYER2 line (last one wins): {"stages", "host_sync_count", "op_census"} as
+    printed, or {} when the engine did not print it. Malformed JSON is ignored (reported missing)."""
+    found = LAYER2_RE.findall(text)
+    if not found:
+        return {}
+    try:
+        obj = json.loads(found[-1])
+    except ValueError:
+        return {}
+    return obj if isinstance(obj, dict) else {}
 
 
 def competitor_stat_lines(text: str) -> list[str]:
@@ -111,7 +127,15 @@ def append_profile_row(cell: Path, engine: str) -> dict:
         else:
             row["engine_log_path"] = log_path
             if engine == "yunshu":
-                row["stages"] = parse_yunshu_stages(text)
+                stages = parse_yunshu_stages(text)
+                l2 = parse_yunshu_layer2(text)
+                for name, fields in (l2.get("stages") or {}).items():
+                    if isinstance(fields, dict):
+                        stages.setdefault(name, {}).update(fields)
+                row["stages"] = stages
+                for key in ("host_sync_count", "op_census"):
+                    if l2.get(key) is not None:
+                        row[key] = l2[key]
             else:
                 lines = competitor_stat_lines(text)
                 row["competitor_stats"] = lines or None
