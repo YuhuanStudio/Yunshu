@@ -567,6 +567,17 @@ def concurrent_probe_verdict(mode, probe_responses, records):
         f"concurrent probe mixed (some responses draft, some do not): {drafted}"]
 
 
+def _concurrent_item(m, log):
+    """The per-request done-line item of a mode: the first acceptance item whose regex matches the log
+    (an engine can list several lines; the first listed may be a different line, e.g. kapitsa's spec:)."""
+    items = [e for e in ((m or {}).get("evidence", []))
+             if e.get("kind") == "acceptance_regex" and e.get("group")]
+    for e in items:
+        if re.search(str(e["pattern_or_path"]), log or ""):
+            return e
+    return items[0] if items else None
+
+
 def concurrent_check(table, engine, mode, log, records, ready_offset, probe_responses=None):
     """THE concurrent verdict (in-job check and audit both call this). records: the cell's conc / mixed
     rows. Returns (ev, problems): ev has the evaluate() shape (engaged_mode, matched_line, evidence_kind,
@@ -581,8 +592,7 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
     if mode in AR_MODES:
         return _ar_concurrent(records, log, ready_offset)
     m = mode_entry(table, engine, mode)
-    item = next((e for e in ((m or {}).get("evidence", []))
-                 if e.get("kind") == "acceptance_regex" and e.get("group")), None)
+    item = _concurrent_item(m, log)
     problems, matched = [], []
     consumed = 0
     total = sum(len(r.get("requests") or []) for r in records)
