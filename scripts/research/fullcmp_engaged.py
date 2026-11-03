@@ -364,6 +364,66 @@ def correlate_multiset(item, log, requests, ready_offset):
     return out, None
 
 
+QUEUED = re.compile(r"queued=([0-9.]+)")
+
+
+def queued_s(line: str):
+    """TensorFold's queue wait for a request (serialized concurrency), or None when the line has none."""
+    m = QUEUED.search(line or "")
+    return float(m.group(1)) if m else None
+
+
+def read_concurrent_records(path) -> list:
+    """The conc / mixed rows of a cell file (malformed lines are skipped here; the parse guards report them)."""
+    out = []
+    p = Path(path)
+    for line in (p.read_text(errors="replace").splitlines() if p.is_file() else []):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if rec.get("part") in ("conc", "mixed"):
+            out.append(rec)
+    return out
+
+
+def concurrent_check(table, engine, mode, log, records, ready_offset):
+    """THE concurrent verdict (in-job check and audit both call this). records: the cell's conc / mixed
+    rows. Returns (ev, problems): ev has the evaluate() shape (engaged_mode, matched_line, evidence_kind,
+    source, stats with per_row) when every record's requests are matched; problems lists every failure
+    (fail closed). ev is None when there are no records."""
+    if not records:
+        return None, []
+    m = mode_entry(table, engine, mode)
+    item = next((e for e in ((m or {}).get("evidence", []))
+                 if e.get("kind") == "acceptance_regex" and e.get("group")), None)
+    problems, matched = [], []
+    for rec in records:
+        reqs = rec.get("requests")
+        if not isinstance(reqs, list) or not reqs:
+            problems.append(f"{rec.get('part')} n={rec.get('n')}: no requests list")
+            continue
+        if item is None:
+            problems.append(f"no per-request acceptance item for {engine}/{mode}")
+            continue
+        found, why = correlate_multiset(item, log, reqs, ready_offset)
+        if why is not None:
+            problems.append(f"concurrent {rec.get('part')} n={rec.get('n')}: {why}")
+        for mt in found:
+            mt["queued_s"] = queued_s(mt["line"])
+            mt["part"] = rec.get("part")
+            matched.append(mt)
+    if problems or not matched:
+        return {"engaged_mode": UNVERIFIED, "matched_line": None, "evidence_kind": "concurrent",
+                "source": "slice", "stats": {"per_row_problem": "; ".join(problems) or "no requests",
+                                             "per_row": matched}, "label": None}, problems
+    per_row = [{"row": i, "prompt": x.get("prompt"), "line": x["line"], "value": x["value"], "group": x.get("group")}
+               for i, x in enumerate(matched)]
+    return {"engaged_mode": mode, "matched_line": matched[-1]["line"], "evidence_kind": "acceptance_regex",
+            "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched)},
+            "label": None}, []
+
+
 def acceptance_proven(ev: dict) -> bool:
     """True when the evidence evaluation itself proved drafting per measured request: every row has its
     own positive matched value (per_row), or the probe's draft stats are positive. This is the single

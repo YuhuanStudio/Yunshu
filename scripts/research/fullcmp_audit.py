@@ -725,9 +725,14 @@ def check_engaged_mode(run: Run) -> GuardResult:
                     probe_row = r
                     break
             probe_response = {"timings": probe_row.get("timings")} if probe_row else None
-            ev = fe.evaluate(engine, want, log, cf.rows, table,
-                             probe_text=h.get("engine_probe"), ready_offset=ready,
-                             probe_response=probe_response)
+            concurrent_records = fe.read_concurrent_records(cf.path)
+            if not cf.rows and concurrent_records:
+                # concurrent cell: the shared verdict (fe.concurrent_check), the same one tfbench ran in-job
+                ev, _ = fe.concurrent_check(table, engine, want, log, concurrent_records, ready)
+            else:
+                ev = fe.evaluate(engine, want, log, cf.rows, table,
+                                 probe_text=h.get("engine_probe"), ready_offset=ready,
+                                 probe_response=probe_response)
         got = ev["engaged_mode"]
         if got == fe.UNVERIFIED:
             kind = ev.get("evidence_kind")
@@ -753,31 +758,11 @@ def check_engaged_mode(run: Run) -> GuardResult:
             # are not populated for these engines and are not read here
             res.fail(cell, f"r{cf.rep}: speculative mode {got!r} without per-request acceptance in the evidence")
         if engine != "yunshu" and got not in fe.AR_MODES and got != fe.UNVERIFIED:
-            # concurrent records (part conc / mixed): one requests list per record; each request needs its own
-            # done line (multiset by prompt and token count), value above min. Fail closed otherwise.
-            item = next((e for e in (m or {}).get("evidence", [])
-                         if e.get("kind") == "acceptance_regex" and e.get("group")), None)
-            concurrent = []
-            for line in (cf.path.read_text(errors="replace").splitlines() if cf.path.is_file() else []):
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                if rec.get("part") in ("conc", "mixed"):
-                    concurrent.append(rec)
-            for rec in concurrent:
-                reqs = rec.get("requests")
-                if not isinstance(reqs, list) or not reqs:
-                    res.fail(cell, f"r{cf.rep}: {rec.get('part')} record has no requests list")
-                elif item is None:
-                    res.fail(cell, f"r{cf.rep}: no per-request acceptance item for {engine}/{want}")
-                else:
-                    matches, why = fe.correlate_multiset(item, log, reqs, ready)
-                    if why is not None:
-                        res.fail(cell, f"r{cf.rep}: concurrent {rec.get('part')} n={rec.get('n')}: {why}")
-                    for mt in matches:
-                        res.notes.append(
-                            f"{cell} r{cf.rep} {rec.get('part')} rid {mt['rid']} accepted {mt['value']}: {mt['line']}")
+            # concurrent records (part conc / mixed): the shared verdict, fail closed per request
+            concurrent = fe.read_concurrent_records(cf.path)
+            _cev, cproblems = fe.concurrent_check(table, engine, want, log, concurrent, ready)
+            for problem in cproblems:
+                res.fail(cell, f"r{cf.rep}: {problem}")
         for row in ev["stats"].get("per_row", []):
             # one line per measured request: row id, the done line it matched, its accepted value
             res.notes.append(

@@ -587,7 +587,7 @@ class Srv:
         except Exception as e:  # noqa: BLE001
             return f"probe failed: {e!r}"
 
-    def verify_spec_mode(self, final=False, rows=(), probe_response=None):
+    def verify_spec_mode(self, final=False, rows=(), probe_response=None, concurrent=()):
         log = self.log.read_text(errors="replace")
         if fp.fullcmp_mode(os.environ) and not self._is_yunshu(self.engine):
             # Fullcmp: the engaged mode comes from the evidence table only (fullcmp_engaged); the
@@ -595,7 +595,9 @@ class Srv:
             # startup line proves 'loaded'), so only the final check (after the requests, with the
             # cell's records) may refuse a cell.
             self.probe = self.probe_text()
-            self._verify_fullcmp_evidence(log, final=final, rows=rows, probe_response=probe_response)
+            self._verify_fullcmp_evidence(
+                log, final=final, rows=rows, probe_response=probe_response, concurrent=concurrent
+            )
             return
         # The engaged-mode line the audit checks (fullcmp header engaged_log_line).
         self.engaged_log_line = engaged_spec_mode_line(
@@ -627,18 +629,25 @@ class Srv:
             # measures a different engine (2026-10-20: ragged KV off broke identity)
             raise RuntimeError(f"{off}; see {self.log}")
 
-    def _verify_fullcmp_evidence(self, log, final=False, rows=(), probe_response=None):
+    def _verify_fullcmp_evidence(self, log, final=False, rows=(), probe_response=None, concurrent=()):
         table = fe.load_table()  # None when the table is missing or malformed: no evidence at all
-        ev = fe.evaluate(
-            self.engine,
-            self.requested_spec_mode,
-            log,
-            rows,
-            table,
-            probe_text=self.probe,
-            ready_offset=getattr(self, "ready_log_offset", None),
-            probe_response=probe_response,
-        )
+        ready = getattr(self, "ready_log_offset", None)
+        if concurrent and not rows:
+            # concurrent cells: the same shared verdict the audit uses (fe.concurrent_check)
+            ev, problems = fe.concurrent_check(table, self.engine, self.requested_spec_mode, log, concurrent, ready)
+            if problems and final:
+                raise RuntimeError("concurrent evidence: " + "; ".join(problems) + f"; see {self.log}")
+        else:
+            ev = fe.evaluate(
+                self.engine,
+                self.requested_spec_mode,
+                log,
+                rows,
+                table,
+                probe_text=self.probe,
+                ready_offset=ready,
+                probe_response=probe_response,
+            )
         self.engaged_spec_mode = ev["engaged_mode"]
         self.engaged_log_line = ev["matched_line"]
         self.engaged_evidence_kind = ev["evidence_kind"]
@@ -2713,7 +2722,12 @@ def main():
                     ),
                 )
             measured = read_decode_rows(a.out)
-            s.verify_spec_mode(final=True, rows=measured, probe_response=probe_response)
+            s.verify_spec_mode(
+                final=True,
+                rows=measured,
+                probe_response=probe_response,
+                concurrent=fe.read_concurrent_records(a.out),
+            )
             if fullcmp and a.engine != "yunshu" and getattr(s, "engaged_per_row", None):
                 # attribution per measured request, from the matched evidence (written after the final check)
                 for attr in fe.attr_rows_from(s.engaged_per_row, measured):
