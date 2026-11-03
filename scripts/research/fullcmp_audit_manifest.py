@@ -225,13 +225,13 @@ EXPECTED_MODE_PROBE = {
     },
     "omlx-0.7.3rc1": {
         "expected_mode": "dflash",
-        "probe": "same as omlx-0.7.3 (rc1 wheel, same engine_pool branch; re-check its source before the first run)",
+        "probe": "same as omlx-0.7.3 (rc1 wheel: same engine_pool branch and log line, grepped)",
         "log_patterns": [
             {
                 "regex": r"DFlash enabled for \S+ as a batched drafter, draft=\S+",
                 "meaning": "DFlash drafter attached as a batched drafter",
-                "confidence": "medium",
-                "source": "expected from the 0.7.3 source; not yet grepped in the rc1 wheel",
+                "confidence": "high",
+                "source": "omlx 0.7.3rc1 engine_pool.py:4187 logger.info (grepped in the rc1 wheel)",
             },
         ],
     },

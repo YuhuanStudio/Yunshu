@@ -287,6 +287,8 @@ def warm_lazy_engine(engine, url, model):
         "omlx",
         "llamacpp",
         "omlx-latest",
+        "omlx-0.7.3",
+        "omlx-0.7.3rc1",
         "llamacpp-mtp",
         "llamacpp-dflash",
         "fn-omlx-latest",

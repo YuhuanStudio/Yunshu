@@ -575,3 +575,31 @@ def test_llama_mtp_engagement_uses_loaded_head_and_actual_drafts():
         )
         is None
     )
+
+
+@pytest.mark.parametrize("engine", ["omlx-0.7.3", "omlx-0.7.3rc1"])
+def test_pinned_omlx_engines_load_lazy_model_before_engagement(monkeypatch, engine):
+    # oMLX loads the model on the first request; the "DFlash enabled ... draft=" line is
+    # printed only inside that load, so the pinned engines must get the warm-up request too
+    import tfbench
+
+    requests = []
+    monkeypatch.setattr(
+        tfbench, "send", lambda url, body, **kw: requests.append((url, body, kw))
+    )
+    tfbench.warm_lazy_engine(engine, "http://fixture", "Qwen3.8-27B-oQ4e-mtp")
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("engine", ["omlx-0.7.3", "omlx-0.7.3rc1"])
+def test_pinned_omlx_launch_writes_dflash_model_settings(tmp_path, engine):
+    launch = be.build_launch(engine, 18995, tmp_path, {})
+    settings_path = str(tmp_path / "omlx-base" / "model_settings.json")
+    model = json.loads(launch.files[settings_path])["models"]["Qwen3.8-27B-oQ4e-mtp"]
+    assert model == {
+        "dflash_enabled": True,
+        "dflash_draft_model": be.DRAFTER,
+    }
+    assert "mtp_enabled" not in model  # mtp and dflash are mutually exclusive in oMLX
+    assert launch.links[str(tmp_path / "omlx-models" / "Qwen3.8-27B-oQ4e-mtp")] == be.CHECKPOINT
+    assert launch.cmd[launch.cmd.index("--base-path") + 1] == str(tmp_path / "omlx-base")
