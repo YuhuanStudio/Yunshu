@@ -57,6 +57,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_engines  # noqa: E402
 import fullcmp_quiet  # noqa: E402
+from fullcmp_profile import profile_env  # noqa: E402
 
 SCRIPTS = Path(__file__).resolve().parent
 TFBENCH = SCRIPTS / "tfbench.py"
@@ -64,6 +65,7 @@ AUDIT = SCRIPTS / "fullcmp_audit.py"
 REPS = SCRIPTS / "fullcmp_reps.py"
 PREFLIGHT = SCRIPTS / "fullcmp_preflight.py"
 QUIET = SCRIPTS / "fullcmp_quiet.py"
+PROFILE_SCRIPT = SCRIPTS / "fullcmp_profile.py"
 
 MAIN_PY = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python"
 GPUQ = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/scripts/dev/gpuq"
@@ -225,7 +227,9 @@ class Job:
         ]
 
 
-def cell_env(engine: str, pin: dict, label: str = "") -> list[str]:
+def cell_env(
+    engine: str, pin: dict, label: str = "", telemetry_root=None, extra=()
+) -> list[str]:
     """Env assignments every harness command carries (pinned Yunshu tree, isolated HOME).
     TFB_TELEMETRY_DIR is the raw root: tfbench writes <root>/<engine>/<cell>-rN.telemetry.jsonl,
     the same place the audit reads it beside each cell file. GPUQ_JOB_ID is not set here: gpuq
@@ -234,7 +238,7 @@ def cell_env(engine: str, pin: dict, label: str = "") -> list[str]:
     harness = pin["launch"]["harness_env"]
     env = [
         "TFB_FULLCMP=1",
-        f"TFB_TELEMETRY_DIR={RAW_ROOT}",
+        f"TFB_TELEMETRY_DIR={telemetry_root or RAW_ROOT}",
         f"TFB_YUNSHU_BIN={harness['TFB_YUNSHU_BIN']}",
         f"TFB_YUNSHU_SRC={harness['TFB_YUNSHU_SRC']}",
         f"PYTHONPATH={harness['PYTHONPATH']}",
@@ -243,21 +247,40 @@ def cell_env(engine: str, pin: dict, label: str = "") -> list[str]:
     ]
     if label:
         env.append(f"TFB_JOB_LABEL={label}")
-    return env
+    return env + list(extra)
 
 
 def raw_path(engine: str, cell_id: str, rep: int) -> Path:
     return RAW_ROOT / engine / f"{cell_id}-r{rep}.jsonl"
 
 
-def cell_command(row: dict, rep: int, pin: dict, label: str = "") -> list[str] | None:
+def profile_path(engine: str, cell_id: str) -> Path:
+    """Layer-2 profile rows: outside <engine>/<cell>-rN.jsonl, so the audit never reads them."""
+    return RAW_ROOT / "profile" / engine / f"{cell_id}-prof.jsonl"
+
+
+def cell_command(
+    row: dict, rep: int, pin: dict, label: str = "", profile: bool = False
+) -> list[str] | None:
     part, extra, reason = harness_part(row)
     if part is None:
         return None
-    out = raw_path(row["engine"], row["id"], rep)
+    if profile:
+        out = profile_path(row["engine"], row["id"])
+        env = cell_env(
+            row["engine"],
+            pin,
+            label,
+            telemetry_root=RAW_ROOT / "profile",
+            extra=profile_env(row["engine"]),
+        )
+        rep = 0
+    else:
+        out = raw_path(row["engine"], row["id"], rep)
+        env = cell_env(row["engine"], pin, label)
     return [
         "env",
-        *cell_env(row["engine"], pin, label),
+        *env,
         MAIN_PY,
         str(TFBENCH),
         "--engine",
@@ -286,14 +309,34 @@ def quiet_gate_argv(label: str) -> list[str]:
     ]
 
 
-def job_command(cells: list[dict], rep: int, pin: dict, label: str = "") -> list[str]:
+def job_command(
+    cells: list[dict], rep: int, pin: dict, label: str = "", profile: bool = False
+) -> list[str]:
     """One gpuq job: quiet gate, then mkdir, then one tfbench invocation per cell (&&-chained,
-    so a busy machine or a failed cell stops the rest of the job)."""
-    dirs = sorted({str(raw_path(c["engine"], c["id"], rep).parent) for c in cells})
+    so a busy machine or a failed cell stops the rest of the job). A profile job appends the
+    layer-2 row (fullcmp_profile.py) after each cell."""
+    if profile:
+        dirs = sorted({str(profile_path(c["engine"], c["id"]).parent) for c in cells})
+    else:
+        dirs = sorted({str(raw_path(c["engine"], c["id"], rep).parent) for c in cells})
     steps = [shlex.join(quiet_gate_argv(label or "unlabelled"))]
     steps.append("mkdir -p " + " ".join(shlex.quote(d) for d in dirs))
     for c in cells:
-        steps.append(shlex.join(cell_command(c, rep, pin, label)))
+        steps.append(shlex.join(cell_command(c, rep, pin, label, profile=profile)))
+        if profile:
+            out = profile_path(c["engine"], c["id"])
+            steps.append(
+                shlex.join(
+                    [
+                        MAIN_PY,
+                        str(PROFILE_SCRIPT),
+                        "--cell",
+                        str(out),
+                        "--engine",
+                        c["engine"],
+                    ]
+                )
+            )
     return ["/bin/sh", "-c", " && ".join(steps)]
 
 
@@ -312,8 +355,10 @@ def plan_jobs(
     pin: dict,
     batch: str,
     label_suffix: str = "",
+    profile: bool = False,
 ) -> list[Job]:
-    """Jobs for each rep in rows_by_rep (dict insertion order is the rep order)."""
+    """Jobs for each rep in rows_by_rep (dict insertion order is the rep order). A profile plan
+    takes one rep key (0) and labels each job ...-<part>-prof."""
     jobs: list[Job] = []
     for rep, rows in rows_by_rep.items():
         order = rotate(engine_order, rep)
@@ -328,7 +373,12 @@ def plan_jobs(
                     part_tag = f"-p{k + 1}" if len(chunks) > 1 else ""
                     est = sum(cell_est(c) for c in chunk)
                     over = est > JOB_CAP_MIN + 1e-9
-                    label = f"fullcmp-{batch}-{engine}-{slug}{part_tag}-r{rep}{label_suffix}"
+                    if profile:
+                        label = f"fullcmp-{batch}-{engine}-{slug}{part_tag}-prof"
+                        flags = ["profile"]
+                    else:
+                        label = f"fullcmp-{batch}-{engine}-{slug}{part_tag}-r{rep}{label_suffix}"
+                        flags = ["rep3"] if label_suffix else []
                     jobs.append(
                         Job(
                             label=label,
@@ -338,15 +388,22 @@ def plan_jobs(
                             rep=rep,
                             cells=chunk,
                             est_min=est,
-                            cmd=job_command(chunk, rep, pin, label),
+                            cmd=job_command(chunk, rep, pin, label, profile=profile),
                             over_cap=over,
-                            flags=["rep3"] if label_suffix else [],
+                            flags=flags,
                         )
                     )
     return jobs
 
 
-def plan_batch(rows: list[dict], batch: str, pin: dict, engines=None, rep=None) -> Plan:
+def plan_batch(
+    rows: list[dict],
+    batch: str,
+    pin: dict,
+    engines=None,
+    rep=None,
+    profile_rep: bool = False,
+) -> Plan:
     batch_rows = [r for r in rows if r.get("batch") == batch]
     runnable, skipped = [], []
     for r in batch_rows:
@@ -369,6 +426,10 @@ def plan_batch(rows: list[dict], batch: str, pin: dict, engines=None, rep=None) 
     rows_by_rep = {k: [r for r in runnable if k < row_reps(r)] for k in reps}
     rows_by_rep = {k: v for k, v in rows_by_rep.items() if v}
     jobs = plan_jobs(rows_by_rep, engine_order, pin, batch)
+    if profile_rep and runnable:
+        # One extra profile job per (engine, group, chunk), after the timed jobs; its rows never
+        # reach the audit or the table.
+        jobs += plan_jobs({0: runnable}, engine_order, pin, batch, profile=True)
     return Plan(batch, runnable, skipped, engine_order, jobs)
 
 
@@ -604,6 +665,20 @@ def print_plan(plan: Plan) -> None:
 # ---------------------------------------------------------------------------
 
 
+def configure(raw_root: Path | None = None, work_dir: Path | None = None) -> None:
+    """Point the driver at a separate raw root and work dir (smoke runs). Defaults are the
+    production paths; a smoke run must never touch RAW_ROOT or the batch audit manifests."""
+    global RAW_ROOT, HOME_ROOT, AUDIT_DIR, QUIET_DIR, PREFLIGHT_DIR
+    if raw_root is not None:
+        RAW_ROOT = Path(raw_root)
+    if work_dir is not None:
+        work = Path(work_dir)
+        HOME_ROOT = work / "home"
+        AUDIT_DIR = work / "audit"
+        QUIET_DIR = work / "quiet"
+        PREFLIGHT_DIR = work / "preflight"
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -623,12 +698,32 @@ def main(argv=None) -> int:
         action="store_true",
         help="submit even with a non-fullcmp GPU job",
     )
+    ap.add_argument(
+        "--profile-rep",
+        action="store_true",
+        help="also queue one layer-2 profile job per cell group (label ...-prof; excluded from tables)",
+    )
+    ap.add_argument(
+        "--raw-root",
+        type=Path,
+        default=None,
+        help="raw results root (default: the production root; smoke runs use their own)",
+    )
+    ap.add_argument(
+        "--work-dir",
+        type=Path,
+        default=None,
+        help="work dir for homes, audit manifests, quiet and preflight logs (default: production)",
+    )
     a = ap.parse_args(argv)
+    configure(a.raw_root, a.work_dir)
 
     pin = json.loads(PIN_PATH.read_text())
     rows = load_rows(a.manifest)
     engines = [e for e in a.engines.split(",") if e] or None
-    plan = plan_batch(rows, a.batch, pin, engines=engines, rep=a.rep)
+    plan = plan_batch(
+        rows, a.batch, pin, engines=engines, rep=a.rep, profile_rep=a.profile_rep
+    )
 
     if a.dry_run:
         print("dry-run: no preflight, no queue read, no submission")
