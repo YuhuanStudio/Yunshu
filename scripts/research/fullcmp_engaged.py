@@ -321,16 +321,12 @@ def attr_rows_from(per_row, rows) -> list[dict]:
     return out
 
 
-def correlate_multiset(item, log, requests, ready_offset):
-    """Concurrent requests (multiset, not order): the post-readiness done lines of the cell are matched to
-    the record's requests by (prompt count, completion count) when the item has those groups; the request
-    order breaks ties between identical pairs. Fail closed: a count mismatch (lines != requests) or an
-    unmatched request. Returns (matches [{rid, prompt, line, value}], None) or ([], reason)."""
+def _done_candidates(item, log, ready_offset):
+    """Every match of the item's regex after the readiness requests, in log order."""
     rx = re.compile(str(item["pattern_or_path"]))
-    group, minimum = item.get("group"), float(item.get("min", 0))
-    start = ready_offset or 0
+    group = item.get("group")
     cands = []
-    for hit in rx.finditer(log or "", start):
+    for hit in rx.finditer(log or "", ready_offset or 0):
         try:
             value = float(hit.group(group))
         except (TypeError, ValueError, IndexError):
@@ -339,7 +335,17 @@ def correlate_multiset(item, log, requests, ready_offset):
         prompt = int(hit.group("prompt").replace(",", "")) if "prompt" in names and hit.group("prompt") else None
         ct = int(hit.group("ct").replace(",", "")) if "ct" in names and hit.group("ct") else None
         cands.append({"line": _line_at(log, hit.start(), hit.end()), "value": value, "prompt": prompt, "ct": ct})
-    cands = cands[READINESS_REQUESTS:]
+    return cands[READINESS_REQUESTS:]
+
+
+def correlate_multiset(item, log, requests, ready_offset, consumed=0):
+    """Concurrent requests (multiset, not order) of ONE record: its requests take the next len(requests)
+    post-readiness done lines after `consumed` (records of a cell run one after another), matched by
+    (prompt count, token count) when the item has those groups; log order breaks ties. Fail closed on a
+    shortage of lines, an unmatched request, or a value not above min. Returns (matches, None) or
+    ([], reason). The caller checks the cell's total (concurrent_check)."""
+    group, minimum = item.get("group"), float(item.get("min", 0))
+    cands = _done_candidates(item, log, ready_offset)[consumed:consumed + len(requests)]
     if len(cands) != len(requests):
         return [], f"count mismatch: {len(cands)} done lines for {len(requests)} requests"
     used, out = set(), []
@@ -355,11 +361,11 @@ def correlate_multiset(item, log, requests, ready_offset):
             found = j
             break
         if found is None:
-            return out, f"request {rid} (prompt {req.get('pt')}, tokens {req.get('ct')}): no done line"
+            return [], f"request {rid} (prompt {req.get('pt')}, tokens {req.get('ct')}): no done line"
         used.add(found)
         c = cands[found]
         if not c["value"] > minimum:
-            return out, f"request {rid}: value {c['value']} not above {minimum}"
+            return [], f"request {rid}: value {c['value']} not above {minimum}"
         out.append({"rid": rid, "prompt": c["prompt"], "line": c["line"], "value": c["value"], "group": group})
     return out, None
 
@@ -398,6 +404,10 @@ def concurrent_check(table, engine, mode, log, records, ready_offset):
     item = next((e for e in ((m or {}).get("evidence", []))
                  if e.get("kind") == "acceptance_regex" and e.get("group")), None)
     problems, matched = [], []
+    consumed = 0
+    total = sum(len(r.get("requests") or []) for r in records)
+    if item is not None and total != len(_done_candidates(item, log, ready_offset)):
+        problems.append(f"cell: {len(_done_candidates(item, log, ready_offset))} done lines for {total} requests")
     for rec in records:
         reqs = rec.get("requests")
         if not isinstance(reqs, list) or not reqs:
@@ -406,7 +416,8 @@ def concurrent_check(table, engine, mode, log, records, ready_offset):
         if item is None:
             problems.append(f"no per-request acceptance item for {engine}/{mode}")
             continue
-        found, why = correlate_multiset(item, log, reqs, ready_offset)
+        found, why = correlate_multiset(item, log, reqs, ready_offset, consumed=consumed)
+        consumed += len(reqs)
         if why is not None:
             problems.append(f"concurrent {rec.get('part')} n={rec.get('n')}: {why}")
         for mt in found:
@@ -417,7 +428,8 @@ def concurrent_check(table, engine, mode, log, records, ready_offset):
         return {"engaged_mode": UNVERIFIED, "matched_line": None, "evidence_kind": "concurrent",
                 "source": "slice", "stats": {"per_row_problem": "; ".join(problems) or "no requests",
                                              "per_row": matched}, "label": None}, problems
-    per_row = [{"row": i, "prompt": x.get("prompt"), "line": x["line"], "value": x["value"], "group": x.get("group")}
+    per_row = [{"row": i, "prompt": x.get("prompt"), "line": x["line"], "value": x["value"],
+                "group": x.get("group"), "queued_s": x.get("queued_s")}
                for i, x in enumerate(matched)]
     return {"engaged_mode": mode, "matched_line": matched[-1]["line"], "evidence_kind": "acceptance_regex",
             "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched)},

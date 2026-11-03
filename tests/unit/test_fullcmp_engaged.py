@@ -772,3 +772,59 @@ def test_mlx_vlm_probe_is_re_evaluated_by_the_audit_on_the_real_raw():
     for jl in jls:
         bad = [v for v in _guard_violations_for(jl) if "unverified" in v]
         assert not bad, bad
+
+
+TF_CONC_REAL = (
+    '[tensorfold] done chatcmpl-a7f9d981ca391dec3977210d34767534 prompt=15 cached=0 thinking=False effort=none tokens=10 sha=e94588627640 finish=stop rounds=1 accepted=9/15 ttft=0.037 decode=0.041 elapsed=0.078 queued=0.000 tok/s=217.6\n',
+    '[tensorfold] done chatcmpl-a3aec464a36e4639539599572c1fb9bc prompt=15 cached=0 thinking=False effort=none tokens=10 sha=e94588627640 finish=stop rounds=1 accepted=9/15 ttft=0.039 decode=0.040 elapsed=0.079 queued=0.000 tok/s=224.9\n',
+    '[tensorfold] done chatcmpl-3ff4edad0a3ea27a41bbcd7ff40c5f26 prompt=1024 cached=0 thinking=False effort=none tokens=64 sha=8f4c72f50c71 finish=length rounds=18 accepted=49/267 ttft=1.059 decode=0.752 elapsed=1.811 queued=0.000 tok/s=83.8\n',
+    '[tensorfold] done chatcmpl-26cbb5abe07d3a983509ef8ede8d2680 prompt=1024 cached=0 thinking=False effort=none tokens=64 sha=af45034bcfc4 finish=length rounds=12 accepted=52/172 ttft=2.863 decode=0.501 elapsed=3.365 queued=1.810 tok/s=125.7\n',
+    '[tensorfold] done chatcmpl-c6ebead6f8bf4aa8ba6fe46459569129 prompt=1024 cached=0 thinking=False effort=none tokens=64 sha=0de688d4dfa9 finish=length rounds=17 accepted=46/246 ttft=1.078 decode=0.703 elapsed=1.781 queued=0.024 tok/s=89.6\n',
+    '[tensorfold] done chatcmpl-742a911e5f4f5c063a04fcaa6f56645a prompt=1024 cached=0 thinking=False effort=none tokens=64 sha=79079b3f5c62 finish=length rounds=12 accepted=51/174 ttft=2.837 decode=0.514 elapsed=3.352 queued=1.781 tok/s=122.5\n',
+)
+
+
+def _tf_item():
+    entry = fe.load_table()["engines"]["tf-1.2.1"]["modes"]["dflash"]
+    return next(e for e in entry["evidence"] if e["kind"] == "acceptance_regex" and e.get("group"))
+
+
+def _conc_records(*sizes):
+    """One conc record per entry of sizes (requests of 1024 prompt tokens, 64 completion tokens)."""
+    return [{"part": "conc", "n": n, "requests": [{"rid": i, "pt": 1024, "ct": 64} for i in range(n)]}
+            for n in sizes]
+
+
+def test_tf_concurrent_real_lines_engage_each_request_with_queued_time():
+    """Real wire-1106 tf-1.2.1 conc cell: 2 readiness pings, then two n=2 conc records (4 done lines).
+    Each request matches its own line; the queued= field is read where present (serialized queue)."""
+    log = "".join(TF_CONC_REAL)
+    ev, problems = fe.concurrent_check(fe.load_table(), "tf-1.2.1", "dflash", log, _conc_records(2, 2), 0)
+    assert problems == [], problems
+    assert ev["engaged_mode"] == "dflash"
+    per_row = ev["stats"]["per_row"]
+    assert [r["value"] for r in per_row] == [49.0, 52.0, 46.0, 51.0]
+    assert [round(r["queued_s"], 3) if r["queued_s"] is not None else None for r in per_row] == [0.0, 1.81, 0.024, 1.781]
+
+
+def test_tf_concurrent_missing_done_line_fails_closed():
+    """Mutation: one concurrent request has no done line (the server did not log it): the cell fails."""
+    lines = list(TF_CONC_REAL)
+    del lines[4]  # the third measured request's line
+    ev, problems = fe.concurrent_check(fe.load_table(), "tf-1.2.1", "dflash", "".join(lines), _conc_records(2, 2), 0)
+    assert problems and ev["engaged_mode"] == "unverified"
+
+
+def test_tf_concurrent_extra_done_line_fails_closed():
+    """Mutation: one more done line than requests (a request the record does not account for)."""
+    lines = list(TF_CONC_REAL) + [TF_CONC_REAL[-1]]
+    ev, problems = fe.concurrent_check(fe.load_table(), "tf-1.2.1", "dflash", "".join(lines), _conc_records(2, 2), 0)
+    assert problems and ev["engaged_mode"] == "unverified"
+
+
+def test_tf_concurrent_unaccepted_request_fails_closed():
+    """Mutation: a measured request's done line has accepted=0: that request is not drafting."""
+    lines = list(TF_CONC_REAL)
+    lines[2] = lines[2].replace("accepted=49/267", "accepted=0/267")
+    ev, problems = fe.concurrent_check(fe.load_table(), "tf-1.2.1", "dflash", "".join(lines), _conc_records(2, 2), 0)
+    assert problems and ev["engaged_mode"] == "unverified"
