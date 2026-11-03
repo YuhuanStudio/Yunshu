@@ -1218,7 +1218,9 @@ def check_quiet_machine(run: Run) -> GuardResult:
                 # processes. The snapshot must still exist (fail closed above).
                 continue
             single, limit = quiet_limits_of(rec)
-            noise = {"WindowServer", "kernel_task", "mds_stores"}
+            import fullcmp_quiet as fq  # the same exemption list as the in-job gate
+
+            noise = fq.SYSTEM_NOISE
             violators = [
                 h
                 for h in rec.get("holders") or []

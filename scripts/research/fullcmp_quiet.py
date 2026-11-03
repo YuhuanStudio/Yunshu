@@ -45,8 +45,10 @@ from pathlib import Path
 
 DEFAULT_MAX_SINGLE_PCT = 20.0
 DEFAULT_MAX_TOTAL_PCT = 150.0
-# macOS system noise: exempt from the single-holder rule only (still recorded and counted in total).
-SYSTEM_NOISE = frozenset({"WindowServer", "kernel_task", "mds_stores"})
+# macOS noise exempt from the single-holder rule only (still recorded and counted in total). Spotlight
+# (mds / mds_stores) is NOT exempt: at 49% on a core it contaminated a host-bound decode (wire-1107
+# kapitsa mixed quiet_pre, 2026-11-04). WindowServer and kernel_task are small and not controllable.
+SYSTEM_NOISE = frozenset({"WindowServer", "kernel_task"})
 DEFAULT_WINDOW_S = 10.0
 DEFAULT_INTERVAL_S = 1.0
 DEFAULT_RETRIES = 3

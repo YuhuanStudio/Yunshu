@@ -200,17 +200,25 @@ def test_single_holder_just_under_the_limit_passes(monkeypatch):
 
 
 def test_system_noise_is_exempt_from_single_rule_but_reported(monkeypatch):
-    # WindowServer / kernel_task / mds_stores are macOS noise: listed and counted, never a violator.
+    # WindowServer is macOS noise: listed and counted, never a violator. Spotlight (mds_stores) is not
+    # exempt: at 49% it contaminated a host-bound decode (wire-1107 kapitsa mixed).
     frames = steady(
         {
-            700: (1, 43.0, "/System/Library/mds/mds_stores"),
-            701: (1, 30.0, "/System/Library/Frameworks/WindowServer"),
+            700: (1, 43.0, "/System/Library/Frameworks/WindowServer"),
+            701: (1, 5.0, "/System/Library/Frameworks/Other"),
         }
     )
     rec = run_check(frames, monkeypatch=monkeypatch)
     assert rec["violators"] == []
     assert rec["ok"] is True  # 73% total < 150%
-    assert [h["name"] for h in rec["holders"]] == ["mds_stores", "WindowServer"]
+    assert [h["name"] for h in rec["holders"]] == ["WindowServer", "Other"]
+
+
+def test_spotlight_at_49_percent_is_a_violator(monkeypatch):
+    frames = steady({600: (1, 49.0, "/System/Library/mds/mds_stores")})
+    rec = run_check(frames, monkeypatch=monkeypatch)
+    assert [h["name"] for h in rec["violators"]] == ["mds_stores"]
+    assert rec["ok"] is False
 
 
 def test_many_small_holders_fail_the_total_rule(monkeypatch):

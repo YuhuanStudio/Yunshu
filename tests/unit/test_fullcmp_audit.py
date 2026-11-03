@@ -1246,10 +1246,29 @@ def test_quiet_machine_flags_post_snapshot_over_limit_and_names_holder():
     assert "quiet_post" in res.violations[0] and "stray" in res.violations[0]
 
 
-def test_quiet_machine_system_noise_is_not_a_holder_violation():
-    noise = [{"pid": 700, "name": "mds_stores", "pct": 43.0}]
-    run = _fake_run([_qcell("c1", 0, quiet_record(1.0), quiet_record(43.0, noise))])
+def test_quiet_machine_system_noise_exempts_only_windowserver_and_kernel_task():
+    import fullcmp_quiet as fq
+
+    assert fq.SYSTEM_NOISE == frozenset({"WindowServer", "kernel_task"})
+    for name in ("mds_stores", "mds"):  # Spotlight is never exempt
+        holder = [{"pid": 700, "name": name, "pct": 43.0}]
+        run = _fake_run([_qcell("c1", 0, quiet_record(1.0), quiet_record(43.0, holder))])
+        assert fa.check_quiet_machine(run).violations, name
+    ws = [{"pid": 634, "name": "WindowServer", "pct": 43.0}]
+    run = _fake_run([_qcell("c1", 0, quiet_record(1.0), quiet_record(43.0, ws))])
     assert fa.check_quiet_machine(run).violations == []
+
+
+def test_wire_1107_kapitsa_mixed_quiet_pre_is_flagged():
+    # the real record: quiet_pre of kapitsa-0.2.26 SMOKE mixed v0 (wire-1107) had mds at 48.66%,
+    # total 112.78%, ok false; the cell ran anyway. Under the audit this must fail.
+    holders = [{"pid": 590, "name": "mds", "pct": 48.66}, {"pid": 85506, "name": "node", "pct": 12.62}]
+    pre = quiet_record(48.66, holders)
+    pre["total_foreign_pct"] = 112.78
+    pre["ok"] = False
+    run = _fake_run([_qcell("kapitsa-mixed-v0", 0, pre, quiet_record(1.0))])
+    res = fa.check_quiet_machine(run)
+    assert res.violations and "quiet_pre" in res.violations[0] and "mds" in res.violations[0]
 
 
 def test_quiet_machine_uses_the_limit_recorded_in_the_snapshot():
