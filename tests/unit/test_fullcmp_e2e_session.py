@@ -32,6 +32,7 @@ import fullcmp_run as fr  # noqa: E402
 import fullcmp_stub_session as sess  # noqa: E402
 
 from .test_fullcmp_e2e import FAKE_JOB_ID, _run_audit  # noqa: E402
+from .test_fullcmp_e2e_coverage import cell_type_key  # noqa: E402
 
 ENGINES_UNDER_TEST = ("yunshu", "tf-1.2.1")
 VARIANTS = (0, 1)
@@ -40,7 +41,21 @@ COVERED_CELL_TYPES = {
     "conc": "test_conc_cells_run_through_tfbench_and_audit_is_clean",
     "follow-up": "test_follow_up_turn2_cell_hits_the_prefix_cache",
     "idle-follow-up": "test_idle_follow_up_cell_runs_turn2_after_the_idle_gap",
+    # the manifest's restart row shape (B2 restart at 32K): key = cell_type_key of that row
     "restart-disk-cache": "test_restart_with_disk_cache_serves_prefix_hits",
+}
+# keys are cell_type_key()s (test_fullcmp_e2e_coverage); the restart row is the manifest's own
+COVERED_CELL_TYPES = {
+    **{k: v for k, v in COVERED_CELL_TYPES.items() if k != "restart-disk-cache"},
+    cell_type_key(
+        fm._cell_row(
+            "yunshu",
+            fm.SMOKE_BATCH,
+            fm.spec(
+                sweep="restart", ctx="32K", turns="restart", phases=("cold", "restart")
+            ),
+        )
+    ): "test_restart_with_disk_cache_serves_prefix_hits",
 }
 
 
@@ -64,7 +79,7 @@ def _rows(engine, specs):
     return rows
 
 
-def _run_cell_rows(tmp: Path, rows, *, cache_dir: Path):
+def _run_cell_rows(tmp: Path, rows, *, stub_module: str = "fullcmp_stub_session"):
     """Plan the rows as one batch, run the wrapper against the session stub, return (raw, plan, pin)."""
     raw = tmp / "raw"
     fr.configure(raw, tmp / "work")
@@ -76,8 +91,7 @@ def _run_cell_rows(tmp: Path, rows, *, cache_dir: Path):
     wrapper = fr.write_wrapper(job)
     env = dict(os.environ)
     env["GPUQ_JOB_ID"] = FAKE_JOB_ID
-    env["TFB_STUB_SERVER"] = str(sess.shim_dir(tmp / "shim"))
-    env[sess.CACHE_ENV] = str(cache_dir)
+    env["TFB_STUB_SERVER"] = str(sess.shim_dir(tmp / "shim", module=stub_module))
     proc = subprocess.run(
         ["/bin/sh", str(wrapper)],
         env=env,
@@ -122,7 +136,7 @@ def test_conc_cells_run_through_tfbench_and_audit_is_clean(tmp_path, engine):
         )
     ]
     rows = _rows(engine, specs)
-    raw, plan, pin = _run_cell_rows(tmp_path, rows, cache_dir=tmp_path / "cache")
+    raw, plan, pin = _run_cell_rows(tmp_path, rows)
     for row in rows:
         n = row["conc"]
         recs = [r for r in _records(raw, engine, row["id"]) if r.get("part") == "conc"]
@@ -154,7 +168,7 @@ def test_follow_up_turn2_cell_hits_the_prefix_cache(tmp_path, engine):
         sweep="smoke-core", ctx="1K", kind="code", out=64, phases=("cold", "turn2")
     )
     rows = _rows(engine, [sp])
-    raw, plan, pin = _run_cell_rows(tmp_path, rows, cache_dir=tmp_path / "cache")
+    raw, plan, pin = _run_cell_rows(tmp_path, rows)
     for row in rows:
         cold, turn2 = _decode(raw, engine, row)
         assert (cold["phase"], turn2["phase"]) == ("cold", "turn2")
@@ -181,7 +195,7 @@ def test_idle_follow_up_cell_runs_turn2_after_the_idle_gap(
         phases=("cold", "fu_idle"),
     )
     rows = _rows(engine, [sp])
-    raw, plan, pin = _run_cell_rows(tmp_path, rows, cache_dir=tmp_path / "cache")
+    raw, plan, pin = _run_cell_rows(tmp_path, rows)
     assert "--think-s 0.05" in plan.jobs[0].script
     for row in rows:
         cold, turn2 = _decode(raw, engine, row)
@@ -192,23 +206,28 @@ def test_idle_follow_up_cell_runs_turn2_after_the_idle_gap(
 
 
 def test_restart_with_disk_cache_serves_prefix_hits(tmp_path, engine):
-    """Restart: the first run prefills into the cache dir; a relaunched stub (a new process, a new
-    tfbench run) on the same dir serves the same prompts as prefix hits."""
-    cache = tmp_path / "cache"
-    sp = fm.spec(sweep="smoke-core", ctx="1K", kind="code", out=64, phases=("cold",))
+    """The restart cell in one run: cold prefill, then tfbench stops the server (keeping its HOME)
+    and relaunches it on the same HOME (restart_server, a real Srv launch). The relaunched stub
+    serves the cold prompt from the disk tier; the audit requires cached > 0 on the restart row."""
+    sp = fm.spec(
+        sweep="restart",
+        ctx="1K",
+        kind="code",
+        out=64,
+        turns="restart",
+        phases=("cold", "restart"),
+    )
     rows = _rows(engine, [sp])
-    raw1, plan1, pin1 = _run_cell_rows(tmp_path / "run1", rows, cache_dir=cache)
+    raw, plan, pin = _run_cell_rows(tmp_path, rows)
     for row in rows:
-        (cold1,) = _decode(raw1, engine, row)
-        assert cold1["cached"] == 0, "first sighting after an empty cache is a miss"
-    _audit_clean(raw1, rows, plan1, pin1, tmp_path / "run1")
-    raw2, _plan2, _pin2 = _run_cell_rows(tmp_path / "run2", rows, cache_dir=cache)
-    for row in rows:
-        (cold2,) = _decode(raw2, engine, row)
-        assert cold2["cached"] > 0, (
-            "a restarted stub with the same cache dir serves the prefix"
+        cold, restart = _decode(raw, engine, row)
+        assert (cold["phase"], restart["phase"]) == ("cold", "restart")
+        assert cold["cached"] == 0, "first sighting after an empty HOME is a miss"
+        assert restart["cached"] > 0, (
+            "the relaunched server reads the same HOME's disk tier"
         )
-        assert cold2["ct"] == 64
+        assert restart["ct"] == 64
+    _audit_clean(raw, rows, plan, pin, tmp_path)
 
 
 # ---------------------------------------------------------------- fast checks (no run)

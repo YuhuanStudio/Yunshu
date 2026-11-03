@@ -2,8 +2,8 @@
 
 Extends tests/unit/fullcmp_stub_server.py by composition: the base module supplies the engine
 load lines, the request/round log lines, the token maths and the GET routes; this module adds
-  * a prefix cache that persists in a cache directory (a relaunched stub with the same directory
-    serves prefix hits, so cached_tokens > 0 after a restart and 0 when cold);
+  * a prefix cache that persists under the server's HOME (a relaunched stub on the same HOME serves
+    prefix hits, so cached_tokens > 0 after a restart; a wiped HOME gives 0);
   * the per-engine usage shape table (what each engine puts in the final usage object);
   * a launcher that tfbench can run through TFB_STUB_SERVER (see shim_dir()).
 
@@ -17,6 +17,7 @@ import argparse
 import json
 import sys
 import threading
+import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -26,18 +27,36 @@ if str(UNIT_DIR) not in sys.path:
 
 import fullcmp_stub_server as base  # noqa: E402
 
-CACHE_ENV = "FULLCMP_STUB_CACHE_DIR"
+# The prefix cache is the server's disk tier: it lives under the server's HOME, exactly like a real
+# engine's SSD tier (tfbench gives each server its own HOME and wipes it between cells). A relaunch
+# on the same HOME (tfbench restart phase) finds the cache; a relaunch on a wiped HOME does not.
+CACHE_SUBDIR = "fullcmp-stub-cache"
+PREFILL_FLOOR_S = 0.02
 CACHE_FILE = "prefix-cache.json"
 
 # Usage shape each engine's final usage object carries (what tfbench's cached_tokens() reads):
 #   details      usage.prompt_tokens_details.cached_tokens = count
 #   unavailable  no cache count at all (tfbench records cached=None plus the reason)
-# yunshu reports the OpenAI details shape. tf-1.2.1 is listed as details too: tfbench reads that
-# shape for every TensorFold build (bench_engine_matrix reads both shapes); not verified on the wire.
-USAGE_SHAPE = {
-    "yunshu": "details",
-    "tf-1.2.1": "details",
-}
+# The table is tests/unit/fullcmp_usage_shapes.json, so a GPU smoke's usage_sample can update it
+# (keys starting with "_" are notes). tf-1.2.1 is listed as details: tfbench reads that shape for
+# every TensorFold build; not verified on the wire.
+USAGE_SHAPES_PATH = UNIT_DIR / "fullcmp_usage_shapes.json"
+
+
+def load_usage_shapes(path: Path = USAGE_SHAPES_PATH) -> dict:
+    raw = json.loads(Path(path).read_text())
+    return {k: v for k, v in raw.items() if not k.startswith("_")}
+
+
+USAGE_SHAPE = load_usage_shapes()
+
+
+class SessionServer(ThreadingHTTPServer):
+    """The default listen backlog (5) resets connections when a mixed cell sends 8 long requests at
+    once; a real engine accepts them, so the stub does too."""
+
+    request_queue_size = 64
+    daemon_threads = True
 
 
 class PrefixStore:
@@ -110,7 +129,7 @@ def make_session_handler(state: SessionState):
             )
             emitted = text.split(" ") if text else []
             finish = "stop" if stopped else "length"
-            prompt_tokens = len(prompt.split())
+            prompt_tokens = count_prompt_tokens(prompt)
             with state.lock:
                 state.round += 1
                 n = state.round
@@ -119,6 +138,9 @@ def make_session_handler(state: SessionState):
             state.log(
                 base.request_lines(state.engine, n, len(emitted), drafted=4, accepted=3)
             )
+            # a stub answers instantly: a floor on prefill time keeps TTFT measurable (tfbench rounds
+            # ttft_s to ms, so a 0.0 TTFT is a fixture artefact, not a measurement)
+            time.sleep(PREFILL_FLOOR_S)
             usage = usage_object(state.shape, prompt_tokens, len(emitted), hit)
             cid = f"chatcmpl-stub-{n}"
             if not body.get("stream"):
@@ -166,23 +188,35 @@ def make_session_handler(state: SessionState):
     return Handler
 
 
+def count_prompt_tokens(prompt: str) -> int:
+    """Prompt tokens the stub reports: one per word. A variant module replaces this (the mixed
+    variant counts long prompts without a tokenizer)."""
+    return len(prompt.split())
+
+
+def cache_dir_for_home(home: str | Path) -> Path:
+    """The disk tier of a server whose HOME is `home` (what the real engines use for theirs)."""
+    return Path(home) / CACHE_SUBDIR
+
+
 def start(engine, model, log_path, port=0, version="stub", cache_dir=None):
     """In-process session stub on 127.0.0.1 (ephemeral port by default). Returns (server, port, state).
     Stop it with server.shutdown(); a relaunch with the same cache_dir is a restart."""
     state = SessionState(engine, model, Path(log_path), version, cache_dir)
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_session_handler(state))
+    server = SessionServer(("127.0.0.1", port), make_session_handler(state))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, server.server_address[1], state
 
 
-def shim_dir(root: Path) -> Path:
+def shim_dir(root: Path, module: str = "fullcmp_stub_session") -> Path:
     """A directory tfbench accepts as TFB_STUB_SERVER: it holds fullcmp_stub_server.py, which runs
-    this module's main() (tfbench launches <dir>/fullcmp_stub_server.py)."""
+    <module>.main() (tfbench launches <dir>/fullcmp_stub_server.py). module=fullcmp_stub_mixed
+    selects the mixed-load stub variant."""
     root.mkdir(parents=True, exist_ok=True)
     (root / "fullcmp_stub_server.py").write_text(
         "import sys\n"
         f"sys.path.insert(0, {str(UNIT_DIR)!r})\n"
-        "import fullcmp_stub_session as s\n"
+        f"import {module} as s\n"
         "raise SystemExit(s.main())\n"
     )
     return root
@@ -198,10 +232,16 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     import os
 
+    # the disk tier is under the HOME the server was launched with (tfbench sets HOME per server)
+    home = os.environ.get("HOME") or None
     state = SessionState(
-        a.engine, a.model, a.log, a.version, os.environ.get(CACHE_ENV) or None
+        a.engine,
+        a.model,
+        a.log,
+        a.version,
+        cache_dir_for_home(home) if home else None,
     )
-    server = ThreadingHTTPServer(("127.0.0.1", a.port), make_session_handler(state))
+    server = SessionServer(("127.0.0.1", a.port), make_session_handler(state))
     print(f"stub {a.engine} listening on 127.0.0.1:{a.port}", flush=True)
     server.serve_forever()
     return 0
