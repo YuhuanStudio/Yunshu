@@ -653,7 +653,15 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
         return None, []
     if engine == "yunshu":
         return _yunshu_concurrent(records, mode, log, ready_offset)
-    if engine in PROBE_ONLY_ENGINES and probe_responses is not None:
+    if engine in PROBE_ONLY_ENGINES:
+        # probe-only engine: only the concurrent probe (one response per request, with per-response draft
+        # stats) is evidence for a concurrent cell; a single sequential probe proves nothing for it
+        has_stats = bool(probe_responses) and all(
+            isinstance((r or {}).get("timings"), dict) and "draft_n" in r["timings"] for r in probe_responses)
+        if not has_stats:
+            return {"engaged_mode": UNVERIFIED, "matched_line": None, "evidence_kind": "concurrent_probe",
+                    "source": "probe", "stats": {"requests": sum(len(r.get("requests") or []) for r in records)},
+                    "label": None}, ["no concurrent probe with per-response stats"]
         return concurrent_probe_verdict(mode, probe_responses, records)
     if mode in AR_MODES:
         return _ar_concurrent(records, log, ready_offset)

@@ -2729,7 +2729,12 @@ def main():
                 # the concurrent probe: the same N requests, non-streaming, at once (the streamed concurrent
                 # requests carry no draft stats). Not a table number: part=probe_conc rows, probe=true.
                 n = sum(len(r.get("requests") or []) for r in conc_records)
-                texts = [concurrent_prompt(i, 0, a.conc_ctx, getattr(a, "prompt_variant", 0)) for i in range(n)]
+                # the cell's prompts: one shared prompt for a --conc-same cell, else the conc part's prompts
+                same = bool(getattr(a, "conc_same", False))
+                texts = [
+                    concurrent_prompt(0 if same else i, 0, a.conc_ctx, getattr(a, "prompt_variant", 0))
+                    for i in range(n)
+                ]
                 with cf.ThreadPoolExecutor(max(1, n)) as ex:
                     conc_probe = list(ex.map(lambda t: probe_request(s, t), texts))
                 for rid, resp in enumerate(conc_probe):
