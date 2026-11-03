@@ -73,6 +73,7 @@ def fake_world(tmp_path, monkeypatch):
     monkeypatch.setattr(fr, "QUIET_DIR", tmp_path / "quiet")
     monkeypatch.setattr(fr, "PREFLIGHT_DIR", tmp_path / "preflight")
     monkeypatch.setattr(fr, "AUDIT_DIR", tmp_path / "audit")
+    monkeypatch.setattr(fr, "TFOUT_ROOT", tmp_path / "tfout")
     pin = {
         "version": "0.1.7.dev0",
         "sha": "0f2960047855546a9f13b2631b680352b1c57cfe",

@@ -527,8 +527,14 @@ def cell_env(layout, fake_http, fake_telemetry, monkeypatch, tmp_path):
     monkeypatch.setattr(
         tfbench.fq,
         "snapshot",
-        lambda *a, **k: {"ok": True, "limit_pct": 25.0, "total_foreign_pct": 0.5,
-                         "holders": [], "top": [], "window_s": 10.0},
+        lambda *a, **k: {
+            "ok": True,
+            "limit_pct": 25.0,
+            "total_foreign_pct": 0.5,
+            "holders": [],
+            "top": [],
+            "window_s": 10.0,
+        },
     )
 
     def part_decode(s, out, a):
@@ -660,9 +666,7 @@ def test_census_models_under_meta_are_found(tmp_path):
     key = fp.census_model_id(census, str(model))
     assert key == "qwen3.8-27b-4bit-jundot"
     rec = fp.weights_record(str(model), census, key)
-    assert rec == [
-        {"file": SHARD, "sha256": WEIGHT_SHA, "bits": 4, "group_size": 64}
-    ]
+    assert rec == [{"file": SHARD, "sha256": WEIGHT_SHA, "bits": 4, "group_size": 64}]
     with pytest.raises(fp.ProvenanceError, match="not in census.json"):
         fp.census_model_id(census, str(tmp_path / "other"))
 
@@ -675,8 +679,13 @@ def test_census_named_registry_ids_have_a_census_key():
     assert key == "tensorfold"
     assert fp.release_date(census, key, "1.2.1", {}) == "2026-11-01"
     with pytest.raises(fp.ProvenanceError):
-        fp.release_date(census, key, "1.1.8", {})  # not the latest: needs TFB_RELEASE_DATE
-    assert fp.release_date(census, key, "1.1.8", {"TFB_RELEASE_DATE": "2026-01-01"}) == "2026-01-01"
+        fp.release_date(
+            census, key, "1.1.8", {}
+        )  # not the latest: needs TFB_RELEASE_DATE
+    assert (
+        fp.release_date(census, key, "1.1.8", {"TFB_RELEASE_DATE": "2026-01-01"})
+        == "2026-01-01"
+    )
 
 
 def test_tensorfold_1_2_engaged_line_is_recorded():
@@ -707,7 +716,9 @@ def test_whole_cell_resolves_job_id_from_label_when_gpuq_does_not_export_it(
     jobs = tmp_path / "gq" / "jobs"
     jobs.mkdir(parents=True)
     (jobs / "0001.json").write_text(
-        json.dumps({"id": "1103-7-label", "label": "fullcmp-B1-x-r0", "state": "running"})
+        json.dumps(
+            {"id": "1103-7-label", "label": "fullcmp-B1-x-r0", "state": "running"}
+        )
     )
     monkeypatch.delenv("GPUQ_JOB_ID")
     monkeypatch.setenv("TFB_JOB_LABEL", "fullcmp-B1-x-r0")
@@ -715,3 +726,19 @@ def test_whole_cell_resolves_job_id_from_label_when_gpuq_does_not_export_it(
     tfbench.main()
     header = _rows(cell_env.out)[0]
     assert header["job_id"] == "1103-7-label"
+
+
+def test_every_server_of_a_fullcmp_job_shares_one_home(tmp_path):
+    # regression (2026-11-03 smoke): each server got OUT/home/<server tag>, so one job with two
+    # cells had two HOMEs and fullcmp_audit's fairness control failed for every job
+    env = {"TFB_FULLCMP": "1", "TFB_JOB_LABEL": "fullcmp-B1-yunshu-r0"}
+    decode = tfbench.server_home(tmp_path, "yunshu-main-decode-0", env)
+    conc = tfbench.server_home(tmp_path, "yunshu-main-conc-0", env)
+    assert decode == conc == tmp_path / "home" / "fullcmp-B1-yunshu-r0"
+
+
+def test_non_fullcmp_servers_keep_one_home_per_tag(tmp_path):
+    a = tfbench.server_home(tmp_path, "x-decode-0", {})
+    b = tfbench.server_home(tmp_path, "x-conc-0", {"TFB_JOB_LABEL": "l"})
+    assert a == tmp_path / "home" / "x-decode-0"
+    assert b == tmp_path / "home" / "x-conc-0"

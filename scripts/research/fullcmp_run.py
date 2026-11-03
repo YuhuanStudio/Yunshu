@@ -74,6 +74,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS_PY = str(REPO_ROOT / ".venv" / "bin" / "python")
 GPUQ = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/scripts/dev/gpuq"
 WRAP_ROOT = Path("/Volumes/Micron/yunshu-fullcmp/wrap")
+TFOUT_ROOT = Path(
+    "/Volumes/Micron/yunshu-fullcmp/tfout"
+)  # tfbench server homes and logs
 GPUQ_DIR_DEFAULT = "/Volumes/P5Plus/yunshu-gpuq"
 
 RUN_DIR = Path("/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103")
@@ -252,6 +255,7 @@ def cell_env(
         f"HOME={HOME_ROOT / engine}",
         f"GPUQ_DIR={GPUQ_DIR_DEFAULT}",
         f"TFB_MLXLM_PY={pin['python_executable']}",
+        f"TFB_OUT={TFOUT_ROOT}",
     ]
     if label:
         env.append(f"TFB_JOB_LABEL={label}")
@@ -372,7 +376,15 @@ def write_wrapper(job: Job) -> Path:
 def _output_roots() -> tuple[str, ...]:
     return tuple(
         str(p)
-        for p in (RAW_ROOT, HOME_ROOT, WRAP_ROOT, QUIET_DIR, PREFLIGHT_DIR, AUDIT_DIR)
+        for p in (
+            RAW_ROOT,
+            HOME_ROOT,
+            WRAP_ROOT,
+            QUIET_DIR,
+            PREFLIGHT_DIR,
+            AUDIT_DIR,
+            TFOUT_ROOT,
+        )
     )
 
 
@@ -754,7 +766,14 @@ def print_plan(plan: Plan) -> None:
 def configure(raw_root: Path | None = None, work_dir: Path | None = None) -> None:
     """Point the driver at a separate raw root and work dir (smoke runs). Defaults are the
     production paths; a smoke run must never touch RAW_ROOT or the batch audit manifests."""
-    global RAW_ROOT, HOME_ROOT, AUDIT_DIR, QUIET_DIR, PREFLIGHT_DIR, WRAP_ROOT
+    global \
+        RAW_ROOT, \
+        HOME_ROOT, \
+        AUDIT_DIR, \
+        QUIET_DIR, \
+        PREFLIGHT_DIR, \
+        WRAP_ROOT, \
+        TFOUT_ROOT
     if raw_root is not None:
         RAW_ROOT = Path(raw_root)
     if work_dir is not None:
@@ -764,6 +783,7 @@ def configure(raw_root: Path | None = None, work_dir: Path | None = None) -> Non
         QUIET_DIR = work / "quiet"
         PREFLIGHT_DIR = work / "preflight"
         WRAP_ROOT = work / "wrap"
+        TFOUT_ROOT = work / "tfout"
 
 
 def main(argv=None) -> int:

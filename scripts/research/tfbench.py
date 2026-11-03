@@ -66,6 +66,17 @@ WORK = Path(os.environ.get("TFB_WORK", "/Volumes/P5Plus/yunshu-build/tfnew"))
 OUT = Path(os.environ.get("TFB_OUT", str(WORK)))
 
 
+def server_home(out: Path, tag: str, environ) -> Path:
+    """HOME of a server. In a full-comparison job (TFB_FULLCMP=1, TFB_JOB_LABEL set by the
+    driver) every server of the job uses the job's one directory: the audit's fairness control
+    is one isolated HOME per gpuq job, and the job's cells run their servers back to back. Other
+    runs keep one directory per server tag."""
+    label = environ.get("TFB_JOB_LABEL", "")
+    if environ.get("TFB_FULLCMP") == "1" and label:
+        return out / "home" / label
+    return out / "home" / tag
+
+
 def free_port(wait_s=600.0, interval_s=5.0, sleep=None, clock=None):
     """Paused gpuq jobs retain ports; wait for the bounded shared pool."""
     sleep = sleep or time.sleep
@@ -265,7 +276,7 @@ class Srv:
         if bench_engines.is_new_engine(engine):
             self.requested_spec_mode = bench_engines.ENGINES[engine].expected_mode
         self.extra_env = extra_env
-        self.home = OUT / "home" / tag
+        self.home = server_home(OUT, tag, os.environ)
         shutil.rmtree(self.home, ignore_errors=True)
         self.home.mkdir(parents=True)
         self.log = OUT / "out" / f"server-{tag}.log"
