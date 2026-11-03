@@ -295,11 +295,11 @@ def test_command_lines_carry_fullcmp_env_and_pin():
     assert "TFB_YUNSHU_BIN=/fake/venv/bin/yunshu" in text
     assert "TFB_YUNSHU_SRC=/fake/tree/python" in text
     assert "PYTHONPATH=/fake/tree/python" in text
-    assert "TFB_TELEMETRY_DIR=/Volumes/Micron/yunshu-fullcmp/raw" in text
-    assert "HOME=/Volumes/Micron/yunshu-fullcmp/home/yunshu" in text
+    assert f"TFB_TELEMETRY_DIR={run.RAW_ROOT}" in text
+    assert f"HOME={run.HOME_ROOT}/yunshu" in text
     assert "--engine yunshu-main" in text and "--part decode" in text
     assert "GPUQ_JOB_ID" not in text  # gpuq exports it to the job env
-    assert "/Volumes/Micron/yunshu-fullcmp/raw/yunshu/B1.ok-r0.jsonl" in text
+    assert f"{run.RAW_ROOT}/yunshu/B1.ok-r0.jsonl" in text
 
 
 def test_telemetry_dir_is_the_cell_file_root():

@@ -234,3 +234,35 @@ def test_driver_main_skips_pre_submit_inside_a_test_run(monkeypatch, tmp_path):
     manifest.write_text("".join(json.dumps(r) + "\n" for r in rows))
     assert run.main(["--batch", "B1", "--manifest", str(manifest), "--dry-run"]) == 0
     assert called == []
+
+
+# --- the real GPU queue is refused under pytest (2026-11-04: a unit test submitted five real jobs) ---
+
+
+def test_real_queue_is_refused_under_pytest(monkeypatch):
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "unit::x")
+    with pytest.raises(run.RealQueueRefused):
+        run.refuse_real_queue({"PYTEST_CURRENT_TEST": "x", "GPUQ_DIR": run.REAL_GPUQ_DIR})
+    run.refuse_real_queue({"PYTEST_CURRENT_TEST": "x", "GPUQ_DIR": "/tmp/somewhere"})
+
+
+def test_fake_paths_are_refused_outside_pytest():
+    with pytest.raises(run.RealQueueRefused):
+        run.refuse_real_queue({"GPUQ_DIR": "/tmp/x", "TFB_YUNSHU_BIN": "/fake/venv/bin/yunshu"})
+    run.refuse_real_queue({"GPUQ_DIR": "/tmp/x"})
+
+
+def test_submit_refuses_before_any_gpuq_call(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(run.subprocess, "run", lambda *a, **k: calls.append(a) or None)
+    monkeypatch.setenv("GPUQ_DIR", run.REAL_GPUQ_DIR)
+    with pytest.raises(run.RealQueueRefused):
+        run._submit_and_wait(_plan_one_job())
+    assert calls == []  # the refusal happens before the wrapper is written or gpuq is called
+
+
+def _plan_one_job():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import importlib
+    tr = importlib.import_module("test_fullcmp_run")
+    return tr.run.plan_batch([tr.row("yunshu", "B1.refuse")], "B1", tr.PIN).jobs[0]

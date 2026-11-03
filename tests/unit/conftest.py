@@ -268,3 +268,43 @@ def _driver_harness_snapshot_stub(request, monkeypatch):
 # that calls the driver ran it again). Inherited by the driver's subprocesses too.
 _sys.modules.setdefault("_fullcmp_presubmit_guard", None)
 _os.environ.setdefault("TFB_PRESUBMIT_SKIP", "1")
+
+
+@pytest.fixture(autouse=True)
+def _fullcmp_driver_sandbox(request, monkeypatch, tmp_path):
+    """A test that loads the fullcmp driver never reaches the real GPU queue or the real result roots
+    (2026-11-04: a unit test submitted five real jobs). Every loaded driver copy gets tmp paths and a
+    fake gpuq that only logs its argv; GPUQ_DIR points at tmp, so the driver's own refusal also holds."""
+    import gc as _gc
+    import types as _types
+
+    drivers = [
+        o for o in _gc.get_objects()
+        if isinstance(o, _types.ModuleType)
+        and str(getattr(o, "__file__", "")).endswith("fullcmp_run.py")
+        and hasattr(o, "GPUQ")
+    ]
+    if not drivers:
+        return
+    sandbox = tmp_path / "sandbox"
+    for d in ("gpuq", "wrap", "raw", "home", "tfout", "audit", "quiet", "preflight"):
+        (sandbox / d).mkdir(parents=True, exist_ok=True)
+    fake = sandbox / "fake_gpuq.sh"
+    fake.write_text(
+        "#!/bin/sh\n"
+        f"echo \"$@\" >> {sandbox / 'submits.log'}\n"
+        "case \"$1\" in submit) echo fake-job-$$ ;; esac\n"
+        "exit 0\n"
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("GPUQ_DIR", str(sandbox / "gpuq"))
+    for mod in drivers:
+        monkeypatch.setattr(mod, "GPUQ", str(fake))
+        monkeypatch.setattr(mod, "GPUQ_DIR_DEFAULT", str(sandbox / "gpuq"))
+        monkeypatch.setattr(mod, "WRAP_ROOT", sandbox / "wrap")
+        monkeypatch.setattr(mod, "RAW_ROOT", sandbox / "raw")
+        monkeypatch.setattr(mod, "HOME_ROOT", sandbox / "home")
+        monkeypatch.setattr(mod, "TFOUT_ROOT", sandbox / "tfout")
+        monkeypatch.setattr(mod, "AUDIT_DIR", sandbox / "audit")
+        monkeypatch.setattr(mod, "QUIET_DIR", sandbox / "quiet")
+        monkeypatch.setattr(mod, "PREFLIGHT_DIR", sandbox / "preflight")

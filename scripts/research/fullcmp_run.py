@@ -1070,6 +1070,26 @@ def parse_need_rep3(stdout: str) -> list[tuple[str, str]]:
 # ---------------------------------------------------------------------------
 
 
+REAL_GPUQ_DIR = "/Volumes/P5Plus/yunshu-gpuq"
+FAKE_PREFIX = "/fake/"
+
+
+class RealQueueRefused(RuntimeError):
+    """A submit (or a driver run) would reach the real GPU queue from a test, or a fake tree path."""
+
+
+def refuse_real_queue(env: dict | None = None) -> None:
+    """Fail closed before any gpuq submission: under pytest the queue dir must not be the real one
+    (2026-11-04: a unit test submitted five real jobs), and no environment value may be a /fake/ path."""
+    env = dict(os.environ) if env is None else env
+    gdir = env.get("GPUQ_DIR", GPUQ_DIR_DEFAULT)
+    if "PYTEST_CURRENT_TEST" in env and os.path.realpath(gdir) == REAL_GPUQ_DIR:
+        raise RealQueueRefused(f"refusing: a test would submit to the real GPU queue ({gdir})")
+    fake = sorted(k for k, v in env.items() if str(v).startswith(FAKE_PREFIX))
+    if fake:
+        raise RealQueueRefused(f"refusing: fake path in the environment: {fake}")
+
+
 def gpuq_env() -> dict:
     env = dict(os.environ)
     env.setdefault("GPUQ_DIR", GPUQ_DIR_DEFAULT)
@@ -1130,6 +1150,7 @@ def self_check(jobs: list[Job]) -> dict[str, list[str]]:
 def submit_all(jobs: list[Job]) -> tuple[list[str], int]:
     ids, bad = [], 0
     for job in jobs:
+        refuse_real_queue(gpuq_env())
         write_wrapper(job)
         res = subprocess.run(
             job.submit_argv(),
@@ -1262,6 +1283,7 @@ def submit_sequential(
 
 def _submit_and_wait(job: "Job") -> tuple[str, object, str]:
     """Submit one job, block until gpuq is done with it, return (job id, rc, state)."""
+    refuse_real_queue(gpuq_env())
     write_wrapper(job)
     res = subprocess.run(
         job.submit_argv(), capture_output=True, text=True, env=gpuq_env(), cwd=str(REPO_ROOT)
@@ -1656,6 +1678,11 @@ def main(argv=None) -> int:
         help="every cell also passes tfbench --log-usage-sample (the first raw usage chunk lands in the session header)",
     )
     a = ap.parse_args(argv)
+    try:
+        refuse_real_queue(gpuq_env())
+    except RealQueueRefused as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     global LOG_USAGE_SAMPLE
     LOG_USAGE_SAMPLE = a.log_usage_sample
     configure(a.raw_root, a.work_dir)
@@ -1799,7 +1826,11 @@ def main(argv=None) -> int:
         print("refusing: swap_stable preflight failed", file=sys.stderr)
         return 2
 
-    ids, failed = submit_sequential(plan.jobs, pin, retry_log=RETRY_LOG)
+    try:
+        ids, failed = submit_sequential(plan.jobs, pin, retry_log=RETRY_LOG)
+    except RealQueueRefused as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     batches = audited_batches(a.batch)
     manifest_path = AUDIT_DIR / f"{a.batch}_audit_manifest.json"
