@@ -69,7 +69,8 @@ FULLCMP_SCHEMA = {
         "yunshu": "{git_sha, python}: pinned Yunshu tree sha and <tree>/.venv/bin/python",
         "controls": "{aa_delta_pct, aa_noise_pct, injected_delay_detected}: A/A and injected-delay controls",
         "groups": "{group: {order: [engine, ...]}}: rep-0 interleave order; rep r rotates it by r",
-        "cells": "[{engine, model, column, cell, group, ctx, kind, prompt_id, max_tokens, phases, expected_records, spec_mode, weight_group}]",
+        "cells": "[{engine, model, column, cell, group, ctx, kind, prompt_id, max_tokens, phases, expected_records, spec_mode, weight_group, rep_decision?, need_rep3?, reps?}]",
+        "rep policy (per cell, optional)": "rep_decision: ok | need_rep3 | unstable | pending (fullcmp_reps.py status). need_rep3 or unstable -> 3 reps; ok -> 2 reps (reps, default the manifest reps); pending -> incomplete. A cell without rep_decision keeps the manifest reps (old manifests).",
     },
     "header": {
         "part": '"session"',
@@ -265,11 +266,23 @@ def _read_jsonl(path: Path):
     return rows, errors
 
 
+REP_DECISIONS = ("ok", "need_rep3", "unstable", "pending")
+
+
+def expected_reps(cell: dict, manifest: dict) -> int:
+    """Reps this cell must have. The rep-3 rule is per cell (fullcmp_reps.py): need_rep3 (or an
+    unstable verdict, which exists only after rep 3) -> 3; a recorded 'ok' (rep 3 not required)
+    -> 2; no decision recorded -> the cell's reps, else the manifest reps."""
+    if cell.get("need_rep3") or cell.get("rep_decision") in ("need_rep3", "unstable"):
+        return 3
+    return int(cell.get("reps", manifest["reps"]))
+
+
 def load_run(root, manifest: dict) -> Run:
     root = Path(root)
     expected = {}
     for cell in manifest["cells"]:
-        for rep in range(int(manifest["reps"])):
+        for rep in range(expected_reps(cell, manifest)):
             expected[root / cell["engine"] / f"{cell['cell']}-r{rep}.jsonl"] = (
                 cell,
                 rep,
@@ -433,6 +446,16 @@ def check_manifest_completeness(run: Run) -> GuardResult:
         res.checked += 1
         if c["engine"] not in pins:
             res.fail(c["cell"], f"engine {c['engine']} has no pin")
+    for c in cells:
+        res.checked += 1
+        dec = c.get("rep_decision")
+        if dec is not None and dec not in REP_DECISIONS:
+            res.fail(c["cell"], f"rep_decision {dec!r} is not one of {REP_DECISIONS}")
+        elif dec == "pending":
+            res.fail(
+                c["cell"],
+                "rep decision pending (fullcmp_reps.py has not decided rep 3)",
+            )
     for cell, rep, path in run.missing:
         res.fail(cell["cell"], f"r{rep} missing ({path})")
     for path in run.extra:

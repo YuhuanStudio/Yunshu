@@ -79,6 +79,21 @@ LLAMA_BIN_LATEST = str(ENVS / "llamacpp-b11565/build/bin/llama-server")
 DFLASH_GGUF = "/Volumes/P5Plus/models/z-lab/Qwen3.8-27B-DFlash2-GGUF/Qwen3.8-27B-DFlash2-Q8_0.gguf"
 MTPLX_BIN_LATEST = str(ENVS / "mtplx-2.12.2/bin/mtplx")
 SPLASH_BIN_LATEST = str(ENVS / "splash-1.3.0/bin/splash")
+# full comparison (2026-11-03): installs under the competitors dir, paths from compsync census.json
+COMP = Path("/Volumes/P5Plus/yunshu-build/competitors")
+TF_121_BIN = str(
+    COMP / "tensorfold-1.2.1/tensorfold-1.2.1-macos-arm64/bin/tensorfold-native"
+)
+TF_118_BIN = str(
+    COMP / "tensorfold-1.1.8/tensorfold-1.1.8-macos-arm64/bin/tensorfold-native"
+)
+SPLASH_BIN_150 = str(COMP / "splash-1.5.0/splash-1.5.0-arm64-macos26/engine/splash")
+OMLX_BIN_073 = str(COMP / "venvs/omlx-0.7.3/bin/omlx")
+OMLX_BIN_073RC1 = str(COMP / "venvs/omlx-0.7.3rc1/bin/omlx")
+MLXSERVE_BIN_26111 = str(COMP / "mlxserve-bin/26.11.1/mlx-serve-macos-arm64/mlx-serve")
+MLXLM_SERVER_BIN = str(COMP / "venvs/mlx-lm-0.32.2/bin/mlx_lm.server")
+KAPITSA_BIN_0226 = str(COMP / "kapitsa-0.2.26/kapitsa-0.2.26-darwin-arm64/kapitsa")
+KAPITSA_MODEL_DIR = "/Volumes/P5Plus/models/kapitsa/models/qwen3.8-27b-4bit"
 SPLASH_MODEL = "incoai/Qwen3.8-27B-Splash"
 NO_THINK_KWARGS = '{"enable_thinking": false}'
 # env vars that would change a server's behaviour under a benchmark
@@ -349,10 +364,151 @@ ENGINES: dict[str, Engine] = {
             0.4,
             30.0,
         ),
+        # ---- full comparison 2026-11-03 (FULLCMP_SPEC.md): manifest ids, see MANIFEST_ENGINES ----
+        Engine(
+            "tf-1.2.1",
+            "TensorFold 1.2.1 (native Zig)",
+            "dflash",
+            "different",
+            TF_NATIVE_MODEL,
+            DRAFTER,
+            "external",
+            "TensorFold/Qwen3.8-27B-MLX-4bit + DFlash2; tf-native launch recipe, competitors install",
+            1.0,
+            75.0,
+        ),
+        Engine(
+            "tf-1.1.8",
+            "TensorFold 1.1.8 (native Zig, lone loop)",
+            "dflash",
+            "different",
+            TF_NATIVE_MODEL,
+            DRAFTER,
+            "external",
+            "best-1.1.8 lone loop (no batching); tf-native launch recipe",
+            1.0,
+            75.0,
+        ),
+        Engine(
+            "splash-1.5.0",
+            "Splash 1.5.0",
+            "dflash",
+            "different",
+            TF_NATIVE_MODEL,
+            DRAFTER,
+            "external",
+            "splash-latest HTTP recipe on the 1.5.0 binary (census: HTTP launcher flags unverified for 1.5.0)",
+            1.1,
+            75.0,
+        ),
+        Engine(
+            "omlx-0.7.3",
+            "oMLX 0.7.3",
+            "dflash",
+            "same",
+            CHECKPOINT,
+            DRAFTER,
+            "external",
+            "omlx recipe, 0.7.3 wheel venv; DFlash2 via model_settings.json",
+            0.9,
+            60.0,
+        ),
+        Engine(
+            "omlx-0.7.3rc1",
+            "oMLX 0.7.3rc1",
+            "dflash",
+            "same",
+            CHECKPOINT,
+            DRAFTER,
+            "external",
+            "omlx recipe, 0.7.3rc1 wheel venv; DFlash2 via model_settings.json",
+            0.9,
+            60.0,
+        ),
+        Engine(
+            "mlx-serve-26.11.1",
+            "mlx-serve 26.11.1",
+            "unverified",
+            "unverified",
+            CHECKPOINT,
+            None,
+            "external",
+            "census start_cmd only; spec mode and weights not yet established: every run fails closed",
+            1.0,
+            60.0,
+        ),
+        Engine(
+            "mlx-lm-server",
+            "mlx-lm 0.32.2 server (stock)",
+            "ar",
+            "same",
+            CHECKPOINT,
+            None,
+            "external",
+            "stock mlx_lm.server, no speculative decoding",
+            0.8,
+            28.0,
+        ),
+        Engine(
+            "kapitsa-0.2.26",
+            "Kapitsa 0.2.26",
+            "unverified",
+            "unverified",
+            KAPITSA_MODEL_DIR,
+            None,
+            "external",
+            "census start_cmd only (KAPITSA_HOME isolated); spec mode and weights not yet established: fails closed",
+            1.0,
+            60.0,
+        ),
     ]
 }
 # the legacy tfbench engines keep their old code path
 LEGACY = ("yunshu", "tf-old", "tf-new")
+
+# ---- full comparison: manifest engine ids (compsync/fullcmp-1103/manifest.jsonl) -> harness ids ----
+# "yunshu" is a LEGACY tfbench id, so the pinned-tree Yunshu row runs as "yunshu-main".
+MANIFEST_ENGINES = {
+    "yunshu": "yunshu-main",
+    "tf-1.2.1": "tf-1.2.1",
+    "tf-1.1.8": "tf-1.1.8",
+    "splash-1.5.0": "splash-1.5.0",
+    "omlx-0.7.3": "omlx-0.7.3",
+    "omlx-0.7.3rc1": "omlx-0.7.3rc1",
+    "mlx-serve-26.11.1": "mlx-serve-26.11.1",
+    "mlx-lm-server": "mlx-lm-server",
+    "kapitsa-0.2.26": "kapitsa-0.2.26",
+}
+# Engines with no harness support yet: reason text only (the stub returns "unsupported (harness: ...)").
+UNSUPPORTED_ENGINES = {
+    "mlx-vlm-server": "no tfbench launcher for mlx_vlm.server; text-decode path not wired (TODO: add launch + engaged-mode probe)",
+    "llama-cpp-b12061": "llama-server b12061 has no tfbench launch recipe or engaged-mode probe (llamacpp-mtp pins b11565) (TODO: add b12061 recipe, parse draft-mtp engagement from its log)",
+    "lmstudio": "lms CLI is bootstrapped into $HOME/.lmstudio; isolated-HOME headless start not verified (TODO: verify lms server start with isolated HOME)",
+    "ollama": "Ollama imports GGUF only; the MLX checkpoint cannot be loaded (census n/a, not a separate row)",
+    "best-competitor (TBD)": "placeholder row, not an engine; the best release is chosen after measurement (TODO: remove the row)",
+}
+TODO_LIST = (
+    "mlx-vlm-server: add tfbench launcher and engaged-mode probe",
+    "llama-cpp-b12061: add launch recipe for b12061 (GGUF Q4_K_M + MTP head) and log-based engaged mode",
+    "lmstudio: verify headless lms server with isolated HOME",
+    "mlx-serve-26.11.1 / kapitsa-0.2.26: establish spec mode and weights (expected_mode unverified fails closed)",
+    "splash-1.5.0 / tf-1.2.1 / tf-1.1.8 / mlx-lm-server: confirm CLI flags against --help before the first run",
+)
+
+
+def stub_reason(manifest_id: str) -> str | None:
+    """'unsupported (harness: reason)' for an engine without harness support, else None."""
+    reason = UNSUPPORTED_ENGINES.get(manifest_id)
+    return None if reason is None else f"unsupported (harness: {reason})"
+
+
+def tfbench_engine(manifest_id: str) -> str:
+    """tfbench --engine id for a manifest engine id; KeyError for stubs and unknown ids."""
+    if manifest_id in UNSUPPORTED_ENGINES:
+        raise KeyError(stub_reason(manifest_id))
+    return MANIFEST_ENGINES[manifest_id]
+
+
 TF_ENGINES = ("tf-new", "tf-old")
 
 
@@ -608,12 +764,12 @@ def build_launch(
         # same launch recipe as the pinned-snapshot engine, newer binary
         base = REFSYNC_ALIASES[engine]
         launch = build_launch(base, port, home, environ, ctx_tokens, parallel)
-        if engine == "omlx-latest":
-            launch.cmd[0] = OMLX_BIN_LATEST
+        if engine in OMLX_BIN_BY_ENGINE:
+            launch.cmd[0] = OMLX_BIN_BY_ENGINE[engine]
         elif engine == "mtplx-latest":
             launch.cmd[0] = MTPLX_BIN_LATEST
         return launch
-    if engine == "splash-latest":
+    if engine in ("splash-latest", "splash-1.5.0"):
         rev = "a" * 40
         hub = (
             Path(home)
@@ -621,7 +777,7 @@ def build_launch(
         )
         return Launch(
             [
-                SPLASH_BIN_LATEST,
+                SPLASH_BIN_LATEST if engine == "splash-latest" else SPLASH_BIN_150,
                 "serve",
                 "--model",
                 "TensorFold/Qwen3.8-27B-MLX-4bit",
@@ -650,10 +806,10 @@ def build_launch(
             {str(hub / "snapshots" / rev): TF_NATIVE_MODEL},
             probe="/status",
         )
-    if engine == "tf-native":
+    if engine in TF_NATIVE_FAMILY:
         return Launch(
             [
-                TF_NATIVE_BIN,
+                TF_NATIVE_BIN_BY_ENGINE[engine],
                 "serve",
                 TF_NATIVE_MODEL,
                 "--host",
@@ -791,12 +947,73 @@ def build_launch(
             {},
             probe="/props",
         )
+    if engine == "mlx-serve-26.11.1":
+        return Launch(
+            [
+                MLXSERVE_BIN_26111,
+                "serve",
+                "--model",
+                CHECKPOINT,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                p,
+                "--ctx-size",
+                str(int(ctx_tokens)),
+            ],
+            scrubbed_env(environ, base_env),
+            {"ctx_size": int(ctx_tokens), "spec_mode": "unverified"},
+            {},
+            {},
+        )
+    if engine == "mlx-lm-server":
+        return Launch(
+            [
+                MLXLM_SERVER_BIN,
+                "--model",
+                CHECKPOINT,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                p,
+                "--max-tokens",
+                "8192",
+                "--chat-template-args",
+                NO_THINK_KWARGS,
+            ],
+            scrubbed_env(environ, base_env),
+            {"speculative": "none"},
+            {},
+            {},
+        )
+    if engine == "kapitsa-0.2.26":
+        kh = str(Path(home) / "kapitsa-home")
+        return Launch(
+            [KAPITSA_BIN_0226, "serve", "--model", "27b", "--port", p],
+            scrubbed_env(environ, {**base_env, "KAPITSA_HOME": kh}),
+            {"model": "27b", "spec_mode": "unverified"},
+            {},
+            {str(Path(kh) / "models" / "qwen3.8-27b-4bit"): KAPITSA_MODEL_DIR},
+        )
     raise KeyError(engine)
 
 
 REFSYNC_ALIASES = {
     "omlx-latest": "omlx",
     "mtplx-latest": "mtplx",
+    "omlx-0.7.3": "omlx",
+    "omlx-0.7.3rc1": "omlx",
+}
+OMLX_BIN_BY_ENGINE = {
+    "omlx-latest": OMLX_BIN_LATEST,
+    "omlx-0.7.3": OMLX_BIN_073,
+    "omlx-0.7.3rc1": OMLX_BIN_073RC1,
+}
+TF_NATIVE_FAMILY = ("tf-native", "tf-1.2.1", "tf-1.1.8")
+TF_NATIVE_BIN_BY_ENGINE = {
+    "tf-native": TF_NATIVE_BIN,
+    "tf-1.2.1": TF_121_BIN,
+    "tf-1.1.8": TF_118_BIN,
 }
 
 
@@ -810,7 +1027,7 @@ def detect_mode(engine: str, log: str, probe_text: str | None = None) -> str | N
     if e.kind == "yunshu":
         modes = re.findall(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", log)
         return modes[-1] if modes else None
-    if engine == "tf-native":
+    if engine in TF_NATIVE_FAMILY:
         # 1.2.0+ serving line names the drafter: "drafts: DFlash2 (<path>)" (or "drafts: DFlash2 (...) + copies").
         if re.search(r"drafts: DFlash2\b", log):
             return "dflash"
@@ -840,6 +1057,10 @@ def detect_mode(engine: str, log: str, probe_text: str | None = None) -> str | N
         "omlx-latest": "omlx",
         "mtplx-latest": "mtplx",
         "splash-latest": "splash",
+        "splash-1.5.0": "splash",
+        "omlx-0.7.3": "omlx",
+        "omlx-0.7.3rc1": "omlx",
+        "mlx-lm-server": "mlxlm",
         "llamacpp-mtp": "llamacpp",
         "fn-llamacpp-mtp": "llamacpp",
     }.get(engine, engine)
@@ -946,6 +1167,15 @@ STATIC_VERSIONS = {
     "fn-omlx-latest": ("main 0b07e88e (0.7.0 + 171 commits)", "0b07e88e"),
     "fn-llamacpp-mtp": ("b11565 (0.6.0-dev build 427)", "2f160ba59"),
     "splash-latest": ("1.3.0 (bottle copy)", None),
+    # full comparison: exact census versions (the audit compares header version == pin)
+    "tf-1.2.1": ("1.2.1", None),
+    "tf-1.1.8": ("1.1.8", None),
+    "splash-1.5.0": ("1.5.0", None),
+    "omlx-0.7.3": ("0.7.3", None),
+    "omlx-0.7.3rc1": ("0.7.3rc1", None),
+    "mlx-serve-26.11.1": ("26.11.1", None),
+    "mlx-lm-server": ("0.32.2", None),
+    "kapitsa-0.2.26": ("0.2.26", None),
 }
 
 
@@ -1005,6 +1235,26 @@ def required_paths(engine: str) -> list[str]:
         ],
         "fn-omlx-latest": [FN_CHECKPOINT + "/config.json", OMLX_BIN_LATEST],
         "fn-llamacpp-mtp": [FN_GGUF, FN_GGUF_MTP, LLAMA_BIN_LATEST],
+        "tf-1.2.1": [
+            TF_NATIVE_MODEL + "/config.json",
+            DRAFTER + "/config.json",
+            TF_121_BIN,
+        ],
+        "tf-1.1.8": [
+            TF_NATIVE_MODEL + "/config.json",
+            DRAFTER + "/config.json",
+            TF_118_BIN,
+        ],
+        "splash-1.5.0": [
+            SPLASH_BIN_150,
+            TF_NATIVE_MODEL + "/config.json",
+            DRAFTER + "/config.json",
+        ],
+        "omlx-0.7.3": common + [DRAFTER + "/config.json", OMLX_BIN_073],
+        "omlx-0.7.3rc1": common + [DRAFTER + "/config.json", OMLX_BIN_073RC1],
+        "mlx-serve-26.11.1": [CHECKPOINT + "/config.json", MLXSERVE_BIN_26111],
+        "mlx-lm-server": common + [MLXLM_SERVER_BIN],
+        "kapitsa-0.2.26": [KAPITSA_BIN_0226, KAPITSA_MODEL_DIR + "/config.json"],
         "tf-new": common + [DRAFTER + "/config.json", TF_BIN],
         "mlxlm": common + [MAIN_PY],
         "omlx": common + [DRAFTER + "/config.json", OMLX_BIN],
