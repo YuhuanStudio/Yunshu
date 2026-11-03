@@ -653,7 +653,9 @@ def concurrent_probe_verdict(mode, probe_responses, records):
     # batch-level: the counters are one batch snapshot shared by the responses (all, or all but one: the snapshot
     # is read at a different step for one response). A response that differs from a shared snapshot is not
     # per-request evidence either way.
-    batch_level = len(keys) >= 2 and keys.count(modal) >= len(keys) - 1
+    # all responses share the snapshot, or (3 or more) all but one; two differing responses are not a batch
+    batch_level = len(keys) >= 2 and (keys.count(modal) == len(keys) or (
+        len(keys) >= 3 and keys.count(modal) == len(keys) - 1))
     if batch_level and drafted:
         # identical counters on every concurrent response: batch-level (shared across the requests), not
         # per-request acceptance. The single sequential probe is never read here (probe_conc rows only).
