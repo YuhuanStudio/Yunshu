@@ -646,3 +646,15 @@ def test_census_models_under_meta_are_found(tmp_path):
     ]
     with pytest.raises(fp.ProvenanceError, match="not in census.json"):
         fp.census_model_id(census, str(tmp_path / "other"))
+
+
+def test_census_named_registry_ids_have_a_census_key():
+    """Every census-named engine id maps to its census entry, so the release date is looked up
+    instead of failing after the server has already started (2026-11-03 smoke)."""
+    census = {"tensorfold": {"latest": "1.2.1", "latest_date": "2026-11-01T23:52:33Z"}}
+    key = tfbench.FULLCMP_CENSUS_KEY["tf-1.2.1"]
+    assert key == "tensorfold"
+    assert fp.release_date(census, key, "1.2.1", {}) == "2026-11-01"
+    with pytest.raises(fp.ProvenanceError):
+        fp.release_date(census, key, "1.1.8", {})  # not the latest: needs TFB_RELEASE_DATE
+    assert fp.release_date(census, key, "1.1.8", {"TFB_RELEASE_DATE": "2026-01-01"}) == "2026-01-01"

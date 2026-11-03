@@ -1555,6 +1555,16 @@ FULLCMP_CENSUS_KEY = {
     "mlxlm": "mlx_lm_server",
     "mlx-serve": "mlx-serve",
     "kapitsa": "kapitsa",
+    # census-named registry ids (2026-11-03 smoke: "no release date for ? '1.2.1'" after launch)
+    "tf-1.2.1": "tensorfold",
+    "tf-1.1.8": "tensorfold",
+    "splash-latest": "splash",
+    "splash-1.5.0": "splash",
+    "omlx-0.7.3": "omlx",
+    "omlx-0.7.3rc1": "omlx",
+    "mlx-serve-26.11.1": "mlx-serve",
+    "mlx-lm-server": "mlx_lm_server",
+    "kapitsa-0.2.26": "kapitsa",
 }
 
 
