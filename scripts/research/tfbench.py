@@ -24,9 +24,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_engines  # noqa: E402
+import fullcmp_provenance as fp  # noqa: E402
 from gpuq_contention import was_contended  # noqa: E402
 
-M = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
+# Identifies this harness in every request row (fullcmp audit: provenance_identity).
+HARNESS_ID = "tfbench/fullcmp-1"
+
+M ="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
 D = "/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2"
 TF = {
     "tf-old": "/Volumes/P5Plus/yunshu-test-envs/tensorfold-0.3.6.1/bin/tensorfold",
@@ -156,14 +160,25 @@ def spec_request(engine, extra_env, model=None):
     return mode, env
 
 
-def engaged_spec_mode(engine, log):
-    """Read the initialized runner, not the earlier selection/fallback message."""
+def engaged_spec_mode_line(engine, log):
+    """(engaged mode, the log line it was parsed from), read from the initialized runner, not
+    the earlier selection/fallback message. (None, None) when the log shows no mode."""
     if engine == "yunshu":
-        modes = re.findall(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", log)
-        return modes[-1] if modes else None
-    if re.search(r"\[tensorfold\] drafter [^\n]*DFlash[^\n]*block=", log):
-        return "dflash"
-    return None
+        found = list(re.finditer(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", log))
+        if not found:
+            return None, None
+        m = found[-1]
+        start = log.rfind("\n", 0, m.start()) + 1
+        end = log.find("\n", m.end())
+        return m.group(1), log[start : end if end != -1 else len(log)]
+    m = re.search(r"\[tensorfold\] drafter [^\n]*DFlash[^\n]*block=[^\n]*", log)
+    if m:
+        return "dflash", m.group(0)
+    return None, None
+
+
+def engaged_spec_mode(engine, log):
+    return engaged_spec_mode_line(engine, log)[0]
 
 
 # Warnings that mean a tuned kernel path silently turned off for this model.
@@ -215,9 +230,21 @@ def wait_startup_ready(proc, log, pattern, timeout=120):
 
 
 class Srv:
+    @staticmethod
+    def _is_yunshu(engine):
+        return engine == "yunshu" or (
+            bench_engines.is_new_engine(engine)
+            and bench_engines.ENGINES[engine].kind == "yunshu"
+        )
+
     def __init__(
         self, engine, extra_env, tag, model=None, ctx_tokens=140000, parallel=1
     ):
+        # Fullcmp: a Yunshu server runs only from the pinned tree and venv, or not at all.
+        # Checked before any port, directory or process is created.
+        self.pin = None
+        if fp.fullcmp_mode(os.environ) and self._is_yunshu(engine):
+            self.pin = fp.require_yunshu_pin(os.environ)
         self.engine, self.port = engine, free_port()
         self.requested_spec_mode, extra_env = spec_request(
             engine, extra_env, model or M
@@ -297,12 +324,15 @@ class Srv:
             ]
         # A watched engine always runs in observe mode; TFB_OBSERVE=0 (or an explicit
         # YUNSHU_OBSERVE via --env) keeps a pure timing run free of telemetry.
-        is_yunshu = engine == "yunshu" or (
-            bench_engines.is_new_engine(engine)
-            and bench_engines.ENGINES[engine].kind == "yunshu"
-        )
+        is_yunshu = self._is_yunshu(engine)
         if is_yunshu and os.environ.get("TFB_OBSERVE", "1") != "0":
             env.setdefault("YUNSHU_OBSERVE", "1")
+        if self.pin is not None:
+            # Pinned: `<pinned venv python> -m yunshu_cli serve ...` from the pinned tree only.
+            if not bench_engines.is_yunshu_command(cmd):
+                raise fp.ProvenanceError(f"pinned launch is not a yunshu command: {cmd[:2]}")
+            cmd = fp.pinned_yunshu_cmd(cmd, self.pin, bench_engines.yunshu_args)
+            env["PYTHONPATH"] = self.pin["src"]
         self.cmd = cmd
         baseline_used = (
             host_used_bytes()
@@ -349,10 +379,28 @@ class Srv:
                 )
                 self.ready_s = time.time() - t0
             warm_lazy_engine(self.engine, self.url, self.model)
+            if self.pin is not None:
+                self.verify_pinned()
             self.verify_spec_mode()
         except Exception:
             self.kill()
             raise
+
+    def verify_pinned(self):
+        """The running server reports the pinned version and runs from the pinned python."""
+        req = urllib.request.Request(
+            self.url + "/v1/yunshu/status",
+            headers={"Authorization": "Bearer " + self.extra_env.get("YUNSHU_AUTH_TOKEN", "k")},
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            status = json.load(r)
+        ps = subprocess.run(
+            ["ps", "-o", "command=", "-p", str(self.proc.pid)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        fp.verify_pinned_server(status, ps.stdout, self.pin)
 
     def probe_text(self):
         path = self.launch.probe if self.launch else None
@@ -366,6 +414,10 @@ class Srv:
 
     def verify_spec_mode(self):
         log = self.log.read_text(errors="replace")
+        # The engaged-mode line the audit checks (fullcmp header engaged_log_line).
+        self.engaged_log_line = engaged_spec_mode_line(
+            "yunshu" if self._is_yunshu(self.engine) else self.engine, log
+        )[1]
         if self.engine in bench_engines.ENGINES:
             # registry engines: evidence from the log (and a status probe) must match the expected mode
             self.probe = self.probe_text()
@@ -440,8 +492,20 @@ def prompt_digest(messages):
     ).hexdigest()
 
 
+_ACTIVE_TELEMETRY = None  # the cell's fullcmp Sampler while a cell runs (marks go to it)
+_REQ_SEQ = [0]
+
+
+def _mark(ev, **fields):
+    """Request event for the cell's telemetry sampler (no-op when no sampler is running)."""
+    if _ACTIVE_TELEMETRY is not None:
+        _ACTIVE_TELEMETRY.mark(ev, **fields)
+
+
 def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
     prompt_sha = prompt_digest(body.get("messages"))
+    max_tokens, temperature = body.get("max_tokens"), body.get("temperature")
+    stop = list(body.get("stop") or [])
     body = dict(body, stream=True, stream_options={"include_usage": True})
     headers = {"Content-Type": "application/json", "Authorization": "Bearer k"}
     if trace_id is not None:
@@ -451,6 +515,8 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
         json.dumps(body).encode(),
         headers,
     )
+    _REQ_SEQ[0] += 1
+    rid = str(_REQ_SEQ[0])
     t0 = time.perf_counter()
     tf = None
     content, reasoning, tools = [], [], {}
@@ -458,6 +524,7 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
     usage = finish = xy = None
     done = False
     nchunks = 0
+    _mark("request_start", req=rid)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         for line in r:
             line = line.strip()
@@ -500,6 +567,7 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
                         )
                 if got and tf is None:
                     tf = time.perf_counter()
+                    _mark("first_token", req=rid, chunks=nchunks)
                 for e in (ch.get("logprobs") or {}).get("content") or []:
                     lp_tokens.append(e.get("token"))
                     lps.append(e.get("logprob"))
@@ -508,6 +576,7 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
     if not done or finish is None or usage is None:
         raise RuntimeError("incomplete stream")
     ct = usage["completion_tokens"]
+    _mark("end", req=rid, chunks=nchunks, completion_tokens=ct)
     c = "".join(content)
     rs = "".join(reasoning)
     sha = hashlib.sha256(
@@ -528,7 +597,14 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
         ct=ct,
         pt=usage["prompt_tokens"],
         prompt_tokens=usage["prompt_tokens"],
+        # The audit's name (prompt_ids_sha) and gaptable's (prompt_sha256) carry the same value:
+        # sha256 of the request messages as sent. Servers report counts, not token ids.
+        prompt_ids_sha=prompt_sha,
         prompt_sha256=prompt_sha,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        stop=stop,
+        harness=HARNESS_ID,
         cached=cached_tokens(usage),
         dec_tps=round((ct - 1) / (t1 - tf), 1) if tf and ct > 1 and t1 > tf else None,
         finish=finish,
@@ -588,6 +664,11 @@ def corpus(kind):
 
 def load_prompt(name):
     return (WORK / "prompts" / f"{name}.txt").read_text()
+
+
+def decode_prompt_file(kind, ctx, smoke=False):
+    """The prompt source a decode cell reads (recorded as prompt_file on every decode row)."""
+    return "inline:smoke" if smoke else str(WORK / "prompts" / f"{kind}-{ctx}.txt")
 
 
 def decode_prompt(kind, ctx, long_ask):
@@ -944,6 +1025,8 @@ def part_decode(s, out, a):
                     ctx=ctx,
                     kind=kind,
                     phase=phase,
+                    prompt_file=decode_prompt_file(kind, ctx, a.smoke),
+                    cell=cell_name(getattr(a, "out", ""), getattr(a, "rep", 0)),
                     reference_prompt_tokens=ctx
                     if os.environ.get("TFB_EXACT_PROMPTS") == "1" and not a.smoke
                     else None,
@@ -1458,6 +1541,105 @@ def parse_args(argv=None):
     return ap.parse_args(args)
 
 
+# Census key (census.json) of each engine's release date; engines not listed need TFB_RELEASE_DATE.
+FULLCMP_CENSUS_KEY = {
+    "yunshu": "yunshu",
+    "tf-new": "tensorfold",
+    "tf-old": "tensorfold",
+    "tf-native": "tensorfold",
+    "omlx": "omlx",
+    "omlx-latest": "omlx",
+    "splash": "splash",
+    "llamacpp": "llama_cpp",
+    "llamacpp-mtp": "llama_cpp",
+    "mlxlm": "mlx_lm_server",
+    "mlx-serve": "mlx-serve",
+    "kapitsa": "kapitsa",
+}
+
+
+def cell_name(out_path, rep):
+    """<cell>-rN.jsonl -> <cell> (the audit's cell id)."""
+    stem = os.path.basename(out_path)
+    stem = stem[: -len(".jsonl")] if stem.endswith(".jsonl") else stem
+    suffix = f"-r{rep}"
+    return stem[: -len(suffix)] if stem.endswith(suffix) else stem
+
+
+def fullcmp_header(s, a, environ, *, census, job_start_s, swap_start, telemetry_path):
+    """Session-header fields the fullcmp audit requires beyond the bench_engines meta row.
+    Every value comes from the pin, the census, the model config, the launched binary or the
+    gpuq job environment; a value that cannot be found raises (fail closed)."""
+    model_key = fp.census_model_id(census, a.model)
+    version, git_sha = bench_engines.engine_version(a.engine, YUNSHU_SRC)
+    census_key = "yunshu" if Srv._is_yunshu(a.engine) else FULLCMP_CENSUS_KEY.get(a.engine)
+    return dict(
+        run_id=environ["TFB_RUN_ID"],
+        model=model_key,
+        cell=cell_name(a.out, a.rep),
+        group=environ["TFB_GROUP"],
+        version=version,
+        git_sha=git_sha,
+        release_date=fp.release_date(census, census_key, version, environ),
+        binary_sha256=fp.binary_sha256(s.cmd[0]),
+        python=(s.pin or {}).get("python"),
+        spec_mode_expected=s.requested_spec_mode,
+        engaged_log_line=s.engaged_log_line,
+        weights=fp.weights_record(a.model, census, model_key),
+        fresh_process=True,
+        home=str(s.home),
+        job_id=environ["GPUQ_JOB_ID"],
+        job_start_s=job_start_s,
+        swap_start=swap_start,
+        telemetry_path=telemetry_path,
+    )
+
+
+def start_cell_telemetry(pid, port, out_path, engine, environ, *, required):
+    """Sampler beside the server for this cell; its series path is returned for the record.
+    Required (fullcmp): a sampler that does not start raises. Optional: warn and continue."""
+    global _ACTIVE_TELEMETRY
+    tdir = environ.get("TFB_TELEMETRY_DIR") or (fp.DEFAULT_TELEMETRY_DIR if required else "")
+    if not tdir:
+        return None
+    path = fp.telemetry_out(out_path, engine, tdir)
+    try:
+        import fullcmp_telemetry as tm
+
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        sampler = tm.Sampler(pid, port, path)
+        sampler.start()
+    except Exception as exc:  # noqa: BLE001 - classified below
+        if required:
+            raise fp.ProvenanceError(f"telemetry sampler did not start: {exc}") from exc
+        print(f"telemetry: optional sampler not started: {exc}", flush=True)
+        return None
+    _ACTIVE_TELEMETRY = sampler
+    return path
+
+
+def stop_cell_telemetry():
+    global _ACTIVE_TELEMETRY
+    sampler, _ACTIVE_TELEMETRY = _ACTIVE_TELEMETRY, None
+    if sampler is not None:
+        sampler.stop()
+
+
+def finalize_session(path, end_fields):
+    """Rewrite the session row (line 1) with the end-of-cell fields: job end, swap at end.
+    The file is replaced atomically, so a crash leaves the start-of-cell row or nothing."""
+    with open(path) as fh:
+        lines = fh.read().splitlines()
+    row = json.loads(lines[0])
+    if row.get("part") != "session":
+        raise RuntimeError(f"{path}: first row is not the session header")
+    row.update(end_fields)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write("\n".join([json.dumps(row), *lines[1:]]) + "\n")
+    os.replace(tmp, path)
+
+
 def main():
     a = parse_args()
     extra_env = dict(kv.split("=", 1) for kv in a.env)
@@ -1514,6 +1696,19 @@ def main():
             raise AssertionError(
                 "Yunshu pinned tree does not match expected release SHA"
             )
+    fullcmp = fp.fullcmp_mode(os.environ)
+    census = fc_header = end_fields = None
+    telem_path = None
+    if fullcmp:
+        # Fail closed before anything runs: identifiers, a quiet GPU, a fresh result file.
+        fp.check_required_env(os.environ)
+        if was_contended():
+            raise fp.ProvenanceError("GPU contended before the cell started (fullcmp)")
+        if os.path.exists(a.out) and os.path.getsize(a.out) > 0:
+            raise fp.ProvenanceError(f"{a.out} exists; a fullcmp cell writes a fresh file")
+        census = fp.load_json(fp.CENSUS_PATH)
+    job_start_s = time.time()
+    swap_start = fp.swap_snapshot() if fullcmp else None
     s = start_server(
         a.engine,
         extra_env,
@@ -1524,6 +1719,26 @@ def main():
     )
     try:
         with open(a.out, "a") as out:
+            try:
+                if fullcmp or os.environ.get("TFB_TELEMETRY_DIR"):
+                    telem_path = start_cell_telemetry(
+                        s.proc.pid, s.port, a.out, a.engine, os.environ, required=fullcmp
+                    )
+                if fullcmp:
+                    fc_header = fullcmp_header(
+                        s,
+                        a,
+                        os.environ,
+                        census=census,
+                        job_start_s=job_start_s,
+                        swap_start=swap_start,
+                        telemetry_path=telem_path,
+                    )
+            except Exception as exc:
+                if fullcmp:
+                    emit(out, part="error", stage="start", engine=a.engine,
+                         rep=a.rep, error=str(exc))
+                raise
             if a.engine in bench_engines.ENGINES:
                 version, sha = bench_engines.engine_version(a.engine, YUNSHU_SRC)
                 META.update(
@@ -1548,6 +1763,7 @@ def main():
                 engaged_spec_mode=s.engaged_spec_mode,
                 engine_probe=getattr(s, "probe", None),
                 tag=a.tag,
+                **(fc_header or {}),
             )
             for _ in range(2):
                 send(s.url, req(s.model, "Say hi.", 24))
@@ -1589,6 +1805,17 @@ def main():
                     idle_after_s=a.idle_s,
                     engine_probe=s.probe_text(),
                 )
+            stop_cell_telemetry()
+            if fullcmp:
+                # The GPU must have stayed exclusive to this cell until its last request.
+                if was_contended():
+                    raise fp.ProvenanceError("GPU contended during the cell (fullcmp)")
+                end_fields = {
+                    "job_end_s": time.time(),
+                    "gpu_exclusive": True,
+                    "contended": False,
+                    "swap_end": fp.swap_snapshot(),
+                }
             emit(
                 out,
                 part="part_done",
@@ -1597,7 +1824,15 @@ def main():
                 rep=a.rep,
                 complete=True,
             )
+        if fullcmp:
+            finalize_session(a.out, end_fields)
+    except Exception as exc:
+        if fullcmp:
+            with open(a.out, "a") as out:
+                emit(out, part="error", stage="run", engine=a.engine, rep=a.rep, error=str(exc))
+        raise
     finally:
+        stop_cell_telemetry()
         s.kill()
 
 
