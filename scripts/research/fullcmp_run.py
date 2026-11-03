@@ -1415,7 +1415,10 @@ def pre_submit_checks(root: Path, repo: Path = REPO_ROOT) -> str:
         verify_snapshot(Path(root), repo)
     except HarnessDirty as exc:
         return f"snapshot integrity: {exc}"
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    if os.environ.get("TFB_PRESUBMIT_ACTIVE") == "1":
+        # a pre-submit's own pytest reached here (through a driver test): refuse, never recurse
+        return "nested pre-submit refused (TFB_PRESUBMIT_ACTIVE=1)"
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", TFB_PRESUBMIT_ACTIVE="1", TFB_PRESUBMIT_SKIP="1")
     static = [HARNESS_PY, "-m", "pytest", "-q", "-p", "no:cacheprovider",
               str(Path(root) / "tests" / "unit" / "test_fullcmp_static.py")]
     quick = [HARNESS_PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", "fullcmp_quick",
@@ -1511,7 +1514,12 @@ def main(argv=None) -> int:
         print(f"refusing: {exc}", file=sys.stderr)
         return 2
     use_harness(snap)
-    quick = pre_submit_checks(snap, REPO_ROOT)
+    if os.environ.get("TFB_PRESUBMIT_SKIP") == "1" or os.environ.get("TFB_PRESUBMIT_ACTIVE") == "1":
+        # inside a test run or a pre-submit's own pytest: never a second pre-submit (that recursed)
+        print("pre-submit skipped: TFB_PRESUBMIT_SKIP/ACTIVE set (test or nested run)", flush=True)
+        quick = ""
+    else:
+        quick = pre_submit_checks(snap, REPO_ROOT)
     if quick:
         print("refusing: pre-submit checks failed on the snapshot:", file=sys.stderr)
         print(quick, file=sys.stderr)

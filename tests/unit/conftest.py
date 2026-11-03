@@ -255,3 +255,9 @@ def _driver_harness_snapshot_stub(request, monkeypatch):
         monkeypatch.setattr(mod, "snapshot_harness", lambda work, repo=None, _r=root: _r)
         monkeypatch.setattr(mod, "use_harness", lambda root: None)
         monkeypatch.setattr(mod, "pre_submit_checks", lambda root, repo=None: "")
+
+
+# Unit tests never run the driver's pre-submit (it runs a pytest subset: a recursion if a test
+# that calls the driver ran it again). Inherited by the driver's subprocesses too.
+_sys.modules.setdefault("_fullcmp_presubmit_guard", None)
+_os.environ.setdefault("TFB_PRESUBMIT_SKIP", "1")

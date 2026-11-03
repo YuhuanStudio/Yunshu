@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+REPO = ROOT
 sys.path.insert(0, str(ROOT / "scripts" / "research"))
 import fullcmp_audit as fa  # noqa: E402
 
@@ -190,3 +191,46 @@ def test_mangled_names_are_excluded_and_logged_and_the_snapshot_verifies(tmp_pat
     # no junk file was copied into the snapshot
     for name in junk:
         assert not (snap / "scripts" / "research" / name).exists(), name
+
+
+def test_pre_submit_runs_exactly_two_pytests_and_never_nests(repo, tmp_path, monkeypatch):
+    snap = run.snapshot_harness(tmp_path / "work", repo)
+    calls = []
+
+    class _Done:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    real_run = subprocess.run
+
+    def fake_run(cmd, **kw):
+        if cmd[0] == "git":  # the snapshot's own git reads stay real
+            return real_run(cmd, **kw)
+        calls.append((list(cmd), kw.get("env", {}).get("TFB_PRESUBMIT_ACTIVE")))
+        return _Done()
+
+    monkeypatch.setattr(run.subprocess, "run", fake_run)
+    monkeypatch.delenv("TFB_PRESUBMIT_ACTIVE", raising=False)
+    assert run.pre_submit_checks(snap, repo) == ""
+    assert len(calls) == 2  # static on the snapshot, quick subset in the live tree; no third
+    assert all(active == "1" for _, active in calls)
+    assert calls[1][0][-1].endswith("test_fullcmp_snapshot.py") or "fullcmp_quick" in calls[1][0]
+    # nested: the child pytest must not spawn another pre-submit
+    calls.clear()
+    monkeypatch.setenv("TFB_PRESUBMIT_ACTIVE", "1")
+    assert "nested" in run.pre_submit_checks(snap, repo)
+    assert calls == []
+
+
+def test_driver_main_skips_pre_submit_inside_a_test_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("TFB_PRESUBMIT_SKIP", "1")
+    called = []
+    monkeypatch.setattr(run, "pre_submit_checks", lambda *a, **k: called.append(a) or "")
+    monkeypatch.setattr(run, "snapshot_harness", lambda work, repo=None: REPO)
+    monkeypatch.setattr(run, "use_harness", lambda root: None)
+    manifest = tmp_path / "m.jsonl"
+    rows, _meta = run.fm.build_rows(engines=["yunshu"])
+    manifest.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert run.main(["--batch", "B1", "--manifest", str(manifest), "--dry-run"]) == 0
+    assert called == []
