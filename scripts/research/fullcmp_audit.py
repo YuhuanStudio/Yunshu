@@ -59,6 +59,7 @@ GUARDS = (
     "fairness_controls",
     "telemetry",
     "quiet_machine",
+    "attribution_fields",
     "round_time_outlier",
 )
 
@@ -943,6 +944,31 @@ def check_round_time_outlier(run: Run) -> GuardResult:
     return res
 
 
+def check_attribution_fields(run: Run) -> GuardResult:
+    """Guard 16: every decode row carries the layer-1 attribution fields for its engine, each as a
+    value or an explicit 'unavailable (reason)' (fullcmp_attribution.check_cell). A MISSING field
+    fails the cell (fail closed). Layer 2 (profile rep) is not part of the timed rows and is not
+    checked here."""
+    import fullcmp_attribution as fa_attr
+
+    res = GuardResult("attribution_fields")
+    for cf in run.files:
+        cell = cf.cell["cell"]
+        res.checked += 1
+        engine = cf.cell.get("engine")
+        try:
+            result = fa_attr.check_cell(engine, cf.rows, None)
+        except KeyError as exc:
+            res.fail(cell, f"r{cf.rep}: {exc}")
+            continue
+        miss = [m for m in result["missing"] if not m.startswith("profile:")]
+        if not cf.rows:
+            res.fail(cell, f"r{cf.rep}: no decode rows")
+        elif miss:
+            res.fail(cell, f"r{cf.rep}: attribution fields MISSING: {', '.join(miss)}")
+    return res
+
+
 GUARD_CHECKS = (
     check_prompt_identity,
     check_provenance_identity,
@@ -958,6 +984,7 @@ GUARD_CHECKS = (
     check_fairness_controls,
     check_telemetry,
     check_quiet_machine,
+    check_attribution_fields,
     check_round_time_outlier,
 )
 

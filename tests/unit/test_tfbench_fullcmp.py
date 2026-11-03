@@ -316,6 +316,7 @@ def test_fullcmp_header_has_every_required_header_field(layout, monkeypatch):
         requested_spec_mode="mtp",
         engaged_log_line="VLM batch runner: draft=mtp",
         home=layout.tmp / "home",
+        log=layout.tmp / "server-hdr.log",
     )
     monkeypatch.setattr(
         tfbench.bench_engines,
@@ -467,6 +468,7 @@ class _FakeServer:
         self.url = "http://127.0.0.1:18991"
         self.model = "qwen-test"
         self.cmd = [layout.pin["python_executable"], "-m", "yunshu_cli", "serve"]
+        self.log = layout.tmp / "server-test.log"
         self.home = layout.tmp / "home"
         self.requested_spec_mode = "mtp"
         self.engaged_spec_mode = "mtp"

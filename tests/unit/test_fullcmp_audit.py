@@ -50,6 +50,36 @@ def _sha(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()[:16]
 
 
+def attr_fixture(eng, row):
+    """Layer-1 attribution fields for one decode row: every REQUIRED field the engine can expose
+    is a value, the rest are its explicit unavailable reasons (fullcmp_attribution schema)."""
+    import fullcmp_attribution as fa_attr
+
+    spec = fa_attr.engine_attr(eng)
+    t = 1000.0 + row["ttft_s"]
+    values = {
+        "t_receive": t - row["ttft_s"],
+        "t_template": t - 0.05,
+        "t_tokenize": t - 0.04,
+        "t_admit": t - 0.03,
+        "t_cache_lookup": t - 0.02,
+        "t_prefill_chunks": [[t - 0.02, t, row["pt"]]],
+        "t_first_token": t,
+        "t_rounds": [t + 0.1],
+        "t_last_token": t + row["total_s"] - 0.1,
+        "t_response_end": t + row["total_s"],
+        "rounds": 128,
+        "tokens_per_round": [4],
+        "rows_per_round": [1],
+        "cache_hit_tokens": row["cached"],
+        "chunk_sizes": [row["pt"]],
+        "host_gaps_ms": [0.1],
+        "engine_log_path": f"/tmp/x/{eng}.log",
+    }
+    attr = {k: v for k, v in values.items() if k not in spec.unavailable}
+    return {"attr": attr, "attr_unavailable": dict(spec.unavailable)}
+
+
 def make_data():
     """Return (manifest, files): files maps 'engine/<cell>-rN.jsonl' to its rows."""
     pins = {
@@ -180,6 +210,8 @@ def make_data():
                             "contended": False,
                         }
                     )
+                for r_ in rows[1:]:
+                    r_.update(attr_fixture(eng, r_))
                 files[f"{eng}/{cell}-r{rep}.jsonl"] = rows
     return manifest, files
 
@@ -301,6 +333,12 @@ def bad_fairness_controls(m, f):
     m["controls"]["injected_delay_detected"] = False
 
 
+def bad_attribution_fields(m, f):
+    # A decode row with no attr at all (a layer-1 field MISSING) fails the cell.
+    rows = f[next(k for k in f if k.startswith("yunshu/"))]
+    rows[1].pop("attr")
+
+
 def bad_quiet_machine(m, f):
     head = f["yunshu/q27_decode-1024-code-p0-r0.jsonl"][0]
     head["quiet_post"] = quiet_record(
@@ -322,6 +360,7 @@ BAD_CASES = [
     ("measured_only", bad_measured_only),
     ("fairness_controls", bad_fairness_controls),
     ("quiet_machine", bad_quiet_machine),
+    ("attribution_fields", bad_attribution_fields),
 ]
 
 
@@ -334,7 +373,7 @@ def test_good_run_passes_all_guards(tmp_path):
     manifest, files = make_data()
     _, results = _run(tmp_path, manifest, files)
     assert [r.name for r in results] == list(fa.GUARDS)
-    assert len(fa.GUARDS) == 15
+    assert len(fa.GUARDS) == 16
     assert failing(results) == set()
     assert all(r.checked > 0 for r in results)
 

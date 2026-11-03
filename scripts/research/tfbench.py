@@ -24,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_engines  # noqa: E402
+import fullcmp_attribution  # noqa: E402  (layer-1 attribution schema)
 import fullcmp_provenance as fp  # noqa: E402
 import fullcmp_quiet as fq  # noqa: E402  (quiet-machine snapshots per cell, FULLCMP_SPEC)
 from gpuq_contention import was_contended  # noqa: E402
@@ -526,6 +527,8 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
     _REQ_SEQ[0] += 1
     rid = str(_REQ_SEQ[0])
     t0 = time.perf_counter()
+    ew_receive = time.time()  # layer-1 attribution: client wall clock (epoch s)
+    ew_first = ew_last = None
     tf = None
     content, reasoning, tools = [], [], {}
     lp_tokens, lps = [], []
@@ -575,12 +578,16 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
                         )
                 if got and tf is None:
                     tf = time.perf_counter()
+                    ew_first = time.time()
                     _mark("first_token", req=rid, chunks=nchunks)
+                if got:
+                    ew_last = time.time()
                 for e in (ch.get("logprobs") or {}).get("content") or []:
                     lp_tokens.append(e.get("token"))
                     lps.append(e.get("logprob"))
                 finish = ch.get("finish_reason") or finish
     t1 = time.perf_counter()
+    ew_end = time.time()
     if not done or finish is None or usage is None:
         raise RuntimeError("incomplete stream")
     ct = usage["completion_tokens"]
@@ -638,6 +645,14 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
         if xy
         else None,
     )
+    result["_attr_client"] = {
+        "t_receive": ew_receive,
+        "t_first_token": ew_first,
+        "t_last_token": ew_last,
+        "t_response_end": ew_end,
+        "cache_hit_tokens": result["cached"],
+    }
+    result["_xy_speculative"] = (xy or {}).get("speculative")
     if capture_timestamps:
         result["_sent_at_s"] = t0
         result["_first_at_s"] = tf
@@ -960,6 +975,30 @@ def part_corpus(s, out, a):
         raise RuntimeError(f"corpus: {len(shorts)} short replies: {shorts}")
 
 
+def attribution_fields(s, r):
+    """Layer-1 fields of one decode row (FULLCMP_SPEC "Attribution data"). Measured client-side
+    values are present; server-side stages and counters the engine does not expose are
+    'unavailable (reason)' from the engine's schema (fullcmp_attribution.ENGINE_OVERRIDES); every
+    other field stays absent so the audit's attribution_fields guard reports it MISSING. Nothing
+    is estimated. Only in fullcmp mode (TFB_FULLCMP=1), where an unknown engine is an error."""
+    client = r.pop("_attr_client", {}) or {}
+    spec = r.pop("_xy_speculative", None) or {}
+    attr = {k: v for k, v in client.items() if v is not None}
+    attr["engine_log_path"] = str(s.log)
+    for f in ("rounds", "drafted", "accepted"):
+        if isinstance(spec.get(f), (int, float)):
+            attr[f] = int(spec[f])
+    unavailable = {}
+    if os.environ.get("TFB_FULLCMP") == "1":
+        eng = fullcmp_attribution.engine_attr(
+            os.environ.get("TFB_ATTR_ENGINE") or s.engine
+        )
+        unavailable = dict(eng.unavailable)
+    r["attr"] = attr
+    r["attr_unavailable"] = unavailable
+    return r
+
+
 def part_decode(s, out, a):
     phases = parse_phases(a.phases)
     n_dec = int(a.decode_tokens)
@@ -1010,7 +1049,7 @@ def part_decode(s, out, a):
                     )  # the user reads the reply before the follow-up
                 if phase == "turn2" and a.rehearse:
                     extra_rec = rehearse(s, b)
-                r = send(s.url, b)
+                r = attribution_fields(s, send(s.url, b))
                 r.update(extra_rec)
                 if not a.smoke:
                     check_decode_len(
@@ -1046,7 +1085,9 @@ def part_decode(s, out, a):
                 and os.environ.get("TFB_EXACT_PROMPTS") != "1"
                 and "specoff" in phases
             ):
-                r = send(s.url, req(s.model, text, n_dec, extra={"draft": False}))
+                r = attribution_fields(
+                    s, send(s.url, req(s.model, text, n_dec, extra={"draft": False}))
+                )
                 r["text"] = r.pop("_text")
                 emit(out, part="decode", ctx=ctx, kind=kind, phase="specoff", **r)
 
@@ -1637,6 +1678,8 @@ def fullcmp_header(
         swap_start=swap_start,
         telemetry_path=telemetry_path,
         quiet_pre=quiet_pre,
+        engine_log_path=str(s.log),
+        server_flags={"argv": [str(x) for x in s.cmd]},
     )
 
 
