@@ -137,30 +137,29 @@ def pin_file(tmp_path, monkeypatch):
 
 
 def test_group_splits_at_the_70_percent_limit_per_rep():
-    # reps=2, est 10 per row -> 5 min per rep per cell. Limit 14 min minus the 1 min job fixed
-    # cost leaves room for two cells per job.
+    # every chunk's itemized job_budget total stays within 14 min (70% of the 20 min cap)
     rows = [row("yunshu", f"B1.c{i}", est=10.0) for i in range(6)]
     chunks = run.pack_chunks(rows)
-    assert [len(c) for c in chunks] == [2, 2, 2]
-    assert all(
-        sum(run.cell_est(r) for r in c) + run.JOB_FIXED_MIN <= run.JOB_LIMIT_MIN
-        for c in chunks
-    )
+    assert len(chunks) >= 2
+    assert sorted(r["id"] for c in chunks for r in c) == sorted(r["id"] for r in rows)
+    assert all(run.job_budget(c)["total"] <= run.JOB_LIMIT_MIN for c in chunks)
     assert run.JOB_LIMIT_MIN == 0.7 * run.JOB_CAP_MIN == 14.0
 
 
 def test_group_whose_measured_sum_exceeds_the_limit_is_split():
-    # two cells of 6.5 min per rep: 13 + 1 fixed fits 14, a third cell does not
-    fits = [row("yunshu", f"B1.a{i}", est=13.0) for i in range(2)]
-    assert len(run.pack_chunks(fits)) == 1
-    over = fits + [row("yunshu", "B1.a2", est=13.0)]
-    chunks = run.pack_chunks(over)
-    assert [len(c) for c in chunks] == [2, 1]
+    # a group whose summed budget exceeds the limit is split; a group under it is not
+    small = [row("yunshu", f"B1.a{i}", est=2.0) for i in range(2)]
+    assert len(run.pack_chunks(small)) == 1
+    big = [row("yunshu", f"B1.b{i}", est=6.0) for i in range(6)]
+    assert run.job_budget(big)["total"] > run.JOB_LIMIT_MIN
+    chunks = run.pack_chunks(big)
+    assert len(chunks) > 1
+    assert all(run.job_budget(c)["total"] <= run.JOB_LIMIT_MIN for c in chunks)
 
 
 def test_yunshu_220358_shape_splits_into_chunks_within_the_limit():
-    # the 10 core cells of job 1103-220358 (1K..128K x code/prose, yunshu, 27B, conc 1) built from
-    # the real manifest estimate: the old single job (13.5 min estimate) was killed at the cap
+    # the 10 core cells of job 1103-220358 (yunshu, 27B, conc 1) from the real manifest: the old
+    # single job (13.5 min estimate, no per-cell start) was killed at the 20 min cap
     import fullcmp_manifest as fm_
 
     rows, _meta = fm_.build_rows(engines=["yunshu"])
@@ -174,18 +173,20 @@ def test_yunshu_220358_shape_splits_into_chunks_within_the_limit():
     assert len(chunks) >= 2
     assert sorted(r["id"] for c in chunks for r in c) == sorted(r["id"] for r in core)
     for c in chunks:
-        est = sum(run.cell_est(r) for r in c) + run.JOB_FIXED_MIN
-        assert est <= 0.7 * run.JOB_CAP_MIN, (est, [r["id"] for r in c])
-        assert run.job_timeout_min(est) <= run.JOB_CAP_MIN
+        b = run.job_budget(c)
+        assert b["total"] <= 0.7 * run.JOB_CAP_MIN, (b["total"], [r["id"] for r in c])
+        assert b["timeout"] <= run.JOB_CAP_MIN
 
 
-def test_timeout_is_1_3_x_estimate_floored_by_the_same_kind_and_capped():
-    assert run.job_timeout_min(10.0) == 13.0  # 1.3 x est
-    assert run.job_timeout_min(14.0) == 18.2
-    assert run.job_timeout_min(30.0) == 20.0  # capped at the cap
-    # never below 1.3 x the longest same-kind run: the killed 1103-220358 job ran 20 min
-    assert run.job_timeout_min(5.0, prior_min=10.0) == 13.0
-    assert run.job_timeout_min(5.0, prior_min=20.0) == 20.0
+def test_timeout_is_1_3_x_total_floored_by_the_same_kind_and_capped():
+    rows = [row("yunshu", "B1.t", est=2.0)]
+    b = run.job_budget(rows)
+    assert b["timeout"] == pytest.approx(
+        min(20.0, __import__("math").ceil(round(1.3 * b["total"] * 10, 6)) / 10)
+    )
+    # floored by the longest same-kind run (the killed 1103-220358 job ran 20 min)
+    assert run.job_budget(rows, prior_min=20.0)["timeout"] == 20.0
+    assert run.job_budget(rows, prior_min=0.0)["timeout"] < 20.0
     assert run.prior_wall_min("B1", "yunshu") >= 20.0
     assert run.prior_wall_min("B9", "yunshu") == 0.0
 
@@ -331,8 +332,9 @@ def test_submit_argv_form():
     assert argv[1:3] == ["submit", "--label"]
     assert argv[3] == "fullcmp-B1-yunshu-q27-4bit-th-off-r0"
     assert argv[4:6] == ["--timeout", f"{job.timeout_min:g}"]
-    assert argv[6:10] == ["--priority", "1", "--quiet", "--"]
-    assert argv[10:] == job.cmd
+    assert argv[6:8] == ["--stall", f"{job.stall_min:g}"]
+    assert argv[8:12] == ["--priority", "1", "--quiet", "--"]
+    assert argv[12:] == job.cmd
 
 
 # --- dry run touches nothing ------------------------------------------------
@@ -495,3 +497,47 @@ def test_real_matrix_rows_have_expected_record_counts():
     assert run.expected_records(b1) == 3  # per rep file
     conc = next(r for r in rows if r["batch"] == "B2" and r["sweep"] == "conc" and r["conc"] == 4)
     assert run.expected_records(conc) == 4 * run.CONC_TRIALS
+
+
+# --- itemized job budget: startup, gate, cells, post, finalize, shutdown; stall; lane ----------
+
+
+def test_slow_start_engine_gets_a_long_timeout_and_no_short_lane(monkeypatch):
+    # ready_s 90 s (longest seen): startup = 1.5 x 90 s = 2.25 min per cell, two 1K cells
+    monkeypatch.setitem(run.JB["startup_seen_s"], "mlx-vlm-server", {"value": 90.0})
+    rows = [row("mlx-vlm-server", f"B1.s{i}", est=2.0) for i in range(2)]
+    b = run.job_budget(rows)
+    assert b["startup"] == pytest.approx(2 * 2.25)
+    assert b["timeout"] >= 1.3 * (2 * 2.25 + run.GATE_PRE_MIN) - 0.05
+    assert b["timeout"] >= 1.3 * b["total"] - 0.05
+    assert b["lane"] == "normal" and b["timeout"] > run.SHORT_LANE_MIN
+    assert b["stall"] >= max(5.0, 2 * 2.25)
+
+
+def test_engine_without_header_data_gets_its_default_startup(monkeypatch):
+    monkeypatch.delitem(run.JB["startup_seen_s"], "llama-cpp-b12061", raising=False)
+    assert run.startup_s("llama-cpp-b12061") == 60.0  # stated default
+    assert run.startup_s("mlx-vlm-server") == 1.5 * 8.2  # seen on disk (floor not used)
+    monkeypatch.delitem(run.JB["startup_seen_s"], "mlx-vlm-server", raising=False)
+    assert run.startup_s("mlx-vlm-server") == 90.0
+    assert run.startup_s("lmstudio") == 60.0
+
+
+def test_fast_cells_still_budget_gate_post_finalize_and_shutdown():
+    # cells that finish in ~8 s: the timeout still covers the gate, post, finalize and shutdown
+    rows = [row("omlx-0.7.3", "B1.fast", est=0.27)]
+    b = run.job_budget(rows)
+    floor = run.GATE_PRE_MIN + run.POST_MIN + run.FINALIZE_MIN + run.SHUTDOWN_MIN
+    assert b["timeout"] >= 1.3 * floor - 0.05
+    assert b["lane"] == ("short" if b["timeout"] <= 10 else "normal")
+    assert b["stall"] >= 5.0 and b["stall"] >= 2 * run.GATE_PRE_MIN
+
+
+def test_dry_run_prints_itemized_budget_timeout_stall_and_lane(capsys):
+    rows = [row("yunshu", "B1.p", est=4.0)]
+    plan = run.plan_batch(rows, "B1", PIN)
+    run.print_plan(plan)
+    out = capsys.readouterr().out
+    for key in ("startup", "gate_pre", "cells", "post", "finalize", "shutdown", "total",
+                "timeout_min", "stall_min", "lane:"):
+        assert key in out, key

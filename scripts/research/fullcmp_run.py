@@ -8,11 +8,11 @@ evidence); "unsupported" and "cut" rows are skipped and listed. A row also needs
 
 Grouping: one server configuration = (engine, model, thinking). Each group becomes one job per rep
 when its estimate fits the planning limit (70% of the 20 min cap = 14 min, JOB_LIMIT_MIN, including
-JOB_FIXED_MIN per job); a larger group is split into consecutive chunks that each fit. A cell is one
+job_budget per job: gate, startup, cells, post, finalize, shutdown); a larger group is split into consecutive chunks that each fit. A cell is one
 tfbench invocation with its own server start, so cells of a chunk run back to back in one job, each
 cold-starting its server. A single cell above the 14 min limit gets a job of its own, flagged
 over_margin (it still runs; above 20 min it is refused). Each job's gpuq --timeout is est x 1.3 (floor
-1.3 x the longest same-kind measured run, capped at 20 min); see job_timeout_min.
+1.3 x the itemized total, floored by the longest same-kind run, capped at 20 min); see job_budget.
 
 Rotation (rep r): the batch's engines, in manifest order, are rotated left by r, so rep r starts at
 engine (r mod n). Within a rep, a group's jobs for one engine are consecutive; engines follow the
@@ -105,8 +105,18 @@ BATCH_CHOICES = BATCH_ORDER + (SMOKE_BATCH,)
 JOB_CAP_MIN = 20.0  # gpuq job cap (default --timeout); a job above it is killed
 JOB_MARGIN = 0.7  # planned chunks stay <= 70% of the cap (>= 30% margin for estimate error)
 JOB_LIMIT_MIN = JOB_CAP_MIN * JOB_MARGIN  # 14 min: the chunk packing limit
-JOB_FIXED_MIN = float(fm.TIMING["job"]["fixed_min"]["value"])  # quiet gate, mkdir, wrapper
-TIMEOUT_FACTOR = float(fm.TIMING["job"]["timeout_factor"]["value"])  # gpuq rule (1.3 x est, floor)
+JB = fm.TIMING["job_budget"]  # itemized per-job budget terms (fullcmp_cell_timing.json)
+TIMEOUT_FACTOR = float(JB["margin_factor"]["value"])  # timeout = 1.3 x itemized total (>= 30% margin)
+GATE_PRE_MIN = (
+    float(JB["gate_retries"]["value"])
+    * (float(JB["gate_wait_s"]["value"]) + float(JB["window_s"]["value"]))
+    / 60.0
+)  # quiet pre-gate, worst case: every attempt waits and checks
+POST_MIN = float(JB["window_s"]["value"]) / 60.0  # one quiet_post snapshot per cell
+FINALIZE_MIN = float(JB["finalize_s"]["value"]) / 60.0  # telemetry/sampler/macmon stop per cell
+SHUTDOWN_MIN = fm.OVERHEAD_S / 60.0  # memory idle + shutdown per cell (measured)
+STALL_FLOOR_MIN = float(JB["stall_floor_min"]["value"])
+SHORT_LANE_MIN = float(JB["short_lane_min"]["value"])  # gpuq: timeout <= this is the short lane
 REP3_INDEX = 2  # same as fullcmp_reps.REP3_INDEX
 # seconds between the cold reply and the follow-up of an idle cell (manifest: 5 s idle)
 IDLE_THINK_S = fm.IDLE_S
@@ -298,31 +308,68 @@ def group_slug(row: dict) -> str:
     return f"{row['model']}-th-{row.get('thinking') or 'off'}"
 
 
+def startup_s(engine: str) -> float:
+    """Model-load and ready budget of one server start, seconds: 1.5 x the longest ready_s seen on
+    disk for the engine; the stated per-engine default only when no header records one."""
+    seen = JB["startup_seen_s"].get(engine)
+    if seen:
+        return float(JB["startup_factor"]["value"]) * float(seen["value"])
+    defaults = JB["startup_default_s"]["value"]
+    return float(defaults.get(engine, defaults["default"]))
+
+
+def cell_budget(row: dict) -> dict:
+    """Itemized minutes of one cell for one rep: its own server start, the modelled work (the
+    manifest estimate minus the manifest's own boot and idle, so nothing is counted twice), the
+    memory idle and shutdown, the quiet_post snapshot and the finalize."""
+    ready = fm.ENGINE_PERF[row["engine"]]["ready_s"]
+    work = max(0.0, cell_est(row) - (ready + fm.OVERHEAD_S) / 60.0)
+    return {
+        "startup": startup_s(row["engine"]) / 60.0,
+        "cells": work,
+        "shutdown": SHUTDOWN_MIN,
+        "post": POST_MIN,
+        "finalize": FINALIZE_MIN,
+    }
+
+
+def job_budget(rows: list[dict], prior_min: float = 0.0) -> dict:
+    """One job's itemized budget (minutes, one rep). total = gate_pre + every cell's terms.
+    timeout = 1.3 x total, never below 1.3 x prior_min (the longest same-kind run), capped at the
+    20 min cap. stall = silence limit: >= 5 min, >= 2 x startup, >= 2 x the gate windows. lane is
+    the short lane only when gpuq would classify the timeout as short (<= 10 min), which by
+    construction means total with the 30% margin is under 10 min."""
+    parts = [cell_budget(r) for r in rows]
+    out = {k: sum(p[k] for p in parts) for k in ("startup", "cells", "shutdown", "post", "finalize")}
+    out["gate_pre"] = GATE_PRE_MIN
+    out["total"] = GATE_PRE_MIN + sum(out[k] for k in ("startup", "cells", "shutdown", "post", "finalize"))
+    want = TIMEOUT_FACTOR * max(out["total"], prior_min)
+    out["timeout"] = min(JOB_CAP_MIN, math.ceil(round(want * 10, 6)) / 10)  # 0.1 min steps
+    out["stall"] = max(
+        STALL_FLOOR_MIN,
+        2.0 * startup_s(rows[0]["engine"]) / 60.0,
+        2.0 * GATE_PRE_MIN,
+    )
+    out["lane"] = "short" if out["timeout"] <= SHORT_LANE_MIN else "normal"
+    out["n_cells"] = len(rows)
+    return out
+
+
 def pack_chunks(rows: list[dict], cap: float = JOB_LIMIT_MIN) -> list[list[dict]]:
-    """Consecutive chunks (in id order) whose estimate (per-rep cell estimates + JOB_FIXED_MIN) is
-    <= cap, the 70% planning limit by default. Cells of one group share a job, not a server: each
-    cell is its own tfbench invocation with its own server start, so the estimate sums per cell.
-    A single row above the limit gets its own chunk (the caller reports it: over_margin)."""
+    """Consecutive chunks (in id order) whose job_budget total is <= cap, the 70% planning limit by
+    default. Cells of one group share a job, not a server: each cell is its own tfbench invocation
+    with its own server start (budgeted per cell). A single row above the limit gets its own chunk
+    (the caller reports it: over_margin)."""
     chunks: list[list[dict]] = []
     cur: list[dict] = []
-    total = JOB_FIXED_MIN
     for row in sorted(rows, key=lambda r: r["id"]):
-        est = cell_est(row)
-        if cur and total + est > cap:
+        if cur and job_budget(cur + [row])["total"] > cap:
             chunks.append(cur)
-            cur, total = [], JOB_FIXED_MIN
+            cur = []
         cur.append(row)
-        total += est
     if cur:
         chunks.append(cur)
     return chunks
-
-
-def job_timeout_min(est_min: float, prior_min: float = 0.0) -> float:
-    """gpuq --timeout for a job: est x 1.3, never below 1.3 x the longest recent run of the same
-    kind (prior_min: gpuq's preflight raises a lower timeout anyway), capped at the 20 min cap."""
-    want = max(TIMEOUT_FACTOR * est_min, TIMEOUT_FACTOR * prior_min)
-    return min(JOB_CAP_MIN, math.ceil(round(want * 10, 6)) / 10)  # 0.1 min steps, no float drift
 
 
 def prior_wall_min(batch: str, engine: str) -> float:
@@ -350,6 +397,9 @@ class Job:
     over_cap: bool = False  # est above the 20 min cap: refused
     over_margin: bool = False  # est above the 70% planning limit: a single cell, run alone
     timeout_min: float = JOB_CAP_MIN
+    stall_min: float = STALL_FLOOR_MIN
+    lane: str = "normal"
+    budget: dict = field(default_factory=dict)
     flags: list[str] = field(default_factory=list)
     script: str = ""  # job body, written to cmd[1] by write_wrapper before submit
 
@@ -365,6 +415,8 @@ class Job:
             self.label,
             "--timeout",
             f"{self.timeout_min:g}",
+            "--stall",
+            f"{self.stall_min:g}",
             "--priority",
             PRIORITY,
             "--quiet",
@@ -620,7 +672,8 @@ def plan_jobs(
                 chunks = pack_chunks(groups[slug])
                 for k, chunk in enumerate(chunks):
                     part_tag = f"-p{k + 1}" if len(chunks) > 1 else ""
-                    est = sum(cell_est(c) for c in chunk) + JOB_FIXED_MIN
+                    budget = job_budget(chunk, prior_wall_min(batch, engine))
+                    est = budget["total"]
                     over = est > JOB_CAP_MIN + 1e-9
                     margin = est > JOB_LIMIT_MIN + 1e-9
                     if profile:
@@ -642,7 +695,10 @@ def plan_jobs(
                             script=job_script(chunk, rep, pin, label, profile=profile),
                             over_cap=over,
                             over_margin=margin,
-                            timeout_min=job_timeout_min(est, prior_wall_min(batch, engine)),
+                            timeout_min=budget["timeout"],
+                            stall_min=budget["stall"],
+                            lane=budget["lane"],
+                            budget=budget,
                             flags=flags,
                         )
                     )
@@ -1035,7 +1091,14 @@ def print_plan(plan: Plan) -> None:
         print(f"JOB {job.label}{flags}")
         print(f"  group: {job.engine}/{job.group} rep {job.rep}")
         print(f"  cells: {' '.join(job.cell_ids)}")
-        print(f"  est_min: {job.est_min:.2f} timeout_min: {job.timeout_min:g}")
+        b = job.budget
+        print(
+            f"  budget_min: startup {b['startup']:.2f} gate_pre {b['gate_pre']:.2f} "
+            f"cells {b['cells']:.2f} post {b['post']:.2f} finalize {b['finalize']:.2f} "
+            f"shutdown {b['shutdown']:.2f} total {b['total']:.2f}"
+        )
+        print(f"  est_min: {job.est_min:.2f} timeout_min: {job.timeout_min:g} "
+              f"stall_min: {job.stall_min:g} lane: {job.lane}")
         print(f"  command: {shlex.join(job.submit_argv())}")
     total = sum(j.est_min for j in plan.jobs)
     print(

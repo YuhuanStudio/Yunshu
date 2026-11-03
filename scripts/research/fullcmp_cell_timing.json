@@ -853,5 +853,119 @@
     }
    }
   }
+ },
+ "job_budget": {
+  "gate_retries": {
+   "value": 3,
+   "kind": "code default",
+   "source": "scripts/research/fullcmp_quiet.py DEFAULT_RETRIES"
+  },
+  "gate_wait_s": {
+   "value": 30.0,
+   "kind": "code default",
+   "source": "scripts/research/fullcmp_quiet.py DEFAULT_WAIT_S"
+  },
+  "window_s": {
+   "value": 10.0,
+   "kind": "code default",
+   "source": "scripts/research/fullcmp_quiet.py DEFAULT_WINDOW_S: the quiet window of the pre-gate and of each per-cell quiet_post snapshot"
+  },
+  "finalize_s": {
+   "value": 30.0,
+   "kind": "assumed",
+   "source": "per cell: telemetry finalize, sampler stop, macmon child stop; NOT measured, budget only"
+  },
+  "startup_factor": {
+   "value": 1.5,
+   "kind": "policy (lead 11-04)",
+   "source": "model load budget = 1.5 x longest seen ready_s"
+  },
+  "startup_default_s": {
+   "value": {
+    "mlx-vlm-server": 90.0,
+    "splash-1.5.0": 120.0,
+    "llama-cpp-b12061": 60.0,
+    "default": 60.0
+   },
+   "kind": "policy (lead 11-04)",
+   "source": "used only when no header on disk has ready_s for the engine"
+  },
+  "startup_seen_s": {
+   "yunshu": {
+    "value": 12.4,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: yunshu-main"
+   },
+   "tf-1.2.1": {
+    "value": 20.4,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: tf-native (max with tf-1.2.1 16.5)"
+   },
+   "tf-1.1.8": {
+    "value": 14.6,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: tf-1.1.8"
+   },
+   "splash-1.5.0": {
+    "value": 100.7,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: splash-1.5.0 (max with splash-latest 79.0)"
+   },
+   "omlx-0.7.3": {
+    "value": 3.3,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: omlx-latest (max with omlx-0.7.3 1.7)"
+   },
+   "omlx-0.7.3rc1": {
+    "value": 3.3,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: omlx-latest (max with omlx-0.7.3rc1 1.4)"
+   },
+   "mlx-serve-26.11.1": {
+    "value": 8.9,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: mlx-serve (max with mlx-serve-26.11.1 2.4)"
+   },
+   "mlx-lm-server": {
+    "value": 1.2,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: mlx-lm-server"
+   },
+   "mlx-vlm-server": {
+    "value": 8.2,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: mlx-vlm-server"
+   },
+   "llama-cpp-b12061": {
+    "value": 18.0,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: llama-cpp-b12061"
+   },
+   "kapitsa-0.2.26": {
+    "value": 6.8,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: kapitsa-0.2.26"
+   }
+  },
+  "stall_floor_min": {
+   "value": 5.0,
+   "kind": "policy (lead 11-04)",
+   "source": "gpuq default stall is 10 min; the floor covers silent gate windows"
+  },
+  "margin_factor": {
+   "value": 1.3,
+   "kind": "policy (lead 11-04)",
+   "source": "timeout = 1.3 x itemized total (>= 30% margin); same factor as gpuq timeout rule"
+  },
+  "short_lane_min": {
+   "value": 10.0,
+   "kind": "gpuq code",
+   "source": "scripts/dev/gpuq.py SHORT_MIN: any job with timeout <= 10 min is in the short lane"
+  },
+  "swap_preflight": {
+   "value": "separate",
+   "kind": "policy (lead 11-04)",
+   "source": "swap preflight is its own job, not in the timeout"
+  }
  }
 }
