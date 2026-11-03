@@ -2315,33 +2315,8 @@ def parse_args(argv=None):
     return ap.parse_args(args)
 
 
-# Census key (census.json) of each engine's release date; engines not listed need TFB_RELEASE_DATE.
-FULLCMP_CENSUS_KEY = {
-    "yunshu": "yunshu",
-    "tf-new": "tensorfold",
-    "tf-old": "tensorfold",
-    "tf-native": "tensorfold",
-    "omlx": "omlx",
-    "omlx-latest": "omlx",
-    "splash": "splash",
-    "llamacpp": "llama_cpp",
-    "llamacpp-mtp": "llama_cpp",
-    "mlxlm": "mlx_lm_server",
-    "mlx-serve": "mlx-serve",
-    "kapitsa": "kapitsa",
-    # census-named registry ids (2026-11-03 smoke: "no release date for ? '1.2.1'" after launch)
-    "tf-1.2.1": "tensorfold",
-    "tf-1.1.8": "tensorfold",
-    "splash-latest": "splash",
-    "splash-1.5.0": "splash",
-    "omlx-0.7.3": "omlx",
-    "omlx-0.7.3rc1": "omlx",
-    "mlx-serve-26.11.1": "mlx-serve",
-    "mlx-lm-server": "mlx_lm_server",
-    "kapitsa-0.2.26": "kapitsa",
-    "mlx-vlm-server": "mlx_vlm_server",
-    "llama-cpp-b12061": "llama_cpp",
-}
+# Census key map lives in fullcmp_provenance (one map for header and dry-run gate).
+FULLCMP_CENSUS_KEY = fp.FULLCMP_CENSUS_KEY
 
 
 def cell_name(out_path, rep):
@@ -2370,9 +2345,7 @@ def fullcmp_header(
     host-CPU snapshot taken before the server started (fullcmp_quiet.snapshot)."""
     model_key = fp.census_model_id(census, a.model)
     version, git_sha = bench_engines.engine_version(a.engine, YUNSHU_SRC)
-    census_key = (
-        "yunshu" if Srv._is_yunshu(a.engine) else FULLCMP_CENSUS_KEY.get(a.engine)
-    )
+    census_key = fp.census_key_for(a.engine)
     return dict(
         run_id=environ["TFB_RUN_ID"],
         model=model_key,

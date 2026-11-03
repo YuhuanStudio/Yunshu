@@ -64,6 +64,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_engines  # noqa: E402
 import fullcmp_manifest as fm  # noqa: E402
+import fullcmp_provenance as fp  # noqa: E402
 import fullcmp_quiet  # noqa: E402
 from fullcmp_profile import profile_env  # noqa: E402
 
@@ -1145,6 +1146,18 @@ def main(argv=None) -> int:
     if problems:
         for p in problems:
             print(f"refusing: {p}", file=sys.stderr)
+        return 2
+    # Provenance before anything is printed, checked or submitted: every selected engine must resolve
+    # its version, census release date and binary sha256, and the model its census weight shas.
+    prov = fp.dry_run_problems(
+        [j.engine for j in plan.jobs],
+        fp.load_json(fp.CENSUS_PATH),
+        pin,
+        MODEL_PATH,
+    )
+    if prov:
+        for p in prov:
+            print(f"refusing: provenance: {p}", file=sys.stderr)
         return 2
 
     if a.dry_run or a.self_check:

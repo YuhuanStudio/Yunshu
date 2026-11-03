@@ -237,6 +237,102 @@ def release_date(census: dict, census_key: str, version: str, environ) -> str:
     )
 
 
+# Census key (census.json) of each engine's release date; engines not listed need TFB_RELEASE_DATE.
+# Lives here (not in tfbench.py) so the runner's dry-run gate and tfbench's header read one map.
+FULLCMP_CENSUS_KEY = {
+    "yunshu": "yunshu",
+    "tf-new": "tensorfold",
+    "tf-old": "tensorfold",
+    "tf-native": "tensorfold",
+    "omlx": "omlx",
+    "omlx-latest": "omlx",
+    "splash": "splash",
+    "llamacpp": "llama_cpp",
+    "llamacpp-mtp": "llama_cpp",
+    "mlxlm": "mlx_lm_server",
+    "mlx-serve": "mlx-serve",
+    "kapitsa": "kapitsa",
+    # census-named registry ids (2026-11-03 smoke: "no release date for ? '1.2.1'" after launch)
+    "tf-1.2.1": "tensorfold",
+    "tf-1.1.8": "tensorfold",
+    "splash-latest": "splash",
+    "splash-1.5.0": "splash",
+    "omlx-0.7.3": "omlx",
+    "omlx-0.7.3rc1": "omlx",
+    "mlx-serve-26.11.1": "mlx-serve",
+    "mlx-lm-server": "mlx_lm_server",
+    "kapitsa-0.2.26": "kapitsa",
+    "mlx-vlm-server": "mlx_vlm_server",
+    "llama-cpp-b12061": "llama_cpp",
+}
+
+
+def is_yunshu_engine(engine: str) -> bool:
+    """The rule tfbench's Srv._is_yunshu applies: the Yunshu engine and its registry ids."""
+    import bench_engines
+
+    return engine == "yunshu" or (
+        bench_engines.is_new_engine(engine)
+        and bench_engines.ENGINES[engine].kind == "yunshu"
+    )
+
+
+def census_key_for(engine: str):
+    """The census entry whose release date a cell of this engine reads (tfbench's rule)."""
+    return "yunshu" if is_yunshu_engine(engine) else FULLCMP_CENSUS_KEY.get(engine)
+
+
+def engine_release_date(census: dict, engine: str, version: str, environ) -> str:
+    """release_date(...) for an engine id, through the census key tfbench uses."""
+    return release_date(census, census_key_for(engine), version, environ)
+
+
+def dry_run_problems(engines, census: dict, pin: dict, model_dir: str, environ=None) -> list:
+    """CPU-only provenance gate for the runner's dry-run, self-check and submit paths.
+
+    Per engine id: the version must be known, its release date must resolve from census.json
+    (census_key_for + release_date, with TFB_RELEASE_DATE removed: a cell's job env never carries
+    it), and the launched binary must hash. The model's census entry must list a sha256 for every
+    shard. Returns one line per problem, each naming the engine; an empty list means every cell
+    of these engines can be attributed."""
+    import bench_engines
+
+    environ = dict(os.environ if environ is None else environ)
+    environ.pop("TFB_RELEASE_DATE", None)
+    problems = []
+    # the pinned Yunshu tree and its venv python (the same paths require_yunshu_pin checks)
+    yunshu_src = os.path.join(str(pin.get("worktree") or ""), "python")
+    try:
+        weights_record(model_dir, census, census_model_id(census, model_dir))
+    except ProvenanceError as exc:
+        problems.append(f"model {model_dir}: {exc}")
+    for manifest_id in dict.fromkeys(engines):
+        try:
+            # the harness id a cell runs under (yunshu -> yunshu-main); stubs never reach here
+            engine = bench_engines.tfbench_engine(manifest_id)
+            version, _sha = bench_engines.engine_version(engine, yunshu_src)
+            if not version or version == "unknown":
+                raise ProvenanceError(f"no pinned version for {engine}")
+            engine_release_date(census, engine, version, environ)
+        except ProvenanceError as exc:
+            problems.append(f"{manifest_id}: {exc}")
+            continue
+        except Exception as exc:  # an unknown id or a broken registry entry refuses too
+            problems.append(f"{manifest_id}: version or release date not resolvable: {exc}")
+            continue
+        try:
+            if is_yunshu_engine(engine):
+                binary = pin["python_executable"]
+            else:
+                binary = bench_engines.build_launch(
+                    engine, 1, "/nonexistent-home", environ
+                ).cmd[0]
+            binary_sha256(binary)
+        except Exception as exc:
+            problems.append(f"{manifest_id}: binary sha256 unavailable: {exc}")
+    return problems
+
+
 def telemetry_out(out_path: str, engine: str, telemetry_dir: str) -> str:
     """<telemetry_dir>/<cell dir>/<cell>-rN.telemetry.jsonl: the audit's telemetry_path() when the
     telemetry dir is the results root (the audit reads it beside each cell file). The directory is

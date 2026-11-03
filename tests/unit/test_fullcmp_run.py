@@ -22,6 +22,16 @@ def _pin_io(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _provenance_gate_passes(monkeypatch):
+    """The fake PIN has no real Yunshu tree or binaries, so the census/binary provenance gate would
+    refuse every batch here. The gate itself (real census, refusal naming the engine) is tested in
+    test_fullcmp_release_dates.py."""
+    import fullcmp_provenance as _fp
+
+    monkeypatch.setattr(_fp, "dry_run_problems", lambda *a, **k: [])
+
+
+@pytest.fixture(autouse=True)
 def _never_reach_gpuq(monkeypatch):
     """No test in this module may queue a job or run the real gpuq: any such call fails the test."""
     import fullcmp_run as _run
