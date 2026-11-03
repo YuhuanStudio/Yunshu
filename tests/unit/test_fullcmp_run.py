@@ -138,8 +138,9 @@ def test_plan_labels_split_groups_and_keeps_one_group_per_server_config():
     rows = [row("yunshu", f"B1.c{i}", est=10.0) for i in range(6)]
     rows.append(row("yunshu", "B1.think", est=2.0, thinking="on"))
     plan = run.plan_batch(rows, "B1", PIN)
-    # thinking=on has no tfbench switch yet: listed as skipped, never silently dropped
-    assert any(r["id"] == "B1.think" and "thinking" in why for r, why in plan.skipped)
+    # thinking=on is a runnable tfbench cell now (the family path): planned, never skipped
+    assert "B1.think" in {r["id"] for r in plan.runnable}
+    assert not any(r["id"] == "B1.think" for r, _why in plan.skipped)
     rep0 = [j for j in plan.jobs if j.rep == 0]
     labels = [j.label for j in rep0]
     assert "fullcmp-B1-yunshu-q27-4bit-th-off-p1-r0" in labels
@@ -182,6 +183,17 @@ def test_rotate_is_left_rotation():
 # --- skip unsupported and unmapped rows -----------------------------------
 
 
+def test_harness_stub_engine_row_is_skipped_not_planned():
+    """lmstudio is 'unverified' in the manifest but a harness stub (bench_engines.UNSUPPORTED_ENGINES):
+    planning used to call tfbench_engine on it and crash the whole dry run with a KeyError."""
+    rows = [row("yunshu", "B1.ok"), row("lmstudio", "B1.lms")]
+    plan = run.plan_batch(rows, "B1", PIN)
+    assert [r["id"] for r in plan.runnable] == ["B1.ok"]
+    reasons = {r["id"]: why for r, why in plan.skipped}
+    assert reasons["B1.lms"].startswith("unsupported (harness:")
+    assert {c for j in plan.jobs for c in j.cell_ids} == {"B1.ok"}
+
+
 def test_unsupported_rows_are_skipped_and_listed():
     rows = [
         row("ollama", "B1.ollama", status="unsupported", reason="n/a: no checkpoint"),
@@ -190,12 +202,12 @@ def test_unsupported_rows_are_skipped_and_listed():
         row("yunshu", "B1.json", kind="json-schema"),
     ]
     plan = run.plan_batch(rows, "B1", PIN)
-    assert [r["id"] for r in plan.runnable] == ["B1.ok"]
+    # image and json-schema rows are runnable tfbench cells now; only the unsupported row is skipped
+    assert [r["id"] for r in plan.runnable] == ["B1.ok", "B1.img", "B1.json"]
     reasons = {r["id"]: why for r, why in plan.skipped}
     assert "unsupported" in reasons["B1.ollama"]
-    assert "image" in reasons["B1.img"]
-    assert "json-schema" in reasons["B1.json"]
-    assert {j.cell_ids[0] for j in plan.jobs} == {"B1.ok"}
+    assert set(reasons) == {"B1.ollama"}
+    assert {c for j in plan.jobs for c in j.cell_ids} == {"B1.ok", "B1.img", "B1.json"}
 
 
 def test_other_batches_are_ignored():

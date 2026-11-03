@@ -606,6 +606,11 @@ def plan_batch(
         if r.get("status") != "unverified":
             skipped.append((r, f"status {r.get('status')}: {r.get('reason')}"))
             continue
+        stub = bench_engines.stub_reason(r["engine"])
+        if stub is not None:
+            # a harness stub (lmstudio: no isolated-HOME start yet): listed as skipped, never planned
+            skipped.append((r, stub))
+            continue
         part, _extra, reason = harness_part(r)
         if part is None:
             skipped.append((r, reason))
