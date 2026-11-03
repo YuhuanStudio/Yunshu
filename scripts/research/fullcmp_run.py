@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -90,6 +91,7 @@ CONC_TRIALS = (
 PRIORITY = "1"
 RUN_ID = "fullcmp-1103"
 ACTIVE_STATES = ("pending", "running", "paused")
+JOB_ID_RE = re.compile(r"\d{4}-\d{6}-\d{2}-\S+")  # gpuq job id: <run>-<seq>-<label>
 PREFLIGHT_TIMEOUT_MIN = "10"
 
 
@@ -451,7 +453,9 @@ def parse_status(text: str) -> list[tuple[str, str]]:
             continue
         state = parts[0]
         if state in ACTIVE_STATES or state.startswith("wait-"):
-            out.append((state, parts[-1]))
+            ids = [p for p in parts if JOB_ID_RE.fullmatch(p)]
+            if ids:
+                out.append((state, ids[0]))
     return out
 
 

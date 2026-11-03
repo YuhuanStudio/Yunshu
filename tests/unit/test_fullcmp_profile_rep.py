@@ -177,3 +177,13 @@ def test_own_jobs_are_not_foreign_when_gpuq_prints_the_job_id():
         "pending   device=m5  1103-113700-00-someone-else-job\n"
     )
     assert fr.foreign_jobs(text) == [("pending", "1103-113700-00-someone-else-job")]
+
+
+def test_status_job_id_is_found_when_the_line_has_trailing_text():
+    # gpuq status appends "(quiet window satisfied)": the id is not the last column.
+    text = (
+        "running  device=m5  54s  p1  1103-114230-00-observe-ab-code-8192-p0  "
+        "peak=32.5G/24G  held=21/300s (quiet window satisfied)\n"
+    )
+    assert fr.parse_status(text) == [("running", "1103-114230-00-observe-ab-code-8192-p0")]
+    assert fr.foreign_jobs(text) == [("running", "1103-114230-00-observe-ab-code-8192-p0")]
