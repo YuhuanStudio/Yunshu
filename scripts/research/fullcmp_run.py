@@ -1128,6 +1128,16 @@ def main(argv=None) -> int:
                 file=sys.stderr,
             )
             return 2
+    # Every per-engine table, resolved for every selected engine (fullcmp_engine_tables): a miss
+    # refuses here, before any job is written, so dry-run, self-check and submission all stop.
+    import fullcmp_engine_tables  # lazy: that module imports this driver's siblings
+
+    misses = fullcmp_engine_tables.check_all(
+        engines or sorted({r.get("engine") for r in rows if r.get("batch") == a.batch})
+    )
+    if misses:
+        print(fullcmp_engine_tables.format_misses(misses), file=sys.stderr)
+        return 2
     plan = plan_batch(
         rows, a.batch, pin, engines=engines, rep=a.rep, profile_rep=a.profile_rep
     )

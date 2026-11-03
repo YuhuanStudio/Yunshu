@@ -73,6 +73,20 @@ PHASE_NAMES = {
 # printed only when the mode is wired for the request; medium = printed per round or per run, so it
 # also needs a count; low = a loaded-state line that is NOT engagement by itself.
 EXPECTED_MODE_PROBE = {
+    # TensorFold 1.2.1 serving line, printed at startup when --drafter is given (bench_engines.detect_mode
+    # and tfbench.engaged_spec_mode_line read the same 'drafts: DFlash2' text; real line in
+    # fullcmp_engaged_evidence.json, the serving format of the 1.2.1 binary).
+    "tf-1.2.1": {
+        "expected_mode": "dflash",
+        "probe": "tensorfold-native serve --drafter DFLASH2_DIR: serving line '[tensorfold] serving ... drafts: DFlash2 (...)'",
+        "log_patterns": [
+            {
+                "regex": r"drafts: DFlash2\b",
+                "confidence": "high",
+                "note": "serving line printed at startup when the DFlash2 drafter is attached",
+            },
+        ],
+    },
     # 2026-11-03 wiring smoke: expected modes come from bench_engines.ENGINES; the regexes are
     # filled from the real smoke log (see /Volumes/P5Plus/yunshu-build/competitors/compsync/
     # fullcmp-1103/wire_smoke.md). mlx-lm has no speculative path: its engaged mode is stock AR.
