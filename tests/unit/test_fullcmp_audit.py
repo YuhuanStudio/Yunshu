@@ -1159,6 +1159,30 @@ def test_quiet_machine_uses_the_limit_recorded_in_the_snapshot():
     assert fa.check_quiet_machine(bad).violations
 
 
+def test_quiet_machine_host_load_is_not_a_violation_for_a_stub_engine_run():
+    # Regression (mixed e2e flake, 2026-11-03): the e2e tests run beside other pytest/agent
+    # processes, so the real host snapshot showed a 438% foreign holder ("bfs") and the stub run
+    # failed. A stub_engine run has no measurement to protect: load is not checked there.
+    hog = [{"pid": 66302, "name": "bfs", "pct": 438.17}]
+    run = _fake_run([_qcell("c1", 0, quiet_record(1.0), quiet_record(492.19, hog))])
+    run.manifest = {"stub_engine": True}
+    assert fa.check_quiet_machine(run).violations == []
+
+
+def test_quiet_machine_stub_run_still_fails_closed_without_a_snapshot():
+    run = _fake_run([_qcell("c1", 0, None, quiet_record(0.0))])
+    run.manifest = {"stub_engine": True}
+    assert any("no quiet_pre" in v for v in fa.check_quiet_machine(run).violations)
+
+
+def test_quiet_machine_real_run_still_flags_the_same_host_load():
+    hog = [{"pid": 66302, "name": "bfs", "pct": 438.17}]
+    run = _fake_run([_qcell("c1", 0, quiet_record(1.0), quiet_record(492.19, hog))])
+    run.manifest = {}
+    res = fa.check_quiet_machine(run)
+    assert res.violations and "bfs" in res.violations[0]
+
+
 def test_quiet_machine_missing_snapshot_fails_closed():
     run = _fake_run([_qcell("c1", 0, None, quiet_record(0.0))])
     res = fa.check_quiet_machine(run)

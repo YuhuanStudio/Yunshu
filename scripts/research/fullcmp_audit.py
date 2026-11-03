@@ -1008,6 +1008,11 @@ def check_quiet_machine(run: Run) -> GuardResult:
             if not is_num(total):
                 res.fail(cell, f"r{cf.rep}: no {key} snapshot")
                 continue
+            if run.manifest.get("stub_engine") is True:
+                # stub_engine (test only): the engine is a stub, so the host's CPU load says
+                # nothing about a measurement; the e2e tests run beside other pytest and agent
+                # processes. The snapshot must still exist (fail closed above).
+                continue
             single, limit = quiet_limits_of(rec)
             noise = {"WindowServer", "kernel_task", "mds_stores"}
             violators = [
