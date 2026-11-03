@@ -473,24 +473,62 @@ def cell_env(
     return env + list(extra)
 
 
-def prompt_corpus_problems(rows: list[dict], work_dir: str = TFB_WORK_DIR) -> list[str]:
-    """Fail closed before any job is written: the TFB_WORK corpus dir must exist and hold the prompt
-    file of every (kind, ctx) the given cells read (family kinds read the prose file, as tfbench does).
-    An empty list means every cell's prompt file is present."""
+PROMPT_VARIANT_DIR = Path("/Volumes/Micron/yunshu-fullcmp/smoke-prompts")  # smoke variants (N > 0)
+PROMPT_SHA_TABLE = Path(
+    "/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103/prompt_files.sha256.txt"
+)
+
+
+def _sha_table(path: Path = PROMPT_SHA_TABLE) -> dict[str, str]:
+    """name -> sha256 from the prompt table ('<sha>  <name>' lines, sha256sum format)."""
+    table: dict[str, str] = {}
+    if path.is_file():
+        for line in path.read_text().splitlines():
+            if line.strip():
+                sha, name = line.split(maxsplit=1)
+                table[name.strip()] = sha
+    return table
+
+
+def prompt_corpus_problems(
+    rows: list[dict],
+    work_dir: str = TFB_WORK_DIR,
+    variant_dir: Path = PROMPT_VARIANT_DIR,
+    sha_table: dict[str, str] | None = None,
+) -> list[str]:
+    """Fail closed before any job is written. Every (kind, ctx, variant) the given cells read must have
+    its prompt file (variant 0: the TFB_WORK corpus; variant N: the smoke variant dir) and a sha256 row in
+    the prompt table that matches the file. Family kinds read the prose file, as tfbench does.
+    Each problem names the (kind, ctx, variant). An empty list means every cell's prompt is present."""
     prompts = Path(work_dir) / "prompts"
     if not prompts.is_dir():
         return [f"TFB_WORK prompt dir missing: {prompts}"]
-    need = set()
+    table = _sha_table() if sha_table is None else sha_table
+    need: dict[str, tuple[str, int, int]] = {}
     for r in rows:
         if "ctx_tokens" not in r or not r.get("prompt_kind"):
             continue  # behaviour / agent rows carry no decode prompt
         base = "prose" if r["prompt_kind"] in fm.FAMILY_KINDS else r["prompt_kind"]
-        need.add(f"{base}-{int(r['ctx_tokens'])}.txt")
-    return [
-        f"missing prompt file {prompts / name}"
-        for name in sorted(need)
-        if not (prompts / name).is_file()
-    ]
+        n = prompt_variant(r)
+        name = f"{base}-{int(r['ctx_tokens'])}" + (f"-v{n}" if n else "") + ".txt"
+        need.setdefault(name, (base, int(r["ctx_tokens"]), n))
+    problems = []
+    for name in sorted(need):
+        kind, ctx, n = need[name]
+        where = "" if not n else f" (kind={kind} ctx={ctx} variant={n})"
+        path = (prompts if n == 0 else variant_dir) / name
+        if not path.is_file():
+            problems.append(f"missing prompt file {path}{where}")
+            continue
+        if name not in table:
+            problems.append(f"no sha256 row for {name} in {PROMPT_SHA_TABLE}{where}")
+            continue
+        import hashlib  # noqa: PLC0415
+
+        got = hashlib.sha256(path.read_bytes()).hexdigest()
+        if got != table[name]:
+            problems.append(f"sha256 mismatch for {path}: table {table[name]} file {got}{where}")
+    return problems
 
 
 def raw_path(engine: str, cell_id: str, rep: int) -> Path:

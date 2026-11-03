@@ -39,7 +39,7 @@ DEFAULT_TOKENIZER = Path(
     "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp/tokenizer.json"
 )
 KINDS = ("code", "prose")
-CTXS = ("1024", "32768")
+CTXS = ("1024", "8192", "32768")  # 8192: the smoke-mixed 8K long request (code is what it uses)
 VARIANTS = (1,)
 TOL = 0.01
 BASE_SEED = 20261103
@@ -114,7 +114,9 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def run(src: Path, out: Path, tokenizer: Path | None) -> dict:
+def run(
+    src: Path, out: Path, tokenizer: Path | None, ctxs=CTXS, kinds=KINDS
+) -> dict:
     tok = None
     if tokenizer is not None and tokenizer.exists():
         from tokenizers import Tokenizer  # noqa: PLC0415 (optional, CPU)
@@ -133,8 +135,8 @@ def run(src: Path, out: Path, tokenizer: Path | None) -> dict:
         mode = "chars"
     out.mkdir(parents=True, exist_ok=True)
     files = []
-    for kind in KINDS:
-        for ctx in CTXS:
+    for kind in kinds:
+        for ctx in ctxs:
             src_path = src / f"{kind}-{ctx}.txt"
             src_text = src_path.read_text()
             for variant in VARIANTS:
@@ -162,11 +164,18 @@ def run(src: Path, out: Path, tokenizer: Path | None) -> dict:
                         "delta_pct": round(100 * delta, 4),
                     }
                 )
+    # a partial run (--ctx / --kind) merges into the existing manifest: other files keep their entries
+    old = {}
+    mpath = out / "manifest.json"
+    if mpath.exists():
+        old = {f["file"]: f for f in json.loads(mpath.read_text()).get("files", [])}
+    for f in files:
+        old[f["file"]] = f
     manifest = {
         "check_mode": mode,
         "tokenizer": str(tokenizer) if mode == "tokens" else None,
         "tolerance_pct": 100 * TOL,
-        "files": files,
+        "files": [old[k] for k in sorted(old)],
     }
     (out / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n"
@@ -179,8 +188,16 @@ def main(argv=None) -> int:
     ap.add_argument("--src", type=Path, default=DEFAULT_SRC)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
     ap.add_argument("--tokenizer", type=Path, default=DEFAULT_TOKENIZER)
+    ap.add_argument("--ctx", default=",".join(CTXS), help="comma list of ctx to write")
+    ap.add_argument("--kind", default=",".join(KINDS), help="comma list of kinds to write")
     args = ap.parse_args(argv)
-    m = run(args.src, args.out, args.tokenizer)
+    m = run(
+        args.src,
+        args.out,
+        args.tokenizer,
+        ctxs=tuple(args.ctx.split(",")),
+        kinds=tuple(args.kind.split(",")),
+    )
     sys.stdout.write(
         f"wrote {len(m['files'])} variant files to {args.out} (check: {m['check_mode']})\n"
     )

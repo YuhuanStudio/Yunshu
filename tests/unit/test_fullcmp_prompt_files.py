@@ -1,73 +1,81 @@
-"""Every (kind, ctx) the fullcmp matrix runs has the prompt file tfbench reads.
+"""Every (kind, ctx, variant) the fullcmp driver can run has its prompt file and a matching sha256 row.
 
-tfbench loads WORK/prompts/<base>-<ctx_tokens>.txt, where WORK is TFB_WORK. Family kinds
-(tool-chat, cjk, json-schema) build on the prose corpus file (tfbench FAMILY_KINDS_LOCAL), so their
-base is prose. The real manifest (when present) and the generated matrix rows are both checked.
+The check is the runner's own gate, fullcmp_run.prompt_corpus_problems, which the driver calls before any
+job is written. Variant 0 reads TFB_WORK/prompts (family kinds read the prose file); variant N reads the
+smoke variant dir and needs a row in the prompt sha table. The real manifest (when present) and every
+generated matrix (real, smoke, smoke-conc) are all checked.
 """
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
-import os
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts" / "research"))
 SPEC = importlib.util.spec_from_file_location(
-    "fullcmp_manifest", ROOT / "scripts/research/fullcmp_manifest.py"
+    "fullcmp_run", ROOT / "scripts" / "research" / "fullcmp_run.py"
 )
-fm = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(fm)
+run = importlib.util.module_from_spec(SPEC)
+sys.modules["fullcmp_run"] = run
+SPEC.loader.exec_module(run)
+fm = run.fm
 
 REAL_MANIFEST = Path(
-    os.environ.get(
-        "FULLCMP_MANIFEST",
-        "/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103/manifest.jsonl",
-    )
+    "/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103/manifest.jsonl"
 )
-PROMPT_DIR = (
-    Path(os.environ.get("TFB_WORK", "/Volumes/P5Plus/yunshu-build/snapshot014-b2")) / "prompts"
-)
+CORPUS_OK = Path(run.TFB_WORK_DIR, "prompts").is_dir()
+VARIANTS_OK = run.PROMPT_VARIANT_DIR.is_dir()
 
 
-def _base_kind(kind: str) -> str:
-    return "prose" if kind in fm.FAMILY_KINDS else kind
-
-
-def _pairs_from_rows(rows):
-    pairs = set()
-    for r in rows:
-        if "ctx_tokens" not in r or not r.get("prompt_kind"):
-            continue  # behaviour / agent rows carry no decode prompt
-        pairs.add((r["prompt_kind"], int(r["ctx_tokens"])))
-    return pairs
-
-
-def _missing(pairs):
-    return sorted(
-        f"{_base_kind(k)}-{ctx}.txt"
-        for k, ctx in pairs
-        if not (PROMPT_DIR / f"{_base_kind(k)}-{ctx}.txt").is_file()
-    )
+def _real_rows():
+    return [json.loads(x) for x in REAL_MANIFEST.read_text().splitlines() if x.strip()]
 
 
 @pytest.mark.skipif(not REAL_MANIFEST.is_file(), reason="real fullcmp manifest not present")
-def test_real_manifest_every_kind_ctx_has_a_prompt_file():
-    rows = [json.loads(line) for line in REAL_MANIFEST.read_text().splitlines() if line.strip()]
-    pairs = _pairs_from_rows(rows)
-    assert pairs, "real manifest has no decode prompt pairs"
-    if not PROMPT_DIR.is_dir():
-        pytest.skip(f"prompt dir {PROMPT_DIR} not present")
-    missing = _missing(pairs)
-    assert not missing, f"real-manifest prompt files missing in {PROMPT_DIR}: {missing}"
+def test_real_manifest_prompt_files_and_sha_rows_present():
+    if not CORPUS_OK:
+        pytest.skip("corpus dir not present")
+    problems = run.prompt_corpus_problems(_real_rows())
+    assert not problems, "\n".join(problems)
 
 
-def test_generated_matrix_every_kind_ctx_has_a_prompt_file():
-    if not PROMPT_DIR.is_dir():
-        pytest.skip(f"prompt dir {PROMPT_DIR} not present")
-    pairs = _pairs_from_rows(fm.build_rows()) | _pairs_from_rows(fm.build_smoke_rows())
-    assert pairs
-    missing = _missing(pairs)
-    assert not missing, f"generated-matrix prompt files missing in {PROMPT_DIR}: {missing}"
+@pytest.mark.skipif(not (CORPUS_OK and VARIANTS_OK), reason="prompt dirs not present")
+def test_generated_matrices_prompt_files_and_sha_rows_present():
+    rows = [*fm.build_rows()[0], *fm.build_smoke_rows(), *fm.build_smoke_conc_rows()]
+    assert any(r.get("prompt_variant") for r in rows), "no variant rows generated"
+    problems = run.prompt_corpus_problems(rows)
+    assert not problems, "\n".join(problems)
+
+
+def test_missing_variant_file_or_sha_row_is_refused_and_named(tmp_path):
+    """Negative case: a variant row with no file, and one whose sha row is absent, are both refused."""
+    corpus = tmp_path / "corpus"
+    (corpus / "prompts").mkdir(parents=True)
+    (corpus / "prompts" / "code-8192.txt").write_text("corpus")
+    variants = tmp_path / "variants"
+    variants.mkdir()
+    (variants / "code-1024-v1.txt").write_text("v1")
+    table = {"code-1024-v1.txt": hashlib.sha256(b"v1").hexdigest()}
+    rows = [
+        {"prompt_kind": "code", "ctx_tokens": 8192, "prompt_variant": 1, "id": "m"},
+        {"prompt_kind": "code", "ctx_tokens": 1024, "prompt_variant": 1, "id": "n"},
+    ]
+    # code-8192-v1.txt absent in variant dir -> refused, named
+    problems = run.prompt_corpus_problems(
+        rows, work_dir=str(corpus), variant_dir=variants, sha_table=table
+    )
+    assert any("kind=code ctx=8192 variant=1" in p for p in problems)
+    # the 1K variant file exists and matches its table row -> no problem for it
+    assert not any("ctx=1024" in p for p in problems)
+    # file present but no table row -> refused, named
+    (variants / "code-8192-v1.txt").write_text("x")
+    problems = run.prompt_corpus_problems(
+        rows[:1], work_dir=str(corpus), variant_dir=variants, sha_table={}
+    )
+    assert any("no sha256 row" in p and "variant=1" in p for p in problems)
