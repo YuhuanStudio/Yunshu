@@ -360,7 +360,13 @@ def _merge_segments(raw):
             continue
         out.append(dict(seg, bad=f"unknown oMLX finish kind {fin!r} for uid {uid}"))
     for uid, parts in pending.items():
-        out.append(dict(parts[-1], bad=f"uid {uid}: {len(parts)} non-terminal segment(s) and no terminal finish"))
+        # no terminal MTP line: the tokens these segments cover are the request's drafted part; the rest of its
+        # tokens were decoded without an MTP stats line (the Chat completion line is the completion record)
+        out.append(dict(parts[-1], ct=sum(p.get("ct") or 0 for p in parts),
+                        value=sum(p.get("value") or 0 for p in parts if p.get("finish") != CALIBRATION_FINISH),
+                        calibration_tokens=sum(p.get("ct") or 0 for p in parts
+                                               if p.get("finish") == CALIBRATION_FINISH),
+                        segments=len(parts), partial=True))
     return out
 
 
@@ -412,18 +418,29 @@ def _request_line_candidates(item, log, ready_offset, skip, mtp):
         chats.append({"line": _line_at(log, hit.start(), hit.end()),
                       "prompt": int(hit.group("prompt").replace(",", "")),
                       "ct": int(hit.group("tokens").replace(",", ""))})
-    mtp_ok = [m for m in mtp if not m.get("bad")]
-    if len(chats) != len(mtp):
-        bad = f"{len(chats)} Chat completion lines and {len(mtp)} MTP request groups"
-        return [{"line": chats[i]["line"] if i < len(chats) else "", "value": 0.0, "prompt": None, "ct": None,
-                 "bad": bad, "calibration_tokens": 0, "calibration_share": 0.0} for i in range(max(1, len(chats)))][skip:]
+    unknown = [m for m in mtp if m.get("bad") and "unknown" in str(m.get("bad"))]
+    if not chats:
+        return [{"line": "", "value": 0.0, "prompt": None, "ct": None,
+                 "bad": "no Chat completion line after readiness", "calibration_tokens": 0,
+                 "calibration_share": 0.0}][skip:]
     out = []
-    for chat, m in zip(chats, mtp):
+    for i, chat in enumerate(chats):
+        m = mtp[i] if i < len(mtp) else None
+        if unknown and m is not None and m.get("bad"):
+            out.append({"line": chat["line"], "value": 0.0, "prompt": chat["prompt"], "ct": chat["ct"],
+                        "bad": m["bad"], "calibration_tokens": 0, "calibration_share": 0.0})
+            continue
+        if m is None:
+            # no MTP segment for this request: decoded without drafting (100% of its tokens)
+            out.append({"line": chat["line"], "mtp_line": None, "value": 0.0, "prompt": chat["prompt"],
+                        "ct": chat["ct"], "ct_merged": 0, "calibration_tokens": 0, "calibration_share": 1.0})
+            continue
         out.append({"line": chat["line"], "mtp_line": m.get("line"), "value": m["value"],
                     "prompt": chat["prompt"], "ct": chat["ct"],
-                    "ct_merged": m.get("ct"), "bad": m.get("bad"),
+                    "ct_merged": m.get("ct"), "bad": None,
                     "calibration_tokens": m.get("calibration_tokens", 0),
-                    "calibration_share": (m.get("calibration_tokens", 0) / m["ct"]) if m.get("ct") else 0.0})
+                    "calibration_share": (m.get("calibration_tokens", 0) / m["ct"]) if m.get("ct") else 0.0,
+                    "mtp_partial": bool(m.get("partial"))})
     return out[skip:]
 
 
@@ -743,13 +760,16 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
     if calibrated:
         pct = round(100.0 * sum(x.get("calibration_share", 0.0) for x in matched) / len(matched))
         label = f"{mode} (partial: {pct}% calibration)"
-    if partial:
-        # the merged MTP sums miss tokens for these requests: the acceptance is a lower bound on the log, not a
-        # verdict on the request; surfaced in the table note, not a violation (the uid count still fails closed)
-        label = (label or mode) + (
-            f" [partial log coverage: {len(partial)} request(s); oMLX logs MTP stats for only the merged tokens of"
-            " each request; the rest were decoded without an MTP stats line (MTP inactive for multi-row batches:"
-            " 'MTP inactive for 3-row batch', batch-standard-calibration segments)]")
+    if matched and any(x.get("mtp_line") is None or x.get("mtp_partial") or x.get("calibrated")
+                       or (x.get("ct_gap") or 0) > 0 for x in matched):
+        total_ct = sum(x.get("ct_expected") or 0 for x in matched) or 1
+        drafted_ct = sum((x.get("ct_merged") or 0) for x in matched if (x.get("value") or 0) > 0
+                         and not x.get("calibrated"))
+        x_pct = round(100.0 * (1 - min(drafted_ct, total_ct) / total_ct))
+        if drafted_ct == 0:
+            label = "ar (oMLX did not draft under concurrency)"
+        else:
+            label = f"{mode} (oMLX drafts at <=2 active rows; {x_pct}% of tokens decoded without drafting)"
     return {"engaged_mode": mode, "matched_line": first_line, "evidence_kind": "acceptance_regex",
             "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched),
                                          "partial_coverage": len(partial), "evidence_lines": evidence_lines},

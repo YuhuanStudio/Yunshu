@@ -45,8 +45,8 @@ def test_real_omlx_rc1_mixed_partial_coverage_label_explains_the_gap():
     ev, problems = fe.concurrent_check(fe.load_table(), "omlx-0.7.3rc1", "dflash", log, conc, 0)
     assert problems == [], problems
     assert ev["engaged_mode"] == "dflash"
-    assert "partial log coverage" in ev["label"]
-    assert "MTP inactive" in ev["label"]
+    assert "oMLX drafts at <=2 active rows" in ev["label"]
+    assert "% of tokens decoded without drafting" in ev["label"]
 
 
 def test_real_omlx_rc1_mixed_wrong_record_pt_fails_closed():
@@ -67,11 +67,14 @@ def test_omlx_unknown_finish_kind_fails_closed():
     assert merged[0].get("bad") and "weird-new-kind" in merged[0]["bad"]
 
 
-def test_omlx_uid_without_terminal_segment_is_unmatched():
+def test_omlx_uid_without_terminal_segment_is_a_partial_group_not_a_failure():
+    """A uid may end without a terminal MTP line (its tokens were decoded while MTP was inactive): its
+    segments are a partial group; the Chat completion line is the completion record."""
     raw = [{"uid": "4", "finish": "late-join-handoff", "ct": 18, "value": 13.0},
            {"uid": "4", "finish": "batch-standard-calibration", "ct": 9, "value": 2.0}]
     merged = fe._merge_segments(raw)
-    assert len(merged) == 1 and merged[0].get("bad") and "no terminal finish" in merged[0]["bad"]
+    assert len(merged) == 1 and merged[0].get("partial") and not merged[0].get("bad")
+    assert merged[0]["ct"] == 27 and merged[0]["calibration_tokens"] == 9
 
 
 def test_omlx_all_non_terminal_kinds_merge_into_the_terminal_request_regardless_of_interleaving():
