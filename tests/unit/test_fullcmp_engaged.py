@@ -174,8 +174,16 @@ def test_merged_table_positive_regex_matches_a_real_splash_log():
     table = fe.load_table()
     m = table["engines"]["splash-1.5.0"]["modes"]["dflash"]
     text = Path(logs[0]).read_text(errors="replace")
-    res = fe.evaluate("splash-1.5.0", "dflash", text, [], table, ready_offset=0)
-    assert res["engaged_mode"] == "dflash", m
+    # the real splash log on disk holds only the two readiness pings (prompt 15): they never count
+    # for a measured row, so a measured row with that prompt has no done line of its own
+    done = [int(x) for x in re.findall(r"Done · input (\d+) ·", text)]
+    assert len(done) == 2, "the real splash log holds the readiness pings only"
+    rows = [{"pt": 15, "ct": 10}]
+    res = fe.evaluate("splash-1.5.0", "dflash", text, rows, table, ready_offset=0)
+    assert res["engaged_mode"] == "unverified"
+    assert "row 0" in res["stats"]["per_row_problem"], m
+    # no measured rows: nothing to correlate, so no per-request evidence
+    assert fe.evaluate("splash-1.5.0", "dflash", text, [], table, ready_offset=0)["engaged_mode"] == "unverified"
 
 
 def test_srv_refuses_only_at_the_final_check(monkeypatch):
@@ -272,3 +280,75 @@ def test_every_entry_regex_runs_on_the_real_logs_and_prints_the_line():
                 print(f"{engine}/{mode} {ev['kind']}: {matched or 'NO MATCH'}")
                 if matched is not None:
                     assert ev["real_example"], f"{engine}/{mode}: real log matches but real_example is null"
+
+
+# ---- per measured request correlation (readiness pings never count for a measured row)
+TF_LINE = "[tensorfold] done chatcmpl-{i} prompt={p} cached=0 thinking=False tokens=10 finish=stop rounds=1 accepted={a}/15 ttft=0.03\n"
+
+
+def _tf_table():
+    return {
+        "_meta": {},
+        "engines": {
+            "tf": {
+                "modes": {
+                    "dflash": {
+                        "evidence": [
+                            _ev(
+                                "acceptance_regex",
+                                r"\[tensorfold\] done chatcmpl-\S+ prompt=(?P<prompt>\d+) .*? rounds=\d+ accepted=(?P<accepted>\d+)/\d+",
+                                per_request=True,
+                            )
+                            | {"group": "accepted", "min": 0}
+                        ],
+                        "fallback": [],
+                    }
+                }
+            }
+        },
+    }
+
+
+def _log(*lines):
+    return "".join(lines)
+
+
+def test_readiness_ping_drafting_but_measured_request_not_drafting_fails():
+    """Ping (prompt 15) accepted>0, the measured request (prompt 1024) accepted=0 -> unverified."""
+    log = _log(
+        TF_LINE.format(i="a", p=15, a=9),  # readiness ping
+        TF_LINE.format(i="b", p=15, a=9),  # readiness ping
+        TF_LINE.format(i="c", p=1024, a=0),  # measured: AR after warm-up
+    )
+    rows = [{"pt": 1024, "ct": 10}]
+    res = fe.evaluate("tf", "dflash", log, rows, _tf_table(), ready_offset=0)
+    assert res["engaged_mode"] == "unverified"
+    assert "done line value" in res["stats"]["per_row_problem"]
+
+
+def test_correct_per_request_lines_pass_and_report_each_matched_line():
+    log = _log(
+        TF_LINE.format(i="a", p=15, a=9),
+        TF_LINE.format(i="b", p=15, a=9),
+        TF_LINE.format(i="c", p=1024, a=5),
+        TF_LINE.format(i="d", p=1024, a=3),
+    )
+    rows = [{"pt": 1024, "ct": 10}, {"pt": 1024, "ct": 10}]
+    res = fe.evaluate("tf", "dflash", log, rows, _tf_table(), ready_offset=0)
+    assert res["engaged_mode"] == "dflash"
+    assert [r["row"] for r in res["stats"]["per_row"]] == [0, 1]
+    assert "chatcmpl-c" in res["stats"]["per_row"][0]["line"]
+    assert "chatcmpl-d" in res["stats"]["per_row"][1]["line"]
+
+
+def test_missing_done_line_for_a_measured_request_fails():
+    """The warm request has no done line (the server never logged it): unverified."""
+    log = _log(
+        TF_LINE.format(i="a", p=15, a=9),
+        TF_LINE.format(i="b", p=15, a=9),
+        TF_LINE.format(i="c", p=1024, a=5),  # cold
+    )
+    rows = [{"pt": 1024, "ct": 10}, {"pt": 1024, "ct": 10}]  # cold + warm
+    res = fe.evaluate("tf", "dflash", log, rows, _tf_table(), ready_offset=0)
+    assert res["engaged_mode"] == "unverified"
+    assert "row 1" in res["stats"]["per_row_problem"]

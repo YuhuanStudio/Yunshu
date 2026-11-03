@@ -34,6 +34,9 @@ AR_MODES = frozenset({"ar", "off"})
 KINDS = frozenset({"log_regex", "metrics", "response_field", "acceptance_stat", "acceptance_regex"})
 REQUIRED = ("kind", "pattern_or_path", "source_ref", "real_example", "negative_example", "per_request")
 UNVERIFIED = "unverified"
+# tfbench main() sends this many readiness requests (short "Say hi") before the measured parts; their
+# done lines are the first lines after the ready offset and never evidence for a measured request.
+READINESS_REQUESTS = 2
 _DOTTED = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 
 
@@ -187,23 +190,17 @@ def evaluate(engine, mode, log, rows, table, probe_text=None, ready_offset=None)
             if positives:
                 hits.append((f"{pat} > 0 in {positives} request(s)", "acceptance_stat"))
         elif kind == "acceptance_regex":
-            # each matching line carries a numeric group (accepted tokens, tokens per cycle);
-            # a line is a hit when that value is above min (drafting accepted something)
-            rx, group, minimum = re.compile(pat), ev.get("group"), float(ev.get("min"))
-            count = 0
-            for hit in rx.finditer(log):
-                try:
-                    value = float(hit.group(group))
-                except (TypeError, ValueError):
-                    continue
-                if value > minimum:
-                    count += 1
-                    src = "slice"
-                    if ready_offset is not None and hit.start() < ready_offset:
-                        src = "startup_log"
-                    hits.append((_line_at(log, hit.start(), hit.end()), src))
-                    break
-            stats[f"{ev.get('group')}_matches"] = count
+            # Per MEASURED request: every row of the cell needs its own done line, after the readiness
+            # requests, with the same prompt count (named group 'prompt' when the line has one,
+            # otherwise the k-th row takes the k-th line) and a value above min. A readiness ping
+            # that drafted, or a missing done line, never counts for a measured row.
+            per_row, why = _correlate(ev, log, rows, ready_offset)
+            stats["per_row_matched"] = len(per_row)
+            stats["per_row"] = per_row
+            if why is None and rows:
+                hits.append((per_row[-1]["line"], "slice"))
+            elif why is not None:
+                stats["per_row_problem"] = why
         for line, src in hits:
             if src == "startup_log":
                 if ev.get("startup_sufficient"):
@@ -221,6 +218,54 @@ def evaluate(engine, mode, log, rows, table, probe_text=None, ready_offset=None)
         line, kind, src = loaded[0]
         return result(UNVERIFIED, line, "startup_only", src)
     return result(UNVERIFIED, None, None, None)
+
+
+def _correlate(ev, log, rows, ready_offset):
+    """(per-row matches, None) when every measured row has its own positive done line, else
+    ([], reason)."""
+    rx, group, minimum = re.compile(str(ev["pattern_or_path"])), ev.get("group"), float(ev.get("min"))
+    start = ready_offset or 0
+    cands = []
+    for hit in rx.finditer(log, start):
+        try:
+            value = float(hit.group(group))
+        except (TypeError, ValueError):
+            continue
+        prompt = None
+        if "prompt" in rx.groupindex and hit.group("prompt") is not None:
+            prompt = int(hit.group("prompt"))
+        cands.append({"line": _line_at(log, hit.start(), hit.end()), "value": value, "prompt": prompt})
+    cands = cands[READINESS_REQUESTS:]  # the readiness pings take the first done lines
+    measured = [r for r in rows if isinstance(r.get("pt"), int)]
+    if not measured or len(measured) != len(rows):
+        return [], "measured rows without a prompt count"
+    used, per_row = set(), []
+    for k, row in enumerate(measured):
+        found = None
+        for j, c in enumerate(cands):
+            if j in used:
+                continue
+            if c["prompt"] is not None and c["prompt"] != row["pt"]:
+                continue
+            if c["prompt"] is None and j != _next_free(used):
+                continue
+            found = j
+            break
+        if found is None:
+            return per_row, f"row {k} (prompt {row['pt']}): no done line"
+        used.add(found)
+        c = cands[found]
+        if not c["value"] > minimum:
+            return per_row, f"row {k} (prompt {row['pt']}): done line value {c['value']} not above {minimum}"
+        per_row.append({"row": k, "prompt": row["pt"], "line": c["line"], "value": c["value"]})
+    return per_row, None
+
+
+def _next_free(used):
+    n = 0
+    while n in used:
+        n += 1
+    return n
 
 
 def acceptance_problem(engaged_mode, m, rows) -> str | None:

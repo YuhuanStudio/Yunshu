@@ -59,7 +59,7 @@ DROP = {
 # tests/unit/test_fullcmp_engaged.py).
 ACCEPT_TF = {
     "kind": "acceptance_regex",
-    "pattern_or_path": r"\[tensorfold\] done chatcmpl-\S+ .*? rounds=\d+ accepted=(?P<accepted>\d+)/\d+",
+    "pattern_or_path": r"\[tensorfold\] done chatcmpl-\S+ prompt=(?P<prompt>\d+) .*? rounds=\d+ accepted=(?P<accepted>\d+)/\d+",
     "group": "accepted",
     "min": 0,
     "per_request": True,
@@ -74,7 +74,7 @@ ADD = {
     "tf-1.1.8": [ACCEPT_TF],
     "splash-1.5.0": [{
         "kind": "acceptance_regex",
-        "pattern_or_path": r"Done · input \d+ · cached \d+ · output \d+ · TTFT [\d.]+s · [\d.]+ tok/s · (?P<tpc>[\d.]+) tok/cycle",
+        "pattern_or_path": r"Done · input (?P<prompt>\d+) · cached \d+ · output \d+ · TTFT [\d.]+s · [\d.]+ tok/s · (?P<tpc>[\d.]+) tok/cycle",
         "group": "tpc",
         "min": 1.0,
         "per_request": True,

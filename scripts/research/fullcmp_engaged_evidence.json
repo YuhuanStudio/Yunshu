@@ -250,7 +250,7 @@
             },
             {
               "kind": "acceptance_regex",
-              "pattern_or_path": "Done · input \\d+ · cached \\d+ · output \\d+ · TTFT [\\d.]+s · [\\d.]+ tok/s · (?P<tpc>[\\d.]+) tok/cycle",
+              "pattern_or_path": "Done · input (?P<prompt>\\d+) · cached \\d+ · output \\d+ · TTFT [\\d.]+s · [\\d.]+ tok/s · (?P<tpc>[\\d.]+) tok/cycle",
               "group": "tpc",
               "min": 1.0,
               "per_request": true,
@@ -284,7 +284,7 @@
             },
             {
               "kind": "acceptance_regex",
-              "pattern_or_path": "\\[tensorfold\\] done chatcmpl-\\S+ .*? rounds=\\d+ accepted=(?P<accepted>\\d+)/\\d+",
+              "pattern_or_path": "\\[tensorfold\\] done chatcmpl-\\S+ prompt=(?P<prompt>\\d+) .*? rounds=\\d+ accepted=(?P<accepted>\\d+)/\\d+",
               "group": "accepted",
               "min": 0,
               "per_request": true,
@@ -318,7 +318,7 @@
             },
             {
               "kind": "acceptance_regex",
-              "pattern_or_path": "\\[tensorfold\\] done chatcmpl-\\S+ .*? rounds=\\d+ accepted=(?P<accepted>\\d+)/\\d+",
+              "pattern_or_path": "\\[tensorfold\\] done chatcmpl-\\S+ prompt=(?P<prompt>\\d+) .*? rounds=\\d+ accepted=(?P<accepted>\\d+)/\\d+",
               "group": "accepted",
               "min": 0,
               "per_request": true,
