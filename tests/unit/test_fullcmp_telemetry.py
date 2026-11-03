@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "research"))
+
+from datetime import UTC
 
 import fullcmp_telemetry as tm  # noqa: E402
 
@@ -169,6 +172,8 @@ def test_unavailable_probes_are_listed_with_reason(tmp_path, monkeypatch):
     monkeypatch.setattr(
         tm, "probe_sudo_nopass", lambda: (False, "sudo -n needs a password")
     )
+    # macmon binary absent: the power probe must be listed unavailable with the reason
+    monkeypatch.setitem(tm.pw.BINARIES, "macmon", str(tmp_path / "no-macmon"))
     import os
 
     s = tm.Sampler(
@@ -183,11 +188,11 @@ def test_unavailable_probes_are_listed_with_reason(tmp_path, monkeypatch):
     assert header["probes"]["proc"]["available"] is True
     assert header["probes"]["vmstat"]["available"] is False
     assert "tool missing" in header["probes"]["vmstat"]["reason"]
-    assert header["probes"]["power"] == {
-        "available": False,
-        "reason": "sudo -n needs a password",
-        "interval_ms": 1000,
-    }
+    pwr = header["probes"]["power"]
+    assert pwr["available"] is False
+    assert pwr["reason"].startswith("unavailable (binary missing")
+    assert pwr["source"] == "macmon" and pwr["interval_ms"] == 1000
+    assert header["power_sudo_note"] == "sudo -n needs a password"
     assert footer["n_samples"] >= 0
 
 
@@ -255,19 +260,193 @@ def test_summarize_window_peak_mean_after_idle():
     assert w["energy_j"] is None and "power unavailable" in w["energy_note"]
 
 
-def test_summarize_energy_per_token_when_power_present():
-    rows = [
-        _sample(0.0, 1, 1, 1, power=10000),
-        _sample(1.0, 1, 1, 1, power=10000),
-        _sample(2.0, 1, 1, 1, power=10000),
+def _power_row(t, sys_w, source="macmon", **extra):
+    row = {
+        "part": "power",
+        "source": source,
+        "t": t,
+        "gpu_w": 1.0,
+        "cpu_w": 2.0,
+        "ane_w": 0.5,
+        "sys_w": sys_w,
+        "all_w": 3.5,
+    }
+    row.update(extra)
+    return row
+
+
+def test_summarize_energy_per_token_from_power_rows_in_window():
+    # 10 W system power held for the 2 s window = 20 J; 100 output tokens -> 0.2 J/token
+    rows = [_power_row(float(t), 10.0) for t in range(3)] + [
+        _sample(0.0, 1, 1, 1),
+        _sample(2.0, 1, 1, 1),
     ]
     marks = [
         {"part": "mark", "ev": "request_start", "req": "0", "t": 0.0},
         {"part": "mark", "ev": "end", "req": "0", "t": 2.0, "tokens": 100},
     ]
     w = tm.summarize(rows, marks)["windows"][0]
-    assert w["energy_j"] == pytest.approx(20.0)  # 10 W for 2 s
-    assert w["energy_j_per_token"] == pytest.approx(0.2)
+    assert w["energy_j"]["sys_w"] == pytest.approx(20.0)
+    assert w["energy_j"]["gpu_w"] == pytest.approx(2.0)  # 1 W for 2 s
+    assert w["energy_j"]["cpu_w"] == pytest.approx(4.0)
+    assert w["energy_j"]["ane_w"] == pytest.approx(1.0)
+    assert w["energy_j_per_token"]["sys_w"] == pytest.approx(0.2)
+    assert w["energy_j_per_token"]["gpu_w"] == pytest.approx(0.02)
+    assert w["power_w"]["sys_w"] == {"mean": 10.0, "peak": 10.0}
+    assert w["power_source"] == ["macmon"] and w["power_samples"] == 3
+
+
+def test_summarize_energy_window_excludes_power_outside_marks():
+    rows = [_power_row(float(t), 10.0) for t in range(10)]
+    marks = [
+        {"part": "mark", "ev": "request_start", "req": "0", "t": 4.0},
+        {"part": "mark", "ev": "end", "req": "0", "t": 6.0, "tokens": 4},
+    ]
+    w = tm.summarize(rows + [_sample(0.0, 1, 1, 1)], marks)["windows"][0]
+    # the window is [4, 6] at 10 W throughout: 20 J; power rows outside it do not add energy
+    assert w["energy_j"]["sys_w"] == pytest.approx(20.0)
+    assert w["energy_j_per_token"]["sys_w"] == pytest.approx(5.0)
+
+
+def test_summarize_power_secondary_rows_are_not_integrated():
+    rows = [
+        _power_row(0.0, 10.0),
+        _power_row(2.0, 10.0),
+        {**_power_row(0.0, 999.0, source="mactop"), "part": "power_secondary"},
+    ]
+    marks = [
+        {"part": "mark", "ev": "request_start", "req": "0", "t": 0.0},
+        {"part": "mark", "ev": "end", "req": "0", "t": 2.0, "tokens": 10},
+    ]
+    w = tm.summarize(rows, marks)["windows"][0]
+    assert w["energy_j"]["sys_w"] == pytest.approx(20.0)
+
+
+def test_summarize_no_power_rows_is_null_not_zero():
+    marks = [
+        {"part": "mark", "ev": "request_start", "req": "0", "t": 0.0},
+        {"part": "mark", "ev": "end", "req": "0", "t": 2.0, "tokens": 10},
+    ]
+    w = tm.summarize([_sample(0.0, 1, 1, 1), _sample(2.0, 1, 1, 1)], marks)["windows"][
+        0
+    ]
+    assert w["energy_j"] is None and w["energy_j_per_token"] is None
+    assert w["power_w"] is None and w["energy_note"] == "power unavailable"
+
+
+def test_powermetrics_row_converts_mw_to_w():
+    row = tm.powermetrics_row(
+        {
+            "cpu_power_mw": 1200.0,
+            "gpu_power_mw": 8400.0,
+            "ane_power_mw": 0.0,
+            "combined_power_mw": 9600.0,
+            "gpu_freq_mhz": 1398.0,
+            "gpu_active_residency_pct": 87.5,
+        },
+        7.0,
+    )
+    assert row["part"] == "power" and row["source"] == "powermetrics"
+    assert row["gpu_w"] == pytest.approx(8.4) and row["all_w"] == pytest.approx(9.6)
+    assert row["sys_w"] is None  # not in the powermetrics text: null, not derived
+    assert row["gpu_active"] == pytest.approx(0.875)
+
+
+def test_tool_records_checks_sha256_against_tools_json(tmp_path):
+    binary = tmp_path / "macmon"
+    binary.write_bytes(b"not really macmon")
+    import hashlib
+
+    good = hashlib.sha256(b"not really macmon").hexdigest()
+    tools = tmp_path / "TOOLS.json"
+    tools.write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "macmon": {
+                        "version": "0.10.0",
+                        "binary": str(binary),
+                        "sudoless": True,
+                        "binary_sha256": good,
+                    },
+                    "mactop": {
+                        "version": "0.2.7",
+                        "binary": str(tmp_path / "x"),
+                        "binary_sha256": "0" * 64,
+                    },
+                }
+            }
+        )
+    )
+    rec = tm.tool_records(str(tools))
+    assert rec["macmon"]["version"] == "0.10.0"
+    assert (
+        rec["macmon"]["sha256_actual"] == good and rec["macmon"]["sha256_match"] is True
+    )
+    assert (
+        rec["mactop"]["sha256_actual"] is None
+        and rec["mactop"]["sha256_match"] is False
+    )
+    assert tm.tool_records(str(tmp_path / "missing.json")) == {
+        "error": "TOOLS.json unreadable: FileNotFoundError"
+    }
+
+
+def test_sampler_writes_power_rows_from_fake_macmon_child(tmp_path, monkeypatch):
+    # sudo -n is forced to fail, so the sudoless macmon reader is the power source
+    import os
+
+    line = (
+        '{"timestamp":"2026-11-03T01:57:06.235457+00:00","sys_power":36.0,"gpu_power":0.03,'
+        '"cpu_power":13.0,"ane_power":0.0,"all_power":13.0,"gpu_usage":[338,0.006],'
+        '"memory":{"ram_total":1,"ram_usage":2,"swap_total":3,"swap_usage":4}}'
+    )
+    fake = tmp_path / "fake_macmon"
+    fake.write_text(f"#!/bin/sh\nwhile :; do echo '{line}'; sleep 0.05; done\n")
+    fake.chmod(0o755)
+    monkeypatch.setitem(tm.pw.BINARIES, "macmon", str(fake))
+    monkeypatch.setattr(tm, "probe_sudo_nopass", lambda: (False, "no sudo"))
+    out = tmp_path / "t.jsonl"
+    s = tm.Sampler(os.getpid(), None, str(out), probes=("proc", POWER))
+    s.start()
+    deadline = time.time() + 5
+    while (
+        s._power is not None and len(s._power.snapshot()) < 3 and time.time() < deadline
+    ):
+        time.sleep(0.05)
+    footer = s.stop()
+    header, samples, _, _ = tm.read_telemetry(out)
+    assert header["probes"]["power"]["available"] is True
+    assert header["probes"]["power"]["source"] == "macmon"
+    assert header["probes"]["power"]["reason"] is None
+    rows = tm.read_telemetry_rows(out)
+    power = [r for r in rows if r.get("part") == "power"]
+    assert len(power) >= 3
+    assert power[0]["sys_w"] == 36.0 and power[0]["source"] == "macmon"
+    # macmon's own ISO timestamp is the row time (same epoch clock as the marks)
+    from datetime import datetime
+
+    expected = datetime(2026, 11, 3, 1, 57, 6, 235457, tzinfo=UTC).timestamp()
+    assert power[0]["t"] == pytest.approx(expected, abs=1e-6)
+    assert all("power" not in s_ for s_ in samples)  # power is never inside a tick row
+    assert footer["power_stops"]["power"]["status"] == "stopped"
+    assert "total_bytes" in header["swap_start"]
+    assert set(header["tools"]) == {"macmon", "mactop"}
+
+
+def test_sampler_power_unavailable_when_macmon_missing(tmp_path, monkeypatch):
+    import os
+
+    monkeypatch.setitem(tm.pw.BINARIES, "macmon", str(tmp_path / "absent"))
+    monkeypatch.setattr(tm, "probe_sudo_nopass", lambda: (False, "no sudo"))
+    out = tmp_path / "t.jsonl"
+    s = tm.Sampler(os.getpid(), None, str(out), probes=("proc", POWER))
+    s.start()
+    s.stop()
+    header, _, _, _ = tm.read_telemetry(out)
+    assert header["probes"]["power"]["available"] is False
+    assert header["probes"]["power"]["reason"].startswith("unavailable (binary missing")
+    assert not [r for r in tm.read_telemetry_rows(out) if r.get("part") == "power"]
 
 
 def test_summarize_swap_growth_and_throttle_flags():

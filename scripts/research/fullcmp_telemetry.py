@@ -27,15 +27,22 @@ Probes and their source (macOS):
     footprint `footprint -p PID`: header "Footprint: N KB|MB|GB" = phys_footprint of the process   1000 ms
     thermal   `pmset -g therm`: CPU_Speed_Limit and whether a thermal/performance warning is recorded
               (also read at start and at stop)                                                      1000 ms
-    power     `sudo -n powermetrics`: CPU/GPU/ANE power (mW) and GPU frequency. Runs ONLY if
-              `sudo -n true` succeeds (no password prompt). Otherwise "unavailable", never faked.
+    power     CPU/GPU/ANE/system power (W) as separate `part: "power"` lines (not per tick).
+              Source: `sudo -n powermetrics` when `sudo -n true` succeeds, else sudoless
+              `macmon pipe -i 1000` (fullcmp_power.PowerSampler). Optional secondary: `mactop -headless`
+              (`--power-secondary mactop`, rows as `part: "power_secondary"`). Never faked: a reader that
+              fails leaves the probe "unavailable" with a reason and no power lines.
+
+Header also records swap used at start (`swap_start`) and the tool versions and sha256 from TOOLS.json,
+next to the sha256 of each binary on disk (`tools`). The footer records `swap_end`.
 
 Cost: the cheap probes (proc, disk, net) run every tick; the subprocess probes run at 1000 ms because
 ioreg and footprint are the largest per-call costs. Measured per-probe cost is written to the footer.
 
 Usage:
     python scripts/research/fullcmp_telemetry.py --pid PID --port P --interval-ms 100 \
-        --out cell.telemetry.jsonl [--marks marks.jsonl] [--duration S] [--idle-s 5]
+        [--out FILE | --out-dir DIR] [--marks marks.jsonl] [--duration S] [--idle-s 5]
+    (default --out-dir /Volumes/Micron/yunshu-fullcmp/raw; the run log is written next to the output)
 
 The harness can also append mark lines to the --marks file: {"ev": "request_start", "req": "0"}.
 Function API: Sampler(pid, port, out).start(); .mark("first_token", req="0"); .stop().
@@ -45,7 +52,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
+import os
 import re
 import signal
 import subprocess
@@ -54,6 +63,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+import fullcmp_power as pw
 import psutil
 
 FAST_PROBES = ("proc", "disk", "net_lo0")
@@ -63,6 +73,11 @@ ALL_PROBES = FAST_PROBES + SLOW_PROBES + (POWER_PROBE,)
 SLOW_INTERVAL_MS = 1000
 PAGE_BYTES_DEFAULT = 16384
 MARK_EVENTS = ("request_start", "first_token", "end")
+DEFAULT_OUT_DIR = "/Volumes/Micron/yunshu-fullcmp/raw"
+TOOLS_JSON = "/Volumes/P5Plus/yunshu-build/tools/TOOLS.json"
+TOOL_NAMES = ("macmon", "mactop")
+ENERGY_KEYS = ("gpu_w", "cpu_w", "ane_w", "sys_w", "all_w")
+POWER_PART_NAMES = ("power", "power_secondary")
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +259,82 @@ def probe_sudo_nopass() -> tuple[bool, str | None]:
     return False, "sudo -n needs a password (no NOPASSWD); powermetrics requires root"
 
 
+def sha256_file(path: str) -> str | None:
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return None
+    return h.hexdigest()
+
+
+def tool_records(tools_json: str = TOOLS_JSON) -> dict:
+    """Version, expected sha256 (TOOLS.json) and the sha256 of each binary on disk, per power tool.
+
+    `sha256_match` is True only when the file on disk hashes to the TOOLS.json value.
+    """
+    try:
+        with open(tools_json) as fh:
+            tools = json.load(fh)["tools"]
+    except (OSError, ValueError, KeyError) as exc:
+        return {"error": f"TOOLS.json unreadable: {type(exc).__name__}"}
+    out = {}
+    for name in TOOL_NAMES:
+        t = tools.get(name)
+        if not isinstance(t, dict):
+            out[name] = {"error": "not in TOOLS.json"}
+            continue
+        actual = sha256_file(t.get("binary", ""))
+        out[name] = {
+            "version": t.get("version"),
+            "binary": t.get("binary"),
+            "sudoless": t.get("sudoless"),
+            "sha256_expected": t.get("binary_sha256"),
+            "sha256_actual": actual,
+            "sha256_match": actual is not None and actual == t.get("binary_sha256"),
+        }
+    return out
+
+
+def swap_record() -> dict:
+    """`sysctl vm.swapusage` as a record (bytes), or {"error": ...} when unreadable."""
+    try:
+        return parse_swapusage(_run(["sysctl", "vm.swapusage"]))
+    except ProbeError as exc:
+        return {"error": str(exc)}
+
+
+def powermetrics_row(p: dict, t: float) -> dict:
+    """parse_powermetrics() output (mW / MHz / %) -> the power row shape of fullcmp_power (W)."""
+
+    def w(v):
+        return None if v is None else v / 1000.0
+
+    combined = p.get("combined_power_mw")
+    return {
+        "part": "power",
+        "source": "powermetrics",
+        "t": t,
+        "gpu_w": w(p.get("gpu_power_mw")),
+        "cpu_w": w(p.get("cpu_power_mw")),
+        "ane_w": w(p.get("ane_power_mw")),
+        "sys_w": None,  # powermetrics has no whole-system figure in this text
+        "all_w": w(combined),
+        "ram_w": None,
+        "gpu_mhz": p.get("gpu_freq_mhz"),
+        "gpu_active": None
+        if p.get("gpu_active_residency_pct") is None
+        else p["gpu_active_residency_pct"] / 100.0,
+        "cpu_active": None,
+        "ram_used": None,
+        "swap_used": None,
+        "cpu_temp_c": None,
+        "gpu_temp_c": None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Probes
 # ---------------------------------------------------------------------------
@@ -258,6 +349,7 @@ class ProbeState:
     last_error: str | None = None
     cost_ms_total: float = 0.0
     cost_ms_max: float = 0.0
+    source: str | None = None
 
 
 @dataclass
@@ -268,6 +360,7 @@ class Sampler:
     interval_ms: int = 100
     marks_file: str | None = None
     probes: tuple = ALL_PROBES
+    power_secondary: str | None = None  # None or "mactop" (sudoless, 1000 ms)
     _state: dict = field(default_factory=dict)
     _thread: threading.Thread | None = None
     _stop: threading.Event = field(default_factory=threading.Event)
@@ -277,8 +370,14 @@ class Sampler:
     _proc = None
     _prev_cpu: tuple | None = None
     _prev_t: float | None = None
-    _power_proc = None
-    _power_latest: dict | None = None
+    _power_proc = None  # sudo -n powermetrics child (only when sudo -n works)
+    _pm_rows: list = field(default_factory=list)
+    _power: pw.PowerSampler | None = None  # macmon (sudoless)
+    _power2: pw.PowerSampler | None = None  # mactop (optional secondary)
+    _flushed: dict = field(default_factory=dict)
+    _power_stops: dict = field(default_factory=dict)
+    _sudo_note: str | None = None
+    _swap_start: dict | None = None
     _thermal_start: dict | None = None
     _thermal_end: dict | None = None
     _n_samples: int = 0
@@ -292,6 +391,7 @@ class Sampler:
         self._fh = open(self.out, "w", buffering=1)  # noqa: SIM115 - closed in stop()
         self._init_probes()
         self._thermal_start = self._safe_thermal()
+        self._swap_start = swap_record()
         self._write(
             {
                 "part": "telemetry_header",
@@ -307,9 +407,13 @@ class Sampler:
                         "available": s.available,
                         "reason": s.reason,
                         "interval_ms": s.interval_ms,
+                        **({"source": s.source} if s.source else {}),
                     }
                     for n, s in self._state.items()
                 },
+                "power_sudo_note": self._sudo_note,
+                "tools": tool_records(),
+                "swap_start": self._swap_start,
                 "thermal_start": self._thermal_start,
                 "net_scope": "lo0 aggregate (all loopback ports)",
                 "disk_scope": "system-wide (macOS has no per-process io counters)",
@@ -328,15 +432,24 @@ class Sampler:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=10)
+        for name, ps in (("power", self._power), ("power_secondary", self._power2)):
+            if ps is not None:
+                res = ps.stop()
+                self._power_stops[name] = {
+                    k: res[k] for k in ("status", "bad_lines", "exit_code", "killed")
+                }
         if self._power_proc is not None:
             with contextlib.suppress(OSError):
                 self._power_proc.terminate()
+        self._flush_power()  # every power row the readers produced, after they stopped
         self._thermal_end = self._safe_thermal()
         footer = {
             "part": "telemetry_footer",
             "t1": time.time(),
             "n_samples": self._n_samples,
             "thermal_end": self._thermal_end,
+            "swap_end": swap_record(),
+            "power_stops": self._power_stops,
             "probe_stats": {
                 n: {
                     "calls": s.calls,
@@ -398,8 +511,7 @@ class Sampler:
         for name in self.probes:
             interval = self.interval_ms if name in FAST_PROBES else SLOW_INTERVAL_MS
             if name == POWER_PROBE:
-                ok, why = probe_sudo_nopass()
-                self._state[name] = ProbeState(name, ok, why, SLOW_INTERVAL_MS)
+                self._init_power()
                 continue
             try:
                 checks[name]()
@@ -408,8 +520,62 @@ class Sampler:
                 self._state[name] = ProbeState(
                     name, False, f"start check failed: {exc}", interval
                 )
-        if self._state.get(POWER_PROBE) and self._avail(POWER_PROBE):
+        if POWER_PROBE in self.probes and self.power_secondary:
+            self._init_power_secondary()
+
+    def _init_power(self) -> None:
+        """powermetrics only when `sudo -n` works; otherwise the sudoless macmon reader."""
+        ok, why = probe_sudo_nopass()
+        if ok:
+            self._state[POWER_PROBE] = ProbeState(
+                POWER_PROBE, True, None, SLOW_INTERVAL_MS, source="powermetrics"
+            )
             self._start_powermetrics()
+            return
+        self._power = pw.PowerSampler(
+            tool="macmon", interval_ms=SLOW_INTERVAL_MS
+        ).start()
+        ok = self._power.status == "running"
+        self._state[POWER_PROBE] = ProbeState(
+            POWER_PROBE,
+            ok,
+            None if ok else self._power.status,
+            SLOW_INTERVAL_MS,
+            source="macmon",
+        )
+        self._sudo_note = why
+
+    def _init_power_secondary(self) -> None:
+        self._power2 = pw.PowerSampler(
+            tool=self.power_secondary, interval_ms=SLOW_INTERVAL_MS
+        ).start()
+        ok = self._power2.status == "running"
+        self._state["power_secondary"] = ProbeState(
+            "power_secondary",
+            ok,
+            None if ok else self._power2.status,
+            SLOW_INTERVAL_MS,
+            source=self.power_secondary,
+        )
+
+    def _flush_power(self) -> None:
+        """Write power rows not yet written, as their own lines (the rows carry their own `t`)."""
+        sources = []  # (key, part, snapshot): snapshots are taken without holding self._lock
+        if self._power is not None:
+            sources.append(("macmon", "power", self._power.snapshot))
+        if self._power2 is not None:
+            sources.append(("mactop", "power_secondary", self._power2.snapshot))
+        sources.append(("powermetrics", "power", self._pm_snapshot))
+        for key, part, snap in sources:
+            rows = snap()
+            done = self._flushed.get(key, 0)
+            self._flushed[key] = len(rows)
+            for r in rows[done:]:
+                self._write({**r, "part": part})
+
+    def _pm_snapshot(self) -> list[dict]:
+        with self._lock:
+            return list(self._pm_rows)
 
     def _start_powermetrics(self) -> None:
         st = self._state[POWER_PROBE]
@@ -444,7 +610,9 @@ class Sampler:
 
     def _consume_power(self, text: str) -> None:
         with contextlib.suppress(ProbeError):
-            self._power_latest = {"t": time.time(), **parse_powermetrics(text)}
+            row = powermetrics_row(parse_powermetrics(text), time.time())
+            with self._lock:
+                self._pm_rows.append(row)
 
     def _safe_thermal(self) -> dict | None:
         try:
@@ -540,11 +708,9 @@ class Sampler:
         for name in SLOW_PROBES:
             if name in due and self._state[name].available:
                 row[name] = self._call(name, due[name])
-        if self._avail(POWER_PROBE) and self._power_proc is not None:
-            row["power"] = (
-                self._power_latest
-            )  # latest powermetrics sample (1 s cadence)
-        row["t"] = now
+        row["t"] = (
+            now  # power rows are written separately (_flush_power), on their own clock
+        )
         return row
 
     def _slow_fns(self) -> dict:
@@ -590,6 +756,7 @@ class Sampler:
             row = self._tick(now, due)
             for m in self._read_marks():
                 self._write(m)
+            self._flush_power()
             self._write({"part": "sample", **row})
             self._n_samples += 1
             if self._proc is not None and not self._proc.is_running():
@@ -624,8 +791,54 @@ def _vals(rows, path):
     return out
 
 
+def _power_window(power: list[dict], t0: float, t1: float, tokens: int | None) -> dict:
+    """Power W (mean/peak) and energy J per source field over [t0, t1], plus J per output token.
+
+    `power` is the power rows of the primary reader. Energy uses fullcmp_power.energy_j (left rule,
+    carry-in at most 5 s old). Without any power row the values are None, never zero.
+    """
+    if not power:
+        return {
+            "power_w": None,
+            "energy_j": None,
+            "energy_j_per_token": None,
+            "energy_note": "power unavailable",
+        }
+    win = [r for r in power if t0 <= r["t"] <= t1]
+    watts = {}
+    for k in ("gpu_w", "cpu_w", "ane_w", "sys_w"):
+        vals = [r[k] for r in win if r.get(k) is not None]
+        if vals:
+            watts[k] = {
+                "mean": round(sum(vals) / len(vals), 4),
+                "peak": round(max(vals), 4),
+            }
+    energy = {k: pw.energy_j(power, t0, t1, k) for k in ENERGY_KEYS}
+    per_tok = None
+    if tokens:
+        per_tok = {
+            k: round(e / tokens, 6) if e is not None else None
+            for k, e in energy.items()
+        }
+    note = None if win else "no power samples in window"
+    return {
+        "power_w": watts or None,
+        "energy_j": energy,
+        "energy_j_per_token": per_tok,
+        "power_samples": len(win),
+        "power_source": sorted({r.get("source") for r in win if r.get("source")})
+        or None,
+        **({"energy_note": note} if note else {}),
+    }
+
+
 def _window_stats(
-    samples: list[dict], idle_row: dict | None, tokens: int | None
+    samples: list[dict],
+    idle_row: dict | None,
+    tokens: int | None,
+    power: list[dict] | None = None,
+    t0: float | None = None,
+    t1: float | None = None,
 ) -> dict:
     stats: dict = {"n": len(samples)}
     rss = _vals(samples, "proc.rss_bytes")
@@ -649,23 +862,10 @@ def _window_stats(
             idle_row, "footprint.phys_footprint_bytes"
         )
         stats["after_idle_gpu_util_pct"] = _get(idle_row, "gpu.device_util_pct")
-    pw = [
-        (r["t"], _get(r, "power.combined_power_mw"))
-        for r in samples
-        if _get(r, "power.combined_power_mw") is not None
-    ]
-    if len(pw) >= 2:
-        joules = 0.0
-        for (t0, p0), (t1, p1) in zip(pw, pw[1:], strict=False):
-            joules += (p0 + p1) / 2.0 * 1e-3 * (t1 - t0)
-        stats["energy_j"] = round(joules, 3)
-        stats["energy_j_per_token"] = round(joules / tokens, 4) if tokens else None
-    else:
-        stats["energy_j"] = None
-        stats["energy_j_per_token"] = None
-        stats["energy_note"] = (
-            "power unavailable" if not pw else "need >= 2 power samples"
-        )
+    if t0 is None or t1 is None:
+        ts = [r["t"] for r in samples]
+        t0, t1 = (min(ts), max(ts)) if ts else (0.0, 0.0)
+    stats.update(_power_window(power or [], t0, t1, tokens))
     return stats
 
 
@@ -679,13 +879,23 @@ def summarize(
 ) -> dict:
     """Peak / after-idle / mean per request window, plus overall.
 
-    telemetry_rows: "sample" rows (any extra rows are ignored). marks: mark rows with ev in
-    request_start / first_token / end and an optional "req" id (default "0") and "tokens" on end.
-    A window is [request_start.t, end.t]. after-idle = the first sample at or after end.t + idle_s
-    (the last sample if the series ends earlier). Without marks the whole series is one window.
+    telemetry_rows: "sample" rows and "power" rows (the primary reader; "power_secondary" is ignored
+    for energy). marks: mark rows with ev in request_start / first_token / end and an optional "req"
+    id (default "0") and "tokens" on end. A window is [request_start.t, end.t]: its power W, energy J
+    per source field and J per token come from the power rows in that window. after-idle = the first
+    sample at or after end.t + idle_s (the last sample if the series ends earlier). Without marks the
+    whole series is one window.
     """
     samples = sorted(
         (r for r in telemetry_rows if r.get("part", "sample") == "sample" and "t" in r),
+        key=lambda r: r["t"],
+    )
+    power = sorted(
+        (
+            r
+            for r in telemetry_rows
+            if r.get("part") == "power" and r.get("t") is not None
+        ),
         key=lambda r: r["t"],
     )
     marks = marks or []
@@ -711,17 +921,23 @@ def summarize(
             "ttft_s": round(evs["first_token"]["t"] - t0, 4)
             if "first_token" in evs
             else None,
-            **_window_stats(win, idle_row, tokens),
+            **_window_stats(win, idle_row, tokens, power, t0, t1),
         }
         windows.append(w)
-    overall = _window_stats(samples, samples[-1] if samples else None, None)
+    overall = _window_stats(samples, samples[-1] if samples else None, None, power)
     if not marks:
         windows = [{"req": None, **overall}]
     return {"windows": windows, "overall": overall, "n_samples": len(samples)}
 
 
+def read_telemetry_rows(path) -> list[dict]:
+    """Every row of a telemetry jsonl, in file order (samples, power, marks, header, footer)."""
+    with open(path) as fh:
+        return [json.loads(line) for line in fh if line.strip()]
+
+
 def read_telemetry(path) -> tuple[dict | None, list[dict], list[dict], dict | None]:
-    """Read a telemetry jsonl -> (header, samples, marks, footer)."""
+    """Read a telemetry jsonl -> (header, samples, marks, footer). Power rows: read_telemetry_rows."""
     header = footer = None
     samples, marks = [], []
     with open(path) as fh:
@@ -758,12 +974,27 @@ def _cli(argv=None) -> int:
     )
     p.add_argument("--port", type=int, default=None)
     p.add_argument("--interval-ms", type=int, default=100)
-    p.add_argument("--out", required=True)
+    p.add_argument(
+        "--out",
+        default=None,
+        help="telemetry jsonl (default: <out-dir>/<label>-<stamp>.jsonl)",
+    )
+    p.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
+    p.add_argument(
+        "--label", default="telemetry", help="file-name prefix for --out-dir"
+    )
+    p.add_argument("--log", default=None, help="run log (default: next to --out)")
     p.add_argument(
         "--marks", default=None, help="jsonl the harness appends mark events to"
     )
     p.add_argument("--duration", type=float, default=None, help="stop after S seconds")
     p.add_argument("--idle-s", type=float, default=5.0)
+    p.add_argument(
+        "--power-secondary",
+        choices=("none", "mactop"),
+        default="none",
+        help="optional second sudoless power reader (1000 ms), rows as power_secondary",
+    )
     a = p.parse_args(argv)
     child = None
     pid = a.pid
@@ -772,7 +1003,12 @@ def _cli(argv=None) -> int:
         pid = child.pid
     if pid is None:
         p.error("need --pid or --spawn-sleep")
-    s = Sampler(pid, a.port, a.out, a.interval_ms, a.marks)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    out = a.out or os.path.join(a.out_dir, f"{a.label}-{stamp}-pid{pid}.jsonl")
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    log_path = a.log or os.path.splitext(out)[0] + ".log"
+    secondary = None if a.power_secondary == "none" else a.power_secondary
+    s = Sampler(pid, a.port, out, a.interval_ms, a.marks, power_secondary=secondary)
     try:
         s.start()
     except ProbeError as exc:
@@ -792,18 +1028,27 @@ def _cli(argv=None) -> int:
     if child is not None:
         child.kill()
         child.wait()
-    header, samples, marks, _ = read_telemetry(a.out)
-    summ = summarize(samples, marks, a.idle_s)
-    print(
-        json.dumps(
-            {
-                "n_samples": footer["n_samples"],
-                "probes": header["probes"],
-                "overall": summ["overall"],
-            },
-            indent=1,
-        )
+    rows = read_telemetry_rows(out)
+    header = next((r for r in rows if r.get("part") == "telemetry_header"), {})
+    marks = [r for r in rows if r.get("part") == "mark"]
+    summ = summarize(rows, marks, a.idle_s)
+    text = json.dumps(
+        {
+            "out": out,
+            "n_samples": footer["n_samples"],
+            "probes": header.get("probes"),
+            "tools": header.get("tools"),
+            "swap_start": header.get("swap_start"),
+            "swap_end": footer.get("swap_end"),
+            "power_stops": footer.get("power_stops"),
+            "overall": summ["overall"],
+        },
+        indent=1,
+        default=str,
     )
+    with open(log_path, "w") as fh:
+        fh.write(text + "\n")
+    print(text)
     return 0
 
 
