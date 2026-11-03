@@ -520,9 +520,9 @@ def _yunshu_concurrent(records, mode, log="", ready_offset=None):
             "label": None}, []
 
 
-def concurrent_attr_rows(table, engine, mode, log, records, ready_offset) -> list:
+def concurrent_attr_rows(table, engine, mode, log, records, ready_offset, probe_responses=None) -> list:
     """part=attr rows for the concurrent requests (rid, record part), from the same verdict as the audit."""
-    ev, _problems = concurrent_check(table, engine, mode, log, records, ready_offset)
+    ev, _problems = concurrent_check(table, engine, mode, log, records, ready_offset, probe_responses)
     out = []
     for pr in (ev or {}).get("stats", {}).get("per_row", []):
         out.append({
@@ -536,7 +536,38 @@ def concurrent_attr_rows(table, engine, mode, log, records, ready_offset) -> lis
     return out
 
 
-def concurrent_check(table, engine, mode, log, records, ready_offset):
+CONC_PROBE_AR_LABEL = "ar (concurrent path does not draft)"
+PROBE_ONLY_ENGINES = {"mlx-vlm-server"}  # their only per-request draft stats are the non-streaming probe
+
+
+def concurrent_probe_verdict(mode, probe_responses, records):
+    """Probe-only engines (mlx-vlm): the same N concurrent non-streaming requests, read per response.
+    All drafted and accepted > 0 -> the mode (dflash); all zero or absent -> 'ar' with the label (the
+    concurrent path does not draft; a label, not a violation); anything mixed -> unverified (fail closed)."""
+    n = sum(len(r.get("requests") or []) for r in records)
+    stats = {"responses": len(probe_responses or []), "requests": n}
+    if not probe_responses or len(probe_responses) != n:
+        return {"engaged_mode": UNVERIFIED, "matched_line": None, "evidence_kind": "concurrent_probe",
+                "source": "probe", "stats": stats, "label": None}, [
+            f"concurrent probe: {len(probe_responses or [])} responses for {n} requests"]
+    drafted = []
+    for resp in probe_responses:
+        t = (resp or {}).get("timings") or {}
+        drafted.append((t.get("draft_n"), t.get("draft_n_accepted")))
+    stats["probe"] = drafted
+    if all(_is_positive(d) and _is_positive(a) for d, a in drafted):
+        return {"engaged_mode": mode, "matched_line": f"concurrent probe draft_n/accepted {drafted}",
+                "evidence_kind": "concurrent_probe", "source": "probe", "stats": stats, "label": None}, []
+    if all(not _is_positive(d) and not _is_positive(a) for d, a in drafted):
+        return {"engaged_mode": "ar", "matched_line": f"concurrent probe zero draft stats {drafted}",
+                "evidence_kind": "concurrent_probe", "source": "probe", "stats": stats,
+                "label": CONC_PROBE_AR_LABEL}, []
+    return {"engaged_mode": UNVERIFIED, "matched_line": None, "evidence_kind": "concurrent_probe",
+            "source": "probe", "stats": stats, "label": None}, [
+        f"concurrent probe mixed (some responses draft, some do not): {drafted}"]
+
+
+def concurrent_check(table, engine, mode, log, records, ready_offset, probe_responses=None):
     """THE concurrent verdict (in-job check and audit both call this). records: the cell's conc / mixed
     rows. Returns (ev, problems): ev has the evaluate() shape (engaged_mode, matched_line, evidence_kind,
     source, stats with per_row) when every record's requests are matched; problems lists every failure
@@ -545,6 +576,8 @@ def concurrent_check(table, engine, mode, log, records, ready_offset):
         return None, []
     if engine == "yunshu":
         return _yunshu_concurrent(records, mode, log, ready_offset)
+    if engine in PROBE_ONLY_ENGINES and probe_responses is not None:
+        return concurrent_probe_verdict(mode, probe_responses, records)
     if mode in AR_MODES:
         return _ar_concurrent(records, log, ready_offset)
     m = mode_entry(table, engine, mode)

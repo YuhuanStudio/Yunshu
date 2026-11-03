@@ -682,6 +682,23 @@ def check_record_count(run: Run) -> GuardResult:
     return res
 
 
+def _concurrent_probe_responses(path) -> list | None:
+    """The concurrent probe's responses of a cell (part=probe_conc rows, in rid order), or None when the
+    cell has none (fail closed: a probe-only engine without its probe cannot be verified)."""
+    rows = []
+    for line in (Path(path).read_text(errors="replace").splitlines() if Path(path).is_file() else []):
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get("part") == "probe_conc":
+            rows.append(r)
+    if not rows:
+        return None
+    rows.sort(key=lambda r: r.get("rid", 0))
+    return [{"timings": r.get("timings")} for r in rows]
+
+
 def check_engaged_mode(run: Run) -> GuardResult:
     """Guard 6: the engaged spec mode is derived from evidence (fullcmp_engaged) in the cell's full
     engine log (split at the header's ready offset) and its per-request records. The header's final
@@ -708,7 +725,8 @@ def check_engaged_mode(run: Run) -> GuardResult:
             if not cf.rows and concurrent_records:
                 # a Yunshu concurrent cell: its requests' counters or the rounds in the slice decide
                 ev, _ = fe.concurrent_check(table, engine, want, log, concurrent_records,
-                                            h.get("server_log_ready_offset"))
+                                            h.get("server_log_ready_offset"),
+                                            probe_responses=_concurrent_probe_responses(cf.path))
             else:
                 ev = fe.yunshu_runner_evidence(log, h.get("server_log_ready_offset"))
             m = None
@@ -749,7 +767,7 @@ def check_engaged_mode(run: Run) -> GuardResult:
             kind = ev.get("evidence_kind")
             why = "loaded only (startup line, no per-request evidence)" if kind == "startup_only" else "no evidence"
             res.fail(cell, f"r{cf.rep}: engaged mode unverified: {why}")
-        elif got != want and not (engine == "yunshu" and not cf.rows and got == "ar" and concurrent_records):
+        elif got != want and not (not cf.rows and got == "ar" and concurrent_records):
             # a Yunshu concurrent cell's derived mode is the evidence's (ar when its requests do not draft)
             res.fail(cell, f"r{cf.rep}: engaged evidence says {got!r}, configured {want!r}")
         for key in ("requested_spec_mode", "spec_mode_expected"):

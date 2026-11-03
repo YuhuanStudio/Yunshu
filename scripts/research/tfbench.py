@@ -587,7 +587,7 @@ class Srv:
         except Exception as e:  # noqa: BLE001
             return f"probe failed: {e!r}"
 
-    def verify_spec_mode(self, final=False, rows=(), probe_response=None, concurrent=()):
+    def verify_spec_mode(self, final=False, rows=(), probe_response=None, concurrent=(), concurrent_probe=None):
         log = self.log.read_text(errors="replace")
         if fp.fullcmp_mode(os.environ) and not self._is_yunshu(self.engine):
             # Fullcmp: the engaged mode comes from the evidence table only (fullcmp_engaged); the
@@ -596,7 +596,8 @@ class Srv:
             # cell's records) may refuse a cell.
             self.probe = self.probe_text()
             self._verify_fullcmp_evidence(
-                log, final=final, rows=rows, probe_response=probe_response, concurrent=concurrent
+                log, final=final, rows=rows, probe_response=probe_response, concurrent=concurrent,
+                concurrent_probe=concurrent_probe
             )
             return
         # The engaged-mode line the audit checks (fullcmp header engaged_log_line).
@@ -629,12 +630,13 @@ class Srv:
             # measures a different engine (2026-10-20: ragged KV off broke identity)
             raise RuntimeError(f"{off}; see {self.log}")
 
-    def _verify_fullcmp_evidence(self, log, final=False, rows=(), probe_response=None, concurrent=()):
+    def _verify_fullcmp_evidence(self, log, final=False, rows=(), probe_response=None, concurrent=(), concurrent_probe=None):
         table = fe.load_table()  # None when the table is missing or malformed: no evidence at all
         ready = getattr(self, "ready_log_offset", None)
         if concurrent and not rows:
             # concurrent cells: the same shared verdict the audit uses (fe.concurrent_check)
-            ev, problems = fe.concurrent_check(table, self.engine, self.requested_spec_mode, log, concurrent, ready)
+            ev, problems = fe.concurrent_check(table, self.engine, self.requested_spec_mode, log, concurrent, ready,
+                                               probe_responses=concurrent_probe)
             if problems and final:
                 raise RuntimeError("concurrent evidence: " + "; ".join(problems) + f"; see {self.log}")
         else:
@@ -2485,9 +2487,9 @@ def stop_cell_telemetry():
 PROBE_ENGINES = {"mlx-vlm-server": True}
 
 
-def probe_request(s):
+def probe_request(s, text="Say hi."):
     """One non-streaming chat request on the live server; returns the response JSON (timings)."""
-    body = dict(req(s.model, "Say hi.", 64))
+    body = dict(req(s.model, text, 64))
     body["stream"] = False
     return _post_json(s.url, "/v1/chat/completions", body)
 
@@ -2709,6 +2711,19 @@ def main():
             if _LIVE_SERVERS:
                 s = _LIVE_SERVERS[-1]  # a restart cell measured on its relaunched server
             probe_response = None
+            conc_probe = None
+            conc_records = fe.read_concurrent_records(a.out)
+            if fullcmp and a.engine in PROBE_ENGINES and conc_records:
+                # the concurrent probe: the same N requests, non-streaming, at once (the streamed concurrent
+                # requests carry no draft stats). Not a table number: part=probe_conc rows, probe=true.
+                n = sum(len(r.get("requests") or []) for r in conc_records)
+                texts = [concurrent_prompt(i, 0, a.conc_ctx, getattr(a, "prompt_variant", 0)) for i in range(n)]
+                with cf.ThreadPoolExecutor(max(1, n)) as ex:
+                    conc_probe = list(ex.map(lambda t: probe_request(s, t), texts))
+                for rid, resp in enumerate(conc_probe):
+                    emit(out, part="probe_conc", engine=a.engine, rep=a.rep, rid=rid,
+                         probe=True, timings=(resp or {}).get("timings"),
+                         probe_fields=fe.probe_fields(resp))
             if fullcmp and a.engine in PROBE_ENGINES:
                 # One non-streaming request after the measured parts (not a table number): the serving
                 # path returns per-request draft stats only in a non-streaming response.
@@ -2732,6 +2747,7 @@ def main():
                 rows=measured,
                 probe_response=probe_response,
                 concurrent=fe.read_concurrent_records(a.out),
+                concurrent_probe=conc_probe,
             )
             if fullcmp and a.engine != "yunshu" and getattr(s, "engaged_per_row", None):
                 # attribution per measured request, from the matched evidence (written after the final check)
@@ -2743,6 +2759,7 @@ def main():
                 for attr in fe.concurrent_attr_rows(
                     fe.load_table(), a.engine, s.requested_spec_mode,
                     s.log.read_text(errors="replace"), conc_records, getattr(s, "ready_log_offset", None),
+                    probe_responses=conc_probe,
                 ):
                     emit(out, part="attr", engine=a.engine, rep=a.rep, **attr)
             mem = getattr(s, "mem", None)
