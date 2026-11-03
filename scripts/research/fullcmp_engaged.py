@@ -686,6 +686,10 @@ def _concurrent_item(m, log):
     return items[0] if items else None
 
 
+def is_yunshu(engine) -> bool:
+    return str(engine) == "yunshu" or str(engine).startswith("yunshu-")
+
+
 def concurrent_check(table, engine, mode, log, records, ready_offset, probe_responses=None):
     """THE concurrent verdict (in-job check and audit both call this). records: the cell's conc / mixed
     rows. Returns (ev, problems): ev has the evaluate() shape (engaged_mode, matched_line, evidence_kind,
@@ -693,7 +697,7 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
     (fail closed). ev is None when there are no records."""
     if not records:
         return None, []
-    if engine == "yunshu":
+    if is_yunshu(engine):  # the bench id (yunshu-main) and the manifest id (yunshu) are one engine
         return _yunshu_concurrent(records, mode, log, ready_offset)
     if engine in PROBE_ONLY_ENGINES:
         # probe-only engine: only the concurrent probe (one response per request, with per-response draft

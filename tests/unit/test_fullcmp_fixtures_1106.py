@@ -124,3 +124,32 @@ def test_yunshu_concurrent_without_counters_and_without_rounds_is_derived_ar():
     ev, problems = fe.concurrent_check(None, "yunshu", "dflash", log, conc, 0)
     assert problems == [] and ev["engaged_mode"] == "ar"
     assert ev["label"].startswith("ar (dev0")
+
+
+def test_yunshu_conc_in_job_and_audit_paths_return_the_same_verdict_on_the_real_wire_1107_log():
+    """Regression (wire-1107): the in-job check passed the bench id 'yunshu-main' and fell through to the
+    acceptance-item path ('no per-request acceptance item'). Both callers (bench id and manifest id) must reach the
+    one derivation and return the same verdict on the real log (2 DFlash round lines for 128 tokens -> ar)."""
+    log = (ROOT / "tests" / "unit" / "fixtures" / "yunshu_conc_1107.server.txt").read_text(errors="replace")
+    conc = [{"part": "conc", "n": 2, "requests": [{"rid": 0, "pt": 1024, "ct": 64, "spec": "unavailable (x)"},
+                                                  {"rid": 1, "pt": 1024, "ct": 64, "spec": "unavailable (x)"}]}]
+    in_job = fe.concurrent_check(None, "yunshu-main", "dflash", log, conc, 0)
+    audit = fe.concurrent_check(None, "yunshu", "dflash", log, conc, 0)
+    assert in_job == audit
+    assert in_job[1] == [] and in_job[0]["engaged_mode"] == "ar"
+    assert in_job[0]["label"].startswith("ar (dev0")
+
+
+def test_every_fixture_cell_has_identical_in_job_and_audit_verdicts():
+    """Generic: for each concurrent fixture cell, the in-job call and the audit call (same function, the bench
+    id and the manifest id) return identical (mode, label, problems)."""
+    cells = [
+        ("yunshu", "yunshu_conc_1107.server.txt",
+         [{"part": "conc", "n": 2, "requests": [{"rid": i, "pt": 1024, "ct": 64, "spec": "unavailable (x)"}
+                                                for i in range(2)]}]),
+    ]
+    for eng, name, conc in cells:
+        log = (ROOT / "tests" / "unit" / "fixtures" / name).read_text(errors="replace")
+        a = fe.concurrent_check(None, eng + "-main" if eng == "yunshu" else eng, "dflash", log, conc, 0)
+        b = fe.concurrent_check(None, eng, "dflash", log, conc, 0)
+        assert (a[0]["engaged_mode"], a[0].get("label"), a[1]) == (b[0]["engaged_mode"], b[0].get("label"), b[1])

@@ -1,0 +1,128 @@
+
+╭─────────────────────────────── Yunshu Server ────────────────────────────────╮
+│ ┌────────────────────────┬─────────────────────────────────────────────────┐ │
+│ │  Yunshu                │  0.1.7.dev0                                     │ │
+│ │  Mode                  │  Single-model                                   │ │
+│ │  Model                 │  /Volumes/Micron/yunshu-fullcmp/wire-1107-wor…  │ │
+│ │  Address               │  http://127.0.0.1:18990                         │ │
+│ │  Completion Batch      │  32                                             │ │
+│ │  Endpoints             │  /v1/chat/completions, /v1/models, /health      │ │
+│ └────────────────────────┴─────────────────────────────────────────────────┘ │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Console http://127.0.0.1:8100/console/  (its own process; --no-console to skip)
+Yunshu console http://127.0.0.1:8100/console/  ->  engine http://127.0.0.1:18990
+2026-11-04 06:11:35,416 WARNING yunshu_gateway.main: SECURITY: No YUNSHU_AUTH_TOKEN set — admin endpoints (model load/unload, benchmarks, dashboard) are DENIED by default. Inference endpoints (chat/completions) remain accessible without auth. Set YUNSHU_AUTH_TOKEN=<secret> to enable full Bearer token auth.
+INFO:     Started server process [9396]
+INFO:     Waiting for application startup.
+2026-11-04 06:11:37,104 INFO yunshu_gateway.main: Single-model mode: /Volumes/Micron/yunshu-fullcmp/wire-1107-work/all/tfout/home/fullcmp-SMOKE-yunshu-q27-4bit-th-off-r0/.yunshu/models/Jundot/Qwen3.8-27B-oQ4e-mtp detected as VLM
+2026-11-04 06:11:37,107 INFO yunshu_gateway.main: Sampling defaults (policy model, default mode thinking): thinking T=1.0 top_p=0.95 top_k=20 presence=0.0 [model_card]; non_thinking T=0.7 top_p=0.8 top_k=20 presence=1.5 [model_card]
+2026-11-04 06:11:37,112 INFO yunshu_engine.mlx_executor: MLX executor thread initialized: generation_stream = ThreadLocalStream(Device(gpu, 0), 3)
+2026-11-04 06:11:43,409 INFO yunshu_engine.vlm_engine: Loaded model via mlx_vlm (vision=True)
+2026-11-04 06:11:44,659 INFO yunshu_engine.vlm_engine: VLM model ~15.8GiB on disk, large=True (clear buffer pool on idle ON)
+2026-11-04 06:11:44,659 INFO yunshu_engine.vlm_engine: VLM engine loaded: /Volumes/Micron/yunshu-fullcmp/wire-1107-work/all/tfout/home/fullcmp-SMOKE-yunshu-q27-4bit-th-off-r0/.yunshu/models/Jundot/Qwen3.8-27B-oQ4e-mtp (vision=True)
+2026-11-04 06:11:44,677 INFO yunshu_engine.vlm_engine: Speculative decoding: dflash (DFlash2 drafter found on disk)
+2026-11-04 06:11:46,245 INFO yunshu_engine.kernels.omlx.qwen35_gdn_verify_fused: GDN verify replay commit patch applied
+2026-11-04 06:11:46,245 INFO yunshu_engine.kernels.omlx.qwen35_gdn_prework: Qwen fused GDN prework patch applied
+2026-11-04 06:11:46,245 INFO yunshu_engine.kernels.omlx.qwen35_verify_sdpa_split: Qwen3.5/3.6 verify-width causal vector attention patch applied
+2026-11-04 06:11:46,245 INFO yunshu_engine.kernels.omlx.qwen35_verify_qmm: MTP verify qmm patch applied (rows 2..6 split-K, 7..8 sg8, 9..24 mma)
+2026-11-04 06:11:46,245 INFO yunshu_engine.kernels.omlx: Qwen MTP verify kernels: {'verify_linear': True, 'gdn_prework': True, 'sdpa_split': True, 'verify_qmm': True, 'gdn_replay': True} (row_exact=False)
+2026-11-04 06:11:46,437 INFO yunshu_engine.kernels.gdn_prefill: GDN prefill: mx.fast.gated_delta_update for chunks >= 64
+2026-11-04 06:11:46,440 INFO yunshu_engine.kernels.batch_invariant: Batch-invariant decode: 0 sg8 + 0 packed target projections
+2026-11-04 06:11:46,441 INFO yunshu_engine.vlm_engine: Split-invariant prefill engaged: NAX/BQ32/GDN, alignment=64
+2026-11-04 06:11:46,449 INFO yunshu_engine.kernels.buffer_cache: prefill buffer cache kept up to 6.0 GiB
+2026-11-04 06:11:46,449 INFO yunshu_engine.vlm_engine: APC RAM budget: 32 GiB (auto)
+2026-11-04 06:11:46,455 INFO yunshu_engine.vlm_engine: APC disk tier at /Volumes/Micron/yunshu-fullcmp/wire-1107-work/all/tfout/home/fullcmp-SMOKE-yunshu-q27-4bit-th-off-r0/.yunshu/cache/apc/dad6518eac1d3db2 (cap 64 GiB, root-wide)
+2026-11-04 06:11:46,798 INFO yunshu_engine.vlm_batch_runner: APC admission configuration: qualified=True enabled=True source=/Volumes/P5Plus/yunshu-build/wt-fullcmp-yunshu/python/yunshu_engine/vlm_batch_runner.py
+2026-11-04 06:11:46,798 INFO yunshu_engine.vlm_batch_runner: Scheduling policy: qualified=True uncached=True auxiliary=True
+2026-11-04 06:11:46,799 INFO yunshu_engine.vlm_engine: Memory admission: KV 64 KiB/token, keeping 6.4 GiB free
+2026-11-04 06:11:46,800 INFO yunshu_engine.vlm_engine: VLM batch runner: apc=32.0GiB draft=dflash block=8 verify_kernels={'verify_linear': True, 'gdn_prework': True, 'sdpa_split': True, 'verify_qmm': True, 'gdn_replay': True, 'lane_linear': 497, 'nax_prefill': 'nax-lane-ef7bd070cbebad0b', 'prefill_matmul': 'stock-qmm-gt512+nax-lane-ef7bd070cbebad0b', 'attn_prefill': 'attn-bq32-swz-e54267bfec9d', 'invariant': {'marked': 0, 'packed': 0}, 'split_prefill': 'split64-v1', 'draft_vocab': 65536, 'copy_rows': 32, 'dflash_copy': True, 'lane_sum_identity': 'long-context', 'dflash_fast': 'short-context', 'dflash_warm_rows': [48, 64]}
+2026-11-04 06:11:46,849 INFO yunshu_engine.gc_policy: GC policy defer: froze 302626 objects
+2026-11-04 06:11:46,849 INFO yunshu_engine.gc_policy: GC policy defer: thresholds (2000, 10, 1000), first-token hold armed
+2026-11-04 06:11:46,849 INFO yunshu_gateway.main: Startup complete: model '/Volumes/Micron/yunshu-fullcmp/wire-1107-work/all/tfout/home/fullcmp-SMOKE-yunshu-q27-4bit-th-off-r0/.yunshu/models/Jundot/Qwen3.8-27B-oQ4e-mtp' loaded (10.9s)
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:18990 (Press CTRL+C to quit)
+INFO:     127.0.0.1:57193 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57194 - "GET /v1/yunshu/status HTTP/1.1" 200 OK
+2026-11-04 06:11:47,243 INFO yunshu: inference_request
+INFO:     127.0.0.1:57197 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-11-04 06:11:47,263 INFO yunshu_engine.vlm_batch_runner: Exact speculative request engaged: dflash constrained=False logprobs=False
+2026-11-04 06:11:47,272 INFO yunshu_engine.vlm_batch_runner: APC runtime kernels: qualified=True installed=True module=/Volumes/P5Plus/yunshu-build/wt-fullcmp-yunshu/python/yunshu_engine/kernels/batch_invariant.py
+2026-11-04 06:11:47,272 INFO yunshu_engine.vlm_batch_runner: APC prefix-invariant dispatch engaged: shared=False dense_attention=True
+2026-11-04 06:11:47,273 INFO yunshu_engine.prompt_end_replay: prompt-end replay: skipped (kv shape/padding)
+2026-11-04 06:11:47,274 INFO yunshu_engine.kernels.gdn_prefill: GDN prefill fused conv+silu engaged: channels=10240
+2026-11-04 06:11:47,274 INFO yunshu_engine.kernels.attn_prefill: Prefill attention short BQ16 compiled: heads=24/4
+2026-11-04 06:11:47,274 INFO yunshu_engine.kernels.attn_prefill: Prefill attention BQ16 engaged: rows=15 keys=15 heads=24/4
+2026-11-04 06:11:47,338 INFO yunshu_engine.vlm_batch_runner: First-content handoff engaged (DFlash, 4ms bound, completed=False)
+2026-11-04 06:11:47,340 INFO yunshu_engine.dflash_fast: DFlash fast verification: keyed=False logprobs=False penalty=False
+2026-11-04 06:11:47,340 INFO yunshu_engine.dflash_fast: DFlash drafter context: 15 prompt-hidden positions (window 2047, target KV 15)
+2026-11-04 06:11:47,358 INFO yunshu_engine.kernels.lane_virtual: lane columns grouped: 3 members of 4, 5-bit
+2026-11-04 06:11:47,432 INFO yunshu.gateway.response: response_done path=/v1/chat/completions stream=True finish_reason=stop completion_tokens=10 tool_calls_parsed=None tool_markup_failed=None
+2026-11-04 06:11:47,433 INFO yunshu_engine.dflash_fast: DFlash suffix graft engagement: copy_rounds=0 proposed=0 accepted=0 extra_accepted=0 matches=0 verify_rows=0 round_ms=0.000 first_round_rows=16
+2026-11-04 06:11:47,435 INFO yunshu: inference_request
+INFO:     127.0.0.1:57200 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-11-04 06:11:47,436 INFO yunshu_engine.vlm_batch_runner: Exact speculative request engaged: dflash constrained=False logprobs=False
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/requests/recent?limit=512 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/host HTTP/1.1" 200 OK
+2026-11-04 06:11:47,508 INFO yunshu_engine.dflash_fast: DFlash fast verification: keyed=False logprobs=False penalty=False
+2026-11-04 06:11:47,508 INFO yunshu_engine.dflash_fast: DFlash drafter context: 15 prompt-hidden positions (window 2047, target KV 15)
+2026-11-04 06:11:47,561 INFO yunshu.gateway.response: response_done path=/v1/chat/completions stream=True finish_reason=stop completion_tokens=10 tool_calls_parsed=None tool_markup_failed=None
+2026-11-04 06:11:47,563 INFO yunshu_engine.dflash_fast: DFlash suffix graft engagement: copy_rounds=0 proposed=0 accepted=0 extra_accepted=0 matches=0 verify_rows=0 round_ms=0.000 first_round_rows=16
+2026-11-04 06:11:47,563 INFO yunshu_engine.vlm_batch_runner: decode cache not stored: superseded by a newer reply
+2026-11-04 06:11:47,847 INFO yunshu_engine.vlm_batch_runner: decode cache stored for the next turn: 15 prompt + 10 reply tokens (drafter window stored; store 13.3 ms, window 2.6 ms)
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/requests/recent?limit=512&after_seq=1 HTTP/1.1" 200 OK
+2026-11-04 06:11:48,569 INFO yunshu_engine.idle_memory: idle memory: holding the wired limit until the idle trim
+2026-11-04 06:11:48,687 INFO yunshu: inference_request
+INFO:     127.0.0.1:57207 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-11-04 06:11:48,689 INFO yunshu: inference_request
+INFO:     127.0.0.1:57206 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-11-04 06:11:48,695 INFO yunshu_engine.kernels.nax_prefill: NAX prefill engaged: rows=960 K=5120 N=10240 bits=4
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/requests/recent?limit=512&after_seq=2 HTTP/1.1" 200 OK
+2026-11-04 06:11:49,537 INFO yunshu_engine.prompt_end_replay: prompt-end replay: skipped (unknown cache type)
+2026-11-04 06:11:49,673 INFO yunshu_engine.cache_decode: APC shared GDN singleton arithmetic engaged: rows=1
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/requests/recent?limit=512&after_seq=2 HTTP/1.1" 200 OK
+2026-11-04 06:11:50,760 INFO yunshu_engine.vlm_batch_runner: Ragged KV engaged (bf16): 16 attention caches
+2026-11-04 06:11:50,761 INFO yunshu_engine.cache_decode: APC shared attention tile arithmetic engaged
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/requests/recent?limit=512&after_seq=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/requests/recent?limit=512&after_seq=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/host HTTP/1.1" 200 OK
+2026-11-04 06:11:53,122 INFO yunshu.gateway.response: response_done path=/v1/chat/completions stream=True finish_reason=length completion_tokens=64 tool_calls_parsed=None tool_markup_failed=None
+2026-11-04 06:11:53,135 INFO yunshu_engine.vlm_batch_runner: Promoted request onto the speculative lane (dflash): 3 tokens left
+2026-11-04 06:11:53,137 INFO yunshu_engine.dflash_fast: DFlash fast verification: keyed=False logprobs=False penalty=False
+2026-11-04 06:11:53,137 INFO yunshu_engine.dflash_fast: DFlash drafter context: 0 prompt-hidden positions (window 2047, target KV 1085)
+2026-11-04 06:11:53,213 INFO yunshu_engine.dflash_fast: DFlash suffix graft engagement: copy_rounds=0 proposed=0 accepted=0 extra_accepted=0 matches=0 verify_rows=0 round_ms=0.000 first_round_rows=1
+2026-11-04 06:11:53,214 INFO yunshu_engine.dflash_fast: DFlash round profile: 1 rounds, 0.0 nodes/round, draft 1.10 ms, verify 35.81 ms, commit+host 0.04 ms
+2026-11-04 06:11:53,214 INFO yunshu_engine.dflash_fast: DFlash host between rounds: consumer (yield) 0.23 ms/round; commit parts {'m_tree_commit': 1.92, 'm_walk_record': 0.012, 'm_hidden': 0.027, 'm_copy_landed': 0.001}
+2026-11-04 06:11:53,214 INFO yunshu_engine.dflash_fast: DFlash budget state: p=[0.75, 0.5, 0.35, 0.25, 0.2, 0.15, 0.1, 0.1, 0.08, 0.08, 0.06, 0.06, 0.05, 0.05, 0.05] cycle_ms={0: 37.0}
+2026-11-04 06:11:53,215 INFO yunshu.gateway.response: response_done path=/v1/chat/completions stream=True finish_reason=length completion_tokens=64 tool_calls_parsed=None tool_markup_failed=None
+2026-11-04 06:11:53,262 INFO yunshu: inference_request
+INFO:     127.0.0.1:57226 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-11-04 06:11:53,263 INFO yunshu: inference_request
+INFO:     127.0.0.1:57227 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/requests/recent?limit=512&after_seq=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/requests/recent?limit=512&after_seq=4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/requests/recent?limit=512&after_seq=4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/requests/recent?limit=512&after_seq=4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/requests/recent?limit=512&after_seq=4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "GET /v1/yunshu/host HTTP/1.1" 200 OK
+2026-11-04 06:11:57,635 INFO yunshu.gateway.response: response_done path=/v1/chat/completions stream=True finish_reason=length completion_tokens=64 tool_calls_parsed=None tool_markup_failed=None
+2026-11-04 06:11:57,643 INFO yunshu_engine.vlm_batch_runner: Promoted request onto the speculative lane (dflash): 3 tokens left
+2026-11-04 06:11:57,645 INFO yunshu_engine.dflash_fast: DFlash fast verification: keyed=False logprobs=False penalty=False
+2026-11-04 06:11:57,645 INFO yunshu_engine.dflash_fast: DFlash drafter context: 0 prompt-hidden positions (window 2047, target KV 1085)
+2026-11-04 06:11:57,719 INFO yunshu_engine.dflash_fast: DFlash suffix graft engagement: copy_rounds=0 proposed=0 accepted=0 extra_accepted=0 matches=0 verify_rows=0 round_ms=0.000 first_round_rows=1
+2026-11-04 06:11:57,720 INFO yunshu_engine.dflash_fast: DFlash round profile: 1 rounds, 0.0 nodes/round, draft 0.79 ms, verify 35.87 ms, commit+host 0.04 ms
+2026-11-04 06:11:57,720 INFO yunshu_engine.dflash_fast: DFlash host between rounds: consumer (yield) 0.26 ms/round; commit parts {'m_tree_commit': 1.583, 'm_walk_record': 0.012, 'm_hidden': 0.028, 'm_copy_landed': 0.001}
+2026-11-04 06:11:57,720 INFO yunshu_engine.dflash_fast: DFlash budget state: p=[0.75, 0.5, 0.35, 0.25, 0.2, 0.15, 0.1, 0.1, 0.08, 0.08, 0.06, 0.06, 0.05, 0.05, 0.05] cycle_ms={0: 36.7}
+2026-11-04 06:11:57,720 INFO yunshu_engine.vlm_batch_runner: decode cache not stored: superseded by a newer reply
+2026-11-04 06:11:57,721 INFO yunshu.gateway.response: response_done path=/v1/chat/completions stream=True finish_reason=length completion_tokens=64 tool_calls_parsed=None tool_markup_failed=None
