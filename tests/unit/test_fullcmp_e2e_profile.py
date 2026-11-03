@@ -252,7 +252,9 @@ def test_profile_without_layer2_fields_fails_closed(chain, tmp_path):
             if row.get("part") == "profile":
                 row.pop("host_sync_count", None)
                 row.pop("op_census", None)
-                row["stages"] = {"decode_round": row["stages"]["decode_round"]}
+                stages = row.get("stages") or {}
+                if "decode_round" in stages:  # a row with no stage lines has nothing to keep
+                    row["stages"] = {"decode_round": stages["decode_round"]}
             out.append(json.dumps(row))
         victim.write_text("\n".join(out) + "\n")
     res = _audit(chain["raw"], chain["manifest"], chain["work"], prof, full=True)
