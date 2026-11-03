@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_engines  # noqa: E402
 import fullcmp_provenance as fp  # noqa: E402
+import fullcmp_quiet as fq  # noqa: E402  (quiet-machine snapshots per cell, FULLCMP_SPEC)
 from gpuq_contention import was_contended  # noqa: E402
 
 # Identifies this harness in every request row (fullcmp audit: provenance_identity).
@@ -1597,10 +1598,13 @@ def cell_name(out_path, rep):
     return stem[: -len(suffix)] if stem.endswith(suffix) else stem
 
 
-def fullcmp_header(s, a, environ, *, census, job_start_s, swap_start, telemetry_path):
+def fullcmp_header(
+    s, a, environ, *, census, job_start_s, swap_start, telemetry_path, quiet_pre=None
+):
     """Session-header fields the fullcmp audit requires beyond the bench_engines meta row.
     Every value comes from the pin, the census, the model config, the launched binary or the
-    gpuq job environment; a value that cannot be found raises (fail closed)."""
+    gpuq job environment; a value that cannot be found raises (fail closed). quiet_pre is the
+    host-CPU snapshot taken before the server started (fullcmp_quiet.snapshot)."""
     model_key = fp.census_model_id(census, a.model)
     version, git_sha = bench_engines.engine_version(a.engine, YUNSHU_SRC)
     census_key = "yunshu" if Srv._is_yunshu(a.engine) else FULLCMP_CENSUS_KEY.get(a.engine)
@@ -1623,6 +1627,7 @@ def fullcmp_header(s, a, environ, *, census, job_start_s, swap_start, telemetry_
         job_start_s=job_start_s,
         swap_start=swap_start,
         telemetry_path=telemetry_path,
+        quiet_pre=quiet_pre,
     )
 
 
@@ -1738,6 +1743,8 @@ def main():
         if os.path.exists(a.out) and os.path.getsize(a.out) > 0:
             raise fp.ProvenanceError(f"{a.out} exists; a fullcmp cell writes a fresh file")
         census = fp.load_json(fp.CENSUS_PATH)
+    # Host CPU before the server exists (foreign holders only; the harness tree is excluded).
+    quiet_pre = fq.snapshot() if fullcmp else None
     job_start_s = time.time()
     swap_start = fp.swap_snapshot() if fullcmp else None
     s = start_server(
@@ -1764,6 +1771,7 @@ def main():
                         job_start_s=job_start_s,
                         swap_start=swap_start,
                         telemetry_path=telem_path,
+                        quiet_pre=quiet_pre,
                     )
             except Exception as exc:
                 if fullcmp:
@@ -1846,6 +1854,8 @@ def main():
                     "gpu_exclusive": True,
                     "contended": False,
                     "swap_end": fp.swap_snapshot(),
+                    # Server still up (a descendant of this process, so not counted as foreign).
+                    "quiet_post": fq.snapshot(),
                 }
             emit(
                 out,

@@ -27,6 +27,21 @@ W = "a" * 64
 B = "b" * 64
 
 
+def quiet_record(total=0.5, holders=(), limit=25.0):
+    """A quiet_pre / quiet_post snapshot as fullcmp_quiet.check() records it."""
+    return {
+        "ok": total < limit,
+        "limit_pct": limit,
+        "total_foreign_pct": total,
+        "holders": [dict(h) for h in holders],
+        "top": [],
+        "load_avg": {"start": 2.0, "end": 2.0, "mean": 2.0},
+        "window_s": 10.0,
+        "samples": 11,
+        "at": 1.0,
+    }
+
+
 def _sha(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()[:16]
 
@@ -126,6 +141,8 @@ def make_data():
                     "gpu_exclusive": True,
                     "contended": False,
                     "device": "m5",
+                    "quiet_pre": quiet_record(),
+                    "quiet_post": quiet_record(),
                 }
                 rows = [head]
                 for ph, base_t, cached, pt in (
@@ -280,6 +297,13 @@ def bad_fairness_controls(m, f):
     m["controls"]["injected_delay_detected"] = False
 
 
+def bad_quiet_machine(m, f):
+    head = f["yunshu/q27_decode-1024-code-p0-r0.jsonl"][0]
+    head["quiet_post"] = quiet_record(
+        total=43.0, holders=[{"pid": 700, "name": "mds_stores", "pct": 43.0}]
+    )
+
+
 BAD_CASES = [
     ("prompt_identity", bad_prompt_identity),
     ("provenance_identity", bad_provenance_identity),
@@ -293,6 +317,7 @@ BAD_CASES = [
     ("output_sha", bad_output_sha),
     ("measured_only", bad_measured_only),
     ("fairness_controls", bad_fairness_controls),
+    ("quiet_machine", bad_quiet_machine),
 ]
 
 
@@ -305,7 +330,7 @@ def test_good_run_passes_all_guards(tmp_path):
     manifest, files = make_data()
     _, results = _run(tmp_path, manifest, files)
     assert [r.name for r in results] == list(fa.GUARDS)
-    assert len(fa.GUARDS) == 13
+    assert len(fa.GUARDS) == 15
     assert failing(results) == set()
     assert all(r.checked > 0 for r in results)
 
@@ -923,3 +948,96 @@ def test_conc_cell_is_read_from_disk_and_counts_its_requests(tmp_path):
     assert run.missing == [] and len(run.files) == 1
     assert len(run.files[0].rows) == 4
     assert fa.check_record_count(run).violations == []
+
+
+# ---------------------------------------------------------------------------
+# quiet_machine (guard 14) and round_time_outlier (guard 15): direct, on fake Run objects
+# ---------------------------------------------------------------------------
+
+
+def _fake_run(files):
+    return fa.Run(manifest={}, files=files, missing=[], extra=[], parse_errors=[])
+
+
+def _qcell(cell, rep, pre, post, rows=()):
+    head = {"part": "session", "quiet_pre": pre, "quiet_post": post}
+    return fa.CellFile({"cell": cell}, rep, Path("x"), head, list(rows))
+
+
+def test_quiet_machine_passes_when_both_snapshots_are_below_limit():
+    run = _fake_run([_qcell("c1", 0, quiet_record(3.0), quiet_record(0.2))])
+    res = fa.check_quiet_machine(run)
+    assert res.violations == [] and res.checked == 1
+
+
+def test_quiet_machine_flags_post_snapshot_over_limit_and_names_holder():
+    hog = [{"pid": 700, "name": "mds_stores", "pct": 43.0}]
+    run = _fake_run([_qcell("c1", 1, quiet_record(1.0), quiet_record(43.0, hog))])
+    res = fa.check_quiet_machine(run)
+    assert len(res.violations) == 1
+    assert "quiet_post" in res.violations[0] and "mds_stores" in res.violations[0]
+
+
+def test_quiet_machine_uses_the_limit_recorded_in_the_snapshot():
+    # A 30% reading against a recorded 40% limit passes; the same reading at 25% fails.
+    ok = _fake_run([_qcell("c1", 0, quiet_record(30.0, limit=40.0), quiet_record(0.0))])
+    bad = _fake_run([_qcell("c1", 0, quiet_record(30.0, limit=25.0), quiet_record(0.0))])
+    assert fa.check_quiet_machine(ok).violations == []
+    assert fa.check_quiet_machine(bad).violations
+
+
+def test_quiet_machine_missing_snapshot_fails_closed():
+    run = _fake_run([_qcell("c1", 0, None, quiet_record(0.0))])
+    res = fa.check_quiet_machine(run)
+    assert any("no quiet_pre snapshot" in v for v in res.violations)
+
+
+def _round_rows(ms, rounds, ctx=1024, phase="cold", kind="code"):
+    return {
+        "part": "decode",
+        "phase": phase,
+        "ctx": ctx,
+        "kind": kind,
+        "xy": {"decode_ms": ms, "speculative": {"rounds": rounds}},
+    }
+
+
+def test_round_time_outlier_flags_rep_more_than_1_5x_the_median():
+    runs = [
+        _fake_run([_qcell("c1", 0, quiet_record(), quiet_record(), [_round_rows(1000, 10)])]),
+        _fake_run([_qcell("c1", 1, quiet_record(), quiet_record(), [_round_rows(1010, 10)])]),
+    ]
+    cf0 = runs[0].files[0]
+    cf1 = runs[1].files[0]
+    # Three reps: r2 is 3x slower than the other two.
+    cf2 = _qcell("c1", 2, quiet_record(), quiet_record(), [_round_rows(3000, 10)])
+    run = _fake_run([cf0, cf1, cf2])
+    res = fa.check_round_time_outlier(run)
+    # Literal rule: each rep against the median of the OTHER reps. The 3x rep is flagged, and
+    # the two normal reps are flagged too (their other-rep median includes the outlier).
+    assert any("r2" in v and "2.99x" in v for v in res.violations)
+    assert all("cold ctx1024 code" in v for v in res.violations)
+
+
+def test_round_time_outlier_passes_within_1_5x():
+    cells = [
+        _qcell("c1", r, quiet_record(), quiet_record(), [_round_rows(ms, 10)])
+        for r, ms in enumerate((1000, 1200, 1400))
+    ]
+    assert fa.check_round_time_outlier(_fake_run(cells)).violations == []
+
+
+def test_round_time_outlier_ignores_requests_without_round_counts():
+    plain = {"part": "decode", "phase": "cold", "ctx": 1024, "kind": "code", "xy": {"decode_ms": 1}}
+    cells = [
+        _qcell("c1", 0, quiet_record(), quiet_record(), [plain]),
+        _qcell("c1", 1, quiet_record(), quiet_record(), [dict(plain, xy={"decode_ms": 9000})]),
+    ]
+    res = fa.check_round_time_outlier(_fake_run(cells))
+    assert res.violations == []
+
+
+def test_round_ms_is_decode_ms_over_speculative_rounds():
+    assert fa.round_ms(_round_rows(500, 25)) == pytest.approx(20.0)
+    assert fa.round_ms({"xy": {"decode_ms": 500}}) is None
+    assert fa.round_ms({"xy": {"decode_ms": 500, "speculative": {"rounds": 0}}}) is None

@@ -337,7 +337,9 @@ def test_fullcmp_header_has_every_required_header_field(layout, monkeypatch):
         job_start_s=1.0,
         swap_start={"used_mb": 1.0},
         telemetry_path="/t.jsonl",
+        quiet_pre={"total_foreign_pct": 0.5, "limit_pct": 25.0},
     )
+    assert fc["quiet_pre"] == {"total_foreign_pct": 0.5, "limit_pct": 25.0}
     # what emit() adds to every session row, plus the start row's explicit fields
     emitted = {
         "part",
@@ -360,7 +362,13 @@ def test_fullcmp_header_has_every_required_header_field(layout, monkeypatch):
         "weights_vs_oQ4e",
         "snapshot_rep",
     }
-    end = {"job_end_s": 2.0, "gpu_exclusive": True, "contended": False, "swap_end": {}}
+    end = {
+        "job_end_s": 2.0,
+        "gpu_exclusive": True,
+        "contended": False,
+        "swap_end": {},
+        "quiet_post": {},
+    }
     have = set(fc) | emitted | set(end)
     required = set(fa.FULLCMP_SCHEMA["header"]) - {
         "contended"
@@ -513,6 +521,13 @@ def cell_env(layout, fake_http, fake_telemetry, monkeypatch, tmp_path):
     monkeypatch.setattr(tfbench, "start_server", lambda *a, **k: server)
     swaps = iter([{"used_mb": 10.0}, {"used_mb": 30.0}])
     monkeypatch.setattr(fp, "swap_snapshot", lambda: next(swaps))
+    # quiet-machine snapshots (10 s of ps sampling each) are stubbed: quiet, nothing named
+    monkeypatch.setattr(
+        tfbench.fq,
+        "snapshot",
+        lambda *a, **k: {"ok": True, "limit_pct": 25.0, "total_foreign_pct": 0.5,
+                         "holders": [], "top": [], "window_s": 10.0},
+    )
 
     def part_decode(s, out, a):
         r = tfbench.send(s.url, tfbench.req(s.model, "hi", 3))
@@ -569,6 +584,8 @@ def test_whole_cell_writes_complete_records(cell_env):
     assert header["swap_end"] == {"used_mb": 30.0}
     assert header["job_start_s"] < header["job_end_s"]
     assert header["gpu_exclusive"] is True and header["contended"] is False
+    assert header["quiet_pre"]["total_foreign_pct"] == 0.5
+    assert header["quiet_post"]["ok"] is True  # written by finalize_session
     assert header["telemetry_path"].endswith("prose-1024-r0.telemetry.jsonl")
     assert header["engaged_log_line"] == "VLM batch runner: draft=mtp"
     decode = next(r for r in rows if r.get("part") == "decode")

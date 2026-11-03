@@ -20,6 +20,17 @@ run = importlib.util.module_from_spec(_SPEC)
 sys.modules["fullcmp_run"] = run
 _SPEC.loader.exec_module(run)
 
+@pytest.fixture(autouse=True)
+def quiet_host_stub(monkeypatch):
+    """The batch-level quiet gate samples the real host (10 s of ps). Stub it: quiet by default;
+    tests that need a busy host override gate themselves."""
+    monkeypatch.setattr(
+        run.fullcmp_quiet,
+        "gate",
+        lambda **kw: {"passed": True, "total_foreign_pct": 0.0, "holders": []},
+    )
+
+
 PIN = {
     "sha": "0f2960047855546a9f13b2631b680352b1c57cfe",
     "version": "0.1.7.dev0",

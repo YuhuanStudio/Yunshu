@@ -15,7 +15,7 @@ Usage:
     python scripts/research/fullcmp_audit.py --root DIR --manifest MANIFEST.json \
         --recompute --table FULLCMP_TABLE.md
 
-Exit status: 0 when all 12 guards pass (and the table recomputes, with --recompute),
+Exit status: 0 when all 15 guards pass (and the table recomputes, with --recompute),
 1 otherwise. This module is CPU-only: it reads json files and never touches MLX or a server.
 
 --recompute parses FULLCMP_TABLE.md: one "### <model> — <metric>" section per model x metric
@@ -58,6 +58,8 @@ GUARDS = (
     "measured_only",
     "fairness_controls",
     "telemetry",
+    "quiet_machine",
+    "round_time_outlier",
 )
 
 # ---------------------------------------------------------------------------
@@ -100,6 +102,8 @@ FULLCMP_SCHEMA = {
         "job_start_s": "float, job start (epoch s)",
         "job_end_s": "float, job end (epoch s)",
         "gpu_exclusive": "bool, no other GPU job ran during the job",
+        "quiet_pre": "dict, quiet-machine snapshot before the server started (fullcmp_quiet)",
+        "quiet_post": "dict, quiet-machine snapshot after the cell, server still up",
         "contended": "bool, machine contention flag",
         "device": "str, machine id",
     },
@@ -827,6 +831,106 @@ def check_telemetry(run: Run) -> GuardResult:
     return res
 
 
+def quiet_limit_of(rec: dict) -> float:
+    """The limit a snapshot was taken against (recorded in it), else the gate default."""
+    import fullcmp_quiet as fq
+
+    lim = rec.get("limit_pct")
+    return float(lim) if is_num(lim) else fq.DEFAULT_MAX_OTHER_CPU_PCT
+
+
+def check_quiet_machine(run: Run) -> GuardResult:
+    """Guard 14: every cell's quiet_pre and quiet_post snapshot (session header) exists and its
+    total foreign CPU is below the limit it was taken against. A missing snapshot is a violation
+    (fail closed); the holders are named in the message."""
+    res = GuardResult("quiet_machine")
+    for cf in run.files:
+        cell = cf.cell["cell"]
+        res.checked += 1
+        head = cf.header or {}
+        for key in ("quiet_pre", "quiet_post"):
+            rec = head.get(key)
+            total = rec.get("total_foreign_pct") if isinstance(rec, dict) else None
+            if not is_num(total):
+                res.fail(cell, f"r{cf.rep}: no {key} snapshot")
+                continue
+            limit = quiet_limit_of(rec)
+            if total >= limit:
+                holders = (
+                    ", ".join(
+                        f"{h.get('name')} (pid {h.get('pid')}, {h.get('pct')}%)"
+                        for h in rec.get("holders") or []
+                    )
+                    or "no holder >= 5%"
+                )
+                res.fail(
+                    cell,
+                    f"r{cf.rep}: {key} foreign CPU {total}% >= {limit}% ({holders})",
+                )
+    return res
+
+
+ROUND_OUTLIER_RATIO = 1.5
+
+
+def round_ms(row: dict):
+    """Per-round decode time of one speculative request: xy.decode_ms / xy.speculative.rounds.
+    None when the row has no speculative round count (not comparable, not flagged)."""
+    xy = row.get("xy") or {}
+    rounds = (xy.get("speculative") or {}).get("rounds")
+    dec = xy.get("decode_ms")
+    if is_num(rounds) and rounds > 0 and is_num(dec) and dec > 0:
+        return dec / rounds
+    return None
+
+
+def round_series(rows) -> dict:
+    """{(phase, ctx, kind, occurrence): round_ms} for one rep's decode rows. Shared with
+    fullcmp_reps, which applies the same rule to 2-rep cells (rep-3 trigger)."""
+    seen: dict = {}
+    out = {}
+    for row in rows:
+        if "phase" not in row:
+            continue
+        base = (row.get("phase"), row.get("ctx"), row.get("kind"))
+        n = seen.get(base, 0)
+        seen[base] = n + 1
+        val = round_ms(row)
+        if val is not None:
+            out[base + (n,)] = val
+    return out
+
+
+def check_round_time_outlier(run: Run) -> GuardResult:
+    """Guard 15: a request whose per-round time differs by more than 1.5x from the median of the
+    same request's other reps is flagged (these cells feed the rep-3 rule). Needs another rep
+    with a round count; requests without speculative round counts are not compared."""
+    import statistics
+
+    res = GuardResult("round_time_outlier")
+    by_cell: dict = defaultdict(dict)
+    for cf in run.files:
+        by_cell[cf.cell["cell"]][cf.rep] = round_series(cf.rows)
+    for cell, reps in by_cell.items():
+        res.checked += 1
+        keys = {k for series in reps.values() for k in series}
+        for key in sorted(keys, key=str):
+            vals = {rep: s[key] for rep, s in reps.items() if key in s}
+            for rep, v in sorted(vals.items()):
+                others = [w for r2, w in vals.items() if r2 != rep]
+                if not others:
+                    continue
+                m = statistics.median(others)
+                ratio = max(v / m, m / v)
+                if ratio > ROUND_OUTLIER_RATIO:
+                    res.fail(
+                        cell,
+                        f"r{rep}: {key[0]} ctx{key[1]} {key[2]} per-round {v:.2f} ms is "
+                        f"{ratio:.2f}x the median of the other reps ({m:.2f} ms)",
+                    )
+    return res
+
+
 GUARD_CHECKS = (
     check_prompt_identity,
     check_provenance_identity,
@@ -841,6 +945,8 @@ GUARD_CHECKS = (
     check_measured_only,
     check_fairness_controls,
     check_telemetry,
+    check_quiet_machine,
+    check_round_time_outlier,
 )
 
 

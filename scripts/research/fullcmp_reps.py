@@ -300,6 +300,23 @@ def group_order(manifest: dict | None, group: str | None):
     return (manifest.get("groups", {}).get(group) or {}).get("order")
 
 
+def round_time_outlier(rep_rows: list) -> bool:
+    """True when one request's per-round time differs by more than the audit's 1.5x between two
+    reps (fullcmp_audit.check_round_time_outlier rule). Imported lazily: the audit imports
+    bench_engines, and this module must still load on its own."""
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import fullcmp_audit as fa
+
+    series = [fa.round_series(rows) for rows in rep_rows]
+    for key in set().union(*series):
+        vals = [s[key] for s in series if key in s]
+        if len(vals) == 2 and max(vals) / min(vals) > fa.ROUND_OUTLIER_RATIO:
+            return True
+    return False
+
+
 def scan(results_dir, thresholds: dict, manifest: dict | None = None):
     """Yields (engine, cell, group, record) for every cell with at least 2 reps."""
     for (engine, cell), entry in sorted(load_results(results_dir).items()):
@@ -308,6 +325,13 @@ def scan(results_dir, thresholds: dict, manifest: dict | None = None):
             continue
         rows = [per_rep_metrics(entry["reps"][k]) for k in reps[:3]]
         verdict = decide(rows, thresholds)
+        if (
+            verdict["status"] == "ok"
+            and len(reps) == 2
+            and round_time_outlier([entry["reps"][k] for k in reps])
+        ):
+            # Per-round time disagrees between the two reps: the rep-3 rule applies too.
+            verdict = dict(verdict, status="need_rep3", exceeding=["round_time"], value=None)
         record = {
             "engine": engine,
             "cell": cell,

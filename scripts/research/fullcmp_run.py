@@ -50,12 +50,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_engines  # noqa: E402
+import fullcmp_quiet  # noqa: E402
 
 SCRIPTS = Path(__file__).resolve().parent
 TFBENCH = SCRIPTS / "tfbench.py"
 AUDIT = SCRIPTS / "fullcmp_audit.py"
 REPS = SCRIPTS / "fullcmp_reps.py"
 PREFLIGHT = SCRIPTS / "fullcmp_preflight.py"
+QUIET = SCRIPTS / "fullcmp_quiet.py"
 
 MAIN_PY = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python"
 GPUQ = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/scripts/dev/gpuq"
@@ -66,6 +68,7 @@ PIN_PATH = RUN_DIR / "yunshu_pin.json"
 THRESH_PATH = RUN_DIR / "rep_thresholds.json"
 AUDIT_DIR = RUN_DIR / "audit"
 PREFLIGHT_DIR = RUN_DIR / "preflight"
+QUIET_DIR = RUN_DIR / "quiet"
 RAW_ROOT = Path("/Volumes/Micron/yunshu-fullcmp/raw")
 HOME_ROOT = Path("/Volumes/Micron/yunshu-fullcmp/home")
 MODEL_PATH = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
@@ -260,9 +263,24 @@ def cell_command(row: dict, rep: int, pin: dict) -> list[str] | None:
     ]
 
 
-def job_command(cells: list[dict], rep: int, pin: dict) -> list[str]:
+def quiet_gate_argv(label: str) -> list[str]:
+    """Quiet-machine gate run first inside the job: up to 3 retries 30 s apart, then the job
+    fails naming the holders (fullcmp_quiet.gate). Its attempts are logged per job label."""
+    return [
+        MAIN_PY,
+        str(QUIET),
+        "gate",
+        "--log",
+        str(QUIET_DIR / f"{label}.jsonl"),
+    ]
+
+
+def job_command(cells: list[dict], rep: int, pin: dict, label: str = "") -> list[str]:
+    """One gpuq job: quiet gate, then mkdir, then one tfbench invocation per cell (&&-chained,
+    so a busy machine or a failed cell stops the rest of the job)."""
     dirs = sorted({str(raw_path(c["engine"], c["id"], rep).parent) for c in cells})
-    steps = ["mkdir -p " + " ".join(shlex.quote(d) for d in dirs)]
+    steps = [shlex.join(quiet_gate_argv(label or "unlabelled"))]
+    steps.append("mkdir -p " + " ".join(shlex.quote(d) for d in dirs))
     for c in cells:
         steps.append(shlex.join(cell_command(c, rep, pin)))
     return ["/bin/sh", "-c", " && ".join(steps)]
@@ -309,7 +327,7 @@ def plan_jobs(
                             rep=rep,
                             cells=chunk,
                             est_min=est,
-                            cmd=job_command(chunk, rep, pin),
+                            cmd=job_command(chunk, rep, pin, label),
                             over_cap=over,
                             flags=["rep3"] if label_suffix else [],
                         )
@@ -622,6 +640,16 @@ def main(argv=None) -> int:
 
     if any(j.over_cap for j in plan.jobs):
         print("refusing: a single cell exceeds the 20 min job cap", file=sys.stderr)
+        return 2
+    # Quiet machine before the batch (each job gates again before its cells).
+    QUIET_DIR.mkdir(parents=True, exist_ok=True)
+    quiet = fullcmp_quiet.gate(log=QUIET_DIR / f"{a.batch}_batch.jsonl")
+    if not quiet["passed"]:
+        print(
+            f"refusing: host busy before batch {a.batch}: foreign CPU "
+            f"{quiet['total_foreign_pct']:.1f}%; holders: {fullcmp_quiet.describe_holders(quiet)}",
+            file=sys.stderr,
+        )
         return 2
     if swap_gate(a.batch) != 0:
         print("refusing: swap_stable preflight failed", file=sys.stderr)
