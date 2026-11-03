@@ -163,12 +163,48 @@ def make_data():
     return manifest, files
 
 
-def write_run(root: Path, manifest, files) -> Path:
+def synthetic_telemetry(swap_used=1000, throttled=False, n=20):
+    """Synthetic telemetry series (NOT captured output): header, samples, footer."""
+    thermal = {"cpu_speed_limit_pct": 100, "throttled": throttled}
+    rows = [
+        {
+            "part": "telemetry_header",
+            "pid": 1,
+            "port": 1,
+            "interval_ms": 100,
+            "probes": {},
+            "thermal_start": thermal,
+        }
+    ]
+    for i in range(n):
+        rows.append(
+            {
+                "part": "sample",
+                "t": 1000.0 + i * 0.1,
+                "proc": {"rss_bytes": 10**9 + i, "cpu_pct": 50.0},
+                "swap": {"used_bytes": swap_used},
+                "gpu": {"device_util_pct": 90},
+                "thermal": thermal,
+            }
+        )
+    rows.append({"part": "telemetry_footer", "n_samples": n, "thermal_end": thermal})
+    return rows
+
+
+def telemetry_file(cell_path: Path) -> Path:
+    return fa.telemetry_path(cell_path)
+
+
+def write_run(root: Path, manifest, files, telemetry=True) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     for rel, rows in files.items():
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        if telemetry:
+            telemetry_file(path).write_text(
+                "".join(json.dumps(r) + "\n" for r in synthetic_telemetry())
+            )
     mpath = root / "manifest.json"
     mpath.write_text(json.dumps(manifest))
     return mpath
@@ -265,11 +301,11 @@ def _run(tmp_path, manifest, files):
     return fa.run_guards(tmp_path / "run", mpath)
 
 
-def test_good_run_passes_all_twelve_guards(tmp_path):
+def test_good_run_passes_all_guards(tmp_path):
     manifest, files = make_data()
     _, results = _run(tmp_path, manifest, files)
     assert [r.name for r in results] == list(fa.GUARDS)
-    assert len(fa.GUARDS) == 12
+    assert len(fa.GUARDS) == 13
     assert failing(results) == set()
     assert all(r.checked > 0 for r in results)
 
@@ -392,3 +428,145 @@ def test_schema_lists_fields_bench_engines_does_not_emit_yet():
     ):
         assert field in missing["header"]
     assert "ttft_s" not in missing["request"] and "sha" not in missing["request"]
+
+
+# ---- telemetry guard (guard 13) ---------------------------------------------
+def _tel_path(tmp_path, rel="mlx-serve/q27_decode-1024-code-p0-r0.jsonl"):
+    return telemetry_file(tmp_path / "run" / rel)
+
+
+def _tel_results(tmp_path, mutate_file=None, remove=False, telemetry_required=True):
+    manifest, files = make_data()
+    manifest["telemetry_required"] = telemetry_required
+    mpath = write_run(tmp_path / "run", manifest, files)
+    if remove:
+        _tel_path(tmp_path).unlink()
+    if mutate_file is not None:
+        p = _tel_path(tmp_path)
+        rows = [json.loads(x) for x in p.read_text().splitlines()]
+        mutate_file(rows)
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    _, results = fa.run_guards(tmp_path / "run", mpath)
+    return next(r for r in results if r.name == "telemetry")
+
+
+def test_telemetry_guard_passes_on_synthetic_good_series(tmp_path):
+    res = _tel_results(tmp_path)
+    assert res.violations == []
+    assert res.checked > 0
+
+
+def test_telemetry_missing_file_is_flagged(tmp_path):
+    res = _tel_results(tmp_path, remove=True)
+    assert any("missing telemetry" in v for v in res.violations)
+
+
+def test_telemetry_missing_allowed_when_not_required(tmp_path):
+    res = _tel_results(tmp_path, remove=True, telemetry_required=False)
+    assert not any("missing telemetry" in v for v in res.violations)
+
+
+def test_telemetry_thermal_throttle_in_a_sample_is_flagged(tmp_path):
+    def throttle(rows):
+        for r in rows:
+            if r.get("part") == "sample":
+                r["thermal"] = {"cpu_speed_limit_pct": 70, "throttled": True}
+                break
+
+    res = _tel_results(tmp_path, mutate_file=throttle)
+    assert any("thermal throttling flagged (sample)" in v for v in res.violations)
+
+
+def test_telemetry_swap_growth_is_flagged(tmp_path):
+    def grow(rows):
+        samples = [r for r in rows if r.get("part") == "sample"]
+        samples[-1]["swap"] = {"used_bytes": 5 * 2**20}
+
+    res = _tel_results(tmp_path, mutate_file=grow)
+    assert any("swap grew" in v for v in res.violations)
+
+
+def test_telemetry_no_samples_is_flagged(tmp_path):
+    res = _tel_results(
+        tmp_path,
+        mutate_file=lambda rows: rows.__setitem__(
+            slice(None), [r for r in rows if r.get("part") != "sample"]
+        ),
+    )
+    assert any("no samples" in v for v in res.violations)
+
+
+# ---- derived efficiency (labeled DERIVED) ------------------------------------
+FIX = Path(__file__).resolve().parent / "fixtures" / "fullcmp_telemetry"
+
+
+def test_arch_from_real_27b_config_matches_table():
+    arch = fa.arch_from_config(FIX / "qwen38_27b_config.json")
+    m = fa.MODELS["q27-4bit"]
+    assert arch["n_layers"] == 64
+    assert arch["full_attn_layers"] == m["full_attn_layers"] == 16
+    assert arch["linear_layers"] == m["linear_layers"] == 48
+    assert arch["kv_heads"] == m["kv_heads"] == 4
+    assert arch["head_dim"] == m["head_dim"] == 256
+    assert arch["n_heads"] == m["n_heads"] == 24
+
+
+def test_arch_from_real_flashnext_config_matches_table():
+    arch = fa.arch_from_config(FIX / "qwen38_flashnext_config.json")
+    m = fa.MODELS["flashnext"]
+    assert arch["n_layers"] == m["n_layers"] == 48
+    assert arch["full_attn_layers"] == m["full_attn_layers"] == 12
+    assert arch["kv_heads"] == m["kv_heads"] == 2
+
+
+def test_kv_and_gdn_bytes_for_27b():
+    m = fa.MODELS["q27-4bit"]
+    # 16 layers * 2 (K,V) * 4 kv heads * 256 * 2 bytes = 65536 B per context token (64 KiB)
+    assert fa.kv_bytes_per_token(m, 1) == 65536
+    # 48 linear layers * 48 heads * 128 * 128 * 4 bytes (fp32 state)
+    assert fa.gdn_state_bytes(m) == 48 * 48 * 128 * 128 * 4
+
+
+def test_derived_mbu_formula_for_27b_decode():
+    hw = "M5 Max"
+    d = fa.derived_decode("q27-4bit", hw, tok_s=40.0, pt=1024, ct=512)
+    m, h = fa.MODELS["q27-4bit"], fa.HARDWARE[hw]
+    ctx = 1024 + 256
+    expect_bytes = m["weight_bytes"] + 65536 * ctx + fa.gdn_state_bytes(m)
+    assert d["label"] == "DERIVED"
+    assert d["bytes_per_token"] == pytest.approx(expect_bytes)
+    assert d["mbu"] == pytest.approx(expect_bytes * 40.0 / (h["peak_bw_gbs"] * 1e9))
+    # no sourced peak FLOP/s in the table: MFU is None with the reason, never a guess
+    assert d["mfu"] is None
+    assert "peak FLOP/s unsourced" in d["reason"]
+
+
+def test_derived_mfu_is_computed_once_a_peak_is_sourced(monkeypatch):
+    hw = {"peak_bw_gbs": 560.0, "peak_tflops_bf16": 100.0}
+    monkeypatch.setitem(fa.HARDWARE, "test-hw", hw)
+    d = fa.derived_prefill("q27-4bit", "test-hw", pt=4096, ttft_s=2.0)
+    flops_tok = 2 * fa.MODELS["q27-4bit"]["active_params"] + fa.attn_flops_per_token(
+        fa.MODELS["q27-4bit"], 2048
+    )
+    assert d["mfu"] == pytest.approx(flops_tok * 2048.0 / (100.0 * 1e12))
+    assert d["prefill_tok_s"] == pytest.approx(2048.0)
+
+
+def test_derived_flashnext_is_none_with_reason():
+    d = fa.derived_decode("flashnext", "M5 Max", tok_s=60.0, pt=1024, ct=512)
+    assert d["mbu"] is None and d["mfu"] is None
+    assert "weight bytes per token not in repo" in d["reason"]
+
+
+def test_derived_rows_only_for_known_models_with_measured_inputs(tmp_path):
+    manifest, files = make_data()
+    mpath = write_run(tmp_path / "run", manifest, files)
+    run = fa.load_run(tmp_path / "run", json.loads(mpath.read_text()))
+    # synthetic model id "Qwen3.8-27B" is not in MODELS: nothing is derived for it
+    assert fa.derived_rows(run) == []
+    for cf in run.files:
+        cf.cell["model"] = "q27-4bit"
+    rows = fa.derived_rows(run)
+    assert rows and {r["metric"] for r in rows} == {"decode", "prefill"}
+    assert all(r["label"] == "DERIVED" for r in rows)
+    assert all(r["mfu"] is None for r in rows)  # peak FLOP/s unsourced in the table

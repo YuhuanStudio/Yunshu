@@ -54,6 +54,7 @@ GUARDS = (
     "output_sha",
     "measured_only",
     "fairness_controls",
+    "telemetry",
 )
 
 # ---------------------------------------------------------------------------
@@ -244,6 +245,14 @@ class GuardResult:
         self.violations.append(f"{self.name}: {cell}: {msg}")
 
 
+TELEMETRY_SUFFIX = ".telemetry.jsonl"
+
+
+def telemetry_path(cell_path: Path) -> Path:
+    """<cell>-rN.jsonl -> <cell>-rN.telemetry.jsonl (written by fullcmp_telemetry.Sampler)."""
+    return cell_path.with_name(cell_path.name[: -len(".jsonl")] + TELEMETRY_SUFFIX)
+
+
 def _read_jsonl(path: Path):
     rows, errors = [], []
     for no, line in enumerate(path.read_text().splitlines(), 1):
@@ -275,7 +284,11 @@ def load_run(root, manifest: dict) -> Run:
         header = next((r for r in rows if r.get("part") == "session"), None)
         body = [r for r in rows if r.get("part") == "decode"]
         files.append(CellFile(cell, rep, path, header, body))
-    extra = [p for p in sorted(root.glob("*/*.jsonl")) if p not in expected]
+    extra = [
+        p
+        for p in sorted(root.glob("*/*.jsonl"))
+        if p not in expected and not p.name.endswith(TELEMETRY_SUFFIX)
+    ]
     return Run(manifest, files, missing, extra, parse_errors)
 
 
@@ -662,6 +675,60 @@ def check_fairness_controls(run: Run) -> GuardResult:
     return res
 
 
+def check_telemetry(run: Run) -> GuardResult:
+    """Guard 13: every cell has a telemetry series; flags thermal throttling and swap growth.
+
+    Missing telemetry, a series without samples, or an unreadable file is a violation (unless the
+    manifest sets "telemetry_required": false). A cell whose sampler saw a thermal throttle
+    (CPU_Speed_Limit < 100 or a recorded thermal/performance warning, at start, end or any sample)
+    is flagged. A cell whose swap used grew during the cell (last sample minus first) is flagged.
+    """
+    import fullcmp_telemetry as tm
+
+    res = GuardResult("telemetry")
+    required = run.manifest.get("telemetry_required", True)
+    for cf in run.files:
+        cell = cf.cell["cell"]
+        tpath = telemetry_path(cf.path)
+        if not tpath.is_file():
+            if required:
+                res.fail(cell, f"r{cf.rep}: missing telemetry file {tpath.name}")
+            continue
+        res.checked += 1
+        try:
+            header, samples, marks, footer = tm.read_telemetry(tpath)
+        except (OSError, json.JSONDecodeError) as exc:
+            res.fail(cell, f"r{cf.rep}: telemetry unreadable ({exc})")
+            continue
+        if header is None:
+            res.fail(cell, f"r{cf.rep}: telemetry has no header")
+        if footer is None:
+            res.fail(
+                cell,
+                f"r{cf.rep}: telemetry has no footer (sampler did not stop cleanly)",
+            )
+        if not samples:
+            res.fail(cell, f"r{cf.rep}: telemetry has no samples")
+            continue
+        flagged = []
+        for where, th in (
+            ("start", (header or {}).get("thermal_start")),
+            ("end", (footer or {}).get("thermal_end")),
+        ):
+            if (th or {}).get("throttled"):
+                flagged.append(where)
+        if any((smp.get("thermal") or {}).get("throttled") for smp in samples):
+            flagged.append("sample")
+        if flagged:
+            res.fail(
+                cell, f"r{cf.rep}: thermal throttling flagged ({', '.join(flagged)})"
+            )
+        growth = tm.summarize(samples, marks)["overall"].get("swap_used_delta_bytes")
+        if growth is not None and growth > 0:
+            res.fail(cell, f"r{cf.rep}: swap grew by {growth} bytes during the cell")
+    return res
+
+
 GUARD_CHECKS = (
     check_prompt_identity,
     check_provenance_identity,
@@ -675,6 +742,7 @@ GUARD_CHECKS = (
     check_output_sha,
     check_measured_only,
     check_fairness_controls,
+    check_telemetry,
 )
 
 
@@ -828,6 +896,186 @@ def recompute_table(run: Run, table_text: str, by_cell: dict):
 
 
 # ---------------------------------------------------------------------------
+# Derived efficiency (labeled DERIVED everywhere: never a measured value)
+#   MBU  = (weight bytes read per token + KV bytes read per token + GDN state bytes) x tok/s / peak BW
+#   MFU  = (2 x active params + attention FLOPs per token) x tok/s / peak FLOPs
+# Inputs are measured (tok/s, prompt/completion tokens, ttft) or come from the tables below.
+# A value whose input is not sourced is None with the reason, never a guess.
+# ---------------------------------------------------------------------------
+HARDWARE = {
+    "M5 Max": {
+        "peak_bw_gbs": 560.0,
+        "bw_source": "IMPLIED: docs/research/ctx1m/ROOFLINE.md (BW = 560 GB/s, implied by the measured "
+        "29 ms 27B floor). Not an Apple spec figure; replace when the spec value is verified.",
+        "peak_tflops_bf16": None,
+        "flops_source": "UNSOURCED: no peak FLOP/s figure in the repo or the spec. The ROOFLINE 40 TFLOP/s "
+        "is measured effective prefill, not a peak. MFU is None until a sourced peak is entered.",
+    },
+}
+
+# Model table. Values from the checkpoints' config.json (text_config) unless noted.
+MODELS = {
+    "q27-4bit": {
+        "name": "Qwen3.8-27B-oQ4e-mtp",
+        "active_params": 27.74e9,  # task spec: 27.74B text params (dense: all active)
+        "weight_bytes": 15.74e9,  # task spec: 15.74 GB weights (oQ4e)
+        "n_layers": 64,
+        "full_attn_layers": 16,  # layer_types == full_attention (every 4th)
+        "linear_layers": 48,
+        "n_heads": 24,
+        "kv_heads": 4,
+        "head_dim": 256,
+        "kv_dtype_bytes": 2,  # bf16 KV (int8 KV is a separate lossy option)
+        "gdn_state": {"heads": 48, "key_dim": 128, "value_dim": 128, "dtype_bytes": 4},
+        "config": "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp/config.json",
+    },
+    "flashnext": {
+        "name": "Qwen3.8-Flash-Next-oQ3e-mtp",
+        # NOT in the repo: MoE (512 experts, top-10) active-parameter count and per-token expert
+        # bytes are not recorded. MBU/MFU stay None until they are sourced.
+        "active_params": None,
+        "weight_bytes": None,
+        "n_layers": 48,
+        "full_attn_layers": 12,
+        "linear_layers": 36,
+        "n_heads": 24,
+        "kv_heads": 2,
+        "head_dim": 256,
+        "kv_dtype_bytes": 2,
+        "gdn_state": None,  # not extracted; KV term excludes the indexer (indexer_kv_heads=1, dim 128)
+        "config": "/Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ3e-mtp/config.json",
+    },
+}
+
+
+def arch_from_config(path) -> dict:
+    """Layer counts from a checkpoint config.json (text_config), for the model table check."""
+    cfg = json.loads(Path(path).read_text())
+    tc = cfg.get("text_config", cfg)
+    types = tc.get("layer_types") or []
+    return {
+        "n_layers": tc.get("num_hidden_layers"),
+        "full_attn_layers": sum(1 for t in types if t == "full_attention"),
+        "linear_layers": sum(1 for t in types if t == "linear_attention"),
+        "n_heads": tc.get("num_attention_heads"),
+        "kv_heads": tc.get("num_key_value_heads"),
+        "head_dim": tc.get("head_dim"),
+        "gdn_state": {
+            "heads": tc.get("linear_num_value_heads"),
+            "key_dim": tc.get("linear_key_head_dim"),
+            "value_dim": tc.get("linear_value_head_dim"),
+            "dtype_bytes": 4 if str(tc.get("mamba_ssm_dtype", "")) == "float32" else 2,
+        }
+        if tc.get("linear_num_value_heads")
+        else None,
+    }
+
+
+def kv_bytes_per_token(model: dict, ctx: float) -> float:
+    """KV bytes READ for one decode step at context length ctx (full-attention layers only)."""
+    return (
+        model["full_attn_layers"]
+        * 2
+        * model["kv_heads"]
+        * model["head_dim"]
+        * model["kv_dtype_bytes"]
+        * ctx
+    )
+
+
+def gdn_state_bytes(model: dict) -> float | None:
+    g = model.get("gdn_state")
+    if not g:
+        return None
+    return (
+        model["linear_layers"]
+        * g["heads"]
+        * g["key_dim"]
+        * g["value_dim"]
+        * g["dtype_bytes"]
+    )
+
+
+def attn_flops_per_token(model: dict, ctx: float) -> float:
+    """Attention matmul FLOPs for one token at context ctx: QK^T and AV, 4 * heads * head_dim * ctx per layer."""
+    return model["full_attn_layers"] * 4 * model["n_heads"] * model["head_dim"] * ctx
+
+
+def derived_decode(model_id: str, hw: str, tok_s: float, pt: int, ct: int) -> dict:
+    """MBU and MFU for decode at the average context (pt + ct/2). Labeled DERIVED."""
+    m, h = MODELS[model_id], HARDWARE[hw]
+    ctx = pt + ct / 2.0
+    out = {"label": "DERIVED", "ctx_avg": ctx, "mbu": None, "mfu": None, "reason": []}
+    if m["weight_bytes"] is None:
+        out["reason"].append("weight bytes per token not in repo")
+    else:
+        kv_gdn = kv_bytes_per_token(m, ctx) + (gdn_state_bytes(m) or 0)
+        bytes_tok = m["weight_bytes"] + kv_gdn
+        out["bytes_per_token"] = bytes_tok
+        out["mbu"] = bytes_tok * tok_s / (h["peak_bw_gbs"] * 1e9)
+    out.update(_mfu(m, h, tok_s, ctx, out))
+    return out
+
+
+def derived_prefill(model_id: str, hw: str, pt: int, ttft_s: float) -> dict:
+    """MFU for prefill: prompt tokens over ttft (includes the first sampled token, so a slight
+    under-estimate). Attention at the average prefill context pt/2. MBU is not defined for
+    compute-bound prefill and is not reported."""
+    m, h = MODELS[model_id], HARDWARE[hw]
+    out = {"label": "DERIVED", "reason": []}
+    if not ttft_s or ttft_s <= 0:
+        return {**out, "mfu": None, "reason": ["ttft missing"]}
+    out.update(_mfu(m, h, pt / ttft_s, pt / 2.0, out))
+    out["prefill_tok_s"] = pt / ttft_s
+    return out
+
+
+def _mfu(m: dict, h: dict, tok_s: float, ctx: float, out: dict) -> dict:
+    if m["active_params"] is None:
+        out["reason"].append("active params not in repo")
+        return {"mfu": None, "reason": out["reason"]}
+    if h["peak_tflops_bf16"] is None:
+        out["reason"].append("peak FLOP/s unsourced")
+        return {"mfu": None, "reason": out["reason"]}
+    flops_tok = 2 * m["active_params"] + attn_flops_per_token(m, ctx)
+    return {
+        "mfu": flops_tok * tok_s / (h["peak_tflops_bf16"] * 1e12),
+        "reason": out["reason"],
+    }
+
+
+def derived_rows(run: Run, hw: str = "M5 Max") -> list:
+    """One DERIVED row per (cell, rep, phase) that has a model table entry and measured inputs."""
+    rows = []
+    for cf in run.files:
+        model_id = cf.cell.get("model")
+        if model_id not in MODELS:
+            continue
+        for r in cf.rows:
+            pt, ct = r.get("pt"), r.get("ct")
+            if not (is_num(pt) and is_num(ct) and ct > 0):
+                continue
+            base = {"cell": cf.cell["cell"], "rep": cf.rep, "phase": r.get("phase")}
+            if is_num(r.get("dec_tps")):
+                rows.append(
+                    {
+                        **base,
+                        "metric": "decode",
+                        **derived_decode(model_id, hw, r["dec_tps"], int(pt), int(ct)),
+                    }
+                )
+            if is_num(r.get("ttft_s")):
+                rows.append(
+                    {
+                        **base,
+                        "metric": "prefill",
+                        **derived_prefill(model_id, hw, int(pt), r["ttft_s"]),
+                    }
+                )
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def main(argv=None) -> int:
@@ -842,6 +1090,11 @@ def main(argv=None) -> int:
         help="also recompute the table from raw rows",
     )
     p.add_argument("--table", help="FULLCMP_TABLE.md (required with --recompute)")
+    p.add_argument(
+        "--derived",
+        action="store_true",
+        help="print DERIVED MBU/MFU rows (labeled derived; never counted as measured)",
+    )
     a = p.parse_args(argv)
     if a.recompute and not a.table:
         p.error("--recompute needs --table")
@@ -860,6 +1113,12 @@ def main(argv=None) -> int:
         )
         for v in r.violations:
             print(f"  {v}")
+    if a.derived:
+        print(
+            "DERIVED (not measured): MBU / MFU from measured inputs + model/hardware tables"
+        )
+        for d in derived_rows(run):
+            print(json.dumps(d, default=str))
     passed = sum(1 for r in results if not r.violations)
     print(f"TOTAL: {passed}/{len(results)} checks passed, {total} violations")
     return 1 if total else 0
