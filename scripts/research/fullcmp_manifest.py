@@ -54,7 +54,7 @@ AGENTIC = (
 )  # agentbench: tasks.py + tasks/ (the task set)
 
 TARGET_GPU_H = 48.0
-REPS = 3
+REPS = 2  # 2 reps per cell; fullcmp_reps.py adds rep 3 only where the rule says need_rep3
 BEHAVIOUR_REPS = 1
 BEHAVIOUR_MIN = 3.0  # per engine: the 7 checks plus one boot (ASSUMED budget)
 # ASSUMED per-run cap for one Claude Code agentbench run. PERF_TREND 2026-10-23 ran 62 runs in

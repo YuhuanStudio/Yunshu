@@ -90,6 +90,8 @@ HOME_ROOT = Path("/Volumes/Micron/yunshu-fullcmp/home")
 MODEL_PATH = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
 
 BATCH_ORDER = ("B1", "B2", "B4", "B5")
+SMOKE_BATCH = "SMOKE"  # pre-flight matrix (fullcmp_manifest --smoke); audits only its own rows
+BATCH_CHOICES = BATCH_ORDER + (SMOKE_BATCH,)
 JOB_CAP_MIN = 20.0
 REP3_INDEX = 2  # same as fullcmp_reps.REP3_INDEX
 CONC_TRIALS = (
@@ -501,6 +503,20 @@ def plan_jobs(
     return jobs
 
 
+def audited_batches(batch: str) -> list[str]:
+    """Batches the audit covers for a run: a SMOKE run audits only its own rows; a real batch
+    audits itself and every earlier batch in BATCH_ORDER."""
+    if batch == SMOKE_BATCH:
+        return [SMOKE_BATCH]
+    return list(BATCH_ORDER[: BATCH_ORDER.index(batch) + 1])
+
+
+def unknown_engines(rows: list[dict], batch: str, engines) -> list[str]:
+    """Requested engine ids that have no manifest row in the batch."""
+    known = {r.get("engine") for r in rows if r.get("batch") == batch}
+    return [e for e in engines if e not in known]
+
+
 def plan_batch(
     rows: list[dict],
     batch: str,
@@ -869,7 +885,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--batch", required=True, choices=BATCH_ORDER)
+    ap.add_argument("--batch", required=True, choices=BATCH_CHOICES)
     ap.add_argument("--manifest", required=True, type=Path)
     ap.add_argument("--engines", default="", help="comma list of manifest engine ids")
     ap.add_argument(
@@ -912,6 +928,16 @@ def main(argv=None) -> int:
     pin = json.loads(PIN_PATH.read_text())
     rows = load_rows(a.manifest)
     engines = [e for e in a.engines.split(",") if e] or None
+    if engines:
+        # An unknown id would filter every row out and run nothing: fail closed instead.
+        missing = unknown_engines(rows, a.batch, engines)
+        if missing:
+            print(
+                f"refusing: no {a.batch} manifest row for engine id(s) {missing} "
+                f"(manifest ids: {sorted({r.get('engine') for r in rows if r.get('batch') == a.batch})})",
+                file=sys.stderr,
+            )
+            return 2
     plan = plan_batch(
         rows, a.batch, pin, engines=engines, rep=a.rep, profile_rep=a.profile_rep
     )
@@ -965,7 +991,7 @@ def main(argv=None) -> int:
     ids, bad = submit_all(plan.jobs)
     failed = bad + (1 if wait_all(ids) != 0 else 0)
 
-    batches = list(BATCH_ORDER[: BATCH_ORDER.index(a.batch) + 1])
+    batches = audited_batches(a.batch)
     manifest_path = AUDIT_DIR / f"{a.batch}_audit_manifest.json"
     AUDIT_DIR.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
