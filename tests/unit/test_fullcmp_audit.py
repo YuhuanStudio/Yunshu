@@ -27,13 +27,17 @@ W = "a" * 64
 B = "b" * 64
 
 
-def quiet_record(total=0.5, holders=(), limit=25.0):
-    """A quiet_pre / quiet_post snapshot as fullcmp_quiet.check() records it."""
+def quiet_record(total=0.5, holders=(), limit=150.0, single=20.0):
+    """A quiet_pre / quiet_post snapshot as fullcmp_quiet.check() records it (`limit` = total)."""
+    hs = [dict(h) for h in holders]
+    violators = [h for h in hs if h["pct"] >= single and h["name"] not in ("WindowServer", "kernel_task", "mds_stores")]
     return {
-        "ok": total < limit,
-        "limit_pct": limit,
+        "ok": total < limit and not violators,
+        "max_single_pct": single,
+        "max_total_pct": limit,
         "total_foreign_pct": total,
-        "holders": [dict(h) for h in holders],
+        "holders": hs,
+        "violators": violators,
         "top": [],
         "load_avg": {"start": 2.0, "end": 2.0, "mean": 2.0},
         "window_s": 10.0,
@@ -300,7 +304,7 @@ def bad_fairness_controls(m, f):
 def bad_quiet_machine(m, f):
     head = f["yunshu/q27_decode-1024-code-p0-r0.jsonl"][0]
     head["quiet_post"] = quiet_record(
-        total=43.0, holders=[{"pid": 700, "name": "mds_stores", "pct": 43.0}]
+        total=43.0, holders=[{"pid": 700, "name": "stray", "pct": 43.0}]
     )
 
 
@@ -971,11 +975,17 @@ def test_quiet_machine_passes_when_both_snapshots_are_below_limit():
 
 
 def test_quiet_machine_flags_post_snapshot_over_limit_and_names_holder():
-    hog = [{"pid": 700, "name": "mds_stores", "pct": 43.0}]
+    hog = [{"pid": 700, "name": "stray", "pct": 43.0}]
     run = _fake_run([_qcell("c1", 1, quiet_record(1.0), quiet_record(43.0, hog))])
     res = fa.check_quiet_machine(run)
     assert len(res.violations) == 1
-    assert "quiet_post" in res.violations[0] and "mds_stores" in res.violations[0]
+    assert "quiet_post" in res.violations[0] and "stray" in res.violations[0]
+
+
+def test_quiet_machine_system_noise_is_not_a_holder_violation():
+    noise = [{"pid": 700, "name": "mds_stores", "pct": 43.0}]
+    run = _fake_run([_qcell("c1", 0, quiet_record(1.0), quiet_record(43.0, noise))])
+    assert fa.check_quiet_machine(run).violations == []
 
 
 def test_quiet_machine_uses_the_limit_recorded_in_the_snapshot():

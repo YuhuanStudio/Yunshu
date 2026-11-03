@@ -15,14 +15,19 @@ What this module does (read-only, never kills anything):
   * measures each foreign process's CPU from its cumulative CPU time (`time` column) between its
     first and last sighting, so a bursty process is not diluted by ps's lifetime `pcpu` average.
     A process that starts and exits between two samples is not seen (interval 1 s by default);
-  * passes when the total foreign CPU is below `max_other_cpu_pct` (percent of one core).
+  * passes only when BOTH hold (percent of one core):
+      - no single foreign holder sustains >= `max_single_pct` (default 20). macOS system noise
+        (WindowServer, kernel_task, mds_stores) is exempt from this rule only: it is still listed
+        and still counted in the total;
+      - total foreign CPU is < `max_total_pct` (default 150).
+    The per-holder rule catches the slow run's ~25% stray process; the total rule catches many
+    small holders adding up to a busy host.
 
-Default limit 25%: a single foreign holder at the level of the slow run's stray process fails the
-gate (its mean is >= 25%), and the 43% mds_stores spikes fail it too. Holders at or above 5% are
-listed by name, pid and mean %; the top five foreign processes are always recorded.
+The record lists EVERY foreign holder with a nonzero mean (`holders`, sorted by mean, name/pid/pct),
+plus `violators` (holders that broke the single-holder rule) and the top five (`top`).
 
 CLI:
-    fullcmp_quiet.py check [--max-other-cpu-pct 25] [--window-s 10]     one snapshot, prints JSON
+    fullcmp_quiet.py check [--max-single-pct 20] [--max-total-pct 150] [--window-s 10]  one snapshot
     fullcmp_quiet.py gate  [--log FILE] [--retries 3] [--wait-s 30]     retries inside a job;
                                                                         exit 3 naming holders
 """
@@ -38,8 +43,10 @@ import sys
 import time
 from pathlib import Path
 
-DEFAULT_MAX_OTHER_CPU_PCT = 25.0
-HOLDER_MIN_PCT = 5.0
+DEFAULT_MAX_SINGLE_PCT = 20.0
+DEFAULT_MAX_TOTAL_PCT = 150.0
+# macOS system noise: exempt from the single-holder rule only (still recorded and counted in total).
+SYSTEM_NOISE = frozenset({"WindowServer", "kernel_task", "mds_stores"})
 DEFAULT_WINDOW_S = 10.0
 DEFAULT_INTERVAL_S = 1.0
 DEFAULT_RETRIES = 3
@@ -161,7 +168,8 @@ def read_loadavg() -> float:
 
 
 def check(
-    max_other_cpu_pct: float = DEFAULT_MAX_OTHER_CPU_PCT,
+    max_single_pct: float = DEFAULT_MAX_SINGLE_PCT,
+    max_total_pct: float = DEFAULT_MAX_TOTAL_PCT,
     window_s: float = DEFAULT_WINDOW_S,
     interval_s: float = DEFAULT_INTERVAL_S,
     *,
@@ -209,7 +217,12 @@ def check(
     holders = [
         {"pid": p, "name": display_name(rows[p]["command"]), "pct": round(pct[p], 2)}
         for p in ranked
-        if pct[p] >= HOLDER_MIN_PCT
+        if pct[p] > 0.0
+    ]
+    violators = [
+        h
+        for h in holders
+        if h["pct"] >= max_single_pct and h["name"] not in SYSTEM_NOISE
     ]
     top = [
         {
@@ -221,10 +234,12 @@ def check(
         for p in ranked[:TOP_N]
     ]
     return {
-        "ok": total < max_other_cpu_pct,
-        "limit_pct": max_other_cpu_pct,
+        "ok": total < max_total_pct and not violators,
+        "max_single_pct": max_single_pct,
+        "max_total_pct": max_total_pct,
         "total_foreign_pct": round(total, 2),
         "holders": holders,
+        "violators": violators,
         "top": top,
         "load_avg": {
             "start": loads[0],
@@ -238,22 +253,28 @@ def check(
 
 
 def snapshot(
-    max_other_cpu_pct=DEFAULT_MAX_OTHER_CPU_PCT, window_s=DEFAULT_WINDOW_S, **kw
+    max_single_pct=DEFAULT_MAX_SINGLE_PCT,
+    max_total_pct=DEFAULT_MAX_TOTAL_PCT,
+    window_s=DEFAULT_WINDOW_S,
+    **kw,
 ) -> dict:
     """check() for a per-cell record (quiet_pre / quiet_post): the same fields."""
-    return check(max_other_cpu_pct, window_s, **kw)
+    return check(max_single_pct, max_total_pct, window_s, **kw)
 
 
 def describe_holders(record: dict) -> str:
-    if not record.get("holders"):
-        return "no single holder >= 5%"
-    return ", ".join(
-        f"{h['name']} (pid {h['pid']}, {h['pct']:.1f}%)" for h in record["holders"]
-    )
+    """Violators first (the reason for a BUSY verdict), then the top foreign holders."""
+    named = record.get("violators") or []
+    rest = [h for h in (record.get("holders") or [])[:TOP_N] if h not in named]
+    shown = named + rest
+    if not shown:
+        return "no foreign holder"
+    return ", ".join(f"{h['name']} (pid {h['pid']}, {h['pct']:.1f}%)" for h in shown)
 
 
 def gate(
-    max_other_cpu_pct: float = DEFAULT_MAX_OTHER_CPU_PCT,
+    max_single_pct: float = DEFAULT_MAX_SINGLE_PCT,
+    max_total_pct: float = DEFAULT_MAX_TOTAL_PCT,
     window_s: float = DEFAULT_WINDOW_S,
     retries: int = DEFAULT_RETRIES,
     wait_s: float = DEFAULT_WAIT_S,
@@ -271,7 +292,7 @@ def gate(
     for attempt in range(retries + 1):
         if attempt:
             sleep(wait_s)
-        final = check(max_other_cpu_pct, window_s, sleep=sleep, **kw)
+        final = check(max_single_pct, max_total_pct, window_s, sleep=sleep, **kw)
         final["attempt"] = attempt + 1
         attempts.append(final["total_foreign_pct"])
         if log is not None:
@@ -297,9 +318,8 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("check", "gate"):
         p = sub.add_parser(name)
-        p.add_argument(
-            "--max-other-cpu-pct", type=float, default=DEFAULT_MAX_OTHER_CPU_PCT
-        )
+        p.add_argument("--max-single-pct", type=float, default=DEFAULT_MAX_SINGLE_PCT)
+        p.add_argument("--max-total-pct", type=float, default=DEFAULT_MAX_TOTAL_PCT)
         p.add_argument("--window-s", type=float, default=DEFAULT_WINDOW_S)
     sub.choices["gate"].add_argument("--retries", type=int, default=DEFAULT_RETRIES)
     sub.choices["gate"].add_argument("--wait-s", type=float, default=DEFAULT_WAIT_S)
@@ -307,11 +327,12 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     try:
         if a.cmd == "check":
-            rec = check(a.max_other_cpu_pct, a.window_s)
+            rec = check(a.max_single_pct, a.max_total_pct, a.window_s)
             print(json.dumps(rec, indent=2))
             return 0 if rec["ok"] else GATE_EXIT_BUSY
         rec = gate(
-            a.max_other_cpu_pct,
+            a.max_single_pct,
+            a.max_total_pct,
             a.window_s,
             retries=a.retries,
             wait_s=a.wait_s,
@@ -322,14 +343,16 @@ def main(argv=None) -> int:
         return 1
     if rec["passed"]:
         print(
-            f"quiet machine: foreign CPU {rec['total_foreign_pct']:.1f}% < {rec['limit_pct']:.0f}% "
+            f"quiet machine: foreign CPU {rec['total_foreign_pct']:.1f}% < {rec['max_total_pct']:.0f}%, "
+            f"no holder >= {rec['max_single_pct']:.0f}% "
             f"(attempt {rec['attempt']})",
             flush=True,
         )
         return 0
     print(
         f"quiet machine: BUSY after {len(rec['attempts'])} attempts: foreign CPU "
-        f"{rec['total_foreign_pct']:.1f}% >= {rec['limit_pct']:.0f}%; holders: {describe_holders(rec)}",
+        f"{rec['total_foreign_pct']:.1f}% (limit {rec['max_total_pct']:.0f}%), single-holder limit "
+        f"{rec['max_single_pct']:.0f}%; holders: {describe_holders(rec)}",
         file=sys.stderr,
         flush=True,
     )

@@ -73,13 +73,14 @@ def steady(procs_cpu_per_s, samples=11):
 
 
 def run_check(
-    frames, limit=25.0, window=10.0, interval=1.0, self_pid=ME, monkeypatch=None
+    frames, single=20.0, total=150.0, window=10.0, interval=1.0, self_pid=ME, monkeypatch=None
 ):
     host = FakeHost(frames)
     if monkeypatch is not None:
         monkeypatch.setattr(q.os, "getpid", lambda: self_pid)
     return q.check(
-        limit,
+        single,
+        total,
         window,
         interval,
         run_ps_fn=host.ps,
@@ -165,7 +166,8 @@ def test_check_excludes_harness_and_counts_only_foreign(monkeypatch):
     rec = run_check(frames, monkeypatch=monkeypatch)
     assert rec["total_foreign_pct"] == pytest.approx(3.0, abs=0.05)
     assert rec["ok"] is True
-    assert rec["holders"] == []
+    assert rec["violators"] == []
+    assert [h["name"] for h in rec["holders"]] == ["mds_stores"]
 
 
 # ---------------------------------------------------------------------------
@@ -178,25 +180,54 @@ def test_slow_run_stray_process_fails_the_default_limit(monkeypatch):
     frames = steady({600: (1, 25.0, "/usr/local/bin/stray --loop")})
     rec = run_check(frames, monkeypatch=monkeypatch)
     assert rec["total_foreign_pct"] == pytest.approx(25.0, abs=0.05)
-    assert rec["ok"] is False  # 25% is not < 25%
-    assert rec["holders"][0]["name"] == "stray"
+    assert rec["ok"] is False  # one holder >= 20% of a core
+    assert rec["violators"][0]["name"] == "stray"
     assert rec["holders"][0]["pid"] == 600
 
 
-def test_mds_stores_spike_fails_and_is_named(monkeypatch):
-    frames = steady({700: (1, 43.0, "/System/Library/mds/mds_stores")})
+def test_single_holder_at_the_limit_fails(monkeypatch):
+    frames = steady({600: (1, 20.0, "burner")})
     rec = run_check(frames, monkeypatch=monkeypatch)
     assert rec["ok"] is False
-    assert rec["holders"] == [
-        {"pid": 700, "name": "mds_stores", "pct": pytest.approx(43.0, abs=0.05)}
-    ]
+    assert rec["violators"][0]["pid"] == 600
+
+
+def test_single_holder_just_under_the_limit_passes(monkeypatch):
+    frames = steady({600: (1, 19.0, "burner")})
+    rec = run_check(frames, monkeypatch=monkeypatch)
+    assert rec["ok"] is True
+    assert rec["violators"] == []
+
+
+def test_system_noise_is_exempt_from_single_rule_but_reported(monkeypatch):
+    # WindowServer / kernel_task / mds_stores are macOS noise: listed and counted, never a violator.
+    frames = steady(
+        {
+            700: (1, 43.0, "/System/Library/mds/mds_stores"),
+            701: (1, 30.0, "/System/Library/Frameworks/WindowServer"),
+        }
+    )
+    rec = run_check(frames, monkeypatch=monkeypatch)
+    assert rec["violators"] == []
+    assert rec["ok"] is True  # 73% total < 150%
+    assert [h["name"] for h in rec["holders"]] == ["mds_stores", "WindowServer"]
+
+
+def test_many_small_holders_fail_the_total_rule(monkeypatch):
+    # Eight 19% holders: no single violator, but 152% total >= 150%.
+    frames = steady({800 + i: (1, 19.0, f"small{i}") for i in range(8)})
+    rec = run_check(frames, monkeypatch=monkeypatch)
+    assert rec["violators"] == []
+    assert rec["total_foreign_pct"] == pytest.approx(152.0, abs=0.1)
+    assert rec["ok"] is False
+    assert len(rec["holders"]) == 8
 
 
 def test_small_background_load_passes_and_is_not_listed_as_holder(monkeypatch):
     frames = steady({800: (1, 2.0, "cfprefsd"), 801: (1, 1.5, "WindowServer")})
     rec = run_check(frames, monkeypatch=monkeypatch)
     assert rec["ok"] is True
-    assert rec["holders"] == []
+    assert rec["violators"] == []
     assert [t["name"] for t in rec["top"]] == ["cfprefsd", "WindowServer"]
 
 
@@ -208,12 +239,13 @@ def test_process_that_exits_keeps_its_last_seen_cpu(monkeypatch):
     assert rec["total_foreign_pct"] == pytest.approx(15.0, abs=0.05)
 
 
-def test_check_records_limit_load_window_and_top_five(monkeypatch):
+def test_check_records_limits_load_window_and_top_five(monkeypatch):
     frames = steady(
         {pid: (1, float(pid - 1000), f"proc{pid}") for pid in range(1001, 1008)}
     )
-    rec = run_check(frames, limit=40.0, monkeypatch=monkeypatch)
-    assert rec["limit_pct"] == 40.0
+    rec = run_check(frames, single=40.0, total=200.0, monkeypatch=monkeypatch)
+    assert rec["max_single_pct"] == 40.0
+    assert rec["max_total_pct"] == 200.0
     assert rec["window_s"] == pytest.approx(10.0)
     assert rec["samples"] == 11
     assert rec["load_avg"] == {"start": 2.5, "end": 2.5, "mean": 2.5}
@@ -224,7 +256,7 @@ def test_check_records_limit_load_window_and_top_five(monkeypatch):
 
 def test_check_rejects_nonpositive_window():
     with pytest.raises(ValueError):
-        q.check(25.0, 0.0)
+        q.check(20.0, 150.0, 0.0)
 
 
 def test_check_raises_when_ps_cannot_run():
@@ -233,7 +265,7 @@ def test_check_raises_when_ps_cannot_run():
 
     with pytest.raises(q.QuietError):
         q.check(
-            25.0, 10.0, run_ps_fn=broken, loadavg_fn=lambda: 1.0, sleep=lambda s: None
+            20.0, 150.0, 10.0, run_ps_fn=broken, loadavg_fn=lambda: 1.0, sleep=lambda s: None
         )
 
 
@@ -257,7 +289,8 @@ def test_gate_passes_first_try_without_waiting(monkeypatch):
     host = FakeHost(frames)
     waits = []
     rec = q.gate(
-        25.0,
+        20.0,
+        150.0,
         10.0,
         retries=3,
         wait_s=30.0,
@@ -278,7 +311,8 @@ def test_gate_retries_three_times_waiting_30s_then_busy(monkeypatch, tmp_path):
     waits = []
     log = tmp_path / "quiet.jsonl"
     rec = q.gate(
-        25.0,
+        20.0,
+        150.0,
         10.0,
         retries=3,
         wait_s=30.0,
@@ -306,7 +340,8 @@ def test_gate_stops_as_soon_as_a_try_is_quiet(monkeypatch):
     host = FakeHost(frames)
     waits = []
     rec = q.gate(
-        25.0,
+        20.0,
+        150.0,
         10.0,
         retries=3,
         wait_s=30.0,

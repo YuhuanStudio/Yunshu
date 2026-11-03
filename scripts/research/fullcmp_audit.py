@@ -831,18 +831,24 @@ def check_telemetry(run: Run) -> GuardResult:
     return res
 
 
-def quiet_limit_of(rec: dict) -> float:
-    """The limit a snapshot was taken against (recorded in it), else the gate default."""
+def quiet_limits_of(rec: dict) -> tuple[float, float]:
+    """(single-holder limit, total limit) a snapshot was taken against (recorded in it), else the
+    gate defaults."""
     import fullcmp_quiet as fq
 
-    lim = rec.get("limit_pct")
-    return float(lim) if is_num(lim) else fq.DEFAULT_MAX_OTHER_CPU_PCT
+    single = rec.get("max_single_pct")
+    total = rec.get("max_total_pct")
+    return (
+        float(single) if is_num(single) else fq.DEFAULT_MAX_SINGLE_PCT,
+        float(total) if is_num(total) else fq.DEFAULT_MAX_TOTAL_PCT,
+    )
 
 
 def check_quiet_machine(run: Run) -> GuardResult:
-    """Guard 14: every cell's quiet_pre and quiet_post snapshot (session header) exists and its
-    total foreign CPU is below the limit it was taken against. A missing snapshot is a violation
-    (fail closed); the holders are named in the message."""
+    """Guard 14: every cell's quiet_pre and quiet_post snapshot (session header) exists, its total
+    foreign CPU is below the total limit, and no non-system holder sustained >= the single-holder
+    limit (both recorded in the snapshot; re-derived from `holders`, not trusted from `ok`). A
+    missing snapshot is a violation (fail closed); the holders are named in the message."""
     res = GuardResult("quiet_machine")
     for cf in run.files:
         cell = cf.cell["cell"]
@@ -854,18 +860,24 @@ def check_quiet_machine(run: Run) -> GuardResult:
             if not is_num(total):
                 res.fail(cell, f"r{cf.rep}: no {key} snapshot")
                 continue
-            limit = quiet_limit_of(rec)
-            if total >= limit:
-                holders = (
-                    ", ".join(
-                        f"{h.get('name')} (pid {h.get('pid')}, {h.get('pct')}%)"
-                        for h in rec.get("holders") or []
-                    )
-                    or "no holder >= 5%"
-                )
+            single, limit = quiet_limits_of(rec)
+            noise = {"WindowServer", "kernel_task", "mds_stores"}
+            violators = [
+                h
+                for h in rec.get("holders") or []
+                if is_num(h.get("pct"))
+                and h["pct"] >= single
+                and h.get("name") not in noise
+            ]
+            if total >= limit or violators:
+                holders = ", ".join(
+                    f"{h.get('name')} (pid {h.get('pid')}, {h.get('pct')}%)"
+                    for h in violators
+                ) or "no single holder"
                 res.fail(
                     cell,
-                    f"r{cf.rep}: {key} foreign CPU {total}% >= {limit}% ({holders})",
+                    f"r{cf.rep}: {key} foreign CPU {total}% (limit {limit}%), "
+                    f"holder limit {single}%: {holders}",
                 )
     return res
 
