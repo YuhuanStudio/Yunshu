@@ -442,3 +442,107 @@ def test_probe_fields_keep_the_draft_and_speed_timings():
     assert fields["predicted_per_second"] == 30.5 and fields["predicted_ms"] is None
     assert "extra" not in fields
     assert fe.probe_fields(None)["draft_kind"] is None
+
+
+# ---- splash per-row correlation: thousands separators and the optional dedup field (2026-11-04)
+SPLASH_REAL = [
+    "00:00:43:16 Done · input 15 · cached 0 · output 10 · TTFT 0.1s · 120.1 tok/s · 4.5 tok/cycle\n",
+    "00:00:43:16 Done · input 15 · cached 0 · output 10 · TTFT 0.0s · 120.6 tok/s · 4.5 tok/cycle\n",
+    "00:00:43:18 Done · input 1,024 · cached 0 · output 64 · TTFT 0.8s · 58.1 tok/s · 2.2 tok/cycle\n",
+    "00:00:43:19 Done · input 1,024 · cached 992 · deduplicated 64 · output 64 · TTFT 0.1s · 67.5 tok/s · 2.6 tok/cycle\n",
+]
+SYNTH_128K = "00:01:02:03 Done · input 131,072 · cached 0 · output 64 · TTFT 9.5s · 40.2 tok/s · 2.1 tok/cycle\n"
+
+
+def _splash_entry():
+    table = fe.load_table()
+    return table, table["engines"]["splash-1.5.0"]["modes"]["dflash"]
+
+
+def test_splash_real_lines_correlate_per_measured_row_with_commas_and_dedup():
+    """The two measured rows (1,024 prompt) match their own done lines; the two readiness pings do not
+    count. Both real lines are fixtures (wire-1104-work/rest/tfout/out/server-splash-1.5.0-decode-0.log)."""
+    table, _ = _splash_entry()
+    log = "".join(SPLASH_REAL)
+    rows = [{"pt": 1024, "ct": 64}, {"pt": 1024, "ct": 64}]
+    res = fe.evaluate("splash-1.5.0", "dflash", log, rows, table, ready_offset=0)
+    assert res["engaged_mode"] == "dflash", res["stats"]
+    assert [r["value"] for r in res["stats"]["per_row"]] == [2.2, 2.6]
+
+
+def test_splash_128k_comma_prompt_correlates():
+    table, _ = _splash_entry()
+    log = "".join(SPLASH_REAL[:2]) + SYNTH_128K
+    res = fe.evaluate("splash-1.5.0", "dflash", log, [{"pt": 131072, "ct": 64}], table, ready_offset=0)
+    assert res["engaged_mode"] == "dflash", res["stats"]
+    assert res["stats"]["per_row"][0]["prompt"] == 131072
+
+
+def test_splash_real_wire_1104_log_on_disk_engages_per_measured_row():
+    """The real splash decode log on disk: 2 readiness pings + 2 measured rows of 1,024 tokens."""
+    logs = glob.glob("/Volumes/Micron/yunshu-fullcmp/wire-1104-work/*/tfout/out/server-splash-1.5.0-*.log")
+    if not logs:
+        pytest.skip("no real splash log on disk")
+    table, _ = _splash_entry()
+    text = Path(logs[0]).read_text(errors="replace")
+    rows = [{"pt": 1024, "ct": 64}, {"pt": 1024, "ct": 64}]
+    res = fe.evaluate("splash-1.5.0", "dflash", text, rows, table, ready_offset=0)
+    assert res["engaged_mode"] == "dflash", res["stats"]
+
+
+def test_evaluate_without_a_table_argument_uses_the_default_file():
+    """Regression (wire-1104, omlx-0.7.3rc1): a caller that passed no table raised TypeError. Every call
+    now resolves the table itself; the default file is used when none is passed."""
+    log = "".join(SPLASH_REAL)
+    rows = [{"pt": 1024, "ct": 64}, {"pt": 1024, "ct": 64}]
+    res = fe.evaluate("splash-1.5.0", "dflash", log, rows, ready_offset=0)
+    assert res["engaged_mode"] == "dflash"
+
+
+def test_every_manifest_engine_runs_the_tfbench_engaged_path_with_a_fake_log():
+    """No engine skipped: every manifest id goes through tfbench.Srv._verify_fullcmp_evidence (the call
+    the GPU driver makes) with a fake log and rows. Only shape/signature errors are asserted here."""
+    import fullcmp_manifest as fm
+    import tfbench
+
+    class FakeLog:
+        def __init__(self, text):
+            self.text = text
+
+        def read_text(self, errors="replace"):
+            return self.text
+
+    for engine in sorted(set(fm.ENGINES) - {"ollama", "lmstudio", fm.PLACEHOLDER}):
+        srv = tfbench.Srv.__new__(tfbench.Srv)
+        srv.engine = engine
+        srv.requested_spec_mode = "dflash"
+        srv.probe = None
+        srv.ready_log_offset = 0
+        srv.log = FakeLog("nothing useful\n")
+        srv._verify_fullcmp_evidence("nothing useful\n", final=False, rows=[{"pt": 1, "ct": 1}])
+        assert srv.engaged_spec_mode in ("unverified", "dflash", "ar", "mtp", "off"), engine
+
+
+def test_mlx_vlm_probe_path_is_exercised_through_the_tfbench_engaged_path():
+    """The pinned id mlx-vlm-server: its probe (non-streaming timings) reaches the same tfbench call."""
+    import tfbench
+
+    class FakeLog:
+        def read_text(self, errors="replace"):
+            return ""
+
+    def run(probe):
+        srv = tfbench.Srv.__new__(tfbench.Srv)
+        srv.engine = "mlx-vlm-server"
+        srv.requested_spec_mode = "dflash"
+        srv.probe = None
+        srv.ready_log_offset = 0
+        srv.log = FakeLog()
+        srv._verify_fullcmp_evidence("", final=True, rows=[{"pt": 1024, "ct": 64}], probe_response=probe)
+        return srv.engaged_spec_mode
+
+    ok = {"timings": {"draft_rounds": 9, "draft_n_accepted": 40}}
+    assert run(ok) == "dflash"
+    # the final check refuses a cell whose probe shows no drafting (dflash not applied)
+    with pytest.raises(RuntimeError, match="engaged=unverified"):
+        run({"timings": {"draft_rounds": 0, "draft_n_accepted": 0}})

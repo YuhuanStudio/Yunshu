@@ -88,7 +88,7 @@ ADD = {
     "tf-1.1.8": [ACCEPT_TF],
     "splash-1.5.0": [{
         "kind": "acceptance_regex",
-        "pattern_or_path": r"Done · input (?P<prompt>\d+) · cached \d+ · output \d+ · TTFT [\d.]+s · [\d.]+ tok/s · (?P<tpc>[\d.]+) tok/cycle",
+        "pattern_or_path": r"Done · input (?P<prompt>[\d,]+) · cached [\d,]+ (?:· deduplicated [\d,]+ )?· output [\d,]+ · TTFT [\d.]+s · [\d.]+ tok/s · (?P<tpc>[\d.]+) tok/cycle",
         "group": "tpc",
         "min": 1.0,
         "per_request": True,

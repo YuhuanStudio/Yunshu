@@ -148,7 +148,9 @@ def acceptance_paths(m) -> list[str]:
     return paths or ["attr.accepted"]
 
 
-def evaluate(engine, mode, log, rows, table, probe_text=None, ready_offset=None, probe_response=None) -> dict:
+def evaluate(engine, mode, log, rows, table=None, probe_text=None, ready_offset=None, probe_response=None) -> dict:
+    if table is None:  # no table passed: the default file (None when missing: unverified)
+        table = load_table()
     """Engaged mode of one cell for its expected mode, from the engine log (whole server log),
     the request rows and the status probe. ready_offset: the log byte offset after readiness
     (None: the whole log counts as request-time evidence)."""
@@ -247,7 +249,7 @@ def _correlate(ev, log, rows, ready_offset):
             continue
         prompt = None
         if "prompt" in rx.groupindex and hit.group("prompt") is not None:
-            prompt = int(hit.group("prompt"))
+            prompt = int(hit.group("prompt").replace(",", ""))  # splash prints 1,024
         cands.append({"line": _line_at(log, hit.start(), hit.end()), "value": value, "prompt": prompt})
     cands = cands[READINESS_REQUESTS:]  # the readiness pings take the first done lines
     measured = [r for r in rows if isinstance(r.get("pt"), int)]
