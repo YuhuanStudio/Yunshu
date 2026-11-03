@@ -81,11 +81,15 @@ OMLX_MTP_LINE = {
     "min": 0,
     # the server's own per-request line (omlx.server): completion tokens, prompt length, finish reason
     "request_line": r"Chat completion: model=\S+, (?P<tokens>[\d,]+) tokens in [^\n]*?prompt: (?P<prompt>[\d,]+), finish_reason=[a-z_-]+",
-    "match_tokens": True,  # per-request gaps reported (ct_gap); calibration-heavy requests (wire-1106d rc1) do not match by tokens
-    # token_tolerance: observed gap (record ct - merged sum) on the real oMLX logs: wire-1106c conc 64-58 = 6,
+    "match_tokens": True,  # the chat line's completion count is exact: a request matches only its own ct
+    "token_tolerance": 0,
+    # partial coverage: the merged MTP tokens below ct by more than this (wire-1106c/d gaps 5-6 are 0-tolerance
+    # matched; the rids 4-7 gaps 15-35 are the partial-coverage evidence, see the label)
+    "coverage_tolerance": 8,
+    # coverage: observed gap (record ct - merged sum) on the real oMLX logs: wire-1106c conc 64-58 = 6,
     # 64-59 = 5, mixed 64-64 = 0 (rc1, wire-1106d), short 10-10 = 0; max observed gap 6 -> tolerance 6 + 2 = 8.
     # Mixed-log sums of 29..49 (wire-1106d rc1) come from segments of other cells in that log: not used.
-    "token_tolerance": 8,
+
     "per_request": True,
     "startup_sufficient": False,
     "source_ref": "serving_path_vlm_omlx.json omlx_0.7.3_and_rc1.per_request_line; batch_generator.py:3950-3995",

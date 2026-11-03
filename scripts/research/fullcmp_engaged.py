@@ -469,7 +469,8 @@ def correlate_multiset(item, log, requests, ready_offset, consumed=0, skip=READI
                     "calibrated": calibrated,
                     # partial log coverage: the merged MTP token sum misses more than the documented tolerance
                     "partial_coverage": (req.get("ct") is not None and c.get("ct_merged", c.get("ct")) is not None and
-                                         (req["ct"] - c.get("ct_merged", c.get("ct"))) > int(item.get("token_tolerance", 0)))})
+                                         (req["ct"] - c.get("ct_merged", c.get("ct"))) >
+                                         int(item.get("coverage_tolerance", item.get("token_tolerance", 0))))})
     return out, None
 
 
@@ -705,7 +706,10 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
     if partial:
         # the merged MTP sums miss tokens for these requests: the acceptance is a lower bound on the log, not a
         # verdict on the request; surfaced in the table note, not a violation (the uid count still fails closed)
-        label = (label or mode) + f" [partial log coverage: {len(partial)} request(s) with ct gap > tolerance]"
+        label = (label or mode) + (
+            f" [partial log coverage: {len(partial)} request(s); oMLX logs MTP stats for only the merged tokens of"
+            " each request; the rest were decoded without an MTP stats line (MTP inactive for multi-row batches:"
+            " 'MTP inactive for 3-row batch', batch-standard-calibration segments)]")
     return {"engaged_mode": mode, "matched_line": matched[-1]["line"], "evidence_kind": "acceptance_regex",
             "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched),
                                          "partial_coverage": len(partial)},
