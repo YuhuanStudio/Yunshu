@@ -523,9 +523,11 @@ def check_pinned_versions(run: Run) -> GuardResult:
                     res.fail(cell, "Yunshu not started by its pinned venv python")
                 if "-m" not in cmd or "yunshu_cli" not in cmd:
                     res.fail(cell, "Yunshu not started as python -m yunshu_cli")
-        elif not re.fullmatch(r"[0-9a-f]{64}", str(h.get("binary_sha256"))) or h.get(
-            "binary_sha256"
-        ) != pin.get("binary_sha256"):
+        elif m.get("stub_engine") is not True and (
+            not re.fullmatch(r"[0-9a-f]{64}", str(h.get("binary_sha256")))
+            or h.get("binary_sha256") != pin.get("binary_sha256")
+        ):
+            # stub_engine (test only): the launched process is the stub, not the engine binary
             res.fail(cell, "binary sha256 missing or not the pinned binary")
     return res
 

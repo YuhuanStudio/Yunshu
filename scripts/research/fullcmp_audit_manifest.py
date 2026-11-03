@@ -57,7 +57,7 @@ CONTROL_FLIP = "ctl-1103-flip3-7cf5266117ae"
 TOK_S_METRICS = ("decode_tps", "followup_decode_tps")
 
 # manifest phase names -> audit phase names (FULLCMP_SCHEMA request.phase)
-PHASE_NAMES = {"cold": "cold", "warm": "warm", "fu": "turn2"}
+PHASE_NAMES = {"cold": "cold", "warm": "warm", "fu": "turn2", "fu_idle": "turn2"}
 
 # Per-engine probe for the expected speculative mode of the engines whose expected mode is not yet
 # established (expected "unverified" fails closed, or a mode that needs its log line confirmed). Each

@@ -1604,7 +1604,9 @@ def part_conc(s, out, a):
                 part="conc",
                 n=n,
                 trial=trial,
-                wall_s=round(wall, 3),
+                # microseconds: agg_tps is total/wall of the unrounded wall, so a millisecond
+                # rounding fails the audit's agg_tps check on a fast engine (CPU stub: wall ~ 8 ms)
+                wall_s=round(wall, 6),
                 total_tokens=tot,
                 agg_tps=round(tot / wall, 1),
                 **conc_aggregates(decs),

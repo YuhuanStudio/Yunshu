@@ -57,6 +57,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_engines  # noqa: E402
+import fullcmp_manifest as fm  # noqa: E402
 import fullcmp_quiet  # noqa: E402
 from fullcmp_profile import profile_env  # noqa: E402
 
@@ -94,6 +95,8 @@ SMOKE_BATCH = "SMOKE"  # pre-flight matrix (fullcmp_manifest --smoke); audits on
 BATCH_CHOICES = BATCH_ORDER + (SMOKE_BATCH,)
 JOB_CAP_MIN = 20.0
 REP3_INDEX = 2  # same as fullcmp_reps.REP3_INDEX
+# seconds between the cold reply and the follow-up of an idle cell (manifest: 5 s idle)
+IDLE_THINK_S = fm.IDLE_S
 CONC_TRIALS = (
     2  # conc records per cell per rep (tfbench --conc-trials); each holds conc requests
 )
@@ -158,6 +161,29 @@ def _base_harness_part(row: dict):
         return None, None, "thinking switch not in tfbench CLI"
     if row.get("sampling") not in (None, "greedy"):
         return None, None, "generation_config sampling not in tfbench CLI"
+    if (
+        row.get("turns") == "idle5"
+        and "fu_idle" in (row.get("phases") or ())
+        and row.get("prompt_kind") in ("code", "prose")
+        and int(row["conc"]) == 1
+    ):
+        # idle follow-up: the cold reply, then the follow-up after the idle gap (tfbench --think-s)
+        return (
+            "decode",
+            [
+                "--only-ctx",
+                str(row["ctx_tokens"]),
+                "--only-kind",
+                row["prompt_kind"],
+                "--decode-tokens",
+                str(row["out_len"]),
+                "--phases",
+                "cold,turn2",
+                "--think-s",
+                str(IDLE_THINK_S),
+            ],
+            None,
+        )
     if row.get("turns") not in (None, "single"):
         return None, None, f"turns={row.get('turns')} not in tfbench CLI"
     kind = row.get("prompt_kind")
@@ -609,6 +635,13 @@ def census_pins(pin: dict) -> dict:
     return fam.build_pins(census, pin)
 
 
+def fam_phase_names() -> dict:
+    """The audit's phase names for manifest phases (fullcmp_audit_manifest.PHASE_NAMES)."""
+    import fullcmp_audit_manifest as fam
+
+    return fam.PHASE_NAMES
+
+
 def expected_records(row: dict) -> int | None:
     """Expected request-record rows per cell (all reps) for a smoke row, from the smoke manifest.
     Decode: one record per planned phase per rep (warm_reps is 1). Conc: CONC_TRIALS records per rep,
@@ -659,7 +692,8 @@ def audit_manifest(
                 "kind": r["prompt_kind"],
                 "prompt_id": prompt_id(r),
                 "max_tokens": r["out_len"],
-                "phases": r.get("phases"),
+                # manifest phase names -> the audit's (fu -> turn2): the records carry the audit's
+                "phases": [fam_phase_names().get(p, p) for p in r.get("phases") or ()],
                 "expected_records": expected_records(r),
                 # Same fields fullcmp_audit_manifest.build_manifest writes: the engine's expected
                 # spec mode (bench_engines) and its weight group. Null only when the engine
