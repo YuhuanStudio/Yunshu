@@ -364,6 +364,11 @@ def _merge_segments(raw):
     return out
 
 
+# requests the harness sends before the measured ones, beyond the two readiness pings (omlx's lazy load
+# warm-up: its first request is MTP[0] with 16 tokens, before the pings; wire-1106c omlx log)
+WARM_EXTRA = {"omlx-0.7.3": 1, "omlx-0.7.3rc1": 1}
+
+
 def _done_candidates(item, log, ready_offset, skip=READINESS_REQUESTS):
     """Every match of the item's regex after the readiness requests, in log order (oMLX's split segments
     are merged per uid first)."""
@@ -675,7 +680,8 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
     if engine in PROBE_ONLY_ENGINES:
         # probe-only engine: only the concurrent probe (one response per request, with per-response draft
         # stats) is evidence for a concurrent cell; a single sequential probe proves nothing for it
-        has_stats = bool(probe_responses) and all(
+        # at least one response carries the draft counters; an absent counter on another is zero (all zero/absent)
+        has_stats = bool(probe_responses) and any(
             isinstance((r or {}).get("timings"), dict) and "draft_n" in r["timings"] for r in probe_responses)
         if not has_stats:
             return {"engaged_mode": UNVERIFIED, "matched_line": None, "evidence_kind": "concurrent_probe",
