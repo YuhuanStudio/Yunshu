@@ -6,6 +6,8 @@ CPU only, fake census and fake digests. The real census lives in the run dir (ou
 
 from __future__ import annotations
 
+import pytest
+
 import hashlib
 import sys
 from pathlib import Path
@@ -77,12 +79,16 @@ def _census():
     }
 
 
+def _head(worktree):
+    return PIN["sha"]
+
+
 def _sha_of(path):
     return D if path else None
 
 
 def test_every_census_engine_has_a_pin():
-    pins = fam.build_pins(_census(), PIN, sha_of=_sha_of)
+    pins = fam.build_pins(_census(), PIN, sha_of=_sha_of, git_head=_head)
     for key, mids in CENSUS_TO_MANIFEST.items():
         for mid in mids:
             assert mid in pins, f"census {key} -> {mid} has no pin"
@@ -92,7 +98,7 @@ def test_pinned_binary_is_the_launched_file_not_the_archive():
     # regression (2026-11-03 smoke): the pin held the release archive digest, the harness header
     # holds the launched binary's digest, so every TensorFold / Splash / mlx-serve cell failed
     # pinned_versions with "binary sha256 missing or not the pinned binary"
-    pins = fam.build_pins(_census(), PIN, sha_of=_sha_of)
+    pins = fam.build_pins(_census(), PIN, sha_of=_sha_of, git_head=_head)
     for mid in ("tf-1.2.1", "tf-1.1.8", "splash-1.5.0", "mlx-serve-26.11.1"):
         assert pins[mid]["binary_sha256"] == D, mid
         assert pins[mid]["archive_sha256"] == H, mid
@@ -100,29 +106,51 @@ def test_pinned_binary_is_the_launched_file_not_the_archive():
 
 
 def test_install_paths_carry_the_pinned_version():
-    pins = fam.build_pins(_census(), PIN, sha_of=_sha_of)
+    pins = fam.build_pins(_census(), PIN, sha_of=_sha_of, git_head=_head)
     assert "tensorfold-1.2.1" in pins["tf-1.2.1"]["install_path"]
     assert "tensorfold-1.1.8" in pins["tf-1.1.8"]["install_path"]
     assert "<ver>" not in pins["tf-1.2.1"]["install_path"]
 
 
 def test_unestablished_engaged_modes_fail_closed():
-    pins = fam.build_pins(_census(), PIN, sha_of=_sha_of)
+    pins = fam.build_pins(_census(), PIN, sha_of=_sha_of, git_head=_head)
     for mid in ("mlx-vlm-server", "llama-cpp-b12061", "tf-1.1.8", "mlx-serve-26.11.1"):
         assert pins[mid]["expected_mode"] == "unverified", mid
         assert pins[mid]["engaged_regex"] is None, mid
 
 
 def test_unsupported_engines_have_no_digest_and_say_why():
-    pins = fam.build_pins(_census(), PIN, sha_of=_sha_of)
+    pins = fam.build_pins(_census(), PIN, sha_of=_sha_of, git_head=_head)
     for mid in ("lmstudio", "ollama"):
         assert pins[mid]["binary_sha256"] is None
         assert pins[mid]["unsupported_reason"]
 
 
 def test_missing_binary_leaves_the_digest_empty():
-    pins = fam.build_pins(_census(), PIN, sha_of=lambda p: None)
+    # the yunshu pin fails closed (raises) on a missing binary, so the other engines are checked
+    # with a stub that only hides the tf digest
+    def sha_of(p):
+        return None if p.startswith("/Volumes") or "tensorfold" in p else D
+
+    pins = fam.build_pins(_census(), PIN, sha_of=sha_of, git_head=_head)
     assert pins["tf-1.2.1"]["binary_sha256"] is None
+
+
+def test_yunshu_pin_fails_closed_on_a_wrong_tree_or_missing_binary():
+    # Lead ruling 2026-11-03: a wrong tree or an absent launched binary must not produce a pin.
+    with pytest.raises(ValueError, match="pinned tree"):
+        fam.build_pins(_census(), PIN, sha_of=_sha_of, git_head=lambda w: "f" * 40)
+    with pytest.raises(ValueError, match="not on disk"):
+        fam.build_pins(_census(), PIN, sha_of=lambda p: None, git_head=_head)
+
+
+def test_yunshu_pin_is_dflash_with_the_engaged_line_and_uv_lock():
+    pins = fam.build_pins(_census(), PIN, sha_of=_sha_of, git_head=_head)
+    y = pins["yunshu"]
+    assert y["binary_sha256"] == D
+    assert y["expected_mode"] == "dflash"
+    assert y["engaged_regex"] == "draft=dflash"
+    assert y["git_sha"] == PIN["sha"]
 
 
 def test_file_sha256_hashes_the_real_bytes(tmp_path):

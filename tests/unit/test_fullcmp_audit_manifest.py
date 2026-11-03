@@ -93,10 +93,28 @@ def _census():
     }
 
 
+_ORIG_BUILD_PINS = fam.build_pins
+
+
+@pytest.fixture(autouse=True)
+def _stub_pin_io(monkeypatch):
+    # build_manifest reads the pinned tree (git) and launched digests from disk; the unit tests
+    # use fakes here, the real checks are in test_fullcmp_pins.py
+    import functools
+
+    monkeypatch.setattr(
+        fam,
+        "build_pins",
+        functools.partial(_ORIG_BUILD_PINS, git_head=lambda w: PIN["sha"], sha_of=lambda p: "a" * 64),
+    )
+
+
 PIN = {
     "sha": "0f2960047855546a9f13b2631b680352b1c57cfe",
     "version": "0.1.7.dev0",
     "python_executable": "/venv/bin/python",
+    "worktree": "/fake/tree",
+    "venv": "/fake/venv",
 }
 THRESH = {"decode_tps": 3.03, "cold_ttft": 5.0}
 

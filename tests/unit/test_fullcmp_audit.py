@@ -87,6 +87,7 @@ def make_data():
             "version": "main",
             "release_date": "2026-11-02",
             "git_sha": "a1b2c3d",
+            "binary_sha256": B,
         },
         "mlx-serve": {
             "version": "v26.10.3",
@@ -150,7 +151,7 @@ def make_data():
                     "version": pins[eng]["version"],
                     "release_date": pins[eng]["release_date"],
                     "git_sha": "a1b2c3d" if yun else "3f9e0c",
-                    "binary_sha256": None if yun else B,
+                    "binary_sha256": B,
                     "cmd": [PY, "-m", "yunshu_cli", "serve"]
                     if yun
                     else ["/bin/mlx-serve", "--serve"],
@@ -346,7 +347,14 @@ def bad_quiet_machine(m, f):
     )
 
 
+def bad_yunshu_binary(m, f):
+    # a yunshu header launched from a different python than the pinned one must fail the cell
+    for rows in _rows(f, "", "yunshu"):
+        rows[0]["binary_sha256"] = "c" * 64
+
+
 BAD_CASES = [
+    ("pinned_versions", bad_yunshu_binary),
     ("prompt_identity", bad_prompt_identity),
     ("provenance_identity", bad_provenance_identity),
     ("pinned_versions", bad_pinned_versions),
@@ -833,6 +841,7 @@ def test_pinned_versions_maps_yunshu_main_to_the_yunshu_pin():
                 "version": "0.1.7.dev0",
                 "release_date": "2026-11-03",
                 "git_sha": sha,
+                "binary_sha256": B,
             }
         },
         "yunshu": {"git_sha": sha, "python": PY},
@@ -844,7 +853,7 @@ def test_pinned_versions_maps_yunshu_main_to_the_yunshu_pin():
         "git_sha": sha,
         "python": PY,
         "cmd": [PY, "-m", "yunshu_cli", "serve"],
-        "binary_sha256": None,
+        "binary_sha256": B,
     }
     cell = {"cell": "c", "engine": "yunshu-main", "group": "g"}
     run = fa.Run(manifest, [_cf(cell, 0, head)], [], [], [])

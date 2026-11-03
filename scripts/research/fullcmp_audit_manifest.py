@@ -256,7 +256,55 @@ def _pin(engine, version, date, archive_sha, kind, sha_of) -> dict:
     }
 
 
-def build_pins(census: dict, pin: dict, sha_of=file_sha256) -> dict:
+def tree_head(worktree: str) -> str:
+    """HEAD sha of the pinned Yunshu worktree (git rev-parse). Fails closed on any error."""
+    import subprocess
+
+    res = subprocess.run(
+        ["git", "-C", worktree, "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if res.returncode != 0 or not res.stdout.strip():
+        raise ValueError(f"cannot read tree sha of {worktree}: {res.stderr.strip()}")
+    return res.stdout.strip()
+
+
+YUNSHU_EXPECTED_MODE = "dflash"
+# the engaged line the Yunshu VLM batch runner prints when DFlash is on
+YUNSHU_ENGAGED_REGEX = r"draft=dflash"
+
+
+def _yunshu_pin(census: dict, pin: dict, sha_of, git_head) -> dict:
+    """Pin of the Yunshu under test. Fail closed: the tree must be the pinned sha (git rev-parse
+    in the pinned worktree), the digest is that of the launched python (cmd[0] of the server, which
+    is what the header's binary_sha256 holds), and the mode is the DFlash mode with its engaged
+    line. The yunshu entry script digest and uv.lock digest are recorded beside it."""
+    worktree = pin["worktree"]
+    head = (git_head or tree_head)(worktree)
+    if head != pin["sha"]:
+        raise ValueError(f"pinned tree {worktree} is at {head}, pin says {pin['sha']}")
+    python = pin["python_executable"]
+    digest = sha_of(python)
+    if not digest:
+        raise ValueError(f"pinned python {python} is not on disk: no launched-binary digest")
+    entry = os.path.join(pin.get("venv", ""), "bin", "yunshu") if pin.get("venv") else None
+    return {
+        "version": pin["version"],
+        "release_date": _date(census["yunshu"]["latest_date"]),
+        "git_sha": pin["sha"],
+        "binary_sha256": digest,
+        "binary_path": python,
+        "entry_script_sha256": sha_of(entry) if entry else None,
+        "uv_lock_sha256": pin.get("uv_lock_sha256"),
+        "install_path": worktree,
+        "expected_mode": YUNSHU_EXPECTED_MODE,
+        "engaged_regex": YUNSHU_ENGAGED_REGEX,
+    }
+
+
+def build_pins(census: dict, pin: dict, sha_of=file_sha256, git_head=None) -> dict:
     """Per-engine pins from census.json (version, release date, archive sha256, install path and
     the launched file's sha256) and yunshu_pin.json. Every engine the census lists has an entry;
     an engine with no harness launch recipe is present with null version and binary (fails closed)."""
@@ -264,15 +312,7 @@ def build_pins(census: dict, pin: dict, sha_of=file_sha256) -> dict:
     ms, ml, kp = census["mlx-serve"], census["mlx_lm_server"], census["kapitsa"]
     vl, lc = census["mlx_vlm_server"], census["llama_cpp"]
     pins = {
-        "yunshu": {
-            "version": pin["version"],
-            "release_date": _date(census["yunshu"]["latest_date"]),
-            "git_sha": pin["sha"],
-            "binary_sha256": None,
-            "install_path": pin.get("worktree"),
-            "expected_mode": "unverified",
-            "engaged_regex": None,
-        },
+        "yunshu": _yunshu_pin(census, pin, sha_of, git_head),
         "tf-1.2.1": _pin(
             "tf-1.2.1",
             "1.2.1",

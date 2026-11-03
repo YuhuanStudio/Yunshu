@@ -505,6 +505,11 @@ def check_pinned_versions(run: Run) -> GuardResult:
                 res.fail(cell, "Yunshu header python is not the pinned venv python")
             # stub_engine (test only, set by the e2e test): the server process is the stub, so its
             # command line cannot be the pinned python. Production manifests never set it.
+            # the header digest is the launched python (cmd[0]); it must be the pinned digest
+            if not re.fullmatch(r"[0-9a-f]{64}", str(h.get("binary_sha256"))) or h.get(
+                "binary_sha256"
+            ) != pin.get("binary_sha256"):
+                res.fail(cell, "Yunshu binary sha256 missing or not the pinned python")
             if m.get("stub_engine") is not True:
                 if not cmd or cmd[0] != yun.get("python"):
                     res.fail(cell, "Yunshu not started by its pinned venv python")
