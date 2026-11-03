@@ -18,6 +18,7 @@ Engines (ids are what ``tfbench.py --engine`` takes):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -568,9 +569,17 @@ def scrubbed_env(environ: dict, extra: dict | None = None) -> dict:
 
 
 def omlx_model_settings(model_id: str) -> dict:
+    # mtp_enabled is written explicitly false: an absent key defaults to False in oMLX too, but
+    # the written file must state it so only the DFlash2 drafter can produce MTP[uid] stats lines
     return {
         "version": 1,
-        "models": {model_id: {"dflash_enabled": True, "dflash_draft_model": DRAFTER}},
+        "models": {
+            model_id: {
+                "dflash_enabled": True,
+                "dflash_draft_model": DRAFTER,
+                "mtp_enabled": False,
+            }
+        },
     }
 
 
@@ -657,9 +666,12 @@ def build_launch(
     if engine == "omlx":
         mid = "Qwen3.8-27B-oQ4e-mtp"
         settings = Path(home) / "omlx-base" / "model_settings.json"
+        settings_text = json.dumps(omlx_model_settings(mid))
         flags = {
             "dflash_enabled": True,
             "dflash_draft_model": DRAFTER,
+            "mtp_enabled": False,
+            "model_settings_sha256": hashlib.sha256(settings_text.encode()).hexdigest(),
             "memory_guard_gb": 96,
             "max_concurrent_requests": 8,
             "ssd_cache": "20GB",
@@ -693,7 +705,7 @@ def build_launch(
             ],
             scrubbed_env(environ, base_env),
             flags,
-            {str(settings): json.dumps(omlx_model_settings(mid))},
+            {str(settings): settings_text},
             {str(Path(home) / "omlx-models" / mid): CHECKPOINT},
         )
     if engine == "splash":

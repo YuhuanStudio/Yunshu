@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -599,7 +600,14 @@ def test_pinned_omlx_launch_writes_dflash_model_settings(tmp_path, engine):
     assert model == {
         "dflash_enabled": True,
         "dflash_draft_model": be.DRAFTER,
+        "mtp_enabled": False,
     }
-    assert "mtp_enabled" not in model  # mtp and dflash are mutually exclusive in oMLX
+    # written explicitly false: mtp and dflash are mutually exclusive, and only one drafter may run
+    assert model["mtp_enabled"] is False
+    flags = be.build_launch(engine, 18995, tmp_path, {}).flags
+    assert flags["mtp_enabled"] is False
+    assert flags["model_settings_sha256"] == hashlib.sha256(
+        launch.files[settings_path].encode()
+    ).hexdigest()
     assert launch.links[str(tmp_path / "omlx-models" / "Qwen3.8-27B-oQ4e-mtp")] == be.CHECKPOINT
     assert launch.cmd[launch.cmd.index("--base-path") + 1] == str(tmp_path / "omlx-base")
