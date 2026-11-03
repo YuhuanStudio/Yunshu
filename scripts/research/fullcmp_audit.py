@@ -414,12 +414,22 @@ PROMPT_SHA_FILE = Path(
 
 
 def load_prompt_file_table() -> dict:
-    """basename -> sha256 of the prompt file. A missing or unreadable table raises (fail closed)."""
+    """basename -> sha256 of the prompt file. A missing or unreadable table raises (fail closed).
+
+    Smoke-only prompt variants (`<kind>-<ctx>-v<n>.txt`, written by fullcmp_make_variants) are not in
+    the corpus table; their producer manifest hashes each file it wrote, so its entries are merged in.
+    A variant absent from both tables still fails its cell (no entry)."""
     table = {}
     for line in PROMPT_SHA_FILE.read_text().splitlines():
         if line.strip():
             sha, name = line.split(maxsplit=1)
             table[name.strip()] = sha
+    variant_manifest = Path(
+        os.environ.get("TFB_PROMPT_VARIANT_DIR", "/Volumes/Micron/yunshu-fullcmp/smoke-prompts")
+    ) / "manifest.json"
+    if variant_manifest.is_file():
+        for entry in json.loads(variant_manifest.read_text()).get("files", []):
+            table[str(entry["file"])] = str(entry["sha256"])
     return table
 
 
@@ -434,7 +444,7 @@ def check_prompt_identity(run: Run) -> GuardResult:
     res = GuardResult("prompt_identity")
     try:
         table = load_prompt_file_table()
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, KeyError, TypeError) as exc:
         res.checked += 1
         for cf in run.files:
             res.fail(cf.cell["cell"], f"prompt sha table unreadable ({PROMPT_SHA_FILE}): {exc}")
