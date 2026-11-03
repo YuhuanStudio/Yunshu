@@ -902,16 +902,73 @@ def recompute_table(run: Run, table_text: str, by_cell: dict):
 # Inputs are measured (tok/s, prompt/completion tokens, ttft) or come from the tables below.
 # A value whose input is not sourced is None with the reason, never a guess.
 # ---------------------------------------------------------------------------
-HARDWARE = {
+PEAKS_PATH = Path(
+    "/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103/peak_measured.json"
+)
+
+# Spec-sheet values: SECONDARY only (column "vs spec sheet"). Never the MBU/MFU denominator.
+SPEC_SHEET = {
     "M5 Max": {
-        "peak_bw_gbs": 560.0,
-        "bw_source": "IMPLIED: docs/research/ctx1m/ROOFLINE.md (BW = 560 GB/s, implied by the measured "
-        "29 ms 27B floor). Not an Apple spec figure; replace when the spec value is verified.",
-        "peak_tflops_bf16": None,
-        "flops_source": "UNSOURCED: no peak FLOP/s figure in the repo or the spec. The ROOFLINE 40 TFLOP/s "
-        "is measured effective prefill, not a peak. MFU is None until a sourced peak is entered.",
+        "bw_gbs": 560.0,
+        "bw_source": "IMPLIED: docs/research/ctx1m/ROOFLINE.md (560 GB/s implied by the measured "
+        "29 ms 27B floor). Not an Apple spec figure.",
+        "tflops_bf16": None,
+        "flops_source": "UNSOURCED: no peak FLOP/s figure in the repo or the spec.",
     },
 }
+
+
+class MeasuredPeaksError(RuntimeError):
+    """The measured-peaks file is absent or invalid. MBU/MFU are refused, never estimated."""
+
+
+def load_measured_peaks(path=PEAKS_PATH) -> dict:
+    """Denominators from scripts/research/probe_peak.py (measured on this machine, gpuq job).
+
+    decode_gbs  = max of the 4-bit quantized GEMV at batch 1 (decode MBU denominator)
+    bf16_tflops = max of the bf16 matmul at the 27B prefill shape (MFU denominator)
+    read_gbs    = max of the sustained read bandwidth (reference only, not a denominator)
+    Fails closed with MeasuredPeaksError when the file is missing, invalid, or lacks a needed result.
+    """
+    import probe_peak as pp  # scripts/research on sys.path (script dir or test insert)
+
+    p = Path(path)
+    if not p.is_file():
+        raise MeasuredPeaksError(
+            f"measured peaks file missing: {p}. Run scripts/research/probe_peak.py through gpuq "
+            "first; MBU/MFU do not fall back to the spec sheet."
+        )
+    try:
+        rep = json.loads(p.read_text())
+        pp.validate_report(rep)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise MeasuredPeaksError(f"measured peaks file invalid: {p}: {exc}") from exc
+    by = {r["name"]: r for r in rep["results"]}
+    needed = ("qgemv_w4g64_M1", "matmul_prefill27b_bf16", "bw_read_sum_bf16")
+    missing = [n for n in needed if n not in by]
+    if missing:
+        raise MeasuredPeaksError(f"measured peaks file lacks {missing}: {p}")
+
+    def pick(name):
+        r = by[name]
+        return {
+            "max": r["max"],
+            "median": r["median"],
+            "spread_pct": r["spread_pct"],
+            "n": r["n"],
+        }
+
+    return {
+        "source": str(p),
+        "label": rep["label"],
+        "mlx_version": rep["mlx_version"],
+        "chip": rep["chip"],
+        "date": rep["date"],
+        "decode_gbs": pick("qgemv_w4g64_M1"),
+        "bf16_tflops": pick("matmul_prefill27b_bf16"),
+        "read_gbs": pick("bw_read_sum_bf16"),
+    }
+
 
 # Model table. Values from the checkpoints' config.json (text_config) unless noted.
 MODELS = {
@@ -1001,50 +1058,73 @@ def attn_flops_per_token(model: dict, ctx: float) -> float:
     return model["full_attn_layers"] * 4 * model["n_heads"] * model["head_dim"] * ctx
 
 
-def derived_decode(model_id: str, hw: str, tok_s: float, pt: int, ct: int) -> dict:
-    """MBU and MFU for decode at the average context (pt + ct/2). Labeled DERIVED."""
-    m, h = MODELS[model_id], HARDWARE[hw]
+def derived_decode(
+    model_id: str, peaks: dict, tok_s: float, pt: int, ct: int, hw: str = "M5 Max"
+) -> dict:
+    """MBU and MFU for decode at the average context (pt + ct/2). Labeled DERIVED.
+
+    mbu uses the measured 4-bit GEMV peak (peaks["decode_gbs"]); mbu_vs_spec is the same bytes
+    against the spec-sheet bandwidth, kept only as a labeled secondary column.
+    """
+    m = MODELS[model_id]
     ctx = pt + ct / 2.0
-    out = {"label": "DERIVED", "ctx_avg": ctx, "mbu": None, "mfu": None, "reason": []}
+    out = {
+        "label": "DERIVED",
+        "ctx_avg": ctx,
+        "mbu": None,
+        "mbu_vs_spec": None,
+        "mfu": None,
+        "reason": [],
+    }
     if m["weight_bytes"] is None:
         out["reason"].append("weight bytes per token not in repo")
     else:
         kv_gdn = kv_bytes_per_token(m, ctx) + (gdn_state_bytes(m) or 0)
         bytes_tok = m["weight_bytes"] + kv_gdn
         out["bytes_per_token"] = bytes_tok
-        out["mbu"] = bytes_tok * tok_s / (h["peak_bw_gbs"] * 1e9)
-    out.update(_mfu(m, h, tok_s, ctx, out))
+        out["peak_decode_gbs"] = peaks["decode_gbs"]["max"]
+        out["mbu"] = bytes_tok * tok_s / (peaks["decode_gbs"]["max"] * 1e9)
+        spec = SPEC_SHEET[hw]["bw_gbs"]
+        out["mbu_vs_spec"] = bytes_tok * tok_s / (spec * 1e9)
+    out.update(_mfu(m, peaks, hw, tok_s, ctx, out))
     return out
 
 
-def derived_prefill(model_id: str, hw: str, pt: int, ttft_s: float) -> dict:
+def derived_prefill(
+    model_id: str, peaks: dict, pt: int, ttft_s: float, hw: str = "M5 Max"
+) -> dict:
     """MFU for prefill: prompt tokens over ttft (includes the first sampled token, so a slight
     under-estimate). Attention at the average prefill context pt/2. MBU is not defined for
     compute-bound prefill and is not reported."""
-    m, h = MODELS[model_id], HARDWARE[hw]
+    m = MODELS[model_id]
     out = {"label": "DERIVED", "reason": []}
     if not ttft_s or ttft_s <= 0:
         return {**out, "mfu": None, "reason": ["ttft missing"]}
-    out.update(_mfu(m, h, pt / ttft_s, pt / 2.0, out))
+    out.update(_mfu(m, peaks, hw, pt / ttft_s, pt / 2.0, out))
     out["prefill_tok_s"] = pt / ttft_s
     return out
 
 
-def _mfu(m: dict, h: dict, tok_s: float, ctx: float, out: dict) -> dict:
+def _mfu(m: dict, peaks: dict, hw: str, tok_s: float, ctx: float, out: dict) -> dict:
     if m["active_params"] is None:
         out["reason"].append("active params not in repo")
-        return {"mfu": None, "reason": out["reason"]}
-    if h["peak_tflops_bf16"] is None:
-        out["reason"].append("peak FLOP/s unsourced")
-        return {"mfu": None, "reason": out["reason"]}
+        return {"mfu": None, "mfu_vs_spec": None, "reason": out["reason"]}
     flops_tok = 2 * m["active_params"] + attn_flops_per_token(m, ctx)
-    return {
-        "mfu": flops_tok * tok_s / (h["peak_tflops_bf16"] * 1e12),
+    res = {
+        "mfu": flops_tok * tok_s / (peaks["bf16_tflops"]["max"] * 1e12),
+        "mfu_vs_spec": None,
+        "peak_bf16_tflops": peaks["bf16_tflops"]["max"],
         "reason": out["reason"],
     }
+    spec_tf = SPEC_SHEET[hw]["tflops_bf16"]
+    if spec_tf is None:
+        res["reason"] = out["reason"] + ["spec-sheet FLOP/s unsourced"]
+    else:
+        res["mfu_vs_spec"] = flops_tok * tok_s / (spec_tf * 1e12)
+    return res
 
 
-def derived_rows(run: Run, hw: str = "M5 Max") -> list:
+def derived_rows(run: Run, peaks: dict, hw: str = "M5 Max") -> list:
     """One DERIVED row per (cell, rep, phase) that has a model table entry and measured inputs."""
     rows = []
     for cf in run.files:
@@ -1061,7 +1141,9 @@ def derived_rows(run: Run, hw: str = "M5 Max") -> list:
                     {
                         **base,
                         "metric": "decode",
-                        **derived_decode(model_id, hw, r["dec_tps"], int(pt), int(ct)),
+                        **derived_decode(
+                            model_id, peaks, r["dec_tps"], int(pt), int(ct), hw
+                        ),
                     }
                 )
             if is_num(r.get("ttft_s")):
@@ -1069,7 +1151,7 @@ def derived_rows(run: Run, hw: str = "M5 Max") -> list:
                     {
                         **base,
                         "metric": "prefill",
-                        **derived_prefill(model_id, hw, int(pt), r["ttft_s"]),
+                        **derived_prefill(model_id, peaks, int(pt), r["ttft_s"], hw),
                     }
                 )
     return rows
@@ -1095,9 +1177,21 @@ def main(argv=None) -> int:
         action="store_true",
         help="print DERIVED MBU/MFU rows (labeled derived; never counted as measured)",
     )
+    p.add_argument(
+        "--peaks",
+        default=str(PEAKS_PATH),
+        help="measured peaks json (scripts/research/probe_peak.py); required with --derived",
+    )
     a = p.parse_args(argv)
     if a.recompute and not a.table:
         p.error("--recompute needs --table")
+    peaks = None
+    if a.derived:
+        try:
+            peaks = load_measured_peaks(a.peaks)
+        except MeasuredPeaksError as exc:
+            print(f"DERIVED REFUSED: {exc}")
+            return 1
     run, results = run_guards(a.root, a.manifest)
     if a.recompute:
         checked, rv = recompute_table(
@@ -1117,7 +1211,8 @@ def main(argv=None) -> int:
         print(
             "DERIVED (not measured): MBU / MFU from measured inputs + model/hardware tables"
         )
-        for d in derived_rows(run):
+        print(f"denominators: {json.dumps(peaks)}")
+        for d in derived_rows(run, peaks):
             print(json.dumps(d, default=str))
     passed = sum(1 for r in results if not r.violations)
     print(f"TOTAL: {passed}/{len(results)} checks passed, {total} violations")
