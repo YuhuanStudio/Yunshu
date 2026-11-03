@@ -212,6 +212,11 @@ def release_date(census: dict, census_key: str, version: str, environ) -> str:
             raise ProvenanceError(f"TFB_RELEASE_DATE={given!r} is not YYYY-MM-DD")
         return given
     entry = (census.get(census_key) or {}) if census_key else {}
+    # A version the census lists with its own release date (release_dates: {version: date}, e.g.
+    # an older release that is not the census 'latest') is checked first.
+    listed = (entry.get("release_dates") or {}).get(version) if version else None
+    if listed and re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(listed)):
+        return str(listed)
     latest, when = str(entry.get("latest") or ""), str(entry.get("latest_date") or "")
     if version and latest.startswith(version) and re.match(r"\d{4}-\d{2}-\d{2}", when):
         return when[:10]

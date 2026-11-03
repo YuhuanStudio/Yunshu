@@ -88,10 +88,20 @@ TF_118_BIN = str(
     COMP / "tensorfold-1.1.8/tensorfold-1.1.8-macos-arm64/bin/tensorfold-native"
 )
 SPLASH_BIN_150 = str(COMP / "splash-1.5.0/splash-1.5.0-arm64-macos26/engine/splash")
+# 1.5.0 HTTP server = its own launcher (install/launcher.py serve, run by the bundled python);
+# engine/splash alone only offers serve-native (no HTTP port), see server/server.py _native_command.
+SPLASH_PY_150 = str(COMP / "splash-1.5.0/splash-1.5.0-arm64-macos26/python/bin/python3")
+SPLASH_LAUNCHER_150 = str(
+    COMP / "splash-1.5.0/splash-1.5.0-arm64-macos26/install/launcher.py"
+)
 OMLX_BIN_073 = str(COMP / "venvs/omlx-0.7.3/bin/omlx")
 OMLX_BIN_073RC1 = str(COMP / "venvs/omlx-0.7.3rc1/bin/omlx")
 MLXSERVE_BIN_26111 = str(COMP / "mlxserve-bin/26.11.1/mlx-serve-macos-arm64/mlx-serve")
 MLXLM_SERVER_BIN = str(COMP / "venvs/mlx-lm-0.32.2/bin/mlx_lm.server")
+MLXVLM_PY_0711 = str(
+    COMP / "venvs/mlx-vlm-0.7.11/bin/python"
+)  # python -m mlx_vlm.server
+LLAMA_BIN_B12061 = str(COMP / "llama.cpp-b12061/llama-b12061/llama-server")
 KAPITSA_BIN_0226 = str(COMP / "kapitsa-0.2.26/kapitsa-0.2.26-darwin-arm64/kapitsa")
 KAPITSA_MODEL_DIR = "/Volumes/P5Plus/models/kapitsa/models/qwen3.8-27b-4bit"
 SPLASH_MODEL = "incoai/Qwen3.8-27B-Splash"
@@ -450,6 +460,30 @@ ENGINES: dict[str, Engine] = {
             28.0,
         ),
         Engine(
+            "mlx-vlm-server",
+            "mlx-vlm 0.7.11 server (stock)",
+            "ar",
+            "same",
+            CHECKPOINT,
+            None,
+            "external",
+            "python -m mlx_vlm.server, no draft model; stock baseline (census start_cmd)",
+            0.8,
+            28.0,
+        ),
+        Engine(
+            "llama-cpp-b12061",
+            "llama.cpp b12061 llama-server (Metal)",
+            "mtp",
+            "different",
+            GGUF,
+            GGUF_MTP,
+            "external",
+            "llama-server b12061, Unsloth UD-Q4_K_M GGUF + MTP head (--spec-type draft-mtp); not the same bits as the MLX checkpoint",
+            1.0,
+            60.0,
+        ),
+        Engine(
             "kapitsa-0.2.26",
             "Kapitsa 0.2.26",
             "unverified",
@@ -478,21 +512,20 @@ MANIFEST_ENGINES = {
     "mlx-serve-26.11.1": "mlx-serve-26.11.1",
     "mlx-lm-server": "mlx-lm-server",
     "kapitsa-0.2.26": "kapitsa-0.2.26",
+    "mlx-vlm-server": "mlx-vlm-server",
+    "llama-cpp-b12061": "llama-cpp-b12061",
 }
 # Engines with no harness support yet: reason text only (the stub returns "unsupported (harness: ...)").
 UNSUPPORTED_ENGINES = {
-    "mlx-vlm-server": "no tfbench launcher for mlx_vlm.server; text-decode path not wired (TODO: add launch + engaged-mode probe)",
-    "llama-cpp-b12061": "llama-server b12061 has no tfbench launch recipe or engaged-mode probe (llamacpp-mtp pins b11565) (TODO: add b12061 recipe, parse draft-mtp engagement from its log)",
     "lmstudio": "lms CLI is bootstrapped into $HOME/.lmstudio; isolated-HOME headless start not verified (TODO: verify lms server start with isolated HOME)",
     "ollama": "Ollama imports GGUF only; the MLX checkpoint cannot be loaded (census n/a, not a separate row)",
     "best-competitor (TBD)": "placeholder row, not an engine; the best release is chosen after measurement (TODO: remove the row)",
 }
 TODO_LIST = (
-    "mlx-vlm-server: add tfbench launcher and engaged-mode probe",
-    "llama-cpp-b12061: add launch recipe for b12061 (GGUF Q4_K_M + MTP head) and log-based engaged mode",
     "lmstudio: verify headless lms server with isolated HOME",
     "mlx-serve-26.11.1 / kapitsa-0.2.26: establish spec mode and weights (expected_mode unverified fails closed)",
-    "splash-1.5.0 / tf-1.2.1 / tf-1.1.8 / mlx-lm-server: confirm CLI flags against --help before the first run",
+    "splash-1.5.0: HTTP launch verified from source (install/launcher.py serve), not yet run",
+    "mlx-serve-26.11.1 / kapitsa-0.2.26 / mlx-vlm-server / llama-cpp-b12061: first run must engage the expected mode (see expected_mode_probe in the audit manifest)",
 )
 
 
@@ -769,7 +802,47 @@ def build_launch(
         elif engine == "mtplx-latest":
             launch.cmd[0] = MTPLX_BIN_LATEST
         return launch
-    if engine in ("splash-latest", "splash-1.5.0"):
+    if engine == "splash-1.5.0":
+        # Splash 1.5.0 HTTP server: its launcher serves the local TensorFold MLX directory
+        # (--model-dir, offline) with the local DFlash2 drafter. No HF snapshot links needed.
+        return Launch(
+            [
+                SPLASH_PY_150,
+                SPLASH_LAUNCHER_150,
+                "serve",
+                "--model",
+                "TensorFold/Qwen3.8-27B-MLX-4bit",
+                "--model-dir",
+                TF_NATIVE_MODEL,
+                "--offline",
+                "--draft-model",
+                DRAFTER,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                p,
+                "--no-webui",
+                "--kv-format",
+                "bf16",
+                "--default-reasoning-effort",
+                "none",
+                "--max-context",
+                str(int(ctx_tokens)),
+            ],
+            scrubbed_env(
+                environ,
+                {**base_env, "HF_HOME": str(Path(home) / "hf")},
+            ),
+            {
+                "kv_format": "bf16 (lossless)",
+                "reasoning_effort": "none",
+                "draft": "local DFlash2",
+            },
+            {},
+            {},
+            probe="/status",
+        )
+    if engine in ("splash-latest",):
         rev = "a" * 40
         hub = (
             Path(home)
@@ -966,6 +1039,50 @@ def build_launch(
             {},
             {},
         )
+    if engine == "mlx-vlm-server":
+        return Launch(
+            [
+                MLXVLM_PY_0711,
+                "-m",
+                "mlx_vlm.server",
+                "--model",
+                CHECKPOINT,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                p,
+            ],
+            scrubbed_env(environ, base_env),
+            {"speculative": "none"},
+            {},
+            {},
+        )
+    if engine == "llama-cpp-b12061":
+        return Launch(
+            [
+                LLAMA_BIN_B12061,
+                "-m",
+                GGUF,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                p,
+                "-c",
+                str(int(ctx_tokens)),
+                "--jinja",
+                "--reasoning",
+                "off",
+                "--spec-type",
+                "draft-mtp",
+                "-md",
+                GGUF_MTP,
+                "--metrics",
+            ],
+            scrubbed_env(environ, base_env),
+            {"spec_type": "draft-mtp", "reasoning": "off"},
+            {},
+            {},
+        )
     if engine == "mlx-lm-server":
         return Launch(
             [
@@ -983,7 +1100,10 @@ def build_launch(
             ],
             scrubbed_env(environ, base_env),
             {"speculative": "none"},
-            {},
+            # mlx_lm.server lists the HF cache on /v1/models (scan_cache_dir raises CacheNotFound
+            # when the hub dir is missing: the 2026-11-03 smoke's 500). An empty hub dir in the
+            # isolated HOME is enough; no model is downloaded.
+            {str(Path(home) / ".cache/huggingface/hub/.keep"): ""},
             {},
         )
     if engine == "kapitsa-0.2.26":
@@ -1061,6 +1181,8 @@ def detect_mode(engine: str, log: str, probe_text: str | None = None) -> str | N
         "omlx-0.7.3": "omlx",
         "omlx-0.7.3rc1": "omlx",
         "mlx-lm-server": "mlxlm",
+        "mlx-vlm-server": "mlxvlm",
+        "llama-cpp-b12061": "llamacpp",
         "llamacpp-mtp": "llamacpp",
         "fn-llamacpp-mtp": "llamacpp",
     }.get(engine, engine)
@@ -1095,7 +1217,8 @@ def detect_mode(engine: str, log: str, probe_text: str | None = None) -> str | N
         )
         # b11565 prints no per-request speculative stats at the default log level: the MTP head file
         # loaded as the draft model, or "draft-mtp" in /props, is the engagement evidence.
-        loose = legacy_engine != "llamacpp"
+        # b12061 prints per-request "draft acceptance" lines, so only a drafted reply counts there
+        loose = legacy_engine not in ("llamacpp", "llama-cpp-b12061")
         if (
             (loaded_mtp and drafted)
             or (loose and loaded_mtp)
@@ -1108,6 +1231,9 @@ def detect_mode(engine: str, log: str, probe_text: str | None = None) -> str | N
     if engine == "splash":
         text = (probe_text or "").lower()
         return "dflash" if "draft" in text or "dflash" in text else None
+    if engine == "mlxvlm":
+        # mlx_vlm.server logs this once the language model is loaded (app.py); no draft model is passed
+        return "ar" if re.search(r"Language model ready", log) else None
     if engine == "mlxlm":
         # no speculative path is configured; "ar" is by construction once the server answered
         return "ar" if re.search(r"Starting httpd|http://127\.0\.0\.1", log) else None
@@ -1176,6 +1302,8 @@ STATIC_VERSIONS = {
     "mlx-serve-26.11.1": ("26.11.1", None),
     "mlx-lm-server": ("0.32.2", None),
     "kapitsa-0.2.26": ("0.2.26", None),
+    "mlx-vlm-server": ("0.7.11", None),
+    "llama-cpp-b12061": ("b12061", None),
 }
 
 
@@ -1246,10 +1374,13 @@ def required_paths(engine: str) -> list[str]:
             TF_118_BIN,
         ],
         "splash-1.5.0": [
-            SPLASH_BIN_150,
+            SPLASH_PY_150,
+            SPLASH_LAUNCHER_150,
             TF_NATIVE_MODEL + "/config.json",
             DRAFTER + "/config.json",
         ],
+        "mlx-vlm-server": common + [MLXVLM_PY_0711],
+        "llama-cpp-b12061": [GGUF, GGUF_MTP, LLAMA_BIN_B12061],
         "omlx-0.7.3": common + [DRAFTER + "/config.json", OMLX_BIN_073],
         "omlx-0.7.3rc1": common + [DRAFTER + "/config.json", OMLX_BIN_073RC1],
         "mlx-serve-26.11.1": [CHECKPOINT + "/config.json", MLXSERVE_BIN_26111],

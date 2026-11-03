@@ -65,16 +65,16 @@ WEIGHT_GROUP = {
     "omlx-0.7.3rc1": "qwen3.8-27b-4bit-jundot",
     "mlx-lm-server": "qwen3.8-27b-4bit-jundot",
     "kapitsa-0.2.26": "qwen3.8-27b-4bit-kapitsa",
-    "tf-1.2.1": None,
-    "tf-1.1.8": None,
-    "splash-1.5.0": None,
+    "mlx-vlm-server": "qwen3.8-27b-4bit-jundot",
+    "llama-cpp-b12061": "qwen3.8-27b-gguf-unsloth",
+    # TensorFold and Splash 1.5.0 load TensorFold/Qwen3.8-27B-MLX-4bit (census key below)
+    "tf-1.2.1": "qwen3.8-27b-4bit-tensorfold",
+    "tf-1.1.8": "qwen3.8-27b-4bit-tensorfold",
+    "splash-1.5.0": "qwen3.8-27b-4bit-tensorfold",
     "mlx-serve-26.11.1": None,
 }
 # why a None above is unresolved (the audit then has no weight comparison for that engine)
 WEIGHT_UNRESOLVED = {
-    "tf-1.2.1": "TensorFold/Qwen3.8-27B-MLX-4bit weights have no sha256 entry in census.json",
-    "tf-1.1.8": "TensorFold/Qwen3.8-27B-MLX-4bit weights have no sha256 entry in census.json",
-    "splash-1.5.0": "Splash loads the TensorFold MLX-4bit checkpoint; no sha256 entry in census.json",
     "mlx-serve-26.11.1": "mlx-serve checkpoint source not recorded in census.json",
 }
 

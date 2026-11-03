@@ -208,7 +208,8 @@ def test_yunshu_maps_to_pinned_tree_engine_not_legacy_id():
 
 def test_stub_engine_has_no_tfbench_id():
     with pytest.raises(KeyError):
-        be.tfbench_engine("llama-cpp-b12061")
+        be.tfbench_engine("lmstudio")
+    assert be.tfbench_engine("llama-cpp-b12061") == "llama-cpp-b12061"
 
 
 def test_new_engines_launch_their_census_binary():
@@ -273,11 +274,7 @@ def test_build_manifest_cells_pins_and_phases():
     assert y["weight_group"] == "qwen3.8-27b-4bit-jundot"
     assert by[("tf-1.1.8", "B1.core.tf-1.1.8.1K.c1.code")]["expected_records"] == 2
     assert all(c["engine"] != "kapitsa-0.2.26" for c in m["cells"])
-    assert any(
-        u["engine"] == "mlx-vlm-server"
-        and u["reason"].startswith("unsupported (harness: ")
-        for u in m["unsupported"]
-    )
+    assert any(c["engine"] == "mlx-vlm-server" for c in m["cells"])
     assert any(u["engine"] == "llama-cpp-b12061" for u in m["unsupported"])
     assert any(n["cell"] == "B1.img.kapitsa-0.2.26.1K" for n in m["not_in_harness"])
     # conc cells are audited: one conc record per trial, n requests per record
@@ -290,7 +287,12 @@ def test_build_manifest_cells_pins_and_phases():
         u["engine"] == "tf-1.1.8" and "release date" in u["reason"]
         for u in m["unresolved"]
     )
-    assert m["groups"]["B1.1K.code.c1"]["order"] == ["yunshu", "omlx-0.7.3", "tf-1.1.8"]
+    assert m["groups"]["B1.1K.code.c1"]["order"] == [
+        "yunshu",
+        "omlx-0.7.3",
+        "tf-1.1.8",
+        "mlx-vlm-server",
+    ]
 
 
 def test_duplicate_cell_stops_the_build():
@@ -436,3 +438,87 @@ def test_rep_decisions_from_raw_results(tmp_path):
     assert got[("yunshu", "gap-cell")] == ("need_rep3", True)
     assert ("yunshu", "one-cell") not in got
     assert fr.rel_gap_pct([100.0, 110.0]) == pytest.approx(10.0)
+
+
+# --- launch specs for the engines the 2026-11-03 smoke could not start (unit, no servers) ---
+
+
+def test_splash_1_5_0_uses_its_http_launcher_not_serve_native():
+    launch = be.build_launch("splash-1.5.0", 18999, "/nonexistent/home", {})
+    cmd = launch.cmd
+    assert cmd[0].endswith("python/bin/python3") and cmd[1].endswith(
+        "install/launcher.py"
+    )
+    assert cmd[2] == "serve" and "serve-native" not in cmd
+    assert cmd[cmd.index("--model-dir") + 1] == be.TF_NATIVE_MODEL
+    assert cmd[cmd.index("--port") + 1] == "18999"
+    assert "--offline" in cmd and "--draft-model" in cmd
+    assert launch.env["HF_HOME"] == "/nonexistent/home/hf"
+
+
+def test_mlx_lm_server_home_has_an_hf_hub_dir():
+    launch = be.build_launch("mlx-lm-server", 18999, "/h/iso", {})
+    assert launch.files == {"/h/iso/.cache/huggingface/hub/.keep": ""}
+    assert launch.cmd[0].endswith("mlx_lm.server")
+
+
+def test_mlx_vlm_server_command_line():
+    launch = be.build_launch("mlx-vlm-server", 18999, "/h/iso", {})
+    assert launch.cmd[:3] == [be.MLXVLM_PY_0711, "-m", "mlx_vlm.server"]
+    assert "--draft-model" not in launch.cmd
+    assert launch.cmd[launch.cmd.index("--port") + 1] == "18999"
+
+
+def test_llama_b12061_command_line_uses_gguf_and_mtp_head():
+    launch = be.build_launch("llama-cpp-b12061", 18999, "/h/iso", {})
+    cmd = launch.cmd
+    assert cmd[0].endswith("llama-b12061/llama-server")
+    assert cmd[cmd.index("-m") + 1] == be.GGUF
+    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
+    assert cmd[cmd.index("-md") + 1] == be.GGUF_MTP
+    assert cmd[cmd.index("--port") + 1] == "18999"
+
+
+def test_engaged_mode_probes_for_new_engines():
+    assert (
+        be.detect_mode(
+            "mlx-vlm-server", "...Language model ready, continuous batching enabled."
+        )
+        == "ar"
+    )
+    assert be.detect_mode("mlx-vlm-server", "no marker here") is None
+    mtp_log = (
+        "srv load_model: loading draft model '/Volumes/P5Plus/models/unsloth/Qwen3.8-27B-GGUF/"
+        "MTP/mtp-Qwen3.8-27B-Q4_0.gguf'\n"
+        "slot 0: id 0 | task 1 | draft acceptance = 0.62500 (   5 accepted /     8 generated), mean len = 2.50"
+    )
+    assert be.detect_mode("llama-cpp-b12061", mtp_log) == "mtp"
+    # a loaded MTP head without any acceptance line is not engagement for the strict probe
+    assert be.detect_mode("llama-cpp-b12061", mtp_log.split("\n")[0]) is None
+
+
+def test_tf_1_1_8_release_date_from_census_list():
+    import fullcmp_provenance as fp
+
+    census = {
+        "tensorfold": {
+            "latest": "1.2.1",
+            "latest_date": "2026-11-01T23:52:33Z",
+            "release_dates": {"1.1.8": "2026-10-28"},
+        }
+    }
+    assert fp.release_date(census, "tensorfold", "1.1.8", {}) == "2026-10-28"
+    assert fp.release_date(census, "tensorfold", "1.2.1", {}) == "2026-11-01"
+    with pytest.raises(fp.ProvenanceError):
+        fp.release_date(census, "tensorfold", "1.0.0", {})
+
+
+def test_tensorfold_and_splash_weights_resolve_to_one_census_entry():
+    import fullcmp_audit_manifest as fam
+
+    assert (
+        fam.WEIGHT_GROUP["tf-1.1.8"]
+        == fam.WEIGHT_GROUP["splash-1.5.0"]
+        == "qwen3.8-27b-4bit-tensorfold"
+    )
+    assert "tf-1.1.8" not in fam.WEIGHT_UNRESOLVED

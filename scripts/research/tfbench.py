@@ -1584,6 +1584,8 @@ FULLCMP_CENSUS_KEY = {
     "mlx-serve-26.11.1": "mlx-serve",
     "mlx-lm-server": "mlx_lm_server",
     "kapitsa-0.2.26": "kapitsa",
+    "mlx-vlm-server": "mlx_vlm_server",
+    "llama-cpp-b12061": "llama_cpp",
 }
 
 
