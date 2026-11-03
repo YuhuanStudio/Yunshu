@@ -232,6 +232,12 @@ def make_data():
                         r["attr"]["accepted"] = 3
                         r["attr"]["drafted"] = 4
                         r["attr"]["rounds"] = 2
+                if eng != "yunshu":  # attribution per measured row, as tfbench writes it (part=attr)
+                    for k, r in enumerate([r for r in rows if r.get("part") == "decode"]):
+                        rows.append({"part": "attr", "row": k, "accepted": 3, "drafted": 4, "rounds": 2,
+                                     "tokens_per_round": round(r.get("ct", 1) / 2, 3)
+                                     if isinstance(r.get("ct"), int) else "unavailable (no count)",
+                                     "matched_line": FIXTURE_LOG_LINE})
                 files[f"{eng}/{cell}-r{rep}.jsonl"] = rows
     return manifest, files
 

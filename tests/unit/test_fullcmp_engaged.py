@@ -684,3 +684,52 @@ def test_audit_acceptance_verdict_uses_the_evidence_not_the_attr_fields_on_real_
             assert not bad, (engine, bad)
     if not checked:
         pytest.skip("no wire-1105 records on disk")
+
+
+def test_attr_rows_are_filled_from_the_matched_evidence():
+    per_row = [
+        {"row": 0, "prompt": 1024, "line": "[tensorfold] done ... rounds=19 accepted=45/285 ...", "value": 45.0,
+         "group": "accepted"},
+        {"row": 1, "prompt": 1024, "line": "Done · input 1,024 · ... 2.6 tok/cycle", "value": 2.6, "group": "tpc"},
+    ]
+    rows = [{"ct": 64}, {"ct": 64}]
+    a0, a1 = fe.attr_rows_from(per_row, rows)
+    assert a0["accepted"] == 45 and a0["drafted"] == 285 and a0["rounds"] == 19
+    assert a0["tokens_per_round"] == round(64 / 19, 3)
+    # a tokens-per-cycle group is not an accepted count: unavailable, never a made-up number
+    assert str(a1["accepted"]).startswith("unavailable")
+    assert str(a1["drafted"]).startswith("unavailable") and str(a1["rounds"]).startswith("unavailable")
+
+
+def test_attr_rows_on_the_real_wire_1105_records_are_filled_for_every_measured_row():
+    """Failing-before: the records written before the final evidence carry no attribution. On the real
+    wire-1105 logs, the matched evidence fills accepted (and drafted/rounds where the line states them)
+    for every measured row, from the same evaluation the audit uses."""
+    table = fe.load_table()
+    checked = []
+    for engine in WIRE_1105_ENGINES:
+        for jl in sorted(glob.glob(f"/Volumes/Micron/yunshu-fullcmp/wire-1105/{engine}/*.jsonl")):
+            if jl.endswith(".telemetry.jsonl"):
+                continue
+            lines = [json.loads(x) for x in Path(jl).read_text().splitlines() if x.strip()]
+            measured = [r for r in lines if r.get("part") == "decode"]
+            log_path = Path(jl).with_name(Path(jl).name[: -len(".jsonl")] + ".server.log")
+            if not measured or not log_path.exists():
+                continue
+            mode = next((r.get("spec_mode_expected") for r in lines if r.get("part") == "session"), None)
+            ev = fe.evaluate(engine, mode, log_path.read_text(errors="replace"), measured, table, ready_offset=0)
+            per_row = ev["stats"].get("per_row") or []
+            if not per_row:
+                continue  # no per-row evidence in this engine's log: nothing to fill
+            attrs = fe.attr_rows_from(per_row, measured)
+            assert len(attrs) == len(measured), (engine, jl)
+            # a count where the matched line states one (accepted > 0); otherwise 'unavailable (reason)'
+            for a in attrs:
+                if isinstance(a["accepted"], (int, float)):
+                    assert a["accepted"] > 0, (engine, a)
+                else:
+                    assert str(a["accepted"]).startswith("unavailable"), (engine, a)
+            if any(isinstance(a["accepted"], (int, float)) for a in attrs):
+                checked.append(engine)
+    if not checked:
+        pytest.skip("no wire-1105 engine with per-row evidence on disk")

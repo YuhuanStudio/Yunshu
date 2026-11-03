@@ -740,6 +740,25 @@ def check_engaged_mode(run: Run) -> GuardResult:
             # one verdict: the evidence evaluation (per measured row / probe); the attr record fields
             # are not populated for these engines and are not read here
             res.fail(cell, f"r{cf.rep}: speculative mode {got!r} without per-request acceptance in the evidence")
+        if engine != "yunshu" and got not in fe.AR_MODES and got != fe.UNVERIFIED:
+            # every measured row of a speculative cell carries its attribution row (part=attr), filled from
+            # the matched evidence: accepted and rounds are counts, or 'unavailable (reason)'
+            attr_by_row = {}
+            for line in cf.path.read_text(errors="replace").splitlines():
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r.get("part") == "attr":
+                    attr_by_row[r.get("row")] = r
+            for k in range(len(cf.rows)):
+                r = attr_by_row.get(k)
+                if r is None:
+                    res.fail(cell, f"r{cf.rep}: measured row {k} has no attribution row (part=attr)")
+                elif not isinstance(r.get("accepted"), (int, float)) and not str(r.get("accepted", "")).startswith("unavailable"):
+                    res.fail(cell, f"r{cf.rep}: measured row {k} attr.accepted {r.get('accepted')!r} is neither a count nor unavailable")
+                elif str(r.get("rounds", "")).startswith("unavailable") is False and not isinstance(r.get("rounds"), int):
+                    res.fail(cell, f"r{cf.rep}: measured row {k} attr.rounds {r.get('rounds')!r} is not a count")
         for row in ev["stats"].get("per_row", []):
             # one line per measured request: row id, the done line it matched, its accepted value
             res.notes.append(

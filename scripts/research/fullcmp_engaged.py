@@ -274,7 +274,8 @@ def _correlate(ev, log, rows, ready_offset):
         c = cands[found]
         if not c["value"] > minimum:
             return per_row, f"row {k} (prompt {row['pt']}): done line value {c['value']} not above {minimum}"
-        per_row.append({"row": k, "prompt": row["pt"], "line": c["line"], "value": c["value"]})
+        per_row.append({"row": k, "prompt": row["pt"], "line": c["line"], "value": c["value"],
+                        "group": ev.get("group")})
     return per_row, None
 
 
@@ -283,6 +284,38 @@ def _next_free(used):
     while n in used:
         n += 1
     return n
+
+
+_DRAFTED = re.compile(r"accepted=\d+/(\d+)")
+_ROUNDS = re.compile(r"rounds=(\d+)|(\d+) cycles|cycles=(\d+)")
+COUNT_GROUPS = ("accepted", "accepts", "acc")  # a numeric group that is an accepted-token count
+
+
+def attr_rows_from(per_row, rows) -> list[dict]:
+    """One attribution row per measured request, from the matched evidence line (single source of the
+    per-request draft fields). A field the line does not state is 'unavailable (reason)', never 0 or
+    an estimate. tokens_per_round = emitted tokens (the row's ct) / rounds."""
+    out = []
+    for pr in per_row:
+        k = pr["row"]
+        line = pr.get("line") or ""
+        value = float(pr["value"])
+        if pr.get("group") in COUNT_GROUPS:
+            accepted = int(value) if value.is_integer() else value
+        else:
+            accepted = "unavailable (line states a tokens-per-cycle value, not an accepted count)"
+        m = _DRAFTED.search(line)
+        drafted = int(m.group(1)) if m else "unavailable (line states no drafted count)"
+        m = _ROUNDS.search(line)
+        rounds = int(next(g for g in m.groups() if g)) if m else "unavailable (line states no round count)"
+        ct = rows[k].get("ct") if k < len(rows) else None
+        if isinstance(rounds, int) and rounds > 0 and isinstance(ct, int):
+            tpr = round(ct / rounds, 3)
+        else:
+            tpr = "unavailable (no rounds or no emitted-token count)"
+        out.append({"row": k, "accepted": accepted, "drafted": drafted, "rounds": rounds,
+                    "tokens_per_round": tpr, "matched_line": line})
+    return out
 
 
 def acceptance_proven(ev: dict) -> bool:

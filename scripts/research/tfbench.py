@@ -628,7 +628,8 @@ class Srv:
         self.engaged_log_line = ev["matched_line"]
         self.engaged_evidence_kind = ev["evidence_kind"]
         self.engaged_evidence_source = ev["source"]
-        self.engaged_label = ev.get("label")  # reported with the base mode (e.g. 'dflash (kflash tree)')
+        self.engaged_label = ev.get("label")
+        self.engaged_per_row = (ev.get("stats") or {}).get("per_row", [])  # reported with the base mode (e.g. 'dflash (kflash tree)')
         if final and self.engaged_spec_mode != self.requested_spec_mode:
             raise RuntimeError(
                 f"requested spec={self.requested_spec_mode}, engaged={self.engaged_spec_mode} "
@@ -2656,9 +2657,12 @@ def main():
                         s.log.read_text(errors="replace") if s.log.exists() else ""
                     ),
                 )
-            s.verify_spec_mode(
-                final=True, rows=read_decode_rows(a.out), probe_response=probe_response
-            )
+            measured = read_decode_rows(a.out)
+            s.verify_spec_mode(final=True, rows=measured, probe_response=probe_response)
+            if fullcmp and a.engine != "yunshu" and getattr(s, "engaged_per_row", None):
+                # attribution per measured request, from the matched evidence (written after the final check)
+                for attr in fe.attr_rows_from(s.engaged_per_row, measured):
+                    emit(out, part="attr", engine=a.engine, rep=a.rep, **attr)
             mem = getattr(s, "mem", None)
             if mem is not None:
                 time.sleep(a.idle_s)
