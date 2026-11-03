@@ -146,9 +146,18 @@ def binary_sha256(path) -> str:
     return _SHA_CACHE[key]
 
 
+def census_models(census: dict) -> dict:
+    """Model entries of census.json. The lead's census keeps them under `_meta.models`
+    (the 2026-11-03 file); a top-level `models` object is accepted too."""
+    models = census.get("models")
+    if not isinstance(models, dict):
+        models = (census.get("_meta") or {}).get("models")
+    return models if isinstance(models, dict) else {}
+
+
 def census_model_id(census: dict, model_path: str) -> str:
     """The census key whose recorded path is this model directory."""
-    for key, entry in (census.get("models") or {}).items():
+    for key, entry in census_models(census).items():
         if (
             isinstance(entry, dict)
             and entry.get("path")
@@ -160,7 +169,7 @@ def census_model_id(census: dict, model_path: str) -> str:
 
 def weights_record(model_dir: str, census: dict, model_key: str) -> list:
     """[{file, sha256, bits, group_size}] for every safetensors shard, sha from census.json."""
-    entry = (census.get("models") or {}).get(model_key) or {}
+    entry = census_models(census).get(model_key) or {}
     sums = entry.get("sha256") or {}
     try:
         config = load_json(Path(model_dir) / "config.json")

@@ -616,3 +616,33 @@ def test_engaged_line_parse_is_the_mode_line():
     assert mode == "mtp" and line == "VLM batch runner: spec=on draft=mtp block=6"
     assert tfbench.engaged_spec_mode_line("yunshu", "nothing") == (None, None)
     assert tfbench.engaged_spec_mode("yunshu", log) == "mtp"
+
+
+def test_census_models_under_meta_are_found(tmp_path):
+    """The lead's census.json keeps model entries under `_meta.models`; the lookup must find
+    them (2026-11-03 smoke failed with 'not in census.json' before this was read)."""
+    model = tmp_path / "Qwen3.8-27B-oQ4e-mtp"
+    model.mkdir()
+    (model / "config.json").write_text(
+        json.dumps({"quantization": {"bits": 4, "group_size": 64}})
+    )
+    (model / SHARD).write_text("weights")
+    census = {
+        "_meta": {
+            "models": {
+                "qwen3.8-27b-4bit-jundot": {
+                    "path": str(model),
+                    "sha256": {SHARD: WEIGHT_SHA},
+                }
+            }
+        },
+        "yunshu": {"latest": "0.1.7.dev0 (repo pin)"},
+    }
+    key = fp.census_model_id(census, str(model))
+    assert key == "qwen3.8-27b-4bit-jundot"
+    rec = fp.weights_record(str(model), census, key)
+    assert rec == [
+        {"file": SHARD, "sha256": WEIGHT_SHA, "bits": 4, "group_size": 64}
+    ]
+    with pytest.raises(fp.ProvenanceError, match="not in census.json"):
+        fp.census_model_id(census, str(tmp_path / "other"))
