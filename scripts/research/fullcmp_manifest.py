@@ -792,6 +792,36 @@ def build_smoke_rows():
     return rows
 
 
+SMOKE_CONC_OUT = Path("/Volumes/Micron/yunshu-fullcmp/smoke-conc-manifest.jsonl")
+SMOKE_CONC_SKIP = ("ollama", "lmstudio")  # no concurrent path to measure (census)
+
+
+def smoke_conc_specs():
+    """Concurrency smoke for every conc-capable engine: conc 2 with distinct prompts, conc 2 with one
+    shared prompt (the cell runs tfbench --conc-same), and one mixed cell (1 request of 8K, 3 of 1K).
+    Serialized engines (tf-1.1.8 lone loop, tf-1.2.1 queue) keep their rows: the 'queued' evidence
+    shows the serialization (per-request queued_s), it is not a plan error."""
+    yield spec(sweep="smoke-conc-distinct", ctx="1K", kind="code", out=64, conc=2, phases=("conc",))
+    yield spec(sweep="smoke-conc-same", ctx="1K", kind="code", out=64, conc=2, phases=("conc",))
+    yield spec(sweep="smoke-mixed", ctx="8K", kind="code", out=64, conc=4, turns="mixed", phases=("mixed",))
+
+
+def build_smoke_conc_rows():
+    """One row per (conc-capable engine, spec); the plan is one lane per engine (one_lane)."""
+    rows = []
+    for eng in ENGINE_IDS:
+        if eng in SMOKE_CONC_SKIP or not ENGINES[eng].get("supported", True):
+            continue
+        for sp in smoke_conc_specs():
+            row = _cell_row(eng, SMOKE_BATCH, sp)
+            row["id"] = f"{row['id']}.v0"
+            row["reps"] = SMOKE_REPS
+            row["prompt_variant"] = 0
+            row["est_gpu_min"] = 0.0
+            rows.append(row)
+    return rows
+
+
 def _meta():
     return {
         "constants": {
@@ -970,9 +1000,23 @@ def main(argv=None):
         action="store_true",
         help="write the smoke manifest (yunshu, 1K, two prompt variants) instead of the real matrix",
     )
+    ap.add_argument(
+        "--smoke-conc",
+        action="store_true",
+        help="write the concurrency smoke manifest: conc 2 (distinct and shared prompt) and one mixed cell "
+        "(1x 8K + 3x 1K) for every conc-capable engine",
+    )
     args = ap.parse_args(argv)
     if args.out is None:
-        args.out = SMOKE_OUT if args.smoke else DEFAULT_OUT
+        args.out = SMOKE_CONC_OUT if args.smoke_conc else (SMOKE_OUT if args.smoke else DEFAULT_OUT)
+    if args.smoke_conc:
+        rows = build_smoke_conc_rows()
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        with args.out.open("w") as fh:
+            for r in rows:
+                fh.write(json.dumps(r, sort_keys=True, ensure_ascii=False) + "\n")
+        sys.stdout.write(f"wrote {args.out} ({len(rows)} smoke-conc rows)\n")
+        return 0
     if args.smoke:
         rows = build_smoke_rows()
         args.out.parent.mkdir(parents=True, exist_ok=True)
