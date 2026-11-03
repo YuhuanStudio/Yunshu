@@ -432,7 +432,16 @@ def concurrent_prompt(index, trial, ctx):
     return exact_chat_prompt(f"Request {trial}:{index}.\n" + source, ctx, LONG_ASK)
 
 
+def prompt_digest(messages):
+    """sha256 of the request messages exactly as sent (canonical JSON). Two engines that got the same
+    digest were given the same prompt text; gaptable.py's summary fails closed when they differ."""
+    return hashlib.sha256(
+        json.dumps(messages, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+
+
 def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
+    prompt_sha = prompt_digest(body.get("messages"))
     body = dict(body, stream=True, stream_options={"include_usage": True})
     headers = {"Content-Type": "application/json", "Authorization": "Bearer k"}
     if trace_id is not None:
@@ -518,6 +527,8 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
         total_s=round(t1 - t0, 3),
         ct=ct,
         pt=usage["prompt_tokens"],
+        prompt_tokens=usage["prompt_tokens"],
+        prompt_sha256=prompt_sha,
         cached=cached_tokens(usage),
         dec_tps=round((ct - 1) / (t1 - tf), 1) if tf and ct > 1 and t1 > tf else None,
         finish=finish,
