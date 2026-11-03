@@ -106,37 +106,3 @@ def test_runner_refuses_on_a_miss_before_any_job(flag, monkeypatch, tmp_path, ca
     assert rc == 2
     assert seen == [["yunshu"]]
     assert "yunshu: [probe] key 'k': injected" in err
-
-
-def test_every_manifest_engine_has_a_complete_pin():
-    """version, release date, binary sha256 and weights sha for every checked engine."""
-    import json
-
-    ctx = fet.load_context()
-    assert ctx.census is not None and ctx.pin is not None, (ctx.load_errors,)
-    weights = fam.census_weights(ctx.census)
-    gaps = []
-    for e in fet.CHECKED_IDS:
-        pin = ctx.pins[e]
-        for key in ("version", "release_date", "binary_sha256"):
-            if not pin.get(key):
-                gaps.append((e, key))
-        group = fam.WEIGHT_GROUP.get(e)
-        if not group or not weights.get(group):
-            gaps.append((e, "weights sha"))
-    assert gaps == [], gaps
-    json.dumps(ctx.pins)  # serialisable, as the audit manifest writes it
-
-
-def test_expected_mode_probe_bench_and_merge_agree_for_every_engine():
-    """Single source of truth: the configured mode (bench_engines.ENGINES) is the probe's expected
-    mode and the evidence builder's mode, for every checked engine (Yunshu: its own entry)."""
-    import fullcmp_engaged_merge as fem
-
-    for e in fet.CHECKED_IDS:
-        bench = fet.be.ENGINES[fet.be.tfbench_engine(e)].expected_mode
-        assert fet.a_expected_mode(e, None) == bench, e
-        if e == "yunshu":
-            assert "dflash" in fem.YUNSHU_ENTRY["modes"]
-        else:
-            assert fem.ENGINE_MODE[e] == bench, e

@@ -159,7 +159,7 @@ EXPECTED_MODE_PROBE = {
         ],
     },
     "mlx-serve-26.11.1": {
-        "expected_mode": "mtp",
+        "expected_mode": "unverified",
         "probe": (
             "--mtp is the default on Metal (mlx-serve --help: 'The default on Metal and CUDA'). Engaged = "
             "a [mtp-round] log line with drafts>0 and accepted>0 in the cell log, AND /v1/models meta.mtp_loaded "
@@ -188,7 +188,7 @@ EXPECTED_MODE_PROBE = {
         ],
     },
     "kapitsa-0.2.26": {
-        "expected_mode": "dflash",
+        "expected_mode": "unverified",
         "probe": (
             "DFlash2 is the default drafter ('--dflash auto ... takes the one downloaded with the model'). "
             "Engaged = the DFlash2 drafter line at load AND a run summary with drafted>0 "
@@ -264,9 +264,7 @@ WEIGHT_GROUP = {
     "tf-1.2.1": "qwen3.8-27b-4bit-tensorfold",
     "tf-1.1.8": "qwen3.8-27b-4bit-tensorfold",
     "splash-1.5.0": "qwen3.8-27b-4bit-tensorfold",
-    # the mlx-serve launch (bench_engines.build_launch) serves bench_engines.CHECKPOINT, the same
-    # checkpoint census.json hashes under qwen3.8-27b-4bit-jundot (meta/model_sha256.txt)
-    "mlx-serve-26.11.1": "qwen3.8-27b-4bit-jundot",
+    "mlx-serve-26.11.1": None,
 }
 # why a None above is unresolved (the audit then has no weight comparison for that engine)
 WEIGHT_UNRESOLVED = {
@@ -326,9 +324,6 @@ def _expected(engine: str) -> tuple[str, str | None]:
         # no established mode: no regex either (the probe's patterns include refusal lines)
         return mode, None
     for pat in probe.get("log_patterns", []):
-        # a refusal line (drafter or MTP head refused) is never the engagement regex
-        if "refus" in str(pat.get("meaning", "")) + str(pat.get("note", "")).lower():
-            continue
         if pat.get("confidence") == "high" and "regex" in pat:
             regex = pat["regex"]
             break

@@ -97,7 +97,8 @@ def test_harness_part_passes_variant_flag_only_when_nonzero():
     )
     part, extra, _ = fr.harness_part(row)
     assert part == "decode"
-    assert extra[-2:] == ["--prompt-variant", "1"]
+    i = extra.index("--prompt-variant")
+    assert extra[i : i + 2] == ["--prompt-variant", "1"]
     zero = {**row, "prompt_variant": 0}
     assert "--prompt-variant" not in fr.harness_part(zero)[1]
 
@@ -108,7 +109,8 @@ def test_smoke_conc_row_uses_conc_part_with_variant():
     )
     part, extra, _ = fr.harness_part(row)
     assert part == "conc"
-    assert extra[-2:] == ["--prompt-variant", "1"]
+    i = extra.index("--prompt-variant")
+    assert extra[i : i + 2] == ["--prompt-variant", "1"]
 
 
 def test_expected_records_for_smoke_rows_come_from_the_manifest():

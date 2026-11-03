@@ -98,6 +98,8 @@ def test_busy_host_refuses_the_batch_before_anything_is_submitted(
     monkeypatch.setattr(run, "PIN_PATH", tmp_path / "pin.json")
     (tmp_path / "pin.json").write_text(json.dumps(PIN))
     monkeypatch.setattr(run, "gpuq_status_text", lambda: "")
+    # provenance (binary sha, census) runs before the quiet gate; this test is about the gate only
+    monkeypatch.setattr(run.fp, "dry_run_problems", lambda *a, **k: [])
     monkeypatch.setattr(
         run.fullcmp_quiet,
         "gate",

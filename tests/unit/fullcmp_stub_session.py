@@ -136,7 +136,9 @@ def make_session_handler(state: SessionState):
                 hit = min(state.cache.hit_words(prompt), max(prompt_tokens - 1, 0))
                 state.cache.add(prompt)
             state.log(
-                base.request_lines(state.engine, n, len(emitted), drafted=4, accepted=3)
+                base.request_lines(
+                    state.engine, n, len(emitted), drafted=4, accepted=3, prompt_tokens=prompt_tokens
+                )
             )
             # a stub answers instantly: a floor on prefill time keeps TTFT measurable (tfbench rounds
             # ttft_s to ms, so a 0.0 TTFT is a fixture artefact, not a measurement)
@@ -180,6 +182,8 @@ def make_session_handler(state: SessionState):
                 "model": state.model,
                 "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
                 "usage": usage,
+                # per-request acceptance (the engaged evidence for yunshu): drafted 4, accepted 3
+                "x_yunshu": {"speculative": {"rounds": 2, "drafted": 4, "accepted": 3}},
             }
             self.wfile.write(f"data: {json.dumps(final)}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")

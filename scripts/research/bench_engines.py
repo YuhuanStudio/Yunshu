@@ -438,12 +438,12 @@ ENGINES: dict[str, Engine] = {
         Engine(
             "mlx-serve-26.11.1",
             "mlx-serve 26.11.1",
-            "mtp",
+            "unverified",
             "unverified",
             CHECKPOINT,
             None,
             "external",
-            "census start_cmd only; MTP is the configured mode (the Metal default, --mtp); weights not yet established",
+            "census start_cmd only; spec mode and weights not yet established: every run fails closed",
             1.0,
             60.0,
         ),
@@ -486,12 +486,12 @@ ENGINES: dict[str, Engine] = {
         Engine(
             "kapitsa-0.2.26",
             "Kapitsa 0.2.26",
-            "dflash",
+            "unverified",
             "unverified",
             KAPITSA_MODEL_DIR,
             None,
             "external",
-            "census start_cmd only (KAPITSA_HOME isolated); DFlash2 is the configured drafter (--dflash auto); weights not yet established",
+            "census start_cmd only (KAPITSA_HOME isolated); spec mode and weights not yet established: fails closed",
             1.0,
             60.0,
         ),
@@ -1042,7 +1042,7 @@ def build_launch(
                 str(int(ctx_tokens)),
             ],
             scrubbed_env(environ, base_env),
-            {"ctx_size": int(ctx_tokens), "spec_mode": "mtp"},
+            {"ctx_size": int(ctx_tokens), "spec_mode": "unverified"},
             {},
             {},
         )
@@ -1120,9 +1120,9 @@ def build_launch(
     if engine == "kapitsa-0.2.26":
         kh = str(Path(home) / "kapitsa-home")
         return Launch(
-            [KAPITSA_BIN_0226, "serve", "--model", "27b", "--dflash", "auto", "--port", p],
+            [KAPITSA_BIN_0226, "serve", "--model", "27b", "--port", p],
             scrubbed_env(environ, {**base_env, "KAPITSA_HOME": kh}),
-            {"model": "27b", "spec_mode": "dflash"},
+            {"model": "27b", "spec_mode": "unverified"},
             {},
             {str(Path(kh) / "models" / "qwen3.8-27b-4bit"): KAPITSA_MODEL_DIR},
         )

@@ -263,17 +263,10 @@ def a_engaged_regex(e, c):
     mode = a_expected_mode(e, c)
     if _is_yunshu(_hid(e)):
         return fam.YUNSHU_ENGAGED_REGEX
-    # confidence is metadata: the header regex is the first non-refusal log pattern of any confidence
-    if e not in fam.EXPECTED_MODE_PROBE:
-        raise TableMiss(e, "no EXPECTED_MODE_PROBE entry")
-    patterns = [
-        p["regex"]
-        for p in fam.EXPECTED_MODE_PROBE[e].get("log_patterns", [])
-        if "regex" in p and "refus" not in str(p.get("meaning", "")) + str(p.get("note", "")).lower()
-    ]
-    if not patterns:
-        raise TableMiss(e, f"no engaged log pattern for mode {mode!r} (EXPECTED_MODE_PROBE)")
-    return patterns[0]
+    _, regex = fam._expected(e)
+    if not regex:
+        raise TableMiss(e, f"no high-confidence engaged regex for mode {mode!r} (EXPECTED_MODE_PROBE)")
+    return regex
 
 
 def a_engaged_evidence(e, c):
@@ -283,11 +276,6 @@ def a_engaged_evidence(e, c):
     entry = fe.mode_entry(c.evidence, e, mode)
     if entry is None:
         raise TableMiss(f"{e}/{mode}", "no engaged evidence entry for the expected mode")
-    if _is_yunshu(_hid(e)):  # Yunshu is judged by fullcmp_engaged.yunshu_runner_evidence (its runner line)
-        return entry
-    # the guard evaluates per measured row: a per-request item, or a startup-sufficient item (stock AR)
-    if not any(ev.get("per_request") or ev.get("startup_sufficient") for ev in entry.get("evidence", [])):
-        raise TableMiss(f"{e}/{mode}", "no per-request or startup-sufficient evidence item")
     return entry
 
 

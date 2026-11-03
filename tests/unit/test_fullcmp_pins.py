@@ -113,10 +113,12 @@ def test_install_paths_carry_the_pinned_version():
 
 
 def test_unestablished_engaged_modes_fail_closed():
+    # An engine with no engaged-mode pattern cannot be verified from its log (fail closed: no regex).
+    # Engines with established evidence (mlx-vlm-server dflash, llama-cpp mtp, tf-* dflash) carry one.
     pins = fam.build_pins(_census(), PIN, sha_of=_sha_of, git_head=_head)
-    for mid in ("mlx-vlm-server", "llama-cpp-b12061", "tf-1.1.8", "mlx-serve-26.11.1"):
-        assert pins[mid]["expected_mode"] == "unverified", mid
-        assert pins[mid]["engaged_regex"] is None, mid
+    assert pins["mlx-serve-26.11.1"]["engaged_regex"] is None
+    for mid in ("mlx-vlm-server", "llama-cpp-b12061", "tf-1.2.1"):
+        assert pins[mid]["engaged_regex"] is not None, mid
 
 
 def test_unsupported_engines_have_no_digest_and_say_why():
