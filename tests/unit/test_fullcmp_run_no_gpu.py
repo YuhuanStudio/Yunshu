@@ -47,8 +47,10 @@ VARIABLE_ARGV_ALLOWED = {
     ("fullcmp_run", "submit_all"): "Job.submit_argv(): gpuq submit (checked below)",
     ("bench_engines", "tree_version"): "read-only git rev-parse on a pinned tree",
     ("fullcmp_audit_manifest", "tree_head"): "read-only git rev-parse of the pinned worktree (fail closed)",
+    ("fullcmp_run", "pre_submit_checks"): "CPU pytest of the explicit quick file list in the snapshot (checked by test_pre_submit_collects_explicit_files_only)",
 }
 LITERAL_NON_GPUQ_ALLOWED = {
+    ("fullcmp_run", "_git"): "read-only git status / rev-parse / archive of the live worktree (harness snapshot)",
     ("fullcmp_audit_manifest", "tree_head"): "read-only git rev-parse of the pinned worktree (fail closed)",
     ("fullcmp_quiet", "run_ps"): "quiet gate: read-only ps",
     ("fullcmp_quiet", "read_loadavg"): "quiet gate: read-only sysctl",

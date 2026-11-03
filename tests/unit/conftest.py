@@ -238,3 +238,20 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.fullcmp_e2e)
         else:
             item.add_marker(pytest.mark.fullcmp_quick)
+
+
+@pytest.fixture(autouse=True)
+def _driver_harness_snapshot_stub(request, monkeypatch):
+    """The fullcmp driver snapshots its harness at HEAD and runs the pre-submit subset before a
+    batch (fullcmp_run.main). Unit tests call main() from a worktree or from a snapshot (no .git):
+    they stub only those two steps, so the snapshot's own tests run without git. test_fullcmp_snapshot
+    exercises the real snapshot code and is not stubbed."""
+    if request.node.fspath.basename == "test_fullcmp_snapshot.py":
+        return
+    for name, mod in list(_sys.modules.items()):
+        if not name.startswith("fullcmp_run") or not hasattr(mod, "snapshot_harness"):
+            continue
+        root = mod.REPO_ROOT
+        monkeypatch.setattr(mod, "snapshot_harness", lambda work, repo=None, _r=root: _r)
+        monkeypatch.setattr(mod, "use_harness", lambda root: None)
+        monkeypatch.setattr(mod, "pre_submit_checks", lambda root: "")
