@@ -16,8 +16,8 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "scripts" / "research"))
 
-import fullcmp_stub_server as stub  # noqa: E402
 import fullcmp_audit_manifest as fam  # noqa: E402
+import fullcmp_stub_server as stub  # noqa: E402
 
 ENGINES = [
     "mlx-serve-26.11.1",

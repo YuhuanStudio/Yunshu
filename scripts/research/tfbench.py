@@ -251,6 +251,22 @@ def wait_startup_ready(proc, log, pattern, timeout=120):
     raise RuntimeError(f"accelerator startup not ready: {pattern}")
 
 
+def stub_server_cmd(engine, port, log, stub_dir) -> list[str]:
+    """TEST-ONLY: argv of the fullcmp stub server that replaces a real engine launch when
+    TFB_STUB_SERVER=<dir> is set. The stub is <dir>/fullcmp_stub_server.py (the tests point it at
+    tests/unit), so no engine is started. Its engine lines go to the server log."""
+    return [
+        sys.executable,
+        str(Path(stub_dir) / "fullcmp_stub_server.py"),
+        "--engine",
+        engine,
+        "--port",
+        str(port),
+        "--log",
+        str(log),
+    ]
+
+
 class Srv:
     @staticmethod
     def _is_yunshu(engine):
@@ -361,14 +377,29 @@ class Srv:
         baseline_used = (
             host_used_bytes()
         )  # before launch: weights/mmap count in the delta
-        with open(self.log, "wb") as server_log:
+        stub_dir = os.environ.get("TFB_STUB_SERVER")
+        if stub_dir:
+            # TEST-ONLY (fullcmp dry run): the server is tests/unit/fullcmp_stub_server.py on
+            # this port, writing its engine lines to this server's log. Launch, readiness and
+            # every check after it stay the same code path.
+            cmd = stub_server_cmd(self.engine, self.port, self.log, stub_dir)
+            self.cmd = cmd
             self.proc = subprocess.Popen(
                 cmd,
-                stdout=server_log,
-                stderr=subprocess.STDOUT,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 env=env,
                 start_new_session=True,
             )
+        else:
+            with open(self.log, "wb") as server_log:
+                self.proc = subprocess.Popen(
+                    cmd,
+                    stdout=server_log,
+                    stderr=subprocess.STDOUT,
+                    env=env,
+                    start_new_session=True,
+                )
         self.url = f"http://127.0.0.1:{self.port}"
         self.mem = MemSampler(
             getattr(self.proc, "pid", None), baseline_bytes=baseline_used
