@@ -165,18 +165,20 @@ def _base_harness_part(row: dict):
         return None, None, f"prompt kind {kind} not in tfbench CLI"
     conc = int(row["conc"])
     if conc == 1:
-        return (
-            "decode",
-            [
-                "--only-ctx",
-                str(row["ctx_tokens"]),
-                "--only-kind",
-                kind,
-                "--decode-tokens",
-                str(row["out_len"]),
-            ],
-            None,
-        )
+        args = [
+            "--only-ctx",
+            str(row["ctx_tokens"]),
+            "--only-kind",
+            kind,
+            "--decode-tokens",
+            str(row["out_len"]),
+        ]
+        # tfbench runs every decode phase unless told otherwise: pass exactly the manifest's
+        # phases (lead 2026-11-03: the audit expects the manifest phases, so the run must match)
+        planned = set(row.get("phases") or ())
+        if planned and planned <= {"cold", "warm", "turn2"}:
+            args += ["--phases", ",".join(p for p in ("cold", "warm", "turn2") if p in planned)]
+        return ("decode", args, None)
     return (
         "conc",
         [
