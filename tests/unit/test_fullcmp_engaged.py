@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import glob
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -227,10 +228,8 @@ def test_splash_startup_slice_is_not_empty(tmp_path):
     assert cell == READY_LINE.encode()
 
 
-# Engines the table has no mode for on purpose: their launch spec configures no speculative mode,
-# so they can never be verified (fail closed). Owner ruling is to give every engine a mode; this
-# one stays empty until a configured mode is pinned.
-UNCONFIGURED = {"llama-cpp-b12061"}
+# Every engine has a configured mode (launch spec or audit pin); none is exempt.
+UNCONFIGURED: set[str] = set()
 
 
 def test_table_keys_equal_the_manifest_engine_set():
@@ -247,3 +246,29 @@ def test_table_keys_equal_the_manifest_engine_set():
         assert entry["modes"], f"{engine}: no mode"
         for mode, m in entry["modes"].items():
             assert m["evidence"], f"{engine}/{mode}: no evidence item"
+
+
+def test_every_entry_regex_runs_on_the_real_logs_and_prints_the_line():
+    """Each log_regex / acceptance_regex item is run on the real server logs on disk. A real log
+    that matches must give a non-null real_example (the matched line); an engine with no real log
+    says so. Output: one line per engine (run pytest -s to see it)."""
+    import fullcmp_engaged_merge as mg
+
+    table = fe.load_table()
+    for engine, entry in sorted(table["engines"].items()):
+        logs = mg.real_logs_for(engine)
+        if not logs:
+            print(f"{engine}: no real log on disk (source-only)")
+            continue
+        texts = {f: Path(f).read_text(errors="replace") for f in logs}
+        for mode, m in entry["modes"].items():
+            for ev in m["evidence"]:
+                if ev["kind"] not in ("log_regex", "acceptance_regex"):
+                    continue
+                rx = re.compile(ev["pattern_or_path"])
+                matched = next(
+                    (fe._line_at(t, h.start(), h.end()) for t in texts.values() if (h := rx.search(t))), None
+                )
+                print(f"{engine}/{mode} {ev['kind']}: {matched or 'NO MATCH'}")
+                if matched is not None:
+                    assert ev["real_example"], f"{engine}/{mode}: real log matches but real_example is null"

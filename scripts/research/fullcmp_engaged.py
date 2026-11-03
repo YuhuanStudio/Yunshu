@@ -31,7 +31,7 @@ from pathlib import Path
 DEFAULT_TABLE = Path(__file__).with_name("fullcmp_engaged_evidence.json")
 MODES = frozenset({"dflash", "mtp", "off", "ar"})
 AR_MODES = frozenset({"ar", "off"})
-KINDS = frozenset({"log_regex", "metrics", "response_field", "acceptance_stat"})
+KINDS = frozenset({"log_regex", "metrics", "response_field", "acceptance_stat", "acceptance_regex"})
 REQUIRED = ("kind", "pattern_or_path", "source_ref", "real_example", "negative_example", "per_request")
 UNVERIFIED = "unverified"
 _DOTTED = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
@@ -67,11 +67,18 @@ def validate_table(table) -> list[str]:
                     continue
                 if ev["kind"] not in KINDS:
                     problems.append(f"{where}: evidence[{i}] kind {ev['kind']!r} not in {sorted(KINDS)}")
-                elif ev["kind"] in ("log_regex", "metrics"):
+                elif ev["kind"] in ("log_regex", "metrics", "acceptance_regex"):
                     try:
-                        re.compile(str(ev["pattern_or_path"]))
+                        rx = re.compile(str(ev["pattern_or_path"]))
                     except re.error as exc:
                         problems.append(f"{where}: evidence[{i}] bad regex: {exc}")
+                        rx = None
+                    if ev["kind"] == "acceptance_regex":
+                        # a numeric capture group; the hit needs value > min
+                        if rx is None or ev.get("group") not in rx.groupindex or not isinstance(
+                            ev.get("min"), (int, float)
+                        ):
+                            problems.append(f"{where}: evidence[{i}] acceptance_regex needs group (a named group) and numeric min")
                 elif not _DOTTED.match(str(ev["pattern_or_path"])):
                     problems.append(f"{where}: evidence[{i}] path {ev['pattern_or_path']!r} is not a dotted field path")
                 if not str(ev.get("source_ref", "")).strip():
@@ -179,6 +186,24 @@ def evaluate(engine, mode, log, rows, table, probe_text=None, ready_offset=None)
             stats["acceptance_positive_rows"] = positives
             if positives:
                 hits.append((f"{pat} > 0 in {positives} request(s)", "acceptance_stat"))
+        elif kind == "acceptance_regex":
+            # each matching line carries a numeric group (accepted tokens, tokens per cycle);
+            # a line is a hit when that value is above min (drafting accepted something)
+            rx, group, minimum = re.compile(pat), ev.get("group"), float(ev.get("min"))
+            count = 0
+            for hit in rx.finditer(log):
+                try:
+                    value = float(hit.group(group))
+                except (TypeError, ValueError):
+                    continue
+                if value > minimum:
+                    count += 1
+                    src = "slice"
+                    if ready_offset is not None and hit.start() < ready_offset:
+                        src = "startup_log"
+                    hits.append((_line_at(log, hit.start(), hit.end()), src))
+                    break
+            stats[f"{ev.get('group')}_matches"] = count
         for line, src in hits:
             if src == "startup_log":
                 if ev.get("startup_sufficient"):
