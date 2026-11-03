@@ -24,9 +24,9 @@ import fullcmp_run as fr  # noqa: E402
 import tfbench  # noqa: E402
 
 # sha256 of the full real manifest (build_rows + apply_cuts, JSONL as main writes it). Re-pinned for
-# REPS 3 -> 2 (user 11-03: 2 reps per cell, rep 3 only where fullcmp_reps says need_rep3); the only
-# row changes are reps and est_gpu_min. Not a file written by gpuq (it annotates device fields).
-REAL_MANIFEST_SHA = "51e277fc4e400cf5e1b345415e5cc9b75c34dadf1901f4b2efef4e13b09b9f5c"
+# the conc-same cells (39 new rows: same-prompt concurrency, B2); the est_gpu_min of the other rows
+# moves by float rounding. Re-pinned 11-03 after the regenerated manifest matched it byte for byte.
+REAL_MANIFEST_SHA = "9a1b7aa62fd84e53bddd1d192e70f15630e285f4b47691c53681b08fc7411471"
 
 
 def _real_manifest_bytes() -> bytes:
