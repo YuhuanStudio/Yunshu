@@ -95,9 +95,9 @@ EXPECTED_MODE_PROBE = {
         "probe": "tensorfold serve --drafter DFLASH2_DIR: serving line 'drafts: DFlash2 (...)' (smoke-confirmed)",
         "log_patterns": [
             {
-                "regex": r"drafts: DFlash2\b",
+                "regex": r"DFlash2 drafts for [^\n]*",
                 "confidence": "high",
-                "note": "1.2.x-style serving line; 1.1.8 prints the same drafts field (binary strings)",
+                "note": "smoke-confirmed: 'Qwen3.8-27B: ... DFlash2 drafts for one of them' with serving line 'drafts: on'",
             },
         ],
     },
@@ -106,9 +106,9 @@ EXPECTED_MODE_PROBE = {
         "probe": "launcher.py serve --draft-model DFlash2: /status draft field (placeholder until smoke)",
         "log_patterns": [
             {
-                "regex": r"DFlash2 draft",
-                "confidence": "low",
-                "note": "placeholder until the smoke log is read; /status draft field is the probe",
+                "regex": r"Decode cycles verify every row of the draft's block",
+                "confidence": "high",
+                "note": "smoke-confirmed: printed at startup once the DFlash2 draft is loaded (probe draft_weights_bytes > 0 corroborates)",
             },
         ],
     },
@@ -290,7 +290,8 @@ COMP = "/Volumes/P5Plus/yunshu-build/competitors"
 INSTALL = {
     "tf-1.2.1": f"{COMP}/tensorfold-<ver>/tensorfold-<ver>-macos-arm64/bin/tensorfold-native",
     "tf-1.1.8": f"{COMP}/tensorfold-<ver>/tensorfold-<ver>-macos-arm64/bin/tensorfold-native",
-    "splash-1.5.0": f"{COMP}/splash-1.5.0/splash-1.5.0-arm64-macos26/engine/splash",
+    # launched as `<bundled python> install/launcher.py serve`: the pinned file is the interpreter
+    "splash-1.5.0": f"{COMP}/splash-1.5.0/splash-1.5.0-arm64-macos26/python/bin/python3",
     "omlx-0.7.3": f"{COMP}/venvs/omlx-0.7.3/bin/omlx",
     "omlx-0.7.3rc1": f"{COMP}/venvs/omlx-0.7.3rc1/bin/omlx",
     "mlx-serve-26.11.1": f"{COMP}/mlxserve-bin/26.11.1/mlx-serve-macos-arm64/mlx-serve",
@@ -418,11 +419,11 @@ def build_pins(census: dict, pin: dict, sha_of=file_sha256, git_head=None) -> di
             "release archive",
             sha_of,
         ),
-        # census has no release date for 1.1.8: stays None and is reported unresolved
+        # GitHub API ashhart/TensorFold releases/tags/v1.1.8 published_at 2026-10-28T07:52:42Z
         "tf-1.1.8": _pin(
             "tf-1.1.8",
             "1.1.8",
-            None,
+            "2026-10-28",
             tf["sha256"]["1.1.8 tarball"],
             "release archive",
             sha_of,

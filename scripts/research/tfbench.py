@@ -253,6 +253,21 @@ def engaged_spec_mode_line(engine, log):
             start = log.rfind("\n", 0, m.start()) + 1
             end = log.find("\n", m.end())
             return "dflash", log[start : end if end != -1 else len(log)]
+        # TensorFold 1.1.8 (2026-11-03 smoke): "Qwen3.8-27B: ... DFlash2 drafts for one of them"
+        # with the serving line "drafts: on" (bench_engines.detect_mode reads the same pair)
+        m = re.search(r"DFlash2 drafts for [^\n]*", log)
+        if m and re.search(r"drafts: on\b", log):
+            start = log.rfind("\n", 0, m.start()) + 1
+            end = log.find("\n", m.end())
+            return "dflash", log[start : end if end != -1 else len(log)]
+    if engine.startswith("splash"):
+        # Splash 1.5.0 (2026-11-03 smoke): printed once the DFlash2 draft is loaded and wired into
+        # the decode loop (the /status probe is only corroboration)
+        m = re.search(r"Decode cycles verify every row of the draft's block[^\n]*", log)
+        if m:
+            start = log.rfind("\n", 0, m.start()) + 1
+            end = log.find("\n", m.end())
+            return "dflash", log[start : end if end != -1 else len(log)]
     return None, None
 
 
@@ -769,7 +784,11 @@ def _mark(ev, **fields):
         _ACTIVE_TELEMETRY.mark(ev, **fields)
 
 
-def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
+def send(
+    url, body, timeout=600, *, capture_timestamps=False, trace_id=None, sample=False
+):
+    # sample=True marks a real benchmark request: only it may fill --log-usage-sample. Warm-up and
+    # readiness requests (short "Say hi" style probes) must not, or the sample is not the benchmark.
     prompt_sha = prompt_digest(body.get("messages"))
     max_tokens, temperature = body.get("max_tokens"), body.get("temperature")
     stop = list(body.get("stop") or [])
@@ -808,8 +827,8 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
                 raise RuntimeError(f"SSE error {d['error']}")
             if d.get("usage"):
                 usage = d["usage"]
-                if _USAGE_SAMPLE[0] is None:
-                    _USAGE_SAMPLE[0] = d  # the raw usage chunk (--log-usage-sample)
+                if sample and _USAGE_SAMPLE[0] is None:
+                    _USAGE_SAMPLE[0] = d  # the final usage chunk of the first benchmark request
             if d.get("x_yunshu"):
                 xy = d["x_yunshu"]
             for ch in d.get("choices") or []:
@@ -1586,7 +1605,7 @@ def part_decode(s, out, a):
                     extra_rec = rehearse(s, b)
                 if family and phase == "cold":
                     family_apply(b, kind, variant, thinking, media)
-                raw = send(s.url, b)
+                raw = send(s.url, b, sample=True)
                 tool_calls = raw.pop("_tools", [])
                 image_tokens = raw.pop("_image_tokens", None)
                 r = attribution_fields(s, raw)
