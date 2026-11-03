@@ -419,7 +419,8 @@ def _request_line_candidates(item, log, ready_offset, skip, mtp):
                  "bad": bad, "calibration_tokens": 0, "calibration_share": 0.0} for i in range(max(1, len(chats)))][skip:]
     out = []
     for chat, m in zip(chats, mtp):
-        out.append({"line": chat["line"], "value": m["value"], "prompt": chat["prompt"], "ct": chat["ct"],
+        out.append({"line": chat["line"], "mtp_line": m.get("line"), "value": m["value"],
+                    "prompt": chat["prompt"], "ct": chat["ct"],
                     "ct_merged": m.get("ct"), "bad": m.get("bad"),
                     "calibration_tokens": m.get("calibration_tokens", 0),
                     "calibration_share": (m.get("calibration_tokens", 0) / m["ct"]) if m.get("ct") else 0.0})
@@ -465,7 +466,7 @@ def correlate_multiset(item, log, requests, ready_offset, consumed=0, skip=READI
         calibrated = c.get("calibration_share", 0.0) >= 1.0
         if not calibrated and not c["value"] > minimum:
             return [], f"request {rid}: value {c['value']} not above {minimum}"
-        out.append({"rid": rid, "prompt": c["prompt"], "line": c["line"],
+        out.append({"rid": rid, "prompt": c["prompt"], "line": c["line"], "mtp_line": c.get("mtp_line"),
                     "value": 0.0 if calibrated else c["value"], "group": group,
                     "ct_expected": req.get("ct"), "ct_merged": c.get("ct_merged", c.get("ct")),
                     "ct_gap": (req.get("ct") - c.get("ct_merged", c.get("ct")))
@@ -724,13 +725,19 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
                 "rid": x.get("rid"), "part": x.get("part"),
                 "calibration_share": x.get("calibration_share"), "calibrated": x.get("calibrated", False),
                 "ct_expected": x.get("ct_expected"), "ct_merged": x.get("ct_merged"), "ct_gap": x.get("ct_gap"),
-                "partial_coverage": x.get("partial_coverage", False)}
+                "partial_coverage": x.get("partial_coverage", False),
+                "chat_line": x.get("line"), "mtp_line": x.get("mtp_line")}
                for i, x in enumerate(matched)]
+    # the header's engaged line rule: the first measured request's MTP acceptance line (the chat line when the
+    # engine has no MTP group); every request's pair is recorded in evidence_lines
+    evidence_lines = [{"rid": x.get("rid"), "chat": x.get("line"), "mtp": x.get("mtp_line")} for x in matched]
+    first_line = (matched[0].get("mtp_line") or matched[0]["line"]) if matched else None
     partial = [x for x in per_row if x.get("partial_coverage")]
     calibrated = [x for x in matched if x.get("calibrated")]
     if calibrated and len(calibrated) == len(matched):
-        return {"engaged_mode": "ar", "matched_line": matched[-1]["line"], "evidence_kind": "acceptance_regex",
-                "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched)},
+        return {"engaged_mode": "ar", "matched_line": first_line, "evidence_kind": "acceptance_regex",
+                "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched),
+                                             "evidence_lines": evidence_lines},
                 "label": "ar (calibration only)"}, []
     label = None
     if calibrated:
@@ -743,9 +750,9 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
             f" [partial log coverage: {len(partial)} request(s); oMLX logs MTP stats for only the merged tokens of"
             " each request; the rest were decoded without an MTP stats line (MTP inactive for multi-row batches:"
             " 'MTP inactive for 3-row batch', batch-standard-calibration segments)]")
-    return {"engaged_mode": mode, "matched_line": matched[-1]["line"], "evidence_kind": "acceptance_regex",
+    return {"engaged_mode": mode, "matched_line": first_line, "evidence_kind": "acceptance_regex",
             "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched),
-                                         "partial_coverage": len(partial)},
+                                         "partial_coverage": len(partial), "evidence_lines": evidence_lines},
             "label": label}, []
 
 

@@ -589,6 +589,19 @@ class Srv:
 
     def verify_spec_mode(self, final=False, rows=(), probe_response=None, concurrent=(), concurrent_probe=None):
         log = self.log.read_text(errors="replace")
+        if fp.fullcmp_mode(os.environ) and self._is_yunshu(self.engine) and final and concurrent and not rows:
+            # a Yunshu concurrent cell: the same derived verdict the audit re-derives (fe.concurrent_check), not the
+            # runner line (the header and the audit must agree on the mode and the line)
+            ev, problems = fe.concurrent_check(fe.load_table(), self.engine, self.requested_spec_mode, log,
+                                               concurrent, getattr(self, "ready_log_offset", None))
+            self.engaged_spec_mode = ev["engaged_mode"]
+            self.engaged_log_line = ev["matched_line"]
+            self.engaged_evidence_kind = ev["evidence_kind"]
+            self.engaged_evidence_source = ev["source"]
+            self.engaged_label = ev.get("label")
+            if problems:
+                raise RuntimeError("concurrent evidence: " + "; ".join(problems) + f"; see {self.log}")
+            return
         if fp.fullcmp_mode(os.environ) and not self._is_yunshu(self.engine):
             # Fullcmp: the engaged mode comes from the evidence table only (fullcmp_engaged); the
             # request is never copied into the header. At startup only the load lines exist (a
