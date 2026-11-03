@@ -276,7 +276,8 @@ def _base_harness_part(row: dict):
         if planned and planned <= {"cold", "warm", "turn2"}:
             args += ["--phases", ",".join(p for p in ("cold", "warm", "turn2") if p in planned)]
         return ("decode", args, None)
-    same = [] if row.get("sweep") != "conc-same" else ["--conc-same"]
+    # both names: the real matrix's conc-same sweep and the --smoke-conc same-prompt sweep
+    same = [] if row.get("sweep") not in ("conc-same", "smoke-conc-same") else ["--conc-same"]
     return (
         "conc",
         [
