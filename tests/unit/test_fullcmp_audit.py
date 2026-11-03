@@ -1062,6 +1062,9 @@ def _conc_record(trial=0, n=2, ct=16, drop=None):
         "part": "conc",
         "n": n,
         "trial": trial,
+        # schema (tfbench request_records): one entry per request of the record
+        "requests": [{"rid": i, "pt": 1024, "ct": ct, "cached": 0, "ttft_s": 0.5, "dec_tps": 30.0,
+                      "spec": {"accepted": 3, "drafted": 4, "rounds": 2}} for i in range(n)],
         "ttfts": [0.5 + i for i in range(n)],
         "per_req_dec": [30.0] * n,
         "total_s": [3.0] * n,

@@ -393,6 +393,50 @@ def read_concurrent_records(path) -> list:
     return out
 
 
+def _yunshu_concurrent(records, mode):
+    """Yunshu: no done line to correlate. Each request's own speculative counters (x_yunshu.speculative,
+    recorded per request by tfbench request_records) must show accepted > 0."""
+    problems, matched = [], []
+    for rec in records:
+        reqs = rec.get("requests")
+        if not isinstance(reqs, list) or not reqs:
+            problems.append(f"{rec.get('part')} n={rec.get('n')}: no requests list")
+            continue
+        for rid, req in enumerate(reqs):
+            spec = req.get("spec")
+            if not isinstance(spec, dict) or not _is_positive(spec.get("accepted")):
+                problems.append(f"{rec.get('part')} n={rec.get('n')} request {rid}: no accepted count > 0 ({spec!r})")
+                continue
+            matched.append({"rid": rid, "part": rec.get("part"), "prompt": req.get("pt"),
+                            "line": f"x_yunshu.speculative accepted={spec['accepted']} drafted={spec.get('drafted')}",
+                            "value": float(spec["accepted"]), "group": "accepted", "queued_s": None})
+    if problems or not matched:
+        return {"engaged_mode": UNVERIFIED, "matched_line": None, "evidence_kind": "concurrent",
+                "source": "record", "stats": {"per_row_problem": "; ".join(problems) or "no requests",
+                                              "per_row": matched}, "label": None}, problems
+    per_row = [{"row": i, "prompt": x["prompt"], "line": x["line"], "value": x["value"], "group": "accepted",
+                "queued_s": None, "rid": x["rid"], "part": x["part"]} for i, x in enumerate(matched)]
+    return {"engaged_mode": mode, "matched_line": matched[-1]["line"], "evidence_kind": "record",
+            "source": "record", "stats": {"per_row": per_row, "concurrent": len(matched)},
+            "label": None}, []
+
+
+def concurrent_attr_rows(table, engine, mode, log, records, ready_offset) -> list:
+    """part=attr rows for the concurrent requests (rid, record part), from the same verdict as the audit."""
+    ev, _problems = concurrent_check(table, engine, mode, log, records, ready_offset)
+    out = []
+    for pr in (ev or {}).get("stats", {}).get("per_row", []):
+        out.append({
+            "rec_part": pr.get("part"),
+            "rid": pr.get("rid"),
+            "accepted": int(pr["value"]) if pr.get("group") in COUNT_GROUPS else
+            "unavailable (line states a tokens-per-cycle value, not an accepted count)",
+            "queued_s": pr.get("queued_s"),
+            "matched_line": pr.get("line"),
+        })
+    return out
+
+
 def concurrent_check(table, engine, mode, log, records, ready_offset):
     """THE concurrent verdict (in-job check and audit both call this). records: the cell's conc / mixed
     rows. Returns (ev, problems): ev has the evaluate() shape (engaged_mode, matched_line, evidence_kind,
@@ -400,6 +444,8 @@ def concurrent_check(table, engine, mode, log, records, ready_offset):
     (fail closed). ev is None when there are no records."""
     if not records:
         return None, []
+    if engine == "yunshu":
+        return _yunshu_concurrent(records, mode)
     m = mode_entry(table, engine, mode)
     item = next((e for e in ((m or {}).get("evidence", []))
                  if e.get("kind") == "acceptance_regex" and e.get("group")), None)
@@ -429,7 +475,8 @@ def concurrent_check(table, engine, mode, log, records, ready_offset):
                 "source": "slice", "stats": {"per_row_problem": "; ".join(problems) or "no requests",
                                              "per_row": matched}, "label": None}, problems
     per_row = [{"row": i, "prompt": x.get("prompt"), "line": x["line"], "value": x["value"],
-                "group": x.get("group"), "queued_s": x.get("queued_s")}
+                "group": x.get("group"), "queued_s": x.get("queued_s"),
+                "rid": x.get("rid"), "part": x.get("part")}
                for i, x in enumerate(matched)]
     return {"engaged_mode": mode, "matched_line": matched[-1]["line"], "evidence_kind": "acceptance_regex",
             "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched)},

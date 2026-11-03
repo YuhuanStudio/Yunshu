@@ -647,6 +647,12 @@ def check_record_count(run: Run) -> GuardResult:
                 f"r{cf.rep}: truncated: part '{part}' has request rows but no part_done "
                 "(the job timed out or was killed; the cell is incomplete)",
             )
+        for rec in fe.read_concurrent_records(cf.path):
+            # a conc / mixed record carries one request entry per request it ran (n of them)
+            reqs = rec.get("requests")
+            if not isinstance(reqs, list) or len(reqs) != rec.get("n"):
+                got = len(reqs) if isinstance(reqs, list) else "no"
+                res.fail(cell, f"r{cf.rep}: {rec.get('part')} record has {got} requests, n={rec.get('n')}")
         exp = cf.cell["expected_records"]  # per rep file (fullcmp_run.expected_records)
         if len(cf.rows) != exp:
             res.fail(cell, f"r{cf.rep}: {len(cf.rows)} request rows, expected {exp}")

@@ -828,3 +828,29 @@ def test_tf_concurrent_unaccepted_request_fails_closed():
     lines[2] = lines[2].replace("accepted=49/267", "accepted=0/267")
     ev, problems = fe.concurrent_check(fe.load_table(), "tf-1.2.1", "dflash", "".join(lines), _conc_records(2, 2), 0)
     assert problems and ev["engaged_mode"] == "unverified"
+
+
+def test_yunshu_concurrent_verdict_is_each_requests_own_counters():
+    """Yunshu conc/mixed: no done line; each request's x_yunshu.speculative accepted must be > 0."""
+    ok = [{"part": "conc", "n": 2, "requests": [
+        {"rid": 0, "pt": 1024, "ct": 16, "spec": {"accepted": 3, "drafted": 4, "rounds": 2}},
+        {"rid": 1, "pt": 1024, "ct": 16, "spec": {"accepted": 5, "drafted": 6, "rounds": 3}}]}]
+    ev, problems = fe.concurrent_check(None, "yunshu", "dflash", "", ok, 0)
+    assert problems == [] and ev["engaged_mode"] == "dflash"
+    assert [r["value"] for r in ev["stats"]["per_row"]] == [3.0, 5.0]
+    zero = [{"part": "conc", "n": 2, "requests": [
+        {"rid": 0, "pt": 1024, "ct": 16, "spec": {"accepted": 3, "drafted": 4, "rounds": 2}},
+        {"rid": 1, "pt": 1024, "ct": 16, "spec": {"accepted": 0, "drafted": 4, "rounds": 2}}]}]
+    ev, problems = fe.concurrent_check(None, "yunshu", "dflash", "", zero, 0)
+    assert problems and ev["engaged_mode"] == "unverified"
+    absent = [{"part": "conc", "n": 1, "requests": [{"rid": 0, "pt": 1024, "ct": 16,
+               "spec": "unavailable (response carries no per-request speculative counters)"}]}]
+    assert fe.concurrent_check(None, "yunshu", "dflash", "", absent, 0)[1]
+
+
+def test_concurrent_attr_rows_carry_rid_and_part():
+    log = "".join(TF_CONC_REAL)
+    rows = fe.concurrent_attr_rows(fe.load_table(), "tf-1.2.1", "dflash", log, _conc_records(2, 2), 0)
+    assert [r["rid"] for r in rows] == [0, 1, 0, 1]
+    assert rows[0]["accepted"] == 49 and rows[0]["rec_part"] == "conc"
+    assert rows[1]["queued_s"] == 1.81
