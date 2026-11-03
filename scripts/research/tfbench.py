@@ -2421,6 +2421,19 @@ def probe_request(s):
     return _post_json(s.url, "/v1/chat/completions", body)
 
 
+def engaged_end_fields(s) -> dict:
+    """The session-row fields written at finalize from the FINAL engaged verdict. The top-level
+    spec_mode is the verified engaged mode: META carries the startup value (before the evidence
+    of the measured requests), so it would still read 'unverified' for an engaged cell."""
+    return {
+        "engaged_spec_mode": s.engaged_spec_mode,
+        "spec_mode": s.engaged_spec_mode,
+        "engaged_log_line": s.engaged_log_line,
+        "engaged_evidence_kind": getattr(s, "engaged_evidence_kind", None),
+        "engaged_evidence_source": getattr(s, "engaged_evidence_source", None),
+    }
+
+
 def read_decode_rows(path):
     """The cell's request rows (part == decode) as written, for the final engaged-mode evidence."""
     rows = []
@@ -2684,14 +2697,7 @@ def main():
                     "quiet_post": fq.snapshot(),
                     # the raw usage chunk of the first request (GPU smoke evidence, per engine)
                     "usage_sample": _USAGE_SAMPLE[0] if a.log_usage_sample else None,
-                    # the final engaged evidence (per-request records included), as the audit reads it
-                    "engaged_spec_mode": s.engaged_spec_mode,
-                    # the top-level spec_mode (every row's META) is the final verified mode, not the
-                    # startup value: the final check passed only when it equals the expected mode
-                    "spec_mode": s.engaged_spec_mode,
-                    "engaged_log_line": s.engaged_log_line,
-                    "engaged_evidence_kind": getattr(s, "engaged_evidence_kind", None),
-                    "engaged_evidence_source": getattr(s, "engaged_evidence_source", None),
+                    **engaged_end_fields(s),
                 }
             emit(
                 out,

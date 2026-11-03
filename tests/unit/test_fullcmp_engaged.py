@@ -546,3 +546,43 @@ def test_mlx_vlm_probe_path_is_exercised_through_the_tfbench_engaged_path():
     # the final check refuses a cell whose probe shows no drafting (dflash not applied)
     with pytest.raises(RuntimeError, match="engaged=unverified"):
         run({"timings": {"draft_rounds": 0, "draft_n_accepted": 0}})
+
+
+def test_finalized_session_row_spec_mode_is_the_engaged_mode_not_the_startup_value():
+    """Regression (wire-1104 tf-1.2.1): the top-level spec_mode came from META at startup, before the
+    measured requests' evidence was verified, so an engaged cell's header said 'unverified'. The
+    finalize fields now carry the final engaged mode; a cell with no evidence stays unverified."""
+    import tfbench
+
+    class FakeLog:
+        def __init__(self, text):
+            self.text = text
+
+        def read_text(self, errors="replace"):
+            return self.text
+
+    def srv(log_text):
+        s = tfbench.Srv.__new__(tfbench.Srv)
+        s.engine = "tf-1.2.1"
+        s.requested_spec_mode = "dflash"
+        s.probe = None
+        s.ready_log_offset = 0
+        s.log = FakeLog(log_text)
+        return s
+
+    line = "[tensorfold] done chatcmpl-x prompt=1024 cached=0 finish=length rounds=19 accepted=45/285\n"
+    engaged = srv(line)
+    # startup: no request evidence yet (the request-time done line is not in the log)
+    engaged._verify_fullcmp_evidence("", final=False, rows=())
+    assert engaged.engaged_spec_mode == "unverified"
+    # the final check, after the measured requests, verifies the engagement
+    ping = "[tensorfold] done chatcmpl-p prompt=15 cached=0 finish=stop rounds=1 accepted=9/15\n"
+    # two readiness pings first (READINESS_REQUESTS), then the measured request's done line
+    engaged._verify_fullcmp_evidence(ping * 2 + line, final=True, rows=[{"pt": 1024, "ct": 64}])
+    fields = tfbench.engaged_end_fields(engaged)
+    assert fields["spec_mode"] == "dflash" == fields["engaged_spec_mode"]
+    assert fields["engaged_evidence_source"] == "slice"
+
+    never = srv("nothing\n")
+    never._verify_fullcmp_evidence("nothing\n", final=False, rows=())
+    assert tfbench.engaged_end_fields(never)["spec_mode"] == "unverified"
