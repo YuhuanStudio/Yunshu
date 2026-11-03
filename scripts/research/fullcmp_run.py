@@ -238,7 +238,12 @@ class Job:
 
 
 def cell_env(
-    engine: str, pin: dict, label: str = "", telemetry_root=None, extra=()
+    engine: str,
+    pin: dict,
+    label: str = "",
+    telemetry_root=None,
+    extra=(),
+    group: str = "",
 ) -> list[str]:
     """Env assignments every harness command carries (pinned Yunshu tree, isolated HOME).
     TFB_TELEMETRY_DIR is the raw root: tfbench writes <root>/<engine>/<cell>-rN.telemetry.jsonl,
@@ -259,6 +264,11 @@ def cell_env(
     ]
     if label:
         env.append(f"TFB_JOB_LABEL={label}")
+    # tfbench fails closed without these (fullcmp_provenance.REQUIRED_ENV); the group is the
+    # manifest cell group, which the audit matches against each header.
+    env.append(f"TFB_RUN_ID={RUN_ID}")
+    if group:
+        env.append(f"TFB_GROUP={group}")
     return env + list(extra)
 
 
@@ -285,11 +295,12 @@ def cell_command(
             label,
             telemetry_root=RAW_ROOT / "profile",
             extra=profile_env(row["engine"]),
+            group=comparison_group(row),
         )
         rep = 0
     else:
         out = raw_path(row["engine"], row["id"], rep)
-        env = cell_env(row["engine"], pin, label)
+        env = cell_env(row["engine"], pin, label, group=comparison_group(row))
     return [
         "env",
         *env,
@@ -544,6 +555,15 @@ def comparison_group(row: dict) -> str:
     return f"{row['batch']}.{row['ctx']}.{row['prompt_kind']}.c{row['conc']}"
 
 
+def census_pins(pin: dict) -> dict:
+    """Every engine's pin (fullcmp_audit_manifest.build_pins over census.json), so the audit
+    finds a pin for each engine in the batch. Reads the census; fails closed if it is missing."""
+    import fullcmp_audit_manifest as fam
+
+    census = json.loads((RUN_DIR / "census.json").read_text())
+    return fam.build_pins(census, pin)
+
+
 def audit_manifest(
     rows: list[dict], batches: list[str], pin: dict, engine_order: list[str]
 ) -> dict:
@@ -585,7 +605,7 @@ def audit_manifest(
         "reps": max(
             (row_reps(r) for r in rows if r.get("batch") in batches), default=1
         ),
-        "pins": {"yunshu": {"version": pin["version"], "git_sha": pin["sha"]}},
+        "pins": census_pins(pin),
         "yunshu": {"git_sha": pin["sha"], "python": pin["python_executable"]},
         "controls": {},
         "groups": ordered,

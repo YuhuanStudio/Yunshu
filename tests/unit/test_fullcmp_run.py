@@ -12,6 +12,21 @@ from pathlib import Path
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _never_reach_gpuq(monkeypatch):
+    """No test in this module may queue a job or run the real gpuq: any such call fails the test."""
+    import fullcmp_run as _run
+
+    def _refuse(name):
+        def _fail(*a, **k):
+            pytest.fail(f"{name} reached the real gpuq from a unit test")
+
+        return _fail
+
+    for name in ("swap_gate", "submit_all", "wait_all", "run_audit", "run_reps"):
+        monkeypatch.setattr(_run, name, _refuse(name))
+
 ROOT = Path(__file__).resolve().parents[2]
 _SPEC = importlib.util.spec_from_file_location(
     "fullcmp_run", ROOT / "scripts" / "research" / "fullcmp_run.py"
@@ -376,9 +391,10 @@ def test_full_run_queues_rep3_for_flagged_cells_and_fails_on_bad_job(
     assert run.main(["--batch", "B1", "--manifest", str(manifest)]) == 1
 
 
-def test_audit_manifest_marks_missing_pins_as_absent(pin_file):
+def test_audit_manifest_carries_census_pins_for_every_engine(pin_file):
     rows = [row("yunshu", "B1.a"), row("omlx-0.7.3", "B1.b")]
     m = run.audit_manifest(rows, ["B1"], PIN, ["yunshu", "omlx-0.7.3"])
-    assert set(m["pins"]) == {"yunshu"}
+    assert {"yunshu", "omlx-0.7.3"} <= set(m["pins"])
+    assert m["pins"]["omlx-0.7.3"]["install_path"]
     assert m["groups"]["B1.1024.code.c1"]["order"] == ["yunshu", "omlx-0.7.3"]
     assert all(c["expected_records"] is None for c in m["cells"])

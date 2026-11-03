@@ -167,3 +167,25 @@ def test_job_body_naming_the_main_checkout_is_refused():
     assert fr.script_problems(
         "set -e\n/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python x.py"
     )
+
+
+def test_every_cell_carries_the_run_id_and_its_manifest_group(fake_world):
+    # regression (2026-11-03 smoke3): tfbench failed closed on every job with "TFB_FULLCMP=1
+    # requires TFB_RUN_ID, TFB_GROUP" because the runner never exported them
+    plan = fr.plan_batch(_b1_rows(), "B1", fake_world["pin"], profile_rep=True)
+    for job in plan.jobs:
+        cells = [ln for ln in job.script.splitlines() if "tfbench.py" in ln]
+        for ln in cells:
+            assert f"TFB_RUN_ID={fr.RUN_ID}" in ln, job.label
+            group = fr.comparison_group(job.cells[0])
+            assert f"TFB_GROUP={group}" in ln, (job.label, group)
+
+
+def test_driver_audit_manifest_has_a_pin_for_every_batch_engine(fake_world):
+    # regression (2026-11-03 smoke3): the driver wrote pins for yunshu only, so every competitor
+    # cell failed manifest_completeness with "engine tf-1.2.1 has no pin"
+    rows = _b1_rows()
+    plan = fr.plan_batch(rows, "B1", fake_world["pin"])
+    man = fr.audit_manifest(rows, ["B1"], fake_world["pin"], plan.engine_order)
+    for eng in plan.engine_order:
+        assert eng in man["pins"], f"no pin for {eng}"
