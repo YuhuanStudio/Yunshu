@@ -840,6 +840,10 @@ def send(
                     _USAGE_SAMPLE[0] = d  # the final usage chunk of the first benchmark request
             if d.get("x_yunshu"):
                 xy = d["x_yunshu"]
+            elif isinstance(d.get("usage"), dict) and d["usage"].get("x_yunshu"):
+                # the gateway puts x_yunshu inside the final usage object (x_yunshu.py: usage["x_yunshu"]),
+                # not at the top level, on the include_usage chunk
+                xy = d["usage"]["x_yunshu"]
             for ch in d.get("choices") or []:
                 dl = ch.get("delta") or {}
                 got = False
