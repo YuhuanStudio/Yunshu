@@ -638,7 +638,10 @@ class Srv:
             ev, problems = fe.concurrent_check(table, self.engine, self.requested_spec_mode, log, concurrent, ready,
                                                probe_responses=concurrent_probe)
             if problems and final:
-                raise RuntimeError("concurrent evidence: " + "; ".join(problems) + f"; see {self.log}")
+                text = self.log.read_text(errors="replace") if self.log.exists() else ""
+                shown = [ln for ln in text.splitlines() if re.search(r"done|chat:|MTP\[", ln)][:10]
+                raise RuntimeError("concurrent evidence: " + "; ".join(problems) + f"; see {self.log}"
+                                   + "; first done lines: " + " | ".join(shown))
         else:
             ev = fe.evaluate(
                 self.engine,
@@ -696,6 +699,15 @@ def server_log_path(out):
     text = str(out)
     stem = text[: -len(".jsonl")] if text.endswith(".jsonl") else text
     return stem + ".server.log"
+
+
+def job_log_suffix() -> str:
+    """A suffix unique to this job/chunk, so two chunks of one cell never share an engine log file
+    (wire-1106d: mixed-0 of p1 and p2 both wrote server-omlx-0.7.3-mixed-0.log; p2 overwrote p1's evidence)."""
+    job = os.environ.get("GPUQ_JOB_ID") or os.environ.get("TFB_RUN_ID") or ""
+    chunk = os.environ.get("TFB_CHUNK") or ""
+    parts = [p for p in (job, chunk) if p]
+    return ("-" + "-".join(re.sub(r"[^A-Za-z0-9._-]", "_", p) for p in parts)) if parts else ""
 
 
 def cell_engine_log(log_path, end=None, prefix=()):
@@ -2616,7 +2628,7 @@ def main():
     s = start_server(
         a.engine,
         extra_env,
-        f"{a.engine}-{a.part}-{a.rep}{a.tag}",
+        f"{a.engine}-{a.part}-{a.rep}{a.tag}{job_log_suffix()}",
         model=a.model,
         ctx_tokens=a.ctx_tokens,
         parallel=a.parallel,
@@ -2742,13 +2754,21 @@ def main():
                     ),
                 )
             measured = read_decode_rows(a.out)
-            s.verify_spec_mode(
-                final=True,
-                rows=measured,
-                probe_response=probe_response,
-                concurrent=fe.read_concurrent_records(a.out),
-                concurrent_probe=conc_probe,
-            )
+            try:
+                s.verify_spec_mode(
+                    final=True,
+                    rows=measured,
+                    probe_response=probe_response,
+                    concurrent=fe.read_concurrent_records(a.out),
+                    concurrent_probe=conc_probe,
+                )
+            except Exception:
+                # a refused cell keeps its evidence: the slice is written before the error propagates
+                log_end_fail = s.log.stat().st_size if s.log.exists() else 0
+                Path(server_log_path(a.out)).write_bytes(
+                    cell_engine_log(s.log, log_end_fail, prefix=_LOG_PREFIX)
+                )
+                raise
             if fullcmp and a.engine != "yunshu" and getattr(s, "engaged_per_row", None):
                 # attribution per measured request, from the matched evidence (written after the final check)
                 for attr in fe.attr_rows_from(s.engaged_per_row, measured):
