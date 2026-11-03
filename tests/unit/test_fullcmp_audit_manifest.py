@@ -256,11 +256,11 @@ def test_new_engines_launch_their_census_binary():
         assert "/Volumes/P5Plus/yunshu-build/competitors/" in launch.cmd[0]
 
 
-def test_unverified_spec_mode_fails_closed():
-    # no log evidence can make an unverified mode engaged: check_engaged always refuses
-    for mid in ("mlx-serve-26.11.1", "kapitsa-0.2.26"):
-        eid = mid
-        assert be.ENGINES[eid].expected_mode == "unverified"
+def test_configured_spec_mode_refuses_without_engagement_evidence():
+    # mlx-serve is configured mtp and kapitsa dflash; a log without engagement evidence is refused
+    expected = {"mlx-serve-26.11.1": "mtp", "kapitsa-0.2.26": "dflash"}
+    for eid, mode in expected.items():
+        assert be.ENGINES[eid].expected_mode == mode
         with pytest.raises(RuntimeError):
             be.check_engaged(eid, be.detect_mode(eid, "any log line draft mtp dflash"))
 
@@ -307,7 +307,7 @@ def test_build_manifest_cells_pins_and_phases():
     assert not any(n["cell"] == "B1.img.kapitsa-0.2.26.1K" for n in m["not_in_harness"])
     assert any(c["engine"] == "mlx-vlm-server" for c in m["cells"])
     assert (
-        m["expected_mode_probe"]["mlx-serve-26.11.1"]["expected_mode"] == "unverified"
+        m["expected_mode_probe"]["mlx-serve-26.11.1"]["expected_mode"] == "mtp"
     )
     assert any(u["engine"] == "llama-cpp-b12061" for u in m["unsupported"])
     # conc cells are audited: one conc record per trial, n requests per record
@@ -315,8 +315,8 @@ def test_build_manifest_cells_pins_and_phases():
     assert conc4["phases"] == ["conc"] and conc4["expected_records"] == 4 * 2
     assert not any(n["cell"].startswith("B1.conc") for n in m["not_in_audit"])
     assert m["pins"]["omlx-0.7.3"]["version"] == "0.7.3"
-    assert m["pins"]["tf-1.1.8"]["release_date"] is None
-    assert any(
+    assert m["pins"]["tf-1.1.8"]["release_date"] == "2026-10-28"
+    assert not any(
         u["engine"] == "tf-1.1.8" and "release date" in u["reason"]
         for u in m["unresolved"]
     )
@@ -498,7 +498,8 @@ def test_mlx_lm_server_home_has_an_hf_hub_dir():
 def test_mlx_vlm_server_command_line():
     launch = be.build_launch("mlx-vlm-server", 18999, "/h/iso", {})
     assert launch.cmd[:3] == [be.MLXVLM_PY_0711, "-m", "mlx_vlm.server"]
-    assert "--draft-model" not in launch.cmd
+    assert launch.cmd[launch.cmd.index("--draft-model") + 1] == be.DRAFTER
+    assert launch.cmd[launch.cmd.index("--draft-kind") + 1] == "dflash"
     assert launch.cmd[launch.cmd.index("--port") + 1] == "18999"
 
 
@@ -513,12 +514,11 @@ def test_llama_b12061_command_line_uses_gguf_and_mtp_head():
 
 
 def test_engaged_mode_probes_for_new_engines():
-    assert (
-        be.detect_mode(
-            "mlx-vlm-server", "...Language model ready, continuous batching enabled."
-        )
-        == "ar"
+    ready = (
+        "Loading speculative drafter (dflash): /Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2\n"
+        "Drafter ready; speculative decoding enabled.\n"
     )
+    assert be.detect_mode("mlx-vlm-server", ready) == "dflash"
     assert be.detect_mode("mlx-vlm-server", "no marker here") is None
     mtp_log = (
         "srv load_model: loading draft model '/Volumes/P5Plus/models/unsloth/Qwen3.8-27B-GGUF/"
@@ -571,10 +571,16 @@ def test_expected_mode_probe_covers_the_unverified_and_omlx_engines():
         "kapitsa-0.2.26",
         "omlx-0.7.3",
         "omlx-0.7.3rc1",
+        "tf-1.2.1",
+        "tf-1.1.8",
+        "splash-1.5.0",
+        "mlx-lm-server",
+        "mlx-vlm-server",
+        "llama-cpp-b12061",
     }
-    # mlx-serve and kapitsa stay fail-closed until a smoke run shows their evidence
-    assert probe["mlx-serve-26.11.1"]["expected_mode"] == "unverified"
-    assert probe["kapitsa-0.2.26"]["expected_mode"] == "unverified"
+    # configured modes (bench_engines.ENGINES): mlx-serve MTP (Metal default), kapitsa DFlash2
+    assert probe["mlx-serve-26.11.1"]["expected_mode"] == "mtp"
+    assert probe["kapitsa-0.2.26"]["expected_mode"] == "dflash"
     for eng, entry in probe.items():
         assert entry["probe"] and entry["log_patterns"], eng
         for pat in entry["log_patterns"]:
