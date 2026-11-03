@@ -23,7 +23,7 @@ import fullcmp_manifest as fm  # noqa: E402
 
 PY = "/tree/.venv/bin/python"
 MODEL = "Qwen3.8-27B"
-ENG = ("yunshu", "mlx-serve")
+ENG = ("yunshu", "mlx-serve-26.11.1")
 PROMPTS = ("p0", "p1")
 REPS = 3
 W = "a" * 64
@@ -92,7 +92,7 @@ def make_data():
             "git_sha": "a1b2c3d",
             "binary_sha256": B,
         },
-        "mlx-serve": {
+        "mlx-serve-26.11.1": {
             "version": "v26.10.3",
             "release_date": "2026-10-20",
             "binary_sha256": B,
@@ -309,7 +309,7 @@ def _engaged_table(monkeypatch):
         ],
         "fallback": [],
     }
-    table = {"_meta": {"fixture": True}, "engines": {"mlx-serve": {"modes": {"dflash": entry}}}}
+    table = {"_meta": {"fixture": True}, "engines": {"mlx-serve-26.11.1": {"modes": {"dflash": entry}}}}
     monkeypatch.setattr(fe, "load_table", lambda: table)
 
 
@@ -353,11 +353,11 @@ def _rows(files, name_part, eng=None):
 
 # ---- bad row sets, one per guard -------------------------------------------
 def bad_prompt_identity(m, f):
-    _rows(f, "p0-r0", "mlx-serve")[0][1]["prompt_ids_sha"] = "sha-other"
+    _rows(f, "p0-r0", "mlx-serve-26.11.1")[0][1]["prompt_ids_sha"] = "sha-other"
 
 
 def bad_provenance_identity(m, f):
-    for rows in _rows(f, "p0", "mlx-serve"):
+    for rows in _rows(f, "p0", "mlx-serve-26.11.1"):
         for r in rows[1:]:
             r["harness"] = "tfbench-other"
 
@@ -368,7 +368,7 @@ def bad_pinned_versions(m, f):
 
 
 def bad_manifest_completeness(m, f):
-    del f["mlx-serve/q27_decode-1024-code-p1-r2.jsonl"]
+    del f["mlx-serve-26.11.1/q27_decode-1024-code-p1-r2.jsonl"]
 
 
 def bad_record_count(m, f):
@@ -377,7 +377,7 @@ def bad_record_count(m, f):
 
 
 def bad_engaged_mode(m, f):
-    for rows in _rows(f, "", "mlx-serve"):
+    for rows in _rows(f, "", "mlx-serve-26.11.1"):
         rows[0]["engaged_spec_mode"] = "mtp"
         rows[0]["engaged_log_line"] = "speculative: mtp head engaged"
 
@@ -386,7 +386,7 @@ def bad_engaged_no_evidence(m, f):
     """Header says engaged == requested, but the engine log slice has no engaged line at all and the
     per-request acceptance is zero: the request was copied into the header (fail closed).
     write_run reads the marker and writes an empty engine-log slice for that file."""
-    for rows in _rows(f, "", "mlx-serve"):
+    for rows in _rows(f, "", "mlx-serve-26.11.1"):
         rows[0]["_no_engine_log_evidence"] = True
         rows[0]["engaged_spec_mode"] = "dflash"
         rows[0]["engaged_log_line"] = FIXTURE_LOG_LINE
@@ -396,7 +396,7 @@ def bad_engaged_no_evidence(m, f):
 
 
 def bad_weight_identity(m, f):
-    for rows in _rows(f, "", "mlx-serve"):
+    for rows in _rows(f, "", "mlx-serve-26.11.1"):
         rows[0]["weights"][0]["sha256"] = "c" * 64
 
 
@@ -523,7 +523,7 @@ def test_each_guard_fails_on_its_bad_rows(tmp_path, guard, mutate):
 def test_truncated_stream_is_a_measured_only_error(tmp_path):
     manifest, files = make_data()
     mpath = write_run(tmp_path / "run", manifest, files)
-    path = tmp_path / "run" / "mlx-serve" / "q27_decode-1024-code-p0-r0.jsonl"
+    path = tmp_path / "run" / "mlx-serve-26.11.1" / "q27_decode-1024-code-p0-r0.jsonl"
     path.write_text(path.read_text()[:-40])  # cut the last row mid-line
     _, results = fa.run_guards(tmp_path / "run", mpath)
     measured = next(r for r in results if r.name == "measured_only")
@@ -532,8 +532,8 @@ def test_truncated_stream_is_a_measured_only_error(tmp_path):
 
 def test_unplanned_file_fails_manifest_completeness(tmp_path):
     manifest, files = make_data()
-    files["mlx-serve/q27_decode-1024-code-p9-r0.jsonl"] = files[
-        "mlx-serve/q27_decode-1024-code-p0-r0.jsonl"
+    files["mlx-serve-26.11.1/q27_decode-1024-code-p9-r0.jsonl"] = files[
+        "mlx-serve-26.11.1/q27_decode-1024-code-p0-r0.jsonl"
     ]
     _, results = _run(tmp_path, manifest, files)
     assert "manifest_completeness" in failing(results)
@@ -556,13 +556,13 @@ GOOD_TABLE = """\
 | engine | 1024-code-p0 | 1024-code-p1 |
 |---|---|---|
 | yunshu | **81.0 ± 2.0** | 81.0 ± 2.0 |
-| mlx-serve | 81.0 ± 2.0 | 81.0 ± 2.0 |
+| mlx-serve-26.11.1 | 81.0 ± 2.0 | 81.0 ± 2.0 |
 
 ### Qwen3.8-27B — cold_ttft
 | engine | 1024-code-p0 | 1024-code-p1 |
 |---|---|---|
 | yunshu | [1.3 ± 0.2](yunshu/raw.jsonl) | 1.3 ± 0.2 |
-| mlx-serve | 1.3 ± 0.2 | 1.3 ± 0.2 |
+| mlx-serve-26.11.1 | 1.3 ± 0.2 | 1.3 ± 0.2 |
 
 ### Derived — Yunshu ratio to best
 | engine | 1024-code-p0 |
@@ -608,8 +608,8 @@ def test_recompute_accepts_invalid_only_when_a_guard_fails(tmp_path):
 
 def test_recompute_number_without_source_is_measured_only(tmp_path):
     table = GOOD_TABLE.replace(
-        "| mlx-serve | 1.3 ± 0.2 | 1.3 ± 0.2 |",
-        "| mlx-serve | 1.3 ± 0.2 | 1.3 ± 0.2 |\n| ghost | 5.0 ± 0.0 | 5.0 ± 0.0 |",
+        "| mlx-serve-26.11.1 | 1.3 ± 0.2 | 1.3 ± 0.2 |",
+        "| mlx-serve-26.11.1 | 1.3 ± 0.2 | 1.3 ± 0.2 |\n| ghost | 5.0 ± 0.0 | 5.0 ± 0.0 |",
     )
     _, viol = _recompute(tmp_path, table)
     assert any(v.startswith("measured_only") and "ghost" in v for v in viol)
@@ -633,7 +633,7 @@ def test_schema_lists_fields_bench_engines_does_not_emit_yet():
 
 
 # ---- telemetry guard (guard 13) ---------------------------------------------
-def _tel_path(tmp_path, rel="mlx-serve/q27_decode-1024-code-p0-r0.jsonl"):
+def _tel_path(tmp_path, rel="mlx-serve-26.11.1/q27_decode-1024-code-p0-r0.jsonl"):
     return telemetry_file(tmp_path / "run" / rel)
 
 

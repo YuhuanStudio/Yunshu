@@ -116,5 +116,5 @@ def test_competitor_profile_is_stats_as_is():
 
 def test_llama_cpp_marks_spec_counters_unavailable():
     # Optional spec counters are not checked for a non-spec engine, the reason lives in the schema.
-    cov = fa.check_request("llama-cpp", {"attr": {}})
+    cov = fa.check_request("llama-cpp-b12061", {"attr": {}})
     assert cov["drafted"].startswith("unavailable (")

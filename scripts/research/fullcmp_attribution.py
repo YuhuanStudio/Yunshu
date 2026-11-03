@@ -110,8 +110,8 @@ class EngineAttr:
 
 _NO_SERVER_STAGES = "not exposed by the engine's HTTP API or log at this verbosity (client-side fields only)"
 _NO_RESTORE = "engine has no separate cache-restore step"
-_NO_SPEC = "engine does not run speculative decoding in this mode"
 _NO_CENSUS = "engine has no op-census hook; profile rep records competitor_stats only"
+_LLAMA_LOG_ONLY = "per-request draft counts are in the server log ('draft acceptance' line), not in the HTTP response"
 
 _COMPETITOR_SERVER_STAGES = {
     f: _NO_SERVER_STAGES
@@ -159,8 +159,8 @@ ENGINE_OVERRIDES = {
     "omlx-0.7.3rc1": EngineAttr(
         "omlx-0.7.3rc1", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"
     ),
-    "mlx-serve": EngineAttr(
-        "mlx-serve", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"
+    "mlx-serve-26.11.1": EngineAttr(
+        "mlx-serve-26.11.1", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"
     ),
     "mlx-lm-server": EngineAttr(
         "mlx-lm-server",
@@ -172,14 +172,19 @@ ENGINE_OVERRIDES = {
         dict(_COMPETITOR_SERVER_STAGES, t_restore=_NO_RESTORE),
         "stats_as_is",
     ),
-    "kapitsa": EngineAttr("kapitsa", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"),
-    "llama-cpp": EngineAttr(
-        "llama-cpp",
+    "kapitsa-0.2.26": EngineAttr(
+        "kapitsa-0.2.26", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"
+    ),
+    # b12061 runs MTP speculative decoding (EXPECTED_MODE_PROBE: mtp), so drafted/accepted are real
+    # counters. The HTTP response does not carry them; the server log's per-request 'draft
+    # acceptance' line does (the engaged evidence), so the layer-1 value is recorded as unavailable.
+    "llama-cpp-b12061": EngineAttr(
+        "llama-cpp-b12061",
         dict(
             _COMPETITOR_SERVER_STAGES,
             t_restore=_NO_RESTORE,
-            drafted=_NO_SPEC,
-            accepted=_NO_SPEC,
+            drafted=_LLAMA_LOG_ONLY,
+            accepted=_LLAMA_LOG_ONLY,
         ),
         "stats_as_is",
     ),
