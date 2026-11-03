@@ -621,6 +621,25 @@ def concurrent_probe_verdict(mode, probe_responses, records):
         t = (resp or {}).get("timings") or {}
         drafted.append((t.get("draft_n"), t.get("draft_n_accepted")))
     stats["probe"] = drafted
+    keys = [json.dumps((r or {}).get("timings") or {}, sort_keys=True) for r in probe_responses]
+    if len(set(keys)) == 1 and drafted:
+        # identical counters on every concurrent response: batch-level (shared across the requests), not
+        # per-request acceptance. The single sequential probe is never read here (probe_conc rows only).
+        d, a = drafted[0]
+        t = (probe_responses[0] or {}).get("timings") or {}
+        rounds = t.get("draft_rounds")
+        stats["batch_level"] = True
+        stats["accepted"], stats["drafted"], stats["rounds"] = a, d, rounds
+        stats["predicted_per_second"] = [(r or {}).get("timings", {}).get("predicted_per_second")
+                                         for r in probe_responses]
+        if _is_positive(d) and _is_positive(a):
+            pct = round(100.0 * a / d)
+            return {"engaged_mode": mode, "matched_line": f"concurrent probe batch counters draft_n={d} "
+                    f"accepted={a} rounds={rounds}", "evidence_kind": "concurrent_probe", "source": "probe",
+                    "stats": stats, "label": f"{mode} (batch-level counters; acceptance {pct}%)"}, []
+        return {"engaged_mode": "ar", "matched_line": f"concurrent probe batch counters zero: {drafted[0]}",
+                "evidence_kind": "concurrent_probe", "source": "probe", "stats": stats,
+                "label": CONC_PROBE_AR_LABEL}, []
     if all(_is_positive(d) and _is_positive(a) for d, a in drafted):
         return {"engaged_mode": mode, "matched_line": f"concurrent probe draft_n/accepted {drafted}",
                 "evidence_kind": "concurrent_probe", "source": "probe", "stats": stats, "label": None}, []
