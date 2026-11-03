@@ -838,12 +838,26 @@ def check_weight_identity(run: Run) -> GuardResult:
             continue
         entries = [e for e in w if isinstance(e, dict)]
         for e in entries:
+            has_bits = isinstance(e.get("bits"), int) and isinstance(e.get("group_size"), int)
             if not (
                 re.fullmatch(r"[0-9a-f]{64}", str(e.get("sha256")))
-                and isinstance(e.get("bits"), int)
-                and isinstance(e.get("group_size"), int)
+                and (has_bits or isinstance(e.get("quant"), str))
             ):
-                res.fail(cell, f"r{cf.rep}: weight entry lacks sha256/bits/group_size")
+                res.fail(cell, f"r{cf.rep}: weight entry lacks sha256 and bits/group_size (or a GGUF quant)")
+        # the files the launch loads (bench_engines is the one source): a GGUF engine whose header
+        # lists safetensors ran with the wrong provenance; its note must say so, never 'same weights'
+        try:
+            hid = bench_engines.tfbench_engine(cf.cell.get("engine"))
+        except (KeyError, TypeError):
+            hid = None
+        want = bench_engines.launched_gguf_files(hid) if hid else []
+        if want:
+            names = sorted(str(e.get("file")) for e in entries)
+            if names != sorted(os.path.basename(p) for p in want):
+                res.fail(cell, f"r{cf.rep}: header weights {names} are not the files the launch loads")
+            note = bench_engines.weights_note(hid)
+            if h.get("weights_note") != note:
+                res.fail(cell, f"r{cf.rep}: weights_note {h.get('weights_note')!r} must be {note!r}")
         canon = json.dumps(
             sorted(
                 json.dumps([e.get("sha256"), e.get("bits"), e.get("group_size")])

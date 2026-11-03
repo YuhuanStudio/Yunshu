@@ -439,12 +439,12 @@ ENGINES: dict[str, Engine] = {
         Engine(
             "mlx-serve-26.11.1",
             "mlx-serve 26.11.1",
-            "unverified",
+            "mtp",
             "unverified",
             CHECKPOINT,
             None,
             "external",
-            "census start_cmd only; spec mode and weights not yet established: every run fails closed",
+            "census start_cmd only; MTP is the configured mode (the Metal default, --mtp); weights not yet established",
             1.0,
             60.0,
         ),
@@ -487,12 +487,12 @@ ENGINES: dict[str, Engine] = {
         Engine(
             "kapitsa-0.2.26",
             "Kapitsa 0.2.26",
-            "unverified",
+            "dflash",
             "unverified",
             KAPITSA_MODEL_DIR,
             None,
             "external",
-            "census start_cmd only (KAPITSA_HOME isolated); spec mode and weights not yet established: fails closed",
+            "census start_cmd only (KAPITSA_HOME isolated); DFlash2 is the configured drafter (--dflash auto); weights not yet established",
             1.0,
             60.0,
         ),
@@ -534,6 +534,69 @@ def stub_reason(manifest_id: str) -> str | None:
     """'unsupported (harness: reason)' for an engine without harness support, else None."""
     reason = UNSUPPORTED_ENGINES.get(manifest_id)
     return None if reason is None else f"unsupported (harness: {reason})"
+
+
+# ---- weights each engine actually loads: the one source for the cell header and the audit ----
+# sha256 of the GGUF files llama-server loads: the census (meta/model_sha256_gguf.txt) has the main
+# file; the MTP head was hashed 2026-11-04 (shasum -a 256 on the file).
+GGUF_SHA256 = {
+    "Qwen3.8-27B-UD-Q4_K_M.gguf": "322e194ff79741c7baa497c240f677f54b201b0efab44ca8e50f122b39123482",
+    "mtp-Qwen3.8-27B-Q4_0.gguf": "50d9ce5a6da381bbcfb31061cf73df94a90e6faf8efeddee379a9cb8f1501c6e",
+}
+GGUF_QUANT = {"Qwen3.8-27B-UD-Q4_K_M.gguf": "UD-Q4_K_M", "mtp-Qwen3.8-27B-Q4_0.gguf": "MTP Q4_0"}
+# census weights key of the checkpoint each engine's launch serves (bench id)
+WEIGHTS_CENSUS_KEY = {
+    "llama-cpp-b12061": "qwen3.8-27b-gguf-unsloth",
+    "kapitsa-0.2.26": "qwen3.8-27b-4bit-kapitsa",
+    "tf-1.2.1": "qwen3.8-27b-4bit-tensorfold",
+    "tf-1.1.8": "qwen3.8-27b-4bit-tensorfold",
+    "splash-1.5.0": "qwen3.8-27b-4bit-tensorfold",
+}
+DEFAULT_WEIGHTS_KEY = "qwen3.8-27b-4bit-jundot"  # CHECKPOINT: Yunshu, oMLX, mlx-lm, mlx-vlm, mlx-serve
+
+
+def launched_gguf_files(engine: str) -> list[str]:
+    """GGUF files the launch loads (-m, -md); [] for MLX engines."""
+    if engine == "llama-cpp-b12061":
+        return [GGUF, GGUF_MTP]
+    return []
+
+
+def served_model_dir(engine: str, default: str) -> str:
+    """Directory of the safetensors the launch serves (for MLX engines); default for the rest."""
+    if engine == "kapitsa-0.2.26":
+        return KAPITSA_MODEL_DIR
+    if engine in ("tf-1.2.1", "tf-1.1.8", "splash-1.5.0"):
+        return TF_NATIVE_MODEL
+    return default
+
+
+def gguf_weights_record(engine: str) -> list[dict]:
+    """[{file, sha256, quant, size}] for the GGUF files the launch loads (the MLX fields do not apply)."""
+    import os
+
+    out = []
+    for path in launched_gguf_files(engine):
+        name = Path(path).name
+        out.append(
+            {
+                "file": name,
+                "sha256": GGUF_SHA256[name],
+                "quant": GGUF_QUANT[name],
+                "size": os.path.getsize(path) if os.path.exists(path) else None,
+            }
+        )
+    return out
+
+
+def weights_note(engine: str) -> str:
+    """Footnote for the audit and the table: 'same weights' only when the launch serves Yunshu's checkpoint."""
+    if launched_gguf_files(engine):
+        return "different weights (GGUF UD-Q4_K_M + MTP Q4_0)"
+    key = WEIGHTS_CENSUS_KEY.get(engine, DEFAULT_WEIGHTS_KEY)
+    if key == DEFAULT_WEIGHTS_KEY:
+        return "same weights as Yunshu (Jundot oQ4e-mtp)"
+    return f"different weights ({key})"
 
 
 def manifest_id(harness_id: str) -> str:
@@ -1054,7 +1117,7 @@ def build_launch(
                 str(int(ctx_tokens)),
             ],
             scrubbed_env(environ, base_env),
-            {"ctx_size": int(ctx_tokens), "spec_mode": "unverified"},
+            {"ctx_size": int(ctx_tokens), "spec_mode": "mtp"},
             {},
             {},
         )
@@ -1132,9 +1195,9 @@ def build_launch(
     if engine == "kapitsa-0.2.26":
         kh = str(Path(home) / "kapitsa-home")
         return Launch(
-            [KAPITSA_BIN_0226, "serve", "--model", "27b", "--port", p],
+            [KAPITSA_BIN_0226, "serve", "--model", "27b", "--dflash", "auto", "--port", p],
             scrubbed_env(environ, {**base_env, "KAPITSA_HOME": kh}),
-            {"model": "27b", "spec_mode": "unverified"},
+            {"model": "27b", "spec_mode": "dflash"},
             {},
             {str(Path(kh) / "models" / "qwen3.8-27b-4bit"): KAPITSA_MODEL_DIR},
         )

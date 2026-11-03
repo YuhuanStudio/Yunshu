@@ -256,11 +256,11 @@ def test_new_engines_launch_their_census_binary():
         assert "/Volumes/P5Plus/yunshu-build/competitors/" in launch.cmd[0]
 
 
-def test_unverified_spec_mode_fails_closed():
-    # no log evidence can make an unverified mode engaged: check_engaged always refuses
-    for mid in ("mlx-serve-26.11.1", "kapitsa-0.2.26"):
-        eid = mid
-        assert be.ENGINES[eid].expected_mode == "unverified"
+def test_configured_spec_mode_refuses_without_engagement_evidence():
+    # mlx-serve is configured mtp and kapitsa dflash; a log without engagement evidence is refused
+    expected = {"mlx-serve-26.11.1": "mtp", "kapitsa-0.2.26": "dflash"}
+    for eid, mode in expected.items():
+        assert be.ENGINES[eid].expected_mode == mode
         with pytest.raises(RuntimeError):
             be.check_engaged(eid, be.detect_mode(eid, "any log line draft mtp dflash"))
 
@@ -307,7 +307,7 @@ def test_build_manifest_cells_pins_and_phases():
     assert not any(n["cell"] == "B1.img.kapitsa-0.2.26.1K" for n in m["not_in_harness"])
     assert any(c["engine"] == "mlx-vlm-server" for c in m["cells"])
     assert (
-        m["expected_mode_probe"]["mlx-serve-26.11.1"]["expected_mode"] == "unverified"
+        m["expected_mode_probe"]["mlx-serve-26.11.1"]["expected_mode"] == "mtp"
     )
     assert any(u["engine"] == "llama-cpp-b12061" for u in m["unsupported"])
     # conc cells are audited: one conc record per trial, n requests per record
@@ -571,10 +571,16 @@ def test_expected_mode_probe_covers_the_unverified_and_omlx_engines():
         "kapitsa-0.2.26",
         "omlx-0.7.3",
         "omlx-0.7.3rc1",
+        "tf-1.2.1",
+        "tf-1.1.8",
+        "splash-1.5.0",
+        "mlx-lm-server",
+        "mlx-vlm-server",
+        "llama-cpp-b12061",
     }
-    # mlx-serve and kapitsa stay fail-closed until a smoke run shows their evidence
-    assert probe["mlx-serve-26.11.1"]["expected_mode"] == "unverified"
-    assert probe["kapitsa-0.2.26"]["expected_mode"] == "unverified"
+    # configured modes (bench_engines.ENGINES): mlx-serve MTP (Metal default), kapitsa DFlash2
+    assert probe["mlx-serve-26.11.1"]["expected_mode"] == "mtp"
+    assert probe["kapitsa-0.2.26"]["expected_mode"] == "dflash"
     for eng, entry in probe.items():
         assert entry["probe"] and entry["log_patterns"], eng
         for pat in entry["log_patterns"]:

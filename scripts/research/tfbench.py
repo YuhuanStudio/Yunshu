@@ -2345,7 +2345,9 @@ def fullcmp_header(
     Every value comes from the pin, the census, the model config, the launched binary or the
     gpuq job environment; a value that cannot be found raises (fail closed). quiet_pre is the
     host-CPU snapshot taken before the server started (fullcmp_quiet.snapshot)."""
-    model_key = fp.census_model_id(census, a.model)
+    # the weights the launch loads (bench_engines is the one source): llama-cpp runs the GGUF, kapitsa
+    # and TensorFold their own checkpoints; every other engine serves the Jundot oQ4e-mtp checkpoint
+    model_key = bench_engines.WEIGHTS_CENSUS_KEY.get(a.engine) or fp.census_model_id(census, a.model)
     version, git_sha = bench_engines.engine_version(a.engine, YUNSHU_SRC)
     census_key = fp.census_key_for(a.engine)
     return dict(
@@ -2363,7 +2365,14 @@ def fullcmp_header(
         engaged_evidence_kind=getattr(s, "engaged_evidence_kind", None),
         engaged_evidence_source=getattr(s, "engaged_evidence_source", None),
         server_log_ready_offset=getattr(s, "ready_log_offset", None),
-        weights=fp.weights_record(a.model, census, model_key),
+        weights=(
+            bench_engines.gguf_weights_record(a.engine)
+            if bench_engines.launched_gguf_files(a.engine)
+            else fp.weights_record(
+                bench_engines.served_model_dir(a.engine, a.model), census, model_key
+            )
+        ),
+        weights_note=bench_engines.weights_note(a.engine),
         fresh_process=True,
         home=str(s.home),
         job_id=job_id or fp.resolve_job_id(environ),
