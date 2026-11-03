@@ -324,12 +324,21 @@ def startup_s(engine: str) -> float:
     return floor
 
 
+# Engines whose mixed (one long + short concurrent) cell can run silent for minutes: a stall limit of
+# MIXED_SLOW_STALL_MIN applies to their mixed jobs even with heartbeats (defense in depth).
+MIXED_SLOW_ENGINES = ("mlx-vlm-server", "splash-1.5.0", "tf-1.1.8")
+MIXED_SLOW_STALL_MIN = 10.0
+MIXED_PROBE_MIN = float(JB["mixed_probe_s"]["value"]) / 60.0  # the concurrent probe of a mixed cell
+
+
 def cell_budget(row: dict) -> dict:
     """Itemized minutes of one cell for one rep: its own server start, the modelled work (the
     manifest estimate minus the manifest's own boot and idle, so nothing is counted twice), the
     memory idle and shutdown, the quiet_post snapshot and the finalize."""
     ready = fm.ENGINE_PERF[row["engine"]]["ready_s"]
     work = max(0.0, cell_est(row) - (ready + fm.OVERHEAD_S) / 60.0)
+    if row.get("turns") == "mixed":
+        work += MIXED_PROBE_MIN  # the probe repeats the N concurrent requests, long prefill included
     return {
         "startup": startup_s(row["engine"]) / 60.0,
         "cells": work,
@@ -356,6 +365,8 @@ def job_budget(rows: list[dict], prior_min: float = 0.0) -> dict:
         2.0 * startup_s(rows[0]["engine"]) / 60.0,
         2.0 * GATE_PRE_MIN,
     )
+    if any(r.get("turns") == "mixed" for r in rows) and rows[0]["engine"] in MIXED_SLOW_ENGINES:
+        out["stall"] = max(out["stall"], MIXED_SLOW_STALL_MIN)
     out["lane"] = "short" if out["timeout"] <= SHORT_LANE_MIN else "normal"
     out["n_cells"] = len(rows)
     return out

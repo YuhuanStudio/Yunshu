@@ -967,6 +967,11 @@
    "value": "separate",
    "kind": "policy (lead 11-04)",
    "source": "swap preflight is its own job, not in the timeout"
+  },
+  "mixed_probe_s": {
+   "value": 600.0,
+   "kind": "assumed, lower bound measured",
+   "source": "wire-1106e mlx-vlm-server SMOKE mixed (job 1104-043901): the concurrent probe was still running after ~340 s (job wall 387 s, mixed trials 17.5 s and 17.3 s, ready 10.4 s). 600 s is a budget, not a complete measurement; re-measure on the next mixed run"
   }
  }
 }

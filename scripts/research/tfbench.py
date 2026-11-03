@@ -2567,7 +2567,26 @@ def finalize_session(path, end_fields):
     os.replace(tmp, path)
 
 
+HEARTBEAT_S = 30.0  # a heartbeat line every 30 s: a long phase never leaves the job log silent
+
+
+def _start_heartbeat(interval: float = HEARTBEAT_S) -> None:
+    """Daemon thread: one stdout line per interval, so gpuq's stall watchdog (silence limit) sees
+    progress during long phases (concurrent waits, the probe, idle windows). It writes no record."""
+    import threading
+
+    t0 = time.time()
+
+    def beat():
+        while True:
+            time.sleep(interval)
+            print(f"heartbeat {time.time() - t0:.0f}s", flush=True)
+
+    threading.Thread(target=beat, name="tfbench-heartbeat", daemon=True).start()
+
+
 def main():
+    _start_heartbeat()
     a = parse_args()
     extra_env = dict(kv.split("=", 1) for kv in a.env)
     if a.part not in (
