@@ -701,10 +701,16 @@ def check_engaged_mode(run: Run) -> GuardResult:
             res.fail(cell, f"r{cf.rep}: manifest has no expected spec mode for this cell")
             continue
         engine = cf.cell.get("engine")
+        concurrent_records = fe.read_concurrent_records(cf.path)
         if engine == "yunshu":
             slice_path = server_log_slice_path(cf.path)
             log = slice_path.read_text(errors="replace") if slice_path.is_file() else ""
-            ev = fe.yunshu_runner_evidence(log, h.get("server_log_ready_offset"))
+            if not cf.rows and concurrent_records:
+                # a Yunshu concurrent cell: its requests' counters or the rounds in the slice decide
+                ev, _ = fe.concurrent_check(table, engine, want, log, concurrent_records,
+                                            h.get("server_log_ready_offset"))
+            else:
+                ev = fe.yunshu_runner_evidence(log, h.get("server_log_ready_offset"))
             m = None
         else:
             if table is None:
@@ -731,7 +737,6 @@ def check_engaged_mode(run: Run) -> GuardResult:
                     probe_row = r
                     break
             probe_response = {"timings": probe_row.get("timings")} if probe_row else None
-            concurrent_records = fe.read_concurrent_records(cf.path)
             if not cf.rows and concurrent_records:
                 # concurrent cell: the shared verdict (fe.concurrent_check), the same one tfbench ran in-job
                 ev, _ = fe.concurrent_check(table, engine, want, log, concurrent_records, ready)
@@ -744,7 +749,8 @@ def check_engaged_mode(run: Run) -> GuardResult:
             kind = ev.get("evidence_kind")
             why = "loaded only (startup line, no per-request evidence)" if kind == "startup_only" else "no evidence"
             res.fail(cell, f"r{cf.rep}: engaged mode unverified: {why}")
-        elif got != want:
+        elif got != want and not (engine == "yunshu" and not cf.rows and got == "ar" and concurrent_records):
+            # a Yunshu concurrent cell's derived mode is the evidence's (ar when its requests do not draft)
             res.fail(cell, f"r{cf.rep}: engaged evidence says {got!r}, configured {want!r}")
         for key in ("requested_spec_mode", "spec_mode_expected"):
             if h.get(key) != want:

@@ -654,7 +654,8 @@ class Srv:
         self.engaged_evidence_source = ev["source"]
         self.engaged_label = ev.get("label")
         self.engaged_per_row = (ev.get("stats") or {}).get("per_row", [])  # reported with the base mode (e.g. 'dflash (kflash tree)')
-        if final and self.engaged_spec_mode != self.requested_spec_mode:
+        derived_ar = bool(concurrent) and not rows and self.engaged_spec_mode == "ar"
+        if final and self.engaged_spec_mode != self.requested_spec_mode and not derived_ar:
             raise RuntimeError(
                 f"requested spec={self.requested_spec_mode}, engaged={self.engaged_spec_mode} "
                 f"(evidence: {self.engaged_evidence_kind}, table: {'ok' if table else 'missing'}); "

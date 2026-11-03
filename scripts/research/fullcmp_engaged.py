@@ -393,9 +393,30 @@ def read_concurrent_records(path) -> list:
     return out
 
 
-def _yunshu_concurrent(records, mode):
-    """Yunshu: no done line to correlate. Each request's own speculative counters (x_yunshu.speculative,
-    recorded per request by tfbench request_records) must show accepted > 0."""
+# Yunshu dev0 concurrent requests run on the batch path: no DFlash per request (wire-1106c). A cell whose
+# requests carry no speculative counters is derived from its DFlash round lines in the log slice.
+DFLASH_BLOCK_MAX = 8  # the DFlash2 drafter block (wire logs: block=8): a round emits at most this many tokens
+DFLASH_ROUND = re.compile(r"DFlash round profile: (\d+) rounds")
+CONC_AR_LABEL = "ar (dev0: concurrent requests do not draft)"
+
+
+def _yunshu_concurrent(records, mode, log="", ready_offset=None):
+    """Yunshu conc/mixed cells. With per-request counters (x_yunshu.speculative): each request must show
+    accepted > 0. Without them: the cell's DFlash rounds in the log slice decide. rounds * DFLASH_BLOCK_MAX
+    < the cell's completion tokens -> the concurrent path does not draft: engaged 'ar' (a label, not a
+    violation). Rounds that could cover the tokens -> the mode, from the rounds (no per-request proof)."""
+    reqs_all = [q for rec in records for q in (rec.get("requests") or [])]
+    if reqs_all and not all(isinstance(q.get("spec"), dict) for q in reqs_all):
+        tokens = sum(int(q.get("ct") or 0) for q in reqs_all)
+        window = (log or "")[ready_offset or 0:]
+        rounds = sum(int(m.group(1)) for m in DFLASH_ROUND.finditer(window))
+        stats = {"rounds": rounds, "tokens": tokens, "requests": len(reqs_all)}
+        if rounds * DFLASH_BLOCK_MAX < tokens:
+            return {"engaged_mode": "ar", "matched_line": f"DFlash rounds {rounds} x block {DFLASH_BLOCK_MAX} < "
+                    f"{tokens} tokens", "evidence_kind": "concurrent_rounds", "source": "slice",
+                    "stats": stats, "label": CONC_AR_LABEL}, []
+        return {"engaged_mode": mode, "matched_line": f"DFlash rounds {rounds} cover {tokens} tokens",
+                "evidence_kind": "concurrent_rounds", "source": "slice", "stats": stats, "label": None}, []
     problems, matched = [], []
     for rec in records:
         reqs = rec.get("requests")
@@ -445,7 +466,7 @@ def concurrent_check(table, engine, mode, log, records, ready_offset):
     if not records:
         return None, []
     if engine == "yunshu":
-        return _yunshu_concurrent(records, mode)
+        return _yunshu_concurrent(records, mode, log, ready_offset)
     m = mode_entry(table, engine, mode)
     item = next((e for e in ((m or {}).get("evidence", []))
                  if e.get("kind") == "acceptance_regex" and e.get("group")), None)
