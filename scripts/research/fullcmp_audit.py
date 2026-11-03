@@ -951,12 +951,18 @@ def check_gpu_exclusive_rotation(run: Run) -> GuardResult:
     """Guard 9: each job ran alone on the GPU; engines interleave in rotated order per rep."""
     res = GuardResult("gpu_exclusive_rotation")
     slots = defaultdict(list)  # (group, rep) -> [(start, end, engine, cell)]
+    untimed = defaultdict(set)  # (group, rep) -> engines whose cells have no timestamps (failed jobs)
     for cf in run.files:
         h = cf.header
         if h is None:
             continue
         cell = cf.cell["cell"]
         res.checked += 1
+        s0, e0 = h.get("job_start_s"), h.get("job_end_s")
+        if not (is_num(s0) and is_num(e0)):
+            # a cell of a failed job: reported once per engine below, not as a rotation violation
+            untimed[(cf.cell["group"], cf.rep)].add(cf.cell["engine"])
+            continue
         if h.get("gpu_exclusive") is not True:
             res.fail(cell, f"r{cf.rep}: gpu_exclusive not recorded True")
         if h.get("contended") is not False:
@@ -983,9 +989,17 @@ def check_gpu_exclusive_rotation(run: Run) -> GuardResult:
         for i in items:
             if not observed or observed[-1] != i[2]:
                 observed.append(i[2])
-        expected = rotate(order, rep)
-        if observed != expected:
-            res.fail(anchor, f"rep {rep}: interleave {observed} != rotated {expected}")
+        # the engines that completed (have timestamps) must follow the planned order among themselves:
+        # a failed engine is absent from both sides (its absence is not a rotation violation)
+        planned = rotate(order, rep)
+        expected = [x for x in planned if x in set(observed)]
+        if [x for x in observed if x not in planned]:
+            res.fail(anchor, f"rep {rep}: observed engines not in the plan: {observed}")
+        elif observed != expected:
+            res.fail(anchor, f"rep {rep}: interleave {observed} != planned order of the completed engines {expected}")
+    for (group, rep), engines in sorted(untimed.items()):
+        for eng in sorted(engines):
+            res.notes.append(f"rep {rep} group {group}: engine {eng} has no job timestamps (failed job; reported once)")
     return res
 
 

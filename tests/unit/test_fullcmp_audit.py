@@ -1529,3 +1529,45 @@ def test_conc_agg_tps_must_equal_total_over_wall():
     rows = _conc_with_aggregates(agg_tps=40.0)
     res = fa.check_usage_fields(_usage_run(rows))
     assert any("agg_tps" in v for v in res.violations)
+
+
+def _rot_cf(engine, rep, start, group="g"):
+    import types
+
+    header = {"job_start_s": start, "job_end_s": start + 5.0, "gpu_exclusive": True, "contended": False}
+    return types.SimpleNamespace(header=header, cell={"cell": f"{engine}-c", "group": group, "engine": engine},
+                                 rep=rep, rows=[], path=None)
+
+
+def _rot_run(order, observed_engines, untimed_engines=(), rep=0):
+    files = [_rot_cf(e, rep, 100.0 + 10 * i) for i, e in enumerate(observed_engines)]
+    files += [_untimed_cf(e, rep) for e in untimed_engines]
+    manifest = {"groups": {"g": {"order": list(order)}}}
+    return fa.Run(manifest=manifest, files=files, missing=[], extra=[], parse_errors=[])
+
+
+def _untimed_cf(engine, rep):
+    import types
+
+    return types.SimpleNamespace(header={"gpu_exclusive": None}, cell={"cell": f"{engine}-c", "group": "g",
+                                                                       "engine": engine}, rep=rep, rows=[], path=None)
+
+
+# the real wire-1106c observed interleave (failed engines absent) against the planned order
+PLANNED_1106 = ["yunshu", "tf-1.2.1", "tf-1.1.8", "splash-1.5.0", "kapitsa-0.2.26", "mlx-serve-26.11.1",
+                "llama-cpp-b12061"]
+OBSERVED_1106 = ["yunshu", "tf-1.2.1", "tf-1.1.8", "splash-1.5.0", "mlx-serve-26.11.1", "llama-cpp-b12061"]
+
+
+def test_rotation_compares_the_completed_subsequence_in_planned_order():
+    """Failing-before (wire-1106c): the observed interleave (kapitsa failed, absent) was compared with the full
+    planned rotation. The completed engines follow the planned relative order: no violation."""
+    res = fa.check_gpu_exclusive_rotation(_rot_run(PLANNED_1106, OBSERVED_1106, untimed_engines=["kapitsa-0.2.26"]))
+    assert res.violations == [], res.violations
+    assert any("kapitsa-0.2.26" in n and "failed job" in n for n in res.notes)
+
+
+def test_rotation_swapped_completed_engines_is_still_a_violation():
+    swapped = ["tf-1.2.1", "yunshu", "tf-1.1.8", "splash-1.5.0", "mlx-serve-26.11.1", "llama-cpp-b12061"]
+    res = fa.check_gpu_exclusive_rotation(_rot_run(PLANNED_1106, swapped))
+    assert res.violations and "planned order of the completed engines" in res.violations[0]
