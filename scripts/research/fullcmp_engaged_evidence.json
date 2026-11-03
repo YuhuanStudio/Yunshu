@@ -156,6 +156,19 @@
               "per_request": false,
               "startup_sufficient": false,
               "real_log": null
+            },
+            {
+              "kind": "response_field_probe",
+              "pattern_or_path": "timings.draft_rounds",
+              "paths": [
+                "timings.draft_rounds",
+                "timings.draft_n_accepted"
+              ],
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "serving_path_vlm_omlx.json mlx_vlm_server_0.7.11.required_evidence_per_request",
+              "real_example": "(probe-based: applied on the serving path; timings.draft_rounds > 0)",
+              "negative_example": "timings.draft_rounds null or 0 (drafter did not run for the probe)"
             }
           ],
           "fallback": []
@@ -177,6 +190,18 @@
               "negative_example": "'DFlash enabled for X but no draft model is set; loading without DFlash' (engine_pool.py:4171) or 'DFlash is not supported for X (model_type=..., engine=...); loading without DFlash' (engine_pool.py:4178)",
               "per_request": false,
               "startup_sufficient": false,
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1104/omlx-0.7.3/SMOKE.smoke-core.omlx-0.7.3.1K.c1.code.o64.single.th-off.none.greedy.v0-r0.server.log"
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "MTP\\[(?P<uid>[^\\]]+)\\] finish=(?P<finish>\\S+) tokens=(?P<tokens>\\d+) cycles=(?P<cycles>\\d+) tok/cycle=(?P<tpc>[\\d.]+) accept=(?P<accepted>\\d+)/(?P<drafted>\\d+) \\((?P<rate>[^)]+)\\)",
+              "group": "accepted",
+              "min": 0,
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "serving_path_vlm_omlx.json omlx_0.7.3_and_rc1.per_request_line; batch_generator.py:3950-3995",
+              "real_example": "2026-11-04 00:35:15,827 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - MTP[0] finish=length tokens=16 cycles=6 tok/cycle=2.67 accept=8/14 (57.1%) depth[d1=5/6,d2=3/5,d3=0/3,d4=0/0,d5=0/0,d6=0/0,d7=0/0] emits[init=2,draft=8,bonus=0,verify=6] timing[backbone=287.7ms mtp=21.9ms sample=0.5ms cache=5.3ms]",
+              "negative_example": "MTP[0] ... accept=0/7 (0.0%)",
               "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1104/omlx-0.7.3/SMOKE.smoke-core.omlx-0.7.3.1K.c1.code.o64.single.th-off.none.greedy.v0-r0.server.log"
             }
           ],
@@ -209,6 +234,18 @@
               "negative_example": "absence after a 'DFlash enabled' line means the drafter was not attached",
               "per_request": false,
               "startup_sufficient": false,
+              "real_log": null
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "MTP\\[(?P<uid>[^\\]]+)\\] finish=(?P<finish>\\S+) tokens=(?P<tokens>\\d+) cycles=(?P<cycles>\\d+) tok/cycle=(?P<tpc>[\\d.]+) accept=(?P<accepted>\\d+)/(?P<drafted>\\d+) \\((?P<rate>[^)]+)\\)",
+              "group": "accepted",
+              "min": 0,
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "serving_path_vlm_omlx.json omlx_0.7.3_and_rc1.per_request_line; batch_generator.py:3950-3995",
+              "real_example": null,
+              "negative_example": "MTP[0] ... accept=0/7 (0.0%)",
               "real_log": null
             }
           ],

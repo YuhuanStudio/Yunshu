@@ -352,3 +352,71 @@ def test_missing_done_line_for_a_measured_request_fails():
     res = fe.evaluate("tf", "dflash", log, rows, _tf_table(), ready_offset=0)
     assert res["engaged_mode"] == "unverified"
     assert "row 1" in res["stats"]["per_row_problem"]
+
+
+# ---- probe-based evidence (mlx-vlm 0.7.11: per-request draft stats only in a non-streaming response)
+def _probe_table():
+    return {
+        "_meta": {},
+        "engines": {
+            "vlm": {
+                "modes": {
+                    "dflash": {
+                        "evidence": [
+                            _ev("response_field_probe", "timings.draft_rounds", per_request=True)
+                            | {"paths": ["timings.draft_rounds", "timings.draft_n_accepted"]}
+                        ],
+                        "fallback": [],
+                    }
+                }
+            }
+        },
+    }
+
+
+def test_stream_rows_without_draft_stats_pass_when_the_probe_has_them():
+    """The measured requests are streamed (no draft stats in their rows); the one non-streaming probe
+    carries timings.draft_rounds and draft_n_accepted > 0 -> engaged by the probe."""
+    rows = [{"pt": 1024, "ct": 64}, {"pt": 1024, "ct": 64}]  # streamed: no attr/draft fields
+    probe = {"timings": {"draft_kind": "dflash", "draft_rounds": 12, "draft_n": 80, "draft_n_accepted": 51}}
+    res = fe.evaluate("vlm", "dflash", "", rows, _probe_table(), ready_offset=0, probe_response=probe)
+    assert res["engaged_mode"] == "dflash"
+    assert res["source"] == "probe"
+    assert res["stats"]["probe"] == [12, 51]
+
+
+def test_probe_with_zero_drafting_is_unverified_dflash_not_applied():
+    rows = [{"pt": 1024, "ct": 64}]
+    probe = {"timings": {"draft_kind": "dflash", "draft_rounds": 0, "draft_n": 0, "draft_n_accepted": 0}}
+    res = fe.evaluate("vlm", "dflash", "", rows, _probe_table(), ready_offset=0, probe_response=probe)
+    assert res["engaged_mode"] == "unverified"
+    null = fe.evaluate("vlm", "dflash", "", rows, _probe_table(), ready_offset=0,
+                       probe_response={"timings": {"draft_rounds": None}})
+    assert null["engaged_mode"] == "unverified"
+    absent = fe.evaluate("vlm", "dflash", "", rows, _probe_table(), ready_offset=0, probe_response=None)
+    assert absent["engaged_mode"] == "unverified"
+
+
+def test_probe_schema_needs_dotted_paths():
+    bad = _probe_table()
+    bad["engines"]["vlm"]["modes"]["dflash"]["evidence"][0]["paths"] = ["not a path!"]
+    assert any("response_field_probe" in p for p in fe.validate_table(bad))
+
+
+def test_omlx_mtp_line_is_per_row_acceptance_and_matches_the_real_log(tmp_path):
+    """The oMLX per-request line (_log_mtp_stats) is correlated per measured row; checked on the real
+    conc log on disk when it exists."""
+    table = fe.load_table()
+    m = table["engines"]["omlx-0.7.3"]["modes"]["dflash"]
+    item = next(ev for ev in m["evidence"] if ev["kind"] == "acceptance_regex" and "MTP" in ev["pattern_or_path"])
+    assert item["group"] == "accepted"
+    real = glob.glob("/Volumes/Micron/yunshu-fullcmp/smoke/*/out/server-omlx-0.7.3-conc-0.log")
+    if not real:
+        pytest.skip("no real oMLX conc log on disk")
+    text = Path(real[0]).read_text(errors="replace")
+    counts = [m_.group("accepted") for m_ in re.finditer(item["pattern_or_path"], text)]
+    assert len(counts) >= 3, "the real oMLX log holds per-row MTP[uid] lines"
+    # the first two lines are the readiness requests (READINESS_REQUESTS); the rest are measured rows
+    rows = [{"pt": 1, "ct": 1}] * (len(counts) - 2)
+    res = fe.evaluate("omlx-0.7.3", "dflash", text, rows, table, ready_offset=0)
+    assert res["engaged_mode"] == "dflash", res["stats"]

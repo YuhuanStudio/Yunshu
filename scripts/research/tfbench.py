@@ -572,7 +572,7 @@ class Srv:
         except Exception as e:  # noqa: BLE001
             return f"probe failed: {e!r}"
 
-    def verify_spec_mode(self, final=False, rows=()):
+    def verify_spec_mode(self, final=False, rows=(), probe_response=None):
         log = self.log.read_text(errors="replace")
         if fp.fullcmp_mode(os.environ) and not self._is_yunshu(self.engine):
             # Fullcmp: the engaged mode comes from the evidence table only (fullcmp_engaged); the
@@ -580,7 +580,7 @@ class Srv:
             # startup line proves 'loaded'), so only the final check (after the requests, with the
             # cell's records) may refuse a cell.
             self.probe = self.probe_text()
-            self._verify_fullcmp_evidence(log, final=final, rows=rows)
+            self._verify_fullcmp_evidence(log, final=final, rows=rows, probe_response=probe_response)
             return
         # The engaged-mode line the audit checks (fullcmp header engaged_log_line).
         self.engaged_log_line = engaged_spec_mode_line(
@@ -612,7 +612,7 @@ class Srv:
             # measures a different engine (2026-10-20: ragged KV off broke identity)
             raise RuntimeError(f"{off}; see {self.log}")
 
-    def _verify_fullcmp_evidence(self, log, final=False, rows=()):
+    def _verify_fullcmp_evidence(self, log, final=False, rows=(), probe_response=None):
         table = fe.load_table()  # None when the table is missing or malformed: no evidence at all
         ev = fe.evaluate(
             self.engine,
@@ -622,6 +622,7 @@ class Srv:
             table,
             probe_text=self.probe,
             ready_offset=getattr(self, "ready_log_offset", None),
+            probe_response=probe_response,
         )
         self.engaged_spec_mode = ev["engaged_mode"]
         self.engaged_log_line = ev["matched_line"]
@@ -2435,6 +2436,18 @@ def stop_cell_telemetry():
         sampler.stop()
 
 
+# Engines whose per-request draft stats only a non-streaming response carries (the probe, see
+# fullcmp_engaged response_field_probe). mlx-vlm 0.7.11: openai.py:2759 (non-streaming chat).
+PROBE_ENGINES = {"mlx-vlm-server": True}
+
+
+def probe_request(s):
+    """One non-streaming chat request on the live server; returns the response JSON (timings)."""
+    body = dict(req(s.model, "Say hi.", 64))
+    body["stream"] = False
+    return _post_json(s.url, "/v1/chat/completions", body)
+
+
 def read_decode_rows(path):
     """The cell's request rows (part == decode) as written, for the final engaged-mode evidence."""
     rows = []
@@ -2637,7 +2650,22 @@ def main():
                 }[a.part](s, out, a)
             if _LIVE_SERVERS:
                 s = _LIVE_SERVERS[-1]  # a restart cell measured on its relaunched server
-            s.verify_spec_mode(final=True, rows=read_decode_rows(a.out))
+            probe_response = None
+            if fullcmp and a.engine in PROBE_ENGINES:
+                # One non-streaming request after the measured parts (not a table number): the serving
+                # path returns per-request draft stats only in a non-streaming response.
+                probe_response = probe_request(s)
+                emit(
+                    out,
+                    part="probe",
+                    engine=a.engine,
+                    rep=a.rep,
+                    probe=True,
+                    timings=probe_response.get("timings"),
+                )
+            s.verify_spec_mode(
+                final=True, rows=read_decode_rows(a.out), probe_response=probe_response
+            )
             mem = getattr(s, "mem", None)
             if mem is not None:
                 time.sleep(a.idle_s)

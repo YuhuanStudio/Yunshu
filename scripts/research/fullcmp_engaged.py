@@ -31,7 +31,8 @@ from pathlib import Path
 DEFAULT_TABLE = Path(__file__).with_name("fullcmp_engaged_evidence.json")
 MODES = frozenset({"dflash", "mtp", "off", "ar"})
 AR_MODES = frozenset({"ar", "off"})
-KINDS = frozenset({"log_regex", "metrics", "response_field", "acceptance_stat", "acceptance_regex"})
+KINDS = frozenset({"log_regex", "metrics", "response_field", "acceptance_stat", "acceptance_regex",
+                    "response_field_probe"})
 REQUIRED = ("kind", "pattern_or_path", "source_ref", "real_example", "negative_example", "per_request")
 UNVERIFIED = "unverified"
 # tfbench main() sends this many readiness requests (short "Say hi") before the measured parts; their
@@ -82,6 +83,12 @@ def validate_table(table) -> list[str]:
                             ev.get("min"), (int, float)
                         ):
                             problems.append(f"{where}: evidence[{i}] acceptance_regex needs group (a named group) and numeric min")
+                elif ev["kind"] == "response_field_probe":
+                    paths = ev.get("paths")
+                    if not isinstance(paths, list) or not paths or not all(
+                        isinstance(p, str) and _DOTTED.match(p) for p in paths
+                    ):
+                        problems.append(f"{where}: evidence[{i}] response_field_probe needs dotted 'paths'")
                 elif not _DOTTED.match(str(ev["pattern_or_path"])):
                     problems.append(f"{where}: evidence[{i}] path {ev['pattern_or_path']!r} is not a dotted field path")
                 if not str(ev.get("source_ref", "")).strip():
@@ -141,7 +148,7 @@ def acceptance_paths(m) -> list[str]:
     return paths or ["attr.accepted"]
 
 
-def evaluate(engine, mode, log, rows, table, probe_text=None, ready_offset=None) -> dict:
+def evaluate(engine, mode, log, rows, table, probe_text=None, ready_offset=None, probe_response=None) -> dict:
     """Engaged mode of one cell for its expected mode, from the engine log (whole server log),
     the request rows and the status probe. ready_offset: the log byte offset after readiness
     (None: the whole log counts as request-time evidence)."""
@@ -189,6 +196,13 @@ def evaluate(engine, mode, log, rows, table, probe_text=None, ready_offset=None)
             stats["acceptance_positive_rows"] = positives
             if positives:
                 hits.append((f"{pat} > 0 in {positives} request(s)", "acceptance_stat"))
+        elif kind == "response_field_probe":
+            # one non-streaming probe request after the cell (tfbench): the serving path returns the
+            # per-request draft stats only in a non-streaming response (mlx-vlm 0.7.11, openai.py:2759)
+            values = [_dotted(probe_response or {}, p) for p in ev.get("paths", [])]
+            if values and all(_is_positive(v) for v in values):
+                hits.append((f"probe {ev['paths']}={values}", "probe"))
+            stats["probe"] = values
         elif kind == "acceptance_regex":
             # Per MEASURED request: every row of the cell needs its own done line, after the readiness
             # requests, with the same prompt count (named group 'prompt' when the line has one,

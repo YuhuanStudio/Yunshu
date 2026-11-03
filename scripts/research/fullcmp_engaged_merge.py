@@ -69,6 +69,20 @@ ACCEPT_TF = {
     "real_example": "[tensorfold] done chatcmpl-… prompt=15 … rounds=1 accepted=9/15 …",
     "negative_example": "[tensorfold] done … rounds=1 accepted=0/15 …",
 }
+# oMLX per-request DFlash evidence: the INFO line _log_mtp_stats prints per finished row (DFlash rows
+# share _MtpState.stats; patches/mlx_lm_mtp/batch_generator.py:3950-3995). Verified on the real
+# server-omlx-0.7.3-conc-0.log (5 lines). The 'vlm_mtp stats' line is not DFlash evidence.
+OMLX_MTP_LINE = {
+    "kind": "acceptance_regex",
+    "pattern_or_path": r"MTP\[(?P<uid>[^\]]+)\] finish=(?P<finish>\S+) tokens=(?P<tokens>\d+) cycles=(?P<cycles>\d+) tok/cycle=(?P<tpc>[\d.]+) accept=(?P<accepted>\d+)/(?P<drafted>\d+) \((?P<rate>[^)]+)\)",
+    "group": "accepted",
+    "min": 0,
+    "per_request": True,
+    "startup_sufficient": False,
+    "source_ref": "serving_path_vlm_omlx.json omlx_0.7.3_and_rc1.per_request_line; batch_generator.py:3950-3995",
+    "real_example": "2026-11-03 10:49:03 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - MTP[0] finish=stop tokens=10 cycles=2 tok/cycle=5.00 accept=6/7 (85.7%)",
+    "negative_example": "MTP[0] ... accept=0/7 (0.0%)",
+}
 ADD = {
     "tf-1.2.1": [ACCEPT_TF],
     "tf-1.1.8": [ACCEPT_TF],
@@ -84,6 +98,20 @@ ADD = {
         "real_example": "Done · input 15 · cached 0 · output 10 · TTFT 0.2s · 118.5 tok/s · 4.5 tok/cycle",
         "negative_example": "… · 1.0 tok/cycle",
     }],
+    "mlx-vlm-server": [{
+        # serving_path_vlm_omlx.json (mlx_vlm_server_0.7.11, openai.py:2759): per-request draft stats only
+        # in a non-streaming response, so the harness's one probe request carries them (tfbench PROBE_ENGINES)
+        "kind": "response_field_probe",
+        "pattern_or_path": "timings.draft_rounds",
+        "paths": ["timings.draft_rounds", "timings.draft_n_accepted"],
+        "per_request": True,
+        "startup_sufficient": False,
+        "source_ref": "serving_path_vlm_omlx.json mlx_vlm_server_0.7.11.required_evidence_per_request",
+        "real_example": "(probe-based: applied on the serving path; timings.draft_rounds > 0)",
+        "negative_example": "timings.draft_rounds null or 0 (drafter did not run for the probe)",
+    }],
+    "omlx-0.7.3": [OMLX_MTP_LINE],
+    "omlx-0.7.3rc1": [OMLX_MTP_LINE],
     "llama-cpp-b12061": [{
         "kind": "acceptance_regex",
         "pattern_or_path": r"draft acceptance\s*=\s*[0-9.]+\s*\(\s*(?P<accepted>\d+) accepted\s*/\s*\d+ generated",
