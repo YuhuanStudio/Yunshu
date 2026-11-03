@@ -653,3 +653,34 @@ def test_llama_real_wire_1105_log_engages_per_measured_row():
     res = fe.evaluate("llama-cpp-b12061", "mtp", text, rows, table, ready_offset=0)
     assert res["engaged_mode"] == "mtp", res["stats"]
     assert [r["value"] for r in res["stats"]["per_row"]] == [39.0, 39.0]
+
+
+WIRE_1105_ENGINES = ("tf-1.2.1", "tf-1.1.8", "omlx-0.7.3rc1", "mlx-serve-26.11.1", "splash-1.5.0", "llama-cpp-b12061")
+
+
+def test_audit_acceptance_verdict_uses_the_evidence_not_the_attr_fields_on_real_wire_1105_records():
+    """Regression (wire-1105): the guard read attr.accepted from the record, which these engines never
+    populate, while the evidence showed accepted > 0 per measured row. On the real records and logs on
+    disk, no engine with per-row evidence may fail 'without per-request acceptance'."""
+    import types
+
+    import fullcmp_audit as fa
+
+    checked = []
+    for engine in WIRE_1105_ENGINES:
+        for jl in sorted(glob.glob(f"/Volumes/Micron/yunshu-fullcmp/wire-1105/{engine}/*.jsonl")):
+            if jl.endswith(".telemetry.jsonl"):
+                continue
+            rows = [json.loads(x) for x in Path(jl).read_text().splitlines() if x.strip()]
+            header = next((r for r in rows if r.get("part") == "session"), None)
+            if header is None:
+                continue
+            decode = [r for r in rows if r.get("part") == "decode"]
+            cell = {"cell": Path(jl).stem, "engine": engine, "spec_mode": header.get("spec_mode_expected")}
+            cf = types.SimpleNamespace(header=header, cell=cell, rep=0, rows=decode, path=Path(jl))
+            res = fa.check_engaged_mode(types.SimpleNamespace(files=[cf]))
+            checked.append(engine)
+            bad = [v for v in res.violations if "without per-request acceptance" in v or "zero or absent" in v]
+            assert not bad, (engine, bad)
+    if not checked:
+        pytest.skip("no wire-1105 records on disk")

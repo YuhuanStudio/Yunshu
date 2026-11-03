@@ -732,8 +732,14 @@ def check_engaged_mode(run: Run) -> GuardResult:
             res.fail(cell, f"r{cf.rep}: engaged_log_line is not the evidence line")
         if engine != "yunshu" and h.get("engaged_evidence_source") != ev.get("source"):
             res.fail(cell, f"r{cf.rep}: engaged_evidence_source={h.get('engaged_evidence_source')!r}, evidence says {ev.get('source')!r}")
-        if (problem := fe.acceptance_problem(got, m or {}, cf.rows)) is not None:
-            res.fail(cell, f"r{cf.rep}: {problem}")
+        if engine == "yunshu":
+            # Yunshu's runner line is its own evidence and its records carry attr.accepted (layer-1)
+            if (problem := fe.acceptance_problem(got, {}, cf.rows)) is not None:
+                res.fail(cell, f"r{cf.rep}: {problem}")
+        elif got not in fe.AR_MODES and got != fe.UNVERIFIED and not fe.acceptance_proven(ev):
+            # one verdict: the evidence evaluation (per measured row / probe); the attr record fields
+            # are not populated for these engines and are not read here
+            res.fail(cell, f"r{cf.rep}: speculative mode {got!r} without per-request acceptance in the evidence")
         for row in ev["stats"].get("per_row", []):
             # one line per measured request: row id, the done line it matched, its accepted value
             res.notes.append(

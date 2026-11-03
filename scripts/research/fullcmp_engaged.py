@@ -285,6 +285,19 @@ def _next_free(used):
     return n
 
 
+def acceptance_proven(ev: dict) -> bool:
+    """True when the evidence evaluation itself proved drafting per measured request: every row has its
+    own positive matched value (per_row), or the probe's draft stats are positive. This is the single
+    source of the acceptance verdict; the record fields (attr.accepted) are not read for it."""
+    stats = ev.get("stats") or {}
+    if stats.get("per_row") and not stats.get("per_row_problem"):
+        return all(float(r.get("value", 0)) > 0 for r in stats["per_row"])
+    probe = stats.get("probe")
+    if probe and all(_is_positive(v) for v in probe):
+        return True
+    return bool(stats.get("acceptance_positive_rows"))
+
+
 def acceptance_problem(engaged_mode, m, rows) -> str | None:
     """For a speculative mode: why its per-request acceptance does not prove drafting, or None."""
     if engaged_mode in AR_MODES or engaged_mode == UNVERIFIED:
