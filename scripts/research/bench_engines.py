@@ -535,6 +535,13 @@ def stub_reason(manifest_id: str) -> str | None:
     return None if reason is None else f"unsupported (harness: {reason})"
 
 
+def manifest_id(harness_id: str) -> str:
+    """Manifest engine id for a tfbench (harness) id: yunshu-main -> yunshu. Unknown ids come back
+    unchanged, so the attribution schema lookup (fullcmp_attribution.engine_attr) fails closed."""
+    inverse = {v: k for k, v in MANIFEST_ENGINES.items()}
+    return inverse.get(harness_id, harness_id)
+
+
 def tfbench_engine(manifest_id: str) -> str:
     """tfbench --engine id for a manifest engine id; KeyError for stubs and unknown ids."""
     if manifest_id in UNSUPPORTED_ENGINES:

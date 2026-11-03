@@ -933,6 +933,15 @@ def host_used_bytes():
         return None
 
 
+def memory_peak_or_raise(mem, idle):
+    """Peak for the memory part. "No data" means no successful sample at all. A legitimate 0.0 GiB
+    delta (a tiny server that grew nothing against its baseline) is data, not a miss (regression,
+    e2e 2026-11-03: the old `not peak` test failed the stub run on a real 0.0 delta)."""
+    if idle is None or mem.n == 0:
+        raise RuntimeError("memory sampling produced no data")
+    return max(mem.peak_gib, idle)
+
+
 class MemSampler:
     """Server memory, sampled every 2 s from server start.
 
@@ -1093,8 +1102,9 @@ def attribution_fields(s, r):
             attr[f] = int(spec[f])
     unavailable = {}
     if os.environ.get("TFB_FULLCMP") == "1":
+        # The schema is keyed by manifest id (yunshu), the server runs as the bench id (yunshu-main).
         eng = fullcmp_attribution.engine_attr(
-            os.environ.get("TFB_ATTR_ENGINE") or s.engine
+            os.environ.get("TFB_ATTR_ENGINE") or bench_engines.manifest_id(s.engine)
         )
         unavailable = dict(eng.unavailable)
         if eng.engine == "yunshu":
@@ -2054,9 +2064,7 @@ def main():
             if mem is not None:
                 time.sleep(a.idle_s)
                 idle = mem.sample()
-                peak = max(mem.peak_gib, idle or 0.0)
-                if not peak or idle is None:
-                    raise RuntimeError("memory sampling produced no data")
+                peak = memory_peak_or_raise(mem, idle)
                 emit(
                     out,
                     part="memory",

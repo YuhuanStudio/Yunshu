@@ -238,12 +238,15 @@ def release_date(census: dict, census_key: str, version: str, environ) -> str:
 
 
 def telemetry_out(out_path: str, engine: str, telemetry_dir: str) -> str:
-    """<telemetry_dir>/<engine>/<cell>-rN.telemetry.jsonl: the audit's telemetry_path() when the
-    telemetry dir is the results root (the audit reads it beside each cell file)."""
+    """<telemetry_dir>/<cell dir>/<cell>-rN.telemetry.jsonl: the audit's telemetry_path() when the
+    telemetry dir is the results root (the audit reads it beside each cell file). The directory is
+    the cell file's own parent name (the manifest engine), not `engine` (the tfbench bench name,
+    e.g. yunshu-main, which differs for some engines), so the series always sits beside its cell."""
     stem = os.path.basename(out_path)
     if stem.endswith(".jsonl"):
         stem = stem[: -len(".jsonl")]
-    return os.path.join(telemetry_dir, engine, stem + ".telemetry.jsonl")
+    cell_dir = os.path.basename(os.path.dirname(os.path.abspath(out_path))) or engine
+    return os.path.join(telemetry_dir, cell_dir, stem + ".telemetry.jsonl")
 
 
 def swap_snapshot() -> dict:

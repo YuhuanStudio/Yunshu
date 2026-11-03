@@ -91,6 +91,9 @@ class StubState:
         self.log_path = Path(log_path)
         self.lock = threading.Lock()
         self.round = 0
+        # prompts this process has already prefilled: a repeat is served from cache, a first
+        # sighting is a cold miss (server-reported cached_tokens, as the real engines report them)
+        self.seen: set[str] = set()
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with self.log_path.open("a") as fh:
             for line in engine_load_lines(engine):
@@ -157,6 +160,8 @@ def make_handler(state: StubState):
             with state.lock:
                 state.round += 1
                 n = state.round
+                cached = prompt_tokens - 1 if prompt in state.seen else 0
+                state.seen.add(prompt)
             state.log(
                 request_lines(state.engine, n, len(emitted), drafted=4, accepted=3)
             )
@@ -164,6 +169,7 @@ def make_handler(state: StubState):
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": len(emitted),
                 "total_tokens": prompt_tokens + len(emitted),
+                "prompt_tokens_details": {"cached_tokens": max(0, cached)},
             }
             cid = f"chatcmpl-stub-{n}"
             if not body.get("stream"):

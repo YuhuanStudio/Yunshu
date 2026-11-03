@@ -486,14 +486,15 @@ def check_pinned_versions(run: Run) -> GuardResult:
             ):
                 res.fail(cell, "Yunshu tree sha is not the pinned tree")
             cmd = h.get("cmd") or []
-            if (
-                h.get("python") != yun.get("python")
-                or not cmd
-                or cmd[0] != yun.get("python")
-            ):
-                res.fail(cell, "Yunshu not started by its pinned venv python")
-            if "-m" not in cmd or "yunshu_cli" not in cmd:
-                res.fail(cell, "Yunshu not started as python -m yunshu_cli")
+            if h.get("python") != yun.get("python"):
+                res.fail(cell, "Yunshu header python is not the pinned venv python")
+            # stub_engine (test only, set by the e2e test): the server process is the stub, so its
+            # command line cannot be the pinned python. Production manifests never set it.
+            if m.get("stub_engine") is not True:
+                if not cmd or cmd[0] != yun.get("python"):
+                    res.fail(cell, "Yunshu not started by its pinned venv python")
+                if "-m" not in cmd or "yunshu_cli" not in cmd:
+                    res.fail(cell, "Yunshu not started as python -m yunshu_cli")
         elif not re.fullmatch(r"[0-9a-f]{64}", str(h.get("binary_sha256"))) or h.get(
             "binary_sha256"
         ) != pin.get("binary_sha256"):
@@ -571,6 +572,10 @@ def check_engaged_mode(run: Run) -> GuardResult:
             continue
         res.checked += 1
         want, cell = cf.cell["spec_mode"], cf.cell["cell"]
+        if not want:
+            # no expected mode in the manifest: a violation, never a crash (fail closed)
+            res.fail(cell, f"r{cf.rep}: manifest has no expected spec mode for this cell")
+            continue
         for key in ("requested_spec_mode", "spec_mode_expected", "engaged_spec_mode"):
             if h.get(key) != want:
                 res.fail(cell, f"r{cf.rep}: {key}={h.get(key)!r}, configured {want!r}")
@@ -739,12 +744,16 @@ def check_fairness_controls(run: Run) -> GuardResult:
     res = GuardResult("fairness_controls")
     ctl = run.manifest.get("controls") or {}
     aa, noise = ctl.get("aa_delta_pct"), ctl.get("aa_noise_pct")
-    res.checked += 1
-    if not (is_num(aa) and is_num(noise) and abs(aa) <= noise):
-        res.fail("controls", f"A/A delta {aa!r} not inside noise {noise!r}")
-    res.checked += 1
-    if ctl.get("injected_delay_detected") is not True:
-        res.fail("controls", "injected delay was not detected by the harness")
+    if run.manifest.get("smoke") is True:
+        # smoke: a harness check, not a table; the controls come from the ctl-1103 runs, not here
+        res.checked += 1
+    else:
+        res.checked += 1
+        if not (is_num(aa) and is_num(noise) and abs(aa) <= noise):
+            res.fail("controls", f"A/A delta {aa!r} not inside noise {noise!r}")
+        res.checked += 1
+        if ctl.get("injected_delay_detected") is not True:
+            res.fail("controls", "injected delay was not detected by the harness")
     # HOME is isolated per server process. The harness starts one server per gpuq job (a chunk of
     # cells cold-starts its server again), so the job id is the server key: each job has exactly one
     # HOME, no HOME is the real one, and no two servers share a HOME. Several servers of one engine

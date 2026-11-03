@@ -309,6 +309,17 @@ def test_cell_name_and_telemetry_path_match_audit(tmp_path):
     assert fa.telemetry_path(Path(out)).name == "prose-1024-r2.telemetry.jsonl"
 
 
+def test_telemetry_lands_beside_the_cell_file_when_engine_names_differ(tmp_path):
+    """Regression (e2e, 2026-11-03): the runner's cell dir is the manifest engine (raw/yunshu/) while
+    tfbench's --engine is the bench name (yunshu-main). The sampler must still write beside the cell
+    file, or the audit reports every cell's telemetry as missing."""
+    out = str(tmp_path / "yunshu" / "prose-1024-r0.jsonl")
+    tpath = fp.telemetry_out(out, "yunshu-main", str(tmp_path / "root"))
+    assert tpath == str(tmp_path / "root" / "yunshu" / "prose-1024-r0.telemetry.jsonl")
+    assert Path(tpath).parent.name == Path(out).parent.name
+    assert fa.telemetry_path(Path(out)).name == Path(tpath).name
+
+
 def test_fullcmp_header_has_every_required_header_field(layout, monkeypatch):
     s = types.SimpleNamespace(
         cmd=[layout.pin["python_executable"], "-m", "yunshu_cli", "serve"],

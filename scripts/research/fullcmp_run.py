@@ -573,7 +573,13 @@ def foreign_jobs(status_text: str) -> list[tuple[str, str]]:
 
 
 def comparison_group(row: dict) -> str:
-    return f"{row['batch']}.{row['ctx']}.{row['prompt_kind']}.c{row['conc']}"
+    """Rows that share a group must share the prompt. A smoke row's prompt variant is part of the
+    prompt, so each variant is its own group (regression, e2e 2026-11-03: variants 0 and 1 of one
+    kind shared a group and the provenance guard reported their different prompts)."""
+    base = f"{row['batch']}.{row['ctx']}.{row['prompt_kind']}.c{row['conc']}"
+    if "prompt_variant" in row:
+        return f"{base}.v{row['prompt_variant']}"
+    return base
 
 
 def census_pins(pin: dict) -> dict:
@@ -595,6 +601,20 @@ def expected_records(row: dict) -> int | None:
     if int(row["conc"]) > 1:
         return reps * int(row["conc"]) * CONC_TRIALS
     return reps * len(row.get("phases") or ())
+
+
+def _expected_spec_mode(engine: str) -> str | None:
+    try:
+        hid = bench_engines.tfbench_engine(engine)
+    except KeyError:
+        return None
+    return bench_engines.ENGINES[hid].expected_mode
+
+
+def _weight_group(engine: str) -> str | None:
+    import fullcmp_audit_manifest as fam
+
+    return fam.WEIGHT_GROUP.get(engine)
 
 
 def audit_manifest(
@@ -623,8 +643,11 @@ def audit_manifest(
                 "max_tokens": r["out_len"],
                 "phases": r.get("phases"),
                 "expected_records": expected_records(r),
-                "spec_mode": None,
-                "weight_group": None,
+                # Same fields fullcmp_audit_manifest.build_manifest writes: the engine's expected
+                # spec mode (bench_engines) and its weight group. Null only when the engine
+                # declares none, and the audit then reports it (fail closed).
+                "spec_mode": _expected_spec_mode(r["engine"]),
+                "weight_group": _weight_group(r["engine"]),
             }
         )
         groups.setdefault(grp, [])
@@ -635,6 +658,9 @@ def audit_manifest(
     }
     return {
         "run_id": RUN_ID,
+        # A smoke manifest is a harness check, not a table: the audit then skips the A/A and
+        # injected-delay controls (fullcmp_audit.check_fairness_controls). Real batches never set it.
+        "smoke": any(b == "SMOKE" for b in batches),
         "reps": max(
             (row_reps(r) for r in rows if r.get("batch") in batches), default=1
         ),
