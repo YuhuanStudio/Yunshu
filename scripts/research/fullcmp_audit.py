@@ -722,7 +722,7 @@ def check_engaged_mode(run: Run) -> GuardResult:
         if engine == "yunshu":
             slice_path = server_log_slice_path(cf.path)
             log = slice_path.read_text(errors="replace") if slice_path.is_file() else ""
-            if not cf.rows and concurrent_records:
+            if bool(concurrent_records):
                 # a Yunshu concurrent cell: its requests' counters or the rounds in the slice decide
                 ev, _ = fe.concurrent_check(table, engine, want, log, concurrent_records,
                                             h.get("server_log_ready_offset"),
@@ -755,7 +755,7 @@ def check_engaged_mode(run: Run) -> GuardResult:
                     probe_row = r
                     break
             probe_response = {"timings": probe_row.get("timings")} if probe_row else None
-            if not cf.rows and concurrent_records:
+            if bool(concurrent_records):
                 # concurrent cell: the shared verdict (fe.concurrent_check), the same one tfbench ran in-job
                 ev, _ = fe.concurrent_check(table, engine, want, log, concurrent_records, ready)
             else:
@@ -773,9 +773,9 @@ def check_engaged_mode(run: Run) -> GuardResult:
         for key in ("requested_spec_mode", "spec_mode_expected"):
             if h.get(key) != want:
                 res.fail(cell, f"r{cf.rep}: {key}={h.get(key)!r}, configured {want!r}")
-        if not (not cf.rows and concurrent_records) and h.get("engaged_spec_mode") != got:
+        if not bool(concurrent_records) and h.get("engaged_spec_mode") != got:
             res.fail(cell, f"r{cf.rep}: header engaged_spec_mode={h.get('engaged_spec_mode')!r}, evidence says {got!r}")
-        if not (not cf.rows and concurrent_records):
+        if not (bool(concurrent_records)):
             # single-request cells: the header's evidence line and source must be the evidence's. Concurrent cells
             # take their evidence only from fe.concurrent_check (the header carries the single-request evidence)
             if h.get("engaged_log_line") != ev["matched_line"]:
@@ -786,7 +786,8 @@ def check_engaged_mode(run: Run) -> GuardResult:
             # Yunshu's runner line is its own evidence and its records carry attr.accepted (layer-1)
             if (problem := fe.acceptance_problem(got, {}, cf.rows)) is not None:
                 res.fail(cell, f"r{cf.rep}: {problem}")
-        elif got not in fe.AR_MODES and got != fe.UNVERIFIED and not fe.acceptance_proven(ev):
+        elif (got not in fe.AR_MODES and got != fe.UNVERIFIED and not fe.acceptance_proven(ev)
+              and not str(ev.get("label") or "").startswith(f"{got} (0% drafted")):
             # one verdict: the evidence evaluation (per measured row / probe); the attr record fields
             # are not populated for these engines and are not read here
             res.fail(cell, f"r{cf.rep}: speculative mode {got!r} without per-request acceptance in the evidence")
