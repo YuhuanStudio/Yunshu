@@ -225,3 +225,25 @@ def test_splash_startup_slice_is_not_empty(tmp_path):
     cell = tfbench.cell_engine_log(log, log.stat().st_size)
     assert cell, "the cell's engine-log slice must not be empty"
     assert cell == READY_LINE.encode()
+
+
+# Engines the table has no mode for on purpose: their launch spec configures no speculative mode,
+# so they can never be verified (fail closed). Owner ruling is to give every engine a mode; this
+# one stays empty until a configured mode is pinned.
+UNCONFIGURED = {"llama-cpp-b12061"}
+
+
+def test_table_keys_equal_the_manifest_engine_set():
+    import fullcmp_manifest as fm
+
+    table = fe.load_table()
+    manifest = set(fm.ENGINES) - {"ollama", "lmstudio", fm.PLACEHOLDER}
+    assert set(table["engines"]) == manifest
+    for engine, entry in table["engines"].items():
+        assert "modes" in entry and entry["confidence"], engine
+        if engine in UNCONFIGURED:
+            assert entry["modes"] == {}
+            continue
+        assert entry["modes"], f"{engine}: no mode"
+        for mode, m in entry["modes"].items():
+            assert m["evidence"], f"{engine}/{mode}: no evidence item"
