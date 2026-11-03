@@ -119,3 +119,15 @@ def test_audit_fails_a_dirty_or_unstamped_cell():
     assert any("harness_dirty" in v for v in fa.check_harness_identity(dirty).violations)
     none = fa.Run({"groups": {}}, [fa.CellFile({"cell": "B1.x"}, 0, Path("x"), {}, [])], [], [], [])
     assert any("harness_commit" in v for v in fa.check_harness_identity(none).violations)
+
+
+def test_pre_submit_collects_explicit_files_only(tmp_path):
+    # never a directory: collecting all of tests/unit fails on modules missing from the venv
+    (tmp_path / "tests" / "unit").mkdir(parents=True)
+    for name in ("test_fullcmp_a.py", "test_tfbench_b.py", "test_bench_snapshot.py", "test_observe_mode.py", "test_yv_verify.py"):
+        (tmp_path / "tests" / "unit" / name).write_text("")
+    picked = run.quick_test_paths(tmp_path)
+    assert "tests/unit/test_yv_verify.py" not in picked
+    assert set(picked) == {f"tests/unit/{n}" for n in ("test_fullcmp_a.py", "test_tfbench_b.py", "test_bench_snapshot.py", "test_observe_mode.py")}
+    assert all(p.endswith(".py") for p in picked)
+    assert all(pat.endswith(".py") for pat in run.QUICK_TEST_FILES)  # file patterns, never a directory

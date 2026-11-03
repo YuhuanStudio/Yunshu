@@ -1297,6 +1297,23 @@ def use_harness(root: Path) -> None:
     HARNESS_COMMIT = (Path(root) / ".snapshot_commit").read_text().strip()
 
 
+# Explicit files only: collecting all of tests/unit fails on unrelated modules missing from the venv.
+QUICK_TEST_FILES = (
+    "tests/unit/test_fullcmp_*.py",
+    "tests/unit/test_tfbench_*.py",
+    "tests/unit/test_bench_snapshot.py",
+    "tests/unit/test_observe_mode.py",
+)
+
+
+def quick_test_paths(root: Path) -> list[str]:
+    """The files pre_submit_checks collects: each pattern expanded inside the snapshot, sorted."""
+    out: list[str] = []
+    for pat in QUICK_TEST_FILES:
+        out += sorted(str(p.relative_to(root)) for p in Path(root).glob(pat))
+    return out
+
+
 def pre_submit_checks(root: Path) -> str:
     """Run the static undefined-name check and the fullcmp_quick subset against the snapshot before
     any job is written or submitted. Returns '' when both pass, else the failing output."""
@@ -1305,7 +1322,7 @@ def pre_submit_checks(root: Path) -> str:
         [HARNESS_PY, "-m", "pytest", "-q", "-p", "no:cacheprovider",
          str(Path(root) / "tests" / "unit" / "test_fullcmp_static.py")],
         [HARNESS_PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", "fullcmp_quick",
-         str(Path(root) / "tests" / "unit")],
+         *[str(Path(root) / f) for f in quick_test_paths(Path(root))]],
     ]
     for cmd in cmds:
         res = subprocess.run(cmd, cwd=str(root), env=env, capture_output=True, text=True)
