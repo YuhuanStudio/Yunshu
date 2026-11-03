@@ -645,7 +645,7 @@ def check_cold_cache(run: Run) -> GuardResult:
                         cell,
                         f"r{cf.rep} cold: cached={cached!r}, must be server-reported 0",
                     )
-            elif phase in ("warm", "turn2"):
+            elif phase in ("warm", "turn2", CONC_PART):
                 if isinstance(cached, bool) or not isinstance(cached, int):
                     res.fail(cell, f"r{cf.rep} {phase}: cached count not recorded")
             else:

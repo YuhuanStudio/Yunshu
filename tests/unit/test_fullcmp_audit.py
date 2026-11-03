@@ -1090,3 +1090,22 @@ def test_round_ms_is_decode_ms_over_speculative_rounds():
     assert fa.round_ms(_round_rows(500, 25)) == pytest.approx(20.0)
     assert fa.round_ms({"xy": {"decode_ms": 500}}) is None
     assert fa.round_ms({"xy": {"decode_ms": 500, "speculative": {"rounds": 0}}}) is None
+
+
+def test_conc_rows_pass_cold_cache_with_recorded_cached_counts():
+    # Smoke4 (2026-11-03): conc rows have phase "conc"; the guard rejected them as an unknown phase.
+    cell = {"cell": "c", "engine": "yunshu", "group": "g", "phases": ["conc"]}
+    rows = fa.conc_request_rows(_conc_record(n=2))
+    run = fa.Run({"groups": {}}, [_cf(cell, 0, {"part": "session", "fresh_process": True}, rows)], [], [], [])
+    res = fa.check_cold_cache(run)
+    assert res.violations == []
+    assert res.checked > 0
+
+
+def test_conc_row_without_recorded_cached_count_fails_cold_cache():
+    cell = {"cell": "c", "engine": "yunshu", "group": "g", "phases": ["conc"]}
+    rows = fa.conc_request_rows(_conc_record(n=2))
+    rows[1]["cached"] = None
+    run = fa.Run({"groups": {}}, [_cf(cell, 0, {"part": "session", "fresh_process": True}, rows)], [], [], [])
+    res = fa.check_cold_cache(run)
+    assert any("cached count not recorded" in v for v in res.violations)
