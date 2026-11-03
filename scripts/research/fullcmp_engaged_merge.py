@@ -129,7 +129,10 @@ ADD = {
     "omlx-0.7.3rc1": [OMLX_MTP_LINE],
     "llama-cpp-b12061": [{
         "kind": "acceptance_regex",
-        "pattern_or_path": r"draft acceptance\s*=\s*[0-9.]+\s*\(\s*(?P<accepted>\d+) accepted\s*/\s*\d+ generated",
+        # one block per request (slot print_timing): the prompt-eval line then the draft acceptance line.
+        # No prompt group: a cached request's prompt eval counts only its new tokens, so the rows are
+        # matched by order after the readiness requests (the window keeps the two lines in one block).
+        "pattern_or_path": r"prompt eval time =[^\n]*?/\s*[\d,]+ tokens[\s\S]{0,700}?draft acceptance = [\d.]+ \(\s*(?P<accepted>\d+) accepted\s*/\s*\d+ generated\)",
         "group": "accepted",
         "min": 0,
         "per_request": True,

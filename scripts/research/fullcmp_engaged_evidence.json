@@ -72,15 +72,15 @@
           "evidence": [
             {
               "kind": "acceptance_regex",
-              "pattern_or_path": "draft acceptance\\s*=\\s*[0-9.]+\\s*\\(\\s*(?P<accepted>\\d+) accepted\\s*/\\s*\\d+ generated",
+              "pattern_or_path": "prompt eval time =[^\\n]*?/\\s*[\\d,]+ tokens[\\s\\S]{0,700}?draft acceptance = [\\d.]+ \\(\\s*(?P<accepted>\\d+) accepted\\s*/\\s*\\d+ generated\\)",
               "group": "accepted",
               "min": 0,
               "per_request": true,
               "startup_sufficient": false,
               "source_ref": "engaged_evidence_vlm_llama.json llama-cpp 'draft acceptance' line; the same format tfbench.detect_mode reads (b12061 prints it per request)",
-              "real_example": null,
+              "real_example": "0.02.942.612 I slot print_timing: id  0 | task 0 | prompt eval time =     219.78 ms /    15 tokens (   14.65 ms per token,    68.25 tokens per second)\n0.02.942.614 I slot print_timing: id  0 | task 0 |        eval time =     173.54 ms /    10 tokens (   19.28 ms per token,    51.86 tokens per second)\n0.02.942.614 I slot print_timing: id  0 | task 0 |       total time =     393.32 ms /    25 tokens\n0.02.942.615 I slot print_timing: id  0 | task 0 |    graphs reused =          2\n0.02.942.615 I slot print_timing: id  0 | task 0 |   graph reallocs =          0    /     0        (same size) / (changed size)\n0.02.942.617 I slot print_timing: id  0 | task 0 | draft acceptance = 0.77778 (    7 accepted /     9 generated), mean len =  3.33",
               "negative_example": "draft acceptance = 0.00 (0 accepted / 4 generated)",
-              "real_log": null
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-llama-cpp-b12061-decode-0.log"
             }
           ],
           "fallback": []

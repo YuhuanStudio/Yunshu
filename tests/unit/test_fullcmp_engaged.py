@@ -619,3 +619,37 @@ def test_kapitsa_real_wire_1105_log_engages_per_measured_row():
     rows = [{"pt": 1024, "ct": 64}, {"pt": 1024, "ct": 64}]
     res = fe.evaluate("kapitsa-0.2.26", "dflash", text, rows, table, ready_offset=0)
     assert res["engaged_mode"] == "dflash", res["stats"]
+
+
+LLAMA_BLOCK = (
+    "0.02.942.612 I slot print_timing: id  0 | task {t} | prompt eval time =     219.78 ms /  {p} tokens (   14.65 ms per token,    68.25 tokens per second)\n"
+    "0.02.942.614 I slot print_timing: id  0 | task {t} |        eval time =     173.54 ms /    10 tokens (   19.28 ms per token,    51.86 tokens per second)\n"
+    "0.02.942.615 I slot print_timing: id  0 | task {t} |   graphs reused =          2\n"
+    "0.02.942.617 I slot print_timing: id  0 | task {t} | draft acceptance = 0.54900 (   {a} accepted /    {g} generated), mean len =  3.33\n"
+    "0.02.942.631 I slot      release: id  0 | task {t} | stop processing: n_tokens = 25, truncated = 0\n"
+)
+
+
+def test_llama_per_row_draft_acceptance_blocks():
+    """llama-cpp b12061: one print_timing block per request (prompt-eval line, then 'draft acceptance =
+    X (N accepted / M generated)'). Measured rows match by order after the readiness requests."""
+    table = fe.load_table()
+    blocks = [LLAMA_BLOCK.format(t=i, p=p, a=a, g=g) for i, (p, a, g) in enumerate(
+        [(15, 7, 9), (4, 7, 9), (1024, 37, 60), (4, 37, 60)])]
+    log = "".join(blocks)
+    rows = [{"pt": 1024, "ct": 64}, {"pt": 1024, "ct": 64}]
+    res = fe.evaluate("llama-cpp-b12061", "mtp", log, rows, table, ready_offset=0)
+    assert res["engaged_mode"] == "mtp", res["stats"]
+    assert [r["value"] for r in res["stats"]["per_row"]] == [37, 37]
+
+
+def test_llama_real_wire_1105_log_engages_per_measured_row():
+    logs = glob.glob("/Volumes/Micron/yunshu-fullcmp/wire-1105-work/*/tfout/out/server-llama-cpp-b12061-*.log")
+    if not logs:
+        pytest.skip("no real llama log on disk")
+    table = fe.load_table()
+    text = Path(logs[0]).read_text(errors="replace")
+    rows = [{"pt": 1034, "ct": 10}, {"pt": 1034, "ct": 10}]
+    res = fe.evaluate("llama-cpp-b12061", "mtp", text, rows, table, ready_offset=0)
+    assert res["engaged_mode"] == "mtp", res["stats"]
+    assert [r["value"] for r in res["stats"]["per_row"]] == [39.0, 39.0]
