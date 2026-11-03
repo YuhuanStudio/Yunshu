@@ -613,3 +613,37 @@ def test_gpuq_picker_reorders_a_mixed_lane_batch_so_the_guard_must_fail(monkeypa
          "cwd": "/w", "env": {"GPUQ_OWNER": "fullcmp"}},
     ]
     assert gq._pick(jobs)["id"] == "b"  # the short-lane job jumps the queue
+
+
+# --- mixed cells: their own work model (long prefill, short prefills, concurrent decode) -------
+
+
+def _mixed(engine, ctx_tokens, conc, out):
+    r = row(engine, f"B2.mix.{engine}.{ctx_tokens}", ctx_tokens=ctx_tokens, conc=conc, out=out, turns="mixed", batch="B2")
+    r["ctx"] = f"{ctx_tokens // 1024}K"
+    return r
+
+
+def test_mixed_128k_cell_term_exceeds_the_cold_prefill_and_decode():
+    for engine in ("yunshu", "tf-1.2.1"):
+        r = _mixed(engine, 131072, 8, 512)
+        cold_prefill_min = 131072 / run.fm.prefill_tps(engine, 131072) / 60.0
+        decode_min = 512 * run.fm.slowdown(engine, 131072, 8) / run.fm.decode_tps(engine, 131072) / 60.0
+        assert run.cell_budget(r)["cells"] > cold_prefill_min + decode_min, engine
+        # the 128K cell's trials: the long prefill is in every trial
+        assert run.cell_budget(r)["cells"] >= run.CONC_TRIALS * cold_prefill_min
+
+
+def test_yunshu_8k_plus_short_mixed_term_is_within_30_percent_of_the_measured_phase():
+    # wire-1106c yunshu SMOKE mixed 8K c4 o64: measured mixed phase 22.9 s (fullcmp_cell_timing.json)
+    measured_min = run.fm.TIMING["job_budget"]["mixed_check_yunshu_8k_c4"]["value"] / 60.0
+    r = _mixed("yunshu", 8192, 4, 64)
+    term = run.cell_budget(r)["cells"]
+    assert abs(term - measured_min) / measured_min <= 0.30, (term, measured_min)
+
+
+def test_fast_engine_mixed_term_is_its_model_without_the_probe():
+    r = _mixed("yunshu", 131072, 8, 512)
+    assert abs(run.cell_budget(r)["cells"] - run.mixed_work_min(r)) < 1e-9
+    slow = _mixed("mlx-vlm-server", 131072, 8, 512)
+    assert abs(run.cell_budget(slow)["cells"] - run.mixed_work_min(slow) - run.MIXED_PROBE_MIN) < 1e-9

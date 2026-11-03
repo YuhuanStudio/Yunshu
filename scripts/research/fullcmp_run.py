@@ -335,14 +335,31 @@ def is_slow_mixed(row: dict) -> bool:
     return row.get("turns") == "mixed" and row.get("engine") in MIXED_SLOW_ENGINES
 
 
+def mixed_work_min(row: dict) -> float:
+    """Minutes of one mixed cell, one rep: CONC_TRIALS trials, each one long request's prefill, the
+    short requests' prefills (summed: conservative), and the concurrent decode (out tokens at the
+    measured or assumed concurrency slowdown). Excludes boot, idle, shutdown and probe."""
+    eng, conc = row["engine"], int(row["conc"])
+    ctx, out = int(row["ctx_tokens"]), int(row["out_len"])
+    per_trial = (
+        ctx / fm.prefill_tps(eng, ctx)
+        + (conc - 1) * 1024 / fm.prefill_tps(eng, 1024)
+        + out * fm.slowdown(eng, ctx, conc) / fm.decode_tps(eng, ctx)
+    )
+    return CONC_TRIALS * per_trial / 60.0
+
+
 def cell_budget(row: dict) -> dict:
-    """Itemized minutes of one cell for one rep: its own server start, the modelled work (the
-    manifest estimate minus the manifest's own boot and idle, so nothing is counted twice), the
-    memory idle and shutdown, the quiet_post snapshot and the finalize."""
+    """Itemized minutes of one cell for one rep: its own server start, the modelled work, the memory
+    idle and shutdown, the quiet_post snapshot and the finalize. A mixed cell's work is its own model
+    (mixed_work_min); other cells use the manifest estimate minus the manifest's own boot and idle."""
     ready = fm.ENGINE_PERF[row["engine"]]["ready_s"]
-    work = max(0.0, cell_est(row) - (ready + fm.OVERHEAD_S) / 60.0)
     if row.get("turns") == "mixed":
-        work += MIXED_PROBE_MIN  # the probe repeats the N concurrent requests, long prefill included
+        work = mixed_work_min(row)
+        if row["engine"] in MIXED_SLOW_ENGINES:
+            work += MIXED_PROBE_MIN  # the probe repeats the N concurrent requests
+    else:
+        work = max(0.0, cell_est(row) - (ready + fm.OVERHEAD_S) / 60.0)
     return {
         "startup": startup_s(row["engine"]) / 60.0,
         "cells": work,
