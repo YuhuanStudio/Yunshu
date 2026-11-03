@@ -2732,6 +2732,14 @@ def main():
                 # attribution per measured request, from the matched evidence (written after the final check)
                 for attr in fe.attr_rows_from(s.engaged_per_row, measured):
                     emit(out, part="attr", engine=a.engine, rep=a.rep, **attr)
+            conc_records = fe.read_concurrent_records(a.out)
+            if fullcmp and conc_records:
+                # attribution per concurrent request (rid, record part), from the shared verdict
+                for attr in fe.concurrent_attr_rows(
+                    fe.load_table(), a.engine, s.requested_spec_mode,
+                    s.log.read_text(errors="replace"), conc_records, getattr(s, "ready_log_offset", None),
+                ):
+                    emit(out, part="attr", engine=a.engine, rep=a.rep, **attr)
             mem = getattr(s, "mem", None)
             if mem is not None:
                 time.sleep(a.idle_s)
