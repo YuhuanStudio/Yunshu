@@ -1276,9 +1276,18 @@ def snapshot_harness(work: Path, repo: Path = REPO_ROOT) -> Path:
         (tmp / ".snapshot_commit").write_text(head + "\n")
         tree = _git(["rev-parse", "HEAD^{tree}"], repo).decode().strip()
         (tmp / ".snapshot_tree").write_text(tree + "\n")
-        manifest = _tree_blobs(head, repo)
-        (tmp / ".snapshot_manifest").write_text(
-            "".join(f"{blob}\t{path}\n" for path, blob in sorted(manifest.items()))
+        manifest, excluded = _tree_blobs(head, repo)
+        for name in excluded:  # the tar extract wrote them: drop before the set is fixed
+            victim = tmp / name
+            if victim.is_file() or victim.is_symlink():
+                victim.unlink()
+        (tmp / ".snapshot_manifest").write_bytes(
+            b"".join(
+                os.fsencode(f"{blob}\t{path}\n") for path, blob in sorted(manifest.items())
+            )
+        )
+        (tmp / ".snapshot_excluded").write_bytes(
+            b"".join(os.fsencode(p) + b"\n" for p in sorted(excluded))
         )
         for dirpath, dirnames, filenames in os.walk(tmp):
             for name in dirnames + filenames:
@@ -1292,26 +1301,38 @@ def snapshot_harness(work: Path, repo: Path = REPO_ROOT) -> Path:
     return dest
 
 
-def _tree_blobs(commit: str, repo: Path) -> dict[str, str]:
-    """path -> blob id of every harness file at `commit` (git ls-tree)."""
-    out = _git(["ls-tree", "-r", commit, "--", *HARNESS_ARCHIVE], repo).decode()
-    blobs = {}
-    for line in out.splitlines():
-        meta, path = line.split("\t", 1)
-        blobs[path] = meta.split()[2]
-    return blobs
+# A path with a control character, a newline, a quote, a backslash, '|' or '$' is not a harness
+# file: it is a mangled name (a shell substitution that became a file). Such entries are excluded
+# from the snapshot set and logged in .snapshot_excluded, never silently copied or compared.
+JUNK_PATH = re.compile(rb'[\x00-\x1f\x7f"\\|$]')
+
+
+def _tree_blobs(commit: str, repo: Path) -> tuple[dict[str, str], list[str]]:
+    """(path -> blob id, excluded paths) of every harness file at `commit`. NUL-separated listing:
+    names are raw bytes, never quoted. Paths are kept as os.fsdecode strings (surrogateescape)."""
+    raw = _git(["ls-tree", "-r", "-z", commit, "--", *HARNESS_ARCHIVE], repo)
+    blobs, excluded = {}, []
+    for entry in raw.split(b"\x00"):
+        if not entry:
+            continue
+        meta, path_b = entry.split(b"\t", 1)
+        if JUNK_PATH.search(path_b):
+            excluded.append(os.fsdecode(path_b))
+            continue
+        blobs[os.fsdecode(path_b)] = meta.split()[2].decode()
+    return blobs, excluded
 
 
 def _file_blobs(root: Path, paths: list[str], repo: Path) -> dict[str, str]:
     """path -> blob id of the files under root, hashed by git itself (git hash-object)."""
     if not paths:
         return {}
+    feed = b"".join(os.fsencode(str(root / p)) + b"\n" for p in paths)
     res = subprocess.run(
         ["git", "hash-object", "--stdin-paths"],
-        cwd=str(root), input="\n".join(str(root / p) for p in paths) + "\n",
-        capture_output=True, text=True, check=True,
+        cwd=str(root), input=feed, capture_output=True, check=True,
     )
-    return dict(zip(paths, res.stdout.split()))
+    return dict(zip(paths, res.stdout.decode().split()))
 
 
 def verify_snapshot(dest: Path, repo: Path = REPO_ROOT) -> None:
@@ -1327,18 +1348,21 @@ def verify_snapshot(dest: Path, repo: Path = REPO_ROOT) -> None:
         head = (dest / ".snapshot_commit").read_text().strip()
     except OSError as exc:
         raise HarnessDirty(f"snapshot {dest} has no readable manifest/commit: {exc}") from exc
-    if _tree_blobs(head, repo) != recorded:
+    if _tree_blobs(head, repo)[0] != recorded:
         raise HarnessDirty(f"snapshot manifest {manifest_path} does not match git's tree at {head[:7]}")
-    present = sorted(
-        str(p.relative_to(dest))
-        for p in dest.rglob("*")
-        if p.is_file() and not p.name.startswith(".snapshot_")
-    )
+    present = []
+    for dirpath, _dirs, files in os.walk(dest):
+        for name in files:
+            full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, dest)
+            if not os.path.basename(rel).startswith(".snapshot_"):
+                present.append(rel)
+    present.sort()
     if present != sorted(recorded):
         extra = sorted(set(present) - set(recorded))
         missing = sorted(set(recorded) - set(present))
         raise HarnessDirty(f"snapshot file set differs: extra {extra[:5]} missing {missing[:5]}")
-    actual = _file_blobs(dest, present, repo)
+    actual = _file_blobs(dest, present, repo)  # hashed by git from raw bytes
     bad = [p for p in present if actual[p] != recorded[p]]
     if bad:
         raise HarnessDirty(f"snapshot files differ from HEAD: {bad[:8]}")

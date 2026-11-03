@@ -159,3 +159,34 @@ def test_snapshot_records_tree_sha_and_manifest(repo, tmp_path):
     assert run.HARNESS_TREE == tree
     pin = {"launch": {"harness_env": {"TFB_YUNSHU_BIN": "b", "TFB_YUNSHU_SRC": "s", "PYTHONPATH": "p"}}, "python_executable": "py"}
     assert f"TFB_HARNESS_TREE={tree}" in run.cell_env("yunshu", pin, "fullcmp-B1-x-r0")
+
+
+def test_mangled_names_are_excluded_and_logged_and_the_snapshot_verifies(tmp_path):
+    # names with '|', a double quote and a newline (a mangled shell substitution became the name)
+    r = tmp_path / "repo2"
+    (r / "scripts" / "research").mkdir(parents=True)
+    (r / "scripts" / "dev").mkdir(parents=True)
+    (r / "python").mkdir()
+    (r / "tests" / "unit").mkdir(parents=True)
+    (r / "scripts" / "research" / "tfbench.py").write_text("VERSION = 1\n")
+    (r / "scripts" / "dev" / "gpuq_util.py").write_text("X = 1\n")
+    (r / "python" / "pkg.py").write_text("P = 1\n")
+    (r / "tests" / "unit" / "test_x.py").write_text("def test_x():\n    pass\n")
+    junk = ['x.pys|^import sys$|import os\\nimport sys|', 'quoted"name.py', "newline\nname.py"]
+    for name in junk:
+        try:
+            (r / "scripts" / "research" / name).write_text("junk\n")
+        except OSError:
+            pytest.skip("filesystem refuses this name")
+    _git(r, "init", "-q")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "base")
+    snap = run.snapshot_harness(tmp_path / "work2", r)  # must not raise
+    excluded = (snap / ".snapshot_excluded").read_bytes()
+    for name in junk:
+        assert os.fsencode(name) in excluded, name
+    assert (snap / "scripts" / "research" / "tfbench.py").is_file()
+    assert run.verify_snapshot(snap, r) is None
+    # no junk file was copied into the snapshot
+    for name in junk:
+        assert not (snap / "scripts" / "research" / name).exists(), name
