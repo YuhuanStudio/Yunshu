@@ -219,34 +219,39 @@ class Job:
         ]
 
 
-def cell_env(engine: str, pin: dict) -> list[str]:
+def cell_env(engine: str, pin: dict, label: str = "") -> list[str]:
     """Env assignments every harness command carries (pinned Yunshu tree, isolated HOME).
     TFB_TELEMETRY_DIR is the raw root: tfbench writes <root>/<engine>/<cell>-rN.telemetry.jsonl,
     the same place the audit reads it beside each cell file. GPUQ_JOB_ID is not set here: gpuq
-    exports it to every job it runs (the env of this command)."""
+    exports it to the current daemon's jobs only. TFB_JOB_LABEL (the label this job was
+    submitted under) plus GPUQ_DIR let tfbench resolve the job id when it is missing."""
     harness = pin["launch"]["harness_env"]
-    return [
+    env = [
         "TFB_FULLCMP=1",
         f"TFB_TELEMETRY_DIR={RAW_ROOT}",
         f"TFB_YUNSHU_BIN={harness['TFB_YUNSHU_BIN']}",
         f"TFB_YUNSHU_SRC={harness['TFB_YUNSHU_SRC']}",
         f"PYTHONPATH={harness['PYTHONPATH']}",
         f"HOME={HOME_ROOT / engine}",
+        f"GPUQ_DIR={GPUQ_DIR_DEFAULT}",
     ]
+    if label:
+        env.append(f"TFB_JOB_LABEL={label}")
+    return env
 
 
 def raw_path(engine: str, cell_id: str, rep: int) -> Path:
     return RAW_ROOT / engine / f"{cell_id}-r{rep}.jsonl"
 
 
-def cell_command(row: dict, rep: int, pin: dict) -> list[str] | None:
+def cell_command(row: dict, rep: int, pin: dict, label: str = "") -> list[str] | None:
     part, extra, reason = harness_part(row)
     if part is None:
         return None
     out = raw_path(row["engine"], row["id"], rep)
     return [
         "env",
-        *cell_env(row["engine"], pin),
+        *cell_env(row["engine"], pin, label),
         MAIN_PY,
         str(TFBENCH),
         "--engine",
@@ -282,7 +287,7 @@ def job_command(cells: list[dict], rep: int, pin: dict, label: str = "") -> list
     steps = [shlex.join(quiet_gate_argv(label or "unlabelled"))]
     steps.append("mkdir -p " + " ".join(shlex.quote(d) for d in dirs))
     for c in cells:
-        steps.append(shlex.join(cell_command(c, rep, pin)))
+        steps.append(shlex.join(cell_command(c, rep, pin, label)))
     return ["/bin/sh", "-c", " && ".join(steps)]
 
 

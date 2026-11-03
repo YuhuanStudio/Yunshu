@@ -118,3 +118,20 @@ def test_busy_host_refuses_the_batch_before_anything_is_submitted(
     assert submitted == []
     err = capsys.readouterr().err
     assert "host busy before batch B1" in err and "mds_stores" in err
+
+
+def test_every_cell_command_carries_its_job_label_and_gpuq_dir():
+    rows = [row("yunshu", "B1.a"), row("yunshu", "B1.b")]
+    job = run.plan_batch(rows, "B1", PIN).jobs[0]
+    cell_cmds = [s for s in job.cmd[2].split(" && ") if "tfbench.py" in s]
+    assert len(cell_cmds) == 2
+    for cmd in cell_cmds:
+        assert f"TFB_JOB_LABEL={job.label}" in cmd
+        assert f"GPUQ_DIR={run.GPUQ_DIR_DEFAULT}" in cmd
+        assert "GPUQ_JOB_ID" not in cmd  # never set by the driver: gpuq exports it (or it resolves)
+
+
+def test_cell_env_without_a_label_sets_no_job_label():
+    env = run.cell_env("yunshu", PIN)
+    assert not any(e.startswith("TFB_JOB_LABEL=") for e in env)
+    assert f"GPUQ_DIR={run.GPUQ_DIR_DEFAULT}" in env

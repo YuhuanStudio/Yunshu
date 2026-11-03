@@ -31,7 +31,7 @@ CENSUS_PATH = Path(
 )
 DEFAULT_TELEMETRY_DIR = "/Volumes/Micron/yunshu-fullcmp/raw"
 # Required in every fullcmp cell: identifiers that the audit cross-checks against the manifest.
-REQUIRED_ENV = ("TFB_RUN_ID", "TFB_GROUP", "GPUQ_JOB_ID")
+REQUIRED_ENV = ("TFB_RUN_ID", "TFB_GROUP")  # the job id: see resolve_job_id
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -242,7 +242,56 @@ def swap_snapshot() -> dict:
     return tm.swap_record()
 
 
-def check_required_env(environ) -> None:
+def resolve_job_id(environ, jobs_dir=None) -> str:
+    """The gpuq job id of this cell.
+
+    GPUQ_JOB_ID when gpuq exports it (the current daemon's env, not the old one on main). Else
+    TFB_JOB_LABEL names the job: exactly one job in $GPUQ_DIR/jobs with that label and state
+    "running" supplies the id. Zero or several matches fail closed, naming the problem. Job
+    files that cannot be read are skipped (they cannot be this job's record)."""
+    jid = environ.get("GPUQ_JOB_ID")
+    if jid:
+        return jid
+    label = environ.get("TFB_JOB_LABEL")
+    if not label:
+        raise ProvenanceError(
+            "GPUQ_JOB_ID unset and TFB_JOB_LABEL unset: a fullcmp cell must run inside a gpuq job"
+        )
+    if jobs_dir is None:
+        gdir = environ.get("GPUQ_DIR")
+        if not gdir:
+            raise ProvenanceError(
+                f"GPUQ_JOB_ID unset: cannot resolve label {label!r} without GPUQ_DIR"
+            )
+        jobs_dir = Path(gdir) / "jobs"
+    matches = []
+    for path in sorted(Path(jobs_dir).glob("*.json")):
+        try:
+            job = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if (
+            isinstance(job, dict)
+            and job.get("label") == label
+            and job.get("state") == "running"
+            and job.get("id")
+        ):
+            matches.append(str(job["id"]))
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise ProvenanceError(
+            f"GPUQ_JOB_ID unset: no running gpuq job labelled {label!r} in {jobs_dir}"
+        )
+    raise ProvenanceError(
+        f"GPUQ_JOB_ID unset: {len(matches)} running gpuq jobs labelled {label!r} "
+        f"({', '.join(matches)}); cannot choose"
+    )
+
+
+def check_required_env(environ, jobs_dir=None) -> str:
+    """Fail closed before a cell runs: REQUIRED_ENV present and a job id resolvable. Returns it."""
     missing = [k for k in REQUIRED_ENV if not environ.get(k)]
     if missing:
         raise ProvenanceError(f"TFB_FULLCMP=1 requires {', '.join(missing)}")
+    return resolve_job_id(environ, jobs_dir)

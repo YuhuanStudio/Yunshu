@@ -695,3 +695,21 @@ def test_missing_gpuq_job_id_fails_closed_with_a_clear_message():
     with pytest.raises(fp.ProvenanceError, match="GPUQ_JOB_ID"):
         fp.check_required_env(env)
     fp.check_required_env(dict(env, GPUQ_JOB_ID="1103-1-x"))
+
+
+def test_whole_cell_resolves_job_id_from_label_when_gpuq_does_not_export_it(
+    cell_env, monkeypatch, tmp_path
+):
+    """Old daemon (no GPUQ_JOB_ID export): the session record gets the id of the one running job
+    carrying TFB_JOB_LABEL in $GPUQ_DIR/jobs."""
+    jobs = tmp_path / "gq" / "jobs"
+    jobs.mkdir(parents=True)
+    (jobs / "0001.json").write_text(
+        json.dumps({"id": "1103-7-label", "label": "fullcmp-B1-x-r0", "state": "running"})
+    )
+    monkeypatch.delenv("GPUQ_JOB_ID")
+    monkeypatch.setenv("TFB_JOB_LABEL", "fullcmp-B1-x-r0")
+    monkeypatch.setenv("GPUQ_DIR", str(tmp_path / "gq"))
+    tfbench.main()
+    header = _rows(cell_env.out)[0]
+    assert header["job_id"] == "1103-7-label"

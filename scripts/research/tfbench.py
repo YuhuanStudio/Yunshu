@@ -1599,7 +1599,16 @@ def cell_name(out_path, rep):
 
 
 def fullcmp_header(
-    s, a, environ, *, census, job_start_s, swap_start, telemetry_path, quiet_pre=None
+    s,
+    a,
+    environ,
+    *,
+    census,
+    job_start_s,
+    swap_start,
+    telemetry_path,
+    quiet_pre=None,
+    job_id=None,
 ):
     """Session-header fields the fullcmp audit requires beyond the bench_engines meta row.
     Every value comes from the pin, the census, the model config, the launched binary or the
@@ -1623,7 +1632,7 @@ def fullcmp_header(
         weights=fp.weights_record(a.model, census, model_key),
         fresh_process=True,
         home=str(s.home),
-        job_id=environ["GPUQ_JOB_ID"],
+        job_id=job_id or fp.resolve_job_id(environ),
         job_start_s=job_start_s,
         swap_start=swap_start,
         telemetry_path=telemetry_path,
@@ -1733,11 +1742,11 @@ def main():
                 "Yunshu pinned tree does not match expected release SHA"
             )
     fullcmp = fp.fullcmp_mode(os.environ)
-    census = fc_header = end_fields = None
+    census = fc_header = end_fields = job_id = None
     telem_path = None
     if fullcmp:
-        # Fail closed before anything runs: identifiers, a quiet GPU, a fresh result file.
-        fp.check_required_env(os.environ)
+        # Fail closed before anything runs: identifiers, the gpuq job, a quiet GPU, a fresh file.
+        job_id = fp.check_required_env(os.environ)
         if was_contended():
             raise fp.ProvenanceError("GPU contended before the cell started (fullcmp)")
         if os.path.exists(a.out) and os.path.getsize(a.out) > 0:
@@ -1772,6 +1781,7 @@ def main():
                         swap_start=swap_start,
                         telemetry_path=telem_path,
                         quiet_pre=quiet_pre,
+                        job_id=job_id,
                     )
             except Exception as exc:
                 if fullcmp:
