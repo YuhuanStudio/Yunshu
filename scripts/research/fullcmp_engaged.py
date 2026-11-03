@@ -438,7 +438,10 @@ def correlate_multiset(item, log, requests, ready_offset, consumed=0, skip=READI
                     "ct_expected": req.get("ct"), "ct_merged": c.get("ct"),
                     "ct_gap": (req.get("ct") - c.get("ct")) if (req.get("ct") is not None and c.get("ct") is not None) else None,
                     "calibration_share": round(c.get("calibration_share", 0.0), 4),
-                    "calibrated": calibrated})
+                    "calibrated": calibrated,
+                    # partial log coverage: the merged MTP token sum misses more than the documented tolerance
+                    "partial_coverage": (req.get("ct") is not None and c.get("ct") is not None and
+                                         (req["ct"] - c["ct"]) > int(item.get("token_tolerance", 0)))})
     return out, None
 
 
@@ -560,6 +563,11 @@ def concurrent_attr_rows(table, engine, mode, log, records, ready_offset, probe_
             "accepted": int(pr["value"]) if pr.get("group") in COUNT_GROUPS else
             "unavailable (line states a tokens-per-cycle value, not an accepted count)",
             "queued_s": pr.get("queued_s"),
+            "ct_expected": pr.get("ct_expected"),
+            "ct_merged": pr.get("ct_merged"),
+            "ct_gap": pr.get("ct_gap"),
+            "partial_coverage": pr.get("partial_coverage", False),
+            "calibration_share": pr.get("calibration_share"),
             "matched_line": pr.get("line"),
         })
     return out
@@ -652,8 +660,11 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
     per_row = [{"row": i, "prompt": x.get("prompt"), "line": x["line"], "value": x["value"],
                 "group": x.get("group"), "queued_s": x.get("queued_s"),
                 "rid": x.get("rid"), "part": x.get("part"),
-                "calibration_share": x.get("calibration_share"), "calibrated": x.get("calibrated", False)}
+                "calibration_share": x.get("calibration_share"), "calibrated": x.get("calibrated", False),
+                "ct_expected": x.get("ct_expected"), "ct_merged": x.get("ct_merged"), "ct_gap": x.get("ct_gap"),
+                "partial_coverage": x.get("partial_coverage", False)}
                for i, x in enumerate(matched)]
+    partial = [x for x in per_row if x.get("partial_coverage")]
     calibrated = [x for x in matched if x.get("calibrated")]
     if calibrated and len(calibrated) == len(matched):
         return {"engaged_mode": "ar", "matched_line": matched[-1]["line"], "evidence_kind": "acceptance_regex",
@@ -663,8 +674,13 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
     if calibrated:
         pct = round(100.0 * sum(x.get("calibration_share", 0.0) for x in matched) / len(matched))
         label = f"{mode} (partial: {pct}% calibration)"
+    if partial:
+        # the merged MTP sums miss tokens for these requests: the acceptance is a lower bound on the log, not a
+        # verdict on the request; surfaced in the table note, not a violation (the uid count still fails closed)
+        label = (label or mode) + f" [partial log coverage: {len(partial)} request(s) with ct gap > tolerance]"
     return {"engaged_mode": mode, "matched_line": matched[-1]["line"], "evidence_kind": "acceptance_regex",
-            "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched)},
+            "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched),
+                                         "partial_coverage": len(partial)},
             "label": label}, []
 
 
