@@ -80,7 +80,10 @@ OMLX_MTP_LINE = {
     "group": "accepted",
     "min": 0,
     "match_tokens": True,
-    "token_tolerance": 8,  # merged sums were 58..59 for requests of 64 tokens (wire-1106c/d): ct-8 <= sum <= ct
+    # token_tolerance: observed gap (record ct - merged sum) on the real oMLX logs: wire-1106c conc 64-58 = 6,
+    # 64-59 = 5, mixed 64-64 = 0 (rc1, wire-1106d), short 10-10 = 0; max observed gap 6 -> tolerance 6 + 2 = 8.
+    # Mixed-log sums of 29..49 (wire-1106d rc1) come from segments of other cells in that log: not used.
+    "token_tolerance": 8,
     "per_request": True,
     "startup_sufficient": False,
     "source_ref": "serving_path_vlm_omlx.json omlx_0.7.3_and_rc1.per_request_line; batch_generator.py:3950-3995",

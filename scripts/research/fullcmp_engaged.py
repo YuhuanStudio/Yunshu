@@ -353,7 +353,7 @@ def _merge_segments(raw):
             segs = parts + [seg]
             merged = dict(seg)
             merged["ct"] = sum(p.get("ct") or 0 for p in segs)
-            merged["value"] = sum(p.get("value") or 0 for p in segs)
+            merged["value"] = sum(p.get("value") or 0 for p in segs if p.get("finish") != CALIBRATION_FINISH)
             merged["calibration_tokens"] = sum(p.get("ct") or 0 for p in parts if p.get("finish") == CALIBRATION_FINISH)
             merged["segments"] = len(segs)
             out.append(merged)
@@ -388,7 +388,9 @@ def _done_candidates(item, log, ready_offset, skip=READINESS_REQUESTS):
     if "uid" in names and "finish" in names:
         raw = _merge_segments(raw)
     cands = [{"line": c["line"], "value": c["value"], "prompt": c["prompt"], "ct": c["ct"],
-              "bad": c.get("bad"), "calibration_tokens": c.get("calibration_tokens", 0)} for c in raw]
+              "bad": c.get("bad"), "calibration_tokens": c.get("calibration_tokens", 0),
+              "calibration_share": (c.get("calibration_tokens", 0) / c["ct"]) if c.get("ct") else 0.0}
+             for c in raw]
     return cands[skip:]
 
 
@@ -425,9 +427,13 @@ def correlate_multiset(item, log, requests, ready_offset, consumed=0, skip=READI
             return [], f"request {rid} (prompt {req.get('pt')}, tokens {req.get('ct')}): no done line"
         used.add(found)
         c = cands[found]
-        if not c["value"] > minimum:
+        calibrated = c.get("calibration_share", 0.0) >= 1.0
+        if not calibrated and not c["value"] > minimum:
             return [], f"request {rid}: value {c['value']} not above {minimum}"
-        out.append({"rid": rid, "prompt": c["prompt"], "line": c["line"], "value": c["value"], "group": group})
+        out.append({"rid": rid, "prompt": c["prompt"], "line": c["line"],
+                    "value": 0.0 if calibrated else c["value"], "group": group,
+                    "calibration_share": round(c.get("calibration_share", 0.0), 4),
+                    "calibrated": calibrated})
     return out, None
 
 
@@ -640,11 +646,21 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
                                              "per_row": matched}, "label": None}, problems
     per_row = [{"row": i, "prompt": x.get("prompt"), "line": x["line"], "value": x["value"],
                 "group": x.get("group"), "queued_s": x.get("queued_s"),
-                "rid": x.get("rid"), "part": x.get("part")}
+                "rid": x.get("rid"), "part": x.get("part"),
+                "calibration_share": x.get("calibration_share"), "calibrated": x.get("calibrated", False)}
                for i, x in enumerate(matched)]
+    calibrated = [x for x in matched if x.get("calibrated")]
+    if calibrated and len(calibrated) == len(matched):
+        return {"engaged_mode": "ar", "matched_line": matched[-1]["line"], "evidence_kind": "acceptance_regex",
+                "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched)},
+                "label": "ar (calibration only)"}, []
+    label = None
+    if calibrated:
+        pct = round(100.0 * sum(x.get("calibration_share", 0.0) for x in matched) / len(matched))
+        label = f"{mode} (partial: {pct}% calibration)"
     return {"engaged_mode": mode, "matched_line": matched[-1]["line"], "evidence_kind": "acceptance_regex",
             "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched)},
-            "label": None}, []
+            "label": label}, []
 
 
 def acceptance_proven(ev: dict) -> bool:
