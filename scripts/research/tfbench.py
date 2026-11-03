@@ -561,12 +561,12 @@ def cached_tokens(usage):
     return value
 
 
-def concurrent_prompt(index, trial, ctx):
+def concurrent_prompt(index, trial, ctx, variant=0):
     """Independent exact-size requests; salt at the front prevents shared-prefix priming."""
     from snapshot_prompts import exact_chat_prompt
 
     kind = "prose" if (index + trial) % 2 == 0 else "code"
-    source = load_prompt(f"{kind}-32768")
+    source = load_variant_prompt(f"{kind}-32768", variant)
     return exact_chat_prompt(f"Request {trial}:{index}.\n" + source, ctx, LONG_ASK)
 
 
@@ -765,17 +765,39 @@ def corpus(kind):
     return files
 
 
+# Smoke-only prompt variants (scripts/research/fullcmp_make_variants.py writes them). Variant 0 is the
+# real corpus prompt in WORK/prompts; variant N is <name>-v<N>.txt in this directory.
+PROMPT_VARIANT_DIR = Path(
+    os.environ.get(
+        "TFB_PROMPT_VARIANT_DIR", "/Volumes/Micron/yunshu-fullcmp/smoke-prompts"
+    )
+)
+
+
+def prompt_path(name, variant=0):
+    if variant == 0:
+        return WORK / "prompts" / f"{name}.txt"
+    return PROMPT_VARIANT_DIR / f"{name}-v{variant}.txt"
+
+
 def load_prompt(name):
     return (WORK / "prompts" / f"{name}.txt").read_text()
 
 
-def decode_prompt_file(kind, ctx, smoke=False):
+def load_variant_prompt(name, variant=0):
+    """Variant 0 is load_prompt (the real corpus); variant N reads the smoke-only directory."""
+    if variant == 0:
+        return load_prompt(name)
+    return (PROMPT_VARIANT_DIR / f"{name}-v{variant}.txt").read_text()
+
+
+def decode_prompt_file(kind, ctx, smoke=False, variant=0):
     """The prompt source a decode cell reads (recorded as prompt_file on every decode row)."""
-    return "inline:smoke" if smoke else str(WORK / "prompts" / f"{kind}-{ctx}.txt")
+    return "inline:smoke" if smoke else str(prompt_path(f"{kind}-{ctx}", variant))
 
 
-def decode_prompt(kind, ctx, long_ask):
-    text = load_prompt(f"{kind}-{ctx}")
+def decode_prompt(kind, ctx, long_ask, variant=0):
+    text = load_variant_prompt(f"{kind}-{ctx}", variant)
     if os.environ.get("TFB_EXACT_PROMPTS") == "1":
         from snapshot_prompts import assert_chat_prompt
 
@@ -1123,7 +1145,9 @@ def part_decode(s, out, a):
             text = (
                 "Write a short example and explain it."
                 if a.smoke
-                else decode_prompt(kind, ctx, a.long_ask)
+                else decode_prompt(
+                    kind, ctx, a.long_ask, getattr(a, "prompt_variant", 0)
+                )
             )
             reply = ""
             order = [p for p in ("cold", "warm", "turn2") if p in phases]
@@ -1187,7 +1211,9 @@ def part_decode(s, out, a):
                     ctx=ctx,
                     kind=kind,
                     phase=phase,
-                    prompt_file=decode_prompt_file(kind, ctx, a.smoke),
+                    prompt_file=decode_prompt_file(
+                        kind, ctx, a.smoke, getattr(a, "prompt_variant", 0)
+                    ),
                     cell=cell_name(getattr(a, "out", ""), getattr(a, "rep", 0)),
                     reference_prompt_tokens=ctx
                     if os.environ.get("TFB_EXACT_PROMPTS") == "1" and not a.smoke
@@ -1514,7 +1540,11 @@ def part_conc(s, out, a):
     for n in (2,) if a.smoke else ns:
         for trial in range(1 if a.smoke else a.conc_trials):
             texts = [
-                "Say hello." if a.smoke else concurrent_prompt(i, trial, a.conc_ctx)
+                "Say hello."
+                if a.smoke
+                else concurrent_prompt(
+                    i, trial, a.conc_ctx, getattr(a, "prompt_variant", 0)
+                )
                 for i in range(n)
             ]
             t0 = time.perf_counter()
@@ -1554,7 +1584,12 @@ def part_conc(s, out, a):
                 # the same for every request of this record (conc prompts are a code/prose mix)
                 ctx=a.conc_ctx,
                 kind="mixed",
-                prompt_file="concurrent_prompt(prose|code, index+trial parity)",
+                prompt_file="concurrent_prompt(prose|code, index+trial parity)"
+                + (
+                    f" variant={getattr(a, 'prompt_variant', 0)}"
+                    if getattr(a, "prompt_variant", 0)
+                    else ""
+                ),
                 max_tokens=16 if a.smoke else a.conc_tokens,
                 temperature=rs[0]["temperature"],
                 stop=rs[0]["stop"],
@@ -1605,6 +1640,12 @@ def parse_args(argv=None):
     ap.add_argument("--out", required=True)
     ap.add_argument("--only-ctx", type=int, action="append")
     ap.add_argument("--only-kind", action="append", choices=["prose", "code"])
+    ap.add_argument(
+        "--prompt-variant",
+        type=int,
+        default=0,
+        help="0 = the real corpus prompts; N > 0 = smoke-only variant N (TFB_PROMPT_VARIANT_DIR)",
+    )
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--tag", default="")
     ap.add_argument("--model", default=M)
@@ -1869,9 +1910,11 @@ def main():
         if a.part == "decode" and not a.smoke:
             for ctx in a.only_ctx or [1024, 8192, 32768]:
                 for kind in a.only_kind or ("prose", "code"):
-                    decode_prompt(kind, ctx, a.long_ask)
+                    decode_prompt(
+                        kind, ctx, a.long_ask, getattr(a, "prompt_variant", 0)
+                    )
         elif a.part == "conc":
-            concurrent_prompt(0, 0, a.conc_ctx)
+            concurrent_prompt(0, 0, a.conc_ctx, getattr(a, "prompt_variant", 0))
         elif a.part in ("agent", "ca"):
             for directory in (BODIES, BODIES2):
                 if not list(directory.glob("*-req.json")):

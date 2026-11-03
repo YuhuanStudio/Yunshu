@@ -123,8 +123,29 @@ def rotate(order, rep: int) -> list:
     return list(order[k:]) + list(order[:k])
 
 
+def prompt_variant(row: dict) -> int:
+    """0 = the real corpus prompt (every real-matrix row); N > 0 = a smoke-only variant file."""
+    return int(row.get("prompt_variant") or 0)
+
+
+def prompt_id(row: dict) -> str:
+    """'<kind>-<ctx>' for variant 0 (unchanged for the real matrix), '<kind>-<ctx>-v<N>' otherwise."""
+    base = f"{row['prompt_kind']}-{row['ctx_tokens']}"
+    n = prompt_variant(row)
+    return f"{base}-v{n}" if n else base
+
+
 def harness_part(row: dict):
-    """(tfbench part, extra args, None) for a row tfbench can run, else (None, None, reason)."""
+    """(tfbench part, extra args, None) for a row tfbench can run, else (None, None, reason).
+    A variant row adds --prompt-variant N; variant 0 adds nothing, so real command lines are unchanged."""
+    part, extra, reason = _base_harness_part(row)
+    n = prompt_variant(row)
+    if part is not None and n:
+        extra = [*extra, "--prompt-variant", str(n)]
+    return part, extra, reason
+
+
+def _base_harness_part(row: dict):
     if row.get("table") == "agent":
         return None, None, "agent task selection not in tfbench CLI"
     if row.get("table") == "behaviour":
@@ -564,6 +585,18 @@ def census_pins(pin: dict) -> dict:
     return fam.build_pins(census, pin)
 
 
+def expected_records(row: dict) -> int | None:
+    """Expected request-record rows per cell (all reps) for a smoke row, from the smoke manifest.
+    Decode: one record per planned phase per rep (warm_reps is 1). Conc: CONC_TRIALS records per rep,
+    each holding conc requests. Real-matrix rows return None: their counts are not filled here."""
+    if "prompt_variant" not in row:
+        return None
+    reps = row_reps(row)
+    if int(row["conc"]) > 1:
+        return reps * int(row["conc"]) * CONC_TRIALS
+    return reps * len(row.get("phases") or ())
+
+
 def audit_manifest(
     rows: list[dict], batches: list[str], pin: dict, engine_order: list[str]
 ) -> dict:
@@ -586,10 +619,10 @@ def audit_manifest(
                 "group": grp,
                 "ctx": r["ctx_tokens"],
                 "kind": r["prompt_kind"],
-                "prompt_id": f"{r['prompt_kind']}-{r['ctx_tokens']}",
+                "prompt_id": prompt_id(r),
                 "max_tokens": r["out_len"],
                 "phases": r.get("phases"),
-                "expected_records": None,
+                "expected_records": expected_records(r),
                 "spec_mode": None,
                 "weight_group": None,
             }

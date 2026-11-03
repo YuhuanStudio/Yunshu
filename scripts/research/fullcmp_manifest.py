@@ -722,6 +722,48 @@ def build_rows(engines=None, tasks=None):
     return rows, _meta()
 
 
+# ---------------------------------------------------------------- smoke manifest
+# A small pre-flight matrix (not the approved scope): yunshu only, 1K prompts, each cell at two prompt
+# variants so the audit's >= 2 distinct prompts per (model, ctx, kind) guard can pass. The real matrix
+# rows never carry prompt_variant; variant 0 keeps its prompt_id unsuffixed.
+SMOKE_BATCH = "SMOKE"
+SMOKE_ENGINE = "yunshu"
+SMOKE_VARIANTS = (0, 1)
+SMOKE_REPS = 1
+SMOKE_OUT = Path("/Volumes/Micron/yunshu-fullcmp/smoke-manifest.jsonl")
+
+
+def smoke_specs():
+    """1K code/prose out 64 cold+warm+turn2, conc 2 (code/prose) and one profile rep (code)."""
+    for kind in CORE_KINDS:
+        yield spec(
+            sweep="smoke-core",
+            ctx="1K",
+            kind=kind,
+            out=64,
+            phases=("cold", "warm", "turn2"),
+        )
+    for kind in CORE_KINDS:
+        yield spec(
+            sweep="smoke-conc", ctx="1K", kind=kind, out=64, conc=2, phases=("conc",)
+        )
+    yield spec(sweep="smoke-profile", ctx="1K", kind="code", out=64, phases=("cold",))
+
+
+def build_smoke_rows():
+    """One row per (spec, variant). Ids end in .v<N>; every smoke row carries prompt_variant."""
+    rows = []
+    for variant in SMOKE_VARIANTS:
+        for sp in smoke_specs():
+            row = _cell_row(SMOKE_ENGINE, SMOKE_BATCH, sp)
+            row["id"] = f"{row['id']}.v{variant}"
+            row["reps"] = SMOKE_REPS
+            row["prompt_variant"] = variant
+            row["est_gpu_min"] = 0.0
+            rows.append(row)
+    return rows
+
+
 def _meta():
     return {
         "constants": {
@@ -891,11 +933,26 @@ def top_cells(rows, n=8):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    ap.add_argument("--out", type=Path, default=None)
     ap.add_argument(
         "--summary", type=Path, default=None, help="also write the summary text here"
     )
+    ap.add_argument(
+        "--smoke",
+        action="store_true",
+        help="write the smoke manifest (yunshu, 1K, two prompt variants) instead of the real matrix",
+    )
     args = ap.parse_args(argv)
+    if args.out is None:
+        args.out = SMOKE_OUT if args.smoke else DEFAULT_OUT
+    if args.smoke:
+        rows = build_smoke_rows()
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        with args.out.open("w") as fh:
+            for r in rows:
+                fh.write(json.dumps(r, sort_keys=True, ensure_ascii=False) + "\n")
+        sys.stdout.write(f"wrote {args.out} ({len(rows)} smoke rows)\n")
+        return 0
     rows, _meta_unused = build_rows()
     buf = []
 
