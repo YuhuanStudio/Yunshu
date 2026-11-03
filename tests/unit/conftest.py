@@ -220,3 +220,21 @@ def _yunshu_loggers_inherit_levels():
     yield
     for lg, level in saved:
         lg.setLevel(level)
+
+
+# fullcmp / tfbench harness markers (by file, so the harness test files stay untouched):
+# fullcmp_e2e = the end-to-end chains (11-30 min each: planner -> wrapper -> real tfbench against the
+# stub -> audit); fullcmp_quick = every other fullcmp / tfbench unit file, the fast regression subset
+# (`pytest -m fullcmp_quick`, under 2 minutes).
+_FULLCMP_QUICK_FILES = ("test_fullcmp_", "test_tfbench_fullcmp")
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        name = os.path.basename(str(item.fspath))
+        if not name.startswith(_FULLCMP_QUICK_FILES):
+            continue
+        if name.startswith("test_fullcmp_e2e"):
+            item.add_marker(pytest.mark.fullcmp_e2e)
+        else:
+            item.add_marker(pytest.mark.fullcmp_quick)

@@ -8,14 +8,27 @@ medium pattern from fullcmp_audit_manifest.EXPECTED_MODE_PROBE, or the round-pro
 yunshu and TensorFold) and one per-request round line.
 
 Used by tests only. Launched by tfbench through the TFB_STUB_SERVER hook (see tfbench.py).
+
+Process hygiene (a leaked stub held 127.0.0.1:18990 for 47 min after its pytest ended):
+- spawn() / stub_process() start a stub in its own process group; stop_group() SIGTERMs the group,
+  waits 2 s, then SIGKILLs it. Every spawned group is also killed at interpreter exit (atexit).
+- main() watches its parent: when the parent is gone (reparented, so getppid() changes or is 1) it
+  exits within about a second, and a hard lifetime cap (--max-lifetime, default 20 min) ends it
+  regardless. --port 0 binds an ephemeral port and reports the real one.
 """
 
 from __future__ import annotations
 
 import argparse
+import atexit
+import contextlib
 import json
+import os
+import signal
+import subprocess
 import sys
 import threading
+import time
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -217,6 +230,85 @@ def make_handler(state: StubState):
     return Handler
 
 
+PARENT_POLL_S = 1.0
+MAX_LIFETIME_S = 20 * 60
+KILL_GRACE_S = 2.0
+_SPAWNED: list[subprocess.Popen] = []
+
+
+def spawn(argv, **kw) -> subprocess.Popen:
+    """Start argv in a new process group and register it for the atexit sweep."""
+    proc = subprocess.Popen(argv, start_new_session=True, **kw)
+    _SPAWNED.append(proc)
+    return proc
+
+
+def stop_group(proc: subprocess.Popen, grace: float = KILL_GRACE_S) -> None:
+    """Kill the whole process group of proc: SIGTERM, then SIGKILL after grace seconds; wait."""
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        pgid = None
+    if pgid is not None:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(pgid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(pgid, signal.SIGKILL)
+    if proc.poll() is None:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=grace)
+    # the group may still hold orphans whose leader already exited: sweep it once more
+    if pgid is not None:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(pgid, signal.SIGKILL)
+
+
+@contextlib.contextmanager
+def stub_process(argv, **kw):
+    """with stub_process([...]) as proc: the group is stopped on exit, even when the body raises."""
+    proc = spawn(argv, **kw)
+    try:
+        yield proc
+    finally:
+        stop_group(proc)
+
+
+def kill_spawned() -> None:
+    for proc in list(_SPAWNED):
+        stop_group(proc)
+    _SPAWNED.clear()
+
+
+atexit.register(kill_spawned)
+
+
+def watch_parent(
+    parent: int,
+    max_lifetime: float = MAX_LIFETIME_S,
+    poll: float = PARENT_POLL_S,
+    exit_fn=os._exit,
+) -> threading.Thread:
+    """Exit when the parent is gone or the lifetime cap passes. Runs as a daemon thread."""
+    started = time.monotonic()
+
+    def run():
+        while True:
+            time.sleep(poll)
+            if os.getppid() != parent or parent == 1:
+                exit_fn(0)
+            if time.monotonic() - started > max_lifetime:
+                exit_fn(3)
+
+    t = threading.Thread(target=run, daemon=True, name="stub-parent-watch")
+    t.start()
+    return t
+
+
 def start(engine: str, model: str, log_path, port: int = 0, version: str = "stub"):
     """Start the stub in a background thread. Returns (server, port, state)."""
     state = StubState(engine, model, Path(log_path), version)
@@ -232,10 +324,13 @@ def main(argv=None) -> int:
     ap.add_argument("--port", type=int, required=True)
     ap.add_argument("--log", required=True, type=Path)
     ap.add_argument("--version", default="stub")
+    ap.add_argument("--max-lifetime", type=float, default=MAX_LIFETIME_S)
     a = ap.parse_args(argv)
     state = StubState(a.engine, a.model, a.log, a.version)
     server = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(state))
-    print(f"stub {a.engine} listening on 127.0.0.1:{a.port}", flush=True)
+    bound = server.server_address[1]
+    watch_parent(os.getppid(), max_lifetime=a.max_lifetime)
+    print(f"stub {a.engine} listening on 127.0.0.1:{bound}", flush=True)
     server.serve_forever()
     return 0
 

@@ -77,8 +77,51 @@ def server_home(out: Path, tag: str, environ) -> Path:
     return out / "home" / tag
 
 
+def ephemeral_port():
+    """An OS-assigned loopback port (never the shared 18990-18999 pool)."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def parse_lsof_pids(text):
+    """PIDs from `lsof -t` output (one per line); blank or junk lines are ignored."""
+    return sorted({int(x) for x in text.split() if x.isdigit()})
+
+
+def listening_pids(port, run=subprocess.run):
+    """PIDs holding a LISTEN socket on the TCP port, named by lsof. Read-only."""
+    result = run(
+        ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    return parse_lsof_pids(result.stdout or "")
+
+
+def assert_port_free(port, run=subprocess.run):
+    """Fail closed when a cell's port is already bound: name the holder, never kill it."""
+    with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+            return
+        except OSError:
+            pass
+    pids = listening_pids(port, run=run)
+    holder = ", ".join(str(p) for p in pids) or "unknown (lsof named no pid)"
+    raise RuntimeError(
+        f"port {port} is already bound by pid {holder}; refusing to start a cell on it "
+        f"(check: lsof -nP -iTCP:{port} -sTCP:LISTEN). Nothing was killed."
+    )
+
+
 def free_port(wait_s=600.0, interval_s=5.0, sleep=None, clock=None):
-    """Paused gpuq jobs retain ports; wait for the bounded shared pool."""
+    """Paused gpuq jobs retain ports; wait for the bounded shared pool. Stub runs (TFB_STUB_SERVER,
+    tests only) take an ephemeral port so they never touch the pool."""
+    if os.environ.get("TFB_STUB_SERVER"):
+        return ephemeral_port()
     sleep = sleep or time.sleep
     clock = clock or time.monotonic
     deadline = clock() + wait_s
@@ -298,6 +341,7 @@ class Srv:
         if fp.fullcmp_mode(os.environ) and self._is_yunshu(engine):
             self.pin = fp.require_yunshu_pin(os.environ)
         self.engine, self.port = engine, free_port()
+        assert_port_free(self.port)  # fail closed before any dir or process is created
         self.requested_spec_mode, extra_env = spec_request(
             engine, extra_env, model or M
         )
@@ -2150,4 +2194,19 @@ def main():
 
 
 if __name__ == "__main__":
+    if os.environ.get("TFB_STUB_SERVER"):
+        # TEST-ONLY: a stub run must not outlive the wrapper that started it. When the parent is
+        # gone (a test timed out and killed the shell), this process exits; its stub then sees its
+        # own parent gone and exits too (fullcmp_stub_server.watch_parent).
+        import threading
+
+        _parent = os.getppid()
+
+        def _exit_with_parent():
+            while True:
+                time.sleep(1)
+                if os.getppid() != _parent or _parent == 1:
+                    os._exit(0)
+
+        threading.Thread(target=_exit_with_parent, daemon=True).start()
     main()

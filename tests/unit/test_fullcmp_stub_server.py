@@ -3,9 +3,14 @@ that the audit's engaged-mode probe actually recognises. CPU only, localhost onl
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
+import signal
+import subprocess
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -139,3 +144,97 @@ def test_load_and_round_lines_match_the_engaged_mode_probe(tmp_path, engine):
         return
     pats = [p["regex"] for p in probe["log_patterns"] if "regex" in p]
     assert any(re.search(p, text) for p in pats), (engine, text)
+
+
+STUB = Path(__file__).resolve().parent / "fullcmp_stub_server.py"
+
+
+def _stub_argv(log, port=0, lifetime=None):
+    argv = [
+        sys.executable,
+        str(STUB),
+        "--engine",
+        "yunshu-main",
+        "--port",
+        str(port),
+        "--log",
+        str(log),
+    ]
+    if lifetime is not None:
+        argv += ["--max-lifetime", str(lifetime)]
+    return argv
+
+
+def _port_accepts(port) -> bool:
+    import socket
+
+    with socket.socket() as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _pid_gone(pid, timeout_s) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def test_stub_is_killed_and_port_freed_when_the_block_raises(tmp_path):
+    proc_holder = {}
+    with pytest.raises(RuntimeError, match="boom"):
+        with stub.stub_process(
+            _stub_argv(tmp_path / "s.log"), stdout=subprocess.PIPE, text=True
+        ) as proc:
+            proc_holder["proc"] = proc
+            port = int(proc.stdout.readline().rsplit(":", 1)[1])
+            assert _port_accepts(port)
+            raise RuntimeError("boom")
+    proc = proc_holder["proc"]
+    assert proc.poll() is not None
+    assert not _port_accepts(port)
+    with pytest.raises(ProcessLookupError):
+        os.killpg(proc.pid, 0)
+
+
+def test_stub_exits_within_seconds_when_its_parent_dies(tmp_path):
+    # an intermediate python starts the stub, reports its pid, then waits; killing the intermediate
+    # reparents the stub, and its watchdog must end it without anyone calling stop_group
+    intermediate = (
+        "import subprocess, sys, time\n"
+        "p = subprocess.Popen(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "print(p.pid, flush=True)\n"
+        "time.sleep(600)\n"
+    )
+    mid = subprocess.Popen(
+        [sys.executable, "-c", intermediate, *_stub_argv(tmp_path / "s.log")],
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stub_pid = int(mid.stdout.readline())
+        deadline = time.monotonic() + 10
+        while not (tmp_path / "s.log").exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        os.kill(mid.pid, signal.SIGKILL)
+        mid.wait(timeout=5)
+        assert _pid_gone(stub_pid, timeout_s=5), "stub outlived its parent"
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(mid.pid, signal.SIGKILL)
+        mid.wait(timeout=5)
+
+
+def test_stub_hard_lifetime_cap_exits_on_its_own(tmp_path):
+    proc = stub.spawn(
+        _stub_argv(tmp_path / "s.log", lifetime=0.5), stdout=subprocess.PIPE, text=True
+    )
+    try:
+        assert proc.wait(timeout=10) == 3
+    finally:
+        stub.stop_group(proc)
