@@ -248,8 +248,15 @@ def _driver_harness_snapshot_stub(request, monkeypatch):
     exercises the real snapshot code and is not stubbed."""
     if request.node.fspath.basename == "test_fullcmp_snapshot.py":
         return
-    for name, mod in list(_sys.modules.items()):
-        if not name.startswith("fullcmp_run") or not hasattr(mod, "snapshot_harness"):
+    import gc as _gc
+    import types as _types
+
+    # every loaded copy of the driver, under any name (a test may hold a module that is not in
+    # sys.modules any more): module objects whose file is fullcmp_run.py
+    for mod in [o for o in _gc.get_objects() if isinstance(o, _types.ModuleType)]:
+        if not str(getattr(mod, "__file__", "")).endswith("fullcmp_run.py"):
+            continue
+        if not hasattr(mod, "snapshot_harness") or not hasattr(mod, "pre_submit_checks"):
             continue
         root = mod.REPO_ROOT
         monkeypatch.setattr(mod, "snapshot_harness", lambda work, repo=None, _r=root: _r)

@@ -1508,13 +1508,20 @@ def main(argv=None) -> int:
     configure(a.raw_root, a.work_dir)
     # Every job of this invocation runs from one frozen snapshot of the harness at HEAD, never the
     # live worktree (2026-11-04: a harness edit landed mid-batch and a NameError killed a job).
-    try:
-        snap = snapshot_harness(HARNESS_WORK, REPO_ROOT)
-    except HarnessDirty as exc:
-        print(f"refusing: {exc}", file=sys.stderr)
-        return 2
-    use_harness(snap)
-    if os.environ.get("TFB_PRESUBMIT_SKIP") == "1" or os.environ.get("TFB_PRESUBMIT_ACTIVE") == "1":
+    test_run = os.environ.get("TFB_PRESUBMIT_SKIP") == "1" or os.environ.get("TFB_PRESUBMIT_ACTIVE") == "1"
+    if test_run:
+        # a unit-test run calls main() on the live tree: no git reads, no snapshot (the snapshot
+        # code is tested by test_fullcmp_snapshot.py)
+        snap = REPO_ROOT
+        print("harness snapshot skipped (test run)", flush=True)
+    else:
+        try:
+            snap = snapshot_harness(HARNESS_WORK, REPO_ROOT)
+        except HarnessDirty as exc:
+            print(f"refusing: {exc}", file=sys.stderr)
+            return 2
+        use_harness(snap)
+    if test_run:
         # inside a test run or a pre-submit's own pytest: never a second pre-submit (that recursed)
         print("pre-submit skipped: TFB_PRESUBMIT_SKIP/ACTIVE set (test or nested run)", flush=True)
         quick = ""
@@ -1524,7 +1531,8 @@ def main(argv=None) -> int:
         print("refusing: pre-submit checks failed on the snapshot:", file=sys.stderr)
         print(quick, file=sys.stderr)
         return 2
-    print(f"harness snapshot: {snap} (commit {HARNESS_COMMIT})", flush=True)
+    if not test_run:
+        print(f"harness snapshot: {snap} (commit {HARNESS_COMMIT})", flush=True)
 
     pin = json.loads(PIN_PATH.read_text())
     rows = load_rows(a.manifest)
