@@ -43,6 +43,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_engines  # noqa: E402  (manifest id <-> harness id registry)
+import fullcmp_attribution as fat  # noqa: E402  (layer-1 / layer-2 attribution schema)
 
 GUARDS = (
     "prompt_identity",
@@ -242,6 +243,8 @@ class Run:
     missing: list  # (cell, rep, path) for expected files that do not exist
     extra: list  # Path of jsonl files on disk that the manifest does not plan
     parse_errors: list  # str, one per unparseable line (truncated stream = error)
+    profile_root: object = None  # <profile_root>/<engine>/<cell>-prof.jsonl: layer-2 rows
+    full: bool = False  # full mode: every cell needs a profile rep (missing = violation)
 
 
 @dataclass
@@ -287,6 +290,10 @@ def expected_reps(cell: dict, manifest: dict) -> int:
 
 
 CONC_PART = "conc"
+CONC_LAYER1_REASON = (
+    "conc record carries relative ttfts/total_s per request, no per-request epoch timestamps "
+    "or per-round/server counters (tfbench conc part)"
+)
 
 
 def conc_request_rows(rec: dict) -> list[dict]:
@@ -303,10 +310,18 @@ def conc_request_rows(rec: dict) -> list[dict]:
             v = rec.get(key)
             return v[i] if isinstance(v, list) and i < len(v) else None
 
+        attr = {"cache_hit_tokens": at("cached")} if at("cached") is not None else {}
+        unavailable = {
+            f: CONC_LAYER1_REASON
+            for f in list(fat.LAYER1_TIMESTAMPS) + list(fat.LAYER1_COUNTERS)
+            if f not in attr and f != "cache_hit_tokens"
+        }
         rows.append(
             {
                 "part": CONC_PART,
                 "phase": CONC_PART,
+                "attr": attr,
+                "attr_unavailable": unavailable,
                 "n": n,
                 "trial": rec.get("trial"),
                 "ttft_s": at("ttfts"),
@@ -954,10 +969,13 @@ def check_round_time_outlier(run: Run) -> GuardResult:
 
 
 def check_attribution_fields(run: Run) -> GuardResult:
-    """Guard 16: every decode row carries the layer-1 attribution fields for its engine, each as a
-    value or an explicit 'unavailable (reason)' (fullcmp_attribution.check_cell). A MISSING field
-    fails the cell (fail closed). Layer 2 (profile rep) is not part of the timed rows and is not
-    checked here."""
+    """Guard 16 (lead ruling 2026-11-03, two layers).
+    Layer 1: every timed row (decode and conc) carries the layer-1 fields for its engine, each as a
+    value or an explicit 'unavailable (reason)'. A MISSING field fails the cell (fail closed).
+    Observe-only fields are never required here.
+    Layer 2: when run.profile_root is set, each cell's profile rep (<profile_root>/<engine>/
+    <cell>-prof.jsonl) must carry the layer-2 fields for its engine. In full mode (run.full) a cell
+    with no profile rep is a violation 'profile rep missing'."""
     import fullcmp_attribution as fa_attr
 
     res = GuardResult("attribution_fields")
@@ -975,6 +993,33 @@ def check_attribution_fields(run: Run) -> GuardResult:
             res.fail(cell, f"r{cf.rep}: no decode rows")
         elif miss:
             res.fail(cell, f"r{cf.rep}: attribution fields MISSING: {', '.join(miss)}")
+    if run.profile_root is None:
+        return res
+    seen = set()
+    for cf in run.files:
+        cell, engine = cf.cell["cell"], cf.cell.get("engine")
+        if (engine, cell) in seen:
+            continue
+        seen.add((engine, cell))
+        path = Path(run.profile_root) / str(engine) / f"{cell}-prof.jsonl"
+        if not path.is_file():
+            if run.full:
+                res.fail(cell, "profile rep missing: no " + str(path))
+            continue
+        rows, _errs = _read_jsonl(path)
+        prof = next((r for r in rows if r.get("part") == "profile"), None)
+        if prof is None:
+            res.fail(cell, "profile rep missing: no part=profile row in " + str(path))
+            continue
+        res.checked += 1
+        try:
+            cov = fa_attr.check_profile(engine, prof)
+        except KeyError as exc:
+            res.fail(cell, f"profile rep: {exc}")
+            continue
+        miss2 = fa_attr.missing(cov)
+        if miss2:
+            res.fail(cell, f"profile rep lacks layer 2: {', '.join(miss2)}")
     return res
 
 
@@ -998,9 +1043,13 @@ GUARD_CHECKS = (
 )
 
 
-def run_guards(root, manifest_path):
+def run_guards(root, manifest_path, profile_root=None, full=False):
+    if full and profile_root is None:
+        raise ValueError("full mode needs --profile-root (layer-2 profile rows)")
     manifest = json.loads(Path(manifest_path).read_text())
     run = load_run(root, manifest)
+    run.profile_root = profile_root
+    run.full = full
     return run, [check(run) for check in GUARD_CHECKS]
 
 
@@ -1560,7 +1609,18 @@ def main(argv=None) -> int:
         default=str(PEAKS_PATH),
         help="measured peaks json (scripts/research/probe_peak.py); required with --derived",
     )
+    p.add_argument(
+        "--profile-root",
+        help="layer-2 profile rows: <profile-root>/<engine>/<cell>-prof.jsonl (checked when given)",
+    )
+    p.add_argument(
+        "--full",
+        action="store_true",
+        help="full mode: every cell needs its profile rep (requires --profile-root)",
+    )
     a = p.parse_args(argv)
+    if a.full and not a.profile_root:
+        p.error("--full needs --profile-root")
     if a.recompute and not a.table:
         p.error("--recompute needs --table")
     peaks = None
@@ -1570,7 +1630,7 @@ def main(argv=None) -> int:
         except MeasuredPeaksError as exc:
             print(f"DERIVED REFUSED: {exc}")
             return 1
-    run, results = run_guards(a.root, a.manifest)
+    run, results = run_guards(a.root, a.manifest, a.profile_root, a.full)
     if a.recompute:
         checked, rv = recompute_table(
             run, Path(a.table).read_text(), violations_by_cell(results)

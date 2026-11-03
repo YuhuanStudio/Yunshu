@@ -1109,3 +1109,92 @@ def test_conc_row_without_recorded_cached_count_fails_cold_cache():
     run = fa.Run({"groups": {}}, [_cf(cell, 0, {"part": "session", "fresh_process": True}, rows)], [], [], [])
     res = fa.check_cold_cache(run)
     assert any("cached count not recorded" in v for v in res.violations)
+
+
+import fullcmp_attribution as fat  # noqa: E402
+
+# --- attribution layers (lead ruling 2026-11-03): layer 1 in every timed row, layer 2 in the
+# profile rep only, a cell with no profile rep is "profile rep missing" in full mode.
+
+
+def _attr_run(tmp_path, rows, *, profile=None, full=False, engine="yunshu"):
+    cell = {"cell": "q27_decode-1024-code", "engine": engine, "group": "g", "phases": ["decode"]}
+    cf = _cf(cell, 0, {"part": "session"}, rows)
+    root = tmp_path / "profile"
+    if profile is not None:
+        d = root / engine
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "q27_decode-1024-code-prof.jsonl").write_text(
+            "\n".join(json.dumps(x) for x in profile) + "\n"
+        )
+    run = fa.Run({"groups": {}}, [cf], [], [], [])
+    run.profile_root = root if (profile is not None or full) else None
+    run.full = full
+    return fa.check_attribution_fields(run)
+
+
+def _full_layer1_row():
+    attr = {f: 1.0 for f in list(fat.LAYER1_TIMESTAMPS) + list(fat.LAYER1_COUNTERS)}
+    attr.update({"rounds": 3, "tokens_per_round": [2, 2, 1], "rows_per_round": [1, 1, 1],
+                 "cache_hit_tokens": 0, "chunk_sizes": [512], "host_gaps_ms": [1.0],
+                 "engine_log_path": "/x.log", "t_rounds": [1.0], "t_prefill_chunks": [[0, 1, 512]]})
+    return {"part": "decode", "attr": attr, "attr_unavailable": {}}
+
+
+def _profile_row(complete=True):
+    stages = {"decode_round": {k: 1.0 for k in ("drafter", "plan", "copy_lookup", "verify_weights",
+                                                 "verify_attention", "commit")},
+              "prefill": {k: 1.0 for k in ("chunk_compute", "eval_wait", "apc_store", "drafter_context")},
+              "ttft": {k: 1.0 for k in ("template", "lookup", "restore", "prefill", "drafter_rebuild", "first_round")}}
+    row = {"part": "profile", "stages": stages, "host_sync_count": 4, "op_census": {"matmul": 10}}
+    if not complete:
+        del row["op_census"]
+    return row
+
+
+def test_timed_row_without_observe_only_fields_passes(tmp_path):
+    # Observe-only fields (stage timers, host syncs, op census) are layer 2: never required here.
+    res = _attr_run(tmp_path, [_full_layer1_row()])
+    assert res.violations == []
+
+
+def test_timed_row_lacking_a_layer1_field_fails(tmp_path):
+    row = _full_layer1_row()
+    row["attr"].pop("t_first_token")
+    res = _attr_run(tmp_path, [row])
+    assert any("t_first_token" in v for v in res.violations)
+
+
+def test_profile_rep_lacking_layer2_fails(tmp_path):
+    res = _attr_run(tmp_path, [_full_layer1_row()], profile=[_profile_row(complete=False)], full=True)
+    assert any("profile rep lacks layer 2" in v and "op_census" in v for v in res.violations)
+
+
+def test_profile_rep_with_layer2_passes(tmp_path):
+    res = _attr_run(tmp_path, [_full_layer1_row()], profile=[_profile_row()], full=True)
+    assert res.violations == []
+
+
+def test_no_profile_rep_fails_in_full_mode(tmp_path):
+    res = _attr_run(tmp_path, [_full_layer1_row()], full=True)
+    assert any("profile rep missing" in v for v in res.violations)
+
+
+def test_no_profile_rep_is_not_checked_outside_full_mode(tmp_path):
+    res = _attr_run(tmp_path, [_full_layer1_row()])
+    assert res.violations == []
+
+
+def test_conc_rows_are_covered_by_layer1(tmp_path):
+    # Conc rows carry the fields their record has; the rest must be explicit reasons, not MISSING.
+    rows = fa.conc_request_rows(_conc_record(n=2))
+    res = _attr_run(tmp_path, rows)
+    assert res.violations == [], res.violations
+
+
+def test_conc_row_with_unexplained_gap_fails(tmp_path):
+    rows = fa.conc_request_rows(_conc_record(n=2))
+    rows[0]["attr_unavailable"].pop("t_admit")
+    rows[0]["attr"].pop("t_admit", None)
+    res = _attr_run(tmp_path, rows)
+    assert any("t_admit" in v for v in res.violations)
