@@ -9,10 +9,14 @@ Measures, with MLX, what this Mac actually sustains (not the spec sheet):
                              M=2048 K=5120 N=17408 (TFLOP/s)
   3. quantized GEMV          mx.quantized_matmul, 4-bit, group 64, M=1..8, K=5120, N=17408;
                              GB/s of packed weight bytes actually read (decode MBU is relative
-                             to what quantized kernels reach, so this is the decode denominator)
+                             to what quantized kernels reach, so this is the decode denominator).
+                             Round-robin over M, 8 chained calls per block, 24 pinned weight
+                             copies (~1 GB, larger than cache), 30 warm-up, 400 timed rounds.
 
-Every number is the median / max / min over the timed iterations, with spread_pct =
-(max - min) / median * 100. Output: one JSON file (label, mlx version, chip, date, results).
+Every result has median / min / max / spread_pct = (max - min) / median * 100 over the samples.
+GEMV results also carry the stable statistic used as the audit denominator: stable =
+top_half_median (median of the upper half of the samples), plus p10, p90 and
+spread_p10_p90_pct. Output: one JSON file (label, mlx version, chip, date, results).
 
 Timing rule: warm-up iterations first, then each iteration is timed around op() + mx.eval(out),
 so lazy graphs are fully materialised inside the timer.
@@ -41,6 +45,8 @@ from pathlib import Path
 
 LABEL = "measured peak on this machine (M5 Max)"
 GIB = 1024**3
+GEMV_MS = (1, 2, 4, 8)  # decode-like batch rows
+GEMV_CHAIN = 8  # GEMV calls per timed block (same pinned weights, distinct inputs)
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +91,59 @@ def time_loop(
     return durs
 
 
+def percentile(sorted_vals: list[float], q: float) -> float:
+    """Linear-interpolated percentile (q in [0, 1]) of an already sorted, non-empty list."""
+    if not sorted_vals:
+        raise ValueError("percentile: no samples")
+    pos = (len(sorted_vals) - 1) * q
+    lo = math.floor(pos)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    return sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * (pos - lo)
+
+
+def robust_stats(values: list[float]) -> dict:
+    """Stable statistics for noisy GPU timings.
+
+    stable = top_half_median: the median of the upper half of the samples. Interference (clock dips,
+    a stray sync) only pulls samples DOWN, so the upper half is the sustained rate.
+    spread_p10_p90_pct = (p90 - p10) / median * 100: spread one outlier cannot inflate.
+    """
+    base = stats(values)
+    srt = sorted(float(v) for v in values)
+    p10, p90 = percentile(srt, 0.10), percentile(srt, 0.90)
+    return {
+        "p10": p10,
+        "p90": p90,
+        "top_half_median": statistics.median(srt[len(srt) // 2 :]),
+        "spread_p10_p90_pct": (p90 - p10) / base["median"] * 100.0,
+    }
+
+
+def interleaved_times(
+    ops: dict[str, Callable[[], object]],
+    eval_fn: Callable[[object], None],
+    warm_rounds: int,
+    rounds: int,
+    clock: Callable[[], float] = time.perf_counter,
+) -> dict[str, list[float]]:
+    """Time several ops round-robin: every round times each op once, in the same order, so clock or
+    thermal drift hits all ops alike. Warm-up rounds run every op untimed first.
+    Returns seconds per call for each op, one entry per round."""
+    if rounds <= 0:
+        raise ValueError("interleaved_times: rounds must be positive")
+    for _ in range(warm_rounds):
+        for op in ops.values():
+            eval_fn(op())
+    out: dict[str, list[float]] = {k: [] for k in ops}
+    for _ in range(rounds):
+        for name, op in ops.items():
+            t0 = clock()
+            res = op()
+            eval_fn(res)
+            out[name].append(clock() - t0)
+    return out
+
+
 def rate(work: float, seconds: list[float]) -> list[float]:
     """work per second for each timed iteration (work = bytes or FLOP per iteration)."""
     if any(s <= 0 for s in seconds):
@@ -104,6 +163,16 @@ def make_result(name: str, unit: str, values: list[float], **extra) -> dict:
         "values": [float(v) for v in values],
         **extra,
     }
+
+
+def make_robust_result(name: str, unit: str, values: list[float], **extra) -> dict:
+    """make_result plus the stable statistic (top_half_median) that the audit uses as a denominator."""
+    r = make_result(name, unit, values, **extra)
+    rs = robust_stats(values)
+    r.update(rs)
+    r["stable"] = rs["top_half_median"]
+    r["stable_stat"] = "top_half_median"
+    return r
 
 
 def make_report(results: list[dict], mlx_version: str, chip: str, date: str) -> dict:
@@ -165,24 +234,19 @@ def measure(pilot: bool) -> tuple[list[dict], str]:
 
     if pilot:
         bw_shape = (2**14, 2**10)  # 32 MiB bf16
-        sq, pf_shape, gemv_nk, warm, iters, gemv_iters = (
-            1024,
-            (256, 512, 1024),
-            (1024, 512),
-            1,
-            3,
-            3,
-        )
+        sq, pf_shape, gemv_nk, warm, iters = (1024, (256, 512, 1024), (1024, 512), 1, 3)
+        gemv_warm, gemv_rounds, gemv_copies = 2, 3, 2
     else:
         bw_shape = (2**21, 2**10)  # 2^31 bf16 elements = 4 GiB
-        sq, pf_shape, gemv_nk, warm, iters, gemv_iters = (
+        sq, pf_shape, gemv_nk, warm, iters = (
             8192,
             (2048, 5120, 17408),
             (17408, 5120),
             5,
             20,
-            50,
         )
+        # long warm-up; 400 interleaved rounds per M; 24 pinned copies = ~1 GB working set
+        gemv_warm, gemv_rounds, gemv_copies = 30, 400, 24
     if not pilot and bw_shape[0] * bw_shape[1] * 2 < 4 * GIB:
         raise RuntimeError("bandwidth array must be >= 4 GiB")
     results: list[dict] = []
@@ -235,29 +299,60 @@ def measure(pilot: bool) -> tuple[list[dict], str]:
 
     # 3. quantized GEMV (decode-like), 4-bit group 64
     n_out, k_in = gemv_nk
-    w = mx.random.normal((n_out, k_in), dtype=mx.bfloat16)
-    wq, sc, bi = mx.quantize(w, group_size=64, bits=4)
-    ev(wq, sc, bi)
-    del w
-    wbytes = wq.nbytes + sc.nbytes + bi.nbytes
-    for m in (1, 2, 4, 8):
-        xa = mx.random.normal((m, k_in), dtype=mx.bfloat16)
-        ev(xa)
-        secs = time_loop(
-            lambda xa=xa: mx.quantized_matmul(
-                xa, wq, sc, bi, transpose=True, group_size=64, bits=4
-            ),
-            ev,
-            warm,
-            gemv_iters,
-        )
+    # Packed weight copies, pinned for the whole run and cycled through by every call. One copy
+    # (~45 MB) would be re-read from the system-level cache and report more than DRAM bandwidth;
+    # the copies together exceed any cache, like a real decode step that streams distinct layers.
+    wqs = []
+    for _ in range(gemv_copies):
+        w = mx.random.normal((n_out, k_in), dtype=mx.bfloat16)
+        wqs.append(mx.quantize(w, group_size=64, bits=4))
+        ev(*wqs[-1])
+        del w
+    wbytes = sum(a.nbytes for a in wqs[0])
+    # Each timed block runs GEMV_CHAIN calls with distinct inputs, so one host sync is amortised
+    # over several kernels. The M values are timed round-robin so drift hits all of them alike.
+    # cursor advances on every call, so consecutive calls hit different pinned copies.
+    xs = {
+        m: [mx.random.normal((m, k_in), dtype=mx.bfloat16) for _ in range(GEMV_CHAIN)]
+        for m in GEMV_MS
+    }
+    ev(*[x for xl in xs.values() for x in xl])
+    cursor = [0]
+
+    def block(m):
+        def run():
+            outs = []
+            for x in xs[m]:
+                wq, sc, bi = wqs[cursor[0] % gemv_copies]
+                cursor[0] += 1
+                outs.append(
+                    mx.quantized_matmul(
+                        x, wq, sc, bi, transpose=True, group_size=64, bits=4
+                    )
+                )
+            return outs
+
+        return run
+
+    secs_by_m = interleaved_times(
+        {m: block(m) for m in GEMV_MS},
+        lambda outs: ev(*outs),
+        gemv_warm,
+        gemv_rounds,
+    )
+    for m in GEMV_MS:
+        per_call = [s / GEMV_CHAIN for s in secs_by_m[m]]
         results.append(
-            make_result(
+            make_robust_result(
                 f"qgemv_w4g64_M{m}",
                 "GB/s",
-                [v / 1e9 for v in rate(wbytes, secs)],
+                [v / 1e9 for v in rate(wbytes, per_call)],
                 bytes=wbytes,
                 shape=[m, k_in, n_out],
+                chain=GEMV_CHAIN,
+                weight_copies=gemv_copies,
+                weight_working_set_bytes=wbytes * gemv_copies,
+                interleaved=True,
             )
         )
     return results, mx.__version__

@@ -130,3 +130,56 @@ def test_chip_falls_back_to_unknown(monkeypatch):
 
     monkeypatch.setattr(pp.subprocess, "run", boom)
     assert pp._chip() == "unknown"
+
+
+def test_percentile_linear_interpolation():
+    s = [1.0, 2.0, 3.0, 4.0]
+    assert pp.percentile(s, 0.0) == 1.0 and pp.percentile(s, 1.0) == 4.0
+    assert pp.percentile(s, 0.5) == pytest.approx(2.5)
+    assert pp.percentile([7.0], 0.9) == 7.0
+    with pytest.raises(ValueError):
+        pp.percentile([], 0.5)
+
+
+def test_robust_stats_ignore_low_outliers_and_report_p10_p90():
+    # 10 fast samples and 2 interference dips: the top-half median is the sustained rate
+    vals = [100.0] * 10 + [40.0, 45.0]
+    rs = pp.robust_stats(vals)
+    assert rs["top_half_median"] == pytest.approx(100.0)
+    # sorted: 40, 45, 100 x10; p10 at position 1.1 -> 45 + 0.1 * (100 - 45)
+    assert rs["p10"] == pytest.approx(50.5)
+    assert rs["p90"] == pytest.approx(100.0)
+    assert rs["spread_p10_p90_pct"] == pytest.approx(
+        (rs["p90"] - rs["p10"]) / pp.stats(vals)["median"] * 100
+    )
+
+
+def test_make_robust_result_names_its_statistic():
+    r = pp.make_robust_result("qgemv_w4g64_M1", "GB/s", [10.0, 11.0, 12.0, 13.0])
+    assert r["stable_stat"] == "top_half_median"
+    assert r["stable"] == pytest.approx(pp.statistics.median([12.0, 13.0]))
+    assert r["median"] == pytest.approx(11.5)
+    pp.validate_report(pp.make_report([r], "0.0.0", "c", "2026-11-03"))
+
+
+def test_interleaved_times_round_robin_order_and_warmup():
+    order = []
+    ops = {
+        "a": lambda: order.append("a") or "a",
+        "b": lambda: order.append("b") or "b",
+    }
+    ticks = iter(range(0, 1000))
+    clock = lambda: next(ticks) * 0.25  # noqa: E731  (each read advances 0.25 s)
+    out = pp.interleaved_times(
+        ops, lambda _: None, warm_rounds=2, rounds=3, clock=clock
+    )
+    # 2 untimed warm-up rounds then 3 timed rounds, always a before b
+    assert order == ["a", "b"] * 5
+    assert set(out) == {"a", "b"}
+    assert all(len(v) == 3 for v in out.values())
+    assert all(d == pytest.approx(0.25) for v in out.values() for d in v)
+
+
+def test_interleaved_times_rejects_zero_rounds():
+    with pytest.raises(ValueError):
+        pp.interleaved_times({"a": lambda: 1}, lambda _: None, 0, 0, clock=lambda: 0.0)

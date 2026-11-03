@@ -528,27 +528,113 @@ def test_kv_and_gdn_bytes_for_27b():
 
 
 PEAKS = {
-    "decode_gbs": {"max": 400.0, "median": 390.0, "spread_pct": 4.0, "n": 3},
+    "decode_gbs": {
+        "max": 420.0,
+        "median": 390.0,
+        "stable": 400.0,
+        "stable_stat": "top_half_median",
+        "spread_pct": 4.0,
+        "n": 3,
+    },
     "bf16_tflops": {"max": 20.0, "median": 19.0, "spread_pct": 3.0, "n": 3},
     "read_gbs": {"max": 500.0, "median": 480.0, "spread_pct": 2.0, "n": 3},
 }
 
 
-def test_derived_mbu_uses_measured_gemv_peak_not_spec():
+def _bytes_round(model_id, pt, ct):
+    m = fa.MODELS[model_id]
+    ctx = pt + ct / 2.0
+    return m["weight_bytes"] + fa.kv_bytes_per_token(m, ctx) + fa.gdn_state_bytes(m)
+
+
+def test_derived_mbu_uses_stable_gemv_peak_not_spec_or_max():
     d = fa.derived_decode("q27-4bit", PEAKS, tok_s=40.0, pt=1024, ct=512)
-    m = fa.MODELS["q27-4bit"]
-    ctx = 1024 + 256
-    expect_bytes = m["weight_bytes"] + 65536 * ctx + fa.gdn_state_bytes(m)
+    expect_bytes = _bytes_round("q27-4bit", 1024, 512)
     assert d["label"] == "DERIVED"
-    assert d["bytes_per_token"] == pytest.approx(expect_bytes)
+    assert d["tokens_per_round"] == 1.0  # plain AR: one token per round
+    assert d["bytes_per_round"] == pytest.approx(expect_bytes)
     assert d["mbu"] == pytest.approx(expect_bytes * 40.0 / (400.0 * 1e9))
     assert d["peak_decode_gbs"] == 400.0
+    assert d["peak_decode_stat"] == "top_half_median"
     # secondary column: same bytes against the spec-sheet bandwidth, labeled as such
     assert d["mbu_vs_spec"] == pytest.approx(
         expect_bytes * 40.0 / (fa.SPEC_SHEET["M5 Max"]["bw_gbs"] * 1e9)
     )
-    # spec-sheet FLOP/s is unsourced: vs-spec MFU is None with the reason
-    assert d["mfu"] is None or d["mfu"] >= 0
+
+
+def test_ar_decode_30_tok_s_mbu_is_tok_s_times_bytes_over_peak():
+    d = fa.derived_decode(
+        "q27-4bit", PEAKS, tok_s=30.0, pt=1024, ct=512, speculative=False
+    )
+    # formula only: 30 tok/s x ~16 GB/token exceeds the 400 GB/s synthetic peak, so no bound here
+    assert d["mbu"] == pytest.approx(_bytes_round("q27-4bit", 1024, 512) * 30.0 / 400e9)
+    assert d["mbu"] > 0
+
+
+def test_spec_decode_80_tok_s_at_3_7_tok_per_round_is_plausible():
+    # 80 tok/s with 3.7 tokens per round = 21.6 rounds/s; weights are read once per round
+    d = fa.derived_decode(
+        "q27-4bit",
+        PEAKS,
+        tok_s=80.0,
+        pt=1024,
+        ct=512,
+        speculative=True,
+        tokens_per_round=3.7,
+        rows_per_round=4,
+    )
+    assert d["rounds_per_s"] == pytest.approx(80.0 / 3.7)
+    assert d["mbu"] == pytest.approx(
+        _bytes_round("q27-4bit", 1024, 512) * (80.0 / 3.7) / 400e9
+    )
+    assert 0 < d["mbu"] < 1
+    # the old per-token formula would have been > 1 at this peak: that was the bug
+    naive = _bytes_round("q27-4bit", 1024, 512) * 80.0 / 400e9
+    assert naive > 1
+    # MFU: 4 verified rows per round, measured from the record
+    flops_round = 4 * (
+        2 * fa.MODELS["q27-4bit"]["active_params"]
+        + fa.attn_flops_per_token(fa.MODELS["q27-4bit"], 1024 + 256)
+    )
+    assert d["mfu"] == pytest.approx(flops_round * (80.0 / 3.7) / 20e12)
+    assert d["rows_per_round_src"] == "record"
+
+
+def test_spec_decode_without_tokens_per_round_is_unavailable_not_a_number():
+    d = fa.derived_decode(
+        "q27-4bit", PEAKS, tok_s=80.0, pt=1024, ct=512, speculative=True
+    )
+    assert d["mbu"] is None and d["mbu_vs_spec"] is None
+    assert "unavailable (tokens_per_round missing)" in d["reason"]
+    assert d["mfu"] is None
+
+
+def test_spec_mfu_rows_fallback_is_labeled_lower_bound():
+    d = fa.derived_decode(
+        "q27-4bit",
+        PEAKS,
+        tok_s=80.0,
+        pt=1024,
+        ct=512,
+        speculative=True,
+        tokens_per_round=4.0,
+    )
+    assert d["rows_per_round_src"] == "lower bound (tokens_per_round)"
+    assert d["rows_per_round"] == 4.0
+    assert d["mbu"] == pytest.approx(_bytes_round("q27-4bit", 1024, 512) * 20.0 / 400e9)
+
+
+def test_is_speculative_maps_engaged_modes():
+    assert fa.is_speculative("off") is False
+    assert fa.is_speculative("") is False
+    assert fa.is_speculative("mtp") is True
+    assert fa.is_speculative("dflash") is True
+    assert fa.is_speculative(None) is None
+
+
+def test_spec_flops_unsourced_mfu_vs_spec_is_none_with_reason():
+    d = fa.derived_decode("q27-4bit", PEAKS, tok_s=40.0, pt=1024, ct=512)
+    assert d["mfu"] is not None and d["mfu"] >= 0
     assert d["mfu_vs_spec"] is None
     assert "spec-sheet FLOP/s unsourced" in d["reason"]
 
@@ -596,7 +682,9 @@ def test_load_measured_peaks_reads_valid_file(tmp_path):
     import probe_peak as pp
 
     res = [
-        pp.make_result("qgemv_w4g64_M1", "GB/s", [300.0, 320.0, 310.0]),
+        pp.make_robust_result(
+            "qgemv_w4g64_M1", "GB/s", [300.0, 320.0, 310.0, 330.0, 305.0, 315.0]
+        ),
         pp.make_result("matmul_prefill27b_bf16", "TFLOP/s", [18.0, 19.0, 20.0]),
         pp.make_result("bw_read_sum_bf16", "GB/s", [500.0, 510.0, 505.0]),
     ]
@@ -606,9 +694,33 @@ def test_load_measured_peaks_reads_valid_file(tmp_path):
     f = tmp_path / "peak.json"
     f.write_text(json.dumps(rep))
     got = fa.load_measured_peaks(f)
-    assert got["decode_gbs"]["max"] == 320.0
+    assert got["decode_gbs"]["max"] == 330.0
+    # the MBU denominator is the stable statistic (top-half median), and the JSON names it
+    assert got["decode_gbs"]["stable_stat"] == "top_half_median"
+    assert got["decode_gbs"]["stable"] == pytest.approx(
+        pp.statistics.median([315.0, 320.0, 330.0])
+    )
     assert got["bf16_tflops"]["max"] == 20.0
     assert got["read_gbs"]["max"] == 510.0
+
+
+def test_load_measured_peaks_refuses_file_without_stable_statistic(tmp_path):
+    import probe_peak as pp
+
+    rep = pp.make_report(
+        [
+            pp.make_result("qgemv_w4g64_M1", "GB/s", [300.0, 320.0, 310.0]),
+            pp.make_result("matmul_prefill27b_bf16", "TFLOP/s", [18.0, 19.0, 20.0]),
+            pp.make_result("bw_read_sum_bf16", "GB/s", [500.0, 510.0, 505.0]),
+        ],
+        mlx_version="0.0.0",
+        chip="Apple M5 Max",
+        date="2026-11-03",
+    )
+    f = tmp_path / "old.json"
+    f.write_text(json.dumps(rep))
+    with pytest.raises(fa.MeasuredPeaksError, match="stable"):
+        fa.load_measured_peaks(f)
 
 
 def test_derived_rows_only_for_known_models_with_measured_inputs(tmp_path):
@@ -619,9 +731,18 @@ def test_derived_rows_only_for_known_models_with_measured_inputs(tmp_path):
     assert fa.derived_rows(run, PEAKS) == []
     for cf in run.files:
         cf.cell["model"] = "q27-4bit"
+    # the synthetic cells are speculative (dflash) and carry no tokens_per_round: decode is unavailable
     rows = fa.derived_rows(run, PEAKS)
-    assert rows and {r["metric"] for r in rows} == {"decode", "prefill"}
-    assert all(r["label"] == "DERIVED" for r in rows)
-    assert all(
-        r["mfu"] is not None for r in rows
-    )  # measured bf16 peak is the denominator
+    dec = [r for r in rows if r["metric"] == "decode"]
+    assert dec and all(r["mbu"] is None for r in dec)
+    assert all("unavailable (tokens_per_round missing)" in r["reason"] for r in dec)
+    # prefill is unaffected and still uses the measured bf16 peak
+    pre = [r for r in rows if r["metric"] == "prefill"]
+    assert pre and all(r["mfu"] is not None for r in pre)
+    # with the record carrying tokens_per_round, decode becomes a number again
+    for cf in run.files:
+        for row in cf.rows:
+            row["tokens_per_round"] = 3.0
+    dec = [r for r in fa.derived_rows(run, PEAKS) if r["metric"] == "decode"]
+    assert dec and all(r["mbu"] is not None and r["mbu"] > 0 for r in dec)
+    assert all(r["label"] == "DERIVED" for r in dec)

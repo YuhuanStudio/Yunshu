@@ -897,8 +897,16 @@ def recompute_table(run: Run, table_text: str, by_cell: dict):
 
 # ---------------------------------------------------------------------------
 # Derived efficiency (labeled DERIVED everywhere: never a measured value)
-#   MBU  = (weight bytes read per token + KV bytes read per token + GDN state bytes) x tok/s / peak BW
-#   MFU  = (2 x active params + attention FLOPs per token) x tok/s / peak FLOPs
+# A decode ROUND reads the weights once and verifies R rows (R = 1 for plain autoregressive decode;
+# R = draft rows for MTP / DFlash speculative decode). Tokens per round T = tokens / rounds.
+#   rounds/s      = tok/s / T
+#   bytes/round   = weight bytes + KV bytes read (at avg ctx) + GDN state bytes
+#   MBU           = bytes/round x rounds/s / peak BW          (peak = stable GEMV statistic)
+#   FLOPs/round   = R x (2 x active params + attention FLOPs at avg ctx)
+#   MFU           = FLOPs/round x rounds/s / peak FLOP/s       (peak = measured bf16 27B prefill)
+# T and R come from the request row / session header when the record carries them. If T is absent
+# for a speculative engine, MBU/MFU are None ("unavailable (tokens_per_round missing)"), never a
+# guess. If R is absent, T is used as a labeled LOWER BOUND for R.
 # Inputs are measured (tok/s, prompt/completion tokens, ttft) or come from the tables below.
 # A value whose input is not sourced is None with the reason, never a guess.
 # ---------------------------------------------------------------------------
@@ -925,10 +933,12 @@ class MeasuredPeaksError(RuntimeError):
 def load_measured_peaks(path=PEAKS_PATH) -> dict:
     """Denominators from scripts/research/probe_peak.py (measured on this machine, gpuq job).
 
-    decode_gbs  = max of the 4-bit quantized GEMV at batch 1 (decode MBU denominator)
+    decode_gbs  = 4-bit quantized GEMV at batch 1, STABLE statistic = top_half_median (MBU denominator;
+                  the record's "stable_stat" names it). max / median / p10-p90 spread kept for reference.
     bf16_tflops = max of the bf16 matmul at the 27B prefill shape (MFU denominator)
     read_gbs    = max of the sustained read bandwidth (reference only, not a denominator)
-    Fails closed with MeasuredPeaksError when the file is missing, invalid, or lacks a needed result.
+    Fails closed with MeasuredPeaksError when the file is missing, invalid, or lacks a needed result
+    (a GEMV result without the stable statistic means the file predates the stable probe).
     """
     import probe_peak as pp  # scripts/research on sys.path (script dir or test insert)
 
@@ -948,6 +958,11 @@ def load_measured_peaks(path=PEAKS_PATH) -> dict:
     missing = [n for n in needed if n not in by]
     if missing:
         raise MeasuredPeaksError(f"measured peaks file lacks {missing}: {p}")
+    if "stable" not in by["qgemv_w4g64_M1"] or not (by["qgemv_w4g64_M1"]["stable"] > 0):
+        raise MeasuredPeaksError(
+            f"measured peaks file has no stable GEMV statistic (predates probe_peak "
+            f"robust stats): {p}"
+        )
 
     def pick(name):
         r = by[name]
@@ -958,13 +973,22 @@ def load_measured_peaks(path=PEAKS_PATH) -> dict:
             "n": r["n"],
         }
 
+    g = by["qgemv_w4g64_M1"]
+    decode = {
+        **pick("qgemv_w4g64_M1"),
+        "stable": g["stable"],
+        "stable_stat": g["stable_stat"],
+        "p10": g["p10"],
+        "p90": g["p90"],
+        "spread_p10_p90_pct": g["spread_p10_p90_pct"],
+    }
     return {
         "source": str(p),
         "label": rep["label"],
         "mlx_version": rep["mlx_version"],
         "chip": rep["chip"],
         "date": rep["date"],
-        "decode_gbs": pick("qgemv_w4g64_M1"),
+        "decode_gbs": decode,
         "bf16_tflops": pick("matmul_prefill27b_bf16"),
         "read_gbs": pick("bw_read_sum_bf16"),
     }
@@ -1058,35 +1082,80 @@ def attn_flops_per_token(model: dict, ctx: float) -> float:
     return model["full_attn_layers"] * 4 * model["n_heads"] * model["head_dim"] * ctx
 
 
+AR_MODES = frozenset({"", "off", "none", "ar", "autoregressive"})
+
+
+def is_speculative(engaged_mode) -> bool | None:
+    """True / False from the engaged spec mode string; None when the mode is not recorded."""
+    if not isinstance(engaged_mode, str):
+        return None
+    return engaged_mode.strip().lower() not in AR_MODES
+
+
 def derived_decode(
-    model_id: str, peaks: dict, tok_s: float, pt: int, ct: int, hw: str = "M5 Max"
+    model_id: str,
+    peaks: dict,
+    tok_s: float,
+    pt: int,
+    ct: int,
+    hw: str = "M5 Max",
+    speculative: bool | None = False,
+    tokens_per_round: float | None = None,
+    rows_per_round: float | None = None,
 ) -> dict:
     """MBU and MFU for decode at the average context (pt + ct/2). Labeled DERIVED.
 
-    mbu uses the measured 4-bit GEMV peak (peaks["decode_gbs"]); mbu_vs_spec is the same bytes
-    against the spec-sheet bandwidth, kept only as a labeled secondary column.
+    Per round (see the formula block above): weights are read once per round, not once per token.
+    tokens_per_round: measured tokens / rounds from the record. None for plain AR decode means 1;
+    None for a speculative engine means unavailable (reported as None, never estimated).
+    mbu uses the stable 4-bit GEMV statistic (peaks["decode_gbs"]["stable"]); mbu_vs_spec is the
+    same bytes against the spec-sheet bandwidth, kept only as a labeled secondary column.
     """
     m = MODELS[model_id]
     ctx = pt + ct / 2.0
     out = {
         "label": "DERIVED",
         "ctx_avg": ctx,
+        "tokens_per_round": None,
+        "tokens_per_round_src": None,
         "mbu": None,
         "mbu_vs_spec": None,
         "mfu": None,
         "reason": [],
     }
+    if tokens_per_round is not None:
+        if not (is_num(tokens_per_round) and tokens_per_round >= 1):
+            out["reason"].append(f"tokens_per_round invalid: {tokens_per_round!r}")
+            return _unavailable_decode(m, peaks, hw, tok_s, ctx, out)
+        tpr, out["tokens_per_round_src"] = float(tokens_per_round), "record"
+    elif speculative is False:
+        tpr, out["tokens_per_round_src"] = 1.0, "autoregressive (1 token per round)"
+    else:
+        out["reason"].append("unavailable (tokens_per_round missing)")
+        return _unavailable_decode(m, peaks, hw, tok_s, ctx, out)
+    out["tokens_per_round"] = tpr
+    rounds_s = tok_s / tpr
+    out["rounds_per_s"] = rounds_s
     if m["weight_bytes"] is None:
         out["reason"].append("weight bytes per token not in repo")
     else:
         kv_gdn = kv_bytes_per_token(m, ctx) + (gdn_state_bytes(m) or 0)
-        bytes_tok = m["weight_bytes"] + kv_gdn
-        out["bytes_per_token"] = bytes_tok
-        out["peak_decode_gbs"] = peaks["decode_gbs"]["max"]
-        out["mbu"] = bytes_tok * tok_s / (peaks["decode_gbs"]["max"] * 1e9)
+        bytes_round = m["weight_bytes"] + kv_gdn
+        out["bytes_per_round"] = bytes_round
+        stable = peaks["decode_gbs"]["stable"]
+        out["peak_decode_gbs"] = stable
+        out["peak_decode_stat"] = peaks["decode_gbs"]["stable_stat"]
+        out["mbu"] = bytes_round * rounds_s / (stable * 1e9)
         spec = SPEC_SHEET[hw]["bw_gbs"]
-        out["mbu_vs_spec"] = bytes_tok * tok_s / (spec * 1e9)
-    out.update(_mfu(m, peaks, hw, tok_s, ctx, out))
+        out["mbu_vs_spec"] = bytes_round * rounds_s / (spec * 1e9)
+    out.update(_mfu(m, peaks, hw, rounds_s, ctx, out, rows_per_round, tpr))
+    return out
+
+
+def _unavailable_decode(m, peaks, hw, tok_s, ctx, out) -> dict:
+    out.update(_mfu(m, peaks, hw, None, ctx, out, None, None))
+    out["mbu"] = None
+    out["mbu_vs_spec"] = None
     return out
 
 
@@ -1105,13 +1174,42 @@ def derived_prefill(
     return out
 
 
-def _mfu(m: dict, peaks: dict, hw: str, tok_s: float, ctx: float, out: dict) -> dict:
+def _mfu(
+    m: dict,
+    peaks: dict,
+    hw: str,
+    rounds_s: float | None,
+    ctx: float,
+    out: dict,
+    rows_per_round: float | None = None,
+    tokens_per_round: float | None = None,
+) -> dict:
+    """MFU = FLOPs per round x rounds/s / peak. A round verifies R rows: R from the record
+    (rows_per_round); else tokens_per_round as a labeled lower bound; else 1 (single forward)."""
     if m["active_params"] is None:
         out["reason"].append("active params not in repo")
         return {"mfu": None, "mfu_vs_spec": None, "reason": out["reason"]}
-    flops_tok = 2 * m["active_params"] + attn_flops_per_token(m, ctx)
+    if rounds_s is None:
+        return {"mfu": None, "mfu_vs_spec": None, "reason": out["reason"]}
+    if rows_per_round is not None:
+        if not (is_num(rows_per_round) and rows_per_round >= 1):
+            return {
+                "mfu": None,
+                "mfu_vs_spec": None,
+                "reason": out["reason"]
+                + [f"rows_per_round invalid: {rows_per_round!r}"],
+            }
+        rows, rows_src = float(rows_per_round), "record"
+    elif tokens_per_round is not None:
+        rows, rows_src = float(tokens_per_round), "lower bound (tokens_per_round)"
+    else:
+        rows, rows_src = 1.0, "1 row per round"
+    flops_round = rows * (2 * m["active_params"] + attn_flops_per_token(m, ctx))
     res = {
-        "mfu": flops_tok * tok_s / (peaks["bf16_tflops"]["max"] * 1e12),
+        "flops_per_round": flops_round,
+        "rows_per_round": rows,
+        "rows_per_round_src": rows_src,
+        "mfu": flops_round * rounds_s / (peaks["bf16_tflops"]["max"] * 1e12),
         "mfu_vs_spec": None,
         "peak_bf16_tflops": peaks["bf16_tflops"]["max"],
         "reason": out["reason"],
@@ -1120,7 +1218,7 @@ def _mfu(m: dict, peaks: dict, hw: str, tok_s: float, ctx: float, out: dict) -> 
     if spec_tf is None:
         res["reason"] = out["reason"] + ["spec-sheet FLOP/s unsourced"]
     else:
-        res["mfu_vs_spec"] = flops_tok * tok_s / (spec_tf * 1e12)
+        res["mfu_vs_spec"] = flops_round * rounds_s / (spec_tf * 1e12)
     return res
 
 
@@ -1137,12 +1235,40 @@ def derived_rows(run: Run, peaks: dict, hw: str = "M5 Max") -> list:
                 continue
             base = {"cell": cf.cell["cell"], "rep": cf.rep, "phase": r.get("phase")}
             if is_num(r.get("dec_tps")):
+                # tokens/rows per round: the request row wins, then the session header; absent
+                # fields stay absent (derived_decode then reports unavailable for spec engines).
+                hdr = cf.header or {}
+                spec = is_speculative(hdr.get("engaged_spec_mode"))
+                tpr = next(
+                    (
+                        src.get("tokens_per_round")
+                        for src in (r, hdr)
+                        if src.get("tokens_per_round") is not None
+                    ),
+                    None,
+                )
+                rpr = next(
+                    (
+                        src.get("rows_per_round")
+                        for src in (r, hdr)
+                        if src.get("rows_per_round") is not None
+                    ),
+                    None,
+                )
                 rows.append(
                     {
                         **base,
                         "metric": "decode",
                         **derived_decode(
-                            model_id, peaks, r["dec_tps"], int(pt), int(ct), hw
+                            model_id,
+                            peaks,
+                            r["dec_tps"],
+                            int(pt),
+                            int(ct),
+                            hw,
+                            speculative=spec,
+                            tokens_per_round=tpr,
+                            rows_per_round=rpr,
                         ),
                     }
                 )
