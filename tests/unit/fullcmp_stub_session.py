@@ -160,6 +160,7 @@ def make_session_handler(state: SessionState):
                             }
                         ],
                         "usage": usage,
+                        "x_yunshu": {"speculative": {"rounds": 2, "drafted": 4, "accepted": 3}},
                     },
                 )
             self.send_response(200)

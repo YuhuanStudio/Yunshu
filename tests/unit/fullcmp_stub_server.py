@@ -214,6 +214,7 @@ def make_handler(state: StubState):
                             }
                         ],
                         "usage": usage,
+                        "x_yunshu": {"speculative": {"rounds": 2, "drafted": 4, "accepted": 3}},
                     },
                 )
             self.send_response(200)

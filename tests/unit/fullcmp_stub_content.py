@@ -196,6 +196,7 @@ def make_family_handler(state, faults=frozenset()):
                 "model": model,
                 "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
                 "usage": usage,
+                "x_yunshu": {"speculative": {"rounds": 2, "drafted": 4, "accepted": 3}},
             }
             self.wfile.write(f"data: {json.dumps(final)}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
