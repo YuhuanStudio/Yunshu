@@ -2074,7 +2074,13 @@ def part_conc(s, out, a):
                 "Say hello."
                 if a.smoke
                 else concurrent_prompt(
-                    0 if same else i, trial, a.conc_ctx, getattr(a, "prompt_variant", 0), run=n
+                    0 if same else i,
+                    trial,
+                    a.conc_ctx,
+                    getattr(a, "prompt_variant", 0),
+                    # the run names the level AND the prompt variant: variants share most of their text,
+                    # so a variant-1 sweep after a variant-0 sweep on one server would hit its cache
+                    run=f"{n}v{getattr(a, 'prompt_variant', 0)}",
                 )
                 for i in range(n)
             ]
