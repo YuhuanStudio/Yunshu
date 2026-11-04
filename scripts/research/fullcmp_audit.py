@@ -1198,6 +1198,8 @@ def check_fairness_controls(run: Run) -> GuardResult:
         res.checked += 1
     else:
         res.checked += 1
+        if ctl.get("error"):
+            res.fail("controls", f"control evidence unavailable: {ctl['error']}")
         if not (is_num(aa) and is_num(noise) and abs(aa) <= noise):
             res.fail("controls", f"A/A delta {aa!r} not inside noise {noise!r}")
         res.checked += 1

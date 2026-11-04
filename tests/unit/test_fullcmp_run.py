@@ -868,3 +868,42 @@ def test_a_cell_flagged_twice_fails_the_batch(monkeypatch, tmp_path):
     monkeypatch.setattr(run, "_submit_and_wait", lambda job: submitted.append(job.label) or ("id", 0, "done"))
     assert run.requeue_quiet_flagged(plan, PIN, raw, run.audit_manifest(rows, ["B1"], PIN, ["yunshu"])) == 1
     assert submitted == []
+
+
+def test_a_real_batch_manifest_carries_the_ctl_1103_controls(tmp_path, monkeypatch):
+    """Failing-before (wire-1108 audit): the driver's audit manifest had controls {} so fairness_controls
+    reported 'A/A delta None' and 'injected delay not detected'. A real batch now reads the ctl-1103
+    verdict files; a smoke batch carries none; a failing control is reported as an error, never passed."""
+    import fullcmp_audit_manifest as fam
+
+    assert run.batch_controls(True) == {}
+    monkeypatch.setattr(
+        fam,
+        "load_controls",
+        lambda: ({"aa_delta_pct": 0.4, "aa_noise_pct": 2.0, "injected_delay_detected": True}, {}),
+    )
+    c = run.batch_controls(False)
+    assert c["aa_delta_pct"] == 0.4 and c["injected_delay_detected"] is True
+
+    def boom():
+        raise fam.ControlError("injected-delay control not detected")
+
+    monkeypatch.setattr(fam, "load_controls", boom)
+    assert "not detected" in run.batch_controls(False)["error"]
+
+
+def test_the_real_ctl_1103_controls_pass_the_fairness_guard():
+    """The existing ctl-1103 runs (A/A inside noise, slow2 detected, flip3 detected) satisfy the audit's
+    fairness_controls guard through the driver's own plumbing. Skipped where the verify runs are absent."""
+    import fullcmp_audit as fa
+    import fullcmp_audit_manifest as fam
+
+    if not (fam.VERIFY_RUNS / fam.CONTROL_AA / "verdict.json").is_file():
+        pytest.skip("ctl-1103 verify runs not on this machine")
+    c = run.batch_controls(False)
+    assert "error" not in c, c
+    assert c["injected_delay_detected"] is True and c["evidence"]["slow"] == fam.CONTROL_SLOW
+    res = fa.check_fairness_controls(
+        fa.Run(manifest={"controls": c}, files=[], missing=[], extra=[], parse_errors=[])
+    )
+    assert [v for v in res.violations if ": controls:" in v] == [], res.violations

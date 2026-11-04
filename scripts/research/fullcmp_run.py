@@ -983,6 +983,22 @@ def _weight_group(engine: str) -> str | None:
     return fam.WEIGHT_GROUP.get(engine)
 
 
+def batch_controls(smoke: bool) -> dict:
+    """The fairness controls of a real batch: the ctl-1103 results (A/A, injected slowdown, injected
+    flip), read from their verdict files by fullcmp_audit_manifest.load_controls. A smoke batch is a
+    harness check and carries none. A missing or failing control file yields {"error": ...}, so the
+    fairness_controls guard fails closed with that reason (never a silent pass)."""
+    if smoke:
+        return {}
+    try:
+        import fullcmp_audit_manifest as fam
+
+        controls, _ = fam.load_controls()
+        return controls
+    except Exception as exc:  # fail closed: the guard reports the error text
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
 def audit_manifest(
     rows: list[dict],
     batches: list[str],
@@ -1048,7 +1064,7 @@ def audit_manifest(
         "pins": census_pins(pin),
         "yunshu": {"git_sha": pin["sha"], "python": pin["python_executable"]},
         "yunshu_pins": yunshu_pins(),
-        "controls": {},
+        "controls": batch_controls(any(b == "SMOKE" for b in batches)),
         "groups": ordered,
         "cells": cells,
         "behaviour": behaviour_expectations(rows, batches),
