@@ -75,6 +75,29 @@ def chat_token_count(text, tok=None):
     return len(ids)
 
 
+@lru_cache(maxsize=1)
+def template_prefix_tokens(tok=None):
+    """Tokens every chat prompt of this model starts with before its content: the common prefix of the rendered
+    prompts of two contents that differ at their first token. A server may legitimately report this many cached tokens
+    for a brand-new prompt (the shared template header), so the cold-cache guard allows it."""
+    t = tok or chat_tokenizer()
+
+    def ids(text):
+        encoded = t.apply_chat_template(
+            [{"role": "user", "content": text}], tokenize=True, add_generation_prompt=True, enable_thinking=False
+        )
+        out = encoded["input_ids"] if hasattr(encoded, "keys") else encoded
+        return out[0] if out and isinstance(out[0], list) else out
+
+    a, b = ids("Alpha beta gamma."), ids("Zulu yankee xray.")
+    n = 0
+    for x, y in zip(a, b, strict=False):
+        if x != y:
+            break
+        n += 1
+    return n
+
+
 def assert_chat_prompt(text, target, tok=None):
     actual = chat_token_count(text, tok)
     if actual != target:

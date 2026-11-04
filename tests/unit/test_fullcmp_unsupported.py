@@ -446,3 +446,50 @@ def test_the_image_rows_record_the_image_sha_and_text_tokens():
 
     assert tb.IMAGE_PNG_SHA256 == hashlib.sha256(__import__("base64").b64decode(tb.IMAGE_PNG_B64)).hexdigest()
     assert len(tb.IMAGE_PNG_SHA256) == 64
+
+
+# --- cold_cache on conc / mixed allows the chat template's shared header (wire-1108c8 TensorFold: cached=3) ----------
+
+
+def _mixed_cf(engine, cached_list, phase="mixed", cell=None):
+    cell = cell or f"B2.mixed.{engine}.8K.c4"
+    rows = [{"part": phase, "phase": phase, "cached": c, "pt": 1024, "trial": 0} for c in cached_list]
+    return fa.CellFile({"cell": cell, "engine": engine, "group": "g"}, 0, Path("x"), {"part": "session", "fresh_process": True}, rows)
+
+
+def test_the_template_prefix_is_computed_from_the_models_chat_template():
+    try:
+        import snapshot_prompts as sp
+
+        n = sp.template_prefix_tokens()
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"no local tokenizer: {exc}")
+    assert n == 3  # '<|im_start|>', 'user', '\n': the header every Qwen chat prompt starts with
+
+
+def test_a_mixed_request_reporting_the_template_header_as_cached_passes_and_one_above_it_fails(monkeypatch):
+    """Failing-before (wire-1108c8 TensorFold mixed 8K c4): cached=3 on fresh prompts, the shared template header before the
+    salted content, failed 'must be server-reported 0'."""
+    monkeypatch.setattr(fa, "template_prefix_allowance", lambda: 3)
+    ok = fa.check_cold_cache(fa.Run(manifest={}, files=[_mixed_cf("tf-1.2.1", [3, 3, 0, 3])], missing=[], extra=[], parse_errors=[]))
+    assert ok.violations == [], ok.violations
+    bad = fa.check_cold_cache(fa.Run(manifest={}, files=[_mixed_cf("tf-1.2.1", [3, 4])], missing=[], extra=[], parse_errors=[]))
+    assert bad.violations and "cached=4" in bad.violations[0] and "3-token header" in bad.violations[0]
+    big = fa.check_cold_cache(fa.Run(manifest={}, files=[_mixed_cf("yunshu", [8192])], missing=[], extra=[], parse_errors=[]))
+    assert big.violations  # a real prefix-cache hit still fails
+
+
+def test_without_a_tokenizer_the_guard_stays_strict(monkeypatch):
+    monkeypatch.setattr(fa, "template_prefix_allowance", lambda: 0)
+    res = fa.check_cold_cache(fa.Run(manifest={}, files=[_mixed_cf("tf-1.2.1", [3])], missing=[], extra=[], parse_errors=[]))
+    assert res.violations and "must be server-reported 0" in res.violations[0]
+
+
+def test_the_allowance_function_falls_back_to_zero_when_the_tokenizer_cannot_load(monkeypatch):
+    import snapshot_prompts as sp
+
+    def boom(*a, **k):
+        raise OSError("no tokenizer")
+
+    monkeypatch.setattr(sp, "template_prefix_tokens", boom)
+    assert fa.template_prefix_allowance() == 0

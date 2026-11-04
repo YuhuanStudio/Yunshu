@@ -1000,9 +1000,22 @@ def _shared_prefix_cell(cell: str) -> bool:
     return ".conc-same." in str(cell)
 
 
+def template_prefix_allowance() -> int:
+    """Cached tokens a brand-new concurrent / mixed prompt may legitimately report: the chat template's shared header
+    (snapshot_prompts.template_prefix_tokens, computed from the model's own template). 0 when the tokenizer cannot be
+    loaded: the guard then keeps its strict 'must be 0' (fail closed)."""
+    try:
+        import snapshot_prompts
+
+        return int(snapshot_prompts.template_prefix_tokens())
+    except Exception:  # noqa: BLE001 - no tokenizer: strict
+        return 0
+
+
 def check_cold_cache(run: Run) -> GuardResult:
     """Guard 8: cold cells are a fresh process with server-reported cached_tokens == 0."""
     res = GuardResult("cold_cache")
+    allowed = template_prefix_allowance()
     same_groups: dict = {}
     for cf in run.files:
         cell = cf.cell["cell"]
@@ -1040,11 +1053,11 @@ def check_cold_cache(run: Run) -> GuardResult:
                 # cell was cached 8192 tokens on yunshu).
                 if cached is None:
                     res.fail(cell, f"r{cf.rep} {phase}: cached count not recorded (fail closed)")
-                elif isinstance(cached, bool) or not isinstance(cached, int) or cached != 0:
+                elif isinstance(cached, bool) or not isinstance(cached, int) or cached > allowed:
                     res.fail(
                         cell,
                         f"r{cf.rep} {phase}: cached={cached!r}, must be server-reported 0 "
-                        "(a new prompt per trial)",
+                        f"(a new prompt per trial; at most the chat template's {allowed}-token header)",
                     )
             elif phase == "restart":
                 # the relaunched server serves the cold prompt from the disk prefix tier: a cache
@@ -1074,7 +1087,7 @@ def check_cold_cache(run: Run) -> GuardResult:
             else:
                 res.fail(cell, f"r{cf.rep}: unknown phase {phase!r}")
     for (rep, cell, trial), cached_list in same_groups.items():
-        if min(cached_list) != 0:
+        if min(cached_list) > allowed:
             res.fail(
                 cell,
                 f"r{rep} trial {trial}: every conc-same request cached (min {min(cached_list)}); "
