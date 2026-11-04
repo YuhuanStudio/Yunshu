@@ -3,6 +3,7 @@ into tests/unit/fixtures/ (read only by these tests); the synthetic negatives pi
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -254,3 +255,27 @@ def test_mlx_vlm_all_distinct_probe_counters_stay_per_request():
     ev, problems = fe.concurrent_check(None, "mlx-vlm-server", "dflash", "", recs, 0, probe_responses=responses)
     assert problems == [] and ev["engaged_mode"] == "dflash"
     assert ev["stats"].get("batch_level") is None
+
+
+def test_concurrent_ar_verdict_passes_the_configured_dflash_mode_with_its_label_on_the_real_wire_1107y_cells():
+    """wire-1107y Yunshu concurrent cells: the evidence says the concurrent path does not draft ('ar (dev0 ...)');
+    under the configured speculative mode this is a labelled pass for concurrent cells (single-request cells must
+    match the configured mode). Read in place from the wire-1107y raw."""
+    import types
+
+    import fullcmp_audit as fa
+
+    names = ["SMOKE.smoke-conc-distinct.yunshu.1K.c2.code.o64.single.th-off.none.greedy.v0-r0.jsonl",
+             "SMOKE.smoke-conc-same.yunshu.1K.c2.code.o64.single.th-off.none.greedy.v0-r0.jsonl",
+             "SMOKE.smoke-mixed.yunshu.8K.c4.code.o64.mixed.th-off.none.greedy.v0-r0.jsonl"]
+    base = Path("/Volumes/Micron/yunshu-fullcmp/wire-1107y/yunshu")
+    paths = [base / n for n in names]
+    if not all(p.exists() for p in paths):
+        pytest.skip("wire-1107y yunshu conc raw not on disk")
+    for p in paths:
+        rows = [json.loads(x) for x in p.read_text().splitlines() if x.strip()]
+        h = next(r for r in rows if r.get("part") == "session")
+        cell = {"cell": p.stem, "engine": "yunshu", "spec_mode": h.get("spec_mode_expected"), "group": "g"}
+        cf = types.SimpleNamespace(header=h, cell=cell, rep=0, rows=[], path=p)
+        res = fa.check_engaged_mode(types.SimpleNamespace(files=[cf]))
+        assert not [v for v in res.violations if "engaged evidence says" in v], (p.name, res.violations)
