@@ -1025,7 +1025,20 @@ def check_cold_cache(run: Run) -> GuardResult:
             elif phase == "restart":
                 # the relaunched server serves the cold prompt from the disk prefix tier: a cache
                 # miss here means the restart did not keep the cache (HOME wiped, tier not used)
-                if isinstance(cached, bool) or not isinstance(cached, int) or cached <= 0:
+                import fullcmp_manifest as fm
+
+                no_tier = fm.NO_DISK_TIER.get(str(cf.cell.get("engine")))
+                if no_tier is not None:
+                    # evidence says this engine has no disk tier as launched: a miss is the expected outcome,
+                    # labelled; a hit would contradict the evidence (classification wrong), so it fails
+                    if cached == 0 and isinstance(cached, int) and not isinstance(cached, bool):
+                        res.notes.append(f"UNSUPPORTED {cell} r{cf.rep} restart: cached=0 ({no_tier})")
+                    else:
+                        res.fail(
+                            cell,
+                            f"r{cf.rep} restart: cached={cached!r} but the evidence says no disk tier ({no_tier})",
+                        )
+                elif isinstance(cached, bool) or not isinstance(cached, int) or cached <= 0:
                     res.fail(
                         cell,
                         f"r{cf.rep} restart: cached={cached!r}, the restarted server must hit "

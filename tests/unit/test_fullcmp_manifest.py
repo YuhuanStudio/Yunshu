@@ -124,6 +124,8 @@ def test_unsupported_rows_come_from_census_flags_only():
         r["engine"] == "ollama"
         # measured refusal (wire-1108 B2): TensorFold 1.2.1 refuses image parts as launched
         or (r["engine"] == "tf-1.2.1" and r.get("media") != "none")
+        # restart cells of engines with no disk tier as launched (fullcmp_manifest.NO_DISK_TIER, evidence cited)
+        or (r["engine"] in fm.NO_DISK_TIER and r.get("turns") == "restart")
         or (
             r["engine"] == "mlx-lm-server"
             and (

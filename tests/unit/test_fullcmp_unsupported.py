@@ -183,3 +183,48 @@ def test_without_the_saved_first_log_the_same_cell_is_startup_only(tmp_path, mon
     monkeypatch.setattr(tb, "_LOG_PREFIX", [])  # the old behaviour: only the live (post-restart) log
     with pytest.raises(RuntimeError, match="startup_only"):
         srv.verify_spec_mode(final=True, rows=_restart_rows())
+
+
+# --- restart cells: the disk tier decides (manifest status and audit label) ------------------------------------
+
+
+def _restart_cf(engine, cached):
+    cell = {"cell": f"B2.restart.{engine}.1K.c1.code.o512.restart.th-off.none.greedy", "engine": engine, "group": "g"}
+    rows = [
+        {"part": "decode", "phase": "cold", "cached": 0},
+        {"part": "decode", "phase": "restart", "cached": cached},
+    ]
+    return fa.CellFile(cell, 0, Path("x"), {"part": "session", "fresh_process": True}, rows)
+
+
+def _cold_cache(*cfs):
+    return fa.check_cold_cache(fa.Run(manifest={}, files=list(cfs), missing=[], extra=[], parse_errors=[]))
+
+
+def test_restart_miss_on_an_engine_without_a_disk_tier_is_a_labelled_outcome_not_a_failure():
+    res = _cold_cache(_restart_cf("tf-1.2.1", 0), _restart_cf("splash-1.5.0", 0), _restart_cf("llama-cpp-b12061", 0))
+    assert res.violations == [], res.violations
+    assert sum("UNSUPPORTED" in n and "restart" in n for n in res.notes) == 3
+    assert any("hits 0, misses 1" in n for n in res.notes)  # TF's own log line is cited
+
+
+def test_restart_miss_on_an_engine_with_a_disk_tier_fails_and_a_hit_on_a_no_tier_engine_contradicts_the_evidence():
+    res = _cold_cache(_restart_cf("yunshu", 0), _restart_cf("omlx-0.7.3", 0))
+    assert len(res.violations) == 2 and all("must hit the disk tier" in v for v in res.violations)
+    res = _cold_cache(_restart_cf("tf-1.2.1", 768))
+    assert res.violations and "evidence says no disk tier" in res.violations[0]
+    assert _cold_cache(_restart_cf("yunshu", 960)).violations == []  # a real disk-tier hit passes
+
+
+def test_manifest_restart_cells_follow_the_disk_tier_evidence():
+    import fullcmp_manifest as fm
+
+    rows, _meta = fm.build_rows()
+    fm.apply_cuts(rows, out=io.StringIO())
+    restart = {r["engine"]: r for r in rows if r.get("turns") == "restart"}
+    for eng in ("tf-1.2.1", "splash-1.5.0", "llama-cpp-b12061", "mlx-lm-server"):
+        assert restart[eng]["status"] == "unsupported", eng
+    assert "hits 0, misses 1" in restart["tf-1.2.1"]["reason"]
+    assert "no automatic disk tier" in restart["llama-cpp-b12061"]["reason"]
+    for eng in ("yunshu", "yunshu-pb2", "omlx-0.7.3", "omlx-0.7.3rc1"):
+        assert restart[eng]["status"] != "unsupported", eng  # they have a disk tier: the cell runs

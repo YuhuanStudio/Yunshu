@@ -395,7 +395,12 @@ ENGINES = {
         label="TensorFold 1.2.1 (tf-native, latest)",
         version="1.2.1",
         supported=True,
-        caps=dict(anthropic=True, responses=True, images=False),
+        caps=dict(anthropic=True, responses=True, images=False, disk_cache=False),
+        disk_reason=(
+            "no disk tier: TensorFold's prompt cache is RAM-only (its prompt-cache size flag); after the restart "
+            "the relaunched server logged 'prompt cache: 1024 tokens, resumed at 0 ... (hits 0, misses 1, "
+            "evicted 0, refused 0, failed 0)' and cached=0 (measured, wire-1108 B2 restart cell)"
+        ),
         # measured: wire-1108 B2 p1 answered the image cell with HTTP 400 and the engine's own refusal text;
         # census: image input needs the --vision flag, which the harness launch does not pass
         images_reason=(
@@ -414,7 +419,12 @@ ENGINES = {
         label="Splash 1.5.0",
         version="1.5.0 (arm64-macos26)",
         supported=True,
-        caps=dict(anthropic=True, responses=True),
+        caps=dict(anthropic=True, responses=True, disk_cache=False),
+        disk_reason=(
+            "no disk tier as launched: Splash's SSD cache is off by default and the harness launch passes no "
+            "persistent-cache flag (bench_engines: max_cache_disk 0 (default)); the feature exists (census: "
+            "persistent cache on, cache dir, max cache disk) but is not enabled for this cell"
+        ),
     ),
     "omlx-0.7.3": dict(
         label="oMLX 0.7.3 (stable)",
@@ -456,7 +466,12 @@ ENGINES = {
         label="llama.cpp llama-server b12061 (Metal, UD-Q4_K_M GGUF)",
         version="b12061",
         supported=True,
-        caps=dict(anthropic=True, responses=True),
+        caps=dict(anthropic=True, responses=True, disk_cache=False),
+        disk_reason=(
+            "no automatic disk tier as launched: the llama.cpp server keeps its prompt cache in RAM slots; disk "
+            "save and restore need a slot-save path plus explicit slot save/restore calls (census), which the "
+            "harness does not make"
+        ),
     ),
     "lmstudio": dict(
         label="LM Studio (headless lms)",
@@ -505,6 +520,10 @@ BATCH_NAMES = {
     "B4": "B4 behaviour checks (once per engine)",
     "B5": "B5 agents (Claude Code x agentbench, Yunshu + 1 placeholder)",
 }
+# Engines whose restart cell cannot hit a disk tier as the harness launches them, with the evidence. One table for
+# the manifest (their restart cells are 'unsupported') and the audit (a restart cell that ran anyway shows
+# cached=0 as an expected, labelled outcome; cached>0 would contradict the evidence and fails).
+NO_DISK_TIER = {k: v["disk_reason"] for k, v in ENGINES.items() if v.get("disk_reason")}
 TOP_ENGINES = {"yunshu", "tf-1.2.1", "splash-1.5.0", "mlx-serve-26.11.1"}
 
 
@@ -521,7 +540,7 @@ def cell_status(eng, sp):
     if sp["kind"] == "json-schema" and caps.get("json_schema") is False:
         return UNS, "no JSON-schema constrained output (census json_schema false)"
     if sp["turns"] == "restart" and caps.get("disk_cache") is False:
-        return UNS, "no disk prefix-cache tier (census disk_prefix_cache false)"
+        return UNS, e.get("disk_reason") or "no disk prefix-cache tier (census disk_prefix_cache false)"
     if sp["conc"] > 1 and caps.get("concurrency") is False:
         return (
             UNV,

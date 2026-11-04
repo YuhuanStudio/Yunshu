@@ -31,7 +31,8 @@ import tfbench  # noqa: E402
 # Re-pinned 2026-11-04: yunshu-pb2 rows added (same config as yunshu; release date = commit 4f99270cae40),
 # and the cut step mirrors yunshu's decisions onto pb2 (CUT_MIRROR)
 # Re-pinned 2026-11-04: tf-1.2.1 image cells are unsupported (its measured refusal, wire-1108 B2), no longer cut
-REAL_MANIFEST_SHA = "907030801d216af09b8aa72155c89ce1d663fe5b8389f42c11e912f8efd27dca"
+# Re-pinned 2026-11-04: restart cells of tf-1.2.1, splash and llama.cpp are unsupported (no disk tier, evidence cited)
+REAL_MANIFEST_SHA = "4968c9e0f394d9cb1cb1a711733c1298d93ca2870ebe2205d931f542ac450028"
 
 
 def _real_manifest_bytes() -> bytes:
