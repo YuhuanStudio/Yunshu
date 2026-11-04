@@ -145,6 +145,8 @@ def progress(manifest: str, raw: str) -> list[dict]:
 
 
 HTML = r"""<title>Yunshu 全面對比</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+__REFRESH__
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
 /* Layout: instrument-panel report; summary strip, then curve panels, then the full table */
@@ -263,7 +265,24 @@ def main() -> int:
     ap.add_argument("--raw", required=True)
     ap.add_argument("--manifest", default="")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--refresh-sec", type=int, default=0, help="page reloads itself every N seconds (live view)")
+    ap.add_argument("--loop-sec", type=int, default=0, help="regenerate every N seconds until --until-pid exits")
+    ap.add_argument("--until-pid", type=int, default=0)
     a = ap.parse_args()
+    while True:
+        write_once(a)
+        if not a.loop_sec:
+            return 0
+        if a.until_pid:
+            try:
+                os.kill(a.until_pid, 0)
+            except OSError:
+                write_once(a)
+                return 0
+        time.sleep(a.loop_sec)
+
+
+def write_once(a) -> None:
     rows, meta = collect(a.raw)
     data = {
         "generated": time.strftime("%Y-%m-%d %H:%M"),
@@ -276,10 +295,14 @@ def main() -> int:
     os.makedirs(a.out, exist_ok=True)
     with open(os.path.join(a.out, "fullcmp_rows.json"), "w") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=1)
-    with open(os.path.join(a.out, "fullcmp_report.html"), "w") as fh:
-        fh.write(HTML.replace("__DATA__", json.dumps(data, ensure_ascii=False).replace("</", "<\\/")))
-    print(f"{len(rows)} rows, {sum(p['done'] for p in data['progress'])}/{sum(p['planned'] for p in data['progress'])} cell-reps done -> {a.out}")
-    return 0
+    refresh = f'<meta http-equiv="refresh" content="{a.refresh_sec}">' if a.refresh_sec else ""
+    page = HTML.replace("__REFRESH__", refresh).replace("__DATA__", json.dumps(data, ensure_ascii=False).replace("</", "<\\/"))
+    # the open browser tab reloads on its own: write a temp file and rename so it never reads half a page
+    final = os.path.join(a.out, "fullcmp_report.html")
+    with open(final + ".tmp", "w") as fh:
+        fh.write(page)
+    os.replace(final + ".tmp", final)
+    print(f"{time.strftime('%H:%M:%S')} {len(rows)} rows, {sum(p['done'] for p in data['progress'])}/{sum(p['planned'] for p in data['progress'])} cell-reps done -> {a.out}", flush=True)
 
 
 if __name__ == "__main__":
