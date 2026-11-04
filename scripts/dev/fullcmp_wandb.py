@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
-"""Stream a fullcmp run into Weights & Biases as CHARTS, unattended (CPU only; reads finished jsonl files).
+"""Stream a fullcmp run into Weights & Biases as native W&B curves, unattended (CPU only; reads jsonl files).
 
-Each round (only when a result file changed) it renders the comparison charts with matplotlib and logs them as
-images, so the W&B workspace shows real plots that update by themselves (the media panel always shows the
-newest round; its slider goes back in time):
-  charts/cold_ttft_<kind>        cold TTFT vs context, one line per engine (log scale)
-  charts/decode_<phase>_<kind>   decode tok/s vs context (cold, warm, turn2)
-  charts/turn2_ttft_<kind>       follow-up TTFT vs context (log scale)
-  charts/concurrency             aggregate tok/s at 2/4/8 concurrent requests (1K, distinct prompts)
-  charts/mixed                   mixed load (one long + short requests): aggregate tok/s and long-request TTFT
-  progress/*                     scalars over time: cell-reps done, % done
-It also logs one `cells` table (every cell x phase: medians, rep spread, cached tokens, labels) for lookups.
+Layout (one W&B group per raw root, so a project can hold several comparisons):
+  - one run per ENGINE (run name = engine id). Its history holds one row per point, with W&B custom x-axes
+    (define_metric step_metric), so the project workspace overlays every engine as its own colored line:
+        x = context_k   (1, 4, 8, 16, 32, 64, 128):  cold_ttft_s/<kind>, warm_ttft_s/<kind>, turn2_ttft_s/<kind>,
+                         decode_cold/<kind>, decode_warm/<kind>, decode_turn2/<kind>
+        x = concurrency (2, 4, 8):  conc_agg_tps/distinct, conc_agg_tps/same, conc_slowest_ttft_s/distinct,
+                         mixed_agg_tps, mixed_long_ttft_s
+    Its summary holds the engine's version, spec mode, cells done and labels.
+    Each round that sees new data rebuilds the engine runs (delete + re-log), so a curve always shows the current
+    medians over reps instead of appending duplicate points.
+  - one run named "progress" with time on the x axis: cells done, % done per batch, unsupported cells, and a
+    `cells` table (every cell x phase: medians, rep spread, cached tokens, labels).
 
     venv-wandb/bin/python scripts/dev/fullcmp_wandb.py --raw <raw root> --manifest <run>/manifest.jsonl \
-        --project yunshu-fullcmp --name <run name> --until-pid <driver pid>
+        --project yunshu-fullcmp --group <name> --until-pid <driver pid>
 
 Run under `taskpolicy -b nice -n 19` so it never shows up in a measured job's quiet gate. Needs `wandb login`
-once. Uploads aggregated numbers, labels and the rendered charts only (no prompts, outputs or logs).
+once. Uploads aggregated numbers and labels only (no prompts, outputs or logs).
 """
 from __future__ import annotations
 
 import argparse
-import io
 import os
 import sys
 import time
@@ -29,135 +30,80 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fullcmp_report as fr  # noqa: E402
 
-CTX_ORDER = ["1K", "4K", "8K", "16K", "32K", "64K", "128K"]
-COLORS = ["#0f6e63", "#d0742c", "#4a6fd1", "#a0438f", "#5d8a2f", "#b8902a", "#2f8fa8", "#c4453d",
-          "#6b5bb5", "#7d7d2b", "#3c6e8f", "#9a5a3a"]
+CTX_K = {"1K": 1, "4K": 4, "8K": 8, "16K": 16, "32K": 32, "64K": 64, "128K": 128}
 COLUMNS = ["batch", "family", "engine", "ctx", "conc", "kind", "out", "variant", "phase", "n",
            "ttft_s", "dec_tps", "agg_tps", "dec_min", "dec_max", "ttft_min", "ttft_max", "cached",
            "ttft_s_spread_pct", "dec_tps_spread_pct", "agg_tps_spread_pct", "label"]
+CTX_METRICS = [  # (metric prefix, phase, field)
+    ("cold_ttft_s", "cold", "ttft_s"), ("warm_ttft_s", "warm", "ttft_s"), ("turn2_ttft_s", "turn2", "ttft_s"),
+    ("decode_cold", "cold", "dec_tps"), ("decode_warm", "warm", "dec_tps"), ("decode_turn2", "turn2", "dec_tps"),
+]
 
 
-def color(engine: str) -> str:
-    try:
-        return COLORS[fr.ENGINE_ORDER.index(engine) % len(COLORS)]
-    except ValueError:
-        return "#777777"
-
-
-def _fig():
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(9, 5), dpi=110)
-    ax.grid(True, alpha=0.3)
-    return plt, fig, ax
-
-
-def _img(wandb, plt, fig):
-    buf = io.BytesIO()
-    fig.tight_layout()
-    fig.savefig(buf, format="png")
-    plt.close(fig)
-    buf.seek(0)
-    from PIL import Image
-
-    return wandb.Image(Image.open(buf))
-
-
-def ctx_chart(wandb, rows, kind, phase, key, title, ylabel, log=False):
-    plt, fig, ax = _fig()
-    drew = False
-    for eng in fr.ENGINE_ORDER:
-        pts = {r["ctx"]: r.get(key) for r in rows if r["engine"] == eng and r["phase"] == phase and r["conc"] == 1
-               and r["kind"] == kind and r["out"] == 512 and r["family"] in ("core", "ctx") and r.get(key)}
-        xs = [i for i, c in enumerate(CTX_ORDER) if c in pts]
-        if not xs:
+def engine_points(rows, engine):
+    """History rows for one engine: one row per context point, one per concurrency point."""
+    by_ctx = {}
+    for r in rows:
+        if (r["engine"] != engine or r["conc"] != 1 or r["out"] != 512 or r["family"] not in ("core", "ctx")
+                or r["ctx"] not in CTX_K):
             continue
-        ax.plot(xs, [pts[CTX_ORDER[i]] for i in xs], marker="o", color=color(eng), label=eng, linewidth=2)
-        drew = True
-    if not drew:
-        plt.close(fig)
-        return None
-    ax.set_xticks(range(len(CTX_ORDER)), CTX_ORDER)
-    ax.set_xlabel("context length")
-    ax.set_ylabel(ylabel)
-    if log:
-        ax.set_yscale("log")
-    ax.set_title(title)
-    ax.legend(fontsize=8, ncol=2)
-    return _img(wandb, plt, fig)
+        for prefix, phase, field in CTX_METRICS:
+            if r["phase"] == phase and r.get(field) is not None:
+                by_ctx.setdefault(CTX_K[r["ctx"]], {})[f"{prefix}/{r['kind']}"] = r[field]
+    by_conc = {}
+    for r in rows:
+        if r["engine"] != engine or r["ctx"] != "1K" and r["phase"] != "mixed":
+            continue
+        if r["phase"] == "conc" and r.get("agg_tps") is not None:
+            tag = "same" if r["family"] == "conc-same" else "distinct"
+            by_conc.setdefault(r["conc"], {})[f"conc_agg_tps/{tag}"] = r["agg_tps"]
+            if r.get("ttft_max") is not None:
+                by_conc[r["conc"]][f"conc_slowest_ttft_s/{tag}"] = r["ttft_max"]
+        if r["phase"] == "mixed" and r.get("agg_tps") is not None:
+            by_conc.setdefault(r["conc"], {})["mixed_agg_tps"] = r["agg_tps"]
+            if r.get("ttft_max") is not None:
+                by_conc[r["conc"]]["mixed_long_ttft_s"] = r["ttft_max"]
+    out = [{"context_k": k, **v} for k, v in sorted(by_ctx.items())]
+    out += [{"concurrency": n, **v} for n, v in sorted(by_conc.items())]
+    return out
 
 
-def conc_chart(wandb, rows):
-    plt, fig, ax = _fig()
-    levels = [2, 4, 8]
-    engines = [e for e in fr.ENGINE_ORDER if any(r["engine"] == e and r["phase"] == "conc" and r["family"] == "conc"
-                                                  and r["ctx"] == "1K" for r in rows)]
-    if not engines:
-        plt.close(fig)
-        return None
-    width = 0.8 / len(engines)
-    for i, eng in enumerate(engines):
-        vals = []
-        for n in levels:
-            v = [r.get("agg_tps") for r in rows if r["engine"] == eng and r["phase"] == "conc"
-                 and r["family"] == "conc" and r["ctx"] == "1K" and r["conc"] == n]
-            vals.append(v[0] if v and v[0] else 0)
-        ax.bar([x + i * width for x in range(len(levels))], vals, width, color=color(eng), label=eng)
-    ax.set_xticks([x + 0.4 - width / 2 for x in range(len(levels))], [f"{n} concurrent" for n in levels])
-    ax.set_ylabel("aggregate tok/s")
-    ax.set_title("Concurrent throughput (1K prompts, distinct)")
-    ax.legend(fontsize=8, ncol=2)
-    return _img(wandb, plt, fig)
+def rebuild_engine_runs(wandb, api, project, entity, group, rows, meta, prog):
+    path = f"{entity}/{project}" if entity else project
+    for old in api.runs(path, filters={"group": group, "jobType": "engine"}):
+        old.delete()
+    for eng in fr.ENGINE_ORDER:
+        pts = engine_points(rows, eng)
+        if not pts:
+            continue
+        run = wandb.init(project=project, entity=entity, group=group, job_type="engine", name=eng,
+                         reinit="create_new", config={"engine": eng, **(meta["engines"].get(eng) or {})})
+        run.define_metric("context_k")
+        run.define_metric("concurrency")
+        for prefix, _, _ in CTX_METRICS:
+            run.define_metric(f"{prefix}/*", step_metric="context_k")
+        for name in ("conc_agg_tps/*", "conc_slowest_ttft_s/*", "mixed_agg_tps", "mixed_long_ttft_s"):
+            run.define_metric(name, step_metric="concurrency")
+        for p in pts:
+            run.log(p)
+        done = sum(p["done"] for p in prog if p["engine"] == eng)
+        planned = sum(p["planned"] for p in prog if p["engine"] == eng)
+        labels = sorted({r["label"] for r in rows if r["engine"] == eng and r.get("label")})
+        run.summary.update({"cells_done": done, "cells_planned": planned, "labels": "; ".join(labels)[:2000]})
+        run.finish()
 
 
-def mixed_chart(wandb, rows):
-    mix = [r for r in rows if r["phase"] == "mixed"]
-    if not mix:
-        return None
-    plt, fig, ax = _fig()
-    engines = [e for e in fr.ENGINE_ORDER if any(r["engine"] == e for r in mix)]
-    xs = list(range(len(engines)))
-    agg = [next((r.get("agg_tps") or 0 for r in mix if r["engine"] == e), 0) for e in engines]
-    ttl = [next((r.get("ttft_max") or 0 for r in mix if r["engine"] == e), 0) for e in engines]
-    ax.bar(xs, agg, color=[color(e) for e in engines])
-    ax.set_xticks(xs, engines, rotation=30, ha="right", fontsize=8)
-    ax.set_ylabel("aggregate tok/s")
-    ax2 = ax.twinx()
-    ax2.plot(xs, ttl, "k^", label="long request TTFT (s)")
-    ax2.set_ylabel("long-request TTFT s")
-    ax2.legend(fontsize=8, loc="upper right")
-    ax.set_title("Mixed load (one long + short requests)")
-    return _img(wandb, plt, fig)
-
-
-def snapshot(wandb, run, raw: str, manifest: str) -> None:
-    rows, meta = fr.collect(raw)
-    prog = fr.progress(manifest, raw)
+def log_progress(wandb, prun, rows, meta, prog):
     done = sum(p["done"] for p in prog)
     planned = sum(p["planned"] for p in prog) or 1
-    log = {"progress/done": done, "progress/planned": planned, "progress/pct": 100.0 * done / planned,
+    log = {"progress/cells_done": done, "progress/cells_planned": planned, "progress/pct": 100.0 * done / planned,
            "progress/unsupported_cells": len(meta["unsupported"])}
-    for kind in ("code", "prose"):
-        for name, phase, key, title, ylabel, lg in (
-            (f"charts/cold_ttft_{kind}", "cold", "ttft_s", f"Cold TTFT vs context ({kind})", "seconds (log)", True),
-            (f"charts/decode_cold_{kind}", "cold", "dec_tps", f"Cold decode speed ({kind})", "tok/s", False),
-            (f"charts/decode_warm_{kind}", "warm", "dec_tps", f"Warm decode speed ({kind})", "tok/s", False),
-            (f"charts/decode_turn2_{kind}", "turn2", "dec_tps", f"Follow-up (turn 2) decode speed ({kind})", "tok/s", False),
-            (f"charts/turn2_ttft_{kind}", "turn2", "ttft_s", f"Follow-up (turn 2) TTFT ({kind})", "seconds (log)", True),
-        ):
-            img = ctx_chart(wandb, rows, kind, phase, key, title, ylabel, lg)
-            if img is not None:
-                log[name] = img
-    for name, fn in (("charts/concurrency", conc_chart), ("charts/mixed", mixed_chart)):
-        img = fn(wandb, rows)
-        if img is not None:
-            log[name] = img
+    for b in ("B1", "B2"):
+        bd = sum(p["done"] for p in prog if p["batch"] == b)
+        bp = sum(p["planned"] for p in prog if p["batch"] == b) or 1
+        log[f"progress/{b}_pct"] = 100.0 * bd / bp
     log["cells"] = wandb.Table(columns=COLUMNS, data=[[r.get(c) for c in COLUMNS] for r in rows])
-    run.log(log)
-    run.summary.update({"updated": time.strftime("%Y-%m-%d %H:%M:%S")})
+    prun.log(log)
 
 
 def alive(pid: int) -> bool:
@@ -175,32 +121,41 @@ def main() -> int:
     ap.add_argument("--raw", required=True)
     ap.add_argument("--manifest", default="")
     ap.add_argument("--project", default="yunshu-fullcmp")
-    ap.add_argument("--name", required=True)
+    ap.add_argument("--entity", default=None)
+    ap.add_argument("--group", required=True)
     ap.add_argument("--interval", type=int, default=900)
     ap.add_argument("--until-pid", type=int, default=0)
     ap.add_argument("--once", action="store_true")
     a = ap.parse_args()
     import wandb
 
-    run = wandb.init(project=a.project, name=a.name, config={"raw": a.raw, "manifest": a.manifest},
-                     dir=os.environ.get("WANDB_DIR", "/Volumes/P5Plus/yunshu-build/wandb"))
+    os.environ.setdefault("WANDB_SILENT", "true")
+    api = wandb.Api()
+    entity = a.entity or api.default_entity
     last_sig = None
+    final = False
     while True:
         try:
-            # skip when no result file changed (a snapshot parses every file)
             sig = max((e.stat().st_mtime for d in os.scandir(a.raw) if d.is_dir() for e in os.scandir(d.path)),
                       default=0)
-            if sig != last_sig:
-                snapshot(wandb, run, a.raw, a.manifest)
+            if sig != last_sig or final:
+                rows, meta = fr.collect(a.raw)
+                prog = fr.progress(a.manifest, a.raw)
+                rebuild_engine_runs(wandb, api, a.project, entity, a.group, rows, meta, prog)
+                prun = wandb.init(project=a.project, entity=entity, group=a.group, job_type="progress",
+                                  name="progress", id=f"progress-{a.group}", resume="allow", reinit="create_new")
+                log_progress(wandb, prun, rows, meta, prog)
+                prun.finish()
                 last_sig = sig
+                print(f"{time.strftime('%H:%M:%S')} uploaded {len(rows)} rows", flush=True)
         except Exception as exc:  # noqa: BLE001 - keep streaming; a half-written cell file is retried next round
-            print(f"snapshot failed: {exc}", file=sys.stderr, flush=True)
-        if a.once or not alive(a.until_pid):
-            if not a.once:
-                snapshot(wandb, run, a.raw, a.manifest)
+            print(f"round failed: {exc!r}", file=sys.stderr, flush=True)
+        if a.once or final:
             break
+        if not alive(a.until_pid):
+            final = True  # one last upload after the run ended
+            continue
         time.sleep(a.interval)
-    run.finish()
     return 0
 
 
