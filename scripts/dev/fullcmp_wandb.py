@@ -72,7 +72,7 @@ def snapshot(wandb, run, raw: str, manifest: str, step: int) -> None:
     for r in rows:
         if r["phase"] in ("conc", "mixed") and r.get("agg_tps") is not None:
             log[f"conc/{r['family']}/{r['ctx']}/c{r['conc']}/{r['engine']}"] = r["agg_tps"]
-    run.log(log, step=step)
+    run.log(log)  # wandb advances its own step; an explicit step below a resumed run step is dropped
     run.summary.update({"engines": meta["engines"], "updated": time.strftime("%Y-%m-%d %H:%M:%S")})
 
 
