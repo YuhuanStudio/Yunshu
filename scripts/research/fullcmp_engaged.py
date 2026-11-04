@@ -98,6 +98,17 @@ def validate_table(table) -> list[str]:
                     re.compile(str(pat))
                 except re.error as exc:
                     problems.append(f"{where}: fallback bad regex: {exc}")
+            for j, nd in enumerate(m.get("no_draft", []) or []):
+                # constrained / special cells an engine legitimately decodes without drafting: the engine's own
+                # feature line is the evidence (see _constrained_ar)
+                if not (isinstance(nd, dict) and nd.get("kinds") and nd.get("feature_regex") and nd.get("reason")
+                        and str(nd.get("source_ref", "")).strip()):
+                    problems.append(f"{where}: no_draft[{j}] needs kinds, feature_regex, reason and source_ref")
+                    continue
+                try:
+                    re.compile(str(nd["feature_regex"]))
+                except re.error as exc:
+                    problems.append(f"{where}: no_draft[{j}] bad regex: {exc}")
     return problems
 
 
@@ -252,10 +263,57 @@ def evaluate(engine, mode, log, rows, table=None, probe_text=None, ready_offset=
     if good:
         line, kind, src = good[0]
         return result(mode, line, kind, src)
+    constrained = _constrained_ar(m, engine, log, rows, ready_offset)
+    if constrained is not None:
+        line, label = constrained
+        out = result("ar", line, "constrained_ar", "slice")
+        out["label"] = label
+        return out
     if loaded:
         line, kind, src = loaded[0]
         return result(UNVERIFIED, line, "startup_only", src)
     return result(UNVERIFIED, None, None, None)
+
+
+def _constrained_ar(m, engine, log, rows, ready_offset):
+    """(feature line, label) when this cell legitimately decoded without drafting, else None.
+
+    Kind cells (json-schema, tool-chat) and thinking cells may run without a draft: mlx-serve turns MTP off under a
+    grammar mask, for example. The evidence decides: every measured row is of a kind the engine's `no_draft` entry
+    names, the engine's own feature line appears once per measured request after the readiness requests, and NO
+    per-request speculative line exists for the measured requests. Per-request spec evidence present -> the spec mode
+    (handled earlier); feature line absent -> None (unverified, the cell fails); never a guess."""
+    rules = m.get("no_draft") or []
+    if not rules or not rows:
+        return None
+    kinds = {str(r.get("family") or r.get("kind") or "") for r in rows}
+    start = ready_offset or 0
+    for rule in rules:
+        if not kinds <= set(rule["kinds"]):
+            continue
+        feature = [h for h in re.finditer(str(rule["feature_regex"]), log[start:])]
+        if len(feature) < len(rows):
+            continue
+        spec_hits = 0
+        for ev in m["evidence"]:
+            if ev.get("kind") == "acceptance_regex" and ev.get("per_request"):
+                found = list(re.finditer(str(ev["pattern_or_path"]), log[start:]))
+                spec_hits += max(0, len(found) - READINESS_REQUESTS)
+        if spec_hits:
+            continue  # some measured request did draft: not an 'ar' cell
+        hit = feature[-1]
+        line = _line_at(log, start + hit.start(), start + hit.end())
+        label = (
+            f"ar (constrained decoding: {engine_display(engine)} {rule['reason']}; evidence: no per-request spec line + "
+            f"{rule.get('name', 'feature')} line)"
+        )
+        return line, label
+    return None
+
+
+def engine_display(engine) -> str:
+    """The engine name without its version (labels read 'mlx-serve does not draft ...')."""
+    return re.sub(r"[-_ ]?\d.*$", "", manifest_key(engine)) or str(engine)
 
 
 def _correlate(ev, log, rows, ready_offset):

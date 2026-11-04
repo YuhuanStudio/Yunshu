@@ -817,7 +817,12 @@ def check_engaged_mode(run: Run) -> GuardResult:
             kind = ev.get("evidence_kind")
             why = "loaded only (startup line, no per-request evidence)" if kind == "startup_only" else "no evidence"
             res.fail(cell, f"r{cf.rep}: engaged mode unverified: {why}")
-        elif got != want and not (bool(concurrent_records) and got == "ar" and str(ev.get("label") or "").startswith("ar (")):
+        elif got != want and not (
+            (bool(concurrent_records) and got == "ar" and str(ev.get("label") or "").startswith("ar ("))
+            # a constrained kind cell (json-schema / tool-chat grammar) the engine decodes without drafting: the
+            # evidence is its own feature line + no per-request spec line (fullcmp_engaged._constrained_ar)
+            or (got == "ar" and ev.get("evidence_kind") == "constrained_ar")
+        ):
             # only single-request cells must match the configured mode; a concurrent cell whose evidence says the
             # concurrent path does not draft ('ar (...)') passes with that label carried into the table
 

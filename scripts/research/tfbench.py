@@ -686,7 +686,9 @@ class Srv:
         self.engaged_evidence_source = ev["source"]
         self.engaged_label = ev.get("label")
         self.engaged_per_row = (ev.get("stats") or {}).get("per_row", [])  # reported with the base mode (e.g. 'dflash (kflash tree)')
-        derived_ar = bool(concurrent) and not rows and self.engaged_spec_mode == "ar"
+        derived_ar = (bool(concurrent) and not rows and self.engaged_spec_mode == "ar") or (
+            self.engaged_spec_mode == "ar" and self.engaged_evidence_kind == "constrained_ar"
+        )  # a labelled 'ar': a concurrent cell, or a constrained kind cell the engine decodes without drafting
         if final and self.engaged_spec_mode != self.requested_spec_mode and not derived_ar:
             raise RuntimeError(
                 f"requested spec={self.requested_spec_mode}, engaged={self.engaged_spec_mode} "

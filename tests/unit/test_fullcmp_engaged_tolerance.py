@@ -122,3 +122,101 @@ def test_each_real_splash_kind_cell_verdict_is_dflash(kind):
     log = "Decode cycles verify every row of the draft's block (--verify-rows auto)\n" + "\n".join([*ready, "13:44:58 " + line]) + "\n"
     ev = fe.evaluate("splash-1.5.0", "dflash", log, _rows(pt), fe.load_table(), ready_offset=0)
     assert ev["engaged_mode"] == "dflash", (kind, ev)
+
+
+# --- constrained kind cells an engine decodes without drafting (wire-1108rest mlx-serve, kind/json-schema) ------------
+
+MLX_SERVE_JSON = (Path(__file__).parent / "fixtures" / "mlx_serve_json_schema_cell.server.log").read_text()
+MLX_SERVE_READY = MLX_SERVE_JSON.index("POST /v1/chat/completions")  # the log offset after readiness
+
+
+def _json_row(pt=8310):
+    return {"pt": pt, "ct": 190, "cached": 0, "family": "json-schema", "kind": "json-schema"}
+
+
+def test_mlx_serve_json_schema_cell_is_ar_with_the_constrained_label():
+    """Failing-before: the cell ended 'requested mtp, engaged=unverified (startup_only)' and aborted the chunk. The real
+    log has '[grammar] enforcing JSON schema from token 0', decodes at 30.1 tok/s and prints no [spec-stats] line for
+    the request: the verdict is a labelled 'ar'."""
+    ev = fe.evaluate("mlx-serve-26.11.1", "mtp", MLX_SERVE_JSON, [_json_row()], fe.load_table(), ready_offset=MLX_SERVE_READY)
+    assert ev["engaged_mode"] == "ar" and ev["evidence_kind"] == "constrained_ar", ev
+    assert ev["label"].startswith("ar (constrained decoding: mlx-serve does not draft under a JSON schema")
+    assert "no per-request spec line + grammar line" in ev["label"]
+    assert "[grammar] enforcing JSON schema" in ev["matched_line"]
+
+
+def test_without_the_engines_feature_line_the_same_cell_stays_unverified():
+    log = MLX_SERVE_JSON.replace("[grammar] enforcing JSON schema from token 0", "[grammar] other message")
+    ev = fe.evaluate("mlx-serve-26.11.1", "mtp", log, [_json_row()], fe.load_table(), ready_offset=MLX_SERVE_READY)
+    assert ev["engaged_mode"] == fe.UNVERIFIED  # absent + no explanation: fail
+
+
+def test_per_request_spec_evidence_beats_the_constrained_label():
+    spec = (
+        "  [spec-stats] mode=mtp attempts=40 accepts=60 avg_per_round=1.50 per_draft_pct=60.0% depth=6 drafted=100 "
+        "ext_rounds=0 partial_rounds=0 runtime_disabled=false reason=none adaptive=undecided\n"
+    )
+    log = MLX_SERVE_JSON.replace("  <- 8310+190 tokens streamed", spec + "  <- 8310+190 tokens streamed")
+    ev = fe.evaluate("mlx-serve-26.11.1", "mtp", log, [_json_row()], fe.load_table(), ready_offset=MLX_SERVE_READY)
+    assert ev["engaged_mode"] == "mtp" and ev["evidence_kind"] != "constrained_ar", ev
+
+
+def test_a_plain_kind_cell_never_gets_the_constrained_label():
+    row = {"pt": 8310, "ct": 190, "cached": 0, "family": "cjk", "kind": "cjk"}
+    ev = fe.evaluate("mlx-serve-26.11.1", "mtp", MLX_SERVE_JSON, [row], fe.load_table(), ready_offset=MLX_SERVE_READY)
+    assert ev["engaged_mode"] == fe.UNVERIFIED
+
+
+def test_the_in_job_check_accepts_the_labelled_ar_instead_of_aborting_the_chunk(tmp_path, monkeypatch):
+    import types
+
+    import tfbench as tb
+
+    monkeypatch.setenv("TFB_FULLCMP", "1")
+    srv = object.__new__(tb.Srv)
+    srv.engine = "mlx-serve-26.11.1"
+    srv.requested_spec_mode = "mtp"
+    srv.log = tmp_path / "live.log"
+    srv.log.write_text(MLX_SERVE_JSON)
+    srv.ready_log_offset = MLX_SERVE_READY
+    srv.probe_text = lambda: ""
+    srv.verify_spec_mode(final=True, rows=[_json_row()])  # no RuntimeError
+    assert srv.engaged_spec_mode == "ar" and srv.engaged_evidence_kind == "constrained_ar"
+    assert srv.engaged_label.startswith("ar (constrained decoding")
+    assert types  # keep the import local
+
+
+def test_the_audit_passes_a_constrained_ar_cell_with_its_label(tmp_path):
+    """The audit re-derives the verdict from the cell's slice: the labelled 'ar' of a constrained kind cell passes
+    (configured 'mtp'), a plain cell with the same log does not."""
+    import json
+
+    import fullcmp_audit as fa
+
+    ev = fe.evaluate("mlx-serve-26.11.1", "mtp", MLX_SERVE_JSON, [_json_row()], fe.load_table(), ready_offset=MLX_SERVE_READY)
+    path = tmp_path / "c-r0.jsonl"
+    path.write_text(json.dumps({"part": "session"}) + "\n")
+    (tmp_path / "c-r0.server.log").write_text(MLX_SERVE_JSON)
+    header = {
+        "part": "session", "server_log_ready_offset": MLX_SERVE_READY, "engaged_spec_mode": "ar",
+        "engaged_log_line": ev["matched_line"], "engaged_evidence_source": ev["source"],
+        "requested_spec_mode": "mtp", "spec_mode_expected": "mtp",
+    }
+
+    def run(row):
+        cell = {"cell": "B2.kind.mlx-serve.json-schema", "engine": "mlx-serve-26.11.1", "spec_mode": "mtp", "group": "g"}
+        cf = fa.CellFile(cell, 0, path, header, [row])
+        return fa.check_engaged_mode(fa.Run(manifest={}, files=[cf], missing=[], extra=[], parse_errors=[]))
+
+    assert run(_json_row()).violations == []
+    plain = {"pt": 8310, "ct": 190, "cached": 0, "family": "cjk", "kind": "cjk"}
+    assert run(plain).violations  # not a constrained kind: the same log is unverified
+
+
+def test_the_table_validates_and_a_malformed_no_draft_entry_is_rejected():
+    table = fe.load_table()
+    assert table is not None
+    bad = {"engines": {"x": {"modes": {"mtp": {"evidence": [{"kind": "log_regex", "pattern_or_path": "a", "source_ref": "s",
+                                                           "per_request": False, "startup_sufficient": True,
+                                                           "confidence": "c"}], "no_draft": [{"kinds": ["json-schema"]}]}}}}}
+    assert any("no_draft[0]" in p for p in fe.validate_table(bad))

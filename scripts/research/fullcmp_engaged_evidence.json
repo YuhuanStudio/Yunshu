@@ -149,7 +149,19 @@
               "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-mlx-serve-26.11.1-decode-0.log"
             }
           ],
-          "fallback": []
+          "fallback": [],
+          "no_draft": [
+            {
+              "name": "grammar",
+              "kinds": [
+                "json-schema",
+                "tool-chat"
+              ],
+              "feature_regex": "\\[grammar\\] enforcing [^\\n]*",
+              "reason": "does not draft under a JSON schema or tool grammar (the token mask replaces the draft path)",
+              "source_ref": "wire-1108rest mlx-serve-26.11.1 B2.kind...json-schema server log: '[grammar] enforcing JSON schema from token 0' then '<- 8310+190 tokens streamed [prefill: 1003.1 tok/s, decode: 30.1 tok/s]' with no mtp= or [spec-stats] line for the request (fixture tests/unit/fixtures/mlx_serve_json_schema_cell.server.log)"
+            }
+          ]
         }
       },
       "log_source": "~/.mlx-serve/logs/mlx-serve-<port>.log (or --log-file PATH), default --log-level info. No flag needed for [spec-stats]: the dashboard reads it from the file.",
