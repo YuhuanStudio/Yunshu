@@ -1640,12 +1640,20 @@ def _conc_same_rows(cached, pts):
     ]
 
 
-def test_conc_same_request_zero_cached_fails():
-    # request 0 of a trial must be a miss: it primes the shared prompt
+def test_conc_same_trial_with_every_request_cached_fails():
+    # the trial's first arrival must be a miss; if all n requests hit, the prompt was primed earlier
+    rows = _conc_same_rows([512, 512, 512, 512], [1024] * 4)
+    run = _fake_run([_cf({"cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
+                         {"part": "session", "fresh_process": True}, rows)])
+    assert any("first arrival must be a miss" in v for v in fa.check_cold_cache(run).violations)
+
+
+def test_conc_same_request_zero_cached_passes_when_another_request_is_the_miss():
+    # server order is arbitrary: index 0 may be processed after a sibling that was the first arrival
     rows = _conc_same_rows([512, 0, 512, 512], [1024] * 4)
     run = _fake_run([_cf({"cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
                          {"part": "session", "fresh_process": True}, rows)])
-    assert any("request 0" in v for v in fa.check_cold_cache(run).violations)
+    assert fa.check_cold_cache(run).violations == []
 
 
 def test_conc_same_later_requests_may_hit_the_shared_prefix_only():

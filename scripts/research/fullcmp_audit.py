@@ -931,6 +931,7 @@ def _shared_prefix_cell(cell: str) -> bool:
 def check_cold_cache(run: Run) -> GuardResult:
     """Guard 8: cold cells are a fresh process with server-reported cached_tokens == 0."""
     res = GuardResult("cold_cache")
+    same_groups: dict = {}
     for cf in run.files:
         cell = cf.cell["cell"]
         if cf.header is not None:
@@ -951,16 +952,16 @@ def check_cold_cache(run: Run) -> GuardResult:
                         f"r{cf.rep} cold: cached={cached!r}, must be server-reported 0",
                     )
             elif phase == "conc" and _shared_prefix_cell(cell):
-                # conc-same: request 0 of a trial primes the shared prompt and must be a miss; a later
-                # request may hit only that shared prefix (cached cannot exceed its prompt tokens).
+                # conc-same: the n requests of one trial send the same prompt concurrently, so which one
+                # the server processes first is not record order. Per trial, the first arrival is a miss
+                # (min cached == 0 over the trial); every request's cached stays within its prompt tokens.
                 pt = r.get("pt")
                 if isinstance(cached, bool) or not isinstance(cached, int):
                     res.fail(cell, f"r{cf.rep} conc-same: cached count not recorded (fail closed)")
-                elif r.get("req_index") == 0 and cached != 0:
-                    res.fail(cell, f"r{cf.rep} conc-same request 0: cached={cached}, must be 0 "
-                                   "(the trial's first request is a miss)")
-                elif r.get("req_index") != 0 and isinstance(pt, int) and cached > pt:
+                elif isinstance(pt, int) and cached > pt:
                     res.fail(cell, f"r{cf.rep} conc-same: cached={cached} > prompt tokens {pt}")
+                else:
+                    same_groups.setdefault((cf.rep, cf.cell["cell"], r.get("trial")), []).append(cached)
             elif phase in ("conc", "mixed"):
                 # concurrent and mixed requests: every trial's prompts are new to the server (the
                 # trial salt), so no request may hit the prefix cache (2026-11-04: trial 1 of a mixed
@@ -987,6 +988,13 @@ def check_cold_cache(run: Run) -> GuardResult:
                     res.fail(cell, f"r{cf.rep} {phase}: cached count not recorded")
             else:
                 res.fail(cell, f"r{cf.rep}: unknown phase {phase!r}")
+    for (rep, cell, trial), cached_list in same_groups.items():
+        if min(cached_list) != 0:
+            res.fail(
+                cell,
+                f"r{rep} trial {trial}: every conc-same request cached (min {min(cached_list)}); "
+                "the trial's first arrival must be a miss",
+            )
     return res
 
 
