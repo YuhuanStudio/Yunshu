@@ -369,7 +369,7 @@ class Srv:
         self.pin = None
         self.observe = None  # fullcmp Yunshu: True (profile) or False (timed); see observe_state
         if fp.fullcmp_mode(os.environ) and self._is_yunshu(engine):
-            self.pin = fp.require_yunshu_pin(os.environ)
+            self.pin = fp.require_yunshu_pin(os.environ, engine=engine)
             self.observe = fp.observe_state(os.environ, True)
         self.engine, self.port = engine, free_port()
         assert_port_free(self.port)  # fail closed before any dir or process is created

@@ -472,6 +472,14 @@ class Job:
         ]
 
 
+def engine_pin(engine: str, pin: dict) -> dict:
+    """The pin whose tree a cell of this engine runs from: the Phase B preview has its own pin
+    (fullcmp_provenance.pin_path_for); every other engine keeps the given pin (dev0 for Yunshu)."""
+    if engine != "yunshu-pb2":
+        return pin
+    return json.loads(fp.pin_path_for(engine).read_text())
+
+
 def cell_env(
     engine: str,
     pin: dict,
@@ -488,7 +496,7 @@ def cell_env(
     the same place the audit reads it beside each cell file. GPUQ_JOB_ID is not set here: gpuq
     exports it to the current daemon's jobs only. TFB_JOB_LABEL (the label this job was
     submitted under) plus GPUQ_DIR let tfbench resolve the job id when it is missing."""
-    harness = pin["launch"]["harness_env"]
+    harness = engine_pin(engine, pin)["launch"]["harness_env"]
     env = [
         "TFB_FULLCMP=1",
         f"TFB_TELEMETRY_DIR={telemetry_root or RAW_ROOT}",

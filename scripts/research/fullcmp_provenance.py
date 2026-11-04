@@ -61,9 +61,24 @@ def same_path(a: str, b: str) -> bool:
     )
 
 
-def require_yunshu_pin(environ, pin_path=None) -> dict:
-    """Return the pin for this cell's Yunshu server; refuse anything that is not the pinned tree."""
-    pin_path = pin_path or PIN_PATH  # resolved per call (tests redirect it)
+PB2_PIN_PATH = Path(
+    "/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103/yunshu_pb2_pin.json"
+)
+
+def pin_path_for(engine=None) -> Path:
+    """The pin file of one Yunshu engine id. Unknown Yunshu-like ids fail closed; the default
+    (no engine, or the dev0 ids) is the dev0 pin, resolved per call so tests can redirect it."""
+    if engine in (None, "yunshu", "yunshu-main"):
+        return PIN_PATH
+    if engine == "yunshu-pb2":
+        return PB2_PIN_PATH
+    raise ProvenanceError(f"no Yunshu pin for engine {engine!r}")
+
+
+def require_yunshu_pin(environ, pin_path=None, engine=None) -> dict:
+    """Return the pin for this cell's Yunshu server; refuse anything that is not the pinned tree.
+    The pin is the engine's own (pin_path_for): a cell of one tree never validates against another."""
+    pin_path = pin_path or pin_path_for(engine)
     bin_path = environ.get("TFB_YUNSHU_BIN")
     src = environ.get("TFB_YUNSHU_SRC")
     if not bin_path or not src:
@@ -96,6 +111,7 @@ def require_yunshu_pin(environ, pin_path=None) -> dict:
     if not os.path.isfile(pin_python):
         raise ProvenanceError(f"pinned python missing: {pin_python}")
     return {
+        "engine": engine or "yunshu",
         "python": pin_python,
         "version": pin_version,
         "git_sha": pin_sha,
