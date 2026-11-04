@@ -220,3 +220,102 @@ def test_the_table_validates_and_a_malformed_no_draft_entry_is_rejected():
                                                            "per_request": False, "startup_sufficient": True,
                                                            "confidence": "c"}], "no_draft": [{"kinds": ["json-schema"]}]}}}}}
     assert any("no_draft[0]" in p for p in fe.validate_table(bad))
+
+
+# --- concurrent cells: a request that drafted with 0 accepted is still speculative decoding (wire-1108c8 mlx-serve c8) ----
+
+MLX_SERVE_C8 = (Path(__file__).parent / "fixtures" / "mlx_serve_conc_c8.server.log").read_text()
+MLX_SERVE_C8_READY = 3702  # the cell's recorded server_log_ready_offset
+
+
+def _c8_records():
+    req = {"pt": 1024, "ct": 512}
+    return [{"part": "conc", "n": 8, "requests": [dict(rid=i, **req) for i in range(8)]} for _ in range(2)]
+
+
+def _spec_lines(log):
+    rx = re.compile(r"\[spec-stats\] mode=mtp attempts=(\d+) accepts=(\d+) .*? drafted=(\d+)")
+    return [(int(a), int(c), int(d)) for a, c, d in rx.findall(log[MLX_SERVE_C8_READY:])][2:]  # past the readiness pings
+
+
+def test_mlx_serve_c8_cell_passes_with_the_drafted_share_label():
+    """Failing-before: 'concurrent conc n=8: request 3: value 0.0 not above 0.0' aborted the cell: under --max-concurrent 8
+    the per-request spec-stats are tiny ('attempts=1 accepts=0 drafted=1'). Every request matched its line, so the cell
+    passes and the label carries the drafted share."""
+    lines = _spec_lines(MLX_SERVE_C8)
+    assert len(lines) == 16 and any(c == 0 for _a, c, _d in lines)  # the real log does contain accepts=0 requests
+    ev, problems = fe.concurrent_check(fe.load_table(), "mlx-serve-26.11.1", "mtp", MLX_SERVE_C8, _c8_records(), MLX_SERVE_C8_READY)
+    assert problems == [], problems
+    drafted = [x for x in lines if x[2] > 0]
+    pct = round(100.0 * sum(c for _a, c, _d in drafted) / sum(d for _a, _c, d in drafted))
+    assert ev["engaged_mode"] == "mtp"
+    assert ev["label"] == f"mtp (drafted on {len(drafted)} of 16 requests; {pct}% of tokens accepted)"
+    assert fe.acceptance_proven(ev) is True
+
+
+def test_a_request_with_drafted_zero_is_a_no_draft_request_not_a_failure():
+    base = (
+        "  [spec-stats] mode=mtp attempts={a} accepts={c} avg_per_round=0.50 per_draft_pct=50.0% depth=6 drafted={d} "
+        "ext_rounds=0 partial_rounds=0 runtime_disabled=false reason=none adaptive=undecided\n"
+    )
+    warm = base.format(a=5, c=5, d=5) * 2
+    reqs = [{"rid": i, "pt": 1024, "ct": 512} for i in range(4)]
+    recs = [{"part": "conc", "n": 4, "requests": reqs}]
+    log = warm + base.format(a=2, c=1, d=2) + base.format(a=0, c=0, d=0) + base.format(a=1, c=0, d=1) + base.format(a=3, c=3, d=3)
+    ev, problems = fe.concurrent_check(fe.load_table(), "mlx-serve-26.11.1", "mtp", log, recs, 0)
+    assert problems == [] and ev["engaged_mode"] == "mtp"
+    assert ev["label"] == "mtp (drafted on 3 of 4 requests; 67% of tokens accepted)"  # (1+0+3) / (2+1+3)
+    none = warm + base.format(a=0, c=0, d=0) * 4
+    ev, problems = fe.concurrent_check(fe.load_table(), "mlx-serve-26.11.1", "mtp", none, recs, 0)
+    assert problems == [] and ev["engaged_mode"] == "ar" and ev["label"] == "ar (concurrent path does not draft)"
+
+
+def test_an_unmatched_line_or_a_count_mismatch_still_fails_the_concurrent_cell():
+    log = MLX_SERVE_C8[:MLX_SERVE_C8_READY] + "".join(
+        ln + "\n" for ln in MLX_SERVE_C8[MLX_SERVE_C8_READY:].splitlines() if "[spec-stats] mode=mtp" in ln
+    )
+    short = "\n".join(log.splitlines()[:-3]) + "\n"  # three requests lost their line
+    ev, problems = fe.concurrent_check(fe.load_table(), "mlx-serve-26.11.1", "mtp", short, _c8_records(), MLX_SERVE_C8_READY)
+    assert problems and ev["engaged_mode"] == fe.UNVERIFIED
+
+
+def test_tensorfold_done_lines_expose_the_drafted_count():
+    rx = re.compile(_item("tf-1.2.1", "dflash")["pattern_or_path"])
+    m = rx.search("[tensorfold] done chatcmpl-a prompt=15 cached=0 tokens=10 rounds=1 accepted=9/15 ttft=0.037")
+    assert m and m.group("accepted") == "9" and m.group("drafted") == "15"
+
+
+KAPITSA_C8 = (Path(__file__).parent / "fixtures" / "kapitsa_conc_c8.server.log").read_text()
+KAPITSA_C8_READY = 2825  # the cell's recorded server_log_ready_offset (launched --slots 8 --context 3072 --private)
+
+
+def test_kapitsa_c8_cell_where_almost_no_slot_drafts_passes_with_the_share_label():
+    """Failing-before (wire-1108c8): 'request 0: value 1.0 not above 1.0' aborted the cell. With 8 slots busy 15 of the 16
+    requests log '1.00 tok/cycle' (KFlash does not draft) and one logs 1.01: no-draft requests, and the cell passes with
+    its drafted share. A cell where all 16 were 1.00 is the labelled ar (next test)."""
+    ev, problems = fe.concurrent_check(fe.load_table(), "kapitsa-0.2.26", "dflash", KAPITSA_C8, _c8_records(), KAPITSA_C8_READY)
+    assert problems == [], problems
+    assert ev["engaged_mode"] == "dflash" and ev["label"] == "dflash (drafted on 1 of 16 requests)"
+    assert sum(1 for r in ev["stats"]["per_row"] if r["drafted_request"]) == 1 and len(ev["stats"]["per_row"]) == 16
+
+
+def test_kapitsa_c8_cell_where_no_slot_drafts_is_the_labelled_ar():
+    log = re.sub(r"1\.01 tok/cycle", "1.00 tok/cycle", KAPITSA_C8)
+    ev, problems = fe.concurrent_check(fe.load_table(), "kapitsa-0.2.26", "dflash", log, _c8_records(), KAPITSA_C8_READY)
+    assert problems == [], problems
+    assert ev["engaged_mode"] == "ar" and ev["label"] == "ar (concurrent path does not draft)"
+    assert all(r["drafted_request"] is False for r in ev["stats"]["per_row"])
+
+
+def test_kapitsa_requests_above_one_token_per_cycle_are_drafted_requests():
+    line = (
+        "[kapitsa] chat: prompt 1024 (cached 0) in 900 ms (x), 512 tokens in 9000 ms (56.9 tok/s), length, {tpc} tok/cycle, "
+        "KFlash (DFlash2): 100 cycles\n"
+    )
+    warm = line.format(tpc="4.50") * 2
+    recs = [{"part": "conc", "n": 4, "requests": [{"rid": i, "pt": 1024, "ct": 512} for i in range(4)]}]
+    log = warm + line.format(tpc="1.00") + line.format(tpc="2.30") + line.format(tpc="1.00") + line.format(tpc="3.10")
+    ev, problems = fe.concurrent_check(fe.load_table(), "kapitsa-0.2.26", "dflash", log, recs, 0)
+    assert problems == [] and ev["engaged_mode"] == "dflash"
+    assert ev["label"] == "dflash (drafted on 2 of 4 requests)"  # no drafted count on this line: no accepted percentage
+    assert fe.acceptance_proven(ev) is True

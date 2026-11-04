@@ -424,6 +424,7 @@ def _merge_segments(raw):
             merged = dict(seg)
             merged["ct"] = sum(p.get("ct") or 0 for p in segs)
             merged["value"] = sum(p.get("value") or 0 for p in segs if p.get("finish") != CALIBRATION_FINISH)
+            merged["drafted"] = sum(p.get("drafted") or 0 for p in segs if p.get("finish") != CALIBRATION_FINISH)
             merged["calibration_tokens"] = sum(p.get("ct") or 0 for p in parts if p.get("finish") == CALIBRATION_FINISH)
             merged["segments"] = len(segs)
             out.append(merged)
@@ -463,12 +464,20 @@ def _done_candidates(item, log, ready_offset, skip=READINESS_REQUESTS):
             if key in names and hit.group(key):
                 ct = int(hit.group(key).replace(",", ""))
                 break
+        drafted = None
+        if "drafted" in names and hit.group("drafted"):
+            try:
+                drafted = int(float(hit.group("drafted").replace(",", "")))
+            except ValueError:
+                drafted = None
         raw.append({"line": _line_at(log, hit.start(), hit.end()), "value": value, "prompt": prompt, "ct": ct,
+                    "drafted": drafted,
                     "uid": hit.group("uid") if "uid" in names else None,
                     "finish": hit.group("finish") if "finish" in names else None})
     if "uid" in names and "finish" in names:
         raw = _merge_segments(raw)
     cands = [{"line": c["line"], "value": c["value"], "prompt": c["prompt"], "ct": c["ct"],
+              "drafted": c.get("drafted"),
               "bad": c.get("bad"), "calibration_tokens": c.get("calibration_tokens", 0),
               "calibration_share": (c.get("calibration_tokens", 0) / c["ct"]) if c.get("ct") else 0.0}
              for c in raw]
@@ -506,6 +515,7 @@ def _request_line_candidates(item, log, ready_offset, skip, mtp):
                         "ct": chat["ct"], "ct_merged": 0, "calibration_tokens": 0, "calibration_share": 1.0})
             continue
         out.append({"line": chat["line"], "mtp_line": m.get("line"), "value": m["value"],
+                    "drafted": m.get("drafted"),
                     "prompt": chat["prompt"], "ct": chat["ct"],
                     "ct_merged": m.get("ct"), "bad": None,
                     "calibration_tokens": m.get("calibration_tokens", 0),
@@ -551,9 +561,13 @@ def correlate_multiset(item, log, requests, ready_offset, consumed=0, skip=READI
         used.add(found)
         c = cands[found]
         calibrated = c.get("calibration_share", 0.0) >= 1.0
-        if not calibrated and not c["value"] > minimum:
-            return [], f"request {rid}: value {c['value']} not above {minimum}"
+        # A concurrent request that drafted and had 0 accepted is still speculative decoding; one with drafted=0 (or no
+        # figure and a 0 value) is a no-draft request. Neither is a failure: only an unmatched line or a count
+        # mismatch is. The cell's label carries the drafted share (concurrent_check).
+        drafted_n = c.get("drafted")
+        drafted_request = (drafted_n > 0) if isinstance(drafted_n, int) else (c["value"] > minimum and not calibrated)
         out.append({"rid": rid, "prompt": c["prompt"], "line": c["line"], "mtp_line": c.get("mtp_line"),
+                    "drafted": drafted_n, "drafted_request": drafted_request,
                     "value": 0.0 if calibrated else c["value"], "group": group,
                     "ct_expected": req.get("ct"), "ct_merged": c.get("ct_merged", c.get("ct")),
                     "ct_gap": (req.get("ct") - c.get("ct_merged", c.get("ct")))
@@ -840,7 +854,8 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
                 "calibration_share": x.get("calibration_share"), "calibrated": x.get("calibrated", False),
                 "ct_expected": x.get("ct_expected"), "ct_merged": x.get("ct_merged"), "ct_gap": x.get("ct_gap"),
                 "partial_coverage": x.get("partial_coverage", False),
-                "chat_line": x.get("line"), "mtp_line": x.get("mtp_line")}
+                "chat_line": x.get("line"), "mtp_line": x.get("mtp_line"),
+                "drafted": x.get("drafted"), "drafted_request": x.get("drafted_request")}
                for i, x in enumerate(matched)]
     # the header's engaged line rule: the first measured request's MTP acceptance line (the chat line when the
     # engine has no MTP group); every request's pair is recorded in evidence_lines
@@ -848,7 +863,7 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
     first_line = (matched[0].get("mtp_line") or matched[0]["line"]) if matched else None
     partial = [x for x in per_row if x.get("partial_coverage")]
     calibrated = [x for x in matched if x.get("calibrated")]
-    if matched and all(x.get("mtp_line") is None for x in matched):
+    if matched and item.get("request_line") and all(x.get("mtp_line") is None for x in matched):
         # no MTP line for any request: oMLX decoded the whole concurrent batch without drafting (the batch was
         # inactive for >=3 rows). Evidence-derived label; the requests' Chat completion lines still matched pt/ct
         return {"engaged_mode": mode, "matched_line": matched[-1]["line"], "evidence_kind": "acceptance_regex",
@@ -864,8 +879,9 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
     if calibrated:
         pct = round(100.0 * sum(x.get("calibration_share", 0.0) for x in matched) / len(matched))
         label = f"{mode} (partial: {pct}% calibration)"
-    if matched and any(x.get("mtp_line") is None or x.get("mtp_partial") or x.get("calibrated")
-                       or (x.get("ct_gap") or 0) > 0 for x in matched):
+    if matched and item.get("request_line") and any(
+            x.get("mtp_line") is None or x.get("mtp_partial") or x.get("calibrated") or (x.get("ct_gap") or 0) > 0
+            for x in matched):  # oMLX only: its Chat completion lines pair with MTP segments
         total_ct = sum(x.get("ct_expected") or 0 for x in matched) or 1
         drafted_ct = sum((x.get("ct_merged") or 0) for x in matched if (x.get("value") or 0) > 0
                          and not x.get("calibrated"))
@@ -874,10 +890,35 @@ def concurrent_check(table, engine, mode, log, records, ready_offset, probe_resp
             label = "ar (oMLX did not draft under concurrency)"
         else:
             label = f"{mode} (oMLX drafts at <=2 active rows; {x_pct}% of tokens decoded without drafting)"
+    share = drafted_share_label(mode, per_row) if label is None else None
+    if share is not None:
+        label = share[0]
+        if share[1] == 0:  # not one request drafted: the cell decoded autoregressively
+            return {"engaged_mode": "ar", "matched_line": first_line, "evidence_kind": "acceptance_regex",
+                    "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched),
+                                                 "evidence_lines": evidence_lines}, "label": label}, []
     return {"engaged_mode": mode, "matched_line": first_line, "evidence_kind": "acceptance_regex",
             "source": "slice", "stats": {"per_row": per_row, "concurrent": len(matched),
                                          "partial_coverage": len(partial), "evidence_lines": evidence_lines},
             "label": label}, []
+
+
+def drafted_share_label(mode, per_row):
+    """(label, drafted request count) when the concurrent cell's requests did not all draft with accepted tokens,
+    else None. 'mtp (drafted on X of N requests; Y% of tokens accepted)': a request that drafted counts even with 0
+    accepted; Y is accepted over drafted tokens across the drafted requests (omitted when the line has no drafted
+    count). Every request matched its line, so this is a label, never a failure."""
+    n = len(per_row)
+    drafted = [r for r in per_row if r.get("drafted_request")]
+    if len(drafted) == n and all((r.get("value") or 0) > 0 for r in per_row):
+        return None  # every request drafted and accepted: nothing to qualify
+    tail = ""
+    tot_d = sum(r.get("drafted") or 0 for r in drafted)
+    if drafted and tot_d > 0 and all(isinstance(r.get("drafted"), int) for r in drafted):
+        tail = f"; {round(100.0 * sum(r.get('value') or 0 for r in drafted) / tot_d)}% of tokens accepted"
+    if not drafted:
+        return CONC_PROBE_AR_LABEL, 0  # not one request drafted: 'ar (concurrent path does not draft)'
+    return f"{mode} (drafted on {len(drafted)} of {n} requests{tail})", len(drafted)
 
 
 def acceptance_proven(ev: dict) -> bool:
@@ -888,7 +929,12 @@ def acceptance_proven(ev: dict) -> bool:
     if stats.get("per_row") and not stats.get("per_row_problem"):
         # rows decoded without drafting (no MTP line, or calibration only) carry the label, not a failure: the
         # cell is proven when some request drafted with accepted > 0 (oMLX drafts at <=2 active rows)
-        drafting = [r for r in stats["per_row"] if not r.get("calibrated") and r.get("mtp_line", "x") is not None]
+        # a request that drafted counts as speculative decoding even with 0 accepted (drafted_request); rows without
+        # that field (single-request evidence, older records) keep the rule: an MTP line and accepted > 0
+        drafting = [r for r in stats["per_row"] if not r.get("calibrated") and (
+            r["drafted_request"] if r.get("drafted_request") is not None else r.get("mtp_line", "x") is not None)]
+        if drafting and any(r.get("drafted_request") is not None for r in drafting):
+            return True
         return any(float(r.get("value", 0)) > 0 for r in drafting) if drafting else all(
             float(r.get("value", 0)) > 0 for r in stats["per_row"])
     if stats.get("batch_level"):

@@ -61,7 +61,7 @@ DROP = {
 # tests/unit/test_fullcmp_engaged.py).
 ACCEPT_TF = {
     "kind": "acceptance_regex",
-    "pattern_or_path": r"\[tensorfold\] done chatcmpl-\S+ prompt=(?P<prompt>\d+) .*? rounds=\d+ accepted=(?P<accepted>\d+)/\d+",
+    "pattern_or_path": r"\[tensorfold\] done chatcmpl-\S+ prompt=(?P<prompt>\d+) .*? rounds=\d+ accepted=(?P<accepted>\d+)/(?P<drafted>\d+)",
     "group": "accepted",
     "min": 0,
     "per_request": True,

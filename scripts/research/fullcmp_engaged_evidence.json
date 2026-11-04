@@ -348,7 +348,7 @@
             },
             {
               "kind": "acceptance_regex",
-              "pattern_or_path": "\\[tensorfold\\] done chatcmpl-\\S+ prompt=(?P<prompt>\\d+) .*? rounds=\\d+ accepted=(?P<accepted>\\d+)/\\d+",
+              "pattern_or_path": "\\[tensorfold\\] done chatcmpl-\\S+ prompt=(?P<prompt>\\d+) .*? rounds=\\d+ accepted=(?P<accepted>\\d+)/(?P<drafted>\\d+)",
               "group": "accepted",
               "min": 0,
               "per_request": true,
@@ -382,7 +382,7 @@
             },
             {
               "kind": "acceptance_regex",
-              "pattern_or_path": "\\[tensorfold\\] done chatcmpl-\\S+ prompt=(?P<prompt>\\d+) .*? rounds=\\d+ accepted=(?P<accepted>\\d+)/\\d+",
+              "pattern_or_path": "\\[tensorfold\\] done chatcmpl-\\S+ prompt=(?P<prompt>\\d+) .*? rounds=\\d+ accepted=(?P<accepted>\\d+)/(?P<drafted>\\d+)",
               "group": "accepted",
               "min": 0,
               "per_request": true,

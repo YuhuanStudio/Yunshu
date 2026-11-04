@@ -823,12 +823,18 @@ def test_tf_concurrent_extra_done_line_fails_closed():
     assert problems and ev["engaged_mode"] == "unverified"
 
 
-def test_tf_concurrent_unaccepted_request_fails_closed():
-    """Mutation: a measured request's done line has accepted=0: that request is not drafting."""
+def test_tf_concurrent_request_that_drafted_with_zero_accepted_is_still_speculative():
+    """A measured request whose done line has accepted=0/267 drafted 267 tokens and got none accepted: still speculative
+    decoding (a share label, not a failure); accepted=0/0 drafted nothing: a no-draft request. Only unmatched lines or a
+    count mismatch fail (the two tests above)."""
     lines = list(TF_CONC_REAL)
     lines[2] = lines[2].replace("accepted=49/267", "accepted=0/267")
     ev, problems = fe.concurrent_check(fe.load_table(), "tf-1.2.1", "dflash", "".join(lines), _conc_records(2, 2), 0)
-    assert problems and ev["engaged_mode"] == "unverified"
+    assert problems == [] and ev["engaged_mode"] == "dflash"
+    assert ev["label"].startswith("dflash (drafted on 4 of 4 requests;")
+    lines[2] = lines[2].replace("accepted=0/267", "accepted=0/0")
+    ev, problems = fe.concurrent_check(fe.load_table(), "tf-1.2.1", "dflash", "".join(lines), _conc_records(2, 2), 0)
+    assert problems == [] and ev["label"].startswith("dflash (drafted on 3 of 4 requests;")
 
 
 def test_yunshu_concurrent_verdict_is_each_requests_own_counters():
