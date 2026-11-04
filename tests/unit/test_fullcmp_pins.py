@@ -132,7 +132,7 @@ def test_missing_binary_leaves_the_digest_empty():
     # the yunshu pin fails closed (raises) on a missing binary, so the other engines are checked
     # with a stub that only hides the tf digest
     def sha_of(p):
-        return None if p.startswith("/Volumes") or "tensorfold" in p else D
+        return None if "tensorfold" in p else D  # only the tf digest is hidden (pb2 python must exist)
 
     pins = fam.build_pins(_census(), PIN, sha_of=sha_of, git_head=_head)
     assert pins["tf-1.2.1"]["binary_sha256"] is None
