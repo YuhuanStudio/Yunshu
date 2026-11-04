@@ -1685,3 +1685,33 @@ def test_yunshu_aliases_never_take_the_competitor_branch():
     src = Path(__file__).resolve().parents[2] / "scripts" / "research" / "fullcmp_audit.py"
     text = src.read_text()
     assert not re.search(r'engine\s*(!=|==)\s*"yunshu"', text), "use fe.is_yunshu(engine), not string equality"
+
+
+def test_quiet_flagged_rerun_keeps_its_original_slot_in_the_rotation_order():
+    """Failing-before (wire-1108 B1): omlx-0.7.3 was quiet-flagged and its -qretry1 rerun ran last, so the
+    observed interleave put omlx at the end. The superseded attempt (slot 1793763668) keeps the slot."""
+    import types
+
+    order = ["omlx-0.7.3", "tf-1.2.1", "splash-1.5.0"]
+    files = [_rot_cf("tf-1.2.1", 0, 1793763730.0), _rot_cf("splash-1.5.0", 0, 1793763800.0)]
+    omlx = _rot_cf("omlx-0.7.3", 0, 1793765093.0)  # the rerun's own, later, timestamps
+    omlx.slot = (1793763668.0, 1793763728.0)  # the superseded first attempt
+    files.insert(0, omlx)
+    manifest = {"groups": {"g": {"order": order}}}
+    run = fa.Run(manifest=manifest, files=files, missing=[], extra=[], parse_errors=[])
+    assert fa.check_gpu_exclusive_rotation(run).violations == []
+    omlx.slot = None  # without the superseded slot the rerun breaks the observed order
+    res = fa.check_gpu_exclusive_rotation(run)
+    assert res.violations and "planned order" in res.violations[0], res.violations
+    assert types  # keep the import local
+
+
+def test_superseded_slot_is_read_from_the_superseded_file_header(tmp_path):
+    cell = tmp_path / "c-r0.jsonl"
+    cell.write_text('{"part": "session", "job_start_s": 9.0, "job_end_s": 10.0}\n')
+    assert fa._superseded_slot(cell) is None
+    (tmp_path / "c-r0.superseded-1.jsonl").write_text(
+        '{"part": "session", "job_start_s": 1.0, "job_end_s": 2.0}\n'
+    )
+    (tmp_path / "c-r0.superseded-1.telemetry.jsonl").write_text('{"x": 1}\n')
+    assert fa._superseded_slot(cell) == (1.0, 2.0)

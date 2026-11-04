@@ -221,6 +221,9 @@ class CellFile:
     rows: list  # request rows (part == "decode")
     # parts that wrote request rows but no part_done(complete=True): a killed or timed-out job
     truncated: tuple = ()
+    # (job_start_s, job_end_s) of the superseded first attempt of a quiet-flagged cell: the rerun
+    # occupies that ORIGINAL slot in the rotation order check
+    slot: tuple | None = None
 
 
 @dataclass
@@ -355,6 +358,25 @@ def conc_request_rows(rec: dict, part: str = CONC_PART) -> list[dict]:
     return rows
 
 
+def _superseded_slot(path: Path):
+    """(job_start_s, job_end_s) from the first superseded attempt of this cell file, if any.
+
+    A quiet-flagged cell is renamed <cell>-rN.superseded-1.jsonl and rerun as -qretry1 in the same
+    slot; the rerun's own header carries the later time, so the rotation check reads the original."""
+    stem = path.name[: -len(".jsonl")]
+    for sup in sorted(path.parent.glob(f"{stem}{SUPERSEDED_TAG}*.jsonl")):
+        if sup.name.endswith(TELEMETRY_SUFFIX):
+            continue
+        try:
+            rows, _ = _read_jsonl(sup)
+        except OSError:
+            continue
+        head = next((r for r in rows if r.get("part") == "session"), None)
+        if head and is_num(head.get("job_start_s")) and is_num(head.get("job_end_s")):
+            return (head["job_start_s"], head["job_end_s"])
+    return None
+
+
 def load_run(root, manifest: dict) -> Run:
     root = Path(root)
     expected = {}
@@ -382,7 +404,17 @@ def load_run(root, manifest: dict) -> Run:
         # part_done was cut short (gpuq timeout or kill), so its cell is incomplete
         started = {r.get("part") for r in rows if r.get("part") in (DECODE_PART, CONC_PART, MIXED_PART)}
         done = {r.get("which") for r in rows if r.get("part") == "part_done" and r.get("complete") is True}
-        files.append(CellFile(cell, rep, path, header, body, truncated=tuple(sorted(started - done))))
+        files.append(
+            CellFile(
+                cell,
+                rep,
+                path,
+                header,
+                body,
+                truncated=tuple(sorted(started - done)),
+                slot=_superseded_slot(path),
+            )
+        )
     extra = [
         p
         for p in sorted(root.glob("*/*.jsonl"))
@@ -1027,7 +1059,9 @@ def check_gpu_exclusive_rotation(run: Run) -> GuardResult:
         if not (is_num(s) and is_num(e) and s < e):
             res.fail(cell, f"r{cf.rep}: job timestamps missing or not start < end")
             continue
-        slots[(cf.cell["group"], cf.rep)].append((s, e, cf.cell["engine"], cell))
+        slot = getattr(cf, "slot", None)
+        order_t = slot[0] if slot else s  # a quiet-flagged rerun keeps its original slot
+        slots[(cf.cell["group"], cf.rep)].append((s, e, cf.cell["engine"], cell, order_t))
     for (group, rep), items in sorted(slots.items()):
         res.checked += 1
         items.sort()
@@ -1035,6 +1069,7 @@ def check_gpu_exclusive_rotation(run: Run) -> GuardResult:
         for prev, nxt in zip(items, items[1:], strict=False):
             if nxt[0] < prev[1]:
                 res.fail(nxt[3], f"rep {rep}: overlaps {prev[2]} on the GPU")
+        items.sort(key=lambda i: (i[4], i[0]))  # the interleave is read in slot order
         order = run.manifest.get("groups", {}).get(group, {}).get("order")
         if not order:
             res.fail(anchor, f"group {group} has no interleave order in manifest")
