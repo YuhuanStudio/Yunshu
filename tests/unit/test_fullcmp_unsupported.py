@@ -391,3 +391,58 @@ def test_llama_cpp_image_cells_are_unsupported_in_this_run_with_the_mmproj_follo
     for r in img:
         assert r["reason"].startswith("unsupported in this run (mmproj not provisioned;")
         assert "mmproj-F16.gguf" in r["reason"] and "--mmproj" in r["reason"] and "follow-up" in r["reason"]
+
+
+# --- prompt_identity on image cells (wire-1108 image cells, copied values) -----------------------------------------
+
+IMG_FILE_SHA = "657679481d9e3cb65ab054cb53167689c39eb7ca688d9aba4c4f0488b5ab15c4"
+IMG_REQ_SHA = "154561527bc387ca8aa80b353cf4a44e645b40326e92c86afad956b25e50a569"
+
+
+def _img_cf(engine, pt, req_sha=IMG_REQ_SHA, **extra):
+    cell = {"cell": f"B2.image.{engine}", "engine": engine, "group": "B2.1K.code.c1.img1"}
+    row = {"part": "decode", "phase": "cold", "pt": pt, "media": "img1", "image_parts": 1, "image_tokens": None,
+           "prompt_ids_sha": req_sha, "prompt_file_sha256": IMG_FILE_SHA, "prompt_file": "/x/code-1024.txt", **extra}
+    return fa.CellFile(cell, 0, Path("x"), {"part": "session"}, [row])
+
+
+def _prompt_identity(monkeypatch, *cfs):
+    monkeypatch.setattr(fa, "load_prompt_file_table", lambda: {"code-1024.txt": IMG_FILE_SHA})
+    return fa.check_prompt_identity(fa.Run(manifest={}, files=list(cfs), missing=[], extra=[], parse_errors=[]))
+
+
+def test_image_cells_with_different_image_token_counts_agree_on_the_prompt(monkeypatch):
+    """Failing-before (wire-1108 images): yunshu, Kapitsa, oMLX, Splash, mlx-vlm report pt 1090 and mlx-serve 1091 for the
+    same request (each vision encoder emits its own image token count): 'engines disagree on prompt (pt, sha)'. The
+    identity is the request as sent, the prompt file and the image."""
+    res = _prompt_identity(monkeypatch, _img_cf("yunshu", 1090), _img_cf("kapitsa-0.2.26", 1090), _img_cf("mlx-serve-26.11.1", 1091))
+    assert res.violations == [], res.violations
+
+
+def test_image_cells_still_fail_when_the_request_the_file_or_the_image_differs(monkeypatch):
+    res = _prompt_identity(monkeypatch, _img_cf("yunshu", 1090), _img_cf("splash-1.5.0", 1090, req_sha="b" * 64))
+    assert res.violations and "disagree on the image prompt" in res.violations[0] and "request" in res.violations[0]
+    res = _prompt_identity(monkeypatch, _img_cf("yunshu", 1090, image_sha256="a" * 64), _img_cf("omlx-0.7.3", 1090, image_sha256="c" * 64))
+    assert any("image" in v for v in res.violations)
+    res = _prompt_identity(monkeypatch, _img_cf("yunshu", 1090, text_tokens=1066), _img_cf("omlx-0.7.3", 1091, text_tokens=1067))
+    assert any("text_tokens" in v for v in res.violations)
+    assert _prompt_identity(monkeypatch, _img_cf("yunshu", 1090, image_sha256="a" * 64, text_tokens=1066),
+                            _img_cf("omlx-0.7.3", 1095, image_sha256="a" * 64, text_tokens=1066)).violations == []
+
+
+def test_a_text_cell_still_compares_the_token_count(monkeypatch):
+    def text(engine, pt):
+        cf = _img_cf(engine, pt)
+        cf.rows[0].pop("media")
+        cf.rows[0]["image_parts"] = 0
+        return cf
+
+    res = _prompt_identity(monkeypatch, text("yunshu", 1024), text("kapitsa-0.2.26", 1025))
+    assert res.violations and "disagree on prompt (pt, sha)" in res.violations[0]
+
+
+def test_the_image_rows_record_the_image_sha_and_text_tokens():
+    import hashlib
+
+    assert tb.IMAGE_PNG_SHA256 == hashlib.sha256(__import__("base64").b64decode(tb.IMAGE_PNG_B64)).hexdigest()
+    assert len(tb.IMAGE_PNG_SHA256) == 64

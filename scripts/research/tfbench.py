@@ -5,6 +5,7 @@ Every record is one HTTP request; a part that does not finish writes no 'part_do
 """
 
 import argparse
+import base64
 import concurrent.futures as cf
 import contextlib
 import hashlib
@@ -1205,6 +1206,9 @@ FAMILY_ASKS = {
 IMAGE_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 )
+# sha256 of the PNG bytes: recorded on every image row so the audit compares the image, not the token count each
+# engine's vision encoder turns it into
+IMAGE_PNG_SHA256 = hashlib.sha256(base64.b64decode(IMAGE_PNG_B64)).hexdigest()
 
 
 def is_family_cell(kind, thinking, media):
@@ -1790,6 +1794,13 @@ def part_decode(s, out, a):
                         media=media,
                         image_parts=fm.IMAGE_COUNT.get(media, 0),
                         image_tokens=image_tokens,
+                        image_sha256=IMAGE_PNG_SHA256 if fm.IMAGE_COUNT.get(media, 0) else None,
+                        # the text part of the prompt, when the engine reports the image token count
+                        text_tokens=(
+                            r.get("pt") - image_tokens
+                            if isinstance(r.get("pt"), int) and isinstance(image_tokens, int) and image_tokens > 0
+                            else None
+                        ),
                         tool_calls=[
                             {"name": c.get("name"), "arguments": c.get("arguments")}
                             for c in tool_calls

@@ -523,10 +523,24 @@ def check_prompt_identity(run: Run) -> GuardResult:
     for group, items in groups.items():
         res.checked += 1
         seen = set()
+        image_ids = defaultdict(set)  # piece name -> distinct values across the group's image rows
         for cell, eng, r in items:
             sha, pt = r.get("prompt_ids_sha"), r.get("pt")
             if not isinstance(sha, str) or not sha or not isinstance(pt, int):
                 res.fail(cell, f"[{eng}] prompt token count/sha not recorded")
+            if r.get("media") not in (None, "none") or (r.get("image_parts") or 0) > 0:
+                # an image cell: each engine's vision encoder turns the image into its own number of tokens, so pt
+                # legitimately differs. The identity is the request as sent (prompt_ids_sha covers the text and the
+                # image data URI), the prompt file's sha, the image's sha and the text-token count when recorded.
+                image_ids["request"].add(sha)
+                image_ids["prompt_file"].add(r.get("prompt_file_sha256"))
+                if r.get("image_sha256") is not None:
+                    image_ids["image"].add(r.get("image_sha256"))
+                if r.get("text_tokens") is not None:
+                    image_ids["text_tokens"].add(r.get("text_tokens"))
+                if not isinstance(r.get("image_parts"), int) or r.get("image_parts") < 1:
+                    res.fail(cell, f"[{eng}] image cell without a recorded image part count")
+                continue
             seen.add((pt, sha))
         if len(seen) > 1:
             for cell in sorted(cells_of[group]):
@@ -534,6 +548,10 @@ def check_prompt_identity(run: Run) -> GuardResult:
                     cell,
                     f"group {group}: engines disagree on prompt (pt, sha) {sorted(map(str, seen))}",
                 )
+        bad = {k: sorted(map(str, v)) for k, v in image_ids.items() if len(v) > 1}
+        if bad:
+            for cell in sorted(cells_of[group]):
+                res.fail(cell, f"group {group}: engines disagree on the image prompt: {bad}")
     return res
 
 
