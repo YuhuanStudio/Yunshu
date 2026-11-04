@@ -322,6 +322,7 @@ def conc_request_rows(rec: dict, part: str = CONC_PART) -> list[dict]:
                 "attr": attr,
                 "attr_unavailable": unavailable,
                 "n": n,
+                "req_index": i,
                 "trial": rec.get("trial"),
                 "ttft_s": at("ttfts"),
                 "dec_tps": at("per_req_dec"),
@@ -947,10 +948,21 @@ def check_cold_cache(run: Run) -> GuardResult:
                         cell,
                         f"r{cf.rep} cold: cached={cached!r}, must be server-reported 0",
                     )
-            elif phase in ("conc", "mixed") and not _shared_prefix_cell(cell):
+            elif phase == "conc" and _shared_prefix_cell(cell):
+                # conc-same: request 0 of a trial primes the shared prompt and must be a miss; a later
+                # request may hit only that shared prefix (cached cannot exceed its prompt tokens).
+                pt = r.get("pt")
+                if isinstance(cached, bool) or not isinstance(cached, int):
+                    res.fail(cell, f"r{cf.rep} conc-same: cached count not recorded (fail closed)")
+                elif r.get("req_index") == 0 and cached != 0:
+                    res.fail(cell, f"r{cf.rep} conc-same request 0: cached={cached}, must be 0 "
+                                   "(the trial's first request is a miss)")
+                elif r.get("req_index") != 0 and isinstance(pt, int) and cached > pt:
+                    res.fail(cell, f"r{cf.rep} conc-same: cached={cached} > prompt tokens {pt}")
+            elif phase in ("conc", "mixed"):
                 # concurrent and mixed requests: every trial's prompts are new to the server (the
                 # trial salt), so no request may hit the prefix cache (2026-11-04: trial 1 of a mixed
-                # cell was cached 8192 tokens on yunshu). conc-same shares its prompt by design.
+                # cell was cached 8192 tokens on yunshu).
                 if cached is None:
                     res.fail(cell, f"r{cf.rep} {phase}: cached count not recorded (fail closed)")
                 elif isinstance(cached, bool) or not isinstance(cached, int) or cached != 0:

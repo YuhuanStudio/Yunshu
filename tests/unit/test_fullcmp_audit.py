@@ -1627,7 +1627,41 @@ def test_missing_cached_fails_closed_for_mixed_and_conc_rows():
 
 
 def test_conc_same_shares_its_prompt_by_design():
-    rows = _mixed_rows([0, 512, 512, 512])
+    rows = _conc_same_rows([0, 512, 512, 512], [1024] * 4)
     run = _fake_run([_cf({"cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
                          {"part": "session", "fresh_process": True}, rows)])
     assert fa.check_cold_cache(run).violations == []
+
+
+def _conc_same_rows(cached, pts):
+    return [
+        {"part": "conc", "phase": "conc", "cached": c, "pt": p, "req_index": i, "ct": 16}
+        for i, (c, p) in enumerate(zip(cached, pts))
+    ]
+
+
+def test_conc_same_request_zero_cached_fails():
+    # request 0 of a trial must be a miss: it primes the shared prompt
+    rows = _conc_same_rows([512, 0, 512, 512], [1024] * 4)
+    run = _fake_run([_cf({"cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
+                         {"part": "session", "fresh_process": True}, rows)])
+    assert any("request 0" in v for v in fa.check_cold_cache(run).violations)
+
+
+def test_conc_same_later_requests_may_hit_the_shared_prefix_only():
+    rows = _conc_same_rows([0, 512, 512, 512], [1024] * 4)
+    run = _fake_run([_cf({"cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
+                         {"part": "session", "fresh_process": True}, rows)])
+    assert fa.check_cold_cache(run).violations == []
+    over = _conc_same_rows([0, 2048, 0, 0], [1024] * 4)
+    run2 = _fake_run([_cf({"cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
+                          {"part": "session", "fresh_process": True}, over)])
+    assert any("> prompt tokens" in v for v in fa.check_cold_cache(run2).violations)
+
+
+def test_conc_distinct_any_cached_request_fails():
+    rows = _conc_same_rows([0, 0, 512, 0], [1024] * 4)
+    rows = [{**r, "phase": "conc"} for r in rows]
+    run = _fake_run([_cf({"cell": "B2.conc.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
+                         {"part": "session", "fresh_process": True}, rows)])
+    assert any("must be server-reported 0" in v for v in fa.check_cold_cache(run).violations)
