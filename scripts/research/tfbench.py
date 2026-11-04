@@ -2133,6 +2133,21 @@ def part_conc(s, out, a):
             )
 
 
+def mixed_long_text(trial, long_ctx, variant=0, smoke=False):
+    """The mixed cell's long prompt for one trial. A per-trial salt at the front changes the prefix from
+    token 0, so no trial can hit the prefix cache of an earlier trial on the same server (2026-11-04: trial 1
+    was cached 8192 tokens on yunshu). Trial k is the same text for every engine (cross-engine fairness)."""
+    if smoke:
+        return "Say hello."
+    from snapshot_prompts import exact_chat_prompt
+
+    return exact_chat_prompt(
+        f"Mixed trial {trial}.\n" + load_variant_prompt(f"code-{long_ctx}", variant),
+        long_ctx,
+        LONG_ASK,
+    )
+
+
 def part_mixed(s, out, a):
     """Mixed load: one long request (--mixed-long-ctx) and --mixed-short-n short ones started
     together, one trial per conc trial. Request 0 is the long one; the rest are short. The
@@ -2144,9 +2159,7 @@ def part_mixed(s, out, a):
     tokens = 16 if a.smoke else a.conc_tokens
     variant = getattr(a, "prompt_variant", 0)
     for trial in range(1 if a.smoke else a.conc_trials):
-        long_text = (
-            "Say hello." if a.smoke else load_variant_prompt(f"code-{long_ctx}", variant)
-        )
+        long_text = mixed_long_text(trial, long_ctx, variant, a.smoke)
         texts = [long_text] + [
             "Say hello."
             if a.smoke
