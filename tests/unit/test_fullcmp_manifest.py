@@ -350,6 +350,20 @@ def test_warm_phase_pays_the_reply_decode():
     assert warm > 512 / dec
 
 
+def test_yunshu_and_pb2_have_the_same_post_cut_row_set_per_batch():
+    # the comparison is the point of pb2: after the cut step both engines keep and cut the same cells
+    rows, _ = fm.build_rows()
+    fm.apply_cuts(rows, out=io.StringIO())
+    for batch in ("B1", "B2", "B4"):
+        def post(engine):
+            return sorted(
+                (r["id"].replace(f".{engine}.", ".E."), r["status"])
+                for r in rows
+                if r["batch"] == batch and r["engine"] == engine
+            )
+        assert post("yunshu") == post("yunshu-pb2"), batch
+
+
 def test_yunshu_pb2_rows_mirror_yunshu_main_cell_for_cell():
     # yunshu-pb2 (phaseb2-main 4f99270) is the same engine config: its rows mirror yunshu's per batch
     rows, _ = fm.build_rows()

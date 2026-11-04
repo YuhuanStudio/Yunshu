@@ -912,6 +912,11 @@ CUT_ORDER = [
 ]
 
 
+# A cut decision is made once per cell: yunshu-pb2 is the same configuration as yunshu-main, so its row
+# takes the cut decision of the yunshu row (mirror by cell id). The two Yunshu engines run identical cells.
+CUT_MIRROR = {"yunshu-pb2": "yunshu"}
+
+
 def apply_cuts(rows, out=sys.stdout):
     """Apply CUT_ORDER until the planned total fits. Prints the total after each cut.
     Returns the list of (label, rows_cut, hours_cut, total_after)."""
@@ -929,7 +934,8 @@ def apply_cuts(rows, out=sys.stdout):
         n = 0
         h = 0.0
         for r in rows:
-            if r["status"] == UNV and pred(r):
+            # the predicate sees the mirrored engine (pb2 -> yunshu), so pb2 is cut exactly where yunshu is
+            if r["status"] == UNV and pred({**r, "engine": CUT_MIRROR.get(r["engine"], r["engine"])}):
                 h += r["est_gpu_min"] / 60.0
                 r["reason"] = f"cut to fit {TARGET_GPU_H:.0f} h: {label}"
                 r["status"] = CUT
