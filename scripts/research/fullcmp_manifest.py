@@ -1019,8 +1019,57 @@ def top_cells(rows, n=8):
     return live[:n]
 
 
+# ---------------------------------------------------------------- wire-1108: one smallest real cell per family
+REAL_MANIFEST = Path(
+    "/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103/manifest.jsonl"
+)
+WIRE_1108_OUT = Path(
+    "/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103/wire-1103/wire_1108_manifest.jsonl"
+)
+FAMILY_SLOTS = (
+    ("core", lambda r: r["sweep"] == "core" and r["prompt_kind"] == "code" and r["ctx"] == "1K"),
+    ("conc", lambda r: r["sweep"] == "conc" and r["conc"] == 2),
+    ("conc-same", lambda r: r["sweep"] == "conc-same" and r["conc"] == 2),
+    ("mixed", lambda r: r["sweep"] == "mixed"),
+    ("ctx", lambda r: r["sweep"] == "ctx"),
+    ("idle5", lambda r: r["sweep"] == "idle5"),
+    ("restart", lambda r: r["sweep"] == "restart"),
+    ("kind:tool-chat", lambda r: r["sweep"] == "kind" and r["prompt_kind"] == "tool-chat"),
+    ("kind:cjk", lambda r: r["sweep"] == "kind" and r["prompt_kind"] == "cjk"),
+    ("kind:json-schema", lambda r: r["sweep"] == "kind" and r["prompt_kind"] == "json-schema"),
+    ("sampling", lambda r: r["sweep"] == "sampling"),
+    ("thinking", lambda r: r["sweep"] == "thinking"),
+    ("out:128", lambda r: r["sweep"] == "out" and r["out_len"] == 128),
+    ("out:2048", lambda r: r["sweep"] == "out" and r["out_len"] == 2048),
+    ("image", lambda r: r["sweep"] == "image" and r["media"] == "img1"),
+)
+
+
+def family_smoke_rows(real_rows):
+    """For each family slot and each engine that has a matching real B1/B2 row, the smallest one (lowest
+    ctx, then conc, then out_len, then id). The rows are the real manifest dicts, unchanged."""
+    out = []
+    for slot, pred in FAMILY_SLOTS:
+        for eng in sorted({r["engine"] for r in real_rows}):
+            cands = [
+                r
+                for r in real_rows
+                if r["batch"] in ("B1", "B2") and r["engine"] == eng and pred(r)
+            ]
+            if not cands:
+                continue
+            best = min(cands, key=lambda r: (r["ctx_tokens"], r["conc"], r["out_len"], r["id"]))
+            out.append(best)
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument(
+        "--family-smoke",
+        action="store_true",
+        help="write the wire-1108 manifest: one smallest real B1/B2 cell per family slot per engine",
+    )
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument(
         "--summary", type=Path, default=None, help="also write the summary text here"
@@ -1037,6 +1086,16 @@ def main(argv=None):
         "(1x 8K + 3x 1K) for every conc-capable engine",
     )
     args = ap.parse_args(argv)
+    if args.family_smoke:
+        real = [json.loads(line) for line in REAL_MANIFEST.read_text().splitlines() if line.strip()]
+        rows = family_smoke_rows(real)
+        out = args.out or WIRE_1108_OUT
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open("w") as fh:
+            for r in rows:
+                fh.write(json.dumps(r, sort_keys=True, ensure_ascii=False) + "\n")
+        sys.stdout.write(f"wrote {out} ({len(rows)} family rows)\n")
+        return 0
     if args.out is None:
         args.out = SMOKE_CONC_OUT if args.smoke_conc else (SMOKE_OUT if args.smoke else DEFAULT_OUT)
     if args.smoke_conc:
