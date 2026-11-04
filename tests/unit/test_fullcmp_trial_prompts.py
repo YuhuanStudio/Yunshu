@@ -90,3 +90,11 @@ def test_conc_same_prompt_is_salted_per_trial_and_sized_to_the_context(real_tb):
         assert sp.chat_token_count(text) == CTX
     # trial k must not hit trial k-1's cache: the prefix differs from token 0 in every trial
     assert _first_tokens(shared[0]) != _first_tokens(shared[1]) != _first_tokens(shared[2])
+
+
+def test_sweeps_with_different_concurrency_never_share_a_prompt(tb):
+    # n=2 trial 0 and n=4 trial 0 must differ from token 0 (one server, two sweeps: a cache hit otherwise)
+    a = tb.concurrent_prompt(0, 0, 8192, run=2)
+    b = tb.concurrent_prompt(0, 0, 8192, run=4)
+    assert a[:24] != b[:24]
+    assert tb.concurrent_prompt(0, 0, 8192, run=2) == a  # the same run is reproducible
