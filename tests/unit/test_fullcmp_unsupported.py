@@ -254,3 +254,91 @@ def test_mlx_vlm_launch_turns_prefix_caching_on_and_splash_its_persistent_cache(
     assert vlm.env["APC_ENABLED"] == "1"  # server/runtime_config.py:76, :360: prefix caching is off by default
     splash = be.build_launch("splash-1.5.0", 18990, "/tmp/h", {})
     assert "--persistent-cache" in splash.cmd  # server/serve_options.py:555-562
+
+
+# --- an error event inside a 200 stream (wire-1108rest, mlx-vlm kind/json-schema) ------------------------------------
+
+MLX_VLM_STREAM_ERROR = "Structured response_format is not supported with speculative decoding."
+
+
+def _sse_server(frames):
+    """A local server answering every chat completion with HTTP 200 and the given SSE data frames."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            for f in frames:
+                self.wfile.write(f"data: {f}\n\n".encode())
+            self.wfile.flush()
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def _decode_kind(url, tmp_path, kind="json-schema"):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    out = tmp_path / "cell-r0.jsonl"
+    a = tb.parse_args(
+        ["--engine", "mlx-vlm-server", "--part", "decode", "--rep", "0", "--out", str(out), "--only-ctx", "1024",
+         "--only-kind", kind, "--decode-tokens", "64", "--phases", "cold"]
+    )
+    s = types.SimpleNamespace(url=url, model="m", engine="mlx-vlm-server", log=tmp_path / "n.log")
+    with out.open("w") as fh:
+        tb.part_decode(s, fh, a)
+    return [json.loads(x) for x in out.read_text().splitlines()], out
+
+
+def test_a_stream_error_event_saying_unsupported_is_a_recorded_refusal(tmp_path):
+    """Failing-before: HTTP 200 with an error frame raised 'SSE error ...' and the chunk aborted. The real mlx-vlm
+    message now becomes the 'unsupported' row, labelled, and the cell closes."""
+    srv = _sse_server([json.dumps({"error": MLX_VLM_STREAM_ERROR})])
+    try:
+        rows, out = _decode_kind(f"http://127.0.0.1:{srv.server_port}", tmp_path)
+    finally:
+        srv.shutdown()
+    un = [r for r in rows if r.get("part") == "unsupported"]
+    assert len(un) == 1 and un[0]["reason"] == MLX_VLM_STREAM_ERROR and un[0]["stream_error"] is True
+    assert un[0]["label"] == "unsupported (json-schema with speculative decoding, engine message)"
+    assert un[0]["http_status"] is None and un[0]["kind"] == "json-schema"
+    assert tb.cell_unsupported(str(out)) is True
+    assert not [r for r in rows if r.get("part") == "decode"]
+
+
+def test_an_error_object_with_a_message_is_read_and_any_other_stream_error_still_fails(tmp_path):
+    srv = _sse_server([json.dumps({"error": {"message": MLX_VLM_STREAM_ERROR, "type": "invalid_request_error"}})])
+    try:
+        rows, _ = _decode_kind(f"http://127.0.0.1:{srv.server_port}", tmp_path / "a")
+    finally:
+        srv.shutdown()
+    assert [r["reason"] for r in rows if r.get("part") == "unsupported"] == [MLX_VLM_STREAM_ERROR]
+    srv = _sse_server([json.dumps({"error": "CUDA out of memory"})])
+    try:
+        with pytest.raises(tb.StreamError, match="out of memory"):
+            _decode_kind(f"http://127.0.0.1:{srv.server_port}", tmp_path / "b")
+    finally:
+        srv.shutdown()
+
+
+def test_the_audit_lists_the_stream_refusal_with_its_label(tmp_path):
+    root = tmp_path / "raw"
+    (root / "mlx-vlm-server").mkdir(parents=True)
+    cell = {"cell": "B2.kind.mlx-vlm-server.8K.c1.json-schema", "engine": "mlx-vlm-server", "group": "g"}
+    (root / "mlx-vlm-server" / f"{cell['cell']}-r0.jsonl").write_text(
+        json.dumps({"part": "session"}) + "\n"
+        + json.dumps({"part": "unsupported", "http_status": None, "stream_error": True, "reason": MLX_VLM_STREAM_ERROR,
+                      "label": "unsupported (json-schema with speculative decoding, engine message)"}) + "\n"
+    )
+    manifest = {"cells": [cell], "reps": 1, "pins": {"mlx-vlm-server": {}}, "groups": {"g": {"order": ["mlx-vlm-server"]}}}
+    res = fa.check_manifest_completeness(fa.load_run(root, manifest))
+    assert res.violations == []
+    assert any("unsupported (json-schema with speculative decoding, engine message)" in n and MLX_VLM_STREAM_ERROR in n
+               for n in res.notes), res.notes

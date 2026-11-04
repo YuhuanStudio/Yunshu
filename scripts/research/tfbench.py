@@ -894,7 +894,9 @@ def _send_impl(
                 break
             d = json.loads(p)
             if d.get("error"):
-                raise RuntimeError(f"SSE error {d['error']}")
+                err = d["error"]
+                text = err.get("message") if isinstance(err, dict) else err
+                raise StreamError(f"SSE error {err}", str(text))
             if d.get("usage"):
                 usage = d["usage"]
                 if sample and _USAGE_SAMPLE[0] is None:
@@ -1474,6 +1476,28 @@ IMAGE_REFUSAL_WORDS = ("image", "vision", "multimodal", "mmproj", "content part"
 REFUSAL_BODY_MAX = 600
 
 
+class StreamError(RuntimeError):
+    """An error event inside a 200 stream (an SSE frame with an 'error' member). `text` is the engine's message."""
+
+    def __init__(self, message: str, text: str):
+        super().__init__(message)
+        self.text = text
+
+
+def is_refusal_text(text: str) -> bool:
+    """A stream error event whose text says the request shape is not supported (no HTTP status to judge it by):
+    the same phrases as a 4xx refusal. Any other stream error still fails the cell."""
+    low = str(text).lower()
+    return any(p in low for p in REFUSAL_PHRASES)
+
+
+def refusal_label(kind, text: str) -> str:
+    """'unsupported (json-schema with speculative decoding, engine message)': the kind, and the engine's own
+    qualifier when its message names speculative decoding."""
+    with_spec = " with speculative decoding" if "speculative decoding" in str(text).lower() else ""
+    return f"unsupported ({kind}{with_spec}, engine message)"
+
+
 def is_engine_refusal(code: int, body: str, media: str | None = None) -> bool:
     """4xx (not a timeout or a rate limit) with a body that names the input as unsupported; on an image
     cell (media not none) also a 4xx whose body is about the image input."""
@@ -1727,6 +1751,26 @@ def part_decode(s, out, a):
                         cell=cell_name(getattr(a, "out", ""), getattr(a, "rep", 0)),
                     )
                     break  # later phases need this reply; the job continues with its next cell
+                except StreamError as exc:
+                    if not is_refusal_text(exc.text):
+                        raise
+                    # HTTP 200 and an error frame (mlx-vlm: 'Structured response_format is not supported with
+                    # speculative decoding.'): the same recorded 'unsupported' row, the cell closed
+                    emit(
+                        out,
+                        part="unsupported",
+                        ctx=ctx,
+                        kind=kind,
+                        phase=phase,
+                        thinking=thinking,
+                        media=media,
+                        http_status=None,
+                        stream_error=True,
+                        reason=exc.text[:REFUSAL_BODY_MAX],
+                        label=refusal_label(kind, exc.text),
+                        cell=cell_name(getattr(a, "out", ""), getattr(a, "rep", 0)),
+                    )
+                    break
                 tool_calls = raw.pop("_tools", [])
                 image_tokens = raw.pop("_image_tokens", None)
                 r = attribution_fields(s, raw)

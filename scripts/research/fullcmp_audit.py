@@ -399,7 +399,8 @@ def load_run(root, manifest: dict) -> Run:
         header = next((r for r in rows if r.get("part") == "session"), None)
         refusal = next((r for r in rows if r.get("part") == "unsupported"), None)
         if refusal is not None:
-            unsupported.append((cell, rep, f"HTTP {refusal.get('http_status')}: {refusal.get('reason')}"))
+            how = refusal.get("label") or f"HTTP {refusal.get('http_status')}"
+            unsupported.append((cell, rep, f"{how}: {refusal.get('reason')}"))
             continue
         body = [r for r in rows if r.get("part") == "decode"]
         for r in rows:
