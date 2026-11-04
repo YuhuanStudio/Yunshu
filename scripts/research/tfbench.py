@@ -588,13 +588,25 @@ class Srv:
         except Exception as e:  # noqa: BLE001
             return f"probe failed: {e!r}"
 
+    def evidence_log(self):
+        """(log text, ready offset) the evidence verdict reads. A restart cell's relaunch truncates the live log, so
+        the rows served by the first server (the cold row) have their done line only in the bytes saved at the
+        restart (_LOG_PREFIX): the verdict reads those bytes first, then the live log, with the FIRST server's ready
+        offset (the audit reads the same concatenation as the cell's slice). Without a restart: the live log."""
+        live = self.log.read_text(errors="replace") if self.log.exists() else ""
+        if not _LOG_PREFIX:
+            return live, getattr(self, "ready_log_offset", None)
+        prefix = b"".join(_LOG_PREFIX).decode(errors="replace")
+        first = getattr(self, "first_ready_log_offset", getattr(self, "ready_log_offset", None))
+        return prefix + live, first
+
     def verify_spec_mode(self, final=False, rows=(), probe_response=None, concurrent=(), concurrent_probe=None):
-        log = self.log.read_text(errors="replace")
+        log, ready_offset = self.evidence_log()
         if fp.fullcmp_mode(os.environ) and self._is_yunshu(self.engine) and final and concurrent and not rows:
             # a Yunshu concurrent cell: the same derived verdict the audit re-derives (fe.concurrent_check), not the
             # runner line (the header and the audit must agree on the mode and the line)
             ev, problems = fe.concurrent_check(fe.load_table(), self.engine, self.requested_spec_mode, log,
-                                               concurrent, getattr(self, "ready_log_offset", None))
+                                               concurrent, ready_offset)
             self.engaged_spec_mode = ev["engaged_mode"]
             self.engaged_log_line = ev["matched_line"]
             self.engaged_evidence_kind = ev["evidence_kind"]
@@ -611,7 +623,7 @@ class Srv:
             self.probe = self.probe_text()
             self._verify_fullcmp_evidence(
                 log, final=final, rows=rows, probe_response=probe_response, concurrent=concurrent,
-                concurrent_probe=concurrent_probe
+                concurrent_probe=concurrent_probe, ready=ready_offset
             )
             return
         # The engaged-mode line the audit checks (fullcmp header engaged_log_line).
@@ -644,9 +656,10 @@ class Srv:
             # measures a different engine (2026-10-20: ragged KV off broke identity)
             raise RuntimeError(f"{off}; see {self.log}")
 
-    def _verify_fullcmp_evidence(self, log, final=False, rows=(), probe_response=None, concurrent=(), concurrent_probe=None):
+    def _verify_fullcmp_evidence(self, log, final=False, rows=(), probe_response=None, concurrent=(), concurrent_probe=None, ready=...):
         table = fe.load_table()  # None when the table is missing or malformed: no evidence at all
-        ready = getattr(self, "ready_log_offset", None)
+        if ready is ...:
+            ready = getattr(self, "ready_log_offset", None)
         if concurrent and not rows:
             # concurrent cells: the same shared verdict the audit uses (fe.concurrent_check)
             ev, problems = fe.concurrent_check(table, self.engine, self.requested_spec_mode, log, concurrent, ready,
@@ -766,6 +779,8 @@ def restart_server(s):
         parallel=s.parallel,
         reuse_home=True,
     )
+    # the evidence verdict reads the first server's saved log then this one's: keep the first ready offset
+    fresh.first_ready_log_offset = getattr(s, "first_ready_log_offset", getattr(s, "ready_log_offset", None))
     _LIVE_SERVERS.append(fresh)
     return fresh
 

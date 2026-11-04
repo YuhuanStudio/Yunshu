@@ -133,3 +133,53 @@ def test_an_image_cell_4xx_about_the_image_is_a_refusal_but_a_plain_bad_request_
     assert not tb.is_engine_refusal(400, odd, "none")  # a text cell never counts on the image wording
     assert not tb.is_engine_refusal(400, '{"error": {"message": "temperature out of range"}}', "img1")
     assert not tb.is_engine_refusal(500, odd, "img1")
+
+
+# --- the restart cell's evidence verdict reads both servers' logs (wire-1108 B2 p3, tf-1.2.1) -------------------
+
+RESTART_LOG = (Path(__file__).parent / "fixtures" / "tf_1_2_1_restart_cell.server.log").read_text()
+
+
+def _restart_srv(tmp_path, monkeypatch):
+    """The relaunch truncated the live log: it holds the second server only; the first server's bytes (its startup
+    and the cold request's done line) were saved at the restart (_LOG_PREFIX). The fixture is the cell's real slice."""
+    second = RESTART_LOG.index("info: prompt cache: 16.0 GiB", RESTART_LOG.index("finish=length") )
+    first_part, second_part = RESTART_LOG[:second], RESTART_LOG[second:]
+    monkeypatch.setattr(tb, "_LOG_PREFIX", [first_part.encode()])
+    srv = object.__new__(tb.Srv)
+    srv.engine = "tf-1.2.1"
+    srv.requested_spec_mode = "dflash"
+    srv.log = tmp_path / "live.log"
+    srv.log.write_text(second_part)
+    srv.ready_log_offset = len(second_part.split("[tensorfold] serving")[0])  # the relaunched server's startup
+    srv.first_ready_log_offset = len(first_part.split("[tensorfold] 127.0.0.1")[0])
+    srv.probe_text = lambda: ""
+    return srv
+
+
+def _restart_rows():
+    done = {  # the two measured requests as tfbench recorded them (cold on server 1, restart on server 2)
+        "cold": dict(pt=1024, ct=512, cached=0, sha="5d2fa71b70f9ac2a"),
+        "restart": dict(pt=1024, ct=512, cached=0, sha="5d2fa71b70f9ac2a"),
+    }
+    return [dict(part="decode", phase=p, finish="length", **v) for p, v in done.items()]
+
+
+def test_restart_cell_evidence_reads_the_pre_restart_log_for_the_cold_row(tmp_path, monkeypatch):
+    """Failing-before (wire-1108 B2 p3): the final check read only the post-restart log, the cold row's done line was
+    gone and the verdict was 'engaged=unverified (evidence: startup_only)'. It now reads the saved first-server bytes
+    then the live log, so both rows correlate with the server process that served them."""
+    monkeypatch.setenv("TFB_FULLCMP", "1")
+    srv = _restart_srv(tmp_path, monkeypatch)
+    log, ready = srv.evidence_log()
+    assert log.count("[tensorfold] done chatcmpl") >= 2  # the cold row's line and the restart row's line
+    srv.verify_spec_mode(final=True, rows=_restart_rows())
+    assert srv.engaged_spec_mode == "dflash", (srv.engaged_spec_mode, srv.engaged_evidence_kind)
+
+
+def test_without_the_saved_first_log_the_same_cell_is_startup_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("TFB_FULLCMP", "1")
+    srv = _restart_srv(tmp_path, monkeypatch)
+    monkeypatch.setattr(tb, "_LOG_PREFIX", [])  # the old behaviour: only the live (post-restart) log
+    with pytest.raises(RuntimeError, match="startup_only"):
+        srv.verify_spec_mode(final=True, rows=_restart_rows())
