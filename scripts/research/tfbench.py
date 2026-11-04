@@ -18,6 +18,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -1438,6 +1439,29 @@ class MemSampler:
         self._stop.set()
 
 
+# An engine's explicit refusal of a request shape (an image to a text-only server, an unsupported route):
+# a 4xx whose body says the input is unsupported. It is recorded as an 'unsupported' row and the cell
+# stops; any other HTTP error still fails the cell (it raises as before).
+REFUSAL_PHRASES = (
+    "accepts text parts only",
+    "unsupported",
+    "not supported",
+    "does not support",
+    "not implemented",
+    "text only",
+    "text-only",
+)
+REFUSAL_BODY_MAX = 600
+
+
+def is_engine_refusal(code: int, body: str) -> bool:
+    """4xx (not a timeout or a rate limit) with a body that names the input as unsupported."""
+    if not (400 <= code < 500) or code in (408, 409, 429):
+        return False
+    low = str(body).lower()
+    return any(p in low for p in REFUSAL_PHRASES)
+
+
 def emit(out, **kw):
     kw = {**META, **kw}
     print(
@@ -1661,7 +1685,25 @@ def part_decode(s, out, a):
                     extra_rec = rehearse(s, b)
                 if family and phase == "cold":
                     family_apply(b, kind, variant, thinking, media)
-                raw = send(s.url, b, sample=True)
+                try:
+                    raw = send(s.url, b, sample=True)
+                except urllib.error.HTTPError as exc:
+                    body = exc.read().decode("utf-8", "replace")[:REFUSAL_BODY_MAX]
+                    if not is_engine_refusal(exc.code, body):
+                        raise
+                    emit(
+                        out,
+                        part="unsupported",
+                        ctx=ctx,
+                        kind=kind,
+                        phase=phase,
+                        thinking=thinking,
+                        media=media,
+                        http_status=exc.code,
+                        reason=body,
+                        cell=cell_name(getattr(a, "out", ""), getattr(a, "rep", 0)),
+                    )
+                    break  # later phases need this reply; the job continues with its next cell
                 tool_calls = raw.pop("_tools", [])
                 image_tokens = raw.pop("_image_tokens", None)
                 r = attribution_fields(s, raw)
@@ -2578,6 +2620,18 @@ def engaged_end_fields(s) -> dict:
     }
 
 
+def cell_unsupported(path) -> bool:
+    """True when the cell file holds an 'unsupported' row: the engine refused the request shape."""
+    with open(path) as fh:
+        for line in fh:
+            try:
+                if json.loads(line).get("part") == "unsupported":
+                    return True
+            except ValueError:
+                continue
+    return False
+
+
 def read_decode_rows(path):
     """The cell's request rows (part == decode) as written, for the final engaged-mode evidence."""
     rows = []
@@ -2836,8 +2890,11 @@ def main():
                 s = _LIVE_SERVERS[-1]  # a restart cell measured on its relaunched server
             probe_response = None
             conc_probe = None
+            # an engine's explicit refusal ended this cell (an 'unsupported' row): it has no requests to
+            # verify, probe or attribute; the evidence checks below are skipped and the cell is closed
+            unsupported_cell = cell_unsupported(a.out)
             conc_records = fe.read_concurrent_records(a.out)
-            if fullcmp and a.engine in PROBE_ENGINES and conc_records:
+            if fullcmp and a.engine in PROBE_ENGINES and conc_records and not unsupported_cell:
                 # the concurrent probe: the same N requests, non-streaming, at once (the streamed concurrent
                 # requests carry no draft stats). Not a table number: part=probe_conc rows, probe=true.
                 n = sum(len(r.get("requests") or []) for r in conc_records)
@@ -2854,7 +2911,7 @@ def main():
                     emit(out, part="probe_conc", engine=a.engine, rep=a.rep, rid=rid,
                          probe=True, timings=(resp or {}).get("timings"),
                          probe_fields=fe.probe_fields(resp))
-            if fullcmp and a.engine in PROBE_ENGINES:
+            if fullcmp and a.engine in PROBE_ENGINES and not unsupported_cell:
                 # One non-streaming request after the measured parts (not a table number): the serving
                 # path returns per-request draft stats only in a non-streaming response.
                 probe_response = probe_request(s)
@@ -2873,13 +2930,14 @@ def main():
                 )
             measured = read_decode_rows(a.out)
             try:
-                s.verify_spec_mode(
-                    final=True,
-                    rows=measured,
-                    probe_response=probe_response,
-                    concurrent=fe.read_concurrent_records(a.out),
-                    concurrent_probe=conc_probe,
-                )
+                if not unsupported_cell:
+                    s.verify_spec_mode(
+                        final=True,
+                        rows=measured,
+                        probe_response=probe_response,
+                        concurrent=fe.read_concurrent_records(a.out),
+                        concurrent_probe=conc_probe,
+                    )
             except Exception:
                 # a refused cell keeps its evidence: the slice is written before the error propagates
                 log_end_fail = s.log.stat().st_size if s.log.exists() else 0
@@ -2887,7 +2945,7 @@ def main():
                     cell_engine_log(s.log, log_end_fail, prefix=_LOG_PREFIX)
                 )
                 raise
-            if fullcmp and a.engine != "yunshu" and getattr(s, "engaged_per_row", None):
+            if fullcmp and a.engine != "yunshu" and getattr(s, "engaged_per_row", None) and not unsupported_cell:
                 # attribution per measured request, from the matched evidence (written after the final check)
                 for attr in fe.attr_rows_from(s.engaged_per_row, measured):
                     emit(out, part="attr", engine=a.engine, rep=a.rep, **attr)
@@ -2901,7 +2959,7 @@ def main():
                 ):
                     emit(out, part="attr", engine=a.engine, rep=a.rep, **attr)
             mem = getattr(s, "mem", None)
-            if mem is not None:
+            if mem is not None and not unsupported_cell:
                 time.sleep(a.idle_s)
                 idle = mem.sample()
                 peak = memory_peak_or_raise(mem, idle)
@@ -2940,6 +2998,7 @@ def main():
                     "quiet_post": fq.snapshot(),
                     # the raw usage chunk of the first request (GPU smoke evidence, per engine)
                     "usage_sample": _USAGE_SAMPLE[0] if a.log_usage_sample else None,
+                    "unsupported_cell": unsupported_cell,
                     **engaged_end_fields(s),
                 }
             emit(

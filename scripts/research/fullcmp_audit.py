@@ -236,6 +236,9 @@ class Run:
     profile_root: object = None  # <profile_root>/<engine>/<cell>-prof.jsonl: layer-2 rows
     full: bool = False  # full mode: every cell needs a profile rep (missing = violation)
     behaviour: dict = field(default_factory=dict)  # engine -> rows of <root>/behaviour/<engine>.jsonl
+    # cells the engine itself refused (tfbench part=unsupported): (cell, rep, reason). They are not measurements:
+    # they leave run.files and every guard, and are listed in manifest_completeness notes (the table shows them)
+    unsupported: list = field(default_factory=list)
 
 
 @dataclass
@@ -386,7 +389,7 @@ def load_run(root, manifest: dict) -> Run:
                 cell,
                 rep,
             )
-    files, missing, parse_errors = [], [], []
+    files, missing, parse_errors, unsupported = [], [], [], []
     for path, (cell, rep) in expected.items():
         if not path.is_file():
             missing.append((cell, rep, path))
@@ -394,6 +397,10 @@ def load_run(root, manifest: dict) -> Run:
         rows, errs = _read_jsonl(path)
         parse_errors += errs
         header = next((r for r in rows if r.get("part") == "session"), None)
+        refusal = next((r for r in rows if r.get("part") == "unsupported"), None)
+        if refusal is not None:
+            unsupported.append((cell, rep, f"HTTP {refusal.get('http_status')}: {refusal.get('reason')}"))
+            continue
         body = [r for r in rows if r.get("part") == "decode"]
         for r in rows:
             if r.get("part") == CONC_PART:
@@ -428,7 +435,7 @@ def load_run(root, manifest: dict) -> Run:
         rows, errs = _read_jsonl(p)
         parse_errors += errs
         behaviour[p.stem] = rows
-    return Run(manifest, files, missing, extra, parse_errors, behaviour=behaviour)
+    return Run(manifest, files, missing, extra, parse_errors, behaviour=behaviour, unsupported=unsupported)
 
 
 def is_num(x) -> bool:
@@ -666,6 +673,10 @@ def check_manifest_completeness(run: Run) -> GuardResult:
         res.fail(cell["cell"], f"r{rep} missing ({path})")
     for path in run.extra:
         res.fail(path.stem, f"unplanned file {path} (not in manifest)")
+    for cell, rep, reason in getattr(run, "unsupported", []):
+        # the engine refused the request shape: recorded as unsupported, not a pass and not a crash
+        res.checked += 1
+        res.notes.append(f"UNSUPPORTED {cell['cell']} r{rep}: {reason}")
     return res
 
 
