@@ -86,14 +86,14 @@ def test_identity_stage_requests_allow_eos_and_speed_does_not():
 
 
 @pytest.mark.parametrize("allow_eos", [False, True])
-def test_followup_speed_cell_ignores_eos_identity_cell_does_not(monkeypatch, allow_eos):
+def test_followup_speed_cell_ignores_eos_identity_cell_does_not(monkeypatch, allow_eos, tmp_path):
     """Flash-Next ends "continue at the same length" after ~150 tokens, which failed every speed
     run at the follow-up cell: a speed follow-up asks past EOS, an identity follow-up never does."""
     from types import SimpleNamespace
 
     sent = []
 
-    def send(_url, body):
+    def send(_url, body, sample=False):  # tfbench passes sample=True on a benchmark request
         sent.append(body)
         n = body.get("max_tokens") or body.get("max_completion_tokens")
         return dict(
@@ -128,7 +128,7 @@ def test_followup_speed_cell_ignores_eos_identity_cell_does_not(monkeypatch, all
         engine="yunshu",
     )
     m.part_decode(
-        SimpleNamespace(url="fake", model="fake"),
+        SimpleNamespace(url="fake", model="fake", log=tmp_path / "engine.log"),
         io.StringIO(),
         a,
     )
