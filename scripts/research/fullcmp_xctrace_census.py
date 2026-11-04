@@ -188,6 +188,8 @@ def census_from_tables(
     pid: int,
     steps: int | None,
     window: tuple[int, int] | None = None,
+    shader_list_xml: str | None = None,
+    shader_intervals_xml: str | None = None,
 ) -> dict:
     """The profile row fields: {"op_census": {...}, "host_sync_count": per step or None, "trace": {...}}.
 
@@ -201,12 +203,19 @@ def census_from_tables(
     if window is not None:
         enc = [e for e in enc if window[0] <= e[0] <= window[1]]
         commits = [c for c in commits if window[0] <= c["start"] <= window[1]]
+    extra = {}
+    if shader_list_xml:
+        extra["kernel_inventory"] = kernel_inventory(shader_list_xml, pid)
+    if shader_intervals_xml:
+        kt = kernel_time(shader_intervals_xml, pid)
+        extra["kernel_time"] = kt  # None: the capture did not enable shader profiling
     gaps = idle_gaps_us(enc)
     hist = {f"ge_{int(t)}us": sum(1 for g in gaps if g >= t) for t in (50, 200, 500, 1000, 5000)}
     syncs = host_syncs(enc)
     return {
         "op_census": op_census(enc, steps),
         "host_sync_count": round(syncs / steps, 3) if steps else None,
+        **extra,
         "trace": {
             "pid": pid,
             "encoder_executions": len(enc),
@@ -223,6 +232,41 @@ def census_from_tables(
             ),
         },
     }
+
+
+_HASH_TAIL = re.compile(r"_[0-9a-f]{16}(?:_.*)?$")
+
+
+def kernel_family(name: str) -> str:
+    """A pipeline name without its specialisation hash and type suffix: 'custom_kernel_lane_qmm_main_tiled_3b1e..
+    _bfloat16_t_float' -> 'custom_kernel_lane_qmm_main_tiled'. Names without a hash stay whole."""
+    return _HASH_TAIL.sub("", str(name))
+
+
+def kernel_inventory(shader_list_xml: str, pid: int) -> dict:
+    """The kernels (compute pipelines) the server process created, from metal-shader-profiler-shader-list:
+    {"pipelines": n, "families": {family: count}}. This is an inventory of what was loaded, not of what ran:
+    the table that links a pipeline to each encoder execution is empty unless shader profiling is enabled."""
+    rows = [r for r in read_table(shader_list_xml) if _num(r.get("process.pid")) == pid]
+    fam = Counter(kernel_family(r.get("name") or r.get("pso-name") or "") for r in rows)
+    return {"pipelines": len(rows), "families": dict(sorted(fam.items(), key=lambda kv: (-kv[1], kv[0])))}
+
+
+def kernel_time(intervals_xml: str, pid: int | None = None) -> dict | None:
+    """Per-kernel-family GPU time from metal-shader-profiler-intervals (Shader Timeline), filled only when the
+    capture enabled shader profiling. {family: {"samples": n, "gpu_ms": ms}}; None when the table has no rows.
+    UNVALIDATED until a shader-profiling capture has been taken (schema read from an empty export)."""
+    rows = read_table(intervals_xml)
+    if pid is not None:
+        rows = [r for r in rows if r.get("process.pid") is None or _num(r.get("process.pid")) == pid]
+    if not rows:
+        return None
+    n, ns = Counter(), Counter()
+    for r in rows:
+        fam = kernel_family(r.get("name") or r.get("pso-label") or "")
+        n[fam] += 1
+        ns[fam] += _num(r.get("duration")) or 0
+    return {f: {"samples": n[f], "gpu_ms": round(ns[f] / 1e6, 3)} for f, _ in ns.most_common()}
 
 
 def steps_from_log(text: str) -> int | None:

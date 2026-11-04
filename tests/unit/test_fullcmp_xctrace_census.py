@@ -212,3 +212,55 @@ def test_tagged_capture_never_collides_with_the_validation_trace():
     base = xt.trace_path("yunshu-pb2", root=xt.XCTRACE_DIR / "wire-1108-prof")
     assert base == xt.XCTRACE_DIR / "wire-1108-prof" / "yunshu-pb2" / "code-1k-out128.trace"
     assert base != xt.trace_path("yunshu-main")
+
+
+def test_kernel_family_strips_the_specialisation_hash():
+    assert cen.kernel_family("custom_kernel_lane_qmm_main_tiled_3b1e8067c5622dc7_bfloat16_t_float_ui") == (
+        "custom_kernel_lane_qmm_main_tiled"
+    )
+    assert cen.kernel_family("ci_ubershader_r4 (0)") == "ci_ubershader_r4 (0)"
+
+
+def test_kernel_inventory_counts_pipelines_per_family_for_the_server_pid():
+    cols = ["timestamp", "name", "pso-name", "process"]
+    rows = [
+        ["1", "k_qmm_aaaaaaaaaaaaaaaa_bf16", "k_qmm_aaaaaaaaaaaaaaaa_bf16", f"process:{PID}"],
+        ["2", "k_qmm_bbbbbbbbbbbbbbbb_bf16", "k_qmm_bbbbbbbbbbbbbbbb_bf16", f"process:{PID}"],
+        ["3", "k_gdn_cccccccccccccccc_f32", "k_gdn_cccccccccccccccc_f32", f"process:{PID}"],
+        ["4", "ubershader", "ubershader", f"process:{OTHER}"],
+    ]
+    inv = cen.kernel_inventory(_table("metal-shader-profiler-shader-list", cols, rows), PID)
+    assert inv == {"pipelines": 3, "families": {"k_qmm": 2, "k_gdn": 1}}
+
+
+def test_real_trace_has_a_kernel_inventory_but_no_shader_timeline():
+    lst, tl = REAL / "metal-shader-profiler-shader-list.xml", REAL / "metal-shader-profiler-intervals.xml"
+    if not (lst.is_file() and tl.is_file()):
+        pytest.skip("real trace export not on this machine")
+    inv = cen.kernel_inventory(lst.read_text(), 50342)
+    assert inv["pipelines"] > 100 and any(f.startswith("custom_kernel_lane_qmm") for f in inv["families"])
+    assert cen.kernel_time(tl.read_text(), 50342) is None  # stock template: shader profiling is off
+
+
+def test_kernel_time_groups_shader_timeline_rows_by_family():
+    cols = ["start", "duration", "name", "process"]
+    rows = [
+        ["1", "2000000", "k_qmm_aaaaaaaaaaaaaaaa_bf16", f"process:{PID}"],
+        ["2", "1000000", "k_qmm_bbbbbbbbbbbbbbbb_bf16", f"process:{PID}"],
+        ["3", "500000", "k_gdn_cccccccccccccccc_f32", f"process:{PID}"],
+    ]
+    kt = cen.kernel_time(_table("metal-shader-profiler-intervals", cols, rows), PID)
+    assert kt["k_qmm"] == {"samples": 2, "gpu_ms": 3.0} and kt["k_gdn"]["samples"] == 1
+
+
+def test_variant_capture_command_uses_the_template_file_and_records_the_overhead(tmp_path):
+    cmd = xt.record_cmd(77, tmp_path / "t.trace", 120, str(tmp_path / "shader.tracetemplate"))
+    assert cmd[cmd.index("--template") + 1].endswith("shader.tracetemplate")
+    assert xt.record_cmd(77, tmp_path / "t.trace")[xt.record_cmd(77, tmp_path / "t.trace").index("--template") + 1] == xt.TEMPLATE
+    f = tmp_path / "c-prof.jsonl"
+    f.write_text("")
+    cap = {"variant": "shader-profiling", "decode_overhead_pct": 31.5, "traced_dec_tps": 48.0, "untraced_dec_tps": 70.0}
+    row = xt.append_census_row(
+        f, "yunshu-main", {"op_census": {}, "host_sync_count": 4.0, "trace": {}, "kernel_time": {"k": {"samples": 1}}}, cap
+    )
+    assert row["capture"]["decode_overhead_pct"] == 31.5 and "kernel_time" in row

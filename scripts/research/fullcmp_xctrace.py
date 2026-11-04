@@ -48,13 +48,14 @@ def trace_path(
     return Path(root) / engine / f"{cell}.trace"
 
 
-def record_cmd(pid: int, trace: Path, time_limit_s: int = 120) -> list[str]:
-    """xctrace attach-mode recording of Metal System Trace for one pid."""
+def record_cmd(pid: int, trace: Path, time_limit_s: int = 120, template: str = TEMPLATE) -> list[str]:
+    """xctrace attach-mode recording of Metal System Trace for one pid. `template` is the stock template
+    name or the path of a saved .tracetemplate (the shader-profiling variant)."""
     return [
         XCTRACE,
         "record",
         "--template",
-        TEMPLATE,
+        template,
         "--attach",
         str(pid),
         "--output",
@@ -226,6 +227,9 @@ def cold_cell_stem(a) -> str | None:
 
 
 CENSUS_TABLES = (GPU_TABLE, "metal-application-command-buffer-submissions")
+# optional tables: the kernel inventory always exists; the shader timeline only with shader profiling on
+SHADER_LIST_TABLE = "metal-shader-profiler-shader-list"
+SHADER_INTERVALS_TABLE = "metal-shader-profiler-intervals"
 
 
 def trace_census(trace: Path, pid: int | None, server_log: str, cell: str | None) -> dict:
@@ -242,16 +246,30 @@ def trace_census(trace: Path, pid: int | None, server_log: str, cell: str | None
         if exp.returncode != 0 or not exp.stdout.strip():
             raise RuntimeError(f"export of {schema} failed (rc {exp.returncode})")
         xml[schema] = exp.stdout
+    opt = {}
+    for schema in (SHADER_LIST_TABLE, SHADER_INTERVALS_TABLE):
+        exp = _run(export_table_cmd(trace, schema), 900)
+        if exp.returncode == 0 and exp.stdout.strip():
+            opt[schema] = exp.stdout
     steps = cen.steps_from_log(server_log)
-    out = cen.census_from_tables(xml[CENSUS_TABLES[0]], xml[CENSUS_TABLES[1]], pid, steps)
+    out = cen.census_from_tables(
+        xml[CENSUS_TABLES[0]],
+        xml[CENSUS_TABLES[1]],
+        pid,
+        steps,
+        shader_list_xml=opt.get(SHADER_LIST_TABLE),
+        shader_intervals_xml=opt.get(SHADER_INTERVALS_TABLE),
+    )
     out["cell"] = cell
     return out
 
 
-def append_census_row(profile_file: Path, engine: str, census: dict) -> dict:
+def append_census_row(profile_file: Path, engine: str, census: dict, capture: dict | None = None) -> dict:
     """Append one part=xctrace row to the profile cell file; the audit reads host_sync_count / op_census
     from it (fullcmp_profile.merge_xctrace). An error census is appended as an error row (fail closed)."""
     row = {"part": "xctrace", "engine": engine, "template": TEMPLATE, "cell_traced": CELL}
+    if capture:
+        row["capture"] = capture  # variant, template, traced vs untraced decode tok/s, overhead, trace bytes
     if "error" in census:
         row["error"] = census["error"]
     else:
@@ -260,6 +278,9 @@ def append_census_row(profile_file: Path, engine: str, census: dict) -> dict:
             host_sync_count=census["host_sync_count"],
             trace=census["trace"],
         )
+        for key in ("kernel_inventory", "kernel_time"):
+            if key in census:
+                row[key] = census[key]
     with Path(profile_file).open("a") as fh:
         fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     return row
@@ -282,6 +303,14 @@ def main() -> int:
         choices=("yunshu-main", "yunshu-pb2"),
         default=ENGINE,
         help="harness id of the Yunshu tree to trace (its own pin supplies binary, source and tree)",
+    )
+    ap.add_argument(
+        "--template-file",
+        type=Path,
+        default=None,
+        help="SHADER-PROFILING VARIANT (optional extra job; not run yet): a .tracetemplate saved from Instruments "
+        "with Shader Timeline / shader profiling enabled. It replaces the stock template; the row records its "
+        "overhead beside the plain capture so the numbers' usability is known.",
     )
     ap.add_argument(
         "--tag",
@@ -307,6 +336,10 @@ def main() -> int:
         print(json.dumps(res, indent=1))
         return 0 if res.get("gpu_rows_server", res.get("gpu_rows", 0)) > 0 else 1
     engine = a.engine
+    template = str(a.template_file) if a.template_file is not None else TEMPLATE
+    variant = "shader-profiling" if a.template_file is not None else "plain"
+    if a.template_file is not None and not a.template_file.exists():
+        raise SystemExit(f"--template-file {a.template_file} does not exist")
     trace = trace_path(engine, root=XCTRACE_DIR / a.tag if a.tag else XCTRACE_DIR)
     print(
         json.dumps(
@@ -377,7 +410,7 @@ def main() -> int:
         xct_log = run_dir / "xctrace-record.log"
         with open(xct_log, "wb") as xfh:
             xct = subprocess.Popen(
-                record_cmd(proc.pid, trace, 120),
+                record_cmd(proc.pid, trace, 120, template),
                 stdout=xfh,
                 stderr=subprocess.STDOUT,
                 env=dict(os.environ, TMPDIR=str(TMP_DIR)),
@@ -453,8 +486,19 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 - recorded, never silent: the profile row then says why
         census = {"error": f"{type(exc).__name__}: {exc}"}
     rec["census"] = census
+    rec["variant"], rec["template"] = variant, template
     if a.profile_file is not None:
-        append_census_row(a.profile_file, engine, census)
+        t_, b_ = rec.get("traced_dec_tps"), rec.get("untraced_dec_tps")
+        capture = {
+            "variant": variant,
+            "template": template,
+            "traced_dec_tps": t_,
+            "untraced_dec_tps": b_,
+            "decode_overhead_pct": round(100.0 * (b_ - t_) / b_, 2) if t_ and b_ else None,
+            "trace_bytes": rec.get("trace_bytes"),
+            "traced_ttft_s": rec.get("traced_ttft_s"),
+        }
+        append_census_row(a.profile_file, engine, census, capture)
     t = rec.get("traced_dec_tps")
     b = rec.get("untraced_dec_tps")
     if t and b:
