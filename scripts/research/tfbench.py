@@ -2473,6 +2473,8 @@ def fullcmp_header(
         release_date=fp.release_date(census, census_key, version, environ),
         binary_sha256=fp.binary_sha256(s.cmd[0]),
         python=(s.pin or {}).get("python"),
+        # the MLX stack of the venv this Yunshu server runs in (dev0 and the Phase B preview differ by venv)
+        packages=(fp.pinned_package_versions(s.pin["python"]) if s.pin else None),
         spec_mode_expected=s.requested_spec_mode,
         engaged_log_line=s.engaged_log_line,
         engaged_evidence_kind=getattr(s, "engaged_evidence_kind", None),

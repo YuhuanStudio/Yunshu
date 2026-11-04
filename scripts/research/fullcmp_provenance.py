@@ -349,6 +349,36 @@ def dry_run_problems(engines, census: dict, pin: dict, model_dir: str, environ=N
     return problems
 
 
+PROVENANCE_PACKAGES = ("mlx", "mlx-lm", "mlx-vlm")
+_PKG_CACHE: dict = {}
+
+
+def pinned_package_versions(python: str) -> dict:
+    """{package: version} of the MLX stack inside a pinned Yunshu venv (metadata only, no MLX import).
+    Recorded in every Yunshu cell header, so the two venvs' versions are part of each result."""
+    if python in _PKG_CACHE:
+        return dict(_PKG_CACHE[python])
+    import subprocess
+
+    code = (
+        "import importlib.metadata as m, json\n"
+        f"names = {list(PROVENANCE_PACKAGES)!r}\n"
+        "out = {}\n"
+        "for n in names:\n"
+        "    try:\n"
+        "        out[n] = m.version(n)\n"
+        "    except m.PackageNotFoundError:\n"
+        "        out[n] = None\n"
+        "print(json.dumps(out))\n"
+    )
+    res = subprocess.run([python, "-c", code], capture_output=True, text=True, timeout=60)
+    if res.returncode != 0:
+        raise ProvenanceError(f"cannot read package versions of {python}: {res.stderr.strip()[-200:]}")
+    versions = json.loads(res.stdout.strip().splitlines()[-1])
+    _PKG_CACHE[python] = versions
+    return dict(versions)
+
+
 def telemetry_out(out_path: str, engine: str, telemetry_dir: str) -> str:
     """<telemetry_dir>/<cell dir>/<cell>-rN.telemetry.jsonl: the audit's telemetry_path() when the
     telemetry dir is the results root (the audit reads it beside each cell file). The directory is

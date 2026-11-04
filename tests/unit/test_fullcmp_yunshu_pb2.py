@@ -6,6 +6,7 @@ evidence table; builds launch specs; no server, no GPU, no gpuq.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -98,8 +99,16 @@ def test_both_yunshu_pins_record_their_package_versions_and_differences_are_foot
     pb2 = _json.loads(fp.PB2_PIN_PATH.read_text())
     dev0_pkgs = dev0["packages"] if isinstance(dev0["packages"], dict) else _json.loads(dev0["packages"].replace("'", '"'))
     assert pb2["packages"]
-    shared = set(dev0_pkgs) & set(pb2["packages"])
-    assert {"mlx", "mlx-lm"} <= shared
-    differs = {k for k in shared if dev0_pkgs[k] != pb2["packages"][k]}
-    if differs or set(dev0_pkgs) != set(pb2["packages"]):
+    stack = ("mlx", "mlx-lm", "mlx-vlm")  # the MLX stack the cells run on
+    differs = [k for k in stack if dev0_pkgs.get(k) != pb2["packages"].get(k)]
+    if differs:
         assert pb2.get("package_note"), "a version difference between the two venvs needs a footnote"
+    assert not differs, differs
+
+
+def test_package_versions_are_read_from_each_pinned_venv_and_match():
+    pb2 = json.loads(fp.PB2_PIN_PATH.read_text())
+    dev0 = json.loads(fp.PIN_PATH.read_text())
+    got_pb2 = fp.pinned_package_versions(pb2["python_executable"])
+    got_dev0 = fp.pinned_package_versions(dev0["python_executable"])
+    assert got_pb2 == got_dev0 == {"mlx": "0.32.3", "mlx-lm": "0.32.2", "mlx-vlm": "0.7.8"}
