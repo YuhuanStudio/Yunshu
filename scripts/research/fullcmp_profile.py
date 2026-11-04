@@ -139,8 +139,14 @@ UNAVAILABLE_REASONS = {
     ),
     "stages.prefill": "unavailable: prefill stage timers are not emitted by this tree's profile log",
     "stages.ttft": "unavailable: TTFT stage timers are not emitted by this tree's profile log",
-    "host_sync_count": "unavailable: not an engine log counter on this tree; comes from the Metal trace capture",
-    "op_census": "unavailable: not an engine log counter on this tree; comes from the Metal trace capture",
+    "host_sync_count": (
+        "unavailable: not an engine log counter on this tree; the Metal trace (fullcmp_xctrace) is captured "
+        "for one cold 1K code request, not for this cell"
+    ),
+    "op_census": (
+        "unavailable: not an engine log counter on this tree; the Metal trace (fullcmp_xctrace) is captured "
+        "for one cold 1K code request, not for this cell"
+    ),
 }
 
 
@@ -167,12 +173,34 @@ def unavailable_layer2(row: dict) -> dict:
         else:
             present = row.get(field) is not None
             key = field
+        if field in ("host_sync_count", "op_census") and row.get("xctrace_error"):
+            continue  # a capture was attempted and failed: the field stays MISSING (fail closed)
         # only what the tree cannot emit: the round line's own fields (drafter, commit) missing is a real gap
         # the dev0 round line carries drafter and commit: absent there is a real gap. The Phase B driver logs
         # whole-round and between-step times instead (step_ms in its stage dict), so those two are unavailable
         round_line_tree = "step_ms" not in (stages.get("decode_round") or {})
         if not present and not (round_line_tree and field in EMITTED_BY_THE_ROUND_LINES):
             out[field] = UNAVAILABLE_REASONS.get(key, "unavailable: not emitted by this engine")
+    return out
+
+
+def merge_xctrace(prof: dict, rows: list[dict]) -> dict:
+    """Fold the part=xctrace row of a profile cell file (fullcmp_xctrace.append_census_row) into the profile
+    row: its op_census and host_sync_count become the row's fields. An xctrace row that records an error sets
+    xctrace_error, so those two fields stay MISSING instead of getting an 'unavailable' reason."""
+    xt = [r for r in rows if r.get("part") == "xctrace"]
+    if not xt:
+        return prof
+    last = xt[-1]
+    out = dict(prof)
+    if last.get("error"):
+        out["xctrace_error"] = str(last["error"])
+        return out
+    if last.get("op_census") is not None:
+        out["op_census"] = last["op_census"]
+    if last.get("host_sync_count") is not None:
+        out["host_sync_count"] = last["host_sync_count"]
+    out["xctrace"] = last.get("trace")
     return out
 
 

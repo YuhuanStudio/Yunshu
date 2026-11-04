@@ -1484,6 +1484,10 @@ def check_attribution_fields(run: Run) -> GuardResult:
             res.fail(cell, "profile rep missing: no part=profile row in " + str(path))
             continue
         res.checked += 1
+        if fe.is_yunshu(engine):
+            import fullcmp_profile as fprof
+
+            prof = fprof.merge_xctrace(prof, rows)
         if fe.is_yunshu(engine) and "layer2_unavailable" not in prof:
             # a profile row written before the per-field reasons existed: the same static facts apply
             import fullcmp_profile as fprof

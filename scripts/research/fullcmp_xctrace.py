@@ -208,6 +208,63 @@ def validate_gpu(trace: Path, pid: int | None) -> dict:
     return {"table_schema": GPU_TABLE, "table_rc": 0, **gpu_summary(exp.stdout, pid)}
 
 
+def yunshu_launch_paths(engine: str, ab) -> tuple[str, str, str]:
+    """(binary, source dir, tree dir) of the Yunshu tree an engine traces: dev0 from the sampler A/B pins,
+    the Phase B preview from its own pin json (harness_env + worktree)."""
+    if engine == "yunshu-pb2":
+        import fullcmp_provenance as fp
+
+        pin = json.loads(fp.pin_path_for("yunshu-pb2").read_text())
+        env = pin["launch"]["harness_env"]
+        return env["TFB_YUNSHU_BIN"], env["TFB_YUNSHU_SRC"], pin["worktree"]
+    return ab.PIN_YUNSHU_BIN, ab.PIN_YUNSHU_SRC, ab.TREE
+
+
+def cold_cell_stem(a) -> str | None:
+    """The profile cell stem the census row belongs to (from --profile-file), for the row's cell field."""
+    return a.profile_file.stem if a.profile_file is not None else None
+
+
+CENSUS_TABLES = (GPU_TABLE, "metal-application-command-buffer-submissions")
+
+
+def trace_census(trace: Path, pid: int | None, server_log: str, cell: str | None) -> dict:
+    """Export the two tables of a finished trace and compute the census fields (fullcmp_xctrace_census).
+    The decode step count of the traced request comes from the engine log; without a pid or a step count
+    the per-step numbers stay None (and the row says so)."""
+    import fullcmp_xctrace_census as cen
+
+    if pid is None:
+        raise RuntimeError("no server pid recorded: the census needs the process to filter the trace")
+    xml = {}
+    for schema in CENSUS_TABLES:
+        exp = _run(export_table_cmd(trace, schema), 900)
+        if exp.returncode != 0 or not exp.stdout.strip():
+            raise RuntimeError(f"export of {schema} failed (rc {exp.returncode})")
+        xml[schema] = exp.stdout
+    steps = cen.steps_from_log(server_log)
+    out = cen.census_from_tables(xml[CENSUS_TABLES[0]], xml[CENSUS_TABLES[1]], pid, steps)
+    out["cell"] = cell
+    return out
+
+
+def append_census_row(profile_file: Path, engine: str, census: dict) -> dict:
+    """Append one part=xctrace row to the profile cell file; the audit reads host_sync_count / op_census
+    from it (fullcmp_profile.merge_xctrace). An error census is appended as an error row (fail closed)."""
+    row = {"part": "xctrace", "engine": engine, "template": TEMPLATE, "cell_traced": CELL}
+    if "error" in census:
+        row["error"] = census["error"]
+    else:
+        row.update(
+            op_census=census["op_census"],
+            host_sync_count=census["host_sync_count"],
+            trace=census["trace"],
+        )
+    with Path(profile_file).open("a") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return row
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument(
@@ -220,6 +277,18 @@ def main() -> int:
         help="validate an existing .trace (no server, no GPU work)",
     )
     ap.add_argument("--pid", type=int, default=None, help="server pid for --validate-only")
+    ap.add_argument(
+        "--engine",
+        choices=("yunshu-main", "yunshu-pb2"),
+        default=ENGINE,
+        help="harness id of the Yunshu tree to trace (its own pin supplies binary, source and tree)",
+    )
+    ap.add_argument(
+        "--profile-file",
+        type=Path,
+        default=None,
+        help="profile cell file (<profile root>/<engine>/<cell>-prof.jsonl): the census row is appended here",
+    )
     a = ap.parse_args()
     if a.validate_only is not None:
         toc = _run(export_toc_cmd(a.validate_only), 300)
@@ -231,7 +300,8 @@ def main() -> int:
         res.update(validate_gpu(a.validate_only, a.pid))
         print(json.dumps(res, indent=1))
         return 0 if res.get("gpu_rows_server", res.get("gpu_rows", 0)) > 0 else 1
-    trace = trace_path()
+    engine = a.engine
+    trace = trace_path(engine)
     print(
         json.dumps(
             {
@@ -260,13 +330,14 @@ def main() -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     home = run_dir / "home"
     home.mkdir(parents=True, exist_ok=True)
+    bin_, src, tree = yunshu_launch_paths(engine, ab)
     environ = dict(
         os.environ,
-        TFB_YUNSHU_BIN=os.environ.get("TFB_YUNSHU_BIN", ab.PIN_YUNSHU_BIN),
-        TFB_YUNSHU_SRC=os.environ.get("TFB_YUNSHU_SRC", ab.PIN_YUNSHU_SRC),
+        TFB_YUNSHU_BIN=os.environ.get("TFB_YUNSHU_BIN", bin_),
+        TFB_YUNSHU_SRC=os.environ.get("TFB_YUNSHU_SRC", src),
         TMPDIR=str(TMP_DIR),
     )
-    launch = be.build_launch("yunshu-main", PORT, home, environ)
+    launch = be.build_launch(engine, PORT, home, environ)
     for path, text in launch.files.items():
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_text(text)
@@ -278,7 +349,7 @@ def main() -> int:
     url = f"http://127.0.0.1:{PORT}"
     log = run_dir / "server.log"
     rec: dict = {
-        "engine": ENGINE,
+        "engine": engine,
         "cell": CELL,
         "trace": str(trace),
         "run_dir": str(run_dir),
@@ -292,7 +363,7 @@ def main() -> int:
                 stdout=fh,
                 stderr=subprocess.STDOUT,
                 env=launch.env,
-                cwd=ab.TREE,
+                cwd=tree,
             )
         model = ab.wait_ready(proc, url, log)
         rec["model_id"] = model
@@ -371,6 +442,13 @@ def main() -> int:
     rec["gpu_schemas"] = schemas
     if GPU_TABLE in schemas:
         rec.update(validate_gpu(trace, rec.get("server_pid")))
+    try:
+        census = trace_census(trace, rec.get("server_pid"), log.read_text(errors="replace"), cold_cell_stem(a))
+    except Exception as exc:  # noqa: BLE001 - recorded, never silent: the profile row then says why
+        census = {"error": f"{type(exc).__name__}: {exc}"}
+    rec["census"] = census
+    if a.profile_file is not None:
+        append_census_row(a.profile_file, engine, census)
     t = rec.get("traced_dec_tps")
     b = rec.get("untraced_dec_tps")
     if t and b:
