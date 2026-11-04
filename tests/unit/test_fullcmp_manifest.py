@@ -20,7 +20,10 @@ def _rows():
 
 
 def test_engine_list_is_the_approved_twelve_plus_ollama():
+    # 12 measured engines (yunshu-pb2 added 2026-11-04: the same curve as yunshu, release date = its
+    # commit 4f99270cae40, 2026-11-03T08:20:53+08:00) + lmstudio (not measured) + ollama (unsupported)
     assert fm.ENGINE_IDS == [
+        "yunshu-pb2",
         "yunshu",
         "tf-1.2.1",
         "tf-1.1.8",
@@ -36,7 +39,7 @@ def test_engine_list_is_the_approved_twelve_plus_ollama():
         "ollama",
     ]
     assert "tf-1.2.0" not in fm.ENGINE_IDS
-    assert len([e for e in fm.ENGINE_IDS if e != "ollama"]) == 12
+    assert len([e for e in fm.ENGINE_IDS if e != "ollama"]) == 13  # 12 measured + lmstudio
 
 
 def test_no_dropped_scope_and_no_secondary_models():
@@ -255,10 +258,12 @@ def test_cuts_apply_in_order_only_while_over_target(monkeypatch):
     total = fm.planned_h(rows)
     text = buf.getvalue()
     assert text.startswith("planned total before cuts")
-    if total <= fm.TARGET_GPU_H:
+    if "cut (" not in text:
         assert "no cut applied" in text
+        assert total <= fm.TARGET_GPU_H
     else:
-        assert "cut (1)" in text
+        # cuts applied in order; within target, or the summary says it is still over (the ranked proposal)
+        assert total <= fm.TARGET_GPU_H or "STILL OVER" in text
     # every cut row keeps its id, cost and reason (never silently dropped)
     cut = [r for r in rows if r["status"] == fm.CUT]
     assert all(
@@ -343,3 +348,14 @@ def test_warm_phase_pays_the_reply_decode():
     warm = fm.wall_s("yunshu", 32768, 1, 512, False, 0, ("warm",))
     dec = fm.decode_tps("yunshu", 32768)
     assert warm > 512 / dec
+
+
+def test_yunshu_pb2_rows_mirror_yunshu_main_cell_for_cell():
+    # yunshu-pb2 (phaseb2-main 4f99270) is the same engine config: its rows mirror yunshu's per batch
+    rows, _ = fm.build_rows()
+    for batch in ("B1", "B2", "B4"):  # B5 (agents) runs only yunshu and the placeholder, by design
+        a = sorted(r["id"].replace(".yunshu-pb2.", ".yunshu.") for r in rows if r["batch"] == batch and r["engine"] == "yunshu-pb2")
+        b = sorted(r["id"] for r in rows if r["batch"] == batch and r["engine"] == "yunshu")
+        assert a == b, batch
+    pb2 = [r for r in rows if r["engine"] == "yunshu-pb2" and r["status"] == "unverified"]
+    assert pb2, "yunshu-pb2 rows are in the real manifest"

@@ -38,8 +38,9 @@ def _census_or_skip() -> dict:
     return fp.load_json(fp.CENSUS_PATH)
 
 
-def test_manifest_engine_ids_are_the_eleven_measured_engines():
+def test_manifest_engine_ids_are_the_twelve_measured_engines():
     assert MEASURED_IDS == [
+        "yunshu-pb2",
         "yunshu",
         "tf-1.2.1",
         "tf-1.1.8",
@@ -140,6 +141,10 @@ def test_runner_dry_run_refuses_an_engine_without_release_date(
     monkeypatch.setattr(run, "PREFLIGHT_DIR", tmp_path / "preflight")
     monkeypatch.setattr(run.fp, "CENSUS_PATH", census_path)
     monkeypatch.setattr(run, "prompt_corpus_problems", lambda rows: [])
+    import fullcmp_engine_tables as fet
+
+    # the engine-table pin check runs its own subprocesses; this test is about the release date
+    monkeypatch.setattr(fet, "check_all", lambda ids, ctx=None: [])
 
     def boom(*_a, **_k):
         raise AssertionError("refused run must not reach gpuq or subprocess")

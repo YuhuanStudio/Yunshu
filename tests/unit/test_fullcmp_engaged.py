@@ -244,7 +244,8 @@ def test_table_keys_equal_the_manifest_engine_set():
     import fullcmp_manifest as fm
 
     table = fe.load_table()
-    manifest = set(fm.ENGINES) - {"ollama", "lmstudio", fm.PLACEHOLDER}
+    # yunshu-pb2 has no evidence of its own: it is read through EVIDENCE_ALIAS (the yunshu evidence)
+    manifest = {fe.EVIDENCE_ALIAS.get(e, e) for e in fm.ENGINES} - {"ollama", "lmstudio", fm.PLACEHOLDER}
     assert set(table["engines"]) == manifest
     for engine, entry in table["engines"].items():
         assert "modes" in entry and entry["confidence"], engine

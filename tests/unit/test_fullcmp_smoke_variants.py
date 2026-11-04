@@ -28,7 +28,8 @@ import tfbench  # noqa: E402
 # moves by float rounding. Re-pinned 11-03 after the regenerated manifest matched it byte for byte.
 # Re-pinned 11-03 again: the cost model now uses the measured cell timing (fullcmp_cell_timing.json:
 # per-cell server start + memory idle, warm decode), so every est_gpu_min moved on purpose.
-REAL_MANIFEST_SHA = "d3c4b57e800db49493b9e01dcdde4e2aae304a44ebafc1ecd90c0ad01a521f90"
+# Re-pinned 2026-11-04: yunshu-pb2 rows added (same config as yunshu; release date = commit 4f99270cae40)
+REAL_MANIFEST_SHA = "0ea2746b010f2c25ec8cd5cfc5350fdebc09d4344e448295ddba3fc4c0619a0c"
 
 
 def _real_manifest_bytes() -> bytes:
