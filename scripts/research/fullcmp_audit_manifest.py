@@ -699,6 +699,7 @@ def build_manifest(
                 "engine": eng,
                 "model": r["model"],
                 "column": f"{r['ctx']}/{r['prompt_kind']}/c{r['conc']}/o{r['out_len']}",
+                "conc": int(r["conc"]),
                 "cell": cid,
                 "group": grp,
                 "ctx": r["ctx_tokens"],

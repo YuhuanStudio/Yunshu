@@ -248,6 +248,7 @@ def _base_harness_part(row: dict):
                 str(row["out_len"]),
                 "--conc-trials",
                 str(CONC_TRIALS),
+                *concurrency_args(row),
             ],
             None,
         )
@@ -292,9 +293,33 @@ def _base_harness_part(row: dict):
             "--conc-trials",
             str(CONC_TRIALS),
             *same,
+            *concurrency_args(row),
         ],
         None,
     )
+
+
+# Engines whose context option is per stream / per slot / per conversation (TensorFold --context, Kapitsa --context,
+# mlx-serve --ctx-size, llama.cpp -c / -np): a concurrent cell is launched with a context sized to the cell
+# (longest request + output + margin), not the 140000 of a decode cell. The other engines keep their context.
+CONC_CTX_ENGINES = ("tf-1.2.1", "tf-1.1.8", "mlx-serve-26.11.1", "kapitsa-0.2.26", "llama-cpp-b12061")
+CTX_MARGIN = 1024  # template, system text and the warm-up requests
+
+
+def cell_context(row: dict) -> int:
+    """Tokens one request of a concurrent cell needs: the longest prompt (conc ctx, or the mixed long request) +
+    output + margin, rounded up to 1024."""
+    need = int(row["ctx_tokens"]) + int(row["out_len"]) + CTX_MARGIN
+    return -(-need // 1024) * 1024
+
+
+def concurrency_args(row: dict) -> list[str]:
+    """Launch configuration of a concurrent cell, as tfbench args: --parallel N (every engine reads it where it has
+    such a flag) and, for the engines with a per-stream context, --ctx-tokens sized to the cell."""
+    args = ["--parallel", str(int(row["conc"]))]
+    if row["engine"] in CONC_CTX_ENGINES:
+        args += ["--ctx-tokens", str(cell_context(row))]
+    return args
 
 
 def row_reps(row: dict) -> int:
@@ -1021,6 +1046,7 @@ def audit_manifest(
                 "engine": r["engine"],
                 "model": r["model"],
                 "column": f"{r['ctx']}/{r['prompt_kind']}/c{r['conc']}/o{r['out_len']}",
+                "conc": int(r["conc"]),
                 "cell": r["id"],
                 "group": grp,
                 "ctx": r["ctx_tokens"],

@@ -1212,6 +1212,45 @@ def check_measured_only(run: Run) -> GuardResult:
     return res
 
 
+STREAMS_RE = re.compile(r"(\d+) streams of (\d+) tokens")
+
+
+def _flag_value(cmd, flag):
+    """Value after `flag` in a recorded launch command (list or string), or None."""
+    words = cmd if isinstance(cmd, list) else str(cmd or "").split()
+    for i, w in enumerate(words[:-1]):
+        if str(w) == flag:
+            return words[i + 1]
+    return None
+
+
+def check_launch_concurrency(run: Run, res: GuardResult) -> None:
+    """A concurrent (conc / mixed) cell was launched the way a user serving N clients would: for an engine that has a
+    slots / parallel flag (bench_engines.PARALLEL_FLAG) the header's recorded command carries it with a value >= the
+    cell's N, and a TensorFold server's own startup line reports at least N streams. Never a silently lower N."""
+    if run.manifest.get("stub_engine") is True:
+        return  # test only: the launched process is a stub, it has no engine flags
+    for cf in run.files:
+        n = int(cf.cell.get("conc") or 1)
+        flag = bench_engines.PARALLEL_FLAG.get(str(cf.cell.get("engine")))
+        if n <= 1 or flag is None or cf.header is None:
+            continue
+        cell = cf.cell["cell"]
+        res.checked += 1
+        got = _flag_value(cf.header.get("cmd"), flag)
+        try:
+            ok = got is not None and int(got) >= n
+        except ValueError:
+            ok = False
+        if not ok:
+            res.fail(cell, f"r{cf.rep}: concurrent cell N={n} launched with {flag} {got!r} (needs >= {n})")
+        if str(cf.cell.get("engine")).startswith("tf-"):
+            log = Path(str(cf.path)[: -len(".jsonl")] + ".server.log")
+            streams = [int(m[0]) for m in STREAMS_RE.findall(log.read_text(errors="replace"))] if log.is_file() else []
+            if streams and max(streams) < n:
+                res.fail(cell, f"r{cf.rep}: the server started {max(streams)} streams for N={n}")
+
+
 def check_fairness_controls(run: Run) -> GuardResult:
     """Guard 12: greedy sampling, isolated HOME per engine, A/A and injected-delay controls."""
     res = GuardResult("fairness_controls")
@@ -1229,6 +1268,7 @@ def check_fairness_controls(run: Run) -> GuardResult:
         res.checked += 1
         if ctl.get("injected_delay_detected") is not True:
             res.fail("controls", "injected delay was not detected by the harness")
+    check_launch_concurrency(run, res)
     # HOME is isolated per server process. The harness starts one server per gpuq job (a chunk of
     # cells cold-starts its server again), so the job id is the server key: each job has exactly one
     # HOME, no HOME is the real one, and no two servers share a HOME. Several servers of one engine

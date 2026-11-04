@@ -750,7 +750,8 @@ def build_launch(
             "mtp_enabled": False,
             "model_settings_sha256": hashlib.sha256(settings_text.encode()).hexdigest(),
             "memory_guard_gb": 96,
-            "max_concurrent_requests": 8,
+            "max_concurrent_requests": max(8, parallel),
+            "parallel": parallel,
             "ssd_cache": "20GB",
             "hot_cache": "8GB",
         }
@@ -764,8 +765,9 @@ def build_launch(
                 "127.0.0.1",
                 "--port",
                 p,
+                # default 8 (omlx serve --help); a cell serving more clients raises it to N
                 "--max-concurrent-requests",
-                "8",
+                str(max(8, parallel)),
                 "--memory-guard-gb",
                 "96",
                 "--paged-ssd-cache-dir",
@@ -1000,7 +1002,9 @@ def build_launch(
                 str(int(ctx_tokens)),
             ],
             scrubbed_env(environ, base_env),
-            {"drafter": "DFlash2 (explicit --drafter)", "thinking": "off"},
+            # --parallel N streams, each of --context tokens (its own startup line: 'Qwen3.8-27B: 1 streams of 140000
+            # tokens'), so a concurrent cell passes N and a context sized to the cell, not 140000
+            {"drafter": "DFlash2 (explicit --drafter)", "thinking": "off", "parallel": parallel},
             {},
             {},
         )
@@ -1139,9 +1143,17 @@ def build_launch(
                 # (src/kv_disk_cache.zig:3640) falls under the isolated HOME
                 "--prefix-cache-disk",
                 "20GB",
+                # --max-concurrent N: sizes the request queue and caps how many decoders a long prefill admits a
+                # newcomer beside (default 1; mlx-serve serve --help). A concurrent cell serves N clients
+                *(["--max-concurrent", str(parallel)] if parallel > 1 else []),
             ],
             scrubbed_env(environ, base_env),
-            {"ctx_size": int(ctx_tokens), "spec_mode": "mtp", "prefix_cache_disk": "20GB (documented SSD tier)"},
+            {
+                "ctx_size": int(ctx_tokens),
+                "spec_mode": "mtp",
+                "prefix_cache_disk": "20GB (documented SSD tier)",
+                "parallel": parallel,
+            },
             {},
             {},
         )
@@ -1181,8 +1193,12 @@ def build_launch(
                 "127.0.0.1",
                 "--port",
                 p,
+                # a concurrent cell (parallel N > 1): -np N slots with the context per slot = the cell's size, so
+                # -c is the total, N x the cell (llama-server --help: -np number of server slots, default auto; with an
+                # explicit slot count the unified KV buffer is off and -c is split across the slots)
                 "-c",
-                str(int(ctx_tokens)),
+                str(int(ctx_tokens) * max(1, parallel)),
+                *(["-np", str(parallel)] if parallel > 1 else []),
                 "--jinja",
                 "--reasoning",
                 "off",
@@ -1193,7 +1209,7 @@ def build_launch(
                 "--metrics",
             ],
             scrubbed_env(environ, base_env),
-            {"spec_type": "draft-mtp", "reasoning": "off"},
+            {"spec_type": "draft-mtp", "reasoning": "off", "parallel": parallel},
             {},
             {},
         )
@@ -1222,15 +1238,36 @@ def build_launch(
         )
     if engine == "kapitsa-0.2.26":
         kh = str(Path(home) / "kapitsa-home")
+        # --private: listen on 127.0.0.1 only and do not announce on the network (kapitsa serve --help); by default
+        # the server is visible to every Mac on the LAN. A concurrent cell (parallel N > 1) is launched the way a user
+        # serving N clients would: --slots N (requests that run at once; default up to 4) and --context sized to the
+        # cell (context per conversation; default 256K x slots)
+        conc_args = (
+            ["--slots", str(parallel), "--context", str(int(ctx_tokens))] if parallel > 1 else []
+        )
         return Launch(
-            [KAPITSA_BIN_0226, "serve", "--model", "27b", "--dflash", "auto", "--port", p],
+            [KAPITSA_BIN_0226, "serve", "--model", "27b", "--dflash", "auto", "--port", p, "--private", *conc_args],
             scrubbed_env(environ, {**base_env, "KAPITSA_HOME": kh}),
-            {"model": "27b", "spec_mode": "dflash"},
+            {"model": "27b", "spec_mode": "dflash", "private": True, "parallel": parallel},
             {},
             {str(Path(kh) / "models" / "qwen3.8-27b-4bit"): KAPITSA_MODEL_DIR},
         )
     raise KeyError(engine)
 
+
+# The launch flag that sets how many requests an engine serves at once, per manifest engine id (the audit fails a
+# concurrent cell whose header shows a value below the cell's N). Engines absent here have no such flag or admit
+# concurrently without one: Yunshu / pb2 (YUNSHU_MAX_CONCURRENT unset: adaptive, starts at 8; settings.py:133),
+# Splash (--queue-size 32), mlx-vlm (--max-num-seqs unbounded), mlx-lm (--decode-concurrency 32).
+PARALLEL_FLAG = {
+    "tf-1.2.1": "--parallel",
+    "tf-1.1.8": "--parallel",
+    "mlx-serve-26.11.1": "--max-concurrent",
+    "kapitsa-0.2.26": "--slots",
+    "llama-cpp-b12061": "-np",
+    "omlx-0.7.3": "--max-concurrent-requests",
+    "omlx-0.7.3rc1": "--max-concurrent-requests",
+}
 
 REFSYNC_ALIASES = {
     "omlx-latest": "omlx",

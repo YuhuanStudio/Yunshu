@@ -51,7 +51,8 @@ PRESENT = {
     "mlx-vlm-server": {"--draft-kind": "dflash", "--draft-model": be.DRAFTER},
     # kapitsa 0.2.26 serve --help: DFlash2 drafter auto (default), slots default up to 4, disk cache auto (default on),
     # context default = the model's limit (256K here, log line 'Context: 256K tokens per conversation')
-    "kapitsa-0.2.26": {"--dflash": "auto"},
+    # (--private: listen on 127.0.0.1 only, do not announce on the LAN; serve --help)
+    "kapitsa-0.2.26": {"--dflash": "auto", "--private": None},
 }
 
 # flags a launch must NOT carry: the engine's lossy switches (user options, never a benchmark default)

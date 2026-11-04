@@ -1112,8 +1112,40 @@ def wire_1108_rows():
     return out
 
 
+# Validation of the concurrent launch configuration (--parallel / --max-concurrent / --slots / -np, context per
+# stream sized to the cell): conc c8 at 1K and mixed 8K c4 for the engines that have such a flag and could not start
+# or fit at N (TensorFold, mlx-serve, Kapitsa, llama.cpp).
+WIRE_1108C8_ENGINES = ("tf-1.2.1", "tf-1.1.8", "mlx-serve-26.11.1", "kapitsa-0.2.26", "llama-cpp-b12061")
+WIRE_1108C8_SHAPES = (
+    ("conc-c8", "B2", dict(sweep="conc", ctx="1K", conc=8, phases=("cold",))),
+    ("mixed-c4", "B2", dict(sweep="mixed", ctx="8K", conc=4, turns="mixed", phases=("mixed",))),
+)
+WIRE_1108C8_OUT = WIRE_1108_OUT.with_name("wire_1108c8_manifest.jsonl")
+
+
+def wire_1108c8_rows():
+    """The concurrency validation smoke: one conc c8 1K and one mixed 8K c4 cell per engine of WIRE_1108C8_ENGINES."""
+    out = []
+    for slot, batch, kw in WIRE_1108C8_SHAPES:
+        sp = spec(**kw, reps=WIRE_1108_REPS)
+        for eng in WIRE_1108C8_ENGINES:
+            row = _cell_row(eng, batch, sp)
+            if row["status"] != UNV:
+                continue
+            work = row.pop("_work_min")
+            row.pop("_group", None)
+            row["est_gpu_min"] = round(work, 3)
+            out.append(row)
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument(
+        "--c8-smoke",
+        action="store_true",
+        help="write the concurrency validation manifest (conc c8 1K + mixed 8K c4: TensorFold, mlx-serve, Kapitsa, llama.cpp)",
+    )
     ap.add_argument(
         "--family-smoke",
         action="store_true",
@@ -1135,6 +1167,15 @@ def main(argv=None):
         "(1x 8K + 3x 1K) for every conc-capable engine",
     )
     args = ap.parse_args(argv)
+    if args.c8_smoke:
+        rows = wire_1108c8_rows()
+        out = args.out or WIRE_1108C8_OUT
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open("w") as fh:
+            for r in rows:
+                fh.write(json.dumps(r, sort_keys=True, ensure_ascii=False) + "\n")
+        sys.stdout.write(f"wrote {out} ({len(rows)} c8-smoke rows)\n")
+        return 0
     if args.family_smoke:
         rows = wire_1108_rows()
         out = args.out or WIRE_1108_OUT

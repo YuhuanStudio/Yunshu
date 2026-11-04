@@ -2641,6 +2641,39 @@ def engaged_end_fields(s) -> dict:
     }
 
 
+def server_exited(s) -> bool:
+    """True when the engine process of this cell is gone (an OOM kill, a crash at a high slot count)."""
+    proc = getattr(s, "proc", None)
+    return proc is not None and proc.poll() is not None
+
+
+def unsupported_at_n_row(out, a, why: str) -> None:
+    """Record that this cell cannot run at its concurrency N: the cell is 'unsupported at N (measured: <error>)',
+    never run again at a lower N."""
+    emit(
+        out,
+        part="unsupported",
+        phase=a.part,
+        http_status=None,
+        concurrency=a.parallel,
+        reason=f"unsupported at N={a.parallel} (measured: {why})"[:REFUSAL_BODY_MAX],
+        cell=cell_name(getattr(a, "out", ""), getattr(a, "rep", 0)),
+    )
+
+
+def run_part_or_unsupported(fn, s, out, a):
+    """Run one part. A concurrent cell (parallel N > 1) whose engine process died during the part (OOM at N slots or
+    streams, a crash) is recorded as 'unsupported at N' with the error; any other failure still raises."""
+    try:
+        fn(s, out, a)
+    except Exception as exc:
+        if a.parallel > 1 and a.part in ("conc", "mixed") and server_exited(s):
+            rc = s.proc.poll()
+            unsupported_at_n_row(out, a, f"engine exited rc={rc} during the cell: {type(exc).__name__}: {exc}")
+            return
+        raise
+
+
 def cell_unsupported(path) -> bool:
     """True when the cell file holds an 'unsupported' row: the engine refused the request shape."""
     with open(path) as fh:
@@ -2812,14 +2845,27 @@ def main():
         sys.exit(QUIET_REFUSED_EXIT)
     job_start_s = time.time()
     swap_start = fp.swap_snapshot() if fullcmp else None
-    s = start_server(
-        a.engine,
-        extra_env,
-        f"{a.engine}-{a.part}-{a.rep}{a.tag}{job_log_suffix()}",
-        model=a.model,
-        ctx_tokens=a.ctx_tokens,
-        parallel=a.parallel,
-    )
+    try:
+        s = start_server(
+            a.engine,
+            extra_env,
+            f"{a.engine}-{a.part}-{a.rep}{a.tag}{job_log_suffix()}",
+            model=a.model,
+            ctx_tokens=a.ctx_tokens,
+            parallel=a.parallel,
+        )
+    except Exception as exc:
+        if not (fullcmp and a.parallel > 1 and a.part in ("conc", "mixed")):
+            raise
+        # the engine does not come up at N slots / streams (OOM, refusal of the flag): this cell is
+        # 'unsupported at N (measured: <error>)'; the job continues with its next cell, never at a lower N
+        with open(a.out, "w") as out:
+            emit(out, part="session", engine=a.engine, rep=a.rep, launch_parallel=a.parallel,
+                 launch_ctx_tokens=a.ctx_tokens, start_failed=True)
+            unsupported_at_n_row(out, a, f"engine did not start: {type(exc).__name__}: {exc}")
+            emit(out, part="part_done", engine=a.engine, which=a.part, rep=a.rep, complete=True)
+        print(f"UNSUPPORTED at N={a.parallel}: engine did not start: {exc}", flush=True)
+        sys.exit(0)
     # The engine log is shared by every cell of a job (same name): this cell's slice is the byte
     # range from here to its end, written beside the cell file (server_log_path).
     first_log = s.log
@@ -2883,6 +2929,9 @@ def main():
                 requested_spec_mode=s.requested_spec_mode,
                 engaged_spec_mode=s.engaged_spec_mode,
                 engine_probe=getattr(s, "probe", None),
+                # the launch configuration of a concurrent cell (the audit compares it with the cell's N)
+                launch_parallel=a.parallel,
+                launch_ctx_tokens=a.ctx_tokens,
                 tag=a.tag,
                 server_log=first_log.name,
                 server_log_start=log_start,
@@ -2895,18 +2944,23 @@ def main():
                 part_conc(s, out, a)
                 part_agent(s, out, a)
             else:
-                {
-                    "decode": part_decode,
-                    "arrive": part_arrive,
-                    "conc": part_conc,
-                    "agent": part_agent,
-                    "needle": part_needle,
-                    "conc32": part_conc32,
-                    "promote": part_promote,
-                    "forced": part_forced,
-                    "corpus": part_corpus,
-                    "mixed": part_mixed,
-                }[a.part](s, out, a)
+                run_part_or_unsupported(
+                    {
+                        "decode": part_decode,
+                        "arrive": part_arrive,
+                        "conc": part_conc,
+                        "agent": part_agent,
+                        "needle": part_needle,
+                        "conc32": part_conc32,
+                        "promote": part_promote,
+                        "forced": part_forced,
+                        "corpus": part_corpus,
+                        "mixed": part_mixed,
+                    }[a.part],
+                    s,
+                    out,
+                    a,
+                )
             if _LIVE_SERVERS:
                 s = _LIVE_SERVERS[-1]  # a restart cell measured on its relaunched server
             probe_response = None
