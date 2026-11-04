@@ -772,3 +772,15 @@ def test_cached_tokens_reads_both_server_shapes_and_keeps_absent_unknown():
     assert tb.cached_tokens({"prompt_tokens": 10, "prompt_tokens_details": {"cached_tokens": 4}}) == 4
     assert tb.cached_tokens({"prompt_tokens": 10, "cached_tokens": 3}) == 3
     assert tb.cached_tokens({"prompt_tokens": 10}) is None
+
+
+@pytest.fixture(autouse=True)
+def _package_versions_stub(monkeypatch):
+    """The header reads the MLX stack from the pinned venv's python. These tests use a fake venv
+    (no interpreter there), so the reader is stubbed to the pinned versions; the reader itself is
+    covered by test_fullcmp_yunshu_pb2 against the real venvs."""
+    monkeypatch.setattr(
+        fp,
+        "pinned_package_versions",
+        lambda python: {"mlx": "0.32.3", "mlx-lm": "0.32.2", "mlx-vlm": "0.7.8"},
+    )
