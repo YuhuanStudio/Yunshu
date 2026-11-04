@@ -66,7 +66,7 @@ def test_pb2_pin_resolves_with_the_census_and_is_its_own_tree():
     p = pins[PB2]
     assert p["version"] == "0.1.7.dev0"
     assert p["release_date"] and p["binary_sha256"]
-    assert p["install_path"] and "yunshu-pb2" in p["install_path"]
+    assert p["install_path"] and "fullcmp-pb2" in p["install_path"]
     assert fam.WEIGHT_GROUP[PB2] == "qwen3.8-27b-4bit-jundot"
     assert fam.census_weights(census)[fam.WEIGHT_GROUP[PB2]] is not None
 
@@ -89,3 +89,17 @@ def test_preview_has_its_own_pin_file_and_the_dev0_tree_is_refused_for_it():
     assert frun.engine_pin(PB2, {})["sha"] == "4f99270cae4068019cfd80d02a177646fdfdb558"
     assert frun.engine_pin("yunshu", {}) is not None
     assert fp.pin_path_for(PB2) != fp.pin_path_for("yunshu")
+
+
+def test_both_yunshu_pins_record_their_package_versions_and_differences_are_footnoted():
+    import json as _json
+
+    dev0 = _json.loads(fp.PIN_PATH.read_text())
+    pb2 = _json.loads(fp.PB2_PIN_PATH.read_text())
+    dev0_pkgs = dev0["packages"] if isinstance(dev0["packages"], dict) else _json.loads(dev0["packages"].replace("'", '"'))
+    assert pb2["packages"]
+    shared = set(dev0_pkgs) & set(pb2["packages"])
+    assert {"mlx", "mlx-lm"} <= shared
+    differs = {k for k in shared if dev0_pkgs[k] != pb2["packages"][k]}
+    if differs or set(dev0_pkgs) != set(pb2["packages"]):
+        assert pb2.get("package_note"), "a version difference between the two venvs needs a footnote"

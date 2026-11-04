@@ -72,7 +72,7 @@ def test_engine_pin_routes_the_env_per_engine():
     dev0 = _dev0_pin()
     assert frun.engine_pin("yunshu", dev0) is dev0
     pb2 = frun.engine_pin("yunshu-pb2", dev0)
-    assert "wt-fullcmp-yunshu-pb2" in pb2["launch"]["harness_env"]["TFB_YUNSHU_SRC"]
+    assert "wt-fullcmp-pb2" in pb2["launch"]["harness_env"]["TFB_YUNSHU_SRC"]
     assert "wt-fullcmp-yunshu/" not in pb2["launch"]["harness_env"]["TFB_YUNSHU_SRC"]
 
 
@@ -81,5 +81,5 @@ def test_cell_env_carries_the_engines_own_tree():
     dev0_env = frun.cell_env("yunshu", dev0, group="g")
     pb2_env = frun.cell_env("yunshu-pb2", dev0, group="g")
     assert any(x.startswith("TFB_YUNSHU_SRC=") and "wt-fullcmp-yunshu/" in x for x in dev0_env)
-    assert any(x.startswith("TFB_YUNSHU_SRC=") and "wt-fullcmp-yunshu-pb2" in x for x in pb2_env)
-    assert not any("wt-fullcmp-yunshu-pb2" in x for x in dev0_env)
+    assert any(x.startswith("TFB_YUNSHU_SRC=") and "wt-fullcmp-pb2" in x for x in pb2_env)
+    assert not any("wt-fullcmp-pb2" in x for x in dev0_env)
