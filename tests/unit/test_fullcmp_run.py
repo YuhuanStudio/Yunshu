@@ -986,3 +986,65 @@ def test_nothing_is_rerun_when_every_cell_is_complete(pin_file, tmp_path, monkey
         raise AssertionError("no rerun expected")
 
     assert run.rerun_failed_cells(plan, json.loads(pin_file.read_text()), submit=never) == ([], 0)
+
+
+# --- profile-only batch: only the -prof jobs, from an existing snapshot, beside a finished timed batch -----------------
+
+
+def _profile_rows():
+    return [row("yunshu", "B1.a", reps=1), row("yunshu-pb2", "B1.b", reps=1), row("omlx-0.7.3", "B1.c", reps=1)]
+
+
+def test_plan_batch_profile_only_has_only_profile_jobs(pin_file):
+    pin = json.loads(pin_file.read_text())
+    both = run.plan_batch(_profile_rows(), "B1", pin, profile_rep=True, profile_engines=["yunshu", "yunshu-pb2"])
+    only = run.plan_batch(
+        _profile_rows(), "B1", pin, profile_rep=True, profile_engines=["yunshu", "yunshu-pb2"], profile_only=True
+    )
+    assert any("profile" not in j.flags for j in both.jobs)  # the normal plan keeps the timed jobs
+    assert only.jobs and all("profile" in j.flags for j in only.jobs)
+    assert {j.engine for j in only.jobs} == {"yunshu", "yunshu-pb2"}  # omlx has no profile job here
+    assert all(j.label.endswith("-prof") or "-prof" in j.label for j in only.jobs)
+
+
+def test_profile_only_needs_profile_rep_and_engines(pin_file, tmp_path, monkeypatch, capsys):
+    manifest = tmp_path / "m.jsonl"
+    manifest.write_text("\n".join(json.dumps(r) for r in _profile_rows()) + "\n")
+    assert run.main(["--batch", "B1", "--manifest", str(manifest), "--profile-only", "--dry-run"]) == 2
+    assert run.main(["--batch", "B1", "--manifest", str(manifest), "--profile-only", "--profile-rep", "--dry-run"]) == 2
+    assert "--profile-only needs --profile-rep and --profile-engines" in capsys.readouterr().err
+
+
+def test_profile_only_dry_run_prints_only_profile_jobs(pin_file, tmp_path, monkeypatch, capsys):
+    manifest = tmp_path / "m.jsonl"
+    manifest.write_text("\n".join(json.dumps(r) for r in _profile_rows()) + "\n")
+    args = ["--batch", "B1", "--manifest", str(manifest), "--profile-rep", "--profile-engines", "yunshu,yunshu-pb2", "--dry-run"]
+    assert run.main([*args, "--profile-only"]) == 0
+    out = capsys.readouterr().out
+    jobs = [ln for ln in out.splitlines() if ln.startswith("JOB ")]
+    assert jobs and all(ln.rstrip().endswith("-prof") or "-prof" in ln for ln in jobs)
+    assert run.main(args) == 0
+    full = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("JOB ")]
+    assert len(full) > len(jobs)  # the normal plan also has the timed jobs
+
+
+def test_profile_only_run_skips_the_audit_reps_and_requeues(pin_file, tmp_path, monkeypatch):
+    manifest = tmp_path / "m.jsonl"
+    manifest.write_text("\n".join(json.dumps(r) for r in _profile_rows()) + "\n")
+    monkeypatch.setattr(run, "gpuq_status_text", lambda: "")
+    monkeypatch.setattr(run, "swap_gate", lambda b: 0)
+    submitted = []
+
+    def fake_one(job):
+        submitted.append(job.label)
+        return f"id{len(submitted)}", 0, "done"
+
+    def forbidden(*a, **k):
+        raise AssertionError("a profile-only batch must not audit, schedule reps or requeue")
+
+    monkeypatch.setattr(run, "_submit_and_wait", fake_one)
+    monkeypatch.setattr(run, "run_audit", forbidden)
+    monkeypatch.setattr(run, "run_reps", forbidden)
+    monkeypatch.setattr(run, "requeue_quiet_flagged", forbidden)
+    rc = run.main(["--batch", "B1", "--manifest", str(manifest), "--profile-rep", "--profile-engines", "yunshu,yunshu-pb2", "--profile-only"])
+    assert rc == 0 and submitted and all("-prof" in lbl for lbl in submitted)

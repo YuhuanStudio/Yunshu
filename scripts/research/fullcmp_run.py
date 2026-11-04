@@ -881,6 +881,7 @@ def plan_batch(
     rep=None,
     profile_rep: bool = False,
     profile_engines=None,
+    profile_only: bool = False,
 ) -> Plan:
     batch_rows = [r for r in rows if r.get("batch") == batch]
     runnable, skipped = [], []
@@ -908,7 +909,7 @@ def plan_batch(
     reps = [rep] if rep is not None else list(range(max_reps))
     rows_by_rep = {k: [r for r in runnable if k < row_reps(r)] for k in reps}
     rows_by_rep = {k: v for k, v in rows_by_rep.items() if v}
-    jobs = plan_jobs(rows_by_rep, engine_order, pin, batch)
+    jobs = [] if profile_only else plan_jobs(rows_by_rep, engine_order, pin, batch)
     if profile_rep and runnable:
         # One extra profile job per (engine, group, chunk), after the timed jobs; its rows never
         # reach the table. --profile-engines limits them to the listed engines (default: all).
@@ -1581,6 +1582,17 @@ def live_dirty_paths(repo: Path = REPO_ROOT) -> list[str]:
     return [line for line in out.splitlines() if line.strip()]
 
 
+def existing_snapshot(path: Path, repo: Path = REPO_ROOT) -> Path:
+    """An already frozen snapshot (harness-<commit7>/) reused as it is: its files must still hash to the blobs git holds
+    for the commit it records (verify_snapshot). A later profile batch runs from the SAME snapshot as the timed batch it
+    profiles, whatever HEAD has become since. Raises HarnessDirty when it is not a valid snapshot."""
+    dest = Path(path)
+    if not (dest / ".snapshot_commit").is_file():
+        raise HarnessDirty(f"{dest} is not a harness snapshot (no .snapshot_commit)")
+    verify_snapshot(dest, repo)
+    return dest
+
+
 def snapshot_harness(work: Path, repo: Path = REPO_ROOT) -> Path:
     """Freeze the harness at HEAD into work/harness-<HEAD7>/ (read-only, reused when it exists for
     the same commit, never deleted). Refuses when the live worktree has uncommitted harness changes
@@ -1824,6 +1836,19 @@ def main(argv=None) -> int:
         "have profile rows (default: every engine)",
     )
     ap.add_argument(
+        "--profile-only",
+        action="store_true",
+        help="with --profile-rep and --profile-engines: schedule ONLY the -prof jobs (no timed jobs, no audit, no rep-3 "
+        "or quiet requeue); the profile rows land under <raw root>/profile/ beside a finished timed batch",
+    )
+    ap.add_argument(
+        "--snapshot-dir",
+        type=Path,
+        default=None,
+        help="reuse this frozen harness snapshot (harness-<commit>/, verified against git) instead of snapshotting HEAD: "
+        "a profile batch runs from the timed batch's own snapshot",
+    )
+    ap.add_argument(
         "--raw-root",
         type=Path,
         default=None,
@@ -1859,7 +1884,11 @@ def main(argv=None) -> int:
         print("harness snapshot skipped (test run)", flush=True)
     else:
         try:
-            snap = snapshot_harness(HARNESS_WORK, REPO_ROOT)
+            snap = (
+                existing_snapshot(a.snapshot_dir, REPO_ROOT)
+                if a.snapshot_dir is not None
+                else snapshot_harness(HARNESS_WORK, REPO_ROOT)
+            )
         except HarnessDirty as exc:
             print(f"refusing: {exc}", file=sys.stderr)
             return 2
@@ -1904,6 +1933,9 @@ def main(argv=None) -> int:
     if profile_engines and not a.profile_rep:
         print("refusing: --profile-engines needs --profile-rep", file=sys.stderr)
         return 2
+    if a.profile_only and not (a.profile_rep and profile_engines):
+        print("refusing: --profile-only needs --profile-rep and --profile-engines", file=sys.stderr)
+        return 2
     if profile_engines:
         known = {r.get("engine") for r in rows if r.get("batch") == a.batch}
         unknown = sorted(set(profile_engines) - known)
@@ -1918,6 +1950,7 @@ def main(argv=None) -> int:
         rep=a.rep,
         profile_rep=a.profile_rep,
         profile_engines=profile_engines,
+        profile_only=a.profile_only,
     )
     problems = prompt_corpus_problems(plan.runnable)
     if problems:
@@ -1995,6 +2028,11 @@ def main(argv=None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
+    if a.profile_only:
+        # the timed record is not touched: no audit, rep-3 or quiet requeue here. The profile rows are audited in place
+        # afterwards (fullcmp_audit --profile-root <raw root>/profile --full) once the xctrace rows are appended
+        print(f"{a.batch}: profile-only batch, {len(ids)} jobs done, {failed} failed", flush=True)
+        return 1 if failed else 0
     # a failed (non-quiet) cell is rerun once at the end, from this snapshot; what is still incomplete fails the batch
     try:
         _rerun_ids, still_incomplete = rerun_failed_cells(plan, pin)

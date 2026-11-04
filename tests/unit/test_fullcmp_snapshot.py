@@ -273,3 +273,21 @@ def test_stub_server_env_refuses_a_real_batch():
     with pytest.raises(run.RealQueueRefused, match="TFB_STUB_SERVER"):
         run.refuse_real_queue({"GPUQ_DIR": "/tmp/x", "TFB_STUB_SERVER": "/tmp/shim"})
     run.refuse_real_queue({"GPUQ_DIR": "/tmp/x"})
+
+
+def test_existing_snapshot_is_reused_after_head_moves_and_refuses_a_tampered_or_missing_one(repo, tmp_path):
+    """A profile batch runs from the timed batch's snapshot, whatever HEAD has become since."""
+    work = tmp_path / "work"
+    work.mkdir()
+    snap = run.snapshot_harness(work, repo)
+    (repo / "scripts" / "research" / "tfbench.py").write_text("VERSION = 2\n")
+    _git(repo, "commit", "-q", "-am", "later")
+    assert run.existing_snapshot(snap, repo) == snap  # HEAD moved: the frozen snapshot is still valid
+    with pytest.raises(run.HarnessDirty):
+        run.existing_snapshot(tmp_path / "nowhere", repo)
+    victim = snap / "scripts" / "research" / "tfbench.py"
+    os.chmod(snap / "scripts" / "research", 0o755)
+    os.chmod(victim, 0o644)
+    victim.write_text("VERSION = 99\n")
+    with pytest.raises(run.HarnessDirty):
+        run.existing_snapshot(snap, repo)
