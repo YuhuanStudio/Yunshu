@@ -590,6 +590,7 @@ def b2_specs():
 
 def _cell_row(eng, batch, sp):
     ctx_tokens = CTX_TOKENS[sp["ctx"]]
+    reps = sp.get("reps", REPS)
     status, why = cell_status(eng, sp)
     cid = (
         f"{batch}.{sp['sweep']}.{eng}.{sp['ctx']}.c{sp['conc']}.{sp['kind']}.o{sp['out']}."
@@ -598,7 +599,7 @@ def _cell_row(eng, batch, sp):
     work = 0.0
     if status != UNS:
         work = (
-            REPS
+            reps
             * wall_s(
                 eng,
                 ctx_tokens,
@@ -630,7 +631,7 @@ def _cell_row(eng, batch, sp):
         "sampling": sp["sampling"],
         "status": status,
         "reason": why,
-        "reps": REPS,
+        "reps": reps,
         "_work_min": work,
         "_group": (batch, eng, "restart" if sp["turns"] == "restart" else "main"),
     }
@@ -1019,47 +1020,54 @@ def top_cells(rows, n=8):
     return live[:n]
 
 
-# ---------------------------------------------------------------- wire-1108: one smallest real cell per family
+# ---------------------------------------------------------------- wire-1108: one smallest shape per family
+# Verification run, not a measurement matrix: one rep per cell, the smallest shape that still exercises
+# each family's mechanism (lead decision, 2026-11-04). Rows come from the production generator (_cell_row),
+# so ids, prompts, salts and parts are the real ones. Shapes not in the real matrix (mixed 8K c4) are built
+# with the same spec path. Engines: every supported engine; a cell the census rules out is dropped.
+WIRE_1108_REPS = 1
 REAL_MANIFEST = Path(
     "/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103/manifest.jsonl"
 )
 WIRE_1108_OUT = Path(
     "/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103/wire-1103/wire_1108_manifest.jsonl"
 )
-FAMILY_SLOTS = (
-    ("core", lambda r: r["sweep"] == "core" and r["prompt_kind"] == "code" and r["ctx"] == "1K"),
-    ("conc", lambda r: r["sweep"] == "conc" and r["conc"] == 2),
-    ("conc-same", lambda r: r["sweep"] == "conc-same" and r["conc"] == 2),
-    ("mixed", lambda r: r["sweep"] == "mixed"),
-    ("ctx", lambda r: r["sweep"] == "ctx"),
-    ("idle5", lambda r: r["sweep"] == "idle5"),
-    ("restart", lambda r: r["sweep"] == "restart"),
-    ("kind:tool-chat", lambda r: r["sweep"] == "kind" and r["prompt_kind"] == "tool-chat"),
-    ("kind:cjk", lambda r: r["sweep"] == "kind" and r["prompt_kind"] == "cjk"),
-    ("kind:json-schema", lambda r: r["sweep"] == "kind" and r["prompt_kind"] == "json-schema"),
-    ("sampling", lambda r: r["sweep"] == "sampling"),
-    ("thinking", lambda r: r["sweep"] == "thinking"),
-    ("out:128", lambda r: r["sweep"] == "out" and r["out_len"] == 128),
-    ("out:2048", lambda r: r["sweep"] == "out" and r["out_len"] == 2048),
-    ("image", lambda r: r["sweep"] == "image" and r["media"] == "img1"),
+WIRE_1108_SHAPES = (
+    # (family slot, batch, spec overrides)            mechanism exercised
+    ("core", "B1", dict(sweep="core", ctx="1K", kind="code")),  # decode, warm, follow-up
+    ("conc", "B2", dict(sweep="conc", ctx="1K", conc=2, phases=("cold",))),  # 2 distinct streams
+    ("conc-same", "B2", dict(sweep="conc-same", ctx="1K", conc=2, phases=("cold",))),  # one shared prompt
+    ("mixed", "B2", dict(sweep="mixed", ctx="8K", conc=4, turns="mixed", phases=("mixed",))),  # 1x8K + short mix
+    ("ctx", "B2", dict(sweep="ctx", ctx="4K")),  # context sweep point
+    ("idle5", "B2", dict(sweep="idle5", ctx="1K", turns="idle5", phases=("cold", "fu_idle"))),  # 5 s idle
+    ("restart", "B2", dict(sweep="restart", ctx="1K", turns="restart", phases=("cold", "restart"))),  # disk tier
+    ("kind:tool-chat", "B2", dict(sweep="kind", ctx="8K", kind="tool-chat", phases=("cold",))),
+    ("kind:cjk", "B2", dict(sweep="kind", ctx="8K", kind="cjk", phases=("cold",))),
+    ("kind:json-schema", "B2", dict(sweep="kind", ctx="8K", kind="json-schema", phases=("cold",))),
+    ("thinking", "B2", dict(sweep="thinking", ctx="8K", thinking="on", phases=("cold",))),  # no 1K thinking prompt
+    ("out:128", "B2", dict(sweep="out", ctx="1K", out=128)),
+    ("out:2048", "B2", dict(sweep="out", ctx="1K", out=2048)),
+    ("sampling", "B2", dict(sweep="sampling", ctx="1K", sampling="genconfig", phases=("cold",))),
+    ("image", "B2", dict(sweep="image", ctx="1K", media="img1", phases=("cold",))),
 )
 
 
-def family_smoke_rows(real_rows):
-    """For each family slot and each engine that has a matching real B1/B2 row, the smallest one (lowest
-    ctx, then conc, then out_len, then id). The rows are the real manifest dicts, unchanged."""
+def wire_1108_rows():
+    """One row per (family slot, supported engine) whose cell the census does not rule out. Each row is
+    _cell_row's output with reps=WIRE_1108_REPS; est_gpu_min is the cell work (no server boot share)."""
     out = []
-    for slot, pred in FAMILY_SLOTS:
-        for eng in sorted({r["engine"] for r in real_rows}):
-            cands = [
-                r
-                for r in real_rows
-                if r["batch"] in ("B1", "B2") and r["engine"] == eng and pred(r)
-            ]
-            if not cands:
+    for slot, batch, kw in WIRE_1108_SHAPES:
+        sp = spec(**kw, reps=WIRE_1108_REPS)
+        for eng in ENGINE_IDS:
+            if not ENGINES[eng]["supported"]:
                 continue
-            best = min(cands, key=lambda r: (r["ctx_tokens"], r["conc"], r["out_len"], r["id"]))
-            out.append(best)
+            row = _cell_row(eng, batch, sp)
+            if row["status"] != UNV:
+                continue
+            work = row.pop("_work_min")
+            row.pop("_group", None)
+            row["est_gpu_min"] = round(work, 3)
+            out.append(row)
     return out
 
 
@@ -1087,8 +1095,7 @@ def main(argv=None):
     )
     args = ap.parse_args(argv)
     if args.family_smoke:
-        real = [json.loads(line) for line in REAL_MANIFEST.read_text().splitlines() if line.strip()]
-        rows = family_smoke_rows(real)
+        rows = wire_1108_rows()
         out = args.out or WIRE_1108_OUT
         out.parent.mkdir(parents=True, exist_ok=True)
         with out.open("w") as fh:
