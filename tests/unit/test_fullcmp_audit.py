@@ -1592,3 +1592,42 @@ def test_rotation_swapped_completed_engines_is_still_a_violation():
     swapped = ["tf-1.2.1", "yunshu", "tf-1.1.8", "splash-1.5.0", "mlx-serve-26.11.1", "llama-cpp-b12061"]
     res = fa.check_gpu_exclusive_rotation(_rot_run(PLANNED_1106, swapped))
     assert res.violations and "planned order of the completed engines" in res.violations[0]
+
+
+# --- cold_cache for concurrent and mixed requests (wire-1107 records, values copied in) -------
+
+
+def _mixed_rows(cached):
+    return [{"part": "mixed", "phase": "mixed", "cached": c, "ct": 16} for c in cached]
+
+
+def test_wire_1107_yunshu_mixed_trial1_fails_the_cold_cache_guard():
+    # wire-1107y yunshu SMOKE mixed 8K c4 v0: trial 1 cached [8192, 0, 0, 0]
+    run = _fake_run([_cf({"cell": "SMOKE.smoke-mixed.yunshu.8K.c4.code.o64.mixed.th-off.none.greedy.v0"},
+                         0, {"part": "session", "fresh_process": True}, _mixed_rows([0, 0, 0, 0, 8192, 0, 0, 0]))])
+    res = fa.check_cold_cache(run)
+    assert any("mixed" in v and "cached=8192" in v for v in res.violations), res.violations
+
+
+def test_wire_1107_splash_and_tf_121_mixed_trial1_fail_the_cold_cache_guard():
+    # splash cached [8160, 0, 0, 0] and tf-1.2.1 cached [8187, 3, 3, 3] in trial 1
+    for cell, cached in (
+        ("SMOKE.smoke-mixed.splash-1.5.0.8K.c4.code.o64.mixed.th-off.none.greedy.v0", [8160, 0, 0, 0]),
+        ("SMOKE.smoke-mixed.tf-1.2.1.8K.c4.code.o64.mixed.th-off.none.greedy.v0", [8187, 3, 3, 3]),
+    ):
+        run = _fake_run([_cf({"cell": cell}, 0, {"part": "session", "fresh_process": True}, _mixed_rows(cached))])
+        assert fa.check_cold_cache(run).violations, cell
+
+
+def test_missing_cached_fails_closed_for_mixed_and_conc_rows():
+    rows = [{"part": "conc", "phase": "conc", "ct": 16}]  # no cached field at all
+    run = _fake_run([_cf({"cell": "B2.conc.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
+                         {"part": "session", "fresh_process": True}, rows)])
+    assert fa.check_cold_cache(run).violations
+
+
+def test_conc_same_shares_its_prompt_by_design():
+    rows = _mixed_rows([0, 512, 512, 512])
+    run = _fake_run([_cf({"cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
+                         {"part": "session", "fresh_process": True}, rows)])
+    assert fa.check_cold_cache(run).violations == []

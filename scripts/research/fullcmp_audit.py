@@ -771,7 +771,10 @@ def check_engaged_mode(run: Run) -> GuardResult:
             kind = ev.get("evidence_kind")
             why = "loaded only (startup line, no per-request evidence)" if kind == "startup_only" else "no evidence"
             res.fail(cell, f"r{cf.rep}: engaged mode unverified: {why}")
-        elif got != want and not (not cf.rows and got == "ar" and concurrent_records):
+        elif got != want and not (bool(concurrent_records) and got == "ar" and str(ev.get("label") or "").startswith("ar (")):
+            # only single-request cells must match the configured mode; a concurrent cell whose evidence says the
+            # concurrent path does not draft ('ar (...)') passes with that label carried into the table
+
             # a Yunshu concurrent cell's derived mode is the evidence's (ar when its requests do not draft)
             res.fail(cell, f"r{cf.rep}: engaged evidence says {got!r}, configured {want!r}")
         for key in ("requested_spec_mode", "spec_mode_expected"):
@@ -917,6 +920,11 @@ def check_weight_identity(run: Run) -> GuardResult:
     return res
 
 
+def _shared_prefix_cell(cell: str) -> bool:
+    """conc-same cells send one shared prompt by design (their share is not a cold cache)."""
+    return ".conc-same." in str(cell)
+
+
 def check_cold_cache(run: Run) -> GuardResult:
     """Guard 8: cold cells are a fresh process with server-reported cached_tokens == 0."""
     res = GuardResult("cold_cache")
@@ -938,6 +946,18 @@ def check_cold_cache(run: Run) -> GuardResult:
                     res.fail(
                         cell,
                         f"r{cf.rep} cold: cached={cached!r}, must be server-reported 0",
+                    )
+            elif phase in ("conc", "mixed") and not _shared_prefix_cell(cell):
+                # concurrent and mixed requests: every trial's prompts are new to the server (the
+                # trial salt), so no request may hit the prefix cache (2026-11-04: trial 1 of a mixed
+                # cell was cached 8192 tokens on yunshu). conc-same shares its prompt by design.
+                if cached is None:
+                    res.fail(cell, f"r{cf.rep} {phase}: cached count not recorded (fail closed)")
+                elif isinstance(cached, bool) or not isinstance(cached, int) or cached != 0:
+                    res.fail(
+                        cell,
+                        f"r{cf.rep} {phase}: cached={cached!r}, must be server-reported 0 "
+                        "(a new prompt per trial)",
                     )
             elif phase == "restart":
                 # the relaunched server serves the cold prompt from the disk prefix tier: a cache
