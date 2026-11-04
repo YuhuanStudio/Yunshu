@@ -792,13 +792,15 @@ def cached_tokens(usage):
     return value
 
 
-def concurrent_prompt(index, trial, ctx, variant=0):
-    """Independent exact-size requests; salt at the front prevents shared-prefix priming."""
+def concurrent_prompt(index, trial, ctx, variant=0, run=0):
+    """Independent exact-size requests; salt at the front prevents shared-prefix priming. The salt names
+    the run (the concurrency level n of a conc sweep): without it, trial 0 of n=2 and trial 0 of n=4 sent the
+    same prompt to one server, and the second sweep hit the first one's cache (2026-11-04)."""
     from snapshot_prompts import exact_chat_prompt
 
     kind = "prose" if (index + trial) % 2 == 0 else "code"
     source = load_variant_prompt(f"{kind}-32768", variant)
-    return exact_chat_prompt(f"Request {trial}:{index}.\n" + source, ctx, LONG_ASK)
+    return exact_chat_prompt(f"Run {run}, request {trial}:{index}.\n" + source, ctx, LONG_ASK)
 
 
 def prompt_digest(messages):
@@ -2072,7 +2074,7 @@ def part_conc(s, out, a):
                 "Say hello."
                 if a.smoke
                 else concurrent_prompt(
-                    0 if same else i, trial, a.conc_ctx, getattr(a, "prompt_variant", 0)
+                    0 if same else i, trial, a.conc_ctx, getattr(a, "prompt_variant", 0), run=n
                 )
                 for i in range(n)
             ]
