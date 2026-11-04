@@ -32,6 +32,15 @@ ROUND_RE = re.compile(
 HOST_RE = re.compile(
     r"DFlash host between rounds: consumer \(yield\) ([\d.]+) ms/round"
 )
+# Phase B round driver (yunshu-pb2): no per-stage profile line; it logs the whole-round time over a window of
+# rounds and, per request, the time inside decode steps and between steps.
+PB2_WINDOW_RE = re.compile(
+    r"Round driver DFlash window of (\d+) rounds \(total (\d+)\): rows/round ([\d.]+), ([\d.]+) ms/round, "
+    r"nodes/row ([\d.]+), tokens/row-round ([\d.]+)"
+)
+PB2_IDLE_RE = re.compile(
+    r"round driver idle: (\d+) decode steps, ([\d.]+) ms in a step, ([\d.]+) ms between steps"
+)
 TREE_RE = re.compile(r"Tree verify stage profile \((\d+) rounds, ms/round\): (\{.*\})")
 COMPETITOR_RE = re.compile(r"(?i)(stat|prof|timing|tok/s|\bms\b)")
 # Structured layer-2 line: stage fields the profile lines do not carry, plus the host-sync counter
@@ -77,6 +86,25 @@ def parse_yunshu_stages(text: str) -> dict:
     return stages
 
 
+def parse_pb2_stages(text: str) -> dict:
+    """Stage dict from the Phase B round driver lines: decode steps and the step-weighted mean of the
+    time inside a step and between steps (one 'round driver idle' line per request), plus the mean
+    ms/round over the logged windows. Only what the log says (means of logged numbers, nothing modelled)."""
+    idle = [(int(a), float(b), float(c)) for a, b, c in PB2_IDLE_RE.findall(text)]
+    win = [float(m[3]) for m in PB2_WINDOW_RE.findall(text)]
+    if not idle and not win:
+        return {}
+    node: dict = {}
+    steps = sum(n for n, _, _ in idle)
+    if steps:
+        node["rounds"] = steps
+        node["step_ms"] = sum(n * a for n, a, _ in idle) / steps
+        node["host_between_steps_ms"] = sum(n * b for n, _, b in idle) / steps
+    if win:
+        node["window_ms_per_round"] = sum(win) / len(win)
+    return {"decode_round": node}
+
+
 def parse_yunshu_layer2(text: str) -> dict:
     """The YUNSHU_LAYER2 line (last one wins): {"stages", "host_sync_count", "op_census"} as
     printed, or {} when the engine did not print it. Malformed JSON is ignored (reported missing)."""
@@ -105,8 +133,9 @@ def competitor_stat_lines(text: str) -> list[str]:
 # of the profile request, taken as a separate profile batch.
 UNAVAILABLE_REASONS = {
     "stages.decode_round": (
-        "unavailable: not emitted by this tree's profile log (it prints drafter, verify_total, commit, "
-        "host_yield and tree_stage_ms only; no YUNSHU_LAYER2 line)"
+        "unavailable: not emitted by this tree's profile log (dev0 prints drafter, verify_total, commit, "
+        "host_yield and tree_stage_ms; the Phase B round driver prints step_ms and ms between steps; "
+        "neither prints a YUNSHU_LAYER2 line)"
     ),
     "stages.prefill": "unavailable: prefill stage timers are not emitted by this tree's profile log",
     "stages.ttft": "unavailable: TTFT stage timers are not emitted by this tree's profile log",
@@ -139,9 +168,28 @@ def unavailable_layer2(row: dict) -> dict:
             present = row.get(field) is not None
             key = field
         # only what the tree cannot emit: the round line's own fields (drafter, commit) missing is a real gap
-        if not present and field not in EMITTED_BY_THE_ROUND_LINES:
+        # the dev0 round line carries drafter and commit: absent there is a real gap. The Phase B driver logs
+        # whole-round and between-step times instead (step_ms in its stage dict), so those two are unavailable
+        round_line_tree = "step_ms" not in (stages.get("decode_round") or {})
+        if not present and not (round_line_tree and field in EMITTED_BY_THE_ROUND_LINES):
             out[field] = UNAVAILABLE_REASONS.get(key, "unavailable: not emitted by this engine")
     return out
+
+
+def refresh_legacy_row(row: dict) -> dict:
+    """A Yunshu profile row written before the Phase B parser and the per-field reasons existed: re-read its
+    engine log (the path is in the row) and recompute stages and reasons. An unreadable log leaves the row
+    unchanged apart from the reasons, so the guard still reports what the row lacks."""
+    row = dict(row)
+    try:
+        text = Path(str(row.get("engine_log_path"))).read_text(errors="replace")
+    except OSError:
+        text = ""
+    stages = parse_yunshu_stages(text) or parse_pb2_stages(text)
+    if stages:
+        row["stages"] = stages
+    row["layer2_unavailable"] = unavailable_layer2(row)
+    return row
 
 
 def _engine_log_path(cell: Path) -> str | None:
@@ -184,7 +232,7 @@ def append_profile_row(cell: Path, engine: str) -> dict:
         else:
             row["engine_log_path"] = log_path
             if engine in YUNSHU_ENGINES:
-                stages = parse_yunshu_stages(text)
+                stages = parse_yunshu_stages(text) or parse_pb2_stages(text)
                 l2 = parse_yunshu_layer2(text)
                 for name, fields in (l2.get("stages") or {}).items():
                     if isinstance(fields, dict):

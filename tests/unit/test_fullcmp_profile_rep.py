@@ -272,3 +272,43 @@ def test_audit_gives_a_legacy_profile_row_the_same_static_reasons():
     row = {"part": "profile", "engine": "yunshu", "stages": {"decode_round": {"drafter": 2.27, "commit": 0.12}}}
     assert "host_sync_count" in fp.unavailable_layer2(row)
     assert hasattr(fau, "check_attribution_fields")
+
+
+def test_phase_b_round_driver_lines_map_to_stages_and_drafter_commit_are_unavailable(tmp_path):
+    """Failing-before (wire-1108 yunshu-pb2): the Phase B round driver prints no 'DFlash round profile' line,
+    so the profile row had stages {} and the guard failed on drafter and commit. Its own lines (window ms/round,
+    'round driver idle: N decode steps, X ms in a step, Y ms between steps') now map to stages, and the two
+    per-stage fields it cannot emit carry explicit reasons."""
+    log = tmp_path / "server.log"
+    log.write_text(
+        "x round_driver.dflash: Round driver DFlash window of 100 rounds (total 100): rows/round 1.00, "
+        "48.7 ms/round, nodes/row 14.30, tokens/row-round 4.60\n"
+        "x round_driver.driver: round driver idle: 100 decode steps, 48.0 ms in a step, 0.4 ms between steps\n"
+        "x round_driver.driver: round driver idle: 100 decode steps, 50.0 ms in a step, 0.2 ms between steps\n"
+    )
+    cell = tmp_path / "p-prof.jsonl"
+    cell.write_text(json.dumps({"part": "session", "engine_log_path": str(log)}) + "\n")
+    row = fp.append_profile_row(cell, "yunshu-pb2")
+    node = row["stages"]["decode_round"]
+    assert node["rounds"] == 200 and node["step_ms"] == pytest.approx(49.0)
+    assert node["host_between_steps_ms"] == pytest.approx(0.3) and node["window_ms_per_round"] == 48.7
+    assert row["layer2_unavailable"]["stages.decode_round.drafter"].startswith("unavailable:")
+    assert fa.missing(fa.check_profile("yunshu-pb2", row)) == []
+
+
+def test_a_dev0_row_without_the_round_line_still_fails_on_drafter(tmp_path):
+    log = tmp_path / "server.log"
+    log.write_text("nothing profiled here\n")
+    cell = tmp_path / "d-prof.jsonl"
+    cell.write_text(json.dumps({"part": "session", "engine_log_path": str(log)}) + "\n")
+    row = fp.append_profile_row(cell, "yunshu")
+    assert "stages.decode_round.drafter" in fa.missing(fa.check_profile("yunshu", row))
+
+
+def test_legacy_pb2_profile_row_is_recomputed_from_its_engine_log(tmp_path):
+    log = tmp_path / "server.log"
+    log.write_text("round driver idle: 10 decode steps, 40.0 ms in a step, 1.0 ms between steps\n")
+    legacy = {"part": "profile", "engine": "yunshu-pb2", "engine_log_path": str(log), "stages": {}}
+    row = fp.refresh_legacy_row(legacy)
+    assert row["stages"]["decode_round"]["step_ms"] == 40.0
+    assert fa.missing(fa.check_profile("yunshu-pb2", row)) == []
