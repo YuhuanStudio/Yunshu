@@ -354,10 +354,15 @@ def test_dry_run_touches_no_gpu_or_queue(pin_file, tmp_path, monkeypatch, capsys
     monkeypatch.setattr(run, "swap_gate", boom)
     monkeypatch.setattr(run, "wait_all", boom)
     monkeypatch.setattr(run.subprocess, "run", boom)
+    # the engine-table check builds the pins (its own subprocesses); this test is about the queue
+    import fullcmp_engine_tables as fet
+
+    monkeypatch.setattr(fet, "check_all", lambda ids, ctx=None: [])
     rc = run.main(["--batch", "B1", "--manifest", str(manifest), "--dry-run"])
-    out = capsys.readouterr().out
-    assert rc == 0
-    assert "JOB fullcmp-B1-yunshu-q27-4bit-th-off-r0" in out
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err
+    assert "JOB fullcmp-B1-yunshu-q27-4bit-th-off-r0" in captured.out
+    out = captured.out
     assert "TOTAL B1: 2 jobs" in out
     assert not (tmp_path / "audit").exists()
 

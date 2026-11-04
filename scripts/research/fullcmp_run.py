@@ -1103,6 +1103,9 @@ def refuse_real_queue(env: dict | None = None) -> None:
     fake = sorted(k for k, v in env.items() if str(v).startswith(FAKE_PREFIX))
     if fake:
         raise RealQueueRefused(f"refusing: fake path in the environment: {fake}")
+    if "TFB_STUB_SERVER" in env:
+        # the stub exemption (tfbench skips the per-cell quiet refusal) must never reach a real batch
+        raise RealQueueRefused("refusing: TFB_STUB_SERVER is set: a stub run may not submit a real batch")
 
 
 def gpuq_env() -> dict:

@@ -2713,7 +2713,9 @@ def main():
         census = fp.load_json(fp.CENSUS_PATH)
     # Host CPU before the server exists (foreign holders only; the harness tree is excluded).
     quiet_pre = fq.snapshot() if fullcmp else None
-    if quiet_refused(quiet_pre):
+    # A stub run (TFB_STUB_SERVER: the tests) has no engine whose CPU use a host check could judge; the
+    # audit already exempts a stub engine from the quiet rule. The real engine never sets it.
+    if quiet_refused(quiet_pre) and not os.environ.get("TFB_STUB_SERVER"):
         # The host is busy before this cell: refuse BEFORE the server starts and before the raw file is
         # created, so the driver can rerun this cell in the same slot (exit 3 = quiet refusal).
         print(f"QUIET REFUSED before {a.out}: {quiet_pre.get('total_foreign_pct')}% foreign, "

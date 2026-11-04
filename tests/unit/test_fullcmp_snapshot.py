@@ -266,3 +266,10 @@ def _plan_one_job():
     import importlib
     tr = importlib.import_module("test_fullcmp_run")
     return tr.run.plan_batch([tr.row("yunshu", "B1.refuse")], "B1", tr.PIN).jobs[0]
+
+
+def test_stub_server_env_refuses_a_real_batch():
+    # the per-cell quiet exemption under TFB_STUB_SERVER must never reach a real batch
+    with pytest.raises(run.RealQueueRefused, match="TFB_STUB_SERVER"):
+        run.refuse_real_queue({"GPUQ_DIR": "/tmp/x", "TFB_STUB_SERVER": "/tmp/shim"})
+    run.refuse_real_queue({"GPUQ_DIR": "/tmp/x"})
