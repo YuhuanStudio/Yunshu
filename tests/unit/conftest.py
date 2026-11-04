@@ -351,3 +351,31 @@ def _real_paths_sandbox(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_sp, "run", run)
     monkeypatch.setattr(_sp, "Popen", GuardedPopen)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _fullcmp_e2e_harness_stand_in(request):
+    """The fullcmp e2e chains run tfbench from the live worktree (no snapshot), so the cell header has
+    no harness_commit and the audit's harness_identity guard fails. The stand-in is this worktree's
+    HEAD and tree: cell_env reads fullcmp_run.HARNESS_COMMIT / HARNESS_TREE at call time. Every loaded
+    copy of the driver is set (a test may load it under another name). Real runs get the values from
+    use_harness(snapshot); the guard itself is unchanged (test_fullcmp_audit covers a real header
+    without harness_commit)."""
+    name = request.node.fspath.basename
+    if not name.startswith("test_fullcmp_e2e"):
+        yield
+        return
+    import gc as _gc
+    import subprocess as _sp
+    import types as _types
+
+    root = str(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+    head = _sp.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+    tree = _sp.run(["git", "rev-parse", "HEAD^{tree}"], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+    mp = pytest.MonkeyPatch()
+    for mod in [o for o in _gc.get_objects() if isinstance(o, _types.ModuleType)]:
+        if str(getattr(mod, "__file__", "")).endswith("fullcmp_run.py") and hasattr(mod, "HARNESS_COMMIT"):
+            mp.setattr(mod, "HARNESS_COMMIT", head)
+            mp.setattr(mod, "HARNESS_TREE", tree)
+    yield
+    mp.undo()

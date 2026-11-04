@@ -50,25 +50,6 @@ def _smoke_rows_under_test():
     return keep
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _harness_stand_in():
-    """The chain runs from the live worktree, not a snapshot, so no .snapshot_commit exists. The
-    stand-in is this worktree's HEAD and tree: cell_env reads fr.HARNESS_COMMIT / HARNESS_TREE at
-    call time, so every cell header carries the harness identity the guard checks (harness_identity).
-    A real run gets these from use_harness(snapshot) and the guard is not weakened."""
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(ROOT), capture_output=True, text=True, check=True
-    ).stdout.strip()
-    tree = subprocess.run(
-        ["git", "rev-parse", "HEAD^{tree}"], cwd=str(ROOT), capture_output=True, text=True, check=True
-    ).stdout.strip()
-    mp = pytest.MonkeyPatch()
-    mp.setattr(fr, "HARNESS_COMMIT", head)
-    mp.setattr(fr, "HARNESS_TREE", tree)
-    yield
-    mp.undo()
-
-
 @pytest.fixture(scope="module")
 def chain(tmp_path_factory):
     work = tmp_path_factory.mktemp("fullcmp-e2e")

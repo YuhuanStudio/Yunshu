@@ -48,21 +48,6 @@ _FAMILY_TEST = {
 }
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _harness_stand_in():
-    """The chain runs from the live worktree (no snapshot): the stand-in is this worktree's HEAD and
-    tree, so each cell header carries the harness identity the audit guard checks. Same as
-    test_fullcmp_e2e.py; the shared fixture in conftest replaces both once it lands."""
-    root = str(Path(__file__).resolve().parents[2])
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
-    tree = subprocess.run(["git", "rev-parse", "HEAD^{tree}"], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
-    mp = pytest.MonkeyPatch()
-    mp.setattr(fr, "HARNESS_COMMIT", head)
-    mp.setattr(fr, "HARNESS_TREE", tree)
-    yield
-    mp.undo()
-
-
 def _family_cover():
     """cell_type_key of every family spec the chain runs (the B2 kind, thinking and image sweeps),
     mapped to the test that validates its replies. Keys come from the manifest's own specs."""
