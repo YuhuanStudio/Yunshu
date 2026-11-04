@@ -395,7 +395,14 @@ ENGINES = {
         label="TensorFold 1.2.1 (tf-native, latest)",
         version="1.2.1",
         supported=True,
-        caps=dict(anthropic=True, responses=True),
+        caps=dict(anthropic=True, responses=True, images=False),
+        # measured: wire-1108 B2 p1 answered the image cell with HTTP 400 and the engine's own refusal text;
+        # census: image input needs the --vision flag, which the harness launch does not pass
+        images_reason=(
+            "TensorFold refuses image input as launched: 'this server accepts text parts only; image, audio "
+            "and video inputs are unsupported' (measured, wire-1108 B2; census: images need the --vision flag, "
+            "not passed by the harness launch)"
+        ),
     ),
     "tf-1.1.8": dict(
         label="TensorFold 1.1.8 (tf-native, best release row; lone loop)",
@@ -510,7 +517,7 @@ def cell_status(eng, sp):
         return UNS, e["reason"]
     caps = e["caps"]
     if sp["media"] != "none" and caps.get("images") is False:
-        return UNS, "text-only server: no image input path (census images false)"
+        return UNS, e.get("images_reason") or "text-only server: no image input path (census images false)"
     if sp["kind"] == "json-schema" and caps.get("json_schema") is False:
         return UNS, "no JSON-schema constrained output (census json_schema false)"
     if sp["turns"] == "restart" and caps.get("disk_cache") is False:

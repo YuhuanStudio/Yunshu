@@ -109,3 +109,16 @@ def test_the_audit_lists_an_unsupported_cell_and_leaves_it_out_of_the_measuremen
     res = fa.check_manifest_completeness(run)
     assert res.violations == [], res.violations
     assert any("UNSUPPORTED" in n and TF_REFUSAL in n for n in res.notes), res.notes
+
+
+def test_tf_1_2_1_image_cells_are_unsupported_with_the_engines_own_message():
+    import fullcmp_manifest as fm
+
+    rows, _meta = fm.build_rows()
+    fm.apply_cuts(rows, out=io.StringIO())
+    img = [r for r in rows if r["engine"] == "tf-1.2.1" and r.get("media") not in (None, "none")]
+    assert img and all(r["status"] == "unsupported" for r in img)
+    assert all("accepts text parts only" in r["reason"] for r in img)
+    # an engine whose census says nothing certain stays costed: the runtime refusal path covers it
+    other = [r for r in rows if r["engine"] == "splash-1.5.0" and r.get("media") not in (None, "none")]
+    assert other and all(r["status"] != "unsupported" for r in other)

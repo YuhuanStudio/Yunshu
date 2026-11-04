@@ -122,6 +122,8 @@ def test_unsupported_rows_come_from_census_flags_only():
     x = [r for r in rows if r["status"] == fm.UNS]
     assert all(
         r["engine"] == "ollama"
+        # measured refusal (wire-1108 B2): TensorFold 1.2.1 refuses image parts as launched
+        or (r["engine"] == "tf-1.2.1" and r.get("media") != "none")
         or (
             r["engine"] == "mlx-lm-server"
             and (
