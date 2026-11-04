@@ -57,7 +57,8 @@ def _census():
         "omlx": {
             "latest_date": "2026-10-31T16:42:55Z",
             "latest_rc_date": "2026-10-27T09:22:10Z",
-            "sha256": {"0.7.3 wheel cp313": H, "0.7.3rc1 wheel cp313": H},
+            "latest_dev_date": "2026-11-04T10:13:41Z",
+            "sha256": {"0.7.3 wheel cp313": H, "0.7.3rc1 wheel cp313": H, "0.7.4.dev1 wheel cp313": H},
         },
         "mlx-serve": one("2026-11-01T19:34:34Z", "26.11.1 binary mlx-serve"),
         "mlx_lm_server": one(

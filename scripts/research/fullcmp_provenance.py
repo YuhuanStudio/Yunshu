@@ -275,6 +275,7 @@ FULLCMP_CENSUS_KEY = {
     "splash-1.5.0": "splash",
     "omlx-0.7.3": "omlx",
     "omlx-0.7.3rc1": "omlx",
+    "omlx-0.7.4.dev1": "omlx",
     "mlx-serve-26.11.1": "mlx-serve",
     "mlx-lm-server": "mlx_lm_server",
     "kapitsa-0.2.26": "kapitsa",

@@ -922,6 +922,11 @@
     "kind": "measured",
     "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: omlx-latest (max with omlx-0.7.3rc1 1.4)"
    },
+   "omlx-0.7.4.dev1": {
+    "value": 3.3,
+    "kind": "assumed",
+    "source": "0.7.4.dev1 not measured yet: the omlx-0.7.3 / rc1 value (same launch recipe, same checkpoint); the wiring smoke replaces it"
+   },
    "mlx-serve-26.11.1": {
     "value": 8.9,
     "kind": "measured",

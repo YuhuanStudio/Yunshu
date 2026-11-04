@@ -39,6 +39,7 @@ ENGINE_MODE = {
     "mlx-vlm-server": "dflash",
     "omlx-0.7.3": "dflash",
     "omlx-0.7.3rc1": "dflash",
+    "omlx-0.7.4.dev1": "dflash",
     "kapitsa-0.2.26": "dflash",  # pins: DFlash2 drafter (--dflash auto); no mode flag in the spec
     "mlx-serve-26.11.1": "mtp",  # default on Metal when the checkpoint ships an MTP head
     "mlx-lm-server": "ar",  # stock mlx-lm: no draft model in argv
@@ -138,6 +139,7 @@ ADD = {
     }],
     "omlx-0.7.3": [OMLX_MTP_LINE],
     "omlx-0.7.3rc1": [OMLX_MTP_LINE],
+    "omlx-0.7.4.dev1": [OMLX_MTP_LINE],
     "llama-cpp-b12061": [{
         "kind": "acceptance_regex",
         # one block per request (slot print_timing): the prompt-eval line then the draft acceptance line.
@@ -161,7 +163,7 @@ DENY = {
     ),
 }
 # engines with no real spec-run log on disk (research: source or binary strings only)
-SOURCE_ONLY = {"kapitsa-0.2.26", "mlx-serve-26.11.1", "omlx-0.7.3", "omlx-0.7.3rc1",
+SOURCE_ONLY = {"kapitsa-0.2.26", "mlx-serve-26.11.1", "omlx-0.7.3", "omlx-0.7.3rc1", "omlx-0.7.4.dev1",
                "llama-cpp-b12061", "mlx-lm-server"}
 FAILURE_MARK = re.compile(r"could not|falls back|incompatible", re.I)
 PLACEHOLDER = re.compile(r"^(none|no |_load\(\)|n/a)", re.I)

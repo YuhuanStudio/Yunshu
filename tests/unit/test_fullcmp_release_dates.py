@@ -38,7 +38,7 @@ def _census_or_skip() -> dict:
     return fp.load_json(fp.CENSUS_PATH)
 
 
-def test_manifest_engine_ids_are_the_twelve_measured_engines():
+def test_manifest_engine_ids_are_the_twelve_measured_engines_plus_the_extra_omlx_dev():
     assert MEASURED_IDS == [
         "yunshu-pb2",
         "yunshu",
@@ -47,6 +47,7 @@ def test_manifest_engine_ids_are_the_twelve_measured_engines():
         "splash-1.5.0",
         "omlx-0.7.3",
         "omlx-0.7.3rc1",
+        "omlx-0.7.4.dev1",  # extra engine (fm.EXTRA_ENGINES): mirrors omlx-0.7.3, hours outside the plan total
         "mlx-serve-26.11.1",
         "mlx-lm-server",
         "mlx-vlm-server",

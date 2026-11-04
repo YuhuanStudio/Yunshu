@@ -234,6 +234,14 @@ ENGINE_PERF = {
         source="cmp-1102 omlx-latest (v0.7.3rc1) constants; slowdown snapshot014 0.7.0",
         assumed=["slowdown from oMLX 0.7.0 (snapshot014)"],
     ),
+    "omlx-0.7.4.dev1": dict(
+        full=False,
+        **OMLX_RC,
+        slow=OMLX_SLOW_POINTS,
+        ready_s=3.3,
+        source="cmp-1102 omlx v0.7.3rc1 constants (0.7.4.dev1 not measured); slowdown snapshot014 0.7.0",
+        assumed=["0.7.4.dev1 not measured: rc1 constants", "slowdown from oMLX 0.7.0 (snapshot014)"],
+    ),
     "mlx-serve-26.11.1": dict(
         full=False,
         **MLXSERVE,
@@ -442,6 +450,15 @@ ENGINES = {
         label="oMLX 0.7.3rc1",
         version="0.7.3rc1 (wheel cp313)",
         supported=True,
+        caps=dict(anthropic=True, responses=True, disk_cache=True),
+    ),
+    "omlx-0.7.4.dev1": dict(
+        label="oMLX 0.7.4.dev1 (dev release; INT8-activation prefill off)",
+        version="0.7.4.dev1 (wheel cp313)",
+        supported=True,
+        # disk tier ON as for 0.7.3 (--paged-ssd-cache-dir). The measured configuration is lossless: its model settings
+        # carry a8_prefill_enabled=false (0.7.4.dev1 turns INT8-activation prefill ON by default on M5,
+        # model_settings.py:216-222; it changes numerics, model_settings.py:337-343)
         caps=dict(anthropic=True, responses=True, disk_cache=True),
     ),
     "mlx-serve-26.11.1": dict(
@@ -863,7 +880,7 @@ def build_smoke_rows():
 
 
 SMOKE_CONC_OUT = Path("/Volumes/Micron/yunshu-fullcmp/smoke-conc-manifest.jsonl")
-SMOKE_CONC_SKIP = ("ollama", "lmstudio")  # no concurrent path to measure (census)
+SMOKE_CONC_SKIP = ("ollama", "lmstudio", "omlx-0.7.4.dev1")  # no concurrent path (census) / extra engine: own smoke
 
 
 def smoke_conc_specs():
@@ -915,7 +932,7 @@ def _meta():
 # ---------------------------------------------------------------- totals, cuts, summary
 def planned_h(rows):
     """GPU hours of rows still planned (unverified), i.e. not unsupported and not cut."""
-    return sum(r["est_gpu_min"] for r in rows if r["status"] == UNV) / 60.0
+    return sum(r["est_gpu_min"] for r in rows if r["status"] == UNV and r["engine"] not in EXTRA_ENGINES) / 60.0
 
 
 def _h(rows, batch=None, engine=None):
@@ -925,7 +942,7 @@ def _h(rows, batch=None, engine=None):
             for r in rows
             if r["status"] == UNV
             and (batch is None or r["batch"] == batch)
-            and (engine is None or r["engine"] == engine)
+            and (r["engine"] == engine if engine is not None else r["engine"] not in EXTRA_ENGINES)
         )
         / 60.0
     )
@@ -960,7 +977,11 @@ CUT_ORDER = [
 
 # A cut decision is made once per cell: yunshu-pb2 is the same configuration as yunshu-main, so its row
 # takes the cut decision of the yunshu row (mirror by cell id). The two Yunshu engines run identical cells.
-CUT_MIRROR = {"yunshu-pb2": "yunshu"}
+CUT_MIRROR = {"yunshu-pb2": "yunshu", "omlx-0.7.4.dev1": "omlx-0.7.3"}
+# Engines added after the plan was sized: their rows mirror another engine's cells and cut decisions, and their hours
+# are NOT part of the planned total (the cut step is decided by the original engine set, so adding an engine never
+# changes which cells the other engines run). Their cost is reported separately.
+EXTRA_ENGINES = frozenset({"omlx-0.7.4.dev1"})
 
 
 def apply_cuts(rows, out=sys.stdout):
@@ -1098,7 +1119,10 @@ WIRE_1108_SHAPES = (
 
 
 # engines left out of this run, with the manifest's own reason (lmstudio: not installed, headless unverified)
-WIRE_1108_SKIP = {"lmstudio": "not installed; headless unverified (manifest engine_version)"}
+WIRE_1108_SKIP = {
+    "lmstudio": "not installed; headless unverified (manifest engine_version)",
+    "omlx-0.7.4.dev1": "added later: its own wiring smoke (wire_omlx074_rows)",
+}
 
 
 def wire_1108_rows():
@@ -1130,6 +1154,27 @@ WIRE_1108C8_SHAPES = (
 )
 WIRE_1108C8_OUT = WIRE_1108_OUT.with_name("wire_1108c8_manifest.jsonl")
 
+# Wiring smoke of the extra engine oMLX 0.7.4.dev1: the cells that exercise its launch, evidence and concurrency path
+# (1K core, conc c2 1K, mixed 8K c4); real shapes from the production generator.
+WIRE_OMLX074_ENGINE = "omlx-0.7.4.dev1"
+WIRE_OMLX074_SHAPES = (
+    ("core", "B1", dict(sweep="core", ctx="1K", kind="code")),
+    ("conc", "B2", dict(sweep="conc", ctx="1K", conc=2, phases=("cold",))),
+    ("mixed", "B2", dict(sweep="mixed", ctx="8K", conc=4, turns="mixed", phases=("mixed",))),
+)
+WIRE_OMLX074_OUT = WIRE_1108_OUT.with_name("wire_omlx074_manifest.jsonl")
+
+
+def wire_omlx074_rows():
+    out = []
+    for _slot, batch, kw in WIRE_OMLX074_SHAPES:
+        row = _cell_row(WIRE_OMLX074_ENGINE, batch, spec(**kw, reps=WIRE_1108_REPS))
+        work = row.pop("_work_min")
+        row.pop("_group", None)
+        row["est_gpu_min"] = round(work, 3)
+        out.append(row)
+    return out
+
 
 def wire_1108c8_rows():
     """The concurrency validation smoke: one conc c8 1K and one mixed 8K c4 cell per engine of WIRE_1108C8_ENGINES."""
@@ -1149,6 +1194,11 @@ def wire_1108c8_rows():
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument(
+        "--omlx074-smoke",
+        action="store_true",
+        help="write the oMLX 0.7.4.dev1 wiring-smoke manifest (1K core, conc c2 1K, mixed 8K c4)",
+    )
     ap.add_argument(
         "--c8-smoke",
         action="store_true",
@@ -1175,6 +1225,15 @@ def main(argv=None):
         "(1x 8K + 3x 1K) for every conc-capable engine",
     )
     args = ap.parse_args(argv)
+    if args.omlx074_smoke:
+        rows = wire_omlx074_rows()
+        out = args.out or WIRE_OMLX074_OUT
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open("w") as fh:
+            for r in rows:
+                fh.write(json.dumps(r, sort_keys=True, ensure_ascii=False) + "\n")
+        sys.stdout.write(f"wrote {out} ({len(rows)} omlx-0.7.4.dev1 smoke rows)\n")
+        return 0
     if args.c8_smoke:
         rows = wire_1108c8_rows()
         out = args.out or WIRE_1108C8_OUT

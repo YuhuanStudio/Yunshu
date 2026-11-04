@@ -35,7 +35,10 @@ import tfbench  # noqa: E402
 # Re-pinned 2026-11-04 (launch review): the documented disk tiers are on (splash, mlx-serve, mlx-vlm APC, kapitsa,
 # oMLX, yunshu), tf-1.1.8 images and restart, llama.cpp restart are unsupported with cited evidence
 # Re-pinned 2026-11-04: llama.cpp image cells are unsupported in this run (mmproj not provisioned, follow-up)
-REAL_MANIFEST_SHA = "e75aba1e3b5b2c1146386fb98d642779fbbdcb77a2ceea98d01e3cfacfd7ca58"
+# Re-pinned 2026-11-04: oMLX 0.7.4.dev1 added as an EXTRA engine (rows mirror omlx-0.7.3, hours outside the plan total).
+# The bytes of every other engine's rows are unchanged: REAL_MANIFEST_SHA_12 is the previous pin (the manifest the real run uses).
+REAL_MANIFEST_SHA = "fcebb2dfc1bc859a8fbf1d9efa44d7474160434438d386fc74fdef6e4b024309"
+REAL_MANIFEST_SHA_12 = "e75aba1e3b5b2c1146386fb98d642779fbbdcb77a2ceea98d01e3cfacfd7ca58"
 
 
 def _real_manifest_bytes() -> bytes:
@@ -45,6 +48,30 @@ def _real_manifest_bytes() -> bytes:
         (json.dumps(r, sort_keys=True, ensure_ascii=False) + "\n").encode()
         for r in rows
     )
+
+
+def test_the_extra_engine_leaves_every_other_rows_bytes_unchanged():
+    """The rows of the engines the real run uses are byte-identical to the manifest before the extra engine existed (its
+    hours are outside the plan total, its cut decisions mirror omlx-0.7.3): adding it changes no other cell."""
+    rows, _meta = fm.build_rows()
+    fm.apply_cuts(rows, out=io.StringIO())
+    data = b"".join(
+        (json.dumps(r, sort_keys=True, ensure_ascii=False) + "\n").encode()
+        for r in rows
+        if r["engine"] not in fm.EXTRA_ENGINES
+    )
+    assert hashlib.sha256(data).hexdigest() == REAL_MANIFEST_SHA_12
+
+
+def test_the_extra_engine_rows_mirror_omlx_073_statuses_and_cells():
+    rows, _meta = fm.build_rows()
+    fm.apply_cuts(rows, out=io.StringIO())
+    base = {r["id"].replace("omlx-0.7.3", "@"): r for r in rows if r["engine"] == "omlx-0.7.3"}
+    extra = {r["id"].replace("omlx-0.7.4.dev1", "@"): r for r in rows if r["engine"] == "omlx-0.7.4.dev1"}
+    assert extra and set(extra) == set(base)
+    for k, r in extra.items():
+        assert r["status"] == base[k]["status"], k  # the same cut / unsupported decisions
+        assert r["batch"] == base[k]["batch"] and r["est_gpu_min"] == base[k]["est_gpu_min"]
 
 
 def test_real_manifest_bytes_unchanged():

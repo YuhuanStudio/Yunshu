@@ -160,6 +160,9 @@ ENGINE_OVERRIDES = {
     "omlx-0.7.3rc1": EngineAttr(
         "omlx-0.7.3rc1", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"
     ),
+    "omlx-0.7.4.dev1": EngineAttr(
+        "omlx-0.7.4.dev1", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"
+    ),
     "mlx-serve-26.11.1": EngineAttr(
         "mlx-serve-26.11.1", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"
     ),

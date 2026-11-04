@@ -97,6 +97,7 @@ SPLASH_LAUNCHER_150 = str(
 )
 OMLX_BIN_073 = str(COMP / "venvs/omlx-0.7.3/bin/omlx")
 OMLX_BIN_073RC1 = str(COMP / "venvs/omlx-0.7.3rc1/bin/omlx")
+OMLX_BIN_074DEV1 = str(COMP / "venvs/omlx-0.7.4.dev1/bin/omlx")
 MLXSERVE_BIN_26111 = str(COMP / "mlxserve-bin/26.11.1/mlx-serve-macos-arm64/mlx-serve")
 MLXLM_SERVER_BIN = str(COMP / "venvs/mlx-lm-0.32.2/bin/mlx_lm.server")
 MLXVLM_PY_0711 = str(
@@ -450,6 +451,19 @@ ENGINES: dict[str, Engine] = {
             60.0,
         ),
         Engine(
+            "omlx-0.7.4.dev1",
+            "oMLX 0.7.4.dev1",
+            "dflash",
+            "same",
+            CHECKPOINT,
+            DRAFTER,
+            "external",
+            "omlx recipe, 0.7.4.dev1 wheel venv; DFlash2 via model_settings.json; INT8-activation prefill OFF "
+            "(a8_prefill_enabled=false: it is ON by default in 0.7.4.dev1 and changes numerics)",
+            0.9,
+            60.0,
+        ),
+        Engine(
             "mlx-serve-26.11.1",
             "mlx-serve 26.11.1",
             "mtp",
@@ -524,6 +538,7 @@ MANIFEST_ENGINES = {
     "splash-1.5.0": "splash-1.5.0",
     "omlx-0.7.3": "omlx-0.7.3",
     "omlx-0.7.3rc1": "omlx-0.7.3rc1",
+    "omlx-0.7.4.dev1": "omlx-0.7.4.dev1",
     "mlx-serve-26.11.1": "mlx-serve-26.11.1",
     "mlx-lm-server": "mlx-lm-server",
     "kapitsa-0.2.26": "kapitsa-0.2.26",
@@ -645,19 +660,16 @@ def scrubbed_env(environ: dict, extra: dict | None = None) -> dict:
     return env
 
 
-def omlx_model_settings(model_id: str) -> dict:
+def omlx_model_settings(model_id: str, a8_off: bool = False) -> dict:
     # mtp_enabled is written explicitly false: an absent key defaults to False in oMLX too, but
-    # the written file must state it so only the DFlash2 drafter can produce MTP[uid] stats lines
-    return {
-        "version": 1,
-        "models": {
-            model_id: {
-                "dflash_enabled": True,
-                "dflash_draft_model": DRAFTER,
-                "mtp_enabled": False,
-            }
-        },
-    }
+    # the written file must state it so only the DFlash2 drafter can produce MTP[uid] stats lines.
+    # a8_off (0.7.4.dev1): INT8-activation prefill is on by default there (None = on); the lossless measured
+    # configuration saves it off. The file is version 2: a version-1 file's saved False is dropped on load where the
+    # kernels cannot run (model_settings.py:871-876), which is not the case on this M5, but version 2 states it.
+    settings = {"dflash_enabled": True, "dflash_draft_model": DRAFTER, "mtp_enabled": False}
+    if a8_off:
+        settings["a8_prefill_enabled"] = False
+    return {"version": 2 if a8_off else 1, "models": {model_id: settings}}
 
 
 @dataclass
@@ -897,6 +909,16 @@ def build_launch(
         launch = build_launch(base, port, home, environ, ctx_tokens, parallel)
         if engine in OMLX_BIN_BY_ENGINE:
             launch.cmd[0] = OMLX_BIN_BY_ENGINE[engine]
+        if engine in OMLX_A8_OFF_ENGINES:
+            # same model settings file, rewritten with A8 prefill saved off (settings version 2, the file version of
+            # 0.7.4.dev1); the recorded flags carry the new hash and the setting
+            mid = "Qwen3.8-27B-oQ4e-mtp"
+            for path in list(launch.files):
+                if path.endswith("model_settings.json"):
+                    text = json.dumps(omlx_model_settings(mid, a8_off=True))
+                    launch.files[path] = text
+                    launch.flags["model_settings_sha256"] = hashlib.sha256(text.encode()).hexdigest()
+            launch.flags["a8_prefill_enabled"] = False
         elif engine == "mtplx-latest":
             launch.cmd[0] = MTPLX_BIN_LATEST
         return launch
@@ -1267,6 +1289,7 @@ PARALLEL_FLAG = {
     "llama-cpp-b12061": "-np",
     "omlx-0.7.3": "--max-concurrent-requests",
     "omlx-0.7.3rc1": "--max-concurrent-requests",
+    "omlx-0.7.4.dev1": "--max-concurrent-requests",
 }
 
 REFSYNC_ALIASES = {
@@ -1274,12 +1297,18 @@ REFSYNC_ALIASES = {
     "mtplx-latest": "mtplx",
     "omlx-0.7.3": "omlx",
     "omlx-0.7.3rc1": "omlx",
+    "omlx-0.7.4.dev1": "omlx",
 }
 OMLX_BIN_BY_ENGINE = {
     "omlx-latest": OMLX_BIN_LATEST,
     "omlx-0.7.3": OMLX_BIN_073,
     "omlx-0.7.3rc1": OMLX_BIN_073RC1,
+    "omlx-0.7.4.dev1": OMLX_BIN_074DEV1,
 }
+# oMLX versions whose INT8-activation (A8) prefill is ON by default on M5 and changes numerics: the measured
+# configuration writes a8_prefill_enabled=false in the model settings (lossless; model_settings.py:216-222, :337-343
+# of 0.7.4.dev1). 0.7.3 and earlier default to off.
+OMLX_A8_OFF_ENGINES = frozenset({"omlx-0.7.4.dev1"})
 TF_NATIVE_FAMILY = ("tf-native", "tf-1.2.1", "tf-1.1.8")
 TF_NATIVE_BIN_BY_ENGINE = {
     "tf-native": TF_NATIVE_BIN,
@@ -1331,6 +1360,7 @@ def detect_mode(engine: str, log: str, probe_text: str | None = None) -> str | N
         "splash-1.5.0": "splash",
         "omlx-0.7.3": "omlx",
         "omlx-0.7.3rc1": "omlx",
+        "omlx-0.7.4.dev1": "omlx",
         "mlx-lm-server": "mlxlm",
         "mlx-vlm-server": "mlxvlm",
         "llama-cpp-b12061": "llamacpp",
@@ -1455,6 +1485,7 @@ STATIC_VERSIONS = {
     "splash-1.5.0": ("1.5.0", None),
     "omlx-0.7.3": ("0.7.3", None),
     "omlx-0.7.3rc1": ("0.7.3rc1", None),
+    "omlx-0.7.4.dev1": ("0.7.4.dev1", None),
     "mlx-serve-26.11.1": ("26.11.1", None),
     "mlx-lm-server": ("0.32.2", None),
     "kapitsa-0.2.26": ("0.2.26", None),
@@ -1539,6 +1570,7 @@ def required_paths(engine: str) -> list[str]:
         "llama-cpp-b12061": [GGUF, GGUF_MTP, LLAMA_BIN_B12061],
         "omlx-0.7.3": common + [DRAFTER + "/config.json", OMLX_BIN_073],
         "omlx-0.7.3rc1": common + [DRAFTER + "/config.json", OMLX_BIN_073RC1],
+        "omlx-0.7.4.dev1": common + [DRAFTER + "/config.json", OMLX_BIN_074DEV1],
         "mlx-serve-26.11.1": [CHECKPOINT + "/config.json", MLXSERVE_BIN_26111],
         "mlx-lm-server": common + [MLXLM_SERVER_BIN],
         "kapitsa-0.2.26": [KAPITSA_BIN_0226, KAPITSA_MODEL_DIR + "/config.json"],

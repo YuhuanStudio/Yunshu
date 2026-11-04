@@ -443,7 +443,7 @@ def _merge_segments(raw):
 
 # requests the harness sends before the measured ones, beyond the two readiness pings (omlx's lazy load
 # warm-up: its first request is MTP[0] with 16 tokens, before the pings; wire-1106c omlx log)
-WARM_EXTRA = {"omlx-0.7.3": 1, "omlx-0.7.3rc1": 1}
+WARM_EXTRA = {"omlx-0.7.3": 1, "omlx-0.7.3rc1": 1, "omlx-0.7.4.dev1": 1}
 
 
 def _done_candidates(item, log, ready_offset, skip=READINESS_REQUESTS):

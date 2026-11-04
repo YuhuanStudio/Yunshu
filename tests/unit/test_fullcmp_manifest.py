@@ -30,6 +30,7 @@ def test_engine_list_is_the_approved_twelve_plus_ollama():
         "splash-1.5.0",
         "omlx-0.7.3",
         "omlx-0.7.3rc1",
+        "omlx-0.7.4.dev1",
         "mlx-serve-26.11.1",
         "mlx-lm-server",
         "mlx-vlm-server",
@@ -39,7 +40,8 @@ def test_engine_list_is_the_approved_twelve_plus_ollama():
         "ollama",
     ]
     assert "tf-1.2.0" not in fm.ENGINE_IDS
-    assert len([e for e in fm.ENGINE_IDS if e != "ollama"]) == 13  # 12 measured + lmstudio
+    # 12 measured + the extra oMLX 0.7.4.dev1 + lmstudio
+    assert len([e for e in fm.ENGINE_IDS if e != "ollama"]) == 14
 
 
 def test_no_dropped_scope_and_no_secondary_models():

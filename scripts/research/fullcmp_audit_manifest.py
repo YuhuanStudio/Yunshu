@@ -237,6 +237,18 @@ EXPECTED_MODE_PROBE = {
             },
         ],
     },
+    "omlx-0.7.4.dev1": {
+        "expected_mode": "dflash",
+        "probe": "same as omlx-0.7.3 (0.7.4.dev1 wheel: same engine_pool branch and log line, grepped)",
+        "log_patterns": [
+            {
+                "regex": r"DFlash enabled for \S+ as a batched drafter, draft=\S+",
+                "meaning": "DFlash drafter attached as a batched drafter",
+                "confidence": "high",
+                "source": "omlx 0.7.4.dev1 engine_pool.py:4222 logger.info (grepped in the 0.7.4.dev1 wheel)",
+            },
+        ],
+    },
     "omlx-0.7.3rc1": {
         "expected_mode": "dflash",
         "probe": "same as omlx-0.7.3 (rc1 wheel: same engine_pool branch and log line, grepped)",
@@ -257,6 +269,7 @@ WEIGHT_GROUP = {
     "yunshu-pb2": "qwen3.8-27b-4bit-jundot",  # the same CHECKPOINT as dev0 (bench_engines.build_launch)
     "omlx-0.7.3": "qwen3.8-27b-4bit-jundot",
     "omlx-0.7.3rc1": "qwen3.8-27b-4bit-jundot",
+    "omlx-0.7.4.dev1": "qwen3.8-27b-4bit-jundot",
     "mlx-lm-server": "qwen3.8-27b-4bit-jundot",
     "kapitsa-0.2.26": "qwen3.8-27b-4bit-kapitsa",
     "mlx-vlm-server": "qwen3.8-27b-4bit-jundot",
@@ -295,6 +308,7 @@ INSTALL = {
     "splash-1.5.0": f"{COMP}/splash-1.5.0/splash-1.5.0-arm64-macos26/python/bin/python3",
     "omlx-0.7.3": f"{COMP}/venvs/omlx-0.7.3/bin/omlx",
     "omlx-0.7.3rc1": f"{COMP}/venvs/omlx-0.7.3rc1/bin/omlx",
+    "omlx-0.7.4.dev1": f"{COMP}/venvs/omlx-0.7.4.dev1/bin/omlx",
     "mlx-serve-26.11.1": f"{COMP}/mlxserve-bin/26.11.1/mlx-serve-macos-arm64/mlx-serve",
     "mlx-lm-server": f"{COMP}/venvs/mlx-lm-0.32.2/bin/mlx_lm.server",
     # launched as `<venv python> -m mlx_vlm.server`: the pinned file is the interpreter
@@ -453,6 +467,14 @@ def build_pins(census: dict, pin: dict, sha_of=file_sha256, git_head=None) -> di
             "0.7.3rc1",
             _date(om["latest_rc_date"]),
             om["sha256"]["0.7.3rc1 wheel cp313"],
+            "wheel",
+            sha_of,
+        ),
+        "omlx-0.7.4.dev1": _pin(
+            "omlx-0.7.4.dev1",
+            "0.7.4.dev1",
+            _date(om["latest_dev_date"]),
+            om["sha256"]["0.7.4.dev1 wheel cp313"],
             "wheel",
             sha_of,
         ),

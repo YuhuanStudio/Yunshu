@@ -423,6 +423,42 @@
       "log_source": "yunshu server log (runner line)",
       "notes": "yunshu is checked by fullcmp_engaged.yunshu_runner_evidence (its runner line), not by this table",
       "confidence": "source-only"
+    },
+    "omlx-0.7.4.dev1": {
+      "modes": {
+        "dflash": {
+          "evidence": [
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "DFlash enabled for (?P<model>\\S+) as a batched drafter, draft=(?P<draft>\\S+)",
+              "source_ref": "/Volumes/P5Plus/yunshu-build/competitors/venvs/omlx-0.7.3/.../engine_pool.py:4189 (load-time intent, after dflash_draft_for resolves a draft); follow with 'DFlash drafter loaded: path=.. kind=.. block=..' at speculative/dflash/__init__.py:231 [0.7.4.dev1: patches/mlx_lm_mtp/batch_generator.py is byte-identical to 0.7.3 and the server.py Chat completion line text is identical (diff of the two wheels); engine_pool.py DFlash line moved to :4222; no live 0.7.4.dev1 log captured yet: the wiring smoke supplies the real lines]",
+              "real_example": "2026-11-04 00:35:05,887 - omlx.engine_pool - INFO - DFlash enabled for Qwen3.8-27B-oQ4e-mtp as a batched drafter, draft=/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2",
+              "negative_example": "'DFlash enabled for X but no draft model is set; loading without DFlash' (engine_pool.py:4171) or 'DFlash is not supported for X (model_type=..., engine=...); loading without DFlash' (engine_pool.py:4178)",
+              "per_request": false,
+              "startup_sufficient": false
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "MTP\\[(?P<uid>[^\\]]+)\\](?=[^\\n]* finish=(?P<finish>\\S+))(?=[^\\n]* tokens=(?P<tokens>\\d+))(?=[^\\n]* cycles=(?P<cycles>\\d+))(?=[^\\n]* tok/cycle=(?P<tpc>[\\d.]+))(?=[^\\n]* accept=(?P<accepted>\\d+)/(?P<drafted>\\d+))(?:(?=[^\\n]* accept=\\d+/\\d+ \\((?P<rate>[^)]+)\\))|)[^\\n]*",
+              "group": "accepted",
+              "min": 0,
+              "request_line": "Chat completion: model=\\S+, (?P<tokens>[\\d,]+) tokens in [^\\n]*?prompt: (?P<prompt>[\\d,]+), finish_reason=[a-z_-]+",
+              "match_tokens": true,
+              "token_tolerance": 0,
+              "coverage_tolerance": 8,
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "serving_path_vlm_omlx.json omlx_0.7.3_and_rc1.per_request_line; batch_generator.py:3950-3995 [0.7.4.dev1: patches/mlx_lm_mtp/batch_generator.py is byte-identical to 0.7.3 and the server.py Chat completion line text is identical (diff of the two wheels); engine_pool.py DFlash line moved to :4222; no live 0.7.4.dev1 log captured yet: the wiring smoke supplies the real lines]",
+              "real_example": "2026-11-04 00:35:15,827 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - MTP[0] finish=length tokens=16 cycles=6 tok/cycle=2.67 accept=8/14 (57.1%) depth[d1=5/6,d2=3/5,d3=0/3,d4=0/0,d5=0/0,d6=0/0,d7=0/0] emits[init=2,draft=8,bonus=0,verify=6] timing[backbone=287.7ms mtp=21.9ms sample=0.5ms cache=5.3ms]",
+              "negative_example": "MTP[0] ... accept=0/7 (0.0%)"
+            }
+          ],
+          "fallback": []
+        }
+      },
+      "log_source": "server stderr/log at INFO (settings.py:195 default log_level='info'; OMLX_LOG_LEVEL overrides). Per-request lines are INFO, so default logging shows them. No --metrics flag needed.",
+      "notes": "from engaged_evidence_others.json; configured mode dflash; How to turn on: per model, model_settings dflash_enabled=true + dflash_draft_model=<path> (or bundled draft), or mtp_enabled=true; both default false, so an unset config is AR. Cost: the log formatting runs after finish and reads Python counters; no added GPU sync in the log function itself (not profiled; if a profile shows a delta, mark the timed run as log-off and use the same regex on a profile",
+      "confidence": "source-only: high for the source-level format and that the lines are emitted (read from 0.7.3 and rc1 source); none for live output (no run). Needs one real request to confirm the regex on the wire."
     }
   }
 }
