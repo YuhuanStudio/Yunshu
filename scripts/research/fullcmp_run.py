@@ -1345,7 +1345,7 @@ def requeue_quiet_flagged(plan: "Plan", pin: dict, raw_root: Path, manifest: dic
     failures, jobs = 0, []
     for cf, violations in quiet_flagged(raw_root, manifest):
         engine, cell_id, rep = cf.cell["engine"], cf.cell["cell"], cf.rep
-        if any(cf.path.parent.glob(f"{cf.path.stem}{SUPERSEDED_TAG}*")):
+        if any(cf.path.parent.glob(f"{cf.path.stem}{SUPERSEDED_TAG}[0-9]*")):
             print(f"QUIET FLAGGED TWICE {cell_id} r{rep}: {violations}; the batch fails", flush=True)
             failures += 1
             continue
@@ -1362,6 +1362,39 @@ def requeue_quiet_flagged(plan: "Plan", pin: dict, raw_root: Path, manifest: dic
         _ids, failed = submit_sequential(jobs, pin, retry_log=RETRY_LOG)
         failures += failed
     return failures
+
+
+RERUN_TAG = f"{SUPERSEDED_TAG}fail1"  # a failed cell's first record, kept as evidence (the audit skips superseded files)
+
+
+def rerun_failed_cells(plan: "Plan", pin: dict, submit=None) -> tuple[list[str], int]:
+    """Once, at the end of the batch and from the same snapshot: every cell of a (non-profile) job that has no complete
+    record (it failed, was aborted, or never ran) goes into one job per original slot, labelled <slot>-rerun1, appended
+    after every planned slot. The failed first record is renamed <cell>-rN.superseded-fail1.* (kept as evidence).
+    A cell still incomplete after the rerun is a failure of the batch (no third attempt). Returns the rerun job ids
+    and the number of cells still incomplete."""
+    submit = submit or submit_sequential
+    jobs = []
+    for job in plan.jobs:
+        if "profile" in job.flags:
+            continue
+        todo = remaining_cells(job)
+        if not todo:
+            continue
+        for c in todo:
+            path = raw_path(c["engine"], c["id"], job.rep)
+            stem = path.name[: -len(".jsonl")]
+            for suffix in (".jsonl", ".telemetry.jsonl", ".server.log"):
+                src = path.with_name(stem + suffix)
+                if src.exists():
+                    src.rename(path.with_name(f"{stem}{RERUN_TAG}{suffix}"))
+        print(f"RERUN {job.label}: {len(todo)} cell(s) without a complete record: {[c['id'] for c in todo]}", flush=True)
+        jobs.append(retry_job(job, 1, pin, cells=todo, tag="rerun"))
+    ids = []
+    if jobs:
+        ids, _failed = submit(jobs, pin, retry_log=RETRY_LOG)
+    still = sum(len(remaining_cells(job)) for job in plan.jobs if "profile" not in job.flags)
+    return ids, still
 
 
 def submit_sequential(
@@ -1962,6 +1995,13 @@ def main(argv=None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
+    # a failed (non-quiet) cell is rerun once at the end, from this snapshot; what is still incomplete fails the batch
+    try:
+        _rerun_ids, still_incomplete = rerun_failed_cells(plan, pin)
+    except RealQueueRefused as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    failed = still_incomplete
     batches = audited_batches(a.batch)
     manifest_path = AUDIT_DIR / f"{a.batch}_audit_manifest.json"
     AUDIT_DIR.mkdir(parents=True, exist_ok=True)

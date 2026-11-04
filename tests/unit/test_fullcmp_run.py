@@ -55,6 +55,13 @@ _SPEC.loader.exec_module(run)
 
 
 @pytest.fixture(autouse=True)
+def _no_end_of_batch_rerun(monkeypatch):
+    """The fake submits of these tests write no cell files, so every cell would count as failed and be rerun. The
+    end-of-batch rerun itself is tested below with real files (test_rerun_failed_cells_*)."""
+    monkeypatch.setattr(run, "rerun_failed_cells", lambda plan, pin, submit=None: ([], 0))
+
+
+@pytest.fixture(autouse=True)
 def quiet_host_stub(monkeypatch):
     """The batch-level quiet gate samples the real host (10 s of ps). Stub it: quiet by default;
     tests that need a busy host override gate themselves."""
@@ -907,3 +914,75 @@ def test_the_real_ctl_1103_controls_pass_the_fairness_guard():
         fa.Run(manifest={"controls": c}, files=[], missing=[], extra=[], parse_errors=[])
     )
     assert [v for v in res.violations if ": controls:" in v] == [], res.violations
+
+
+# --- a failed (non-quiet) cell is rerun once at the end of the batch, from the same snapshot ---------------------------
+
+
+def _complete(engine, cell, rep=0):
+    p = run.raw_path(engine, cell, rep)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"part": "session"}) + "\n" + json.dumps({"part": "part_done", "complete": True}) + "\n")
+
+
+def _failed(engine, cell, rep=0):
+    p = run.raw_path(engine, cell, rep)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"part": "session"}) + "\n" + json.dumps({"part": "error", "error": "boom"}) + "\n")
+    p.with_name(p.name.replace(".jsonl", ".server.log")).write_text("log of the failed attempt")
+
+
+def test_rerun_failed_cells_appends_one_rerun_job_per_slot_and_keeps_the_failed_record(pin_file, tmp_path, monkeypatch):
+    monkeypatch.undo()  # the autouse stubs above are not wanted here
+    monkeypatch.setattr(run, "RAW_ROOT", tmp_path / "raw")
+    monkeypatch.setattr(run, "RETRY_LOG", tmp_path / "retry.log")
+    rows = [{**row(e, c), "reps": 1} for e, c in (("yunshu", "B1.a"), ("yunshu", "B1.b"), ("omlx-0.7.3", "B1.c"))]
+    plan = run.plan_batch(rows, "B1", json.loads(pin_file.read_text()))
+    _complete("yunshu", "B1.a")
+    _failed("yunshu", "B1.b")  # failed: an error record and no part_done
+    # omlx B1.c never ran (no file)
+    submitted = []
+
+    def fake_submit(jobs, pin, retry_log=None):
+        submitted.extend(jobs)
+        for j in jobs:
+            for c in j.cells:
+                _complete(c["engine"], c["id"], j.rep)  # the rerun succeeds
+        return [f"id{i}" for i in range(len(jobs))], 0
+
+    ids, still = run.rerun_failed_cells(plan, json.loads(pin_file.read_text()), submit=fake_submit)
+    assert still == 0 and len(ids) == 2
+    assert len(submitted) == 2 and all(j.label.endswith("-rerun1") for j in submitted)  # one per slot, after the others
+    assert {j.label.removesuffix("-rerun1") for j in submitted} <= {j.label for j in plan.jobs}
+    done_cells = {c["id"] for j in submitted for c in j.cells}
+    assert done_cells == {"B1.b", "B1.c"}  # B1.a was complete: not rerun
+    kept = run.raw_path("yunshu", "B1.b", 0).with_name("B1.b-r0.superseded-fail1.server.log")
+    assert kept.read_text() == "log of the failed attempt"  # the failed first record is evidence, not deleted
+    assert run.raw_path("yunshu", "B1.b", 0).with_name("B1.b-r0.superseded-fail1.jsonl").exists()
+
+
+def test_a_cell_still_incomplete_after_the_rerun_is_counted_and_there_is_no_third_attempt(pin_file, tmp_path, monkeypatch):
+    monkeypatch.undo()
+    monkeypatch.setattr(run, "RAW_ROOT", tmp_path / "raw")
+    monkeypatch.setattr(run, "RETRY_LOG", tmp_path / "retry.log")
+    plan = run.plan_batch([{**row("yunshu", "B1.a"), "reps": 1}], "B1", json.loads(pin_file.read_text()))
+    calls = []
+
+    def fail_again(jobs, pin, retry_log=None):
+        calls.append(len(jobs))
+        return ["id0"], 1  # nothing written: the rerun failed too
+
+    ids, still = run.rerun_failed_cells(plan, json.loads(pin_file.read_text()), submit=fail_again)
+    assert still == 1 and calls == [1]
+
+
+def test_nothing_is_rerun_when_every_cell_is_complete(pin_file, tmp_path, monkeypatch):
+    monkeypatch.undo()
+    monkeypatch.setattr(run, "RAW_ROOT", tmp_path / "raw")
+    plan = run.plan_batch([{**row("yunshu", "B1.a"), "reps": 1}], "B1", json.loads(pin_file.read_text()))
+    _complete("yunshu", "B1.a")
+
+    def never(jobs, pin, retry_log=None):
+        raise AssertionError("no rerun expected")
+
+    assert run.rerun_failed_cells(plan, json.loads(pin_file.read_text()), submit=never) == ([], 0)
