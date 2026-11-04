@@ -2141,6 +2141,12 @@ def part_conc(s, out, a):
             )
 
 
+def mixed_short_text(index, trial, short_ctx, variant=0):
+    """A short request of a mixed trial. Its run names the mixed cell and the variant, like the conc sweeps:
+    without it, the variant-0 and variant-1 mixed cells on one server share the short prompts' heads."""
+    return concurrent_prompt(index, trial, short_ctx, variant, run=f"mixed{variant}")
+
+
 def mixed_long_text(trial, long_ctx, variant=0, smoke=False):
     """The mixed cell's long prompt for one trial. A per-trial salt at the front changes the prefix from
     token 0, so no trial can hit the prefix cache of an earlier trial on the same server (2026-11-04: trial 1
@@ -2169,9 +2175,7 @@ def part_mixed(s, out, a):
     for trial in range(1 if a.smoke else a.conc_trials):
         long_text = mixed_long_text(trial, long_ctx, variant, a.smoke)
         texts = [long_text] + [
-            "Say hello."
-            if a.smoke
-            else concurrent_prompt(i, trial, short_ctx, variant)
+            "Say hello." if a.smoke else mixed_short_text(i, trial, short_ctx, variant)
             for i in range(short_n)
         ]
         t0 = time.perf_counter()
