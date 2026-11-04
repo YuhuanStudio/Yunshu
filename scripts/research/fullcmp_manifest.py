@@ -1052,6 +1052,10 @@ WIRE_1108_SHAPES = (
 )
 
 
+# engines left out of this run, with the manifest's own reason (lmstudio: not installed, headless unverified)
+WIRE_1108_SKIP = {"lmstudio": "not installed; headless unverified (manifest engine_version)"}
+
+
 def wire_1108_rows():
     """One row per (family slot, supported engine) whose cell the census does not rule out. Each row is
     _cell_row's output with reps=WIRE_1108_REPS; est_gpu_min is the cell work (no server boot share)."""
@@ -1059,7 +1063,7 @@ def wire_1108_rows():
     for slot, batch, kw in WIRE_1108_SHAPES:
         sp = spec(**kw, reps=WIRE_1108_REPS)
         for eng in ENGINE_IDS:
-            if not ENGINES[eng]["supported"]:
+            if not ENGINES[eng]["supported"] or eng in WIRE_1108_SKIP:
                 continue
             row = _cell_row(eng, batch, sp)
             if row["status"] != UNV:

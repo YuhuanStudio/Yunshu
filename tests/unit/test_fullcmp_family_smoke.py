@@ -33,7 +33,7 @@ def real_by_id():
 
 def test_every_supported_engine_gets_each_slot_unless_census_rules_it_out(rows):
     have = {(r["engine"], r["id"].split(".")[1], r["id"]) for r in rows}
-    supported = [e for e in fm.ENGINE_IDS if fm.ENGINES[e]["supported"]]
+    supported = [e for e in fm.ENGINE_IDS if fm.ENGINES[e]["supported"] and e not in fm.WIRE_1108_SKIP]
     assert supported, "no supported engines"
     for _slot, batch, kw in fm.WIRE_1108_SHAPES:
         sp = fm.spec(**kw, reps=fm.WIRE_1108_REPS)
