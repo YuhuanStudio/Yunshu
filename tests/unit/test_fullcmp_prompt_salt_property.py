@@ -86,23 +86,60 @@ def _key_text(text):
     return text[:HEAD]
 
 
-def test_no_two_requests_in_one_cell_share_a_prompt_head(stand_in, tb):
+def find_leaks(tb, rows=None, scope="cell"):
+    """(scope id, first key, second key) for every two requests whose prompt heads collide without a designed
+    share. scope "cell": one tfbench invocation (one server process) per row. scope "job": every row of the
+    list in one scope, for the disk-tier engines whose HOME, and so whose prefix store, is shared by a job."""
     leaks = []
-    for row in _rows():
-        reqs = _cell_requests(tb, row)
+    if rows is None:
+        rows = _rows()
+    groups = [[r] for r in rows] if scope == "cell" else [rows]
+    for group in groups:
         seen = {}
-        for key, text, group in reqs:
-            head = _key_text(text)
-            if head in seen:
-                prev_key, prev_group = seen[head]
-                designed = (group is not None and group == prev_group) or (
-                    group == ("phase-repeat",) and prev_group == ("phase-repeat",)
-                )
-                if not designed:
-                    leaks.append((row["id"], prev_key, key))
-            else:
-                seen[head] = (key, group)
+        for row in group:
+            for key, text, share in _cell_requests(tb, row):
+                head = _key_text(text)
+                tagged = (row["id"], key)
+                if head in seen:
+                    prev_tag, prev_share = seen[head]
+                    designed = share is not None and share == prev_share or (
+                        share == ("phase-repeat",) and prev_share == ("phase-repeat",)
+                    )
+                    if not designed:
+                        leaks.append((prev_tag, tagged))
+                else:
+                    seen[head] = (tagged, share)
+    return leaks
+
+
+def test_no_two_requests_in_one_cell_share_a_prompt_head(stand_in, tb):
+    leaks = find_leaks(tb)
     assert not leaks, f"{len(leaks)} prompt-head collisions, first: {leaks[:5]}"
+
+
+def test_mutation_old_mixed_short_salt_is_reported(stand_in, tb, monkeypatch):
+    # the run-0 mixed short prompts (before the fix): variant 0 and variant 1 mixed cells must collide
+    monkeypatch.setattr(
+        tb, "mixed_short_text", lambda i, t, c, v=0: tb.concurrent_prompt(i, t, c, v, run=0)
+    )
+    base = [r for r in _rows() if r.get("turns") == "mixed" and r["engine"] == "yunshu"][:1]
+    mixed = [dict(r, prompt_variant=v) for r in base for v in (0, 1)]  # the two smoke variants, one job
+    leaks = find_leaks(tb, mixed, scope="job")
+    assert leaks, "the detector must report the run-0 mixed short collision"
+
+
+def test_mutation_conc_salt_without_variant_is_reported(stand_in, tb, monkeypatch):
+    # drop the variant from the conc run name (the leak of 8b8a75de7): a variant-0/1 sweep collides
+    orig = tb.concurrent_prompt
+
+    def no_variant(index, trial, ctx, variant=0, run=0):
+        return orig(index, trial, ctx, variant, run=str(run).split("v")[0])
+
+    monkeypatch.setattr(tb, "concurrent_prompt", no_variant)
+    base = [r for r in _rows() if r.get("sweep", "").startswith("conc") and int(r.get("conc", 1)) > 1 and r["engine"] == "yunshu"][:1]
+    conc = [dict(r, prompt_variant=v) for r in base for v in (0, 1)]
+    leaks = find_leaks(tb, conc, scope="job")
+    assert leaks, "the detector must report the variant-free conc collision"
 
 
 def test_conc_same_requests_of_different_trials_diverge_from_token_zero(stand_in, tb):
@@ -121,3 +158,4 @@ def test_the_stand_in_reproduces_a_variant_collision_when_the_salt_omits_the_var
     a = tb.concurrent_prompt(0, 0, 8192, 0, run="4")
     b = tb.concurrent_prompt(0, 0, 8192, 1, run="4")
     assert _key_text(a) == _key_text(b)
+
