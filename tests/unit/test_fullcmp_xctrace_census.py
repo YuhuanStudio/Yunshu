@@ -206,3 +206,9 @@ def test_audit_reads_host_sync_and_census_from_the_xctrace_row():
     plain = fp.merge_xctrace(base, [base])
     assert plain is base  # no xctrace row: untouched; the cell then carries the 'one cold 1K request' reason
     assert "cold 1K code request" in fp.unavailable_layer2(plain)["host_sync_count"]
+
+
+def test_tagged_capture_never_collides_with_the_validation_trace():
+    base = xt.trace_path("yunshu-pb2", root=xt.XCTRACE_DIR / "wire-1108-prof")
+    assert base == xt.XCTRACE_DIR / "wire-1108-prof" / "yunshu-pb2" / "code-1k-out128.trace"
+    assert base != xt.trace_path("yunshu-main")

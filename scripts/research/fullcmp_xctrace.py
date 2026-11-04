@@ -284,6 +284,12 @@ def main() -> int:
         help="harness id of the Yunshu tree to trace (its own pin supplies binary, source and tree)",
     )
     ap.add_argument(
+        "--tag",
+        default="",
+        help="subdirectory of the xctrace root for this capture (a profile batch must not collide with an "
+        "earlier trace: an existing .trace is never overwritten)",
+    )
+    ap.add_argument(
         "--profile-file",
         type=Path,
         default=None,
@@ -301,7 +307,7 @@ def main() -> int:
         print(json.dumps(res, indent=1))
         return 0 if res.get("gpu_rows_server", res.get("gpu_rows", 0)) > 0 else 1
     engine = a.engine
-    trace = trace_path(engine)
+    trace = trace_path(engine, root=XCTRACE_DIR / a.tag if a.tag else XCTRACE_DIR)
     print(
         json.dumps(
             {
