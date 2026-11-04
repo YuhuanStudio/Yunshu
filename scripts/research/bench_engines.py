@@ -924,6 +924,10 @@ def build_launch(
                 "none",
                 "--max-context",
                 str(int(ctx_tokens)),
+                # "keep the SSD cache across restarts" (server/serve_options.py:555-562; files under
+                # ~/Library/Caches/Splash/prefix-cache, :564-571, inside the isolated HOME): automatic restore,
+                # no client call, so a user who restarts the server turns it on and the restart cell measures it
+                "--persistent-cache",
             ],
             scrubbed_env(
                 environ,
@@ -933,6 +937,7 @@ def build_launch(
                 "kv_format": "bf16 (lossless)",
                 "reasoning_effort": "none",
                 "draft": "local DFlash2",
+                "persistent_cache": "on (SSD cache kept across restarts)",
             },
             {},
             {},
@@ -1129,9 +1134,14 @@ def build_launch(
                 p,
                 "--ctx-size",
                 str(int(ctx_tokens)),
+                # the documented SSD prefix tier (docs/cli.md:90, src/main.zig:376, default off): prefixes survive
+                # restarts. A user who restarts a long-conversation server turns it on; root ~/.mlx-serve/kv-cache
+                # (src/kv_disk_cache.zig:3640) falls under the isolated HOME
+                "--prefix-cache-disk",
+                "20GB",
             ],
             scrubbed_env(environ, base_env),
-            {"ctx_size": int(ctx_tokens), "spec_mode": "mtp"},
+            {"ctx_size": int(ctx_tokens), "spec_mode": "mtp", "prefix_cache_disk": "20GB (documented SSD tier)"},
             {},
             {},
         )
@@ -1152,8 +1162,12 @@ def build_launch(
                 "--draft-kind",
                 "dflash",
             ],
-            scrubbed_env(environ, base_env),
-            {"speculative": "dflash", "draft_kind": "dflash"},
+            # prefix caching (APC) is OFF by default (server/runtime_config.py:76, :321; read from APC_ENABLED at
+            # :360): without it every request re-prefills and warm / follow-up cells measure nothing. A user who
+            # serves long conversations turns it on; disk persistence is then on by default (:78-91, :322, files
+            # under ~/.cache/mlx-vlm/apc, apc.py:84-89, inside the isolated HOME)
+            scrubbed_env(environ, {**base_env, "APC_ENABLED": "1"}),
+            {"speculative": "dflash", "draft_kind": "dflash", "apc": "APC_ENABLED=1 (prefix cache on, disk persistence default)"},
             {},
             {},
         )

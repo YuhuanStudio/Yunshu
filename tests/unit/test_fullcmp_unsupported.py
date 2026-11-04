@@ -116,7 +116,7 @@ def test_tf_1_2_1_image_cells_are_unsupported_with_the_engines_own_message():
 
     rows, _meta = fm.build_rows()
     fm.apply_cuts(rows, out=io.StringIO())
-    img = [r for r in rows if r["engine"] == "tf-1.2.1" and r.get("media") not in (None, "none")]
+    img = [r for r in rows if r["engine"] in ("tf-1.2.1", "tf-1.1.8") and r.get("media") not in (None, "none")]
     assert img and all(r["status"] == "unsupported" for r in img)
     assert all("accepts text parts only" in r["reason"] for r in img)
     # an engine whose census says nothing certain stays costed: the runtime refusal path covers it
@@ -202,15 +202,16 @@ def _cold_cache(*cfs):
 
 
 def test_restart_miss_on_an_engine_without_a_disk_tier_is_a_labelled_outcome_not_a_failure():
-    res = _cold_cache(_restart_cf("tf-1.2.1", 0), _restart_cf("splash-1.5.0", 0), _restart_cf("llama-cpp-b12061", 0))
+    res = _cold_cache(_restart_cf("tf-1.2.1", 0), _restart_cf("tf-1.1.8", 0), _restart_cf("llama-cpp-b12061", 0))
     assert res.violations == [], res.violations
     assert sum("UNSUPPORTED" in n and "restart" in n for n in res.notes) == 3
     assert any("hits 0, misses 1" in n for n in res.notes)  # TF's own log line is cited
 
 
 def test_restart_miss_on_an_engine_with_a_disk_tier_fails_and_a_hit_on_a_no_tier_engine_contradicts_the_evidence():
-    res = _cold_cache(_restart_cf("yunshu", 0), _restart_cf("omlx-0.7.3", 0))
-    assert len(res.violations) == 2 and all("must hit the disk tier" in v for v in res.violations)
+    tiers = ("yunshu", "omlx-0.7.3", "splash-1.5.0", "mlx-serve-26.11.1", "kapitsa-0.2.26", "mlx-vlm-server")
+    res = _cold_cache(*(_restart_cf(e, 0) for e in tiers))
+    assert len(res.violations) == len(tiers) and all("must hit the disk tier" in v for v in res.violations)
     res = _cold_cache(_restart_cf("tf-1.2.1", 768))
     assert res.violations and "evidence says no disk tier" in res.violations[0]
     assert _cold_cache(_restart_cf("yunshu", 960)).violations == []  # a real disk-tier hit passes
@@ -222,9 +223,34 @@ def test_manifest_restart_cells_follow_the_disk_tier_evidence():
     rows, _meta = fm.build_rows()
     fm.apply_cuts(rows, out=io.StringIO())
     restart = {r["engine"]: r for r in rows if r.get("turns") == "restart"}
-    for eng in ("tf-1.2.1", "splash-1.5.0", "llama-cpp-b12061", "mlx-lm-server"):
+    for eng in ("tf-1.2.1", "tf-1.1.8", "llama-cpp-b12061", "mlx-lm-server"):
         assert restart[eng]["status"] == "unsupported", eng
     assert "hits 0, misses 1" in restart["tf-1.2.1"]["reason"]
     assert "no automatic disk tier" in restart["llama-cpp-b12061"]["reason"]
-    for eng in ("yunshu", "yunshu-pb2", "omlx-0.7.3", "omlx-0.7.3rc1"):
-        assert restart[eng]["status"] != "unsupported", eng  # they have a disk tier: the cell runs
+    # an engine with a disk tier the launch turns on is measured: yunshu (settings.py:211, default on), oMLX
+    # (--paged-ssd-cache-dir), Splash (--persistent-cache), mlx-serve (--prefix-cache-disk), Kapitsa (--disk-cache auto,
+    # default), mlx-vlm (APC_ENABLED=1, disk persistence default)
+    for eng in ("yunshu", "yunshu-pb2", "omlx-0.7.3", "omlx-0.7.3rc1", "splash-1.5.0", "mlx-serve-26.11.1",
+                "kapitsa-0.2.26", "mlx-vlm-server"):
+        assert restart[eng]["status"] != "unsupported", eng
+
+
+def test_mlx_serve_launch_enables_its_documented_ssd_prefix_tier():
+    """Lead ruling: an engine's documented disk tier is on for every cell (docs/cli.md:90 of mlx-serve: --prefix-cache-disk,
+    default off), so the restart cell measures it."""
+    import bench_engines as be
+
+    launch = be.build_launch("mlx-serve-26.11.1", 18990, "/tmp/h", {})
+    cmd = list(launch.cmd)
+    assert cmd[cmd.index("--prefix-cache-disk") + 1] == "20GB"
+    assert launch.flags["prefix_cache_disk"].startswith("20GB")
+
+
+def test_mlx_vlm_launch_turns_prefix_caching_on_and_splash_its_persistent_cache():
+    """Each engine's launch enables the documented cache features a user turns on (lead rule, 2026-11-04)."""
+    import bench_engines as be
+
+    vlm = be.build_launch("mlx-vlm-server", 18990, "/tmp/h", {})
+    assert vlm.env["APC_ENABLED"] == "1"  # server/runtime_config.py:76, :360: prefix caching is off by default
+    splash = be.build_launch("splash-1.5.0", 18990, "/tmp/h", {})
+    assert "--persistent-cache" in splash.cmd  # server/serve_options.py:555-562

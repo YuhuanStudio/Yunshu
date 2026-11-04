@@ -413,36 +413,43 @@ ENGINES = {
         label="TensorFold 1.1.8 (tf-native, best release row; lone loop)",
         version="1.1.8",
         supported=True,
-        caps=dict(anthropic=True, responses=True, concurrency=False),
+        caps=dict(anthropic=True, responses=True, concurrency=False, images=False, disk_cache=False),
+        disk_reason=(
+            "no disk tier: the pinned binary's serve --help lists only a RAM prompt cache (--prompt-cache-gib, "
+            "--prompt-cache-over-cap), no disk option; same as 1.2.1, whose restart was measured (hits 0, misses 1)"
+        ),
+        images_reason=(
+            "TensorFold 1.1.8 refuses image input as launched: 'this server accepts text parts only; image, audio "
+            "and video inputs are unsupported' (measured, wire-1108 B2; census: images need the --vision flag, "
+            "not passed by the harness launch)"
+        ),
     ),
     "splash-1.5.0": dict(
         label="Splash 1.5.0",
         version="1.5.0 (arm64-macos26)",
         supported=True,
-        caps=dict(anthropic=True, responses=True, disk_cache=False),
-        disk_reason=(
-            "no disk tier as launched: Splash's SSD cache is off by default and the harness launch passes no "
-            "persistent-cache flag (bench_engines: max_cache_disk 0 (default)); the feature exists (census: "
-            "persistent cache on, cache dir, max cache disk) but is not enabled for this cell"
-        ),
+        # disk tier ON: the launch passes --persistent-cache (server/serve_options.py:555-562): automatic, no client call
+        caps=dict(anthropic=True, responses=True, disk_cache=True),
     ),
     "omlx-0.7.3": dict(
         label="oMLX 0.7.3 (stable)",
         version="0.7.3 (wheel cp313)",
         supported=True,
-        caps=dict(anthropic=True, responses=True),
+        # disk tier ON: the launch passes --paged-ssd-cache-dir (omlx serve --help: 'enables oMLX prefix cache')
+        caps=dict(anthropic=True, responses=True, disk_cache=True),
     ),
     "omlx-0.7.3rc1": dict(
         label="oMLX 0.7.3rc1",
         version="0.7.3rc1 (wheel cp313)",
         supported=True,
-        caps=dict(anthropic=True, responses=True),
+        caps=dict(anthropic=True, responses=True, disk_cache=True),
     ),
     "mlx-serve-26.11.1": dict(
         label="mlx-serve 26.11.1",
         version="26.11.1",
         supported=True,
-        caps=dict(anthropic=True, responses=True),
+        # disk tier ON: the launch passes --prefix-cache-disk 20GB (docs/cli.md:90, src/main.zig:376)
+        caps=dict(anthropic=True, responses=True, disk_cache=True),
     ),
     "mlx-lm-server": dict(
         label="mlx_lm.server (stock)",
@@ -460,7 +467,9 @@ ENGINES = {
         label="mlx-vlm server (stock)",
         version="0.7.11",
         supported=True,
-        caps=dict(images=True, anthropic=True, responses=True),
+        # prefix cache ON via APC_ENABLED=1 (server/runtime_config.py:76,:360); disk persistence is then default on
+        # (:78-91, :322)
+        caps=dict(images=True, anthropic=True, responses=True, disk_cache=True),
     ),
     "llama-cpp-b12061": dict(
         label="llama.cpp llama-server b12061 (Metal, UD-Q4_K_M GGUF)",
@@ -468,9 +477,9 @@ ENGINES = {
         supported=True,
         caps=dict(anthropic=True, responses=True, disk_cache=False),
         disk_reason=(
-            "no automatic disk tier as launched: the llama.cpp server keeps its prompt cache in RAM slots; disk "
-            "save and restore need a slot-save path plus explicit slot save/restore calls (census), which the "
-            "harness does not make"
+            "no automatic disk tier: the prompt cache is RAM (--cache-ram, default 8192 MiB; llama-server --help); "
+            "--slot-save-path (default: disabled; llama-server --help) only saves a slot's KV when a client calls "
+            "the slot save / restore endpoints, which a normal OpenAI client never does"
         ),
     ),
     "lmstudio": dict(
@@ -483,7 +492,9 @@ ENGINES = {
         label="Kapitsa 0.2.26",
         version="0.2.26",
         supported=True,
-        caps=dict(anthropic=True),
+        # disk tier ON by default: serve --disk-cache 'auto (default)', kept across restarts in
+        # ~/.cache/kapitsa/prefix-cache (kapitsa serve --help); the Qwen3.5 family has it
+        caps=dict(anthropic=True, disk_cache=True),
     ),
     "ollama": dict(
         label="Ollama 0.40.13",

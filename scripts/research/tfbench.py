@@ -705,7 +705,7 @@ class Srv:
         # yv runs held 362 GB of it on P5Plus (2026-10-07). A restart cell stops its first server
         # with keep_disk=True: the relaunched server reads that cache from the same HOME.
         if self.proc.poll() is not None and not keep_disk:
-            for sub in (".yunshu/cache", "omlx-ssd", "mtplx-cache", "omlx-base/cache"):
+            for sub in (".yunshu/cache", "omlx-ssd", "mtplx-cache", "omlx-base/cache", ".mlx-serve/kv-cache", "Library/Caches/Splash", ".cache/mlx-vlm/apc", ".cache/kapitsa/prefix-cache"):
                 shutil.rmtree(self.home / sub, ignore_errors=True)
         if getattr(self, "mem", None):
             self.mem.stop()
