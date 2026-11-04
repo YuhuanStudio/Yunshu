@@ -1673,3 +1673,15 @@ def test_conc_distinct_any_cached_request_fails():
     run = _fake_run([_cf({"cell": "B2.conc.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
                          {"part": "session", "fresh_process": True}, rows)])
     assert any("must be server-reported 0" in v for v in fa.check_cold_cache(run).violations)
+
+
+def test_yunshu_aliases_never_take_the_competitor_branch():
+    """wire-1108 B1 (2026-11-04): the audit crashed (UnboundLocalError 'ready') because yunshu-pb2 failed an
+    `engine != "yunshu"` test and entered the competitor-only concurrent check. Every Yunshu alias must be
+    routed by fe.is_yunshu, never by string equality."""
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[2] / "scripts" / "research" / "fullcmp_audit.py"
+    text = src.read_text()
+    assert not re.search(r'engine\s*(!=|==)\s*"yunshu"', text), "use fe.is_yunshu(engine), not string equality"

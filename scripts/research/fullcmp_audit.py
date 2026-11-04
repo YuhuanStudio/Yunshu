@@ -790,7 +790,7 @@ def check_engaged_mode(run: Run) -> GuardResult:
             # take their evidence only from fe.concurrent_check (the header carries the single-request evidence)
             if h.get("engaged_log_line") != ev["matched_line"]:
                 res.fail(cell, f"r{cf.rep}: engaged_log_line is not the evidence line")
-            if engine != "yunshu" and h.get("engaged_evidence_source") != ev.get("source"):
+            if not fe.is_yunshu(engine) and h.get("engaged_evidence_source") != ev.get("source"):
                 res.fail(cell, f"r{cf.rep}: engaged_evidence_source={h.get('engaged_evidence_source')!r}, evidence says {ev.get('source')!r}")
         if fe.is_yunshu(engine):
             # Yunshu's runner line is its own evidence and its records carry attr.accepted (layer-1)
@@ -806,7 +806,7 @@ def check_engaged_mode(run: Run) -> GuardResult:
             # one verdict: the evidence evaluation (per measured row / probe); the attr record fields
             # are not populated for these engines and are not read here
             res.fail(cell, f"r{cf.rep}: speculative mode {got!r} without per-request acceptance in the evidence")
-        if engine != "yunshu" and got not in fe.AR_MODES and got != fe.UNVERIFIED:
+        if not fe.is_yunshu(engine) and got not in fe.AR_MODES and got != fe.UNVERIFIED:
             # concurrent records (part conc / mixed): the shared verdict, fail closed per request
             concurrent = fe.read_concurrent_records(cf.path)
             _cev, cproblems = fe.concurrent_check(table, engine, want, log, concurrent, ready,
@@ -857,7 +857,7 @@ def check_observe_state(run: Run) -> GuardResult:
     seen = set()
     for cf in run.files:
         cell, engine = cf.cell["cell"], cf.cell.get("engine")
-        if engine != "yunshu" or (engine, cell) in seen:
+        if not fe.is_yunshu(engine) or (engine, cell) in seen:
             continue
         seen.add((engine, cell))
         path = Path(run.profile_root) / str(engine) / f"{cell}-prof.jsonl"
