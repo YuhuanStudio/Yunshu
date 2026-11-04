@@ -160,7 +160,7 @@ def test_append_census_row_writes_a_part_xctrace_row_and_errors_fail_closed(tmp_
     assert rows[2]["error"] == "export failed" and "op_census" not in bad
 
 
-def test_trace_census_exports_two_tables_and_needs_a_pid(tmp_path, monkeypatch):
+def test_trace_census_exports_the_census_and_shader_tables_and_needs_a_pid(tmp_path, monkeypatch):
     import types
 
     gpu = _gpu([(0, 1000, "Compute", PID, "p")] + [(10_000_000 + i * 900_000, 500_000, "Compute", PID, f"d{i}") for i in range(4)])
@@ -174,7 +174,7 @@ def test_trace_census_exports_two_tables_and_needs_a_pid(tmp_path, monkeypatch):
 
     monkeypatch.setattr(xt, "_run", fake_run)
     out = xt.trace_census(tmp_path / "t.trace", PID, "round driver idle: 4 decode steps, 1.0 ms in a step, 0.0 ms between steps", "c")
-    assert out["trace"]["steps"] == 4 and out["cell"] == "c" and len(seen) == 2
+    assert out["trace"]["steps"] == 4 and out["cell"] == "c" and len(seen) == 4 and "kernel_inventory" in out
     with pytest.raises(RuntimeError, match="no server pid"):
         xt.trace_census(tmp_path / "t.trace", None, "", "c")
 
