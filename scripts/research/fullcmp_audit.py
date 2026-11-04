@@ -794,7 +794,12 @@ def check_engaged_mode(run: Run) -> GuardResult:
                 res.fail(cell, f"r{cf.rep}: engaged_evidence_source={h.get('engaged_evidence_source')!r}, evidence says {ev.get('source')!r}")
         if fe.is_yunshu(engine):
             # Yunshu's runner line is its own evidence and its records carry attr.accepted (layer-1)
-            if (problem := fe.acceptance_problem(got, {}, cf.rows)) is not None:
+            # conc / mixed rows keep their acceptance in the record's per-request spec, not attr: the
+            # concurrent verdict's per-row values are the evidence for them (positive = drafted)
+            row_values = [row.get("value") for row in ev["stats"].get("per_row", [])]
+            if not any(isinstance(v, (int, float)) and v > 0 for v in row_values) and (
+                problem := fe.acceptance_problem(got, {}, cf.rows)
+            ) is not None:
                 res.fail(cell, f"r{cf.rep}: {problem}")
         elif (got not in fe.AR_MODES and got != fe.UNVERIFIED and not fe.acceptance_proven(ev)
               and not str(ev.get("label") or "").startswith(f"{got} (0% drafted")):
