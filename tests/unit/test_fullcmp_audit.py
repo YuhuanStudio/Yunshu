@@ -1423,7 +1423,8 @@ def _profile_row(complete=True):
               "ttft": {k: 1.0 for k in ("template", "lookup", "restore", "prefill", "drafter_rebuild", "first_round")}}
     row = {"part": "profile", "stages": stages, "host_sync_count": 4, "op_census": {"matmul": 10}}
     if not complete:
-        del row["op_census"]
+        # a field the engine DOES emit (its round line carries the drafter time): absence is a real gap
+        del row["stages"]["decode_round"]["drafter"]
     return row
 
 
@@ -1442,7 +1443,19 @@ def test_timed_row_lacking_a_layer1_field_fails(tmp_path):
 
 def test_profile_rep_lacking_layer2_fails(tmp_path):
     res = _attr_run(tmp_path, [_full_layer1_row()], profile=[_profile_row(complete=False)], full=True)
-    assert any("profile rep lacks layer 2" in v and "op_census" in v for v in res.violations)
+    assert any("profile rep lacks layer 2" in v and "decode_round.drafter" in v for v in res.violations)
+
+
+def test_profile_rep_without_counters_passes_with_explicit_reasons(tmp_path):
+    """The dev0/pb2 profile log carries no host_sync_count / op_census / fine stage timers: the audit reports
+    them 'unavailable (reason)' (like a competitor), while a missing drafter time still fails."""
+    row = _profile_row()
+    for k in ("host_sync_count", "op_census"):
+        del row[k]
+    for k in ("plan", "copy_lookup", "verify_weights", "verify_attention"):
+        del row["stages"]["decode_round"][k]
+    res = _attr_run(tmp_path, [_full_layer1_row()], profile=[row], full=True)
+    assert res.violations == [], res.violations
 
 
 def test_profile_rep_with_layer2_passes(tmp_path):

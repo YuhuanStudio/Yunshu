@@ -98,6 +98,52 @@ def competitor_stat_lines(text: str) -> list[str]:
     ]
 
 
+# Why a layer-2 field is absent from a Yunshu profile row. The dev0 and Phase B preview trees print the
+# "DFlash round profile", "host between rounds" and "Tree verify stage profile" lines only; the finer
+# stage timers and the per-step counters are not emitted by those trees (no YUNSHU_LAYER2 line), so the row
+# says so per field instead of leaving it absent. The per-step counters come from a Metal trace capture
+# of the profile request, taken as a separate profile batch.
+UNAVAILABLE_REASONS = {
+    "stages.decode_round": (
+        "unavailable: not emitted by this tree's profile log (it prints drafter, verify_total, commit, "
+        "host_yield and tree_stage_ms only; no YUNSHU_LAYER2 line)"
+    ),
+    "stages.prefill": "unavailable: prefill stage timers are not emitted by this tree's profile log",
+    "stages.ttft": "unavailable: TTFT stage timers are not emitted by this tree's profile log",
+    "host_sync_count": "unavailable: not an engine log counter on this tree; comes from the Metal trace capture",
+    "op_census": "unavailable: not an engine log counter on this tree; comes from the Metal trace capture",
+}
+
+
+# Required layer-2 fields the "DFlash round profile" line does emit: absent means the log lacked the line.
+EMITTED_BY_THE_ROUND_LINES = frozenset({"stages.decode_round.drafter", "stages.decode_round.commit"})
+
+
+def unavailable_layer2(row: dict) -> dict:
+    """{field: reason} for each required layer-2 field the row does not carry (explicit, never silent)."""
+    import fullcmp_attribution as fa_attr
+
+    out = {}
+    stages = row.get("stages") or {}
+    for field in fa_attr.required_layer2(row.get("engine", "yunshu")):
+        if field.startswith("stages."):
+            node, ok = stages, True
+            for part in field.split(".", 1)[1].split("."):
+                if not isinstance(node, dict) or part not in node:
+                    ok = False
+                    break
+                node = node[part]
+            present = ok and node is not None
+            key = ".".join(field.split(".")[:2])
+        else:
+            present = row.get(field) is not None
+            key = field
+        # only what the tree cannot emit: the round line's own fields (drafter, commit) missing is a real gap
+        if not present and field not in EMITTED_BY_THE_ROUND_LINES:
+            out[field] = UNAVAILABLE_REASONS.get(key, "unavailable: not emitted by this engine")
+    return out
+
+
 def _engine_log_path(cell: Path) -> str | None:
     """The engine log of a cell: the session header's engine_log_path (every cell type carries it), else the
     attribution rows' or a decode row's (sequential cells). Conc and mixed cells have no decode rows."""
@@ -147,6 +193,7 @@ def append_profile_row(cell: Path, engine: str) -> dict:
                 for key in ("host_sync_count", "op_census"):
                     if l2.get(key) is not None:
                         row[key] = l2[key]
+                row["layer2_unavailable"] = unavailable_layer2(row)
             else:
                 lines = competitor_stat_lines(text)
                 row["competitor_stats"] = lines or None

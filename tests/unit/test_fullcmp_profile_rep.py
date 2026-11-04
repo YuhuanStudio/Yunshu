@@ -228,3 +228,47 @@ def test_concurrent_cell_without_any_log_path_is_a_labelled_result_not_an_error(
     row = fp.append_profile_row(cell, "yunshu")
     assert "error" not in row
     assert row["stages_unavailable"].startswith("stages unavailable for concurrent path")
+
+
+def test_yunshu_profile_row_names_every_absent_layer2_field_as_unavailable(tmp_path):
+    """Failing-before (wire-1108 audit): the dev0/pb2 profile log carries drafter/verify_total/commit/host_yield
+    only, so the row lacked stages.decode_round.plan/copy_lookup/..., prefill.*, ttft.*, host_sync_count and
+    op_census and the guard reported them MISSING. The row now carries an explicit reason per absent field;
+    the guard reports 'unavailable (reason)', and present fields stay present."""
+    log = tmp_path / "server.log"
+    log.write_text(
+        "DFlash round profile: 114 rounds, 14.2 nodes/round, draft 2.27 ms, verify 45.49 ms, commit+host 0.12 ms\n"
+        "DFlash host between rounds: consumer (yield) 1.14 ms/round\n"
+    )
+    cell = tmp_path / "a1-prof.jsonl"
+    cell.write_text(json.dumps({"part": "session", "engine_log_path": str(log)}) + "\n")
+    row = fp.append_profile_row(cell, "yunshu-pb2")
+    un = row["layer2_unavailable"]
+    for field in (
+        "stages.decode_round.plan",
+        "stages.decode_round.copy_lookup",
+        "stages.decode_round.verify_weights",
+        "stages.decode_round.verify_attention",
+        "stages.prefill.chunk_compute",
+        "stages.ttft.lookup",
+        "host_sync_count",
+        "op_census",
+    ):
+        assert un[field].startswith("unavailable:"), (field, un.get(field))
+    assert "stages.decode_round.drafter" not in un and "stages.decode_round.commit" not in un
+    cov = fa.check_profile("yunshu-pb2", row)
+    assert fa.missing(cov) == [], fa.missing(cov)
+    assert cov["stages.decode_round.drafter"] == "present"
+    assert cov["host_sync_count"].startswith("unavailable (")
+    # a field that is neither present nor reasoned stays MISSING (fail closed)
+    bare = {k: v for k, v in row.items() if k != "layer2_unavailable"}
+    assert "host_sync_count" in fa.missing(fa.check_profile("yunshu-pb2", bare))
+
+
+def test_audit_gives_a_legacy_profile_row_the_same_static_reasons():
+    """The wire-1108 profile rows were written before the reasons existed: the audit applies them."""
+    import fullcmp_audit as fau
+
+    row = {"part": "profile", "engine": "yunshu", "stages": {"decode_round": {"drafter": 2.27, "commit": 0.12}}}
+    assert "host_sync_count" in fp.unavailable_layer2(row)
+    assert hasattr(fau, "check_attribution_fields")

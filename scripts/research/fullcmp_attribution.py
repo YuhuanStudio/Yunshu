@@ -269,6 +269,11 @@ def check_profile(engine: str, row: dict | None) -> dict:
                 cov[field] = "present" if ok and node is not None else "MISSING"
             else:
                 cov[field] = "present" if row.get(field) is not None else "MISSING"
+            if cov[field] == "MISSING":
+                # an explicit per-field reason the engine cannot emit it (fullcmp_profile.unavailable_layer2)
+                why = (row.get("layer2_unavailable") or {}).get(field)
+                if isinstance(why, str) and why.startswith("unavailable"):
+                    cov[field] = f"unavailable ({why[len('unavailable: '):]})"
     else:
         cov["competitor_stats"] = (
             "present" if row.get("competitor_stats") else "MISSING"
