@@ -327,6 +327,16 @@ def main(argv=None) -> int:
     sub.choices["gate"].add_argument("--wait-s", type=float, default=DEFAULT_WAIT_S)
     sub.choices["gate"].add_argument("--log", type=Path, default=None)
     a = ap.parse_args(argv)
+    if a.cmd == "gate" and os.environ.get("TFB_STUB_SERVER"):
+        # A stub run (the e2e tests) runs no engine whose CPU use this host check could judge, and the
+        # host load of the test machine is not evidence about it. A real submission refuses
+        # TFB_STUB_SERVER (fullcmp_run.refuse_real_queue), so a real batch never reaches this exemption.
+        if a.log:
+            a.log.parent.mkdir(parents=True, exist_ok=True)
+            with open(a.log, "a") as fh:
+                fh.write(json.dumps({"stub_exempt": True, "reason": "TFB_STUB_SERVER set (test run)"}) + "\n")
+        print("quiet gate: exempt (TFB_STUB_SERVER test run)")
+        return 0
     try:
         if a.cmd == "check":
             rec = check(a.max_single_pct, a.max_total_pct, a.window_s)

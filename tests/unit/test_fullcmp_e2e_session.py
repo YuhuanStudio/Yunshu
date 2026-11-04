@@ -114,21 +114,23 @@ def _run_cell_rows(tmp: Path, rows, *, stub_module: str = "fullcmp_stub_session"
     pin = json.loads(fr.PIN_PATH.read_text())
     plan = fr.plan_batch(rows, fm.SMOKE_BATCH, pin)
     assert not plan.skipped, [(r["id"], why) for r, why in plan.skipped]
-    assert len(plan.jobs) == 1, [j.label for j in plan.jobs]
-    job = plan.jobs[0]
-    wrapper = fr.write_wrapper(job)
-    env = dict(os.environ)
-    env["GPUQ_JOB_ID"] = FAKE_JOB_ID
-    env["TFB_STUB_SERVER"] = str(sess.shim_dir(tmp / "shim", module=stub_module))
-    proc = subprocess.run(
-        ["/bin/sh", str(wrapper)],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=900,
-        cwd=str(ROOT),
-    )
-    assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-4000:]
+    # budget packing may split a group into chunks (a 14 min limit): every planned job runs, each with
+    # its own gpuq job id, as in a real batch (the same approach as test_fullcmp_e2e_mixed)
+    assert plan.jobs, "no job planned"
+    for k, job in enumerate(plan.jobs):
+        wrapper = fr.write_wrapper(job)
+        env = dict(os.environ)
+        env["GPUQ_JOB_ID"] = f"{FAKE_JOB_ID}-{k}"
+        env["TFB_STUB_SERVER"] = str(sess.shim_dir(tmp / "shim", module=stub_module))
+        proc = subprocess.run(
+            ["/bin/sh", str(wrapper)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=900,
+            cwd=str(ROOT),
+        )
+        assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-4000:]
     return raw, plan, pin
 
 
