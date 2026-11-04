@@ -34,16 +34,46 @@ import fullcmp_stub_session as sess  # noqa: E402
 from .test_fullcmp_e2e import _run_audit  # noqa: E402
 from .test_fullcmp_e2e_coverage import cell_type_key  # noqa: E402
 from .test_fullcmp_e2e_session import (  # noqa: E402
+    FAKE_JOB_ID,
     _audit_clean,
     _decode,
     _records,
     _rows,
-    _run_cell_rows,
 )
 
 ENGINES_UNDER_TEST = ("yunshu", "tf-1.2.1")
 MIXED_STUB = "fullcmp_stub_mixed"
 SHORT_N = 7
+
+
+def _run_cell_rows(tmp: Path, rows, *, stub_module: str = "fullcmp_stub_session"):
+    """Plan the rows as one batch and run EVERY planned job's wrapper against the session stub.
+    The shared helper asserts one job, but budget packing (a 14 min chunk limit; a slow conc-8 cell)
+    splits a group into chunks: running all chunks is the intended behaviour, so the test runs them all."""
+    import subprocess
+
+    import fullcmp_stub_session as stub_sess
+
+    raw = tmp / "raw"
+    fr.configure(raw, tmp / "work")
+    # the driver exports the harness commit to every cell (the audit's harness_identity guard needs it)
+    fr.HARNESS_COMMIT = "e2e-harness-commit"
+    fr.HARNESS_TREE = "e2e-harness-tree"
+    pin = json.loads(fr.PIN_PATH.read_text())
+    plan = fr.plan_batch(rows, fm.SMOKE_BATCH, pin)
+    assert not plan.skipped, [(r["id"], why) for r, why in plan.skipped]
+    assert plan.jobs, "no job planned"
+    for k, job in enumerate(plan.jobs):
+        wrapper = fr.write_wrapper(job)
+        env = dict(os.environ)
+        # one gpuq job per chunk, as in a real batch: each chunk has its own job id and its own HOME
+        env["GPUQ_JOB_ID"] = f"{FAKE_JOB_ID}-{k}"
+        env["TFB_STUB_SERVER"] = str(stub_sess.shim_dir(tmp / "shim", module=stub_module))
+        proc = subprocess.run(
+            ["/bin/sh", str(wrapper)], env=env, capture_output=True, text=True, timeout=900, cwd=str(ROOT)
+        )
+        assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-4000:]
+    return raw, plan, pin
 
 
 @pytest.fixture(params=ENGINES_UNDER_TEST)
