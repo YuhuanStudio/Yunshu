@@ -47,7 +47,7 @@
             },
             {
               "kind": "acceptance_regex",
-              "pattern_or_path": "\\[kapitsa\\] chat: prompt (?P<prompt>[\\d,]+) \\(cached [\\d,]+\\) in [^\\n]*?, [\\d,]+ tokens in [^\\n]*?, \\S+, (?P<tpc>[\\d.]+) tok/cycle, KFlash \\(DFlash2\\): [\\d,]+ cycles",
+              "pattern_or_path": "\\[kapitsa\\] chat: prompt (?P<prompt>[\\d,]+) \\(cached [\\d,]+\\) in [^\\n]*?, [\\d,]+ tokens in [^\\n]*?, \\S+, (?:[^\\n]*?, )?(?P<tpc>[\\d.]+) tok/cycle, (?:[^\\n]*?, )?KFlash \\(DFlash2\\): [\\d,]+ cycles",
               "group": "tpc",
               "min": 1.0,
               "per_request": true,
@@ -118,7 +118,7 @@
           "evidence": [
             {
               "kind": "acceptance_regex",
-              "pattern_or_path": "\\[spec-stats\\] mode=mtp attempts=(?P<attempts>\\d+) accepts=(?P<accepts>\\d+) avg_per_round=(?P<apr>[\\d.]+) per_draft_pct=(?P<pct>[\\d.]+)% depth=(?P<depth>\\d+) drafted=(?P<drafted>\\d+) ext_rounds=(?P<ext>\\d+) partial_rounds=(?P<partial>\\d+) runtime_disabled=(?P<dis>true|false) reason=(?P<reason>\\S+) adaptive=(?P<adaptive>\\S+)",
+              "pattern_or_path": "\\[spec-stats\\] mode=mtp\\b(?=[^\\n]* attempts=(?P<attempts>\\d+))(?=[^\\n]* accepts=(?P<accepts>\\d+))(?=[^\\n]* drafted=(?P<drafted>\\d+))(?:(?=[^\\n]* avg_per_round=(?P<apr>[\\d.]+))|)(?:(?=[^\\n]* per_draft_pct=(?P<pct>[\\d.]+)%)|)(?:(?=[^\\n]* depth=(?P<depth>\\d+))|)(?:(?=[^\\n]* ext_rounds=(?P<ext>\\d+))|)(?:(?=[^\\n]* partial_rounds=(?P<partial>\\d+))|)(?:(?=[^\\n]* runtime_disabled=(?P<dis>true|false))|)(?:(?=[^\\n]* reason=(?P<reason>\\S+))|)(?:(?=[^\\n]* adaptive=(?P<adaptive>\\S+))|)[^\\n]*",
               "source_ref": "mlx-serve binary strings (format template at offset line 54076 of `strings -n 5`); the dashboard bundle documents '[spec-stats]' as a stable format written to ~/.mlx-serve/logs/mlx-serve-<port>.log (log.defaultLogPath; --log-file overrides)",
               "real_example": "  [spec-stats] mode=mtp attempts=5 accepts=5 avg_per_round=1.00 per_draft_pct=100.0% depth=6 drafted=5 ext_rounds=0 partial_rounds=0 runtime_disabled=false reason=none adaptive=undecided serial_cell=0.00 sync_ms=0.00 round_ms=35.88 two_ms_tok=0.00 one_ms_tok=0.00 verdict_round=0 trials=0 width_trials=0 table=<2k: table_drops=t0/c0/b0/i0 serial_drops=t0/c0/b0 depth_policy=accept lookup=0/0/0",
               "negative_example": "a request with no [spec-stats] line, or mode=pld / mode=drafter / mode=dflash only; or attempts=0 accepts=0; or runtime_disabled=true reason=adaptive adaptive=serial (the adaptive controller fell back to serial decode for the rest of the request, so MTP was requested but not used past that point)",
@@ -207,7 +207,7 @@
             },
             {
               "kind": "acceptance_regex",
-              "pattern_or_path": "MTP\\[(?P<uid>[^\\]]+)\\] finish=(?P<finish>\\S+) tokens=(?P<tokens>\\d+) cycles=(?P<cycles>\\d+) tok/cycle=(?P<tpc>[\\d.]+) accept=(?P<accepted>\\d+)/(?P<drafted>\\d+) \\((?P<rate>[^)]+)\\)",
+              "pattern_or_path": "MTP\\[(?P<uid>[^\\]]+)\\](?=[^\\n]* finish=(?P<finish>\\S+))(?=[^\\n]* tokens=(?P<tokens>\\d+))(?=[^\\n]* cycles=(?P<cycles>\\d+))(?=[^\\n]* tok/cycle=(?P<tpc>[\\d.]+))(?=[^\\n]* accept=(?P<accepted>\\d+)/(?P<drafted>\\d+))(?:(?=[^\\n]* accept=\\d+/\\d+ \\((?P<rate>[^)]+)\\))|)[^\\n]*",
               "group": "accepted",
               "min": 0,
               "request_line": "Chat completion: model=\\S+, (?P<tokens>[\\d,]+) tokens in [^\\n]*?prompt: (?P<prompt>[\\d,]+), finish_reason=[a-z_-]+",
@@ -255,7 +255,7 @@
             },
             {
               "kind": "acceptance_regex",
-              "pattern_or_path": "MTP\\[(?P<uid>[^\\]]+)\\] finish=(?P<finish>\\S+) tokens=(?P<tokens>\\d+) cycles=(?P<cycles>\\d+) tok/cycle=(?P<tpc>[\\d.]+) accept=(?P<accepted>\\d+)/(?P<drafted>\\d+) \\((?P<rate>[^)]+)\\)",
+              "pattern_or_path": "MTP\\[(?P<uid>[^\\]]+)\\](?=[^\\n]* finish=(?P<finish>\\S+))(?=[^\\n]* tokens=(?P<tokens>\\d+))(?=[^\\n]* cycles=(?P<cycles>\\d+))(?=[^\\n]* tok/cycle=(?P<tpc>[\\d.]+))(?=[^\\n]* accept=(?P<accepted>\\d+)/(?P<drafted>\\d+))(?:(?=[^\\n]* accept=\\d+/\\d+ \\((?P<rate>[^)]+)\\))|)[^\\n]*",
               "group": "accepted",
               "min": 0,
               "request_line": "Chat completion: model=\\S+, (?P<tokens>[\\d,]+) tokens in [^\\n]*?prompt: (?P<prompt>[\\d,]+), finish_reason=[a-z_-]+",
@@ -302,7 +302,7 @@
             },
             {
               "kind": "acceptance_regex",
-              "pattern_or_path": "Done · input (?P<prompt>[\\d,]+) · cached [\\d,]+ (?:· deduplicated [\\d,]+ )?· output [\\d,]+ · TTFT [\\d.]+s · [\\d.]+ tok/s · (?P<tpc>[\\d.]+) tok/cycle",
+              "pattern_or_path": "Done · input (?P<prompt>[\\d,]+)(?: · (?:(?! · )[^\\n])+)*? · output [\\d,]+(?: · (?:(?! · )[^\\n])+)*? · (?P<tpc>[\\d.]+) tok/cycle",
               "group": "tpc",
               "min": 1.0,
               "per_request": true,

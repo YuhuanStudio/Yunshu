@@ -76,7 +76,7 @@ ACCEPT_TF = {
 # server-omlx-0.7.3-conc-0.log (5 lines). The 'vlm_mtp stats' line is not DFlash evidence.
 OMLX_MTP_LINE = {
     "kind": "acceptance_regex",
-    "pattern_or_path": r"MTP\[(?P<uid>[^\]]+)\] finish=(?P<finish>\S+) tokens=(?P<tokens>\d+) cycles=(?P<cycles>\d+) tok/cycle=(?P<tpc>[\d.]+) accept=(?P<accepted>\d+)/(?P<drafted>\d+) \((?P<rate>[^)]+)\)",
+    "pattern_or_path": r"MTP\[(?P<uid>[^\]]+)\](?=[^\n]* finish=(?P<finish>\S+))(?=[^\n]* tokens=(?P<tokens>\d+))(?=[^\n]* cycles=(?P<cycles>\d+))(?=[^\n]* tok/cycle=(?P<tpc>[\d.]+))(?=[^\n]* accept=(?P<accepted>\d+)/(?P<drafted>\d+))(?:(?=[^\n]* accept=\d+/\d+ \((?P<rate>[^)]+)\))|)[^\n]*",
     "group": "accepted",
     "min": 0,
     # the server's own per-request line (omlx.server): completion tokens, prompt length, finish reason
@@ -101,7 +101,7 @@ ADD = {
     "tf-1.1.8": [ACCEPT_TF],
     "splash-1.5.0": [{
         "kind": "acceptance_regex",
-        "pattern_or_path": r"Done · input (?P<prompt>[\d,]+) · cached [\d,]+ (?:· deduplicated [\d,]+ )?· output [\d,]+ · TTFT [\d.]+s · [\d.]+ tok/s · (?P<tpc>[\d.]+) tok/cycle",
+        "pattern_or_path": r"Done · input (?P<prompt>[\d,]+)(?: · (?:(?! · )[^\n])+)*? · output [\d,]+(?: · (?:(?! · )[^\n])+)*? · (?P<tpc>[\d.]+) tok/cycle",
         "group": "tpc",
         "min": 1.0,
         "per_request": True,
@@ -127,7 +127,7 @@ ADD = {
     # wire-1105-work/all/tfout/out/server-kapitsa-0.2.26-decode-0.log; 4 lines, prompts 15,15,1024,1024)
     "kapitsa-0.2.26": [{
         "kind": "acceptance_regex",
-        "pattern_or_path": r"\[kapitsa\] chat: prompt (?P<prompt>[\d,]+) \(cached [\d,]+\) in [^\n]*?, [\d,]+ tokens in [^\n]*?, \S+, (?P<tpc>[\d.]+) tok/cycle, KFlash \(DFlash2\): [\d,]+ cycles",
+        "pattern_or_path": r"\[kapitsa\] chat: prompt (?P<prompt>[\d,]+) \(cached [\d,]+\) in [^\n]*?, [\d,]+ tokens in [^\n]*?, \S+, (?:[^\n]*?, )?(?P<tpc>[\d.]+) tok/cycle, (?:[^\n]*?, )?KFlash \(DFlash2\): [\d,]+ cycles",
         "group": "tpc",
         "min": 1.0,
         "per_request": True,
