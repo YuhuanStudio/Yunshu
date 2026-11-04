@@ -1473,6 +1473,9 @@ REFUSAL_PHRASES = (
 # on an image cell a 4xx that talks about the image itself is the engine saying it cannot take it
 # (llama-server without an mmproj, a text-only chat template, an unknown content type)
 IMAGE_REFUSAL_WORDS = ("image", "vision", "multimodal", "mmproj", "content part", "content type")
+# the explicit wording a 5xx body must carry to be an engine's refusal (not 'unsupported' alone: a crash message such
+# as 'unsupported operation' is a real failure)
+SERVER_REFUSAL_PHRASES = ("is not supported", "are not supported", "does not support", "accepts text parts only")
 REFUSAL_BODY_MAX = 600
 
 
@@ -1501,9 +1504,14 @@ def refusal_label(kind, text: str) -> str:
 def is_engine_refusal(code: int, body: str, media: str | None = None) -> bool:
     """4xx (not a timeout or a rate limit) with a body that names the input as unsupported; on an image
     cell (media not none) also a 4xx whose body is about the image input."""
+    low = str(body).lower()
+    if 500 <= code < 600:
+        # llama-server answers an image part without an mmproj with HTTP 500 'image input is not supported - hint: ...
+        # provide the mmproj': a 5xx counts only when its body explicitly says the input is not supported; any
+        # other 5xx is a real failure
+        return any(p in low for p in SERVER_REFUSAL_PHRASES)
     if not (400 <= code < 500) or code in (408, 409, 429):
         return False
-    low = str(body).lower()
     if any(p in low for p in REFUSAL_PHRASES):
         return True
     return media not in (None, "none") and any(w in low for w in IMAGE_REFUSAL_WORDS)

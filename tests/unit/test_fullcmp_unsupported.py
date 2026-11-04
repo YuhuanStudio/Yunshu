@@ -30,7 +30,7 @@ def _http_error(code, body):
 def test_the_real_tf_refusal_is_an_engine_refusal_and_other_errors_are_not():
     assert tb.is_engine_refusal(400, TF_BODY)
     assert tb.is_engine_refusal(400, TF_REFUSAL)
-    assert not tb.is_engine_refusal(500, TF_BODY)  # a server error is never a refusal
+    assert not tb.is_engine_refusal(500, '{"error": {"message": "internal error"}}')  # a plain server error is not
     assert not tb.is_engine_refusal(400, '{"error": {"message": "invalid json at line 3"}}')  # a plain bad request
     assert not tb.is_engine_refusal(429, "unsupported rate")  # rate limit / timeout
     assert not tb.is_engine_refusal(408, TF_BODY)
@@ -342,3 +342,52 @@ def test_the_audit_lists_the_stream_refusal_with_its_label(tmp_path):
     assert res.violations == []
     assert any("unsupported (json-schema with speculative decoding, engine message)" in n and MLX_VLM_STREAM_ERROR in n
                for n in res.notes), res.notes
+
+
+# --- llama-server without an mmproj: HTTP 500 with the engine's own refusal (wire-1108rest llama.cpp image cell) -------
+
+LLAMA_IMAGE_BODY = (
+    '{"error":{"code":500,"message":"image input is not supported - hint: if this is unexpected, you may need to '
+    'provide the mmproj"}}'
+)
+
+
+def test_a_5xx_whose_body_says_the_input_is_not_supported_is_a_refusal_other_5xx_are_not():
+    assert tb.is_engine_refusal(500, LLAMA_IMAGE_BODY, "img1")
+    assert tb.is_engine_refusal(500, LLAMA_IMAGE_BODY)  # the body alone decides: no media needed
+    assert not tb.is_engine_refusal(500, '{"error": {"message": "internal error"}}', "img1")
+    assert not tb.is_engine_refusal(500, '{"error": {"message": "CUDA out of memory"}}', "img1")
+    assert not tb.is_engine_refusal(503, '{"error": {"message": "unsupported operation in kernel"}}', "img1")  # crash text
+    assert not tb.is_engine_refusal(502, "bad gateway", "img1")
+
+
+def test_the_real_llama_image_500_becomes_an_unsupported_row(tmp_path, monkeypatch):
+    def send(url, body, **kw):
+        raise _http_error(500, LLAMA_IMAGE_BODY)
+
+    monkeypatch.setattr(tb, "send", send)
+    rows, out = _decode(tmp_path, send)
+    un = [r for r in rows if r.get("part") == "unsupported"]
+    assert len(un) == 1 and un[0]["http_status"] == 500 and "provide the mmproj" in un[0]["reason"]
+    assert tb.cell_unsupported(str(out)) is True
+
+
+def test_a_real_5xx_failure_still_fails_the_cell(tmp_path, monkeypatch):
+    def send(url, body, **kw):
+        raise _http_error(500, '{"error": {"message": "internal error"}}')
+
+    monkeypatch.setattr(tb, "send", send)
+    with pytest.raises(urllib.error.HTTPError):
+        _decode(tmp_path, send)
+
+
+def test_llama_cpp_image_cells_are_unsupported_in_this_run_with_the_mmproj_follow_up():
+    import fullcmp_manifest as fm
+
+    rows, _meta = fm.build_rows()
+    fm.apply_cuts(rows, out=io.StringIO())
+    img = [r for r in rows if r["engine"] == "llama-cpp-b12061" and r.get("media") not in (None, "none")]
+    assert img and all(r["status"] == "unsupported" for r in img)
+    for r in img:
+        assert r["reason"].startswith("unsupported in this run (mmproj not provisioned;")
+        assert "mmproj-F16.gguf" in r["reason"] and "--mmproj" in r["reason"] and "follow-up" in r["reason"]

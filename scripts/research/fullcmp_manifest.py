@@ -475,7 +475,15 @@ ENGINES = {
         label="llama.cpp llama-server b12061 (Metal, UD-Q4_K_M GGUF)",
         version="b12061",
         supported=True,
-        caps=dict(anthropic=True, responses=True, disk_cache=False),
+        caps=dict(anthropic=True, responses=True, disk_cache=False, images=False),
+        # follow-up (post-run, not in the 2-day budget): provision the projector and rerun the image cells with
+        # --mmproj <unsloth/Qwen3.8-27B-GGUF/mmproj-F16.gguf>
+        images_reason=(
+            "unsupported in this run (mmproj not provisioned; llama.cpp supports images with --mmproj and "
+            "unsloth/Qwen3.8-27B-GGUF publishes mmproj-F16.gguf and mmproj-BF16.gguf, HF API listing 2026-11-04; "
+            "measured: HTTP 500 'image input is not supported - hint: if this is unexpected, you may need to provide "
+            "the mmproj'; follow-up: provision and rerun)"
+        ),
         disk_reason=(
             "no automatic disk tier: the prompt cache is RAM (--cache-ram, default 8192 MiB; llama-server --help); "
             "--slot-save-path (default: disabled; llama-server --help) only saves a slot's KV when a client calls "

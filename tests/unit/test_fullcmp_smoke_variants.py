@@ -34,7 +34,8 @@ import tfbench  # noqa: E402
 # Re-pinned 2026-11-04: restart cells of tf-1.2.1, splash and llama.cpp are unsupported (no disk tier, evidence cited)
 # Re-pinned 2026-11-04 (launch review): the documented disk tiers are on (splash, mlx-serve, mlx-vlm APC, kapitsa,
 # oMLX, yunshu), tf-1.1.8 images and restart, llama.cpp restart are unsupported with cited evidence
-REAL_MANIFEST_SHA = "e4b0261ad7e41e3c73703d9bc21844c63394b44cfeb8ee0176e2a5f1e230fe5f"
+# Re-pinned 2026-11-04: llama.cpp image cells are unsupported in this run (mmproj not provisioned, follow-up)
+REAL_MANIFEST_SHA = "e75aba1e3b5b2c1146386fb98d642779fbbdcb77a2ceea98d01e3cfacfd7ca58"
 
 
 def _real_manifest_bytes() -> bytes:
