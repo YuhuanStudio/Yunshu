@@ -555,7 +555,7 @@ def check_pinned_versions(run: Run) -> GuardResult:
     res = GuardResult("pinned_versions")
     m = run.manifest
     pins = m.get("pins", {})
-    yun = m.get("yunshu", {})
+    yun_all = m.get("yunshu", {})
     for cf in run.files:
         h = cf.header
         if h is None:
@@ -564,6 +564,8 @@ def check_pinned_versions(run: Run) -> GuardResult:
         cell = cf.cell["cell"]
         eng = manifest_engine(cf.cell["engine"])
         pin = pins.get(eng)
+        # the Yunshu tree this engine runs from: its own section (Phase B preview), else dev0's
+        yun = (m.get("yunshu_pins") or {}).get(eng) or yun_all
         if pin is None:
             res.fail(cell, f"no pin for engine {eng}")
             continue
@@ -575,7 +577,7 @@ def check_pinned_versions(run: Run) -> GuardResult:
             )
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(h.get("release_date"))):
             res.fail(cell, "release_date not recorded")
-        if eng == "yunshu":
+        if fe.is_yunshu(eng):
             if h.get("git_sha") != yun.get("git_sha") or pin.get("git_sha") != yun.get(
                 "git_sha"
             ):
@@ -723,7 +725,7 @@ def check_engaged_mode(run: Run) -> GuardResult:
             continue
         engine = cf.cell.get("engine")
         concurrent_records = fe.read_concurrent_records(cf.path)
-        if engine == "yunshu":
+        if fe.is_yunshu(engine):
             slice_path = server_log_slice_path(cf.path)
             log = slice_path.read_text(errors="replace") if slice_path.is_file() else ""
             if bool(concurrent_records):
@@ -790,7 +792,7 @@ def check_engaged_mode(run: Run) -> GuardResult:
                 res.fail(cell, f"r{cf.rep}: engaged_log_line is not the evidence line")
             if engine != "yunshu" and h.get("engaged_evidence_source") != ev.get("source"):
                 res.fail(cell, f"r{cf.rep}: engaged_evidence_source={h.get('engaged_evidence_source')!r}, evidence says {ev.get('source')!r}")
-        if engine == "yunshu":
+        if fe.is_yunshu(engine):
             # Yunshu's runner line is its own evidence and its records carry attr.accepted (layer-1)
             if (problem := fe.acceptance_problem(got, {}, cf.rows)) is not None:
                 res.fail(cell, f"r{cf.rep}: {problem}")
@@ -840,7 +842,7 @@ def check_observe_state(run: Run) -> GuardResult:
     res = GuardResult("observe_state")
     for cf in run.files:
         cell, engine = cf.cell["cell"], cf.cell.get("engine")
-        if engine != "yunshu":
+        if not fe.is_yunshu(engine):
             continue
         res.checked += 1
         for problem in _observe_problems(cf.header or {}):

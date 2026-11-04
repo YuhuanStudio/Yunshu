@@ -159,6 +159,16 @@ NO_MEASUREMENT = {"prefill": {}, "decode": {}}
 PLACEHOLDER = "best-competitor (TBD)"
 
 ENGINE_PERF = {
+    # the Phase B preview: the dev0 curve until its own 1K/32K/64K/128K cells are measured (provisional)
+    "yunshu-pb2": dict(
+        full=True,
+        prefill=YUNSHU_CURVE["prefill"],
+        decode=YUNSHU_CURVE["decode"],
+        slow=YUNSHU_SLOW_POINTS,
+        ready_s=float(_PLAN["ready_s_max"]["value"]),
+        source="phaseb2-main 4f99270: NOT measured; the dev0 curve is the planning stand-in (provisional)",
+        assumed=["planning curve = dev0 (0f2960047); no pb2 cell has run"],
+    ),
     "yunshu": dict(
         full=True,
         prefill=YUNSHU_CURVE["prefill"],
@@ -353,6 +363,20 @@ def slowdown(eng, ctx_tokens, conc):
 # ---------------------------------------------------------------- engines and status
 UNV, UNS, CUT = "unverified", "unsupported", "cut"
 ENGINES = {
+    "yunshu-pb2": dict(
+        label="Yunshu Phase B preview (unmerged, 4f99270)",
+        version="0.1.7.dev0 @ 4f99270 (phaseb2-main, unmerged preview)",
+        supported=True,
+        caps=dict(
+            images=True,
+            json_schema=True,
+            anthropic=True,
+            responses=True,
+            disk_cache=True,
+            tools=True,
+            concurrency=True,
+        ),
+    ),
     "yunshu": dict(
         label="Yunshu main 0f2960047 (0.1.7.dev0)",
         version="0.1.7.dev0 @ 0f2960047 (curve from 0.1.4 snapshot014, provisional)",

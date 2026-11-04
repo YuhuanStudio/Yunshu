@@ -131,12 +131,13 @@ def test_every_manifest_engine_has_a_complete_pin():
 def test_expected_mode_probe_bench_and_merge_agree_for_every_engine():
     """Single source of truth: the configured mode (bench_engines.ENGINES) is the probe's expected
     mode and the evidence builder's mode, for every checked engine (Yunshu: its own entry)."""
+    import fullcmp_engaged as fe
     import fullcmp_engaged_merge as fem
 
     for e in fet.CHECKED_IDS:
         bench = fet.be.ENGINES[fet.be.tfbench_engine(e)].expected_mode
         assert fet.a_expected_mode(e, None) == bench, e
-        if e == "yunshu":
-            assert "dflash" in fem.YUNSHU_ENTRY["modes"]
+        if fe.is_yunshu(e):  # dev0 and the Phase B preview share the Yunshu evidence entry
+            assert bench in fem.YUNSHU_ENTRY["modes"], e
         else:
             assert fem.ENGINE_MODE[e] == bench, e

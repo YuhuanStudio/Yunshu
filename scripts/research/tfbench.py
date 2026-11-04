@@ -1534,7 +1534,7 @@ def attribution_fields(s, r):
             os.environ.get("TFB_ATTR_ENGINE") or bench_engines.manifest_id(s.engine)
         )
         unavailable = dict(eng.unavailable)
-        if eng.engine == "yunshu":
+        if eng.layer2 == "stages":  # Yunshu-style stage timers: dev0 and the Phase B preview
             _yunshu_server_fields(attr, unavailable, client, spec, lat)
     r["attr"] = attr
     r["attr_unavailable"] = unavailable

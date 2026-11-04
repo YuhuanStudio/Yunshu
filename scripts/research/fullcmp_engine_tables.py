@@ -240,7 +240,7 @@ def a_weights_group(e, c):
 
 
 def a_expected_mode(e, c):
-    if e == "yunshu":
+    if fe.is_yunshu(e):
         mode = fam.YUNSHU_EXPECTED_MODE
     elif e not in fam.EXPECTED_MODE_PROBE:
         raise TableMiss(e, "fullcmp_audit_manifest.EXPECTED_MODE_PROBE has no entry (the audit defaults to 'unverified')")
@@ -293,7 +293,7 @@ def a_engaged_evidence(e, c):
 
 def a_merge_mode(e, c):
     expected = a_expected_mode(e, c)
-    if e == "yunshu":  # the merge writes Yunshu's entry explicitly (fem.YUNSHU_ENTRY), not from ENGINE_MODE
+    if fe.is_yunshu(e):  # the merge writes Yunshu's entry explicitly (fem.YUNSHU_ENTRY), not from ENGINE_MODE
         if expected not in fem.YUNSHU_ENTRY["modes"]:
             raise TableMiss(e, f"fullcmp_engaged_merge.YUNSHU_ENTRY has no {expected!r} mode")
         return expected

@@ -37,11 +37,13 @@ COMPETITOR_RE = re.compile(r"(?i)(stat|prof|timing|tok/s|\bms\b)")
 # Structured layer-2 line: stage fields the profile lines do not carry, plus the host-sync counter
 # and the op census (fullcmp_attribution.LAYER2_YUNSHU). The engine must print it for --full to pass.
 LAYER2_RE = re.compile(r"^YUNSHU_LAYER2 (\{.*\})\s*$", re.M)
+# manifest ids of the Yunshu trees: dev0 and the Phase B preview (same server and profile lines)
+YUNSHU_ENGINES = ("yunshu", "yunshu-pb2")
 
 
 def profile_env(engine: str) -> list[str]:
     """Env assignments that switch the engine's own profiling on (none for competitors)."""
-    if engine == "yunshu":
+    if engine in YUNSHU_ENGINES:
         return ["YUNSHU_DEBUG_TREE_PROFILE=1"]
     return []
 
@@ -135,7 +137,7 @@ def append_profile_row(cell: Path, engine: str) -> dict:
             row["error"] = f"engine log unreadable: {exc}"
         else:
             row["engine_log_path"] = log_path
-            if engine == "yunshu":
+            if engine in YUNSHU_ENGINES:
                 stages = parse_yunshu_stages(text)
                 l2 = parse_yunshu_layer2(text)
                 for name, fields in (l2.get("stages") or {}).items():

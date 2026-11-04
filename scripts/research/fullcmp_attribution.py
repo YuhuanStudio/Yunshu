@@ -148,6 +148,7 @@ _YUNSHU_UNAVAILABLE = {
 
 ENGINE_OVERRIDES = {
     "yunshu": EngineAttr("yunshu", dict(_YUNSHU_UNAVAILABLE), "stages"),
+    "yunshu-pb2": EngineAttr("yunshu-pb2", dict(_YUNSHU_UNAVAILABLE), "stages"),
     "tf-1.2.1": EngineAttr("tf-1.2.1", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"),
     "tf-1.1.8": EngineAttr("tf-1.1.8", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"),
     "splash-1.5.0": EngineAttr(

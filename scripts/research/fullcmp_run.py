@@ -472,6 +472,12 @@ class Job:
         ]
 
 
+def yunshu_pins() -> dict:
+    """Per-Yunshu-engine tree sha and python for the audit manifest (dev0 keeps the top-level section)."""
+    pb2 = engine_pin("yunshu-pb2", {})
+    return {"yunshu-pb2": {"git_sha": pb2["sha"], "python": pb2["python_executable"]}}
+
+
 def engine_pin(engine: str, pin: dict) -> dict:
     """The pin whose tree a cell of this engine runs from: the Phase B preview has its own pin
     (fullcmp_provenance.pin_path_for); every other engine keeps the given pin (dev0 for Yunshu)."""
@@ -1041,6 +1047,7 @@ def audit_manifest(
         ),
         "pins": census_pins(pin),
         "yunshu": {"git_sha": pin["sha"], "python": pin["python_executable"]},
+        "yunshu_pins": yunshu_pins(),
         "controls": {},
         "groups": ordered,
         "cells": cells,

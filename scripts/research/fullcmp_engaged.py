@@ -113,11 +113,22 @@ def load_table(path=DEFAULT_TABLE):
     return None if validate_table(table) else table
 
 
+# engine ids whose engaged evidence is another engine's: the Phase B preview (own pin, same Yunshu
+# server, same log line and per-request counters) is judged by the dev0 Yunshu entries
+EVIDENCE_ALIAS = {"yunshu-pb2": "yunshu"}
+
+
+def evidence_key(engine) -> str:
+    """The evidence-table key of an engine id (manifest or bench form)."""
+    key = manifest_key(engine)
+    return EVIDENCE_ALIAS.get(key, key)
+
+
 def mode_entry(table, engine, mode):
     """The mode entry the expected mode selects, or None (no entry: unverifiable)."""
     if not isinstance(table, dict):
         return None
-    eng = (table.get("engines") or {}).get(engine)
+    eng = (table.get("engines") or {}).get(evidence_key(engine))
     if not isinstance(eng, dict):
         return None
     m = (eng.get("modes") or {}).get(mode)
@@ -710,7 +721,7 @@ def manifest_key(engine) -> str:
 
 
 def is_yunshu(engine) -> bool:
-    return manifest_key(engine) == "yunshu"
+    return evidence_key(engine) == "yunshu"
 
 
 def concurrent_check(table, engine, mode, log, records, ready_offset, probe_responses=None):

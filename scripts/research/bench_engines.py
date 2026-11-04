@@ -241,6 +241,19 @@ ENGINES: dict[str, Engine] = {
             0.4,
             22.0,
         ),
+        # ---- full comparison: the Phase B preview row (unmerged phaseb2-main 4f99270, own pin) ----
+        Engine(
+            "yunshu-pb2",
+            "Yunshu Phase B preview (unmerged, 4f99270)",
+            "dflash",
+            "same",
+            CHECKPOINT,
+            DRAFTER,
+            "yunshu",
+            "phaseb2-main tree 4f99270 (TFB_YUNSHU_SRC of its own pin); same launch as yunshu-main; drafter auto-discovered",
+            1.0,
+            75.0,
+        ),
         # ---- refsync: latest engines, 27B cells ----
         Engine(
             "yunshu-main",
@@ -505,6 +518,7 @@ LEGACY = ("yunshu", "tf-old", "tf-new")
 # "yunshu" is a LEGACY tfbench id, so the pinned-tree Yunshu row runs as "yunshu-main".
 MANIFEST_ENGINES = {
     "yunshu": "yunshu-main",
+    "yunshu-pb2": "yunshu-pb2",
     "tf-1.2.1": "tf-1.2.1",
     "tf-1.1.8": "tf-1.1.8",
     "splash-1.5.0": "splash-1.5.0",
