@@ -1451,15 +1451,21 @@ REFUSAL_PHRASES = (
     "text only",
     "text-only",
 )
+# on an image cell a 4xx that talks about the image itself is the engine saying it cannot take it
+# (llama-server without an mmproj, a text-only chat template, an unknown content type)
+IMAGE_REFUSAL_WORDS = ("image", "vision", "multimodal", "mmproj", "content part", "content type")
 REFUSAL_BODY_MAX = 600
 
 
-def is_engine_refusal(code: int, body: str) -> bool:
-    """4xx (not a timeout or a rate limit) with a body that names the input as unsupported."""
+def is_engine_refusal(code: int, body: str, media: str | None = None) -> bool:
+    """4xx (not a timeout or a rate limit) with a body that names the input as unsupported; on an image
+    cell (media not none) also a 4xx whose body is about the image input."""
     if not (400 <= code < 500) or code in (408, 409, 429):
         return False
     low = str(body).lower()
-    return any(p in low for p in REFUSAL_PHRASES)
+    if any(p in low for p in REFUSAL_PHRASES):
+        return True
+    return media not in (None, "none") and any(w in low for w in IMAGE_REFUSAL_WORDS)
 
 
 def emit(out, **kw):
@@ -1689,7 +1695,7 @@ def part_decode(s, out, a):
                     raw = send(s.url, b, sample=True)
                 except urllib.error.HTTPError as exc:
                     body = exc.read().decode("utf-8", "replace")[:REFUSAL_BODY_MAX]
-                    if not is_engine_refusal(exc.code, body):
+                    if not is_engine_refusal(exc.code, body, media):
                         raise
                     emit(
                         out,

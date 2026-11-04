@@ -122,3 +122,14 @@ def test_tf_1_2_1_image_cells_are_unsupported_with_the_engines_own_message():
     # an engine whose census says nothing certain stays costed: the runtime refusal path covers it
     other = [r for r in rows if r["engine"] == "splash-1.5.0" and r.get("media") not in (None, "none")]
     assert other and all(r["status"] != "unsupported" for r in other)
+
+
+def test_an_image_cell_4xx_about_the_image_is_a_refusal_but_a_plain_bad_request_is_not():
+    # llama-server without an mmproj answers an image part with a 400 that talks about the image
+    llama = '{"error": {"message": "image input is not supported - hint: provide the mmproj file"}}'
+    assert tb.is_engine_refusal(400, llama, "img1")
+    odd = '{"error": {"message": "unknown content part type image_url"}}'
+    assert tb.is_engine_refusal(400, odd, "img4")
+    assert not tb.is_engine_refusal(400, odd, "none")  # a text cell never counts on the image wording
+    assert not tb.is_engine_refusal(400, '{"error": {"message": "temperature out of range"}}', "img1")
+    assert not tb.is_engine_refusal(500, odd, "img1")
