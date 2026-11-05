@@ -863,3 +863,19 @@ def test_concurrent_attr_rows_carry_rid_and_part():
     assert [r["rid"] for r in rows] == [0, 1, 0, 1]
     assert rows[0]["accepted"] == 49 and rows[0]["rec_part"] == "conc"
     assert rows[1]["queued_s"] == 1.81
+
+
+def test_omlx_batch_parked_segments_merge_into_their_request():
+    """real-1104 B2 (2026-11-05): oMLX 0.7.3 at c8 logs 'MTP[4] finish=batch-parked ...' when it parks drafting
+    for the batch; the harness failed every oMLX concurrent cell on 'unknown oMLX finish kind'."""
+    raw = [
+        {"uid": 4, "finish": "batch-parked", "ct": 104, "value": 61, "drafted": 75},
+        {"uid": 5, "finish": "batch-parked", "ct": 101, "value": 58, "drafted": 74},
+        {"uid": 4, "finish": "length", "ct": 50, "value": 20, "drafted": 30},
+    ]
+    out = fe._merge_segments(raw)
+    assert not any(o.get("bad") for o in out)
+    r4 = next(o for o in out if o["uid"] == 4)
+    assert r4["ct"] == 154 and r4["value"] == 81 and r4["drafted"] == 105 and r4["segments"] == 2
+    r5 = next(o for o in out if o["uid"] == 5)
+    assert r5.get("partial") and r5["ct"] == 101

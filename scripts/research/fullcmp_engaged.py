@@ -399,7 +399,10 @@ def attr_rows_from(per_row, rows) -> list[dict]:
 
 HANDOFF_FINISH = "late-join-handoff"
 CALIBRATION_FINISH = "batch-standard-calibration"  # oMLX decoding without drafting under concurrency
-NON_TERMINAL_FINISH = frozenset({HANDOFF_FINISH, CALIBRATION_FINISH})
+# oMLX 0.7.3 'Lightning MTP batch parked': at high row counts it stops drafting for the whole batch and decodes
+# standard (cooldown N steps); the segment's tokens were drafted, the rest of the request continues undrafted
+PARKED_FINISH = "batch-parked"
+NON_TERMINAL_FINISH = frozenset({HANDOFF_FINISH, CALIBRATION_FINISH, PARKED_FINISH})
 TERMINAL_FINISH = frozenset({"length", "stop"})
 
 
