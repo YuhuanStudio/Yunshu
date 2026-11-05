@@ -105,6 +105,7 @@ BATCH_ORDER = ("B1", "B2", "B4", "B5")
 SMOKE_BATCH = "SMOKE"  # pre-flight matrix (fullcmp_manifest --smoke); audits only its own rows
 BATCH_CHOICES = BATCH_ORDER + (SMOKE_BATCH,)
 JOB_CAP_MIN = 20.0  # gpuq job cap (default --timeout); a job above it is killed
+SINGLE_CELL_CAP_MIN = 45.0  # a single unsplittable cell may run this long (its own 1.3 x budget as timeout)
 JOB_MARGIN = 0.7  # planned chunks stay <= 70% of the cap (>= 30% margin for estimate error)
 JOB_LIMIT_MIN = JOB_CAP_MIN * JOB_MARGIN  # 14 min: the chunk packing limit
 JB = fm.TIMING["job_budget"]  # itemized per-job budget terms (fullcmp_cell_timing.json)
@@ -407,7 +408,10 @@ def job_budget(rows: list[dict], prior_min: float = 0.0) -> dict:
     out["gate_pre"] = GATE_PRE_MIN
     out["total"] = GATE_PRE_MIN + sum(out[k] for k in ("startup", "cells", "shutdown", "post", "finalize"))
     want = TIMEOUT_FACTOR * max(out["total"], prior_min)
-    out["timeout"] = min(JOB_CAP_MIN, math.ceil(round(want * 10, 6)) / 10)  # 0.1 min steps
+    # one cell that cannot be split (a mixed 128K c8 cell on a slow-prefill engine) may exceed the 20 min cap:
+    # its timeout is its own 1.3 x budget, up to SINGLE_CELL_CAP_MIN; a multi-cell job stays at the cap
+    cap = SINGLE_CELL_CAP_MIN if len(rows) == 1 else JOB_CAP_MIN
+    out["timeout"] = min(cap, math.ceil(round(want * 10, 6)) / 10)  # 0.1 min steps
     out["stall"] = max(
         STALL_FLOOR_MIN,
         2.0 * startup_s(rows[0]["engine"]) / 60.0,
@@ -804,7 +808,11 @@ def plan_jobs(
                     part_tag = f"-p{k + 1}" if len(chunks) > 1 else ""
                     budget = job_budget(chunk, prior_wall_min(batch, engine))
                     est = budget["total"]
-                    over = est > JOB_CAP_MIN + 1e-9
+                    # refused only when it cannot run: a multi-cell chunk above the cap (pack_chunks should
+                    # have split it) or a single cell whose 1.3 x budget exceeds SINGLE_CELL_CAP_MIN
+                    over = (est > JOB_CAP_MIN + 1e-9 and len(chunk) > 1) or (
+                        TIMEOUT_FACTOR * est > SINGLE_CELL_CAP_MIN + 1e-9
+                    )
                     margin = est > JOB_LIMIT_MIN + 1e-9
                     if profile:
                         label = f"fullcmp-{batch}-{engine}-{slug}{part_tag}-prof"

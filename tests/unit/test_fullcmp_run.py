@@ -189,10 +189,12 @@ def test_timeout_is_1_3_x_total_floored_by_the_same_kind_and_capped():
     rows = [row("yunshu", "B1.t", est=2.0)]
     b = run.job_budget(rows)
     assert b["timeout"] == pytest.approx(
-        min(20.0, __import__("math").ceil(round(1.3 * b["total"] * 10, 6)) / 10)
+        min(run.SINGLE_CELL_CAP_MIN, __import__("math").ceil(round(1.3 * b["total"] * 10, 6)) / 10)
     )
     # floored by the longest same-kind run (the killed 1103-220358 job ran 20 min)
-    assert run.job_budget(rows, prior_min=20.0)["timeout"] == 20.0
+    # a single cell's timeout follows 1.3 x prior up to SINGLE_CELL_CAP_MIN; a multi-cell job stays at the cap
+    assert run.job_budget(rows, prior_min=20.0)["timeout"] == 26.0
+    assert run.job_budget(rows * 2, prior_min=20.0)["timeout"] == run.JOB_CAP_MIN
     assert run.job_budget(rows, prior_min=0.0)["timeout"] < 20.0
     assert run.prior_wall_min("B1", "yunshu") >= 20.0
     assert run.prior_wall_min("B9", "yunshu") == 0.0
@@ -213,9 +215,20 @@ def test_plan_labels_split_groups_and_keeps_one_group_per_server_config():
 
 
 def test_single_cell_above_cap_is_flagged():
-    rows = [row("yunshu", "B1.big", est=60.0)]  # 30 min per rep
+    rows = [row("yunshu", "B1.big", est=80.0)]  # 40 min per rep: 1.3 x 40 > SINGLE_CELL_CAP_MIN
     plan = run.plan_batch(rows, "B1", PIN)
     assert plan.jobs and all(j.over_cap for j in plan.jobs)
+
+
+def test_single_cell_between_job_cap_and_single_cell_cap_runs_alone():
+    """real-1104 B2: mixed 128K c8 cells budget ~22 min; one unsplittable cell runs with its own 1.3x timeout."""
+    rows = [row("yunshu", "B1.mixed128", est=45.0), row("yunshu", "B1.short", est=2.0)]  # 22.5 min per rep
+    plan = run.plan_batch(rows, "B1", PIN)
+    rep0 = [j for j in plan.jobs if j.rep == 0]
+    big = next(j for j in rep0 if "B1.mixed128" in j.cell_ids)
+    assert big.cell_ids == ["B1.mixed128"] and not big.over_cap
+    assert run.JOB_CAP_MIN < big.timeout_min <= run.SINGLE_CELL_CAP_MIN
+    assert not any(j.over_cap for j in plan.jobs)
 
 
 def test_single_cell_above_the_margin_runs_alone_and_is_flagged():
@@ -225,7 +238,7 @@ def test_single_cell_above_the_margin_runs_alone_and_is_flagged():
     long_job = next(j for j in rep0 if "B1.long" in j.cell_ids)
     assert long_job.cell_ids == ["B1.long"]  # alone: the next cell does not fit with it
     assert long_job.over_margin and not long_job.over_cap
-    assert long_job.timeout_min == run.JOB_CAP_MIN  # 1.3 x 16 min, capped at 20
+    assert long_job.timeout_min == pytest.approx(26.1)  # alone: its own 1.3 x budget, not the 20 min cap
 
 
 # --- rotated order across reps ---------------------------------------------
@@ -1048,3 +1061,4 @@ def test_profile_only_run_skips_the_audit_reps_and_requeues(pin_file, tmp_path, 
     monkeypatch.setattr(run, "requeue_quiet_flagged", forbidden)
     rc = run.main(["--batch", "B1", "--manifest", str(manifest), "--profile-rep", "--profile-engines", "yunshu,yunshu-pb2", "--profile-only"])
     assert rc == 0 and submitted and all("-prof" in lbl for lbl in submitted)
+
