@@ -698,7 +698,15 @@ class Srv:
                 f"see {self.log}"
             )
 
-    def kill(self, keep_disk=False):
+    def kill(self, keep_disk=False, graceful=False):
+        if self.proc.poll() is None and graceful:
+            # a restart is a real stop: SIGTERM lets the engine persist its prefix cache on shutdown
+            # (Yunshu's APC close() writes resident checkpoints); SIGKILL only after the grace period
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(self.proc.pid, signal.SIGTERM)
+            with contextlib.suppress(Exception):
+                self.proc.wait(RESTART_TERM_GRACE_S)
+            self.term_exit = "exited" if self.proc.poll() is not None else "sigkill after grace"
         if self.proc.poll() is None:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(self.proc.pid, signal.SIGKILL)
@@ -709,7 +717,7 @@ class Srv:
         # yv runs held 362 GB of it on P5Plus (2026-10-07). A restart cell stops its first server
         # with keep_disk=True: the relaunched server reads that cache from the same HOME.
         if self.proc.poll() is not None and not keep_disk:
-            for sub in (".yunshu/cache", "omlx-ssd", "mtplx-cache", "omlx-base/cache", ".mlx-serve/kv-cache", "Library/Caches/Splash", ".cache/mlx-vlm/apc", ".cache/kapitsa/prefix-cache"):
+            for sub in ENGINE_CACHE_SUBDIRS:
                 shutil.rmtree(self.home / sub, ignore_errors=True)
         if getattr(self, "mem", None):
             self.mem.stop()
@@ -762,13 +770,54 @@ def cell_log_slice(log_path, start, end=None, prefix=()):
     return b"".join(pieces)
 
 
+RESTART_TERM_GRACE_S = 120.0  # SIGTERM -> SIGKILL grace for a restart cell's first server
+DISK_SETTLE_QUIET_S = 10.0  # cache dirs unchanged this long = the engine finished writing
+DISK_SETTLE_MAX_S = 180.0
+ENGINE_CACHE_SUBDIRS = (".yunshu/cache", "omlx-ssd", "mtplx-cache", "omlx-base/cache", ".mlx-serve/kv-cache",
+                        "Library/Caches/Splash", ".cache/mlx-vlm/apc", ".cache/kapitsa/prefix-cache")
+
+
+def _cache_footprint(home) -> tuple:
+    total, newest, count = 0, 0.0, 0
+    for sub in ENGINE_CACHE_SUBDIRS:
+        for root, _dirs, files in os.walk(Path(home) / sub):
+            for f in files:
+                with contextlib.suppress(OSError):
+                    st = os.stat(os.path.join(root, f))
+                    total, count, newest = total + st.st_size, count + 1, max(newest, st.st_mtime)
+    return total, count, newest
+
+
+def wait_disk_settled(home, quiet_s=None, max_s=None, poll_s=1.0) -> float:
+    """Seconds waited until the engine cache dirs under home were unchanged for quiet_s (capped at max_s)."""
+    stub = bool(os.environ.get("TFB_STUB_SERVER"))  # stub servers write no cache: keep e2e tests fast
+    quiet_s = (0.3 if stub else DISK_SETTLE_QUIET_S) if quiet_s is None else quiet_s
+    max_s = DISK_SETTLE_MAX_S if max_s is None else max_s
+    if home is None:
+        return 0.0
+    t0 = time.monotonic()
+    last, since = _cache_footprint(home), time.monotonic()
+    while time.monotonic() - t0 < max_s:
+        time.sleep(poll_s)
+        cur = _cache_footprint(home)
+        if cur != last:
+            last, since = cur, time.monotonic()
+        elif time.monotonic() - since >= quiet_s:
+            break
+    return round(time.monotonic() - t0, 1)
+
+
 def restart_server(s):
     """Stop the live server (its disk prefix tier is kept) and launch the same engine again on the
     same HOME: a fresh process and port, the same cache directory (restart-with-disk-cache)."""
     log = getattr(s, "log", None)  # a stub server has no engine log
+    # real-1104 B2: the first server was SIGKILLed 0.4 s after the reply, before any engine (Yunshu, Splash,
+    # mlx-serve, oMLX) had written its disk tier, so every restart cell measured a cold prefill. Wait until the
+    # engine's cache directories stop changing, then stop it the way a user restart does (SIGTERM, grace).
+    s.restart_settle_s = wait_disk_settled(getattr(s, "home", None))
     if log is not None and log.exists():
         _LOG_PREFIX.append(log.read_bytes())  # the relaunch truncates this log: keep its bytes
-    s.kill(keep_disk=True)
+    s.kill(keep_disk=True, graceful=True)
     if os.environ.get("TFB_STUB_SERVER") and os.environ.get(
         "TFB_STUB_WIPE_HOME_ON_RESTART"
     ) == "1":

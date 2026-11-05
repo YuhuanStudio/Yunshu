@@ -1816,6 +1816,12 @@ def main(argv=None) -> int:
     ap.add_argument("--manifest", required=True, type=Path)
     ap.add_argument("--engines", default="", help="comma list of manifest engine ids")
     ap.add_argument(
+        "--cells",
+        default="",
+        help="regex on manifest cell ids: run only the matching cells of the batch (a targeted re-run "
+        "after a harness fix; results overwrite the same raw-root files)",
+    )
+    ap.add_argument(
         "--rep", type=int, default=None, help="run only this rep index (0-based)"
     )
     ap.add_argument(
@@ -1916,6 +1922,12 @@ def main(argv=None) -> int:
 
     pin = json.loads(PIN_PATH.read_text())
     rows = load_rows(a.manifest)
+    if a.cells:
+        rx = re.compile(a.cells)
+        rows = [r for r in rows if r.get("batch") != a.batch or rx.search(str(r.get("id", "")))]
+        if not any(r.get("batch") == a.batch for r in rows):
+            print(f"refusing: --cells {a.cells!r} matches no {a.batch} cell", file=sys.stderr)
+            return 2
     engines = [e for e in a.engines.split(",") if e] or None
     if engines:
         # An unknown id would filter every row out and run nothing: fail closed instead.

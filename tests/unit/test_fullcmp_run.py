@@ -1062,3 +1062,17 @@ def test_profile_only_run_skips_the_audit_reps_and_requeues(pin_file, tmp_path, 
     rc = run.main(["--batch", "B1", "--manifest", str(manifest), "--profile-rep", "--profile-engines", "yunshu,yunshu-pb2", "--profile-only"])
     assert rc == 0 and submitted and all("-prof" in lbl for lbl in submitted)
 
+
+
+def test_cells_filter_selects_only_matching_cells_and_refuses_an_empty_match(tmp_path, capsys):
+    """real-1104 B2: restart cells (SIGKILL before the disk write) and oMLX c4/c8 cells (batch-parked parse)
+    need a targeted re-run with the fixed harness; --cells selects them by id."""
+    rows = [
+        {"batch": "B2", "id": "B2.restart.yunshu.32K", "engine": "yunshu"},
+        {"batch": "B2", "id": "B2.conc.omlx-0.7.3.8K.c8", "engine": "omlx-0.7.3"},
+        {"batch": "B2", "id": "B2.ctx.yunshu.4K", "engine": "yunshu"},
+    ]
+    m = tmp_path / "m.jsonl"
+    m.write_text("\n".join(__import__("json").dumps(r) for r in rows) + "\n")
+    rc = run.main(["--batch", "B2", "--manifest", str(m), "--cells", r"^B2\.nomatch", "--dry-run"])
+    assert rc == 2 and "matches no B2 cell" in capsys.readouterr().err
