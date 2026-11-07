@@ -334,6 +334,8 @@ def test_prefill_atoms_merge_up_to_checkpoints_and_the_tail():
     from yunshu_engine.round_driver import driver as drv
 
     d = drv.RoundDriver.__new__(drv.RoundDriver)
+    # the packed prefill plan: _span_end / _run_end read these flags (bf52d4a99 added them)
+    d.flash = d.generic = False
     d.chunk = 512
     d.long_from, d.long_chunk = 1 << 60, 2048
     ids = list(range(512 * 6 + 40))
@@ -519,6 +521,8 @@ def test_atoms_grow_with_the_absolute_position():
     from yunshu_engine.round_driver import driver as drv
 
     d = drv.RoundDriver.__new__(drv.RoundDriver)
+    # the packed prefill plan: _span_end / _run_end read these flags (bf52d4a99 added them)
+    d.flash = d.generic = False
     d.chunk = 512
     d.long_from, d.long_chunk = 2048, 1024
     ids = list(range(2048 + 1024 * 3 + 40))
@@ -855,6 +859,8 @@ def test_prompt_tail_runs_apart_even_without_a_checkpoint(tiny, monkeypatch):
     from yunshu_engine.round_driver import driver as drv
 
     d = drv.RoundDriver.__new__(drv.RoundDriver)
+    # the packed prefill plan: _span_end / _run_end read these flags (bf52d4a99 added them)
+    d.flash = d.generic = False
     d.chunk = 512
     d.long_from, d.long_chunk = 1 << 60, 2048
 

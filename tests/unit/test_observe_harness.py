@@ -30,6 +30,8 @@ def _tfb_env(monkeypatch, tmp_path, extra=None, tfb_observe=None):
     monkeypatch.setattr(tfbench, "OUT", tmp_path)
     monkeypatch.setattr(tfbench, "free_port", lambda: 18999)
     monkeypatch.setattr(tfbench, "owns_listener", lambda *a: True)
+    # the default target fits the 27B drafter (same hidden size); pin it so the test needs no model on disk
+    monkeypatch.setattr(tfbench, "_hidden_size", lambda _path: 5120)
     monkeypatch.delenv("TFB_OBSERVE", raising=False)
     if tfb_observe is not None:
         monkeypatch.setenv("TFB_OBSERVE", tfb_observe)

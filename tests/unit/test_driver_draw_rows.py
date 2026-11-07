@@ -1,6 +1,8 @@
 """RoundDriver._draw on an n-row window (an MTP chain: guide plan, processors, logprobs report)
 gives every row what n plain single-row steps give (spec on == spec off), bit for bit."""
 
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -10,6 +12,7 @@ mx = pytest.importorskip("mlx.core")
 pytest.importorskip("mlx_lm")
 pytest.importorskip("llguidance")
 
+sys.path.insert(0, str(Path(__file__).parent))
 from test_driver_window_processors import PROMPT, SETS, V  # noqa: E402
 
 from yunshu_engine import constrained_spec as cs  # noqa: E402
