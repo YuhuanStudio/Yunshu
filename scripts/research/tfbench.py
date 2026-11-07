@@ -83,6 +83,18 @@ def server_home(out: Path, tag: str, environ) -> Path:
     return out / "home" / tag
 
 
+def cleanup_job_home(out: Path, environ, rmtree=shutil.rmtree) -> bool:
+    """End of a full-comparison tfbench run: remove the job's whole server HOME (engine disk caches such
+    as .cache/mlx-vlm/apc held 17-19 GB per job and filled the result disk, 2026-11-08). Nothing in it is
+    evidence: the audit reads the header's recorded home path, never the directory. Only a fullcmp job
+    with a label (its own directory) is touched; a restart cell has finished both its servers by now."""
+    label = environ.get("TFB_JOB_LABEL", "")
+    if environ.get("TFB_FULLCMP") != "1" or not label:
+        return False
+    rmtree(server_home(out, "", environ), ignore_errors=True)
+    return True
+
+
 def ephemeral_port():
     """An OS-assigned loopback port (never the shared 18990-18999 pool)."""
     with socket.socket() as s:
@@ -3217,6 +3229,7 @@ def main():
         for live in _LIVE_SERVERS:  # a restart cell's relaunched server, then the first one
             live.kill()
         s.kill()
+        cleanup_job_home(OUT, os.environ)
 
 
 if __name__ == "__main__":

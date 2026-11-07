@@ -538,7 +538,7 @@ def cell_env(
         f"TFB_YUNSHU_BIN={harness['TFB_YUNSHU_BIN']}",
         f"TFB_YUNSHU_SRC={harness['TFB_YUNSHU_SRC']}",
         f"PYTHONPATH={harness['PYTHONPATH']}",
-        f"HOME={HOME_ROOT / engine}",
+        f"HOME={HOME_ROOT / engine / label if label else HOME_ROOT / engine}",
         f"GPUQ_DIR={GPUQ_DIR_DEFAULT}",
         f"TFB_WORK={TFB_WORK_DIR}",
         f"TFB_MLXLM_PY={pin['python_executable']}",
@@ -684,6 +684,24 @@ def quiet_gate_argv(label: str) -> list[str]:
     ]
 
 
+def job_cleanup_trap(label: str, engines=()) -> str:
+    """Remove the job's HOMEs on every way out of the wrapper (normal end, a failed step under set -e,
+    gpuq's SIGINT on timeout or stall, SIGTERM, SIGHUP): the engine disk caches in them filled the result
+    disk when only tfbench's own cleanup ran (2026-11-08). The restart cell keeps its HOME between its two
+    servers inside one tfbench run, which is all inside the wrapper. A retry has its own label, so its
+    own fresh directories."""
+    if not label:
+        return ""
+    paths = [TFOUT_ROOT / "home" / label]
+    paths += [HOME_ROOT / e / label for e in sorted(set(engines))]
+    dirs = " ".join(shlex.quote(str(d)) for d in paths)
+    return (
+        f"cleanup_homes() {{ rm -rf {dirs}; }}\n"
+        "trap cleanup_homes EXIT\n"
+        "trap 'exit 143' INT TERM HUP\n"
+    )
+
+
 def job_script(
     cells: list[dict], rep: int, pin: dict, label: str = "", profile: bool = False
 ) -> str:
@@ -714,7 +732,8 @@ def job_script(
                     ]
                 )
             )
-    return "set -e\n" + " && ".join(steps) + "\n"
+    trap = job_cleanup_trap(label, [c["engine"] for c in cells])
+    return "set -e\n" + trap + " && ".join(steps) + "\n"
 
 
 def wrapper_path(label: str) -> Path:
