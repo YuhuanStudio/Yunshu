@@ -6,6 +6,8 @@ from typing import Any
 
 import mlx.core as mx
 
+from .. import gpu_probe
+
 from .inputs import ints
 
 MAX_ROWS = 128         # rows the lane kernel accepts in one call
@@ -189,8 +191,8 @@ def _generation(architecture: str) -> int | None:
 def _resolve_variant() -> str:
     """Choose once; no hardware lookup or variant branch on the matmul hot path."""
     global _VARIANT, _MAIN, _MAIN_TILED, _COOP
-    if _VARIANT is None:
-        generation = _generation(str(mx.device_info().get("architecture", "")))
+    if _VARIANT is None:  # decided by the GPU (gpu_probe), never by the caller's default device
+        generation = _generation(str(gpu_probe.device_info().get("architecture", "")))
         _VARIANT = "m5" if generation in (17, 18) else "portable"
         if _VARIANT == "m5":
             from . import lane_m5, lane_widen, lane_widen_m5
@@ -417,6 +419,14 @@ _READY: list[bool] = []
 
 
 def ready() -> bool:
+    """Whether the lane matmul is certified on this process's GPU. The probe and its self-test run under
+    the GPU stream (``gpu_probe``): a first call made while the default device was the CPU used to cache
+    "not ready" / the portable variant for the whole process."""
+    with gpu_probe.gpu_scope():
+        return _ready()
+
+
+def _ready() -> bool:
     """Admit known hardware and certify unknown GPU / Metal compiler layouts once.
 
     Known M1-M4 use portable coordinates; known M5 uses its proven fragments.
@@ -427,7 +437,7 @@ def ready() -> bool:
     """
     _resolve_variant()
     if not _READY:
-        generation = _generation(str(mx.device_info().get("architecture", "")))
+        generation = _generation(str(gpu_probe.device_info().get("architecture", "")))
         if generation is not None and 13 <= generation <= 18:
             _READY.append(True)
             return True

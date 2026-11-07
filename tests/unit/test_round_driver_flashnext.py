@@ -41,8 +41,7 @@ def fresh_replay_store():
     replay.clear()
 
 
-@pytest.fixture(scope="module")
-def tiny():
+def make_tiny():
     from mlx.utils import tree_flatten
     from mlx_vlm.speculative.drafters.qwen4_exp_mtp.config import Qwen4ExpMTPConfig
     from mlx_vlm.speculative.drafters.qwen4_exp_mtp.qwen4_exp_mtp import (
@@ -63,6 +62,11 @@ def tiny():
     )
     mx.eval(head.parameters())  # float32: CPU gather_mm takes nothing else
     return lm, head
+
+
+@pytest.fixture(scope="module")
+def tiny():
+    return make_tiny()
 
 
 def run(model, ids_list, *, head=None, join_after=None, max_tokens=10):

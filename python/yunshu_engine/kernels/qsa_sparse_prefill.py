@@ -20,6 +20,8 @@ from typing import Any, cast
 
 import mlx.core as mx
 
+from . import gpu_probe
+
 logger = logging.getLogger(__name__)
 
 D, H, KV, BLOCK, TOPK = 256, 24, 2, 4, 512
@@ -242,7 +244,8 @@ def ready() -> bool:
         import re
 
         match = re.fullmatch(
-            r"applegpu_g(\d+)[a-z]+", str(mx.device_info().get("architecture", ""))
+            r"applegpu_g(\d+)[a-z]+",
+            str(gpu_probe.device_info().get("architecture", "")),
         )
         _READY.append(bool(match and int(match[1]) in (17, 18)))
     return _READY[0]

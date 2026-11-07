@@ -10,6 +10,8 @@ from typing import Any
 
 import mlx.core as mx
 
+from .. import gpu_probe
+
 from . import threads
 from .inputs import ints, padded  # noqa: F401  (8+ elements, one source a kernel name)
 
@@ -360,7 +362,7 @@ class _Kernel:
 
 @functools.cache
 def _generation() -> int:
-    info = mx.device_info() if hasattr(mx, "device_info") else mx.metal.device_info()
+    info = gpu_probe.device_info()
     digits = "".join(ch for ch in str(info.get("architecture", "")).removeprefix("applegpu_g") if ch.isdigit())
     return int(digits) if digits else 0
 

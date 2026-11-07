@@ -17,6 +17,8 @@ from typing import Any, cast
 
 import mlx.core as mx
 
+from . import gpu_probe
+
 
 @cache
 def header() -> str:
@@ -205,7 +207,7 @@ def enable() -> bool:
     _dispatches = 0
     if importlib.metadata.version("mlx") != "0.32.3":
         return False
-    info = mx.device_info()
+    info = gpu_probe.device_info()
     from .tensorfold.lane_qmm import _generation
 
     if info.get("device_name") != "Apple M5 Max" or _generation(

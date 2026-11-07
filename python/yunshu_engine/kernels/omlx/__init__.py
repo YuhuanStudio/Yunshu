@@ -31,6 +31,8 @@ import logging
 
 import mlx.core as mx
 
+from .. import gpu_probe
+
 logger = logging.getLogger(__name__)
 
 _STATE = {"applied": None, "row_exact": False}
@@ -62,7 +64,7 @@ def is_nax_available() -> bool:
     ok = False
     try:
         release = tuple(int(x) for x in platform.mac_ver()[0].split(".")[:2])
-        arch = str(mx.device_info().get("architecture", ""))
+        arch = str(gpu_probe.device_info().get("architecture", ""))
         match = re.fullmatch(r"applegpu_g(\d+)([a-z])", arch)
         if release >= (26, 2) and match is not None:
             gen, suffix = int(match.group(1)), match.group(2)

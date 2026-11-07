@@ -1,8 +1,4 @@
-"""DFlash2 on Flash-Next driver rows (tiny random Flash-Next + tiny DFlash2, CPU).
-
-Kept in a file that sorts last: constructing a DFlash batch on this target leaves process state that changes
-the arithmetic of the Qwen3.5 DFlash / APC tests run after it in the same process (observed, see the report),
-so no other test module may follow this one."""
+"""DFlash2 on Flash-Next driver rows (tiny random Flash-Next + tiny DFlash2, CPU)."""
 
 # ruff: noqa: F811  (imported fixtures are used as test arguments)
 
@@ -26,15 +22,13 @@ from tests.unit.test_round_driver_flashnext import (  # noqa: E402,F401
 from yunshu_engine.round_driver.driver import Request, RoundDriver  # noqa: E402
 
 
-@pytest.fixture(scope="module")
-def dflash(tiny):
+def make_dflash(lm):
+    """(drafter, restore): the DFlash2 drafter and the undo of ``qwen4_dflash.install`` on the target classes."""
+    from mlx_vlm.models.qwen4_exp.language import LanguageModel, Qwen4ExpDecoderLayer
     from mlx_vlm.speculative.drafters.dflash2.config import DFlash2Config
     from mlx_vlm.speculative.drafters.dflash2.dflash2 import DFlash2DraftModel
 
     from yunshu_engine import qwen4_dflash
-
-    lm, _ = tiny
-    from mlx_vlm.models.qwen4_exp.language import LanguageModel, Qwen4ExpDecoderLayer
 
     saved = {
         (cls, name): cls.__dict__.get(name, None)
@@ -69,20 +63,23 @@ def dflash(tiny):
     )
     d = DFlash2DraftModel(cfg)
     mx.eval(d.parameters())
-    yield d
-    import gc
 
-    gc.collect()
-    mx.clear_cache()
-    for (
-        cls,
-        name,
-    ), value in saved.items():  # the install patches classes: leave them as found
-        if value is None:
-            if name in cls.__dict__:
-                delattr(cls, name)
-        else:
-            setattr(cls, name, value)
+    def restore():
+        for (cls, name), value in saved.items():
+            if value is None:
+                if name in cls.__dict__:
+                    delattr(cls, name)
+            else:
+                setattr(cls, name, value)
+
+    return d, restore
+
+
+@pytest.fixture(scope="module")
+def dflash(tiny):
+    d, restore = make_dflash(tiny[0])
+    yield d
+    restore()
 
 
 def run_dflash(model, draft, ids_list, *, join_after=None, max_tokens=10):

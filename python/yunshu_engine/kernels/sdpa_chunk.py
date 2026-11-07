@@ -31,6 +31,8 @@ from typing import Any, cast
 
 import mlx.core as mx
 
+from . import gpu_probe
+
 logger = logging.getLogger(__name__)
 
 HEAD_DIM = 256
@@ -47,7 +49,7 @@ def _device_generation() -> int | None:
 
         if not mx.metal.is_available():
             return None
-        return _generation(str(mx.device_info().get("architecture", "")))
+        return _generation(str(gpu_probe.device_info().get("architecture", "")))
     except Exception:
         return None
 
