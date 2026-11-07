@@ -278,7 +278,6 @@ def driver_allow_draft(
     logprobs: bool,
     guide,
     *,
-    dflash_driver: bool,
     xtc: bool = False,
     sampled: bool = False,
 ) -> bool:
@@ -289,8 +288,9 @@ def driver_allow_draft(
     masks incl. min_tokens / top-n-sigma, logit bias, repetition penalty, one frequency /
     presence penalty), logprobs with or without them, and any invariant guide (tool-call or
     response-format, alone or combined) with either, on DFlash and on MTP head rows alike.
-    Plain rows: XTC sampling (no keyed draw), a sampled row with logprobs on MTP (the keyed
-    report is a DFlash path), a non-invariant guide, any other processor. ``allow_draft`` False
+    Plain rows: XTC sampling (no keyed draw), a non-invariant guide, any other processor. A
+    sampled row with logprobs drafts on MTP head rows too (``driver.row_logprobs`` reduces every
+    window row on its own, so the report equals a plain step's). ``allow_draft`` False
     (the caller) always wins."""
     from .constrained_spec import driver_guide
     from .round_driver.driver import windowable
@@ -298,8 +298,6 @@ def driver_allow_draft(
     # reporting adds an Fp32 processor; the driver does the fp32 readout itself
     rest = [p for p in (processors or []) if not isinstance(p, Fp32LogitsProcessor)]
     if not allow_draft or xtc:
-        return False
-    if sampled and logprobs and not dflash_driver:
         return False
     if guide is not None:
         return driver_guide(guide, logprobs, rest)
@@ -906,8 +904,6 @@ class VLMBatchRunner:
             processors,
             logprobs,
             guide,
-            dflash_driver=self.driver is not None
-            and getattr(self.driver, "dflash", None) is not None,
             xtc=bool(xtc_probability),
             sampled=not greedy,
         )

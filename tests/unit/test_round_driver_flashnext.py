@@ -31,6 +31,16 @@ def cpu():
     mx.set_default_device(previous)
 
 
+@pytest.fixture(autouse=True)
+def fresh_replay_store():
+    """The tail replay store is process-global: leave nothing of these tiny models behind."""
+    from yunshu_engine.round_driver import replay
+
+    replay.clear()
+    yield
+    replay.clear()
+
+
 @pytest.fixture(scope="module")
 def tiny():
     from mlx.utils import tree_flatten
@@ -262,17 +272,13 @@ def test_request_kinds_draft_on_flash_rows_as_on_mtp_head_rows(tiny):
     seen_draft = seen_plain = 0
     for name, procs, logprobs, sampled in _kinds():
         want = vbr.driver_allow_draft(
-            True, list(procs), logprobs, None, dflash_driver=False, sampled=sampled
+            True, list(procs), logprobs, None, sampled=sampled
         )
         sampling = vbr.RowParams(0.7, 0.9, 0, 0.0, 5, 0.0) if sampled else None
         driver = RoundDriver(model, drafter=head, chunk=CHUNK, stop_tokens=set())
         assert driver.will_draft(
             sampling=sampling, processors=procs, logprobs=logprobs, draft=want
-        ) == (
-            want
-            and driver._processors_draft(procs, logprobs)
-            and not (sampled and logprobs)
-        ), name
+        ) == (want and driver._processors_draft(procs, logprobs)), name
         driver.add(
             Request(
                 PROMPTS[1],
@@ -289,7 +295,8 @@ def test_request_kinds_draft_on_flash_rows_as_on_mtp_head_rows(tiny):
         assert (row.mtp_cache is not None) == bool(want)
         seen_draft += bool(want)
         seen_plain += not want
-    assert seen_draft > 20 and seen_plain > 0
+    assert seen_draft > 20 and seen_plain == 0  # XTC alone stays plain (no keyed draw)
+    assert not vbr.driver_allow_draft(True, [], False, None, xtc=True)
 
 
 def test_flash_row_with_processors_and_a_guide_free_request_matches_solo(tiny):
@@ -337,134 +344,6 @@ def test_flash_next_media_prompts_take_the_driver():
 
 
 # ── DFlash2 on Flash-Next rows ─────────────────────────────────────────────────────────────────
-@pytest.fixture(scope="module")
-def dflash(tiny):
-    from mlx_vlm.speculative.drafters.dflash2.config import DFlash2Config
-    from mlx_vlm.speculative.drafters.dflash2.dflash2 import DFlash2DraftModel
-
-    from yunshu_engine import qwen4_dflash
-
-    lm, _ = tiny
-    from mlx_vlm.models.qwen4_exp.language import LanguageModel, Qwen4ExpDecoderLayer
-
-    saved = {
-        (cls, name): cls.__dict__.get(name, None)
-        for cls, name in (
-            (Qwen4ExpDecoderLayer, "__call__"),
-            (LanguageModel, "__call__"),
-            (LanguageModel, "_yunshu_dflash_capture"),
-            (LanguageModel, "speculative_verify_dflash_hidden"),
-        )
-    }
-    qwen4_dflash.install(lm)
-    mx.random.seed(11)
-    cfg = DFlash2Config(
-        hidden_size=32,
-        intermediate_size=64,
-        num_hidden_layers=2,
-        num_attention_heads=2,
-        num_key_value_heads=1,
-        head_dim=16,
-        vocab_size=64,
-        mask_token_id=7,
-        max_position_embeddings=4096,
-        block_size=6,
-        num_target_layers=2,
-        target_layer_ids=[0, 1],
-        conv_kernel_size=2,
-        conv_group_size=16,
-        selector_rank=8,
-        selector_top_k=4,
-        layer_types=["sliding_attention"] * 2,
-        sliding_window=32,
-    )
-    d = DFlash2DraftModel(cfg)
-    mx.eval(d.parameters())
-    yield d
-    for (
-        cls,
-        name,
-    ), value in saved.items():  # the install patches classes: leave them as found
-        if value is None:
-            if name in cls.__dict__:
-                delattr(cls, name)
-        else:
-            setattr(cls, name, value)
-
-
-def run_dflash(model, draft, ids_list, *, join_after=None, max_tokens=10):
-    driver = RoundDriver(
-        SimpleNamespace(language_model=model),
-        dflash_drafter=draft,
-        stop_tokens=set(),
-        chunk=CHUNK,
-    )
-    out = {i: [] for i in range(len(ids_list))}
-    pending = list(enumerate(ids_list))
-    steps = 0
-    while pending or driver.busy():
-        while pending and (join_after is None or steps >= join_after[pending[0][0]]):
-            i, ids = pending.pop(0)
-            driver.add(Request(ids, max_tokens, handle=i))
-        for event in driver.step():
-            if event.token is not None:
-                out[event.handle].append(int(event.token))
-        steps += 1
-        assert steps < 400
-    return out, driver
-
-
-def test_dflash_flash_next_driver_wiring(tiny, dflash):
-    from yunshu_engine.round_driver.flashnext_dflash import FlashNextDFlash
-
-    lm, _ = tiny
-    driver = RoundDriver(
-        SimpleNamespace(language_model=lm), dflash_drafter=dflash, chunk=CHUNK
-    )
-    assert isinstance(driver.dflash, FlashNextDFlash) and driver.batch is driver.dflash
-    assert driver.head is None and driver.can_draft
-    assert driver.dflash.capture_ids == [0, 1]
-
-
-def test_dflash_solo_equals_plain_and_concurrent(tiny, dflash):
-    lm, _ = tiny
-    plain = [run(lm, [ids])[0][0] for ids in PROMPTS]
-    solo = [run_dflash(lm, dflash, [ids])[0][0] for ids in PROMPTS]
-    assert solo == plain
-    together, driver = run_dflash(lm, dflash, PROMPTS)
-    assert [together[i] for i in range(len(PROMPTS))] == plain
-    assert driver.drafted > 0
-    late, _ = run_dflash(lm, dflash, PROMPTS, join_after=[0, 4, 9])
-    assert [late[i] for i in range(len(PROMPTS))] == plain
-
-
-@pytest.mark.parametrize("corrupt_at", [None, 2])
-@pytest.mark.parametrize("lone", [True, False])
-def test_dflash_oracle_chains_commit_whole_windows(
-    tiny, dflash, monkeypatch, corrupt_at, lone
-):
-    """Chains that are what plain decode produces next commit all their positions (QSA indexer, PLE history
-    and GDN state advance by the whole window); a chain wrong at one depth commits the prefix and rolls the
-    rest back. The stream is the plain one either way, with the next round drafted before the verify is read
-    back (a lone row) or after (two rows)."""
-    from yunshu_engine.round_driver.flashnext_dflash import FlashNextDFlash
-
-    lm, _ = tiny
-    for ids in PROMPTS:
-        truth = run(lm, [ids], max_tokens=10)[0][0]
-
-        def oracle(self, dh, anchor, row, truth=truth, generated=None):
-            n = row.generated if generated is None else generated
-            future = (truth[n : n + 15] + [0] * 15)[:15]
-            if corrupt_at is not None:
-                future[corrupt_at] = (future[corrupt_at] + 1) % 60
-            return mx.array(future, dtype=mx.int32)
-
-        monkeypatch.setattr(FlashNextDFlash, "_chain", oracle)
-        got, _ = run_dflash(lm, dflash, [ids] if lone else [ids, PROMPTS[1]])
-        assert got[0] == truth, (corrupt_at, lone)
-
-
 # ── explicit cache plans ride on the driver ─────────────────────────────────────────────────────
 class _Coordinator:
     enabled = True
@@ -597,21 +476,6 @@ def test_media_rows_draft_and_keep_their_stream(tiny):
     assert spec[3] == plain and driver.drafted > 0
 
 
-def test_media_rows_on_dflash_keep_their_stream_beside_text_rows(tiny, dflash):
-    lm, _ = tiny
-    plain = run_requests(lm, [_media_request(lm, PROMPTS[2], shift=5, handle=3)])[0][3]
-    got, driver = run_requests(
-        lm,
-        [
-            _media_request(lm, PROMPTS[2], shift=5, handle=3),
-            Request(PROMPTS[1], 10, handle=4),
-        ],
-        dflash=dflash,
-    )
-    assert got[3] == plain
-    assert got[4] == run(lm, [PROMPTS[1]])[0][0]
-
-
 def test_finished_head_row_stores_target_and_head_caches_together(tiny):
     """The reply cache of a drafting row carries the head's KV after the target's, cut to the same rows."""
     lm, head = tiny
@@ -666,31 +530,14 @@ def test_device_walk_equals_the_host_walk():
         assert int(bonus.item()) == target[path[-1]]
 
 
-def test_dflash_chain_depth_follows_the_cost_aware_budget(tiny, dflash):
-    from yunshu_engine.round_driver.flashnext_dflash import CHAIN_DEPTH
-
-    lm, _ = tiny
-    driver = RoundDriver(
-        SimpleNamespace(language_model=lm), dflash_drafter=dflash, chunk=CHUNK
-    )
-    batch = driver.dflash
-    row = SimpleNamespace()
-    budget = batch._budget(row)
-    assert budget.size == min(
-        CHAIN_DEPTH, batch.positions
-    )  # the old lane's cap of seven drafts
-    assert batch._budget(row) is budget
-    assert batch.positions == dflash.config.block_size - 1
-
-
 # ── tail replay carries the QSA indexer and PLE state ───────────────────────────────────────────
-@pytest.mark.parametrize("mode", ["mtp", "plain", "dflash"])
-def test_tail_replay_gives_the_stream_of_a_real_forward(tiny, dflash, mode):
+@pytest.mark.parametrize("mode", ["mtp", "plain"])
+def test_tail_replay_gives_the_stream_of_a_real_forward(tiny, mode):
     from yunshu_engine.round_driver import replay
 
     lm, head = tiny
     replay.clear()
-    kinds = {"mtp": dict(head=head), "plain": {}, "dflash": dict(dflash=dflash)}[mode]
+    kinds = {"mtp": dict(head=head), "plain": {}}[mode]
     ids = PROMPTS[0]  # 18 tokens on a grid of 8: a 2-row final block (replay-eligible)
 
     def go():
@@ -750,3 +597,123 @@ def test_replay_entry_keeps_the_indexer_rows(tiny):
                 if x is not None:
                     assert mx.array_equal(x, y).item()
     replay.clear()
+
+
+# ── sampled + logprobs rows draft on MTP head rows: the report of a window equals plain steps ───
+def _draw_driver():
+    driver = object.__new__(RoundDriver)
+    driver.dflash = None
+    return driver
+
+
+def _sampled_row(logprobs=True, top=2, seed=11):
+    from yunshu_engine import keyed_sampling
+    from yunshu_engine import vlm_batch_runner as vbr
+    from yunshu_engine.round_driver.driver import _Row
+
+    params = vbr.RowParams(0.8, 0.95, 0, 0.0, seed, 0.0)
+    req = Request(
+        [1, 2, 3],
+        8,
+        sampling=params,
+        logprobs=logprobs,
+        top_logprobs=top,
+        handle=0,
+    )
+    row = _Row(
+        req=req,
+        cache=None,
+        mtp_cache=None,
+        keyed=keyed_sampling.KeyedSampler(params, seed),
+        base=keyed_sampling.seed_base(seed),
+        drafting=True,
+    )
+    row.generated = 3
+    return row
+
+
+@pytest.mark.parametrize("vocab", [4096, 151936])
+@pytest.mark.parametrize("dtype", [mx.float32, mx.bfloat16])
+def test_window_report_is_bit_equal_to_plain_steps(vocab, dtype):
+    """A two-row verify window (an MTP draft) draws and reports every position with the bits of the plain
+    step that would have run there: logprobs, the drawn token and the top-k report."""
+    from yunshu_engine.round_driver.driver import _Item
+
+    mx.random.seed(3)
+    rows = (mx.random.normal((2, vocab)) * 3).astype(dtype)
+    d = _draw_driver()
+    window_row = _sampled_row()
+    ((it, tok2, extra2),) = d._draw(
+        [_Item("d", window_row, at=0, count=2)], None, target_logits=rows
+    )
+    for j in range(2):
+        plain_row = _sampled_row()
+        plain_row.generated = 3 + j
+        ((_, tok1, extra1),) = d._draw(
+            [_Item("d", plain_row, at=0, count=1)], None, target_logits=rows[j : j + 1]
+        )
+        assert int(tok1[0].item()) == int(tok2[j].item())
+        got, want = extra2[j], extra1
+        assert mx.array_equal(
+            got[0], want[0]
+        ).item()  # the chosen token's logprob, bit for bit
+        for a, b in zip(got[1:], want[1:], strict=True):
+            for x, y in zip(a, b, strict=True):
+                assert mx.array_equal(x, y).item()
+
+
+def test_row_logprobs_reduces_each_row_on_its_own():
+    from yunshu_engine.round_driver.driver import row_logprobs
+
+    x = (mx.random.normal((5, 8192)) * 4).astype(mx.bfloat16)
+    got = row_logprobs(x)
+    for j in range(5):
+        want = x[j : j + 1] - mx.logsumexp(x[j : j + 1], axis=-1, keepdims=True)
+        assert mx.array_equal(got[j : j + 1], want).item()
+    one = row_logprobs(x[:1])
+    assert mx.array_equal(one, got[:1]).item()
+
+
+def test_sampled_logprobs_rows_draft_on_flash_mtp_rows(tiny):
+    """End to end on the tiny model: a seeded sampled request with logprobs drafts, and its tokens and
+    reports equal the same request decoded plain."""
+    from yunshu_engine import vlm_batch_runner as vbr
+
+    lm, head = tiny
+    params = vbr.RowParams(0.8, 0.95, 0, 0.0, 21, 0.0)
+
+    def go(drafter):
+        driver = RoundDriver(
+            SimpleNamespace(language_model=lm),
+            drafter=drafter,
+            plain_verify=drafter is None,
+            stop_tokens=set(),
+            chunk=CHUNK,
+            max_draft=1,
+        )
+        driver.add(
+            Request(
+                PROMPTS[0],
+                10,
+                sampling=params,
+                logprobs=True,
+                top_logprobs=2,
+                draft=drafter is not None,
+                handle=0,
+            )
+        )
+        out = []
+        for _ in range(300):
+            if not driver.busy():
+                break
+            for e in driver.step():
+                if e.token is not None:
+                    out.append((int(e.token), e.logprob))
+        return out, driver
+
+    plain, _ = go(None)
+    spec, driver = go(head)
+    assert driver.rows == [] and driver.drafted > 0
+    assert [t for t, _ in spec] == [t for t, _ in plain]
+    for (_, a), (_, b) in zip(spec, plain, strict=True):
+        assert a is not None and a == b

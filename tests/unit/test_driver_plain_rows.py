@@ -90,13 +90,11 @@ def drafts_on_driver(k) -> bool:
     processors = list(k._p)
     if k.logprobs:
         processors.append(vbr.Fp32LogitsProcessor())
-    dflash = k.mode == "dflash"
     if not vbr.driver_allow_draft(
         True,
         processors,
         k.logprobs,
         k._g,
-        dflash_driver=dflash,
         xtc=k.sampling == "xtc",
         sampled=k.sampling != "greedy",
     ):
@@ -104,12 +102,7 @@ def drafts_on_driver(k) -> bool:
     request_procs = [
         p for p in processors if not isinstance(p, vbr.Fp32LogitsProcessor)
     ]
-    # the keyed report (sampled + logprobs) is a DFlash path: add() builds no keyed sampler
-    # otherwise and the row stays plain
-    return bool(
-        RoundDriver._processors_draft(None, request_procs, k.logprobs, k._g)
-        and (k.sampling == "greedy" or not k.logprobs or dflash)
-    )
+    return bool(RoundDriver._processors_draft(None, request_procs, k.logprobs, k._g))
 
 
 # kind predicate -> (status, reason). "main-plain": the stock lane does not draft it either (no
@@ -126,13 +119,6 @@ PLAIN = [
         lambda k: k.guide == "unknown_guide",
         "main-plain",
         "only the grammar guides have exact per-row masks",
-    ),
-    (
-        "sampled row with logprobs on mtp",
-        lambda k: k.mode == "mtp" and k.sampling != "greedy" and k.logprobs,
-        "blocker",
-        "the position-keyed report of a sampled row is the DFlash path ("
-        "keyed_sampling.tree_target_rows); an MTP head row has none",
     ),
 ]
 
@@ -251,20 +237,16 @@ def test_logit_bias_is_pure_per_row_for_any_leading_shape():
 
 def test_xtc_row_is_not_reported_as_drafting():
     for guide in (None, _make(cs.ConstraintGuide)):
-        assert not vbr.driver_allow_draft(
-            True, [], False, guide, dflash_driver=True, xtc=True
-        )
-    assert vbr.driver_allow_draft(True, [], False, None, dflash_driver=True, xtc=False)
+        assert not vbr.driver_allow_draft(True, [], False, guide, xtc=True)
+    assert vbr.driver_allow_draft(True, [], False, None, xtc=False)
 
 
 def test_mtp_drafts_windowable_processors():
     procs = _processors()
     for name in ("repetition_penalty", "min_tokens", "top_n_sigma", "logit_bias"):
+        assert vbr.driver_allow_draft(True, procs[name], False, None)
         assert vbr.driver_allow_draft(
-            True, procs[name], False, None, dflash_driver=False
-        )
-        assert vbr.driver_allow_draft(
-            True, procs[name], False, _make(cs.ConstraintGuide), dflash_driver=False
+            True, procs[name], False, _make(cs.ConstraintGuide)
         )
 
 
@@ -298,8 +280,9 @@ def test_logprobs_and_guides_draft_on_both_modes_when_greedy(mode, procs, guide)
         assert drafts_on_driver(k), k.name
 
 
-def test_sampled_logprobs_drafts_on_dflash_only():
-    for mode, expected in (("dflash", True), ("mtp", False)):
+def test_sampled_logprobs_drafts_on_every_driver_row():
+    # the report of a window row is reduced on its own (driver.row_logprobs): MTP head rows draft too
+    for mode, expected in (("dflash", True), ("mtp", True)):
         k = next(
             k
             for k in _kinds()

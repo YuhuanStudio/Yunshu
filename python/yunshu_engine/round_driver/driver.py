@@ -207,6 +207,24 @@ class _PerRow(list):
     """Reported logprobs of an n-row window: entry j is row j's ``[logprob, *top]``."""
 
 
+def row_logprobs(x: mx.array) -> mx.array:
+    """Log-probabilities of the rows of ``x`` [n, V], each through its own ``[1, V]`` reduction.
+
+    A verify window of n rows and n plain steps must report the same bits: the sum inside
+    ``logsumexp`` is one fixed reduction per row only when it is called on one row, so a window's
+    rows are never reduced as one ``[n, V]`` block (``constrained_spec.normalize_rows``'s rule)."""
+    n = int(x.shape[0])
+    if n == 1:
+        return x - mx.logsumexp(x, axis=-1, keepdims=True)
+    return mx.concatenate(
+        [
+            x[j : j + 1] - mx.logsumexp(x[j : j + 1], axis=-1, keepdims=True)
+            for j in range(n)
+        ],
+        axis=0,
+    )
+
+
 def _report(req, lp: mx.array, tok: mx.array):
     """The logprob report of a draw over the rows of ``lp`` [n, V]: ``[lp, (ids, values)]`` of the
     one row of a plain step, a ``_PerRow`` of them for a window (an MTP chain)."""
@@ -476,7 +494,6 @@ class RoundDriver:
             req.sampling is not None
             and req.draft
             and self._processors_draft(req.processors, req.logprobs, req.guide)
-            and (not req.logprobs or self.dflash is not None)
             and keyed_sampling.supports(req.sampling)
         ):
             # A sampled row drafts too (and draws the same tokens whether or
@@ -569,7 +586,6 @@ class RoundDriver:
                 sampling is None
                 or (
                     self._processors_draft(processors, logprobs)
-                    and (not logprobs or self.dflash is not None)
                     and keyed_sampling.supports(sampling)
                 )
             )
@@ -992,7 +1008,7 @@ class RoundDriver:
                 x = lg[off : off + n]
                 if self.dflash is None or req.logprobs:
                     x = x.astype(mx.float32)
-                lp = x - mx.logsumexp(x, axis=-1, keepdims=True)
+                lp = row_logprobs(x)
                 tok = row.keyed.sample_positions(
                     lp, list(range(row.generated, row.generated + n))
                 )
@@ -1007,7 +1023,7 @@ class RoundDriver:
                 # DFlash matches the shared batch: retain bf16 normalization
                 # unless reporting logprobs explicitly requests float32.
                 x = x.astype(mx.float32)
-            lp = x - mx.logsumexp(x, axis=-1, keepdims=True)
+            lp = row_logprobs(x)
             tok = self._sample(row, lp)
             draws.append((it, tok, _report(req, lp, tok)))
         return draws
