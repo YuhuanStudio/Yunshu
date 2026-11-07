@@ -43,7 +43,7 @@ def engine_load_lines(engine: str) -> list[str]:
     high- or medium-confidence engaged-mode pattern for that engine (fullcmp_audit_manifest)."""
     if engine == "mlx-serve-26.11.1":
         return ["[mtp] sidecar loaded (mtp head ready)"]
-    if engine == "kapitsa-0.2.26":
+    if engine in ("kapitsa-0.2.26", "kapitsa-0.2.31"):
         return ["DFlash2 drafter /stub/draft: 4 layers loaded in 12 ms"]
     if engine == "omlx-0.7.3":
         return ["DFlash enabled for stub-model as a batched drafter, draft=/stub/draft"]
@@ -75,7 +75,7 @@ def request_lines(
         ]
     if engine == "mlx-serve-26.11.1":
         return [f"[mtp-round] off0=0 t1=1 m=1 drafts={drafted} accepted={accepted}"]
-    if engine == "kapitsa-0.2.26":
+    if engine in ("kapitsa-0.2.26", "kapitsa-0.2.31"):
         return [f"spec: {accepted}/{drafted} accepted/drafted over 1 cycles"]
     if engine.startswith("omlx"):
         return [f"DFlash round drafted={drafted} accepted={accepted}"]

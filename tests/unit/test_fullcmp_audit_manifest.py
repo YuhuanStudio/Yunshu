@@ -35,6 +35,7 @@ MANIFEST_IDS = (
     "llama-cpp-b12061",
     "lmstudio",
     "kapitsa-0.2.26",
+    "kapitsa-0.2.31",
     "ollama",
     "best-competitor (TBD)",
 )
@@ -79,7 +80,8 @@ def _census():
         },
         "kapitsa": {
             "latest_date": "2026-11-01T22:32:02Z",
-            "sha256": {"0.2.26 binary kapitsa": H, "0.2.26 tarball": H},
+            "sha256": {"0.2.26 binary kapitsa": H, "0.2.26 tarball": H, "0.2.31 tarball": H},
+            "release_dates": {"0.2.26": "2026-11-01", "0.2.31": "2026-11-05"},
         },
         "mlx_vlm_server": {
             "latest_date": "2026-10-28T17:48:51Z",
@@ -570,6 +572,7 @@ def test_expected_mode_probe_covers_the_unverified_and_omlx_engines():
     assert set(probe) == {
         "mlx-serve-26.11.1",
         "kapitsa-0.2.26",
+        "kapitsa-0.2.31",
         "omlx-0.7.3",
         "omlx-0.7.3rc1",
         "omlx-0.7.4.dev1",
@@ -583,6 +586,7 @@ def test_expected_mode_probe_covers_the_unverified_and_omlx_engines():
     # configured modes (bench_engines.ENGINES): mlx-serve MTP (Metal default), kapitsa DFlash2
     assert probe["mlx-serve-26.11.1"]["expected_mode"] == "mtp"
     assert probe["kapitsa-0.2.26"]["expected_mode"] == "dflash"
+    assert probe["kapitsa-0.2.31"]["expected_mode"] == "dflash"
     for eng, entry in probe.items():
         assert entry["probe"] and entry["log_patterns"], eng
         for pat in entry["log_patterns"]:

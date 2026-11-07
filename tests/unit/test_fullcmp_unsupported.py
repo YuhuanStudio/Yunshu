@@ -437,8 +437,14 @@ def test_a_text_cell_still_compares_the_token_count(monkeypatch):
         cf.rows[0]["image_parts"] = 0
         return cf
 
+    # the same request (same sha) rendered by another chat template: a per-engine token-count note, not a violation
     res = _prompt_identity(monkeypatch, text("yunshu", 1024), text("kapitsa-0.2.26", 1025))
-    assert res.violations and "disagree on prompt (pt, sha)" in res.violations[0]
+    assert res.violations == [] and any("template delta" in n for n in res.notes)
+    # a different request is still a violation
+    other = text("kapitsa-0.2.26", 1024)
+    other.rows[0]["prompt_ids_sha"] = "f" * 64
+    res = _prompt_identity(monkeypatch, text("yunshu", 1024), other)
+    assert res.violations and "different requests" in res.violations[0]
 
 
 def test_the_image_rows_record_the_image_sha_and_text_tokens():

@@ -380,16 +380,52 @@ def _superseded_slot(path: Path):
     return None
 
 
+def skipped_cells(manifest: dict) -> dict:
+    """(engine, cell) -> reason for every cell the manifest plans as unsupported: a whole-engine skip
+    (lmstudio: the harness cannot start it headless) or a per-cell status (census flag). Such a cell
+    is never an expected measurement; a file that exists for it is labelled with the reason."""
+    return {
+        (u.get("engine"), u["cell"]): u.get("reason")
+        for u in manifest.get("unsupported", [])
+        if u.get("cell") is not None
+    }
+
+
+BATCH_ID = re.compile(r"^B\d+$")  # a batch id in a cell name: 'B2.core.<engine>...'
+
+
+def planned_batches(manifest: dict) -> set:
+    """The batches this audit manifest selects (build_manifest --batches), from its cell names. A file of
+    another batch in the results root (a B1 rep-3 file in a B2-only audit) is out of scope, not unplanned."""
+    names = [c["cell"] for c in manifest.get("cells", [])]
+    names += [u["cell"] for u in manifest.get("unsupported", []) if u.get("cell") is not None]
+    return {_batch_of(n) for n in names if BATCH_ID.match(_batch_of(n))}
+
+
+def _cell_key(path: Path):
+    """(engine dir, cell name) of a '<cell>-rN.jsonl' file."""
+    stem = path.name[: -len(".jsonl")]
+    return (path.parent.name, stem.rsplit("-r", 1)[0])
+
+
 def load_run(root, manifest: dict) -> Run:
     root = Path(root)
+    skipped = skipped_cells(manifest)
     expected = {}
     for cell in manifest["cells"]:
+        if (cell["engine"], cell["cell"]) in skipped:
+            continue  # planned as unsupported: no measurement is expected
         for rep in range(expected_reps(cell, manifest)):
             expected[root / cell["engine"] / f"{cell['cell']}-r{rep}.jsonl"] = (
                 cell,
                 rep,
             )
     files, missing, parse_errors, unsupported = [], [], [], []
+    for (eng, cid), reason in sorted(skipped.items(), key=lambda kv: str(kv[0])):
+        # a skipped cell that still has rep files: labelled with the manifest's reason, not guarded
+        for path in sorted((root / str(eng)).glob(f"{cid}-r[0-9].jsonl")):
+            if path.is_file():
+                unsupported.append(({"engine": eng, "cell": cid}, int(path.stem[-1]), reason))
     for path, (cell, rep) in expected.items():
         if not path.is_file():
             missing.append((cell, rep, path))
@@ -423,6 +459,7 @@ def load_run(root, manifest: dict) -> Run:
                 slot=_superseded_slot(path),
             )
         )
+    batches = planned_batches(manifest)
     extra = [
         p
         for p in sorted(root.glob("*/*.jsonl"))
@@ -430,6 +467,8 @@ def load_run(root, manifest: dict) -> Run:
         and not p.name.endswith(TELEMETRY_SUFFIX)
         and SUPERSEDED_TAG not in p.name
         and p.parent.name != BEHAVIOUR_DIR
+        and _cell_key(p) not in skipped
+        and (not batches or not BATCH_ID.match(_batch_of(p.name)) or _batch_of(p.name) in batches)
     ]
     behaviour = {}
     for p in sorted((root / BEHAVIOUR_DIR).glob("*.jsonl")):
@@ -523,6 +562,7 @@ def check_prompt_identity(run: Run) -> GuardResult:
     for group, items in groups.items():
         res.checked += 1
         seen = set()
+        pts = defaultdict(set)  # engine -> engine-reported prompt token counts (informational)
         image_ids = defaultdict(set)  # piece name -> distinct values across the group's image rows
         for cell, eng, r in items:
             sha, pt = r.get("prompt_ids_sha"), r.get("pt")
@@ -541,18 +581,36 @@ def check_prompt_identity(run: Run) -> GuardResult:
                 if not isinstance(r.get("image_parts"), int) or r.get("image_parts") < 1:
                     res.fail(cell, f"[{eng}] image cell without a recorded image part count")
                 continue
-            seen.add((pt, sha))
+            # the request is what must match: engines render the chat template themselves, so
+            # their prompt token count (pt) legitimately differs by a few special tokens
+            seen.add(sha)
+            pts[eng].add(pt)
         if len(seen) > 1:
             for cell in sorted(cells_of[group]):
                 res.fail(
                     cell,
-                    f"group {group}: engines disagree on prompt (pt, sha) {sorted(map(str, seen))}",
+                    f"group {group}: engines were sent different requests (prompt sha) "
+                    f"{sorted(map(str, seen))}",
                 )
+        counts = {e: sorted(v) for e, v in pts.items()}
+        if len({tuple(v) for v in counts.values()}) > 1:
+            base = min((v[0] for v in counts.values() if v), default=0)
+            res.notes.append(
+                f"template delta {group}: "
+                + ", ".join(f"{e} {v}({v[0] - base:+d})" for e, v in sorted(counts.items()))
+            )
         bad = {k: sorted(map(str, v)) for k, v in image_ids.items() if len(v) > 1}
         if bad:
             for cell in sorted(cells_of[group]):
                 res.fail(cell, f"group {group}: engines disagree on the image prompt: {bad}")
     return res
+
+
+def comparable_group(cell: dict) -> str:
+    """The cells that must share provenance: the same cell id with the engine removed, so
+    max_tokens (o128/o512/o2048), the sampling variant (greedy / genconfig), the family
+    (out / sampling / restart ...) and the mode (single / mixed / idle5) stay apart."""
+    return cell["cell"].replace(f".{cell['engine']}.", ".", 1)
 
 
 def check_provenance_identity(run: Run) -> GuardResult:
@@ -585,7 +643,7 @@ def check_provenance_identity(run: Run) -> GuardResult:
                 res.fail(cf.cell["cell"], "ctx/kind differs from the planned cell")
         if len(prov_set) > 1:
             res.fail(cf.cell["cell"], "provenance differs between rows of one cell")
-        per_group[cf.cell["group"]][(cf.cell["engine"], cf.cell["cell"])] = (
+        per_group[comparable_group(cf.cell)][(cf.cell["engine"], cf.cell["cell"])] = (
             prov_set.pop() if prov_set else None
         )
     for group, by_key in per_group.items():
@@ -660,7 +718,18 @@ def check_pinned_versions(run: Run) -> GuardResult:
             or h.get("binary_sha256") != pin.get("binary_sha256")
         ):
             # stub_engine (test only): the launched process is the stub, not the engine binary
-            res.fail(cell, "binary sha256 missing or not the pinned binary")
+            got = str(h.get("binary_sha256"))
+            if re.fullmatch(r"[0-9a-f]{64}", got):
+                # a real digest of another file: the engine's binary changed under the same
+                # version label (an engine that updates itself), so the cell is not comparable
+                res.fail(
+                    cell,
+                    f"binary sha256 {got[:12]} is not the pinned binary "
+                    f"{str(pin.get('binary_sha256'))[:12]} (the launched file changed since "
+                    "the pin; compute it with shasum -a 256 from the file the run used)",
+                )
+            else:
+                res.fail(cell, "binary sha256 missing or not the pinned binary")
     return res
 
 
@@ -882,8 +951,10 @@ def check_engaged_mode(run: Run) -> GuardResult:
                 res.fail(cell, f"r{cf.rep}: {problem}")
         for row in ev["stats"].get("per_row", []):
             # one line per measured request: row id, the done line it matched, its accepted value
+            # .get with a visible placeholder: a per-row entry without its id must not crash the audit
             res.notes.append(
-                f"{cell} r{cf.rep} row {row['row']} (prompt {row['prompt']}) accepted {row['value']}: {row['line']}"
+                f"{cell} r{cf.rep} row {row.get('row', '<missing>')} (prompt {row.get('prompt', '<missing>')}) "
+                f"accepted {row.get('value', '<missing>')}: {row.get('line', '<missing>')}"
             )
     return res
 
@@ -1315,6 +1386,12 @@ def check_fairness_controls(run: Run) -> GuardResult:
         for r in cf.rows:
             res.checked += 1
             t = r.get("temperature")
+            if cf.cell["cell"].endswith(".genconfig"):
+                # genconfig cells run the model's own generation config (temperature/top_p from its
+                # generation_config.json, not greedy): only the greedy requirement is waived
+                if not is_num(t) or r.get("sampling") not in (None, "genconfig"):
+                    res.fail(cf.cell["cell"], f"genconfig cell: temperature {t!r}, sampling {r.get('sampling')!r}; the model's generation config required")
+                continue
             if not (is_num(t) and t == 0):
                 res.fail(cf.cell["cell"], f"temperature {t!r}; greedy (0) required")
         if cf.header is not None:

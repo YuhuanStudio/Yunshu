@@ -29,7 +29,7 @@ CENSUS_TO_MANIFEST = {
     "mlx_lm_server": ("mlx-lm-server",),
     "mlx_vlm_server": ("mlx-vlm-server",),
     "llama_cpp": ("llama-cpp-b12061",),
-    "kapitsa": ("kapitsa-0.2.26",),
+    "kapitsa": ("kapitsa-0.2.26", "kapitsa-0.2.31"),
     "lm_studio": ("lmstudio",),
     "ollama": ("ollama",),
 }
@@ -73,7 +73,8 @@ def _census():
         },
         "kapitsa": {
             "latest_date": "2026-11-01T22:32:02Z",
-            "sha256": {"0.2.26 tarball": H, "0.2.26 binary kapitsa": H},
+            "sha256": {"0.2.26 tarball": H, "0.2.26 binary kapitsa": H, "0.2.31 tarball": H},
+            "release_dates": {"0.2.26": "2026-11-01", "0.2.31": "2026-11-05"},
         },
         "lm_studio": {},
         "ollama": {},

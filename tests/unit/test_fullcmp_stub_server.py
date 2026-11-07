@@ -27,6 +27,7 @@ import fullcmp_stub_server as stub  # noqa: E402
 ENGINES = [
     "mlx-serve-26.11.1",
     "kapitsa-0.2.26",
+    "kapitsa-0.2.31",
     "omlx-0.7.3",
     "omlx-0.7.3rc1",
     "yunshu-main",

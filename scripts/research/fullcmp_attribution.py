@@ -179,6 +179,9 @@ ENGINE_OVERRIDES = {
     "kapitsa-0.2.26": EngineAttr(
         "kapitsa-0.2.26", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"
     ),
+    "kapitsa-0.2.31": EngineAttr(
+        "kapitsa-0.2.31", dict(_COMPETITOR_SERVER_STAGES), "stats_as_is"
+    ),
     # b12061 runs MTP speculative decoding (EXPECTED_MODE_PROBE: mtp), so drafted/accepted are real
     # counters. The HTTP response does not carry them; the server log's per-request 'draft
     # acceptance' line does (the engaged evidence), so the layer-1 value is recorded as unavailable.

@@ -55,6 +55,23 @@ def parse_cell_name(name: str) -> dict:
     }
 
 
+def tool_e2e(r: dict):
+    """End-to-end seconds of one record (client t_last_token - t_receive), or None when either is missing."""
+    attr = r.get("attr") if isinstance(r.get("attr"), dict) else {}
+    t0, t1 = _num(attr.get("t_receive")), _num(attr.get("t_last_token"))
+    if t0 is None or t1 is None or t1 < t0:
+        return None
+    return round(t1 - t0, 4)
+
+
+def is_appendix(engine: str) -> bool:
+    """Engines kept out of the main table and listed in the appendix (kapitsa: self-updated mid-run)."""
+    return engine.startswith("kapitsa")
+
+
+APPENDIX_NOTE = "self-updated during the run (0.2.26 -> 0.2.31), mixed binaries, not comparable"
+
+
 def collect(raw: str) -> tuple[list[dict], dict]:
     reps = defaultdict(list)  # (cell, phase) -> list of measurements
     labels, unsupported, engines_meta = {}, {}, {}
@@ -84,11 +101,17 @@ def collect(raw: str) -> tuple[list[dict], dict]:
             if part in ("unsupported",) or r.get("label", "").startswith("unsupported") if isinstance(r.get("label"), str) else False:
                 unsupported[meta["cell"]] = str(r.get("label") or r.get("reason"))[:300]
             phase = r.get("phase")
-            if phase in ("cold", "warm", "fu", "turn2", "restart", "fu_idle") and _num(r.get("dec_tps")) is not None:
+            tool = meta["kind"] == "tool-chat"
+            e2e = tool_e2e(r) if tool else None
+            ok = (e2e is not None) if tool else (_num(r.get("dec_tps")) is not None)
+            if phase in ("cold", "warm", "fu", "turn2", "restart", "fu_idle") and ok:
                 reps[(meta["cell"], PHASE_ALIAS.get(phase, phase))].append({
                     **meta, "phase": PHASE_ALIAS.get(phase, phase),
-                    "ttft_s": _num(r.get("ttft_s")), "dec_tps": _num(r.get("dec_tps")),
-                    "cached": r.get("cached"), "pt": r.get("pt"), "ct": r.get("ct"),
+                    "ttft_s": _num(r.get("ttft_s")), "dec_tps": None if tool else _num(r.get("dec_tps")),
+                    # a tool call arrives in one burst: its decode rate is meaningless, so the cell
+                    # reports end-to-end latency (t_last_token - t_receive) and completion tokens
+                    "e2e_s": e2e, "ct": _num(r.get("ct")) if tool else None,
+                    "cached": r.get("cached"), "pt": r.get("pt"),
                 })
             if part in ("conc", "mixed") and _num(r.get("agg_tps")) is not None:
                 tt = [t for t in (r.get("ttfts") or []) if _num(t) is not None]
@@ -103,7 +126,7 @@ def collect(raw: str) -> tuple[list[dict], dict]:
         row = {k: m0[k] for k in ("batch", "family", "engine", "ctx", "conc", "kind", "out", "variant", "cell")}
         row["phase"] = phase
         row["n"] = len(ms)
-        for key in ("ttft_s", "dec_tps", "agg_tps", "dec_min", "dec_max", "ttft_max", "ttft_min"):
+        for key in ("ttft_s", "dec_tps", "agg_tps", "dec_min", "dec_max", "ttft_max", "ttft_min", "e2e_s", "ct"):
             vals = [x[key] for x in ms if x.get(key) is not None]
             if vals:
                 row[key] = round(statistics.median(vals), 4)
@@ -188,7 +211,8 @@ th{color:var(--muted);font-weight:500;position:sticky;top:0;background:var(--pan
  <div class="card"><h2>第二輪 TTFT 對上下文長度</h2><div class="ctl">內容 <select id="k4"><option>code</option><option>prose</option></select> · 秒</div><svg id="c4" width="100%"></svg><div class="legend" id="l4"></div></div>
 </section>
 <section class="card"><h2>所有格子</h2><div class="ctl">批次 <select id="fb"><option value="">全部</option><option>B1</option><option>B2</option></select> 類型 <select id="ff"><option value="">全部</option></select> 引擎 <select id="fe"><option value="">全部</option></select></div>
-<div class="tbl"><table id="tb"><thead><tr><th>格子</th><th>引擎</th><th>階段</th><th>TTFT s</th><th>解碼 tok/s</th><th>總吞吐</th><th>快取命中</th><th>次數</th><th>差距%</th><th>標註</th></tr></thead><tbody></tbody></table></div></section>
+<div class="tbl"><table id="tb"><thead><tr><th>格子</th><th>引擎</th><th>階段</th><th>TTFT s</th><th>解碼 tok/s（工具：端到端 s · 輸出 tok）</th><th>總吞吐</th><th>快取命中</th><th>次數</th><th>差距%</th><th>標註</th></tr></thead><tbody></tbody></table></div></section>
+<section class="card" id="appx" hidden><h2>附錄 ¹ 不列入主表的引擎</h2><div class="note" id="appxn"></div><div class="tbl"><table id="ta"><thead><tr><th>格子</th><th>引擎</th><th>階段</th><th>TTFT s</th><th>解碼 tok/s（工具：端到端 s · 輸出 tok）</th><th>總吞吐</th><th>快取命中</th><th>次數</th><th>差距%</th><th>標註</th></tr></thead><tbody></tbody></table></div></section>
 <p class="note" id="foot"></p>
 </div>
 <div class="tip" id="tip" hidden></div>
@@ -243,12 +267,13 @@ const fb=document.getElementById('fb'),ff=document.getElementById('ff'),fe=docum
 ENG.forEach(e=>{const o=document.createElement('option');o.textContent=e;fe.append(o)});
 [fb,ff,fe].forEach(s=>s.addEventListener('change',table));
 const PH={cold:'冷',warm:'暖',turn2:'第二輪',restart:'重啟',fu_idle:'閒置後',conc:'並行',mixed:'混合'};
-function table(){const tb=document.querySelector('#tb tbody');tb.innerHTML='';
- rows.filter(r=>(!fb.value||r.batch===fb.value)&&(!ff.value||r.family===ff.value)&&(!fe.value||r.engine===fe.value)).forEach(r=>{const tr=document.createElement('tr');
-  const sp=[r.ttft_s_spread_pct,r.dec_tps_spread_pct,r.agg_tps_spread_pct].filter(x=>x!=null);
-  const cells=[`${r.batch}.${r.family} ${r.ctx} c${r.conc} ${r.kind} o${r.out}${r.variant?' '+r.variant:''}`,r.engine,PH[r.phase]||r.phase,r.ttft_s!=null?r.ttft_s.toFixed(3):(r.ttft_max!=null?r.ttft_min.toFixed(2)+'–'+r.ttft_max.toFixed(2):'—'),r.dec_tps!=null?r.dec_tps.toFixed(1):(r.dec_min!=null?r.dec_min.toFixed(1)+'–'+r.dec_max.toFixed(1):'—'),r.agg_tps!=null?r.agg_tps.toFixed(1):'—',r.cached??'—',r.n,sp.length?Math.max(...sp):'—',r.label||''];
-  cells.forEach((c,i)=>{const td=document.createElement('td');td.textContent=c;if(i===9){td.className='l lab'}tr.append(td)});tb.append(tr)});
-}
+function rowCells(r){const sp=[r.ttft_s_spread_pct,r.dec_tps_spread_pct,r.agg_tps_spread_pct,r.e2e_s_spread_pct].filter(x=>x!=null);
+ const dec=r.kind==='tool-chat'?(r.e2e_s!=null?`端到端 ${r.e2e_s.toFixed(2)} s · ${r.ct!=null?Math.round(r.ct):'—'} tok`:'—'):(r.dec_tps!=null?r.dec_tps.toFixed(1):(r.dec_min!=null?r.dec_min.toFixed(1)+'–'+r.dec_max.toFixed(1):'—'));
+ return [`${r.batch}.${r.family} ${r.ctx} c${r.conc} ${r.kind} o${r.out}${r.variant?' '+r.variant:''}`,r.engine,PH[r.phase]||r.phase,r.ttft_s!=null?r.ttft_s.toFixed(3):(r.ttft_max!=null?r.ttft_min.toFixed(2)+'–'+r.ttft_max.toFixed(2):'—'),dec,r.agg_tps!=null?r.agg_tps.toFixed(1):'—',r.cached??'—',r.n,sp.length?Math.max(...sp):'—',r.label||''];}
+function fill(tb,list){tb.innerHTML='';list.forEach(r=>{const tr=document.createElement('tr');
+  rowCells(r).forEach((c,i)=>{const td=document.createElement('td');td.textContent=c;if(i===9){td.className='l lab'}tr.append(td)});tb.append(tr)});}
+function table(){fill(document.querySelector('#tb tbody'),rows.filter(r=>(!fb.value||r.batch===fb.value)&&(!ff.value||r.family===ff.value)&&(!fe.value||r.engine===fe.value)));}
+if(D.appendix&&D.appendix.length){document.getElementById('appx').hidden=false;document.getElementById('appxn').textContent='¹ '+D.appendix_note+'。這些引擎的數字不進入上面的圖表與主表。';fill(document.querySelector('#ta tbody'),D.appendix)}
 const un=Object.entries(D.meta.unsupported);
 document.getElementById('foot').textContent=`引擎版本：${Object.entries(D.meta.engines).map(([e,m])=>e+' '+(m.git_sha||m.version||'')).join(' · ')}。不支援的格子 ${un.length} 個（引擎自己的拒絕訊息記在原始數據裡）。這份頁面由 scripts/dev/fullcmp_report.py 從原始數據產生，數字是每格各次重複的中位數。`;
 draw(); addEventListener('resize',()=>{clearTimeout(window._rt);window._rt=setTimeout(draw,150)});
@@ -257,7 +282,7 @@ draw(); addEventListener('resize',()=>{clearTimeout(window._rt);window._rt=setTi
 """
 
 ENGINE_ORDER = ["yunshu", "yunshu-pb2", "tf-1.2.1", "tf-1.1.8", "splash-1.5.0", "omlx-0.7.3", "omlx-0.7.3rc1",
-                "mlx-serve-26.11.1", "kapitsa-0.2.26", "mlx-lm-server", "mlx-vlm-server", "llama-cpp-b12061"]
+                "mlx-serve-26.11.1", "mlx-lm-server", "mlx-vlm-server", "llama-cpp-b12061"]
 
 
 def main() -> int:
@@ -284,10 +309,13 @@ def main() -> int:
 
 def write_once(a) -> None:
     rows, meta = collect(a.raw)
+    appendix = [r for r in rows if is_appendix(r["engine"])]
     data = {
         "generated": time.strftime("%Y-%m-%d %H:%M"),
         "raw": os.path.basename(a.raw.rstrip("/")),
-        "rows": rows,
+        "rows": [r for r in rows if not is_appendix(r["engine"])],
+        "appendix": appendix,
+        "appendix_note": APPENDIX_NOTE,
         "meta": meta,
         "progress": progress(a.manifest, a.raw),
         "engine_order": ENGINE_ORDER,

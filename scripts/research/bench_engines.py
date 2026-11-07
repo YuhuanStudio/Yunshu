@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -105,6 +106,12 @@ MLXVLM_PY_0711 = str(
 )  # python -m mlx_vlm.server
 LLAMA_BIN_B12061 = str(COMP / "llama.cpp-b12061/llama-b12061/llama-server")
 KAPITSA_BIN_0226 = str(COMP / "kapitsa-0.2.26/kapitsa-0.2.26-darwin-arm64/kapitsa")
+# 0.2.26 self-updated to 0.2.31 inside its own directory during real-1104 (four binary shas under one label), so
+# the final table uses a read-only copy of the 0.2.31 binary, pinned by sha256 and launched with auto-update off.
+KAPITSA_BIN_0231 = str(COMP / "kapitsa-0.2.31/kapitsa-0.2.31-darwin-arm64/kapitsa")
+KAPITSA_PIN_0231 = "cd869a9cfebecdcb3d1c2b47680b4fd1516790ef850d1142c4a7705b9547b569"
+# engines superseded by a re-run on a pinned binary (history rows stay; the final table uses the successor)
+SUPERSEDED_BY = {"kapitsa-0.2.26": "kapitsa-0.2.31"}
 KAPITSA_MODEL_DIR = "/Volumes/P5Plus/models/kapitsa/models/qwen3.8-27b-4bit"
 SPLASH_MODEL = "incoai/Qwen3.8-27B-Splash"
 NO_THINK_KWARGS = '{"enable_thinking": false}'
@@ -523,6 +530,18 @@ ENGINES: dict[str, Engine] = {
             1.0,
             60.0,
         ),
+        Engine(
+            "kapitsa-0.2.31",
+            "Kapitsa 0.2.31",
+            "dflash",
+            "unverified",
+            KAPITSA_MODEL_DIR,
+            None,
+            "external",
+            "pinned read-only binary (sha256 cd869a9c...), auto-update off (KAPITSA_NO_AUTO_UPDATE=1, CI=true); replaces the self-updated 0.2.26 rows; DFlash2 is the configured drafter (--dflash auto)",
+            1.0,
+            60.0,
+        ),
     ]
 }
 # the legacy tfbench engines keep their old code path
@@ -542,6 +561,7 @@ MANIFEST_ENGINES = {
     "mlx-serve-26.11.1": "mlx-serve-26.11.1",
     "mlx-lm-server": "mlx-lm-server",
     "kapitsa-0.2.26": "kapitsa-0.2.26",
+    "kapitsa-0.2.31": "kapitsa-0.2.31",
     "mlx-vlm-server": "mlx-vlm-server",
     "llama-cpp-b12061": "llama-cpp-b12061",
 }
@@ -577,6 +597,7 @@ GGUF_QUANT = {"Qwen3.8-27B-UD-Q4_K_M.gguf": "UD-Q4_K_M", "mtp-Qwen3.8-27B-Q4_0.g
 WEIGHTS_CENSUS_KEY = {
     "llama-cpp-b12061": "qwen3.8-27b-gguf-unsloth",
     "kapitsa-0.2.26": "qwen3.8-27b-4bit-kapitsa",
+    "kapitsa-0.2.31": "qwen3.8-27b-4bit-kapitsa",
     "tf-1.2.1": "qwen3.8-27b-4bit-tensorfold",
     "tf-1.1.8": "qwen3.8-27b-4bit-tensorfold",
     "splash-1.5.0": "qwen3.8-27b-4bit-tensorfold",
@@ -593,7 +614,7 @@ def launched_gguf_files(engine: str) -> list[str]:
 
 def served_model_dir(engine: str, default: str) -> str:
     """Directory of the safetensors the launch serves (for MLX engines); default for the rest."""
-    if engine == "kapitsa-0.2.26":
+    if engine in ("kapitsa-0.2.26", "kapitsa-0.2.31"):
         return KAPITSA_MODEL_DIR
     if engine in ("tf-1.2.1", "tf-1.1.8", "splash-1.5.0"):
         return TF_NATIVE_MODEL
@@ -648,6 +669,25 @@ TF_ENGINES = ("tf-new", "tf-old")
 def is_new_engine(engine: str) -> bool:
     """Engines launched by build_launch() (everything except tfbench's original three)."""
     return engine in ENGINES and engine not in LEGACY
+
+
+class PinMismatch(RuntimeError):
+    """The file a launch would run is not the pinned binary (or is missing): the cell must not run."""
+
+
+def verify_pinned_binary(path: str, sha256: str) -> None:
+    """Fail closed before a server starts: the launched file's sha256 must be the pin (the audit's
+    pinned_versions guard checks the same after the fact)."""
+
+    real = str(Path(path).resolve())
+    if not os.path.isfile(real):
+        raise PinMismatch(f"pinned binary {path} is missing")
+    h = hashlib.sha256()
+    with open(real, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    if h.hexdigest() != sha256:
+        raise PinMismatch(f"{path} sha256 {h.hexdigest()} is not the pin {sha256}")
 
 
 def scrubbed_env(environ: dict, extra: dict | None = None) -> dict:
@@ -1258,7 +1298,10 @@ def build_launch(
             {str(Path(home) / ".cache/huggingface/hub/.keep"): ""},
             {},
         )
-    if engine == "kapitsa-0.2.26":
+    if engine in ("kapitsa-0.2.26", "kapitsa-0.2.31"):
+        pinned = engine == "kapitsa-0.2.31"
+        if pinned:
+            verify_pinned_binary(KAPITSA_BIN_0231, KAPITSA_PIN_0231)
         kh = str(Path(home) / "kapitsa-home")
         # --private: listen on 127.0.0.1 only and do not announce on the network (kapitsa serve --help); by default
         # the server is visible to every Mac on the LAN. A concurrent cell (parallel N > 1) is launched the way a user
@@ -1268,8 +1311,15 @@ def build_launch(
             ["--slots", str(parallel), "--context", str(int(ctx_tokens))] if parallel > 1 else []
         )
         return Launch(
-            [KAPITSA_BIN_0226, "serve", "--model", "27b", "--dflash", "auto", "--port", p, "--private", *conc_args],
-            scrubbed_env(environ, {**base_env, "KAPITSA_HOME": kh}),
+            [
+                KAPITSA_BIN_0231 if pinned else KAPITSA_BIN_0226,
+                "serve", "--model", "27b", "--dflash", "auto", "--port", p, "--private", *conc_args,
+            ],
+            # the pinned run launches with self-update off: 0.2.26 replaced its own binary mid-run
+            scrubbed_env(
+                environ,
+                {**base_env, "KAPITSA_HOME": kh, **({"KAPITSA_NO_AUTO_UPDATE": "1", "CI": "true"} if pinned else {})},
+            ),
             {"model": "27b", "spec_mode": "dflash", "private": True, "parallel": parallel},
             {},
             {str(Path(kh) / "models" / "qwen3.8-27b-4bit"): KAPITSA_MODEL_DIR},
@@ -1286,6 +1336,7 @@ PARALLEL_FLAG = {
     "tf-1.1.8": "--parallel",
     "mlx-serve-26.11.1": "--max-concurrent",
     "kapitsa-0.2.26": "--slots",
+    "kapitsa-0.2.31": "--slots",
     "llama-cpp-b12061": "-np",
     "omlx-0.7.3": "--max-concurrent-requests",
     "omlx-0.7.3rc1": "--max-concurrent-requests",
@@ -1489,6 +1540,7 @@ STATIC_VERSIONS = {
     "mlx-serve-26.11.1": ("26.11.1", None),
     "mlx-lm-server": ("0.32.2", None),
     "kapitsa-0.2.26": ("0.2.26", None),
+    "kapitsa-0.2.31": ("0.2.31", None),
     "mlx-vlm-server": ("0.7.11", None),
     "llama-cpp-b12061": ("b12061", None),
 }
@@ -1574,6 +1626,7 @@ def required_paths(engine: str) -> list[str]:
         "mlx-serve-26.11.1": [CHECKPOINT + "/config.json", MLXSERVE_BIN_26111],
         "mlx-lm-server": common + [MLXLM_SERVER_BIN],
         "kapitsa-0.2.26": [KAPITSA_BIN_0226, KAPITSA_MODEL_DIR + "/config.json"],
+        "kapitsa-0.2.31": [KAPITSA_BIN_0231, KAPITSA_MODEL_DIR + "/config.json"],
         "tf-new": common + [DRAFTER + "/config.json", TF_BIN],
         "mlxlm": common + [MAIN_PY],
         "omlx": common + [DRAFTER + "/config.json", OMLX_BIN],
