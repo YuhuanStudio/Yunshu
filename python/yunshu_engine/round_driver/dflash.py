@@ -22,6 +22,7 @@ from .. import (
     settings,
     tree_verify,
 )
+from ..constrained_spec import masks_every_row
 from ..copy_drafter import CopyDrafter
 from ..dflash_context import context_window
 from ..dflash_fast import Verifier, pack_readback, prepare, unpack_readback
@@ -36,6 +37,13 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _plain_guided(r) -> bool:
+    """A guided row that decodes one masked token a round: a tool-call guide inside a call.
+    A response-format guide masks every row, so its row drafts a masked tree instead."""
+    guide = r.req.guide
+    return guide is not None and guide.constrained and not masks_every_row(guide)
 
 
 class DFlashBatch:
@@ -262,11 +270,7 @@ class DFlashBatch:
         max_rows = tree_verify.FAST_MAX_ROWS if len(rows) == 1 else DRIVER_MAX_ROWS
         for b, r in enumerate(rows):
             room = max(0, r.req.max_tokens - r.generated - 1)
-            if (
-                not r.drafting
-                or r.force
-                or (r.req.guide is not None and r.req.guide.constrained)
-            ):
+            if not r.drafting or r.force or _plain_guided(r):
                 rooms.append(0)
                 continue
             copier = self.copiers.get(id(r))
@@ -359,11 +363,7 @@ class DFlashBatch:
             for r, w, res in zip(rows, windows, results, strict=True):
                 row_logits = packed_logits[at : at + w.shape.width]
                 at += w.shape.width
-                if (
-                    not r.drafting
-                    or r.force
-                    or (r.req.guide is not None and r.req.guide.constrained)
-                ):
+                if not r.drafting or r.force or _plain_guided(r):
                     it = _Item("d", r, at=0, count=1)
                     _, targets, extra = driver._draw(
                         [it], res.hidden[0], target_logits=row_logits
@@ -371,6 +371,17 @@ class DFlashBatch:
                     draws.append((targets, None, extra))
                 else:
                     drawn = row_logits[None]
+                    if r.req.guide is not None and masks_every_row(r.req.guide):
+                        from ..constrained_spec import plan_tree
+                        from ..tool_call_grammar import apply_bitmask
+
+                        # every position's mask depends on the tokens before it on its path
+                        masks = plan_tree(
+                            r.req.guide,
+                            w.tokens.reshape(-1).tolist(),
+                            w.shape.parents_array().tolist(),
+                        )
+                        drawn = apply_bitmask(drawn[0], masks)[None]
                     for p in r.req.processors:
                         # static bans (and a penalty: per window row below; Driver._processors_draft)
                         if p is not r.penalty:
@@ -413,11 +424,7 @@ class DFlashBatch:
                                 top_logprobs_device(lp[p : p + 1], r.req.top_logprobs)
                             )
                     used += driver._emit(r, [int(token)], emit_extra, events)
-                    if (
-                        r.finished
-                        or r.force
-                        or (r.req.guide is not None and r.req.guide.constrained)
-                    ):
+                    if r.finished or r.force or _plain_guided(r):
                         break
                 kept = path[:used]
                 if budget is not None and b == 0:

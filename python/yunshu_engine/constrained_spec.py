@@ -102,6 +102,46 @@ def _invariant_guide_kind(guide) -> bool:
     return False
 
 
+def masks_every_row(guide) -> bool:
+    """A guide that masks every position (a response-format guide, alone or combined). Its row
+    drafts a masked chain/tree on the round driver; a tool-call guide masks only inside a call
+    and its in-call rows decode plain."""
+    from .reasoning_gate import ThinkGatedGuide
+
+    if isinstance(guide, (ConstraintGuide, ThinkGatedGuide)):
+        return True
+    if isinstance(guide, CombinedGuide):
+        return any(masks_every_row(g) for g in guide.guides)
+    return False
+
+
+def plan_tree(guide, toks, parents):
+    """Per-node token masks ``[nodes, words]`` of a draft tree (``parents[0] == -1`` is the
+    pending root; ``toks[0]`` its token). Row ``n`` is the mask of the distribution after the
+    path to node ``n``. A node whose token its parent's mask forbids can never be accepted, and
+    nothing below it is reached: those rows stay all-allowed. The guide is restored."""
+    n = len(toks)
+    out = np.full((n, guide.words), -1, dtype=np.int32)
+    kids: list[list[int]] = [[] for _ in range(n)]
+    for i in range(1, n):
+        kids[parents[i]].append(i)
+
+    def visit(node):
+        out[node] = guide.mask()
+        for child in kids[node]:
+            tok = int(toks[child])
+            if (out[node, tok >> 5] >> (tok & 31)) & 1:
+                saved = guide.checkpoint()
+                try:
+                    guide.feed(tok)
+                    visit(child)
+                finally:
+                    guide.restore(saved)
+
+    visit(0)
+    return out
+
+
 def tree_guide(guide) -> bool:
     """A guide whose free stretches the DFlash fast tree can run unmasked: a tool-call guide
     alone. A response-format guide masks every row, so its request keeps the chain."""
@@ -222,6 +262,9 @@ class ConstraintGuide:
         c = processor._constraint
         self._saved_arg = bool(inspect.signature(c.rollback).parameters)
 
+    def arms(self, token):
+        return False
+
     def mask(self):
         p = self.processor
         c = p._constraint
@@ -315,6 +358,9 @@ class CombinedGuide:
     @property
     def constrained(self):
         return any(g.constrained for g in self.guides)
+
+    def arms(self, token):
+        return any(getattr(g, "arms", lambda t: False)(token) for g in self.guides)
 
     def mask(self):
         out = np.full(self.words, -1, dtype=np.int32)

@@ -1806,13 +1806,13 @@
     },
     {
       "id": "guide-off-copy-tree",
-      "a": "response-format / combined guides, or tool-call guides with logprobs or penalties",
+      "a": "any guide with logprobs or penalties (response-format guides draft a masked tree on the round driver; the speculative lane keeps their chain)",
       "b": "DFlash copy islands and fast tree",
       "kind": "unimplemented",
       "ev": [
         [
           "python/yunshu_engine/constrained_spec.py",
-          "isinstance(guide, ToolCallGuide) and not logprobs and not processors"
+          "return _invariant_guide_kind(guide) and not logprobs and not processors"
         ]
       ],
       "why": "Tool-call guides alone can use keyed fast-tree and copy rounds; these additional constraints retain the serial chain."
