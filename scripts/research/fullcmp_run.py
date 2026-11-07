@@ -501,16 +501,22 @@ class Job:
         ]
 
 
+OWN_PIN_ENGINES = ("yunshu-pb2", "yunshu-next")
+
+
 def yunshu_pins() -> dict:
     """Per-Yunshu-engine tree sha and python for the audit manifest (dev0 keeps the top-level section)."""
-    pb2 = engine_pin("yunshu-pb2", {})
-    return {"yunshu-pb2": {"git_sha": pb2["sha"], "python": pb2["python_executable"]}}
+    out = {}
+    for eng in OWN_PIN_ENGINES:
+        p = engine_pin(eng, {})
+        out[eng] = {"git_sha": p["sha"], "python": p["python_executable"]}
+    return out
 
 
 def engine_pin(engine: str, pin: dict) -> dict:
     """The pin whose tree a cell of this engine runs from: the Phase B preview has its own pin
     (fullcmp_provenance.pin_path_for); every other engine keeps the given pin (dev0 for Yunshu)."""
-    if engine != "yunshu-pb2":
+    if engine not in OWN_PIN_ENGINES:
         return pin
     return json.loads(fp.pin_path_for(engine).read_text())
 

@@ -42,6 +42,7 @@ def test_manifest_engine_ids_are_the_twelve_measured_engines_plus_the_extra_omlx
     assert (
         MEASURED_IDS
         == [
+            "yunshu-next",
             "yunshu-pb2",
             "yunshu",
             "tf-1.2.1",

@@ -126,7 +126,7 @@ def load_table(path=DEFAULT_TABLE):
 
 # engine ids whose engaged evidence is another engine's: the Phase B preview (own pin, same Yunshu
 # server, same log line and per-request counters) is judged by the dev0 Yunshu entries
-EVIDENCE_ALIAS = {"yunshu-pb2": "yunshu"}
+EVIDENCE_ALIAS = {"yunshu-pb2": "yunshu", "yunshu-next": "yunshu"}
 
 
 def evidence_key(engine) -> str:
