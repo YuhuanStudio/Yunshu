@@ -15,6 +15,7 @@ equal to its own tokens, so drafts only decide how much a step commits.
 from __future__ import annotations
 
 import logging
+import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -22,6 +23,7 @@ import mlx.core as mx
 
 from .. import dflash_ring, dflash_tree, keyed_sampling
 from ..constrained_spec import masks_every_row
+from ..spec_schedule import CHAIN_PRIOR, NodeBudget
 from ..text_logprobs import top_logprobs_device
 from . import flashnext
 from .allocate import fair_nodes
@@ -32,7 +34,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-PROPOSALS = 15  # drafter positions per round (its trained block minus the root)
+PROPOSALS = 15  # most drafter positions per round (the drafter's trained block minus one is used)
+CHAIN_DEPTH = 7  # deepest chain a cost-aware budget may pick (the old lane's ``install_chain_budget``)
+
+
+def walk_on_device(window: mx.array, target: mx.array):
+    """The accepted chain prefix of a window on the device: ``(used, bonus)`` where ``used`` positions are
+    kept (the pending token plus the drafts equal to the target's own tokens) and ``bonus`` is the
+    target's token after the last kept one. ``window`` [W] and ``target`` [W] int32."""
+    width = int(window.shape[0])
+    if width == 1:
+        return mx.array([1], dtype=mx.int32), target[:1]
+    match = (window[1:] == target[:-1]).astype(mx.int32)
+    accepted = mx.cumprod(match).sum()
+    return (accepted + 1).astype(mx.int32).reshape(1), mx.take(
+        target, accepted
+    ).reshape(1)
 
 
 class FlashNextDFlash(DFlashBatch):
@@ -49,6 +66,49 @@ class FlashNextDFlash(DFlashBatch):
             )
         super().__init__(model, draft, kv_format)
         self.lm = getattr(model, "language_model", model)
+
+    @property
+    def positions(self) -> int:
+        """Masked drafter positions of a round: its trained block minus the root."""
+        return max(1, min(PROPOSALS, int(self.draft.config.block_size) - 1))
+
+    def _chain(self, dh, anchor, row) -> mx.array:
+        """The row's draft chain ``[positions]`` from the drafter's hidden rows ``dh`` [1, P, H]: the best
+        candidate at each depth. A greedy row reads the argmax of the (reduced-vocabulary) head directly,
+        without the candidate selector a tree needs; a keyed row takes the coupled candidates' best."""
+        if row.keyed is None:
+            vocab = getattr(self.draft, "_draft_vocab", None)
+            subset = (
+                vocab.logits_subset(dh)
+                if vocab is not None
+                and self.draft.config.final_logit_softcapping is None
+                else None
+            )
+            if subset is not None:
+                logits, ids = subset
+                return (
+                    mx.take(ids, mx.argmax(logits, axis=-1))
+                    .astype(mx.int32)
+                    .reshape(-1)
+                )
+            return mx.argmax(self.draft._logits(dh)[0], axis=-1).astype(mx.int32)
+        lat = dflash_tree.lattice_from_hidden(
+            self.draft,
+            dh,
+            anchor,
+            keyed=row.keyed,
+            committed=row.generated,
+            penalty=row.penalty,
+        )
+        return lat.cands[:, 0].astype(mx.int32)
+
+    def _budget(self, row) -> NodeBudget:
+        found = self.budgets.get(id(row))
+        if found is None:
+            found = self.budgets[id(row)] = NodeBudget(
+                min(CHAIN_DEPTH, self.positions), prior=CHAIN_PRIOR
+            )
+        return found
 
     # ── membership ───────────────────────────────────────────────────────
     def join(self, rows):
@@ -74,40 +134,67 @@ class FlashNextDFlash(DFlashBatch):
             )
         return events
 
+    def _queue_next(self, rows, windows, results, draws, nodes) -> set:
+        """A lone greedy drafting row (no guide / budget / force / report): take the accepted prefix on the
+        device, append its features to the drafter ring and queue the next round's chain, all before the
+        host reads the verify back (the Qwen3.5 batch's next-round pipelining). Returns the rows whose ring
+        was appended here."""
+        if len(rows) != 1:
+            return set()
+        r, w, res = rows[0], windows[0], results[0]
+        target, _lp, extra = draws[0]
+        if (
+            not r.drafting
+            or r.force
+            or r.keyed is not None
+            or r.req.guide is not None
+            or r.req.budget is not None
+            or not nodes[0]
+            or extra is not None
+            or r.req.logprobs
+        ):
+            return set()
+        used, bonus = walk_on_device(w.reshape(-1), target.reshape(-1).astype(mx.int32))
+        ring = self.rings[id(r)]
+        ring.append(self.draft, mx.concatenate(res[1], axis=-1), used)
+        hs = dflash_ring.draft_hidden(self.draft, ring, bonus, self.positions)
+        chain = self._chain(hs, bonus, r)
+        mx.async_eval(chain)
+        self.prebuilt[id(r)] = chain
+        return {id(r)}
+
     def _step_rows(self, driver, rows) -> list[Event]:
         from ..tree_verify import TreeShape
         from .driver import _Item
 
+        t_start = time.perf_counter()
         rooms = []
         for r in rows:
             room = max(0, r.req.max_tokens - r.generated - 1)
             rooms.append(
                 0
-                if not r.drafting or r.force or _plain_guided(r)
-                else min(PROPOSALS, room)
+                if not r.drafting or r.force or _plain_guided(r) or not room
+                else min(self._budget(r).choose(room), room, self.positions)
             )
         nodes = fair_nodes(rooms, budget=flashnext.PACK_ROWS, turn=self.turn)
         self.turn += 1
         live = [b for b, n in enumerate(nodes) if n]
         chains: dict[int, mx.array] = {}
-        if live:
+        ready = {b: self.prebuilt.pop(id(rows[b]), None) for b in live}
+        self.prebuilt.clear()  # a row without a drafted round drops its queued chain
+        fresh = [b for b in live if ready[b] is None]
+        if fresh:
+            pend = mx.array([rows[b].pending for b in fresh], dtype=mx.int32)
             hs = dflash_ring.draft_hidden_batch(
                 self.draft,
-                [self.rings[id(rows[b])] for b in live],
-                mx.array([rows[b].pending for b in live], dtype=mx.int32),
-                PROPOSALS,
+                [self.rings[id(rows[b])] for b in fresh],
+                pend,
+                self.positions,
             )
-            for j, b in enumerate(live):
-                r = rows[b]
-                lat = dflash_tree.lattice_from_hidden(
-                    self.draft,
-                    hs[j : j + 1],
-                    mx.array([r.pending], dtype=mx.int32),
-                    keyed=r.keyed,
-                    committed=r.generated,
-                    penalty=r.penalty,
-                )
-                chains[b] = lat.cands[: nodes[b], 0].astype(mx.int32)
+            for j, b in enumerate(fresh):
+                ready[b] = self._chain(hs[j : j + 1], pend[j : j + 1], rows[b])
+        for b in live:
+            chains[b] = ready[b][: nodes[b]]
         windows = []
         for b, r in enumerate(rows):
             pend = mx.array([r.pending], dtype=mx.int32)
@@ -179,6 +266,7 @@ class FlashNextDFlash(DFlashBatch):
                 )
                 draws.append((targets, lp, None))
             mx.async_eval(*[d[0] for d in draws])
+            walked = self._queue_next(rows, windows, results, draws, nodes)
             for r, w, res, (target, lp, extra) in zip(
                 rows, windows, results, draws, strict=True
             ):
@@ -228,7 +316,21 @@ class FlashNextDFlash(DFlashBatch):
                 vocab = getattr(self.draft, "_draft_vocab", None)
                 if vocab is not None:
                     vocab.learn(committed[:used])
-                if not r.finished:
+                if drafted:
+                    self._budget(r).observe(
+                        drafted,
+                        range(min(max(0, used - 1), drafted)),
+                        (time.perf_counter() - t_start) * 1000,
+                        first=r.generated - used == 1,
+                    )
+                if id(r) in walked:
+                    if not r.finished and used != len(path):
+                        raise RuntimeError(
+                            "round driver: a pipelined Flash-Next DFlash row was cut short"
+                        )
+                    if r.finished:
+                        self.prebuilt.pop(id(r), None)
+                elif not r.finished:
                     feats = mx.concatenate(res[1], axis=-1)[:, :used]
                     self.rings[id(r)].append(
                         self.draft, feats, mx.array([used], dtype=mx.int32)
@@ -243,6 +345,6 @@ class FlashNextDFlash(DFlashBatch):
             self.stats.pop(id(r), None)
         driver.rows = [r for r in driver.rows if not r.finished]
         driver._release(gone)
-        mx.async_eval(*self.arrays())
+        mx.async_eval(*self.arrays(), *self.prebuilt.values())
         driver.steps += 1
         return events

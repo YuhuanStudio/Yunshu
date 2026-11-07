@@ -439,31 +439,30 @@ def test_dflash_solo_equals_plain_and_concurrent(tiny, dflash):
 
 
 @pytest.mark.parametrize("corrupt_at", [None, 2])
+@pytest.mark.parametrize("lone", [True, False])
 def test_dflash_oracle_chains_commit_whole_windows(
-    tiny, dflash, monkeypatch, corrupt_at
+    tiny, dflash, monkeypatch, corrupt_at, lone
 ):
     """Chains that are what plain decode produces next commit all their positions (QSA indexer, PLE history
     and GDN state advance by the whole window); a chain wrong at one depth commits the prefix and rolls the
-    rest back. The stream is the plain one either way."""
-    from types import SimpleNamespace as NS
-
-    from yunshu_engine import dflash_tree
+    rest back. The stream is the plain one either way, with the next round drafted before the verify is read
+    back (a lone row) or after (two rows)."""
+    from yunshu_engine.round_driver.flashnext_dflash import FlashNextDFlash
 
     lm, _ = tiny
     for ids in PROMPTS:
         truth = run(lm, [ids], max_tokens=10)[0][0]
 
-        def oracle(draft, dh, anchor, *, committed=0, truth=truth, **kw):
-            future = (truth[committed : committed + 15] + [0] * 15)[:15]
+        def oracle(self, dh, anchor, row, truth=truth, generated=None):
+            n = row.generated if generated is None else generated
+            future = (truth[n : n + 15] + [0] * 15)[:15]
             if corrupt_at is not None:
                 future[corrupt_at] = (future[corrupt_at] + 1) % 60
-            return NS(cands=mx.array(future, dtype=mx.int32)[:, None])
+            return mx.array(future, dtype=mx.int32)
 
-        monkeypatch.setattr(dflash_tree, "lattice_from_hidden", oracle)
-        got, driver = run_dflash(lm, dflash, [ids])
-        assert got[0] == truth, corrupt_at
-        if corrupt_at is None:
-            assert driver.accepted >= len(truth) - 3  # windows landed whole
+        monkeypatch.setattr(FlashNextDFlash, "_chain", oracle)
+        got, _ = run_dflash(lm, dflash, [ids] if lone else [ids, PROMPTS[1]])
+        assert got[0] == truth, (corrupt_at, lone)
 
 
 # ── explicit cache plans ride on the driver ─────────────────────────────────────────────────────
@@ -645,3 +644,40 @@ def test_finished_head_row_stores_target_and_head_caches_together(tiny):
         c.index_keys is None or int(c.index_keys.shape[1]) == seen["n"] for c in hcache
     )
     assert flashnext.decode_caches(driver, SimpleNamespace(hn=0, n=0)) is None
+
+
+def test_device_walk_equals_the_host_walk():
+    from yunshu_engine.round_driver.flashnext_dflash import walk_on_device
+
+    cases = [
+        ([5, 1, 2, 3], [1, 2, 9, 4]),  # two drafts land, third misses
+        ([5, 1, 2, 3], [7, 2, 9, 4]),  # first misses
+        ([5, 1, 2, 3], [1, 2, 3, 8]),  # all land: bonus after the last
+        ([5], [8]),  # a window of one
+    ]
+    for window, target in cases:
+        path = [0]
+        while path[-1] + 1 < len(window) and window[path[-1] + 1] == target[path[-1]]:
+            path.append(path[-1] + 1)
+        used, bonus = walk_on_device(
+            mx.array(window, dtype=mx.int32), mx.array(target, dtype=mx.int32)
+        )
+        assert int(used.item()) == len(path)
+        assert int(bonus.item()) == target[path[-1]]
+
+
+def test_dflash_chain_depth_follows_the_cost_aware_budget(tiny, dflash):
+    from yunshu_engine.round_driver.flashnext_dflash import CHAIN_DEPTH
+
+    lm, _ = tiny
+    driver = RoundDriver(
+        SimpleNamespace(language_model=lm), dflash_drafter=dflash, chunk=CHUNK
+    )
+    batch = driver.dflash
+    row = SimpleNamespace()
+    budget = batch._budget(row)
+    assert budget.size == min(
+        CHAIN_DEPTH, batch.positions
+    )  # the old lane's cap of seven drafts
+    assert batch._budget(row) is budget
+    assert batch.positions == dflash.config.block_size - 1
