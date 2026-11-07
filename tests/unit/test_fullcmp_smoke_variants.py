@@ -51,6 +51,7 @@ def _real_manifest_bytes() -> bytes:
     return b"".join(
         (json.dumps(r, sort_keys=True, ensure_ascii=False) + "\n").encode()
         for r in rows
+        if r["engine"] != "yunshu-next"  # added after the real run was planned (re-run candidate)
     )
 
 
