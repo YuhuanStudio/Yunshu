@@ -472,3 +472,70 @@ def test_dflash_oracle_chains_commit_whole_windows(
         assert got[0] == truth, corrupt_at
         if corrupt_at is None:
             assert driver.accepted >= len(truth) - 3  # windows landed whole
+
+
+# ── explicit cache plans ride on the driver ─────────────────────────────────────────────────────
+class _Coordinator:
+    enabled = True
+    is_checkpoint = True
+    media_checkpoint = False
+
+    def __init__(self, plan_points):
+        self.plan_points = plan_points
+        self.policy = None
+        self.stored = []
+        self.manager = SimpleNamespace(
+            exact_cache_min_tokens=1,
+            lock=__import__("contextlib").nullcontext(),
+            stats=SimpleNamespace(restored_tokens=0),
+        )
+
+    def set_request(self, ids, policy):
+        self.policy = (tuple(ids), policy)
+
+    def lookup(self, ids, **kw):
+        return None
+
+    def prepare_prefill(self, *a, **kw):
+        pass
+
+    def checkpoint_lengths(self, ids, media, *, begin=True):
+        return list(self.plan_points) if self.policy else [len(ids) - 1]
+
+    def store_checkpoint(self, ids, caches, extra_hash=0):
+        self.stored.append(len(ids))
+
+
+def test_explicit_cache_plan_steers_the_row_checkpoints(tiny):
+    lm, _ = tiny
+    coord = _Coordinator([12])
+    manager = SimpleNamespace(coordinator=lambda model: coord)
+    driver = RoundDriver(
+        SimpleNamespace(language_model=lm),
+        stop_tokens=set(),
+        chunk=CHUNK,
+        apc=manager,
+        plain_verify=True,
+    )
+    plan = {"points": [(12, 300)], "lookup_points": [12]}
+    driver.add(Request(PROMPTS[2], 3, handle=0, cache_plan=plan))
+    assert coord.policy == (tuple(PROMPTS[2]), plan)
+    for _ in range(100):
+        if not driver.busy():
+            break
+        driver.step()
+    driver.flush_checkpoints()
+    assert coord.stored == [12]  # stored at the seam, not at an automatic point
+
+
+def test_cache_plan_requests_take_the_driver_and_salt_their_own_namespace():
+    from yunshu_engine import vlm_batch_runner as vbr
+
+    r = object.__new__(vbr.VLMBatchRunner)
+    r.driver = SimpleNamespace(flash=True)
+    r.apc_semantic_hash = 7
+    plain = SimpleNamespace(cache_plan=None, prompt_kwargs=None, salt=None)
+    planned = SimpleNamespace(cache_plan={"points": []}, prompt_kwargs=None, salt=None)
+    assert r._driver_takes(planned)
+    assert r._driver_extra_hash(plain) == 7
+    assert r._driver_extra_hash(planned) not in (0, 7)

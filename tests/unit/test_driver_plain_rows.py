@@ -224,17 +224,16 @@ def test_these_kinds_draft_on_dflash(procs, guide):
         assert drafts_on_driver(k), k.name
 
 
-def test_guided_request_with_a_cache_plan_keeps_the_stock_lane():
+def test_guided_request_never_takes_the_stock_lane_when_the_driver_serves_it():
     lane = vbr.guided_stock_lane
-    # no cache plan: the driver takes it, the stock lane does not
+    # the driver takes it, with or without an explicit cache plan (cache seams are the driver's too)
     assert not lane(True, True, True, True, None)
-    # an explicit cache plan runs the stock runner, whose lane takes a lone guided request
-    assert lane(True, True, True, True, {"points": []})
-    assert not lane(True, False, True, True, {"points": []})  # not alone
-    assert not lane(False, True, True, True, {"points": []})  # drafting off
-    assert not lane(True, True, False, True, {"points": []})  # lane busy
-    # no driver at all (non-Qwen3.5 family): the lane as before
+    assert not lane(True, True, True, True, {"points": []})
+    # no driver at all (non-driver family): the lane as before
     assert lane(True, True, True, False, None)
+    assert not lane(True, False, True, False, None)  # not alone
+    assert not lane(False, True, True, False, None)  # drafting off
+    assert not lane(True, True, False, False, None)  # lane busy
 
 
 def test_logit_bias_is_pure_per_row_for_any_leading_shape():

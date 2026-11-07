@@ -310,12 +310,9 @@ def guided_stock_lane(
     use_draft: bool, alone: bool, lane_free: bool, driver_takes: bool, cache_plan
 ) -> bool:
     """A guided request drafts on the stock speculative lane (as on main) when it is alone and
-    the lane is free and the round driver does not take it. A request with an explicit cache
-    plan (Anthropic ``cache_control``, rendered prompt-cache endpoints) is never the driver's:
-    it runs the stock runner, so its lane stays available."""
-    return bool(
-        use_draft and alone and lane_free and not (driver_takes and cache_plan is None)
-    )
+    the lane is free and the round driver does not take it (``cache_plan`` is the driver's too)."""
+    del cache_plan
+    return bool(use_draft and alone and lane_free and not driver_takes)
 
 
 def static_masks_only(processors) -> bool:
@@ -1226,11 +1223,7 @@ class VLMBatchRunner:
         )
 
         if job.guide is not None:
-            driver_guide = (
-                self._driver_takes(job, alone)
-                and job.cache_plan is None
-                and self._driver_guide(job)
-            )
+            driver_guide = self._driver_takes(job, alone) and self._driver_guide(job)
             lane = guided_stock_lane(
                 job.use_draft,
                 alone,
@@ -1260,7 +1253,7 @@ class VLMBatchRunner:
                 use_apc = bool(self._apc_admit(ids_mx))
             except Exception:
                 logger.debug("APC admission check failed; using APC", exc_info=True)
-        if self._driver_takes(job, alone) and job.cache_plan is None:
+        if self._driver_takes(job, alone):
             self._admit_driver(job, use_apc)
             return
         job.stats.cache_reason = (
@@ -1643,6 +1636,25 @@ class VLMBatchRunner:
             else int(round(float(rd.reshape(-1)[0].item()))),
         }
 
+    def _driver_extra_hash(self, job: _Job) -> int:
+        """The APC namespace of a driver row: the model / processor identity (a media prompt's own
+        salt), and for explicit cache seams their own numerical span plan, as the stock path keeps it."""
+        salt = (
+            job.salt
+            if job.prompt_kwargs is not None and job.salt is not None
+            else self.apc_semantic_hash or 0
+        )
+        if job.cache_plan is not None:
+            import hashlib
+
+            salt = int.from_bytes(
+                hashlib.blake2b(
+                    f"{salt}:explicit-absolute-spans-v1".encode(), digest_size=8
+                ).digest(),
+                "little",
+            )
+        return int(salt)
+
     def _admit_driver(self, job: _Job, use_apc: bool) -> None:
         from .round_driver.driver import Request
 
@@ -1705,13 +1717,10 @@ class VLMBatchRunner:
                 guide=job.guide if self._driver_guide(job) else None,
                 budget=job.budget,
                 handle=job,
-                extra_hash=(
-                    job.salt
-                    if job.prompt_kwargs is not None and job.salt is not None
-                    else self.apc_semantic_hash or 0
-                ),
+                extra_hash=self._driver_extra_hash(job),
                 use_apc=use_apc,
                 cache_store=job.cache_store,
+                cache_plan=job.cache_plan,
             )
         )
         hit_stages.add("add", time.perf_counter() - t_add)

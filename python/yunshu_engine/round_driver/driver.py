@@ -257,6 +257,9 @@ class Request:
     extra_hash: int = 0  # APC salt (model / processor identity)
     use_apc: bool = True  # the runner's capacity check for this prompt
     cache_store: bool = True  # False: look the prefix up, store nothing
+    # Explicit cache seams (Anthropic ``cache_control``, rendered prompt-cache endpoints): the APC
+    # coordinator's per-request policy (lookup points, checkpoint writes); None: automatic checkpoints.
+    cache_plan: Any = None
     # Media prompt: [L, D] prompt embeddings (visual features scattered in), [3, L] mRoPE
     # positions and the decode position offset (``rope_deltas``); None / 0 for plain text.
     embeds: Any = None
@@ -601,6 +604,9 @@ class RoundDriver:
         # one coordinator per row: its checkpoint plan is request state
         row.apc = self._new_coordinator(self._apc_manager)
         row.apc.media_checkpoint = row.req.embeds is not None
+        if row.req.cache_plan is not None:
+            # the policy steers this coordinator's lookup and checkpoint plan (it is per row)
+            row.apc.set_request(ids, row.req.cache_plan)
         row.salt = self.apc_salt(int(row.req.extra_hash), row.mtp_cache is not None)
         # A prompt with no media token (the usual one) needs none of the media checks, each of which
         # walks every prompt id in Python (~34K ids at 32K context, several times per lookup): one
