@@ -2437,10 +2437,15 @@ class VLMEngine:
 
     def _round_driver_wanted(self, lm) -> bool:
         """The multi-row round driver serves a dense Qwen3.5-family text decoder with
-        bf16 or int8 KV (``YUNSHU_KV_PRECISION``) when the lane arithmetic is ready. With speculation off
-        (``YUNSHU_VLM_DRAFT=off``) the same driver decodes without drafting, so speculation
+        bf16 or int8 KV (``YUNSHU_KV_PRECISION``) when the lane arithmetic is ready, and every
+        Flash-Next (Qwen4) model with bf16 KV (its own packed forward needs no lane self-test). With
+        speculation off (``YUNSHU_VLM_DRAFT=off``) the same driver decodes without drafting, so speculation
         on equals speculation off bit for bit (one arithmetic, rows never draft)."""
+        from .round_driver import flashnext
         from .round_driver import forward as rd_forward
+
+        if flashnext.is_flash_next(lm):
+            return True
 
         if not rd_forward.supports(lm):
             logger.info("Round driver: not a dense Qwen3.5-family model")
@@ -2497,9 +2502,9 @@ class VLMEngine:
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
         qwen4 = is_qwen4_family(self._config)
-        use_driver = not qwen4 and spec_family and self._round_driver_wanted(lm)
+        use_driver = spec_family and self._round_driver_wanted(lm)
         driver_lanes = 0
-        if use_driver:
+        if use_driver and not qwen4:
             # Row-invariant lane projections everywhere (before any verify
             # kernel install repacks them): the round driver's rows, and the
             # upstream paths that still serve image prompts, both use them.
@@ -2950,9 +2955,13 @@ class VLMEngine:
                 dflash_drafter=drafter if draft_kind == "dflash" else None,
                 plain_verify=drafter is None,
                 stop_tokens=runner.stop_tokens,
-                chunk=ROUND_PREFILL_CHUNK,
+                # Flash-Next prefill is not split-invariant: its spans are the 2048 grid the APC
+                # checkpoints sit on (apc_prefill_stride), so a hit runs the spans a cold prompt did
+                chunk=PREFILL_STEP if qwen4 else ROUND_PREFILL_CHUNK,
                 apc=self._apc_backend,
-                kv_format=precision,
+                kv_format="bf16" if qwen4 else precision,
+                # the packed Flash-Next verify takes a pending token and one draft (block 2)
+                max_draft=max(0, min(int(block or 2) - 1, 1)) if qwen4 else None,
             )
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s kv=%s",

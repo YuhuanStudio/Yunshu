@@ -2012,6 +2012,12 @@ class VLMBatchRunner:
                 ("cache_store off", not row.req.cache_store),
                 ("overflowed", bool(getattr(job, "overflowed", False))),
                 ("MTP batch row", row.cache is None),
+                # a Flash-Next head row keeps its target caches, the head's KV lives apart: a stored
+                # target-only entry would never match the drafting salt's layout
+                (
+                    "MTP head row",
+                    bool(row.drafting and getattr(job.driver, "dflash", None) is None),
+                ),
                 ("no reply tokens", len(row.context) <= len(row.req.ids)),
             )
             if bad

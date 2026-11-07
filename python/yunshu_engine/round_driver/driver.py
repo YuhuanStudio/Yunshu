@@ -59,7 +59,7 @@ from ..serving.work_scheduler import (
     decode_quantum,
 )
 from ..text_logprobs import top_logprobs_device
-from . import replay
+from . import flashnext, replay
 from .allocate import CostCurve, allocate, chain
 from .batch import MAX_WINDOW, DecodeBatch
 from .forward import Segment, lane_forward, logits
@@ -93,6 +93,10 @@ def cache_buffers(cache: list) -> list:
             out += [c.keys, c.values]
             if getattr(c, "k_scales", None) is not None:  # int8 row cache
                 out += [c.k_scales, c.v_scales]
+            for name in ("index_keys", "index_position_ids", "index_block_keys"):
+                a = getattr(c, name, None)  # Flash-Next QSA indexer state
+                if isinstance(a, mx.array):
+                    out.append(a)
         else:
             out += [a for a in getattr(c, "cache", ()) if isinstance(a, mx.array)]
     return out
@@ -335,6 +339,7 @@ class RoundDriver:
         chunk: int | None = None,
         apc: Any = None,
         kv_format: str = "bf16",
+        max_draft: int | None = None,
     ):
         from .mtp import MTPHead
 
@@ -366,16 +371,40 @@ class RoundDriver:
             except Exception:  # a model without media tokens
                 self._media_ids = set()
         self.stop_tokens = set(stop_tokens or ())
-        self.head = (
-            MTPHead(drafter, self.lm, lambda h: logits(self.lm, h))
-            if drafter is not None
-            else None
+        # Flash-Next (Qwen4: HC + QSA + GDN + MoE + PLE): the model side is round_driver/flashnext.py
+        # behind the same interface; everything else of the driver is shared.
+        self.flash = flashnext.is_flash_next(self.lm)
+        if self.flash and dflash_drafter is not None:
+            raise ValueError(
+                "DFlash on Flash-Next is not on the round driver yet; use the MTP head "
+                "(YUNSHU_VLM_DRAFT unset or mtp)"
+            )
+        # drafts per round: the Qwen3.5 window is up to MAX_WINDOW - 1 positions, a Flash-Next window is the
+        # pending token plus one draft (the packed verify's chain length; block 2 decodes fastest there)
+        self.max_draft = int(
+            max_draft
+            if max_draft is not None
+            else (flashnext.MAX_CHAIN - 1 if self.flash else MAX_DECODE_TOKENS - 1)
         )
+        if self.flash:
+            self.head = (
+                flashnext.FlashNextHead(drafter, self.lm, self._logits)
+                if drafter is not None
+                else None
+            )
+        else:
+            self.head = (
+                MTPHead(drafter, self.lm, lambda h: logits(self.lm, h))
+                if drafter is not None
+                else None
+            )
         prev = mx.set_cache_limit(CACHE_LIMIT)
         if prev < CACHE_LIMIT:
             mx.set_cache_limit(prev)  # a tighter limit set by the host stays
         self.dflash = None
-        if dflash_drafter is not None or (plain_verify and drafter is None):
+        if not self.flash and (
+            dflash_drafter is not None or (plain_verify and drafter is None)
+        ):
             from .. import tree_verify
             from .dflash import DFlashBatch
 
@@ -389,7 +418,11 @@ class RoundDriver:
             self.dflash = DFlashBatch(model, dflash_drafter, kv_format)
         self.kv_format = kv_format
         self.batch: Any = (
-            self.dflash if self.dflash is not None else DecodeBatch(self.lm, kv_format)
+            self.dflash
+            if self.dflash is not None
+            else flashnext.FlashNextBatch(self.lm, kv_format)
+            if self.flash
+            else DecodeBatch(self.lm, kv_format)
         )
         # APC prefix cache (mlx_vlm ``APCManager``): a prompt starts from the
         # longest stored checkpoint (target KV + GDN state, plus the MTP
@@ -423,6 +456,12 @@ class RoundDriver:
         # per draft depth: drafted / landed (telemetry)
         self.depth_drafted = [0] * (MAX_DECODE_TOKENS - 1)
         self.depth_landed = [0] * (MAX_DECODE_TOKENS - 1)
+
+    def _logits(self, hidden: mx.array) -> mx.array:
+        """Logits of the target's hidden rows (Flash-Next: HC states through the mixer and the head)."""
+        if self.flash:
+            return flashnext.logits(self.lm, hidden)
+        return logits(self.lm, hidden)
 
     # ── rows ─────────────────────────────────────────────────────────────
     def add(self, req: Request) -> int:
@@ -632,6 +671,14 @@ class RoundDriver:
         a = self.atom(start)
         n = len(row.req.ids)
         end = min((start // a + 1) * a, n)
+        if self.flash:
+            # Flash-Next prefill is not split-invariant (chunked GDN, stock matmuls), so the plan is
+            # the absolute grid plus the row's checkpoints and nothing else: a cold run and a hit
+            # run the same spans (no 64-aligned tail cut, no run of several atoms).
+            for c in row.ckpts:
+                if start < c < end:
+                    return c
+            return end
         # The prompt's tail (the rows after its last 64-aligned boundary) always runs apart, as in
         # main's absolute prompt steps (boundary = min(grid, (end - 1) // 64 * 64)): a cell that
         # contains the boundary is cut there even when no checkpoint is planned (a short prompt, a
@@ -657,6 +704,8 @@ class RoundDriver:
         (nax matmul, BQ32 attention, chunked GDN), so the segment size never
         changes a prompt's output."""
         end = self._span_end(row, start)
+        if self.flash:
+            return end
         limit = (len(row.req.ids) - 1) // 64 * 64
         while end not in row.ckpts and end < limit:
             nxt = self._span_end(row, end)
@@ -841,7 +890,7 @@ class RoundDriver:
             return []
         indices = mx.array(pick, dtype=mx.int32)
         lg = (
-            logits(self.lm, hidden[indices])
+            self._logits(hidden[indices])
             if target_logits is None
             else target_logits[indices]
         )
@@ -1117,6 +1166,8 @@ class RoundDriver:
         # one-layer forward, as on a real step), so only the target forward is skipped.
         if row.finished or not replay.eligible(it.start, it.end, len(ids)):
             return None
+        if self.flash:
+            return None  # the stored block carries KV rows only, not the QSA indexer keys or PLE history
         from .. import dflash_apc_window
 
         return (
@@ -1222,7 +1273,9 @@ class RoundDriver:
                         reserve_prompt_kv(it.row.cache, len(it.row.req.ids))
                         got: list[mx.array] = []
                         parts.append(
-                            lane_forward(
+                            flashnext.prefill(self.lm, it.seg)
+                            if self.flash
+                            else lane_forward(
                                 self.lm,
                                 it.seg,
                                 capture_ids=self.dflash.capture_ids
@@ -1567,7 +1620,7 @@ class RoundDriver:
         fixed = len(self.batch.rows)
         probs = []
         for r in ready:
-            room = min(MAX_DECODE_TOKENS - 1, r.req.max_tokens - r.generated - 1)
+            room = min(self.max_draft, r.req.max_tokens - r.generated - 1)
             probs.append(chain(r.rates, room) if room > 0 else [])
         return allocate(fixed, probs, self.cost, LANE_ROWS, self.chain_ms, padded=True)
 
