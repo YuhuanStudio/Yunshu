@@ -64,6 +64,8 @@ def test_server_launch_checks_fresh_log_and_cleans_up(monkeypatch, tmp_path, act
     monkeypatch.setattr(tfbench, "OUT", tmp_path)
     monkeypatch.setattr(tfbench, "free_port", lambda: 18999)
     monkeypatch.setattr(tfbench, "owns_listener", lambda *args: True)
+    # the default target fits the 27B drafter (same hidden size); pin it so the test needs no model on disk
+    monkeypatch.setattr(tfbench, "_hidden_size", lambda _path: 5120)
     log = tmp_path / "out/server-repeat.log"
     log.parent.mkdir()
     log.write_text("VLM batch runner: apc=off draft=dflash block=8\n")

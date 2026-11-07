@@ -10,8 +10,9 @@ Skipped when the reference clone is absent.
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import json
+import subprocess
+import types
 from pathlib import Path
 
 import pytest
@@ -44,11 +45,28 @@ REF = _find_ref()
 pytestmark = pytest.mark.skipif(REF is None, reason="reference/mlx-lm clone missing")
 
 
+# The mlx-lm revision the family readers were reviewed against (vendor.json, tool_format.py
+# reviewed_commit). The clone's checkout can be older or newer (a helper Mac's clone was at a May
+# 2026 commit whose mistral and pythonic parsers predate the reviewed ones), so the reference source
+# is read from this revision, never from the working tree.
+REVIEWED = "9d8abd94d63a9b3c72e7e9b146e43af1005368fa"
+
+
 def _ref(name):
     assert REF is not None
-    spec = importlib.util.spec_from_file_location(f"_ref_{name}", REF / f"{name}.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    src = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(REF.parents[1]),
+            "show",
+            f"{REVIEWED}:mlx_lm/tool_parsers/{name}.py",
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout
+    mod = types.ModuleType(f"_ref_{name}")
+    exec(compile(src, f"mlx-lm@{REVIEWED[:9]}:{name}.py", "exec"), mod.__dict__)
     return mod
 
 
