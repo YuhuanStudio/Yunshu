@@ -30,6 +30,16 @@ from typing import Any
 
 import mlx.core as mx
 import mlx.nn as nn
+import numpy as np
+
+from .prompt_ids import ids_array
+
+
+def _as_ids(token_ids):
+    """The prompt's int32 array (shared with the APC lookup's), else a list of ints."""
+    arr = ids_array(token_ids)
+    return arr if arr is not None else [int(t) for t in token_ids]
+
 
 PROMPT_MIN = 16  # prompt ids before its script is judged
 COMMITTED_MIN = 24  # committed tokens before the output's script is judged
@@ -75,8 +85,13 @@ class DraftVocab:
         )
 
     def _add(self, wanted: list[int]) -> int:
-        new = sorted(t for t in set(wanted) if self.keep <= t < self.vocab)
-        new = [t for t in new if t not in self._seen]
+        if isinstance(wanted, np.ndarray):
+            # unique ids in [keep, vocab): the sort and range filter run in numpy, not per id
+            sel = wanted[(wanted >= self.keep) & (wanted < self.vocab)]
+            new = [t for t in np.unique(sel).tolist() if t not in self._seen]
+        else:
+            new = sorted(t for t in set(wanted) if self.keep <= t < self.vocab)
+            new = [t for t in new if t not in self._seen]
         if not new:
             return 0
         ids = mx.array(new, dtype=mx.uint32)
@@ -101,7 +116,7 @@ class DraftVocab:
         self._seen = set()
         self.full = False
         self._high = self._total = 0
-        ids = [int(t) for t in token_ids]
+        ids = _as_ids(token_ids)
         if len(ids) >= PROMPT_MIN and self._mostly_high(ids):
             self.full = self.fallback is not None
         if self.full:
@@ -114,7 +129,7 @@ class DraftVocab:
     def add_context(self, token_ids: list[int]) -> int:
         """Another request joins while others run: its prompt's ids join the
         extension (``set_context`` would drop the running requests')."""
-        ids = [int(t) for t in token_ids]
+        ids = _as_ids(token_ids)
         if self.full:
             return 0
         if len(ids) >= PROMPT_MIN and self._mostly_high(ids) and self.fallback:
@@ -127,7 +142,10 @@ class DraftVocab:
         return count
 
     def _mostly_high(self, ids: list[int]) -> bool:
-        high = sum(1 for t in ids if self.keep <= t < self.vocab)
+        if isinstance(ids, np.ndarray):
+            high = int(np.count_nonzero((ids >= self.keep) & (ids < self.vocab)))
+        else:
+            high = sum(1 for t in ids if self.keep <= t < self.vocab)
         return high * 2 >= len(ids)
 
     def learn(self, token_ids: list[int]) -> int:

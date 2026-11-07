@@ -37,7 +37,7 @@ from typing import Any, cast
 import mlx.core as mx
 import numpy as np
 
-from . import keyed_sampling, settings, text_logprobs
+from . import hit_stages, keyed_sampling, settings, text_logprobs
 from .constraint_eos import GrammarDeadEndError
 from .idle_memory import IdleMemory
 from .kernels.preempt import PreemptedError as _Preempted
@@ -1201,11 +1201,13 @@ class VLMBatchRunner:
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state
 
+        hit_stages.begin()
         if self._decode_follows(job):
             # before this follow-up looks up its prefix: resume in place when the cache can
             # stand, else copy it into the APC as before
-            if not self._stand_decode_cache():
-                self._flush_decode_cache()
+            with hit_stages.stage("standing"):
+                if not self._stand_decode_cache():
+                    self._flush_decode_cache()
 
         # A busy lane changes this admission, not the row's eventual eligibility.
         # In particular, the shared batch installs a ToolCallProcessor while the
@@ -1665,11 +1667,12 @@ class VLMBatchRunner:
             # every speculative start): a prompt's own tokens (code identifiers) are what its
             # continuation repeats. First row of an idle driver replaces the context; a row
             # joining running ones adds to it.
-            extra = (
-                vocab.add_context(job.ids)
-                if driver.rows
-                else vocab.set_context(job.ids)
-            )
+            with hit_stages.stage("vocab"):
+                extra = (
+                    vocab.add_context(job.ids)
+                    if driver.rows
+                    else vocab.set_context(job.ids)
+                )
             logger.info("Round driver: draft vocabulary context +%s ids", extra)
         media = self._media_request(job)
         if media:
@@ -1678,6 +1681,7 @@ class VLMBatchRunner:
                 len(job.ids),
                 media["rope_delta"],
             )
+        t_add = time.perf_counter()
         hit = driver.add(
             Request(
                 **media,
@@ -1705,6 +1709,8 @@ class VLMBatchRunner:
                 cache_store=job.cache_store,
             )
         )
+        hit_stages.add("add", time.perf_counter() - t_add)
+        hit_stages.mark("add_end")
         self._vocab_owner = driver
         job.start = job.stats.t_admit = job.stats.t_prefill_start = time.perf_counter()
         job.stats.tracks_prefill_start = True
@@ -1770,13 +1776,20 @@ class VLMBatchRunner:
                 continue
             stats = job.stats
             now = time.perf_counter()
-            if stats.generated == 0:
+            first = stats.generated == 0
+            if first:
                 stats.first_token_s = now - job.start
                 stats.t_first = now
                 stats.prefill_done = stats.prefill_total
             stats.t_last = now
             stats.generated += 1
             self._emit(job, (int(event.token), event.logprob))
+            if first:
+                hit_stages.finish(
+                    len(job.ids),
+                    int(stats.cached_tokens or 0),
+                    time.perf_counter() - now,
+                )
             if event.finish is not None:
                 stats.finish_reason = event.finish
                 self._driver_jobs.pop(id(job), None)

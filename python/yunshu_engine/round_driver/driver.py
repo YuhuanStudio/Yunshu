@@ -48,10 +48,11 @@ from typing import Any
 import mlx.core as mx
 import numpy as np
 
-from .. import keyed_sampling
+from .. import hit_stages, keyed_sampling
 from ..cache_prefill import reserve_prompt_kv
 from ..kernels import preempt
 from ..keyed_sampling import top_k_filter, top_p_filter
+from ..prompt_ids import ids_array
 from ..serving.work_scheduler import (
     DECODE_EARLY_TOKENS,
     DECODE_FIRST_BURST_S,
@@ -314,6 +315,12 @@ class _Item:
     tokens: Any = None  # a decode window's tokens (pending + drafts); None: just the pending token
 
 
+def _prefix(ids, n: int):
+    """The first ``n`` ids as a view of the prompt's int32 array (one conversion per prompt)."""
+    arr = ids_array(ids)
+    return arr[:n] if arr is not None else ids[:n]
+
+
 class RoundDriver:
     """Rows of one Qwen3.5-family target (projections converted to lane)."""
 
@@ -567,6 +574,7 @@ class RoundDriver:
             # A media prompt restores only a prefix that leaves a text-only suffix (the media
             # placeholders, whose embeddings are computed per request, lie inside the cached
             # part), and no checkpoint cuts a media span (main: PromptProcessingBatch callbacks).
+            t_lookup = time.perf_counter()
             hit = row.apc.lookup(
                 ids,
                 extra_hash=row.salt,
@@ -578,6 +586,7 @@ class RoundDriver:
                     ids, n, media
                 ),
             )
+            hit_stages.add("lookup", time.perf_counter() - t_lookup)
             n = len(row.cache)
             want = n + (len(row.mtp_cache) if row.mtp_cache is not None else 0)
             warm = hit.get("warm_cache") if hit else None
@@ -592,13 +601,16 @@ class RoundDriver:
             row.apc.prepare_prefill(
                 [len(ids)], prefill_step_size=self.chunk, prefix_lengths=[row.hit]
             )
-            self._seed_window(row)
+            with hit_stages.stage("window"):
+                self._seed_window(row)
+            t_plan = time.perf_counter()
             floor = row.apc.manager.exact_cache_min_tokens
             row.ckpts = [
                 c
                 for c in row.apc.checkpoint_lengths(ids, media)
                 if row.hit < c < len(ids) and c >= floor
             ]
+            hit_stages.add("plan", time.perf_counter() - t_plan)
         except Exception:
             logger.warning("APC lookup failed; prefilling from scratch", exc_info=True)
             if row.hit == 0:
@@ -669,7 +681,7 @@ class RoundDriver:
             if layers is None:
                 return
             win.put(
-                win.key_for(row.salt, row.req.ids[:end]),
+                win.key_for(row.salt, _prefix(row.req.ids, end)),
                 layers,
                 sum(int(x.nbytes) for x in layers),
             )
@@ -681,7 +693,7 @@ class RoundDriver:
             return
         from .. import dflash_apc_window as win
 
-        layers = win.get(win.key_for(row.salt, row.req.ids[: row.hit]))
+        layers = win.get(win.key_for(row.salt, _prefix(row.req.ids, row.hit)))
         if layers is None:
             return
         self.dflash.seed(row, layers)

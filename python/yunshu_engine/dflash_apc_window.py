@@ -47,12 +47,20 @@ _STATS = {
 def key_for(extra_hash: int, token_ids) -> tuple:
     import numpy as np
 
-    arr = np.asarray(list(token_ids), dtype=np.int64)
-    return (
-        int(extra_hash),
-        len(arr),
-        hashlib.blake2b(arr.tobytes(), digest_size=16).digest(),
-    )
+    from . import hit_stages
+    from .prompt_ids import ids_array
+
+    with hit_stages.stage("hash"):
+        arr = ids_array(token_ids, remember=False)
+        if arr is not None:
+            arr = arr.astype(np.int64, copy=False)  # the key's bytes are int64 ids
+        else:
+            arr = np.asarray(list(token_ids), dtype=np.int64)
+        return (
+            int(extra_hash),
+            len(arr),
+            hashlib.blake2b(arr.tobytes(), digest_size=16).digest(),
+        )
 
 
 def resident_bytes() -> int:

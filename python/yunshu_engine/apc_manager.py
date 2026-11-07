@@ -48,6 +48,9 @@ from mlx_vlm.apc import APCManager, DiskBlockStore
 from mlx_vlm.apc import _sequence_hash as _upstream_sequence_hash
 from mlx_vlm.apc_coordinator import APCCoordinator
 
+from . import hit_stages
+from .prompt_ids import head_boundary_index, ids_array, semantic_boundary_set
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,11 +58,17 @@ def _sequence_hash(token_ids, extra_hash: int, block_size: int) -> int:
     """``mlx_vlm.apc._sequence_hash`` without its per-token ``int(t)`` loop (b9f5305: convert
     the ids to bytes once). Same digest: the upstream builds the same int32 array, just from
     a Python-level copy of every id. Other inputs (mx arrays, generators) take the upstream."""
-    if isinstance(token_ids, (list, tuple)):
-        try:
+    if isinstance(token_ids, (list, tuple, np.ndarray)):
+        if isinstance(token_ids, np.ndarray):
+            # a view of the prompt's int32 array (the lookup converts the prompt once)
+            if token_ids.dtype != np.int32:
+                token_ids = token_ids.tolist()
             arr = np.asarray(token_ids, dtype=np.int32)
-        except (TypeError, ValueError, OverflowError):
-            return int(_upstream_sequence_hash(token_ids, extra_hash, block_size))
+        else:
+            try:
+                arr = np.asarray(token_ids, dtype=np.int32)
+            except (TypeError, ValueError, OverflowError):
+                return int(_upstream_sequence_hash(token_ids, extra_hash, block_size))
         if arr.ndim == 1:
             h = hashlib.sha256()
             h.update(int(extra_hash & ((1 << 64) - 1)).to_bytes(8, "little"))
@@ -1008,6 +1017,7 @@ class _Coordinator(APCCoordinator):
         if tail is not None:
             return tail
         points = self.checkpoint_lengths(token_ids, set(), begin=False)
+        whole = ids_array(token_ids)  # converted once; each probe hashes a view of it
         candidates = policy.get("lookup_points", [n for n, _ in policy["points"]])
         maximum = max(candidates, default=0)
         extra_hash = kwargs["extra_hash"]
@@ -1033,7 +1043,9 @@ class _Coordinator(APCCoordinator):
             )
             if probed:
                 pkey = _sequence_hash(
-                    tuple(token_ids[:probed]), extra_hash, self.manager.block_size
+                    whole[:probed] if whole is not None else tuple(token_ids[:probed]),
+                    extra_hash,
+                    self.manager.block_size,
                 )
                 if not acceptable(probed, pkey):
                     maximum = probed - 1
@@ -1048,7 +1060,9 @@ class _Coordinator(APCCoordinator):
             if cache is None or not n:
                 return None
             key = _sequence_hash(
-                tuple(token_ids[:n]), extra_hash, self.manager.block_size
+                whole[:n] if whole is not None else tuple(token_ids[:n]),
+                extra_hash,
+                self.manager.block_size,
             )
             if acceptable(n, key):
                 self.manager.touch_boundary(token_ids[:n], extra_hash)
@@ -1966,6 +1980,15 @@ class YunshuAPCManager(APCManager):
         if self.head_marker is None:
             return 0
         a, b = self.head_marker
+        arr = ids_array(token_ids)
+        if arr is not None:
+            with hit_stages.stage("boundaries"):
+                i = head_boundary_index(arr, a, b)
+            return self.align_prefill_boundary(i) if i else 0
+        return self._head_boundary_loop(token_ids)
+
+    def _head_boundary_loop(self, token_ids) -> int:
+        a, b = self.head_marker
         n = len(token_ids)
         if n >= 2 and token_ids[0] == a and token_ids[1] == b:
             return 0
@@ -2521,6 +2544,24 @@ class YunshuAPCManager(APCManager):
 
     # ── provenance ─────────────────────────────────────────────────────
     def semantic_boundaries(self, token_ids):
+        arr = ids_array(token_ids)
+        if arr is not None:
+            with hit_stages.stage("boundaries"):
+                boundaries = semantic_boundary_set(
+                    arr,
+                    self.prefill_assistant_header,
+                    self.prefill_message_end,
+                    self.prefill_turn_boundary,
+                    self.prefill_boundary_tokens,
+                )
+            return {
+                self.align_prefill_boundary(n)
+                for n in boundaries
+                if self.align_prefill_boundary(n) > 0
+            }
+        return self._semantic_boundaries_loop(token_ids)
+
+    def _semantic_boundaries_loop(self, token_ids):
         boundaries = set()
         header = self.prefill_assistant_header
         assistant = header is None
