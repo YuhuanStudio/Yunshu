@@ -1814,6 +1814,20 @@
       "local_changes": [
         "DFlash2 chain drafting for Flash-Next driver rows: the Qwen3.5 DFlash batch's per-row rings with a chain of the drafter's best candidates verified through the packed Flash-Next step and committed through upstream speculative cache transactions."
       ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/round_driver/generic.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "upstream_paths": [
+        "mlx_vlm/generate/ar.py"
+      ],
+      "commit": "92b31ad308b651a7c1e22d0c58bcdc35c3807750",
+      "license": "MIT",
+      "local_changes": [
+        "Generic round-driver model layer: PromptProcessingBatch's single-row prefill recipe (chunks with n_to_process, the last prompt token alone with logits_to_keep=1, sequence-aligned prompt kwargs cut with the span, rope deltas captured with the upstream helper) and GenerationBatch's one-token decode call, run per row on the row's own cache with the language model's mRoPE state swapped per row. The upstream slicing helpers and APC_PRIVATE_PROMPT_KEYS are imported, not copied."
+      ]
     }
   ],
   "patches": [

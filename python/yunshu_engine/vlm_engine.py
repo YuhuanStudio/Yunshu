@@ -476,15 +476,20 @@ def _derive_vlm_quantization(config: dict) -> dict | None:
 
 
 def apc_prefill_stride(
-    spec_family: bool, invariant: bool, qwen4: bool, step: int
+    spec_family: bool,
+    invariant: bool,
+    qwen4: bool,
+    step: int,
+    generic: bool = False,
 ) -> int:
     """APC checkpoint grid: checkpoints sit only where a cold run of the same request also ends a forward.
 
     Invariant kernels (Qwen3.5) make that hold at any split. Flash-Next (qwen4_exp) prefill is not
     split-invariant, so its checkpoints need the grid: with stride 0 a turn-2 hit restored at the
     turn-1 prompt end, the tail was prefilled as one span the cold run never had, and logprobs
-    drifted (|dlp| 0.05 at 32K; tokens equal)."""
-    return step if spec_family and (invariant or qwen4) else 0
+    drifted (|dlp| 0.05 at 32K; tokens equal). The generic layer (the model's own stock forward) is no more
+    split-invariant than Flash-Next, so it takes the same grid."""
+    return step if generic or (spec_family and (invariant or qwen4)) else 0
 
 
 def resolve_external_ple_manifest(config: dict, model_path) -> None:
@@ -2470,7 +2475,7 @@ class VLMEngine:
         """
         from .kernels import nax_prefill
         from .utils.hardware import is_paravirtual_metal
-        from .vlm_batch_runner import VLMBatchRunner
+        from .vlm_batch_runner import PREFILL_STEP, VLMBatchRunner
 
         nax_prefill.disable()
         from .kernels import gdn_prefill
@@ -2497,12 +2502,33 @@ class VLMEngine:
             runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
             runner.stop_tokens = set(self._get_eos_ids())
             runner.inflight = lambda: self._active_count
+            from .round_driver.driver import RoundDriver
+
+            # the model's own forward per row, no APC: the stock cold forwards, on the one driver
+            runner.driver = RoundDriver(
+                self._model,
+                generic_layer=True,
+                stop_tokens=runner.stop_tokens,
+                chunk=PREFILL_STEP,
+                apc=None,
+            )
             return runner
 
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
         qwen4 = is_qwen4_family(self._config)
         use_driver = spec_family and self._round_driver_wanted(lm)
+        # Every other model runs the generic layer: its own upstream forward per row, no drafter, no verify
+        # kernels, no lane projections (the stock arithmetic is the contract there).
+        generic_layer = not use_driver
+        if generic_layer:
+            if spec_family:
+                logger.warning(
+                    "Speculative decoding is not available for %s on the round driver (no packed model "
+                    "layer for it yet); it decodes plain on the model's own forward",
+                    self._config.get("model_type"),
+                )
+            spec_family = False
         driver_lanes = 0
         if use_driver and not qwen4:
             # Row-invariant lane projections everywhere (before any verify
@@ -2776,10 +2802,12 @@ class VLMEngine:
                     block = 6
         self._prefix_invariant_dispatch = bool(kernels and kernels.get("invariant"))
         # After the kernels: the identity names the prefill matmul they installed.
-        from .vlm_batch_runner import PREFILL_STEP
-
         self._apc_prefill_stride = apc_prefill_stride(
-            spec_family, bool((kernels or {}).get("invariant")), qwen4, PREFILL_STEP
+            spec_family,
+            bool((kernels or {}).get("invariant")),
+            qwen4,
+            PREFILL_STEP,
+            generic=generic_layer,
         )
         from .kernels import buffer_cache
 
@@ -2936,7 +2964,7 @@ class VLMEngine:
         precision = settings.get("YUNSHU_KV_PRECISION")
         from .kernels import ragged_kv
 
-        if not qwen4 and ragged_kv.supports(self._model.language_model):
+        if use_driver and not qwen4 and ragged_kv.supports(self._model.language_model):
             ragged_kv.install()
             ragged_kv.enable(None)  # the runner sets the format while it steps
             runner.ragged_kv = precision
@@ -2945,6 +2973,16 @@ class VLMEngine:
                 "YUNSHU_KV_PRECISION=%s applies to Qwen3.5-family attention "
                 "only; this model's KV stays bf16",
                 precision,
+            )
+        if generic_layer:
+            from .round_driver.driver import RoundDriver
+
+            runner.driver = RoundDriver(
+                self._model,
+                generic_layer=True,
+                stop_tokens=runner.stop_tokens,
+                chunk=PREFILL_STEP,
+                apc=self._apc_backend,
             )
         if use_driver:
             from .round_driver.driver import RoundDriver
@@ -2973,6 +3011,7 @@ class VLMEngine:
             kernels,
             precision if use_driver else "bf16",
         )
+        logger.info("Round driver layer: %s", "generic" if generic_layer else "packed")
         return runner
 
     # Knobs the runner does not implement; such requests take the legacy loop.

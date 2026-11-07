@@ -2,7 +2,7 @@
   "_doc": "Path-parity matrix. Every optimization or capability, on every serving path where it applies: engaged (with evidence), na (with reason), partial/missing (with owner and impact). tests/unit/test_path_parity.py enforces it; see that test for the rules. A new optimization module or performance setting fails CI until it has a row here.",
   "paths": {
     "batch": "Round driver, the unified runner for text requests of the dense Qwen3.5 family and of Flash-Next (Qwen4): spec on or off, one row or many (round_driver/; replaces the speculative lane and the shared batch for them)",
-    "generic": "Stock runner (mlx-vlm BatchGenerator + the retained single-request lane): other mlx-vlm families (Gemma, Omni thinker, ...) and the requests the driver excludes (explicit cache plans, media on Qwen3.5, MoE); Flash-Next keeps its stock-path patches only for explicit cache plans",
+    "generic": "Round driver, generic layer (round_driver/generic.py): every other mlx-vlm family (Gemma, Omni thinker, qwen3_5_moe, ...) on the model's own upstream forward, one call per row, no drafter and no packed kernels; also the paravirtual-Metal and no-lane-matmul hosts",
     "text": "Text-only mlx-lm single-request fast path (_generate_fast)",
     "loop": "Text-model EngineCore continuous-batching loop (YUNSHU_ENGINE_LOOP, off by default, not grown)"
   },

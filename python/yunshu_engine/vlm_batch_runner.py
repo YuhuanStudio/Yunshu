@@ -1587,6 +1587,18 @@ class VLMBatchRunner:
             else int(round(float(rd.reshape(-1)[0].item()))),
         }
 
+    def _generic_request(self, job: _Job) -> dict:
+        """The driver ``Request`` fields of the generic layer: the model's prompt inputs. A media prompt
+        brings its own (``prepare_media``); a text prompt gets what the stock generator feeds it, the
+        model's ``get_input_embeddings`` of the prompt ids (some families add inputs of their own:
+        positions, per-layer inputs). The row owns its model state, so nothing is cleared here."""
+        pkw = job.prompt_kwargs
+        if pkw is None:
+            pkw = self.model.get_input_embeddings(
+                mx.array(job.ids)[None], None, mask=None
+            ).to_dict()
+        return {"prompt_kwargs": pkw, "media": job.prompt_kwargs is not None}
+
     def _driver_extra_hash(self, job: _Job) -> int:
         """The APC namespace of a driver row: the model / processor identity (a media prompt's own
         salt), and for explicit cache seams their own numerical span plan, as the stock path keeps it."""
@@ -1616,6 +1628,7 @@ class VLMBatchRunner:
 
                 self._aux_driver = RoundDriver(
                     self.model,
+                    generic_layer=getattr(self.driver, "generic", False),
                     drafter=self.drafter if self.draft_kind == "mtp" else None,
                     dflash_drafter=self.drafter
                     if self.draft_kind == "dflash"
@@ -1642,8 +1655,12 @@ class VLMBatchRunner:
                     else vocab.set_context(job.ids)
                 )
             logger.info("Round driver: draft vocabulary context +%s ids", extra)
-        media = self._media_request(job)
-        if media:
+        media = (
+            self._generic_request(job)
+            if getattr(driver, "generic", False)
+            else self._media_request(job)
+        )
+        if media and not getattr(driver, "generic", False):
             logger.info(
                 "Round driver: media prompt %d tokens, rope_delta %d",
                 len(job.ids),

@@ -59,7 +59,7 @@ from ..serving.work_scheduler import (
     decode_quantum,
 )
 from ..text_logprobs import top_logprobs_device
-from . import flashnext, replay
+from . import flashnext, generic, replay
 from .allocate import CostCurve, allocate, chain
 from .batch import MAX_WINDOW, DecodeBatch
 from .forward import Segment, lane_forward, logits
@@ -97,6 +97,8 @@ def cache_buffers(cache: list) -> list:
                 a = getattr(c, name, None)  # Flash-Next QSA indexer state
                 if isinstance(a, mx.array):
                     out.append(a)
+        elif getattr(c, "caches", None) is not None:  # a CacheList of sub-caches
+            out += cache_buffers(list(c.caches))
         else:
             out += [a for a in getattr(c, "cache", ()) if isinstance(a, mx.array)]
     return out
@@ -283,6 +285,12 @@ class Request:
     embeds: Any = None
     position_ids: Any = None
     rope_delta: int = 0
+    # Generic layer only: the model's prompt inputs (``generic.PromptFeatures`` input: the runner's
+    # ``get_input_embeddings(...).to_dict()`` or ``prepare_media`` output, dict of arrays).
+    prompt_kwargs: Any = None
+    media: bool = (
+        False  # the prompt carries media (APC checkpoints take the media rules)
+    )
 
 
 @dataclass
@@ -326,6 +334,8 @@ class _Row:
         None  # GeneratedTokenPenalty of a drafting / keyed row (applied per window row)
     )
     generic: bool = False  # processors applied per window row by ``window_processed``
+    features: Any = None  # generic layer: ``generic.PromptFeatures`` of the prompt
+    state: Any = None  # generic layer: ``generic.RowState`` (the model's per-row state)
 
 
 @dataclass
@@ -361,6 +371,7 @@ class RoundDriver:
         apc: Any = None,
         kv_format: str = "bf16",
         max_draft: int | None = None,
+        generic_layer: bool = False,
     ):
         from .mtp import MTPHead
 
@@ -391,18 +402,42 @@ class RoundDriver:
                 self._media_ids = set(_apc.multimodal_token_ids_from_config(config))
             except Exception:  # a model without media tokens
                 self._media_ids = set()
+        # the wrapper's own placeholder ids (a backbone config may omit them: Gemma 4)
+        from ..vlm_batch_runner import media_token_ids
+
+        with contextlib.suppress(
+            Exception
+        ):  # a model object without a config (unit fakes)
+            self._media_ids |= set(media_token_ids(model))
         self.stop_tokens = set(stop_tokens or ())
         # Flash-Next (Qwen4: HC + QSA + GDN + MoE + PLE): the model side is round_driver/flashnext.py
         # behind the same interface; everything else of the driver is shared.
         self.flash = flashnext.is_flash_next(self.lm)
+        # Generic layer: the model's own upstream forward, one call per row (``generic.py``); no drafter,
+        # logits instead of hidden states. Mutually exclusive with the two packed model layers.
+        self.generic = bool(generic_layer)
+        if self.generic and (
+            self.flash or drafter is not None or dflash_drafter is not None
+        ):
+            raise ValueError(
+                "round driver: the generic layer takes no drafter and no Flash-Next model"
+            )
         # drafts per round: the Qwen3.5 window is up to MAX_WINDOW - 1 positions, a Flash-Next window is the
         # pending token plus one draft (the packed verify's chain length; block 2 decodes fastest there)
         self.max_draft = int(
             max_draft
             if max_draft is not None
-            else (flashnext.MAX_CHAIN - 1 if self.flash else MAX_DECODE_TOKENS - 1)
+            else (
+                0
+                if self.generic
+                else flashnext.MAX_CHAIN - 1
+                if self.flash
+                else MAX_DECODE_TOKENS - 1
+            )
         )
-        if self.flash:
+        if self.generic:
+            self.head = None
+        elif self.flash:
             self.head = (
                 flashnext.FlashNextHead(drafter, self.lm, self._logits)
                 if drafter is not None
@@ -422,8 +457,10 @@ class RoundDriver:
             from .flashnext_dflash import FlashNextDFlash
 
             self.dflash = FlashNextDFlash(model, dflash_drafter, kv_format)
-        if not self.flash and (
-            dflash_drafter is not None or (plain_verify and drafter is None)
+        if (
+            not self.flash
+            and not self.generic
+            and (dflash_drafter is not None or (plain_verify and drafter is None))
         ):
             from .. import tree_verify
             from .dflash import DFlashBatch
@@ -438,7 +475,9 @@ class RoundDriver:
             self.dflash = DFlashBatch(model, dflash_drafter, kv_format)
         self.kv_format = kv_format
         self.batch: Any = (
-            self.dflash
+            generic.GenericBatch(self.lm, kv_format)
+            if self.generic
+            else self.dflash
             if self.dflash is not None
             else flashnext.FlashNextBatch(self.lm, kv_format)
             if self.flash
@@ -479,9 +518,14 @@ class RoundDriver:
 
     def _logits(self, hidden: mx.array) -> mx.array:
         """Logits of the target's hidden rows (Flash-Next: HC states through the mixer and the head)."""
+        if self.generic:
+            return hidden  # the generic layer already returns logits rows
         if self.flash:
             return flashnext.logits(self.lm, hidden)
         return logits(self.lm, hidden)
+
+    def _new_cache(self) -> list:
+        return generic.new_cache(self.lm) if self.generic else self.lm.make_cache()
 
     # ── rows ─────────────────────────────────────────────────────────────
     def add(self, req: Request) -> int:
@@ -513,7 +557,7 @@ class RoundDriver:
         )
         row = _Row(
             req=req,
-            cache=self.lm.make_cache(),
+            cache=self._new_cache(),
             mtp_cache=self.head.make_cache()
             if draft and self.head is not None
             else None,
@@ -541,6 +585,11 @@ class RoundDriver:
             row.base = keyed_sampling.seed_base(seed)
         elif seed is not None:
             row.key = mx.random.key(int(seed))
+        if self.generic:
+            if req.prompt_kwargs is None:
+                raise ValueError("generic round driver row: prompt_kwargs are required")
+            row.features = generic.PromptFeatures(req.prompt_kwargs, len(req.ids))
+            row.state = generic.RowState()
         self._restore(row)
         vocab = self.head.vocab if self.head is not None and draft else None
         if vocab is not None:
@@ -619,7 +668,7 @@ class RoundDriver:
         ids = row.req.ids
         # one coordinator per row: its checkpoint plan is request state
         row.apc = self._new_coordinator(self._apc_manager)
-        row.apc.media_checkpoint = row.req.embeds is not None
+        row.apc.media_checkpoint = row.req.embeds is not None or row.req.media
         if row.req.cache_plan is not None:
             # the policy steers this coordinator's lookup and checkpoint plan (it is per row)
             row.apc.set_request(ids, row.req.cache_plan)
@@ -674,7 +723,7 @@ class RoundDriver:
         except Exception:
             logger.warning("APC lookup failed; prefilling from scratch", exc_info=True)
             if row.hit == 0:
-                row.cache = self.lm.make_cache()
+                row.cache = self._new_cache()
                 if row.mtp_cache is not None:
                     row.mtp_cache = self.head.make_cache()
             row.ckpts = []
@@ -692,7 +741,7 @@ class RoundDriver:
         a = self.atom(start)
         n = len(row.req.ids)
         end = min((start // a + 1) * a, n)
-        if self.flash:
+        if self.flash or self.generic:
             # Flash-Next prefill is not split-invariant (chunked GDN, stock matmuls), so the plan is
             # the absolute grid plus the row's checkpoints and nothing else: a cold run and a hit
             # run the same spans (no 64-aligned tail cut, no run of several atoms).
@@ -725,7 +774,7 @@ class RoundDriver:
         (nax matmul, BQ32 attention, chunked GDN), so the segment size never
         changes a prompt's output."""
         end = self._span_end(row, start)
-        if self.flash:
+        if self.flash or self.generic:
             return end
         limit = (len(row.req.ids) - 1) // 64 * 64
         while end not in row.ckpts and end < limit:
@@ -1185,7 +1234,11 @@ class RoundDriver:
         # An MTP head row replays too: the head's cache already holds the restored
         # prefix and its tail is re-absorbed below from the stored hidden rows (a
         # one-layer forward, as on a real step), so only the target forward is skipped.
-        if row.finished or not replay.eligible(it.start, it.end, len(ids)):
+        if (
+            self.generic
+            or row.finished
+            or not replay.eligible(it.start, it.end, len(ids))
+        ):
             return None
         from .. import dflash_apc_window
 
@@ -1291,6 +1344,13 @@ class RoundDriver:
                             continue
                         reserve_prompt_kv(it.row.cache, len(it.row.req.ids))
                         got: list[mx.array] = []
+                        if self.generic:
+                            # the model's own call: logits only for the span that ends the prompt
+                            out = generic.prefill(self.lm, it.row, it.start, it.end)
+                            if out is not None:
+                                parts.append(out)
+                            per_seg.append(got)
+                            continue
                         parts.append(
                             flashnext.prefill(
                                 self.lm,
@@ -1311,8 +1371,20 @@ class RoundDriver:
                             )
                         )
                         per_seg.append(got)
+                    if self.generic:
+                        # rows of ``hidden`` are the logits of the prompts finished this step: an item
+                        # owns one row if it ends its prompt, none otherwise
+                        run = 0
+                        for it in items:
+                            ends = int(it.end == len(it.row.req.ids))
+                            it.at, it.count = run, ends
+                            run += ends
                     hidden = (
-                        parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=0)
+                        None
+                        if not parts
+                        else parts[0]
+                        if len(parts) == 1
+                        else mx.concatenate(parts, axis=0)
                     )
                     if self.dflash is not None and per_seg:
                         captures = [

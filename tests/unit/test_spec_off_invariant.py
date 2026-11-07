@@ -17,7 +17,15 @@ def _build(monkeypatch, model_type):
     monkeypatch.setattr(
         "yunshu_engine.utils.hardware.is_paravirtual_metal", lambda: False
     )
-    monkeypatch.setattr(VLMEngine, "_round_driver_wanted", lambda *_: False)
+    # a Qwen3.5 target takes the packed driver layer, any other family the generic one
+    monkeypatch.setattr(
+        VLMEngine, "_round_driver_wanted", lambda *_: model_type == "qwen3_5"
+    )
+    from yunshu_engine.kernels import lane_linear
+
+    monkeypatch.setattr(
+        lane_linear, "convert", lambda lm: {"converted": 0, "skipped": []}
+    )
     monkeypatch.setattr(
         spec_select,
         "choose",
@@ -40,7 +48,9 @@ def _build(monkeypatch, model_type):
     monkeypatch.setattr(buffer_cache, "auto_limit_gib", lambda *_: 0)
     eng = object.__new__(VLMEngine)
     eng._config = {"model_type": model_type}
-    eng._model = SimpleNamespace(language_model=SimpleNamespace())
+    eng._model = SimpleNamespace(
+        language_model=SimpleNamespace(args=SimpleNamespace(tie_word_embeddings=False))
+    )
     eng._apc_backend = None
     with pytest.raises(_StopError):
         eng._build_batch_runner("/nonexistent")
@@ -57,9 +67,11 @@ def test_spec_off_spec_family_installs_invariant(monkeypatch):
 
 def test_non_spec_family_untouched(monkeypatch):
     eng, calls = _build(monkeypatch, "gemma4")
+    # the generic layer: the model's own stock forward, no kernel installs, and the prefill grid
+    # as the APC stride (stock prefill is not split-invariant: a hit must run a cold prompt's spans)
     assert calls == []
     assert eng._prefix_invariant_dispatch is False
-    assert eng._apc_prefill_stride == 0
+    assert eng._apc_prefill_stride == 2048
 
 
 def test_flash_next_apc_uses_the_prefill_grid():
@@ -72,3 +84,5 @@ def test_flash_next_apc_uses_the_prefill_grid():
     assert apc_prefill_stride(True, True, False, 2048) == 2048
     assert apc_prefill_stride(True, False, False, 2048) == 0
     assert apc_prefill_stride(False, False, False, 2048) == 0
+    # the generic driver layer (stock forward per row) takes the grid as well
+    assert apc_prefill_stride(False, False, False, 2048, generic=True) == 2048
