@@ -1728,3 +1728,123 @@ def test_superseded_slot_is_read_from_the_superseded_file_header(tmp_path):
     )
     (tmp_path / "c-r0.superseded-1.telemetry.jsonl").write_text('{"x": 1}\n')
     assert fa._superseded_slot(cell) == (1.0, 2.0)
+
+
+# --- audit fixes (auditfix-1107): crash, genconfig fairness, skipped engines, batch scope, reasoning split
+
+
+LMS_CELL = "B1.core.lmstudio.1K.c1.code.o512.single.th-off.none.greedy"
+LMS_REASON = "unsupported (harness: lms CLI is bootstrapped into $HOME/.lmstudio)"
+
+
+def test_engaged_per_row_without_row_id_is_reported_not_a_crash(tmp_path, monkeypatch):
+    """A per-row evidence entry without 'row' (or 'prompt'/'value'/'line') used to raise KeyError and
+    stop the whole audit; the note now carries a visible placeholder."""
+    manifest, files = make_data()
+    mpath = write_run(tmp_path / "run", manifest, files)
+    orig = fe.evaluate
+
+    def with_bare_row(*a, **k):
+        ev = orig(*a, **k)
+        ev["stats"]["per_row"] = [{"value": 1, "line": "done line"}]
+        return ev
+
+    monkeypatch.setattr(fe, "evaluate", with_bare_row)
+    run = fa.load_run(tmp_path / "run", json.loads(mpath.read_text()))
+    res = fa.check_engaged_mode(run)  # must not raise KeyError
+    assert res.notes and all("row <missing>" in n and "prompt <missing>" in n for n in res.notes)
+
+
+def test_genconfig_cell_is_exempt_from_greedy_but_not_from_other_checks(tmp_path):
+    """genconfig cells deliberately run the model's generation config (temperature 1.0): only the
+    greedy requirement is waived. A non-numeric temperature or a record that says it did not use the
+    generation config is still a violation."""
+    gen_cell = "B2.sampling.yunshu.1K.c1.code.o512.single.th-off.none.genconfig"
+    manifest, _ = make_data()
+    cf_ok = fa.CellFile(
+        {"cell": gen_cell, "engine": "yunshu", "group": "g"}, 0, Path("x"),
+        {"job_id": "j1", "home": "/tmp/h1"},
+        [{"temperature": 1.0, "top_p": 0.95, "sampling": "genconfig"}],
+    )
+    cf_bad = fa.CellFile(
+        {"cell": gen_cell, "engine": "yunshu", "group": "g"}, 0, Path("x"),
+        {"job_id": "j2", "home": "/tmp/h2"},
+        [{"temperature": 0.7, "sampling": "greedy"}],
+    )
+    run_ok = fa.Run(manifest, [cf_ok], [], [], [], full=False)
+    assert fa.check_fairness_controls(run_ok).violations == []
+    run_bad = fa.Run(manifest, [cf_bad], [], [], [], full=False)
+    msgs = fa.check_fairness_controls(run_bad).violations
+    assert any("temperature 0.7" in m for m in msgs)
+    # a greedy cell (not genconfig) at temperature 1.0 is still refused
+    cf_greedy = fa.CellFile(
+        {"cell": gen_cell.replace(".genconfig", ".greedy"), "engine": "yunshu", "group": "g"}, 0,
+        Path("x"), {"job_id": "j3", "home": "/tmp/h3"}, [{"temperature": 1.0}],
+    )
+    msgs = fa.check_fairness_controls(fa.Run(manifest, [cf_greedy], [], [], [], full=False)).violations
+    assert any("temperature 1.0; greedy (0) required" in m for m in msgs)
+
+
+def test_skipped_engine_cells_are_not_expected_files(tmp_path):
+    """lmstudio is skipped for the whole run (manifest unsupported entries, no harness launch): its
+    planned cells are not missing measurements."""
+    manifest = {
+        "reps": 2,
+        "cells": [{"engine": "lmstudio", "cell": LMS_CELL, "reps": 2, "phases": ["cold"], "expected_records": 1}],
+        "unsupported": [{"engine": "lmstudio", "cell": LMS_CELL, "batch": "B1", "reason": LMS_REASON}],
+    }
+    run = fa.load_run(tmp_path / "run", manifest)
+    assert run.missing == []
+    assert [c["cell"] for c, _, _ in run.unsupported] == []  # no file, nothing refused
+    res = fa.check_manifest_completeness(run)
+    assert not any("missing" in v for v in res.violations)
+
+
+def test_skipped_cell_with_a_file_is_labelled_unsupported_not_a_violation(tmp_path):
+    """A cell the manifest plans as unsupported is recorded with its reason, never as a missing or
+    unplanned file, and its rows are not run through the measurement guards."""
+    manifest = {
+        "reps": 2,
+        "cells": [],
+        "unsupported": [{"engine": "lmstudio", "cell": LMS_CELL, "batch": "B1", "reason": LMS_REASON}],
+    }
+    d = tmp_path / "run" / "lmstudio"
+    d.mkdir(parents=True)
+    (d / f"{LMS_CELL}-r0.jsonl").write_text('{"part": "session"}\n')
+    run = fa.load_run(tmp_path / "run", manifest)
+    assert run.extra == []
+    assert [(c["cell"], rep, r) for c, rep, r in run.unsupported] == [(LMS_CELL, 0, LMS_REASON)]
+    assert run.files == []
+
+
+def test_other_batch_rep3_file_is_not_an_unplanned_file_in_a_b2_audit(tmp_path):
+    """A B2-only audit must not count B1 files (kapitsa -r2 of B1 cells) as unplanned: the audit
+    scopes extra files to the batches the manifest plans."""
+    b2_cell = "B2.core.mlx-serve-26.11.1.1K.c1.code.o512.single.th-off.none.greedy"
+    manifest = {"reps": 2, "cells": [{"engine": "mlx-serve-26.11.1", "cell": b2_cell, "reps": 2}], "unsupported": []}
+    for rel in (
+        "mlx-serve-26.11.1/" + b2_cell + "-r0.jsonl",
+        "mlx-serve-26.11.1/" + b2_cell + "-r1.jsonl",
+        "kapitsa-0.2.26/B1.core.kapitsa-0.2.26.1K.c1.code.o512.single.th-off.none.greedy-r2.jsonl",
+    ):
+        (tmp_path / "run" / rel.split("/")[0]).mkdir(parents=True, exist_ok=True)
+        (tmp_path / "run" / rel).write_text("")
+    run = fa.load_run(tmp_path / "run", manifest)
+    assert run.extra == []
+    # a B2 file that the manifest does not plan is still unplanned
+    (tmp_path / "run" / "mlx-serve-26.11.1" / ("B2.core.mlx-serve-26.11.1.8K.c1.code.o512.single.th-off.none.greedy-r0.jsonl")).write_text("")
+    assert [p.name for p in fa.load_run(tmp_path / "run", manifest).extra] == [
+        "B2.core.mlx-serve-26.11.1.8K.c1.code.o512.single.th-off.none.greedy-r0.jsonl"
+    ]
+
+
+def test_mlx_lm_server_thinking_cell_is_an_engine_limitation_label():
+    """mlx-lm-server does not split reasoning (reasoning_content empty): the thinking-on cell is a
+    labelled 'unsupported: <reason>' status, not a measured cell with three guard violations."""
+    sp = dict(media="none", kind="code", turns="single", conc=1, thinking="on", sampling="greedy")
+    status, reason = fm.cell_status("mlx-lm-server", sp)
+    assert status == fm.UNS
+    assert "reasoning" in reason
+    # the thinking-off cell of the same engine stays unverified (costed), not refused
+    off = dict(sp, thinking="off")
+    assert fm.cell_status("mlx-lm-server", off)[0] == fm.UNV

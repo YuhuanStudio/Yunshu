@@ -478,6 +478,7 @@ ENGINES = {
             anthropic=False,
             responses=False,
             disk_cache=False,
+            reasoning_split=False,
         ),
     ),
     "mlx-vlm-server": dict(
@@ -575,6 +576,10 @@ def cell_status(eng, sp):
         return UNS, e.get("images_reason") or "text-only server: no image input path (census images false)"
     if sp["kind"] == "json-schema" and caps.get("json_schema") is False:
         return UNS, "no JSON-schema constrained output (census json_schema false)"
+    if sp["thinking"] == "on" and caps.get("reasoning_split") is False:
+        # the engine returns the reasoning inside content (reasoning_content empty): no reasoning split to
+        # validate or measure, so the thinking cell is an engine limitation label
+        return UNS, "no reasoning split (census reasoning_split false: reasoning_content empty)"
     if sp["turns"] == "restart" and caps.get("disk_cache") is False:
         return UNS, e.get("disk_reason") or "no disk prefix-cache tier (census disk_prefix_cache false)"
     if sp["conc"] > 1 and caps.get("concurrency") is False:

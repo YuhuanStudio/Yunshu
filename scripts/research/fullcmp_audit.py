@@ -380,16 +380,52 @@ def _superseded_slot(path: Path):
     return None
 
 
+def skipped_cells(manifest: dict) -> dict:
+    """(engine, cell) -> reason for every cell the manifest plans as unsupported: a whole-engine skip
+    (lmstudio: the harness cannot start it headless) or a per-cell status (census flag). Such a cell
+    is never an expected measurement; a file that exists for it is labelled with the reason."""
+    return {
+        (u.get("engine"), u["cell"]): u.get("reason")
+        for u in manifest.get("unsupported", [])
+        if u.get("cell") is not None
+    }
+
+
+BATCH_ID = re.compile(r"^B\d+$")  # a batch id in a cell name: 'B2.core.<engine>...'
+
+
+def planned_batches(manifest: dict) -> set:
+    """The batches this audit manifest selects (build_manifest --batches), from its cell names. A file of
+    another batch in the results root (a B1 rep-3 file in a B2-only audit) is out of scope, not unplanned."""
+    names = [c["cell"] for c in manifest.get("cells", [])]
+    names += [u["cell"] for u in manifest.get("unsupported", []) if u.get("cell") is not None]
+    return {_batch_of(n) for n in names if BATCH_ID.match(_batch_of(n))}
+
+
+def _cell_key(path: Path):
+    """(engine dir, cell name) of a '<cell>-rN.jsonl' file."""
+    stem = path.name[: -len(".jsonl")]
+    return (path.parent.name, stem.rsplit("-r", 1)[0])
+
+
 def load_run(root, manifest: dict) -> Run:
     root = Path(root)
+    skipped = skipped_cells(manifest)
     expected = {}
     for cell in manifest["cells"]:
+        if (cell["engine"], cell["cell"]) in skipped:
+            continue  # planned as unsupported: no measurement is expected
         for rep in range(expected_reps(cell, manifest)):
             expected[root / cell["engine"] / f"{cell['cell']}-r{rep}.jsonl"] = (
                 cell,
                 rep,
             )
     files, missing, parse_errors, unsupported = [], [], [], []
+    for (eng, cid), reason in sorted(skipped.items(), key=lambda kv: str(kv[0])):
+        # a skipped cell that still has rep files: labelled with the manifest's reason, not guarded
+        for path in sorted((root / str(eng)).glob(f"{cid}-r[0-9].jsonl")):
+            if path.is_file():
+                unsupported.append(({"engine": eng, "cell": cid}, int(path.stem[-1]), reason))
     for path, (cell, rep) in expected.items():
         if not path.is_file():
             missing.append((cell, rep, path))
@@ -423,6 +459,7 @@ def load_run(root, manifest: dict) -> Run:
                 slot=_superseded_slot(path),
             )
         )
+    batches = planned_batches(manifest)
     extra = [
         p
         for p in sorted(root.glob("*/*.jsonl"))
@@ -430,6 +467,8 @@ def load_run(root, manifest: dict) -> Run:
         and not p.name.endswith(TELEMETRY_SUFFIX)
         and SUPERSEDED_TAG not in p.name
         and p.parent.name != BEHAVIOUR_DIR
+        and _cell_key(p) not in skipped
+        and (not batches or not BATCH_ID.match(_batch_of(p.name)) or _batch_of(p.name) in batches)
     ]
     behaviour = {}
     for p in sorted((root / BEHAVIOUR_DIR).glob("*.jsonl")):
@@ -882,8 +921,10 @@ def check_engaged_mode(run: Run) -> GuardResult:
                 res.fail(cell, f"r{cf.rep}: {problem}")
         for row in ev["stats"].get("per_row", []):
             # one line per measured request: row id, the done line it matched, its accepted value
+            # .get with a visible placeholder: a per-row entry without its id must not crash the audit
             res.notes.append(
-                f"{cell} r{cf.rep} row {row['row']} (prompt {row['prompt']}) accepted {row['value']}: {row['line']}"
+                f"{cell} r{cf.rep} row {row.get('row', '<missing>')} (prompt {row.get('prompt', '<missing>')}) "
+                f"accepted {row.get('value', '<missing>')}: {row.get('line', '<missing>')}"
             )
     return res
 
@@ -1315,6 +1356,12 @@ def check_fairness_controls(run: Run) -> GuardResult:
         for r in cf.rows:
             res.checked += 1
             t = r.get("temperature")
+            if cf.cell["cell"].endswith(".genconfig"):
+                # genconfig cells run the model's own generation config (temperature/top_p from its
+                # generation_config.json, not greedy): only the greedy requirement is waived
+                if not is_num(t) or r.get("sampling") not in (None, "genconfig"):
+                    res.fail(cf.cell["cell"], f"genconfig cell: temperature {t!r}, sampling {r.get('sampling')!r}; the model's generation config required")
+                continue
             if not (is_num(t) and t == 0):
                 res.fail(cf.cell["cell"], f"temperature {t!r}; greedy (0) required")
         if cf.header is not None:
