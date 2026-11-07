@@ -97,12 +97,6 @@ def test_flash_next_is_detected_and_takes_flash_batch(tiny):
     )  # no Qwen3.5 tree-verify batch for a plain Flash-Next row
 
 
-def test_dflash_drafter_is_refused_not_silently_dropped(tiny):
-    lm, _ = tiny
-    with pytest.raises(ValueError, match="DFlash on Flash-Next"):
-        RoundDriver(SimpleNamespace(language_model=lm), dflash_drafter=object())
-
-
 def test_flash_spans_are_the_grid_plus_checkpoints_only(tiny):
     lm, _ = tiny
     driver = RoundDriver(SimpleNamespace(language_model=lm), chunk=CHUNK)
@@ -348,3 +342,133 @@ def test_flash_next_media_prompts_keep_the_stock_runner():
     stock = object.__new__(vbr.VLMBatchRunner)
     stock.driver = None
     assert not stock._driver_takes(text)
+
+
+# ── DFlash2 on Flash-Next rows ─────────────────────────────────────────────────────────────────
+@pytest.fixture(scope="module")
+def dflash(tiny):
+    from mlx_vlm.speculative.drafters.dflash2.config import DFlash2Config
+    from mlx_vlm.speculative.drafters.dflash2.dflash2 import DFlash2DraftModel
+
+    from yunshu_engine import qwen4_dflash
+
+    lm, _ = tiny
+    from mlx_vlm.models.qwen4_exp.language import LanguageModel, Qwen4ExpDecoderLayer
+
+    saved = {
+        (cls, name): cls.__dict__.get(name, None)
+        for cls, name in (
+            (Qwen4ExpDecoderLayer, "__call__"),
+            (LanguageModel, "__call__"),
+            (LanguageModel, "_yunshu_dflash_capture"),
+            (LanguageModel, "speculative_verify_dflash_hidden"),
+        )
+    }
+    qwen4_dflash.install(lm)
+    mx.random.seed(11)
+    cfg = DFlash2Config(
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=16,
+        vocab_size=64,
+        mask_token_id=7,
+        max_position_embeddings=4096,
+        block_size=6,
+        num_target_layers=2,
+        target_layer_ids=[0, 1],
+        conv_kernel_size=2,
+        conv_group_size=16,
+        selector_rank=8,
+        selector_top_k=4,
+        layer_types=["sliding_attention"] * 2,
+        sliding_window=32,
+    )
+    d = DFlash2DraftModel(cfg)
+    mx.eval(d.parameters())
+    yield d
+    for (
+        cls,
+        name,
+    ), value in saved.items():  # the install patches classes: leave them as found
+        if value is None:
+            if name in cls.__dict__:
+                delattr(cls, name)
+        else:
+            setattr(cls, name, value)
+
+
+def run_dflash(model, draft, ids_list, *, join_after=None, max_tokens=10):
+    driver = RoundDriver(
+        SimpleNamespace(language_model=model),
+        dflash_drafter=draft,
+        stop_tokens=set(),
+        chunk=CHUNK,
+    )
+    out = {i: [] for i in range(len(ids_list))}
+    pending = list(enumerate(ids_list))
+    steps = 0
+    while pending or driver.busy():
+        while pending and (join_after is None or steps >= join_after[pending[0][0]]):
+            i, ids = pending.pop(0)
+            driver.add(Request(ids, max_tokens, handle=i))
+        for event in driver.step():
+            if event.token is not None:
+                out[event.handle].append(int(event.token))
+        steps += 1
+        assert steps < 400
+    return out, driver
+
+
+def test_dflash_flash_next_driver_wiring(tiny, dflash):
+    from yunshu_engine.round_driver.flashnext_dflash import FlashNextDFlash
+
+    lm, _ = tiny
+    driver = RoundDriver(
+        SimpleNamespace(language_model=lm), dflash_drafter=dflash, chunk=CHUNK
+    )
+    assert isinstance(driver.dflash, FlashNextDFlash) and driver.batch is driver.dflash
+    assert driver.head is None and driver.can_draft
+    assert driver.dflash.capture_ids == [0, 1]
+
+
+def test_dflash_solo_equals_plain_and_concurrent(tiny, dflash):
+    lm, _ = tiny
+    plain = [run(lm, [ids])[0][0] for ids in PROMPTS]
+    solo = [run_dflash(lm, dflash, [ids])[0][0] for ids in PROMPTS]
+    assert solo == plain
+    together, driver = run_dflash(lm, dflash, PROMPTS)
+    assert [together[i] for i in range(len(PROMPTS))] == plain
+    assert driver.drafted > 0
+    late, _ = run_dflash(lm, dflash, PROMPTS, join_after=[0, 4, 9])
+    assert [late[i] for i in range(len(PROMPTS))] == plain
+
+
+@pytest.mark.parametrize("corrupt_at", [None, 2])
+def test_dflash_oracle_chains_commit_whole_windows(
+    tiny, dflash, monkeypatch, corrupt_at
+):
+    """Chains that are what plain decode produces next commit all their positions (QSA indexer, PLE history
+    and GDN state advance by the whole window); a chain wrong at one depth commits the prefix and rolls the
+    rest back. The stream is the plain one either way."""
+    from types import SimpleNamespace as NS
+
+    from yunshu_engine import dflash_tree
+
+    lm, _ = tiny
+    for ids in PROMPTS:
+        truth = run(lm, [ids], max_tokens=10)[0][0]
+
+        def oracle(draft, dh, anchor, *, committed=0, truth=truth, **kw):
+            future = (truth[committed : committed + 15] + [0] * 15)[:15]
+            if corrupt_at is not None:
+                future[corrupt_at] = (future[corrupt_at] + 1) % 60
+            return NS(cands=mx.array(future, dtype=mx.int32)[:, None])
+
+        monkeypatch.setattr(dflash_tree, "lattice_from_hidden", oracle)
+        got, driver = run_dflash(lm, dflash, [ids])
+        assert got[0] == truth, corrupt_at
+        if corrupt_at is None:
+            assert driver.accepted >= len(truth) - 3  # windows landed whole

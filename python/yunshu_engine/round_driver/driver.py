@@ -374,11 +374,6 @@ class RoundDriver:
         # Flash-Next (Qwen4: HC + QSA + GDN + MoE + PLE): the model side is round_driver/flashnext.py
         # behind the same interface; everything else of the driver is shared.
         self.flash = flashnext.is_flash_next(self.lm)
-        if self.flash and dflash_drafter is not None:
-            raise ValueError(
-                "DFlash on Flash-Next is not on the round driver yet; use the MTP head "
-                "(YUNSHU_VLM_DRAFT unset or mtp)"
-            )
         # drafts per round: the Qwen3.5 window is up to MAX_WINDOW - 1 positions, a Flash-Next window is the
         # pending token plus one draft (the packed verify's chain length; block 2 decodes fastest there)
         self.max_draft = int(
@@ -402,6 +397,10 @@ class RoundDriver:
         if prev < CACHE_LIMIT:
             mx.set_cache_limit(prev)  # a tighter limit set by the host stays
         self.dflash = None
+        if self.flash and dflash_drafter is not None:
+            from .flashnext_dflash import FlashNextDFlash
+
+            self.dflash = FlashNextDFlash(model, dflash_drafter, kv_format)
         if not self.flash and (
             dflash_drafter is not None or (plain_verify and drafter is None)
         ):
@@ -1039,7 +1038,7 @@ class RoundDriver:
         self._finish_join()
         if not self.rows:
             return []
-        if self.dflash is not None:
+        if self.dflash is not None and not self.flash:
             from ..mrope import clear_rope_state
 
             clear_rope_state(self.model)
@@ -1273,7 +1272,14 @@ class RoundDriver:
                         reserve_prompt_kv(it.row.cache, len(it.row.req.ids))
                         got: list[mx.array] = []
                         parts.append(
-                            flashnext.prefill(self.lm, it.seg)
+                            flashnext.prefill(
+                                self.lm,
+                                it.seg,
+                                capture_ids=self.dflash.capture_ids
+                                if self.dflash
+                                else (),
+                                captured=got if self.dflash else None,
+                            )
                             if self.flash
                             else lane_forward(
                                 self.lm,

@@ -59,7 +59,9 @@ def cache_arrays(cache: list) -> list:
 
 
 # ── prompt spans ─────────────────────────────────────────────────────────
-def prefill(language_model: Any, seg: Any) -> mx.array:
+def prefill(
+    language_model: Any, seg: Any, *, capture_ids=(), captured: list | None = None
+) -> mx.array:
     """One prompt span on the row's caches: the HC state of every span position ``[T, hc * D]``.
 
     The model's own call: a 1-token span takes the batch-invariant decode forward, longer spans the
@@ -67,12 +69,39 @@ def prefill(language_model: Any, seg: Any) -> mx.array:
     and the batch generator prefilled it. ``skip_logits``: only the last prompt row's logits are read."""
     if seg.embeds is not None or seg.position_ids is not None:
         raise ValueError("Flash-Next has no media input on the round driver")
-    out = language_model(
-        seg.tokens[None].astype(mx.int32),
-        cache=seg.cache,
-        return_hidden=True,
-        skip_logits=True,
-    )
+    inputs = seg.tokens[None].astype(mx.int32)
+    if captured is not None and capture_ids:
+        # DFlash2 features: the stream mean of the completed layers (``qwen4_dflash``)
+        from .. import qwen4_dflash
+
+        ids = list(capture_ids)
+        if inputs.shape[1] == 1:
+            out, hidden = qwen4_dflash.capture_forward(
+                language_model, inputs, seg.cache, ids, skip_logits=True
+            )
+            captured.extend(x[0] for x in out.hidden_states)
+            return hidden[0]
+        layers = language_model.model.layers
+        sink: list = []
+        token = qwen4_dflash._PREFILL_CAPTURE.set(
+            (
+                {id(layers[i]) for i in ids},
+                sink,
+                language_model.args.hc_count,
+                language_model.args.hidden_size,
+            )
+        )
+        try:
+            out = language_model(
+                inputs, cache=seg.cache, return_hidden=True, skip_logits=True
+            )
+        finally:
+            qwen4_dflash._PREFILL_CAPTURE.reset(token)
+        if len(sink) != len(set(ids)):
+            raise ValueError("Qwen4 DFlash capture layer is outside the target")
+        captured.extend(x[0] for x in sink)
+        return out.hidden_states[0][0]
+    out = language_model(inputs, cache=seg.cache, return_hidden=True, skip_logits=True)
     return out.hidden_states[0][0]
 
 
@@ -120,7 +149,7 @@ def _prepare(lm: Any, tokens: list, caches: list):
     return positions, transactions
 
 
-def fused_chain_forward(lm: Any, tokens: list, caches: list):
+def fused_chain_forward(lm: Any, tokens: list, caches: list, capture_ids=()):
     """The layer loop of ``tf_hc_forward._tf_model`` over several rows' windows.
 
     HC norm / project and the router + experts run once over all packed rows (the kernels' rows are
@@ -178,6 +207,8 @@ def fused_chain_forward(lm: Any, tokens: list, caches: list):
 
         h = hidden.reshape(total, width)
         pending = None
+        capture = set(capture_ids)
+        features: list = []
         for index, layer in enumerate(model.layers):
             hn, ssp = norm(h, pending)
             if "ple" in layer:
@@ -230,17 +261,56 @@ def fused_chain_forward(lm: Any, tokens: list, caches: list):
                 fused = ("plain", (branch2.reshape(total, dims),))
             h = hn2
             pending = (fused[0], fused[1], inject2)
+            if index in capture:
+                committed, _ = norm(h, pending)
+                features.append(
+                    committed.reshape(1, total, streams, dims).mean(axis=-2)
+                )
             mx.async_eval(h, *fused[1])
         hn, _ = norm(h, pending)
         hn = hn.reshape(1, total, width)
-        return [
+        out = [
             (hn[:, s:e], transaction)
             for (s, e), transaction in zip(spans, transactions, strict=True)
+        ]
+        if not capture_ids:
+            return out
+        return [
+            (hid, [f[:, s:e] for f in features], transaction)
+            for (hid, transaction), (s, e) in zip(out, spans, strict=True)
         ]
     except BaseException:
         for transaction in transactions:
             transaction.abort()
         raise
+
+
+def chain_forward_capture(lm: Any, tokens: list, caches: list, capture_ids):
+    """Windows of any width (a DFlash chain: the pending token and its drafts) of independent rows,
+    capturing the DFlash layer features. Returns ``[(HC state [1, w, hc * D], [feature [1, w, D] per
+    layer], transaction)]``. The fused loop packs the rows (at most ``PACK_ROWS`` positions in all);
+    otherwise every row runs the upstream capture verifier on its own cache, which is the same
+    arithmetic as ``_tf_model``'s fallback loop."""
+    if not tokens or len(tokens) != len(caches):
+        raise ValueError("chain forward needs matching nonempty tokens and caches")
+    if len({id(c) for c in caches}) != len(caches):
+        raise ValueError("chain forward needs independent caches")
+    if _fused_ready(lm, _compute_dtype(lm)):
+        if sum(int(t.shape[1]) for t in tokens) > PACK_ROWS:
+            raise ValueError("fused pack is limited to PACK_ROWS positions")
+        return fused_chain_forward(lm, tokens, caches, capture_ids)
+    out = []
+    try:
+        for t, c in zip(tokens, caches, strict=True):
+            features, hidden, transaction = lm.speculative_verify_dflash_hidden(
+                t, c, list(capture_ids)
+            )
+            out.append((hidden, features, transaction))
+    except BaseException:
+        for got in out:
+            got[2].abort()
+        raise
+    return out
 
 
 def chain_forward(lm: Any, tokens: list, caches: list):

@@ -2280,7 +2280,13 @@
         "s": "missing",
         "owner": "flashnext80",
         "impact": "medium",
-        "why": "The Qwen3.5-only optimized hook is not installed on qwen4; family-specific serving evidence and adaptation remain open."
+        "why": "Flash-Next's QSA verifier is an exact chain (a draft tree would need per-node sparse selection); DFlash rows draft chains of the drafter's best candidates",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/flashnext_dflash.py",
+            "chain"
+          ]
+        ]
       },
       "cost_aware_depth": {
         "s": "partial",
@@ -2417,14 +2423,12 @@
         ]
       },
       "draft_family_coverage": {
-        "s": "partial",
-        "owner": "flashnext80",
-        "impact": "medium",
-        "why": "Native MTP head rows are on the round driver. DFlash2 on Flash-Next is refused at driver construction (its mixed-layer capture adapter qwen4_dflash.py has CPU tests but no driver lifecycle yet)",
+        "s": "engaged",
+        "why": "native MTP head rows and DFlash2 rows (the default when a matching drafter is on disk) are driver rows: per-row ring, one batched drafter forward, chains verified through the packed Flash-Next step",
         "ev": [
           [
-            "python/yunshu_engine/round_driver/driver.py",
-            "DFlash on Flash-Next is not on the round driver yet"
+            "python/yunshu_engine/round_driver/flashnext_dflash.py",
+            "class FlashNextDFlash"
           ]
         ]
       },

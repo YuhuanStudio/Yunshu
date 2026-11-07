@@ -159,7 +159,8 @@ cancel and events; the model side differs:
   so solo == concurrent and spec on == spec off;
 - prefill is the model's own forward per span; spans are the absolute 2048 grid plus the row's checkpoints (Flash-Next prefill is not
   split-invariant), so an APC hit runs the spans a cold prompt did. The reply-tail replay is off (it stores KV rows only);
-- not on the driver yet: DFlash2 on Flash-Next (refused at load), int8 KV (stays bf16), explicit cache plans (stock path), logprob
+- DFlash2 rows (the default when a matching drafter is on disk) keep the Qwen3.5 batch's per-row context rings and batched drafter forward, draft a chain of the drafter's best candidates per round (fair share of a 16-position pack) and verify it through the same packed step with the five-layer feature capture;
+- not on the driver yet: int8 KV (stays bf16), explicit cache plans (stock path), logprob
   reports of sampled MTP rows (plain rows, as for Qwen3.5 MTP), deeper MTP chains.
 
 ## Phase B adapter (WIP, still opt-in)

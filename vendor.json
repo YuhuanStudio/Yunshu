@@ -1799,6 +1799,21 @@
       "local_changes": [
         "Flash-Next rows on the round driver: per-row caches, a packed one/two-position verify (the layer loop of tf_hc_forward._tf_model over several rows, per-row PLE/GDN/QSA) with upstream speculative transactions, and the native MTP head driven per row with its own position bookkeeping."
       ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/round_driver/flashnext_dflash.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "upstream_paths": [
+        "mlx_vlm/speculative/drafters/dflash2",
+        "mlx_vlm/models/qwen4_exp/language.py"
+      ],
+      "commit": "92b31ad308b651a7c1e22d0c58bcdc35c3807750",
+      "license": "MIT",
+      "local_changes": [
+        "DFlash2 chain drafting for Flash-Next driver rows: the Qwen3.5 DFlash batch's per-row rings with a chain of the drafter's best candidates verified through the packed Flash-Next step and committed through upstream speculative cache transactions."
+      ]
     }
   ],
   "patches": [
