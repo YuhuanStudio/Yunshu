@@ -214,11 +214,22 @@ def cmd_run(a):
         res["rows"]["c4"]["pass"] = (
             True  # equality is reported, not required: stock batched arithmetic
         )
-        res["rows"]["json_schema"] = check_json_schema(url, model)
-        res["rows"]["tool_call"] = check_tool_call(url, model)
-        res["rows"]["cancel"] = check_cancel(url, model)
-        if a.image:
-            res["rows"]["image"] = check_image(url, model)
+        checks = [
+            ("json_schema", check_json_schema),
+            ("tool_call", check_tool_call),
+            ("cancel", check_cancel),
+            *([("image", check_image)] if a.image else []),
+        ]
+        for name, fn in checks:  # one failing check must not hide the others
+            try:
+                res["rows"][name] = fn(url, model)
+            except Exception as exc:  # noqa: BLE001
+                body = getattr(exc, "read", lambda: b"")()
+                res["rows"][name] = {
+                    "pass": False,
+                    "error": repr(exc),
+                    "body": body[:400].decode(errors="replace"),
+                }
         res["pass"] = all(r.get("pass") for r in res["rows"].values())
     except Exception as exc:  # noqa: BLE001
         res["error"] = repr(exc)
