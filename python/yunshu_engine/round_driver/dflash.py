@@ -371,7 +371,11 @@ class DFlashBatch:
                     draws.append((targets, None, extra))
                 else:
                     drawn = row_logits[None]
-                    if r.req.guide is not None and masks_every_row(r.req.guide):
+                    if (
+                        r.req.guide is not None
+                        and masks_every_row(r.req.guide)
+                        and not r.generic
+                    ):
                         from ..constrained_spec import plan_tree
                         from ..tool_call_grammar import apply_bitmask
 
@@ -382,17 +386,42 @@ class DFlashBatch:
                             w.shape.parents_array().tolist(),
                         )
                         drawn = apply_bitmask(drawn[0], masks)[None]
-                    for p in r.req.processors:
-                        # static bans (and a penalty: per window row below; Driver._processors_draft)
-                        if p is not r.penalty:
-                            drawn = p.pure_at(r.generated, drawn)
+                    if r.generic:
+                        # processors one window row at a time, in list order and before the
+                        # guide, as the serial step draws it (Driver.window_processed)
+                        from .driver import window_processed
+
+                        toks = w.tokens.reshape(-1).tolist()
+                        parents = w.shape.parents_array().tolist()
+                        drawn = window_processed(
+                            r.req.processors,
+                            row_logits,
+                            r.context,
+                            r.generated,
+                            toks,
+                            parents,
+                        )[None]
+                        if r.req.guide is not None and masks_every_row(r.req.guide):
+                            from ..constrained_spec import plan_tree
+                            from ..tool_call_grammar import apply_bitmask
+
+                            drawn = apply_bitmask(
+                                drawn[0], plan_tree(r.req.guide, toks, parents)
+                            )[None]
+                        penalty = None
+                    else:
+                        for p in r.req.processors:
+                            # static bans (and a penalty: per window row below)
+                            if p is not r.penalty:
+                                drawn = p.pure_at(r.generated, drawn)
+                        penalty = r.penalty
                     targets, lp = keyed_sampling.tree_target_rows(
                         drawn,
                         w.shape,
                         r.generated,
                         r.keyed,
                         SimpleNamespace(logprobs=r.req.logprobs),
-                        r.penalty,
+                        penalty,
                         w.tokens,
                     )
                     draws.append((targets, lp, None))

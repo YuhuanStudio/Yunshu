@@ -122,6 +122,77 @@ def draft_penalty(processors):
     return pens[0]
 
 
+def _mlx_closure(p) -> bool:
+    return getattr(p, "__module__", "").startswith("mlx_lm.sample_utils")
+
+
+def windowable(processors) -> bool:
+    """Every processor can be applied to one row of a speculative window with nothing but that
+    row's position and path: a pure mask (``pure_at``: token masks with min_tokens / top-n-sigma,
+    logit bias), at most one ``GeneratedTokenPenalty`` (``window_row``), or an mlx-lm closure
+    over the last tokens (repetition penalty)."""
+    penalties = 0
+    for p in processors or ():
+        if hasattr(p, "pure_at"):
+            continue
+        if hasattr(p, "window_row"):
+            penalties += 1
+            continue
+        if _mlx_closure(p):
+            continue
+        return False
+    return penalties <= 1
+
+
+def generic_processors(processors, guided: bool = False) -> bool:
+    """Processors the row applies one window row at a time (``window_processed``): windowable,
+    and not served by the device fast paths (static bans; one penalty over static bans,
+    unguided)."""
+    if not processors or not windowable(processors) or static_mask_only(processors):
+        return False
+    return guided or draft_penalty(processors) is None
+
+
+def _row_path(tokens, parents, j) -> list:
+    """Window tokens on the root-to-``j`` path (root first, ``j`` included)."""
+    if parents is None:
+        return list(tokens[: j + 1])
+    chain, at = [], j
+    while at >= 0:
+        chain.append(tokens[at])
+        at = parents[at]
+    return chain[::-1]
+
+
+def window_processed(
+    processors, logits: mx.array, context, generated: int, tokens=None, parents=None
+) -> mx.array:
+    """The request's processors on every row of a window, in list order, each row exactly as the
+    serial step that draws it: ``logits`` [n, V]; ``context`` the row's token context (ending
+    with the window root); ``generated`` the draw index of row 0; ``tokens`` the window's tokens
+    (root first) and ``parents`` its tree (None: a chain), or ``tokens`` None for the prompt's
+    first draw (nothing fed yet). Row j sees the committed context plus its path, and a stateful
+    token mask counts ``generated + depth`` draws, as ``process_last_token`` would have."""
+    from ..constrained_spec import PENALTY_CONTEXT
+
+    n = int(logits.shape[0])
+    rows = []
+    for j in range(n):
+        path = _row_path(tokens, parents, j) if tokens is not None else []
+        depth = max(len(path) - 1, 0)
+        row = logits[j : j + 1]
+        for p in processors:
+            if hasattr(p, "pure_at"):
+                row = p.pure_at(generated + depth, row)
+            elif hasattr(p, "window_row"):
+                row = p.window_row(path, row)
+            else:
+                history = [*context[-PENALTY_CONTEXT:], *path[1:]][-PENALTY_CONTEXT:]
+                row = p(mx.array(history, dtype=mx.int32), row)
+        rows.append(row)
+    return rows[0] if n == 1 else mx.concatenate(rows, axis=0)
+
+
 def window_penalty(penalty, logits: mx.array, window: mx.array) -> mx.array:
     """``penalty`` on a chain window's rows ``logits`` [n, V]: row j counts the committed tokens plus
     ``window[: j + 1]`` (the tokens fed up to it), the counts ``window_row`` builds, then the same
@@ -203,6 +274,7 @@ class _Row:
     penalty: Any = (
         None  # GeneratedTokenPenalty of a drafting / keyed row (applied per window row)
     )
+    generic: bool = False  # processors applied per window row by ``window_processed``
 
 
 @dataclass
@@ -364,6 +436,13 @@ class RoundDriver:
             if draft or keyed is not None
             else None,
         )
+        if (draft or keyed is not None) and generic_processors(
+            req.processors, req.guide is not None
+        ):
+            row.generic = True
+            row.penalty = next(
+                (p for p in req.processors if hasattr(p, "window_row")), None
+            )
         seed = getattr(req.sampling, "seed", None)
         if req.sampling is not None and keyed_sampling.supports(req.sampling):
             # Position-keyed draws, like the shared batch and the speculative lane.
@@ -405,7 +484,13 @@ class RoundDriver:
         logprobs or a guide (``draft_penalty``, as the speculative lane's ``tree_penalty``)."""
         if not processors or static_mask_only(processors):
             return True
-        return draft_penalty(processors) is not None and not logprobs and guide is None
+        if logprobs:
+            return False
+        if guide is None and draft_penalty(processors) is not None:
+            return True
+        # pure masks, repetition penalty, one frequency / presence penalty, in any order,
+        # with or without a guide: applied one window row at a time (``window_processed``)
+        return windowable(processors)
 
     def will_draft(self, *, sampling, processors, logprobs, draft: bool) -> bool:
         """Whether a request with these fields gets an MTP head row (as ``add``)."""
@@ -737,6 +822,33 @@ class RoundDriver:
         for it, off, n in outs:
             row = it.row
             req = row.req
+            if row.generic:
+                if it.kind == "d":
+                    toks = it.tokens
+                    toks = (
+                        [row.pending]
+                        if toks is None
+                        else [int(t) for t in toks.reshape(-1).tolist()]
+                    )
+                    masked = window_processed(
+                        req.processors,
+                        lg[off : off + n],
+                        row.context,
+                        row.generated,
+                        toks,
+                        None,
+                    )
+                else:
+                    masked = window_processed(
+                        req.processors,
+                        lg[off : off + n],
+                        row.context,
+                        row.generated,
+                    )
+                lg = mx.concatenate([lg[:off], masked, lg[off + n :]], axis=0)
+                greedy = mx.argmax(
+                    lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
+                )
             if req.guide is not None:
                 from ..tool_call_grammar import apply_bitmask
 
@@ -748,7 +860,7 @@ class RoundDriver:
                     greedy = mx.argmax(
                         lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
                     )
-            if req.processors and static_mask_only(req.processors):
+            if req.processors and not row.generic and static_mask_only(req.processors):
                 # static bans: every window row gets the mask a plain row applies (``pure_at``), so a
                 # drafting row verifies against the same distributions
                 masked = lg[off : off + n]
@@ -758,7 +870,7 @@ class RoundDriver:
                 greedy = mx.argmax(
                     lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
                 )
-            if row.penalty is not None and it.kind == "d":
+            if row.penalty is not None and not row.generic and it.kind == "d":
                 # a drafting row's penalty: every window row over the tokens fed up to it (a prompt's
                 # last position has nothing generated yet, as the serial first call)
                 window = (
@@ -782,6 +894,7 @@ class RoundDriver:
                     not req.processors
                     or static_mask_only(req.processors)
                     or row.penalty is not None
+                    or row.generic
                 )
                 and not req.logprobs
             ):
@@ -1196,7 +1309,9 @@ class RoundDriver:
             if use:
                 parts.append(r.draft_dev)
             wins.append(
-                mx.concatenate(parts[-2:]) if use and r.penalty is not None else None
+                mx.concatenate(parts[-2:])
+                if use and (r.penalty is not None or r.generic)
+                else None
             )
             lens.append(1 + use)
             used_drafts.append(use)

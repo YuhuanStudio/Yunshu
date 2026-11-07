@@ -92,10 +92,13 @@ def drafts_on_driver(k) -> bool:
         processors.append(vbr.Fp32LogitsProcessor())
     dflash = k.mode == "dflash"
     if not vbr.driver_allow_draft(
-        True, processors, k.logprobs, k._g, dflash_driver=dflash
+        True,
+        processors,
+        k.logprobs,
+        k._g,
+        dflash_driver=dflash,
+        xtc=k.sampling == "xtc",
     ):
-        return False
-    if k.sampling == "xtc":  # no keyed sampler: the driver's add() leaves the row plain
         return False
     request_procs = [
         p for p in processors if not (dflash and isinstance(p, vbr.Fp32LogitsProcessor))
@@ -145,28 +148,8 @@ PLAIN = [
         "main drafts it on the exact chain (exact_verify); the driver has no reporting guide row",
     ),
     (
-        "guide with a non-static processor",
-        lambda k: (
-            k.guide != "none"
-            and k.procs
-            not in ("none", "static_ban", "ignore_eos", "logit_bias", "ban+bias")
-        ),
-        "blocker",
-        "penalties / repetition / min_tokens / top-n-sigma with a guide: main chain-verifies it",
-    ),
-    (
-        "min_tokens / top_n_sigma / repetition penalty",
-        lambda k: (
-            k.procs
-            in ("min_tokens", "top_n_sigma", "repetition_penalty", "bias+repetition")
-        ),
-        "blocker",
-        "history- or depth-dependent masks: the driver applies pure masks to every window row "
-        "at the same position; main's chain applies them per row (ProcessorWindow)",
-    ),
-    (
-        "penalty with logprobs",
-        lambda k: k.logprobs and "penalty" in k.procs,
+        "guide with logprobs and a processor",
+        lambda k: k.logprobs and k.guide != "none" and k.procs != "none",
         "blocker",
         "windowed penalty + fp32 reporting: main chain-verifies it",
     ),
@@ -243,6 +226,15 @@ def test_every_processor_class_is_a_known_kind():
         ("presence_penalty", "none"),
         ("penalty+ban", "none"),
         ("penalty+bias", "none"),
+        ("repetition_penalty", "none"),
+        ("min_tokens", "none"),
+        ("top_n_sigma", "none"),
+        ("bias+repetition", "none"),
+        ("repetition_penalty", "json_schema"),
+        ("min_tokens", "tool_call"),
+        ("top_n_sigma", "json+tools"),
+        ("presence_penalty", "json_schema"),
+        ("penalty+ban", "tool_call"),
     ],
 )
 def test_these_kinds_draft_on_dflash(procs, guide):
@@ -291,3 +283,22 @@ def test_logit_bias_is_pure_per_row_for_any_leading_shape():
     assert float(out.sum()) == 8.0  # out-of-range ids ignored
     two_d = p(None, mx.zeros((4, 8)))
     assert two_d[:, 3].tolist() == [2.0] * 4
+
+
+def test_xtc_row_is_not_reported_as_drafting():
+    for guide in (None, _make(cs.ConstraintGuide)):
+        assert not vbr.driver_allow_draft(
+            True, [], False, guide, dflash_driver=True, xtc=True
+        )
+    assert vbr.driver_allow_draft(True, [], False, None, dflash_driver=True, xtc=False)
+
+
+def test_mtp_drafts_windowable_processors_but_not_guides_or_logprobs():
+    procs = _processors()
+    for name in ("repetition_penalty", "min_tokens", "top_n_sigma", "logit_bias"):
+        assert vbr.driver_allow_draft(
+            True, procs[name], False, None, dflash_driver=False
+        )
+        assert not vbr.driver_allow_draft(
+            True, procs[name], False, _make(cs.ConstraintGuide), dflash_driver=False
+        )

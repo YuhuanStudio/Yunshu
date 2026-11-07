@@ -273,29 +273,31 @@ def spec_safe_processors(processors) -> bool:
 
 
 def driver_allow_draft(
-    allow_draft: bool, processors, logprobs: bool, guide, *, dflash_driver: bool
+    allow_draft: bool,
+    processors,
+    logprobs: bool,
+    guide,
+    *,
+    dflash_driver: bool,
+    xtc: bool = False,
 ) -> bool:
     """Whether a request's row may draft on the round driver (the driver's own ``add`` checks
     the rest: a sampled row needs the keyed sampler, ``xtc`` has none).
 
-    Drafts: no processors, static token bans / logit bias, or those plus one frequency /
-    presence penalty (both without logprobs, unguided); DFlash additionally logprobs alone
-    (reporting only), and any invariant guide with no processors beyond static ones. Everything
-    else decodes as a plain row: repetition penalty, min_tokens, top-n-sigma, a penalty with
-    logprobs or a guide, logprobs with a guide, a non-invariant guide. ``allow_draft`` False
-    (the caller) always wins."""
+    Drafts: no processors, or processors the driver applies one window row at a time
+    (``driver.windowable``: token masks incl. min_tokens / top-n-sigma, logit bias, repetition
+    penalty, one frequency / presence penalty), without logprobs; DFlash additionally logprobs
+    alone (reporting only) and any invariant guide with windowable processors. Plain rows:
+    logprobs with a processor or a guide, a non-invariant guide, XTC sampling (no keyed draw),
+    guides and logprobs on MTP. ``allow_draft`` False (the caller) always wins."""
     from .constrained_spec import driver_guide
-    from .round_driver.driver import draft_penalty, static_mask_only
+    from .round_driver.driver import windowable
 
     processors = list(processors or [])
-    if not allow_draft:
+    if not allow_draft or xtc:
         return False
     if guide is None and not logprobs:
-        return (
-            not processors
-            or static_mask_only(processors)
-            or bool(draft_penalty(processors))
-        )
+        return not processors or windowable(processors)
     if not dflash_driver:
         return False
     if not all(isinstance(p, Fp32LogitsProcessor) for p in processors):
@@ -915,6 +917,7 @@ class VLMBatchRunner:
             guide,
             dflash_driver=self.driver is not None
             and getattr(self.driver, "dflash", None) is not None,
+            xtc=bool(xtc_probability),
         )
         stats.used_draft = use_draft
         stats.t_submit = time.perf_counter()
