@@ -89,6 +89,22 @@ def invariant_guide(guide, logprobs=False, processors=()) -> bool:
     return _invariant_guide_kind(guide) and not logprobs and not processors
 
 
+def driver_guide(guide, logprobs=False, processors=()) -> bool:
+    """The round driver drafts for this guide: an invariant guide kind (tool-call or
+    response-format, alone or combined), no logprobs, and no processors beyond static
+    token bans / logit bias (``round_driver.driver.static_mask_only``): those are pure per
+    verify row, so a guided drafting row applies them on top of the guide's mask exactly
+    as a plain row does. Penalties, repetition penalty, min_tokens and top-n-sigma stay
+    plain rows (see docs: pb2_plainrows)."""
+    from .round_driver.driver import static_mask_only
+
+    return (
+        _invariant_guide_kind(guide)
+        and not logprobs
+        and (not processors or static_mask_only(processors))
+    )
+
+
 def _invariant_guide_kind(guide) -> bool:
     from .reasoning_gate import ThinkGatedGuide
     from .tool_call_grammar import ToolCallGuide

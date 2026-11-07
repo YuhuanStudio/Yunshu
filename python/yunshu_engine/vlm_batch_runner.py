@@ -272,6 +272,51 @@ def spec_safe_processors(processors) -> bool:
     return True
 
 
+def driver_allow_draft(
+    allow_draft: bool, processors, logprobs: bool, guide, *, dflash_driver: bool
+) -> bool:
+    """Whether a request's row may draft on the round driver (the driver's own ``add`` checks
+    the rest: a sampled row needs the keyed sampler, ``xtc`` has none).
+
+    Drafts: no processors, static token bans / logit bias, or those plus one frequency /
+    presence penalty (both without logprobs, unguided); DFlash additionally logprobs alone
+    (reporting only), and any invariant guide with no processors beyond static ones. Everything
+    else decodes as a plain row: repetition penalty, min_tokens, top-n-sigma, a penalty with
+    logprobs or a guide, logprobs with a guide, a non-invariant guide. ``allow_draft`` False
+    (the caller) always wins."""
+    from .constrained_spec import driver_guide
+    from .round_driver.driver import draft_penalty, static_mask_only
+
+    processors = list(processors or [])
+    if not allow_draft:
+        return False
+    if guide is None and not logprobs:
+        return (
+            not processors
+            or static_mask_only(processors)
+            or bool(draft_penalty(processors))
+        )
+    if not dflash_driver:
+        return False
+    if not all(isinstance(p, Fp32LogitsProcessor) for p in processors):
+        # reporting alone adds an Fp32 processor; anything else must be a static one
+        rest = [p for p in processors if not isinstance(p, Fp32LogitsProcessor)]
+        return bool(guide is not None) and driver_guide(guide, logprobs, rest)
+    return guide is None or driver_guide(guide, logprobs, [])
+
+
+def guided_stock_lane(
+    use_draft: bool, alone: bool, lane_free: bool, driver_takes: bool, cache_plan
+) -> bool:
+    """A guided request drafts on the stock speculative lane (as on main) when it is alone and
+    the lane is free and the round driver does not take it. A request with an explicit cache
+    plan (Anthropic ``cache_control``, rendered prompt-cache endpoints) is never the driver's:
+    it runs the stock runner, so its lane stays available."""
+    return bool(
+        use_draft and alone and lane_free and not (driver_takes and cache_plan is None)
+    )
+
+
 def static_masks_only(processors) -> bool:
     """True when every processor is a static ban (a checkpoint ``suppress_tokens`` list or
     ``ignore_eos``) -- vacuously true for none. Such a mask never needs the token history, so
@@ -294,6 +339,12 @@ class LogitBiasProcessor:
     """
 
     context_free = True
+    # the bias is a constant per id: a speculative window applies it to every row
+    # (``pure_at``), as a plain row does, so a row that carries it still drafts
+    is_static = True
+
+    def pure_at(self, generated: int, logits: mx.array) -> mx.array:
+        return self(None, logits)
 
     def __init__(self, biases: dict[int, float]):
         self._biases = {int(k): float(v) for k, v in biases.items()}
@@ -312,7 +363,7 @@ class LogitBiasProcessor:
             )
         if self._scatter is None:
             return logits
-        return logits.at[:, self._scatter[0]].add(self._scatter[1])
+        return logits.at[..., self._scatter[0]].add(self._scatter[1])
 
 
 def build_penalty_processors(
@@ -857,29 +908,13 @@ class VLMBatchRunner:
             budget=budget,
             first_delivery=first_delivery,
         )
-        from .constrained_spec import invariant_guide
-
-        # The DFlash driver accepts reporting and invariant tool-call guides;
-        # other processors retain their established path. Sampled rows draw
-        # with the position-keyed sampler, so a draft is accepted exactly when serial
-        # sampling would have produced it.
-        from .round_driver.driver import draft_penalty
-
-        job.allow_draft = bool(
-            allow_draft
-            and (
-                (
-                    (static_masks_only(processors) or draft_penalty(processors))
-                    and not logprobs
-                    and guide is None
-                )
-                or (
-                    self.driver is not None
-                    and getattr(self.driver, "dflash", None) is not None
-                    and all(isinstance(p, Fp32LogitsProcessor) for p in processors)
-                    and (guide is None or invariant_guide(guide, logprobs, processors))
-                )
-            )
+        job.allow_draft = driver_allow_draft(
+            allow_draft,
+            processors,
+            logprobs,
+            guide,
+            dflash_driver=self.driver is not None
+            and getattr(self.driver, "dflash", None) is not None,
         )
         stats.used_draft = use_draft
         stats.t_submit = time.perf_counter()
@@ -1147,9 +1182,9 @@ class VLMBatchRunner:
         the call's rows are masked); any other guide runs as a ToolCallProcessor row."""
         if getattr(self.driver, "dflash", None) is None or not self.driver.can_draft:
             return False
-        from .constrained_spec import invariant_guide
+        from .constrained_spec import driver_guide
 
-        return job.guide is not None and invariant_guide(
+        return job.guide is not None and driver_guide(
             job.guide, job.logprobs, job.processors
         )
 
@@ -1187,11 +1222,12 @@ class VLMBatchRunner:
                 and job.cache_plan is None
                 and self._driver_guide(job)
             )
-            lane = (
-                job.use_draft
-                and alone
-                and self._spec is None
-                and not self._driver_takes(job, alone)
+            lane = guided_stock_lane(
+                job.use_draft,
+                alone,
+                self._spec is None,
+                self._driver_takes(job, alone),
+                job.cache_plan,
             )
             if not lane and not driver_guide:
                 job.use_draft = job.allow_draft = False
