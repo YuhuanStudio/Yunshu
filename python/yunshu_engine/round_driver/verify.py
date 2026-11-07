@@ -158,8 +158,13 @@ def native_chain_forward(lm, tokens, caches):
     Dense projections and routed/shared experts see all real tokens; PLE,
     QSA and GDN state remain owned by each request. No 27B shape assumptions.
     """
-    from mlx_vlm.models.qwen4_exp.language import Qwen4ExpBatchInvariantForward
     from mlx_vlm.speculative.cache_state import start_speculative_cache
+
+    from ..qwen4_family import qwen4_first_module
+
+    Qwen4ExpBatchInvariantForward = qwen4_first_module(
+        "language"
+    ).Qwen4ExpBatchInvariantForward
 
     if not tokens or len(tokens) != len(caches):
         raise ValueError("native chain requires matching nonempty tokens and caches")

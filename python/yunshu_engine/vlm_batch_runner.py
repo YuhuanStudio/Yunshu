@@ -1195,8 +1195,13 @@ class VLMBatchRunner:
         model, one row or many, speculation on or off. Rows it cannot draft for
         (processors, constraints, non-invariant guides) still decode in it, one token a
         round through their own processors. Media prompts ride in it as prompt embeddings
-        plus mRoPE positions and a per-row decode offset (``_media_request``)."""
-        return self.driver is not None
+        plus mRoPE positions and a per-row decode offset (``_media_request``), except on Flash-Next,
+        whose image prompts keep the stock runner until the driver packs them (PARITY row 13)."""
+        if self.driver is None:
+            return False
+        return not (
+            job.prompt_kwargs is not None and getattr(self.driver, "flash", False)
+        )
 
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state

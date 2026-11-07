@@ -328,3 +328,23 @@ def test_flash_row_with_processors_and_a_guide_free_request_matches_solo(tiny):
     both = go([PROMPTS[0], PROMPTS[2]])
     assert both[0] == alone and len(alone) == 8
     assert not set(alone) & {5, 6, 7}
+
+
+def test_flash_next_media_prompts_keep_the_stock_runner():
+    from yunshu_engine import vlm_batch_runner as vbr
+
+    def runner(flash):
+        r = object.__new__(vbr.VLMBatchRunner)
+        r.driver = SimpleNamespace(flash=flash)
+        return r
+
+    text = SimpleNamespace(prompt_kwargs=None)
+    media = SimpleNamespace(prompt_kwargs={"pixel_values": 1})
+    assert runner(True)._driver_takes(text)
+    assert not runner(True)._driver_takes(
+        media
+    )  # the driver has no Flash-Next media input yet
+    assert runner(False)._driver_takes(media)  # Qwen3.5 packs media itself
+    stock = object.__new__(vbr.VLMBatchRunner)
+    stock.driver = None
+    assert not stock._driver_takes(text)
