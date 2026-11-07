@@ -1171,8 +1171,6 @@ class RoundDriver:
         # one-layer forward, as on a real step), so only the target forward is skipped.
         if row.finished or not replay.eligible(it.start, it.end, len(ids)):
             return None
-        if self.flash:
-            return None  # the stored block carries KV rows only, not the QSA indexer keys or PLE history
         from .. import dflash_apc_window
 
         return (

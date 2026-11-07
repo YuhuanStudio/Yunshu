@@ -681,3 +681,72 @@ def test_dflash_chain_depth_follows_the_cost_aware_budget(tiny, dflash):
     )  # the old lane's cap of seven drafts
     assert batch._budget(row) is budget
     assert batch.positions == dflash.config.block_size - 1
+
+
+# ── tail replay carries the QSA indexer and PLE state ───────────────────────────────────────────
+@pytest.mark.parametrize("mode", ["mtp", "plain", "dflash"])
+def test_tail_replay_gives_the_stream_of_a_real_forward(tiny, dflash, mode):
+    from yunshu_engine.round_driver import replay
+
+    lm, head = tiny
+    replay.clear()
+    kinds = {"mtp": dict(head=head), "plain": {}, "dflash": dict(dflash=dflash)}[mode]
+    ids = PROMPTS[0]  # 18 tokens on a grid of 8: a 2-row final block (replay-eligible)
+
+    def go():
+        driver = RoundDriver(
+            SimpleNamespace(language_model=lm),
+            drafter=kinds.get("head"),
+            dflash_drafter=kinds.get("dflash"),
+            plain_verify=not kinds,
+            stop_tokens=set(),
+            chunk=CHUNK,
+            max_draft=1,
+        )
+        driver.idle_budget = (
+            CHUNK  # one span a step, as a 2048-token grid span fills the real budget
+        )
+        out = []
+        driver.add(Request(ids, 10, handle=0))
+        for _ in range(200):
+            if not driver.busy():
+                break
+            out += [int(e.token) for e in driver.step() if e.token is not None]
+        return out
+
+    first = go()
+    assert replay.stats()["stored"] >= 1
+    second = go()
+    assert replay.stats()["replayed"] >= 1, "the repeat did not replay its tail"
+    assert second == first
+    replay.clear()
+
+
+def test_replay_entry_keeps_the_indexer_rows(tiny):
+    from yunshu_engine.round_driver import replay
+
+    lm, _ = tiny
+    cache = lm.make_cache()
+    lm(mx.array([PROMPTS[0][:12]]), cache=cache)
+    lm(mx.array([PROMPTS[0][12:18]]), cache=cache)
+    mx.eval([c.state for c in cache])
+    replay.clear()
+    replay.store("k", cache, 12, 18, mx.zeros((6, 4)), [])
+    entry = replay._STORE["k"]
+    tags = [tag for tag, _ in entry.slots]
+    assert "q" in tags and "a" in tags
+    fresh = lm.make_cache()
+    lm(mx.array([PROMPTS[0][:12]]), cache=fresh)
+    mx.eval([c.state for c in fresh])
+    assert replay.lookup("k", fresh, 12, 18) is entry
+    replay.restore(entry, "k", fresh)
+    for a, b in zip(cache, fresh, strict=True):
+        if getattr(a, "index_keys", None) is not None:
+            assert mx.array_equal(a.index_keys, b.index_keys).item()
+            assert mx.array_equal(a.keys[..., :18, :], b.keys[..., :18, :]).item()
+        elif hasattr(a, "cache"):
+            for x, y in zip(a.cache, b.cache, strict=True):
+                assert (x is None) == (y is None)
+                if x is not None:
+                    assert mx.array_equal(x, y).item()
+    replay.clear()

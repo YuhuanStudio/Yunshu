@@ -31,7 +31,7 @@ _STATS = {"stored": 0, "replayed": 0, "evicted": 0}
 class Entry:
     base: int
     rows: int
-    slots: list  # per layer ("a", state dict) or ("k", (keys, values))
+    slots: list  # per layer ("a", state dict), ("k", (keys, values)) or ("q", (keys, values, indexer))
     hidden: mx.array  # final-norm hidden rows [rows, D]
     captures: list  # drafter capture rows per layer ([rows, D] each), may be empty
     nbytes: int
@@ -59,6 +59,11 @@ def _is_kv(c: Any) -> bool:
     return getattr(c, "keys", None) is not None
 
 
+def _has_indexer(c: Any) -> bool:
+    """A Flash-Next QSA cache: the indexer's raw keys and positions ride with the K/V rows."""
+    return getattr(c, "index_keys", None) is not None
+
+
 def eligible(start: int, end: int, n: int) -> bool:
     """The span is the prompt's final block of at most ``TAIL_MAX`` rows (the span
     plan makes it the same span for a cold run and a restored one)."""
@@ -74,8 +79,12 @@ def lookup(key, cache: list, start: int, end: int) -> Entry | None:
     ):
         return None
     for c, (tag, payload) in zip(cache, entry.slots, strict=True):
-        if tag == "k":
-            if not _is_kv(c) or int(c.offset) != start:
+        if tag in ("k", "q"):
+            if (
+                not _is_kv(c)
+                or int(c.offset) != start
+                or (tag == "q") != _has_indexer(c)
+            ):
                 return None
         elif _is_kv(c) or len(payload["cache"]) != len(c.cache):
             return None
@@ -87,6 +96,13 @@ def restore(entry: Entry, key, cache: list) -> None:
     for c, (tag, payload) in zip(cache, entry.slots, strict=True):
         if tag == "k":
             c.update_and_fetch(*payload)
+        elif tag == "q":
+            keys, values, indexer = payload
+            c.update_and_fetch(keys, values)
+            c.update_indexer(indexer["keys"], indexer["positions"])
+            # the block summaries after the stored forward (None: rebuilt from the raw keys, as after a trim)
+            c.index_block_keys = _owned(indexer["blocks"])
+            c.index_block_ratio = indexer["ratio"]
         else:
             c.__dict__.update(payload)
             c.cache = [_owned(a) for a in payload["cache"]]
@@ -108,8 +124,22 @@ def store(key, cache: list, start: int, end: int, hidden, captures) -> None:
                 _owned(c.keys[..., start:end, :]),
                 _owned(c.values[..., start:end, :]),
             )
-            slots.append(("k", rows))
-            copies.extend(rows)
+            if _has_indexer(c):
+                if int(c.index_keys.shape[1]) != end:
+                    return
+                indexer = {
+                    "keys": _owned(c.index_keys[:, start:end]),
+                    "positions": _owned(c.index_position_ids[..., start:end]),
+                    "blocks": _owned(c.index_block_keys),
+                    "ratio": c.index_block_ratio,
+                }
+                extra = [a for a in indexer.values() if isinstance(a, mx.array)]
+                slots.append(("q", (*rows, indexer)))
+                copies.extend([*rows, *extra])
+                nbytes += sum(int(a.nbytes) for a in extra)
+            else:
+                slots.append(("k", rows))
+                copies.extend(rows)
             nbytes += int(rows[0].nbytes) + int(rows[1].nbytes)
         elif hasattr(c, "cache"):
             meta = dict(c.__dict__)

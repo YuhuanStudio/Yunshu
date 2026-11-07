@@ -158,7 +158,7 @@ cancel and events; the model side differs:
   and each row commits through upstream's speculative cache transactions. Each row gets the bits of the same window verified alone,
   so solo == concurrent and spec on == spec off;
 - prefill is the model's own forward per span; spans are the absolute 2048 grid plus the row's checkpoints (Flash-Next prefill is not
-  split-invariant), so an APC hit runs the spans a cold prompt did. The reply-tail replay is off (it stores KV rows only);
+  split-invariant), so an APC hit runs the spans a cold prompt did. The prompt-tail replay carries the QSA indexer rows and block summaries and the PLE / GDN state with the KV rows;
 - DFlash2 rows (the default when a matching drafter is on disk) keep the Qwen3.5 batch's per-row context rings and batched drafter forward, draft a chain of the drafter's best candidates per round (fair share of a 16-position pack) and verify it through the same packed step with the five-layer feature capture;
 - image prompts ride as prompt embeddings + mRoPE positions with a per-row decode offset; explicit cache plans (cache seams) steer the
   row's own APC coordinator (every family); a finished MTP-head row stores its head KV beside the target's for the next turn;
