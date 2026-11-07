@@ -55,8 +55,9 @@ def test_part_decode_rejects_short_reply(tfb, monkeypatch, tmp_path):
         sent.append(body["max_tokens"])
         return {"finish": "length", "ct": 64 if len(sent) < 2 else 63, "_text": "t"}
 
+    monkeypatch.setattr(tfb, "prompt_file_sha256", lambda *_a, **_k: "0" * 64)
     monkeypatch.setattr(tfb, "send", send)
-    srv = type("S", (), {"url": "u", "model": "m"})()
+    srv = type("S", (), {"url": "u", "model": "m", "log": "server.log"})()
     with (
         open(tmp_path / "o.jsonl", "w") as out,
         pytest.raises(RuntimeError, match="63"),
@@ -106,7 +107,7 @@ def test_part_needle_scores_answers(tfb, monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr(tfb, "send", send)
-    srv = type("S", (), {"url": "u", "model": "m"})()
+    srv = type("S", (), {"url": "u", "model": "m", "log": "server.log"})()
     import json
 
     with open(tmp_path / "o.jsonl", "w+") as out:

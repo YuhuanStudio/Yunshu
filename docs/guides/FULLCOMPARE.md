@@ -291,3 +291,20 @@ marks every `test_fullcmp_*` and `test_tfbench_fullcmp*` file). The `fullcmp_e2e
 real tfbench against the stub server) are the harness's own preflight: run them before every comparison with
 `python -m pytest -m fullcmp_e2e -q -n 8 --dist loadfile tests/unit` (on the M3 via `scripts/dev/m3run` when the M5
 is measuring). Fast set only: `python -m pytest -m fullcmp_quick -q tests/unit`. Run the harness tests under `nice -n 15`.
+
+### 7.1 Tests that need the benchmark machine (skip-if-absent)
+
+A CI runner or a laptop has none of the real run's state (`census.json`, `yunshu_pin.json`, `yunshu_pb2_pin.json`,
+the manifest, the pinned binaries and venvs, the prompt corpus), and `scripts/dev/ci-local` hides the build volume on
+purpose. Two sets of tests validate that real state and cannot be hermetic:
+
+- every test of the `test_fullcmp_e2e*` chains, and
+- the tests listed in `_NEEDS_BENCH_MACHINE` in `tests/unit/conftest.py` (the pin, engine-table, audit-manifest,
+  submit-argv and driver dry-run checks against the real census and pins).
+
+`conftest.py` skips them with the reason "needs the benchmark machine's fullcmp-1103 run dir" when
+`/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103/census.json` is not a file. **This is part of the
+harness preflight:** on the benchmark machine the run dir exists, so the same command must report none of these tests
+skipped. Run `python -m pytest -m fullcmp_quick -q -rs tests/unit | grep "benchmark machine"` before a comparison; any
+output line means the run dir is missing or unreadable and the preflight has failed. Every other harness test is
+hermetic (tmp fixtures, committed server-log excerpts under `tests/unit/fixtures/`, stand-in prompt corpus).

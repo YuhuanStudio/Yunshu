@@ -410,7 +410,9 @@ def test_sampler_writes_power_rows_from_fake_macmon_child(tmp_path, monkeypatch)
     monkeypatch.setattr(
         tm,
         "tool_records",
-        lambda: {n: {"version": "test", "sha256_match": True} for n in ("macmon", "mactop")},
+        lambda: {
+            n: {"version": "test", "sha256_match": True} for n in ("macmon", "mactop")
+        },
     )
     out = tmp_path / "t.jsonl"
     s = tm.Sampler(os.getpid(), None, str(out), probes=("proc", POWER))

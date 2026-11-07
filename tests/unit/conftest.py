@@ -229,15 +229,88 @@ def _yunshu_loggers_inherit_levels():
 _FULLCMP_QUICK_FILES = ("test_fullcmp_", "test_tfbench_fullcmp")
 
 
+# Tests that validate the REAL full-comparison run (census.json, pin files, manifest, installed
+# binaries and venvs under the build volume). They cannot run anywhere but the benchmark machine
+# (a CI runner or a laptop has none of it), so they skip when the run dir is absent. The e2e chains
+# need it too (every file named test_fullcmp_e2e*). Listed in docs/guides/FULLCOMPARE.md section 7:
+# on the benchmark machine none of these may be skipped (the harness preflight counts the skips).
+_BENCH_CENSUS = (
+    "/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103/census.json"
+)
+_NEEDS_BENCH_MACHINE = frozenset(
+    "test_fullcmp_audit_manifest.py::test_build_manifest_cells_pins_and_phases",
+    "test_fullcmp_audit_manifest.py::test_duplicate_cell_stops_the_build",
+    "test_fullcmp_audit_manifest.py::test_rep_decision_per_cell_reaches_the_audit_rule",
+    "test_fullcmp_batch_smoke_reps.py::test_smoke_batch_is_a_valid_batch_choice_and_dry_runs",
+    "test_fullcmp_batch_smoke_reps.py::test_unknown_engine_id_is_refused_not_silently_empty",
+    "test_fullcmp_engine_tables.py::test_check_all_returns_every_miss_at_once",
+    "test_fullcmp_engine_tables.py::test_every_manifest_engine_has_a_complete_pin",
+    "test_fullcmp_engine_tables.py::test_every_manifest_engine_resolves_every_table",
+    "test_fullcmp_engine_tables.py::test_runner_refuses_on_a_miss_before_any_job",
+    "test_fullcmp_engine_tables.py::test_unresolved_is_a_note_not_a_miss",
+    "test_fullcmp_pin_per_engine.py::test_cell_env_carries_the_engines_own_tree",
+    "test_fullcmp_pin_per_engine.py::test_dev0_cell_still_validates_against_dev0",
+    "test_fullcmp_pin_per_engine.py::test_dev0_tree_is_refused_for_the_pb2_engine",
+    "test_fullcmp_pin_per_engine.py::test_engine_pin_routes_the_env_per_engine",
+    "test_fullcmp_pin_per_engine.py::test_pb2_cell_validates_against_the_pb2_tree_and_venv",
+    "test_fullcmp_pins.py::test_every_census_engine_has_a_pin",
+    "test_fullcmp_pins.py::test_install_paths_carry_the_pinned_version",
+    "test_fullcmp_pins.py::test_missing_binary_leaves_the_digest_empty",
+    "test_fullcmp_pins.py::test_pinned_binary_is_the_launched_file_not_the_archive",
+    "test_fullcmp_pins.py::test_unestablished_engaged_modes_fail_closed",
+    "test_fullcmp_pins.py::test_unsupported_engines_have_no_digest_and_say_why",
+    "test_fullcmp_pins.py::test_yunshu_pin_is_dflash_with_the_engaged_line_and_uv_lock",
+    "test_fullcmp_profile_rep.py::test_audit_manifest_reps_follow_the_rows_not_a_constant",
+    "test_fullcmp_run.py::test_a_cell_flagged_twice_fails_the_batch",
+    "test_fullcmp_run.py::test_a_quiet_flagged_cell_is_superseded_and_rerun_in_its_slot",
+    "test_fullcmp_run.py::test_allow_foreign_overrides_refusal",
+    "test_fullcmp_run.py::test_audit_manifest_carries_census_pins_for_every_engine",
+    "test_fullcmp_run.py::test_audit_manifest_names_the_profile_required_engines",
+    "test_fullcmp_run.py::test_cells_filter_selects_only_matching_cells_and_refuses_an_empty_match",
+    "test_fullcmp_run.py::test_dry_run_touches_no_gpu_or_queue",
+    "test_fullcmp_run.py::test_full_run_queues_rep3_for_flagged_cells_and_fails_on_bad_job",
+    "test_fullcmp_run.py::test_plan_batch_profile_only_has_only_profile_jobs",
+    "test_fullcmp_run.py::test_profile_only_dry_run_prints_only_profile_jobs",
+    "test_fullcmp_run.py::test_profile_only_needs_profile_rep_and_engines",
+    "test_fullcmp_run.py::test_profile_only_run_skips_the_audit_reps_and_requeues",
+    "test_fullcmp_run_quiet.py::test_busy_host_refuses_the_batch_before_anything_is_submitted",
+    "test_fullcmp_snapshot.py::test_driver_main_skips_pre_submit_inside_a_test_run",
+    "test_fullcmp_submit_argv.py::test_driver_audit_manifest_has_a_pin_for_every_batch_engine",
+    "test_fullcmp_submit_argv.py::test_every_b1_submit_argv_passes_gpuq_preflight",
+    "test_fullcmp_submit_argv.py::test_every_cell_carries_the_run_id_and_its_manifest_group",
+    "test_fullcmp_submit_argv.py::test_gate_is_a_step_inside_the_wrapper_not_the_argv",
+    "test_fullcmp_submit_argv.py::test_self_check_is_clean_for_every_b1_job",
+    "test_fullcmp_submit_argv.py::test_submit_argv_never_names_the_main_checkout",
+    "test_fullcmp_yunshu_pb2.py::test_both_yunshu_pins_record_their_package_versions_and_differences_are_footnoted",
+    "test_fullcmp_yunshu_pb2.py::test_package_versions_are_read_from_each_pinned_venv_and_match",
+    "test_fullcmp_yunshu_pb2.py::test_pb2_pin_resolves_with_the_census_and_is_its_own_tree",
+    "test_fullcmp_yunshu_pb2.py::test_preview_has_its_own_pin_file_and_the_dev0_tree_is_refused_for_it",
+)
+
+
+def _bench_machine_present() -> bool:
+    return os.path.isfile(_BENCH_CENSUS)  # False on EPERM/ENOENT, never raises
+
+
 def pytest_collection_modifyitems(config, items):
+    machine = _bench_machine_present()
     for item in items:
         name = os.path.basename(str(item.fspath))
         if not name.startswith(_FULLCMP_QUICK_FILES):
             continue
-        if name.startswith("test_fullcmp_e2e"):
+        is_e2e = name.startswith("test_fullcmp_e2e")
+        if is_e2e:
             item.add_marker(pytest.mark.fullcmp_e2e)
         else:
             item.add_marker(pytest.mark.fullcmp_quick)
+        base = f"{name}::{item.originalname}"
+        if not machine and (is_e2e or base in _NEEDS_BENCH_MACHINE):
+            item.add_marker(
+                pytest.mark.skip(
+                    reason="needs the benchmark machine's fullcmp-1103 run dir "
+                    "(census, pins, manifest); see docs/guides/FULLCOMPARE.md section 7"
+                )
+            )
 
 
 def _loaded_driver_modules():
@@ -287,14 +360,14 @@ _os.environ.setdefault("TFB_PRESUBMIT_SKIP", "1")
 
 
 @pytest.fixture(autouse=True)
-def _fullcmp_driver_sandbox(request, monkeypatch, tmp_path):
+def _fullcmp_driver_sandbox(request, monkeypatch, tmp_path_factory):
     """A test that loads the fullcmp driver never reaches the real GPU queue or the real result roots
     (2026-11-04: a unit test submitted five real jobs). Every loaded driver copy gets tmp paths and a
     fake gpuq that only logs its argv; GPUQ_DIR points at tmp, so the driver's own refusal also holds."""
     drivers = [o for o in _loaded_driver_modules() if hasattr(o, "GPUQ")]
     if not drivers:
         return
-    sandbox = tmp_path / "sandbox"
+    sandbox = tmp_path_factory.mktemp("driver-sandbox")  # not the test's tmp_path
     for d in ("gpuq", "wrap", "raw", "home", "tfout", "audit", "quiet", "preflight"):
         (sandbox / d).mkdir(parents=True, exist_ok=True)
     fake = sandbox / "fake_gpuq.sh"

@@ -27,6 +27,16 @@ TF_BODY = json.dumps(
 )
 
 
+@pytest.fixture(autouse=True)
+def _prompt_corpus(tmp_path_factory, monkeypatch):
+    """The decode cell reads its prompt file from tfbench.WORK/prompts (the benchmark machine's corpus
+    on the build volume): a stand-in file keeps the test about the refusal handling."""
+    work = tmp_path_factory.mktemp("tfwork")
+    (work / "prompts").mkdir()
+    (work / "prompts" / "prose-1024.txt").write_text("a stand-in prompt. " * 40)
+    monkeypatch.setattr(tb, "WORK", work)
+
+
 def _http_error(code, body):
     return urllib.error.HTTPError(
         "http://x/v1/chat/completions", code, "err", {}, io.BytesIO(body.encode())

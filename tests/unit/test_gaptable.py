@@ -130,7 +130,9 @@ def test_concurrent_prompt_exact_size_and_salt(monkeypatch):
 
 
 def test_concurrent_records_all_eight_requests(monkeypatch, tmp_path):
-    monkeypatch.setattr(tb, "concurrent_prompt", lambda i, trial, ctx, variant=0, run=0: str(i))
+    monkeypatch.setattr(
+        tb, "concurrent_prompt", lambda i, trial, ctx, variant=0, run=0: str(i)
+    )
     monkeypatch.setattr(
         tb,
         "send",
@@ -143,8 +145,13 @@ def test_concurrent_records_all_eight_requests(monkeypatch, tmp_path):
             pt=1024,
             sha="a",
             _text="x",
+            total_s=2.0,
+            prompt_ids_sha="p",
+            temperature=0.0,
+            stop=None,
         ),
     )
+    monkeypatch.setattr(tb, "prompt_file_sha256", lambda *_a, **_k: "0" * 64)
     out = tmp_path / "rows.jsonl"
     with out.open("w") as f:
         tb.part_conc(
