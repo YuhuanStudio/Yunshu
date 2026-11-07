@@ -50,6 +50,7 @@ import numpy as np
 
 from .. import hit_stages, keyed_sampling
 from ..cache_prefill import reserve_prompt_kv
+from ..constraint_eos import GrammarDeadEndError
 from ..kernels import preempt
 from ..keyed_sampling import top_k_filter, top_p_filter
 from ..prompt_ids import ids_array
@@ -995,11 +996,17 @@ class RoundDriver:
                 from ..tool_call_grammar import apply_bitmask
 
                 # a window's position j is masked by the guide state after its path: ``plan``
-                mask = (
-                    req.guide.plan(host[1:], n)
-                    if host is not None and n > 1
-                    else req.guide.mask()
-                )
+                try:
+                    mask = (
+                        req.guide.plan(host[1:], n)
+                        if host is not None and n > 1
+                        else req.guide.mask()
+                    )
+                except GrammarDeadEndError as exc:
+                    # this row's grammar has no continuation: record it on the guide (the runner fails
+                    # this one request: ``_row_fault``) and keep the step going for the other rows
+                    req.guide.fault = exc
+                    mask = None
                 if mask is not None:
                     # This row's slice only; other packed distributions stay intact.
                     masked = apply_bitmask(lg[off : off + n], mask)

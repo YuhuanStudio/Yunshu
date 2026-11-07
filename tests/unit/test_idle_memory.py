@@ -92,17 +92,14 @@ def test_stages_run_on_the_submitted_executor_not_the_timer_thread():
 
 
 def _runner(monkeypatch):
-    import importlib
     from concurrent.futures import ThreadPoolExecutor
     from types import SimpleNamespace
 
-    from tests.unit.test_vlm_runner_batching import FakeGen
+    from tests.unit.test_vlm_runner_batching import FakeDriver
     from yunshu_engine import vlm_batch_runner as vbr
 
-    ar = importlib.import_module("mlx_vlm.generate.ar")
-    FakeGen.instances = []
-    monkeypatch.setattr(ar, "BatchGenerator", FakeGen)
     rn = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), processor=None)
+    rn.driver = FakeDriver()
     rn._executor = ThreadPoolExecutor(max_workers=1)
     return rn
 

@@ -511,6 +511,7 @@ def test_decode_rows_share_one_batched_call_and_a_lone_row_keeps_its_own_cache()
 def test_the_batch_shrinks_when_a_row_leaves_and_the_other_keeps_its_tokens():
     lm = TinyLM()
     short = solo(lm, PROMPTS[0], 12)
+    LOG.clear()
     out = run(
         make(lm),
         [
@@ -556,3 +557,39 @@ def test_a_batch_cache_gives_a_rows_own_cache_back_and_leave_filters_the_others(
     assert batch.rows == [b] and batch.cache[0].keys.shape[0] == 1
     batch.leave([b])
     assert batch.cache is None and batch.rows == []
+
+
+class _DyingGuide:
+    """A guide whose grammar has no continuation after ``alive`` tokens."""
+
+    constrained = True
+
+    def __init__(self, alive):
+        self.alive, self.fed, self.fault = alive, 0, None
+
+    def mask(self):
+        from yunshu_engine.constraint_eos import GrammarDeadEndError
+
+        if self.fed >= self.alive:
+            raise GrammarDeadEndError("Grammar constraint has no valid next token")
+        return None
+
+    def arms(self, token):
+        return False
+
+    def feed(self, token):
+        self.fed += 1
+
+
+def test_a_grammar_dead_end_marks_only_that_row_and_the_step_goes_on():
+    lm = TinyLM()
+    alone = solo(lm, PROMPTS[1], 8)
+    guide = _DyingGuide(alive=2)
+    d = make(lm)
+    reqs = [
+        request(lm, PROMPTS[0], 8, handle="bad", guide=guide),
+        request(lm, PROMPTS[1], 8, handle="good"),
+    ]
+    out = run(d, reqs)  # must not raise
+    assert isinstance(guide.fault, Exception)
+    assert tokens(out, "good") == alone

@@ -155,9 +155,11 @@ def test_round_driver_last_finished_row_defers_its_reply_cache():
         finished=True,
         slot=None,
         hslot=None,
+        drafting=False,
     )
     runner = _runner()
     drv = RoundDriver.__new__(RoundDriver)
+    drv.generic = False
     drv.rows, drv.head, drv.dflash = [], None, None
     drv.finish_hook = runner._driver_store_decode
     drv._release([row])
@@ -183,7 +185,7 @@ def test_driver_standing_handoff_preserves_row_salt_and_cache_ownership(monkeypa
     from yunshu_engine import dflash_apc_window
     from yunshu_engine.kernels import buffer_cache
 
-    group, coord = _group(6)
+    group, coord, _caches = _group(6)
     group.driver_salt = 5
     standing = []
     coord.offer_standing = lambda tokens, rows, **kw: standing.append(

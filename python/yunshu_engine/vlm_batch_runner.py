@@ -202,7 +202,10 @@ class ConstraintProcessor:
 
 def _row_fault(job: Any) -> BaseException | None:
     """The grammar dead end an isolated processor recorded for this row, if any."""
-    for proc in getattr(job, "processors", None) or ():
+    for proc in (
+        *(getattr(job, "processors", None) or ()),
+        getattr(job, "guide", None),
+    ):
         fault = getattr(proc, "fault", None)
         if isinstance(fault, BaseException):
             return fault
@@ -1162,7 +1165,9 @@ class VLMBatchRunner:
         hit_stages.add("add", time.perf_counter() - t_add)
         hit_stages.mark("add_end")
         self._vocab_owner = driver
-        job.start = job.stats.t_admit = job.stats.t_prefill_start = time.perf_counter()
+        # ``t_admit`` stays what ``_admit`` set before the driver looked the prefix up (the cache
+        # provenance record and the prefill-speed observation are measured from it)
+        job.start = job.stats.t_prefill_start = time.perf_counter()
         job.stats.tracks_prefill_start = True
         hit = int(hit or 0)
         job.stats.cached_tokens = hit

@@ -2123,7 +2123,8 @@
     "python/yunshu_engine/kernels/omlx_q4/qwen35_verify_qmm.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
     "python/yunshu_engine/kernels/omlx_q4/row_exact_qmv.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
     "python/yunshu_engine/kernels/omlx_q4/__init__.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
-    "python/yunshu_engine/kernels/qwen4_qsa": "Metal source and launch wrapper of the padded batched sparse QSA attention (the former stock-path batched decode, deleted with the stock Flash-Next path); no caller: kept for the batched-QSA follow-up (bqsa-1028) with its oracle test."
+    "python/yunshu_engine/kernels/qwen4_qsa": "Metal source and launch wrapper of the padded batched sparse QSA attention (the former stock-path batched decode, deleted with the stock Flash-Next path); no caller: kept for the batched-QSA follow-up (bqsa-1028) with its oracle test.",
+    "python/yunshu_engine/kernels/gpu_probe.py": "GPU capability probes (device, tensor-op support) asked of the GPU, not the caller's default device"
   },
   "settings": {
     "YUNSHU_MTP": "draft_family_coverage",

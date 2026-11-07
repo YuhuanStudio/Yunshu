@@ -21,9 +21,17 @@ class ProcessingDriver(FakeDriver):
 
     def step(self):
         logits = mx.zeros((1, 4))
+        from yunshu_engine.constraint_eos import GrammarDeadEndError
+
         for row in self.rows:
             for proc in row[0].processors:
                 proc(mx.array([1]), logits)
+            guide = row[0].guide
+            if guide is not None:  # what RoundDriver._draw does with a guide's mask
+                try:
+                    guide.mask()
+                except GrammarDeadEndError as exc:
+                    guide.fault = exc
         return super().step()
 
 
