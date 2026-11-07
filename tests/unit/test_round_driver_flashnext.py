@@ -324,24 +324,16 @@ def test_flash_row_with_processors_and_a_guide_free_request_matches_solo(tiny):
     assert not set(alone) & {5, 6, 7}
 
 
-def test_flash_next_media_prompts_keep_the_stock_runner():
+def test_flash_next_media_prompts_take_the_driver():
     from yunshu_engine import vlm_batch_runner as vbr
 
-    def runner(flash):
-        r = object.__new__(vbr.VLMBatchRunner)
-        r.driver = SimpleNamespace(flash=flash)
-        return r
-
-    text = SimpleNamespace(prompt_kwargs=None)
-    media = SimpleNamespace(prompt_kwargs={"pixel_values": 1})
-    assert runner(True)._driver_takes(text)
-    assert not runner(True)._driver_takes(
-        media
-    )  # the driver has no Flash-Next media input yet
-    assert runner(False)._driver_takes(media)  # Qwen3.5 packs media itself
+    r = object.__new__(vbr.VLMBatchRunner)
+    r.driver = SimpleNamespace(flash=True)
+    assert r._driver_takes(SimpleNamespace(prompt_kwargs=None))
+    assert r._driver_takes(SimpleNamespace(prompt_kwargs={"pixel_values": 1}))
     stock = object.__new__(vbr.VLMBatchRunner)
     stock.driver = None
-    assert not stock._driver_takes(text)
+    assert not stock._driver_takes(SimpleNamespace(prompt_kwargs=None))
 
 
 # ── DFlash2 on Flash-Next rows ─────────────────────────────────────────────────────────────────
@@ -539,3 +531,83 @@ def test_cache_plan_requests_take_the_driver_and_salt_their_own_namespace():
     assert r._driver_takes(planned)
     assert r._driver_extra_hash(plain) == 7
     assert r._driver_extra_hash(planned) not in (0, 7)
+
+
+# ── media prompts (prompt embeddings + mRoPE positions + a per-row decode offset) ───────────────
+def _media_request(lm, ids, shift=0, handle=0, max_tokens=10):
+    emb = lm.model.embed_tokens(mx.array(ids, dtype=mx.int32))
+    pos = mx.broadcast_to(
+        (mx.arange(len(ids), dtype=mx.int32) + shift)[None], (3, len(ids))
+    )
+    return Request(
+        ids, max_tokens, handle=handle, embeds=emb, position_ids=pos, rope_delta=shift
+    )
+
+
+def run_requests(lm, requests, *, head=None, dflash=None):
+    driver = RoundDriver(
+        SimpleNamespace(language_model=lm),
+        drafter=head,
+        dflash_drafter=dflash,
+        plain_verify=head is None and dflash is None,
+        stop_tokens=set(),
+        chunk=CHUNK,
+        max_draft=1,
+    )
+    out = {r.handle: [] for r in requests}
+    for r in requests:
+        driver.add(r)
+    for _ in range(400):
+        if not driver.busy():
+            break
+        for e in driver.step():
+            if e.token is not None:
+                out[e.handle].append(int(e.token))
+    assert not driver.busy()
+    return out, driver
+
+
+def test_media_rows_equal_text_rows_at_zero_offset_and_solo_equals_concurrent(tiny):
+    lm, head = tiny
+    ids = PROMPTS[0]
+    text = run(lm, [ids])[0][0]
+    media = run_requests(lm, [_media_request(lm, ids)])[0][0]
+    assert (
+        media == text
+    )  # embeddings of the tokens with sequential positions are the text prompt
+    solo = run_requests(lm, [_media_request(lm, PROMPTS[2], shift=5, handle=7)])[0][7]
+    both, _ = run_requests(
+        lm,
+        [
+            _media_request(lm, PROMPTS[2], shift=5, handle=7),
+            Request(PROMPTS[1], 10, handle=8),
+            _media_request(lm, ids, shift=3, handle=9),
+        ],
+    )
+    assert both[7] == solo
+    solo9 = run_requests(lm, [_media_request(lm, ids, shift=3, handle=9)])[0][9]
+    assert both[9] == solo9
+    assert both[8] == run(lm, [PROMPTS[1]])[0][0]
+
+
+def test_media_rows_draft_and_keep_their_stream(tiny):
+    lm, head = tiny
+    request = lambda: _media_request(lm, PROMPTS[2], shift=5, handle=3)  # noqa: E731
+    plain = run_requests(lm, [request()])[0][3]
+    spec, driver = run_requests(lm, [request()], head=head)
+    assert spec[3] == plain and driver.drafted > 0
+
+
+def test_media_rows_on_dflash_keep_their_stream_beside_text_rows(tiny, dflash):
+    lm, _ = tiny
+    plain = run_requests(lm, [_media_request(lm, PROMPTS[2], shift=5, handle=3)])[0][3]
+    got, driver = run_requests(
+        lm,
+        [
+            _media_request(lm, PROMPTS[2], shift=5, handle=3),
+            Request(PROMPTS[1], 10, handle=4),
+        ],
+        dflash=dflash,
+    )
+    assert got[3] == plain
+    assert got[4] == run(lm, [PROMPTS[1]])[0][0]

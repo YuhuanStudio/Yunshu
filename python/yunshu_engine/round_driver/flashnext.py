@@ -37,6 +37,12 @@ MAX_CHAIN = 2  # positions per row in one packed step: the pending token and one
 PACK_ROWS = 16  # rows of one fused-kernel pack (kernels/tf_flash_next MAX_ROWS)
 
 
+def media_of(row: Any) -> tuple[int, bool]:
+    """``(rope_delta, multimodal)`` of a driver row: (0, False) for a text prompt."""
+    req = row.req
+    return int(req.rope_delta), req.position_ids is not None
+
+
 def is_flash_next(language_model: Any) -> bool:
     """The driver's target is a Qwen4 (Flash-Next) language model."""
     args = getattr(language_model, "args", None)
@@ -67,9 +73,16 @@ def prefill(
     The model's own call: a 1-token span takes the batch-invariant decode forward, longer spans the
     prefill forward (the sparse QSA prefill kernels, chunked GDN), exactly as the speculative lane
     and the batch generator prefilled it. ``skip_logits``: only the last prompt row's logits are read."""
-    if seg.embeds is not None or seg.position_ids is not None:
-        raise ValueError("Flash-Next has no media input on the round driver")
     inputs = seg.tokens[None].astype(mx.int32)
+    media = {}
+    if seg.embeds is not None:
+        media["inputs_embeds"] = seg.embeds[None]
+    if seg.position_ids is not None:
+        media["position_ids"] = seg.position_ids[:, None, :]
+    if media:
+        return _prefill_media(
+            language_model, inputs, seg.cache, media, capture_ids, captured
+        )
     if captured is not None and capture_ids:
         # DFlash2 features: the stream mean of the completed layers (``qwen4_dflash``)
         from .. import qwen4_dflash
@@ -105,6 +118,49 @@ def prefill(
     return out.hidden_states[0][0]
 
 
+def _prefill_media(
+    lm: Any, inputs, cache, media: dict, capture_ids, captured
+) -> mx.array:
+    """A media prompt's span (prompt embeddings, mRoPE positions) on the row's caches. The model's inner
+    call, not ``lm(...)``: that one reads the process-global rope state of the last media prompt, while
+    these positions belong to this row."""
+    ids = list(capture_ids) if captured is not None else []
+    one = inputs.shape[1] == 1
+    if one and ids:
+        from .. import qwen4_dflash
+
+        out, hidden = qwen4_dflash.capture_forward(
+            lm, inputs, cache, ids, skip_logits=True, **media
+        )
+        captured.extend(x[0] for x in out.hidden_states)
+        return hidden[0]
+    if one:
+        out = lm._batch_invariant_decode(inputs, cache=cache, skip_logits=True, **media)
+        return out.hidden_states[0][0]
+    sink: list = []
+    token = None
+    if ids:
+        from .. import qwen4_dflash
+
+        feats: list = []
+        layers = lm.model.layers
+        token = qwen4_dflash._PREFILL_CAPTURE.set(
+            ({id(layers[i]) for i in ids}, feats, lm.args.hc_count, lm.args.hidden_size)
+        )
+    try:
+        lm.model(inputs, cache=cache, capture_layer_ids=[], hidden_sink=sink, **media)
+    finally:
+        if token is not None:
+            from .. import qwen4_dflash
+
+            qwen4_dflash._PREFILL_CAPTURE.reset(token)
+    if ids:
+        if len(feats) != len(set(ids)):
+            raise ValueError("Qwen4 DFlash capture layer is outside the target")
+        captured.extend(x[0] for x in feats)
+    return sink[0][0]
+
+
 def logits(language_model: Any, hidden: mx.array) -> mx.array:
     """Logits ``[R, V]`` of HC states ``[R, hc * D]``: the final mixer, then the row-invariant head."""
     return language_model.speculative_logits_from_hidden(hidden[None])[0]
@@ -129,18 +185,25 @@ def _fused_ready(lm: Any, dtype: Any) -> bool:
     )
 
 
-def _prepare(lm: Any, tokens: list, caches: list):
-    """Per row: the position ids and a speculative cache transaction (``_speculative_verify``'s prologue)."""
+def _prepare(lm: Any, tokens: list, caches: list, media: list | None = None):
+    """Per row: the position ids and a speculative cache transaction (``_speculative_verify``'s prologue).
+
+    ``media[b] = (rope_delta, multimodal)`` of a media row: positions continue after the prompt's mRoPE
+    offset, and a multimodal row's are the three-axis form the model's own verifier uses there."""
     from mlx_vlm.speculative.cache_state import start_speculative_cache
 
     model = lm.model
     positions, transactions = [], []
     try:
-        for t, cache in zip(tokens, caches, strict=True):
+        for b, (t, cache) in enumerate(zip(tokens, caches, strict=True)):
             # queue any lazy prefix-cache writes before the verifier appends to the same buffers
             mx.async_eval([entry.state for entry in cache])
             offset = int(cache[model.fa_idx].offset)
-            positions.append(offset + mx.arange(t.shape[1], dtype=mx.int64)[None])
+            delta, multimodal = media[b] if media else (0, False)
+            pos = (offset + int(delta) + mx.arange(t.shape[1], dtype=mx.int64))[None]
+            if multimodal:
+                pos = mx.broadcast_to(pos[None], (3, 1, t.shape[1]))
+            positions.append(pos)
             transactions.append(start_speculative_cache(cache, t.shape[1]))
     except BaseException:
         for transaction in transactions:
@@ -149,7 +212,9 @@ def _prepare(lm: Any, tokens: list, caches: list):
     return positions, transactions
 
 
-def fused_chain_forward(lm: Any, tokens: list, caches: list, capture_ids=()):
+def fused_chain_forward(
+    lm: Any, tokens: list, caches: list, capture_ids=(), media: list | None = None
+):
     """The layer loop of ``tf_hc_forward._tf_model`` over several rows' windows.
 
     HC norm / project and the router + experts run once over all packed rows (the kernels' rows are
@@ -169,7 +234,7 @@ def fused_chain_forward(lm: Any, tokens: list, caches: list, capture_ids=()):
         spans.append((at, at + w))
         at += w
     total = at
-    positions, transactions = _prepare(lm, tokens, caches)
+    positions, transactions = _prepare(lm, tokens, caches, media)
     try:
         ids = mx.concatenate(tokens, axis=1)
         hidden = mx.tile(model.embed_tokens(ids), (1, 1, streams))
@@ -285,7 +350,36 @@ def fused_chain_forward(lm: Any, tokens: list, caches: list, capture_ids=()):
         raise
 
 
-def chain_forward_capture(lm: Any, tokens: list, caches: list, capture_ids):
+def _row_verify(lm: Any, t, cache, medium, capture_ids=()):
+    """One row's window with explicit positions (the model's ``_speculative_verify`` with the row's own
+    mRoPE offset instead of the process-global one). Returns (hidden, features or [], transaction)."""
+    positions, (transaction,) = _prepare(lm, [t], [cache], [medium])
+    try:
+        if capture_ids:
+            from .. import qwen4_dflash
+
+            out, hidden = qwen4_dflash.capture_forward(
+                lm,
+                t,
+                cache,
+                list(capture_ids),
+                position_ids=positions[0],
+                skip_logits=True,
+            )
+            return hidden, list(out.hidden_states), transaction
+        ql = qwen4_first_module("language")
+        out = ql._QWEN4_BATCH_INVARIANT_FORWARD(
+            lm, t, cache=cache, position_ids=positions[0], skip_logits=True
+        )
+        return out.hidden_states[-1], [], transaction
+    except BaseException:
+        transaction.abort()
+        raise
+
+
+def chain_forward_capture(
+    lm: Any, tokens: list, caches: list, capture_ids, media: list | None = None
+):
     """Windows of any width (a DFlash chain: the pending token and its drafts) of independent rows,
     capturing the DFlash layer features. Returns ``[(HC state [1, w, hc * D], [feature [1, w, D] per
     layer], transaction)]``. The fused loop packs the rows (at most ``PACK_ROWS`` positions in all);
@@ -298,13 +392,18 @@ def chain_forward_capture(lm: Any, tokens: list, caches: list, capture_ids):
     if _fused_ready(lm, _compute_dtype(lm)):
         if sum(int(t.shape[1]) for t in tokens) > PACK_ROWS:
             raise ValueError("fused pack is limited to PACK_ROWS positions")
-        return fused_chain_forward(lm, tokens, caches, capture_ids)
+        return fused_chain_forward(lm, tokens, caches, capture_ids, media)
     out = []
     try:
-        for t, c in zip(tokens, caches, strict=True):
-            features, hidden, transaction = lm.speculative_verify_dflash_hidden(
-                t, c, list(capture_ids)
-            )
+        for b, (t, c) in enumerate(zip(tokens, caches, strict=True)):
+            if media and media[b] != (0, False):
+                hidden, features, transaction = _row_verify(
+                    lm, t, c, media[b], capture_ids
+                )
+            else:
+                features, hidden, transaction = lm.speculative_verify_dflash_hidden(
+                    t, c, list(capture_ids)
+                )
             out.append((hidden, features, transaction))
     except BaseException:
         for got in out:
@@ -313,7 +412,7 @@ def chain_forward_capture(lm: Any, tokens: list, caches: list, capture_ids):
     return out
 
 
-def chain_forward(lm: Any, tokens: list, caches: list):
+def chain_forward(lm: Any, tokens: list, caches: list, media: list | None = None):
     """Windows ``tokens`` (each ``[1, w]``, ``1 <= w <= 2``) of independent rows through the target.
 
     Returns ``[(HC state [1, w, hc * D], transaction)]`` in row order; the caller commits each
@@ -335,7 +434,18 @@ def chain_forward(lm: Any, tokens: list, caches: list):
     if sum(int(t.shape[1]) for t in tokens) > DRIVER_MAX_ROWS:
         raise ValueError("chain forward exceeds the shared node budget")
     if _fused_ready(lm, _compute_dtype(lm)):
-        return fused_chain_forward(lm, tokens, caches)
+        return fused_chain_forward(lm, tokens, caches, (), media)
+    if media and any(m != (0, False) for m in media):
+        rows = []
+        try:
+            for b, (t, c) in enumerate(zip(tokens, caches, strict=True)):
+                hidden, _, transaction = _row_verify(lm, t, c, media[b])
+                rows.append((hidden, transaction))
+        except BaseException:
+            for _, transaction in rows:
+                transaction.abort()
+            raise
+        return rows
     return native_chain_forward(lm, tokens, caches)
 
 
@@ -401,6 +511,7 @@ class FlashNextBatch:
                     self.lm,
                     [tokens[starts[b] : starts[b] + lens[b]][None] for b in pack],
                     [self.rows[b].cache for b in pack],
+                    [media_of(self.rows[b]) for b in pack],
                 )
                 for b, got in zip(pack, out, strict=True):
                     results[b] = got
@@ -468,13 +579,31 @@ class FlashNextHead:
         mixed = self.drafter.hyper_connection_mixer(hidden[None])[0]
         return mx.argmax(self._mix_logits(mixed), axis=-1).astype(mx.int32)
 
-    def _step(self, cache: list, tokens: mx.array, hidden: mx.array):
+    def _step(
+        self,
+        cache: list,
+        tokens: mx.array,
+        hidden: mx.array,
+        delta: int = 0,
+        positions: mx.array | None = None,
+    ):
         """One row's ``tokens`` [1, T] with HC states ``hidden`` [1, T, hc * D] on ``cache``, positions
-        continuing the head cache. Returns (mixed [1, T, D], next HC state [1, T, hc * D])."""
+        continuing the head cache (plus a media row's rope delta, or the prompt chunk's own temporal mRoPE
+        positions ``[1, T]``). Returns (mixed [1, T, D], next HC state [1, T, hc * D])."""
         d = self.drafter
-        d._next_position = int(cache[0].offset)
+        d._next_position = int(cache[0].offset) + int(delta)
         embedded = self.embed(tokens.astype(mx.int32))
-        return d._forward_hidden(embedded, hidden.astype(embedded.dtype), tokens, cache)
+        if positions is None:
+            return d._forward_hidden(
+                embedded, hidden.astype(embedded.dtype), tokens, cache
+            )
+        d._position_ids = lambda length=1: positions  # type: ignore[method-assign]
+        try:
+            return d._forward_hidden(
+                embedded, hidden.astype(embedded.dtype), tokens, cache
+            )
+        finally:
+            del d._position_ids
 
     @staticmethod
     def _sync(cache: list, keep: int) -> None:
@@ -489,9 +618,10 @@ class FlashNextHead:
         """``rows``: (row state with ``mtp_cache``, next tokens, HC states [n, hc * D]); returns each
         row's head HC state at its last absorbed position ``[hc * D]``."""
         outs = []
-        for row, nxt, hid, *_ in rows:
+        for row, nxt, hid, *rest in rows:
+            pos = rest[0][0][None].astype(mx.int32) if rest else None
             _, state = self._step(
-                row.mtp_cache, mx.array([nxt], dtype=mx.int32), hid[None]
+                row.mtp_cache, mx.array([nxt], dtype=mx.int32), hid[None], positions=pos
             )
             outs.append(state[0, -1])
         return outs
@@ -523,7 +653,9 @@ class FlashNextHead:
         for b, row in enumerate(rows):
             cache = self.caches[id(row)]
             self._sync(cache, row.hn)
-            mixed, state = self._step(cache, tokens[b : b + 1], hidden[b : b + 1])
+            mixed, state = self._step(
+                cache, tokens[b : b + 1], hidden[b : b + 1], row.req.rope_delta
+            )
             states.append(state[0])
             greedy.append(
                 mx.argmax(self._mix_logits(mixed[0]), axis=-1).astype(mx.int32)
@@ -554,7 +686,10 @@ class FlashNextHead:
                 cache = self.caches[id(rows[b])]
                 self._sync(cache, rows[b].hn + j - 1)
                 mixed, state = self._step(
-                    cache, tok[i : i + 1][None], hid[i : i + 1][None]
+                    cache,
+                    tok[i : i + 1][None],
+                    hid[i : i + 1][None],
+                    rows[b].req.rope_delta,
                 )
                 states.append(state[0, 0])
                 toks.append(

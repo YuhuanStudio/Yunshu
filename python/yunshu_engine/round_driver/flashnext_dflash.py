@@ -115,7 +115,11 @@ class FlashNextDFlash(DFlashBatch):
                 mx.concatenate([pend, chains[b]])[None] if b in chains else pend[None]
             )
         results = flashnext.chain_forward_capture(
-            self.lm, windows, [r.cache for r in rows], self.capture_ids
+            self.lm,
+            windows,
+            [r.cache for r in rows],
+            self.capture_ids,
+            [flashnext.media_of(r) for r in rows],
         )
         committed_rows: set[int] = set()
         events: list[Event] = []

@@ -1188,17 +1188,12 @@ class VLMBatchRunner:
         return job.guide is not None and driver_guide(job.guide, job.logprobs, rest)
 
     def _driver_takes(self, job: _Job, alone: bool = False) -> bool:
-        """The round driver is the path for every text request of a dense Qwen3.5-family
-        model, one row or many, speculation on or off. Rows it cannot draft for
-        (processors, constraints, non-invariant guides) still decode in it, one token a
-        round through their own processors. Media prompts ride in it as prompt embeddings
-        plus mRoPE positions and a per-row decode offset (``_media_request``), except on Flash-Next,
-        whose image prompts keep the stock runner until the driver packs them (PARITY row 13)."""
-        if self.driver is None:
-            return False
-        return not (
-            job.prompt_kwargs is not None and getattr(self.driver, "flash", False)
-        )
+        """The round driver is the path for every request of a model it serves (dense Qwen3.5
+        family, Flash-Next), one row or many, speculation on or off, with or without explicit cache
+        seams. Rows it cannot draft for (processors, constraints, non-invariant guides) still decode
+        in it, one token a round through their own processors. Media prompts ride in it as prompt
+        embeddings plus mRoPE positions and a per-row decode offset (``_media_request``)."""
+        return self.driver is not None
 
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state
