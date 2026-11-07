@@ -210,7 +210,7 @@ def _collect() -> None:
 
 
 def _trim() -> None:
-    from . import ane_ffn_runtime, prompt_end_replay
+    from . import ane_ffn_runtime
     from .kernels.buffer_cache import clear_restore_buffers
     from .mlx_executor import sync_and_clear_cache
 
@@ -222,8 +222,7 @@ def _trim() -> None:
     # exact-repeat blocks (up to 768 MiB) are worth keeping only while a client is active
     from .round_driver import replay as driver_replay
 
-    held = prompt_end_replay.resident_bytes() + driver_replay.resident_bytes()
-    prompt_end_replay.clear()
+    held = driver_replay.resident_bytes()
     driver_replay.clear()
     if held:
         logger.info("idle memory: released %d bytes of prompt-end replay blocks", held)

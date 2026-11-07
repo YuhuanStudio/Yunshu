@@ -49,14 +49,11 @@ def test_unknown_guide_member_is_serial(guides):
 
 
 def test_spec_off_and_spec_on_choose_the_same_arithmetic(guides):
-    # _serial_rows drives the APC namespace, the invariant kernels and the dense lane for the
-    # spec-off batch AND the speculative lane; exact_verify uses the same predicate.
+    # exact_verify and the round driver's guide rows use one predicate (the stock runner's
+    # ``_serial_rows`` is gone with the stock runner).
     from yunshu_engine import constrained_spec as cs
-    from yunshu_engine.vlm_batch_runner import _serial_rows
 
     for g in (guides.text, guides.combined):
-        assert not _serial_rows(SimpleNamespace(guide=g, logprobs=False))
-        assert _serial_rows(SimpleNamespace(guide=g, logprobs=True))
         assert cs.invariant_request(
             SimpleNamespace(guide=g, logprobs=False, processors=[])
         )

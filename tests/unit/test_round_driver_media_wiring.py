@@ -13,13 +13,9 @@ def runner():
     return VLMBatchRunner(object(), object(), apc_manager=None)
 
 
-def test_text_prompt_has_no_media_fields_and_every_prompt_is_taken_by_the_driver():
+def test_text_prompt_has_no_media_fields():
     r = runner()
     assert r._media_request(SimpleNamespace(prompt_kwargs=None)) == {}
-    r.driver = object()
-    # media prompts are no longer excluded from the driver
-    assert r._driver_takes(SimpleNamespace(prompt_kwargs={"inputs_embeds": 1}))
-    assert r._driver_takes(SimpleNamespace(prompt_kwargs=None))
 
 
 def test_media_prompt_maps_to_request_fields():

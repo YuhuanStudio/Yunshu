@@ -1,4 +1,8 @@
-"""Shared-batch scheduling in VLMBatchRunner, with a fake upstream generator."""
+"""VLMBatchRunner scheduling with a fake round driver: every request is a driver row.
+
+The stock BatchGenerator runner (shared generators, speculative lane groups, promotion) is gone: the
+runner admits requests, applies memory / prefix admission and hands rows to the one round driver.
+``FakeDriver`` emits one token per row per step: ``100 * <admission index> + step``."""
 
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -9,75 +13,58 @@ import pytest
 from yunshu_engine import vlm_batch_runner as vbr
 
 
-class FakeGen:
-    """Emits token ``100*row + step`` per active row per next(); finishes at max."""
+class FakeDriver:
+    """Round driver stand-in: one token per row per step, ``100 * n + step`` for the n-th admitted row."""
 
-    instances: list = []
+    def __init__(self):
+        self.rows, self.removed, self.requests = [], [], []
+        self.head = object()
+        self.can_draft = True
+        self.max_rows = 0
 
-    def __init__(self, *args, **kwargs):
-        self.kwargs = kwargs
-        self.rows = {}
-        self.next_uid = 0
-        self.max_batch = 0
-        self.removed = []
-        self.closed = False
-        FakeGen.instances.append(self)
+    def add(self, req):
+        n = len(self.requests)
+        self.requests.append(req)
+        self.rows.append([req, 0, n])
+        self.max_rows = max(self.max_rows, len(self.rows))
 
-    def insert(
-        self,
-        prompts,
-        max_tokens,
-        prompt_kwargs,
-        logits_processors,
-        thinking_budget_criteria=None,
-    ):
-        assert self.kwargs.get("prefill_batch_size") == 1
-        self.budgets = thinking_budget_criteria
-        uid = self.next_uid
-        self.next_uid += 1
-        self.rows[uid] = [0, max_tokens]
-        return [uid]
+    def remove(self, handle):
+        self.removed.append(handle)
+        self.rows = [r for r in self.rows if r[0].handle is not handle]
 
-    def remove(self, uid):
-        self.removed.append(uid)
-        self.rows.pop(uid, None)
-
-    @property
-    def has_work(self):
+    def busy(self):
         return bool(self.rows)
 
-    def next(self):
-        self.max_batch = max(self.max_batch, len(self.rows))
+    def flush_checkpoints(self):
+        """The runner publishes captured APC checkpoints after emitting a step's tokens."""
+
+    def planned_checkpoints(self, handle):
+        return None
+
+    def step(self):
+        from yunshu_engine.round_driver.driver import Event
+
         out = []
-        for uid, state in list(self.rows.items()):
-            state[0] += 1
-            done = state[0] >= state[1]
+        for row in self.rows:
+            row[1] += 1
+            done = row[1] >= row[0].max_tokens
             out.append(
-                SimpleNamespace(
-                    uid=uid,
-                    token=100 * uid + state[0],
-                    token_logprob=0.0,
-                    top_logprobs=None,
-                    finish_reason="length" if done else None,
+                Event(
+                    row[0].handle,
+                    100 * row[2] + row[1],
+                    None,
+                    "length" if done else None,
                 )
             )
-            if done:
-                del self.rows[uid]
-        return [], out
-
-    def close(self):
-        self.closed = True
+        self.rows = [r for r in self.rows if r[1] < r[0].max_tokens]
+        return out
 
 
 @pytest.fixture
-def runner(monkeypatch):
-    import importlib
-
-    ar = importlib.import_module("mlx_vlm.generate.ar")
-    FakeGen.instances = []
-    monkeypatch.setattr(ar, "BatchGenerator", FakeGen)
-    model = SimpleNamespace(language_model=object())
-    return vbr.VLMBatchRunner(model, processor=None)
+def runner():
+    r = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), processor=None)
+    r.driver = FakeDriver()
+    return r
 
 
 def _collect(runner, n, **kw):
@@ -89,7 +76,7 @@ def test_inline_single_request(runner):
     assert not runner.busy()
 
 
-def test_concurrent_requests_share_one_generator(runner, monkeypatch):
+def test_concurrent_requests_are_rows_of_the_one_driver(runner, monkeypatch):
     ex = ThreadPoolExecutor(max_workers=1)
     runner._executor = ex
     start = threading.Barrier(4)
@@ -123,18 +110,14 @@ def test_concurrent_requests_share_one_generator(runner, monkeypatch):
         ex.shutdown(wait=True)
     assert len(results) == 4
     assert all(len(v) == 5 for v in results.values())
-    gens = FakeGen.instances
-    # Same greedy settings -> one shared generator that ran rows together.
-    assert max(g.max_batch for g in gens) > 1
+    assert runner.driver.max_rows > 1  # the rows ran together in the one driver
     assert not runner.busy()
 
 
-def test_mixed_sampling_shares_one_batch(runner):
+def test_sampling_parameters_ride_on_the_request_not_on_a_group(runner):
     ex = ThreadPoolExecutor(max_workers=1)
     runner._executor = ex
     out = {}
-    # Hold the executor until both requests are queued, so they are admitted in the same
-    # drive slice whatever the thread timing (no sleeps, no join timeouts).
     gate = threading.Event()
     ex.submit(gate.wait)
 
@@ -157,31 +140,11 @@ def test_mixed_sampling_shares_one_batch(runner):
     tb.join()
     ex.shutdown(wait=True)
     assert len(out["a"]) == 4 and len(out["b"]) == 4
-    # One shared generator with the per-row sampler, no per-params groups.
-    assert len(FakeGen.instances) == 1
-    assert isinstance(FakeGen.instances[0].kwargs["sampler"], vbr.RowSampler)
-
-
-def test_row_sampler_per_row_params_and_seed():
-    import mlx.core as mx
-
-    logprobs = mx.log(mx.softmax(mx.random.normal((3, 50)), axis=-1))
-    greedy = mx.argmax(logprobs, axis=-1).tolist()
-
-    def draw(seed):
-        s = vbr.RowSampler()
-        s.add(11, vbr.RowParams(1.0, 1.0, 0, 0.0, seed))
-        vbr._STEP_UIDS = [10, 11, 12]
-        try:
-            return [s(logprobs).tolist() for _ in range(5)]
-        finally:
-            vbr._STEP_UIDS = None
-
-    first, again = draw(7), draw(7)
-    assert first == again  # seeded row reproducible
-    for toks in first:
-        assert toks[0] == greedy[0] and toks[2] == greedy[2]  # other rows greedy
-    assert len({t[1] for t in first}) > 1  # the sampled row actually samples
+    sampling = sorted(
+        (r.sampling is not None, getattr(r.sampling, "temperature", None))
+        for r in runner.driver.requests
+    )
+    assert sampling == [(False, None), (True, 0.7)]
 
 
 def test_abandoned_consumer_frees_its_row(runner):
@@ -189,8 +152,8 @@ def test_abandoned_consumer_frees_its_row(runner):
     assert next(it) == 1
     it.close()  # consumer stops early (e.g. a stop string)
     runner._drive_slice(resubmit=False)
-    assert FakeGen.instances[0].removed == [0]
-    assert not runner.busy() or not runner._batches
+    assert len(runner.driver.removed) == 1
+    assert not runner.driver.rows
 
 
 def test_cancel_event_finishes_with_cancel(runner):
@@ -203,26 +166,23 @@ def test_cancel_event_finishes_with_cancel(runner):
     ev.set()
     assert list(it) == []
     assert stats.finish_reason == "cancel"
+    assert len(runner.driver.removed) == 1
 
 
-def test_thinking_budget_uses_upstream_criteria_without_draft(runner):
+def test_thinking_budget_reaches_the_driver_row_as_the_forcing_criteria(runner):
     class Tok:
         def encode(self, text, add_special_tokens=False):
             return {"</think>": [7], "<think>": [6], "\n": [5]}[text]
 
     runner.processor = SimpleNamespace(tokenizer=Tok())
-    runner.drafter = object()
-    stats = vbr.RunStats()
     out = list(
         runner.iter_tokens(
-            [1], max_tokens=2, prompt_kwargs={}, thinking_budget=4, stats=stats
+            [1], max_tokens=2, prompt_kwargs={}, thinking_budget=4, stats=vbr.RunStats()
         )
     )
-    gen = FakeGen.instances[0]
     assert out == [1, 2]
-    assert gen.kwargs["draft_model"] is None and not stats.used_draft
-    (crit,) = gen.budgets
-    assert crit is not None and crit.thinking_budget == 4
+    (req,) = runner.driver.requests
+    assert req.budget is not None and req.budget.thinking_budget == 4
 
 
 def test_token_mask_processor_min_tokens_ignore_eos_suppress():
@@ -241,85 +201,28 @@ def test_token_mask_processor_min_tokens_ignore_eos_suppress():
     assert out[0, 5].item() == float("-inf")
 
 
-def test_ragged_format_set_only_while_runner_steps():
-    from yunshu_engine.kernels import ragged_kv
-
-    runner = vbr.VLMBatchRunner(
-        SimpleNamespace(language_model=object()), processor=None
-    )
-    runner.ragged_kv = "int8"
-    seen = []
-
-    class Gen:
-        _prompt_batch = None
-        _generation_batch = None
-
-        def next(self):
-            seen.append(ragged_kv._STATE["format"])
-            return [], []
-
-    group = vbr._Group(gen=Gen(), spec=False)
-    group.jobs = {
-        1: SimpleNamespace(
-            cancel_event=None, abandoned=False, guide=None, logprobs=False
-        )
-    }
-    runner._step_group(group)
-    assert seen == ["int8"]
-    assert ragged_kv._STATE["format"] is None
-
-
-class FakeDriver:
-    """Round driver stand-in: one token per row per step, ``10 + step``."""
-
-    def __init__(self):
-        self.rows, self.removed, self.head = [], [], object()
-        self.can_draft = True
-
-    def add(self, req):
-        self.rows.append([req, 0])
-
-    def remove(self, handle):
-        self.removed.append(handle)
-        self.rows = [r for r in self.rows if r[0].handle is not handle]
-
-    def busy(self):
-        return bool(self.rows)
-
-    def flush_checkpoints(self):
-        """The runner publishes captured APC checkpoints after emitting a step's tokens."""
-
-    def planned_checkpoints(self, handle):
-        return None
-
-    def step(self):
-        from yunshu_engine.round_driver.driver import Event
-
-        out = []
-        for row in self.rows:
-            row[1] += 1
-            done = row[1] >= row[0].max_tokens
-            out.append(
-                Event(row[0].handle, 10 + row[1], None, "length" if done else None)
-            )
-        self.rows = [r for r in self.rows if r[1] < r[0].max_tokens]
-        return out
-
-
-def test_text_requests_go_to_the_round_driver(monkeypatch):
+def test_text_requests_go_to_the_round_driver():
     runner = vbr.VLMBatchRunner(
         SimpleNamespace(language_model=object()), processor=None
     )
     runner.driver = FakeDriver()
     stats = vbr.RunStats()
     got = list(runner.iter_tokens([1, 2, 3], max_tokens=3, stats=stats))
-    assert got == [11, 12, 13]
+    assert got == [1, 2, 3]
     assert stats.finish_reason == "length" and stats.generated == 3
     assert stats.used_draft  # greedy, no processors: the driver may draft
     assert not runner.busy()
 
 
-def test_round_driver_drops_cancelled_rows(monkeypatch):
+def test_a_runner_without_a_driver_refuses_instead_of_serving_on_another_path():
+    runner = vbr.VLMBatchRunner(
+        SimpleNamespace(language_model=object()), processor=None
+    )
+    with pytest.raises(RuntimeError, match="no round driver"):
+        list(runner.iter_tokens([1, 2, 3], max_tokens=3, stats=vbr.RunStats()))
+
+
+def test_round_driver_drops_cancelled_rows():
     runner = vbr.VLMBatchRunner(
         SimpleNamespace(language_model=object()), processor=None
     )
@@ -327,102 +230,16 @@ def test_round_driver_drops_cancelled_rows(monkeypatch):
     cancel = threading.Event()
     stats = vbr.RunStats()
     it = runner.iter_tokens([1], max_tokens=50, cancel_event=cancel, stats=stats)
-    assert next(it) == 11
+    assert next(it) == 1
     cancel.set()
     assert list(it) == []
     assert stats.finish_reason == "cancel"
     assert len(runner.driver.removed) == 1
 
 
-def test_prefix_sharing_uses_invariant_kernels_in_shared_batch(runner, monkeypatch):
-    from yunshu_engine.kernels import batch_invariant
-
-    active = []
-    monkeypatch.setattr(batch_invariant, "is_installed", lambda: True)
-    monkeypatch.setattr(batch_invariant, "set_active", active.append)
-    runner.prefix_invariant = True
-    assert _collect(runner, 2) == [1, 2]
-    assert True in active
-    assert active[-1] is False
-
-
-@pytest.mark.parametrize("finish", [None, "length", "stop"])
-def test_ready_ar_first_token_is_emitted_before_lookahead(runner, monkeypatch, finish):
-    import mlx.core as mx
-    from mlx_vlm.generate.ar import GenerationBatch
-
-    with mx.stream(mx.cpu):
-        batch = GenerationBatch(
-            model=SimpleNamespace(),
-            uids=[7],
-            inputs=mx.array([42]),
-            prompt_cache=[],
-            sampler=None,
-            stop_criteria=lambda token: finish == "stop",
-            max_tokens=[1 if finish == "length" else 8],
-        )
-    stats = vbr.RunStats(prefill_total=3)
-    job = SimpleNamespace(
-        uid=7, stats=stats, start=0.0, logprobs=False, cancel_event=None
-    )
-    emitted, finished, order = [], [], []
-
-    def emit(job, item):
-        order.append("emit")
-        emitted.append(item)
-        assert job.stats.generated == 1
-
-    def lookahead():
-        order.append("lookahead")
-        # Upstream must retain its original token count and sampled input.
-        assert batch._num_tokens == [0]
-        assert batch._next_tokens.tolist() == [42]
-        return [42], None, None, None
-
-    batch._step = lookahead
-    gen = SimpleNamespace(_generation_batch=batch, next=lambda: ([], batch.next()))
-    group = vbr._Group(gen=gen, spec=False, jobs={7: job})
-    runner.ragged_kv = None
-    monkeypatch.setattr(runner, "_emit", emit)
-    monkeypatch.setattr(runner, "_note_prefill", lambda group: None)
-    monkeypatch.setattr(runner, "_note_cache", lambda job: None)
-    monkeypatch.setattr(runner, "_finish", lambda group, uid, why: finished.append(why))
-    runner._step_generator(group)
-    assert order == ["emit", "lookahead"]
-    assert emitted == [(42, None)]  # no duplicate when upstream returns that token
-    assert stats.generated == 1 and stats.t_first > 0
-    assert stats.prefill_done == 3
-    assert finished == ([] if finish is None else [finish])
-
-
-def test_early_ar_delivery_leaves_logprob_requests_on_original_path(runner):
-    import mlx.core as mx
-    from mlx_vlm.generate.ar import GenerationBatch
-
-    with mx.stream(mx.cpu):
-        batch = GenerationBatch(
-            model=SimpleNamespace(),
-            uids=[7],
-            inputs=mx.array([42]),
-            prompt_cache=[],
-            sampler=None,
-            stop_criteria=lambda token: False,
-            max_tokens=[8],
-        )
-    stats = vbr.RunStats()
-    group = vbr._Group(
-        gen=SimpleNamespace(_generation_batch=batch),
-        spec=False,
-        jobs={7: SimpleNamespace(uid=7, logprobs=True, stats=stats)},
-    )
-    assert runner._emit_ready_first(group) is None
-    assert stats.generated == 0 and batch._num_tokens == [0]
-
-
 def test_driver_rows_set_and_extend_the_draft_vocab_context():
-    """Regression: the driver never told the reduced draft readout about the prompt's ids (the
-    lane does at every speculative start), so code prompts drafted from the base set only:
-    8K code decode 3.8 instead of 5 tokens/round."""
+    """Regression: the driver never told the reduced draft readout about the prompt's ids, so code
+    prompts drafted from the base set only: 8K code decode 3.8 instead of 5 tokens/round."""
     calls = []
 
     class Vocab:
@@ -439,3 +256,33 @@ def test_driver_rows_set_and_extend_the_draft_vocab_context():
     runner.drafter = SimpleNamespace(_draft_vocab=Vocab())
     list(runner.iter_tokens([1, 2, 3], max_tokens=1, stats=vbr.RunStats()))
     assert calls[0] == ("set", [1, 2, 3])
+
+
+def test_a_lone_finished_row_teaches_the_storage_tiers_the_prefill_speed(runner):
+    """The stock runner fed the APC cost model at every finish; the driver path must too."""
+    observed = []
+    runner.apc_manager = SimpleNamespace(
+        disk=SimpleNamespace(observe_prefill=lambda *a: observed.append(a))
+    )
+    assert _collect(runner, 2) == [1, 2]
+    assert len(observed) == 1 and observed[0][0] == 3  # the prompt's uncached tokens
+
+
+def test_a_row_records_where_its_prefix_hit_came_from(runner):
+    rec = SimpleNamespace(cached=True, tier="ssd", ms=12.5, device="Micron", t=3.0)
+    runner.apc_manager = SimpleNamespace(take_lookup=lambda *a, **k: rec)
+    stats = vbr.RunStats()
+    list(runner.iter_tokens([1, 2, 3], max_tokens=2, prompt_kwargs={}, stats=stats))
+    assert (stats.cache_tier, stats.cache_reload_ms) == ("ssd", 12.5)
+    assert stats.cache_reason == "hit" and stats.cache_device == "Micron"
+
+
+def test_a_cleanup_step_that_raises_still_publishes_the_terminal(runner):
+    runner.apc_manager = SimpleNamespace(
+        disk=SimpleNamespace(
+            observe_prefill=lambda *a: (_ for _ in ()).throw(RuntimeError("boom"))
+        )
+    )
+    assert _collect(runner, 2) == [1, 2]
+    assert runner.finish_cleanup_failures == {"observe_prefill": 1}
+    assert not runner.busy()

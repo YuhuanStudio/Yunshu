@@ -23,12 +23,10 @@ class _Coord:
 
 
 def _group(offset):
+    """``(group, coordinator, caches)``: the reply's caches are handed to the store explicitly."""
     coord = _Coord()
-    gen = SimpleNamespace(
-        apc=coord,
-        _generation_batch=SimpleNamespace(prompt_cache=[_KV(offset), object()]),
-    )
-    return SimpleNamespace(gen=gen, last_caches=None, spec=True, jobs={}), coord
+    group = SimpleNamespace(gen=SimpleNamespace(apc=coord), jobs={})
+    return group, coord, [_KV(offset), object()]
 
 
 def _job(prompt, generated, salt=7):
@@ -38,17 +36,21 @@ def _job(prompt, generated, salt=7):
 
 
 def test_the_reply_cache_is_stored_under_prompt_plus_held_tokens():
-    group, coord = _group(
+    group, coord, caches = _group(
         offset=6
     )  # 4 prompt + 2 of 3 reply tokens fed (the last one is pending)
-    VLMBatchRunner._store_decode_cache(group, _job([1, 2, 3, 4], [10, 11, 12]))
+    VLMBatchRunner._store_decode_cache(
+        group, _job([1, 2, 3, 4], [10, 11, 12]), caches=caches
+    )
     assert coord.calls == [([1, 2, 3, 4, 10, 11], 7)]
 
 
 def test_a_cache_that_disagrees_with_the_tokens_is_not_stored():
     for offset in (4, 9):  # no reply token held / more than were emitted
-        group, coord = _group(offset)
-        VLMBatchRunner._store_decode_cache(group, _job([1, 2, 3, 4], [10, 11, 12]))
+        group, coord, caches = _group(offset)
+        VLMBatchRunner._store_decode_cache(
+            group, _job([1, 2, 3, 4], [10, 11, 12]), caches=caches
+        )
         assert coord.calls == []
 
 
@@ -81,29 +83,11 @@ def test_the_lanes_batch_cache_counts_rows_past_its_left_padding():
         left_padding = np.array([1])
 
     coord = _Coord()
-    gen = SimpleNamespace(
-        apc=coord,
-        _generation_batch=SimpleNamespace(prompt_cache=[_BatchKV(), object()]),
+    group = SimpleNamespace(gen=SimpleNamespace(apc=coord), jobs={})
+    VLMBatchRunner._store_decode_cache(
+        group, _job([1, 2, 3, 4], [10, 11, 12]), caches=[_BatchKV(), object()]
     )
-    group = SimpleNamespace(gen=gen, last_caches=None, spec=True, jobs={})
-    VLMBatchRunner._store_decode_cache(group, _job([1, 2, 3, 4], [10, 11, 12]))
     assert coord.calls == [([1, 2, 3, 4, 10, 11], 7)]
-
-
-def test_a_reply_whose_consumer_closed_after_the_last_token_is_still_stored():
-    """Turn 3 of the 27B probe (2026-11-02): the client counted max_tokens and closed its
-    stream before the finishing slice ran, so ``abandoned`` was set and every follow-up of a
-    max_tokens reply missed the reply cache."""
-    group, _ = _group(6)
-    job = _job([1, 2, 3, 4], [10, 11, 12])
-    job.cache_store, job.abandoned, job.overflowed = True, True, False
-    assert VLMBatchRunner._decode_store_skip(group, job, "length") == []
-    assert VLMBatchRunner._decode_store_skip(group, job, "cancel") == ["finish cancel"]
-    job.overflowed = True
-    assert VLMBatchRunner._decode_store_skip(group, job, "stop") == ["overflowed"]
-    group.jobs = {2: object()}
-    job.overflowed = False
-    assert VLMBatchRunner._decode_store_skip(group, job, "stop") == ["other rows"]
 
 
 def _runner():
@@ -111,7 +95,6 @@ def _runner():
 
     r = VLMBatchRunner.__new__(VLMBatchRunner)
     r._lock, r._pending, r._executor = threading.Lock(), [], None
-    r._groups = lambda: []
     return r
 
 
@@ -133,22 +116,19 @@ def test_the_store_waits_for_the_follow_up_not_for_a_resend(monkeypatch):
             lambda g, j, caches=None, window_tail=None, salt=None: stored.append(j)
         ),
     )
-    import yunshu_engine.spec_release as sr
-
-    monkeypatch.setattr(sr, "finished_caches", lambda gen, last: ["kv"])
     r = _runner()
-    group, _ = _group(6)
+    group, _, _caches = _group(6)
     reply = _job([1, 2, 3, 4], [10, 11, 12])
-    r._defer_decode_cache(group, reply)
+    r._defer_decode_cache(group, reply, caches=["kv"])
     assert stored == [] and offered == []
     assert not r._decode_follows(_job([1, 2, 3, 4], []))  # the same prompt again
     assert r._decode_follows(_job([1, 2, 3, 4, 10, 11, 12, 99], []))
     r._flush_decode_cache_if_idle(r._decode_pending)
     assert stored == [reply] and offered == [["kv"]]
     # a newer reply drops an unflushed older one instead of copying it
-    r._defer_decode_cache(group, _job([5], [6]))
+    r._defer_decode_cache(group, _job([5], [6]), caches=["kv"])
     newer = _job([7], [8])
-    r._defer_decode_cache(group, newer)
+    r._defer_decode_cache(group, newer, caches=["kv"])
     r._flush_decode_cache()
     assert stored == [reply, newer]
 

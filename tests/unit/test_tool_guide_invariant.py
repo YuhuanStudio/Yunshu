@@ -29,19 +29,6 @@ def test_invariant_guide_only_for_a_tool_guide_alone(tool_guide):
     assert not invariant_guide(combined)
 
 
-def test_serial_rows(tool_guide):
-    from yunshu_engine.vlm_batch_runner import _serial_rows
-
-    assert not _serial_rows(SimpleNamespace(guide=None, logprobs=False))
-    assert not _serial_rows(SimpleNamespace(guide=None, logprobs=True))
-    assert _serial_rows(
-        SimpleNamespace(guide=None, logprobs=True, processors=[object()])
-    )
-    assert not _serial_rows(SimpleNamespace(guide=tool_guide, logprobs=False))
-    assert _serial_rows(SimpleNamespace(guide=tool_guide, logprobs=True))
-    assert _serial_rows(SimpleNamespace(guide=object(), logprobs=False))
-
-
 def test_exact_verify_keeps_invariant_kernels_for_a_tool_guide(tool_guide, monkeypatch):
     from yunshu_engine import constrained_spec as cs
     from yunshu_engine.kernels import batch_invariant

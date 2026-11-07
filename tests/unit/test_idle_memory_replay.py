@@ -4,13 +4,14 @@ import pytest
 
 pytest.importorskip("mlx.core")
 
-from yunshu_engine import idle_memory, prompt_end_replay  # noqa: E402
+from yunshu_engine import idle_memory  # noqa: E402
+from yunshu_engine.round_driver import replay as driver_replay  # noqa: E402
 
 
-def test_idle_trim_clears_prompt_end_replay(monkeypatch):
+def test_idle_trim_clears_driver_replay(monkeypatch):
     cleared = []
-    monkeypatch.setattr(prompt_end_replay, "resident_bytes", lambda: 1234)
-    monkeypatch.setattr(prompt_end_replay, "clear", lambda: cleared.append(True))
+    monkeypatch.setattr(driver_replay, "resident_bytes", lambda: 1234)
+    monkeypatch.setattr(driver_replay, "clear", lambda: cleared.append(True))
     monkeypatch.setattr(
         "yunshu_engine.kernels.buffer_cache.clear_restore_buffers", lambda: None
     )
@@ -26,8 +27,8 @@ def test_idle_trim_drops_replay_blocks_before_clearing_the_pool(monkeypatch):
     """Dropped replay blocks land in MLX's freed-buffer pool: clearing the pool first left them there
     (release gate 0.1.6 soak: 502 MiB of replay blocks released after the clear, idle cache 505 MiB)."""
     calls = []
-    monkeypatch.setattr(prompt_end_replay, "resident_bytes", lambda: 1234)
-    monkeypatch.setattr(prompt_end_replay, "clear", lambda: calls.append("replay"))
+    monkeypatch.setattr(driver_replay, "resident_bytes", lambda: 1234)
+    monkeypatch.setattr(driver_replay, "clear", lambda: calls.append("replay"))
     monkeypatch.setattr(
         "yunshu_engine.kernels.buffer_cache.clear_restore_buffers",
         lambda: calls.append("spares"),

@@ -176,8 +176,8 @@
           "s": "engaged",
           "ev": [
             [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "class RowSampler"
+              "python/yunshu_engine/round_driver/driver.py",
+              "keyed_sampling.sample_rows"
             ]
           ]
         },
@@ -205,7 +205,7 @@
       "cells": {
         "batch": {
           "s": "partial",
-          "why": "DFlash driver rows with an invariant tool-call guide draft free text and mask the call's rows (round_driver/driver.py req.guide.mask()); schema/regex/grammar guides never enter the driver and use the lane or shared batch",
+          "why": "DFlash driver rows with an invariant tool-call guide draft free text and mask the call's rows (round_driver/driver.py req.guide.mask()); schema/regex/grammar guides are driver rows too and decode one token a round through their ConstraintProcessor",
           "owner": "decode16",
           "impact": "medium",
           "ev": [
@@ -348,8 +348,8 @@
           "s": "engaged",
           "ev": [
             [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "ThinkingBudgetCriteria"
+              "python/yunshu_engine/round_driver/driver.py",
+              "row.force"
             ]
           ]
         },
@@ -649,7 +649,7 @@
               "apc.store_checkpoint"
             ]
           ],
-          "why": "the driver restores and stores exact hybrid checkpoints for every request it serves; the retained stock lane/batch (explicit cache plans, MoE) keeps the ordinary namespace"
+          "why": "the driver restores and stores exact hybrid checkpoints for every request it serves (every request of every model)"
         },
         "generic": {
           "s": "missing",
@@ -709,8 +709,17 @@
       "what": "Image / audio / video prompts (prepare_media, prompt_kwargs)",
       "cells": {
         "batch": {
-          "s": "na",
-          "why": "prompts with media never enter the driver (exclusion media-off-driver): they take the lane or the shared batch, where media input is engaged"
+          "s": "engaged",
+          "ev": [
+            [
+              "python/yunshu_engine/vlm_batch_runner.py",
+              "_media_request"
+            ],
+            [
+              "python/yunshu_engine/vlm_batch_runner.py",
+              "_generic_request"
+            ]
+          ]
         },
         "generic": {
           "s": "engaged",
@@ -1110,7 +1119,7 @@
       "cells": {
         "batch": {
           "s": "na",
-          "why": "a lone background rehearsal is below DRIVER_MIN_CONCURRENCY, so it runs on the stock batch runner; the driver itself is experimental and default off"
+          "why": "a background rehearsal is a priority < 0 row of the auxiliary driver; layer-group preemption wraps the Qwen3.5 decoder layer only (other layers run the rehearsal to its end)"
         },
         "generic": {
           "s": "na",
@@ -1217,7 +1226,7 @@
           "s": "engaged",
           "ev": [
             [
-              "python/yunshu_engine/vlm_batch_runner.py",
+              "python/yunshu_engine/round_driver/driver.py",
               "top_logprobs_device"
             ]
           ]
@@ -1373,8 +1382,13 @@
       "what": "Constrained decoding masks from the constraint's bitmask/allowed_mask, not a ~240K-id allowlist per token",
       "cells": {
         "batch": {
-          "s": "na",
-          "why": "constrained (schema/regex/grammar) requests never enter the driver: _driver_takes admits only invariant tool-call guides, which mask through the guide bitmask (tool_call_grammar.apply_bitmask)"
+          "s": "engaged",
+          "ev": [
+            [
+              "python/yunshu_engine/vlm_batch_runner.py",
+              "allowed_mask"
+            ]
+          ]
         },
         "generic": {
           "s": "engaged",
@@ -1410,8 +1424,13 @@
       "what": "generation_config.json suppress_tokens is the default token mask when a request sets none",
       "cells": {
         "batch": {
-          "s": "na",
-          "why": "a row carrying the static suppress mask keeps the speculative lane (_driver_takes admits only Fp32 reporting processors)"
+          "s": "engaged",
+          "ev": [
+            [
+              "python/yunshu_engine/round_driver/driver.py",
+              "static_mask_only"
+            ]
+          ]
         },
         "generic": {
           "s": "engaged",
@@ -1447,8 +1466,13 @@
       "what": "A grammar dead end fails only its own request (with an error), never the other rows or a hang",
       "cells": {
         "batch": {
-          "s": "na",
-          "why": "constrained requests never enter the driver (_driver_takes); an invariant tool guide has no dead end by construction"
+          "s": "engaged",
+          "ev": [
+            [
+              "python/yunshu_engine/vlm_batch_runner.py",
+              "proc.isolate = True"
+            ]
+          ]
         },
         "generic": {
           "s": "engaged",
@@ -1750,19 +1774,6 @@
   },
   "exclusions": [
     {
-      "id": "thinking-budget-off-spec",
-      "a": "thinking_budget",
-      "b": "speculative lane",
-      "kind": "unimplemented",
-      "ev": [
-        [
-          "python/yunshu_engine/vlm_batch_runner.py",
-          "and thinking_budget is None"
-        ]
-      ],
-      "why": "The lane can truncate the accepted run at the budget."
-    },
-    {
       "id": "xtc-off-spec",
       "a": "XTC sampling",
       "b": "speculative lane",
@@ -1835,7 +1846,7 @@
       "ev": [
         [
           "python/yunshu_engine/vlm_engine.py",
-          "_RUNNER_UNSUPPORTED_KWARGS"
+          "_UNSUPPORTED_KWARGS"
         ]
       ],
       "why": "By design: the runner shares one model across rows."
@@ -1979,8 +1990,8 @@
         "python/yunshu_engine/engine_sampling.py",
         "python/yunshu_engine/batch_sampler.py"
       ],
-      "note": "top-p/min-p/XTC/top-k filter chains re-implemented in RowSampler.__call__, keyed_sampling.filter_logprobs, engine_sampling and batch_sampler.",
-      "unify": "keyed_sampling.filter_logprobs as the only chain; RowSampler calls it."
+      "note": "top-p/min-p/XTC/top-k filter chains re-implemented in the round driver's _sample, keyed_sampling.filter_logprobs, engine_sampling and batch_sampler.",
+      "unify": "keyed_sampling.filter_logprobs as the only chain; the driver's _sample calls it."
     },
     {
       "id": "request-processors",
@@ -2042,7 +2053,6 @@
     "python/yunshu_engine/copy_cost.py": "copy_rounds cost model",
     "python/yunshu_engine/spec_select.py": "drafter selection (draft_family_coverage)",
     "python/yunshu_engine/spec_metrics.py": "spec counters",
-    "python/yunshu_engine/spec_release.py": "spec lane release",
     "python/yunshu_engine/spec_draft_verifier.py": "legacy text-path draft verifier",
     "python/yunshu_engine/spec_prefill.py": "legacy loop SpecPrefill",
     "python/yunshu_engine/spec_prefill_engine.py": "legacy loop SpecPrefill engine",
@@ -2070,7 +2080,6 @@
     "python/yunshu_engine/kernels/singleton_cache.py": "singleton cache install",
     "python/yunshu_engine/kernels/omlx": "oMLX verify kernel package (omlx.apply; spec family)",
     "python/yunshu_engine/kernels/tensorfold": "TensorFold lane kernels (lane_linear)",
-    "python/yunshu_engine/cache_decode.py": "ragged decode cache install",
     "python/yunshu_engine/cache_prefill.py": "prefill cache install",
     "python/yunshu_engine/cache_observation.py": "cache observation",
     "python/yunshu_engine/cache_restore.py": "n/a placeholder",
@@ -2089,7 +2098,6 @@
     "python/yunshu_engine/dflash_conv.py": "orphan (see orphans)",
     "python/yunshu_engine/dflash_draft.py": "orphan (see orphans)",
     "python/yunshu_engine/dflash_apc_window.py": "DFlash drafter context window kept beside APC checkpoints (dflash path; apc_prefix_cache)",
-    "python/yunshu_engine/prompt_end_replay.py": "Exact-repeat zero-forward replay of the final prompt block beside APC checkpoints (dflash and no-spec single-row text paths; apc_prefix_cache)",
     "python/yunshu_engine/penalty_context.py": "Penalty context = full prompt on an APC hit (hit == miss; part of penalties_in_spec / apc)",
     "python/yunshu_engine/gpu_window.py": "debug GPU busy/idle window (Metal interposer), inert unless DYLD_INSERT_LIBRARIES loads it",
     "python/yunshu_engine/kernels/tf_flash_next/base.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
@@ -2257,8 +2265,8 @@
         "s": "engaged",
         "ev": [
           [
-            "python/yunshu_engine/vlm_batch_runner.py",
-            "class RowSampler"
+            "python/yunshu_engine/round_driver/driver.py",
+            "keyed_sampling.sample_rows"
           ]
         ]
       },

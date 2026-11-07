@@ -338,13 +338,25 @@ def test_flash_row_with_processors_and_a_guide_free_request_matches_solo(tiny):
 def test_flash_next_media_prompts_take_the_driver():
     from yunshu_engine import vlm_batch_runner as vbr
 
+    admitted = []
     r = object.__new__(vbr.VLMBatchRunner)
     r.driver = SimpleNamespace(flash=True)
-    assert r._driver_takes(SimpleNamespace(prompt_kwargs=None))
-    assert r._driver_takes(SimpleNamespace(prompt_kwargs={"pixel_values": 1}))
-    stock = object.__new__(vbr.VLMBatchRunner)
-    stock.driver = None
-    assert not stock._driver_takes(SimpleNamespace(prompt_kwargs=None))
+    r._admit_driver = lambda job, use_apc: admitted.append(job)
+    r.apc_manager = None
+    r._decode_follows = lambda job: False
+    for pkw in (None, {"pixel_values": 1}):
+        job = SimpleNamespace(
+            ids=[1],
+            guide=None,
+            priority=0,
+            cache_plan=None,
+            prompt_kwargs=pkw,
+            stats=vbr.RunStats(),
+        )
+        r._admit(job, True)
+        assert (
+            admitted[-1] is job
+        )  # text and media prompts alike: the driver, no other path
 
 
 # ── DFlash2 on Flash-Next rows ─────────────────────────────────────────────────────────────────
@@ -410,7 +422,6 @@ def test_cache_plan_requests_take_the_driver_and_salt_their_own_namespace():
     r.apc_semantic_hash = 7
     plain = SimpleNamespace(cache_plan=None, prompt_kwargs=None, salt=None)
     planned = SimpleNamespace(cache_plan={"points": []}, prompt_kwargs=None, salt=None)
-    assert r._driver_takes(planned)
     assert r._driver_extra_hash(plain) == 7
     assert r._driver_extra_hash(planned) not in (0, 7)
 

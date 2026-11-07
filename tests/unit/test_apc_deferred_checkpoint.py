@@ -9,7 +9,6 @@ mx = pytest.importorskip("mlx.core")
 from mlx_vlm.models.cache import ArraysCache, KVCache  # noqa: E402
 
 from tests.unit.test_apc_manager import _coordinator, _mgr  # noqa: E402
-from yunshu_engine import vlm_batch_runner as vbr  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -190,70 +189,6 @@ def test_late_capture_keeps_its_groups_generation():
     assert list(manager._born.values()) == [1]
 
 
-def test_runner_emits_first_token_before_checkpoint_flush():
-    events = []
-    coordinator = SimpleNamespace(
-        defer_checkpoint_stores=False,
-        flush_deferred_checkpoints=lambda: events.append("flush"),
-    )
-
-    def step():
-        assert coordinator.defer_checkpoint_stores
-        events.append("step")
-        return [], [SimpleNamespace(uid=1, token=42, finish_reason=None)]
-
-    runner = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), None)
-    runner._emit = lambda *args: events.append("emit")
-    runner._note_cache = lambda *args: None
-    runner._note_prefill = lambda *args: None
-    job = SimpleNamespace(stats=vbr.RunStats(), start=0.0, logprobs=False)
-    group = vbr._Group(SimpleNamespace(next=step, apc=coordinator), spec=False)
-    group.jobs[1] = job
-    runner._step_generator(group)
-    assert events == ["step", "emit", "flush"]
-    assert not coordinator.defer_checkpoint_stores
-
-
-def test_lone_ar_uses_speculative_target_arithmetic(monkeypatch):
-    from yunshu_engine.kernels import batch_invariant, ragged_kv
-
-    runner = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), None)
-    runner.ragged_kv = "bf16"
-    monkeypatch.setitem(batch_invariant._STATE, "installed", True)
-    monkeypatch.setitem(batch_invariant._STATE, "active", False)
-    seen = []
-    runner._step_generator = lambda group, **kwargs: seen.append(
-        (batch_invariant._STATE["active"], ragged_kv._STATE["dense_lane"])
-    )
-    group = vbr._Group(SimpleNamespace(), spec=False)
-    group.jobs[1] = SimpleNamespace(cancel_event=None, abandoned=False)
-    runner._step_group(group)
-    assert seen == [(True, True)]
-    assert not batch_invariant._STATE["active"]
-    assert not ragged_kv._STATE["dense_lane"]
-
-
-def test_failed_prefill_discards_pending_captures():
-    events = []
-    coordinator = SimpleNamespace(
-        defer_checkpoint_stores=False,
-        flush_deferred_checkpoints=lambda: events.append("flush"),
-        discard_deferred_checkpoints=lambda: events.append("discard"),
-    )
-
-    def step():
-        assert coordinator.defer_checkpoint_stores
-        raise RuntimeError("prefill failed")
-
-    runner = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), None)
-    group = vbr._Group(SimpleNamespace(next=step, apc=coordinator), spec=False)
-    group.jobs[1] = SimpleNamespace()
-    with pytest.raises(RuntimeError, match="prefill failed"):
-        runner._step_generator(group)
-    assert events == ["discard"]
-    assert not coordinator.defer_checkpoint_stores
-
-
 def test_lone_row_arithmetic_revision_is_in_apc_identity():
     from yunshu_engine.kernels import lane_linear
     from yunshu_engine.vlm_engine import VLMEngine
@@ -279,29 +214,6 @@ def test_sg8_target_also_versions_its_lone_row_arithmetic():
         )
     )
     assert engine._prefill_kernel_id().endswith("+single-row-invariant-v1")
-
-
-def test_cancel_discards_capture_even_after_another_row_joins(monkeypatch):
-    events = []
-    runner = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), None)
-    runner._finish = lambda group, uid, reason: group.jobs.pop(uid)
-    runner._step_generator = lambda group, **kwargs: events.append("step")
-    group = vbr._Group(
-        SimpleNamespace(
-            remove=lambda uid: None,
-            apc=SimpleNamespace(
-                discard_deferred_checkpoints=lambda: events.append("discard")
-            ),
-        ),
-        spec=False,
-    )
-    group.jobs = {
-        1: SimpleNamespace(cancel_event=None, abandoned=True),
-        2: SimpleNamespace(cancel_event=None, abandoned=False),
-    }
-    runner._step_group(group)
-    assert events == ["discard", "step"]
-    assert list(group.jobs) == [2]
 
 
 def test_single_restore_preserves_capacity_without_aliasing_array_handles():
@@ -379,37 +291,6 @@ def test_rejected_deferred_admission_does_not_publish_policy(monkeypatch):
     assert policy["written"] == 0
     assert manager._retention == {}
     assert manager._span_plans == {}
-
-
-def test_one_token_completion_waits_for_deferred_publication():
-    events = []
-    policy = {"written": 0}
-
-    def flush():
-        policy["written"] = 113
-        events.append("flush")
-
-    coordinator = SimpleNamespace(
-        defer_checkpoint_stores=False, flush_deferred_checkpoints=flush
-    )
-    response = SimpleNamespace(uid=1, token=42, finish_reason="length")
-    runner = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), None)
-    runner._emit = lambda *args: events.append("emit")
-    runner._note_cache = lambda *args: None
-    runner._note_prefill = lambda *args: None
-
-    def finish(*args):
-        assert policy["written"] == 113
-        events.append("done")
-
-    runner._finish = finish
-    job = SimpleNamespace(stats=vbr.RunStats(), start=0.0, logprobs=False)
-    group = vbr._Group(
-        SimpleNamespace(next=lambda: ([], [response]), apc=coordinator), spec=False
-    )
-    group.jobs[1] = job
-    runner._step_generator(group)
-    assert events == ["emit", "flush", "done"]
 
 
 @pytest.mark.parametrize(

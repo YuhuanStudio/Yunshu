@@ -3014,10 +3014,6 @@ class VLMEngine:
         logger.info("Round driver layer: %s", "generic" if generic_layer else "packed")
         return runner
 
-    # Knobs the runner does not implement; such requests take the legacy loop.
-    # (spec_decode is accepted and ignored: the runner drafts on its own.)
-    _RUNNER_UNSUPPORTED_KWARGS = ("logits_processors", "lora_adapter")
-
     def _build_text_constraint(self, json_schema):
         if json_schema is None:
             return None

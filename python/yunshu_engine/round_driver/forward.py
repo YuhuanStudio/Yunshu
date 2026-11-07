@@ -323,7 +323,7 @@ def lane_forward(language_model: Any, seg: Segment, *, capture_ids=(), captured=
     from ..kernels import gdn_prefill
 
     sink = [] if captured is not None else None
-    # short tails take the tail scope, as the lane does (cache_prefill._tail_scope)
+    # short tails take the tail scope, as the lane does (gdn_prefill.tail_scope)
     scope = (
         gdn_prefill.tail_scope()
         if seg.tokens.shape[0] <= 48

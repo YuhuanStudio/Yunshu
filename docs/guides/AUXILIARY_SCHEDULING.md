@@ -79,7 +79,7 @@ request to completion; its gateway deferral and cache protection do not turn it 
 preemptible runner. The measured claim here is the 27B VLM runner. On the default runner, aging admits and services an auxiliary row after 10 seconds of waiting,
 but this is a service opportunity rather than a completion deadline: in-flight atoms,
 other older work, client cancellation and existing deadlines still apply. The
-experimental round driver retains strict auxiliary priority and does not use this
+round driver (every request's path now) keeps strict auxiliary priority and has no such
 work-ordering policy; endless primary driver traffic can still defer auxiliary
 service. Existing queue limits, errors and deadlines remain in force.
 
@@ -108,7 +108,9 @@ TTFT p50/p90 pooled and per run, and compares complete content / reasoning / too
 finish-reason SHA-256 digests for both primary and auxiliary responses. The result
 must pass all 18 primary and all 3 title comparisons before a lossless default is enabled.
 
-## Historical uncached-work ordering: CPU simulation (YUNSHU_UNCACHED_SCHEDULING)
+## Historical uncached-work ordering: CPU simulation (setting removed)
+
+> `YUNSHU_UNCACHED_SCHEDULING` and the stock runner's work ordering were removed with the stock runner: every request is a round-driver row, which orders its own prefill (shortest remainder first). The simulation below is kept as history.
 
 `scripts/research/agentic/i8_admission_sim.py` replays three captured opencode
 sessions (prompt sizes from the request bodies, 4.15 chars/token, 236 ms +
@@ -134,7 +136,7 @@ A/B would be required before any default change.
 
 Captured opencode fix-cart-discount session (six agent turns plus the title),
 seed 42, arm 0 = stock, arm 1 = `YUNSHU_AUXILIARY_SCHEDULING=1` and
-`YUNSHU_UNCACHED_SCHEDULING=1`. Main-turn TTFT (s), turns 1-6:
+`YUNSHU_UNCACHED_SCHEDULING=1` (then). Main-turn TTFT (s), turns 1-6:
 
 | arm | turn 1 | 2 | 3 | 4 | 5 | 6 | title |
 |---|---|---|---|---|---|---|---|
@@ -317,8 +319,8 @@ liveness only; they are not lossless/default evidence for that model.
 The policy now defaults on only when the loaded backend actually engages qualified
 batch-invariant kernels (`prefix_invariant`), including the tuned 27B Qwen3.5 family.
 Unqualified backends, including the bf16 0.8B probe, retain FIFO and ordinary APC
-admission by default. Explicit `YUNSHU_AUXILIARY_SCHEDULING=1` and
-`YUNSHU_UNCACHED_SCHEDULING=1` opt them in; either setting at 0 disables its component.
+admission by default. Explicit `YUNSHU_AUXILIARY_SCHEDULING=1` opts it in and 0 disables it
+(`YUNSHU_UNCACHED_SCHEDULING` no longer exists).
 These are stable overrides; neither was still experimental in the inherited registry,
 so no settled experimental entry remains to remove. FIFO remains required for
 unqualified backends and explicit opt-out.
