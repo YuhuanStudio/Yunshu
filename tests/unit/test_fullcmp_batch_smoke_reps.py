@@ -21,13 +21,23 @@ import fullcmp_run as fr  # noqa: E402
 @pytest.fixture
 def smoke_manifest(tmp_path):
     p = tmp_path / "smoke-manifest.jsonl"
-    p.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in fm.build_smoke_rows()))
+    p.write_text(
+        "".join(json.dumps(r, sort_keys=True) + "\n" for r in fm.build_smoke_rows())
+    )
     return p
 
 
 def test_smoke_batch_is_a_valid_batch_choice_and_dry_runs(smoke_manifest, capsys):
     rc = fr.main(
-        ["--batch", "SMOKE", "--manifest", str(smoke_manifest), "--engines", "yunshu", "--dry-run"]
+        [
+            "--batch",
+            "SMOKE",
+            "--manifest",
+            str(smoke_manifest),
+            "--engines",
+            "yunshu",
+            "--dry-run",
+        ]
     )
     out = capsys.readouterr().out
     assert rc == 0
@@ -45,7 +55,15 @@ def test_smoke_run_audits_only_the_smoke_batch():
 def test_unknown_engine_id_is_refused_not_silently_empty(smoke_manifest, capsys):
     # The runbook's bench id "yunshu-main" is not a manifest id ("yunshu"): it must fail closed.
     rc = fr.main(
-        ["--batch", "SMOKE", "--manifest", str(smoke_manifest), "--engines", "yunshu-main", "--dry-run"]
+        [
+            "--batch",
+            "SMOKE",
+            "--manifest",
+            str(smoke_manifest),
+            "--engines",
+            "yunshu-main",
+            "--dry-run",
+        ]
     )
     assert rc == 2
     assert "yunshu-main" in capsys.readouterr().err
@@ -59,11 +77,15 @@ def test_unknown_engine_helper_passes_known_ids():
 
 def test_real_matrix_b1_b2_cells_default_to_two_reps():
     assert fm.REPS == 2
-    spec = importlib.util.spec_from_file_location("fullcmp_manifest_reps", SCRIPTS / "fullcmp_manifest.py")
+    spec = importlib.util.spec_from_file_location(
+        "fullcmp_manifest_reps", SCRIPTS / "fullcmp_manifest.py"
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     rows, _meta = mod.build_rows()
-    b12 = [r for r in rows if r["batch"] in ("B1", "B2") and r["status"] == "unverified"]
+    b12 = [
+        r for r in rows if r["batch"] in ("B1", "B2") and r["status"] == "unverified"
+    ]
     assert b12, "expected runnable B1/B2 rows"
     assert {r["reps"] for r in b12} == {2}
 

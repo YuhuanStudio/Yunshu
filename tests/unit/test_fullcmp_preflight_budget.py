@@ -23,7 +23,9 @@ STARTUP_MARGIN_S = 60
 
 
 def _gpuq_const(name: str) -> float:
-    m = re.search(rf"^{name} = (?:float\(os\.environ\.get\([^,]+,\s*)?([0-9.]+)", GPUQ_SRC, re.M)
+    m = re.search(
+        rf"^{name} = (?:float\(os\.environ\.get\([^,]+,\s*)?([0-9.]+)", GPUQ_SRC, re.M
+    )
     assert m, f"gpuq.py constant {name} not found"
     return float(m.group(1))
 

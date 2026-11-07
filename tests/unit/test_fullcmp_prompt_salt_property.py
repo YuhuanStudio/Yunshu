@@ -25,7 +25,9 @@ HEAD = 40  # first characters of the content that must already diverge (the salt
 
 @pytest.fixture(scope="module")
 def tb():
-    spec = importlib.util.spec_from_file_location("tfbench_prop", ROOT / "scripts" / "research" / "tfbench.py")
+    spec = importlib.util.spec_from_file_location(
+        "tfbench_prop", ROOT / "scripts" / "research" / "tfbench.py"
+    )
     mod = importlib.util.module_from_spec(spec)
     sys.modules["tfbench_prop"] = mod
     spec.loader.exec_module(mod)
@@ -41,8 +43,14 @@ def stand_in(tb, monkeypatch):
         return (f"{name} corpus body " * 3000) + f"variant {variant} tail " * 2
 
     monkeypatch.setattr(tb, "load_variant_prompt", body)
-    monkeypatch.setattr(tb, "decode_prompt", lambda kind, ctx, ask, variant=0: body(f"{kind}-{ctx}", variant))
-    monkeypatch.setattr(sp, "exact_chat_prompt", lambda src, target, suffix="": f"{src}|{target}")
+    monkeypatch.setattr(
+        tb,
+        "decode_prompt",
+        lambda kind, ctx, ask, variant=0: body(f"{kind}-{ctx}", variant),
+    )
+    monkeypatch.setattr(
+        sp, "exact_chat_prompt", lambda src, target, suffix="": f"{src}|{target}"
+    )
     return body
 
 
@@ -55,7 +63,9 @@ def _cell_requests(tb, row):
     if turns == "mixed":
         n = int(row["conc"])
         for trial in range(2):  # the real cell runs conc_trials (2)
-            out.append((("mixed-long", trial), tb.mixed_long_text(trial, ctx, variant), None))
+            out.append(
+                (("mixed-long", trial), tb.mixed_long_text(trial, ctx, variant), None)
+            )
             for i in range(1, n):
                 # the short requests of the mixed cell (tfbench part_mixed: short_ctx 1024)
                 text = tb.mixed_short_text(i, trial, 1024, variant)
@@ -65,7 +75,9 @@ def _cell_requests(tb, row):
         same = row["sweep"] == "conc-same"
         for trial in range(2):
             for i in range(n):
-                text = tb.concurrent_prompt(0 if same else i, trial, ctx, variant, run=f"{n}v{variant}")
+                text = tb.concurrent_prompt(
+                    0 if same else i, trial, ctx, variant, run=f"{n}v{variant}"
+                )
                 group = ("same", trial) if same else None
                 out.append((("conc", trial, i), text, group))
     else:
@@ -102,8 +114,13 @@ def find_leaks(tb, rows=None, scope="cell"):
                 tagged = (row["id"], key)
                 if head in seen:
                     prev_tag, prev_share = seen[head]
-                    designed = share is not None and share == prev_share or (
-                        share == ("phase-repeat",) and prev_share == ("phase-repeat",)
+                    designed = (
+                        share is not None
+                        and share == prev_share
+                        or (
+                            share == ("phase-repeat",)
+                            and prev_share == ("phase-repeat",)
+                        )
                     )
                     if not designed:
                         leaks.append((prev_tag, tagged))
@@ -120,10 +137,16 @@ def test_no_two_requests_in_one_cell_share_a_prompt_head(stand_in, tb):
 def test_mutation_old_mixed_short_salt_is_reported(stand_in, tb, monkeypatch):
     # the run-0 mixed short prompts (before the fix): variant 0 and variant 1 mixed cells must collide
     monkeypatch.setattr(
-        tb, "mixed_short_text", lambda i, t, c, v=0: tb.concurrent_prompt(i, t, c, v, run=0)
+        tb,
+        "mixed_short_text",
+        lambda i, t, c, v=0: tb.concurrent_prompt(i, t, c, v, run=0),
     )
-    base = [r for r in _rows() if r.get("turns") == "mixed" and r["engine"] == "yunshu"][:1]
-    mixed = [dict(r, prompt_variant=v) for r in base for v in (0, 1)]  # the two smoke variants, one job
+    base = [
+        r for r in _rows() if r.get("turns") == "mixed" and r["engine"] == "yunshu"
+    ][:1]
+    mixed = [
+        dict(r, prompt_variant=v) for r in base for v in (0, 1)
+    ]  # the two smoke variants, one job
     leaks = find_leaks(tb, mixed, scope="job")
     assert leaks, "the detector must report the run-0 mixed short collision"
 
@@ -136,7 +159,13 @@ def test_mutation_conc_salt_without_variant_is_reported(stand_in, tb, monkeypatc
         return orig(index, trial, ctx, variant, run=str(run).split("v")[0])
 
     monkeypatch.setattr(tb, "concurrent_prompt", no_variant)
-    base = [r for r in _rows() if r.get("sweep", "").startswith("conc") and int(r.get("conc", 1)) > 1 and r["engine"] == "yunshu"][:1]
+    base = [
+        r
+        for r in _rows()
+        if r.get("sweep", "").startswith("conc")
+        and int(r.get("conc", 1)) > 1
+        and r["engine"] == "yunshu"
+    ][:1]
     conc = [dict(r, prompt_variant=v) for r in base for v in (0, 1)]
     leaks = find_leaks(tb, conc, scope="job")
     assert leaks, "the detector must report the variant-free conc collision"
@@ -148,14 +177,17 @@ def test_conc_same_requests_of_different_trials_diverge_from_token_zero(stand_in
             continue
         heads = {}
         for key, text, _group in _cell_requests(tb, row):
-            if key[0] == "conc" and key[2] == 0:  # request 0 of each trial primes the shared prompt
+            if (
+                key[0] == "conc" and key[2] == 0
+            ):  # request 0 of each trial primes the shared prompt
                 heads[key[1]] = _key_text(text)
         assert len(set(heads.values())) == len(heads), row["id"]
 
 
-def test_the_stand_in_reproduces_a_variant_collision_when_the_salt_omits_the_variant(stand_in, tb, monkeypatch):
+def test_the_stand_in_reproduces_a_variant_collision_when_the_salt_omits_the_variant(
+    stand_in, tb, monkeypatch
+):
     # the detector must see the leak it was written for: the run name without the variant collides
     a = tb.concurrent_prompt(0, 0, 8192, 0, run="4")
     b = tb.concurrent_prompt(0, 0, 8192, 1, run="4")
     assert _key_text(a) == _key_text(b)
-

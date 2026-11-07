@@ -33,7 +33,12 @@ B = "b" * 64
 def quiet_record(total=0.5, holders=(), limit=150.0, single=20.0):
     """A quiet_pre / quiet_post snapshot as fullcmp_quiet.check() records it (`limit` = total)."""
     hs = [dict(h) for h in holders]
-    violators = [h for h in hs if h["pct"] >= single and h["name"] not in ("WindowServer", "kernel_task", "mds_stores")]
+    violators = [
+        h
+        for h in hs
+        if h["pct"] >= single
+        and h["name"] not in ("WindowServer", "kernel_task", "mds_stores")
+    ]
     return {
         "ok": total < limit and not violators,
         "max_single_pct": single,
@@ -234,12 +239,25 @@ def make_data():
                         r["attr"]["accepted"] = 3
                         r["attr"]["drafted"] = 4
                         r["attr"]["rounds"] = 2
-                if eng != "yunshu":  # attribution per measured row, as tfbench writes it (part=attr)
-                    for k, r in enumerate([r for r in rows if r.get("part") == "decode"]):
-                        rows.append({"part": "attr", "row": k, "accepted": 3, "drafted": 4, "rounds": 2,
-                                     "tokens_per_round": round(r.get("ct", 1) / 2, 3)
-                                     if isinstance(r.get("ct"), int) else "unavailable (no count)",
-                                     "matched_line": FIXTURE_LOG_LINE})
+                if (
+                    eng != "yunshu"
+                ):  # attribution per measured row, as tfbench writes it (part=attr)
+                    for k, r in enumerate(
+                        [r for r in rows if r.get("part") == "decode"]
+                    ):
+                        rows.append(
+                            {
+                                "part": "attr",
+                                "row": k,
+                                "accepted": 3,
+                                "drafted": 4,
+                                "rounds": 2,
+                                "tokens_per_round": round(r.get("ct", 1) / 2, 3)
+                                if isinstance(r.get("ct"), int)
+                                else "unavailable (no count)",
+                                "matched_line": FIXTURE_LOG_LINE,
+                            }
+                        )
                 files[f"{eng}/{cell}-r{rep}.jsonl"] = rows
     return manifest, files
 
@@ -317,7 +335,10 @@ def _engaged_table(monkeypatch):
         ],
         "fallback": [],
     }
-    table = {"_meta": {"fixture": True}, "engines": {"mlx-serve-26.11.1": {"modes": {"dflash": entry}}}}
+    table = {
+        "_meta": {"fixture": True},
+        "engines": {"mlx-serve-26.11.1": {"modes": {"dflash": entry}}},
+    }
     monkeypatch.setattr(fe, "load_table", lambda: table)
 
 
@@ -336,7 +357,8 @@ def write_run(root: Path, manifest, files, telemetry=True) -> Path:
         if any(isinstance(r, dict) and r.get("_no_engine_log_evidence") for r in rows):
             line = "[round-profile] engine=fixture round=1 tokens=4"
         fa.server_log_slice_path(path).write_text(
-            line + "\n[round-profile] engine=fixture round=1 drafts=4 accepted=3 tokens=4\n"
+            line
+            + "\n[round-profile] engine=fixture round=1 drafts=4 accepted=3 tokens=4\n"
         )
         if telemetry:
             telemetry_file(path).write_text(
@@ -504,7 +526,8 @@ def test_good_run_passes_all_guards(tmp_path):
     # family_validity and behaviour pass with zero checks here, and only because the manifest has
     # no family cell (no tool/json/cjk/thinking/image cell) and no behaviour section
     assert not any(
-        fm.is_family_cell(c["kind"], c.get("thinking"), c.get("media")) for c in manifest["cells"]
+        fm.is_family_cell(c["kind"], c.get("thinking"), c.get("media"))
+        for c in manifest["cells"]
     )
     assert not manifest.get("behaviour")
     vacuous = {r.name for r in results if r.checked == 0}
@@ -512,11 +535,15 @@ def test_good_run_passes_all_guards(tmp_path):
     assert all(r.checked > 0 for r in results if r.name not in vacuous)
 
 
-def test_family_validity_with_no_family_rows_fails_when_the_manifest_has_family_cells(tmp_path):
+def test_family_validity_with_no_family_rows_fails_when_the_manifest_has_family_cells(
+    tmp_path,
+):
     manifest, files = make_data()
     for c in manifest["cells"]:
         c["kind"] = "tool-chat"  # the manifest now plans family cells ...
-    _, results = _run(tmp_path, manifest, {})  # ... and no cell file (no rows) was written
+    _, results = _run(
+        tmp_path, manifest, {}
+    )  # ... and no cell file (no rows) was written
     assert "family_validity" in failing(results)
 
 
@@ -1065,8 +1092,18 @@ def _conc_record(trial=0, n=2, ct=16, drop=None):
         "n": n,
         "trial": trial,
         # schema (tfbench request_records): one entry per request of the record
-        "requests": [{"rid": i, "pt": 1024, "ct": ct, "cached": 0, "ttft_s": 0.5, "dec_tps": 30.0,
-                      "spec": {"accepted": 3, "drafted": 4, "rounds": 2}} for i in range(n)],
+        "requests": [
+            {
+                "rid": i,
+                "pt": 1024,
+                "ct": ct,
+                "cached": 0,
+                "ttft_s": 0.5,
+                "dec_tps": 30.0,
+                "spec": {"accepted": 3, "drafted": 4, "rounds": 2},
+            }
+            for i in range(n)
+        ],
         "ttfts": [0.5 + i for i in range(n)],
         "per_req_dec": [30.0] * n,
         "total_s": [3.0] * n,
@@ -1163,13 +1200,16 @@ def test_truncated_cell_without_part_done_is_a_violation_naming_the_cell(tmp_pat
     assert run.files[0].truncated == ("decode",)
     rec = fa.check_record_count(run)
     assert any(
-        "B1.core.yunshu.64K.c1.prose.o512" in v and "truncated" in v and "part_done" in v
+        "B1.core.yunshu.64K.c1.prose.o512" in v
+        and "truncated" in v
+        and "part_done" in v
         for v in rec.violations
     )
     assert any("record" in v or "request rows" in v for v in rec.violations)
     comp = fa.check_manifest_completeness(run)
     assert any(
-        "B1.core.yunshu.8K.c1.code.o512" in v and "missing" in v for v in comp.violations
+        "B1.core.yunshu.8K.c1.code.o512" in v and "missing" in v
+        for v in comp.violations
     )
 
 
@@ -1249,10 +1289,12 @@ def test_quiet_machine_flags_post_snapshot_over_limit_and_names_holder():
 def test_quiet_machine_system_noise_exempts_only_windowserver_and_kernel_task():
     import fullcmp_quiet as fq
 
-    assert fq.SYSTEM_NOISE == frozenset({"WindowServer", "kernel_task"})
+    assert frozenset({"WindowServer", "kernel_task"}) == fq.SYSTEM_NOISE
     for name in ("mds_stores", "mds"):  # Spotlight is never exempt
         holder = [{"pid": 700, "name": name, "pct": 43.0}]
-        run = _fake_run([_qcell("c1", 0, quiet_record(1.0), quiet_record(43.0, holder))])
+        run = _fake_run(
+            [_qcell("c1", 0, quiet_record(1.0), quiet_record(43.0, holder))]
+        )
         assert fa.check_quiet_machine(run).violations, name
     ws = [{"pid": 634, "name": "WindowServer", "pct": 43.0}]
     run = _fake_run([_qcell("c1", 0, quiet_record(1.0), quiet_record(43.0, ws))])
@@ -1262,19 +1304,28 @@ def test_quiet_machine_system_noise_exempts_only_windowserver_and_kernel_task():
 def test_wire_1107_kapitsa_mixed_quiet_pre_is_flagged():
     # the real record: quiet_pre of kapitsa-0.2.26 SMOKE mixed v0 (wire-1107) had mds at 48.66%,
     # total 112.78%, ok false; the cell ran anyway. Under the audit this must fail.
-    holders = [{"pid": 590, "name": "mds", "pct": 48.66}, {"pid": 85506, "name": "node", "pct": 12.62}]
+    holders = [
+        {"pid": 590, "name": "mds", "pct": 48.66},
+        {"pid": 85506, "name": "node", "pct": 12.62},
+    ]
     pre = quiet_record(48.66, holders)
     pre["total_foreign_pct"] = 112.78
     pre["ok"] = False
     run = _fake_run([_qcell("kapitsa-mixed-v0", 0, pre, quiet_record(1.0))])
     res = fa.check_quiet_machine(run)
-    assert res.violations and "quiet_pre" in res.violations[0] and "mds" in res.violations[0]
+    assert (
+        res.violations
+        and "quiet_pre" in res.violations[0]
+        and "mds" in res.violations[0]
+    )
 
 
 def test_quiet_machine_uses_the_limit_recorded_in_the_snapshot():
     # A 30% reading against a recorded 40% limit passes; the same reading at 25% fails.
     ok = _fake_run([_qcell("c1", 0, quiet_record(30.0, limit=40.0), quiet_record(0.0))])
-    bad = _fake_run([_qcell("c1", 0, quiet_record(30.0, limit=25.0), quiet_record(0.0))])
+    bad = _fake_run(
+        [_qcell("c1", 0, quiet_record(30.0, limit=25.0), quiet_record(0.0))]
+    )
     assert fa.check_quiet_machine(ok).violations == []
     assert fa.check_quiet_machine(bad).violations
 
@@ -1321,8 +1372,12 @@ def _round_rows(ms, rounds, ctx=1024, phase="cold", kind="code"):
 
 def test_round_time_outlier_flags_rep_more_than_1_5x_the_median():
     runs = [
-        _fake_run([_qcell("c1", 0, quiet_record(), quiet_record(), [_round_rows(1000, 10)])]),
-        _fake_run([_qcell("c1", 1, quiet_record(), quiet_record(), [_round_rows(1010, 10)])]),
+        _fake_run(
+            [_qcell("c1", 0, quiet_record(), quiet_record(), [_round_rows(1000, 10)])]
+        ),
+        _fake_run(
+            [_qcell("c1", 1, quiet_record(), quiet_record(), [_round_rows(1010, 10)])]
+        ),
     ]
     cf0 = runs[0].files[0]
     cf1 = runs[1].files[0]
@@ -1345,10 +1400,22 @@ def test_round_time_outlier_passes_within_1_5x():
 
 
 def test_round_time_outlier_ignores_requests_without_round_counts():
-    plain = {"part": "decode", "phase": "cold", "ctx": 1024, "kind": "code", "xy": {"decode_ms": 1}}
+    plain = {
+        "part": "decode",
+        "phase": "cold",
+        "ctx": 1024,
+        "kind": "code",
+        "xy": {"decode_ms": 1},
+    }
     cells = [
         _qcell("c1", 0, quiet_record(), quiet_record(), [plain]),
-        _qcell("c1", 1, quiet_record(), quiet_record(), [dict(plain, xy={"decode_ms": 9000})]),
+        _qcell(
+            "c1",
+            1,
+            quiet_record(),
+            quiet_record(),
+            [dict(plain, xy={"decode_ms": 9000})],
+        ),
     ]
     res = fa.check_round_time_outlier(_fake_run(cells))
     assert res.violations == []
@@ -1364,7 +1431,13 @@ def test_conc_rows_pass_cold_cache_with_recorded_cached_counts():
     # Smoke4 (2026-11-03): conc rows have phase "conc"; the guard rejected them as an unknown phase.
     cell = {"cell": "c", "engine": "yunshu", "group": "g", "phases": ["conc"]}
     rows = fa.conc_request_rows(_conc_record(n=2))
-    run = fa.Run({"groups": {}}, [_cf(cell, 0, {"part": "session", "fresh_process": True}, rows)], [], [], [])
+    run = fa.Run(
+        {"groups": {}},
+        [_cf(cell, 0, {"part": "session", "fresh_process": True}, rows)],
+        [],
+        [],
+        [],
+    )
     res = fa.check_cold_cache(run)
     assert res.violations == []
     assert res.checked > 0
@@ -1374,7 +1447,13 @@ def test_conc_row_without_recorded_cached_count_fails_cold_cache():
     cell = {"cell": "c", "engine": "yunshu", "group": "g", "phases": ["conc"]}
     rows = fa.conc_request_rows(_conc_record(n=2))
     rows[1]["cached"] = None
-    run = fa.Run({"groups": {}}, [_cf(cell, 0, {"part": "session", "fresh_process": True}, rows)], [], [], [])
+    run = fa.Run(
+        {"groups": {}},
+        [_cf(cell, 0, {"part": "session", "fresh_process": True}, rows)],
+        [],
+        [],
+        [],
+    )
     res = fa.check_cold_cache(run)
     assert any("cached count not recorded" in v for v in res.violations)
 
@@ -1386,12 +1465,19 @@ import fullcmp_attribution as fat  # noqa: E402
 
 
 def _attr_run(tmp_path, rows, *, profile=None, full=False, engine="yunshu"):
-    cell = {"cell": "q27_decode-1024-code", "engine": engine, "group": "g", "phases": ["decode"]}
+    cell = {
+        "cell": "q27_decode-1024-code",
+        "engine": engine,
+        "group": "g",
+        "phases": ["decode"],
+    }
     cf = _cf(cell, 0, {"part": "session"}, rows)
     # the cell file sits where the audit reads it, with its engine-log slice beside it
     cf.path = tmp_path / engine / "q27_decode-1024-code-r0.jsonl"
     fa.server_log_slice_path(cf.path).parent.mkdir(parents=True, exist_ok=True)
-    fa.server_log_slice_path(cf.path).write_text("[round-profile] engine=yunshu round=1\n")
+    fa.server_log_slice_path(cf.path).write_text(
+        "[round-profile] engine=yunshu round=1\n"
+    )
     root = tmp_path / "profile"
     if profile is not None:
         d = root / engine
@@ -1410,18 +1496,57 @@ def _attr_run(tmp_path, rows, *, profile=None, full=False, engine="yunshu"):
 
 def _full_layer1_row():
     attr = {f: 1.0 for f in list(fat.LAYER1_TIMESTAMPS) + list(fat.LAYER1_COUNTERS)}
-    attr.update({"rounds": 3, "tokens_per_round": [2, 2, 1], "rows_per_round": [1, 1, 1],
-                 "cache_hit_tokens": 0, "chunk_sizes": [512], "host_gaps_ms": [1.0],
-                 "engine_log_path": "/x.log", "t_rounds": [1.0], "t_prefill_chunks": [[0, 1, 512]]})
+    attr.update(
+        {
+            "rounds": 3,
+            "tokens_per_round": [2, 2, 1],
+            "rows_per_round": [1, 1, 1],
+            "cache_hit_tokens": 0,
+            "chunk_sizes": [512],
+            "host_gaps_ms": [1.0],
+            "engine_log_path": "/x.log",
+            "t_rounds": [1.0],
+            "t_prefill_chunks": [[0, 1, 512]],
+        }
+    )
     return {"part": "decode", "attr": attr, "attr_unavailable": {}}
 
 
 def _profile_row(complete=True):
-    stages = {"decode_round": {k: 1.0 for k in ("drafter", "plan", "copy_lookup", "verify_weights",
-                                                 "verify_attention", "commit")},
-              "prefill": {k: 1.0 for k in ("chunk_compute", "eval_wait", "apc_store", "drafter_context")},
-              "ttft": {k: 1.0 for k in ("template", "lookup", "restore", "prefill", "drafter_rebuild", "first_round")}}
-    row = {"part": "profile", "stages": stages, "host_sync_count": 4, "op_census": {"matmul": 10}}
+    stages = {
+        "decode_round": {
+            k: 1.0
+            for k in (
+                "drafter",
+                "plan",
+                "copy_lookup",
+                "verify_weights",
+                "verify_attention",
+                "commit",
+            )
+        },
+        "prefill": {
+            k: 1.0
+            for k in ("chunk_compute", "eval_wait", "apc_store", "drafter_context")
+        },
+        "ttft": {
+            k: 1.0
+            for k in (
+                "template",
+                "lookup",
+                "restore",
+                "prefill",
+                "drafter_rebuild",
+                "first_round",
+            )
+        },
+    }
+    row = {
+        "part": "profile",
+        "stages": stages,
+        "host_sync_count": 4,
+        "op_census": {"matmul": 10},
+    }
     if not complete:
         # a field the engine DOES emit (its round line carries the drafter time): absence is a real gap
         del row["stages"]["decode_round"]["drafter"]
@@ -1442,8 +1567,16 @@ def test_timed_row_lacking_a_layer1_field_fails(tmp_path):
 
 
 def test_profile_rep_lacking_layer2_fails(tmp_path):
-    res = _attr_run(tmp_path, [_full_layer1_row()], profile=[_profile_row(complete=False)], full=True)
-    assert any("profile rep lacks layer 2" in v and "decode_round.drafter" in v for v in res.violations)
+    res = _attr_run(
+        tmp_path,
+        [_full_layer1_row()],
+        profile=[_profile_row(complete=False)],
+        full=True,
+    )
+    assert any(
+        "profile rep lacks layer 2" in v and "decode_round.drafter" in v
+        for v in res.violations
+    )
 
 
 def test_profile_rep_without_counters_passes_with_explicit_reasons(tmp_path):
@@ -1518,11 +1651,21 @@ def test_usage_cached_none_without_reason_fails():
 
 
 def test_usage_cached_none_with_reason_passes_usage_but_cold_cache_fails_it():
-    row = _decode_row(cached=None, cached_unavailable="usage has no cached count", phase="cold")
+    row = _decode_row(
+        cached=None, cached_unavailable="usage has no cached count", phase="cold"
+    )
     assert fa.check_usage_fields(_usage_run([row])).violations == []
     cell = {"cell": "c", "engine": "yunshu", "group": "g", "phases": ["decode"]}
-    run = fa.Run({"groups": {}}, [_cf(cell, 0, {"part": "session", "fresh_process": True}, [row])], [], [], [])
-    assert any("must be server-reported 0" in v for v in fa.check_cold_cache(run).violations)
+    run = fa.Run(
+        {"groups": {}},
+        [_cf(cell, 0, {"part": "session", "fresh_process": True}, [row])],
+        [],
+        [],
+        [],
+    )
+    assert any(
+        "must be server-reported 0" in v for v in fa.check_cold_cache(run).violations
+    )
 
 
 def _conc_with_aggregates(decs=(10.0, 20.0), **override):
@@ -1568,9 +1711,19 @@ def test_conc_agg_tps_must_equal_total_over_wall():
 def _rot_cf(engine, rep, start, group="g"):
     import types
 
-    header = {"job_start_s": start, "job_end_s": start + 5.0, "gpu_exclusive": True, "contended": False}
-    return types.SimpleNamespace(header=header, cell={"cell": f"{engine}-c", "group": group, "engine": engine},
-                                 rep=rep, rows=[], path=None)
+    header = {
+        "job_start_s": start,
+        "job_end_s": start + 5.0,
+        "gpu_exclusive": True,
+        "contended": False,
+    }
+    return types.SimpleNamespace(
+        header=header,
+        cell={"cell": f"{engine}-c", "group": group, "engine": engine},
+        rep=rep,
+        rows=[],
+        path=None,
+    )
 
 
 def _rot_run(order, observed_engines, untimed_engines=(), rep=0):
@@ -1583,28 +1736,58 @@ def _rot_run(order, observed_engines, untimed_engines=(), rep=0):
 def _untimed_cf(engine, rep):
     import types
 
-    return types.SimpleNamespace(header={"gpu_exclusive": None}, cell={"cell": f"{engine}-c", "group": "g",
-                                                                       "engine": engine}, rep=rep, rows=[], path=None)
+    return types.SimpleNamespace(
+        header={"gpu_exclusive": None},
+        cell={"cell": f"{engine}-c", "group": "g", "engine": engine},
+        rep=rep,
+        rows=[],
+        path=None,
+    )
 
 
 # the real wire-1106c observed interleave (failed engines absent) against the planned order
-PLANNED_1106 = ["yunshu", "tf-1.2.1", "tf-1.1.8", "splash-1.5.0", "kapitsa-0.2.26", "mlx-serve-26.11.1",
-                "llama-cpp-b12061"]
-OBSERVED_1106 = ["yunshu", "tf-1.2.1", "tf-1.1.8", "splash-1.5.0", "mlx-serve-26.11.1", "llama-cpp-b12061"]
+PLANNED_1106 = [
+    "yunshu",
+    "tf-1.2.1",
+    "tf-1.1.8",
+    "splash-1.5.0",
+    "kapitsa-0.2.26",
+    "mlx-serve-26.11.1",
+    "llama-cpp-b12061",
+]
+OBSERVED_1106 = [
+    "yunshu",
+    "tf-1.2.1",
+    "tf-1.1.8",
+    "splash-1.5.0",
+    "mlx-serve-26.11.1",
+    "llama-cpp-b12061",
+]
 
 
 def test_rotation_compares_the_completed_subsequence_in_planned_order():
     """Failing-before (wire-1106c): the observed interleave (kapitsa failed, absent) was compared with the full
     planned rotation. The completed engines follow the planned relative order: no violation."""
-    res = fa.check_gpu_exclusive_rotation(_rot_run(PLANNED_1106, OBSERVED_1106, untimed_engines=["kapitsa-0.2.26"]))
+    res = fa.check_gpu_exclusive_rotation(
+        _rot_run(PLANNED_1106, OBSERVED_1106, untimed_engines=["kapitsa-0.2.26"])
+    )
     assert res.violations == [], res.violations
     assert any("kapitsa-0.2.26" in n and "failed job" in n for n in res.notes)
 
 
 def test_rotation_swapped_completed_engines_is_still_a_violation():
-    swapped = ["tf-1.2.1", "yunshu", "tf-1.1.8", "splash-1.5.0", "mlx-serve-26.11.1", "llama-cpp-b12061"]
+    swapped = [
+        "tf-1.2.1",
+        "yunshu",
+        "tf-1.1.8",
+        "splash-1.5.0",
+        "mlx-serve-26.11.1",
+        "llama-cpp-b12061",
+    ]
     res = fa.check_gpu_exclusive_rotation(_rot_run(PLANNED_1106, swapped))
-    assert res.violations and "planned order of the completed engines" in res.violations[0]
+    assert (
+        res.violations and "planned order of the completed engines" in res.violations[0]
+    )
 
 
 # --- cold_cache for concurrent and mixed requests (wire-1107 records, values copied in) -------
@@ -1616,76 +1799,180 @@ def _mixed_rows(cached):
 
 def test_wire_1107_yunshu_mixed_trial1_fails_the_cold_cache_guard():
     # wire-1107y yunshu SMOKE mixed 8K c4 v0: trial 1 cached [8192, 0, 0, 0]
-    run = _fake_run([_cf({"cell": "SMOKE.smoke-mixed.yunshu.8K.c4.code.o64.mixed.th-off.none.greedy.v0"},
-                         0, {"part": "session", "fresh_process": True}, _mixed_rows([0, 0, 0, 0, 8192, 0, 0, 0]))])
+    run = _fake_run(
+        [
+            _cf(
+                {
+                    "cell": "SMOKE.smoke-mixed.yunshu.8K.c4.code.o64.mixed.th-off.none.greedy.v0"
+                },
+                0,
+                {"part": "session", "fresh_process": True},
+                _mixed_rows([0, 0, 0, 0, 8192, 0, 0, 0]),
+            )
+        ]
+    )
     res = fa.check_cold_cache(run)
-    assert any("mixed" in v and "cached=8192" in v for v in res.violations), res.violations
+    assert any("mixed" in v and "cached=8192" in v for v in res.violations), (
+        res.violations
+    )
 
 
 def test_wire_1107_splash_and_tf_121_mixed_trial1_fail_the_cold_cache_guard():
     # splash cached [8160, 0, 0, 0] and tf-1.2.1 cached [8187, 3, 3, 3] in trial 1
     for cell, cached in (
-        ("SMOKE.smoke-mixed.splash-1.5.0.8K.c4.code.o64.mixed.th-off.none.greedy.v0", [8160, 0, 0, 0]),
-        ("SMOKE.smoke-mixed.tf-1.2.1.8K.c4.code.o64.mixed.th-off.none.greedy.v0", [8187, 3, 3, 3]),
+        (
+            "SMOKE.smoke-mixed.splash-1.5.0.8K.c4.code.o64.mixed.th-off.none.greedy.v0",
+            [8160, 0, 0, 0],
+        ),
+        (
+            "SMOKE.smoke-mixed.tf-1.2.1.8K.c4.code.o64.mixed.th-off.none.greedy.v0",
+            [8187, 3, 3, 3],
+        ),
     ):
-        run = _fake_run([_cf({"cell": cell}, 0, {"part": "session", "fresh_process": True}, _mixed_rows(cached))])
+        run = _fake_run(
+            [
+                _cf(
+                    {"cell": cell},
+                    0,
+                    {"part": "session", "fresh_process": True},
+                    _mixed_rows(cached),
+                )
+            ]
+        )
         assert fa.check_cold_cache(run).violations, cell
 
 
 def test_missing_cached_fails_closed_for_mixed_and_conc_rows():
     rows = [{"part": "conc", "phase": "conc", "ct": 16}]  # no cached field at all
-    run = _fake_run([_cf({"cell": "B2.conc.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
-                         {"part": "session", "fresh_process": True}, rows)])
+    run = _fake_run(
+        [
+            _cf(
+                {"cell": "B2.conc.yunshu.8K.c4.code.o512.single.th-off.none.greedy"},
+                0,
+                {"part": "session", "fresh_process": True},
+                rows,
+            )
+        ]
+    )
     assert fa.check_cold_cache(run).violations
 
 
 def test_conc_same_shares_its_prompt_by_design():
     rows = _conc_same_rows([0, 512, 512, 512], [1024] * 4)
-    run = _fake_run([_cf({"cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
-                         {"part": "session", "fresh_process": True}, rows)])
+    run = _fake_run(
+        [
+            _cf(
+                {
+                    "cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"
+                },
+                0,
+                {"part": "session", "fresh_process": True},
+                rows,
+            )
+        ]
+    )
     assert fa.check_cold_cache(run).violations == []
 
 
 def _conc_same_rows(cached, pts):
     return [
-        {"part": "conc", "phase": "conc", "cached": c, "pt": p, "req_index": i, "ct": 16}
-        for i, (c, p) in enumerate(zip(cached, pts))
+        {
+            "part": "conc",
+            "phase": "conc",
+            "cached": c,
+            "pt": p,
+            "req_index": i,
+            "ct": 16,
+        }
+        for i, (c, p) in enumerate(zip(cached, pts, strict=True))
     ]
 
 
 def test_conc_same_trial_with_every_request_cached_fails():
     # the trial's first arrival must be a miss; if all n requests hit, the prompt was primed earlier
     rows = _conc_same_rows([512, 512, 512, 512], [1024] * 4)
-    run = _fake_run([_cf({"cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
-                         {"part": "session", "fresh_process": True}, rows)])
-    assert any("first arrival must be a miss" in v for v in fa.check_cold_cache(run).violations)
+    run = _fake_run(
+        [
+            _cf(
+                {
+                    "cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"
+                },
+                0,
+                {"part": "session", "fresh_process": True},
+                rows,
+            )
+        ]
+    )
+    assert any(
+        "first arrival must be a miss" in v for v in fa.check_cold_cache(run).violations
+    )
 
 
 def test_conc_same_request_zero_cached_passes_when_another_request_is_the_miss():
     # server order is arbitrary: index 0 may be processed after a sibling that was the first arrival
     rows = _conc_same_rows([512, 0, 512, 512], [1024] * 4)
-    run = _fake_run([_cf({"cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
-                         {"part": "session", "fresh_process": True}, rows)])
+    run = _fake_run(
+        [
+            _cf(
+                {
+                    "cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"
+                },
+                0,
+                {"part": "session", "fresh_process": True},
+                rows,
+            )
+        ]
+    )
     assert fa.check_cold_cache(run).violations == []
 
 
 def test_conc_same_later_requests_may_hit_the_shared_prefix_only():
     rows = _conc_same_rows([0, 512, 512, 512], [1024] * 4)
-    run = _fake_run([_cf({"cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
-                         {"part": "session", "fresh_process": True}, rows)])
+    run = _fake_run(
+        [
+            _cf(
+                {
+                    "cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"
+                },
+                0,
+                {"part": "session", "fresh_process": True},
+                rows,
+            )
+        ]
+    )
     assert fa.check_cold_cache(run).violations == []
     over = _conc_same_rows([0, 2048, 0, 0], [1024] * 4)
-    run2 = _fake_run([_cf({"cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
-                          {"part": "session", "fresh_process": True}, over)])
+    run2 = _fake_run(
+        [
+            _cf(
+                {
+                    "cell": "B2.conc-same.yunshu.8K.c4.code.o512.single.th-off.none.greedy"
+                },
+                0,
+                {"part": "session", "fresh_process": True},
+                over,
+            )
+        ]
+    )
     assert any("> prompt tokens" in v for v in fa.check_cold_cache(run2).violations)
 
 
 def test_conc_distinct_any_cached_request_fails():
     rows = _conc_same_rows([0, 0, 512, 0], [1024] * 4)
     rows = [{**r, "phase": "conc"} for r in rows]
-    run = _fake_run([_cf({"cell": "B2.conc.yunshu.8K.c4.code.o512.single.th-off.none.greedy"}, 0,
-                         {"part": "session", "fresh_process": True}, rows)])
-    assert any("must be server-reported 0" in v for v in fa.check_cold_cache(run).violations)
+    run = _fake_run(
+        [
+            _cf(
+                {"cell": "B2.conc.yunshu.8K.c4.code.o512.single.th-off.none.greedy"},
+                0,
+                {"part": "session", "fresh_process": True},
+                rows,
+            )
+        ]
+    )
+    assert any(
+        "must be server-reported 0" in v for v in fa.check_cold_cache(run).violations
+    )
 
 
 def test_yunshu_aliases_never_take_the_competitor_branch():
@@ -1695,9 +1982,16 @@ def test_yunshu_aliases_never_take_the_competitor_branch():
     import re
     from pathlib import Path
 
-    src = Path(__file__).resolve().parents[2] / "scripts" / "research" / "fullcmp_audit.py"
+    src = (
+        Path(__file__).resolve().parents[2]
+        / "scripts"
+        / "research"
+        / "fullcmp_audit.py"
+    )
     text = src.read_text()
-    assert not re.search(r'engine\s*(!=|==)\s*"yunshu"', text), "use fe.is_yunshu(engine), not string equality"
+    assert not re.search(r'engine\s*(!=|==)\s*"yunshu"', text), (
+        "use fe.is_yunshu(engine), not string equality"
+    )
 
 
 def test_quiet_flagged_rerun_keeps_its_original_slot_in_the_rotation_order():
@@ -1706,7 +2000,10 @@ def test_quiet_flagged_rerun_keeps_its_original_slot_in_the_rotation_order():
     import types
 
     order = ["omlx-0.7.3", "tf-1.2.1", "splash-1.5.0"]
-    files = [_rot_cf("tf-1.2.1", 0, 1793763730.0), _rot_cf("splash-1.5.0", 0, 1793763800.0)]
+    files = [
+        _rot_cf("tf-1.2.1", 0, 1793763730.0),
+        _rot_cf("splash-1.5.0", 0, 1793763800.0),
+    ]
     omlx = _rot_cf("omlx-0.7.3", 0, 1793765093.0)  # the rerun's own, later, timestamps
     omlx.slot = (1793763668.0, 1793763728.0)  # the superseded first attempt
     files.insert(0, omlx)
@@ -1752,7 +2049,9 @@ def test_engaged_per_row_without_row_id_is_reported_not_a_crash(tmp_path, monkey
     monkeypatch.setattr(fe, "evaluate", with_bare_row)
     run = fa.load_run(tmp_path / "run", json.loads(mpath.read_text()))
     res = fa.check_engaged_mode(run)  # must not raise KeyError
-    assert res.notes and all("row <missing>" in n and "prompt <missing>" in n for n in res.notes)
+    assert res.notes and all(
+        "row <missing>" in n and "prompt <missing>" in n for n in res.notes
+    )
 
 
 def test_genconfig_cell_is_exempt_from_greedy_but_not_from_other_checks(tmp_path):
@@ -1762,12 +2061,16 @@ def test_genconfig_cell_is_exempt_from_greedy_but_not_from_other_checks(tmp_path
     gen_cell = "B2.sampling.yunshu.1K.c1.code.o512.single.th-off.none.genconfig"
     manifest, _ = make_data()
     cf_ok = fa.CellFile(
-        {"cell": gen_cell, "engine": "yunshu", "group": "g"}, 0, Path("x"),
+        {"cell": gen_cell, "engine": "yunshu", "group": "g"},
+        0,
+        Path("x"),
         {"job_id": "j1", "home": "/tmp/h1"},
         [{"temperature": 1.0, "top_p": 0.95, "sampling": "genconfig"}],
     )
     cf_bad = fa.CellFile(
-        {"cell": gen_cell, "engine": "yunshu", "group": "g"}, 0, Path("x"),
+        {"cell": gen_cell, "engine": "yunshu", "group": "g"},
+        0,
+        Path("x"),
         {"job_id": "j2", "home": "/tmp/h2"},
         [{"temperature": 0.7, "sampling": "greedy"}],
     )
@@ -1778,10 +2081,19 @@ def test_genconfig_cell_is_exempt_from_greedy_but_not_from_other_checks(tmp_path
     assert any("temperature 0.7" in m for m in msgs)
     # a greedy cell (not genconfig) at temperature 1.0 is still refused
     cf_greedy = fa.CellFile(
-        {"cell": gen_cell.replace(".genconfig", ".greedy"), "engine": "yunshu", "group": "g"}, 0,
-        Path("x"), {"job_id": "j3", "home": "/tmp/h3"}, [{"temperature": 1.0}],
+        {
+            "cell": gen_cell.replace(".genconfig", ".greedy"),
+            "engine": "yunshu",
+            "group": "g",
+        },
+        0,
+        Path("x"),
+        {"job_id": "j3", "home": "/tmp/h3"},
+        [{"temperature": 1.0}],
     )
-    msgs = fa.check_fairness_controls(fa.Run(manifest, [cf_greedy], [], [], [], full=False)).violations
+    msgs = fa.check_fairness_controls(
+        fa.Run(manifest, [cf_greedy], [], [], [], full=False)
+    ).violations
     assert any("temperature 1.0; greedy (0) required" in m for m in msgs)
 
 
@@ -1790,8 +2102,23 @@ def test_skipped_engine_cells_are_not_expected_files(tmp_path):
     planned cells are not missing measurements."""
     manifest = {
         "reps": 2,
-        "cells": [{"engine": "lmstudio", "cell": LMS_CELL, "reps": 2, "phases": ["cold"], "expected_records": 1}],
-        "unsupported": [{"engine": "lmstudio", "cell": LMS_CELL, "batch": "B1", "reason": LMS_REASON}],
+        "cells": [
+            {
+                "engine": "lmstudio",
+                "cell": LMS_CELL,
+                "reps": 2,
+                "phases": ["cold"],
+                "expected_records": 1,
+            }
+        ],
+        "unsupported": [
+            {
+                "engine": "lmstudio",
+                "cell": LMS_CELL,
+                "batch": "B1",
+                "reason": LMS_REASON,
+            }
+        ],
     }
     run = fa.load_run(tmp_path / "run", manifest)
     assert run.missing == []
@@ -1806,14 +2133,23 @@ def test_skipped_cell_with_a_file_is_labelled_unsupported_not_a_violation(tmp_pa
     manifest = {
         "reps": 2,
         "cells": [],
-        "unsupported": [{"engine": "lmstudio", "cell": LMS_CELL, "batch": "B1", "reason": LMS_REASON}],
+        "unsupported": [
+            {
+                "engine": "lmstudio",
+                "cell": LMS_CELL,
+                "batch": "B1",
+                "reason": LMS_REASON,
+            }
+        ],
     }
     d = tmp_path / "run" / "lmstudio"
     d.mkdir(parents=True)
     (d / f"{LMS_CELL}-r0.jsonl").write_text('{"part": "session"}\n')
     run = fa.load_run(tmp_path / "run", manifest)
     assert run.extra == []
-    assert [(c["cell"], rep, r) for c, rep, r in run.unsupported] == [(LMS_CELL, 0, LMS_REASON)]
+    assert [(c["cell"], rep, r) for c, rep, r in run.unsupported] == [
+        (LMS_CELL, 0, LMS_REASON)
+    ]
     assert run.files == []
 
 
@@ -1821,7 +2157,11 @@ def test_other_batch_rep3_file_is_not_an_unplanned_file_in_a_b2_audit(tmp_path):
     """A B2-only audit must not count B1 files (kapitsa -r2 of B1 cells) as unplanned: the audit
     scopes extra files to the batches the manifest plans."""
     b2_cell = "B2.core.mlx-serve-26.11.1.1K.c1.code.o512.single.th-off.none.greedy"
-    manifest = {"reps": 2, "cells": [{"engine": "mlx-serve-26.11.1", "cell": b2_cell, "reps": 2}], "unsupported": []}
+    manifest = {
+        "reps": 2,
+        "cells": [{"engine": "mlx-serve-26.11.1", "cell": b2_cell, "reps": 2}],
+        "unsupported": [],
+    }
     for rel in (
         "mlx-serve-26.11.1/" + b2_cell + "-r0.jsonl",
         "mlx-serve-26.11.1/" + b2_cell + "-r1.jsonl",
@@ -1832,7 +2172,14 @@ def test_other_batch_rep3_file_is_not_an_unplanned_file_in_a_b2_audit(tmp_path):
     run = fa.load_run(tmp_path / "run", manifest)
     assert run.extra == []
     # a B2 file that the manifest does not plan is still unplanned
-    (tmp_path / "run" / "mlx-serve-26.11.1" / ("B2.core.mlx-serve-26.11.1.8K.c1.code.o512.single.th-off.none.greedy-r0.jsonl")).write_text("")
+    (
+        tmp_path
+        / "run"
+        / "mlx-serve-26.11.1"
+        / (
+            "B2.core.mlx-serve-26.11.1.8K.c1.code.o512.single.th-off.none.greedy-r0.jsonl"
+        )
+    ).write_text("")
     assert [p.name for p in fa.load_run(tmp_path / "run", manifest).extra] == [
         "B2.core.mlx-serve-26.11.1.8K.c1.code.o512.single.th-off.none.greedy-r0.jsonl"
     ]
@@ -1841,7 +2188,14 @@ def test_other_batch_rep3_file_is_not_an_unplanned_file_in_a_b2_audit(tmp_path):
 def test_mlx_lm_server_thinking_cell_is_an_engine_limitation_label():
     """mlx-lm-server does not split reasoning (reasoning_content empty): the thinking-on cell is a
     labelled 'unsupported: <reason>' status, not a measured cell with three guard violations."""
-    sp = dict(media="none", kind="code", turns="single", conc=1, thinking="on", sampling="greedy")
+    sp = dict(
+        media="none",
+        kind="code",
+        turns="single",
+        conc=1,
+        thinking="on",
+        sampling="greedy",
+    )
     status, reason = fm.cell_status("mlx-lm-server", sp)
     assert status == fm.UNS
     assert "reasoning" in reason
@@ -1854,7 +2208,9 @@ def test_prompt_token_count_delta_is_informational_not_a_violation(tmp_path):
     manifest, files = make_data()
     for r in _rows(files, "p0-r0", "mlx-serve-26.11.1")[0][1:]:
         if r.get("pt") is not None:
-            r["pt"] = r["pt"] + 2  # the engine's chat template adds two tokens; same request sha
+            r["pt"] = (
+                r["pt"] + 2
+            )  # the engine's chat template adds two tokens; same request sha
     _, results = _run(tmp_path, manifest, files)
     res = next(r for r in results if r.name == "prompt_identity")
     assert not res.violations, res.violations

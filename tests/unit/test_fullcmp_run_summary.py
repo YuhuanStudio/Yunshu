@@ -23,7 +23,9 @@ class _Done:
 
 
 def _record(jobs_dir: Path, jid: str, state: str, rc):
-    (jobs_dir / f"{jid}.json").write_text(json.dumps({"id": jid, "state": state, "rc": rc}))
+    (jobs_dir / f"{jid}.json").write_text(
+        json.dumps({"id": jid, "state": state, "rc": rc})
+    )
 
 
 @pytest.fixture
@@ -37,15 +39,33 @@ def fake_gpuq(tmp_path, monkeypatch):
 
 def _jobs(engines):
     return [
-        frun.Job(label=f"lbl-{e}", batch="B1", engine=e, group="g", rep=0, cells=[], est_min=1.0, cmd=[])
+        frun.Job(
+            label=f"lbl-{e}",
+            batch="B1",
+            engine=e,
+            group="g",
+            rep=0,
+            cells=[],
+            est_min=1.0,
+            cmd=[],
+        )
         for e in engines
     ]
 
 
-def test_mixed_results_fail_and_name_every_failing_engine(fake_gpuq, monkeypatch, capsys):
-    engines = ["tf-1.2.1", "omlx-0.7.3", "mlx-serve-26.11.1", "kapitsa-0.2.26", "splash-1.5.0", "yunshu"]
+def test_mixed_results_fail_and_name_every_failing_engine(
+    fake_gpuq, monkeypatch, capsys
+):
+    engines = [
+        "tf-1.2.1",
+        "omlx-0.7.3",
+        "mlx-serve-26.11.1",
+        "kapitsa-0.2.26",
+        "splash-1.5.0",
+        "yunshu",
+    ]
     ids = [f"1104-00000{i}-00-x" for i in range(len(engines))]
-    for jid, job in zip(ids, _jobs(engines)):
+    for jid, job in zip(ids, _jobs(engines), strict=True):
         frun.JOB_OF_ID[jid] = job
     # the single wait returns 0 (it saw one failure as 'done'): the records must still decide
     monkeypatch.setattr(frun.subprocess, "run", lambda *a, **k: _Done())
@@ -74,7 +94,7 @@ def test_mixed_results_fail_and_name_every_failing_engine(fake_gpuq, monkeypatch
 
 def test_all_done_exits_zero(fake_gpuq, monkeypatch, capsys):
     ids = ["1104-000001-00-a", "1104-000002-00-b"]
-    for jid, job in zip(ids, _jobs(["tf-1.2.1", "yunshu"])):
+    for jid, job in zip(ids, _jobs(["tf-1.2.1", "yunshu"]), strict=True):
         frun.JOB_OF_ID[jid] = job
     monkeypatch.setattr(frun.subprocess, "run", lambda *a, **k: _Done())
     for jid in ids:

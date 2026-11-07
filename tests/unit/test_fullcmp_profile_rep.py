@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 import pytest
-from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "research"))
@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "scripts" / "research"))
 import fullcmp_attribution as fa  # noqa: E402
 import fullcmp_profile as fp  # noqa: E402
 import fullcmp_run as fr  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fullcmp_pin_io import stub_pin_io  # noqa: E402
 
@@ -25,6 +26,7 @@ from fullcmp_pin_io import stub_pin_io  # noqa: E402
 @pytest.fixture(autouse=True)
 def _pin_io(monkeypatch):
     stub_pin_io(monkeypatch)
+
 
 PIN = {
     "version": "0.1.7.dev0",
@@ -215,19 +217,25 @@ def test_job_shell_script_does_not_start_with_a_path():
 def test_real_wire_1107y_conc_profile_cell_finds_its_log_from_the_session_header():
     """Failing-before (wire-1107y): the conc cell's rows carry no engine_log_path (only the session header does);
     the profile stage must read it there, not fail with 'no engine_log_path'."""
-    real = Path("/Volumes/Micron/yunshu-fullcmp/wire-1107y/profile/yunshu/"
-                "SMOKE.smoke-conc-distinct.yunshu.1K.c2.code.o64.single.th-off.none.greedy.v0-prof.jsonl")
+    real = Path(
+        "/Volumes/Micron/yunshu-fullcmp/wire-1107y/profile/yunshu/"
+        "SMOKE.smoke-conc-distinct.yunshu.1K.c2.code.o64.single.th-off.none.greedy.v0-prof.jsonl"
+    )
     if not real.exists():
         pytest.skip("no real wire-1107y conc profile cell on disk")
     assert fp._engine_log_path(real) is not None
 
 
-def test_concurrent_cell_without_any_log_path_is_a_labelled_result_not_an_error(tmp_path):
+def test_concurrent_cell_without_any_log_path_is_a_labelled_result_not_an_error(
+    tmp_path,
+):
     cell = tmp_path / "c-prof.jsonl"
     cell.write_text(json.dumps({"part": "conc", "n": 2, "requests": []}) + "\n")
     row = fp.append_profile_row(cell, "yunshu")
     assert "error" not in row
-    assert row["stages_unavailable"].startswith("stages unavailable for concurrent path")
+    assert row["stages_unavailable"].startswith(
+        "stages unavailable for concurrent path"
+    )
 
 
 def test_yunshu_profile_row_names_every_absent_layer2_field_as_unavailable(tmp_path):
@@ -255,7 +263,10 @@ def test_yunshu_profile_row_names_every_absent_layer2_field_as_unavailable(tmp_p
         "op_census",
     ):
         assert un[field].startswith("unavailable:"), (field, un.get(field))
-    assert "stages.decode_round.drafter" not in un and "stages.decode_round.commit" not in un
+    assert (
+        "stages.decode_round.drafter" not in un
+        and "stages.decode_round.commit" not in un
+    )
     cov = fa.check_profile("yunshu-pb2", row)
     assert fa.missing(cov) == [], fa.missing(cov)
     assert cov["stages.decode_round.drafter"] == "present"
@@ -269,12 +280,18 @@ def test_audit_gives_a_legacy_profile_row_the_same_static_reasons():
     """The wire-1108 profile rows were written before the reasons existed: the audit applies them."""
     import fullcmp_audit as fau
 
-    row = {"part": "profile", "engine": "yunshu", "stages": {"decode_round": {"drafter": 2.27, "commit": 0.12}}}
+    row = {
+        "part": "profile",
+        "engine": "yunshu",
+        "stages": {"decode_round": {"drafter": 2.27, "commit": 0.12}},
+    }
     assert "host_sync_count" in fp.unavailable_layer2(row)
     assert hasattr(fau, "check_attribution_fields")
 
 
-def test_phase_b_round_driver_lines_map_to_stages_and_drafter_commit_are_unavailable(tmp_path):
+def test_phase_b_round_driver_lines_map_to_stages_and_drafter_commit_are_unavailable(
+    tmp_path,
+):
     """Failing-before (wire-1108 yunshu-pb2): the Phase B round driver prints no 'DFlash round profile' line,
     so the profile row had stages {} and the guard failed on drafter and commit. Its own lines (window ms/round,
     'round driver idle: N decode steps, X ms in a step, Y ms between steps') now map to stages, and the two
@@ -291,8 +308,13 @@ def test_phase_b_round_driver_lines_map_to_stages_and_drafter_commit_are_unavail
     row = fp.append_profile_row(cell, "yunshu-pb2")
     node = row["stages"]["decode_round"]
     assert node["rounds"] == 200 and node["step_ms"] == pytest.approx(49.0)
-    assert node["host_between_steps_ms"] == pytest.approx(0.3) and node["window_ms_per_round"] == 48.7
-    assert row["layer2_unavailable"]["stages.decode_round.drafter"].startswith("unavailable:")
+    assert (
+        node["host_between_steps_ms"] == pytest.approx(0.3)
+        and node["window_ms_per_round"] == 48.7
+    )
+    assert row["layer2_unavailable"]["stages.decode_round.drafter"].startswith(
+        "unavailable:"
+    )
     assert fa.missing(fa.check_profile("yunshu-pb2", row)) == []
 
 
@@ -307,8 +329,15 @@ def test_a_dev0_row_without_the_round_line_still_fails_on_drafter(tmp_path):
 
 def test_legacy_pb2_profile_row_is_recomputed_from_its_engine_log(tmp_path):
     log = tmp_path / "server.log"
-    log.write_text("round driver idle: 10 decode steps, 40.0 ms in a step, 1.0 ms between steps\n")
-    legacy = {"part": "profile", "engine": "yunshu-pb2", "engine_log_path": str(log), "stages": {}}
+    log.write_text(
+        "round driver idle: 10 decode steps, 40.0 ms in a step, 1.0 ms between steps\n"
+    )
+    legacy = {
+        "part": "profile",
+        "engine": "yunshu-pb2",
+        "engine_log_path": str(log),
+        "stages": {},
+    }
     row = fp.refresh_legacy_row(legacy)
     assert row["stages"]["decode_round"]["step_ms"] == 40.0
     assert fa.missing(fa.check_profile("yunshu-pb2", row)) == []

@@ -39,28 +39,33 @@ def _census_or_skip() -> dict:
 
 
 def test_manifest_engine_ids_are_the_twelve_measured_engines_plus_the_extra_omlx_dev():
-    assert MEASURED_IDS == [
-        "yunshu-pb2",
-        "yunshu",
-        "tf-1.2.1",
-        "tf-1.1.8",
-        "splash-1.5.0",
-        "omlx-0.7.3",
-        "omlx-0.7.3rc1",
-        "omlx-0.7.4.dev1",  # extra engine (fm.EXTRA_ENGINES): mirrors omlx-0.7.3, hours outside the plan total
-        "mlx-serve-26.11.1",
-        "mlx-lm-server",
-        "mlx-vlm-server",
-        "llama-cpp-b12061",
-        "kapitsa-0.2.26",
-        "kapitsa-0.2.31",
-    ]
+    assert (
+        MEASURED_IDS
+        == [
+            "yunshu-pb2",
+            "yunshu",
+            "tf-1.2.1",
+            "tf-1.1.8",
+            "splash-1.5.0",
+            "omlx-0.7.3",
+            "omlx-0.7.3rc1",
+            "omlx-0.7.4.dev1",  # extra engine (fm.EXTRA_ENGINES): mirrors omlx-0.7.3, hours outside the plan total
+            "mlx-serve-26.11.1",
+            "mlx-lm-server",
+            "mlx-vlm-server",
+            "llama-cpp-b12061",
+            "kapitsa-0.2.26",
+            "kapitsa-0.2.31",
+        ]
+    )
 
 
 @pytest.mark.parametrize("engine", MEASURED_IDS)
 def test_engine_id_resolves_release_date_through_tfbench_path(engine):
     census = _census_or_skip()
-    harness = bench_engines.tfbench_engine(engine)  # --engine id tfbench receives (yunshu-main)
+    harness = bench_engines.tfbench_engine(
+        engine
+    )  # --engine id tfbench receives (yunshu-main)
     version, _sha = bench_engines.engine_version(harness, str(ROOT / "python"))
     assert version != "unknown", f"{engine}: no version"
     date = fp.engine_release_date(census, harness, version, {})  # tfbench's header call

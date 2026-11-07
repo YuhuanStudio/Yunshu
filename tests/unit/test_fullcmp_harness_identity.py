@@ -14,8 +14,13 @@ import fullcmp_audit as fa  # noqa: E402
 
 
 def _run(header):
-    cell = {"cell": "SMOKE.smoke-core.yunshu.1K.c1.prose.o64.single.th-off.none.greedy.v0", "engine": "yunshu"}
-    cf = SimpleNamespace(cell=cell, rep=0, path=Path("/x/c-r0.jsonl"), header=header, rows=[])
+    cell = {
+        "cell": "SMOKE.smoke-core.yunshu.1K.c1.prose.o64.single.th-off.none.greedy.v0",
+        "engine": "yunshu",
+    }
+    cf = SimpleNamespace(
+        cell=cell, rep=0, path=Path("/x/c-r0.jsonl"), header=header, rows=[]
+    )
     return SimpleNamespace(files=[cf])
 
 
@@ -25,5 +30,7 @@ def test_real_header_without_harness_commit_fails():
 
 
 def test_header_with_commit_and_clean_tree_passes():
-    res = fa.check_harness_identity(_run({"harness_dirty": False, "harness_commit": "a" * 40}))
+    res = fa.check_harness_identity(
+        _run({"harness_dirty": False, "harness_commit": "a" * 40})
+    )
     assert res.violations == []

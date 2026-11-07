@@ -77,7 +77,9 @@ def test_evidence_alias_maps_the_preview_to_the_yunshu_entries():
     assert table is not None
     assert fe.evidence_key(PB2) == "yunshu"
     assert fe.is_yunshu(PB2) and fe.is_yunshu(DEV0) and fe.is_yunshu("yunshu")
-    assert fe.mode_entry(table, PB2, "dflash") == fe.mode_entry(table, "yunshu", "dflash")
+    assert fe.mode_entry(table, PB2, "dflash") == fe.mode_entry(
+        table, "yunshu", "dflash"
+    )
     assert fe.mode_entry(table, PB2, "dflash") is not None
 
 
@@ -97,12 +99,18 @@ def test_both_yunshu_pins_record_their_package_versions_and_differences_are_foot
 
     dev0 = _json.loads(fp.PIN_PATH.read_text())
     pb2 = _json.loads(fp.PB2_PIN_PATH.read_text())
-    dev0_pkgs = dev0["packages"] if isinstance(dev0["packages"], dict) else _json.loads(dev0["packages"].replace("'", '"'))
+    dev0_pkgs = (
+        dev0["packages"]
+        if isinstance(dev0["packages"], dict)
+        else _json.loads(dev0["packages"].replace("'", '"'))
+    )
     assert pb2["packages"]
     stack = ("mlx", "mlx-lm", "mlx-vlm")  # the MLX stack the cells run on
     differs = [k for k in stack if dev0_pkgs.get(k) != pb2["packages"].get(k)]
     if differs:
-        assert pb2.get("package_note"), "a version difference between the two venvs needs a footnote"
+        assert pb2.get("package_note"), (
+            "a version difference between the two venvs needs a footnote"
+        )
     assert not differs, differs
 
 
@@ -111,4 +119,6 @@ def test_package_versions_are_read_from_each_pinned_venv_and_match():
     dev0 = json.loads(fp.PIN_PATH.read_text())
     got_pb2 = fp.pinned_package_versions(pb2["python_executable"])
     got_dev0 = fp.pinned_package_versions(dev0["python_executable"])
-    assert got_pb2 == got_dev0 == {"mlx": "0.32.3", "mlx-lm": "0.32.2", "mlx-vlm": "0.7.8"}
+    assert (
+        got_pb2 == got_dev0 == {"mlx": "0.32.3", "mlx-lm": "0.32.2", "mlx-vlm": "0.7.8"}
+    )

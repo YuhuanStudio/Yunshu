@@ -4,13 +4,14 @@ import json
 from contextlib import contextmanager
 
 import pytest
-
 from scripts.research import tfbench as tb
 
 
 class _Stream:
     def __init__(self, chunks):
-        self._lines = [("data: " + json.dumps(c)).encode() for c in chunks] + [b"data: [DONE]"]
+        self._lines = [("data: " + json.dumps(c)).encode() for c in chunks] + [
+            b"data: [DONE]"
+        ]
 
     def __iter__(self):
         return iter(self._lines)
@@ -20,7 +21,11 @@ def _chunks(prompt_tokens):
     text = {"choices": [{"delta": {"content": "x"}, "finish_reason": None}]}
     final = {
         "choices": [{"delta": {}, "finish_reason": "length"}],
-        "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": 1, "total_tokens": prompt_tokens + 1},
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": 1,
+            "total_tokens": prompt_tokens + 1,
+        },
     }
     return [text, final]
 
@@ -38,7 +43,10 @@ def fake_urlopen(monkeypatch):
 
 
 def test_warmup_request_does_not_fill_usage_sample(fake_urlopen):
-    tb.send("http://127.0.0.1:1/v1/chat/completions", {"messages": [{"role": "user", "content": "Say hi."}]})
+    tb.send(
+        "http://127.0.0.1:1/v1/chat/completions",
+        {"messages": [{"role": "user", "content": "Say hi."}]},
+    )
     assert tb._USAGE_SAMPLE[0] is None
 
 

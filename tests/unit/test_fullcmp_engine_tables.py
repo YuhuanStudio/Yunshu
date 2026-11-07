@@ -30,7 +30,11 @@ def test_every_manifest_engine_resolves_every_table():
 
 def test_registry_covers_manifest_ids_not_bench_ids():
     # the checked list is the manifest ids minus the stubs and the placeholder
-    assert set(fet.CHECKED_IDS) == set(fm.ENGINES) - {"ollama", "lmstudio", fm.PLACEHOLDER}
+    assert set(fet.CHECKED_IDS) == set(fm.ENGINES) - {
+        "ollama",
+        "lmstudio",
+        fm.PLACEHOLDER,
+    }
     assert "yunshu" in fet.CHECKED_IDS and "yunshu-main" not in fet.CHECKED_IDS
 
 
@@ -54,7 +58,9 @@ def test_tensorfold_121_has_expected_mode_probe():
 
 def test_unknown_engine_id_is_a_miss():
     misses = fet.check_all(["no-such-engine"])
-    assert [(m.engine, m.table) for m in misses] == [("no-such-engine", "manifest entry")]
+    assert [(m.engine, m.table) for m in misses] == [
+        ("no-such-engine", "manifest entry")
+    ]
 
 
 def test_stub_and_placeholder_ids_are_skipped():
@@ -69,7 +75,9 @@ def test_check_all_returns_every_miss_at_once(monkeypatch):
             raise fet.TableMiss(f"key-{engine}", "injected miss")
         return "ok"
 
-    monkeypatch.setattr(fet, "TABLES", [(fet.Table("probe", "test", "manifest id"), broken)])
+    monkeypatch.setattr(
+        fet, "TABLES", [(fet.Table("probe", "test", "manifest id"), broken)]
+    )
     misses = fet.check_all(["tf-1.2.1", "yunshu", "tf-1.1.8"])
     assert sorted((m.engine, m.table, m.key, m.error) for m in misses) == [
         ("tf-1.2.1", "probe", "key-tf-1.2.1", "injected miss"),
@@ -81,9 +89,13 @@ def test_unresolved_is_a_note_not_a_miss(monkeypatch):
     def documented(engine, ctx):
         raise fet.Unresolved("open item with a recorded reason")
 
-    monkeypatch.setattr(fet, "TABLES", [(fet.Table("probe", "test", "manifest id"), documented)])
+    monkeypatch.setattr(
+        fet, "TABLES", [(fet.Table("probe", "test", "manifest id"), documented)]
+    )
     misses, notes = fet.run_checks(["tf-1.2.1"])
-    assert misses == [] and [n.text for n in notes] == ["open item with a recorded reason"]
+    assert misses == [] and [n.text for n in notes] == [
+        "open item with a recorded reason"
+    ]
 
 
 @pytest.mark.parametrize("flag", ["--dry-run", "--self-check"])
@@ -94,14 +106,20 @@ def test_runner_refuses_on_a_miss_before_any_job(flag, monkeypatch, tmp_path, ca
     manifest.write_text('{"batch": "B1", "engine": "yunshu", "id": "x"}\n')
     miss = fet.Miss("yunshu", "probe", "k", "injected")
     seen = []
-    monkeypatch.setattr(fet, "check_all", lambda ids, ctx=None: seen.append(list(ids)) or [miss])
+    monkeypatch.setattr(
+        fet, "check_all", lambda ids, ctx=None: seen.append(list(ids)) or [miss]
+    )
     monkeypatch.setattr(
         frun, "plan_batch", lambda *a, **k: pytest.fail("planned after a table miss")
     )
     monkeypatch.setattr(
-        frun, "self_check", lambda *a, **k: pytest.fail("self-check ran after a table miss")
+        frun,
+        "self_check",
+        lambda *a, **k: pytest.fail("self-check ran after a table miss"),
     )
-    rc = frun.main(["--batch", "B1", "--manifest", str(manifest), "--engines", "yunshu", flag])
+    rc = frun.main(
+        ["--batch", "B1", "--manifest", str(manifest), "--engines", "yunshu", flag]
+    )
     err = capsys.readouterr().err
     assert rc == 2
     assert seen == [["yunshu"]]
@@ -137,7 +155,9 @@ def test_expected_mode_probe_bench_and_merge_agree_for_every_engine():
     for e in fet.CHECKED_IDS:
         bench = fet.be.ENGINES[fet.be.tfbench_engine(e)].expected_mode
         assert fet.a_expected_mode(e, None) == bench, e
-        if fe.is_yunshu(e):  # dev0 and the Phase B preview share the Yunshu evidence entry
+        if fe.is_yunshu(
+            e
+        ):  # dev0 and the Phase B preview share the Yunshu evidence entry
             assert bench in fem.YUNSHU_ENTRY["modes"], e
         else:
             assert fem.ENGINE_MODE[e] == bench, e

@@ -101,15 +101,22 @@ def test_corpus_missing_prompt_file_fails_closed(tmp_path):
 
 def test_corpus_family_kind_reads_the_prose_file(tmp_path):
     work = _corpus(tmp_path, ["prose-4096.txt"])
-    assert fr.prompt_corpus_problems(
-        [_row(prompt_kind="tool-chat", ctx_tokens=4096)], work, sha_table=_shas(["prose-4096.txt"])
-    ) == []
+    assert (
+        fr.prompt_corpus_problems(
+            [_row(prompt_kind="tool-chat", ctx_tokens=4096)],
+            work,
+            sha_table=_shas(["prose-4096.txt"]),
+        )
+        == []
+    )
 
 
 def test_corpus_complete_passes_and_skips_rows_without_a_decode_prompt(tmp_path):
     work = _corpus(tmp_path, ["code-1024.txt"])
     rows = [_row(), {"id": "agent", "engine": "yunshu"}]
-    assert fr.prompt_corpus_problems(rows, work, sha_table=_shas(["code-1024.txt"])) == []
+    assert (
+        fr.prompt_corpus_problems(rows, work, sha_table=_shas(["code-1024.txt"])) == []
+    )
 
 
 # ---- 2. prompt_file_sha256 guard -----------------------------------------------------------
@@ -185,7 +192,10 @@ def _profile_line(engine, n):
 def test_server_log_path_sits_beside_the_cell_file():
     out = "/raw/yunshu/c1-r2.jsonl"
     assert tfbench.server_log_path(out) == "/raw/yunshu/c1-r2.server.log"
-    assert tfbench.server_log_path("/p/yunshu/c1-prof.jsonl") == "/p/yunshu/c1-prof.server.log"
+    assert (
+        tfbench.server_log_path("/p/yunshu/c1-prof.jsonl")
+        == "/p/yunshu/c1-prof.server.log"
+    )
     assert str(fa.server_log_slice_path(out)) == tfbench.server_log_path(out)
 
 
@@ -207,7 +217,9 @@ def test_two_cells_in_one_log_get_two_distinct_slices(tmp_path):
     assert slice_a.count(b"[round-profile]") == 2 and b"round=1 " in slice_a
     assert slice_b.count(b"[round-profile]") == 3 and b"round=7 " in slice_b
     assert b"round=7 " not in slice_a and b"round=1 " not in slice_b
-    assert b"[engine] ready" not in slice_a  # startup lines are outside the cell's range
+    assert (
+        b"[engine] ready" not in slice_a
+    )  # startup lines are outside the cell's range
 
 
 def test_cell_slice_survives_a_later_cell_overwriting_the_log(tmp_path):

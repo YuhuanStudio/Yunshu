@@ -37,8 +37,12 @@ def _settings(launch):
 
 def test_the_launch_runs_the_0_7_4_binary_with_the_0_7_3_flags():
     a, b = _launch(E074), _launch(E073)
-    assert a.cmd[0] == be.OMLX_BIN_074DEV1 and a.cmd[0].endswith("venvs/omlx-0.7.4.dev1/bin/omlx")
-    assert a.cmd[1:] == b.cmd[1:]  # every flag unchanged: --paged-ssd-cache-dir, --max-concurrent-requests, ...
+    assert a.cmd[0] == be.OMLX_BIN_074DEV1 and a.cmd[0].endswith(
+        "venvs/omlx-0.7.4.dev1/bin/omlx"
+    )
+    assert (
+        a.cmd[1:] == b.cmd[1:]
+    )  # every flag unchanged: --paged-ssd-cache-dir, --max-concurrent-requests, ...
     assert "--paged-ssd-cache-dir" in a.cmd and "--max-concurrent-requests" in a.cmd
 
 
@@ -46,25 +50,53 @@ def test_a8_prefill_is_saved_off_in_a_version_2_settings_file_and_0_7_3_is_uncha
     s74, s73 = _settings(_launch(E074)), _settings(_launch(E073))
     m74 = s74["models"]["Qwen3.8-27B-oQ4e-mtp"]
     assert s74["version"] == 2 and m74["a8_prefill_enabled"] is False
-    assert m74["dflash_enabled"] is True and m74["dflash_draft_model"] == be.DRAFTER and m74["mtp_enabled"] is False
-    assert s73 == {"version": 1, "models": {"Qwen3.8-27B-oQ4e-mtp": {
-        "dflash_enabled": True, "dflash_draft_model": be.DRAFTER, "mtp_enabled": False}}}
-    assert be.omlx_model_settings("m")["version"] == 1 and "a8_prefill_enabled" not in be.omlx_model_settings("m")["models"]["m"]
+    assert (
+        m74["dflash_enabled"] is True
+        and m74["dflash_draft_model"] == be.DRAFTER
+        and m74["mtp_enabled"] is False
+    )
+    assert s73 == {
+        "version": 1,
+        "models": {
+            "Qwen3.8-27B-oQ4e-mtp": {
+                "dflash_enabled": True,
+                "dflash_draft_model": be.DRAFTER,
+                "mtp_enabled": False,
+            }
+        },
+    }
+    assert (
+        be.omlx_model_settings("m")["version"] == 1
+        and "a8_prefill_enabled" not in be.omlx_model_settings("m")["models"]["m"]
+    )
 
 
 def test_the_recorded_flags_carry_the_a8_setting_and_the_settings_hash():
     launch = _launch(E074)
     (path,) = [p for p in launch.files if p.endswith("model_settings.json")]
     assert launch.flags["a8_prefill_enabled"] is False
-    assert launch.flags["model_settings_sha256"] == hashlib.sha256(launch.files[path].encode()).hexdigest()
+    assert (
+        launch.flags["model_settings_sha256"]
+        == hashlib.sha256(launch.files[path].encode()).hexdigest()
+    )
     assert "a8_prefill_enabled" not in _launch(E073).flags
 
 
 def test_concurrency_flag_and_registry_entries_mirror_omlx_073():
     assert be.PARALLEL_FLAG[E074] == "--max-concurrent-requests"
-    assert _launch(E074, parallel=16).cmd[_launch(E074, parallel=16).cmd.index("--max-concurrent-requests") + 1] == "16"
-    assert be.tfbench_engine(E074) == E074 and be.ENGINES[E074].expected_mode == "dflash"
-    assert be.ENGINES[E074].checkpoint == be.ENGINES[E073].checkpoint and be.ENGINES[E074].drafter == be.ENGINES[E073].drafter
+    assert (
+        _launch(E074, parallel=16).cmd[
+            _launch(E074, parallel=16).cmd.index("--max-concurrent-requests") + 1
+        ]
+        == "16"
+    )
+    assert (
+        be.tfbench_engine(E074) == E074 and be.ENGINES[E074].expected_mode == "dflash"
+    )
+    assert (
+        be.ENGINES[E074].checkpoint == be.ENGINES[E073].checkpoint
+        and be.ENGINES[E074].drafter == be.ENGINES[E073].drafter
+    )
 
 
 def test_the_census_pin_has_the_release_timestamp_sha_and_binary():
@@ -72,9 +104,18 @@ def test_the_census_pin_has_the_release_timestamp_sha_and_binary():
     if census is None or "latest_dev_date" not in census["omlx"]:
         pytest.skip("census with the 0.7.4.dev1 entry not on this machine")
     om = census["omlx"]
-    assert om["latest_dev_date"] == "2026-11-04T10:13:41Z" and om["release_dates"]["0.7.4.dev1"] == "2026-11-04"
-    assert om["sha256"]["0.7.4.dev1 wheel cp313"] == "40ba8e231dea8473686e0e8bd6f4f6f133c479da1586384e96817b85a80d2f4f"
-    assert "4213c3284abc7b3746a91464a7af7ccc3732b759" in om["release_date_source"]["0.7.4.dev1"]
+    assert (
+        om["latest_dev_date"] == "2026-11-04T10:13:41Z"
+        and om["release_dates"]["0.7.4.dev1"] == "2026-11-04"
+    )
+    assert (
+        om["sha256"]["0.7.4.dev1 wheel cp313"]
+        == "40ba8e231dea8473686e0e8bd6f4f6f133c479da1586384e96817b85a80d2f4f"
+    )
+    assert (
+        "4213c3284abc7b3746a91464a7af7ccc3732b759"
+        in om["release_date_source"]["0.7.4.dev1"]
+    )
     for key in ("a8_prefill", "evidence_lines", "launch_flags", "prefill_accelerator"):
         assert om["census_0_7_4_dev1"][key]
     assert "model_settings.py:216-222" in om["census_0_7_4_dev1"]["a8_prefill"]
@@ -84,18 +125,29 @@ def test_the_evidence_entry_reads_the_real_omlx_lines_like_0_7_3rc1():
     """The MTP / Chat completion / late-join / calibration lines are byte-identical code in 0.7.4.dev1: the real rc1 mixed
     log gives the same shared verdict under the new engine id."""
     log = (FIX / "omlx_rc1_mixed_1106d.server.txt").read_text(errors="replace")
-    reqs = [{"rid": i, "pt": p, "ct": 64} for i, p in enumerate([1024, 1024, 1024, 8204, 8204, 1024, 1024, 1024])]
+    reqs = [
+        {"rid": i, "pt": p, "ct": 64}
+        for i, p in enumerate([1024, 1024, 1024, 8204, 8204, 1024, 1024, 1024])
+    ]
     conc = [{"part": "mixed", "n": 8, "requests": reqs}]
     a = fe.concurrent_check(fe.load_table(), "omlx-0.7.3rc1", "dflash", log, conc, 0)
     b = fe.concurrent_check(fe.load_table(), E074, "dflash", log, conc, 0)
-    assert (b[0]["engaged_mode"], b[0].get("label"), b[1]) == (a[0]["engaged_mode"], a[0].get("label"), a[1])
+    assert (b[0]["engaged_mode"], b[0].get("label"), b[1]) == (
+        a[0]["engaged_mode"],
+        a[0].get("label"),
+        a[1],
+    )
     assert fe.WARM_EXTRA[E074] == fe.WARM_EXTRA["omlx-0.7.3"]
 
 
 def test_the_wiring_smoke_manifest_has_core_conc_and_mixed_and_nothing_else_changes():
     rows = fm.wire_omlx074_rows()
     shapes = {(r["batch"], r["sweep"], r["conc"], r["ctx"]) for r in rows}
-    assert shapes == {("B1", "core", 1, "1K"), ("B2", "conc", 2, "1K"), ("B2", "mixed", 4, "8K")}
+    assert shapes == {
+        ("B1", "core", 1, "1K"),
+        ("B2", "conc", 2, "1K"),
+        ("B2", "mixed", 4, "8K"),
+    }
     assert all(r["engine"] == E074 and r["status"] == "unverified" for r in rows)
     for r in rows:
         part, args, _ = fr.harness_part(r)
@@ -106,7 +158,9 @@ def test_the_wiring_smoke_manifest_has_core_conc_and_mixed_and_nothing_else_chan
     assert all(r["engine"] != E074 for r in fm.wire_1108_rows())
     rows_all, _ = fm.build_rows()
     fm.apply_cuts(rows_all, out=io.StringIO())
-    assert fm.planned_h([r for r in rows_all if r["engine"] != E074]) == fm.planned_h(rows_all)
+    assert fm.planned_h([r for r in rows_all if r["engine"] != E074]) == fm.planned_h(
+        rows_all
+    )
 
 
 def test_pins_resolve_for_the_new_engine_from_the_census():
@@ -118,4 +172,6 @@ def test_pins_resolve_for_the_new_engine_from_the_census():
     pin = json.loads(fr.PIN_PATH.read_text())
     pins = fam.build_pins(census, pin)
     p = pins[E074]
-    assert p["version"] == "0.7.4.dev1" and str(p.get("release_date", "")).startswith("2026-11-04")
+    assert p["version"] == "0.7.4.dev1" and str(p.get("release_date", "")).startswith(
+        "2026-11-04"
+    )

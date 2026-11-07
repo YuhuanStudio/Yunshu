@@ -41,7 +41,12 @@ def test_mlx_vlm_server_engaged_only_on_drafter_ready():
     )
     assert be.detect_mode("mlx-vlm-server", fallback) is None
     # plain start (no draft) is not engaged either
-    assert be.detect_mode("mlx-vlm-server", "Language model ready, continuous batching enabled.\n") is None
+    assert (
+        be.detect_mode(
+            "mlx-vlm-server", "Language model ready, continuous batching enabled.\n"
+        )
+        is None
+    )
 
 
 def test_mlx_vlm_server_drafter_is_a_required_path():

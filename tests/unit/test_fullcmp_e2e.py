@@ -24,16 +24,19 @@ SCRIPTS = ROOT / "scripts" / "research"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT / "scripts" / "dev"))
 
+import fullcmp_attribution as fa_attr  # noqa: E402
 import fullcmp_audit as fa  # noqa: E402
 import fullcmp_manifest as fm  # noqa: E402
 import fullcmp_run as fr  # noqa: E402
-import fullcmp_attribution as fa_attr  # noqa: E402
 import gpuq_preflight  # noqa: E402
+
 from .test_fullcmp_e2e_coverage import cell_type_key  # noqa: E402
 
 # the smoke chain runs the smoke-core code row (cold, warm, turn2) through the whole wrapper chain
 COVERED_CELL_TYPES = {
-    cell_type_key(fm.build_smoke_rows()[0]): "test_wrapper_runs_tfbench_against_stub_and_audit_is_clean",
+    cell_type_key(
+        fm.build_smoke_rows()[0]
+    ): "test_wrapper_runs_tfbench_against_stub_and_audit_is_clean",
 }
 
 STUB_DIR = ROOT / "tests" / "unit"
@@ -45,7 +48,9 @@ def _smoke_rows_under_test():
     >= 2 prompts per (model, ctx, kind) guard passes. The smoke conc rows are not used here: the
     audit's attribution guard covers decode rows, and the conc path has its own tests."""
     rows = fm.build_smoke_rows()
-    keep = [r for r in rows if r["sweep"] == "smoke-core" and r["prompt_kind"] == "code"]
+    keep = [
+        r for r in rows if r["sweep"] == "smoke-core" and r["prompt_kind"] == "code"
+    ]
     assert {r["prompt_variant"] for r in keep} == {0, 1}
     return keep
 
@@ -58,15 +63,15 @@ def chain(tmp_path_factory):
     pin = json.loads(fr.PIN_PATH.read_text())
     rows = _smoke_rows_under_test()
     manifest = work / "smoke-manifest.jsonl"
-    manifest.write_text(
-        "".join(json.dumps(r, sort_keys=True) + "\n" for r in rows)
-    )
+    manifest.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
     return {"work": work, "raw": raw, "pin": pin, "rows": rows, "manifest": manifest}
 
 
 def _audit_manifest_for(chain, *, stub_engine=True):
     plan = fr.plan_batch(chain["rows"], fm.SMOKE_BATCH, chain["pin"])
-    manifest = fr.audit_manifest(chain["rows"], [fm.SMOKE_BATCH], chain["pin"], plan.engine_order)
+    manifest = fr.audit_manifest(
+        chain["rows"], [fm.SMOKE_BATCH], chain["pin"], plan.engine_order
+    )
     if stub_engine:
         # test only: the engine process is the stub (see fullcmp_audit.check_pinned_versions)
         manifest["stub_engine"] = True
@@ -131,7 +136,9 @@ def test_wrapper_runs_tfbench_against_stub_and_audit_is_clean(chain, good_run):
         assert fa.telemetry_path(c).exists(), f"telemetry beside {c.name}"
     res = _run_audit(chain["raw"], _audit_manifest_for(chain), chain["work"])
     assert res.returncode == 0, res.stdout[-4000:] + res.stderr[-4000:]
-    assert re.search(r"TOTAL: \d+/\d+ checks passed, 0 violations", res.stdout), res.stdout[-2000:]
+    assert re.search(r"TOTAL: \d+/\d+ checks passed, 0 violations", res.stdout), (
+        res.stdout[-2000:]
+    )
 
 
 def test_smoke_manifest_plans_one_job_with_the_gpuq_argv(chain):
@@ -155,7 +162,9 @@ def test_gpuq_preflight_and_job_body_pass_for_the_smoke_job(chain):
 def test_runner_manifest_carries_expected_spec_mode_and_weight_group(chain):
     """Regression (e2e, 2026-11-03): the runner's audit manifest left spec_mode and weight_group
     null for every cell, so every production run failed closed on engaged mode."""
-    manifest = fr.audit_manifest(chain["rows"], [fm.SMOKE_BATCH], chain["pin"], ["yunshu"])
+    manifest = fr.audit_manifest(
+        chain["rows"], [fm.SMOKE_BATCH], chain["pin"], ["yunshu"]
+    )
     cells = manifest["cells"]
     assert cells
     for c in cells:
@@ -197,13 +206,13 @@ def test_memory_part_accepts_a_zero_gib_delta_and_rejects_no_samples():
     import os
 
     import pytest as _pytest
-
     import tfbench as tb
 
     mem = tb.MemSampler(os.getpid(), baseline_bytes=1, used_fn=lambda: 1)
     idle = mem.sample()
     assert idle == 0.0
     assert tb.memory_peak_or_raise(mem, idle) == 0.0
+
     def unreadable():
         raise OSError("vm_stat unavailable")
 
@@ -223,7 +232,11 @@ def _env_pairs(cell_env_list):
 
 def _cell_env_for(chain):
     row = chain["rows"][0]
-    return _env_pairs(fr.cell_env(row["engine"], chain["pin"], "fullcmp-x", group=fr.comparison_group(row)))
+    return _env_pairs(
+        fr.cell_env(
+            row["engine"], chain["pin"], "fullcmp-x", group=fr.comparison_group(row)
+        )
+    )
 
 
 def test_mutation_drop_run_id_fails_closed_before_any_cell(chain):
@@ -270,7 +283,9 @@ def test_mutation_drop_header_field_is_a_violation(chain, good_run, tmp_path):
 def test_mutation_wrong_binary_path_is_a_violation(chain, good_run, tmp_path):
     """Without the test-only stub flag the server must be the pinned venv python. The stub's command
     line is not, so the audit must reject it (the wrong binary is caught, not waved through)."""
-    res = _run_audit(good_run["raw"], _audit_manifest_for(chain, stub_engine=False), tmp_path)
+    res = _run_audit(
+        good_run["raw"], _audit_manifest_for(chain, stub_engine=False), tmp_path
+    )
     assert res.returncode != 0
     assert "Yunshu not started by its pinned venv python" in res.stdout
 

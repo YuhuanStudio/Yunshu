@@ -85,9 +85,15 @@ def profile_type_key(row: dict) -> str:
 def real_manifest_rows() -> list[dict]:
     path = Path(fm.DEFAULT_OUT)
     if not path.is_file():
-        raise AssertionError(f"real manifest missing: {path} (cell types cannot be enumerated)")
+        raise AssertionError(
+            f"real manifest missing: {path} (cell types cannot be enumerated)"
+        )
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-    return [r for r in rows if r.get("batch") in REAL_BATCHES and r.get("status") == "unverified"]
+    return [
+        r
+        for r in rows
+        if r.get("batch") in REAL_BATCHES and r.get("status") == "unverified"
+    ]
 
 
 def manifest_cell_types() -> dict[str, str]:
@@ -107,7 +113,9 @@ def collect_covered() -> tuple[dict[str, str], list[str]]:
     problems: list[str] = []
     for name in COVERAGE_MODULES:
         try:
-            mod = importlib.import_module(f"{__package__}.{name}" if __package__ else name)
+            mod = importlib.import_module(
+                f"{__package__}.{name}" if __package__ else name
+            )
         except Exception as exc:  # noqa: BLE001 - any failure to load is a coverage failure
             problems.append(f"{name}: not importable ({type(exc).__name__}: {exc})")
             continue
@@ -117,7 +125,9 @@ def collect_covered() -> tuple[dict[str, str], list[str]]:
             continue
         for key, test_id in table.items():
             if key in covered:
-                problems.append(f"{key}: covered twice ({covered[key]} and {name}::{test_id})")
+                problems.append(
+                    f"{key}: covered twice ({covered[key]} and {name}::{test_id})"
+                )
             covered[key] = f"{name}::{test_id}"
     return covered, problems
 
@@ -125,9 +135,13 @@ def collect_covered() -> tuple[dict[str, str], list[str]]:
 def coverage_report() -> dict:
     types = manifest_cell_types()
     covered, problems = collect_covered()
-    uncovered = sorted(k for k in types if k not in covered and k not in XFAIL_CELL_TYPES)
+    uncovered = sorted(
+        k for k in types if k not in covered and k not in XFAIL_CELL_TYPES
+    )
     stale_xfail = sorted(k for k in XFAIL_CELL_TYPES if k in covered)
-    unknown = sorted(k for k in list(covered) + list(XFAIL_CELL_TYPES) if k not in types)
+    unknown = sorted(
+        k for k in list(covered) + list(XFAIL_CELL_TYPES) if k not in types
+    )
     return {
         "types": types,
         "covered": covered,
@@ -144,11 +158,20 @@ def test_every_manifest_cell_type_has_a_covering_test():
     if rep["problems"]:
         msgs.append("modules: " + "; ".join(rep["problems"]))
     if rep["uncovered"]:
-        msgs.append(f"{len(rep['uncovered'])} uncovered cell types:\n  " + "\n  ".join(rep["uncovered"]))
+        msgs.append(
+            f"{len(rep['uncovered'])} uncovered cell types:\n  "
+            + "\n  ".join(rep["uncovered"])
+        )
     if rep["stale_xfail"]:
-        msgs.append("XFAIL types that are covered now (remove them): " + "; ".join(rep["stale_xfail"]))
+        msgs.append(
+            "XFAIL types that are covered now (remove them): "
+            + "; ".join(rep["stale_xfail"])
+        )
     if rep["unknown"]:
-        msgs.append("covered or XFAIL keys matching no manifest type: " + "; ".join(rep["unknown"]))
+        msgs.append(
+            "covered or XFAIL keys matching no manifest type: "
+            + "; ".join(rep["unknown"])
+        )
     assert not msgs, "\n".join(msgs)
 
 
@@ -185,9 +208,17 @@ def test_xfail_types_are_real_and_carry_a_reason():
 # request carries those values and the rows record them.
 
 GENCONFIG_TYPE = cell_type_key(
-    {"table": "decode", "sweep": "sampling", "prompt_kind": "code", "conc": 1,
-     "phases": ["cold"], "turns": "single", "thinking": "off", "media": "none",
-     "sampling": "genconfig"}
+    {
+        "table": "decode",
+        "sweep": "sampling",
+        "prompt_kind": "code",
+        "conc": 1,
+        "phases": ["cold"],
+        "turns": "single",
+        "thinking": "off",
+        "media": "none",
+        "sampling": "genconfig",
+    }
 )
 COVERED_CELL_TYPES = {
     GENCONFIG_TYPE: "test_genconfig_sampling_stub_run",
@@ -205,14 +236,17 @@ def test_genconfig_reads_the_model_sampler_and_fails_closed(tmp_path):
     (tmp_path / "generation_config.json").write_text(
         json.dumps({"temperature": 1.0, "top_p": 0.95, "top_k": 20, "eos_token_id": 1})
     )
-    assert tb.genconfig_sampling(tmp_path) == {"temperature": 1.0, "top_p": 0.95, "top_k": 20}
+    assert tb.genconfig_sampling(tmp_path) == {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+    }
 
 
 def test_genconfig_sampling_stub_run(tmp_path):
     """tfbench --sampling genconfig against the stub: the request carries the model's sampler and the
     rows record it. Runs the exact command line the runner builds for a real genconfig row."""
     import fullcmp_run as fr
-
     import tfbench as tb
 
     stub_dir = Path(__file__).resolve().parent
@@ -225,10 +259,18 @@ def test_genconfig_sampling_stub_run(tmp_path):
     argv = fr.cell_command(row, 0, pin)
     assert argv is not None and "--sampling" in argv
     assert argv[argv.index("--sampling") + 1] == "genconfig"
-    env = dict(os.environ, GPUQ_JOB_ID="2026-110301-01-fullcmp-SMOKE", TFB_STUB_SERVER=str(stub_dir))
+    env = dict(
+        os.environ,
+        GPUQ_JOB_ID="2026-110301-01-fullcmp-SMOKE",
+        TFB_STUB_SERVER=str(stub_dir),
+    )
     # the job wrapper makes the raw directory before tfbench appends to it; this runs argv directly
-    Path(fr.raw_path(row["engine"], row["id"], 0)).parent.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=600, cwd=str(ROOT))
+    Path(fr.raw_path(row["engine"], row["id"], 0)).parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    proc = subprocess.run(
+        argv, env=env, capture_output=True, text=True, timeout=600, cwd=str(ROOT)
+    )
     assert proc.returncode == 0, proc.stdout[-1500:] + proc.stderr[-3000:]
     out = Path(fr.raw_path(row["engine"], row["id"], 0))
     decs = [json.loads(x) for x in out.read_text().splitlines() if x.strip()]
@@ -252,14 +294,24 @@ def test_log_usage_sample_records_the_raw_usage_chunk_through_the_stub(tmp_path)
     row = next(r for r in real_manifest_rows() if r.get("ctx_tokens") == 1024)
     row = dict(row, id=row["id"] + ".usagesample", out_len=16)
     argv = fr.cell_command(row, 0, pin) + ["--log-usage-sample"]
-    env = dict(os.environ, GPUQ_JOB_ID="2026-110301-01-fullcmp-SMOKE", TFB_STUB_SERVER=str(stub_dir))
-    Path(fr.raw_path(row["engine"], row["id"], 0)).parent.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=600, cwd=str(ROOT))
+    env = dict(
+        os.environ,
+        GPUQ_JOB_ID="2026-110301-01-fullcmp-SMOKE",
+        TFB_STUB_SERVER=str(stub_dir),
+    )
+    Path(fr.raw_path(row["engine"], row["id"], 0)).parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    proc = subprocess.run(
+        argv, env=env, capture_output=True, text=True, timeout=600, cwd=str(ROOT)
+    )
     assert proc.returncode == 0, proc.stdout[-1500:] + proc.stderr[-3000:]
     out = Path(fr.raw_path(row["engine"], row["id"], 0))
     # finalize_session writes the end-of-cell fields (usage_sample included) into the session header
     head = json.loads(out.read_text().splitlines()[0])
     assert head.get("part") == "session", head.keys()
     sample = head.get("usage_sample")
-    assert isinstance(sample, dict) and sample, f"usage_sample not recorded: {sorted(head)}"
+    assert isinstance(sample, dict) and sample, (
+        f"usage_sample not recorded: {sorted(head)}"
+    )
     assert "usage" in sample, sorted(sample)

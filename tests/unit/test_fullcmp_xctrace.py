@@ -73,9 +73,9 @@ def test_gpu_summary_resolves_refs_and_filters_by_pid():
         '<trace-query-result><node><schema name="metal-gpu-intervals"/>'
         '<row><start-time id="1">100</start-time><duration id="2">50</duration>'
         '<process id="3" fmt="python (4242)"/><gpu-channel-name id="4" fmt="Compute">Compute</gpu-channel-name></row>'
-        '<row><start-time>120</start-time><duration>50</duration>'
+        "<row><start-time>120</start-time><duration>50</duration>"
         '<process ref="3"/><gpu-channel-name ref="4"/></row>'
-        '<row><start-time>400</start-time><duration>100</duration>'
+        "<row><start-time>400</start-time><duration>100</duration>"
         '<process id="9" fmt="WindowServer (634)"/><gpu-channel-name>Vertex</gpu-channel-name></row>'
         "</node></trace-query-result>"
     )

@@ -13,8 +13,11 @@ import fullcmp_run as fr  # noqa: E402
 
 
 def _row(sweep):
-    row = fm._cell_row("yunshu", fm.SMOKE_BATCH, fm.spec(sweep=sweep, ctx="1K", kind="code", out=64,
-                                                         conc=2, phases=("conc",)))
+    row = fm._cell_row(
+        "yunshu",
+        fm.SMOKE_BATCH,
+        fm.spec(sweep=sweep, ctx="1K", kind="code", out=64, conc=2, phases=("conc",)),
+    )
     row["id"] += ".v0"
     row["reps"] = 1
     row["prompt_variant"] = 0

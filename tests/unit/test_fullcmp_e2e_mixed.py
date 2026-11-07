@@ -68,9 +68,16 @@ def _run_cell_rows(tmp: Path, rows, *, stub_module: str = "fullcmp_stub_session"
         env = dict(os.environ)
         # one gpuq job per chunk, as in a real batch: each chunk has its own job id and its own HOME
         env["GPUQ_JOB_ID"] = f"{FAKE_JOB_ID}-{k}"
-        env["TFB_STUB_SERVER"] = str(stub_sess.shim_dir(tmp / "shim", module=stub_module))
+        env["TFB_STUB_SERVER"] = str(
+            stub_sess.shim_dir(tmp / "shim", module=stub_module)
+        )
         proc = subprocess.run(
-            ["/bin/sh", str(wrapper)], env=env, capture_output=True, text=True, timeout=900, cwd=str(ROOT)
+            ["/bin/sh", str(wrapper)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=900,
+            cwd=str(ROOT),
         )
         assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-4000:]
     return raw, plan, pin

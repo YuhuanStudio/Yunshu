@@ -29,7 +29,9 @@ SPLASH_LOG = (
 def test_tf_1_1_8_engaged_line_is_the_drafts_for_line():
     mode, line = tfbench.engaged_spec_mode_line("tf-1.1.8", TF118_LOG)
     assert mode == "dflash"
-    assert line.startswith("info: Qwen3.8-27B: 1 streams") and "DFlash2 drafts for" in line
+    assert (
+        line.startswith("info: Qwen3.8-27B: 1 streams") and "DFlash2 drafts for" in line
+    )
 
 
 def test_tf_1_1_8_without_drafts_on_does_not_engage():
@@ -45,7 +47,10 @@ def test_tf_1_1_8_probe_regex_matches_the_real_line():
 def test_splash_engaged_line_is_the_draft_block_line():
     mode, line = tfbench.engaged_spec_mode_line("splash-1.5.0", SPLASH_LOG)
     assert mode == "dflash" and "verify every row of the draft's block" in line
-    assert tfbench.engaged_spec_mode_line("splash-1.5.0", "00:06:09 Ready\n") == (None, None)
+    assert tfbench.engaged_spec_mode_line("splash-1.5.0", "00:06:09 Ready\n") == (
+        None,
+        None,
+    )
 
 
 def test_splash_probe_regex_matches_the_real_line():

@@ -73,7 +73,13 @@ def steady(procs_cpu_per_s, samples=11):
 
 
 def run_check(
-    frames, single=20.0, total=150.0, window=10.0, interval=1.0, self_pid=ME, monkeypatch=None
+    frames,
+    single=20.0,
+    total=150.0,
+    window=10.0,
+    interval=1.0,
+    self_pid=ME,
+    monkeypatch=None,
 ):
     host = FakeHost(frames)
     if monkeypatch is not None:
@@ -273,7 +279,12 @@ def test_check_raises_when_ps_cannot_run():
 
     with pytest.raises(q.QuietError):
         q.check(
-            20.0, 150.0, 10.0, run_ps_fn=broken, loadavg_fn=lambda: 1.0, sleep=lambda s: None
+            20.0,
+            150.0,
+            10.0,
+            run_ps_fn=broken,
+            loadavg_fn=lambda: 1.0,
+            sleep=lambda s: None,
         )
 
 

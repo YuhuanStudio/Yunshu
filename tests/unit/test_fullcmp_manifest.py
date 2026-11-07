@@ -126,13 +126,17 @@ def test_unsupported_rows_come_from_census_flags_only():
     assert all(
         r["engine"] == "ollama"
         # measured refusal (wire-1108 B2): TensorFold 1.2.1 refuses image parts as launched
-        or (r["engine"] in ("tf-1.2.1", "tf-1.1.8", "llama-cpp-b12061") and r.get("media") != "none")
+        or (
+            r["engine"] in ("tf-1.2.1", "tf-1.1.8", "llama-cpp-b12061")
+            and r.get("media") != "none"
+        )
         # restart cells of engines with no disk tier as launched (fullcmp_manifest.NO_DISK_TIER, evidence cited)
         or (r["engine"] in fm.NO_DISK_TIER and r.get("turns") == "restart")
         or (
             r["engine"] == "mlx-lm-server"
             and (
-                r.get("thinking") == "on"  # census reasoning_split false: reasoning_content empty
+                r.get("thinking")
+                == "on"  # census reasoning_split false: reasoning_content empty
                 or r.get("media") != "none"
                 or r.get("prompt_kind") == "json-schema"
                 or r.get("turns") == "restart"
@@ -196,7 +200,9 @@ def test_yunshu_concurrency_is_measured_not_the_snapshot_artifact():
     assert fm.slowdown("yunshu", 1024, 4) == 2.66  # nearest measured ctx is 8K
     assert fm.slowdown("yunshu", 131072, 2) == 3.2  # nearest measured ctx is 64K
     assert fm.ENGINE_PERF["yunshu"]["slow"] != {2: {None: 5.9}}
-    assert "fullcmp_cell_timing.json" in fm.ENGINE_PERF["yunshu"]["source"]  # measured, not snapshot
+    assert (
+        "fullcmp_cell_timing.json" in fm.ENGINE_PERF["yunshu"]["source"]
+    )  # measured, not snapshot
 
 
 def test_fallback_and_serial_slowdown_are_explicit():
@@ -222,8 +228,14 @@ def test_loglin_hits_measured_anchors_exactly():
     assert fm.prefill_tps("omlx-0.7.3rc1", 1024) == 772.0
     assert fm.decode_tps("tf-1.2.1", 32768) == 112.0
     # Yunshu anchors are the measured B1 planning values (fullcmp_cell_timing.json), not snapshot014
-    assert fm.prefill_tps("yunshu", 32768) == fm.TIMING["yunshu"]["planning"]["prefill_tps"]["32768"]["value"]
-    assert fm.prefill_tps("yunshu", 131072) == fm.TIMING["yunshu"]["planning"]["prefill_tps"]["131072"]["value"]
+    assert (
+        fm.prefill_tps("yunshu", 32768)
+        == fm.TIMING["yunshu"]["planning"]["prefill_tps"]["32768"]["value"]
+    )
+    assert (
+        fm.prefill_tps("yunshu", 131072)
+        == fm.TIMING["yunshu"]["planning"]["prefill_tps"]["131072"]["value"]
+    )
 
 
 def test_cost_monotone_in_the_obvious_directions():
@@ -346,7 +358,11 @@ def test_overhead_is_the_measured_idle_plus_shutdown():
 
 def test_a_cell_pays_its_own_server_start_and_memory_idle():
     rows, _meta = fm.build_rows(engines=["yunshu"])
-    r = next(x for x in rows if x["id"] == "B1.core.yunshu.1K.c1.code.o512.single.th-off.none.greedy")
+    r = next(
+        x
+        for x in rows
+        if x["id"] == "B1.core.yunshu.1K.c1.code.o512.single.th-off.none.greedy"
+    )
     wall = fm.wall_s("yunshu", 1024, 1, 512, False, 0, ("cold", "warm", "fu"))
     want = fm.REPS * (wall + fm.ENGINE_PERF["yunshu"]["ready_s"] + fm.OVERHEAD_S) / 60.0
     assert abs(r["est_gpu_min"] - want) < 0.01
@@ -363,21 +379,35 @@ def test_yunshu_and_pb2_have_the_same_post_cut_row_set_per_batch():
     rows, _ = fm.build_rows()
     fm.apply_cuts(rows, out=io.StringIO())
     for batch in ("B1", "B2", "B4"):
+
         def post(engine):
             return sorted(
                 (r["id"].replace(f".{engine}.", ".E."), r["status"])
                 for r in rows
                 if r["batch"] == batch and r["engine"] == engine
             )
+
         assert post("yunshu") == post("yunshu-pb2"), batch
 
 
 def test_yunshu_pb2_rows_mirror_yunshu_main_cell_for_cell():
     # yunshu-pb2 (phaseb2-main 4f99270) is the same engine config: its rows mirror yunshu's per batch
     rows, _ = fm.build_rows()
-    for batch in ("B1", "B2", "B4"):  # B5 (agents) runs only yunshu and the placeholder, by design
-        a = sorted(r["id"].replace(".yunshu-pb2.", ".yunshu.") for r in rows if r["batch"] == batch and r["engine"] == "yunshu-pb2")
-        b = sorted(r["id"] for r in rows if r["batch"] == batch and r["engine"] == "yunshu")
+    for batch in (
+        "B1",
+        "B2",
+        "B4",
+    ):  # B5 (agents) runs only yunshu and the placeholder, by design
+        a = sorted(
+            r["id"].replace(".yunshu-pb2.", ".yunshu.")
+            for r in rows
+            if r["batch"] == batch and r["engine"] == "yunshu-pb2"
+        )
+        b = sorted(
+            r["id"] for r in rows if r["batch"] == batch and r["engine"] == "yunshu"
+        )
         assert a == b, batch
-    pb2 = [r for r in rows if r["engine"] == "yunshu-pb2" and r["status"] == "unverified"]
+    pb2 = [
+        r for r in rows if r["engine"] == "yunshu-pb2" and r["status"] == "unverified"
+    ]
     assert pb2, "yunshu-pb2 rows are in the real manifest"

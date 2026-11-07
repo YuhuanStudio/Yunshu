@@ -29,11 +29,13 @@ _SPEC.loader.exec_module(run)
 PIN = {
     "sha": "0f2960047855546a9f13b2631b680352b1c57cfe",
     "python_executable": "/venv/bin/python",
-    "launch": {"harness_env": {
-        "TFB_YUNSHU_BIN": "/venv/bin/yunshu",
-        "TFB_YUNSHU_SRC": "/tree/python",
-        "PYTHONPATH": "/tree/python",
-    }},
+    "launch": {
+        "harness_env": {
+            "TFB_YUNSHU_BIN": "/venv/bin/yunshu",
+            "TFB_YUNSHU_SRC": "/tree/python",
+            "PYTHONPATH": "/tree/python",
+        }
+    },
 }
 
 
@@ -66,7 +68,9 @@ def test_every_cell_env_states_observe_explicitly():
 @pytest.mark.parametrize("raw", [None, "1", "", "true"])
 def test_timed_yunshu_cell_refuses_unset_or_on(raw):
     environ = {} if raw is None else {"TFB_OBSERVE": raw}
-    with pytest.raises(fp.ProvenanceError, match="timed Yunshu cell requires TFB_OBSERVE=0"):
+    with pytest.raises(
+        fp.ProvenanceError, match="timed Yunshu cell requires TFB_OBSERVE=0"
+    ):
         fp.observe_state(environ, True)
 
 
@@ -79,7 +83,9 @@ def test_profile_yunshu_cell_refuses_observe_off_or_unset(raw):
     environ = {"TFB_PROFILE": "1"}
     if raw is not None:
         environ["TFB_OBSERVE"] = raw
-    with pytest.raises(fp.ProvenanceError, match="profile Yunshu cell requires TFB_OBSERVE=1"):
+    with pytest.raises(
+        fp.ProvenanceError, match="profile Yunshu cell requires TFB_OBSERVE=1"
+    ):
         fp.observe_state(environ, True)
 
 
@@ -105,26 +111,51 @@ def test_profile_rep_with_observe_off_fails_the_guard(tmp_path):
     prof_dir = tmp_path / "profile" / "yunshu"
     prof_dir.mkdir(parents=True)
     session = {
-        "part": "session", "observe": False, "yunshu_observe": None, "profile": True,
+        "part": "session",
+        "observe": False,
+        "yunshu_observe": None,
+        "profile": True,
     }
     (prof_dir / f"{cell['cell']}-prof.jsonl").write_text(json.dumps(session) + "\n")
-    head = {"part": "session", "observe": False, "yunshu_observe": None, "profile": False}
+    head = {
+        "part": "session",
+        "observe": False,
+        "yunshu_observe": None,
+        "profile": False,
+    }
     run_obj = fa.Run(
-        manifest, [fa.CellFile(cell, 0, Path("x"), head, [])], [], [], [],
+        manifest,
+        [fa.CellFile(cell, 0, Path("x"), head, [])],
+        [],
+        [],
+        [],
         profile_root=tmp_path / "profile",
     )
     res = fa.check_observe_state(run_obj)
-    assert any("profile rep: observe=False but profile=True" in v for v in res.violations)
+    assert any(
+        "profile rep: observe=False but profile=True" in v for v in res.violations
+    )
 
 
 def test_profile_rep_without_session_header_fails_the_guard(tmp_path):
     cell, manifest = _manifest()
     prof_dir = tmp_path / "profile" / "yunshu"
     prof_dir.mkdir(parents=True)
-    (prof_dir / f"{cell['cell']}-prof.jsonl").write_text(json.dumps({"part": "profile"}) + "\n")
-    head = {"part": "session", "observe": False, "yunshu_observe": None, "profile": False}
+    (prof_dir / f"{cell['cell']}-prof.jsonl").write_text(
+        json.dumps({"part": "profile"}) + "\n"
+    )
+    head = {
+        "part": "session",
+        "observe": False,
+        "yunshu_observe": None,
+        "profile": False,
+    }
     run_obj = fa.Run(
-        manifest, [fa.CellFile(cell, 0, Path("x"), head, [])], [], [], [],
+        manifest,
+        [fa.CellFile(cell, 0, Path("x"), head, [])],
+        [],
+        [],
+        [],
         profile_root=tmp_path / "profile",
     )
     res = fa.check_observe_state(run_obj)
@@ -136,12 +167,24 @@ def test_good_timed_and_profile_headers_pass_the_guard(tmp_path):
     prof_dir = tmp_path / "profile" / "yunshu"
     prof_dir.mkdir(parents=True)
     session = {
-        "part": "session", "observe": True, "yunshu_observe": "1", "profile": True,
+        "part": "session",
+        "observe": True,
+        "yunshu_observe": "1",
+        "profile": True,
     }
     (prof_dir / f"{cell['cell']}-prof.jsonl").write_text(json.dumps(session) + "\n")
-    head = {"part": "session", "observe": False, "yunshu_observe": None, "profile": False}
+    head = {
+        "part": "session",
+        "observe": False,
+        "yunshu_observe": None,
+        "profile": False,
+    }
     run_obj = fa.Run(
-        manifest, [fa.CellFile(cell, 0, Path("x"), head, [])], [], [], [],
+        manifest,
+        [fa.CellFile(cell, 0, Path("x"), head, [])],
+        [],
+        [],
+        [],
         profile_root=tmp_path / "profile",
     )
     assert fa.check_observe_state(run_obj).violations == []
@@ -178,7 +221,11 @@ def test_refused_submit_exits_nonzero_and_names_the_label(monkeypatch, capsys):
 
     class Res:
         def __init__(self, rc, out):
-            self.returncode, self.stdout, self.stderr = rc, out, "duplicate active label"
+            self.returncode, self.stdout, self.stderr = (
+                rc,
+                out,
+                "duplicate active label",
+            )
 
     def fake_run(argv, **kw):
         calls.append(argv)

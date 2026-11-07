@@ -68,7 +68,11 @@ def _census():
             "latest_date": "2026-10-31T16:42:55Z",
             "latest_rc_date": "2026-10-27T09:22:10Z",
             "latest_dev_date": "2026-11-04T10:13:41Z",
-            "sha256": {"0.7.3 wheel cp313": H, "0.7.3rc1 wheel cp313": H, "0.7.4.dev1 wheel cp313": H},
+            "sha256": {
+                "0.7.3 wheel cp313": H,
+                "0.7.3rc1 wheel cp313": H,
+                "0.7.4.dev1 wheel cp313": H,
+            },
         },
         "mlx-serve": {
             "latest_date": "2026-11-01T19:34:34Z",
@@ -80,7 +84,11 @@ def _census():
         },
         "kapitsa": {
             "latest_date": "2026-11-01T22:32:02Z",
-            "sha256": {"0.2.26 binary kapitsa": H, "0.2.26 tarball": H, "0.2.31 tarball": H},
+            "sha256": {
+                "0.2.26 binary kapitsa": H,
+                "0.2.26 tarball": H,
+                "0.2.31 tarball": H,
+            },
             "release_dates": {"0.2.26": "2026-11-01", "0.2.31": "2026-11-05"},
         },
         "mlx_vlm_server": {
@@ -108,7 +116,9 @@ def _stub_pin_io(monkeypatch):
     monkeypatch.setattr(
         fam,
         "build_pins",
-        functools.partial(_ORIG_BUILD_PINS, git_head=lambda w: PIN["sha"], sha_of=lambda p: "a" * 64),
+        functools.partial(
+            _ORIG_BUILD_PINS, git_head=lambda w: PIN["sha"], sha_of=lambda p: "a" * 64
+        ),
     )
 
 
@@ -309,9 +319,7 @@ def test_build_manifest_cells_pins_and_phases():
     assert img["engine"] == "kapitsa-0.2.26" and img["media"] == "image"
     assert not any(n["cell"] == "B1.img.kapitsa-0.2.26.1K" for n in m["not_in_harness"])
     assert any(c["engine"] == "mlx-vlm-server" for c in m["cells"])
-    assert (
-        m["expected_mode_probe"]["mlx-serve-26.11.1"]["expected_mode"] == "mtp"
-    )
+    assert m["expected_mode_probe"]["mlx-serve-26.11.1"]["expected_mode"] == "mtp"
     assert any(u["engine"] == "llama-cpp-b12061" for u in m["unsupported"])
     # conc cells are audited: one conc record per trial, n requests per record
     conc4 = by[("tf-1.1.8", "B1.conc.tf-1.1.8.1K.c4.code")]

@@ -30,7 +30,9 @@ def test_agent_part_is_dispatched_and_server_closed(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(module, "Srv", lambda *args, **kwargs: server)
     monkeypatch.setattr(module, "send", lambda *args: {})
-    monkeypatch.setattr(module, "start_cell_telemetry", lambda *args, **kwargs: None)  # no sampler
+    monkeypatch.setattr(
+        module, "start_cell_telemetry", lambda *args, **kwargs: None
+    )  # no sampler
     monkeypatch.setattr(module, "part_agent", lambda *args: calls.append("agent"))
     output = tmp_path / "agent.jsonl"
     monkeypatch.setattr(

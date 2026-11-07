@@ -64,7 +64,9 @@ def image_count(body: dict) -> int:
     for m in body.get("messages", []):
         c = m.get("content")
         if isinstance(c, list):
-            n += sum(1 for p in c if isinstance(p, dict) and p.get("type") == "image_url")
+            n += sum(
+                1 for p in c if isinstance(p, dict) and p.get("type") == "image_url"
+            )
     return n
 
 
@@ -108,8 +110,16 @@ def plan(body: dict, kind: str, faults=frozenset()):
         if "bad_tool_json" in faults:
             arguments = _cut(arguments)
         deltas = [
-            {"tool_calls": [{"index": 0, "id": "call_0", "type": "function",
-                             "function": {"name": name, "arguments": ""}}]},
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_0",
+                        "type": "function",
+                        "function": {"name": name, "arguments": ""},
+                    }
+                ]
+            },
             {"tool_calls": [{"index": 0, "function": {"arguments": arguments}}]},
         ]
         return deltas, "tool_calls", 2, 0
@@ -133,7 +143,11 @@ def plan(body: dict, kind: str, faults=frozenset()):
         return [{"content": t} for t in toks], "length", len(toks), img
     # thinking on: reasoning split first, then the answer; the budget covers both (as in the engines)
     deltas = []
-    reason = [] if "no_reasoning" in faults else ["先", "想", "一下"][: max(0, max_tokens - 1)]
+    reason = (
+        []
+        if "no_reasoning" in faults
+        else ["先", "想", "一下"][: max(0, max_tokens - 1)]
+    )
     deltas += [{"reasoning_content": r} for r in reason]
     toks = base.make_tokens(base.prompt_text(body), max(1, max_tokens - len(reason)))
     deltas += [{"content": t} for t in toks]
@@ -154,7 +168,9 @@ def make_family_handler(state, faults=frozenset()):
                 self.rfile = io.BytesIO(raw)  # the base handler reads its own body
                 return super().do_POST()
             if kind == "images" and state.engine.startswith("tf-"):
-                return self._json(400, {"error": {"message": "image input is not supported"}})
+                return self._json(
+                    400, {"error": {"message": "image input is not supported"}}
+                )
             deltas, finish, pieces, img = plan(body, kind, faults)
             with state.lock:
                 state.round += 1
@@ -163,7 +179,12 @@ def make_family_handler(state, faults=frozenset()):
             # the done line carries the same prompt count the usage object reports
             state.log(
                 base.request_lines(
-                    state.engine, n, pieces, drafted=4, accepted=3, prompt_tokens=prompt_tokens
+                    state.engine,
+                    n,
+                    pieces,
+                    drafted=4,
+                    accepted=3,
+                    prompt_tokens=prompt_tokens,
                 )
             )
             details = {"cached_tokens": 0}
@@ -189,7 +210,9 @@ def make_family_handler(state, faults=frozenset()):
                     "model": model,
                     "choices": [{"index": 0, "delta": d}],
                 }
-                self.wfile.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode())
+                self.wfile.write(
+                    f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
+                )
             final = {
                 "id": cid,
                 "object": "chat.completion.chunk",
@@ -211,7 +234,9 @@ def start(engine, model, log_path, port=0, version="stub", faults=frozenset()):
     if unknown:
         raise ValueError(f"unknown faults {sorted(unknown)}")
     state = base.StubState(engine, model, Path(log_path), version)
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_family_handler(state, frozenset(faults)))
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", port), make_family_handler(state, frozenset(faults))
+    )
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, server.server_address[1], state
 

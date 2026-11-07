@@ -80,6 +80,10 @@ def test_cell_env_carries_the_engines_own_tree():
     dev0 = _dev0_pin()
     dev0_env = frun.cell_env("yunshu", dev0, group="g")
     pb2_env = frun.cell_env("yunshu-pb2", dev0, group="g")
-    assert any(x.startswith("TFB_YUNSHU_SRC=") and "wt-fullcmp-yunshu/" in x for x in dev0_env)
-    assert any(x.startswith("TFB_YUNSHU_SRC=") and "wt-fullcmp-pb2" in x for x in pb2_env)
+    assert any(
+        x.startswith("TFB_YUNSHU_SRC=") and "wt-fullcmp-yunshu/" in x for x in dev0_env
+    )
+    assert any(
+        x.startswith("TFB_YUNSHU_SRC=") and "wt-fullcmp-pb2" in x for x in pb2_env
+    )
     assert not any("wt-fullcmp-pb2" in x for x in dev0_env)

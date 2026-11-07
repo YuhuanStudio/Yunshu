@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -34,7 +33,16 @@ def test_no_undefined_names_in_harness_modules():
     if ruff is None:
         pytest.fail("ruff not found in the worktree venv: the static check cannot run")
     res = subprocess.run(
-        [ruff, "check", "--no-cache", "--select", "F821", "--output-format", "concise", *FILES],
+        [
+            ruff,
+            "check",
+            "--no-cache",
+            "--select",
+            "F821",
+            "--output-format",
+            "concise",
+            *FILES,
+        ],
         cwd=ROOT,
         capture_output=True,
         text=True,

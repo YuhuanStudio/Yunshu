@@ -103,14 +103,22 @@ def test_competitor_row_with_no_reason_is_missing():
 
 
 def test_row_level_reason_is_accepted_for_optional_engine_field():
-    row = {"attr": {}, "attr_unavailable": {"t_admit": "queue not instrumented in this build"}}
+    row = {
+        "attr": {},
+        "attr_unavailable": {"t_admit": "queue not instrumented in this build"},
+    }
     cov = fa.check_request("mlx-lm-server", row)
     assert cov["t_admit"].startswith("unavailable (")
 
 
 def test_competitor_profile_is_stats_as_is():
     assert fa.required_layer2("omlx-0.7.3") == ["competitor_stats"]
-    assert fa.check_profile("omlx-0.7.3", {"competitor_stats": ["TIMING x"]})["competitor_stats"] == "present"
+    assert (
+        fa.check_profile("omlx-0.7.3", {"competitor_stats": ["TIMING x"]})[
+            "competitor_stats"
+        ]
+        == "present"
+    )
     assert fa.check_profile("omlx-0.7.3", {})["competitor_stats"] == "MISSING"
 
 

@@ -32,21 +32,43 @@ def _val(cmd, flag):
 # launch values that matter for speed, with the source of the choice
 PRESENT = {
     # TensorFold 1.2.1 / 1.1.8: serve --help carries names only (no descriptions); RUNTIME.md names no speed setting.
-    "tf-1.2.1": {"--drafter": be.DRAFTER, "--no-thinking": None, "--parallel": "1", "--context": "140000"},
-    "tf-1.1.8": {"--drafter": be.DRAFTER, "--no-thinking": None, "--parallel": "1", "--context": "140000"},
+    "tf-1.2.1": {
+        "--drafter": be.DRAFTER,
+        "--no-thinking": None,
+        "--parallel": "1",
+        "--context": "140000",
+    },
+    "tf-1.1.8": {
+        "--drafter": be.DRAFTER,
+        "--no-thinking": None,
+        "--parallel": "1",
+        "--context": "140000",
+    },
     # Splash 1.5.0 serve --help: KV format default int8 (lossy), launch bf16 = lossless; DFlash2 draft explicit;
     # --max-context sized to the cell; persistent SSD cache on (serve_options.py:555-562)
-    "splash-1.5.0": {"--kv-format": "bf16", "--draft-model": be.DRAFTER, "--persistent-cache": None},
+    "splash-1.5.0": {
+        "--kv-format": "bf16",
+        "--draft-model": be.DRAFTER,
+        "--persistent-cache": None,
+    },
     # oMLX 0.7.3 serve --help: --max-concurrent-requests default 8 (same), hot cache default 0 (launch 8GB, a
     # documented speed option), SSD cache on; DFlash via model settings (dflash_verify_mode adaptive, block size and
     # draft window at the checkpoint defaults: model_settings.py:321-339)
-    "omlx-0.7.3": {"--max-concurrent-requests": "8", "--hot-cache-max-size": "8GB", "--paged-ssd-cache-max-size": "20GB"},
+    "omlx-0.7.3": {
+        "--max-concurrent-requests": "8",
+        "--hot-cache-max-size": "8GB",
+        "--paged-ssd-cache-max-size": "20GB",
+    },
     # mlx-serve 26.11.1 serve --help: MTP head auto-loaded (default on Metal), depth adaptive, prefix cache RAM default
     # on, SSD tier opt-in (docs/cli.md:90): on
     "mlx-serve-26.11.1": {"--ctx-size": "140000", "--prefix-cache-disk": "20GB"},
     # llama.cpp b12061 llama-server --help: --spec-type draft-mtp with the MTP GGUF head, flash attention auto
     # (default), --cache-ram 8192 MiB default, --spec-draft-n-max 3 default
-    "llama-cpp-b12061": {"--spec-type": "draft-mtp", "-c": "140000", "--reasoning": "off"},
+    "llama-cpp-b12061": {
+        "--spec-type": "draft-mtp",
+        "-c": "140000",
+        "--reasoning": "off",
+    },
     # mlx-vlm 0.7.11: DFlash drafter explicit; prefix cache is OFF by default (runtime_config.py:76) -> APC_ENABLED=1
     "mlx-vlm-server": {"--draft-kind": "dflash", "--draft-model": be.DRAFTER},
     # kapitsa 0.2.26 serve --help: DFlash2 drafter auto (default), slots default up to 4, disk cache auto (default on),
@@ -57,7 +79,15 @@ PRESENT = {
 
 # flags a launch must NOT carry: the engine's lossy switches (user options, never a benchmark default)
 LOSSY_ABSENT = {
-    "mlx-serve-26.11.1": ["--ane-prefill", "--int8-qk", "--mtp-typical", "--mtp-tokenv3", "--kv-quant", "--lm-head-mxfp8", "--ane"],
+    "mlx-serve-26.11.1": [
+        "--ane-prefill",
+        "--int8-qk",
+        "--mtp-typical",
+        "--mtp-tokenv3",
+        "--kv-quant",
+        "--lm-head-mxfp8",
+        "--ane",
+    ],
     "splash-1.5.0": ["--state-format"],  # bf16 state is lossy; the default fp32 stays
     "mlx-vlm-server": ["--kv-bits", "--kv-quant-scheme", "--quantized-kv-start"],
     "llama-cpp-b12061": ["-ctk", "-ctv", "--cache-type-k", "--cache-type-v"],
@@ -67,12 +97,42 @@ LOSSY_ABSENT = {
 
 # documented speed flags the launch leaves at the engine's default because its own docs recommend no other value
 DEFAULTS_KEPT = {
-    "llama-cpp-b12061": ["-b (2048)", "-ub (512)", "-fa (auto)", "-np (auto)", "--cache-ram (8192 MiB)", "--spec-draft-n-max (3)", "-t / -tb"],
-    "mlx-serve-26.11.1": ["--max-concurrent (1)", "--prefill-chunk (8192)", "--prefill-decode-share (0.25)", "--mtp-max-depth (adaptive)"],
-    "splash-1.5.0": ["--decode-share (0.5)", "--queue-size (32)", "--verify-rows (auto)", "--disable-ane (off)"],
-    "kapitsa-0.2.26": ["--slots (up to 4)", "--prefill-chunk (2048)", "--spec", "--mem-budget"],
-    "mlx-vlm-server": ["--prefill-step-size (2048)", "--max-num-seqs (unbounded)", "--draft-block-size"],
-    "omlx-0.7.3": ["--memory-guard (launch 96 GB, a ceiling)", "--initial-cache-blocks (256)"],
+    "llama-cpp-b12061": [
+        "-b (2048)",
+        "-ub (512)",
+        "-fa (auto)",
+        "-np (auto)",
+        "--cache-ram (8192 MiB)",
+        "--spec-draft-n-max (3)",
+        "-t / -tb",
+    ],
+    "mlx-serve-26.11.1": [
+        "--max-concurrent (1)",
+        "--prefill-chunk (8192)",
+        "--prefill-decode-share (0.25)",
+        "--mtp-max-depth (adaptive)",
+    ],
+    "splash-1.5.0": [
+        "--decode-share (0.5)",
+        "--queue-size (32)",
+        "--verify-rows (auto)",
+        "--disable-ane (off)",
+    ],
+    "kapitsa-0.2.26": [
+        "--slots (up to 4)",
+        "--prefill-chunk (2048)",
+        "--spec",
+        "--mem-budget",
+    ],
+    "mlx-vlm-server": [
+        "--prefill-step-size (2048)",
+        "--max-num-seqs (unbounded)",
+        "--draft-block-size",
+    ],
+    "omlx-0.7.3": [
+        "--memory-guard (launch 96 GB, a ceiling)",
+        "--initial-cache-blocks (256)",
+    ],
     "tf-1.2.1": ["--speed-up", "--keep-warm", "--prompt-cache-gib (16 GiB)"],
 }
 
@@ -101,4 +161,10 @@ def test_mlx_vlm_enables_prefix_caching_and_every_engine_with_a_documented_disk_
 
 
 def test_defaults_kept_are_listed_for_every_reviewed_engine():
-    assert set(DEFAULTS_KEPT) >= {"llama-cpp-b12061", "mlx-serve-26.11.1", "splash-1.5.0", "kapitsa-0.2.26", "mlx-vlm-server"}
+    assert set(DEFAULTS_KEPT) >= {
+        "llama-cpp-b12061",
+        "mlx-serve-26.11.1",
+        "splash-1.5.0",
+        "kapitsa-0.2.26",
+        "mlx-vlm-server",
+    }

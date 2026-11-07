@@ -41,17 +41,32 @@ def _table():
                 "modes": {
                     "dflash": {
                         "evidence": [
-                            _ev("log_regex", r"Drafter ready; speculative decoding enabled\."),
-                            _ev("log_regex", r"spec: request drafted", per_request=True),
+                            _ev(
+                                "log_regex",
+                                r"Drafter ready; speculative decoding enabled\.",
+                            ),
+                            _ev(
+                                "log_regex", r"spec: request drafted", per_request=True
+                            ),
                             _ev("acceptance_stat", "attr.accepted", per_request=True),
                         ],
                         "fallback": [r"falls back to AR"],
                     },
-                    "ar": {"evidence": [_ev("log_regex", r"Starting httpd", startup_sufficient=True)]},
+                    "ar": {
+                        "evidence": [
+                            _ev("log_regex", r"Starting httpd", startup_sufficient=True)
+                        ]
+                    },
                 },
             },
             "metrics-eng": {
-                "modes": {"mtp": {"evidence": [_ev("metrics", r"spec_enabled 1", per_request=True)]}}
+                "modes": {
+                    "mtp": {
+                        "evidence": [
+                            _ev("metrics", r"spec_enabled 1", per_request=True)
+                        ]
+                    }
+                }
             },
         },
     }
@@ -74,7 +89,9 @@ def test_per_request_log_line_after_ready_is_engaged():
 
 def test_startup_only_line_is_loaded_not_engaged():
     log = READY_LINE
-    res = fe.evaluate("eng", "dflash", log, [], _table(), ready_offset=len(log.encode()))
+    res = fe.evaluate(
+        "eng", "dflash", log, [], _table(), ready_offset=len(log.encode())
+    )
     assert res["engaged_mode"] == "unverified"
     assert res["evidence_kind"] == "startup_only"
     assert res["source"] == "startup_log"
@@ -82,7 +99,14 @@ def test_startup_only_line_is_loaded_not_engaged():
 
 
 def test_startup_sufficient_line_engages_from_startup_log():
-    res = fe.evaluate("eng", "ar", "Starting httpd at 127.0.0.1 on port 1...\n", [], _table(), ready_offset=10**6)
+    res = fe.evaluate(
+        "eng",
+        "ar",
+        "Starting httpd at 127.0.0.1 on port 1...\n",
+        [],
+        _table(),
+        ready_offset=10**6,
+    )
     assert res["engaged_mode"] == "ar"
     assert res["source"] == "startup_log"
 
@@ -101,28 +125,58 @@ def test_fallback_line_is_ar_even_with_positive_evidence():
 
 
 def test_acceptance_stat_engages_only_when_positive():
-    ok = fe.evaluate("eng", "dflash", "", [{"attr": {"accepted": 2}}], _table(), ready_offset=0)
+    ok = fe.evaluate(
+        "eng", "dflash", "", [{"attr": {"accepted": 2}}], _table(), ready_offset=0
+    )
     assert ok["engaged_mode"] == "dflash" and ok["source"] == "acceptance_stat"
-    zero = fe.evaluate("eng", "dflash", "", [{"attr": {"accepted": 0}}], _table(), ready_offset=0)
+    zero = fe.evaluate(
+        "eng", "dflash", "", [{"attr": {"accepted": 0}}], _table(), ready_offset=0
+    )
     assert zero["engaged_mode"] == "unverified"
 
 
 def test_metrics_evidence_reads_the_probe_text():
-    on = fe.evaluate("metrics-eng", "mtp", "", [], _table(), probe_text="spec_enabled 1\n", ready_offset=0)
-    off = fe.evaluate("metrics-eng", "mtp", "", [], _table(), probe_text="spec_enabled 0\n", ready_offset=0)
+    on = fe.evaluate(
+        "metrics-eng",
+        "mtp",
+        "",
+        [],
+        _table(),
+        probe_text="spec_enabled 1\n",
+        ready_offset=0,
+    )
+    off = fe.evaluate(
+        "metrics-eng",
+        "mtp",
+        "",
+        [],
+        _table(),
+        probe_text="spec_enabled 0\n",
+        ready_offset=0,
+    )
     assert on["engaged_mode"] == "mtp" and on["source"] == "metrics"
     assert off["engaged_mode"] == "unverified"
 
 
 def test_wrong_or_missing_mode_entry_is_unverified():
-    assert fe.evaluate("eng", "mtp", REQ_LOG, [], _table(), ready_offset=0)["engaged_mode"] == "unverified"
-    assert fe.evaluate("nope", "dflash", REQ_LOG, [], _table(), ready_offset=0)["engaged_mode"] == "unverified"
+    assert (
+        fe.evaluate("eng", "mtp", REQ_LOG, [], _table(), ready_offset=0)["engaged_mode"]
+        == "unverified"
+    )
+    assert (
+        fe.evaluate("nope", "dflash", REQ_LOG, [], _table(), ready_offset=0)[
+            "engaged_mode"
+        ]
+        == "unverified"
+    )
 
 
 def test_acceptance_problem_when_all_stats_zero_or_absent():
     m = _table()["engines"]["eng"]["modes"]["dflash"]
     assert fe.acceptance_problem("dflash", m, [{"attr": {"accepted": 1}}]) is None
-    assert fe.acceptance_problem("dflash", m, [{"attr": {"accepted": 0}}, {}]) is not None
+    assert (
+        fe.acceptance_problem("dflash", m, [{"attr": {"accepted": 0}}, {}]) is not None
+    )
     assert fe.acceptance_problem("dflash", m, []) is not None
     assert fe.acceptance_problem("ar", m, [{}]) is None
 
@@ -130,13 +184,24 @@ def test_acceptance_problem_when_all_stats_zero_or_absent():
 def test_validate_rejects_bad_entries():
     bad = copy.deepcopy(_table())
     bad["engines"]["eng"]["modes"]["dflash"]["evidence"][0]["source_ref"] = ""
-    bad["engines"]["eng"]["modes"]["dflash"]["evidence"][1]["pattern_or_path"] = "(unclosed"
+    bad["engines"]["eng"]["modes"]["dflash"]["evidence"][1]["pattern_or_path"] = (
+        "(unclosed"
+    )
     bad["engines"]["metrics-eng"]["modes"]["mtp"]["evidence"][0]["kind"] = "prose"
     bad["engines"]["eng"]["modes"]["warp"] = {"evidence": [_ev("log_regex", "x")]}
     bad["engines"]["eng"]["modes"]["off"] = {"evidence": []}
-    bad["engines"]["eng"]["modes"]["mtp"] = {"evidence": [_ev("response_field", "not a path!")]}
+    bad["engines"]["eng"]["modes"]["mtp"] = {
+        "evidence": [_ev("response_field", "not a path!")]
+    }
     problems = "\n".join(fe.validate_table(bad))
-    for needle in ("source_ref", "bad regex", "kind", "not in", "non-empty", "dotted field path"):
+    for needle in (
+        "source_ref",
+        "bad regex",
+        "kind",
+        "not in",
+        "non-empty",
+        "dotted field path",
+    ):
         assert needle in problems, needle
     assert fe.validate_table(_table()) == []
     assert fe.validate_table({"engines": []})  # not an object of engines
@@ -155,7 +220,9 @@ def test_load_table_is_none_when_missing_or_malformed(tmp_path):
 def test_merged_table_is_the_default_and_validates():
     assert Path(fe.DEFAULT_TABLE) == MERGED
     table = fe.load_table()
-    assert table is not None, "fullcmp_engaged_evidence.json must load through the schema"
+    assert table is not None, (
+        "fullcmp_engaged_evidence.json must load through the schema"
+    )
     assert fe.validate_table(table) == []
     assert "engaged_evidence_tf_splash.json" in table["_meta"]["sources"]
     for engine, entry in table["engines"].items():
@@ -168,7 +235,9 @@ def test_merged_table_is_the_default_and_validates():
 def test_merged_table_positive_regex_matches_a_real_splash_log():
     """Real-log check (skipped when the logs are not on disk): splash's per-request line is in a
     spec-on run's own log, so the splash dflash entry can engage on a request."""
-    logs = glob.glob("/Volumes/Micron/yunshu-fullcmp/wire-1103/splash-1.5.0/*.server.log")
+    logs = glob.glob(
+        "/Volumes/Micron/yunshu-fullcmp/wire-1103/splash-1.5.0/*.server.log"
+    )
     if not logs:
         pytest.skip("no real splash server log on disk")
     table = fe.load_table()
@@ -183,7 +252,12 @@ def test_merged_table_positive_regex_matches_a_real_splash_log():
     assert res["engaged_mode"] == "unverified"
     assert "row 0" in res["stats"]["per_row_problem"], m
     # no measured rows: nothing to correlate, so no per-request evidence
-    assert fe.evaluate("splash-1.5.0", "dflash", text, [], table, ready_offset=0)["engaged_mode"] == "unverified"
+    assert (
+        fe.evaluate("splash-1.5.0", "dflash", text, [], table, ready_offset=0)[
+            "engaged_mode"
+        ]
+        == "unverified"
+    )
 
 
 def test_srv_refuses_only_at_the_final_check(monkeypatch):
@@ -208,12 +282,16 @@ def test_srv_refuses_only_at_the_final_check(monkeypatch):
 
     monkeypatch.setattr(fe, "load_table", _table)
     srv = make(READY_LINE)
-    srv._verify_fullcmp_evidence(READY_LINE, final=False)  # startup: loaded only, no refusal
+    srv._verify_fullcmp_evidence(
+        READY_LINE, final=False
+    )  # startup: loaded only, no refusal
     assert srv.engaged_spec_mode == "unverified"
     with pytest.raises(RuntimeError, match="engaged=unverified"):
         srv._verify_fullcmp_evidence(READY_LINE, final=True)
     srv = make(REQ_LOG)
-    srv._verify_fullcmp_evidence(REQ_LOG, final=True, rows=[])  # per-request line: engaged, no error
+    srv._verify_fullcmp_evidence(
+        REQ_LOG, final=True, rows=[]
+    )  # per-request line: engaged, no error
     assert srv.engaged_spec_mode == "dflash" and srv.engaged_evidence_source == "slice"
     monkeypatch.setattr(fe, "load_table", lambda: None)  # no table: no evidence at all
     with pytest.raises(RuntimeError, match="table: missing"):
@@ -223,9 +301,8 @@ def test_srv_refuses_only_at_the_final_check(monkeypatch):
 def test_splash_startup_slice_is_not_empty(tmp_path):
     """Regression (2026-11-04): the slice began at readiness, so splash-1.5.0 cells had an empty
     .server.log slice. The cell slice is the whole server log from byte 0."""
-    import tfbench
-
     import bench_engines as be
+    import tfbench
 
     launch = be.build_launch("splash-1.5.0", 18990, tmp_path / "home", {}, 140000, 1)
     assert "serve" in launch.cmd
@@ -245,7 +322,11 @@ def test_table_keys_equal_the_manifest_engine_set():
 
     table = fe.load_table()
     # yunshu-pb2 has no evidence of its own: it is read through EVIDENCE_ALIAS (the yunshu evidence)
-    manifest = {fe.EVIDENCE_ALIAS.get(e, e) for e in fm.ENGINES} - {"ollama", "lmstudio", fm.PLACEHOLDER}
+    manifest = {fe.EVIDENCE_ALIAS.get(e, e) for e in fm.ENGINES} - {
+        "ollama",
+        "lmstudio",
+        fm.PLACEHOLDER,
+    }
     assert set(table["engines"]) == manifest
     for engine, entry in table["engines"].items():
         assert "modes" in entry and entry["confidence"], engine
@@ -276,11 +357,18 @@ def test_every_entry_regex_runs_on_the_real_logs_and_prints_the_line():
                     continue
                 rx = re.compile(ev["pattern_or_path"])
                 matched = next(
-                    (fe._line_at(t, h.start(), h.end()) for t in texts.values() if (h := rx.search(t))), None
+                    (
+                        fe._line_at(t, h.start(), h.end())
+                        for t in texts.values()
+                        if (h := rx.search(t))
+                    ),
+                    None,
                 )
                 print(f"{engine}/{mode} {ev['kind']}: {matched or 'NO MATCH'}")
                 if matched is not None:
-                    assert ev["real_example"], f"{engine}/{mode}: real log matches but real_example is null"
+                    assert ev["real_example"], (
+                        f"{engine}/{mode}: real log matches but real_example is null"
+                    )
 
 
 # ---- per measured request correlation (readiness pings never count for a measured row)
@@ -364,8 +452,17 @@ def _probe_table():
                 "modes": {
                     "dflash": {
                         "evidence": [
-                            _ev("response_field_probe", "timings.draft_rounds", per_request=True)
-                            | {"paths": ["timings.draft_rounds", "timings.draft_n_accepted"]}
+                            _ev(
+                                "response_field_probe",
+                                "timings.draft_rounds",
+                                per_request=True,
+                            )
+                            | {
+                                "paths": [
+                                    "timings.draft_rounds",
+                                    "timings.draft_n_accepted",
+                                ]
+                            }
                         ],
                         "fallback": [],
                     }
@@ -378,9 +475,21 @@ def _probe_table():
 def test_stream_rows_without_draft_stats_pass_when_the_probe_has_them():
     """The measured requests are streamed (no draft stats in their rows); the one non-streaming probe
     carries timings.draft_rounds and draft_n_accepted > 0 -> engaged by the probe."""
-    rows = [{"pt": 1024, "ct": 64}, {"pt": 1024, "ct": 64}]  # streamed: no attr/draft fields
-    probe = {"timings": {"draft_kind": "dflash", "draft_rounds": 12, "draft_n": 80, "draft_n_accepted": 51}}
-    res = fe.evaluate("vlm", "dflash", "", rows, _probe_table(), ready_offset=0, probe_response=probe)
+    rows = [
+        {"pt": 1024, "ct": 64},
+        {"pt": 1024, "ct": 64},
+    ]  # streamed: no attr/draft fields
+    probe = {
+        "timings": {
+            "draft_kind": "dflash",
+            "draft_rounds": 12,
+            "draft_n": 80,
+            "draft_n_accepted": 51,
+        }
+    }
+    res = fe.evaluate(
+        "vlm", "dflash", "", rows, _probe_table(), ready_offset=0, probe_response=probe
+    )
     assert res["engaged_mode"] == "dflash"
     assert res["source"] == "probe"
     assert res["stats"]["probe"] == [12, 51]
@@ -388,13 +497,31 @@ def test_stream_rows_without_draft_stats_pass_when_the_probe_has_them():
 
 def test_probe_with_zero_drafting_is_unverified_dflash_not_applied():
     rows = [{"pt": 1024, "ct": 64}]
-    probe = {"timings": {"draft_kind": "dflash", "draft_rounds": 0, "draft_n": 0, "draft_n_accepted": 0}}
-    res = fe.evaluate("vlm", "dflash", "", rows, _probe_table(), ready_offset=0, probe_response=probe)
+    probe = {
+        "timings": {
+            "draft_kind": "dflash",
+            "draft_rounds": 0,
+            "draft_n": 0,
+            "draft_n_accepted": 0,
+        }
+    }
+    res = fe.evaluate(
+        "vlm", "dflash", "", rows, _probe_table(), ready_offset=0, probe_response=probe
+    )
     assert res["engaged_mode"] == "unverified"
-    null = fe.evaluate("vlm", "dflash", "", rows, _probe_table(), ready_offset=0,
-                       probe_response={"timings": {"draft_rounds": None}})
+    null = fe.evaluate(
+        "vlm",
+        "dflash",
+        "",
+        rows,
+        _probe_table(),
+        ready_offset=0,
+        probe_response={"timings": {"draft_rounds": None}},
+    )
     assert null["engaged_mode"] == "unverified"
-    absent = fe.evaluate("vlm", "dflash", "", rows, _probe_table(), ready_offset=0, probe_response=None)
+    absent = fe.evaluate(
+        "vlm", "dflash", "", rows, _probe_table(), ready_offset=0, probe_response=None
+    )
     assert absent["engaged_mode"] == "unverified"
 
 
@@ -409,9 +536,15 @@ def test_omlx_mtp_line_is_per_row_acceptance_and_matches_the_real_log(tmp_path):
     conc log on disk when it exists."""
     table = fe.load_table()
     m = table["engines"]["omlx-0.7.3"]["modes"]["dflash"]
-    item = next(ev for ev in m["evidence"] if ev["kind"] == "acceptance_regex" and "MTP" in ev["pattern_or_path"])
+    item = next(
+        ev
+        for ev in m["evidence"]
+        if ev["kind"] == "acceptance_regex" and "MTP" in ev["pattern_or_path"]
+    )
     assert item["group"] == "accepted"
-    real = glob.glob("/Volumes/Micron/yunshu-fullcmp/smoke/*/out/server-omlx-0.7.3-conc-0.log")
+    real = glob.glob(
+        "/Volumes/Micron/yunshu-fullcmp/smoke/*/out/server-omlx-0.7.3-conc-0.log"
+    )
     if not real:
         pytest.skip("no real oMLX conc log on disk")
     text = Path(real[0]).read_text(errors="replace")
@@ -436,8 +569,16 @@ def test_completed_request_lines_give_the_streamed_decode_speed():
 
 
 def test_probe_fields_keep_the_draft_and_speed_timings():
-    probe = {"timings": {"draft_kind": "dflash", "draft_rounds": 12, "draft_n": 80,
-                         "draft_n_accepted": 51, "predicted_per_second": 30.5, "extra": 1}}
+    probe = {
+        "timings": {
+            "draft_kind": "dflash",
+            "draft_rounds": 12,
+            "draft_n": 80,
+            "draft_n_accepted": 51,
+            "predicted_per_second": 30.5,
+            "extra": 1,
+        }
+    }
     fields = fe.probe_fields(probe)
     assert fields["draft_rounds"] == 12 and fields["draft_n_accepted"] == 51
     assert fields["predicted_per_second"] == 30.5 and fields["predicted_ms"] is None
@@ -474,14 +615,18 @@ def test_splash_real_lines_correlate_per_measured_row_with_commas_and_dedup():
 def test_splash_128k_comma_prompt_correlates():
     table, _ = _splash_entry()
     log = "".join(SPLASH_REAL[:2]) + SYNTH_128K
-    res = fe.evaluate("splash-1.5.0", "dflash", log, [{"pt": 131072, "ct": 64}], table, ready_offset=0)
+    res = fe.evaluate(
+        "splash-1.5.0", "dflash", log, [{"pt": 131072, "ct": 64}], table, ready_offset=0
+    )
     assert res["engaged_mode"] == "dflash", res["stats"]
     assert res["stats"]["per_row"][0]["prompt"] == 131072
 
 
 def test_splash_real_wire_1104_log_on_disk_engages_per_measured_row():
     """The real splash decode log on disk: 2 readiness pings + 2 measured rows of 1,024 tokens."""
-    logs = glob.glob("/Volumes/Micron/yunshu-fullcmp/wire-1104-work/*/tfout/out/server-splash-1.5.0-*.log")
+    logs = glob.glob(
+        "/Volumes/Micron/yunshu-fullcmp/wire-1104-work/*/tfout/out/server-splash-1.5.0-*.log"
+    )
     if not logs:
         pytest.skip("no real splash log on disk")
     table, _ = _splash_entry()
@@ -520,8 +665,12 @@ def test_every_manifest_engine_runs_the_tfbench_engaged_path_with_a_fake_log():
         srv.probe = None
         srv.ready_log_offset = 0
         srv.log = FakeLog("nothing useful\n")
-        srv._verify_fullcmp_evidence("nothing useful\n", final=False, rows=[{"pt": 1, "ct": 1}])
-        assert srv.engaged_spec_mode in ("unverified", "dflash", "ar", "mtp", "off"), engine
+        srv._verify_fullcmp_evidence(
+            "nothing useful\n", final=False, rows=[{"pt": 1, "ct": 1}]
+        )
+        assert srv.engaged_spec_mode in ("unverified", "dflash", "ar", "mtp", "off"), (
+            engine
+        )
 
 
 def test_mlx_vlm_probe_path_is_exercised_through_the_tfbench_engaged_path():
@@ -539,7 +688,9 @@ def test_mlx_vlm_probe_path_is_exercised_through_the_tfbench_engaged_path():
         srv.probe = None
         srv.ready_log_offset = 0
         srv.log = FakeLog()
-        srv._verify_fullcmp_evidence("", final=True, rows=[{"pt": 1024, "ct": 64}], probe_response=probe)
+        srv._verify_fullcmp_evidence(
+            "", final=True, rows=[{"pt": 1024, "ct": 64}], probe_response=probe
+        )
         return srv.engaged_spec_mode
 
     ok = {"timings": {"draft_rounds": 9, "draft_n_accepted": 40}}
@@ -579,7 +730,9 @@ def test_finalized_session_row_spec_mode_is_the_engaged_mode_not_the_startup_val
     # the final check, after the measured requests, verifies the engagement
     ping = "[tensorfold] done chatcmpl-p prompt=15 cached=0 finish=stop rounds=1 accepted=9/15\n"
     # two readiness pings first (READINESS_REQUESTS), then the measured request's done line
-    engaged._verify_fullcmp_evidence(ping * 2 + line, final=True, rows=[{"pt": 1024, "ct": 64}])
+    engaged._verify_fullcmp_evidence(
+        ping * 2 + line, final=True, rows=[{"pt": 1024, "ct": 64}]
+    )
     fields = tfbench.engaged_end_fields(engaged)
     assert fields["spec_mode"] == "dflash" == fields["engaged_spec_mode"]
     assert fields["engaged_evidence_source"] == "slice"
@@ -606,13 +759,17 @@ def test_kapitsa_per_row_kflash_evidence_with_label():
     log = "".join(KAPITSA_REAL)
     rows = [{"pt": 1024, "ct": 64}, {"pt": 1024, "ct": 64}]
     res = fe.evaluate("kapitsa-0.2.26", "dflash", log, rows, table, ready_offset=0)
-    assert res["engaged_mode"] == "dflash", res["stats"]  # the base mode; the guard compares it
+    assert res["engaged_mode"] == "dflash", res[
+        "stats"
+    ]  # the base mode; the guard compares it
     assert res["label"] == "dflash (kflash tree)"
     assert [r["value"] for r in res["stats"]["per_row"]] == [2.86, 2.86]
 
 
 def test_kapitsa_real_wire_1105_log_engages_per_measured_row():
-    logs = glob.glob("/Volumes/Micron/yunshu-fullcmp/wire-1105-work/*/tfout/out/server-kapitsa-0.2.26-*.log")
+    logs = glob.glob(
+        "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/*/tfout/out/server-kapitsa-0.2.26-*.log"
+    )
     if not logs:
         pytest.skip("no real kapitsa log on disk")
     table = fe.load_table()
@@ -635,8 +792,12 @@ def test_llama_per_row_draft_acceptance_blocks():
     """llama-cpp b12061: one print_timing block per request (prompt-eval line, then 'draft acceptance =
     X (N accepted / M generated)'). Measured rows match by order after the readiness requests."""
     table = fe.load_table()
-    blocks = [LLAMA_BLOCK.format(t=i, p=p, a=a, g=g) for i, (p, a, g) in enumerate(
-        [(15, 7, 9), (4, 7, 9), (1024, 37, 60), (4, 37, 60)])]
+    blocks = [
+        LLAMA_BLOCK.format(t=i, p=p, a=a, g=g)
+        for i, (p, a, g) in enumerate(
+            [(15, 7, 9), (4, 7, 9), (1024, 37, 60), (4, 37, 60)]
+        )
+    ]
     log = "".join(blocks)
     rows = [{"pt": 1024, "ct": 64}, {"pt": 1024, "ct": 64}]
     res = fe.evaluate("llama-cpp-b12061", "mtp", log, rows, table, ready_offset=0)
@@ -645,7 +806,9 @@ def test_llama_per_row_draft_acceptance_blocks():
 
 
 def test_llama_real_wire_1105_log_engages_per_measured_row():
-    logs = glob.glob("/Volumes/Micron/yunshu-fullcmp/wire-1105-work/*/tfout/out/server-llama-cpp-b12061-*.log")
+    logs = glob.glob(
+        "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/*/tfout/out/server-llama-cpp-b12061-*.log"
+    )
     if not logs:
         pytest.skip("no real llama log on disk")
     table = fe.load_table()
@@ -656,7 +819,14 @@ def test_llama_real_wire_1105_log_engages_per_measured_row():
     assert [r["value"] for r in res["stats"]["per_row"]] == [39.0, 39.0]
 
 
-WIRE_1105_ENGINES = ("tf-1.2.1", "tf-1.1.8", "omlx-0.7.3rc1", "mlx-serve-26.11.1", "splash-1.5.0", "llama-cpp-b12061")
+WIRE_1105_ENGINES = (
+    "tf-1.2.1",
+    "tf-1.1.8",
+    "omlx-0.7.3rc1",
+    "mlx-serve-26.11.1",
+    "splash-1.5.0",
+    "llama-cpp-b12061",
+)
 
 
 def test_audit_acceptance_verdict_uses_the_evidence_not_the_attr_fields_on_real_wire_1105_records():
@@ -669,19 +839,33 @@ def test_audit_acceptance_verdict_uses_the_evidence_not_the_attr_fields_on_real_
 
     checked = []
     for engine in WIRE_1105_ENGINES:
-        for jl in sorted(glob.glob(f"/Volumes/Micron/yunshu-fullcmp/wire-1105/{engine}/*.jsonl")):
+        for jl in sorted(
+            glob.glob(f"/Volumes/Micron/yunshu-fullcmp/wire-1105/{engine}/*.jsonl")
+        ):
             if jl.endswith(".telemetry.jsonl"):
                 continue
-            rows = [json.loads(x) for x in Path(jl).read_text().splitlines() if x.strip()]
+            rows = [
+                json.loads(x) for x in Path(jl).read_text().splitlines() if x.strip()
+            ]
             header = next((r for r in rows if r.get("part") == "session"), None)
             if header is None:
                 continue
             decode = [r for r in rows if r.get("part") == "decode"]
-            cell = {"cell": Path(jl).stem, "engine": engine, "spec_mode": header.get("spec_mode_expected")}
-            cf = types.SimpleNamespace(header=header, cell=cell, rep=0, rows=decode, path=Path(jl))
+            cell = {
+                "cell": Path(jl).stem,
+                "engine": engine,
+                "spec_mode": header.get("spec_mode_expected"),
+            }
+            cf = types.SimpleNamespace(
+                header=header, cell=cell, rep=0, rows=decode, path=Path(jl)
+            )
             res = fa.check_engaged_mode(types.SimpleNamespace(files=[cf]))
             checked.append(engine)
-            bad = [v for v in res.violations if "without per-request acceptance" in v or "zero or absent" in v]
+            bad = [
+                v
+                for v in res.violations
+                if "without per-request acceptance" in v or "zero or absent" in v
+            ]
             assert not bad, (engine, bad)
     if not checked:
         pytest.skip("no wire-1105 records on disk")
@@ -689,9 +873,20 @@ def test_audit_acceptance_verdict_uses_the_evidence_not_the_attr_fields_on_real_
 
 def test_attr_rows_are_filled_from_the_matched_evidence():
     per_row = [
-        {"row": 0, "prompt": 1024, "line": "[tensorfold] done ... rounds=19 accepted=45/285 ...", "value": 45.0,
-         "group": "accepted"},
-        {"row": 1, "prompt": 1024, "line": "Done · input 1,024 · ... 2.6 tok/cycle", "value": 2.6, "group": "tpc"},
+        {
+            "row": 0,
+            "prompt": 1024,
+            "line": "[tensorfold] done ... rounds=19 accepted=45/285 ...",
+            "value": 45.0,
+            "group": "accepted",
+        },
+        {
+            "row": 1,
+            "prompt": 1024,
+            "line": "Done · input 1,024 · ... 2.6 tok/cycle",
+            "value": 2.6,
+            "group": "tpc",
+        },
     ]
     rows = [{"ct": 64}, {"ct": 64}]
     a0, a1 = fe.attr_rows_from(per_row, rows)
@@ -699,7 +894,9 @@ def test_attr_rows_are_filled_from_the_matched_evidence():
     assert a0["tokens_per_round"] == round(64 / 19, 3)
     # a tokens-per-cycle group is not an accepted count: unavailable, never a made-up number
     assert str(a1["accepted"]).startswith("unavailable")
-    assert str(a1["drafted"]).startswith("unavailable") and str(a1["rounds"]).startswith("unavailable")
+    assert str(a1["drafted"]).startswith("unavailable") and str(
+        a1["rounds"]
+    ).startswith("unavailable")
 
 
 def test_attr_rows_on_the_real_wire_1105_records_are_filled_for_every_measured_row():
@@ -709,16 +906,36 @@ def test_attr_rows_on_the_real_wire_1105_records_are_filled_for_every_measured_r
     table = fe.load_table()
     checked = []
     for engine in WIRE_1105_ENGINES:
-        for jl in sorted(glob.glob(f"/Volumes/Micron/yunshu-fullcmp/wire-1105/{engine}/*.jsonl")):
+        for jl in sorted(
+            glob.glob(f"/Volumes/Micron/yunshu-fullcmp/wire-1105/{engine}/*.jsonl")
+        ):
             if jl.endswith(".telemetry.jsonl"):
                 continue
-            lines = [json.loads(x) for x in Path(jl).read_text().splitlines() if x.strip()]
+            lines = [
+                json.loads(x) for x in Path(jl).read_text().splitlines() if x.strip()
+            ]
             measured = [r for r in lines if r.get("part") == "decode"]
-            log_path = Path(jl).with_name(Path(jl).name[: -len(".jsonl")] + ".server.log")
+            log_path = Path(jl).with_name(
+                Path(jl).name[: -len(".jsonl")] + ".server.log"
+            )
             if not measured or not log_path.exists():
                 continue
-            mode = next((r.get("spec_mode_expected") for r in lines if r.get("part") == "session"), None)
-            ev = fe.evaluate(engine, mode, log_path.read_text(errors="replace"), measured, table, ready_offset=0)
+            mode = next(
+                (
+                    r.get("spec_mode_expected")
+                    for r in lines
+                    if r.get("part") == "session"
+                ),
+                None,
+            )
+            ev = fe.evaluate(
+                engine,
+                mode,
+                log_path.read_text(errors="replace"),
+                measured,
+                table,
+                ready_offset=0,
+            )
             per_row = ev["stats"].get("per_row") or []
             if not per_row:
                 continue  # no per-row evidence in this engine's log: nothing to fill
@@ -745,8 +962,14 @@ def _guard_violations_for(jl):
     rows = [json.loads(x) for x in Path(jl).read_text().splitlines() if x.strip()]
     header = next(r for r in rows if r.get("part") == "session")
     decode = [r for r in rows if r.get("part") == "decode"]
-    cell = {"cell": Path(jl).stem, "engine": header["engine"], "spec_mode": header.get("spec_mode_expected")}
-    cf = types.SimpleNamespace(header=header, cell=cell, rep=0, rows=decode, path=Path(jl))
+    cell = {
+        "cell": Path(jl).stem,
+        "engine": header["engine"],
+        "spec_mode": header.get("spec_mode_expected"),
+    }
+    cf = types.SimpleNamespace(
+        header=header, cell=cell, rep=0, rows=decode, path=Path(jl)
+    )
     return fa.check_engaged_mode(types.SimpleNamespace(files=[cf])).violations
 
 
@@ -754,19 +977,27 @@ def test_kapitsa_tok_cycle_only_engine_is_proven_per_row_on_the_real_raw():
     """Regression (wire-1105b): kapitsa's chat line has tok/cycle and 'KFlash (DFlash2): N cycles' but
     no accepted count. The acceptance verdict is the per-row evidence (tok/cycle > 1.0), not attr.accepted.
     A stale per-row problem from another evidence item must not fail it."""
-    jls = sorted(glob.glob("/Volumes/Micron/yunshu-fullcmp/wire-1105b/kapitsa-0.2.26/*-r0.jsonl"))
+    jls = sorted(
+        glob.glob("/Volumes/Micron/yunshu-fullcmp/wire-1105b/kapitsa-0.2.26/*-r0.jsonl")
+    )
     jls = [j for j in jls if "telemetry" not in j]
     if not jls:
         pytest.skip("no real kapitsa raw on disk")
     for jl in jls:
-        bad = [v for v in _guard_violations_for(jl) if "without per-request acceptance" in v]
+        bad = [
+            v
+            for v in _guard_violations_for(jl)
+            if "without per-request acceptance" in v
+        ]
         assert not bad, bad
 
 
 def test_mlx_vlm_probe_is_re_evaluated_by_the_audit_on_the_real_raw():
     """Regression (wire-1105b): the audit did not pass the probe response; the header's engine_probe is None
     for this engine. The recorded part=probe row must reach the evaluation: no 'unverified' violation."""
-    jls = sorted(glob.glob("/Volumes/Micron/yunshu-fullcmp/wire-1105b/mlx-vlm-server/*-r0.jsonl"))
+    jls = sorted(
+        glob.glob("/Volumes/Micron/yunshu-fullcmp/wire-1105b/mlx-vlm-server/*-r0.jsonl")
+    )
     jls = [j for j in jls if "telemetry" not in j]
     if not jls:
         pytest.skip("no real mlx-vlm raw on disk")
@@ -776,50 +1007,68 @@ def test_mlx_vlm_probe_is_re_evaluated_by_the_audit_on_the_real_raw():
 
 
 TF_CONC_REAL = (
-    '[tensorfold] done chatcmpl-a7f9d981ca391dec3977210d34767534 prompt=15 cached=0 thinking=False effort=none tokens=10 sha=e94588627640 finish=stop rounds=1 accepted=9/15 ttft=0.037 decode=0.041 elapsed=0.078 queued=0.000 tok/s=217.6\n',
-    '[tensorfold] done chatcmpl-a3aec464a36e4639539599572c1fb9bc prompt=15 cached=0 thinking=False effort=none tokens=10 sha=e94588627640 finish=stop rounds=1 accepted=9/15 ttft=0.039 decode=0.040 elapsed=0.079 queued=0.000 tok/s=224.9\n',
-    '[tensorfold] done chatcmpl-3ff4edad0a3ea27a41bbcd7ff40c5f26 prompt=1024 cached=0 thinking=False effort=none tokens=64 sha=8f4c72f50c71 finish=length rounds=18 accepted=49/267 ttft=1.059 decode=0.752 elapsed=1.811 queued=0.000 tok/s=83.8\n',
-    '[tensorfold] done chatcmpl-26cbb5abe07d3a983509ef8ede8d2680 prompt=1024 cached=0 thinking=False effort=none tokens=64 sha=af45034bcfc4 finish=length rounds=12 accepted=52/172 ttft=2.863 decode=0.501 elapsed=3.365 queued=1.810 tok/s=125.7\n',
-    '[tensorfold] done chatcmpl-c6ebead6f8bf4aa8ba6fe46459569129 prompt=1024 cached=0 thinking=False effort=none tokens=64 sha=0de688d4dfa9 finish=length rounds=17 accepted=46/246 ttft=1.078 decode=0.703 elapsed=1.781 queued=0.024 tok/s=89.6\n',
-    '[tensorfold] done chatcmpl-742a911e5f4f5c063a04fcaa6f56645a prompt=1024 cached=0 thinking=False effort=none tokens=64 sha=79079b3f5c62 finish=length rounds=12 accepted=51/174 ttft=2.837 decode=0.514 elapsed=3.352 queued=1.781 tok/s=122.5\n',
+    "[tensorfold] done chatcmpl-a7f9d981ca391dec3977210d34767534 prompt=15 cached=0 thinking=False effort=none tokens=10 sha=e94588627640 finish=stop rounds=1 accepted=9/15 ttft=0.037 decode=0.041 elapsed=0.078 queued=0.000 tok/s=217.6\n",
+    "[tensorfold] done chatcmpl-a3aec464a36e4639539599572c1fb9bc prompt=15 cached=0 thinking=False effort=none tokens=10 sha=e94588627640 finish=stop rounds=1 accepted=9/15 ttft=0.039 decode=0.040 elapsed=0.079 queued=0.000 tok/s=224.9\n",
+    "[tensorfold] done chatcmpl-3ff4edad0a3ea27a41bbcd7ff40c5f26 prompt=1024 cached=0 thinking=False effort=none tokens=64 sha=8f4c72f50c71 finish=length rounds=18 accepted=49/267 ttft=1.059 decode=0.752 elapsed=1.811 queued=0.000 tok/s=83.8\n",
+    "[tensorfold] done chatcmpl-26cbb5abe07d3a983509ef8ede8d2680 prompt=1024 cached=0 thinking=False effort=none tokens=64 sha=af45034bcfc4 finish=length rounds=12 accepted=52/172 ttft=2.863 decode=0.501 elapsed=3.365 queued=1.810 tok/s=125.7\n",
+    "[tensorfold] done chatcmpl-c6ebead6f8bf4aa8ba6fe46459569129 prompt=1024 cached=0 thinking=False effort=none tokens=64 sha=0de688d4dfa9 finish=length rounds=17 accepted=46/246 ttft=1.078 decode=0.703 elapsed=1.781 queued=0.024 tok/s=89.6\n",
+    "[tensorfold] done chatcmpl-742a911e5f4f5c063a04fcaa6f56645a prompt=1024 cached=0 thinking=False effort=none tokens=64 sha=79079b3f5c62 finish=length rounds=12 accepted=51/174 ttft=2.837 decode=0.514 elapsed=3.352 queued=1.781 tok/s=122.5\n",
 )
 
 
 def _tf_item():
     entry = fe.load_table()["engines"]["tf-1.2.1"]["modes"]["dflash"]
-    return next(e for e in entry["evidence"] if e["kind"] == "acceptance_regex" and e.get("group"))
+    return next(
+        e
+        for e in entry["evidence"]
+        if e["kind"] == "acceptance_regex" and e.get("group")
+    )
 
 
 def _conc_records(*sizes):
     """One conc record per entry of sizes (requests of 1024 prompt tokens, 64 completion tokens)."""
-    return [{"part": "conc", "n": n, "requests": [{"rid": i, "pt": 1024, "ct": 64} for i in range(n)]}
-            for n in sizes]
+    return [
+        {
+            "part": "conc",
+            "n": n,
+            "requests": [{"rid": i, "pt": 1024, "ct": 64} for i in range(n)],
+        }
+        for n in sizes
+    ]
 
 
 def test_tf_concurrent_real_lines_engage_each_request_with_queued_time():
     """Real wire-1106 tf-1.2.1 conc cell: 2 readiness pings, then two n=2 conc records (4 done lines).
     Each request matches its own line; the queued= field is read where present (serialized queue)."""
     log = "".join(TF_CONC_REAL)
-    ev, problems = fe.concurrent_check(fe.load_table(), "tf-1.2.1", "dflash", log, _conc_records(2, 2), 0)
+    ev, problems = fe.concurrent_check(
+        fe.load_table(), "tf-1.2.1", "dflash", log, _conc_records(2, 2), 0
+    )
     assert problems == [], problems
     assert ev["engaged_mode"] == "dflash"
     per_row = ev["stats"]["per_row"]
     assert [r["value"] for r in per_row] == [49.0, 52.0, 46.0, 51.0]
-    assert [round(r["queued_s"], 3) if r["queued_s"] is not None else None for r in per_row] == [0.0, 1.81, 0.024, 1.781]
+    assert [
+        round(r["queued_s"], 3) if r["queued_s"] is not None else None for r in per_row
+    ] == [0.0, 1.81, 0.024, 1.781]
 
 
 def test_tf_concurrent_missing_done_line_fails_closed():
     """Mutation: one concurrent request has no done line (the server did not log it): the cell fails."""
     lines = list(TF_CONC_REAL)
     del lines[4]  # the third measured request's line
-    ev, problems = fe.concurrent_check(fe.load_table(), "tf-1.2.1", "dflash", "".join(lines), _conc_records(2, 2), 0)
+    ev, problems = fe.concurrent_check(
+        fe.load_table(), "tf-1.2.1", "dflash", "".join(lines), _conc_records(2, 2), 0
+    )
     assert problems and ev["engaged_mode"] == "unverified"
 
 
 def test_tf_concurrent_extra_done_line_fails_closed():
     """Mutation: one more done line than requests (a request the record does not account for)."""
     lines = list(TF_CONC_REAL) + [TF_CONC_REAL[-1]]
-    ev, problems = fe.concurrent_check(fe.load_table(), "tf-1.2.1", "dflash", "".join(lines), _conc_records(2, 2), 0)
+    ev, problems = fe.concurrent_check(
+        fe.load_table(), "tf-1.2.1", "dflash", "".join(lines), _conc_records(2, 2), 0
+    )
     assert problems and ev["engaged_mode"] == "unverified"
 
 
@@ -829,37 +1078,93 @@ def test_tf_concurrent_request_that_drafted_with_zero_accepted_is_still_speculat
     count mismatch fail (the two tests above)."""
     lines = list(TF_CONC_REAL)
     lines[2] = lines[2].replace("accepted=49/267", "accepted=0/267")
-    ev, problems = fe.concurrent_check(fe.load_table(), "tf-1.2.1", "dflash", "".join(lines), _conc_records(2, 2), 0)
+    ev, problems = fe.concurrent_check(
+        fe.load_table(), "tf-1.2.1", "dflash", "".join(lines), _conc_records(2, 2), 0
+    )
     assert problems == [] and ev["engaged_mode"] == "dflash"
     assert ev["label"].startswith("dflash (drafted on 4 of 4 requests;")
     lines[2] = lines[2].replace("accepted=0/267", "accepted=0/0")
-    ev, problems = fe.concurrent_check(fe.load_table(), "tf-1.2.1", "dflash", "".join(lines), _conc_records(2, 2), 0)
-    assert problems == [] and ev["label"].startswith("dflash (drafted on 3 of 4 requests;")
+    ev, problems = fe.concurrent_check(
+        fe.load_table(), "tf-1.2.1", "dflash", "".join(lines), _conc_records(2, 2), 0
+    )
+    assert problems == [] and ev["label"].startswith(
+        "dflash (drafted on 3 of 4 requests;"
+    )
 
 
 def test_yunshu_concurrent_verdict_is_each_requests_own_counters():
     """Yunshu conc/mixed: no done line; each request's x_yunshu.speculative accepted must be > 0."""
-    ok = [{"part": "conc", "n": 2, "requests": [
-        {"rid": 0, "pt": 1024, "ct": 16, "spec": {"accepted": 3, "drafted": 4, "rounds": 2}},
-        {"rid": 1, "pt": 1024, "ct": 16, "spec": {"accepted": 5, "drafted": 6, "rounds": 3}}]}]
+    ok = [
+        {
+            "part": "conc",
+            "n": 2,
+            "requests": [
+                {
+                    "rid": 0,
+                    "pt": 1024,
+                    "ct": 16,
+                    "spec": {"accepted": 3, "drafted": 4, "rounds": 2},
+                },
+                {
+                    "rid": 1,
+                    "pt": 1024,
+                    "ct": 16,
+                    "spec": {"accepted": 5, "drafted": 6, "rounds": 3},
+                },
+            ],
+        }
+    ]
     ev, problems = fe.concurrent_check(None, "yunshu", "dflash", "", ok, 0)
     assert problems == [] and ev["engaged_mode"] == "dflash"
     assert [r["value"] for r in ev["stats"]["per_row"]] == [3.0, 5.0]
-    zero = [{"part": "conc", "n": 2, "requests": [
-        {"rid": 0, "pt": 1024, "ct": 16, "spec": {"accepted": 3, "drafted": 4, "rounds": 2}},
-        {"rid": 1, "pt": 1024, "ct": 16, "spec": {"accepted": 0, "drafted": 4, "rounds": 2}}]}]
+    zero = [
+        {
+            "part": "conc",
+            "n": 2,
+            "requests": [
+                {
+                    "rid": 0,
+                    "pt": 1024,
+                    "ct": 16,
+                    "spec": {"accepted": 3, "drafted": 4, "rounds": 2},
+                },
+                {
+                    "rid": 1,
+                    "pt": 1024,
+                    "ct": 16,
+                    "spec": {"accepted": 0, "drafted": 4, "rounds": 2},
+                },
+            ],
+        }
+    ]
     ev, problems = fe.concurrent_check(None, "yunshu", "dflash", "", zero, 0)
     assert problems and ev["engaged_mode"] == "unverified"
-    absent = [{"part": "conc", "n": 1, "requests": [{"rid": 0, "pt": 1024, "ct": 16,
-               "spec": "unavailable (response carries no per-request speculative counters)"}]}]
+    absent = [
+        {
+            "part": "conc",
+            "n": 1,
+            "requests": [
+                {
+                    "rid": 0,
+                    "pt": 1024,
+                    "ct": 16,
+                    "spec": "unavailable (response carries no per-request speculative counters)",
+                }
+            ],
+        }
+    ]
     # no per-request counters and no DFlash rounds in the slice: derived 'ar' (a label, not a violation)
     ev, problems = fe.concurrent_check(None, "yunshu", "dflash", "", absent, 0)
-    assert problems == [] and ev["engaged_mode"] == "ar" and ev["label"].startswith("ar (")
+    assert (
+        problems == [] and ev["engaged_mode"] == "ar" and ev["label"].startswith("ar (")
+    )
 
 
 def test_concurrent_attr_rows_carry_rid_and_part():
     log = "".join(TF_CONC_REAL)
-    rows = fe.concurrent_attr_rows(fe.load_table(), "tf-1.2.1", "dflash", log, _conc_records(2, 2), 0)
+    rows = fe.concurrent_attr_rows(
+        fe.load_table(), "tf-1.2.1", "dflash", log, _conc_records(2, 2), 0
+    )
     assert [r["rid"] for r in rows] == [0, 1, 0, 1]
     assert rows[0]["accepted"] == 49 and rows[0]["rec_part"] == "conc"
     assert rows[1]["queued_s"] == 1.81
@@ -876,6 +1181,11 @@ def test_omlx_batch_parked_segments_merge_into_their_request():
     out = fe._merge_segments(raw)
     assert not any(o.get("bad") for o in out)
     r4 = next(o for o in out if o["uid"] == 4)
-    assert r4["ct"] == 154 and r4["value"] == 81 and r4["drafted"] == 105 and r4["segments"] == 2
+    assert (
+        r4["ct"] == 154
+        and r4["value"] == 81
+        and r4["drafted"] == 105
+        and r4["segments"] == 2
+    )
     r5 = next(o for o in out if o["uid"] == 5)
     assert r5.get("partial") and r5["ct"] == 101

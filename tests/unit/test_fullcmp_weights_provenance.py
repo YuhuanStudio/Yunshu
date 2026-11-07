@@ -23,13 +23,20 @@ SHA = "a" * 64
 
 def _run(header, engine=LLAMA):
     cell = {"cell": "c1", "engine": engine, "weight_group": "g"}
-    cf = SimpleNamespace(cell=cell, rep=0, path=Path("/x/c1-r0.jsonl"), header=header, rows=[])
+    cf = SimpleNamespace(
+        cell=cell, rep=0, path=Path("/x/c1-r0.jsonl"), header=header, rows=[]
+    )
     return SimpleNamespace(files=[cf])
 
 
 def _mlx_weights():
     return [
-        {"file": "model-00001-of-00004.safetensors", "sha256": SHA, "bits": 4, "group_size": 64},
+        {
+            "file": "model-00001-of-00004.safetensors",
+            "sha256": SHA,
+            "bits": 4,
+            "group_size": 64,
+        },
     ]
 
 

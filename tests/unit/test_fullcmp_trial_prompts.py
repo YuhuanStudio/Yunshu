@@ -14,13 +14,20 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @pytest.fixture
 def tb(monkeypatch):
-    spec = importlib.util.spec_from_file_location("tfbench_trials", ROOT / "scripts" / "research" / "tfbench.py")
+    spec = importlib.util.spec_from_file_location(
+        "tfbench_trials", ROOT / "scripts" / "research" / "tfbench.py"
+    )
     mod = importlib.util.module_from_spec(spec)
     sys.modules["tfbench_trials"] = mod
     spec.loader.exec_module(mod)
     import snapshot_prompts as sp
-    monkeypatch.setattr(sp, "exact_chat_prompt", lambda src, target, suffix="": f"{src}|{target}")
-    monkeypatch.setattr(mod, "load_variant_prompt", lambda name, variant=0: f"BODY-{name}-v{variant}")
+
+    monkeypatch.setattr(
+        sp, "exact_chat_prompt", lambda src, target, suffix="": f"{src}|{target}"
+    )
+    monkeypatch.setattr(
+        mod, "load_variant_prompt", lambda name, variant=0: f"BODY-{name}-v{variant}"
+    )
     return mod
 
 
@@ -51,7 +58,9 @@ CTX = 8192
 
 @pytest.fixture
 def real_tb(monkeypatch):
-    spec = importlib.util.spec_from_file_location("tfbench_real", ROOT / "scripts" / "research" / "tfbench.py")
+    spec = importlib.util.spec_from_file_location(
+        "tfbench_real", ROOT / "scripts" / "research" / "tfbench.py"
+    )
     mod = importlib.util.module_from_spec(spec)
     sys.modules["tfbench_real"] = mod
     spec.loader.exec_module(mod)
@@ -61,7 +70,11 @@ def real_tb(monkeypatch):
         sp.chat_tokenizer()
     except Exception as exc:  # the tokenizer files are local; a missing model dir is a skip, not a pass
         pytest.skip(f"no local tokenizer: {exc}")
-    monkeypatch.setattr(mod, "load_variant_prompt", lambda name, variant=0: "lorem ipsum dolor sit amet " * 4000)
+    monkeypatch.setattr(
+        mod,
+        "load_variant_prompt",
+        lambda name, variant=0: "lorem ipsum dolor sit amet " * 4000,
+    )
     return mod
 
 
@@ -71,15 +84,21 @@ def _first_tokens(text, n=8):
     return sp.chat_tokenizer().encode(text)[:n]
 
 
-def test_conc_distinct_prompts_are_salted_from_token_zero_and_sized_to_the_context(real_tb):
+def test_conc_distinct_prompts_are_salted_from_token_zero_and_sized_to_the_context(
+    real_tb,
+):
     import snapshot_prompts as sp
 
     for trial in (0, 1):
         texts = [real_tb.concurrent_prompt(i, trial, CTX) for i in range(3)]
         for text in texts:
-            assert sp.chat_token_count(text) == CTX  # the real tokenizer, rendered with the chat template
+            assert (
+                sp.chat_token_count(text) == CTX
+            )  # the real tokenizer, rendered with the chat template
     a, b = real_tb.concurrent_prompt(0, 0, CTX), real_tb.concurrent_prompt(0, 1, CTX)
-    assert _first_tokens(a) != _first_tokens(b)  # the salt is at token 0, not only in the suffix
+    assert _first_tokens(a) != _first_tokens(
+        b
+    )  # the salt is at token 0, not only in the suffix
 
 
 def test_conc_same_prompt_is_salted_per_trial_and_sized_to_the_context(real_tb):
@@ -89,7 +108,9 @@ def test_conc_same_prompt_is_salted_per_trial_and_sized_to_the_context(real_tb):
     for text in shared:
         assert sp.chat_token_count(text) == CTX
     # trial k must not hit trial k-1's cache: the prefix differs from token 0 in every trial
-    assert _first_tokens(shared[0]) != _first_tokens(shared[1]) != _first_tokens(shared[2])
+    assert (
+        _first_tokens(shared[0]) != _first_tokens(shared[1]) != _first_tokens(shared[2])
+    )
 
 
 def test_sweeps_with_different_concurrency_never_share_a_prompt(tb):

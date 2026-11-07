@@ -19,7 +19,9 @@ sys.path.insert(0, str(ROOT / "scripts" / "research"))
 
 import tfbench  # noqa: E402
 
-POOL = range(18990, 19000)  # the shared gpuq pool, 18990-18999 (free_port's TFB_PORT_LAST default)
+POOL = range(
+    18990, 19000
+)  # the shared gpuq pool, 18990-18999 (free_port's TFB_PORT_LAST default)
 
 
 @pytest.fixture

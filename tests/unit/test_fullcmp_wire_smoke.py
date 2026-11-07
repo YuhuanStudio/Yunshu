@@ -15,7 +15,9 @@ import fullcmp_audit_manifest as fam  # noqa: E402
 
 
 def test_tf_1_1_8_pin_carries_its_github_release_date():
-    pin = fam._pin("tf-1.1.8", "1.1.8", "2026-10-28", "ab", "release archive", lambda p: None)
+    pin = fam._pin(
+        "tf-1.1.8", "1.1.8", "2026-10-28", "ab", "release archive", lambda p: None
+    )
     assert pin["release_date"] == "2026-10-28"
 
 
@@ -45,9 +47,20 @@ def test_mlx_lm_stock_server_engages_ar_once_httpd_starts():
 def test_smoke_rows_log_the_usage_sample_and_real_rows_do_not():
     import fullcmp_run as fr
 
-    smoke = {"batch": "SMOKE", "table": "decode", "engine": "tf-1.1.8", "conc": 1,
-             "sampling": "greedy", "turns": "single", "phases": ["cold", "warm"],
-             "prompt_kind": "code", "ctx": "1K", "ctx_tokens": 1024, "out_len": 64, "id": "x"}
+    smoke = {
+        "batch": "SMOKE",
+        "table": "decode",
+        "engine": "tf-1.1.8",
+        "conc": 1,
+        "sampling": "greedy",
+        "turns": "single",
+        "phases": ["cold", "warm"],
+        "prompt_kind": "code",
+        "ctx": "1K",
+        "ctx_tokens": 1024,
+        "out_len": 64,
+        "id": "x",
+    }
     _, extra, _ = fr.harness_part(smoke)
     assert extra[-1] == "--log-usage-sample"
     real = dict(smoke, batch="B1")

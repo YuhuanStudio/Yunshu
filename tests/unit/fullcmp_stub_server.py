@@ -62,7 +62,12 @@ def engine_load_lines(engine: str) -> list[str]:
 
 
 def request_lines(
-    engine: str, n: int, tokens: int, drafted: int, accepted: int, prompt_tokens: int = 0
+    engine: str,
+    n: int,
+    tokens: int,
+    drafted: int,
+    accepted: int,
+    prompt_tokens: int = 0,
 ) -> list[str]:
     """Per-request engagement lines: what the engine prints when a round drafted and accepted."""
     if engine.startswith("tf-"):
@@ -189,7 +194,12 @@ def make_handler(state: StubState):
                 state.seen.add(prompt)
             state.log(
                 request_lines(
-                    state.engine, n, len(emitted), drafted=4, accepted=3, prompt_tokens=prompt_tokens
+                    state.engine,
+                    n,
+                    len(emitted),
+                    drafted=4,
+                    accepted=3,
+                    prompt_tokens=prompt_tokens,
                 )
             )
             usage = {
@@ -214,7 +224,9 @@ def make_handler(state: StubState):
                             }
                         ],
                         "usage": usage,
-                        "x_yunshu": {"speculative": {"rounds": 2, "drafted": 4, "accepted": 3}},
+                        "x_yunshu": {
+                            "speculative": {"rounds": 2, "drafted": 4, "accepted": 3}
+                        },
                     },
                 )
             self.send_response(200)

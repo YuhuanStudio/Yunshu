@@ -256,10 +256,14 @@ def _driver_harness_snapshot_stub(request, monkeypatch):
     for mod in [o for o in _gc.get_objects() if isinstance(o, _types.ModuleType)]:
         if not str(getattr(mod, "__file__", "")).endswith("fullcmp_run.py"):
             continue
-        if not hasattr(mod, "snapshot_harness") or not hasattr(mod, "pre_submit_checks"):
+        if not hasattr(mod, "snapshot_harness") or not hasattr(
+            mod, "pre_submit_checks"
+        ):
             continue
         root = mod.REPO_ROOT
-        monkeypatch.setattr(mod, "snapshot_harness", lambda work, repo=None, _r=root: _r)
+        monkeypatch.setattr(
+            mod, "snapshot_harness", lambda work, repo=None, _r=root: _r
+        )
         monkeypatch.setattr(mod, "use_harness", lambda root: None)
         monkeypatch.setattr(mod, "pre_submit_checks", lambda root, repo=None: "")
 
@@ -279,7 +283,8 @@ def _fullcmp_driver_sandbox(request, monkeypatch, tmp_path):
     import types as _types
 
     drivers = [
-        o for o in _gc.get_objects()
+        o
+        for o in _gc.get_objects()
         if isinstance(o, _types.ModuleType)
         and str(getattr(o, "__file__", "")).endswith("fullcmp_run.py")
         and hasattr(o, "GPUQ")
@@ -292,8 +297,8 @@ def _fullcmp_driver_sandbox(request, monkeypatch, tmp_path):
     fake = sandbox / "fake_gpuq.sh"
     fake.write_text(
         "#!/bin/sh\n"
-        f"echo \"$@\" >> {sandbox / 'submits.log'}\n"
-        "case \"$1\" in submit) echo fake-job-$$ ;; esac\n"
+        f'echo "$@" >> {sandbox / "submits.log"}\n'
+        'case "$1" in submit) echo fake-job-$$ ;; esac\n'
         "exit 0\n"
     )
     fake.chmod(0o755)
@@ -338,7 +343,9 @@ def _real_paths_sandbox(tmp_path, monkeypatch):
         if argv and argv[0].endswith("gpuq") and "fake" not in argv[0]:
             gdir = os.environ.get("GPUQ_DIR", "")
             if os.path.realpath(gdir) == os.path.realpath(_REAL_QUEUE):
-                raise RuntimeError(f"sandbox: a test tried gpuq {argv[1:3]} on the real queue")
+                raise RuntimeError(
+                    f"sandbox: a test tried gpuq {argv[1:3]} on the real queue"
+                )
 
     def run(args, *a, **k):
         _guard(args)
@@ -369,12 +376,28 @@ def _fullcmp_e2e_harness_stand_in(request):
     import subprocess as _sp
     import types as _types
 
-    root = str(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
-    head = _sp.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
-    tree = _sp.run(["git", "rev-parse", "HEAD^{tree}"], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+    root = str(
+        _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    )
+    head = _sp.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    tree = _sp.run(
+        ["git", "rev-parse", "HEAD^{tree}"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
     mp = pytest.MonkeyPatch()
     for mod in [o for o in _gc.get_objects() if isinstance(o, _types.ModuleType)]:
-        if str(getattr(mod, "__file__", "")).endswith("fullcmp_run.py") and hasattr(mod, "HARNESS_COMMIT"):
+        if str(getattr(mod, "__file__", "")).endswith("fullcmp_run.py") and hasattr(
+            mod, "HARNESS_COMMIT"
+        ):
             mp.setattr(mod, "HARNESS_COMMIT", head)
             mp.setattr(mod, "HARNESS_TREE", tree)
     yield

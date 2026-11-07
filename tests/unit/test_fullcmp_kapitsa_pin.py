@@ -33,7 +33,9 @@ def test_launch_refuses_a_binary_that_is_not_the_pin(monkeypatch, tmp_path):
         be.build_launch("kapitsa-0.2.31", 18990, tmp_path, {})
 
 
-@pytest.mark.skipif(not Path(be.KAPITSA_BIN_0231).is_file(), reason="pinned copy not on this machine")
+@pytest.mark.skipif(
+    not Path(be.KAPITSA_BIN_0231).is_file(), reason="pinned copy not on this machine"
+)
 def test_launch_of_the_pinned_copy_turns_auto_update_off():
     launch = be.build_launch("kapitsa-0.2.31", 18990, "/tmp/h", {"CI": "false"})
     assert launch.cmd[0] == be.KAPITSA_BIN_0231 and "--private" in launch.cmd
@@ -57,8 +59,16 @@ def test_the_rerun_engine_mirrors_the_old_rows_and_is_outside_the_plan_total():
     import io
 
     fm.apply_cuts(rows, out=io.StringIO())
-    old = {r["id"].replace("kapitsa-0.2.26", "@"): r for r in rows if r["engine"] == "kapitsa-0.2.26"}
-    new = {r["id"].replace("kapitsa-0.2.31", "@"): r for r in rows if r["engine"] == "kapitsa-0.2.31"}
+    old = {
+        r["id"].replace("kapitsa-0.2.26", "@"): r
+        for r in rows
+        if r["engine"] == "kapitsa-0.2.26"
+    }
+    new = {
+        r["id"].replace("kapitsa-0.2.31", "@"): r
+        for r in rows
+        if r["engine"] == "kapitsa-0.2.31"
+    }
     assert new and set(new) == set(old)
     assert all(new[k]["status"] == old[k]["status"] for k in new)
     assert "kapitsa-0.2.31" in fm.EXTRA_ENGINES

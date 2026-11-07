@@ -41,7 +41,10 @@ from test_fullcmp_e2e_coverage import cell_type_key, profile_type_key  # noqa: E
 
 STUB_DIR = Path(__file__).resolve().parent
 FAKE_JOB_ID = "2026-110301-01-fullcmp-SMOKE"
-PROFILE_STUB_ENV = {"TFB_STUB_SERVER": str(STUB_DIR), "TFB_STUB_SCRIPT": "fullcmp_stub_profile.py"}
+PROFILE_STUB_ENV = {
+    "TFB_STUB_SERVER": str(STUB_DIR),
+    "TFB_STUB_SCRIPT": "fullcmp_stub_profile.py",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -56,6 +59,8 @@ BEHAVIOUR_TYPES = {
     f"part=behaviour;check={c}": "test_behaviour_full_stub_passes_every_check"
     for c in fb.CHECKS
 }
+
+
 def _real_spec(pairs, sweep, **match):
     """The manifest's own spec of this sweep (the type itself, not a copy of its shape)."""
     for _batch, sp in pairs:
@@ -74,11 +79,21 @@ PROFILE_SHAPES = {
     "conc-same c2": _real_spec(fm.b2_specs(), "conc-same", conc=2),
     "conc-same c4": _real_spec(fm.b2_specs(), "conc-same", conc=4),
     "conc-same c8": _real_spec(fm.b2_specs(), "conc-same", conc=8),
-    "smoke-conc code": fm.spec(sweep="smoke-conc", ctx="1K", kind="code", out=64, conc=2, phases=("conc",)),
-    "smoke-conc prose": fm.spec(sweep="smoke-conc", ctx="1K", kind="prose", out=64, conc=2, phases=("conc",)),
+    "smoke-conc code": fm.spec(
+        sweep="smoke-conc", ctx="1K", kind="code", out=64, conc=2, phases=("conc",)
+    ),
+    "smoke-conc prose": fm.spec(
+        sweep="smoke-conc", ctx="1K", kind="prose", out=64, conc=2, phases=("conc",)
+    ),
     "mixed": _real_spec(fm.b2_specs(), "mixed", conc=8),
     "core prose": _real_spec(fm.b1_specs(), "core", ctx="1K", kind="prose"),
-    "smoke-core prose": fm.spec(sweep="smoke-core", ctx="1K", kind="prose", out=64, phases=("cold", "warm", "turn2")),
+    "smoke-core prose": fm.spec(
+        sweep="smoke-core",
+        ctx="1K",
+        kind="prose",
+        out=64,
+        phases=("cold", "warm", "turn2"),
+    ),
     "core code": _real_spec(fm.b1_specs(), "core", ctx="1K", kind="code"),
     # ctx is not a dimension of the type; 4K has no prompt file in the corpus (see test_..._session)
     "ctx code": dict(_real_spec(fm.b2_specs(), "ctx", ctx="4K"), ctx="1K"),
@@ -92,7 +107,9 @@ PROFILE_SHAPES = {
     "kind tool-chat": _real_spec(fm.b2_specs(), "kind", kind="tool-chat"),
     "thinking": _real_spec(fm.b2_specs(), "thinking"),
     "genconfig": _real_spec(fm.b2_specs(), "sampling", ctx="1K", sampling="genconfig"),
-    "smoke-profile": fm.spec(sweep="smoke-profile", ctx="1K", kind="code", out=64, phases=("cold",)),
+    "smoke-profile": fm.spec(
+        sweep="smoke-profile", ctx="1K", kind="code", out=64, phases=("cold",)
+    ),
 }
 
 
@@ -108,7 +125,9 @@ def _profile_row(sp):
 COVERED_CELL_TYPES = {
     SMOKE_PROFILE_TYPE: "test_profile_chain_audit_full_is_clean",
     **{
-        profile_type_key(_profile_row(sp)): f"test_profile_rep_job_runs_for_each_shape[{name}]"
+        profile_type_key(
+            _profile_row(sp)
+        ): f"test_profile_rep_job_runs_for_each_shape[{name}]"
         for name, sp in PROFILE_SHAPES.items()
     },
     **BEHAVIOUR_TYPES,
@@ -141,7 +160,9 @@ def test_profile_rep_job_runs_for_each_shape(tmp_path, shape):
 
 def _smoke_rows():
     rows = fm.build_smoke_rows()
-    keep = [r for r in rows if r["sweep"] == "smoke-core" and r["prompt_kind"] == "code"]
+    keep = [
+        r for r in rows if r["sweep"] == "smoke-core" and r["prompt_kind"] == "code"
+    ]
     assert {r["prompt_variant"] for r in keep} == {0, 1}
     return keep
 
@@ -150,7 +171,12 @@ def _run_wrapper(job, extra_env):
     wrapper = fr.write_wrapper(job)
     env = dict(os.environ, GPUQ_JOB_ID=FAKE_JOB_ID, **extra_env)
     proc = subprocess.run(
-        ["/bin/sh", str(wrapper)], env=env, capture_output=True, text=True, timeout=900, cwd=str(ROOT)
+        ["/bin/sh", str(wrapper)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=900,
+        cwd=str(ROOT),
     )
     assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-4000:]
 
@@ -172,18 +198,34 @@ def chain(tmp_path_factory):
     _run_wrapper(prof[0], PROFILE_STUB_ENV)
     manifest = fr.audit_manifest(rows, [fm.SMOKE_BATCH], pin, plan.engine_order)
     manifest["stub_engine"] = True  # test only: the engine process is the stub
-    return {"work": work, "raw": raw, "rows": rows, "pin": pin, "manifest": manifest, "plan": plan}
+    return {
+        "work": work,
+        "raw": raw,
+        "rows": rows,
+        "pin": pin,
+        "manifest": manifest,
+        "plan": plan,
+    }
 
 
 def _audit(root, manifest, work, profile_root=None, full=False):
     mpath = work / f"audit-{abs(hash((str(root), str(profile_root), full)))}.json"
     mpath.write_text(json.dumps(manifest, indent=2) + "\n")
-    argv = [fr.HARNESS_PY, str(SCRIPTS / "fullcmp_audit.py"), "--root", str(root), "--manifest", str(mpath)]
+    argv = [
+        fr.HARNESS_PY,
+        str(SCRIPTS / "fullcmp_audit.py"),
+        "--root",
+        str(root),
+        "--manifest",
+        str(mpath),
+    ]
     if profile_root is not None:
         argv += ["--profile-root", str(profile_root)]
     if full:
         argv += ["--full"]
-    return subprocess.run(argv, capture_output=True, text=True, timeout=600, cwd=str(ROOT))
+    return subprocess.run(
+        argv, capture_output=True, text=True, timeout=600, cwd=str(ROOT)
+    )
 
 
 def test_profile_job_is_the_extra_job_after_the_timed_one(chain):
@@ -204,15 +246,26 @@ def test_profile_rows_land_under_profile_and_carry_the_layer2_fields(chain):
         prof = [r for r in rows if r.get("part") == "profile"]
         assert len(prof) == 1, f.name
         assert "error" not in prof[0] or not prof[0]["error"], prof[0]
-        assert fat.check_profile("yunshu", prof[0]) and not fat.missing(fat.check_profile("yunshu", prof[0]))
-        assert prof[0]["host_sync_count"] == 3 and prof[0]["op_census"] == {"matmul": 120, "rope": 40}
+        assert fat.check_profile("yunshu", prof[0]) and not fat.missing(
+            fat.check_profile("yunshu", prof[0])
+        )
+        assert prof[0]["host_sync_count"] == 3 and prof[0]["op_census"] == {
+            "matmul": 120,
+            "rope": 40,
+        }
     # the timed rows never went under profile/, and the profile rows never beside them
     assert not list((chain["raw"] / "yunshu").glob("*-prof.jsonl"))
 
 
 def test_profile_chain_audit_full_is_clean(chain):
     """Layer 1 on the timed rows, layer 2 on the profile rows, every cell (full mode). Zero violations."""
-    res = _audit(chain["raw"], chain["manifest"], chain["work"], chain["raw"] / "profile", full=True)
+    res = _audit(
+        chain["raw"],
+        chain["manifest"],
+        chain["work"],
+        chain["raw"] / "profile",
+        full=True,
+    )
     assert res.returncode == 0, res.stdout[-4000:] + res.stderr[-3000:]
     assert "0 violations" in res.stdout, res.stdout[-2000:]
 
@@ -234,7 +287,11 @@ def test_profile_rep_missing_is_a_violation(chain, tmp_path):
 def test_profile_row_missing_is_a_violation(chain, tmp_path):
     prof = _copy_tree(chain["raw"] / "profile", tmp_path / "profile")
     victim = next((prof / "yunshu").glob("*-prof.jsonl"))
-    kept = [x for x in victim.read_text().splitlines() if json.loads(x).get("part") != "profile"]
+    kept = [
+        x
+        for x in victim.read_text().splitlines()
+        if json.loads(x).get("part") != "profile"
+    ]
     victim.write_text("\n".join(kept) + "\n")
     res = _audit(chain["raw"], chain["manifest"], chain["work"], prof, full=True)
     assert res.returncode != 0
@@ -253,7 +310,9 @@ def test_profile_without_layer2_fields_fails_closed(chain, tmp_path):
                 row.pop("host_sync_count", None)
                 row.pop("op_census", None)
                 stages = row.get("stages") or {}
-                if "decode_round" in stages:  # a row with no stage lines has nothing to keep
+                if (
+                    "decode_round" in stages
+                ):  # a row with no stage lines has nothing to keep
                     row["stages"] = {"decode_round": stages["decode_round"]}
             out.append(json.dumps(row))
         victim.write_text("\n".join(out) + "\n")
@@ -287,7 +346,7 @@ def test_profile_rows_are_excluded_from_table_numbers(chain, tmp_path):
     timed_ids = {r["id"] for r in chain["rows"]}
     assert engines_cells == timed_ids, engines_cells ^ timed_ids
     for key, entry in cells.items():
-        for rep, rows in entry["reps"].items():
+        for _rep, rows in entry["reps"].items():
             assert all(r.get("part") != "profile" for r in rows), key
     # the profile tree is never scanned as a table engine either
     assert all(eng != "profile" for (eng, _c) in cells)
@@ -295,7 +354,13 @@ def test_profile_rows_are_excluded_from_table_numbers(chain, tmp_path):
 
 def test_audit_extra_scan_ignores_profile_and_behaviour_dirs(chain):
     """The audit's unplanned-file scan must not count profile/ or behaviour/ as unplanned output."""
-    res = _audit(chain["raw"], chain["manifest"], chain["work"], chain["raw"] / "profile", full=True)
+    res = _audit(
+        chain["raw"],
+        chain["manifest"],
+        chain["work"],
+        chain["raw"] / "profile",
+        full=True,
+    )
     assert "unplanned file" not in res.stdout
 
 
@@ -303,7 +368,9 @@ def test_audit_extra_scan_ignores_profile_and_behaviour_dirs(chain):
 
 
 def _serve(stub_module, tmp_path, engine="yunshu"):
-    server, port, _state = stub_module.start(engine, "stub-model", tmp_path / "server.log")
+    server, port, _state = stub_module.start(
+        engine, "stub-model", tmp_path / "server.log"
+    )
     return server, f"http://127.0.0.1:{port}"
 
 
@@ -316,7 +383,9 @@ def full_stub(tmp_path):
 
 @pytest.fixture
 def base_stub(tmp_path):
-    server, port, _state = stub_base.start("yunshu", "stub-model", tmp_path / "server.log")
+    server, port, _state = stub_base.start(
+        "yunshu", "stub-model", tmp_path / "server.log"
+    )
     yield f"http://127.0.0.1:{port}"
     server.shutdown()
 
@@ -332,11 +401,15 @@ def test_behaviour_full_stub_passes_every_check(full_stub, tmp_path):
     head, got = _checks(out)
     assert head["part"] == "behaviour_session" and head["run_id"] == "RUN-1"
     assert set(got) == set(fb.CHECKS)
-    bad = {k: (v["status"], v["reason"]) for k, v in got.items() if v["status"] != "pass"}
+    bad = {
+        k: (v["status"], v["reason"]) for k, v in got.items() if v["status"] != "pass"
+    }
     assert rc == 0 and not bad, bad
 
 
-def test_behaviour_base_stub_fails_tool_json_logprobs_and_reports_missing_routes(base_stub, tmp_path):
+def test_behaviour_base_stub_fails_tool_json_logprobs_and_reports_missing_routes(
+    base_stub, tmp_path
+):
     out = tmp_path / "behaviour" / "yunshu.jsonl"
     rc = fb.run("yunshu", base_stub, "stub-model", out, "RUN-2")
     _head, got = _checks(out)
@@ -350,25 +423,46 @@ def test_behaviour_base_stub_fails_tool_json_logprobs_and_reports_missing_routes
     assert rc == 1
 
 
-def test_behaviour_audit_guard_accepts_expected_statuses_and_rejects_others(full_stub, base_stub, tmp_path):
+def test_behaviour_audit_guard_accepts_expected_statuses_and_rejects_others(
+    full_stub, base_stub, tmp_path
+):
     """Expectations: pass for every check on the full stub; on the base stub the routes are expected
     unsupported and the tool/JSON/logprob checks are expected pass (so they must be violations)."""
     expect_all_pass = {c: "pass" for c in fb.CHECKS}
     root_ok = tmp_path / "ok"
-    fb.run("yunshu", full_stub, "stub-model", root_ok / "behaviour" / "yunshu.jsonl", "R")
+    fb.run(
+        "yunshu", full_stub, "stub-model", root_ok / "behaviour" / "yunshu.jsonl", "R"
+    )
     man = {"cells": [], "behaviour": {"yunshu": expect_all_pass}}
     run = fa.load_run(root_ok, man)
     assert fa.check_behaviour(run).violations == []
 
     root_bad = tmp_path / "bad"
-    fb.run("yunshu", base_stub, "stub-model", root_bad / "behaviour" / "yunshu.jsonl", "R")
+    fb.run(
+        "yunshu", base_stub, "stub-model", root_bad / "behaviour" / "yunshu.jsonl", "R"
+    )
     man_bad = {"cells": [], "behaviour": {"yunshu": expect_all_pass}}
     vio = fa.check_behaviour(fa.load_run(root_bad, man_bad)).violations
     joined = "\n".join(vio)
-    for check in ("tool_validity", "json_validity", "logprobs", "anthropic_api", "responses_api"):
+    for check in (
+        "tool_validity",
+        "json_validity",
+        "logprobs",
+        "anthropic_api",
+        "responses_api",
+    ):
         assert f"yunshu.{check}" in joined, joined
     # the same stub with the census saying the routes are unsupported: exactly the route checks pass
-    man_census = {"cells": [], "behaviour": {"yunshu": dict(expect_all_pass, anthropic_api="unsupported", responses_api="unsupported")}}
+    man_census = {
+        "cells": [],
+        "behaviour": {
+            "yunshu": dict(
+                expect_all_pass,
+                anthropic_api="unsupported",
+                responses_api="unsupported",
+            )
+        },
+    }
     vio2 = "\n".join(fa.check_behaviour(fa.load_run(root_bad, man_census)).violations)
     assert "anthropic_api" not in vio2 and "responses_api" not in vio2
 
@@ -379,26 +473,77 @@ def test_behaviour_audit_missing_and_unplanned_files_fail_closed(full_stub, tmp_
     man = {"cells": [], "behaviour": {"yunshu": {"logprobs": "pass"}}}
     vio = fa.check_behaviour(fa.load_run(root, man)).violations
     assert any("behaviour file missing" in v for v in vio)
-    fb.run("tf-1.2.1", full_stub, "stub-model", root / "behaviour" / "tf-1.2.1.jsonl", "R", ("logprobs",))
+    fb.run(
+        "tf-1.2.1",
+        full_stub,
+        "stub-model",
+        root / "behaviour" / "tf-1.2.1.jsonl",
+        "R",
+        ("logprobs",),
+    )
     vio = fa.check_behaviour(fa.load_run(root, man)).violations
     assert any("unplanned behaviour file" in v for v in vio)
 
 
 def test_behaviour_checker_exit_and_unknown_check_are_strict(full_stub, tmp_path):
     out = tmp_path / "b.jsonl"
-    rc = fb.main(["--engine", "yunshu", "--url", full_stub, "--model", "stub-model", "--out", str(out),
-                  "--checks", "stop_sequences"])
+    rc = fb.main(
+        [
+            "--engine",
+            "yunshu",
+            "--url",
+            full_stub,
+            "--model",
+            "stub-model",
+            "--out",
+            str(out),
+            "--checks",
+            "stop_sequences",
+        ]
+    )
     assert rc == 0
     with pytest.raises(SystemExit):
-        fb.main(["--engine", "yunshu", "--url", full_stub, "--model", "stub-model", "--out", str(out),
-                 "--checks", "nope"])
+        fb.main(
+            [
+                "--engine",
+                "yunshu",
+                "--url",
+                full_stub,
+                "--model",
+                "stub-model",
+                "--out",
+                str(out),
+                "--checks",
+                "nope",
+            ]
+        )
 
 
 def test_behaviour_expectations_follow_the_manifest_census():
     """fullcmp_run.behaviour_expectations: unverified rows expect pass, unsupported rows expect unsupported."""
     rows = [
-        {"table": "behaviour", "batch": "B4", "engine": "e1", "check": "logprobs", "status": "unverified"},
-        {"table": "behaviour", "batch": "B4", "engine": "e1", "check": "anthropic_api", "status": "unsupported"},
-        {"table": "decode", "batch": "B1", "engine": "e1", "check": None, "status": "unverified"},
+        {
+            "table": "behaviour",
+            "batch": "B4",
+            "engine": "e1",
+            "check": "logprobs",
+            "status": "unverified",
+        },
+        {
+            "table": "behaviour",
+            "batch": "B4",
+            "engine": "e1",
+            "check": "anthropic_api",
+            "status": "unsupported",
+        },
+        {
+            "table": "decode",
+            "batch": "B1",
+            "engine": "e1",
+            "check": None,
+            "status": "unverified",
+        },
     ]
-    assert fr.behaviour_expectations(rows, ["B4"]) == {"e1": {"logprobs": "pass", "anthropic_api": "unsupported"}}
+    assert fr.behaviour_expectations(rows, ["B4"]) == {
+        "e1": {"logprobs": "pass", "anthropic_api": "unsupported"}
+    }

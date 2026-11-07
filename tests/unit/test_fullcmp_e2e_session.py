@@ -37,6 +37,7 @@ from .test_fullcmp_e2e_coverage import cell_type_key  # noqa: E402
 ENGINES_UNDER_TEST = ("yunshu", "tf-1.2.1")
 VARIANTS = (0, 1)
 
+
 def _real_spec(pairs, sweep, **match):
     """The manifest's own spec of this sweep (the type itself, not a copy of its shape)."""
     for _batch, sp in pairs:
@@ -51,7 +52,9 @@ def _key(sp: dict) -> str:
 
 
 # the conc cells: B2 conc (8K, distinct prompts) and the smoke conc rows
-CONC_SPECS = [_real_spec(fm.b2_specs(), "conc", ctx="8K", conc=n) for n in (2, 4, 8)] + [
+CONC_SPECS = [
+    _real_spec(fm.b2_specs(), "conc", ctx="8K", conc=n) for n in (2, 4, 8)
+] + [
     fm.spec(sweep="smoke-conc", ctx="1K", kind=kind, out=64, conc=2, phases=("conc",))
     for kind in ("code", "prose")
 ]
@@ -59,7 +62,11 @@ CONC_SPECS = [_real_spec(fm.b2_specs(), "conc", ctx="8K", conc=n) for n in (2, 4
 # test_fullcmp_e2e (its chain runs that row), so it is not listed here
 FOLLOW_UP_SPECS = {
     "smoke-core prose": fm.spec(
-        sweep="smoke-core", ctx="1K", kind="prose", out=64, phases=("cold", "warm", "turn2")
+        sweep="smoke-core",
+        ctx="1K",
+        kind="prose",
+        out=64,
+        phases=("cold", "warm", "turn2"),
     ),
     "core code": _real_spec(fm.b1_specs(), "core", ctx="1K", kind="code"),
     "core prose": _real_spec(fm.b1_specs(), "core", ctx="1K", kind="prose"),
@@ -72,11 +79,16 @@ FOLLOW_UP_SPECS = {
 # the idle5 type at 1K (variant files exist there; ctx is not a dimension of the type)
 IDLE_SPEC = dict(_real_spec(fm.b2_specs(), "idle5", ctx="8K"), ctx="1K")
 RESTART_SPEC = _real_spec(fm.b2_specs(), "restart", ctx="32K")
-SMOKE_PROFILE_SPEC = fm.spec(sweep="smoke-profile", ctx="1K", kind="code", out=64, phases=("cold",))
+SMOKE_PROFILE_SPEC = fm.spec(
+    sweep="smoke-profile", ctx="1K", kind="code", out=64, phases=("cold",)
+)
 
 # keys are cell_type_key()s (test_fullcmp_e2e_coverage); every key belongs to exactly one module
 COVERED_CELL_TYPES = {
-    **{_key(sp): "test_conc_cells_run_through_tfbench_and_audit_is_clean" for sp in CONC_SPECS},
+    **{
+        _key(sp): "test_conc_cells_run_through_tfbench_and_audit_is_clean"
+        for sp in CONC_SPECS
+    },
     **{
         _key(sp): "test_follow_up_turn2_cell_hits_the_prefix_cache"
         for sp in FOLLOW_UP_SPECS.values()
@@ -192,11 +204,19 @@ def test_follow_up_turn2_cell_hits_the_prefix_cache(tmp_path, engine, shape):
     raw, plan, pin = _run_cell_rows(tmp_path, rows)
     for row in rows:
         recs = _decode(raw, engine, row)
-        assert [r["phase"] for r in recs] == ["cold", "warm", "turn2"], [r["phase"] for r in recs]
+        assert [r["phase"] for r in recs] == ["cold", "warm", "turn2"], [
+            r["phase"] for r in recs
+        ]
         cold, _warm, turn2 = recs
         assert cold["cached"] == 0, "a first sighting after an empty cache is a miss"
-        assert turn2["cached"] > 0, "the follow-up re-sends the cold prompt: a prefix hit"
-        assert turn2["ct"] == row["out_len"] and turn2["dec_tps"] > 0 and turn2["ttft_s"] > 0
+        assert turn2["cached"] > 0, (
+            "the follow-up re-sends the cold prompt: a prefix hit"
+        )
+        assert (
+            turn2["ct"] == row["out_len"]
+            and turn2["dec_tps"] > 0
+            and turn2["ttft_s"] > 0
+        )
     _audit_clean(raw, rows, plan, pin, tmp_path)
 
 

@@ -18,8 +18,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[2]
 RESEARCH = ROOT / "scripts" / "research"
 
@@ -32,7 +30,14 @@ MODULES = [
     "fullcmp_audit_manifest",
 ]
 
-FORBIDDEN_IMPORTS = ("mlx", "mlx_lm", "mlx_vlm", "mlx_audio", "yunshu_engine", "yunshu_gateway")
+FORBIDDEN_IMPORTS = (
+    "mlx",
+    "mlx_lm",
+    "mlx_vlm",
+    "mlx_audio",
+    "yunshu_engine",
+    "yunshu_gateway",
+)
 
 GPUQ_VERBS = {"submit", "wait", "status", "cancel", "run"}
 HARNESS_SCRIPTS = {"AUDIT", "REPS", "PREFLIGHT", "QUIET"}
@@ -42,18 +47,42 @@ OS_SPAWNS = {"system", "popen", "fork", "forkpty"}
 # Spawns whose argv is a variable: (module, enclosing function) -> reason. Each is verified
 # separately (run_capture callers, Job.submit_argv) or is a fixed read-only probe.
 VARIABLE_ARGV_ALLOWED = {
-    ("fullcmp_run", "run_capture"): "gpuq status: callers pass only [GPUQ, 'status'] (checked below)",
-    ("fullcmp_run", "swap_gate"): "gpuq run: CPU swap-stability preflight job, no engine",
+    (
+        "fullcmp_run",
+        "run_capture",
+    ): "gpuq status: callers pass only [GPUQ, 'status'] (checked below)",
+    (
+        "fullcmp_run",
+        "swap_gate",
+    ): "gpuq run: CPU swap-stability preflight job, no engine",
     ("fullcmp_run", "submit_all"): "Job.submit_argv(): gpuq submit (checked below)",
-    ("fullcmp_run", "_submit_and_wait"): "Job.submit_argv(): gpuq submit, one slot at a time (checked below)",
+    (
+        "fullcmp_run",
+        "_submit_and_wait",
+    ): "Job.submit_argv(): gpuq submit, one slot at a time (checked below)",
     ("bench_engines", "tree_version"): "read-only git rev-parse on a pinned tree",
-    ("fullcmp_audit_manifest", "tree_head"): "read-only git rev-parse of the pinned worktree (fail closed)",
-    ("fullcmp_run", "pre_submit_checks"): "CPU pytest of the explicit quick file list in the snapshot (checked by test_pre_submit_collects_explicit_files_only)",
+    (
+        "fullcmp_audit_manifest",
+        "tree_head",
+    ): "read-only git rev-parse of the pinned worktree (fail closed)",
+    (
+        "fullcmp_run",
+        "pre_submit_checks",
+    ): "CPU pytest of the explicit quick file list in the snapshot (checked by test_pre_submit_collects_explicit_files_only)",
 }
 LITERAL_NON_GPUQ_ALLOWED = {
-    ("fullcmp_run", "_git"): "read-only git status / rev-parse / archive of the live worktree (harness snapshot)",
-    ("fullcmp_run", "_file_blobs"): "read-only git hash-object of the snapshot files (integrity proof)",
-    ("fullcmp_audit_manifest", "tree_head"): "read-only git rev-parse of the pinned worktree (fail closed)",
+    (
+        "fullcmp_run",
+        "_git",
+    ): "read-only git status / rev-parse / archive of the live worktree (harness snapshot)",
+    (
+        "fullcmp_run",
+        "_file_blobs",
+    ): "read-only git hash-object of the snapshot files (integrity proof)",
+    (
+        "fullcmp_audit_manifest",
+        "tree_head",
+    ): "read-only git rev-parse of the pinned worktree (fail closed)",
     ("fullcmp_quiet", "run_ps"): "quiet gate: read-only ps",
     ("fullcmp_quiet", "read_loadavg"): "quiet gate: read-only sysctl",
     ("bench_engines", "tree_version"): "read-only git rev-parse on a pinned tree",
@@ -66,7 +95,9 @@ def _spawn_name(call: ast.Call) -> str | None:
         if f.value.id == "subprocess" and f.attr in SUBPROCESS_CALLS:
             return f"subprocess.{f.attr}"
         if f.value.id == "os" and (
-            f.attr.startswith("exec") or f.attr.startswith("spawn") or f.attr in OS_SPAWNS
+            f.attr.startswith("exec")
+            or f.attr.startswith("spawn")
+            or f.attr in OS_SPAWNS
         ):
             return f"os.{f.attr}"
     if isinstance(f, ast.Name) and f.id in SUBPROCESS_CALLS | {"Popen"}:
@@ -78,7 +109,9 @@ class _Scan(ast.NodeVisitor):
     def __init__(self, module: str):
         self.module = module
         self.func: list[str] = []
-        self.spawns: list[tuple[str, str, ast.Call]] = []  # (function, spawn name, call)
+        self.spawns: list[
+            tuple[str, str, ast.Call]
+        ] = []  # (function, spawn name, call)
 
     def visit_FunctionDef(self, node):  # noqa: N802
         self.func.append(node.name)
@@ -99,7 +132,11 @@ def _parse(module: str) -> ast.Module:
 
 
 def _const(node) -> str | None:
-    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+    return (
+        node.value
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        else None
+    )
 
 
 def _classify(module: str, func: str, call: ast.Call) -> str | None:
@@ -114,7 +151,11 @@ def _classify(module: str, func: str, call: ast.Call) -> str | None:
             return f"gpuq with verb {verb!r} not in {sorted(GPUQ_VERBS)}"
         if isinstance(head, ast.Name) and head.id == "HARNESS_PY":
             second = argv.elts[1] if len(argv.elts) > 1 else None
-            if isinstance(second, ast.Call) and isinstance(second.func, ast.Name) and second.func.id == "str":
+            if (
+                isinstance(second, ast.Call)
+                and isinstance(second.func, ast.Name)
+                and second.func.id == "str"
+            ):
                 second = second.args[0] if second.args else None
             if isinstance(second, ast.Name) and second.id in HARNESS_SCRIPTS:
                 return None
@@ -159,25 +200,39 @@ def test_run_capture_callers_only_query_gpuq_status():
     calls = [
         n
         for n in ast.walk(tree)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "run_capture"
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Name)
+        and n.func.id == "run_capture"
     ]
     assert calls, "run_capture has no callers; the allowlist entry is stale"
     for call in calls:
         arg = call.args[0]
-        assert isinstance(arg, ast.List), f"run_capture:{call.lineno} takes a non-literal argv"
+        assert isinstance(arg, ast.List), (
+            f"run_capture:{call.lineno} takes a non-literal argv"
+        )
         assert isinstance(arg.elts[0], ast.Name) and arg.elts[0].id == "GPUQ"
-        assert _const(arg.elts[1]) == "status", f"run_capture:{call.lineno} is not gpuq status"
+        assert _const(arg.elts[1]) == "status", (
+            f"run_capture:{call.lineno} is not gpuq status"
+        )
 
 
 def test_job_submit_argv_is_gpuq_submit():
     tree = _parse("fullcmp_run")
-    fns = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "submit_argv"]
+    fns = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "submit_argv"
+    ]
     assert len(fns) == 1, "Job.submit_argv not found exactly once"
     ret = [n for n in ast.walk(fns[0]) if isinstance(n, ast.Return)]
-    assert ret and isinstance(ret[0].value, ast.List), "submit_argv must return a literal list"
+    assert ret and isinstance(ret[0].value, ast.List), (
+        "submit_argv must return a literal list"
+    )
     elts = ret[0].value.elts
     assert isinstance(elts[0], ast.Name) and elts[0].id == "GPUQ"
-    assert _const(elts[1]) == "submit", "every engine launch must be a `gpuq submit` argv"
+    assert _const(elts[1]) == "submit", (
+        "every engine launch must be a `gpuq submit` argv"
+    )
 
 
 def test_driver_imports_no_mlx_in_a_fresh_interpreter(tmp_path):

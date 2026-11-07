@@ -1,6 +1,7 @@
 """real-1104 B2 (2026-11-05): a restart cell SIGKILLed its first server 0.4 s after the reply, before any engine
 had written its disk prefix tier; every engine (Yunshu, Splash, mlx-serve, oMLX) then measured a cold prefill
 after the restart. The restart now waits for the cache dirs to settle and stops the server with SIGTERM first."""
+
 from __future__ import annotations
 
 import signal
@@ -48,7 +49,9 @@ def test_graceful_kill_sends_sigterm_and_lets_the_handler_run(tmp_path):
         "print('ready',flush=True)\n"
         "time.sleep(60)\n"
     )
-    proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, start_new_session=True)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", code], stdout=subprocess.PIPE, start_new_session=True
+    )
     assert proc.stdout.readline().strip() == b"ready"
 
     class S:
@@ -57,6 +60,8 @@ def test_graceful_kill_sends_sigterm_and_lets_the_handler_run(tmp_path):
     s = S()
     s.proc, s.home, s.mem = proc, tmp_path, None
     tfbench.Srv.kill(s, keep_disk=True, graceful=True)
-    assert done.read_text() == "ok"  # SIGTERM reached the handler: a SIGKILL would have left no file
+    assert (
+        done.read_text() == "ok"
+    )  # SIGTERM reached the handler: a SIGKILL would have left no file
     assert s.term_exit == "exited"
     assert proc.returncode == 0 and proc.returncode != -signal.SIGKILL

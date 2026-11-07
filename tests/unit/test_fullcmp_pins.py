@@ -6,11 +6,11 @@ CPU only, fake census and fake digests. The real census lives in the run dir (ou
 
 from __future__ import annotations
 
-import pytest
-
 import hashlib
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "research"))
@@ -58,7 +58,11 @@ def _census():
             "latest_date": "2026-10-31T16:42:55Z",
             "latest_rc_date": "2026-10-27T09:22:10Z",
             "latest_dev_date": "2026-11-04T10:13:41Z",
-            "sha256": {"0.7.3 wheel cp313": H, "0.7.3rc1 wheel cp313": H, "0.7.4.dev1 wheel cp313": H},
+            "sha256": {
+                "0.7.3 wheel cp313": H,
+                "0.7.3rc1 wheel cp313": H,
+                "0.7.4.dev1 wheel cp313": H,
+            },
         },
         "mlx-serve": one("2026-11-01T19:34:34Z", "26.11.1 binary mlx-serve"),
         "mlx_lm_server": one(
@@ -73,7 +77,11 @@ def _census():
         },
         "kapitsa": {
             "latest_date": "2026-11-01T22:32:02Z",
-            "sha256": {"0.2.26 tarball": H, "0.2.26 binary kapitsa": H, "0.2.31 tarball": H},
+            "sha256": {
+                "0.2.26 tarball": H,
+                "0.2.26 binary kapitsa": H,
+                "0.2.31 tarball": H,
+            },
             "release_dates": {"0.2.26": "2026-11-01", "0.2.31": "2026-11-05"},
         },
         "lm_studio": {},
@@ -134,7 +142,9 @@ def test_missing_binary_leaves_the_digest_empty():
     # the yunshu pin fails closed (raises) on a missing binary, so the other engines are checked
     # with a stub that only hides the tf digest
     def sha_of(p):
-        return None if "tensorfold" in p else D  # only the tf digest is hidden (pb2 python must exist)
+        return (
+            None if "tensorfold" in p else D
+        )  # only the tf digest is hidden (pb2 python must exist)
 
     pins = fam.build_pins(_census(), PIN, sha_of=sha_of, git_head=_head)
     assert pins["tf-1.2.1"]["binary_sha256"] is None

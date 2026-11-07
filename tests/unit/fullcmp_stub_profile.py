@@ -77,9 +77,9 @@ class ProfileState(base.StubState):
 
     def log(self, lines: list[str]) -> None:
         extra = []
-        if any(line.startswith("[round-profile]") for line in lines) and profile_enabled(
-            self.engine
-        ):
+        if any(
+            line.startswith("[round-profile]") for line in lines
+        ) and profile_enabled(self.engine):
             extra = PROFILE_LINES + ["YUNSHU_LAYER2 " + json.dumps(LAYER2_CONTRACT)]
         super().log(list(lines) + extra)
 
@@ -110,7 +110,11 @@ def make_handler(state: base.StubState):
             if (
                 self.path.startswith("/v1/chat/completions")
                 and not body.get("stream")
-                and (body.get("tools") or body.get("response_format") or body.get("logprobs"))
+                and (
+                    body.get("tools")
+                    or body.get("response_format")
+                    or body.get("logprobs")
+                )
             ):
                 return self._special_chat(body)
             self.rfile = io.BytesIO(raw)  # the base handler reads the body again
@@ -123,7 +127,12 @@ def make_handler(state: base.StubState):
             prompt_tokens = len(base.prompt_text(body).split())
             state.log(
                 base.request_lines(
-                    state.engine, n, 1, drafted=4, accepted=3, prompt_tokens=prompt_tokens
+                    state.engine,
+                    n,
+                    1,
+                    drafted=4,
+                    accepted=3,
+                    prompt_tokens=prompt_tokens,
                 )
             )
             message: dict = {"role": "assistant", "content": None}
@@ -152,7 +161,8 @@ def make_handler(state: base.StubState):
             if body.get("logprobs"):
                 choice["logprobs"] = {
                     "content": [
-                        {"token": t, "logprob": -0.25, "top_logprobs": []} for t in tokens
+                        {"token": t, "logprob": -0.25, "top_logprobs": []}
+                        for t in tokens
                     ]
                 }
             return self._send(

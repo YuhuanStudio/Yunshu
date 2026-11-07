@@ -45,6 +45,7 @@ def _never_reach_gpuq(monkeypatch):
     for name in ("swap_gate", "submit_all", "wait_all", "run_audit", "run_reps"):
         monkeypatch.setattr(_run, name, _refuse(name))
 
+
 ROOT = Path(__file__).resolve().parents[2]
 _SPEC = importlib.util.spec_from_file_location(
     "fullcmp_run", ROOT / "scripts" / "research" / "fullcmp_run.py"
@@ -58,7 +59,9 @@ _SPEC.loader.exec_module(run)
 def _no_end_of_batch_rerun(monkeypatch):
     """The fake submits of these tests write no cell files, so every cell would count as failed and be rerun. The
     end-of-batch rerun itself is tested below with real files (test_rerun_failed_cells_*)."""
-    monkeypatch.setattr(run, "rerun_failed_cells", lambda plan, pin, submit=None: ([], 0))
+    monkeypatch.setattr(
+        run, "rerun_failed_cells", lambda plan, pin, submit=None: ([], 0)
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -173,7 +176,9 @@ def test_yunshu_220358_shape_splits_into_chunks_within_the_limit():
     core = [
         r
         for r in rows
-        if r["batch"] == "B1" and r["ctx"] in fm_.CORE_CTX and r["status"] == "unverified"
+        if r["batch"] == "B1"
+        and r["ctx"] in fm_.CORE_CTX
+        and r["status"] == "unverified"
     ]
     assert len(core) == 10
     chunks = run.pack_chunks(core)
@@ -189,7 +194,10 @@ def test_timeout_is_1_3_x_total_floored_by_the_same_kind_and_capped():
     rows = [row("yunshu", "B1.t", est=2.0)]
     b = run.job_budget(rows)
     assert b["timeout"] == pytest.approx(
-        min(run.SINGLE_CELL_CAP_MIN, __import__("math").ceil(round(1.3 * b["total"] * 10, 6)) / 10)
+        min(
+            run.SINGLE_CELL_CAP_MIN,
+            __import__("math").ceil(round(1.3 * b["total"] * 10, 6)) / 10,
+        )
     )
     # floored by the longest same-kind run (the killed 1103-220358 job ran 20 min)
     # a single cell's timeout follows 1.3 x prior up to SINGLE_CELL_CAP_MIN; a multi-cell job stays at the cap
@@ -215,14 +223,19 @@ def test_plan_labels_split_groups_and_keeps_one_group_per_server_config():
 
 
 def test_single_cell_above_cap_is_flagged():
-    rows = [row("yunshu", "B1.big", est=80.0)]  # 40 min per rep: 1.3 x 40 > SINGLE_CELL_CAP_MIN
+    rows = [
+        row("yunshu", "B1.big", est=80.0)
+    ]  # 40 min per rep: 1.3 x 40 > SINGLE_CELL_CAP_MIN
     plan = run.plan_batch(rows, "B1", PIN)
     assert plan.jobs and all(j.over_cap for j in plan.jobs)
 
 
 def test_single_cell_between_job_cap_and_single_cell_cap_runs_alone():
     """real-1104 B2: mixed 128K c8 cells budget ~22 min; one unsplittable cell runs with its own 1.3x timeout."""
-    rows = [row("yunshu", "B1.mixed128", est=45.0), row("yunshu", "B1.short", est=2.0)]  # 22.5 min per rep
+    rows = [
+        row("yunshu", "B1.mixed128", est=45.0),
+        row("yunshu", "B1.short", est=2.0),
+    ]  # 22.5 min per rep
     plan = run.plan_batch(rows, "B1", PIN)
     rep0 = [j for j in plan.jobs if j.rep == 0]
     big = next(j for j in rep0 if "B1.mixed128" in j.cell_ids)
@@ -238,7 +251,9 @@ def test_single_cell_above_the_margin_runs_alone_and_is_flagged():
     long_job = next(j for j in rep0 if "B1.long" in j.cell_ids)
     assert long_job.cell_ids == ["B1.long"]  # alone: the next cell does not fit with it
     assert long_job.over_margin and not long_job.over_cap
-    assert long_job.timeout_min == pytest.approx(26.1)  # alone: its own 1.3 x budget, not the 20 min cap
+    assert long_job.timeout_min == pytest.approx(
+        26.1
+    )  # alone: its own 1.3 x budget, not the 20 min cap
 
 
 # --- rotated order across reps ---------------------------------------------
@@ -519,9 +534,17 @@ def test_real_matrix_rows_have_expected_record_counts():
     # regression 2026-11-03: real-matrix rows returned None, so record_count failed every cell
     # ("expected None"); a B1 decode cell has one record per phase per rep (cold, warm, turn2)
     rows, _meta = run.fm.build_rows(engines=["yunshu"])
-    b1 = next(r for r in rows if r["batch"] == "B1" and r["ctx"] == "1K" and r["prompt_kind"] == "code")
+    b1 = next(
+        r
+        for r in rows
+        if r["batch"] == "B1" and r["ctx"] == "1K" and r["prompt_kind"] == "code"
+    )
     assert run.expected_records(b1) == 3  # per rep file
-    conc = next(r for r in rows if r["batch"] == "B2" and r["sweep"] == "conc" and r["conc"] == 4)
+    conc = next(
+        r
+        for r in rows
+        if r["batch"] == "B2" and r["sweep"] == "conc" and r["conc"] == 4
+    )
     assert run.expected_records(conc) == 4 * run.CONC_TRIALS
 
 
@@ -567,8 +590,18 @@ def test_dry_run_prints_itemized_budget_timeout_stall_and_lane(capsys):
     plan = run.plan_batch(rows, "B1", PIN)
     run.print_plan(plan)
     out = capsys.readouterr().out
-    for key in ("startup", "gate_pre", "cells", "post", "finalize", "shutdown", "total",
-                "timeout_min", "stall_min", "lane:"):
+    for key in (
+        "startup",
+        "gate_pre",
+        "cells",
+        "post",
+        "finalize",
+        "shutdown",
+        "total",
+        "timeout_min",
+        "stall_min",
+        "lane:",
+    ):
         assert key in out, key
 
 
@@ -631,12 +664,30 @@ def test_gpuq_picker_reorders_a_mixed_lane_batch_so_the_guard_must_fail(monkeypa
     # the cause of wire-1106: a short-named job (submitted later) is picked before a normal job
     gq = _gpuq_module()
     jobs = [
-        {"id": "a", "label": "fullcmp-B1-x-r0", "state": "pending", "submitted": 0.0,
-         "priority": 1, "device": "m5", "timeout_s": 20 * 60, "short": False,
-         "cwd": "/w", "env": {"GPUQ_OWNER": "fullcmp"}},
-        {"id": "b", "label": "fullcmp-tiny-y-r0", "state": "pending", "submitted": 1.0,
-         "priority": 1, "device": "m5", "timeout_s": 20 * 60, "short": False,
-         "cwd": "/w", "env": {"GPUQ_OWNER": "fullcmp"}},
+        {
+            "id": "a",
+            "label": "fullcmp-B1-x-r0",
+            "state": "pending",
+            "submitted": 0.0,
+            "priority": 1,
+            "device": "m5",
+            "timeout_s": 20 * 60,
+            "short": False,
+            "cwd": "/w",
+            "env": {"GPUQ_OWNER": "fullcmp"},
+        },
+        {
+            "id": "b",
+            "label": "fullcmp-tiny-y-r0",
+            "state": "pending",
+            "submitted": 1.0,
+            "priority": 1,
+            "device": "m5",
+            "timeout_s": 20 * 60,
+            "short": False,
+            "cwd": "/w",
+            "env": {"GPUQ_OWNER": "fullcmp"},
+        },
     ]
     assert gq._pick(jobs)["id"] == "b"  # the short-lane job jumps the queue
 
@@ -645,7 +696,15 @@ def test_gpuq_picker_reorders_a_mixed_lane_batch_so_the_guard_must_fail(monkeypa
 
 
 def _mixed(engine, ctx_tokens, conc, out):
-    r = row(engine, f"B2.mix.{engine}.{ctx_tokens}", ctx_tokens=ctx_tokens, conc=conc, out=out, turns="mixed", batch="B2")
+    r = row(
+        engine,
+        f"B2.mix.{engine}.{ctx_tokens}",
+        ctx_tokens=ctx_tokens,
+        conc=conc,
+        out=out,
+        turns="mixed",
+        batch="B2",
+    )
     r["ctx"] = f"{ctx_tokens // 1024}K"
     return r
 
@@ -654,7 +713,12 @@ def test_mixed_128k_cell_term_exceeds_the_cold_prefill_and_decode():
     for engine in ("yunshu", "tf-1.2.1"):
         r = _mixed(engine, 131072, 8, 512)
         cold_prefill_min = 131072 / run.fm.prefill_tps(engine, 131072) / 60.0
-        decode_min = 512 * run.fm.slowdown(engine, 131072, 8) / run.fm.decode_tps(engine, 131072) / 60.0
+        decode_min = (
+            512
+            * run.fm.slowdown(engine, 131072, 8)
+            / run.fm.decode_tps(engine, 131072)
+            / 60.0
+        )
         assert run.cell_budget(r)["cells"] > cold_prefill_min + decode_min, engine
         # the 128K cell's trials: the long prefill is in every trial
         assert run.cell_budget(r)["cells"] >= run.CONC_TRIALS * cold_prefill_min
@@ -662,7 +726,9 @@ def test_mixed_128k_cell_term_exceeds_the_cold_prefill_and_decode():
 
 def test_yunshu_8k_plus_short_mixed_term_is_within_30_percent_of_the_measured_phase():
     # wire-1106c yunshu SMOKE mixed 8K c4 o64: measured mixed phase 22.9 s (fullcmp_cell_timing.json)
-    measured_min = run.fm.TIMING["job_budget"]["mixed_check_yunshu_8k_c4"]["value"] / 60.0
+    measured_min = (
+        run.fm.TIMING["job_budget"]["mixed_check_yunshu_8k_c4"]["value"] / 60.0
+    )
     r = _mixed("yunshu", 8192, 4, 64)
     term = run.cell_budget(r)["cells"]
     assert abs(term - measured_min) / measured_min <= 0.30, (term, measured_min)
@@ -672,7 +738,14 @@ def test_fast_engine_mixed_term_is_its_model_without_the_probe():
     r = _mixed("yunshu", 131072, 8, 512)
     assert abs(run.cell_budget(r)["cells"] - run.mixed_work_min(r)) < 1e-9
     slow = _mixed("mlx-vlm-server", 131072, 8, 512)
-    assert abs(run.cell_budget(slow)["cells"] - run.mixed_work_min(slow) - run.MIXED_PROBE_MIN) < 1e-9
+    assert (
+        abs(
+            run.cell_budget(slow)["cells"]
+            - run.mixed_work_min(slow)
+            - run.MIXED_PROBE_MIN
+        )
+        < 1e-9
+    )
 
 
 def test_slow_mixed_jobs_get_a_ten_minute_stall_for_every_manifest_engine():
@@ -703,14 +776,22 @@ def test_profile_engines_limits_the_prof_jobs_to_the_listed_engine():
 def test_profile_default_is_every_engine():
     rows = [row("yunshu", "B1.a", est=2.0), row("omlx-0.7.3", "B1.b", est=2.0)]
     plan = run.plan_batch(rows, "B1", PIN, profile_rep=True)
-    assert {j.engine for j in plan.jobs if "-prof" in j.label} == {"yunshu", "omlx-0.7.3"}
+    assert {j.engine for j in plan.jobs if "-prof" in j.label} == {
+        "yunshu",
+        "omlx-0.7.3",
+    }
 
 
 def test_audit_manifest_names_the_profile_required_engines():
     rows = [row("yunshu", "B1.a"), row("omlx-0.7.3", "B1.b")]
     m = run.audit_manifest(rows, ["B1"], PIN, ["yunshu", "omlx-0.7.3"], ["yunshu"])
     assert m["profile_required_engines"] == ["yunshu"]
-    assert run.audit_manifest(rows, ["B1"], PIN, ["yunshu", "omlx-0.7.3"])["profile_required_engines"] is None
+    assert (
+        run.audit_manifest(rows, ["B1"], PIN, ["yunshu", "omlx-0.7.3"])[
+            "profile_required_engines"
+        ]
+        is None
+    )
 
 
 def test_audit_requires_profile_rows_only_for_the_listed_engines():
@@ -736,7 +817,10 @@ def retry_world(tmp_path, monkeypatch):
 
 
 def _two_slots():
-    rows = [row("yunshu", "B1.a", est=2.0), row("yunshu", "B1.b", est=2.0, ctx=8192, ctx_tokens=8192)]
+    rows = [
+        row("yunshu", "B1.a", est=2.0),
+        row("yunshu", "B1.b", est=2.0, ctx=8192, ctx_tokens=8192),
+    ]
     return run.plan_batch(rows, "B1", PIN).jobs
 
 
@@ -747,7 +831,9 @@ def _scripted(outcomes):
     def run_one(job):
         calls.append(job.label)
         base = job.label.split("-retry")[0]
-        rc, state = left.get(base, [(0, "done")]).pop(0) if left.get(base) else (0, "done")
+        rc, state = (
+            left.get(base, [(0, "done")]).pop(0) if left.get(base) else (0, "done")
+        )
         return f"jid-{len(calls)}", rc, state
 
     return run_one, calls
@@ -758,29 +844,50 @@ def test_quiet_refusals_are_retried_in_the_same_slot_then_the_slot_passes(retry_
     first = jobs[0].label
     run_one, calls = _scripted({first: [(3, "failed"), (3, "failed"), (0, "done")]})
     sleeps = []
-    ids, failed = run.submit_sequential(jobs, PIN, run_one=run_one, sleep=sleeps.append,
-                                        retry_log=retry_world / "retries.jsonl")
+    ids, failed = run.submit_sequential(
+        jobs,
+        PIN,
+        run_one=run_one,
+        sleep=sleeps.append,
+        retry_log=retry_world / "retries.jsonl",
+    )
     assert failed == 0
-    assert calls == [first, f"{first}-retry1", f"{first}-retry2", jobs[1].label]  # same slot, in order
+    assert calls == [
+        first,
+        f"{first}-retry1",
+        f"{first}-retry2",
+        jobs[1].label,
+    ]  # same slot, in order
     assert sleeps == [5 * 60, 10 * 60]  # the back-off table
-    log = [json.loads(x) for x in (retry_world / "retries.jsonl").read_text().splitlines()]
-    assert [r["attempt"] for r in log] == [0, 1] and all(r["slot"] == first for r in log)
+    log = [
+        json.loads(x) for x in (retry_world / "retries.jsonl").read_text().splitlines()
+    ]
+    assert [r["attempt"] for r in log] == [0, 1] and all(
+        r["slot"] == first for r in log
+    )
 
 
 def test_exhausted_quiet_refusals_fail_the_slot_and_the_batch(retry_world):
     jobs = _two_slots()
     first = jobs[0].label
     run_one, calls = _scripted({first: [(3, "failed")] * 6})
-    ids, failed = run.submit_sequential(jobs, PIN, run_one=run_one, sleep=lambda s: None)
+    ids, failed = run.submit_sequential(
+        jobs, PIN, run_one=run_one, sleep=lambda s: None
+    )
     assert failed == 1
-    assert calls.count(first) + sum(1 for c in calls if c.startswith(f"{first}-retry")) == run.MAX_TRIES
+    assert (
+        calls.count(first) + sum(1 for c in calls if c.startswith(f"{first}-retry"))
+        == run.MAX_TRIES
+    )
 
 
 def test_other_failures_are_not_retried(retry_world):
     jobs = _two_slots()
     first = jobs[0].label
     run_one, calls = _scripted({first: [(2, "failed")]})
-    ids, failed = run.submit_sequential(jobs, PIN, run_one=run_one, sleep=lambda s: None)
+    ids, failed = run.submit_sequential(
+        jobs, PIN, run_one=run_one, sleep=lambda s: None
+    )
     assert failed == 1 and calls.count(first) == 1
 
 
@@ -788,7 +895,9 @@ def test_a_stalled_or_timed_out_job_stays_a_failure(retry_world):
     jobs = _two_slots()
     first = jobs[0].label
     run_one, calls = _scripted({first: [(-2, "stalled")]})
-    ids, failed = run.submit_sequential(jobs, PIN, run_one=run_one, sleep=lambda s: None)
+    ids, failed = run.submit_sequential(
+        jobs, PIN, run_one=run_one, sleep=lambda s: None
+    )
     assert failed == 1 and calls.count(first) == 1
 
 
@@ -797,11 +906,22 @@ def test_retry_log_names_the_foreign_holders(retry_world):
     first = jobs[0].label
     (retry_world / "quiet").mkdir()
     (retry_world / "quiet" / f"{first}.jsonl").write_text(
-        json.dumps({"ok": False, "holders": [{"name": "XProtectRemediatorPirrit", "pct": 95.0}]}) + "\n"
+        json.dumps(
+            {
+                "ok": False,
+                "holders": [{"name": "XProtectRemediatorPirrit", "pct": 95.0}],
+            }
+        )
+        + "\n"
     )
     run_one, _calls = _scripted({first: [(3, "failed"), (0, "done")]})
-    run.submit_sequential(jobs, PIN, run_one=run_one, sleep=lambda s: None,
-                          retry_log=retry_world / "retries.jsonl")
+    run.submit_sequential(
+        jobs,
+        PIN,
+        run_one=run_one,
+        sleep=lambda s: None,
+        retry_log=retry_world / "retries.jsonl",
+    )
     rec = json.loads((retry_world / "retries.jsonl").read_text().splitlines()[0])
     assert rec["holders"][0]["name"] == "XProtectRemediatorPirrit"
 
@@ -820,57 +940,98 @@ def test_retry_job_is_a_new_wrapper_with_its_own_gate_log(retry_world):
 
 def test_a_failed_per_cell_quiet_snapshot_refuses_the_cell():
     import importlib.util as ilu
-    spec = ilu.spec_from_file_location("tfbench_q", ROOT / "scripts" / "research" / "tfbench.py")
+
+    spec = ilu.spec_from_file_location(
+        "tfbench_q", ROOT / "scripts" / "research" / "tfbench.py"
+    )
     tb = ilu.module_from_spec(spec)
     sys.modules["tfbench_q"] = tb
     spec.loader.exec_module(tb)
-    bad = {"ok": False, "total_foreign_pct": 112.8, "holders": [{"name": "mds", "pct": 48.7}]}
+    bad = {
+        "ok": False,
+        "total_foreign_pct": 112.8,
+        "holders": [{"name": "mds", "pct": 48.7}],
+    }
     assert tb.quiet_refused(bad) is True
     assert tb.quiet_refused({"ok": True}) is False
-    assert tb.quiet_refused(None) is False  # not a fullcmp cell: no snapshot, no refusal
+    assert (
+        tb.quiet_refused(None) is False
+    )  # not a fullcmp cell: no snapshot, no refusal
     assert tb.QUIET_REFUSED_EXIT == 3
 
 
 def _part_done(path, complete=True):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('{"part": "decode"}\n' + ('{"part": "part_done", "complete": true}\n' if complete else ""))
+    path.write_text(
+        '{"part": "decode"}\n'
+        + ('{"part": "part_done", "complete": true}\n' if complete else "")
+    )
 
 
 def test_a_quiet_retry_runs_only_the_unfinished_cells(monkeypatch, tmp_path):
     monkeypatch.setattr(run, "RAW_ROOT", tmp_path / "raw")
-    rows = [row("yunshu", "B1.first", est=2.0), row("yunshu", "B1.second", est=2.0, ctx=8192, ctx_tokens=8192)]
+    rows = [
+        row("yunshu", "B1.first", est=2.0),
+        row("yunshu", "B1.second", est=2.0, ctx=8192, ctx_tokens=8192),
+    ]
     job = run.plan_batch(rows, "B1", PIN).jobs[0]
     job = run.dataclasses.replace(job, cells=[dict(r) for r in rows], rep=0)
-    _part_done(run.raw_path("yunshu", "B1.first", 0))  # the first cell finished before the refusal
+    _part_done(
+        run.raw_path("yunshu", "B1.first", 0)
+    )  # the first cell finished before the refusal
     assert [c["id"] for c in run.remaining_cells(job)] == ["B1.second"]
     retry = run.retry_job(job, 1, PIN, cells=run.remaining_cells(job))
     assert [c["id"] for c in retry.cells] == ["B1.second"]
     assert retry.label.endswith("-retry1")
 
 
-def test_a_quiet_flagged_cell_is_superseded_and_rerun_in_its_slot(monkeypatch, tmp_path):
+def test_a_quiet_flagged_cell_is_superseded_and_rerun_in_its_slot(
+    monkeypatch, tmp_path
+):
     import fullcmp_audit as fa
+
     raw = tmp_path / "raw"
     monkeypatch.setattr(run, "RAW_ROOT", raw)
     rows = [row("yunshu", "B1.a", est=2.0)]
     plan = run.plan_batch(rows, "B1", PIN)
-    rec = {"ok": False, "total_foreign_pct": 60.0, "max_single_pct": 20.0, "max_total_pct": 150.0,
-           "holders": [{"pid": 9, "name": "stray", "pct": 43.0}]}
-    head = {"part": "session", "quiet_pre": {**rec, "ok": True, "total_foreign_pct": 1.0, "holders": []},
-            "quiet_post": rec}
+    rec = {
+        "ok": False,
+        "total_foreign_pct": 60.0,
+        "max_single_pct": 20.0,
+        "max_total_pct": 150.0,
+        "holders": [{"pid": 9, "name": "stray", "pct": 43.0}],
+    }
+    head = {
+        "part": "session",
+        "quiet_pre": {**rec, "ok": True, "total_foreign_pct": 1.0, "holders": []},
+        "quiet_post": rec,
+    }
     cell_file = run.raw_path("yunshu", "B1.a", 0)
     cell_file.parent.mkdir(parents=True, exist_ok=True)
-    cell_file.write_text(json.dumps(head) + "\n" + '{"part": "part_done", "complete": true}\n')
+    cell_file.write_text(
+        json.dumps(head) + "\n" + '{"part": "part_done", "complete": true}\n'
+    )
     manifest = run.audit_manifest(rows, ["B1"], PIN, ["yunshu"])
     submitted = []
-    monkeypatch.setattr(run, "_submit_and_wait", lambda job: submitted.append(job.label) or ("id", 0, "done"))
+    monkeypatch.setattr(
+        run,
+        "_submit_and_wait",
+        lambda job: submitted.append(job.label) or ("id", 0, "done"),
+    )
     failures = run.requeue_quiet_flagged(plan, PIN, raw, manifest)
     assert failures == 0
     assert not cell_file.exists()  # the flagged file moved aside, as evidence
-    assert cell_file.with_name(cell_file.name.replace(".jsonl", ".superseded-1.jsonl")).exists()
+    assert cell_file.with_name(
+        cell_file.name.replace(".jsonl", ".superseded-1.jsonl")
+    ).exists()
     assert submitted and submitted[0].endswith("-qretry1")
     # the audit does not count the superseded file as an unplanned file
-    assert fa.SUPERSEDED_TAG in cell_file.with_name(cell_file.name.replace(".jsonl", ".superseded-1.jsonl")).name
+    assert (
+        fa.SUPERSEDED_TAG
+        in cell_file.with_name(
+            cell_file.name.replace(".jsonl", ".superseded-1.jsonl")
+        ).name
+    )
 
 
 def test_a_cell_flagged_twice_fails_the_batch(monkeypatch, tmp_path):
@@ -878,15 +1039,31 @@ def test_a_cell_flagged_twice_fails_the_batch(monkeypatch, tmp_path):
     monkeypatch.setattr(run, "RAW_ROOT", raw)
     rows = [row("yunshu", "B1.a", est=2.0)]
     plan = run.plan_batch(rows, "B1", PIN)
-    rec = {"ok": False, "total_foreign_pct": 60.0, "max_single_pct": 20.0, "max_total_pct": 150.0,
-           "holders": [{"pid": 9, "name": "stray", "pct": 43.0}]}
+    rec = {
+        "ok": False,
+        "total_foreign_pct": 60.0,
+        "max_single_pct": 20.0,
+        "max_total_pct": 150.0,
+        "holders": [{"pid": 9, "name": "stray", "pct": 43.0}],
+    }
     cell_file = run.raw_path("yunshu", "B1.a", 0)
     cell_file.parent.mkdir(parents=True, exist_ok=True)
     cell_file.write_text(json.dumps({"part": "session", "quiet_post": rec}) + "\n")
-    cell_file.with_name(cell_file.name.replace(".jsonl", ".superseded-1.jsonl")).write_text("x\n")
+    cell_file.with_name(
+        cell_file.name.replace(".jsonl", ".superseded-1.jsonl")
+    ).write_text("x\n")
     submitted = []
-    monkeypatch.setattr(run, "_submit_and_wait", lambda job: submitted.append(job.label) or ("id", 0, "done"))
-    assert run.requeue_quiet_flagged(plan, PIN, raw, run.audit_manifest(rows, ["B1"], PIN, ["yunshu"])) == 1
+    monkeypatch.setattr(
+        run,
+        "_submit_and_wait",
+        lambda job: submitted.append(job.label) or ("id", 0, "done"),
+    )
+    assert (
+        run.requeue_quiet_flagged(
+            plan, PIN, raw, run.audit_manifest(rows, ["B1"], PIN, ["yunshu"])
+        )
+        == 1
+    )
     assert submitted == []
 
 
@@ -900,7 +1077,10 @@ def test_a_real_batch_manifest_carries_the_ctl_1103_controls(tmp_path, monkeypat
     monkeypatch.setattr(
         fam,
         "load_controls",
-        lambda: ({"aa_delta_pct": 0.4, "aa_noise_pct": 2.0, "injected_delay_detected": True}, {}),
+        lambda: (
+            {"aa_delta_pct": 0.4, "aa_noise_pct": 2.0, "injected_delay_detected": True},
+            {},
+        ),
     )
     c = run.batch_controls(False)
     assert c["aa_delta_pct"] == 0.4 and c["injected_delay_detected"] is True
@@ -922,9 +1102,14 @@ def test_the_real_ctl_1103_controls_pass_the_fairness_guard():
         pytest.skip("ctl-1103 verify runs not on this machine")
     c = run.batch_controls(False)
     assert "error" not in c, c
-    assert c["injected_delay_detected"] is True and c["evidence"]["slow"] == fam.CONTROL_SLOW
+    assert (
+        c["injected_delay_detected"] is True
+        and c["evidence"]["slow"] == fam.CONTROL_SLOW
+    )
     res = fa.check_fairness_controls(
-        fa.Run(manifest={"controls": c}, files=[], missing=[], extra=[], parse_errors=[])
+        fa.Run(
+            manifest={"controls": c}, files=[], missing=[], extra=[], parse_errors=[]
+        )
     )
     assert [v for v in res.violations if ": controls:" in v] == [], res.violations
 
@@ -935,21 +1120,38 @@ def test_the_real_ctl_1103_controls_pass_the_fairness_guard():
 def _complete(engine, cell, rep=0):
     p = run.raw_path(engine, cell, rep)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"part": "session"}) + "\n" + json.dumps({"part": "part_done", "complete": True}) + "\n")
+    p.write_text(
+        json.dumps({"part": "session"})
+        + "\n"
+        + json.dumps({"part": "part_done", "complete": True})
+        + "\n"
+    )
 
 
 def _failed(engine, cell, rep=0):
     p = run.raw_path(engine, cell, rep)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"part": "session"}) + "\n" + json.dumps({"part": "error", "error": "boom"}) + "\n")
-    p.with_name(p.name.replace(".jsonl", ".server.log")).write_text("log of the failed attempt")
+    p.write_text(
+        json.dumps({"part": "session"})
+        + "\n"
+        + json.dumps({"part": "error", "error": "boom"})
+        + "\n"
+    )
+    p.with_name(p.name.replace(".jsonl", ".server.log")).write_text(
+        "log of the failed attempt"
+    )
 
 
-def test_rerun_failed_cells_appends_one_rerun_job_per_slot_and_keeps_the_failed_record(pin_file, tmp_path, monkeypatch):
+def test_rerun_failed_cells_appends_one_rerun_job_per_slot_and_keeps_the_failed_record(
+    pin_file, tmp_path, monkeypatch
+):
     monkeypatch.undo()  # the autouse stubs above are not wanted here
     monkeypatch.setattr(run, "RAW_ROOT", tmp_path / "raw")
     monkeypatch.setattr(run, "RETRY_LOG", tmp_path / "retry.log")
-    rows = [{**row(e, c), "reps": 1} for e, c in (("yunshu", "B1.a"), ("yunshu", "B1.b"), ("omlx-0.7.3", "B1.c"))]
+    rows = [
+        {**row(e, c), "reps": 1}
+        for e, c in (("yunshu", "B1.a"), ("yunshu", "B1.b"), ("omlx-0.7.3", "B1.c"))
+    ]
     plan = run.plan_batch(rows, "B1", json.loads(pin_file.read_text()))
     _complete("yunshu", "B1.a")
     _failed("yunshu", "B1.b")  # failed: an error record and no part_done
@@ -963,75 +1165,160 @@ def test_rerun_failed_cells_appends_one_rerun_job_per_slot_and_keeps_the_failed_
                 _complete(c["engine"], c["id"], j.rep)  # the rerun succeeds
         return [f"id{i}" for i in range(len(jobs))], 0
 
-    ids, still = run.rerun_failed_cells(plan, json.loads(pin_file.read_text()), submit=fake_submit)
+    ids, still = run.rerun_failed_cells(
+        plan, json.loads(pin_file.read_text()), submit=fake_submit
+    )
     assert still == 0 and len(ids) == 2
-    assert len(submitted) == 2 and all(j.label.endswith("-rerun1") for j in submitted)  # one per slot, after the others
-    assert {j.label.removesuffix("-rerun1") for j in submitted} <= {j.label for j in plan.jobs}
+    assert len(submitted) == 2 and all(
+        j.label.endswith("-rerun1") for j in submitted
+    )  # one per slot, after the others
+    assert {j.label.removesuffix("-rerun1") for j in submitted} <= {
+        j.label for j in plan.jobs
+    }
     done_cells = {c["id"] for j in submitted for c in j.cells}
     assert done_cells == {"B1.b", "B1.c"}  # B1.a was complete: not rerun
-    kept = run.raw_path("yunshu", "B1.b", 0).with_name("B1.b-r0.superseded-fail1.server.log")
-    assert kept.read_text() == "log of the failed attempt"  # the failed first record is evidence, not deleted
-    assert run.raw_path("yunshu", "B1.b", 0).with_name("B1.b-r0.superseded-fail1.jsonl").exists()
+    kept = run.raw_path("yunshu", "B1.b", 0).with_name(
+        "B1.b-r0.superseded-fail1.server.log"
+    )
+    assert (
+        kept.read_text() == "log of the failed attempt"
+    )  # the failed first record is evidence, not deleted
+    assert (
+        run.raw_path("yunshu", "B1.b", 0)
+        .with_name("B1.b-r0.superseded-fail1.jsonl")
+        .exists()
+    )
 
 
-def test_a_cell_still_incomplete_after_the_rerun_is_counted_and_there_is_no_third_attempt(pin_file, tmp_path, monkeypatch):
+def test_a_cell_still_incomplete_after_the_rerun_is_counted_and_there_is_no_third_attempt(
+    pin_file, tmp_path, monkeypatch
+):
     monkeypatch.undo()
     monkeypatch.setattr(run, "RAW_ROOT", tmp_path / "raw")
     monkeypatch.setattr(run, "RETRY_LOG", tmp_path / "retry.log")
-    plan = run.plan_batch([{**row("yunshu", "B1.a"), "reps": 1}], "B1", json.loads(pin_file.read_text()))
+    plan = run.plan_batch(
+        [{**row("yunshu", "B1.a"), "reps": 1}], "B1", json.loads(pin_file.read_text())
+    )
     calls = []
 
     def fail_again(jobs, pin, retry_log=None):
         calls.append(len(jobs))
         return ["id0"], 1  # nothing written: the rerun failed too
 
-    ids, still = run.rerun_failed_cells(plan, json.loads(pin_file.read_text()), submit=fail_again)
+    ids, still = run.rerun_failed_cells(
+        plan, json.loads(pin_file.read_text()), submit=fail_again
+    )
     assert still == 1 and calls == [1]
 
 
 def test_nothing_is_rerun_when_every_cell_is_complete(pin_file, tmp_path, monkeypatch):
     monkeypatch.undo()
     monkeypatch.setattr(run, "RAW_ROOT", tmp_path / "raw")
-    plan = run.plan_batch([{**row("yunshu", "B1.a"), "reps": 1}], "B1", json.loads(pin_file.read_text()))
+    plan = run.plan_batch(
+        [{**row("yunshu", "B1.a"), "reps": 1}], "B1", json.loads(pin_file.read_text())
+    )
     _complete("yunshu", "B1.a")
 
     def never(jobs, pin, retry_log=None):
         raise AssertionError("no rerun expected")
 
-    assert run.rerun_failed_cells(plan, json.loads(pin_file.read_text()), submit=never) == ([], 0)
+    assert run.rerun_failed_cells(
+        plan, json.loads(pin_file.read_text()), submit=never
+    ) == ([], 0)
 
 
 # --- profile-only batch: only the -prof jobs, from an existing snapshot, beside a finished timed batch -----------------
 
 
 def _profile_rows():
-    return [row("yunshu", "B1.a", reps=1), row("yunshu-pb2", "B1.b", reps=1), row("omlx-0.7.3", "B1.c", reps=1)]
+    return [
+        row("yunshu", "B1.a", reps=1),
+        row("yunshu-pb2", "B1.b", reps=1),
+        row("omlx-0.7.3", "B1.c", reps=1),
+    ]
 
 
 def test_plan_batch_profile_only_has_only_profile_jobs(pin_file):
     pin = json.loads(pin_file.read_text())
-    both = run.plan_batch(_profile_rows(), "B1", pin, profile_rep=True, profile_engines=["yunshu", "yunshu-pb2"])
-    only = run.plan_batch(
-        _profile_rows(), "B1", pin, profile_rep=True, profile_engines=["yunshu", "yunshu-pb2"], profile_only=True
+    both = run.plan_batch(
+        _profile_rows(),
+        "B1",
+        pin,
+        profile_rep=True,
+        profile_engines=["yunshu", "yunshu-pb2"],
     )
-    assert any("profile" not in j.flags for j in both.jobs)  # the normal plan keeps the timed jobs
+    only = run.plan_batch(
+        _profile_rows(),
+        "B1",
+        pin,
+        profile_rep=True,
+        profile_engines=["yunshu", "yunshu-pb2"],
+        profile_only=True,
+    )
+    assert any(
+        "profile" not in j.flags for j in both.jobs
+    )  # the normal plan keeps the timed jobs
     assert only.jobs and all("profile" in j.flags for j in only.jobs)
-    assert {j.engine for j in only.jobs} == {"yunshu", "yunshu-pb2"}  # omlx has no profile job here
+    assert {j.engine for j in only.jobs} == {
+        "yunshu",
+        "yunshu-pb2",
+    }  # omlx has no profile job here
     assert all(j.label.endswith("-prof") or "-prof" in j.label for j in only.jobs)
 
 
-def test_profile_only_needs_profile_rep_and_engines(pin_file, tmp_path, monkeypatch, capsys):
+def test_profile_only_needs_profile_rep_and_engines(
+    pin_file, tmp_path, monkeypatch, capsys
+):
     manifest = tmp_path / "m.jsonl"
     manifest.write_text("\n".join(json.dumps(r) for r in _profile_rows()) + "\n")
-    assert run.main(["--batch", "B1", "--manifest", str(manifest), "--profile-only", "--dry-run"]) == 2
-    assert run.main(["--batch", "B1", "--manifest", str(manifest), "--profile-only", "--profile-rep", "--dry-run"]) == 2
-    assert "--profile-only needs --profile-rep and --profile-engines" in capsys.readouterr().err
+    assert (
+        run.main(
+            [
+                "--batch",
+                "B1",
+                "--manifest",
+                str(manifest),
+                "--profile-only",
+                "--dry-run",
+            ]
+        )
+        == 2
+    )
+    assert (
+        run.main(
+            [
+                "--batch",
+                "B1",
+                "--manifest",
+                str(manifest),
+                "--profile-only",
+                "--profile-rep",
+                "--dry-run",
+            ]
+        )
+        == 2
+    )
+    assert (
+        "--profile-only needs --profile-rep and --profile-engines"
+        in capsys.readouterr().err
+    )
 
 
-def test_profile_only_dry_run_prints_only_profile_jobs(pin_file, tmp_path, monkeypatch, capsys):
+def test_profile_only_dry_run_prints_only_profile_jobs(
+    pin_file, tmp_path, monkeypatch, capsys
+):
     manifest = tmp_path / "m.jsonl"
     manifest.write_text("\n".join(json.dumps(r) for r in _profile_rows()) + "\n")
-    args = ["--batch", "B1", "--manifest", str(manifest), "--profile-rep", "--profile-engines", "yunshu,yunshu-pb2", "--dry-run"]
+    args = [
+        "--batch",
+        "B1",
+        "--manifest",
+        str(manifest),
+        "--profile-rep",
+        "--profile-engines",
+        "yunshu,yunshu-pb2",
+        "--dry-run",
+    ]
     assert run.main([*args, "--profile-only"]) == 0
     out = capsys.readouterr().out
     jobs = [ln for ln in out.splitlines() if ln.startswith("JOB ")]
@@ -1041,7 +1328,9 @@ def test_profile_only_dry_run_prints_only_profile_jobs(pin_file, tmp_path, monke
     assert len(full) > len(jobs)  # the normal plan also has the timed jobs
 
 
-def test_profile_only_run_skips_the_audit_reps_and_requeues(pin_file, tmp_path, monkeypatch):
+def test_profile_only_run_skips_the_audit_reps_and_requeues(
+    pin_file, tmp_path, monkeypatch
+):
     manifest = tmp_path / "m.jsonl"
     manifest.write_text("\n".join(json.dumps(r) for r in _profile_rows()) + "\n")
     monkeypatch.setattr(run, "gpuq_status_text", lambda: "")
@@ -1053,18 +1342,32 @@ def test_profile_only_run_skips_the_audit_reps_and_requeues(pin_file, tmp_path, 
         return f"id{len(submitted)}", 0, "done"
 
     def forbidden(*a, **k):
-        raise AssertionError("a profile-only batch must not audit, schedule reps or requeue")
+        raise AssertionError(
+            "a profile-only batch must not audit, schedule reps or requeue"
+        )
 
     monkeypatch.setattr(run, "_submit_and_wait", fake_one)
     monkeypatch.setattr(run, "run_audit", forbidden)
     monkeypatch.setattr(run, "run_reps", forbidden)
     monkeypatch.setattr(run, "requeue_quiet_flagged", forbidden)
-    rc = run.main(["--batch", "B1", "--manifest", str(manifest), "--profile-rep", "--profile-engines", "yunshu,yunshu-pb2", "--profile-only"])
+    rc = run.main(
+        [
+            "--batch",
+            "B1",
+            "--manifest",
+            str(manifest),
+            "--profile-rep",
+            "--profile-engines",
+            "yunshu,yunshu-pb2",
+            "--profile-only",
+        ]
+    )
     assert rc == 0 and submitted and all("-prof" in lbl for lbl in submitted)
 
 
-
-def test_cells_filter_selects_only_matching_cells_and_refuses_an_empty_match(tmp_path, capsys):
+def test_cells_filter_selects_only_matching_cells_and_refuses_an_empty_match(
+    tmp_path, capsys
+):
     """real-1104 B2: restart cells (SIGKILL before the disk write) and oMLX c4/c8 cells (batch-parked parse)
     need a targeted re-run with the fixed harness; --cells selects them by id."""
     rows = [
@@ -1074,7 +1377,9 @@ def test_cells_filter_selects_only_matching_cells_and_refuses_an_empty_match(tmp
     ]
     m = tmp_path / "m.jsonl"
     m.write_text("\n".join(__import__("json").dumps(r) for r in rows) + "\n")
-    rc = run.main(["--batch", "B2", "--manifest", str(m), "--cells", r"^B2\.nomatch", "--dry-run"])
+    rc = run.main(
+        ["--batch", "B2", "--manifest", str(m), "--cells", r"^B2\.nomatch", "--dry-run"]
+    )
     assert rc == 2 and "matches no B2 cell" in capsys.readouterr().err
 
 
@@ -1086,13 +1391,17 @@ def test_resume_reps_skips_cells_whose_rep3_is_on_disk(tmp_path):
     d.mkdir()
     assert not run.rep3_present(tmp_path, row)
     (d / f"{row['id']}-r{run.REP3_INDEX}.jsonl").write_text("")
-    assert not run.rep3_present(tmp_path, row)  # an empty file is a dead job, not a result
+    assert not run.rep3_present(
+        tmp_path, row
+    )  # an empty file is a dead job, not a result
     (d / f"{row['id']}-r{run.REP3_INDEX}.jsonl").write_text('{"part": "conc"}\n')
     assert run.rep3_present(tmp_path, row)
-    assert "--resume-reps" in open(run.__file__).read()
+    assert "--resume-reps" in Path(run.__file__).read_text(encoding="utf-8")
 
 
-def test_supersede_never_overwrites_and_cells_rerun_moves_existing_records(tmp_path, monkeypatch):
+def test_supersede_never_overwrites_and_cells_rerun_moves_existing_records(
+    tmp_path, monkeypatch
+):
     """real-1104 B2 fix (2026-11-07): the --cells re-run hit 'exists; a fullcmp cell writes a fresh file' on every
     job, and rerun_failed_cells' rename could overwrite an earlier superseded-fail1 copy. Existing records are now
     superseded with the first free number before the re-run."""
@@ -1100,11 +1409,15 @@ def test_supersede_never_overwrites_and_cells_rerun_moves_existing_records(tmp_p
     d.mkdir()
     cell = d / "B2.restart.yunshu.32K-r0.jsonl"
     for n in (1,):
-        (d / f"B2.restart.yunshu.32K-r0.superseded-fail{n}.jsonl").write_text("old fail1\n")
+        (d / f"B2.restart.yunshu.32K-r0.superseded-fail{n}.jsonl").write_text(
+            "old fail1\n"
+        )
     for sfx in (".jsonl", ".telemetry.jsonl", ".server.log"):
         (d / f"B2.restart.yunshu.32K-r0{sfx}").write_text("current\n")
     moved = run.supersede_cell_files(cell, "fail")
-    assert (d / "B2.restart.yunshu.32K-r0.superseded-fail1.jsonl").read_text() == "old fail1\n"
+    assert (
+        d / "B2.restart.yunshu.32K-r0.superseded-fail1.jsonl"
+    ).read_text() == "old fail1\n"
     assert {p.name for p in moved} == {
         "B2.restart.yunshu.32K-r0.superseded-fail2.jsonl",
         "B2.restart.yunshu.32K-r0.superseded-fail2.telemetry.jsonl",
@@ -1122,5 +1435,7 @@ def test_supersede_never_overwrites_and_cells_rerun_moves_existing_records(tmp_p
         jobs = [J()]
 
     assert run.supersede_selected(P()) == 1
-    assert (d / "B2.restart.yunshu.32K-r0.superseded-fix1.jsonl").read_text() == "again\n"
+    assert (
+        d / "B2.restart.yunshu.32K-r0.superseded-fix1.jsonl"
+    ).read_text() == "again\n"
     assert run.supersede_selected(P()) == 0

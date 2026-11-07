@@ -16,7 +16,12 @@ sys.path.insert(0, str(ROOT / "scripts" / "research"))
 
 import fullcmp_observe_ab as obs  # noqa: E402
 
-THR = {"decode_tps": 3.03, "turn2_decode_tps": 3.0, "cold_ttft": 5.0, "turn2_ttft": 32.93}
+THR = {
+    "decode_tps": 3.03,
+    "turn2_decode_tps": 3.0,
+    "cold_ttft": 5.0,
+    "turn2_ttft": 32.93,
+}
 
 
 def test_arm_on_sets_observe_and_arm_off_removes_it():
@@ -56,7 +61,9 @@ def test_profile_regex_is_shared_with_the_sampler_driver():
 
 
 def test_bad_sequences_are_rejected_before_any_launch():
-    assert obs.run_cmd("code-1024", "BA", 0, "t") == 2  # must start with A (global ABAB order)
+    assert (
+        obs.run_cmd("code-1024", "BA", 0, "t") == 2
+    )  # must start with A (global ABAB order)
     assert obs.run_cmd("code-1024", "ABA", 0, "t") == 2  # must be a pair
     assert obs.run_cmd("code-1024", "AC", 0, "t") == 2  # unknown arm
     assert obs.run_cmd("code-4096", "AB", 0, "t") == 2  # unknown prompt
@@ -64,9 +71,16 @@ def test_bad_sequences_are_rejected_before_any_launch():
 
 def _rec(prompt, arm, idx, cold, turn2, ttft_c, ttft_t, verify, quiet=False):
     return {
-        "prompt": prompt, "arm": arm, "idx": idx, "tag": "t", "quiet_flag": quiet,
-        "cold_dec_tps": cold, "turn2_dec_tps": turn2, "cold_ttft_s": ttft_c,
-        "turn2_ttft_s": ttft_t, "verify_ms_round": verify,
+        "prompt": prompt,
+        "arm": arm,
+        "idx": idx,
+        "tag": "t",
+        "quiet_flag": quiet,
+        "cold_dec_tps": cold,
+        "turn2_dec_tps": turn2,
+        "cold_ttft_s": ttft_c,
+        "turn2_ttft_s": ttft_t,
+        "verify_ms_round": verify,
     }
 
 
@@ -89,12 +103,16 @@ def test_slow_outlier_is_counted_and_excluded_from_means():
         _rec("code-1024", "off", 0, 80.0, 80.0, 1.0, 2.0, 40.0),
         _rec("code-1024", "off", 1, 80.0, 80.0, 1.0, 2.0, 41.0),
         _rec("code-1024", "on", 2, 80.0, 80.0, 1.0, 2.0, 40.0),
-        _rec("code-1024", "on", 3, 20.0, 20.0, 9.0, 9.0, 139.0),  # verify > 1.5 x median
+        _rec(
+            "code-1024", "on", 3, 20.0, 20.0, 9.0, 9.0, 139.0
+        ),  # verify > 1.5 x median
     ]
     out = obs.summarize_prompt("code-1024", recs, THR)
     assert out["per_arm"]["on"]["outliers"] == 1
     assert out["per_arm"]["on"]["included"] == 1
-    assert out["per_arm"]["on"]["decode_cold_tps"]["mean"] == 80.0  # outlier not in the mean
+    assert (
+        out["per_arm"]["on"]["decode_cold_tps"]["mean"] == 80.0
+    )  # outlier not in the mean
     assert [o["idx"] for o in out["outlier_servers"]] == [3]
 
 

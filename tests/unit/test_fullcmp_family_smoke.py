@@ -28,20 +28,34 @@ def real_by_id():
     path = Path(fm.REAL_MANIFEST)
     if not path.exists():
         pytest.skip("real manifest not present on this host")
-    return {json.loads(line)["id"]: json.loads(line) for line in path.read_text().splitlines() if line.strip()}
+    return {
+        json.loads(line)["id"]: json.loads(line)
+        for line in path.read_text().splitlines()
+        if line.strip()
+    }
 
 
 def test_every_supported_engine_gets_each_slot_unless_census_rules_it_out(rows):
-    have = {(r["engine"], r["id"].split(".")[1], r["id"]) for r in rows}
-    supported = [e for e in fm.ENGINE_IDS if fm.ENGINES[e]["supported"] and e not in fm.WIRE_1108_SKIP]
+    supported = [
+        e
+        for e in fm.ENGINE_IDS
+        if fm.ENGINES[e]["supported"] and e not in fm.WIRE_1108_SKIP
+    ]
     assert supported, "no supported engines"
-    for _slot, batch, kw in fm.WIRE_1108_SHAPES:
+    for _slot, _batch, kw in fm.WIRE_1108_SHAPES:
         sp = fm.spec(**kw, reps=fm.WIRE_1108_REPS)
         for eng in supported:
             status, _why = fm.cell_status(eng, sp)
-            ids = [r["id"] for r in rows if r["engine"] == eng and r["sweep"] == sp["sweep"]
-                   and r["ctx"] == sp["ctx"] and r["prompt_kind"] == sp["kind"]
-                   and r["out_len"] == sp["out"] and r["conc"] == sp["conc"]]
+            ids = [
+                r["id"]
+                for r in rows
+                if r["engine"] == eng
+                and r["sweep"] == sp["sweep"]
+                and r["ctx"] == sp["ctx"]
+                and r["prompt_kind"] == sp["kind"]
+                and r["out_len"] == sp["out"]
+                and r["conc"] == sp["conc"]
+            ]
             if status == fm.UNV:
                 assert len(ids) == 1, f"{eng} {sp['sweep']} must have exactly one row"
             else:
@@ -53,10 +67,14 @@ def test_rows_are_the_production_generator_output(rows):
         ctx_sp = next(
             fm.spec(**kw, reps=fm.WIRE_1108_REPS)
             for _s, _b, kw in fm.WIRE_1108_SHAPES
-            if kw["sweep"] == r["sweep"] and kw.get("ctx") == r["ctx"]
-            and kw.get("kind", "code") == r["prompt_kind"] and kw.get("out", 512) == r["out_len"]
-            and kw.get("conc", 1) == r["conc"] and kw.get("thinking", "off") == r["thinking"]
-            and kw.get("sampling", "greedy") == r["sampling"] and kw.get("media", "none") == r["media"]
+            if kw["sweep"] == r["sweep"]
+            and kw.get("ctx") == r["ctx"]
+            and kw.get("kind", "code") == r["prompt_kind"]
+            and kw.get("out", 512) == r["out_len"]
+            and kw.get("conc", 1) == r["conc"]
+            and kw.get("thinking", "off") == r["thinking"]
+            and kw.get("sampling", "greedy") == r["sampling"]
+            and kw.get("media", "none") == r["media"]
             and kw.get("turns", "single") == r["turns"]
         )
         regen = fm._cell_row(r["engine"], r["batch"], ctx_sp)
@@ -70,7 +88,9 @@ def test_every_row_is_one_rep(rows):
     assert rows and all(r["reps"] == 1 for r in rows)
 
 
-def test_shapes_present_in_the_real_manifest_match_it_except_reps_and_estimate(rows, real_by_id):
+def test_shapes_present_in_the_real_manifest_match_it_except_reps_and_estimate(
+    rows, real_by_id
+):
     matched = 0
     for r in rows:
         real = real_by_id.get(r["id"])

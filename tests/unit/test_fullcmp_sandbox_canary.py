@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -25,10 +24,24 @@ def test_env_points_every_result_dir_into_tmp(tmp_path):
 def test_a_gpuq_submit_on_the_real_queue_is_refused(monkeypatch):
     monkeypatch.setenv("GPUQ_DIR", REAL_QUEUE)
     with pytest.raises(RuntimeError, match="real queue"):
-        subprocess.run(["/Users/yuhuan/Documents/YuhuanStudio/Yunshu/scripts/dev/gpuq", "submit", "--", "true"])
+        subprocess.run(
+            [
+                "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/scripts/dev/gpuq",
+                "submit",
+                "--",
+                "true",
+            ]
+        )
 
 
 def test_a_popen_on_the_real_queue_is_refused(monkeypatch):
     monkeypatch.setenv("GPUQ_DIR", REAL_QUEUE)
     with pytest.raises(RuntimeError, match="real queue"):
-        subprocess.Popen(["/Users/yuhuan/Documents/YuhuanStudio/Yunshu/scripts/dev/gpuq", "run", "--", "true"])
+        subprocess.Popen(
+            [
+                "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/scripts/dev/gpuq",
+                "run",
+                "--",
+                "true",
+            ]
+        )

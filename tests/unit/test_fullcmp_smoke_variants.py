@@ -40,7 +40,9 @@ import tfbench  # noqa: E402
 # Re-pinned 2026-11-07: mlx-lm-server thinking-on cells are unsupported (census reasoning_split false, audit fixes 5b2e17d50)
 # and kapitsa-0.2.31 (pinned re-run of kapitsa-0.2.26, an EXTRA engine: the other engines' bytes did not move with it).
 REAL_MANIFEST_SHA = "d7db4b5a6d9ac02b06ef4c20ac5526b8b4895a7d3af03cdd065877b1d4ccb854"
-REAL_MANIFEST_SHA_12 = "17ff25d5690b62c1030c70b06bff53ea7cd28f8e7f77ce537afbfd27c75b73d3"
+REAL_MANIFEST_SHA_12 = (
+    "17ff25d5690b62c1030c70b06bff53ea7cd28f8e7f77ce537afbfd27c75b73d3"
+)
 
 
 def _real_manifest_bytes() -> bytes:
@@ -68,12 +70,25 @@ def test_the_extra_engine_leaves_every_other_rows_bytes_unchanged():
 def test_the_extra_engine_rows_mirror_omlx_073_statuses_and_cells():
     rows, _meta = fm.build_rows()
     fm.apply_cuts(rows, out=io.StringIO())
-    base = {r["id"].replace("omlx-0.7.3", "@"): r for r in rows if r["engine"] == "omlx-0.7.3"}
-    extra = {r["id"].replace("omlx-0.7.4.dev1", "@"): r for r in rows if r["engine"] == "omlx-0.7.4.dev1"}
+    base = {
+        r["id"].replace("omlx-0.7.3", "@"): r
+        for r in rows
+        if r["engine"] == "omlx-0.7.3"
+    }
+    extra = {
+        r["id"].replace("omlx-0.7.4.dev1", "@"): r
+        for r in rows
+        if r["engine"] == "omlx-0.7.4.dev1"
+    }
     assert extra and set(extra) == set(base)
     for k, r in extra.items():
-        assert r["status"] == base[k]["status"], k  # the same cut / unsupported decisions
-        assert r["batch"] == base[k]["batch"] and r["est_gpu_min"] == base[k]["est_gpu_min"]
+        assert r["status"] == base[k]["status"], (
+            k
+        )  # the same cut / unsupported decisions
+        assert (
+            r["batch"] == base[k]["batch"]
+            and r["est_gpu_min"] == base[k]["est_gpu_min"]
+        )
 
 
 def test_real_manifest_bytes_unchanged():

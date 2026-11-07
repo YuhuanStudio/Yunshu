@@ -29,11 +29,11 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT / "scripts" / "dev"))
 sys.path.insert(0, str(UNIT))
 
-import fullcmp_audit as fa  # noqa: E402
 import fullcmp_manifest as fm  # noqa: E402
 import fullcmp_run as fr  # noqa: E402
 import fullcmp_stub_content as stub  # noqa: E402
 import tfbench as tb  # noqa: E402
+
 from .test_fullcmp_e2e_coverage import cell_type_key  # noqa: E402
 
 CHAIN_ENGINES = ("yunshu", "tf-1.2.1")
@@ -58,7 +58,9 @@ def _family_cover():
         if sp["sweep"] == "kind" and sp["kind"] not in fm.FAMILY_KINDS:
             continue
         name = sp["kind"] if sp["sweep"] == "kind" else sp["sweep"]
-        out[cell_type_key(fm._cell_row("yunshu", fm.SMOKE_BATCH, sp))] = _FAMILY_TEST[name]
+        out[cell_type_key(fm._cell_row("yunshu", fm.SMOKE_BATCH, sp))] = _FAMILY_TEST[
+            name
+        ]
     return out
 
 
@@ -70,7 +72,7 @@ def _family_rows(engine):
     tf-1.2.1 gets no image rows here: a text-only 400 would kill the job (see the strict xfail)."""
     rows = []
     for variant in (0, 1):
-        for batch, sp in fm.b2_specs():
+        for _batch, sp in fm.b2_specs():
             if sp["sweep"] not in FAMILY_SWEEPS:
                 continue
             if sp["sweep"] == "kind" and sp["kind"] not in fm.FAMILY_KINDS:
@@ -148,12 +150,21 @@ def _rows_of(chain, family):
 
 
 def _audit(chain):
-    manifest = fr.audit_manifest(chain["rows"], [fm.SMOKE_BATCH], chain["pin"], chain["plan"].engine_order)
+    manifest = fr.audit_manifest(
+        chain["rows"], [fm.SMOKE_BATCH], chain["pin"], chain["plan"].engine_order
+    )
     manifest["stub_engine"] = True  # test only: the engine process is the family stub
     mpath = chain["work"] / "family-audit-manifest.json"
     mpath.write_text(json.dumps(manifest, indent=2) + "\n")
     return subprocess.run(
-        [fr.HARNESS_PY, str(SCRIPTS / "fullcmp_audit.py"), "--root", str(chain["raw"]), "--manifest", str(mpath)],
+        [
+            fr.HARNESS_PY,
+            str(SCRIPTS / "fullcmp_audit.py"),
+            "--root",
+            str(chain["raw"]),
+            "--manifest",
+            str(mpath),
+        ],
         capture_output=True,
         text=True,
         timeout=600,
@@ -173,7 +184,9 @@ def test_tool_chat_cell_replies_with_valid_tool_calls(chain):
         rows = _decode_rows(chain, row)
         assert rows
         for r in rows:
-            assert r["family"] == "tool-chat" and r["valid"] is True, r.get("invalid_reason")
+            assert r["family"] == "tool-chat" and r["valid"] is True, r.get(
+                "invalid_reason"
+            )
             assert r["tool_calls"], "tool_calls must be recorded"
             for c in r["tool_calls"]:
                 assert c["name"] in {"read_file", "run_shell"}
@@ -183,7 +196,9 @@ def test_tool_chat_cell_replies_with_valid_tool_calls(chain):
 def test_json_schema_cell_replies_conformant_json(chain):
     for row in _rows_of(chain, "json-schema"):
         for r in _decode_rows(chain, row):
-            assert r["family"] == "json-schema" and r["valid"] is True, r.get("invalid_reason")
+            assert r["family"] == "json-schema" and r["valid"] is True, r.get(
+                "invalid_reason"
+            )
             obj = json.loads(r["text"])
             assert set(obj) == {"title", "items"}
 
@@ -206,7 +221,9 @@ def test_thinking_cell_splits_reasoning_from_content(chain):
 
 def test_image_cells_are_accepted_and_report_image_tokens(chain):
     if chain["rows"][0]["engine"] != "yunshu":
-        pytest.xfail("tf-1.2.1: no image rows in its chain; see test_images_on_tf_1_2_1_are_valid")
+        pytest.xfail(
+            "tf-1.2.1: no image rows in its chain; see test_images_on_tf_1_2_1_are_valid"
+        )
     assert _rows_of(chain, "images")
     for row in _rows_of(chain, "images"):
         for r in _decode_rows(chain, row):
@@ -250,8 +267,12 @@ def test_other_engines_run_the_family_chain(engine, tmp_path):
 def test_images_on_tf_1_2_1_are_valid(tmp_path):
     srv, port, _ = stub.start("tf-1.2.1", "stub-model", tmp_path / "e.log")
     try:
-        s = types.SimpleNamespace(url=f"http://127.0.0.1:{port}", model="stub-model", log=tmp_path / "e.log")
-        body = tb.family_apply(tb.req("stub-model", "hello", 8), "code", 0, "off", "img1")
+        s = types.SimpleNamespace(
+            url=f"http://127.0.0.1:{port}", model="stub-model", log=tmp_path / "e.log"
+        )
+        body = tb.family_apply(
+            tb.req("stub-model", "hello", 8), "code", 0, "off", "img1"
+        )
         r = tb.send(s.url, body)  # raises HTTP 400 from the text-only stub
         assert not tb.family_problems("code", r, "off", "img1")
     finally:
@@ -264,10 +285,18 @@ def family_server(tmp_path):
     servers = []
 
     def make(faults):
-        srv, port, _ = stub.start("yunshu-main", "stub-model", tmp_path / f"n{len(servers)}.log", faults=faults)
+        srv, port, _ = stub.start(
+            "yunshu-main",
+            "stub-model",
+            tmp_path / f"n{len(servers)}.log",
+            faults=faults,
+        )
         servers.append(srv)
         return types.SimpleNamespace(
-            url=f"http://127.0.0.1:{port}", model="stub-model", log=tmp_path / "n.log", engine="yunshu-main"
+            url=f"http://127.0.0.1:{port}",
+            model="stub-model",
+            log=tmp_path / "n.log",
+            engine="yunshu-main",
         )
 
     yield make
@@ -279,9 +308,26 @@ def _part_decode_rows(s, tmp_path, kind, *, thinking="off", media="none", ctx=10
     tmp_path.mkdir(parents=True, exist_ok=True)
     out = tmp_path / f"{kind}-{thinking}-{media}.jsonl"
     argv = [
-        "--engine", "yunshu-main", "--part", "decode", "--rep", "0", "--out", str(out),
-        "--only-ctx", str(ctx), "--only-kind", kind, "--decode-tokens", "64", "--phases", "cold",
-        "--thinking", thinking, "--media", media,
+        "--engine",
+        "yunshu-main",
+        "--part",
+        "decode",
+        "--rep",
+        "0",
+        "--out",
+        str(out),
+        "--only-ctx",
+        str(ctx),
+        "--only-kind",
+        kind,
+        "--decode-tokens",
+        "64",
+        "--phases",
+        "cold",
+        "--thinking",
+        thinking,
+        "--media",
+        media,
     ]
     a = tb.parse_args(argv)
     with out.open("w") as fh:
@@ -300,15 +346,25 @@ def test_invalid_tool_json_flags_the_row(family_server, tmp_path, no_gpu_content
     assert "arguments are not JSON" in rows[0]["invalid_reason"]
 
 
-def test_nonconformant_json_output_flags_the_row(family_server, tmp_path, no_gpu_contention):
-    cut = _part_decode_rows(family_server({"bad_json"}), tmp_path / "cut", "json-schema")
+def test_nonconformant_json_output_flags_the_row(
+    family_server, tmp_path, no_gpu_contention
+):
+    cut = _part_decode_rows(
+        family_server({"bad_json"}), tmp_path / "cut", "json-schema"
+    )
     assert cut[0]["valid"] is False and "not JSON" in cut[0]["invalid_reason"]
-    wrong = _part_decode_rows(family_server({"bad_schema"}), tmp_path / "type", "json-schema")
+    wrong = _part_decode_rows(
+        family_server({"bad_schema"}), tmp_path / "type", "json-schema"
+    )
     assert wrong[0]["valid"] is False and "schema" in wrong[0]["invalid_reason"]
 
 
-def test_missing_reasoning_split_flags_the_row(family_server, tmp_path, no_gpu_contention):
-    rows = _part_decode_rows(family_server({"no_reasoning"}), tmp_path, "code", thinking="on")
+def test_missing_reasoning_split_flags_the_row(
+    family_server, tmp_path, no_gpu_contention
+):
+    rows = _part_decode_rows(
+        family_server({"no_reasoning"}), tmp_path, "code", thinking="on"
+    )
     assert rows[0]["valid"] is False
     assert "no reasoning split" in rows[0]["invalid_reason"]
 
@@ -329,13 +385,25 @@ def test_a_flagged_row_fails_the_audit(chain, tmp_path):
             rec["invalid_reason"] = "mutated: arguments are not JSON"
         lines[i] = json.dumps(rec)
     path.write_text("\n".join(lines) + "\n")
-    manifest = fr.audit_manifest(chain["rows"], [fm.SMOKE_BATCH], chain["pin"], chain["plan"].engine_order)
+    manifest = fr.audit_manifest(
+        chain["rows"], [fm.SMOKE_BATCH], chain["pin"], chain["plan"].engine_order
+    )
     manifest["stub_engine"] = True
     mpath = tmp_path / "audit-manifest.json"
     mpath.write_text(json.dumps(manifest, indent=2) + "\n")
     res = subprocess.run(
-        [fr.HARNESS_PY, str(SCRIPTS / "fullcmp_audit.py"), "--root", str(root), "--manifest", str(mpath)],
-        capture_output=True, text=True, timeout=600, cwd=str(ROOT),
+        [
+            fr.HARNESS_PY,
+            str(SCRIPTS / "fullcmp_audit.py"),
+            "--root",
+            str(root),
+            "--manifest",
+            str(mpath),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        cwd=str(ROOT),
     )
     assert res.returncode != 0
     assert "family reply invalid" in res.stdout
