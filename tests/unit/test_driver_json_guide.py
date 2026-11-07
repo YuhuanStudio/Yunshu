@@ -106,7 +106,9 @@ def test_driver_guide_routes_response_format_rows_to_the_driver():
         return SimpleNamespace(**base)
 
     assert runner._driver_guide(job())
-    assert not runner._driver_guide(job(logprobs=True))
+    assert runner._driver_guide(
+        job(logprobs=True)
+    )  # reporting rides with the guide now
     assert not runner._driver_guide(job(processors=[object()]))
     assert not runner._driver_guide(job(guide=None))
     runner.driver = SimpleNamespace(dflash=None, can_draft=False)

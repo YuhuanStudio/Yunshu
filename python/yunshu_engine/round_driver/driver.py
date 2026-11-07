@@ -144,13 +144,18 @@ def windowable(processors) -> bool:
     return penalties <= 1
 
 
-def generic_processors(processors, guided: bool = False) -> bool:
+def generic_processors(
+    processors, guided: bool = False, logprobs: bool = False
+) -> bool:
     """Processors the row applies one window row at a time (``window_processed``): windowable,
     and not served by the device fast paths (static bans; one penalty over static bans,
-    unguided)."""
-    if not processors or not windowable(processors) or static_mask_only(processors):
+    unguided, unreported). A reporting row always takes this path: the serial step applies the
+    processors in the logits dtype and only then promotes to fp32 for the report."""
+    if not processors or not windowable(processors):
         return False
-    return guided or draft_penalty(processors) is None
+    if guided or logprobs:
+        return True
+    return not static_mask_only(processors) and draft_penalty(processors) is None
 
 
 def _row_path(tokens, parents, j) -> list:
@@ -191,6 +196,26 @@ def window_processed(
                 row = p(mx.array(history, dtype=mx.int32), row)
         rows.append(row)
     return rows[0] if n == 1 else mx.concatenate(rows, axis=0)
+
+
+class _PerRow(list):
+    """Reported logprobs of an n-row window: entry j is row j's ``[logprob, *top]``."""
+
+
+def _report(req, lp: mx.array, tok: mx.array):
+    """The logprob report of a draw over the rows of ``lp`` [n, V]: ``[lp, (ids, values)]`` of the
+    one row of a plain step, a ``_PerRow`` of them for a window (an MTP chain)."""
+    if not req.logprobs:
+        return None
+    n = int(lp.shape[0])
+
+    def one(j: int) -> list:
+        extra = [lp[j, tok[j]]]
+        if req.top_logprobs > 0:
+            extra += list(top_logprobs_device(lp[j : j + 1], req.top_logprobs))
+        return extra
+
+    return one(0) if n == 1 else _PerRow(one(j) for j in range(n))
 
 
 def window_penalty(penalty, logits: mx.array, window: mx.array) -> mx.array:
@@ -437,7 +462,7 @@ class RoundDriver:
             else None,
         )
         if (draft or keyed is not None) and generic_processors(
-            req.processors, req.guide is not None
+            req.processors, req.guide is not None, bool(req.logprobs)
         ):
             row.generic = True
             row.penalty = next(
@@ -482,14 +507,9 @@ class RoundDriver:
         """A row with these processors may draft: none, static token bans (every verify row gets the
         same ban, DFlash and MTP rows alike), or bans plus one frequency / presence penalty without
         logprobs or a guide (``draft_penalty``, as the speculative lane's ``tree_penalty``)."""
-        if not processors or static_mask_only(processors):
-            return True
-        if logprobs:
-            return False
-        if guide is None and draft_penalty(processors) is not None:
-            return True
-        # pure masks, repetition penalty, one frequency / presence penalty, in any order,
-        # with or without a guide: applied one window row at a time (``window_processed``)
+        # pure masks, repetition penalty, one frequency / presence penalty, in any order, with
+        # or without a guide or logprobs: applied one window row at a time
+        # (``window_processed``; fast device paths for static bans and one penalty)
         return windowable(processors)
 
     def will_draft(self, *, sampling, processors, logprobs, draft: bool) -> bool:
@@ -822,37 +842,22 @@ class RoundDriver:
         for it, off, n in outs:
             row = it.row
             req = row.req
-            if row.generic:
-                if it.kind == "d":
-                    toks = it.tokens
-                    toks = (
-                        [row.pending]
-                        if toks is None
-                        else [int(t) for t in toks.reshape(-1).tolist()]
-                    )
-                    masked = window_processed(
-                        req.processors,
-                        lg[off : off + n],
-                        row.context,
-                        row.generated,
-                        toks,
-                        None,
-                    )
-                else:
-                    masked = window_processed(
-                        req.processors,
-                        lg[off : off + n],
-                        row.context,
-                        row.generated,
-                    )
-                lg = mx.concatenate([lg[:off], masked, lg[off + n :]], axis=0)
-                greedy = mx.argmax(
-                    lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
+            host = None  # the window's tokens (root first) on the host, when a row needs them
+            if it.kind == "d" and (row.generic or req.guide is not None):
+                host = (
+                    [row.pending]
+                    if it.tokens is None
+                    else [int(t) for t in it.tokens.reshape(-1).tolist()]
                 )
             if req.guide is not None:
                 from ..tool_call_grammar import apply_bitmask
 
-                mask = req.guide.mask()
+                # a window's position j is masked by the guide state after its path: ``plan``
+                mask = (
+                    req.guide.plan(host[1:], n)
+                    if host is not None and n > 1
+                    else req.guide.mask()
+                )
                 if mask is not None:
                     # This row's slice only; other packed distributions stay intact.
                     masked = apply_bitmask(lg[off : off + n], mask)
@@ -860,6 +865,22 @@ class RoundDriver:
                     greedy = mx.argmax(
                         lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
                     )
+            if row.generic:
+                # the request's processors on every window row, in list order, after the guide's
+                # mask (a mask is -inf: the order only matters to top-n-sigma, and the plain row
+                # and the window take the same one)
+                masked = window_processed(
+                    req.processors,
+                    lg[off : off + n],
+                    row.context,
+                    row.generated,
+                    host,
+                    None,
+                )
+                lg = mx.concatenate([lg[:off], masked, lg[off + n :]], axis=0)
+                greedy = mx.argmax(
+                    lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
+                )
             if req.processors and not row.generic and static_mask_only(req.processors):
                 # static bans: every window row gets the mask a plain row applies (``pure_at``), so a
                 # drafting row verifies against the same distributions
@@ -909,26 +930,20 @@ class RoundDriver:
                 tok = row.keyed.sample_positions(
                     lp, list(range(row.generated, row.generated + n))
                 )
-                extra = None
-                if req.logprobs:
-                    extra = [lp[0, tok[0]]]
-                    if req.top_logprobs > 0:
-                        extra += list(top_logprobs_device(lp, req.top_logprobs))
-                draws.append((it, tok, extra))
+                draws.append((it, tok, _report(req, lp, tok)))
                 continue
-            x = self._processed(row, lg[off : off + 1], first=it.kind == "p")
+            if row.generic or not req.processors:
+                # already processed above (or nothing to apply): every row of the window
+                x = lg[off : off + n]
+            else:
+                x = self._processed(row, lg[off : off + 1], first=it.kind == "p")
             if req.logprobs or (row.base is not None and self.dflash is None):
                 # DFlash matches the shared batch: retain bf16 normalization
                 # unless reporting logprobs explicitly requests float32.
                 x = x.astype(mx.float32)
             lp = x - mx.logsumexp(x, axis=-1, keepdims=True)
             tok = self._sample(row, lp)
-            extra = None
-            if req.logprobs:
-                extra = [lp[0, tok[0]]]
-                if req.top_logprobs > 0:
-                    extra += list(top_logprobs_device(lp, req.top_logprobs))
-            draws.append((it, tok, extra))
+            draws.append((it, tok, _report(req, lp, tok)))
         return draws
 
     # ── one step ─────────────────────────────────────────────────────────
@@ -1310,7 +1325,8 @@ class RoundDriver:
                 parts.append(r.draft_dev)
             wins.append(
                 mx.concatenate(parts[-2:])
-                if use and (r.penalty is not None or r.generic)
+                if use
+                and (r.penalty is not None or r.generic or r.req.guide is not None)
                 else None
             )
             lens.append(1 + use)
@@ -1444,20 +1460,24 @@ class RoundDriver:
     def _emit(self, row: _Row, committed: list[int], extra, out: list) -> int:
         """Emit ``committed`` in order until a stop, the length limit or the
         thinking budget cuts it; returns how many tokens were kept."""
-        lp = None
-        if extra is not None:
+
+        def report(token: int, one) -> dict | None:
+            if one is None:
+                return None
             lp = {
-                "token_id": committed[0],
-                "logprob": float(extra[0].item()),
+                "token_id": token,
+                "logprob": float(one[0].item()),
                 "top_logprobs": [],
             }
-            if len(extra) > 1:
+            if len(one) > 1:
                 lp["top_logprobs"] = [
                     {"token_id": int(t), "logprob": float(v)}
-                    for t, v in zip(
-                        extra[1][0].tolist(), extra[2][0].tolist(), strict=True
-                    )
+                    for t, v in zip(one[1][0].tolist(), one[2][0].tolist(), strict=True)
                 ]
+            return lp
+
+        per_row = isinstance(extra, _PerRow)
+        lp = report(committed[0], extra[0] if per_row else extra)
         row.drafts, row.draft_dev, row.nd = [], None, 0
         before = row.pending
         used = 0
@@ -1475,7 +1495,11 @@ class RoundDriver:
             elif row.generated >= row.req.max_tokens:
                 finish = "length"
             out.append(Event(row.req.handle, t, lp, finish))
-            lp = None
+            lp = (
+                report(committed[used], extra[used])
+                if per_row and used < len(committed) and used < len(extra)
+                else None
+            )
             if finish is not None:
                 row.finished = True
                 break

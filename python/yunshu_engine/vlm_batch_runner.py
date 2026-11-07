@@ -280,31 +280,30 @@ def driver_allow_draft(
     *,
     dflash_driver: bool,
     xtc: bool = False,
+    sampled: bool = False,
 ) -> bool:
     """Whether a request's row may draft on the round driver (the driver's own ``add`` checks
     the rest: a sampled row needs the keyed sampler, ``xtc`` has none).
 
-    Drafts: no processors, or processors the driver applies one window row at a time
-    (``driver.windowable``: token masks incl. min_tokens / top-n-sigma, logit bias, repetition
-    penalty, one frequency / presence penalty), without logprobs; DFlash additionally logprobs
-    alone (reporting only) and any invariant guide with windowable processors. Plain rows:
-    logprobs with a processor or a guide, a non-invariant guide, XTC sampling (no keyed draw),
-    guides and logprobs on MTP. ``allow_draft`` False (the caller) always wins."""
+    Drafts: processors the driver applies one window row at a time (``driver.windowable``: token
+    masks incl. min_tokens / top-n-sigma, logit bias, repetition penalty, one frequency /
+    presence penalty), logprobs with or without them, and any invariant guide (tool-call or
+    response-format, alone or combined) with either, on DFlash and on MTP head rows alike.
+    Plain rows: XTC sampling (no keyed draw), a sampled row with logprobs on MTP (the keyed
+    report is a DFlash path), a non-invariant guide, any other processor. ``allow_draft`` False
+    (the caller) always wins."""
     from .constrained_spec import driver_guide
     from .round_driver.driver import windowable
 
-    processors = list(processors or [])
+    # reporting adds an Fp32 processor; the driver does the fp32 readout itself
+    rest = [p for p in (processors or []) if not isinstance(p, Fp32LogitsProcessor)]
     if not allow_draft or xtc:
         return False
-    if guide is None and not logprobs:
-        return not processors or windowable(processors)
-    if not dflash_driver:
+    if sampled and logprobs and not dflash_driver:
         return False
-    if not all(isinstance(p, Fp32LogitsProcessor) for p in processors):
-        # reporting alone adds an Fp32 processor; anything else must be a static one
-        rest = [p for p in processors if not isinstance(p, Fp32LogitsProcessor)]
-        return bool(guide is not None) and driver_guide(guide, logprobs, rest)
-    return guide is None or driver_guide(guide, logprobs, [])
+    if guide is not None:
+        return driver_guide(guide, logprobs, rest)
+    return windowable(rest)
 
 
 def guided_stock_lane(
@@ -918,6 +917,7 @@ class VLMBatchRunner:
             dflash_driver=self.driver is not None
             and getattr(self.driver, "dflash", None) is not None,
             xtc=bool(xtc_probability),
+            sampled=not greedy,
         )
         stats.used_draft = use_draft
         stats.t_submit = time.perf_counter()
@@ -1183,13 +1183,12 @@ class VLMBatchRunner:
     def _driver_guide(self, job: _Job) -> bool:
         """The DFlash driver advances an invariant tool-call guide itself (free text drafts,
         the call's rows are masked); any other guide runs as a ToolCallProcessor row."""
-        if getattr(self.driver, "dflash", None) is None or not self.driver.can_draft:
+        if self.driver is None or not self.driver.can_draft:
             return False
         from .constrained_spec import driver_guide
 
-        return job.guide is not None and driver_guide(
-            job.guide, job.logprobs, job.processors
-        )
+        rest = [p for p in job.processors if not isinstance(p, Fp32LogitsProcessor)]
+        return job.guide is not None and driver_guide(job.guide, job.logprobs, rest)
 
     def _driver_takes(self, job: _Job, alone: bool = False) -> bool:
         """The round driver is the path for every text request of a dense Qwen3.5-family
@@ -1685,11 +1684,11 @@ class VLMBatchRunner:
                 ids=job.ids,
                 max_tokens=job.max_tokens,
                 sampling=job.sampling,
+                # the driver reads logprobs out in fp32 itself (``Request.logprobs``)
                 processors=[
                     p
                     for p in (job.processors or [])
-                    if getattr(driver, "dflash", None) is None
-                    or not isinstance(p, Fp32LogitsProcessor)
+                    if not isinstance(p, Fp32LogitsProcessor)
                 ],
                 logprobs=job.logprobs,
                 top_logprobs=job.top_logprobs,

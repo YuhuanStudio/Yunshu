@@ -98,11 +98,14 @@ def drafts_on_driver(k) -> bool:
         k._g,
         dflash_driver=dflash,
         xtc=k.sampling == "xtc",
+        sampled=k.sampling != "greedy",
     ):
         return False
     request_procs = [
-        p for p in processors if not (dflash and isinstance(p, vbr.Fp32LogitsProcessor))
+        p for p in processors if not isinstance(p, vbr.Fp32LogitsProcessor)
     ]
+    # the keyed report (sampled + logprobs) is a DFlash path: add() builds no keyed sampler
+    # otherwise and the row stays plain
     return bool(
         RoundDriver._processors_draft(None, request_procs, k.logprobs, k._g)
         and (k.sampling == "greedy" or not k.logprobs or dflash)
@@ -125,39 +128,11 @@ PLAIN = [
         "only the grammar guides have exact per-row masks",
     ),
     (
-        "mtp: logprobs, guides",
-        lambda k: k.mode == "mtp" and (k.logprobs or k.guide != "none"),
-        "blocker",
-        "the driver's MTP head rows have no guided / reporting verify; main's MTP lane has",
-    ),
-    (
-        "dflash: logprobs with static processors",
-        lambda k: (
-            k.mode == "dflash"
-            and k.logprobs
-            and k.guide == "none"
-            and k.procs != "none"
-        ),
-        "blocker",
-        "reporting rows keep fp32 readout and only draft alone (main: chain under exact_verify)",
-    ),
-    (
-        "guide with logprobs",
-        lambda k: k.guide != "none" and k.logprobs,
-        "blocker",
-        "main drafts it on the exact chain (exact_verify); the driver has no reporting guide row",
-    ),
-    (
-        "guide with logprobs and a processor",
-        lambda k: k.logprobs and k.guide != "none" and k.procs != "none",
-        "blocker",
-        "windowed penalty + fp32 reporting: main chain-verifies it",
-    ),
-    (
         "sampled row with logprobs on mtp",
         lambda k: k.mode == "mtp" and k.sampling != "greedy" and k.logprobs,
         "blocker",
-        "needs the native keyed report (Qwen4 only on main)",
+        "the position-keyed report of a sampled row is the DFlash path (qwen4_sampled / "
+        "keyed_sampling.tree_target_rows); an MTP head row has none",
     ),
 ]
 
@@ -235,6 +210,7 @@ def test_every_processor_class_is_a_known_kind():
         ("top_n_sigma", "json+tools"),
         ("presence_penalty", "json_schema"),
         ("penalty+ban", "tool_call"),
+        ("repetition_penalty", "tool_call"),
     ],
 )
 def test_these_kinds_draft_on_dflash(procs, guide):
@@ -246,17 +222,6 @@ def test_these_kinds_draft_on_dflash(procs, guide):
             == (procs, guide, False, sampling, "dflash")
         )
         assert drafts_on_driver(k), k.name
-
-
-def test_logprobs_alone_drafts_on_dflash_only():
-    for mode, expected in (("dflash", True), ("mtp", False)):
-        k = next(
-            k
-            for k in _kinds()
-            if (k.procs, k.guide, k.logprobs, k.sampling, k.mode)
-            == ("none", "none", True, "greedy", mode)
-        )
-        assert drafts_on_driver(k) is expected
 
 
 def test_guided_request_with_a_cache_plan_keeps_the_stock_lane():
@@ -293,12 +258,53 @@ def test_xtc_row_is_not_reported_as_drafting():
     assert vbr.driver_allow_draft(True, [], False, None, dflash_driver=True, xtc=False)
 
 
-def test_mtp_drafts_windowable_processors_but_not_guides_or_logprobs():
+def test_mtp_drafts_windowable_processors():
     procs = _processors()
     for name in ("repetition_penalty", "min_tokens", "top_n_sigma", "logit_bias"):
         assert vbr.driver_allow_draft(
             True, procs[name], False, None, dflash_driver=False
         )
-        assert not vbr.driver_allow_draft(
+        assert vbr.driver_allow_draft(
             True, procs[name], False, _make(cs.ConstraintGuide), dflash_driver=False
         )
+
+
+@pytest.mark.parametrize("mode", ["dflash", "mtp"])
+@pytest.mark.parametrize(
+    "procs,guide",
+    [
+        ("none", "none"),
+        ("static_ban", "none"),
+        ("presence_penalty", "none"),
+        ("repetition_penalty", "none"),
+        ("min_tokens", "none"),
+        ("all_five", "none"),
+        ("none", "json_schema"),
+        ("none", "tool_call"),
+        ("logit_bias", "json_schema"),
+        ("top_n_sigma", "json+tools"),
+        ("penalty+ban", "json_schema"),
+    ],
+)
+def test_logprobs_and_guides_draft_on_both_modes_when_greedy(mode, procs, guide):
+    if procs == "all_five":
+        pytest.skip("covered by the processor sets")
+    for logprobs in (False, True):
+        k = next(
+            k
+            for k in _kinds()
+            if (k.procs, k.guide, k.logprobs, k.sampling, k.mode)
+            == (procs, guide, logprobs, "greedy", mode)
+        )
+        assert drafts_on_driver(k), k.name
+
+
+def test_sampled_logprobs_drafts_on_dflash_only():
+    for mode, expected in (("dflash", True), ("mtp", False)):
+        k = next(
+            k
+            for k in _kinds()
+            if (k.procs, k.guide, k.logprobs, k.sampling, k.mode)
+            == ("presence_penalty", "none", True, "sampled", mode)
+        )
+        assert drafts_on_driver(k) is expected

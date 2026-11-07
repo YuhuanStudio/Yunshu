@@ -371,11 +371,7 @@ class DFlashBatch:
                     draws.append((targets, None, extra))
                 else:
                     drawn = row_logits[None]
-                    if (
-                        r.req.guide is not None
-                        and masks_every_row(r.req.guide)
-                        and not r.generic
-                    ):
+                    if r.req.guide is not None and masks_every_row(r.req.guide):
                         from ..constrained_spec import plan_tree
                         from ..tool_call_grammar import apply_bitmask
 
@@ -395,19 +391,12 @@ class DFlashBatch:
                         parents = w.shape.parents_array().tolist()
                         drawn = window_processed(
                             r.req.processors,
-                            row_logits,
+                            drawn[0],
                             r.context,
                             r.generated,
                             toks,
                             parents,
                         )[None]
-                        if r.req.guide is not None and masks_every_row(r.req.guide):
-                            from ..constrained_spec import plan_tree
-                            from ..tool_call_grammar import apply_bitmask
-
-                            drawn = apply_bitmask(
-                                drawn[0], plan_tree(r.req.guide, toks, parents)
-                            )[None]
                         penalty = None
                     else:
                         for p in r.req.processors:

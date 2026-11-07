@@ -97,11 +97,7 @@ def driver_guide(guide, logprobs=False, processors=()) -> bool:
     the guide's mask, as the serial step does."""
     from .round_driver.driver import windowable
 
-    return (
-        _invariant_guide_kind(guide)
-        and not logprobs
-        and (not processors or windowable(processors))
-    )
+    return _invariant_guide_kind(guide) and (not processors or windowable(processors))
 
 
 def _invariant_guide_kind(guide) -> bool:

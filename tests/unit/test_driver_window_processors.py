@@ -153,3 +153,27 @@ def test_min_tokens_flips_inside_a_window():
     got = window_processed(make(), logits, PROMPT + gen, 3, tokens, None)
     banned = [bool(mx.isinf(got[j, EOS[0]]).item()) for j in range(5)]
     assert banned == [True, True, True, False, False]
+
+
+@pytest.mark.parametrize("name", sorted(SETS))
+def test_tree_report_rows_equal_the_serial_report(name):
+    """DFlash tree rows: processors in the logits dtype, then the fp32 report
+    (keyed_sampling.tree_target_rows with logprobs) == the plain row's report."""
+    from yunshu_engine import keyed_sampling
+
+    make = SETS[name]
+    mx.random.seed(9)
+    gen = [30, 31, 32]
+    tokens = [gen[-1], 40, 41, 42, 43, 44]
+    parents = [-1, 0, 0, 1, 1, 2]
+    logits = (mx.random.normal((len(tokens), V)) * 3).astype(mx.bfloat16)
+    drawn = _window(make, gen, tokens, parents, logits)[None]
+    target, probs = keyed_sampling.tree_target_rows(
+        drawn, None, len(gen), None, SimpleNamespace(logprobs=True), None, None
+    )
+    for j in range(len(tokens)):
+        path = _path(tokens, parents, j)
+        x = _serial(make, gen + path[1:], logits[j : j + 1]).astype(mx.float32)
+        lp = x - mx.logsumexp(x, axis=-1, keepdims=True)
+        assert mx.array_equal(probs[j : j + 1], lp), (name, j)
+        assert int(target[j].item()) == int(mx.argmax(lp, axis=-1)[0].item())
