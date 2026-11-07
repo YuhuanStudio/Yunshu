@@ -2455,11 +2455,17 @@ class VLMEngine:
         if not rd_forward.supports(lm):
             logger.info("Round driver: not a dense Qwen3.5-family model")
             return False
+        import mlx.nn as nn
+
         from .kernels.tensorfold.lane_qmm import ready
 
-        if not ready():
+        quantized = any(
+            isinstance(m, nn.QuantizedLinear) for _, m in lm.named_modules()
+        )
+        # the lane matmul reads quantized weights only: an unquantized checkpoint needs no self-test
+        if quantized and not ready():
             logger.warning(
-                "Round driver: lane arithmetic self-test failed; using the stock runner"
+                "Round driver: lane arithmetic self-test failed; serving on the generic layer"
             )
             return False
         return True
@@ -2545,22 +2551,6 @@ class VLMEngine:
                 lanes["converted"],
                 len(lanes["skipped"]),
             )
-            from . import tree_verify
-
-            if not tree_verify.lane_projections(lm):
-                # The packed layer's decode / verify needs row-invariant lane projections in the decoder
-                # (a checkpoint with unquantized or unreadable projections has none): a concurrent row
-                # crashed with "packed verify requires row-invariant lane projections". Such a model runs
-                # on the generic layer, its own stock forward.
-                logger.warning(
-                    "Round driver: %s has no lane projections (%d converted, %d skipped); "
-                    "serving it on the generic layer (stock arithmetic, no speculation)",
-                    self._config.get("model_type"),
-                    lanes["converted"],
-                    len(lanes["skipped"]),
-                )
-                use_driver, generic_layer, spec_family = False, True, False
-                driver_lanes = 0
         drafter = None
         draft_kind = "mtp"
         from . import spec_select

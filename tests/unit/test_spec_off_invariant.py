@@ -91,10 +91,28 @@ def test_flash_next_apc_uses_the_prefill_grid():
     assert apc_prefill_stride(False, False, False, 2048, generic=True) == 2048
 
 
-def test_qwen35_without_lane_projections_serves_on_the_generic_layer(monkeypatch):
-    """A Qwen3.5 checkpoint whose decoder has no row-invariant lane projections (unquantized weights) used
-    to take the packed layer and crash the first concurrent row; it takes the generic layer now."""
-    eng, calls = _build(monkeypatch, "qwen3_5", lanes=False)
-    assert calls == []  # no verify kernels, no invariant install: the stock arithmetic
-    assert eng._prefix_invariant_dispatch is False
-    assert eng._apc_prefill_stride == 2048  # the generic layer's grid
+def test_unquantized_qwen35_keeps_the_packed_layer_and_needs_no_lane_self_test(
+    monkeypatch,
+):
+    """An unquantized checkpoint is a packed-layer model: its projections are plain Linear, which the verifier
+    runs one token at a time (row-invariant at any window width), so no lane matmul and no self-test."""
+    from types import SimpleNamespace
+
+    import mlx.nn as nn
+
+    from yunshu_engine.kernels.tensorfold import lane_qmm
+    from yunshu_engine.round_driver import forward as rd_forward
+
+    monkeypatch.setattr(rd_forward, "supports", lambda lm: True)
+    monkeypatch.setattr(
+        lane_qmm, "ready", lambda: False
+    )  # a host without the lane matmul
+    dense = SimpleNamespace(named_modules=lambda: [("a", nn.Linear(4, 4))])
+    quantized = SimpleNamespace(
+        named_modules=lambda: [("a", nn.QuantizedLinear(64, 64, bits=4))]
+    )
+    eng = object.__new__(VLMEngine)
+    assert eng._round_driver_wanted(dense) is True
+    assert (
+        eng._round_driver_wanted(quantized) is False
+    )  # quantized needs the lane matmul

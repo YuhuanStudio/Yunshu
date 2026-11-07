@@ -1184,16 +1184,23 @@ def supported(language_model: Any) -> bool:
 
 
 def lane_projections(lm: Any) -> bool:
-    """The decoder's projections are ``LaneLinear`` (row-invariant at any row count).
+    """The decoder's projections are row-invariant at any row count: ``LaneLinear``, or plain
+    floating-point ``nn.Linear`` (an unquantized checkpoint), which the verifier runs one token at a
+    time (``batch_invariant.exact_rows``: the decode GEMV for every row of a window, so a row's bits
+    do not depend on the window width).
 
     One projection ``lane_linear.convert`` could not read (FP16 scales, an unsupported
     width) stays a QuantizedLinear, whose sg8 arithmetic matches decode only up to 8 rows.
     """
+    import mlx.nn as nn
+
     from .kernels.lane_linear import LaneLinear
 
+    if getattr(lm, "_yunshu_lane_skipped", 0):
+        return False
     layer = lm.model.layers[0]
     proj = layer.linear_attn.in_proj_qkv if layer.is_linear else layer.self_attn.q_proj
-    return isinstance(proj, LaneLinear) and not getattr(lm, "_yunshu_lane_skipped", 0)
+    return isinstance(proj, LaneLinear) or type(proj) is nn.Linear
 
 
 def lane_ready(lm: Any, cache: list) -> bool:

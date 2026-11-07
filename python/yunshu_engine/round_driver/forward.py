@@ -354,8 +354,16 @@ def logits(language_model: Any, hidden: mx.array) -> mx.array:
     if head is not None:
         return head(hidden)
     if language_model.args.tie_word_embeddings:
-        return language_model.model.embed_tokens.as_linear(hidden)
-    return language_model.lm_head(hidden)
+        dense = language_model.model.embed_tokens.as_linear
+    else:
+        dense = language_model.lm_head
+    if int(hidden.shape[0]) == 1:
+        return dense(hidden)
+    # No lane head (an unquantized checkpoint): a GEMM over R rows is not row-invariant (its tiling
+    # follows R), so each row takes the single-row GEMV a plain decode step makes.
+    return mx.concatenate(
+        [dense(hidden[i : i + 1]) for i in range(int(hidden.shape[0]))]
+    )
 
 
 __all__ = ["Segment", "forward", "lane_forward", "logits", "supports"]
