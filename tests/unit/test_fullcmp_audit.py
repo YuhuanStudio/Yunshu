@@ -1848,3 +1848,27 @@ def test_mlx_lm_server_thinking_cell_is_an_engine_limitation_label():
     # the thinking-off cell of the same engine stays unverified (costed), not refused
     off = dict(sp, thinking="off")
     assert fm.cell_status("mlx-lm-server", off)[0] == fm.UNV
+
+
+def test_prompt_token_count_delta_is_informational_not_a_violation(tmp_path):
+    manifest, files = make_data()
+    for r in _rows(files, "p0-r0", "mlx-serve-26.11.1")[0][1:]:
+        if r.get("pt") is not None:
+            r["pt"] = r["pt"] + 2  # the engine's chat template adds two tokens; same request sha
+    _, results = _run(tmp_path, manifest, files)
+    res = next(r for r in results if r.name == "prompt_identity")
+    assert not res.violations, res.violations
+    assert any("template delta" in n for n in res.notes)
+
+
+def test_comparable_group_separates_max_tokens_and_sampling():
+    def cell(eng, tail):
+        return {"engine": eng, "cell": f"B2.{tail[0]}.{eng}.1K.c1.code.{tail[1]}"}
+
+    base = cell("yunshu", ("out", "o128.single.th-off.none.greedy"))
+    same = cell("tf-1.1.8", ("out", "o128.single.th-off.none.greedy"))
+    longer = cell("tf-1.1.8", ("out", "o2048.single.th-off.none.greedy"))
+    gen = cell("tf-1.1.8", ("sampling", "o128.single.th-off.none.genconfig"))
+    assert fa.comparable_group(base) == fa.comparable_group(same)
+    assert fa.comparable_group(base) != fa.comparable_group(longer)
+    assert fa.comparable_group(base) != fa.comparable_group(gen)

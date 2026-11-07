@@ -562,6 +562,7 @@ def check_prompt_identity(run: Run) -> GuardResult:
     for group, items in groups.items():
         res.checked += 1
         seen = set()
+        pts = defaultdict(set)  # engine -> engine-reported prompt token counts (informational)
         image_ids = defaultdict(set)  # piece name -> distinct values across the group's image rows
         for cell, eng, r in items:
             sha, pt = r.get("prompt_ids_sha"), r.get("pt")
@@ -580,18 +581,36 @@ def check_prompt_identity(run: Run) -> GuardResult:
                 if not isinstance(r.get("image_parts"), int) or r.get("image_parts") < 1:
                     res.fail(cell, f"[{eng}] image cell without a recorded image part count")
                 continue
-            seen.add((pt, sha))
+            # the request is what must match: engines render the chat template themselves, so
+            # their prompt token count (pt) legitimately differs by a few special tokens
+            seen.add(sha)
+            pts[eng].add(pt)
         if len(seen) > 1:
             for cell in sorted(cells_of[group]):
                 res.fail(
                     cell,
-                    f"group {group}: engines disagree on prompt (pt, sha) {sorted(map(str, seen))}",
+                    f"group {group}: engines were sent different requests (prompt sha) "
+                    f"{sorted(map(str, seen))}",
                 )
+        counts = {e: sorted(v) for e, v in pts.items()}
+        if len({tuple(v) for v in counts.values()}) > 1:
+            base = min((v[0] for v in counts.values() if v), default=0)
+            res.notes.append(
+                f"template delta {group}: "
+                + ", ".join(f"{e} {v}({v[0] - base:+d})" for e, v in sorted(counts.items()))
+            )
         bad = {k: sorted(map(str, v)) for k, v in image_ids.items() if len(v) > 1}
         if bad:
             for cell in sorted(cells_of[group]):
                 res.fail(cell, f"group {group}: engines disagree on the image prompt: {bad}")
     return res
+
+
+def comparable_group(cell: dict) -> str:
+    """The cells that must share provenance: the same cell id with the engine removed, so
+    max_tokens (o128/o512/o2048), the sampling variant (greedy / genconfig), the family
+    (out / sampling / restart ...) and the mode (single / mixed / idle5) stay apart."""
+    return cell["cell"].replace(f".{cell['engine']}.", ".", 1)
 
 
 def check_provenance_identity(run: Run) -> GuardResult:
@@ -624,7 +643,7 @@ def check_provenance_identity(run: Run) -> GuardResult:
                 res.fail(cf.cell["cell"], "ctx/kind differs from the planned cell")
         if len(prov_set) > 1:
             res.fail(cf.cell["cell"], "provenance differs between rows of one cell")
-        per_group[cf.cell["group"]][(cf.cell["engine"], cf.cell["cell"])] = (
+        per_group[comparable_group(cf.cell)][(cf.cell["engine"], cf.cell["cell"])] = (
             prov_set.pop() if prov_set else None
         )
     for group, by_key in per_group.items():
@@ -699,7 +718,18 @@ def check_pinned_versions(run: Run) -> GuardResult:
             or h.get("binary_sha256") != pin.get("binary_sha256")
         ):
             # stub_engine (test only): the launched process is the stub, not the engine binary
-            res.fail(cell, "binary sha256 missing or not the pinned binary")
+            got = str(h.get("binary_sha256"))
+            if re.fullmatch(r"[0-9a-f]{64}", got):
+                # a real digest of another file: the engine's binary changed under the same
+                # version label (an engine that updates itself), so the cell is not comparable
+                res.fail(
+                    cell,
+                    f"binary sha256 {got[:12]} is not the pinned binary "
+                    f"{str(pin.get('binary_sha256'))[:12]} (the launched file changed since "
+                    "the pin; compute it with shasum -a 256 from the file the run used)",
+                )
+            else:
+                res.fail(cell, "binary sha256 missing or not the pinned binary")
     return res
 
 
