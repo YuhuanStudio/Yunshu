@@ -25,6 +25,7 @@ def test_invariant_guide_only_for_a_tool_guide_alone(tool_guide):
     assert not invariant_guide(tool_guide, logprobs=True)
     assert not invariant_guide(tool_guide, processors=[object()])
     combined = object.__new__(CombinedGuide)
+    combined.guides = (tool_guide, object())
     assert not invariant_guide(combined)
 
 

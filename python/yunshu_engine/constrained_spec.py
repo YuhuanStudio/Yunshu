@@ -75,17 +75,39 @@ def finish_serial_prefill(gen):
 
 
 def invariant_guide(guide, logprobs=False, processors=()) -> bool:
-    """A tool-call guide alone: its rows keep the batch-invariant arithmetic.
+    """Tool-call and response-format guides (alone or combined) keep the batch-invariant
+    arithmetic.
 
-    Free text under a tool-call guide is unmasked, and inside a call the mask only
-    restricts the argmax of a row whose logits the invariant kernels already make equal
-    in verify and in one-row decode. So such a request decodes, verifies and prefills
-    exactly like an unguided one (same kernels, APC namespace, DFlash fast tree), with
-    the call's masked rows checked on the chain. Logprobs, penalties / bias processors
-    and response-format guides keep the serial path."""
+    A guide's mask only restricts the argmax of a row whose logits the invariant kernels
+    already make equal in verify and in one-row decode (greedy, no logprobs, no logits
+    processors). So such a request decodes, verifies and prefills exactly like an unguided
+    one (same kernels, same APC namespace) in speculative and in spec-off decoding alike,
+    with the masked rows checked on the chain. Free text under a tool-call guide is
+    unmasked and runs the DFlash fast tree (``tree_guide``); a response-format guide masks
+    every row and keeps the chain. Logprobs and penalties / bias processors keep the
+    serial path."""
+    return _invariant_guide_kind(guide) and not logprobs and not processors
+
+
+def _invariant_guide_kind(guide) -> bool:
+    from .reasoning_gate import ThinkGatedGuide
     from .tool_call_grammar import ToolCallGuide
 
-    return isinstance(guide, ToolCallGuide) and not logprobs and not processors
+    if isinstance(guide, (ToolCallGuide, ConstraintGuide)):
+        return True
+    if isinstance(guide, ThinkGatedGuide):
+        return _invariant_guide_kind(guide.inner)
+    if isinstance(guide, CombinedGuide):
+        return all(_invariant_guide_kind(g) for g in guide.guides)
+    return False
+
+
+def tree_guide(guide) -> bool:
+    """A guide whose free stretches the DFlash fast tree can run unmasked: a tool-call guide
+    alone. A response-format guide masks every row, so its request keeps the chain."""
+    from .tool_call_grammar import ToolCallGuide
+
+    return isinstance(guide, ToolCallGuide)
 
 
 def tree_penalty(request):

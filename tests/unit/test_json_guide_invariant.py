@@ -1,0 +1,110 @@
+"""Response-format guides (json_schema) keep the batch-invariant arithmetic when greedy without
+logprobs / processors, in speculative and spec-off decoding alike (constrained_spec.invariant_guide).
+
+Real-model identity (spec on == spec off, json validity, speed) is a GPU check; these pin routing."""
+
+from types import SimpleNamespace
+
+import pytest
+
+
+def _make(cls, **attrs):
+    obj = object.__new__(cls)
+    for k, v in attrs.items():
+        setattr(obj, k, v)
+    return obj
+
+
+@pytest.fixture
+def guides():
+    from yunshu_engine import tool_call_grammar as tcg
+    from yunshu_engine.constrained_spec import CombinedGuide, ConstraintGuide
+    from yunshu_engine.reasoning_gate import ThinkGatedGuide
+
+    text = _make(ConstraintGuide)
+    tool = _make(tcg.ToolCallGuide)
+    gated = _make(ThinkGatedGuide, inner=text)
+    return SimpleNamespace(
+        text=text,
+        tool=tool,
+        gated=gated,
+        combined=_make(CombinedGuide, guides=(text, tool)),
+        combined_gated=_make(CombinedGuide, guides=(gated, tool)),
+    )
+
+
+def test_response_format_guides_are_invariant(guides):
+    from yunshu_engine.constrained_spec import invariant_guide
+
+    for g in (guides.text, guides.gated, guides.combined, guides.combined_gated):
+        assert invariant_guide(g)
+        assert not invariant_guide(g, logprobs=True)
+        assert not invariant_guide(g, processors=[object()])
+
+
+def test_unknown_guide_member_is_serial(guides):
+    from yunshu_engine.constrained_spec import CombinedGuide, invariant_guide
+
+    assert not invariant_guide(_make(CombinedGuide, guides=(guides.text, object())))
+
+
+def test_spec_off_and_spec_on_choose_the_same_arithmetic(guides):
+    # _serial_rows drives the APC namespace, the invariant kernels and the dense lane for the
+    # spec-off batch AND the speculative lane; exact_verify uses the same predicate.
+    from yunshu_engine import constrained_spec as cs
+    from yunshu_engine.vlm_batch_runner import _serial_rows
+
+    for g in (guides.text, guides.combined):
+        assert not _serial_rows(SimpleNamespace(guide=g, logprobs=False))
+        assert _serial_rows(SimpleNamespace(guide=g, logprobs=True))
+        assert cs.invariant_request(
+            SimpleNamespace(guide=g, logprobs=False, processors=[])
+        )
+        assert not cs.invariant_request(
+            SimpleNamespace(guide=g, logprobs=True, processors=[])
+        )
+        assert not cs.invariant_request(
+            SimpleNamespace(guide=g, logprobs=False, processors=[object()])
+        )
+
+
+def test_exact_verify_keeps_invariant_kernels_for_json_guide(guides, monkeypatch):
+    from yunshu_engine import constrained_spec as cs
+    from yunshu_engine.kernels import batch_invariant
+
+    monkeypatch.setattr(batch_invariant, "is_installed", lambda: True)
+    request = SimpleNamespace(logprobs=False, processors=[], serial_verify_rounds=0)
+    with cs.exact_verify(request, guides.text):
+        assert cs._SERIAL_VERIFY is False
+    assert request.serial_verify_rounds == 0
+
+
+def test_only_tool_guide_may_use_the_fast_tree(guides):
+    from yunshu_engine.constrained_spec import tree_guide
+
+    assert tree_guide(guides.tool)
+    assert not tree_guide(guides.text)
+    assert not tree_guide(guides.combined)
+    assert not tree_guide(guides.gated)
+
+
+def test_takes_guided_refuses_response_format(guides, monkeypatch):
+    from mlx_vlm.speculative import utils
+
+    from yunshu_engine import constrained_spec as cs
+    from yunshu_engine import dflash_copy, settings
+
+    def fake(*a, **k):
+        return iter(())
+
+    fake._yunshu_copy = True
+    monkeypatch.setattr(utils, "_dflash_rounds", fake)
+    monkeypatch.setattr(settings, "get", lambda name, *a, **k: "auto")
+    monkeypatch.setattr(dflash_copy, "_copy_gate", lambda *a, **k: True)
+    from yunshu_engine import dflash_fast
+
+    monkeypatch.setattr(dflash_fast, "eligible", lambda *a, **k: True)
+    kw = {"first_bonus": 1}
+    for g, expected in ((guides.text, False), (guides.tool, True)):
+        monkeypatch.setattr(cs, "current_request", lambda g=g: SimpleNamespace(guide=g))
+        assert dflash_copy.takes_guided(None, None, [], kw) is expected
