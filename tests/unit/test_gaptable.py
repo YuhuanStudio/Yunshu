@@ -130,7 +130,7 @@ def test_concurrent_prompt_exact_size_and_salt(monkeypatch):
 
 
 def test_concurrent_records_all_eight_requests(monkeypatch, tmp_path):
-    monkeypatch.setattr(tb, "concurrent_prompt", lambda i, trial, ctx: str(i))
+    monkeypatch.setattr(tb, "concurrent_prompt", lambda i, trial, ctx, variant=0, run=0: str(i))
     monkeypatch.setattr(
         tb,
         "send",

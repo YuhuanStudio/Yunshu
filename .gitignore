@@ -82,3 +82,6 @@ scripts/research/local.env
 
 # Downloaded test vocabularies (tests/unit/cpu_models.py)
 /tests/fixtures/.cache/
+
+# trimmed server logs the fullcmp parser tests read (the *.log rule above is for run output)
+!tests/unit/fixtures/*.log

@@ -240,6 +240,25 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.fullcmp_quick)
 
 
+def _loaded_driver_modules():
+    """Every loaded copy of fullcmp_run.py under any name (a test may hold a copy that is not in
+    sys.modules any more). gc.get_objects() also yields dead weakref proxies, whose isinstance or
+    attribute access raises ReferenceError: those are skipped."""
+    import gc as _gc
+    import types as _types
+
+    found = []
+    for o in _gc.get_objects():
+        try:
+            if isinstance(o, _types.ModuleType) and str(
+                getattr(o, "__file__", "")
+            ).endswith("fullcmp_run.py"):
+                found.append(o)
+        except ReferenceError:
+            continue
+    return found
+
+
 @pytest.fixture(autouse=True)
 def _driver_harness_snapshot_stub(request, monkeypatch):
     """The fullcmp driver snapshots its harness at HEAD and runs the pre-submit subset before a
@@ -248,14 +267,7 @@ def _driver_harness_snapshot_stub(request, monkeypatch):
     exercises the real snapshot code and is not stubbed."""
     if request.node.fspath.basename == "test_fullcmp_snapshot.py":
         return
-    import gc as _gc
-    import types as _types
-
-    # every loaded copy of the driver, under any name (a test may hold a module that is not in
-    # sys.modules any more): module objects whose file is fullcmp_run.py
-    for mod in [o for o in _gc.get_objects() if isinstance(o, _types.ModuleType)]:
-        if not str(getattr(mod, "__file__", "")).endswith("fullcmp_run.py"):
-            continue
+    for mod in _loaded_driver_modules():
         if not hasattr(mod, "snapshot_harness") or not hasattr(
             mod, "pre_submit_checks"
         ):
@@ -279,16 +291,7 @@ def _fullcmp_driver_sandbox(request, monkeypatch, tmp_path):
     """A test that loads the fullcmp driver never reaches the real GPU queue or the real result roots
     (2026-11-04: a unit test submitted five real jobs). Every loaded driver copy gets tmp paths and a
     fake gpuq that only logs its argv; GPUQ_DIR points at tmp, so the driver's own refusal also holds."""
-    import gc as _gc
-    import types as _types
-
-    drivers = [
-        o
-        for o in _gc.get_objects()
-        if isinstance(o, _types.ModuleType)
-        and str(getattr(o, "__file__", "")).endswith("fullcmp_run.py")
-        and hasattr(o, "GPUQ")
-    ]
+    drivers = [o for o in _loaded_driver_modules() if hasattr(o, "GPUQ")]
     if not drivers:
         return
     sandbox = tmp_path / "sandbox"
@@ -319,11 +322,12 @@ _REAL_QUEUE = "/Volumes/P5Plus/yunshu-gpuq"
 
 
 @pytest.fixture(autouse=True)
-def _real_paths_sandbox(tmp_path, monkeypatch):
+def _real_paths_sandbox(tmp_path_factory, monkeypatch):
     """Every unit test: the GPU queue dir, telemetry dir, quiet dir and the Yunshu result output go to
     tmp, and a call to gpuq while GPUQ_DIR is the real queue is refused (a test must not submit real
     jobs or write real raw files). Tests that point GPUQ_DIR at their own tmp dir are unaffected."""
-    box = tmp_path / "real-paths-sandbox"
+    # its own tmp dir, not the test's tmp_path: tests that list or size their tmp_path must not see it
+    box = tmp_path_factory.mktemp("real-paths-sandbox")
     for d in ("gpuq", "telemetry", "quiet", "out", "home"):
         (box / d).mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("GPUQ_DIR", str(box / "gpuq"))
@@ -372,9 +376,7 @@ def _fullcmp_e2e_harness_stand_in(request):
     if not name.startswith("test_fullcmp_e2e"):
         yield
         return
-    import gc as _gc
     import subprocess as _sp
-    import types as _types
 
     root = str(
         _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
@@ -394,10 +396,8 @@ def _fullcmp_e2e_harness_stand_in(request):
         check=True,
     ).stdout.strip()
     mp = pytest.MonkeyPatch()
-    for mod in [o for o in _gc.get_objects() if isinstance(o, _types.ModuleType)]:
-        if str(getattr(mod, "__file__", "")).endswith("fullcmp_run.py") and hasattr(
-            mod, "HARNESS_COMMIT"
-        ):
+    for mod in _loaded_driver_modules():
+        if hasattr(mod, "HARNESS_COMMIT"):
             mp.setattr(mod, "HARNESS_COMMIT", head)
             mp.setattr(mod, "HARNESS_TREE", tree)
     yield

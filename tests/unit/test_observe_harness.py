@@ -28,6 +28,8 @@ conc_probe = _load("conc_probe_observe", "scripts/research/conc_probe.py")
 
 def _tfb_env(monkeypatch, tmp_path, extra=None, tfb_observe=None):
     monkeypatch.setattr(tfbench, "OUT", tmp_path)
+    # the target and the drafter configs live on the benchmark machine: same hidden size
+    monkeypatch.setattr(tfbench, "_hidden_size", lambda _p: 5120)
     monkeypatch.setattr(tfbench, "free_port", lambda: 18999)
     monkeypatch.setattr(tfbench, "owns_listener", lambda *a: True)
     monkeypatch.delenv("TFB_OBSERVE", raising=False)

@@ -217,7 +217,9 @@ def test_other_engine_launches(tmp_path):
     assert be.ENGINES["llamacpp"].weights == be.ENGINES["splash"].weights == "different"
 
 
-def test_all_ports_in_range_are_not_hardcoded():
+def test_all_ports_in_range_are_not_hardcoded(monkeypatch):
+    # launch construction only: the pinned binaries live on the benchmark machine's build volume
+    monkeypatch.setattr(be, "verify_pinned_binary", lambda *_a, **_k: None)
     for e in be.ENGINES:
         if be.is_new_engine(e):
             la = be.build_launch(e, 18997, "/h", {})

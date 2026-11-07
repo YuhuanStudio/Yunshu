@@ -62,6 +62,8 @@ def test_server_launch_checks_fresh_log_and_cleans_up(monkeypatch, tmp_path, act
     import io
 
     monkeypatch.setattr(tfbench, "OUT", tmp_path)
+    # the target and the drafter configs live on the benchmark machine: same hidden size
+    monkeypatch.setattr(tfbench, "_hidden_size", lambda _p: 5120)
     monkeypatch.setattr(tfbench, "free_port", lambda: 18999)
     monkeypatch.setattr(tfbench, "owns_listener", lambda *args: True)
     log = tmp_path / "out/server-repeat.log"

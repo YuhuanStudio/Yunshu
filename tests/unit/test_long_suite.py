@@ -51,7 +51,7 @@ def test_part_decode_rejects_short_reply(tfb, monkeypatch, tmp_path):
     monkeypatch.setattr(tfb, "load_prompt", lambda n: "p")
     sent = []
 
-    def send(url, body):
+    def send(url, body, **_kw):
         sent.append(body["max_tokens"])
         return {"finish": "length", "ct": 64 if len(sent) < 2 else 63, "_text": "t"}
 
@@ -100,7 +100,7 @@ def test_part_needle_scores_answers(tfb, monkeypatch, tmp_path):
     items = tfb.needle_items(1024)
     answers = iter([code for _, code in items[:7]] + ["no idea"] * 3)
 
-    def send(url, body):
+    def send(url, body, **_kw):
         return dict(
             _text=next(answers), ttft_s=1, pt=9, cached=0, finish="length", ct=6
         )

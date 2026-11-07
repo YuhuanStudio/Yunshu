@@ -406,6 +406,12 @@ def test_sampler_writes_power_rows_from_fake_macmon_child(tmp_path, monkeypatch)
     fake.chmod(0o755)
     monkeypatch.setitem(tm.pw.BINARIES, "macmon", str(fake))
     monkeypatch.setattr(tm, "probe_sudo_nopass", lambda: (False, "no sudo"))
+    # TOOLS.json lives on the benchmark machine's build volume: a stand-in with both power tools
+    monkeypatch.setattr(
+        tm,
+        "tool_records",
+        lambda: {n: {"version": "test", "sha256_match": True} for n in ("macmon", "mactop")},
+    )
     out = tmp_path / "t.jsonl"
     s = tm.Sampler(os.getpid(), None, str(out), probes=("proc", POWER))
     s.start()
