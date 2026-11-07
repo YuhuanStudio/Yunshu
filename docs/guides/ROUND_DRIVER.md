@@ -175,14 +175,18 @@ off) are GPU checks, not CPU-test claims.
 
 ## Generic layer (every other mlx-vlm family)
 
-A model that has no packed layer (Gemma, the Qwen-VL / Omni families, `qwen3_5_moe`, ...) is served by the same driver through
-`round_driver/generic.py`: the model's own upstream forward, one call per row on the row's own cache, nothing packed across rows.
-A row's arithmetic is the stock arithmetic whatever else runs, so a request decodes the same tokens alone and beside others.
+A model that has no packed layer (Gemma, the Qwen-VL / Omni families, ...) is served by the same driver through
+`round_driver/generic.py`, on the model's own upstream forward and the stock arithmetic: prefill runs per row on the row's own cache;
+decode rows are batched through the upstream batched forward (a lone row decodes on its own cache; a second row turns the caches into
+`BatchKVCache` / the family's batch classes with left padding, merged with upstream's `_extend_cache`, and every step is one call over
+all rows, as `GenerationBatch` does). A family's outputs are what the stock runner produced for it; there is no cross-row identity
+contract beyond that (batched stock kernels are not row-invariant).
 
 - prefill is the stock single-row recipe: chunks with `n_to_process`, then the last prompt token alone with `logits_to_keep=1`; the
   inputs are the runner's prompt features (`get_input_embeddings` of the prompt, or `prepare_media`'s), sequence-aligned kwargs cut
   with the span, so images, audio and video ride as they do upstream (mRoPE models keep their per-row state: `_rope_deltas`, `_position_ids`);
 - spans are the absolute 2048 grid plus the row's checkpoints and `apc_prefill_stride` is the grid (a hit runs the spans a cold prompt did);
+- a row's own cache is cut back out of the batch cache (`extract`) only when the last row of a burst leaves and its reply is to be stored;
 - no drafter and no verify kernels: every row decodes one token a round through its own processors, guide and sampler; APC, cancel,
   memory admission, telemetry and the next-turn store are the driver's and the runner's;
 - KV stays bf16 (`YUNSHU_KV_PRECISION` is the Qwen3.5 layer's option) and the prompt-tail replay is not kept;

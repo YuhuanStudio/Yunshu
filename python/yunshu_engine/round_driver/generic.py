@@ -1,11 +1,11 @@
 """Generic model layer of the round driver: any mlx-vlm language model, on the model's own forward.
 
 The Qwen3.5 layer (``forward.py`` / ``batch.py``) and the Flash-Next layer (``flashnext.py``) pack rows
-into their own kernels. This layer packs nothing: every row runs the model's upstream call on the row's
-own cache, one row per call, exactly as the stock mlx-vlm generator runs a single request
-(``PromptProcessingBatch`` chunks, then the last prompt token on its own with ``logits_to_keep=1``;
-decode one token a call). A row's arithmetic is therefore the stock arithmetic whatever else is
-running, so a request decodes the same tokens alone and beside others by construction.
+into their own kernels. This layer has none: prefill runs the model's upstream call per row on the row's
+own cache, exactly as the stock mlx-vlm generator prefills a single request (``PromptProcessingBatch``
+chunks, then the last prompt token on its own with ``logits_to_keep=1``); decode rows are batched through
+the upstream batched forward (``BatchKVCache`` / left padding), the same call and arithmetic as the stock
+``GenerationBatch``. A family's outputs are what the stock runner produced for it (no identity change).
 
 What the layer returns to the driver are logits, not hidden states: the driver's ``_draw`` reads them
 through ``RoundDriver._logits``, which is the identity here. A prompt span yields ``[1, V]`` only when
@@ -171,10 +171,18 @@ def cache_arrays(cache: list) -> list:
 
 
 class GenericBatch:
-    """The decoding rows of a generic target: one upstream call per row and step, each on its own cache.
+    """The decoding rows of a generic target, batched as the stock generator batches them.
 
-    Same interface as ``DecodeBatch`` / ``FlashNextBatch`` (``join`` / ``leave`` / ``arrays`` /
-    ``forward`` / ``commit``). The window of every row is its one pending token (no drafts)."""
+    Prefill is per row (own cache, ``prefill`` above). Once a row's first token is out it joins here: a
+    lone row keeps decoding on its own cache (upstream's single-row path); a second row turns the caches
+    into batch caches (``BatchKVCache`` and the family's own batch classes, left padded, merged with
+    upstream's ``_extend_cache``) and every step is ONE upstream forward over all rows, the call and
+    arithmetic ``GenerationBatch._step`` makes. Same interface as ``DecodeBatch`` / ``FlashNextBatch``
+    (``join`` / ``leave`` / ``arrays`` / ``forward`` / ``commit``). The window of a row is its one
+    pending token (no drafts).
+
+    While a row sits in a batch cache its ``row.cache`` is None (the batch owns the K/V); ``restore``
+    cuts the row's own cache back out (``extract``) when its reply cache is to be stored."""
 
     def __init__(self, language_model: Any, kv_format: str = "bf16"):
         if kv_format != "bf16":
@@ -184,38 +192,61 @@ class GenericBatch:
         self.lm = language_model
         self.kv_format = kv_format
         self.rows: list = []
+        self.cache: list | None = (
+            None  # the decoding rows' cache (batch dimension = row order)
+        )
 
     def join(self, rows: list) -> None:
+        from mlx_vlm.generate import ar
+
         for row in rows:
-            row.slot = id(row)  # the caches stay on the row
+            merged = self.cache is not None
+            self.cache = ar._extend_cache(self.cache, row.cache)
+            row.slot = id(row)
             self.rows.append(row)
+            if merged:
+                # the batch cache owns every row's K/V now (a lone row's own cache was copied in)
+                for r in self.rows:
+                    r.cache = None
 
     def leave(self, gone: list) -> None:
         ids = {id(r) for r in gone}
         for r in gone:
             r.slot = None
-        self.rows = [r for r in self.rows if id(r) not in ids]
+        keep = [i for i, r in enumerate(self.rows) if id(r) not in ids]
+        if not keep:
+            self.cache = None
+        elif len(keep) < len(self.rows):
+            keep_arr = mx.array(keep, mx.int32)
+            for c in self.cache:
+                c.filter(keep_arr)
+        self.rows = [self.rows[i] for i in keep]
+
+    def restore(self, row: Any) -> None:
+        """Give ``row`` its own cache back (cut out of the batch cache) before it leaves."""
+        if row.cache is not None or self.cache is None:
+            return
+        row.cache = [c.extract(self.rows.index(row)) for c in self.cache]
 
     def arrays(self) -> list:
-        out: list = []
-        for r in self.rows:
-            out += cache_arrays(r.cache)
-        return out
+        return [] if self.cache is None else cache_arrays(self.cache)
 
     def forward(self, lens: list[int], tokens: mx.array) -> mx.array:
-        """Every row's pending token through the model; returns logits ``[N, V]`` in row order."""
+        """Every row's pending token through the model in one call; logits ``[N, V]`` in row order."""
         if len(lens) != len(self.rows) or any(int(n) != 1 for n in lens):
             raise ValueError("generic round driver decodes one token per row and step")
-        parts = []
-        for i, row in enumerate(self.rows):
-            kwargs = {}
-            if row.state.rope_deltas is not None:
-                kwargs["rope_deltas"] = row.state.rope_deltas
-            out = _call(
-                self.lm, row, tokens[i : i + 1][None], cache=row.cache, **kwargs
+        deltas = [r.state.rope_deltas for r in self.rows]
+        kwargs = {}
+        if any(d is not None for d in deltas):
+            if any(d is None for d in deltas):
+                raise RuntimeError(
+                    "generic round driver: rows with and without mRoPE offsets cannot share a batch"
+                )
+            kwargs["rope_deltas"] = (
+                deltas[0] if len(deltas) == 1 else mx.concatenate(deltas, axis=0)
             )
-            parts.append(_logits_of(out)[:, -1, :])
-        return parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=0)
+        out = self.lm(tokens[:, None], cache=self.cache, **kwargs)
+        return _logits_of(out)[:, -1, :]
 
     def commit(self, used: list[int]) -> None:
         for r, u in zip(self.rows, used, strict=True):

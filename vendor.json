@@ -1826,7 +1826,7 @@
       "commit": "92b31ad308b651a7c1e22d0c58bcdc35c3807750",
       "license": "MIT",
       "local_changes": [
-        "Generic round-driver model layer: PromptProcessingBatch's single-row prefill recipe (chunks with n_to_process, the last prompt token alone with logits_to_keep=1, sequence-aligned prompt kwargs cut with the span, rope deltas captured with the upstream helper) and GenerationBatch's one-token decode call, run per row on the row's own cache with the language model's mRoPE state swapped per row. The upstream slicing helpers and APC_PRIVATE_PROMPT_KEYS are imported, not copied."
+        "Generic round-driver model layer: PromptProcessingBatch's single-row prefill recipe (chunks with n_to_process, the last prompt token alone with logits_to_keep=1, sequence-aligned prompt kwargs cut with the span, rope deltas captured with the upstream helper) and GenerationBatch's batched decode (upstream's _extend_cache / filter / extract on the batch caches); prefill runs per row with the language model's mRoPE state swapped per row. The upstream slicing helpers and APC_PRIVATE_PROMPT_KEYS are imported, not copied."
       ]
     }
   ],

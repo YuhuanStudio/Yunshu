@@ -1,10 +1,11 @@
-"""Round driver, generic layer: the model's own forward per row.
+"""Round driver, generic layer: the model's own forward, prefill per row, decode rows batched.
 
 A tiny random attention LM on the CPU device stands in for a family without a packed layer. It
 speaks the upstream mlx-vlm language-model call (``inputs_embeds``, ``n_to_process``,
 ``logits_to_keep``, ``rope_deltas``) and keeps mRoPE-style state on itself. The tests pin what the
-layer promises: the stock single-row call recipe, one row's tokens equal alone and beside others
-(joining mid-flight too), per-row model state, every request kind a plain row serves (sampling,
+layer promises: the stock single-row prefill recipe, decode rows sharing ONE upstream batched call
+(batch caches, left padding) whose tokens equal the solo ones here (float32, no near ties; on the GPU
+the batched arithmetic is the stock one, not row-invariant), per-row model state, every request kind a plain row serves (sampling,
 logprobs, processors, stop, length, cancel), and the routing of every family to the driver.
 """
 
@@ -32,6 +33,11 @@ def cpu_and_clear_log():
     mx.set_default_device(previous)
 
 
+def _first(x):
+    """An int, or the first element of an array."""
+    return int(mx.array(x).reshape(-1)[0])
+
+
 class _Out:
     def __init__(self, logits):
         self.logits = logits
@@ -52,11 +58,16 @@ class _Block(nn.Module):
         q, k, v = (
             t.reshape(B, T, HEADS, self.hd).transpose(0, 2, 1, 3) for t in (q, k, v)
         )
-        offset = cache.offset
+        offset = cache.offset  # an int, or [B] row positions of a batch cache
         q, k = self.rope(q, offset=offset), self.rope(k, offset=offset)
         k, v = cache.update_and_fetch(k, v)
         mask = None
-        if T > 1:
+        if hasattr(
+            cache, "left_padding"
+        ):  # batch cache, one token a row: hide the left padding
+            ok = mx.arange(k.shape[2])[None, :] >= cache.left_padding[:, None]
+            mask = mx.where(ok, 0.0, -1e9)[:, None, None, :]
+        elif T > 1:
             rows = mx.arange(T)[:, None] + offset
             cols = mx.arange(offset + T)[None, :]
             mask = mx.where(cols <= rows, 0.0, -1e9)
@@ -102,9 +113,10 @@ class TinyLM(nn.Module):
                 T=T,
                 n=n_to_process,
                 keep=logits_to_keep,
-                offset=int(cache[0].offset),
-                rope=None if rope_deltas is None else int(rope_deltas.reshape(-1)[0]),
-                state=int(self._rope_deltas.reshape(-1)[0])
+                B=inputs.shape[0],
+                offset=_first(cache[0].offset),
+                rope=None if rope_deltas is None else rope_deltas.reshape(-1).tolist(),
+                state=_first(self._rope_deltas)
                 if self.stateful and self._rope_deltas is not None
                 else None,
                 extra=sorted(kwargs),
@@ -116,10 +128,10 @@ class TinyLM(nn.Module):
             # model's own state, set by the first call of a row; the maths depends on them
             if rope_deltas is not None:
                 self._rope_deltas = rope_deltas
-            elif cache[0].offset == 0:
+            elif _first(cache[0].offset) == 0:
                 self._rope_deltas = mx.array([[T + 100 * int(inputs[0, 0])]])
             if self._rope_deltas is not None:
-                shift = float(self._rope_deltas.reshape(-1)[0]) * 1e-3
+                shift = self._rope_deltas.reshape(-1, 1, 1).astype(mx.float32) * 1e-3
         x = self.embed(inputs) if inputs_embeds is None else inputs_embeds
         x = x + shift
         for block, c in zip(self.blocks, cache, strict=True):
@@ -302,12 +314,12 @@ def test_each_row_decodes_with_its_own_rope_deltas_not_the_models_last():
     a, b = prompt(5, 1), prompt(9, 2)
     run(make(lm), [request(lm, a, 6, handle="a"), request(lm, b, 6, handle="b")])
     decode = [c for c in LOG if c["T"] == 1 and c["keep"] is None]
-    seen = {c["rope"] for c in decode}
-    assert (
-        None not in seen
-    )  # decode passes the captured offsets, as the stock generator does
-    # the model recorded T + 100 * first token on each row's first call: one value per row
-    assert seen == {4 + 100 * a[0], 8 + 100 * b[0]}
+    assert all(
+        c["rope"] is not None for c in decode
+    )  # the captured offsets, as the stock generator
+    # the model recorded T + 100 * first token on each row's first call: one value per row, in batch order
+    both = [c for c in decode if c["B"] == 2]
+    assert both and both[0]["rope"] == [4 + 100 * a[0], 8 + 100 * b[0]]
 
 
 def test_rope_state_does_not_leak_between_interleaved_prefills():
@@ -478,3 +490,69 @@ def test_the_generic_apc_grid_is_the_prefill_step():
 
     assert apc_prefill_stride(False, False, False, 2048, generic=True) == 2048
     assert apc_prefill_stride(False, False, False, 2048) == 0
+
+
+# ── batched decode ───────────────────────────────────────────────────────────────────────────
+def test_decode_rows_share_one_batched_call_and_a_lone_row_keeps_its_own_cache():
+    lm = TinyLM()
+    run(
+        make(lm),
+        [request(lm, PROMPTS[0], 6, handle=0), request(lm, PROMPTS[1], 6, handle=1)],
+    )
+    decode = [c for c in LOG if c["T"] == 1 and c["keep"] is None]
+    assert decode and all(
+        c["B"] == 2 for c in decode
+    )  # one call per step for both rows
+    LOG.clear()
+    run(make(lm), [request(lm, PROMPTS[0], 6, handle=0)])
+    assert all(c["B"] == 1 for c in LOG)
+
+
+def test_the_batch_shrinks_when_a_row_leaves_and_the_other_keeps_its_tokens():
+    lm = TinyLM()
+    short = solo(lm, PROMPTS[0], 12)
+    out = run(
+        make(lm),
+        [
+            request(lm, PROMPTS[0], 12, handle="a"),
+            request(lm, PROMPTS[1], 3, handle="b"),
+        ],
+    )
+    assert tokens(out, "a") == short
+    sizes = [c["B"] for c in LOG if c["T"] == 1 and c["keep"] is None]
+    assert sizes[0] == 2 and sizes[-1] == 1
+
+
+def _prefilled(lm, ids):
+    from types import SimpleNamespace
+
+    row = SimpleNamespace(
+        req=SimpleNamespace(ids=ids),
+        features=generic.PromptFeatures(prompt_kwargs(lm, ids), len(ids)),
+        state=generic.RowState(),
+        cache=generic.new_cache(lm),
+        slot=None,
+        n=len(ids),
+    )
+    generic.prefill(lm, row, 0, len(ids))
+    mx.eval(*generic.cache_arrays(row.cache))
+    return row
+
+
+def test_a_batch_cache_gives_a_rows_own_cache_back_and_leave_filters_the_others():
+    lm = TinyLM()
+    a, b = _prefilled(lm, prompt(7, 1)), _prefilled(lm, prompt(12, 2))
+    want = _prefilled(lm, prompt(12, 2))
+    batch = generic.GenericBatch(lm)
+    batch.join([a, b])
+    assert a.cache is None and b.cache is None  # the batch cache owns the K/V
+    assert batch.cache[0].keys.shape[0] == 2
+    batch.restore(b)
+    assert b.cache[0].offset == 12
+    assert mx.allclose(
+        b.cache[0].keys[..., :12, :], want.cache[0].keys[..., :12, :]
+    ).item()
+    batch.leave([a])
+    assert batch.rows == [b] and batch.cache[0].keys.shape[0] == 1
+    batch.leave([b])
+    assert batch.cache is None and batch.rows == []

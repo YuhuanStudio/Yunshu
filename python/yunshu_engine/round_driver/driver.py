@@ -878,6 +878,17 @@ class RoundDriver:
 
     def _release(self, gone: list[_Row]) -> None:
         """Drop rows' slots in the decode batch and the head's."""
+        if (
+            self.generic
+            and len(gone) == 1
+            and not self.rows
+            and gone[0].slot is not None
+            and gone[0].finished
+            and gone[0].apc is not None
+            and self.finish_hook is not None
+        ):
+            # the last row leaves a batch cache: cut its own cache out so the reply can be stored
+            self.batch.restore(gone[0])
         if len(gone) == 1 and not self.rows and gone[0].cache:
             # The last row leaves with its own K/V buffers (the DFlash batch decodes in the row's
             # caches): pool them for the next request's cache hit, as the runner's _finish does
