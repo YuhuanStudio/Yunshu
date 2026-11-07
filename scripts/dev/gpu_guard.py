@@ -35,6 +35,8 @@ ALLOWED = re.compile(
     r"\bgpuq\b|\bpytest\b|\bpy_compile\b|\bruff\b|\bmypy\b|\bm3run\b|--help\b"
     # CPU-only report tools under scripts/research (they read finished results; no MLX import)
     r"|\bgapboard\.py\b|\bgaptable\.py\s+summary\b"
+    # the full-comparison driver: it only submits/waits gpuq jobs (every engine runs inside one)
+    r"|\bfullcmp_run\.py\b"
 )
 
 

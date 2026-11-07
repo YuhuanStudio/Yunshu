@@ -1610,6 +1610,7 @@ class YunshuAPCManager(APCManager):
         prefill_assistant_header: tuple[int, int] | None = None,
         prefill_message_end: int | None = None,
         prefill_turn_boundary: bool = False,
+        persist_on_store: bool = False,
         **kwargs: Any,
     ):
         overrides = dict(kwargs.pop("overrides", None) or {})
@@ -1669,6 +1670,11 @@ class YunshuAPCManager(APCManager):
         # cache browser reads it. Never consulted by a lookup, so it cannot change a hit.
         self._entry_hits: collections.OrderedDict[int, list] = collections.OrderedDict()
         self.disk_superseded = 0
+        # write-behind: a stored checkpoint is queued to the SSD writer thread right away (see
+        # ``_persist_behind``), so a kill or power loss costs at most the requests in flight
+        self.persist_on_store = bool(persist_on_store)
+        self._unpersisted: dict[int, None] = {}
+        self.persist_queued = 0
         if warm_mode != "off" and warm_bytes > 0:
             from .apc_warm import WarmTier
 
@@ -1740,6 +1746,40 @@ class YunshuAPCManager(APCManager):
             disk.write_now(key, entry.token_ids, entry.extra_hash, entry.prompt_cache)
         except Exception as e:
             logger.warning("APC: SSD spill failed (%s)", e)
+
+    def _persist_behind(self, key) -> None:
+        """Queue a just-stored checkpoint (and any earlier one the queue had no room for) to the
+        SSD writer thread. Never blocks the request: the write is the writer thread's (atomic
+        temp file + rename, the budget's cap and free-space reserve apply), and a full queue
+        only postpones the entry to the next store. A checkpoint a newer one superseded is gone
+        from RAM and is not written. Entries already on disk are deduplicated by the store,
+        so ``close()`` never writes them twice."""
+        disk = self.disk
+        if not isinstance(disk, SpillDiskStore):
+            return
+        self._unpersisted[key] = None
+        try:
+            room = int(disk.queue_max_bytes) - int(disk.pending_bytes)
+            for k in reversed(list(self._unpersisted)):  # newest first
+                with self.lock:
+                    entry = self._exact_cache.get(k)
+                if entry is None:  # superseded or evicted (eviction spilled it)
+                    self._unpersisted.pop(k, None)
+                    continue
+                from mlx_vlm.apc import _cache_nbytes
+
+                size = int(_cache_nbytes(entry.prompt_cache))
+                if size > room:
+                    continue  # no queue room: retried at the next store, or at close()
+                room -= size
+                self._unpersisted.pop(k, None)
+                if disk.write_now(
+                    k, entry.token_ids, entry.extra_hash, entry.prompt_cache
+                ):
+                    self.persist_queued += 1
+            self._save_span_plans()
+        except Exception as e:
+            logger.warning("APC: write-behind failed (%s)", e)
 
     def _demote(self, key, entry) -> None:
         """A HOT entry was evicted: it moves to WARM (compact form in RAM) when there is one and
@@ -1926,6 +1966,7 @@ class YunshuAPCManager(APCManager):
 
     def _save_span_plans(self) -> None:
         path = self.disk.dir / self._SPAN_PLANS_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         data = {str(k): list(v) for k, v in self._span_plans.items()}
         tmp.write_text(json.dumps(data))
@@ -2185,6 +2226,8 @@ class YunshuAPCManager(APCManager):
             )
         finally:
             _OWNED_SNAPSHOT.reset(token)
+        if ok and self.persist_on_store:
+            self._persist_behind(key)
         if not ok and not had:
             with self._plock:
                 self._born.pop(key, None)

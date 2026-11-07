@@ -2890,6 +2890,7 @@ class VLMEngine:
                     prefill_boundary_tokens=tuple(boundary_tokens),
                     prefill_assistant_header=assistant_header,
                     prefill_message_end=message_end,
+                    persist_on_store=settings.get("YUNSHU_VLM_APC_PERSIST") == "store",
                     prefill_turn_boundary=(
                         settings.get("YUNSHU_NEXT_TURN_PREFILL")
                         in ("boundary", "exact")

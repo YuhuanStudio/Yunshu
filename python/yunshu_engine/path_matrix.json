@@ -2142,6 +2142,7 @@
     "YUNSHU_VLM_APC_DISK": "apc_prefix_cache",
     "YUNSHU_VLM_APC_DISK_DIR": "apc_prefix_cache",
     "YUNSHU_VLM_APC_DISK_GB": "apc_prefix_cache",
+    "YUNSHU_VLM_APC_PERSIST": "apc_prefix_cache",
     "YUNSHU_VLM_APC_DISK_TIERS": "apc_prefix_cache",
     "YUNSHU_VLM_APC_DISK_ENCODING": "apc_prefix_cache",
     "YUNSHU_VLM_APC_WARM": "apc_prefix_cache",
