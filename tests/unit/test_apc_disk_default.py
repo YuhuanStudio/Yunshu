@@ -39,8 +39,25 @@ def test_namespace_follows_the_weights(tmp_path):
     assert eng._apc_disk_namespace() != first
 
 
+def _free_gib(monkeypatch, gib):
+    """The doctor's free-space probe, independent of the host disk that holds tmp."""
+    import collections
+
+    usage = collections.namedtuple("usage", "total used free")
+    monkeypatch.setattr(
+        doctor.shutil, "disk_usage", lambda _p: usage(1 << 50, 0, int(gib * 1024**3))
+    )
+
+
+def test_doctor_warns_when_free_space_is_low(monkeypatch, tmp_path):
+    monkeypatch.setenv("YUNSHU_VLM_APC_DISK_DIR", str(tmp_path / "apc"))
+    _free_gib(monkeypatch, 0.5)
+    assert doctor.check_prefix_disk().status == "warn"
+
+
 def test_doctor_reports_the_tier(monkeypatch, tmp_path):
     monkeypatch.setenv("YUNSHU_VLM_APC_DISK_DIR", str(tmp_path / "apc"))
+    _free_gib(monkeypatch, 500)
     c = doctor.check_prefix_disk()
     assert c.status == "ok" and str(tmp_path / "apc") in c.detail
     monkeypatch.setenv("YUNSHU_VLM_APC_DISK", "0")
