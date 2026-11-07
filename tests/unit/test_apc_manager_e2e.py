@@ -12,8 +12,9 @@ import pytest
 
 mx = pytest.importorskip("mlx.core")
 
+from tests.unit.driver_runner import driver_runner  # noqa: E402
 from yunshu_engine.apc_manager import YunshuAPCManager  # noqa: E402
-from yunshu_engine.vlm_batch_runner import RunStats, VLMBatchRunner  # noqa: E402
+from yunshu_engine.vlm_batch_runner import RunStats  # noqa: E402
 
 IM_START, USER = 900, 901
 
@@ -118,7 +119,7 @@ def test_growth_head_reuse_supersede_and_lossless_output(model):
         overrides={"memory_max_gb": 1, "checkpoint_interval_tokens": 128},
         head_marker=(IM_START, USER),
     )
-    runner = VLMBatchRunner(
+    runner = driver_runner(
         model, processor=_processor(), apc_manager=mgr, apc_semantic_hash=0
     )
     outs, stats = [], []
@@ -134,7 +135,7 @@ def test_growth_head_reuse_supersede_and_lossless_output(model):
     assert sorted(mgr.snapshot()["entry_tokens"]) == [301, 384, 452, 512, 592]
     assert mgr.snapshot()["head_checkpoints"] == 1
 
-    cold = VLMBatchRunner(model, processor=_processor())
+    cold = driver_runner(model, processor=_processor())
     for ids, got in zip((s1, s1b, s2), outs, strict=True):
         assert _run(cold, ids)[0] == got
 
@@ -160,7 +161,7 @@ def test_ssd_reload_gives_the_same_tokens_as_ram_and_cold(model, tmp_path):
         )
 
     def runner_for(mgr):
-        return VLMBatchRunner(
+        return driver_runner(
             model, processor=_processor(), apc_manager=mgr, apc_semantic_hash=0
         )
 
@@ -179,5 +180,5 @@ def test_ssd_reload_gives_the_same_tokens_as_ram_and_cold(model, tmp_path):
     out_ram, st_ram = _run(runner_ram, a2)
     assert st_ram.cache_tier == "ram"
 
-    out_cold, _ = _run(VLMBatchRunner(model, processor=_processor()), a2)
+    out_cold, _ = _run(driver_runner(model, processor=_processor()), a2)
     assert out_ssd == out_ram == out_cold

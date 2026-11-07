@@ -583,17 +583,9 @@ def test_auto_encoding_compresses_only_where_it_pays(tmp_path):
 
 
 def _driver_runner(model, proc, mgr, salt):
-    """The real runner on the generic driver layer over a tiny real Qwen3.5 (the path every family takes)."""
-    from yunshu_engine.round_driver.driver import RoundDriver
-    from yunshu_engine.vlm_batch_runner import VLMBatchRunner
+    from tests.unit.driver_runner import driver_runner
 
-    runner = VLMBatchRunner(
-        model, processor=proc, apc_manager=mgr, apc_semantic_hash=salt
-    )
-    runner.driver = RoundDriver(
-        model, generic_layer=True, apc=mgr, chunk=2048, stop_tokens=set()
-    )
-    return runner
+    return driver_runner(model, proc, mgr, salt)
 
 
 # ── manager level: provenance + token identity ───────────────────────────

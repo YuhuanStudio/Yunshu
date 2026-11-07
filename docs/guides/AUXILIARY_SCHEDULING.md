@@ -110,7 +110,7 @@ must pass all 18 primary and all 3 title comparisons before a lossless default i
 
 ## Historical uncached-work ordering: CPU simulation (setting removed)
 
-> `YUNSHU_UNCACHED_SCHEDULING` and the stock runner's work ordering were removed with the stock runner: every request is a round-driver row, which orders its own prefill (shortest remainder first). The simulation below is kept as history.
+> The uncached-work setting and the stock runner's work ordering were removed with the stock runner: every request is a round-driver row, which orders its own prefill (shortest remainder first). The simulation below is kept as history.
 
 `scripts/research/agentic/i8_admission_sim.py` replays three captured opencode
 sessions (prompt sizes from the request bodies, 4.15 chars/token, 236 ms +
@@ -136,7 +136,7 @@ A/B would be required before any default change.
 
 Captured opencode fix-cart-discount session (six agent turns plus the title),
 seed 42, arm 0 = stock, arm 1 = `YUNSHU_AUXILIARY_SCHEDULING=1` and
-`YUNSHU_UNCACHED_SCHEDULING=1` (then). Main-turn TTFT (s), turns 1-6:
+the uncached-work ordering setting (then). Main-turn TTFT (s), turns 1-6:
 
 | arm | turn 1 | 2 | 3 | 4 | 5 | 6 | title |
 |---|---|---|---|---|---|---|---|
@@ -320,7 +320,7 @@ The policy now defaults on only when the loaded backend actually engages qualifi
 batch-invariant kernels (`prefix_invariant`), including the tuned 27B Qwen3.5 family.
 Unqualified backends, including the bf16 0.8B probe, retain FIFO and ordinary APC
 admission by default. Explicit `YUNSHU_AUXILIARY_SCHEDULING=1` opts it in and 0 disables it
-(`YUNSHU_UNCACHED_SCHEDULING` no longer exists).
+(the uncached-work ordering setting no longer exists).
 These are stable overrides; neither was still experimental in the inherited registry,
 so no settled experimental entry remains to remove. FIFO remains required for
 unqualified backends and explicit opt-out.

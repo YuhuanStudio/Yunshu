@@ -238,7 +238,7 @@ def test_memory_holders_inventory_reads_known_retainers(tmp_path, monkeypatch):
     )
     got = m.holders(runner)
     assert got["apc_resident"] == 3.0
-    assert {"restore_pool", "replay_main", "dflash_windows"} <= set(got)
+    assert {"restore_pool", "dflash_windows"} <= set(got)
     # a broken retainer is skipped, not fatal
     runner.apc_manager = types.SimpleNamespace()
     assert "apc_resident" not in m.holders(runner)

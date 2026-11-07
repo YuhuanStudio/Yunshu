@@ -539,7 +539,6 @@ MEM_OUT = os.environ.get("PB2_MEM_OUT")
 GIB = float(1 << 30)
 
 
-
 def _dtype_gib(arrays) -> dict:
     """GiB per dtype over distinct arrays (decode KV: int8 codes + fp16 scales vs bf16)."""
     seen, out = set(), {}
@@ -575,9 +574,8 @@ def holders(runner) -> dict:
     from yunshu_engine.kernels import buffer_cache
 
     put("restore_pool", buffer_cache.restore_buffer_bytes)
-    from yunshu_engine import dflash_apc_window, prompt_end_replay
+    from yunshu_engine import dflash_apc_window
 
-    put("replay_main", prompt_end_replay.resident_bytes)
     put("dflash_windows", dflash_apc_window.resident_bytes)
     try:
         from yunshu_engine.round_driver import replay as driver_replay

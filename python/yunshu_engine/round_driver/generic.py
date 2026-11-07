@@ -1,3 +1,4 @@
+# Upstream (inspired): Blaizzy/mlx-vlm (MIT) mlx_vlm/generate/ar.py @ 92b31ad308b651a7c1e22d0c58bcdc35c3807750
 """Generic model layer of the round driver: any mlx-vlm language model, on the model's own forward.
 
 The Qwen3.5 layer (``forward.py`` / ``batch.py``) and the Flash-Next layer (``flashnext.py``) pack rows

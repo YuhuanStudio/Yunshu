@@ -9,9 +9,9 @@ import pytest
 
 mx = pytest.importorskip("mlx.core")
 
+from tests.unit.driver_runner import driver_runner  # noqa: E402
 from tests.unit.test_apc_manager_e2e import (  # noqa: E402
     RunStats,
-    VLMBatchRunner,
     YunshuAPCManager,
     _processor,
     _run,
@@ -39,7 +39,7 @@ def _spilled(model, tmp_path, validator):  # noqa: F811
             max_entries=1,
             overrides={"memory_max_gb": 1, "checkpoint_interval_tokens": 0},
         )
-        return VLMBatchRunner(
+        return driver_runner(
             model, processor=_processor(), apc_manager=mgr, apc_semantic_hash=0
         )
 
@@ -51,7 +51,7 @@ def _spilled(model, tmp_path, validator):  # noqa: F811
 
 
 def _cold(model, ids):  # noqa: F811
-    return _run(VLMBatchRunner(model, processor=_processor()), ids)[0]
+    return _run(driver_runner(model, processor=_processor()), ids)[0]
 
 
 def test_validator_accepts_real_states_and_reload_stays_lossless(model, tmp_path):  # noqa: F811
