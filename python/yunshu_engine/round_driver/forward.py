@@ -70,7 +70,7 @@ class Segment:
 
 
 def supports(language_model: Any) -> bool:
-    """Dense Qwen3.5-family text decoder (hybrid GDN + full attention)."""
+    """Qwen3.5-family text decoder (hybrid GDN + full attention), dense or sparse MoE (qwen3_5_moe)."""
     try:
         from mlx_vlm.models.qwen3_5 import language as q35
     except ImportError:  # pragma: no cover
@@ -78,11 +78,17 @@ def supports(language_model: Any) -> bool:
     inner = getattr(language_model, "model", None)
     if not isinstance(inner, q35.Qwen3_5Model):
         return False
-    for layer in inner.layers:
-        mlp = getattr(layer, "mlp", None)
-        if not all(hasattr(mlp, n) for n in ("gate_proj", "up_proj", "down_proj")):
-            return False  # MoE layers: not yet
-    return True
+    return all(_known_mlp(getattr(layer, "mlp", None)) for layer in inner.layers)
+
+
+def _known_mlp(mlp: Any) -> bool:
+    """A dense SwiGLU MLP, or the Qwen3.5-MoE sparse block (router, routed experts, shared expert)."""
+    if all(hasattr(mlp, n) for n in ("gate_proj", "up_proj", "down_proj")):
+        return True
+    return all(
+        hasattr(mlp, n)
+        for n in ("gate", "switch_mlp", "shared_expert", "shared_expert_gate", "top_k")
+    )
 
 
 def _attention_mix(attn, q, k, v, seg: Segment, cache) -> mx.array:
@@ -209,6 +215,11 @@ def _project(
 def _mlp(mlp, x: mx.array, spans: list[tuple[int, int]], lane: list[bool]) -> mx.array:
     from mlx_vlm.models.qwen3_5.language import swiglu
 
+    if hasattr(mlp, "switch_mlp"):
+        # Sparse MoE block: router, routed experts and shared expert run per segment, so a segment's
+        # rows get what they would as the only segment of a step (an expert matmul groups the tokens it
+        # is given: packing segments would make a row depend on its neighbours).
+        return _cat([mlp(x[:, s:e]) for s, e in spans])
     h = swiglu(
         _project(mlp.gate_proj, x, spans, lane), _project(mlp.up_proj, x, spans, lane)
     )

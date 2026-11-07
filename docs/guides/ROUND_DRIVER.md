@@ -142,7 +142,6 @@ time between steps; it has not been isolated.
 
 ## Not yet
 
-- Image / audio prompts (mRoPE), int8 KV, MoE: those requests stay on the upstream path.
 - Phase B performance/identity qualification on 27B, including 32K concurrency.
 
 ## Flash-Next (Qwen4) rows
@@ -165,6 +164,15 @@ cancel and events; the model side differs:
 - sampled requests with logprobs draft on MTP head rows too: every window row's log-softmax is reduced on its own (`row_logprobs`), so a window reports the bits of the plain steps;
 - not on the driver yet: int8 KV (stays bf16), deeper MTP chains.
 
+## Qwen3.5-MoE (`qwen3_5_moe`) rows
+
+The sparse variant of the Qwen3.5 layer set takes the same packed layer, MTP and DFlash drafting included. Attention, GDN, the
+lane projections and the drafters are the dense model's; the feed-forward is the upstream verifier's `_feed_forward`, which for a
+sparse block runs the router, the routed experts (one `gather_qmm` call per token and expert, so a token's rows do not depend on
+the other tokens of the call) and the shared expert. Prefill spans use the model's own block call. The packed `forward._mlp`
+(research / tests) runs a sparse block once per segment. Arithmetic gates on a real MoE checkpoint (solo == concurrent, spec on ==
+off) are GPU checks, not CPU-test claims.
+
 ## Generic layer (every other mlx-vlm family)
 
 A model that has no packed layer (Gemma, the Qwen-VL / Omni families, `qwen3_5_moe`, ...) is served by the same driver through
@@ -178,7 +186,7 @@ A row's arithmetic is the stock arithmetic whatever else runs, so a request deco
 - no drafter and no verify kernels: every row decodes one token a round through its own processors, guide and sampler; APC, cancel,
   memory admission, telemetry and the next-turn store are the driver's and the runner's;
 - KV stays bf16 (`YUNSHU_KV_PRECISION` is the Qwen3.5 layer's option) and the prompt-tail replay is not kept;
-- `qwen3_5_moe` loses the stock lane's MTP / DFlash drafting until its packed layer exists (the server logs it at start).
+- hosts whose lane arithmetic self-test fails (older chips) and the paravirtual-Metal VM also run this layer (plain decode).
 
 ## Phase B adapter (WIP, still opt-in)
 
