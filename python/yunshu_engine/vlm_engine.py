@@ -2545,6 +2545,22 @@ class VLMEngine:
                 lanes["converted"],
                 len(lanes["skipped"]),
             )
+            from . import tree_verify
+
+            if not tree_verify.lane_projections(lm):
+                # The packed layer's decode / verify needs row-invariant lane projections in the decoder
+                # (a checkpoint with unquantized or unreadable projections has none): a concurrent row
+                # crashed with "packed verify requires row-invariant lane projections". Such a model runs
+                # on the generic layer, its own stock forward.
+                logger.warning(
+                    "Round driver: %s has no lane projections (%d converted, %d skipped); "
+                    "serving it on the generic layer (stock arithmetic, no speculation)",
+                    self._config.get("model_type"),
+                    lanes["converted"],
+                    len(lanes["skipped"]),
+                )
+                use_driver, generic_layer, spec_family = False, True, False
+                driver_lanes = 0
         drafter = None
         draft_kind = "mtp"
         from . import spec_select

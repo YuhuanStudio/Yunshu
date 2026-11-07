@@ -12,7 +12,7 @@ class _StopError(Exception):
     pass
 
 
-def _build(monkeypatch, model_type):
+def _build(monkeypatch, model_type, lanes=True):
     calls = []
     monkeypatch.setattr(
         "yunshu_engine.utils.hardware.is_paravirtual_metal", lambda: False
@@ -26,6 +26,9 @@ def _build(monkeypatch, model_type):
     monkeypatch.setattr(
         lane_linear, "convert", lambda lm: {"converted": 0, "skipped": []}
     )
+    from yunshu_engine import tree_verify
+
+    monkeypatch.setattr(tree_verify, "lane_projections", lambda lm: lanes)
     monkeypatch.setattr(
         spec_select,
         "choose",
@@ -86,3 +89,12 @@ def test_flash_next_apc_uses_the_prefill_grid():
     assert apc_prefill_stride(False, False, False, 2048) == 0
     # the generic driver layer (stock forward per row) takes the grid as well
     assert apc_prefill_stride(False, False, False, 2048, generic=True) == 2048
+
+
+def test_qwen35_without_lane_projections_serves_on_the_generic_layer(monkeypatch):
+    """A Qwen3.5 checkpoint whose decoder has no row-invariant lane projections (unquantized weights) used
+    to take the packed layer and crash the first concurrent row; it takes the generic layer now."""
+    eng, calls = _build(monkeypatch, "qwen3_5", lanes=False)
+    assert calls == []  # no verify kernels, no invariant install: the stock arithmetic
+    assert eng._prefix_invariant_dispatch is False
+    assert eng._apc_prefill_stride == 2048  # the generic layer's grid
