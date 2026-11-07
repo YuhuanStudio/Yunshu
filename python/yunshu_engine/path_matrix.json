@@ -1,8 +1,8 @@
 {
   "_doc": "Path-parity matrix. Every optimization or capability, on every serving path where it applies: engaged (with evidence), na (with reason), partial/missing (with owner and impact). tests/unit/test_path_parity.py enforces it; see that test for the rules. A new optimization module or performance setting fails CI until it has a row here.",
   "paths": {
-    "batch": "Round driver, the unified runner for dense Qwen3.5-family text requests: spec on or off, one row or many (round_driver/; replaces the speculative lane and the shared batch for them)",
-    "generic": "Stock runner (mlx-vlm BatchGenerator + the retained single-request lane): other mlx-vlm families (Gemma, Qwen4/Flash-Next, Omni thinker, ...) and the requests the driver excludes (explicit cache plans, MoE)",
+    "batch": "Round driver, the unified runner for text requests of the dense Qwen3.5 family and of Flash-Next (Qwen4): spec on or off, one row or many (round_driver/; replaces the speculative lane and the shared batch for them)",
+    "generic": "Stock runner (mlx-vlm BatchGenerator + the retained single-request lane): other mlx-vlm families (Gemma, Omni thinker, ...) and the requests the driver excludes (explicit cache plans, media on Qwen3.5, MoE); Flash-Next keeps its stock-path patches only for explicit cache plans",
     "text": "Text-only mlx-lm single-request fast path (_generate_fast)",
     "loop": "Text-model EngineCore continuous-batching loop (YUNSHU_ENGINE_LOOP, off by default, not grown)"
   },
@@ -1021,8 +1021,14 @@
       "what": "Per-layer n-gram embedding rows read from SSD in parallel (byte-identical to upstream), with the pack table scale applied",
       "cells": {
         "batch": {
-          "s": "na",
-          "why": "PLE tables exist only in qwen4_exp (Flash-Next), which is served on the generic runner"
+          "s": "engaged",
+          "ev": [
+            [
+              "python/yunshu_engine/vlm_engine.py",
+              "ple_parallel.install("
+            ]
+          ],
+          "why": "PLE rows are read per row inside the packed Flash-Next step (history in the row's own ArraysCache)"
         },
         "generic": {
           "s": "engaged",
@@ -1070,8 +1076,14 @@
       "what": "TensorFold flash_next fused hyper-connection + router/experts kernels for the qwen4_exp layer loop (always on for qwen4_exp; single-request plain decode 26 -> 14.4 ms)",
       "cells": {
         "batch": {
-          "s": "na",
-          "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
+          "s": "engaged",
+          "ev": [
+            [
+              "python/yunshu_engine/round_driver/flashnext.py",
+              "def fused_chain_forward"
+            ]
+          ],
+          "why": "the packed Flash-Next step runs the fused HC + router/expert kernels once over all rows"
         },
         "text": {
           "s": "na",
@@ -1740,8 +1752,14 @@
       "what": "Qwen4 padded batched sparse QSA decode with singleton fallback",
       "cells": {
         "batch": {
-          "s": "na",
-          "why": "Qwen4 QSA is specific to the generic VLM family"
+          "s": "engaged",
+          "ev": [
+            [
+              "python/yunshu_engine/round_driver/flashnext.py",
+              "fwd._qsa_attention"
+            ]
+          ],
+          "why": "per-row QSA in the packed forward"
         },
         "generic": {
           "s": "engaged",
@@ -2218,9 +2236,16 @@
     "flashnext": {
       "qwen4_batched_qsa": {
         "s": "engaged",
-        "why": "concurrent decode rows keep the solo sparse QSA (per-row block selection, one padded attention launch), so N rows == solo",
+        "why": "driver rows run QSA per row inside the packed forward on the row's own indexer state (solo == concurrent by construction); the padded batched kernel stays on the stock path for explicit cache plans",
         "ev": [
-          ["python/yunshu_engine/qwen4_mtp.py", "install_row_qsa()"]
+          [
+            "python/yunshu_engine/qwen4_mtp.py",
+            "install_row_qsa()"
+          ],
+          [
+            "python/yunshu_engine/round_driver/flashnext.py",
+            "fwd._qsa_attention"
+          ]
         ]
       },
       "qwen4_gdn_fused": {
@@ -2258,10 +2283,16 @@
         "why": "The Qwen3.5-only optimized hook is not installed on qwen4; family-specific serving evidence and adaptation remain open."
       },
       "cost_aware_depth": {
-        "s": "missing",
+        "s": "partial",
         "owner": "flashnext80",
-        "impact": "medium",
-        "why": "The Qwen3.5-only optimized hook is not installed on qwen4; family-specific serving evidence and adaptation remain open."
+        "impact": "low",
+        "why": "the driver's cost-aware allocation runs per round (0 or 1 draft per row) but chains are capped at one draft by the two-position packed verify; block 2 decoded fastest on Flash-Next (verifykern 2026-10), deeper chains need a longer QSA-exact window",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/flashnext.py",
+            "MAX_CHAIN = 2"
+          ]
+        ]
       },
       "sampled_spec": {
         "s": "engaged",
@@ -2309,10 +2340,14 @@
         ]
       },
       "spec_under_concurrency": {
-        "s": "missing",
-        "owner": "flashnext80",
-        "impact": "medium",
-        "why": "The Qwen3.5-only optimized hook is not installed on qwen4; family-specific serving evidence and adaptation remain open."
+        "s": "engaged",
+        "why": "every Flash-Next row drafts with its own native MTP head on the round driver (packed verify of the pending token + one draft)",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/flashnext.py",
+            "class FlashNextHead"
+          ]
+        ]
       },
       "batch_invariant_kernels": {
         "s": "partial",
@@ -2384,16 +2419,12 @@
       "draft_family_coverage": {
         "s": "partial",
         "owner": "flashnext80",
-        "impact": "high",
-        "why": "Native MTP is wired. DFlash mixed-layer capture adapter has CPU tests; four-arm real checkpoint gate is pending.",
+        "impact": "medium",
+        "why": "Native MTP head rows are on the round driver. DFlash2 on Flash-Next is refused at driver construction (its mixed-layer capture adapter qwen4_dflash.py has CPU tests but no driver lifecycle yet)",
         "ev": [
           [
-            "python/yunshu_engine/qwen4_mtp.py",
-            "configure_lane"
-          ],
-          [
-            "python/yunshu_engine/qwen4_dflash.py",
-            "def capture_forward"
+            "python/yunshu_engine/round_driver/driver.py",
+            "DFlash on Flash-Next is not on the round driver yet"
           ]
         ]
       },
@@ -2449,10 +2480,8 @@
         ]
       },
       "lane_promotion": {
-        "s": "missing",
-        "owner": "flashnext80",
-        "impact": "medium",
-        "why": "The Qwen3.5-only optimized hook is not installed on qwen4; family-specific serving evidence and adaptation remain open."
+        "s": "na",
+        "why": "there is no lane to promote from: every Flash-Next text row is a driver row"
       },
       "qwen4_fused_hc": {
         "s": "engaged",

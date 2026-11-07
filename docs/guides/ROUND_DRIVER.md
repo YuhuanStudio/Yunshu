@@ -145,6 +145,23 @@ time between steps; it has not been isolated.
 - Image / audio prompts (mRoPE), int8 KV, MoE: those requests stay on the upstream path.
 - Phase B performance/identity qualification on 27B, including 32K concurrency.
 
+## Flash-Next (Qwen4) rows
+
+Text requests of Qwen3.8-Flash-Next (HC + QSA + GDN + MoE + PLE) are driver rows too, alone or with others, every row
+drafting with the checkpoint's native MTP head (`round_driver/flashnext.py`). The driver keeps span planning, APC, sampling,
+cancel and events; the model side differs:
+
+- every row keeps its own caches (`QSAKVCache` with the QSA indexer keys and block summaries, `ArraysCache` with the GDN state,
+  the conv window and the PLE token history), so per-row state is isolated by construction;
+- a decode step packs the rows' windows (the pending token and at most one draft) into one forward: the fused HC and router /
+  expert kernels run once over the pack (at most 16 positions, then the next pack), PLE / GDN / QSA run per row on the row's cache,
+  and each row commits through upstream's speculative cache transactions. Each row gets the bits of the same window verified alone,
+  so solo == concurrent and spec on == spec off;
+- prefill is the model's own forward per span; spans are the absolute 2048 grid plus the row's checkpoints (Flash-Next prefill is not
+  split-invariant), so an APC hit runs the spans a cold prompt did. The reply-tail replay is off (it stores KV rows only);
+- not on the driver yet: DFlash2 on Flash-Next (refused at load), int8 KV (stays bf16), explicit cache plans (stock path), logprob
+  reports of sampled MTP rows (plain rows, as for Qwen3.5 MTP), deeper MTP chains.
+
 ## Phase B adapter (WIP, still opt-in)
 
 With a bounded-context DFlash2 drafter, the existing driver captures target layer taps during prefill, retains the drafter's trailing window, and keeps each row's target KV/GDN caches as lane transactions. Every decode step reserves each row's root and fairly splits a shared 32-node budget; the remainder rotates between rows. DFlash proposals share one batched drafter forward, while rings, RoPE positions and convolution sequences remain independent. CopyDrafter chains reuse the same budget. Target projections, MLP and the output head run over packed nodes; attention and GDN keep per-sequence state. Each row accepts using argmax or position-keyed Gumbel, then commits its own path through the existing tree replay.

@@ -1782,6 +1782,23 @@
       "local_changes": [
         "Request-local projection views pack native HC/router/shared and routed expert work while native QSA/GDN/PLE own independent temporal state and transactions. Not admitted for serving until native MTP lifecycle gates pass."
       ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/round_driver/flashnext.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "upstream_paths": [
+        "mlx_vlm/models/qwen4_exp/language.py",
+        "mlx_vlm/speculative/drafters/mtp_base.py",
+        "mlx_vlm/speculative/drafters/qwen4_exp_mtp/qwen4_exp_mtp.py",
+        "mlx_vlm/speculative/cache_state.py"
+      ],
+      "commit": "92b31ad308b651a7c1e22d0c58bcdc35c3807750",
+      "license": "MIT",
+      "local_changes": [
+        "Flash-Next rows on the round driver: per-row caches, a packed one/two-position verify (the layer loop of tf_hc_forward._tf_model over several rows, per-row PLE/GDN/QSA) with upstream speculative transactions, and the native MTP head driven per row with its own position bookkeeping."
+      ]
     }
   ],
   "patches": [
