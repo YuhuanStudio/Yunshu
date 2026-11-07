@@ -53,9 +53,11 @@ def apply():
             return tuple(verify_linear._target_verify_linear(linear, x) for linear in linears)
         return original_linears(linears, x)
 
+    from ...qwen4_family import qwen4_module_names
+
     for name in (
         "mlx_vlm.models.qwen3_5.speculative_verifier",
-        "mlx_vlm.models.qwen4_exp.language",
+        *qwen4_module_names("language"),
     ):
         language = sys.modules.get(name)
         if language is not None:

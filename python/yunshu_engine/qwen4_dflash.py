@@ -26,11 +26,11 @@ def capture_forward(
 ):
     import mlx.core as mx
     from mlx_vlm.models.base import LanguageModelOutput
-    from mlx_vlm.models.qwen4_exp.language import _QWEN4_BATCH_INVARIANT_FORWARD
 
     from .kernels.tf_hc_forward import _tf_model
+    from .qwen4_family import qwen4_first_module
 
-    forward = _QWEN4_BATCH_INVARIANT_FORWARD
+    forward = qwen4_first_module("language")._QWEN4_BATCH_INVARIANT_FORWARD
     if position_ids is None and cache is not None:
         offset = cache[lm.model.fa_idx].offset
         offsets = mx.array(offset).astype(mx.int64).reshape(-1)
@@ -66,13 +66,15 @@ def capture_forward(
 
 def install(lm: Any) -> None:
     """Preserve five mixed layer features during decode and transactional verify."""
-    from mlx_vlm.models.qwen4_exp.language import Qwen4ExpDecoderLayer
     from mlx_vlm.speculative.cache_state import start_speculative_cache
+
+    from .qwen4_family import qwen4_first_module
 
     cls = type(lm)
     if cls.__dict__.get("_yunshu_dflash_capture"):
         return
     original = cls.__call__
+    Qwen4ExpDecoderLayer = qwen4_first_module("language").Qwen4ExpDecoderLayer
     layer_call = Qwen4ExpDecoderLayer.__call__
 
     def completed_layer(self, *args, **kwargs):

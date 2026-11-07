@@ -51,7 +51,9 @@ def is_mtp_capable(model_path: str) -> bool:
     tc = cfg.get("text_config") or cfg
     if int(tc.get("mtp_num_hidden_layers", 0) or 0) <= 0:
         return False
-    if cfg.get("model_type") not in ("qwen3_5", "qwen3_6", "qwen4_exp"):
+    from .qwen4_family import is_qwen4_family
+
+    if cfg.get("model_type") not in ("qwen3_5", "qwen3_6") and not is_qwen4_family(cfg):
         return False
     # A config can advertise MTP even when the downloaded checkpoint omits
     # the head. Do not turn an unreadable/missing index into a positive match.

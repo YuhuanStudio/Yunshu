@@ -54,6 +54,7 @@ from .memory_admission import (
 )
 from .moe_pack import tensor_quantization_override, unsupported_pack_reason
 from .paths import private_media_dir
+from .qwen4_family import QWEN4_MODEL_TYPES, is_qwen4_family
 from .request import RequestOutput
 from .special_tokens import neutralize_special_text
 from .types import EngineConfig
@@ -699,7 +700,7 @@ class VLMEngine:
         )
 
         config = vlm_load_config(model_path)
-        if config.get("model_type") == "qwen4_exp":
+        if is_qwen4_family(config):
             # MLX bills a command-buffer commit for every large bound buffer (expert banks exceed its
             # 50 MB default cap twice per MoE layer); raising the caps before the first Metal command
             # removes those commits (-0.6 to -1.0 ms per plain Flash-Next step, same tokens).
@@ -726,7 +727,7 @@ class VLMEngine:
             # dropping the entries here means the table is never read into memory
             weights = {k: v for k, v in weights.items() if not is_ple_tensor(k)}
         ple_table_scales = {}
-        if config.get("model_type") == "qwen4_exp":
+        if is_qwen4_family(config):
             from .ple_scale import collect_table_scales
 
             ple_table_scales = collect_table_scales(weights)
@@ -749,7 +750,7 @@ class VLMEngine:
         from . import ple_parallel
 
         ple_parallel.install(int(settings.get("YUNSHU_PLE_READ_THREADS")))
-        if config.get("model_type") == "qwen4_exp":
+        if is_qwen4_family(config):
             from .kernels import tf_hc_forward
 
             tf_hc_forward.install()
@@ -766,7 +767,7 @@ class VLMEngine:
             model_config.model_path = str(model_path)
 
         model = model_class.Model(model_config)
-        if config.get("model_type") == "qwen4_exp":
+        if is_qwen4_family(config):
             from .model_patches import sanitize_qwen4_checkpoint
 
             weights, self._qwen4_mtp_weights = sanitize_qwen4_checkpoint(
@@ -2078,7 +2079,7 @@ class VLMEngine:
 
     # Checkpoints whose speculative decoding (MTP / DFlash draft, verify and
     # batch-invariant kernels) is validated. Every family uses the runner.
-    _SPEC_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe", "qwen4_exp")
+    _SPEC_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe", *QWEN4_MODEL_TYPES)
 
     def _memory_total_bytes(self) -> int:
         from .apc_manager import total_memory_bytes
@@ -2495,7 +2496,7 @@ class VLMEngine:
 
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
-        qwen4 = self._config.get("model_type") == "qwen4_exp"
+        qwen4 = is_qwen4_family(self._config)
         use_driver = not qwen4 and spec_family and self._round_driver_wanted(lm)
         driver_lanes = 0
         if use_driver:

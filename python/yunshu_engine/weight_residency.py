@@ -13,10 +13,16 @@ from typing import Any
 
 def _tables() -> list[Any]:
     try:
-        from mlx_vlm.models.qwen4_exp.ple_storage import QuantizedMMapNGramEmbedding
-    except Exception:  # noqa: BLE001 - mlx_vlm without qwen4_exp
+        from .qwen4_family import qwen4_model_modules
+
+        classes = tuple(
+            m.QuantizedMMapNGramEmbedding for m in qwen4_model_modules("ple_storage")
+        )
+    except Exception:  # noqa: BLE001 - mlx_vlm without a Qwen4 module
         return []
-    return [o for o in gc.get_objects() if isinstance(o, QuantizedMMapNGramEmbedding)]
+    if not classes:
+        return []
+    return [o for o in gc.get_objects() if isinstance(o, classes)]
 
 
 def ple_lookup_stats() -> dict[str, Any]:

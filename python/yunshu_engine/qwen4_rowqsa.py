@@ -64,7 +64,9 @@ def run_rows(
 
 def _index_rows(cache: Any, batch: int) -> list[Any]:
     """Extract only the indexer state; sparse attention uses the batched KV cache."""
-    from mlx_vlm.models.qwen4_exp.language import QSAKVCache
+    from .qwen4_family import qwen4_first_module
+
+    QSAKVCache = qwen4_first_module("language").QSAKVCache
 
     padding = cache.left_padding.tolist()
     rows = []
@@ -196,11 +198,14 @@ def install() -> bool:
     if _STATE["installed"]:
         return True
     try:
-        from mlx_vlm.models.qwen4_exp.language import (
-            BatchQSAKVCache,
-            Qwen4ExpBatchInvariantForward,
-        )
-    except ImportError:
+        from .qwen4_family import qwen4_first_module
+
+        language = qwen4_first_module("language")
+        if language is None:
+            return False
+        BatchQSAKVCache = language.BatchQSAKVCache
+        Qwen4ExpBatchInvariantForward = language.Qwen4ExpBatchInvariantForward
+    except (ImportError, AttributeError):
         return False
     original = Qwen4ExpBatchInvariantForward._qsa_attention
 

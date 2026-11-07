@@ -306,8 +306,12 @@ def attend(
 def install() -> bool:
     """Route eligible prefill calls of ``dispatch_qsa_attention`` to the tensor-unit kernel once."""
     try:
-        from mlx_vlm.models.qwen4_exp import language as lang
+        from ..qwen4_family import qwen4_first_module
+
+        lang = qwen4_first_module("language")
     except ImportError:
+        return False
+    if lang is None:
         return False
     if getattr(lang.dispatch_qsa_attention, "_yunshu_sparse_prefill", False):
         return True
