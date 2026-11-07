@@ -20,7 +20,12 @@ def test_mlx_vlm_server_launch_uses_dflash2_drafter(tmp_path):
     assert cmd[cmd.index("--port") + 1] == "18995"
     assert cmd[cmd.index("--draft-model") + 1] == be.DRAFTER
     assert cmd[cmd.index("--draft-kind") + 1] == "dflash"
-    assert lc.flags == {"speculative": "dflash", "draft_kind": "dflash"}
+    # real-1104 fairness fix: mlx-vlm runs with its prefix cache on (APC_ENABLED=1), like every other engine
+    assert lc.flags == {
+        "speculative": "dflash",
+        "draft_kind": "dflash",
+        "apc": "APC_ENABLED=1 (prefix cache on, disk persistence default)",
+    }
     assert be.ENGINES["mlx-vlm-server"].expected_mode == "dflash"
     assert be.ENGINES["mlx-vlm-server"].drafter == be.DRAFTER
     assert be.stub_reason("mlx-vlm-server") is None
@@ -67,7 +72,8 @@ def test_llama_cpp_b12061_launch_is_ud_q4_k_m_with_mtp_head(tmp_path):
     assert cmd[cmd.index("--reasoning") + 1] == "off"
     assert cmd[cmd.index("--port") + 1] == "18995"
     assert cmd[cmd.index("--host") + 1] == "127.0.0.1"
-    assert lc.flags == {"spec_type": "draft-mtp", "reasoning": "off"}
+    # the launch records its slot count (-np, concurrency cells raise it)
+    assert lc.flags == {"spec_type": "draft-mtp", "reasoning": "off", "parallel": 1}
     assert be.ENGINES["llama-cpp-b12061"].checkpoint == be.GGUF
     assert be.ENGINES["llama-cpp-b12061"].expected_mode == "mtp"
 

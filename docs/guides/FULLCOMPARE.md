@@ -285,7 +285,9 @@ Each lesson is one line, with the fix that now enforces it.
 
 ## 7. Tests
 
-The harness unit tests run in the default suite. `scripts/dev/ci-local` runs `pytest tests/unit -m "not serial"`,
-which includes the `fullcmp_quick` set (the `conftest.py` marks every `test_fullcmp_*` and `test_tfbench_fullcmp*`
-file). The `fullcmp_e2e` chains are marked too and also run in that pass, at 11 to 30 minutes each. To run only the
-fast set: `python -m pytest -m fullcmp_quick -q tests/unit`. Run the harness tests under `nice -n 15`.
+The harness unit tests run in the default suite. `scripts/dev/ci-local` and `just test-unit` run
+`pytest tests/unit -m "not serial and not fullcmp_e2e"`, which includes the `fullcmp_quick` set (the `conftest.py`
+marks every `test_fullcmp_*` and `test_tfbench_fullcmp*` file). The `fullcmp_e2e` chains (11 to 30 minutes each,
+real tfbench against the stub server) are the harness's own preflight: run them before every comparison with
+`python -m pytest -m fullcmp_e2e -q -n 8 --dist loadfile tests/unit` (on the M3 via `scripts/dev/m3run` when the M5
+is measuring). Fast set only: `python -m pytest -m fullcmp_quick -q tests/unit`. Run the harness tests under `nice -n 15`.
