@@ -237,16 +237,18 @@ def one_arm(model, label, sets):
         solo = [text_of(chat(url, mid, p, n=48)) for p in PROMPTS]
         c2 = concurrent(url, mid, PROMPTS[:2])
         c4 = concurrent(url, mid, PROMPTS)
-        log = srv.log_tail(80)
+        log = Path(srv.log).read_text(errors="replace")
         return {
             "solo": solo,
             "c2": c2,
             "c4": c4,
             "spec_log": [
-                ln
+                ln[-220:]
                 for ln in log.splitlines()
-                if "peculative" in ln or "Round driver layer" in ln
-            ][-4:],
+                if "peculative" in ln
+                or "Round driver layer" in ln
+                or "lane projections" in ln
+            ][:6],
         }
     finally:
         srv.kill()
