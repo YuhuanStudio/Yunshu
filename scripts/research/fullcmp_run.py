@@ -1033,6 +1033,22 @@ def batch_controls(smoke: bool) -> dict:
         return {"error": f"{type(exc).__name__}: {exc}"}
 
 
+def audit_scope_rows(rows: list[dict], batch: str, plan) -> list[dict]:
+    """The manifest rows the audit expects. A cell of this run's batch is expected only when this run
+    planned it (plan.runnable: --engines, --cells and the status / part filters applied), so an engine
+    left out of the run (lmstudio: not in --engines, never started) expects no file. Earlier audited
+    batches keep their rows, minus the engines the harness cannot start at all (bench_engines stubs)."""
+    ran = {(r["engine"], r["id"]) for r in plan.runnable}
+    out = []
+    for r in rows:
+        if bench_engines.stub_reason(r.get("engine")) is not None:
+            continue
+        if r.get("batch") == batch and (r.get("engine"), r.get("id")) not in ran:
+            continue
+        out.append(r)
+    return out
+
+
 def audit_manifest(
     rows: list[dict],
     batches: list[str],
@@ -2084,7 +2100,7 @@ def main(argv=None) -> int:
     batches = audited_batches(a.batch)
     manifest_path = AUDIT_DIR / f"{a.batch}_audit_manifest.json"
     AUDIT_DIR.mkdir(parents=True, exist_ok=True)
-    manifest_obj = audit_manifest(rows, batches, pin, plan.engine_order, profile_engines)
+    manifest_obj = audit_manifest(audit_scope_rows(rows, a.batch, plan), batches, pin, plan.engine_order, profile_engines)
     # quiet-flagged cells are rerun in their slot; the second pass catches a cell flagged twice
     for _pass in range(0 if a.resume_reps else 2):  # a resume keeps the flags the first driver already acted on
         failed += requeue_quiet_flagged(plan, pin, RAW_ROOT, manifest_obj)
