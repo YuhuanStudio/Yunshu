@@ -27,6 +27,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
+# helper modules next to the tests (fullcmp_pin_io) import by bare name, whichever file runs first
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+
 
 @pytest.fixture(autouse=True)
 def _disable_auth(request):
@@ -291,7 +294,10 @@ _NEEDS_BENCH_MACHINE = frozenset(
 
 
 def _bench_machine_present() -> bool:
-    return os.path.isfile(_BENCH_CENSUS)  # False on EPERM/ENOENT, never raises
+    try:
+        return os.path.isfile(_BENCH_CENSUS)
+    except OSError:  # PermissionError under the CI sandbox counts as absent
+        return False
 
 
 def pytest_collection_modifyitems(config, items):
