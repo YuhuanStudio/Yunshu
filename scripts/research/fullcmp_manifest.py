@@ -299,6 +299,14 @@ ENGINE_PERF = {
         source="ASSUMED: no run (kapitsa 0.2.26); Yunshu curve",
         assumed=["no measurement; Yunshu curve", "ready_s from Yunshu"],
     ),
+    "kapitsa-0.2.31": dict(
+        full=False,
+        **NO_MEASUREMENT,
+        slow=None,
+        ready_s=6.1,
+        source="ASSUMED: no run on the pinned 0.2.31 binary; the kapitsa 0.2.26 / Yunshu curve",
+        assumed=["no measurement; Yunshu curve", "ready_s from Yunshu"],
+    ),
     "ollama": dict(
         full=False,
         **NO_MEASUREMENT,
@@ -520,6 +528,14 @@ ENGINES = {
         supported=True,
         # disk tier ON by default: serve --disk-cache 'auto (default)', kept across restarts in
         # ~/.cache/kapitsa/prefix-cache (kapitsa serve --help); the Qwen3.5 family has it
+        caps=dict(anthropic=True, disk_cache=True),
+        superseded_by="kapitsa-0.2.31",  # self-updated mid-run (four binary shas): history rows only
+    ),
+    "kapitsa-0.2.31": dict(
+        label="Kapitsa 0.2.31 (pinned binary, auto-update off)",
+        version="0.2.31",
+        supported=True,
+        # same recipe and caps as 0.2.26; the binary is a read-only copy pinned by sha256
         caps=dict(anthropic=True, disk_cache=True),
     ),
     "ollama": dict(
@@ -885,7 +901,7 @@ def build_smoke_rows():
 
 
 SMOKE_CONC_OUT = Path("/Volumes/Micron/yunshu-fullcmp/smoke-conc-manifest.jsonl")
-SMOKE_CONC_SKIP = ("ollama", "lmstudio", "omlx-0.7.4.dev1")  # no concurrent path (census) / extra engine: own smoke
+SMOKE_CONC_SKIP = ("ollama", "lmstudio", "omlx-0.7.4.dev1", "kapitsa-0.2.31")  # no concurrent path (census) / extra engine: own smoke
 
 
 def smoke_conc_specs():
@@ -982,11 +998,11 @@ CUT_ORDER = [
 
 # A cut decision is made once per cell: yunshu-pb2 is the same configuration as yunshu-main, so its row
 # takes the cut decision of the yunshu row (mirror by cell id). The two Yunshu engines run identical cells.
-CUT_MIRROR = {"yunshu-pb2": "yunshu", "omlx-0.7.4.dev1": "omlx-0.7.3"}
+CUT_MIRROR = {"yunshu-pb2": "yunshu", "omlx-0.7.4.dev1": "omlx-0.7.3", "kapitsa-0.2.31": "kapitsa-0.2.26"}
 # Engines added after the plan was sized: their rows mirror another engine's cells and cut decisions, and their hours
 # are NOT part of the planned total (the cut step is decided by the original engine set, so adding an engine never
 # changes which cells the other engines run). Their cost is reported separately.
-EXTRA_ENGINES = frozenset({"omlx-0.7.4.dev1"})
+EXTRA_ENGINES = frozenset({"omlx-0.7.4.dev1", "kapitsa-0.2.31"})
 
 
 def apply_cuts(rows, out=sys.stdout):
@@ -1127,6 +1143,7 @@ WIRE_1108_SHAPES = (
 WIRE_1108_SKIP = {
     "lmstudio": "not installed; headless unverified (manifest engine_version)",
     "omlx-0.7.4.dev1": "added later: its own wiring smoke (wire_omlx074_rows)",
+    "kapitsa-0.2.31": "pinned re-run of kapitsa-0.2.26: the 0.2.26 rows carry the wiring evidence",
 }
 
 
@@ -1205,6 +1222,16 @@ def main(argv=None):
         help="write the oMLX 0.7.4.dev1 wiring-smoke manifest (1K core, conc c2 1K, mixed 8K c4)",
     )
     ap.add_argument(
+        "--only-engine",
+        default=None,
+        help="write only this engine's rows of the full plan (cuts decided by the whole plan), e.g. a re-run manifest",
+    )
+    ap.add_argument(
+        "--batches",
+        default="B1,B2",
+        help="with --only-engine: comma-separated batches to keep (default B1,B2)",
+    )
+    ap.add_argument(
         "--c8-smoke",
         action="store_true",
         help="write the concurrency validation manifest (conc c8 1K + mixed 8K c4: TensorFold, mlx-serve, Kapitsa, llama.cpp)",
@@ -1274,6 +1301,21 @@ def main(argv=None):
             for r in rows:
                 fh.write(json.dumps(r, sort_keys=True, ensure_ascii=False) + "\n")
         sys.stdout.write(f"wrote {args.out} ({len(rows)} smoke rows)\n")
+        return 0
+    if args.only_engine:
+        rows, _meta_unused = build_rows()
+        import io
+
+        apply_cuts(rows, out=io.StringIO())
+        keep = set(args.batches.split(","))
+        rows = [r for r in rows if r["engine"] == args.only_engine and r["batch"] in keep]
+        if not rows:
+            raise SystemExit(f"no rows for engine {args.only_engine!r} in batches {sorted(keep)}")
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        with args.out.open("w") as fh:
+            for r in rows:
+                fh.write(json.dumps(r, sort_keys=True, ensure_ascii=False) + "\n")
+        sys.stdout.write(f"wrote {args.out} ({len(rows)} {args.only_engine} rows)\n")
         return 0
     rows, _meta_unused = build_rows()
     buf = []

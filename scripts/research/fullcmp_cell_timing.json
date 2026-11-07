@@ -886,6 +886,7 @@
     "splash-1.5.0": 120.0,
     "llama-cpp-b12061": 60.0,
     "kapitsa-0.2.26": 60.0,
+    "kapitsa-0.2.31": 60.0,
     "default": 60.0
    },
    "kind": "policy (lead 11-04)",
@@ -951,6 +952,11 @@
     "value": 6.8,
     "kind": "measured",
     "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: kapitsa-0.2.26"
+   },
+   "kapitsa-0.2.31": {
+    "value": 6.8,
+    "kind": "assumed",
+    "source": "the kapitsa-0.2.26 value (same binary build, not yet measured on the pinned copy)"
    }
   },
   "stall_floor_min": {

@@ -303,7 +303,7 @@ def _base_harness_part(row: dict):
 # Engines whose context option is per stream / per slot / per conversation (TensorFold --context, Kapitsa --context,
 # mlx-serve --ctx-size, llama.cpp -c / -np): a concurrent cell is launched with a context sized to the cell
 # (longest request + output + margin), not the 140000 of a decode cell. The other engines keep their context.
-CONC_CTX_ENGINES = ("tf-1.2.1", "tf-1.1.8", "mlx-serve-26.11.1", "kapitsa-0.2.26", "llama-cpp-b12061")
+CONC_CTX_ENGINES = ("tf-1.2.1", "tf-1.1.8", "mlx-serve-26.11.1", "kapitsa-0.2.26", "kapitsa-0.2.31", "llama-cpp-b12061")
 CTX_MARGIN = 1024  # template, system text and the warm-up requests
 
 

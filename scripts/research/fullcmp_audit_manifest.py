@@ -215,6 +215,34 @@ EXPECTED_MODE_PROBE = {
             },
         ],
     },
+    "kapitsa-0.2.31": {
+        "expected_mode": "dflash",
+        "probe": (
+            "DFlash2 is the default drafter ('--dflash auto ... takes the one downloaded with the model'). "
+            "Engaged = the DFlash2 drafter line at load AND a run summary with drafted>0 "
+            "('spec: X accepted/drafted over N cycles' with drafted>0) after the cell."
+        ),
+        "log_patterns": [
+            {
+                "regex": r"DFlash2 drafter .*loaded in [0-9.]+ ms",
+                "meaning": "DFlash2 drafter loaded (loaded, not yet engaged)",
+                "confidence": "low",
+                "source": "kapitsa binary strings: 'DFlash2 drafter %s: %d layers ... loaded in %.0f ms'",
+            },
+            {
+                "regex": r"spec: [0-9.]+ accepted/drafted over [1-9]\d* cycles",
+                "meaning": "speculative cycles ran after the cell (count drafted > 0 separately)",
+                "confidence": "medium",
+                "source": "kapitsa binary strings: 'spec: %.2f accepted/drafted over %ld cycles'",
+            },
+            {
+                "regex": r"MTP head loaded in [0-9.]+ ms",
+                "meaning": "MTP head loaded (not the DFlash2 mode; a mismatch with expected dflash fails)",
+                "confidence": "low",
+                "source": "kapitsa binary strings",
+            },
+        ],
+    },
     "omlx-0.7.3": {
         "expected_mode": "dflash",
         "probe": (
@@ -272,6 +300,7 @@ WEIGHT_GROUP = {
     "omlx-0.7.4.dev1": "qwen3.8-27b-4bit-jundot",
     "mlx-lm-server": "qwen3.8-27b-4bit-jundot",
     "kapitsa-0.2.26": "qwen3.8-27b-4bit-kapitsa",
+    "kapitsa-0.2.31": "qwen3.8-27b-4bit-kapitsa",
     "mlx-vlm-server": "qwen3.8-27b-4bit-jundot",
     "llama-cpp-b12061": "qwen3.8-27b-gguf-unsloth",
     # TensorFold and Splash 1.5.0 load TensorFold/Qwen3.8-27B-MLX-4bit (census key below)
@@ -315,6 +344,8 @@ INSTALL = {
     "mlx-vlm-server": f"{COMP}/venvs/mlx-vlm-0.7.11/bin/python",
     "llama-cpp-b12061": f"{COMP}/llama.cpp-b12061/llama-b12061/llama-server",
     "kapitsa-0.2.26": f"{COMP}/kapitsa-0.2.26/kapitsa-0.2.26-darwin-arm64/kapitsa",
+    # a read-only copy: 0.2.26's own directory self-updated to 0.2.31 during real-1104
+    "kapitsa-0.2.31": f"{COMP}/kapitsa-0.2.31/kapitsa-0.2.31-darwin-arm64/kapitsa",
 }
 
 
@@ -513,8 +544,16 @@ def build_pins(census: dict, pin: dict, sha_of=file_sha256, git_head=None) -> di
         "kapitsa-0.2.26": _pin(
             "kapitsa-0.2.26",
             "0.2.26",
-            _date(kp["latest_date"]),
+            _date((kp.get("release_dates") or {}).get("0.2.26") or kp["latest_date"]),
             kp["sha256"]["0.2.26 tarball"],
+            "release archive",
+            sha_of,
+        ),
+        "kapitsa-0.2.31": _pin(
+            "kapitsa-0.2.31",
+            "0.2.31",
+            _date(kp["release_dates"]["0.2.31"]),
+            kp["sha256"]["0.2.31 tarball"],
             "release archive",
             sha_of,
         ),

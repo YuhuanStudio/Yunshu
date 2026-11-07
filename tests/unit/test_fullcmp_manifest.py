@@ -37,11 +37,12 @@ def test_engine_list_is_the_approved_twelve_plus_ollama():
         "llama-cpp-b12061",
         "lmstudio",
         "kapitsa-0.2.26",
+        "kapitsa-0.2.31",
         "ollama",
     ]
     assert "tf-1.2.0" not in fm.ENGINE_IDS
-    # 12 measured + the extra oMLX 0.7.4.dev1 + lmstudio
-    assert len([e for e in fm.ENGINE_IDS if e != "ollama"]) == 14
+    # 12 measured + the extra oMLX 0.7.4.dev1 + the pinned Kapitsa 0.2.31 re-run + lmstudio
+    assert len([e for e in fm.ENGINE_IDS if e != "ollama"]) == 15
 
 
 def test_no_dropped_scope_and_no_secondary_models():

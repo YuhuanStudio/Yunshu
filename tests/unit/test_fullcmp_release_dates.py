@@ -53,6 +53,7 @@ def test_manifest_engine_ids_are_the_twelve_measured_engines_plus_the_extra_omlx
         "mlx-vlm-server",
         "llama-cpp-b12061",
         "kapitsa-0.2.26",
+        "kapitsa-0.2.31",
     ]
 
 

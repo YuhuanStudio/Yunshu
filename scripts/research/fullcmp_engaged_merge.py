@@ -40,13 +40,14 @@ ENGINE_MODE = {
     "omlx-0.7.3": "dflash",
     "omlx-0.7.3rc1": "dflash",
     "omlx-0.7.4.dev1": "dflash",
+    "kapitsa-0.2.31": "dflash",
     "kapitsa-0.2.26": "dflash",  # pins: DFlash2 drafter (--dflash auto); no mode flag in the spec
     "mlx-serve-26.11.1": "mtp",  # default on Metal when the checkpoint ships an MTP head
     "mlx-lm-server": "ar",  # stock mlx-lm: no draft model in argv
     "llama-cpp-b12061": "mtp",  # launch spec: --spec-type draft-mtp with the MTP GGUF (-md)
 }
 # the label reported with the base mode (the guard compares the base mode only)
-ENGAGED_LABEL = {"kapitsa-0.2.26": "dflash (kflash tree)"}
+ENGAGED_LABEL = {"kapitsa-0.2.26": "dflash (kflash tree)", "kapitsa-0.2.31": "dflash (kflash tree)"}
 # research patterns corrected to the line the real logs print (the research regex did not match)
 PATTERN_FIX = {
     "tf-1.1.8": {"DFlash2 drafts for": r"DFlash2 drafts for one of them"},
@@ -137,6 +138,17 @@ ADD = {
         "real_example": "[kapitsa] chat: prompt 1024 (cached 0) in 995 ms (...), 64 tokens in 856 ms (73.6 tok/s), length, 2.86 tok/cycle, KFlash (DFlash2): 22 cycles",
         "negative_example": "... 1.00 tok/cycle, KFlash (DFlash2): 2 cycles",
     }],
+    "kapitsa-0.2.31": [{
+        "kind": "acceptance_regex",
+        "pattern_or_path": r"\[kapitsa\] chat: prompt (?P<prompt>[\d,]+) \(cached [\d,]+\) in [^\n]*?, [\d,]+ tokens in [^\n]*?, \S+, (?:[^\n]*?, )?(?P<tpc>[\d.]+) tok/cycle, (?:[^\n]*?, )?KFlash \(DFlash2\): [\d,]+ cycles",
+        "group": "tpc",
+        "min": 1.0,
+        "per_request": True,
+        "startup_sufficient": False,
+        "source_ref": "wire-1105 kapitsa server log (chat line, KFlash tree drafting on the DFlash2 lattice)",
+        "real_example": "[kapitsa] chat: prompt 1024 (cached 0) in 995 ms (...), 64 tokens in 856 ms (73.6 tok/s), length, 2.86 tok/cycle, KFlash (DFlash2): 22 cycles",
+        "negative_example": "... 1.00 tok/cycle, KFlash (DFlash2): 2 cycles",
+    }],
     "omlx-0.7.3": [OMLX_MTP_LINE],
     "omlx-0.7.3rc1": [OMLX_MTP_LINE],
     "omlx-0.7.4.dev1": [OMLX_MTP_LINE],
@@ -161,9 +173,12 @@ DENY = {
     "kapitsa-0.2.26": (
         (re.compile(r"chat: prompt"), "a chat line proves a request, not drafting"),
     ),
+    "kapitsa-0.2.31": (
+        (re.compile(r"chat: prompt"), "a chat line proves a request, not drafting"),
+    ),
 }
 # engines with no real spec-run log on disk (research: source or binary strings only)
-SOURCE_ONLY = {"kapitsa-0.2.26", "mlx-serve-26.11.1", "omlx-0.7.3", "omlx-0.7.3rc1", "omlx-0.7.4.dev1",
+SOURCE_ONLY = {"kapitsa-0.2.26", "kapitsa-0.2.31", "mlx-serve-26.11.1", "omlx-0.7.3", "omlx-0.7.3rc1", "omlx-0.7.4.dev1",
                "llama-cpp-b12061", "mlx-lm-server"}
 FAILURE_MARK = re.compile(r"could not|falls back|incompatible", re.I)
 PLACEHOLDER = re.compile(r"^(none|no |_load\(\)|n/a)", re.I)

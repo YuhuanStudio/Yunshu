@@ -66,6 +66,53 @@
       "notes": "from engaged_evidence_others.json; configured mode dflash; How to turn on: kapitsa serve --model 27b (dflash auto picks the downloaded DFlash2 drafter; --dflash none uses MTP; --spec 0 disables MTP). Default is dflash auto, so the harness must pass --dflash none or a DIR explicitly for a named mode. Negative: 'plain decoding' in the mode line. The 'diagnostics' object in the bench output is the bench's own, not proof of server use. Timed-run cost: the req",
       "confidence": "source-only: medium: the format fragments and file location come from the binary and help; no live line captured. Positive engagement needs the tok/cycle or KFlash cycle suffix on the chat line and the DFlash2 dra"
     },
+    "kapitsa-0.2.31": {
+      "modes": {
+        "dflash": {
+          "evidence": [
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "DFlash2 drafter (?P<path>\\S+): (?P<layers>\\d+) layers, hidden (?P<hidden>\\d+), (?P<bits>\\d+)-bit projections, (?P<gb>[\\d.]+) GB resident .* loaded in (?P<ms>[\\d.]+) ms",
+              "source_ref": "kapitsa binary strings line 5978 (format string, DFlash2 drafter load)",
+              "real_example": "[kapitsa] DFlash2 drafter /Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/home/fullcmp-SMOKE-kapitsa-0.2.26-q27-4bit-th-off-r0/kapitsa-home/models/qwen3.8-27b-4bit/dflash2: 5 layers, hidden 5120, 4-bit projections, 1.61 GB resident (process footprint +1.55 GB), loaded in 1353 ms",
+              "negative_example": "'DFlash2: no drafter found for %s (looked next to the model and in ~/.cache/nace-infer-models/drafters)' (strings 4253) or 'DFlash2: %s does not fit this model's embedding / LM head format; not used' (4254)",
+              "per_request": false,
+              "startup_sufficient": false,
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-kapitsa-0.2.26-decode-0.log"
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "spec: (?P<acc>[\\d.]+) accepted/drafted over (?P<cycles>\\d+) cycles",
+              "source_ref": "kapitsa binary strings line 4390",
+              "real_example": null,
+              "negative_example": "0.00 accepted/drafted",
+              "per_request": true,
+              "group": "acc",
+              "min": 0,
+              "startup_sufficient": false,
+              "real_log": null
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "\\[kapitsa\\] chat: prompt (?P<prompt>[\\d,]+) \\(cached [\\d,]+\\) in [^\\n]*?, [\\d,]+ tokens in [^\\n]*?, \\S+, (?:[^\\n]*?, )?(?P<tpc>[\\d.]+) tok/cycle, (?:[^\\n]*?, )?KFlash \\(DFlash2\\): [\\d,]+ cycles",
+              "group": "tpc",
+              "min": 1.0,
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "wire-1105 kapitsa server log (chat line, KFlash tree drafting on the DFlash2 lattice)",
+              "real_example": "[kapitsa] chat: prompt 15 (cached 0) in 100 ms (+1.1 ms template/tokenize; last chunk: encoded by 0.5 ms, GPU start +17.7 ms, GPU 81.9 ms, wake +0.1 ms), 10 tokens in 80 ms (112.4 tok/s), stop, 4.50 tok/cycle, KFlash (DFlash2): 2 cycles",
+              "negative_example": "... 1.00 tok/cycle, KFlash (DFlash2): 2 cycles",
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-kapitsa-0.2.26-decode-0.log"
+            }
+          ],
+          "fallback": []
+        }
+      },
+      "engaged_label": "dflash (kflash tree)",
+      "log_source": "engine log at ~/.cache/kapitsa/logs/serve-<PORT>.log (KAPITSA_HOME moves it); --verbose mirrors it to the terminal (kapitsa serve --help). --timing controls the TTFT/prefill shown in the request line.",
+      "notes": "from engaged_evidence_others.json; configured mode dflash; How to turn on: kapitsa serve --model 27b (dflash auto picks the downloaded DFlash2 drafter; --dflash none uses MTP; --spec 0 disables MTP). Default is dflash auto, so the harness must pass --dflash none or a DIR explicitly for a named mode. Negative: 'plain decoding' in the mode line. The 'diagnostics' object in the bench output is the bench's own, not proof of server use. Timed-run cost: the req",
+      "confidence": "source-only: medium: the format fragments and file location come from the binary and help; no live line captured. Positive engagement needs the tok/cycle or KFlash cycle suffix on the chat line and the DFlash2 dra"
+    },
     "llama-cpp-b12061": {
       "modes": {
         "mtp": {
