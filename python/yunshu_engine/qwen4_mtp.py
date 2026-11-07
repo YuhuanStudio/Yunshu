@@ -63,8 +63,6 @@ def load_native_head(
     # The process-global Qwen3.5 early-absorb patch uses this capability to
     # intercept serving. Qwen4 keeps the native loop even after another load.
     drafter.supports_greedy_draft_argmax = False
-    # Sampled requests draw position-keyed targets and coupled drafts (qwen4_sampled).
-    drafter.native_keyed = True
     mx.eval(drafter.parameters())
     return drafter
 
@@ -131,9 +129,7 @@ def configure_lane(lm: Any, drafter: Any, block: int | None) -> tuple[dict, int 
     for MTP decode at one row (verifykern 2026-10-26). ``YUNSHU_QWEN4_LANE`` moves every dense projection to the
     lane matmul for decode, verify and drafting alike."""
     from . import settings
-    from .qwen4_rowqsa import install as install_row_qsa
 
-    install_row_qsa()
     if getattr(getattr(drafter, "config", None), "target_layer_ids", None):
         from .qwen4_dflash import install
 

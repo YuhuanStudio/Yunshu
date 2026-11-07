@@ -611,3 +611,37 @@ def test_media_rows_on_dflash_keep_their_stream_beside_text_rows(tiny, dflash):
     )
     assert got[3] == plain
     assert got[4] == run(lm, [PROMPTS[1]])[0][0]
+
+
+def test_finished_head_row_stores_target_and_head_caches_together(tiny):
+    """The reply cache of a drafting row carries the head's KV after the target's, cut to the same rows."""
+    lm, head = tiny
+    driver = RoundDriver(
+        SimpleNamespace(language_model=lm),
+        drafter=head,
+        stop_tokens=set(),
+        chunk=CHUNK,
+        max_draft=1,
+    )
+    driver.add(Request(PROMPTS[0], 8, handle=0))
+    seen = {}
+
+    def hook(row):
+        seen["caches"] = flashnext.decode_caches(driver, row)
+        seen["n"], seen["hn"] = row.n, row.hn
+        return False
+
+    driver.finish_hook = hook
+    for _ in range(100):
+        if not driver.busy():
+            break
+        driver.step()
+    caches = seen["caches"]
+    assert caches is not None and len(caches) == len(lm.layers) + len(head.layers)
+    target, hcache = caches[: len(lm.layers)], caches[len(lm.layers) :]
+    assert int(target[lm.model.fa_idx].offset) == seen["n"]
+    assert int(hcache[0].offset) == seen["n"]
+    assert all(
+        c.index_keys is None or int(c.index_keys.shape[1]) == seen["n"] for c in hcache
+    )
+    assert flashnext.decode_caches(driver, SimpleNamespace(hn=0, n=0)) is None

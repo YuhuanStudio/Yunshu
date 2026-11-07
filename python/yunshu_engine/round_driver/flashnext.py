@@ -43,6 +43,20 @@ def media_of(row: Any) -> tuple[int, bool]:
     return int(req.rope_delta), req.position_ids is not None
 
 
+def decode_caches(driver: Any, row: Any) -> list | None:
+    """A finished MTP-head row's target caches followed by its head cache cut to the kept positions: the
+    layout of the drafting APC salt, so the next turn can restore the reply. None for other rows."""
+    head = getattr(driver, "head", None)
+    caches = getattr(head, "caches", {}).get(id(row)) if head is not None else None
+    if caches is None:
+        return None
+    if int(caches[0].offset) < row.n:
+        return None  # the head did not absorb every kept position (it lags the target)
+    # the head absorbed the last window before its length was known: positions past the kept ones go
+    head._sync(caches, row.n)
+    return list(row.cache) + list(caches)
+
+
 def is_flash_next(language_model: Any) -> bool:
     """The driver's target is a Qwen4 (Flash-Next) language model."""
     args = getattr(language_model, "args", None)

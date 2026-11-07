@@ -131,7 +131,7 @@ PLAIN = [
         "sampled row with logprobs on mtp",
         lambda k: k.mode == "mtp" and k.sampling != "greedy" and k.logprobs,
         "blocker",
-        "the position-keyed report of a sampled row is the DFlash path (qwen4_sampled / "
+        "the position-keyed report of a sampled row is the DFlash path ("
         "keyed_sampling.tree_target_rows); an MTP head row has none",
     ),
 ]

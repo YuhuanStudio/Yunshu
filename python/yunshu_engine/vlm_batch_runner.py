@@ -845,12 +845,7 @@ class VLMBatchRunner:
                 not processors
                 or (self._lane_takes_processors() and spec_safe_processors(processors))
             )
-            and (
-                not logprobs
-                or self._lane_takes_guide(None)
-                or self._native_keyed(greedy)
-                or self._native_greedy_report(greedy)
-            )
+            and (not logprobs or self._lane_takes_guide(None))
             and thinking_budget is None
             and (guide is None or self._lane_takes_guide(guide))
         )
@@ -921,23 +916,9 @@ class VLMBatchRunner:
         with contextlib.suppress(Exception):
             # The gateway reaches the live stats through the cancel event it owns.
             cancel_event.run_stats = stats
-        if greedy and use_draft and logprobs and self._native_greedy_report(greedy):
-            from .qwen4_sampled import NativeKeyedSampler, install_logit_stash
-
-            install_logit_stash(self.model.language_model)
-            job.keyed = NativeKeyedSampler(None, 0, lm=self.model.language_model)
-        elif not greedy and use_draft:
+        if not greedy and use_draft:
             key = seed if seed is not None else int.from_bytes(os.urandom(8), "little")
-            if self._native_keyed(greedy):
-                from .qwen4_sampled import NativeKeyedSampler, install_logit_stash
-
-                # only a sampled request needs the verify window's logits; greedy requests never wrap them
-                install_logit_stash(self.model.language_model)
-                job.keyed = NativeKeyedSampler(
-                    job.sampling, key, lm=self.model.language_model
-                )
-            else:
-                job.keyed = keyed_sampling.KeyedSampler(job.sampling, key)
+            job.keyed = keyed_sampling.KeyedSampler(job.sampling, key)
         self._submit(job)
         try:
             while True:
@@ -966,24 +947,6 @@ class VLMBatchRunner:
 
         return self.draft_kind == "dflash" or (
             self.draft_kind == "mtp" and mtp_lane.can_guide(self.drafter)
-        )
-
-    def _native_keyed(self, greedy: bool) -> bool:
-        """A sampled request on the Qwen4 native MTP loop: position-keyed draws with coupled
-        drafts, target logprobs read from the verify window (qwen4_sampled)."""
-        return bool(
-            not greedy
-            and self.draft_kind == "mtp"
-            and getattr(self.drafter, "native_keyed", False)
-        )
-
-    def _native_greedy_report(self, greedy: bool) -> bool:
-        """A greedy request that asks for logprobs on the Qwen4 native MTP loop: targets are the argmax of
-        the verify window's float32 rows, so tokens and reports equal the serial path's (qwen4_sampled)."""
-        return bool(
-            greedy
-            and self.draft_kind == "mtp"
-            and getattr(self.drafter, "native_keyed", False)
         )
 
     def _lane_takes_guide(self, guide: Any) -> bool:
@@ -1291,9 +1254,6 @@ class VLMBatchRunner:
             job.spec_request = SpecRequest(job.logprobs, job.top_logprobs)
             job.spec_request.guide = job.guide
             job.spec_request.processors = list(job.spec_procs)
-            if hasattr(job.keyed, "report"):
-                job.keyed.request = job.spec_request
-                job.spec_request.native = job.keyed
             job.processors.append(job.spec_request)
             logger.info(
                 "Exact speculative request engaged: %s constrained=%s logprobs=%s",
@@ -2004,6 +1964,8 @@ class VLMBatchRunner:
         return bool(stored)
 
     def _driver_store_decode(self, row: Any) -> bool:
+        from .round_driver import flashnext
+
         """Round driver hook: the last row of a driver leaves finished, its K/V still in its own
         caches (the driver's rows never reach ``_finish``). The same deferred store as the
         speculative lane's. True: the store holds the buffers, the driver must not pool them (the
@@ -2021,11 +1983,13 @@ class VLMBatchRunner:
                 ("cache_store off", not row.req.cache_store),
                 ("overflowed", bool(getattr(job, "overflowed", False))),
                 ("MTP batch row", row.cache is None),
-                # a Flash-Next head row keeps its target caches, the head's KV lives apart: a stored
-                # target-only entry would never match the drafting salt's layout
                 (
-                    "MTP head row",
-                    bool(row.drafting and getattr(job.driver, "dflash", None) is None),
+                    "MTP head row without its head cache",
+                    bool(
+                        row.drafting
+                        and getattr(job.driver, "dflash", None) is None
+                        and flashnext.decode_caches(job.driver, row) is None
+                    ),
                 ),
                 ("no reply tokens", len(row.context) <= len(row.req.ids)),
             )
@@ -2037,7 +2001,9 @@ class VLMBatchRunner:
         group = SimpleNamespace(
             gen=SimpleNamespace(apc=row.apc), driver_salt=int(row.salt or 0)
         )
-        self._defer_decode_cache(group, job, caches=list(row.cache))
+        # a Flash-Next head row stores its head's KV beside the target's (the drafting salt's layout)
+        caches = flashnext.decode_caches(job.driver, row) if row.drafting else None
+        self._defer_decode_cache(group, job, caches=caches or list(row.cache))
         return self._decode_pending_job() is job
 
     def _decode_pending_job(self):

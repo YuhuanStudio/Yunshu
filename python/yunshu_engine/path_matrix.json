@@ -1746,40 +1746,6 @@
           ]
         }
       }
-    },
-    "qwen4_batched_qsa": {
-      "module": "python/yunshu_engine/qwen4_rowqsa.py",
-      "what": "Qwen4 padded batched sparse QSA decode with singleton fallback",
-      "cells": {
-        "batch": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/round_driver/flashnext.py",
-              "fwd._qsa_attention"
-            ]
-          ],
-          "why": "per-row QSA in the packed forward"
-        },
-        "generic": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/qwen4_mtp.py",
-              "install_row_qsa()"
-            ]
-          ],
-          "why": "Qwen4 batch sparse decode: concurrent rows equal solo (token + logprob, burst/stagger, spec off and MTP, 8K-32K)."
-        },
-        "text": {
-          "s": "na",
-          "why": "Qwen4 QSA is specific to the generic VLM family"
-        },
-        "loop": {
-          "s": "na",
-          "why": "Qwen4 QSA is specific to the generic VLM family"
-        }
-      }
     }
   },
   "exclusions": [
@@ -2148,7 +2114,7 @@
     "python/yunshu_engine/kernels/omlx_q4/qwen35_verify_qmm.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
     "python/yunshu_engine/kernels/omlx_q4/row_exact_qmv.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
     "python/yunshu_engine/kernels/omlx_q4/__init__.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
-    "python/yunshu_engine/kernels/qwen4_qsa": "Metal source and launch wrapper for qwen4_batched_qsa."
+    "python/yunshu_engine/kernels/qwen4_qsa": "Metal source and launch wrapper of the padded batched sparse QSA attention (the former stock-path batched decode, deleted with the stock Flash-Next path); no caller: kept for the batched-QSA follow-up (bqsa-1028) with its oracle test."
   },
   "settings": {
     "YUNSHU_MTP": "draft_family_coverage",
@@ -2234,20 +2200,6 @@
   "architecture_columns": {
     "_doc": "Architecture audit columns, not additional serving paths. Entries record wiring; numerical/performance qualification is a separate real-checkpoint gate.",
     "flashnext": {
-      "qwen4_batched_qsa": {
-        "s": "engaged",
-        "why": "driver rows run QSA per row inside the packed forward on the row's own indexer state (solo == concurrent by construction); the padded batched kernel stays on the stock path for explicit cache plans",
-        "ev": [
-          [
-            "python/yunshu_engine/qwen4_mtp.py",
-            "install_row_qsa()"
-          ],
-          [
-            "python/yunshu_engine/round_driver/flashnext.py",
-            "fwd._qsa_attention"
-          ]
-        ]
-      },
       "qwen4_gdn_fused": {
         "s": "engaged",
         "why": "default on both qwen4_exp layer loops; 2-bit packs keep the composed layer (no 2-bit plan tiles, identity-checked)",
