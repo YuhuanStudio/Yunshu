@@ -1375,6 +1375,41 @@ def requeue_quiet_flagged(plan: "Plan", pin: dict, raw_root: Path, manifest: dic
 
 RERUN_TAG = f"{SUPERSEDED_TAG}fail1"  # a failed cell's first record, kept as evidence (the audit skips superseded files)
 
+CELL_FILE_SUFFIXES = (".jsonl", ".telemetry.jsonl", ".server.log")
+
+
+def supersede_cell_files(path: Path, tag: str) -> list[Path]:
+    """Rename a cell's record, telemetry and server log to <stem>.superseded-<tag><N>.* with the first N that is
+    free for all of them, so an earlier superseded copy is never overwritten (kept as evidence; the audit skips
+    superseded files). Returns the new paths."""
+    stem = path.name[: -len(".jsonl")]
+    n = 1
+    while any(path.with_name(f"{stem}{SUPERSEDED_TAG}{tag}{n}{sfx}").exists() for sfx in CELL_FILE_SUFFIXES):
+        n += 1
+    moved = []
+    for sfx in CELL_FILE_SUFFIXES:
+        src = path.with_name(stem + sfx)
+        if src.exists():
+            dst = path.with_name(f"{stem}{SUPERSEDED_TAG}{tag}{n}{sfx}")
+            src.rename(dst)
+            moved.append(dst)
+    return moved
+
+
+def supersede_selected(plan: "Plan") -> int:
+    """--cells re-run (real-1104 B2 fix, 2026-11-07): every selected cell x rep that already has files is superseded
+    first, because a fullcmp cell refuses to overwrite a record (fullcmp_provenance). Returns the cells moved."""
+    moved = 0
+    for job in plan.jobs:
+        if "profile" in job.flags:
+            continue
+        for c in job.cells:
+            path = raw_path(c["engine"], c["id"], job.rep)
+            if any(path.with_name(path.name[: -len(".jsonl")] + sfx).exists() for sfx in CELL_FILE_SUFFIXES):
+                supersede_cell_files(path, "fix")
+                moved += 1
+    return moved
+
 
 def rerun_failed_cells(plan: "Plan", pin: dict, submit=None) -> tuple[list[str], int]:
     """Once, at the end of the batch and from the same snapshot: every cell of a (non-profile) job that has no complete
@@ -1391,12 +1426,7 @@ def rerun_failed_cells(plan: "Plan", pin: dict, submit=None) -> tuple[list[str],
         if not todo:
             continue
         for c in todo:
-            path = raw_path(c["engine"], c["id"], job.rep)
-            stem = path.name[: -len(".jsonl")]
-            for suffix in (".jsonl", ".telemetry.jsonl", ".server.log"):
-                src = path.with_name(stem + suffix)
-                if src.exists():
-                    src.rename(path.with_name(f"{stem}{RERUN_TAG}{suffix}"))
+            supersede_cell_files(raw_path(c["engine"], c["id"], job.rep), "fail")  # fail1, fail2, ...: never overwrites
         print(f"RERUN {job.label}: {len(todo)} cell(s) without a complete record: {[c['id'] for c in todo]}", flush=True)
         jobs.append(retry_job(job, 1, pin, cells=todo, tag="rerun"))
     ids = []
@@ -2054,6 +2084,9 @@ def main(argv=None) -> int:
         print("refusing: swap_stable preflight failed", file=sys.stderr)
         return 2
 
+    if a.cells and not a.resume_reps:
+        n = supersede_selected(plan)
+        print(f"{a.batch}: --cells: {n} existing cell record(s) superseded before the re-run", flush=True)
     if a.resume_reps:
         # real-1104 B2 (2026-11-07): the driver died with its Claude Code parent during rep 3; reps 1-2 and the
         # end-of-batch rerun are on disk. Skip them; the rep-3 selection below skips cells that already have rep 3.

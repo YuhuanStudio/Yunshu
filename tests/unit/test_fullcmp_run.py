@@ -1090,3 +1090,37 @@ def test_resume_reps_skips_cells_whose_rep3_is_on_disk(tmp_path):
     (d / f"{row['id']}-r{run.REP3_INDEX}.jsonl").write_text('{"part": "conc"}\n')
     assert run.rep3_present(tmp_path, row)
     assert "--resume-reps" in open(run.__file__).read()
+
+
+def test_supersede_never_overwrites_and_cells_rerun_moves_existing_records(tmp_path, monkeypatch):
+    """real-1104 B2 fix (2026-11-07): the --cells re-run hit 'exists; a fullcmp cell writes a fresh file' on every
+    job, and rerun_failed_cells' rename could overwrite an earlier superseded-fail1 copy. Existing records are now
+    superseded with the first free number before the re-run."""
+    d = tmp_path / "yunshu"
+    d.mkdir()
+    cell = d / "B2.restart.yunshu.32K-r0.jsonl"
+    for n in (1,):
+        (d / f"B2.restart.yunshu.32K-r0.superseded-fail{n}.jsonl").write_text("old fail1\n")
+    for sfx in (".jsonl", ".telemetry.jsonl", ".server.log"):
+        (d / f"B2.restart.yunshu.32K-r0{sfx}").write_text("current\n")
+    moved = run.supersede_cell_files(cell, "fail")
+    assert (d / "B2.restart.yunshu.32K-r0.superseded-fail1.jsonl").read_text() == "old fail1\n"
+    assert {p.name for p in moved} == {
+        "B2.restart.yunshu.32K-r0.superseded-fail2.jsonl",
+        "B2.restart.yunshu.32K-r0.superseded-fail2.telemetry.jsonl",
+        "B2.restart.yunshu.32K-r0.superseded-fail2.server.log",
+    }
+    assert not cell.exists()
+    monkeypatch.setattr(run, "RAW_ROOT", tmp_path)
+    cell.write_text("again\n")
+
+    class J:
+        flags, rep = [], 0
+        cells = [{"engine": "yunshu", "id": "B2.restart.yunshu.32K"}]
+
+    class P:
+        jobs = [J()]
+
+    assert run.supersede_selected(P()) == 1
+    assert (d / "B2.restart.yunshu.32K-r0.superseded-fix1.jsonl").read_text() == "again\n"
+    assert run.supersede_selected(P()) == 0
