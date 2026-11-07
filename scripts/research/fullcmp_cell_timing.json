@@ -1,0 +1,993 @@
+{
+ "schema": "fullcmp-cell-timing/1",
+ "as_of": "2026-11-03",
+ "scope": "per-cell wall for the full comparison; each cell = one tfbench invocation = one server start",
+ "overhead_s": {
+  "value": 30.6,
+  "kind": "measured",
+  "source": "residual (job wall - ready - cold - warm - turn2) over the 7 complete yunshu B1 cells in job 1103-220358 (30.5-30.6 s); = memory idle_after_s 30.0 + shutdown"
+ },
+ "wall_model": "cell_wall_s = ready_s + cold_total + warm_total + turn2_total + overhead_s; cold = ttft(ctx) + out/dec; warm = warm_ttft + out/dec; turn2 = new-prefill + out/dec",
+ "job": {
+  "cap_min": {
+   "value": 20.0,
+   "kind": "gpuq default --timeout (gpuq.py)",
+   "source": "scripts/dev/gpuq.py submit --timeout default 20 min"
+  },
+  "margin": {
+   "value": 0.7,
+   "kind": "policy (lead 2026-11-03): every chunk estimate <= 70% of the cap",
+   "source": "lead instruction 2026-11-03 (>= 30% margin)"
+  },
+  "limit_min": {
+   "value": 14.0,
+   "kind": "derived: cap x margin",
+   "source": "20 x 0.7"
+  },
+  "fixed_min": {
+   "value": 1.0,
+   "kind": "assumed",
+   "source": "per job: quiet gate (first attempt passed in 1103-220358), mkdir, wrapper"
+  },
+  "timeout_factor": {
+   "value": 1.3,
+   "kind": "gpuq rule: timeout = max(est x 1.3, 1.3 x longest same-kind recent run), capped at the cap",
+   "source": "gpuq preflight rule (GROUND_TRUTH: timeout < 1.3x same-kind longest recent run is raised); est x 1.3 per lead"
+  },
+  "history": [
+   {
+    "job": "1103-220358-00-fullcmp-B1-yunshu-q27-4bit-th-off-r0",
+    "batch": "B1",
+    "engine": "yunshu",
+    "wall_min": {
+     "value": 20.05,
+     "kind": "measured",
+     "source": "gpuq: timeout rc=-2 after 1203 s; killed at the cap, so a lower bound"
+    },
+    "outcome": "timed out: 64K prose truncated after its cold reply; both 8K cells never ran"
+   }
+  ]
+ },
+ "yunshu": {
+  "measured": {
+   "1K": {
+    "code": {
+     "source": "raw B1 yunshu rows /Volumes/Micron/yunshu-fullcmp/raw/yunshu/ (job 1103-220358-00-fullcmp-B1-yunshu-q27-4bit-th-off-r0, gpuq wall = session job_end_s - job_start_s) file B1.core.yunshu.1K.c1.code.o512.single.th-off.none.greedy-r0.jsonl",
+     "ready_s": {
+      "value": 3.8,
+      "kind": "measured",
+      "source": "session row ready_s"
+     },
+     "cold_ttft_s": {
+      "value": 0.978,
+      "kind": "measured",
+      "source": "decode/cold ttft_s"
+     },
+     "cold_total_s": {
+      "value": 6.586,
+      "kind": "measured",
+      "source": "decode/cold total_s (ttft + 512 tokens)"
+     },
+     "cold_dec_tps": {
+      "value": 91.1,
+      "kind": "measured",
+      "source": "decode/cold dec_tps"
+     },
+     "cold_prefill_tps": {
+      "value": 1057.3,
+      "kind": "derived",
+      "source": "pt / cold ttft_s"
+     },
+     "warm_total_s": {
+      "value": 4.662,
+      "kind": "measured",
+      "source": "decode/warm total_s (prefix cache hit, 512 tokens)"
+     },
+     "turn2_total_s": {
+      "value": 7.278,
+      "kind": "measured",
+      "source": "decode/turn2 total_s"
+     },
+     "job_wall_s": {
+      "value": 52.9,
+      "kind": "measured",
+      "source": "session job_end_s - job_start_s (one cell = one server start)"
+     },
+     "residual_s": {
+      "value": 30.59,
+      "kind": "measured",
+      "source": "job_wall - ready - cold - warm - turn2 (= memory idle_after_s + shutdown)"
+     },
+     "idle_after_s": {
+      "value": 30.0,
+      "kind": "measured",
+      "source": "memory row idle_after_s"
+     },
+     "complete": true
+    },
+    "prose": {
+     "source": "raw B1 yunshu rows /Volumes/Micron/yunshu-fullcmp/raw/yunshu/ (job 1103-220358-00-fullcmp-B1-yunshu-q27-4bit-th-off-r0, gpuq wall = session job_end_s - job_start_s) file B1.core.yunshu.1K.c1.prose.o512.single.th-off.none.greedy-r0.jsonl",
+     "ready_s": {
+      "value": 3.8,
+      "kind": "measured",
+      "source": "session row ready_s"
+     },
+     "cold_ttft_s": {
+      "value": 0.985,
+      "kind": "measured",
+      "source": "decode/cold ttft_s"
+     },
+     "cold_total_s": {
+      "value": 7.988,
+      "kind": "measured",
+      "source": "decode/cold total_s (ttft + 512 tokens)"
+     },
+     "cold_dec_tps": {
+      "value": 73.0,
+      "kind": "measured",
+      "source": "decode/cold dec_tps"
+     },
+     "cold_prefill_tps": {
+      "value": 1049.7,
+      "kind": "derived",
+      "source": "pt / cold ttft_s"
+     },
+     "warm_total_s": {
+      "value": 6.522,
+      "kind": "measured",
+      "source": "decode/warm total_s (prefix cache hit, 512 tokens)"
+     },
+     "turn2_total_s": {
+      "value": 7.231,
+      "kind": "measured",
+      "source": "decode/turn2 total_s"
+     },
+     "job_wall_s": {
+      "value": 56.1,
+      "kind": "measured",
+      "source": "session job_end_s - job_start_s (one cell = one server start)"
+     },
+     "residual_s": {
+      "value": 30.53,
+      "kind": "measured",
+      "source": "job_wall - ready - cold - warm - turn2 (= memory idle_after_s + shutdown)"
+     },
+     "idle_after_s": {
+      "value": 30.0,
+      "kind": "measured",
+      "source": "memory row idle_after_s"
+     },
+     "complete": true
+    }
+   },
+   "32K": {
+    "code": {
+     "source": "raw B1 yunshu rows /Volumes/Micron/yunshu-fullcmp/raw/yunshu/ (job 1103-220358-00-fullcmp-B1-yunshu-q27-4bit-th-off-r0, gpuq wall = session job_end_s - job_start_s) file B1.core.yunshu.32K.c1.code.o512.single.th-off.none.greedy-r0.jsonl",
+     "ready_s": {
+      "value": 4.1,
+      "kind": "measured",
+      "source": "session row ready_s"
+     },
+     "cold_ttft_s": {
+      "value": 32.835,
+      "kind": "measured",
+      "source": "decode/cold ttft_s"
+     },
+     "cold_total_s": {
+      "value": 38.639,
+      "kind": "measured",
+      "source": "decode/cold total_s (ttft + 512 tokens)"
+     },
+     "cold_dec_tps": {
+      "value": 88.0,
+      "kind": "measured",
+      "source": "decode/cold dec_tps"
+     },
+     "cold_prefill_tps": {
+      "value": 998.3,
+      "kind": "derived",
+      "source": "pt / cold ttft_s"
+     },
+     "warm_total_s": {
+      "value": 3.657,
+      "kind": "measured",
+      "source": "decode/warm total_s (prefix cache hit, 512 tokens)"
+     },
+     "turn2_total_s": {
+      "value": 3.066,
+      "kind": "measured",
+      "source": "decode/turn2 total_s"
+     },
+     "job_wall_s": {
+      "value": 80.0,
+      "kind": "measured",
+      "source": "session job_end_s - job_start_s (one cell = one server start)"
+     },
+     "residual_s": {
+      "value": 30.58,
+      "kind": "measured",
+      "source": "job_wall - ready - cold - warm - turn2 (= memory idle_after_s + shutdown)"
+     },
+     "idle_after_s": {
+      "value": 30.0,
+      "kind": "measured",
+      "source": "memory row idle_after_s"
+     },
+     "complete": true
+    },
+    "prose": {
+     "source": "raw B1 yunshu rows /Volumes/Micron/yunshu-fullcmp/raw/yunshu/ (job 1103-220358-00-fullcmp-B1-yunshu-q27-4bit-th-off-r0, gpuq wall = session job_end_s - job_start_s) file B1.core.yunshu.32K.c1.prose.o512.single.th-off.none.greedy-r0.jsonl",
+     "ready_s": {
+      "value": 3.8,
+      "kind": "measured",
+      "source": "session row ready_s"
+     },
+     "cold_ttft_s": {
+      "value": 32.836,
+      "kind": "measured",
+      "source": "decode/cold ttft_s"
+     },
+     "cold_total_s": {
+      "value": 41.191,
+      "kind": "measured",
+      "source": "decode/cold total_s (ttft + 512 tokens)"
+     },
+     "cold_dec_tps": {
+      "value": 61.2,
+      "kind": "measured",
+      "source": "decode/cold dec_tps"
+     },
+     "cold_prefill_tps": {
+      "value": 998.2,
+      "kind": "derived",
+      "source": "pt / cold ttft_s"
+     },
+     "warm_total_s": {
+      "value": 7.122,
+      "kind": "measured",
+      "source": "decode/warm total_s (prefix cache hit, 512 tokens)"
+     },
+     "turn2_total_s": {
+      "value": 9.348,
+      "kind": "measured",
+      "source": "decode/turn2 total_s"
+     },
+     "job_wall_s": {
+      "value": 92.0,
+      "kind": "measured",
+      "source": "session job_end_s - job_start_s (one cell = one server start)"
+     },
+     "residual_s": {
+      "value": 30.5,
+      "kind": "measured",
+      "source": "job_wall - ready - cold - warm - turn2 (= memory idle_after_s + shutdown)"
+     },
+     "idle_after_s": {
+      "value": 30.0,
+      "kind": "measured",
+      "source": "memory row idle_after_s"
+     },
+     "complete": true
+    }
+   },
+   "64K": {
+    "code": {
+     "source": "raw B1 yunshu rows /Volumes/Micron/yunshu-fullcmp/raw/yunshu/ (job 1103-220358-00-fullcmp-B1-yunshu-q27-4bit-th-off-r0, gpuq wall = session job_end_s - job_start_s) file B1.core.yunshu.64K.c1.code.o512.single.th-off.none.greedy-r0.jsonl",
+     "ready_s": {
+      "value": 3.8,
+      "kind": "measured",
+      "source": "session row ready_s"
+     },
+     "cold_ttft_s": {
+      "value": 74.68,
+      "kind": "measured",
+      "source": "decode/cold ttft_s"
+     },
+     "cold_total_s": {
+      "value": 81.857,
+      "kind": "measured",
+      "source": "decode/cold total_s (ttft + 512 tokens)"
+     },
+     "cold_dec_tps": {
+      "value": 71.2,
+      "kind": "measured",
+      "source": "decode/cold dec_tps"
+     },
+     "cold_prefill_tps": {
+      "value": 877.7,
+      "kind": "derived",
+      "source": "pt / cold ttft_s"
+     },
+     "warm_total_s": {
+      "value": 4.72,
+      "kind": "measured",
+      "source": "decode/warm total_s (prefix cache hit, 512 tokens)"
+     },
+     "turn2_total_s": {
+      "value": 7.476,
+      "kind": "measured",
+      "source": "decode/turn2 total_s"
+     },
+     "job_wall_s": {
+      "value": 128.4,
+      "kind": "measured",
+      "source": "session job_end_s - job_start_s (one cell = one server start)"
+     },
+     "residual_s": {
+      "value": 30.58,
+      "kind": "measured",
+      "source": "job_wall - ready - cold - warm - turn2 (= memory idle_after_s + shutdown)"
+     },
+     "idle_after_s": {
+      "value": 30.0,
+      "kind": "measured",
+      "source": "memory row idle_after_s"
+     },
+     "complete": true
+    },
+    "prose": {
+     "source": "raw B1 yunshu rows /Volumes/Micron/yunshu-fullcmp/raw/yunshu/ (job 1103-220358-00-fullcmp-B1-yunshu-q27-4bit-th-off-r0, gpuq wall = session job_end_s - job_start_s) file B1.core.yunshu.64K.c1.prose.o512.single.th-off.none.greedy-r0.jsonl",
+     "ready_s": {
+      "value": 3.9,
+      "kind": "measured",
+      "source": "session row ready_s"
+     },
+     "cold_ttft_s": {
+      "value": 74.676,
+      "kind": "measured",
+      "source": "decode/cold ttft_s"
+     },
+     "cold_total_s": {
+      "value": 86.257,
+      "kind": "measured",
+      "source": "decode/cold total_s (ttft + 512 tokens)"
+     },
+     "cold_dec_tps": {
+      "value": 44.1,
+      "kind": "measured",
+      "source": "decode/cold dec_tps"
+     },
+     "cold_prefill_tps": {
+      "value": 877.8,
+      "kind": "derived",
+      "source": "pt / cold ttft_s"
+     },
+     "complete": false,
+     "truncated": {
+      "value": true,
+      "kind": "measured",
+      "source": "part_done missing; decode rows: cold only; job killed at gpuq timeout 1203 s"
+     },
+     "job_wall_s_predicted": {
+      "value": 90.2,
+      "kind": "derived",
+      "source": "NOT measured: ready + cold only; full wall predicted by the fit (see fit_check)"
+     }
+    }
+   },
+   "128K": {
+    "code": {
+     "source": "raw B1 yunshu rows /Volumes/Micron/yunshu-fullcmp/raw/yunshu/ (job 1103-220358-00-fullcmp-B1-yunshu-q27-4bit-th-off-r0, gpuq wall = session job_end_s - job_start_s) file B1.core.yunshu.128K.c1.code.o512.single.th-off.none.greedy-r0.jsonl",
+     "ready_s": {
+      "value": 12.2,
+      "kind": "measured",
+      "source": "session row ready_s"
+     },
+     "cold_ttft_s": {
+      "value": 187.023,
+      "kind": "measured",
+      "source": "decode/cold ttft_s"
+     },
+     "cold_total_s": {
+      "value": 195.111,
+      "kind": "measured",
+      "source": "decode/cold total_s (ttft + 512 tokens)"
+     },
+     "cold_dec_tps": {
+      "value": 63.2,
+      "kind": "measured",
+      "source": "decode/cold dec_tps"
+     },
+     "cold_prefill_tps": {
+      "value": 700.9,
+      "kind": "derived",
+      "source": "pt / cold ttft_s"
+     },
+     "warm_total_s": {
+      "value": 6.089,
+      "kind": "measured",
+      "source": "decode/warm total_s (prefix cache hit, 512 tokens)"
+     },
+     "turn2_total_s": {
+      "value": 7.505,
+      "kind": "measured",
+      "source": "decode/turn2 total_s"
+     },
+     "job_wall_s": {
+      "value": 251.5,
+      "kind": "measured",
+      "source": "session job_end_s - job_start_s (one cell = one server start)"
+     },
+     "residual_s": {
+      "value": 30.58,
+      "kind": "measured",
+      "source": "job_wall - ready - cold - warm - turn2 (= memory idle_after_s + shutdown)"
+     },
+     "idle_after_s": {
+      "value": 30.0,
+      "kind": "measured",
+      "source": "memory row idle_after_s"
+     },
+     "complete": true
+    },
+    "prose": {
+     "source": "raw B1 yunshu rows /Volumes/Micron/yunshu-fullcmp/raw/yunshu/ (job 1103-220358-00-fullcmp-B1-yunshu-q27-4bit-th-off-r0, gpuq wall = session job_end_s - job_start_s) file B1.core.yunshu.128K.c1.prose.o512.single.th-off.none.greedy-r0.jsonl",
+     "ready_s": {
+      "value": 11.6,
+      "kind": "measured",
+      "source": "session row ready_s"
+     },
+     "cold_ttft_s": {
+      "value": 186.922,
+      "kind": "measured",
+      "source": "decode/cold ttft_s"
+     },
+     "cold_total_s": {
+      "value": 200.155,
+      "kind": "measured",
+      "source": "decode/cold total_s (ttft + 512 tokens)"
+     },
+     "cold_dec_tps": {
+      "value": 38.6,
+      "kind": "measured",
+      "source": "decode/cold dec_tps"
+     },
+     "cold_prefill_tps": {
+      "value": 701.3,
+      "kind": "derived",
+      "source": "pt / cold ttft_s"
+     },
+     "warm_total_s": {
+      "value": 12.545,
+      "kind": "measured",
+      "source": "decode/warm total_s (prefix cache hit, 512 tokens)"
+     },
+     "turn2_total_s": {
+      "value": 13.447,
+      "kind": "measured",
+      "source": "decode/turn2 total_s"
+     },
+     "job_wall_s": {
+      "value": 268.3,
+      "kind": "measured",
+      "source": "session job_end_s - job_start_s (one cell = one server start)"
+     },
+     "residual_s": {
+      "value": 30.55,
+      "kind": "measured",
+      "source": "job_wall - ready - cold - warm - turn2 (= memory idle_after_s + shutdown)"
+     },
+     "idle_after_s": {
+      "value": 30.0,
+      "kind": "measured",
+      "source": "memory row idle_after_s"
+     },
+     "complete": true
+    }
+   }
+  },
+  "planning": {
+   "prefill_tps": {
+    "1024": {
+     "value": 1049.7,
+     "kind": "measured",
+     "source": "min over code/prose of cold pt/ttft (prose 1049.7, code 1057.3)"
+    },
+    "32768": {
+     "value": 998.2,
+     "kind": "measured",
+     "source": "min over code/prose of cold pt/ttft (32K 998.2-998.3)"
+    },
+    "65536": {
+     "value": 877.7,
+     "kind": "measured",
+     "source": "cold pt/ttft, 64K code 877.7 (prose 877.8, cold row only)"
+    },
+    "131072": {
+     "value": 700.9,
+     "kind": "measured",
+     "source": "min over code/prose of cold pt/ttft (code 700.9, prose 701.3)"
+    },
+    "_other_ctx": "4K, 8K, 16K: log-linear in log2(ctx) between the anchors (kind: interpolated)"
+   },
+   "decode_tps": {
+    "1024": {
+     "value": 73.0,
+     "kind": "measured",
+     "source": "min over kinds of cold dec_tps (prose 73.0, code 91.1)"
+    },
+    "32768": {
+     "value": 61.2,
+     "kind": "measured",
+     "source": "min over kinds (prose 61.2, code 88.0)"
+    },
+    "65536": {
+     "value": 44.1,
+     "kind": "measured",
+     "source": "min over kinds (prose 44.1, code 71.2)"
+    },
+    "131072": {
+     "value": 38.6,
+     "kind": "measured",
+     "source": "min over kinds (prose 38.6, code 63.2)"
+    },
+    "_other_ctx": "4K, 8K, 16K: log-linear between the anchors (kind: interpolated)"
+   },
+   "warm_ttft_s": {
+    "value": 0.6,
+    "kind": "measured+margin",
+    "source": "warm ttft max 0.268 s (128K prose); turn2 ttft max 0.585 s (128K prose); rounded up"
+   },
+   "ready_s_max": {
+    "value": 12.2,
+    "kind": "measured",
+    "source": "max session ready_s over the 7 complete yunshu B1 cells (128K code)"
+   }
+  }
+ },
+ "competitors": {
+  "note": "cmp-1102 measured cold/warm/turn2 at 1K and 32K only (no 64K/128K result file exists). Their 64K/128K values are extrapolated with the Yunshu shape and flagged assumed in fullcmp_manifest.ENGINE_PERF.",
+  "maps_to": {
+   "tf-native": "tf-1.2.1 (1.2.0 binary) / tf-1.1.8",
+   "splash-latest": "splash-1.5.0 (1.4.1 binary)",
+   "omlx-latest": "omlx-0.7.3rc1",
+   "mlx-serve": "mlx-serve-26.11.1 (26.10.3 binary)"
+  },
+  "measured": {
+   "mlx-serve-decode-1024-code": {
+    "file": "/Volumes/P5Plus/yunshu-build/competitors/compsync/cmp-1102/base/mlx-serve-decode-1024-code-r0.jsonl",
+    "ready_s": {
+     "value": 8.6,
+     "kind": "measured",
+     "source": "session row ready_s of this file"
+    },
+    "cells": {
+     "1024": {
+      "code": {
+       "cold": {
+        "ttft_s": 1.053,
+        "total_s": 7.266,
+        "dec_tps": 82.3,
+        "pt": 1024,
+        "cached": 0
+       }
+      }
+     }
+    }
+   },
+   "mlx-serve-decode-1024-prose": {
+    "file": "/Volumes/P5Plus/yunshu-build/competitors/compsync/cmp-1102/base/mlx-serve-decode-1024-prose-r0.jsonl",
+    "ready_s": {
+     "value": 8.9,
+     "kind": "measured",
+     "source": "session row ready_s of this file"
+    },
+    "cells": {
+     "1024": {
+      "prose": {
+       "cold": {
+        "ttft_s": 1.173,
+        "total_s": 10.03,
+        "dec_tps": 57.7,
+        "pt": 1024,
+        "cached": 0
+       }
+      }
+     }
+    }
+   },
+   "mlx-serve-decode-32768-code": {
+    "file": "/Volumes/P5Plus/yunshu-build/competitors/compsync/cmp-1102/base/mlx-serve-decode-32768-code-r0.jsonl",
+    "ready_s": {
+     "value": 2.4,
+     "kind": "measured",
+     "source": "session row ready_s of this file"
+    },
+    "cells": {
+     "32768": {
+      "code": {
+       "cold": {
+        "ttft_s": 43.635,
+        "total_s": 47.292,
+        "dec_tps": 139.8,
+        "pt": 32768,
+        "cached": 0
+       },
+       "warm": {
+        "ttft_s": 0.135,
+        "total_s": 3.732,
+        "dec_tps": 142.1,
+        "pt": 32768,
+        "cached": 32737
+       },
+       "turn2": {
+        "ttft_s": 0.155,
+        "total_s": 2.275,
+        "dec_tps": 241.1,
+        "pt": 33305,
+        "cached": 33280
+       }
+      }
+     }
+    }
+   },
+   "omlx-latest-decode-1024-code": {
+    "file": "/Volumes/P5Plus/yunshu-build/competitors/compsync/cmp-1102/base/omlx-latest-decode-1024-code-r0.jsonl",
+    "ready_s": {
+     "value": 3.3,
+     "kind": "measured",
+     "source": "session row ready_s of this file"
+    },
+    "cells": {
+     "1024": {
+      "code": {
+       "cold": {
+        "ttft_s": 1.566,
+        "total_s": 8.783,
+        "dec_tps": 70.8,
+        "pt": 1024,
+        "cached": 0
+       }
+      }
+     }
+    }
+   },
+   "omlx-latest-decode-1024-prose": {
+    "file": "/Volumes/P5Plus/yunshu-build/competitors/compsync/cmp-1102/base/omlx-latest-decode-1024-prose-r0.jsonl",
+    "ready_s": {
+     "value": 2.2,
+     "kind": "measured",
+     "source": "session row ready_s of this file"
+    },
+    "cells": {
+     "1024": {
+      "prose": {
+       "cold": {
+        "ttft_s": 1.151,
+        "total_s": 9.84,
+        "dec_tps": 58.8,
+        "pt": 1024,
+        "cached": 0
+       }
+      }
+     }
+    }
+   },
+   "omlx-latest-decode-32768-code": {
+    "file": "/Volumes/P5Plus/yunshu-build/competitors/compsync/cmp-1102/base/omlx-latest-decode-32768-code-r0.jsonl",
+    "ready_s": {
+     "value": 3.3,
+     "kind": "measured",
+     "source": "session row ready_s of this file"
+    },
+    "cells": {
+     "32768": {
+      "code": {
+       "cold": {
+        "ttft_s": 37.0,
+        "total_s": 44.192,
+        "dec_tps": 71.0,
+        "pt": 32768,
+        "cached": 0
+       },
+       "warm": {
+        "ttft_s": 0.955,
+        "total_s": 8.105,
+        "dec_tps": 71.5,
+        "pt": 32768,
+        "cached": 32761
+       },
+       "turn2": {
+        "ttft_s": 1.473,
+        "total_s": 6.967,
+        "dec_tps": 93.0,
+        "pt": 33304,
+        "cached": 32761
+       }
+      }
+     }
+    }
+   },
+   "splash-latest-decode-1024-code": {
+    "file": "/Volumes/P5Plus/yunshu-build/competitors/compsync/cmp-1102/base/splash-latest-decode-1024-code-r0.jsonl",
+    "ready_s": {
+     "value": 75.9,
+     "kind": "measured",
+     "source": "session row ready_s of this file"
+    },
+    "cells": {
+     "1024": {
+      "code": {
+       "cold": {
+        "ttft_s": 0.887,
+        "total_s": 6.573,
+        "dec_tps": 89.9,
+        "pt": 1024,
+        "cached": 0
+       }
+      }
+     }
+    }
+   },
+   "splash-latest-decode-1024-prose": {
+    "file": "/Volumes/P5Plus/yunshu-build/competitors/compsync/cmp-1102/base/splash-latest-decode-1024-prose-r0.jsonl",
+    "ready_s": {
+     "value": 15.7,
+     "kind": "measured",
+     "source": "session row ready_s of this file"
+    },
+    "cells": {
+     "1024": {
+      "prose": {
+       "cold": {
+        "ttft_s": 0.832,
+        "total_s": 8.085,
+        "dec_tps": 70.5,
+        "pt": 1024,
+        "cached": 0
+       }
+      }
+     }
+    }
+   },
+   "splash-latest-decode-32768-code": {
+    "file": "/Volumes/P5Plus/yunshu-build/competitors/compsync/cmp-1102/base/splash-latest-decode-32768-code-r0.jsonl",
+    "ready_s": {
+     "value": 79.0,
+     "kind": "measured",
+     "source": "session row ready_s of this file"
+    },
+    "cells": {
+     "32768": {
+      "code": {
+       "cold": {
+        "ttft_s": 30.77,
+        "total_s": 35.439,
+        "dec_tps": 109.4,
+        "pt": 32768,
+        "cached": 0
+       },
+       "warm": {
+        "ttft_s": 0.236,
+        "total_s": 4.945,
+        "dec_tps": 108.5,
+        "pt": 32768,
+        "cached": 32736
+       },
+       "turn2": {
+        "ttft_s": 0.777,
+        "total_s": 4.822,
+        "dec_tps": 126.3,
+        "pt": 33305,
+        "cached": 32736
+       }
+      }
+     }
+    }
+   },
+   "tf-native-decode-1024-code": {
+    "file": "/Volumes/P5Plus/yunshu-build/competitors/compsync/cmp-1102/tf-1.1.8/tf-native-decode-1024-code-r0.jsonl",
+    "ready_s": {
+     "value": 8.5,
+     "kind": "measured",
+     "source": "session row ready_s of this file"
+    },
+    "cells": {
+     "1024": {
+      "code": {
+       "cold": {
+        "ttft_s": 1.067,
+        "total_s": 5.4,
+        "dec_tps": 117.9,
+        "pt": 1024,
+        "cached": 0
+       }
+      }
+     }
+    }
+   },
+   "tf-native-decode-1024-prose": {
+    "file": "/Volumes/P5Plus/yunshu-build/competitors/compsync/cmp-1102/tf-1.2.0/tf-native-decode-1024-prose-r0.jsonl",
+    "ready_s": {
+     "value": 14.6,
+     "kind": "measured",
+     "source": "session row ready_s of this file"
+    },
+    "cells": {
+     "1024": {
+      "prose": {
+       "cold": {
+        "ttft_s": 1.064,
+        "total_s": 7.151,
+        "dec_tps": 84.0,
+        "pt": 1024,
+        "cached": 0
+       }
+      }
+     }
+    }
+   },
+   "tf-native-decode-32768-code": {
+    "file": "/Volumes/P5Plus/yunshu-build/competitors/compsync/cmp-1102/tf-1.2.0/tf-native-decode-32768-code-r0.jsonl",
+    "ready_s": {
+     "value": 20.4,
+     "kind": "measured",
+     "source": "session row ready_s of this file"
+    },
+    "cells": {
+     "32768": {
+      "code": {
+       "cold": {
+        "ttft_s": 38.357,
+        "total_s": 42.92,
+        "dec_tps": 112.0,
+        "pt": 32768,
+        "cached": 0
+       },
+       "warm": {
+        "ttft_s": 0.146,
+        "total_s": 4.602,
+        "dec_tps": 114.7,
+        "pt": 32768,
+        "cached": 32761
+       },
+       "turn2": {
+        "ttft_s": 1.079,
+        "total_s": 7.097,
+        "dec_tps": 84.9,
+        "pt": 33303,
+        "cached": 32761
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "job_budget": {
+  "gate_retries": {
+   "value": 3,
+   "kind": "code default",
+   "source": "scripts/research/fullcmp_quiet.py DEFAULT_RETRIES"
+  },
+  "gate_wait_s": {
+   "value": 30.0,
+   "kind": "code default",
+   "source": "scripts/research/fullcmp_quiet.py DEFAULT_WAIT_S"
+  },
+  "window_s": {
+   "value": 10.0,
+   "kind": "code default",
+   "source": "scripts/research/fullcmp_quiet.py DEFAULT_WINDOW_S: the quiet window of the pre-gate and of each per-cell quiet_post snapshot"
+  },
+  "finalize_s": {
+   "value": 30.0,
+   "kind": "assumed",
+   "source": "per cell: telemetry finalize, sampler stop, macmon child stop; NOT measured, budget only"
+  },
+  "startup_factor": {
+   "value": 1.5,
+   "kind": "policy (lead 11-04)",
+   "source": "model load budget = 1.5 x longest seen ready_s"
+  },
+  "startup_default_s": {
+   "value": {
+    "mlx-vlm-server": 90.0,
+    "splash-1.5.0": 120.0,
+    "llama-cpp-b12061": 60.0,
+    "kapitsa-0.2.26": 60.0,
+    "kapitsa-0.2.31": 60.0,
+    "default": 60.0
+   },
+   "kind": "policy (lead 11-04)",
+   "source": "FLOOR (lead 11-04): startup = max(1.5 x longest ready_s on disk, this default); others 60 s"
+  },
+  "startup_seen_s": {
+   "yunshu": {
+    "value": 12.4,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: yunshu-main"
+   },
+   "tf-1.2.1": {
+    "value": 20.4,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: tf-native (max with tf-1.2.1 16.5)"
+   },
+   "tf-1.1.8": {
+    "value": 14.6,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: tf-1.1.8"
+   },
+   "splash-1.5.0": {
+    "value": 100.7,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: splash-1.5.0 (max with splash-latest 79.0)"
+   },
+   "omlx-0.7.3": {
+    "value": 3.3,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: omlx-latest (max with omlx-0.7.3 1.7)"
+   },
+   "omlx-0.7.3rc1": {
+    "value": 3.3,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: omlx-latest (max with omlx-0.7.3rc1 1.4)"
+   },
+   "omlx-0.7.4.dev1": {
+    "value": 3.3,
+    "kind": "assumed",
+    "source": "0.7.4.dev1 not measured yet: the omlx-0.7.3 / rc1 value (same launch recipe, same checkpoint); the wiring smoke replaces it"
+   },
+   "mlx-serve-26.11.1": {
+    "value": 8.9,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: mlx-serve (max with mlx-serve-26.11.1 2.4)"
+   },
+   "mlx-lm-server": {
+    "value": 1.2,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: mlx-lm-server"
+   },
+   "mlx-vlm-server": {
+    "value": 8.2,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: mlx-vlm-server"
+   },
+   "llama-cpp-b12061": {
+    "value": 18.0,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: llama-cpp-b12061"
+   },
+   "kapitsa-0.2.26": {
+    "value": 6.8,
+    "kind": "measured",
+    "source": "max session ready_s over all result headers on disk (/Volumes/Micron/yunshu-fullcmp, cmp-1102, wire-1103..1105, smoke*), aliases merged: kapitsa-0.2.26"
+   },
+   "kapitsa-0.2.31": {
+    "value": 6.8,
+    "kind": "assumed",
+    "source": "the kapitsa-0.2.26 value (same binary build, not yet measured on the pinned copy)"
+   }
+  },
+  "stall_floor_min": {
+   "value": 5.0,
+   "kind": "policy (lead 11-04)",
+   "source": "gpuq default stall is 10 min; the floor covers silent gate windows"
+  },
+  "margin_factor": {
+   "value": 1.3,
+   "kind": "policy (lead 11-04)",
+   "source": "timeout = 1.3 x itemized total (>= 30% margin); same factor as gpuq timeout rule"
+  },
+  "short_lane_min": {
+   "value": 10.0,
+   "kind": "gpuq code",
+   "source": "scripts/dev/gpuq.py SHORT_MIN: any job with timeout <= 10 min is in the short lane"
+  },
+  "swap_preflight": {
+   "value": "separate",
+   "kind": "policy (lead 11-04)",
+   "source": "swap preflight is its own job, not in the timeout"
+  },
+  "mixed_probe_s": {
+   "value": 600.0,
+   "kind": "assumed, lower bound measured",
+   "source": "wire-1106e mlx-vlm-server SMOKE mixed (job 1104-043901): the concurrent probe was still running after ~340 s (job wall 387 s, mixed trials 17.5 s and 17.3 s, ready 10.4 s). 600 s is a budget, not a complete measurement; re-measure on the next mixed run"
+  },
+  "mixed_check_yunshu_8k_c4": {
+   "value": 22.9,
+   "kind": "measured",
+   "source": "wire-1106c yunshu SMOKE mixed 8K c4 o64 v0 (job raw .../wire-1106c/yunshu/...v0-r0.jsonl): two trials, max total_s per trial 16.457 and 6.451; sum 22.9 s (the mixed phase, no boot or idle); job wall 58.6 s = ready 4.1 + mixed + ~30.6 idle/shutdown"
+  }
+ }
+}

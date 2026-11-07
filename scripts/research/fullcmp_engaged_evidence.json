@@ -1,0 +1,511 @@
+{
+  "_meta": {
+    "built_by": "fullcmp_engaged_merge.py",
+    "sources": {
+      "engaged_evidence_tf_splash.json": {
+        "task": "per-engine evidence that the requested speculative mode is engaged on a request (read-only; no GPU, no servers)",
+        "date": "2026-11-04",
+        "sources": [
+          "competitors/tensorfold-1.2.1/.../bin/tensorfold-native (strings, byte offsets via python re over the file)",
+          "competitors/tensorfold-1.1.8/.../bin/tensorfold-native (strings)",
+          "competitors/splash-1.5.0/.../engine/splash (native, strings) and .../server/*.py (Python source)",
+          "Micron/yunshu-fullcmp/wire-1103/{tf-1.1.8,splash-1.5.0}/*.server.log and *.jsonl (per-cell slices, wire 2026-11-03/04)",
+          "Micron/yunshu-fullcmp/wire-1103-work/{tf-1.1.8,splash-1.5.0}/tfout/out/server-*-decode-0.log (full engine stdout, startup included)",
+          "Micron/yunshu-fullcmp/smoke-v2/tf-1.2.1 and tfout-v2/out/server-tf-1.2.1-decode-0.log (only real TF 1.2.1 run on disk; no wire-1103 tf-1.2.1 run exists)",
+          "wt-fullcmp-harness scripts/research/tfbench.py, bench_engines.py"
+        ],
+        "harness_bug": "fullcmp header engaged_spec_mode = requested_spec_mode is in tfbench.py Srv session emit; the registry detector bench_engines.detect_mode is what should decide. The wire-1103 header engaged_log_line is null for tf-1.1.8 and splash-1.5.0 (see tf-1.1.8 notes)."
+      }
+    }
+  },
+  "engines": {
+    "kapitsa-0.2.26": {
+      "modes": {
+        "dflash": {
+          "evidence": [
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "DFlash2 drafter (?P<path>\\S+): (?P<layers>\\d+) layers, hidden (?P<hidden>\\d+), (?P<bits>\\d+)-bit projections, (?P<gb>[\\d.]+) GB resident .* loaded in (?P<ms>[\\d.]+) ms",
+              "source_ref": "kapitsa binary strings line 5978 (format string, DFlash2 drafter load)",
+              "real_example": "[kapitsa] DFlash2 drafter /Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/home/fullcmp-SMOKE-kapitsa-0.2.26-q27-4bit-th-off-r0/kapitsa-home/models/qwen3.8-27b-4bit/dflash2: 5 layers, hidden 5120, 4-bit projections, 1.61 GB resident (process footprint +1.55 GB), loaded in 1353 ms",
+              "negative_example": "'DFlash2: no drafter found for %s (looked next to the model and in ~/.cache/nace-infer-models/drafters)' (strings 4253) or 'DFlash2: %s does not fit this model's embedding / LM head format; not used' (4254)",
+              "per_request": false,
+              "startup_sufficient": false,
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-kapitsa-0.2.26-decode-0.log"
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "spec: (?P<acc>[\\d.]+) accepted/drafted over (?P<cycles>\\d+) cycles",
+              "source_ref": "kapitsa binary strings line 4390",
+              "real_example": null,
+              "negative_example": "0.00 accepted/drafted",
+              "per_request": true,
+              "group": "acc",
+              "min": 0,
+              "startup_sufficient": false,
+              "real_log": null
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "\\[kapitsa\\] chat: prompt (?P<prompt>[\\d,]+) \\(cached [\\d,]+\\) in [^\\n]*?, [\\d,]+ tokens in [^\\n]*?, \\S+, (?:[^\\n]*?, )?(?P<tpc>[\\d.]+) tok/cycle, (?:[^\\n]*?, )?KFlash \\(DFlash2\\): [\\d,]+ cycles",
+              "group": "tpc",
+              "min": 1.0,
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "wire-1105 kapitsa server log (chat line, KFlash tree drafting on the DFlash2 lattice)",
+              "real_example": "[kapitsa] chat: prompt 15 (cached 0) in 100 ms (+1.1 ms template/tokenize; last chunk: encoded by 0.5 ms, GPU start +17.7 ms, GPU 81.9 ms, wake +0.1 ms), 10 tokens in 80 ms (112.4 tok/s), stop, 4.50 tok/cycle, KFlash (DFlash2): 2 cycles",
+              "negative_example": "... 1.00 tok/cycle, KFlash (DFlash2): 2 cycles",
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-kapitsa-0.2.26-decode-0.log"
+            }
+          ],
+          "fallback": []
+        }
+      },
+      "engaged_label": "dflash (kflash tree)",
+      "log_source": "engine log at ~/.cache/kapitsa/logs/serve-<PORT>.log (KAPITSA_HOME moves it); --verbose mirrors it to the terminal (kapitsa serve --help). --timing controls the TTFT/prefill shown in the request line.",
+      "notes": "from engaged_evidence_others.json; configured mode dflash; How to turn on: kapitsa serve --model 27b (dflash auto picks the downloaded DFlash2 drafter; --dflash none uses MTP; --spec 0 disables MTP). Default is dflash auto, so the harness must pass --dflash none or a DIR explicitly for a named mode. Negative: 'plain decoding' in the mode line. The 'diagnostics' object in the bench output is the bench's own, not proof of server use. Timed-run cost: the req",
+      "confidence": "source-only: medium: the format fragments and file location come from the binary and help; no live line captured. Positive engagement needs the tok/cycle or KFlash cycle suffix on the chat line and the DFlash2 dra"
+    },
+    "kapitsa-0.2.31": {
+      "modes": {
+        "dflash": {
+          "evidence": [
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "DFlash2 drafter (?P<path>\\S+): (?P<layers>\\d+) layers, hidden (?P<hidden>\\d+), (?P<bits>\\d+)-bit projections, (?P<gb>[\\d.]+) GB resident .* loaded in (?P<ms>[\\d.]+) ms",
+              "source_ref": "kapitsa binary strings line 5978 (format string, DFlash2 drafter load)",
+              "real_example": "[kapitsa] DFlash2 drafter /Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/home/fullcmp-SMOKE-kapitsa-0.2.26-q27-4bit-th-off-r0/kapitsa-home/models/qwen3.8-27b-4bit/dflash2: 5 layers, hidden 5120, 4-bit projections, 1.61 GB resident (process footprint +1.55 GB), loaded in 1353 ms",
+              "negative_example": "'DFlash2: no drafter found for %s (looked next to the model and in ~/.cache/nace-infer-models/drafters)' (strings 4253) or 'DFlash2: %s does not fit this model's embedding / LM head format; not used' (4254)",
+              "per_request": false,
+              "startup_sufficient": false,
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-kapitsa-0.2.26-decode-0.log"
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "spec: (?P<acc>[\\d.]+) accepted/drafted over (?P<cycles>\\d+) cycles",
+              "source_ref": "kapitsa binary strings line 4390",
+              "real_example": null,
+              "negative_example": "0.00 accepted/drafted",
+              "per_request": true,
+              "group": "acc",
+              "min": 0,
+              "startup_sufficient": false,
+              "real_log": null
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "\\[kapitsa\\] chat: prompt (?P<prompt>[\\d,]+) \\(cached [\\d,]+\\) in [^\\n]*?, [\\d,]+ tokens in [^\\n]*?, \\S+, (?:[^\\n]*?, )?(?P<tpc>[\\d.]+) tok/cycle, (?:[^\\n]*?, )?KFlash \\(DFlash2\\): [\\d,]+ cycles",
+              "group": "tpc",
+              "min": 1.0,
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "wire-1105 kapitsa server log (chat line, KFlash tree drafting on the DFlash2 lattice)",
+              "real_example": "[kapitsa] chat: prompt 15 (cached 0) in 100 ms (+1.1 ms template/tokenize; last chunk: encoded by 0.5 ms, GPU start +17.7 ms, GPU 81.9 ms, wake +0.1 ms), 10 tokens in 80 ms (112.4 tok/s), stop, 4.50 tok/cycle, KFlash (DFlash2): 2 cycles",
+              "negative_example": "... 1.00 tok/cycle, KFlash (DFlash2): 2 cycles",
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-kapitsa-0.2.26-decode-0.log"
+            }
+          ],
+          "fallback": []
+        }
+      },
+      "engaged_label": "dflash (kflash tree)",
+      "log_source": "engine log at ~/.cache/kapitsa/logs/serve-<PORT>.log (KAPITSA_HOME moves it); --verbose mirrors it to the terminal (kapitsa serve --help). --timing controls the TTFT/prefill shown in the request line.",
+      "notes": "from engaged_evidence_others.json; configured mode dflash; How to turn on: kapitsa serve --model 27b (dflash auto picks the downloaded DFlash2 drafter; --dflash none uses MTP; --spec 0 disables MTP). Default is dflash auto, so the harness must pass --dflash none or a DIR explicitly for a named mode. Negative: 'plain decoding' in the mode line. The 'diagnostics' object in the bench output is the bench's own, not proof of server use. Timed-run cost: the req",
+      "confidence": "source-only: medium: the format fragments and file location come from the binary and help; no live line captured. Positive engagement needs the tok/cycle or KFlash cycle suffix on the chat line and the DFlash2 dra"
+    },
+    "llama-cpp-b12061": {
+      "modes": {
+        "mtp": {
+          "evidence": [
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "prompt eval time =[^\\n]*?/\\s*[\\d,]+ tokens[\\s\\S]{0,700}?draft acceptance = [\\d.]+ \\(\\s*(?P<accepted>\\d+) accepted\\s*/\\s*\\d+ generated\\)",
+              "group": "accepted",
+              "min": 0,
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "engaged_evidence_vlm_llama.json llama-cpp 'draft acceptance' line; the same format tfbench.detect_mode reads (b12061 prints it per request)",
+              "real_example": "0.02.942.612 I slot print_timing: id  0 | task 0 | prompt eval time =     219.78 ms /    15 tokens (   14.65 ms per token,    68.25 tokens per second)\n0.02.942.614 I slot print_timing: id  0 | task 0 |        eval time =     173.54 ms /    10 tokens (   19.28 ms per token,    51.86 tokens per second)\n0.02.942.614 I slot print_timing: id  0 | task 0 |       total time =     393.32 ms /    25 tokens\n0.02.942.615 I slot print_timing: id  0 | task 0 |    graphs reused =          2\n0.02.942.615 I slot print_timing: id  0 | task 0 |   graph reallocs =          0    /     0        (same size) / (changed size)\n0.02.942.617 I slot print_timing: id  0 | task 0 | draft acceptance = 0.77778 (    7 accepted /     9 generated), mean len =  3.33",
+              "negative_example": "draft acceptance = 0.00 (0 accepted / 4 generated)",
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-llama-cpp-b12061-decode-0.log"
+            }
+          ],
+          "fallback": []
+        }
+      },
+      "log_source": "llama-server stderr (default text log; --log-jsonl available). Enable: --metrics for the endpoint (help: 'enable prometheus compatible metrics endpoint'); verbosity via -lv/--log-verbosity (default unverified for slot INFO lines). The scrape and log line add no GPU sync if done outside the timed window; the timings object is always returned.",
+      "notes": "from engaged_evidence_vlm_llama.json; configured mode mtp; Requested spec types are in --help: --spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash,draft-dspark,ngram-*. For the MTP lane the drafter is -md <mtp GGUF> (census: mtp-Qwen3.8-27B-Q4_0.gguf). Recommended combined evidence for a per-request verdict: timings.draft_n_accepted > 0 in the response plus the 'draft acceptance' line; the metrics endpoint is the fallback when the response i",
+      "confidence": "source-only: medium: names and format strings verified from the b12061 binaries and --help, but no real spec run exists on disk to confirm the line level, the field presence, or that draft-dflash loads (no DFlash "
+    },
+    "mlx-lm-server": {
+      "modes": {
+        "ar": {
+          "evidence": [
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "Starting httpd at (?P<host>\\S+) on port (?P<port>\\d+)\\.\\.\\.",
+              "source_ref": "/Volumes/P5Plus/yunshu-build/competitors/venvs/mlx-lm-0.32.2/lib/python3.13/site-packages/mlx_lm/server.py:1898 (INFO)",
+              "real_example": "2026-11-04 00:44:04,518 - INFO - Starting httpd at 127.0.0.1 on port 18990...",
+              "negative_example": "absent means the server did not start (positive server-up check only)",
+              "per_request": false,
+              "startup_sufficient": true,
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1104/mlx-lm-server/SMOKE.smoke-core.mlx-lm-server.1K.c1.code.o64.single.th-off.none.greedy.v0-r0.server.log"
+            }
+          ],
+          "fallback": []
+        }
+      },
+      "log_source": "server stderr; --log-level default INFO (server.py:1970-1972)",
+      "notes": "from engaged_evidence_others.json; configured mode ar; How to turn on: nothing to enable for AR. For the 'spec' negative control, do not use mlx-lm for a draft test: it cannot show engagement. Harness rule: for ar rows, record argv and reject any request body containing 'draft_model'. Note that mlx-lm 0.32.2 lacks a speculative evidence path, so it cannot be a spec-on row with evidence.",
+      "confidence": "source-only: high for AR meaning (source-verified: no response, log or metric carries a draft count). The check is argv-based: no --draft-model in the launch command line (the harness must record argv, as cell JSO"
+    },
+    "mlx-serve-26.11.1": {
+      "modes": {
+        "mtp": {
+          "evidence": [
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "\\[spec-stats\\] mode=mtp\\b(?=[^\\n]* attempts=(?P<attempts>\\d+))(?=[^\\n]* accepts=(?P<accepts>\\d+))(?=[^\\n]* drafted=(?P<drafted>\\d+))(?:(?=[^\\n]* avg_per_round=(?P<apr>[\\d.]+))|)(?:(?=[^\\n]* per_draft_pct=(?P<pct>[\\d.]+)%)|)(?:(?=[^\\n]* depth=(?P<depth>\\d+))|)(?:(?=[^\\n]* ext_rounds=(?P<ext>\\d+))|)(?:(?=[^\\n]* partial_rounds=(?P<partial>\\d+))|)(?:(?=[^\\n]* runtime_disabled=(?P<dis>true|false))|)(?:(?=[^\\n]* reason=(?P<reason>\\S+))|)(?:(?=[^\\n]* adaptive=(?P<adaptive>\\S+))|)[^\\n]*",
+              "source_ref": "mlx-serve binary strings (format template at offset line 54076 of `strings -n 5`); the dashboard bundle documents '[spec-stats]' as a stable format written to ~/.mlx-serve/logs/mlx-serve-<port>.log (log.defaultLogPath; --log-file overrides)",
+              "real_example": "  [spec-stats] mode=mtp attempts=5 accepts=5 avg_per_round=1.00 per_draft_pct=100.0% depth=6 drafted=5 ext_rounds=0 partial_rounds=0 runtime_disabled=false reason=none adaptive=undecided serial_cell=0.00 sync_ms=0.00 round_ms=35.88 two_ms_tok=0.00 one_ms_tok=0.00 verdict_round=0 trials=0 width_trials=0 table=<2k: table_drops=t0/c0/b0/i0 serial_drops=t0/c0/b0 depth_policy=accept lookup=0/0/0",
+              "negative_example": "a request with no [spec-stats] line, or mode=pld / mode=drafter / mode=dflash only; or attempts=0 accepts=0; or runtime_disabled=true reason=adaptive adaptive=serial (the adaptive controller fell back to serial decode for the rest of the request, so MTP was requested but not used past that point)",
+              "per_request": true,
+              "group": "accepts",
+              "min": 0,
+              "startup_sufficient": false,
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-mlx-serve-26.11.1-decode-0.log"
+            },
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "\\[mtp\\] loaded native MTP head \\((?P<src>[^;]+); per-weight quant, fallback bits=(?P<bits>\\d+)/gs=(?P<gs>\\d+)\\)",
+              "source_ref": "mlx-serve binary strings line 54369 (startup)",
+              "real_example": "[mtp] loaded native MTP head (dense-mlp; per-weight quant, fallback bits=4/gs=64)",
+              "negative_example": "'[mtp] no head found: no mtp/ sidecar and no [language_model.]mtp.* keys ...' or '[mtp] failed to load sidecar' / '[mtp] sidecar incompatible with target'",
+              "per_request": false,
+              "startup_sufficient": false,
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-mlx-serve-26.11.1-decode-0.log"
+            },
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "\\[mtp\\] (lazy predraft engaged|prompt-lookup drafts engaged|draft rerank engaged)",
+              "source_ref": "binary strings (lines 18080, 21854, and the rerank lines)",
+              "real_example": "[mtp] draft rerank engaged (3-bit coarse -> top-32 -> trunk re-score)",
+              "negative_example": "[mtp] regime gate ... two-chunk ... (a regime choice, not a failure)",
+              "per_request": false,
+              "startup_sufficient": false,
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-mlx-serve-26.11.1-decode-0.log"
+            }
+          ],
+          "fallback": [],
+          "no_draft": [
+            {
+              "name": "grammar",
+              "kinds": [
+                "json-schema",
+                "tool-chat"
+              ],
+              "feature_regex": "\\[grammar\\] enforcing [^\\n]*",
+              "reason": "does not draft under a JSON schema or tool grammar (the token mask replaces the draft path)",
+              "source_ref": "wire-1108rest mlx-serve-26.11.1 B2.kind...json-schema server log: '[grammar] enforcing JSON schema from token 0' then '<- 8310+190 tokens streamed [prefill: 1003.1 tok/s, decode: 30.1 tok/s]' with no mtp= or [spec-stats] line for the request (fixture tests/unit/fixtures/mlx_serve_json_schema_cell.server.log)"
+            }
+          ]
+        }
+      },
+      "log_source": "~/.mlx-serve/logs/mlx-serve-<port>.log (or --log-file PATH), default --log-level info. No flag needed for [spec-stats]: the dashboard reads it from the file.",
+      "notes": "from engaged_evidence_others.json; configured mode mtp; How to turn on: default on Metal for MTP-capable checkpoints (--mtp is the default flag; --no-mtp disables). PLD is default ON (--pld) and emits its own [spec-stats] mode=pld line, so count only mode=mtp. --no-pld removes that ambiguity but is a config change, avoid it for the best-config row. --log-file lets the harness own the path. [mtp-round] (the per-round line) appears gated by a trace/diag ",
+      "confidence": "source-only: medium-high: the [spec-stats] format and its per-request semantics are documented in the binary's own dashboard code; not yet seen in a run of ours. Verify once on a real request."
+    },
+    "mlx-vlm-server": {
+      "modes": {
+        "dflash": {
+          "evidence": [
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "^.* - INFO - Drafter ready; speculative decoding enabled\\.$  (startup only; NOT per request)",
+              "source_ref": "mlx_vlm/server/generation.py:1177",
+              "real_example": null,
+              "negative_example": "Fallback line (startup): \"Speculative drafter is incompatible with the target model; falling back to autoregressive generation\" (WARNING, generation.py:1169-1171). Startup-only; a line like this means draft_model=None and no draft_* field will ever appear.",
+              "per_request": false,
+              "startup_sufficient": false,
+              "real_log": null
+            },
+            {
+              "kind": "response_field_probe",
+              "pattern_or_path": "timings.draft_rounds",
+              "paths": [
+                "timings.draft_rounds",
+                "timings.draft_n_accepted"
+              ],
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "serving_path_vlm_omlx.json mlx_vlm_server_0.7.11.required_evidence_per_request",
+              "real_example": "(probe-based: applied on the serving path; timings.draft_rounds > 0)",
+              "negative_example": "timings.draft_rounds null or 0 (drafter did not run for the probe)"
+            }
+          ],
+          "fallback": []
+        }
+      },
+      "log_source": "stderr of `python -m mlx_vlm.server` (logging format '%(asctime)s - %(levelname)s - %(message)s'); captured as tfout/out/server-mlx-vlm-server-decode-0.log. Per-request 'Request completed ... decode=... tok/s' and 'Decode completed' lines (generation.py:397-410, 1485) exist but carry NO draft fields, so they are not engagement evidence.",
+      "notes": "from engaged_evidence_vlm_llama.json; configured mode dflash; (1) Silent-fallback and rejection rules: drafter incompatible -> startup warning, draft_model=None (generation.py:1169-1175); logits_processors (structured response_format) and thinking_budget with a drafter -> ValueError, request rejected not silently degraded (generation.py:1203-1208); logprobs with a drafter are SILENTLY disabled (generate/ar.py:2552-2556 sets compute_logprobs=False, top_logpro",
+      "confidence": "high for per-request timings.draft_* when present (source + one real record); medium for the timed decode cells (no record); the 25-40 tok/s decode cause is not diagnosable from these artifacts."
+    },
+    "omlx-0.7.3": {
+      "modes": {
+        "dflash": {
+          "evidence": [
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "DFlash enabled for (?P<model>\\S+) as a batched drafter, draft=(?P<draft>\\S+)",
+              "source_ref": "/Volumes/P5Plus/yunshu-build/competitors/venvs/omlx-0.7.3/.../engine_pool.py:4189 (load-time intent, after dflash_draft_for resolves a draft); follow with 'DFlash drafter loaded: path=.. kind=.. block=..' at speculative/dflash/__init__.py:231",
+              "real_example": "2026-11-04 00:35:05,887 - omlx.engine_pool - INFO - DFlash enabled for Qwen3.8-27B-oQ4e-mtp as a batched drafter, draft=/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2",
+              "negative_example": "'DFlash enabled for X but no draft model is set; loading without DFlash' (engine_pool.py:4171) or 'DFlash is not supported for X (model_type=..., engine=...); loading without DFlash' (engine_pool.py:4178)",
+              "per_request": false,
+              "startup_sufficient": false,
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1104/omlx-0.7.3/SMOKE.smoke-core.omlx-0.7.3.1K.c1.code.o64.single.th-off.none.greedy.v0-r0.server.log"
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "MTP\\[(?P<uid>[^\\]]+)\\](?=[^\\n]* finish=(?P<finish>\\S+))(?=[^\\n]* tokens=(?P<tokens>\\d+))(?=[^\\n]* cycles=(?P<cycles>\\d+))(?=[^\\n]* tok/cycle=(?P<tpc>[\\d.]+))(?=[^\\n]* accept=(?P<accepted>\\d+)/(?P<drafted>\\d+))(?:(?=[^\\n]* accept=\\d+/\\d+ \\((?P<rate>[^)]+)\\))|)[^\\n]*",
+              "group": "accepted",
+              "min": 0,
+              "request_line": "Chat completion: model=\\S+, (?P<tokens>[\\d,]+) tokens in [^\\n]*?prompt: (?P<prompt>[\\d,]+), finish_reason=[a-z_-]+",
+              "match_tokens": true,
+              "token_tolerance": 0,
+              "coverage_tolerance": 8,
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "serving_path_vlm_omlx.json omlx_0.7.3_and_rc1.per_request_line; batch_generator.py:3950-3995",
+              "real_example": "2026-11-04 00:35:15,827 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - MTP[0] finish=length tokens=16 cycles=6 tok/cycle=2.67 accept=8/14 (57.1%) depth[d1=5/6,d2=3/5,d3=0/3,d4=0/0,d5=0/0,d6=0/0,d7=0/0] emits[init=2,draft=8,bonus=0,verify=6] timing[backbone=287.7ms mtp=21.9ms sample=0.5ms cache=5.3ms]",
+              "negative_example": "MTP[0] ... accept=0/7 (0.0%)",
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1104/omlx-0.7.3/SMOKE.smoke-core.omlx-0.7.3.1K.c1.code.o64.single.th-off.none.greedy.v0-r0.server.log"
+            }
+          ],
+          "fallback": []
+        }
+      },
+      "log_source": "server stderr/log at INFO (settings.py:195 default log_level='info'; OMLX_LOG_LEVEL overrides). Per-request lines are INFO, so default logging shows them. No --metrics flag needed.",
+      "notes": "from engaged_evidence_others.json; configured mode dflash; How to turn on: per model, model_settings dflash_enabled=true + dflash_draft_model=<path> (or bundled draft), or mtp_enabled=true; both default false, so an unset config is AR. Cost: the log formatting runs after finish and reads Python counters; no added GPU sync in the log function itself (not profiled; if a profile shows a delta, mark the timed run as log-off and use the same regex on a profile",
+      "confidence": "source-only: high for the source-level format and that the lines are emitted (read from 0.7.3 and rc1 source); none for live output (no run). Needs one real request to confirm the regex on the wire."
+    },
+    "omlx-0.7.3rc1": {
+      "modes": {
+        "dflash": {
+          "evidence": [
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "DFlash enabled for (?P<model>\\S+) as a batched drafter, draft=(?P<draft>\\S+)",
+              "source_ref": "/Volumes/P5Plus/yunshu-build/competitors/venvs/omlx-0.7.3rc1/omlx-0.7.3rc1/lib/python3.13/site-packages/omlx/engine_pool.py:4187 (load-time)",
+              "real_example": "2026-11-04 00:59:23,467 - omlx.engine_pool - INFO - DFlash enabled for Qwen3.8-27B-oQ4e-mtp as a batched drafter, draft=/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2",
+              "negative_example": "'DFlash enabled for X but no draft model is set' (engine_pool.py:4169)",
+              "per_request": false,
+              "startup_sufficient": false,
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-omlx-0.7.3rc1-decode-0.log"
+            },
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "DFlash drafter loaded: path=(?P<path>\\S+) kind=(?P<kind>\\S+) block=(?P<block>\\d+)",
+              "source_ref": "/Volumes/P5Plus/yunshu-build/competitors/venvs/omlx-0.7.3rc1/omlx-0.7.3rc1/lib/python3.13/site-packages/omlx/speculative/dflash/__init__.py:232",
+              "real_example": "2026-11-04 00:59:28,130 - omlx.speculative.dflash - INFO - DFlash drafter loaded: path=/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2 kind=dflash2 block=8 adaptive=True target_layers=[5, 19, 33, 47, 61]",
+              "negative_example": "absence after a 'DFlash enabled' line means the drafter was not attached",
+              "per_request": false,
+              "startup_sufficient": false,
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-omlx-0.7.3rc1-decode-0.log"
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "MTP\\[(?P<uid>[^\\]]+)\\](?=[^\\n]* finish=(?P<finish>\\S+))(?=[^\\n]* tokens=(?P<tokens>\\d+))(?=[^\\n]* cycles=(?P<cycles>\\d+))(?=[^\\n]* tok/cycle=(?P<tpc>[\\d.]+))(?=[^\\n]* accept=(?P<accepted>\\d+)/(?P<drafted>\\d+))(?:(?=[^\\n]* accept=\\d+/\\d+ \\((?P<rate>[^)]+)\\))|)[^\\n]*",
+              "group": "accepted",
+              "min": 0,
+              "request_line": "Chat completion: model=\\S+, (?P<tokens>[\\d,]+) tokens in [^\\n]*?prompt: (?P<prompt>[\\d,]+), finish_reason=[a-z_-]+",
+              "match_tokens": true,
+              "token_tolerance": 0,
+              "coverage_tolerance": 8,
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "serving_path_vlm_omlx.json omlx_0.7.3_and_rc1.per_request_line; batch_generator.py:3950-3995",
+              "real_example": "2026-11-04 00:59:28,935 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - MTP[0] finish=length tokens=16 cycles=6 tok/cycle=2.67 accept=8/14 (57.1%) depth[d1=5/6,d2=3/5,d3=0/3,d4=0/0,d5=0/0,d6=0/0,d7=0/0] emits[init=2,draft=8,bonus=0,verify=6] timing[backbone=277.4ms mtp=17.4ms sample=0.5ms cache=5.1ms]",
+              "negative_example": "MTP[0] ... accept=0/7 (0.0%)",
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1105-work/all/tfout/out/server-omlx-0.7.3rc1-decode-0.log"
+            }
+          ],
+          "fallback": []
+        }
+      },
+      "log_source": "INFO log as in 0.7.3",
+      "notes": "from engaged_evidence_others.json; configured mode dflash; rc1 pins mlx_vlm 0.7.10; 0.7.3 pins 0.7.11. Its vlm_mtp and text MTP stats code matches 0.7.3. Not a separate measured row unless the lead keeps it. No spec counters in response usage or /api/status (same as 0.7.3).",
+      "confidence": "source-only: high for source presence; none for live output"
+    },
+    "splash-1.5.0": {
+      "modes": {
+        "dflash": {
+          "evidence": [
+            {
+              "kind": "metrics",
+              "pattern_or_path": "GET http://127.0.0.1:<port>/metrics (Prometheus text): splash_drafted_tokens_total, splash_accepted_draft_tokens_total, splash_draft_acceptance_ratio, splash_decode_cycle_milliseconds_total. Per request = delta of the counters before/after.",
+              "source_ref": "server/server.py:569-574 (path == '/metrics' -> prometheus_metrics(self.server.status())); server/metrics.py:182-184 (splash_drafted_tokens_total -> metrics.drafted_tokens, splash_accepted_draft_tokens_total -> metrics.accepted_draft_tokens, splash_draft_acceptance_ratio -> metrics.draft_acceptance_rate).",
+              "real_example": "idle status JSON captured in wire-1103 session row engine_probe (GET /status, after the 1K decode cells): \"metrics\":{... \"drafted_tokens\":0,\"accepted_draft_tokens\":0,\"draft_acceptance_rate\":0, ... \"decode_cycle_ms\":0 ...}, \"draft_weights_bytes\":1266647040, \"draft_context\":{...}",
+              "negative_example": "drafted_tokens delta == 0 across a request = drafter not used (AR). Idle values are all 0 and are not a per-request proof.",
+              "per_request": true,
+              "startup_sufficient": false
+            },
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "Decode cycles verify every row of the draft's block \\(--verify-rows (auto|all)",
+              "source_ref": "engine/splash native binary, string at byte 2460245/2460318 ('Decode cycles verify every row of the draft's block'). Python launcher forwards --draft-model (install/launcher.py:139, 162).",
+              "real_example": "00:04:46 Decode cycles verify every row of the draft's block (--verify-rows auto, as /Volumes/P5Plus/models/TensorFold/Qwen3.8-27B-MLX-4bit is dense).",
+              "negative_example": "not captured; expected absent without --draft-model (unverified). Also startup-only: a drafter can load and draft nothing.",
+              "per_request": false,
+              "startup_sufficient": false,
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1103-work/splash-1.5.0/tfout/out/server-splash-1.5.0-decode-0.log"
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "Done · input (?P<prompt>[\\d,]+)(?: · (?:(?! · )[^\\n])+)*? · output [\\d,]+(?: · (?:(?! · )[^\\n])+)*? · (?P<tpc>[\\d.]+) tok/cycle",
+              "group": "tpc",
+              "min": 1.0,
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "engaged_evidence_tf_splash.json splash-1.5.0 'tok/cycle' line; real line 'Done · input 15 · cached 0 · output 10 · TTFT 0.2s · 118.5 tok/s · 4.5 tok/cycle'",
+              "real_example": "00:06:09 Done · input 15 · cached 0 · output 10 · TTFT 0.2s · 118.5 tok/s · 4.5 tok/cycle",
+              "negative_example": "… · 1.0 tok/cycle",
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1103-work/splash-1.5.0/tfout/out/server-splash-1.5.0-decode-0.log"
+            }
+          ],
+          "fallback": []
+        }
+      },
+      "log_source": "Engine stdout (launcher.py serve -> native engine). The harness Popen writes stdout to <out>/server-splash-1.5.0-<tag>-N.log (tfbench.py Srv). Per-cell slice DOES exist on wire-1103: Micron/yunshu-fullcmp/wire-1103/splash-1.5.0/SMOKE.smoke-core.splash-1.5.0.1K.c1.code.o64.single.th-off.none.greedy.v0-r0.server.log (8 lines, Started/Done only; startup lines are before log_start and are only in wire-1103-work/splash-1.5.0/tfout/out/server-splash-1.5.0-decode-0.log). The missing slice in wire-1103-work is only because the work dir holds the full log; the slice is written to --raw-root wire-1103. Splash does not write request logs to its own dir: its crash traces go to $HOME/Library/Logs/Splash/crash (serve_options/crash_trace, HOME is isolated per cell), and its SSD cache is under /Volumes/P5Plus/yunshu-gpuq/tmp/<job> (not logs).",
+      "notes": "from engaged_evidence_tf_splash.json; configured mode dflash; Harness weakness: bench_engines.detect_mode 'splash' branch (repo bench_engines.py:887) returns dflash if the substring 'draft' occurs in the /status probe text. Real /status contains draft_* keys (draft_weights_bytes, draft_context, idle_draft_rings) even at idle, so the check is not evidence of a request using the drafter. Replace it with the per-request signal: 'tok/cycle' > 1.0 in the Done lin",
+      "confidence": "high for the per-request 'tok/cycle' line (real log, source-verified formula); high for the /metrics counter names (source); medium for the response timings field (source only, no captured body)"
+    },
+    "tf-1.1.8": {
+      "modes": {
+        "dflash": {
+          "evidence": [
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "DFlash2 drafts for one of them",
+              "source_ref": "tensorfold-native 1.1.8 binary strings: 'DFlash2 drafts for one of them' (byte 10051856) and serving format with 'drafts: ' (byte 8903745). Harness pair detector: tfbench.py engaged_spec_mode_line (worktree) and bench_engines.detect_mode TF_NATIVE_FAMILY fallback branch (drafts: on + 'DFlash2 drafts for').",
+              "real_example": "info: Qwen3.8-27B: 1 streams of 140000 tokens, DFlash2 drafts for one of them",
+              "negative_example": "Not captured. Expected: no 'DFlash2 drafts for' line when no --drafter is given (unverified).",
+              "per_request": false,
+              "startup_sufficient": false,
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1103-work/tf-1.1.8/tfout/out/server-tf-1.1.8-decode-0.log"
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "\\[tensorfold\\] done chatcmpl-\\S+ prompt=(?P<prompt>\\d+) .*? rounds=\\d+ accepted=(?P<accepted>\\d+)/(?P<drafted>\\d+)",
+              "group": "accepted",
+              "min": 0,
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "engaged_evidence_tf_splash.json tf-1.2.1 acceptance_stat; real line '[tensorfold] done ... rounds=1 accepted=9/15' in wire-1103 logs",
+              "real_example": "[tensorfold] done chatcmpl-95c4291cab12d10e81ad25726763e51b prompt=15 cached=0 thinking=False effort=none tokens=10 sha=e94588627640 finish=stop rounds=1 accepted=9/15 ttft=0.036 decode=0.041 elapsed=0.077 queued=0.000 tok/s=218.4",
+              "negative_example": "[tensorfold] done … rounds=1 accepted=0/15 …",
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1103-work/tf-1.1.8/tfout/out/server-tf-1.1.8-decode-0.log"
+            }
+          ],
+          "fallback": []
+        }
+      },
+      "log_source": "Per-cell slice (real, exists): Micron/yunshu-fullcmp/wire-1103/tf-1.1.8/SMOKE.smoke-core.tf-1.1.8.1K.c1.code.o64.single.th-off.none.greedy.v0-r0.server.log (13 lines, starts at the first request). Full engine stdout with startup lines: Micron/yunshu-fullcmp/wire-1103-work/tf-1.1.8/tfout/out/server-tf-1.1.8-decode-0.log (20 lines). Use the full log for the startup drafts line; use the slice for per-request done lines.",
+      "notes": "from engaged_evidence_tf_splash.json; configured mode dflash; Harness bug: wire-1103 session row has engaged_log_line null for tf-1.1.8 while the same run's full log contains both 'DFlash2 drafts for' and 'drafts: on'. Likely cause: tfbench.py (worktree mtime 2026-11-04 00:07:50) was modified after the wire run (23:41-00:06), so the DFlash2-drafts pair branch that matches this line was probably added later (the function comment cites the 2026-11-03 smoke). N",
+      "confidence": "high for per-request accepted>0 (real wire-1103 log); high for the startup line (real); medium that the wire rows are the actual decode engagement since there is no AR control on disk"
+    },
+    "tf-1.2.1": {
+      "modes": {
+        "dflash": {
+          "evidence": [
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "\\[tensorfold\\] serving \\S+ at \\S+ \\(.*drafts: DFlash2 \\(([^)]+)\\)",
+              "source_ref": "tensorfold-native 1.2.1 binary, string 'drafts: ' + serving format '[tensorfold] serving  at http:///v1 (sampling: ; drafts: ; context: ; loaded in s)' (strings hit at byte 9569508). Harness: bench_engines.detect_mode TF_NATIVE_FAMILY branch 'drafts: DFlash2\\b' (scripts/research/bench_engines.py, detect_mode).",
+              "real_example": "[tensorfold] serving Qwen3.8-27B-MLX-4bit at http://127.0.0.1:18990/v1 (sampling: temperature 1.0, top_k 20, top_p 0.95; drafts: DFlash2 (/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2); context: 140000; loaded in 14.9s)",
+              "negative_example": "Not captured on disk. Expected: the serving line shows no 'drafts: DFlash2' (e.g. launched with --no-drafts or no --drafter), and the startup line 'Qwen3.8-27B: ... DFlash2 drafts for one of them' is absent. Unverified; needs one AR run.",
+              "per_request": false,
+              "startup_sufficient": false,
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1103-work/all6/tfout/out/server-tf-1.2.1-decode-0.log"
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "\\[tensorfold\\] done chatcmpl-\\S+ prompt=(?P<prompt>\\d+) .*? rounds=\\d+ accepted=(?P<accepted>\\d+)/(?P<drafted>\\d+)",
+              "group": "accepted",
+              "min": 0,
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "engaged_evidence_tf_splash.json tf-1.2.1 acceptance_stat; real line '[tensorfold] done ... rounds=1 accepted=9/15' in wire-1103 logs",
+              "real_example": "[tensorfold] done chatcmpl-a9307583010044733e184f6f6c375f62 prompt=15 cached=0 thinking=False effort=none tokens=10 sha=e94588627640 finish=stop rounds=1 accepted=9/15 ttft=0.037 decode=0.043 elapsed=0.080 queued=0.000 tok/s=209.2",
+              "negative_example": "[tensorfold] done … rounds=1 accepted=0/15 …",
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1104/tf-1.2.1/SMOKE.smoke-core.tf-1.2.1.1K.c1.code.o64.single.th-off.none.greedy.v0-r0.server.log"
+            }
+          ],
+          "fallback": [
+            "the drafter could not start"
+          ]
+        }
+      },
+      "log_source": "Engine stdout, full file: <out>/server-tf-1.2.1-<tag>-N.log (tfbench Srv Popen stdout=). Per-cell slice <cell>.server.log is the byte range AFTER start_server, so the serving/drafts line is NOT in the slice; read the full server-*.log for startup evidence. Per-request 'done' lines are in the slice. The smoke-v2 session row shows server_log None and engine_probe None (older harness), so the wire-1103 slice path was not exercised for tf-1.2.1.",
+      "notes": "from engaged_evidence_tf_splash.json; configured mode dflash; Per request use the done-line regex (acceptance_stat, accepted>0 with rounds>0 = spec engaged). Note accepted=49/228 means 49 of 228 drafted tokens accepted (21%) over 17 rounds. The TF benchmark tool itself prints 'A drafter was passed, but the server drafted no tokens: this run does not show that the drafter ran' (byte 13280731), i.e. TF treats zero drafted tokens as not-engaged. A /metrics endp",
+      "confidence": "high for the startup line and per-request accepted=A/D (real logs, 1K and prefix-cache requests show accepted>0); medium for the negative case (no real AR run exists)"
+    },
+    "yunshu": {
+      "modes": {
+        "dflash": {
+          "evidence": [
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "VLM batch runner: [^\\n]*?draft=(dflash|mtp|off)\\b",
+              "source_ref": "scripts/research/tfbench.py engaged_spec_mode_line (yunshu branch)",
+              "real_example": "2026-11-04 00:22:08,379 INFO yunshu_engine.vlm_engine: VLM batch runner: apc=32.0GiB draft=dflash block=8 verify_kernels={'verify_linear': True, 'gdn_prework': True, 'sdpa_split': True, 'verify_qmm': True, 'gdn_replay': True, 'lane_linear': 497, 'nax_prefill': 'nax-lane-ef7bd070cbebad0b', 'prefill_matmul': 'stock-qmm-gt512+nax-lane-ef7bd070cbebad0b', 'attn_prefill': 'attn-bq32-swz-e54267bfec9d', 'invariant': {'marked': 0, 'packed': 0}, 'split_prefill': 'split64-v1', 'draft_vocab': 65536, 'copy_rows': 32, 'dflash_copy': True, 'lane_sum_identity': 'long-context', 'dflash_fast': 'short-context', 'dflash_warm_rows': [48, 64]}",
+              "negative_example": "draft=off",
+              "per_request": false,
+              "startup_sufficient": true,
+              "real_log": "/Volumes/Micron/yunshu-fullcmp/wire-1103-work/all6/tfout/out/server-yunshu-main-decode-0.log"
+            }
+          ],
+          "fallback": []
+        }
+      },
+      "log_source": "yunshu server log (runner line)",
+      "notes": "yunshu is checked by fullcmp_engaged.yunshu_runner_evidence (its runner line), not by this table",
+      "confidence": "source-only"
+    },
+    "omlx-0.7.4.dev1": {
+      "modes": {
+        "dflash": {
+          "evidence": [
+            {
+              "kind": "log_regex",
+              "pattern_or_path": "DFlash enabled for (?P<model>\\S+) as a batched drafter, draft=(?P<draft>\\S+)",
+              "source_ref": "/Volumes/P5Plus/yunshu-build/competitors/venvs/omlx-0.7.3/.../engine_pool.py:4189 (load-time intent, after dflash_draft_for resolves a draft); follow with 'DFlash drafter loaded: path=.. kind=.. block=..' at speculative/dflash/__init__.py:231 [0.7.4.dev1: patches/mlx_lm_mtp/batch_generator.py is byte-identical to 0.7.3 and the server.py Chat completion line text is identical (diff of the two wheels); engine_pool.py DFlash line moved to :4222; no live 0.7.4.dev1 log captured yet: the wiring smoke supplies the real lines]",
+              "real_example": "2026-11-04 00:35:05,887 - omlx.engine_pool - INFO - DFlash enabled for Qwen3.8-27B-oQ4e-mtp as a batched drafter, draft=/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2",
+              "negative_example": "'DFlash enabled for X but no draft model is set; loading without DFlash' (engine_pool.py:4171) or 'DFlash is not supported for X (model_type=..., engine=...); loading without DFlash' (engine_pool.py:4178)",
+              "per_request": false,
+              "startup_sufficient": false
+            },
+            {
+              "kind": "acceptance_regex",
+              "pattern_or_path": "MTP\\[(?P<uid>[^\\]]+)\\](?=[^\\n]* finish=(?P<finish>\\S+))(?=[^\\n]* tokens=(?P<tokens>\\d+))(?=[^\\n]* cycles=(?P<cycles>\\d+))(?=[^\\n]* tok/cycle=(?P<tpc>[\\d.]+))(?=[^\\n]* accept=(?P<accepted>\\d+)/(?P<drafted>\\d+))(?:(?=[^\\n]* accept=\\d+/\\d+ \\((?P<rate>[^)]+)\\))|)[^\\n]*",
+              "group": "accepted",
+              "min": 0,
+              "request_line": "Chat completion: model=\\S+, (?P<tokens>[\\d,]+) tokens in [^\\n]*?prompt: (?P<prompt>[\\d,]+), finish_reason=[a-z_-]+",
+              "match_tokens": true,
+              "token_tolerance": 0,
+              "coverage_tolerance": 8,
+              "per_request": true,
+              "startup_sufficient": false,
+              "source_ref": "serving_path_vlm_omlx.json omlx_0.7.3_and_rc1.per_request_line; batch_generator.py:3950-3995 [0.7.4.dev1: patches/mlx_lm_mtp/batch_generator.py is byte-identical to 0.7.3 and the server.py Chat completion line text is identical (diff of the two wheels); engine_pool.py DFlash line moved to :4222; no live 0.7.4.dev1 log captured yet: the wiring smoke supplies the real lines]",
+              "real_example": "2026-11-04 00:35:15,827 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - MTP[0] finish=length tokens=16 cycles=6 tok/cycle=2.67 accept=8/14 (57.1%) depth[d1=5/6,d2=3/5,d3=0/3,d4=0/0,d5=0/0,d6=0/0,d7=0/0] emits[init=2,draft=8,bonus=0,verify=6] timing[backbone=287.7ms mtp=21.9ms sample=0.5ms cache=5.3ms]",
+              "negative_example": "MTP[0] ... accept=0/7 (0.0%)"
+            }
+          ],
+          "fallback": []
+        }
+      },
+      "log_source": "server stderr/log at INFO (settings.py:195 default log_level='info'; OMLX_LOG_LEVEL overrides). Per-request lines are INFO, so default logging shows them. No --metrics flag needed.",
+      "notes": "from engaged_evidence_others.json; configured mode dflash; How to turn on: per model, model_settings dflash_enabled=true + dflash_draft_model=<path> (or bundled draft), or mtp_enabled=true; both default false, so an unset config is AR. Cost: the log formatting runs after finish and reads Python counters; no added GPU sync in the log function itself (not profiled; if a profile shows a delta, mark the timed run as log-off and use the same regex on a profile",
+      "confidence": "source-only: high for the source-level format and that the lines are emitted (read from 0.7.3 and rc1 source); none for live output (no run). Needs one real request to confirm the regex on the wire."
+    }
+  }
+}

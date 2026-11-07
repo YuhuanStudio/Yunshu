@@ -62,6 +62,8 @@ def test_server_launch_checks_fresh_log_and_cleans_up(monkeypatch, tmp_path, act
     import io
 
     monkeypatch.setattr(tfbench, "OUT", tmp_path)
+    # the target and the drafter configs live on the benchmark machine: same hidden size
+    monkeypatch.setattr(tfbench, "_hidden_size", lambda _p: 5120)
     monkeypatch.setattr(tfbench, "free_port", lambda: 18999)
     monkeypatch.setattr(tfbench, "owns_listener", lambda *args: True)
     log = tmp_path / "out/server-repeat.log"
@@ -185,7 +187,11 @@ def test_cpu_preflight_checks_legacy_tag_without_starting_server(
     )
     tfbench.main()
     assert len(prompts) == 6
-    assert '"requested_spec_mode": "dflash"' in capsys.readouterr().out
+    # The legacy "-dflash" tag no longer selects the mode: the drafter follows the target (a94e6a593).
+    # A tmp target without a hidden size is not the 27B, so it drafts with its MTP head.
+    out = capsys.readouterr().out
+    assert '"requested_spec_mode": "mtp"' in out
+    assert '"YUNSHU_VLM_DRAFT": "mtp"' in out
     assert not (tmp_path / "result.jsonl").exists()
 
 

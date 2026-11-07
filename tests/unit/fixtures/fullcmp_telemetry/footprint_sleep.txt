@@ -1,0 +1,30 @@
+======================================================================
+sleep [44760]: 64-bit    Footprint: 1200 KB (16384 bytes per page)
+======================================================================
+
+  Dirty      Clean  Reclaimable    Regions    Category
+    ---        ---          ---        ---    ---
+ 608 KB        0 B          0 B          9    Malloc Metadata
+ 176 KB        0 B          0 B          1    page table
+ 117 KB        0 B          0 B         71    __DATA_DIRTY
+  75 KB        0 B          0 B        190    unused dyld shared cache area
+  48 KB        0 B          0 B          3    Malloc Small
+  32 KB        0 B          0 B          1    Malloc Tiny
+  32 KB        0 B          0 B          5    Untagged
+  32 KB        0 B          0 B          2    Stack
+  20 KB        0 B          0 B          4    __TPRO_CONST
+  20 KB        0 B          0 B          1    __OBJC_RW
+  16 KB        0 B          0 B          1    Deferred Reclaim
+  16 KB        0 B          0 B          1    OS Alloc Once
+ 8630 B        0 B          0 B         32    __DATA
+    0 B      16 KB          0 B         83    __TEXT
+    0 B      16 KB          0 B         39    __DATA_CONST
+    0 B      16 KB          0 B          2    __LINKEDIT
+    0 B        0 B          0 B         40    __AUTH_CONST
+    0 B        0 B          0 B         11    __AUTH
+    0 B        0 B          0 B          1    __OBJC_RO
+    0 B        0 B          0 B          1    Dyld Private Memory
+    0 B        0 B          0 B          1    mapped file
+    ---        ---          ---        ---    ---
+1200 KB      48 KB          0 B        501    TOTAL
+
