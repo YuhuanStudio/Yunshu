@@ -23,7 +23,12 @@ _PREFIX = "mlx_vlm.models."
 
 
 def is_qwen4_type(model_type: Any) -> bool:
-    return isinstance(model_type, str) and model_type in QWEN4_MODEL_TYPES
+    """A Qwen4 model_type, or its text sub-config's (mlx-vlm names the language model's config
+    ``<type>_text``: the Flash-Next checkpoint's text_config.model_type is ``qwen4_exp_text``)."""
+    if not isinstance(model_type, str):
+        return False
+    base = model_type[: -len("_text")] if model_type.endswith("_text") else model_type
+    return base in QWEN4_MODEL_TYPES
 
 
 def is_qwen4_family(config: Mapping[str, Any] | None) -> bool:

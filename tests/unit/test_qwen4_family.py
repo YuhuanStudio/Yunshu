@@ -119,3 +119,17 @@ def test_no_new_literal_qwen4_exp_in_code():
     assert not bad, (
         "use yunshu_engine.qwen4_family instead of a literal:\n" + "\n".join(bad)
     )
+
+
+def test_text_sub_config_type_is_qwen4():
+    """2026-11-08 M5 yv: the real Flash-Next checkpoint's language model reports args.model_type
+    'qwen4_exp_text' (config.json text_config.model_type); the driver routed it to the generic layer and
+    decoded without speculation. The text sub-config type must count as Qwen4."""
+    from yunshu_engine.qwen4_family import is_qwen4_type, is_qwen4_family
+
+    assert is_qwen4_type("qwen4_exp_text")
+    assert is_qwen4_type("qwen4_exp")
+    assert not is_qwen4_type("qwen3_5_text")
+    assert not is_qwen4_type("qwen4_exp_textual")
+    assert is_qwen4_family({"model_type": "qwen4_exp", "text_config": {"model_type": "qwen4_exp_text"}})
+    assert is_qwen4_family({"model_type": "other", "text_config": {"model_type": "qwen4_exp_text"}})
