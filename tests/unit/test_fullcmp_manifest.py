@@ -132,7 +132,8 @@ def test_unsupported_rows_come_from_census_flags_only():
         or (
             r["engine"] == "mlx-lm-server"
             and (
-                r.get("media") != "none"
+                r.get("thinking") == "on"  # census reasoning_split false: reasoning_content empty
+                or r.get("media") != "none"
                 or r.get("prompt_kind") == "json-schema"
                 or r.get("turns") == "restart"
                 or r.get("agent") == "claude"

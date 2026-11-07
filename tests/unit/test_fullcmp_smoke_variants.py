@@ -37,8 +37,10 @@ import tfbench  # noqa: E402
 # Re-pinned 2026-11-04: llama.cpp image cells are unsupported in this run (mmproj not provisioned, follow-up)
 # Re-pinned 2026-11-04: oMLX 0.7.4.dev1 added as an EXTRA engine (rows mirror omlx-0.7.3, hours outside the plan total).
 # The bytes of every other engine's rows are unchanged: REAL_MANIFEST_SHA_12 is the previous pin (the manifest the real run uses).
-REAL_MANIFEST_SHA = "fcebb2dfc1bc859a8fbf1d9efa44d7474160434438d386fc74fdef6e4b024309"
-REAL_MANIFEST_SHA_12 = "e75aba1e3b5b2c1146386fb98d642779fbbdcb77a2ceea98d01e3cfacfd7ca58"
+# Re-pinned 2026-11-07: mlx-lm-server thinking-on cells are unsupported (census reasoning_split false, audit fixes 5b2e17d50)
+# and kapitsa-0.2.31 (pinned re-run of kapitsa-0.2.26, an EXTRA engine: the other engines' bytes did not move with it).
+REAL_MANIFEST_SHA = "d7db4b5a6d9ac02b06ef4c20ac5526b8b4895a7d3af03cdd065877b1d4ccb854"
+REAL_MANIFEST_SHA_12 = "17ff25d5690b62c1030c70b06bff53ea7cd28f8e7f77ce537afbfd27c75b73d3"
 
 
 def _real_manifest_bytes() -> bytes:
