@@ -1076,3 +1076,17 @@ def test_cells_filter_selects_only_matching_cells_and_refuses_an_empty_match(tmp
     m.write_text("\n".join(__import__("json").dumps(r) for r in rows) + "\n")
     rc = run.main(["--batch", "B2", "--manifest", str(m), "--cells", r"^B2\.nomatch", "--dry-run"])
     assert rc == 2 and "matches no B2 cell" in capsys.readouterr().err
+
+
+def test_resume_reps_skips_cells_whose_rep3_is_on_disk(tmp_path):
+    """real-1104 B2 (2026-11-07): the driver died with its parent during rep 3; --resume-reps runs only the
+    rep-3 cells still missing (a non-empty <raw>/<engine>/<cell>-r2.jsonl counts as present)."""
+    row = {"engine": "kapitsa-0.2.26", "id": "B2.conc.kapitsa-0.2.26.8K.c2"}
+    d = tmp_path / row["engine"]
+    d.mkdir()
+    assert not run.rep3_present(tmp_path, row)
+    (d / f"{row['id']}-r{run.REP3_INDEX}.jsonl").write_text("")
+    assert not run.rep3_present(tmp_path, row)  # an empty file is a dead job, not a result
+    (d / f"{row['id']}-r{run.REP3_INDEX}.jsonl").write_text('{"part": "conc"}\n')
+    assert run.rep3_present(tmp_path, row)
+    assert "--resume-reps" in open(run.__file__).read()

@@ -1507,6 +1507,12 @@ def run_audit(raw_root: Path, manifest_path: Path) -> int:
     ).returncode
 
 
+def rep3_present(raw_root: Path, row: dict) -> bool:
+    """A cell's rep-3 result file exists and is non-empty (<raw>/<engine>/<cell>-r2.jsonl)."""
+    f = Path(raw_root) / row["engine"] / f"{row['id']}-r{REP3_INDEX}.jsonl"
+    return f.is_file() and f.stat().st_size > 0
+
+
 def run_reps(raw_root: Path, manifest_path: Path) -> list[tuple[str, str]]:
     res = subprocess.run(
         [
@@ -1816,6 +1822,12 @@ def main(argv=None) -> int:
     ap.add_argument("--manifest", required=True, type=Path)
     ap.add_argument("--engines", default="", help="comma list of manifest engine ids")
     ap.add_argument(
+        "--resume-reps",
+        action="store_true",
+        help="the batch's reps 1-2 are already in the raw root (a driver that died during rep 3): skip "
+        "them and run the audit, the rep-3 selection and the rep-3 jobs still missing",
+    )
+    ap.add_argument(
         "--cells",
         default="",
         help="regex on manifest cell ids: run only the matching cells of the batch (a targeted re-run "
@@ -2042,11 +2054,17 @@ def main(argv=None) -> int:
         print("refusing: swap_stable preflight failed", file=sys.stderr)
         return 2
 
-    try:
-        ids, failed = submit_sequential(plan.jobs, pin, retry_log=RETRY_LOG)
-    except RealQueueRefused as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
+    if a.resume_reps:
+        # real-1104 B2 (2026-11-07): the driver died with its Claude Code parent during rep 3; reps 1-2 and the
+        # end-of-batch rerun are on disk. Skip them; the rep-3 selection below skips cells that already have rep 3.
+        ids, failed = [], []
+        print(f"{a.batch}: resume: reps 1-2 taken from {RAW_ROOT}", flush=True)
+    else:
+        try:
+            ids, failed = submit_sequential(plan.jobs, pin, retry_log=RETRY_LOG)
+        except RealQueueRefused as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
 
     if a.profile_only:
         # the timed record is not touched: no audit, rep-3 or quiet requeue here. The profile rows are audited in place
@@ -2054,18 +2072,21 @@ def main(argv=None) -> int:
         print(f"{a.batch}: profile-only batch, {len(ids)} jobs done, {failed} failed", flush=True)
         return 1 if failed else 0
     # a failed (non-quiet) cell is rerun once at the end, from this snapshot; what is still incomplete fails the batch
-    try:
-        _rerun_ids, still_incomplete = rerun_failed_cells(plan, pin)
-    except RealQueueRefused as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
+    if a.resume_reps:
+        still_incomplete = []
+    else:
+        try:
+            _rerun_ids, still_incomplete = rerun_failed_cells(plan, pin)
+        except RealQueueRefused as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     failed = still_incomplete
     batches = audited_batches(a.batch)
     manifest_path = AUDIT_DIR / f"{a.batch}_audit_manifest.json"
     AUDIT_DIR.mkdir(parents=True, exist_ok=True)
     manifest_obj = audit_manifest(rows, batches, pin, plan.engine_order, profile_engines)
     # quiet-flagged cells are rerun in their slot; the second pass catches a cell flagged twice
-    for _pass in range(2):
+    for _pass in range(0 if a.resume_reps else 2):  # a resume keeps the flags the first driver already acted on
         failed += requeue_quiet_flagged(plan, pin, RAW_ROOT, manifest_obj)
     manifest_path.write_text(json.dumps(manifest_obj, indent=2) + "\n"
     )
@@ -2077,6 +2098,10 @@ def main(argv=None) -> int:
     if need:
         want = set(need)
         subset = [r for r in plan.runnable if (r["engine"], r["id"]) in want]
+        if a.resume_reps:  # rep-3 results already on disk are not measured again
+            have = [r for r in subset if rep3_present(RAW_ROOT, r)]
+            subset = [r for r in subset if r not in have]
+            print(f"resume: {len(have)} cells already have rep 3; {len(subset)} to run", flush=True)
         rep3_jobs = plan_jobs(
             {REP3_INDEX: subset}, plan.engine_order, pin, a.batch, label_suffix="-rep3"
         )
