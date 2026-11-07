@@ -2818,9 +2818,8 @@ class VLMEngine:
         from .kernels import buffer_cache
 
         if spec_family and not qwen4:
-            from .kernels import cache_restore, singleton_cache
+            from .kernels import cache_restore
 
-            singleton_cache.install()
             cache_restore.install()
             from .kernels import preempt
 

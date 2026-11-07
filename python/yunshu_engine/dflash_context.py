@@ -3,15 +3,9 @@
 """DFlash speculative decoding on Qwen3.5: lossless prefill, verify head, and
 the drafter's context window.
 
-1. Prefill with captured layers. A single request's speculative prompt cache is
-   a one-row ``BatchKVCache``; upstream ``Qwen3_5Model`` runs such a request on
-   an extracted per-row ``KVCache`` -- the plain-decode arithmetic -- but only
-   when no hidden states are captured (``hidden_sink is None``). DFlash
-   captures ``target_layer_ids`` during prefill, so its prompt ran the batched
-   attention path instead: different bits in every KV entry after the first
-   attention layer, and spec on != spec off from the first near-tie on (MTP
-   captures nothing and was unaffected). ``install`` gives the capturing call
-   the same per-row path.
+1. (Removed with the stock runner.) A one-row ``BatchKVCache`` prefill with captured layers used to
+   need a per-row routing patch of ``Qwen3_5Model.__call__``; the round driver prefills every row on
+   its own plain ``KVCache`` and passes ``capture_layer_ids`` / ``hidden_sink`` straight to the model.
 2. Greedy verify head. mlx-vlm's greedy DFlash round asks the target for
    ``speculative_verify_dflash_hidden`` (captured layers + final hidden) and
    takes the argmax with ``speculative_argmax_from_hidden`` -- the head MTP
@@ -66,70 +60,6 @@ def _speculative_verify_dflash_hidden(self, inputs, cache, capture_layer_ids):
         skip_logits=True,
     )
     return out.hidden_states[:-1], out.hidden_states[-1], out.gdn_states
-
-
-def _install_row_capture() -> None:
-    """Route a capturing one-row call through upstream's per-row path."""
-    from mlx_vlm.models.qwen3_5 import language as lang
-
-    cls = lang.Qwen3_5Model
-    orig = cls.__call__
-
-    def __call__(
-        self,
-        inputs,
-        inputs_embeds=None,
-        mask=None,
-        cache=None,
-        position_ids=None,
-        capture_layer_ids=None,
-        hidden_sink=None,
-    ):
-        batch = (inputs_embeds if inputs_embeds is not None else inputs).shape[0]
-        fa_cache = cache[self.fa_idx] if cache is not None else None
-        if (
-            hidden_sink is None
-            or batch != 1
-            or fa_cache is None
-            or not lang._is_single_row_batch_cache(fa_cache)
-        ):
-            return orig(
-                self,
-                inputs,
-                inputs_embeds=inputs_embeds,
-                mask=mask,
-                cache=cache,
-                position_ids=position_ids,
-                capture_layer_ids=capture_layer_ids,
-                hidden_sink=hidden_sink,
-            )
-        # Same as upstream's hidden_sink-free branch, keeping the capture.
-        row_cache = [
-            None
-            if entry is None
-            else lang._extract_row_cache(entry, 0)
-            if lang._is_single_row_batch_cache(entry)
-            else entry
-            for entry in cache
-        ]
-        out = orig(
-            self,
-            inputs,
-            inputs_embeds=inputs_embeds,
-            mask=mask,
-            cache=row_cache,
-            position_ids=position_ids,
-            capture_layer_ids=capture_layer_ids,
-            hidden_sink=hidden_sink,
-        )
-        for i, entry in enumerate(row_cache):
-            if cache[i] is None or entry is None:
-                continue
-            if hasattr(cache[i].__class__, "merge"):
-                cache[i] = cache[i].__class__.merge([entry])
-        return out
-
-    cls.__call__ = __call__
 
 
 def neutral_context(drafter: Any):
@@ -297,7 +227,7 @@ def _install_context_window() -> None:
 
 
 def install(language_model: Any = None) -> bool:
-    """Install the three patches (idempotent). ``language_model``'s class gets
+    """Install the patches (idempotent). ``language_model``'s class gets
     the greedy DFlash verify hook when it verifies through
     ``speculative_argmax_from_hidden`` but lacks it."""
     cls = type(language_model) if language_model is not None else None
@@ -309,12 +239,11 @@ def install(language_model: Any = None) -> bool:
         cls.speculative_verify_dflash_hidden = _speculative_verify_dflash_hidden
     if _STATE["installed"]:
         return True
-    _install_row_capture()
     _install_context_window()
     try:
         from . import dflash_apc_window, settings
 
-        dflash_apc_window.install(
+        dflash_apc_window.set_budget(
             int(float(settings.get("YUNSHU_VLM_APC_DRAFT_WINDOW_GB") or 0) * (1 << 30))
         )
     except Exception:  # lossless fallback: suffix-only drafter context after a hit

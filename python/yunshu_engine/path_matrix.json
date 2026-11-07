@@ -2077,7 +2077,6 @@
     "python/yunshu_engine/kernels/qmv_compat.py": "qmv compatibility shim",
     "python/yunshu_engine/kernels/buffer_cache.py": "prefill buffer cache (VLM runner)",
     "python/yunshu_engine/kernels/cache_restore.py": "APC restore kernels",
-    "python/yunshu_engine/kernels/singleton_cache.py": "singleton cache install",
     "python/yunshu_engine/kernels/omlx": "oMLX verify kernel package (omlx.apply; spec family)",
     "python/yunshu_engine/kernels/tensorfold": "TensorFold lane kernels (lane_linear)",
     "python/yunshu_engine/cache_prefill.py": "prefill cache install",
