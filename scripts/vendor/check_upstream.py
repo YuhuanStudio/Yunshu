@@ -31,10 +31,13 @@ import fnmatch
 import hashlib
 import importlib.metadata
 import importlib.util
+import io
 import json
 import re
 import subprocess
 import sys
+import textwrap
+import tokenize
 import tomllib
 import urllib.request
 from pathlib import Path
@@ -241,6 +244,53 @@ def _find_symbol(source: str, symbol: str):
     return node
 
 
+# Tokens that carry no code: comments, blank lines and the file bookkeeping tokens.
+_SKIP_TOKENS = {
+    tokenize.COMMENT,
+    tokenize.NL,
+    tokenize.ENCODING,
+    tokenize.ENDMARKER,
+}
+_FSTRING_START = getattr(tokenize, "FSTRING_START", None)
+_FSTRING_END = getattr(tokenize, "FSTRING_END", None)
+
+
+def source_fingerprint(source: str, symbol: str) -> tuple[str, str] | None:
+    """(sha256, signature) of a symbol's code, independent of the interpreter's ``ast.unparse``.
+
+    The digest is over the symbol's token stream (from ``tokenize``) with comments, blank lines and
+    indentation-free layout dropped; an f-string is one STRING token whether the interpreter tokenizes
+    it as one token (<3.12) or as FSTRING_START/MIDDLE/END pieces (3.12+). So a formatting-only change
+    in the upstream file, or a different Python, leaves the digest alone; a code change does not."""
+    lines = source.splitlines(keepends=True)
+    node = _find_symbol(source, symbol)
+    if node is None:
+        return None
+    start = min([node.lineno, *(d.lineno for d in node.decorator_list)])
+    segment = textwrap.dedent("".join(lines[start - 1 : node.end_lineno]))
+    toks: list[tuple[str, str]] = []
+    fstring_depth, fstring_text = 0, []
+    for tok in tokenize.generate_tokens(io.StringIO(segment).readline):
+        if tok.type in _SKIP_TOKENS:
+            continue
+        if _FSTRING_START is not None and tok.type == _FSTRING_START:
+            fstring_depth += 1
+        if fstring_depth:
+            fstring_text.append(tok.string)
+            if _FSTRING_END is not None and tok.type == _FSTRING_END:
+                fstring_depth -= 1
+                if fstring_depth == 0:
+                    toks.append(("STRING", "".join(fstring_text)))
+                    fstring_text = []
+            continue
+        toks.append((tokenize.tok_name.get(tok.type, str(tok.type)), tok.string))
+    digest = hashlib.sha256(
+        "\n".join(f"{t}\x1f{v}" for t, v in toks).encode()
+    ).hexdigest()
+    sig = ast.unparse(node.args) if hasattr(node, "args") else ""
+    return digest, "(" + sig + ")"
+
+
 def symbol_fingerprint(module: str, symbol: str):
     """(sha256 of the normalized source, signature) of an installed symbol, or None."""
     try:
@@ -249,12 +299,7 @@ def symbol_fingerprint(module: str, symbol: str):
         return None
     if spec is None or not spec.origin or not spec.origin.endswith(".py"):
         return None
-    node = _find_symbol(Path(spec.origin).read_text(), symbol)
-    if node is None:
-        return None
-    sig = ast.unparse(node.args) if hasattr(node, "args") else ""
-    digest = hashlib.sha256(ast.unparse(node).encode()).hexdigest()
-    return digest, "(" + sig + ")"
+    return source_fingerprint(Path(spec.origin).read_text(), symbol)
 
 
 def norm_sig(sig: str) -> str:
