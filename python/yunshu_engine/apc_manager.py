@@ -448,7 +448,54 @@ class SpillDiskStore(DiskBlockStore):
     # extra_hash)``. The manager uses it to drop the files that checkpoint supersedes.
     on_exact_written: Any = None
 
+    # Write-behind gate: the background writer starts a file only while the engine is idle. A
+    # ~1 GB checkpoint written during a decode took memory bandwidth and CPU from it (27B 8K code
+    # decode -5.5%, identical per-round counters). ``busy_probe() -> bool`` is set by the engine
+    # (any request prefilling, decoding or queued); the writer waits between files until the
+    # engine has been idle for ``gate_delay_s`` (polling every ``gate_poll_s``). ``flush()`` and
+    # ``close()`` open the gate, so a graceful stop writes everything; producer-thread writes
+    # (queue full, RAM eviction, an entry too big for RAM) are never gated.
+    busy_probe: Any = None
+    gate_delay_s: float = 0.1
+    gate_poll_s: float = 0.02
+    _gate_open = False
+    _gate_waits = 0
+
+    def _wait_idle(self) -> None:
+        probe = self.busy_probe
+        idle_since = None
+        counted = False
+        while probe is not None and not self._gate_open:
+            try:
+                busy = bool(probe())
+            except Exception:
+                return
+            now = time.monotonic()
+            if busy:
+                idle_since = None
+                if not counted:
+                    counted = True
+                    self._gate_waits += 1
+            elif idle_since is None:
+                idle_since = now
+            elif now - idle_since >= self.gate_delay_s:
+                return
+            time.sleep(self.gate_poll_s)
+
+    def flush(self) -> None:
+        self._gate_open = True
+        try:
+            super().flush()
+        finally:
+            self._gate_open = False
+
+    def close(self) -> None:
+        self._gate_open = True
+        super().close()
+
     def _write_payload(self, shard_id, block_hashes, payload) -> bool:
+        if threading.current_thread().name.startswith("apc-disk-"):
+            self._wait_idle()
         ok = self._write_payload_impl(shard_id, block_hashes, payload)
         h = getattr(payload, "cache_hash", None)
         if ok and h is not None:

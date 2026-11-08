@@ -156,3 +156,72 @@ def test_full_queue_postpones_instead_of_writing_inline(tmp_path):
     assert _files(tmp_path) == []
     m.close()  # close() still persists it
     assert len(_files(tmp_path)) == 1
+
+
+def _gated(tmp_path, busy):
+    m = _disk_mgr(tmp_path, persist_on_store=True)
+    m.disk.busy_probe = lambda: busy["on"]
+    m.disk.gate_delay_s = 0.05
+    m.disk.gate_poll_s = 0.005
+    return m
+
+
+def _wait_files(tmp_path, n, timeout=10.0):
+    import time
+
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if len(_files(tmp_path)) >= n:
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_writer_waits_while_the_engine_is_busy_then_resumes(tmp_path):
+    import time
+
+    busy = {"on": True}
+    m = _gated(tmp_path, busy)
+    m.begin_request()
+    assert m.store_exact_cache(_ids(2000), _cache(96))
+    time.sleep(0.4)
+    assert _files(tmp_path) == []  # busy: not a byte written
+    busy["on"] = False
+    assert _wait_files(tmp_path, 1)  # idle: written within the delay
+    assert m.disk._gate_waits == 1
+
+
+def test_a_busy_blip_restarts_the_idle_delay(tmp_path):
+    import time
+
+    busy = {"on": False}
+    m = _gated(tmp_path, busy)
+    m.disk.gate_delay_s = 0.3
+    m.begin_request()
+    m.store_exact_cache(_ids(2000), _cache(96))
+    time.sleep(0.1)
+    busy["on"] = True  # a request arrives before the delay elapsed
+    time.sleep(0.5)
+    assert _files(tmp_path) == []
+    busy["on"] = False
+    assert _wait_files(tmp_path, 1)
+
+
+def test_flush_and_close_write_everything_while_busy(tmp_path):
+    busy = {"on": True}
+    m = _gated(tmp_path, busy)
+    m.begin_request()
+    m.store_exact_cache(_ids(2000), _cache(96))
+    m.disk.flush()  # a graceful stop does not wait for an idle engine
+    assert len(_files(tmp_path)) == 1
+    m.store_exact_cache(_ids(5000), _cache(96))
+    m.close()
+    assert len(_files(tmp_path)) == 2
+
+
+def test_no_probe_means_no_gate(tmp_path):
+    m = _disk_mgr(tmp_path, persist_on_store=True)
+    m.begin_request()
+    m.store_exact_cache(_ids(2000), _cache(96))
+    m.disk.flush()
+    assert len(_files(tmp_path)) == 1
