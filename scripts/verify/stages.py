@@ -328,10 +328,12 @@ def stage_preflight(ctx: Ctx) -> StageResult:
                     "--dist",
                     "loadfile",
                     "-m",
-                    "not serial",
+                    # the fullcmp e2e chains (11-30 min each) are the harness's own preflight, not a
+                    # per-change gate (docs/guides/FULLCOMPARE.md section 7), as in ci-local
+                    "not serial and not fullcmp_e2e",
                     *tests,
                 ],
-                base_cmd + ["-m", "serial", *tests],
+                base_cmd + ["-m", "serial and not fullcmp_e2e", *tests],
             ]
         else:
             runs = [base_cmd + tests]
