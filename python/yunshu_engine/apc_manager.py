@@ -494,9 +494,22 @@ class SpillDiskStore(DiskBlockStore):
         super().close()
 
     def _write_payload(self, shard_id, block_hashes, payload) -> bool:
-        if threading.current_thread().name.startswith("apc-disk-"):
+        writer = threading.current_thread().name.startswith("apc-disk-")
+        t0 = time.perf_counter()
+        if writer:
             self._wait_idle()
+        t1 = time.perf_counter()
         ok = self._write_payload_impl(shard_id, block_hashes, payload)
+        if writer:
+            logger.info(
+                "APC write-behind: file written (ok=%s) waited %.0f ms for idle, wrote %.0f ms, "
+                "%d tokens, wall %.3f",
+                ok,
+                (t1 - t0) * 1e3,
+                (time.perf_counter() - t1) * 1e3,
+                len(getattr(payload, "token_ids", ())),
+                time.time() % 1000,
+            )
         h = getattr(payload, "cache_hash", None)
         if ok and h is not None:
             tokens = tuple(map(int, payload.token_ids))
@@ -1792,6 +1805,8 @@ class YunshuAPCManager(APCManager):
         disk = self.disk
         if not isinstance(disk, SpillDiskStore):
             return
+        t_start = time.perf_counter()
+        queued_before = self.persist_queued
         self._unpersisted[key] = None
         try:
             room = int(disk.queue_max_bytes) - int(disk.pending_bytes)
@@ -1812,7 +1827,18 @@ class YunshuAPCManager(APCManager):
                     k, entry.token_ids, entry.extra_hash, entry.prompt_cache
                 ):
                     self.persist_queued += 1
+            t_plans = time.perf_counter()
             self._save_span_plans()
+            logger.info(
+                "APC write-behind: store queued %d file(s) in %.1f ms "
+                "(span plans %.1f ms), pending %.0f MiB, %d unqueued, wall %.3f",
+                self.persist_queued - queued_before,
+                (time.perf_counter() - t_start) * 1e3,
+                (time.perf_counter() - t_plans) * 1e3,
+                disk.pending_bytes / 2**20,
+                len(self._unpersisted),
+                time.time() % 1000,
+            )
         except Exception as e:
             logger.warning("APC: write-behind failed (%s)", e)
 

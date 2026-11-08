@@ -860,6 +860,22 @@ class RoundDriver:
     def flush_checkpoints(self) -> None:
         """Evaluate and publish the captured checkpoints (after the step's tokens were emitted)."""
         pending, self._deferred_apcs = self._deferred_apcs, []
+        t0 = time.perf_counter()
+        try:
+            self._flush_pending(pending)
+        finally:
+            if pending:
+                logger.info(
+                    "round driver: deferred checkpoints flushed in %.1f ms (%d apc), "
+                    "active %.0f MiB cache %.0f MiB, wall %.3f",
+                    (time.perf_counter() - t0) * 1e3,
+                    len(pending),
+                    mx.get_active_memory() / 2**20,
+                    mx.get_cache_memory() / 2**20,
+                    time.time() % 1000,
+                )
+
+    def _flush_pending(self, pending: list) -> None:
         for apc in pending:
             try:
                 apc.flush_deferred_checkpoints()
@@ -1100,6 +1116,7 @@ class RoundDriver:
     def _finish_join(self) -> None:
         """Move rows whose prompt finished into the decode batch (deferred from the prefill
         step so their first token is not delayed by it)."""
+        t_join = time.perf_counter()
         pending, self._pending_join = self._pending_join, []
         heads, self._pending_heads = self._pending_heads, {}
         live = [r for r in pending if r in self.rows and not r.finished]
@@ -1117,6 +1134,12 @@ class RoundDriver:
                 r.head_state = heads[id(r)]
                 arrays.append(r.head_state)
         mx.eval(*arrays)
+        logger.info(
+            "round driver: %d row(s) joined the decode batch in %.1f ms, wall %.3f",
+            len(live),
+            (time.perf_counter() - t_join) * 1e3,
+            time.time() % 1000,
+        )
 
     def step(self) -> list[Event]:
         # The previous step's tokens have been handed out: publish the captured checkpoints. While a
