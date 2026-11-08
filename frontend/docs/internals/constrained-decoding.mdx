@@ -53,7 +53,7 @@ flowchart TD
 
 ## Interaction with speculation
 
-On the Qwen3.5 speculative lanes (MTP and DFlash) the same constraint object serves both the serial path and the verifier. `yunshu_engine/constrained_spec.py` provides this:
+On the Qwen3.5 packed rows (MTP and DFlash) the same constraint object serves both the serial path and the verifier. `yunshu_engine/constrained_spec.py` provides this:
 
 - **Transactions.** `ConstraintGuide.checkpoint`, `feed` and `restore` let the verifier walk a window of drafted tokens, build one mask per position with `plan(drafts, n_pos)`, and then roll back. Walking proposals never changes the committed grammar state.
 - **Forced tokens.** `forced_tokens` jumps only over positions whose mask has a single legal token. The module notes that forced bytes can have several BPE tokenizations, so llguidance's byte fast-forward alone would not be token-exact.

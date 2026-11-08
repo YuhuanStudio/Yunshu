@@ -9,7 +9,7 @@ These pages explain how Yunshu works inside, for people who read or change the c
 
 Yunshu is one process: a FastAPI gateway in front of an MLX-based engine on Apple Silicon. A request passes through middleware and a router, is dispatched by `ModelManager` to the engine for its model, and ends as tokens that the gateway turns into the dialect's response or stream. Three ideas shape everything else:
 
-- **Two serving paths.** Every `mlx-vlm` model (`VLMEngine`) is served by the VLM batch runner (`vlm_batch_runner.py`, built by `VLMEngine._build_batch_runner`). Text-only `mlx-lm` models use a single-request fast path (`_generate_fast`, which calls mlx-lm's `generate_step`); concurrent requests to such a model are serialized.
+- **Two serving paths.** Every `mlx-vlm` model (`VLMEngine`) is served by the VLM batch runner (`vlm_batch_runner.py`, built by `VLMEngine._build_batch_runner`), which hosts the round driver (`round_driver/`). Text-only `mlx-lm` models use a single-request fast path (`_generate_fast`, which calls mlx-lm's `generate_step`); concurrent requests to such a model are serialized.
 - **One MLX thread.** All GPU work runs on a single-worker executor that owns the Metal stream. Nothing touches MLX arrays from the event loop.
 - **Identity rules.** A cache hit equals a miss, speculation on equals speculation off, and rehearsal never changes outputs. Each internals page states which rule applies and how it is checked.
 
@@ -51,7 +51,7 @@ Every setting is registered in `python/yunshu_engine/settings.py`; `yunshu confi
 
 ## Limits
 
-Yunshu has no multi-node mode and does not aim at multi-tenant throughput. Speculative decoding runs in a single-request lane, so concurrent requests are batched without drafting.
+Yunshu has no multi-node mode and does not aim at multi-tenant throughput. Speculative decoding runs on the round driver, so concurrent rows draft together.
 
 ## How to verify
 
@@ -67,7 +67,7 @@ Run `yunshu config` to see effective settings, and read [Verification](/docs/dev
     Exact checkpoints, 64-aligned cuts, media keys, the RAM and SSD tiers.
   </Card>
   <Card title="Speculative decoding" href="/docs/internals/speculative-decoding">
-    DFlash2 and MTP drafting, batch-invariant verify kernels and the single-request lane.
+    DFlash2 and MTP drafting, batch-invariant verify kernels and the round driver's packed rows.
   </Card>
   <Card title="Prefill and rehearsal" href="/docs/internals/prefill-and-rehearsal">
     Split-invariant prefill and next-turn rehearsal.

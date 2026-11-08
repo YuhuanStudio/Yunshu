@@ -53,7 +53,7 @@ flowchart TD
 
 ## 與推測解碼的互動
 
-在 Qwen3.5 的推測通道（MTP 與 DFlash）上，同一個約束物件同時服務序列路徑與驗證器。`yunshu_engine/constrained_spec.py` 提供下列機制：
+在 Qwen3.5 的封裝 row（MTP 與 DFlash）上，同一個約束物件同時服務序列路徑與驗證器。`yunshu_engine/constrained_spec.py` 提供下列機制：
 
 - **交易。** `ConstraintGuide.checkpoint`、`feed` 與 `restore` 讓驗證器走過一個草稿 token 視窗，以 `plan(drafts, n_pos)` 為每個位置建立一份遮罩，然後回復。走過提案絕不會改變已提交的文法狀態。
 - **強制 token。** `forced_tokens` 只會跳過遮罩內只有單一合法 token 的位置。該模組註記，強制的位元組可能有多種 BPE tokenization，所以單靠 llguidance 的位元組快轉無法做到 token 精確。

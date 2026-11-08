@@ -11,8 +11,8 @@ are in [Benchmarks](../BENCHMARKS.md) and [PERF_TREND](../reports/PERF_TREND.md)
 
 | Model | Path | Speculation | Prefix cache |
 |---|---|---|---|
-| Qwen3.5 / 3.6 / 3.8 family (mlx-vlm) | VLM batch runner, single-request speculative lane | DFlash2, MTP, prompt-copy | exact hybrid checkpoints (APC) |
-| Other mlx-vlm models | same runner | none | APC where the cache layout allows it (including checkpoint-specific exact-window support; see model support) |
+| Qwen3.5 / 3.6 / 3.8 family (mlx-vlm) | Round driver, packed Qwen3.5 layer | DFlash2, MTP, prompt-copy | exact hybrid checkpoints (APC) |
+| Other mlx-vlm models | round driver, generic layer | none | APC where the cache layout allows it (including checkpoint-specific exact-window support; see model support) |
 | Text-only mlx-lm models | single-request fast path | optional n-gram / suffix, Gemma 4 assistant, external draft (experimental) | mlx-lm prompt cache |
 
 `/v1/models` reports what the loaded model supports.
@@ -37,8 +37,8 @@ are in [Benchmarks](../BENCHMARKS.md) and [PERF_TREND](../reports/PERF_TREND.md)
 - Counters: `GET /v1/yunshu/spec-decode`, Prometheus `yunshu_spec_decode_*`, and per-request
   `x_yunshu.speculative`.
 
-Limit: the speculative lane serves one request at a time; concurrent requests use the shared batch
-without drafting.
+Limit: rows with processors outside the driver's windowable set, XTC sampling, or a non-invariant guide
+decode one token a round without drafting (see [Round driver](ROUND_DRIVER.md)).
 
 ## Prefix cache (APC)
 
@@ -148,8 +148,8 @@ already in progress (since 0.1.6 rehearsal starts 0.3 s after a reply and stops 
 multi-turn floating-point rounding; they are explicit opt-ins. This does not eliminate
 the measured [immediate follow-up latency gap](../BENCHMARKS.md#where-yunshu-stands).
 
-When a shared batch drains to one eligible greedy request, the runner can promote it
-to the speculative lane at a step boundary. Concurrent rows do not draft together.
+Every request is a round-driver row from admission, so concurrent rows draft together; no batch has to
+drain first.
 
 ## Orphan adoption (agent retries)
 

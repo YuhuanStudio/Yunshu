@@ -10,7 +10,7 @@ description: 一个请求如何经过网关中间件、路由器、ModelManager 
 1. **中间件。** `python/yunshu_gateway/main.py` 的 `create_app()` 堆叠各层。因为 `add_middleware` 是向前插入，最后加入的在最外层。由外到内：`DisconnectWatchMiddleware`、`MetricsMiddleware`、`LiveCORSMiddleware`、`ModelLeaseMiddleware`、`ResidentActivityMiddleware`、`YunshuExtensionsMiddleware`（请求 id、队列标头、每个响应的 `x_yunshu` 统计）、`AuthMiddleware`、`RateLimitMiddleware`（仅在 `YUNSHU_RATE_LIMIT_RPM` 大于 0 时）以及 `RequestLoggingMiddleware`。Metrics 刻意放在 auth 之外，让 401、429、413 也被计入。断连监视层在最外面，因为 Starlette 的 `BaseHTTPMiddleware` 会隐藏客户端断连；它把断连记录在 `scope["yunshu.client_gone"]`。
 2. **路由器。** `python/yunshu_gateway/routers/` 下的路由器（`chat.py`、`anthropic.py`、Responses 路由器等）校验 body，规范化为一个内部请求并解析模型。
 3. **引擎分发。** `ModelManager`（`python/yunshu_engine/model_manager.py`）延迟加载模型、在内存压力下按最近最少使用淘汰，并发放租约（lease）。`ModelLeaseMiddleware` 让请求获取的每个模型在响应结束前都持有租约，因此卸载、TTL 到期或淘汰都不会在响应途中抽走模型。
-4. **VLM batch runner。** 对 `mlx-vlm` 模型，`VLMEngine.generate_stream` 在 MLX 线程上准备提示（chat template、媒体编码、约束编译），并把 job 提交给 `VLMBatchRunner`。runner 一次接纳一个提示做预填、查询前缀缓存，并让所有活跃的行一起解码；Qwen3.5 系列可让单独的请求跑在推测通道。纯文本 `mlx-lm` 模型则改走 `_generate_fast`。
+4. **VLM batch runner。** 对 `mlx-vlm` 模型，`VLMEngine.generate_stream` 在 MLX 线程上准备提示（chat template、媒体编码、约束编译），并把 job 提交给 `VLMBatchRunner`。round driver 把提示变成一个 row：在自己的缓存上分块预填、加入时查询前缀缓存，并让所有活跃的 row 在打包的步骤中一起解码；Qwen3.5 与 Flash-Next 的 row 会起草。纯文本 `mlx-lm` 模型则改走 `_generate_fast`。
 5. **MLX 线程。** 所有 GPU 工作都在单 worker 执行器上运行（`python/yunshu_engine/mlx_executor.py`），它拥有 Metal generation stream。
 6. **还原文本、停止、投递。** runner 产出 token id。`VLMEngine` 运行每个请求的 detokenizer、stop 字符串与推理状态跟踪，并通过有界队列把 `RequestOutput` 推给异步消费者。路由器再把它们转成该方言的 JSON 或 SSE 事件，包含 usage 与附加的 `x_yunshu` 字段。
 

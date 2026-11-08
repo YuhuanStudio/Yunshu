@@ -399,8 +399,8 @@ is whitespace-trimmed, a stream's concatenated deltas are not.
 
 ## Sampling contract
 
-- **Seeded sampling is position-keyed.** On every VLM-runner path (speculative lane and shared
-  batch, alone or mixed with other requests) the token drawn at generation index `g` is a function
+- **Seeded sampling is position-keyed.** On every VLM-runner path (the round driver, alone or
+  mixed with other requests) the token drawn at generation index `g` is a function
   of `(logits, seed, g)` only, so the same `seed` gives the same stream whatever the admission
   path or concurrency, given batch-invariant logits. Unseeded requests draw a random seed.
   Exceptions that stay stateful: XTC (`xtc_probability > 0`), the text-only `mlx-lm` fast path,

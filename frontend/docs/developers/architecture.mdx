@@ -41,7 +41,7 @@ All GPU work runs on **one MLX thread**: a global single-worker executor owns a 
 
 ### VLM batch runner
 
-Every model served through `mlx-vlm` (`VLMEngine`) runs on the VLM batch runner, built by `VLMEngine._build_batch_runner` on top of upstream `mlx-vlm`'s `BatchGenerator`. This includes text-only requests to a VLM checkpoint such as Qwen3.5.
+Every model served through `mlx-vlm` (`VLMEngine`) runs on the VLM batch runner (`vlm_batch_runner.py`), built by `VLMEngine._build_batch_runner`, which hosts the round driver. The driver serves every row through one of three model layers: packed Qwen3.5 (dense and MoE), packed Flash-Next (Qwen4), and the generic layer (the model's own upstream forward per row) for all other families. This includes text-only requests to a VLM checkpoint such as Qwen3.5.
 
 - **Continuous batching** with per-request sampling parameters and seeds (`RowSampler`). Prefill is admitted one request at a time and interleaved with decode of the other rows.
 - **Prefix cache (APC)** for every family without a sliding-window cache, using exact checkpoints for hybrid models, image-pixel and audio-feature keys for media, and an optional SSD tier. See [Prompt caching](/docs/guides/prompt-caching).
@@ -72,7 +72,7 @@ For the Qwen3.5 family on the VLM runner (model types `qwen3_5`, `qwen3_6` and `
 - **MTP**: draft with the checkpoint's own multi-token-prediction head. This is the default (`YUNSHU_MTP`), with a default block of 6 tokens (`YUNSHU_MTP_BLOCK_SIZE`).
 - **DFlash**: draft with an external block-diffusion drafter. `YUNSHU_VLM_DRAFT` points at a drafter directory, forces `mtp`, or turns drafting `off`; when unset, a matching drafter found in the models directory or the Hugging Face cache is used.
 
-Speculative decoding runs in a single-request lane: concurrent requests are batched for ordinary decoding but do not draft. Other model families use the generic paths without speculation.
+Speculative decoding runs on the round driver's packed rows, so concurrent requests draft too. Other model families use the generic paths without speculation.
 
 ### Batch-invariant kernels and the lossless guarantee
 

@@ -14,7 +14,7 @@ description: 雲樞如何以 DFlash2 或 MTP head 每步起草並驗證多個 to
 3. 否則，若 checkpoint 自帶 **MTP head** 就用它（`YUNSHU_MTP`）。
 4. 否則，使用一般解碼。
 
-區塊大小：DFlash 使用 drafter 訓練時的區塊，MTP 為 6，除非設定了 `YUNSHU_MTP_BLOCK_SIZE`。起草在**單請求通道**中進行：runner 接納請求、預填，然後執行起草與驗證回合。當共用批次只剩一個合格請求時，`VLMBatchRunner._maybe_promote` 會在步驟邊界把該列移到通道上；通道的第一回合是單列的一般驗證，用來擷取 drafter 需要的 hidden state，因此移入通道是無損的。
+區塊大小：DFlash 使用 drafter 訓練時的區塊，MTP 為 6，除非設定了 `YUNSHU_MTP_BLOCK_SIZE`。起草在 **round driver** 上進行：每個請求都是一個 row，所有 row 的起草與驗證回合一起執行，每個 row 依其接受率決定深度。row 的輸出不取決於哪些 row 與它共用同一步，因此驗證是無損的。
 
 其他起草來源：
 
@@ -38,7 +38,7 @@ flowchart TD
   M --> V
 ```
 
-此圖顯示模型載入時如何選擇 drafter；之後在單請求通道上依請求使用推測。
+此圖顯示模型載入時如何選擇 drafter；之後每個 row 在 round driver 上依需求起草。
 
 ## 為什麼這樣設計
 
@@ -70,10 +70,10 @@ flowchart TD
 ## 限制
 
 - 無損保證不涵蓋搭配外部 draft 模型的 `YUNSHU_SPEC_UNVERIFIED`：其輸出可能與一般解碼不同。見[可能改變輸出的選項](/docs/guides/options)。
-- 在 VLM runner 上僅限 Qwen3.5 系列；其他 VLM 系列不起草直接解碼。
-- 通道一次只服務一個請求。並行請求共用批次，不一起起草。
-- Apple Paravirtual Metal 主機使用原生 runner，沒有推測。
-- VLM 會拒絕 LoRA adapter 與自訂 logits processor，而不適合起草（not draft-safe）的 processor 會讓請求無法進入該通道。
+- 封裝層（Qwen3.5 系列、Flash-Next）起草；其他 VLM 系列使用 generic 層，直接解碼不起草。
+- 不在 driver 可逐 window row 套用的集合內的 processor、XTC 取樣與非 invariant guide 的 row，每輪只解碼一個 token，不起草。
+- Apple Paravirtual Metal 主機使用 generic 層，沒有推測。
+- VLM 會拒絕 LoRA adapter 與自訂 logits processor，而不適合起草（not draft-safe）的 processor 會讓該 row 不起草。
 
 ## 如何驗證
 

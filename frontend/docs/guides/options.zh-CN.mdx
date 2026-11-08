@@ -33,7 +33,7 @@ Yunshu 的规则很简单：**无损**优化（与普通路径生成相同的 to
 
 | 设置 | 无损默认值 | 有损值 | 作用 |
 |---|---|---|---|
-| `YUNSHU_KV_PRECISION` | `bf16` | `int8` | Qwen3.5 系列共享解码批次使用 int8 KV；内存与带宽较少，注意力有小误差。单请求与推测 lane 保持 bf16 |
+| `YUNSHU_KV_PRECISION` | `bf16` | `int8` | Qwen3.5 系列 packed 层的 row 使用 int8 KV；内存与带宽较少，注意力有小误差。Flash-Next 与 generic 层模型保持 bf16 |
 | `YUNSHU_KV_QUANT_BITS` | `off` | `auto`、`2`、`3`、`4`、`8` | 文本引擎的量化 KV 缓存 |
 | `YUNSHU_PREFIX_HOT_LIMIT` | `0`（全部完整精度） | 一个数量 | 只让该数量的前缀 KV 条目保持完整精度，较旧的以 4-bit 存放在 RAM；复用时有损 |
 | `YUNSHU_SSD_CACHE_PRECISION` | `native` | `int8` | 文本 SSD 前缀缓存以逐 tensor int8 存储；复用时有损 |

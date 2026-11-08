@@ -167,7 +167,7 @@ yunshu cache gc --apply    # 刪除它們並修剪到容量上限
 | 設定 | 效果 |
 |---|---|
 | `YUNSHU_KV_QUANT_BITS` | 文字引擎：把 KV 快取量化為 2、3、4 或 8 位元（`auto` 會在快取超過約 2 GiB 時改用 8 位元）。預設 `off` |
-| `YUNSHU_KV_PRECISION` | Qwen3.5 家族 runner：`int8` 以 int8 編碼加每組縮放值儲存共用解碼批次的 KV，記憶體與讀取頻寬約減半。預設 `bf16`。單一請求與推測解碼通道維持 bf16 |
+| `YUNSHU_KV_PRECISION` | Qwen3.5 家族 packed 層的 row：`int8` 以 int8 編碼加每組縮放值儲存 KV，記憶體與讀取頻寬約減半。預設 `bf16`。Flash-Next 與 generic 層模型維持 bf16 |
 | `YUNSHU_VLM_APC_WARM` = `int8` 或 `int4` | 被淘汰的檢查點以量化形式留在 RAM；命中時還原的是反量化的 K/V，輸出可能與冷啟動預填不同。SSD 層仍保存精確狀態 |
 | `YUNSHU_PREFIX_HOT_LIMIT` | 文字引擎：只有這麼多項目保持全精度，較舊的以 4 位元儲存（預設 `0`：全部全精度） |
 | `YUNSHU_SSD_CACHE_PRECISION` = `int8` | 文字引擎：以 int8 儲存 SSD 項目，位元組數約減半。預設 `native`（位元精確） |

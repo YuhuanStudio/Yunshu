@@ -21,7 +21,7 @@ description: 預填如何讓分段長度不影響 token（split-invariant 預填
 - 預演在 `YUNSHU_NEXT_TURN_DELAY_S`（預設 0.3 秒）之後開始，所以立即的後續請求（如 agent 迴圈）會在任何預演工作開始前到達，只預填一次。預演期間到達的相符請求會接手進行中的工作；不相符的則在下個可搶佔邊界取消它。
 - 只預演純文字聊天：回覆必須以 `stop` 或 `length` 結束、長度為 16 到 4096 個 token，且請求不可有媒體、工具或受限解碼（`next_turn.ineligible_reason`）。
 
-**批次通道移入。** 共用批次只剩一個合格請求時，runner 會在步驟邊界把它移到單請求推測通道（`VLMBatchRunner._maybe_promote`；見[推測解碼](/docs/internals/speculative-decoding)）。
+**Row，而非批次。** 每個請求從進入起就是 round driver 的一個 row，因此沒有批次到推測通道的升級步驟（見[推測解碼](/docs/internals/speculative-decoding)）。
 
 ```mermaid
 stateDiagram-v2

@@ -41,7 +41,7 @@ client ── HTTP ──> middleware ──> router ──> engine dispatch
 
 ### VLM batch runner
 
-所有经由 `mlx-vlm` 服务的模型（`VLMEngine`）都跑在 VLM batch runner 上，由 `VLMEngine._build_batch_runner` 建构，底层是上游 `mlx-vlm` 的 `BatchGenerator`。这也包含送到 Qwen3.5 这类 VLM 检查点的纯文本请求。
+所有经由 `mlx-vlm` 服务的模型（`VLMEngine`）都跑在 VLM batch runner 上，由 `VLMEngine._build_batch_runner` 构建，runner 承载 round driver，round driver 以三种模型层服务每个 row：packed Qwen3.5（dense 与 MoE）、packed Flash-Next（Qwen4），以及 generic 层（模型自己的 upstream forward，逐 row 执行）供其他所有家族使用。这也包含送到 Qwen3.5 这类 VLM 检查点的纯文本请求。
 
 - **连续批处理**，每个请求有自己的采样参数与种子（`RowSampler`）。预填一次只接纳一个请求，并与其他列的解码交错进行。
 - **前缀缓存（APC）** 适用于所有没有滑动窗口缓存的模型家族：混合模型使用精确检查点，媒体以图像像素与音频特征为键，另有选用的 SSD 层。见[提示词缓存](/docs/guides/prompt-caching)。
@@ -72,7 +72,7 @@ Runner 只产出 token id。解码成文本、stop 字符串、思考状态与�
 - **MTP**：使用检查点自带的 multi-token-prediction head 起草。这是缺省（`YUNSHU_MTP`），缺省区块大小为 6 个 token（`YUNSHU_MTP_BLOCK_SIZE`）。
 - **DFlash**：使用外部的 block-diffusion 起草器。`YUNSHU_VLM_DRAFT` 可指向起草器目录、强制使用 `mtp`，或设为 `off` 关闭起草；未配置时，会使用在模型目录或 Hugging Face 缓存中找到的相符起草器。
 
-推测解码在单一请求信道中运行：并行请求在一般解码时会被批量处理，但不会起草。其他模型家族走通用路径，不做推测。
+推测解码在 round driver 的打包 row 上运行，因此并发请求也会起草。其他模型家族使用 generic 层，不做推测。
 
 ### Batch-invariant kernel 与无损保证
 

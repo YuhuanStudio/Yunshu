@@ -21,7 +21,7 @@ This is the method behind llama.cpp `perplexity --kl-divergence` and vLLM's logp
 
 - **Corpus.** `common.build_corpus` builds a pinned token corpus (prose, code, Chinese and math windows of 2048 tokens, plus long documents at 8K and 32K). Only token ids are stored, privately.
 - **Reference file.** Top-64 log-probabilities for every position, plus the full-vocabulary log-softmax for a fixed random subset of positions, so later comparisons never rerun the reference. Positions outside the subset use top-64 plus one lumped tail bucket, which is a lower bound of the true divergence.
-- **Parts** (the `PARTS` table in `kld.py`): `prefill`, `dec1` (one token per step, the speculative lane), `dec6` (6-token verify blocks), `decb` and `decb8` (two-row shared batch on a ragged bf16 or int8 KV cache), `stockb2` (stock two-row batch, a noise floor).
+- **Parts** (the `PARTS` table in `kld.py`): `prefill`, `dec1` (one token per step, earlier the speculative lane), `dec6` (6-token verify blocks), `decb` and `decb8` (two-row shared batch on a ragged bf16 or int8 KV cache), `stockb2` (stock two-row batch, a noise floor).
 - **Metrics.** KL divergence (reference to candidate) mean, median, 99th percentile and max; top-1 agreement; mean change of the top-1 probability; perplexity of both, overall and by corpus type and position bucket.
 
 ### Tier 2: greedy divergence

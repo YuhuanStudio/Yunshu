@@ -53,7 +53,7 @@ flowchart TD
 
 ## 与推测解码的互动
 
-在 Qwen3.5 的推测通道（MTP 与 DFlash）上，同一个约束对象同时服务串行路径与验证器。`yunshu_engine/constrained_spec.py` 提供：
+在 Qwen3.5 的打包 row（MTP 与 DFlash）上，同一个约束对象同时服务串行路径与验证器。`yunshu_engine/constrained_spec.py` 提供：
 
 - **事务。** `ConstraintGuide.checkpoint`、`feed` 与 `restore` 让验证器遍历一个草稿 token 窗口，用 `plan(drafts, n_pos)` 为每个位置建立一份掩码，然后回滚。遍历提案绝不会改变已提交的语法状态。
 - **强制 token。** `forced_tokens` 只会跳过掩码里只有一个合法 token 的位置。该模块指出强制的字节可能有多种 BPE 分词方式，所以单靠 llguidance 的字节快进无法保证 token 精确一致。

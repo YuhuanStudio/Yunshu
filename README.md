@@ -69,7 +69,7 @@ Everything Yunshu serves, grouped. Each row links to the guide with an example a
 | [Round driver](docs/guides/ROUND_DRIVER.md) | multi-row speculative decoding for dense Qwen3.5-family models: concurrent requests draft too (MTP chains, DFlash2 trees and copy chains), spec on equals spec off |
 | [Model support](docs/guides/MODEL_SUPPORT.md) | what is tuned, generic and validated, per family |
 | [Next-turn rehearsal](docs/guides/INFERENCE.md) | Canonical stride APC rehearsal after eligible text replies; boundary/exact are explicit numeric-changing opt-ins |
-| [Batch-to-lane promotion](docs/guides/INFERENCE.md) | An eligible greedy request moves to speculation when the shared batch drains to one row; multi-row speculation is not implemented |
+| [Multi-row speculation](docs/guides/ROUND_DRIVER.md) | Every request is a round-driver row; concurrent rows draft too (MTP chains, DFlash2 drafts sharing a verify budget) |
 | [Orphan adoption](docs/guides/INFERENCE.md) | A generation whose client timed out is kept for 120 s; the identical retry (streaming or not) attaches to it instead of recomputing |
 
 **APIs**
@@ -254,9 +254,9 @@ To work on the console itself, run `pnpm install && pnpm dev` in `frontend/` (se
                                            ▼
                                   engine (one MLX thread)
           ┌────────────────────────────────┴───────────────────────────────┐
-   VLM batch runner (every mlx-vlm model)                 text fast path (mlx-lm models)
-   shared continuous batch, per-row sampling              single-request generate_step
-   speculative lane: DFlash2 / MTP / prompt-copy
+   VLM round driver (every mlx-vlm model)                 text fast path (mlx-lm models)
+   packed rows, per-row sampling                          single-request generate_step
+   speculation: DFlash2 / MTP (Qwen3.5 family, Flash-Next)
    prefix cache: RAM ─► SSD ─► optional storage tiers
 ```
 
@@ -265,14 +265,15 @@ returns as soon as its own generation ends.
 
 ### Speculative decoding
 
-For Qwen3.5-family models a single request decodes in a speculative lane:
+For Qwen3.5-family and Flash-Next models every request is a row of the round driver, and rows draft
+together, alone or among others:
 
 - **DFlash2** — a separate block drafter proposes several tokens per round; used automatically when
   a matching drafter is installed.
 - **MTP** — the checkpoint's own multi-token-prediction head; the fallback when no drafter is present.
 - **Prompt-copy drafting** — when the output starts repeating text from the prompt (code edits,
-  quoting tool results, multi-turn agents), the lane proposes the continuation of that earlier text
-  and verifies it in the same pass. It is on by default (`YUNSHU_SPEC_COPY_ROWS`, default 32 rows; `0` turns it off).
+  quoting tool results, multi-turn agents), the drafter proposes the continuation of that earlier text
+  and verifies it in the same pass (`YUNSHU_SPEC_COPY_ROWS`, default 32 rows; `0` turns it off).
 
 Every decode and verify matmul goes through **batch-invariant kernels**: a token's arithmetic is the
 same whether it is verified alone or among other rows. That is what makes greedy output identical
@@ -386,8 +387,8 @@ TensorFold leads 27B decode at all depths, including the same-checkpoint compari
 
 | Models | Serving path |
 |---|---|
-| Qwen3.5 / 3.6 / 3.8 family (Qwen3.8-27B tuned first) | VLM batch runner with prefix cache and MTP / DFlash2 speculation |
-| Other mlx-vlm models (Gemma, GLM, Qwen-VL, Qwen-Omni, …) | Same runner; images, audio and video input where the model supports them; prefix cache where the cache layout allows |
+| Qwen3.5 / 3.6 / 3.8 family (Qwen3.8-27B tuned first) | Round driver (packed Qwen3.5 layer) with prefix cache and MTP / DFlash2 speculation |
+| Other mlx-vlm models (Gemma, GLM, Qwen-VL, Qwen-Omni, …) | Same round driver (generic layer, no drafter); images, audio and video input where the model supports them; prefix cache where the cache layout allows |
 | Text-only mlx-lm models | Single-request fast path with constraints, tools and logprobs |
 
 `/v1/models` returns each model's card: context length, output limit, and which inputs and features

@@ -19,8 +19,8 @@ Yunshu loads MLX checkpoints. It detects what kind of model a folder holds from 
 
 | Path | Used for | Behavior |
 |---|---|---|
-| VLM batch runner | Every model served through `mlx-vlm`, including the Qwen3.5 / 3.6 / 3.8 family when it is loaded with the `vision` extra | Continuous batching with per-request sampling. One request is prefilled at a time. Automatic prefix cache for families with a restorable checkpoint (including scoped exact-window support), keyed also on image and audio features, with an optional SSD tier. Accepts image, audio and video input. |
-| Speculative lane (Qwen3.5 family only) | `qwen3_5`, `qwen3_6`, `qwen3_5_moe` | MTP or DFlash drafting in a single-request lane, using batch-invariant decode and verify kernels so that output with drafting on matches output with drafting off. `YUNSHU_MTP` (default on) and `YUNSHU_VLM_DRAFT` control it. Concurrent requests are not yet drafted together. |
+| VLM batch runner | Every model served through `mlx-vlm`, including the Qwen3.5 / 3.6 / 3.8 family when it is loaded with the `vision` extra | Continuous batching of rows with per-request sampling; each prompt is prefilled in atoms on its row's own caches. Automatic prefix cache for families with a restorable checkpoint (including scoped exact-window support), keyed also on image and audio features, with an optional SSD tier. Accepts image, audio and video input. |
+| Speculative drafting (Qwen3.5 family and Flash-Next) | `qwen3_5`, `qwen3_6`, `qwen3_5_moe`, Qwen4 | MTP or DFlash drafting on the round driver's packed rows, using batch-invariant decode and verify kernels so that output with drafting on matches output with drafting off. `YUNSHU_MTP` (default on) and `YUNSHU_VLM_DRAFT` control it. Concurrent rows draft together. |
 | Text fast path | Text-only `mlx-lm` models | One request at a time through `mlx-lm`; concurrent requests are served one after another. |
 
 Limits of the VLM path: LoRA adapters and custom logits processors are rejected for vision-language models. Which speculative path will be used for a Qwen3.5-family model is shown by `yunshu doctor -m <model>` (the `speculative` row) and by the startup log.

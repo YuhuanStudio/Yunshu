@@ -1,9 +1,9 @@
 ---
 title: Round driver
-description: "The packed-row engine for dense Qwen3.5-family models: one forward per step over every decoding row, row-invariant arithmetic, and cost-aware MTP or DFlash drafting for several rows at once."
+description: "The packed-row engine that serves every mlx-vlm model: one forward per step over every decoding row, row-invariant arithmetic, and cost-aware MTP or DFlash drafting for several rows at once."
 ---
 
-The round driver (`python/yunshu_engine/round_driver/`) is the multi-row serving path for dense Qwen3.5-family models when speculation is on. It lets concurrent requests draft too (MTP chains, or DFlash2 trees and copy chains sharing a fair 32-node verify budget), where the single-request lane drafts only while a request is alone. With speculation off (`YUNSHU_VLM_DRAFT=off`) the stock shared batch serves every request and is the identity reference: speculation on equals speculation off, token for token. This page is a maintainer reference; for the other serving paths see [Architecture](/docs/developers/architecture).
+The round driver (`python/yunshu_engine/round_driver/`) is the serving path for every model loaded through `mlx-vlm`. Each request is a row, and the driver serves rows through one of three model layers: the packed Qwen3.5 layer (dense and MoE Qwen3.5-family models), the packed Flash-Next layer (Qwen4), and the generic layer (the model's own upstream forward per row, no drafter) for every other family and for Apple Paravirtual Metal. Speculative decoding runs on the packed layers: concurrent requests draft too (MTP chains, or DFlash2 drafts sharing a fair 32-node verify budget). With `YUNSHU_VLM_DRAFT=off` the driver still serves every request, without drafting, and speculation on equals speculation off, token for token. This page is a maintainer reference; for the other serving paths see [Architecture](/docs/developers/architecture).
 
 ## What it does
 
@@ -16,7 +16,7 @@ Every request is a **row**. A row prefills on its own single-row caches (a `KVCa
 `RoundDriver` (`driver.py`) advances rows in **steps**, each one forward of one kind:
 
 - **Decode step**: every decoding row's window (the pending token plus `d >= 0` drafts), right-padded to the longest window. Norms, projections and the MLP run over the packed rows; attention writes all rows' keys with one scatter and reads them with one ragged-attention launch (`kernels/ragged_attention.py`); the GDN conv and recurrence are one batched launch (`kernels/gdn_rows.py`).
-- **Prefill step**: waiting prompts' fixed-size **atoms** (`ROUND_PREFILL_CHUNK` in `vlm_engine.py`, 512 tokens, on a grid from the prompt start, cut at the prompt's checkpoints and end). One atom while rows decode; more consecutive full atoms together when no row decodes.
+- **Prefill step**: waiting prompts' fixed-size **atoms** (`ROUND_PREFILL_CHUNK` in `vlm_engine.py`, 512 tokens; 2048 on Flash-Next), on a grid from the prompt start, cut at the prompt's checkpoints and end. One atom while rows decode; more consecutive full atoms together when no row decodes.
 
 While rows decode and prompts wait, prefill and decode steps alternate one to one. Steps stay single-kind: packing decode rows into the prefill forward measured no better than alternating at the same chunk size on Qwen3.8-27B (2026-09-29).
 
@@ -35,11 +35,26 @@ flowchart LR
 
 ### Routing
 
-`VLMEngine._round_driver_wanted` enables the driver when speculation is on (checkpoint MTP head or a DFlash2 drafter), the language model is a dense Qwen3.5-family decoder (`round_driver.forward.supports`; MoE layers do not qualify), `YUNSHU_KV_PRECISION` is `bf16`, and the lane-arithmetic self test passes. Otherwise the upstream runner serves. Inside the runner (`VLMBatchRunner._driver_takes`), DFlash text requests with no processors other than float32 reporting (solo, long, logprobs, invariant tool-call guides) go to the driver; MTP text requests go to it when at least `DRIVER_MIN_CONCURRENCY` (2) requests are in flight and the uncached prompt is at most `DRIVER_MAX_UNCACHED_TOKENS` (12288) tokens. Other requests keep the single-request speculative lane or the upstream prefill. Image and audio prompts stay on the upstream path.
+`VLMEngine._build_batch_runner` picks the layer when a model loads:
+
+- **Apple Paravirtual Metal**: the generic layer, with no APC and no speculation.
+- **Qwen3.5-family or Qwen4 models** (`_SPEC_MODEL_TYPES`) whose language model the packed layer supports (`_round_driver_wanted`): the packed Qwen3.5 layer, or the Flash-Next layer for Qwen4. A quantized Qwen3.5 checkpoint whose lane arithmetic self-test fails serves on the generic layer.
+- **Every other model**: the generic layer, plain decode.
+
+The draft is chosen separately (`spec_select.choose`). `YUNSHU_VLM_DRAFT=off` gives no draft; a DFlash drafter directory or `mtp` selects that path; unset uses a matching DFlash2 drafter when one is found, else the checkpoint MTP head. `YUNSHU_MTP=0` disables the MTP head.
+
+Every request, text or media, is a row of the same driver. A media prompt carries its own prompt features (`VLMBatchRunner._media_request` on the packed layers, `_generic_request` on the generic layer). A row draws its drafts only when its processors allow it (below).
 
 ## Why
 
-Upstream `mlx-vlm`'s `BatchGenerator` runs one prompt batch at a time, speculative batches cannot take joins, and MTP drafter state exists for one batch. The driver is Yunshu's own loop (inspired by TensorFold's lane engine, MIT; see [Upstream tracking](/docs/developers/upstream-tracking)) so that several rows can share a forward, join at any step and still produce the tokens they would produce alone. Earlier prototype runs measured the default path behind competitors on concurrent long-reasoning load; there is no current cross-engine number for the driver, and the numbers in the source notes are not release figures. See [Benchmarks](/docs/guides/benchmarks) for the maintained comparisons.
+Upstream `mlx-vlm`'s `BatchGenerator` runs one `_prompt_batch` at a time, speculative batches that cannot take joins, and MTP drafter state for one batch. Measured on 27B (M5 Max):
+
+- MMLU-Pro 300 b8 (long reasoning, 8 in flight): Yunshu 139 tok/s (drafts only while a request is alone), TensorFold MTP parallel-8 159, Splash 223.
+- 8 concurrent 1K prompts: the last TTFT is ~10 s (prefill one request at a time).
+
+These are the numbers of the earlier stock shared-batch path, kept as the motivation for the driver.
+
+The driver is Yunshu's own loop (inspired by TensorFold's lane engine, MIT; see [Upstream tracking](/docs/developers/upstream-tracking)) so that several rows can share a forward, join at any step and still produce the tokens they would produce alone. Earlier prototype runs measured the earlier stock path behind competitors on concurrent long-reasoning load; there is no current cross-engine number for the driver, and the numbers in the source notes are not release figures. See [Benchmarks](/docs/guides/benchmarks) for the maintained comparisons.
 
 ## Guarantees
 
@@ -50,26 +65,26 @@ A row's arithmetic does not depend on which rows share the step, how many drafts
 - **GDN** runs as one launch over the rows' states; a row that keeps part of its window continues from the saved intermediate state (`DecodeBatch.commit`).
 - **Prefill** follows an atom plan that is a function of the prompt alone, so a repeated prompt, or a row restored from a checkpoint on the grid, prefills with the same atoms as a cold run: APC hit equals miss token for token.
 - **Greedy rows**: speculation on equals speculation off, and a row alone equals the same row in any batch or join order. **Sampled rows** draw with `keyed_sampling.KeyedSampler` (seed and generation index), so the token at index `g` is a pure function of the row's logits, seed and `g`.
-- Rows with logits processors (grammar or JSON, penalties), logprobs or XTC never draft.
 
-Drafting uses the checkpoint's MTP head for every draftable row. The head's KV is kept current every step, so any row can start drafting at any step. Draft depth per row comes from `round_driver/allocate.py` (TensorFold allocation rule, MIT): per-depth acceptance is tracked as an EMA, rows receive drafts greedily by marginal expected tokens, and the step keeps the allocation that maximizes expected committed tokens per millisecond using forward cost measured online. There are no row-count thresholds.
+Drafting uses the checkpoint's MTP head, or the DFlash2 drafter when one is selected, for every draftable row. The head's KV is kept current every step, so any row can start drafting at any step. Draft depth per row comes from `round_driver/allocate.py` (TensorFold allocation rule, MIT): per-depth acceptance is tracked as an EMA, rows receive drafts greedily by marginal expected tokens, and the step keeps the allocation that maximizes expected committed tokens per millisecond using forward cost measured online. There are no row-count thresholds.
 
-The driver shares the `APCManager` prefix cache with the default runner (through `APCCoordinator`, checkpoint strategy). Its entries are keyed apart from the upstream runner's, so a prefix cached by one path is cold for the other.
+Every row uses the model's `APCManager` prefix cache through `APCCoordinator` (checkpoint strategy) on every family without a sliding-window cache. Entries are salted by the model and processor identity (`VLMBatchRunner._driver_extra_hash`), so a prefix cached under one identity is cold under another.
 
 ## Knobs
 
 | Setting | Default | Effect |
 |---|---|---|
-| `YUNSHU_KV_PRECISION` | `bf16` | Anything else keeps the upstream path |
-| `YUNSHU_MTP` | `true` | Draft with the checkpoint MTP head; shared with the default runner |
+| `YUNSHU_KV_PRECISION` | `bf16` | `int8` applies to the packed Qwen3.5 layer's rows; the Flash-Next and generic layers keep bf16 |
+| `YUNSHU_MTP` | `true` | Draft with the checkpoint MTP head; `false` disables that draft |
+| `YUNSHU_VLM_DRAFT` | unset | `off` disables drafting; a drafter directory or `mtp` selects the draft (see Routing) |
 
 ## Limits
 
-- Image and audio prompts (mRoPE), int8 KV and MoE models stay on the upstream path.
-- MTP rows verify chains only; logprobs, processors and penalties on an MTP row run one token a step. Schema, regex and grammar constraints stay on the lane or the shared batch.
-- Open work: a per-row cost of about 25 ms per round (draft, verify, draw) keeps four-row seeded decoding level with the shared batch.
+- Rows with logits processors other than the driver's windowable set (token masks, logit bias, repetition penalty, one frequency or presence penalty), XTC sampling, and constraints other than invariant tool-call or response-format guides decode one token a round and never draft.
+- A prompt feature that the packed layer does not carry raises an error at admission (`VLMBatchRunner._media_request`).
+- Open work: a per-row cost of about 25 ms per round (draft, verify, draw) keeps four-row seeded decoding level with the earlier shared batch.
 
 ## How to verify
 
-- `tests/unit/test_round_driver.py` (greedy invariance on a random small Qwen3.5), `tests/unit/test_round_driver_apc.py` (hit equals miss) and `tests/unit/test_round_driver_routing.py`.
-- `scripts/research/sweep_round_driver.py` on a real checkpoint (alone, batch, staggered and autoregressive parity), `scripts/research/probe_span_bits.py` (identical hidden states and caches across prefill span sizes) and `scripts/research/validate_round_driver.sh` for the full off-versus-on validation. These need the GPU queue; see [Verification](/docs/developers/verification).
+- `tests/unit/test_round_driver.py` (greedy invariance on a random small Qwen3.5), `tests/unit/test_round_driver_apc.py` (hit equals miss), `tests/unit/test_round_driver_routing.py` (layer and draft routing), and `tests/unit/test_round_driver_generic.py` (the generic layer).
+- `scripts/research/sweep_round_driver.py` on a real checkpoint (alone, batch, staggered and autoregressive parity) and `scripts/research/probe_span_bits.py` (identical hidden states and caches across prefill span sizes). These need the GPU queue; see [Verification](/docs/developers/verification).
