@@ -971,3 +971,33 @@ def test_forced_windows_emit_boundary_as_final_draw(monkeypatch, boundary):
         emitted.extend(values)
     assert emitted == list(range(7, 13 if boundary == "stop" else 25))
     assert guide.at == len(emitted)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("sigma", [0.0, 2.0])
+def test_runner_hands_plain_rows_a_live_guide_for_jump_forward(
+    monkeypatch, enabled, sigma
+):
+    from types import SimpleNamespace
+
+    from yunshu_engine import settings
+    from yunshu_engine.constrained_spec import ConstraintGuide
+    from yunshu_engine.vlm_batch_runner import TokenMaskProcessor, VLMBatchRunner
+
+    original = settings.get
+    monkeypatch.setattr(
+        settings,
+        "get",
+        lambda key, *a, **kw: (
+            enabled if key == "YUNSHU_JUMP_FORWARD" else original(key, *a, **kw)
+        ),
+    )
+    runner = VLMBatchRunner.__new__(VLMBatchRunner)
+    runner.driver = SimpleNamespace(can_draft=False)
+    guide = ConstraintGuide.__new__(ConstraintGuide)
+    job = SimpleNamespace(
+        guide=guide,
+        processors=[TokenMaskProcessor(top_n_sigma=sigma)] if sigma else [],
+        logprobs=False,
+    )
+    assert runner._driver_guide(job) is (enabled and not sigma)

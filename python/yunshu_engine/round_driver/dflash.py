@@ -271,7 +271,7 @@ class DFlashBatch:
         # one live row verifies up to FAST_MAX_ROWS rows; a pack shares DRIVER_MAX_ROWS
         max_rows = tree_verify.FAST_MAX_ROWS if len(rows) == 1 else DRIVER_MAX_ROWS
         for b, r in enumerate(rows):
-            run = driver._forced_window(r, max_rows)
+            run = driver._forced_window(r, min(max_rows, tree_verify.MAX_ROWS))
             if run:
                 forced[b] = run
                 copies[b] = run

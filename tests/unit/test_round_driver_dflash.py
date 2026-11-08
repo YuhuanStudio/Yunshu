@@ -723,7 +723,8 @@ def test_forced_runs_on_packed_rows_match_serial(target, monkeypatch, draft):
     assert results[1][1] < results[0][1]
 
 
-def test_forced_packed_window_hidden_and_next_state_equal_t1_bits(target):
+@pytest.mark.parametrize("width", [2, 8, 32])
+def test_forced_packed_window_hidden_and_next_state_equal_t1_bits(target, width):
     import copy
 
     from yunshu_engine import tree_verify as tv
@@ -737,7 +738,7 @@ def test_forced_packed_window_hidden_and_next_state_equal_t1_bits(target):
         driver.step()
     cache = driver.batch.rows[0].cache
     serial, window = copy.deepcopy(cache), copy.deepcopy(cache)
-    tokens = list(range(7, 15))
+    tokens = list(range(7, 7 + width))
     got = forward(
         driver.lm,
         [
