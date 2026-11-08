@@ -131,7 +131,15 @@ def test_flash_next_prefill_is_hooked(monkeypatch, tmp_path):
         (fn, "prefill"),
     ):
         monkeypatch.setattr(obj, name, getattr(obj, name))
-    monkeypatch.setattr(fn, "prefill", lambda lm, seg, **kw: np.zeros((3, 4)))
+
+    def inner_prefill(lm, seg, **kw):
+        # the real one calls the language model, whose body hook must not record a second time
+        for hook in body_hooks:
+            hook()
+        return np.zeros((3, 4))
+
+    body_hooks = []
+    monkeypatch.setattr(fn, "prefill", inner_prefill)
     monkeypatch.setattr(fn, "logits", lambda lm, h: np.zeros((h.shape[0], 2)))
     cur = tmp_path / "_current.json"
     cur.write_text("{}")
@@ -142,12 +150,14 @@ def test_flash_next_prefill_is_hooked(monkeypatch, tmp_path):
         seen.append((inputs.shape, hidden.shape, head(hidden)))
         state["tokens"].extend([0] * inputs.shape[1])
 
+    body_hooks.append(lambda: None if state.get("in_driver") else seen.append("dup"))
     capture.install_driver(state, record, lambda: None, lambda: None, cur)
     seg = SimpleNamespace(
         tokens=np.zeros(3), cache=[SimpleNamespace(offset=0)], embeds=None
     )
     fn.prefill(object(), seg)
     assert state["active"] and not state["bad"]
+    assert "dup" not in seen
     assert seen and seen[0][0] == (1, 3) and seen[0][2].shape == (1, 3, 2)
     fn.prefill(
         object(), seg

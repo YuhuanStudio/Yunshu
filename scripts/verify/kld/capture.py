@@ -214,7 +214,14 @@ def install(arm: str, arch: str = "qwen4_exp") -> None:
 
     def qwen4_model_call(self, inputs, *args, **kwargs):
         out = model_call(self, inputs, *args, **kwargs)
-        if state["lm"] is not None and inputs.shape[0] == 1 and expect_file.exists():
+        if (
+            state["lm"] is not None
+            and not state.get(
+                "in_driver"
+            )  # the driver hook records this forward itself
+            and inputs.shape[0] == 1
+            and expect_file.exists()
+        ):
             state["active"] = True
             record(inputs, out)
         return out
@@ -284,7 +291,13 @@ def install_driver(state, record, write_window, reset, expect_file) -> None:
 
         def run(lm, seg, **kwargs):
             offset = _cache_offset(seg.cache) if expect_file.exists() else None
-            out = forward_fn(lm, seg, **kwargs)
+            state["in_driver"] = (
+                True  # Flash-Next's prefill calls the (hooked) model body inside
+            )
+            try:
+                out = forward_fn(lm, seg, **kwargs)
+            finally:
+                state["in_driver"] = False
             if expect_file.exists():
                 if offset != len(
                     state["tokens"]
