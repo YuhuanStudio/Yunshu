@@ -354,16 +354,27 @@ def logits(language_model: Any, hidden: mx.array) -> mx.array:
     if head is not None:
         return head(hidden)
     if language_model.args.tie_word_embeddings:
-        dense = language_model.model.embed_tokens.as_linear
+        owner = language_model.model.embed_tokens
+        dense = owner.as_linear
     else:
-        dense = language_model.lm_head
-    if int(hidden.shape[0]) == 1:
+        owner = language_model.lm_head
+        dense = owner
+    if int(hidden.shape[0]) == 1 or _quantized(owner):
+        # A quantized head keeps one call over R rows: the arithmetic main's lane used and that the
+        # 27B identity gates pass on. (2026-11-08: routing quantized heads through the per-row loop
+        # below cost the 27B ~11 ms per verify round, -28% decode at 1K; yv bisect 355610644.)
         return dense(hidden)
-    # No lane head (an unquantized checkpoint): a GEMM over R rows is not row-invariant (its tiling
-    # follows R), so each row takes the single-row GEMV a plain decode step makes.
+    # An unquantized (float) head without a lane head: a GEMM over R rows is not row-invariant (its
+    # tiling follows R), so each row takes the single-row GEMV a plain decode step makes.
     return mx.concatenate(
         [dense(hidden[i : i + 1]) for i in range(int(hidden.shape[0]))]
     )
+
+
+def _quantized(module: Any) -> bool:
+    import mlx.nn as nn
+
+    return isinstance(module, (nn.QuantizedLinear, nn.QuantizedEmbedding)) or hasattr(module, "scales")
 
 
 __all__ = ["Segment", "forward", "lane_forward", "logits", "supports"]

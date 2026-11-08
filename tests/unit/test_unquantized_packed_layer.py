@@ -49,3 +49,31 @@ def test_dense_lm_head_rows_equal_the_single_row_call():
             assert tuple(got.shape) == (7, 512)
     finally:
         mx.set_default_device(previous)
+
+
+def test_quantized_head_keeps_one_call_over_the_rows():
+    """2026-11-08 yv bisect: 355610644 sent the 27B's quantized LM head through the per-row loop (one
+    GEMV per verify row), costing ~11 ms per round (-28% decode at 1K). Only a float head loops."""
+    import mlx.core as mx
+    import mlx.nn as nn
+
+    from yunshu_engine.round_driver import forward as fwd
+
+    calls = []
+
+    class Head(nn.QuantizedLinear):
+        def __call__(self, x):
+            calls.append(int(x.shape[0]))
+            return super().__call__(x)
+
+    head = Head(64, 32, bias=False, group_size=32, bits=4)
+
+    class Args:
+        tie_word_embeddings = False
+
+    class LM:
+        args = Args()
+        lm_head = head
+
+    fwd.logits(LM(), mx.zeros((5, 64)))
+    assert calls == [5]
