@@ -280,7 +280,7 @@ def install_driver(state, record, write_window, reset, expect_file) -> None:
     and the window is written when ``_prefill_step`` emits the row's first token (a one-token request).
     A segment that does not continue the recorded prompt (an APC-restored prefix, a second request)
     marks the window bad: nothing is written, so the run fails closed."""
-    print("KLDDBG install_driver", file=open(os.environ["KLD_CACHE_DIR"] + "/_dbg.txt", "a"), flush=True)
+    print("KLDDBG install_driver", file=open('/Volumes/P5Plus/yunshu-build/kld_dbg.txt', "a"), flush=True)
     try:
         from yunshu_engine.round_driver import driver as rd
         from yunshu_engine.round_driver import forward as fwd
@@ -300,7 +300,7 @@ def install_driver(state, record, write_window, reset, expect_file) -> None:
             finally:
                 state["in_driver"] = False
             if expect_file.exists():
-                print(f"KLDDBG seg offset={offset} rec={len(state['tokens'])} n={int(seg.tokens.shape[0])}", file=open(os.environ['KLD_CACHE_DIR']+'/_dbg.txt','a'), flush=True)
+                print(f"KLDDBG seg offset={offset} rec={len(state['tokens'])} n={int(seg.tokens.shape[0])}", file=open('/Volumes/P5Plus/yunshu-build/kld_dbg.txt','a'), flush=True)
                 if offset != len(
                     state["tokens"]
                 ):  # a restored prefix, or an interleaved row
@@ -327,7 +327,7 @@ def install_driver(state, record, write_window, reset, expect_file) -> None:
     def hooked_prefill_step(self, *args, **kwargs):
         events = prefill_step(self, *args, **kwargs)
         if expect_file.exists():
-            print(f"KLDDBG step events={len(events)} active={state['active']} bad={state['bad']}", file=open(os.environ['KLD_CACHE_DIR']+'/_dbg.txt','a'), flush=True)
+            print(f"KLDDBG step events={len(events)} active={state['active']} bad={state['bad']}", file=open('/Volumes/P5Plus/yunshu-build/kld_dbg.txt','a'), flush=True)
         if state["active"] or state["bad"]:
             if events:  # the first token left: the prompt phase is over
                 if state["active"] and not state["bad"]:
