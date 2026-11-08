@@ -1,0 +1,4 @@
+2026-11-08 12:36:39,560 INFO yunshu_engine.fn_ttft: fn_ttft path=lane ids=15 hit=0 segs=4 | submit=0.1 wait=276.7 ckpt=0.0 capture=0.0 head=0.0 draw=0.0 emit=0.1 tail=0.0 other=0.5 total=277.4 ms
+2026-11-08 12:36:39,822 INFO yunshu_engine.fn_ttft: fn_ttft path=lane ids=15 hit=0 segs=4 | submit=0.0 wait=127.7 ckpt=0.0 capture=0.0 head=0.0 draw=0.0 emit=0.1 tail=0.0 other=0.4 total=128.2 ms
+2026-11-08 12:36:41,369 INFO yunshu_engine.fn_ttft: fn_ttft path=lane ids=1034 hit=0 segs=4 | submit=0.0 wait=1425.2 ckpt=0.0 capture=0.0 head=0.0 draw=0.0 emit=0.1 tail=0.0 other=0.6 total=1425.9 ms
+2026-11-08 12:36:45,013 INFO yunshu_engine.fn_ttft: fn_ttft path=lane ids=1034 hit=1033 segs=2 | submit=0.0 wait=18.8 ckpt=0.0 capture=0.0 head=0.0 draw=0.0 emit=0.0 tail=0.0 other=0.1 total=19.0 ms

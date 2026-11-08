@@ -560,6 +560,7 @@ def _probe_key(ctx: Ctx, ctxs: list, kinds: list) -> str:
     """Base counters are deterministic: cache per (base sha, env, model, checkpoint, cells, runtime)."""
     return _sha(
         "probe",
+        "ttft-stages-1",  # the cached summary carries the per-request stage records
         ctx.base.key,
         ctx.arm_env("base"),
         ctx.model,
@@ -625,6 +626,17 @@ def stage_probe(ctx: Ctx) -> StageResult:
         summ["base"] = cached
     else:
         probe_mod.cache_store(ctx.exe.cache_dir, key, summ["base"])
+    if not (summ["base"].get("stage_lines") or summ["cand"].get("stage_lines")):
+        # neither arm prints per-request stage lines (fn_ttft / turn stages): no TTFT attribution
+        reason = (
+            "no TTFT stage evidence (neither arm prints fn_ttft / turn stages lines)"
+        )
+        if "speed" in cfg["stages"]:
+            ctx.log(reason + "; the speed stage decides")
+            return _finish(
+                ctx, StageResult("probe", True, [], {"inconclusive": reason})
+            )
+        return _finish(ctx, StageResult("probe", False, [reason]))
     tol = {k: float(cfg[f"probe_{k}"]) for k in probe_mod.TOL if f"probe_{k}" in cfg}
     cmp = probe_mod.compare(summ["base"], summ["cand"], tol)
     numbers = dict(cmp["numbers"], base_cached=bool(cached), moved=cmp["moved"])
