@@ -148,6 +148,15 @@ def join_rows(parsed: dict, rows: list) -> list:
         tpr = q["tpr"]
         if tpr is None:
             tpr = (row.get("ct") or 0) / q["rounds"] if q["rounds"] else None
+            # a lane profile line has no token count: the join assumes one line per decode request.
+            # An older build that skips some requests (and prints warmup lines) shifts the pairing, and
+            # a reply of 256 tokens "in 1 round" is the symptom (2026-11-08 push-gate). A round commits
+            # at most nodes+1 tokens, so anything above that is a mispaired record: fail closed.
+            if tpr is not None and tpr > q["nodes"] + 1:
+                raise ValueError(
+                    f"counter record ({q['rounds']} rounds, {q['nodes']} nodes/round) cannot belong to "
+                    f"a {row.get('ct')}-token reply: lane profile lines do not pair with the requests"
+                )
         out.append(
             {
                 "cell": f"{row.get('kind')}@{row.get('ctx')}:{row.get('phase')}",
@@ -185,9 +194,17 @@ def summarize(text: str, rows: list) -> dict:
             raise
         parsed = {"fmt": "none", "requests": [], "windows": []}
         cells = [
-            {"cell": f"{r.get('kind')}@{r.get('ctx')}:{r.get('phase')}", "rounds": None, "tpr": None,
-             "nodes": None, "hist": None, "dec_tps": r.get("dec_tps"), "ttft_s": r.get("ttft_s")}
-            for r in rows if r.get("part") == "decode" and r.get("phase")
+            {
+                "cell": f"{r.get('kind')}@{r.get('ctx')}:{r.get('phase')}",
+                "rounds": None,
+                "tpr": None,
+                "nodes": None,
+                "hist": None,
+                "dec_tps": r.get("dec_tps"),
+                "ttft_s": r.get("ttft_s"),
+            }
+            for r in rows
+            if r.get("part") == "decode" and r.get("phase")
         ]
     dec = [r for r in rows if r.get("part") == "decode" and r.get("phase")]
     for cell, stages in zip(cells, join_stages(stage_log, rows)):  # noqa: B905
@@ -222,7 +239,10 @@ def compare(base: dict, cand: dict, tol: dict | None = None) -> dict:
             "numbers": {},
         }
     tpr_tol = t["tpr_pct_cross"] if cross else t["tpr_pct"]
-    nocount = "none" in (base["fmt"], cand["fmt"])  # an arm without round counters: TTFT stages only
+    nocount = "none" in (
+        base["fmt"],
+        cand["fmt"],
+    )  # an arm without round counters: TTFT stages only
     for b, c in zip(bc, cc):  # noqa: B905
         d = {"cell": b["cell"]}
         for name in ("tpr", "nodes", "rounds"):

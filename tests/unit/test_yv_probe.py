@@ -198,3 +198,15 @@ def test_arm_without_round_counters_still_compares_ttft_stages():
     assert r["ok"], r["moved"]
     with pytest.raises(ValueError):
         probe.summarize("INFO nothing\n", _rows([1]))
+
+
+def test_older_lane_log_with_unpaired_profiles_is_nocount():
+    """2026-11-08 push-gate: the base build printed profile lines for only some requests (plus 1-round
+    warmups), so the last-N join paired a 256-token reply with a 1-round record ('tokens/round 256.00')."""
+    text = (FX / "lane_profile_partial.log").read_text()
+    rows = _rows([256] * 6)
+    with pytest.raises(ValueError):
+        probe.join_rows(probe.parse_log(text), rows)
+    s = probe.summarize(text + "\n" + (FX / "stages_lane.log").read_text(), rows)
+    assert s["fmt"] == "none"
+    assert probe.compare(s, copy.deepcopy(s))["ok"]
