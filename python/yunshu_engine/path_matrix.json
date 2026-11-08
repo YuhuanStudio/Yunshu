@@ -1725,7 +1725,11 @@
     "python/yunshu_engine/dflash_conv.py": "One-dispatch private DFlash convolution candidate; unit tested, never installed. Wire or delete after an A/B; only its unit test uses it, so it stays until that A/B is recorded.",
     "python/yunshu_engine/kernels/verify_select.py": "exact-kernel streamed5 verify select; only research scripts and test_qmv_compat use it since the YUNSHU_MTP_ROW_EXACT path was deleted",
     "python/yunshu_engine/kernels/gdn_rows.py": "batched GDN recurrence with per-row window lengths, formerly DecodeBatch's state kernel; DecodeBatch now runs tree_verify._gdn_layer per row for one arithmetic with tree_forward (spec on == off), so nothing imports it. Kept as the base of the batched per-row-invariant GDN kernel (PARITY row 23); unit tested (test_gdn_rows). Delete if row 23 does not build on it.",
-    "python/yunshu_engine/kernels/qwen4_qsa/attention.py": "Padded batched sparse QSA attention launch (the former stock-path batched decode, deleted with the stock Flash-Next path; driver rows run QSA per row). No caller: kept with its oracle test for the batched-QSA follow-up (bqsa-1028)."
+    "python/yunshu_engine/kernels/qwen4_qsa/attention.py": "Padded batched sparse QSA attention launch (the former stock-path batched decode, deleted with the stock Flash-Next path; driver rows run QSA per row). No caller: kept with its oracle test for the batched-QSA follow-up (bqsa-1028).",
+    "python/yunshu_engine/turbo_quant.py": "unwired: to be re-homed on the round driver (T5 KV quantization rows; plan step T5). Restored from history at T0 correction; no driver caller yet.",
+    "python/yunshu_engine/kv_optimizations.py": "unwired: to be re-homed on the round driver (T5 KV quantization rows; plan step T5). Restored from history at T0 correction; no driver caller yet.",
+    "python/yunshu_engine/spec_prefill.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan, needs an owner and a decision (plan T4 is the closest step). Restored from history at T0 correction.",
+    "python/yunshu_engine/spec_prefill_engine.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan, needs an owner and a decision (plan T4 is the closest step). Restored from history at T0 correction."
   },
   "modules_other": {
     "python/yunshu_engine/kernels/gdn_qk_eps.py": "GDN q/k RMS epsilon measured from the installed mlx-vlm and rendered into gdn_prefill._NORM_SCALE_SOURCE and the RMS arm of qwen35_gdn_prework, so a mlx-vlm bump (b8bf04c) flips stock and fused together (value unchanged on 0.7.8)",
@@ -1809,7 +1813,11 @@
     "python/yunshu_engine/kernels/omlx_q4/row_exact_qmv.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
     "python/yunshu_engine/kernels/omlx_q4/__init__.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
     "python/yunshu_engine/kernels/qwen4_qsa": "Metal source and launch wrapper of the padded batched sparse QSA attention (the former stock-path batched decode, deleted with the stock Flash-Next path); no caller: kept for the batched-QSA follow-up (bqsa-1028) with its oracle test.",
-    "python/yunshu_engine/kernels/gpu_probe.py": "GPU capability probes (device, tensor-op support) asked of the GPU, not the caller's default device"
+    "python/yunshu_engine/kernels/gpu_probe.py": "GPU capability probes (device, tensor-op support) asked of the GPU, not the caller's default device",
+    "python/yunshu_engine/kv_prefix_compression.py": "unwired: to be re-homed on the round driver (T8 APC/prefix-cache migration; plan step T8). Restored from history at T0 correction.",
+    "python/yunshu_engine/mamba_cache.py": "unwired: to be re-homed on the round driver (T8b hybrid/SSM snapshots on the APC checkpoint plan; plan step T8). Restored from history at T0 correction.",
+    "python/yunshu_engine/encoder_cache.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan (VLM encoder-output reuse), needs an owner. Restored from history at T0 correction.",
+    "python/yunshu_engine/auto_tuner.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan (parameter tuning/SLO), needs an owner. Restored from history at T0 correction."
   },
   "settings": {
     "YUNSHU_MTP": "draft_family_coverage",

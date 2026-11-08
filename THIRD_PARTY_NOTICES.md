@@ -8,7 +8,8 @@ comment. Summary of upstreams and licenses:
 
 | Upstream | License | Used as |
 |---|---|---|
-| jundot/omlx | Apache-2.0 | vendored `kernels/omlx/`; derived `ragged_attention.py` tile kernel; inspired `routers/decisions.py` (route design only), `lane_layers.py`, `model_settings.py`, `mrope.py`, `mlx_executor.py`, `prefill_progress.py`, `yunshu_kv/mlx_cache.py`; derived `process_memory_enforcer.py` |
+| jundot/omlx | Apache-2.0 | vendored `kernels/omlx/`; derived `ragged_attention.py` tile kernel; inspired `spec_prefill.py`, `routers/decisions.py` (route design only), `lane_layers.py`, `model_settings.py`, `mrope.py`, `mlx_executor.py`, `prefill_progress.py`, `yunshu_kv/mlx_cache.py`; derived `process_memory_enforcer.py` |
+| sgl-project/sglang | Apache-2.0 | inspired radix-tree prefix matching (`kv_optimizations.py`) |
 | ashhart/TensorFold | MIT | vendored `kernels/tensorfold/`; derived `lane_linear.py`, `int_code_linear.py`, `kernels/qsa_sparse_prefill.py` (Flash-Next tensor-unit sparse prefill attention, Apache-2.0), `copy_drafter.py`; inspired draft vocabulary, DFlash/tree drafting, tree verify, ordered chunk merge |
 | Blaizzy/mlx-vlm | MIT | patched (speculative verifier, Qwen4 sampled-verify logit stash and row QSA, DFlash/MTP rounds, batch generator, audio patches, APC checkpoint policy and lookup provenance); inspired `round_driver/generic.py` (single-row prefill / decode call recipe); derived `kernels/qwen4_qsa/source.py`, `dflash_context.py`, patched `penalty_context.py`, `dflash_apc_window.py`, `dflash_copy.py`, `mtp_lane.py`, `mtp_tree.py`; tool-format registry, DFlash chain depth, structured-output wiring |
 | ml-explore/mlx-lm | MIT | tool parsers; speculative verification (`spec_draft_verifier.py`), sampler order (`batched_engine.py`) |

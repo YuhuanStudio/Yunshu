@@ -219,3 +219,39 @@ class TestWave47AnthropicCacheCreation:
 
         src = inspect.getsource(_non_stream_batched)
         assert "cache_creation_input_tokens" in src and "cached_tokens" in src
+
+
+class TestWave44AutoTuner:
+    """1. AutoTuner.auto_tune() uses profiler recommendations (not TypeError)."""
+
+    def test_auto_tune_applies_profiler_recommendations(self):
+        from yunshu_engine.auto_tuner import AutoTuner, PerformanceProfiler, StepMetrics
+
+        profiler = PerformanceProfiler()
+        for _ in range(200):
+            profiler.record_step(
+                StepMetrics(
+                    throughput_tok_s=5.0,
+                    gpu_memory_util=0.95,
+                    wall_time_ms=10.0,
+                    tokens_generated=1,
+                )
+            )
+        tuner = AutoTuner(profiler=profiler)
+        decisions = tuner.auto_tune()
+        assert isinstance(decisions, list)
+        if profiler.get_bottleneck().value != "none":
+            assert len(decisions) >= 1
+            assert decisions[0].param_name in (
+                "batch_size",
+                "kv_quantization_bits",
+                "prefill_chunk_size",
+                "spec_draft_length",
+                "num_parallel_requests",
+            )
+
+    def test_auto_tune_no_recommendations_returns_empty(self):
+        from yunshu_engine.auto_tuner import AutoTuner, PerformanceProfiler
+
+        tuner = AutoTuner(profiler=PerformanceProfiler())
+        assert tuner.auto_tune() == []
