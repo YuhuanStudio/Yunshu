@@ -300,13 +300,34 @@ def test_mutation_missing_telemetry_is_a_violation(chain, good_run, tmp_path):
     assert "missing telemetry file" in res.stdout
 
 
+def test_mutation_wrong_prompt_sha_is_a_violation(chain, good_run, tmp_path):
+    """The prompt file's bytes are checked against the sha table (prompt_identity), per row, so a
+    one-engine smoke still catches a wrong prompt sha. The old xfail on prompt_ids_sha passed only
+    because an unrelated pinned_versions failure made the audit exit non-zero."""
+    root = _copy_raw(good_run, tmp_path)
+    victim = _cell_files(root)[0]
+    lines = victim.read_text().splitlines()
+    mutated = 0
+    for i in range(1, len(lines)):
+        row = json.loads(lines[i])
+        if row.get("part") == "decode" and "prompt_file_sha256" in row:
+            row["prompt_file_sha256"] = "0" * 64
+            mutated += 1
+        lines[i] = json.dumps(row)
+    assert mutated, "the good run has decode rows with prompt_file_sha256"
+    victim.write_text("\n".join(lines) + "\n")
+    res = _run_audit(root, _audit_manifest_for(chain), tmp_path)
+    assert res.returncode != 0
+    assert "prompt_identity" in res.stdout and "!= table" in res.stdout, res.stdout[-2000:]
+
+
 @pytest.mark.xfail(
     strict=True,
-    reason="open gap: a single-engine group has no reference prompt sha. prompt_identity compares "
-    "engines within a group, so a wrong prompt sha in a one-engine smoke passes. Needs a per-prompt "
-    "expected sha in the manifest.",
+    reason="open gap: prompt_ids_sha (the token ids the server reported) is compared only across engines "
+    "in a group, so a wrong prompt_ids_sha in a one-engine smoke passes. Needs a per-prompt expected "
+    "token-id sha in the manifest.",
 )
-def test_mutation_wrong_prompt_sha_is_a_violation(chain, good_run, tmp_path):
+def test_mutation_wrong_prompt_ids_sha_is_a_violation(chain, good_run, tmp_path):
     root = _copy_raw(good_run, tmp_path)
     victim = _cell_files(root)[0]
     lines = victim.read_text().splitlines()
@@ -318,3 +339,4 @@ def test_mutation_wrong_prompt_sha_is_a_violation(chain, good_run, tmp_path):
     victim.write_text("\n".join(lines) + "\n")
     res = _run_audit(root, _audit_manifest_for(chain), tmp_path)
     assert res.returncode != 0
+    assert "prompt_ids_sha" in res.stdout, res.stdout[-2000:]

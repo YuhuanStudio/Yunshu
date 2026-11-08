@@ -81,7 +81,8 @@ PROFILE_SCRIPT = SCRIPTS / "fullcmp_profile.py"
 # Harness commands run with THIS checkout's venv (the worktree that holds the driver), never the
 # main checkout's .venv. gpuq itself is invoked by its literal path (user rule).
 REPO_ROOT = Path(__file__).resolve().parents[2]
-HARNESS_PY = str(REPO_ROOT / ".venv" / "bin" / "python")
+MAIN_CHECKOUT = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/"  # the shared checkout other agents commit in
+HARNESS_PY =str(REPO_ROOT / ".venv" / "bin" / "python")
 if not Path(HARNESS_PY).exists():  # a worktree without its own venv (yv trees, extra worktrees): this interpreter
     HARNESS_PY = sys.executable
 GPUQ = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/scripts/dev/gpuq"
@@ -784,6 +785,16 @@ def script_problems(script: str) -> list[str]:
     point into the main checkout. Output and home paths are created by the job, not checked."""
     problems: list[str] = []
     outs = _output_roots()
+    # The driver's own checkout (REPO_ROOT) is the harness it runs: a path inside it is not a main-checkout
+    # reference. When the driver runs from the main checkout itself (the e2e chains do), REPO_ROOT is the
+    # main checkout and its own paths are exempt; any other main-checkout path is still refused.
+    own = str(REPO_ROOT) + "/"
+
+    def main_ref(value: str) -> bool:
+        return (
+            "/Yunshu/.venv" in value or value.startswith(MAIN_CHECKOUT)
+        ) and not value.startswith(own)
+
     for tok in shlex.split(script):
         for part in (
             tok.split(":") if tok.startswith(("PYTHONPATH=", "TFB_")) else [tok]
@@ -791,13 +802,12 @@ def script_problems(script: str) -> list[str]:
             value = part.partition("=")[2] if re.match(r"^[A-Z_]+=", part) else part
             if not value.startswith("/") or "{" in value or value.startswith(outs):
                 continue
-            if "/Yunshu/.venv" in value or value.startswith(
-                "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/"
-            ):
+            if main_ref(value):
                 problems.append(f"job references the main checkout: {value}")
             elif not os.path.exists(value):
                 problems.append(f"input path does not exist: {value}")
-    if "/Yunshu/.venv" in script or "/Documents/YuhuanStudio/Yunshu/" in script:
+    body = script.replace(own, "")
+    if "/Yunshu/.venv" in body or MAIN_CHECKOUT in body:
         problems.append("job body references the main checkout")
     return sorted(set(problems))
 

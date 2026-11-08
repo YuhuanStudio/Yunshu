@@ -126,7 +126,20 @@ def test_every_b1_submit_argv_passes_gpuq_preflight(fake_world, profile_rep):
         assert fr.script_problems(job.script) == [], job.label
 
 
-def test_submit_argv_never_names_the_main_checkout(fake_world):
+def test_submit_argv_never_names_the_main_checkout(fake_world, monkeypatch, tmp_path):
+    # production points every harness script at the frozen snapshot (fullcmp_run.use_harness) before
+    # any job is written; the job paths must come from there, not from the live checkout this test runs in
+    snap = tmp_path / "harness-snapshot" / "scripts" / "research"
+    snap.mkdir(parents=True)
+    for name in ("tfbench", "fullcmp_audit", "fullcmp_reps", "fullcmp_preflight", "fullcmp_quiet", "fullcmp_profile"):
+        (snap / f"{name}.py").write_text("")
+    monkeypatch.setattr(fr, "SCRIPTS", snap)
+    monkeypatch.setattr(fr, "TFBENCH", snap / "tfbench.py")
+    monkeypatch.setattr(fr, "AUDIT", snap / "fullcmp_audit.py")
+    monkeypatch.setattr(fr, "REPS", snap / "fullcmp_reps.py")
+    monkeypatch.setattr(fr, "PREFLIGHT", snap / "fullcmp_preflight.py")
+    monkeypatch.setattr(fr, "QUIET", snap / "fullcmp_quiet.py")
+    monkeypatch.setattr(fr, "PROFILE_SCRIPT", snap / "fullcmp_profile.py")
     plan = fr.plan_batch(_b1_rows(), "B1", fake_world["pin"], profile_rep=True)
     for job in plan.jobs:
         argv = job.submit_argv()[1:]  # argv[0] is the literal gpuq path (user rule)
@@ -175,10 +188,28 @@ def test_self_check_refuses_a_missing_model(fake_world, monkeypatch):
     assert any("input path does not exist" in p for ps in bad.values() for p in ps)
 
 
-def test_job_body_naming_the_main_checkout_is_refused():
+def test_job_body_naming_the_main_checkout_is_refused(monkeypatch, tmp_path):
+    # a driver running from a worktree: the main checkout is foreign, its paths are refused
+    monkeypatch.setattr(fr, "REPO_ROOT", tmp_path / "wt-driver")
     assert fr.script_problems(
         "set -e\n/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python x.py"
     )
+
+
+def test_driver_checkout_paths_are_not_main_checkout_references(monkeypatch, tmp_path):
+    # the driver's own checkout is the harness it runs (e2e chains run from the main checkout): its
+    # own paths are not references to a foreign main checkout; another main-checkout path still is
+    own = tmp_path / "own"
+    monkeypatch.setattr(fr, "REPO_ROOT", own)
+    (own / "scripts").mkdir(parents=True)
+    (own / "scripts" / "t.py").write_text("")
+    (own / ".venv" / "bin").mkdir(parents=True)
+    (own / ".venv" / "bin" / "python").write_text("")
+    assert fr.script_problems(f"set -e\n{own}/.venv/bin/python {own}/scripts/t.py") == []
+    refs = fr.script_problems(
+        f"set -e\n{own}/.venv/bin/python /Users/yuhuan/Documents/YuhuanStudio/Yunshu/scripts/x.py"
+    )
+    assert any("main checkout" in p for p in refs)
 
 
 def test_every_cell_carries_the_run_id_and_its_manifest_group(fake_world):
