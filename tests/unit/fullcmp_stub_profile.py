@@ -69,7 +69,9 @@ LAYER2_CONTRACT = {
 
 
 def profile_enabled(engine: str) -> bool:
-    return engine == "yunshu" and os.environ.get("YUNSHU_DEBUG_TREE_PROFILE") == "1"
+    # tfbench passes the harness id (yunshu-main, yunshu-pb2, ...): every Yunshu engine, as the base stub's
+    # round-driver line does (fullcmp_stub_server.StubState), not only the legacy id "yunshu"
+    return engine.startswith(("yunshu", "fn-yunshu")) and os.environ.get("YUNSHU_DEBUG_TREE_PROFILE") == "1"
 
 
 class ProfileState(base.StubState):
