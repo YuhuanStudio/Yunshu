@@ -2985,7 +2985,7 @@ def _round_golden_valid(path: Path) -> tuple[bool, str]:
 
 def stage_round_golden(ctx: Ctx) -> StageResult:
     """M0 candidate receipts: tiny first, then the selected real checkpoint."""
-    from scripts.research.round_driver_golden import LAYERS
+    from scripts.research.round_driver_golden import LAYERS, execution_records, validate
 
     layer = ctx.env.get("M0_LAYER", "qwen3_5")
     if layer not in LAYERS:
@@ -3049,13 +3049,14 @@ def stage_round_golden(ctx: Ctx) -> StageResult:
     for key, result in results.items():
         if result.ok and result.evidence:
             receipt = json.loads(result.evidence.read_text())
-            payload = receipt["payload"]
+            payload = validate(receipt)
+            execution = execution_records(receipt)
             cells = payload["cells"] + payload["spec_cells"] + payload["cache_cells"]
             numbers[key] = dict(
                 sha256=receipt["sha256"],
                 cells=len(cells),
                 tokens=sum(len(row) for cell in cells for row in cell["rows"]),
-                drafted=sum(run["drafted"] for run in payload["execution"]),
+                drafted=sum(run["drafted"] for run in execution),
                 hits=sum(sum(cell["hits"]) for cell in payload["cache_cells"]),
                 replays=sum(cell.get("replayed", 0) for cell in payload["cache_cells"]),
                 int8_checks=len(payload["int8_reference"]),

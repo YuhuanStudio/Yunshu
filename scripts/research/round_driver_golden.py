@@ -67,10 +67,27 @@ def event_record(event):
     return {"token": int(event.token), "logprob": float(lp).hex()}
 
 
+def execution_records(receipt):
+    if "execution_json" in receipt:
+        return json.loads(receipt["execution_json"])
+    if "execution" in receipt:
+        return receipt["execution"]
+    payload = (
+        json.loads(receipt["payload_json"])
+        if "payload_json" in receipt
+        else receipt["payload"]
+    )
+    return payload.get("execution", [])
+
+
 def validate(receipt):
     if receipt.get("complete") is not True:
         raise ValueError("missing complete receipt")
-    payload = receipt["payload"]
+    payload = (
+        json.loads(receipt["payload_json"])
+        if "payload_json" in receipt
+        else receipt["payload"]
+    )
     if receipt.get("sha256") != digest(payload):
         raise ValueError("payload checksum mismatch")
     if payload["layer"] not in LAYERS or not payload.get("device"):
@@ -121,12 +138,33 @@ def validate(receipt):
             raise ValueError("missing replay evidence")
     if not caps["apc"] and not caps.get("apc_unavailable_reason"):
         raise ValueError("APC unavailability needs a reason")
+    if caps["spec"]:
+        runs = [r for r in execution_records(receipt) if r.get("spec")]
+        expected = {
+            (mode, schedule, indices)
+            for mode in ("greedy", "seeded")
+            for schedule, indices in (
+                ("solo", (0,)),
+                ("solo", (1,)),
+                ("solo", (2,)),
+                ("burst", (0, 1, 2)),
+                ("stagger", (0, 1, 2)),
+            )
+        }
+        if (
+            len(runs) != len(expected)
+            or {(r["mode"], r["schedule"], tuple(r["indices"])) for r in runs}
+            != expected
+            or any(r.get("drafted", 0) <= 0 for r in runs)
+        ):
+            raise ValueError("missing speculative execution evidence")
     int8 = payload["int8_reference"]
     if caps["int8"] and (len(int8) != 3 or any(not r.get("sha256") for r in int8)):
         raise ValueError("missing int8 oracle evidence")
     if not caps["int8"] and int8:
         raise ValueError("unexpected int8 evidence")
-    return payload
+    # Legacy receipts included scheduler telemetry; it is not arithmetic identity.
+    return {key: value for key, value in payload.items() if key != "execution"}
 
 
 def compare(reference, candidate):
@@ -484,7 +522,6 @@ def _capture(layer, model=None, tokens=8, device="gpu"):
     payload = dict(
         layer=layer,
         model=str(model or f"tiny:{layer}"),
-        execution=execution,
         prompt_sha256=digest(prompts),
         checkpoint={
             "config_sha256": hashlib.sha256(
@@ -532,7 +569,9 @@ def _capture(layer, model=None, tokens=8, device="gpu"):
             "media": "embedding-equivalence",
         },
     )
-    receipt = dict(complete=True, payload=payload, sha256=digest(payload))
+    receipt = dict(
+        complete=True, payload=payload, sha256=digest(payload), execution=execution
+    )
     validate(receipt)
     return receipt
 
@@ -570,7 +609,17 @@ def main():
     if a.reference:
         compare(json.loads(a.reference.read_text()), receipt)
     a.out.parent.mkdir(parents=True, exist_ok=True)
-    a.out.write_text(json.dumps(receipt, sort_keys=True) + "\n")
+    # gpuq annotates every dictionary recursively. Seal the canonical payload
+    # as text so transport metadata cannot overwrite model state or token data.
+    wire = {
+        "complete": receipt["complete"],
+        "sha256": receipt["sha256"],
+        "execution_json": json.dumps(receipt.get("execution", []), sort_keys=True),
+        "payload_json": json.dumps(
+            receipt["payload"], sort_keys=True, separators=(",", ":"), allow_nan=False
+        ),
+    }
+    a.out.write_text(json.dumps(wire, sort_keys=True) + "\n")
     print(json.dumps(dict(complete=True, sha256=receipt["sha256"])))
 
 

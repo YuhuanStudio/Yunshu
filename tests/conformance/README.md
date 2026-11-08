@@ -27,6 +27,12 @@ scripts/dev/yv wait RUN_DIR
 before the real `--model` checkpoint cell starts. Generic is CPU-only. GPU calls
 require `GPUQ_JOB_ID`; correctness jobs do not request quiet timing admission.
 Every output is one JSON line with `complete: true`; a dry run is not evidence.
+The hashed payload is sealed in `payload_json` text: gpuq recursively annotates
+JSON dictionaries, so unsealed nested records would be changed after capture.
+`validate(receipt)` returns the canonical payload; transport metadata is outside
+the checksum. Adaptive draft/step counters are separate `execution_json`
+evidence, because different draft acceptance schedules may produce identical
+token IDs and logprobs.
 
 Archive successful receipts under the gitignored `docs/research/m0-golden/`,
 named `LAYER-tiny.jsonl` and `LAYER-checkpoint.jsonl`, with separate device

@@ -150,3 +150,56 @@ def test_capability_without_evidence_fails(capability):
     r["sha256"] = digest(r["payload"])
     with pytest.raises(ValueError):
         validate(r)
+
+
+def test_receipt_survives_gpuq_recursive_device_annotations(tmp_path, monkeypatch):
+    import json
+    import sys
+
+    from scripts.research import round_driver_golden as golden
+    from scripts.verify.stages import _round_golden_valid
+
+    out = tmp_path / "receipt.jsonl"
+    monkeypatch.setattr(golden, "capture", lambda *args: receipt())
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["golden", "--layer", "generic", "--device", "cpu", "--out", str(out)],
+    )
+    golden.main()
+    record = json.loads(out.read_text())
+
+    def annotate(value):
+        if isinstance(value, dict):
+            for child in list(value.values()):
+                annotate(child)
+            value.update(device="m5", execution_device="m5", remote_host=None)
+        elif isinstance(value, list):
+            for child in value:
+                annotate(child)
+
+    annotate(record)
+    out.write_text(json.dumps(record) + "\n")
+    assert _round_golden_valid(out) == (True, "")
+
+
+def test_adaptive_step_counts_are_evidence_not_output_identity():
+    a, b = receipt(), receipt()
+    a["payload"]["execution"] = [{"steps": 8, "drafted": 7}]
+    b["payload"]["execution"] = [{"steps": 9, "drafted": 6}]
+    for record in (a, b):
+        record["sha256"] = digest(record["payload"])
+    compare(a, b)
+
+
+def test_spec_token_rows_without_engaged_drafter_evidence_fail():
+    r = receipt()
+    r["payload"]["capabilities"]["spec"] = True
+    r["payload"]["spec_cells"] = [
+        copy.deepcopy(c)
+        for c in r["payload"]["cells"]
+        if c["schedule"] in ("solo", "burst", "stagger")
+    ]
+    r["sha256"] = digest(r["payload"])
+    with pytest.raises(ValueError, match="speculative execution evidence"):
+        validate(r)
