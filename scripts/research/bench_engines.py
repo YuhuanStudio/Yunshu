@@ -262,16 +262,16 @@ ENGINES: dict[str, Engine] = {
             1.0,
             75.0,
         ),
-        # ---- full comparison: the pb2-generic candidate (detached tree 89740a60f, own pin) ----
+        # ---- full comparison: the pb2-generic candidate (detached tree 15ab1a0f, own pin) ----
         Engine(
             "yunshu-next",
-            "Yunshu next (pb2-generic, 89740a60f)",
+            "Yunshu next (pb2-generic, 15ab1a0f)",
             "dflash",
             "same",
             CHECKPOINT,
             DRAFTER,
             "yunshu",
-            "pb2-generic tree 89740a60f (TFB_YUNSHU_SRC of its own pin); same launch as yunshu-pb2; default settings; drafter auto-discovered",
+            "pb2-generic tree 15ab1a0f (TFB_YUNSHU_SRC of its own pin); same launch as yunshu-pb2; default settings; drafter auto-discovered",
             1.0,
             75.0,
         ),

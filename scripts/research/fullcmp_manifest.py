@@ -166,7 +166,7 @@ ENGINE_PERF = {
         decode=YUNSHU_CURVE["decode"],
         slow=YUNSHU_SLOW_POINTS,
         ready_s=float(_PLAN["ready_s_max"]["value"]),
-        source="pb2-generic 89740a60f: NOT measured; the dev0 curve is the planning stand-in (provisional)",
+        source="pb2-generic 15ab1a0f: NOT measured; the dev0 curve is the planning stand-in (provisional)",
         assumed=["planning curve = dev0 (0f2960047); no yunshu-next cell has run"],
     ),
     # the Phase B preview: the dev0 curve until its own 1K/32K/64K/128K cells are measured (provisional)
@@ -390,8 +390,8 @@ def slowdown(eng, ctx_tokens, conc):
 UNV, UNS, CUT = "unverified", "unsupported", "cut"
 ENGINES = {
     "yunshu-next": dict(
-        label="Yunshu next (pb2-generic 89740a60f, detached tree)",
-        version="0.1.7.dev0 @ 89740a60f (pb2-generic, unmerged candidate)",
+        label="Yunshu next (pb2-generic 15ab1a0f, detached tree)",
+        version="0.1.7.dev1 @ 15ab1a0f (pb2-generic, unmerged candidate)",
         supported=True,
         caps=dict(
             images=True,
