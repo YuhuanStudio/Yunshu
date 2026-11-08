@@ -25,9 +25,7 @@ async def run(args):
     from yunshu_engine.vlm_engine import VLMEngine
 
     settings.set_override("YUNSHU_VLM_APC_MEMORY_GB", 1.0)
-    engine = VLMEngine(
-        str(args.model), EngineConfig(prefill_step_size=512, completion_batch_size=1)
-    )
+    engine = VLMEngine(str(args.model), EngineConfig(prefill_step_size=512))
     await engine.start()
     lm = engine._model.language_model
     layer = lm.model.layers[1]

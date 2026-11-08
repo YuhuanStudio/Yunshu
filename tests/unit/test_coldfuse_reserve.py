@@ -48,26 +48,6 @@ def test_other_cache_types_do_not_reserve():
     reserve_prompt_kv([Other()], 32768)
 
 
-def test_singleton_forward_retains_reserved_capacity():
-    from yunshu_engine.kernels.singleton_cache import extract_rows, merge_rows
-
-    caches = [BatchKVCache([0])]
-    reference = KVCache()
-    for step in range(3):
-        reserve_prompt_kv(caches, 32768)
-        rows = extract_rows(caches)
-        x = mx.full((1, 4, 2048, 256), step + 1, dtype=mx.bfloat16)
-        expected = reference.update_and_fetch(x, x)
-        actual = rows[0].update_and_fetch(x, x)
-        caches = merge_rows(rows)
-        mx.eval(expected, actual)
-        assert caches[0]._idx == reference.offset
-        if step:
-            assert caches[0].keys.shape[2] == 32768
-        for a, b in zip(expected, actual, strict=True):
-            assert mx.array_equal(a.view(mx.uint16), b.view(mx.uint16)).item()
-
-
 @pytest.mark.parametrize("padding", [[1], [0, 0]])
 def test_padded_or_multirow_batch_not_reserved(padding):
     cache = BatchKVCache(padding)

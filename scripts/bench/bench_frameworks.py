@@ -64,13 +64,6 @@ def bench(model):
             dict(base, FW="yunshu-fast", YBENCH_MODEL=model),
         )
     )
-    print(f"  [{name}] yunshu-loop...", flush=True)
-    rows.append(
-        run(
-            [sys.executable, "scripts/bench/_fw_yunshu.py"],
-            dict(base, FW="yunshu-loop", YUNSHU_ENGINE_LOOP="1", YBENCH_MODEL=model),
-        )
-    )
     print(f"  [{name}] mlx-lm...", flush=True)
     rows.append(
         run(

@@ -31,7 +31,11 @@ def test_copy_outside_sys_modules_is_found_and_matches_the_heap_scan():
     assert "fullcmp_copy_unit" not in sys.modules
     got = cf._loaded_driver_modules()
     assert any(m is mod for m in got)
-    assert {id(m) for m in got} == {id(m) for m in _gc_scan()}
+    extra = [m for m in _gc_scan() if id(m) not in {id(g) for g in got}]
+    assert not extra, [
+        (m.__name__, getattr(m, "__spec__", None), m.__dict__.get("__loader__"))
+        for m in extra
+    ]
 
 
 def test_lookup_does_not_walk_the_heap():

@@ -582,10 +582,16 @@ def test_auto_encoding_compresses_only_where_it_pays(tmp_path):
     assert {e.path.suffix for e in fast.lower[0].index.values()} == {".safetensors"}
 
 
+def _driver_runner(model, proc, mgr, salt):
+    from tests.unit.driver_runner import driver_runner
+
+    return driver_runner(model, proc, mgr, salt)
+
+
 # ── manager level: provenance + token identity ───────────────────────────
 def test_manager_reports_device_and_stays_token_identical(tmp_path):
     from tests.unit.test_apc_warm import _tiny_model
-    from yunshu_engine.vlm_batch_runner import RunStats, VLMBatchRunner
+    from yunshu_engine.vlm_batch_runner import RunStats
 
     class Stop:
         def __init__(self):
@@ -631,7 +637,7 @@ def test_manager_reports_device_and_stays_token_identical(tmp_path):
         num_blocks=64, block_size=16, disk=disk,
         overrides={"memory_max_gb": 1, "checkpoint_interval_tokens": 0}, max_entries=1,
     )  # fmt: skip
-    runner = VLMBatchRunner(model, processor=proc, apc_manager=mgr, apc_semantic_hash=0)
+    runner = _driver_runner(model, proc, mgr, 0)
     run(runner, a)
     run(runner, b)  # a leaves RAM for the SSD
     run(runner, c)
@@ -646,11 +652,11 @@ def test_manager_reports_device_and_stays_token_identical(tmp_path):
         num_blocks=64, block_size=16,
         overrides={"memory_max_gb": 1, "checkpoint_interval_tokens": 0}, max_entries=8,
     )  # fmt: skip
-    rr = VLMBatchRunner(model, processor=proc, apc_manager=ram, apc_semantic_hash=0)
+    rr = _driver_runner(model, proc, ram, 0)
     run(rr, a)
     out_ram, st_ram = run(rr, a2)
     assert st_ram.cache_tier == "ram"
-    out_cold, _ = run(VLMBatchRunner(model, processor=proc), a2)
+    out_cold, _ = run(_driver_runner(model, proc, None, None), a2)
     assert out_low == out_ram == out_cold
     assert any(
         t["name"] == "hdd" and t["hits"] == 1 for t in mgr.snapshot()["storage_tiers"]
@@ -663,7 +669,7 @@ def test_agent_sessions_leave_one_or_two_checkpoints_each_on_the_ssd(tmp_path):
     the session's next checkpoint is written (the generation of a RAM-superseded entry is kept)."""
     from tests.unit.test_apc_warm import _tiny_model
     from yunshu_engine.apc_manager import SpillDiskStore
-    from yunshu_engine.vlm_batch_runner import RunStats, VLMBatchRunner
+    from yunshu_engine.vlm_batch_runner import RunStats
 
     class Stop:
         def __init__(self):
@@ -685,9 +691,7 @@ def test_agent_sessions_leave_one_or_two_checkpoints_each_on_the_ssd(tmp_path):
         head_marker=(900, 901),
     )
     proc = SimpleNamespace(tokenizer=SimpleNamespace(stopping_criteria=Stop()))
-    runner = VLMBatchRunner(
-        _tiny_model(), processor=proc, apc_manager=mgr, apc_semantic_hash=12345
-    )
+    runner = _driver_runner(_tiny_model(), proc, mgr, 12345)
     r = random.Random(3)
     head = [r.randrange(3, 800) for _ in range(150)]
     sess = [

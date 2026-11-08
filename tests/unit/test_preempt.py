@@ -1,14 +1,12 @@
 """Preemptible prefill: a background request can stop between decoder-layer groups."""
 
 import threading
-from types import SimpleNamespace
 
 import pytest
 
 mx = pytest.importorskip("mlx.core")
 
 from yunshu_engine.kernels import preempt  # noqa: E402
-from yunshu_engine.vlm_batch_runner import VLMBatchRunner  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -86,36 +84,6 @@ def test_install_is_idempotent_and_supported_reflects_it():
         assert preempt.supported()
     finally:
         Qwen3_5DecoderLayer.__call__ = before
-
-
-def test_runner_scopes_only_a_lone_preemptible_job(monkeypatch):
-    monkeypatch.setattr(preempt, "supported", lambda: True)
-    seen = []
-
-    class Gen:
-        def next(self):
-            seen.append(preempt._SCOPE.get())
-            return "ok"
-
-    ev = threading.Event()
-    ev.preemptible = True
-    rehearsal = SimpleNamespace(cancel_event=ev)
-    plain = SimpleNamespace(cancel_event=threading.Event())
-
-    assert (
-        VLMBatchRunner._next_preemptible(
-            SimpleNamespace(gen=Gen(), jobs={1: rehearsal})
-        )
-        == "ok"
-    )
-    assert seen[-1] is not None and seen[-1].cancel_event is ev
-    VLMBatchRunner._next_preemptible(SimpleNamespace(gen=Gen(), jobs={1: plain}))
-    assert seen[-1] is None
-    # shared with another job: a preempt exception would corrupt the other row
-    VLMBatchRunner._next_preemptible(
-        SimpleNamespace(gen=Gen(), jobs={1: rehearsal, 2: plain})
-    )
-    assert seen[-1] is None
 
 
 def test_preempted_error_reports_the_layer_group():

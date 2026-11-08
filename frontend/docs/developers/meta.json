@@ -12,6 +12,7 @@
   "agent-compat",
   "hardware-validation",
   "serve-and-develop",
+  "round-driver",
   "api-parity",
   "auxiliary-scheduling",
   "prior-art-formats",

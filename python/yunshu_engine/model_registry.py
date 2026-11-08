@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Model Registry — tracks model ownership across engines .
 
-Prevents BatchKVCache conflicts when multiple EngineCore instances
+Prevents BatchKVCache conflicts when multiple engine instances
 share a model. mlx-lm's BatchGenerator maintains internal KV cache
 state tied to the model — multiple engines using the same model
 causes incompatible cache objects and NoneType errors.

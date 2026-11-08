@@ -70,6 +70,19 @@ def kill_tree(pid: int) -> None:
             p.kill()
 
 
+async def _wait_exit(proc, timeout: float | None = None, poll: float = 0.01) -> None:
+    """Wait until the leader exits. ``Process.wait()`` also waits for the stdio pipes to close once
+    they are read, so a background child holding them open would hold the wait until that child
+    exits by itself, and the sweep below would never reach it. The leader's returncode is set at
+    its exit, so poll that."""
+    loop = asyncio.get_running_loop()
+    deadline = None if timeout is None else loop.time() + timeout
+    while proc.returncode is None:
+        if deadline is not None and loop.time() >= deadline:
+            raise TimeoutError
+        await asyncio.sleep(poll)
+
+
 async def run_supervised(
     argv: list[str],
     *,
@@ -137,12 +150,12 @@ async def run_supervised(
     watcher = asyncio.create_task(watch())
     try:
         try:
-            await asyncio.wait_for(proc.wait(), timeout)
+            await _wait_exit(proc, timeout)
         except TimeoutError:
             res.timed_out = True
             killed.set()
             kill_tree(pid)
-            await proc.wait()
+            await _wait_exit(proc)
         # whatever the command left running (daemons, background jobs) dies with the call, and
         # only then the pipes are drained (a survivor would otherwise hold them open)
         kill_tree(pid)

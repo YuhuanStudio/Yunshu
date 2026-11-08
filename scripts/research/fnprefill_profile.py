@@ -415,7 +415,9 @@ def main(argv=None):
         install(plain=mode == "--serve-plain")
         import os
 
-        if os.environ.get("FNPREFILL_STEP"):  # experiment: prompt tokens per prefill forward
+        if os.environ.get(
+            "FNPREFILL_STEP"
+        ):  # experiment: prompt tokens per prefill forward
             from yunshu_engine import memory_admission, vlm_batch_runner
 
             vlm_batch_runner.PREFILL_STEP = memory_admission.PREFILL_STEP = int(

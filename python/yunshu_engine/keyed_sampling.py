@@ -56,7 +56,7 @@ def seed_base(seed: int) -> int:
     return _mix_int((int(seed) & _M64) ^ _C0)
 
 
-def _gumbel_at(bases: mx.array, positions: mx.array, ids: mx.array) -> mx.array:
+def _gumbel_graph_at(bases: mx.array, positions: mx.array, ids: mx.array) -> mx.array:
     """Gumbel(0, 1) noise for token ``ids`` ([1, V] or [N, K], uint64): row n is keyed by
     (bases[n], positions[n], id), so any subset of ids gets the same values as the full row."""
     pos = positions.astype(mx.uint64).reshape(-1, 1)
@@ -74,7 +74,132 @@ def gumbel_rows(bases: mx.array, positions: mx.array, vocab: int) -> mx.array:
 
     ``bases`` are ``seed_base`` values as a uint64 array, so rows with different seeds are
     drawn in one graph."""
-    return _gumbel_at(bases, positions, mx.arange(vocab, dtype=mx.uint64)[None, :])
+    if not _fused_ok():
+        return _gumbel_graph_at(
+            bases, positions, mx.arange(vocab, dtype=mx.uint64)[None, :]
+        )
+    return _noise(None, bases, positions, vocab)
+
+
+def _gumbel_rows_graph(bases: mx.array, positions: mx.array, vocab: int) -> mx.array:
+    """Reference op graph of ``gumbel_rows`` (the fused kernel must match it bit for bit)."""
+    return _gumbel_graph_at(
+        bases, positions, mx.arange(vocab, dtype=mx.uint64)[None, :]
+    )
+
+
+_NOISE_HEADER = """
+    constant ulong NC1 = 0xBF58476D1CE4E5B9ul;
+    constant ulong NC2 = 0x94D049BB133111EBul;
+    constant ulong NC3 = 0xD1B54A32D192ED03ul;
+    inline float gumbel_at(ulong base, ulong pos, ulong v) {
+        ulong x = base ^ (pos * NC3);
+        x ^= x >> 30; x *= NC1; x ^= x >> 27; x *= NC2; x ^= x >> 31;
+        x ^= v;
+        x ^= x >> 30; x *= NC1; x ^= x >> 27; x *= NC2; x ^= x >> 31;
+        const float u = ((float)(x >> 41) + 0.5f) * (1.0f / 8388608.0f);
+        return -metal::precise::log(-metal::precise::log(u));
+    }
+"""
+_NOISE_SOURCE = """
+    const uint v = thread_position_in_grid.x;
+    const uint n = thread_position_in_grid.y;
+    if (v >= (uint)V) return;
+    float g = gumbel_at(bases[n], pos[n], (ulong)v);
+    if (ADD) {
+        const float r = row[(size_t)n * (size_t)V + v];
+        out[(size_t)n * (size_t)V + v] = (r == -INFINITY) ? -INFINITY : r + g;
+    } else {
+        out[(size_t)n * (size_t)V + v] = g;
+    }
+"""
+_NOISE_AT_SOURCE = """
+    const uint j = thread_position_in_grid.x;
+    const uint n = thread_position_in_grid.y;
+    if (j >= (uint)K) return;
+    const size_t at = (size_t)n * (size_t)K + j;
+    const float r = vals[at];
+    out[at] = (r == -INFINITY) ? -INFINITY : r + gumbel_at(bases[n], pos[n], (ulong)ids[at]);
+"""
+_NOISE_KERNEL: dict = {}
+
+
+def _fused_ok() -> bool:
+    """The kernels run on the GPU; a CPU default device (tests, CPU tools) uses the op graph."""
+    return mx.default_device() == mx.gpu
+
+
+def _kernel(name, inputs, source):
+    k = _NOISE_KERNEL.get(name)
+    if k is None:
+        k = _NOISE_KERNEL[name] = mx.fast.metal_kernel(
+            name=name,
+            input_names=inputs,
+            output_names=["out"],
+            source=source,
+            header=_NOISE_HEADER,
+        )
+    return k
+
+
+def _noise(row, bases, positions, vocab: int) -> mx.array:
+    """One kernel for the hash, both logs and (with ``row``) the add: the graph form
+    materializes about twenty [N, vocab] uint64 / float32 temporaries per draw. Same
+    arithmetic, op for op, so the same bits."""
+    n = int(positions.size)
+    add = row is not None
+    (out,) = _kernel("yunshu_keyed_noise", ["row", "bases", "pos"], _NOISE_SOURCE)(
+        inputs=[
+            mx.contiguous(row) if add else mx.zeros((1,), dtype=mx.float32),
+            bases.astype(mx.uint64).reshape(-1),
+            positions.astype(mx.uint64).reshape(-1),
+        ],
+        template=[("V", int(vocab)), ("ADD", 1 if add else 0)],
+        grid=(int(vocab), n, 1),
+        threadgroup=(256, 1, 1),
+        output_shapes=[(n, int(vocab))],
+        output_dtypes=[mx.float32],
+    )
+    return out
+
+
+def noised_rows(row, bases, positions):
+    """``where(row == -inf, -inf, row + gumbel)`` for ``row`` [N, V] float32."""
+    row = row.astype(mx.float32)
+    if not _fused_ok():
+        return mx.where(
+            row == -mx.inf,
+            -mx.inf,
+            row + _gumbel_rows_graph(bases, positions, row.shape[-1]),
+        )
+    return _noise(row, bases, positions, row.shape[-1])
+
+
+def noised_at(vals, ids, bases, positions):
+    """``where(vals == -inf, -inf, vals + gumbel[id])`` for candidate ``vals``/``ids`` [N, K]."""
+    if not _fused_ok():
+        return mx.where(
+            vals == -mx.inf,
+            -mx.inf,
+            vals + _gumbel_graph_at(bases, positions, ids.astype(mx.uint64)),
+        )
+    n, k = (int(d) for d in vals.shape)
+    (out,) = _kernel(
+        "yunshu_keyed_noise_at", ["vals", "ids", "bases", "pos"], _NOISE_AT_SOURCE
+    )(
+        inputs=[
+            mx.contiguous(vals.astype(mx.float32)),
+            mx.contiguous(ids.astype(mx.uint32)),
+            bases.astype(mx.uint64).reshape(-1),
+            positions.astype(mx.uint64).reshape(-1),
+        ],
+        template=[("K", k)],
+        grid=(k, n, 1),
+        threadgroup=(min(k, 32), 1, 1),
+        output_shapes=[(n, k)],
+        output_dtypes=[mx.float32],
+    )
+    return out
 
 
 def gumbel(seed: int, positions: mx.array, vocab: int) -> mx.array:
@@ -92,18 +217,11 @@ def sample_rows(
     cand = candidate_rows(row, params)
     if cand is not None:
         ids, scaled = cand
-        noisy = mx.where(
-            scaled == -mx.inf,
-            -mx.inf,
-            scaled + _gumbel_at(bases, positions, ids.astype(mx.uint64)),
-        )
+        noisy = noised_at(scaled, ids, bases, positions)
         pick = mx.argmax(noisy, axis=-1, keepdims=True)
         return mx.take_along_axis(ids, pick, axis=-1)[:, 0]
     row = filter_logprobs(row, params)
-    noisy = mx.where(
-        row == -mx.inf, -mx.inf, row + gumbel_rows(bases, positions, row.shape[-1])
-    )
-    return mx.argmax(noisy, axis=-1)
+    return mx.argmax(noised_rows(row, bases, positions), axis=-1)
 
 
 # Nucleus / min-p / top-k filters only ever keep a few hundred tokens, so they are applied
@@ -256,8 +374,9 @@ def coupled_scores(logprobs, sampler, positions):
     row = filter_logprobs(logprobs.astype(mx.float32), sampler.params)
     if sampler.position_base:
         positions = positions + sampler.position_base
-    noise = gumbel(sampler.seed, positions, row.shape[-1])
-    return mx.where(row == -mx.inf, -mx.inf, row + noise)
+    n = int(positions.size)
+    bases = mx.array(np.full((n,), seed_base(sampler.seed), dtype=np.uint64))
+    return noised_rows(row, bases, positions)
 
 
 def coupled_candidates(logprobs, sampler, positions):
@@ -272,8 +391,7 @@ def coupled_candidates(logprobs, sampler, positions):
     bases = mx.array(
         np.full((int(positions.size),), seed_base(sampler.seed), dtype=np.uint64)
     )
-    noise = _gumbel_at(bases, positions, ids.astype(mx.uint64))
-    return ids, mx.where(scaled == -mx.inf, -mx.inf, scaled + noise)
+    return ids, noised_at(scaled, ids, bases, positions)
 
 
 class KeyedSampler:

@@ -596,6 +596,12 @@ def test_m3_lane_not_dispatched_while_owner_active(queue, monkeypatch):
     t.join(timeout=1.0)
     assert ran == []
     assert queue._read(queue.JOBS / (jid + ".json"))["state"] == "pending"
+    # The pending job keeps the daemon from ever idling out: cancel it so the loop returns, and wait for
+    # that. A daemon thread left polling a module-global queue dir disturbed the gpuq tests that ran
+    # later in the same worker (test_gpuq_idle read counts, test_gpuq_hold picks).
+    queue._patch_job(queue.JOBS / (jid + ".json"), state="cancelled")
+    t.join(timeout=30)
+    assert not t.is_alive()
 
 
 def test_user_idle_probe_parses_and_fails_closed():

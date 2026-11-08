@@ -220,6 +220,11 @@ def takes_guided(model, draft, cache, kw) -> bool:
 
     if not getattr(utils._dflash_rounds, "_yunshu_copy", False):
         return False  # only this wrapper hands a guided request to the fast tree
+    from .constrained_spec import current_request, tree_guide
+
+    request = current_request()
+    if request is not None and not tree_guide(request.guide):
+        return False  # response-format guides mask every row: the guided chain
     lm = getattr(model, "language_model", model)
     kw = dict(kw)
     bonus = kw.get("first_bonus")

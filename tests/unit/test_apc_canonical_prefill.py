@@ -220,52 +220,6 @@ def test_split_invariant_lookup_accepts_rehearsed_subatom_but_not_unaligned():
     assert lookup(_coordinator(manager), ids)["prefix_len"] == 640
 
 
-@pytest.mark.parametrize(
-    "total,prefix",
-    [(1, 0), (63, 0), (64, 0), (65, 0), (1001, 0), (1361, 960), (32769, 0)]
-    # a follow-up turn resumed from the previous reply's off-grid decode cache
-    + [(1232, 1206), (1300, 1206), (5000, 1206)],
-)
-def test_prompt_dispatch_never_splits_inside_a_recurrence_block(
-    monkeypatch, total, prefix
-):
-    from types import SimpleNamespace
-
-    from yunshu_engine import cache_prefill
-    from yunshu_engine.kernels import gdn_prefill
-
-    class Base:
-        def needs_processing(self):
-            return self._inputs_embeds.shape[1] > 1
-
-        def prompt_step(self):
-            n = min(self.prefill_step_size, self._inputs_embeds.shape[1] - 1)
-            self._processed_prompt_columns += n
-            self._inputs_embeds.shape = (1, self._inputs_embeds.shape[1] - n, 1)
-            return n
-
-    ar = SimpleNamespace(PromptProcessingBatch=Base)
-    root = SimpleNamespace()
-    monkeypatch.setattr(
-        cache_prefill.importlib,
-        "import_module",
-        lambda name: ar if name.endswith(".ar") else root,
-    )
-    monkeypatch.setitem(gdn_prefill._STATE, "enabled", True)
-    monkeypatch.setitem(gdn_prefill._STATE, "split", True)
-    cache_prefill.install()
-    batch = ar.PromptProcessingBatch()
-    batch.prefill_step_size = 2048
-    batch._processed_prompt_columns = 0
-    batch._cached_tokens_per_row = [prefix]
-    batch._inputs_embeds = SimpleNamespace(shape=(1, total - prefix, 1))
-    while batch.needs_processing():
-        assert batch.prompt_step() > 0
-        assert (prefix + batch._processed_prompt_columns) % 64 == 0
-    assert 1 <= batch._inputs_embeds.shape[1] <= 64
-    assert batch.prefill_step_size == 2048
-
-
 def test_split_media_checkpoint_also_ends_at_a_complete_block():
     manager = _mgr(prefill_stride=2048, prefill_alignment=64)
     assert _coordinator(manager).checkpoint_lengths(list(range(200)), {121}) == [192]
@@ -288,41 +242,6 @@ def test_split_invariant_interval_checkpoint_before_an_image_stays_aligned():
     assert points and all(n % 64 == 0 for n in points)
     for n in points:  # and none cuts the image span
         assert not (ids[n - 1] == image and ids[n] == image)
-
-
-@pytest.mark.parametrize(
-    "tail,scoped", [(1, False), (16, False), (48, False), (49, True), (64, True)]
-)
-def test_short_prompt_tail_runs_outside_the_long_prefill_scope(
-    monkeypatch, tail, scoped
-):
-    """The rows after the last aligned boundary start at the same absolute position cold or
-    restored, so up to TAIL_FAST_ROWS of them take the decode/verify kernels (a 16-row tail
-    was host-bound at 168 ms on the long prefill path)."""
-    from types import SimpleNamespace
-
-    from yunshu_engine import cache_prefill
-    from yunshu_engine.kernels import gdn_prefill
-
-    seen = []
-
-    class Base:
-        def generate(self, *a, **k):
-            seen.append((gdn_prefill.in_prefill(), gdn_prefill.in_tail()))
-
-    ar = SimpleNamespace(PromptProcessingBatch=Base)
-    monkeypatch.setattr(
-        cache_prefill.importlib,
-        "import_module",
-        lambda name: ar if name.endswith(".ar") else SimpleNamespace(),
-    )
-    monkeypatch.setitem(gdn_prefill._STATE, "enabled", True)
-    monkeypatch.setitem(gdn_prefill._STATE, "split", True)
-    cache_prefill.install()
-    batch = ar.PromptProcessingBatch()
-    batch._inputs_embeds = SimpleNamespace(shape=(1, tail, 1))
-    batch.generate()
-    assert seen == [(scoped, not scoped)]
 
 
 def test_reply_cache_is_stored_off_the_grid_and_found_first():

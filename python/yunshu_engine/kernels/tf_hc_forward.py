@@ -165,8 +165,12 @@ def install_qwen4_gdn() -> bool:
     Lossless, so always on (fngdn-1029c/1030long: 0 identity mismatches at 1K-128K, decode +2-8%).
     Idempotent; only the qwen4_exp class is patched (Qwen3.5 keeps its own)."""
     try:
-        from mlx_vlm.models.qwen4_exp import language
-    except Exception:  # noqa: BLE001 - mlx_vlm without qwen4_exp
+        from ..qwen4_family import qwen4_first_module
+
+        language = qwen4_first_module("language")
+    except Exception:  # noqa: BLE001 - mlx_vlm without a Qwen4 module
+        return False
+    if language is None:
         return False
     from . import qwen4_gdn
 
@@ -219,7 +223,9 @@ def _tf_model(
     capture_layer_ids=(),
     hidden_sink=None,
 ):
-    from mlx_vlm.models.qwen4_exp import language as ql
+    from ..qwen4_family import qwen4_first_module
+
+    ql = qwen4_first_module("language")
 
     from .tf_flash_next import hc as tf_hc
 
@@ -333,8 +339,12 @@ def set_moe(enabled: bool) -> None:
 def install() -> bool:
     """Run the qwen4_exp layer loop on the fused HC kernels (idempotent)."""
     try:
-        from mlx_vlm.models.qwen4_exp import language
-    except Exception:  # noqa: BLE001 - mlx_vlm without qwen4_exp
+        from ..qwen4_family import qwen4_first_module
+
+        language = qwen4_first_module("language")
+    except Exception:  # noqa: BLE001 - mlx_vlm without a Qwen4 module
+        return False
+    if language is None:
         return False
     cls = language.Qwen4ExpBatchInvariantForward
     if _STATE["installed"]:
@@ -365,8 +375,9 @@ def forget(model) -> None:
 def uninstall() -> None:
     if not _STATE["installed"]:
         return
-    from mlx_vlm.models.qwen4_exp import language
+    from ..qwen4_family import qwen4_first_module
 
+    language = qwen4_first_module("language")
     language.Qwen4ExpBatchInvariantForward._model = _STATE["original"]
     saved = _STATE["gdn_original"]
     if saved is _INHERITED:

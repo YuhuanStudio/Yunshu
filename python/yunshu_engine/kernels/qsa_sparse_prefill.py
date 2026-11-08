@@ -20,6 +20,8 @@ from typing import Any, cast
 
 import mlx.core as mx
 
+from . import gpu_probe
+
 logger = logging.getLogger(__name__)
 
 D, H, KV, BLOCK, TOPK = 256, 24, 2, 4, 512
@@ -242,7 +244,8 @@ def ready() -> bool:
         import re
 
         match = re.fullmatch(
-            r"applegpu_g(\d+)[a-z]+", str(mx.device_info().get("architecture", ""))
+            r"applegpu_g(\d+)[a-z]+",
+            str(gpu_probe.device_info().get("architecture", "")),
         )
         _READY.append(bool(match and int(match[1]) in (17, 18)))
     return _READY[0]
@@ -306,8 +309,12 @@ def attend(
 def install() -> bool:
     """Route eligible prefill calls of ``dispatch_qsa_attention`` to the tensor-unit kernel once."""
     try:
-        from mlx_vlm.models.qwen4_exp import language as lang
+        from ..qwen4_family import qwen4_first_module
+
+        lang = qwen4_first_module("language")
     except ImportError:
+        return False
+    if lang is None:
         return False
     if getattr(lang.dispatch_qsa_attention, "_yunshu_sparse_prefill", False):
         return True

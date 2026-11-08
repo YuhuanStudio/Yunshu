@@ -6,7 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.unit.test_vlm_runner_batching import runner  # noqa: F401
+from tests.unit.test_vlm_runner_batching import FakeDriver
+from tests.unit.test_vlm_runner_batching import runner as _runner  # noqa: F401
 from yunshu_engine import vlm_batch_runner as vbr
 from yunshu_gateway import admission
 
@@ -39,6 +40,13 @@ def test_near_matches_stay_interactive(title, change):
     assert admission.auxiliary_kind(title) is None
 
 
+@pytest.fixture
+def runner(_runner):  # noqa: F811
+    """A runner whose primary and auxiliary drivers are fakes (auxiliary rows never join the primary)."""
+    _runner._aux_driver = FakeDriver()
+    return _runner
+
+
 def job(priority):
     request = vbr._Job(
         ids=[1, 2],
@@ -59,7 +67,7 @@ def job(priority):
     return request
 
 
-def test_pending_primary_precedes_auxiliary_without_dropping(runner):  # noqa: F811
+def test_pending_primary_precedes_auxiliary_without_dropping(runner):
     aux, main = job(-1), job(0)
     runner._submit(aux)
     runner._submit(main)
@@ -76,7 +84,7 @@ def test_pending_primary_precedes_auxiliary_without_dropping(runner):  # noqa: F
     assert not runner.busy()
 
 
-def test_active_auxiliary_pauses_and_resumes_exact_state(runner):  # noqa: F811
+def test_active_auxiliary_pauses_and_resumes_exact_state(runner):
     aux = job(-1)
     runner._submit(aux)
     runner._drive_slice(resubmit=False)
@@ -92,16 +100,16 @@ def test_active_auxiliary_pauses_and_resumes_exact_state(runner):  # noqa: F811
     assert [aux.out.get()[0], aux.out.get()[0]] == [1, 2]
 
 
-def test_auxiliary_cannot_touch_apc(runner):  # noqa: F811
+def test_auxiliary_cannot_touch_apc(runner):
     runner.apc_manager = SimpleNamespace()
     aux = job(-1)
     runner._submit(aux)
     runner._drive_slice(resubmit=False)
     assert not aux.stats.used_apc
-    assert runner._groups()[0].gen.kwargs["apc_manager"] is None
+    assert runner._aux_driver.requests[0].use_apc is False
 
 
-def test_paused_auxiliary_cancel_releases_row(runner):  # noqa: F811
+def test_paused_auxiliary_cancel_releases_row(runner):
     import threading
 
     aux = job(-1)
@@ -114,37 +122,51 @@ def test_paused_auxiliary_cancel_releases_row(runner):  # noqa: F811
     runner._drive_slice(resubmit=False)
     assert aux.stats.finish_reason == "cancel"
     assert aux.stats.generated == 1
-    assert all(aux not in g.jobs.values() for g in runner._groups())
+    assert len(runner._aux_driver.removed) == 1
     assert main.stats.generated == 1
 
 
-def test_spec_lanes_retain_both_caches_and_restore_readout(runner):  # noqa: F811
-    contexts = []
-    runner.drafter = SimpleNamespace(
-        _draft_vocab=SimpleNamespace(set_context=contexts.append)
-    )
+def test_round_driver_auxiliary_never_joins_primary_driver(runner, monkeypatch):
+
+    class Driver:
+        head = None
+        can_draft = False
+        chunk = 2048
+
+        def __init__(self):
+            self.rows = []
+            self.steps = 0
+
+        def add(self, req):
+            self.rows.append(SimpleNamespace(req=req, done=0, hit=0))
+            return 0
+
+        def step(self):
+            self.steps += bool(self.rows)
+            return []
+
+        def remove(self, handle):
+            self.rows = [r for r in self.rows if r.req.handle is not handle]
+
+    runner.driver = Driver()
+    runner._aux_driver = Driver()
     aux = job(-1)
-    aux.use_draft = True
-    aux.max_tokens = 3
+    aux.prompt_kwargs = None
     runner._submit(aux)
     runner._drive_slice(resubmit=False)
-    aux_lane = runner._aux_spec
+    assert runner._aux_driver.steps == 1
     main = job(0)
-    main.ids = [3, 4]
-    main.use_draft = True
+    main.prompt_kwargs = None
     runner._submit(main)
     runner._drive_slice(resubmit=False)
-    assert runner._spec is not None
-    assert runner._aux_spec is aux_lane
-    assert aux.stats.generated == 1
-    assert main.stats.generated == 1
+    assert runner._aux_driver.steps == 1
+    assert runner.driver.steps == 1
+    assert runner.driver.rows[0].req.handle is main
+    assert not runner._aux_driver.rows[0].req.use_apc
+    main.abandoned = True
     runner._drive_slice(resubmit=False)
     runner._drive_slice(resubmit=False)
-    assert aux.stats.generated == 2
-    assert contexts == [[1, 2], [3, 4], [1, 2]]
-    runner._drive_slice(resubmit=False)
-    assert [aux.out.get()[0] for _ in range(3)] == [1, 2, 3]
-    assert not runner.busy()
+    assert runner._aux_driver.steps == 2
 
 
 def test_tracker_transfers_priority_to_worker_event():
@@ -184,7 +206,7 @@ def test_opt_out_and_unknown_requests_keep_normal_priority(title, monkeypatch):
         current_request_info.reset(token)
 
 
-def test_pending_auxiliary_cancel_does_not_wait_for_primary(runner):  # noqa: F811
+def test_pending_auxiliary_cancel_does_not_wait_for_primary(runner):
     import threading
 
     aux, main = job(-1), job(0)
@@ -227,7 +249,7 @@ async def test_gateway_grace_then_waits_for_interactive_idle(monkeypatch):
         current_request_info.reset(token)
 
 
-def test_auxiliary_does_not_train_apc_cost_model(runner):  # noqa: F811
+def test_auxiliary_does_not_train_apc_cost_model(runner):
     observed = []
     runner.apc_manager = SimpleNamespace(
         disk=SimpleNamespace(observe_prefill=lambda *args: observed.append(args))
@@ -240,52 +262,6 @@ def test_auxiliary_does_not_train_apc_cost_model(runner):  # noqa: F811
     main.stats.t_admit, main.stats.t_first = 1, 2
     runner._observe_prefill(main)
     assert observed == [(2, 1)]
-
-
-def test_paused_spec_counters_exclude_the_other_request(runner, monkeypatch):  # noqa: F811
-    import importlib
-
-    from tests.unit.test_vlm_runner_batching import FakeGen
-
-    drafter = SimpleNamespace(
-        speculative_total_rounds=0,
-        speculative_total_accepted=0.0,
-        speculative_total_drafted=0,
-        copy_total_rounds=0,
-        copy_total_tokens=0,
-    )
-
-    class CounterGen(FakeGen):
-        def next(self):
-            drafter.speculative_total_rounds += 1
-            drafter.speculative_total_accepted += 2
-            drafter.speculative_total_drafted += 6
-            drafter.copy_total_rounds += 1
-            drafter.copy_total_tokens += 2
-            return super().next()
-
-    monkeypatch.setattr(
-        importlib.import_module("mlx_vlm.generate.ar"), "BatchGenerator", CounterGen
-    )
-    runner.drafter = drafter
-    aux = job(-1)
-    aux.use_draft, aux.max_tokens = True, 3
-    runner._submit(aux)
-    runner._drive_slice(resubmit=False)
-    main = job(0)
-    main.use_draft = True
-    runner._submit(main)
-    runner._drive_slice(resubmit=False)
-    runner._drive_slice(resubmit=False)
-    assert main.stats.spec_rounds == 2
-    assert aux.stats.spec_rounds == 1
-    runner._drive_slice(resubmit=False)
-    runner._drive_slice(resubmit=False)
-    assert aux.stats.spec_rounds == 3
-    assert aux.stats.spec_drafted == 18
-    assert aux.stats.spec_accepted == 6
-    assert aux.stats.spec_copy_rounds == 3
-    assert aux.stats.spec_copy_tokens == 6
 
 
 def test_queue_position_does_not_put_agent_behind_title(monkeypatch):
@@ -302,7 +278,7 @@ def test_queue_position_does_not_put_agent_behind_title(monkeypatch):
     assert queue_snapshot(aux)[0] == 2
 
 
-def test_auxiliary_waits_for_request_still_preparing(runner):  # noqa: F811
+def test_auxiliary_waits_for_request_still_preparing(runner):
     runner.inflight = lambda: (
         2
     )  # auxiliary plus a primary not submitted to the runner yet
@@ -323,89 +299,6 @@ def test_fingerprint_survives_real_gateway_schema(title):
 
     validated = ChatCompletionRequest.model_validate(title)
     assert admission.auxiliary_kind(validated.model_dump()) == "opencode_title"
-
-
-def test_auxiliary_keeps_checkpoint_cuts_without_primary_cache_effects():
-    from yunshu_engine.apc_manager import YunshuAPCManager
-    from yunshu_engine.serving.auxiliary_prefill import AuxiliaryPrefillPolicy
-
-    class Manager:
-        exact_cache_guard_tokens = 1
-        checkpoint_interval_tokens = 2048
-        keep_interval_checkpoint = True
-        block_size = 256
-        exact_cache_min_tokens = 1
-        head_marker = (9, 8)
-        head_boundary = YunshuAPCManager.head_boundary
-
-        def note_head(self, *_):
-            raise AssertionError("primary head metadata touched")
-
-        def begin_request(self):
-            raise AssertionError("primary request generation touched")
-
-    policy = AuxiliaryPrefillPolicy(Manager())
-    # Exercise Yunshu's exact same checkpoint arithmetic, with no GPU model.
-    from yunshu_engine.serving.auxiliary_prefill import _AuxiliaryCoordinator
-
-    c = object.__new__(_AuxiliaryCoordinator)
-    c.manager = policy
-    c.plan = SimpleNamespace(restorable=True, strategy="checkpoint")
-    ids = [1, 2, 9, 8, *range(3000)]
-    assert c.checkpoint_lengths(ids, set()) == [2, 2048, len(ids) - 1]
-    assert c.lookup(ids) is None
-    assert c.store_checkpoint(ids, object())
-    assert c.commit(object(), ids)
-    assert not hasattr(policy, "disk")
-
-
-def test_auxiliary_policy_keeps_64_aligned_checkpoint_cuts():
-    from yunshu_engine.apc_manager import YunshuAPCManager
-    from yunshu_engine.serving.auxiliary_prefill import (
-        AuxiliaryPrefillPolicy,
-        _AuxiliaryCoordinator,
-    )
-
-    class Manager:
-        exact_cache_guard_tokens = 1
-        checkpoint_interval_tokens = 2048
-        keep_interval_checkpoint = True
-        block_size = 256
-        exact_cache_min_tokens = 1
-        head_marker = (9, 8)
-        prefill_alignment = 64
-        head_boundary = YunshuAPCManager.head_boundary
-        align_prefill_boundary = YunshuAPCManager.align_prefill_boundary
-
-    policy = AuxiliaryPrefillPolicy(Manager())
-    assert policy.prefill_alignment == 64
-    assert policy.align_prefill_boundary(3003) == 2944
-    c = object.__new__(_AuxiliaryCoordinator)
-    c.manager = policy
-    c.plan = SimpleNamespace(restorable=True, strategy="checkpoint")
-    ids = [1, 2, 9, 8, *range(3000)]
-    cuts = c.checkpoint_lengths(ids, set())
-    assert cuts and all(n % 64 == 0 for n in cuts), cuts
-
-
-def test_auxiliary_generator_receives_numerical_policy_not_primary_cache(runner):  # noqa: F811
-    from yunshu_engine.serving.auxiliary_prefill import AuxiliaryPrefillPolicy
-
-    runner.apc_manager = SimpleNamespace(
-        exact_cache_guard_tokens=1,
-        checkpoint_interval_tokens=2048,
-        keep_interval_checkpoint=True,
-        block_size=256,
-        exact_cache_min_tokens=1,
-        head_marker=(9, 8),
-        coordinator=lambda model: None,
-    )
-    aux = job(-1)
-    runner._submit(aux)
-    runner._drive_slice(False)
-    manager = runner._groups()[0].gen.kwargs["apc_manager"]
-    assert isinstance(manager, AuxiliaryPrefillPolicy)
-    assert not aux.stats.used_apc
 
 
 @pytest.mark.parametrize("qualified", [False, True])

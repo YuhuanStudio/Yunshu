@@ -24,7 +24,6 @@ class EngineConfig:
     Maps to BatchGenerator constructor + oMLX's SchedulerConfig.
     """
 
-    completion_batch_size: int = 32
     prefill_batch_size: int = 8
     prefill_step_size: int = 2048
     max_kv_size: int | None = None

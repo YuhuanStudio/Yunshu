@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "resear
 
 
 def test_disabled_fast_path_is_found_in_the_server_log():
-    import tfbench
+    from scripts.research import tfbench
 
     log = (
         "INFO VLM batch runner: ... draft=dflash\n"

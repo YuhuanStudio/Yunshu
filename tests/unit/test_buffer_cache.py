@@ -1,9 +1,8 @@
-"""The generator's clear_cache keeps the buffer cache until it grows past the limit."""
+"""The bounded allocator pool: a clear at a boundary (``clear_if_over``) keeps the buffer cache until it grows past the limit."""
 
 import pytest
 
 mx = pytest.importorskip("mlx.core")
-ar = pytest.importorskip("mlx_vlm.generate.ar")
 
 from yunshu_engine.kernels import buffer_cache  # noqa: E402
 
@@ -18,13 +17,11 @@ def test_default_pool_scales_with_physical_ram():
 
 @pytest.fixture
 def restore():
-    original = ar.mx
     state = dict(buffer_cache._STATE)
     previous = mx.set_cache_limit(0)
     mx.set_cache_limit(previous)
     yield
     buffer_cache._RESTORE_BUFFERS.clear()
-    ar.mx = original
     mx.set_cache_limit(previous)
     buffer_cache._STATE.clear()
     buffer_cache._STATE.update(state)
@@ -37,15 +34,14 @@ def _fill_cache():
     mx.synchronize()
 
 
-def test_small_cache_survives_generator_clear(restore):
+def test_small_cache_survives_a_boundary_clear(restore):
     mx.clear_cache()
     buffer_cache.install(1.0)
     _fill_cache()
     held = mx.get_cache_memory()
     assert held > 0
-    ar.mx.clear_cache()
+    buffer_cache.clear_if_over()
     assert mx.get_cache_memory() == held
-    assert ar.mx.array is mx.array
 
 
 def test_over_limit_pool_is_reclaimed_on_allocation_without_full_clear(restore):
@@ -54,7 +50,7 @@ def test_over_limit_pool_is_reclaimed_on_allocation_without_full_clear(restore):
     _fill_cache()
     held = mx.get_cache_memory()
     assert held > 0
-    ar.mx.clear_cache()
+    buffer_cache.clear_if_over()
     assert mx.get_cache_memory() == held
     scratch = mx.empty((16,), dtype=mx.float32)
     mx.eval(scratch)
@@ -65,7 +61,7 @@ def test_zero_limit_clears_every_time(restore):
     mx.clear_cache()
     buffer_cache.install(0)
     _fill_cache()
-    ar.mx.clear_cache()
+    buffer_cache.clear_if_over()
     assert mx.get_cache_memory() == 0
 
 

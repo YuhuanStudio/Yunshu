@@ -251,8 +251,12 @@ def install_qwen4() -> bool:
     ``(q_proj, k_proj, v_proj)`` of one normed input; with lane projections each was a launch plus a group-sum
     launch. Output is bit-identical to the separate calls (``grouped_linears``)."""
     try:
-        from mlx_vlm.models.qwen4_exp import language as ql
-    except ImportError:  # pragma: no cover - mlx-vlm without qwen4_exp
+        from ..qwen4_family import qwen4_first_module
+
+        ql = qwen4_first_module("language")
+    except ImportError:  # pragma: no cover
+        return False
+    if ql is None:  # pragma: no cover - mlx-vlm without a Qwen4 module
         return False
     cls = ql.Qwen4ExpBatchInvariantForward
     if getattr(cls, "_yunshu_grouped_linears", False):

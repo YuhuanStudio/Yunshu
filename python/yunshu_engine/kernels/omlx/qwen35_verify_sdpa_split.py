@@ -46,6 +46,8 @@ import struct
 
 import mlx.core as mx
 
+from .. import gpu_probe
+
 from .qwen35_verify_qmm import is_row_exact_armed
 
 logger = logging.getLogger(__name__)
@@ -95,7 +97,7 @@ def _chunked_causal_sdpa(queries, keys, values, scale, limit: int):
 @functools.lru_cache(maxsize=None)
 def _gpu_class() -> str:
     try:
-        return str(mx.device_info().get("architecture", ""))[-1:]
+        return str(gpu_probe.device_info().get("architecture", ""))[-1:]
     except Exception:
         return ""
 

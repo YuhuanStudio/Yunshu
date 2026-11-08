@@ -6,22 +6,19 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from tests.unit.test_vlm_runner_batching import FakeGen, runner  # noqa: F401,F811
+from tests.unit.test_vlm_runner_batching import FakeDriver, runner  # noqa: F401,F811
 
 STEP_S = 0.01
 
 
-class _SlowGen(FakeGen):
-    def next(self):
+class _SlowDriver(FakeDriver):
+    def step(self):
         time.sleep(STEP_S)
-        return super().next()
+        return super().step()
 
 
-def test_other_modality_waits_one_slice_not_the_whole_generation(runner, monkeypatch):  # noqa: F811
-    import importlib
-
-    ar = importlib.import_module("mlx_vlm.generate.ar")
-    monkeypatch.setattr(ar, "BatchGenerator", _SlowGen)
+def test_other_modality_waits_one_slice_not_the_whole_generation(runner):  # noqa: F811
+    runner.driver = _SlowDriver()
     ex = ThreadPoolExecutor(max_workers=1)
     runner._executor = ex
     tokens: list[int] = []

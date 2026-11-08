@@ -397,21 +397,6 @@ async def system_stats(request: Request) -> dict[str, Any]:
         "hostname": platform.node(),
     }
 
-    # Compute utilization from engine_core (GPU active time / wall time)
-    try:
-        engines = _collect_engines_from_globals()
-        util_values = []
-        for _model_id, engine in engines:
-            core = getattr(engine, "_engine_core", None)
-            if core is not None and hasattr(core, "get_compute_utilization"):
-                util_values.append(core.get_compute_utilization())
-        if util_values:
-            result["compute_utilization_pct"] = round(
-                sum(util_values) / len(util_values), 2
-            )
-    except Exception:
-        logger.debug("compute_utilization collection failed", exc_info=True)
-
     return result
 
 
@@ -557,21 +542,9 @@ async def prometheus_export(request: Request) -> str:
                 except Exception:
                     logger.debug("ITL gauge population failed", exc_info=True)
 
-                # KV cache block gauges (paged KV from engine_core)
+                # KV prefix cache gauges
                 try:
                     kv_stats = entry.engine.get_kv_cache_stats()
-                    paged = kv_stats.get("paged_kv", {})
-                    if paged.get("enabled"):
-                        pm.set_gauge(
-                            "kv_cache_blocks_used",
-                            paged.get("used_blocks", 0),
-                            labels=ml,
-                        )
-                        pm.set_gauge(
-                            "kv_cache_blocks_total",
-                            paged.get("total_blocks", 0),
-                            labels=ml,
-                        )
                     # KV prefix cache stats
                     prefix = kv_stats.get("prefix_cache", {})
                     if prefix:
@@ -593,117 +566,6 @@ async def prometheus_export(request: Request) -> str:
                         )
                 except Exception:
                     logger.debug("KV cache gauge population failed", exc_info=True)
-
-                # RadixTree gauges
-                try:
-                    radix_stats = entry.engine.get_radix_tree_stats()
-                    if radix_stats.get("enabled"):
-                        pm.set_gauge(
-                            "radix_total_nodes",
-                            radix_stats.get("total_nodes", 0),
-                            labels=ml,
-                        )
-                        pm.set_gauge(
-                            "radix_total_tokens",
-                            radix_stats.get("total_tokens", 0),
-                            labels=ml,
-                        )
-                        # RadixTree.get_stats() returns "eviction_stats" (not "evictions")
-                        ev = radix_stats.get("eviction_stats", {})
-                        pm.set_counter(
-                            "radix_evictions_lru", ev.get("lru", 0), labels=ml
-                        )
-                        pm.set_counter(
-                            "radix_evictions_lfu", ev.get("lfu", 0), labels=ml
-                        )
-                        pm.set_counter(
-                            "radix_evictions_fifo", ev.get("fifo", 0), labels=ml
-                        )
-                        pm.set_counter(
-                            "radix_evictions_freed_blocks",
-                            ev.get("total_freed_blocks", 0),
-                            labels=ml,
-                        )
-                        # RadixTree blocks and match rate
-                        pm.set_gauge(
-                            "radix_tree_blocks",
-                            radix_stats.get("total_blocks", 0),
-                            labels=ml,
-                        )
-                        pm.set_gauge(
-                            "radix_tree_match_rate",
-                            radix_stats.get("match_rate", 0.0),
-                            labels=ml,
-                        )
-                        pm.set_counter(
-                            "radix_tree_match_total",
-                            radix_stats.get("match_total", 0),
-                            labels=ml,
-                        )
-                        pm.set_counter(
-                            "radix_tree_match_hits",
-                            radix_stats.get("match_hits", 0),
-                            labels=ml,
-                        )
-                except Exception:
-                    logger.debug("RadixTree gauge population failed", exc_info=True)
-
-                # Scheduler monitoring gauges from engine_core
-                try:
-                    core = getattr(entry.engine, "_engine_core", None)
-                    if core is not None:
-                        pm.set_gauge(
-                            "scheduler_waiting_queue_depth",
-                            getattr(core, "_last_queue_depth", 0),
-                            labels=ml,
-                        )
-                        pm.set_gauge(
-                            "scheduler_batch_size",
-                            getattr(core, "_last_batch_size", 0),
-                            labels=ml,
-                        )
-                        pm.set_gauge(
-                            "compute_utilization_pct",
-                            core.get_compute_utilization()
-                            if hasattr(core, "get_compute_utilization")
-                            else 0,
-                            labels=ml,
-                        )
-                        pm.set_gauge(
-                            "step_duration_ms",
-                            getattr(core, "_last_step_wall_ms", 0.0),
-                            labels=ml,
-                        )
-                except Exception:
-                    logger.debug(
-                        "scheduler monitoring gauge population failed", exc_info=True
-                    )
-
-                # H2O attention eviction gauges
-                try:
-                    core = getattr(entry.engine, "_engine_core", None)
-                    if core is not None:
-                        tracker = getattr(
-                            getattr(core, "scheduler", None),
-                            "_attention_score_tracker",
-                            None,
-                        )
-                        if tracker is not None:
-                            at_stats = tracker.get_stats()
-                            pm.set_gauge(
-                                "attention_eviction_tracked_requests",
-                                at_stats.get("tracked_requests", 0),
-                                labels=ml,
-                            )
-                            pm.set_gauge(
-                                "attention_eviction_total_blocks",
-                                at_stats.get("total_blocks", 0),
-                                labels=ml,
-                            )
-                except Exception:
-                    logger.debug(
-                        "attention eviction gauge population failed", exc_info=True
-                    )
 
                 # Response cache Prometheus counters
                 try:
@@ -806,48 +668,9 @@ async def prometheus_export(request: Request) -> str:
                 pm.set_counter("spec_mtp_rejects", 0, labels=ml)
                 pm.set_gauge("spec_mtp_acceptance_rate", 0.0, labels=ml)
 
-            # Scheduler gauges
-            try:
-                core = getattr(engine, "_engine_core", None)
-                if core is not None:
-                    pm.set_gauge(
-                        "scheduler_waiting_queue_depth",
-                        getattr(core, "_last_queue_depth", 0),
-                        labels=ml,
-                    )
-                    pm.set_gauge(
-                        "scheduler_batch_size",
-                        getattr(core, "_last_batch_size", 0),
-                        labels=ml,
-                    )
-                    pm.set_gauge(
-                        "compute_utilization_pct",
-                        core.get_compute_utilization()
-                        if hasattr(core, "get_compute_utilization")
-                        else 0,
-                        labels=ml,
-                    )
-                    pm.set_gauge(
-                        "step_duration_ms",
-                        getattr(core, "_last_step_wall_ms", 0.0),
-                        labels=ml,
-                    )
-            except Exception:
-                logger.debug(
-                    "single-engine scheduler gauge population failed", exc_info=True
-                )
-
-            # KV cache, RadixTree, ITL stats (same as multi-model path)
+            # KV cache, ITL stats (same as multi-model path)
             try:
                 kv_stats = engine.get_kv_cache_stats()
-                paged = kv_stats.get("paged_kv", {})
-                if paged.get("enabled"):
-                    pm.set_gauge(
-                        "kv_cache_blocks_used", paged.get("used_blocks", 0), labels=ml
-                    )
-                    pm.set_gauge(
-                        "kv_cache_blocks_total", paged.get("total_blocks", 0), labels=ml
-                    )
                 prefix = kv_stats.get("prefix_cache", {})
                 if prefix:
                     pm.set_gauge(
@@ -867,53 +690,6 @@ async def prometheus_export(request: Request) -> str:
             except Exception:
                 logger.debug(
                     "single-engine KV cache gauge population failed", exc_info=True
-                )
-
-            try:
-                radix_stats = engine.get_radix_tree_stats()
-                if radix_stats.get("enabled"):
-                    pm.set_gauge(
-                        "radix_total_nodes",
-                        radix_stats.get("total_nodes", 0),
-                        labels=ml,
-                    )
-                    pm.set_gauge(
-                        "radix_total_tokens",
-                        radix_stats.get("total_tokens", 0),
-                        labels=ml,
-                    )
-                    ev = radix_stats.get("eviction_stats", {})
-                    pm.set_counter("radix_evictions_lru", ev.get("lru", 0), labels=ml)
-                    pm.set_counter("radix_evictions_lfu", ev.get("lfu", 0), labels=ml)
-                    pm.set_counter("radix_evictions_fifo", ev.get("fifo", 0), labels=ml)
-                    pm.set_counter(
-                        "radix_evictions_freed_blocks",
-                        ev.get("total_freed_blocks", 0),
-                        labels=ml,
-                    )
-                    pm.set_gauge(
-                        "radix_tree_blocks",
-                        radix_stats.get("total_blocks", 0),
-                        labels=ml,
-                    )
-                    pm.set_gauge(
-                        "radix_tree_match_rate",
-                        radix_stats.get("match_rate", 0.0),
-                        labels=ml,
-                    )
-                    pm.set_counter(
-                        "radix_tree_match_total",
-                        radix_stats.get("match_total", 0),
-                        labels=ml,
-                    )
-                    pm.set_counter(
-                        "radix_tree_match_hits",
-                        radix_stats.get("match_hits", 0),
-                        labels=ml,
-                    )
-            except Exception:
-                logger.debug(
-                    "single-engine RadixTree gauge population failed", exc_info=True
                 )
 
             try:
@@ -999,7 +775,7 @@ _APC_COUNTERS = (
 
 def _populate_busy_metrics(pm) -> None:
     """Cumulative GPU-busy seconds per engine: ``yunshu_gpu_busy_seconds_total`` (all runner
-    slices); idle fraction = 1 - rate() of the counter."""
+    slices) and ``yunshu_round_driver_busy_seconds_total``; idle fraction = 1 - rate() of the counter."""
     try:
         from ..engine import get_engine, get_model_manager
 
@@ -1011,6 +787,11 @@ def _populate_busy_metrics(pm) -> None:
             ml = {"model_id": model_id}
             pm.set_counter(
                 "gpu_busy_seconds", snap["slices"]["busy_seconds"], labels=ml
+            )
+            pm.set_counter(
+                "round_driver_busy_seconds",
+                snap["round_driver"]["busy_seconds"],
+                labels=ml,
             )
     except Exception:
         logger.debug("busy-time metrics population failed", exc_info=True)
@@ -1195,10 +976,6 @@ async def memory_guard_stats(request: Request) -> dict[str, Any]:
     results = []
     for model_id, engine in engines:
         guard = getattr(engine, "_memory_guard", None)
-        if guard is None:
-            core = getattr(engine, "_engine_core", None)
-            if core:
-                guard = getattr(core, "_memory_guard", None)
         if guard is not None:
             guard_stats = guard.get_stats() if hasattr(guard, "get_stats") else {}
             results.append(
@@ -1244,14 +1021,6 @@ async def ssd_cache_stats(request: Request) -> dict[str, Any]:
         cache = getattr(engine, "_kv_prefix_cache", None)
         if cache is not None:
             ssd = getattr(cache, "_ssd_store", None)
-        # Under the continuous-batching loop the SSD tier lives on the
-        # TieredKVCacheManager (engine_core._kv_manager.ssd), NOT on the
-        # fast-path prefix cache — the endpoint reported active:false while the
-        # 4-tier SSD cache was actively persisting blocks. Also check there.
-        if ssd is None:
-            core = getattr(engine, "_engine_core", None)
-            kvm = getattr(core, "_kv_manager", None) if core is not None else None
-            ssd = getattr(kvm, "ssd", None)
         if ssd is not None:
             stats: dict = getattr(ssd, "get_stats", lambda: {})()
             results.append({"model_id": model_id, **stats})

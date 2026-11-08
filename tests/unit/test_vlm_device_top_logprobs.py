@@ -3,14 +3,15 @@
 ``top_logprobs_device`` orders like the text path: descending value, equal values by ASCENDING
 token id (mlx-vlm's own ``argsort`` + reverse slice breaks ties by descending id), NaN above
 everything. The VALUES must equal the upstream sort bit for bit; only the tie order differs.
-The GenerationBatch hook in ``vlm_batch_runner`` must report that order.
+The round driver reports through the same function (``driver._report``); the GenerationBatch hook
+that once did it for the stock runner is gone.
 """
 
 import mlx.core as mx
 import numpy as np
 import pytest
 
-from yunshu_engine import text_logprobs, vlm_batch_runner
+from yunshu_engine import text_logprobs
 from yunshu_engine.text_logprobs import top_logprobs_device
 
 
@@ -118,74 +119,3 @@ def test_tie_order_is_ascending_id_and_values_match_upstream():
 
 def test_probe_reports_support():
     assert text_logprobs.device_topk_supported()
-
-
-# ---- the hook on the real upstream GenerationBatch --------------------------------------
-
-
-class _Table:
-    """Language model whose next-token logits are a fixed function of the input token."""
-
-    def __init__(self, table):
-        self.table = table
-
-    def __call__(self, inputs, cache=None, **_):
-        return self.table[inputs[:, 0]][:, None, :]
-
-
-def _run(table, first, k, steps, rows_sampler=None):
-    from mlx_vlm.generate import ar
-
-    vlm_batch_runner._install_row_context()
-    n = len(first)
-    batch = ar.GenerationBatch(
-        model=_Table(table),
-        uids=list(range(n)),
-        inputs=mx.array(first),
-        prompt_cache=[],
-        sampler=rows_sampler or vlm_batch_runner.RowSampler(),
-        stop_criteria=lambda tok: False,
-        max_tokens=[10**6] * n,
-        top_logprobs_k=k,
-    )
-    batch.compute_logprobs = True
-    out = []
-    for _ in range(steps):
-        out.append(batch.next())
-    return out
-
-
-@pytest.mark.parametrize("k", [1, 5])
-def test_generation_batch_reports_the_upstream_top_logprobs(k):
-    vocab, n = 2048, 3
-    table = _rows(vocab, 21)[:3]  # rows 0..2: ties, -inf tail, fully masked
-    table = mx.concatenate([table, mx.zeros((vocab - 3, vocab))], axis=0)
-    table = table - mx.logsumexp(table, axis=-1, keepdims=True)
-    first = [0, 1, 2]
-    responses = _run(table, first, k, 4)
-    # step s reports the tops of the distribution that produced the token emitted at s
-    # (token 0 is the given input, so its tops are the prime buffers = None here).
-    for s in range(1, 4):
-        for i in range(n):
-            tok_prev = responses[s - 1][i].token
-            row = table[tok_prev][None]
-            norm = row - mx.logsumexp(row, axis=-1, keepdims=True)
-            want_i, want_v = upstream_top(norm, k)
-            got = responses[s][i].top_logprobs
-            assert got is not None
-            assert [t for t, _ in got] == canonical_top(norm, k)[0].tolist()
-            assert [v for _, v in got] == want_v[0].tolist()
-
-
-def test_hook_does_not_touch_rows_without_top_logprobs(monkeypatch):
-    vlm_batch_runner._install_row_context()  # its capability probe uses the helper once
-    called = []
-    monkeypatch.setattr(
-        text_logprobs,
-        "top_logprobs_device",
-        lambda *a, **kw: called.append(1) or (_ for _ in ()).throw(AssertionError),
-    )
-    table = mx.zeros((64, 64))
-    out = _run(table, [0, 1], 0, 2)
-    assert not called
-    assert all(r.top_logprobs is None for step in out for r in step)

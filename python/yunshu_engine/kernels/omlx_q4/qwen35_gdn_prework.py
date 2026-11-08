@@ -41,6 +41,7 @@ import mlx.core as mx
 import mlx.nn as nn
 from mlx_lm.models.gated_delta import normalize_qk
 
+from ...qwen4_family import is_qwen4_module_name, loaded_qwen4_modules
 from . import qwen35_gdn_verify_fused
 from .module_cache import cached_per_module
 from .qwen35_verify_qmm import is_row_exact_armed
@@ -1305,7 +1306,7 @@ def configure_qwen4_decode(model, *, wide_projections: bool) -> None:
     for module in model.modules():
         if (
             type(module).__name__ == "Qwen4ExpGatedDeltaNet"
-            and type(module).__module__ == "mlx_vlm.models.qwen4_exp.language"
+            and is_qwen4_module_name(type(module).__module__)
         ):
             module._omlx_qwen4_wide_projections = wide_projections
 
@@ -1321,7 +1322,7 @@ def _qwen4_gdn_geometry_ok(module) -> bool:
     conv_dim = 2 * 16 * 128 + 48 * 128
     if (
         type(module).__name__ != "Qwen4ExpGatedDeltaNet"
-        or type(module).__module__ != "mlx_vlm.models.qwen4_exp.language"
+        or not is_qwen4_module_name(type(module).__module__)
         or module.training
         or module.num_k_heads != 16
         or module.num_v_heads != 48
@@ -1534,7 +1535,7 @@ def _is_qwen4_gdn(module) -> bool:
         qwen4 = _QWEN4_GDN_CLASSES[cls] = (
             issubclass(cls, nn.Module)
             and cls.__name__ == "Qwen4ExpGatedDeltaNet"
-            and cls.__module__ == "mlx_vlm.models.qwen4_exp.language"
+            and is_qwen4_module_name(cls.__module__)
         )
     return qwen4
 
@@ -1903,9 +1904,10 @@ def _qwen4_l2_norm_sites():
     Looked up in sys.modules only: importing qwen4_exp here would pin the
     upstream copy before the compat vendor registers its own.
     """
-    q4_lang = sys.modules.get("mlx_vlm.models.qwen4_exp.language")
-    if q4_lang is None:
+    loaded = loaded_qwen4_modules("language")
+    if not loaded:
         return None
+    q4_lang = loaded[0]
     verifier_cls = getattr(q4_lang, "_Qwen4Verifier", None) or getattr(
         q4_lang, "Qwen4ExpBatchInvariantForward", None
     )

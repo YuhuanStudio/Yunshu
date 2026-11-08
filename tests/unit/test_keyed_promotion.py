@@ -6,8 +6,8 @@ import mlx.core as mx
 import numpy as np
 import pytest
 
-from yunshu_engine.keyed_sampling import KeyedSampler, coupled_scores, seed_base
-from yunshu_engine.vlm_batch_runner import RowParams, RowSampler
+from yunshu_engine.keyed_sampling import KeyedSampler, coupled_scores
+from yunshu_engine.vlm_batch_runner import RowParams
 
 
 @pytest.mark.parametrize(
@@ -33,17 +33,6 @@ def test_promoted_local_positions_equal_absolute_serial_draws(
             == coupled_scores(probs, serial, local + 40).tolist()
         )
         assert promoted._next == 0
-
-
-@pytest.mark.parametrize("seed", [None, 17])
-def test_batch_and_lane_share_the_seed_for_an_unseeded_eligible_request(seed):
-    params = RowParams(0.7, 0.95, 20, 0.0, seed)
-    lane = KeyedSampler(params, seed if seed is not None else 829107)
-    batch = RowSampler()
-    batch.add(7, params, keyed=lane)
-    entry = batch._rows[7]
-    assert entry[2] == seed_base(lane.seed)
-    assert params.seed == seed  # request metadata is not rewritten
 
 
 def test_default_position_base_keeps_the_existing_stream():

@@ -75,17 +75,90 @@ def finish_serial_prefill(gen):
 
 
 def invariant_guide(guide, logprobs=False, processors=()) -> bool:
-    """A tool-call guide alone: its rows keep the batch-invariant arithmetic.
+    """Tool-call and response-format guides (alone or combined) keep the batch-invariant
+    arithmetic.
 
-    Free text under a tool-call guide is unmasked, and inside a call the mask only
-    restricts the argmax of a row whose logits the invariant kernels already make equal
-    in verify and in one-row decode. So such a request decodes, verifies and prefills
-    exactly like an unguided one (same kernels, APC namespace, DFlash fast tree), with
-    the call's masked rows checked on the chain. Logprobs, penalties / bias processors
-    and response-format guides keep the serial path."""
+    A guide's mask only restricts the argmax of a row whose logits the invariant kernels
+    already make equal in verify and in one-row decode (greedy, no logprobs, no logits
+    processors). So such a request decodes, verifies and prefills exactly like an unguided
+    one (same kernels, same APC namespace) in speculative and in spec-off decoding alike,
+    with the masked rows checked on the chain. Free text under a tool-call guide is
+    unmasked and runs the DFlash fast tree (``tree_guide``); a response-format guide masks
+    every row and keeps the chain. Logprobs and penalties / bias processors keep the
+    serial path."""
+    return _invariant_guide_kind(guide) and not logprobs and not processors
+
+
+def driver_guide(guide, logprobs=False, processors=()) -> bool:
+    """The round driver drafts for this guide: an invariant guide kind (tool-call or
+    response-format, alone or combined), no logprobs, and processors the driver applies one
+    window row at a time (``round_driver.driver.windowable``: token masks, logit bias,
+    repetition and frequency / presence penalty); a guided drafting row applies them before
+    the guide's mask, as the serial step does."""
+    from .round_driver.driver import windowable
+
+    return _invariant_guide_kind(guide) and (not processors or windowable(processors))
+
+
+def _invariant_guide_kind(guide) -> bool:
+    from .reasoning_gate import ThinkGatedGuide
     from .tool_call_grammar import ToolCallGuide
 
-    return isinstance(guide, ToolCallGuide) and not logprobs and not processors
+    if isinstance(guide, (ToolCallGuide, ConstraintGuide)):
+        return True
+    if isinstance(guide, ThinkGatedGuide):
+        return _invariant_guide_kind(guide.inner)
+    if isinstance(guide, CombinedGuide):
+        return all(_invariant_guide_kind(g) for g in guide.guides)
+    return False
+
+
+def masks_every_row(guide) -> bool:
+    """A guide that masks every position (a response-format guide, alone or combined). Its row
+    drafts a masked chain/tree on the round driver; a tool-call guide masks only inside a call
+    and its in-call rows decode plain."""
+    from .reasoning_gate import ThinkGatedGuide
+
+    if isinstance(guide, (ConstraintGuide, ThinkGatedGuide)):
+        return True
+    if isinstance(guide, CombinedGuide):
+        return any(masks_every_row(g) for g in guide.guides)
+    return False
+
+
+def plan_tree(guide, toks, parents):
+    """Per-node token masks ``[nodes, words]`` of a draft tree (``parents[0] == -1`` is the
+    pending root; ``toks[0]`` its token). Row ``n`` is the mask of the distribution after the
+    path to node ``n``. A node whose token its parent's mask forbids can never be accepted, and
+    nothing below it is reached: those rows stay all-allowed. The guide is restored."""
+    n = len(toks)
+    out = np.full((n, guide.words), -1, dtype=np.int32)
+    kids: list[list[int]] = [[] for _ in range(n)]
+    for i in range(1, n):
+        kids[parents[i]].append(i)
+
+    def visit(node):
+        out[node] = guide.mask()
+        for child in kids[node]:
+            tok = int(toks[child])
+            if (out[node, tok >> 5] >> (tok & 31)) & 1:
+                saved = guide.checkpoint()
+                try:
+                    guide.feed(tok)
+                    visit(child)
+                finally:
+                    guide.restore(saved)
+
+    visit(0)
+    return out
+
+
+def tree_guide(guide) -> bool:
+    """A guide whose free stretches the DFlash fast tree can run unmasked: a tool-call guide
+    alone. A response-format guide masks every row, so its request keeps the chain."""
+    from .tool_call_grammar import ToolCallGuide
+
+    return isinstance(guide, ToolCallGuide)
 
 
 def tree_penalty(request):
@@ -200,6 +273,9 @@ class ConstraintGuide:
         c = processor._constraint
         self._saved_arg = bool(inspect.signature(c.rollback).parameters)
 
+    def arms(self, token):
+        return False
+
     def mask(self):
         p = self.processor
         c = p._constraint
@@ -293,6 +369,9 @@ class CombinedGuide:
     @property
     def constrained(self):
         return any(g.constrained for g in self.guides)
+
+    def arms(self, token):
+        return any(getattr(g, "arms", lambda t: False)(token) for g in self.guides)
 
     def mask(self):
         out = np.full(self.words, -1, dtype=np.int32)
@@ -495,9 +574,6 @@ class SpecRequest:
         )
         self.forced_windows = 0
         self.serial_verify_rounds = 0
-        self.native = (
-            None  # NativeKeyedSampler of a Qwen4 native-loop request: reports by index
-        )
         self.taken = 0
 
     def __call__(self, tokens, logits):
@@ -530,13 +606,10 @@ class SpecRequest:
         ]
 
     def take(self, token):
-        index = self.taken
         self.taken += 1
         if self.first_probs is not None:
             self.record(self.first_probs, [token])
             self.first_probs = None
-        if self.native is not None and index > 0:
-            return self.native.report(index, token)
         tok, lp, top = self.pending.popleft()
         if tok != token:
             raise RuntimeError("speculative logprob row/token mismatch")

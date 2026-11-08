@@ -7,8 +7,6 @@ Tests the following parameters across Chat and Completions APIs:
 - parallel_tool_calls: controls whether multiple tool calls can be generated
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
 
 from yunshu_engine.request import SamplingParams
@@ -303,84 +301,4 @@ class TestSchedulerSamplerIntegration:
 # ── EngineCore parameter pass-through tests ──
 
 
-class TestEngineCoreParamPassthrough:
-    """Test that EngineCore.add_request passes new params to SamplingParams."""
-
-    @pytest.mark.asyncio
-    async def test_add_request_with_frequency_penalty(self):
-        """Verify frequency_penalty flows through to SamplingParams."""
-        from yunshu_engine.engine_core import EngineCore, EngineCoreConfig
-
-        # Mock the model, tokenizer, executor
-        mock_model = MagicMock()
-        mock_tokenizer = MagicMock()
-        mock_tokenizer.encode.return_value = [1, 2, 3]
-
-        config = EngineCoreConfig()
-        core = EngineCore(
-            model=mock_model,
-            tokenizer=mock_tokenizer,
-            config=config,
-            executor=MagicMock(),
-        )
-
-        # Patch scheduler.add_request to capture the Request
-        captured_request = None
-
-        def capture_add(request):
-            nonlocal captured_request
-            captured_request = request
-            # Don't actually add — just capture
-            return
-
-        core.scheduler.add_request = capture_add
-
-        # Mock event loop
-        with patch("asyncio.get_running_loop") as mock_loop:
-            mock_loop.return_value.run_in_executor = AsyncMock(
-                side_effect=lambda executor, fn, *args: fn(*args),
-            )
-
-            await core.add_request(
-                prompt="test",
-                frequency_penalty=0.5,
-                presence_penalty=0.3,
-                logit_bias={100: -10},
-            )
-
-        assert captured_request is not None
-        assert captured_request.sampling_params.frequency_penalty == 0.5
-        assert captured_request.sampling_params.presence_penalty == 0.3
-        assert captured_request.sampling_params.logit_bias == {100: -10}
-
-
 # ── PagedScheduler integration test ──
-
-
-class TestPagedSchedulerIntegration:
-    """Test that PagedScheduler properly integrates KVCacheManager."""
-
-    def test_paged_scheduler_config_exists(self):
-        """Verify EngineCoreConfig has enable_paged_kv option."""
-        from yunshu_engine.engine_core import EngineCoreConfig
-
-        config = EngineCoreConfig()
-        assert hasattr(config, "enable_paged_kv")
-        assert config.enable_paged_kv is True  # C11: enabled by default
-
-        config_with_paged = EngineCoreConfig(enable_paged_kv=True)
-        assert config_with_paged.enable_paged_kv is True
-
-    def test_paged_scheduler_class_exists(self):
-        """Verify PagedScheduler can be imported."""
-        from yunshu_engine.paged_scheduler import PagedScheduler
-
-        assert PagedScheduler is not None
-
-    def test_scheduler_config_has_spec_decode(self):
-        """Verify SchedulerConfig has speculative decoding fields."""
-        from yunshu_engine.scheduler import SchedulerConfig
-
-        config = SchedulerConfig()
-        assert hasattr(config, "enable_spec_decode")
-        assert config.enable_spec_decode is False

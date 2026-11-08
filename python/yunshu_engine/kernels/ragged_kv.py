@@ -393,6 +393,11 @@ def _dense_kv_classes() -> tuple:
             classes.append(VlmKVCache)
         except ImportError:
             pass
+        from .int8_kv import Int8KVCache
+
+        classes.append(
+            Int8KVCache
+        )  # int8 row cache: same single-row layout (codes + scales)
         hit = _CLASSES["dense"] = tuple(classes)
     return hit
 
@@ -468,6 +473,11 @@ def set_dense_lane(active: bool) -> None:
     through the ragged kernel while the speculative lane steps. Set on the
     single MLX thread, before the step's graphs are built."""
     _STATE["dense_lane"] = bool(active)
+
+
+def dense_lane_active() -> bool:
+    """Whether single-row KVCache attention currently routes through the ragged kernel."""
+    return bool(_STATE["dense_lane"])
 
 
 def _lane_length(cache: Any) -> int | None:

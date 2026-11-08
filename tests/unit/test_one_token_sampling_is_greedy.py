@@ -3,7 +3,7 @@
 
 import pytest
 
-from tests.unit.test_vlm_runner_batching import FakeGen, runner  # noqa: F401,F811
+from tests.unit.test_vlm_runner_batching import FakeDriver, runner  # noqa: F401,F811
 from yunshu_engine.sampling_defaults import effective_temperature, keeps_one_token
 
 from .tiny_text_engine import make_engine

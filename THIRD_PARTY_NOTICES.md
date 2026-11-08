@@ -9,15 +9,15 @@ comment. Summary of upstreams and licenses:
 | Upstream | License | Used as |
 |---|---|---|
 | jundot/omlx | Apache-2.0 | vendored `kernels/omlx/`; derived `ragged_attention.py` tile kernel; inspired `spec_prefill.py`, `routers/decisions.py` (route design only), `lane_layers.py`, `model_settings.py`, `mrope.py`, `mlx_executor.py`, `prefill_progress.py`, `yunshu_kv/mlx_cache.py`; derived `process_memory_enforcer.py` |
+| sgl-project/sglang | Apache-2.0 | inspired radix-tree prefix matching (`kv_optimizations.py`) |
 | ashhart/TensorFold | MIT | vendored `kernels/tensorfold/`; derived `lane_linear.py`, `int_code_linear.py`, `kernels/qsa_sparse_prefill.py` (Flash-Next tensor-unit sparse prefill attention, Apache-2.0), `copy_drafter.py`; inspired draft vocabulary, DFlash/tree drafting, tree verify, ordered chunk merge |
-| Blaizzy/mlx-vlm | MIT | patched (speculative verifier, Qwen4 sampled-verify logit stash and row QSA, DFlash/MTP rounds, batch generator, audio patches, APC checkpoint policy and lookup provenance); derived `kernels/qwen4_qsa/source.py`, `dflash_context.py`, patched `penalty_context.py`, `dflash_apc_window.py`, `dflash_copy.py`, `mtp_lane.py`, `mtp_tree.py`; tool-format registry, DFlash chain depth, structured-output wiring |
+| Blaizzy/mlx-vlm | MIT | patched (speculative verifier, Qwen4 sampled-verify logit stash and row QSA, DFlash/MTP rounds, batch generator, audio patches, APC checkpoint policy and lookup provenance); inspired `round_driver/generic.py` (single-row prefill / decode call recipe); derived `kernels/qwen4_qsa/source.py`, `dflash_context.py`, patched `penalty_context.py`, `dflash_apc_window.py`, `dflash_copy.py`, `mtp_lane.py`, `mtp_tree.py`; tool-format registry, DFlash chain depth, structured-output wiring |
 | ml-explore/mlx-lm | MIT | tool parsers; speculative verification (`spec_draft_verifier.py`), sampler order (`batched_engine.py`) |
 | ml-explore/mlx | MIT | patched `nn.QuantizedLinear.__call__` for batch-invariant decode; derived native NAX prefill loader (`nax_prefill.py`) |
 | vllm-project/vllm, vllm-omni | Apache-2.0 | derived `gemma4_assistant.py`; inspired Qwen3 reasoning ends at a tool-call marker (`vlm_engine.py`), `structured_outputs` request field and entrypoint request-validation / route checks (`schemas/structured_outputs.py`, `scripts/research/route_checks_vllm.py`), n-gram / suffix proposers, block pool, mRoPE state |
 | Cloudflare/clef (model + reference `joint_schema_model.py`) | Apache-2.0 | derived `decision_engine.py` (joint schema head and record encoding re-implemented in MLX) |
 | huggingface/transformers | Apache-2.0 | inspired EmbeddingGemma 2 text tower (`embedding_gemma2.py`; the vision / audio towers are imported from mlx-vlm gemma4) |
 | ggml-org/llama.cpp | MIT | inspired n-gram hash pool |
-| sgl-project/sglang | Apache-2.0 | inspired radix-tree prefix matching (`kv_optimizations.py`) |
 | waybarrios/vllm-mlx | Apache-2.0 | inspired warm-prompt preloading (`model_optimizations.py`) |
 | incoai/splash | Apache-2.0 | inspired lossless (batch-invariant) speculative decoding; credited inside the vendored oMLX kernels |
 | bstnxbt/dflash-mlx, youssofal/MTPLX | Apache-2.0 | credited inside the vendored oMLX kernels |

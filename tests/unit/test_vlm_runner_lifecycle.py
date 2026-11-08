@@ -3,7 +3,7 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from tests.unit.test_vlm_runner_batching import FakeGen, runner  # noqa: F401,F811
+from tests.unit.test_vlm_runner_batching import FakeDriver, runner  # noqa: F401,F811
 from yunshu_engine import vlm_batch_runner as vbr
 
 
@@ -67,8 +67,7 @@ def test_r10_cancelled_before_admit_never_prefills(runner):  # noqa: F811
     ev = threading.Event()
     ev.set()
     assert _run(runner, cancel_event=ev) == []
-    assert FakeGen.instances == [] or all(not g.rows for g in FakeGen.instances)
-    assert all(g.next_uid == 0 for g in FakeGen.instances)
+    assert runner.driver.requests == []  # never reached the driver
     assert not runner.busy()
 
 
@@ -166,11 +165,9 @@ def test_non_draft_and_inline_consumers_never_wait_for_delivery(runner):  # noqa
 
 
 def test_failure_detaches_work_before_notifying_consumers(runner, monkeypatch):  # noqa: F811
-    from types import SimpleNamespace
 
     job = _handoff_job(None)
-    group = SimpleNamespace(jobs={1: job}, gen=SimpleNamespace(close=lambda: None))
-    runner._batches["failed"] = group
+    runner._driver_jobs[id(job)] = job
     runner._driving = True
     emitted = []
 
@@ -182,6 +179,7 @@ def test_failure_detaches_work_before_notifying_consumers(runner, monkeypatch): 
     error = RuntimeError("executor failed")
     runner._fail_all(error)
     assert emitted == [(job, error)]
+    assert runner.driver.removed == [job]
 
 
 def test_gc_guard_spans_request_arrival_to_first_emit(runner):  # noqa: F811

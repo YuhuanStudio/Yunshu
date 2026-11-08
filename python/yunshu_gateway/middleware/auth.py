@@ -13,7 +13,7 @@ Security posture (unchanged, safe by default):
 - Health/docs endpoints remain public.
 
 After authentication the caller's identity is stamped on ``request.state.actor`` /
-``role`` and on ``current_actor`` (``request_tracker`` ownership, ``engine_core`` dedup,
+``role`` and on ``current_actor`` (``request_tracker`` ownership,
 stored-response / container ownership): the static token and auth-disabled single-user
 mode are the owner (constant ``"owner"``, overridable via ``YUNSHU_ACTOR_IDENTITY``,
 role ``"owner"``, admin); a managed key is ``key:<id>`` with role ``"admin"`` only when

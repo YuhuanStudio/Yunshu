@@ -213,6 +213,11 @@ def main():
             ttft=r["ttft"],
             tokens_equal=r["toks"] == ref["toks"],
             logprobs_equal=r["lps"] == ref["lps"],
+            diff_positions=[
+                i
+                for i, (x, y) in enumerate(zip(r["lps"], ref["lps"], strict=False))
+                if x != y
+            ][:16],
             max_abs_dlp=max(
                 abs(x - y) for x, y in zip(r["lps"], ref["lps"], strict=True)
             )

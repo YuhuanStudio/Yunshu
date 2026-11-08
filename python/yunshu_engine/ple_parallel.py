@@ -123,8 +123,12 @@ def parallel_read_rows(table, row_ids, threads: int, dtypes: dict):
 def install(threads: int) -> bool:
     """Patch upstream's ``_read_rows`` to read in parallel; 0 restores upstream. True if active."""
     try:
-        from mlx_vlm.models.qwen4_exp import ple_storage
-    except Exception:  # noqa: BLE001 - mlx_vlm without qwen4_exp
+        from .qwen4_family import qwen4_first_module
+
+        ple_storage = qwen4_first_module("ple_storage")
+    except Exception:  # noqa: BLE001 - mlx_vlm without a Qwen4 module
+        return False
+    if ple_storage is None:
         return False
     cls = ple_storage.QuantizedMMapNGramEmbedding
     with _LOCK:

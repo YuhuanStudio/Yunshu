@@ -26,7 +26,7 @@ This is the method behind llama.cpp `perplexity --kl-divergence` and vLLM's logp
 
 ### Tier 2: greedy divergence
 
-50 fixed chat prompts (English, code, math, Chinese and long summarization prompts), greedy, up to 256 tokens (`N_PROMPTS, MAX_TOKENS = 50, 256` in `greedy_div.py`). Each pair of runs is scored by exact match of the whole continuation and by the first differing position. The `engine` configuration runs each prompt with speculation off and on (`allow_draft`).
+50 fixed chat prompts (English, code, math, Chinese and long summarization prompts), greedy, up to 256 tokens (`N_PROMPTS, MAX_TOKENS = 50, 256` in `greedy_div.py`). Each pair of runs is scored by exact match of the whole continuation and by the first differing position. The `engine` configuration runs each prompt with speculation off and on (`allow_draft`);
 
 ### Tier 3: paired downstream evaluation
 

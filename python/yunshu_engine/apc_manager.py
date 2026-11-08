@@ -48,6 +48,9 @@ from mlx_vlm.apc import APCManager, DiskBlockStore
 from mlx_vlm.apc import _sequence_hash as _upstream_sequence_hash
 from mlx_vlm.apc_coordinator import APCCoordinator
 
+from . import hit_stages
+from .prompt_ids import head_boundary_index, ids_array, semantic_boundary_set
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,11 +58,17 @@ def _sequence_hash(token_ids, extra_hash: int, block_size: int) -> int:
     """``mlx_vlm.apc._sequence_hash`` without its per-token ``int(t)`` loop (b9f5305: convert
     the ids to bytes once). Same digest: the upstream builds the same int32 array, just from
     a Python-level copy of every id. Other inputs (mx arrays, generators) take the upstream."""
-    if isinstance(token_ids, (list, tuple)):
-        try:
+    if isinstance(token_ids, (list, tuple, np.ndarray)):
+        if isinstance(token_ids, np.ndarray):
+            # a view of the prompt's int32 array (the lookup converts the prompt once)
+            if token_ids.dtype != np.int32:
+                token_ids = token_ids.tolist()
             arr = np.asarray(token_ids, dtype=np.int32)
-        except (TypeError, ValueError, OverflowError):
-            return int(_upstream_sequence_hash(token_ids, extra_hash, block_size))
+        else:
+            try:
+                arr = np.asarray(token_ids, dtype=np.int32)
+            except (TypeError, ValueError, OverflowError):
+                return int(_upstream_sequence_hash(token_ids, extra_hash, block_size))
         if arr.ndim == 1:
             h = hashlib.sha256()
             h.update(int(extra_hash & ((1 << 64) - 1)).to_bytes(8, "little"))
@@ -93,6 +102,11 @@ _MEDIA_COST: contextvars.ContextVar[bool] = contextvars.ContextVar(
 # - the copies of all layers were evaluated at once, so a restore held the source, the
 #   copy and the capacity-padded copy of every layer together (3x the cache at its peak).
 #   They are evaluated a few layers at a time, so only a few layers' intermediates exist.
+# Set while a checkpoint is being admitted: the disk's ``flush()`` (upstream joins the writer queue
+# at the start of every store) is then a no-op, so a store never waits for a queued file's write.
+_ADMISSION: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "yunshu_apc_admission", default=False
+)
 _OWNED_SNAPSHOT: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "yunshu_apc_owned_snapshot", default=False
 )
@@ -439,8 +453,28 @@ class SpillDiskStore(DiskBlockStore):
     # extra_hash)``. The manager uses it to drop the files that checkpoint supersedes.
     on_exact_written: Any = None
 
+    def flush(self) -> None:
+        if _ADMISSION.get():
+            # Upstream's store_exact_cache joins the writer queue before admitting a checkpoint
+            # (to release queued tensors). With write-behind that made the next store of a flush
+            # wait for the previous file's disk write (~200 ms per 8K checkpoint on the 27B, in
+            # the first decode step's prelude). The queue is bounded by
+            # ``queue_max_bytes``; a full queue already makes the producer write by itself.
+            return
+        super().flush()
+
     def _write_payload(self, shard_id, block_hashes, payload) -> bool:
+        writer = threading.current_thread().name.startswith("apc-disk-")
+        t1 = time.perf_counter()
         ok = self._write_payload_impl(shard_id, block_hashes, payload)
+        if writer:
+            logger.info(
+                "APC write-behind: file written (ok=%s) in %.0f ms, %d tokens, wall %.3f",
+                ok,
+                (time.perf_counter() - t1) * 1e3,
+                len(getattr(payload, "token_ids", ())),
+                time.time() % 1000,
+            )
         h = getattr(payload, "cache_hash", None)
         if ok and h is not None:
             tokens = tuple(map(int, payload.token_ids))
@@ -836,6 +870,61 @@ def materialize(target_lists, limit_bytes: int = MATERIALIZE_BYTES) -> None:
 SHARE_MAX_TAIL = 4096
 
 
+def _extra_defer_types() -> tuple:
+    """Cache classes (beyond the stock ones) whose checkpoints are captured lazily too: Flash-Next's
+    ``QSAKVCache`` (K/V plus the QSA indexer keys, positions and block summaries). Upstream's
+    ``clone_cache_entry`` copies it through its state / meta_state contract, the same function the
+    synchronous store uses, so the stored bits are identical; only when the copy runs differs."""
+    from .qwen4_family import qwen4_model_modules
+
+    # every Qwen4-family language module's QSAKVCache (a renamed release adds its own module)
+    return tuple(
+        m.QSAKVCache
+        for m in qwen4_model_modules("language")
+        if hasattr(m, "QSAKVCache")
+    )
+
+
+def _share_qsa_rows(mine, theirs, targets: list, views: list) -> bool:
+    """Flash-Next ``QSAKVCache``: the shorter checkpoint's K/V rows AND indexer rows (keys and
+    positions, written once per position like K/V) become views of the longer one's, so the prefix
+    is copied once. The block summaries stay the shorter checkpoint's own copy. True when handled."""
+    qsa = _extra_defer_types()
+    if not qsa or type(mine) not in qsa or type(theirs) is not type(mine):
+        return False
+    arrays = (
+        mine.keys, mine.values, mine.index_keys, mine.index_position_ids,
+        theirs.keys, theirs.values, theirs.index_keys, theirs.index_position_ids,
+    )  # fmt: skip
+    if any(a is None for a in arrays):
+        return True  # nothing shared, and the generic KVCache branch must not run on it
+    rows = int(mine.keys.shape[-2])
+    if (
+        mine.values.shape[-2] != rows
+        or theirs.keys.shape[-2] < rows
+        or theirs.values.shape[-2] < rows
+        or mine.keys.shape[:-2] != theirs.keys.shape[:-2]
+        or mine.keys.dtype != theirs.keys.dtype
+        or int(mine.index_keys.shape[1]) != rows
+        or int(theirs.index_keys.shape[1]) < rows
+        or int(mine.index_position_ids.shape[-1]) != rows
+        or int(theirs.index_position_ids.shape[-1]) < rows
+        or mine.index_keys.dtype != theirs.index_keys.dtype
+        or mine.index_keys.shape[0] != theirs.index_keys.shape[0]
+        or mine.index_keys.shape[2:] != theirs.index_keys.shape[2:]
+        or mine.index_position_ids.shape[:-1] != theirs.index_position_ids.shape[:-1]
+    ):
+        return True
+    own = {id(a) for a in arrays[:4]}
+    targets[:] = [t for t in targets if id(t) not in own]
+    mine.keys = theirs.keys[..., :rows, :]
+    mine.values = theirs.values[..., :rows, :]
+    mine.index_keys = theirs.index_keys[:, :rows]
+    mine.index_position_ids = theirs.index_position_ids[..., :rows]
+    views += [mine.keys, mine.values, mine.index_keys, mine.index_position_ids]
+    return True
+
+
 def share_prefix_rows(pending, max_tail: int = SHARE_MAX_TAIL) -> list:
     """Make a shorter checkpoint's K/V rows views of a longer one's of the same request.
 
@@ -866,6 +955,8 @@ def share_prefix_rows(pending, max_tail: int = SHARE_MAX_TAIL) -> list:
             continue
         donor = max(donors, key=lambda p: len(p[0]))
         for mine, theirs in zip(snapshot, donor[1], strict=False):
+            if _share_qsa_rows(mine, theirs, targets, views):
+                continue
             if type(mine) is not KVCache or type(theirs) is not KVCache:
                 continue
             if mine.keys is None or theirs.keys is None or mine.values is None:
@@ -1008,6 +1099,7 @@ class _Coordinator(APCCoordinator):
         if tail is not None:
             return tail
         points = self.checkpoint_lengths(token_ids, set(), begin=False)
+        whole = ids_array(token_ids)  # converted once; each probe hashes a view of it
         candidates = policy.get("lookup_points", [n for n, _ in policy["points"]])
         maximum = max(candidates, default=0)
         extra_hash = kwargs["extra_hash"]
@@ -1033,7 +1125,9 @@ class _Coordinator(APCCoordinator):
             )
             if probed:
                 pkey = _sequence_hash(
-                    tuple(token_ids[:probed]), extra_hash, self.manager.block_size
+                    whole[:probed] if whole is not None else tuple(token_ids[:probed]),
+                    extra_hash,
+                    self.manager.block_size,
                 )
                 if not acceptable(probed, pkey):
                     maximum = probed - 1
@@ -1048,7 +1142,9 @@ class _Coordinator(APCCoordinator):
             if cache is None or not n:
                 return None
             key = _sequence_hash(
-                tuple(token_ids[:n]), extra_hash, self.manager.block_size
+                whole[:n] if whole is not None else tuple(token_ids[:n]),
+                extra_hash,
+                self.manager.block_size,
             )
             if acceptable(n, key):
                 self.manager.touch_boundary(token_ids[:n], extra_hash)
@@ -1084,7 +1180,7 @@ class _Coordinator(APCCoordinator):
                 tails.pop(next(iter(tails)))
         policy["written"] = max(policy.get("written", 0), len(tokens))
 
-    # Enabled only around a runner generator step. External APC
+    # Enabled only around a runner generator step. Round-driver and external APC
     # callers retain synchronous admission until they supply the same flush boundary.
     defer_checkpoint_stores = False
 
@@ -1309,18 +1405,6 @@ class _Coordinator(APCCoordinator):
             and len(token_ids) not in self._store_lengths
         ):
             return False  # deterministic forward boundary, not an extra snapshot
-        # Only a checkpoint that is going to be stored can be restored from, so only its window
-        # is kept: forward-split boundaries (every stride in split-invariant prefill) and
-        # opted-out requests used to concatenate and store a window each, evicting the windows
-        # of real checkpoints from the small budget.
-        try:
-            from . import dflash_apc_window
-
-            dflash_apc_window.capture(
-                tokens, extra_hash, prompt_end=len(tokens) >= len(full_ids) - 1
-            )
-        except Exception:  # the drafter window is an optimisation only
-            logger.debug("drafter window capture failed", exc_info=True)
         from mlx_vlm.apc import _cache_nbytes
         from mlx_vlm.apc_adapters import clone_cache_entry
         from mlx_vlm.models.cache import (
@@ -1341,7 +1425,8 @@ class _Coordinator(APCCoordinator):
             and batch_idx in (None, 0)
             and bool(prompt_cache)
             and all(
-                type(c) in (ArraysCache, KVCache, RotatingKVCache)
+                type(c)
+                in (ArraysCache, KVCache, RotatingKVCache, *_extra_defer_types())
                 or (
                     type(c) in (BatchKVCache, BatchRotatingKVCache)
                     and c.is_single_row()
@@ -1425,21 +1510,27 @@ class _Coordinator(APCCoordinator):
         # first (the same drops ``store_exact_cache`` makes), then copy a few arrays at a
         # time across all checkpoints so the pinned buffers go as the copies appear.
         # Same operations and bits as evaluating everything at once; only the peak differs.
+        t0 = time.perf_counter()
         release = getattr(self.manager, "release_superseded", None)
         for tokens, _, extra_hash, _, generation, _, _ in pending:
             if release is not None:
                 release(tokens, extra_hash, _generation=generation)
+        t_release = time.perf_counter()
         views = share_prefix_rows(pending)
+        t_share = time.perf_counter()
         longest = max(pending, key=lambda p: len(p[0]))
         share_lazy = getattr(self.manager, "share_anchor_rows_lazy", None)
         if share_lazy is not None:
             # retained anchors give up their own rows before the new copy is made
             views = views + share_lazy(longest[0], longest[1], longest[2])
         materialize([entry[3] for entry in pending])
+        t_mat = time.perf_counter()
         if views:
             import mlx.core as mx
 
             mx.eval(views)
+        t_views = time.perf_counter()
+        store_ms = []
         for (
             tokens,
             snapshot,
@@ -1452,11 +1543,30 @@ class _Coordinator(APCCoordinator):
             kwargs = {"extra_hash": extra_hash, "_owned": True}
             if generation is not None:
                 kwargs["_generation"] = generation
+            t_store = time.perf_counter()
             if self.manager.store_exact_cache(tokens, snapshot, **kwargs):
                 self._publish_checkpoint_policy(tokens, extra_hash, policy, signature)
+            store_ms.append(
+                f"{len(tokens)}t:{(time.perf_counter() - t_store) * 1e3:.1f}"
+            )
         finish = getattr(self.manager, "finish_anchor_sharing", None)
         if finish is not None:
             finish()
+        logger.info(
+            "APC flush: %d checkpoint(s) %s (arrays copied %s MiB, %d shared views): release %.1f"
+            " share %.1f materialize %.1f views %.1f stores [%s] finish %.1f ms",
+            len(pending),
+            [len(p[0]) for p in pending],
+            sum(int(t.nbytes) for p in pending for t in p[3]) >> 20,
+            len(views),
+            (t_release - t0) * 1e3,
+            (t_share - t_release) * 1e3,
+            (t_mat - t_share) * 1e3,
+            (t_views - t_mat) * 1e3,
+            ", ".join(store_ms),
+            (time.perf_counter() - t_views) * 1e3
+            - sum(float(x.split(":")[1]) for x in store_ms),
+        )
 
     def discard_deferred_checkpoints(self) -> None:
         self.__dict__.pop("_deferred_checkpoints", None)
@@ -1596,6 +1706,7 @@ class YunshuAPCManager(APCManager):
         prefill_assistant_header: tuple[int, int] | None = None,
         prefill_message_end: int | None = None,
         prefill_turn_boundary: bool = False,
+        persist_on_store: bool = False,
         **kwargs: Any,
     ):
         overrides = dict(kwargs.pop("overrides", None) or {})
@@ -1655,6 +1766,11 @@ class YunshuAPCManager(APCManager):
         # cache browser reads it. Never consulted by a lookup, so it cannot change a hit.
         self._entry_hits: collections.OrderedDict[int, list] = collections.OrderedDict()
         self.disk_superseded = 0
+        # write-behind: a stored checkpoint is queued to the SSD writer thread right away (see
+        # ``_persist_behind``), so a kill or power loss costs at most the requests in flight
+        self.persist_on_store = bool(persist_on_store)
+        self._unpersisted: dict[int, None] = {}
+        self.persist_queued = 0
         if warm_mode != "off" and warm_bytes > 0:
             from .apc_warm import WarmTier
 
@@ -1726,6 +1842,53 @@ class YunshuAPCManager(APCManager):
             disk.write_now(key, entry.token_ids, entry.extra_hash, entry.prompt_cache)
         except Exception as e:
             logger.warning("APC: SSD spill failed (%s)", e)
+
+    def _persist_behind(self, key) -> None:
+        """Queue a just-stored checkpoint (and any earlier one the queue had no room for) to the
+        SSD writer thread. Never blocks the request: the write is the writer thread's (atomic
+        temp file + rename, the budget's cap and free-space reserve apply), and a full queue
+        only postpones the entry to the next store. A checkpoint a newer one superseded is gone
+        from RAM and is not written. Entries already on disk are deduplicated by the store,
+        so ``close()`` never writes them twice."""
+        disk = self.disk
+        if not isinstance(disk, SpillDiskStore):
+            return
+        t_start = time.perf_counter()
+        queued_before = self.persist_queued
+        self._unpersisted[key] = None
+        try:
+            room = int(disk.queue_max_bytes) - int(disk.pending_bytes)
+            for k in reversed(list(self._unpersisted)):  # newest first
+                with self.lock:
+                    entry = self._exact_cache.get(k)
+                if entry is None:  # superseded or evicted (eviction spilled it)
+                    self._unpersisted.pop(k, None)
+                    continue
+                from mlx_vlm.apc import _cache_nbytes
+
+                size = int(_cache_nbytes(entry.prompt_cache))
+                if size > room:
+                    continue  # no queue room: retried at the next store, or at close()
+                room -= size
+                self._unpersisted.pop(k, None)
+                if disk.write_now(
+                    k, entry.token_ids, entry.extra_hash, entry.prompt_cache
+                ):
+                    self.persist_queued += 1
+            t_plans = time.perf_counter()
+            self._save_span_plans()
+            logger.info(
+                "APC write-behind: store queued %d file(s) in %.1f ms "
+                "(span plans %.1f ms), pending %.0f MiB, %d unqueued, wall %.3f",
+                self.persist_queued - queued_before,
+                (time.perf_counter() - t_start) * 1e3,
+                (time.perf_counter() - t_plans) * 1e3,
+                disk.pending_bytes / 2**20,
+                len(self._unpersisted),
+                time.time() % 1000,
+            )
+        except Exception as e:
+            logger.warning("APC: write-behind failed (%s)", e)
 
     def _demote(self, key, entry) -> None:
         """A HOT entry was evicted: it moves to WARM (compact form in RAM) when there is one and
@@ -1912,6 +2075,7 @@ class YunshuAPCManager(APCManager):
 
     def _save_span_plans(self) -> None:
         path = self.disk.dir / self._SPAN_PLANS_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         data = {str(k): list(v) for k, v in self._span_plans.items()}
         tmp.write_text(json.dumps(data))
@@ -1965,6 +2129,15 @@ class YunshuAPCManager(APCManager):
         """Token index where the first user turn starts (the end of the system turn)."""
         if self.head_marker is None:
             return 0
+        a, b = self.head_marker
+        arr = ids_array(token_ids)
+        if arr is not None:
+            with hit_stages.stage("boundaries"):
+                i = head_boundary_index(arr, a, b)
+            return self.align_prefill_boundary(i) if i else 0
+        return self._head_boundary_loop(token_ids)
+
+    def _head_boundary_loop(self, token_ids) -> int:
         a, b = self.head_marker
         n = len(token_ids)
         if n >= 2 and token_ids[0] == a and token_ids[1] == b:
@@ -2156,12 +2329,24 @@ class YunshuAPCManager(APCManager):
                 self._head_keys.add(key)
         before_rejects = self.stats.rejects
         token = _OWNED_SNAPSHOT.set(bool(_owned))
+        adm = _ADMISSION.set(True)
+        t_store = time.perf_counter()
         try:
             ok = super().store_exact_cache(
                 token_ids, prompt_cache, extra_hash=extra_hash
             )
         finally:
+            _ADMISSION.reset(adm)
             _OWNED_SNAPSHOT.reset(token)
+        logger.info(
+            "APC store: %d tokens ok=%s in %.1f ms (owned snapshot %s)",
+            n,
+            bool(ok),
+            (time.perf_counter() - t_store) * 1e3,
+            bool(_owned),
+        )
+        if ok and self.persist_on_store:
+            self._persist_behind(key)
         if not ok and not had:
             with self._plock:
                 self._born.pop(key, None)
@@ -2521,6 +2706,24 @@ class YunshuAPCManager(APCManager):
 
     # ── provenance ─────────────────────────────────────────────────────
     def semantic_boundaries(self, token_ids):
+        arr = ids_array(token_ids)
+        if arr is not None:
+            with hit_stages.stage("boundaries"):
+                boundaries = semantic_boundary_set(
+                    arr,
+                    self.prefill_assistant_header,
+                    self.prefill_message_end,
+                    self.prefill_turn_boundary,
+                    self.prefill_boundary_tokens,
+                )
+            return {
+                self.align_prefill_boundary(n)
+                for n in boundaries
+                if self.align_prefill_boundary(n) > 0
+            }
+        return self._semantic_boundaries_loop(token_ids)
+
+    def _semantic_boundaries_loop(self, token_ids):
         boundaries = set()
         header = self.prefill_assistant_header
         assistant = header is None

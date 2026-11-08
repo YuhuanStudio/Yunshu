@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from yunshu_engine import settings
 from yunshu_engine.model_manager import ModelEntry, ModelManager, ModelType
 from yunshu_engine.request_tracker import get_request_tracker
-from yunshu_engine.vlm_batch_runner import RunStats, VLMBatchRunner
+from yunshu_engine.vlm_batch_runner import RunStats
 from yunshu_gateway import x_yunshu
 from yunshu_gateway.error_hints import add_hint, hint_for
 from yunshu_gateway.routers import yunshu as yunshu_router
@@ -316,28 +316,6 @@ def test_runstats_phase():
     assert st.phase == "decode"
     st.finish_reason = "stop"
     assert st.phase == "done"
-
-
-def test_note_prefill_reads_upstream_prompt_batch():
-    import numpy as np
-
-    st = RunStats()
-    st.prefill_total = 4096
-    job = SimpleNamespace(stats=st, ids=list(range(4096)))
-    pb = SimpleNamespace(
-        _processed_prompt_columns=2048,
-        _input_ids=np.zeros((1, 2048)),
-        _cached_tokens_per_row=[0],
-        _prompt_uids=[7],
-    )
-    group = SimpleNamespace(gen=SimpleNamespace(_prompt_batch=pb), jobs={7: job})
-    VLMBatchRunner._note_prefill(group)
-    assert (st.prefill_done, st.prefill_total) == (2048, 4096)
-    # after the prompt batch is gone the row counts as fully prefilled
-    group.gen._prompt_batch = None
-    group.gen._unprocessed_sequences = []
-    VLMBatchRunner._note_prefill(group)
-    assert st.prefill_done == 4096
 
 
 # ── keep_alive ─────────────────────────────────────────────────────────────

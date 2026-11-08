@@ -11,7 +11,8 @@ Sub-commands
     run --config ref          stock mlx-vlm greedy loop, no Yunshu kernel imported
     run --config engine       VLMEngine's batch runner, in-process. Each request
                               runs twice, spec off then spec on (allow_draft),
-                              so one process yields both paths.
+                              so one process yields both paths. With
+                              YUNSHU_ROUND_DRIVER=1 it is the round driver.
     compare A B [C ...]       first run is the base; every other run is scored against it
 """
 

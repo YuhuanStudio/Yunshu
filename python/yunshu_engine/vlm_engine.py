@@ -54,11 +54,18 @@ from .memory_admission import (
 )
 from .moe_pack import tensor_quantization_override, unsupported_pack_reason
 from .paths import private_media_dir
+from .qwen4_family import QWEN4_MODEL_TYPES, is_qwen4_family
 from .request import RequestOutput
 from .special_tokens import neutralize_special_text
 from .types import EngineConfig
 
 logger = logging.getLogger(__name__)
+
+# Prompt tokens per round-driver prefill atom: a decoding row only steps between prefill
+# forwards, so small atoms keep it running next to a long prompt (Qwen3.8-27B, M5 Max:
+# 512 -> 6 tok/s, 128 -> 24 tok/s for one MTP row beside an 8K prompt, ~20% less prefill
+# speed). The atom grid is fixed per prompt, so output never depends on what else runs.
+ROUND_PREFILL_CHUNK = 512
 
 # Per-request temp-file registry. Set to a fresh list at the start of each
 # generate()/generate_stream() call so cleanup deletes EXACTLY the files THIS request
@@ -469,15 +476,20 @@ def _derive_vlm_quantization(config: dict) -> dict | None:
 
 
 def apc_prefill_stride(
-    spec_family: bool, invariant: bool, qwen4: bool, step: int
+    spec_family: bool,
+    invariant: bool,
+    qwen4: bool,
+    step: int,
+    generic: bool = False,
 ) -> int:
     """APC checkpoint grid: checkpoints sit only where a cold run of the same request also ends a forward.
 
     Invariant kernels (Qwen3.5) make that hold at any split. Flash-Next (qwen4_exp) prefill is not
     split-invariant, so its checkpoints need the grid: with stride 0 a turn-2 hit restored at the
     turn-1 prompt end, the tail was prefilled as one span the cold run never had, and logprobs
-    drifted (|dlp| 0.05 at 32K; tokens equal)."""
-    return step if spec_family and (invariant or qwen4) else 0
+    drifted (|dlp| 0.05 at 32K; tokens equal). The generic layer (the model's own stock forward) is no more
+    split-invariant than Flash-Next, so it takes the same grid."""
+    return step if generic or (spec_family and (invariant or qwen4)) else 0
 
 
 def resolve_external_ple_manifest(config: dict, model_path) -> None:
@@ -693,7 +705,7 @@ class VLMEngine:
         )
 
         config = vlm_load_config(model_path)
-        if config.get("model_type") == "qwen4_exp":
+        if is_qwen4_family(config):
             # MLX bills a command-buffer commit for every large bound buffer (expert banks exceed its
             # 50 MB default cap twice per MoE layer); raising the caps before the first Metal command
             # removes those commits (-0.6 to -1.0 ms per plain Flash-Next step, same tokens).
@@ -720,7 +732,7 @@ class VLMEngine:
             # dropping the entries here means the table is never read into memory
             weights = {k: v for k, v in weights.items() if not is_ple_tensor(k)}
         ple_table_scales = {}
-        if config.get("model_type") == "qwen4_exp":
+        if is_qwen4_family(config):
             from .ple_scale import collect_table_scales
 
             ple_table_scales = collect_table_scales(weights)
@@ -743,7 +755,7 @@ class VLMEngine:
         from . import ple_parallel
 
         ple_parallel.install(int(settings.get("YUNSHU_PLE_READ_THREADS")))
-        if config.get("model_type") == "qwen4_exp":
+        if is_qwen4_family(config):
             from .kernels import tf_hc_forward
 
             tf_hc_forward.install()
@@ -760,7 +772,7 @@ class VLMEngine:
             model_config.model_path = str(model_path)
 
         model = model_class.Model(model_config)
-        if config.get("model_type") == "qwen4_exp":
+        if is_qwen4_family(config):
             from .model_patches import sanitize_qwen4_checkpoint
 
             weights, self._qwen4_mtp_weights = sanitize_qwen4_checkpoint(
@@ -2072,7 +2084,7 @@ class VLMEngine:
 
     # Checkpoints whose speculative decoding (MTP / DFlash draft, verify and
     # batch-invariant kernels) is validated. Every family uses the runner.
-    _SPEC_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe", "qwen4_exp")
+    _SPEC_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe", *QWEN4_MODEL_TYPES)
 
     def _memory_total_bytes(self) -> int:
         from .apc_manager import total_memory_bytes
@@ -2428,6 +2440,36 @@ class VLMEngine:
                 )
         disk.start_mover()
 
+    def _round_driver_wanted(self, lm) -> bool:
+        """The multi-row round driver serves a dense Qwen3.5-family text decoder with
+        bf16 or int8 KV (``YUNSHU_KV_PRECISION``) when the lane arithmetic is ready, and every
+        Flash-Next (Qwen4) model with bf16 KV (its own packed forward needs no lane self-test). With
+        speculation off (``YUNSHU_VLM_DRAFT=off``) the same driver decodes without drafting, so speculation
+        on equals speculation off bit for bit (one arithmetic, rows never draft)."""
+        from .round_driver import flashnext
+        from .round_driver import forward as rd_forward
+
+        if flashnext.is_flash_next(lm):
+            return True
+
+        if not rd_forward.supports(lm):
+            logger.info("Round driver: not a dense Qwen3.5-family model")
+            return False
+        import mlx.nn as nn
+
+        from .kernels.tensorfold.lane_qmm import ready
+
+        quantized = any(
+            isinstance(m, nn.QuantizedLinear) for _, m in lm.named_modules()
+        )
+        # the lane matmul reads quantized weights only: an unquantized checkpoint needs no self-test
+        if quantized and not ready():
+            logger.warning(
+                "Round driver: lane arithmetic self-test failed; serving on the generic layer"
+            )
+            return False
+        return True
+
     def _build_batch_runner(self, model_path: str):
         """Build the runner that serves every request of this model.
 
@@ -2439,7 +2481,7 @@ class VLMEngine:
         """
         from .kernels import nax_prefill
         from .utils.hardware import is_paravirtual_metal
-        from .vlm_batch_runner import VLMBatchRunner
+        from .vlm_batch_runner import PREFILL_STEP, VLMBatchRunner
 
         nax_prefill.disable()
         from .kernels import gdn_prefill
@@ -2466,11 +2508,49 @@ class VLMEngine:
             runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
             runner.stop_tokens = set(self._get_eos_ids())
             runner.inflight = lambda: self._active_count
+            from .round_driver.driver import RoundDriver
+
+            # the model's own forward per row, no APC: the stock cold forwards, on the one driver
+            runner.driver = RoundDriver(
+                self._model,
+                generic_layer=True,
+                stop_tokens=runner.stop_tokens,
+                chunk=PREFILL_STEP,
+                apc=None,
+            )
             return runner
 
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
-        qwen4 = self._config.get("model_type") == "qwen4_exp"
+        qwen4 = is_qwen4_family(self._config)
+        use_driver = spec_family and self._round_driver_wanted(lm)
+        # Every other model runs the generic layer: its own upstream forward per row, no drafter, no verify
+        # kernels, no lane projections (the stock arithmetic is the contract there).
+        generic_layer = not use_driver
+        if generic_layer:
+            if spec_family:
+                logger.warning(
+                    "Speculative decoding is not available for %s on the round driver (no packed model "
+                    "layer for it yet); it decodes plain on the model's own forward",
+                    self._config.get("model_type"),
+                )
+            spec_family = False
+        driver_lanes = 0
+        if use_driver and not qwen4:
+            # Row-invariant lane projections everywhere (before any verify
+            # kernel install repacks them): the round driver's rows, and the
+            # upstream paths that still serve image prompts, both use them.
+            from .kernels import lane_linear
+
+            lanes = lane_linear.convert(lm)
+            driver_lanes = lanes["converted"]
+            if lm.args.tie_word_embeddings:
+                lm._yunshu_lane_head = lane_linear.lane_head(lm.model.embed_tokens)
+            logger.info(
+                "Round driver: %d lane projections (%d skipped)",
+                lanes["converted"],
+                len(lanes["skipped"]),
+            )
         drafter = None
         draft_kind = "mtp"
         from . import spec_select
@@ -2598,9 +2678,11 @@ class VLMEngine:
             if ready():
                 from .kernels import lane_linear
 
-                kernels["lane_linear"] = lane_linear.convert(
-                    self._model.language_model
-                )["converted"]
+                # (a second convert finds the driver's lanes already in place)
+                kernels["lane_linear"] = (
+                    lane_linear.convert(self._model.language_model)["converted"]
+                    or driver_lanes
+                )
                 if settings.get("YUNSHU_PREFILL_MATMUL") == "stock":
                     lane_linear.set_stock_rows(lane_linear.STOCK_MIN_ROWS)
                     text_cfg = self._config.get("text_config", self._config)
@@ -2633,12 +2715,12 @@ class VLMEngine:
             )
             # Every prompt piece uses the same arithmetic, while decode and
             # speculative verify retain their own invariant kernels. Only the
-            # jointly qualified 27B device/ABI/weight geometry can enter it.
+            # jointly qualified 27B device/ABI/weight geometry can enter it. The KV precision is
+            # not part of it: prefill and the prefix cache stay bf16 whatever the decode rows hold.
             split_ready = bool(
                 kernels.get("nax_prefill")
                 and kernels.get("attn_prefill")
                 and settings.get("YUNSHU_PREFILL_GDN") == "chunked"
-                and settings.get("YUNSHU_KV_PRECISION") == "bf16"
                 and all(
                     module.output_dims < lane_linear.NARROW
                     or module.output_dims >= 100_000
@@ -2726,17 +2808,18 @@ class VLMEngine:
                     block = 6
         self._prefix_invariant_dispatch = bool(kernels and kernels.get("invariant"))
         # After the kernels: the identity names the prefill matmul they installed.
-        from .vlm_batch_runner import PREFILL_STEP
-
         self._apc_prefill_stride = apc_prefill_stride(
-            spec_family, bool((kernels or {}).get("invariant")), qwen4, PREFILL_STEP
+            spec_family,
+            bool((kernels or {}).get("invariant")),
+            qwen4,
+            PREFILL_STEP,
+            generic=generic_layer,
         )
         from .kernels import buffer_cache
 
         if spec_family and not qwen4:
-            from .kernels import cache_restore, singleton_cache
+            from .kernels import cache_restore
 
-            singleton_cache.install()
             cache_restore.install()
             from .kernels import preempt
 
@@ -2806,6 +2889,7 @@ class VLMEngine:
                     prefill_boundary_tokens=tuple(boundary_tokens),
                     prefill_assistant_header=assistant_header,
                     prefill_message_end=message_end,
+                    persist_on_store=settings.get("YUNSHU_VLM_APC_PERSIST") == "store",
                     prefill_turn_boundary=(
                         settings.get("YUNSHU_NEXT_TURN_PREFILL")
                         in ("boundary", "exact")
@@ -2886,7 +2970,7 @@ class VLMEngine:
         precision = settings.get("YUNSHU_KV_PRECISION")
         from .kernels import ragged_kv
 
-        if not qwen4 and ragged_kv.supports(self._model.language_model):
+        if use_driver and not qwen4 and ragged_kv.supports(self._model.language_model):
             ragged_kv.install()
             ragged_kv.enable(None)  # the runner sets the format while it steps
             runner.ragged_kv = precision
@@ -2896,20 +2980,45 @@ class VLMEngine:
                 "only; this model's KV stays bf16",
                 precision,
             )
+        if generic_layer:
+            from .round_driver.driver import RoundDriver
+
+            runner.driver = RoundDriver(
+                self._model,
+                generic_layer=True,
+                stop_tokens=runner.stop_tokens,
+                chunk=PREFILL_STEP,
+                apc=self._apc_backend,
+            )
+        if use_driver:
+            from .round_driver.driver import RoundDriver
+
+            runner.driver = RoundDriver(
+                self._model,
+                drafter=drafter if draft_kind == "mtp" else None,
+                dflash_drafter=drafter if draft_kind == "dflash" else None,
+                plain_verify=drafter is None,
+                stop_tokens=runner.stop_tokens,
+                # Flash-Next prefill is not split-invariant: its spans are the 2048 grid the APC
+                # checkpoints sit on (apc_prefill_stride), so a hit runs the spans a cold prompt did
+                chunk=PREFILL_STEP if qwen4 else ROUND_PREFILL_CHUNK,
+                apc=self._apc_backend,
+                kv_format="bf16" if qwen4 else precision,
+                # the packed Flash-Next verify takes a pending token and one draft (block 2)
+                max_draft=max(0, min(int(block or 2) - 1, 1)) if qwen4 else None,
+            )
         logger.info(
-            "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
+            "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s kv=%s",
             f"{self._apc_backend.memory_max_bytes / 2**30:.1f}GiB"
             if self._apc_backend is not None
             else "off",
             draft_kind if drafter is not None else "off",
             block or "default",
             kernels,
+            precision if use_driver else "bf16",
         )
+        logger.info("Round driver layer: %s", "generic" if generic_layer else "packed")
         return runner
-
-    # Knobs the runner does not implement; such requests take the legacy loop.
-    # (spec_decode is accepted and ignored: the runner drafts on its own.)
-    _RUNNER_UNSUPPORTED_KWARGS = ("logits_processors", "lora_adapter")
 
     def _build_text_constraint(self, json_schema):
         if json_schema is None:

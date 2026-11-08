@@ -1,10 +1,10 @@
 # Upstream (inspired): ml-explore/mlx-lm (MIT) mlx_lm/sample_utils.py @ e5dd6100
 from __future__ import annotations
 
-"""Yunshu BatchedEngine — user-facing continuous batching engine.
+"""Yunshu BatchedEngine — user-facing text engine.
 
 Written from scratch:
-- Wraps AsyncEngineCore for clean separation of concerns
+- Single-request fast path (concurrent requests serialize on the MLX executor)
 - Lazy model loading on first request
 - Chat template application before generation
 - GeneratorExit-safe cleanup for streaming
@@ -12,9 +12,7 @@ Written from scratch:
 
 Architecture:
   BatchedEngine (user-facing API)
-    → AsyncEngineCore (orchestration)
-      → Scheduler (BatchGenerator management)
-      → RequestOutputCollector (per-request output buffer)
+    → single-request fast path (mlx-lm generate_step on the MLX executor)
 
 This is the engine that ModelManager and the gateway routers use.
 """
@@ -257,9 +255,9 @@ class BatchedEngine(
     EngineSpeculativeMixin,
     EngineNgramMixin,
 ):
-    """User-facing continuous batching engine.
+    """User-facing text engine (single-request fast path).
 
-    Wraps EngineCore with:
+    Wraps the single-request fast path with:
     - Lazy model loading
     - Chat template preprocessing
     - SamplingParams construction
@@ -299,10 +297,8 @@ class BatchedEngine(
 
         self._model = None
         self._tokenizer = None
-        self._engine_core = None
         self._loaded = False
         self._starting = False  # Guard against concurrent start() calls
-        self._kv_manager = None  # Set from EngineCore._kv_manager after start
 
         # Fast-path active request tracking (prevents model eviction mid-generation)
         self._active_fast_path_count = 0
@@ -449,39 +445,17 @@ class BatchedEngine(
         self._metal_kernel_manager = None
         self._metal_kernels_enabled = False
 
-        # Engine loop default (continuous batching mode, experimental)
-        self._engine_loop_default = settings.get_bool("YUNSHU_ENGINE_LOOP")
-
     @property
     def is_loaded(self) -> bool:
         return self._loaded
 
     @property
-    def config(self):
-        """Engine config — delegates to EngineCoreConfig when available.
-
-        This property exists so that the admin ``/config/engine`` endpoint
-        (which reads ``engine.config``) works with both the legacy ``Engine``
-        class (which stores config directly) and ``BatchedEngine`` (which
-        keeps the config inside ``EngineCore``).
-        """
-        if self._engine_core is not None:
-            return self._engine_core.config
-        return None
-
-    @property
     def is_running(self) -> bool:
-        """True when the engine core loop is active (continuous batching).
-
-        Used by ``_ensure_engine_started`` in the gateway engine module
-        to decide whether ``start()`` needs to be called.
-        """
-        return self._loaded and (
-            self._engine_core is not None and self._engine_core.is_running
-        )
+        """True once the model is loaded (the fast path serves every request)."""
+        return self._loaded
 
     async def start(self) -> None:
-        """Load model and start EngineCore."""
+        """Load the model."""
         if self._loaded:
             return
 
@@ -760,19 +734,6 @@ class BatchedEngine(
         # Warm prompt prefill: pre-populate KV cache with common system prompts
         await self._warm_prompt_prefill()
 
-        # Auto-start EngineCore so the scheduler is ready for concurrent requests.
-        try:
-            await self._ensure_engine_core()
-            logger.info("EngineCore auto-started — continuous batching ready")
-        except Exception as e:
-            logger.warning(
-                f"EngineCore auto-start failed ({e}), falling back to fast-path only"
-            )
-            self._engine_core = None
-
-        # KV-5: Apply auto-tuner KV quantization recommendation if available
-        self._apply_auto_tuner_kv_quant()
-
         # Metal kernel init removed (kernels deleted — slower than mx.fast).
 
     def _load_model_settings(self):
@@ -823,13 +784,11 @@ class BatchedEngine(
                 )
         if s.kv_cache_quant_group_size != 64:
             self._kv_quant_group_size = s.kv_cache_quant_group_size
-        # NOTE: kv_cache_quant_start_layer is a LAYER INDEX — turbo_quant
-        # uses it for per-layer fp16/int8/int4 tiering (turbo_quant.py:178-188). It
-        # must NOT be assigned to self._kv_quant_start, which is mlx-lm's
-        # quantized_kv_start: a TOKEN-POSITION threshold compared against cache.offset.
-        # Conflating them made "quantize from layer N" silently mean "quantize once the
-        # sequence reaches N tokens". _kv_quant_start stays 0; the layer field is
-        # consumed by turbo_quant only.
+        # NOTE: kv_cache_quant_start_layer is a LAYER INDEX (per-layer tiering, a field
+        # no fast-path reader consumes). It must NOT be assigned to self._kv_quant_start,
+        # which is mlx-lm's quantized_kv_start: a TOKEN-POSITION threshold compared
+        # against cache.offset. Conflating them made "quantize from layer N" silently
+        # mean "quantize once the sequence reaches N tokens". _kv_quant_start stays 0.
         if not s.prefix_cache_enabled:
             self._kv_prefix_cache = None
 
@@ -1049,34 +1008,6 @@ class BatchedEngine(
             return False
         return True if cache is None else self._cache_is_quantized(cache)
 
-    def _apply_auto_tuner_kv_quant(self) -> None:
-        """KV-5: Apply auto-tuner's kv_quantization_bits recommendation.
-
-        Checks the AutoTuner's current params for KV quantization recommendation
-        and updates the engine's _kv_quant_bits if the auto-tuner suggests
-        quantization that isn't already configured. This enables adaptive KV
-        quantization based on observed memory pressure.
-
-        Priority: env var > model settings > auto_tuner recommendation.
-        """
-        # Lossy: only when the user opted into automatic KV quantization.
-        if not getattr(self, "_kv_quant_auto", False):
-            return
-        # Only apply if KV quantization isn't already explicitly configured
-        if self._kv_quant_bits is not None:
-            return  # Already configured via env var or model settings
-
-        # Check EngineCore's auto-tuner if available
-        if self._engine_core is not None:
-            auto_tuner = getattr(self._engine_core, "_auto_tuner", None)
-            if auto_tuner is not None:
-                recommended_bits = auto_tuner.params.kv_quantization_bits
-                if recommended_bits < 16:  # 16 means no quantization
-                    self._kv_quant_bits = recommended_bits
-                    logger.info(
-                        f"KV-5: Auto-tuner recommends {recommended_bits}-bit KV quantization"
-                    )
-
     def _init_lora(self):
         """Initialize LoRA adapter manager after model load."""
         max_loras = settings.get("YUNSHU_MAX_LORAS")
@@ -1122,163 +1053,18 @@ class BatchedEngine(
     def get_lora_manager(self):
         return self._lora_manager
 
-    async def _ensure_engine_core(self):
-        """Lazy-create EngineCore only when continuous batching is needed."""
-        if self._engine_core is not None:
-            return
-        from .engine_core import EngineCore, EngineCoreConfig
-        from .mlx_executor import get_mlx_executor
-
-        executor = get_mlx_executor()
-        arch_kwargs = self._extract_model_arch(self._model)
-
-        self._engine_core = EngineCore(
-            model=self._model,
-            tokenizer=self._tokenizer,
-            config=EngineCoreConfig(
-                stream_interval=self.stream_interval,
-                # Decode-batch width is configurable, but the
-                # default of 32 is near-optimal on Apple-Silicon UMA and should
-                # rarely be raised. Decode is memory-bandwidth-bound, so
-                # aggregate throughput SATURATES around batch ~32; measured on
-                # Qwen3.5-2B, raising it to 64 made N=96/128 WORSE (130 then a
-                # crash) because a wider decode batch only adds KV memory
-                # pressure without more throughput. The N>=32 throughput plateau
-                # is the hardware ceiling, not a tunable software limit.
-                completion_batch_size=settings.get("YUNSHU_COMPLETION_BATCH_SIZE"),
-                **arch_kwargs,
-            ),
-            executor=executor,
-        )
-        self._engine_core.scheduler.config.model_name = self.model_name
-
-        # Propagate paged KV manager for memory pressure eviction in fast paths
-        self._kv_manager = self._engine_core._kv_manager
-
-        # Setup memory guard with model dimensions
-        try:
-            model_cfg = (
-                getattr(self._model, "config", self._model) if self._model else None
-            )
-            if model_cfg is not None:
-                num_layers = getattr(model_cfg, "num_hidden_layers", 0)
-                num_kv_heads = getattr(model_cfg, "num_key_value_heads", 0)
-                head_dim = getattr(model_cfg, "hidden_size", 0) // max(
-                    getattr(model_cfg, "num_attention_heads", 1), 1
-                )
-                num_attn_heads = getattr(model_cfg, "num_attention_heads", None)
-                if num_layers and num_kv_heads and head_dim:
-                    self._engine_core.setup_memory_guard(
-                        num_layers=num_layers,
-                        num_kv_heads=num_kv_heads,
-                        head_dim=head_dim,
-                        num_attention_heads=num_attn_heads,
-                    )
-        except Exception:
-            logger.warning("MemoryGuard setup skipped", exc_info=True)
-
-        # Setup TurboQuant per-layer mixed-precision KV quantization
-        try:
-            model_cfg = (
-                getattr(self._model, "config", self._model) if self._model else None
-            )
-            if model_cfg is not None:
-                num_layers = getattr(model_cfg, "num_hidden_layers", 0)
-                if num_layers > 0:
-                    quant_bits = getattr(model_cfg, "kv_cache_quant_bits", None)
-                    quant_start = int(
-                        getattr(model_cfg, "kv_cache_quant_start_layer", 0)
-                    )
-                    quant_group = int(
-                        getattr(model_cfg, "kv_cache_quant_group_size", 64)
-                    )
-                    # Enable when the model config carries quant settings.
-                    if quant_bits is not None:
-                        self._engine_core.setup_turbo_quant(
-                            total_layers=num_layers,
-                            kv_quant_bits=quant_bits,
-                            kv_quant_start_layer=quant_start,
-                            kv_quant_group_size=quant_group,
-                        )
-        except Exception:
-            logger.debug("TurboQuant setup skipped", exc_info=True)
-
-        # Setup HybridKVCache layer type registration for Mamba/hybrid models
-        try:
-            model_cfg = (
-                getattr(self._model, "config", self._model) if self._model else None
-            )
-            if model_cfg is not None and self._model is not None:
-                num_layers = getattr(model_cfg, "num_hidden_layers", 0)
-                if num_layers > 0:
-                    self._engine_core.setup_hybrid_kv(
-                        model=self._model,
-                        total_layers=num_layers,
-                    )
-        except Exception:
-            logger.debug("HybridKVCache setup skipped", exc_info=True)
-
-        # Wire prefix cache into scheduler for batch-path insert_segments (C16)
-        self._engine_core.set_prefix_cache(self._kv_prefix_cache)
-        # Wire HybridKVCache into scheduler for layer-type-aware KV routing
-        if self._engine_core._hybrid_kv is not None:
-            self._engine_core.scheduler.set_hybrid_kv_cache(
-                self._engine_core._hybrid_kv
-            )
-        # Wire speculative decoding decoders into the scheduler
-        self._wire_spec_decoders_to_scheduler()
-        await self._engine_core.start()
-
-        logger.info(f"BatchedEngine started: {self.model_name}")
-
-    def _wire_spec_decoders_to_scheduler(self) -> None:
-        """Wire speculative decoding decoders into the scheduler's batch path.
-
-        Propagate the text n-gram proposer when the scheduler lacks one.
-        Native Qwen MTP and DFlash are served by the VLM runner; unverified
-        cross-model/text MTP decoders are not installed in the text scheduler.
-        """
-        if self._engine_core is None:
-            return
-        scheduler = self._engine_core.scheduler
-
-        # Propagate N-gram proposer to scheduler if needed
-        # (BatchedEngine creates its own N-gram proposer, but the scheduler
-        # may not have one if ngram_spec_enabled was False in EngineCoreConfig).
-        # Only the n-gram family has min_n/max_n config; the suffix proposer is
-        # driven solely on the single-request fast path, so skip the batch-loop
-        # sync for it (the legacy BatchGenerator loop has no suffix support).
-        if (
-            self._ngram_proposer is not None
-            and scheduler._ngram_proposer is None
-            and hasattr(self._ngram_proposer.config, "min_n")
-        ):
-            scheduler.enable_ngram_spec(
-                min_n=self._ngram_proposer.config.min_n,
-                max_n=self._ngram_proposer.config.max_n,
-                k=self._ngram_proposer.config.k,
-                mode=self._ngram_proposer.config.mode,
-            )
-            logger.info("Wired N-gram proposer into scheduler batch path")
-
     async def stop(self) -> None:
         """Stop engine and release resources.
 
         Idempotent: safe to call multiple times or before start().
         Order of shutdown:
-        1. EngineCore (stops engine loop, drains in-flight requests)
-        2. Subsystem cleanup (KV caches, spec decoder, LoRA, Metal kernels)
-        3. Model/tokenizer release + GC + MLX cache clear
+        1. Subsystem cleanup (KV caches, spec decoder, LoRA, Metal kernels)
+        2. Model/tokenizer release + GC + MLX cache clear
         """
-        if not self._loaded and self._engine_core is None:
+        if not self._loaded:
             return  # Never started or already stopped
 
-        # 1. Stop EngineCore (continuous batching loop, drain in-flight)
-        if self._engine_core is not None:
-            await self._engine_core.stop()
-            self._engine_core = None
-
-        # 2. Release KV prefix cache (holds MLX array refs) and flush SSD tier
+        # Release KV prefix cache (holds MLX array refs) and flush SSD tier
         if self._kv_prefix_cache is not None:
             self._kv_prefix_cache.close()
             self._kv_prefix_cache.clear()
@@ -1364,16 +1150,15 @@ class BatchedEngine(
         stream: bool,
         temperature: float | None,
         logprobs: bool,
-        use_engine_loop: bool,
         gemma4_eligible=None,
         external_eligible: bool = True,
         plain_only: bool = False,
     ) -> str | None:
         # plain_only: the request sets min_tokens / ignore_eos, which only the plain fast
-        # path (and the loop) honor; a spec route would drop them. suppress_tokens is not
+        # path honors; a spec route would drop them. suppress_tokens is not
         # one of them: the n-gram and Gemma-4 routes ban the ids themselves, and the opt-in
         # external-draft route excludes it in ``external_eligible``.
-        if use_engine_loop or logprobs or plain_only:
+        if logprobs or plain_only:
             return None
         greedy = temperature is None or temperature <= 0.0
         if (
@@ -1398,26 +1183,6 @@ class BatchedEngine(
             return "ngram"
         return None
 
-    def _should_use_engine_loop(self, use_engine_loop: bool | None) -> bool:
-        """Route through EngineCore continuous batching or the fast path.
-
-        The choice is configuration, never load: ``YUNSHU_ENGINE_LOOP=1`` (or an
-        explicit per-call ``use_engine_loop``) selects the loop; otherwise every
-        request takes the single-request fast path. (It used to switch to the
-        loop whenever EngineCore had active requests, so numerics and available
-        features depended on timing.)
-        """
-        # Safety, not a heuristic: the BatchGenerator shares the model and
-        # generation_stream with the fast path on the single MLX executor, and
-        # overlapping insert()/next() with a fast-path generate_step corrupts
-        # BatchGenerator state (IndexError in mlx_lm.generate._next). While a
-        # fast-path request runs, nothing may enter the loop.
-        if getattr(self, "_active_fast_path_count", 0) > 0:
-            return False
-        if use_engine_loop is not None:
-            return use_engine_loop
-        return bool(getattr(self, "_engine_loop_default", False))
-
     # ── Non-generative tasks: embeddings, pooling ────────────────────────────
 
     async def generate(
@@ -1437,7 +1202,6 @@ class BatchedEngine(
         seed: int | None = None,
         json_schema: dict | str | None = None,
         spec_decode: bool = False,
-        use_engine_loop: bool | None = None,
         enable_thinking: bool | None = None,
         logprobs: bool = False,
         top_logprobs: int | None = None,
@@ -1464,10 +1228,6 @@ class BatchedEngine(
             spec_decode: If True, use speculative decoding path when available.
                          Falls back to standard generation if spec decode is
                          not configured or the model lacks spec heads.
-            use_engine_loop: If True, route through EngineCore's continuous
-                             batching loop. If False, use fast path.
-                             If None (default), uses YUNSHU_ENGINE_LOOP env var
-                             (defaults to False if not set).
             logprobs: If True, return log probabilities for each generated token.
             top_logprobs: Number of top logprobs to return per token (max 20).
             timeout_seconds: Per-request generation timeout (total wall time). None:
@@ -1516,14 +1276,11 @@ class BatchedEngine(
         _REQUEST_TOP_N_SIGMA.set(
             top_n_sigma if top_n_sigma and top_n_sigma > 0 else None
         )
-        _use_engine_loop = self._should_use_engine_loop(use_engine_loop)
-
         _spec = self._spec_route(
             spec_decode=spec_decode,
             stream=False,
             temperature=temperature,
             logprobs=bool(logprobs),
-            use_engine_loop=_use_engine_loop,
             # min_tokens / ignore_eos only the plain path honors; suppress_tokens (the request's
             # or the checkpoint's default) the n-gram and Gemma-4 routes apply themselves
             plain_only=bool(min_tokens or ignore_eos),
@@ -1797,63 +1554,7 @@ class BatchedEngine(
             )
 
         # Fast path: direct generate_step on executor thread for full GPU utilization
-        if not _use_engine_loop:
-            result = await self._generate_fast(
-                prompt=prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k,
-                min_p=min_p,
-                repetition_penalty=repetition_penalty,
-                frequency_penalty=frequency_penalty,
-                presence_penalty=presence_penalty,
-                logit_bias=logit_bias,
-                stop=stop,
-                stop_token_ids=stop_token_ids,
-                seed=seed,
-                enable_thinking=enable_thinking,
-                logprobs=logprobs,
-                top_logprobs=top_logprobs,
-                thinking_budget=thinking_budget,
-                xtc_probability=xtc_probability,
-                xtc_threshold=xtc_threshold,
-                json_schema=json_schema,
-                cancel_event=cancel_event,
-                logits_processors=logits_processors,
-                priority=priority,
-                timeout_seconds=timeout_seconds,
-                lora_adapter=lora_adapter,
-                kv_cache_breakpoints=kv_cache_breakpoints,
-                min_tokens=min_tokens,
-                ignore_eos=ignore_eos,
-                suppress_tokens=suppress_tokens,
-            )
-            if _rc_hash is not None and result.finish_reason != "error":
-                try:
-                    from .gateway_optimizer import get_response_cache
-
-                    await get_response_cache().put(_rc_hash, result)
-                except Exception:
-                    logger.debug("response cache store failed", exc_info=True)
-            # prompt_logprobs — one extra prompt forward (eval/perplexity).
-            # Opt-in, length-gated (full [seq,vocab] logits are large), and run on
-            # the MLX executor so it doesn't block the event loop. Never fails the
-            # request — best-effort attach.
-            if prompt_logprobs is not None and result.finish_reason != "error":
-                try:
-                    _pl = await self._compute_prompt_logprobs_for(
-                        prompt,
-                        enable_thinking,
-                        int(prompt_logprobs),
-                    )
-                    result.prompt_logprobs = _pl
-                except Exception:
-                    logger.debug("prompt_logprobs computation failed", exc_info=True)
-            return result
-
-        # Engine loop path: continuous batching with scheduler overhead
-        result = await self._engine_core.generate(
+        result = await self._generate_fast(
             prompt=prompt,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -1867,113 +1568,45 @@ class BatchedEngine(
             stop=stop,
             stop_token_ids=stop_token_ids,
             seed=seed,
-            json_schema=json_schema,
             enable_thinking=enable_thinking,
-            thinking_budget=thinking_budget,
             logprobs=logprobs,
             top_logprobs=top_logprobs,
-            priority=priority,
+            thinking_budget=thinking_budget,
             xtc_probability=xtc_probability,
             xtc_threshold=xtc_threshold,
-            reasoning_effort=reasoning_effort,
-            logits_processors=logits_processors,
+            json_schema=json_schema,
             cancel_event=cancel_event,
+            logits_processors=logits_processors,
+            priority=priority,
+            timeout_seconds=timeout_seconds,
             lora_adapter=lora_adapter,
             kv_cache_breakpoints=kv_cache_breakpoints,
-            # The engine-loop branch silently dropped min_tokens / ignore_eos /
-            # suppress_tokens — the scheduler's _make_sampler honors them but they
-            # were never threaded here, so an engine-loop request ignored all three (e.g.
-            # min_tokens floor, ignore_eos throughput runs, suppress_tokens bans). The fast
-            # path passes them (above); make the opt-in loop match.
             min_tokens=min_tokens,
             ignore_eos=ignore_eos,
             suppress_tokens=suppress_tokens,
         )
-
-        if result is None:
-            return GenerationOutput(
-                finished=True, finish_reason="error", error="engine_core returned None"
-            )
-
-        # Map engine_core finish_reason to OpenAI-compatible finish_reason
-        finish_reason = result.finish_reason
-        if finish_reason == "memory_exceeded":
-            finish_reason = "memory_limit"
-        # Guard: finish_reason must never be None when finished=True
-        if finish_reason is None:
-            finish_reason = "stop"
-
-        # Apply output parser to extract reasoning/tool_calls from raw text
-        output_text = _clean_special_tokens(result.output_text)
-        _reasoning_tok = 0
-        try:
-            from .output_parser import parse_output
-
-            parsed = parse_output(output_text, self.model_name)
-            if parsed.finish_reason:
-                finish_reason = parsed.finish_reason
-            # Use cleaned content (reasoning stripped) as the main text
-            if parsed.reasoning and parsed.content != output_text:
-                output_text = parsed.content
-        except Exception:
-            logger.debug("output_parser failed", exc_info=True)
-
-        # Reasoning parser: model-specific reasoning extraction with token count
-        # Supplements output_parser with per-model reasoning token counting.
-        # Fall back to scheduler-computed reasoning_tokens when parser returns 0.
-        _reasoning_tok = getattr(result, "reasoning_tokens", 0) or 0
-        try:
-            from .reasoning_parser import get_reasoning_parser
-
-            rp = get_reasoning_parser(self.model_name)
-            rp_out = rp.parse(output_text)
-            if rp_out.reasoning and rp_out.reasoning_tokens > 0:
-                _reasoning_tok = rp_out.reasoning_tokens
-        except Exception:
-            logger.debug("reasoning_parser failed", exc_info=True)
-
-        # TTFT from engine_core (computed before request cleanup)
-        _ttft_ms = getattr(result, "ttft_ms", 0.0)
-
-        # Record TTFT in Prometheus (consistency with fast path)
-        if _ttft_ms > 0:
-            try:
-                from yunshu_gateway.middleware.prometheus_exporter import (
-                    get_prometheus_metrics,
-                )
-
-                pm = get_prometheus_metrics()
-                pm.observe_histogram(
-                    "ttft_seconds",
-                    _ttft_ms / 1000.0,
-                    labels={"model_id": self.model_label},
-                )
-            except Exception:
-                logger.debug(
-                    "engine loop TTFT prometheus recording failed", exc_info=True
-                )
-
-        engine_loop_result = GenerationOutput(
-            text=output_text,
-            new_text=output_text,
-            prompt_tokens=result.prompt_tokens,
-            completion_tokens=result.completion_tokens,
-            finished=True,
-            finish_reason=finish_reason,
-            reasoning_tokens=_reasoning_tok,
-            cached_tokens=getattr(result, "cached_tokens", 0),
-            logprobs=getattr(result, "logprobs", None),
-            ttft_ms=_ttft_ms,
-            error=getattr(result, "error", None),
-        )
-        if _rc_hash is not None and engine_loop_result.finish_reason != "error":
+        if _rc_hash is not None and result.finish_reason != "error":
             try:
                 from .gateway_optimizer import get_response_cache
 
-                await get_response_cache().put(_rc_hash, engine_loop_result)
+                await get_response_cache().put(_rc_hash, result)
             except Exception:
                 logger.debug("response cache store failed", exc_info=True)
-        return engine_loop_result
+        # prompt_logprobs — one extra prompt forward (eval/perplexity).
+        # Opt-in, length-gated (full [seq,vocab] logits are large), and run on
+        # the MLX executor so it doesn't block the event loop. Never fails the
+        # request — best-effort attach.
+        if prompt_logprobs is not None and result.finish_reason != "error":
+            try:
+                _pl = await self._compute_prompt_logprobs_for(
+                    prompt,
+                    enable_thinking,
+                    int(prompt_logprobs),
+                )
+                result.prompt_logprobs = _pl
+            except Exception:
+                logger.debug("prompt_logprobs computation failed", exc_info=True)
+        return result
 
     async def stream_generate(
         self,
@@ -1992,7 +1625,6 @@ class BatchedEngine(
         seed: int | None = None,
         json_schema: dict | str | None = None,
         spec_decode: bool = False,
-        use_engine_loop: bool | None = None,
         enable_thinking: bool | None = None,
         thinking_budget: int | None = None,
         reasoning_effort: str | None = None,
@@ -2014,9 +1646,7 @@ class BatchedEngine(
     ) -> AsyncIterator[GenerationOutput]:
         """Streaming text generation.
 
-        Default uses fast path (direct generate_step on executor) for single
-        requests. Set use_engine_loop=True for continuous batching path.
-        If use_engine_loop is None, uses YUNSHU_ENGINE_LOOP env var.
+        Runs the single-request fast path (direct generate_step on executor).
 
         When cancel_event is provided (e.g. from gateway disconnect detection),
         it is checked alongside the engine's internal cancel event to allow
@@ -2039,7 +1669,6 @@ class BatchedEngine(
         _REQUEST_TOP_N_SIGMA.set(
             top_n_sigma if top_n_sigma and top_n_sigma > 0 else None
         )
-        _use_engine_loop = self._should_use_engine_loop(use_engine_loop)
         # Streaming speculation follows the route table (see _spec_route): only
         # the experimental EAGLE / MTP routes stream; everything else is plain.
         _spec = self._spec_route(
@@ -2047,7 +1676,6 @@ class BatchedEngine(
             stream=True,
             temperature=temperature,
             logprobs=bool(logprobs),
-            use_engine_loop=_use_engine_loop,
         )
         spec_decode = _spec is not None
         # Resolve reasoning_effort → thinking_budget if not explicitly set
@@ -2118,167 +1746,40 @@ class BatchedEngine(
             _cancel_event = None
             _tracker = None
 
-        # Fast path: bypass EngineCore for single-request streaming
-        if not _use_engine_loop:
-            try:
-                async for output in self._stream_generate_fast(
-                    prompt=prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                    min_p=min_p,
-                    repetition_penalty=repetition_penalty,
-                    frequency_penalty=frequency_penalty,
-                    presence_penalty=presence_penalty,
-                    logit_bias=logit_bias,
-                    stop=stop,
-                    stop_token_ids=stop_token_ids,
-                    seed=seed,
-                    enable_thinking=enable_thinking,
-                    thinking_budget=thinking_budget,
-                    xtc_probability=xtc_probability,
-                    xtc_threshold=xtc_threshold,
-                    json_schema=json_schema,
-                    cancel_event=_cancel_event,
-                    logprobs=bool(logprobs),
-                    top_logprobs=top_logprobs,
-                    logits_processors=logits_processors,
-                    priority=priority,
-                    timeout_seconds=timeout_seconds,
-                    lora_adapter=lora_adapter,
-                    kv_cache_breakpoints=kv_cache_breakpoints,
-                    min_tokens=min_tokens,
-                    ignore_eos=ignore_eos,
-                    suppress_tokens=suppress_tokens,
-                ):
-                    yield output
-            finally:
-                if _tracker is not None:
-                    try:
-                        _tracker.unregister(_stream_req_id)
-                    except Exception:
-                        logger.debug("request tracker cleanup failed", exc_info=True)
-            return
-
-        # Engine loop path: continuous batching with scheduler
-        await self._ensure_engine_core()
-        _stream_t0 = time.perf_counter()
-        request_id = await self._engine_core.add_request(
-            prompt=prompt,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            min_p=min_p,
-            repetition_penalty=repetition_penalty,
-            frequency_penalty=frequency_penalty,
-            presence_penalty=presence_penalty,
-            logit_bias=logit_bias,
-            stop=stop,
-            stop_token_ids=stop_token_ids,
-            seed=seed,
-            json_schema=json_schema,
-            enable_thinking=enable_thinking,
-            thinking_budget=thinking_budget,
-            priority=priority,
-            logprobs=bool(logprobs),
-            top_logprobs=top_logprobs,
-            xtc_probability=xtc_probability,
-            xtc_threshold=xtc_threshold,
-            reasoning_effort=reasoning_effort,
-            logits_processors=logits_processors,
-            images=images,
-            lora_adapter=lora_adapter,
-        )
-
-        finished_normally = False
-        _first_token = True
-        _stream_ttft_ms = 0.0
         try:
-            async for output in self._engine_core.stream_outputs(
-                request_id, cancel_event=_cancel_event
+            async for output in self._stream_generate_fast(
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
+                stop=stop,
+                stop_token_ids=stop_token_ids,
+                seed=seed,
+                enable_thinking=enable_thinking,
+                thinking_budget=thinking_budget,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
+                json_schema=json_schema,
+                cancel_event=_cancel_event,
+                logprobs=bool(logprobs),
+                top_logprobs=top_logprobs,
+                logits_processors=logits_processors,
+                priority=priority,
+                timeout_seconds=timeout_seconds,
+                lora_adapter=lora_adapter,
+                kv_cache_breakpoints=kv_cache_breakpoints,
+                min_tokens=min_tokens,
+                ignore_eos=ignore_eos,
+                suppress_tokens=suppress_tokens,
             ):
-                # Check cancel event (gateway disconnect or internal cancel)
-                if _cancel_event is not None and _cancel_event.is_set():
-                    logger.debug(
-                        f"Cancel event triggered during streaming: {request_id}"
-                    )
-                    # Yield terminal stop chunk so consumer sees finished=True
-                    yield GenerationOutput(
-                        text="",
-                        new_text="",
-                        prompt_tokens=getattr(output, "prompt_tokens", 0)
-                        if hasattr(output, "prompt_tokens")
-                        else 0,
-                        completion_tokens=getattr(output, "completion_tokens", 0)
-                        if hasattr(output, "completion_tokens")
-                        else 0,
-                        finished=True,
-                        finish_reason="stop",
-                        ttft_ms=_stream_ttft_ms,
-                        cached_tokens=getattr(output, "cached_tokens", 0),
-                        reasoning_tokens=getattr(output, "reasoning_tokens", 0),
-                    )
-                    break
-                cleaned = _clean_special_tokens(output.new_text)
-                finish_reason = output.finish_reason
-                if finish_reason == "memory_exceeded":
-                    finish_reason = "memory_limit"
-                # Guard: finish_reason must never be None when finished=True
-                if output.finished and finish_reason is None:
-                    finish_reason = "stop"
-                # Compute TTFT on first streamed output
-                _ttft_ms = 0.0
-                if _first_token:
-                    _stream_ttft_ms = round(
-                        (time.perf_counter() - _stream_t0) * 1000, 1
-                    )
-                    _ttft_ms = _stream_ttft_ms
-                    _first_token = False
-                    # Record TTFT in Prometheus (consistency with fast path)
-                    try:
-                        from yunshu_gateway.middleware.prometheus_exporter import (
-                            get_prometheus_metrics,
-                        )
-
-                        pm = get_prometheus_metrics()
-                        pm.observe_histogram(
-                            "ttft_seconds",
-                            _stream_ttft_ms / 1000.0,
-                            labels={"model_id": self.model_label},
-                        )
-                    except Exception:
-                        logger.debug(
-                            "engine loop streaming TTFT prometheus recording failed",
-                            exc_info=True,
-                        )
-                gen_output = GenerationOutput(
-                    text=_clean_special_tokens(output.output_text),
-                    new_text=cleaned,
-                    prompt_tokens=output.prompt_tokens,
-                    completion_tokens=output.completion_tokens,
-                    finished=output.finished,
-                    finish_reason=finish_reason,
-                    reasoning_tokens=getattr(output, "reasoning_tokens", 0),
-                    cached_tokens=getattr(output, "cached_tokens", 0),
-                    logprobs=getattr(output, "logprobs", None),
-                    ttft_ms=_ttft_ms,
-                    current_state=getattr(output, "current_state", None),
-                    error=getattr(output, "error", None),
-                    prefill_progress=getattr(output, "prefill_progress", None),
-                )
-                if output.finished:
-                    finished_normally = True
-                yield gen_output
-        except GeneratorExit:
-            logger.debug(f"Client disconnected during streaming: {request_id}")
+                yield output
         finally:
-            if not finished_normally:
-                try:
-                    await self._engine_core.abort_request(request_id)
-                except Exception:
-                    logger.debug("stream abort failed", exc_info=True)
             if _tracker is not None:
                 try:
                     _tracker.unregister(_stream_req_id)

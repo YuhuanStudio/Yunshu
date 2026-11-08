@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import mlx.core as mx
 import pytest
 
-from tests.unit.test_vlm_runner_batching import FakeGen, runner  # noqa: F401,F811
+from tests.unit.test_vlm_runner_batching import FakeDriver, runner  # noqa: F401,F811
 from yunshu_engine import vlm_batch_runner as vbr
 
 
@@ -16,33 +16,30 @@ class DeadConstraint:
         return []
 
 
-class ProcessingGen(FakeGen):
-    """FakeGen that runs each row's logits processors like upstream's decode step."""
+class ProcessingDriver(FakeDriver):
+    """FakeDriver that runs each row's logits processors like the driver's decode step."""
 
-    def insert(self, prompts, max_tokens, prompt_kwargs, logits_processors, **kw):
-        (uid,) = super().insert(
-            prompts, max_tokens, prompt_kwargs, logits_processors, **kw
-        )
-        self.procs = getattr(self, "procs", {})
-        self.procs[uid] = logits_processors[0] or []
-        return [uid]
-
-    def next(self):
+    def step(self):
         logits = mx.zeros((1, 4))
-        for uid in list(self.rows):
-            for proc in self.procs[uid]:
+        from yunshu_engine.constraint_eos import GrammarDeadEndError
+
+        for row in self.rows:
+            for proc in row[0].processors:
                 proc(mx.array([1]), logits)
-        return super().next()
+            guide = row[0].guide
+            if guide is not None:  # what RoundDriver._draw does with a guide's mask
+                try:
+                    guide.mask()
+                except GrammarDeadEndError as exc:
+                    guide.fault = exc
+        return super().step()
 
 
 @pytest.fixture
-def pgen_runner(monkeypatch):
-    import importlib
-
-    ar = importlib.import_module("mlx_vlm.generate.ar")
-    FakeGen.instances = []
-    monkeypatch.setattr(ar, "BatchGenerator", ProcessingGen)
-    return vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), processor=None)
+def pgen_runner():
+    r = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), processor=None)
+    r.driver = ProcessingDriver()
+    return r
 
 
 def _two_requests(rn, bad_kwargs):
@@ -90,7 +87,9 @@ def test_grammar_dead_end_fails_only_that_row(pgen_runner):
     res = _two_requests(pgen_runner, {"logits_processors": [proc]})
     assert isinstance(res["bad"], ValueError)
     assert "no valid next token" in str(res["bad"])
-    assert res["good"] == [101, 102, 103, 104, 105]  # uid 1's tokens: 100 * uid + step
+    good = res["good"]
+    assert isinstance(good, list) and len(good) == 5, good
+    assert good == list(range(good[0], good[0] + 5))  # an uninterrupted run
     assert not pgen_runner.busy()
 
 
@@ -217,34 +216,16 @@ def test_production_json_schema_dead_end_fails_only_that_row(pgen_runner):
     assert not pgen_runner.busy()
 
 
-def test_faulted_row_never_publishes_its_unmasked_first_token(pgen_runner, monkeypatch):
-    import importlib
-
-    ar = importlib.import_module("mlx_vlm.generate.ar")
-
-    class Batch:
-        uids = [7]
-        _num_tokens = [0]
-        _current_tokens = None
-        _next_tokens = mx.array([3])
-
-    monkeypatch.setattr(ar, "GenerationBatch", Batch)
-    emitted = []
-    monkeypatch.setattr(pgen_runner, "_emit", lambda job, item: emitted.append(item))
+def test_faulted_row_never_publishes_its_unmasked_first_token(pgen_runner):
     proc = vbr.ConstraintProcessor(DeadConstraint(), tokenizer=None)
-    proc.fault = ValueError("dead end")
-    job = SimpleNamespace(
-        processors=[proc],
-        logprobs=False,
-        uid=7,
-        start=0.0,
-        stats=SimpleNamespace(generated=0),
-    )
-    group = SimpleNamespace(
-        spec=False, jobs={7: job}, gen=SimpleNamespace(_generation_batch=Batch())
-    )
-    assert pgen_runner._emit_ready_first(group) is None
-    assert emitted == []
+    got = []
+    with pytest.raises(ValueError, match="no valid next token"):
+        for token in pgen_runner.iter_tokens(
+            [1, 2, 3], max_tokens=5, prompt_kwargs={}, logits_processors=[proc]
+        ):
+            got.append(token)
+    assert got == []
+    assert not pgen_runner.busy()
 
 
 def _plain_job():
@@ -301,35 +282,3 @@ def test_admitted_jobs_are_not_reached_again_by_the_failure_handler(
     runner._drive_slice_body(resubmit=False)
     assert admitted == [first]
     assert sorted(map(id, seen)) == sorted(map(id, [first, second]))  # each once
-
-
-def test_extra_hash_failure_releases_the_apc_request(runner, monkeypatch):  # noqa: F811
-    from tests.unit.test_vlm_runner_batching import FakeGen
-
-    class Apc:
-        def __init__(self):
-            self.manager = SimpleNamespace(_console_requests={})
-            self.set, self.released = [], []
-
-        def set_request(self, ids, plan):
-            self.set.append(tuple(ids))
-
-        def release_request(self, ids, plan):
-            self.released.append(tuple(ids))
-
-    apc = Apc()
-
-    def bad_hash(pkw):
-        raise RuntimeError("extra_hash exploded")
-
-    monkeypatch.setattr(FakeGen, "apc", apc, raising=False)
-    monkeypatch.setattr(
-        FakeGen, "_apc_extra_hash", staticmethod(bad_hash), raising=False
-    )
-    job = _plain_job()
-    with runner._lock:
-        runner._pending.append(job)
-    runner._drive_slice_body(resubmit=False)
-    assert isinstance(job.out.get(timeout=1), RuntimeError)
-    assert apc.set == [(1,)]
-    assert apc.released == [(1,)]

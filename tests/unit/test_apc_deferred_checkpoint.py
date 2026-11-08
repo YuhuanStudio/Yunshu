@@ -9,7 +9,6 @@ mx = pytest.importorskip("mlx.core")
 from mlx_vlm.models.cache import ArraysCache, KVCache  # noqa: E402
 
 from tests.unit.test_apc_manager import _coordinator, _mgr  # noqa: E402
-from yunshu_engine import vlm_batch_runner as vbr  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -190,70 +189,6 @@ def test_late_capture_keeps_its_groups_generation():
     assert list(manager._born.values()) == [1]
 
 
-def test_runner_emits_first_token_before_checkpoint_flush():
-    events = []
-    coordinator = SimpleNamespace(
-        defer_checkpoint_stores=False,
-        flush_deferred_checkpoints=lambda: events.append("flush"),
-    )
-
-    def step():
-        assert coordinator.defer_checkpoint_stores
-        events.append("step")
-        return [], [SimpleNamespace(uid=1, token=42, finish_reason=None)]
-
-    runner = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), None)
-    runner._emit = lambda *args: events.append("emit")
-    runner._note_cache = lambda *args: None
-    runner._note_prefill = lambda *args: None
-    job = SimpleNamespace(stats=vbr.RunStats(), start=0.0, logprobs=False)
-    group = vbr._Group(SimpleNamespace(next=step, apc=coordinator), spec=False)
-    group.jobs[1] = job
-    runner._step_generator(group)
-    assert events == ["step", "emit", "flush"]
-    assert not coordinator.defer_checkpoint_stores
-
-
-def test_lone_ar_uses_speculative_target_arithmetic(monkeypatch):
-    from yunshu_engine.kernels import batch_invariant, ragged_kv
-
-    runner = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), None)
-    runner.ragged_kv = "bf16"
-    monkeypatch.setitem(batch_invariant._STATE, "installed", True)
-    monkeypatch.setitem(batch_invariant._STATE, "active", False)
-    seen = []
-    runner._step_generator = lambda group, **kwargs: seen.append(
-        (batch_invariant._STATE["active"], ragged_kv._STATE["dense_lane"])
-    )
-    group = vbr._Group(SimpleNamespace(), spec=False)
-    group.jobs[1] = SimpleNamespace(cancel_event=None, abandoned=False)
-    runner._step_group(group)
-    assert seen == [(True, True)]
-    assert not batch_invariant._STATE["active"]
-    assert not ragged_kv._STATE["dense_lane"]
-
-
-def test_failed_prefill_discards_pending_captures():
-    events = []
-    coordinator = SimpleNamespace(
-        defer_checkpoint_stores=False,
-        flush_deferred_checkpoints=lambda: events.append("flush"),
-        discard_deferred_checkpoints=lambda: events.append("discard"),
-    )
-
-    def step():
-        assert coordinator.defer_checkpoint_stores
-        raise RuntimeError("prefill failed")
-
-    runner = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), None)
-    group = vbr._Group(SimpleNamespace(next=step, apc=coordinator), spec=False)
-    group.jobs[1] = SimpleNamespace()
-    with pytest.raises(RuntimeError, match="prefill failed"):
-        runner._step_generator(group)
-    assert events == ["discard"]
-    assert not coordinator.defer_checkpoint_stores
-
-
 def test_lone_row_arithmetic_revision_is_in_apc_identity():
     from yunshu_engine.kernels import lane_linear
     from yunshu_engine.vlm_engine import VLMEngine
@@ -279,29 +214,6 @@ def test_sg8_target_also_versions_its_lone_row_arithmetic():
         )
     )
     assert engine._prefill_kernel_id().endswith("+single-row-invariant-v1")
-
-
-def test_cancel_discards_capture_even_after_another_row_joins(monkeypatch):
-    events = []
-    runner = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), None)
-    runner._finish = lambda group, uid, reason: group.jobs.pop(uid)
-    runner._step_generator = lambda group, **kwargs: events.append("step")
-    group = vbr._Group(
-        SimpleNamespace(
-            remove=lambda uid: None,
-            apc=SimpleNamespace(
-                discard_deferred_checkpoints=lambda: events.append("discard")
-            ),
-        ),
-        spec=False,
-    )
-    group.jobs = {
-        1: SimpleNamespace(cancel_event=None, abandoned=True),
-        2: SimpleNamespace(cancel_event=None, abandoned=False),
-    }
-    runner._step_group(group)
-    assert events == ["discard", "step"]
-    assert list(group.jobs) == [2]
 
 
 def test_single_restore_preserves_capacity_without_aliasing_array_handles():
@@ -379,37 +291,6 @@ def test_rejected_deferred_admission_does_not_publish_policy(monkeypatch):
     assert policy["written"] == 0
     assert manager._retention == {}
     assert manager._span_plans == {}
-
-
-def test_one_token_completion_waits_for_deferred_publication():
-    events = []
-    policy = {"written": 0}
-
-    def flush():
-        policy["written"] = 113
-        events.append("flush")
-
-    coordinator = SimpleNamespace(
-        defer_checkpoint_stores=False, flush_deferred_checkpoints=flush
-    )
-    response = SimpleNamespace(uid=1, token=42, finish_reason="length")
-    runner = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), None)
-    runner._emit = lambda *args: events.append("emit")
-    runner._note_cache = lambda *args: None
-    runner._note_prefill = lambda *args: None
-
-    def finish(*args):
-        assert policy["written"] == 113
-        events.append("done")
-
-    runner._finish = finish
-    job = SimpleNamespace(stats=vbr.RunStats(), start=0.0, logprobs=False)
-    group = vbr._Group(
-        SimpleNamespace(next=lambda: ([], [response]), apc=coordinator), spec=False
-    )
-    group.jobs[1] = job
-    runner._step_generator(group)
-    assert events == ["emit", "flush", "done"]
 
 
 @pytest.mark.parametrize(
@@ -716,3 +597,76 @@ def test_sliding_window_checkpoint_is_deferred_and_survives_live_mutation(monkey
     frozen = calls[0][0]
     assert frozen.offset == 32
     assert frozen.keys[:, :, :32, :].tolist() == [[[[1.0] * 4] * 32]]
+
+
+def test_qsa_checkpoint_is_deferred_with_its_indexer_and_matches_the_synchronous_copy(
+    monkeypatch,
+):
+    """Flash-Next's QSAKVCache (K/V + indexer keys, positions, block summaries) is captured lazily
+    like KVCache: nothing is copied before the first token, live mutation afterwards does not
+    reach the capture, and it equals what upstream's clone makes of the live cache."""
+    from mlx_vlm.apc_adapters import clone_cache_entry
+    from mlx_vlm.models.qwen4_exp.language import QSAKVCache
+
+    manager = _mgr()
+    coordinator = _coordinator(manager)
+    coordinator.defer_checkpoint_stores = True
+    qsa = QSAKVCache()
+    qsa.update_and_fetch(mx.ones((1, 1, 32, 4)) * 2, mx.ones((1, 1, 32, 4)) * 3)
+    qsa.update_indexer(mx.ones((1, 32, 4)) * 5, mx.arange(32)[None, None, :])
+    qsa.index_block_keys = mx.ones((1, 2, 4)) * 6
+    qsa.index_block_ratio = 16
+    mx.eval(qsa.keys, qsa.values, qsa.index_keys, qsa.index_position_ids)
+    reference = clone_cache_entry(qsa, min_capacity_tokens=None, eval_targets=[])
+    calls = []
+    monkeypatch.setattr(
+        manager, "store_exact_cache", lambda ids, c, **kw: calls.append(c) or True
+    )
+    assert coordinator.store_checkpoint(list(range(32)), [qsa], extra_hash=1)
+    assert calls == []  # deferred, not copied on the first-token path
+    qsa.keys[:, :, :32, :] = 0
+    qsa.index_keys = mx.zeros((1, 32, 4))
+    coordinator.flush_deferred_checkpoints()
+    (frozen,) = calls[0]
+    assert type(frozen) is QSAKVCache and frozen.offset == 32
+    for got, want in zip(frozen.state[:5], reference.state[:5], strict=True):
+        assert got.tolist() == want.tolist()
+    assert frozen.index_block_ratio == reference.index_block_ratio == 16
+
+
+def _qsa_pending(n, extra_hash=0):
+    from mlx_vlm.models.qwen4_exp.language import QSAKVCache
+
+    q = QSAKVCache()
+    q.keys = mx.arange(n * 4, dtype=mx.float32).reshape(1, 1, n, 4)
+    q.values = q.keys + 1000
+    q.offset = n
+    q.index_keys = mx.arange(n * 2, dtype=mx.float32).reshape(1, n, 2) + 5000
+    q.index_position_ids = mx.arange(n).reshape(1, 1, n)
+    q.index_block_keys = mx.ones((1, 2, 2)) * n
+    q.index_block_ratio = 16
+    targets = [q.keys, q.values, q.index_keys, q.index_position_ids, q.index_block_keys]
+    return (tuple(range(n)), [q], extra_hash, targets, 1, None, ())
+
+
+def test_qsa_shorter_checkpoint_shares_kv_and_indexer_rows_of_the_longer_one():
+    from yunshu_engine.apc_manager import share_prefix_rows
+
+    short, long_ = _qsa_pending(32), _qsa_pending(48)
+    q = short[1][0]
+    want = [q.keys.tolist(), q.index_keys.tolist(), q.index_position_ids.tolist()]
+    own_keys = q.keys
+    views = share_prefix_rows([short, long_])
+    mx.eval(views)
+    assert len(views) == 4 and q.keys is not own_keys
+    assert [
+        q.keys.tolist(),
+        q.index_keys.tolist(),
+        q.index_position_ids.tolist(),
+    ] == want
+    assert q.index_keys.shape == (1, 32, 2) and q.offset == 32
+    assert q.index_block_keys.tolist() == [
+        [[32.0] * 2] * 2
+    ]  # block summaries stay its own copy
+    assert len(short[3]) == 1  # only the block summaries are still copied on their own
+    assert len(long_[3]) == 5

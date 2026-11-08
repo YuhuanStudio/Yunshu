@@ -213,6 +213,8 @@ def test_full_suite_has_every_stage():
         "probe",
         "longqa",
         "conc",
+        "phaseb-identity",
+        "phaseb-speed",
         "ttft_profile",
         "ssd_ttft",
         "ssd_ttft_profile",

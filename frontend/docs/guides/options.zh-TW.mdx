@@ -6,7 +6,7 @@ description: 輸出不保證與預設路徑相同的選用設定，以及將它�
 Yunshu 的規則很單純：**無損**最佳化（與一般路徑產生相同的 token）可以成為預設值；**有損或輸出不相同**的最佳化則是穩定的使用者選項，預設關閉，不會因為某次基準測試就替你打開。本頁列出所有這類選項。預設值定義在設定註冊表（`python/yunshu_engine/settings.py`），實際生效的值可用 `yunshu config` 查看。完整設定表請見[設定](/docs/guides/configuration)。
 
 <Callout type="warn">
-第一節的四個選項（`YUNSHU_SPEC_UNVERIFIED`、`YUNSHU_DRAFT_MODEL`、`YUNSHU_ENGINE_LOOP`、`YUNSHU_OVERLAP`）是穩定選項，不是實驗功能，但**不保證產生與預設路徑相同的 token**。只有在你接受輸出可能與一般解碼不同時才開啟。每個選項的限制見下文。
+第一節的兩個選項（`YUNSHU_SPEC_UNVERIFIED`、`YUNSHU_DRAFT_MODEL`）是穩定選項，不是實驗功能，但**不保證產生與預設路徑相同的 token**。只有在你接受輸出可能與一般解碼不同時才開啟。每個選項的限制見下文。
 </Callout>
 
 ## 輸出不相同的服務選項
@@ -17,8 +17,6 @@ Yunshu 的規則很單純：**無損**最佳化（與一般路徑產生相同的
 |---|---|---|
 | `YUNSHU_SPEC_UNVERIFIED` | `''`（關閉）或 `eagle` | 在文字模型上啟用以外部 `mlx-lm` draft 模型進行的推測解碼 |
 | `YUNSHU_DRAFT_MODEL` | 未設定 | `YUNSHU_SPEC_UNVERIFIED=eagle` 使用的 draft 檢查點路徑 |
-| `YUNSHU_ENGINE_LOOP` | 關閉 | 文字模型改用連續批次迴圈，而不是單一請求的快速路徑 |
-| `YUNSHU_OVERLAP` | `''`（關閉）、`cpu_gpu` 或 `two_batch` | 讓該迴圈中的 CPU 與 GPU 工作重疊 |
 
 ### 外部 draft 模型（`YUNSHU_SPEC_UNVERIFIED` 與 `YUNSHU_DRAFT_MODEL`）
 
@@ -28,21 +26,6 @@ Yunshu 的規則很單純：**無損**最佳化（與一般路徑產生相同的
 - 只有貪婪（temperature 為 0 或未設定）、非串流、要求推測或預設啟用推測、且使用預設取樣與懲罰參數的請求才會走這條路。Schema 或文法限制、自訂 logits processor、stop 字串、思考預算、LoRA 與 token mask 選項仍走一般快速路徑，logprobs 請求也是。
 - 輸出不保證與一般解碼逐 token 相同。註冊表記錄 2026-10-24 的一次檢查中，試過的每個提示都出現差異，速度則依提示從變慢到變快不等；這些數字不在基準測試紀錄中，因此這裡不引用。
 - 當你有一個與大型文字模型相配的小型 draft，且重視速度勝過精確重現時才使用。要無損推測請用 n-gram 或 suffix 草稿（`YUNSHU_NGRAM_DEFAULT`、`YUNSHU_SPEC_PROPOSER`）或 Qwen3.5 系列 runner。
-
-### 連續批次迴圈（`YUNSHU_ENGINE_LOOP`）
-
-設定 `YUNSHU_ENGINE_LOOP=1` 後，文字模型改由 `EngineCore`（`python/yunshu_engine/engine_core.py`）服務，它會把並行請求合批；否則由 `_generate_fast` 服務，並行請求會被序列化。
-
-- 多個並行文字請求時，總吞吐量較高；只有一個請求時，註冊表記錄有小幅損失。確切數字不在基準測試紀錄中，因此這裡不列出。
-- 批次輸出與單一請求路徑不保證逐 token 相同，因為批次的數值計算不同。
-- 部分功能在迴圈上行為不同，例如 SpecPrefill 不會套用。
-- 它不影響 VLM，VLM 一律使用 VLM batch runner。
-
-適合並行用戶端很多、吞吐量比逐位元可重現性更重要的純文字伺服器。
-
-### CPU 與 GPU 重疊（`YUNSHU_OVERLAP`）
-
-`cpu_gpu` 讓排程工作與 GPU 步驟重疊；`two_batch` 把一個批次切成兩半讓它們重疊。兩者都在 `EngineCore` 啟動時讀取，因此只有搭配 `YUNSHU_ENGINE_LOOP=1` 才有意義，並繼承其輸出不相同的特性。註冊表記錄在 3B 文字模型上沒有可量測的效果（2026-10-24），除非你在自己的模型上量到好處，否則請保持關閉。
 
 ## 有損記憶體選項
 

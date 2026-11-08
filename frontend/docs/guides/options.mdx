@@ -6,19 +6,17 @@ description: The opt-in settings whose output is not guaranteed identical to the
 Yunshu's rule is simple: a **lossless** optimization (same tokens as the plain path) may become the default; a **lossy or non-identical** one is a stable user option that is off by default, and a benchmark never turns it on for you. This page lists every such option. Defaults are in the settings registry (`python/yunshu_engine/settings.py`); effective values are shown by `yunshu config`. For the full table of settings see [Configuration](/docs/guides/configuration).
 
 <Callout type="warn">
-The four options in the first section (`YUNSHU_SPEC_UNVERIFIED`, `YUNSHU_DRAFT_MODEL`, `YUNSHU_ENGINE_LOOP`, `YUNSHU_OVERLAP`) are stable options, not experiments, but they are **not guaranteed to produce the same tokens as the default path**. Turn one on only if you accept that output can differ from plain decoding. Each has its own constraints below.
+The two options in the first section (`YUNSHU_SPEC_UNVERIFIED`, `YUNSHU_DRAFT_MODEL`) are stable options, not experiments, but they are **not guaranteed to produce the same tokens as the default path**. Turn one on only if you accept that output can differ from plain decoding. Each has its own constraints below.
 </Callout>
 
 ## Non-identical serving options
 
-All four apply to text-only `mlx-lm` models. The Qwen3.5-family VLM runner has its own lossless speculation (MTP, DFlash) and does not use them. See [Speculative decoding](/docs/internals/speculative-decoding).
+Both apply to text-only `mlx-lm` models. The Qwen3.5-family VLM runner has its own lossless speculation (MTP, DFlash) and does not use them. See [Speculative decoding](/docs/internals/speculative-decoding).
 
 | Setting | Default | What it does |
 |---|---|---|
 | `YUNSHU_SPEC_UNVERIFIED` | `''` (off), or `eagle` | Enables speculative decoding with an external `mlx-lm` draft model on text models |
 | `YUNSHU_DRAFT_MODEL` | unset | Path of the draft checkpoint used by `YUNSHU_SPEC_UNVERIFIED=eagle` |
-| `YUNSHU_ENGINE_LOOP` | off | Serves text models with the continuous-batching loop instead of the single-request fast path |
-| `YUNSHU_OVERLAP` | `''` (off), `cpu_gpu` or `two_batch` | Overlaps CPU and GPU work in that loop |
 
 ### External draft model (`YUNSHU_SPEC_UNVERIFIED` and `YUNSHU_DRAFT_MODEL`)
 
@@ -28,21 +26,6 @@ All four apply to text-only `mlx-lm` models. The Qwen3.5-family VLM runner has i
 - The route is taken only for greedy (temperature 0 or unset), non-streaming requests that ask for speculation or default to it, with default sampling and penalties. Schema or grammar constraints, custom logits processors, stop strings, thinking budgets, LoRA and token-mask options keep the regular fast path, and so do logprob requests.
 - Output is not guaranteed to be token-identical to plain decode. The registry records that a check on 2026-10-24 differed on every prompt it tried, and that speed ranged from slower to faster depending on the prompt; no figure from it is quoted here, because it is not in the benchmark log.
 - Use it when you have a well-matched small draft for a large text model and prefer speed over exact reproducibility. For lossless speculation use n-gram or suffix drafting (`YUNSHU_NGRAM_DEFAULT`, `YUNSHU_SPEC_PROPOSER`) or the Qwen3.5-family runner.
-
-### Continuous-batching loop (`YUNSHU_ENGINE_LOOP`)
-
-With `YUNSHU_ENGINE_LOOP=1`, text models are served by `EngineCore` (`python/yunshu_engine/engine_core.py`), which batches concurrent requests, instead of `_generate_fast`, which serializes them.
-
-- Aggregate throughput with several concurrent text requests is higher; at one request the registry records a small loss. Exact figures are not in the benchmark log, so none are given here.
-- Batched outputs are not token-identical to the single-request path, because the numerics of a batch differ.
-- Some features act differently on the loop; for example, SpecPrefill is not applied on it.
-- It does not affect VLMs, which always use the VLM batch runner.
-
-Use it for a text-only server with many simultaneous clients, where throughput matters more than bitwise repeatability.
-
-### CPU and GPU overlap (`YUNSHU_OVERLAP`)
-
-`cpu_gpu` overlaps scheduling work with the GPU step; `two_batch` splits a batch into two halves that overlap. Both are read when `EngineCore` starts, so they only matter with `YUNSHU_ENGINE_LOOP=1` and inherit its non-identical output. The registry records no measurable effect on a 3B text model (2026-10-24), so leave it off unless you measure a gain on your own model.
 
 ## Lossy memory options
 

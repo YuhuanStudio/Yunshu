@@ -24,7 +24,6 @@ const settingdesc = {
   YUNSHU_WARM_PROMPTS:
     "启动时预填充以预热前缀缓存的提示词：以 `||` 分隔的文本或文件路径。",
   YUNSHU_CONFIG: "包含 `YUNSHU_*` 设置的 TOML 配置文件（优先级低于环境变量）。",
-  YUNSHU_MAX_CONCURRENT: "同时受理请求数的上限；未设置则自适应，起始值为 8。",
   YUNSHU_UNCACHED_SCHEDULING:
     "按预估未命中缓存的工作量和等待时间排序 VLM 预填充原子，保护交互式预填充，并在原子之间预留实测的解码时间，不改变任何 token 区间。仅在合格的批不变内核下默认开启，其他后端除非启用否则保持先进先出；停用可恢复上游排序。",
   YUNSHU_DECODE_TAIL_SHARE:
@@ -39,7 +38,6 @@ const settingdesc = {
     "同时保留的孤儿生成上限；每个都占用解码行与 KV，直到被接手或超时。超出时取消最旧的。",
   YUNSHU_MEMORY_PRESSURE_REJECT:
     "Metal 工作集使用比例的阈值；超过时若仍有其他请求在运行，新的生成请求会以 503 和 `Retry-After` 拒绝，以避免内存不足。空闲的服务器不会拒绝。0 表示关闭。",
-  YUNSHU_COMPLETION_BATCH_SIZE: "文本引擎：一起解码的序列数上限。",
   YUNSHU_SAMPLING_DEFAULTS:
     "请求未带采样参数时的默认来源：model 依次采用模型公布的各模式建议、generation_config.json、API 默认；api 只用 API 默认。请求带的值永远优先。",
   YUNSHU_DEFAULT_MAX_TOKENS:
@@ -153,7 +151,7 @@ const settingdesc = {
   YUNSHU_VLM_APC_DISK_DIR:
     "APC SSD 层的目录；未设置时为 `~/.yunshu/cache/apc`（内置磁盘）。可放到高速卷上以保持内置磁盘干净。",
   YUNSHU_KV_PRECISION:
-    "Qwen3.5 系列运行器共享解码批的 KV 缓存精度：`bf16`（无损）或 `int8`（KV 内存和读取带宽约为 0.53 倍，注意力有小幅误差，以质量换内存）。单个请求和推测解码通道保持 bf16。",
+    "Qwen3.5 系列运行器解码行的 KV 缓存精度：`bf16`（无损）或 `int8`（KV 内存和读取带宽约为 0.53 倍，注意力有小幅误差，以质量换内存）。选 int8 时每个解码行的 KV 都是 int8，单个请求与并发请求一样，推测解码的草稿与验证也读取 int8 KV，所以回复不会因为有没有其他请求重叠而不同。预填与前缀缓存保持 bf16。",
   YUNSHU_VLM_APC_DISK_GB:
     "APC SSD 层的大小上限（GiB），整个目录共用一份预算（跨命名空间先淘汰最久未使用的文件；0 表示不设上限，仍受剩余空间保留限制）。未设置时为卷的四分之一，最多 64 GiB。27B 检查点每个 token 约 130 KiB，因此 64 GiB 约可容纳 500K token。",
   YUNSHU_PREFILL_MATMUL:
@@ -221,10 +219,6 @@ const settingdesc = {
     "Qwen3.8-Flash-Next（qwen4_exp），M5 级 GPU：在张量单元上执行提示行的索引稀疏 QSA 注意力，每个（行，key 头）一个线程组，共享同一 key 头的 12 个 query 头作为一个矩阵乘操作数，选中的 key 只读一次，取代上游对每个 query 头重复读取选中 key 的标量核心。每一行的结果只取决于该行，因此预填与分块方式无关；算术与上游不同（fp32 累加顺序不同，并非质量变化）。解码与推测验证不受影响。默认开启：Flash-Next oQ2.5e 的 8K/32K/128K 冷 TTFT 分别降低 25/24/20%，推测开关一致与缓存命中一致仍成立，输出比原生核心更接近 fp32 注意力参考（KLD 0.0685 对 0.0731）。关闭：使用上游纯量核心。",
   YUNSHU_QWEN4_LANE:
     "Qwen3.8-Flash-Next（qwen4_exp）：解码、推测验证与草稿统一以行不变的 lane 矩阵乘处理稠密量化投影，取代上游逐行的单行 qmv。多一行验证不再成倍增加稠密权重读取量；推测输出仍与普通解码相同。输出与默认算术相差最后一位。上游融合 head 内核读不了的 head 格式（如 6-bit）会强制启用。宽于 32 行的预填块仍用 MLX 的量化矩阵乘。",
-  YUNSHU_ENGINE_LOOP:
-    "文本模型：使用 EngineCore 连续批处理循环，取代单请求快速路径。",
-  YUNSHU_OVERLAP:
-    "文本引擎循环：让 CPU 与 GPU 工作重叠（`cpu_gpu`），或将批拆成两个相互重叠的一半（`two_batch`）。",
   YUNSHU_SPEC_UNVERIFIED:
     "文本模型：显式启用未经验证的外部 mlx-lm 草稿实验。`eagle` 是沿用的路由名称，普通语言模型草稿即可，不需要训练过的 EAGLE 头。仅适用于使用默认采样和惩罚的贪婪、非流式请求；schema、自定义处理器、停止字符串、思考预算、LoRA 和 token 掩码选项仍走常规快速路径。",
   YUNSHU_DRAFT_MODEL:

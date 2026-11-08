@@ -195,8 +195,8 @@ def test_every_command_has_help(command):
     [
         ["config"],
         ["config", "path"],
-        ["config", "set", "max_concurrent", "2"],
-        ["config", "unset", "max_concurrent"],
+        ["config", "set", "max_loras", "2"],
+        ["config", "unset", "max_loras"],
     ],
 )
 def test_config_global_json(args):

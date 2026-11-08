@@ -1,0 +1,383 @@
+# Upstream (inspired): ashhart/TensorFold (MIT) src/tensorfold/kernels/qwen/dense/v1/lane_multi.py, src/tensorfold/kernels/qwen/dense/v1/lane_glue.py @ 34bae79a
+"""Prefill: one packed forward over prompt chunks of several rows.
+
+A segment is one row's chunk (a fixed span of its prompt) with that row's own
+caches (a ``KVCache`` per attention layer, an ``ArraysCache`` per GDN layer).
+Every weight-bearing op runs once over the packed tokens of all segments
+(norms, GDN / attention in and out projections, MLP): with the target's
+projections converted to ``LaneLinear`` those are row-invariant, so a chunk's
+hidden states have the bits it would get in a forward of its own. Only the
+sequence mixers run per segment, on the row's caches: attention is causal SDPA
+over the row's keys, the GDN conv + recurrence run on the chunk. Decoding rows
+run in ``batch.DecodeBatch``, not here.
+"""
+
+from __future__ import annotations
+
+import contextlib
+from dataclasses import dataclass
+from typing import Any
+
+import mlx.core as mx
+import mlx.nn as nn
+
+ATTN_BLOCK = 512  # default prefill attention query block (absolute grid)
+LANE_TAIL = 256  # partial atoms up to this many tokens use lane projections
+EVAL_EVERY = 4  # layers between evaluations of a prefill forward
+PROFILE: dict[str, float] | None = None  # research: stage name -> synchronized seconds
+_T = [0.0]
+
+
+def _tick(name: str, *arrays) -> None:
+    """With PROFILE set, evaluate ``arrays`` and charge the wall time since the
+    last tick to ``name`` (adds a sync per stage; timing probes only)."""
+    if PROFILE is None:
+        return
+    import time
+
+    mx.eval(*arrays)
+    now = time.perf_counter()
+    PROFILE[name] = PROFILE.get(name, 0.0) + now - _T[0]
+    _T[0] = now
+
+
+@dataclass
+class Segment:
+    """One row's prompt chunk for this step."""
+
+    cache: list
+    tokens: mx.array  # [T] int32
+    block: int = ATTN_BLOCK  # prefill attention query block (the driver's chunk)
+    long_from: int = 1 << 60  # positions from here on use the coarser grid
+    long_block: int = ATTN_BLOCK
+    # Media prompt (images / video / audio): the span's prompt embeddings [T, D] (visual features
+    # already scattered in) and its mRoPE positions [3, T]; None for a plain token span.
+    embeds: mx.array | None = None
+    position_ids: mx.array | None = None
+
+    @property
+    def length(self) -> int:
+        return int(self.tokens.shape[0])
+
+    @property
+    def lane(self) -> bool:
+        """Short partial atom (a prompt's tail, the token after a checkpoint):
+        its projections run the row-invariant lane matmul, which reads each
+        weight once per <= 128 rows and needs no stock-layout copy of the
+        weights (a stock call of 1..256 rows costs ~100 ms of untiling on a
+        27B target). A function of the atom alone, so hit == miss."""
+        return self.length < self.block and self.length <= LANE_TAIL
+
+
+def supports(language_model: Any) -> bool:
+    """Qwen3.5-family text decoder (hybrid GDN + full attention), dense or sparse MoE (qwen3_5_moe)."""
+    try:
+        from mlx_vlm.models.qwen3_5 import language as q35
+    except ImportError:  # pragma: no cover
+        return False
+    inner = getattr(language_model, "model", None)
+    if not isinstance(inner, q35.Qwen3_5Model):
+        return False
+    return all(_known_mlp(getattr(layer, "mlp", None)) for layer in inner.layers)
+
+
+def _known_mlp(mlp: Any) -> bool:
+    """A dense SwiGLU MLP, or the Qwen3.5-MoE sparse block (router, routed experts, shared expert)."""
+    if all(hasattr(mlp, n) for n in ("gate_proj", "up_proj", "down_proj")):
+        return True
+    return all(
+        hasattr(mlp, n)
+        for n in ("gate", "switch_mlp", "shared_expert", "shared_expert_gate", "top_k")
+    )
+
+
+def _attention_mix(attn, q, k, v, seg: Segment, cache) -> mx.array:
+    T = seg.length
+    queries, keys, values, gate, _ = attn._prepare_projected_qkv(
+        q, k, v, cache, None, None, None
+    )
+    if T == 1:
+        out = mx.fast.scaled_dot_product_attention(
+            queries, keys, values, scale=attn.scale, mask=None
+        )
+    else:
+        # SDPA's bits follow its query count, so the queries go through in
+        # blocks on the absolute ``seg.block`` grid (a span's edge cuts a
+        # block): a token's attention is the same whatever span it prefilled in.
+        n = int(keys.shape[2])
+        start = n - T
+        parts = []
+        b0 = start
+        while b0 < n:
+            blk = seg.long_block if b0 >= seg.long_from else seg.block
+            b1 = min((b0 // blk + 1) * blk, n)
+            parts.append(
+                mx.fast.scaled_dot_product_attention(
+                    queries[:, :, b0 - start : b1 - start],
+                    keys[:, :, :b1],
+                    values[:, :, :b1],
+                    scale=attn.scale,
+                    mask="causal",
+                )
+            )
+            b0 = b1
+        out = parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=2)
+    out = out.transpose(0, 2, 1, 3).reshape(1, T, -1)
+    return out * mx.sigmoid(gate)
+
+
+def _gdn_mix(layer, qkv, z, b, a, cache) -> mx.array:
+    from mlx_vlm.models.qwen3_5.gated_delta import gated_delta_update
+
+    from ..kernels import gdn_prefill
+
+    _, S, _ = qkv.shape
+    z = z.reshape(1, S, -1, layer.head_v_dim)
+    conv_state = cache[0]
+    if conv_state is None:
+        conv_state = mx.zeros(
+            (1, layer.conv_kernel_size - 1, layer.conv_dim), dtype=qkv.dtype
+        )
+    fused = (
+        S >= 3
+        and qkv.dtype == mx.bfloat16
+        and layer.conv_kernel_size == 4
+        and layer.conv1d.weight.dtype == mx.bfloat16
+        and getattr(layer.conv1d, "bias", None) is None
+        and mx.default_device() == mx.gpu
+    )
+    if fused:
+        cache.update_window(0, qkv[:, S - 3 :], 3)
+        conv_out = gdn_prefill.fused_conv_silu(conv_state, qkv, layer.conv1d.weight)
+    else:
+        conv_input = mx.concatenate([conv_state, qkv], axis=1)
+        cache.update_window(0, conv_input, layer.conv_kernel_size - 1)
+        conv_out = nn.silu(layer.conv1d(conv_input))
+    q, k, v = [
+        t.reshape(1, S, h, d)
+        for t, h, d in zip(
+            mx.split(conv_out, [layer.key_dim, 2 * layer.key_dim], -1),
+            [layer.num_k_heads, layer.num_k_heads, layer.num_v_heads],
+            [layer.head_k_dim, layer.head_k_dim, layer.head_v_dim],
+            strict=True,
+        )
+    ]
+    if fused and q.shape[-1] == k.shape[-1] == 128:
+        q = gdn_prefill.fused_norm_scale(q, inverse=True)
+        k = gdn_prefill.fused_norm_scale(k, inverse=False)
+    else:
+        inv = k.shape[-1] ** -0.5
+        q = (inv**2) * mx.fast.rms_norm(q, None, 1e-6)
+        k = inv * mx.fast.rms_norm(k, None, 1e-6)
+    out, _ = gated_delta_update(
+        q, k, v, a, b, layer.A_log, layer.dt_bias, use_kernel=True, cache=cache
+    )
+    if hasattr(cache, "advance"):
+        cache.advance(S)
+    return layer.norm(out, z).reshape(1, S, -1)
+
+
+def _cat(parts: list) -> mx.array:
+    """Token-axis concatenation; one part is returned as is (a copy of every
+    projection output of a 4096-row step costs ~0.2 s per 8K prompt)."""
+    return parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=1)
+
+
+def _slices(segments: list[Segment]) -> list[tuple[int, int]]:
+    out, at = [], 0
+    for s in segments:
+        out.append((at, at + s.length))
+        at += s.length
+    return out
+
+
+def _project(
+    lin, x: mx.array, spans: list[tuple[int, int]], lane: list[bool]
+) -> mx.array:
+    """``lin`` over the packed tokens, one matmul per segment: a segment's
+    result is what it would be as the only segment of a step. Lane projections
+    run MLX's quantized matmul on a transient stock-layout weight
+    (``LaneLinear.prefill``); anything else is called per segment."""
+    parts = [x[:, s:e] for s, e in spans]
+    if not hasattr(lin, "prefill"):
+        return _cat([lin(p) for p in parts])
+    outs: list = [None] * len(parts)
+    stock = [i for i, short in enumerate(lane) if not short]
+    if stock:
+        for i, o in zip(stock, lin.prefill([parts[i] for i in stock]), strict=True):
+            outs[i] = o
+    for i, short in enumerate(lane):
+        if short:
+            outs[i] = lin(parts[i])
+    return _cat(outs)
+
+
+def _mlp(mlp, x: mx.array, spans: list[tuple[int, int]], lane: list[bool]) -> mx.array:
+    from mlx_vlm.models.qwen3_5.language import swiglu
+
+    if hasattr(mlp, "switch_mlp"):
+        # Sparse MoE block: router, routed experts and shared expert run per segment, so a segment's
+        # rows get what they would as the only segment of a step (an expert matmul groups the tokens it
+        # is given: packing segments would make a row depend on its neighbours).
+        return _cat([mlp(x[:, s:e]) for s, e in spans])
+    h = swiglu(
+        _project(mlp.gate_proj, x, spans, lane), _project(mlp.up_proj, x, spans, lane)
+    )
+    return _project(mlp.down_proj, h, spans, lane)
+
+
+def forward(
+    language_model: Any, segments: list[Segment], *, capture_ids=(), captured=None
+) -> mx.array:
+    """Run prompt ``segments`` through the decoder in one packed forward;
+    returns the final-norm hidden states ``[N, D]`` in segment order.
+
+    Every weight-bearing op runs once per segment, so a segment's hidden
+    states depend only on its own tokens and caches (never on which prompts
+    share the step); the layer loop stays outside so a lane projection
+    untiles its weight once for all segments of the step."""
+    model = language_model.model
+    spans = _slices(segments)
+    lane = [seg.lane for seg in segments]
+    tokens = mx.concatenate([s.tokens for s in segments]).astype(mx.int32)
+    x = model.embed_tokens(tokens)[None]
+    if PROFILE is not None:
+        import time
+
+        mx.eval(x)
+        _T[0] = time.perf_counter()
+    for i, layer in enumerate(model.layers):
+        xn = layer.input_layernorm(x)
+        if layer.is_linear:
+            g = layer.linear_attn
+            qkv, z = (
+                _project(g.in_proj_qkv, xn, spans, lane),
+                _project(g.in_proj_z, xn, spans, lane),
+            )
+            b, a = (
+                _project(g.in_proj_b, xn, spans, lane),
+                _project(g.in_proj_a, xn, spans, lane),
+            )
+            _tick("gdn_proj", qkv, z, b, a)
+            parts = [
+                _gdn_mix(g, qkv[:, s:e], z[:, s:e], b[:, s:e], a[:, s:e], seg.cache[i])
+                for seg, (s, e) in zip(segments, spans, strict=True)
+            ]
+            _tick("gdn_mix", *parts)
+            r = _project(g.out_proj, _cat(parts), spans, lane)
+            _tick("gdn_out", r)
+        else:
+            at = layer.self_attn
+            q = _project(at.q_proj, xn, spans, lane)
+            k, v = (
+                _project(at.k_proj, xn, spans, lane),
+                _project(at.v_proj, xn, spans, lane),
+            )
+            _tick("attn_proj", q, k, v)
+            parts = [
+                _attention_mix(at, q[:, s:e], k[:, s:e], v[:, s:e], seg, seg.cache[i])
+                for seg, (s, e) in zip(segments, spans, strict=True)
+            ]
+            _tick("attn_mix", *parts)
+            r = _project(at.o_proj, _cat(parts), spans, lane)
+            _tick("attn_out", r)
+        h = x + r
+        x = h + _mlp(layer.mlp, layer.post_attention_layernorm(h), spans, lane)
+        _tick("mlp", x)
+        if captured is not None and i in capture_ids:
+            captured.append(x[0])
+        # transient stock weights are freed every few layers (the graph would
+        # otherwise hold every layer's)
+        if i % EVAL_EVERY == EVAL_EVERY - 1:
+            mx.eval(x)
+    return model.norm(x)[0]
+
+
+DENSE_LANE_ROWS = (
+    8  # main's dense lane attends this many query rows or fewer on the tile kernel
+)
+
+
+@contextlib.contextmanager
+def _dense_lane_tail(seg: Segment):
+    """A prompt tail of 1..8 rows attends through the ragged token-tile kernel, as in main's lone
+    (speculative) lane: ``ragged_kv.set_dense_lane`` routes a single-row KVCache's attention of up to
+    8 query rows there (the same per-token bits as decode and verify), while 9 rows and more keep
+    the prefill attention (BQ kernels). Found with the layer-checksum probe on a 135-token prompt
+    (128 + a 7-row tail): the 128-row span was identical, the tail identical through layers 0-2 and
+    different at the first full-attention layer; a 189-token prompt (61-row tail) was identical."""
+    if not 1 <= seg.length <= DENSE_LANE_ROWS:
+        yield
+        return
+    from ..kernels import ragged_kv
+
+    previous = ragged_kv.dense_lane_active()
+    ragged_kv.set_dense_lane(True)
+    try:
+        yield
+    finally:
+        ragged_kv.set_dense_lane(previous)
+
+
+def lane_forward(language_model: Any, seg: Segment, *, capture_ids=(), captured=None):
+    from ..kernels import gdn_prefill
+
+    sink = [] if captured is not None else None
+    # short tails take the tail scope, as the lane does (gdn_prefill.tail_scope)
+    scope = (
+        gdn_prefill.tail_scope()
+        if seg.tokens.shape[0] <= 48
+        else gdn_prefill.prefill_scope()
+    )
+    with scope, _dense_lane_tail(seg):
+        media = {}
+        if seg.embeds is not None:
+            media["inputs_embeds"] = seg.embeds[None]
+        if seg.position_ids is not None:
+            media["position_ids"] = seg.position_ids[:, None, :]
+        h = language_model.model(
+            seg.tokens[None].astype(mx.int32),
+            cache=seg.cache,
+            capture_layer_ids=list(capture_ids) if sink is not None else None,
+            hidden_sink=sink,
+            **media,
+        )
+    if sink is not None:
+        captured.extend(x[0] for x in sink)
+    return h[0]
+
+
+def logits(language_model: Any, hidden: mx.array) -> mx.array:
+    """LM head over hidden rows ``[R, D]`` (a lane projection once converted;
+    tied embeddings use ``round_driver`` 's lane head when available)."""
+    head = getattr(language_model, "_yunshu_lane_head", None)
+    if head is not None:
+        return head(hidden)
+    if language_model.args.tie_word_embeddings:
+        owner = language_model.model.embed_tokens
+        dense = owner.as_linear
+    else:
+        owner = language_model.lm_head
+        dense = owner
+    if int(hidden.shape[0]) == 1 or not _float_head(owner):
+        # A quantized or lane head (LaneLinear: row-invariant by construction) keeps one call over R
+        # rows, the arithmetic the 27B identity gates pass on. (2026-11-08: routing the 27B's LaneLinear
+        # lm_head through the per-row loop below cost ~11 ms per verify round, -28% decode at 1K; yv
+        # bisect 355610644.)
+        return dense(hidden)
+    # An unquantized (float) head without a lane head: a GEMM over R rows is not row-invariant (its
+    # tiling follows R), so each row takes the single-row GEMV a plain decode step makes.
+    return mx.concatenate(
+        [dense(hidden[i : i + 1]) for i in range(int(hidden.shape[0]))]
+    )
+
+
+def _float_head(module: Any) -> bool:
+    """A plain floating-point Linear / Embedding head (an unquantized checkpoint): the only kind whose
+    R-row GEMM is not row-invariant and therefore needs the per-row loop."""
+    import mlx.nn as nn
+
+    return type(module) in (nn.Linear, nn.Embedding)
+
+
+__all__ = ["Segment", "forward", "lane_forward", "logits", "supports"]

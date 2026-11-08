@@ -24,7 +24,6 @@ const settingdesc = {
   YUNSHU_WARM_PROMPTS:
     "啟動時預填以暖機前綴快取的提示詞：以 `||` 分隔的文字或檔案路徑。",
   YUNSHU_CONFIG: "含 `YUNSHU_*` 設定的 TOML 設定檔（優先順序低於環境變數）。",
-  YUNSHU_MAX_CONCURRENT: "同時受理請求數的上限；未設定則自適應，起始值為 8。",
   YUNSHU_UNCACHED_SCHEDULING:
     "依預估未命中快取的工作量與等待時間排序 VLM 預填原子，保護互動式預填，並在原子之間預留實測的解碼時間，不改變任何 token 區段。僅在合格的批次不變核心下預設開啟，其他後端除非啟用否則維持先進先出；停用可還原上游排序。",
   YUNSHU_DECODE_TAIL_SHARE:
@@ -39,7 +38,6 @@ const settingdesc = {
     "同時保留的孤兒生成上限；每個都占用解碼列與 KV，直到被接手或逾時。超出時取消最舊的。",
   YUNSHU_MEMORY_PRESSURE_REJECT:
     "Metal 工作集使用比例的門檻；超過時若仍有其他請求執行，新的生成請求會以 503 與 `Retry-After` 拒絕，以避免記憶體不足。閒置的伺服器不會拒絕。0 表示關閉。",
-  YUNSHU_COMPLETION_BATCH_SIZE: "文字引擎：一起解碼的序列數上限。",
   YUNSHU_SAMPLING_DEFAULTS:
     "請求未帶取樣參數時的預設來源：model 依序採用模型公布的各模式建議、generation_config.json、API 預設；api 只用 API 預設。請求帶的值永遠優先。",
   YUNSHU_DEFAULT_MAX_TOKENS:
@@ -153,7 +151,7 @@ const settingdesc = {
   YUNSHU_VLM_APC_DISK_DIR:
     "APC SSD 層的目錄；未設定時為 `~/.yunshu/cache/apc`（內建磁碟）。可放到高速磁碟區以保持內建磁碟乾淨。",
   YUNSHU_KV_PRECISION:
-    "Qwen3.5 系列執行器共用解碼批次的 KV 快取精度：`bf16`（無損）或 `int8`（KV 記憶體與讀取頻寬約為 0.53 倍，注意力有小幅誤差，以品質換記憶體）。單一請求與推測解碼通道維持 bf16。",
+    "Qwen3.5 系列執行器解碼列的 KV 快取精度：`bf16`（無損）或 `int8`（KV 記憶體與讀取頻寬約為 0.53 倍，注意力有小幅誤差，以品質換記憶體）。選 int8 時每個解碼列的 KV 都是 int8，單一請求與併發請求一樣，推測解碼的草稿與驗證也讀取 int8 KV，所以回覆不會因為有沒有其他請求重疊而不同。預填與前綴快取維持 bf16。",
   YUNSHU_VLM_APC_DISK_GB:
     "APC SSD 層的大小上限（GiB），整個目錄共用一份預算（跨命名空間先淘汰最久未使用的檔案；0 表示不設上限，仍受剩餘空間保留限制）。未設定時為磁碟區的四分之一，最多 64 GiB。27B 檢查點每個 token 約 130 KiB，因此 64 GiB 約可容納 500K token。",
   YUNSHU_PREFILL_MATMUL:
@@ -221,10 +219,6 @@ const settingdesc = {
     "Qwen3.8-Flash-Next（qwen4_exp），M5 級 GPU：在張量單元上執行提示列的索引稀疏 QSA 注意力，每個（列，key 頭）一個執行緒群組，共用同一 key 頭的 12 個 query 頭作為一個矩陣乘運算元，選中的 key 只讀一次，取代上游對每個 query 頭重複讀取選中 key 的純量核心。每一列的結果只取決於該列，因此預填與分塊方式無關；算術與上游不同（fp32 累加順序不同，並非品質變化）。解碼與推測驗證不受影響。預設開啟：Flash-Next oQ2.5e 的 8K/32K/128K 冷 TTFT 分別降低 25/24/20%，推測開關一致與快取命中一致仍成立，輸出比原生核心更接近 fp32 注意力參考（KLD 0.0685 對 0.0731）。關閉：使用上游純量核心。",
   YUNSHU_QWEN4_LANE:
     "Qwen3.8-Flash-Next（qwen4_exp）：解碼、推測驗證與草稿一律以列不變的 lane 矩陣乘處理稠密量化投影，取代上游逐列的單列 qmv。多一列驗證不再倍增稠密權重讀取量；推測輸出仍與一般解碼相同。輸出與預設算術相差最後一位。上游融合 head 核心讀不了的 head 格式（如 6-bit）會強制啟用。寬於 32 列的預填區塊仍用 MLX 的量化矩陣乘。",
-  YUNSHU_ENGINE_LOOP:
-    "文字模型：使用 EngineCore 連續批次迴圈，取代單一請求快速路徑。",
-  YUNSHU_OVERLAP:
-    "文字引擎迴圈：讓 CPU 與 GPU 工作重疊（`cpu_gpu`），或將批次拆成兩個互相重疊的一半（`two_batch`）。",
   YUNSHU_SPEC_UNVERIFIED:
     "文字模型：明確啟用未經驗證的外部 mlx-lm 草稿實驗。`eagle` 是沿用的路由名稱，一般語言模型草稿即可，不需要訓練過的 EAGLE 頭。僅適用於使用預設取樣與懲罰的貪婪、非串流請求；schema、自訂處理器、停止字串、思考預算、LoRA 與 token 遮罩選項仍走一般快速路徑。",
   YUNSHU_DRAFT_MODEL:

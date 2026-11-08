@@ -280,19 +280,3 @@ def test_vlm_runner_gets_a_gated_guide_when_the_prompt_opens_think(monkeypatch):
 def test_vlm_runner_guide_is_ungated_when_thinking_is_closed(monkeypatch):
     guide = _vlm_guide(monkeypatch, [5, 6, OPEN, CLOSE])
     assert isinstance(guide, _Inner)
-
-
-def test_engine_loop_sampler_is_gated_when_the_prompt_opens_think():
-    from types import SimpleNamespace
-
-    from yunshu_engine.request import SamplingParams
-    from yunshu_engine.scheduler import Scheduler
-
-    me = SimpleNamespace(tokenizer=ThinkTok())
-    sp = SamplingParams(temperature=0.0, grammar={"type": "choice", "choices": ["ab"]})
-    gated = Scheduler._make_sampler(me, sp, [5, 6, OPEN])
-    assert isinstance(gated, ThinkGatedSampler) and gated.gate.open
-    ungated = Scheduler._make_sampler(me, sp, [5, 6, OPEN, CLOSE])
-    assert not isinstance(ungated, ThinkGatedSampler)
-    logits = mx.zeros((1, 64)).at[0, EOS].add(9.0)
-    assert int(gated(logits)[0]) != EOS  # a stop inside the reasoning is masked

@@ -48,7 +48,10 @@ def normalize(model, weights: dict, *, direct: bool) -> int:
     if not direct:
         return 0
     import mlx.core as mx
-    from mlx_vlm.models.qwen4_exp.language import Qwen4ExpRMSNorm
+
+    from .qwen4_family import qwen4_first_module
+
+    Qwen4ExpRMSNorm = qwen4_first_module("language").Qwen4ExpRMSNorm
 
     count = 0
     for path, module in model.named_modules():

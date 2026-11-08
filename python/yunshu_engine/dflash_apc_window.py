@@ -1,4 +1,3 @@
-# Upstream (patches): Blaizzy/mlx-vlm (MIT) mlx_vlm/generate/ar.py PromptProcessingBatch @ v0.7.3
 """Keep the DFlash drafter's context window across APC prefix hits.
 
 The DFlash2 drafter reads the target's captured hidden states of the last
@@ -27,7 +26,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_STATE: dict[str, Any] = {"installed": False, "current": None, "budget": 0}
+_STATE: dict[str, Any] = {"budget": 0}
 DISK_CAP = 4 << 30  # bytes of windows kept on disk per namespace (~40 at 32K)
 # disk store: directory, the volume's APC budget (its free-space reserve), the drafter tag
 # (its target layers: the window is their captured states) and the writer thread
@@ -47,12 +46,20 @@ _STATS = {
 def key_for(extra_hash: int, token_ids) -> tuple:
     import numpy as np
 
-    arr = np.asarray(list(token_ids), dtype=np.int64)
-    return (
-        int(extra_hash),
-        len(arr),
-        hashlib.blake2b(arr.tobytes(), digest_size=16).digest(),
-    )
+    from . import hit_stages
+    from .prompt_ids import ids_array
+
+    with hit_stages.stage("hash"):
+        arr = ids_array(token_ids, remember=False)
+        if arr is not None:
+            arr = arr.astype(np.int64, copy=False)  # the key's bytes are int64 ids
+        else:
+            arr = np.asarray(list(token_ids), dtype=np.int64)
+        return (
+            int(extra_hash),
+            len(arr),
+            hashlib.blake2b(arr.tobytes(), digest_size=16).digest(),
+        )
 
 
 def resident_bytes() -> int:
@@ -225,98 +232,6 @@ def flush() -> None:
     q = _DISK["queue"]
     if q is not None:
         q.join()
-
-
-def window_from_chunks(chunks: list, keep: int) -> tuple[list, int] | None:
-    """Last ``keep`` positions of per-layer chunk lists as ``(layers, nbytes)``."""
-    import mlx.core as mx
-
-    if not chunks:
-        return None
-    layers = [
-        mx.concatenate(list(parts), axis=1) for parts in zip(*chunks, strict=True)
-    ]
-    if int(layers[0].shape[1]) > keep:
-        layers = [x[:, -keep:] for x in layers]
-    # Never block here: this runs inside the prefill step, ahead of the first token.
-    mx.async_eval(layers)
-    return layers, sum(int(x.nbytes) for x in layers)
-
-
-def capture(token_ids, extra_hash: int, *, prompt_end: bool = False) -> bool:
-    """Called from the coordinator's ``store_checkpoint`` while a prefill step is running;
-    ``prompt_end``: the checkpoint ends the request's prompt (its window goes to disk too)."""
-    batch = _STATE["current"]
-    if batch is None or _STATE["budget"] <= 0:
-        return False
-    sp = getattr(batch, "_speculative_prefill", None)
-    keep = getattr(sp, "_yunshu_keep", None)
-    if sp is None or not sp.kwargs or keep is None or len(batch.uids) != 1:
-        return False
-    built = window_from_chunks(list(sp.chunks), keep)
-    if built is None:
-        return False
-    layers, nbytes = built
-    key = key_for(extra_hash, token_ids)
-    stored = put(key, layers, nbytes)
-    if stored and prompt_end:
-        try:
-            persist(key)
-        except Exception:  # the window is an optimisation only
-            logger.debug("drafter window persist failed", exc_info=True)
-    return stored
-
-
-def seed(batch) -> bool:
-    """On a prefix hit, start the drafter-context chunks with the stored window."""
-    sp = getattr(batch, "_speculative_prefill", None)
-    if sp is None or not getattr(sp, "kwargs", None) or len(batch.uids) != 1:
-        return False
-    metas = getattr(batch, "_apc_meta", None) or []
-    meta = metas[0] if metas else None
-    prefix = int((meta or {}).get("prefix_len") or 0)
-    if meta is None or prefix <= 0 or sp.chunks:
-        return False
-    layers = get(key_for(meta.get("extra_hash", 0), meta["full_input_ids"][:prefix]))
-    if layers is None:
-        return False
-    sp.chunks = [list(layers)]
-    _STATS["seeded"] += 1
-    logger.info(
-        "DFlash drafter window restored from APC hit: %d positions (prefix %d)",
-        int(layers[0].shape[1]),
-        prefix,
-    )
-    return True
-
-
-def install(budget_bytes: int | None = None) -> bool:
-    if budget_bytes is not None:
-        set_budget(budget_bytes)
-    if _STATE["installed"]:
-        return True
-    from mlx_vlm.generate import ar
-
-    cls = ar.PromptProcessingBatch
-    orig_init, orig_step = cls.__init__, cls.prompt_step
-
-    def __init__(self, *args, **kwargs):
-        orig_init(self, *args, **kwargs)
-        try:
-            seed(self)
-        except Exception:  # lossless fallback: drafter keeps the suffix-only context
-            logger.debug("drafter window seed failed", exc_info=True)
-
-    def prompt_step(self):
-        _STATE["current"] = self
-        try:
-            return orig_step(self)
-        finally:
-            _STATE["current"] = None
-
-    cls.__init__, cls.prompt_step = __init__, prompt_step
-    _STATE["installed"] = True
-    return True
 
 
 # -- decode window (YUNSHU_NEXT_TURN_PREFILL=decode) --------------------------------------

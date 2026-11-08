@@ -209,11 +209,9 @@ def _fuse_context_kv(drafter: Any):
     return stacked, widths
 
 
-def _attend(attn: Any, x: mx.array, keys: mx.array, values: mx.array, rope, pos, mask):
+def _attend_projected(attn, q, pk, pv, keys, values, rope, pos, mask):
     """The vendor DFlashAttention for the proposal rows over the ring's context."""
-    b, n, _ = x.shape
-    q = attn.q_proj(x)
-    pk, pv = attn._project_kv(x)
+    b, n, _ = q.shape
     q = attn.q_norm(q.reshape(b, n, attn.n_heads, -1)).transpose(0, 2, 1, 3)
     pk = attn.k_norm(pk.reshape(b, n, attn.n_kv_heads, -1)).transpose(0, 2, 1, 3)
     pv = pv.reshape(b, n, attn.n_kv_heads, -1).transpose(0, 2, 1, 3)
@@ -229,7 +227,73 @@ def _attend(attn: Any, x: mx.array, keys: mx.array, values: mx.array, rope, pos,
         mask=mask,
         sinks=attn.attention_sink_bias,
     )
-    return attn.o_proj(o.transpose(0, 2, 1, 3).reshape(b, n, -1))
+    return o.transpose(0, 2, 1, 3).reshape(b, n, -1)
+
+
+def _attend(attn: Any, x: mx.array, keys: mx.array, values: mx.array, rope, pos, mask):
+    q = attn.q_proj(x)
+    pk, pv = attn._project_kv(x)
+    return attn.o_proj(
+        _attend_projected(attn, q, pk, pv, keys, values, rope, pos, mask)
+    )
+
+
+def draft_hidden_batch(
+    drafter: Any, rings: list[Ring], bonuses: mx.array, positions: int
+):
+    """One drafter forward for every row, with independent ring/RoPE context.
+
+    Convolutions retain a batch axis (never concatenate sequences along time).
+    Q/K/V and output projections run once per layer; attention reads each row's
+    ring at its own position. The solo branch is exactly draft_hidden.
+    """
+    if not rings or bonuses.size != len(rings) or positions < 1:
+        raise ValueError(
+            "one bonus per nonempty ring batch and positive positions required"
+        )
+    if len(rings) == 1:
+        return draft_hidden(drafter, rings[0], bonuses, positions)
+    masks = mx.full(
+        (len(rings), positions), int(drafter.config.mask_token_id), dtype=mx.int32
+    )
+    inputs = mx.concatenate([bonuses.reshape(-1, 1).astype(mx.int32), masks], axis=1)
+    h = drafter._embed_input_tokens(inputs)
+
+    def attend(attn, x, index):
+        q = attn.q_proj(x)
+        pk, pv = attn._project_kv(x)
+        parts = [
+            _attend_projected(
+                attn,
+                q[b : b + 1],
+                pk[b : b + 1],
+                pv[b : b + 1],
+                ring.keys[index],
+                ring.values[index],
+                drafter.rope,
+                ring.pos.reshape(()),
+                ring.mask(positions + 1),
+            )
+            for b, ring in enumerate(rings)
+        ]
+        return attn.o_proj(mx.concatenate(parts, axis=0))
+
+    for i, layer in enumerate(drafter.layers):
+        compiled = getattr(layer, "_compiled", None)
+        if compiled is not None:
+            pre, mid, post = compiled()
+            prepared, kernel = pre(h)
+            attended = attend(layer.self_attn, prepared, i)
+            h1, prepared2, kernel2 = mid(h, attended, kernel)
+            h = post(h1, layer.mlp(prepared2), kernel2)
+        else:
+            prepared, kernel = layer.attention_conv.prepare(layer.input_layernorm(h))
+            h = h + layer.attention_conv.finish(
+                attend(layer.self_attn, prepared, i), kernel
+            )
+            prepared, kernel = layer.mlp_conv.prepare(layer.post_attention_layernorm(h))
+            h = h + layer.mlp_conv.finish(layer.mlp(prepared), kernel)
+    return drafter.norm(h)[:, 1:]
 
 
 def draft_hidden(drafter: Any, ring: Ring, bonus: mx.array, positions: int) -> Any:

@@ -21,6 +21,8 @@ STAGES = (
     "memory",
     "longqa",
     "conc",
+    "phaseb-identity",
+    "phaseb-speed",
     "ttft_profile",
     "ssd_ttft",
     "ssd_ttft_profile",
@@ -49,6 +51,8 @@ LADDER = tuple(
     not in (
         "longqa",
         "conc",
+        "phaseb-identity",
+        "phaseb-speed",
         "ttft_profile",
         "ssd_ttft",
         "ssd_ttft_profile",
@@ -79,6 +83,20 @@ LADDER = tuple(
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
+    "phaseb2": {
+        "stages": ["phaseb-identity", "phaseb-speed"],
+        "phaseb_ctx_chars": [16000, 85000],
+        "phaseb_scenarios": ["burst2", "stagger", "burst4"],
+        "phaseb_shapes": ["greedy", "seeded"],
+    },
+    "phaseb-pilot": {
+        "stages": ["phaseb-identity"],
+        "phaseb_ctx_chars": [16000],
+        "phaseb_scenarios": ["burst2"],
+        "phaseb_shapes": ["greedy"],
+        "phaseb_arms": ["cand"],
+        "phaseb_tokens": 128,
+    },
     # Diagnostic instrumentation only; does not judge speed or token identity.
     "ttft_profile": {
         "stages": ["preflight", "ttft_profile"],
@@ -334,3 +352,21 @@ def parse_suite(spec: str) -> dict:
     cfg["stages"] = [s for s in STAGES if s in parts]
     cfg["name"] = ",".join(cfg["stages"])
     return cfg
+
+
+# One (context, scenario) per suite: three speed reps = three queued jobs at a time.
+for _chars in (16000, 85000):
+    for _scen in ("burst2", "stagger", "burst4"):
+        SUITES[f"phaseb2-speed-{_chars // 1000}k-{_scen}"] = {
+            "stages": ["phaseb-speed"],
+            "phaseb_ctx_chars": [_chars],
+            "phaseb_scenarios": [_scen],
+            "phaseb_shapes": ["greedy", "seeded"],
+        }
+
+SUITES["phaseb2-ident"] = {
+    "stages": ["phaseb-identity"],
+    "phaseb_ctx_chars": [16000],
+    "phaseb_scenarios": ["solo", "burst2", "stagger", "burst4"],
+    "phaseb_shapes": ["greedy", "seeded"],
+}

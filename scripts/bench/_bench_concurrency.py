@@ -1,6 +1,6 @@
 """Concurrent-throughput bench (continuous batching). Emits @@CONC@@ <json>.
 Fires N concurrent distinct requests, measures wall time + aggregate decode tok/s
-+ mean TTFT-ish. Yunshu: set YUNSHU_ENGINE_LOOP=1 for the batching path.
++ mean TTFT-ish.
 """
 
 import asyncio
@@ -51,7 +51,6 @@ async def main():
         "wall_s": round(wall, 2),
         "total_tok": toks,
         "agg_tps": round(toks / wall, 1) if wall else 0,
-        "loop": os.environ.get("YUNSHU_ENGINE_LOOP", "0"),
     }
     print("@@CONC@@ " + json.dumps(res))
     import contextlib

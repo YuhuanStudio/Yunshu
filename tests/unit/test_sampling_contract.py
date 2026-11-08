@@ -5,7 +5,6 @@ import numpy as np
 import pytest
 
 from yunshu_engine import keyed_sampling
-from yunshu_engine import vlm_batch_runner as vbr
 from yunshu_engine.keyed_sampling import KeyedSampler, filter_logprobs
 from yunshu_engine.vlm_batch_runner import RowParams
 
@@ -60,53 +59,6 @@ def test_top_k_at_or_above_vocab_is_a_noop(k):
     assert np.isfinite(out).sum() == (1 if k == 1 else min(k, 32) if k else 32)
 
 
-def test_row_sampler_seeded_stream_is_the_keyed_stream():
-    """Same seed, same tokens whether a row is sampled by the shared batch or the lane."""
-    rng = np.random.default_rng(0)
-    steps = [_lp(rng.normal(size=(1, 64)).astype(np.float32)) for _ in range(12)]
-    params = _params(top_p=0.9, top_k=20, temperature=0.8)
-    row = vbr.RowSampler()
-    row.add(5, RowParams(0.8, 0.9, 20, 0.0, 7))
-    vbr._STEP_UIDS = [5]
-    try:
-        got = [int(row(lp)[0]) for lp in steps]
-    finally:
-        vbr._STEP_UIDS = None
-    keyed = KeyedSampler(params, seed=7)
-    want = [int(keyed.sample_positions(lp, [i])[0]) for i, lp in enumerate(steps)]
-    assert got == want
-
-
-def test_row_sampler_stream_ignores_batch_neighbours():
-    rng = np.random.default_rng(1)
-    a = [_lp(rng.normal(size=(1, 64)).astype(np.float32)) for _ in range(8)]
-    b = [_lp(rng.normal(size=(1, 64)).astype(np.float32)) for _ in range(8)]
-
-    def solo():
-        s = vbr.RowSampler()
-        s.add(1, RowParams(1.0, 1.0, 0, 0.0, 9))
-        vbr._STEP_UIDS = [1]
-        try:
-            return [int(s(x)[0]) for x in a]
-        finally:
-            vbr._STEP_UIDS = None
-
-    def mixed():
-        s = vbr.RowSampler()
-        s.add(1, RowParams(1.0, 1.0, 0, 0.0, 9))
-        s.add(2, RowParams(1.0, 1.0, 0, 0.0, 4))
-        out = []
-        for x, y in zip(a, b, strict=True):
-            vbr._STEP_UIDS = [2, 1]
-            try:
-                out.append(int(s(mx.concatenate([y, x]))[1]))
-            finally:
-                vbr._STEP_UIDS = None
-        return out
-
-    assert solo() == mixed()
-
-
 def test_xtc_stays_on_the_stateful_sampler():
     assert not keyed_sampling.supports(RowParams(1.0, 1.0, 0, 0.0, 1, 0.5, 0.1))
 
@@ -138,29 +90,42 @@ def test_every_route_derives_choice_seeds_through_the_shared_helper():
         assert "req.seed +" not in src, name
 
 
-def test_row_sampler_mixed_params_match_solo_streams():
-    """Rows with different parameters and seeds draw in one step exactly as they do alone."""
-    rng = np.random.default_rng(2)
-    cfgs = [
-        RowParams(0.7, 0.9, 20, 0.0, 3),
-        RowParams(1.0, 1.0, 0, 0.05, 4),
-        RowParams(0.7, 0.9, 20, 0.0, 5),
-    ]
-    steps = [_lp(rng.normal(size=(3, 64)).astype(np.float32)) for _ in range(10)]
-    mixed = vbr.RowSampler()
-    for u, c in enumerate(cfgs):
-        mixed.add(u, c)
-    vbr._STEP_UIDS = [0, 1, 2]
-    try:
-        got = [mixed(x).tolist() for x in steps]
-        for u, c in enumerate(cfgs):
-            solo = vbr.RowSampler()
-            solo.add(u, c)
-            vbr._STEP_UIDS = [u]
-            want = [int(solo(x[u : u + 1])[0]) for x in steps]
-            assert [g[u] for g in got] == want
-    finally:
-        vbr._STEP_UIDS = None
+def _driver_row(params, seed, generated=0):
+    from yunshu_engine.round_driver import driver as drv
+
+    req = drv.Request([1, 2, 3], 8, sampling=params)
+    row = drv._Row(req=req, cache=None, mtp_cache=None, generated=generated)
+    if keyed_sampling.supports(params):
+        row.base = keyed_sampling.seed_base(seed)
+    return drv, row
+
+
+def test_round_driver_sample_matches_the_keyed_stream():
+    params = _params(top_p=0.9, top_k=20, temperature=0.8)
+    rng = np.random.default_rng(3)
+    steps = [_lp(rng.normal(size=(1, 64)).astype(np.float32)) for _ in range(8)]
+    drv, row = _driver_row(params, 7)
+    d = object.__new__(drv.RoundDriver)
+    got = []
+    for lp in steps:
+        got.append(int(d._sample(row, lp)[0]))
+        row.generated += 1
+    keyed = KeyedSampler(params, seed=7)
+    assert got == [int(keyed.sample_positions(x, [i])[0]) for i, x in enumerate(steps)]
+
+
+@pytest.mark.parametrize("top_p,top_k", [(1e-10, 0), (1.0, 10**9), (0.0, 33)])
+def test_round_driver_sample_survives_edge_filters(top_p, top_k):
+    lp = _lp(np.linspace(0, 3, 32)[None])
+    for params in (
+        _params(top_p=top_p, top_k=top_k),
+        _params(top_p=top_p, top_k=top_k, min_p=0.0),
+    ):
+        drv, row = _driver_row(params, 1)
+        d = object.__new__(drv.RoundDriver)
+        assert 0 <= int(d._sample(row, lp)[0]) < 32
+        row.base = None  # stateful path (XTC-style) takes the same filters
+        assert 0 <= int(d._sample(row, lp)[0]) < 32
 
 
 def test_one_logical_request_cancels_every_choice():

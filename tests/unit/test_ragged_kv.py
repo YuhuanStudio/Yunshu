@@ -766,3 +766,10 @@ def test_to_lane_cache_is_the_lanes_one_row_layout():
     assert mx.array_equal(lane.values[0, :, :3], v[1, :, pads[1] :])
     assert lane.offset.tolist() == [3]
     assert ragged_kv.to_lane_cache(object()) is None
+
+
+def test_to_lane_cache_refuses_missing_values():
+    stock, _, _, _ = _stock_cache([3])
+    cache = ragged_kv.RaggedKVCache.from_cache(stock)
+    cache.values = None
+    assert ragged_kv.to_lane_cache(cache) is None

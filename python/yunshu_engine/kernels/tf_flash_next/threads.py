@@ -8,6 +8,8 @@ from typing import Any, Callable, Hashable, Iterable, Sequence
 
 import mlx.core as mx
 
+from .. import gpu_probe
+
 # threads a threadgroup every pipeline takes on every Apple GPU, at the most registers a thread can hold
 SAFE = 256
 _LIMIT = re.compile(r"maximum allowed threads per threadgroup \((\d+)\)")
@@ -20,7 +22,7 @@ guessed: set[Hashable] = set()
 def _probes() -> bool:
     """Whether pipelines here can take fewer threads than a launch asks: M1 and M2 (M3 on give every one 1024)."""
 
-    info = mx.device_info() if hasattr(mx, "device_info") else mx.metal.device_info()
+    info = gpu_probe.device_info()
     found = re.match(r"applegpu_g(\d+)", str(info.get("architecture", "")))
     return not found or int(found.group(1)) < 15
 
@@ -37,7 +39,7 @@ def limit_in(err: BaseException) -> int | None:
 
 
 def chip() -> str:
-    info = mx.device_info() if hasattr(mx, "device_info") else mx.metal.device_info()
+    info = gpu_probe.device_info()
     return str(info.get("device_name") or info.get("architecture") or "this GPU")
 
 

@@ -99,6 +99,9 @@ class ThinkGatedGuide:
                 row[t >> 5] &= np.uint32(~(1 << (t & 31)) & 0xFFFFFFFF)
         self._wait_row = row.view(np.int32)
 
+    def arms(self, token):
+        return False
+
     def mask(self):
         if self.gate.open:
             return self._wait_row

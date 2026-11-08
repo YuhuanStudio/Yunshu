@@ -11,6 +11,7 @@ mx = pytest.importorskip("mlx.core")
 from mlx_vlm.apc import _sequence_hash  # noqa: E402
 from mlx_vlm.models.cache import ArraysCache, KVCache  # noqa: E402
 
+from tests.unit.driver_runner import driver_runner  # noqa: E402
 from yunshu_engine.apc_manager import SpillDiskStore, YunshuAPCManager  # noqa: E402
 from yunshu_engine.apc_warm import WarmTier  # noqa: E402
 
@@ -289,7 +290,7 @@ def _tiny_model():
 
 
 def test_warm_lossless_and_ssd_hits_are_token_identical_to_hot(tmp_path):
-    from yunshu_engine.vlm_batch_runner import RunStats, VLMBatchRunner
+    from yunshu_engine.vlm_batch_runner import RunStats
 
     class Stop:
         def __init__(self):
@@ -319,7 +320,7 @@ def test_warm_lossless_and_ssd_hits_are_token_identical_to_hot(tmp_path):
             overrides={"memory_max_gb": 1, "checkpoint_interval_tokens": 0},
             max_entries=entries, warm_mode=mode, warm_bytes=256 << 20,
         )  # fmt: skip
-        runner = VLMBatchRunner(
+        runner = driver_runner(
             model, processor=proc, apc_manager=mgr, apc_semantic_hash=0
         )
         return mgr, runner
@@ -344,7 +345,7 @@ def test_warm_lossless_and_ssd_hits_are_token_identical_to_hot(tmp_path):
     out_ssd, st_ssd = run(ssd, a2)
     assert st_ssd.cache_tier == "ssd"
 
-    cold, _ = run(VLMBatchRunner(model, processor=proc), a2)
+    cold, _ = run(driver_runner(model, processor=proc), a2)
     assert out_hot == out_warm == out_ssd == cold
 
 

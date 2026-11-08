@@ -592,16 +592,6 @@ class EngineStreamMixin:
             # Proactive memory pressure eviction (vllm-mlx pattern)
             if prefix_cache is not None and self._mem_pressure_threshold > 0:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
-                # Also evict from paged KV manager when enabled
-                if self._kv_manager is not None:
-                    try:
-                        self._kv_manager.memory_pressure_evict(
-                            self._mem_pressure_threshold / 100.0
-                        )
-                    except Exception:
-                        _engine.logger.debug(
-                            "paged KV pressure eviction failed", exc_info=True
-                        )
             try:
                 cached_kv, _, matched = (
                     prefix_cache.get(ids)

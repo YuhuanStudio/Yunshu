@@ -23,6 +23,7 @@ import os
 from pathlib import Path
 
 from . import paths, settings
+from .qwen4_family import is_qwen4_family, qwen4_first_module
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,10 @@ def manifest_for(model_path: Path) -> Path:
     )
     if target.exists():
         return target
-    from mlx_vlm.models.qwen4_exp.ple_storage import build_quantized_ple_manifest
+    ple_storage = qwen4_first_module("ple_storage")
+    if ple_storage is None:
+        raise ImportError("no Qwen4 ple_storage module")
+    build_quantized_ple_manifest = ple_storage.build_quantized_ple_manifest
 
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name(f"ple-store.{os.getpid()}.partial.json")
@@ -61,7 +65,7 @@ def external_ple(config: dict, model_path) -> bool:
     """Switch ``config`` to row-wise PLE reads from the pack's files when that applies.
 
     Returns True when the loader must skip the table's tensors (``is_ple_tensor``)."""
-    if config.get("model_type") != "qwen4_exp":
+    if not is_qwen4_family(config):
         return False
     text = config.get("text_config")
     if not isinstance(text, dict) or text.get("ple_storage"):
@@ -106,7 +110,7 @@ def bytes_read_from_files(model_path) -> int:
     try:
         config = json.loads((model_path / "config.json").read_text())
         if (
-            config.get("model_type") != "qwen4_exp"
+            not is_qwen4_family(config)
             or (config.get("text_config") or {}).get("ple_storage")
             or settings.get("YUNSHU_PLE_STORAGE") != "ssd"
         ):

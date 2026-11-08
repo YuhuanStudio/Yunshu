@@ -9,12 +9,12 @@ Prevents OOM by rejecting requests that would exceed available memory:
   (no fixed cap; the request is granted what fits instead of refused)
 
 Architecture:
-  EngineCore.add_request()
+  BatchedEngine.generate() / stream_generate()
     → MemoryGuard.preflight_check(num_prompt_tokens, max_tokens)
     → reject immediately with finish_reason="memory_exceeded" if insufficient memory
 
   BatchedEngine.generate() / stream_generate()
-    → MemoryGuard preflight before submitting to EngineCore
+    → MemoryGuard preflight before a request runs on the fast path
     → return GenerationOutput with finish_reason="memory_limit" on rejection
 
 Integration:

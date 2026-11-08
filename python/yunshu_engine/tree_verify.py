@@ -441,12 +441,18 @@ def replay_path(layer, state, rows, path_arr, count_arr):
     return out
 
 
-def _gdn_layer(verifier, layer, x, cache, shape: TreeShape):
+def _gdn_layer(
+    verifier, layer, x, cache, shape: TreeShape, *, projected=None, project_output=True
+):
     """One GDN layer over the window; returns the out-projection output and
     the record ``tree_commit`` needs."""
     w = shape.width
-    mixed, z, b, a = verifier._linears(
-        (layer.in_proj_qkv, layer.in_proj_z, layer.in_proj_b, layer.in_proj_a), x
+    mixed, z, b, a = (
+        verifier._linears(
+            (layer.in_proj_qkv, layer.in_proj_z, layer.in_proj_b, layer.in_proj_a), x
+        )
+        if projected is None
+        else projected
     )
     dtype = x.dtype
     hk, hv = layer.num_k_heads, layer.num_v_heads
@@ -534,7 +540,7 @@ def _gdn_layer(verifier, layer, x, cache, shape: TreeShape):
         )
         vq.register_group_sums(out, sums)
     record = ("gdn", layer, state, conv_prev, mixed, rows)
-    return verifier._linear(layer.out_proj, out), record
+    return (verifier._linear(layer.out_proj, out) if project_output else out), record
 
 
 # ── attention ───────────────────────────────────────────────────────────────
@@ -702,6 +708,129 @@ class RoundContext:
         self.pos = None
 
 
+class _DequantRows:
+    """``rows[idx]`` of an int8 cache's ``[HKV, CAP, D]`` codes, dequantized: the same index applies to
+    the codes and to the scales (the index never touches the last axis)."""
+
+    def __init__(self, codes: mx.array, scales: mx.array):
+        self.codes, self.scales = codes, scales
+
+    def __getitem__(self, idx):
+        from .kernels.int8_kv import dequantize_kv
+
+        return dequantize_kv(self.codes[idx], self.scales[idx])
+
+
+# Hooks for the int8 tree-attention kernels. ``None`` means "not installed": an int8 row cache then
+# raises instead of silently falling back to a dequantized copy (the reference below is test-only).
+#
+# tile_partials_q8(q_fused, keys, k_scales, values, v_scales, lengths, slots, scale, plan, t_tokens, nc)
+#   -> (po, pm, pl, wstart)
+#   Same arguments, layouts, chunking (CK = 512 keys per chunk, 64-key steps), work list ``plan`` and
+#   outputs as ``_tile_partials``; ``keys`` / ``values`` are int8 [1, HKV, CAP, D] codes and ``k_scales`` /
+#   ``v_scales`` fp16 [1, HKV, CAP, D / 32]. Required result: bit-identical to
+#   ``_tile_partials(q_fused, dequantize_kv(keys, k_scales), dequantize_kv(values, v_scales), ...)``
+#   with dequantize_kv(code, scale) = bfloat16(float(code) * float(scale)) (kernels/int8_kv.py).
+# tree_attention_fused_q8(queries, keys, k_scales, values, v_scales, shape, rc, scale_arr, dims)
+#   Same contract against ``_tree_attention_fused`` on the dequantized buffers.
+TILE_PARTIALS_Q8 = None
+TREE_ATTENTION_FUSED_Q8 = None
+
+
+def int8_kernels_installed() -> bool:
+    return TILE_PARTIALS_Q8 is not None and TREE_ATTENTION_FUSED_Q8 is not None
+
+
+def require_int8_kernels() -> None:
+    """int8 KV on the DFlash / plain-verify batch needs the int8 tree-attention kernels."""
+    if not int8_kernels_installed():
+        raise RuntimeError(
+            "YUNSHU_KV_PRECISION=int8: the int8 tree-attention kernels are not installed "
+            "(tree_verify.TILE_PARTIALS_Q8 / TREE_ATTENTION_FUSED_Q8); refusing to serve int8 KV with a "
+            "fallback. Use bf16, or an engine build that ships the kernels."
+        )
+
+
+def _tile_partials_q8(
+    q_fused, keys, k_scales, values, v_scales, lengths, slots, scale, plan, t_tokens, nc
+):
+    if TILE_PARTIALS_Q8 is None:
+        raise RuntimeError("int8 KV: the int8 tile kernel is not installed")
+    return TILE_PARTIALS_Q8(
+        q_fused,
+        keys,
+        k_scales,
+        values,
+        v_scales,
+        lengths,
+        slots,
+        scale,
+        plan,
+        t_tokens,
+        nc,
+    )
+
+
+def _tree_attention_fused_q8(
+    queries, keys, k_scales, values, v_scales, shape, rc, scale_arr, dims
+):
+    if TREE_ATTENTION_FUSED_Q8 is None:
+        raise RuntimeError(
+            "int8 KV: the int8 fused tree-attention kernel is not installed"
+        )
+    return TREE_ATTENTION_FUSED_Q8(
+        queries, keys, k_scales, values, v_scales, shape, rc, scale_arr, dims
+    )
+
+
+def tile_partials_q8_reference(
+    q_fused, keys, k_scales, values, v_scales, lengths, slots, scale, plan, t_tokens, nc
+):
+    """TEST ONLY: the contract of ``TILE_PARTIALS_Q8``, by dequantizing the whole buffer in-graph and running
+    the bf16 tile kernel. Slow (a full bf16 copy per call); never installed as a fallback."""
+    from .kernels.int8_kv import dequantize_kv
+
+    return _tile_partials(
+        q_fused,
+        dequantize_kv(keys, k_scales),
+        dequantize_kv(values, v_scales),
+        lengths,
+        slots,
+        scale,
+        plan,
+        t_tokens,
+        nc,
+    )
+
+
+def tree_attention_fused_q8_reference(
+    queries, keys, k_scales, values, v_scales, shape, rc, scale_arr, dims
+):
+    """TEST ONLY: the contract of ``TREE_ATTENTION_FUSED_Q8`` (dequantize in-graph, bf16 fused kernel)."""
+    from .kernels.int8_kv import dequantize_kv
+
+    return _tree_attention_fused(
+        queries,
+        dequantize_kv(keys, k_scales),
+        dequantize_kv(values, v_scales),
+        shape,
+        rc,
+        scale_arr,
+        dims,
+    )
+
+
+def tree_attention_int8_reference(queries, cache, scale, shape, n0, rc=None):
+    """TEST ONLY: ``tree_attention`` over an int8 row cache computed as the bf16 kernel over the cache's
+    dequantized buffers (``Int8KVCache.dequantized``). The int8 kernels must reproduce this bit for bit."""
+    from types import SimpleNamespace
+
+    keys, values = cache.dequantized()
+    return tree_attention(
+        queries, SimpleNamespace(keys=keys, values=values), scale, shape, n0, rc
+    )
+
+
 def tree_attention(
     queries: mx.array,
     cache: Any,
@@ -716,6 +845,11 @@ def tree_attention(
     w = shape.width
     rc = rc or RoundContext(shape, n0)
     keys, values = cache.keys, cache.values
+    k_scales = getattr(
+        cache, "k_scales", None
+    )  # int8 row cache: codes + fp16 group scales
+    q8 = k_scales is not None
+    v_scales = cache.v_scales if q8 else None
     if keys.shape[2] % 64:
         pad = [
             (0, 0),
@@ -725,12 +859,27 @@ def tree_attention(
         ]
         cache.keys = keys = mx.pad(keys, pad)
         cache.values = values = mx.pad(values, pad)
+        if q8:
+            cache.k_scales = k_scales = mx.pad(k_scales, pad)
+            cache.v_scales = v_scales = mx.pad(v_scales, pad)
     _, h, _, d = (int(s) for s in queries.shape)
     hkv = int(keys.shape[1])
     g = h // hkv
     cstar, tail_start, ntail, m = rc.cstar, rc.tail_start, rc.ntail, rc.m
     scale_arr = _scale_array(scale)
     if getattr(shape, "fast_glue", False) and w <= FUSED_ROWS:
+        if q8:
+            return _tree_attention_fused_q8(
+                queries,
+                keys,
+                k_scales,
+                values,
+                v_scales,
+                shape,
+                rc,
+                scale_arr,
+                (h, hkv, d),
+            )
         return _tree_attention_fused(
             queries, keys, values, shape, rc, scale_arr, (h, hkv, d)
         )
@@ -738,16 +887,32 @@ def tree_attention(
     # shared chunks 0 .. cstar - 1: every row sees them whole
     if cstar:
         parts = [
-            _tile_partials(
-                _fuse_tokens(queries[:, :, lo : lo + tg], hkv, g, tg),
-                keys,
-                values,
-                len_arr,
-                rc.slot0,
-                scale_arr,
-                plan,
-                tg,
-                nc,
+            (
+                _tile_partials_q8(
+                    _fuse_tokens(queries[:, :, lo : lo + tg], hkv, g, tg),
+                    keys,
+                    k_scales,
+                    values,
+                    v_scales,
+                    len_arr,
+                    rc.slot0,
+                    scale_arr,
+                    plan,
+                    tg,
+                    nc,
+                )
+                if q8
+                else _tile_partials(
+                    _fuse_tokens(queries[:, :, lo : lo + tg], hkv, g, tg),
+                    keys,
+                    values,
+                    len_arr,
+                    rc.slot0,
+                    scale_arr,
+                    plan,
+                    tg,
+                    nc,
+                )
             )[:3]
             for lo, tg, len_arr, nc, plan in rc.groups_a
         ]
@@ -767,8 +932,12 @@ def tree_attention(
     # complete 64-key tiles containing live keys. The tile kernel's last load
     # still begins at the same address; masked CK padding needs no backing rows.
     cap2 = _tree_tail_capacity(m + shape.max_depth + 1)
-    hkv_keys = keys[0]  # [HKV, CAP, D]
-    hkv_vals = values[0]
+    if q8:  # the window / tail rows are dequantized into the bf16 tail copy
+        hkv_keys = _DequantRows(keys[0], k_scales[0])
+        hkv_vals = _DequantRows(values[0], v_scales[0])
+    else:
+        hkv_keys = keys[0]  # [HKV, CAP, D]
+        hkv_vals = values[0]
     win_k = (
         mx.take(hkv_keys[:, n0 : n0 + w], rc.win_idx, axis=1)
         .reshape(hkv, w, shape.max_depth + 1, d)
@@ -791,7 +960,7 @@ def tree_attention(
     parts_v.append(win_v)
     fill = cap2 - m - (shape.max_depth + 1)
     if fill:
-        z = _zeros((w, hkv, fill, d), keys.dtype)
+        z = _zeros((w, hkv, fill, d), mx.bfloat16 if q8 else keys.dtype)
         parts_k.append(z)
         parts_v.append(z)
     tail_k = mx.concatenate(parts_k, axis=2)
@@ -893,12 +1062,26 @@ def _add_rms(shape, h, r, norm):
     return vq.add_rms_norm(h, r, norm)
 
 
-def _tree_attention_fused(queries, keys, values, shape, rc, scale_arr, dims):
+def _tree_attention_fused(
+    queries,
+    keys,
+    values,
+    shape,
+    rc,
+    scale_arr,
+    dims,
+    *,
+    shared_partials=None,
+    tail_kv=None,
+):
     """``tree_attention`` with the query layouts, the per-row key/value tails and
     the partial tables built by one kernel each instead of a chain of copies, and
     the shared prefix read once for all of the window's 8-token groups (one launch,
     chunk-major; a launch per group re-reads the whole prefix from DRAM, about 3 ms
-    a group at 32K over 16 layers). Same values, same partials, same merge order."""
+    a group at 32K over 16 layers). Same values, same partials, same merge order.
+
+    ``shared_partials`` (``_tile_partials`` without the K / V arguments) and ``tail_kv`` (keys, values,
+    meta for the tail copy) let an int8 cache supply its own prefix kernel and a dequantized tail slice."""
     from . import tree_glue
 
     h, hkv, d = dims
@@ -907,25 +1090,33 @@ def _tree_attention_fused(queries, keys, values, shape, rc, scale_arr, dims):
     groups = -(-w // ra.TILE_TOKENS)
     q_a, q_b = tree_glue.fuse_queries(queries, hkv, groups)
     cap2 = _tree_tail_capacity(m + shape.max_depth + 1)
+    if shared_partials is None:
+
+        def shared_partials(q, lengths, slots, scale, plan, t_tokens, nc):
+            return _tile_partials(
+                q, keys, values, lengths, slots, scale, plan, t_tokens, nc
+            )
+
+    tail_keys, tail_values, tail_meta = tail_kv or (keys, values, rc.meta)
     tail_k, tail_v = tree_glue.tail_copy(
-        keys,
-        values,
+        tail_keys,
+        tail_values,
         rc.win_idx,
-        rc.meta,
+        tail_meta,
         width=w,
         depth_rows=shape.max_depth + 1,
         cap2=cap2,
     )
     if cstar and groups >= 2:
         lengths, slots, plan, nc = _shared_plan(rc.tail_start, groups)
-        po_a, pm_a, pl_a, _ = _tile_partials(
-            q_a, keys, values, lengths, slots, scale_arr, plan, 8, nc
+        po_a, pm_a, pl_a, _ = shared_partials(
+            q_a, lengths, slots, scale_arr, plan, 8, nc
         )
         starts_a = plan[1]
     elif cstar:
         _lo, tg, len_arr, nc, plan = rc.groups_a[0]
-        po_a, pm_a, pl_a, _ = _tile_partials(
-            q_a, keys, values, len_arr, rc.slot0, scale_arr, plan, tg, nc
+        po_a, pm_a, pl_a, _ = shared_partials(
+            q_a, len_arr, rc.slot0, scale_arr, plan, tg, nc
         )
         starts_a = plan[1]
     else:
@@ -993,16 +1184,23 @@ def supported(language_model: Any) -> bool:
 
 
 def lane_projections(lm: Any) -> bool:
-    """The decoder's projections are ``LaneLinear`` (row-invariant at any row count).
+    """The decoder's projections are row-invariant at any row count: ``LaneLinear``, or plain
+    floating-point ``nn.Linear`` (an unquantized checkpoint), which the verifier runs one token at a
+    time (``batch_invariant.exact_rows``: the decode GEMV for every row of a window, so a row's bits
+    do not depend on the window width).
 
     One projection ``lane_linear.convert`` could not read (FP16 scales, an unsupported
     width) stays a QuantizedLinear, whose sg8 arithmetic matches decode only up to 8 rows.
     """
+    import mlx.nn as nn
+
     from .kernels.lane_linear import LaneLinear
 
+    if getattr(lm, "_yunshu_lane_skipped", 0):
+        return False
     layer = lm.model.layers[0]
     proj = layer.linear_attn.in_proj_qkv if layer.is_linear else layer.self_attn.q_proj
-    return isinstance(proj, LaneLinear) and not getattr(lm, "_yunshu_lane_skipped", 0)
+    return isinstance(proj, LaneLinear) or type(proj) is nn.Linear
 
 
 def lane_ready(lm: Any, cache: list) -> bool:
@@ -1050,8 +1248,10 @@ def _tree_forward(
     capture_ids=(),
     *,
     verifier=None,
+    rope_delta: int | None = None,
 ) -> TreeResult:
-    """Run the window through the decoder. ``tokens`` [1, W]."""
+    """Run the window through the decoder. ``tokens`` [1, W]. ``rope_delta`` is the row's
+    mRoPE decode offset (a media prompt's ``rope_deltas``); None reads the model's own."""
     from mlx_vlm.models.qwen3_5 import language as q35
 
     verifier = q35._EXACT_SPECULATIVE_VERIFIER if verifier is None else verifier
@@ -1065,7 +1265,7 @@ def _tree_forward(
     n0 = ragged_kv._lane_length(cache[model.fa_idx])
     if n0 is None:
         raise ValueError("tree verify needs the single-row lane cache")
-    base = n0 + _rope_delta(lm)
+    base = n0 + (_rope_delta(lm) if rope_delta is None else int(rope_delta))
     if shape.dynamic:
         pos = mx.broadcast_to((base + shape.depth_array())[None, None], (3, 1, w))
     else:
@@ -1169,11 +1369,22 @@ def compact_kv(caches: list, src: mx.array, n0: int, m: int) -> None:
     """
     rows = []
     for c in caches:
-        rows.append((mx.take(c.keys, src, axis=2), mx.take(c.values, src, axis=2)))
+        gathered = [mx.take(c.keys, src, axis=2), mx.take(c.values, src, axis=2)]
+        if (
+            getattr(c, "k_scales", None) is not None
+        ):  # int8: codes move with their scales (no re-quantizing)
+            gathered += [
+                mx.take(c.k_scales, src, axis=2),
+                mx.take(c.v_scales, src, axis=2),
+            ]
+        rows.append(tuple(gathered))
     mx.async_eval(rows)
-    for c, (k, v) in zip(caches, rows, strict=True):
-        c.keys[..., n0 + 1 : n0 + m, :] = k
-        c.values[..., n0 + 1 : n0 + m, :] = v
+    for c, got in zip(caches, rows, strict=True):
+        c.keys[..., n0 + 1 : n0 + m, :] = got[0]
+        c.values[..., n0 + 1 : n0 + m, :] = got[1]
+        if len(got) == 4:
+            c.k_scales[..., n0 + 1 : n0 + m, :] = got[2]
+            c.v_scales[..., n0 + 1 : n0 + m, :] = got[3]
 
 
 def conv_tail(conv_prev, mixed, path, conv_idx, tail_idx):
@@ -1253,7 +1464,7 @@ def reserve_decode(cache: list, tokens: int) -> int:
     step = min(DECODE_STEP_CAP, max(256, -(-int(tokens) // 256) * 256))
     count = 0
     for c in cache:
-        if type(c) is KVCache:
+        if type(c) is KVCache or getattr(c, "k_scales", None) is not None:
             c.step = step
             count += 1
     return step if count else 0

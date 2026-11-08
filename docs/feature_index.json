@@ -56,6 +56,14 @@
       "status": "partial"
     },
     {
+      "id": "round-driver",
+      "group": "inference",
+      "title": "Round driver",
+      "summary": "multi-row speculative decoding for dense Qwen3.5-family models",
+      "doc": "docs/guides/ROUND_DRIVER.md",
+      "status": "stable"
+    },
+    {
       "id": "model-support",
       "group": "inference",
       "title": "Model support",

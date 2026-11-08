@@ -92,17 +92,14 @@ def test_stages_run_on_the_submitted_executor_not_the_timer_thread():
 
 
 def _runner(monkeypatch):
-    import importlib
     from concurrent.futures import ThreadPoolExecutor
     from types import SimpleNamespace
 
-    from tests.unit.test_vlm_runner_batching import FakeGen
+    from tests.unit.test_vlm_runner_batching import FakeDriver
     from yunshu_engine import vlm_batch_runner as vbr
 
-    ar = importlib.import_module("mlx_vlm.generate.ar")
-    FakeGen.instances = []
-    monkeypatch.setattr(ar, "BatchGenerator", FakeGen)
     rn = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), processor=None)
+    rn.driver = FakeDriver()
     rn._executor = ThreadPoolExecutor(max_workers=1)
     return rn
 
@@ -143,70 +140,6 @@ def test_runner_request_cancels_pending_idle_schedule(monkeypatch):
     assert _wait(lambda: seen == ["collect", "trim"], timeout=5)
     assert seen == ["collect", "trim"]
     rn._executor.shutdown(wait=True)
-
-
-def test_closing_a_group_breaks_the_speculative_round_cycle_without_the_collector():
-    """A finished speculative batch is freed by reference counting, not by gc."""
-    import gc
-    import weakref
-
-    from yunshu_engine.vlm_batch_runner import close_generator
-
-    class Cache:
-        pass
-
-    class Batch:  # stands in for SpeculativeGenerationBatch
-        def __init__(self):
-            self.prompt_cache = [Cache()]
-            self._rounds_iter = None
-
-        def start(self):
-            def stop_check(i):  # closes over the batch, as upstream's does
-                return self.prompt_cache
-
-            def rounds():
-                transaction = (stop_check, self.prompt_cache)
-                while True:
-                    yield transaction
-
-            self._rounds_iter = rounds()
-            next(self._rounds_iter)
-
-    class Gen:
-        closed = False
-
-        def __init__(self):
-            self._generation_batch = Batch()
-            self._generation_batch.start()
-
-        def close(self):
-            self.closed = True
-
-    gen = Gen()
-    cache_ref = weakref.ref(gen._generation_batch.prompt_cache[0])
-    gc.collect()
-    gc.disable()
-    try:
-        close_generator(gen)
-        assert gen.closed
-        del gen
-        assert cache_ref() is None  # freed at once: no cycle left for gc to find
-    finally:
-        gc.enable()
-
-
-def test_close_generator_tolerates_generators_without_speculation():
-    from yunshu_engine.vlm_batch_runner import close_generator
-
-    class Plain:
-        closed = False
-
-        def close(self):
-            self.closed = True
-
-    g = Plain()
-    close_generator(g)
-    assert g.closed
 
 
 def test_idle_trim_releases_host_allocator_after_mlx(monkeypatch):

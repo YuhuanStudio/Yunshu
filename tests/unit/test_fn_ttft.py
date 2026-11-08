@@ -1,5 +1,6 @@
 """Stage timers of a cold Flash-Next request: line format, accumulation, one line per request."""
 
+import logging
 import re
 
 from yunshu_engine import fn_ttft
@@ -27,3 +28,36 @@ def test_merge_sums_stages_and_spans_steps():
     a.merge(b)
     assert a.stage["wait"] == 0.75 and a.segs == 2
     assert LINE.match(a.line("lane", 1, 0, total_s=1.0))
+
+
+def test_driver_logs_one_line_per_cold_request(caplog):
+    from tests.unit.test_round_driver_flashnext import PROMPTS, make_tiny, run
+
+    lm, head = make_tiny()
+    with caplog.at_level(logging.INFO, logger="yunshu_engine.fn_ttft"):
+        run(lm, [PROMPTS[0]], head=head)
+    lines = [r.message for r in caplog.records if r.message.startswith("fn_ttft")]
+    assert len(lines) == 1 and LINE.match(lines[0]), lines
+
+
+def test_driver_logs_every_flash_next_span_with_its_cut_reason(caplog):
+    import re
+
+    from tests.unit.test_round_driver_flashnext import PROMPTS, make_tiny, run
+
+    lm, head = make_tiny()
+    with caplog.at_level(logging.INFO, logger="yunshu_engine.round_driver.driver"):
+        run(lm, [PROMPTS[0]], head=head)
+    spans = [r.message for r in caplog.records if r.message.startswith("fn_span")]
+    assert spans, "no fn_span line"
+    pat = re.compile(
+        r"fn_span path=driver ids=(\d+) span=(\d+):(\d+) len=(\d+) cut=([\w+-]+) submit=[\d.]+ wait=[\d.]+ ms"
+    )
+    got = [pat.match(m) for m in spans]
+    assert all(got), spans
+    edges = [(int(m[2]), int(m[3])) for m in got]
+    assert edges[0][0] == 0 and edges[-1][1] == int(got[0][1])  # spans tile the prompt
+    assert all(a[1] == b[0] for a, b in zip(edges, edges[1:]))  # noqa: B905
+    assert got[-1][5].startswith("tail") and all(
+        m[5] in ("grid", "grid+checkpoint", "checkpoint-cut", "other") for m in got[:-1]
+    )

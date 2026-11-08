@@ -31,7 +31,7 @@ from typing import Any, cast
 
 import mlx.core as mx
 
-from . import gdn_prefill
+from . import gdn_prefill, gpu_probe
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +241,7 @@ def attend(q: mx.array, k: mx.array, v: mx.array) -> mx.array:
 def supported_device() -> bool:
     if importlib.metadata.version("mlx") != "0.32.3":
         return False
-    info = mx.device_info()
+    info = gpu_probe.device_info()
     from .tensorfold.lane_qmm import _generation
 
     return bool(

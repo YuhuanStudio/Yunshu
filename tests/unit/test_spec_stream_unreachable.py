@@ -28,7 +28,6 @@ def _route(eng, **kw):
         stream=False,
         temperature=0.0,
         logprobs=False,
-        use_engine_loop=False,
     )
     args.update(kw)
     return eng._spec_route(**args)
@@ -41,7 +40,6 @@ def test_remaining_text_routes():
     assert _route(_engine(_ngram_greedy_default=True), spec_decode=False) == "ngram"
     assert _route(eng, temperature=0.7) is None
     assert _route(eng, logprobs=True) is None
-    assert _route(eng, use_engine_loop=True) is None
     assert _route(eng, gemma4_eligible=lambda: True) == "gemma4_assistant"
     assert _route(eng, stream=True, gemma4_eligible=lambda: True) is None
 
@@ -83,16 +81,6 @@ def test_vlm_spec_selection_survives_text_flag_removal(monkeypatch, override, mo
     monkeypatch.setenv("YUNSHU_MTP", "1")
     assert spec_select.choose({}, spec_family=True, mtp_capable=True).kind == mode
     assert spec_select.choose({}, spec_family=False, mtp_capable=True).kind == "none"
-
-
-def test_text_scheduler_receives_only_ngram():
-    eng = _engine(_engine_core=MagicMock())
-    eng._ngram_proposer = MagicMock()
-    eng._engine_core.scheduler._ngram_proposer = None
-    eng._wire_spec_decoders_to_scheduler()
-    eng._engine_core.scheduler.enable_ngram_spec.assert_called_once()
-    eng._engine_core.scheduler.set_spec_decoder.assert_not_called()
-    eng._engine_core.scheduler.set_mtp_decoder.assert_not_called()
 
 
 def test_live_streaming_path_has_holdback():
