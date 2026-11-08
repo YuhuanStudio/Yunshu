@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import analyze
+from . import probe as probe_mod
 from .core import (
     REPO,
     VENV_PY,
@@ -537,6 +538,101 @@ def stage_client_compat(ctx: Ctx) -> StageResult:
         if reasons:
             break
     return _finish(ctx, StageResult(stage, not reasons, reasons, numbers, jobs))
+
+
+# ── b0. probe ────────────────────────────────────────────────────────────
+def _probe_ctxs(ctx: Ctx) -> list:
+    cfg = ctx.suite
+    return (
+        list(cfg["ctx"])
+        if cfg.get("name") == "probe"
+        else list(cfg.get("probe_ctx", [1024]))
+    )
+
+
+def _probe_key(ctx: Ctx, ctxs: list, kinds: list) -> str:
+    """Base counters are deterministic: cache per (base sha, env, model, checkpoint, cells, runtime)."""
+    return _sha(
+        "probe",
+        ctx.base.key,
+        ctx.arm_env("base"),
+        ctx.model,
+        checkpoint_identity(ctx.model),
+        ctxs,
+        kinds,
+        _prompt_hashes(ctxs, kinds),
+        _runtime_key(ctx, "base"),
+        _dec_args(ctx),
+        _harness_hash(ctx.base.path),
+    )
+
+
+def stage_probe(ctx: Ctx) -> StageResult:
+    """One server per arm, short greedy cold decode; compare engine round counters (docs/guides/VERIFY.md)."""
+    cfg = ctx.suite
+    ctxs, kinds = _probe_ctxs(ctx), ["code", "prose"]
+    _check_prompts(ctxs, kinds)
+    key = _probe_key(ctx, ctxs, kinds)
+    cached = (
+        None if cfg.get("fresh_probe") else probe_mod.cache_load(ctx.exe.cache_dir, key)
+    )
+    arms = ["cand"] if cached else ["base", "cand"]
+    cells = [
+        Cell(
+            "probe",
+            arm,
+            _tfbench_argv(ctx, arm, "probe", arm, _unit_args(ctxs) + _dec_args(ctx)),
+            mem_gb=ctx.mem_gb,
+            timeout_min=_decode_est_min(
+                ctx, ctxs, len(kinds), int(cfg.get("decode_tokens", 256))
+            ),
+            stall_min=12 if ctx.big else 4,
+            quiet=True,
+        )
+        for arm in arms
+    ]
+    res = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(res)
+    if reasons:
+        return _finish(ctx, StageResult("probe", False, reasons))
+    summ = {}
+    try:
+        for arm in arms:
+            lg = _tfb_log(ctx, "probe", arm)
+            summ[arm] = probe_mod.summarize(
+                lg.read_text(errors="replace") if lg.exists() else "",
+                read_jsonl(res[arm].evidence),
+            )
+    except ValueError as e:  # no counter line: no evidence, no verdict
+        return _finish(
+            ctx, StageResult("probe", False, [f"no counter evidence ({arm}): {e}"])
+        )
+    if cached:
+        summ["base"] = cached
+    else:
+        probe_mod.cache_store(ctx.exe.cache_dir, key, summ["base"])
+    tol = {k: float(cfg[f"probe_{k}"]) for k in probe_mod.TOL if f"probe_{k}" in cfg}
+    cmp = probe_mod.compare(summ["base"], summ["cand"], tol)
+    numbers = dict(cmp["numbers"], base_cached=bool(cached), moved=cmp["moved"])
+    text = probe_mod.verdict_text(cmp)
+    ctx.log(text)
+    if cmp["ok"]:
+        return _finish(ctx, StageResult("probe", True, [], numbers))
+    reasons = list(cmp["moved"]) + ["run the speed stage"]
+    if cfg.get("then_speed") and "speed" not in cfg["stages"]:
+        ctx.suite = {
+            **cfg,
+            "reps": max(3, int(cfg.get("reps", 1))),
+            "ctx": ctxs,
+            "kinds": kinds,
+        }
+        sp = stage_speed(ctx)  # the speed verdict is final once the probe asked for it
+        numbers["speed_passed"] = sp.passed
+        reasons = [f"counters moved: {'; '.join(cmp['moved'])}"] + [
+            f"speed: {r}" for r in sp.reasons
+        ]
+        return _finish(ctx, StageResult("probe", sp.passed, reasons, numbers))
+    return _finish(ctx, StageResult("probe", False, reasons, numbers))
 
 
 def stage_smoke(ctx: Ctx) -> StageResult:
@@ -3063,6 +3159,7 @@ STAGE_FUNCS = {
     "searchrank": stage_searchrank,
     "rerank": stage_rerank,
     "preflight": stage_preflight,
+    "probe": stage_probe,
     "smoke": stage_smoke,
     "toolparse": stage_toolparse,
     "client_compat": stage_client_compat,

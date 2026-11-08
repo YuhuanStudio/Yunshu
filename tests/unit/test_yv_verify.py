@@ -210,6 +210,7 @@ def test_suite_named_and_adhoc():
 def test_full_suite_has_every_stage():
     assert suites.parse_suite("full")["stages"] == list(suites.LADDER)
     assert set(suites.STAGES) - set(suites.LADDER) == {
+        "probe",
         "longqa",
         "conc",
         "ttft_profile",
