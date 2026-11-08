@@ -20,6 +20,13 @@ class P:
                 gd.gated_delta_kernel = cl["step"]
             if act == "nopacked":
                 gd._gated_delta_kernel_packed = None
+            if act == "reset":
+                w = gd.gated_delta_kernel
+                if getattr(w, "__closure__", None):
+                    cl = {n: c.cell_contents for n, c in zip(w.__code__.co_freevars, w.__closure__)}
+                    gd.gated_delta_kernel = cl["step"]
+                gdn_prefill._STATE.update(installed=False, enabled=False)
+                lane_linear.set_stock_rows(0)
             print("GD", gd.gated_delta_kernel.__qualname__, gd._gated_delta_kernel_packed, getattr(lang,'gated_delta_update',None), getattr(lang.gated_delta_update,'__module__',None) if hasattr(lang,'gated_delta_update') else None, flush=True)
             print("STATE", dict(gdn=dict(gdn_prefill._STATE), nax=nax_prefill._enabled, attn=getattr(attn_prefill,'_STATE',getattr(attn_prefill,'_enabled',None)),
                stock=lane_linear.STOCK_ROWS, sp=lane_linear._SUM_POLICY, sr=lane_linear._SUM_REUSE,
