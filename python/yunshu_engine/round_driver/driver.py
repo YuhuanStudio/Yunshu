@@ -1313,6 +1313,37 @@ class RoundDriver:
         self._lazy_ids[id(row)] = lazy
         return lazy
 
+    def _span_reason(self, row: _Row, start: int, end: int) -> str:
+        """Why the prompt span ``start:end`` ends where it does (grid / checkpoint / tail)."""
+        n = len(row.req.ids)
+        atom = self.atom(start)
+        on_grid = end % atom == 0
+        if end == n:
+            return "tail" + ("+checkpoint" if end in row.ckpts else "")
+        if end in row.ckpts:
+            return "grid+checkpoint" if on_grid else "checkpoint-cut"
+        return "grid" if on_grid else "other"
+
+    def _log_spans(self, items: list, span_t: list, wait_s: float) -> None:
+        """One INFO line per Flash-Next prompt span of a request that is not already cached: where it
+        starts and ends, why it was cut, the host time spent building its graph and the step's eval
+        wait (shared by the step's spans). Logging only."""
+        for i, it in enumerate(items):
+            if it.seg is None:
+                continue
+            logger.info(
+                "fn_span path=driver ids=%d span=%d:%d len=%d cut=%s submit=%.1f wait=%.1f ms"
+                " (step of %d span(s))",
+                len(it.row.req.ids),
+                it.start,
+                it.end,
+                it.end - it.start,
+                self._span_reason(it.row, it.start, it.end),
+                (span_t[i + 2] - span_t[i + 1]) * 1e3,
+                wait_s * 1e3,
+                len(items),
+            )
+
     def _record_tail(self, items: list[_Item], hidden, captures) -> None:
         """Keep the final block a real forward produced for the next identical prompt."""
         for it in items:
@@ -1383,6 +1414,7 @@ class RoundDriver:
             return []
         tm = fn_ttft.Timer()
         tm.segs = len(items)
+        span_t: list[float] = [time.perf_counter()]
         captures: list[mx.array] = []
         entry = None
         tail_key = None
@@ -1407,6 +1439,9 @@ class RoundDriver:
                     parts: list[mx.array] = []
                     per_seg: list[list[mx.array]] = []
                     for it in items:
+                        span_t.append(
+                            time.perf_counter()
+                        )  # host time of the previous item
                         if it.seg is None:
                             continue
                         reserve_prompt_kv(it.row.cache, len(it.row.req.ids))
@@ -1438,6 +1473,7 @@ class RoundDriver:
                             )
                         )
                         per_seg.append(got)
+                    span_t.append(time.perf_counter())
                     if self.generic:
                         # rows of ``hidden`` are the logits of the prompts finished this step: an item
                         # owns one row if it ends its prompt, none otherwise
@@ -1468,12 +1504,15 @@ class RoundDriver:
         # on top of the previous chunk's, and a long prompt becomes one graph
         # holding every chunk's KV buffer version until its last chunk.
         advanced = {id(it.row): it.row for it in items}
+        t_eval = time.perf_counter()
         mx.eval(
             *[d[1] for d in draws],
             *[a for d in draws if d[2] for a in d[2]],
             *[a for r in advanced.values() for a in cache_buffers(r.cache)],
         )
         tm.mark("wait")
+        if self.flash and len(span_t) == len(items) + 2:
+            self._log_spans(items, span_t, time.perf_counter() - t_eval)
         if entry is None:
             self._record_tail(items, hidden, captures)
         tm.mark("ckpt")
