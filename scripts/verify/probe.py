@@ -147,7 +147,17 @@ def join_rows(parsed: dict, rows: list) -> list:
     for row, q in zip(dec, reqs[len(reqs) - len(dec) :]):  # noqa: B905
         tpr = q["tpr"]
         if tpr is None:
-            tpr = (row.get("ct") or 0) / q["rounds"] if q["rounds"] else None
+            # The lane's profile line leaves out one round (36 spec rounds, 35 profiled on the 1K code
+            # cell) and the driver's tokens/round excludes the prefill token, so ct / profile rounds read
+            # 7.31 against the driver's 7.08 for identical rounds, drafts and acceptance (2026-11-08).
+            # Use the row's own spec round count and the same (ct - 1) numerator as the driver.
+            spec_rounds = ((row.get("xy") or {}).get("speculative") or {}).get("rounds")
+            rounds = spec_rounds or q["rounds"]
+            tpr = (
+                ((row.get("ct") or 0) - (1 if spec_rounds else 0)) / rounds
+                if rounds
+                else None
+            )
             # a lane profile line has no token count: the join assumes one line per decode request.
             # An older build that skips some requests (and prints warmup lines) shifts the pairing, and
             # a reply of 256 tokens "in 1 round" is the symptom (2026-11-08 push-gate). A round commits
