@@ -25,10 +25,10 @@ SHA="$(git -C "$SRC" rev-parse "$REF")"
 # YUNSHU_CI_ROOT moves the ~8 GB checkout + venv off the system disk (an external SSD; it must not be
 # the denied build volume below). Default /tmp.
 WORK="${YUNSHU_CI_ROOT:-/tmp}/ycl-$(echo "$SHA" | cut -c1-8)"
-rm -rf "$WORK"
+[ -d "$WORK" ] && chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"  # tests leave read-only harness snapshots
 # A failing run's checkout stays for debugging, but only until the next run: three kept failures filled the system
 # disk (36 GB) on 2026-10-25. Older than 6 h so a concurrent run's checkout is never touched.
-find "${YUNSHU_CI_ROOT:-/tmp}/" -maxdepth 1 -type d -name 'ycl-*' -mmin +360 -exec rm -rf {} + 2>/dev/null
+find "${YUNSHU_CI_ROOT:-/tmp}/" -maxdepth 1 -type d -name 'ycl-*' -mmin +360 -exec chmod -R u+w {} + -exec rm -rf {} + 2>/dev/null
 git clone -q --no-hardlinks "$SRC" "$WORK"
 git -C "$WORK" checkout -q "$SHA"
 cd "$WORK"
@@ -129,5 +129,5 @@ UV_TOOL_DIR="$WORK/tools" UV_TOOL_BIN_DIR="$WORK/bin" uv tool install --python 3
 # A passing run's ~13 GB checkout + venv is not needed again (a failing one stays for debugging);
 # YUNSHU_CI_KEEP=1 keeps it.
 cd /
-[ "${YUNSHU_CI_KEEP:-0}" = 1 ] || rm -rf "$WORK"
+[ "${YUNSHU_CI_KEEP:-0}" = 1 ] || { chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"; }
 echo "ci-local: PASS $SHA ($WORK$([ "${YUNSHU_CI_KEEP:-0}" = 1 ] || echo ', removed'))"
