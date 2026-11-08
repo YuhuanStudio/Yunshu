@@ -38,10 +38,20 @@ def _census_or_skip() -> dict:
     return fp.load_json(fp.CENSUS_PATH)
 
 
+def _tree_src(engine) -> str:
+    """The source tree a cell of this engine runs from: a Yunshu engine's own pin, else this checkout."""
+    if engine.startswith("yunshu"):
+        pin = fp.pin_path_for("yunshu-main" if engine == "yunshu" else engine)
+        if pin.is_file():
+            return str(Path(fp.load_json(pin)["worktree"]) / "python")
+    return str(ROOT / "python")
+
+
 def test_manifest_engine_ids_are_the_twelve_measured_engines_plus_the_extra_omlx_dev():
     assert (
         MEASURED_IDS
         == [
+            "yunshu-next",
             "yunshu-pb2",
             "yunshu",
             "tf-1.2.1",
@@ -66,7 +76,7 @@ def test_engine_id_resolves_release_date_through_tfbench_path(engine):
     harness = bench_engines.tfbench_engine(
         engine
     )  # --engine id tfbench receives (yunshu-main)
-    version, _sha = bench_engines.engine_version(harness, str(ROOT / "python"))
+    version, _sha = bench_engines.engine_version(harness, _tree_src(engine))
     assert version != "unknown", f"{engine}: no version"
     date = fp.engine_release_date(census, harness, version, {})  # tfbench's header call
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", date), f"{engine}: {date!r}"
@@ -77,7 +87,7 @@ def test_release_date_source_is_recorded_for_every_engine_version():
     missing = []
     for engine in MEASURED_IDS:
         harness = bench_engines.tfbench_engine(engine)
-        version, _sha = bench_engines.engine_version(harness, str(ROOT / "python"))
+        version, _sha = bench_engines.engine_version(harness, _tree_src(engine))
         key = fp.census_key_for(harness)
         entry = census.get(key) or {}
         if version not in (entry.get("release_date_source") or {}):

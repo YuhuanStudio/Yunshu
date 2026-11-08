@@ -281,7 +281,7 @@ draw(); addEventListener('resize',()=>{clearTimeout(window._rt);window._rt=setTi
 </script>
 """
 
-ENGINE_ORDER = ["yunshu", "yunshu-pb2", "tf-1.2.1", "tf-1.1.8", "splash-1.5.0", "omlx-0.7.3", "omlx-0.7.3rc1",
+ENGINE_ORDER = ["yunshu", "yunshu-pb2", "yunshu-next", "tf-1.2.1", "tf-1.1.8", "splash-1.5.0", "omlx-0.7.3", "omlx-0.7.3rc1",
                 "mlx-serve-26.11.1", "mlx-lm-server", "mlx-vlm-server", "llama-cpp-b12061"]
 
 

@@ -143,7 +143,12 @@ def test_gate_is_a_step_inside_the_wrapper_not_the_argv(fake_world):
     plan = fr.plan_batch(_b1_rows(), "B1", fake_world["pin"])
     for job in plan.jobs:
         assert "fullcmp_quiet.py" not in " ".join(job.cmd)
-        first = job.script.splitlines()[1].split(" && ")[0]
+        steps = [
+            ln
+            for ln in job.script.splitlines()[1:]
+            if not ln.startswith(("cleanup_homes", "trap "))
+        ]
+        first = steps[0].split(" && ")[0]
         assert "fullcmp_quiet.py" in first and " gate " in first
 
 

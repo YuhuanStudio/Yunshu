@@ -294,6 +294,7 @@ EXPECTED_MODE_PROBE = {
 # manifest engine id -> census weights entry (census._meta.models); None = no pinned weights in census
 WEIGHT_GROUP = {
     "yunshu": "qwen3.8-27b-4bit-jundot",
+    "yunshu-next": "qwen3.8-27b-4bit-jundot",
     "yunshu-pb2": "qwen3.8-27b-4bit-jundot",  # the same CHECKPOINT as dev0 (bench_engines.build_launch)
     "omlx-0.7.3": "qwen3.8-27b-4bit-jundot",
     "omlx-0.7.3rc1": "qwen3.8-27b-4bit-jundot",
@@ -460,6 +461,7 @@ def build_pins(census: dict, pin: dict, sha_of=file_sha256, git_head=None) -> di
         # the Phase B preview: its own pin (own tree, venv and digest), same census entry as dev0
         # its tree is read from its own worktree (git_head is the dev0 test seam only)
         "yunshu-pb2": _yunshu_pin(census, frun.engine_pin("yunshu-pb2", pin), sha_of, None),
+        "yunshu-next": _yunshu_pin(census, frun.engine_pin("yunshu-next", pin), sha_of, None),
         "tf-1.2.1": _pin(
             "tf-1.2.1",
             "1.2.1",

@@ -23,6 +23,7 @@ def test_engine_list_is_the_approved_twelve_plus_ollama():
     # 12 measured engines (yunshu-pb2 added 2026-11-04: the same curve as yunshu, release date = its
     # commit 4f99270cae40, 2026-11-03T08:20:53+08:00) + lmstudio (not measured) + ollama (unsupported)
     assert fm.ENGINE_IDS == [
+        "yunshu-next",
         "yunshu-pb2",
         "yunshu",
         "tf-1.2.1",
@@ -42,7 +43,7 @@ def test_engine_list_is_the_approved_twelve_plus_ollama():
     ]
     assert "tf-1.2.0" not in fm.ENGINE_IDS
     # 12 measured + the extra oMLX 0.7.4.dev1 + the pinned Kapitsa 0.2.31 re-run + lmstudio
-    assert len([e for e in fm.ENGINE_IDS if e != "ollama"]) == 15
+    assert len([e for e in fm.ENGINE_IDS if e != "ollama"]) == 16
 
 
 def test_no_dropped_scope_and_no_secondary_models():

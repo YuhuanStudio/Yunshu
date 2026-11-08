@@ -159,6 +159,16 @@ NO_MEASUREMENT = {"prefill": {}, "decode": {}}
 PLACEHOLDER = "best-competitor (TBD)"
 
 ENGINE_PERF = {
+    # the pb2-generic candidate: dev0 planning curve, as pb2 (provisional; its cells are measured by the run)
+    "yunshu-next": dict(
+        full=True,
+        prefill=YUNSHU_CURVE["prefill"],
+        decode=YUNSHU_CURVE["decode"],
+        slow=YUNSHU_SLOW_POINTS,
+        ready_s=float(_PLAN["ready_s_max"]["value"]),
+        source="pb2-generic 89740a60f: NOT measured; the dev0 curve is the planning stand-in (provisional)",
+        assumed=["planning curve = dev0 (0f2960047); no yunshu-next cell has run"],
+    ),
     # the Phase B preview: the dev0 curve until its own 1K/32K/64K/128K cells are measured (provisional)
     "yunshu-pb2": dict(
         full=True,
@@ -379,6 +389,20 @@ def slowdown(eng, ctx_tokens, conc):
 # ---------------------------------------------------------------- engines and status
 UNV, UNS, CUT = "unverified", "unsupported", "cut"
 ENGINES = {
+    "yunshu-next": dict(
+        label="Yunshu next (pb2-generic 89740a60f, detached tree)",
+        version="0.1.7.dev0 @ 89740a60f (pb2-generic, unmerged candidate)",
+        supported=True,
+        caps=dict(
+            images=True,
+            json_schema=True,
+            anthropic=True,
+            responses=True,
+            disk_cache=True,
+            tools=True,
+            concurrency=True,
+        ),
+    ),
     "yunshu-pb2": dict(
         label="Yunshu Phase B preview (unmerged, 4f99270)",
         version="0.1.7.dev0 @ 4f99270 (phaseb2-main, unmerged preview)",
@@ -901,7 +925,7 @@ def build_smoke_rows():
 
 
 SMOKE_CONC_OUT = Path("/Volumes/Micron/yunshu-fullcmp/smoke-conc-manifest.jsonl")
-SMOKE_CONC_SKIP = ("ollama", "lmstudio", "omlx-0.7.4.dev1", "kapitsa-0.2.31")  # no concurrent path (census) / extra engine: own smoke
+SMOKE_CONC_SKIP = ("ollama", "lmstudio", "omlx-0.7.4.dev1", "kapitsa-0.2.31", "yunshu-next")  # no concurrent path (census) / extra engine: own smoke
 
 
 def smoke_conc_specs():
@@ -998,11 +1022,11 @@ CUT_ORDER = [
 
 # A cut decision is made once per cell: yunshu-pb2 is the same configuration as yunshu-main, so its row
 # takes the cut decision of the yunshu row (mirror by cell id). The two Yunshu engines run identical cells.
-CUT_MIRROR = {"yunshu-pb2": "yunshu", "omlx-0.7.4.dev1": "omlx-0.7.3", "kapitsa-0.2.31": "kapitsa-0.2.26"}
+CUT_MIRROR = {"yunshu-pb2": "yunshu", "yunshu-next": "yunshu", "omlx-0.7.4.dev1": "omlx-0.7.3", "kapitsa-0.2.31": "kapitsa-0.2.26"}
 # Engines added after the plan was sized: their rows mirror another engine's cells and cut decisions, and their hours
 # are NOT part of the planned total (the cut step is decided by the original engine set, so adding an engine never
 # changes which cells the other engines run). Their cost is reported separately.
-EXTRA_ENGINES = frozenset({"omlx-0.7.4.dev1", "kapitsa-0.2.31"})
+EXTRA_ENGINES = frozenset({"omlx-0.7.4.dev1", "kapitsa-0.2.31", "yunshu-next"})
 
 
 def apply_cuts(rows, out=sys.stdout):
@@ -1144,6 +1168,7 @@ WIRE_1108_SKIP = {
     "lmstudio": "not installed; headless unverified (manifest engine_version)",
     "omlx-0.7.4.dev1": "added later: its own wiring smoke (wire_omlx074_rows)",
     "kapitsa-0.2.31": "pinned re-run of kapitsa-0.2.26: the 0.2.26 rows carry the wiring evidence",
+    "yunshu-next": "added later: same server as yunshu-pb2 (its wiring rows carry the evidence); cells chosen by --next-cells",
 }
 
 
@@ -1214,6 +1239,39 @@ def wire_1108c8_rows():
     return out
 
 
+# yunshu-next re-run cells (2026-11-08): the cells where the real-1104 comparison found gaps, as manifest ids of the
+# yunshu engine ("@" = the engine id). Same cell ids, prompts and salts as the real run.
+NEXT_CELLS = tuple(
+    [
+        f"B1.core.@.{c}.c1.{k}.o512.single.th-off.none.greedy"
+        for c in ("1K", "8K", "32K", "128K")
+        for k in ("prose", "code")
+    ]
+    + [f"B2.kind.@.8K.c1.{k}.o512.single.th-off.none.greedy" for k in ("json-schema", "tool-chat")]
+    + ["B2.restart.@.32K.c1.code.o512.restart.th-off.none.greedy"]
+    + [f"B2.conc.@.{c}.c{n}.code.o512.single.th-off.none.greedy" for c in ("8K", "32K") for n in (2, 4, 8)]
+    + [f"B2.conc-same.@.8K.c{n}.code.o512.single.th-off.none.greedy" for n in (2, 4, 8)]
+    + ["B2.mixed.@.128K.c8.code.o512.mixed.th-off.none.greedy"]
+    + [f"B2.sampling.@.{c}.c1.code.o512.single.th-off.none.genconfig" for c in ("1K", "32K")]
+    + ["B2.thinking.@.8K.c1.code.o512.single.th-on.none.greedy"]
+)
+NEXT_ENGINE = "yunshu-next"
+
+
+def next_cell_rows():
+    """The yunshu-next rows of NEXT_CELLS. Fails closed when a cell is missing or not 'unverified'."""
+    rows, _meta = build_rows()
+    by_id = {r["id"]: r for r in rows if r["engine"] == NEXT_ENGINE}
+    out = []
+    for tmpl in NEXT_CELLS:
+        cid = tmpl.replace("@", NEXT_ENGINE)
+        r = by_id.get(cid)
+        if r is None or r["status"] != UNV:
+            raise SystemExit(f"next cell {cid}: {'missing' if r is None else r['status']}")
+        out.append(r)
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument(
@@ -1225,6 +1283,11 @@ def main(argv=None):
         "--only-engine",
         default=None,
         help="write only this engine's rows of the full plan (cuts decided by the whole plan), e.g. a re-run manifest",
+    )
+    ap.add_argument(
+        "--next-cells",
+        action="store_true",
+        help="write the yunshu-next re-run manifest (NEXT_CELLS: the gap cells of real-1104)",
     )
     ap.add_argument(
         "--batches",
@@ -1265,6 +1328,14 @@ def main(argv=None):
             for r in rows:
                 fh.write(json.dumps(r, sort_keys=True, ensure_ascii=False) + "\n")
         sys.stdout.write(f"wrote {out} ({len(rows)} omlx-0.7.4.dev1 smoke rows)\n")
+        return 0
+    if args.next_cells:
+        rows = next_cell_rows()
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        with args.out.open("w") as fh:
+            for r in rows:
+                fh.write(json.dumps(r, sort_keys=True, ensure_ascii=False) + "\n")
+        sys.stdout.write(f"wrote {args.out} ({len(rows)} {NEXT_ENGINE} rows)\n")
         return 0
     if args.c8_smoke:
         rows = wire_1108c8_rows()

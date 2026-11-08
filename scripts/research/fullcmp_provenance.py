@@ -65,6 +65,11 @@ PB2_PIN_PATH = Path(
     "/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103/yunshu_pb2_pin.json"
 )
 
+NEXT_PIN_PATH = Path(
+    "/Volumes/P5Plus/yunshu-build/competitors/compsync/fullcmp-1103/yunshu_next_pin.json"
+)
+
+
 def pin_path_for(engine=None) -> Path:
     """The pin file of one Yunshu engine id. Unknown Yunshu-like ids fail closed; the default
     (no engine, or the dev0 ids) is the dev0 pin, resolved per call so tests can redirect it."""
@@ -72,6 +77,8 @@ def pin_path_for(engine=None) -> Path:
         return PIN_PATH
     if engine == "yunshu-pb2":
         return PB2_PIN_PATH
+    if engine == "yunshu-next":
+        return NEXT_PIN_PATH
     raise ProvenanceError(f"no Yunshu pin for engine {engine!r}")
 
 

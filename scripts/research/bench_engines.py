@@ -262,6 +262,19 @@ ENGINES: dict[str, Engine] = {
             1.0,
             75.0,
         ),
+        # ---- full comparison: the pb2-generic candidate (detached tree 89740a60f, own pin) ----
+        Engine(
+            "yunshu-next",
+            "Yunshu next (pb2-generic, 89740a60f)",
+            "dflash",
+            "same",
+            CHECKPOINT,
+            DRAFTER,
+            "yunshu",
+            "pb2-generic tree 89740a60f (TFB_YUNSHU_SRC of its own pin); same launch as yunshu-pb2; default settings; drafter auto-discovered",
+            1.0,
+            75.0,
+        ),
         # ---- refsync: latest engines, 27B cells ----
         Engine(
             "yunshu-main",
@@ -552,6 +565,7 @@ LEGACY = ("yunshu", "tf-old", "tf-new")
 MANIFEST_ENGINES = {
     "yunshu": "yunshu-main",
     "yunshu-pb2": "yunshu-pb2",
+    "yunshu-next": "yunshu-next",
     "tf-1.2.1": "tf-1.2.1",
     "tf-1.1.8": "tf-1.1.8",
     "splash-1.5.0": "splash-1.5.0",
