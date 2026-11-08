@@ -9,6 +9,7 @@
       "commit": "a98d8c8c",
       "license": "Apache-2.0",
       "local_changes": [
+        "register_group_sums keeps at most GROUP_SUMS_MAX entries (a path that never clears the table pinned every layer output)",
         "imports point at yunshu_engine.kernels.omlx"
       ],
       "kind": "vendored",
@@ -408,6 +409,7 @@
       "commit": "125ca6819ed78212cacdf70fbbbfb25c25dd5f3f",
       "license": "Apache-2.0",
       "local_changes": [
+        "register_group_sums keeps at most GROUP_SUMS_MAX entries (a path that never clears the table pinned every layer output)",
         "none (verbatim); used only by kernels/qwen4_gdn.py for the Qwen4 fused GDN verify plan and deferred rollback"
       ],
       "kind": "vendored"

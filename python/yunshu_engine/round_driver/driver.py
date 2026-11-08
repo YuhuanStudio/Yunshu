@@ -84,6 +84,21 @@ LANE_ROWS = 128  # rows one lane-matmul call keeps row-invariant
 # to ~95 GiB in a 4 x 32K run, after which every step took 5-10x as long
 # (docs/guides/ROUND_DRIVER.md). The driver keeps it under this bound.
 CACHE_LIMIT = 8 * 2**30
+
+
+def _clear_verify_state() -> None:
+    """Drop the verify kernels' per-forward group-sum tables (thread-local, keyed by array).
+
+    The packed / Flash-Next layers register every GDN block output there; only the tree-verify
+    paths used to clear it, so each decode step of a driver row left its 48 layers' outputs (and
+    the Metal buffers behind them) alive: ~1600 arrays per second for the life of the server."""
+    from ..kernels.omlx import qwen35_verify_qmm as q35
+    from ..kernels.omlx_q4 import qwen35_verify_qmm as q4
+
+    q35.clear_group_sums()
+    q4.clear_group_sums()
+
+
 HEAD_LAZY_MAX = 512 << 20  # prompt HC bytes a row's queued head prefill may retain
 
 
@@ -1155,6 +1170,12 @@ class RoundDriver:
         )
 
     def step(self) -> list[Event]:
+        try:
+            return self._step_impl()
+        finally:
+            _clear_verify_state()
+
+    def _step_impl(self) -> list[Event]:
         # The previous step's tokens have been handed out: publish the captured checkpoints. While a
         # row is still prefilling nothing has been handed out yet and the capture stays lazy (the
         # runner flushes after the first token, as for the batch path): flushing at every prefill
