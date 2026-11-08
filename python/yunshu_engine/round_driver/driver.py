@@ -1523,7 +1523,10 @@ class RoundDriver:
         # holding every chunk's KV buffer version until its last chunk.
         advanced = {id(it.row): it.row for it in items}
         t_eval = time.perf_counter()
+        # Flash-Next: the span's HC states (the head's input and the next span's neighbour in the queue)
+        # are evaluated with the caches; left lazy they were measured 2-4% slower per cold prefill.
         mx.eval(
+            *([hidden] if self.flash and hidden is not None else []),
             *[d[1] for d in draws],
             *[a for d in draws if d[2] for a in d[2]],
             *[a for r in advanced.values() for a in cache_buffers(cast(list, r.cache))],
