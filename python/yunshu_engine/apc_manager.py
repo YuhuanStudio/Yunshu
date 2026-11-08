@@ -879,7 +879,9 @@ def _extra_defer_types() -> tuple:
 
     # every Qwen4-family language module's QSAKVCache (a renamed release adds its own module)
     return tuple(
-        m.QSAKVCache for m in qwen4_model_modules("language") if hasattr(m, "QSAKVCache")
+        m.QSAKVCache
+        for m in qwen4_model_modules("language")
+        if hasattr(m, "QSAKVCache")
     )
 
 
@@ -1508,21 +1510,27 @@ class _Coordinator(APCCoordinator):
         # first (the same drops ``store_exact_cache`` makes), then copy a few arrays at a
         # time across all checkpoints so the pinned buffers go as the copies appear.
         # Same operations and bits as evaluating everything at once; only the peak differs.
+        t0 = time.perf_counter()
         release = getattr(self.manager, "release_superseded", None)
         for tokens, _, extra_hash, _, generation, _, _ in pending:
             if release is not None:
                 release(tokens, extra_hash, _generation=generation)
+        t_release = time.perf_counter()
         views = share_prefix_rows(pending)
+        t_share = time.perf_counter()
         longest = max(pending, key=lambda p: len(p[0]))
         share_lazy = getattr(self.manager, "share_anchor_rows_lazy", None)
         if share_lazy is not None:
             # retained anchors give up their own rows before the new copy is made
             views = views + share_lazy(longest[0], longest[1], longest[2])
         materialize([entry[3] for entry in pending])
+        t_mat = time.perf_counter()
         if views:
             import mlx.core as mx
 
             mx.eval(views)
+        t_views = time.perf_counter()
+        store_ms = []
         for (
             tokens,
             snapshot,
@@ -1535,11 +1543,30 @@ class _Coordinator(APCCoordinator):
             kwargs = {"extra_hash": extra_hash, "_owned": True}
             if generation is not None:
                 kwargs["_generation"] = generation
+            t_store = time.perf_counter()
             if self.manager.store_exact_cache(tokens, snapshot, **kwargs):
                 self._publish_checkpoint_policy(tokens, extra_hash, policy, signature)
+            store_ms.append(
+                f"{len(tokens)}t:{(time.perf_counter() - t_store) * 1e3:.1f}"
+            )
         finish = getattr(self.manager, "finish_anchor_sharing", None)
         if finish is not None:
             finish()
+        logger.info(
+            "APC flush: %d checkpoint(s) %s (arrays copied %s MiB, %d shared views): release %.1f"
+            " share %.1f materialize %.1f views %.1f stores [%s] finish %.1f ms",
+            len(pending),
+            [len(p[0]) for p in pending],
+            sum(int(t.nbytes) for p in pending for t in p[3]) >> 20,
+            len(views),
+            (t_release - t0) * 1e3,
+            (t_share - t_release) * 1e3,
+            (t_mat - t_share) * 1e3,
+            (t_views - t_mat) * 1e3,
+            ", ".join(store_ms),
+            (time.perf_counter() - t_views) * 1e3
+            - sum(float(x.split(":")[1]) for x in store_ms),
+        )
 
     def discard_deferred_checkpoints(self) -> None:
         self.__dict__.pop("_deferred_checkpoints", None)
