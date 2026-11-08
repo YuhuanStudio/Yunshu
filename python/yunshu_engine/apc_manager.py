@@ -917,6 +917,18 @@ def materialize(target_lists, limit_bytes: int = MATERIALIZE_BYTES) -> None:
 SHARE_MAX_TAIL = 4096
 
 
+def _extra_defer_types() -> tuple:
+    """Cache classes (beyond the stock ones) whose checkpoints are captured lazily too: Flash-Next's
+    ``QSAKVCache`` (K/V plus the QSA indexer keys, positions and block summaries). Upstream's
+    ``clone_cache_entry`` copies it through its state / meta_state contract, the same function the
+    synchronous store uses, so the stored bits are identical; only when the copy runs differs."""
+    try:
+        from mlx_vlm.models.qwen4_exp.language import QSAKVCache
+    except ImportError:
+        return ()
+    return (QSAKVCache,)
+
+
 def share_prefix_rows(pending, max_tail: int = SHARE_MAX_TAIL) -> list:
     """Make a shorter checkpoint's K/V rows views of a longer one's of the same request.
 
@@ -1415,7 +1427,8 @@ class _Coordinator(APCCoordinator):
             and batch_idx in (None, 0)
             and bool(prompt_cache)
             and all(
-                type(c) in (ArraysCache, KVCache, RotatingKVCache)
+                type(c)
+                in (ArraysCache, KVCache, RotatingKVCache, *_extra_defer_types())
                 or (
                     type(c) in (BatchKVCache, BatchRotatingKVCache)
                     and c.is_single_row()

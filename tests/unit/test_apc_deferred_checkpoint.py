@@ -597,3 +597,38 @@ def test_sliding_window_checkpoint_is_deferred_and_survives_live_mutation(monkey
     frozen = calls[0][0]
     assert frozen.offset == 32
     assert frozen.keys[:, :, :32, :].tolist() == [[[[1.0] * 4] * 32]]
+
+
+def test_qsa_checkpoint_is_deferred_with_its_indexer_and_matches_the_synchronous_copy(
+    monkeypatch,
+):
+    """Flash-Next's QSAKVCache (K/V + indexer keys, positions, block summaries) is captured lazily
+    like KVCache: nothing is copied before the first token, live mutation afterwards does not
+    reach the capture, and it equals what upstream's clone makes of the live cache."""
+    from mlx_vlm.apc_adapters import clone_cache_entry
+    from mlx_vlm.models.qwen4_exp.language import QSAKVCache
+
+    manager = _mgr()
+    coordinator = _coordinator(manager)
+    coordinator.defer_checkpoint_stores = True
+    qsa = QSAKVCache()
+    qsa.update_and_fetch(mx.ones((1, 1, 32, 4)) * 2, mx.ones((1, 1, 32, 4)) * 3)
+    qsa.update_indexer(mx.ones((1, 32, 4)) * 5, mx.arange(32)[None, None, :])
+    qsa.index_block_keys = mx.ones((1, 2, 4)) * 6
+    qsa.index_block_ratio = 16
+    mx.eval(qsa.keys, qsa.values, qsa.index_keys, qsa.index_position_ids)
+    reference = clone_cache_entry(qsa, min_capacity_tokens=None, eval_targets=[])
+    calls = []
+    monkeypatch.setattr(
+        manager, "store_exact_cache", lambda ids, c, **kw: calls.append(c) or True
+    )
+    assert coordinator.store_checkpoint(list(range(32)), [qsa], extra_hash=1)
+    assert calls == []  # deferred, not copied on the first-token path
+    qsa.keys[:, :, :32, :] = 0
+    qsa.index_keys = mx.zeros((1, 32, 4))
+    coordinator.flush_deferred_checkpoints()
+    (frozen,) = calls[0]
+    assert type(frozen) is QSAKVCache and frozen.offset == 32
+    for got, want in zip(frozen.state[:5], reference.state[:5], strict=True):
+        assert got.tolist() == want.tolist()
+    assert frozen.index_block_ratio == reference.index_block_ratio == 16
