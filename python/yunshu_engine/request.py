@@ -123,6 +123,7 @@ class RequestOutput:
     finish_reason: str | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    prompt_logprobs: list | None = None
     logprobs: Any = None
     reasoning_tokens: int = 0
     current_state: str = "normal"

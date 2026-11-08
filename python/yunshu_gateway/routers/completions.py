@@ -737,6 +737,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     cancel_event=_ns_cancel_event,
                     timeout_seconds=req.timeout,
                     lora_adapter=loaded_adapter,
+                    prompt_logprobs=req.prompt_logprobs,
                     # parity with chat.py + the batched branch — these were dropped
                     # on the non-batched/streaming completions paths, so ignore_eos/min_tokens
                     # were no-ops for the default (fast-path) case (generation still stopped at
@@ -747,6 +748,8 @@ async def create_completion(req: CompletionRequest, request: Request):
                 )
                 # VLMEngine.generate() returns dict, not object with attributes
                 if isinstance(state, dict):
+                    if state.get("prompt_logprobs") is not None:
+                        _prompt_lp_holder["v"] = state["prompt_logprobs"]
                     text = state.get("text", "")
                     pt = state.get("prompt_tokens", 0)
                     ct = state.get("completion_tokens", 0)

@@ -287,6 +287,7 @@ class Request:
     processors: list = field(default_factory=list)
     logprobs: bool = False
     top_logprobs: int = 0
+    prompt_logprobs: int | None = None
     draft: bool = True  # greedy without processors / logprobs may draft
     guide: Any = None  # invariant tool-call guide, advanced on emitted tokens
     budget: Any = None  # mlx_vlm ThinkingBudgetCriteria (forces "\n</think>")
@@ -317,6 +318,7 @@ class Event:
     logprob: dict | None = None
     finish: str | None = None
     cached_tokens: int = 0
+    prompt_logprobs: list | None = None
 
 
 @dataclass
@@ -328,6 +330,7 @@ class _Row:
     head_lazy: int = (
         0  # bytes of prompt HC states the head's queued (unevaluated) prefill holds
     )
+    prompt_scores: list = field(default_factory=lambda: [None])
     done: int = 0  # prompt tokens prefilled
     pending: int | None = None  # committed token not yet in the cache
     generated: int = 0
@@ -687,7 +690,11 @@ class RoundDriver:
     def _restore(self, row: _Row) -> None:
         """Start ``row`` from the longest stored checkpoint of its prompt and
         plan the checkpoints it stores on the way."""
-        if self.apc is None or not row.req.use_apc:
+        if (
+            self.apc is None
+            or not row.req.use_apc
+            or row.req.prompt_logprobs is not None
+        ):
             return
         ids = row.req.ids
         # one coordinator per row: its checkpoint plan is request state
@@ -1318,6 +1325,7 @@ class RoundDriver:
         # one-layer forward, as on a real step), so only the target forward is skipped.
         if (
             self.generic
+            or row.req.prompt_logprobs is not None
             or row.finished
             or not replay.eligible(it.start, it.end, len(ids))
         ):
@@ -1413,6 +1421,8 @@ class RoundDriver:
             while budget > 0 and r.done < len(ids):
                 start = r.done
                 end = self._run_end(r, start, budget)
+                if r.req.prompt_logprobs is not None and self.generic:
+                    end = min(end, start + 32)
                 assert r.cache is not None
                 chunk = mx.array(ids[start:end], dtype=mx.int32)
                 items.append(
@@ -1510,6 +1520,16 @@ class RoundDriver:
                                 captured=got if self.dflash else None,
                             )
                         )
+                        if it.row.req.prompt_logprobs is not None:
+                            from .prompt_logprobs import score_span
+
+                            h = parts[-1]
+                            for offset in range(0, it.count, 32):
+                                score_span(
+                                    it.row,
+                                    it.start + offset,
+                                    self._logits(h[offset : offset + 32]),
+                                )
                         per_seg.append(got)
                     span_t.append(time.perf_counter())
                     if self.generic:
@@ -1830,7 +1850,17 @@ class RoundDriver:
                 finish = "stop"
             elif row.generated >= row.req.max_tokens:
                 finish = "length"
-            out.append(Event(row.req.handle, t, lp, finish))
+            out.append(
+                Event(
+                    row.req.handle,
+                    t,
+                    lp,
+                    finish,
+                    prompt_logprobs=row.prompt_scores
+                    if row.generated == 1 and row.req.prompt_logprobs is not None
+                    else None,
+                )
+            )
             lp = (
                 report(committed[used], extra[used])
                 if per_row and used < len(committed) and used < len(extra)
