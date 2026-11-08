@@ -234,7 +234,6 @@ def _no_gpuq_daemon_outlives_its_test():
     import time as _t
 
     yield
-    deadline = _t.monotonic() + 5
 
     def live():
         return [
@@ -243,7 +242,9 @@ def _no_gpuq_daemon_outlives_its_test():
             if t.is_alive() and t.name.endswith("(daemon)")
         ]
 
-    while live() and _t.monotonic() < deadline:
+    for _ in range(100):  # no clock: tests patch time.monotonic process-wide
+        if not live():
+            break
         _t.sleep(0.05)
     assert not live(), f"a gpuq daemon loop outlived its test: {live()}"
 
