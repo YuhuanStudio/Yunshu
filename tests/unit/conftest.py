@@ -204,6 +204,20 @@ def _restore_mlx_default_device():
         mx.set_default_device(previous)
 
 
+@pytest.fixture(autouse=True, scope="module")
+def _restore_dense_lane_route():
+    """The dense-lane attention route (``ragged_kv.set_dense_lane``) is a process-global switch: a module whose tiny
+    production model turns it on (test_round_driver_int8_dflash imports the DFlash fixtures but not their module-level
+    restore) left it on, and every later bf16 prefill of a one-row KVCache went through the ragged kernel by span, so
+    test_apc_manager_e2e's cold != warm tokens depended on which files shared its xdist worker."""
+    mod = _sys.modules.get("yunshu_engine.kernels.ragged_kv")
+    previous = mod._STATE["dense_lane"] if mod is not None else False
+    yield
+    mod = _sys.modules.get("yunshu_engine.kernels.ragged_kv")
+    if mod is not None and mod._STATE["dense_lane"] != previous:
+        mod.set_dense_lane(previous)
+
+
 @pytest.fixture(autouse=True)
 def _yunshu_loggers_inherit_levels():
     """Each test starts with the yunshu_* package loggers at NOTSET, so ``caplog.at_level(DEBUG)`` reaches them: an earlier
