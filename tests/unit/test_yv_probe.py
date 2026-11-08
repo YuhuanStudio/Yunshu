@@ -186,3 +186,15 @@ def test_summary_without_stage_lines_is_marked():
     s = probe.summarize((FX / "driver_rows.log").read_text(), _rows([255, 255]))
     assert s["stage_lines"] is False and s["stage_schema"] == 1
     assert probe.parse_stage_log("INFO nothing\n") == {"turn": [], "fn": []}
+
+
+def test_arm_without_round_counters_still_compares_ttft_stages():
+    """2026-11-08 proof run (Flash-Next, main's MTP lane prints no round counters): the probe stopped at
+    'no counter evidence' and never compared the fn_ttft stages both arms print."""
+    lane = (FX / "stages_lane.log").read_text()
+    s = probe.summarize(lane, _rows([255, 255]))
+    assert s["fmt"] == "none" and s["stage_lines"]
+    r = probe.compare(s, copy.deepcopy(s))
+    assert r["ok"], r["moved"]
+    with pytest.raises(ValueError):
+        probe.summarize("INFO nothing\n", _rows([1]))

@@ -174,15 +174,27 @@ def arm_ms(parsed: dict) -> float | None:
 
 
 def summarize(text: str, rows: list) -> dict:
-    parsed = parse_log(text)
-    cells = join_rows(parsed, rows)
     stage_log = parse_stage_log(text)
+    try:
+        parsed = parse_log(text)
+        cells = join_rows(parsed, rows)
+    except ValueError:
+        # no decode round counters (e.g. main's Flash-Next MTP lane): the TTFT stage lines can still be
+        # compared; without them there is no evidence at all and the caller fails closed / hands over
+        if not (stage_log["turn"] or stage_log["fn"]):
+            raise
+        parsed = {"fmt": "none", "requests": [], "windows": []}
+        cells = [
+            {"cell": f"{r.get('kind')}@{r.get('ctx')}:{r.get('phase')}", "rounds": None, "tpr": None,
+             "nodes": None, "hist": None, "dec_tps": r.get("dec_tps"), "ttft_s": r.get("ttft_s")}
+            for r in rows if r.get("part") == "decode" and r.get("phase")
+        ]
     dec = [r for r in rows if r.get("part") == "decode" and r.get("phase")]
     for cell, stages in zip(cells, join_stages(stage_log, rows)):  # noqa: B905
         cell["stages"] = stages
     return {
         "fmt": parsed["fmt"],
-        "ms_per_round": arm_ms(parsed),
+        "ms_per_round": arm_ms(parsed) if parsed["fmt"] != "none" else None,
         "cells": cells,
         "stage_lines": bool(stage_log["turn"] or stage_log["fn"]),
         "stage_schema": 1,
@@ -210,19 +222,22 @@ def compare(base: dict, cand: dict, tol: dict | None = None) -> dict:
             "numbers": {},
         }
     tpr_tol = t["tpr_pct_cross"] if cross else t["tpr_pct"]
+    nocount = "none" in (base["fmt"], cand["fmt"])  # an arm without round counters: TTFT stages only
     for b, c in zip(bc, cc):  # noqa: B905
         d = {"cell": b["cell"]}
         for name in ("tpr", "nodes", "rounds"):
             d[name] = [b[name], c[name]]
-        if b["tpr"] is None or c["tpr"] is None:
+        if nocount:
+            pass
+        elif b["tpr"] is None or c["tpr"] is None:
             moved.append(f"{b['cell']}: tokens/round missing")
         elif abs(_pct(b["tpr"], c["tpr"])) > tpr_tol:
             moved.append(f"{b['cell']}: tokens/round {b['tpr']:.2f} -> {c['tpr']:.2f}")
-        if abs(c["nodes"] - b["nodes"]) > t["nodes_abs"]:
+        if not nocount and abs(c["nodes"] - b["nodes"]) > t["nodes_abs"]:
             moved.append(
                 f"{b['cell']}: nodes/round {b['nodes']:.1f} -> {c['nodes']:.1f}"
             )
-        if not cross and b["rounds"] != c["rounds"]:
+        if not nocount and not cross and b["rounds"] != c["rounds"]:
             moved.append(f"{b['cell']}: rounds {b['rounds']} -> {c['rounds']}")
         if b["hist"] and c["hist"] and b["hist"] != c["hist"]:
             moved.append(
@@ -252,7 +267,7 @@ def compare(base: dict, cand: dict, tol: dict | None = None) -> dict:
             moved.append(
                 f"ms/round {bm:.1f} -> {cm:.1f} ({_pct(bm, cm):+.1f}%, limit {t['ms_pct']}%)"
             )
-    else:
+    elif not nocount:
         moved.append("ms/round missing in an arm (no window/profile line)")
     return {
         "ok": not moved,
