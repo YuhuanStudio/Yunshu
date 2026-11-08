@@ -391,3 +391,67 @@ def test_a_prompt_without_media_tokens_skips_the_media_scans(tiny, monkeypatch):
         out += [e.token for e in d.step()]
     assert hit > 0 and out == cold[0] == first[0]
     assert calls == []
+
+
+def test_earlier_checkpoints_start_their_copy_at_capture(tiny, monkeypatch):
+    """2026-11-08 Flash-Next 8K: a deferred checkpoint before the row's last one cost 118-128 ms in
+    the first decode window (nothing queued ahead of it). Every checkpoint but the row's last starts
+    its copy at capture (async_eval of exactly its targets); the last stays deferred; tokens and the
+    published checkpoints are unchanged."""
+    import yunshu_engine.round_driver.driver as drv
+    from yunshu_engine.apc_manager import YunshuAPCManager
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    def manager():
+        return YunshuAPCManager(
+            num_blocks=64,
+            block_size=16,
+            overrides={
+                "memory_max_gb": 1,
+                "checkpoint_entries": 4,
+                "checkpoint_interval_tokens": 256,
+            },
+        )
+
+    lm, _ = tiny
+    ref = _run(lm, None, [DOC], manager())[0][0]
+    started = []
+    real_async = drv.mx.async_eval
+
+    def record(*a):
+        if a and isinstance(
+            a[0], list
+        ):  # ids now: the flush may reuse or drop the list later
+            started.append({id(t) for t in a[0]})
+        return real_async(*a)
+
+    monkeypatch.setattr(drv.mx, "async_eval", record)
+    apc = manager()
+    d = RoundDriver(lm, stop_tokens=set(), chunk=64, apc=apc)
+    d.add(Request(DOC, N, handle=0))
+    planned = list(d.rows[0].ckpts)
+    assert len(planned) >= 2, planned
+    import yunshu_engine.apc_manager as am
+
+    captured = []
+    real_store = am._Coordinator.store_checkpoint
+
+    def store(self, token_ids, *a, **kw):
+        out = real_store(self, token_ids, *a, **kw)
+        pend = self.__dict__.get("_deferred_checkpoints") or []
+        if pend and len(pend[-1][0]) == len(token_ids):
+            captured.append((len(token_ids), [id(t) for t in pend[-1][3]]))
+        return out
+
+    monkeypatch.setattr(am._Coordinator, "store_checkpoint", store)
+    out = []
+    while d.busy():
+        out += [e.token for e in d.step()]
+    d.flush_checkpoints()
+    assert out == ref
+    started_ids = started
+    assert captured
+    for length, ids in captured:
+        early = any(set(ids) <= s for s in started_ids)
+        assert early == (length < max(planned)), (length, planned)
+    assert d.add(Request(DOC, N, handle=1)) >= len(DOC) - 1
