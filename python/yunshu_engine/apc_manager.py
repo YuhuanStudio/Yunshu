@@ -2330,6 +2330,7 @@ class YunshuAPCManager(APCManager):
         before_rejects = self.stats.rejects
         token = _OWNED_SNAPSHOT.set(bool(_owned))
         adm = _ADMISSION.set(True)
+        t_store = time.perf_counter()
         try:
             ok = super().store_exact_cache(
                 token_ids, prompt_cache, extra_hash=extra_hash
@@ -2337,6 +2338,13 @@ class YunshuAPCManager(APCManager):
         finally:
             _ADMISSION.reset(adm)
             _OWNED_SNAPSHOT.reset(token)
+        logger.info(
+            "APC store: %d tokens ok=%s in %.1f ms (owned snapshot %s)",
+            n,
+            bool(ok),
+            (time.perf_counter() - t_store) * 1e3,
+            bool(_owned),
+        )
         if ok and self.persist_on_store:
             self._persist_behind(key)
         if not ok and not had:
