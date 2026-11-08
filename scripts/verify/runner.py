@@ -349,8 +349,19 @@ def status_text(rd: RunDir) -> str:
     return f"{head}\n{run}; stage {s.get('stage')}; done {s.get('stages', {})}"
 
 
-def wait_run(rd: RunDir, sleep: float = 10.0, poll=time.sleep) -> int:
-    """Block until the run has a verdict, or its process is gone; exit code = the verdict's."""
+def wait_run(
+    rd: RunDir,
+    sleep: float = 10.0,
+    poll=time.sleep,
+    no_state_grace_s: float = 120.0,
+    clock=time.monotonic,
+) -> int:
+    """Block until the run has a verdict, or its process is gone; exit code = the verdict's.
+
+    A run that never wrote state.json (refused at start: unknown suite, bad ref) or whose directory is gone
+    fails closed after ``no_state_grace_s``: 2026-11-08 two completion watchers waited forever on runs
+    refused with 'unknown suite'."""
+    t0 = clock()
     while True:
         v = rd.path / "verdict.json"
         if v.exists():
@@ -359,6 +370,14 @@ def wait_run(rd: RunDir, sleep: float = 10.0, poll=time.sleep) -> int:
         if s and not alive(int(s.get("pid", 0) or 0)):
             print(
                 "yv: the run process is gone without a verdict; rerun the same command to resume"
+            )
+            return 2
+        if not s and clock() - t0 >= no_state_grace_s:
+            log = rd.path / "yv.log"
+            tail = log.read_text().strip().splitlines()[-1:] if log.exists() else []
+            print(
+                f"yv: no run state after {no_state_grace_s:.0f} s (refused at start or removed)"
+                + (f": {tail[0][:300]}" if tail else "")
             )
             return 2
         poll(sleep)
