@@ -1,0 +1,4 @@
+2026-11-08 06:26:48,507 INFO yunshu_engine.dflash_fast: DFlash round profile: 66 rounds, 14.1 nodes/round, draft 2.60 ms, verify 46.11 ms, commit+host 0.18 ms
+2026-11-08 06:26:51,819 INFO yunshu_engine.dflash_fast: DFlash round profile: 66 rounds, 14.1 nodes/round, draft 2.58 ms, verify 46.03 ms, commit+host 0.18 ms
+2026-11-08 06:26:55,493 INFO yunshu_engine.dflash_fast: DFlash round profile: 71 rounds, 13.6 nodes/round, draft 2.80 ms, verify 46.23 ms, commit+host 0.19 ms
+2026-11-08 06:26:58,365 INFO yunshu_engine.dflash_fast: DFlash round profile: 35 rounds, 15.7 nodes/round, draft 2.95 ms, verify 48.85 ms, commit+host 0.11 ms

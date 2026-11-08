@@ -85,3 +85,4 @@ scripts/research/local.env
 
 # trimmed server logs the fullcmp parser tests read (the *.log rule above is for run output)
 !tests/unit/fixtures/*.log
+!tests/unit/fixtures/**/*.log
