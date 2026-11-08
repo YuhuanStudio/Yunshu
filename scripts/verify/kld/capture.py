@@ -279,28 +279,34 @@ def install_driver(state, record, write_window, reset, expect_file) -> None:
     except ImportError:
         return  # a tree without the round driver: the upstream hooks above are the whole path
 
-    lane_forward = rd.lane_forward
+    def hooked(forward_fn, head_of):
+        """Wrap a segment forward ``(lm, seg, **kw) -> hidden`` so each prompt segment is recorded."""
 
-    def hooked_lane_forward(lm, seg, **kwargs):
-        offset = _cache_offset(seg.cache) if expect_file.exists() else None
-        out = lane_forward(lm, seg, **kwargs)
-        if expect_file.exists():
-            if offset != len(
-                state["tokens"]
-            ):  # a restored prefix, or an interleaved row
-                state["bad"] = True
-            elif not state["bad"]:
-                state["active"] = (
-                    True  # state["lm"] stays unset: the body hook must not record too
-                )
-                record(
-                    seg.tokens[None],
-                    out[None],
-                    head=lambda h: fwd.logits(lm, h[0])[None],
-                )
-        return out
+        def run(lm, seg, **kwargs):
+            offset = _cache_offset(seg.cache) if expect_file.exists() else None
+            out = forward_fn(lm, seg, **kwargs)
+            if expect_file.exists():
+                if offset != len(
+                    state["tokens"]
+                ):  # a restored prefix, or an interleaved row
+                    state["bad"] = True
+                elif not state["bad"]:
+                    state["active"] = (
+                        True  # state["lm"] stays unset: the body hook must not record too
+                    )
+                    record(seg.tokens[None], out[None], head=head_of(lm))
+            return out
 
-    rd.lane_forward = hooked_lane_forward
+        return run
+
+    rd.lane_forward = hooked(
+        rd.lane_forward, lambda lm: lambda h: fwd.logits(lm, h[0])[None]
+    )
+    # Flash-Next (Qwen4 family) prefills through flashnext.prefill, not lane_forward: without this hook
+    # no window is ever recorded ("the capture hook wrote no window").
+    from yunshu_engine.round_driver import flashnext as fn
+
+    fn.prefill = hooked(fn.prefill, lambda lm: lambda h: fn.logits(lm, h[0])[None])
     prefill_step = rd.RoundDriver._prefill_step
 
     def hooked_prefill_step(self, *args, **kwargs):
