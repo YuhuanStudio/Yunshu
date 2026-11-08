@@ -321,19 +321,42 @@ def pytest_collection_modifyitems(config, items):
             )
 
 
-def _loaded_driver_modules():
-    """Every loaded copy of fullcmp_run.py under any name (a test may hold a copy that is not in
-    sys.modules any more). gc.get_objects() also yields dead weakref proxies, whose isinstance or
-    attribute access raises ReferenceError: those are skipped."""
-    import gc as _gc
-    import types as _types
+_DRIVER_COPIES = None
 
+
+def _track_driver_copies():
+    """Remember every module object built from fullcmp_run.py, whatever name a test gives it (a test may
+    hold a copy that is not in sys.modules). Scanning gc.get_objects() for them in two autouse fixtures
+    cost 0.1-0.3 s per test as the worker's heap grew (80% of the suite's wall time: 3600 of 4400 s)."""
+    import importlib.util as _iu
+    import weakref
+
+    global _DRIVER_COPIES
+    _DRIVER_COPIES = weakref.WeakSet()
+    original = _iu.module_from_spec
+
+    def module_from_spec(spec):
+        mod = original(spec)
+        if str(getattr(spec, "origin", "") or "").endswith("fullcmp_run.py"):
+            _DRIVER_COPIES.add(mod)
+        return mod
+
+    _iu.module_from_spec = module_from_spec
+
+
+_track_driver_copies()
+
+
+def _loaded_driver_modules():
+    """Every loaded copy of fullcmp_run.py under any name: those in sys.modules plus the tracked copies."""
     found = []
-    for o in _gc.get_objects():
+    seen = set()
+    for o in [*list(_sys.modules.values()), *list(_DRIVER_COPIES)]:
         try:
-            if isinstance(o, _types.ModuleType) and str(
-                getattr(o, "__file__", "")
-            ).endswith("fullcmp_run.py"):
+            if id(o) not in seen and str(getattr(o, "__file__", "") or "").endswith(
+                "fullcmp_run.py"
+            ):
+                seen.add(id(o))
                 found.append(o)
         except ReferenceError:
             continue
