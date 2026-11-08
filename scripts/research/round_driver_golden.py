@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import math
+import struct
 from pathlib import Path
 
 LAYERS = ("generic", "qwen3_5", "qwen3_5_moe", "flash_next")
@@ -120,6 +121,11 @@ def validate(receipt):
             raise ValueError("missing replay evidence")
     if not caps["apc"] and not caps.get("apc_unavailable_reason"):
         raise ValueError("APC unavailability needs a reason")
+    int8 = payload["int8_reference"]
+    if caps["int8"] and (len(int8) != 3 or any(not r.get("sha256") for r in int8)):
+        raise ValueError("missing int8 oracle evidence")
+    if not caps["int8"] and int8:
+        raise ValueError("unexpected int8 evidence")
     return payload
 
 
@@ -222,7 +228,19 @@ def build(layer, model):
         ragged_kv.install()
         ragged_kv.set_dense_lane(False)
         mx.eval(lm.parameters())
-        head = None
+        from mlx_vlm.speculative.drafters.qwen3_5_mtp.config import Qwen3_5MTPConfig
+        from mlx_vlm.speculative.drafters.qwen3_5_mtp.qwen3_5_mtp import (
+            Qwen3_5MTPDraftModel,
+        )
+
+        mx.random.seed(3)
+        head = Qwen3_5MTPDraftModel(
+            Qwen3_5MTPConfig(
+                text_config={**asdict(tiny_config()), "mtp_num_hidden_layers": 1}
+            )
+        )
+        head.set_dtype(mx.bfloat16)
+        mx.eval(head.parameters())
     return (
         lm,
         lm,
@@ -232,6 +250,75 @@ def build(layer, model):
             for salt, n in enumerate((17, 33, 25))
         ],
     )
+
+
+def int8_reference():
+    """Keep the existing dequantized-bf16 arithmetic oracle, never int8 == bf16 quality."""
+    import mlx.core as mx
+    from tests.unit.test_int8_tile_kernel import _int8_cache
+
+    from yunshu_engine import tree_verify as tv
+    from yunshu_engine.kernels import int8_tile
+    from yunshu_engine.kernels import ragged_attention as ra
+
+    receipts = []
+    for hkv, g, tokens, length in ((1, 4, 1, 1300), (2, 4, 4, 1300), (1, 4, 2, 65)):
+        cap = -(-length // 64) * 64
+        kc, ks, vc, vs = _int8_cache(hkv, cap, seed=length + tokens)
+        mx.random.seed(7)
+        q = mx.random.normal((1, hkv * g, tokens, 256)).astype(mx.bfloat16)
+        fused = tv._fuse_tokens(q, hkv, g, tokens)
+        nc = -(-length // tv.CK)
+        plan = ra._work_list((length,), tokens, nc, True)
+        args = (
+            fused,
+            kc,
+            ks,
+            vc,
+            vs,
+            mx.array([length], dtype=mx.int32),
+            mx.array([0], dtype=mx.int32),
+            tv._scale_array(256**-0.5),
+            plan,
+            tokens,
+            nc,
+        )
+        got = int8_tile.tile_partials_q8(*args)
+        ref = tv.tile_partials_q8_reference(*args)
+        assert all(
+            bool(mx.array_equal(a, b)) for a, b in zip(got[:3], ref[:3], strict=True)
+        )
+        receipts.append(
+            dict(
+                hkv=hkv,
+                group=g,
+                tokens=tokens,
+                length=length,
+                sha256=digest(
+                    [
+                        {
+                            "shape": list(a.shape),
+                            "dtype": str(a.dtype),
+                            "bits": hashlib.sha256(
+                                struct.pack(
+                                    f"<{a.size}f",
+                                    *a.astype(mx.float32).reshape(-1).tolist(),
+                                )
+                            ).hexdigest(),
+                        }
+                        for a in got[:3]
+                    ]
+                ),
+            )
+        )
+    return receipts
+
+
+def cache_prompt_index(prompts):
+    index = max(range(len(prompts)), key=lambda i: len(prompts[i]))
+    if len(prompts[index]) <= 16:
+        raise ValueError("APC probe needs a prompt past its 16-token floor")
+    return index
 
 
 def _capture(layer, model=None, tokens=8, device="gpu"):
@@ -368,8 +455,7 @@ def _capture(layer, model=None, tokens=8, device="gpu"):
                 },
             )
             replay.clear()
-            # The existing generic fixture has two prompts below the APC floor.
-            cache_index = 1
+            cache_index = cache_prompt_index(prompts)
             cold_hits, warm_hits = [], []
             cold = run([cache_index], mode, "cold", apc=apc, hits=cold_hits)
             warm = run([cache_index], mode, "hit", apc=apc, hits=warm_hits)
@@ -390,13 +476,45 @@ def _capture(layer, model=None, tokens=8, device="gpu"):
             cache_cells[-1]["replayed"] = replayed
             replay.clear()
     import importlib.metadata
+    import platform
+    import subprocess
 
+    int8 = int8_reference() if layer in ("qwen3_5", "qwen3_5_moe") else []
+    assert_globals(baseline)
     payload = dict(
         layer=layer,
         model=str(model or f"tiny:{layer}"),
         execution=execution,
+        prompt_sha256=digest(prompts),
+        checkpoint={
+            "config_sha256": hashlib.sha256(
+                (Path(model) / "config.json").read_bytes()
+            ).hexdigest(),
+            "weight_sizes": {
+                p.name: p.stat().st_size
+                for p in sorted(Path(model).glob("*.safetensors"))
+            },
+        }
+        if model
+        else None,
+        seeds={
+            "target": 0 if layer == "generic" else 17 if layer == "flash_next" else 23,
+            "head": 5 if layer == "flash_next" else 3,
+            "sampling": 41,
+        }
+        if not model
+        else {"sampling": 41},
+        int8_reference=int8,
         device=str(mx.default_device()),
-        hardware=mx.device_info() if device == "gpu" else {"device": "cpu"},
+        hardware=mx.device_info()
+        if device == "gpu"
+        else {
+            "device": "cpu",
+            "machine": platform.machine(),
+            "chip": subprocess.check_output(
+                ["sysctl", "-n", "machdep.cpu.brand_string"], text=True
+            ).strip(),
+        },
         versions={p: importlib.metadata.version(p) for p in ("mlx", "mlx-vlm")},
         globals=baseline,
         tokens=tokens,
@@ -410,7 +528,7 @@ def _capture(layer, model=None, tokens=8, device="gpu"):
             if layer == "generic"
             else None,
             "replay": layer != "generic",
-            "int8": False,
+            "int8": bool(int8),
             "media": "embedding-equivalence",
         },
     )

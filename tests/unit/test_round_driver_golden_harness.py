@@ -18,8 +18,13 @@ def receipt():
         tokens=4,
         globals=dict.fromkeys(GLOBAL_STATES, False),
         capabilities=dict(
-            spec=False, apc=False, replay=False, apc_unavailable_reason="fixture"
+            spec=False,
+            apc=False,
+            replay=False,
+            int8=False,
+            apc_unavailable_reason="fixture",
         ),
+        int8_reference=[],
         spec_cells=[],
         cache_cells=[],
         cells=[
@@ -119,3 +124,29 @@ def test_cli_writes_a_complete_json_line(tmp_path, monkeypatch):
     golden.main()
     records = [json.loads(line) for line in out.read_text().splitlines()]
     assert len(records) == 1 and records[-1]["complete"] is True
+
+
+def test_apc_probe_uses_a_prompt_above_the_cache_floor():
+    from scripts.research.round_driver_golden import cache_prompt_index
+
+    prompts = [list(range(18)), list(range(11)), list(range(23))]
+    assert len(prompts[cache_prompt_index(prompts)]) > 16
+    with pytest.raises(ValueError, match="16-token floor"):
+        cache_prompt_index([[1], [2, 3]])
+
+
+def test_gpu_capture_requires_queue_before_importing_mlx(monkeypatch):
+    from scripts.research.round_driver_golden import capture
+
+    monkeypatch.delenv("GPUQ_JOB_ID", raising=False)
+    with pytest.raises(RuntimeError, match="gpuq admission"):
+        capture("qwen3_5")
+
+
+@pytest.mark.parametrize("capability", ["spec", "apc", "int8"])
+def test_capability_without_evidence_fails(capability):
+    r = receipt()
+    r["payload"]["capabilities"][capability] = True
+    r["sha256"] = digest(r["payload"])
+    with pytest.raises(ValueError):
+        validate(r)

@@ -3015,6 +3015,16 @@ def stage_round_golden(ctx: Ctx) -> StageResult:
         ]
         if kind == "checkpoint":
             cmd += ["--model", ctx.model]
+        if ctx.env.get("M0_REFERENCE_DIR"):
+            reference = Path(ctx.env["M0_REFERENCE_DIR"]) / f"{layer}-{kind}.jsonl"
+            if not reference.is_file():
+                return _finish(
+                    ctx,
+                    StageResult(
+                        "round-golden", False, [f"missing reference {reference}"]
+                    ),
+                )
+            cmd += ["--reference", str(reference)]
         cell = Cell(
             "round-golden",
             kind,
@@ -3035,11 +3045,21 @@ def stage_round_golden(ctx: Ctx) -> StageResult:
         if _failed_cells(results):
             break
     reasons = _failed_cells(results)
-    numbers = {
-        key: json.loads(result.evidence.read_text())["sha256"]
-        for key, result in results.items()
-        if result.ok and result.evidence
-    }
+    numbers = {}
+    for key, result in results.items():
+        if result.ok and result.evidence:
+            receipt = json.loads(result.evidence.read_text())
+            payload = receipt["payload"]
+            cells = payload["cells"] + payload["spec_cells"] + payload["cache_cells"]
+            numbers[key] = dict(
+                sha256=receipt["sha256"],
+                cells=len(cells),
+                tokens=sum(len(row) for cell in cells for row in cell["rows"]),
+                drafted=sum(run["drafted"] for run in payload["execution"]),
+                hits=sum(sum(cell["hits"]) for cell in payload["cache_cells"]),
+                replays=sum(cell.get("replayed", 0) for cell in payload["cache_cells"]),
+                int8_checks=len(payload["int8_reference"]),
+            )
     return _finish(ctx, StageResult("round-golden", not reasons, reasons, numbers))
 
 
