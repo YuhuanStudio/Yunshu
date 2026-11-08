@@ -209,3 +209,23 @@ def test_reference_attention_stays_finite_when_the_last_row_ends_on_a_block_boun
         q, k, k, mx.array(blocks), mx.array(ends[None]), 256**-0.5
     )
     assert np.isfinite(np.array(out.astype(mx.float32))).all()
+
+
+def test_capture_rewrites_the_module_form_server_command():
+    """The harness starts `<python> -m <cli module> serve ...`; only the legacy script name was
+    rewritten, so no capture hook was installed and every window failed 'wrote no window'."""
+    from verify.kld import capture
+
+    for cmd in (
+        ["/venv/bin/python", "-m", "yunshu_cli", "serve", "--port", "1"],
+        ["/venv/bin/yunshu", "serve", "--port", "1"],
+    ):
+        out = capture.serve_command(cmd, "base", "qwen4_exp")
+        assert out[1].endswith("capture.py") and out[2:5] == [
+            "serve",
+            "base",
+            "qwen4_exp",
+        ]
+        assert out[5:] == ["serve", "--port", "1"]
+    other = ["/venv/bin/python", "-m", "other"]
+    assert capture.serve_command(other, "base", "qwen4_exp") == other

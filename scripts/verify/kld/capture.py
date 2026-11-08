@@ -354,6 +354,25 @@ def ask(url: str, model: str, text: str) -> tuple[int, float]:
     return int((reply.get("usage") or {})["prompt_tokens"]), time.perf_counter() - t0
 
 
+def serve_command(command, arm: str, arch: str):
+    """The harness's server command with this script's hooked server in its place. The harness launches
+    ``<python> -m <cli module> serve ...`` (or the legacy console script): both are rewritten, otherwise
+    no hook is installed and no window is ever written."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "research"))
+    from bench_engines import is_yunshu_command, yunshu_args
+
+    if command and is_yunshu_command(command):
+        return [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "serve",
+            arm,
+            arch,
+            *yunshu_args(command),
+        ]
+    return command
+
+
 def run(args) -> None:
     import subprocess
 
@@ -372,16 +391,7 @@ def run(args) -> None:
     popen = subprocess.Popen
 
     def launch(command, *a, **kw):
-        if command and Path(command[0]).name == "yunshu":
-            command = [
-                sys.executable,
-                str(Path(__file__).resolve()),
-                "serve",
-                args.arm,
-                arch,
-                *command[1:],
-            ]
-        return popen(command, *a, **kw)
+        return popen(serve_command(command, args.arm, arch), *a, **kw)
 
     out = Path(args.out)
     rows = []
