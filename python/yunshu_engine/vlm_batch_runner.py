@@ -2043,6 +2043,8 @@ class VLMBatchRunner:
         try:
             early_first = self._emit_ready_first(group)
             tm.mark("submit")
+            pb0 = getattr(group.gen, "_prompt_batch", None)
+            cols0 = int(getattr(pb0, "_processed_prompt_columns", 0) or 0)
             if decode_only:
                 # Upstream returns after decode once capacity is reached. Zero
                 # capacity yields without starting/resuming any prefill atom.
@@ -2056,6 +2058,23 @@ class VLMBatchRunner:
                 prompt_progress, responses = self._next_preemptible(group)
             tm.mark("wait")
             tm.segs = 1
+            if group.spec and not decode_only and job.stats.generated == 0:
+                # one line per prefill atom of a speculative request: where the generator's chunk
+                # started and ended (its end is the prompt's length once the prompt batch is gone)
+                pb1 = getattr(group.gen, "_prompt_batch", None)
+                cols1 = (
+                    int(getattr(pb1, "_processed_prompt_columns", 0) or 0)
+                    if pb1 is not None
+                    else len(job.ids)
+                )
+                logger.info(
+                    "fn_span path=lane ids=%d span=%d:%d len=%d wait=%.1f ms",
+                    len(job.ids),
+                    cols0,
+                    cols1,
+                    cols1 - cols0,
+                    tm.stage["wait"] * 1e3,
+                )
             if group.spec and _serial_rows(job):
                 from .constrained_spec import finish_serial_prefill
 
