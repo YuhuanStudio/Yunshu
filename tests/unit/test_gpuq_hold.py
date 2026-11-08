@@ -49,7 +49,7 @@ def test_holder_keeps_lane_while_it_has_long_jobs(gpuq):
 
 
 def test_holder_gap_waits_for_next_batch_but_short_jobs_still_run(gpuq):
-    hist = [ran("a0", "a", 31 * MIN, 30 * MIN)]  # ended 60 s ago
+    hist = [ran("a0", "a", 30 * MIN + 20, 30 * MIN)]  # ended 20 s ago (HOLD_GAP_S is 30)
     other_long = job("b1", "b")
     assert gpuq._pick(hist + [other_long]) is None
     smoke = job("b-smoke", "b", timeout_s=5 * MIN)

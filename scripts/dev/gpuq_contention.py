@@ -279,17 +279,60 @@ class CpuSampler:
         return sorted(found, key=lambda m: -m["cpu_pct"])
 
 
+def is_quiet_sample(sample, cfg):
+    """One definition of a quiet CPU sample, shared by the admission window and the carry-over."""
+    cpu = sample["foreign_cpu_pct"]
+    return not (
+        cpu is None or cpu >= cfg["threshold_pct"] or busy_foreign_models(sample, cfg)
+    )
+
+
+HISTORY_S = 600.0
+
+
 class QuietGate:
-    """One shared pending snapshot per poll, individual continuous quiet windows."""
+    """One shared pending snapshot per poll, individual continuous quiet windows.
+
+    The sampler also runs while a job holds the lane (``observe``, called every daemon tick with
+    the running job's pid; that job's process tree is excluded exactly as at admission). A quiet
+    window that began during the previous job therefore counts at the next admission: the hold is
+    ``window - already_quiet``. The guarantee is unchanged: the same foreign-CPU definition (the
+    same sampler, with the lane job's tree as the only exclusion), the same thresholds and the
+    same continuous ``window_s``; the carried part is observed time, not skipped time. A gap in
+    sampling longer than ``MAX_POLL_GAP_S`` or any busy sample ends the carried window."""
 
     def __init__(self):
         self.sampler = CpuSampler(env=None)
         self.cached = None
+        self.running_pid = None
+        self.history = []
+
+    def observe(self, now, running_pid=None):
+        self.running_pid = running_pid
+        return self.sample(now)
 
     def sample(self, now):
         if self.cached is None or now - self.cached["time"] >= 1.0:
-            self.cached = self.sampler.sample(now=now)
+            if self.running_pid is None:
+                # No lane job: nothing is excluded (a finished job's leftovers are foreign).
+                self.sampler.owned.clear()
+            self.cached = self.sampler.sample(pid=self.running_pid, now=now)
+            self.history.append(self.cached)
+            while self.history and now - self.history[0]["time"] > HISTORY_S:
+                self.history.pop(0)
         return self.cached
+
+    def carried_quiet_since(self, cfg):
+        """Start of the continuous quiet run ending at the newest sample, or None."""
+        since = None
+        newer = None
+        for row in reversed(self.history):
+            if not is_quiet_sample(row, cfg):
+                break
+            if newer is not None and newer["time"] - row["time"] > MAX_POLL_GAP_S:
+                break
+            since, newer = row["time"], row
+        return since
 
     def blocked(self, job, sample, now):
         if not requires_quiet(job):
@@ -311,7 +354,8 @@ class QuietGate:
         ):
             job["quiet_since"] = None
         elif job.get("quiet_since") is None:
-            job["quiet_since"] = now
+            carried = self.carried_quiet_since(cfg)
+            job["quiet_since"] = now if carried is None else min(now, carried)
         if (
             job.get("quiet_since") is not None
             and now - job["quiet_since"] >= cfg["window_s"]
