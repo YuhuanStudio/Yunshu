@@ -1510,7 +1510,15 @@ class _Coordinator(APCCoordinator):
         # first (the same drops ``store_exact_cache`` makes), then copy a few arrays at a
         # time across all checkpoints so the pinned buffers go as the copies appear.
         # Same operations and bits as evaluating everything at once; only the peak differs.
+        import mlx.core as mx
+
+        # Diagnostic split (2026-11-08): wait for the GPU work queued before the flush (the step that
+        # emitted the first token, an already-dispatched next round) separately, so 'materialize'
+        # reports the copies alone. The copies would wait for that work anyway (one stream, in order).
+        t_q = time.perf_counter()
+        mx.synchronize()
         t0 = time.perf_counter()
+        queued_ms = (t0 - t_q) * 1e3
         release = getattr(self.manager, "release_superseded", None)
         for tokens, _, extra_hash, _, generation, _, _ in pending:
             if release is not None:
@@ -1553,12 +1561,13 @@ class _Coordinator(APCCoordinator):
         if finish is not None:
             finish()
         logger.info(
-            "APC flush: %d checkpoint(s) %s (arrays copied %s MiB, %d shared views): release %.1f"
+            "APC flush: %d checkpoint(s) %s (arrays copied %s MiB, %d shared views): queued %.1f release %.1f"
             " share %.1f materialize %.1f views %.1f stores [%s] finish %.1f ms",
             len(pending),
             [len(p[0]) for p in pending],
             sum(int(t.nbytes) for p in pending for t in p[3]) >> 20,
             len(views),
+            queued_ms,
             (t_release - t0) * 1e3,
             (t_share - t_release) * 1e3,
             (t_mat - t_share) * 1e3,
