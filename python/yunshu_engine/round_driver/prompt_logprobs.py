@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import mlx.core as mx
 
 from ..text_logprobs import top_logprobs_rows
@@ -17,7 +19,7 @@ def score_span(row, start: int, logits: mx.array) -> None:
     values = mx.take_along_axis(lp, mx.array(targets)[:, None], axis=-1)
     k = int(row.req.prompt_logprobs or 0)
     ids, tops = top_logprobs_rows(lp, k)
-    vals = values[:, 0].tolist()
+    vals = cast(list[float], values[:, 0].tolist())
     for j, token in enumerate(targets):
         entry = {"token_id": token, "logprob": vals[j]}
         if k > 0:
