@@ -299,6 +299,7 @@ def install_driver(state, record, write_window, reset, expect_file) -> None:
             finally:
                 state["in_driver"] = False
             if expect_file.exists():
+                print(f"KLDDBG seg offset={offset} rec={len(state['tokens'])} n={int(seg.tokens.shape[0])}", file=sys.stderr, flush=True)
                 if offset != len(
                     state["tokens"]
                 ):  # a restored prefix, or an interleaved row
@@ -324,6 +325,8 @@ def install_driver(state, record, write_window, reset, expect_file) -> None:
 
     def hooked_prefill_step(self, *args, **kwargs):
         events = prefill_step(self, *args, **kwargs)
+        if expect_file.exists():
+            print(f"KLDDBG step events={len(events)} active={state['active']} bad={state['bad']}", file=sys.stderr, flush=True)
         if state["active"] or state["bad"]:
             if events:  # the first token left: the prompt phase is over
                 if state["active"] and not state["bad"]:
