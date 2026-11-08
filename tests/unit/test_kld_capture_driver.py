@@ -28,10 +28,12 @@ def hooks(monkeypatch, tmp_path):
     from scripts.verify.kld import capture
 
     from yunshu_engine.round_driver import driver as rd
+    from yunshu_engine.round_driver import flashnext as fn
 
     monkeypatch.setenv("KLD_CACHE_DIR", str(tmp_path))
     for obj, name in (
         (rd, "lane_forward"),
+        (fn, "prefill"),  # install_driver wraps it too: never leave a wrapper behind
         (rd.RoundDriver, "_prefill_step"),
         (PromptProcessingBatch, "generate"),
         (l35.LanguageModel, "__call__"),
