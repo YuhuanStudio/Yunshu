@@ -170,13 +170,17 @@ def _tfbench_argv(
 
 
 def _tfb_log(ctx: Ctx, stage: str, key: str, rep: int = 0) -> Path:
-    return (
-        ctx.run.path
-        / "tfb"
-        / f"{stage}.{key}"
-        / "out"
-        / f"server-yunshu-decode-{rep}-{stage}-{key}.log"
+    out = ctx.run.path / "tfb" / f"{stage}.{key}" / "out"
+    exact = out / f"server-yunshu-decode-{rep}-{stage}-{key}.log"
+    if exact.exists():
+        return exact
+    # tfbench names a server log after the gpuq job label too (per-job HOME, 2026-11-08):
+    # server-yunshu-decode-0-probe-base-<job label>.log; take the newest such log
+    found = sorted(
+        out.glob(f"server-yunshu-decode-{rep}-{stage}-{key}-*.log"),
+        key=lambda p: p.stat().st_mtime,
     )
+    return found[-1] if found else exact
 
 
 def _units(ctx: Ctx) -> list:
@@ -605,7 +609,15 @@ def stage_probe(ctx: Ctx) -> StageResult:
                 lg.read_text(errors="replace") if lg.exists() else "",
                 read_jsonl(res[arm].evidence),
             )
-    except ValueError as e:  # no counter line: no evidence, no verdict
+    except ValueError as e:  # no counter line: no evidence, no counter verdict
+        if "speed" in cfg["stages"]:
+            # an arm that prints no round counters (e.g. main's Flash-Next MTP lane) cannot be compared by
+            # counters; the suite's own speed stage decides, so the probe hands over instead of failing
+            reason = f"no counter evidence ({arm}): {e}; the speed stage decides"
+            ctx.log(reason)
+            return _finish(
+                ctx, StageResult("probe", True, [], {"inconclusive": reason})
+            )
         return _finish(
             ctx, StageResult("probe", False, [f"no counter evidence ({arm}): {e}"])
         )
