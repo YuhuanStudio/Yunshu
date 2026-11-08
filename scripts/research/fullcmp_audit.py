@@ -777,6 +777,20 @@ def check_manifest_completeness(run: Run) -> GuardResult:
         res.fail(cell["cell"], f"r{rep} missing ({path})")
     for path in run.extra:
         res.fail(path.stem, f"unplanned file {path} (not in manifest)")
+    import fullcmp_manifest as fm
+
+    for u in run.manifest.get("unsupported", []):
+        # a census 'unsupported' restart cell is accepted only for an engine registered without a disk tier
+        # (fullcmp_manifest.NO_DISK_TIER, with its evidence); an engine that has a disk tier must measure it
+        res.checked += 1
+        if u.get("turns") == "restart" and u.get("engine") not in fm.NO_DISK_TIER:
+            res.fail(
+                u.get("cell"),
+                f"restart cell marked unsupported ({u.get('reason')}) but {u.get('engine')} has a disk "
+                "tier (fullcmp_manifest.NO_DISK_TIER): it must be measured",
+            )
+        else:
+            res.notes.append(f"UNSUPPORTED {u.get('cell')}: {u.get('reason')}")
     for cell, rep, reason in getattr(run, "unsupported", []):
         # the engine refused the request shape: recorded as unsupported, not a pass and not a crash
         res.checked += 1

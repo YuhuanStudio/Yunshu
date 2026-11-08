@@ -1087,8 +1087,24 @@ def audit_manifest(
     Fields the driver cannot know (per-engine pins other than yunshu, controls, expected records,
     spec mode, weight groups) are left out or null, so the audit fails closed on them."""
     cells, groups = [], {}
+    unsupported = []
     for r in rows:
-        if r.get("batch") not in batches or r.get("status") != "unverified":
+        if r.get("batch") not in batches:
+            continue
+        if r.get("status") == "unsupported" and r.get("table") != "behaviour":
+            # the census says this cell cannot run on the engine (fullcmp_manifest.cell_status, e.g. a restart
+            # cell of an engine with no disk tier): an explicit status, no measurement expected. The audit
+            # accepts it only with that evidence (a restart cell of a disk-tier engine must be measured).
+            unsupported.append(
+                {
+                    "engine": r["engine"],
+                    "cell": r["id"],
+                    "reason": r.get("reason"),
+                    "turns": r.get("turns"),
+                }
+            )
+            continue
+        if r.get("status") != "unverified":
             continue
         if harness_part(r)[0] is None:
             continue
@@ -1145,6 +1161,7 @@ def audit_manifest(
         "controls": batch_controls(any(b == "SMOKE" for b in batches)),
         "groups": ordered,
         "cells": cells,
+        "unsupported": unsupported,
         "behaviour": behaviour_expectations(rows, batches),
     }
 
