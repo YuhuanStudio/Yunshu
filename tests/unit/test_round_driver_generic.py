@@ -680,3 +680,32 @@ def test_unrequested_prompt_scores_do_no_work(monkeypatch):
     ids = prompt(71)
     events = run(make(lm), [request(lm, ids)])[tuple(ids[:2])]
     assert all(e.prompt_logprobs is None for e in events)
+
+
+def test_prompt_scoring_chunked_equals_full_forward_bits():
+    """A lookup LM isolates scoring bits from attention/GEMM batch-shape rounding."""
+
+    class LookupLM(TinyLM):
+        def __call__(self, inputs, **kwargs):
+            table = (
+                mx.arange(VOCAB * VOCAB, dtype=mx.float32).reshape(VOCAB, VOCAB) * 0.125
+            )
+            out = table[inputs]
+            if kwargs.get("logits_to_keep") is not None:
+                out = out[:, -kwargs["logits_to_keep"] :]
+            return _Out(out)
+
+    lm = LookupLM()
+    ids = prompt(71)
+    logits = lm(mx.array([ids])).logits[0]
+    lp = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+    scores = []
+    for chunk in (3, 512):
+        events = run(make(lm, chunk=chunk), [request(lm, ids, n=1, prompt_logprobs=3)])[
+            tuple(ids[:2])
+        ]
+        scores.append(events[0].prompt_logprobs)
+    assert scores[0] == scores[1]
+    assert [e["logprob"] for e in scores[0][1:]] == [
+        float(lp[i, ids[i + 1]]) for i in range(len(ids) - 1)
+    ]
