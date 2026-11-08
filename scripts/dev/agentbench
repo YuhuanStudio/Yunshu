@@ -191,6 +191,13 @@ def judge(planned, rows, baseline_rows):
     ]
     cur = stats(rows)
     for agent, s in cur.items():
+        # a run that never reached the engine is a launch failure, not a model result
+        no_request = sum(1 for r in rows if r["agent"] == agent and not r["requests"])
+        if no_request:
+            problems.append(
+                f"{agent}: {no_request} runs sent no request to the engine "
+                "(agent launch or harness failure)"
+            )
         if s["api_errors"]:
             problems.append(f"{agent}: {s['api_errors']} API errors")
         if s["malformed_tool_calls"]:

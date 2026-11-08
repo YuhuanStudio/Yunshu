@@ -80,6 +80,18 @@ def test_verdict_fails_closed(tmp_path):
     assert ab.judge([], [], [])["verdict"] == "PASS"  # nothing planned, nothing wrong
 
 
+def test_runs_that_sent_no_request_fail_the_verdict():
+    # 2026-11-01 d6dea8f: 60 rows, 0 requests, agent_exit 1 -- judged PASS without a baseline
+    ab = _ab()
+    planned = [{"agent": "claude", "task": t, "repeat": 1} for t in ("a", "b")]
+    dead = [row(task="a", requests=0, passed=False, agent_exit=1), row(task="b")]
+    v = ab.judge(planned, dead, [])
+    assert v["verdict"] == "FAIL"
+    assert v["problems"] == [
+        "claude: 1 runs sent no request to the engine (agent launch or harness failure)"
+    ]
+
+
 def test_regression_against_baseline_uses_the_wilson_lower_bound():
     ab = _ab()
     planned = [{"agent": "claude", "task": f"t{i}", "repeat": 1} for i in range(10)]
