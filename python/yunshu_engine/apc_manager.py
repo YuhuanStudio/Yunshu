@@ -1460,6 +1460,22 @@ class _Coordinator(APCCoordinator):
         targets: list[Any] = []
         snapshot = []
         layout = []  # DIAG 2026-11-08: (cache class, target count) per entry
+        import mlx.core as _mx
+
+        _cap = []
+        for _j, _c in enumerate(prompt_cache):
+            _b = getattr(_c, "index_block_keys", None)
+            if isinstance(_b, _mx.array):
+                _t = time.perf_counter()
+                _mx.eval(_b)
+                _ms = (time.perf_counter() - _t) * 1e3
+                if _ms > 1.0:
+                    _cap.append(f"#{_j}{tuple(_b.shape)}={_ms:.1f}")
+        logger.info(
+            "APC capture diag: %d tokens, block keys evaluated at capture: %s",
+            len(token_ids),
+            " ".join(_cap) or "all fast",
+        )
         for c in prompt_cache:
             n0 = len(targets)
             snapshot.append(
