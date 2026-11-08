@@ -82,6 +82,8 @@ PROFILE_SCRIPT = SCRIPTS / "fullcmp_profile.py"
 # main checkout's .venv. gpuq itself is invoked by its literal path (user rule).
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS_PY = str(REPO_ROOT / ".venv" / "bin" / "python")
+if not Path(HARNESS_PY).exists():  # a worktree without its own venv (yv trees, extra worktrees): this interpreter
+    HARNESS_PY = sys.executable
 GPUQ = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/scripts/dev/gpuq"
 WRAP_ROOT = Path("/Volumes/Micron/yunshu-fullcmp/wrap")
 TFOUT_ROOT = Path(

@@ -160,6 +160,11 @@ def test_cpu_preflight_checks_legacy_tag_without_starting_server(
     import sys
 
     (tmp_path / "config.json").write_text('{"model_type":"qwen3_5"}')
+    # the tmp target has no hidden size; the drafter config on the benchmark machine has one, so the
+    # result must not depend on whether the drafter is on this disk (it is on the M5, not on the M3)
+    monkeypatch.setattr(
+        tfbench, "_hidden_size", lambda p: None if str(p) == str(tmp_path) else 5120
+    )
     monkeypatch.setattr(
         sys,
         "argv",
