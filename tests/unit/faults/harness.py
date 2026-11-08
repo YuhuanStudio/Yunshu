@@ -448,6 +448,7 @@ class LeakAudit:
                     g.cancel_event.is_set(),
                     g.cancelled,
                     round(g.elapsed_s, 1),
+                    getattr(g, "_registered_by", None),
                 )
                 for g in self.tracker.all_active()
             ]

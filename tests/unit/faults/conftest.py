@@ -34,3 +34,34 @@ def audit():
         return LeakAudit(*engines)
 
     return _make
+
+
+@pytest.fixture(autouse=True)
+def _record_who_registers(monkeypatch):
+    """A leaked tracker entry names the thread, task and stack that registered it (an entry that is not this
+    test's own request came from another test's late work in the same worker)."""
+    import asyncio
+    import threading
+    import traceback
+
+    from yunshu_engine.request_tracker import RequestTracker
+
+    original = RequestTracker.register
+
+    def register(self, request_id, model="", owner=None):
+        gen = original(self, request_id, model, owner)
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            task = None
+        gen._registered_by = (
+            threading.current_thread().name,
+            task.get_name() if task else None,
+            [
+                f"{f.filename.rsplit('/', 1)[-1]}:{f.lineno}"
+                for f in traceback.extract_stack()[-8:-1]
+            ],
+        )
+        return gen
+
+    monkeypatch.setattr(RequestTracker, "register", register)
