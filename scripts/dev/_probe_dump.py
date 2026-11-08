@@ -20,5 +20,6 @@ class P:
                         for a, f in list(vars(v).items()):
                             if callable(f) and hasattr(f, "__qualname__"):
                                 out[f"{name}.{k}.{a}"] = "fn:" + f.__qualname__
-            json.dump(out, open(os.environ["OUT"], "w"), indent=0, sort_keys=True)
+            out = {k: v for k, v in out.items()}
+            json.dump(out, open(os.environ["OUT"], "w"), indent=0, sort_keys=True, default=str)
 sys.exit(pytest.main(["-q","-p","no:cacheprovider","-p","no:randomly",*sys.argv[1:]],plugins=[P()]))
