@@ -2962,14 +2962,6 @@ class VLMEngine:
         runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
         runner.stop_tokens = set(self._get_eos_ids())
         runner.inflight = lambda: self._active_count
-        disk = getattr(self._apc_backend, "disk", None)
-        if hasattr(disk, "busy_probe"):
-            # the APC write-behind writer waits for an idle engine (SpillDiskStore._wait_idle)
-            disk.busy_probe = lambda: (
-                self._active_count > 0
-                or runner.busy()
-                or (runner.driver is not None and runner.driver.busy())
-            )
         runner.memory_gate = self._build_memory_gate()
         # Per-row-length (ragged) KV + ragged decode attention for the shared
         # batch and the speculative lane: the layout for every model with
