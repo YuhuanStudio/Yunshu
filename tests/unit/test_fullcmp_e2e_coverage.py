@@ -2,7 +2,7 @@
 
 A cell type is the canonical key of one manifest row (cell_type_key). Types come from the smoke
 manifest (fullcmp_manifest.build_smoke_rows) and from the real manifest
-(compsync/fullcmp-1103/manifest.jsonl, status unverified, batches B1/B2/B4). Each row gives a timed
+(compsync/fullcmp-1103/manifest.jsonl, every status, batches B1/B2/B4). Each row gives a timed
 type and, for decode/conc rows, a profile type (the --profile-rep job of the same cell).
 
 Covering: each test module declares COVERED_CELL_TYPES = {key: "test id"}. The check imports the
@@ -82,23 +82,26 @@ def profile_type_key(row: dict) -> str:
     return cell_type_key(row).replace("profile=timed", "profile=rep")
 
 
-def real_manifest_rows() -> list[dict]:
+def _real_manifest_all_rows() -> list[dict]:
     path = Path(fm.DEFAULT_OUT)
     if not path.is_file():
         raise AssertionError(
             f"real manifest missing: {path} (cell types cannot be enumerated)"
         )
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-    return [
-        r
-        for r in rows
-        if r.get("batch") in REAL_BATCHES and r.get("status") == "unverified"
-    ]
+    return [r for r in rows if r.get("batch") in REAL_BATCHES]
+
+
+def real_manifest_rows() -> list[dict]:
+    """The rows this batch would run: status unverified (the run tests use these)."""
+    return [r for r in _real_manifest_all_rows() if r.get("status") == "unverified"]
 
 
 def manifest_cell_types() -> dict[str, str]:
-    """{type key: example row id} over the smoke and the real manifests."""
-    rows = list(fm.build_smoke_rows()) + real_manifest_rows()
+    """{type key: example row id} over the smoke and the real manifests. Every manifest row counts
+    as a cell type, whatever its status: a 'cut' row (dropped from this batch for budget, e.g. the image
+    cells) or an 'unsupported' one is still a cell of the manifest, and its type needs a covering test."""
+    rows = list(fm.build_smoke_rows()) + _real_manifest_all_rows()
     types: dict[str, str] = {}
     for r in rows:
         types.setdefault(cell_type_key(r), r["id"])
