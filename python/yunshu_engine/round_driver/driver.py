@@ -1170,6 +1170,12 @@ class RoundDriver:
             out = self._decode_step()
             self._t_end = time.perf_counter()
             self.step_s += self._t_end - t0
+            if self.flash and self.decode_steps < 3:
+                logger.info(
+                    "round driver: decode step %d of the burst took %.1f ms",
+                    self.decode_steps + 1,
+                    (self._t_end - t0) * 1e3,
+                )
             if self.dflash is not None:
                 self._decode_credit = max(0.0, self._decode_credit - (self._t_end - t0))
             self.decode_steps += 1
