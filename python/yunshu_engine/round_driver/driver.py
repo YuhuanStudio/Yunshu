@@ -84,7 +84,7 @@ LANE_ROWS = 128  # rows one lane-matmul call keeps row-invariant
 # to ~95 GiB in a 4 x 32K run, after which every step took 5-10x as long
 # (docs/guides/ROUND_DRIVER.md). The driver keeps it under this bound.
 CACHE_LIMIT = 8 * 2**30
-HEAD_LAZY_MAX = 0  # DIAG (to revert) was 512 << 20; prompt HC bytes a row's queued head prefill may retain
+HEAD_LAZY_MAX = 512 << 20  # prompt HC bytes a row's queued head prefill may retain
 
 
 def cache_buffers(cache: list) -> list:

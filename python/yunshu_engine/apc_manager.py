@@ -1458,31 +1458,10 @@ class _Coordinator(APCCoordinator):
                     share(tokens, extra_hash)
             return ok
         targets: list[Any] = []
-        snapshot = []
-        layout = []  # DIAG 2026-11-08: (cache class, target count) per entry
-        import mlx.core as _mx
-
-        _cap = []
-        for _j, _c in enumerate(prompt_cache):
-            _b = getattr(_c, "index_block_keys", None)
-            if isinstance(_b, _mx.array):
-                _t = time.perf_counter()
-                _mx.eval(_b)
-                _ms = (time.perf_counter() - _t) * 1e3
-                if _ms > 1.0:
-                    _cap.append(f"#{_j}{tuple(_b.shape)}={_ms:.1f}")
-        logger.info(
-            "APC capture diag: %d tokens, block keys evaluated at capture: %s",
-            len(token_ids),
-            " ".join(_cap) or "all fast",
-        )
-        for c in prompt_cache:
-            n0 = len(targets)
-            snapshot.append(
-                clone_cache_entry(c, min_capacity_tokens=None, eval_targets=targets)
-            )
-            layout.append((type(c).__name__, len(targets) - n0))
-        self.__dict__.setdefault("_diag_layout", {})[len(token_ids)] = layout
+        snapshot = [
+            clone_cache_entry(c, min_capacity_tokens=None, eval_targets=targets)
+            for c in prompt_cache
+        ]
         if any(c is None for c in snapshot):
             ok = bool(
                 super().store_checkpoint(
@@ -1531,15 +1510,7 @@ class _Coordinator(APCCoordinator):
         # first (the same drops ``store_exact_cache`` makes), then copy a few arrays at a
         # time across all checkpoints so the pinned buffers go as the copies appear.
         # Same operations and bits as evaluating everything at once; only the peak differs.
-        import mlx.core as mx
-
-        # Diagnostic split (2026-11-08): wait for the GPU work queued before the flush (the step that
-        # emitted the first token, an already-dispatched next round) separately, so 'materialize'
-        # reports the copies alone. The copies would wait for that work anyway (one stream, in order).
-        t_q = time.perf_counter()
-        mx.synchronize()
         t0 = time.perf_counter()
-        queued_ms = (t0 - t_q) * 1e3
         release = getattr(self.manager, "release_superseded", None)
         for tokens, _, extra_hash, _, generation, _, _ in pending:
             if release is not None:
@@ -1552,43 +1523,6 @@ class _Coordinator(APCCoordinator):
         if share_lazy is not None:
             # retained anchors give up their own rows before the new copy is made
             views = views + share_lazy(longest[0], longest[1], longest[2])
-        # DIAG 2026-11-08 (revert after): evaluate checkpoint by checkpoint and cache class by class
-        diag, slow = [], []
-        layouts = self.__dict__.pop("_diag_layout", {})
-        for entry in pending:
-            layout = layouts.get(len(entry[0])) or [("?", len(entry[3]))]
-            per, i = {}, 0
-            for name, n in layout:
-                group = entry[3][i : i + n]
-                i += n
-                if not group:
-                    continue
-                ts = time.perf_counter()
-                if name == "QSAKVCache":
-                    for j, t in enumerate(group):
-                        t1 = time.perf_counter()
-                        mx.eval(t)
-                        ms = (time.perf_counter() - t1) * 1e3
-                        if ms > 1.0:
-                            slow.append(
-                                f"{len(entry[0])}t#{i - n + j}:{tuple(t.shape)}{t.dtype}={ms:.1f}"
-                            )
-                else:
-                    mx.eval(group)
-                k = per.setdefault(name, [0.0, 0, 0])
-                k[0] += (time.perf_counter() - ts) * 1e3
-                k[1] += sum(int(t.nbytes) for t in group)
-                k[2] += len(group)
-            diag.append(
-                f"{len(entry[0])}t: "
-                + ", ".join(
-                    f"{n} {v[0]:.1f} ms/{v[1] >> 20} MiB/{v[2]} arrays"
-                    for n, v in per.items()
-                )
-            )
-        logger.info(
-            "APC flush diag: %s || slow: %s", " | ".join(diag), " ".join(slow[:24])
-        )
         materialize([entry[3] for entry in pending])
         t_mat = time.perf_counter()
         if views:
@@ -1619,13 +1553,12 @@ class _Coordinator(APCCoordinator):
         if finish is not None:
             finish()
         logger.info(
-            "APC flush: %d checkpoint(s) %s (arrays copied %s MiB, %d shared views): queued %.1f release %.1f"
+            "APC flush: %d checkpoint(s) %s (arrays copied %s MiB, %d shared views): release %.1f"
             " share %.1f materialize %.1f views %.1f stores [%s] finish %.1f ms",
             len(pending),
             [len(p[0]) for p in pending],
             sum(int(t.nbytes) for p in pending for t in p[3]) >> 20,
             len(views),
-            queued_ms,
             (t_release - t0) * 1e3,
             (t_share - t_release) * 1e3,
             (t_mat - t_share) * 1e3,
