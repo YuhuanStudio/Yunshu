@@ -7,6 +7,7 @@ admitting the scoring row. No driver prefill/readout/scoring helper is reused.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import subprocess
@@ -19,12 +20,14 @@ def compare(scores, reference, tolerance=0.0):
     assert isinstance(scores, list) and len(scores) == len(reference)
     assert scores[0] is None and reference[0] is None
     errors = []
-    for got, want in zip(scores[1:], reference[1:], strict=True):
+    for position, (got, want) in enumerate(
+        zip(scores[1:], reference[1:], strict=True), start=1
+    ):
         assert got["token_id"] == want["token_id"]
         errors.append(abs(got["logprob"] - want["logprob"]))
         assert [x["token_id"] for x in got["top_logprobs"]] == [
             x["token_id"] for x in want["top_logprobs"]
-        ]
+        ], f"top-k mismatch at position {position}: got={got}, reference={want}"
         errors.extend(
             abs(g["logprob"] - w["logprob"])
             for g, w in zip(got["top_logprobs"], want["top_logprobs"], strict=True)
@@ -32,6 +35,13 @@ def compare(scores, reference, tolerance=0.0):
     maximum = max(errors, default=0.0)
     assert maximum <= tolerance, f"plain forward max error {maximum} > {tolerance}"
     return maximum
+
+
+def reference_prefill_mode(layer, tokens):
+    """Match the serving arithmetic scope without using a driver forward/readout."""
+    if layer == "packed-qwen35":
+        return "tail" if tokens <= 48 else "prefill"
+    return None
 
 
 def serve(args):
@@ -45,7 +55,27 @@ def serve(args):
     def add(driver, req):
         if req.prompt_logprobs is not None:
             lm = driver.lm
-            out = lm(mx.array([req.ids], mx.int32), cache=lm.make_cache())
+            from yunshu_engine.kernels import gdn_prefill
+
+            layer = (
+                "generic"
+                if driver.generic
+                else "flashnext"
+                if driver.flash
+                else "packed-qwen35"
+            )
+            mode = reference_prefill_mode(layer, len(req.ids))
+            scope = (
+                gdn_prefill.tail_scope()
+                if mode == "tail"
+                else gdn_prefill.prefill_scope()
+                if mode == "prefill"
+                else contextlib.nullcontext()
+            )
+            # The production packed prefill selects recurrence/convolution kernels
+            # through this scope. An unscoped forward uses decode arithmetic instead.
+            with scope:
+                out = lm(mx.array([req.ids], mx.int32), cache=lm.make_cache())
             logits = (out.logits if hasattr(out, "logits") else out)[0].astype(
                 mx.float32
             )
@@ -72,11 +102,8 @@ def serve(args):
                 json.dumps(
                     {
                         "scores": entries,
-                        "layer": "generic"
-                        if driver.generic
-                        else "flashnext"
-                        if driver.flash
-                        else "packed-qwen35",
+                        "layer": layer,
+                        "prefill_scope": mode,
                     }
                 )
             )
@@ -185,6 +212,7 @@ def main():
                     body = response.json()
                     ref = json.loads(reference.read_text())
                     scores = body["choices"][0]["prompt_logprobs"]
+                    out.with_suffix(".actual.json").write_text(json.dumps(scores))
                     error = compare(scores, ref["scores"], args.tolerance)
                     checks.append(
                         {

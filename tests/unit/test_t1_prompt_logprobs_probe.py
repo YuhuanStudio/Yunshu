@@ -32,3 +32,36 @@ def test_reference_tolerance_is_explicit_and_bounded():
     assert compare(got, ref, tolerance=1e-5) < 1e-5
     with pytest.raises(AssertionError):
         compare(got, ref, tolerance=1e-8)
+
+
+def test_top_k_mismatch_preserves_position_and_values():
+    ref = [
+        None,
+        {
+            "token_id": 2,
+            "logprob": -1.0,
+            "top_logprobs": [{"token_id": 2, "logprob": -1.0}],
+        },
+    ]
+    got = [
+        None,
+        {
+            "token_id": 2,
+            "logprob": -1.0,
+            "top_logprobs": [{"token_id": 3, "logprob": -1.0}],
+        },
+    ]
+    with pytest.raises(
+        AssertionError, match="top-k mismatch at position 1: got=.*reference="
+    ):
+        compare(got, ref)
+
+
+def test_reference_selects_packed_prefill_arithmetic():
+    from scripts.research.t1_prompt_logprobs import reference_prefill_mode
+
+    assert reference_prefill_mode("packed-qwen35", 23) == "tail"
+    assert reference_prefill_mode("packed-qwen35", 48) == "tail"
+    assert reference_prefill_mode("packed-qwen35", 49) == "prefill"
+    assert reference_prefill_mode("generic", 23) is None
+    assert reference_prefill_mode("flashnext", 23) is None
