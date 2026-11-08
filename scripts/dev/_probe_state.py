@@ -27,6 +27,10 @@ class P:
                     gd.gated_delta_kernel = cl["step"]
                 gdn_prefill._STATE.update(installed=False, enabled=False)
                 lane_linear.set_stock_rows(0)
+            if act.startswith("apply_"):
+                from yunshu_engine.kernels.omlx import (qwen35_gdn_prework, qwen35_gdn_verify_fused, qwen35_verify_linear, qwen35_verify_qmm, qwen35_verify_sdpa_split)
+                fn = dict(verify_linear=qwen35_verify_linear.apply, gdn_prework=qwen35_gdn_prework.apply_qwen35_gdn_prework_patch, sdpa_split=qwen35_verify_sdpa_split.apply_qwen35_verify_sdpa_split_patch, verify_qmm=qwen35_verify_qmm.apply_verify_qmm_patch, gdn_replay=qwen35_gdn_verify_fused.apply_arrays_cache_replay_patch)[act[6:]]
+                fn()
             print("GD", gd.gated_delta_kernel.__qualname__, gd._gated_delta_kernel_packed, getattr(lang,'gated_delta_update',None), getattr(lang.gated_delta_update,'__module__',None) if hasattr(lang,'gated_delta_update') else None, flush=True)
             print("STATE", dict(gdn=dict(gdn_prefill._STATE), nax=nax_prefill._enabled, attn=getattr(attn_prefill,'_STATE',getattr(attn_prefill,'_enabled',None)),
                stock=lane_linear.STOCK_ROWS, sp=lane_linear._SUM_POLICY, sr=lane_linear._SUM_REUSE,
