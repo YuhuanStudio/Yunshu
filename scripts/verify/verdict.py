@@ -138,7 +138,8 @@ def _numbers_en(s: dict) -> str:
         return (
             f"KLD(ref||base) {a['kld_mean']:.5f} (p99 {a['kld_p99']:.4f}) vs cand {b['kld_mean']:.5f} (p99 {b['kld_p99']:.4f}); "
             f"top-1 vs ref {a['top1']:.4f} -> {b['top1']:.4f}; dPPL {a['delta_ppl']:+.4f} -> {b['delta_ppl']:+.4f}; "
-            f"{b['windows']} windows, {b['positions']} positions"
+            f"{b['windows']} windows, {b['positions']} positions; "
+            f"ref attention calls {n.get('ref_attention_calls', 'not recorded')}"
         )
     if nm == "identity":
         bits = []

@@ -67,7 +67,13 @@ def load_arm(directory: Path, manifest: dict) -> dict:
     out = {}
     for w in manifest["windows"]:
         with np.load(directory / f"{w['id']}.npz") as z:
-            window = metrics.Window(z["ids"], z["lp"], z["next_lp"], z["tokens"])
+            window = metrics.Window(
+                z["ids"],
+                z["lp"],
+                z["next_lp"],
+                z["tokens"],
+                int(z["ref_calls"]) if "ref_calls" in z.files else None,
+            )
         window.check()
         if abs(window.ids.shape[0] - w["tokens"]) > POSITION_SLACK:
             raise RuntimeError(
@@ -94,14 +100,34 @@ def noise() -> dict:
     )
 
 
+def ref_engagement(ref: dict) -> int:
+    """Reference-attention forwards over every ref window; fails closed when a window recorded none (the
+    reference arm ran the engine's own attention, so it would equal base and make every KLD 0)."""
+    idle = [i for i, w in ref.items() if not w.ref_calls]
+    if idle:
+        raise RuntimeError(
+            f"ref not engaged: no reference attention call in windows {idle[:5]} (ref_calls missing or 0)"
+        )
+    return sum(w.ref_calls for w in ref.values())
+
+
 def evaluate(ref: dict, base: dict, cand: dict, eps: float, top1_noise: float) -> dict:
     """Metrics of base and cand against ref, cand against base, and the verdict."""
     from . import metrics
 
+    engaged = ref_engagement(ref)
+
     ref_vs_base = metrics.summarize(ref, base)
     ref_vs_cand = metrics.summarize(ref, cand)
     ok, reasons = metrics.verdict(ref_vs_base, ref_vs_cand, eps, top1_noise)
+    if ref_vs_base["kld_mean"] == 0 and ref_vs_cand["kld_mean"] == 0:
+        # a reference with different arithmetic cannot match both arms exactly
+        ok = False
+        reasons.append(
+            "ref not engaged: KLD(ref||base) and KLD(ref||cand) are exactly 0"
+        )
     return dict(
+        ref_attention_calls=engaged,
         passed=ok,
         reasons=reasons,
         eps=eps,

@@ -229,3 +229,30 @@ def test_capture_rewrites_the_module_form_server_command():
         assert out[5:] == ["serve", "--port", "1"]
     other = ["/venv/bin/python", "-m", "other"]
     assert capture.serve_command(other, "base", "qwen4_exp") == other
+
+
+def _arm(calls=None):
+    w = window([[1, 2, 3]], [[0.5, 0.3, 0.1]])
+    w.ref_calls = calls
+    return {"w0": w}
+
+
+def test_ref_without_engagement_fails_closed():
+    """2026-11-08: the engine's sparse-prefill wrapper answered every call before the reference hook, so
+    ref == base and the stage printed KLD 0.00000 as a PASS."""
+    with pytest.raises(RuntimeError, match="ref not engaged"):
+        stage.evaluate(_arm(None), _arm(), _arm(), 0.002, 0.003)
+    with pytest.raises(RuntimeError, match="ref not engaged"):
+        stage.evaluate(_arm(0), _arm(), _arm(), 0.002, 0.003)
+
+
+def test_exactly_zero_kld_against_a_reference_is_not_a_pass():
+    r = stage.evaluate(_arm(5), _arm(), _arm(), 0.002, 0.003)
+    assert r["ref_attention_calls"] == 5 and not r["passed"]
+    assert any("ref not engaged" in x for x in r["reasons"])
+
+
+def test_engaged_ref_with_real_difference_passes():
+    base = window([[1, 2, 3]], [[0.4, 0.3, 0.2]])
+    r = stage.evaluate(_arm(5), {"w0": base}, {"w0": base}, 0.002, 0.003)
+    assert r["passed"] and r["ref_vs_base"]["kld_mean"] > 0

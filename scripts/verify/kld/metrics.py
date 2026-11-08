@@ -24,6 +24,9 @@ class Window:
     lp: np.ndarray  # [N, K] float32
     next_lp: np.ndarray  # [N] float32
     tokens: np.ndarray  # [N] int32
+    ref_calls: int | None = (
+        None  # reference-attention forwards (ref arm; None: not recorded)
+    )
 
     def check(self, expect: int | None = None) -> None:
         n = self.ids.shape[0]

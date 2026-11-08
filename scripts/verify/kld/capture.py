@@ -148,6 +148,10 @@ def install(arm: str, arch: str = "qwen4_exp") -> None:
         "bad": False,
     }
 
+    ref_calls = [
+        0
+    ]  # forwards the reference attention replaced (saved with each window)
+
     if arm == "ref":
         upcast_attention()
     if arm == "ref" and arch == "qwen4_exp":
@@ -155,6 +159,7 @@ def install(arm: str, arch: str = "qwen4_exp") -> None:
 
         def dispatch(queries, keys, values, block_indices, query_ends, **kw):
             if _eligible(queries, keys, values, block_indices, kw):
+                ref_calls[0] += 1
                 return reference_attend(
                     queries, keys, values, block_indices, query_ends, float(kw["scale"])
                 )
@@ -243,7 +248,9 @@ def install(arm: str, arch: str = "qwen4_exp") -> None:
             lp=lp,
             next_lp=np.array(state["next"], dtype=np.float32),
             tokens=np.array(state["tokens"], dtype=np.int32),
+            ref_calls=np.int64(ref_calls[0]),
         )
+        ref_calls[0] = 0
         tmp.rename(outdir / f"{wid}.npz")
         expect_file.unlink()
 
@@ -405,7 +412,16 @@ def run(args) -> None:
             "YUNSHU_CONSOLE": "0",
             "KLD_CACHE_DIR": str(cache),
             # the reference must not use Yunshu's tile attention kernel: stock attention is what gets upcast
-            **({"YUNSHU_PREFILL_ATTENTION": "stock"} if args.arm == "ref" else {}),
+            # the engine's tensor-unit sparse prefill wraps dispatch_qsa_attention at model load, outside
+            # the reference hook, and would answer every eligible call itself (ref == base, KLD 0)
+            **(
+                {
+                    "YUNSHU_PREFILL_ATTENTION": "stock",
+                    "YUNSHU_QSA_SPARSE_PREFILL": "0",
+                }
+                if args.arm == "ref"
+                else {}
+            ),
             **dict(kv.split("=", 1) for kv in args.env),
         }
         srv = t.Srv("yunshu", env, f"kld-{args.arm}-{k}of{n}", model=args.model)
