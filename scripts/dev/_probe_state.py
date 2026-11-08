@@ -27,6 +27,14 @@ class P:
                     gd.gated_delta_kernel = cl["step"]
                 gdn_prefill._STATE.update(installed=False, enabled=False)
                 lane_linear.set_stock_rows(0)
+            for one in act.split(","):
+                if one == "gdn_inst":
+                    gdn_prefill.install(); gdn_prefill.disable()
+                if one == "stock": lane_linear.set_stock_rows(512)
+                if one == "omlx_all":
+                    from yunshu_engine.kernels import omlx as _o; _o.apply()
+                if one == "ragged":
+                    from yunshu_engine.kernels import ragged_kv as _r; _r._STATE.update(installed=True, dense_lane=True)
             if act.startswith("apply_"):
                 from yunshu_engine.kernels.omlx import (qwen35_gdn_prework, qwen35_gdn_verify_fused, qwen35_verify_linear, qwen35_verify_qmm, qwen35_verify_sdpa_split)
                 fn = dict(verify_linear=qwen35_verify_linear.apply, gdn_prework=qwen35_gdn_prework.apply_qwen35_gdn_prework_patch, sdpa_split=qwen35_verify_sdpa_split.apply_qwen35_verify_sdpa_split_patch, verify_qmm=qwen35_verify_qmm.apply_verify_qmm_patch, gdn_replay=qwen35_gdn_verify_fused.apply_arrays_cache_replay_patch)[act[6:]]
