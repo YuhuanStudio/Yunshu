@@ -1537,7 +1537,7 @@ class _Coordinator(APCCoordinator):
             # retained anchors give up their own rows before the new copy is made
             views = views + share_lazy(longest[0], longest[1], longest[2])
         # DIAG 2026-11-08 (revert after): evaluate checkpoint by checkpoint and cache class by class
-        diag = []
+        diag, slow = [], []
         layouts = self.__dict__.pop("_diag_layout", {})
         for entry in pending:
             layout = layouts.get(len(entry[0])) or [("?", len(entry[3]))]
@@ -1548,7 +1548,17 @@ class _Coordinator(APCCoordinator):
                 if not group:
                     continue
                 ts = time.perf_counter()
-                mx.eval(group)
+                if name == "QSAKVCache":
+                    for j, t in enumerate(group):
+                        t1 = time.perf_counter()
+                        mx.eval(t)
+                        ms = (time.perf_counter() - t1) * 1e3
+                        if ms > 1.0:
+                            slow.append(
+                                f"{len(entry[0])}t#{i - n + j}:{tuple(t.shape)}{t.dtype}={ms:.1f}"
+                            )
+                else:
+                    mx.eval(group)
                 k = per.setdefault(name, [0.0, 0, 0])
                 k[0] += (time.perf_counter() - ts) * 1e3
                 k[1] += sum(int(t.nbytes) for t in group)
@@ -1560,7 +1570,9 @@ class _Coordinator(APCCoordinator):
                     for n, v in per.items()
                 )
             )
-        logger.info("APC flush diag: %s", " | ".join(diag))
+        logger.info(
+            "APC flush diag: %s || slow: %s", " | ".join(diag), " ".join(slow[:24])
+        )
         materialize([entry[3] for entry in pending])
         t_mat = time.perf_counter()
         if views:
