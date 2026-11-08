@@ -249,6 +249,18 @@ def _no_gpuq_daemon_outlives_its_test():
     assert not live(), f"a gpuq daemon loop outlived its test: {live()}"
 
 
+@pytest.fixture(autouse=True)
+def _empty_dflash_apc_window_store():
+    """The DFlash captured-layer window store is a process-wide cache the memory ledger counts as an owner. Tests that
+    run DFlash with APC (test_round_driver_int8_dflash, test_round_driver_dflash) left entries in it, so a later
+    test that expects an empty ledger (test_memory_ledger_counters: ``other`` = active - attributed = 10) saw 63 KB
+    attributed and ``other`` clamped to 0."""
+    yield
+    mod = _sys.modules.get("yunshu_engine.dflash_apc_window")
+    if mod is not None:
+        mod.clear()
+
+
 @pytest.fixture(autouse=True, scope="module")
 def _restore_dense_lane_route():
     """The dense-lane attention route (``ragged_kv.set_dense_lane``) is a process-global switch: a module whose tiny
