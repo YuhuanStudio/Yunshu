@@ -732,3 +732,21 @@ def test_sampled_logprobs_rows_draft_on_flash_mtp_rows(tiny):
     assert [t for t, _ in spec] == [t for t, _ in plain]
     for (_, a), (_, b) in zip(spec, plain, strict=True):
         assert a is not None and a == b
+
+
+def test_head_prefill_stays_queued_past_the_first_token_and_changes_nothing(
+    tiny, monkeypatch
+):
+    """The MTP head's prompt prefill is not evaluated before a row's first token (it ran on the
+    TTFT path); with the retained-bytes bound at zero it is evaluated per step again, and the
+    tokens are the same either way."""
+    from yunshu_engine.round_driver import driver as drv
+
+    lm, head = tiny
+    ids = PROMPTS[0]
+    lazy, d1 = run(lm, [ids], head=head)
+    assert d1._lazy_ids and all(d1._lazy_ids.values())
+    monkeypatch.setattr(drv, "HEAD_LAZY_MAX", 0)
+    eager, d2 = run(lm, [ids], head=head)
+    assert d2._lazy_ids and not any(d2._lazy_ids.values())
+    assert lazy == eager
