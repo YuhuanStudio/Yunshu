@@ -225,6 +225,29 @@ def _isolated_files_store(tmp_path_factory, monkeypatch):
         mod.reset_store()
 
 
+@pytest.fixture(autouse=True)
+def _no_gpuq_daemon_outlives_its_test():
+    """An in-process ``gpuq.daemon`` loop that keeps running after its test polls the module-global queue dir for the
+    rest of the worker's life: test_gpuq_idle (reads per poll) and test_gpuq_hold (picks) failed at random behind
+    test_gpuq_m3's thread. Fail the test that leaves one."""
+    import threading
+    import time as _t
+
+    yield
+    deadline = _t.monotonic() + 5
+
+    def live():
+        return [
+            t
+            for t in threading.enumerate()
+            if t.is_alive() and t.name.endswith("(daemon)")
+        ]
+
+    while live() and _t.monotonic() < deadline:
+        _t.sleep(0.05)
+    assert not live(), f"a gpuq daemon loop outlived its test: {live()}"
+
+
 @pytest.fixture(autouse=True, scope="module")
 def _restore_dense_lane_route():
     """The dense-lane attention route (``ragged_kv.set_dense_lane``) is a process-global switch: a module whose tiny
