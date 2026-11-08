@@ -882,6 +882,46 @@ def _extra_defer_types() -> tuple:
     return (QSAKVCache,)
 
 
+def _share_qsa_rows(mine, theirs, targets: list, views: list) -> bool:
+    """Flash-Next ``QSAKVCache``: the shorter checkpoint's K/V rows AND indexer rows (keys and
+    positions, written once per position like K/V) become views of the longer one's, so the prefix
+    is copied once. The block summaries stay the shorter checkpoint's own copy. True when handled."""
+    qsa = _extra_defer_types()
+    if not qsa or type(mine) not in qsa or type(theirs) is not type(mine):
+        return False
+    arrays = (
+        mine.keys, mine.values, mine.index_keys, mine.index_position_ids,
+        theirs.keys, theirs.values, theirs.index_keys, theirs.index_position_ids,
+    )  # fmt: skip
+    if any(a is None for a in arrays):
+        return True  # nothing shared, and the generic KVCache branch must not run on it
+    rows = int(mine.keys.shape[-2])
+    if (
+        mine.values.shape[-2] != rows
+        or theirs.keys.shape[-2] < rows
+        or theirs.values.shape[-2] < rows
+        or mine.keys.shape[:-2] != theirs.keys.shape[:-2]
+        or mine.keys.dtype != theirs.keys.dtype
+        or int(mine.index_keys.shape[1]) != rows
+        or int(theirs.index_keys.shape[1]) < rows
+        or int(mine.index_position_ids.shape[-1]) != rows
+        or int(theirs.index_position_ids.shape[-1]) < rows
+        or mine.index_keys.dtype != theirs.index_keys.dtype
+        or mine.index_keys.shape[0] != theirs.index_keys.shape[0]
+        or mine.index_keys.shape[2:] != theirs.index_keys.shape[2:]
+        or mine.index_position_ids.shape[:-1] != theirs.index_position_ids.shape[:-1]
+    ):
+        return True
+    own = {id(a) for a in arrays[:4]}
+    targets[:] = [t for t in targets if id(t) not in own]
+    mine.keys = theirs.keys[..., :rows, :]
+    mine.values = theirs.values[..., :rows, :]
+    mine.index_keys = theirs.index_keys[:, :rows]
+    mine.index_position_ids = theirs.index_position_ids[..., :rows]
+    views += [mine.keys, mine.values, mine.index_keys, mine.index_position_ids]
+    return True
+
+
 def share_prefix_rows(pending, max_tail: int = SHARE_MAX_TAIL) -> list:
     """Make a shorter checkpoint's K/V rows views of a longer one's of the same request.
 
@@ -912,6 +952,8 @@ def share_prefix_rows(pending, max_tail: int = SHARE_MAX_TAIL) -> list:
             continue
         donor = max(donors, key=lambda p: len(p[0]))
         for mine, theirs in zip(snapshot, donor[1], strict=False):
+            if _share_qsa_rows(mine, theirs, targets, views):
+                continue
             if type(mine) is not KVCache or type(theirs) is not KVCache:
                 continue
             if mine.keys is None or theirs.keys is None or mine.values is None:

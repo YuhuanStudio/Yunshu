@@ -632,3 +632,41 @@ def test_qsa_checkpoint_is_deferred_with_its_indexer_and_matches_the_synchronous
     for got, want in zip(frozen.state[:5], reference.state[:5], strict=True):
         assert got.tolist() == want.tolist()
     assert frozen.index_block_ratio == reference.index_block_ratio == 16
+
+
+def _qsa_pending(n, extra_hash=0):
+    from mlx_vlm.models.qwen4_exp.language import QSAKVCache
+
+    q = QSAKVCache()
+    q.keys = mx.arange(n * 4, dtype=mx.float32).reshape(1, 1, n, 4)
+    q.values = q.keys + 1000
+    q.offset = n
+    q.index_keys = mx.arange(n * 2, dtype=mx.float32).reshape(1, n, 2) + 5000
+    q.index_position_ids = mx.arange(n).reshape(1, 1, n)
+    q.index_block_keys = mx.ones((1, 2, 2)) * n
+    q.index_block_ratio = 16
+    targets = [q.keys, q.values, q.index_keys, q.index_position_ids, q.index_block_keys]
+    return (tuple(range(n)), [q], extra_hash, targets, 1, None, ())
+
+
+def test_qsa_shorter_checkpoint_shares_kv_and_indexer_rows_of_the_longer_one():
+    from yunshu_engine.apc_manager import share_prefix_rows
+
+    short, long_ = _qsa_pending(32), _qsa_pending(48)
+    q = short[1][0]
+    want = [q.keys.tolist(), q.index_keys.tolist(), q.index_position_ids.tolist()]
+    own_keys = q.keys
+    views = share_prefix_rows([short, long_])
+    mx.eval(views)
+    assert len(views) == 4 and q.keys is not own_keys
+    assert [
+        q.keys.tolist(),
+        q.index_keys.tolist(),
+        q.index_position_ids.tolist(),
+    ] == want
+    assert q.index_keys.shape == (1, 32, 2) and q.offset == 32
+    assert q.index_block_keys.tolist() == [
+        [[32.0] * 2] * 2
+    ]  # block summaries stay its own copy
+    assert len(short[3]) == 1  # only the block summaries are still copied on their own
+    assert len(long_[3]) == 5
