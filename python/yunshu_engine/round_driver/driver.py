@@ -84,6 +84,7 @@ LANE_ROWS = 128  # rows one lane-matmul call keeps row-invariant
 # to ~95 GiB in a 4 x 32K run, after which every step took 5-10x as long
 # (docs/guides/ROUND_DRIVER.md). The driver keeps it under this bound.
 CACHE_LIMIT = 8 * 2**30
+HEAD_LAZY_MAX = 512 << 20  # prompt HC bytes a row's queued head prefill may retain
 
 
 def cache_buffers(cache: list) -> list:
@@ -308,6 +309,9 @@ class _Row:
     req: Request
     cache: list | None  # prefill caches (None once the row joined the batch)
     mtp_cache: list | None
+    head_lazy: int = (
+        0  # bytes of prompt HC states the head's queued (unevaluated) prefill holds
+    )
     done: int = 0  # prompt tokens prefilled
     pending: int | None = None  # committed token not yet in the cache
     generated: int = 0
@@ -498,6 +502,9 @@ class RoundDriver:
         self.rows: list[_Row] = []
         self._pending_join: list = []  # rows with their first token out, not yet in the decode batch
         self._pending_heads: dict = {}
+        self._lazy_ids: dict[
+            int, bool
+        ] = {}  # row id -> its head prefill was left queued
         self._deferred_apcs: list = []  # coordinators holding captured, unflushed checkpoints
         self.cost = CostCurve()
         self.steps = 0
@@ -1266,6 +1273,22 @@ class RoundDriver:
             dflash_apc_window.key_for(row.salt, ids),
         )
 
+    def _head_lazy(self, row: _Row, advanced: dict, hidden, items: list) -> bool:
+        """Keep ``row``'s head prefill queued past this step's first token (Flash-Next rows,
+        bounded by HEAD_LAZY_MAX of retained prompt HC states); False evaluates it now."""
+        if not self.flash or hidden is None or id(row) not in advanced:
+            return False
+        row.head_lazy += sum(
+            it.count * int(hidden.shape[-1]) * hidden.dtype.size
+            for it in items
+            if it.row is row
+        )
+        lazy = row.head_lazy <= HEAD_LAZY_MAX
+        if not lazy:
+            row.head_lazy = 0
+        self._lazy_ids[id(row)] = lazy
+        return lazy
+
     def _record_tail(self, items: list[_Item], hidden, captures) -> None:
         """Keep the final block a real forward produced for the next identical prompt."""
         for it in items:
@@ -1477,10 +1500,18 @@ class RoundDriver:
             {id(r): heads[id(r)] for r in joined if id(r) in heads}
         )
         arrays = [a for r in self.rows if r.cache for a in cache_buffers(r.cache)]
+        # The MTP head's prompt prefill (one layer over every prompt row, ~3% of a Flash-Next
+        # prefill) stays queued while its HC states fit HEAD_LAZY_MAX: the first token does not
+        # wait for it. A row that joins evaluates it in _finish_join, after the token is out.
         arrays += [
-            a for r in self.rows if r.mtp_cache for a in cache_buffers(r.mtp_cache)
+            a
+            for r in self.rows
+            if r.mtp_cache and not self._head_lazy(r, advanced, hidden, items)
+            for a in cache_buffers(r.mtp_cache)
         ]
-        arrays += list(self._pending_heads.values())
+        arrays += [
+            h for k, h in self._pending_heads.items() if not self._lazy_ids.get(k)
+        ]
         mx.eval(*arrays)
         self.steps += 1
         return events
