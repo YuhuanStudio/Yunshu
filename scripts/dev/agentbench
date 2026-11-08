@@ -4,6 +4,8 @@
     agentbench [--ref main] [--agents claude,codex,opencode] [--tasks all] [--repeat 1]
                [--priority -1] [--label-prefix agentbench] [--baseline GLOB|none] [--dry-run] [--no-wait]
     agentbench --collect DIR           # judge the outputs of an earlier (--no-wait) run
+    agentbench --collect DIR --watch-collect   # wait until its gpuq jobs are final, then judge
+    agentbench ... --no-wait --watch-collect   # submit, then a detached collector writes the verdict
 
 One gpuq job per (agent, task, repeat) so each stays inside its queue timeout and a failed
 run costs one cell; every job starts a fresh server with Yunshu's default configuration on a
@@ -270,6 +272,80 @@ def task_ids(spec):
     return [t.id for t in tasklib.select(spec, tasklib.all_tasks(cache))]
 
 
+def write_verdict(outdir, problem):
+    """A run dir that cannot be judged (no plan.json: the submit did not finish) is a FAIL."""
+    v = {
+        "verdict": "FAIL",
+        "problems": [problem],
+        "regressions": [],
+        "current": {},
+        "baseline": {},
+        "wait_rc": None,
+        "finished": time.strftime("%FT%T"),
+    }
+    (outdir / "verdict.json").write_text(json.dumps(v, indent=1))
+    print(f"agentbench {outdir.name}: FAIL  ({outdir / 'verdict.json'})")
+    print("  ", problem)
+    return 1
+
+
+def wait_final(ids, poll_s=300, max_wait_s=12 * 3600):
+    """Block until gpuq reports every job final. `gpuq wait` exits 2 while any job is still pending
+    (it takes precedence over failures), so anything else is final: 0 all done, 1 a job failed or
+    is missing, 3 contended. Returns the last rc; 2 when max_wait_s ran out with jobs unfinished."""
+    deadline = time.monotonic() + max_wait_s
+    while True:
+        rc = subprocess.run(
+            [GPUQ, "wait", "--max-seconds", str(poll_s), *ids]
+        ).returncode
+        if rc != 2 or time.monotonic() >= deadline:
+            return rc
+        print(f"{time.strftime('%FT%T')} jobs still unfinished, waiting", flush=True)
+
+
+def watch_collect(outdir, baseline, max_seconds, poll_s=300, max_wait_s=12 * 3600):
+    """Wait for every gpuq job of a run to reach a final state, then judge it (writes verdict.json).
+    Fail closed: an unfinished, failed or missing job or result gives FAIL (finish does the judging)."""
+    plan_path = outdir / "plan.json"
+    if not plan_path.exists():
+        return write_verdict(outdir, "no plan.json: the run was not fully submitted")
+    meta = json.loads(plan_path.read_text())
+    ids = [j["id"] for j in meta["jobs"] if j.get("id")]
+    if ids:
+        wait_final(ids, poll_s, max_wait_s)
+    return finish(outdir, [], max_seconds, baseline)
+
+
+def watcher_argv(outdir, baseline_arg, max_seconds):
+    """The detached collector's command line (pure): the same script, collecting with --watch-collect."""
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--collect",
+        str(outdir),
+        "--watch-collect",
+        "--baseline",
+        baseline_arg,
+        "--max-seconds",
+        str(max_seconds),
+    ]
+
+
+def spawn_watcher(outdir, baseline_arg, max_seconds):
+    """Start the collector in its own session so it outlives this command; its output goes to
+    DIR/watch.log and its pid to DIR/watch.pid."""
+    with open(outdir / "watch.log", "ab") as log:
+        p = subprocess.Popen(
+            watcher_argv(outdir, baseline_arg, max_seconds),
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    (outdir / "watch.pid").write_text(str(p.pid))
+    return p.pid
+
+
 def finish(outdir, wait_ids, max_seconds, baseline):
     meta = json.loads((outdir / "plan.json").read_text())
     planned = [dict(j, out=Path(j["out"])) for j in meta["jobs"]]
@@ -323,6 +399,12 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-wait", action="store_true")
     ap.add_argument("--collect")
+    ap.add_argument(
+        "--watch-collect",
+        action="store_true",
+        help="with --collect: wait until the jobs are final, then judge; with --no-wait: "
+        "submit and start a detached collector that does the same",
+    )
     ap.add_argument("--max-seconds", type=int, default=3600)
     a = ap.parse_args(argv)
     baseline = (
@@ -333,6 +415,8 @@ def main(argv=None):
         else [a.baseline]
     )
     if a.collect:
+        if a.watch_collect:
+            return watch_collect(Path(a.collect), baseline, a.max_seconds)
         return finish(Path(a.collect), [], a.max_seconds, baseline)
     agents = [x for x in a.agents.split(",") if x]
     bad = [x for x in agents if x not in AGENTS]
@@ -374,8 +458,17 @@ def main(argv=None):
         f"submitted {len(jobs)} jobs ({a.label_prefix}-*), outputs in {outdir}",
         flush=True,
     )
+    if a.watch_collect:
+        a.no_wait = True
     if a.no_wait:
-        print(f"collect later: agentbench --collect {outdir}")
+        if a.watch_collect:
+            pid = spawn_watcher(outdir, a.baseline, a.max_seconds)
+            print(
+                f"collector pid {pid} waits for the jobs and writes {outdir / 'verdict.json'} "
+                f"(log: {outdir / 'watch.log'})"
+            )
+        else:
+            print(f"collect later: agentbench --collect {outdir}")
         return 0
     return finish(outdir, ids_, a.max_seconds, baseline)
 
