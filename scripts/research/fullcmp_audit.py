@@ -666,6 +666,20 @@ def manifest_engine(eng: str) -> str:
     return inverse.get(eng, eng)
 
 
+def _is_sha256(value) -> bool:
+    return bool(re.fullmatch(r"[0-9a-f]{64}", str(value)))
+
+
+def stub_launch(m: dict, eng: str, header: dict) -> bool:
+    """True only for a registered stub engine of a test run: the manifest sets stub_engine AND lists this
+    engine in stub_engines (the engines the test replaces with a stub), AND the header's argv is a fullcmp
+    stub server (tfbench stub_server_cmd). A real engine is never listed, so its digest stays strict; the
+    argv check keeps a listed engine from passing with a real launch."""
+    if m.get("stub_engine") is not True or eng not in (m.get("stub_engines") or ()):
+        return False
+    return any("fullcmp_stub_" in str(arg) for arg in (header.get("cmd") or []))
+
+
 def check_pinned_versions(run: Run) -> GuardResult:
     """Guard 3: version, release date, binary sha256 / pinned tree, and this run's run_id."""
     res = GuardResult("pinned_versions")
@@ -704,22 +718,24 @@ def check_pinned_versions(run: Run) -> GuardResult:
             # stub_engine (test only, set by the e2e test): the server process is the stub, so its
             # command line cannot be the pinned python. Production manifests never set it.
             # the header digest is the launched python (cmd[0]); it must be the pinned digest
-            if not re.fullmatch(r"[0-9a-f]{64}", str(h.get("binary_sha256"))) or h.get(
-                "binary_sha256"
-            ) != pin.get("binary_sha256"):
+            # (a registered stub run's digest is the test interpreter's: only its format is checked)
+            if not _is_sha256(h.get("binary_sha256")) or (
+                not stub_launch(m, eng, h)
+                and h.get("binary_sha256") != pin.get("binary_sha256")
+            ):
                 res.fail(cell, "Yunshu binary sha256 missing or not the pinned python")
             if m.get("stub_engine") is not True:
                 if not cmd or cmd[0] != yun.get("python"):
                     res.fail(cell, "Yunshu not started by its pinned venv python")
                 if "-m" not in cmd or "yunshu_cli" not in cmd:
                     res.fail(cell, "Yunshu not started as python -m yunshu_cli")
-        elif m.get("stub_engine") is not True and (
-            not re.fullmatch(r"[0-9a-f]{64}", str(h.get("binary_sha256")))
-            or h.get("binary_sha256") != pin.get("binary_sha256")
+        elif not _is_sha256(h.get("binary_sha256")) or (
+            not stub_launch(m, eng, h)
+            and h.get("binary_sha256") != pin.get("binary_sha256")
         ):
-            # stub_engine (test only): the launched process is the stub, not the engine binary
+            # a registered stub engine (test only): the launched process is the stub, not the engine binary
             got = str(h.get("binary_sha256"))
-            if re.fullmatch(r"[0-9a-f]{64}", got):
+            if _is_sha256(got):
                 # a real digest of another file: the engine's binary changed under the same
                 # version label (an engine that updates itself), so the cell is not comparable
                 res.fail(

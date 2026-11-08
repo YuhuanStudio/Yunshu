@@ -75,6 +75,7 @@ def _audit_manifest_for(chain, *, stub_engine=True):
     if stub_engine:
         # test only: the engine process is the stub (see fullcmp_audit.check_pinned_versions)
         manifest["stub_engine"] = True
+        manifest["stub_engines"] = sorted({c["engine"] for c in manifest["cells"]})
     return manifest
 
 

@@ -237,6 +237,7 @@ def test_restart_that_wipes_home_loses_the_disk_tier_and_audit_fails(
         assert restart["cached"] == 0, "a wiped HOME has no disk tier to hit"
     manifest = fr.audit_manifest(rows, [fm.SMOKE_BATCH], pin, plan.engine_order)
     manifest["stub_engine"] = True
+    manifest["stub_engines"] = sorted({c["engine"] for c in manifest["cells"]})
     res = _run_audit(raw, manifest, tmp_path)
     assert res.returncode != 0, res.stdout[-2000:]
     assert "restart: cached=0" in res.stdout, res.stdout[-2000:]

@@ -149,6 +149,7 @@ def _run_cell_rows(tmp: Path, rows, *, stub_module: str = "fullcmp_stub_session"
 def _audit_clean(raw: Path, rows, plan, pin, tmp: Path):
     manifest = fr.audit_manifest(rows, [fm.SMOKE_BATCH], pin, plan.engine_order)
     manifest["stub_engine"] = True  # test only: the engine process is the session stub
+    manifest["stub_engines"] = sorted({c["engine"] for c in manifest["cells"]})
     res = _run_audit(raw, manifest, tmp)
     assert res.returncode == 0, res.stdout[-4000:] + res.stderr[-4000:]
     assert "0 violations" in res.stdout, res.stdout[-2000:]
