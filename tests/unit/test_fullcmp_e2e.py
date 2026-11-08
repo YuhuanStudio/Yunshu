@@ -318,7 +318,9 @@ def test_mutation_wrong_prompt_sha_is_a_violation(chain, good_run, tmp_path):
     victim.write_text("\n".join(lines) + "\n")
     res = _run_audit(root, _audit_manifest_for(chain), tmp_path)
     assert res.returncode != 0
-    assert "prompt_identity" in res.stdout and "!= table" in res.stdout, res.stdout[-2000:]
+    assert "prompt_identity" in res.stdout and "!= table" in res.stdout, res.stdout[
+        -2000:
+    ]
 
 
 @pytest.mark.xfail(

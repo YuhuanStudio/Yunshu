@@ -131,7 +131,14 @@ def test_submit_argv_never_names_the_main_checkout(fake_world, monkeypatch, tmp_
     # any job is written; the job paths must come from there, not from the live checkout this test runs in
     snap = tmp_path / "harness-snapshot" / "scripts" / "research"
     snap.mkdir(parents=True)
-    for name in ("tfbench", "fullcmp_audit", "fullcmp_reps", "fullcmp_preflight", "fullcmp_quiet", "fullcmp_profile"):
+    for name in (
+        "tfbench",
+        "fullcmp_audit",
+        "fullcmp_reps",
+        "fullcmp_preflight",
+        "fullcmp_quiet",
+        "fullcmp_profile",
+    ):
         (snap / f"{name}.py").write_text("")
     monkeypatch.setattr(fr, "SCRIPTS", snap)
     monkeypatch.setattr(fr, "TFBENCH", snap / "tfbench.py")
@@ -205,7 +212,9 @@ def test_driver_checkout_paths_are_not_main_checkout_references(monkeypatch, tmp
     (own / "scripts" / "t.py").write_text("")
     (own / ".venv" / "bin").mkdir(parents=True)
     (own / ".venv" / "bin" / "python").write_text("")
-    assert fr.script_problems(f"set -e\n{own}/.venv/bin/python {own}/scripts/t.py") == []
+    assert (
+        fr.script_problems(f"set -e\n{own}/.venv/bin/python {own}/scripts/t.py") == []
+    )
     refs = fr.script_problems(
         f"set -e\n{own}/.venv/bin/python /Users/yuhuan/Documents/YuhuanStudio/Yunshu/scripts/x.py"
     )
