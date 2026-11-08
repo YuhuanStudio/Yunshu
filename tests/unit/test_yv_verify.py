@@ -934,6 +934,23 @@ def test_status_and_wait(world):
     assert runner.wait_run(core.RunDir(rd), sleep=0) == 2
 
 
+def test_wait_on_a_run_refused_at_start_fails_closed(tmp_path, capsys):
+    """2026-11-08: 'unknown suite' runs leave only yv.log; two watchers waited on them forever."""
+    rd = tmp_path / "keyednoise-ident-x"
+    rd.mkdir()
+    (rd / "yv.log").write_text("yv: unknown suite/stage ['phaseb2-ident']\n")
+    ticks = iter(range(0, 10_000, 30))
+    assert runner.wait_run(core.RunDir(rd), sleep=0, clock=lambda: next(ticks)) == 2
+    assert "unknown suite" in capsys.readouterr().out
+    ticks = iter(range(0, 10_000, 30))  # a directory that is gone entirely
+    assert (
+        runner.wait_run(
+            core.RunDir(tmp_path / "gone"), sleep=0, clock=lambda: next(ticks)
+        )
+        == 2
+    )
+
+
 # ── verdict ──────────────────────────────────────────────────────────────
 def test_verdict_overall_rules():
     arm = {"spec": "x", "key": "k"}

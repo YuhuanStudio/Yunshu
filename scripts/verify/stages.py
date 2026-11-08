@@ -170,13 +170,17 @@ def _tfbench_argv(
 
 
 def _tfb_log(ctx: Ctx, stage: str, key: str, rep: int = 0) -> Path:
-    return (
-        ctx.run.path
-        / "tfb"
-        / f"{stage}.{key}"
-        / "out"
-        / f"server-yunshu-decode-{rep}-{stage}-{key}.log"
+    out = ctx.run.path / "tfb" / f"{stage}.{key}" / "out"
+    exact = out / f"server-yunshu-decode-{rep}-{stage}-{key}.log"
+    if exact.exists():
+        return exact
+    # tfbench names a server log after the gpuq job label too (per-job HOME, 2026-11-08):
+    # server-yunshu-decode-0-probe-base-<job label>.log; take the newest such log
+    found = sorted(
+        out.glob(f"server-yunshu-decode-{rep}-{stage}-{key}-*.log"),
+        key=lambda p: p.stat().st_mtime,
     )
+    return found[-1] if found else exact
 
 
 def _units(ctx: Ctx) -> list:
@@ -556,6 +560,7 @@ def _probe_key(ctx: Ctx, ctxs: list, kinds: list) -> str:
     """Base counters are deterministic: cache per (base sha, env, model, checkpoint, cells, runtime)."""
     return _sha(
         "probe",
+        "ttft-stages-1",  # the cached summary carries the per-request stage records
         ctx.base.key,
         ctx.arm_env("base"),
         ctx.model,
@@ -605,7 +610,15 @@ def stage_probe(ctx: Ctx) -> StageResult:
                 lg.read_text(errors="replace") if lg.exists() else "",
                 read_jsonl(res[arm].evidence),
             )
-    except ValueError as e:  # no counter line: no evidence, no verdict
+    except ValueError as e:  # no counter line: no evidence, no counter verdict
+        if "speed" in cfg["stages"]:
+            # an arm that prints no round counters (e.g. main's Flash-Next MTP lane) cannot be compared by
+            # counters; the suite's own speed stage decides, so the probe hands over instead of failing
+            reason = f"no counter evidence ({arm}): {e}; the speed stage decides"
+            ctx.log(reason)
+            return _finish(
+                ctx, StageResult("probe", True, [], {"inconclusive": reason})
+            )
         return _finish(
             ctx, StageResult("probe", False, [f"no counter evidence ({arm}): {e}"])
         )
@@ -613,6 +626,17 @@ def stage_probe(ctx: Ctx) -> StageResult:
         summ["base"] = cached
     else:
         probe_mod.cache_store(ctx.exe.cache_dir, key, summ["base"])
+    if not (summ["base"].get("stage_lines") or summ["cand"].get("stage_lines")):
+        # neither arm prints per-request stage lines (fn_ttft / turn stages): no TTFT attribution
+        reason = (
+            "no TTFT stage evidence (neither arm prints fn_ttft / turn stages lines)"
+        )
+        if "speed" in cfg["stages"]:
+            ctx.log(reason + "; the speed stage decides")
+            return _finish(
+                ctx, StageResult("probe", True, [], {"inconclusive": reason})
+            )
+        return _finish(ctx, StageResult("probe", False, [reason]))
     tol = {k: float(cfg[f"probe_{k}"]) for k in probe_mod.TOL if f"probe_{k}" in cfg}
     cmp = probe_mod.compare(summ["base"], summ["cand"], tol)
     numbers = dict(cmp["numbers"], base_cached=bool(cached), moved=cmp["moved"])

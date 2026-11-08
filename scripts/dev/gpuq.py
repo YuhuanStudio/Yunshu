@@ -73,7 +73,8 @@ LOGS = ROOT / "logs"
 TMPS = ROOT / "tmp"
 IDLE_EXIT_S = 600
 STALL_S = 600  # a job whose log stops growing this long is stopped as "stalled"
-POLL_S = 2.0
+POLL_S = 2.0  # fallback tick; job end and submit wake the scheduler at once (see WAKE_FILE / _wake_wait)
+WAKE_POLL_S = 0.125  # a power of two, so chunked sleeps sum exactly to POLL_S
 DEFAULT_MEM_GB = 24.0
 DEFAULT_RESERVE_GB = 16.0
 CLAIM_LOCK = threading.Lock()
@@ -85,7 +86,9 @@ SHORT_SHARE = float(os.environ.get("GPUQ_SHORT_SHARE", 0.15))
 SHORT_WINDOW_S = 2 * 3600
 # Line holding (see _hold_filter): the line running long jobs keeps the M5 lane while it has more, waits
 # HOLD_GAP_S for its next batch, and yields after HOLD_MAX_S of tenure. Env: GPUQ_HOLD_GAP_S, GPUQ_HOLD_MAX_S.
-HOLD_GAP_S = float(os.environ.get("GPUQ_HOLD_GAP_S", 120))
+# 30 s: a chain only needs the time to submit its next job (the idle-gap analysis found the old 120 s
+# left the GPU idle ~54 min/week while another line's job waited).
+HOLD_GAP_S = float(os.environ.get("GPUQ_HOLD_GAP_S", 30))
 HOLD_MAX_S = float(os.environ.get("GPUQ_HOLD_MAX_S", 4 * 3600))
 # Filler: while the head job waits only for a quiet CPU, an idle GPU runs one job that needs no quiet CPU.
 FILLER_WAIT_S = float(os.environ.get("GPUQ_FILLER_WAIT_S", 30))
@@ -457,7 +460,16 @@ def _admit(jobs: list[dict], gate: ServingGate, preempt=False) -> dict | None:
                     JOBS / f"{job['id']}.json",
                     **{k: v for k, v in job.items() if k.startswith("quiet_")},
                 )
+                _dlog("quiet hold start", job=job["id"], label=job.get("label"))
             why = _cpu_blocker(job, gate)
+            if why is None:
+                _dlog(
+                    "quiet hold end",
+                    job=job["id"],
+                    hold_s=f"{now - job['quiet_hold_started']:.1f}"
+                    if job.get("quiet_hold_started")
+                    else "?",
+                )
         if job.get("waiting") != why:
             _patch_job(JOBS / f"{job['id']}.json", waiting=why)
         job["waiting"] = why
@@ -1063,6 +1075,7 @@ def submit(
             },
         )
     _ensure_daemon()
+    _poke_daemon()
     return jid
 
 
@@ -1660,9 +1673,58 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     _write(path, job)
 
 
+WAKE = threading.Event()
+ENDING = (
+    threading.Event()
+)  # a worker is about to exit: the daemon joins it before choosing
+
+
+def _wake_file() -> Path:
+    return ROOT / "wake"
+
+
+def _wake_mtime() -> float:
+    try:
+        return _wake_file().stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _poke_daemon() -> None:
+    """submit / cancel tell the running daemon something changed (best effort, never fails a submit)."""
+    with contextlib.suppress(OSError):
+        _wake_file().touch()
+
+
+def _wake_wait(timeout: float, seen: float) -> float:
+    """Sleep up to ``timeout`` but return at once when a job ended in this daemon or a CLI poked the
+    wake file. Returns the wake-file mtime now seen."""
+    left = timeout
+    while True:
+        mtime = _wake_mtime()
+        if WAKE.is_set() or mtime != seen:
+            WAKE.clear()
+            return mtime
+        if left <= 1e-9:
+            return mtime
+        step = min(WAKE_POLL_S, left)
+        time.sleep(step)
+        left -= step
+
+
+def _dlog(event: str, **kw) -> None:
+    """One timestamped daemon.log line (epoch seconds with ms), so idle gaps can be attributed."""
+    extra = " ".join(f"{k}={v}" for k, v in kw.items())
+    print(
+        f"{time.strftime('%H:%M:%S')} t={time.time():.3f} {event} {extra}".rstrip(),
+        flush=True,
+    )
+
+
 def _execute(job: dict, path: Path, gate: ServingGate) -> None:
     """Contain a runner error for normal and preempting jobs alike."""
     print(f"{time.strftime('%H:%M:%S')} run {job['id']}", flush=True)
+    _dlog("started", job=job["id"], device=job.get("device", "m5"))
     try:
         if job.get("device") == "m3":
             _run_remote(job, path)
@@ -1693,6 +1755,15 @@ def _execute(job: dict, path: Path, gate: ServingGate) -> None:
     print(f"{time.strftime('%H:%M:%S')} end {job['id']} {job['state']}", flush=True)
     for sib in _cancel_siblings(job):
         print(f"{time.strftime('%H:%M:%S')} cancel {sib} (sibling failed)", flush=True)
+    ended = job.get("ended")
+    _dlog(
+        "lane released",
+        job=job["id"],
+        device=job.get("device", "m5"),
+        release_lag_s=f"{time.time() - ended:.3f}" if ended else "?",
+    )
+    ENDING.set()
+    WAKE.set()
 
 
 _COUNTER = re.compile(r"-(r?\d+)$")  # not "27b", "32k": sizes, not counters
@@ -1881,9 +1952,12 @@ def daemon() -> None:
         except BaseException as exc:
             errors.append(exc)
 
+    wake_seen = _wake_mtime()
     while True:
+        joined = 0.2 if ENDING.is_set() else 0.001
+        ENDING.clear()
         for worker in workers.values():
-            worker.join(timeout=0.001)
+            worker.join(timeout=joined)
         if errors:
             raise errors[0]
         gate.configure(load_serving_config())
@@ -1917,6 +1991,21 @@ def daemon() -> None:
                 worker.start()
             adopted = True
         workers = {lane: t for lane, t in workers.items() if t.is_alive()}
+        if gate.cpu is not None and "m5" in workers:
+            # Keep the quiet-window sampler running while a job holds the lane (carry-over); an
+            # idle lane is sampled by admission itself.
+            running = next(
+                (
+                    j.get("pid")
+                    for j in _jobs()
+                    if j["state"] == "running"
+                    and j.get("device", "m5") == "m5"
+                    and j.get("pid")
+                    and not j.get("paused")
+                ),
+                None,
+            )
+            gate.cpu.observe(_now(), running)
         if gate.enabled and "m5" not in workers:
             gate.poll()
             gate.acknowledge(True)
@@ -1946,6 +2035,7 @@ def daemon() -> None:
                 )
             if job is None:
                 continue
+            _dlog("winner chosen", job=job["id"], lane=lane, label=job.get("label"))
             if not _claim(job, lane):
                 continue
             path = JOBS / f"{job['id']}.json"
@@ -1961,7 +2051,7 @@ def daemon() -> None:
             idle_since = _now()
         elif _now() - idle_since > IDLE_EXIT_S:
             return
-        time.sleep(POLL_S)
+        wake_seen = _wake_wait(POLL_S, wake_seen)
 
 
 def _patch_job(path: Path, **kw) -> None:

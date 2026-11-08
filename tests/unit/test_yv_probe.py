@@ -110,3 +110,91 @@ def test_probe_is_first_stage_after_preflight():
         "preflight",
         "probe",
     ]
+
+
+# ── TTFT stages (cold / warm / turn-2 client TTFT + the engine's per-request stage lines) ──
+def _ttft_arm(log, cold_s, warm_s, ids=1034):
+    rows = [
+        {"part": "decode", "phase": ph, "kind": "code", "ctx": 1024, "prompt_tokens": ids,
+         "ttft_s": t, "ct": 256}
+        for ph, t in (("cold", cold_s), ("warm", warm_s))
+    ]  # fmt: skip
+    st = probe.join_stages(probe.parse_stage_log((FX / log).read_text()), rows)
+    cells = [
+        {"cell": f"code@1024:{r['phase']}", "tpr": 3.0, "nodes": 10.0, "rounds": 50,
+         "hist": None, "dec_tps": None, "ttft_s": r["ttft_s"], "stages": s}
+        for r, s in zip(rows, st)  # noqa: B905
+    ]  # fmt: skip
+    return {"fmt": "driver", "ms_per_round": 50.0, "cells": cells, "stage_lines": True}
+
+
+def test_parse_real_stage_lines_and_join_skips_warmup_requests():
+    d = probe.parse_stage_log((FX / "stages_driver.log").read_text())
+    assert len(d["turn"]) == 6 and len(d["fn"]) == 6
+    assert d["turn"][3]["stages"]["add"] == 71.3 and d["turn"][3]["hit"] == 1033
+    assert d["fn"][2]["path"] == "driver" and d["fn"][2]["stages"]["submit"] == 728.4
+    lane = probe.parse_stage_log((FX / "stages_lane.log").read_text())
+    assert lane["turn"] == [] and lane["fn"][2]["path"] == "lane"
+    cand = _ttft_arm("stages_driver.log", 1.43, 0.068)
+    # the two ids=15 warmup requests are skipped: cold = the first 1034 record, warm = the next
+    assert cand["cells"][0]["stages"]["fn"]["total"] == 1424.3
+    assert cand["cells"][1]["stages"]["turn"]["stages"]["add"] == 71.3
+    assert cand["cells"][1]["stages"]["fn"]["total"] == 3.6
+
+
+def test_todays_warm_regression_is_caught_and_attributed():
+    base = _ttft_arm("stages_lane.log", 1.437, 0.026)  # main's lane
+    cand = _ttft_arm("stages_driver.log", 1.430, 0.068)  # the driver build: warm +42 ms
+    r = probe.compare(base, cand)
+    assert not r["ok"]
+    warm = [m for m in r["moved"] if "warm" in m]
+    assert any("client TTFT 26 -> 68 ms" in m for m in warm), r["moved"]
+    # the lane prints no 'turn stages', so the culprit stage comes from the candidate's own line
+    assert any("'add': 71.3" in m for m in warm), r["moved"]
+    assert not any("cold" in m and "client TTFT" in m for m in r["moved"])
+
+
+def test_stage_move_is_named_when_both_arms_print_it():
+    base = _ttft_arm("stages_driver.log", 1.43, 0.026)
+    cand = copy.deepcopy(base)
+    cand["cells"][1]["stages"]["turn"] = {
+        **cand["cells"][1]["stages"]["turn"],
+        "stages": {**cand["cells"][1]["stages"]["turn"]["stages"], "add": 3.6},
+    }
+    base["cells"][1]["stages"]["turn"]["stages"]["add"] = (
+        71.3  # base slow, cand fast: not a regression
+    )
+    assert probe.compare(base, cand)["ok"]
+    cand["cells"][1]["stages"]["turn"]["stages"]["add"] = (
+        120.0  # cand slower than base's 71.3
+    )
+    r = probe.compare(base, cand)
+    assert any("turn stage add 71.3 -> 120.0" in m for m in r["moved"])
+
+
+def test_ttft_inside_the_floors_passes_and_tolerances_are_overridable():
+    base = _ttft_arm("stages_driver.log", 1.43, 0.026)
+    cand = copy.deepcopy(base)
+    cand["cells"][0]["ttft_s"] = 1.43 + 0.015  # +15 ms, +1 %: inside both floors
+    assert probe.compare(base, cand)["ok"]
+    cand["cells"][0]["ttft_s"] = 1.43 + 0.060  # +60 ms, +4.2 %: beyond both
+    assert not probe.compare(base, cand)["ok"]
+    assert probe.compare(base, cand, {"ttft_pct": 10.0})["ok"]
+
+
+def test_summary_without_stage_lines_is_marked():
+    s = probe.summarize((FX / "driver_rows.log").read_text(), _rows([255, 255]))
+    assert s["stage_lines"] is False and s["stage_schema"] == 1
+    assert probe.parse_stage_log("INFO nothing\n") == {"turn": [], "fn": []}
+
+
+def test_arm_without_round_counters_still_compares_ttft_stages():
+    """2026-11-08 proof run (Flash-Next, main's MTP lane prints no round counters): the probe stopped at
+    'no counter evidence' and never compared the fn_ttft stages both arms print."""
+    lane = (FX / "stages_lane.log").read_text()
+    s = probe.summarize(lane, _rows([255, 255]))
+    assert s["fmt"] == "none" and s["stage_lines"]
+    r = probe.compare(s, copy.deepcopy(s))
+    assert r["ok"], r["moved"]
+    with pytest.raises(ValueError):
+        probe.summarize("INFO nothing\n", _rows([1]))

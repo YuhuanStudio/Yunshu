@@ -31,7 +31,63 @@ TOL = {
     "nodes_abs": 0.1,  # nodes/round is printed with one decimal
     "ms_pct": 3.0,
     "tps_pct": 5.0,  # one rep: a loose timing flag only
+    "ttft_pct": 3.0,  # client TTFT (cold / warm / turn-2): flagged beyond BOTH the % and the ms floor
+    "ttft_abs_ms": 20.0,
+    "stage_pct": 25.0,  # one per-request stage of the engine's own stage line
+    "stage_abs_ms": 10.0,
 }
+
+TURN_STAGES = re.compile(r"turn stages: ids=(\d+) hit=(\d+) \| (.*?) total=([\d.]+) ms")
+FN_TTFT = re.compile(
+    r"fn_ttft path=(\w+) ids=(\d+) hit=(\d+) segs=\d+ \| (.*?) total=([\d.]+) ms"
+)
+_KV = re.compile(r"(\w+)=(-?[\d.]+)")
+
+
+def parse_stage_log(text: str) -> dict:
+    """Per-request stage records: ``turn`` (hit_stages ``turn stages:`` lines, the driver) and ``fn``
+    (``fn_ttft`` lines, Flash-Next on the driver and the old lane), in log order. Never raises: an arm
+    without stage lines simply has empty lists."""
+    turn, fn = [], []
+    for line in text.splitlines():
+        m = TURN_STAGES.search(line)
+        if m:
+            st = {k: float(v) for k, v in _KV.findall(m[3])}
+            turn.append(
+                {"ids": int(m[1]), "hit": int(m[2]), "total": float(m[4]), "stages": st}
+            )
+            continue
+        m = FN_TTFT.search(line)
+        if m:
+            st = {k: float(v) for k, v in _KV.findall(m[4])}
+            fn.append(
+                {
+                    "path": m[1],
+                    "ids": int(m[2]),
+                    "hit": int(m[3]),
+                    "total": float(m[5]),
+                    "stages": st,
+                }
+            )
+    return {"turn": turn, "fn": fn}
+
+
+def join_stages(stage_log: dict, rows: list) -> list:
+    """For each tfbench decode row (request order) the stage records of its request, matched by prompt
+    length in order (rehearsals and warmups between rows are skipped; ``hit`` is not used because a
+    replayed prompt tail reports a longer hit than the cache the client saw). None when absent."""
+    dec = [r for r in rows if r.get("part") == "decode" and r.get("phase")]
+    out = [{"turn": None, "fn": None} for _ in dec]
+    for kind in ("turn", "fn"):
+        recs, at = stage_log[kind], 0
+        for i, row in enumerate(dec):
+            ids = row.get("prompt_tokens") or row.get("pt")
+            for j in range(at, len(recs)):
+                if recs[j]["ids"] == ids:
+                    out[i][kind] = recs[j]
+                    at = j + 1
+                    break
+    return out
 
 
 def parse_log(text: str) -> dict:
@@ -118,11 +174,31 @@ def arm_ms(parsed: dict) -> float | None:
 
 
 def summarize(text: str, rows: list) -> dict:
-    parsed = parse_log(text)
+    stage_log = parse_stage_log(text)
+    try:
+        parsed = parse_log(text)
+        cells = join_rows(parsed, rows)
+    except ValueError:
+        # no decode round counters (e.g. main's Flash-Next MTP lane): the TTFT stage lines can still be
+        # compared; without them there is no evidence at all and the caller fails closed / hands over
+        if not (stage_log["turn"] or stage_log["fn"]):
+            raise
+        parsed = {"fmt": "none", "requests": [], "windows": []}
+        cells = [
+            {"cell": f"{r.get('kind')}@{r.get('ctx')}:{r.get('phase')}", "rounds": None, "tpr": None,
+             "nodes": None, "hist": None, "dec_tps": r.get("dec_tps"), "ttft_s": r.get("ttft_s")}
+            for r in rows if r.get("part") == "decode" and r.get("phase")
+        ]
+    dec = [r for r in rows if r.get("part") == "decode" and r.get("phase")]
+    for cell, stages in zip(cells, join_stages(stage_log, rows)):  # noqa: B905
+        cell["stages"] = stages
     return {
         "fmt": parsed["fmt"],
-        "ms_per_round": arm_ms(parsed),
-        "cells": join_rows(parsed, rows),
+        "ms_per_round": arm_ms(parsed) if parsed["fmt"] != "none" else None,
+        "cells": cells,
+        "stage_lines": bool(stage_log["turn"] or stage_log["fn"]),
+        "stage_schema": 1,
+        "n_dec": len(dec),
     }
 
 
@@ -146,19 +222,22 @@ def compare(base: dict, cand: dict, tol: dict | None = None) -> dict:
             "numbers": {},
         }
     tpr_tol = t["tpr_pct_cross"] if cross else t["tpr_pct"]
+    nocount = "none" in (base["fmt"], cand["fmt"])  # an arm without round counters: TTFT stages only
     for b, c in zip(bc, cc):  # noqa: B905
         d = {"cell": b["cell"]}
         for name in ("tpr", "nodes", "rounds"):
             d[name] = [b[name], c[name]]
-        if b["tpr"] is None or c["tpr"] is None:
+        if nocount:
+            pass
+        elif b["tpr"] is None or c["tpr"] is None:
             moved.append(f"{b['cell']}: tokens/round missing")
         elif abs(_pct(b["tpr"], c["tpr"])) > tpr_tol:
             moved.append(f"{b['cell']}: tokens/round {b['tpr']:.2f} -> {c['tpr']:.2f}")
-        if abs(c["nodes"] - b["nodes"]) > t["nodes_abs"]:
+        if not nocount and abs(c["nodes"] - b["nodes"]) > t["nodes_abs"]:
             moved.append(
                 f"{b['cell']}: nodes/round {b['nodes']:.1f} -> {c['nodes']:.1f}"
             )
-        if not cross and b["rounds"] != c["rounds"]:
+        if not nocount and not cross and b["rounds"] != c["rounds"]:
             moved.append(f"{b['cell']}: rounds {b['rounds']} -> {c['rounds']}")
         if b["hist"] and c["hist"] and b["hist"] != c["hist"]:
             moved.append(
@@ -178,13 +257,17 @@ def compare(base: dict, cand: dict, tol: dict | None = None) -> dict:
                 round(_pct(b["ttft_s"], c["ttft_s"]), 1),
             ]
         cells.append(d)
+    tt = compare_ttft(base, cand, t)
+    moved += tt["moved"]
+    for d, e in zip(cells, tt["cells"]):  # noqa: B905
+        d.update({k: v for k, v in e.items() if k != "cell"})
     bm, cm = base["ms_per_round"], cand["ms_per_round"]
     if bm and cm:
         if _pct(bm, cm) > t["ms_pct"]:
             moved.append(
                 f"ms/round {bm:.1f} -> {cm:.1f} ({_pct(bm, cm):+.1f}%, limit {t['ms_pct']}%)"
             )
-    else:
+    elif not nocount:
         moved.append("ms/round missing in an arm (no window/profile line)")
     return {
         "ok": not moved,
@@ -196,6 +279,75 @@ def compare(base: dict, cand: dict, tol: dict | None = None) -> dict:
             "tol": t,
         },
     }
+
+
+def _stage_moves(cell: str, label: str, b: dict, c: dict, t: dict) -> list:
+    """Every stage (and the total) present in both records that moved beyond its ms floor AND %."""
+    out = []
+    pairs = {"total": (b["total"], c["total"])}
+    for k in b["stages"]:
+        if k in c["stages"]:
+            pairs[k] = (b["stages"][k], c["stages"][k])
+    for k, (x, y) in pairs.items():
+        d = y - x
+        if d > t["stage_abs_ms"] and _pct(max(x, 1e-9), y) > t["stage_pct"]:
+            out.append(f"{cell}: {label} stage {k} {x:.1f} -> {y:.1f} ms ({d:+.1f})")
+    return out
+
+
+def compare_ttft(base: dict, cand: dict, tol: dict | None = None) -> dict:
+    """TTFT part of the probe: per cell the client TTFT, then the engine's stage lines. Flags the cell
+    whose client TTFT grew beyond the ms floor AND the %, and every stage that did the same where both
+    arms print comparable stage records (``turn stages`` anywhere; ``fn_ttft`` stages only when both are
+    the same path, otherwise just its total). When the client TTFT moved the cell's stage numbers of both
+    arms are attached so the culprit stage is visible even across formats."""
+    t = {**TOL, **(tol or {})}
+    moved, cells = [], []
+    for b, c in zip(base["cells"], cand["cells"]):  # noqa: B905
+        d = {"cell": b["cell"]}
+        bt, ct = b.get("ttft_s"), c.get("ttft_s")
+        flagged = False
+        if bt and ct:
+            dms = (ct - bt) * 1e3
+            pct = _pct(bt, ct)
+            d["ttft_ms"] = [round(bt * 1e3, 1), round(ct * 1e3, 1), round(pct, 1)]
+            if dms > t["ttft_abs_ms"] and pct > t["ttft_pct"]:
+                flagged = True
+                moved.append(
+                    f"{b['cell']}: client TTFT {bt * 1e3:.0f} -> {ct * 1e3:.0f} ms ({dms:+.0f} ms, {pct:+.1f}%)"
+                )
+        bs, cs = b.get("stages") or {}, c.get("stages") or {}
+        stage_moves = []
+        if bs.get("turn") and cs.get("turn"):
+            stage_moves += _stage_moves(b["cell"], "turn", bs["turn"], cs["turn"], t)
+        if bs.get("fn") and cs.get("fn"):
+            if bs["fn"]["path"] == cs["fn"]["path"]:
+                stage_moves += _stage_moves(b["cell"], "fn_ttft", bs["fn"], cs["fn"], t)
+            else:
+                stage_moves += _stage_moves(
+                    b["cell"],
+                    f"fn_ttft {bs['fn']['path']}->{cs['fn']['path']}",
+                    {"total": bs["fn"]["total"], "stages": {}},
+                    {"total": cs["fn"]["total"], "stages": {}},
+                    t,
+                )
+        moved += stage_moves
+        if flagged or stage_moves:
+            d["stages"] = {
+                "base": {k: v and v["stages"] for k, v in bs.items()},
+                "cand": {k: v and v["stages"] for k, v in cs.items()},
+            }
+            if flagged and not stage_moves:
+                top = {
+                    k: dict(sorted(v["stages"].items(), key=lambda kv: -kv[1])[:3])
+                    for k, v in cs.items()
+                    if v
+                }
+                moved.append(
+                    f"{b['cell']}: TTFT moved outside every comparable stage; cand's largest stages {top}"
+                )
+        cells.append(d)
+    return {"moved": moved, "cells": cells}
 
 
 def verdict_text(res: dict) -> str:
