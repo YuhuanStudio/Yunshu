@@ -286,3 +286,21 @@ def test_a_cleanup_step_that_raises_still_publishes_the_terminal(runner):
     assert _collect(runner, 2) == [1, 2]
     assert runner.finish_cleanup_failures == {"observe_prefill": 1}
     assert not runner.busy()
+
+
+def test_prompt_logprobs_request_and_first_event_reach_stats(runner):
+    scores = [None, {"token_id": 2, "logprob": -1.0}]
+    original = runner.driver.step
+
+    def step():
+        events = original()
+        for event in events:
+            if event.token == 1:
+                event.prompt_logprobs = scores
+        return events
+
+    runner.driver.step = step
+    stats = vbr.RunStats()
+    assert _collect(runner, 2, prompt_logprobs=0, stats=stats) == [1, 2]
+    assert runner.driver.requests[0].prompt_logprobs == 0
+    assert stats.prompt_logprobs == scores

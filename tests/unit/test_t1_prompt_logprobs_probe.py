@@ -22,3 +22,13 @@ def test_reference_validator():
     ]
     with pytest.raises(AssertionError):
         compare(wrong, scores)
+
+
+def test_reference_tolerance_is_explicit_and_bounded():
+    ref = [None, {"token_id": 2, "logprob": -1.0, "top_logprobs": []}]
+    got = [None, {"token_id": 2, "logprob": -1.000001, "top_logprobs": []}]
+    with pytest.raises(AssertionError):
+        compare(got, ref)
+    assert compare(got, ref, tolerance=1e-5) < 1e-5
+    with pytest.raises(AssertionError):
+        compare(got, ref, tolerance=1e-8)

@@ -119,11 +119,9 @@ def test_driver_row_with_a_grammar_dead_end_fails_alone():
     fault = RuntimeError("grammar dead end")
     bad.processors = [SimpleNamespace(fault=fault)]
     removed = []
-    events = [
-        SimpleNamespace(handle=bad, token=1, logprob=None, finish=None),
-        SimpleNamespace(handle=good, token=2, logprob=None, finish=None),
-        SimpleNamespace(handle=bad, token=3, logprob=None, finish=None),
-    ]
+    from yunshu_engine.round_driver.driver import Event
+
+    events = [Event(bad, 1), Event(good, 2), Event(bad, 3)]
     drv = SimpleNamespace(
         rows=[],
         can_draft=False,

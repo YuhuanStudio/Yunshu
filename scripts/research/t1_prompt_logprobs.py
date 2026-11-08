@@ -85,7 +85,15 @@ def serve(args):
     RoundDriver.add = add
     from yunshu_cli import main
 
-    sys.argv = ["yunshu", "serve", "-m", args.model, "--port", str(args.port)]
+    sys.argv = [
+        "yunshu",
+        "serve",
+        "-m",
+        args.model,
+        "--port",
+        str(args.port),
+        "--no-console",
+    ]
     main()
 
 
@@ -186,7 +194,14 @@ def main():
                         }
                     )
                 out.write_text(
-                    json.dumps({"checks": checks, "complete": True, "passed": True})
+                    json.dumps(
+                        {
+                            "checks": checks,
+                            "complete": True,
+                            "passed": True,
+                            "tolerance": args.tolerance,
+                        }
+                    )
                     + "\n"
                 )
                 print(out.read_text(), flush=True)
