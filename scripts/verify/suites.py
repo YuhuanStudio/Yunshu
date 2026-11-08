@@ -10,6 +10,7 @@ STAGES = (
     "service_deploy",
     "telemetry-tiny",
     "telemetry",
+    "probe",
     "smoke",
     "toolparse",
     "identity",
@@ -76,6 +77,7 @@ LADDER = tuple(
         "searchrank",
         "toolparse",
         "qwen4_mtp",
+        "probe",
     )
 )
 
@@ -104,6 +106,12 @@ SUITES = {
         "reps": 1,
     },
     "snapshot": {"stages": ["snapshot"]},
+    # cheap counter check: one short run per arm, no timing reps (docs/guides/VERIFY.md, "probe")
+    "probe": {
+        "stages": ["preflight", "probe"],
+        "ctx": [1024],
+        "reps": 1,
+    },
     "qwen4_mtp": {"stages": ["preflight", "qwen4_mtp"]},
     "respfeat": {"stages": ["preflight", "respfeat"]},
     "priorart": {"stages": ["preflight", "priorart"]},
@@ -155,7 +163,7 @@ SUITES = {
     "rerank": {"stages": ["preflight", "rerank"]},
     # decode-path change (kernels, spec decode, sampler): identity incl. spec on == off, speed
     "decode": {
-        "stages": ["preflight", "smoke", "identity", "apc", "speed"],
+        "stages": ["preflight", "probe", "smoke", "identity", "apc", "speed"],
         "ctx": [1024, 8192],
         # spec on == off is opt-in (--spec-off): on main the server-level 'off' path differs
         # from MTP and DFlash in every 27B 1K cell (2026-10 measurement)
@@ -192,7 +200,15 @@ SUITES = {
     },
     # iteration: fast, base cached across candidates; run `full` before merge
     "quick": {
-        "stages": ["preflight", "smoke", "identity", "apc", "quality", "speed"],
+        "stages": [
+            "preflight",
+            "probe",
+            "smoke",
+            "identity",
+            "apc",
+            "quality",
+            "speed",
+        ],
         "ctx": [1024, 8192],
         "spec_off": False,
         "reps": 3,

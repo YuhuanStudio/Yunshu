@@ -7,6 +7,7 @@ import time
 SCHEMA = 1
 STAGE_ORDER = [
     "preflight",
+    "probe",
     "smoke",
     "identity",
     "apc",

@@ -5,6 +5,7 @@ Every record is one HTTP request; a part that does not finish writes no 'part_do
 """
 
 import argparse
+import base64
 import concurrent.futures as cf
 import contextlib
 import hashlib
@@ -18,13 +19,24 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
+
+import jsonschema
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_engines  # noqa: E402
+import fullcmp_manifest as fm  # noqa: E402  (request families: FAMILY_KINDS, IMAGE_COUNT)
+import fullcmp_attribution  # noqa: E402  (layer-1 attribution schema)
+import fullcmp_engaged as fe  # noqa: E402  (engaged spec mode from evidence, never the request)
+import fullcmp_provenance as fp  # noqa: E402
+import fullcmp_quiet as fq  # noqa: E402  (quiet-machine snapshots per cell, FULLCMP_SPEC)
 from gpuq_contention import was_contended  # noqa: E402
+
+# Identifies this harness in every request row (fullcmp audit: provenance_identity).
+HARNESS_ID = "tfbench/fullcmp-1"
 
 M = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
 D = "/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2"
@@ -60,8 +72,74 @@ WORK = Path(os.environ.get("TFB_WORK", "/Volumes/P5Plus/yunshu-build/tfnew"))
 OUT = Path(os.environ.get("TFB_OUT", str(WORK)))
 
 
+def server_home(out: Path, tag: str, environ) -> Path:
+    """HOME of a server. In a full-comparison job (TFB_FULLCMP=1, TFB_JOB_LABEL set by the
+    driver) every server of the job uses the job's one directory: the audit's fairness control
+    is one isolated HOME per gpuq job, and the job's cells run their servers back to back. Other
+    runs keep one directory per server tag."""
+    label = environ.get("TFB_JOB_LABEL", "")
+    if environ.get("TFB_FULLCMP") == "1" and label:
+        return out / "home" / label
+    return out / "home" / tag
+
+
+def cleanup_job_home(out: Path, environ, rmtree=shutil.rmtree) -> bool:
+    """End of a full-comparison tfbench run: remove the job's whole server HOME (engine disk caches such
+    as .cache/mlx-vlm/apc held 17-19 GB per job and filled the result disk, 2026-11-08). Nothing in it is
+    evidence: the audit reads the header's recorded home path, never the directory. Only a fullcmp job
+    with a label (its own directory) is touched; a restart cell has finished both its servers by now."""
+    label = environ.get("TFB_JOB_LABEL", "")
+    if environ.get("TFB_FULLCMP") != "1" or not label:
+        return False
+    rmtree(server_home(out, "", environ), ignore_errors=True)
+    return True
+
+
+def ephemeral_port():
+    """An OS-assigned loopback port (never the shared 18990-18999 pool)."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def parse_lsof_pids(text):
+    """PIDs from `lsof -t` output (one per line); blank or junk lines are ignored."""
+    return sorted({int(x) for x in text.split() if x.isdigit()})
+
+
+def listening_pids(port, run=subprocess.run):
+    """PIDs holding a LISTEN socket on the TCP port, named by lsof. Read-only."""
+    result = run(
+        ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    return parse_lsof_pids(result.stdout or "")
+
+
+def assert_port_free(port, run=subprocess.run):
+    """Fail closed when a cell's port is already bound: name the holder, never kill it."""
+    with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+            return
+        except OSError:
+            pass
+    pids = listening_pids(port, run=run)
+    holder = ", ".join(str(p) for p in pids) or "unknown (lsof named no pid)"
+    raise RuntimeError(
+        f"port {port} is already bound by pid {holder}; refusing to start a cell on it "
+        f"(check: lsof -nP -iTCP:{port} -sTCP:LISTEN). Nothing was killed."
+    )
+
+
 def free_port(wait_s=600.0, interval_s=5.0, sleep=None, clock=None):
-    """Paused gpuq jobs retain ports; wait for the bounded shared pool."""
+    """Paused gpuq jobs retain ports; wait for the bounded shared pool. Stub runs (TFB_STUB_SERVER,
+    tests only) take an ephemeral port so they never touch the pool."""
+    if os.environ.get("TFB_STUB_SERVER"):
+        return ephemeral_port()
     sleep = sleep or time.sleep
     clock = clock or time.monotonic
     deadline = clock() + wait_s
@@ -156,14 +234,59 @@ def spec_request(engine, extra_env, model=None):
     return mode, env
 
 
-def engaged_spec_mode(engine, log):
-    """Read the initialized runner, not the earlier selection/fallback message."""
+def engaged_spec_mode_line(engine, log):
+    """(engaged mode, the log line it was parsed from), read from the initialized runner, not
+    the earlier selection/fallback message. (None, None) when the log shows no mode."""
     if engine == "yunshu":
-        modes = re.findall(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", log)
-        return modes[-1] if modes else None
-    if re.search(r"\[tensorfold\] drafter [^\n]*DFlash[^\n]*block=", log):
-        return "dflash"
-    return None
+        found = list(
+            re.finditer(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", log)
+        )
+        if not found:
+            return None, None
+        m = found[-1]
+        start = log.rfind("\n", 0, m.start()) + 1
+        end = log.find("\n", m.end())
+        return m.group(1), log[start : end if end != -1 else len(log)]
+    if engine.startswith("omlx-"):
+        # omlx prints this once the DFlash drafter is attached as a batched drafter (the
+        # high-confidence pattern of fullcmp_audit_manifest.EXPECTED_MODE_PROBE)
+        m = re.search(
+            r"DFlash enabled for \S+ as a batched drafter, draft=\S+[^\n]*", log
+        )
+        if m:
+            start = log.rfind("\n", 0, m.start()) + 1
+            end = log.find("\n", m.end())
+            return "dflash", log[start : end if end != -1 else len(log)]
+    m = re.search(r"\[tensorfold\] drafter [^\n]*DFlash[^\n]*block=[^\n]*", log)
+    if m:
+        return "dflash", m.group(0)
+    if engine.startswith("tf-"):
+        # TensorFold 1.2.x serving line (bench_engines.detect_mode reads the same evidence)
+        m = re.search(r"drafts: DFlash2\b[^\n]*", log)
+        if m:
+            start = log.rfind("\n", 0, m.start()) + 1
+            end = log.find("\n", m.end())
+            return "dflash", log[start : end if end != -1 else len(log)]
+        # TensorFold 1.1.8 (2026-11-03 smoke): "Qwen3.8-27B: ... DFlash2 drafts for one of them"
+        # with the serving line "drafts: on" (bench_engines.detect_mode reads the same pair)
+        m = re.search(r"DFlash2 drafts for [^\n]*", log)
+        if m and re.search(r"drafts: on\b", log):
+            start = log.rfind("\n", 0, m.start()) + 1
+            end = log.find("\n", m.end())
+            return "dflash", log[start : end if end != -1 else len(log)]
+    if engine.startswith("splash"):
+        # Splash 1.5.0 (2026-11-03 smoke): printed once the DFlash2 draft is loaded and wired into
+        # the decode loop (the /status probe is only corroboration)
+        m = re.search(r"Decode cycles verify every row of the draft's block[^\n]*", log)
+        if m:
+            start = log.rfind("\n", 0, m.start()) + 1
+            end = log.find("\n", m.end())
+            return "dflash", log[start : end if end != -1 else len(log)]
+    return None, None
+
+
+def engaged_spec_mode(engine, log):
+    return engaged_spec_mode_line(engine, log)[0]
 
 
 # Warnings that mean a tuned kernel path silently turned off for this model.
@@ -193,6 +316,9 @@ def warm_lazy_engine(engine, url, model):
         "omlx",
         "llamacpp",
         "omlx-latest",
+        "omlx-0.7.3",
+        "omlx-0.7.3rc1",
+        "omlx-0.7.4.dev1",
         "llamacpp-mtp",
         "llamacpp-dflash",
         "fn-omlx-latest",
@@ -214,11 +340,56 @@ def wait_startup_ready(proc, log, pattern, timeout=120):
     raise RuntimeError(f"accelerator startup not ready: {pattern}")
 
 
+def stub_server_cmd(engine, port, log, stub_dir, version=None) -> list[str]:
+    """TEST-ONLY: argv of the fullcmp stub server that replaces a real engine launch when
+    TFB_STUB_SERVER=<dir> is set. The stub is <dir>/fullcmp_stub_server.py (the tests point it at
+    tests/unit), so no engine is started. Its engine lines go to the server log; version is the
+    version it reports on /v1/yunshu/status (the pinned version for yunshu)."""
+    cmd = [
+        sys.executable,
+        # TFB_STUB_SCRIPT picks another stub file in the same dir (tests: the request-family stub)
+        str(Path(stub_dir) / os.environ.get("TFB_STUB_SCRIPT", "fullcmp_stub_server.py")),
+        "--engine",
+        engine,
+        "--port",
+        str(port),
+        "--log",
+        str(log),
+    ]
+    if version:
+        cmd += ["--version", str(version)]
+    return cmd
+
+
 class Srv:
+    @staticmethod
+    def _is_yunshu(engine):
+        return engine == "yunshu" or (
+            bench_engines.is_new_engine(engine)
+            and bench_engines.ENGINES[engine].kind == "yunshu"
+        )
+
     def __init__(
-        self, engine, extra_env, tag, model=None, ctx_tokens=140000, parallel=1
+        self,
+        engine,
+        extra_env,
+        tag,
+        model=None,
+        ctx_tokens=140000,
+        parallel=1,
+        reuse_home=False,
     ):
+        # Fullcmp: a Yunshu server runs only from the pinned tree and venv, or not at all.
+        # Checked before any port, directory or process is created.
+        self.pin = None
+        self.observe = None  # fullcmp Yunshu: True (profile) or False (timed); see observe_state
+        if fp.fullcmp_mode(os.environ) and self._is_yunshu(engine):
+            self.pin = fp.require_yunshu_pin(os.environ, engine=engine)
+            self.observe = fp.observe_state(os.environ, True)
         self.engine, self.port = engine, free_port()
+        assert_port_free(self.port)  # fail closed before any dir or process is created
+        self.tag, self.model_arg = tag, model
+        self.ctx_tokens, self.parallel = ctx_tokens, parallel
         self.requested_spec_mode, extra_env = spec_request(
             engine, extra_env, model or M
         )
@@ -227,9 +398,10 @@ class Srv:
         if bench_engines.is_new_engine(engine):
             self.requested_spec_mode = bench_engines.ENGINES[engine].expected_mode
         self.extra_env = extra_env
-        self.home = OUT / "home" / tag
-        shutil.rmtree(self.home, ignore_errors=True)
-        self.home.mkdir(parents=True)
+        self.home = server_home(OUT, tag, os.environ)
+        if not reuse_home:  # a restart keeps HOME: the disk prefix tier lives there
+            shutil.rmtree(self.home, ignore_errors=True)
+        self.home.mkdir(parents=True, exist_ok=True)
         self.log = OUT / "out" / f"server-{tag}.log"
         self.log.parent.mkdir(parents=True, exist_ok=True)
         env = bench_engines.scrubbed_env(os.environ)
@@ -297,24 +469,62 @@ class Srv:
             ]
         # A watched engine always runs in observe mode; TFB_OBSERVE=0 (or an explicit
         # YUNSHU_OBSERVE via --env) keeps a pure timing run free of telemetry.
-        is_yunshu = engine == "yunshu" or (
-            bench_engines.is_new_engine(engine)
-            and bench_engines.ENGINES[engine].kind == "yunshu"
-        )
-        if is_yunshu and os.environ.get("TFB_OBSERVE", "1") != "0":
+        is_yunshu = self._is_yunshu(engine)
+        if fp.fullcmp_mode(os.environ) and is_yunshu:
+            # Fullcmp: the server env carries exactly what observe_state decided (no leftovers,
+            # no --env override); the header records the value actually passed.
+            if "YUNSHU_OBSERVE" in extra_env:
+                raise fp.ProvenanceError("fullcmp: YUNSHU_OBSERVE must not come from --env")
+            env.pop("YUNSHU_OBSERVE", None)
+            if self.observe:
+                env["YUNSHU_OBSERVE"] = "1"
+        elif is_yunshu and os.environ.get("TFB_OBSERVE", "1") != "0":
             env.setdefault("YUNSHU_OBSERVE", "1")
+        self.yunshu_observe_env = env.get("YUNSHU_OBSERVE")
+        if self.pin is not None:
+            # Pinned: `<pinned venv python> -m yunshu_cli serve ...` from the pinned tree only.
+            if not bench_engines.is_yunshu_command(cmd):
+                raise fp.ProvenanceError(
+                    f"pinned launch is not a yunshu command: {cmd[:2]}"
+                )
+            cmd = fp.pinned_yunshu_cmd(cmd, self.pin, bench_engines.yunshu_args)
+            env["PYTHONPATH"] = self.pin["src"]
         self.cmd = cmd
         baseline_used = (
             host_used_bytes()
         )  # before launch: weights/mmap count in the delta
-        with open(self.log, "wb") as server_log:
+        stub_dir = os.environ.get("TFB_STUB_SERVER")
+        if stub_dir:
+            # TEST-ONLY (fullcmp dry run): the server is tests/unit/fullcmp_stub_server.py on
+            # this port, writing its engine lines to this server's log. Launch, readiness and
+            # every check after it stay the same code path.
+            cmd = stub_server_cmd(
+                self.engine,
+                self.port,
+                self.log,
+                stub_dir,
+                version=(self.pin or {}).get("version"),
+            )
+            self.cmd = cmd
+            self.log.write_bytes(
+                b""
+            )  # as the real launch does: the log exists before readiness
             self.proc = subprocess.Popen(
                 cmd,
-                stdout=server_log,
-                stderr=subprocess.STDOUT,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 env=env,
                 start_new_session=True,
             )
+        else:
+            with open(self.log, "wb") as server_log:
+                self.proc = subprocess.Popen(
+                    cmd,
+                    stdout=server_log,
+                    stderr=subprocess.STDOUT,
+                    env=env,
+                    start_new_session=True,
+                )
         self.url = f"http://127.0.0.1:{self.port}"
         self.mem = MemSampler(
             getattr(self.proc, "pid", None), baseline_bytes=baseline_used
@@ -341,6 +551,8 @@ class Srv:
         else:
             self.kill()
             raise RuntimeError("not ready")
+        # the log offset after readiness: a match before it is startup evidence (loaded only)
+        self.ready_log_offset = self.log.stat().st_size if self.log.exists() else 0
         try:
             startup = getattr(bench_engines.ENGINES.get(self.engine), "extra", {})
             if pattern := startup.get("startup_ready_regex"):
@@ -349,10 +561,36 @@ class Srv:
                 )
                 self.ready_s = time.time() - t0
             warm_lazy_engine(self.engine, self.url, self.model)
+            if self.pin is not None:
+                self.verify_pinned()
             self.verify_spec_mode()
         except Exception:
             self.kill()
             raise
+
+    def verify_pinned(self):
+        """The running server reports the pinned version and runs from the pinned python."""
+        req = urllib.request.Request(
+            self.url + "/v1/yunshu/status",
+            headers={
+                "Authorization": "Bearer "
+                + self.extra_env.get("YUNSHU_AUTH_TOKEN", "k")
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            status = json.load(r)
+        ps = subprocess.run(
+            ["ps", "-o", "command=", "-p", str(self.proc.pid)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        fp.verify_pinned_status(status, self.pin)
+        if os.environ.get("TFB_STUB_SERVER"):
+            # TEST-ONLY: the live process is the stub, so its command line cannot be the pinned
+            # python; every other pin check (version, binary, paths) still runs.
+            return
+        fp.verify_pinned_cmdline(ps.stdout, self.pin)
 
     def probe_text(self):
         path = self.launch.probe if self.launch else None
@@ -364,8 +602,48 @@ class Srv:
         except Exception as e:  # noqa: BLE001
             return f"probe failed: {e!r}"
 
-    def verify_spec_mode(self):
-        log = self.log.read_text(errors="replace")
+    def evidence_log(self):
+        """(log text, ready offset) the evidence verdict reads. A restart cell's relaunch truncates the live log, so
+        the rows served by the first server (the cold row) have their done line only in the bytes saved at the
+        restart (_LOG_PREFIX): the verdict reads those bytes first, then the live log, with the FIRST server's ready
+        offset (the audit reads the same concatenation as the cell's slice). Without a restart: the live log."""
+        live = self.log.read_text(errors="replace") if self.log.exists() else ""
+        if not _LOG_PREFIX:
+            return live, getattr(self, "ready_log_offset", None)
+        prefix = b"".join(_LOG_PREFIX).decode(errors="replace")
+        first = getattr(self, "first_ready_log_offset", getattr(self, "ready_log_offset", None))
+        return prefix + live, first
+
+    def verify_spec_mode(self, final=False, rows=(), probe_response=None, concurrent=(), concurrent_probe=None):
+        log, ready_offset = self.evidence_log()
+        if fp.fullcmp_mode(os.environ) and self._is_yunshu(self.engine) and final and concurrent and not rows:
+            # a Yunshu concurrent cell: the same derived verdict the audit re-derives (fe.concurrent_check), not the
+            # runner line (the header and the audit must agree on the mode and the line)
+            ev, problems = fe.concurrent_check(fe.load_table(), self.engine, self.requested_spec_mode, log,
+                                               concurrent, ready_offset)
+            self.engaged_spec_mode = ev["engaged_mode"]
+            self.engaged_log_line = ev["matched_line"]
+            self.engaged_evidence_kind = ev["evidence_kind"]
+            self.engaged_evidence_source = ev["source"]
+            self.engaged_label = ev.get("label")
+            if problems:
+                raise RuntimeError("concurrent evidence: " + "; ".join(problems) + f"; see {self.log}")
+            return
+        if fp.fullcmp_mode(os.environ) and not self._is_yunshu(self.engine):
+            # Fullcmp: the engaged mode comes from the evidence table only (fullcmp_engaged); the
+            # request is never copied into the header. At startup only the load lines exist (a
+            # startup line proves 'loaded'), so only the final check (after the requests, with the
+            # cell's records) may refuse a cell.
+            self.probe = self.probe_text()
+            self._verify_fullcmp_evidence(
+                log, final=final, rows=rows, probe_response=probe_response, concurrent=concurrent,
+                concurrent_probe=concurrent_probe, ready=ready_offset
+            )
+            return
+        # The engaged-mode line the audit checks (fullcmp header engaged_log_line).
+        self.engaged_log_line = engaged_spec_mode_line(
+            "yunshu" if self._is_yunshu(self.engine) else self.engine, log
+        )[1]
         if self.engine in bench_engines.ENGINES:
             # registry engines: evidence from the log (and a status probe) must match the expected mode
             self.probe = self.probe_text()
@@ -392,7 +670,55 @@ class Srv:
             # measures a different engine (2026-10-20: ragged KV off broke identity)
             raise RuntimeError(f"{off}; see {self.log}")
 
-    def kill(self):
+    def _verify_fullcmp_evidence(self, log, final=False, rows=(), probe_response=None, concurrent=(), concurrent_probe=None, ready=...):
+        table = fe.load_table()  # None when the table is missing or malformed: no evidence at all
+        if ready is ...:
+            ready = getattr(self, "ready_log_offset", None)
+        if concurrent and not rows:
+            # concurrent cells: the same shared verdict the audit uses (fe.concurrent_check)
+            ev, problems = fe.concurrent_check(table, self.engine, self.requested_spec_mode, log, concurrent, ready,
+                                               probe_responses=concurrent_probe)
+            if problems and final:
+                text = self.log.read_text(errors="replace") if self.log.exists() else ""
+                shown = [ln for ln in text.splitlines() if re.search(r"done|chat:|MTP\[", ln)][:10]
+                raise RuntimeError("concurrent evidence: " + "; ".join(problems) + f"; see {self.log}"
+                                   + "; first done lines: " + " | ".join(shown))
+        else:
+            ev = fe.evaluate(
+                self.engine,
+                self.requested_spec_mode,
+                log,
+                rows,
+                table,
+                probe_text=self.probe,
+                ready_offset=ready,
+                probe_response=probe_response,
+            )
+        self.engaged_spec_mode = ev["engaged_mode"]
+        self.engaged_log_line = ev["matched_line"]
+        self.engaged_evidence_kind = ev["evidence_kind"]
+        self.engaged_evidence_source = ev["source"]
+        self.engaged_label = ev.get("label")
+        self.engaged_per_row = (ev.get("stats") or {}).get("per_row", [])  # reported with the base mode (e.g. 'dflash (kflash tree)')
+        derived_ar = (bool(concurrent) and not rows and self.engaged_spec_mode == "ar") or (
+            self.engaged_spec_mode == "ar" and self.engaged_evidence_kind == "constrained_ar"
+        )  # a labelled 'ar': a concurrent cell, or a constrained kind cell the engine decodes without drafting
+        if final and self.engaged_spec_mode != self.requested_spec_mode and not derived_ar:
+            raise RuntimeError(
+                f"requested spec={self.requested_spec_mode}, engaged={self.engaged_spec_mode} "
+                f"(evidence: {self.engaged_evidence_kind}, table: {'ok' if table else 'missing'}); "
+                f"see {self.log}"
+            )
+
+    def kill(self, keep_disk=False, graceful=False):
+        if self.proc.poll() is None and graceful:
+            # a restart is a real stop: SIGTERM lets the engine persist its prefix cache on shutdown
+            # (Yunshu's APC close() writes resident checkpoints); SIGKILL only after the grace period
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(self.proc.pid, signal.SIGTERM)
+            with contextlib.suppress(Exception):
+                self.proc.wait(RESTART_TERM_GRACE_S)
+            self.term_exit = "exited" if self.proc.poll() is not None else "sigkill after grace"
         if self.proc.poll() is None:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(self.proc.pid, signal.SIGKILL)
@@ -400,18 +726,142 @@ class Srv:
                 self.proc.wait(30)
         # The server's SSD prefix cache (up to ~8 GB per 128K cell) is dead once the server is:
         # the next server of this tag starts from an emptied home anyway. Left behind, finished
-        # yv runs held 362 GB of it on P5Plus (2026-10-07).
-        if self.proc.poll() is not None:
-            for sub in (".yunshu/cache", "omlx-ssd", "mtplx-cache", "omlx-base/cache"):
+        # yv runs held 362 GB of it on P5Plus (2026-10-07). A restart cell stops its first server
+        # with keep_disk=True: the relaunched server reads that cache from the same HOME.
+        if self.proc.poll() is not None and not keep_disk:
+            for sub in ENGINE_CACHE_SUBDIRS:
                 shutil.rmtree(self.home / sub, ignore_errors=True)
         if getattr(self, "mem", None):
             self.mem.stop()
 
 
+# Every server a run started (the restart phase replaces the live one): main() kills all of them.
+_LIVE_SERVERS: list = []
+# The first raw chunk that carried a usage object (the server's own usage shape, as sent).
+_USAGE_SAMPLE: list = [None]
+
+
+# Full bytes of each engine log that a restart truncated during the current cell (restart_server).
+_LOG_PREFIX = []
+
+
+def server_log_path(out):
+    """The cell's engine-log slice: <cell>-rN.server.log beside <cell>-rN.jsonl (or -prof.jsonl)."""
+    text = str(out)
+    stem = text[: -len(".jsonl")] if text.endswith(".jsonl") else text
+    return stem + ".server.log"
+
+
+def job_log_suffix() -> str:
+    """A suffix unique to this job/chunk, so two chunks of one cell never share an engine log file
+    (wire-1106d: mixed-0 of p1 and p2 both wrote server-omlx-0.7.3-mixed-0.log; p2 overwrote p1's evidence)."""
+    job = os.environ.get("GPUQ_JOB_ID") or os.environ.get("TFB_RUN_ID") or ""
+    chunk = os.environ.get("TFB_CHUNK") or ""
+    parts = [p for p in (job, chunk) if p]
+    return ("-" + "-".join(re.sub(r"[^A-Za-z0-9._-]", "_", p) for p in parts)) if parts else ""
+
+
+def cell_engine_log(log_path, end=None, prefix=()):
+    """This cell's engine log. Each launch truncates its log (open 'wb'), so the cell's slice is the
+    whole server log from byte 0: the engaged-mode evidence is printed at startup, before readiness
+    (Splash prints its drafter line there and logs nothing per request), so a slice that began at
+    readiness was empty for Splash (2026-11-04). prefix: bytes of logs a restart truncated."""
+    return cell_log_slice(log_path, 0, end, prefix=prefix)
+
+
+def cell_log_slice(log_path, start, end=None, prefix=()):
+    """Bytes of one cell's engine log: the shared log from offset start to end (None: its end),
+    after the full bytes of any log a restart in this cell truncated (prefix, in order)."""
+    log_path = Path(log_path)
+    data = log_path.read_bytes() if log_path.exists() else b""  # no log: an empty slice (audit fails)
+    if not prefix:
+        return data[start:end]
+    pieces = [*prefix, data]
+    pieces[0] = pieces[0][start:]
+    pieces[-1] = pieces[-1] if end is None else pieces[-1][:end]
+    return b"".join(pieces)
+
+
+RESTART_TERM_GRACE_S = 120.0  # SIGTERM -> SIGKILL grace for a restart cell's first server
+DISK_SETTLE_QUIET_S = 10.0  # cache dirs unchanged this long = the engine finished writing
+DISK_SETTLE_MAX_S = 180.0
+ENGINE_CACHE_SUBDIRS = (".yunshu/cache", "omlx-ssd", "mtplx-cache", "omlx-base/cache", ".mlx-serve/kv-cache",
+                        "Library/Caches/Splash", ".cache/mlx-vlm/apc", ".cache/kapitsa/prefix-cache")
+
+
+def _cache_footprint(home) -> tuple:
+    total, newest, count = 0, 0.0, 0
+    for sub in ENGINE_CACHE_SUBDIRS:
+        for root, _dirs, files in os.walk(Path(home) / sub):
+            for f in files:
+                with contextlib.suppress(OSError):
+                    st = os.stat(os.path.join(root, f))
+                    total, count, newest = total + st.st_size, count + 1, max(newest, st.st_mtime)
+    return total, count, newest
+
+
+def wait_disk_settled(home, quiet_s=None, max_s=None, poll_s=1.0) -> float:
+    """Seconds waited until the engine cache dirs under home were unchanged for quiet_s (capped at max_s)."""
+    stub = bool(os.environ.get("TFB_STUB_SERVER"))  # stub servers write no cache: keep e2e tests fast
+    quiet_s = (0.3 if stub else DISK_SETTLE_QUIET_S) if quiet_s is None else quiet_s
+    max_s = DISK_SETTLE_MAX_S if max_s is None else max_s
+    if home is None:
+        return 0.0
+    t0 = time.monotonic()
+    last, since = _cache_footprint(home), time.monotonic()
+    while time.monotonic() - t0 < max_s:
+        time.sleep(poll_s)
+        cur = _cache_footprint(home)
+        if cur != last:
+            last, since = cur, time.monotonic()
+        elif time.monotonic() - since >= quiet_s:
+            break
+    return round(time.monotonic() - t0, 1)
+
+
+def restart_server(s):
+    """Stop the live server (its disk prefix tier is kept) and launch the same engine again on the
+    same HOME: a fresh process and port, the same cache directory (restart-with-disk-cache)."""
+    log = getattr(s, "log", None)  # a stub server has no engine log
+    # real-1104 B2: the first server was SIGKILLed 0.4 s after the reply, before any engine (Yunshu, Splash,
+    # mlx-serve, oMLX) had written its disk tier, so every restart cell measured a cold prefill. Wait until the
+    # engine's cache directories stop changing, then stop it the way a user restart does (SIGTERM, grace).
+    s.restart_settle_s = wait_disk_settled(getattr(s, "home", None))
+    if log is not None and log.exists():
+        _LOG_PREFIX.append(log.read_bytes())  # the relaunch truncates this log: keep its bytes
+    s.kill(keep_disk=True, graceful=True)
+    if os.environ.get("TFB_STUB_SERVER") and os.environ.get(
+        "TFB_STUB_WIPE_HOME_ON_RESTART"
+    ) == "1":
+        # TEST-ONLY negative case: a restart on a wiped HOME must lose the disk tier (the audit fails)
+        shutil.rmtree(s.home, ignore_errors=True)
+    fresh = start_server(
+        s.engine,
+        s.extra_env,
+        s.tag,
+        model=s.model_arg,
+        ctx_tokens=s.ctx_tokens,
+        parallel=s.parallel,
+        reuse_home=True,
+    )
+    # the evidence verdict reads the first server's saved log then this one's: keep the first ready offset
+    fresh.first_ready_log_offset = getattr(s, "first_ready_log_offset", getattr(s, "ready_log_offset", None))
+    _LIVE_SERVERS.append(fresh)
+    return fresh
+
+
+CACHED_UNAVAILABLE = (
+    "usage has no cached-token count (prompt_tokens_details.cached_tokens or usage.cached_tokens)"
+)
+
+
 def cached_tokens(usage):
-    """Keep absent cache accounting unknown; zero is a measured cache miss."""
+    """Keep absent cache accounting unknown; zero is a measured cache miss. Two server shapes
+    carry the count: OpenAI's prompt_tokens_details.cached_tokens and a top-level usage.cached_tokens."""
     details = usage.get("prompt_tokens_details") or {}
     value = details.get("cached_tokens")
+    if value is None:
+        value = usage.get("cached_tokens")
     if value is None:
         return None
     if (
@@ -423,16 +873,58 @@ def cached_tokens(usage):
     return value
 
 
-def concurrent_prompt(index, trial, ctx):
-    """Independent exact-size requests; salt at the front prevents shared-prefix priming."""
+def concurrent_prompt(index, trial, ctx, variant=0, run=0):
+    """Independent exact-size requests; salt at the front prevents shared-prefix priming. The salt names
+    the run (the concurrency level n of a conc sweep): without it, trial 0 of n=2 and trial 0 of n=4 sent the
+    same prompt to one server, and the second sweep hit the first one's cache (2026-11-04)."""
     from snapshot_prompts import exact_chat_prompt
 
     kind = "prose" if (index + trial) % 2 == 0 else "code"
-    source = load_prompt(f"{kind}-32768")
-    return exact_chat_prompt(f"Request {trial}:{index}.\n" + source, ctx, LONG_ASK)
+    source = load_variant_prompt(f"{kind}-32768", variant)
+    return exact_chat_prompt(f"Run {run}, request {trial}:{index}.\n" + source, ctx, LONG_ASK)
 
 
-def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
+def prompt_digest(messages):
+    """sha256 of the request messages exactly as sent (canonical JSON). Two engines that got the same
+    digest were given the same prompt text; gaptable.py's summary fails closed when they differ."""
+    return hashlib.sha256(
+        json.dumps(messages, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+
+
+_ACTIVE_TELEMETRY = (
+    None  # the cell's fullcmp Sampler while a cell runs (marks go to it)
+)
+_REQ_SEQ = [0]
+
+
+def _mark(ev, **fields):
+    """Request event for the cell's telemetry sampler (no-op when no sampler is running)."""
+    if _ACTIVE_TELEMETRY is not None:
+        _ACTIVE_TELEMETRY.mark(ev, **fields)
+
+
+def send(
+    url, body, timeout=600, *, capture_timestamps=False, trace_id=None, sample=False
+):
+    _progress()
+    try:
+        return _send_impl(
+            url, body, timeout, capture_timestamps=capture_timestamps,
+            trace_id=trace_id, sample=sample,
+        )
+    finally:
+        _progress()
+
+
+def _send_impl(
+    url, body, timeout=600, *, capture_timestamps=False, trace_id=None, sample=False
+):
+    # sample=True marks a real benchmark request: only it may fill --log-usage-sample. Warm-up and
+    # readiness requests (short "Say hi" style probes) must not, or the sample is not the benchmark.
+    prompt_sha = prompt_digest(body.get("messages"))
+    max_tokens, temperature = body.get("max_tokens"), body.get("temperature")
+    stop = list(body.get("stop") or [])
     body = dict(body, stream=True, stream_options={"include_usage": True})
     headers = {"Content-Type": "application/json", "Authorization": "Bearer k"}
     if trace_id is not None:
@@ -442,13 +934,18 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
         json.dumps(body).encode(),
         headers,
     )
+    _REQ_SEQ[0] += 1
+    rid = str(_REQ_SEQ[0])
     t0 = time.perf_counter()
+    ew_receive = time.time()  # layer-1 attribution: client wall clock (epoch s)
+    ew_first = ew_last = None
     tf = None
     content, reasoning, tools = [], [], {}
     lp_tokens, lps = [], []
     usage = finish = xy = None
     done = False
     nchunks = 0
+    _mark("request_start", req=rid)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         for line in r:
             line = line.strip()
@@ -460,11 +957,19 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
                 break
             d = json.loads(p)
             if d.get("error"):
-                raise RuntimeError(f"SSE error {d['error']}")
+                err = d["error"]
+                text = err.get("message") if isinstance(err, dict) else err
+                raise StreamError(f"SSE error {err}", str(text))
             if d.get("usage"):
                 usage = d["usage"]
+                if sample and _USAGE_SAMPLE[0] is None:
+                    _USAGE_SAMPLE[0] = d  # the final usage chunk of the first benchmark request
             if d.get("x_yunshu"):
                 xy = d["x_yunshu"]
+            elif isinstance(d.get("usage"), dict) and d["usage"].get("x_yunshu"):
+                # the gateway puts x_yunshu inside the final usage object (x_yunshu.py: usage["x_yunshu"]),
+                # not at the top level, on the include_usage chunk
+                xy = d["usage"]["x_yunshu"]
             for ch in d.get("choices") or []:
                 dl = ch.get("delta") or {}
                 got = False
@@ -491,14 +996,20 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
                         )
                 if got and tf is None:
                     tf = time.perf_counter()
+                    ew_first = time.time()
+                    _mark("first_token", req=rid, chunks=nchunks)
+                if got:
+                    ew_last = time.time()
                 for e in (ch.get("logprobs") or {}).get("content") or []:
                     lp_tokens.append(e.get("token"))
                     lps.append(e.get("logprob"))
                 finish = ch.get("finish_reason") or finish
     t1 = time.perf_counter()
+    ew_end = time.time()
     if not done or finish is None or usage is None:
         raise RuntimeError("incomplete stream")
     ct = usage["completion_tokens"]
+    _mark("end", req=rid, chunks=nchunks, completion_tokens=ct)
     c = "".join(content)
     rs = "".join(reasoning)
     sha = hashlib.sha256(
@@ -518,7 +1029,19 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
         total_s=round(t1 - t0, 3),
         ct=ct,
         pt=usage["prompt_tokens"],
+        prompt_tokens=usage["prompt_tokens"],
+        # The audit's name (prompt_ids_sha) and gaptable's (prompt_sha256) carry the same value:
+        # sha256 of the request messages as sent. Servers report counts, not token ids.
+        prompt_ids_sha=prompt_sha,
+        prompt_sha256=prompt_sha,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=body.get("top_p"),
+        top_k=body.get("top_k"),
+        stop=stop,
+        harness=HARNESS_ID,
         cached=cached_tokens(usage),
+        cached_unavailable=None if cached_tokens(usage) is not None else CACHED_UNAVAILABLE,
         dec_tps=round((ct - 1) / (t1 - tf), 1) if tf and ct > 1 and t1 > tf else None,
         finish=finish,
         sha=sha,
@@ -543,6 +1066,17 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
         if xy
         else None,
     )
+    result["_tools"] = [tools[i] for i in sorted(tools)]
+    result["_image_tokens"] = (usage.get("prompt_tokens_details") or {}).get("image_tokens")
+    result["_attr_client"] = {
+        "t_receive": ew_receive,
+        "t_first_token": ew_first,
+        "t_last_token": ew_last,
+        "t_response_end": ew_end,
+        "cache_hit_tokens": result["cached"],
+    }
+    result["_xy_speculative"] = (xy or {}).get("speculative")
+    result["_xy_latency"] = (xy or {}).get("latency")
     if capture_timestamps:
         result["_sent_at_s"] = t0
         result["_first_at_s"] = tf
@@ -575,12 +1109,47 @@ def corpus(kind):
     return files
 
 
+# Smoke-only prompt variants (scripts/research/fullcmp_make_variants.py writes them). Variant 0 is the
+# real corpus prompt in WORK/prompts; variant N is <name>-v<N>.txt in this directory.
+PROMPT_VARIANT_DIR = Path(
+    os.environ.get(
+        "TFB_PROMPT_VARIANT_DIR", "/Volumes/Micron/yunshu-fullcmp/smoke-prompts"
+    )
+)
+
+
+def prompt_path(name, variant=0):
+    if variant == 0:
+        return WORK / "prompts" / f"{name}.txt"
+    return PROMPT_VARIANT_DIR / f"{name}-v{variant}.txt"
+
+
 def load_prompt(name):
     return (WORK / "prompts" / f"{name}.txt").read_text()
 
 
-def decode_prompt(kind, ctx, long_ask):
-    text = load_prompt(f"{kind}-{ctx}")
+def load_variant_prompt(name, variant=0):
+    """Variant 0 is load_prompt (the real corpus); variant N reads the smoke-only directory."""
+    if variant == 0:
+        return load_prompt(name)
+    return (PROMPT_VARIANT_DIR / f"{name}-v{variant}.txt").read_text()
+
+
+def decode_prompt_file(kind, ctx, smoke=False, variant=0):
+    """The prompt source a decode cell reads (recorded as prompt_file on every decode row)."""
+    return "inline:smoke" if smoke else str(prompt_path(f"{kind}-{ctx}", variant))
+
+
+def prompt_file_sha256(kind, ctx, smoke=False, variant=0):
+    """sha256 of the prompt FILE bytes a decode cell read (the bytes prompt_files.sha256.txt hashes).
+    None for a smoke cell (inline prompt). prompt_sha256 is the rendered request, not the file."""
+    if smoke:
+        return None
+    return hashlib.sha256(prompt_path(f"{kind}-{ctx}", variant).read_bytes()).hexdigest()
+
+
+def decode_prompt(kind, ctx, long_ask, variant=0):
+    text = load_variant_prompt(f"{kind}-{ctx}", variant)
     if os.environ.get("TFB_EXACT_PROMPTS") == "1":
         from snapshot_prompts import assert_chat_prompt
 
@@ -624,6 +1193,169 @@ def req(model, text, mt, seed=None, extra=None, temp=0):
     if extra:
         b.update(extra)
     return b
+
+
+# ---- request families (B2 kind / thinking / image cells)
+# Built on the real prose corpus plus a family ask; variant N changes only the ask, so two variants
+# give two distinct prompts (the audit's >= 2 prompts per (model, ctx, kind) guard).
+FAMILY_KINDS_LOCAL = fm.FAMILY_KINDS
+FAMILY_SYSTEM = (
+    "You are a coding agent. Use the provided tools when a file or shell command is needed. "
+    "Reply with a tool call when one is needed."
+)
+FAMILY_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a UTF-8 text file.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "max_lines": {"type": "integer"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_shell",
+            "description": "Run one shell command in the workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+                "additionalProperties": False,
+            },
+        },
+    },
+]
+FAMILY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "count": {"type": "integer"}},
+                "required": ["name", "count"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["title", "items"],
+    "additionalProperties": False,
+}
+# thinking / image cells on a plain kind: variant 0 is the corpus prompt, variant 1 adds one line
+GENERIC_ASKS = ("", "Keep the answer short.")
+FAMILY_ASKS = {
+    "tool-chat": [
+        "Read the file notes/todo.md with a tool call.",
+        "List the files under src/ with the shell tool.",
+    ],
+    "cjk": [
+        "請用中文逐段說明上面材料的主要概念，每段至少一句。",
+        "請用繁體中文總結上面材料的重點，並保留專有名詞。",
+    ],
+    "json-schema": [
+        "Summarise the material above as JSON with a title and a list of items (name, count).",
+        "Extract three terms from the material above as JSON with a title and a list of items.",
+    ],
+}
+# A valid 1x1 PNG, sent as the image_url data URI of each image part.
+IMAGE_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+# sha256 of the PNG bytes: recorded on every image row so the audit compares the image, not the token count each
+# engine's vision encoder turns it into
+IMAGE_PNG_SHA256 = hashlib.sha256(base64.b64decode(IMAGE_PNG_B64)).hexdigest()
+
+
+def is_family_cell(kind, thinking, media):
+    return fm.is_family_cell(kind, thinking, media)
+
+
+def family_apply(body, kind, variant, thinking, media):
+    """Turn a plain decode body into the family's request, in place: the agent system prompt and
+    tool schemas (tool-chat), a JSON-schema response_format (json-schema), the Qwen chat-template
+    thinking switch (thinking on), and image_url content parts (img1 / img4)."""
+    text = body["messages"][-1]["content"]
+    asks = FAMILY_ASKS.get(kind, GENERIC_ASKS)
+    ask = asks[variant % len(asks)]
+    if ask:
+        text = f"{text}\n\n---\n{ask}"
+    msgs = [{"role": "user", "content": text}]
+    if kind == "tool-chat":
+        msgs.insert(0, {"role": "system", "content": FAMILY_SYSTEM})
+        body["tools"] = FAMILY_TOOLS
+        body["tool_choice"] = "auto"
+    if kind == "json-schema":
+        body["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {"name": "summary", "schema": FAMILY_SCHEMA, "strict": True},
+        }
+    n = fm.IMAGE_COUNT.get(media, 0)
+    if n:
+        url = "data:image/png;base64," + IMAGE_PNG_B64
+        msgs[-1]["content"] = [{"type": "text", "text": text}] + [
+            {"type": "image_url", "image_url": {"url": url}} for _ in range(n)
+        ]
+    body["messages"] = msgs
+    body["chat_template_kwargs"] = {"enable_thinking": thinking == "on"}
+    return body
+
+
+def family_problems(kind, r, thinking, media):
+    """Reasons a family reply is invalid (empty list = valid), judged from the client's stream.
+    Tool calls must name a declared tool with JSON arguments that satisfy its schema; a json-schema
+    reply must be JSON that validates; a cjk reply must be mostly CJK text; thinking on needs the
+    reasoning split (reasoning_content) and no reasoning in the content; image input must be
+    accepted and reported as image tokens."""
+    probs = []
+    content = r.get("_text") or ""
+    if kind == "tool-chat":
+        calls = r.get("tool_calls") or []
+        if not calls:
+            probs.append("no tool_calls in reply")
+        declared = {t["function"]["name"]: t["function"] for t in FAMILY_TOOLS}
+        for c in calls:
+            fn = declared.get(c.get("name"))
+            if fn is None:
+                probs.append(f"undeclared tool {c.get('name')!r}")
+                continue
+            try:
+                args = json.loads(c.get("arguments") or "")
+            except ValueError:
+                probs.append(f"tool {c['name']} arguments are not JSON")
+                continue
+            try:
+                jsonschema.validate(args, fn["parameters"])
+            except jsonschema.ValidationError as e:
+                probs.append(f"tool {c['name']} arguments: {e.message}")
+    if kind == "json-schema":
+        try:
+            obj = json.loads(content)
+        except ValueError:
+            probs.append("reply is not JSON")
+        else:
+            try:
+                jsonschema.validate(obj, FAMILY_SCHEMA)
+            except jsonschema.ValidationError as e:
+                probs.append(f"reply does not match the schema: {e.message}")
+    if kind == "cjk":
+        chars = [ch for ch in content if not ch.isspace()]
+        cjk = sum(1 for ch in chars if "一" <= ch <= "鿿")
+        if not chars or cjk * 2 < len(chars) or "�" in content:
+            probs.append(f"reply is not CJK text ({cjk}/{len(chars)} CJK characters)")
+    if "<think>" in content or "</think>" in content:
+        probs.append("reasoning leaked into the content")
+    if thinking == "on" and not r.get("reasoning_chars"):
+        probs.append("thinking on but no reasoning split (reasoning_content empty)")
+    if fm.IMAGE_COUNT.get(media, 0) and not r.get("image_tokens"):
+        probs.append("image input not accepted or no image tokens reported")
+    return probs
 
 
 def rehearsal_prefix(rendered, marker="<|im_start|>user"):
@@ -716,6 +1448,15 @@ def host_used_bytes():
         return None
 
 
+def memory_peak_or_raise(mem, idle):
+    """Peak for the memory part. "No data" means no successful sample at all. A legitimate 0.0 GiB
+    delta (a tiny server that grew nothing against its baseline) is data, not a miss (regression,
+    e2e 2026-11-03: the old `not peak` test failed the stub run on a real 0.0 delta)."""
+    if idle is None or mem.n == 0:
+        raise RuntimeError("memory sampling produced no data")
+    return max(mem.peak_gib, idle)
+
+
 class MemSampler:
     """Server memory, sampled every 2 s from server start.
 
@@ -783,6 +1524,65 @@ class MemSampler:
         self._stop.set()
 
 
+# An engine's explicit refusal of a request shape (an image to a text-only server, an unsupported route):
+# a 4xx whose body says the input is unsupported. It is recorded as an 'unsupported' row and the cell
+# stops; any other HTTP error still fails the cell (it raises as before).
+REFUSAL_PHRASES = (
+    "accepts text parts only",
+    "unsupported",
+    "not supported",
+    "does not support",
+    "not implemented",
+    "text only",
+    "text-only",
+)
+# on an image cell a 4xx that talks about the image itself is the engine saying it cannot take it
+# (llama-server without an mmproj, a text-only chat template, an unknown content type)
+IMAGE_REFUSAL_WORDS = ("image", "vision", "multimodal", "mmproj", "content part", "content type")
+# the explicit wording a 5xx body must carry to be an engine's refusal (not 'unsupported' alone: a crash message such
+# as 'unsupported operation' is a real failure)
+SERVER_REFUSAL_PHRASES = ("is not supported", "are not supported", "does not support", "accepts text parts only")
+REFUSAL_BODY_MAX = 600
+
+
+class StreamError(RuntimeError):
+    """An error event inside a 200 stream (an SSE frame with an 'error' member). `text` is the engine's message."""
+
+    def __init__(self, message: str, text: str):
+        super().__init__(message)
+        self.text = text
+
+
+def is_refusal_text(text: str) -> bool:
+    """A stream error event whose text says the request shape is not supported (no HTTP status to judge it by):
+    the same phrases as a 4xx refusal. Any other stream error still fails the cell."""
+    low = str(text).lower()
+    return any(p in low for p in REFUSAL_PHRASES)
+
+
+def refusal_label(kind, text: str) -> str:
+    """'unsupported (json-schema with speculative decoding, engine message)': the kind, and the engine's own
+    qualifier when its message names speculative decoding."""
+    with_spec = " with speculative decoding" if "speculative decoding" in str(text).lower() else ""
+    return f"unsupported ({kind}{with_spec}, engine message)"
+
+
+def is_engine_refusal(code: int, body: str, media: str | None = None) -> bool:
+    """4xx (not a timeout or a rate limit) with a body that names the input as unsupported; on an image
+    cell (media not none) also a 4xx whose body is about the image input."""
+    low = str(body).lower()
+    if 500 <= code < 600:
+        # llama-server answers an image part without an mmproj with HTTP 500 'image input is not supported - hint: ...
+        # provide the mmproj': a 5xx counts only when its body explicitly says the input is not supported; any
+        # other 5xx is a real failure
+        return any(p in low for p in SERVER_REFUSAL_PHRASES)
+    if not (400 <= code < 500) or code in (408, 409, 429):
+        return False
+    if any(p in low for p in REFUSAL_PHRASES):
+        return True
+    return media not in (None, "none") and any(w in low for w in IMAGE_REFUSAL_WORDS)
+
+
 def emit(out, **kw):
     kw = {**META, **kw}
     print(
@@ -833,10 +1633,10 @@ ALL_PHASES = ("cold", "warm", "turn2", "specoff")
 def parse_phases(text):
     """Selected decode phases; turn2 replays the cold reply, so it needs cold."""
     phases = [p.strip() for p in str(text).split(",") if p.strip()]
-    bad = [p for p in phases if p not in ALL_PHASES]
+    bad = [p for p in phases if p not in ALL_PHASES + ("restart",)]
     if bad or not phases:
         raise SystemExit(
-            f"--phases: unknown or empty selection {text!r} (use {ALL_PHASES})"
+            f"--phases: unknown or empty selection {text!r} (use {ALL_PHASES + ('restart',)})"
         )
     if "turn2" in phases and "cold" not in phases:
         raise SystemExit("--phases: turn2 needs cold (it continues the cold reply)")
@@ -860,19 +1660,108 @@ def part_corpus(s, out, a):
         raise RuntimeError(f"corpus: {len(shorts)} short replies: {shorts}")
 
 
+def attribution_fields(s, r):
+    """Layer-1 fields of one decode row (FULLCMP_SPEC "Attribution data"). Measured client-side
+    values are present; server-side stages and counters the engine does not expose are
+    'unavailable (reason)' from the engine's schema (fullcmp_attribution.ENGINE_OVERRIDES); every
+    other field stays absent so the audit's attribution_fields guard reports it MISSING. Nothing
+    is estimated. Only in fullcmp mode (TFB_FULLCMP=1), where an unknown engine is an error."""
+    client = r.pop("_attr_client", {}) or {}
+    spec = r.pop("_xy_speculative", None) or {}
+    lat = r.pop("_xy_latency", None) or {}
+    attr = {k: v for k, v in client.items() if v is not None}
+    attr["engine_log_path"] = str(s.log)
+    for f in ("rounds", "drafted", "accepted"):
+        if isinstance(spec.get(f), (int, float)):
+            attr[f] = int(spec[f])
+    unavailable = {}
+    if os.environ.get("TFB_FULLCMP") == "1":
+        # The schema is keyed by manifest id (yunshu), the server runs as the bench id (yunshu-main).
+        eng = fullcmp_attribution.engine_attr(
+            os.environ.get("TFB_ATTR_ENGINE") or bench_engines.manifest_id(s.engine)
+        )
+        unavailable = dict(eng.unavailable)
+        if eng.layer2 == "stages":  # Yunshu-style stage timers: dev0 and the Phase B preview
+            _yunshu_server_fields(attr, unavailable, client, spec, lat)
+    r["attr"] = attr
+    r["attr_unavailable"] = unavailable
+    return r
+
+
+# Yunshu milestone name -> layer-1 field (x_yunshu.latency.milestones_ms, ms since gateway arrival).
+YUNSHU_MILESTONE_FIELDS = {
+    "t_template": "template_end",
+    "t_admit": "engine_admit",
+    "t_cache_lookup": "apc_end",
+}
+
+
+def _yunshu_server_fields(attr, unavailable, client, spec, lat):
+    """Map Yunshu's exposed server stages onto layer-1 fields. A milestone is epoch seconds as
+    client t_receive + ms (the gateway clock is the request's arrival, so the loopback offset is
+    the only error). A milestone the request did not reach gets a per-row reason."""
+    ms = lat.get("milestones_ms") if isinstance(lat, dict) else None
+    ms = ms if isinstance(ms, dict) else {}
+    t_recv = client.get("t_receive")
+    for field, key in YUNSHU_MILESTONE_FIELDS.items():
+        v = ms.get(key)
+        if isinstance(v, (int, float)) and t_recv is not None:
+            attr[field] = t_recv + float(v) / 1000.0
+        else:
+            unavailable[field] = f"milestone {key} not reached by this request"
+    if "rounds" not in attr:
+        unavailable["rounds"] = (
+            "no speculative mode for this request (x_yunshu.speculative absent)"
+            if not spec
+            else "x_yunshu.speculative has no rounds (zero verify rounds)"
+        )
+    copy = spec.get("copy") if isinstance(spec, dict) else None
+    if isinstance(copy, dict) and isinstance(copy.get("rounds"), (int, float)):
+        attr["copy_rounds"] = int(copy["rounds"])
+
+
+GENCONFIG_KEYS = ("temperature", "top_p", "top_k")
+
+
+def genconfig_sampling(model_dir) -> dict:
+    """Sampler fields of the model's generation_config.json (the model card's defaults). Fails
+    closed: a missing file or no temperature/top_p is an error, never a silent greedy run."""
+    path = Path(str(model_dir)) / "generation_config.json"
+    try:
+        cfg = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"--sampling genconfig: cannot read {path}: {exc}")
+    picked = {k: cfg[k] for k in GENCONFIG_KEYS if k in cfg}
+    if "temperature" not in picked or "top_p" not in picked:
+        raise SystemExit(f"--sampling genconfig: {path} has no temperature/top_p")
+    return picked
+
+
 def part_decode(s, out, a):
     phases = parse_phases(a.phases)
+    samp = (
+        genconfig_sampling(a.model)
+        if getattr(a, "sampling", "greedy") == "genconfig"
+        else {}
+    )
     n_dec = int(a.decode_tokens)
     ctxs = [512] if a.smoke else a.only_ctx or [1024, 8192, 32768]
+    thinking, media = getattr(a, "thinking", "off"), getattr(a, "media", "none")
     for ctx in ctxs:
         for kind in a.only_kind or ("prose", "code"):
+            family = is_family_cell(kind, thinking, media)
+            variant = getattr(a, "prompt_variant", 0)
+            # family cells build on the real corpus (variant 0); their variants differ in the ask
+            # only, so the audit's distinct-prompt guard still sees two prompts
+            base_kind = "prose" if kind in FAMILY_KINDS_LOCAL else kind
+            base_variant = 0 if family else variant
             text = (
                 "Write a short example and explain it."
                 if a.smoke
-                else decode_prompt(kind, ctx, a.long_ask)
+                else decode_prompt(base_kind, ctx, a.long_ask, base_variant)
             )
             reply = ""
-            order = [p for p in ("cold", "warm", "turn2") if p in phases]
+            order = [p for p in ("cold", "warm", "turn2", "restart") if p in phases]
             if (
                 "warm" in order
             ):  # repeated warm hits separate a one-time cost from a per-hit one
@@ -880,6 +1769,10 @@ def part_decode(s, out, a):
                 order[at : at + 1] = ["warm"] * max(1, int(a.warm_reps))
             for phase in order:
                 want = (a.turn2_tokens or n_dec) if phase == "turn2" else n_dec
+                if phase == "restart":
+                    # the cold prompt again, on a relaunched server that reads the same HOME: a
+                    # disk-tier hit is the only way the prefix can be cached (the cell's proof)
+                    s = restart_server(s)
                 b = req(
                     s.model,
                     text,
@@ -887,6 +1780,7 @@ def part_decode(s, out, a):
                     extra={
                         **(json.loads(a.request_extra) if a.request_extra else {}),
                         **({"logprobs": True} if a.logprobs else {}),
+                        **samp,
                     }
                     or None,
                 )
@@ -910,9 +1804,73 @@ def part_decode(s, out, a):
                     )  # the user reads the reply before the follow-up
                 if phase == "turn2" and a.rehearse:
                     extra_rec = rehearse(s, b)
-                r = send(s.url, b)
+                if family and phase == "cold":
+                    family_apply(b, kind, variant, thinking, media)
+                try:
+                    raw = send(s.url, b, sample=True)
+                except urllib.error.HTTPError as exc:
+                    body = exc.read().decode("utf-8", "replace")[:REFUSAL_BODY_MAX]
+                    if not is_engine_refusal(exc.code, body, media):
+                        raise
+                    emit(
+                        out,
+                        part="unsupported",
+                        ctx=ctx,
+                        kind=kind,
+                        phase=phase,
+                        thinking=thinking,
+                        media=media,
+                        http_status=exc.code,
+                        reason=body,
+                        cell=cell_name(getattr(a, "out", ""), getattr(a, "rep", 0)),
+                    )
+                    break  # later phases need this reply; the job continues with its next cell
+                except StreamError as exc:
+                    if not is_refusal_text(exc.text):
+                        raise
+                    # HTTP 200 and an error frame (mlx-vlm: 'Structured response_format is not supported with
+                    # speculative decoding.'): the same recorded 'unsupported' row, the cell closed
+                    emit(
+                        out,
+                        part="unsupported",
+                        ctx=ctx,
+                        kind=kind,
+                        phase=phase,
+                        thinking=thinking,
+                        media=media,
+                        http_status=None,
+                        stream_error=True,
+                        reason=exc.text[:REFUSAL_BODY_MAX],
+                        label=refusal_label(kind, exc.text),
+                        cell=cell_name(getattr(a, "out", ""), getattr(a, "rep", 0)),
+                    )
+                    break
+                tool_calls = raw.pop("_tools", [])
+                image_tokens = raw.pop("_image_tokens", None)
+                r = attribution_fields(s, raw)
                 r.update(extra_rec)
-                if not a.smoke:
+                if family:
+                    r.update(
+                        family=kind,
+                        thinking=thinking,
+                        media=media,
+                        image_parts=fm.IMAGE_COUNT.get(media, 0),
+                        image_tokens=image_tokens,
+                        image_sha256=IMAGE_PNG_SHA256 if fm.IMAGE_COUNT.get(media, 0) else None,
+                        # the text part of the prompt, when the engine reports the image token count
+                        text_tokens=(
+                            r.get("pt") - image_tokens
+                            if isinstance(r.get("pt"), int) and isinstance(image_tokens, int) and image_tokens > 0
+                            else None
+                        ),
+                        tool_calls=[
+                            {"name": c.get("name"), "arguments": c.get("arguments")}
+                            for c in tool_calls
+                        ],
+                    )
+                    probs = family_problems(kind, r, thinking, media)
+                    r.update(valid=not probs, invalid_reason="; ".join(probs) or None)
+                if not a.smoke and not family:
                     check_decode_len(
                         r,
                         want,
@@ -933,6 +1891,11 @@ def part_decode(s, out, a):
                     ctx=ctx,
                     kind=kind,
                     phase=phase,
+                    prompt_file=decode_prompt_file(base_kind, ctx, a.smoke, base_variant),
+                    prompt_file_sha256=prompt_file_sha256(
+                        base_kind, ctx, a.smoke, base_variant
+                    ),
+                    cell=cell_name(getattr(a, "out", ""), getattr(a, "rep", 0)),
                     reference_prompt_tokens=ctx
                     if os.environ.get("TFB_EXACT_PROMPTS") == "1" and not a.smoke
                     else None,
@@ -944,7 +1907,9 @@ def part_decode(s, out, a):
                 and os.environ.get("TFB_EXACT_PROMPTS") != "1"
                 and "specoff" in phases
             ):
-                r = send(s.url, req(s.model, text, n_dec, extra={"draft": False}))
+                r = attribution_fields(
+                    s, send(s.url, req(s.model, text, n_dec, extra={"draft": False}))
+                )
                 r["text"] = r.pop("_text")
                 emit(out, part="decode", ctx=ctx, kind=kind, phase="specoff", **r)
 
@@ -1179,6 +2144,22 @@ def part_conc32(s, out, a):
         )
 
 
+def conc_aggregates(decs):
+    """Per-request decode summary and fairness of one conc record (lead ruling 2026-11-03). Any
+    missing or non-positive rate makes every summary None, so the audit fails the record."""
+    import statistics
+
+    ok = bool(decs) and all(isinstance(d, (int, float)) and d > 0 for d in decs)
+    if not ok:
+        return {"dec_min": None, "dec_max": None, "dec_median": None, "fair_max_min": None}
+    return {
+        "dec_min": min(decs),
+        "dec_max": max(decs),
+        "dec_median": statistics.median(decs),
+        "fair_max_min": round(max(decs) / min(decs), 3),
+    }
+
+
 def part_promote(s, out, a):
     """A long reply A starts while a shorter reply B runs; B ends first and A then decodes alone.
 
@@ -1251,12 +2232,46 @@ def part_forced(s, out, a):
         )
 
 
+def request_records(rs):
+    """The per-request list of a conc / mixed record (schema: fullcmp requests). spec is the request's own
+    speculative counters from its response (x_yunshu.speculative) when the engine sends them, otherwise
+    'unavailable (reason)': the evidence correlation fills it at finalize, per request."""
+    out = []
+    for i, r in enumerate(rs):
+        xy = r.pop("_xy_speculative", None) or {}
+        if isinstance(xy.get("accepted"), (int, float)):
+            spec = {"accepted": int(xy["accepted"]), "drafted": xy.get("drafted"), "rounds": xy.get("rounds")}
+        else:
+            spec = "unavailable (response carries no per-request speculative counters)"
+        out.append({
+            "rid": i,
+            "pt": r["pt"],
+            "ct": r["ct"],
+            "cached": r["cached"],
+            "ttft_s": r["ttft_s"],
+            "dec_tps": r["dec_tps"],
+            "spec": spec,
+        })
+    return out
+
+
 def part_conc(s, out, a):
     ns = [int(x) for x in (a.conc_ns or "2,4,8").split(",")]
     for n in (2,) if a.smoke else ns:
         for trial in range(1 if a.smoke else a.conc_trials):
+            same = bool(getattr(a, "conc_same", False))
             texts = [
-                "Say hello." if a.smoke else concurrent_prompt(i, trial, a.conc_ctx)
+                "Say hello."
+                if a.smoke
+                else concurrent_prompt(
+                    0 if same else i,
+                    trial,
+                    a.conc_ctx,
+                    getattr(a, "prompt_variant", 0),
+                    # the run names the level AND the prompt variant: variants share most of their text,
+                    # so a variant-1 sweep after a variant-0 sweep on one server would hit its cache
+                    run=f"{n}v{getattr(a, 'prompt_variant', 0)}",
+                )
                 for i in range(n)
             ]
             t0 = time.perf_counter()
@@ -1273,23 +2288,135 @@ def part_conc(s, out, a):
                 if not a.smoke:
                     check_decode_len(r, a.conc_tokens, f"conc n={n} trial={trial}")
                 r.pop("_text")
+            requests = request_records(rs)
             wall = time.perf_counter() - t0
             tot = sum(r["ct"] for r in rs)
+            decs = [r["dec_tps"] for r in rs]
             emit(
                 out,
                 part="conc",
                 n=n,
                 trial=trial,
-                wall_s=round(wall, 3),
+                # microseconds: agg_tps is total/wall of the unrounded wall, so a millisecond
+                # rounding fails the audit's agg_tps check on a fast engine (CPU stub: wall ~ 8 ms)
+                wall_s=round(wall, 6),
                 total_tokens=tot,
                 agg_tps=round(tot / wall, 1),
-                per_req_dec=[r["dec_tps"] for r in rs],
+                **conc_aggregates(decs),
+                per_req_dec=decs,
                 ttfts=[r["ttft_s"] for r in rs],
                 cached=[r["cached"] for r in rs],
                 pts=[r["pt"] for r in rs],
                 cts=[r["ct"] for r in rs],
                 shas=[r["sha"] for r in rs],
+                requests=requests,
+                # per-request provenance for the fullcmp audit (one entry per request, in order)
+                total_s=[r["total_s"] for r in rs],
+                finish=[r["finish"] for r in rs],
+                prompt_ids_sha=[r["prompt_ids_sha"] for r in rs],
+                # the same for every request of this record (conc prompts are a code/prose mix)
+                ctx=a.conc_ctx,
+                kind="mixed",
+                prompt_file="concurrent_prompt(prose|code, index+trial parity)"
+                + (
+                    f" variant={getattr(a, 'prompt_variant', 0)}"
+                    if getattr(a, "prompt_variant", 0)
+                    else ""
+                ),
+                max_tokens=16 if a.smoke else a.conc_tokens,
+                temperature=rs[0]["temperature"],
+                stop=rs[0]["stop"],
+                same_prompt=same,
+                harness=HARNESS_ID,
             )
+
+
+def mixed_short_text(index, trial, short_ctx, variant=0):
+    """A short request of a mixed trial. Its run names the mixed cell and the variant, like the conc sweeps:
+    without it, the variant-0 and variant-1 mixed cells on one server share the short prompts' heads."""
+    return concurrent_prompt(index, trial, short_ctx, variant, run=f"mixed{variant}")
+
+
+def mixed_long_text(trial, long_ctx, variant=0, smoke=False):
+    """The mixed cell's long prompt for one trial. A per-trial salt at the front changes the prefix from
+    token 0, so no trial can hit the prefix cache of an earlier trial on the same server (2026-11-04: trial 1
+    was cached 8192 tokens on yunshu). Trial k is the same text for every engine (cross-engine fairness)."""
+    if smoke:
+        return "Say hello."
+    from snapshot_prompts import exact_chat_prompt
+
+    return exact_chat_prompt(
+        f"Mixed trial {trial}.\n" + load_variant_prompt(f"code-{long_ctx}", variant),
+        long_ctx,
+        LONG_ASK,
+    )
+
+
+def part_mixed(s, out, a):
+    """Mixed load: one long request (--mixed-long-ctx) and --mixed-short-n short ones started
+    together, one trial per conc trial. Request 0 is the long one; the rest are short. The
+    aggregates (dec_min/max/median, fair_max_min) summarise the SHORT requests' decode rates;
+    agg_tps is all tokens over the wall time."""
+    long_ctx = 512 if a.smoke else a.mixed_long_ctx
+    short_n = 2 if a.smoke else a.mixed_short_n
+    short_ctx = 256 if a.smoke else a.mixed_short_ctx
+    tokens = 16 if a.smoke else a.conc_tokens
+    variant = getattr(a, "prompt_variant", 0)
+    for trial in range(1 if a.smoke else a.conc_trials):
+        long_text = mixed_long_text(trial, long_ctx, variant, a.smoke)
+        texts = [long_text] + [
+            "Say hello." if a.smoke else mixed_short_text(i, trial, short_ctx, variant)
+            for i in range(short_n)
+        ]
+        t0 = time.perf_counter()
+        with cf.ThreadPoolExecutor(len(texts)) as ex:
+            rs = list(
+                ex.map(
+                    lambda t: send(s.url, req(s.model, t, tokens)),
+                    texts,
+                )
+            )
+        wall = time.perf_counter() - t0
+        for r in rs[1:]:
+            if not a.smoke:
+                check_decode_len(r, tokens, f"mixed short trial={trial}")
+        if not a.smoke:
+            check_decode_len(rs[0], tokens, f"mixed long trial={trial}")
+        for r in rs:
+            r.pop("_text")
+        requests = request_records(rs)
+        tot = sum(r["ct"] for r in rs)
+        short_decs = [r["dec_tps"] for r in rs[1:]]
+        emit(
+            out,
+            part="mixed",
+            trial=trial,
+            n=len(rs),
+            roles=["long"] + ["short"] * short_n,
+            wall_s=round(wall, 6),
+            total_tokens=tot,
+            agg_tps=round(tot / wall, 1),
+            long_ttft_s=rs[0]["ttft_s"],
+            # summary of the short requests only (the fairness question of the mixed cell)
+            **conc_aggregates(short_decs),
+            per_req_dec=[r["dec_tps"] for r in rs],
+            ttfts=[r["ttft_s"] for r in rs],
+            cached=[r["cached"] for r in rs],
+            pts=[r["pt"] for r in rs],
+            cts=[r["ct"] for r in rs],
+            shas=[r["sha"] for r in rs],
+            requests=requests,
+            total_s=[r["total_s"] for r in rs],
+            finish=[r["finish"] for r in rs],
+            prompt_ids_sha=[r["prompt_ids_sha"] for r in rs],
+            ctx=long_ctx,
+            short_ctx=short_ctx,
+            kind="mixed",
+            max_tokens=tokens,
+            temperature=rs[0]["temperature"],
+            stop=rs[0]["stop"],
+            harness=HARNESS_ID,
+        )
 
 
 def part_agent(s, out, a):
@@ -1334,7 +2461,29 @@ def parse_args(argv=None):
     ap.add_argument("--rep", type=int, default=0)
     ap.add_argument("--out", required=True)
     ap.add_argument("--only-ctx", type=int, action="append")
-    ap.add_argument("--only-kind", action="append", choices=["prose", "code"])
+    ap.add_argument(
+        "--only-kind",
+        action="append",
+        choices=["prose", "code", *fm.FAMILY_KINDS],
+    )
+    ap.add_argument(
+        "--thinking",
+        choices=("off", "on"),
+        default="off",
+        help="decode part: Qwen chat-template thinking switch (on = reasoning split required)",
+    )
+    ap.add_argument(
+        "--media",
+        choices=tuple(fm.IMAGE_COUNT),
+        default="none",
+        help="decode part: image parts per request (img1 / img4)",
+    )
+    ap.add_argument(
+        "--prompt-variant",
+        type=int,
+        default=0,
+        help="0 = the real corpus prompts; N > 0 = smoke-only variant N (TFB_PROMPT_VARIANT_DIR)",
+    )
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--tag", default="")
     ap.add_argument("--model", default=M)
@@ -1383,6 +2532,35 @@ def parse_args(argv=None):
     ap.add_argument(
         "--conc-ns", default="", help="concurrency levels, e.g. 2,4 (default 2,4,8)"
     )
+    ap.add_argument(
+        "--conc-same",
+        action="store_true",
+        help="conc part: every concurrent request sends the same prompt (record same_prompt=true)",
+    )
+    ap.add_argument(
+        "--mixed-long-ctx",
+        type=int,
+        default=131072,
+        help="mixed part: rendered tokens of the one long request",
+    )
+    ap.add_argument(
+        "--mixed-short-n",
+        type=int,
+        default=7,
+        help="mixed part: number of short requests sent with the long one",
+    )
+    ap.add_argument(
+        "--mixed-short-ctx",
+        type=int,
+        default=1024,
+        help="mixed part: rendered tokens of each short request",
+    )
+    ap.add_argument(
+        "--log-usage-sample",
+        action="store_true",
+        help="keep the first raw usage chunk the server sent and write it to the session "
+        "header as usage_sample (the GPU smoke's usage-shape evidence)",
+    )
     ap.add_argument("--conc-trials", type=int, default=2)
     ap.add_argument("--conc-tokens", type=int, default=256)
     ap.add_argument(
@@ -1426,7 +2604,7 @@ def parse_args(argv=None):
     ap.add_argument(
         "--phases",
         default=",".join(ALL_PHASES),
-        help="decode phases to run (comma list of cold,warm,turn2,specoff); the checks stay "
+        help="decode phases to run (comma list of cold,warm,turn2,specoff,restart); the checks stay "
         "fail-closed for every selected phase",
     )
     ap.add_argument(
@@ -1434,6 +2612,13 @@ def parse_args(argv=None):
         type=int,
         default=1,
         help="warm (full APC hit) requests per prompt; each is recorded",
+    )
+    ap.add_argument(
+        "--sampling",
+        choices=("greedy", "genconfig"),
+        default="greedy",
+        help="decode part: greedy (temperature 0) or genconfig (temperature/top_p/top_k from the "
+        "model's generation_config.json, sent explicitly)",
     )
     ap.add_argument("--dry-run", action="store_true")
     args = list(sys.argv[1:] if argv is None else argv)
@@ -1447,8 +2632,264 @@ def parse_args(argv=None):
     return ap.parse_args(args)
 
 
+# Census key map lives in fullcmp_provenance (one map for header and dry-run gate).
+FULLCMP_CENSUS_KEY = fp.FULLCMP_CENSUS_KEY
+
+
+def cell_name(out_path, rep):
+    """<cell>-rN.jsonl -> <cell> (the audit's cell id)."""
+    stem = os.path.basename(out_path)
+    stem = stem[: -len(".jsonl")] if stem.endswith(".jsonl") else stem
+    suffix = f"-r{rep}"
+    return stem[: -len(suffix)] if stem.endswith(suffix) else stem
+
+
+def fullcmp_header(
+    s,
+    a,
+    environ,
+    *,
+    census,
+    job_start_s,
+    swap_start,
+    telemetry_path,
+    quiet_pre=None,
+    job_id=None,
+):
+    """Session-header fields the fullcmp audit requires beyond the bench_engines meta row.
+    Every value comes from the pin, the census, the model config, the launched binary or the
+    gpuq job environment; a value that cannot be found raises (fail closed). quiet_pre is the
+    host-CPU snapshot taken before the server started (fullcmp_quiet.snapshot)."""
+    # the weights the launch loads (bench_engines is the one source): llama-cpp runs the GGUF, kapitsa
+    # and TensorFold their own checkpoints; every other engine serves the Jundot oQ4e-mtp checkpoint
+    model_key = bench_engines.WEIGHTS_CENSUS_KEY.get(a.engine) or fp.census_model_id(census, a.model)
+    version, git_sha = bench_engines.engine_version(a.engine, YUNSHU_SRC)
+    census_key = fp.census_key_for(a.engine)
+    return dict(
+        run_id=environ["TFB_RUN_ID"],
+        model=model_key,
+        cell=cell_name(a.out, a.rep),
+        group=environ["TFB_GROUP"],
+        version=version,
+        git_sha=git_sha,
+        release_date=fp.release_date(census, census_key, version, environ),
+        binary_sha256=fp.binary_sha256(s.cmd[0]),
+        python=(s.pin or {}).get("python"),
+        # the MLX stack of the venv this Yunshu server runs in (dev0 and the Phase B preview differ by venv)
+        packages=(fp.pinned_package_versions(s.pin["python"]) if s.pin else None),
+        spec_mode_expected=s.requested_spec_mode,
+        engaged_log_line=s.engaged_log_line,
+        engaged_evidence_kind=getattr(s, "engaged_evidence_kind", None),
+        engaged_evidence_source=getattr(s, "engaged_evidence_source", None),
+        server_log_ready_offset=getattr(s, "ready_log_offset", None),
+        weights=(
+            bench_engines.gguf_weights_record(a.engine)
+            if bench_engines.launched_gguf_files(a.engine)
+            else fp.weights_record(
+                bench_engines.served_model_dir(a.engine, a.model), census, model_key
+            )
+        ),
+        weights_note=bench_engines.weights_note(a.engine),
+        fresh_process=True,
+        # the harness snapshot the driver submitted from (fullcmp_run.snapshot_harness); the live
+        # worktree is never a job source, so dirty is false by construction
+        harness_commit=environ.get("TFB_HARNESS_COMMIT") or None,
+        harness_tree_sha=environ.get("TFB_HARNESS_TREE") or None,
+        harness_dirty=False,
+        home=str(s.home),
+        job_id=job_id or fp.resolve_job_id(environ),
+        job_start_s=job_start_s,
+        swap_start=swap_start,
+        telemetry_path=telemetry_path,
+        quiet_pre=quiet_pre,
+        engine_log_path=str(s.log),
+        server_flags={"argv": [str(x) for x in s.cmd]},
+        observe=s.observe,
+        yunshu_observe=s.yunshu_observe_env,
+        profile=environ.get("TFB_PROFILE") == "1",
+    )
+
+
+def start_cell_telemetry(pid, port, out_path, engine, environ, *, required):
+    """Sampler beside the server for this cell; its series path is returned for the record.
+    Required (fullcmp): a sampler that does not start raises. Optional: warn and continue."""
+    global _ACTIVE_TELEMETRY
+    tdir = environ.get("TFB_TELEMETRY_DIR") or (
+        fp.DEFAULT_TELEMETRY_DIR if required else ""
+    )
+    if not tdir:
+        return None
+    path = fp.telemetry_out(out_path, engine, tdir)
+    try:
+        import fullcmp_telemetry as tm
+
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        sampler = tm.Sampler(pid, port, path)
+        sampler.start()
+    except Exception as exc:  # noqa: BLE001 - classified below
+        if required:
+            raise fp.ProvenanceError(f"telemetry sampler did not start: {exc}") from exc
+        print(f"telemetry: optional sampler not started: {exc}", flush=True)
+        return None
+    _ACTIVE_TELEMETRY = sampler
+    return path
+
+
+def stop_cell_telemetry():
+    global _ACTIVE_TELEMETRY
+    sampler, _ACTIVE_TELEMETRY = _ACTIVE_TELEMETRY, None
+    if sampler is not None:
+        sampler.stop()
+
+
+# Engines whose per-request draft stats only a non-streaming response carries (the probe, see
+# fullcmp_engaged response_field_probe). mlx-vlm 0.7.11: openai.py:2759 (non-streaming chat).
+PROBE_ENGINES = {"mlx-vlm-server": True}
+
+
+def probe_request(s, text="Say hi."):
+    """One non-streaming chat request on the live server; returns the response JSON (timings)."""
+    body = dict(req(s.model, text, 64))
+    body["stream"] = False
+    return _post_json(s.url, "/v1/chat/completions", body)
+
+
+def engaged_end_fields(s) -> dict:
+    """The session-row fields written at finalize from the FINAL engaged verdict. The top-level
+    spec_mode is the verified engaged mode: META carries the startup value (before the evidence
+    of the measured requests), so it would still read 'unverified' for an engaged cell."""
+    return {
+        "engaged_spec_mode": s.engaged_spec_mode,
+        "spec_mode": s.engaged_spec_mode,
+        "engaged_log_line": s.engaged_log_line,
+        "engaged_evidence_kind": getattr(s, "engaged_evidence_kind", None),
+        "engaged_evidence_source": getattr(s, "engaged_evidence_source", None),
+        "engaged_label": getattr(s, "engaged_label", None),
+    }
+
+
+def server_exited(s) -> bool:
+    """True when the engine process of this cell is gone (an OOM kill, a crash at a high slot count)."""
+    proc = getattr(s, "proc", None)
+    return proc is not None and proc.poll() is not None
+
+
+def unsupported_at_n_row(out, a, why: str) -> None:
+    """Record that this cell cannot run at its concurrency N: the cell is 'unsupported at N (measured: <error>)',
+    never run again at a lower N."""
+    emit(
+        out,
+        part="unsupported",
+        phase=a.part,
+        http_status=None,
+        concurrency=a.parallel,
+        reason=f"unsupported at N={a.parallel} (measured: {why})"[:REFUSAL_BODY_MAX],
+        cell=cell_name(getattr(a, "out", ""), getattr(a, "rep", 0)),
+    )
+
+
+def run_part_or_unsupported(fn, s, out, a):
+    """Run one part. A concurrent cell (parallel N > 1) whose engine process died during the part (OOM at N slots or
+    streams, a crash) is recorded as 'unsupported at N' with the error; any other failure still raises."""
+    try:
+        fn(s, out, a)
+    except Exception as exc:
+        if a.parallel > 1 and a.part in ("conc", "mixed") and server_exited(s):
+            rc = s.proc.poll()
+            unsupported_at_n_row(out, a, f"engine exited rc={rc} during the cell: {type(exc).__name__}: {exc}")
+            return
+        raise
+
+
+def cell_unsupported(path) -> bool:
+    """True when the cell file holds an 'unsupported' row: the engine refused the request shape."""
+    with open(path) as fh:
+        for line in fh:
+            try:
+                if json.loads(line).get("part") == "unsupported":
+                    return True
+            except ValueError:
+                continue
+    return False
+
+
+def read_decode_rows(path):
+    """The cell's request rows (part == decode) as written, for the final engaged-mode evidence."""
+    rows = []
+    with open(path) as fh:
+        for line in fh:
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get("part") == "decode":
+                rows.append(r)
+    return rows
+
+
+def finalize_session(path, end_fields):
+    """Rewrite the session row (line 1) with the end-of-cell fields: job end, swap at end.
+    The file is replaced atomically, so a crash leaves the start-of-cell row or nothing."""
+    with open(path) as fh:
+        lines = fh.read().splitlines()
+    row = json.loads(lines[0])
+    if row.get("part") != "session":
+        raise RuntimeError(f"{path}: first row is not the session header")
+    row.update(end_fields)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write("\n".join([json.dumps(row), *lines[1:]]) + "\n")
+    os.replace(tmp, path)
+
+
+QUIET_REFUSED_EXIT = 3  # the driver retries a quiet refusal in the same slot (fullcmp_run)
+
+
+def quiet_refused(snapshot) -> bool:
+    """True when a per-cell quiet snapshot failed the gate (fullcmp_quiet.check's own verdict)."""
+    return isinstance(snapshot, dict) and snapshot.get("ok") is False
+
+
+HEARTBEAT_S = 30.0  # a heartbeat line every 30 s: a long phase never leaves the job log silent
+HEARTBEAT_STOP_S = 600.0  # no main-thread progress this long: stop beating, so the stall watchdog fires
+_PROGRESS = {"phase": "start", "t": time.time(), "t0": time.time()}
+
+
+def _progress(phase: str | None = None) -> None:
+    """Main-thread progress: every request completion and every phase change calls this."""
+    if phase is not None:
+        _PROGRESS["phase"] = phase
+    _PROGRESS["t"] = time.time()
+
+
+def _start_heartbeat(interval: float = HEARTBEAT_S, stop_after: float = HEARTBEAT_STOP_S) -> None:
+    """Daemon thread: one stdout line per interval while the main thread makes progress: phase name,
+    elapsed time and the age of the last progress. A hung main thread stops the beats after stop_after
+    seconds without progress, so gpuq's stall watchdog fires instead of a daemon hiding the hang."""
+    import threading
+
+    _PROGRESS["t0"] = time.time()
+
+    def beat():
+        while True:
+            time.sleep(interval)
+            now = time.time()
+            idle = now - _PROGRESS["t"]
+            if idle > stop_after:
+                return  # silence on purpose: the watchdog must see a hang
+            print(
+                f"heartbeat {now - _PROGRESS['t0']:.0f}s phase={_PROGRESS['phase']} "
+                f"last_progress={idle:.0f}s",
+                flush=True,
+            )
+
+    threading.Thread(target=beat, name="tfbench-heartbeat", daemon=True).start()
+
+
 def main():
+    _start_heartbeat()
     a = parse_args()
+    _progress(f"part-{a.part}")
     extra_env = dict(kv.split("=", 1) for kv in a.env)
     if a.part not in (
         "decode",
@@ -1461,17 +2902,20 @@ def main():
         "promote",
         "forced",
         "corpus",
+        "mixed",
     ):
         raise ValueError(
-            "supported parts: decode, conc, agent, ca, needle, conc32, arrive, promote, forced, corpus"
+            "supported parts: decode, conc, agent, ca, needle, conc32, arrive, promote, forced, corpus, mixed"
         )
     if a.dry_run:
         if a.part == "decode" and not a.smoke:
             for ctx in a.only_ctx or [1024, 8192, 32768]:
                 for kind in a.only_kind or ("prose", "code"):
-                    decode_prompt(kind, ctx, a.long_ask)
+                    decode_prompt(
+                        kind, ctx, a.long_ask, getattr(a, "prompt_variant", 0)
+                    )
         elif a.part == "conc":
-            concurrent_prompt(0, 0, a.conc_ctx)
+            concurrent_prompt(0, 0, a.conc_ctx, getattr(a, "prompt_variant", 0))
         elif a.part in ("agent", "ca"):
             for directory in (BODIES, BODIES2):
                 if not list(directory.glob("*-req.json")):
@@ -1503,16 +2947,92 @@ def main():
             raise AssertionError(
                 "Yunshu pinned tree does not match expected release SHA"
             )
-    s = start_server(
-        a.engine,
-        extra_env,
-        f"{a.engine}-{a.part}-{a.rep}{a.tag}",
-        model=a.model,
-        ctx_tokens=a.ctx_tokens,
-        parallel=a.parallel,
-    )
+    fullcmp = fp.fullcmp_mode(os.environ)
+    census = fc_header = end_fields = job_id = None
+    telem_path = None
+    if fullcmp:
+        # Fail closed before anything runs: identifiers, the gpuq job, a quiet GPU, a fresh file.
+        job_id = fp.check_required_env(os.environ)
+        if was_contended():
+            raise fp.ProvenanceError("GPU contended before the cell started (fullcmp)")
+        if os.path.exists(a.out) and os.path.getsize(a.out) > 0:
+            raise fp.ProvenanceError(
+                f"{a.out} exists; a fullcmp cell writes a fresh file"
+            )
+        census = fp.load_json(fp.CENSUS_PATH)
+    # Host CPU before the server exists (foreign holders only; the harness tree is excluded).
+    quiet_pre = fq.snapshot() if fullcmp else None
+    # A stub run (TFB_STUB_SERVER: the tests) has no engine whose CPU use a host check could judge; the
+    # audit already exempts a stub engine from the quiet rule. The real engine never sets it.
+    if quiet_refused(quiet_pre) and not os.environ.get("TFB_STUB_SERVER"):
+        # The host is busy before this cell: refuse BEFORE the server starts and before the raw file is
+        # created, so the driver can rerun this cell in the same slot (exit 3 = quiet refusal).
+        print(f"QUIET REFUSED before {a.out}: {quiet_pre.get('total_foreign_pct')}% foreign, "
+              f"holders {[h.get('name') for h in quiet_pre.get('holders', [])[:5]]}", flush=True)
+        sys.exit(QUIET_REFUSED_EXIT)
+    job_start_s = time.time()
+    swap_start = fp.swap_snapshot() if fullcmp else None
+    try:
+        s = start_server(
+            a.engine,
+            extra_env,
+            f"{a.engine}-{a.part}-{a.rep}{a.tag}{job_log_suffix()}",
+            model=a.model,
+            ctx_tokens=a.ctx_tokens,
+            parallel=a.parallel,
+        )
+    except Exception as exc:
+        if not (fullcmp and a.parallel > 1 and a.part in ("conc", "mixed")):
+            raise
+        # the engine does not come up at N slots / streams (OOM, refusal of the flag): this cell is
+        # 'unsupported at N (measured: <error>)'; the job continues with its next cell, never at a lower N
+        with open(a.out, "w") as out:
+            emit(out, part="session", engine=a.engine, rep=a.rep, launch_parallel=a.parallel,
+                 launch_ctx_tokens=a.ctx_tokens, start_failed=True)
+            unsupported_at_n_row(out, a, f"engine did not start: {type(exc).__name__}: {exc}")
+            emit(out, part="part_done", engine=a.engine, which=a.part, rep=a.rep, complete=True)
+        print(f"UNSUPPORTED at N={a.parallel}: engine did not start: {exc}", flush=True)
+        sys.exit(0)
+    # The engine log is shared by every cell of a job (same name): this cell's slice is the byte
+    # range from here to its end, written beside the cell file (server_log_path).
+    first_log = s.log
+    log_start = 0  # the launch truncated this log: the cell's evidence includes the startup lines
+    _LOG_PREFIX.clear()
     try:
         with open(a.out, "a") as out:
+            try:
+                if fullcmp or os.environ.get("TFB_TELEMETRY_DIR"):
+                    telem_path = start_cell_telemetry(
+                        s.proc.pid,
+                        s.port,
+                        a.out,
+                        a.engine,
+                        os.environ,
+                        required=fullcmp,
+                    )
+                if fullcmp:
+                    fc_header = fullcmp_header(
+                        s,
+                        a,
+                        os.environ,
+                        census=census,
+                        job_start_s=job_start_s,
+                        swap_start=swap_start,
+                        telemetry_path=telem_path,
+                        quiet_pre=quiet_pre,
+                        job_id=job_id,
+                    )
+            except Exception as exc:
+                if fullcmp:
+                    emit(
+                        out,
+                        part="error",
+                        stage="start",
+                        engine=a.engine,
+                        rep=a.rep,
+                        error=str(exc),
+                    )
+                raise
             if a.engine in bench_engines.ENGINES:
                 version, sha = bench_engines.engine_version(a.engine, YUNSHU_SRC)
                 META.update(
@@ -1536,7 +3056,14 @@ def main():
                 requested_spec_mode=s.requested_spec_mode,
                 engaged_spec_mode=s.engaged_spec_mode,
                 engine_probe=getattr(s, "probe", None),
+                # the launch configuration of a concurrent cell (the audit compares it with the cell's N)
+                launch_parallel=a.parallel,
+                launch_ctx_tokens=a.ctx_tokens,
                 tag=a.tag,
+                server_log=first_log.name,
+                server_log_start=log_start,
+                server_log_slice=Path(server_log_path(a.out)).name,
+                **(fc_header or {}),
             )
             for _ in range(2):
                 send(s.url, req(s.model, "Say hi.", 24))
@@ -1544,25 +3071,100 @@ def main():
                 part_conc(s, out, a)
                 part_agent(s, out, a)
             else:
-                {
-                    "decode": part_decode,
-                    "arrive": part_arrive,
-                    "conc": part_conc,
-                    "agent": part_agent,
-                    "needle": part_needle,
-                    "conc32": part_conc32,
-                    "promote": part_promote,
-                    "forced": part_forced,
-                    "corpus": part_corpus,
-                }[a.part](s, out, a)
-            s.verify_spec_mode()
+                run_part_or_unsupported(
+                    {
+                        "decode": part_decode,
+                        "arrive": part_arrive,
+                        "conc": part_conc,
+                        "agent": part_agent,
+                        "needle": part_needle,
+                        "conc32": part_conc32,
+                        "promote": part_promote,
+                        "forced": part_forced,
+                        "corpus": part_corpus,
+                        "mixed": part_mixed,
+                    }[a.part],
+                    s,
+                    out,
+                    a,
+                )
+            if _LIVE_SERVERS:
+                s = _LIVE_SERVERS[-1]  # a restart cell measured on its relaunched server
+            probe_response = None
+            conc_probe = None
+            # an engine's explicit refusal ended this cell (an 'unsupported' row): it has no requests to
+            # verify, probe or attribute; the evidence checks below are skipped and the cell is closed
+            unsupported_cell = cell_unsupported(a.out)
+            conc_records = fe.read_concurrent_records(a.out)
+            if fullcmp and a.engine in PROBE_ENGINES and conc_records and not unsupported_cell:
+                # the concurrent probe: the same N requests, non-streaming, at once (the streamed concurrent
+                # requests carry no draft stats). Not a table number: part=probe_conc rows, probe=true.
+                n = sum(len(r.get("requests") or []) for r in conc_records)
+                # the cell's prompts: one shared prompt for a --conc-same cell, else the conc part's prompts
+                same = bool(getattr(a, "conc_same", False))
+                texts = [
+                    concurrent_prompt(0 if same else i, 0, a.conc_ctx, getattr(a, "prompt_variant", 0))
+                    for i in range(n)
+                ]
+                with cf.ThreadPoolExecutor(max(1, n)) as ex:
+                    _progress("conc-probe")
+                    conc_probe = list(ex.map(lambda t: probe_request(s, t), texts))
+                for rid, resp in enumerate(conc_probe):
+                    emit(out, part="probe_conc", engine=a.engine, rep=a.rep, rid=rid,
+                         probe=True, timings=(resp or {}).get("timings"),
+                         probe_fields=fe.probe_fields(resp))
+            if fullcmp and a.engine in PROBE_ENGINES and not unsupported_cell:
+                # One non-streaming request after the measured parts (not a table number): the serving
+                # path returns per-request draft stats only in a non-streaming response.
+                probe_response = probe_request(s)
+                emit(
+                    out,
+                    part="probe",
+                    engine=a.engine,
+                    rep=a.rep,
+                    probe=True,
+                    timings=probe_response.get("timings"),
+                    probe_fields=fe.probe_fields(probe_response),
+                    # the streamed rows' decode speed, from the server's own completed-request lines
+                    completed_decode_tok_s=fe.completed_decode_tok_s(
+                        s.log.read_text(errors="replace") if s.log.exists() else ""
+                    ),
+                )
+            measured = read_decode_rows(a.out)
+            try:
+                if not unsupported_cell:
+                    s.verify_spec_mode(
+                        final=True,
+                        rows=measured,
+                        probe_response=probe_response,
+                        concurrent=fe.read_concurrent_records(a.out),
+                        concurrent_probe=conc_probe,
+                    )
+            except Exception:
+                # a refused cell keeps its evidence: the slice is written before the error propagates
+                log_end_fail = s.log.stat().st_size if s.log.exists() else 0
+                Path(server_log_path(a.out)).write_bytes(
+                    cell_engine_log(s.log, log_end_fail, prefix=_LOG_PREFIX)
+                )
+                raise
+            if fullcmp and a.engine != "yunshu" and getattr(s, "engaged_per_row", None) and not unsupported_cell:
+                # attribution per measured request, from the matched evidence (written after the final check)
+                for attr in fe.attr_rows_from(s.engaged_per_row, measured):
+                    emit(out, part="attr", engine=a.engine, rep=a.rep, **attr)
+            conc_records = fe.read_concurrent_records(a.out)
+            if fullcmp and conc_records:
+                # attribution per concurrent request (rid, record part), from the shared verdict
+                for attr in fe.concurrent_attr_rows(
+                    fe.load_table(), a.engine, s.requested_spec_mode,
+                    s.log.read_text(errors="replace"), conc_records, getattr(s, "ready_log_offset", None),
+                    probe_responses=conc_probe,
+                ):
+                    emit(out, part="attr", engine=a.engine, rep=a.rep, **attr)
             mem = getattr(s, "mem", None)
-            if mem is not None:
+            if mem is not None and not unsupported_cell:
                 time.sleep(a.idle_s)
                 idle = mem.sample()
-                peak = max(mem.peak_gib, idle or 0.0)
-                if not peak or idle is None:
-                    raise RuntimeError("memory sampling produced no data")
+                peak = memory_peak_or_raise(mem, idle)
                 emit(
                     out,
                     part="memory",
@@ -1578,6 +3180,29 @@ def main():
                     idle_after_s=a.idle_s,
                     engine_probe=s.probe_text(),
                 )
+            stop_cell_telemetry()
+            # The cell's engine-log slice, written now: the next cell of the job reuses the name.
+            log_end = s.log.stat().st_size if s.log.exists() else 0
+            Path(server_log_path(a.out)).write_bytes(
+                cell_engine_log(s.log, log_end, prefix=_LOG_PREFIX)
+            )
+            if fullcmp:
+                # The GPU must have stayed exclusive to this cell until its last request.
+                if was_contended():
+                    raise fp.ProvenanceError("GPU contended during the cell (fullcmp)")
+                end_fields = {
+                    "server_log_end": log_end,
+                    "job_end_s": time.time(),
+                    "gpu_exclusive": True,
+                    "contended": False,
+                    "swap_end": fp.swap_snapshot(),
+                    # Server still up (a descendant of this process, so not counted as foreign).
+                    "quiet_post": fq.snapshot(),
+                    # the raw usage chunk of the first request (GPU smoke evidence, per engine)
+                    "usage_sample": _USAGE_SAMPLE[0] if a.log_usage_sample else None,
+                    "unsupported_cell": unsupported_cell,
+                    **engaged_end_fields(s),
+                }
             emit(
                 out,
                 part="part_done",
@@ -1586,9 +3211,41 @@ def main():
                 rep=a.rep,
                 complete=True,
             )
+        finalize_session(a.out, end_fields or {"server_log_end": log_end})
+    except Exception as exc:
+        if fullcmp:
+            with open(a.out, "a") as out:
+                emit(
+                    out,
+                    part="error",
+                    stage="run",
+                    engine=a.engine,
+                    rep=a.rep,
+                    error=str(exc),
+                )
+        raise
     finally:
+        stop_cell_telemetry()
+        for live in _LIVE_SERVERS:  # a restart cell's relaunched server, then the first one
+            live.kill()
         s.kill()
+        cleanup_job_home(OUT, os.environ)
 
 
 if __name__ == "__main__":
+    if os.environ.get("TFB_STUB_SERVER"):
+        # TEST-ONLY: a stub run must not outlive the wrapper that started it. When the parent is
+        # gone (a test timed out and killed the shell), this process exits; its stub then sees its
+        # own parent gone and exits too (fullcmp_stub_server.watch_parent).
+        import threading
+
+        _parent = os.getppid()
+
+        def _exit_with_parent():
+            while True:
+                time.sleep(1)
+                if os.getppid() != _parent or _parent == 1:
+                    os._exit(0)
+
+        threading.Thread(target=_exit_with_parent, daemon=True).start()
     main()

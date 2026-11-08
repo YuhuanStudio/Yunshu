@@ -38,14 +38,20 @@ def test_a_reader_following_the_cursor_sees_every_request_exactly_once_under_loa
     total = 3000
     done = threading.Event()
 
+    seen: list[str] = []
+
     def writer() -> None:
         for i in range(total):
+            # the ring holds 512 finished requests: a reader starved for longer than that (a loaded CI
+            # host) loses evicted rows by design, which is not what this test is about. Keep the writer
+            # at most 400 rows ahead of what the reader has taken.
+            while i - len(seen) > 400:
+                time.sleep(0.0002)
             reg.record_done(entry(i))
             if i % 50 == 0:
                 time.sleep(0.0005)
         done.set()
 
-    seen: list[str] = []
     cursor: int | None = None
     thread = threading.Thread(target=writer)
     thread.start()

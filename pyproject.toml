@@ -41,7 +41,7 @@ exclude = [
 
 [project]
 name = "yunshu"
-version = "0.1.7.dev0"
+version = "0.1.7.dev1"
 description = "Fast local single-node LLM/VLM inference engine for Apple Silicon — speculative decoding, prefix reuse, OpenAI/Anthropic-compatible"
 readme = "README.md"
 license = "Apache-2.0"
@@ -292,4 +292,6 @@ markers = [
     "integration: requires running services or real models",
     "slow: tests that take >5 seconds",
     "serial: depends on host-wide state (CPU load, process table); ci-local runs these alone after the parallel pass",
+    "fullcmp_quick: fast fullcmp / tfbench harness unit tests (pytest -m fullcmp_quick, under 2 minutes)",
+    "fullcmp_e2e: fullcmp end-to-end chains through real tfbench against the stub (11-30 min each)",
 ]

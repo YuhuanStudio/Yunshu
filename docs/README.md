@@ -36,6 +36,7 @@ pin their measured source independently of release status. Start at the top-leve
 - [guides/KV_CACHE_MATRIX.md](guides/KV_CACHE_MATRIX.md): current APC tiers and measured tradeoffs
 - [guides/AGENT_COMPAT.md](guides/AGENT_COMPAT.md): coding-agent feature evidence
 - [BENCHMARKS.md](BENCHMARKS.md): where each published number comes from and how to reproduce it
+- [guides/VERIFY.md](guides/VERIFY.md): per-change verdicts (`yv`); [guides/FULLCOMPARE.md](guides/FULLCOMPARE.md): the pinned cross-engine full comparison runbook (preflight, launch, audit, publishing)
 
 ## Contribute and maintain
 
@@ -57,7 +58,7 @@ docs/
     perf_history/       ← time-named KPI snapshots (perf_<UTC>.json)
     img/                ← trend charts
   guides/               # hand-written guides and reference notes
-    CLIENTS.md, SERVICE.md, TROUBLESHOOTING.md, RELEASE_READINESS.md, RELEASE_GATE.md, VERIFY.md
+    CLIENTS.md, SERVICE.md, TROUBLESHOOTING.md, RELEASE_READINESS.md, RELEASE_GATE.md, VERIFY.md, FULLCOMPARE.md
     KV_CACHE_MATRIX.md, PROMPT_CACHING_APIS.md
   archive/
     results/            ← raw bench JSON from early sweeps (comprehensive_sweep, framework_comparison, kv_cache_matrix); historical, kept as evidence, not cited by current docs

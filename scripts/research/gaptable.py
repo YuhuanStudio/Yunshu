@@ -224,6 +224,73 @@ def run(a):
     print(json.dumps({"complete": True, "engine": a.engine, "rep": a.rep}))
 
 
+# Phases whose request is identical for every engine. turn2 is built from each engine's own cold
+# reply, so its prompt differs by design and is recorded but not compared.
+PROMPT_COMPARED_PHASES = ("cold", "warm")
+
+
+def completed_result_files(out):
+    """(name, rows) for every finished, non-failed result file in out."""
+    done = []
+    for path in sorted(Path(out).glob("*.jsonl")):
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        if any(r.get("part") == "failure" for r in rows):
+            continue
+        if not any(r.get("part") == "part_done" and r.get("complete") for r in rows):
+            continue
+        done.append((path.name, rows))
+    return done
+
+
+def prompt_problems(out):
+    """Fail-closed prompt identity check across engines, per (ctx, kind, phase) comparison group.
+
+    Every compared decode row must carry prompt_tokens and prompt_sha256 (missing -> problem). Within a
+    group, all engines must have sent the same prompt digest, and their server prompt_tokens must agree
+    within 1%. Returns human-readable problems naming the cells; empty list means the group is clean."""
+    problems = []
+    groups = {}
+    for name, rows in completed_result_files(out):
+        for r in rows:
+            if (
+                r.get("part") != "decode"
+                or r.get("phase") not in PROMPT_COMPARED_PHASES
+            ):
+                continue
+            cell = f"{name} {r.get('ctx')} {r.get('kind')} {r.get('phase')}"
+            if r.get("prompt_tokens") is None:
+                problems.append(f"{cell}: prompt_tokens missing")
+                continue
+            if not r.get("prompt_sha256"):
+                problems.append(f"{cell}: prompt_sha256 missing")
+                continue
+            key = (r["ctx"], r["kind"], r["phase"])
+            groups.setdefault(key, []).append(
+                (r["engine"], r["prompt_sha256"], r["prompt_tokens"], cell)
+            )
+    for (ctx, kind, phase), entries in sorted(groups.items()):
+        engines = {e for e, *_ in entries}
+        if len(engines) < 2:
+            continue
+        shas = {}
+        for _engine, sha, _pt, cell in entries:
+            shas.setdefault(sha, []).append(cell)
+        if len(shas) > 1:
+            detail = "; ".join(
+                f"{sha[:12]}: {', '.join(cells)}" for sha, cells in sorted(shas.items())
+            )
+            problems.append(
+                f"prompt mismatch in group {ctx} {kind} {phase} (engines {sorted(engines)}): {detail}"
+            )
+        pts = [pt for _engine, _sha, pt, _cell in entries]
+        lo, hi = min(pts), max(pts)
+        if hi > lo * 1.01:
+            problems.append(
+                f"prompt_tokens differ >1% in group {ctx} {kind} {phase}: {lo}..{hi}"
+            )
+    return problems
+
+
 def summary(out):
     """Summarize completed independent reps; never collapse them to the last row."""
     groups = {}
@@ -286,6 +353,15 @@ def main():
     a = p.parse_args()
     if a.action == "summary":
         print(summary(a.out))
+        problems = prompt_problems(a.out)
+        if problems:
+            # Fail closed: a table across engines that did not get identical prompts is not a comparison.
+            for problem in problems:
+                print(f"PROMPT CHECK FAILED: {problem}", file=sys.stderr)
+            sys.exit(1)
+        print(
+            "prompt check: all compared groups sent identical prompts", file=sys.stderr
+        )
         return
     if a.action == "run":
         if not a.engine:

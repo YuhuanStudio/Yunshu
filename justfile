@@ -27,7 +27,7 @@ test: test-unit
 
 # Parallel like scripts/dev/ci-local: one test file per xdist worker, then the serial-marked tests alone.
 test-unit:
-    uv run pytest tests/ -q -n 8 --dist loadfile -m "not serial"
+    uv run pytest tests/ -q -n 8 --dist loadfile -m "not serial and not fullcmp_e2e"
     uv run pytest tests/ -q -m serial
 
 test-integration:

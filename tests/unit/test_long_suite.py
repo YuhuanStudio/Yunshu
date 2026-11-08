@@ -51,12 +51,13 @@ def test_part_decode_rejects_short_reply(tfb, monkeypatch, tmp_path):
     monkeypatch.setattr(tfb, "load_prompt", lambda n: "p")
     sent = []
 
-    def send(url, body):
+    def send(url, body, **_kw):
         sent.append(body["max_tokens"])
         return {"finish": "length", "ct": 64 if len(sent) < 2 else 63, "_text": "t"}
 
+    monkeypatch.setattr(tfb, "prompt_file_sha256", lambda *_a, **_k: "0" * 64)
     monkeypatch.setattr(tfb, "send", send)
-    srv = type("S", (), {"url": "u", "model": "m"})()
+    srv = type("S", (), {"url": "u", "model": "m", "log": "server.log"})()
     with (
         open(tmp_path / "o.jsonl", "w") as out,
         pytest.raises(RuntimeError, match="63"),
@@ -100,13 +101,13 @@ def test_part_needle_scores_answers(tfb, monkeypatch, tmp_path):
     items = tfb.needle_items(1024)
     answers = iter([code for _, code in items[:7]] + ["no idea"] * 3)
 
-    def send(url, body):
+    def send(url, body, **_kw):
         return dict(
             _text=next(answers), ttft_s=1, pt=9, cached=0, finish="length", ct=6
         )
 
     monkeypatch.setattr(tfb, "send", send)
-    srv = type("S", (), {"url": "u", "model": "m"})()
+    srv = type("S", (), {"url": "u", "model": "m", "log": "server.log"})()
     import json
 
     with open(tmp_path / "o.jsonl", "w+") as out:

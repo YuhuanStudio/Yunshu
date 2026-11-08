@@ -1,0 +1,30 @@
+info: qwen27: prompt capacity=2048 rows, startup stream and scratch reserve=28845080576 bytes
+info: qwen27: lone loop=lanes width=16; lane window=16, lane copies=off
+info: qwen27: 43.0 GiB kept wired between requests, inside 70% of 128 GiB of RAM
+info: qwen27: Neural Engine prompt share requested_columns=0 loaded_columns=0 program_weight_bytes=0 loaded=false exact_output_qualified=false
+info: prompt cache: 16.0 GiB from 44.2 GiB free under the 70% cap (43.4 GiB in use once loaded, 128 GiB of RAM, 2 GiB kept for prompt buffers); 16 GiB by default: --prompt-cache-gib takes more, up to what is free
+info: Qwen3.8-27B: 1 streams of 140000 tokens, DFlash2 drafts for one of them
+[tensorfold] prompt chunks of up to 2,048 tokens, cut at replies 256+ tokens apart
+[tensorfold] serving Qwen3.8-27B-MLX-4bit at http://127.0.0.1:18990/v1 (sampling: temperature 1.0, top_k 20, top_p 0.95; drafts: DFlash2 (/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2); context: 140000; loaded in 8.3s)
+[tensorfold] 127.0.0.1 "GET /v1/models HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+info: prompt cache: 15 tokens, resumed at 0, kept 0; 0 states, 0 MiB and 0 MiB spare of 16384 MiB (hits 0, misses 1, evicted 0, refused 0, failed 0)
+[tensorfold] done chatcmpl-4c2b29317664a47b4d55e9f0a388b257 prompt=15 cached=0 thinking=False effort=none tokens=10 sha=e94588627640 finish=stop rounds=1 accepted=9/15 ttft=0.039 decode=0.042 elapsed=0.081 queued=0.000 tok/s=215.5
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+info: prompt cache: 15 tokens, resumed at 0, kept 0; 1 states, 192 MiB and 0 MiB spare of 16384 MiB (hits 0, misses 2, evicted 0, refused 0, failed 0)
+[tensorfold] done chatcmpl-a08d2ec60feb83ecf51dcb30ea2fb916 prompt=15 cached=0 thinking=False effort=none tokens=10 sha=e94588627640 finish=stop rounds=1 accepted=9/15 ttft=0.040 decode=0.041 elapsed=0.080 queued=0.000 tok/s=221.3
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+info: prompt cache: 1024 tokens, resumed at 0, kept 1; 2 states, 512 MiB and 0 MiB spare of 16384 MiB (hits 0, misses 3, evicted 0, refused 0, failed 0)
+[tensorfold] done chatcmpl-69481e7bafbdacd45a5b5a83f60e79d8 prompt=1024 cached=0 thinking=False effort=none tokens=512 sha=3387264e2172 finish=length rounds=105 accepted=411/1508 ttft=1.049 decode=4.264 elapsed=5.313 queued=0.000 tok/s=119.8
+info: qwen27: prompt capacity=2048 rows, startup stream and scratch reserve=28845080576 bytes
+info: qwen27: lone loop=lanes width=16; lane window=16, lane copies=off
+info: qwen27: 43.0 GiB kept wired between requests, inside 70% of 128 GiB of RAM
+info: qwen27: Neural Engine prompt share requested_columns=0 loaded_columns=0 program_weight_bytes=0 loaded=false exact_output_qualified=false
+info: prompt cache: 16.0 GiB from 44.4 GiB free under the 70% cap (43.2 GiB in use once loaded, 128 GiB of RAM, 2 GiB kept for prompt buffers); 16 GiB by default: --prompt-cache-gib takes more, up to what is free
+info: Qwen3.8-27B: 1 streams of 140000 tokens, DFlash2 drafts for one of them
+[tensorfold] prompt chunks of up to 2,048 tokens, cut at replies 256+ tokens apart
+[tensorfold] serving Qwen3.8-27B-MLX-4bit at http://127.0.0.1:18990/v1 (sampling: temperature 1.0, top_k 20, top_p 0.95; drafts: DFlash2 (/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2); context: 140000; loaded in 3.8s)
+[tensorfold] 127.0.0.1 "GET /v1/models HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+info: prompt cache: 1024 tokens, resumed at 0, kept 1; 1 states, 320 MiB and 0 MiB spare of 16384 MiB (hits 0, misses 1, evicted 0, refused 0, failed 0)
+[tensorfold] done chatcmpl-9be339a807106c63f15883d2e1e1e125 prompt=1024 cached=0 thinking=False effort=none tokens=512 sha=3387264e2172 finish=length rounds=105 accepted=411/1514 ttft=1.064 decode=4.218 elapsed=5.282 queued=0.000 tok/s=121.1

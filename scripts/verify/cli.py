@@ -108,6 +108,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="also check spec on == off",
     )
     ab.add_argument(
+        "--then-speed",
+        dest="then_speed",
+        action="store_true",
+        help="probe stage: when a counter moves, run the speed stage right away",
+    )
+    ab.add_argument(
+        "--probe-ms-tol",
+        dest="probe_ms_tol",
+        type=float,
+        help="probe stage ms/round tolerance in percent (default 3)",
+    )
+    ab.add_argument(
         "--spec-modes",
         dest="spec_modes",
         help="identity under each speculative method: default,mtp,dflash (comma list)",

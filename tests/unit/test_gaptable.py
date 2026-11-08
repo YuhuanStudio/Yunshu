@@ -130,7 +130,9 @@ def test_concurrent_prompt_exact_size_and_salt(monkeypatch):
 
 
 def test_concurrent_records_all_eight_requests(monkeypatch, tmp_path):
-    monkeypatch.setattr(tb, "concurrent_prompt", lambda i, trial, ctx: str(i))
+    monkeypatch.setattr(
+        tb, "concurrent_prompt", lambda i, trial, ctx, variant=0, run=0: str(i)
+    )
     monkeypatch.setattr(
         tb,
         "send",
@@ -143,8 +145,13 @@ def test_concurrent_records_all_eight_requests(monkeypatch, tmp_path):
             pt=1024,
             sha="a",
             _text="x",
+            total_s=2.0,
+            prompt_ids_sha="p",
+            temperature=0.0,
+            stop=None,
         ),
     )
+    monkeypatch.setattr(tb, "prompt_file_sha256", lambda *_a, **_k: "0" * 64)
     out = tmp_path / "rows.jsonl"
     with out.open("w") as f:
         tb.part_conc(
@@ -330,3 +337,108 @@ def test_accelerator_startup_times_out(monkeypatch, tmp_path):
         tb.wait_startup_ready(
             SimpleNamespace(poll=lambda: None), tmp_path / "unused", "ready", timeout=1
         )
+
+
+def _write_result(
+    out, engine, *, sha="a" * 64, pt=1024, phase="cold", ctx=1024, kind="code", rep=0
+):
+    """Synthetic completed result file: one decode row (prompt fields optional) plus part_done."""
+    row = dict(
+        engine=engine,
+        part="decode",
+        ctx=ctx,
+        kind=kind,
+        phase=phase,
+        snapshot_rep=rep,
+        ct=512,
+        finish="length",
+        ttft_s=0.5,
+        dec_tps=60.0,
+    )
+    if pt is not None:
+        row["prompt_tokens"] = pt
+    if sha is not None:
+        row["prompt_sha256"] = sha
+    rows = [row, dict(part="part_done", complete=True, engine=engine)]
+    path = Path(out) / f"{engine}-decode-{ctx}-{kind}-r{rep}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
+def test_prompt_check_passes_when_engines_sent_the_same_prompt(tmp_path):
+    _write_result(tmp_path, "yunshu-main", sha="s1", pt=1024)
+    _write_result(tmp_path, "tf-native", sha="s1", pt=1025)
+    assert gt.prompt_problems(tmp_path) == []
+
+
+def test_prompt_check_fails_and_names_cells_on_different_prompt(tmp_path):
+    _write_result(tmp_path, "yunshu-main", sha="s1", pt=1024)
+    _write_result(tmp_path, "omlx-latest", sha="s2", pt=1024)
+    problems = gt.prompt_problems(tmp_path)
+    assert len(problems) == 1
+    assert "mismatch" in problems[0] and "1024 code cold" in problems[0]
+    assert "omlx-latest-decode-1024-code-r0.jsonl" in problems[0]
+
+
+def test_prompt_check_fails_on_prompt_tokens_over_one_percent(tmp_path):
+    _write_result(tmp_path, "yunshu-main", sha="s1", pt=1000)
+    _write_result(tmp_path, "tf-native", sha="s1", pt=1020)
+    assert any("prompt_tokens differ" in p for p in gt.prompt_problems(tmp_path))
+
+
+def test_prompt_check_fails_closed_when_fields_missing(tmp_path):
+    _write_result(tmp_path, "yunshu-main", sha="s1", pt=1024)
+    _write_result(tmp_path, "tf-native", sha="s1", pt=None)
+    _write_result(tmp_path, "omlx-latest", sha=None, pt=1024)
+    problems = gt.prompt_problems(tmp_path)
+    assert any(
+        "tf-native-decode-1024-code-r0.jsonl" in p and "prompt_tokens missing" in p
+        for p in problems
+    )
+    assert any(
+        "omlx-latest-decode-1024-code-r0.jsonl" in p and "prompt_sha256 missing" in p
+        for p in problems
+    )
+
+
+def test_prompt_check_ignores_turn2_and_single_engine_groups(tmp_path):
+    # turn2 is built from each engine's own cold reply, so differing turn2 prompts are expected.
+    _write_result(tmp_path, "yunshu-main", sha="s1", pt=1024, phase="turn2")
+    _write_result(tmp_path, "tf-native", sha="s2", pt=1024, phase="turn2")
+    _write_result(tmp_path, "solo", sha="x1", pt=4096, ctx=4096)
+    assert gt.prompt_problems(tmp_path) == []
+
+
+def test_summary_action_exits_nonzero_on_prompt_mismatch(tmp_path, monkeypatch, capsys):
+    manifest = tmp_path / "m.json"
+    manifest.write_text("{}")
+    _write_result(tmp_path, "yunshu-main", sha="s1", pt=1024)
+    _write_result(tmp_path, "omlx-latest", sha="s2", pt=1024)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "gaptable.py",
+            "summary",
+            "--manifest",
+            str(manifest),
+            "--out",
+            str(tmp_path),
+            "--src",
+            str(tmp_path),
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        gt.main()
+    assert exc.value.code == 1
+    assert "PROMPT CHECK FAILED" in capsys.readouterr().err
+
+
+def test_prompt_digest_is_canonical_and_text_sensitive():
+    msgs = [{"role": "user", "content": "hello"}]
+    assert tb.prompt_digest(msgs) == tb.prompt_digest(
+        [{"content": "hello", "role": "user"}]
+    )
+    assert tb.prompt_digest(msgs) != tb.prompt_digest(
+        [{"role": "user", "content": "hello!"}]
+    )
