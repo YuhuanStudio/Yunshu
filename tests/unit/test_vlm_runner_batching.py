@@ -21,6 +21,7 @@ class FakeDriver:
         self.head = object()
         self.can_draft = True
         self.max_rows = 0
+        self.apc = None  # RoundDriver always has it (None without a prefix cache)
 
     def add(self, req):
         n = len(self.requests)
