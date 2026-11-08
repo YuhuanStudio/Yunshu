@@ -982,7 +982,7 @@ class RoundDriver:
             return mx.random.categorical(x, key=sub)
         return mx.random.categorical(x)
 
-    def _draw(self, items: list[_Item], hidden: mx.array, target_logits=None):
+    def _draw(self, items: list[_Item], hidden: mx.array | None, target_logits=None):
         """Logits at every decode window position and the last position of a
         prompt finished this step; the row's token(s) at each. Returns
         ``[(item, token ids array, logprob arrays or None)]``."""
@@ -998,8 +998,11 @@ class RoundDriver:
         if not pick:
             return []
         indices = mx.array(pick, dtype=mx.int32)
+        assert (
+            hidden is not None or target_logits is not None
+        )  # a picked row has a hidden row
         lg = (
-            self._logits(hidden[indices])
+            self._logits(cast(mx.array, hidden)[indices])
             if target_logits is None
             else target_logits[indices]
         )
@@ -1511,7 +1514,7 @@ class RoundDriver:
             except preempt.PreemptedError as stop:
                 return self._preempted(items, stop)
         tm.mark("submit")
-        assert hidden is not None
+        # hidden is None on a generic-layer step where no prompt ends (_draw then picks nothing)
         draws = self._draw(items, hidden)
         tm.mark("draw")
         # Evaluate every cache the step advanced, not only what feeds a token:
@@ -1551,7 +1554,8 @@ class RoundDriver:
             nxt.append(tail_tok)
             absorb_entry = absorb.setdefault(id(row), (row, [], [], []))
             absorb_entry[1].extend(nxt)
-            absorb_entry[2].append(hidden[it.at : it.at + it.count])
+            # rows with an MTP head run the packed / Flash-Next layer: hidden holds every span row
+            absorb_entry[2].append(cast(mx.array, hidden)[it.at : it.at + it.count])
             if row.req.position_ids is not None:
                 absorb_entry[3].append(row.req.position_ids[:, it.start : it.end])
         live = list(absorb.values())
