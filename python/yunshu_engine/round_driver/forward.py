@@ -359,10 +359,11 @@ def logits(language_model: Any, hidden: mx.array) -> mx.array:
     else:
         owner = language_model.lm_head
         dense = owner
-    if int(hidden.shape[0]) == 1 or _quantized(owner):
-        # A quantized head keeps one call over R rows: the arithmetic main's lane used and that the
-        # 27B identity gates pass on. (2026-11-08: routing quantized heads through the per-row loop
-        # below cost the 27B ~11 ms per verify round, -28% decode at 1K; yv bisect 355610644.)
+    if int(hidden.shape[0]) == 1 or not _float_head(owner):
+        # A quantized or lane head (LaneLinear: row-invariant by construction) keeps one call over R
+        # rows, the arithmetic the 27B identity gates pass on. (2026-11-08: routing the 27B's LaneLinear
+        # lm_head through the per-row loop below cost ~11 ms per verify round, -28% decode at 1K; yv
+        # bisect 355610644.)
         return dense(hidden)
     # An unquantized (float) head without a lane head: a GEMM over R rows is not row-invariant (its
     # tiling follows R), so each row takes the single-row GEMV a plain decode step makes.
@@ -371,10 +372,12 @@ def logits(language_model: Any, hidden: mx.array) -> mx.array:
     )
 
 
-def _quantized(module: Any) -> bool:
+def _float_head(module: Any) -> bool:
+    """A plain floating-point Linear / Embedding head (an unquantized checkpoint): the only kind whose
+    R-row GEMM is not row-invariant and therefore needs the per-row loop."""
     import mlx.nn as nn
 
-    return isinstance(module, (nn.QuantizedLinear, nn.QuantizedEmbedding)) or hasattr(module, "scales")
+    return type(module) in (nn.Linear, nn.Embedding)
 
 
 __all__ = ["Segment", "forward", "lane_forward", "logits", "supports"]

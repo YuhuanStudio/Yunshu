@@ -77,3 +77,43 @@ def test_quantized_head_keeps_one_call_over_the_rows():
 
     fwd.logits(LM(), mx.zeros((5, 64)))
     assert calls == [5]
+
+
+def test_lane_head_keeps_one_call_and_float_head_loops():
+    """The 27B's lm_head is converted to LaneLinear (no `scales` attribute): it must keep one call."""
+    import mlx.core as mx
+    import mlx.nn as nn
+
+    from yunshu_engine.round_driver import forward as fwd
+
+    class Args:
+        tie_word_embeddings = False
+
+    calls = []
+
+    class Lane(nn.Module):
+        def __call__(self, x):
+            calls.append(int(x.shape[0]))
+            return mx.zeros((x.shape[0], 8))
+
+    class LM:
+        args = Args()
+        lm_head = Lane()
+
+    fwd.logits(LM(), mx.zeros((6, 16)))
+    assert calls == [6]
+
+    float_calls = []
+
+    class FloatHead(nn.Linear):
+        def __call__(self, x):
+            float_calls.append(int(x.shape[0]))
+            return super().__call__(x)
+
+    class LM2:
+        args = Args()
+        lm_head = FloatHead(16, 8, bias=False)
+
+    assert not fwd._float_head(LM2.lm_head)  # a subclass is not the plain class
+    LM2.lm_head = nn.Linear(16, 8, bias=False)
+    assert fwd._float_head(LM2.lm_head)
