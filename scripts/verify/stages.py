@@ -2973,6 +2973,65 @@ def _lane_bandwidth_valid(path: Path) -> tuple[bool, str]:
     return True, ""
 
 
+def _round_golden_valid(path: Path) -> tuple[bool, str]:
+    from scripts.research.round_driver_golden import validate
+
+    try:
+        validate(json.loads(path.read_text()))
+    except (OSError, ValueError, KeyError, TypeError, AssertionError) as exc:
+        return False, str(exc)
+    return True, ""
+
+
+def stage_round_golden(ctx: Ctx) -> StageResult:
+    """M0 candidate receipts: tiny first, then the selected real checkpoint."""
+    from scripts.research.round_driver_golden import LAYERS
+
+    layer = ctx.env.get("M0_LAYER", "qwen3_5")
+    if layer not in LAYERS:
+        return _finish(ctx, StageResult("round-golden", False, ["unknown M0_LAYER"]))
+    results = {}
+    for kind in ("tiny", "checkpoint"):
+        if (
+            layer == "generic" or ctx.env.get("M0_TINY_ONLY") == "1"
+        ) and kind == "checkpoint":
+            continue
+        cmd = [
+            "env",
+            f"PYTHONPATH={ctx.cand.path / 'python'}:{ctx.cand.path}",
+            ctx.py,
+            str(ctx.cand.path / "scripts/research/round_driver_golden.py"),
+            "--layer",
+            layer,
+            "--device",
+            "cpu" if layer == "generic" else "gpu",
+            "--out",
+            "{out}",
+        ]
+        if kind == "checkpoint":
+            cmd += ["--model", ctx.model]
+        cell = Cell(
+            "round-golden",
+            kind,
+            cmd,
+            quiet=False,
+            mem_gb=80 if kind == "checkpoint" else 4,
+            timeout_min=15,
+            cwd=ctx.cand.path,
+            validate=_round_golden_valid,
+        )
+        results.update(ctx.exe.run_cells([cell]))
+        if _failed_cells(results):
+            break
+    reasons = _failed_cells(results)
+    numbers = {
+        key: json.loads(result.evidence.read_text())["sha256"]
+        for key, result in results.items()
+        if result.ok and result.evidence
+    }
+    return _finish(ctx, StageResult("round-golden", not reasons, reasons, numbers))
+
+
 def stage_lane_bandwidth(ctx: Ctx) -> StageResult:
     """Candidate-only in-graph projection bandwidth; no end-to-end speed verdict."""
     name = "lane_bandwidth"
@@ -3248,6 +3307,7 @@ STAGE_FUNCS = {
     "phaseb-identity": stage_phaseb,
     "phaseb-speed": lambda ctx: stage_phaseb(ctx, speed=True),
     "lane_bandwidth": stage_lane_bandwidth,
+    "round-golden": stage_round_golden,
     "ssd_ttft": stage_ssd_ttft,
     "ssd_ttft_profile": lambda ctx: stage_ttft_profile(ctx, ssd=True),
     "ttft_profile": stage_ttft_profile,

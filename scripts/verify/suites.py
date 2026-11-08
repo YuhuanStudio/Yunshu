@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 STAGES = (
+    "round-golden",
     "preflight",
     "console",
     "deployment",
@@ -49,6 +50,7 @@ LADDER = tuple(
     for s in STAGES
     if s
     not in (
+        "round-golden",
         "longqa",
         "conc",
         "phaseb-identity",
@@ -83,6 +85,7 @@ LADDER = tuple(
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
+    "round-golden": {"stages": ["round-golden"]},
     "phaseb2": {
         "stages": ["phaseb-identity", "phaseb-speed"],
         "phaseb_ctx_chars": [16000, 85000],
