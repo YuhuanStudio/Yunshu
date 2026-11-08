@@ -66,7 +66,10 @@ class _Block(nn.Module):
             cache, "left_padding"
         ):  # batch cache, one token a row: hide the left padding
             ok = mx.arange(k.shape[2])[None, :] >= cache.left_padding[:, None]
-            mask = mx.where(ok, 0.0, -1e9)[:, None, None, :]
+            causal = mx.arange(k.shape[2])[None, :] <= (
+                mx.arange(T)[:, None] + k.shape[2] - T
+            )
+            mask = mx.where(ok[:, None, :] & causal[None], 0.0, -1e9)[:, None]
         elif T > 1:
             rows = mx.arange(T)[:, None] + offset
             cols = mx.arange(offset + T)[None, :]
@@ -709,3 +712,262 @@ def test_prompt_scoring_chunked_equals_full_forward_bits():
     assert [e["logprob"] for e in scores[0][1:]] == [
         float(lp[i, ids[i + 1]]) for i in range(len(ids) - 1)
     ]
+
+
+class _ForcedGuide:
+    """A token grammar with singleton masks, including checkpointed lookahead."""
+
+    from yunshu_engine.constrained_spec import ConstraintGuide
+
+    plan = ConstraintGuide.plan
+    words = (VOCAB + 31) // 32
+    constrained = True
+
+    def __init__(self, tokens, vocab=VOCAB):
+        self.words = (vocab + 31) // 32
+        self.tokens = tokens
+        self.at = 0
+        self.fault = None
+
+    def arms(self, token):
+        return False
+
+    def checkpoint(self):
+        return self.at
+
+    def restore(self, cp):
+        self.at = cp
+
+    def mask(self):
+        import numpy as np
+
+        mask = np.zeros(self.words, dtype=np.int32)
+        token = self.tokens[min(self.at, len(self.tokens) - 1)]
+        mask[token // 32] = 1 << (token % 32)
+        return mask
+
+    def feed(self, token):
+        assert token == self.tokens[min(self.at, len(self.tokens) - 1)]
+        self.at += 1
+        return True
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("batched", [False, True])
+def test_forced_run_matches_serial_tokens(monkeypatch, enabled, batched):
+    from yunshu_engine import settings
+
+    original = settings.get
+    monkeypatch.setattr(
+        settings,
+        "get",
+        lambda key, *a, **kw: (
+            enabled if key == "YUNSHU_JUMP_FORWARD" else original(key, *a, **kw)
+        ),
+    )
+    lm = TinyLM()
+    scripts = (
+        [list(range(7, 22)), list(range(11, 18))] if batched else [list(range(7, 22))]
+    )
+    guides = [_ForcedGuide(s) for s in scripts]
+    reqs = [
+        request(lm, [1, 2, 3 + i], len(s), handle=i, guide=g)
+        for i, (s, g) in enumerate(zip(scripts, guides, strict=True))
+    ]
+    out = run(make(lm), reqs)
+    for i, script in enumerate(scripts):
+        assert [e.token for e in out[i]] == script
+        assert guides[i].at == len(script)
+        assert out[i][-1].finish == "length"
+    decode = [c for c in LOG if c["keep"] is None and c["n"] is None]
+    assert any(c["T"] > 1 for c in decode) == enabled
+
+
+def test_forced_plan_and_cancel_restore_guide(monkeypatch):
+    from yunshu_engine import settings
+
+    original = settings.get
+    monkeypatch.setattr(
+        settings,
+        "get",
+        lambda key, *a, **kw: (
+            True if key == "YUNSHU_JUMP_FORWARD" else original(key, *a, **kw)
+        ),
+    )
+    lm = TinyLM()
+    guide = _ForcedGuide(list(range(7, 25)))
+    d = make(lm)
+    handle = object()
+    d.add(request(lm, [1, 2, 3], 18, handle=handle, guide=guide))
+    while not d.batch.rows:
+        d.step()
+    row = d.batch.rows[0]
+    at = guide.at
+    assert len(d._forced_window(row, 8)) > 1
+    assert guide.at == at
+    d.remove(handle)
+    assert guide.at == at
+    assert not d.busy()
+
+
+@pytest.mark.parametrize("used", [[3, 1], [2, 1]])
+def test_generic_windows_keep_each_rows_cache_and_causal_mask(used):
+    import copy
+    from types import SimpleNamespace
+
+    lm = TinyLM()
+    rows, refs = [], []
+    for prompt in ([1, 2, 3], [4, 5]):
+        cache = generic.new_cache(lm)
+        lm(mx.array([prompt]), cache=cache)
+        refs.append(copy.deepcopy(cache))
+        rows.append(
+            SimpleNamespace(cache=cache, state=generic.RowState(), n=len(prompt))
+        )
+    batch = generic.GenericBatch(lm)
+    batch.join(rows)
+    windows = [[7, 8, 9], [10]]
+    got = batch.forward([3, 1], mx.array([7, 8, 9, 10]))
+    expected = []
+    for window, cache, keep in zip(windows, refs, used, strict=True):
+        check = copy.deepcopy(cache)
+        expected.extend(lm(mx.array([[t]]), cache=check).logits[0, 0] for t in window)
+        for token in window[:keep]:
+            lm(mx.array([[token]]), cache=cache)
+    assert mx.allclose(got, mx.stack(expected), atol=1e-5).item()
+    batch.commit(used)
+    nxt = batch.forward([1, 1], mx.array([11, 12]))
+    ref = mx.concatenate(
+        [
+            lm(mx.array([[t]]), cache=c).logits[:, 0]
+            for t, c in zip([11, 12], refs, strict=True)
+        ]
+    )
+    assert mx.allclose(nxt, ref, atol=1e-5).item()
+
+
+@pytest.mark.parametrize("boundary", ["stop", "arm", "fault"])
+def test_forced_planning_stops_at_boundaries_and_restores(boundary):
+    from yunshu_engine.constrained_spec import forced_tokens
+
+    guide = _ForcedGuide(list(range(7, 22)))
+    if boundary == "arm":
+        guide.arms = lambda t: t == 9
+    elif boundary == "fault":
+        mask = guide.mask
+
+        def failing_mask():
+            if guide.at == 3:
+                raise RuntimeError("cancelled during lookahead")
+            return mask()
+
+        guide.mask = failing_mask
+    if boundary == "fault":
+        with pytest.raises(RuntimeError, match="cancelled"):
+            forced_tokens(guide, 10)
+    else:
+        assert forced_tokens(guide, 10, {9} if boundary == "stop" else ()) == [7, 8, 9]
+    assert guide.at == 0
+
+
+def test_forced_plain_rows_apply_processors_at_each_position(monkeypatch):
+    from yunshu_engine import settings
+    from yunshu_engine.vlm_batch_runner import LogitBiasProcessor
+
+    # A static logit bias is windowable but does not make an ordinary row draft.
+
+    original = settings.get
+    monkeypatch.setattr(
+        settings,
+        "get",
+        lambda key, *a, **kw: (
+            True if key == "YUNSHU_JUMP_FORWARD" else original(key, *a, **kw)
+        ),
+    )
+    lm = TinyLM()
+    script = list(range(7, 22))
+    processor = LogitBiasProcessor({7: 1.0})
+    out = run(
+        make(lm),
+        [
+            request(
+                lm,
+                [1, 2, 3],
+                len(script),
+                handle=0,
+                guide=_ForcedGuide(script),
+                processors=[processor],
+            )
+        ],
+    )
+    assert [e.token for e in out[0]] == script
+    assert any(c["T"] > 1 and c["n"] is None for c in LOG)
+
+
+def test_single_forced_token_verifies_the_following_choice(monkeypatch):
+    from yunshu_engine import settings
+
+    class BranchGuide(_ForcedGuide):
+        def mask(self):
+            mask = super().mask()
+            # Alternate singleton and real branch positions. A forced-token window
+            # must read the model's next choice through the guide's planned mask.
+            if self.at % 2:
+                token = self.tokens[min(self.at, len(self.tokens) - 1)] + 20
+                mask[token // 32] |= 1 << (token % 32)
+            return mask
+
+        def feed(self, token):
+            assert (int(self.mask()[token // 32]) >> (token % 32)) & 1
+            self.at += 1
+            return True
+
+    original = settings.get
+    results, calls = [], []
+    for enabled in (False, True):
+        monkeypatch.setattr(
+            settings,
+            "get",
+            lambda key, *a, **kw: (
+                enabled if key == "YUNSHU_JUMP_FORWARD" else original(key, *a, **kw)
+            ),
+        )
+        LOG.clear()
+        lm = TinyLM()
+        guide = BranchGuide(list(range(7, 25)))
+        out = run(make(lm), [request(lm, [1, 2, 3], 18, handle=0, guide=guide)])
+        results.append([e.token for e in out[0]])
+        calls.append(len(LOG))
+        assert guide.at == 18
+    assert results[0] == results[1]
+    assert calls[1] < calls[0]
+
+
+@pytest.mark.parametrize("boundary", ["stop", "arm"])
+def test_forced_windows_emit_boundary_as_final_draw(monkeypatch, boundary):
+    from yunshu_engine import settings
+
+    original = settings.get
+    monkeypatch.setattr(
+        settings,
+        "get",
+        lambda key, *a, **kw: (
+            True if key == "YUNSHU_JUMP_FORWARD" else original(key, *a, **kw)
+        ),
+    )
+    lm = TinyLM()
+    guide = _ForcedGuide(list(range(7, 25)))
+    if boundary == "arm":
+        guide.arms = lambda t: t == 12
+    d = make(lm, stop_tokens={12} if boundary == "stop" else set())
+    handle = object()
+    d.add(request(lm, [1, 2, 3], 18, handle=handle, guide=guide))
+    emitted = []
+    while d.busy():
+        events = d.step()
+        values = [e.token for e in events]
+        if 12 in values:
+            assert values[-1] == 12
+        emitted.extend(values)
+    assert emitted == list(range(7, 13 if boundary == "stop" else 25))
+    assert guide.at == len(emitted)

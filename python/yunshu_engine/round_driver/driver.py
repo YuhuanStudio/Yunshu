@@ -336,6 +336,7 @@ class _Row:
     generated: int = 0
     drafts: list = field(default_factory=list)  # host ints of this step's window
     draft_dev: Any = None  # the next window's drafts: a (maybe lazy) int32 array
+    forced_windows: int = 0
     nd: int = 0  # how many drafts ``draft_dev`` holds
     rates: list = field(default_factory=list)
     key: Any = None
@@ -1675,6 +1676,10 @@ class RoundDriver:
         # the device, so this step's graph is built while the chain runs.
         lens, parts, used_drafts, wins = [], [], [], []
         for r in rows:
+            forced = self._forced_window(r, MAX_DECODE_TOKENS)
+            if forced:
+                r.draft_dev = mx.array(forced, dtype=mx.int32)
+                r.nd = len(forced)
             use = r.nd if r.draft_dev is not None and not r.force else 0
             parts.append(mx.array([r.pending], dtype=mx.int32))
             if use:
@@ -1776,6 +1781,51 @@ class RoundDriver:
                 self._draft([r for _, _, r in alive], heads, first)
         self.steps += 1
         return events
+
+    def _forced_window(self, row: _Row, width: int) -> list[int]:
+        """Plan a forced decode window without advancing the live guide.
+
+        Feed the pending token and the forced prefix, then verify all target draws,
+        including the bonus after that prefix. Planning stops before stop/guide-entry
+        tokens, so a boundary can only be the final draw. Thinking-budget rows stay
+        serial. Generic window rounding remains opt-in with the existing False default.
+        """
+        from .. import settings
+        from ..constrained_spec import forced_tokens
+
+        req = row.req
+        if (
+            not settings.get("YUNSHU_JUMP_FORWARD")
+            or req.guide is None
+            or row.force
+            or req.budget is not None
+            or (req.processors and not windowable(req.processors))
+            or (req.sampling is not None and row.keyed is None)
+        ):
+            return []
+        limit = min(width - 1, req.max_tokens - row.generated - 1)
+        try:
+            forced = forced_tokens(
+                req.guide, limit, self.stop_tokens, before_boundary=True
+            )
+        except GrammarDeadEndError as exc:
+            req.guide.fault = exc
+            return []
+        if not forced:
+            return []
+        # A formerly plain row now applies processors to every window position. Its
+        # penalty already holds the serial committed counts; _emit commits only fed tokens.
+        if generic_processors(req.processors, True, bool(req.logprobs)):
+            row.generic = True
+            row.penalty = next(
+                (p for p in req.processors if hasattr(p, "window_row")), None
+            )
+        row.forced_windows += 1
+        if row.forced_windows == 1:
+            logger.info(
+                "Round driver forced window engaged: %d tokens", len(forced) + 1
+            )
+        return forced
 
     def _draft(
         self,

@@ -170,8 +170,11 @@ def native_chain_forward(lm, tokens, caches):
         raise ValueError("native chain requires matching nonempty tokens and caches")
     if len({id(c) for c in caches}) != len(caches):
         raise ValueError("native chain requires independent caches")
-    if any(t.ndim != 2 or t.shape[0] != 1 or not 1 <= t.shape[1] <= 2 for t in tokens):
-        raise ValueError("native chain supports one or two positions per row")
+    if any(
+        t.ndim != 2 or t.shape[0] != 1 or not 1 <= t.shape[1] <= DRIVER_MAX_ROWS
+        for t in tokens
+    ):
+        raise ValueError("native chain supports 1..DRIVER_MAX_ROWS positions per row")
     if sum(t.shape[1] for t in tokens) > DRIVER_MAX_ROWS:
         raise ValueError("native chain exceeds the shared node budget")
 

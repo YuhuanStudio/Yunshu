@@ -2973,6 +2973,51 @@ def _lane_bandwidth_valid(path: Path) -> tuple[bool, str]:
     return True, ""
 
 
+def stage_jump_forward(ctx: Ctx) -> StageResult:
+    """Paired JSON-schema identity and client decode rate; generic rounding stays opt-in."""
+    from scripts.research.probe_jump_forward import validate_records
+
+    name = "jump_forward"
+    reps = max(1, int(ctx.suite.get("reps", 3)))
+    cell = Cell(
+        name,
+        "paired",
+        [
+            ctx.py,
+            str(ctx.cand.path / "scripts/research/probe_jump_forward.py"),
+            "--base-src",
+            str(ctx.base.path / "python"),
+            "--cand-src",
+            str(ctx.cand.path / "python"),
+            "--model",
+            ctx.model,
+            "--reps",
+            str(reps),
+            "--out",
+            "{out}",
+        ],
+        quiet=True,
+        mem_gb=ctx.mem_gb,
+        timeout_min=30,
+        cwd=ctx.cand.path,
+        validate=lambda path: validate_records(read_jsonl(path), reps),
+    )
+    results = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(results)
+    result = results.get("paired")
+    numbers = {}
+    if result and result.ok and result.evidence:
+        rows = read_jsonl(result.evidence)
+        valid, reason = validate_records(rows, reps)
+        if not valid:
+            reasons.append(reason)
+        else:
+            numbers = rows[-1]
+    else:
+        reasons.append("missing paired JSON-schema evidence")
+    return _finish(ctx, StageResult(name, not reasons, reasons, numbers))
+
+
 def stage_lane_bandwidth(ctx: Ctx) -> StageResult:
     """Candidate-only in-graph projection bandwidth; no end-to-end speed verdict."""
     name = "lane_bandwidth"
@@ -3248,6 +3293,7 @@ STAGE_FUNCS = {
     "phaseb-identity": stage_phaseb,
     "phaseb-speed": lambda ctx: stage_phaseb(ctx, speed=True),
     "lane_bandwidth": stage_lane_bandwidth,
+    "jump_forward": stage_jump_forward,
     "ssd_ttft": stage_ssd_ttft,
     "ssd_ttft_profile": lambda ctx: stage_ttft_profile(ctx, ssd=True),
     "ttft_profile": stage_ttft_profile,

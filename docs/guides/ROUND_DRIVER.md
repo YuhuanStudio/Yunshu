@@ -202,3 +202,17 @@ With a bounded-context DFlash2 drafter, the existing driver captures target laye
 Invariant tool-call guides draft in free text, cut a round at grammar entry, and use masked one-token steps in a constrained body. Logprob reporting uses float32 readout. Other processors, media and int8 KV keep the driver's existing handling for them. Flash-Next native MTP admission is unfinished: `verify.native_chain_forward` packs HC, target projections, router and routed/shared experts, with native per-row QSA/GDN/PLE transactions. Its small-array parity checks include QSA boundaries, PLE history and partial commit/abort; these are not a real-checkpoint or serving verdict. DFlash target APC checkpoints share the driver's target-only layout; proposal rings are reconstructed from the available suffix after a cache hit. The experiment remains off by default. No 27B speed or merge verdict is claimed here.
 
 Verification: `yv ab --base <sha> --cand <sha> --suite phaseb-pilot --label phaseb-pilot`; then `phaseb-identity` (4K/32K matched solo, burst2/4, stagger, greedy/seeded, spec on/off) and `phaseb-speed` (three interleaved quiet repetitions, also agent defaults). Standard long, APC and serve-27b gates remain required.
+
+`YUNSHU_JUMP_FORWARD=1` batches a guide's singleton token continuation into one
+target window on packed Qwen3.5, Flash-Next and generic rows. Planning restores
+the guide before emission; only emitted tokens advance it. Runs stop at grammar
+entry, stop-token and length boundaries. The default remains off: generic upstream
+T>1 forwards may round differently from repeated T=1 forwards. Thinking-budget
+rows and processors without a window contract retain single-token decoding.
+
+`yv ab --base BASE --cand CAND --suite jump_forward` measures the existing
+JSON-schema family workload with three interleaved option-off/option-on pairs,
+requiring output digest/token-count equality and schema validation. A second
+long-literal schema requires forced-window engagement; the ordinary schema may
+have no singleton runs. It reports client decode tok/s; it is separate from the unconstrained
+`identity` suite and the GPU bit-equality tests.
