@@ -2990,6 +2990,8 @@ def stage_round_golden(ctx: Ctx) -> StageResult:
     layer = ctx.env.get("M0_LAYER", "qwen3_5")
     if layer not in LAYERS:
         return _finish(ctx, StageResult("round-golden", False, ["unknown M0_LAYER"]))
+    scratch = ctx.run.path / "round-golden-home"
+    scratch.mkdir(parents=True, exist_ok=True)
     results = {}
     for kind in ("tiny", "checkpoint"):
         if (
@@ -2998,6 +3000,9 @@ def stage_round_golden(ctx: Ctx) -> StageResult:
             continue
         cmd = [
             "env",
+            f"HOME={scratch}",
+            f"XDG_CACHE_HOME={scratch / 'cache'}",
+            "PYTHONDONTWRITEBYTECODE=1",
             f"PYTHONPATH={ctx.cand.path / 'python'}:{ctx.cand.path}",
             ctx.py,
             str(ctx.cand.path / "scripts/research/round_driver_golden.py"),
@@ -3016,11 +3021,17 @@ def stage_round_golden(ctx: Ctx) -> StageResult:
             cmd,
             quiet=False,
             mem_gb=80 if kind == "checkpoint" else 4,
-            timeout_min=15,
+            timeout_min=5 if kind == "tiny" else 15,
             cwd=ctx.cand.path,
             validate=_round_golden_valid,
         )
-        results.update(ctx.exe.run_cells([cell]))
+        result = ctx.exe.run_cells([cell])
+        if kind not in result:
+            return _finish(
+                ctx,
+                StageResult("round-golden", False, [f"missing {kind} cell evidence"]),
+            )
+        results.update(result)
         if _failed_cells(results):
             break
     reasons = _failed_cells(results)

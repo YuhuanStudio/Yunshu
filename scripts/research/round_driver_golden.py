@@ -76,27 +76,50 @@ def validate(receipt):
         raise ValueError("missing layer/device")
     if set(payload["globals"]) != set(GLOBAL_STATES):
         raise ValueError("missing module-global assertions")
-    cells = payload["cells"]
-    expected = {
-        (mode, schedule)
-        for mode in ("greedy", "seeded")
-        for schedule in ("solo", "burst", "stagger", "cancel", "media", "repeat")
-    }
-    if {(c["mode"], c["schedule"]) for c in cells} != expected or len(cells) != len(
-        expected
-    ):
-        raise ValueError("incomplete scenario matrix")
-    for cell in cells:
-        if not cell["rows"] or any(
-            len(row) != payload["tokens"] for row in cell["rows"]
+    if type(payload["tokens"]) is not int or payload["tokens"] < 4:
+        raise ValueError("invalid token budget")
+    caps = payload["capabilities"]
+
+    def matrix(cells, schedules, count):
+        expected = {(m, s) for m in ("greedy", "seeded") for s in schedules}
+        if {(c["mode"], c["schedule"]) for c in cells} != expected or len(cells) != len(
+            expected
         ):
-            raise ValueError("incomplete token/logprob evidence")
-        for row in cell["rows"]:
-            for event in row:
-                if type(event["token"]) is not int or not math.isfinite(
-                    float.fromhex(event["logprob"])
-                ):
-                    raise ValueError("invalid token/logprob")
+            raise ValueError("incomplete scenario matrix")
+        for cell in cells:
+            n = 2 if cell["schedule"] == "cancel" else count
+            if len(cell["rows"]) != n or any(
+                len(row) != payload["tokens"] for row in cell["rows"]
+            ):
+                raise ValueError("incomplete token/logprob evidence")
+            for row in cell["rows"]:
+                for event in row:
+                    if type(event["token"]) is not int or not math.isfinite(
+                        float.fromhex(event["logprob"])
+                    ):
+                        raise ValueError("invalid token/logprob")
+
+    matrix(
+        payload["cells"], ("solo", "burst", "stagger", "cancel", "media", "repeat"), 3
+    )
+    matrix(
+        payload["spec_cells"], ("solo", "burst", "stagger") if caps["spec"] else (), 3
+    )
+    matrix(payload["cache_cells"], ("cold", "hit") if caps["apc"] else (), 1)
+    for cell in payload["cache_cells"]:
+        hits = cell["hits"]
+        if len(hits) != 1 or (
+            hits[0] != 0 if cell["schedule"] == "cold" else hits[0] <= 0
+        ):
+            raise ValueError("missing APC hit/cold evidence")
+        if (
+            caps["replay"]
+            and cell["schedule"] == "hit"
+            and cell.get("replayed", 0) <= 0
+        ):
+            raise ValueError("missing replay evidence")
+    if not caps["apc"] and not caps.get("apc_unavailable_reason"):
+        raise ValueError("APC unavailability needs a reason")
     return payload
 
 
@@ -211,7 +234,7 @@ def build(layer, model):
     )
 
 
-def capture(layer, model=None, tokens=8, device="gpu"):
+def _capture(layer, model=None, tokens=8, device="gpu"):
     import mlx.core as mx
 
     from yunshu_engine.round_driver.driver import Request, RoundDriver
@@ -220,9 +243,10 @@ def capture(layer, model=None, tokens=8, device="gpu"):
     mx.set_default_device(mx.cpu if device == "cpu" else mx.gpu)
     wrapper, lm, head, prompts = build(layer, model)
     baseline = global_state()
+    execution = []
     assert not baseline["gdn_prefill._PREFILL"] and not baseline["gdn_prefill._TAIL"]
 
-    def run(indices, mode, schedule, *, spec=False):
+    def run(indices, mode, schedule, *, spec=False, apc=None, hits=None):
         d = RoundDriver(
             wrapper,
             generic_layer=layer == "generic",
@@ -230,6 +254,7 @@ def capture(layer, model=None, tokens=8, device="gpu"):
             chunk=512,
             drafter=head if spec else None,
             max_draft=1,
+            apc=apc,
         )
         pending = list(indices)
         out = {i: [] for i in indices}
@@ -252,7 +277,7 @@ def capture(layer, model=None, tokens=8, device="gpu"):
                     if mode == "seeded"
                     else None
                 )
-                d.add(
+                hit = d.add(
                     Request(
                         prompts[i],
                         tokens,
@@ -263,6 +288,8 @@ def capture(layer, model=None, tokens=8, device="gpu"):
                         **kw,
                     )
                 )
+                if hits is not None:
+                    hits.append(hit)
             for event in d.step():
                 if event.token is not None:
                     out[event.handle].append(event_record(event))
@@ -274,10 +301,24 @@ def capture(layer, model=None, tokens=8, device="gpu"):
         assert not d.rows and not d.batch.rows
         if spec:
             assert d.drafted > 0, "spec requested but no tokens drafted"
+        if schedule == "cancel":
+            assert 0 < len(out[indices[-1]]) < tokens, "cancellation was not exercised"
+        execution.append(
+            dict(
+                indices=indices,
+                mode=mode,
+                schedule=schedule,
+                spec=spec,
+                steps=steps,
+                drafted=d.drafted,
+                accepted=d.accepted,
+            )
+        )
         return [out[i] for i in indices if schedule != "cancel" or i != indices[-1]]
 
     cells = []
     spec_cells = []
+    cache_cells = []
     for mode in ("greedy", "seeded"):
         solo = [run([i], mode, "solo")[0] for i in range(3)]
         for schedule in ("solo", "burst", "stagger", "cancel", "media", "repeat"):
@@ -295,6 +336,8 @@ def capture(layer, model=None, tokens=8, device="gpu"):
             assert [[e["token"] for e in r] for r in rows] == [
                 [e["token"] for e in r] for r in solo[: len(rows)]
             ], (mode, schedule)
+            if layer != "generic" or schedule == "repeat":
+                assert rows == solo[: len(rows)], (mode, schedule, "logprobs")
             cells.append(dict(mode=mode, schedule=schedule, rows=rows))
         if head is not None:
             for schedule in ("solo", "burst", "stagger"):
@@ -306,12 +349,52 @@ def capture(layer, model=None, tokens=8, device="gpu"):
                 assert [[e["token"] for e in r] for r in rows] == [
                     [e["token"] for e in r] for r in solo
                 ], (mode, schedule, "spec")
+                assert rows == solo, (mode, schedule, "spec-logprobs")
                 spec_cells.append(dict(mode=mode, schedule=schedule, rows=rows))
+        if layer != "generic":
+            # Use the same APC-enabled cold span plan as the hit: checkpoint seams
+            # participate in prefill arithmetic even when lookup found nothing.
+            from mlx_vlm.apc import APCManager
+
+            from yunshu_engine.round_driver import replay
+
+            apc = APCManager(
+                num_blocks=64,
+                block_size=16,
+                overrides={
+                    "memory_max_gb": 0.1,
+                    "checkpoint_entries": 4,
+                    "checkpoint_interval_tokens": 512,
+                },
+            )
+            replay.clear()
+            # The existing generic fixture has two prompts below the APC floor.
+            cache_index = 1
+            cold_hits, warm_hits = [], []
+            cold = run([cache_index], mode, "cold", apc=apc, hits=cold_hits)
+            warm = run([cache_index], mode, "hit", apc=apc, hits=warm_hits)
+            assert cold_hits == [0] and warm_hits[0] > 0, (cold_hits, warm_hits)
+            assert [[e["token"] for e in r] for r in cold] == [
+                [e["token"] for e in r] for r in warm
+            ]
+            assert cold == warm, (mode, "APC logprobs")
+            cache_cells.extend(
+                [
+                    dict(mode=mode, schedule="cold", rows=cold, hits=cold_hits),
+                    dict(mode=mode, schedule="hit", rows=warm, hits=warm_hits),
+                ]
+            )
+            replayed = replay.stats()["replayed"]
+            if layer != "generic":
+                assert replayed > 0, "APC hit did not exercise tail replay"
+            cache_cells[-1]["replayed"] = replayed
+            replay.clear()
     import importlib.metadata
 
     payload = dict(
         layer=layer,
-        model=str(model or "tiny-seed-23"),
+        model=str(model or f"tiny:{layer}"),
+        execution=execution,
         device=str(mx.default_device()),
         hardware=mx.device_info() if device == "gpu" else {"device": "cpu"},
         versions={p: importlib.metadata.version(p) for p in ("mlx", "mlx-vlm")},
@@ -319,10 +402,14 @@ def capture(layer, model=None, tokens=8, device="gpu"):
         tokens=tokens,
         cells=cells,
         spec_cells=spec_cells,
+        cache_cells=cache_cells,
         capabilities={
             "spec": head is not None,
-            "apc": False,
-            "replay": False,
+            "apc": layer != "generic",
+            "apc_unavailable_reason": "stock dense generic selects block strategy; current driver admits checkpoints only"
+            if layer == "generic"
+            else None,
+            "replay": layer != "generic",
             "int8": False,
             "media": "embedding-equivalence",
         },
@@ -330,6 +417,20 @@ def capture(layer, model=None, tokens=8, device="gpu"):
     receipt = dict(complete=True, payload=payload, sha256=digest(payload))
     validate(receipt)
     return receipt
+
+
+def capture(layer, model=None, tokens=8, device="gpu"):
+    import os
+
+    if device == "gpu" and not os.environ.get("GPUQ_JOB_ID"):
+        raise RuntimeError("GPU conformance requires gpuq admission")
+    import mlx.core as mx
+
+    previous = mx.default_device()
+    try:
+        return _capture(layer, model, tokens, device)
+    finally:
+        mx.set_default_device(previous)
 
 
 def main():
@@ -351,7 +452,7 @@ def main():
     if a.reference:
         compare(json.loads(a.reference.read_text()), receipt)
     a.out.parent.mkdir(parents=True, exist_ok=True)
-    a.out.write_text(json.dumps(receipt, sort_keys=True, indent=2) + "\n")
+    a.out.write_text(json.dumps(receipt, sort_keys=True) + "\n")
     print(json.dumps(dict(complete=True, sha256=receipt["sha256"])))
 
 
