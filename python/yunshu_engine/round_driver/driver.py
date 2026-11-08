@@ -850,15 +850,6 @@ class RoundDriver:
             apc.store_checkpoint(row.req.ids[:end], caches, extra_hash=row.salt)
             if defer and apc not in self._deferred_apcs:
                 self._deferred_apcs.append(apc)
-            if defer and end < max(row.ckpts, default=end):
-                # A checkpoint before the row's last one starts its copy now, queued behind this
-                # atom while the sources are live: deferred to the flush, the 8192 checkpoint of an
-                # 8203-token Flash-Next prompt cost 118-128 ms in the first decode window (queued
-                # GPU work 0.0 ms; the same copy stored synchronously ~8 ms). Same arrays and bits;
-                # only the last checkpoint stays off the first-token path.
-                pending = getattr(apc, "__dict__", {}).get("_deferred_checkpoints") or []
-                if pending and len(pending[-1][0]) == end:
-                    mx.async_eval(pending[-1][3])
         except Exception:
             logger.warning("APC checkpoint store failed", exc_info=True)
         finally:
