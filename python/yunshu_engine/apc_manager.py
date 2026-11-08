@@ -1458,10 +1458,15 @@ class _Coordinator(APCCoordinator):
                     share(tokens, extra_hash)
             return ok
         targets: list[Any] = []
-        snapshot = [
-            clone_cache_entry(c, min_capacity_tokens=None, eval_targets=targets)
-            for c in prompt_cache
-        ]
+        snapshot = []
+        layout = []  # DIAG 2026-11-08: (cache class, target count) per entry
+        for c in prompt_cache:
+            n0 = len(targets)
+            snapshot.append(
+                clone_cache_entry(c, min_capacity_tokens=None, eval_targets=targets)
+            )
+            layout.append((type(c).__name__, len(targets) - n0))
+        self.__dict__.setdefault("_diag_layout", {})[len(token_ids)] = layout
         if any(c is None for c in snapshot):
             ok = bool(
                 super().store_checkpoint(
@@ -1531,6 +1536,31 @@ class _Coordinator(APCCoordinator):
         if share_lazy is not None:
             # retained anchors give up their own rows before the new copy is made
             views = views + share_lazy(longest[0], longest[1], longest[2])
+        # DIAG 2026-11-08 (revert after): evaluate checkpoint by checkpoint and cache class by class
+        diag = []
+        layouts = self.__dict__.pop("_diag_layout", {})
+        for entry in pending:
+            layout = layouts.get(len(entry[0])) or [("?", len(entry[3]))]
+            per, i = {}, 0
+            for name, n in layout:
+                group = entry[3][i : i + n]
+                i += n
+                if not group:
+                    continue
+                ts = time.perf_counter()
+                mx.eval(group)
+                k = per.setdefault(name, [0.0, 0, 0])
+                k[0] += (time.perf_counter() - ts) * 1e3
+                k[1] += sum(int(t.nbytes) for t in group)
+                k[2] += len(group)
+            diag.append(
+                f"{len(entry[0])}t: "
+                + ", ".join(
+                    f"{n} {v[0]:.1f} ms/{v[1] >> 20} MiB/{v[2]} arrays"
+                    for n, v in per.items()
+                )
+            )
+        logger.info("APC flush diag: %s", " | ".join(diag))
         materialize([entry[3] for entry in pending])
         t_mat = time.perf_counter()
         if views:
