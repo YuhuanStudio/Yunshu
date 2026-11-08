@@ -1138,30 +1138,41 @@ class VLMBatchRunner:
                 media["rope_delta"],
             )
         t_add = time.perf_counter()
-        hit = driver.add(
-            Request(
-                **media,
-                ids=job.ids,
-                max_tokens=job.max_tokens,
-                sampling=job.sampling,
-                # the driver reads logprobs out in fp32 itself (``Request.logprobs``)
-                processors=[
-                    p
-                    for p in (job.processors or [])
-                    if not isinstance(p, Fp32LogitsProcessor)
-                ],
-                logprobs=job.logprobs,
-                top_logprobs=job.top_logprobs,
-                draft=job.allow_draft,
-                guide=job.guide if self._driver_guide(job) else None,
-                budget=job.budget,
-                handle=job,
-                extra_hash=self._driver_extra_hash(job),
-                use_apc=use_apc,
-                cache_store=job.cache_store,
-                cache_plan=job.cache_plan,
+        # The request id reaches the cache events only through the APC's id queue for these
+        # ids (``checkpoint_lengths`` pops it while the row plans its restore). Only a row that
+        # plans checkpoints queues one, and the queue entry is dropped again after ``add``.
+        request_id = job.stats.request_id
+        linked = use_apc and driver.apc is not None and self.apc_manager is not None
+        if linked:
+            self.apc_manager.register_console_request(job.ids, request_id)
+        try:
+            hit = driver.add(
+                Request(
+                    **media,
+                    ids=job.ids,
+                    max_tokens=job.max_tokens,
+                    sampling=job.sampling,
+                    # the driver reads logprobs out in fp32 itself (``Request.logprobs``)
+                    processors=[
+                        p
+                        for p in (job.processors or [])
+                        if not isinstance(p, Fp32LogitsProcessor)
+                    ],
+                    logprobs=job.logprobs,
+                    top_logprobs=job.top_logprobs,
+                    draft=job.allow_draft,
+                    guide=job.guide if self._driver_guide(job) else None,
+                    budget=job.budget,
+                    handle=job,
+                    extra_hash=self._driver_extra_hash(job),
+                    use_apc=use_apc,
+                    cache_store=job.cache_store,
+                    cache_plan=job.cache_plan,
+                )
             )
-        )
+        finally:
+            if linked:
+                self.apc_manager.release_console_request(job.ids, request_id)
         hit_stages.add("add", time.perf_counter() - t_add)
         hit_stages.mark("add_end")
         self._vocab_owner = driver

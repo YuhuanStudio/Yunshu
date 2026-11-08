@@ -3301,6 +3301,18 @@ class YunshuAPCManager(APCManager):
         self._last_shared_keys.clear()
         self._console_requests.clear()
 
+    def register_console_request(self, ids, request_id) -> None:
+        """Link the next checkpoint plan for ``ids`` to ``request_id`` (round driver admission)."""
+        from .cache_observation import register_console_request
+
+        register_console_request(self._console_requests, ids, request_id)
+
+    def release_console_request(self, ids, request_id) -> None:
+        """Drop a registration the plan did not consume (admission failed or never planned)."""
+        from .cache_observation import release_console_request
+
+        release_console_request(self._console_requests, ids, request_id)
+
     def console_snapshot(self) -> dict:
         from mlx_vlm.apc import _cache_nbytes
 
