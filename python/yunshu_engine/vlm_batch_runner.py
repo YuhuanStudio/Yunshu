@@ -2032,6 +2032,9 @@ class VLMBatchRunner:
             # decode one row while admitting another, whose first token has not
             # been delivered yet; that admission keeps synchronous stores.
             apc.defer_checkpoint_stores = len(group.jobs) == 1
+        from . import fn_ttft
+
+        tm = fn_ttft.Timer()
         early_first = None
         if group.spec:
             from .spec_release import snapshot_caches
@@ -2039,6 +2042,7 @@ class VLMBatchRunner:
             group.last_caches = snapshot_caches(group.gen, list(group.jobs))
         try:
             early_first = self._emit_ready_first(group)
+            tm.mark("submit")
             if decode_only:
                 # Upstream returns after decode once capacity is reached. Zero
                 # capacity yields without starting/resuming any prefill atom.
@@ -2050,6 +2054,8 @@ class VLMBatchRunner:
                     group.gen.completion_batch_size = capacity
             else:
                 prompt_progress, responses = self._next_preemptible(group)
+            tm.mark("wait")
+            tm.segs = 1
             if group.spec and _serial_rows(job):
                 from .constrained_spec import finish_serial_prefill
 
@@ -2161,6 +2167,18 @@ class VLMBatchRunner:
         # copies and admission run on this same serialized MLX thread.
         if responses and flush is not None:
             flush()
+        tm.mark("emit")
+        if group.spec:
+            for job in group.jobs.values():
+                acc = getattr(job, "fn_tm", None)
+                if acc is None:
+                    acc = job.fn_tm = fn_ttft.Timer()
+                    acc.t0 = tm.t0
+                if job.stats.generated <= 1 and not getattr(job, "fn_tm_done", False):
+                    acc.merge(tm)
+                    if job.stats.t_first:
+                        job.fn_tm_done = True
+                        acc.log("lane", len(job.ids), job.stats.cached_tokens)
         # Completion/usage must observe publication even for a one-token reply.
         # The first token was already emitted, so this keeps stores off TTFT.
         for uid, reason in finished:
