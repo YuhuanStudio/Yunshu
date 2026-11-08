@@ -204,6 +204,27 @@ def _restore_mlx_default_device():
         mx.set_default_device(previous)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_files_store(tmp_path_factory, monkeypatch):
+    """Files, batches and their records default to ~/.yunshu/files, which is one directory for every test in a worker
+    (HOME is the session's throwaway root). test_route_checks_harness[batches] left an unfinished batch there; the next
+    gateway lifespan in that worker resumed it (``batches.start_runner``) against that test's engine: test_custom_route_does_not_drop_tool
+    saw the batch's chat call as its own (json_schema None), and faults/test_queue found an anthropic ``msg_`` request
+    hung in the tracker. Every test now gets its own empty store."""
+    import sys as _s
+
+    monkeypatch.setenv(
+        "YUNSHU_FILES_DIR", str(tmp_path_factory.mktemp("files-store") / "files")
+    )
+    mod = _s.modules.get("yunshu_gateway.files_store")
+    if mod is not None:
+        mod.reset_store()
+    yield
+    mod = _s.modules.get("yunshu_gateway.files_store")
+    if mod is not None:
+        mod.reset_store()
+
+
 @pytest.fixture(autouse=True, scope="module")
 def _restore_dense_lane_route():
     """The dense-lane attention route (``ragged_kv.set_dense_lane``) is a process-global switch: a module whose tiny
