@@ -2700,6 +2700,7 @@ async def _handle_vlm_chat(
         suppress_tokens=req.suppress_tokens,
         logprobs=req.logprobs,
         top_logprobs=req.top_logprobs,
+        prompt_logprobs=req.prompt_logprobs,
         spec_decode=req.spec_decode,
         priority=req.priority,
         timeout_seconds=req.timeout,
@@ -2797,6 +2798,7 @@ async def _handle_vlm_chat(
                 "cached_tokens": r.get("cached_tokens", 0) or 0,
                 "finish_reason": finish_reason,
                 "tool_calls": tool_calls,
+                "prompt_logprobs": r.get("prompt_logprobs"),
                 "logprobs": r.get("logprobs"),
             },
             None,
@@ -2947,6 +2949,8 @@ async def _handle_vlm_chat(
                 tokenizer=getattr(vlm_engine, "_tokenizer", None),
                 top_logprobs=req.top_logprobs,
             )
+        if data.get("prompt_logprobs") is not None:
+            choice["prompt_logprobs"] = data["prompt_logprobs"]
         choices.append(choice)
 
     # If every choice returned 0 (e.g., timeout), fall back to text-only count

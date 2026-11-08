@@ -980,3 +980,29 @@ def test_presence_penalty_keeps_the_mtp_row_drafting_and_equal_plain_decode(samp
     # a spec-off server (no head) still keys a sampled row: the penalty must apply there too
     off, _ = run(True, head=False)
     assert off == plain
+
+
+def test_packed_prompt_logprobs(tiny):
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+    from yunshu_engine.round_driver.forward import Segment, lane_forward, logits
+
+    lm, _ = tiny
+    ids = PROMPTS[0]
+    language = lm.language_model if hasattr(lm, "language_model") else lm
+    h = lane_forward(
+        language,
+        Segment(language.make_cache(), mx.array(ids, mx.int32), 512, 16384, 2048),
+    )
+    ref = logits(language, h).astype(mx.float32)
+    ref = ref - mx.logsumexp(ref, axis=-1, keepdims=True)
+    driver = RoundDriver(lm, plain_verify=True, stop_tokens=set())
+    driver.add(Request(ids, 2, prompt_logprobs=3, draft=False))
+    events = []
+    while driver.busy():
+        events.extend(driver.step())
+    scores = events[0].prompt_logprobs
+    assert scores[0] is None
+    assert len(scores) == len(ids)
+    for i, entry in enumerate(scores[1:]):
+        assert entry["logprob"] == float(ref[i, ids[i + 1]])
+    assert events[1].prompt_logprobs is None

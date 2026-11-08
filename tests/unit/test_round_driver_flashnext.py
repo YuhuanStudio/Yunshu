@@ -750,3 +750,30 @@ def test_head_prefill_stays_queued_past_the_first_token_and_changes_nothing(
     eager, d2 = run(lm, [ids], head=head)
     assert d2._lazy_ids and not any(d2._lazy_ids.values())
     assert lazy == eager
+
+
+def test_flash_prompt_logprobs(tiny):
+    from yunshu_engine.text_logprobs import top_logprobs_device
+
+    lm, _ = tiny
+    ids = PROMPTS[0]
+    ref = lm(mx.array([ids]), cache=lm.make_cache()).logits[0].astype(mx.float32)
+    ref = ref - mx.logsumexp(ref, axis=-1, keepdims=True)
+    driver = RoundDriver(
+        SimpleNamespace(language_model=lm),
+        plain_verify=True,
+        stop_tokens=set(),
+        chunk=512,
+    )
+    driver.add(Request(ids, 2, prompt_logprobs=3, draft=False))
+    events = []
+    while driver.busy():
+        events.extend(driver.step())
+    scores = events[0].prompt_logprobs
+    assert scores[0] is None
+    assert len(scores) == len(ids)
+    top_ids, _ = top_logprobs_device(ref[:-1], 3)
+    for i, entry in enumerate(scores[1:]):
+        assert entry["logprob"] == pytest.approx(float(ref[i, ids[i + 1]]), abs=2e-5)
+        assert [e["token_id"] for e in entry["top_logprobs"]] == top_ids[i].tolist()
+    assert events[1].prompt_logprobs is None

@@ -163,3 +163,39 @@ async def test_vlm_non_stream_does_not_re_encode_when_engine_reports_prompt_toke
     assert response.status_code == 200
     assert b'"prompt_tokens":7' in response.body.replace(b" ", b"")
     assert formatted == []  # no template render for a fallback nobody needed
+
+
+@pytest.mark.asyncio
+async def test_vlm_prompt_logprobs_round_trip(monkeypatch):
+    import json
+
+    from yunshu_engine.vlm_engine import VLMEngine
+
+    engine = VLMEngine.__new__(VLMEngine)
+    engine._tokenizer = _Tok()
+    engine._processor = None
+    engine._config = {"max_position_embeddings": 100_000}
+    scores = [None, {"token_id": 2, "logprob": -1.25}]
+
+    async def generate(**kwargs):
+        assert kwargs["prompt_logprobs"] == 0
+        return {
+            "text": "ok",
+            "prompt_tokens": 2,
+            "completion_tokens": 1,
+            "finish_reason": "stop",
+            "prompt_logprobs": scores,
+        }
+
+    engine.generate = generate
+    monkeypatch.setattr(chat, "get_engine", lambda: engine)
+    monkeypatch.setattr(chat, "get_model_manager", lambda: None)
+    req = chat.ChatCompletionRequest(
+        model="m",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=8,
+        prompt_logprobs=0,
+    )
+    response = await chat._handle_vlm_chat(req, req.messages, None)
+    assert response.status_code == 200
+    assert json.loads(response.body)["choices"][0]["prompt_logprobs"] == scores
