@@ -1,5 +1,5 @@
 """(HIGH): the Anthropic /v1/messages STREAMING batched path
-(is_batched=True, opt-in YUNSHU_ENGINE_LOOP=1) never called ToolCallStreamer.flush().
+(is_batched=True, the EngineCore batched path since removed) never called ToolCallStreamer.flush().
 
 In BUFFER_ALL mode (— Mistral [TOOL_CALLS], Qwen, GLM block-form) and for tool calls
 truncated at max_tokens, the streamer HOLDS the whole tool-call buffer during process_token
