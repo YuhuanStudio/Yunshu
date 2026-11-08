@@ -328,6 +328,7 @@ def _track_driver_copies():
     """Remember every module object built from fullcmp_run.py, whatever name a test gives it (a test may
     hold a copy that is not in sys.modules). Scanning gc.get_objects() for them in two autouse fixtures
     cost 0.1-0.3 s per test as the worker's heap grew (80% of the suite's wall time: 3600 of 4400 s)."""
+    import importlib._bootstrap as _boot
     import importlib.util as _iu
     import weakref
 
@@ -341,6 +342,8 @@ def _track_driver_copies():
             _DRIVER_COPIES.add(mod)
         return mod
 
+    # the import system calls the _bootstrap one, importlib.util re-exports it: patch both
+    _boot.module_from_spec = module_from_spec
     _iu.module_from_spec = module_from_spec
 
 
