@@ -709,5 +709,3 @@ class TestCachePoolStats:
 
 
 # ── Integration with Scheduler Config ──────────────────────────────────
-
-

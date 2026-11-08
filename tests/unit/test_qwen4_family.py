@@ -131,5 +131,9 @@ def test_text_sub_config_type_is_qwen4():
     assert is_qwen4_type("qwen4_exp")
     assert not is_qwen4_type("qwen3_5_text")
     assert not is_qwen4_type("qwen4_exp_textual")
-    assert is_qwen4_family({"model_type": "qwen4_exp", "text_config": {"model_type": "qwen4_exp_text"}})
-    assert is_qwen4_family({"model_type": "other", "text_config": {"model_type": "qwen4_exp_text"}})
+    assert is_qwen4_family(
+        {"model_type": "qwen4_exp", "text_config": {"model_type": "qwen4_exp_text"}}
+    )
+    assert is_qwen4_family(
+        {"model_type": "other", "text_config": {"model_type": "qwen4_exp_text"}}
+    )
