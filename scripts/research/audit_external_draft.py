@@ -94,7 +94,6 @@ async def measure(args):
                 stream=False,
                 temperature=0.0,
                 logprobs=False,
-                use_engine_loop=False,
             )
             if mode != "eagle":
                 raise RuntimeError(f"wrong engaged route: {mode}")
@@ -103,14 +102,12 @@ async def measure(args):
                 max_tokens=8,
                 temperature=0.0,
                 spec_decode=False,
-                use_engine_loop=False,
             )
             await engine.generate(
                 "Say hello.",
                 max_tokens=8,
                 temperature=0.0,
                 spec_decode=True,
-                use_engine_loop=False,
             )
             generation = importlib.import_module("mlx_lm.generate")
             plain_generate = generation.generate_step
@@ -159,7 +156,6 @@ async def measure(args):
                                 max_tokens=tokens,
                                 temperature=0.0,
                                 spec_decode=arm == "external",
-                                use_engine_loop=False,
                                 enable_thinking=False,
                             )
                         ids = list(observed)
@@ -180,7 +176,6 @@ async def measure(args):
                             max_tokens=tokens,
                             temperature=0.0,
                             spec_decode=arm == "external",
-                            use_engine_loop=False,
                             enable_thinking=False,
                         )
                         elapsed = time.perf_counter() - start

@@ -71,7 +71,7 @@ def get_mlx_executor() -> ThreadPoolExecutor:
 def reset_mlx_executor() -> ThreadPoolExecutor:
     """Reset the global MLX executor, recreating it from scratch.
 
-    Used by EngineCore's BrokenThreadPool recovery to ensure all
+    Used by the BrokenThreadPool recovery to ensure all
     subsequent get_mlx_executor() calls return the new executor,
     maintaining the single-thread GPU serialization guarantee. Only a broken
     or shut-down executor with no live worker is replaced; otherwise the

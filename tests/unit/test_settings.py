@@ -75,9 +75,9 @@ def test_memory_gb(monkeypatch, text, gib):
 
 
 def test_enum_rejects_unknown(monkeypatch):
-    monkeypatch.setenv("YUNSHU_OVERLAP", "three_batch")
+    monkeypatch.setenv("YUNSHU_KV_QUANT_BITS", "three_batch")
     with pytest.raises(settings.SettingError):
-        settings.get("YUNSHU_OVERLAP")
+        settings.get("YUNSHU_KV_QUANT_BITS")
 
 
 def test_empty_env_is_unset_except_persona(monkeypatch):

@@ -21,7 +21,6 @@ logging.basicConfig(level=logging.ERROR)
 MODEL = os.environ.get("YUNSHU_BENCH_MODEL", "./models/Qwen2.5-3B-Instruct-bf16")
 
 # Engine loop + SSD tier (the former YUNSHU_KV_OFFLOAD* flags no longer exist).
-os.environ.setdefault("YUNSHU_ENGINE_LOOP", "1")
 os.environ.setdefault("YUNSHU_SSD_CACHE", "1")
 os.environ.setdefault("YUNSHU_SSD_CACHE_DIR", "/tmp/yunshu_ssd_detailed")
 
@@ -86,7 +85,7 @@ async def main():
     from yunshu_engine.batched_engine import BatchedEngine
 
     print(f"\n╔══ DETAILED CACHE BENCH: {MODEL} ══")
-    print(f"║ config: ENGINE_LOOP=1 SSD=1")
+    print(f"║ config: SSD=1")
     engine = BatchedEngine(model_name=MODEL)
     t0 = time.perf_counter()
     await engine.start()

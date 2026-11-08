@@ -3,8 +3,7 @@
   "paths": {
     "batch": "Round driver, the unified runner for text requests of the dense Qwen3.5 family and of Flash-Next (Qwen4): spec on or off, one row or many (round_driver/; replaces the speculative lane and the shared batch for them)",
     "generic": "Round driver, generic layer (round_driver/generic.py): every other mlx-vlm family (Gemma, Omni thinker, qwen3_5_moe, ...) on the model's own upstream forward, one call per row, no drafter and no packed kernels; also the paravirtual-Metal and no-lane-matmul hosts",
-    "text": "Text-only mlx-lm single-request fast path (_generate_fast)",
-    "loop": "Text-model EngineCore continuous-batching loop (YUNSHU_ENGINE_LOOP, off by default, not grown)"
+    "text": "Text-only mlx-lm single-request fast path (_generate_fast)"
   },
   "features": {
     "draft_vocab": {
@@ -30,10 +29,6 @@
         "text": {
           "s": "na",
           "why": "n-gram drafts need no head"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -52,10 +47,6 @@
         "text": {
           "s": "na",
           "why": "no drafter on this path"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -98,10 +89,6 @@
               "_ngram_greedy_default"
             ]
           ]
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -125,10 +112,6 @@
         "text": {
           "s": "na",
           "why": "no drafter on this path"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -152,10 +135,6 @@
         "text": {
           "s": "na",
           "why": "ngram depth is its own controller"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -192,10 +171,6 @@
               "keyed_sampling"
             ]
           ]
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -232,10 +207,6 @@
               "TokenStreamToolCallProcessor"
             ]
           ]
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -272,15 +243,6 @@
               "token_logprobs"
             ]
           ]
-        },
-        "loop": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/scheduler.py",
-              "logprob_entry("
-            ]
-          ]
         }
       }
     },
@@ -313,19 +275,6 @@
             [
               "python/yunshu_engine/engine_sampling.py",
               "fpc = _mx.zeros"
-            ]
-          ]
-        },
-        "loop": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/scheduler.py",
-              "_tlp.FrequencyPresencePenalty("
-            ],
-            [
-              "python/yunshu_engine/scheduler.py",
-              "_tlp.TokenBan(_eos_ids, floor=_min_tok"
             ]
           ]
         }
@@ -361,10 +310,6 @@
               "thinking_budget"
             ]
           ]
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -388,10 +333,6 @@
         "text": {
           "s": "na",
           "why": "single request"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -415,10 +356,6 @@
         "text": {
           "s": "na",
           "why": "no speculative path to make identical"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -442,10 +379,6 @@
         "text": {
           "s": "na",
           "why": "mlx-lm stock matmul"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -464,10 +397,6 @@
         "text": {
           "s": "na",
           "why": "Qwen3.5 verifier patch"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -499,10 +428,6 @@
         "text": {
           "s": "na",
           "why": "single request, no batch to be ragged"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -531,15 +456,6 @@
           "impact": "medium"
         },
         "text": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/batched_engine.py",
-              "settings.get(\"YUNSHU_KV_QUANT_BITS\")"
-            ]
-          ]
-        },
-        "loop": {
           "s": "engaged",
           "ev": [
             [
@@ -586,15 +502,6 @@
               "settings.get(\"YUNSHU_QUANT_MODE\")"
             ]
           ]
-        },
-        "loop": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/batched_engine.py",
-              "settings.get(\"YUNSHU_QUANT_MODE\")"
-            ]
-          ]
         }
       }
     },
@@ -630,10 +537,6 @@
         "text": {
           "s": "na",
           "why": "mlx-lm stock prefill (YUNSHU_PREFILL_STEP_SIZE)"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -668,10 +571,6 @@
               "_capture_hybrid_prefix"
             ]
           ]
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -697,10 +596,6 @@
         "text": {
           "s": "na",
           "why": "own prefix cache; no chunk-aligned checkpoints"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -733,10 +628,6 @@
         "text": {
           "s": "na",
           "why": "text-only model"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -771,10 +662,6 @@
               "gemma4_assistant"
             ]
           ]
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -807,15 +694,6 @@
           ]
         },
         "text": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/engine_sampling.py",
-              "grammar_bitmask"
-            ]
-          ]
-        },
-        "loop": {
           "s": "engaged",
           "ev": [
             [
@@ -862,10 +740,6 @@
               "settings.get_bool(\"YUNSHU_JUMP_FORWARD\")"
             ]
           ]
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -890,15 +764,6 @@
           ]
         },
         "text": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/engine_sampling.py",
-              "_engine._build_gpu_sampler_text("
-            ]
-          ]
-        },
-        "loop": {
           "s": "engaged",
           "ev": [
             [
@@ -933,10 +798,6 @@
               "_run_with_lora"
             ]
           ]
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -973,23 +834,11 @@
               "IdleMemory"
             ]
           ]
-        },
-        "loop": {
-          "s": "missing",
-          "why": "same as text",
-          "owner": "memidle",
-          "impact": "low",
-          "absent": [
-            [
-              "python/yunshu_engine/engine_core.py",
-              "IdleMemory"
-            ]
-          ]
         }
       }
     },
     "cancel": {
-      "module": "python/yunshu_engine/request_lifecycle.py",
+      "module": "python/yunshu_engine/vlm_batch_runner.py",
       "what": "Client disconnect / cancel stops generation",
       "cells": {
         "batch": {
@@ -1018,10 +867,6 @@
               "cancel_event"
             ]
           ]
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -1051,10 +896,6 @@
         "text": {
           "s": "na",
           "why": "PLE tables exist only in qwen4_exp (Flash-Next), which is served on the generic runner"
-        },
-        "loop": {
-          "s": "na",
-          "why": "PLE tables exist only in qwen4_exp (Flash-Next), which is served on the generic runner"
         }
       }
     },
@@ -1073,10 +914,6 @@
         "text": {
           "s": "na",
           "why": "n-gram drafts need no promotion"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -1095,10 +932,6 @@
           "why": "the packed Flash-Next step runs the fused HC + router/expert kernels once over all rows"
         },
         "text": {
-          "s": "na",
-          "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
-        },
-        "loop": {
           "s": "na",
           "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
         },
@@ -1128,10 +961,6 @@
         "text": {
           "s": "na",
           "why": "text-only mlx-lm fast path has no APC checkpoints to rehearse into"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -1160,10 +989,6 @@
         "text": {
           "s": "na",
           "why": "text-only mlx-lm path does not go through the VLM runner"
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -1190,15 +1015,6 @@
           ]
         },
         "text": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/batched_engine.py",
-              "prewarm_for_engine(self)"
-            ]
-          ]
-        },
-        "loop": {
           "s": "engaged",
           "ev": [
             [
@@ -1239,15 +1055,6 @@
               "text_logprobs"
             ]
           ]
-        },
-        "loop": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/scheduler.py",
-              "from .text_logprobs import logprob_entry"
-            ]
-          ]
         }
       }
     },
@@ -1278,15 +1085,6 @@
           "ev": [
             [
               "python/yunshu_engine/engine_templates.py",
-              "neutralize_special_text"
-            ]
-          ]
-        },
-        "loop": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/engine_core.py",
               "neutralize_special_text"
             ]
           ]
@@ -1323,15 +1121,6 @@
               "require_non_empty_prompt"
             ]
           ]
-        },
-        "loop": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/engine_core.py",
-              "require_non_empty_prompt"
-            ]
-          ]
         }
       }
     },
@@ -1358,15 +1147,6 @@
           ]
         },
         "text": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/kv_prefix_cache.py",
-              "recurrent_state_finite"
-            ]
-          ]
-        },
-        "loop": {
           "s": "engaged",
           "ev": [
             [
@@ -1407,15 +1187,6 @@
               "apply_allowed_mask_from"
             ]
           ]
-        },
-        "loop": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/json_schema.py",
-              "apply_allowed_mask_from"
-            ]
-          ]
         }
       }
     },
@@ -1442,15 +1213,6 @@
           ]
         },
         "text": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/batched_engine.py",
-              "generation_suppress"
-            ]
-          ]
-        },
-        "loop": {
           "s": "engaged",
           "ev": [
             [
@@ -1489,15 +1251,6 @@
             [
               "python/yunshu_engine/json_schema.py",
               "ConstrainedDecodingError"
-            ]
-          ]
-        },
-        "loop": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/scheduler.py",
-              "_DeadEndGuardSampler"
             ]
           ]
         }
@@ -1545,10 +1298,6 @@
               "store_opt_out("
             ]
           ]
-        },
-        "loop": {
-          "s": "na",
-          "why": "the EngineCore loop (YUNSHU_ENGINE_LOOP, off by default) is not grown"
         }
       }
     },
@@ -1582,15 +1331,6 @@
               "sdpa_chunk.install()"
             ]
           ]
-        },
-        "loop": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/batched_engine.py",
-              "sdpa_chunk.install()"
-            ]
-          ]
         }
       }
     },
@@ -1612,10 +1352,6 @@
           ]
         },
         "text": {
-          "s": "na",
-          "why": "text-only models take no images"
-        },
-        "loop": {
           "s": "na",
           "why": "text-only models take no images"
         }
@@ -1644,15 +1380,6 @@
           ]
         },
         "text": {
-          "s": "engaged",
-          "ev": [
-            [
-              "python/yunshu_engine/batched_engine.py",
-              "effective_temperature("
-            ]
-          ]
-        },
-        "loop": {
           "s": "engaged",
           "ev": [
             [
@@ -1693,10 +1420,6 @@
               "adapt_messages"
             ]
           ]
-        },
-        "loop": {
-          "s": "na",
-          "why": "the loop renders its own messages and applies no message adapter at all (system hoisting included); off by default and not grown"
         }
       }
     },
@@ -1713,10 +1436,6 @@
           "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
         },
         "text": {
-          "s": "na",
-          "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
-        },
-        "loop": {
           "s": "na",
           "why": "Console request preparation only; delegates unchanged chat inference to the attached engine."
         }
@@ -1737,10 +1456,6 @@
         "text": {
           "s": "na",
           "why": "mlx-lm stock prefill; the split patches the mlx-vlm Qwen3.5 MLP"
-        },
-        "loop": {
-          "s": "na",
-          "why": "legacy loop is not grown (CLAUDE.md)"
         }
       }
     },
@@ -1753,10 +1468,6 @@
           "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
         },
         "text": {
-          "s": "na",
-          "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
-        },
-        "loop": {
           "s": "na",
           "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
         },
@@ -1973,27 +1684,6 @@
       "unify": "Text path moves to APC (the plan to unify text onto the runner); one disk setting family."
     },
     {
-      "id": "kv-quant",
-      "impls": [
-        "python/yunshu_engine/kv_quantization.py",
-        "python/yunshu_engine/turbo_quant.py",
-        "python/yunshu_engine/kernels/ragged_kv.py"
-      ],
-      "note": "Two KV-quantization stacks and settings: YUNSHU_KV_QUANT_BITS (text) and YUNSHU_KV_PRECISION (VLM).",
-      "unify": "One user setting; ragged_kv's int8 layout becomes the format for both."
-    },
-    {
-      "id": "sampler-filters",
-      "impls": [
-        "python/yunshu_engine/vlm_batch_runner.py",
-        "python/yunshu_engine/keyed_sampling.py",
-        "python/yunshu_engine/engine_sampling.py",
-        "python/yunshu_engine/batch_sampler.py"
-      ],
-      "note": "top-p/min-p/XTC/top-k filter chains re-implemented in the round driver's _sample, keyed_sampling.filter_logprobs, engine_sampling and batch_sampler.",
-      "unify": "keyed_sampling.filter_logprobs as the only chain; the driver's _sample calls it."
-    },
-    {
       "id": "request-processors",
       "impls": [
         "python/yunshu_engine/engine_fast.py",
@@ -2035,7 +1725,11 @@
     "python/yunshu_engine/dflash_conv.py": "One-dispatch private DFlash convolution candidate; unit tested, never installed. Wire or delete after an A/B; only its unit test uses it, so it stays until that A/B is recorded.",
     "python/yunshu_engine/kernels/verify_select.py": "exact-kernel streamed5 verify select; only research scripts and test_qmv_compat use it since the YUNSHU_MTP_ROW_EXACT path was deleted",
     "python/yunshu_engine/kernels/gdn_rows.py": "batched GDN recurrence with per-row window lengths, formerly DecodeBatch's state kernel; DecodeBatch now runs tree_verify._gdn_layer per row for one arithmetic with tree_forward (spec on == off), so nothing imports it. Kept as the base of the batched per-row-invariant GDN kernel (PARITY row 23); unit tested (test_gdn_rows). Delete if row 23 does not build on it.",
-    "python/yunshu_engine/kernels/qwen4_qsa/attention.py": "Padded batched sparse QSA attention launch (the former stock-path batched decode, deleted with the stock Flash-Next path; driver rows run QSA per row). No caller: kept with its oracle test for the batched-QSA follow-up (bqsa-1028)."
+    "python/yunshu_engine/kernels/qwen4_qsa/attention.py": "Padded batched sparse QSA attention launch (the former stock-path batched decode, deleted with the stock Flash-Next path; driver rows run QSA per row). No caller: kept with its oracle test for the batched-QSA follow-up (bqsa-1028).",
+    "python/yunshu_engine/turbo_quant.py": "unwired: to be re-homed on the round driver (T5 KV quantization rows; plan step T5). Restored from history at T0 correction; no driver caller yet.",
+    "python/yunshu_engine/kv_optimizations.py": "unwired: to be re-homed on the round driver (T5 KV quantization rows; plan step T5). Restored from history at T0 correction; no driver caller yet.",
+    "python/yunshu_engine/spec_prefill.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan, needs an owner and a decision (plan T4 is the closest step). Restored from history at T0 correction.",
+    "python/yunshu_engine/spec_prefill_engine.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan, needs an owner and a decision (plan T4 is the closest step). Restored from history at T0 correction."
   },
   "modules_other": {
     "python/yunshu_engine/kernels/gdn_qk_eps.py": "GDN q/k RMS epsilon measured from the installed mlx-vlm and rendered into gdn_prefill._NORM_SCALE_SOURCE and the RMS arm of qwen35_gdn_prework, so a mlx-vlm bump (b8bf04c) flips stock and fused together (value unchanged on 0.7.8)",
@@ -2054,8 +1748,6 @@
     "python/yunshu_engine/spec_select.py": "drafter selection (draft_family_coverage)",
     "python/yunshu_engine/spec_metrics.py": "spec counters",
     "python/yunshu_engine/spec_draft_verifier.py": "legacy text-path draft verifier",
-    "python/yunshu_engine/spec_prefill.py": "legacy loop SpecPrefill",
-    "python/yunshu_engine/spec_prefill_engine.py": "legacy loop SpecPrefill engine",
     "python/yunshu_engine/spec_schedule.py": "cost_aware_depth",
     "python/yunshu_engine/adaptive_spec.py": "legacy loop depth controller (depth-allocators duplicate group)",
     "python/yunshu_engine/apc_manager.py": "apc_prefix_cache",
@@ -2085,8 +1777,6 @@
     "python/yunshu_engine/constrained_spec.py": "guided_spec",
     "python/yunshu_engine/keyed_sampling.py": "sampled_spec",
     "python/yunshu_engine/kv_quantization.py": "kv_precision (text)",
-    "python/yunshu_engine/kv_optimizations.py": "legacy loop KV optimizations",
-    "python/yunshu_engine/turbo_quant.py": "kv_precision (text)",
     "python/yunshu_engine/grammar_bitmask.py": "constrained_bitmask_engine",
     "python/yunshu_engine/grammar_constraint.py": "constrained decoding (shared)",
     "python/yunshu_engine/grammar_compile.py": "constrained decoding (shared)",
@@ -2123,7 +1813,11 @@
     "python/yunshu_engine/kernels/omlx_q4/row_exact_qmv.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
     "python/yunshu_engine/kernels/omlx_q4/__init__.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
     "python/yunshu_engine/kernels/qwen4_qsa": "Metal source and launch wrapper of the padded batched sparse QSA attention (the former stock-path batched decode, deleted with the stock Flash-Next path); no caller: kept for the batched-QSA follow-up (bqsa-1028) with its oracle test.",
-    "python/yunshu_engine/kernels/gpu_probe.py": "GPU capability probes (device, tensor-op support) asked of the GPU, not the caller's default device"
+    "python/yunshu_engine/kernels/gpu_probe.py": "GPU capability probes (device, tensor-op support) asked of the GPU, not the caller's default device",
+    "python/yunshu_engine/kv_prefix_compression.py": "unwired: to be re-homed on the round driver (T8 APC/prefix-cache migration; plan step T8). Restored from history at T0 correction.",
+    "python/yunshu_engine/mamba_cache.py": "unwired: to be re-homed on the round driver (T8b hybrid/SSM snapshots on the APC checkpoint plan; plan step T8). Restored from history at T0 correction.",
+    "python/yunshu_engine/encoder_cache.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan (VLM encoder-output reuse), needs an owner. Restored from history at T0 correction.",
+    "python/yunshu_engine/auto_tuner.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan (parameter tuning/SLO), needs an owner. Restored from history at T0 correction."
   },
   "settings": {
     "YUNSHU_MTP": "draft_family_coverage",
@@ -2159,8 +1853,6 @@
     "YUNSHU_GRAMMAR_BITMASK": "constrained_bitmask_engine",
     "YUNSHU_QUANT_MODE": "weight_quant_on_load",
     "YUNSHU_QUANT_CONFIG": "weight_quant_on_load",
-    "YUNSHU_ENGINE_LOOP": "loop",
-    "YUNSHU_OVERLAP": "loop",
     "YUNSHU_VLM_MAX_IMAGE_BYTES": "media_input",
     "YUNSHU_VLM_MAX_VIDEO_BYTES": "media_input",
     "YUNSHU_VLM_INSECURE_SSL": "media_input",
@@ -2198,7 +1890,7 @@
     "YUNSHU_SDPA_CHUNK": "sdpa_chunk_pre_nax",
     "YUNSHU_PLE_STORAGE": "ple_ssd_rows"
   },
-  "gap_budget": 27,
+  "gap_budget": 26,
   "settings_categories": [
     "speculative",
     "vlm-runner",

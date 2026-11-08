@@ -199,7 +199,7 @@ def test_performance_settings_have_a_decision():
 
     cats = set(MATRIX["settings_categories"])
     mapped = MATRIX["settings"]
-    features = set(MATRIX["features"]) | {"loop"}
+    features = set(MATRIX["features"])
     perf = {n for n, s in settings.REGISTRY.items() if s.category in cats}
     assert perf - set(mapped) == set(), (
         f"settings with no path decision (add to path_matrix.json settings): {sorted(perf - set(mapped))}"
@@ -228,7 +228,7 @@ def test_feature_ids_are_slugs(fid):
 # User 2026-09-28 / 2026-10-24: no more paths, and no new feature that only works on a benchmark-shaped path. The
 # guard above only recorded divergence (55 gap cells, never driven down); these two make it block. The path set
 # may only shrink as paths merge into the one runner.
-PATHS_2026_10_24 = {"mtp", "dflash", "batch", "generic", "text", "loop"}
+PATHS_2026_10_24 = {"mtp", "dflash", "batch", "generic", "text"}
 FEATURES_2026_10_24 = {
     "apc_prefix_cache",
     "batch_invariant_kernels",

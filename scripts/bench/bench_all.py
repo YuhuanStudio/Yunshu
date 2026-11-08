@@ -4,8 +4,7 @@ is its own subprocess, never concurrent) so numbers don't interfere.
 
 Per model it runs, in order:
   1. Yunshu fast path 4-tier  (scripts/bench/bench_4tier.py        -> @@RESULT4T@@)
-  2. Yunshu engine-loop radix (scripts/_bench_engineloop.py  -> @@RESULTEL@@)
-  3. oMLX head-to-head        (scripts/_bench_omlx.py         -> @@RESULTOMLX@@)
+  2. oMLX head-to-head        (scripts/_bench_omlx.py         -> @@RESULTOMLX@@)
 
 Run:
   PYTHONPATH=. uv run python scripts/bench_all.py
@@ -96,16 +95,9 @@ def bench_model(path, arch):
             "name": name,
             "arch": arch,
             "ft": r4,
-            "el": {"status": "n/a (VLM)"},
             "omlx": {"status": "n/a (VLM)"},
         }
-    print(f"  [{name}] 2/3 engine-loop radix ...", flush=True)
-    rel = _run(
-        [sys.executable, "scripts/bench/_bench_engineloop.py"],
-        dict(base, YBENCH_MODEL=path, YUNSHU_SSD_CACHE_DIR=ssd + "_el"),
-        "RESULTEL",
-    )
-    print(f"  [{name}] 3/3 oMLX head-to-head ...", flush=True)
+    print(f"  [{name}] 2/2 oMLX head-to-head ...", flush=True)
     # Prefer oMLX's NATIVE venv (its exact pinned mlx-lm/mlx-vlm) for a correct,
     # artifact-free comparison: set OMLX_PYTHON=/path/to/omlxenv/bin/python and
     # the no-stub native bench is used. Falls back to the in-env stubbed bench.
@@ -133,7 +125,7 @@ def bench_model(path, arch):
             "RESULTOMLX",
         )
     subprocess.run(["rm", "-rf", ssd + "_ft", ssd + "_el", ssd + "_omlx"], cwd=REPO)
-    return {"name": name, "arch": arch, "ft": r4, "el": rel, "omlx": romlx}
+    return {"name": name, "arch": arch, "ft": r4, "omlx": romlx}
 
 
 def _tier(ft, t, k, fmt, default="—"):
@@ -155,11 +147,10 @@ def render(rows):
         "F-WARM",
         "F-SSD",
         "WARMram",
-        "LOOP",
         "oMLX",
         "loss/note",
     ]
-    W = [30, 10, 5, 6, 7, 8, 7, 7, 8, 7, 7, 8, 20]
+    W = [30, 10, 5, 6, 7, 8, 7, 7, 8, 7, 8, 20]
 
     def fmt_row(cells):
         return " ".join(str(c)[:w].ljust(w) for c, w in zip(cells, W, strict=False))
@@ -170,7 +161,7 @@ def render(rows):
     print(fmt_row(H))
     print("-" * 130)
     for r in rows:
-        ft, el, om = r["ft"], r["el"], r["omlx"]
+        ft, om = r["ft"], r["omlx"]
         # Reuse intentionally bypassed (VLM sliding-window / interleaved-mRoPE / hybrid).
         if ft.get("bypassed"):
             why = ft.get("bypass_reason", "bypassed")[:30]
@@ -226,9 +217,6 @@ def render(rows):
             if ft.get("warm_entry_mb")
             else "1.0x"
         )
-        loopx = (
-            f"{el['speedup']:.2f}x" if "speedup" in el else el.get("status", "?")[:6]
-        )
         omx = (
             f"{om['speedup']:.2f}x"
             if om.get("status") == "ok"
@@ -257,16 +245,13 @@ def render(rows):
                     warmx,
                     f"{ssdx}{ssd_restored}",
                     warmram,
-                    loopx,
                     omx,
                     "Y" if lossless else "n",
                 ]
             )
         )
     print("=" * 130)
-    print(
-        "F-* = Yunshu fast path (default). LOOP = Yunshu engine-loop (radix, opt-in, HOT only)."
-    )
+    print("F-* = Yunshu fast path (default).")
     print(
         "oMLX = reference/omlx live head-to-head (prefix cache on, block=128). loss = all Yunshu tiers lossless."
     )

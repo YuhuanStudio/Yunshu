@@ -183,7 +183,6 @@ def _launch_spec(fw: str, model_path: str, port: int):
             PYTHONPATH=os.path.join(REPO, "python"),
             YUNSHU_MODEL=model_path,
             YUNSHU_AUTH_DISABLED="true",
-            YUNSHU_ENGINE_LOOP="1" if fw == "yunshu" else "0",
         )
         return (
             [

@@ -73,9 +73,7 @@ async def measure(args):
         ),
     )
     settings.set_override("YUNSHU_VLM_APC_DISK_GB", 8.0)
-    engine = VLMEngine(
-        str(args.model), EngineConfig(prefill_step_size=512, completion_batch_size=1)
-    )
+    engine = VLMEngine(str(args.model), EngineConfig(prefill_step_size=512))
     processes = model_processes()
     if "Flash" in str(args.model) or "flashnext" in str(args.model):
         conflicting = [

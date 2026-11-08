@@ -74,30 +74,3 @@ def test_kv_manager_save_guards_unbound_tensors():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
-
-
-def test_scheduler_never_adopts_a_live_inflight_cache():
-    # H3: the batch path adopted a donor's live kv_cache_ref and assumed the whole shorter
-    # prompt matched, skipping recipient tokens and decoding on another prompt's KV.
-    from yunshu_engine import scheduler
-
-    src = inspect.getsource(scheduler)
-    assert "find_prefix(" not in src  # no donor lookup, so no live cache to adopt
-
-
-def test_engine_loop_does_not_compute_an_unused_spec_prefill_selection(caplog):
-    # M5: the loop scored prompts with the draft and counted skipped tokens, but
-    # insertion never read the selection: the full prompt was prefilled anyway.
-    from yunshu_engine.scheduler import Scheduler
-
-    class _Never:
-        def compute_skippable_tokens(self, ids):
-            raise AssertionError("a selection nothing applies must not be computed")
-
-    s = Scheduler.__new__(Scheduler)
-    s._batch_spec_prefill = _Never()
-    req = type("R", (), {"prompt_token_ids": list(range(10000)), "request_id": "r"})()
-    with caplog.at_level("WARNING"):
-        assert s._apply_batch_spec_prefill([req]) == [req]
-        assert s._apply_batch_spec_prefill([req]) == [req]
-    assert sum("SpecPrefill is not applied" in r.message for r in caplog.records) == 1

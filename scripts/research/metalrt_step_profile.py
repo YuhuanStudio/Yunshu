@@ -268,9 +268,7 @@ def run_flash(a, mx, tracer):
 
     async def go():
         settings.set_override("YUNSHU_VLM_APC_MEMORY_GB", 1.0)
-        engine = VLMEngine(
-            str(a.model), EngineConfig(prefill_step_size=512, completion_batch_size=1)
-        )
+        engine = VLMEngine(str(a.model), EngineConfig(prefill_step_size=512))
         await engine.start()
         lm = engine._model.language_model
         ids = [(i * 7919) % 200000 + 1000 for i in range(a.ctx + 64)]
@@ -347,9 +345,7 @@ def run_flashverify(a, mx, tracer):
 
         threading.Thread(target=heartbeat, daemon=True).start()
         settings.set_override("YUNSHU_VLM_APC_MEMORY_GB", 1.0)
-        engine = VLMEngine(
-            str(a.model), EngineConfig(prefill_step_size=512, completion_batch_size=1)
-        )
+        engine = VLMEngine(str(a.model), EngineConfig(prefill_step_size=512))
         await engine.start()
         alive.set()
         lm = engine._model.language_model

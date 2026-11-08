@@ -77,8 +77,6 @@ yunshu --url http://localhost:8001 --json complete "Hello"
 | `--uds` | 改在此 Unix domain socket 上服务而非 TCP；`--host` 和 `--port` 会被忽略。 |
 | `--workers`、`-w` | worker 进程数。默认 `1`。 |
 | `--max-memory` | 模型可用的 GPU 内存上限，例如 `32GB`，或 `disabled`。 |
-| `--completion-batch` | 补全批大小（设置 `YUNSHU_COMPLETION_BATCH_SIZE`）。 |
-| `--max-concurrent` | 最大并发请求数（设置 `YUNSHU_MAX_CONCURRENT`）。 |
 | `--auth-token` | 请求必须携带的 bearer token（设置 `YUNSHU_AUTH_TOKEN`）。 |
 | `--mcp-config` | MCP 配置文件的路径。 |
 | `--hf-endpoint` | 自定义的 Hugging Face Hub 端点。 |

@@ -225,7 +225,7 @@ class ServerMetrics:
     def record_batch_size(self, batch_size: int) -> None:
         """Record a scheduler batch size sample (MON-2).
 
-        Called from engine_core._engine_loop after each scheduler step.
+        Called from the generation loop after each step.
         Maintains a bounded buffer and computes percentiles on flush.
         Thread-safe: acquires self._lock for all mutable state access.
         """
@@ -270,7 +270,7 @@ class ServerMetrics:
     def record_compute_step(self, step_duration_ms: float, idle: bool = False) -> None:
         """Record a scheduler step duration for compute utilization tracking.
 
-        Called from engine_core._engine_loop after each step.
+        Called from the generation loop after each step.
         Step time = GPU active time; idle time = time spent waiting for requests.
 
         Wall time is tracked via ``_util_start_time`` (set at init) and

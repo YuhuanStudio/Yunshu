@@ -332,9 +332,6 @@ def _apc_snapshot(engine: Any) -> dict | None:
 
 def _guard_margin_pct(engine: Any) -> float | None:
     guard = getattr(engine, "_memory_guard", None)
-    if guard is None:
-        core = getattr(engine, "_engine_core", None)
-        guard = getattr(core, "_memory_guard", None) if core is not None else None
     margin = getattr(guard, "_safety_margin_pct", None)
     return float(margin) if isinstance(margin, (int, float)) else None
 

@@ -3,7 +3,7 @@
 Supports three modes:
 1. Single-engine mode (legacy): set_engine() / init_engine()
 2. Multi-model mode: uses ModelManager for LRU eviction and multi-model routing
-3. BatchedEngine mode: uses BatchedEngine with EngineCore backend
+3. BatchedEngine mode: uses BatchedEngine (single-request fast path)
 
 The gateway routers use get_engine_for_model() which works in all modes.
 """

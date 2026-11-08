@@ -27,10 +27,8 @@ logging.basicConfig(level=logging.ERROR)
 MODEL = os.environ.get("YUNSHU_BENCH_MODEL", "./models/Qwen2.5-3B-Instruct-bf16")
 
 # DEFAULT FAST PATH (the production serving path) — this is what exercises the
-# KVPrefixCache 4-tier hierarchy (HOT/WARM/SSD). The opt-in engine_core loop
-# (YUNSHU_ENGINE_LOOP=1) uses the PagedScheduler radix cache instead and leaves
-# the KVPrefixCache empty, so the tiers are a FAST-PATH feature. SSD on for the
-# SSD tier. Per-tier hot_limit/max_entries are set programmatically below.
+# KVPrefixCache 4-tier hierarchy (HOT/WARM/SSD). SSD on for the SSD tier.
+# Per-tier hot_limit/max_entries are set programmatically below.
 os.environ.setdefault("YUNSHU_SSD_CACHE", "1")
 os.environ.setdefault("YUNSHU_SSD_CACHE_DIR", "/tmp/yunshu_ssd_4tier")
 

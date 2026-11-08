@@ -214,7 +214,6 @@ async def main():
     # completion tok/s. Measured on BOTH paths so the report shows the real story:
     #  - fast path: serialises on the MLX executor (max_workers=1) → agg ≈ single
     #    stream, TTFT grows with N. The right default for single-user latency.
-    #  - engine-loop (YUNSHU_ENGINE_LOOP=1): true continuous batching → agg scales.
     async def _conc_sweep(eng, tag):
         print(f"╠══ CONCURRENCY sweep ({tag}, aggregate tok/s) ══")
         print(f"║  {'N':>4} {'agg_tok/s':>10} {'mean_TTFT_ms':>12}")
@@ -243,22 +242,6 @@ async def main():
         return rows
 
     result["concurrency_sweep"] = await _conc_sweep(engine, "fast path")
-    # Engine-loop concurrency (the real multi-user path). LLM-only — VLM has no
-    # engine-loop. Load it AFTER stopping the fast engine so we never hold two
-    # model copies in memory at once (matters for 9B-4bit / 30B).
-    if not _IS_VLM:
-        try:
-            await engine.stop()
-        except Exception:
-            pass
-        os.environ["YUNSHU_ENGINE_LOOP"] = "1"
-        from yunshu_engine.batched_engine import BatchedEngine as _BE
-
-        engine = _BE(model_name=MODEL)
-        await engine.start()
-        await _chat(engine, "warmup", "hi", 4)
-        result["concurrency_sweep_loop"] = await _conc_sweep(engine, "engine-loop")
-
     print(f"╚{'═' * 54}")
     print("@@COMPREHENSIVE@@ " + json.dumps(result))
     try:

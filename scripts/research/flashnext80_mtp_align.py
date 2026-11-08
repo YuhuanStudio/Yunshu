@@ -42,9 +42,7 @@ async def run(args):
         return captured["drafter"]
 
     qwen4_mtp.load_native_head = capture
-    engine = VLMEngine(
-        str(args.model), EngineConfig(prefill_step_size=512, completion_batch_size=1)
-    )
+    engine = VLMEngine(str(args.model), EngineConfig(prefill_step_size=512))
     await engine.start()
     drafter = captured.get("drafter")
     out = args.out.open("w")

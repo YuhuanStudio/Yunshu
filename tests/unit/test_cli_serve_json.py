@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
         (["--port", "65536"], "Cannot listen"),
         (["org/first", "-m", "org/second"], "disagree"),
         (["--set", "NOT_A_SETTING=1"], "unknown setting"),
-        (["--set", "MAX_CONCURRENT=not-an-integer"], "YUNSHU_MAX_CONCURRENT"),
+        (["--set", "MAX_MEMORY_GB=not-a-number"], "YUNSHU_MAX_MEMORY_GB"),
     ],
 )
 def test_serve_preflight_json_error(tmp_path, arguments, expected):

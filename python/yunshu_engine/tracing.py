@@ -838,10 +838,6 @@ class HealthDashboard:
             max_pressure = "normal"
             for _model_id, engine in engines:
                 guard = getattr(engine, "_memory_guard", None)
-                if guard is None:
-                    core = getattr(engine, "_engine_core", None)
-                    if core:
-                        guard = getattr(core, "_memory_guard", None)
                 if guard is not None:
                     data["active"] = True
                     pl = getattr(guard, "pressure_level", "normal")

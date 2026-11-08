@@ -3,7 +3,7 @@
 Starts one server (port 18990-18995) with the given env, runs a workload, kills it.
 
     python scripts/research/flagverdict_text.py spec  --model T --draft D --out o.json
-    python scripts/research/flagverdict_text.py conc  --model T --label loop --env YUNSHU_ENGINE_LOOP=1 --out o.json
+    python scripts/research/flagverdict_text.py conc  --model T --label kvq4 --env YUNSHU_KV_QUANT_BITS=4 --out o.json
 
 spec: one server with SPEC_UNVERIFIED=eagle + DRAFT_MODEL; every prompt is sent alternately with
 spec_decode false (plain fast path) and true (draft), greedy non-stream, ``reps`` interleaved rounds.

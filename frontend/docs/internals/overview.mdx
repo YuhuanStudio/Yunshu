@@ -13,8 +13,6 @@ Yunshu is one process: a FastAPI gateway in front of an MLX-based engine on Appl
 - **One MLX thread.** All GPU work runs on a single-worker executor that owns the Metal stream. Nothing touches MLX arrays from the event loop.
 - **Identity rules.** A cache hit equals a miss, speculation on equals speculation off, and rehearsal never changes outputs. Each internals page states which rule applies and how it is checked.
 
-A continuous-batching loop for text models exists behind `YUNSHU_ENGINE_LOOP` (default off). It is a stable user option whose output is not guaranteed identical to the fast path (see [Options that can change output](/docs/guides/options)); it is a legacy path, not a feature to build on.
-
 ## Why (design decision)
 
 Yunshu is a single-node engine, so it optimizes time to first token, decode speed and prefix reuse for one machine rather than throughput across tenants. Optimizations stay lossless by default; lossy ones (for example int8 KV) are explicit user options. A custom Metal kernel is adopted only when a same-checkpoint comparison shows a real end-to-end win with identical or tolerance-checked output.
@@ -46,7 +44,6 @@ The map above shows where each internals page sits on the path of a request.
 
 | Setting | Default | Effect |
 |---|---|---|
-| `YUNSHU_ENGINE_LOOP` | off | Legacy text-model batching loop instead of the fast path |
 | `YUNSHU_VLM_DRAFT` | unset | Override the speculative drafter for the Qwen3.5 family |
 | `YUNSHU_VLM_APC_MEMORY_GB` | derived from free memory | RAM budget of the prefix cache; `0` disables it |
 

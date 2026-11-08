@@ -149,9 +149,6 @@ def main():
         "--inproc", action="store_true", help="also measure in-process baseline"
     )
     ap.add_argument(
-        "--loop", action="store_true", help="enable engine-loop (continuous batching)"
-    )
-    ap.add_argument(
         "--concurrency", default="", help="comma list e.g. 8,16,32 → aggregate tok/s"
     )
     a = ap.parse_args()
@@ -160,7 +157,6 @@ def main():
     env = dict(os.environ)
     env["YUNSHU_MODEL"] = a.model
     env["YUNSHU_AUTH_DISABLED"] = "true"
-    env["YUNSHU_ENGINE_LOOP"] = "1" if a.loop else "0"
     env["PYTHONPATH"] = os.path.join(REPO, "python")
     proc = subprocess.Popen(
         [
@@ -196,7 +192,7 @@ def main():
             return
         time.sleep(2)
         http = asyncio.run(_http_ttft(a.port, model_id, a.n))
-        print(f"\n=== TTFT probe: {model_id} (loop={a.loop}, n={a.n}) ===")
+        print(f"\n=== TTFT probe: {model_id} (n={a.n}) ===")
         print(
             f"  HTTP served TTFT  median: {_median_ms(http)} ms   "
             f"(min {_median_ms([min(http)]) if http else 0}, samples={len(http)})"
