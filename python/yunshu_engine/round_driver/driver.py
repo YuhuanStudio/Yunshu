@@ -48,7 +48,7 @@ from typing import Any
 import mlx.core as mx
 import numpy as np
 
-from .. import hit_stages, keyed_sampling
+from .. import fn_ttft, hit_stages, keyed_sampling
 from ..cache_prefill import reserve_prompt_kv
 from ..constraint_eos import GrammarDeadEndError
 from ..kernels import preempt
@@ -308,6 +308,7 @@ class _Row:
     req: Request
     cache: list | None  # prefill caches (None once the row joined the batch)
     mtp_cache: list | None
+    tm: Any = None  # fn_ttft stage timer (cold Flash-Next requests)
     done: int = 0  # prompt tokens prefilled
     pending: int | None = None  # committed token not yet in the cache
     generated: int = 0
@@ -1334,6 +1335,8 @@ class RoundDriver:
                 blocked = True
         if not items:
             return []
+        tm = fn_ttft.Timer()
+        tm.segs = len(items)
         captures: list[mx.array] = []
         entry = None
         tail_key = None
@@ -1411,7 +1414,9 @@ class RoundDriver:
                         ]
             except preempt.PreemptedError as stop:
                 return self._preempted(items, stop)
+        tm.mark("submit")
         draws = self._draw(items, hidden)
+        tm.mark("draw")
         # Evaluate every cache the step advanced, not only what feeds a token:
         # a prompt chunk that emits nothing would otherwise stay a lazy graph
         # on top of the previous chunk's, and a long prompt becomes one graph
@@ -1422,13 +1427,17 @@ class RoundDriver:
             *[a for d in draws if d[2] for a in d[2]],
             *[a for r in advanced.values() for a in cache_buffers(r.cache)],
         )
+        tm.mark("wait")
         if entry is None:
             self._record_tail(items, hidden, captures)
+        tm.mark("ckpt")
         events: list[Event] = []
         for it, tok, extra in draws:
             self._emit(it.row, [int(tok.tolist()[0])], extra, events)
+        tm.mark("emit")
         if self.dflash is not None and captures:
             self.dflash.absorb(items, captures)
+        tm.mark("capture")
         # prompt chunks of draftable rows feed their MTP head, in order
         absorb: dict[int, tuple] = {}
         for it in items:
@@ -1454,9 +1463,11 @@ class RoundDriver:
                 ]
             )
             heads = {id(e[0]): o for e, o in zip(live, outs, strict=True)}
+        tm.mark("head")
         for it in items:
             if it.end in it.row.ckpts and not it.row.finished:
                 self._store_checkpoint(it.row, it.end)
+        tm.mark("ckpt")
         gone = [r for r in self.rows if r.finished]
         self.rows = [r for r in self.rows if not r.finished]
         # a request that ends at its first token (a rehearsal, max_tokens 1) leaves from here: its
@@ -1482,6 +1493,15 @@ class RoundDriver:
         ]
         arrays += list(self._pending_heads.values())
         mx.eval(*arrays)
+        tm.mark("tail")
+        for r in advanced.values():
+            if r.tm is None:
+                r.tm = fn_ttft.Timer()
+                r.tm.t0 = tm.t0
+            r.tm.merge(tm)
+            if r.done == len(r.req.ids) and r.hit < len(r.req.ids) and self.flash:
+                r.tm.log("driver", len(r.req.ids), r.hit)
+                r.tm = None
         self.steps += 1
         return events
 
