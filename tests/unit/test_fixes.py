@@ -6,108 +6,11 @@ output_parser, model optimization, KV lifecycle admit/release, MemoryAwareSchedu
 TieredKV _extract_kv_for_block, Anthropic cache_creation_input_tokens
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 # ── ──────────────────────────────────────────────────────────────
-
-
-class TestWave44AutoTuner:
-    """1. AutoTuner.auto_tune() uses profiler recommendations (not TypeError)."""
-
-    def test_auto_tune_applies_profiler_recommendations(self):
-        from yunshu_engine.auto_tuner import AutoTuner, PerformanceProfiler, StepMetrics
-
-        profiler = PerformanceProfiler()
-        for _ in range(200):
-            profiler.record_step(
-                StepMetrics(
-                    throughput_tok_s=5.0,
-                    gpu_memory_util=0.95,
-                    wall_time_ms=10.0,
-                    tokens_generated=1,
-                )
-            )
-        tuner = AutoTuner(profiler=profiler)
-        decisions = tuner.auto_tune()
-        assert isinstance(decisions, list)
-        if profiler.get_bottleneck().value != "none":
-            assert len(decisions) >= 1
-            assert decisions[0].param_name in (
-                "batch_size",
-                "kv_quantization_bits",
-                "prefill_chunk_size",
-                "spec_draft_length",
-                "num_parallel_requests",
-            )
-
-    def test_auto_tune_no_recommendations_returns_empty(self):
-        from yunshu_engine.auto_tuner import AutoTuner, PerformanceProfiler
-
-        tuner = AutoTuner(profiler=PerformanceProfiler())
-        assert tuner.auto_tune() == []
-
-
-class TestWave44SchedulerShutdown:
-    """2. Scheduler.shutdown() calls both deep_reset() AND closes BatchGenerator."""
-
-    def test_shutdown_calls_deep_reset_and_closes_batch_gen(self):
-        from yunshu_engine.scheduler import Scheduler, SchedulerConfig
-
-        tok = MagicMock()
-        tok.eos_token_ids = [2]
-        scheduler = Scheduler(MagicMock(), tok, config=SchedulerConfig())
-        batch_gen = MagicMock()
-        scheduler._batch_gen = batch_gen
-        with patch.object(scheduler, "deep_reset", wraps=scheduler.deep_reset) as m:
-            scheduler.shutdown()
-        m.assert_called_once()
-        batch_gen.close.assert_called_once()
-        assert scheduler._batch_gen is None
-
-    def test_deep_reset_releases_row_grammar_guards(self):
-        from yunshu_engine.scheduler import Scheduler, SchedulerConfig
-
-        tok = MagicMock()
-        tok.eos_token_ids = [2]
-        scheduler = Scheduler(MagicMock(), tok, config=SchedulerConfig())
-        scheduler._row_guards["r1"] = (
-            MagicMock()
-        )  # holds a sampler and a grammar matcher
-        scheduler.deep_reset()
-        assert scheduler._row_guards == {}
-
-
-class TestWave44MemoryAwareScheduler:
-    """3. MemoryAwareScheduler reserve/release lifecycle."""
-
-    def test_reserve_release_lifecycle(self):
-        from yunshu_engine.memory_aware_scheduler import MemoryAwareScheduler
-
-        mas = MemoryAwareScheduler(total_budget_bytes=1024 * 1024)
-        assert mas.reserve_memory("req-1", 1000, num_tokens=50)
-        assert mas.reserve_memory("req-2", 2000, num_tokens=100)
-        s = mas.get_stats()
-        assert s.total_admissions == 2 and s.current_reserved_bytes == 3000
-        assert mas.release_memory("req-1") == 1000
-        s = mas.get_stats()
-        assert s.current_reserved_bytes == 2000 and s.active_requests == 1
-        assert mas.release_memory("unknown") == 0
-
-
-class TestWave44StepMetrics:
-    """4. StepMetrics uses real wall_time_ms (not 0.0)."""
-
-    def test_wall_time_set(self):
-        from yunshu_engine.auto_tuner import StepMetrics
-
-        assert StepMetrics(wall_time_ms=42.5).wall_time_ms == 42.5
-
-    def test_timestamp_auto_populated(self):
-        from yunshu_engine.auto_tuner import StepMetrics
-
-        assert StepMetrics().timestamp > 0.0
 
 
 class TestWave44KVAnyImport:
@@ -273,45 +176,6 @@ class TestWave46ModelOptimizationDetection:
             ModelWarmupManager,
         ):
             assert callable(cls().get_stats)
-
-
-class TestWave46KVLifecycleAdmitRelease:
-    """14. KV lifecycle admit/release called on request add/finish."""
-
-    def test_admit_release(self):
-        from yunshu_engine.kv_lifecycle import KVLifecycleManager, KVTier, KVTierConfig
-
-        mgr = KVLifecycleManager(
-            tier_configs=[KVTierConfig(tier=KVTier.HOT, max_bytes=1024 * 1024)]
-        )
-        assert mgr.admit(1, size_bytes=4096, prefix_hash="abc")
-        assert mgr.get_stats()["tier_blocks"].get("HOT", 0) == 1
-        mgr.release(1)
-        # release() no longer auto-evicts — block stays at ref_count=0
-        block = mgr.get_block(1)
-        assert block is not None
-        assert block.ref_count == 0
-
-    def test_admit_rejects_when_full(self):
-        from yunshu_engine.kv_lifecycle import KVLifecycleManager, KVTier, KVTierConfig
-
-        mgr = KVLifecycleManager(
-            tier_configs=[KVTierConfig(tier=KVTier.HOT, max_bytes=100)]
-        )
-        assert mgr.admit(1, 50)
-        assert not mgr.admit(2, 200)
-
-
-class TestWave46MemoryAwareSchedulerModelConfig:
-    """15. MemoryAwareScheduler configured with model params."""
-
-    def test_model_config_changes_estimation(self):
-        from yunshu_engine.memory_aware_scheduler import MemoryAwareScheduler
-
-        mas = MemoryAwareScheduler()
-        est_before = mas.estimate_kv_memory(100)
-        mas.set_model_config(num_layers=64, num_kv_heads=8, head_dim=128, dtype_size=2)
-        assert mas.estimate_kv_memory(100) > est_before
 
 
 # ── ──────────────────────────────────────────────────────────────

@@ -1195,21 +1195,6 @@
     },
     {
       "kind": "inspired",
-      "path": "python/yunshu_engine/spec_prefill.py",
-      "repo": "https://github.com/jundot/omlx",
-      "clone": "reference/omlx",
-      "upstream_paths": [
-        "omlx/patches/specprefill.py"
-      ],
-      "commit": "deb9f00a",
-      "license": "Apache-2.0",
-      "why": "attention-based sparse prefill",
-      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Keep lossy sparse prefill opt-in and local recovery policy; upstream draft attention positions and scheduler cleanup are separate correctness candidates, not justification to enable this by default."
-    },
-    {
-      "kind": "inspired",
       "path": "python/yunshu_engine/ngram_proposer.py",
       "repo": "https://github.com/vllm-project/vllm",
       "clone": "reference/vllm",
@@ -1393,21 +1378,6 @@
       "commit": "c8da6659",
       "license": "MIT",
       "why": "DFlash chain depth selection"
-    },
-    {
-      "kind": "inspired",
-      "path": "python/yunshu_engine/kv_optimizations.py",
-      "repo": "https://github.com/sgl-project/sglang",
-      "clone": "reference/sglang",
-      "upstream_paths": [
-        "python/sglang/srt/mem_cache/radix_cache.py"
-      ],
-      "commit": "a0ba1968",
-      "license": "Apache-2.0",
-      "why": "radix-tree prefix matching",
-      "reviewed_commit": "97d3150a6a3c412f9445d33c7a91238e590f8b10",
-      "reviewed_date": "2026-10-15",
-      "review_reason": "sync016 source diff review: KEEP: LoRA KV event names and signed-int64 priority clamp concern SGLang radix event transport; no LoRA event/torch-int64 priority representation in this local cache."
     },
     {
       "kind": "inspired",

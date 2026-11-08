@@ -11,7 +11,7 @@ truncation strategies to fit within the token budget:
   4. summary_compression: Replace old turns with a summary placeholder.
 
 Integration:
-  EngineCore.add_request()
+  BatchedEngine.generate() / stream_generate()
     → ContextWindowManager.compute_truncation(messages, max_tokens, strategy)
     → returns truncated messages that fit within the budget
 """

@@ -117,16 +117,6 @@ def serve(
         "--max-memory",
         help="Max GPU memory for models (e.g., 32GB, 'disabled'). Default: 80%% of system.",
     ),
-    completion_batch_size: int | None = typer.Option(
-        None,
-        "--completion-batch",
-        help="Completion batch size (default 32).",
-    ),
-    max_concurrent: int | None = typer.Option(
-        None,
-        "--max-concurrent",
-        help="Max concurrent requests (default: 8).",
-    ),
     auth_token: str | None = typer.Option(
         None,
         "--auth-token",
@@ -256,8 +246,6 @@ def serve(
         ("YUNSHU_AUTH_TOKEN", auth_token),
         ("YUNSHU_MCP_CONFIG", mcp_config),
         ("YUNSHU_HF_ENDPOINT", hf_endpoint),
-        ("YUNSHU_MAX_CONCURRENT", max_concurrent),
-        ("YUNSHU_COMPLETION_BATCH_SIZE", completion_batch_size),
         ("YUNSHU_STARTUP_TIMEOUT", startup_timeout),
         ("YUNSHU_SLOW_REQUEST_THRESHOLD", slow_request_threshold),
         ("YUNSHU_DRAIN_TIMEOUT", drain_timeout),
@@ -372,7 +360,6 @@ def serve(
         is_multi=is_multi,
         host=host,
         port=port,
-        completion_batch=settings.get("YUNSHU_COMPLETION_BATCH_SIZE"),
         mcp_config=settings.get("YUNSHU_MCP_CONFIG"),
         hf_endpoint=hf,
         has_proxy=bool(http_proxy or https_proxy),
@@ -565,7 +552,6 @@ def _print_startup_banner(
     is_multi: bool,
     host: str,
     port: int,
-    completion_batch: int,
     mcp_config: str | None = None,
     hf_endpoint: str | None = None,
     has_proxy: bool = False,
@@ -588,7 +574,6 @@ def _print_startup_banner(
         table.add_row("Models Dir", models_dir)
     _uds = settings.get("YUNSHU_UDS")
     table.add_row("Address", f"unix:{_uds}" if _uds else f"http://{host}:{port}")
-    table.add_row("Completion Batch", str(completion_batch))
     if voice_on:
         table.add_row("Voice", "[bold green]native speech-to-speech (omni) ON[/]")
 

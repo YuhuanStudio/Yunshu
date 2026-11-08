@@ -7,17 +7,6 @@ import pytest
 from yunshu_engine.engine_diagnostics import EngineDiagnosticsMixin as D
 
 
-def test_has_active_requests_counts_fast_path_and_core():
-    core = SimpleNamespace(has_active_requests=False)
-    eng = SimpleNamespace(_active_fast_path_count=0, _engine_core=core)
-    assert D.has_active_requests(eng) is False
-    core.has_active_requests = True
-    assert D.has_active_requests(eng) is True
-    eng = SimpleNamespace(_active_fast_path_count=2, _engine_core=None)
-    assert D.has_active_requests(eng) is True
-    assert D.has_active_requests(SimpleNamespace(_engine_core=None)) is False
-
-
 @pytest.mark.parametrize(
     "name,model_id,expected",
     [

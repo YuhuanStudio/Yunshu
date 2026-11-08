@@ -302,7 +302,7 @@ class EngineFastMixin:
     ) -> _engine.GenerationOutput:
         """Fast path: run generate_step directly on executor thread.
 
-        Bypasses EngineCore's continuous batching loop for single requests.
+        The single-request fast path: one generate_step on the MLX executor.
         Runs the entire generation in one tight GPU loop on the MLX executor,
         eliminating per-token async round-trip overhead for full GPU utilization.
         Note: priority is accepted for API consistency but has no effect in the
@@ -923,16 +923,6 @@ class EngineFastMixin:
             # Proactive memory pressure eviction (vllm-mlx pattern)
             if prefix_cache is not None and self._mem_pressure_threshold > 0:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
-                # Also evict from paged KV manager when enabled
-                if self._kv_manager is not None:
-                    try:
-                        self._kv_manager.memory_pressure_evict(
-                            self._mem_pressure_threshold / 100.0
-                        )
-                    except Exception:
-                        _engine.logger.debug(
-                            "paged KV pressure eviction failed", exc_info=True
-                        )
             if not _pc_hit:
                 try:
                     cached_kv, _, matched = (

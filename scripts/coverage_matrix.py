@@ -72,13 +72,6 @@ TECHNIQUES = [
         "Default serving (_generate_fast). Exercised by ~40 verify_* sections.",
     ),
     (
-        "engine-loop continuous batching",
-        "GATED",
-        "cache-lossless: engine-loop",
-        ["Qwen2.5-3B"],
-        "Opt-in YUNSHU_ENGINE_LOOP=1. Gated lossless; only 1 model.",
-    ),
-    (
         "KV-prefix cache HOT",
         "GATED",
         "cache-tier matrix (all models)",

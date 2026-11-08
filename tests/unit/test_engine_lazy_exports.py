@@ -15,7 +15,7 @@ import yunshu_engine
 
 def test_every_lazy_export_resolves():
     pairs = re.findall(r'"(\w+)": "(\.\w+)"', inspect.getsource(yunshu_engine))
-    assert len(pairs) > 50
+    assert len(pairs) > 40
     broken = []
     for name, module in pairs:
         try:

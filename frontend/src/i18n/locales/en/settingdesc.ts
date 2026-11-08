@@ -25,8 +25,6 @@ const settingdesc = {
     "Prompts prefilled at startup to warm the prefix cache: text or file paths separated by `||`.",
   YUNSHU_CONFIG:
     "TOML config file with `YUNSHU_*` settings (lower precedence than the environment).",
-  YUNSHU_MAX_CONCURRENT:
-    "Cap on concurrently admitted requests. Unset: adaptive, starting at 8.",
   YUNSHU_UNCACHED_SCHEDULING:
     "Order VLM prefill atoms by estimated uncached work and wait time, protect interactive prefills, and reserve measured decode time between atoms, without changing any token span. On by default only with qualified batch-invariant kernels; other backends keep FIFO unless enabled. Disable to restore upstream ordering.",
   YUNSHU_DECODE_TAIL_SHARE:
@@ -41,8 +39,6 @@ const settingdesc = {
     "Most orphaned generations kept at once; each holds its decode row and KV until adopted or expired. The oldest is cancelled beyond this.",
   YUNSHU_MEMORY_PRESSURE_REJECT:
     "Share of the Metal working set above which a new generation request is refused with 503 and `Retry-After` while other requests are running, to avoid an OOM. An idle server never refuses. 0 = off.",
-  YUNSHU_COMPLETION_BATCH_SIZE:
-    "Text engine: maximum sequences decoded together.",
   YUNSHU_SAMPLING_DEFAULTS:
     "Where a request that omits a sampling parameter gets it: the model's published per-mode recommendation, then its generation_config.json, then the API default (model), or the API default only (api). A value in the request always wins.",
   YUNSHU_DEFAULT_MAX_TOKENS:
@@ -233,10 +229,6 @@ const settingdesc = {
     "Qwen3.8-Flash-Next (qwen4_exp), M5-class GPUs: run the prompt rows’ indexed-sparse QSA attention on the tensor units, one threadgroup per (row, key head) with the 12 query heads that share a key head as one matmul operand and the selected keys read once, instead of upstream’s scalar kernel that re-reads the selected keys for every query head. Each row’s result depends on that row alone, so prefill stays independent of chunking; the arithmetic differs from upstream’s (fp32 accumulate in a different order, not a quality change). Decode and speculative verify are untouched. On by default: cold TTFT at 8K/32K/128K drops 25/24/20% on Flash-Next oQ2.5e, spec on == off and cache hit == miss hold, and the output is closer to an fp32-attention reference than the stock kernel (KLD 0.0685 vs 0.0731). Off: upstream’s scalar kernel.",
   YUNSHU_QWEN4_LANE:
     "Qwen3.8-Flash-Next (qwen4_exp): run the dense quantized projections as the row-invariant lane matmul for decode, speculative verify and drafting instead of upstream’s per-row singleton qmv. Extra verify rows no longer multiply the dense weight traffic; speculative output still equals plain decode. Output differs from the default arithmetic in the last bit. A head format the upstream fused head kernel cannot read (6-bit) turns it on regardless. Prefill chunks wider than 32 rows keep MLX’s quantized matmul.",
-  YUNSHU_ENGINE_LOOP:
-    "Text models: EngineCore continuous-batching loop instead of the single-request fast path.",
-  YUNSHU_OVERLAP:
-    "Text engine loop: overlap CPU and GPU work (`cpu_gpu`) or split a batch into two overlapping halves (`two_batch`).",
   YUNSHU_SPEC_UNVERIFIED:
     "Text models: explicitly enable the unverified external mlx-lm draft experiment. `eagle` is the historical route name; an ordinary LM draft works, no trained EAGLE head needed. Only greedy, non-streaming requests with default sampling and penalties; schema, custom processors, stop strings, thinking budgets, LoRA and token-mask options keep the regular fast path.",
   YUNSHU_DRAFT_MODEL:

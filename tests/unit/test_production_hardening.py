@@ -333,61 +333,6 @@ class TestEmptyInputs:
 # ═══════════════════════════════════════════════════════════════
 
 
-class TestTimeoutDuringGeneration:
-    """Verify generation timeout triggers cleanup."""
-
-    def test_request_lifecycle_timeout_tracking(self):
-        """RequestLifecycleState tracks timeout via timing fields."""
-        from yunshu_engine.request_lifecycle import (
-            RequestLifecycleState,
-        )
-
-        state = RequestLifecycleState(request_id="timeout-1")
-        state.queued_at = time.monotonic() - 10.0  # 10s ago
-        state.prefill_start = time.monotonic() - 9.0
-        # Simulate decode still not started → TTFT not measurable
-        assert state.ttft_ms is not None  # has prefill_start
-        assert state.queue_time_ms > 0
-
-    def test_timeout_deadline_calculation(self):
-        """Timeout deadline = gen_t0 + timeout_seconds."""
-        gen_t0 = 100.0
-        timeout_seconds = 5.0
-        deadline = gen_t0 + timeout_seconds
-        # At time 103.0, we're still within deadline
-        assert time.monotonic() is not None  # real clock works
-        assert deadline == 105.0
-
-    def test_timeout_cancel_event_set(self):
-        """After timeout, the cancel event should be set to stop generation."""
-        tracker = RequestTracker()
-        gen = tracker.register("timeout-req", "test")
-        # Simulate timeout by setting the event
-        gen.cancel_event.set()
-        assert gen.cancel_event.is_set()
-
-    def test_request_phase_aborted(self):
-        """ABORTED phase exists for timeout/cancel scenarios."""
-        from yunshu_engine.request_lifecycle import RequestPhase
-
-        assert RequestPhase.ABORTED is not None
-        state_aborted = RequestPhase.ABORTED
-        assert state_aborted.name == "ABORTED"
-
-    def test_lifecycle_transition_to_aborted(self):
-        """Transition from DECODING to ABORTED is valid."""
-        from yunshu_engine.request_lifecycle import (
-            RequestLifecycleState,
-            RequestPhase,
-        )
-
-        state = RequestLifecycleState(request_id="abort-1")
-        state.phase = RequestPhase.DECODING
-        result = state.transition(RequestPhase.ABORTED)
-        assert result is True
-        assert state.phase == RequestPhase.ABORTED
-
-
 # ═══════════════════════════════════════════════════════════════
 # 5. OOM During Generation
 # ═══════════════════════════════════════════════════════════════

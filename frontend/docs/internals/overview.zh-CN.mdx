@@ -13,8 +13,6 @@ description: 引擎内部地图：服务模型、请求路径、前缀缓存、�
 - **单一 MLX 线程。** 所有 GPU 工作都在拥有 Metal stream 的单 worker 执行器上运行，事件循环不会接触 MLX 数组。
 - **一致性规则。** 缓存命中等于未命中、推测开启等于推测关闭、预演（rehearsal）不改变输出。每个内部页面都会说明适用哪条规则以及如何检查。
 
-文本模型的 continuous batching 循环藏在 `YUNSHU_ENGINE_LOOP` 之后（默认关闭）。它是稳定的用户选项，输出不保证与快速路径相同（见[可能改变输出的选项](/docs/guides/options)）；它是遗留路径，不是要扩展的功能。
-
 ## 为什么这样设计
 
 云枢是单节点引擎，因此针对单台机器优化首 token 时间、解码速度与前缀复用，而不是多租户吞吐量。优化默认保持无损；有损的（例如 int8 KV）是明确的用户选项。自定义 Metal kernel 只有在相同 checkpoint 的对照显示端到端确实有收益、且输出相同或在容差内时才会采用。
@@ -46,7 +44,6 @@ flowchart TD
 
 | 设置 | 默认 | 作用 |
 |---|---|---|
-| `YUNSHU_ENGINE_LOOP` | 关闭 | 用遗留的文本模型批处理循环取代快速路径 |
 | `YUNSHU_VLM_DRAFT` | 未设置 | 覆盖 Qwen3.5 系列的推测 drafter |
 | `YUNSHU_VLM_APC_MEMORY_GB` | 按剩余内存推算 | 前缀缓存的 RAM 预算；`0` 表示禁用 |
 

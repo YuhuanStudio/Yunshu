@@ -13,27 +13,6 @@ import pytest
 from yunshu_engine.batched_engine import BatchedEngine, GenerationOutput
 
 
-def _engine(greedy_default: bool, has_proposer: bool = True):
-    eng = BatchedEngine.__new__(BatchedEngine)
-    eng._loaded = True
-    eng._model = MagicMock()
-    eng._tokenizer = MagicMock()
-    eng._model_name = "test"
-    eng._kv_prefix_cache = MagicMock()
-    eng._kv_prefix_cache.get.return_value = (None, None, 0)
-    eng._kv_prefix_cache.add = MagicMock()
-    eng._mem_pressure_threshold = 0
-    eng._spec_enabled = False
-    eng._spec_decoder = None
-    eng._ngram_proposer = MagicMock() if has_proposer else None
-    eng._ngram_greedy_default = greedy_default
-    eng._spec_prefill_enabled = False
-    eng._kv_quant_bits = None
-    eng._check_memory_guard = MagicMock(side_effect=lambda p, mt, **kw: (None, mt))
-    eng._engine_core = None
-    return eng
-
-
 async def _route(eng, **kw):
     """Run generate() with both paths mocked; return which one was hit."""
     eng._generate_fast = AsyncMock(
@@ -76,3 +55,23 @@ async def test_nonzero_temperature_never_takes_ngram():
     # n-gram verify is only lossless at temp<=0
     eng = _engine(greedy_default=True)
     assert await _route(eng, temperature=0.7, spec_decode=False) == "fast"
+
+
+def _engine(greedy_default: bool, has_proposer: bool = True):
+    eng = BatchedEngine.__new__(BatchedEngine)
+    eng._loaded = True
+    eng._model = MagicMock()
+    eng._tokenizer = MagicMock()
+    eng._model_name = "test"
+    eng._kv_prefix_cache = MagicMock()
+    eng._kv_prefix_cache.get.return_value = (None, None, 0)
+    eng._kv_prefix_cache.add = MagicMock()
+    eng._mem_pressure_threshold = 0
+    eng._spec_enabled = False
+    eng._spec_decoder = None
+    eng._ngram_proposer = MagicMock() if has_proposer else None
+    eng._ngram_greedy_default = greedy_default
+    eng._spec_prefill_enabled = False
+    eng._kv_quant_bits = None
+    eng._check_memory_guard = MagicMock(side_effect=lambda p, mt, **kw: (None, mt))
+    return eng

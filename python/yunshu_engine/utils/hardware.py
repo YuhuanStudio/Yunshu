@@ -375,8 +375,8 @@ _hw_cache_lock = threading.Lock()
 def get_hardware_info() -> HardwareInfo:
     """Cached hardware info singleton (refreshes every 30s).
 
-    Used by engine_core and scheduler for memory checks.
-    Caching avoids sysctl overhead on every engine loop step.
+    Used by the engine's memory checks.
+    Caching avoids sysctl overhead on every request.
     Thread-safe: protects check-and-update with a lock since it is
     called from both the MLX executor thread and the asyncio loop.
     """

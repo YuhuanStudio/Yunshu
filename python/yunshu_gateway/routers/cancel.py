@@ -74,39 +74,7 @@ async def cancel_generation(req: CancelRequest, request: Request):
             )
         count = tracker.cancel_all()
 
-        # Also cancel dedup shadow requests that are not registered with
-        # the tracker but tracked in engine_core._dedup_shadows.
-        shadow_count = 0
-        try:
-            from ..engine import get_engine, get_model_manager
-
-            engines_to_check = []
-            manager = get_model_manager()
-            if manager is not None:
-                for entry in manager.list_entries():
-                    if entry.is_loaded and hasattr(entry, "engine"):
-                        engines_to_check.append(entry.engine)
-            else:
-                engine = get_engine()
-                if engine is not None:
-                    engines_to_check.append(engine)
-
-            for eng in engines_to_check:
-                core = getattr(eng, "_engine_core", None)
-                if core is None:
-                    continue
-                for shadow_id in list(getattr(core, "_dedup_shadows", {}).keys()):
-                    # Only count a REAL cancellation. Dedup shadows are
-                    # engine-internal and not tracker-registered, so cancel() returns
-                    # False (no-op) — the old unconditional += inflated the reported
-                    # count. Shadows still terminate via their primary's fan-out (the
-                    # primaries ARE cancelled by the main cancel_all above).
-                    if tracker.cancel(shadow_id):
-                        shadow_count += 1
-        except Exception:
-            pass  # Best-effort: dedup shadows may not exist in all modes
-
-        total = count + shadow_count
+        total = count
         log_operation("cancel_all", "all_requests", "success", actor=actor, count=total)
         return {"status": "cancelled", "count": total}
 

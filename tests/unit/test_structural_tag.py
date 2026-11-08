@@ -380,15 +380,13 @@ async def test_text_engine_preserves_thinking_budget_only_for_lazy_tags(
         result = [
             o
             async for o in eng.stream_generate(
-                "hi", json_schema=schema, thinking_budget=96, use_engine_loop=False
+                "hi", json_schema=schema, thinking_budget=96
             )
         ]
         assert result
         passed = calls[0]
     else:
-        await eng.generate(
-            "hi", json_schema=schema, thinking_budget=96, use_engine_loop=False
-        )
+        await eng.generate("hi", json_schema=schema, thinking_budget=96)
         passed = eng._generate_fast.call_args.kwargs
     assert passed["thinking_budget"] == (96 if lazy else None)
 

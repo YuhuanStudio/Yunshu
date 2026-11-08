@@ -526,7 +526,7 @@ class LoRAAdapterManager:
             # place (LoRALinear wrappers), and load_adapter only restores-before-apply
             # when SWITCHING to a *different* adapter — so a subsequent request with NO
             # adapter (which never touches this manager) silently ran with this
-            # adapter's weights (and in YUNSHU_ENGINE_LOOP mode it fused onto every
+            # adapter's weights (the removed engine loop used to fuse it onto every
             # batched request). Mark is_loaded=False so a later same-adapter request
             # re-applies via acquire→load_adapter (the weights stay cached in
             # _adapters; only the in-place application is redone). Subtract the bytes

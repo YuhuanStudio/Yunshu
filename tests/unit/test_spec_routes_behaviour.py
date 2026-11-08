@@ -207,7 +207,6 @@ def test_gemma4_spec_excludes_every_request_the_primitive_cannot_reproduce(overr
 @pytest.mark.parametrize(
     "kw, expected",
     [
-        (dict(use_engine_loop=True), None),
         (dict(logprobs=True), None),
         (dict(plain_only=True), None),
         (dict(stream=True), None),  # no streaming spec route
@@ -227,7 +226,6 @@ def test_spec_route_table(kw, expected):
         stream=False,
         temperature=0.0,
         logprobs=False,
-        use_engine_loop=False,
     )
     args.update(kw)
     assert eng._spec_route(**args) == expected

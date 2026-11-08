@@ -12,11 +12,7 @@ from typing import Any
 class EngineDiagnosticsMixin:
     def has_active_requests(self: _engine.BatchedEngine) -> bool:  # type: ignore[misc]
         """Check if engine has in-flight requests (including fast-path)."""
-        if getattr(self, "_active_fast_path_count", 0) > 0:
-            return True
-        if self._engine_core:
-            return bool(self._engine_core.has_active_requests)
-        return False
+        return getattr(self, "_active_fast_path_count", 0) > 0
 
     def resolve_model_id(self: _engine.BatchedEngine, model_id: str) -> bool:  # type: ignore[misc]
         """Check if a model ID matches this engine."""
@@ -38,12 +34,7 @@ class EngineDiagnosticsMixin:
         return False
 
     def get_stats(self: _engine.BatchedEngine) -> dict:  # type: ignore[misc]
-        if self._engine_core:
-            stats = self._engine_core.get_stats()
-            stats["model"] = self.model_name
-            stats["loaded"] = self._loaded
-        else:
-            stats = {"model": self.model_name, "loaded": self._loaded}
+        stats = {"model": self.model_name, "loaded": self._loaded}
         if self._adaptive_spec is not None:
             stats["adaptive_spec"] = self._adaptive_spec.get_stats()
         if self._spec_decoder is not None:
@@ -206,44 +197,14 @@ class EngineDiagnosticsMixin:
                 result["prompt_cache"] = self._prompt_cache.get_stats()
             except Exception:
                 _engine.logger.debug("prompt cache stats unavailable", exc_info=True)
-        if self._engine_core:
-            paged = self._engine_core.get_kv_cache_stats()
-            result["paged_kv"] = paged
         return result
-
-    def get_radix_tree_stats(self: _engine.BatchedEngine) -> dict:  # type: ignore[misc]
-        """Return RadixTree statistics (node count, eviction metrics, block usage)."""
-        if not self._engine_core:
-            return {"enabled": False}
-        # Attr is `scheduler`, not `_scheduler` — the old typo made this always
-        # return {"enabled": False}, masking real RadixTree state .
-        scheduler = getattr(self._engine_core, "scheduler", None) or getattr(
-            self._engine_core, "_scheduler", None
-        )
-        if scheduler is None:
-            return {"enabled": False}
-        kv_mgr = getattr(scheduler, "_kv_manager", None) or getattr(
-            scheduler, "kv_manager", None
-        )
-        if kv_mgr is None:
-            return {"enabled": False}
-        # In tiered mode (YUNSHU_SSD_CACHE_DIR), kv_mgr is a TieredKVCacheManager
-        # whose RadixTree lives on `.hot` (: reach through the wrapper, else
-        # the stat is silently empty in tiered config).
-        tree = getattr(kv_mgr, "_radix_tree", None)
-        if tree is None:
-            hot = getattr(kv_mgr, "hot", None)
-            tree = getattr(hot, "_radix_tree", None) if hot is not None else None
-        if tree is None:
-            return {"enabled": False}
-        return {"enabled": True, **tree.get_stats()}
 
     @staticmethod
     def _extract_model_arch(model: Any) -> dict:
         """Extract model architecture parameters for KV cache sizing.
 
         Reads from the model's config attribute (standard HuggingFace pattern).
-        Returns kwargs dict for EngineCoreConfig.
+        Returns the architecture kwargs used for the KV sizing estimate.
         """
         if model is None:
             return {}
@@ -320,12 +281,9 @@ class EngineDiagnosticsMixin:
         """Lazily build a per-engine MemoryGuard so the preflight check actually
         fires on the DEFAULT FAST PATH.
 
-        Previously `_check_memory_guard` read `self._engine_core._memory_guard`,
-        but `_engine_core` is None in default serving, so the preflight was a
-        guaranteed no-op for the path that actually serves users — a safety valve
-        that never fired. We build a guard from the loaded model's arch on first
-        use. It is a SAFETY VALVE, not an admission throttle: it uses a permissive
-        KV budget (0.6 of the working set, vs the engine-loop's 0.25) so it only
+        We build a guard from the loaded model's arch on first use. It is a
+        SAFETY VALVE, not an admission throttle: it uses a permissive KV budget
+        (0.6 of the working set) so it only
         rejects a request whose KV alone would blow memory, never throttling
         normal traffic. Fail-open: any construction error → None (no rejection).
         The gateway's token-count `validate_prefill_memory` remains the primary
@@ -334,8 +292,7 @@ class EngineDiagnosticsMixin:
         g = getattr(self, "_fastpath_memory_guard", "unset")
         if g != "unset":
             return g
-        # Prefer the engine-loop's already-configured guard if present.
-        guard = getattr(self._engine_core, "_memory_guard", None)
+        guard = None
         if guard is None:
             try:
                 arch = self._extract_model_arch(self._model)

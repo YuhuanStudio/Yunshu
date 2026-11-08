@@ -11,8 +11,8 @@ scripts/
   coverage_matrix.py   # living coverage map (auto-derives GATED set from regression.py)
 
   verify/      # verify_*.py — correctness GATES (must PASS for GO). Real-model + protocol.
-  bench/       # bench_*.py, sweep_*.py, fair_bench, profile_engine_loop + framework/loop
-               #   helpers (_fw_*.py drive each framework; _bench_*.py drive engine-loop/oMLX)
+  bench/       # bench_*.py, sweep_*.py, fair_bench + framework
+               #   helpers (_fw_*.py drive each framework; _bench_*.py drive oMLX and the concurrency runs)
   realmodel/   # test_*.py — real-model smoke/integration drivers (test_all_modalities, …)
   validate/    # validate_*.py — CoreML / Gemma 4 model-specific validation
   tools/       # quality_comparison, extract_mtp_weights, roofline, build_coremltools_ane.sh

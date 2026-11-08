@@ -23,7 +23,6 @@ def route(engine, **kwargs):
         stream=False,
         temperature=0.0,
         logprobs=False,
-        use_engine_loop=False,
     )
     args.update(kwargs)
     return engine._spec_route(**args)
@@ -55,7 +54,6 @@ def test_plain_external_model_is_reachable(monkeypatch, path_source, with_config
     assert route(engine, stream=True) is None
     assert route(engine, temperature=0.7) is None
     assert route(engine, logprobs=True) is None
-    assert route(engine, use_engine_loop=True) is None
 
 
 def test_draft_path_alone_never_loads_a_second_model(monkeypatch):
@@ -85,12 +83,7 @@ async def test_public_generate_selects_plain_external_draft(monkeypatch):
     expected = GenerationOutput(text="draft route", finished=True, finish_reason="stop")
     engine._generate_speculative = AsyncMock(return_value=expected)
     engine._generate_fast = AsyncMock()
-    assert (
-        await engine.generate(
-            "hello", temperature=0.0, spec_decode=True, use_engine_loop=False
-        )
-        is expected
-    )
+    assert await engine.generate("hello", temperature=0.0, spec_decode=True) is expected
     engine._generate_speculative.assert_awaited_once()
     engine._generate_fast.assert_not_called()
 
@@ -131,9 +124,7 @@ async def test_external_draft_falls_back_for_unimplemented_parameters(
     expected = GenerationOutput(text="fast", finished=True, finish_reason="stop")
     engine._generate_fast = AsyncMock(return_value=expected)
     assert (
-        await engine.generate(
-            "hello", temperature=0.0, spec_decode=True, use_engine_loop=False, **option
-        )
+        await engine.generate("hello", temperature=0.0, spec_decode=True, **option)
         is expected
     )
     engine._generate_speculative.assert_not_awaited()

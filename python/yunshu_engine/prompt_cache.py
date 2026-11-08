@@ -10,10 +10,10 @@ Design:
   - Content hash of (messages + sampling_params) as cache key
   - LRU eviction with configurable max entries and memory budget
   - Stats tracking: hits, misses, memory usage, entry count
-  - Thread-safe for concurrent access from engine loop
+  - Thread-safe for concurrent access from the MLX executor
 
 Integration:
-  EngineCore.add_request()
+  BatchedEngine.generate() / stream_generate()
     → PromptCacheManager.lookup(messages_hash)
       → if hit: inject cached KV, skip prefill
     → PromptCacheManager.store(messages_hash, kv_state)
