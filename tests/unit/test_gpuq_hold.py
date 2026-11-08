@@ -19,6 +19,11 @@ def gpuq(tmp_path, monkeypatch):
 
     module = importlib.reload(module)
     monkeypatch.setattr(module.time, "time", lambda: NOW)
+    # The constants are read from the environment when the module is (re)loaded; pin the ones these
+    # tests state their numbers against, so a value another gpuq test left in the process cannot move them.
+    monkeypatch.setattr(module, "HOLD_GAP_S", 30.0)
+    monkeypatch.setattr(module, "HOLD_MAX_S", 4 * 3600.0)
+    monkeypatch.setattr(module, "SHORT_MIN", 10.0)
     return module
 
 
