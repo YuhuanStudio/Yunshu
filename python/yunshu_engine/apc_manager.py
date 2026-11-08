@@ -875,11 +875,12 @@ def _extra_defer_types() -> tuple:
     ``QSAKVCache`` (K/V plus the QSA indexer keys, positions and block summaries). Upstream's
     ``clone_cache_entry`` copies it through its state / meta_state contract, the same function the
     synchronous store uses, so the stored bits are identical; only when the copy runs differs."""
-    try:
-        from mlx_vlm.models.qwen4_exp.language import QSAKVCache
-    except ImportError:
-        return ()
-    return (QSAKVCache,)
+    from .qwen4_family import qwen4_model_modules
+
+    # every Qwen4-family language module's QSAKVCache (a renamed release adds its own module)
+    return tuple(
+        m.QSAKVCache for m in qwen4_model_modules("language") if hasattr(m, "QSAKVCache")
+    )
 
 
 def _share_qsa_rows(mine, theirs, targets: list, views: list) -> bool:
