@@ -133,6 +133,34 @@ class Verdict:
     size_kb: int = 0
 
 
+PIN_GLOBS = (
+    "/Volumes/P5Plus/yunshu-build/competitors/*/*/*_pin.json",
+    "/Volumes/P5Plus/yunshu-build/competitors/*/*_pin.json",
+)
+
+
+_PINNED: dict[Path, str] | None = None  # main() reads the pin files once
+
+
+def pinned_trees(globs: tuple[str, ...] | None = None) -> dict[Path, str]:
+    """Worktrees a comparison pin file names (fullcmp yunshu_pin.json and friends): never removed.
+    2026-11-08 the census pass removed wt-fullcmp-{yunshu,pb2,next-engine} (clean, merged) and the
+    fullcmp harness then refused every Yunshu cell for a missing pinned tree."""
+    import glob
+    import json
+
+    out: dict[Path, str] = {}
+    for pattern in PIN_GLOBS if globs is None else globs:
+        for f in glob.glob(pattern, recursive=True):
+            try:
+                wt = json.loads(Path(f).read_text()).get("worktree")
+            except (OSError, ValueError, AttributeError):
+                continue
+            if isinstance(wt, str) and wt:
+                out[Path(wt).resolve()] = f
+    return out
+
+
 def classify(
     tree: Path,
     repo: Path,
@@ -147,6 +175,9 @@ def classify(
 
     if not (tree / ".git").exists():
         return keep("not a worktree")
+    pinned = _PINNED if _PINNED is not None else pinned_trees()
+    if tree.resolve() in pinned:
+        return keep(f"pinned by {pinned[tree.resolve()]}")
     rc, head, _ = git(tree, "rev-parse", "HEAD")
     if rc != 0:
         return keep("HEAD unreadable")
@@ -246,6 +277,8 @@ def main(argv: list[str] | None = None) -> int:
     verify_trees = args.verify_root / "trees"
     now = time.time()
     try:
+        global _PINNED
+        _PINNED = pinned_trees()
         refs = protecting_runs(args.verify_root / "runs", now)
         procs = live_process_lines()
         jobs: list[tuple[Path, bool]] = []

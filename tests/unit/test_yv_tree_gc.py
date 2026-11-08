@@ -239,3 +239,20 @@ def test_census_requires_ancestor_of_main(env):
     v = _verdict(env, tree, census=True)
     assert not v.remove
     assert v.reason == "HEAD is not an ancestor of main"
+
+
+def test_a_tree_named_by_a_pin_file_is_never_removed(tmp_path, monkeypatch):
+    """2026-11-08: the census pass removed the fullcmp pinned worktrees (clean, merged into main)."""
+    tree = tmp_path / "wt-fullcmp-yunshu"
+    tree.mkdir()
+    (tree / ".git").write_text("gitdir: x")
+    pin = tmp_path / "competitors" / "x" / "yunshu_pin.json"
+    pin.parent.mkdir(parents=True)
+    pin.write_text(json.dumps({"worktree": str(tree)}))
+    monkeypatch.setattr(
+        gc, "PIN_GLOBS", (str(tmp_path / "competitors" / "*" / "*_pin.json"),)
+    )
+    v = gc.classify(
+        tree, tmp_path, now=1e12, min_age_h=0, refs=[], procs=[], census=True
+    )
+    assert not v.remove and "pinned by" in v.reason
