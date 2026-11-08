@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import time
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import mlx.core as mx
 
@@ -100,7 +100,7 @@ class FlashNextDFlash(DFlashBatch):
             committed=row.generated,
             penalty=row.penalty,
         )
-        return lat.cands[:, 0].astype(mx.int32)
+        return cast(mx.array, lat.cands[:, 0].astype(mx.int32))
 
     def _budget(self, row) -> NodeBudget:
         found = self.budgets.get(id(row))
@@ -270,7 +270,7 @@ class FlashNextDFlash(DFlashBatch):
             for r, w, res, (target, lp, extra) in zip(
                 rows, windows, results, draws, strict=True
             ):
-                toks = [int(t) for t in w.reshape(-1).tolist()]
+                toks = [int(t) for t in cast(list[int], w.reshape(-1).tolist())]
                 targets = [int(t) for t in target.reshape(-1).tolist()]
                 path = [0]
                 while (

@@ -388,6 +388,7 @@ class SpillDiskStore(DiskBlockStore):
     # The root's shared DiskBudget (yunshu_kv.disk_budget): global cap across namespaces,
     # free-space reserve, pause after a failed write. None keeps upstream's per-namespace cap.
     budget = None
+    _disk_bytes: int  # kept by the write and evict paths
 
     def attach_budget(self, budget) -> None:
         """Put this namespace under the root-wide budget."""
@@ -2138,6 +2139,7 @@ class YunshuAPCManager(APCManager):
         return self._head_boundary_loop(token_ids)
 
     def _head_boundary_loop(self, token_ids) -> int:
+        assert self.head_marker is not None
         a, b = self.head_marker
         n = len(token_ids)
         if n >= 2 and token_ids[0] == a and token_ids[1] == b:
@@ -2587,7 +2589,9 @@ class YunshuAPCManager(APCManager):
                     dropped += 1
                 if dropped:
                     release_freed_buffers(1 << 40)
-            return super()._make_room(allocation_bytes, retain_bytes=retain_bytes)
+            return cast(
+                bool, super()._make_room(allocation_bytes, retain_bytes=retain_bytes)
+            )
         finally:
             self.observation.reason = "superseded"
             self._headroom_memo = None
@@ -3392,7 +3396,7 @@ class YunshuAPCManager(APCManager):
 
     def snapshot(self) -> dict:
         """Counters and occupancy for /debug/kv-cache and /metrics."""
-        snap = self.stats_snapshot()
+        snap: dict[Any, Any] = self.stats_snapshot()
         with self.lock:
             snap["entries"] = len(self._exact_cache)
             snap["entry_tokens"] = [

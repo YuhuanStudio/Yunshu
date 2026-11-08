@@ -51,7 +51,9 @@ def normalize(model, weights: dict, *, direct: bool) -> int:
 
     from .qwen4_family import qwen4_first_module
 
-    Qwen4ExpRMSNorm = qwen4_first_module("language").Qwen4ExpRMSNorm
+    language = qwen4_first_module("language")
+    assert language is not None
+    Qwen4ExpRMSNorm = language.Qwen4ExpRMSNorm
 
     count = 0
     for path, module in model.named_modules():

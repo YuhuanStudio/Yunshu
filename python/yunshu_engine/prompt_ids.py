@@ -7,6 +7,8 @@ give the same results from one int32 array built once per prompt object.
 
 from __future__ import annotations
 
+from typing import cast
+
 import numpy as np
 
 _SLOT: list = [None, None]  # [the id sequence object, its int32 array]
@@ -26,7 +28,7 @@ def ids_array(token_ids, remember: bool = True) -> np.ndarray | None:
         arr = _SLOT[1]
         # a request's ids are never mutated; the ends are checked as a cheap tripwire
         if not len(arr) or (arr[0] == token_ids[0] and arr[-1] == token_ids[-1]):
-            return arr
+            return cast(np.ndarray, arr)
     try:
         arr = np.asarray(token_ids, dtype=np.int32)
     except (TypeError, ValueError, OverflowError):
@@ -97,6 +99,7 @@ def semantic_boundary_set(
         if assistant and not was:
             start = p
         elif was and not assistant:
+            assert start is not None  # a span opened where the turn became assistant
             spans.append((start, p))
             start = None
     if assistant and start is not None:

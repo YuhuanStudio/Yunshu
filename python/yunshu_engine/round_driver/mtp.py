@@ -20,7 +20,7 @@ Drafts only decide how much a step can commit, never what: the target verifies.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import mlx.core as mx
 
@@ -173,7 +173,7 @@ class MTPHead:
             xn = layer.input_layernorm(x)
             hh = x + attend(layer.self_attn, xn, self.slots, li, plan)
             x = hh + layer.mlp(layer.post_attention_layernorm(hh))
-        return d.norm(x)
+        return cast(mx.array, d.norm(x))
 
     def absorb_window(
         self, rows: list, tokens: mx.array, hidden: mx.array

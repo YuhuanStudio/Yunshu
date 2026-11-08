@@ -43,7 +43,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import mlx.core as mx
 import numpy as np
@@ -259,7 +259,7 @@ def window_penalty(penalty, logits: mx.array, window: mx.array) -> mx.array:
         .add(valid)
     )
     counts = penalty._counts(vocab)[None] + mx.cumsum(hits, axis=0)
-    return penalty._apply(counts, logits)
+    return cast(mx.array, penalty._apply(counts, logits))
 
 
 @dataclass
@@ -442,7 +442,7 @@ class RoundDriver:
             )
         )
         if self.generic:
-            self.head = None
+            self.head: Any = None
         elif self.flash:
             self.head = (
                 flashnext.FlashNextHead(drafter, self.lm, self._logits)
@@ -458,7 +458,7 @@ class RoundDriver:
         prev = mx.set_cache_limit(CACHE_LIMIT)
         if prev < CACHE_LIMIT:
             mx.set_cache_limit(prev)  # a tighter limit set by the host stays
-        self.dflash = None
+        self.dflash: Any = None
         if self.flash and dflash_drafter is not None:
             from .flashnext_dflash import FlashNextDFlash
 
@@ -705,6 +705,7 @@ class RoundDriver:
                 ),
             )
             hit_stages.add("lookup", time.perf_counter() - t_lookup)
+            assert row.cache is not None
             n = len(row.cache)
             want = n + (len(row.mtp_cache) if row.mtp_cache is not None else 0)
             warm = hit.get("warm_cache") if hit else None
@@ -756,7 +757,7 @@ class RoundDriver:
             # run the same spans (no 64-aligned tail cut, no run of several atoms).
             for c in row.ckpts:
                 if start < c < end:
-                    return c
+                    return cast(int, c)
             return end
         # The prompt's tail (the rows after its last 64-aligned boundary) always runs apart, as in
         # main's absolute prompt steps (boundary = min(grid, (end - 1) // 64 * 64)): a cell that
@@ -836,6 +837,7 @@ class RoundDriver:
         if not row.req.cache_store:
             return  # X-Yunshu-Cache-Store: off: the plan and lookup stay an ordinary request's
         self._store_window(row, end)
+        assert row.cache is not None
         caches = list(row.cache)
         if row.mtp_cache is not None:
             caches += row.mtp_cache
@@ -984,7 +986,8 @@ class RoundDriver:
         """Logits at every decode window position and the last position of a
         prompt finished this step; the row's token(s) at each. Returns
         ``[(item, token ids array, logprob arrays or None)]``."""
-        pick, outs = [], []
+        pick: list[int] = []
+        outs = []
         for it in items:
             if it.kind == "d":
                 outs.append((it, len(pick), it.count))
@@ -1356,6 +1359,7 @@ class RoundDriver:
             key = self._replay_key(it)
             if key is None or it.seg is None:
                 continue
+            assert it.row.cache is not None
             try:
                 replay.store(
                     key,
@@ -1385,6 +1389,7 @@ class RoundDriver:
             while budget > 0 and r.done < len(ids):
                 start = r.done
                 end = self._run_end(r, start, budget)
+                assert r.cache is not None
                 chunk = mx.array(ids[start:end], dtype=mx.int32)
                 items.append(
                     _Item(
@@ -1427,10 +1432,13 @@ class RoundDriver:
         if len(items) == 1 and items[0].seg is not None:
             tail_key = self._replay_key(items[0])
             if tail_key is not None:
+                assert items[0].row.cache is not None
                 entry = replay.lookup(
                     tail_key, items[0].row.cache, items[0].start, items[0].end
                 )
+        hidden: mx.array | None = None
         if entry is not None:
+            assert items[0].row.cache is not None
             replay.restore(entry, tail_key, items[0].row.cache)
             hidden = entry.hidden
             captures = list(entry.captures)
@@ -1503,6 +1511,7 @@ class RoundDriver:
             except preempt.PreemptedError as stop:
                 return self._preempted(items, stop)
         tm.mark("submit")
+        assert hidden is not None
         draws = self._draw(items, hidden)
         tm.mark("draw")
         # Evaluate every cache the step advanced, not only what feeds a token:
@@ -1514,7 +1523,7 @@ class RoundDriver:
         mx.eval(
             *[d[1] for d in draws],
             *[a for d in draws if d[2] for a in d[2]],
-            *[a for r in advanced.values() for a in cache_buffers(r.cache)],
+            *[a for r in advanced.values() for a in cache_buffers(cast(list, r.cache))],
         )
         tm.mark("wait")
         if self.flash and len(span_t) == len(items) + 2:
@@ -1537,12 +1546,14 @@ class RoundDriver:
                 continue
             ids = row.req.ids
             nxt = ids[it.start + 1 : it.end]
-            nxt.append(ids[it.end] if it.end < len(ids) else row.pending)
-            entry = absorb.setdefault(id(row), (row, [], [], []))
-            entry[1].extend(nxt)
-            entry[2].append(hidden[it.at : it.at + it.count])
+            tail_tok = ids[it.end] if it.end < len(ids) else row.pending
+            assert tail_tok is not None
+            nxt.append(tail_tok)
+            absorb_entry = absorb.setdefault(id(row), (row, [], [], []))
+            absorb_entry[1].extend(nxt)
+            absorb_entry[2].append(hidden[it.at : it.at + it.count])
             if row.req.position_ids is not None:
-                entry[3].append(row.req.position_ids[:, it.start : it.end])
+                absorb_entry[3].append(row.req.position_ids[:, it.start : it.end])
         live = list(absorb.values())
         heads = {}
         if live:
@@ -1606,7 +1617,7 @@ class RoundDriver:
 
     def _decode_step(self) -> list[Event]:
         if self.dflash is not None:
-            return self.dflash.step(self)
+            return cast(list[Event], self.dflash.step(self))
         started = time.perf_counter()
         late = [r for r in self.batch.rows if r.head_state is not None]
         if late:

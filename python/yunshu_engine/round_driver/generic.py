@@ -21,7 +21,7 @@ values in and out around the upstream call.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import mlx.core as mx
 
@@ -33,7 +33,7 @@ def new_cache(lm: Any) -> list:
     """The row's prompt cache, built as the stock generator builds a single row's."""
     from mlx_vlm.models import cache as vlm_cache
 
-    return vlm_cache.make_prompt_cache(lm)
+    return cast(list[Any], vlm_cache.make_prompt_cache(lm))
 
 
 class PromptFeatures:
@@ -109,7 +109,7 @@ def _call(lm: Any, row: Any, *args, **kwargs):
 
 
 def _logits_of(out: Any) -> mx.array:
-    return out.logits if hasattr(out, "logits") else out
+    return cast(mx.array, out.logits if hasattr(out, "logits") else out)
 
 
 def prefill(lm: Any, row: Any, start: int, end: int) -> mx.array | None:
@@ -219,6 +219,7 @@ class GenericBatch:
             self.cache = None
         elif len(keep) < len(self.rows):
             keep_arr = mx.array(keep, mx.int32)
+            assert self.cache is not None
             for c in self.cache:
                 c.filter(keep_arr)
         self.rows = [self.rows[i] for i in keep]

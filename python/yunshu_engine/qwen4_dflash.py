@@ -74,7 +74,9 @@ def install(lm: Any) -> None:
     if cls.__dict__.get("_yunshu_dflash_capture"):
         return
     original = cls.__call__
-    Qwen4ExpDecoderLayer = qwen4_first_module("language").Qwen4ExpDecoderLayer
+    language = qwen4_first_module("language")
+    assert language is not None
+    Qwen4ExpDecoderLayer = language.Qwen4ExpDecoderLayer
     layer_call = Qwen4ExpDecoderLayer.__call__
 
     def completed_layer(self, *args, **kwargs):

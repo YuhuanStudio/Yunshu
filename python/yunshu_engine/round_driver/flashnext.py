@@ -24,7 +24,7 @@ same interface the Qwen3.5 side has (``forward.lane_forward`` / ``batch.DecodeBa
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 import mlx.core as mx
 
@@ -53,6 +53,7 @@ def decode_caches(driver: Any, row: Any) -> list | None:
     if int(caches[0].offset) < row.n:
         return None  # the head did not absorb every kept position (it lags the target)
     # the head absorbed the last window before its length was known: positions past the kept ones go
+    assert head is not None
     head._sync(caches, row.n)
     return list(row.cache) + list(caches)
 
@@ -107,7 +108,7 @@ def prefill(
                 language_model, inputs, seg.cache, ids, skip_logits=True
             )
             captured.extend(x[0] for x in out.hidden_states)
-            return hidden[0]
+            return cast(mx.array, hidden[0])
         layers = language_model.model.layers
         sink: list = []
         token = qwen4_dflash._PREFILL_CAPTURE.set(
@@ -127,9 +128,9 @@ def prefill(
         if len(sink) != len(set(ids)):
             raise ValueError("Qwen4 DFlash capture layer is outside the target")
         captured.extend(x[0] for x in sink)
-        return out.hidden_states[0][0]
+        return cast(mx.array, out.hidden_states[0][0])
     out = language_model(inputs, cache=seg.cache, return_hidden=True, skip_logits=True)
-    return out.hidden_states[0][0]
+    return cast(mx.array, out.hidden_states[0][0])
 
 
 def _prefill_media(
@@ -147,10 +148,10 @@ def _prefill_media(
             lm, inputs, cache, ids, skip_logits=True, **media
         )
         captured.extend(x[0] for x in out.hidden_states)
-        return hidden[0]
+        return cast(mx.array, hidden[0])
     if one:
         out = lm._batch_invariant_decode(inputs, cache=cache, skip_logits=True, **media)
-        return out.hidden_states[0][0]
+        return cast(mx.array, out.hidden_states[0][0])
     sink: list = []
     token = None
     if ids:
@@ -172,12 +173,14 @@ def _prefill_media(
         if len(feats) != len(set(ids)):
             raise ValueError("Qwen4 DFlash capture layer is outside the target")
         captured.extend(x[0] for x in feats)
-    return sink[0][0]
+    return cast(mx.array, sink[0][0])
 
 
 def logits(language_model: Any, hidden: mx.array) -> mx.array:
     """Logits ``[R, V]`` of HC states ``[R, hc * D]``: the final mixer, then the row-invariant head."""
-    return language_model.speculative_logits_from_hidden(hidden[None])[0]
+    return cast(
+        mx.array, language_model.speculative_logits_from_hidden(hidden[None])[0]
+    )
 
 
 # ── packed decode / verify window ────────────────────────────────────────
@@ -239,6 +242,7 @@ def fused_chain_forward(
     from ..kernels.tf_flash_next import hc as tf_hc
 
     ql = qwen4_first_module("language")
+    assert ql is not None
     fwd = ql._QWEN4_BATCH_INVARIANT_FORWARD
     model = lm.model
     streams = model.args.hc_count
@@ -382,6 +386,7 @@ def _row_verify(lm: Any, t, cache, medium, capture_ids=()):
             )
             return hidden, list(out.hidden_states), transaction
         ql = qwen4_first_module("language")
+        assert ql is not None
         out = ql._QWEN4_BATCH_INVARIANT_FORWARD(
             lm, t, cache=cache, position_ids=positions[0], skip_logits=True
         )
@@ -541,6 +546,7 @@ class FlashNextBatch:
     def commit(self, used: list[int]) -> None:
         """Rows keep their first ``used[b]`` window positions (``1 <= used <= len(window)``)."""
         last, self._last = self._last, None
+        assert last is not None
         for r, u, transaction in zip(self.rows, used, last, strict=True):
             transaction.commit(int(u))
             r.n += int(u)
@@ -581,11 +587,11 @@ class FlashNextHead:
         self.slots = _HeadArrays(self)
 
     def make_cache(self) -> list:
-        return self.drafter.make_cache()
+        return cast(list, self.drafter.make_cache())
 
     def _mix_logits(self, mixed: mx.array) -> mx.array:
         """Logits of the head's mixed output ``[R, D]``."""
-        return self.lm.speculative_logits_from_hidden(mixed[None])[0]
+        return cast(mx.array, self.lm.speculative_logits_from_hidden(mixed[None])[0])
 
     def readout(self, hidden: mx.array, single: bool = False) -> mx.array:
         """Greedy token ids [R] (int32) of head HC states ``hidden`` [R, hc * D]."""

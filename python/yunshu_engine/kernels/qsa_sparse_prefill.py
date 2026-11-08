@@ -344,5 +344,6 @@ def install() -> bool:
         return original(queries, keys, values, block_indices, query_ends, **kw)
 
     dispatch._yunshu_sparse_prefill = True  # type: ignore[attr-defined]
-    lang.dispatch_qsa_attention = dispatch
+    # ModuleType's stub does not declare this attribute; a module's attribute store is its __dict__
+    lang.__dict__["dispatch_qsa_attention"] = dispatch
     return True

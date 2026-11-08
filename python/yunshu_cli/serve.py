@@ -266,8 +266,8 @@ def serve(
             hint = f" (did you mean {', '.join(close)}?)" if close else ""
             fail(f"--set {item!r}: unknown setting{hint}", code=2)
         overrides[name] = value
-    for key, value in overrides.items():
-        settings.set_override(key, value)
+    for key, override in overrides.items():
+        settings.set_override(key, override)
     try:
         for warning in settings.validate(warn=False):
             console.print(f"[yellow]Warning:[/] {warning}")
@@ -326,6 +326,7 @@ def serve(
         # A name under the models directory, or a repo id already in the
         # Hugging Face cache, serves that local copy instead of downloading.
         local = resolve_model_ref(effective_model)
+        assert local is not None  # an unmatched ref comes back unchanged
         if local != effective_model:
             console.print(f"[dim]Using the local copy of {effective_model}: {local}[/]")
             settings.set_override("YUNSHU_MODEL", local)
@@ -427,7 +428,8 @@ def serve(
         ),
         # NB: uvicorn.run has no request-size limit kwarg; the limit is enforced
         # by the gateway middleware via YUNSHU_MAX_REQUEST_SIZE (set above).
-        server_header="Yunshu" if server_header else None,
+        # uvicorn types server_header as bool; the name string is what the Server header carries
+        server_header="Yunshu" if server_header else None,  # type: ignore[arg-type]
         # uvicorn closes a WebSocket frame over ws_max_size (default 16 MiB) with 1009
         # before the app sees it: keep it level with what HTTP accepts.
         ws_max_size=settings.get("YUNSHU_MAX_REQUEST_SIZE"),

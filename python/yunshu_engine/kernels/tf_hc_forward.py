@@ -378,6 +378,7 @@ def uninstall() -> None:
     from ..qwen4_family import qwen4_first_module
 
     language = qwen4_first_module("language")
+    assert language is not None
     language.Qwen4ExpBatchInvariantForward._model = _STATE["original"]
     saved = _STATE["gdn_original"]
     if saved is _INHERITED:

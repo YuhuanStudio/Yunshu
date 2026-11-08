@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -174,7 +174,7 @@ def _gdn_mix(layer, qkv, z, b, a, cache) -> mx.array:
     )
     if hasattr(cache, "advance"):
         cache.advance(S)
-    return layer.norm(out, z).reshape(1, S, -1)
+    return cast(mx.array, layer.norm(out, z).reshape(1, S, -1))
 
 
 def _cat(parts: list) -> mx.array:
@@ -290,7 +290,7 @@ def forward(
         # otherwise hold every layer's)
         if i % EVAL_EVERY == EVAL_EVERY - 1:
             mx.eval(x)
-    return model.norm(x)[0]
+    return cast(mx.array, model.norm(x)[0])
 
 
 DENSE_LANE_ROWS = (
@@ -322,7 +322,7 @@ def _dense_lane_tail(seg: Segment):
 def lane_forward(language_model: Any, seg: Segment, *, capture_ids=(), captured=None):
     from ..kernels import gdn_prefill
 
-    sink = [] if captured is not None else None
+    sink: list[Any] | None = [] if captured is not None else None
     # short tails take the tail scope, as the lane does (gdn_prefill.tail_scope)
     scope = (
         gdn_prefill.tail_scope()
@@ -352,7 +352,7 @@ def logits(language_model: Any, hidden: mx.array) -> mx.array:
     tied embeddings use ``round_driver`` 's lane head when available)."""
     head = getattr(language_model, "_yunshu_lane_head", None)
     if head is not None:
-        return head(hidden)
+        return cast(mx.array, head(hidden))
     if language_model.args.tie_word_embeddings:
         owner = language_model.model.embed_tokens
         dense = owner.as_linear
@@ -364,7 +364,7 @@ def logits(language_model: Any, hidden: mx.array) -> mx.array:
         # rows, the arithmetic the 27B identity gates pass on. (2026-11-08: routing the 27B's LaneLinear
         # lm_head through the per-row loop below cost ~11 ms per verify round, -28% decode at 1K; yv
         # bisect 355610644.)
-        return dense(hidden)
+        return cast(mx.array, dense(hidden))
     # An unquantized (float) head without a lane head: a GEMM over R rows is not row-invariant (its
     # tiling follows R), so each row takes the single-row GEMV a plain decode step makes.
     return mx.concatenate(

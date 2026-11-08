@@ -17,7 +17,7 @@ so the distribution matches the non-speculative path.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, cast
 
 import mlx.core as mx
 import numpy as np
@@ -29,7 +29,8 @@ _C3 = 0xD1B54A32D192ED03
 
 
 def _u64(x: int) -> mx.array:
-    return mx.array(np.uint64(x))
+    # the mlx stub does not list numpy scalars as array inputs
+    return mx.array(np.uint64(x))  # type: ignore[arg-type]
 
 
 def _mix(x: mx.array) -> mx.array:
@@ -160,7 +161,7 @@ def _noise(row, bases, positions, vocab: int) -> mx.array:
         output_shapes=[(n, int(vocab))],
         output_dtypes=[mx.float32],
     )
-    return out
+    return cast(mx.array, out)
 
 
 def noised_rows(row, bases, positions):
@@ -307,7 +308,7 @@ def filter_logprobs(logprobs: mx.array, params: Any) -> mx.array:
     if params.min_p:
         row = apply_min_p(row, params.min_p)
     row = top_k_filter(row, params.top_k)
-    return row * (1 / params.temperature)
+    return cast(mx.array, row * (1 / params.temperature))
 
 
 def supports(params: Any) -> bool:

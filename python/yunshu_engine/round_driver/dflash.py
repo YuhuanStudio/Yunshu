@@ -57,6 +57,7 @@ class DFlashBatch:
         # draft None: speculation off. Rows decode through the very same packed verify
         # forward (a one-token window) but never draft, so spec on == spec off.
         self.can_draft = draft is not None
+        self.draft: Any = None
         if draft is None:
             self.draft, self.keep, self.capture_ids = None, 0, []
         else:
@@ -68,21 +69,21 @@ class DFlashBatch:
             self.keep = keep
             self.capture_ids = list(draft.config.target_layer_ids)
         self.verifier = Verifier(q35._EXACT_SPECULATIVE_VERIFIER)
-        self.rows = []
-        self.stats = {}
-        self.hidden = {}
+        self.rows: list[Any] = []
+        self.stats: dict[int, Any] = {}
+        self.hidden: dict[int, Any] = {}
         # YUNSHU_NEXT_TURN_PREFILL=decode: id(row) -> DecodeTail (the drafter window ending at the
         # row's cache), and the GPU-walked rounds' padded captured rows
         self.tails: dict[int, Any] = {}
         self.walk_rows: dict[int, Any] = {}
-        self.rings = {}
-        self.copiers = {}
+        self.rings: dict[int, Any] = {}
+        self.copiers: dict[int, Any] = {}
         # A lone drafting row's next lattice, queued behind its verify before the host readback
         # (``_prebuild``): id(row) -> lattice
-        self.prebuilt = {}
+        self.prebuilt: dict[int, Any] = {}
         # A lone row's cost-aware node budget (the lane's NodeBudget: 0 / 7 / 15 nodes by measured
         # landing and round cost): id(row) -> NodeBudget
-        self.budgets = {}
+        self.budgets: dict[int, Any] = {}
         self.turn = 0
         logger.info(
             "Round driver DFlash packed: shared 32-node budget, context=%d", self.keep
@@ -279,8 +280,10 @@ class DFlashBatch:
                 if copier is not None
                 else []
             )
-            if copied and (
-                r.generated == 1 or copier.last_match < copier.cfg.confident_match
+            if (
+                copied
+                and copier is not None
+                and (r.generated == 1 or copier.last_match < copier.cfg.confident_match)
             ):
                 copied = copied[:15]
             if copied:

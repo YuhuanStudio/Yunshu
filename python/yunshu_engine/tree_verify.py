@@ -33,6 +33,7 @@ GDN caches and appends the window's keys to the attention caches;
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -91,7 +92,7 @@ class TreeShape:
         self.dynamic = False
         self._arrays: dict[str, mx.array] = {}
 
-    def _const(self, name, make):
+    def _const(self, name: str, make: Callable[[], mx.array]) -> mx.array:
         arr = self._arrays.get(name)
         if arr is None:
             arr = self._arrays[name] = make()
@@ -181,7 +182,7 @@ class DynamicShape:
 class TreeResult:
     shape: TreeShape
     n0: int
-    hidden: mx.array  # [1, W, D] final-norm hidden
+    hidden: mx.array | None  # [1, W, D] final-norm hidden (None: a commit-only result)
     captured: list = field(default_factory=list)  # [1, W, D] per captured layer
     records: dict = field(default_factory=dict)  # layer index -> record
 
@@ -733,8 +734,8 @@ class _DequantRows:
 #   with dequantize_kv(code, scale) = bfloat16(float(code) * float(scale)) (kernels/int8_kv.py).
 # tree_attention_fused_q8(queries, keys, k_scales, values, v_scales, shape, rc, scale_arr, dims)
 #   Same contract against ``_tree_attention_fused`` on the dequantized buffers.
-TILE_PARTIALS_Q8 = None
-TREE_ATTENTION_FUSED_Q8 = None
+TILE_PARTIALS_Q8: Any = None
+TREE_ATTENTION_FUSED_Q8: Any = None
 
 
 def int8_kernels_installed() -> bool:
@@ -860,6 +861,9 @@ def tree_attention(
         cache.keys = keys = mx.pad(keys, pad)
         cache.values = values = mx.pad(values, pad)
         if q8:
+            assert (
+                k_scales is not None and v_scales is not None
+            )  # q8 is k_scales is not None
             cache.k_scales = k_scales = mx.pad(k_scales, pad)
             cache.v_scales = v_scales = mx.pad(v_scales, pad)
     _, h, _, d = (int(s) for s in queries.shape)
@@ -869,7 +873,7 @@ def tree_attention(
     scale_arr = _scale_array(scale)
     if getattr(shape, "fast_glue", False) and w <= FUSED_ROWS:
         if q8:
-            return _tree_attention_fused_q8(
+            fused_q8_out: mx.array = _tree_attention_fused_q8(
                 queries,
                 keys,
                 k_scales,
@@ -880,9 +884,11 @@ def tree_attention(
                 scale_arr,
                 (h, hkv, d),
             )
-        return _tree_attention_fused(
+            return fused_q8_out
+        fused_out: mx.array = _tree_attention_fused(
             queries, keys, values, shape, rc, scale_arr, (h, hkv, d)
         )
+        return fused_out
 
     # shared chunks 0 .. cstar - 1: every row sees them whole
     if cstar:
@@ -933,6 +939,7 @@ def tree_attention(
     # still begins at the same address; masked CK padding needs no backing rows.
     cap2 = _tree_tail_capacity(m + shape.max_depth + 1)
     if q8:  # the window / tail rows are dequantized into the bf16 tail copy
+        assert k_scales is not None and v_scales is not None
         hkv_keys = _DequantRows(keys[0], k_scales[0])
         hkv_vals = _DequantRows(values[0], v_scales[0])
     else:
@@ -1397,7 +1404,7 @@ def conv_tail(conv_prev, mixed, path, conv_idx, tail_idx):
     return mx.take(seq, conv_idx, axis=0)[None]
 
 
-def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
+def tree_commit(lm, cache: Any, res: TreeResult, path: list[int]) -> None:
     """Keep the window rows in ``path`` (root first, each row a child of the
     previous one): the caches end as if those tokens had been decoded one by one."""
     from mlx_vlm.models.qwen3_5 import language as q35

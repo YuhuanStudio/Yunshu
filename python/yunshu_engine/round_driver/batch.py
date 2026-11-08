@@ -27,7 +27,7 @@ state / conv window continue from the position ``used`` (``commit``).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import mlx.core as mx
 import numpy as np
@@ -120,15 +120,20 @@ class Slots:
         """Store a row's first ``n`` keys (``k``, ``v`` [1, HKV, >= n, D], bf16): quantized
         here once when the format is int8."""
         self._buf(i, k)
+        # _buf allocated this layer's buffers (codes + scales when int8)
+        k_buf, v_buf = self.k[i], self.v[i]
+        assert k_buf is not None and v_buf is not None
         if self.int8:
             kq, ks, vq, vs = ra.quantize_kv_pair(k[:, :, :n, :], v[:, :, :n, :])
-            self.k[i][slot, :, :n, :] = kq[0]
-            self.v[i][slot, :, :n, :] = vq[0]
-            self.ks[i][slot, :, :n, :] = ks[0]
-            self.vs[i][slot, :, :n, :] = vs[0]
+            ks_buf, vs_buf = self.ks[i], self.vs[i]
+            assert ks_buf is not None and vs_buf is not None
+            k_buf[slot, :, :n, :] = kq[0]
+            v_buf[slot, :, :n, :] = vq[0]
+            ks_buf[slot, :, :n, :] = ks[0]
+            vs_buf[slot, :, :n, :] = vs[0]
             return
-        self.k[i][slot, :, :n, :] = k[0, :, :n, :]
-        self.v[i][slot, :, :n, :] = v[0, :, :n, :]
+        k_buf[slot, :, :n, :] = k[0, :, :n, :]
+        v_buf[slot, :, :n, :] = v[0, :, :n, :]
 
     def arrays(self) -> list[mx.array]:
         return [a for a in self.k + self.v + self.ks + self.vs if a is not None]
@@ -249,16 +254,21 @@ def attend(
     HKV = int(keys.shape[1])
     slots._buf(i, keys)
     idx = plan.scatter_index(HKV, slots.cap)
+    # _buf allocated this layer's buffers (codes + scales when int8)
+    k_buf, v_buf = slots.k[i], slots.v[i]
+    assert k_buf is not None and v_buf is not None
     if slots.int8:
         # new rows are quantized on write; the kernel reads codes + scales
         kq, ks, vq, vs = ra.quantize_kv_pair(keys, values)
-        slots.k[i] = _scatter_rows(slots.k[i], idx, kq)
-        slots.v[i] = _scatter_rows(slots.v[i], idx, vq)
-        slots.ks[i] = _scatter_rows(slots.ks[i], idx, ks)
-        slots.vs[i] = _scatter_rows(slots.vs[i], idx, vs)
+        ks_buf, vs_buf = slots.ks[i], slots.vs[i]
+        assert ks_buf is not None and vs_buf is not None
+        slots.k[i] = _scatter_rows(k_buf, idx, kq)
+        slots.v[i] = _scatter_rows(v_buf, idx, vq)
+        slots.ks[i] = _scatter_rows(ks_buf, idx, ks)
+        slots.vs[i] = _scatter_rows(vs_buf, idx, vs)
     else:
-        slots.k[i] = _scatter_rows(slots.k[i], idx, keys)
-        slots.v[i] = _scatter_rows(slots.v[i], idx, values)
+        slots.k[i] = _scatter_rows(k_buf, idx, keys)
+        slots.v[i] = _scatter_rows(v_buf, idx, values)
     if not slots.int8 and (queries.dtype != mx.bfloat16 or keys.dtype != mx.bfloat16):
         # The ragged Metal kernels accept bf16 only. MTP heads may retain
         # fp16/fp32 weights; keep their arithmetic instead of rounding to bf16.
@@ -275,10 +285,12 @@ def attend(
         # int8 rows run the same token-tile family as bf16 (the int8 tile kernel dequantizes in-kernel), so
         # plain decode, MTP verify and tree verify share one arithmetic
         tile = H // HKV <= 8 and ra.tile_ready()
+        k_now, v_now = slots.k[i], slots.v[i]
+        assert k_now is not None and v_now is not None
         out = ra.ragged_decode_attention(
             queries,
-            slots.k[i],
-            slots.v[i],
+            k_now,
+            v_now,
             plan.lengths,
             at.scale,
             max_length=plan.max_length,
@@ -291,8 +303,8 @@ def attend(
     out = out.transpose(0, 2, 1, 3).reshape(B, T, -1) * mx.sigmoid(gate)
     out = out if pack is None else pack.unpad(out)
     if verifier is not None:
-        return verifier._linear(at.o_proj, out[None])[0]
-    return at.o_proj(out)
+        return cast(mx.array, verifier._linear(at.o_proj, out[None])[0])
+    return cast(mx.array, at.o_proj(out))
 
 
 class DecodeBatch:
@@ -412,7 +424,7 @@ class DecodeBatch:
             h = x + r
             x = h + verifier._feed_forward(layer.mlp, layer.post_attention_layernorm(h))
         self._last = {"recs": recs, "lens": lens, "T": T}
-        return model.norm(x)[0]
+        return cast(mx.array, model.norm(x)[0])
 
     def _gdn(self, verifier, g, xn, i, lens, recs) -> mx.array:
         """One GDN layer over the rows' windows, row by row through ``tree_verify._gdn_layer`` (a chain
@@ -436,7 +448,9 @@ class DecodeBatch:
             recs[b][i] = rec
             mixed.append(out)
             at += w
-        return verifier._linear(g.out_proj, mx.concatenate(mixed, axis=1))
+        return cast(
+            mx.array, verifier._linear(g.out_proj, mx.concatenate(mixed, axis=1))
+        )
 
     def commit(self, used: list[int]) -> None:
         """Rows keep their first ``used[b]`` window positions (``1 <= used <=
@@ -446,6 +460,7 @@ class DecodeBatch:
         from .. import tree_verify as tv
 
         last, self._last = self._last, None
+        assert last is not None
         for r, u in zip(self.rows, used, strict=True):
             r.n += u
         for b, (u, rec) in enumerate(zip(used, last["recs"], strict=True)):

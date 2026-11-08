@@ -71,7 +71,7 @@ def eligible(start: int, end: int, n: int) -> bool:
 
 
 def lookup(key, cache: list, start: int, end: int) -> Entry | None:
-    entry = _STORE.get(key)
+    entry: Entry | None = _STORE.get(key)
     if entry is None or (entry.base, entry.rows, len(entry.slots)) != (
         start,
         end - start,

@@ -44,6 +44,10 @@ def _pad_tokens(a: mx.array, n: int) -> mx.array:
 class Int8KVCache(KVCache):
     """Single-row KV cache stored as int8 codes + fp16 group scales (see the module docstring)."""
 
+    offset: int
+    keys: mx.array | None
+    values: mx.array | None
+
     def __init__(self) -> None:
         super().__init__()
         self.k_scales: mx.array | None = None
@@ -82,7 +86,9 @@ class Int8KVCache(KVCache):
             return
         grow = cap - int(self.keys.shape[2])
         self.keys = _pad_tokens(self.keys, grow)
+        assert self.values is not None
         self.values = _pad_tokens(self.values, grow)
+        assert self.k_scales is not None and self.v_scales is not None
         self.k_scales = _pad_tokens(self.k_scales, grow)
         self.v_scales = _pad_tokens(self.v_scales, grow)
 
@@ -91,6 +97,8 @@ class Int8KVCache(KVCache):
         tree attention reads ``keys`` / ``values`` / scales off the cache, not the return value)."""
         prev, t = self.offset, int(keys.shape[2])
         self._reserve(prev + t, keys)
+        assert self.keys is not None and self.values is not None
+        assert self.k_scales is not None and self.v_scales is not None
         kq, ks, vq, vs = quantize_kv_pair(keys, values)
         end = prev + t
         self.keys[..., prev:end, :] = kq
@@ -132,6 +140,11 @@ class Int8KVCache(KVCache):
     def nbytes(self) -> int:
         if self.keys is None:
             return 0
+        assert (
+            self.values is not None
+            and self.k_scales is not None
+            and self.v_scales is not None
+        )
         return sum(
             int(a.nbytes)
             for a in (self.keys, self.values, self.k_scales, self.v_scales)
@@ -139,6 +152,8 @@ class Int8KVCache(KVCache):
 
     def dequantized(self, n: int | None = None) -> tuple[mx.array, mx.array]:
         """bf16 K, V of the first ``n`` (default: all ``CAP``) positions: the reference's input."""
+        assert self.keys is not None and self.values is not None
+        assert self.k_scales is not None and self.v_scales is not None
         end = int(self.keys.shape[2]) if n is None else int(n)
         return (
             dequantize_kv(self.keys[..., :end, :], self.k_scales[..., :end, :]),
