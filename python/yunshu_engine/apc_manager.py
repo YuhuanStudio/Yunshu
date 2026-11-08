@@ -102,6 +102,11 @@ _MEDIA_COST: contextvars.ContextVar[bool] = contextvars.ContextVar(
 # - the copies of all layers were evaluated at once, so a restore held the source, the
 #   copy and the capacity-padded copy of every layer together (3x the cache at its peak).
 #   They are evaluated a few layers at a time, so only a few layers' intermediates exist.
+# Set while a checkpoint is being admitted: the disk's ``flush()`` (upstream joins the writer queue
+# at the start of every store) is then a no-op, so a store never waits for a queued file's write.
+_ADMISSION: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "yunshu_apc_admission", default=False
+)
 _OWNED_SNAPSHOT: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "yunshu_apc_owned_snapshot", default=False
 )
@@ -483,6 +488,13 @@ class SpillDiskStore(DiskBlockStore):
             time.sleep(self.gate_poll_s)
 
     def flush(self) -> None:
+        if _ADMISSION.get():
+            # Upstream's store_exact_cache joins the writer queue before admitting a checkpoint
+            # (to release queued tensors). With write-behind that made the next store of a flush
+            # wait for the previous file's disk write (~200 ms per 8K checkpoint on the 27B, in
+            # the first decode step's prelude) and opened the gate. The queue is bounded by
+            # ``queue_max_bytes``; a full queue already makes the producer write by itself.
+            return
         self._gate_open = True
         try:
             super().flush()
@@ -2281,11 +2293,13 @@ class YunshuAPCManager(APCManager):
                 self._head_keys.add(key)
         before_rejects = self.stats.rejects
         token = _OWNED_SNAPSHOT.set(bool(_owned))
+        adm = _ADMISSION.set(True)
         try:
             ok = super().store_exact_cache(
                 token_ids, prompt_cache, extra_hash=extra_hash
             )
         finally:
+            _ADMISSION.reset(adm)
             _OWNED_SNAPSHOT.reset(token)
         if ok and self.persist_on_store:
             self._persist_behind(key)

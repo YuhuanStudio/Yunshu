@@ -225,3 +225,45 @@ def test_no_probe_means_no_gate(tmp_path):
     m.store_exact_cache(_ids(2000), _cache(96))
     m.disk.flush()
     assert len(_files(tmp_path)) == 1
+
+
+def test_store_does_not_wait_for_a_file_being_written(tmp_path):
+    """Upstream joins the writer queue at the start of every store; a flush of several
+    checkpoints then waited out each file's disk write (the first decode step's prelude)."""
+    import time
+
+    m = _disk_mgr(tmp_path, persist_on_store=True)
+    gate, started = threading.Event(), threading.Event()
+    real = m.disk._write_payload_impl
+
+    def slow(shard_id, hashes, payload):
+        started.set()
+        gate.wait(10)
+        return real(shard_id, hashes, payload)
+
+    m.disk._write_payload_impl = slow
+    m.begin_request()
+    assert m.store_exact_cache(_ids(2000), _cache(96))
+    assert started.wait(5)  # file one is being written (and held)
+    t = time.perf_counter()
+    assert m.store_exact_cache(_ids(5000), _cache(96))  # must not wait for it
+    assert time.perf_counter() - t < 1.0
+    gate.set()
+    m.disk.flush()  # outside an admission, flush still waits for the writer
+    assert len(_files(tmp_path)) == 2
+
+
+def test_busy_engine_keeps_every_file_back_across_several_stores(tmp_path):
+    import time
+
+    busy = {"on": True}
+    m = _gated(tmp_path, busy)
+    m.begin_request()
+    for base in (2000, 5000, 8000):
+        assert m.store_exact_cache(_ids(base), _cache(96))
+    time.sleep(0.3)
+    assert (
+        _files(tmp_path) == []
+    )  # an admission's flush neither waited nor opened the gate
+    busy["on"] = False
+    assert _wait_files(tmp_path, 3)
