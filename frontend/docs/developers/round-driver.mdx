@@ -1,6 +1,6 @@
 ---
 title: Round driver
-description: The packed-row engine for dense Qwen3.5-family models: one forward per step over every decoding row, row-invariant arithmetic, and cost-aware MTP or DFlash drafting for several rows at once.
+description: "The packed-row engine for dense Qwen3.5-family models: one forward per step over every decoding row, row-invariant arithmetic, and cost-aware MTP or DFlash drafting for several rows at once."
 ---
 
 The round driver (`python/yunshu_engine/round_driver/`) is the multi-row serving path for dense Qwen3.5-family models when speculation is on. It lets concurrent requests draft too (MTP chains, or DFlash2 trees and copy chains sharing a fair 32-node verify budget), where the single-request lane drafts only while a request is alone. With speculation off (`YUNSHU_VLM_DRAFT=off`) the stock shared batch serves every request and is the identity reference: speculation on equals speculation off, token for token. This page is a maintainer reference; for the other serving paths see [Architecture](/docs/developers/architecture).
