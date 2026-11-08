@@ -15,11 +15,11 @@ class P:
                         try: out[f"{name}.{k}"] = f"{type(v).__name__}[{len(v)}]" + (repr(v)[:150] if len(repr(v)) < 400 else "")
                         except Exception: pass
                     elif callable(v) and hasattr(v, "__qualname__"):
-                        out[f"{name}.{k}"] = "fn:" + v.__qualname__ + ":" + str(getattr(v, "__module__", ""))
+                        out[f"{name}.{k}"] = "fn:" + str(v.__qualname__) + ":" + str(getattr(v, "__module__", ""))
                     if isinstance(v, type) and name.startswith(("mlx_vlm.models.qwen3_5", "yunshu_engine")):
                         for a, f in list(vars(v).items()):
                             if callable(f) and hasattr(f, "__qualname__"):
-                                out[f"{name}.{k}.{a}"] = "fn:" + f.__qualname__
+                                out[f"{name}.{k}.{a}"] = "fn:" + str(f.__qualname__)
             out = {k: v for k, v in out.items()}
             json.dump(out, open(os.environ["OUT"], "w"), indent=0, sort_keys=True, default=str)
 sys.exit(pytest.main(["-q","-p","no:cacheprovider","-p","no:randomly",*sys.argv[1:]],plugins=[P()]))
