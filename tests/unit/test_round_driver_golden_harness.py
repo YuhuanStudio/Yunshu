@@ -203,3 +203,24 @@ def test_spec_token_rows_without_engaged_drafter_evidence_fail():
     r["sha256"] = digest(r["payload"])
     with pytest.raises(ValueError, match="speculative execution evidence"):
         validate(r)
+
+
+def test_yv_golden_scratch_stays_on_run_disk(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts.verify import stages
+
+    cells = []
+    monkeypatch.setattr(stages, "_finish", lambda ctx, result: result)
+    ctx = SimpleNamespace(
+        env={"M0_LAYER": "generic"},
+        run=SimpleNamespace(path=tmp_path),
+        cand=SimpleNamespace(path=tmp_path),
+        py="python",
+        model="tiny",
+        exe=SimpleNamespace(run_cells=lambda batch: cells.extend(batch) or {}),
+    )
+    stages.stage_round_golden(ctx)
+    scratch = tmp_path / "round-golden-home"
+    assert f"TMPDIR={scratch / 'tmp'}" in cells[0].argv
+    assert (scratch / "tmp").is_dir()

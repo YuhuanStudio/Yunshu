@@ -2991,7 +2991,7 @@ def stage_round_golden(ctx: Ctx) -> StageResult:
     if layer not in LAYERS:
         return _finish(ctx, StageResult("round-golden", False, ["unknown M0_LAYER"]))
     scratch = ctx.run.path / "round-golden-home"
-    scratch.mkdir(parents=True, exist_ok=True)
+    (scratch / "tmp").mkdir(parents=True, exist_ok=True)
     results = {}
     for kind in ("tiny", "checkpoint"):
         if (
@@ -3002,6 +3002,7 @@ def stage_round_golden(ctx: Ctx) -> StageResult:
             "env",
             f"HOME={scratch}",
             f"XDG_CACHE_HOME={scratch / 'cache'}",
+            f"TMPDIR={scratch / 'tmp'}",
             "PYTHONDONTWRITEBYTECODE=1",
             f"PYTHONPATH={ctx.cand.path / 'python'}:{ctx.cand.path}",
             ctx.py,
