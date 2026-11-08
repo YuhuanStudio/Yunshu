@@ -33,6 +33,10 @@ class P:
                 if one == "stock": lane_linear.set_stock_rows(512)
                 if one == "omlx_all":
                     from yunshu_engine.kernels import omlx as _o; _o.apply()
+                if one == "ragged_real":
+                    from yunshu_engine.kernels import ragged_kv as _r; _r.install(); _r.set_dense_lane(True)
+                if one == "ragged_inst":
+                    from yunshu_engine.kernels import ragged_kv as _r; _r.install()
                 if one == "ragged":
                     from yunshu_engine.kernels import ragged_kv as _r; _r._STATE.update(installed=True, dense_lane=True)
             if act.startswith("apply_"):
