@@ -223,6 +223,7 @@ def test_full_suite_has_every_stage():
         "modelprobe",
         "lane_bandwidth",
         "jump_forward",
+        "ngram",
         "client_compat",
         "respfeat",
         "websearch",
