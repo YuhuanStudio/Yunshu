@@ -2934,11 +2934,6 @@ class VLMEngine:
                     processor=self._processor,
                 )
         if drafter is not None and draft_kind == "dflash":
-            # Keep adaptive depth for the fallback. Qualified greedy requests
-            # use the trained DFlash2 block and verified prompt-copy islands.
-            from .spec_schedule import install_chain_budget
-
-            install_chain_budget()
             if kernels is not None:
                 from .dflash_copy import configure as configure_dflash_copy
 
@@ -2969,15 +2964,6 @@ class VLMEngine:
                             logger.warning(
                                 "fast-tree verify warm-up failed", exc_info=True
                             )
-        if drafter is not None and not qwen4:
-            # Tree drafts through the tree verify (single greedy row,
-            # batch-invariant kernels only; every other round keeps the loop).
-            if settings.get("YUNSHU_SPEC_TREE") == "tree":
-                if draft_kind == "dflash":
-                    from .dflash_tree import install as install_tree
-                else:
-                    from .mtp_tree import install as install_tree
-                install_tree()
         runner = VLMBatchRunner(
             self._model,
             self._processor,

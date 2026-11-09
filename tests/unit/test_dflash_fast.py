@@ -230,30 +230,6 @@ def test_cached_gate_record_commits_once_with_the_same_conv_path(monkeypatch):
     assert cache[0]._omlx_gdn_pending is None
 
 
-def test_prior_force_tree_install_delegates_after_mode_change(monkeypatch):
-    from mlx_vlm.speculative import utils
-
-    from yunshu_engine import dflash_copy, dflash_tree, settings
-
-    mode = ["tree"]
-    monkeypatch.setattr(settings, "get", lambda *_: mode[0])
-
-    def original(*_, **__):
-        yield 11, None
-
-    original._yunshu_copy = True
-    monkeypatch.setattr(utils, "_dflash_rounds", original)
-    monkeypatch.setattr(
-        dflash_tree, "dflash_tree_rounds", lambda *_, **__: iter([(17, None)])
-    )
-    assert dflash_tree.install()
-    assert list(utils._dflash_rounds()) == [(17, None)]
-    for selected in ("off", "auto"):
-        mode[0] = selected
-        assert list(utils._dflash_rounds()) == [(11, None)]
-        assert dflash_copy.install()
-
-
 def test_private_projection_bundle_does_not_keep_the_model_alive(monkeypatch):
     import gc
     import weakref

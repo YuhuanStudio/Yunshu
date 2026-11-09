@@ -203,10 +203,8 @@ if _dflash:
     if "--dflash-served" in sys.argv:
         # as the server builds it: 8-bit drafter and cost-aware chain depth
         from yunshu_engine.dflash_tree import quantize_drafter  # noqa: E402
-        from yunshu_engine.spec_schedule import install_chain_budget  # noqa: E402
 
         quantize_drafter(drafter, 8)
-        install_chain_budget()
 else:
     drafter, draft_kind = _load_drafter_in_memory(model_dir), "mtp"
 print(

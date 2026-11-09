@@ -135,139 +135,6 @@ def test_copy_observation_does_not_repeat_previous_round():
     assert proxy._copy._model_tpr == expected
 
 
-def install_fixture(monkeypatch):
-    from mlx_vlm.speculative import dflash, utils
-
-    from yunshu_engine import mtp_lane, tree_verify
-
-    received = []
-    closed = []
-
-    def original(model, dm, cache, hidden, **kw):
-        received.append(dm)
-        if isinstance(dm, dflash_copy.CopyDraft):
-            dflash._dflash_next_block_size(dm, 8, 100)
-        try:
-            dm.accept_lens.append(1)
-            yield 2, None
-            yield 3, None
-        finally:
-            closed.append(True)
-
-    monkeypatch.setattr(utils, "_dflash_rounds", original)
-    monkeypatch.setattr(
-        dflash, "_dflash_next_block_size", lambda dm, b, r, i=None: min(b, r)
-    )
-    monkeypatch.setitem(mtp_lane._STATE, "context", [11, 12, 13])
-    monkeypatch.setitem(mtp_lane._STATE, "guide", None)
-    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda lm: 16)
-    monkeypatch.setattr(mtp_lane, "verify_max_rows", lambda *args: 32)
-    monkeypatch.setattr(tree_verify, "supported", lambda lm: True)
-    monkeypatch.setattr(tree_verify, "lane_ready", lambda lm, cache: True)
-    monkeypatch.setattr(tree_verify, "lane_projections", lambda lm: True)
-    raw = draft()
-    raw.config.block_size = 8
-    raw.candidate_selector = object()
-    dflash_copy.install()
-    return utils, raw, received, closed
-
-
-def test_installer_uses_proxy_without_mutating_draft_methods(monkeypatch):
-    utils, raw, received, closed = install_fixture(monkeypatch)
-    fn = raw.draft_block_greedy
-    assert list(
-        utils._dflash_rounds(None, raw, [], None, first_bonus=1, greedy_sampling=True)
-    ) == [(2, None), (3, None)]
-    assert isinstance(received[0], dflash_copy.CopyDraft)
-    assert received[0]._copy.ctx == [11, 12, 13, 1, 2, 3]
-    assert raw.draft_block_greedy is fn
-    assert closed == [True]
-    installed = utils._dflash_rounds
-    dflash_copy.install()
-    assert utils._dflash_rounds is installed
-
-
-@pytest.mark.parametrize(
-    "case",
-    [
-        "sampled",
-        "no_context",
-        "guide",
-        "narrow",
-        "unsupported",
-        "narrow_backend",
-        "prepared",
-        "no_window",
-        "oversized",
-    ],
-)
-def test_unsupported_requests_keep_original_loop(monkeypatch, case):
-    from yunshu_engine import mtp_lane, tree_verify
-
-    utils, raw, received, _ = install_fixture(monkeypatch)
-    kwargs = dict(first_bonus=1, greedy_sampling=True)
-    if case == "sampled":
-        kwargs["greedy_sampling"] = False
-    elif case == "no_context":
-        monkeypatch.setitem(mtp_lane._STATE, "context", None)
-    elif case == "guide":
-        monkeypatch.setitem(mtp_lane._STATE, "guide", object())
-    elif case == "narrow":
-        monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda lm: 0)
-    elif case == "unsupported":
-        monkeypatch.setattr(tree_verify, "supported", lambda lm: False)
-    elif case == "narrow_backend":
-        monkeypatch.setattr(tree_verify, "lane_projections", lambda lm: False)
-    elif case == "prepared":
-        raw.prepare_target_hidden = lambda h: h
-    elif case == "no_window":
-        raw.config.layer_types = ["full_attention"]
-    elif case == "oversized":
-        kwargs["draft_block_size"] = 64
-    list(utils._dflash_rounds(None, raw, [], None, **kwargs))
-    assert received == [raw]
-
-
-def test_cancel_closes_upstream_and_drops_pending_taps(monkeypatch):
-    utils, raw, received, closed = install_fixture(monkeypatch)
-    iterator = utils._dflash_rounds(
-        None, raw, [], None, first_bonus=1, greedy_sampling=True
-    )
-    assert next(iterator) == (2, None)
-    proxy = received[0]
-    proxy._pending_hidden = np.zeros((1, 4, 2))
-    proxy._pending_skipped = 10
-    iterator.close()
-    assert closed == [True]
-    assert proxy._pending_hidden is None and proxy._pending_skipped == 0
-    assert proxy._copy.ctx[-1] == 2
-
-
-def test_engine_reload_keeps_copy_choice_hook(monkeypatch):
-    from mlx_vlm.speculative import dflash
-
-    from yunshu_engine.spec_schedule import install_chain_budget
-
-    install_fixture(monkeypatch)
-    chooser = dflash._dflash_next_block_size
-    install_chain_budget()
-    assert dflash._dflash_next_block_size is chooser
-    dflash_copy.install()
-    assert dflash._dflash_next_block_size is chooser
-
-
-def test_existing_tree_loop_is_not_wrapped_twice(monkeypatch):
-    from mlx_vlm.speculative import utils
-
-    def tree(*args, **kwargs):
-        return iter(())
-
-    tree._yunshu_tree = True
-    monkeypatch.setattr(utils, "_dflash_rounds", tree)
-    assert dflash_copy.install() is False
-    assert utils._dflash_rounds is tree
-
-
 @pytest.mark.parametrize(
     "rows,invariant,lanes,expected,enabled",
     [
@@ -285,32 +152,17 @@ def test_configuration_honors_copy_setting_and_certified_backend(
 
     monkeypatch.setitem(mtp_lane._STATE, "copy_rows", 16)
     monkeypatch.setattr(mtp_lane, "verify_max_rows", lambda wide, lm: 32 if wide else 8)
-    calls = []
-    monkeypatch.setattr(dflash_copy, "install", lambda: calls.append(True) or True)
     assert dflash_copy.configure(
         object(), rows, invariant=invariant, lane_projections=lanes
     ) == (expected, enabled)
     assert mtp_lane._STATE["copy_rows"] == expected
-    assert bool(calls) == enabled
 
 
-def test_uncertified_wide_geometry_keeps_original_rounds(monkeypatch):
-    from yunshu_engine import mtp_lane
-
-    utils, raw, received, _ = install_fixture(monkeypatch)
-    monkeypatch.setattr(mtp_lane, "verify_max_rows", lambda *args: 8)
-    list(utils._dflash_rounds(None, raw, [], None, first_bonus=1, greedy_sampling=True))
-    assert received == [raw]
-
-
-def test_configuration_does_not_install_on_eight_row_geometry(monkeypatch):
+def test_configuration_is_off_on_eight_row_geometry(monkeypatch):
     from yunshu_engine import mtp_lane
 
     monkeypatch.setitem(mtp_lane._STATE, "copy_rows", 16)
     monkeypatch.setattr(mtp_lane, "verify_max_rows", lambda *args: 8)
-    monkeypatch.setattr(
-        dflash_copy, "install", lambda: pytest.fail("narrow geometry installed")
-    )
     assert dflash_copy.configure(
         object(), 16, invariant=True, lane_projections=True
     ) == (8, False)
