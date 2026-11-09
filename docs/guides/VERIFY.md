@@ -99,6 +99,8 @@ yv ab --base main --cand <dir> --suite kld --model <Flash-Next dir> --cand-env Y
 builds an ad-hoc ladder (stages keep their canonical order). Overrides: `--ctx 1024,8192`,
 `--reps`, `--mmlu-n`, `--mem-sizes`, `--mem-reps`, `--speed-tol`, `--spec-off`.
 
+**Chinese coverage.** Verification is not English-only. The `zh` suite (identity with spec on == off, then speed, at 1K / 8K / 32K) runs two Chinese kinds, `zhcn` (Simplified) and `zhtw` (Taiwan Traditional), built from Chinese Wikipedia articles (CC BY-SA 4.0; sources in `tfnew/zh_src/SOURCES.md`) at 1K to 128K like the English prompts. `quick` also runs `zhcn` and `zhtw` next to `prose` and `code`. Other suites keep their own `kinds` key (English by default). Mostly-Chinese prompts exercise different tokenization and draft behaviour, and an English-only run once missed a speculative-decode crash on them.
+
 ## Resume
 
 Everything lands in `/Volumes/P5Plus/yunshu-build/verify/runs/<label>-<cand key>/`: one

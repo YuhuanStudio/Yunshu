@@ -1646,6 +1646,16 @@ def test_evals_suite_is_a_separate_correctness_probe():
     assert "evals" in stages.STAGE_FUNCS
 
 
+def test_zh_suite_is_chinese_identity_and_speed():
+    cfg = suites.parse_suite("zh")
+    assert cfg["kinds"] == ["zhcn", "zhtw"]
+    assert cfg["stages"] == ["identity", "speed"]
+    assert cfg["ctx"] == [1024, 8192, 32768]
+    assert cfg["spec_off"] is True
+    # quick (the iteration suite) also runs the Chinese kinds next to prose and code
+    assert suites.parse_suite("quick")["kinds"] == ["prose", "code", "zhcn", "zhtw"]
+
+
 def test_declared_short_timeout_preserves_gpuq_short_lane(monkeypatch):
     from types import SimpleNamespace
 

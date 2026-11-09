@@ -170,6 +170,15 @@ SUITES = {
         "spec_off": False,
         "reps": 3,
     },
+    # Chinese prompts (Simplified and Taiwan Traditional Wikipedia essays, prompts/zhcn-* and zhtw-*):
+    # identity incl. spec on == off, and speed. Mostly-Chinese prompts once crashed spec decode (417bbfa6).
+    "zh": {
+        "stages": ["identity", "speed"],
+        "ctx": [1024, 8192, 32768],
+        "kinds": ["zhcn", "zhtw"],
+        "spec_off": True,
+        "reps": 3,
+    },
     # prefill / prefix-cache change: long contexts, TTFT, cache hit == miss, quality
     "prefill": {
         "stages": ["preflight", "smoke", "identity", "apc", "quality", "speed"],
@@ -210,6 +219,8 @@ SUITES = {
             "speed",
         ],
         "ctx": [1024, 8192],
+        # identity and speed also cover Chinese prompts (zhcn, zhtw), not only English prose/code
+        "kinds": ["prose", "code", "zhcn", "zhtw"],
         "spec_off": False,
         "reps": 3,
         "mmlu_n": 200,
