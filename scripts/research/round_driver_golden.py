@@ -211,7 +211,7 @@ def build(layer, model):
             ragged_kv.set_dense_lane(False)
             from yunshu_engine.mlxvlm_mtp import _load_drafter_in_memory
 
-            head = _load_drafter_in_memory(model)
+            head = optional_mtp_head(_load_drafter_in_memory, model)
         return wrapper, lm, head, real_prompts(ids, model)
     if layer == "generic":
         from tests.unit.test_round_driver_generic import PROMPTS, TinyLM
@@ -373,11 +373,30 @@ def apc_probe_prompt(encode, minimum=APC_PROBE_MIN_TOKENS):
     raise ValueError("tokenizer produced too few tokens for the APC probe")
 
 
+def optional_mtp_head(load, model):
+    """The MTP head when the checkpoint ships one; None (spec not exercised) otherwise.
+
+    The receipt records spec = (head is not None), so a checkpoint without MTP
+    tensors is captured on the non-speculative path instead of failing.
+    """
+    try:
+        return load(model)
+    except ValueError as exc:
+        if "No MTP tensors found" in str(exc):
+            return None
+        raise
+
+
 def real_prompts(ids, model):
+    """Three short cell prompts (as validated) plus one APC probe prompt.
+
+    cells use indices 0-2 and keep their short prefill arithmetic; the APC
+    section picks the longest prompt (the probe) via cache_prompt_index.
+    """
     from mlx_lm.utils import load_tokenizer
 
     tokenizer = load_tokenizer(Path(model))
-    return [ids[:17], ids[20:53], apc_probe_prompt(tokenizer.encode)]
+    return [ids[:17], ids[20:53], ids[60:85], apc_probe_prompt(tokenizer.encode)]
 
 
 def cache_prompt_index(prompts):

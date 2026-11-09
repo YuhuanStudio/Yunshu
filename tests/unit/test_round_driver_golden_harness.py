@@ -267,3 +267,37 @@ def test_real_checkpoint_apc_probe_crosses_a_checkpoint():
     assert len(prompt) >= APC_PROBE_MIN_TOKENS > 512
     prompts = [list(range(17)), list(range(33)), prompt]
     assert cache_prompt_index(prompts) == 2
+
+
+def test_real_prompts_keep_short_cells_and_add_a_probe(monkeypatch):
+    import sys
+    import types
+
+    from scripts.research import round_driver_golden as golden
+
+    class Tok:
+        def encode(self, text):
+            return list(range(len(text)))
+
+    fake = types.ModuleType("mlx_lm.utils")
+    fake.load_tokenizer = lambda path: Tok()
+    monkeypatch.setitem(sys.modules, "mlx_lm.utils", fake)
+    ids = list(range(200))
+    prompts = golden.real_prompts(ids, "/models/x")
+    # Cells use indices 0-2: they must keep the short prompts that were validated.
+    assert [len(p) for p in prompts[:3]] == [17, 33, 25]
+    # The APC probe is the longest prompt and crosses a checkpoint interval.
+    assert golden.cache_prompt_index(prompts) == 3
+    assert len(prompts[3]) >= golden.APC_PROBE_MIN_TOKENS > 512
+
+
+def test_checkpoint_without_mtp_tensors_runs_without_a_head():
+    from scripts.research.round_driver_golden import optional_mtp_head
+
+    def no_mtp(model):
+        raise ValueError(f"No MTP tensors found in {model}")
+
+    assert optional_mtp_head(no_mtp, "/models/moe") is None
+    assert optional_mtp_head(lambda model: "head", "/models/x") == "head"
+    with pytest.raises(ValueError, match="corrupt"):
+        optional_mtp_head(lambda m: (_ for _ in ()).throw(ValueError("corrupt")), "/m")
