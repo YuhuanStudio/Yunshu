@@ -220,7 +220,8 @@ def install(drafter: Any, target_language_model: Any, keep: int) -> DraftVocab |
     the head is not affine 4-bit quantized."""
     lm = target_language_model
     head = getattr(lm, "lm_head", None)
-    if head is None:
+    tied = head is None
+    if tied:
         head = lm.model.embed_tokens
     try:
         vocab = DraftVocab(head, keep)
@@ -232,7 +233,19 @@ def install(drafter: Any, target_language_model: Any, keep: int) -> DraftVocab |
     greedy = getattr(drafter, "_greedy_token", None)
     # a DFlash drafter has no greedy readout: its lattice reads logits_subset instead, and the
     # fallback only marks that a full-vocabulary readout exists
-    vocab.fallback = greedy if greedy is not None else drafter._logits
+    if greedy is not None:
+        # The full-vocabulary readout reads the target head directly. Upstream's own
+        # _greedy_token needs drafter.bind(target), which only upstream's generate loop
+        # calls; on the round driver it was None, so a mostly non-Latin prompt (or a media
+        # prompt full of image-pad ids) crashed the MTP draft on its first full readout.
+        head_fn = head.as_linear if tied else head
+
+        def _full_greedy(hidden: mx.array) -> mx.array:
+            return mx.argmax(head_fn(hidden), axis=-1)
+
+        vocab.fallback = _full_greedy
+    else:
+        vocab.fallback = drafter._logits
 
     if greedy is not None:
 

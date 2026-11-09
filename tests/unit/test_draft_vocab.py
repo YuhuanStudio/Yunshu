@@ -140,3 +140,32 @@ def test_logits_subset_is_none_once_the_request_reads_the_full_vocabulary():
     vocab = DraftVocab(_head(), KEEP)
     vocab.full = True
     assert vocab.logits_subset(mx.zeros((1, K), dtype=mx.bfloat16)) is None
+
+
+class _UnboundMTP:
+    """Upstream's MTP drafter before bind(): its own greedy readout has no head (the
+    round driver never calls bind, so this is the served state)."""
+
+    _lm_head_fn = None
+
+    def _greedy_token(self, hidden):
+        return mx.argmax(self._lm_head_fn(hidden), axis=-1)
+
+
+def test_installed_full_readout_needs_no_upstream_bind():
+    """2026-11-09: an image prompt (mostly image-pad ids) on 27B MTP crashed with
+    'NoneType' object is not callable in the full-vocabulary fallback."""
+    from types import SimpleNamespace
+
+    from yunshu_engine.draft_vocab import install
+
+    head = _head(5)
+    lm = SimpleNamespace(lm_head=head)
+    drafter = _UnboundMTP()
+    vocab = install(drafter, lm, KEEP)
+    assert vocab is not None
+    vocab.set_context([KEEP + i for i in range(20)])
+    assert vocab.full
+    x = mx.random.normal((2, K))
+    full = mx.argmax(_full_logits(head, x), axis=-1).tolist()
+    assert drafter._greedy_token(x).tolist() == full
