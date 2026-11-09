@@ -212,7 +212,7 @@ def build(layer, model):
             from yunshu_engine.mlxvlm_mtp import _load_drafter_in_memory
 
             head = _load_drafter_in_memory(model)
-        return wrapper, lm, head, [ids[:17], ids[20:53], ids[60:85]]
+        return wrapper, lm, head, real_prompts(ids, model)
     if layer == "generic":
         from tests.unit.test_round_driver_generic import PROMPTS, TinyLM
 
@@ -350,6 +350,34 @@ def int8_reference():
             )
         )
     return receipts
+
+
+APC_PROBE_MIN_TOKENS = (
+    1024  # > checkpoint_interval_tokens (512) so a 64-aligned checkpoint exists
+)
+
+
+def apc_probe_prompt(encode, minimum=APC_PROBE_MIN_TOKENS):
+    """A prompt long enough that the APC probe can hit a stored checkpoint.
+
+    Short prompts never reach a checkpoint, so a warm hit cannot occur: the
+    real-checkpoint probe needs at least one checkpoint interval of tokens.
+    """
+    text = "Explain why the sky is blue. "
+    reps = 8
+    while reps <= 4096:
+        ids = list(encode(text * reps))
+        if len(ids) >= minimum:
+            return ids
+        reps *= 2
+    raise ValueError("tokenizer produced too few tokens for the APC probe")
+
+
+def real_prompts(ids, model):
+    from mlx_lm.utils import load_tokenizer
+
+    tokenizer = load_tokenizer(Path(model))
+    return [ids[:17], ids[20:53], apc_probe_prompt(tokenizer.encode)]
 
 
 def cache_prompt_index(prompts):

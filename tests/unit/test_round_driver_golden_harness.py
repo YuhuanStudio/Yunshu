@@ -250,3 +250,20 @@ def test_yv_golden_checkpoint_memory_is_overridable(tmp_path, monkeypatch):
         )
         stages.stage_round_golden(ctx)
         assert seen.get("checkpoint") == want
+
+
+def test_real_checkpoint_apc_probe_crosses_a_checkpoint():
+    from scripts.research.round_driver_golden import (
+        APC_PROBE_MIN_TOKENS,
+        apc_probe_prompt,
+        cache_prompt_index,
+    )
+
+    # Regression: the real-checkpoint prompts were <= 33 tokens, so no checkpoint
+    # was stored and the warm APC hit could never happen.
+    with pytest.raises(ValueError, match="too few tokens"):
+        apc_probe_prompt(lambda text: [1] * 5)
+    prompt = apc_probe_prompt(lambda text: list(range(len(text))))
+    assert len(prompt) >= APC_PROBE_MIN_TOKENS > 512
+    prompts = [list(range(17)), list(range(33)), prompt]
+    assert cache_prompt_index(prompts) == 2
