@@ -51,12 +51,25 @@ class RoundProfile:
         self.on = enabled() if on is None else on
         self._t = 0.0
         self._round: dict[str, float] = {}
+        self._disp: dict[str, int] = {}
         self._rows: dict[int, dict[str, float]] = {}
+        # Metal dispatch census per stage, only when the metalrt interposer is loaded
+        # (DYLD_INSERT_LIBRARIES=.../libmetalrt_trace2.dylib); absent otherwise, never zero-filled.
+        self._gw = None
+        if self.on:
+            from .. import gpu_window
+
+            if gpu_window._lib() is not None:
+                self._gw = gpu_window
 
     def begin(self) -> None:
         if not self.on:
             return
         self._round = {}
+        self._disp = {}
+        if self._gw is not None:
+            mx.synchronize()
+            self._gw.stage_begin()
         self._t = time.perf_counter()
 
     def mark(self, stage: str, *arrays) -> None:
@@ -68,6 +81,9 @@ class RoundProfile:
             mx.eval(*live)
         now = time.perf_counter()
         self._round[stage] = self._round.get(stage, 0.0) + (now - self._t) * 1000
+        if self._gw is not None:
+            mx.synchronize()
+            self._disp[stage] = self._disp.get(stage, 0) + self._gw.stage_end()
         self._t = now
 
     def end(self, row_ids, attention_ms: float | None) -> None:
@@ -87,6 +103,8 @@ class RoundProfile:
             acc["rounds"] += 1
             for k, v in r.items():
                 acc[k] = acc.get(k, 0.0) + v
+            for k, v in self._disp.items():
+                acc["dispatches." + k] = acc.get("dispatches." + k, 0.0) + v
 
     def finish(self, rid: int) -> dict | None:
         """Log and return the request's per-round means (None when off or the row never ran a round)."""
@@ -94,7 +112,14 @@ class RoundProfile:
         if not self.on or not acc or not acc.get("rounds"):
             return None
         n = acc.pop("rounds")
+        disp = {
+            k[11:]: round(acc.pop(k) / n, 1)
+            for k in sorted(acc)
+            if k.startswith("dispatches.")
+        }
         stages = {k: round(v / n, 3) for k, v in sorted(acc.items())}
         payload = {"rounds": int(n), "stages": {"decode_round": stages}}
+        if disp:
+            payload["dispatches_per_round"] = disp
         logger.info("YUNSHU_LAYER2 %s", json.dumps(payload, sort_keys=True))
         return payload

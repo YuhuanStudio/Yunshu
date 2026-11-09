@@ -83,3 +83,41 @@ def test_the_harness_reads_the_engine_line_through_the_logger_prefix():
     )
     got = fp.parse_yunshu_layer2(line)
     assert got["stages"]["decode_round"]["drafter"] == 1.0
+
+
+class _FakeWindow:
+    """Stands in for gpu_window with the interposer loaded: each stage_end returns the next count."""
+
+    def __init__(self, counts):
+        self.counts = list(counts)
+
+    def stage_begin(self):
+        pass
+
+    def stage_end(self):
+        return self.counts.pop(0)
+
+
+def test_dispatch_census_per_stage_only_with_the_interposer():
+    p = RoundProfile(on=True)
+    assert p._gw is None  # no interposer in tests: no dispatch field at all
+    p._gw = _FakeWindow([1, 10, 2, 100, 5] * 2)
+    _round(p, 3, 0.0)
+    _round(p, 3, 0.0)
+    payload = p.finish(3)
+    assert payload["dispatches_per_round"] == {
+        "copy_lookup": 1,
+        "drafter": 10,
+        "plan": 2,
+        "verify": 100,
+        "commit": 5,
+    }
+    assert not any(
+        k.startswith("dispatches") for k in payload["stages"]["decode_round"]
+    )
+
+
+def test_no_dispatch_field_without_the_interposer():
+    p = RoundProfile(on=True)
+    _round(p, 1, 0.0)
+    assert "dispatches_per_round" not in p.finish(1)
