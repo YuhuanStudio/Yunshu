@@ -3038,6 +3038,99 @@ def stage_jump_forward(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult(name, not reasons, reasons, numbers))
 
 
+def _round_golden_valid(path: Path) -> tuple[bool, str]:
+    from scripts.research.round_driver_golden import validate
+
+    try:
+        validate(json.loads(path.read_text()))
+    except (OSError, ValueError, KeyError, TypeError, AssertionError) as exc:
+        return False, str(exc)
+    return True, ""
+
+
+def stage_round_golden(ctx: Ctx) -> StageResult:
+    """M0 candidate receipts: tiny first, then the selected real checkpoint."""
+    from scripts.research.round_driver_golden import LAYERS, execution_records, validate
+
+    layer = ctx.env.get("M0_LAYER", "qwen3_5")
+    if layer not in LAYERS:
+        return _finish(ctx, StageResult("round-golden", False, ["unknown M0_LAYER"]))
+    scratch = ctx.run.path / "round-golden-home"
+    (scratch / "tmp").mkdir(parents=True, exist_ok=True)
+    checkpoint_mem = float(ctx.env.get("M0_CHECKPOINT_MEM_GB", 80))
+    results = {}
+    for kind in ("tiny", "checkpoint"):
+        if (
+            layer == "generic" or ctx.env.get("M0_TINY_ONLY") == "1"
+        ) and kind == "checkpoint":
+            continue
+        cmd = [
+            "env",
+            f"HOME={scratch}",
+            f"XDG_CACHE_HOME={scratch / 'cache'}",
+            f"TMPDIR={scratch / 'tmp'}",
+            "PYTHONDONTWRITEBYTECODE=1",
+            f"PYTHONPATH={ctx.cand.path / 'python'}:{ctx.cand.path}",
+            ctx.py,
+            str(ctx.cand.path / "scripts/research/round_driver_golden.py"),
+            "--layer",
+            layer,
+            "--device",
+            "cpu" if layer == "generic" else "gpu",
+            "--out",
+            "{out}",
+        ]
+        if kind == "checkpoint":
+            cmd += ["--model", ctx.model]
+        if ctx.env.get("M0_REFERENCE_DIR"):
+            reference = Path(ctx.env["M0_REFERENCE_DIR"]) / f"{layer}-{kind}.jsonl"
+            if not reference.is_file():
+                return _finish(
+                    ctx,
+                    StageResult(
+                        "round-golden", False, [f"missing reference {reference}"]
+                    ),
+                )
+            cmd += ["--reference", str(reference)]
+        cell = Cell(
+            "round-golden",
+            kind,
+            cmd,
+            quiet=False,
+            mem_gb=checkpoint_mem if kind == "checkpoint" else 4,
+            timeout_min=5 if kind == "tiny" else 15,
+            cwd=ctx.cand.path,
+            validate=_round_golden_valid,
+        )
+        result = ctx.exe.run_cells([cell])
+        if kind not in result:
+            return _finish(
+                ctx,
+                StageResult("round-golden", False, [f"missing {kind} cell evidence"]),
+            )
+        results.update(result)
+        if _failed_cells(results):
+            break
+    reasons = _failed_cells(results)
+    numbers = {}
+    for key, result in results.items():
+        if result.ok and result.evidence:
+            receipt = json.loads(result.evidence.read_text())
+            payload = validate(receipt)
+            execution = execution_records(receipt)
+            cells = payload["cells"] + payload["spec_cells"] + payload["cache_cells"]
+            numbers[key] = dict(
+                sha256=receipt["sha256"],
+                cells=len(cells),
+                tokens=sum(len(row) for cell in cells for row in cell["rows"]),
+                drafted=sum(run["drafted"] for run in execution),
+                hits=sum(sum(cell["hits"]) for cell in payload["cache_cells"]),
+                replays=sum(cell.get("replayed", 0) for cell in payload["cache_cells"]),
+                int8_checks=len(payload["int8_reference"]),
+            )
+    return _finish(ctx, StageResult("round-golden", not reasons, reasons, numbers))
+
+
 def stage_lane_bandwidth(ctx: Ctx) -> StageResult:
     """Candidate-only in-graph projection bandwidth; no end-to-end speed verdict."""
     name = "lane_bandwidth"
@@ -3314,6 +3407,7 @@ STAGE_FUNCS = {
     "phaseb-speed": lambda ctx: stage_phaseb(ctx, speed=True),
     "lane_bandwidth": stage_lane_bandwidth,
     "jump_forward": stage_jump_forward,
+    "round-golden": stage_round_golden,
     "ssd_ttft": stage_ssd_ttft,
     "ssd_ttft_profile": lambda ctx: stage_ttft_profile(ctx, ssd=True),
     "ttft_profile": stage_ttft_profile,
