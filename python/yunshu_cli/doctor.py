@@ -335,7 +335,7 @@ def check_speculative(model: str) -> list[Check]:
         return [Check("speculative", "warn", warning)]
     from yunshu_engine.vlm_engine import VLMEngine
 
-    family = cfg.get("model_type") in VLMEngine._SPEC_MODEL_TYPES
+    family = VLMEngine.is_spec_model_type(cfg.get("model_type"))
     try:
         choice = spec_select.choose(
             cfg,

@@ -83,10 +83,39 @@ def test_preview_type_still_engages(tmp_path, monkeypatch):
     assert mlxvlm_mtp.is_mtp_capable(str(tmp_path))
 
 
-def test_spec_model_types_include_family():
+def test_spec_model_types_follow_registry(renamed):
     import yunshu_engine.vlm_engine as ve
 
-    assert set(fam.QWEN4_MODEL_TYPES) <= set(ve.VLMEngine._SPEC_MODEL_TYPES)
+    spec = ve.VLMEngine.is_spec_model_type
+    assert spec("qwen4_exp") and spec("qwen4_moe")
+    assert spec("qwen3_5") and spec("qwen3_5_moe")
+    assert not spec("qwen3_5_text") and not spec("qwen4_exp_text")
+    assert not spec("qwen9") and not spec(None)
+
+
+def test_renamed_type_engages_mtp_head_check(renamed, tmp_path):
+    from yunshu_engine import mlxvlm_mtp
+
+    _pack(tmp_path, "qwen4_moe")
+    assert mlxvlm_mtp.mtp_head_problem(str(tmp_path)) is None
+
+
+def test_kld_detect_arch_follows_registry(renamed, tmp_path):
+    import importlib.util
+    import json
+
+    spec = importlib.util.spec_from_file_location(
+        "kld_capture_under_test",
+        Path(__file__).resolve().parents[2] / "scripts/verify/kld/capture.py",
+    )
+    capture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(capture)
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {"model_type": "qwen4_moe", "text_config": {"model_type": "qwen4_moe_text"}}
+        )
+    )
+    assert capture.detect_arch(str(tmp_path)) == "qwen4"
 
 
 def test_modules_apply_to_present_skip_absent(renamed, monkeypatch):

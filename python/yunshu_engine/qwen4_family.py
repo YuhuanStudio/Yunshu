@@ -31,6 +31,11 @@ def is_qwen4_type(model_type: Any) -> bool:
     return base in QWEN4_MODEL_TYPES
 
 
+def is_qwen4_exact_type(model_type: Any) -> bool:
+    """Exact registry match, no ``_text`` fold: for a top-level config ``model_type``."""
+    return isinstance(model_type, str) and model_type in QWEN4_MODEL_TYPES
+
+
 def is_qwen4_family(config: Mapping[str, Any] | None) -> bool:
     """True when ``config`` (or its ``text_config``) names a Qwen4 model_type."""
     if not config:
