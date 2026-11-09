@@ -391,16 +391,3 @@ def test_lane_masks_are_engaged_and_rounds_are_cut_at_the_marker(toy, monkeypatc
     assert got == script
     assert guide.lane_rounds > 0  # the constrained stretch went through masked verify
     assert guide.calls == 1 and guide.phase == tcg.FREE
-
-
-def test_can_guide_needs_the_lane_installed():
-    class Head:
-        supports_greedy_draft_argmax = True
-
-    assert not mtp_lane.can_guide(object())
-    mtp_lane._STATE["installed"], was = True, mtp_lane._STATE["installed"]
-    try:
-        assert mtp_lane.can_guide(Head())
-        assert not mtp_lane.can_guide(object())
-    finally:
-        mtp_lane._STATE["installed"] = was

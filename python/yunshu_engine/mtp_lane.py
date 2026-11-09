@@ -44,12 +44,10 @@ import mlx.core as mx
 from .copy_cost import RoundCostClock
 from .copy_drafter import CopyDrafter
 from .copy_graft import GraftBudget, verify_graft
-from .keyed_sampling import KeyedSampler
 
 logger = logging.getLogger(__name__)
 
 _STATE: dict = {
-    "installed": False,
     "enabled": True,
     "window": 0,
     "profile": None,
@@ -132,15 +130,6 @@ def copy_rows_for_model(language_model: Any, rows: int | None = None) -> int:
     )
     return min(
         rows, verify_max_rows(isinstance(projection, LaneLinear), language_model)
-    )
-
-
-def can_guide(draft_model: Any) -> bool:
-    """True when ``rounds`` can apply a tool-call guide with this drafter."""
-    return bool(
-        _STATE["enabled"]
-        and _STATE["installed"]
-        and getattr(draft_model, "supports_greedy_draft_argmax", False)
     )
 
 
@@ -562,77 +551,4 @@ def rounds(
             mx.clear_cache()
 
 
-def _request_needs_chain() -> bool:
-    # Processors and logprob reports are recorded per token by the chain rounds only; the tree
-    # rounds emit bare tokens.
-    from .constrained_spec import current_request
-
-    request = current_request()
-    return bool(request is not None and (request.processors or request.logprobs))
-
-
-def install() -> bool:
-    """Serve single-row greedy MTP requests of ``BatchGenerator`` with
-    ``rounds``; other requests keep upstream's loop."""
-    if _STATE["installed"]:
-        return True
-    from mlx_vlm.generate import ar
-    from mlx_vlm.speculative import utils as spec_utils
-
-    from . import settings
-
-    original = ar.run_speculative_server_rounds
-
-    def run(model, draft_model, prompt_cache, hidden, **kw):
-        from .keyed_sampling import tree_supported
-
-        first = kw.get("first_bonus")
-        if (
-            _STATE["enabled"]
-            # Tree owns the upstream MTP hook; the chain lane must not
-            # intercept its eligible requests before that hook is reached.
-            and not (
-                settings.get("YUNSHU_SPEC_TREE") == "tree"
-                and tree_supported(kw.get("sampler"), kw.get("greedy_sampling", False))
-                and _STATE["guide"] is None
-                and not _request_needs_chain()
-            )
-            and kw.get("draft_kind") == "mtp"
-            and (
-                kw.get("greedy_sampling") or isinstance(kw.get("sampler"), KeyedSampler)
-            )
-            and first is not None
-            and int(first.shape[0]) == 1
-            and getattr(draft_model, "supports_greedy_draft_argmax", False)
-        ):
-            return rounds(
-                model,
-                draft_model,
-                prompt_cache,
-                hidden,
-                prompt_tokens=kw.get("prompt_tokens"),
-                first_bonus=int(first.reshape(-1).item()),
-                max_tokens=kw["max_tokens"],
-                sampler=kw["sampler"],
-                draft_block_size=kw.get("draft_block_size"),
-                token_dtype=kw.get("token_dtype", mx.int32),
-                stop_check=kw.get("stop_check"),
-                eos_token_ids=kw.get("eos_token_ids"),
-                guide=_STATE["guide"],
-                keyed=kw["sampler"]
-                if isinstance(kw.get("sampler"), KeyedSampler)
-                else None,
-            )
-        if _STATE["guide"] is not None:
-            logger.warning(
-                "tool-call guide dropped: the speculative lane's rounds are not in use"
-            )
-        return original(model, draft_model, prompt_cache, hidden, **kw)
-
-    ar.run_speculative_server_rounds = run
-    spec_utils.run_speculative_server_rounds = run
-    _STATE["installed"] = True
-    return True
-
-
-__all__ = ["install", "rounds", "set_enabled", "set_window"]
+__all__ = ["rounds", "set_enabled", "set_window"]

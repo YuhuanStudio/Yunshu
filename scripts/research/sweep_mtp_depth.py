@@ -225,7 +225,6 @@ if _dv and draft_kind == "mtp":
 if "--mtp-lane" in sys.argv and draft_kind == "mtp":
     from yunshu_engine import mtp_lane  # noqa: E402
 
-    print(json.dumps({"mtp_lane": mtp_lane.install()}), flush=True)
     _win = next(
         (int(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--draft-window=")),
         0,

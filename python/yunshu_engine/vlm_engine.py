@@ -2812,19 +2812,13 @@ class VLMEngine:
                 )
                 kernels["draft_vocab"] = DFLASH_KEEP if found else None
             if draft_kind == "mtp" and drafter is not None:
-                # The lane's own MTP rounds (one host read per cycle, the head
-                # run over every verify row inside the verify's graph), fused
-                # residual+norm layers and a reduced draft vocabulary. Same
-                # tokens as upstream's loop; Qwen3.8-27B, single requests, HTTP
-                # decode tok/s 1K/8K/32K/131K: code_python 45.8/68.6/53.4/55.9
-                # -> 55.2/69.5/62.5/59.7, novel_en 48.5/42.2/43.3/32.7 ->
-                # 55.3/49.9/44.5/35.0 (measured 2026-09-29).
+                # Copy-row budget for the driver's MTP verify, fused
+                # residual+norm layers and a reduced draft vocabulary.
                 from . import mtp_lane
                 from .draft_vocab import DRAFT_VOCAB
                 from .draft_vocab import install as install_draft_vocab
                 from .kernels import lane_layers
 
-                kernels["mtp_lane"] = mtp_lane.install()
                 kernels["copy_rows"] = mtp_lane.set_copy_rows(
                     settings.get("YUNSHU_SPEC_COPY_ROWS"),
                     mtp_lane.verify_max_rows(bool(kernels.get("lane_linear")), lm),
