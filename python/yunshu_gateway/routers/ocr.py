@@ -52,13 +52,9 @@ async def extract_text_from_image(
     raw_suffix = os.path.splitext(file.filename or "image.png")[1].lower()
     suffix = raw_suffix if raw_suffix in _IMAGE_EXTENSIONS else ".png"
 
-    # wire request-tracker registration + client-disconnect cancellation
-    # (the cancel keystone, un-propagated to OCR — audio/images already had it;
-    # OCR + video were the missed single-shot-media siblings). The native OCR path uses a
-    # blocking mlx_vlm.generate (bounded by max_tokens, not interruptible mid-decode), but
-    # registering frees the tracker slot and returns the handler promptly on disconnect
-    # (no head-of-line block on the event loop), and the VLM-fallback path
-    # (vlm_engine.generate) honors cancel_event between decode steps → real mid-gen stop.
+    # wire request-tracker registration + client-disconnect cancellation. Both engine
+    # paths generate through VLMEngine.generate (the round driver), which honors
+    # cancel_event between decode steps, so a client disconnect stops the decode.
     import uuid as _uuid
 
     from ..streaming import run_with_disconnect_guard
@@ -142,13 +138,17 @@ async def extract_text_from_image(
             # default), so without this a model-scoped key could OCR through a model it
             # cannot access simply by omitting `model`. Mirror isolation.
             _check_model_access(request, ocr_model_id)
-            # disconnect guard frees the handler promptly on client disconnect
-            # (the native blocking generate still runs to completion on the executor, but
-            # bounded by max_tokens; None on disconnect → empty result, discarded anyway).
+            # disconnect guard sets cancel_event and frees the handler promptly on client
+            # disconnect (None on disconnect → empty result, discarded anyway).
             result = (
                 await run_with_disconnect_guard(
                     request,
-                    ocr_engine.extract_text(tmp_path, language=language, task=task),
+                    ocr_engine.extract_text(
+                        tmp_path,
+                        language=language,
+                        task=task,
+                        cancel_event=_ocr_cancel,
+                    ),
                     cancel_event=_ocr_cancel,
                 )
                 or {}
