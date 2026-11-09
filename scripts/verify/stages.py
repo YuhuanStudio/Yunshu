@@ -1952,6 +1952,25 @@ def _multimodal_speed(numbers, reps, tolerance):
     )
 
 
+def _multimodal_env(arm_env: dict, scratch) -> dict:
+    """Server env of a multimodal cell: pinned defaults (no disk APC, bf16 KV, drafting off),
+    then the arm's own env on top, so ``--cand-env YUNSHU_VLM_DRAFT=default`` serves the
+    candidate with the engine's default drafter (spec on images) against a spec-off base and
+    the stage's raw-token identity check becomes spec on == spec off for media requests."""
+    env = {
+        "YUNSHU_VLM_APC_DISK": "0",
+        "YUNSHU_VLM_APC_WARM": "off",
+        "YUNSHU_KV_PRECISION": "bf16",
+        "YUNSHU_VLM_DRAFT": "off",
+        "HF_HUB_OFFLINE": "1",
+    }
+    env.update(arm_env)
+    env["YUNSHU_MEDIA_DIR"] = str(scratch)
+    if env.get("YUNSHU_VLM_DRAFT") == "default":
+        del env["YUNSHU_VLM_DRAFT"]
+    return env
+
+
 def stage_multimodal(ctx: Ctx) -> StageResult:
     """Pinned media sessions: raw IDs, pixel isolation, short + long TTFT."""
 
@@ -1959,17 +1978,7 @@ def stage_multimodal(ctx: Ctx) -> StageResult:
         key = f"{arm}-r{rep}"
         scratch = ctx.run.path / "media" / key
         scratch.mkdir(parents=True, exist_ok=True)
-        env = ctx.arm_env(
-            arm,
-            {
-                "YUNSHU_VLM_APC_DISK": "0",
-                "YUNSHU_VLM_APC_WARM": "off",
-                "YUNSHU_KV_PRECISION": "bf16",
-                "YUNSHU_VLM_DRAFT": "off",
-                "YUNSHU_MEDIA_DIR": str(scratch),
-                "HF_HUB_OFFLINE": "1",
-            },
-        )
+        env = _multimodal_env(ctx.arm_env(arm), scratch)
         argv = ["env", f"PYTHONPATH={ctx.tree(arm).path / 'python'}"]
         argv += [f"{k}={v}" for k, v in env.items()]
         remote = (
