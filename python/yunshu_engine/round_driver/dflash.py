@@ -30,6 +30,7 @@ from ..dflash_plan import FastShape, remap_landed, reorder, search_tree
 from ..text_logprobs import top_logprobs_device
 from .allocate import fair_nodes
 from .forward import logits
+from .stage_profile import RoundProfile
 from .verify import DRIVER_MAX_ROWS, Window, forward
 
 if TYPE_CHECKING:
@@ -50,6 +51,8 @@ class DFlashBatch:
     def __init__(self, model, draft, kv_format: str = "bf16"):
         self.kv_format = kv_format
         self._diag = dict(rounds=0, rows=0, s=0.0, nodes=0, used=0)
+        # YUNSHU_DEBUG_TREE_PROFILE: synced stage split per request
+        self.prof = RoundProfile()
         from mlx_vlm.models.qwen3_5 import language as q35
 
         self.model = model
@@ -207,6 +210,7 @@ class DFlashBatch:
             self.walk_rows.pop(id(row), None)
             self.prebuilt.pop(id(row), None)
             self.budgets.pop(id(row), None)
+            self.prof.finish(id(row))
 
     def arrays(self):
         from .driver import cache_buffers
@@ -264,6 +268,9 @@ class DFlashBatch:
         from .driver import _Item
 
         t_start = time.perf_counter()
+        prof = self.prof
+        prof.begin()
+        kv_before = tree_verify.PROFILE.get("attention_kv_ms", 0.0)
 
         copies = {}
         rooms = []
@@ -289,6 +296,7 @@ class DFlashBatch:
             if copied:
                 copies[b] = copied
             rooms.append(len(copied) if copied else min(15, room))
+        prof.mark("copy_lookup")
         nodes = fair_nodes(rooms, budget=max_rows, turn=self.turn)
         self.turn += 1
         budget = None
@@ -327,6 +335,14 @@ class DFlashBatch:
                     committed=r.generated,
                     penalty=r.penalty,
                 )
+        prof.mark(
+            "drafter",
+            *[
+                x
+                for b in live
+                for x in (ready[b].cands, ready[b].unary, ready[b].anchor)
+            ],
+        )
         if live:
             for b in live:
                 r = rows[b]
@@ -347,6 +363,7 @@ class DFlashBatch:
                         mx.arange(-1, count, dtype=mx.int32), count, is_chain=True
                     ),
                 )
+        prof.mark("plan", *[p[0] for p in proposals.values()])
         windows = []
         for b, r in enumerate(rows):
             tokens, shape = proposals.get(
@@ -418,6 +435,7 @@ class DFlashBatch:
                     )
                     draws.append((targets, lp, None))
             mx.async_eval(*[d[0] for d in draws])
+            prof.mark("verify", *[d[0] for d in draws])
             gpu_walked = self._prebuild(rows, windows, results, draws, nodes, copies)
             events: list[Event] = []
             for b, (r, w, res, (target, lp, extra), n) in enumerate(
@@ -530,7 +548,16 @@ class DFlashBatch:
                     st["copy_used"] / max(1, st["copy"]),
                     st["hist"],
                 )
+        prof.mark("commit", *self.arrays())
+        prof.end(
+            [id(r) for r in rows],
+            # solo rows verify through tree_forward, which times the KV attention on its own
+            tree_verify.PROFILE.get("attention_kv_ms", 0.0) - kv_before
+            if len(rows) == 1
+            else None,
+        )
         for r in gone:
+            self.prof.finish(id(r))
             self.prebuilt.pop(id(r), None)
         driver.rows = [r for r in driver.rows if not r.finished]
         driver._release(gone)

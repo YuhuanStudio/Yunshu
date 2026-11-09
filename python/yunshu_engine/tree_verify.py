@@ -1306,7 +1306,12 @@ def _tree_forward(
             queries, _k, _v, gate, _ = at._prepare_projected_qkv(
                 q, k, v, c, pos, None, None
             )
+            if prof:
+                # projections + RoPE + KV append, then the tree attention over the KV alone
+                t0 = _tick("attention_proj_ms", (queries, gate), t0)
             out = tree_attention(queries, c, at.scale, shape, n0, rc)
+            if prof:
+                t0 = _tick("attention_kv_ms", out, t0)
             out = out.transpose(0, 2, 1, 3).reshape(1, w, -1)
             r = verifier._linear(at.o_proj, out * mx.sigmoid(gate))
             rec = ("kv",)
