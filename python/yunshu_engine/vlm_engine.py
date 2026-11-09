@@ -3208,6 +3208,7 @@ class VLMEngine:
         tool_spec: dict | None = None,
         tools_declared: bool = False,
         first_delivery: threading.Event | None = None,
+        spec_decode: bool = False,
     ):
         """Yield ``(text, token_id, state, finish_reason, thinking_tokens, logprob)``.
 
@@ -3352,6 +3353,7 @@ class VLMEngine:
             xtc_threshold=xtc_threshold,
             xtc_special_tokens=list(self._get_eos_ids()),
             guide=guide,
+            ngram=spec_decode,
             first_delivery=first_delivery,
         ):
             count += 1
@@ -3718,6 +3720,8 @@ class VLMEngine:
             top_n_sigma=float(kwargs.get("top_n_sigma") or 0.0),
             xtc_probability=float(kwargs.get("xtc_probability") or 0.0),
             xtc_threshold=float(kwargs.get("xtc_threshold") or 0.0),
+            spec_decode=bool(kwargs.get("spec_decode"))
+            or bool(settings.get("YUNSHU_NGRAM_DEFAULT")),
             tool_spec=kwargs.get("_tool_spec"),
             tool_recovery_tools=kwargs.get("_tool_recovery_tools"),
         )

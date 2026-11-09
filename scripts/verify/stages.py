@@ -3038,6 +3038,52 @@ def stage_jump_forward(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult(name, not reasons, reasons, numbers))
 
 
+def stage_ngram(ctx: Ctx) -> StageResult:
+    """n-gram speculation off vs on (candidate tree): engagement, window guarantee, decode rate."""
+    from scripts.research.probe_ngram import validate_records
+
+    name = "ngram"
+    reps = max(1, int(ctx.suite.get("reps", 3)))
+    expect = str(ctx.suite.get("ngram_expect", "engaged"))
+    cell = Cell(
+        name,
+        "paired",
+        [
+            ctx.py,
+            str(ctx.cand.path / "scripts/research/probe_ngram.py"),
+            "--src",
+            str(ctx.cand.path),
+            "--model",
+            ctx.model,
+            "--expect",
+            expect,
+            "--reps",
+            str(reps),
+            "--out",
+            "{out}",
+        ],
+        quiet=True,
+        mem_gb=ctx.mem_gb,
+        timeout_min=30,
+        cwd=ctx.cand.path,
+        validate=lambda path: validate_records(read_jsonl(path), reps, expect),
+    )
+    results = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(results)
+    result = results.get("paired")
+    numbers = {}
+    if result and result.ok and result.evidence:
+        rows = read_jsonl(result.evidence)
+        valid, reason = validate_records(rows, reps, expect)
+        if not valid:
+            reasons.append(reason)
+        else:
+            numbers = rows[-1]
+    else:
+        reasons.append("missing paired n-gram evidence")
+    return _finish(ctx, StageResult(name, not reasons, reasons, numbers))
+
+
 def stage_lane_bandwidth(ctx: Ctx) -> StageResult:
     """Candidate-only in-graph projection bandwidth; no end-to-end speed verdict."""
     name = "lane_bandwidth"
@@ -3314,6 +3360,7 @@ STAGE_FUNCS = {
     "phaseb-speed": lambda ctx: stage_phaseb(ctx, speed=True),
     "lane_bandwidth": stage_lane_bandwidth,
     "jump_forward": stage_jump_forward,
+    "ngram": stage_ngram,
     "ssd_ttft": stage_ssd_ttft,
     "ssd_ttft_profile": lambda ctx: stage_ttft_profile(ctx, ssd=True),
     "ttft_profile": stage_ttft_profile,

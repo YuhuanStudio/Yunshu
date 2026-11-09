@@ -11,7 +11,8 @@ the upstream batched forward (``BatchKVCache`` / left padding), the same call an
 What the layer returns to the driver are logits, not hidden states: the driver's ``_draw`` reads them
 through ``RoundDriver._logits``, which is the identity here. A prompt span yields ``[1, V]`` only when
 it ends the prompt (the first token's distribution), nothing otherwise; a decode step yields ``[N, V]``,
-one row per decoding window position. No drafter: ``RoundDriver.can_draft`` is False. The user
+one row per decoding window position. No model drafter: ``RoundDriver.can_draft`` is False (the
+model-free n-gram / suffix drafter, ``ngram.py``, is a per-request opt-in on a lone row). The user
 option ``YUNSHU_JUMP_FORWARD`` (default off) batches singleton grammar continuations; T>1 on
 upstream kernels may round differently from T=1. Ordinary rows still decode one token a round.
 
@@ -279,7 +280,24 @@ class GenericBatch:
         logits = _logits_of(out)
         return mx.concatenate([logits[b, :n] for b, n in enumerate(lens)])
 
+    def can_trim(self) -> bool:
+        """Every cache of the decode batch can cut rejected window positions (KV caches; not rotating
+        or recurrent state)."""
+        return self.cache is not None and all(c.is_trimmable() for c in self.cache)
+
     def commit(self, used: list[int]) -> None:
+        if len(self.rows) == 1 and used[0] < self._lens[0]:
+            # one row: the window's rejected tail is the cache's last positions (no padding to roll);
+            # an in-place trim, not the extract / re-merge a batch needs
+            assert self.cache is not None
+            for c in self.cache:
+                if not c.is_trimmable():
+                    raise RuntimeError(
+                        "generic window cache cannot trim a rejected prefix"
+                    )
+                c.trim(self._lens[0] - used[0])
+            self.rows[0].n += int(used[0])
+            return
         if any(u != n for u, n in zip(used, self._lens, strict=True)):
             # A processor can reject a forced token; keep only the verified prefix.
             # Extracting removes each row's padding before trimming and re-merging.

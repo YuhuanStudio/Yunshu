@@ -309,6 +309,9 @@ class Request:
     media: bool = (
         False  # the prompt carries media (APC checkpoints take the media rules)
     )
+    # n-gram / suffix speculation (generic layer, greedy rows; opt-in: per-request spec_decode or
+    # YUNSHU_NGRAM_DEFAULT). Ignored where the row cannot take it (``RoundDriver.ngram_ok``).
+    ngram: bool = False
 
 
 @dataclass
@@ -337,6 +340,8 @@ class _Row:
     drafts: list = field(default_factory=list)  # host ints of this step's window
     draft_dev: Any = None  # the next window's drafts: a (maybe lazy) int32 array
     forced_windows: int = 0
+    ngram_logged: bool = False
+    ngram: Any = None  # NgramDrafter of a greedy generic-layer row that asked for n-gram speculation
     nd: int = 0  # how many drafts ``draft_dev`` holds
     rates: list = field(default_factory=list)
     key: Any = None
@@ -527,6 +532,7 @@ class RoundDriver:
         ] = {}  # row id -> its head prefill was left queued
         self._deferred_apcs: list = []  # coordinators holding captured, unflushed checkpoints
         self.cost = CostCurve()
+        self._ngram_untrimmable_logged = False
         self.steps = 0
         self.drafted = 0
         self.accepted = 0
@@ -583,6 +589,7 @@ class RoundDriver:
             and self._processors_draft(req.processors, req.logprobs, req.guide)
             and (req.sampling is None or keyed is not None)
         )
+        ngram = self.ngram_ok(req)
         row = _Row(
             req=req,
             cache=self._new_cache(),
@@ -595,10 +602,18 @@ class RoundDriver:
             keyed=keyed,
             # a keyed row draws in the window branch (no ``_processed``) whether or not it drafts
             penalty=draft_penalty(req.processors)
-            if draft or keyed is not None
+            if draft or keyed is not None or ngram
             else None,
         )
-        if (draft or keyed is not None) and generic_processors(
+        if ngram:
+            from .. import settings
+            from .ngram import NgramDrafter
+
+            row.ngram = NgramDrafter(settings.get("YUNSHU_SPEC_PROPOSER"))
+            st = getattr(req.handle, "stats", None)
+            if st is not None:
+                st.spec_mode = "ngram"
+        if (draft or keyed is not None or ngram) and generic_processors(
             req.processors, req.guide is not None, bool(req.logprobs)
         ):
             row.generic = True
@@ -645,6 +660,43 @@ class RoundDriver:
             self.dflash is not None and self.dflash.can_draft
         )
 
+    def ngram_ok(self, req: Request) -> bool:
+        """Whether ``req`` takes the model-free n-gram / suffix drafter: the generic layer only (packed
+        layers keep their batch-invariant tree verify), a greedy row without guide, thinking budget or
+        logprobs, with windowable processors."""
+        return bool(
+            req.ngram
+            and self.generic
+            and req.sampling is None
+            and req.guide is None
+            and req.budget is None
+            and not req.logprobs
+            and req.prompt_logprobs is None
+            and windowable(req.processors)
+        )
+
+    def _ngram_window(self, row: _Row) -> list[int]:
+        """The drafts of this step's window for an n-gram row. Only a lone decoding row speculates:
+        rejected positions are cut off the cache by ``trim`` (free on one row; rows of a batch cache
+        would each need their own cut). Caches that cannot trim (rotating, recurrent) decode plain."""
+        if row.ngram is None or row.force:
+            return []
+        if len(self.batch.rows) != 1:
+            return []
+        if not self.batch.can_trim():
+            if not self._ngram_untrimmable_logged:
+                self._ngram_untrimmable_logged = True
+                logger.info(
+                    "Round driver n-gram speculation off: the model's cache cannot trim"
+                )
+            return []
+        room = min(row.ngram.k, row.req.max_tokens - row.generated - 1)
+        drafts = row.ngram.propose(row.context, room)
+        if drafts and not row.ngram_logged:
+            row.ngram_logged = True
+            logger.info("Round driver n-gram window engaged: %d drafts", len(drafts))
+        return drafts
+
     def _processors_draft(self, processors, logprobs=False, guide=None) -> bool:
         """A row with these processors may draft: none, static token bans (every verify row gets the
         same ban, DFlash and MTP rows alike), or bans plus one frequency / presence penalty without
@@ -668,7 +720,7 @@ class RoundDriver:
             )
         )
 
-    def apc_salt(self, extra_hash: int, drafting: bool) -> int:
+    def apc_salt(self, extra_hash: int, drafting: bool, ngram: bool = False) -> int:
         """APC key of this driver's cache layout. Entries carry the head's KV only
         for rows that draft and come from this driver's numerics, so they are kept
         apart from the upstream runner's entries; the prefill arithmetic (NAX /
@@ -689,6 +741,9 @@ class RoundDriver:
                 # Upstream T>1 decode rounds differently. Reply checkpoints from
                 # this user option must not enter the default T=1 namespace.
                 arith += ":jump-forward"
+        if ngram:
+            # T>1 windows round differently from T=1 on stock kernels: their replies stay out of the plain namespace
+            arith += ":ngram"
         mix = f"{extra_hash}:round-driver:{int(drafting)}:{arith}"
         return (
             int.from_bytes(hashlib.blake2b(mix.encode(), digest_size=8).digest(), "big")
@@ -711,7 +766,9 @@ class RoundDriver:
         if row.req.cache_plan is not None:
             # the policy steers this coordinator's lookup and checkpoint plan (it is per row)
             row.apc.set_request(ids, row.req.cache_plan)
-        row.salt = self.apc_salt(int(row.req.extra_hash), row.mtp_cache is not None)
+        row.salt = self.apc_salt(
+            int(row.req.extra_hash), row.mtp_cache is not None, row.ngram is not None
+        )
         # A prompt with no media token (the usual one) needs none of the media checks, each of which
         # walks every prompt id in Python (~34K ids at 32K context, several times per lookup): one
         # C-level set test decides, and an empty media set makes every check trivially true / empty.
@@ -1683,7 +1740,7 @@ class RoundDriver:
         # the device, so this step's graph is built while the chain runs.
         lens, parts, used_drafts, wins = [], [], [], []
         for r in rows:
-            forced = self._forced_window(r, MAX_DECODE_TOKENS)
+            forced = self._forced_window(r, MAX_DECODE_TOKENS) or self._ngram_window(r)
             if forced:
                 r.draft_dev = mx.array(forced, dtype=mx.int32)
                 r.nd = len(forced)
@@ -1760,6 +1817,8 @@ class RoundDriver:
                 keep += 1
             if len(window) > 1:
                 self._observe(row, len(window) - 1, keep - 1)
+                if row.ngram is not None:
+                    row.ngram.observe(len(window) - 1, keep - 1)
             # a stop, the length limit or the thinking budget can cut the
             # window short: the cache keeps what was emitted
             used = self._emit(row, toks[:keep], extra, events)

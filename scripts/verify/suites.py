@@ -30,6 +30,7 @@ STAGES = (
     "modelprobe",
     "lane_bandwidth",
     "jump_forward",
+    "ngram",
     "client_compat",
     "respfeat",
     "websearch",
@@ -62,6 +63,7 @@ LADDER = tuple(
         "modelprobe",
         "lane_bandwidth",
         "jump_forward",
+        "ngram",
         "client_compat",
         "console",
         "deployment",
@@ -115,6 +117,14 @@ SUITES = {
         "reps": 1,
     },
     "qwen4_mtp": {"stages": ["preflight", "qwen4_mtp"]},
+    # n-gram speculation on the generic layer: a trimmable-cache model (engaged), and a packed layer or
+    # rotating-cache model where the drafter must stay off and spec on == off
+    "ngram": {"stages": ["preflight", "ngram"], "reps": 3, "ngram_expect": "engaged"},
+    "ngram-plain": {
+        "stages": ["preflight", "ngram"],
+        "reps": 2,
+        "ngram_expect": "plain",
+    },
     "respfeat": {"stages": ["preflight", "respfeat"]},
     "priorart": {"stages": ["preflight", "priorart"]},
     "embedding": {"stages": ["preflight", "embedding"]},

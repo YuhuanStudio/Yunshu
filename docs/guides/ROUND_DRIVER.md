@@ -217,3 +217,26 @@ requiring output digest/token-count equality and schema validation. A second
 long-literal schema requires forced-window engagement; the ordinary schema may
 have no singleton runs. It reports client decode tok/s; it is separate from the unconstrained
 `identity` suite and the GPU bit-equality tests.
+
+## n-gram / suffix speculation on the generic layer
+
+A request with `spec_decode: true` (or `YUNSHU_NGRAM_DEFAULT=1`) on a generic-layer model drafts from
+its own context: after each emit the row's prompt plus emitted tokens propose the continuation of the
+longest earlier match (`YUNSHU_SPEC_PROPOSER` = `ngram` or `suffix`; the proposers are the text engine's,
+unchanged), the driver feeds `[pending, *drafts]` as one upstream window and keeps the prefix whose
+top-1 equals the draft (`round_driver/ngram.py`). Rejected positions are cut with `cache.trim`; a row
+that keeps missing backs off for up to 8 steps.
+
+Guarantee (the old text path's): every kept token is the model's own top-1 over that T>1 window. It is
+not bitwise equal to one-token decode on stock kernels, which is why it is a documented opt-in and its
+reply checkpoints use their own APC namespace. Scope: greedy rows without guide, thinking budget,
+logprobs or prompt logprobs; windowable processors only; one decoding row at a time (rows of a batch cache
+would each need their own cut: concurrent rows decode plain); models whose cache cannot trim (rotating
+window, recurrent state) decode plain and log it once. Packed Qwen3.5 and Flash-Next rows never take this
+drafter: their windows are batch-invariant verifies (MTP, DFlash copy drafts), so spec on equals spec off
+there and a `spec_decode` request changes nothing.
+
+`yv ab --base BASE --cand CAND --suite ngram --model <generic model>` runs spec off against on on the
+candidate tree (repetitive 1.5K and 32K-token prompts, one prose prompt), requiring engagement on the
+repetitive cases and reporting decode tok/s and whether the text was exactly equal; `--suite ngram-plain`
+requires the drafter to stay off and the two arms identical (packed layers, rotating caches).
