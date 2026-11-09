@@ -2992,6 +2992,7 @@ def stage_round_golden(ctx: Ctx) -> StageResult:
         return _finish(ctx, StageResult("round-golden", False, ["unknown M0_LAYER"]))
     scratch = ctx.run.path / "round-golden-home"
     (scratch / "tmp").mkdir(parents=True, exist_ok=True)
+    checkpoint_mem = float(ctx.env.get("M0_CHECKPOINT_MEM_GB", 80))
     results = {}
     for kind in ("tiny", "checkpoint"):
         if (
@@ -3031,7 +3032,7 @@ def stage_round_golden(ctx: Ctx) -> StageResult:
             kind,
             cmd,
             quiet=False,
-            mem_gb=80 if kind == "checkpoint" else 4,
+            mem_gb=checkpoint_mem if kind == "checkpoint" else 4,
             timeout_min=5 if kind == "tiny" else 15,
             cwd=ctx.cand.path,
             validate=_round_golden_valid,

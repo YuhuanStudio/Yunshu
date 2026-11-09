@@ -224,3 +224,29 @@ def test_yv_golden_scratch_stays_on_run_disk(tmp_path, monkeypatch):
     scratch = tmp_path / "round-golden-home"
     assert f"TMPDIR={scratch / 'tmp'}" in cells[0].argv
     assert (scratch / "tmp").is_dir()
+
+
+def test_yv_golden_checkpoint_memory_is_overridable(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts.verify import stages
+
+    monkeypatch.setattr(stages, "_finish", lambda ctx, result: result)
+    seen = {}
+
+    def run_cells(batch):
+        seen[batch[0].key] = batch[0].mem_gb
+        return {batch[0].key: SimpleNamespace(ok=True, evidence=None)}
+
+    for env, want in (({}, 80.0), ({"M0_CHECKPOINT_MEM_GB": "30"}, 30.0)):
+        seen.clear()
+        ctx = SimpleNamespace(
+            env={"M0_LAYER": "qwen3_5_moe", "M0_TINY_ONLY": "0", **env},
+            run=SimpleNamespace(path=tmp_path),
+            cand=SimpleNamespace(path=tmp_path),
+            py="python",
+            model="/models/moe",
+            exe=SimpleNamespace(run_cells=run_cells),
+        )
+        stages.stage_round_golden(ctx)
+        assert seen.get("checkpoint") == want
