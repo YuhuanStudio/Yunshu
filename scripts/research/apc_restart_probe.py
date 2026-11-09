@@ -55,7 +55,7 @@ def serve(model, port, home, log):
             str(port),
         ],
         env=env,
-        stdout=open(log, "wb"),
+        stdout=open(log, "wb"),  # noqa: SIM115
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
