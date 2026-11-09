@@ -131,6 +131,27 @@ async def test_ddg_legitimate_empty_is_distinct_from_parser_failure():
             await search.DuckDuckGo().search("q", limit=5, client=client)
 
 
+def test_keyless_duckduckgo_is_on_by_default(monkeypatch):
+    # user decision 2026-11-09: DuckDuckGo backend on by default, no API keys.
+    assert settings.REGISTRY["YUNSHU_WEB_KEYLESS"].default is True
+    assert settings.REGISTRY["YUNSHU_WEB_SEARCH_PROVIDER"].default == "auto"
+    settings.clear_overrides()
+    for name in (
+        "YUNSHU_WEB_SEARCH_PROVIDER",
+        "YUNSHU_WEB_KEYLESS",
+        "YUNSHU_SEARXNG_URL",
+        *(f"YUNSHU_{n.upper()}_API_KEY" for n in search.PROVIDER_ORDER),
+    ):
+        monkeypatch.delenv(name, raising=False)
+    search.set_provider_for_tests(None)
+    try:
+        prov = search.get_provider()
+        assert prov is not None
+        assert "ddg_html" in {p.name for p in prov.providers}
+    finally:
+        search.set_provider_for_tests(None)
+
+
 def test_mwmbl_is_explicit_opt_in(monkeypatch):
     search.set_provider_for_tests(None)
     monkeypatch.setenv("YUNSHU_WEB_SEARCH_PROVIDER", "auto")

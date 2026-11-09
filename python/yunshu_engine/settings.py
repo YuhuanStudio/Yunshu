@@ -290,7 +290,7 @@ _add("YUNSHU_WEB_SEARCH_PROVIDER", "enum", "auto", "Search backend. Auto runs li
 _add("YUNSHU_WEB_SEARCH_PROVIDER_TIMEOUT", "float", 1.0, "Per-provider metasearch deadline in seconds; slow providers cannot block the whole query.", "server-tools", minimum=0.1)
 _add("YUNSHU_WEB_SEARCH_HEALTH_FILE", "path", "~/.yunshu/cache/websearch-health.json", "Small query-free provider health snapshot read by yunshu config. No SERPs or credentials are stored.", "server-tools")
 _add("YUNSHU_WEB_MWMBL", "bool", False, "Opt in to Mwmbl's open small-web index in auto metasearch. Dataset is CC-BY-NC-SA 4.0 (noncommercial, attribution/share-alike); code is not vendored. Explicit provider=mwmbl also opts in.", "server-tools")
-_add("YUNSHU_WEB_KEYLESS", "bool", True, "Allow keyless DuckDuckGo (best effort; may block) and Wikipedia. Query text and IP leave the machine.", "server-tools")
+_add("YUNSHU_WEB_KEYLESS", "bool", True, "DuckDuckGo HTML (best effort; may block) and Wikipedia, no API keys; on by default (user decision 2026-11-09). Query text and IP leave the machine.", "server-tools")
 _add("YUNSHU_MOJEEK_API_KEY", "str", None, "Mojeek independent-index API key. Configured keys participate in auto metasearch.", "server-tools", secret=True)
 _add("YUNSHU_MARGINALIA_API_KEY", "str", None, "Explicit opt-in to Marginalia small-web search. Noncommercial/public API data is CC-BY-NC-SA 4.0; commercial keys have separate terms. No implicit public key.", "server-tools", secret=True)
 _add("YUNSHU_SERPER_API_KEY", "str", None, "Serper Google SERP API key.", "server-tools", secret=True)

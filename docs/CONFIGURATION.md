@@ -271,7 +271,7 @@ still wins at runtime (reported as `overridden`).
 | `YUNSHU_WEB_SEARCH_PROVIDER_TIMEOUT` | float | 1.0 | restart | Per-provider metasearch deadline in seconds; slow providers cannot block the whole query. |
 | `YUNSHU_WEB_SEARCH_HEALTH_FILE` | path | ~/.yunshu/cache/websearch-health.json | restart | Small query-free provider health snapshot read by yunshu config. No SERPs or credentials are stored. |
 | `YUNSHU_WEB_MWMBL` | bool | off | restart | Opt in to Mwmbl's open small-web index in auto metasearch. Dataset is CC-BY-NC-SA 4.0 (noncommercial, attribution/share-alike); code is not vendored. Explicit provider=mwmbl also opts in. |
-| `YUNSHU_WEB_KEYLESS` | bool | on | restart | Allow keyless DuckDuckGo (best effort; may block) and Wikipedia. Query text and IP leave the machine. |
+| `YUNSHU_WEB_KEYLESS` | bool | on | restart | DuckDuckGo HTML (best effort; may block) and Wikipedia, no API keys; on by default (user decision 2026-11-09). Query text and IP leave the machine. |
 | `YUNSHU_MOJEEK_API_KEY` | str | unset | restart | Mojeek independent-index API key. Configured keys participate in auto metasearch. |
 | `YUNSHU_MARGINALIA_API_KEY` | str | unset | restart | Explicit opt-in to Marginalia small-web search. Noncommercial/public API data is CC-BY-NC-SA 4.0; commercial keys have separate terms. No implicit public key. |
 | `YUNSHU_SERPER_API_KEY` | str | unset | restart | Serper Google SERP API key. |
