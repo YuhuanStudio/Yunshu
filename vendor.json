@@ -3466,6 +3466,68 @@
       ],
       "why": "docs Ask AI UX reference for the console (frontend/src/docs/AskAI.tsx); Yunxin is the sibling YuhuanStudio project",
       "commit": "6d671e87871bffc1ba203bca1b5e5973efcbd420"
+    },
+    {
+      "repo": "https://github.com/nace-ai/kapitsa",
+      "clone": "reference/kapitsa",
+      "globs": [
+        "src/**"
+      ],
+      "why": "speed competitor (fullcmp): DFlash drafting blocks, tree verify kernels, keyed sampling, CJK pre-tokenizer",
+      "commit": "e21f08b45fde070cb554bb73897e67b547b5c279",
+      "reviewed_date": "2026-11-09",
+      "reviewed_commit": "e21f08b45fde070cb554bb73897e67b547b5c279",
+      "review_reason": "added by the 11-09 refsync catch-up; delta studies in lead/study/delta_*_1109.md and zh_optimizations_1109.md"
+    },
+    {
+      "repo": "https://github.com/ddalcu/mlx-serve",
+      "clone": "reference/mlx-serve",
+      "globs": [
+        "**/*.zig",
+        "**/*.py",
+        "**/*.swift"
+      ],
+      "why": "MLX server competitor (fullcmp): checkpoint ladder, SSD spill with spec sidecar, restatement loop-stop",
+      "commit": "66aad94946b22afc040fa948b5c7599b227549ec",
+      "reviewed_date": "2026-11-09",
+      "reviewed_commit": "66aad94946b22afc040fa948b5c7599b227549ec",
+      "review_reason": "added by the 11-09 refsync catch-up; delta studies in lead/study/delta_*_1109.md and zh_optimizations_1109.md"
+    },
+    {
+      "repo": "https://github.com/lmstudio-ai/mlx-engine",
+      "clone": "reference/mlx-engine",
+      "globs": [
+        "mlx_engine/**/*.py"
+      ],
+      "why": "LM Studio's MLX engine (fullcmp): context AutoFit, cache and generation policy",
+      "commit": "ea1160901f67bad16a377f44219df4b56f8cddaf",
+      "reviewed_date": "2026-11-09",
+      "reviewed_commit": "ea1160901f67bad16a377f44219df4b56f8cddaf",
+      "review_reason": "added by the 11-09 refsync catch-up; delta studies in lead/study/delta_*_1109.md and zh_optimizations_1109.md"
+    },
+    {
+      "repo": "https://github.com/thunlp/FR-Spec",
+      "clone": "reference/FR-Spec",
+      "globs": [
+        "**/*.py"
+      ],
+      "why": "frequency-ranked draft vocabulary (zh line Z: frequency-trimmed Han set)",
+      "commit": "29d0136b43d372d7d48806db8702cc9c813fdccf",
+      "reviewed_date": "2026-11-09",
+      "reviewed_commit": "29d0136b43d372d7d48806db8702cc9c813fdccf",
+      "review_reason": "added by the 11-09 refsync catch-up; delta studies in lead/study/delta_*_1109.md and zh_optimizations_1109.md"
+    },
+    {
+      "repo": "https://github.com/alipay/PainlessInferenceAcceleration",
+      "clone": "reference/Lookahead",
+      "globs": [
+        "**/*.py"
+      ],
+      "why": "trie-based lookahead drafting without a draft model (zh line Z / agent RAG copy drafting)",
+      "commit": "78c9b002749f86a2dc601af3d02c5eaf6cc91507",
+      "reviewed_date": "2026-11-09",
+      "reviewed_commit": "78c9b002749f86a2dc601af3d02c5eaf6cc91507",
+      "review_reason": "added by the 11-09 refsync catch-up; delta studies in lead/study/delta_*_1109.md and zh_optimizations_1109.md"
     }
   ],
   "packages": [
