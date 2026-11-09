@@ -10,7 +10,12 @@ set -eu
 # The unit suite runs MLX on the GPU: outside gpuq it overlapped timing jobs and voided them
 # (2026-11-02: a turn-2 probe read 10x slow while ci-local ran beside it). Inside a gpuq job
 # GPUQ_RC is set; YUNSHU_CI_OUTSIDE_GPUQ=1 overrides on a machine with no timing work.
-if [ -z "${GPUQ_RC:-}" ] && [ "${YUNSHU_CI_OUTSIDE_GPUQ:-0}" != 1 ]; then
+# YUNSHU_CI_STAGE splits the run (default all): `cpu` = lint, mypy, console checks and the browser suite (no GPU:
+# the browser tests run vite and a stand-in engine), allowed outside gpuq; `gpu` = everything else (unit suite,
+# build, wheel smoke), inside gpuq. 2026-11-10: the ~50 min browser suite held the GPU lane while 25 jobs waited.
+STAGE="${YUNSHU_CI_STAGE:-all}"
+case "$STAGE" in all|cpu|gpu) ;; *) echo "ci-local: YUNSHU_CI_STAGE must be all, cpu or gpu" >&2; exit 2;; esac
+if [ "$STAGE" != cpu ] && [ -z "${GPUQ_RC:-}" ] && [ "${YUNSHU_CI_OUTSIDE_GPUQ:-0}" != 1 ]; then
   echo "ci-local: run it through gpuq (scripts/dev/gpuq submit --label ci-local -- scripts/dev/ci-local [REF]);" >&2
   echo "          its unit suite uses the GPU. YUNSHU_CI_OUTSIDE_GPUQ=1 runs it here anyway." >&2
   exit 2
@@ -25,6 +30,7 @@ SHA="$(git -C "$SRC" rev-parse "$REF")"
 # YUNSHU_CI_ROOT moves the ~8 GB checkout + venv off the system disk (an external SSD; it must not be
 # the denied build volume below). Default /tmp.
 WORK="${YUNSHU_CI_ROOT:-/tmp}/ycl-$(echo "$SHA" | cut -c1-8)"
+[ "$STAGE" = all ] || WORK="$WORK-$STAGE"  # the two halves run at the same time
 [ -d "$WORK" ] && chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"  # tests leave read-only harness snapshots
 # A failing run's checkout stays for debugging, but only until the next run: three kept failures filled the system
 # disk (36 GB) on 2026-10-25. Older than 6 h so a concurrent run's checkout is never touched.
@@ -41,13 +47,19 @@ UV_PROJECT_ENVIRONMENT="$WORK/.venv" uv sync -q --python 3.13 --dev --extra visi
 uv run --python 3.13 ruff check python/ tests/
 uv run --python 3.13 ruff format --check python/ tests/
 uv run --python 3.13 python scripts/dev/mypy_gate.py
+if [ "$STAGE" != gpu ]; then
 (cd frontend && pnpm install --frozen-lockfile && pnpm exec tsc --noEmit && pnpm test && pnpm build && pnpm exec yunui doctor --strict && pnpm exec yunui audit --strict)
-if [ "${YUNSHU_CI_BROWSER:-0}" = 1 ]; then
+fi
+if [ "$STAGE" != gpu ] && [ "${YUNSHU_CI_BROWSER:-0}" = 1 ]; then
   # A port nothing answers on (the resident console and agent servers live in 18990-18999); Playwright never reuses a server
   # already on the port (playwright.config.ts), so a taken port fails loudly.
   PW_PORT=$("$WORK/.venv/bin/python" -c 'import socket; s=socket.socket(); s.bind(("0.0.0.0", 0)); print(s.getsockname()[1])')
   (cd frontend && pnpm exec playwright install --with-deps chromium webkit && \
     PLAYWRIGHT_PORT="$PW_PORT" YUNSHU_TEST_PYTHON="$WORK/.venv/bin/python" pnpm test:browser)
+fi
+if [ "$STAGE" = cpu ]; then
+  echo "ci-local: CPU stage PASS $SHA"
+  exit 0
 fi
 PROFILE="$WORK/ci.sb"
 cat > "$PROFILE" <<EOF
