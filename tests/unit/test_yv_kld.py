@@ -256,3 +256,36 @@ def test_engaged_ref_with_real_difference_passes():
     base = window([[1, 2, 3]], [[0.4, 0.3, 0.2]])
     r = stage.evaluate(_arm(5), {"w0": base}, {"w0": base}, 0.002, 0.003)
     assert r["passed"] and r["ref_vs_base"]["kld_mean"] > 0
+
+
+def test_per_change_suites_never_run_counted_question_mmlu():
+    """User 10-28/10-30: a change is judged by identity / KLD / golden, not by MMLU question
+    counts (slow, noisy); MMLU-Pro is release-only. `quick` still carried mmlu_n 200 until
+    2026-11-09 and the lead queued it for eight families."""
+    from verify import suites
+
+    release_only = {"full", "evals", "quality-think"}  # release runs only
+    for name, suite in suites.SUITES.items():
+        if name in release_only or "quality" not in suite.get("stages", []):
+            continue
+        pytest.fail(f"suite {name!r} runs the MMLU quality stage per change")
+    for name in ("quick", "prefill", "scheduler"):
+        assert "kld" in suites.SUITES[name]["stages"]
+
+
+def test_kld_stage_is_not_applicable_to_a_family_without_capture_hooks(tmp_path):
+    from types import SimpleNamespace
+
+    from verify import stages
+
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "gemma4"}))
+    logged = []
+    ctx = SimpleNamespace(
+        model=str(tmp_path),
+        suite={},
+        exe=SimpleNamespace(jobs=[]),
+        run=SimpleNamespace(append=lambda name, ev: logged.append(ev)),
+    )
+    res = stages.stage_kld(ctx)
+    assert res.passed and res.numbers == {"applicable": False}
+    assert "gemma4" in res.reasons[0] and logged[0]["status"] == "PASS"

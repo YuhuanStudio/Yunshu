@@ -3371,6 +3371,22 @@ def stage_kld(ctx: Ctx) -> StageResult:
                 ["--kld-decode (teacher-forced decode path) is not implemented"],
             ),
         )
+    from .kld.capture import detect_arch
+
+    try:
+        detect_arch(ctx.model)
+    except RuntimeError as e:
+        # No capture hooks for this family: say so in the verdict instead of burning a GPU
+        # job that fails at load. Cross-path accuracy then rests on smoke/identity/apc.
+        return _finish(
+            ctx,
+            StageResult(
+                "kld",
+                True,
+                [f"n/a: {e}"],
+                numbers={"applicable": False},
+            ),
+        )
     manifest = corpus.load_manifest()
     corpus.load_texts()  # fails closed when the text under /Volumes/P5Plus is missing or altered
     ident = checkpoint_identity(ctx.model)

@@ -640,7 +640,8 @@ def test_tiny_suite_passes_base_equals_cand(world):
     assert go(world) == 0
     v, rd = verdict_of(world)
     assert v["overall"] == "PASS" and v["exit_code"] == 0
-    assert [s["status"] for s in v["stages"]] == ["PASS"] * 7
+    # preflight, smoke, identity, apc, speed, memory (no MMLU quality per change, 2026-11-10)
+    assert [s["status"] for s in v["stages"]] == ["PASS"] * 6
     for key in (
         "schema",
         "label",
@@ -676,7 +677,8 @@ def test_broken_candidate_fails_at_identity_and_stops(world):
     status = {s["name"]: s["status"] for s in v["stages"]}
     assert status["preflight"] == status["smoke"] == "PASS"
     assert status["identity"] == "FAIL" and v["failed_stage"] == "identity"
-    assert all(status[s] == "NOT_RUN" for s in ("apc", "quality", "speed", "memory"))
+    assert all(status[s] == "NOT_RUN" for s in ("apc", "speed", "memory"))
+    assert "quality" not in status
     assert not (rd / "speed.jsonl").exists()  # fail-fast: later stages never submitted
     assert "base != cand" in " ".join(v["stages"][2]["reasons"])
 

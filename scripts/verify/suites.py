@@ -199,20 +199,20 @@ SUITES = {
         "spec_off": True,
         "reps": 3,
     },
-    # prefill / prefix-cache change: long contexts, TTFT, cache hit == miss, quality
+    # prefill / prefix-cache change: long contexts, TTFT, cache hit == miss, KLD. Per-change suites
+    # never run counted-question MMLU (user 10-28/10-30: identity/KLD/golden per change; MMLU-Pro
+    # is release-only, suite `full`/`evals`); `quick` carried mmlu_n 200 until 2026-11-09.
     "prefill": {
-        "stages": ["preflight", "smoke", "identity", "apc", "quality", "speed"],
+        "stages": ["preflight", "smoke", "identity", "apc", "kld", "speed"],
         "ctx": [1024, 8192, 32768],
         "spec_off": False,
         "reps": 3,
-        "mmlu_n": 200,
     },
     "scheduler": {
-        "stages": ["preflight", "smoke", "identity", "apc", "quality", "speed"],
+        "stages": ["preflight", "smoke", "identity", "apc", "kld", "speed"],
         "ctx": [1024, 8192],
         "spec_off": False,
         "reps": 3,
-        "mmlu_n": 200,
     },
     "memory": {
         "stages": ["preflight", "smoke", "identity", "memory"],
@@ -235,7 +235,7 @@ SUITES = {
             "smoke",
             "identity",
             "apc",
-            "quality",
+            "kld",
             "speed",
         ],
         "ctx": [1024, 8192],
@@ -243,7 +243,6 @@ SUITES = {
         "kinds": ["prose", "code", "zhcn", "zhtw"],
         "spec_off": False,
         "reps": 3,
-        "mmlu_n": 200,
     },
     # long requests (agentic 32K-128K sessions): identity incl. spec on == off over 2048-token
     # replies, cold/warm/follow-up TTFT + 2048-token decode, 32K/128K memory, needle retrieval,
@@ -315,11 +314,11 @@ SUITES = {
     "tiny": {
         # no kld: its capture hooks know only the Qwen3.5 / Flash-Next families and it reads the fixed
         # corpus on P5Plus, so a small model (or the unit tests' fake world) fails it closed
-        "stages": [s for s in LADDER if s != "kld"],
+        # no quality: counted-question MMLU is release-only (user 10-28/10-30), tiny runs per change
+        "stages": [s for s in LADDER if s not in ("kld", "quality")],
         "ctx": [1024],
         "spec_off": False,
         "reps": 3,
-        "mmlu_n": 12,
         "mem_sizes": [4096, 8192],
         "mem_reps": 1,
     },
