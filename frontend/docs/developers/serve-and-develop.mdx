@@ -56,7 +56,7 @@ stateDiagram-v2
 A benchmark number that includes paused time measures the user's traffic, not the engine, so harnesses must never report such a sample.
 
 - `scripts/dev/gpuq_pause.py` (standard library only) provides `was_paused(t0, t1)`, `timed(fn)` and `pause_intervals()`. `timed` discards and re-runs a sample that overlapped a pause and raises `PausedSampleError` after repeated overlaps. It fails closed: an unreadable `$GPUQ_PAUSE_FILE` means paused; outside gpuq the variable is unset and nothing is ever paused.
-- It is wired into `scripts/research/agentic/replay_traffic.py`, `scripts/research/bench_engine_matrix.py` and the release gate's `cancel_then_next` wall-time check. New benchmark scripts must wrap each timed sample in `timed(...)`. Accuracy evals need nothing: a pause only makes them slower.
+- It is wired into `scripts/research/agentic/replay_traffic.py`, `scripts/research/bench_engine_matrix.py` and the release gate's `cancel_then_next` wall-time check. The offline live-A/B replay (`scripts/servedev/replay.py`, `ab()`) also drops any pair whose window overlaps a pause from both arms, reports `paused_pairs_dropped`, and fails closed when no clean pair remains. New benchmark scripts must wrap each timed sample in `timed(...)`. Accuracy evals need nothing: a pause only makes them slower.
 - Preemption lands within one poll interval of the first request, so a sample can briefly share the GPU before the stop. Keep `poll_s` small. For the handshake that closes this window, see below.
 
 ### Foreign-CPU and memory contamination

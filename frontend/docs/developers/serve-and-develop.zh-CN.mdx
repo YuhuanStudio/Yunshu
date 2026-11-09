@@ -56,7 +56,7 @@ stateDiagram-v2
 包含暂停时间的基准测试数字，测到的是用户的流量，不是引擎，所以测试工具绝不能报告这样的样本。
 
 - `scripts/dev/gpuq_pause.py`（仅用标准库）提供 `was_paused(t0, t1)`、`timed(fn)` 与 `pause_intervals()`。`timed` 会丢弃并重跑与暂停重叠的样本，重复重叠后抛出 `PausedSampleError`。它以失败关闭为原则：无法读取的 `$GPUQ_PAUSE_FILE` 视为已暂停；在 gpuq 之外，该变量未设置，也绝不会暂停。
-- 已接入 `scripts/research/agentic/replay_traffic.py`、`scripts/research/bench_engine_matrix.py`，以及发布关卡的 `cancel_then_next` 墙钟时间检查。新的基准测试脚本必须把每个计时样本包在 `timed(...)` 中。准确度评测不需要：暂停只会让它们变慢。
+- 已接入 `scripts/research/agentic/replay_traffic.py`、`scripts/research/bench_engine_matrix.py`，以及发布关卡的 `cancel_then_next` 墙钟时间检查。离线实时 A/B 重放（`scripts/servedev/replay.py` 的 `ab()`）同样会从两个 arm 中丢弃时间窗口与暂停重叠的配对，报告 `paused_pairs_dropped`，并且在没有干净配对剩下时以失败关闭的方式结束。新的基准测试脚本必须把每个计时样本包在 `timed(...)` 中。准确度评测不需要：暂停只会让它们变慢。
 - 抢占会在第一个请求之后的一个轮询间隔内生效，所以样本可能在停止之前短暂与请求共用 GPU。请让 `poll_s` 保持很小。关闭这个空窗的握手机制见下文。
 
 ### 外部 CPU 与内存污染
