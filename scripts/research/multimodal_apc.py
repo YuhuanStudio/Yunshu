@@ -212,6 +212,15 @@ async def anthropic_probe(engine, client, body, *, cold=False):
     )
 
 
+ANTHROPIC_TEXT = (
+    "You are checking a test image for a colour calibration report. The report lists "
+    "the dominant colour of every swatch, one word each, using plain colour names such "
+    "as red, green, blue, yellow, black or white, and never a shade or a hex code. "
+    "Look at the whole image, ignore any border, and decide which single colour covers "
+    "most of it. Describe the image's colour in one word."
+)
+
+
 def anthropic_body(model):
     return dict(
         model=model,
@@ -229,11 +238,15 @@ def anthropic_body(model):
                             "media_type": "image/png",
                             "data": base64.b64encode(png()).decode(),
                         },
-                        "cache_control": {"type": "ephemeral"},
                     },
                     {
+                        # The breakpoint sits on a text block long enough that a 64-aligned
+                        # checkpoint lands after the image: checkpoints never cut a media
+                        # span, so a one-line question after a ~60-token image (27B) could
+                        # never be cached and the warm request could never hit.
                         "type": "text",
-                        "text": "Describe the image's colour in one word.",
+                        "text": ANTHROPIC_TEXT,
+                        "cache_control": {"type": "ephemeral"},
                     },
                 ],
             }
