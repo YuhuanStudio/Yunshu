@@ -3491,10 +3491,14 @@
         "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
       },
       "media_input": {
-        "s": "missing",
-        "why": "audio is not rejected for this family (vlm_engine _check_request_supported has no audio gate) and prepare_media forwards it to the processor; no audio request has been served on the family",
-        "owner": "phaseE",
-        "impact": "high"
+        "s": "na",
+        "why": "Qwen3.5-family checkpoints have no audio encoder; audio input is refused with 400 (audio for Qwen is omni_speech)",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "has no audio encoder; audio input is"
+          ]
+        ]
       },
       "draft_family_coverage": {
         "s": "na",

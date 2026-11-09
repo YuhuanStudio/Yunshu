@@ -502,6 +502,19 @@ def resolve_external_ple_manifest(config: dict, model_path) -> None:
         ple["manifest"] = str(Path(model_path) / manifest)
 
 
+def _config_has_audio(config: dict) -> bool:
+    """True when the checkpoint config declares any audio component (top level or a
+    thinker sub-config). Families differ in naming (audio_config, sound_config, ...),
+    so any key mentioning audio counts; only a config with none is treated as text+vision."""
+
+    def has(cfg) -> bool:
+        return isinstance(cfg, dict) and any(
+            m in str(k).lower() for k in cfg for m in ("audio", "sound", "speech")
+        )
+
+    return has(config) or has(config.get("thinker_config"))
+
+
 class VLMEngine:
     """Multimodal (mlx-vlm) model engine.
 
@@ -656,6 +669,7 @@ class VLMEngine:
         self._has_vision = bool(
             self._config.get("vision_config") or thinker_cfg.get("vision_config")
         )
+        self._has_audio = _config_has_audio(self._config)
         try:
             with _quantize_shape_safety_patch():
                 self._model = self._load_vision_model(model_path)
@@ -3484,6 +3498,11 @@ class VLMEngine:
         if image_paths and not self._has_vision:
             raise ValueError(
                 f"model {self.model_name!r} has no vision encoder; image input is "
+                "not supported"
+            )
+        if audio_paths and not getattr(self, "_has_audio", True):
+            raise ValueError(
+                f"model {self.model_name!r} has no audio encoder; audio input is "
                 "not supported"
             )
         if (image_paths or audio_paths) and self._processor is None:
