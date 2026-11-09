@@ -33,9 +33,15 @@ def test_zh_kinds_are_always_passed_to_tfbench():
     from verify.stages import _kind_args
 
     assert _kind_args(["zhcn", "zhtw"], ["zhcn", "zhtw"]) == [
-        "--only-kind", "zhcn", "--only-kind", "zhtw",
+        "--only-kind",
+        "zhcn",
+        "--only-kind",
+        "zhtw",
     ]
     assert _kind_args(["prose", "code"], ["prose", "code"]) == []
-    assert _kind_args(["prose", "code", "zhcn", "zhtw"], ["prose", "code", "zhcn", "zhtw"])[-2:] == [
-        "--only-kind", "zhtw",
+    assert _kind_args(
+        ["prose", "code", "zhcn", "zhtw"], ["prose", "code", "zhcn", "zhtw"]
+    )[-2:] == [
+        "--only-kind",
+        "zhtw",
     ]
