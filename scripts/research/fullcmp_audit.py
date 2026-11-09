@@ -2156,7 +2156,7 @@ MODELS = {
         "config": "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp/config.json",
     },
     "flashnext": {
-        "name": "Qwen3.8-Flash-Next-oQ3e-mtp",
+        "name": "Qwen3.8-Flash-Next-oQ2.5e-mtp",
         # NOT in the repo: MoE (512 experts, top-10) active-parameter count and per-token expert
         # bytes are not recorded. MBU/MFU stay None until they are sourced.
         "active_params": None,
@@ -2169,7 +2169,7 @@ MODELS = {
         "head_dim": 256,
         "kv_dtype_bytes": 2,
         "gdn_state": None,  # not extracted; KV term excludes the indexer (indexer_kv_heads=1, dim 128)
-        "config": "/Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ3e-mtp/config.json",
+        "config": "/Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ2.5e-mtp/config.json",
     },
 }
 

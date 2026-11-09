@@ -67,6 +67,8 @@ Support in this table describes what the code handles. It is not a promise that 
 
 ## Qwen3.8-Flash-Next under 80 GB (qwen4_exp)
 
+Default Flash-Next checkpoint (2026-11-09): `Jundot/Qwen3.8-Flash-Next-oQ2.5e-mtp` (77 GB on disk, PLE read from the SSD), chosen for the smaller footprint and more concurrent headroom. `Jundot/Qwen3.8-Flash-Next-oQ3e-mtp` (86 GB) stays a supported higher-precision alternative.
+
 `Jundot/Qwen3.8-Flash-Next-oQ4e-mtp` is 106 GB on disk, of which 32 GB is the per-layer n-gram embedding (PLE). Yunshu reads PLE rows from the SSD instead of loading the table, which leaves 74.3 GB of resident weights (the 1.5 GB MTP head included).
 
 1. Build the external-PLE view once (hard links, nothing is copied, the original pack is untouched; source and view must be on the same volume): `python scripts/research/flashnext80_prepare_view.py <pack> <pack>-ple-ssd`.
