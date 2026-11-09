@@ -125,6 +125,11 @@ SUITES = {
         "reps": 2,
         "ngram_expect": "plain",
     },
+    "ngram-mixed": {
+        "stages": ["preflight", "ngram"],
+        "reps": 2,
+        "ngram_expect": "mixed",
+    },
     "respfeat": {"stages": ["preflight", "respfeat"]},
     "priorart": {"stages": ["preflight", "priorart"]},
     "embedding": {"stages": ["preflight", "embedding"]},

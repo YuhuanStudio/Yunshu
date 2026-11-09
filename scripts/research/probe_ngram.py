@@ -30,7 +30,7 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--src", type=Path, required=True)
     p.add_argument("--model", required=True)
-    p.add_argument("--expect", choices=["engaged", "plain"], required=True)
+    p.add_argument("--expect", choices=["engaged", "plain", "mixed"], required=True)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--reps", type=int, default=3)
     p.add_argument("--tokens", type=int, default=512)
@@ -84,15 +84,27 @@ def validate_records(rows, reps, expect, cases=CASES):
             )
             if off.get("engaged"):
                 return False, "the drafter engaged on a request that did not ask for it"
-            if expect == "plain":
+            if expect == "mixed" and case == "repeat_long":
+                # a model whose cache wraps (rotating window): short prompts may draft, the long one must not
+                expect_case = "plain"
+            else:
+                expect_case = "engaged" if expect == "mixed" else expect
+            if expect_case == "plain":
                 if on.get("engaged"):
                     return False, "the drafter engaged where it must stay off"
                 if (on["sha"], on["ct"]) != (off["sha"], off["ct"]):
                     return False, "plain row is not identical with spec off"
             else:
-                if case.startswith("repeat") and not on.get("engaged"):
+                if (
+                    expect == "engaged"
+                    and case.startswith("repeat")
+                    and not on.get("engaged")
+                ):
                     return False, "the drafter never engaged on a repetitive prompt"
-                if int(on.get("match", 0)) < MIN_MATCH_CHARS:
+                if (
+                    case.startswith("repeat")
+                    and int(on.get("match", 0)) < MIN_MATCH_CHARS
+                ):
                     return False, "spec on diverged from spec off almost at once"
     return True, ""
 
@@ -141,7 +153,7 @@ def main():
                     chars = CHARS[case] or a.long_chars
                     ask = PROSE_ASK if case == "prose_short" else REPEAT_ASK
                     text = filler(chars, 101) + ask
-                    texts = {}
+                    texts, rows = {}, {}
                     for arm in ("off", "on") if rep % 2 == 0 else ("on", "off"):
                         body = dict(
                             model=server.model,
@@ -155,22 +167,21 @@ def main():
                         result = t.send(server.url, body)
                         log = server.log.read_bytes()[start:].decode(errors="replace")
                         texts[arm] = result["_text"]
-                        write(
-                            dict(
-                                phase="decode",
-                                case=case,
-                                arm=arm,
-                                rep=rep,
-                                sha=result["sha"],
-                                ct=result["ct"],
-                                dec_tps=result["dec_tps"],
-                                engaged="n-gram window engaged" in log,
-                                server_log=str(server.log),
-                            )
+                        rows[arm] = dict(
+                            phase="decode",
+                            case=case,
+                            arm=arm,
+                            rep=rep,
+                            sha=result["sha"],
+                            ct=result["ct"],
+                            dec_tps=result["dec_tps"],
+                            engaged="n-gram window engaged" in log,
+                            server_log=str(server.log),
                         )
-                    on = records[-1] if records[-1]["arm"] == "on" else records[-2]
-                    on["match"] = common_prefix(texts["off"], texts["on"])
-                    on["exact"] = texts["off"] == texts["on"]
+                    rows["on"]["match"] = common_prefix(texts["off"], texts["on"])
+                    rows["on"]["exact"] = texts["off"] == texts["on"]
+                    for arm in ("off", "on"):
+                        write(rows[arm])
             finally:
                 server.kill()
                 shutil.rmtree(server.home, ignore_errors=True)

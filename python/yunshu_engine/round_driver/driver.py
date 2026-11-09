@@ -992,6 +992,15 @@ class RoundDriver:
 
     def _release(self, gone: list[_Row]) -> None:
         """Drop rows' slots in the decode batch and the head's."""
+        for r in gone:
+            if r.ngram is not None and r.ngram.windows:
+                logger.info(
+                    "Round driver n-gram row: %d windows, %d drafted, %d accepted, %d tokens",
+                    r.ngram.windows,
+                    r.ngram.drafted,
+                    r.ngram.landed,
+                    r.generated,
+                )
         if (
             self.generic
             and len(gone) == 1

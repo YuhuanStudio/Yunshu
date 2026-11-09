@@ -51,6 +51,7 @@ class NgramDrafter:
         self.proposer = make_proposer(kind)
         self.misses = 0
         self.cool = 0
+        self.windows = self.drafted = self.landed = 0
 
     def propose(self, context: list[int], room: int) -> list[int]:
         """Up to ``room`` draft tokens after ``context[-1]``; empty while cooling down."""
@@ -64,6 +65,9 @@ class NgramDrafter:
     def observe(self, drafted: int, landed: int) -> None:
         if not drafted:
             return
+        self.windows += 1
+        self.drafted += drafted
+        self.landed += landed
         if landed:
             self.misses = 0
             return
