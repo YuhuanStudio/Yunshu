@@ -31,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
-from gpuq_pause import pause_intervals  # noqa: E402
+from gpuq_pause import pause_intervals, paused_seconds  # noqa: E402
 from process_memory import apc_resident_gib, process_tree_memory  # noqa: E402
 
 CODES = [
@@ -317,7 +317,7 @@ def run_verdict(reqs, elapsed_s, requested_s, start_ledger, end_ledger, aborted=
 
 
 def active_seconds(start, end):
-    paused = sum(max(0.0, min(b, end) - max(a, start)) for a, b in pause_intervals())
+    paused = paused_seconds(start, end, pause_intervals())
     return max(0.0, end - start - paused)
 
 
