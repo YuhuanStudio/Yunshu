@@ -20,6 +20,15 @@ from tests.unit.test_apc_manager_e2e import (  # noqa: E402
 from yunshu_engine.apc_manager import SpillDiskStore, check_loaded_cache  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _prefill_checkpoints_only(monkeypatch):
+    # These tests pin the prefill-checkpoint / tier mechanics. The default next-turn mode
+    # (decode, user 2026-11-02) also stores each finished reply's decode cache, a second
+    # checkpoint at prompt + reply tokens that changes which positions and tiers exist; that mode
+    # is covered by test_decode_cache_next_turn.py.
+    monkeypatch.setenv("YUNSHU_NEXT_TURN_PREFILL", "off")
+
+
 def _spilled(model, tmp_path, validator):  # noqa: F811
     """Conversation ``a`` pushed out to the SSD by ``b``; a fresh runner on the same dir."""
     rnd = random.Random(9)
