@@ -2306,5 +2306,1864 @@
         "why": "shared VLM runner code (review branch 2026-10-26); real-checkpoint check pending"
       }
     }
+  },
+  "modality_columns": {
+    "_doc": "Feature x modality audit (phase E0). Columns: image / video (Qwen3.5-family dense VLM, VLMEngine -> round driver packed layer via prepare_media; video frames ride the image path), audio_in (same family; no audio encoder upstream, so every cell but media_input is na), omni_speech (Qwen3-Omni Thinker + Talker through omni_engine.py, bypasses the driver), ocr (OCREngine, ocr_engine.py, stock mlx-vlm generate). Every feature has a cell in every column. engaged needs ev (file + grep string that occurs in the file) and real_check (TODO until the lead's real-server run). missing / partial need owner and impact and why. na needs a physical reason. Unverified means missing. Source: lead/phaseE_plan.md E0, lead/bypass_census_1109.md.",
+    "image": {
+      "draft_vocab": {
+        "s": "partial",
+        "why": "reduced draft readout used only when one row drafts (round_driver/mtp.py single=True); media rows share the same driver",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "draft_topk_tree": {
+        "s": "missing",
+        "why": "tree/lattice top-k is not on the Qwen3.5 driver chain path; batch cell says chains only",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "copy_rounds": {
+        "s": "partial",
+        "why": "DFlash driver rows verify copy chains; MTP rows draft through the head only (same for media rows)",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "tree_drafts": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/dflash.py",
+            "search_tree("
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "cost_aware_depth": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "allocate"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "sampled_spec": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "keyed_sampling"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "guided_spec": {
+        "s": "partial",
+        "why": "DFlash driver rows with an invariant tool-call guide draft free text; other guides decode one token a round (media rows too)",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "logprobs": {
+        "s": "partial",
+        "why": "DFlash driver rows report logprobs while drafting; MTP driver rows with logprobs run one token a step",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "penalties_in_spec": {
+        "s": "missing",
+        "why": "rows with penalty / bias processors run one token a step through their own sampler",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "thinking_budget": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "row.req.budget"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "spec_under_concurrency": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/dflash.py",
+            "fair_nodes"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "batch_invariant_kernels": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "lane_linear.convert(lm)"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "lane_linear": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "_yunshu_lane_head"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "lane_layers": {
+        "s": "missing",
+        "why": "fused residual+RMSNorm / early async_eval are not shown in the driver's packed forward (round_driver/forward.py); batch cell marked na",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "ragged_kv": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/batch.py",
+            "ragged_attention"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "kv_precision": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/batch.py",
+            "quantize_kv_pair"
+          ],
+          [
+            "python/yunshu_engine/kernels/int8_kv.py",
+            "class Int8KVCache"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "weight_quant_on_load": {
+        "s": "missing",
+        "why": "in-memory weight quantization is not applied on the driver load path (same as batch)",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "prefill_kernels": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "gdn_prefill"
+          ],
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "attn_prefill.enable()"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "apc_prefix_cache": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "apc.store_checkpoint"
+          ],
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "media_checkpoint"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "prefill_stride_rule": {
+        "s": "partial",
+        "why": "fixed 64-aligned checkpoints, but no checkpoint cuts a media span: a media prompt restores only prefixes that end before its media, so hit-vs-cold equality is not pinned for media spans",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "media_input": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "def prepare_media"
+          ],
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "self._batch_runner.prepare_media("
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "draft_family_coverage": {
+        "s": "na",
+        "why": "feature is about other drafter families; this column is the Qwen3.5 family, whose MTP / DFlash rows are above"
+      },
+      "constrained_bitmask_engine": {
+        "s": "missing",
+        "why": "xgrammar-style bitmask engine is wired on the text fast path only",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "jump_forward": {
+        "s": "missing",
+        "why": "guided rows do not draft or jump on the driver",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "gpu_sampler": {
+        "s": "missing",
+        "why": "driver samples through keyed_sampling (sampled_spec); not verified as this on-GPU Gumbel sampler without per-token sync",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "lora_adapters": {
+        "s": "missing",
+        "why": "rejected for VLM models (vlm_engine _UNSUPPORTED_KWARGS)",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "idle_memory_return": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "IdleMemory"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "cancel": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "cancel_event"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "ple_ssd_rows": {
+        "s": "na",
+        "why": "PLE tables exist only in qwen4_exp (Flash-Next); the Qwen3.5 family has none"
+      },
+      "lane_promotion": {
+        "s": "na",
+        "why": "the round driver has no shared-batch phase to promote a row out of (the lane is replaced by the driver)"
+      },
+      "qwen4_fused_hc": {
+        "s": "na",
+        "why": "Flash-Next (qwen4_exp) only"
+      },
+      "next_turn_rehearsal": {
+        "s": "missing",
+        "why": "next_turn.ineligible_reason returns 'media request' for media prompts",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "gc_policy": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "gc_policy.install("
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "grammar_prewarm": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "prewarm_for_engine(self)"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "fast_top_logprobs": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "top_logprobs_device"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "special_token_text": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "neutralize_special_text("
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "empty_prompt_refusal": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "_non_empty_ids("
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "finite_state_publish": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "apc.store_checkpoint"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "grammar_mask_fast": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "allowed_mask"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "generation_suppress_default": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "_generation_suppress_ids"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "grammar_dead_end_isolation": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "proc.isolate = True"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "cache_store_opt_out": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "if not row.req.cache_store"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "sdpa_chunk_pre_nax": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "sdpa_chunk.install()"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "pil_channels_last": {
+        "s": "na",
+        "why": "fix is for the Gemma 4 / EmbeddingGemma 2 image processors; the Qwen3.5 processor is not on that path"
+      },
+      "one_token_greedy": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "effective_temperature("
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "budget_marker_strip": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "adapt_messages("
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "docs_ask": {
+        "s": "na",
+        "why": "console request preparation only; not a modality"
+      },
+      "ane_ffn_split": {
+        "s": "missing",
+        "why": "opt-in split patches the Qwen3.5 MLP for single-row prompt steps; the driver prefills its own spans, so the split is not on the media path",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "qwen4_gdn_fused": {
+        "s": "na",
+        "why": "Flash-Next (qwen4_exp) GDN verify plan only"
+      }
+    },
+    "video": {
+      "draft_vocab": {
+        "s": "partial",
+        "why": "reduced draft readout used only when one row drafts (round_driver/mtp.py single=True); media rows share the same driver",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "draft_topk_tree": {
+        "s": "missing",
+        "why": "tree/lattice top-k is not on the Qwen3.5 driver chain path; batch cell says chains only",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "copy_rounds": {
+        "s": "partial",
+        "why": "DFlash driver rows verify copy chains; MTP rows draft through the head only (same for media rows)",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "tree_drafts": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/dflash.py",
+            "search_tree("
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "cost_aware_depth": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "allocate"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "sampled_spec": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "keyed_sampling"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "guided_spec": {
+        "s": "partial",
+        "why": "DFlash driver rows with an invariant tool-call guide draft free text; other guides decode one token a round (media rows too)",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "logprobs": {
+        "s": "partial",
+        "why": "DFlash driver rows report logprobs while drafting; MTP driver rows with logprobs run one token a step",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "penalties_in_spec": {
+        "s": "missing",
+        "why": "rows with penalty / bias processors run one token a step through their own sampler",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "thinking_budget": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "row.req.budget"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "spec_under_concurrency": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/dflash.py",
+            "fair_nodes"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "batch_invariant_kernels": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "lane_linear.convert(lm)"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "lane_linear": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "_yunshu_lane_head"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "lane_layers": {
+        "s": "missing",
+        "why": "fused residual+RMSNorm / early async_eval are not shown in the driver's packed forward (round_driver/forward.py); batch cell marked na",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "ragged_kv": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/batch.py",
+            "ragged_attention"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "kv_precision": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/batch.py",
+            "quantize_kv_pair"
+          ],
+          [
+            "python/yunshu_engine/kernels/int8_kv.py",
+            "class Int8KVCache"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "weight_quant_on_load": {
+        "s": "missing",
+        "why": "in-memory weight quantization is not applied on the driver load path (same as batch)",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "prefill_kernels": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "gdn_prefill"
+          ],
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "attn_prefill.enable()"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "apc_prefix_cache": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "apc.store_checkpoint"
+          ],
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "media_checkpoint"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "prefill_stride_rule": {
+        "s": "partial",
+        "why": "fixed 64-aligned checkpoints, but no checkpoint cuts a media span: a media prompt restores only prefixes that end before its media, so hit-vs-cold equality is not pinned for media spans",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "media_input": {
+        "s": "partial",
+        "why": "video frames are extracted (vlm_engine _extract_video_frames) and sent as images: no pixel_values_videos / video_grid_thw path, so temporal grouping is not the video one (unverified)",
+        "owner": "phaseE",
+        "impact": "high"
+      },
+      "draft_family_coverage": {
+        "s": "na",
+        "why": "feature is about other drafter families; this column is the Qwen3.5 family, whose MTP / DFlash rows are above"
+      },
+      "constrained_bitmask_engine": {
+        "s": "missing",
+        "why": "xgrammar-style bitmask engine is wired on the text fast path only",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "jump_forward": {
+        "s": "missing",
+        "why": "guided rows do not draft or jump on the driver",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "gpu_sampler": {
+        "s": "missing",
+        "why": "driver samples through keyed_sampling (sampled_spec); not verified as this on-GPU Gumbel sampler without per-token sync",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "lora_adapters": {
+        "s": "missing",
+        "why": "rejected for VLM models (vlm_engine _UNSUPPORTED_KWARGS)",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "idle_memory_return": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "IdleMemory"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "cancel": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "cancel_event"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "ple_ssd_rows": {
+        "s": "na",
+        "why": "PLE tables exist only in qwen4_exp (Flash-Next); the Qwen3.5 family has none"
+      },
+      "lane_promotion": {
+        "s": "na",
+        "why": "the round driver has no shared-batch phase to promote a row out of (the lane is replaced by the driver)"
+      },
+      "qwen4_fused_hc": {
+        "s": "na",
+        "why": "Flash-Next (qwen4_exp) only"
+      },
+      "next_turn_rehearsal": {
+        "s": "missing",
+        "why": "next_turn.ineligible_reason returns 'media request' for media prompts",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "gc_policy": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "gc_policy.install("
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "grammar_prewarm": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "prewarm_for_engine(self)"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "fast_top_logprobs": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "top_logprobs_device"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "special_token_text": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "neutralize_special_text("
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "empty_prompt_refusal": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "_non_empty_ids("
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "finite_state_publish": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "apc.store_checkpoint"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "grammar_mask_fast": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "allowed_mask"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "generation_suppress_default": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "_generation_suppress_ids"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "grammar_dead_end_isolation": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "proc.isolate = True"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "cache_store_opt_out": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "if not row.req.cache_store"
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "sdpa_chunk_pre_nax": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "sdpa_chunk.install()"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "pil_channels_last": {
+        "s": "na",
+        "why": "fix is for the Gemma 4 / EmbeddingGemma 2 image processors; the Qwen3.5 processor is not on that path"
+      },
+      "one_token_greedy": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "effective_temperature("
+          ],
+          [
+            "python/yunshu_engine/vlm_batch_runner.py",
+            "_media_request"
+          ],
+          [
+            "python/yunshu_engine/round_driver/forward.py",
+            "media[\"inputs_embeds\"]"
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "budget_marker_strip": {
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/vlm_engine.py",
+            "adapt_messages("
+          ]
+        ],
+        "real_check": "TODO"
+      },
+      "docs_ask": {
+        "s": "na",
+        "why": "console request preparation only; not a modality"
+      },
+      "ane_ffn_split": {
+        "s": "missing",
+        "why": "opt-in split patches the Qwen3.5 MLP for single-row prompt steps; the driver prefills its own spans, so the split is not on the media path",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "qwen4_gdn_fused": {
+        "s": "na",
+        "why": "Flash-Next (qwen4_exp) GDN verify plan only"
+      }
+    },
+    "audio_in": {
+      "draft_vocab": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "draft_topk_tree": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "copy_rounds": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "tree_drafts": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "cost_aware_depth": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "sampled_spec": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "guided_spec": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "logprobs": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "penalties_in_spec": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "thinking_budget": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "spec_under_concurrency": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "batch_invariant_kernels": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "lane_linear": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "lane_layers": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "ragged_kv": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "kv_precision": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "weight_quant_on_load": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "prefill_kernels": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "apc_prefix_cache": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "prefill_stride_rule": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "media_input": {
+        "s": "missing",
+        "why": "audio is not rejected for this family (vlm_engine _check_request_supported has no audio gate) and prepare_media forwards it to the processor; no audio request has been served on the family",
+        "owner": "phaseE",
+        "impact": "high"
+      },
+      "draft_family_coverage": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "constrained_bitmask_engine": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "jump_forward": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "gpu_sampler": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "lora_adapters": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "idle_memory_return": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "cancel": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "ple_ssd_rows": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "lane_promotion": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "qwen4_fused_hc": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "next_turn_rehearsal": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "gc_policy": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "grammar_prewarm": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "fast_top_logprobs": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "special_token_text": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "empty_prompt_refusal": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "finite_state_publish": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "grammar_mask_fast": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "generation_suppress_default": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "grammar_dead_end_isolation": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "cache_store_opt_out": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "sdpa_chunk_pre_nax": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "pil_channels_last": {
+        "s": "na",
+        "why": "fix is for the Gemma 4 / EmbeddingGemma 2 image processors; not an audio path"
+      },
+      "one_token_greedy": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "budget_marker_strip": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "docs_ask": {
+        "s": "na",
+        "why": "console request preparation only; not a modality"
+      },
+      "ane_ffn_split": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "qwen4_gdn_fused": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      }
+    },
+    "omni_speech": {
+      "draft_vocab": {
+        "s": "missing",
+        "why": "driver-only feature: the Thinker bypasses the round driver (bypass census A8); no drafter on the Omni path",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "draft_topk_tree": {
+        "s": "missing",
+        "why": "driver-only feature: the Thinker bypasses the round driver (bypass census A8); no drafter on the Omni path",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "copy_rounds": {
+        "s": "missing",
+        "why": "driver-only feature: the Thinker bypasses the round driver (bypass census A8); no copy drafting",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "tree_drafts": {
+        "s": "missing",
+        "why": "driver-only feature: the Thinker bypasses the round driver (bypass census A8); no tree drafts",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "cost_aware_depth": {
+        "s": "missing",
+        "why": "driver-only feature: the Thinker bypasses the round driver (bypass census A8); no drafter depth control",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "sampled_spec": {
+        "s": "missing",
+        "why": "driver-only feature: the Thinker bypasses the round driver (bypass census A8); no speculative sampling",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "guided_spec": {
+        "s": "missing",
+        "why": "driver-only feature: the Thinker bypasses the round driver (bypass census A8); no guide in the Omni path",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "logprobs": {
+        "s": "missing",
+        "why": "OmniEngine.stream returns text and audio chunks only; no logprobs",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "penalties_in_spec": {
+        "s": "missing",
+        "why": "no repetition / presence / frequency penalty or logit_bias on OmniEngine.stream",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "thinking_budget": {
+        "s": "missing",
+        "why": "thinker_max_new_tokens is a total budget; no thinking-close forcing",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "spec_under_concurrency": {
+        "s": "missing",
+        "why": "driver-only feature: the Thinker bypasses the round driver (bypass census A8); OmniEngine is single-flight (self._busy)",
+        "owner": "phaseE",
+        "impact": "high"
+      },
+      "batch_invariant_kernels": {
+        "s": "missing",
+        "why": "driver-only feature: the Thinker bypasses the round driver (bypass census A8); no spec-on == spec-off check for Omni",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "lane_linear": {
+        "s": "na",
+        "why": "Qwen3.5 layout lane matmul; the Qwen3-Omni Thinker is a Qwen3-MoE stack"
+      },
+      "lane_layers": {
+        "s": "na",
+        "why": "Qwen3.5 verifier patch; the Qwen3-Omni Thinker has no Qwen3.5 layers"
+      },
+      "ragged_kv": {
+        "s": "missing",
+        "why": "single-flight generation, no per-row KV batch (OmniEngine._busy)",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "kv_precision": {
+        "s": "missing",
+        "why": "no YUNSHU_KV_PRECISION read on the Omni path",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "weight_quant_on_load": {
+        "s": "missing",
+        "why": "OmniEngine loads through mlx_vlm.load with no YUNSHU_QUANT_* applied",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "prefill_kernels": {
+        "s": "missing",
+        "why": "Qwen3.5 GDN prompt kernels are not on Qwen3-Omni; attention prefill kernels not verified",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "apc_prefix_cache": {
+        "s": "missing",
+        "why": "no prefix cache: each turn re-prefills the transcript (_messages_to_omni_prompt)",
+        "owner": "phaseE",
+        "impact": "high"
+      },
+      "prefill_stride_rule": {
+        "s": "missing",
+        "why": "no checkpoints, so no stride rule",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "media_input": {
+        "s": "partial",
+        "why": "image and audio go to mlx-vlm generate_stream as pixel_values / input_features (one each per turn); no video, no prepare_media, not a driver row",
+        "owner": "phaseE",
+        "impact": "high"
+      },
+      "draft_family_coverage": {
+        "s": "missing",
+        "why": "no drafter family is reachable from OmniEngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "constrained_bitmask_engine": {
+        "s": "missing",
+        "why": "no constrained decoding on OmniEngine.stream",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "jump_forward": {
+        "s": "missing",
+        "why": "no constrained decoding on OmniEngine.stream",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "gpu_sampler": {
+        "s": "missing",
+        "why": "Thinker and Talker sample inside mlx-vlm generate_stream, not the engine sampler",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "lora_adapters": {
+        "s": "missing",
+        "why": "no LoRA on OmniEngine.stream",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "idle_memory_return": {
+        "s": "missing",
+        "why": "IdleMemory is wired on the VLM runner only",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "cancel": {
+        "s": "partial",
+        "why": "no cancel event on OmniEngine.stream; a consumer that stops reading stops the generator from being advanced, but the in-flight executor step completes and the suspended generator is not closed",
+        "owner": "phaseE",
+        "impact": "high"
+      },
+      "ple_ssd_rows": {
+        "s": "na",
+        "why": "PLE tables exist only in qwen4_exp (Flash-Next)"
+      },
+      "lane_promotion": {
+        "s": "na",
+        "why": "single-row generation with no shared batch to promote out of"
+      },
+      "qwen4_fused_hc": {
+        "s": "na",
+        "why": "Flash-Next (qwen4_exp) only"
+      },
+      "next_turn_rehearsal": {
+        "s": "missing",
+        "why": "rehearsal is a VLMEngine feature; not on the Omni path",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "gc_policy": {
+        "s": "missing",
+        "why": "GC policy is installed for the VLM runner only (vlm_engine gc_policy.install)",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "grammar_prewarm": {
+        "s": "missing",
+        "why": "grammar prewarm is run by VLMEngine only",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "fast_top_logprobs": {
+        "s": "missing",
+        "why": "no top_logprobs on OmniEngine.stream",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "special_token_text": {
+        "s": "missing",
+        "why": "user text is passed to the processor without neutralize_special_text",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "empty_prompt_refusal": {
+        "s": "missing",
+        "why": "no empty-prompt refusal on OmniEngine.stream",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "finite_state_publish": {
+        "s": "missing",
+        "why": "no prefix cache, so nothing to publish",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "grammar_mask_fast": {
+        "s": "missing",
+        "why": "no grammar on OmniEngine.stream",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "generation_suppress_default": {
+        "s": "missing",
+        "why": "generation_config suppress_tokens is not applied on the Omni path",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "grammar_dead_end_isolation": {
+        "s": "missing",
+        "why": "no grammar on OmniEngine.stream",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "cache_store_opt_out": {
+        "s": "missing",
+        "why": "no cache store on the Omni path",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "sdpa_chunk_pre_nax": {
+        "s": "missing",
+        "why": "installed by VLMEngine for its runner; not verified on the Omni generate_stream",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "pil_channels_last": {
+        "s": "na",
+        "why": "fix is for the Gemma 4 / EmbeddingGemma 2 image processors; the Qwen3-Omni processor is not on that path"
+      },
+      "one_token_greedy": {
+        "s": "missing",
+        "why": "no sampling filters or greedy routing on OmniEngine.stream",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "budget_marker_strip": {
+        "s": "missing",
+        "why": "prompt is built by _build_content with no adapt_messages",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "docs_ask": {
+        "s": "na",
+        "why": "console request preparation only; not a modality"
+      },
+      "ane_ffn_split": {
+        "s": "na",
+        "why": "patches the Qwen3.5 dense MLP; the Qwen3-Omni Thinker uses a MoE MLP"
+      },
+      "qwen4_gdn_fused": {
+        "s": "na",
+        "why": "Flash-Next (qwen4_exp) GDN verify plan only"
+      }
+    },
+    "ocr": {
+      "draft_vocab": {
+        "s": "missing",
+        "why": "driver-only feature: OCREngine calls mlx-vlm generate directly, not the round driver (bypass census B1); no drafter",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "draft_topk_tree": {
+        "s": "missing",
+        "why": "driver-only feature: OCREngine calls mlx-vlm generate directly, not the round driver (bypass census B1); no drafter",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "copy_rounds": {
+        "s": "missing",
+        "why": "driver-only feature: OCREngine calls mlx-vlm generate directly, not the round driver (bypass census B1); no copy drafting",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "tree_drafts": {
+        "s": "missing",
+        "why": "driver-only feature: OCREngine calls mlx-vlm generate directly, not the round driver (bypass census B1); no tree drafts",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "cost_aware_depth": {
+        "s": "missing",
+        "why": "driver-only feature: OCREngine calls mlx-vlm generate directly, not the round driver (bypass census B1); no drafter depth control",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "sampled_spec": {
+        "s": "missing",
+        "why": "driver-only feature: OCREngine calls mlx-vlm generate directly, not the round driver (bypass census B1); no speculative sampling",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "guided_spec": {
+        "s": "missing",
+        "why": "driver-only feature: OCREngine calls mlx-vlm generate directly, not the round driver (bypass census B1); no guide on the OCR path",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "logprobs": {
+        "s": "missing",
+        "why": "OCREngine returns text and token counts only; no logprobs",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "penalties_in_spec": {
+        "s": "missing",
+        "why": "no penalty or logit_bias processors on OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "thinking_budget": {
+        "s": "missing",
+        "why": "no thinking budget on OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "spec_under_concurrency": {
+        "s": "missing",
+        "why": "driver-only feature: OCREngine calls mlx-vlm generate directly, not the round driver (bypass census B1); OCREngine has no concurrency control",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "batch_invariant_kernels": {
+        "s": "missing",
+        "why": "driver-only feature: OCREngine calls mlx-vlm generate directly, not the round driver (bypass census B1); no spec path to make identical",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "lane_linear": {
+        "s": "na",
+        "why": "Qwen3.5 layout lane matmul; GLM-OCR is a different architecture"
+      },
+      "lane_layers": {
+        "s": "na",
+        "why": "Qwen3.5 verifier patch; GLM-OCR has no Qwen3.5 layers"
+      },
+      "ragged_kv": {
+        "s": "missing",
+        "why": "driver-only feature: OCREngine calls mlx-vlm generate directly, not the round driver (bypass census B1); single request per call",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "kv_precision": {
+        "s": "missing",
+        "why": "YUNSHU_KV_PRECISION is not read on OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "weight_quant_on_load": {
+        "s": "missing",
+        "why": "OCREngine loads through mlx_vlm.load with no YUNSHU_QUANT_* applied",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "prefill_kernels": {
+        "s": "missing",
+        "why": "Qwen3.5 GDN prompt kernels are not on GLM-OCR; no OCR prefill kernels installed",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "apc_prefix_cache": {
+        "s": "missing",
+        "why": "no prefix cache: every call prefills its image",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "prefill_stride_rule": {
+        "s": "missing",
+        "why": "no checkpoints, so no stride rule",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "media_input": {
+        "s": "partial",
+        "why": "one image per call, passed to mlx-vlm generate as [image_path]; not prepare_media, not a driver row; video and audio are not OCR inputs",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "draft_family_coverage": {
+        "s": "missing",
+        "why": "no drafter family is reachable from OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "constrained_bitmask_engine": {
+        "s": "missing",
+        "why": "no constrained decoding on OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "jump_forward": {
+        "s": "missing",
+        "why": "no constrained decoding on OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "gpu_sampler": {
+        "s": "missing",
+        "why": "OCREngine uses mlx-vlm's stock sampler",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "lora_adapters": {
+        "s": "missing",
+        "why": "no LoRA on OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "idle_memory_return": {
+        "s": "missing",
+        "why": "IdleMemory is wired on the VLM runner only; OCREngine clears memory at unload",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "cancel": {
+        "s": "missing",
+        "why": "router disconnect guard returns early but no cancel event reaches the generate call; generation runs to max_tokens=4096",
+        "owner": "phaseE",
+        "impact": "high"
+      },
+      "ple_ssd_rows": {
+        "s": "na",
+        "why": "PLE tables exist only in qwen4_exp (Flash-Next)"
+      },
+      "lane_promotion": {
+        "s": "na",
+        "why": "single stock generate call with no shared batch"
+      },
+      "qwen4_fused_hc": {
+        "s": "na",
+        "why": "Flash-Next (qwen4_exp) only"
+      },
+      "next_turn_rehearsal": {
+        "s": "missing",
+        "why": "rehearsal is a VLMEngine feature; not on OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "gc_policy": {
+        "s": "missing",
+        "why": "GC policy is installed for the VLM runner only",
+        "owner": "phaseE",
+        "impact": "medium"
+      },
+      "grammar_prewarm": {
+        "s": "missing",
+        "why": "grammar prewarm is run by VLMEngine only",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "fast_top_logprobs": {
+        "s": "missing",
+        "why": "no top_logprobs on OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "special_token_text": {
+        "s": "missing",
+        "why": "the task / language text is inserted into the prompt without neutralize_special_text",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "empty_prompt_refusal": {
+        "s": "missing",
+        "why": "no empty-prompt refusal on OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "finite_state_publish": {
+        "s": "missing",
+        "why": "no prefix cache on OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "grammar_mask_fast": {
+        "s": "missing",
+        "why": "no grammar on OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "generation_suppress_default": {
+        "s": "missing",
+        "why": "generation_config suppress_tokens is not applied on the OCR path",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "grammar_dead_end_isolation": {
+        "s": "missing",
+        "why": "no grammar on OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "cache_store_opt_out": {
+        "s": "missing",
+        "why": "no cache store on OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "sdpa_chunk_pre_nax": {
+        "s": "missing",
+        "why": "sdpa_chunk is not installed on OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "pil_channels_last": {
+        "s": "na",
+        "why": "fix is for the Gemma 4 / EmbeddingGemma 2 image processors; the GLM-OCR processor is not on that path"
+      },
+      "one_token_greedy": {
+        "s": "missing",
+        "why": "no greedy routing on OCREngine",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "budget_marker_strip": {
+        "s": "missing",
+        "why": "no adapt_messages on the OCR path",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "docs_ask": {
+        "s": "na",
+        "why": "console request preparation only; not a modality"
+      },
+      "ane_ffn_split": {
+        "s": "na",
+        "why": "patches the Qwen3.5 dense MLP; GLM-OCR is a different architecture"
+      },
+      "qwen4_gdn_fused": {
+        "s": "na",
+        "why": "Flash-Next (qwen4_exp) GDN verify plan only"
+      }
+    }
   }
 }
