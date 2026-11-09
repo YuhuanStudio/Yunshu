@@ -125,12 +125,15 @@ def test_the_store_waits_for_the_follow_up_not_for_a_resend(monkeypatch):
     assert r._decode_follows(_job([1, 2, 3, 4, 10, 11, 12, 99], []))
     r._flush_decode_cache_if_idle(r._decode_pending)
     assert stored == [reply] and offered == [["kv"]]
-    # a newer reply drops an unflushed older one instead of copying it
-    r._defer_decode_cache(group, _job([5], [6]), caches=["kv"])
+    # a newer reply stores an unflushed older one first (dropping it made the older
+    # conversation's follow-up re-prefill only under concurrency: concurrent != solo)
+    older = _job([5], [6])
+    r._defer_decode_cache(group, older, caches=["kv"])
     newer = _job([7], [8])
     r._defer_decode_cache(group, newer, caches=["kv"])
+    assert stored == [reply, older] and r._decode_pending_job() is newer
     r._flush_decode_cache()
-    assert stored == [reply, newer]
+    assert stored == [reply, older, newer]
 
 
 def test_round_driver_last_finished_row_defers_its_reply_cache():

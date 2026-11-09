@@ -1478,16 +1478,13 @@ class VLMBatchRunner:
         conversation's follow-up (before its lookup) or when the runner goes idle."""
         from . import dflash_apc_window
 
-        old = self.__dict__.pop("_decode_pending", None)
-        if old is not None:
-            # A newer reply finished before the runner went idle: its store would land in
-            # front of the next request too, so the older one is dropped (that conversation
-            # re-prefills its reply if it continues).
-            logger.info("decode cache not stored: superseded by a newer reply")
-            from .kernels.buffer_cache import offer_restore_buffers
-
-            with contextlib.suppress(Exception):
-                offer_restore_buffers(old[2])
+        if self.__dict__.get("_decode_pending") is not None:
+            # A newer reply finished before the runner went idle: the older one is stored
+            # now. Dropping it (as before 2026-11-09) made a follow-up restore its reply when
+            # it ran alone but re-prefill it when another reply finished first, and decode
+            # state and a re-prefill differ in the last bits: concurrent != solo output.
+            logger.info("decode cache stored early: a newer reply finished first")
+            self._flush_decode_cache()
         coordinator = getattr(group.gen, "apc", None)
         if coordinator is not None and hasattr(coordinator, "take_standing"):
             coordinator.take_standing()  # a standing cache its follow-up never claimed
