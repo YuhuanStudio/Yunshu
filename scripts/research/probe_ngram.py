@@ -104,6 +104,10 @@ def main():
     if a.dry_run:
         print(json.dumps(dict(complete=True, dry_run=True, reps=a.reps)))
         return
+    import os
+
+    # tfbench's drafter-engagement check expects MTP; this probe proves the n-gram engagement itself
+    os.environ["TFB_SKIP_ENGAGED"] = "1"
     try:
         from . import tfbench as t
         from .conc_probe import filler
