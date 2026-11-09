@@ -23,7 +23,7 @@ class _FakeOCR:
     def __init__(self, tag):
         self.tag = tag
 
-    async def extract_text(self, path, language=None, task="text"):
+    async def extract_text(self, path, language=None, task="text", cancel_event=None):
         return {
             "text": f"from-{self.tag}",
             "confidence": 1.0,

@@ -35,12 +35,20 @@ from .active_tracking import ActiveRequestMixin, tracks_active
 class OCREngine(ActiveRequestMixin):
     """OCR engine using GLM-OCR models via mlx-vlm.
 
-    Uses chat template formatting with image tokens for proper vision encoding,
-    then runs generation with KV cache for token-by-token decoding.
+    Owns a ``VLMEngine`` for the same checkpoint and generates every OCR call
+    through ``VLMEngine.generate`` (the round driver). The OCR-specific pieces
+    stay here: task-prompt resolution, the language hint, the GLM-OCR processor
+    import, and the image-token estimate.
     """
 
-    def __init__(self, model_path: str) -> None:
+    def __init__(self, model_path: str, shared_vlm: Any = None) -> None:
+        """``shared_vlm``: an already-loaded VLMEngine for the same checkpoint (the
+        model manager passes one when it serves that checkpoint as a VLM). The OCR
+        engine then reuses it and never loads a second copy of the weights."""
         self._model_path = model_path
+        self._shared_vlm = shared_vlm
+        self._owns_vlm = False
+        self._vlm = None
         self._model = None
         self._processor = None
         self._tokenizer = None
@@ -53,7 +61,7 @@ class OCREngine(ActiveRequestMixin):
 
     @property
     def is_loaded(self) -> bool:
-        return self._model is not None
+        return self._vlm is not None and self._vlm.is_loaded
 
     def load(self) -> None:
         """Load the OCR model via mlx-vlm."""
@@ -78,14 +86,41 @@ class OCREngine(ActiveRequestMixin):
             self._model = None
             self._processor = None
 
+    @staticmethod
+    def _import_glm_ocr_processing() -> None:
+        # Eagerly import GLM-OCR processing so its AutoProcessor patch is
+        # installed before the VLM processor is resolved (see load()).
+        with contextlib.suppress(Exception):
+            import mlx_vlm.models.glm_ocr.processing  # noqa: F401
+
     async def start(self) -> None:
-        """Start the OCR engine."""
+        """Start the OCR engine: load the checkpoint into a VLMEngine."""
         from .mlx_executor import get_mlx_executor
+        from .vlm_engine import VLMEngine
 
         self._executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(self._executor, self.load)
-        if self._model is not None:
+        await loop.run_in_executor(self._executor, self._import_glm_ocr_processing)
+        shared = self._shared_vlm
+        if shared is not None and getattr(shared, "is_loaded", False):
+            # the checkpoint is already resident in a VLMEngine: reuse it (one copy of
+            # the weights in memory). stop() then leaves it running for its owner.
+            self._owns_vlm = False
+            vlm = shared
+        else:
+            vlm = VLMEngine(self._model_path)
+            try:
+                await vlm.start()
+                self._owns_vlm = True
+            except Exception as e:
+                logger.warning(f"OCR model load failed: {e}")
+                vlm = None
+        self._vlm = vlm
+        if self._vlm is not None:
+            # the engine's model/processor refs point at the VLMEngine's (no second load)
+            self._model = getattr(vlm, "_model", None)
+            self._processor = getattr(vlm, "_processor", None)
+            self._tokenizer = getattr(vlm, "_tokenizer", None)
             self._running = True
         else:
             logger.error("OCR engine failed to load model %s", self._model_path)
@@ -101,6 +136,10 @@ class OCREngine(ActiveRequestMixin):
         """
         import gc
 
+        vlm, self._vlm = self._vlm, None
+        if vlm is not None and self._owns_vlm:
+            await vlm.stop()
+        self._owns_vlm = False
         self._model = None
         self._processor = None
         self._tokenizer = None
@@ -118,9 +157,17 @@ class OCREngine(ActiveRequestMixin):
                     "OCR sync_and_clear_cache during stop failed", exc_info=True
                 )
 
+    def _model_config(self) -> Any:
+        """The loaded model's config: the mlx-vlm model object's config, else the
+        config.json dict the VLMEngine read."""
+        cfg = getattr(self._model, "config", None)
+        if cfg is None and self._vlm is not None:
+            cfg = getattr(self._vlm, "_config", None)
+        return cfg
+
     def _get_vision_config(self) -> dict[str, Any]:
         """Return the model's vision_config dict (or empty when missing)."""
-        cfg = getattr(self._model, "config", None)
+        cfg = self._model_config()
         if cfg is None:
             return {}
         # mlx-vlm wraps config either as a dataclass-like object or a dict.
@@ -226,33 +273,86 @@ class OCREngine(ActiveRequestMixin):
             "total_tokens": int(prompt_tokens + completion_tokens),
         }
 
+    @staticmethod
+    def _build_messages(
+        image_path: str, task: str, language: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Chat messages for one OCR call: the image, then the task prompt.
+
+        The task prompt is the GLM-OCR card prompt for ``task`` (see
+        ``_resolve_task_prompt``); a language hint is appended to it. VLMEngine
+        expands the image part through the model's own chat template.
+        """
+        task_prompt = _resolve_task_prompt(task)
+        # honor the language hint on the primary engine path (it was
+        # accepted then ignored — only the VLM-fallback in routers/ocr.py applied
+        # it, so the same endpoint behaved differently per engine).
+        if language:
+            task_prompt = f"{task_prompt}\n\nRespond in {language}."
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"file://{image_path}"}},
+                    {"type": "text", "text": task_prompt},
+                ],
+            }
+        ]
+
     @tracks_active
     async def extract_text(
         self,
         image_path: str,
         language: str | None = None,
         task: str = "text",
+        cancel_event: Any = None,
     ) -> dict[str, Any]:
         """Extract text from an image file.
 
+        Generation runs through ``VLMEngine.generate`` (the round driver), greedy
+        with the 4096-token cap the native OCR path always used. ``cancel_event``
+        is forwarded so a client disconnect stops the decode between steps.
+
         Args:
-            image_path: Path to the image file
+            image_path: Path to the image file (must live under YUNSHU_MEDIA_DIR)
             language: Optional language hint
             task: OCR task type — "text", "formula", or "table"
+            cancel_event: optional threading.Event set on client disconnect
 
         Returns:
-            {"text": "...", "confidence": float, "language": str}
+            {"text": "...", "confidence": None, "language": str|None, ...}
         """
         if not self.is_loaded:
             raise RuntimeError("OCR engine not started")
 
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            self._executor, self._extract_sync, image_path, task, language
+        messages = self._build_messages(image_path, task, language)
+        result = await self._vlm.generate(
+            messages=messages,
+            max_tokens=4096,
+            temperature=0.0,
+            top_p=1.0,
+            # the old native path never enabled reasoning; keep it off explicitly
+            enable_thinking=False,
+            cancel_event=cancel_event,
         )
+        prompt_tokens = int(result.get("prompt_tokens", 0) or 0)
+        completion_tokens = int(result.get("completion_tokens", 0) or 0)
+        image_tokens = self._estimate_image_tokens(image_path)
+        out = {
+            "text": result.get("text", "") or "",
+            # (honesty): the VLM-OCR model emits no confidence score, so
+            # the old hardcoded 1.0 was a fabricated "measurement". Report None —
+            # confidence is genuinely unknown, not perfect.
+            "confidence": None,
+            "language": None,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "image_tokens": int(image_tokens),
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
         if language:
-            result["language"] = language
-        return result
+            out["language"] = language
+        return out
 
     def get_stats(self) -> dict:
         return {

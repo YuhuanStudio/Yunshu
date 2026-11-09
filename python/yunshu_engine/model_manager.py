@@ -416,8 +416,30 @@ def _embedding_engine_class(model_path: str) -> Any:
     return VLEmbeddingEngine
 
 
+def find_loaded_vlm(entries, model_path: str) -> Any:
+    """The loaded VLMEngine serving ``model_path`` among ``entries``, else None. The OCR
+    engine reuses it instead of loading the same checkpoint a second time."""
+    import os
+
+    from .vlm_engine import VLMEngine
+
+    want = os.path.realpath(str(model_path))
+    for entry in entries:
+        engine = getattr(entry, "engine", None)
+        if (
+            isinstance(engine, VLMEngine)
+            and engine.is_loaded
+            and os.path.realpath(str(entry.model_path)) == want
+        ):
+            return engine
+    return None
+
+
 async def instantiate_engine(
-    model_type: ModelType | None, model_path: str, config: Any = None
+    model_type: ModelType | None,
+    model_path: str,
+    config: Any = None,
+    shared_vlm: Any = None,
 ) -> Any:
     """Create AND start the engine matching ``model_type``. Shared by multi-model
     loading and single-model serving so every modality (TTS / ASR / VLM / IMAGE_GEN /
@@ -472,7 +494,7 @@ async def instantiate_engine(
     if model_type == ModelType.OCR:
         from .ocr_engine import OCREngine
 
-        engine = OCREngine(model_path)
+        engine = OCREngine(model_path, shared_vlm=shared_vlm)
         await engine.start()
         return engine
     from .batched_engine import BatchedEngine
@@ -835,7 +857,12 @@ class ModelManager:
     ) -> Any:
         """Create the right engine type and load it."""
         asyncio.get_running_loop()
-        return await instantiate_engine(entry.model_type, entry.model_path, config)
+        shared = None
+        if entry.model_type == ModelType.OCR:
+            shared = find_loaded_vlm(self._entries.values(), entry.model_path)
+        return await instantiate_engine(
+            entry.model_type, entry.model_path, config, shared_vlm=shared
+        )
 
     async def unload_model(self, model_id: str, force: bool = False) -> bool:
         """Unload a model and reclaim memory.
