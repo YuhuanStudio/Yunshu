@@ -694,7 +694,7 @@ class RoundDriver:
                 )
             return []
         room = min(row.ngram.k, row.req.max_tokens - row.generated - 1)
-        drafts = row.ngram.propose(row.context, room)
+        drafts: list[int] = row.ngram.propose(row.context, room)
         if drafts and not row.ngram_logged:
             row.ngram_logged = True
             logger.info("Round driver n-gram window engaged: %d drafts", len(drafts))
