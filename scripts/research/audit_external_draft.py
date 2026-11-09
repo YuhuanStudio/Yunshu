@@ -72,7 +72,6 @@ async def measure(args):
         "YUNSHU_CONFIG": str(config_file),
         "YUNSHU_SPEC_UNVERIFIED": "eagle",
         "YUNSHU_DRAFT_MODEL": str(args.draft),
-        "YUNSHU_ENGINE_LOOP": "0",
         "YUNSHU_NGRAM_DEFAULT": "0",
         "YUNSHU_OVERLAP": "",
         "YUNSHU_SSD_CACHE": "0",

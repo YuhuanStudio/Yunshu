@@ -1,3 +1,5 @@
+> Historical snapshot (2026-10-26). The EngineCore loop and the stock runner described here were deleted (t0-engineloop 2c479d59, Phase B 75052d1c); see docs/guides/ROUND_DRIVER.md.
+
 # Review branch handoff (2026-10-26)
 
 Branch `claude/confident-franklin-3pcza4`, based on `main` at `47a87ab`. It is the result of a parallel review of the

@@ -202,7 +202,7 @@ def clear_rope_state(model: Any) -> None:
 class BatchRopeDeltaManager:
     """Manages per-request rope_deltas for batch decode .
 
-    Maintains a Dict[int, float] mapping from BatchGenerator UID to
+    Maintains a Dict[int, float] mapping from batch-row UID to
     the rope_deltas captured during prefill. Before each decode step,
     builds a batch_rope_deltas array aligned to current batch order.
 

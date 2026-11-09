@@ -518,9 +518,10 @@ def _config_has_audio(config: dict) -> bool:
 class VLMEngine:
     """Multimodal (mlx-vlm) model engine.
 
-    Every request is served by ``VLMBatchRunner`` (upstream mlx-vlm
-    ``BatchGenerator``): shared continuous batching, APC prefix reuse, and —
-    for Qwen3.5-family checkpoints — MTP/DFlash speculative decoding. Text-only
+    Every request is served by ``VLMBatchRunner``, which hosts the round driver
+    (``round_driver/``): each request prefills on its own cache, then joins a
+    shared decode batch with APC prefix reuse and — for Qwen3.5-family
+    checkpoints — MTP/DFlash speculative decoding. Text-only
     models are served by ``BatchedEngine`` (model_manager routes them there).
     The pre-runner generation loops are recorded in
     docs/archive/legacy_vlm_loop/README.md.
@@ -2099,7 +2100,7 @@ class VLMEngine:
         self._backend_caps = caps
         return caps
 
-    # ── Unified BatchGenerator text path (APC + MTP + sampling + constraints) ──
+    # ── Round-driver generation path (APC + MTP + sampling + constraints) ──
 
     # Checkpoints whose speculative decoding (MTP / DFlash draft, verify and
     # batch-invariant kernels) is validated. Every family uses the runner.

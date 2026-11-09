@@ -2110,7 +2110,7 @@ async def create_response(req: ResponsesRequest, request: Request):
         is_batched = isinstance(engine, BatchedEngine)
 
         # Non-batched Engine path: apply chat template ourselves before
-        # passing to engine.generate().  The legacy Engine / EngineCore
+        # passing to engine.generate().  The legacy Engine path's
         # _messages_to_text() does not call adapt_messages() and may strip
         # tool-related fields, producing garbage for tool-use conversations.
         _non_batched_prompt: str | list[dict] = messages
@@ -2632,7 +2632,7 @@ async def _stream_response(
     is_batched = isinstance(engine, BatchedEngine)
 
     # Non-batched Engine path: apply chat template ourselves before passing
-    # to engine.generate_stream().  The legacy Engine / EngineCore
+    # to engine.generate_stream().  The legacy Engine path's
     # _messages_to_text() does not call adapt_messages() and may strip
     # tool-related fields, producing garbage for tool-use conversations.
     _stream_prompt: str | list[dict] = messages
