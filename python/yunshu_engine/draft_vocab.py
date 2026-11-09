@@ -20,12 +20,17 @@ an argmax of each, and the better of the two mapped back to full-vocabulary ids.
 
 When half or more of a request's prompt (16+ ids) or of its committed tokens
 (24+) lie above the base set, the request is in such a script and the extension
-would grow without bound: the readout goes back to the full vocabulary for the
-rest of the request (zh 1K: 53.5, same as no reduction).
+would grow without bound. If those ids are mostly Chinese (``script_ids``: every
+vocabulary id whose text holds a Han character, CJK punctuation or a full-width form;
+55.5k of Qwen's 248k ids, all but 61 above the base set), the readout adds that
+script set to the base and keeps the extension for the rest: about half the full
+head per draft instead of all of it. Any other script goes back to the full
+vocabulary for the rest of the request (zh 1K: 53.5, same as no reduction).
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import mlx.core as mx
@@ -33,6 +38,23 @@ import mlx.nn as nn
 import numpy as np
 
 from .prompt_ids import ids_array
+
+_CJK = re.compile(
+    r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3000-\u303f\uff00-\uffef]"
+)
+SCRIPT_SHARE = 0.8  # of a request's high ids that must be in the script set
+
+
+def cjk_ids(tokenizer: Any, vocab: int) -> np.ndarray | None:
+    """Sorted ids whose decoded text holds a Han character, CJK punctuation or a
+    full-width form (Simplified and Traditional alike); None without a tokenizer.
+    One decode per id: 0.26 s for Qwen's 248k vocabulary."""
+    decode = getattr(tokenizer, "decode", None)
+    if decode is None:
+        return None
+    n = min(int(vocab), len(tokenizer)) if hasattr(tokenizer, "__len__") else int(vocab)
+    out = [i for i in range(n) if _CJK.search(decode([i]))]
+    return np.asarray(out, dtype=np.int64) if out else None
 
 
 def _as_ids(token_ids):
@@ -74,7 +96,13 @@ class DraftVocab:
         # neither judge the prompt's script nor join the searched set. Without this an image
         # prompt (thousands of image-pad ids above the base set) read the full vocabulary.
         self.skip_ids: frozenset[int] = frozenset()
+        # Chinese script set (see the module doc): ids above the base set, rows built on the
+        # first Chinese request and kept (Qwen 27B: 55.5k rows, ~160 MB).
+        self.script_ids: np.ndarray | None = None
+        self._script: tuple | None = None  # (mx ids, rows)
+        self.script = False
         self.full = False
+        self._high_ids: list[int] = []
         self._high = 0
         self._total = 0
 
@@ -96,13 +124,57 @@ class DraftVocab:
             return ids[~np.isin(ids, np.fromiter(self.skip_ids, dtype=ids.dtype))]
         return [t for t in ids if t not in self.skip_ids]
 
+    def set_script_ids(self, ids) -> None:
+        """Install the script set (ids at or below the base set are dropped)."""
+        if ids is None:
+            self.script_ids = None
+            return
+        arr = np.unique(np.asarray(ids, dtype=np.int64))
+        arr = arr[(arr >= self.keep) & (arr < self.vocab)]
+        self.script_ids = arr if arr.size else None
+        self._script = None
+
+    def _script_share(self, high: np.ndarray) -> float:
+        if self.script_ids is None or high.size == 0:
+            return 0.0
+        return float(np.count_nonzero(np.isin(high, self.script_ids))) / high.size
+
+    def _escalate(self, high: np.ndarray) -> None:
+        """The request is mostly above the base set: the script set when those ids are
+        mostly in it, else the full vocabulary."""
+        if self.script_ids is not None and self._script_share(high) >= SCRIPT_SHARE:
+            self.script = True
+            if self._script is None:
+                ids = mx.array(self.script_ids.astype(np.uint32))
+                rows = self._rows(ids)
+                mx.eval(ids, *rows)
+                self._script = (ids, rows)
+            if self.extra_ids is not None and self.extra_rows is not None:
+                keep = ~np.isin(np.array(self.extra_ids), self.script_ids)
+                if not keep.all():
+                    idx = mx.array(np.nonzero(keep)[0].astype(np.uint32))
+                    if keep.any():
+                        self.extra_ids = mx.take(self.extra_ids, idx)
+                        self.extra_rows = tuple(
+                            mx.take(a, idx, axis=0) for a in self.extra_rows
+                        )
+                    else:
+                        self.extra_ids = self.extra_rows = None
+            return
+        self.full = True  # a non-Latin script: search everything
+        self.extra_ids = self.extra_rows = None
+
     def _add(self, wanted: list[int]) -> int:
         if isinstance(wanted, np.ndarray):
             # unique ids in [keep, vocab): the sort and range filter run in numpy, not per id
             sel = wanted[(wanted >= self.keep) & (wanted < self.vocab)]
+            if self.script and self.script_ids is not None:
+                sel = sel[~np.isin(sel, self.script_ids)]
             new = [t for t in np.unique(sel).tolist() if t not in self._seen]
         else:
             new = sorted(t for t in set(wanted) if self.keep <= t < self.vocab)
+            if self.script and self.script_ids is not None:
+                new = [t for t in new if not np.isin(t, self.script_ids)]
             new = [t for t in new if t not in self._seen]
         if not new:
             return 0
@@ -127,10 +199,16 @@ class DraftVocab:
         self.extra_rows = None
         self._seen = set()
         self.full = False
+        self.script = False
         self._high = self._total = 0
+        self._high_ids: list[int] = []
         ids = self._text(token_ids)
-        if len(ids) >= PROMPT_MIN and self._mostly_high(ids):
-            self.full = self.fallback is not None
+        if (
+            len(ids) >= PROMPT_MIN
+            and self._mostly_high(ids)
+            and self.fallback is not None
+        ):
+            self._escalate(self._high_of(ids))
         if self.full:
             return 0
         count = self._add(ids)
@@ -144,14 +222,23 @@ class DraftVocab:
         ids = self._text(token_ids)
         if self.full:
             return 0
-        if len(ids) >= PROMPT_MIN and self._mostly_high(ids) and self.fallback:
-            self.full = True  # a non-Latin script: search everything
-            self.extra_ids = self.extra_rows = None
-            return 0
+        if (
+            not self.script
+            and len(ids) >= PROMPT_MIN
+            and self._mostly_high(ids)
+            and self.fallback
+        ):
+            self._escalate(self._high_of(ids))
+            if self.full:
+                return 0
         count = self._add(ids)
         if count and self.extra_ids is not None and self.extra_rows is not None:
             mx.eval(self.extra_ids, *self.extra_rows)
         return count
+
+    def _high_of(self, ids) -> np.ndarray:
+        arr = np.asarray(ids, dtype=np.int64)
+        return arr[(arr >= self.keep) & (arr < self.vocab)]
 
     def _mostly_high(self, ids: list[int]) -> bool:
         if isinstance(ids, np.ndarray):
@@ -165,16 +252,20 @@ class DraftVocab:
         if self.full:
             return 0
         ids = [int(t) for t in token_ids]
+        if self.script:
+            return self._add(ids)
         self._total += len(ids)
-        self._high += sum(1 for t in ids if self.keep <= t < self.vocab)
+        high = [t for t in ids if self.keep <= t < self.vocab]
+        self._high += len(high)
+        self._high_ids.extend(high)
         if (
             self.fallback is not None
             and self._total >= COMMITTED_MIN
             and self._high * 2 >= self._total
         ):
-            self.full = True  # a non-Latin script: search everything
-            self.extra_ids = self.extra_rows = None
-            return 0
+            self._escalate(np.asarray(self._high_ids, dtype=np.int64))
+            if self.full:
+                return 0
         return self._add(ids)
 
     def _matmul(self, x: mx.array, rows: tuple) -> mx.array:
@@ -200,6 +291,9 @@ class DraftVocab:
         x = hidden.reshape(-1, hidden.shape[-1])
         logits = self._matmul(x, self.rows)
         ids = self.ids
+        if self.script and self._script is not None:
+            logits = mx.concatenate([logits, self._matmul(x, self._script[1])], axis=-1)
+            ids = mx.concatenate([ids, self._script[0]])
         if self.extra_ids is not None and self.extra_rows is not None:
             logits = mx.concatenate([logits, self._matmul(x, self.extra_rows)], axis=-1)
             ids = mx.concatenate([ids, self.extra_ids])
@@ -215,18 +309,25 @@ class DraftVocab:
         logits = self._matmul(x, self.rows)
         pick = mx.argmax(logits, axis=-1)
         best = mx.take(self.ids, pick).astype(mx.int32)
-        if self.extra_ids is not None:
+        chunks = []
+        if self.script and self._script is not None:
+            chunks.append(self._script)
+        if self.extra_ids is not None and self.extra_rows is not None:
+            chunks.append((self.extra_ids, self.extra_rows))
+        if chunks:
             top = mx.max(logits, axis=-1)
-            x_logits = self._matmul(x, self.extra_rows)
-            x_top = mx.max(x_logits, axis=-1)
-            x_best = mx.take(self.extra_ids, mx.argmax(x_logits, axis=-1)).astype(
-                mx.int32
-            )
-            best = mx.where(x_top > top, x_best, best)
+            for c_ids, c_rows in chunks:
+                c_logits = self._matmul(x, c_rows)
+                c_top = mx.max(c_logits, axis=-1)
+                c_best = mx.take(c_ids, mx.argmax(c_logits, axis=-1)).astype(mx.int32)
+                best = mx.where(c_top > top, c_best, best)
+                top = mx.maximum(top, c_top)
         return best.reshape(lead)
 
 
-def install(drafter: Any, target_language_model: Any, keep: int) -> DraftVocab | None:
+def install(
+    drafter: Any, target_language_model: Any, keep: int, tokenizer: Any = None
+) -> DraftVocab | None:
     """Route ``drafter``'s greedy readout through a ``DraftVocab`` of the target's
     quantized head (its ``lm_head``, or the embedding table when tied); None when
     the head is not affine 4-bit quantized."""
@@ -265,6 +366,15 @@ def install(drafter: Any, target_language_model: Any, keep: int) -> DraftVocab |
             return vocab.argmax(hidden)
 
         object.__setattr__(drafter, "_greedy_token", _greedy_token)
+    if tokenizer is not None:
+        try:
+            vocab.set_script_ids(
+                cjk_ids(getattr(tokenizer, "_tokenizer", tokenizer), vocab.vocab)
+            )
+        except (
+            Exception
+        ):  # a tokenizer without per-id decode: other scripts read the full head
+            vocab.set_script_ids(None)
     object.__setattr__(drafter, "_draft_vocab", vocab)
     return vocab
 

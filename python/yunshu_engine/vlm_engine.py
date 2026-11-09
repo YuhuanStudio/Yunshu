@@ -2802,7 +2802,7 @@ class VLMEngine:
 
                 assert self._model is not None
                 found = _install_dflash_vocab(
-                    drafter, self._model.language_model, DFLASH_KEEP
+                    drafter, self._model.language_model, DFLASH_KEEP, self._tokenizer
                 )
                 kernels["draft_vocab"] = DFLASH_KEEP if found else None
             if draft_kind == "mtp" and drafter is not None:
@@ -2825,7 +2825,7 @@ class VLMEngine:
                 )
                 kernels["lane_layers"] = lane_layers.install()
                 found = install_draft_vocab(
-                    drafter, self._model.language_model, DRAFT_VOCAB
+                    drafter, self._model.language_model, DRAFT_VOCAB, self._tokenizer
                 )
                 kernels["draft_vocab"] = DRAFT_VOCAB if found else None
             # Invariant kernels cost little per extra verify row and peak at 6

@@ -187,3 +187,68 @@ def test_media_placeholder_ids_do_not_switch_to_the_full_vocabulary():
 
     vocab.set_context(np.array(prompt, dtype=np.int32))
     assert not vocab.full
+
+
+# --- Chinese script set (2026-11-09): a mostly-Chinese request searches base + Han ids
+# instead of the whole head (before: the full vocabulary, i.e. every draft read all 248k rows).
+
+SCRIPT = list(range(KEEP + 100, KEEP + 400))
+
+
+def _script_vocab(seed=7):
+    head = _head(seed)
+    vocab = DraftVocab(head, KEEP)
+    vocab.fallback = lambda h: mx.argmax(_full_logits(head, h), axis=-1)
+    vocab.set_script_ids(SCRIPT)
+    return head, vocab
+
+
+def test_a_chinese_prompt_searches_base_plus_script_not_the_full_head():
+    head, vocab = _script_vocab()
+    prompt = SCRIPT[:30] + list(range(10))
+    vocab.set_context(prompt)
+    assert vocab.script and not vocab.full
+    x = mx.random.normal((4, K))
+    allowed = set(range(KEEP)) | set(SCRIPT)
+    assert vocab.argmax(x).tolist() == _restricted_argmax(head, x, allowed).tolist()
+    logits, ids = vocab.logits_subset(x)
+    got = ids.tolist()
+    assert len(got) == len(set(got)) == len(allowed)  # no id twice
+
+
+def test_other_scripts_still_read_the_full_head():
+    _, vocab = _script_vocab()
+    vocab.set_context(
+        [KEEP + 600 + i for i in range(30)]
+    )  # high, not in the script set
+    assert vocab.full and not vocab.script
+
+
+def test_chinese_output_after_a_latin_prompt_switches_to_the_script_set():
+    head, vocab = _script_vocab()
+    vocab.set_context(list(range(40)) + [KEEP + 650])  # extension holds one outside id
+    assert not vocab.script
+    vocab.learn(SCRIPT[:60])
+    assert vocab.script and not vocab.full
+    x = mx.random.normal((2, K))
+    allowed = set(range(KEEP)) | set(SCRIPT) | {KEEP + 650}
+    assert vocab.argmax(x).tolist() == _restricted_argmax(head, x, allowed).tolist()
+    _, ids = vocab.logits_subset(x)
+    assert len(ids.tolist()) == len(set(ids.tolist()))
+    vocab.set_context([1, 2, 3])  # next request starts on the base set again
+    assert not vocab.script and not vocab.full
+
+
+def test_cjk_ids_covers_simplified_and_traditional():
+    from yunshu_engine.draft_vocab import cjk_ids
+
+    table = ["a", "的", "們", "们", "，", "hello", "Ａ", " 中", "x"]
+
+    class Tok:
+        def __len__(self):
+            return len(table)
+
+        def decode(self, ids):
+            return table[ids[0]]
+
+    assert cjk_ids(Tok(), 100).tolist() == [1, 2, 3, 4, 6, 7]
