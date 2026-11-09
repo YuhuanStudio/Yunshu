@@ -277,7 +277,10 @@ def window_penalty(penalty, logits: mx.array, window: mx.array) -> mx.array:
     return cast(mx.array, penalty._apply(counts, logits))
 
 
-@dataclass
+# eq=False: a request and a row are entities, compared by identity. The generated field-wise
+# __eq__ made `row in self.rows` compare prompt kwargs holding mx arrays (pixel_values, audio
+# features), which raised as soon as two media rows were live (2026-11-10, OCR A/B: 500s).
+@dataclass(eq=False)
 class Request:
     """What a row needs from the caller (the runner's job)."""
 
@@ -324,7 +327,7 @@ class Event:
     prompt_logprobs: list | None = None
 
 
-@dataclass
+@dataclass(eq=False)
 class _Row:
     req: Request
     cache: list | None  # prefill caches (None once the row joined the batch)

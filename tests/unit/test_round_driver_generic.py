@@ -1057,3 +1057,25 @@ def test_generic_jump_forward_caches_do_not_enter_default_namespace(monkeypatch)
     assert salts[0] == salts[2]
     assert salts[0][0] != salts[1][0]
     assert salts[0][1] == salts[1][1]
+
+
+def test_rows_and_requests_compare_by_identity_not_by_media_arrays():
+    """2026-11-10 OCR A/B: with two media rows live, `r in self.rows` (RoundDriver._finish_join)
+    ran the dataclass field-wise __eq__ over prompt_kwargs holding mx arrays and raised
+    "Only length-1 arrays can be converted to Python scalars" -> HTTP 500 for concurrent
+    image / audio / video requests."""
+    import mlx.core as mx
+
+    def req():
+        return drv.Request(
+            [1, 2, 3],
+            4,
+            prompt_kwargs={"pixel_values": mx.ones((2, 3))},
+            embeds=mx.ones((3, 4)),
+            media=True,
+        )
+
+    a, b = req(), req()
+    assert a in [b, a] and b not in [a]
+    rows = [drv._Row(r, None, None) for r in (a, b)]
+    assert rows[1] in rows[::-1] and drv._Row(a, None, None) not in rows
