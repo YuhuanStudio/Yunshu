@@ -104,9 +104,11 @@ async def test_anthropic_probe_on_fake_http_before_loading_a_model():
     class Client:
         async def post(self, path, json):
             assert path == "/v1/messages"
-            assert json["messages"][0]["content"][0]["cache_control"] == {
-                "type": "ephemeral"
-            }
+            # breakpoint on the text block after the image: a 64-aligned checkpoint can
+            # land there (one on the image block cut the image span and never hit)
+            image, text = json["messages"][0]["content"]
+            assert image["type"] == "image" and "cache_control" not in image
+            assert text["cache_control"] == {"type": "ephemeral"}
             list(engine._runner_events())
             return Response()
 

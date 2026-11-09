@@ -792,10 +792,45 @@ def keeps_mid_conversation_system(model_name: str | None = None) -> bool:
     return False
 
 
+def order_tool_results(messages: list[dict]) -> list[dict]:
+    """Each run of ``tool`` messages in the preceding assistant's ``tool_calls`` order.
+
+    Qwen's chat templates (and most others) render tool results as ordered
+    ``<tool_response>`` blocks and never read ``tool_call_id``, so parallel results a client
+    returns in completion order were paired with the wrong calls. Results whose id matches no
+    call keep their relative order after the matched ones (stable sort). Adopted from oMLX
+    57440b05d (Anthropic route only there); here every route's template input.
+    """
+    out: list[dict] = []
+    order: dict = {}
+    run: list[dict] = []
+
+    def flush() -> None:
+        if len(run) > 1 and order:
+            run.sort(key=lambda m: order.get(m.get("tool_call_id") or "", len(order)))
+        out.extend(run)
+        run.clear()
+
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("role") == "tool":
+            run.append(msg)
+            continue
+        flush()
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            order = {
+                c.get("id"): i
+                for i, c in enumerate(msg.get("tool_calls") or [])
+                if isinstance(c, dict) and c.get("id")
+            }
+        out.append(msg)
+    flush()
+    return out
+
+
 def adapt_messages(messages: list[dict], model_name: str | None = None) -> list[dict]:
     """Convenience: adapt messages for a model in one call."""
     adapter = get_message_adapter(model_name)
-    return adapter.adapt(_hoist_system(messages))
+    return adapter.adapt(order_tool_results(_hoist_system(messages)))
 
 
 def register_message_adapter(family: str, adapter_cls: type[MessageAdapter]) -> None:
