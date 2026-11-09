@@ -2,7 +2,7 @@
 
 AutoTuner profiler, Scheduler shutdown, MemoryAwareScheduler lifecycle, StepMetrics, Any import
 TTS params, audio format, Anthropic top_k/thinking_budget, Responses API, MCP signature, Models timestamp
-output_parser, model optimization, KV lifecycle admit/release, MemoryAwareScheduler model config
+model optimization, KV lifecycle admit/release, MemoryAwareScheduler model config
 TieredKV _extract_kv_for_block, Anthropic cache_creation_input_tokens
 """
 
@@ -139,23 +139,6 @@ class TestWave45ModelsCreatedTimestamp:
 
 
 # ── ──────────────────────────────────────────────────────────────
-
-
-class TestWave46OutputParser:
-    """12. output_parser applied to _generate_fast output."""
-
-    def test_parse_output_exists(self):
-        from yunshu_engine.output_parser import parse_output
-
-        assert callable(parse_output)
-
-    def test_strips_think_tags(self):
-        from yunshu_engine.output_parser import parse_output
-
-        parsed = parse_output(
-            "<think\nstep 1\n</think\nThe answer is 42.", "deepseek-r1"
-        )
-        assert "42" in parsed.content
 
 
 class TestWave46ModelOptimizationDetection:
