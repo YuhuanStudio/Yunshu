@@ -169,3 +169,21 @@ def test_installed_full_readout_needs_no_upstream_bind():
     x = mx.random.normal((2, K))
     full = mx.argmax(_full_logits(head, x), axis=-1).tolist()
     assert drafter._greedy_token(x).tolist() == full
+
+
+def test_media_placeholder_ids_do_not_switch_to_the_full_vocabulary():
+    """An image prompt is mostly image-pad ids above the base set; they are not a script."""
+    head = _head(6)
+    vocab = DraftVocab(head, KEEP)
+    vocab.fallback = lambda h: mx.argmax(_full_logits(head, h), axis=-1)
+    pad = KEEP + 7
+    prompt = [pad] * 200 + list(range(20))
+    vocab.set_context(prompt)
+    assert vocab.full  # without the skip set the pads look like a non-Latin script
+    vocab.skip_ids = frozenset({pad})
+    vocab.set_context(prompt)
+    assert not vocab.full and vocab.extra_ids is None  # and the pad is not searched
+    import numpy as np
+
+    vocab.set_context(np.array(prompt, dtype=np.int32))
+    assert not vocab.full

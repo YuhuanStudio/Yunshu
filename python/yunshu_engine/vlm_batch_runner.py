@@ -503,6 +503,7 @@ class VLMBatchRunner:
         prefix_invariant: bool = False,
     ):
         self.model = model
+        self._media_token_ids = frozenset(media_token_ids(model))
         self.prefix_invariant = prefix_invariant
         logger.info(
             "APC admission configuration: qualified=%s enabled=%s source=%s",
@@ -1118,6 +1119,7 @@ class VLMBatchRunner:
                 proc.isolate = True
         vocab = getattr(self.drafter, "_draft_vocab", None)
         if vocab is not None and driver.can_draft:
+            vocab.skip_ids = self._media_token_ids
             # The reduced draft readout must cover this prompt's ids (the lane sets it at
             # every speculative start): a prompt's own tokens (code identifiers) are what its
             # continuation repeats. First row of an idle driver replaces the context; a row

@@ -70,6 +70,10 @@ class DraftVocab:
         self.extra_rows: tuple | None = None
         self._seen: set[int] = set()
         self.fallback: Any = None  # the drafter's own full-vocabulary readout
+        # Media placeholder ids (image/video/audio pads, vision start/end): not text, so they
+        # neither judge the prompt's script nor join the searched set. Without this an image
+        # prompt (thousands of image-pad ids above the base set) read the full vocabulary.
+        self.skip_ids: frozenset[int] = frozenset()
         self.full = False
         self._high = 0
         self._total = 0
@@ -83,6 +87,14 @@ class DraftVocab:
             mx.take(h.scales, ids, axis=0),
             mx.take(h.biases, ids, axis=0),
         )
+
+    def _text(self, token_ids):
+        ids = _as_ids(token_ids)
+        if not self.skip_ids:
+            return ids
+        if isinstance(ids, np.ndarray):
+            return ids[~np.isin(ids, np.fromiter(self.skip_ids, dtype=ids.dtype))]
+        return [t for t in ids if t not in self.skip_ids]
 
     def _add(self, wanted: list[int]) -> int:
         if isinstance(wanted, np.ndarray):
@@ -116,7 +128,7 @@ class DraftVocab:
         self._seen = set()
         self.full = False
         self._high = self._total = 0
-        ids = _as_ids(token_ids)
+        ids = self._text(token_ids)
         if len(ids) >= PROMPT_MIN and self._mostly_high(ids):
             self.full = self.fallback is not None
         if self.full:
@@ -129,7 +141,7 @@ class DraftVocab:
     def add_context(self, token_ids: list[int]) -> int:
         """Another request joins while others run: its prompt's ids join the
         extension (``set_context`` would drop the running requests')."""
-        ids = _as_ids(token_ids)
+        ids = self._text(token_ids)
         if self.full:
             return 0
         if len(ids) >= PROMPT_MIN and self._mostly_high(ids) and self.fallback:
