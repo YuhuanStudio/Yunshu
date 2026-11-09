@@ -107,6 +107,7 @@ def test_suffix_proposer_kind():
     row = d.rows[0]
     assert row.ngram is not None and row.ngram.kind in ("ngram", "suffix")
     drafter = NgramDrafter("suffix")
+    drafter.steps = 3
     assert drafter.propose([1, 2, 3, 4, 1, 2, 3], 5)[:1] == [4]
 
 
@@ -164,6 +165,7 @@ def test_ngram_replies_have_their_own_apc_namespace():
 
 def test_backoff_after_misses_and_reset_on_a_hit():
     n = NgramDrafter("ngram")
+    n.steps = 3
     ctx = [1, 2, 3, 1, 2, 3, 1, 2]
     assert n.propose(ctx, 5) == [3, 1, 2]
     n.observe(3, 0)
@@ -197,3 +199,20 @@ def test_long_prompts_still_draft():
     for kind in ("ngram", "suffix"):
         ctx = list(range(100, 40000)) + [7, 8, 9, 10, 5, 7, 8, 9]
         assert make_proposer(kind).propose(ctx)[:1] == [10]
+
+
+def test_a_row_whose_windows_are_slower_than_plain_decodes_plain():
+    n = NgramDrafter("ngram")
+    ctx = [1, 2, 3, 1, 2, 3, 1, 2]
+    for _ in range(3):  # warm-up: plain steps measure the plain cost, no proposals
+        assert n.propose(ctx, 5) == []
+        n.observe_step(False, 1, 0.020)
+    assert n.propose(ctx, 5) == [3, 1, 2]
+    n.observe_step(True, 3, 0.080)  # 3 tokens in 80 ms: 37/s against 50/s plain
+    assert n.slow()
+    assert n.propose(ctx, 5) == [] and n.cool > 0
+    n.cool = 0
+    n.observe_step(True, 3, 0.030)  # windows got cheaper: 100/s
+    n.observe_step(True, 3, 0.030)
+    n.observe_step(True, 3, 0.030)
+    assert not n.slow() and n.propose(ctx, 5) == [3, 1, 2]

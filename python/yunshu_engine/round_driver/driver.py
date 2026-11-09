@@ -1806,6 +1806,7 @@ class RoundDriver:
             ),
         )
         window_tokens: list[Any] = [d[1].tolist() for d in draws]  # waits for the step
+        step_s = time.perf_counter() - started
         seed_vals: Any = early_seeds.tolist() if early_seeds is not None else []
         # forward cost: from when the GPU could start it (the chain before it
         # is not part of the forward) to now
@@ -1832,6 +1833,8 @@ class RoundDriver:
             # a stop, the length limit or the thinking budget can cut the
             # window short: the cache keeps what was emitted
             used = self._emit(row, toks[:keep], extra, events)
+            if row.ngram is not None and len(rows) == 1:
+                row.ngram.observe_step(len(window) > 1, used, step_s)
             used_all.append(used)
         self.batch.commit(used_all)
         gone = [r for r in rows if r.finished]
