@@ -100,3 +100,47 @@ def test_int8_attention_is_close_to_bf16(tiny):
     a, b = last_hidden("bf16"), last_hidden("int8")
     rel = float(mx.linalg.norm(a - b) / mx.linalg.norm(a))
     assert rel < 0.15, rel
+
+
+def test_int8_followup_suffix_logits_match_a_cold_bf16_forward(tiny):
+    """A reply's int8 cache resumed in place (the standing hand-off) prefills its follow-up suffix on
+    the values decode reads: the suffix logits stay close to a cold bf16 forward over the same ids
+    (before the fix the suffix attended raw int8 codes: logits were garbage)."""
+    import mlx.core as mx
+
+    from yunshu_engine.kernels import int8_kv
+    from yunshu_engine.round_driver import driver as drv
+    from yunshu_engine.round_driver import forward as fwd
+
+    lm, drafter = tiny
+    held = []
+    d = drv.RoundDriver(lm, drafter=drafter, stop_tokens=set(), kv_format="int8")
+    d.add(drv.Request(PROMPTS[2], N - 8, handle="row"))
+    toks = []
+    while d.busy():
+        toks += [e.token for e in d.step() if e.token is not None]
+        for (
+            row
+        ) in d.rows:  # cut the row's own cache out of the batch (a copy), keep decoding
+            if row.slot is not None and row.cache is None:
+                d.batch.restore(row)
+                held[:] = [(list(row.cache), list(row.context))]
+                row.cache = None
+    assert held, "no row cache was cut out"
+    cache, context = held[0]
+    attn = [c for c in cache if int8_kv.is_int8_cache(c)]
+    assert attn, "no int8 attention cache"
+    n = int(attn[0].offset)
+    # every stored position carries real keys (none left as zero codes and scales)
+    k, _ = attn[0].dequantized(n)
+    assert bool(mx.all(mx.any(k != 0, axis=(0, 1, 3))))
+    suffix = [5, 9, 17, 23, 31, 40]
+    ids = context[:n] + suffix
+    warm = [int8_kv.to_bf16_cache(c) if int8_kv.is_int8_cache(c) else c for c in cache]
+    got = fwd.logits(lm, lm.model(mx.array([suffix]), cache=warm)[0])
+    ref = fwd.logits(lm, lm.model(mx.array([ids]), cache=lm.make_cache())[0])[
+        -len(suffix) :
+    ]
+    got, ref = got.astype(mx.float32), ref.astype(mx.float32)
+    rel = float(mx.linalg.norm(got - ref) / mx.linalg.norm(ref))
+    assert rel < 0.1, rel
