@@ -1483,6 +1483,40 @@
           ]
         }
       }
+    },
+    "ngram_spec": {
+      "module": "python/yunshu_engine/round_driver/ngram.py",
+      "what": "Model-free n-gram / suffix prompt-lookup speculation (opt-in: per-request spec_decode or YUNSHU_NGRAM_DEFAULT; greedy rows)",
+      "cells": {
+        "batch": {
+          "s": "na",
+          "why": "packed Qwen3.5 / Flash-Next windows are batch-invariant tree verifies fed by MTP or DFlash copy drafts (copy_rounds); a host n-gram window would be a second proposer there, and spec on must equal spec off"
+        },
+        "generic": {
+          "s": "engaged",
+          "why": "lone-row T>1 window on the model's own forward, rejected tail cut with cache.trim; guarantee = verifier top-1 over the window (not bitwise vs T=1); concurrent rows and untrimmable caches decode plain",
+          "ev": [
+            [
+              "python/yunshu_engine/round_driver/driver.py",
+              "NgramDrafter("
+            ],
+            [
+              "python/yunshu_engine/round_driver/driver.py",
+              "_ngram_window"
+            ]
+          ]
+        },
+        "text": {
+          "s": "engaged",
+          "why": "engine_ngram.py spec loop (greedy, non-streaming); deleted with the text path switch (T11)",
+          "ev": [
+            [
+              "python/yunshu_engine/batched_engine.py",
+              "_ngram_greedy_default"
+            ]
+          ]
+        }
+      }
     }
   },
   "exclusions": [

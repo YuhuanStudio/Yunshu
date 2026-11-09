@@ -20,6 +20,7 @@ Other drafting sources:
 
 - **Prompt-copy rounds.** A round can propose the continuation of the longest earlier occurrence of the current tail in the request's prompt plus generated text. The same verify checks it. `YUNSHU_SPEC_COPY_ROWS` sets the verify rows (default 32; `0` turns it off).
 - **Draft tree.** `YUNSHU_SPEC_TREE` (`auto`) uses a draft-tree verifier for eligible greedy requests with the DFlash2 drafter.
+- **Generic round-driver layer (every mlx-vlm family without a packed layer).** The same n-gram or suffix speculation for greedy requests with `spec_decode` (or `YUNSHU_NGRAM_DEFAULT`), on a lone decoding row with a trimmable KV cache; the guarantee is the verifier's top-1 over the window, not bitwise equality with one-token decode. Packed Qwen3.5 and Flash-Next rows keep their batch-invariant verify.
 - **Text-only `mlx-lm` models.** Lossless n-gram or suffix speculation on greedy requests (`YUNSHU_NGRAM_DEFAULT`, off by default; a request can ask for it with `spec_decode`; `YUNSHU_SPEC_PROPOSER` is `ngram` or `suffix`), and an assistant drafter directory for Gemma 4 text models (`YUNSHU_GEMMA4_ASSISTANT`).
 - **Jump-forward** is a different mechanism for constrained output (tokens forced by a grammar are emitted without a forward pass). See [Constrained decoding](/docs/internals/constrained-decoding).
 

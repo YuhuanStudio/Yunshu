@@ -731,6 +731,7 @@ class VLMBatchRunner:
         seed: int | None = None,
         logits_processors: list | None = None,
         allow_draft: bool = True,
+        ngram: bool = False,
         prompt_kwargs: dict | None = None,
         apc_semantic_hash: int | None = None,
         cancel_event: Any = None,
@@ -814,6 +815,7 @@ class VLMBatchRunner:
             top_logprobs=int(top_logprobs or 0) if logprobs else 0,
             processors=processors,
             guide=guide,
+            ngram=bool(ngram),
             prompt_kwargs=prompt_kwargs,
             salt=apc_semantic_hash,
             seed=seed,
@@ -1178,6 +1180,7 @@ class VLMBatchRunner:
                     logprobs=job.logprobs,
                     top_logprobs=job.top_logprobs,
                     draft=job.allow_draft,
+                    ngram=job.ngram,
                     guide=job.guide if self._driver_guide(job) else None,
                     budget=job.budget,
                     handle=job,
@@ -1202,8 +1205,9 @@ class VLMBatchRunner:
         job.stats.prefill_total = len(job.ids) - hit
         job.stats.prefill_known = True
         job.stats.used_apc = use_apc
-        job.stats.used_draft = bool(job.allow_draft and driver.can_draft)
-        if job.stats.used_draft:
+        ngram_row = job.stats.spec_mode == "ngram"  # set by the driver's ``add``
+        job.stats.used_draft = bool((job.allow_draft and driver.can_draft) or ngram_row)
+        if job.stats.used_draft and not ngram_row:
             job.stats.spec_mode = (
                 "dflash" if getattr(driver, "dflash", None) is not None else "mtp"
             )
@@ -1985,6 +1989,9 @@ class _Job:
     abandoned: bool = False
     budget: Any = None
     allow_draft: bool = False
+    ngram: bool = (
+        False  # n-gram / suffix speculation requested (generic layer, greedy rows)
+    )
     guide: Any = None
     terminal: bool = False
     overflowed: bool = False
