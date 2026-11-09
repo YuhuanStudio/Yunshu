@@ -2347,6 +2347,20 @@
           ]
         ],
         "why": "shared VLM runner code (review branch 2026-10-26); real-checkpoint check pending"
+      },
+      "ngram_spec": {
+        "s": "na",
+        "why": "Flash-Next rows run the packed layer (flashnext.py / flashnext_dflash.py), not the generic layer; ngram_ok requires self.generic, and the packed windows are batch-invariant MTP / DFlash verifies where a second host proposer would break spec on == spec off",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "def ngram_ok"
+          ],
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "and self.generic"
+          ]
+        ]
       }
     }
   },
@@ -2908,6 +2922,20 @@
       "qwen4_gdn_fused": {
         "s": "na",
         "why": "Flash-Next (qwen4_exp) GDN verify plan only"
+      },
+      "ngram_spec": {
+        "s": "na",
+        "why": "n-gram speculation is generic-layer only (RoundDriver.ngram_ok requires self.generic); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host n-gram proposer would be a second drafter and spec on must equal spec off",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "def ngram_ok"
+          ],
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "and self.generic"
+          ]
+        ]
       }
     },
     "video": {
@@ -3450,6 +3478,20 @@
       "qwen4_gdn_fused": {
         "s": "na",
         "why": "Flash-Next (qwen4_exp) GDN verify plan only"
+      },
+      "ngram_spec": {
+        "s": "na",
+        "why": "n-gram speculation is generic-layer only (RoundDriver.ngram_ok requires self.generic); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host n-gram proposer would be a second drafter and spec on must equal spec off",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "def ngram_ok"
+          ],
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "and self.generic"
+          ]
+        ]
       }
     },
     "audio_in": {
@@ -3652,6 +3694,10 @@
         "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
       },
       "qwen4_gdn_fused": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "ngram_spec": {
         "s": "na",
         "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
       }
@@ -3932,6 +3978,12 @@
       "qwen4_gdn_fused": {
         "s": "na",
         "why": "Flash-Next (qwen4_exp) GDN verify plan only"
+      },
+      "ngram_spec": {
+        "s": "missing",
+        "why": "driver-only feature: the Thinker bypasses the round driver (bypass census A8); no n-gram speculation",
+        "owner": "phaseE",
+        "impact": "low"
       }
     },
     "ocr": {
@@ -4210,6 +4262,12 @@
       "qwen4_gdn_fused": {
         "s": "na",
         "why": "Flash-Next (qwen4_exp) GDN verify plan only"
+      },
+      "ngram_spec": {
+        "s": "missing",
+        "why": "driver-only feature: OCREngine calls mlx-vlm generate directly, not the round driver (bypass census B1); no n-gram speculation",
+        "owner": "phaseE",
+        "impact": "low"
       }
     }
   }
