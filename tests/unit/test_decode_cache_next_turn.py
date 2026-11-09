@@ -205,3 +205,30 @@ def test_driver_standing_handoff_preserves_row_salt_and_cache_ownership(monkeypa
     assert standing == [([1, 2, 3, 4, 10, 11], rows, 5)]
     assert runner._decode_pending_job() is None
     assert coord.calls == [] and offered == []
+
+
+def test_int8_row_reply_cache_is_not_held_for_the_follow_up():
+    """An int8 reply cache is never handed over (its follow-up decoded garbage on it): the follow-up
+    re-prefills the reply from the bf16 prefix cache."""
+    coord = _Coord()
+    job = _job([1, 2, 3, 4], [10, 11, 12], salt=5)
+    job.driver = SimpleNamespace(kv_format="int8", dflash=None)
+    row = SimpleNamespace(
+        req=SimpleNamespace(
+            ids=[1, 2, 3, 4], handle=job, cache_store=True, use_apc=True, max_tokens=9
+        ),
+        apc=coord,
+        cache=[_KV(6)],
+        context=[1, 2, 3, 4, 10, 11, 12],
+        generated=3,
+        salt=5,
+        finished=True,
+        slot=None,
+        hslot=None,
+        drafting=False,
+    )
+    runner = _runner()
+    assert runner._driver_store_decode(row) is False
+    assert runner._decode_pending_job() is None
+    job.driver = SimpleNamespace(kv_format="bf16", dflash=None)
+    assert runner._driver_store_decode(row) is True
