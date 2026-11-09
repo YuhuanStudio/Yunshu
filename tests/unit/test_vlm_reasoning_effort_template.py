@@ -25,8 +25,7 @@ def test_effort_from_chat_template_kwargs():
     assert eng._template_effort_extra(kwargs) == {"reasoning_effort": "low"}
 
 
-def test_effort_kept_as_budget_when_template_lacks_it():
+def test_effort_on_a_template_without_it_is_not_rendered():
     eng = _engine("{{ messages }}")
     kwargs = {"reasoning_effort": "medium"}
     assert eng._template_effort_extra(kwargs) is None
-    assert kwargs["reasoning_effort"] == "medium"

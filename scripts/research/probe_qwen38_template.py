@@ -11,7 +11,7 @@ from pathlib import Path
 
 from transformers import AutoTokenizer
 
-from yunshu_engine.batched_engine import _REASONING_EFFORT_MAP, BatchedEngine
+from yunshu_engine.batched_engine import BatchedEngine
 from yunshu_engine.tool_format import formats_for_tokenizer, parse_tool_output
 from yunshu_engine.vlm_engine import VLMEngine
 
@@ -71,7 +71,7 @@ result = {
     },
     "llm_matches": {e: actual_llm == s for e, s in expected.items()},
     "vlm_text_matches": {e: actual_vlm == s for e, s in expected.items()},
-    "xhigh_budget_mapping": _REASONING_EFFORT_MAP.get("xhigh", 8192),
+    "xhigh_budget_mapping": None,  # effort is a template variable, never a token cap (11-09)
     "vlm_null_history": {
         "matches_canonical": vlm_history == canonical,
         "contains_literal_none": "None" in vlm_history,

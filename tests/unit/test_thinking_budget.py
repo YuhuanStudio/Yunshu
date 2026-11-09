@@ -77,20 +77,10 @@ class TestParseThinkingBudget:
         assert config.max_thinking_tokens == 4096
         assert config.enabled is True
 
-    def test_reasoning_effort_low(self):
-        config = parse_thinking_budget({"reasoning_effort": "low"})
-        assert config is not None
-        assert config.max_thinking_tokens == 2048
-
-    def test_reasoning_effort_medium(self):
-        config = parse_thinking_budget({"reasoning_effort": "medium"})
-        assert config is not None
-        assert config.max_thinking_tokens == 8192
-
-    def test_reasoning_effort_high(self):
-        config = parse_thinking_budget({"reasoning_effort": "high"})
-        assert config is not None
-        assert config.max_thinking_tokens == 32768
+    def test_reasoning_effort_is_not_a_budget(self):
+        """User 2026-11-09: effort goes to the model's chat template, never a token cap."""
+        for effort in ("low", "medium", "high", "xhigh", "max"):
+            assert parse_thinking_budget({"reasoning_effort": effort}) is None
 
     def test_no_budget_params(self):
         config = parse_thinking_budget({})

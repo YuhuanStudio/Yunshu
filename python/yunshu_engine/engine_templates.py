@@ -29,6 +29,7 @@ class EngineTemplatesMixin:
         **kwargs,
     ) -> _engine.GenerationOutput:
         """Non-streaming chat completion (messages → template → generate)."""
+        _engine.set_request_effort(kwargs.get("reasoning_effort"))
         prompt = self._apply_chat_template(messages, enable_thinking)
         return await self.generate(
             prompt=prompt,
@@ -62,6 +63,7 @@ class EngineTemplatesMixin:
         **kwargs,
     ) -> AsyncIterator[_engine.GenerationOutput]:
         """Streaming chat completion (messages → template → stream_generate)."""
+        _engine.set_request_effort(kwargs.get("reasoning_effort"))
         prompt = self._apply_chat_template(messages, enable_thinking)
         async for output in self.stream_generate(
             prompt=prompt,
@@ -298,6 +300,13 @@ class EngineTemplatesMixin:
                     kwargs["add_generation_prompt"] = True
                 if thinking is not None:
                     kwargs["enable_thinking"] = thinking
+                _effort = _engine._REQUEST_EFFORT.get()
+                if _effort is not None:
+                    _levels = _engine.template_effort_levels(tokenizer)
+                    if _levels is not None:
+                        from .model_card import normalize_effort
+
+                        kwargs["reasoning_effort"] = normalize_effort(_effort, _levels)
                 # Native tool rendering: explicit param wins, else the per-request
                 # contextvar the router set (task-side). Only pass when the template
                 # actually references a `tools` variable.

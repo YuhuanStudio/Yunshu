@@ -74,16 +74,15 @@ def test_thinking_budget_accepts_the_model_thinking_limit():
             cls(model="m", thinking_budget=262145, **kw)
 
 
-def test_effort_budget_is_monotone_and_xhigh_max_are_largest():
-    ladder = ["low", "medium", "high", "xhigh", "max"]
-    vals = [ol.effort_budget(e) for e in ladder]
-    assert vals == sorted(vals) and len(set(vals)) == 5
-    assert vals[-1] == ol.MAX_THINKING_BUDGET
+def test_reasoning_effort_is_never_a_token_cap():
+    """User 2026-11-09: reasoning_effort goes to the model's template; no invented ladder."""
+    assert not hasattr(ol, "effort_budget") and not hasattr(
+        ol, "EFFORT_THINKING_BUDGET"
+    )
 
 
 def test_effort_none_and_minimal_turn_thinking_off():
     for eff in ("none", "minimal", "NONE"):
-        assert ol.effort_budget(eff) is None
         c = ChatCompletionRequest(model="m", messages=U, reasoning_effort=eff)
         assert c.enable_thinking is False and c.reasoning_effort is None
         r = ResponsesRequest(model="m", input="x", reasoning={"effort": eff})

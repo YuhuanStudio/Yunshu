@@ -51,32 +51,6 @@ def default_source() -> str:
 # (Anthropic budget_tokens and OpenAI-style fields have no smaller API cap).
 MAX_THINKING_BUDGET = MODEL_MAX_OUTPUT_TOKENS
 
-# reasoning_effort -> thinking budget for models whose template has no effort levels.
-# Monotone; xhigh / max take the largest budgets.  Sources: "low" 2048 / "medium" 8192 /
-# "high" 32768 are the long-standing ladder (Anthropic extended-thinking minimum 1024, docs
-# examples 2K-32K); "xhigh" 131072 = the card's final-answer ceiling half-way to the
-# thinking ceiling; "max" 262144 = Qwen3.8 card thinking limit (no cap beyond the output cap).
-EFFORT_THINKING_BUDGET = {
-    "low": 2048,
-    "medium": 8192,
-    "high": 32768,
-    "xhigh": 131072,
-    "max": MAX_THINKING_BUDGET,
-}
-EFFORT_BUDGET_FALLBACK = 8192  # unknown spelling: the medium rung
-
-
-def effort_budget(effort: str | None) -> int | None:
-    """Thinking budget for an OpenAI ``reasoning_effort``; None for "none"/"minimal"
-    (thinking off: callers disable thinking instead) and for no effort."""
-    if effort is None:
-        return None
-    e = str(effort).strip().lower()
-    if e in THINKING_OFF_EFFORTS:
-        return None
-    return EFFORT_THINKING_BUDGET.get(e, EFFORT_BUDGET_FALLBACK)
-
-
 # OpenAI SDK ReasoningEffort = none | minimal | low | medium | high | xhigh | max;
 # "none" means no reasoning and "minimal" is the lowest-reasoning setting, mapped to off
 # because the local template has no rung below "low" that thinks less.

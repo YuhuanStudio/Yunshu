@@ -3701,11 +3701,9 @@ class VLMEngine:
         js = kwargs.get("json_schema")
         if js is None:
             js = kwargs.get("grammar")
+        # reasoning_effort never becomes a token cap (user 2026-11-09): a template that
+        # declares it receives it (_template_effort_extra); one that does not ignores it.
         tb = params.pop("thinking_budget", None)
-        if tb is None and kwargs.get("reasoning_effort") is not None:
-            from .output_limits import effort_budget
-
-            tb = effort_budget(kwargs["reasoning_effort"])
         return dict(
             params,
             prompt_logprobs=kwargs.get("prompt_logprobs"),

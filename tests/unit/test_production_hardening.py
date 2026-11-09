@@ -636,19 +636,8 @@ class TestThinkingBudgetEnforcement:
         assert cfg.enabled is True
 
     def test_parse_thinking_budget_from_effort(self):
-        """parse_thinking_budget maps reasoning_effort to token budgets."""
-        assert (
-            parse_thinking_budget({"reasoning_effort": "low"}).max_thinking_tokens
-            == 2048
-        )
-        assert (
-            parse_thinking_budget({"reasoning_effort": "medium"}).max_thinking_tokens
-            == 8192
-        )
-        assert (
-            parse_thinking_budget({"reasoning_effort": "high"}).max_thinking_tokens
-            == 32768
-        )
+        """reasoning_effort is the template's variable, not a token budget (user 2026-11-09)."""
+        assert parse_thinking_budget({"reasoning_effort": "high"}) is None
 
     def test_parse_thinking_budget_none(self):
         """parse_thinking_budget returns None when no params provided."""

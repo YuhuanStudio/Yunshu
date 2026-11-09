@@ -45,12 +45,30 @@ logger = logging.getLogger(__name__)
 
 
 from .output_limits import (  # noqa: E402
-    EFFORT_BUDGET_FALLBACK,
-    EFFORT_THINKING_BUDGET,
     THINKING_OFF_EFFORTS,
 )
 
-_REASONING_EFFORT_MAP = EFFORT_THINKING_BUDGET
+
+def set_request_effort(effort) -> None:
+    """Record the request's ``reasoning_effort`` for the template ("none"/"minimal" mean
+    thinking off and are not a template level)."""
+    if effort is None or str(effort).strip().lower() in THINKING_OFF_EFFORTS:
+        _REQUEST_EFFORT.set(None)
+    else:
+        _REQUEST_EFFORT.set(str(effort))
+
+
+def template_effort_levels(tokenizer) -> list[str] | None:
+    """The chat template's own ``reasoning_effort`` levels ([] when it takes the variable
+    without listing levels); None when the template has no such variable."""
+    tpl = getattr(tokenizer, "chat_template", None)
+    if not isinstance(tpl, str) or "reasoning_effort" not in tpl:
+        return None
+    from .model_card import reasoning_levels
+
+    return reasoning_levels(tpl)[0] or []
+
+
 _MAX_STREAMING_TEXT_BUFFER = (
     1 * 1024 * 1024
 )  # 1MB safety limit for streaming text buffer
@@ -135,6 +153,11 @@ _REQUEST_TOP_N_SIGMA: contextvars.ContextVar[float | None] = contextvars.Context
 # cross-request leak.
 _REQUEST_TOOLS: contextvars.ContextVar[list | None] = contextvars.ContextVar(
     "yunshu_request_tools", default=None
+)
+# Per-request OpenAI ``reasoning_effort``, rendered into chat templates that declare a
+# ``reasoning_effort`` variable (mapped onto the template's own levels); never a token cap.
+_REQUEST_EFFORT: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "yunshu_request_effort", default=None
 )
 
 
@@ -1337,12 +1360,12 @@ class BatchedEngine(
             reasoning_effort = None
             if enable_thinking is None:
                 enable_thinking = False
-        if thinking_budget is None and reasoning_effort is not None:
-            thinking_budget = _REASONING_EFFORT_MAP.get(
-                reasoning_effort, EFFORT_BUDGET_FALLBACK
-            )
-            if enable_thinking is None:
-                enable_thinking = True
+        # The effort goes to the chat template as the model's own variable (Qwen3.8:
+        # low / medium / xhigh); no token cap is invented for it (user 2026-11-09). Set on
+        # every call so an earlier request's effort never leaks into this one's template.
+        set_request_effort(reasoning_effort)
+        if reasoning_effort is not None and enable_thinking is None:
+            enable_thinking = True
         if constrains_initial_output(json_schema):
             # Bare structured output is constrained from its first token: a thinking
             # budget would force a close tag into the mask (all logits -inf).
@@ -1686,12 +1709,12 @@ class BatchedEngine(
             reasoning_effort = None
             if enable_thinking is None:
                 enable_thinking = False
-        if thinking_budget is None and reasoning_effort is not None:
-            thinking_budget = _REASONING_EFFORT_MAP.get(
-                reasoning_effort, EFFORT_BUDGET_FALLBACK
-            )
-            if enable_thinking is None:
-                enable_thinking = True
+        # The effort goes to the chat template as the model's own variable (Qwen3.8:
+        # low / medium / xhigh); no token cap is invented for it (user 2026-11-09). Set on
+        # every call so an earlier request's effort never leaks into this one's template.
+        set_request_effort(reasoning_effort)
+        if reasoning_effort is not None and enable_thinking is None:
+            enable_thinking = True
         if constrains_initial_output(json_schema):
             # Bare structured output is constrained from its first token: a thinking
             # budget would force a close tag into the mask (all logits -inf).
