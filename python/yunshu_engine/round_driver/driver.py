@@ -683,7 +683,7 @@ class RoundDriver:
             return []
         if len(self.batch.rows) != 1:
             return []
-        if not self.batch.can_trim():
+        if not self.batch.can_trim(row.ngram.k + 1):
             if not self._ngram_untrimmable_logged:
                 self._ngram_untrimmable_logged = True
                 logger.info(

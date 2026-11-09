@@ -18,7 +18,10 @@ batch-invariant tree verifies (DFlash copy drafts, MTP) and stay on that path.
 from __future__ import annotations
 
 MAX_DRAFT = 5  # drafts per window (the text engine's k)
-MAX_COOL = 8  # steps a row sits out after repeated misses
+MAX_COOL = 8
+MAX_MODEL_LEN = (
+    1 << 24
+)  # the proposers' own 32K default would silence drafts on a longer prompt  # steps a row sits out after repeated misses
 
 
 def make_proposer(kind: str):
@@ -26,10 +29,16 @@ def make_proposer(kind: str):
     if kind == "suffix":
         from ..suffix_proposer import SuffixConfig, SuffixProposer
 
-        return SuffixProposer(SuffixConfig(max_draft=MAX_DRAFT, max_trie_depth=80))
+        return SuffixProposer(
+            SuffixConfig(
+                max_draft=MAX_DRAFT, max_trie_depth=80, max_model_len=MAX_MODEL_LEN
+            )
+        )
     from ..ngram_proposer import NgramConfig, NgramProposer
 
-    return NgramProposer(NgramConfig(max_n=5, k=MAX_DRAFT, mode="lps"))
+    return NgramProposer(
+        NgramConfig(max_n=5, k=MAX_DRAFT, mode="lps", max_model_len=MAX_MODEL_LEN)
+    )
 
 
 class NgramDrafter:

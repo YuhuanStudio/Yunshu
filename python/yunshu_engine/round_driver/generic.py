@@ -177,6 +177,22 @@ def cache_arrays(cache: list) -> list:
     return out
 
 
+def _trimmable(cache: Any, extra: int) -> bool:
+    """``cache`` can drop its last ``extra`` positions after they are appended: ``is_trimmable`` now
+    and, for a rotating window, still after ``extra`` more positions (it stops trimming once wrapped)."""
+    subs = getattr(cache, "caches", None)
+    if subs is not None:
+        return all(_trimmable(c, extra) for c in subs)
+    if not cache.is_trimmable():
+        return False
+    size = getattr(cache, "max_size", None)
+    if size is None:
+        return True
+    off = getattr(cache, "offset", 0)
+    off = int(off.max().item()) if hasattr(off, "max") else int(off)
+    return off + extra <= int(size)
+
+
 class GenericBatch:
     """The decoding rows of a generic target, batched as the stock generator batches them.
 
@@ -280,10 +296,10 @@ class GenericBatch:
         logits = _logits_of(out)
         return mx.concatenate([logits[b, :n] for b, n in enumerate(lens)])
 
-    def can_trim(self) -> bool:
-        """Every cache of the decode batch can cut rejected window positions (KV caches; not rotating
-        or recurrent state)."""
-        return self.cache is not None and all(c.is_trimmable() for c in self.cache)
+    def can_trim(self, extra: int = 0) -> bool:
+        """Every cache of the decode batch can cut ``extra`` more window positions after appending them
+        (KV caches; a rotating cache only while its window has not wrapped; not recurrent state)."""
+        return self.cache is not None and all(_trimmable(c, extra) for c in self.cache)
 
     def commit(self, used: list[int]) -> None:
         if len(self.rows) == 1 and used[0] < self._lens[0]:

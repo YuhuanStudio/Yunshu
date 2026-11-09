@@ -16,6 +16,7 @@ import pytest
 
 pytest.importorskip("mlx.core")
 pytest.importorskip("mlx_vlm")
+mx = pytest.importorskip("mlx.core")
 
 from test_round_driver_generic import (  # noqa: E402
     LOG,
@@ -140,7 +141,7 @@ def test_a_cache_that_cannot_trim_decodes_plain(monkeypatch):
     lm = TinyLM()
     ids = prompt(12)
     d = make(lm)
-    monkeypatch.setattr(d.batch, "can_trim", lambda: False)
+    monkeypatch.setattr(d.batch, "can_trim", lambda extra=0: False)
     h = handle()
     out = run(d, [req(lm, ids, 30, h)])
     assert tokens(out, h) == reference(lm, ids, 30)
@@ -175,3 +176,24 @@ def test_backoff_after_misses_and_reset_on_a_hit():
     n.observe(3, 1)
     assert n.misses == 0
     assert n.propose(ctx, 0) == []
+
+
+def test_a_rotating_cache_that_would_wrap_cannot_trim():
+    from mlx_vlm.models import cache as vc
+
+    from yunshu_engine.round_driver.generic import _trimmable
+
+    c = vc.RotatingKVCache(max_size=8, keep=0)
+    k = mx.zeros((1, 1, 6, 4))
+    c.update_and_fetch(k, k)
+    assert _trimmable(c, 2) and not _trimmable(c, 3)  # 6 + 3 > 8: the window would wrap
+    assert _trimmable(vc.KVCache(), 99)
+
+
+def test_long_prompts_still_draft():
+    # the proposers' own 32K max_model_len must not silence drafts on a longer context
+    from yunshu_engine.round_driver.ngram import make_proposer
+
+    for kind in ("ngram", "suffix"):
+        ctx = list(range(100, 40000)) + [7, 8, 9, 10, 5, 7, 8, 9]
+        assert make_proposer(kind).propose(ctx)[:1] == [10]
