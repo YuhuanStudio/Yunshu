@@ -149,9 +149,9 @@ class RunStats:
 
 
 class ConstraintProcessor:
-    """Adapt a Yunshu grammar/JSON constraint to a BatchGenerator logits processor.
+    """Adapt a Yunshu grammar/JSON constraint to the runner's logits-processor protocol.
 
-    BatchGenerator calls ``__call__`` for the first token (prompt stage) and
+    The runner calls ``__call__`` for the first token (prompt stage) and
     ``process_last_token`` for every later step with the token it just sampled,
     so the constraint advances before masking the next distribution.
     """
@@ -233,7 +233,7 @@ def build_sampler(temperature: float, top_p: float, top_k: int, min_p: float):
     from mlx_lm.sample_utils import make_sampler
 
     if temperature is None or temperature < 1e-6:
-        return None  # BatchGenerator's greedy argmax (fused when possible)
+        return None  # greedy argmax (fused when possible)
     return make_sampler(
         temp=float(temperature),
         top_p=float(top_p) if top_p and top_p < 1.0 else 0.0,
