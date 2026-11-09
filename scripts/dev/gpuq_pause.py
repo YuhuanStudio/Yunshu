@@ -58,6 +58,11 @@ def pause_intervals(path: str | None = None) -> list[tuple[float, float]]:
     return _pauses.read_pause_file(path)
 
 
+def paused_seconds(t0: float, t1: float, spans: list[tuple[float, float]]) -> float:
+    """Seconds of [t0, t1] covered by ``spans`` (from ``pause_intervals()``); overlapping pauses are merged so none is counted twice."""
+    return _pauses.paused_seconds(t0, t1, spans)
+
+
 def was_paused(t0: float, t1: float, path: str | None = None) -> bool:
     """True if any pause interval overlaps [t0, t1] (wall-clock seconds). Fails closed on a bad file."""
     return _pauses.was_paused(t0, t1, path)

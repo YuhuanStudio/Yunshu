@@ -30,6 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
 from gpuq_contention import was_contended  # noqa: E402
 from gpuq_pause import pause_intervals  # noqa: E402
+from gpuq_pause import paused_seconds as merged_paused_seconds  # noqa: E402
 
 
 def paused_seconds(t0: float, t1: float) -> float:
@@ -38,7 +39,7 @@ def paused_seconds(t0: float, t1: float) -> float:
         spans = pause_intervals()
     except (OSError, ValueError, TypeError):
         return t1 - t0
-    return sum(max(0.0, min(b, t1) - max(a, t0)) for a, b in spans)
+    return merged_paused_seconds(t0, t1, spans)
 
 
 NO_THINK = {"chat_template_kwargs": {"enable_thinking": False}}

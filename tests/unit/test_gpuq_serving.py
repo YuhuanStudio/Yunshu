@@ -364,6 +364,24 @@ def test_timed_retries_then_fails_closed(q, gp, monkeypatch):
         gp.timed(lambda: 1, retries=2)
 
 
+def test_paused_seconds_merges_overlapping_pauses(gp, monkeypatch, tmp_path):
+    # overlapping pauses are one stopped span: 10..20 and 15..30 cover 20 s, not 25 s
+    assert gp.paused_seconds(0, 100, [(10, 20), (15, 30)]) == 20.0
+    assert gp.paused_seconds(12, 18, [(10, 20)]) == 6.0
+    # the gate's wrapper (scripts/release/gate_checks.py) must agree on the same file
+    spec = importlib.util.spec_from_file_location(
+        "gate_checks_pause_test", REPO / "scripts/release/gate_checks.py"
+    )
+    gc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gc)
+    f = tmp_path / "p.json"
+    f.write_text(json.dumps({"pauses": [[10, 20], [15, 30]]}))
+    monkeypatch.setenv("GPUQ_PAUSE_FILE", str(f))
+    assert gc.paused_seconds(0, 100) == 20.0
+    f.write_text("garbage")  # unreadable file: the whole window counts as stopped
+    assert gc.paused_seconds(0, 100) == 100.0
+
+
 def test_memory_admission(q, prod):
     g = _gate(q, prod, reserve_gb=16)
     job, _ = _job(q, ["true"], mem_gb=24)
