@@ -161,6 +161,10 @@ def pinned_trees(globs: tuple[str, ...] | None = None) -> dict[Path, str]:
     return out
 
 
+# Trees a resident service runs from (the always-on console, launchd); never removed.
+RESIDENT_TREES = frozenset({"wt-consoleauto"})
+
+
 def classify(
     tree: Path,
     repo: Path,
@@ -178,6 +182,8 @@ def classify(
     pinned = _PINNED if _PINNED is not None else pinned_trees()
     if tree.resolve() in pinned:
         return keep(f"pinned by {pinned[tree.resolve()]}")
+    if tree.name in RESIDENT_TREES:
+        return keep("resident service tree")
     rc, head, _ = git(tree, "rev-parse", "HEAD")
     if rc != 0:
         return keep("HEAD unreadable")

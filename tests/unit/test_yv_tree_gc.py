@@ -256,3 +256,15 @@ def test_a_tree_named_by_a_pin_file_is_never_removed(tmp_path, monkeypatch):
         tree, tmp_path, now=1e12, min_age_h=0, refs=[], procs=[], census=True
     )
     assert not v.remove and "pinned by" in v.reason
+
+
+def test_the_resident_console_tree_is_never_removed(tmp_path, monkeypatch):
+    """2026-11-09: the console launchd service ran from wt-consoleauto, which a census pass had removed."""
+    tree = tmp_path / "wt-consoleauto"
+    tree.mkdir()
+    (tree / ".git").write_text("gitdir: x")
+    monkeypatch.setattr(gc, "PIN_GLOBS", ())
+    v = gc.classify(
+        tree, tmp_path, now=1e12, min_age_h=0, refs=[], procs=[], census=True
+    )
+    assert not v.remove and v.reason == "resident service tree"
