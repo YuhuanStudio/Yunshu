@@ -28,7 +28,7 @@ WORK="${YUNSHU_CI_ROOT:-/tmp}/ycl-$(echo "$SHA" | cut -c1-8)"
 [ -d "$WORK" ] && chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"  # tests leave read-only harness snapshots
 # A failing run's checkout stays for debugging, but only until the next run: three kept failures filled the system
 # disk (36 GB) on 2026-10-25. Older than 6 h so a concurrent run's checkout is never touched.
-find "${YUNSHU_CI_ROOT:-/tmp}/" -maxdepth 1 -type d -name 'ycl-*' -mmin +360 -exec chmod -R u+w {} + -exec rm -rf {} + 2>/dev/null
+find "${YUNSHU_CI_ROOT:-/tmp}/" -maxdepth 1 -type d -name 'ycl-*' -mmin +360 -exec chmod -R u+w {} + -exec rm -rf {} + 2>/dev/null || echo "ci-local: could not remove every old checkout (continuing)"
 git clone -q --no-hardlinks "$SRC" "$WORK"
 git -C "$WORK" checkout -q "$SHA"
 cd "$WORK"

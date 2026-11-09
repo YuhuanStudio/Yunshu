@@ -21,7 +21,7 @@ Prompt pieces and APC checkpoints are cut at **absolute 64-token boundaries**, s
 - Rehearsal starts after `YUNSHU_NEXT_TURN_DELAY_S` (default 0.3 s), so an immediate follow-up, as in an agent loop, arrives before any rehearsal work starts and prefills once. A matching request that arrives during rehearsal adopts the work in progress; a diverging one cancels it at the next preemptible boundary.
 - Only plain-text chats are rehearsed: the reply must finish with `stop` or `length`, have 16 to 4096 tokens, and the request must have no media, no tools and no constrained decoding (`next_turn.ineligible_reason`).
 
-**Batch-lane promotion.** When a shared batch drains to one eligible request, the runner moves it onto the single-request speculative lane at a step boundary (`VLMBatchRunner._maybe_promote`; see [Speculative decoding](/docs/internals/speculative-decoding)).
+**Rows, not batches.** Every request is a round-driver row from admission, so there is no batch-to-lane promotion step (see [Speculative decoding](/docs/internals/speculative-decoding)).
 
 ```mermaid
 stateDiagram-v2

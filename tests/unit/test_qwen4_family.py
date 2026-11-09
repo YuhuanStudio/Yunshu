@@ -105,17 +105,20 @@ def test_modules_apply_to_present_skip_absent(renamed, monkeypatch):
 
 
 def test_no_new_literal_qwen4_exp_in_code():
-    root = Path(__file__).resolve().parents[2] / "python"
-    pat = re.compile(r"""["']qwen4_exp["']|models\.qwen4_exp""")
+    repo = Path(__file__).resolve().parents[2]
+    pat = re.compile(
+        r"""["']qwen4_exp(_text)?["']|models\.qwen4_exp|drafters\.qwen4_exp|qwen4_exp_mtp"""
+    )
     bad = []
-    for path in root.rglob("*.py"):
+    root = repo / "python"
+    for path in [*root.rglob("*.py"), *(repo / "scripts" / "verify").rglob("*.py")]:
         if path.name == "qwen4_family.py":
             continue
         for n, line in enumerate(path.read_text().splitlines(), 1):
             if line.lstrip().startswith("#"):
                 continue
             if pat.search(line):
-                bad.append(f"{path.relative_to(root)}:{n}: {line.strip()}")
+                bad.append(f"{path.relative_to(repo)}:{n}: {line.strip()}")
     assert not bad, (
         "use yunshu_engine.qwen4_family instead of a literal:\n" + "\n".join(bad)
     )

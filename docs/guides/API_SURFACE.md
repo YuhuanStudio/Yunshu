@@ -64,6 +64,7 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 |---|---|---|
 | `messages` (system, developer, user, assistant, tool; content parts; `image_url`) | implemented (image needs a VLM; audio input on omni models) | real 2026-10-06: `wire` (system, user, assistant, tool messages) and `routes` (`image_url` on 0.8B; image block on gemma-4-e2b-it-4bit answers "blue"). Messages has no audio block (Anthropic API). `developer` role: unit |
 | `temperature`, `top_p`, `max_tokens`, `max_completion_tokens`, `n`, `seed`, `stop`, `presence_penalty`, `frequency_penalty`, `logit_bias`, `user` | implemented | real 2026-10-06: `max_tokens` / `max_completion_tokens` (`wire` truncation). The sampling fields, `n`, `seed`, `stop` lists beyond single characters, `logit_bias`, `user`: unit. Omitted sampling fields take the model's `generation_config.json` value, else the API default (see [Sampling defaults](INFERENCE.md#sampling-defaults)) |
+| `prompt_logprobs` | implemented on text and all round-driver layers; non-streaming chat choices and single-prompt completions return `[null, {token_id, logprob, top_logprobs?}, ...]`; `0` scores realized tokens only. Scoring recomputes the prompt, bypassing APC/replay restore; readouts are reduced in bounded chunks. | unit: tiny generic / Flash-Next reference and gateway round-trip tests; M5 packed tiny test PASS; 27B real HTTP oracle (2026-11-09): two 23-token prompts, exact plain-forward realized/top-3 scores (max error 0), APC restore bypassed; yv identity: 12 cells, 0 mismatches |
 | `logprobs`, `top_logprobs` (also streamed) | implemented | unit (scripted engine); audit on the VLM runner |
 | `tools`, `tool_choice` (`auto`, `none`, `required`, named function), `parallel_tool_calls`, tool result messages | implemented; streamed `tool_calls` deltas | real 2026-10-06: `wire` (`auto`, `none`, `required`, named, `parallel_tool_calls: false`; stream and not) on 0.8B, 3B, 9B-4bit |
 | `response_format` `json_object`, `json_schema` (strict) | implemented (constrained decoding) | real 2026-10-06: `wire` (`json_schema`, stream and not; chat, Responses, Ollama). `json_object`: unit |
@@ -399,8 +400,8 @@ is whitespace-trimmed, a stream's concatenated deltas are not.
 
 ## Sampling contract
 
-- **Seeded sampling is position-keyed.** On every VLM-runner path (speculative lane and shared
-  batch, alone or mixed with other requests) the token drawn at generation index `g` is a function
+- **Seeded sampling is position-keyed.** On every VLM-runner path (the round driver, alone or
+  mixed with other requests) the token drawn at generation index `g` is a function
   of `(logits, seed, g)` only, so the same `seed` gives the same stream whatever the admission
   path or concurrency, given batch-invariant logits. Unseeded requests draw a random seed.
   Exceptions that stay stateful: XTC (`xtc_probability > 0`), the text-only `mlx-lm` fast path,

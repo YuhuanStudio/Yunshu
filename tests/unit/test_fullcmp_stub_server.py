@@ -21,6 +21,7 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "scripts" / "research"))
 
+import bench_engines  # noqa: E402
 import fullcmp_audit_manifest as fam  # noqa: E402
 import fullcmp_stub_server as stub  # noqa: E402
 
@@ -145,6 +146,23 @@ def test_load_and_round_lines_match_the_engaged_mode_probe(tmp_path, engine):
         return
     pats = [p["regex"] for p in probe["log_patterns"] if "regex" in p]
     assert any(re.search(p, text) for p in pats), (engine, text)
+
+
+YUNSHU_ENGINES = sorted(
+    name for name, e in bench_engines.ENGINES.items() if e.kind == "yunshu"
+)
+
+
+@pytest.mark.parametrize("engine", YUNSHU_ENGINES)
+def test_yunshu_stub_engaged_line_is_read_back_as_the_expected_mode(engine):
+    """A Yunshu stub run must show the engaged mode the harness checks (bench_engines.check_engaged).
+    Regression: yunshu-pb2 printed no runner line, so every stub run failed with engaged None."""
+    log = "\n".join(stub.engine_load_lines(engine))
+    assert (
+        bench_engines.detect_mode(engine, log)
+        == bench_engines.ENGINES[engine].expected_mode
+    )
+    bench_engines.check_engaged(engine, bench_engines.detect_mode(engine, log))
 
 
 STUB = Path(__file__).resolve().parent / "fullcmp_stub_server.py"

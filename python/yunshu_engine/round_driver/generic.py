@@ -133,6 +133,10 @@ def prefill(lm: Any, row: Any, start: int, end: int) -> mx.array | None:
             n_to_process=stop - start,
             **feats.span(start, stop),
         )
+        if getattr(row.req, "prompt_logprobs", None) is not None:
+            from .prompt_logprobs import score_span
+
+            score_span(row, start, _logits_of(out)[0])
         del out  # the chunk's logits are never read; only the cache it advanced matters
     if not final:
         return None

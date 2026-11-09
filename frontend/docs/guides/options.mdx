@@ -33,7 +33,7 @@ These trade quality for memory or disk. All are off by default (a lossless value
 
 | Setting | Lossless default | Lossy value | Effect |
 |---|---|---|---|
-| `YUNSHU_KV_PRECISION` | `bf16` | `int8` | int8 KV for the Qwen3.5-family shared decode batch; less memory and bandwidth, small attention error. A lone request and the speculative lane stay bf16 |
+| `YUNSHU_KV_PRECISION` | `bf16` | `int8` | int8 KV for Qwen3.5-family rows on the packed layer; less memory and bandwidth, small attention error. Flash-Next and generic-layer models stay bf16 |
 | `YUNSHU_KV_QUANT_BITS` | `off` | `auto`, `2`, `3`, `4`, `8` | Quantized KV cache on the text engine |
 | `YUNSHU_PREFIX_HOT_LIMIT` | `0` (all full precision) | a count | Keeps that many prefix KV entries at full precision and stores older ones 4-bit in RAM; lossy on reuse |
 | `YUNSHU_SSD_CACHE_PRECISION` | `native` | `int8` | Text SSD prefix cache stored as per-tensor int8; lossy on reuse |

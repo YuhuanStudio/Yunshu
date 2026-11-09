@@ -9,17 +9,42 @@ the pause, not the engine, so it must never reach a result table:
 
 Fail closed: if GPUQ_PAUSE_FILE is set but unreadable the answer is "paused"; outside gpuq (variable unset)
 nothing is ever paused. Timestamps are wall-clock (time.time()) because the daemon is another process.
+
+The pause file is parsed by the serving-side reader, ``python/yunshu_engine/serving/pauses.py`` (the single
+parser). It is loaded by file path so this script stays stdlib-only and does not import the engine package.
 """
 
 from __future__ import annotations
 
-import json
-import os
+import importlib.util
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 _RETRY_WAIT_S = 1.0
+
+_PAUSES_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "python"
+    / "yunshu_engine"
+    / "serving"
+    / "pauses.py"
+)
+
+
+def _load_reader():
+    spec = importlib.util.spec_from_file_location(
+        "_yunshu_serving_pauses", _PAUSES_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load the pause reader at {_PAUSES_PATH}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_pauses = _load_reader()
 
 
 class PausedSampleError(RuntimeError):
@@ -29,29 +54,13 @@ class PausedSampleError(RuntimeError):
 def pause_intervals(path: str | None = None) -> list[tuple[float, float]]:
     """The recorded pauses as (t0, t1); an open (still stopped) interval ends at now.
 
-    Raises OSError / ValueError when the file exists in the environment but cannot be read."""
-    path = path or os.environ.get("GPUQ_PAUSE_FILE")
-    if not path:
-        return []
-    now = time.time()
-    with open(path) as f:
-        data = json.load(f)
-    return [
-        (float(a), float(b) if b is not None else now)
-        for a, b in data.get("pauses", [])
-    ]
+    Raises ValueError (``PauseDataError``) when the file is configured but cannot be read or parsed."""
+    return _pauses.read_pause_file(path)
 
 
 def was_paused(t0: float, t1: float, path: str | None = None) -> bool:
     """True if any pause interval overlaps [t0, t1] (wall-clock seconds). Fails closed on a bad file."""
-    path = path or os.environ.get("GPUQ_PAUSE_FILE")
-    if not path:
-        return False
-    try:
-        spans = pause_intervals(path)
-    except (OSError, ValueError, TypeError):
-        return True
-    return any(a <= t1 and b >= t0 for a, b in spans)
+    return _pauses.was_paused(t0, t1, path)
 
 
 def timed(fn: Callable[[], Any], retries: int = 5, path: str | None = None) -> Any:

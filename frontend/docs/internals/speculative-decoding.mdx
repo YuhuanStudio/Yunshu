@@ -14,7 +14,7 @@ For the **Qwen3.5 family on the VLM runner** (model types in `VLMEngine._SPEC_MO
 3. Otherwise, the checkpoint's own **MTP head** when it has one (`YUNSHU_MTP`).
 4. Otherwise, plain decode.
 
-The block size is the drafter's trained block for DFlash and 6 for MTP unless `YUNSHU_MTP_BLOCK_SIZE` is set. Drafting runs in a **single-request lane**: the runner admits a request, prefills it, and runs draft-and-verify rounds. When a shared batch drains to one eligible request, `VLMBatchRunner._maybe_promote` moves that row onto the lane at a step boundary; the lane's first round is a plain one-row verify that captures the hidden states the drafter needs, so promotion is lossless.
+The block size is the drafter's trained block for DFlash and 6 for MTP unless `YUNSHU_MTP_BLOCK_SIZE` is set. Drafting runs on the **round driver**: every request is a row, and draft-and-verify rounds run for all rows together, each row drafting at the depth its acceptance allows. A row's output does not depend on which rows share its step, so verification is lossless.
 
 Other drafting sources:
 
@@ -38,7 +38,7 @@ flowchart TD
   M --> V
 ```
 
-The diagram shows how the drafter is chosen when a model loads; speculation is then used per request on the single-request lane.
+The diagram shows how the drafter is chosen when a model loads; speculation then runs per row on the round driver.
 
 ## Why (design decision)
 
@@ -70,10 +70,10 @@ Speculation is only worth shipping if it is invisible to the user. Yunshu theref
 ## Limits
 
 - The lossless guarantee does not cover `YUNSHU_SPEC_UNVERIFIED` with an external draft model: its output can differ from plain decode. See [Options that can change output](/docs/guides/options).
-- Qwen3.5 family only on the VLM runner; other VLM families decode without drafting.
-- The lane serves one request at a time. Concurrent requests share a batch and do not draft together.
-- An Apple Paravirtual Metal host runs the stock runner without speculation.
-- LoRA adapters and custom logits processors are rejected for VLMs, and processors that are not draft-safe keep a request off the lane.
+- Packed layers (Qwen3.5 family, Flash-Next) draft; other VLM families run the generic layer and decode without drafting.
+- Rows with processors outside the driver's windowable set, XTC sampling or non-invariant guides decode one token a round without drafting.
+- An Apple Paravirtual Metal host runs the generic layer without speculation.
+- LoRA adapters and custom logits processors are rejected for VLMs, and processors that are not draft-safe keep a row from drafting.
 
 ## How to verify
 

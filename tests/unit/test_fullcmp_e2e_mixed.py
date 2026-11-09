@@ -221,7 +221,6 @@ def test_restart_that_wipes_home_loses_the_disk_tier_and_audit_fails(
 ):
     """Negative case for the restart cell: the relaunch runs on a wiped HOME, so the restart row
     reports cached 0 and the audit (check_cold_cache, restart rule) must flag it."""
-    monkeypatch.setenv("TFB_STUB_WIPE_HOME_ON_RESTART", "1")
     sp = fm.spec(
         sweep="restart",
         ctx="1K",
@@ -230,6 +229,13 @@ def test_restart_that_wipes_home_loses_the_disk_tier_and_audit_fails(
         turns="restart",
         phases=("cold", "restart"),
     )
+    if engine in fm.NO_DISK_TIER:
+        # no disk tier to wipe: the cell is the census's explicit unsupported status (see the session test)
+        from .test_fullcmp_e2e_session import assert_unsupported_restart
+
+        assert_unsupported_restart(tmp_path, engine, sp)
+        return
+    monkeypatch.setenv("TFB_STUB_WIPE_HOME_ON_RESTART", "1")
     rows = _rows(engine, [sp])
     raw, plan, pin = _run_cell_rows(tmp_path, rows)
     for row in rows:
@@ -237,6 +243,7 @@ def test_restart_that_wipes_home_loses_the_disk_tier_and_audit_fails(
         assert restart["cached"] == 0, "a wiped HOME has no disk tier to hit"
     manifest = fr.audit_manifest(rows, [fm.SMOKE_BATCH], pin, plan.engine_order)
     manifest["stub_engine"] = True
+    manifest["stub_engines"] = sorted({c["engine"] for c in manifest["cells"]})
     res = _run_audit(raw, manifest, tmp_path)
     assert res.returncode != 0, res.stdout[-2000:]
     assert "restart: cached=0" in res.stdout, res.stdout[-2000:]

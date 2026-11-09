@@ -227,3 +227,41 @@ class TestGuidedAliasesW744:
     def test_native_grammar_wins(self):
         r = self._r(grammar={"type": "regex", "pattern": "z"}, guided_regex="a+")
         assert r.grammar == {"type": "regex", "pattern": "z"}
+
+
+def test_vlm_prompt_logprobs_round_trip(monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from yunshu_gateway import capability_gate
+    from yunshu_gateway.routers import completions
+
+    scores = [None, {"token_id": 2, "logprob": -1.0}]
+
+    async def generate(**kwargs):
+        assert kwargs["prompt_logprobs"] == 0
+        return {
+            "text": "ok",
+            "prompt_tokens": 2,
+            "completion_tokens": 1,
+            "finish_reason": "stop",
+            "prompt_logprobs": scores,
+        }
+
+    engine = SimpleNamespace(
+        is_loaded=True, model_name="m", generate=generate, _tokenizer=None
+    )
+    monkeypatch.setattr(completions, "get_engine", lambda: engine)
+    monkeypatch.setattr(capability_gate, "enforce_completion", lambda _: None)
+    app = FastAPI()
+    app.include_router(completions.router, prefix="/v1")
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/completions",
+            json={"model": "m", "prompt": "hi", "max_tokens": 1, "prompt_logprobs": 0},
+        )
+    assert response.status_code == 200, response.text
+    assert json.loads(response.content)["choices"][0]["prompt_logprobs"] == scores

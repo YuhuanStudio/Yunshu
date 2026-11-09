@@ -840,6 +840,7 @@ def vk_swiglu_sg8(x2, gate, up, sums=None):
 
 # Inputs whose producer already wrote their per-64 group sums, by identity.
 _SUM_GROUP = 64
+GROUP_SUMS_MAX = 256
 
 
 def register_group_sums(x, sums) -> None:
@@ -847,6 +848,10 @@ def register_group_sums(x, sums) -> None:
     if table is None:
         table = _ROUTE_ARMED.sums = {}
     table[id(x)] = (x, sums)
+    # consumers read an entry right after its producer; a path that never clears must not
+    # pin every layer's output (and its Metal buffer) for the life of the process
+    while len(table) > GROUP_SUMS_MAX:
+        del table[next(iter(table))]
 
 
 def group_sums_for(x):

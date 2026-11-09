@@ -28,10 +28,12 @@ def hooks(monkeypatch, tmp_path):
     from scripts.verify.kld import capture
 
     from yunshu_engine.round_driver import driver as rd
+    from yunshu_engine.round_driver import flashnext as fn
 
     monkeypatch.setenv("KLD_CACHE_DIR", str(tmp_path))
     for obj, name in (
         (rd, "lane_forward"),
+        (fn, "prefill"),  # install_driver wraps it too: never leave a wrapper behind
         (rd.RoundDriver, "_prefill_step"),
         (PromptProcessingBatch, "generate"),
         (l35.LanguageModel, "__call__"),
@@ -113,3 +115,53 @@ def test_restored_prefix_writes_nothing(tiny, hooks, monkeypatch):
     while d.busy():
         d.step()
     assert not (out / "w1.npz").exists()
+
+
+def test_flash_next_prefill_is_hooked(monkeypatch, tmp_path):
+    """Flash-Next prompts prefill through flashnext.prefill, not lane_forward: the hook must follow it
+    (before the fix every Flash-Next window failed with 'the capture hook wrote no window')."""
+    from types import SimpleNamespace
+
+    from scripts.verify.kld import capture
+
+    from yunshu_engine.round_driver import driver as rd
+    from yunshu_engine.round_driver import flashnext as fn
+
+    for obj, name in (
+        (rd, "lane_forward"),
+        (rd.RoundDriver, "_prefill_step"),
+        (fn, "prefill"),
+    ):
+        monkeypatch.setattr(obj, name, getattr(obj, name))
+
+    def inner_prefill(lm, seg, **kw):
+        # the real one calls the language model, whose body hook must not record a second time
+        for hook in body_hooks:
+            hook()
+        return np.zeros((3, 4))
+
+    body_hooks = []
+    monkeypatch.setattr(fn, "prefill", inner_prefill)
+    monkeypatch.setattr(fn, "logits", lambda lm, h: np.zeros((h.shape[0], 2)))
+    cur = tmp_path / "_current.json"
+    cur.write_text("{}")
+    state = {"tokens": [], "active": False, "bad": False}
+    seen = []
+
+    def record(inputs, hidden, head=None):
+        seen.append((inputs.shape, hidden.shape, head(hidden)))
+        state["tokens"].extend([0] * inputs.shape[1])
+
+    body_hooks.append(lambda: None if state.get("in_driver") else seen.append("dup"))
+    capture.install_driver(state, record, lambda: None, lambda: None, cur)
+    seg = SimpleNamespace(
+        tokens=np.zeros(3), cache=[SimpleNamespace(offset=0)], embeds=None
+    )
+    fn.prefill(object(), seg)
+    assert state["active"] and not state["bad"]
+    assert "dup" not in seen
+    assert seen and seen[0][0] == (1, 3) and seen[0][2].shape == (1, 3, 2)
+    fn.prefill(
+        object(), seg
+    )  # offset 0 again but 3 tokens recorded: not the continuation
+    assert state["bad"]

@@ -1,4 +1,4 @@
-"""The pb2-generic candidate (yunshu-next, detached tree 89740a60f) is modelled exactly on yunshu-pb2:
+"""The pb2-generic candidate (yunshu-next, detached tree 15ab1a0f) is modelled exactly on yunshu-pb2:
 own pin, own tree and venv, same checkpoint and flags, evidence read through the Yunshu entries, and a
 small re-run manifest (NEXT_CELLS) whose ids are the yunshu cells of the real run."""
 
@@ -46,7 +46,7 @@ def test_pin_path_and_fail_closed_ids():
 )
 def test_pin_is_the_detached_tree_and_the_pb2_tree_is_refused():
     pin = json.loads(fp.NEXT_PIN_PATH.read_text())
-    assert pin["sha"].startswith("89740a60f")
+    assert pin["sha"].startswith("15ab1a0f")
     assert "wt-fullcmp-next-engine" in pin["worktree"] and pin["venv"].endswith(
         "venv-fullcmp-next"
     )

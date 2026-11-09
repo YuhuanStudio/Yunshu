@@ -3,8 +3,8 @@
 gpuq (``scripts/dev/gpuq.py``, preemption) SIGSTOPs a dev job while production traffic is served
 and records every stopped interval. This module is the reader the serving / analysis code uses
 to drop samples that overlap such an interval. It is written against the interface the gpuq
-side defines (kept identical to ``scripts/dev/gpuq_pause.py::was_paused`` so the two reconcile
-at merge without a behaviour change):
+side defines. This module is the single parser: ``scripts/dev/gpuq_pause.py`` loads it by path for its
+``was_paused`` / ``pause_intervals`` / ``timed`` API, so both sides read the file the same way:
 
 - the job JSON and the file named by ``$GPUQ_PAUSE_FILE`` hold ``{"pauses": [[t0, t1], ...]}``;
 - timestamps are wall-clock seconds (``time.time()``), the daemon being another process;

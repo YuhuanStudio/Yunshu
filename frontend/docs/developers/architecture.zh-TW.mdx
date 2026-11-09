@@ -41,7 +41,7 @@ client ── HTTP ──> middleware ──> router ──> engine dispatch
 
 ### VLM batch runner
 
-所有經由 `mlx-vlm` 服務的模型（`VLMEngine`）都跑在 VLM batch runner 上，由 `VLMEngine._build_batch_runner` 建構，底層是上游 `mlx-vlm` 的 `BatchGenerator`。這也包含送到 Qwen3.5 這類 VLM 檢查點的純文字請求。
+所有經由 `mlx-vlm` 服務的模型（`VLMEngine`）都跑在 VLM batch runner 上，由 `VLMEngine._build_batch_runner` 建構，runner 承載 round driver，round driver 以三種模型層服務每個 row：packed Qwen3.5（dense 與 MoE）、packed Flash-Next（Qwen4），以及 generic 層（模型自己的 upstream forward，逐 row 執行）供其他所有家族使用。這也包含送到 Qwen3.5 這類 VLM 檢查點的純文字請求。
 
 - **連續批次處理**，每個請求有自己的取樣參數與種子（`RowSampler`）。預填一次只接納一個請求，並與其他列的解碼交錯進行。
 - **前綴快取（APC）** 適用於所有沒有滑動視窗快取的模型家族：混合模型使用精確檢查點，媒體以圖像像素與音訊特徵為鍵，另有選用的 SSD 層。見[提示詞快取](/docs/guides/prompt-caching)。
@@ -72,7 +72,7 @@ Runner 只產出 token id。解碼成文字、stop 字串、思考狀態與交�
 - **MTP**：使用檢查點自帶的 multi-token-prediction head 草擬。這是預設（`YUNSHU_MTP`），預設區塊大小為 6 個 token（`YUNSHU_MTP_BLOCK_SIZE`）。
 - **DFlash**：使用外部的 block-diffusion 草擬器。`YUNSHU_VLM_DRAFT` 可指向草擬器目錄、強制使用 `mtp`，或設為 `off` 關閉草擬；未設定時，會使用在模型目錄或 Hugging Face 快取中找到的相符草擬器。
 
-推測解碼在單一請求通道中執行：並行請求在一般解碼時會被批次處理，但不會草擬。其他模型家族走通用路徑，不做推測。
+推測解碼在 round driver 的封裝 row 上執行，因此並行請求也會起草。其他模型家族使用 generic 層，不做推測。
 
 ### Batch-invariant kernel 與無損保證
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections
+import contextlib
 import time
 
 _AUTO = object()
@@ -50,6 +51,33 @@ class Observation:
             "last_hit": last,
             "hits": hits,
         }
+
+
+CONSOLE_REQUEST_CAP = 512
+
+
+def register_console_request(pending, ids, request_id) -> None:
+    """Queue ``request_id`` under its prompt ids before the row is added to the round driver.
+
+    The APC's ``checkpoint_lengths(begin=True)`` pops the oldest id queued for these ids and
+    makes it the observation's request link, so the checkpoints the row writes (and their
+    lifecycle events) name their request. Without this queue every event is unlinked.
+    """
+    pending.setdefault(tuple(ids), collections.deque()).append(request_id)
+    while len(pending) > CONSOLE_REQUEST_CAP:
+        pending.popitem(last=False)
+
+
+def release_console_request(pending, ids, request_id) -> None:
+    """Forget a registration the APC did not consume (the row failed before its plan)."""
+    key = tuple(ids)
+    queue = pending.get(key)
+    if queue is None:
+        return
+    with contextlib.suppress(ValueError):
+        queue.remove(request_id)
+    if not queue:
+        pending.pop(key, None)
 
 
 _MISSING = object()

@@ -1608,11 +1608,7 @@
    "probes": [],
    "cells": {
     "chat/nonstream": {
-     "s": "partial",
-     "why": "prompt_logprobs is accepted and forwarded but no route-level test drives it (schema tests only)",
-     "kind": "untested",
-     "impact": "low",
-     "owner": "unassigned",
+     "s": "engaged",
      "ev": [
       [
        "python/yunshu_gateway/routers/chat.py",
@@ -1623,6 +1619,10 @@
       [
        "tests/unit/test_chat.py",
        "TestChatPromptLogprobsSchemaW744::test_accepts_prompt_logprobs"
+      ],
+      [
+       "tests/unit/test_chat_default_max_tokens_no_encode.py",
+       "test_vlm_prompt_logprobs_round_trip"
       ]
      ]
     },
@@ -1681,6 +1681,10 @@
       [
        "tests/unit/test_completions_echo_logprobs.py",
        "test_echo_prepends_prompt_token_logprobs"
+      ],
+      [
+       "tests/unit/test_completions.py",
+       "test_vlm_prompt_logprobs_round_trip"
       ]
      ]
     },
@@ -6782,5 +6786,5 @@
   "agentcompat",
   "unassigned"
  ],
- "gap_budget": 62
+ "gap_budget": 61
 }

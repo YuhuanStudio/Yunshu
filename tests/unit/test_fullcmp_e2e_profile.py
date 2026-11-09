@@ -198,6 +198,7 @@ def chain(tmp_path_factory):
     _run_wrapper(prof[0], PROFILE_STUB_ENV)
     manifest = fr.audit_manifest(rows, [fm.SMOKE_BATCH], pin, plan.engine_order)
     manifest["stub_engine"] = True  # test only: the engine process is the stub
+    manifest["stub_engines"] = sorted({c["engine"] for c in manifest["cells"]})
     return {
         "work": work,
         "raw": raw,

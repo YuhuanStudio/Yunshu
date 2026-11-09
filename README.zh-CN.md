@@ -64,7 +64,7 @@ Yunshu 提供的所有能力，分组列出。每一行链接到有示例与限�
 | [Round driver](docs/guides/ROUND_DRIVER.md) | 稠密 Qwen3.5 系列模型的多行推测解码：并行请求也会做草稿（MTP 链、DFlash2 树与复制链），推测开启与关闭输出相同 |
 | [模型支持](docs/guides/MODEL_SUPPORT.md) | 各系列哪些是调校、通用与已验证 |
 | [下一轮预填](docs/guides/INFERENCE.md) | 符合条件的文本回复以标准 stride 边界预填 APC；boundary/exact 会改变数值运算，须明确选用 |
-| [单请求转入推测路径](docs/guides/INFERENCE.md) | 共享批次剩下一个符合条件的贪婪请求时转入推测；尚无多行推测 |
+| [多行推测](docs/guides/ROUND_DRIVER.md) | 每个请求都是 round driver 的一个 row；并发 row 也会一起起草（MTP 链、共享验证预算的 DFlash2 草稿） |
 | [孤儿请求接手](docs/guides/INFERENCE.md) | 客户端超时断开的生成会保留 120 秒；相同的重发请求（流式或非流式）直接接手，不重算 |
 
 **API**
@@ -240,9 +240,9 @@ uv run yunshu serve -m <model>
                                            ▼
                                   engine (one MLX thread)
           ┌────────────────────────────────┴───────────────────────────────┐
-   VLM batch runner (every mlx-vlm model)                 text fast path (mlx-lm models)
-   shared continuous batch, per-row sampling              single-request generate_step
-   speculative lane: DFlash2 / MTP / prompt-copy
+   VLM round driver (every mlx-vlm model)                 text fast path (mlx-lm models)
+   packed rows, per-row sampling                          single-request generate_step
+   speculation: DFlash2 / MTP (Qwen3.5 family, Flash-Next)
    prefix cache: RAM ─► SSD ─► optional storage tiers
 ```
 
@@ -250,12 +250,12 @@ uv run yunshu serve -m <model>
 
 ### 推测解码
 
-Qwen3.5 家族的单一请求在推测解码通道中解码：
+Qwen3.5 家族与 Flash-Next 的每个请求都是 round driver 的一个 row，row 可以单独或与其他请求一起起草：
 
 - **DFlash2**：独立的区块草稿模型，每轮提出多个 token；装了相符的草稿模型就自动使用。
 - **MTP**：checkpoint 自带的多 token 预测头；没有草稿模型时的后备。
 - **Prompt-copy 草稿**：当输出开始重复 prompt 里的文本（改代码、引用工具结果、多轮 agent），
-  通道会提出那段文本的后续，并在同一次验证中检查。默认打开（`YUNSHU_SPEC_COPY_ROWS`，设 `0` 关闭）。
+  草稿会提出那段文本的后续，并在同一次验证中检查（`YUNSHU_SPEC_COPY_ROWS`，设 `0` 关闭）。
 
 所有解码与验证的矩阵乘法都走**不随批次改变的 kernel**：一个 token 不论单独验证或和其他列一起验证，
 算术都相同。这让开关推测解码时的贪婪输出完全一致，采样输出在依位置决定的采样下也精确一致。

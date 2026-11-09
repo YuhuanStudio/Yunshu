@@ -518,3 +518,47 @@ def test_job_output_passes_the_gpuq_complete_check(tmp_path):
     assert output_problem(out, expect_complete=True) is None
     jobs.write(out, {"kind": "routes", "checks": {}, "complete": False})
     assert output_problem(out, expect_complete=True) == "no complete line"
+
+
+def test_clean_worktree_is_the_committed_ref_not_the_checkout(tmp_path):
+    """The sweep submits from a worktree of the commit: another agent's uncommitted tracked edits
+    and untracked files in the checkout must not reach the M3 run (the mixed-tree failure)."""
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                *args,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    git("init", "-q")
+    (repo / "settings.py").write_text("committed = 1\n")
+    git("add", "settings.py")
+    git("commit", "-q", "-m", "base")
+    sha = git("rev-parse", "HEAD")
+    (repo / "settings.py").write_text(
+        "uncommitted = 2\n"
+    )  # tracked edit, not committed
+    (repo / "scratch.txt").write_text("untracked\n")
+    d = _driver()
+    wt = d.clean_worktree(repo, sha, tmp_path / "out" / "src")
+    assert (Path(wt) / "settings.py").read_text() == "committed = 1\n"
+    assert not (Path(wt) / "scratch.txt").exists()
+    assert git("rev-parse", "HEAD") == sha
+    # the checkout keeps its own edits untouched
+    assert (repo / "settings.py").read_text() == "uncommitted = 2\n"
+    git("worktree", "remove", "--force", wt)

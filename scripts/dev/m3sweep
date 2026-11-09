@@ -4,10 +4,12 @@
     m3sweep [REF] [--only wire,agent,units] [--dry-run] [--no-wait]
     m3sweep --collect DIR            # judge the outputs of an earlier (--no-wait) run
 
-REF defaults to HEAD of the current checkout (tracked edits included, as the lane snapshots them);
-any other ref is checked out detached under /Volumes/P5Plus/yunshu-build/m3sweep/. The M3 is
-portability / correctness evidence only: no tok/s, no timing verdict. Fail closed: a missing
-output, an incomplete output, a failed job or any mismatch is FAIL. Verdict: DIR/verdict.json.
+REF defaults to HEAD. Every sweep runs from a temporary detached worktree of the COMMITTED REF under its
+output directory (/Volumes/P5Plus/yunshu-build/m3sweep/<sha>-<time>/src), never from the checkout itself:
+gpuq snapshots a job's cwd including tracked edits, so uncommitted work of other agents would otherwise
+be mixed into the M3 run. The M3 is portability / correctness evidence only: no tok/s, no timing verdict.
+Fail closed: a missing output, an incomplete output, a failed job or any mismatch is FAIL.
+Verdict: DIR/verdict.json.
 """
 
 from __future__ import annotations
@@ -242,6 +244,18 @@ def sh(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, **kw)
 
 
+def clean_worktree(top, sha, path):
+    """A detached worktree of the committed ``sha`` at ``path``: exactly the commit, no edits of the
+    checkout (tracked or untracked). Fail closed: refuses a worktree that is not clean."""
+    r = sh(["git", "-C", str(top), "worktree", "add", "-q", "--detach", str(path), sha])
+    if r.returncode:
+        raise SystemExit(f"m3sweep: cannot create a worktree of {sha[:7]}: {r.stderr.strip()}")
+    dirty = sh(["git", "-C", str(path), "status", "--porcelain"]).stdout.strip()
+    if dirty:
+        raise SystemExit(f"m3sweep: worktree of {sha[:7]} is not clean:\n{dirty}")
+    return str(path)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("ref", nargs="?")
@@ -274,15 +288,8 @@ def main(argv=None):
         print(json.dumps([{**j, "out": str(j["out"])} for j in jobs], indent=1))
         return 0
     outdir.mkdir(parents=True)
-    run_cwd = top
-    if a.ref and sha != sh(["git", "-C", top, "rev-parse", "HEAD"]).stdout.strip():
-        created = outdir / "src"
-        r = sh(
-            ["git", "-C", top, "worktree", "add", "-q", "--detach", str(created), sha]
-        )
-        if r.returncode:
-            sys.exit(r.stderr)
-        run_cwd = str(created)
+    created = outdir / "src"
+    run_cwd = clean_worktree(top, sha, created)
     ids = []
     try:
         for j in jobs:

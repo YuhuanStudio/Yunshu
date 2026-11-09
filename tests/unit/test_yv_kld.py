@@ -172,7 +172,7 @@ def test_capture_detects_the_architecture_and_fails_closed(tmp_path):
     from verify.kld import capture
 
     for kind, arch in (
-        ("qwen4_exp", "qwen4_exp"),
+        ("qwen4_exp", "qwen4"),
         ("qwen3_5", "qwen3_5"),
         ("qwen3_5_moe", "qwen3_5"),
     ):
@@ -209,3 +209,50 @@ def test_reference_attention_stays_finite_when_the_last_row_ends_on_a_block_boun
         q, k, k, mx.array(blocks), mx.array(ends[None]), 256**-0.5
     )
     assert np.isfinite(np.array(out.astype(mx.float32))).all()
+
+
+def test_capture_rewrites_the_module_form_server_command():
+    """The harness starts `<python> -m <cli module> serve ...`; only the legacy script name was
+    rewritten, so no capture hook was installed and every window failed 'wrote no window'."""
+    from verify.kld import capture
+
+    for cmd in (
+        ["/venv/bin/python", "-m", "yunshu_cli", "serve", "--port", "1"],
+        ["/venv/bin/yunshu", "serve", "--port", "1"],
+    ):
+        out = capture.serve_command(cmd, "base", "qwen4_exp")
+        assert out[1].endswith("capture.py") and out[2:5] == [
+            "serve",
+            "base",
+            "qwen4_exp",
+        ]
+        assert out[5:] == ["serve", "--port", "1"]
+    other = ["/venv/bin/python", "-m", "other"]
+    assert capture.serve_command(other, "base", "qwen4_exp") == other
+
+
+def _arm(calls=None):
+    w = window([[1, 2, 3]], [[0.5, 0.3, 0.1]])
+    w.ref_calls = calls
+    return {"w0": w}
+
+
+def test_ref_without_engagement_fails_closed():
+    """2026-11-08: the engine's sparse-prefill wrapper answered every call before the reference hook, so
+    ref == base and the stage printed KLD 0.00000 as a PASS."""
+    with pytest.raises(RuntimeError, match="ref not engaged"):
+        stage.evaluate(_arm(None), _arm(), _arm(), 0.002, 0.003)
+    with pytest.raises(RuntimeError, match="ref not engaged"):
+        stage.evaluate(_arm(0), _arm(), _arm(), 0.002, 0.003)
+
+
+def test_exactly_zero_kld_against_a_reference_is_not_a_pass():
+    r = stage.evaluate(_arm(5), _arm(), _arm(), 0.002, 0.003)
+    assert r["ref_attention_calls"] == 5 and not r["passed"]
+    assert any("ref not engaged" in x for x in r["reasons"])
+
+
+def test_engaged_ref_with_real_difference_passes():
+    base = window([[1, 2, 3]], [[0.4, 0.3, 0.2]])
+    r = stage.evaluate(_arm(5), {"w0": base}, {"w0": base}, 0.002, 0.003)
+    assert r["passed"] and r["ref_vs_base"]["kld_mean"] > 0

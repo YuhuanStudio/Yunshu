@@ -21,7 +21,7 @@ description: Yunshu 如何通过三个层级（logit 分歧、贪婪分歧、成
 
 - **语料。** `common.build_corpus` 构建固定的 token 语料（散文、代码、中文与数学的 2048 token 窗口，另有 8K 与 32K 的长文档）。token id 只私下保存。
 - **基准文件。** 每个位置的 top-64 对数概率，加上固定随机子集位置的完整词表 log-softmax，因此之后的比较不必重跑基准。子集之外的位置使用 top-64 加一个合并的尾部桶，这是真实分歧的下界。
-- **部分**（`kld.py` 中的 `PARTS` 表）：`prefill`、`dec1`（每步一个 token，即推测 lane）、`dec6`（6 个 token 的验证块）、`decb` 与 `decb8`（在 ragged bf16 或 int8 KV 缓存上的双行共享批次）、`stockb2`（原生双行批次，作为噪声底线）。
+- **部分**（`kld.py` 中的 `PARTS` 表）：`prefill`、`dec1`（每步一个 token，早期为推测 lane）、`dec6`（6 个 token 的验证块）、`decb` 与 `decb8`（在 ragged bf16 或 int8 KV 缓存上的双行共享批次）、`stockb2`（原生双行批次，作为噪声底线）。
 - **指标。** KL 散度（基准对候选）的平均、中位数、第 99 百分位与最大值；top-1 一致率；top-1 概率的平均变化；两者的困惑度，整体以及按语料类型与位置区间分组。
 
 ### 层级 2：贪婪分歧

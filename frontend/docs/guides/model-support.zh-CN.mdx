@@ -20,7 +20,7 @@ Yunshu 加载 MLX 检查点。它会根据文件夹中的文件和 `config.json`
 | 路径 | 适用对象 | 行为 |
 |---|---|---|
 | VLM batch runner | 所有经由 `mlx-vlm` 服务的模型，包括以 `vision` 额外依赖加载的 Qwen3.5 / 3.6 / 3.8 系列 | 连续批处理，每个请求独立采样。一次只预填一个请求。对可恢复检查点的模型系列（含特定模型的精确窗口支持）提供自动前缀缓存，键值也包含图片和音频特征，并可选用 SSD 层。接受图片、音频和视频输入。 |
-| 推测式通道（仅 Qwen3.5 系列） | `qwen3_5`、`qwen3_6`、`qwen3_5_moe` | 在单请求通道中进行 MTP 或 DFlash 草稿生成，使用批次不变的解码与验证内核，使开启草稿的输出与关闭草稿时相同。由 `YUNSHU_MTP`（默认开启）和 `YUNSHU_VLM_DRAFT` 控制。并发请求目前不会一起进行草稿生成。 |
+| 推测式草稿（Qwen3.5 系列与 Flash-Next） | `qwen3_5`、`qwen3_6`、`qwen3_5_moe` | 在 round driver 的打包 row 上进行 MTP 或 DFlash 草稿生成，使用批次不变的解码与验证内核，使开启草稿的输出与关闭草稿时相同。由 `YUNSHU_MTP`（默认开启）和 `YUNSHU_VLM_DRAFT` 控制。并发 row 会一起进行草稿生成。 |
 | 文本快速路径 | 纯文本 `mlx-lm` 模型 | 通过 `mlx-lm` 一次处理一个请求；并发的请求会依次处理。 |
 
 VLM 路径的限制：视觉语言模型会拒绝 LoRA adapter 和自定义 logits processor。Qwen3.5 系列模型将使用哪条推测路径，可由 `yunshu doctor -m <model>` 的 `speculative` 行和启动日志得知。

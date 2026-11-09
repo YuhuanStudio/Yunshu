@@ -275,6 +275,22 @@ def _restore_dense_lane_route():
         mod.set_dense_lane(previous)
 
 
+@pytest.fixture(autouse=True, scope="module")
+def _restore_prefill_kernel_switches():
+    """``gdn_prefill.install()`` (test_kld_capture_driver, test_round_driver, test_packed_tree_verify, ...) leaves the GDN
+    prefill kernel switch ``enabled`` on for the rest of the process, so a later module's long prefill chunks went through
+    ``mx.fast.gated_delta_update`` by span while its cold run took another cut: test_apc_manager_e2e's cold != cached tokens
+    depended on which files shared its xdist worker. The switches are restored to their pre-module values."""
+    gp = _sys.modules.get("yunshu_engine.kernels.gdn_prefill")
+    keys = ("enabled", "split")
+    previous = {k: gp._STATE[k] for k in keys} if gp is not None else None
+    yield
+    gp = _sys.modules.get("yunshu_engine.kernels.gdn_prefill")
+    if gp is not None:
+        for k in keys:
+            gp._STATE[k] = previous[k] if previous is not None else False
+
+
 @pytest.fixture(autouse=True)
 def _yunshu_loggers_inherit_levels():
     """Each test starts with the yunshu_* package loggers at NOTSET, so ``caplog.at_level(DEBUG)`` reaches them: an earlier

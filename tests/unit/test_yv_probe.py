@@ -210,3 +210,24 @@ def test_older_lane_log_with_unpaired_profiles_is_nocount():
     s = probe.summarize(text + "\n" + (FX / "stages_lane.log").read_text(), rows)
     assert s["fmt"] == "none"
     assert probe.compare(s, copy.deepcopy(s))["ok"]
+
+
+def test_lane_tokens_per_round_uses_spec_rounds_like_the_driver():
+    """1K code cell, 2026-11-08: the lane profiled 35 of 36 rounds, so ct / profiled rounds read 7.31
+    against the driver's (ct - 1) / 36 = 7.08 for identical rounds. Same rounds, same tokens/round."""
+    text = (
+        "x INFO yunshu_engine.dflash_fast: DFlash round profile: 35 rounds, 15.7 nodes/round, "
+        "draft 2.4 ms, verify 47.4 ms, commit+host 0.1 ms\n"
+    )
+    rows = [
+        {
+            "part": "decode",
+            "phase": "cold",
+            "kind": "code",
+            "ctx": 1024,
+            "ct": 256,
+            "xy": {"speculative": {"rounds": 36}},
+        }
+    ]
+    cell = probe.join_rows(probe.parse_log(text), rows)[0]
+    assert round(cell["tpr"], 2) == 7.08

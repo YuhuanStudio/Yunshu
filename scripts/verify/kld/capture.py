@@ -92,8 +92,10 @@ def detect_arch(model_dir: str) -> str:
     """The architecture family the capture hooks know; anything else fails closed."""
     config = json.loads((Path(model_dir) / "config.json").read_text())
     kind = config.get("model_type") or config.get("text_config", {}).get("model_type")
-    if kind in ("qwen4_exp", "qwen4_exp_text"):
-        return "qwen4_exp"
+    from yunshu_engine.qwen4_family import is_qwen4_type
+
+    if is_qwen4_type(kind):
+        return "qwen4"
     if kind in ("qwen3_5", "qwen3_5_moe", "qwen3_5_text", "qwen3_5_moe_text"):
         return "qwen3_5"
     raise RuntimeError(f"kld capture has no hooks for model_type {kind!r}")
@@ -121,19 +123,23 @@ def upcast_attention() -> None:
     mx.fast.scaled_dot_product_attention = sdpa
 
 
-def install(arm: str, arch: str = "qwen4_exp") -> None:
+def install(arm: str, arch: str = "qwen4") -> None:
     import mlx.core as mx
     from mlx_vlm.generate.ar import PromptProcessingBatch
 
-    if arch == "qwen4_exp":
-        from mlx_vlm.models.qwen4_exp import language as l4
+    if arch == "qwen4":
+        from yunshu_engine.qwen4_family import qwen4_first_module
+
+        l4 = qwen4_first_module("language")
+        if l4 is None:
+            raise RuntimeError("no mlx-vlm language module for the Qwen4 family")
     elif arch == "qwen3_5":
         from mlx_vlm.models.qwen3_5 import (
             language as l4,
         )  # same hook names: LanguageModel and the *Model body
     else:
         raise RuntimeError(f"no capture hooks for {arch}")
-    body_class = l4.Qwen4ExpModel if arch == "qwen4_exp" else l4.Qwen3_5Model
+    body_class = l4.Qwen4ExpModel if arch == "qwen4" else l4.Qwen3_5Model
 
     outdir = Path(os.environ["KLD_CACHE_DIR"])
     expect_file = outdir / "_current.json"
@@ -148,13 +154,18 @@ def install(arm: str, arch: str = "qwen4_exp") -> None:
         "bad": False,
     }
 
+    ref_calls = [
+        0
+    ]  # forwards the reference attention replaced (saved with each window)
+
     if arm == "ref":
         upcast_attention()
-    if arm == "ref" and arch == "qwen4_exp":
+    if arm == "ref" and arch == "qwen4":
         original = l4.dispatch_qsa_attention
 
         def dispatch(queries, keys, values, block_indices, query_ends, **kw):
             if _eligible(queries, keys, values, block_indices, kw):
+                ref_calls[0] += 1
                 return reference_attend(
                     queries, keys, values, block_indices, query_ends, float(kw["scale"])
                 )
@@ -214,7 +225,14 @@ def install(arm: str, arch: str = "qwen4_exp") -> None:
 
     def qwen4_model_call(self, inputs, *args, **kwargs):
         out = model_call(self, inputs, *args, **kwargs)
-        if state["lm"] is not None and inputs.shape[0] == 1 and expect_file.exists():
+        if (
+            state["lm"] is not None
+            and not state.get(
+                "in_driver"
+            )  # the driver hook records this forward itself
+            and inputs.shape[0] == 1
+            and expect_file.exists()
+        ):
             state["active"] = True
             record(inputs, out)
         return out
@@ -236,7 +254,9 @@ def install(arm: str, arch: str = "qwen4_exp") -> None:
             lp=lp,
             next_lp=np.array(state["next"], dtype=np.float32),
             tokens=np.array(state["tokens"], dtype=np.int32),
+            ref_calls=np.int64(ref_calls[0]),
         )
+        ref_calls[0] = 0
         tmp.rename(outdir / f"{wid}.npz")
         expect_file.unlink()
 
@@ -279,28 +299,40 @@ def install_driver(state, record, write_window, reset, expect_file) -> None:
     except ImportError:
         return  # a tree without the round driver: the upstream hooks above are the whole path
 
-    lane_forward = rd.lane_forward
+    def hooked(forward_fn, head_of):
+        """Wrap a segment forward ``(lm, seg, **kw) -> hidden`` so each prompt segment is recorded."""
 
-    def hooked_lane_forward(lm, seg, **kwargs):
-        offset = _cache_offset(seg.cache) if expect_file.exists() else None
-        out = lane_forward(lm, seg, **kwargs)
-        if expect_file.exists():
-            if offset != len(
-                state["tokens"]
-            ):  # a restored prefix, or an interleaved row
-                state["bad"] = True
-            elif not state["bad"]:
-                state["active"] = (
-                    True  # state["lm"] stays unset: the body hook must not record too
-                )
-                record(
-                    seg.tokens[None],
-                    out[None],
-                    head=lambda h: fwd.logits(lm, h[0])[None],
-                )
-        return out
+        def run(lm, seg, **kwargs):
+            offset = _cache_offset(seg.cache) if expect_file.exists() else None
+            state["in_driver"] = (
+                True  # Flash-Next's prefill calls the (hooked) model body inside
+            )
+            try:
+                out = forward_fn(lm, seg, **kwargs)
+            finally:
+                state["in_driver"] = False
+            if expect_file.exists():
+                if offset != len(
+                    state["tokens"]
+                ):  # a restored prefix, or an interleaved row
+                    state["bad"] = True
+                elif not state["bad"]:
+                    state["active"] = (
+                        True  # state["lm"] stays unset: the body hook must not record too
+                    )
+                    record(seg.tokens[None], out[None], head=head_of(lm))
+            return out
 
-    rd.lane_forward = hooked_lane_forward
+        return run
+
+    rd.lane_forward = hooked(
+        rd.lane_forward, lambda lm: lambda h: fwd.logits(lm, h[0])[None]
+    )
+    # Flash-Next (Qwen4 family) prefills through flashnext.prefill, not lane_forward: without this hook
+    # no window is ever recorded ("the capture hook wrote no window").
+    from yunshu_engine.round_driver import flashnext as fn
+
+    fn.prefill = hooked(fn.prefill, lambda lm: lambda h: fn.logits(lm, h[0])[None])
     prefill_step = rd.RoundDriver._prefill_step
 
     def hooked_prefill_step(self, *args, **kwargs):
@@ -335,6 +367,25 @@ def ask(url: str, model: str, text: str) -> tuple[int, float]:
     return int((reply.get("usage") or {})["prompt_tokens"]), time.perf_counter() - t0
 
 
+def serve_command(command, arm: str, arch: str):
+    """The harness's server command with this script's hooked server in its place. The harness launches
+    ``<python> -m <cli module> serve ...`` (or the legacy console script): both are rewritten, otherwise
+    no hook is installed and no window is ever written."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "research"))
+    from bench_engines import is_yunshu_command, yunshu_args
+
+    if command and is_yunshu_command(command):
+        return [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "serve",
+            arm,
+            arch,
+            *yunshu_args(command),
+        ]
+    return command
+
+
 def run(args) -> None:
     import subprocess
 
@@ -353,16 +404,7 @@ def run(args) -> None:
     popen = subprocess.Popen
 
     def launch(command, *a, **kw):
-        if command and Path(command[0]).name == "yunshu":
-            command = [
-                sys.executable,
-                str(Path(__file__).resolve()),
-                "serve",
-                args.arm,
-                arch,
-                *command[1:],
-            ]
-        return popen(command, *a, **kw)
+        return popen(serve_command(command, args.arm, arch), *a, **kw)
 
     out = Path(args.out)
     rows = []
@@ -376,7 +418,16 @@ def run(args) -> None:
             "YUNSHU_CONSOLE": "0",
             "KLD_CACHE_DIR": str(cache),
             # the reference must not use Yunshu's tile attention kernel: stock attention is what gets upcast
-            **({"YUNSHU_PREFILL_ATTENTION": "stock"} if args.arm == "ref" else {}),
+            # the engine's tensor-unit sparse prefill wraps dispatch_qsa_attention at model load, outside
+            # the reference hook, and would answer every eligible call itself (ref == base, KLD 0)
+            **(
+                {
+                    "YUNSHU_PREFILL_ATTENTION": "stock",
+                    "YUNSHU_QSA_SPARSE_PREFILL": "0",
+                }
+                if args.arm == "ref"
+                else {}
+            ),
             **dict(kv.split("=", 1) for kv in args.env),
         }
         srv = t.Srv("yunshu", env, f"kld-{args.arm}-{k}of{n}", model=args.model)

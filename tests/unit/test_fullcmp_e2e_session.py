@@ -149,6 +149,7 @@ def _run_cell_rows(tmp: Path, rows, *, stub_module: str = "fullcmp_stub_session"
 def _audit_clean(raw: Path, rows, plan, pin, tmp: Path):
     manifest = fr.audit_manifest(rows, [fm.SMOKE_BATCH], pin, plan.engine_order)
     manifest["stub_engine"] = True  # test only: the engine process is the session stub
+    manifest["stub_engines"] = sorted({c["engine"] for c in manifest["cells"]})
     res = _run_audit(raw, manifest, tmp)
     assert res.returncode == 0, res.stdout[-4000:] + res.stderr[-4000:]
     assert "0 violations" in res.stdout, res.stdout[-2000:]
@@ -248,10 +249,61 @@ def test_idle_follow_up_cell_runs_turn2_after_the_idle_gap(
     _audit_clean(raw, rows, plan, pin, tmp_path)
 
 
+def assert_unsupported_restart(tmp: Path, engine: str, spec: dict) -> None:
+    """An engine registered without a disk tier (fullcmp_manifest.NO_DISK_TIER): its restart cell is the
+    census's explicit 'unsupported' status. It is planned as skipped, never run, and the audit accepts it
+    from the manifest's own unsupported list with no measurement (an empty results root passes)."""
+    assert engine in fm.NO_DISK_TIER, engine
+    status, reason = fm.cell_status(engine, spec)
+    assert status == fm.UNS and "no disk tier" in reason, (status, reason)
+    rows = _rows(engine, [spec])
+    raw = tmp / "raw"
+    raw.mkdir(parents=True, exist_ok=True)
+    fr.configure(raw, tmp / "work")
+    pin = json.loads(fr.PIN_PATH.read_text())
+    plan = fr.plan_batch(rows, fm.SMOKE_BATCH, pin)
+    assert not plan.jobs and not plan.runnable, [j.label for j in plan.jobs]
+    assert plan.skipped and all(
+        "unsupported" in why and "no disk tier" in why for _r, why in plan.skipped
+    ), plan.skipped
+    manifest = fr.audit_manifest(rows, [fm.SMOKE_BATCH], pin, plan.engine_order)
+    assert [u["engine"] for u in manifest["unsupported"]] == [engine] * len(rows)
+    assert all(u["turns"] == "restart" for u in manifest["unsupported"])
+    res = _run_audit(raw, manifest, tmp)
+    assert res.returncode == 0, res.stdout[-3000:] + res.stderr[-2000:]
+    assert "UNSUPPORTED" in res.stdout and "no disk tier" in res.stdout, res.stdout[
+        -2000:
+    ]
+
+
+def test_restart_unsupported_is_accepted_only_for_an_engine_without_a_disk_tier(
+    tmp_path,
+):
+    """The evidence rule: a restart cell may be 'unsupported' only where NO_DISK_TIER cites the evidence.
+    The same unsupported status on a disk-tier engine (yunshu) fails: that engine must measure it."""
+    rows = _rows("yunshu", [RESTART_SPEC])
+    for r in rows:
+        r["status"] = "unsupported"
+        r["reason"] = "no disk tier (claimed)"
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    fr.configure(raw, tmp_path / "work")
+    pin = json.loads(fr.PIN_PATH.read_text())
+    manifest = fr.audit_manifest(rows, [fm.SMOKE_BATCH], pin, ["yunshu"])
+    manifest["stub_engine"] = True
+    res = _run_audit(raw, manifest, tmp_path)
+    assert res.returncode != 0, res.stdout[-2000:]
+    assert "it must be measured" in res.stdout, res.stdout[-2000:]
+
+
 def test_restart_with_disk_cache_serves_prefix_hits(tmp_path, engine):
     """The restart cell in one run: cold prefill, then tfbench stops the server (keeping its HOME)
     and relaunches it on the same HOME (restart_server, a real Srv launch). The relaunched stub
-    serves the cold prompt from the disk tier; the audit requires cached > 0 on the restart row."""
+    serves the cold prompt from the disk tier; the audit requires cached > 0 on the restart row.
+    An engine with no disk tier (tf-1.2.1) has the explicit unsupported status instead of a run."""
+    if engine in fm.NO_DISK_TIER:
+        assert_unsupported_restart(tmp_path, engine, RESTART_SPEC)
+        return
     rows = _rows(engine, [RESTART_SPEC])
     raw, plan, pin = _run_cell_rows(tmp_path, rows)
     for row in rows:

@@ -666,6 +666,20 @@ def manifest_engine(eng: str) -> str:
     return inverse.get(eng, eng)
 
 
+def _is_sha256(value) -> bool:
+    return bool(re.fullmatch(r"[0-9a-f]{64}", str(value)))
+
+
+def stub_launch(m: dict, eng: str, header: dict) -> bool:
+    """True only for a registered stub engine of a test run: the manifest sets stub_engine AND lists this
+    engine in stub_engines (the engines the test replaces with a stub), AND the header's argv is a fullcmp
+    stub server (tfbench stub_server_cmd). A real engine is never listed, so its digest stays strict; the
+    argv check keeps a listed engine from passing with a real launch."""
+    if m.get("stub_engine") is not True or eng not in (m.get("stub_engines") or ()):
+        return False
+    return any("fullcmp_stub_" in str(arg) for arg in (header.get("cmd") or []))
+
+
 def check_pinned_versions(run: Run) -> GuardResult:
     """Guard 3: version, release date, binary sha256 / pinned tree, and this run's run_id."""
     res = GuardResult("pinned_versions")
@@ -704,22 +718,24 @@ def check_pinned_versions(run: Run) -> GuardResult:
             # stub_engine (test only, set by the e2e test): the server process is the stub, so its
             # command line cannot be the pinned python. Production manifests never set it.
             # the header digest is the launched python (cmd[0]); it must be the pinned digest
-            if not re.fullmatch(r"[0-9a-f]{64}", str(h.get("binary_sha256"))) or h.get(
-                "binary_sha256"
-            ) != pin.get("binary_sha256"):
+            # (a registered stub run's digest is the test interpreter's: only its format is checked)
+            if not _is_sha256(h.get("binary_sha256")) or (
+                not stub_launch(m, eng, h)
+                and h.get("binary_sha256") != pin.get("binary_sha256")
+            ):
                 res.fail(cell, "Yunshu binary sha256 missing or not the pinned python")
             if m.get("stub_engine") is not True:
                 if not cmd or cmd[0] != yun.get("python"):
                     res.fail(cell, "Yunshu not started by its pinned venv python")
                 if "-m" not in cmd or "yunshu_cli" not in cmd:
                     res.fail(cell, "Yunshu not started as python -m yunshu_cli")
-        elif m.get("stub_engine") is not True and (
-            not re.fullmatch(r"[0-9a-f]{64}", str(h.get("binary_sha256")))
-            or h.get("binary_sha256") != pin.get("binary_sha256")
+        elif not _is_sha256(h.get("binary_sha256")) or (
+            not stub_launch(m, eng, h)
+            and h.get("binary_sha256") != pin.get("binary_sha256")
         ):
-            # stub_engine (test only): the launched process is the stub, not the engine binary
+            # a registered stub engine (test only): the launched process is the stub, not the engine binary
             got = str(h.get("binary_sha256"))
-            if re.fullmatch(r"[0-9a-f]{64}", got):
+            if _is_sha256(got):
                 # a real digest of another file: the engine's binary changed under the same
                 # version label (an engine that updates itself), so the cell is not comparable
                 res.fail(
@@ -761,6 +777,20 @@ def check_manifest_completeness(run: Run) -> GuardResult:
         res.fail(cell["cell"], f"r{rep} missing ({path})")
     for path in run.extra:
         res.fail(path.stem, f"unplanned file {path} (not in manifest)")
+    import fullcmp_manifest as fm
+
+    for u in run.manifest.get("unsupported", []):
+        # a census 'unsupported' restart cell is accepted only for an engine registered without a disk tier
+        # (fullcmp_manifest.NO_DISK_TIER, with its evidence); an engine that has a disk tier must measure it
+        res.checked += 1
+        if u.get("turns") == "restart" and u.get("engine") not in fm.NO_DISK_TIER:
+            res.fail(
+                u.get("cell"),
+                f"restart cell marked unsupported ({u.get('reason')}) but {u.get('engine')} has a disk "
+                "tier (fullcmp_manifest.NO_DISK_TIER): it must be measured",
+            )
+        else:
+            res.notes.append(f"UNSUPPORTED {u.get('cell')}: {u.get('reason')}")
     for cell, rep, reason in getattr(run, "unsupported", []):
         # the engine refused the request shape: recorded as unsupported, not a pass and not a crash
         res.checked += 1
@@ -2126,7 +2156,7 @@ MODELS = {
         "config": "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp/config.json",
     },
     "flashnext": {
-        "name": "Qwen3.8-Flash-Next-oQ3e-mtp",
+        "name": "Qwen3.8-Flash-Next-oQ2.5e-mtp",
         # NOT in the repo: MoE (512 experts, top-10) active-parameter count and per-token expert
         # bytes are not recorded. MBU/MFU stay None until they are sourced.
         "active_params": None,
@@ -2139,7 +2169,7 @@ MODELS = {
         "head_dim": 256,
         "kv_dtype_bytes": 2,
         "gdn_state": None,  # not extracted; KV term excludes the indexer (indexer_kv_heads=1, dim 128)
-        "config": "/Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ3e-mtp/config.json",
+        "config": "/Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ2.5e-mtp/config.json",
     },
 }
 

@@ -593,3 +593,119 @@ def test_a_grammar_dead_end_marks_only_that_row_and_the_step_goes_on():
     out = run(d, reqs)  # must not raise
     assert isinstance(guide.fault, Exception)
     assert tokens(out, "good") == alone
+
+
+@pytest.mark.parametrize("chunk", [3, 8, 512])
+@pytest.mark.parametrize("k", [0, 5])
+def test_prompt_logprobs_plain_forward(chunk, k):
+    from yunshu_engine.text_logprobs import top_logprobs_device
+
+    lm = TinyLM()
+    ids = prompt(71)
+    logits = lm(mx.array([ids]), cache=generic.new_cache(lm)).logits[0]
+    lp = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+    expected_ids, expected_vals = top_logprobs_device(lp[:-1], max(1, k))
+    out = run(make(lm, chunk=chunk), [request(lm, ids, n=2, prompt_logprobs=k)])
+    events = out[tuple(ids[:2])]
+    scores = events[0].prompt_logprobs
+    assert scores[0] is None
+    assert len(scores) == len(ids)
+    for i, entry in enumerate(scores[1:]):
+        assert entry["token_id"] == ids[i + 1]
+        assert entry["logprob"] == pytest.approx(float(lp[i, ids[i + 1]]), abs=2e-6)
+        if k:
+            assert [t["token_id"] for t in entry["top_logprobs"]] == expected_ids[
+                i
+            ].tolist()
+            assert [t["logprob"] for t in entry["top_logprobs"]] == pytest.approx(
+                expected_vals[i].tolist(), abs=2e-6
+            )
+        else:
+            assert "top_logprobs" not in entry
+    assert all(e.prompt_logprobs is None for e in events[1:])
+    assert max(c["T"] for c in LOG[1:]) <= 32
+
+
+def test_prompt_scoring_skips_apc_restore():
+    from types import SimpleNamespace
+
+    d = make(TinyLM())
+    d.apc = object()
+    # No coordinator may be constructed: scoring must recompute even a cached prompt.
+    d._new_coordinator = lambda *_: pytest.fail("scoring restored an APC prefix")
+    row = SimpleNamespace(req=drv.Request([1, 2], 1, prompt_logprobs=0))
+    d._restore(row)
+
+
+def test_prompt_scoring_ties_and_chunk_identity():
+    from types import SimpleNamespace
+
+    from yunshu_engine.round_driver.prompt_logprobs import score_span
+
+    ids = [1, 2, 3, 0, 1]
+    logits = mx.zeros((4, 5))
+    rows = [
+        SimpleNamespace(
+            req=drv.Request(ids, 1, prompt_logprobs=3), prompt_scores=[None]
+        )
+        for _ in range(2)
+    ]
+    score_span(rows[0], 0, logits)
+    score_span(rows[1], 0, logits[:2])
+    score_span(rows[1], 2, logits[2:])
+    assert rows[0].prompt_scores == rows[1].prompt_scores
+    assert [t["token_id"] for t in rows[0].prompt_scores[1]["top_logprobs"]] == [
+        0,
+        1,
+        2,
+    ]
+
+
+@pytest.mark.parametrize("k", [None, 0, 3])
+def test_single_prompt_token(k):
+    lm = TinyLM()
+    out = run(make(lm), [request(lm, [3], n=2, prompt_logprobs=k)])
+    events = out[(3,)]
+    assert events[0].prompt_logprobs == (None if k is None else [None])
+    assert events[1].prompt_logprobs is None
+
+
+def test_unrequested_prompt_scores_do_no_work(monkeypatch):
+    from yunshu_engine.round_driver import prompt_logprobs
+
+    monkeypatch.setattr(
+        prompt_logprobs, "score_span", lambda *_: pytest.fail("unrequested scoring")
+    )
+    lm = TinyLM()
+    ids = prompt(71)
+    events = run(make(lm), [request(lm, ids)])[tuple(ids[:2])]
+    assert all(e.prompt_logprobs is None for e in events)
+
+
+def test_prompt_scoring_chunked_equals_full_forward_bits():
+    """A lookup LM isolates scoring bits from attention/GEMM batch-shape rounding."""
+
+    class LookupLM(TinyLM):
+        def __call__(self, inputs, **kwargs):
+            table = (
+                mx.arange(VOCAB * VOCAB, dtype=mx.float32).reshape(VOCAB, VOCAB) * 0.125
+            )
+            out = table[inputs]
+            if kwargs.get("logits_to_keep") is not None:
+                out = out[:, -kwargs["logits_to_keep"] :]
+            return _Out(out)
+
+    lm = LookupLM()
+    ids = prompt(71)
+    logits = lm(mx.array([ids])).logits[0]
+    lp = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+    scores = []
+    for chunk in (3, 512):
+        events = run(make(lm, chunk=chunk), [request(lm, ids, n=1, prompt_logprobs=3)])[
+            tuple(ids[:2])
+        ]
+        scores.append(events[0].prompt_logprobs)
+    assert scores[0] == scores[1]
+    assert [e["logprob"] for e in scores[0][1:]] == [
+        float(lp[i, ids[i + 1]]) for i in range(len(ids) - 1)
+    ]

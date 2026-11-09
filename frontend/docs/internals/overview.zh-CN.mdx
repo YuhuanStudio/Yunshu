@@ -9,7 +9,7 @@ description: 引擎内部地图：服务模型、请求路径、前缀缓存、�
 
 云枢是单个进程：在 Apple Silicon 上，FastAPI 网关位于基于 MLX 的引擎之前。请求经过中间件与路由器，由 `ModelManager` 分发到对应模型的引擎，最后变成 token，再由网关转成该 API 方言的响应或流。三个想法决定了其余的设计：
 
-- **两条服务路径。** 每个 `mlx-vlm` 模型（`VLMEngine`）都由 VLM batch runner 服务（`vlm_batch_runner.py`，由 `VLMEngine._build_batch_runner` 构建）。纯文本 `mlx-lm` 模型走单请求快速路径（`_generate_fast`，直接调用 mlx-lm 的 `generate_step`）；对这类模型的并发请求会被串行化。
+- **两条服务路径。** 每个 `mlx-vlm` 模型（`VLMEngine`）都由 VLM batch runner 服务（`vlm_batch_runner.py`，由 `VLMEngine._build_batch_runner` 构建，并承载 round driver `round_driver/`）。纯文本 `mlx-lm` 模型走单请求快速路径（`_generate_fast`，直接调用 mlx-lm 的 `generate_step`）；对这类模型的并发请求会被串行化。
 - **单一 MLX 线程。** 所有 GPU 工作都在拥有 Metal stream 的单 worker 执行器上运行，事件循环不会接触 MLX 数组。
 - **一致性规则。** 缓存命中等于未命中、推测开启等于推测关闭、预演（rehearsal）不改变输出。每个内部页面都会说明适用哪条规则以及如何检查。
 
@@ -51,7 +51,7 @@ flowchart TD
 
 ## 限制
 
-云枢没有多节点模式，也不以多租户吞吐量为目标。推测解码在单请求通道中运行，因此并发请求会以不做 draft 的方式批处理。
+云枢没有多节点模式，也不以多租户吞吐量为目标。推测解码在 round driver 上运行，因此并发 row 也会一起做草稿。
 
 ## 如何验证
 
@@ -67,7 +67,7 @@ flowchart TD
     精确 checkpoint、64 对齐切点、媒体 key、RAM 与 SSD 层。
   </Card>
   <Card title="推测解码" href="/docs/internals/speculative-decoding">
-    DFlash2 与 MTP 草稿、batch-invariant 验证 kernel 与单请求通道。
+    DFlash2 与 MTP 草稿、batch-invariant 验证 kernel 与 round driver 的打包 row。
   </Card>
   <Card title="预填与预演" href="/docs/internals/prefill-and-rehearsal">
     Split-invariant 预填与下一轮预演。

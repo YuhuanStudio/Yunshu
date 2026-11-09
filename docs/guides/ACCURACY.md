@@ -15,7 +15,7 @@ noise, so it cannot see small numeric drift. Three tiers, cheapest and most sens
 The reference is always stock mlx-vlm on the same checkpoint with no Yunshu kernel imported
 (no batch_invariant, ragged KV, lane, omlx, int-code). The run asserts this. The candidate is
 what `VLMEngine._build_batch_runner` installs: oMLX verify kernels, batch-invariant and
-lane-linear projections (active in the speculative lane; older runs used NAX-packed projections), ragged KV.
+lane-linear projections (active on the round driver's packed rows; older runs used NAX-packed projections), ragged KV.
 
 ## Tier 1: teacher-forced logit alignment
 
@@ -29,7 +29,7 @@ The method behind llama.cpp `perplexity --kl-divergence` and vLLM's logprob-clos
   for a fixed random subset (256 prefill, 128 decode positions), so later comparisons never
   rerun the reference. Positions outside the subset use top-64 plus one lumped tail bucket,
   a lower bound of the true KLD; the full subset reports both (they agree within about 10%).
-* Parts: `prefill` (all positions, 2048-token chunks), `dec1` (one token per step, the
+* Parts: `prefill` (all positions, 2048-token chunks), `dec1` (one token per step, earlier the
   speculative lane), `dec6` (6-token verify blocks), `decb` / `decb8` (two-row shared batch
   on a ragged bf16 / int8 KV cache), `stockb2` (stock two-row batch, a noise floor). Decode
   windows: 8 windows of 384 steps at position 256, plus two of 128 steps at position 31488.

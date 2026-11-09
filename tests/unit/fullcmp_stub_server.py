@@ -49,9 +49,14 @@ def engine_load_lines(engine: str) -> list[str]:
         return ["DFlash enabled for stub-model as a batched drafter, draft=/stub/draft"]
     if engine == "omlx-0.7.3rc1":
         return ["DFlash enabled for stub-model as a batched drafter, draft=/stub/draft"]
-    if engine == "yunshu-main":
-        # tfbench.engaged_spec_mode_line reads the initialized runner line
-        return ["VLM batch runner: model=stub-model draft=dflash"]
+    if engine.startswith(("yunshu", "fn-yunshu")):
+        # every Yunshu engine (yunshu-main, -pb2, -next, ...) runs the round driver, which prints this
+        # line once the runner is initialized (vlm_engine._build_batch_runner; fullcmp_engaged reads it).
+        # The Flash-Next engine's drafter is the checkpoint MTP head; the Qwen3.8 engines use DFlash.
+        draft = "mtp" if engine.startswith("fn-") else "dflash"
+        return [
+            f"VLM batch runner: apc=off draft={draft} block=default verify_kernels=True kv=bf16"
+        ]
     if engine.startswith("tf-"):
         # the real TensorFold serving line (fullcmp_engaged_evidence.json tf-1.2.1 log_regex)
         return [

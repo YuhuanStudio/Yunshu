@@ -17,6 +17,9 @@ def test_direct_gpu_work_is_blocked():
         "/x/rapid-mlx/.venv/bin/python -m rapid_mlx.cli serve m",
         "git status; uv run python scripts/research/memory_ab.py --arm a=b",
         "cd x && python3 - <<'EOF'\nimport mlx.core as mx\nEOF",
+        # the verify scripts load a real model when its path exists (a Haiku ran one outside gpuq, 11-09)
+        "uv run python scripts/verify/verify_batch_api.py",
+        ".venv/bin/python scripts/regression.py --tier smoke",
     ):
         assert guard.verdict(cmd), cmd
 

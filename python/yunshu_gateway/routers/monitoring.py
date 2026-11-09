@@ -1007,6 +1007,15 @@ async def weight_residency(request: Request) -> dict[str, Any]:
     return ple_lookup_stats()
 
 
+@router.get("/kernel-fallbacks")
+async def kernel_fallbacks(request: Request) -> dict[str, Any]:
+    """Fused kernels that fell back to the upstream path: count and the first shape per kind."""
+    _check_permission(request)
+    from yunshu_engine import fallbacks
+
+    return {"fallbacks": fallbacks.counts()}
+
+
 @router.get("/ssd-cache")
 async def ssd_cache_stats(request: Request) -> dict[str, Any]:
     """SSD KV cache statistics across all loaded engines."""

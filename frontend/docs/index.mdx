@@ -21,7 +21,7 @@ Yunshu picks a serving path from the model that you load. All GPU work runs on o
 | Model | Serving path |
 |---|---|
 | Any `mlx-vlm` model (vision-language, and the Qwen3.5 / 3.6 / 3.8 family) | The VLM batch runner: continuous batching with per-request sampling, an automatic prefix cache, and image, audio and video input. |
-| Qwen3.5-family models | The same runner, plus speculative decoding (MTP or a matching drafter) in a single-request lane. |
+| Qwen3.5-family models | The same round driver, plus speculative decoding (MTP or a matching drafter) on its packed rows. |
 | Text-only `mlx-lm` models | A single-request fast path. Concurrent requests are served one after another. |
 
 See [Model support](/docs/guides/model-support) for the details of each path.

@@ -1024,6 +1024,73 @@ def test_pinned_versions_maps_yunshu_main_to_the_yunshu_pin():
     assert any("pinned tree" in v for v in fa.check_pinned_versions(run).violations)
 
 
+def _pinned_yunshu_run(head, *, stub_engines=None):
+    sha = "0f2960047855546a9f13b2631b680352b1c57cfe"
+    manifest = {
+        "run_id": "r1",
+        "pins": {
+            "yunshu": {
+                "version": "0.1.7.dev0",
+                "release_date": "2026-11-03",
+                "git_sha": sha,
+                "binary_sha256": B,
+            }
+        },
+        "yunshu": {"git_sha": sha, "python": PY},
+    }
+    if stub_engines is not None:
+        manifest["stub_engine"] = True
+        manifest["stub_engines"] = stub_engines
+    cell = {"cell": "c", "engine": "yunshu", "group": "g"}
+    return fa.Run(manifest, [_cf(cell, 0, head)], [], [], [])
+
+
+def _yunshu_head(**kw):
+    head = {
+        "run_id": "r1",
+        "version": "0.1.7.dev0",
+        "release_date": "2026-11-03",
+        "git_sha": "0f2960047855546a9f13b2631b680352b1c57cfe",
+        "python": PY,
+        "cmd": [PY, "-m", "yunshu_cli", "serve"],
+        "binary_sha256": "c" * 64,
+    }
+    head.update(kw)
+    return head
+
+
+def test_stub_digest_is_exempt_only_for_a_registered_stub_engine():
+    """A registered stub run's digest is the test interpreter's, so only its format is checked."""
+    stub_cmd = [PY, "/x/tests/unit/fullcmp_stub_server.py", "--engine", "yunshu"]
+    run = _pinned_yunshu_run(_yunshu_head(cmd=stub_cmd), stub_engines=["yunshu"])
+    assert fa.check_pinned_versions(run).violations == []
+    bad_format = _pinned_yunshu_run(
+        _yunshu_head(cmd=stub_cmd, binary_sha256="xyz"), stub_engines=["yunshu"]
+    )
+    assert any(
+        "binary sha256 missing" in v
+        for v in fa.check_pinned_versions(bad_format).violations
+    )
+
+
+def test_real_engine_digest_mismatch_still_fails_even_with_a_stub_flag():
+    """A real launch (pinned venv python, not a stub) with a wrong digest fails, whether or not the
+    manifest carries the test-only stub flag, and whether or not the engine is listed as a stub."""
+    real_cmd = [PY, "-m", "yunshu_cli", "serve"]
+    for stub_engines in (None, [], ["yunshu"]):
+        run = _pinned_yunshu_run(_yunshu_head(cmd=real_cmd), stub_engines=stub_engines)
+        assert any(
+            "not the pinned python" in v
+            for v in fa.check_pinned_versions(run).violations
+        ), stub_engines
+    # the stub argv does not rescue an unlisted engine either: only a registered stub is exempt
+    stub_cmd = [PY, "/x/tests/unit/fullcmp_stub_server.py"]
+    run = _pinned_yunshu_run(_yunshu_head(cmd=stub_cmd), stub_engines=[])
+    assert any(
+        "not the pinned python" in v for v in fa.check_pinned_versions(run).violations
+    )
+
+
 def test_manifest_engine_inverts_the_registry():
     assert fa.manifest_engine("yunshu-main") == "yunshu"
     assert fa.manifest_engine("yunshu") == "yunshu"

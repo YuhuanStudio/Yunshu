@@ -12,6 +12,8 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from yunshu_engine.serving import pauses
+
 from .shapes import Shape, synthetic_messages
 
 REQUIRED = ("ids", "finish", "ttft_ms", "decode_tps")
@@ -142,15 +144,37 @@ def ab(
     cand_send: Callable[[dict], dict],
     shapes: list[Shape],
     lossless: bool = True,
+    *,
+    paused: Callable[[float, float], bool] | None = None,
+    clock: Callable[[], float] = time.time,
 ) -> dict:
-    """Paired replay: same shapes, same seeds, interleaved per row so drift hits both arms alike."""
-    base, cand = [], []
+    """Paired replay: same shapes, same seeds, interleaved per row so drift hits both arms alike.
+
+    A pair whose wall-clock window overlaps a gpuq pause is dropped from both arms and counted in
+    ``paused_pairs_dropped``: a stopped job's wall time is not engine time. The default check reads
+    ``$GPUQ_PAUSE_FILE`` and fails closed; with no clean pair left the run raises.
+    """
+    is_paused = paused or pauses.was_paused
+    base, cand, dropped = [], [], 0
     for i, s in enumerate(shapes):
-        base += run_arm(base_send, [s], seed=1 + i)
-        cand += run_arm(cand_send, [s], seed=1 + i)
+        t0 = clock()
+        b = run_arm(base_send, [s], seed=1 + i)
+        c = run_arm(cand_send, [s], seed=1 + i)
+        if is_paused(t0, clock()):
+            dropped += 1
+            continue
+        base += b
+        cand += c
+    if not base:
+        raise ReplayError(
+            "every A/B pair overlapped a gpuq pause (or the pause file is unreadable): "
+            "no clean sample, measurement fails closed"
+        )
     res = compare(base, cand, lossless)
     res["pass"] = bool(res["ok"])
     res["complete"] = True
+    res["pairs"] = len(base)
+    res["paused_pairs_dropped"] = dropped
     res["note"] = (
         "synthetic same-shape prompts: shape-level evidence, not real-content parity"
     )

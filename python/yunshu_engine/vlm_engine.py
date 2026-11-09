@@ -1311,6 +1311,7 @@ class VLMEngine:
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_token_count,
                 "cached_tokens": cached_token_count,
+                "prompt_logprobs": _runner_extras.get("prompt_logprobs"),
                 "logprobs": _runner_extras.get("logprobs"),
                 "stopped_by_stop_sequence": bool(
                     _runner_extras.get("stopped_by_stop_sequence")
@@ -1342,6 +1343,7 @@ class VLMEngine:
         thinking = generated = cached = prompt_tokens = 0
         finish = None
         stop_seq = False
+        prompt_scores = None
         timed_out = {
             "text": "",
             "finish_reason": "timeout",
@@ -1374,6 +1376,8 @@ class VLMEngine:
                         (
                             reasoning if out.current_state == "reasoning" else parts
                         ).append(out.new_text)
+                    if out.prompt_logprobs is not None:
+                        prompt_scores = out.prompt_logprobs
                     if out.logprobs:
                         lps.extend(out.logprobs)
                     thinking = max(thinking, out.reasoning_tokens or 0)
@@ -1407,6 +1411,7 @@ class VLMEngine:
             "prompt_tokens": prompt_tokens,
             "completion_tokens": generated,
             "cached_tokens": cached,
+            "prompt_logprobs": prompt_scores,
             "logprobs": lps if params.get("logprobs") else None,
             "stopped_by_stop_sequence": stop_seq,
         }
@@ -2567,6 +2572,18 @@ class VLMEngine:
         external = choice.drafter
         if choice.kind != "none":
             logger.info("Speculative decoding: %s (%s)", choice.kind, choice.reason)
+        elif qwen4:
+            from .mlxvlm_mtp import mtp_head_problem
+
+            problem = mtp_head_problem(model_path)
+            if problem is not None:
+                logger.warning(
+                    "Qwen4 checkpoint has no detectable MTP head: %s", problem
+                )
+            logger.info(
+                "Speculative decoding: off (drafting off: %s)",
+                problem or choice.reason,
+            )
         if external:
             # DFlash drafter directory, e.g. incoai/Qwen3.8-27B-DFlash2.
             from mlx_vlm.speculative.drafters import (
@@ -3167,6 +3184,7 @@ class VLMEngine:
         prompt_cache_plan: dict | None = None,
         logprobs: bool = False,
         top_logprobs: int | None = None,
+        prompt_logprobs: int | None = None,
         min_tokens: int = 0,
         ignore_eos: bool = False,
         suppress_tokens: list[int] | None = None,
@@ -3305,6 +3323,7 @@ class VLMEngine:
             stats=stats,
             logprobs=bool(logprobs),
             top_logprobs=int(top_logprobs or 0),
+            prompt_logprobs=prompt_logprobs,
             thinking_budget=(
                 thinking_budget
                 if enable_thinking is not False
@@ -3670,6 +3689,7 @@ class VLMEngine:
             tb = effort_budget(kwargs["reasoning_effort"])
         return dict(
             params,
+            prompt_logprobs=kwargs.get("prompt_logprobs"),
             frequency_penalty=kwargs.get("frequency_penalty", 0.0) or 0.0,
             presence_penalty=kwargs.get("presence_penalty", 0.0) or 0.0,
             logit_bias=kwargs.get("logit_bias"),
@@ -3742,6 +3762,7 @@ class VLMEngine:
             # which the event stream itself never shows.
             parts = ["<think>", *reasoning, "</think>", *parts]
         if extras is not None:
+            extras["prompt_logprobs"] = stats.prompt_logprobs
             extras["prompt_tokens"] = stats.prompt_tokens
             extras["stopped_by_stop_sequence"] = stats.stop_string_hit
             if params.get("logprobs"):
@@ -3800,6 +3821,9 @@ class VLMEngine:
                         current_state=state,
                         reasoning_tokens=thinking,
                         ttft_ms=round(stats.first_token_s * 1000, 1) if first else 0.0,
+                        prompt_logprobs=stats.prompt_logprobs
+                        if not first_sent or first
+                        else None,
                         logprobs=[lp] if lp is not None else None,
                         stopped_by_stop_sequence=bool(
                             reason == "stop" and stats.stop_string_hit

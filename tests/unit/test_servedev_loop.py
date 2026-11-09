@@ -145,3 +145,39 @@ def test_ab_pairs_rows_and_marks_shape_level():
     r = replay.ab(fake_send([1, 2]), fake_send([1, 2], ttft=50), sh)
     assert r["pass"] and r["complete"] and "shape-level" in r["note"]
     assert not replay.ab(fake_send([1, 2]), fake_send([9]), sh)["pass"]
+
+
+def test_ab_drops_pairs_that_overlap_a_gpuq_pause():
+    # a pause that covers the second pair removes that pair from BOTH arms, and is counted
+    sh = [shapes.Shape(100, 4)] * 3
+    checked = []
+
+    def paused(t0, t1):
+        checked.append((t0, t1))
+        return len(checked) == 2
+
+    ticks = iter(range(1000))
+    r = replay.ab(
+        fake_send([1, 2]),
+        fake_send([1, 2]),
+        sh,
+        paused=paused,
+        clock=lambda: float(next(ticks)),
+    )
+    assert r["pass"] and r["n"] == 2 and r["pairs"] == 2
+    assert r["paused_pairs_dropped"] == 1
+    assert len(checked) == 3 and all(t0 <= t1 for t0, t1 in checked)
+
+
+def test_ab_reads_the_gpuq_pause_file_and_fails_closed(tmp_path, monkeypatch):
+    sh = [shapes.Shape(100, 4)]
+    # unreadable pause file under gpuq: every sample is treated as paused, so no evidence
+    monkeypatch.setenv("GPUQ_PAUSE_FILE", str(tmp_path / "missing.json"))
+    with pytest.raises(replay.ReplayError):
+        replay.ab(fake_send([1]), fake_send([1]), sh)
+    # a readable file with a pause far in the past: nothing dropped
+    f = tmp_path / "j.pauses.json"
+    f.write_text(json.dumps({"pauses": [[1.0, 2.0]]}))
+    monkeypatch.setenv("GPUQ_PAUSE_FILE", str(f))
+    r = replay.ab(fake_send([1]), fake_send([1]), sh)
+    assert r["pass"] and r["paused_pairs_dropped"] == 0

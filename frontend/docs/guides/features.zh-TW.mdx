@@ -24,7 +24,7 @@ description: 依領域列出 Yunshu 的每一項功能，附上狀態與涵蓋�
 | Round driver（實驗性） | Yunshu 自有、針對 dense Qwen3.5 系列模型的推測 round driver | 實驗性 | [Round driver](/docs/developers/round-driver) |
 | 模型支援 | 依系列說明哪些已調校、哪些走通用路徑、哪些已驗證 | 穩定 | [模型支援](/docs/guides/model-support) |
 | 下一回合預演 | 符合條件的文字回覆之後，以標準 stride 做 APC 預演；boundary/exact 是會改變數值、須明確啟用的選項 | 穩定 | [預填與預演](/docs/internals/prefill-and-rehearsal) |
-| Batch 轉 lane 升級 | 共用 batch 縮減到一個 row 時，符合條件的貪婪請求會移到推測 lane；多 row 推測尚未實作 | 穩定 | [推測解碼](/docs/internals/speculative-decoding) |
+| 多列推測 | 每個請求都是 round driver 的一個 row；並行 row 也會一起起草（MTP 鏈、共用驗證預算的 DFlash2 草稿） | 穩定 | [推測解碼](/docs/internals/speculative-decoding) |
 
 ## API
 

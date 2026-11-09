@@ -154,6 +154,7 @@ def _audit(chain):
         chain["rows"], [fm.SMOKE_BATCH], chain["pin"], chain["plan"].engine_order
     )
     manifest["stub_engine"] = True  # test only: the engine process is the family stub
+    manifest["stub_engines"] = sorted({c["engine"] for c in manifest["cells"]})
     mpath = chain["work"] / "family-audit-manifest.json"
     mpath.write_text(json.dumps(manifest, indent=2) + "\n")
     return subprocess.run(
@@ -389,6 +390,7 @@ def test_a_flagged_row_fails_the_audit(chain, tmp_path):
         chain["rows"], [fm.SMOKE_BATCH], chain["pin"], chain["plan"].engine_order
     )
     manifest["stub_engine"] = True
+    manifest["stub_engines"] = sorted({c["engine"] for c in manifest["cells"]})
     mpath = tmp_path / "audit-manifest.json"
     mpath.write_text(json.dumps(manifest, indent=2) + "\n")
     res = subprocess.run(

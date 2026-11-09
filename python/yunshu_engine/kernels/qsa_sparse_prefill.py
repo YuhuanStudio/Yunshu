@@ -275,6 +275,20 @@ def eligible(
     )
 
 
+def ineligible_reason(
+    queries: Any, keys: Any, values: Any, block_indices: Any, block_size: int
+) -> str:
+    """Why ``eligible`` is False, naming the shapes (for the one-time fallback log)."""
+    shape = lambda a: tuple(getattr(a, "shape", ()))  # noqa: E731
+    dtype = lambda a: str(getattr(a, "dtype", "?"))  # noqa: E731
+    return (
+        f"queries={shape(queries)} {dtype(queries)} keys={shape(keys)} {dtype(keys)} "
+        f"block_indices={shape(block_indices)} block_size={block_size}; kernel takes "
+        f"queries [1,{H},T>2,{D}] bf16, keys [1,{KV},*,{D}] bf16, top-k {TOPK}, block {BLOCK}, "
+        f"M5-class GPU (ready={ready()})"
+    )
+
+
 def attend(
     queries: mx.array,
     keys: mx.array,
@@ -341,6 +355,14 @@ def install() -> bool:
             and queries.shape[2] > 2
         ):
             COUNTS["fallback"] += 1  # a prefill-shaped call that kept upstream's kernel
+            from .. import fallbacks
+
+            fallbacks.record(
+                "qsa_sparse_prefill",
+                ineligible_reason(
+                    queries, keys, values, block_indices, kw["block_size"]
+                ),
+            )
         return original(queries, keys, values, block_indices, query_ends, **kw)
 
     dispatch._yunshu_sparse_prefill = True  # type: ignore[attr-defined]

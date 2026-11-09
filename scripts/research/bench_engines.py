@@ -66,8 +66,8 @@ OMLX_BIN = str(ENVS / "omlx-bench/venv/bin/omlx")
 LLAMA_BIN = str(ENVS / "llamacpp/build/bin/llama-server")
 SPLASH_BIN = "/opt/homebrew/bin/splash"
 # refsync (2026-10-12): latest engines in their own envs under ENVS (the ids above stay for the 0.1.4 snapshot)
-FN_CHECKPOINT = "/Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ3e-mtp"
-FN_CHECKPOINT_PLE = "/Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ3e-mtp"
+FN_CHECKPOINT = "/Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ2.5e-mtp"
+FN_CHECKPOINT_PLE = "/Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ2.5e-mtp-ple-ssd"
 FN_GGUF = "/Volumes/Micron/yunshu-refsync/gguf-flashnext/UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf"
 FN_GGUF_MTP = (
     "/Volumes/Micron/yunshu-refsync/gguf-flashnext/MTP/mtp-Qwen3.8-Flash-Next-Q8_0.gguf"
@@ -262,16 +262,16 @@ ENGINES: dict[str, Engine] = {
             1.0,
             75.0,
         ),
-        # ---- full comparison: the pb2-generic candidate (detached tree 89740a60f, own pin) ----
+        # ---- full comparison: the pb2-generic candidate (detached tree 15ab1a0f, own pin) ----
         Engine(
             "yunshu-next",
-            "Yunshu next (pb2-generic, 89740a60f)",
+            "Yunshu next (pb2-generic, 15ab1a0f)",
             "dflash",
             "same",
             CHECKPOINT,
             DRAFTER,
             "yunshu",
-            "pb2-generic tree 89740a60f (TFB_YUNSHU_SRC of its own pin); same launch as yunshu-pb2; default settings; drafter auto-discovered",
+            "pb2-generic tree 15ab1a0f (TFB_YUNSHU_SRC of its own pin); same launch as yunshu-pb2; default settings; drafter auto-discovered",
             1.0,
             75.0,
         ),

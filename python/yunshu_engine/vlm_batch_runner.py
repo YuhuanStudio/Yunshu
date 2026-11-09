@@ -94,6 +94,7 @@ class RunStats:
     used_apc: bool = False
     used_draft: bool = False
     # Per-token {"token_id", "logprob", "top_logprobs": [...]} when requested.
+    prompt_logprobs: list | None = None
     last_logprob: dict | None = None
     extra: dict = field(default_factory=dict)
     # Timing / progress (time.perf_counter() values; 0.0 = not reached yet). The
@@ -735,6 +736,7 @@ class VLMBatchRunner:
         stats: RunStats | None = None,
         logprobs: bool = False,
         top_logprobs: int = 0,
+        prompt_logprobs: int | None = None,
         thinking_budget: int | None = None,
         prompt_preopens_thinking: bool = False,
         thinking_start_token: str = "<think>",
@@ -806,6 +808,7 @@ class VLMBatchRunner:
                 )
             ),
             use_draft=use_draft,
+            prompt_logprobs=prompt_logprobs,
             logprobs=bool(logprobs),
             top_logprobs=int(top_logprobs or 0) if logprobs else 0,
             processors=processors,
@@ -1138,30 +1141,42 @@ class VLMBatchRunner:
                 media["rope_delta"],
             )
         t_add = time.perf_counter()
-        hit = driver.add(
-            Request(
-                **media,
-                ids=job.ids,
-                max_tokens=job.max_tokens,
-                sampling=job.sampling,
-                # the driver reads logprobs out in fp32 itself (``Request.logprobs``)
-                processors=[
-                    p
-                    for p in (job.processors or [])
-                    if not isinstance(p, Fp32LogitsProcessor)
-                ],
-                logprobs=job.logprobs,
-                top_logprobs=job.top_logprobs,
-                draft=job.allow_draft,
-                guide=job.guide if self._driver_guide(job) else None,
-                budget=job.budget,
-                handle=job,
-                extra_hash=self._driver_extra_hash(job),
-                use_apc=use_apc,
-                cache_store=job.cache_store,
-                cache_plan=job.cache_plan,
+        # The request id reaches the cache events only through the APC's id queue for these
+        # ids (``checkpoint_lengths`` pops it while the row plans its restore). Only a row that
+        # plans checkpoints queues one, and the queue entry is dropped again after ``add``.
+        request_id = job.stats.request_id
+        linked = use_apc and driver.apc is not None and self.apc_manager is not None
+        if linked:
+            self.apc_manager.register_console_request(job.ids, request_id)
+        try:
+            hit = driver.add(
+                Request(
+                    **media,
+                    ids=job.ids,
+                    max_tokens=job.max_tokens,
+                    sampling=job.sampling,
+                    # the driver reads logprobs out in fp32 itself (``Request.logprobs``)
+                    processors=[
+                        p
+                        for p in (job.processors or [])
+                        if not isinstance(p, Fp32LogitsProcessor)
+                    ],
+                    prompt_logprobs=job.prompt_logprobs,
+                    logprobs=job.logprobs,
+                    top_logprobs=job.top_logprobs,
+                    draft=job.allow_draft,
+                    guide=job.guide if self._driver_guide(job) else None,
+                    budget=job.budget,
+                    handle=job,
+                    extra_hash=self._driver_extra_hash(job),
+                    use_apc=use_apc,
+                    cache_store=job.cache_store,
+                    cache_plan=job.cache_plan,
+                )
             )
-        )
+        finally:
+            if linked:
+                self.apc_manager.release_console_request(job.ids, request_id)
         hit_stages.add("add", time.perf_counter() - t_add)
         hit_stages.mark("add_end")
         self._vocab_owner = driver
@@ -1233,6 +1248,8 @@ class VLMBatchRunner:
                     self._emit(job, fault)
                 continue
             stats = job.stats
+            if event.prompt_logprobs is not None:
+                stats.prompt_logprobs = event.prompt_logprobs
             now = time.perf_counter()
             first = stats.generated == 0
             if first:
@@ -1935,6 +1952,7 @@ class _Job:
     seed: int | None
     cancel_event: Any
     stats: RunStats
+    prompt_logprobs: int | None = None
     priority: int = 0
     queued: float = 0.0
     last_service: float = 0.0
