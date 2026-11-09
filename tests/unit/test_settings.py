@@ -207,7 +207,11 @@ def test_no_raw_yunshu_env_reads():
 
 def test_every_mentioned_name_is_registered():
     """Code and docstrings only name real settings (catches stale flags)."""
-    allowed = {"YUNSHU_NAME", "YUNSHU_LOGGERS"}
+    allowed = {
+        "YUNSHU_NAME",
+        "YUNSHU_LOGGERS",
+        "YUNSHU_LAYER2",
+    }  # LAYER2: a log-line marker (round_driver/stage_profile.py), not a setting
     stale = set()
     for path in (ROOT / "python").rglob("*.py"):
         for name in re.findall(r"YUNSHU_[A-Z0-9_]*[A-Z0-9]", path.read_text()):

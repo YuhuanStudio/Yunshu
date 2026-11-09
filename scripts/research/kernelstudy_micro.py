@@ -22,6 +22,23 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 EXTERNAL = Path("/Volumes/Micron/yunshu-refsync/omlx/omlx/patches")
+MLX_ROOT = Path("/Volumes/Micron/yunshu-refsync/mlx")
+# The upstream sources this study harvests are read at the commit recorded in vendor.json
+# (git show), never from the clone's working tree: refsync fast-forwards the clone, and a
+# newer Steel header broke the harvest contract (2026-11-09).
+MLX_PIN = "36969c094354086e15d2a327a9c50feb20b9cf11"
+
+
+def pinned_text(root: Path, rel: str, commit: str = MLX_PIN) -> str:
+    """``rel`` as it is at ``commit`` in the git clone ``root``."""
+    import subprocess
+
+    return subprocess.run(
+        ["git", "-C", str(root), "show", f"{commit}:{rel}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
 
 
 def parse_args(argv=None):
@@ -94,10 +111,7 @@ def metal_body(text, name):
 
 def latest_vector(mx, q, k, v, context):
     """Execute release-0.32.4 vector bodies on the installed Metal runtime."""
-    path = Path(
-        "/Volumes/Micron/yunshu-refsync/mlx/mlx/backend/metal/kernels/sdpa_vector.h"
-    )
-    text = path.read_text()
+    text = pinned_text(MLX_ROOT, "mlx/backend/metal/kernels/sdpa_vector.h")
     blocks = (
         512 if context < 65536 else 1024
     )  # screen-selected splits; not upstream g17s defaults
@@ -191,9 +205,9 @@ def attention(mx, context):
             "engaged": "ours=ragged tile CK512; external=harvested MLX0.32.4 vector TK4 2pass (q_len=1,D256)",
             "external_file": "mlx/backend/metal/kernels/sdpa_vector.h:181",
             "external_sha256": hashlib.sha256(
-                Path(
-                    "/Volumes/Micron/yunshu-refsync/mlx/mlx/backend/metal/kernels/sdpa_vector.h"
-                ).read_bytes()
+                pinned_text(
+                    MLX_ROOT, "mlx/backend/metal/kernels/sdpa_vector.h"
+                ).encode()
             ).hexdigest(),
         },
     )
@@ -201,8 +215,9 @@ def attention(mx, context):
 
 def steel_header(root):
     """Harvest upstream Steel FA2 without altering loop/reduction expressions."""
-    path = root / "mlx/backend/metal/kernels/steel/attn/kernels/steel_attention.h"
-    text = path.read_text()
+    text = pinned_text(
+        root, "mlx/backend/metal/kernels/steel/attn/kernels/steel_attention.h"
+    )
     start = text.index("template <", text.index("struct DivOp"))
     # DivOp has an inner template; the kernel starts at the subsequent template.
     start = text.index("template <", text.index("};", start) + 2)
@@ -246,7 +261,7 @@ def steel_header(root):
         if name in seen:
             return ""
         seen.add(name)
-        source = (root / name).read_text().replace("#pragma once", "")
+        source = pinned_text(root, name).replace("#pragma once", "")
         return re.sub(r'^\s*#include "([^"]+)"', expand, source, flags=re.M)
 
     prefix = re.sub(r'^\s*#include "([^"]+)"', expand, prefix, flags=re.M)

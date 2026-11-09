@@ -89,11 +89,9 @@ def test_metal_body_extracts_nested_scopes_only():
 
 
 def test_release_vector_source_has_prefetch():
-    path = Path(
-        "/Volumes/Micron/yunshu-refsync/mlx/mlx/backend/metal/kernels/sdpa_vector.h"
-    )
-    if not path.exists():
+    if not probe.MLX_ROOT.exists():
         pytest.skip("external clone absent")
-    body = probe.metal_body(path.read_text(), "sdpa_vector_2pass_1")
+    text = probe.pinned_text(probe.MLX_ROOT, "mlx/backend/metal/kernels/sdpa_vector.h")
+    body = probe.metal_body(text, "sdpa_vector_2pass_1")
     assert "T k_reg[TK][qk_per_thread]" in body
     assert "for (; i + (TK - 1) * blocks < N;" in body
