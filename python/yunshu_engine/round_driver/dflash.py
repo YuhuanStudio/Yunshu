@@ -272,7 +272,7 @@ class DFlashBatch:
             self._diag = dict(rounds=0, rows=0, s=0.0, nodes=0, used=0)
 
     def _step_rows_inner(self, driver, rows) -> list[Event]:
-        from .driver import _Item
+        from .driver import _Item, _PerRow
 
         t_start = time.perf_counter()
         prof = self.prof
@@ -280,10 +280,17 @@ class DFlashBatch:
         kv_before = tree_verify.PROFILE.get("attention_kv_ms", 0.0)
 
         copies = {}
+        forced = {}
         rooms = []
         # one live row verifies up to FAST_MAX_ROWS rows; a pack shares DRIVER_MAX_ROWS
         max_rows = tree_verify.FAST_MAX_ROWS if len(rows) == 1 else DRIVER_MAX_ROWS
         for b, r in enumerate(rows):
+            run = driver._forced_window(r, min(max_rows, tree_verify.MAX_ROWS))
+            if run:
+                forced[b] = run
+                copies[b] = run
+                rooms.append(len(run))
+                continue
             room = max(0, r.req.max_tokens - r.generated - 1)
             if not r.drafting or r.force or _plain_guided(r):
                 rooms.append(0)
@@ -391,11 +398,11 @@ class DFlashBatch:
                 self.lm, mx.concatenate([res.hidden[0] for res in results])
             )
             at = 0
-            for r, w, res in zip(rows, windows, results, strict=True):
+            for b, (r, w, res) in enumerate(zip(rows, windows, results, strict=True)):
                 row_logits = packed_logits[at : at + w.shape.width]
                 at += w.shape.width
-                if not r.drafting or r.force or _plain_guided(r):
-                    it = _Item("d", r, at=0, count=1)
+                if b in forced or not r.drafting or r.force or _plain_guided(r):
+                    it = _Item("d", r, at=0, count=w.shape.width, tokens=w.tokens)
                     _, targets, extra = driver._draw(
                         [it], res.hidden[0], target_logits=row_logits
                     )[0]
@@ -466,7 +473,7 @@ class DFlashBatch:
                 committed = [toks[p] for p in path[1:]] + [targets[path[-1]]]
                 used = 0
                 for p, token in zip(path, committed, strict=True):
-                    emit_extra = extra
+                    emit_extra = extra[p] if isinstance(extra, _PerRow) else extra
                     if r.req.logprobs and lp is not None:
                         emit_extra = [lp[p, token]]
                         if r.req.top_logprobs:
@@ -474,7 +481,7 @@ class DFlashBatch:
                                 top_logprobs_device(lp[p : p + 1], r.req.top_logprobs)
                             )
                     used += driver._emit(r, [int(token)], emit_extra, events)
-                    if r.finished or r.force or _plain_guided(r):
+                    if r.finished or r.force or (b not in forced and _plain_guided(r)):
                         break
                 kept = path[:used]
                 if budget is not None and b == 0:

@@ -168,11 +168,17 @@ class FlashNextDFlash(DFlashBatch):
 
     def _step_rows(self, driver, rows) -> list[Event]:
         from ..tree_verify import TreeShape
-        from .driver import _Item
+        from .driver import _Item, _PerRow
 
         t_start = time.perf_counter()
         rooms = []
-        for r in rows:
+        forced = {}
+        for b, r in enumerate(rows):
+            run = driver._forced_window(r, flashnext.PACK_ROWS)
+            if run:
+                forced[b] = run
+                rooms.append(len(run))
+                continue
             room = max(0, r.req.max_tokens - r.generated - 1)
             rooms.append(
                 0
@@ -181,7 +187,7 @@ class FlashNextDFlash(DFlashBatch):
             )
         nodes = fair_nodes(rooms, budget=flashnext.PACK_ROWS, turn=self.turn)
         self.turn += 1
-        live = [b for b, n in enumerate(nodes) if n]
+        live = [b for b, n in enumerate(nodes) if n and b not in forced]
         chains: dict[int, mx.array] = {}
         ready = {b: self.prebuilt.pop(id(rows[b]), None) for b in live}
         self.prebuilt.clear()  # a row without a drafted round drops its queued chain
@@ -198,6 +204,8 @@ class FlashNextDFlash(DFlashBatch):
                 ready[b] = self._chain(hs[j : j + 1], pend[j : j + 1], rows[b])
         for b in live:
             chains[b] = ready[b][: nodes[b]]
+        for b, run in forced.items():
+            chains[b] = mx.array(run[: nodes[b]], dtype=mx.int32)
         windows = []
         for b, r in enumerate(rows):
             pend = mx.array([r.pending], dtype=mx.int32)
@@ -219,12 +227,14 @@ class FlashNextDFlash(DFlashBatch):
             )
             draws, at = [], 0
             shapes = [TreeShape(list(range(-1, int(w.shape[1]) - 1))) for w in windows]
-            for r, w, res, shape in zip(rows, windows, results, shapes, strict=True):
+            for b, (r, w, res, shape) in enumerate(
+                zip(rows, windows, results, shapes, strict=True)
+            ):
                 n = int(w.shape[1])
                 row_logits = packed[at : at + n]
                 at += n
-                if not r.drafting or r.force or _plain_guided(r):
-                    it = _Item("d", r, at=0, count=1)
+                if b in forced or not r.drafting or r.force or _plain_guided(r):
+                    it = _Item("d", r, at=0, count=n, tokens=w)
                     _, targets, extra = driver._draw(
                         [it], res[0][0], target_logits=row_logits
                     )[0]
@@ -270,8 +280,8 @@ class FlashNextDFlash(DFlashBatch):
                 draws.append((targets, lp, None))
             mx.async_eval(*[d[0] for d in draws])
             walked = self._queue_next(rows, windows, results, draws, nodes)
-            for r, w, res, (target, lp, extra) in zip(
-                rows, windows, results, draws, strict=True
+            for b, (r, w, res, (target, lp, extra)) in enumerate(
+                zip(rows, windows, results, draws, strict=True)
             ):
                 toks = [int(t) for t in cast(list[int], w.reshape(-1).tolist())]
                 targets = [int(t) for t in target.reshape(-1).tolist()]
@@ -283,7 +293,7 @@ class FlashNextDFlash(DFlashBatch):
                 committed = [toks[p] for p in path[1:]] + [targets[path[-1]]]
                 used = 0
                 for p, token in zip(path, committed, strict=True):
-                    emit_extra = extra
+                    emit_extra = extra[p] if isinstance(extra, _PerRow) else extra
                     if r.req.logprobs and lp is not None:
                         emit_extra = [lp[p, token]]
                         if r.req.top_logprobs:
@@ -291,7 +301,7 @@ class FlashNextDFlash(DFlashBatch):
                                 top_logprobs_device(lp[p : p + 1], r.req.top_logprobs)
                             )
                     used += driver._emit(r, [int(token)], emit_extra, events)
-                    if r.finished or r.force or _plain_guided(r):
+                    if r.finished or r.force or (b not in forced and _plain_guided(r)):
                         break
                 res[2].commit(used)
                 committed_rows.add(id(r))

@@ -11,8 +11,9 @@ the upstream batched forward (``BatchKVCache`` / left padding), the same call an
 What the layer returns to the driver are logits, not hidden states: the driver's ``_draw`` reads them
 through ``RoundDriver._logits``, which is the identity here. A prompt span yields ``[1, V]`` only when
 it ends the prompt (the first token's distribution), nothing otherwise; a decode step yields ``[N, V]``,
-one row per decoding row. No drafter: ``RoundDriver.can_draft`` is False, so every row decodes one
-token a round through its own processors, guide and sampler.
+one row per decoding window position. No drafter: ``RoundDriver.can_draft`` is False. The user
+option ``YUNSHU_JUMP_FORWARD`` (default off) batches singleton grammar continuations; T>1 on
+upstream kernels may round differently from T=1. Ordinary rows still decode one token a round.
 
 Per-row model state: mRoPE models keep ``_rope_deltas`` / ``_position_ids`` on the language model
 between calls (upstream resets it per batch). Rows interleave here, so each call swaps the row's saved
@@ -183,8 +184,8 @@ class GenericBatch:
     into batch caches (``BatchKVCache`` and the family's own batch classes, left padded, merged with
     upstream's ``_extend_cache``) and every step is ONE upstream forward over all rows, the call and
     arithmetic ``GenerationBatch._step`` makes. Same interface as ``DecodeBatch`` / ``FlashNextBatch``
-    (``join`` / ``leave`` / ``arrays`` / ``forward`` / ``commit``). The window of a row is its one
-    pending token (no drafts).
+    (``join`` / ``leave`` / ``arrays`` / ``forward`` / ``commit``). The window of a row starts with its
+    pending token, optionally followed by grammar-forced tokens (no drafter).
 
     While a row sits in a batch cache its ``row.cache`` is None (the batch owns the K/V); ``restore``
     cuts the row's own cache back out (``extract``) when its reply cache is to be stored."""
@@ -238,9 +239,27 @@ class GenericBatch:
         return [] if self.cache is None else cache_arrays(self.cache)
 
     def forward(self, lens: list[int], tokens: mx.array) -> mx.array:
-        """Every row's pending token through the model in one call; logits ``[N, V]`` in row order."""
-        if len(lens) != len(self.rows) or any(int(n) != 1 for n in lens):
-            raise ValueError("generic round driver decodes one token per row and step")
+        """One upstream call over decode windows; unpadded logits in row/window order.
+
+        The upstream prepare/finalize protocol rolls trailing padding into each cache's
+        left padding and adjusts its position offset. The T=1 call stays exactly the old call.
+        """
+        if len(lens) != len(self.rows) or any(int(n) < 1 for n in lens):
+            raise ValueError("generic round driver needs a nonempty window per row")
+        self._lens = list(lens)
+        width = max(lens)
+        pads = [width - n for n in lens]
+        if width > 1:
+            parts, at = [], 0
+            for n, pad in zip(lens, pads, strict=True):
+                parts.append(mx.pad(tokens[at : at + n], (0, pad)))
+                at += n
+            inputs = mx.stack(parts)
+            if any(pads):
+                for c in self.cache or ():
+                    c.prepare(right_padding=pads, lengths=lens)
+        else:
+            inputs = tokens[:, None]
         deltas = [r.state.rope_deltas for r in self.rows]
         kwargs = {}
         if any(d is not None for d in deltas):
@@ -251,10 +270,42 @@ class GenericBatch:
             kwargs["rope_deltas"] = (
                 deltas[0] if len(deltas) == 1 else mx.concatenate(deltas, axis=0)
             )
-        out = self.lm(tokens[:, None], cache=self.cache, **kwargs)
-        return _logits_of(out)[:, -1, :]
+        out = self.lm(inputs, cache=self.cache, **kwargs)
+        if width == 1:
+            return _logits_of(out)[:, -1, :]
+        if any(pads):
+            for c in self.cache or ():
+                c.finalize()
+        logits = _logits_of(out)
+        return mx.concatenate([logits[b, :n] for b, n in enumerate(lens)])
 
     def commit(self, used: list[int]) -> None:
+        if any(u != n for u, n in zip(used, self._lens, strict=True)):
+            # A processor can reject a forced token; keep only the verified prefix.
+            # Extracting removes each row's padding before trimming and re-merging.
+            from mlx_vlm.generate import ar
+
+            assert self.cache is not None
+            merged = None
+            for b, (r, u, n) in enumerate(
+                zip(self.rows, used, self._lens, strict=True)
+            ):
+                cache = (
+                    r.cache
+                    if r.cache is not None
+                    else [c.extract(b) for c in self.cache]
+                )
+                if n > u:
+                    for c in cache:
+                        if not c.is_trimmable():
+                            raise RuntimeError(
+                                "generic forced window cache cannot trim a rejected prefix"
+                            )
+                        c.trim(n - u)
+                merged = ar._extend_cache(merged, cache)
+            self.cache = merged
+            for r in self.rows:
+                r.cache = self.cache if len(self.rows) == 1 else None
         for r, u in zip(self.rows, used, strict=True):
             r.n += int(u)
 

@@ -777,3 +777,40 @@ def test_flash_prompt_logprobs(tiny):
         assert entry["logprob"] == pytest.approx(float(ref[i, ids[i + 1]]), abs=2e-5)
         assert [e["token_id"] for e in entry["top_logprobs"]] == top_ids[i].tolist()
     assert events[1].prompt_logprobs is None
+
+
+@pytest.mark.parametrize("backend", ["plain", "mtp", "dflash"])
+@pytest.mark.parametrize("drafting", [False, True])
+def test_forced_runs_use_windows_on_every_flash_layer(
+    tiny, monkeypatch, backend, drafting
+):
+    from tests.unit.test_round_driver_flashnext_dflash import make_dflash
+    from tests.unit.test_round_driver_generic import _ForcedGuide
+    from yunshu_engine import settings
+
+    lm, head = tiny
+    draft, restore = make_dflash(lm) if backend == "dflash" else (None, lambda: None)
+    original = settings.get
+    results = []
+    try:
+        for enabled in (False, True):
+            monkeypatch.setattr(
+                settings,
+                "get",
+                lambda key, *a, **kw: (
+                    enabled if key == "YUNSHU_JUMP_FORWARD" else original(key, *a, **kw)
+                ),
+            )
+            scripts = [list(range(7, 22)), list(range(11, 18))]
+            requests = [
+                Request(p, len(s), handle=i, guide=_ForcedGuide(s), draft=drafting)
+                for i, (p, s) in enumerate(zip(PROMPTS[:2], scripts, strict=True))
+            ]
+            out, driver = run_requests(
+                lm, requests, head=head if backend == "mtp" else None, dflash=draft
+            )
+            assert out == dict(enumerate(scripts))
+            results.append(driver.steps)
+        assert results[1] < results[0]
+    finally:
+        restore()

@@ -405,7 +405,9 @@ class CombinedGuide:
         return ConstraintGuide.plan(self, drafts, n_pos)
 
 
-def forced_tokens(guide: Any, limit: int) -> list[int]:
+def forced_tokens(
+    guide: Any, limit: int, stop_tokens=(), *, before_boundary=False
+) -> list[int]:
     """Return a singleton-token prefix without advancing the live guide."""
     if guide is None or not guide.constrained:
         return []
@@ -428,8 +430,16 @@ def forced_tokens(guide: Any, limit: int) -> list[int]:
             if word & (word - 1):
                 break
             token = int(nonzero[0]) * 32 + word.bit_length() - 1
+            arms = guide.arms(token)
+            if before_boundary and (arms or token in stop_tokens):
+                break
             out.append(token)
-            if not guide.feed(token) or not guide.constrained:
+            if (
+                not guide.feed(token)
+                or not guide.constrained
+                or arms
+                or token in stop_tokens
+            ):
                 break
     finally:
         guide.restore(cp)

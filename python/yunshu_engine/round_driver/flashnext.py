@@ -432,7 +432,7 @@ def chain_forward_capture(
 
 
 def chain_forward(lm: Any, tokens: list, caches: list, media: list | None = None):
-    """Windows ``tokens`` (each ``[1, w]``, ``1 <= w <= 2``) of independent rows through the target.
+    """Windows ``tokens`` (each ``[1, w]``, ``1 <= w <= PACK_ROWS``) of independent rows through the target.
 
     Returns ``[(HC state [1, w, hc * D], transaction)]`` in row order; the caller commits each
     transaction with the kept length or aborts it. The fused-kernel loop when the pack's HC weights
@@ -446,10 +446,10 @@ def chain_forward(lm: Any, tokens: list, caches: list, media: list | None = None
     if len({id(c) for c in caches}) != len(caches):
         raise ValueError("chain forward needs independent caches")
     if any(
-        t.ndim != 2 or t.shape[0] != 1 or not 1 <= t.shape[1] <= MAX_CHAIN
+        t.ndim != 2 or t.shape[0] != 1 or not 1 <= t.shape[1] <= PACK_ROWS
         for t in tokens
     ):
-        raise ValueError("chain forward takes one or two positions per row")
+        raise ValueError("chain forward takes 1..PACK_ROWS positions per row")
     if sum(int(t.shape[1]) for t in tokens) > DRIVER_MAX_ROWS:
         raise ValueError("chain forward exceeds the shared node budget")
     if _fused_ready(lm, _compute_dtype(lm)):
@@ -517,8 +517,8 @@ class FlashNextBatch:
         a lazy graph) through the target; returns the HC states ``[N, hc * D]`` in the same order. KV, QSA
         indexer, PLE history and GDN state advance optimistically; ``commit`` keeps ``used[b]`` positions."""
         lens = [int(n) for n in lens]
-        if len(lens) != len(self.rows) or max(lens) > MAX_CHAIN:
-            raise ValueError("Flash-Next decode window is at most two positions")
+        if len(lens) != len(self.rows) or max(lens) > PACK_ROWS:
+            raise ValueError("Flash-Next decode window is at most PACK_ROWS positions")
         starts, at = [], 0
         for n in lens:
             starts.append(at)

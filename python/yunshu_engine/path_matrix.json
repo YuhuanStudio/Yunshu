@@ -706,29 +706,31 @@
     },
     "jump_forward": {
       "module": "python/yunshu_engine/engine_fast.py",
-      "what": "Emit grammar-forced tokens without a forward (YUNSHU_JUMP_FORWARD)",
+      "what": "Batch singleton grammar continuations into a target window (YUNSHU_JUMP_FORWARD, default off)",
       "cells": {
         "batch": {
-          "s": "missing",
-          "why": "guided rows do not draft or jump",
-          "owner": "decode16",
-          "impact": "medium",
-          "absent": [
+          "s": "engaged",
+          "ev": [
             [
               "python/yunshu_engine/round_driver/driver.py",
-              "forced_tokens"
+              "_forced_window"
+            ],
+            [
+              "python/yunshu_engine/round_driver/generic.py",
+              "self._lens"
             ]
           ]
         },
         "generic": {
-          "s": "missing",
-          "why": "same as batch",
-          "owner": "unassigned",
-          "impact": "low",
-          "absent": [
+          "s": "engaged",
+          "ev": [
             [
-              "python/yunshu_engine/vlm_batch_runner.py",
-              "forced_tokens"
+              "python/yunshu_engine/round_driver/driver.py",
+              "_forced_window"
+            ],
+            [
+              "python/yunshu_engine/round_driver/generic.py",
+              "self._lens"
             ]
           ]
         },
@@ -1890,7 +1892,7 @@
     "YUNSHU_SDPA_CHUNK": "sdpa_chunk_pre_nax",
     "YUNSHU_PLE_STORAGE": "ple_ssd_rows"
   },
-  "gap_budget": 26,
+  "gap_budget": 24,
   "settings_categories": [
     "speculative",
     "vlm-runner",
@@ -2093,10 +2095,17 @@
         "impact": "medium"
       },
       "jump_forward": {
-        "s": "missing",
-        "why": "same as batch",
-        "owner": "unassigned",
-        "impact": "low"
+        "s": "engaged",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/flashnext_dflash.py",
+            "driver._forced_window"
+          ],
+          [
+            "python/yunshu_engine/round_driver/flashnext.py",
+            "PACK_ROWS positions"
+          ]
+        ]
       },
       "gpu_sampler": {
         "s": "missing",

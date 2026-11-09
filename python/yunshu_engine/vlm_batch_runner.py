@@ -957,8 +957,19 @@ class VLMBatchRunner:
     def _driver_guide(self, job: _Job) -> bool:
         """The DFlash driver advances an invariant tool-call guide itself (free text drafts,
         the call's rows are masked); any other guide runs as a ToolCallProcessor row."""
-        if self.driver is None or not self.driver.can_draft:
+        if self.driver is None:
             return False
+        # Forced windows need a live guide even without a model drafter (generic
+        # families and spec-off packed rows). Preserve the old option-off route.
+        if not self.driver.can_draft:
+            if not settings.get("YUNSHU_JUMP_FORWARD"):
+                return False
+            # top-n-sigma reads the unmasked distribution on the serial route;
+            # moving its guide before that processor would change the candidate set.
+            if any(
+                isinstance(p, TokenMaskProcessor) and p._n_sigma for p in job.processors
+            ):
+                return False
         from .constrained_spec import driver_guide
 
         rest = [p for p in job.processors if not isinstance(p, Fp32LogitsProcessor)]

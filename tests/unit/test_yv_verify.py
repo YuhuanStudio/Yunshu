@@ -222,6 +222,7 @@ def test_full_suite_has_every_stage():
         "snapshot",
         "modelprobe",
         "lane_bandwidth",
+        "jump_forward",
         "client_compat",
         "respfeat",
         "websearch",

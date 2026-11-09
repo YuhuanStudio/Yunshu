@@ -692,3 +692,118 @@ def test_packed_rows_copy_round_keeps_32_row_budget(target, monkeypatch):
     packed = [w for n, w in seen if n == 2]
     assert packed, sorted(set(seen))
     assert max(packed) <= 32
+
+
+@pytest.mark.parametrize("draft", [False, True])
+def test_forced_runs_on_packed_rows_match_serial(target, monkeypatch, draft):
+    from tests.unit.test_round_driver_generic import _ForcedGuide
+    from yunshu_engine import settings
+
+    original = settings.get
+    results = []
+    for enabled in (False, True):
+        monkeypatch.setattr(
+            settings,
+            "get",
+            lambda key, *a, **kw: (
+                enabled if key == "YUNSHU_JUMP_FORWARD" else original(key, *a, **kw)
+            ),
+        )
+        out, driver = _run(
+            target,
+            [list(range(4, 25))],
+            draft=draft,
+            tokens=15,
+            logprobs=True,
+            guide_factory=lambda: _ForcedGuide(list(range(7, 22)), vocab=512),
+        )
+        assert [t for t, _ in out[0]] == list(range(7, 22))
+        results.append((out, driver.steps))
+    assert results[0][0] == results[1][0]
+    assert results[1][1] < results[0][1]
+
+
+@pytest.mark.parametrize("width", [2, 8, 32])
+def test_forced_packed_window_hidden_and_next_state_equal_t1_bits(target, width):
+    import copy
+
+    from yunshu_engine import tree_verify as tv
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+    from yunshu_engine.round_driver.forward import logits
+    from yunshu_engine.round_driver.verify import Window, forward
+
+    driver = RoundDriver(target, plain_verify=True, stop_tokens=set(), chunk=16)
+    driver.add(Request(list(range(4, 25)), 30))
+    while not driver.batch.rows:
+        driver.step()
+    cache = driver.batch.rows[0].cache
+    serial, window = copy.deepcopy(cache), copy.deepcopy(cache)
+    tokens = list(range(7, 7 + width))
+    got = forward(
+        driver.lm,
+        [
+            Window(
+                mx.array([tokens]),
+                tv.TreeShape(list(range(-1, len(tokens) - 1))),
+                window,
+            )
+        ],
+        [],
+    )[0]
+    refs = []
+    for token in tokens:
+        ref = forward(
+            driver.lm, [Window(mx.array([[token]]), tv.TreeShape([-1]), serial)], []
+        )[0]
+        refs.append(ref.hidden)
+        tv.tree_commit(driver.lm, serial, ref, [0])
+    expected = mx.concatenate(refs, axis=1)
+    assert mx.array_equal(got.hidden, expected).item()
+    assert mx.array_equal(
+        logits(driver.lm, got.hidden[0]), logits(driver.lm, expected[0])
+    ).item()
+    tv.tree_commit(driver.lm, window, got, list(range(len(tokens))))
+    nxt = [
+        forward(driver.lm, [Window(mx.array([[20]]), tv.TreeShape([-1]), c)], [])[0]
+        for c in [serial, window]
+    ]
+    assert mx.array_equal(nxt[0].hidden, nxt[1].hidden).item()
+    for c, res in zip([serial, window], nxt, strict=True):
+        tv.tree_commit(driver.lm, c, res, [0])
+
+
+@pytest.mark.parametrize("width", [2, 8, 16])
+def test_forced_flash_window_hidden_and_next_state_equal_t1_bits(width):
+    import copy
+
+    from scripts.research.phaseb_verify import native_tiny
+
+    from yunshu_engine.round_driver import flashnext
+
+    if not mx.metal.is_available():
+        pytest.skip("GPU window identity gate")
+    lm = native_tiny()
+    cache = lm.make_cache()
+    lm(mx.array([[3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23]]), cache=cache)
+    mx.eval([c.state for c in cache])
+    serial, window = copy.deepcopy(cache), copy.deepcopy(cache)
+    tokens = list(range(7, 7 + width))
+    got, transaction = flashnext.chain_forward(lm, [mx.array([tokens])], [window])[0]
+    refs = []
+    for token in tokens:
+        ref, tx = flashnext.chain_forward(lm, [mx.array([[token]])], [serial])[0]
+        refs.append(ref)
+        tx.commit(1)
+    expected = mx.concatenate(refs, axis=1)
+    assert mx.array_equal(got, expected).item()
+    assert mx.array_equal(
+        flashnext.logits(lm, got[0]), flashnext.logits(lm, expected[0])
+    ).item()
+    transaction.commit(width)
+    nxt = [
+        flashnext.chain_forward(lm, [mx.array([[40]])], [c])[0]
+        for c in [serial, window]
+    ]
+    assert mx.array_equal(nxt[0][0], nxt[1][0]).item()
+    for _, tx in nxt:
+        tx.commit(1)

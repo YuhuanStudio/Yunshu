@@ -1006,3 +1006,41 @@ def test_packed_prompt_logprobs(tiny):
     for i, entry in enumerate(scores[1:]):
         assert entry["logprob"] == float(ref[i, ids[i + 1]])
     assert events[1].prompt_logprobs is None
+
+
+@pytest.mark.parametrize("drafting", [False, True])
+def test_forced_windows_on_packed_mtp_layer_equal_serial(tiny, monkeypatch, drafting):
+    from tests.unit.test_round_driver_generic import _ForcedGuide
+    from yunshu_engine import settings
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    lm, head = tiny
+    original = settings.get
+    steps = []
+    for enabled in (False, True):
+        monkeypatch.setattr(
+            settings,
+            "get",
+            lambda key, *a, **kw: (
+                enabled if key == "YUNSHU_JUMP_FORWARD" else original(key, *a, **kw)
+            ),
+        )
+        d = RoundDriver(lm, drafter=head if drafting else None, stop_tokens=set())
+        scripts = [list(range(7, 25)), list(range(11, 22))]
+        out = {0: [], 1: []}
+        for i, script in enumerate(scripts):
+            d.add(
+                Request(
+                    PROMPTS[i],
+                    len(script),
+                    handle=i,
+                    guide=_ForcedGuide(script, vocab=512),
+                    draft=drafting,
+                )
+            )
+        while d.busy():
+            for event in d.step():
+                out[event.handle].append(event.token)
+        assert out == dict(enumerate(scripts))
+        steps.append(d.steps)
+    assert steps[1] < steps[0]
