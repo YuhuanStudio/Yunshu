@@ -163,6 +163,31 @@ def validate(receipt):
         raise ValueError("missing int8 oracle evidence")
     if not caps["int8"] and int8:
         raise ValueError("unexpected int8 evidence")
+    if payload.get("checkpoint") is not None:
+        # A real checkpoint is valid only as the served configuration: the kernel stack the server
+        # installs, with split-invariant prefill engaged on qwen3_5 (the 27B path).
+        kernels = payload.get("serving_kernels")
+        if not isinstance(kernels, dict):
+            raise ValueError("missing served kernel evidence")
+        if (
+            payload["layer"] == "qwen3_5"
+            and kernels.get("split_prefill") != "split64-v1"
+        ):
+            raise ValueError(
+                "split-invariant prefill is not engaged on the served qwen3_5"
+            )
+        long_burst = payload.get("long_burst")
+        if not isinstance(long_burst, list) or sorted(
+            c.get("mode") for c in long_burst
+        ) != ["greedy", "seeded"]:
+            raise ValueError("missing long-row burst evidence")
+        for cell in long_burst:
+            if (
+                cell.get("schedule") != "burst"
+                or len(cell["rows"]) != 3
+                or any(len(row) != payload["tokens"] for row in cell["rows"])
+            ):
+                raise ValueError("incomplete long-row burst evidence")
     # Legacy receipts included scheduler telemetry; it is not arithmetic identity.
     return {key: value for key, value in payload.items() if key != "execution"}
 
@@ -179,52 +204,19 @@ def build(layer, model):
     import mlx.core as mx
 
     if model:
-        if layer == "flash_next":
-            from types import SimpleNamespace
-
-            from yunshu_engine.kernels import omlx
-            from yunshu_engine.qwen4_mtp import configure_lane, load_native_head
-            from yunshu_engine.vlm_engine import VLMEngine
-
-            omlx.apply()
-            holder = SimpleNamespace()
-            wrapper = VLMEngine._load_vision_model(holder, Path(model))
-            lm = wrapper.language_model
-            config = json.loads((Path(model) / "config.json").read_text())
-            head = load_native_head(
-                config,
-                holder._qwen4_mtp_weights,
-                direct_norms=holder._qwen4_direct_norms,
-            )
-            configure_lane(lm, head, None)
-            from mlx_lm.utils import load_tokenizer
-
-            ids = load_tokenizer(Path(model)).encode(
-                "Explain why the sky is blue. " * 30
-            )
-        else:
-            from scripts.research.probe_wide_verify import setup
-
-            wrapper, lm, ids = setup(model)
-            from yunshu_engine.kernels import ragged_kv
-
-            ragged_kv.set_dense_lane(False)
-            from yunshu_engine.mlxvlm_mtp import _load_drafter_in_memory
-
-            head = optional_mtp_head(_load_drafter_in_memory, model)
-        return wrapper, lm, head, real_prompts(ids, model)
+        return _build_checkpoint(layer, model)
     if layer == "generic":
         from tests.unit.test_round_driver_generic import PROMPTS, TinyLM
 
         lm = TinyLM()
-        return lm, lm, None, PROMPTS
+        return lm, lm, None, PROMPTS, None
     if layer == "flash_next":
         from types import SimpleNamespace
 
         from tests.unit.test_round_driver_flashnext import PROMPTS, make_tiny
 
         lm, head = make_tiny()
-        return SimpleNamespace(language_model=lm), lm, head, PROMPTS
+        return SimpleNamespace(language_model=lm), lm, head, PROMPTS, None
     if layer == "qwen3_5":
         from tests.unit.test_round_driver import _tiny
 
@@ -287,7 +279,64 @@ def build(layer, model):
             [3 + (i * 7 + salt) % 500 for i in range(n)]
             for salt, n in enumerate((17, 33, 25))
         ],
+        None,
     )
+
+
+def _build_checkpoint(layer, model):
+    """A real checkpoint, loaded and kernel-installed the way VLMEngine serves it.
+
+    The loader, the drafter and the kernel stack are the served ones: VLMEngine._load_vision_model,
+    the drafter VLMEngine loads for MTP / Qwen4 heads, and serving_kernels.install (the block
+    VLMEngine runs). Returns (wrapper, lm, head, prompts, kernels).
+    """
+    from types import SimpleNamespace
+
+    from mlx_lm.utils import load_tokenizer
+
+    from yunshu_engine import serving_kernels, settings
+    from yunshu_engine.qwen4_family import is_qwen4_family
+    from yunshu_engine.vlm_engine import VLMEngine
+
+    holder = SimpleNamespace()
+    wrapper = VLMEngine._load_vision_model(holder, Path(model))
+    lm = wrapper.language_model
+    config = json.loads((Path(model) / "config.json").read_text())
+    tokenizer = load_tokenizer(Path(model))
+    if layer == "flash_next":
+        from yunshu_engine.qwen4_mtp import load_native_head
+
+        head = load_native_head(
+            config,
+            holder._qwen4_mtp_weights,
+            direct_norms=holder._qwen4_direct_norms,
+        )
+        ids = tokenizer.encode("Explain why the sky is blue. " * 30)
+    else:
+        from scripts.research.probe_wide_verify import FILLER
+
+        from yunshu_engine.mlxvlm_mtp import _load_drafter_in_memory
+
+        head = optional_mtp_head(_load_drafter_in_memory, model)
+        ids = tokenizer.encode(FILLER, add_special_tokens=False)
+    kernels, _ = serving_kernels.install(
+        wrapper,
+        config,
+        drafter=head,
+        draft_kind="mtp",
+        spec_family=VLMEngine.is_spec_model_type(config.get("model_type")),
+        model_path=Path(model),
+        tokenizer=tokenizer,
+        block=settings.get("YUNSHU_MTP_BLOCK_SIZE"),
+    )
+    if not is_qwen4_family(config):
+        # the runner's KV setup for the qwen3_5 round driver (VLMEngine._build_batch_runner)
+        from yunshu_engine.kernels import ragged_kv
+
+        if ragged_kv.supports(lm):
+            ragged_kv.install()
+            ragged_kv.enable(None)
+    return wrapper, lm, head, real_prompts(ids, model), kernels
 
 
 def int8_reference():
@@ -426,7 +475,7 @@ def _capture(layer, model=None, tokens=8, device="gpu"):
     from yunshu_engine.vlm_batch_runner import RowParams
 
     mx.set_default_device(mx.cpu if device == "cpu" else mx.gpu)
-    wrapper, lm, head, prompts = build(layer, model)
+    wrapper, lm, head, prompts, kernels = build(layer, model)
     baseline = global_state()
     execution = []
     assert not baseline["gdn_prefill._PREFILL"] and not baseline["gdn_prefill._TAIL"]
@@ -504,8 +553,17 @@ def _capture(layer, model=None, tokens=8, device="gpu"):
     cells = []
     spec_cells = []
     cache_cells = []
+    long_cells = []
     for mode in ("greedy", "seeded"):
         solo = [run([i], mode, "solo")[0] for i in range(3)]
+        if model:
+            # The long APC probe row joins the short rows in one burst. Its prefill (and every
+            # row's logprobs) must not depend on the rows decoding beside it: solo == burst, bitwise.
+            long_index = cache_prompt_index(prompts)
+            long_solo = run([long_index], mode, "solo")[0]
+            long_rows = run([0, 1, long_index], mode, "burst")
+            assert long_rows == [solo[0], solo[1], long_solo], (mode, "long-row burst")
+            long_cells.append(dict(mode=mode, schedule="burst", rows=long_rows))
         for schedule in ("solo", "burst", "stagger", "cancel", "media", "repeat"):
             rows = (
                 solo
@@ -630,6 +688,15 @@ def _capture(layer, model=None, tokens=8, device="gpu"):
             "media": "embedding-equivalence",
         },
     )
+    if model:
+        # Real checkpoints only (the tiny receipts keep their payload bytes): the served kernel
+        # stack that serving_kernels.install engaged, and the long-row burst cells.
+        payload["serving_kernels"] = {
+            key: value
+            for key, value in (kernels or {}).items()
+            if isinstance(value, (str, int, bool, type(None)))
+        }
+        payload["long_burst"] = long_cells
     receipt = dict(
         complete=True, payload=payload, sha256=digest(payload), execution=execution
     )

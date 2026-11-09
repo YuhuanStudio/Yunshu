@@ -2678,171 +2678,21 @@ class VLMEngine:
                     drafter = _load_drafter_in_memory(model_path)
                 validate_drafter_compatibility(self._model, drafter, "mtp")
         block = settings.get("YUNSHU_MTP_BLOCK_SIZE")
-        kernels = None
-        from .kernels import sdpa_chunk
+        from . import serving_kernels
 
-        # M1-M4 only; bounds the unfused head-dim-256 prefill score matrix
-        sdpa_chunk.install()
-        # Spec off on a spec family still runs the lane's plain-decode arithmetic
-        # (invariant kernels), so spec on == spec off token-for-token.
+        kernels, block = serving_kernels.install(
+            self._model,
+            self._config,
+            drafter=drafter,
+            draft_kind=draft_kind,
+            spec_family=spec_family,
+            model_path=model_path,
+            tokenizer=self._tokenizer,
+            block=block,
+            driver_lanes=driver_lanes,
+        )
         if qwen4:
-            from .qwen4_mtp import configure_lane
-
-            kernels, block = configure_lane(lm, drafter, block)
             self._qwen4_mtp_weights = None
-        if not qwen4 and (drafter is not None or spec_family):
-            from .kernels.omlx import apply as apply_verify_kernels
-
-            kernels = apply_verify_kernels()
-            # Lossless MTP decode: decode and verify share row-invariant kernels,
-            # so speculative output == this engine's plain decode. On Qwen3.8-27B
-            # (M5 Max) invariant + NAX-packed at block 6 decodes code/prose/json
-            # at 88.6/59.9/67.3 tok/s vs 57-67/50-53/58-62 for row-exact kernels
-            # at block 3 (the removed row-exact alternative) and
-            # 83.8/59.9/66.7 for the non-exact fast verify, with parity on every
-            # task (measured on Qwen3.8-27B, 2026-09-28).
-            # DFlash verifies through the same target forward, so it gets the
-            # same guarantee.
-            from .kernels.batch_invariant import install as install_invariant
-            from .kernels.batch_invariant import set_active
-
-            # Target projections run TensorFold's row-invariant lane matmul
-            # (M5-class tensor ops; sg8 elsewhere). 27B, in-process vs the
-            # NAX packed kernel: MTP / DFlash2 decode +0..+17% at 1K-131K
-            # with identical tokens, and 0.6 GiB less memory (no repacked copy).
-            from .kernels.tensorfold.lane_qmm import ready
-
-            if ready():
-                from .kernels import lane_linear
-
-                # (a second convert finds the driver's lanes already in place)
-                kernels["lane_linear"] = (
-                    lane_linear.convert(self._model.language_model)["converted"]
-                    or driver_lanes
-                )
-                if settings.get("YUNSHU_PREFILL_MATMUL") == "stock":
-                    lane_linear.set_stock_rows(lane_linear.STOCK_MIN_ROWS)
-                    text_cfg = self._config.get("text_config", self._config)
-                    if (
-                        kernels["lane_linear"]
-                        and text_cfg.get("hidden_size") == 5120
-                        and text_cfg.get("num_hidden_layers") == 64
-                        and nax_prefill.enable()
-                    ):
-                        nax_prefill.warmup(
-                            {
-                                module.bits
-                                for _, module in lm.named_modules()
-                                if isinstance(module, lane_linear.LaneLinear)
-                            }
-                        )
-                        kernels["nax_prefill"] = nax_prefill.arithmetic_id()
-                kernels["prefill_matmul"] = lane_linear.prefill_kernel_id()
-            if settings.get("YUNSHU_PREFILL_GDN") == "chunked":
-                from .kernels import gdn_prefill
-
-                gdn_prefill.install()
-            if settings.get("YUNSHU_PREFILL_ATTENTION") == "tile":
-                # Bit-identical to stock MLX attention, so no APC key change.
-                kernels["attn_prefill"] = (
-                    attn_prefill.arithmetic_id() if attn_prefill.enable() else None
-                )
-            kernels["invariant"] = install_invariant(
-                self._model.language_model, model=self._model, packed=False
-            )
-            # Every prompt piece uses the same arithmetic, while decode and
-            # speculative verify retain their own invariant kernels. Only the
-            # jointly qualified 27B device/ABI/weight geometry can enter it. The KV precision is
-            # not part of it: prefill and the prefix cache stay bf16 whatever the decode rows hold.
-            split_ready = bool(
-                kernels.get("nax_prefill")
-                and kernels.get("attn_prefill")
-                and settings.get("YUNSHU_PREFILL_GDN") == "chunked"
-                and all(
-                    module.output_dims < lane_linear.NARROW
-                    or module.output_dims >= 100_000
-                    or nax_prefill.split_eligible(
-                        64,
-                        module.input_dims,
-                        module.output_dims,
-                        module.bits,
-                        module.group_size,
-                        module.tiled,
-                    )
-                    for _, module in lm.named_modules()
-                    if isinstance(module, lane_linear.LaneLinear)
-                )
-            )
-            gdn_prefill.configure_split(split_ready)
-            if split_ready:
-                gdn_prefill.install_split_forward(lm)
-                kernels["split_prefill"] = "split64-v1"
-                logger.info(
-                    "Split-invariant prefill engaged: NAX/BQ32/GDN, alignment=64"
-                )
-            if settings.get("YUNSHU_ANE_FFN_SPLIT") == "splash" and split_ready:
-                from . import ane_ffn_runtime
-
-                runtime = ane_ffn_runtime.install(
-                    lm,
-                    Path(
-                        settings.get("YUNSHU_ANE_FFN_CACHE")
-                        or Path.home() / ".yunshu" / "ane_cache" / "ffn"
-                    ),
-                    str(model_path),
-                    share=settings.get("YUNSHU_ANE_FFN_SHARE"),
-                    minimum_rows=settings.get("YUNSHU_ANE_FFN_MIN_ROWS"),
-                )
-                if runtime and settings.get("YUNSHU_ANE_FFN_TRACE"):
-                    runtime.trace = True
-                    runtime.split.profile(True)
-                kernels["ane_ffn_split"] = (
-                    ane_ffn_runtime.kernel_suffix() if runtime else None
-                )
-            # The runner turns them on for spec and lone AR target steps.
-            set_active(False)
-            if draft_kind == "dflash" and drafter is not None:
-                # Reduced candidate vocabulary for the DFlash lattice (draft_vocab.logits_subset).
-                from .draft_vocab import DRAFT_VOCAB as DFLASH_KEEP
-                from .draft_vocab import install as _install_dflash_vocab
-
-                assert self._model is not None
-                found = _install_dflash_vocab(
-                    drafter, self._model.language_model, DFLASH_KEEP, self._tokenizer
-                )
-                kernels["draft_vocab"] = DFLASH_KEEP if found else None
-            if draft_kind == "mtp" and drafter is not None:
-                # The lane's own MTP rounds (one host read per cycle, the head
-                # run over every verify row inside the verify's graph), fused
-                # residual+norm layers and a reduced draft vocabulary. Same
-                # tokens as upstream's loop; Qwen3.8-27B, single requests, HTTP
-                # decode tok/s 1K/8K/32K/131K: code_python 45.8/68.6/53.4/55.9
-                # -> 55.2/69.5/62.5/59.7, novel_en 48.5/42.2/43.3/32.7 ->
-                # 55.3/49.9/44.5/35.0 (measured 2026-09-29).
-                from . import mtp_lane
-                from .draft_vocab import DRAFT_VOCAB
-                from .draft_vocab import install as install_draft_vocab
-                from .kernels import lane_layers
-
-                kernels["mtp_lane"] = mtp_lane.install()
-                kernels["copy_rows"] = mtp_lane.set_copy_rows(
-                    settings.get("YUNSHU_SPEC_COPY_ROWS"),
-                    mtp_lane.verify_max_rows(bool(kernels.get("lane_linear")), lm),
-                )
-                kernels["lane_layers"] = lane_layers.install()
-                found = install_draft_vocab(
-                    drafter, self._model.language_model, DRAFT_VOCAB, self._tokenizer
-                )
-                kernels["draft_vocab"] = DRAFT_VOCAB if found else None
-            # Invariant kernels cost little per extra verify row and peak at 6
-            # for MTP. A DFlash drafter proposes a whole block in one forward
-            # and upstream adapts the depth to acceptance under this ceiling,
-            # so the ceiling is the block it was trained on.
-            if block is None and drafter is not None:
-                if draft_kind == "dflash":
-                    block = int(getattr(drafter.config, "block_size", 0)) or None
-                else:
-                    block = 6
         self._prefix_invariant_dispatch = bool(kernels and kernels.get("invariant"))
         # After the kernels: the identity names the prefill matmul they installed.
         self._apc_prefill_stride = apc_prefill_stride(
