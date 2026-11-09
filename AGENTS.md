@@ -13,11 +13,12 @@ cached), prefix reuse, capability completeness. Qwen3.8-27B is the first fully t
 (Qwen3-Omni), ASR/TTS, Realtime voice, image/video generation and embeddings are supported capabilities, not the
 identity — fix them when shared with the LLM/VLM path or explicitly prioritized. [Yunmo](../Yunmo) is one consumer.
 
-**Non-goals (do not reintroduce):** no distributed/multi-node mesh, no throughput/batching race, no
-multi-tenant control plane. Custom Metal kernels only when a same-checkpoint A/B proves an end-to-end win with
-matching output. Performance = TTFT, decode speed, prefix reuse (cold and warm).
-Single-node console exception (2026-10-07): multiple API keys with per-key usage/quotas, writing engine settings and
-editing CORS are in scope; multi-node and a wider multi-tenant control plane are not.
+**Scope (2026-11-09):** concurrent throughput/latency is a performance axis next to single-stream speed (the round
+driver batches concurrent rows; no regression of single-stream or identity). Multi-device is not current work but a
+possible future line (designed fresh). Out: a multi-tenant control plane beyond the console's API keys + quotas.
+Custom Metal kernels only when a same-checkpoint A/B proves an end-to-end win with matching output.
+Performance = TTFT, decode speed, prefix reuse, concurrent throughput/latency (cold and warm).
+Console (2026-10-07): multiple API keys with per-key usage/quotas, writing engine settings and editing CORS are in scope.
 
 This repo is mid-**refocus** away from its old "production platform / distributed Infra" framing. The
 whitepaper and the wave-narrative VALIDATION_REPORT are retired — do not cite or resurrect their claims.
