@@ -143,6 +143,20 @@ class MTPHead:
             row.mtp_cache = None
         self.rows.extend(rows)
 
+    def restore(self, row: Any) -> list | None:
+        """The row's head cache cut to its ``row.n`` kept positions (copied), the layout of the drafting APC
+        salt; None when the head lags the target (it did not absorb every kept position)."""
+        if row.hslot is None or row.hn < row.n:
+            return None
+        caches = self.make_cache()
+        for li, c in enumerate(caches):
+            got = self.slots.read_prefix(li, row.hslot, row.n)
+            if got is None:
+                return None
+            c.keys, c.values = got
+            c.offset = int(row.n)
+        return caches
+
     def leave(self, gone: list) -> None:
         ids = {id(r) for r in gone}
         for r in self.rows:

@@ -1434,6 +1434,7 @@ class VLMBatchRunner:
                         row.drafting
                         and getattr(job.driver, "dflash", None) is None
                         and flashnext.decode_caches(job.driver, row) is None
+                        and getattr(row, "head_cache", None) is None
                     ),
                 ),
                 ("no reply tokens", len(row.context) <= len(row.req.ids)),
@@ -1448,6 +1449,10 @@ class VLMBatchRunner:
         )
         # a Flash-Next head row stores its head's KV beside the target's (the drafting salt's layout)
         caches = flashnext.decode_caches(job.driver, row) if row.drafting else None
+        if caches is None and getattr(row, "head_cache", None) is not None:
+            caches = list(row.cache) + list(
+                row.head_cache
+            )  # the packed MTP batch's row
         self._defer_decode_cache(group, job, caches=caches or list(row.cache))
         return self._decode_pending_job() is job
 

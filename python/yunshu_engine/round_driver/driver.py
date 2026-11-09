@@ -349,6 +349,9 @@ class _Row:
     slot: int | None = None  # KV slot in the decode batch
     hslot: int | None = None  # KV slot in the MTP head's batch
     hn: int = 0  # positions absorbed by the MTP head (after joining)
+    head_cache: list | None = (
+        None  # the head's KV cut out of its slots as the row leaves finished
+    )
     drafting: bool = False  # the row has an MTP head (prefill or batch)
     hit: int = 0  # prompt tokens restored from the APC prefix cache
     ckpts: list = field(default_factory=list)  # APC checkpoint lengths ahead
@@ -946,6 +949,28 @@ class RoundDriver:
         ):
             # the last row leaves a batch cache: cut its own cache out so the reply can be stored
             self.batch.restore(gone[0])
+        if (
+            type(self.batch) is DecodeBatch
+            and len(gone) == 1
+            and not self.rows
+            and gone[0].slot is not None
+            and gone[0].finished
+            and gone[0].apc is not None
+            and self.finish_hook is not None
+            and gone[0].req.use_apc
+            and gone[0].req.cache_store
+            and len(gone[0].context) > len(gone[0].req.ids)
+        ):
+            # the packed batch decodes in shared slots: cut the row's own caches (and its head's) out
+            # before they are released, so the reply is stored like a DFlash-batch row's
+            row = gone[0]
+            try:
+                self.batch.restore(row)
+                if self.head is not None and row.drafting and row.hslot is not None:
+                    row.head_cache = self.head.restore(row)
+            except Exception:
+                logger.warning("decode cache cut-out failed", exc_info=True)
+                row.cache = None
         if len(gone) == 1 and not self.rows and gone[0].cache:
             # The last row leaves with its own K/V buffers (the DFlash batch decodes in the row's
             # caches): pool them for the next request's cache hit, as the runner's _finish does
@@ -1767,6 +1792,11 @@ class RoundDriver:
         self.batch.commit(used_all)
         gone = [r for r in rows if r.finished]
         self.rows = [r for r in self.rows if not r.finished]
+        for b, r in head_rows:
+            if r.finished:
+                # the early absorb wrote every kept position of the last window into the head's KV:
+                # the head is level with the target, so the reply's head cache can be stored
+                r.hn += used_all[b]
         self._release(gone)
         if early_out is not None:
             alive = [(i, b, r) for i, (b, r) in enumerate(head_rows) if not r.finished]

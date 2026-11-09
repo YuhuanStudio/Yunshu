@@ -160,6 +160,7 @@ def test_round_driver_last_finished_row_defers_its_reply_cache():
     runner = _runner()
     drv = RoundDriver.__new__(RoundDriver)
     drv.generic = False
+    drv.batch = None
     drv.rows, drv.head, drv.dflash = [], None, None
     drv.finish_hook = runner._driver_store_decode
     drv._release([row])

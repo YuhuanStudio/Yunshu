@@ -135,6 +135,34 @@ class Slots:
         k_buf[slot, :, :n, :] = k[0, :, :n, :]
         v_buf[slot, :, :n, :] = v[0, :, :n, :]
 
+    def write_codes(self, i: int, slot: int, c: Any, n: int) -> None:
+        """Store a row's first ``n`` keys from an int8 row cache (codes + scales) as they are."""
+        if not self.int8:
+            raise ValueError("Slots: int8 row cache in a bf16 slot pool")
+        self._buf(i, c.keys)
+        for buf, src in (
+            (self.k, c.keys),
+            (self.v, c.values),
+            (self.ks, c.k_scales),
+            (self.vs, c.v_scales),
+        ):
+            b = buf[i]
+            assert b is not None
+            b[slot, :, :n, :] = src[0, :, :n, :]
+
+    def read_prefix(self, i: int, slot: int, n: int) -> tuple | None:
+        """Detached copies of a slot's first ``n`` keys of layer ``i`` (``[1, HKV, n, D]``): bf16 (k, v) or
+        int8 (codes, codes, key scales, value scales). Evaluated here: the slot is reused after the row
+        leaves, and a one-slot pool's buffers go to the restore pool."""
+        if self.k[i] is None:
+            return None
+        bufs = (self.k, self.v, self.ks, self.vs) if self.int8 else (self.k, self.v)
+        out = tuple(
+            mx.contiguous(cast(mx.array, b[i])[slot : slot + 1, :, :n, :]) for b in bufs
+        )
+        mx.eval(*out)
+        return out
+
     def arrays(self) -> list[mx.array]:
         return [a for a in self.k + self.v + self.ks + self.vs if a is not None]
 
@@ -339,10 +367,49 @@ class DecodeBatch:
             else:
                 for row in rows:
                     c = row.cache[i]
-                    self.slots.write_prefix(i, row.slot, c.keys, c.values, row.n)
+                    if getattr(c, "k_scales", None) is not None:
+                        # a restored int8 row cache (a stored reply): its codes are the slot's
+                        self.slots.write_codes(i, row.slot, c, row.n)
+                    else:
+                        self.slots.write_prefix(i, row.slot, c.keys, c.values, row.n)
         for row in rows:
             row.cache = None
         self.rows.extend(rows)
+
+    def restore(self, row: Any) -> None:
+        """Give ``row`` its own cache back (cut out of the slots / state lists, copied) before it leaves:
+        the layout its prefill had (bf16 ``KVCache`` / int8 ``Int8KVCache`` per attention layer, the
+        model's GDN cache objects), holding ``row.n`` positions."""
+        if (
+            row.cache is not None
+            or row.slot is None
+            or row.n < 1
+            or row not in self.rows
+        ):
+            return
+        b = self.rows.index(row)
+        cache = self.lm.make_cache()
+        for i, lin in enumerate(self.linear):
+            if lin:
+                cache[i][0], cache[i][1] = self.conv[i][b], self.state[i][b]
+                continue
+            got = self.slots.read_prefix(i, row.slot, row.n)
+            if got is None:
+                raise RuntimeError("decode batch: attention layer without keys")
+            c = cache[i]
+            if self.slots.int8:
+                from ..kernels.int8_kv import Int8KVCache
+
+                c = cache[i] = Int8KVCache()
+                c.keys, c.values, c.k_scales, c.v_scales = got
+            else:
+                c.keys, c.values = got
+            c.offset = int(row.n)
+        gdn = [a for i, lin in enumerate(self.linear) if lin for a in cache[i]]
+        mx.eval(
+            *[a for a in gdn if a is not None]
+        )  # copies, not views of the batch lists
+        row.cache = cache
 
     def leave(self, gone: list) -> None:
         """Drop rows (finished or cancelled) from the batch."""
