@@ -161,8 +161,26 @@ class Int8KVCache(KVCache):
         )
 
 
+def to_bf16_cache(cache):
+    """A bf16 ``KVCache`` holding ``dequantize_kv`` of an int8 row cache's stored keys.
+
+    A restored int8 cache (a standing reply handed to its follow-up) must not enter a prefill as it
+    is: the model's attention uses what ``update_and_fetch`` returns, which for an int8 cache is the
+    raw codes. Converted here, the suffix prefills on the same values decode reads, and the row
+    joins the batch through ``from_kv`` again (quantizing dequantized codes returns the same codes
+    and scales), so the follow-up decodes on the state the reply left."""
+    out = KVCache()
+    n = int(cache.offset)
+    if cache.keys is None or n == 0:
+        out.offset = n
+        return out
+    out.keys, out.values = cache.dequantized(n)
+    out.offset = n
+    return out
+
+
 def is_int8_cache(cache) -> bool:
     return getattr(cache, "k_scales", None) is not None
 
 
-__all__ = ["Int8KVCache", "dequantize_kv", "is_int8_cache"]
+__all__ = ["Int8KVCache", "dequantize_kv", "is_int8_cache", "to_bf16_cache"]

@@ -801,7 +801,12 @@ class RoundDriver:
             warm = hit.get("warm_cache") if hit else None
             prefix = int(hit["prefix_len"]) if hit else 0
             if warm is not None and len(warm) == want and 0 < prefix < len(ids):
-                row.cache = list(warm[:n])
+                from ..kernels import int8_kv
+
+                row.cache = [
+                    int8_kv.to_bf16_cache(c) if int8_kv.is_int8_cache(c) else c
+                    for c in warm[:n]
+                ]
                 if row.mtp_cache is not None:
                     row.mtp_cache = list(warm[n:])
                 row.done = row.hit = prefix
