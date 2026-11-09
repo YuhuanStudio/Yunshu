@@ -201,7 +201,7 @@ class DraftVocab:
         self.full = False
         self.script = False
         self._high = self._total = 0
-        self._high_ids: list[int] = []
+        self._high_ids = []
         ids = self._text(token_ids)
         if (
             len(ids) >= PROMPT_MIN
@@ -332,7 +332,7 @@ def install(
     quantized head (its ``lm_head``, or the embedding table when tied); None when
     the head is not affine 4-bit quantized."""
     lm = target_language_model
-    head = getattr(lm, "lm_head", None)
+    head: Any = getattr(lm, "lm_head", None)
     tied = head is None
     if tied:
         head = lm.model.embed_tokens
