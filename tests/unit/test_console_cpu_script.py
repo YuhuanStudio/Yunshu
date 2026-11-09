@@ -48,8 +48,12 @@ def test_the_sampler_measures_a_busy_process_and_an_idle_one():
         busy.kill()
         idle.kill()
     assert b and i
-    assert mod.summarize(b)["cpu_mean_pct"] > 50
-    assert mod.summarize(i)["cpu_mean_pct"] < 5
+    busy_pct = mod.summarize(b)["cpu_mean_pct"]
+    idle_pct = mod.summarize(i)["cpu_mean_pct"]
+    # Relative, not absolute: under ci-local's parallel suite the busy loop got 31.6% of a core
+    # (2026-11-09, twice), so "> 50%" failed though the sampler told busy from idle fine.
+    assert idle_pct < 5
+    assert busy_pct > max(10.0, 4 * idle_pct)
 
 
 def test_help_and_no_pkill():
