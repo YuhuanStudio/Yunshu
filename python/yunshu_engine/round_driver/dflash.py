@@ -87,6 +87,11 @@ class DFlashBatch:
         # A lone row's cost-aware node budget (the lane's NodeBudget: 0 / 7 / 15 nodes by measured
         # landing and round cost): id(row) -> NodeBudget
         self.budgets: dict[int, Any] = {}
+        from ..spec_schedule import ModePriors
+
+        self.mode_priors = (
+            ModePriors()
+        )  # greedy and sampled rows keep separate landing priors
         self.turn = 0
         logger.info(
             "Round driver DFlash packed: shared 32-node budget, context=%d", self.keep
@@ -209,7 +214,9 @@ class DFlashBatch:
             self.tails.pop(id(row), None)
             self.walk_rows.pop(id(row), None)
             self.prebuilt.pop(id(row), None)
-            self.budgets.pop(id(row), None)
+            gone_budget = self.budgets.pop(id(row), None)
+            if gone_budget is not None:
+                self.mode_priors.learn(row.keyed is not None, gone_budget)
             self.prof.finish(id(row))
 
     def arrays(self):
@@ -308,7 +315,11 @@ class DFlashBatch:
             budget = self.budgets.get(id(r))
             if budget is None:
                 budget = self.budgets[id(r)] = NodeBudget(
-                    15, prior=dflash_tree.PRIOR, widths=(7, 15)
+                    15,
+                    prior=self.mode_priors.prior(
+                        r.keyed is not None, dflash_tree.PRIOR
+                    ),
+                    widths=(7, 15),
                 )
             nodes = [
                 min(nodes[0], budget.choose(max(0, r.req.max_tokens - r.generated - 1)))

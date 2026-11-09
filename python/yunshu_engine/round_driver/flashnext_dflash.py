@@ -106,7 +106,10 @@ class FlashNextDFlash(DFlashBatch):
         found = self.budgets.get(id(row))
         if found is None:
             found = self.budgets[id(row)] = NodeBudget(
-                min(CHAIN_DEPTH, self.positions), prior=CHAIN_PRIOR
+                min(CHAIN_DEPTH, self.positions),
+                prior=self.mode_priors.prior(
+                    getattr(row, "keyed", None) is not None, CHAIN_PRIOR
+                ),
             )
         return found
 

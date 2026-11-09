@@ -156,7 +156,33 @@ class NodeBudget:
         del bucket[:-SAMPLES]
 
 
-__all__ = ["NodeBudget"]
+class ModePriors:
+    """Per-mode (greedy / sampled) landing prior carried across rows.
+
+    A sampled row lands fewer drafted nodes than a greedy one, so the two modes keep separate
+    priors: a new row starts from what finished rows of ITS mode learned (blended with the
+    static prior), and a row's observations never touch the other mode's state. The budget
+    only sizes the verify tree, so the emitted tokens do not depend on it."""
+
+    BLEND = 0.5  # weight of a finished row's learned landing in its mode's prior
+
+    def __init__(self) -> None:
+        self._p: dict[bool, list[float]] = {}
+
+    def prior(self, sampled: bool, static) -> list[float]:
+        return list(self._p.get(bool(sampled), static))
+
+    def learn(self, sampled: bool, budget: NodeBudget) -> None:
+        if budget.rounds < WARMUP + PROBE:
+            return  # too little history to say anything about the mode
+        cur = self._p.get(bool(sampled), list(budget.p))
+        self._p[bool(sampled)] = [
+            (1 - self.BLEND) * c + self.BLEND * v
+            for c, v in zip(cur, budget.smoothed(), strict=False)
+        ]
+
+
+__all__ = ["ModePriors", "NodeBudget"]
 
 
 # -- chain depth ---------------------------------------------------------------------

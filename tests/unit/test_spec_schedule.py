@@ -172,3 +172,17 @@ def test_widths_keep_the_budget_on_row_steps():
     # unrestricted, the linear fit between the probes lands between the steps
     free = [n for seed in range(4) for n in _stepped(seed, None)]
     assert any(8 <= n <= 14 for n in free)
+
+
+def test_sampled_rows_do_not_move_the_greedy_prior():
+    from yunshu_engine.spec_schedule import PROBE, WARMUP, ModePriors
+
+    static = [0.75, 0.5, 0.35, 0.25]
+    mp = ModePriors()
+    sampled = NodeBudget(4, prior=mp.prior(True, static))
+    for _ in range(WARMUP + PROBE + 4):
+        sampled.observe(4, [], 40.0)  # a sampled row that lands nothing
+    mp.learn(True, sampled)
+    assert mp.prior(False, static) == static  # greedy rows keep the static prior
+    assert mp.prior(True, static)[0] < static[0]  # sampled rows start lower
+    assert NodeBudget(4, prior=mp.prior(False, static)).p == static
