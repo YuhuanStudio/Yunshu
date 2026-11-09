@@ -70,7 +70,6 @@ def main():
     from yunshu_engine.kernels import gdn_prefill, lane_linear, omlx, ragged_kv
     from yunshu_engine.kernels.batch_invariant import install, set_active
     from yunshu_engine.mrope import clear_rope_state
-    from yunshu_engine.spec_schedule import install_chain_budget
 
     raw_conv = d2._grouped_dynamic_convolve
     compiled_conv = mx.compile(raw_conv) if 1 in a.compile_conv else raw_conv
@@ -110,7 +109,6 @@ def main():
     ragged_kv.install()
     ragged_kv.set_dense_lane(True)
     context_install(lm)
-    install_chain_budget()
     target_head = lm.lm_head
     target_weight = target_head.weight
     arms = {}

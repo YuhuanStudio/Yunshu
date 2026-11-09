@@ -10,7 +10,7 @@ readback is needed inside a copy island.
 from __future__ import annotations
 
 import logging
-from typing import Any, cast
+from typing import Any
 
 import mlx.core as mx
 
@@ -157,173 +157,13 @@ def resume_chain(original, model, draft, cache, hidden, *, copy, draft_cache, **
             proxy.close()
 
 
-def _copy_gate(lm, draft, cache, kw) -> bool:
-    """The copy / fast-tree wrapper's preconditions (greedy, lane-ready, row bounds)."""
-    from mlx_vlm.speculative.common import _dflash_block_total
-
-    from . import mtp_lane, tree_verify
-    from .keyed_sampling import tree_supported
-
-    return not (
-        not tree_supported(kw.get("sampler"), kw.get("greedy_sampling", True))
-        or mtp_lane._STATE["context"] is None
-        or mtp_lane.copy_rows_for_model(lm) < 3
-        or not hasattr(draft, "candidate_selector")
-        or callable(getattr(draft, "prepare_target_hidden", None))
-        or context_window(draft) is None
-        or not tree_verify.supported(lm)
-        or not tree_verify.lane_projections(lm)
-        or not tree_verify.lane_ready(lm, cache)
-        or mtp_lane.verify_max_rows(True, lm) < 16
-        or _dflash_block_total(draft, kw.get("draft_block_size"))
-        > mtp_lane.verify_max_rows(tree_verify.lane_projections(lm), lm)
-    )
-
-
-def chain_reasons(lm, draft, cache, kw) -> list[str]:
-    """Names of the fast-tree preconditions this request fails (diagnostic for the chain fallback log)."""
-    from mlx_vlm.speculative.common import _dflash_block_total
-
-    from . import dflash_fast, mtp_lane, settings, tree_verify
-    from .keyed_sampling import tree_supported
-
-    checks = {
-        "spec_tree_not_auto": settings.get("YUNSHU_SPEC_TREE") != "auto",
-        "sampler_unsupported": not tree_supported(
-            kw.get("sampler"), kw.get("greedy_sampling", True)
-        ),
-        "no_context": mtp_lane._STATE["context"] is None,
-        "copy_rows": mtp_lane.copy_rows_for_model(lm) < 3,
-        "no_candidate_selector": not hasattr(draft, "candidate_selector"),
-        "prepare_target_hidden": callable(
-            getattr(draft, "prepare_target_hidden", None)
-        ),
-        "no_context_window": context_window(draft) is None,
-        "tree_unsupported": not tree_verify.supported(lm),
-        "no_lane_projections": not tree_verify.lane_projections(lm),
-        "cache_not_lane_ready": not tree_verify.lane_ready(lm, cache),
-        "verify_rows": mtp_lane.verify_max_rows(True, lm) < 16,
-        "block_total": _dflash_block_total(draft, kw.get("draft_block_size"))
-        > mtp_lane.verify_max_rows(tree_verify.lane_projections(lm), lm),
-        "fast_ineligible": not dflash_fast.eligible(lm, draft, cache, kw),
-    }
-    return [name for name, failed in checks.items() if failed]
-
-
-def takes_guided(model, draft, cache, kw) -> bool:
-    """Whether the DFlash fast tree takes this tool-guided request (it masks the call's rows
-    on its chain); otherwise constrained_spec runs the guided chain. ``kw`` may be the
-    server-rounds keywords (``first_bonus`` an array) or the rounds keywords."""
-    from mlx_vlm.speculative import utils
-
-    from . import dflash_fast, settings
-
-    if not getattr(utils._dflash_rounds, "_yunshu_copy", False):
-        return False  # only this wrapper hands a guided request to the fast tree
-    from .constrained_spec import current_request, tree_guide
-
-    request = current_request()
-    if request is not None and not tree_guide(request.guide):
-        return False  # response-format guides mask every row: the guided chain
-    lm = getattr(model, "language_model", model)
-    kw = dict(kw)
-    bonus = kw.get("first_bonus")
-    if hasattr(bonus, "reshape"):
-        kw["first_bonus"] = int(bonus.reshape(-1).item())
-    return bool(
-        settings.get("YUNSHU_SPEC_TREE") == "auto"
-        and _copy_gate(lm, draft, cache, kw)
-        and dflash_fast.eligible(lm, draft, cache, kw, guided=True)
-    )
-
-
-def install() -> bool:
-    """Install once; unsupported and sampled requests retain their original loop."""
-    from mlx_vlm.speculative import dflash, utils
-
-    from .spec_schedule import install_chain_budget
-
-    install_chain_budget()
-    current = utils._dflash_rounds
-    if getattr(current, "_yunshu_copy", False):
-        return True
-    if getattr(current, "_yunshu_tree", False):
-        from . import settings
-
-        return bool(
-            settings.get("YUNSHU_SPEC_TREE") != "tree"
-            and getattr(current, "_yunshu_copy_underneath", False)
-        )  # A prior force-tree wrapper delegates after an engine reload.
-    choose = dflash._dflash_next_block_size
-
-    def next_block(draft, block, remaining, initial=None):
-        if isinstance(draft, CopyDraft):
-            return draft.choose(block, remaining)
-        return choose(draft, block, remaining, initial)
-
-    def rounds(model, draft, cache, hidden, **kw):
-        from . import dflash_fast, mtp_lane, settings
-
-        lm = getattr(model, "language_model", model)
-        if mtp_lane._STATE["guide"] is not None:
-            # constrained_spec.run sends a guided request here only when this predicate
-            # holds (otherwise it runs the guided chain itself)
-            if not takes_guided(model, draft, cache, kw):
-                yield from current(model, draft, cache, hidden, **kw)
-                return
-            yield from dflash_fast.rounds(
-                model, draft, cache, hidden, _chain=current, **kw
-            )
-            return
-        if not _copy_gate(lm, draft, cache, kw):
-            logger.info(
-                "Speculative lane chain: %s",
-                ",".join(chain_reasons(lm, draft, cache, kw)),
-            )
-            yield from current(model, draft, cache, hidden, **kw)
-            return
-        context = mtp_lane._STATE["context"]
-        rows = mtp_lane.copy_rows_for_model(lm)
-        if settings.get("YUNSHU_SPEC_TREE") == "auto" and dflash_fast.eligible(
-            lm, draft, cache, kw
-        ):
-            yield from dflash_fast.rounds(
-                model, draft, cache, hidden, _chain=current, **kw
-            )
-            return
-        logger.info(
-            "Speculative lane copy chain: %s",
-            ",".join(chain_reasons(lm, draft, cache, kw)),
-        )
-        proxy = CopyDraft(draft, context, int(kw["first_bonus"]), rows)
-        iterator = current(model, proxy, cache, hidden, **kw)
-        try:
-            for token, state in iterator:
-                proxy.emitted(int(token))
-                yield token, state
-        finally:
-            try:
-                iterator.close()
-            finally:
-                proxy.close()
-
-    # Keep the original depth controller installed across engine reloads.
-    cast(Any, next_block)._yunshu_budget = True
-    cast(Any, rounds)._yunshu_copy = True
-    utils._dflash_rounds = rounds
-    dflash._dflash_next_block_size = next_block
-    return True
-
-
 def configure(
     language_model: Any, rows: int, *, invariant: bool, lane_projections: bool
 ) -> tuple[int, bool]:
-    """Apply the existing setting to this target and install only the measured lane."""
+    """Apply the copy-rows setting to this target; True when the measured lane is certified."""
     from . import mtp_lane
 
     limit = mtp_lane.verify_max_rows(lane_projections, language_model)
     effective = mtp_lane.set_copy_rows(rows, limit)
-    enabled = bool(
-        effective >= 3 and invariant and lane_projections and limit >= 16 and install()
-    )
+    enabled = bool(effective >= 3 and invariant and lane_projections and limit >= 16)
     return effective, enabled

@@ -367,22 +367,4 @@ def mtp_tree_rounds_batch(
                 return
 
 
-def install() -> bool:
-    """Route upstream's MTP round loop (the server path, one greedy row)
-    through the tree rounds (idempotent)."""
-    from mlx_vlm.speculative import utils as spec_utils
-
-    current = spec_utils._mtp_rounds_batch
-    if getattr(current, "_yunshu_tree", False):
-        return True
-    original = current
-
-    def rounds(*args, **kwargs):
-        return mtp_tree_rounds_batch(*args, _original=original, **kwargs)
-
-    rounds._yunshu_tree = True
-    spec_utils._mtp_rounds_batch = rounds
-    return True
-
-
-__all__ = ["install", "mtp_tree_rounds_batch", "search_tree"]
+__all__ = ["mtp_tree_rounds_batch", "search_tree"]

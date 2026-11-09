@@ -121,7 +121,6 @@ def main():
     from yunshu_engine.kernels import gdn_prefill, lane_linear, omlx, ragged_kv
     from yunshu_engine.kernels.batch_invariant import install, set_active
     from yunshu_engine.mrope import clear_rope_state
-    from yunshu_engine.spec_schedule import install_chain_budget
 
     omlx.apply()
     model, processor = load(a.model)
@@ -134,7 +133,6 @@ def main():
     ragged_kv.install()
     ragged_kv.set_dense_lane(True)
     install_context(lm)
-    install_chain_budget()
     choose_main = dflash._dflash_next_block_size
     draft, kind = load_drafter(a.drafter, kind="dflash")
     quantize_drafter(draft, 8)
