@@ -23,8 +23,11 @@ from yunshu_engine.gemma4_assistant import (
     load_assistant_drafter,
 )
 
-_REAL_DRAFTER = Path("models/gemma-4-E4B-it-assistant-bf16")
-_REAL_TARGET = Path("models/gemma-4-e4b-it-bf16")
+# The real checkpoints live on the external model disk. These were relative "models/..." paths,
+# which never exist from the repo root, so the real-weight tests always skipped (found 2026-11-10).
+_MODELS = Path("/Volumes/P5Plus/models")
+_REAL_DRAFTER = _MODELS / "gemma-4-E4B-it-assistant-bf16"
+_REAL_TARGET = _MODELS / "gemma-4-e4b-it-bf16"
 
 H = 16  # hidden_size
 V = 64  # vocab_size
@@ -405,16 +408,13 @@ def test_real_assistant_proposer_acceptance():
 
     from yunshu_engine.gemma4_assistant import Gemma4AssistantProposer
 
-    target_dir = "models/gemma-4-e4b-it-bf16"
-    if not __import__("pathlib").Path(target_dir).exists():
+    if not _REAL_TARGET.exists():
         pytest.skip("target not mounted")
-    ret = load_model(__import__("pathlib").Path(target_dir), strict=False)
+    ret = load_model(_REAL_TARGET, strict=False)
     target = ret[0] if isinstance(ret, tuple) else ret
-    tok = load_tokenizer(__import__("pathlib").Path(target_dir))
+    tok = load_tokenizer(_REAL_TARGET)
     tm = target.language_model.model
-    tcfg = json.loads(
-        (__import__("pathlib").Path(target_dir) / "config.json").read_text()
-    )
+    tcfg = json.loads((_REAL_TARGET / "config.json").read_text())
     prop = Gemma4AssistantProposer.from_paths(
         str(DRAFTER_DIR_FOR_TEST), tm.embed_tokens.weight, tm.embed_scale, tcfg
     )
@@ -544,7 +544,7 @@ def test_spec_decode_sampling_is_stochastic_and_valid():
     assert s1 != s2  # sampling genuinely stochastic across seeds
 
 
-_DRAFTER_DIR = Path("models/gemma-4-E4B-it-assistant-bf16")
+_DRAFTER_DIR = _REAL_DRAFTER
 DRAFTER_DIR_FOR_TEST = _DRAFTER_DIR
 
 
