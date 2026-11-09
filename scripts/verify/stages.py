@@ -214,8 +214,19 @@ def _unit_args(ctxs: list, rep: int = 0) -> list:
     ]
 
 
+TFBENCH_DEFAULT_KINDS = ["prose", "code"]  # what tfbench runs without --only-kind
+
+
 def _kind_args(kinds: list, all_kinds: list) -> list:
-    return [x for k in kinds for x in ("--only-kind", k)] if kinds != all_kinds else []
+    """--only-kind flags, omitted only when they would name exactly tfbench's own default.
+
+    Before 2026-11-09 the flags were dropped whenever ``kinds`` was the suite's full list, so
+    the zh suite (all kinds = zhcn, zhtw) ran tfbench's default prose/code and every Chinese
+    cell came back 'missing'."""
+    del all_kinds
+    if list(kinds) == TFBENCH_DEFAULT_KINDS:
+        return []
+    return [x for k in kinds for x in ("--only-kind", k)]
 
 
 def _decode_est_min(

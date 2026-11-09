@@ -25,3 +25,17 @@ def test_arm_env_can_restore_the_default_drafter():
 def test_arm_env_overrides_pins_but_not_the_scratch_dir():
     env = _multimodal_env({"YUNSHU_VLM_DRAFT": "mtp", "YUNSHU_MEDIA_DIR": "/y"}, "/x")
     assert env["YUNSHU_VLM_DRAFT"] == "mtp" and env["YUNSHU_MEDIA_DIR"] == "/x"
+
+
+def test_zh_kinds_are_always_passed_to_tfbench():
+    """2026-11-09: the zh suite dropped --only-kind (its kinds were 'all' kinds) and ran
+    tfbench's default prose/code, so every Chinese cell was missing."""
+    from verify.stages import _kind_args
+
+    assert _kind_args(["zhcn", "zhtw"], ["zhcn", "zhtw"]) == [
+        "--only-kind", "zhcn", "--only-kind", "zhtw",
+    ]
+    assert _kind_args(["prose", "code"], ["prose", "code"]) == []
+    assert _kind_args(["prose", "code", "zhcn", "zhtw"], ["prose", "code", "zhcn", "zhtw"])[-2:] == [
+        "--only-kind", "zhtw",
+    ]

@@ -2469,7 +2469,8 @@ def parse_args(argv=None):
     ap.add_argument(
         "--only-kind",
         action="append",
-        choices=["prose", "code", *fm.FAMILY_KINDS],
+        # zhcn / zhtw: Simplified / Taiwan-Traditional Chinese essays (prompts/zhcn-*, zhtw-*)
+        choices=["prose", "code", "zhcn", "zhtw", *fm.FAMILY_KINDS],
     )
     ap.add_argument(
         "--thinking",
