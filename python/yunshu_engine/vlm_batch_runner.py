@@ -1433,6 +1433,13 @@ class VLMBatchRunner:
                 ("overflowed", bool(getattr(job, "overflowed", False))),
                 ("MTP batch row", row.cache is None),
                 (
+                    # int8 reply caches are not handed to the follow-up (its turn-2 output was
+                    # wrong); the prefix cache stays bf16 and the follow-up re-prefills the reply
+                    "int8 KV",
+                    getattr(getattr(job, "driver", None), "kv_format", "bf16")
+                    == "int8",
+                ),
+                (
                     "MTP head row without its head cache",
                     bool(
                         row.drafting

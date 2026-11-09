@@ -259,3 +259,43 @@ def test_int8_driver_installs_the_real_kernels_not_the_reference(monkeypatch, ta
     )
     assert tv.TILE_PARTIALS_Q8 is int8_tile.tile_partials_q8
     assert tv.TREE_ATTENTION_FUSED_Q8 is int8_tile.tree_attention_fused_q8
+
+
+def test_int8_dflash_reply_cache_matches_a_cold_bf16_forward_position_by_position(
+    target,  # noqa: F811
+):
+    """What a finished int8 DFlash row leaves in its caches (what a follow-up resumes) holds, at every
+    stored position, the keys a cold forward over the same ids computes (within int8 tolerance)."""
+    from yunshu_engine.kernels import int8_kv
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    d = RoundDriver(
+        target,
+        dflash_drafter=_draft(target),
+        stop_tokens=set(),
+        chunk=16,
+        kv_format="int8",
+    )
+    d.add(Request(PROMPTS[0], 30, handle=0))
+    held = None
+    while d.busy():
+        d.step()
+        for r in d.batch.rows:
+            if r.cache:
+                held = (list(r.cache), list(r.context))
+    assert held is not None
+    cache, context = held
+    n = int(next(c for c in cache if int8_kv.is_int8_cache(c)).offset)
+    ref = target.make_cache()
+    target.model(mx.array([context[:n]]), cache=ref)
+    for c, rc in zip(cache, ref, strict=True):
+        if not int8_kv.is_int8_cache(c):
+            continue
+        assert int(c.offset) == n
+        k, _ = c.dequantized(n)
+        rk = rc.keys[..., :n, :].astype(mx.float32)
+        err = mx.linalg.norm(k.astype(mx.float32) - rk, axis=-1) / (
+            mx.linalg.norm(rk, axis=-1) + 1e-6
+        )
+        worst = [int(i) for i in mx.argsort(-err.reshape(-1))[:4].tolist()]
+        assert float(err.max()) < 0.2, (n, worst, float(err.max()))
