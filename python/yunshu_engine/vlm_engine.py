@@ -54,7 +54,7 @@ from .memory_admission import (
 )
 from .moe_pack import tensor_quantization_override, unsupported_pack_reason
 from .paths import private_media_dir
-from .qwen4_family import QWEN4_MODEL_TYPES, is_qwen4_family
+from .qwen4_family import is_qwen4_exact_type, is_qwen4_family
 from .request import RequestOutput
 from .special_tokens import neutralize_special_text
 from .types import EngineConfig
@@ -2103,7 +2103,13 @@ class VLMEngine:
 
     # Checkpoints whose speculative decoding (MTP / DFlash draft, verify and
     # batch-invariant kernels) is validated. Every family uses the runner.
-    _SPEC_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe", *QWEN4_MODEL_TYPES)
+    # The Qwen4 family comes from the qwen4_family registry (see is_spec_model_type).
+    _SPEC_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe")
+
+    @classmethod
+    def is_spec_model_type(cls, model_type: object) -> bool:
+        """True for a top-level config model_type that runs speculative decoding."""
+        return model_type in cls._SPEC_MODEL_TYPES or is_qwen4_exact_type(model_type)
 
     def _memory_total_bytes(self) -> int:
         from .apc_manager import total_memory_bytes
@@ -2539,7 +2545,7 @@ class VLMEngine:
             )
             return runner
 
-        spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
+        spec_family = self.is_spec_model_type(self._config.get("model_type"))
         lm = self._model.language_model
         qwen4 = is_qwen4_family(self._config)
         use_driver = spec_family and self._round_driver_wanted(lm)

@@ -200,7 +200,9 @@ def wrap_qwen4(lm):
 
 def wrap_model(lm):
     """Replace the leaf modules of interest by Timed wrappers; return the list."""
-    if getattr(lm, "model_type", "") == "qwen4_exp":
+    from yunshu_engine.qwen4_family import is_qwen4_exact_type
+
+    if is_qwen4_exact_type(getattr(lm, "model_type", "")):
         return wrap_qwen4(lm)
     wrapped = []
     for i, layer in enumerate(lm.model.layers):
@@ -253,7 +255,9 @@ def main():
     from yunshu_engine.kernels.batch_invariant import set_active
 
     config = json.loads((Path(a.model_dir) / "config.json").read_text())
-    qwen4 = config.get("model_type") == "qwen4_exp"
+    from yunshu_engine.qwen4_family import is_qwen4_exact_type
+
+    qwen4 = is_qwen4_exact_type(config.get("model_type"))
     if qwen4:
         from yunshu_engine.qwen4_mtp import configure_lane
         from yunshu_engine.vlm_engine import VLMEngine
