@@ -447,7 +447,20 @@ async def run(a):
                 if a.image_audio:
                     msg = with_audio(msg)
                 cold = await probe(engine, msg, cold=True)
-                hit = await probe(engine, msg)
+                # These items test hit == cold output, so the hit must restore: on a ~171-token
+                # item the media restore-cost model skips the restore (it charges the whole cold
+                # latency as launch cost) and the hit request had cached=0 (E1 run 5, 11-09).
+                cost = getattr(engine._apc_backend, "media_restore_cost", None)
+                saved = cost.cold_s if cost is not None else None
+                if cost is not None:
+                    cost.cold_s = (
+                        0.0  # worth() admits every restore while cold_s is unset
+                    )
+                try:
+                    hit = await probe(engine, msg)
+                finally:
+                    if cost is not None:
+                        cost.cold_s = saved
                 emit(
                     {
                         "event": "parity_item",
@@ -456,6 +469,8 @@ async def run(a):
                         "cold_ids": cold["ids"],
                         "hit_ids": hit["ids"],
                         "cached": hit["cached"],
+                        "restore_skipped": hit["restore_skipped"],
+                        "pt": hit["pt"],
                         "cold_correct": cold["text"].strip() == str(gold),
                         "hit_correct": hit["text"].strip() == str(gold),
                     }
