@@ -40,6 +40,21 @@ _STATE: dict[str, Any] = {
 }
 
 
+def _note_fallback(kind: str, module: Any, exc: BaseException) -> None:
+    from .. import fallbacks
+
+    shapes = {
+        k: tuple(v.shape)
+        for k, v in (
+            module.parameters() if hasattr(module, "parameters") else {}
+        ).items()
+        if hasattr(v, "shape")
+    }
+    fallbacks.record(
+        kind, f"{type(module).__name__} {type(exc).__name__}: {exc} (params {shapes})"
+    )
+
+
 def _plan(module: Any) -> Any:
     """Cached kernel inputs of one HyperConnection module, or None when its weights are not affine."""
     from .tf_flash_next.base import AFFINE_BITS, QWeights
@@ -84,7 +99,8 @@ def _plan(module: Any) -> Any:
             up.biases,
             norm_scale,
         )
-    except Exception:  # noqa: BLE001 - any odd pack keeps the upstream path
+    except Exception as exc:  # noqa: BLE001 - any odd pack keeps the upstream path
+        _note_fallback("tf_hc_plan", module, exc)
         _STATE["modules"][key] = "ineligible"
         return None
     _STATE["modules"][key] = plan
@@ -129,7 +145,8 @@ def _moe_plan(mlp: Any) -> Any:
             "sw": sw,
             "se": se,
         }
-    except Exception:  # noqa: BLE001 - any odd format keeps the upstream MoE for that layer
+    except Exception as exc:  # noqa: BLE001 - any odd format keeps the upstream MoE for that layer
+        _note_fallback("tf_moe_plan", mlp, exc)
         _STATE["modules"][key] = "ineligible"
         return None
     _STATE["modules"][key] = plan

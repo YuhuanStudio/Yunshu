@@ -92,8 +92,10 @@ def detect_arch(model_dir: str) -> str:
     """The architecture family the capture hooks know; anything else fails closed."""
     config = json.loads((Path(model_dir) / "config.json").read_text())
     kind = config.get("model_type") or config.get("text_config", {}).get("model_type")
-    if kind in ("qwen4_exp", "qwen4_exp_text"):
-        return "qwen4_exp"
+    from yunshu_engine.qwen4_family import is_qwen4_type
+
+    if is_qwen4_type(kind):
+        return "qwen4"
     if kind in ("qwen3_5", "qwen3_5_moe", "qwen3_5_text", "qwen3_5_moe_text"):
         return "qwen3_5"
     raise RuntimeError(f"kld capture has no hooks for model_type {kind!r}")
@@ -121,19 +123,23 @@ def upcast_attention() -> None:
     mx.fast.scaled_dot_product_attention = sdpa
 
 
-def install(arm: str, arch: str = "qwen4_exp") -> None:
+def install(arm: str, arch: str = "qwen4") -> None:
     import mlx.core as mx
     from mlx_vlm.generate.ar import PromptProcessingBatch
 
-    if arch == "qwen4_exp":
-        from mlx_vlm.models.qwen4_exp import language as l4
+    if arch == "qwen4":
+        from yunshu_engine.qwen4_family import qwen4_first_module
+
+        l4 = qwen4_first_module("language")
+        if l4 is None:
+            raise RuntimeError("no mlx-vlm language module for the Qwen4 family")
     elif arch == "qwen3_5":
         from mlx_vlm.models.qwen3_5 import (
             language as l4,
         )  # same hook names: LanguageModel and the *Model body
     else:
         raise RuntimeError(f"no capture hooks for {arch}")
-    body_class = l4.Qwen4ExpModel if arch == "qwen4_exp" else l4.Qwen3_5Model
+    body_class = l4.Qwen4ExpModel if arch == "qwen4" else l4.Qwen3_5Model
 
     outdir = Path(os.environ["KLD_CACHE_DIR"])
     expect_file = outdir / "_current.json"
@@ -154,7 +160,7 @@ def install(arm: str, arch: str = "qwen4_exp") -> None:
 
     if arm == "ref":
         upcast_attention()
-    if arm == "ref" and arch == "qwen4_exp":
+    if arm == "ref" and arch == "qwen4":
         original = l4.dispatch_qsa_attention
 
         def dispatch(queries, keys, values, block_indices, query_ends, **kw):

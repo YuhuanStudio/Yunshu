@@ -14,10 +14,10 @@ def load_native_head(
     """Strictly load the retained head, respecting mixed per-module quantization."""
     import mlx.core as mx
     import mlx.nn as nn
-    from mlx_vlm.speculative.drafters.qwen4_exp_mtp.config import Qwen4ExpMTPConfig
-    from mlx_vlm.speculative.drafters.qwen4_exp_mtp.qwen4_exp_mtp import (
-        Qwen4ExpMTPDraftModel,
-    )
+
+    from .qwen4_family import qwen4_drafter_classes
+
+    Qwen4ExpMTPConfig, Qwen4ExpMTPDraftModel = qwen4_drafter_classes()
 
     if not weights:
         raise ValueError("Qwen4 MTP selected without retained native head weights")

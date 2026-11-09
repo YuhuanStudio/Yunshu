@@ -2572,6 +2572,18 @@ class VLMEngine:
         external = choice.drafter
         if choice.kind != "none":
             logger.info("Speculative decoding: %s (%s)", choice.kind, choice.reason)
+        elif qwen4:
+            from .mlxvlm_mtp import mtp_head_problem
+
+            problem = mtp_head_problem(model_path)
+            if problem is not None:
+                logger.warning(
+                    "Qwen4 checkpoint has no detectable MTP head: %s", problem
+                )
+            logger.info(
+                "Speculative decoding: off (drafting off: %s)",
+                problem or choice.reason,
+            )
         if external:
             # DFlash drafter directory, e.g. incoai/Qwen3.8-27B-DFlash2.
             from mlx_vlm.speculative.drafters import (

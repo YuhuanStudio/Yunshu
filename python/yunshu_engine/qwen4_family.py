@@ -70,3 +70,42 @@ def qwen4_first_module(sub: str = "language") -> ModuleType | None:
 def loaded_qwen4_modules(sub: str = "language") -> list[ModuleType]:
     """Family modules already in ``sys.modules`` (never imports)."""
     return [m for n in qwen4_module_names(sub) if (m := sys.modules.get(n)) is not None]
+
+
+def _own_class(module: ModuleType, suffix: str) -> Any:
+    """The class defined in ``module`` (not an imported base) whose name ends with ``suffix``."""
+    return next(
+        (
+            v
+            for k, v in vars(module).items()
+            if isinstance(v, type)
+            and k.endswith(suffix)
+            and v.__module__ == module.__name__
+        ),
+        None,
+    )
+
+
+def qwen4_drafter_classes() -> tuple[Any, Any]:
+    """``(MTPConfig, MTPDraftModel)`` of the family's native MTP drafter.
+
+    mlx-vlm names the package ``mlx_vlm.speculative.drafters.<type>_mtp`` with ``config`` and
+    ``<type>_mtp`` submodules; the classes are the first ``*MTPConfig`` / ``*MTPDraftModel`` found.
+    Raises a clear error when no type in the family has one."""
+    tried: list[str] = []
+    for t in QWEN4_MODEL_TYPES:
+        pkg = f"mlx_vlm.speculative.drafters.{t}_mtp"
+        try:
+            cfg_mod = importlib.import_module(f"{pkg}.config")
+            model_mod = importlib.import_module(f"{pkg}.{t}_mtp")
+        except ImportError:
+            tried.append(pkg)
+            continue
+        cfg = _own_class(cfg_mod, "MTPConfig")
+        model = _own_class(model_mod, "MTPDraftModel")
+        if cfg is not None and model is not None:
+            return cfg, model
+        tried.append(f"{pkg} (no *MTPConfig / *MTPDraftModel class)")
+    raise ImportError(
+        "no native Qwen4 MTP drafter module in mlx-vlm; tried " + ", ".join(tried)
+    )

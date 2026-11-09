@@ -597,8 +597,13 @@ def _speculative(kind: str, model_path: Path, config: dict) -> dict:
     try:
         from . import spec_select
         from .mlxvlm_mtp import is_mtp_capable
+        from .qwen4_family import is_qwen4_family
 
-        family = config.get("model_type") in ("qwen3_5", "qwen3_6", "qwen3_5_moe")
+        family = config.get("model_type") in (
+            "qwen3_5",
+            "qwen3_6",
+            "qwen3_5_moe",
+        ) or is_qwen4_family(config)
         mtp = family and is_mtp_capable(str(model_path))
         choice = spec_select.choose(config, spec_family=family, mtp_capable=mtp)
     except Exception:

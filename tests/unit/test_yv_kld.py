@@ -172,7 +172,7 @@ def test_capture_detects_the_architecture_and_fails_closed(tmp_path):
     from verify.kld import capture
 
     for kind, arch in (
-        ("qwen4_exp", "qwen4_exp"),
+        ("qwen4_exp", "qwen4"),
         ("qwen3_5", "qwen3_5"),
         ("qwen3_5_moe", "qwen3_5"),
     ):
