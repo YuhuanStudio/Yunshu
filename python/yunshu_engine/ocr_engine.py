@@ -326,6 +326,7 @@ class OCREngine(ActiveRequestMixin):
             raise RuntimeError("OCR engine not started")
 
         messages = self._build_messages(image_path, task, language)
+        assert self._vlm is not None  # is_loaded checked it
         result = await self._vlm.generate(
             messages=messages,
             max_tokens=4096,
