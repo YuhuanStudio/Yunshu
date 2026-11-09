@@ -376,7 +376,9 @@ def main():
                 if arm != "off":
                     server.verify_spec_mode()
                 log = server.log.read_text(errors="replace")
-                if arm == "cand" and a.draft != "mtp":
+                # the packed-DFlash evidence applies to a DFlash drafter only (not mtp, not off:
+                # a family without a drafter, e.g. Gemma-4 on the generic layer)
+                if arm == "cand" and a.draft not in ("mtp", "off"):
                     if "Round driver DFlash packed" not in log:
                         raise RuntimeError("candidate did not engage packed DFlash")
                 if arm == "cand" and "YUNSHU_KV_PRECISION=int8" in a.cand_env:
