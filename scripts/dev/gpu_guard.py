@@ -23,6 +23,7 @@ GPU = re.compile(
     | \bmlx_(lm|vlm)\.(generate|server)\b | \bmlx_(lm|vlm)\s+(generate|server)\b
     | scripts/(research|realmodel|bench)\S*\.py
     | \b(memory_ab|soak_\w+|probe_\w+|bench_\w+)\.py\b
+    | scripts/verify/verify_\w+\.py | scripts/regression\.py
     """,
     re.X,
 )

@@ -436,7 +436,7 @@ def _sections():
             _p_passfail_skip,
         ),
         (
-            "batch inference API (/v1/batch custom_id mapping)",
+            "Batch API (/v1/files + /v1/batches, custom_id mapping)",
             "smoke",
             True,
             [PY, "scripts/verify/verify_batch_api.py"],

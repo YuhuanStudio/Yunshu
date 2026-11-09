@@ -280,7 +280,11 @@ INTERFACES = [
         "GATED",
         "Responses API /v1/responses (envelope + streaming lifecycle)",
     ),
-    ("Batch /v1/batch", "GATED", "batch inference API (/v1/batch custom_id mapping)"),
+    (
+        "Batch /v1/batches",
+        "GATED",
+        "Batch API (/v1/files + /v1/batches, custom_id mapping)",
+    ),
     ("Realtime WebSocket", "GATED", "unit-tests"),
     ("MCP (model-context-protocol)", "GATED", "unit-tests"),
 ]
