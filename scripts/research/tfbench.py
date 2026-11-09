@@ -480,6 +480,11 @@ class Srv:
                 env["YUNSHU_OBSERVE"] = "1"
         elif is_yunshu and os.environ.get("TFB_OBSERVE", "1") != "0":
             env.setdefault("YUNSHU_OBSERVE", "1")
+        if is_yunshu and os.environ.get("TFB_PROFILE") == "1" and os.environ.get("YUNSHU_DEBUG_TREE_PROFILE"):
+            # A profile rep sets the engine's stage timer in this process's env (fullcmp_profile.profile_env),
+            # which the server env scrubs with every other YUNSHU_* variable: pass that one switch through,
+            # or the engine never profiles and the row reports layer 2 as missing (2026-11-09).
+            env["YUNSHU_DEBUG_TREE_PROFILE"] = os.environ["YUNSHU_DEBUG_TREE_PROFILE"]
         self.yunshu_observe_env = env.get("YUNSHU_OBSERVE")
         if self.pin is not None:
             # Pinned: `<pinned venv python> -m yunshu_cli serve ...` from the pinned tree only.

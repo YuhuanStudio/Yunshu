@@ -314,7 +314,16 @@ def test_profile_without_layer2_fields_fails_closed(chain, tmp_path):
                 if (
                     "decode_round" in stages
                 ):  # a row with no stage lines has nothing to keep
-                    row["stages"] = {"decode_round": stages["decode_round"]}
+                    # only what the three profile lines carry (the stub's YUNSHU_LAYER2 line, which the
+                    # harness now reads, also fills plan / copy_lookup / verify_*; drop those here)
+                    row["stages"] = {
+                        "decode_round": {
+                            k: v
+                            for k, v in stages["decode_round"].items()
+                            if f"stages.decode_round.{k}"
+                            in fp.EMITTED_BY_THE_ROUND_LINES
+                        }
+                    }
             out.append(json.dumps(row))
         victim.write_text("\n".join(out) + "\n")
     res = _audit(chain["raw"], chain["manifest"], chain["work"], prof, full=True)

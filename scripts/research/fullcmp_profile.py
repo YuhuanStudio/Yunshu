@@ -45,7 +45,8 @@ TREE_RE = re.compile(r"Tree verify stage profile \((\d+) rounds, ms/round\): (\{
 COMPETITOR_RE = re.compile(r"(?i)(stat|prof|timing|tok/s|\bms\b)")
 # Structured layer-2 line: stage fields the profile lines do not carry, plus the host-sync counter
 # and the op census (fullcmp_attribution.LAYER2_YUNSHU). The engine must print it for --full to pass.
-LAYER2_RE = re.compile(r"^YUNSHU_LAYER2 (\{.*\})\s*$", re.M)
+# the engine logs it through logging (timestamp / level / logger prefix); the stub prints it bare
+LAYER2_RE = re.compile(r"(?:^|: )YUNSHU_LAYER2 (\{.*\})\s*$", re.M)
 # manifest ids of the Yunshu trees: dev0 and the Phase B preview (same server and profile lines)
 YUNSHU_ENGINES = ("yunshu", "yunshu-pb2", "yunshu-next")
 
