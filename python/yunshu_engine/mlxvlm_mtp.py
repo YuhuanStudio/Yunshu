@@ -39,22 +39,31 @@ def _mlxvlm_has_mtp() -> bool:
         return False
 
 
-def is_mtp_capable(model_path: str) -> bool:
-    """True only when a supported checkpoint has indexed native MTP weights."""
+MTP_TENSOR_PREFIXES = ("mtp.", "language_model.mtp.", "model.mtp.")
+
+
+def mtp_head_problem(model_path: str) -> str | None:
+    """None when a supported checkpoint has indexed native MTP weights, else why it has none."""
     cfg_path = Path(model_path) / "config.json"
+    looked = (
+        f"looked for config mtp_num_hidden_layers > 0 and index tensors prefixed "
+        f"{', '.join(MTP_TENSOR_PREFIXES)} in {model_path}"
+    )
     if not cfg_path.exists():
-        return False
+        return f"no config.json ({looked})"
     try:
         cfg = json.loads(cfg_path.read_text())
     except Exception:
-        return False
+        return f"unreadable config.json ({looked})"
     tc = cfg.get("text_config") or cfg
     if int(tc.get("mtp_num_hidden_layers", 0) or 0) <= 0:
-        return False
+        return f"mtp_num_hidden_layers is 0 or missing ({looked})"
     from .qwen4_family import is_qwen4_family
 
     if cfg.get("model_type") not in ("qwen3_5", "qwen3_6") and not is_qwen4_family(cfg):
-        return False
+        return (
+            f"model_type {cfg.get('model_type')!r} has no native MTP loader ({looked})"
+        )
     # A config can advertise MTP even when the downloaded checkpoint omits
     # the head. Do not turn an unreadable/missing index into a positive match.
     try:
@@ -63,18 +72,25 @@ def is_mtp_capable(model_path: str) -> bool:
         )
         wm = idx.get("weight_map", idx)
         if not isinstance(wm, dict):
-            return False
+            return f"index weight_map is not a mapping ({looked})"
         shards = {
-            shard
-            for key, shard in wm.items()
-            if key.startswith(("mtp.", "language_model.mtp.", "model.mtp."))
+            shard for key, shard in wm.items() if key.startswith(MTP_TENSOR_PREFIXES)
         }
-        return bool(shards) and all(
+        if not shards:
+            return f"no indexed tensor with an MTP prefix ({looked})"
+        if not all(
             isinstance(shard, str) and (Path(model_path) / shard).is_file()
             for shard in shards
-        )
+        ):
+            return f"an MTP shard listed in the index is missing on disk ({looked})"
+        return None
     except (OSError, ValueError, TypeError, AttributeError):
-        return False
+        return f"model.safetensors.index.json missing or unreadable ({looked})"
+
+
+def is_mtp_capable(model_path: str) -> bool:
+    """True only when a supported checkpoint has indexed native MTP weights."""
+    return mtp_head_problem(model_path) is None
 
 
 def unindexed_mtp_warning(model_path: str) -> str | None:

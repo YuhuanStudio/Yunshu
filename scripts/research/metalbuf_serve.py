@@ -71,6 +71,56 @@ def owners(arrays, shape, depth: int = 8) -> list:
     return out
 
 
+def graph_nodes(arrays, cap: int = 3_000_000) -> int:
+    """Unevaluated graph size reachable from ``arrays`` (evaluated arrays have no inputs)."""
+    import io
+
+    import mlx.core as mx
+
+    arrays = [a for a in arrays if isinstance(a, mx.array)]
+    if not arrays:
+        return 0
+    buf = io.StringIO()
+    mx.export_to_dot(buf, *arrays)
+    return buf.getvalue().count("[label")
+
+
+def held_arrays(obj, depth: int = 2):
+    """(path, array) for every mx.array reachable from ``obj`` attributes / lists / dicts."""
+    import mlx.core as mx
+
+    out = []
+
+    def walk(o, path, d):
+        if isinstance(o, mx.array):
+            out.append((path, o))
+        elif d > 0 and isinstance(o, (list, tuple)):
+            for i, x in enumerate(o[:64]):
+                walk(x, f"{path}[{i}]", d - 1)
+        elif d > 0 and isinstance(o, dict):
+            for k, x in list(o.items())[:64]:
+                walk(x, f"{path}.{k}", d - 1)
+        elif d > 0 and hasattr(o, "__dict__") and not isinstance(o, type):
+            for k, x in list(vars(o).items()):
+                walk(x, f"{path}.{k}", d - 1)
+
+    walk(obj, "", depth)
+    return out
+
+
+def graph_report(driver) -> dict:
+    """Per-attribute unevaluated node counts of the driver, its rows, the batch and the head."""
+    rep = {}
+    parts = [("driver", driver)]
+    parts += [(f"row{i}", r) for i, r in enumerate(driver.rows)]
+    for name, obj in parts:
+        for path, a in held_arrays(obj, 3):
+            n = graph_nodes([a])
+            if n > 50:
+                rep[f"{name}{path}"] = n
+    return dict(sorted(rep.items(), key=lambda kv: -kv[1])[:12])
+
+
 def probe_headroom(mx, cap: int = 700_000, chunk: int = 10_000) -> int:
     held: list = []
     try:
@@ -122,6 +172,70 @@ def main() -> None:
     os.makedirs(out, exist_ok=True)
     if not os.environ.get("METALBUF_NO_MONITOR"):
         threading.Thread(target=monitor, args=(out,), daemon=True).start()
+    if os.environ.get("METALBUF_GRAPH"):
+        import mlx.core as mx
+
+        from yunshu_engine import keyed_sampling as ks
+        from yunshu_engine.round_driver import driver as drv
+
+        glog = os.path.join(out, "graph.jsonl")
+
+        def emit(rec):
+            with open(glog, "a") as f:
+                f.write(json.dumps(rec) + "\n")
+
+        orig_g = drv.RoundDriver.step
+        gcnt = {"n": 0}
+
+        def step_g(self):
+            gcnt["n"] += 1
+            try:
+                res = orig_g(self)
+            except RuntimeError as e:
+                emit(
+                    {
+                        "FAIL": str(e)[:80],
+                        "step": gcnt["n"],
+                        "active_mib": mx.get_active_memory() >> 20,
+                        "arrays": sum(
+                            1 for o in gc.get_objects() if type(o) is mx.array
+                        ),
+                        "graph": graph_report(self),
+                    }
+                )
+                raise
+            if gcnt["n"] % 5 == 0:
+                try:
+                    emit(
+                        {
+                            "step": gcnt["n"],
+                            "active_mib": mx.get_active_memory() >> 20,
+                            "cache_mib": mx.get_cache_memory() >> 20,
+                            "rows": len(self.rows),
+                            "prefill_last": getattr(self, "_prefilled_last", None),
+                            "graph": graph_report(self),
+                        }
+                    )
+                except Exception as e:  # noqa: BLE001
+                    emit({"report_error": repr(e)[:200]})
+            return res
+
+        drv.RoundDriver.step = step_g
+        orig_c = ks.candidate_rows
+
+        def cand(logprobs, params):
+            try:
+                return orig_c(logprobs, params)
+            except RuntimeError as e:
+                emit(
+                    {
+                        "FAIL_candidate": str(e)[:80],
+                        "logprob_graph": graph_nodes([logprobs]),
+                    }
+                )
+                raise
+
+        ks.candidate_rows = cand
     every = int(os.environ.get("METALBUF_CLEAR_EVERY", "0"))
     probe_every = int(os.environ.get("METALBUF_STEP_PROBE", "0"))
     if probe_every:

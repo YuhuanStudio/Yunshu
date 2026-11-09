@@ -1068,7 +1068,8 @@ def test_stub_digest_is_exempt_only_for_a_registered_stub_engine():
         _yunshu_head(cmd=stub_cmd, binary_sha256="xyz"), stub_engines=["yunshu"]
     )
     assert any(
-        "binary sha256 missing" in v for v in fa.check_pinned_versions(bad_format).violations
+        "binary sha256 missing" in v
+        for v in fa.check_pinned_versions(bad_format).violations
     )
 
 
@@ -1079,7 +1080,8 @@ def test_real_engine_digest_mismatch_still_fails_even_with_a_stub_flag():
     for stub_engines in (None, [], ["yunshu"]):
         run = _pinned_yunshu_run(_yunshu_head(cmd=real_cmd), stub_engines=stub_engines)
         assert any(
-            "not the pinned python" in v for v in fa.check_pinned_versions(run).violations
+            "not the pinned python" in v
+            for v in fa.check_pinned_versions(run).violations
         ), stub_engines
     # the stub argv does not rescue an unlisted engine either: only a registered stub is exempt
     stub_cmd = [PY, "/x/tests/unit/fullcmp_stub_server.py"]

@@ -85,6 +85,9 @@ report such a sample.
   request is wrapped in `timed`), and the release gate's `cancel_then_next` wall-time check (paused seconds are
   subtracted). Other gate checks have no timing thresholds.
 * Accuracy evals (`paired_eval`) need nothing: a pause only makes them slower.
+* The offline live-A/B replay (`scripts/servedev/replay.py`, `ab()`) reads the same contract through
+  `yunshu_engine.serving.pauses`: a pair whose window overlaps a pause is dropped from both arms and counted in
+  `paused_pairs_dropped`; with no clean pair left the run fails closed.
 * New benchmark scripts must wrap each timed sample in `timed(...)` (or check `was_paused`) before recording it.
 * Limit: preemption happens within one poll interval of the first request, so a sample can briefly share the GPU
   with a request before the stop lands. Keep `poll_s` small; the idle gate makes this rare.

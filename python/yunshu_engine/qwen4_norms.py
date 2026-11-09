@@ -16,6 +16,9 @@ _ANCHOR = re.compile(
 )
 
 
+_MIN_ANCHORS = 8
+
+
 def direct_gamma(means: list[float]) -> bool:
     """Classify a pack from multiple stable anchors; refuse ambiguous mixtures."""
     if len(means) < 8:
@@ -39,6 +42,12 @@ def infer_direct_gamma(weights: dict) -> bool:
     anchors = [
         mx.mean(v.astype(mx.float32)) for k, v in weights.items() if _ANCHOR.search(k)
     ]
+    if len(anchors) < _MIN_ANCHORS:
+        raise ValueError(
+            f"Qwen4 norm convention cannot be determined: found {len(anchors)} "
+            f"attn_hyper_connection.hc_norm.weight tensors (need >= {_MIN_ANCHORS}); "
+            "the checkpoint's tensor names or layout differ from the expected release format"
+        )
     mx.eval(anchors)
     return direct_gamma([float(x.astype(mx.float32).item().real) for x in anchors])
 

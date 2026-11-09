@@ -271,10 +271,14 @@ def assert_unsupported_restart(tmp: Path, engine: str, spec: dict) -> None:
     assert all(u["turns"] == "restart" for u in manifest["unsupported"])
     res = _run_audit(raw, manifest, tmp)
     assert res.returncode == 0, res.stdout[-3000:] + res.stderr[-2000:]
-    assert "UNSUPPORTED" in res.stdout and "no disk tier" in res.stdout, res.stdout[-2000:]
+    assert "UNSUPPORTED" in res.stdout and "no disk tier" in res.stdout, res.stdout[
+        -2000:
+    ]
 
 
-def test_restart_unsupported_is_accepted_only_for_an_engine_without_a_disk_tier(tmp_path):
+def test_restart_unsupported_is_accepted_only_for_an_engine_without_a_disk_tier(
+    tmp_path,
+):
     """The evidence rule: a restart cell may be 'unsupported' only where NO_DISK_TIER cites the evidence.
     The same unsupported status on a disk-tier engine (yunshu) fails: that engine must measure it."""
     rows = _rows("yunshu", [RESTART_SPEC])
