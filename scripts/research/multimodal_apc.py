@@ -259,7 +259,14 @@ def arithmetic_item(i):
     a, b = 100 + (i * 17) % 89, 1 + (i * 23) % 97
     red = i % 2 == 0
     msg = messages(1, (200, 30, 30) if red else (30, 30, 200))
+    # The fixed instructions keep the text after the image long enough for a 64-aligned
+    # checkpoint to land past the image span (checkpoints never cut one): without them a
+    # ~114-token item on 27B had no legal checkpoint and the hit request could never hit.
     msg[0]["content"][1]["text"] = (
+        "You are checking a colour-coded arithmetic card for a calibration report. "
+        "The card is a single solid swatch. Read its colour from the whole image, "
+        "ignore any border, then follow the rule for that colour exactly and answer "
+        "with digits only, no words, no punctuation and no explanation. "
         f"If the image is red, compute {a} + {b}. If it is blue, compute {a} - {b}. "
         "Reply with only the integer answer."
     )
