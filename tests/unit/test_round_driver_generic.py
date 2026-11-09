@@ -1001,3 +1001,59 @@ def test_runner_hands_plain_rows_a_live_guide_for_jump_forward(
         logprobs=False,
     )
     assert runner._driver_guide(job) is (enabled and not sigma)
+
+
+def test_forced_lookahead_fault_does_not_fault_the_live_guide(monkeypatch):
+    from yunshu_engine import settings
+    from yunshu_engine.constraint_eos import GrammarDeadEndError
+
+    class DeadLater(_ForcedGuide):
+        def mask(self):
+            if self.at >= 3:
+                raise GrammarDeadEndError("future dead end")
+            return super().mask()
+
+    original = settings.get
+    monkeypatch.setattr(
+        settings,
+        "get",
+        lambda key, *a, **kw: (
+            True if key == "YUNSHU_JUMP_FORWARD" else original(key, *a, **kw)
+        ),
+    )
+    lm = TinyLM()
+    guide = DeadLater(list(range(7, 25)))
+    d = make(lm)
+    d.add(request(lm, [1, 2, 3], 18, guide=guide))
+    while not d.batch.rows:
+        d.step()
+    row = d.batch.rows[0]
+    at = guide.at
+    assert d._forced_window(row, 8) == []
+    assert guide.at == at and guide.fault is None
+
+
+def test_generic_jump_forward_caches_do_not_enter_default_namespace(monkeypatch):
+    from types import SimpleNamespace
+
+    from yunshu_engine import settings
+
+    lm = TinyLM()
+    d = make(lm)
+    packed = SimpleNamespace(generic=False, dflash=None)
+    original = settings.get
+    salts = []
+    for enabled in (False, True, False):
+        monkeypatch.setattr(
+            settings,
+            "get",
+            lambda key, *a, **kw: (
+                enabled if key == "YUNSHU_JUMP_FORWARD" else original(key, *a, **kw)
+            ),
+        )
+        salts.append(
+            (d.apc_salt(17, False), drv.RoundDriver.apc_salt(packed, 17, False))
+        )
+    assert salts[0] == salts[2]
+    assert salts[0][0] != salts[1][0]
+    assert salts[0][1] == salts[1][1]

@@ -207,7 +207,8 @@ Verification: `yv ab --base <sha> --cand <sha> --suite phaseb-pilot --label phas
 target window on packed Qwen3.5, Flash-Next and generic rows. Planning restores
 the guide before emission; only emitted tokens advance it. Runs stop at grammar
 entry, stop-token and length boundaries. The default remains off: generic upstream
-T>1 forwards may round differently from repeated T=1 forwards. Thinking-budget
+T>1 forwards may round differently from repeated T=1 forwards; their reply
+checkpoints use a separate namespace from the default. Thinking-budget
 rows and processors without a window contract retain single-token decoding.
 
 `yv ab --base BASE --cand CAND --suite jump_forward` measures the existing

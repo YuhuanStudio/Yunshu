@@ -682,6 +682,13 @@ class RoundDriver:
         arith = gdn_prefill.kernel_id() + (
             nax_prefill.arithmetic_id() if nax_prefill.enabled() else "lane"
         )
+        if self.generic:
+            from .. import settings
+
+            if settings.get("YUNSHU_JUMP_FORWARD"):
+                # Upstream T>1 decode rounds differently. Reply checkpoints from
+                # this user option must not enter the default T=1 namespace.
+                arith += ":jump-forward"
         mix = f"{extra_hash}:round-driver:{int(drafting)}:{arith}"
         return (
             int.from_bytes(hashlib.blake2b(mix.encode(), digest_size=8).digest(), "big")
@@ -1808,8 +1815,9 @@ class RoundDriver:
             forced = forced_tokens(
                 req.guide, limit, self.stop_tokens, before_boundary=True
             )
-        except GrammarDeadEndError as exc:
-            req.guide.fault = exc
+        except GrammarDeadEndError:
+            # Lookahead is speculative. Only _draw's committed-position mask
+            # may fault the live request; a future dead end retains serial emission.
             return []
         if not forced:
             return []

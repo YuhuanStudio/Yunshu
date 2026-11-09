@@ -780,7 +780,10 @@ def test_flash_prompt_logprobs(tiny):
 
 
 @pytest.mark.parametrize("backend", ["plain", "mtp", "dflash"])
-def test_forced_runs_use_windows_on_every_flash_layer(tiny, monkeypatch, backend):
+@pytest.mark.parametrize("drafting", [False, True])
+def test_forced_runs_use_windows_on_every_flash_layer(
+    tiny, monkeypatch, backend, drafting
+):
     from tests.unit.test_round_driver_flashnext_dflash import make_dflash
     from tests.unit.test_round_driver_generic import _ForcedGuide
     from yunshu_engine import settings
@@ -800,7 +803,7 @@ def test_forced_runs_use_windows_on_every_flash_layer(tiny, monkeypatch, backend
             )
             scripts = [list(range(7, 22)), list(range(11, 18))]
             requests = [
-                Request(p, len(s), handle=i, guide=_ForcedGuide(s), draft=False)
+                Request(p, len(s), handle=i, guide=_ForcedGuide(s), draft=drafting)
                 for i, (p, s) in enumerate(zip(PROMPTS[:2], scripts, strict=True))
             ]
             out, driver = run_requests(
