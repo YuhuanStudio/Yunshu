@@ -1,16 +1,19 @@
 """Batch inference API gate (in-process ASGI, real engine).
 
-/v1/batch takes a list of items (each with a custom_id + an OpenAI request body)
-and returns per-item results. This gate submits a small batch and checks the
-results map back to their custom_ids correctly.
+OpenAI Batch API over the real route: upload a JSONL file (purpose=batch) to
+``/v1/files``, create a batch with ``POST /v1/batches`` (input_file_id +
+endpoint + completion_window), poll ``GET /v1/batches/{id}`` until terminal,
+then read the output / error files from ``/v1/files/{id}/content``.
 
-  - HTTP 200; response is a batch object with a terminal status
-  - every submitted custom_id appears exactly once in the results
-  - each result carries a usable completion (content or a chat response body)
-  - a deliberately malformed item is reported as an error WITHOUT failing the
-    whole batch (the good items still succeed)
+  - HTTP 200 on upload and create; batch object with a terminal status
+  - every submitted custom_id appears exactly once in the output file
+  - each output line carries a usable completion (response.body)
+  - a line that fails per-item generation lands in the error file WITHOUT
+    failing the good items
+  - a line that is not valid JSON fails the whole batch at validation
+    (status "failed" with an errors list), as the real API does
 
-Run: PYTHONPATH=. uv run python scripts/verify_batch_api.py
+Run: PYTHONPATH=. uv run python scripts/verify/verify_batch_api.py
 """
 
 from __future__ import annotations
@@ -21,20 +24,70 @@ import os
 import sys
 
 MODEL = os.environ.get("YUNSHU_BENCH_MODEL", "./models/Qwen3.5-0.8B-MLX-bf16")
+TERMINAL = ("completed", "failed", "expired", "cancelled")
 
 
-def _result_text(r: dict) -> str:
-    """Pull assistant text out of whatever shape a batch result uses."""
-    blob = json.dumps(r).lower()
-    for key in ("response", "body", "result"):
-        v = r.get(key)
-        if isinstance(v, dict):
-            try:
-                return v["choices"][0]["message"]["content"] or ""
-            except Exception:
-                pass
-    # fall back: any content field present
-    return blob
+def _line(cid: str, prompt: str) -> dict:
+    return {
+        "custom_id": cid,
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 512,
+            "temperature": 0.0,
+        },
+    }
+
+
+def _content(out: dict) -> str:
+    try:
+        return out["response"]["body"]["choices"][0]["message"]["content"] or ""
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def _jsonl(lines: list[dict | str]) -> bytes:
+    return "\n".join(x if isinstance(x, str) else json.dumps(x) for x in lines).encode()
+
+
+async def _upload(client, data: bytes) -> str:
+    r = await client.post(
+        "/v1/files",
+        data={"purpose": "batch"},
+        files={"file": ("batch.jsonl", data, "application/jsonl")},
+    )
+    assert r.status_code == 200, f"upload status={r.status_code} body={r.text[:200]}"
+    return r.json()["id"]
+
+
+async def _run_batch(client, file_id: str, timeout_s: float = 900) -> dict:
+    r = await client.post(
+        "/v1/batches",
+        json={
+            "input_file_id": file_id,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    assert r.status_code == 200, f"create status={r.status_code} body={r.text[:200]}"
+    bid = r.json()["id"]
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while True:
+        d = (await client.get(f"/v1/batches/{bid}")).json()
+        if d.get("status") in TERMINAL or loop.time() > deadline:
+            return d
+        await asyncio.sleep(0.5)
+
+
+async def _read_jsonl(client, file_id: str | None) -> list[dict]:
+    if not file_id:
+        return []
+    r = await client.get(f"/v1/files/{file_id}/content")
+    assert r.status_code == 200, f"content status={r.status_code}"
+    return [json.loads(x) for x in r.text.splitlines() if x.strip()]
 
 
 async def main() -> int:
@@ -62,78 +115,67 @@ async def main() -> int:
         async with httpx.AsyncClient(
             transport=transport, base_url="http://test", timeout=180
         ) as client:
-
-            def item(cid, prompt):
-                return {
-                    "custom_id": cid,
-                    "method": "POST",
-                    "url": "/v1/chat/completions",
-                    "body": {
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 16,
-                        "temperature": 0.0,
-                    },
-                }
-
-            body = {
-                "model": MODEL,
-                "requests": [
-                    item("req-france", "Capital of France? One word."),
-                    item("req-math", "What is 8 plus 5? Just the number."),
-                    item("req-japan", "Capital of Japan? One word."),
-                ],
-            }
-            r = await client.post("/v1/batch", json=body)
-            checks["/v1/batch: HTTP 200"] = r.status_code == 200
-            if r.status_code != 200:
-                detail.append(f"status={r.status_code} body={r.text[:200]}")
-            else:
-                d = r.json()
-                results = d.get("results") or []
-                checks["batch: object + status present"] = (
-                    bool(d.get("status")) and d.get("object") == "batch"
-                )
-                got_ids = [x.get("custom_id") for x in results]
-                want_ids = ["req-france", "req-math", "req-japan"]
-                checks["batch: all custom_ids returned exactly once"] = sorted(
-                    got_ids
-                ) == sorted(want_ids)
-                # each maps to a usable completion
-                texts = {x.get("custom_id"): _result_text(x) for x in results}
-                checks["batch: results carry completions"] = all(
-                    texts.get(c, "").strip() for c in want_ids
-                )
-                detail.append(f"status={d.get('status')} ids={got_ids}")
-                for c in want_ids:
-                    detail.append(f"  {c} → {texts.get(c, '')[:40]!r}")
-
-            # malformed item must not sink the whole batch
-            r2 = await client.post(
-                "/v1/batch",
-                json={
-                    "model": MODEL,
-                    "requests": [
-                        item("ok-1", "Say hi."),
-                        {
-                            "custom_id": "bad-1",
-                            "method": "POST",
-                            "url": "/v1/chat/completions",
-                            "body": {},
-                        },  # no messages
-                    ],
-                },
+            want_ids = ["req-france", "req-math", "req-japan"]
+            good = [
+                _line("req-france", "Capital of France? One word."),
+                _line("req-math", "What is 8 plus 5? Just the number."),
+                _line("req-japan", "Capital of Japan? One word."),
+            ]
+            d = await _run_batch(client, await _upload(client, _jsonl(good)))
+            checks["batch: object + terminal status"] = (
+                d.get("object") == "batch" and d.get("status") == "completed"
             )
-            if r2.status_code == 200:
-                res2 = {x.get("custom_id"): x for x in (r2.json().get("results") or [])}
-                ok_good = bool(_result_text(res2.get("ok-1", {})).strip())
-                bad_flagged = (
-                    "bad-1" in res2
-                )  # present (likely with an error), didn't crash batch
-                checks["batch: malformed item isolated (good item still ok)"] = (
-                    ok_good and bad_flagged
-                )
-            else:
-                checks["batch: malformed item isolated (good item still ok)"] = False
+            out = await _read_jsonl(client, d.get("output_file_id"))
+            got_ids = [x.get("custom_id") for x in out]
+            checks["batch: all custom_ids returned exactly once"] = sorted(
+                got_ids
+            ) == sorted(want_ids)
+            texts = {x.get("custom_id"): _content(x) for x in out}
+            checks["batch: results carry completions"] = all(
+                texts.get(c, "").strip() for c in want_ids
+            )
+            detail.append(f"status={d.get('status')} ids={got_ids}")
+            for c in want_ids:
+                detail.append(f"  {c} → {texts.get(c, '')[:40]!r}")
+
+            # one generation-level failure (no messages) must not sink the good item
+            d2 = await _run_batch(
+                client,
+                await _upload(
+                    client,
+                    _jsonl(
+                        [
+                            _line("ok-1", "Say hi."),
+                            {
+                                "custom_id": "bad-1",
+                                "method": "POST",
+                                "url": "/v1/chat/completions",
+                                "body": {"model": MODEL},
+                            },
+                        ]
+                    ),
+                ),
+            )
+            ok_out = {
+                x["custom_id"]: x
+                for x in await _read_jsonl(client, d2.get("output_file_id"))
+            }
+            err_out = {
+                x["custom_id"]: x
+                for x in await _read_jsonl(client, d2.get("error_file_id"))
+            }
+            checks["batch: malformed item isolated (good item still ok)"] = bool(
+                _content(ok_out.get("ok-1", {})).strip() and "bad-1" in err_out
+            )
+
+            # a non-JSON line fails the batch at validation with an errors list
+            d3 = await _run_batch(
+                client,
+                await _upload(client, _jsonl([_line("ok-2", "Hi."), "not json"])),
+            )
+            checks["batch: invalid JSON line fails the batch with errors"] = d3.get(
+                "status"
+            ) == "failed" and bool((d3.get("errors") or {}).get("data"))
     finally:
         set_engine(None)
         await eng.stop()
