@@ -387,6 +387,19 @@ def optional_mtp_head(load, model):
         raise
 
 
+def apc_probe_sizing(model):
+    """(num_blocks, memory_max_gb) for the APC probe.
+
+    The tiny probe keeps its validated sizing (64 blocks = 1024 tokens, 0.1 GB).
+    A real checkpoint's 1024-token prompt fills that pool exactly and its hybrid
+    checkpoint state exceeds 0.1 GB, so the probe gets room to store checkpoints.
+    Sizing only: the arithmetic is unchanged.
+    """
+    if model is None:
+        return 64, 0.1
+    return 512, 2.0
+
+
 def real_prompts(ids, model):
     """Three short cell prompts (as validated) plus one APC probe prompt.
 
@@ -530,11 +543,12 @@ def _capture(layer, model=None, tokens=8, device="gpu"):
 
             from yunshu_engine.round_driver import replay
 
+            num_blocks, memory_max_gb = apc_probe_sizing(model)
             apc = APCManager(
-                num_blocks=64,
+                num_blocks=num_blocks,
                 block_size=16,
                 overrides={
-                    "memory_max_gb": 0.1,
+                    "memory_max_gb": memory_max_gb,
                     "checkpoint_entries": 4,
                     "checkpoint_interval_tokens": 512,
                 },

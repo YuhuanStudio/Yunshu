@@ -301,3 +301,13 @@ def test_checkpoint_without_mtp_tensors_runs_without_a_head():
     assert optional_mtp_head(lambda model: "head", "/models/x") == "head"
     with pytest.raises(ValueError, match="corrupt"):
         optional_mtp_head(lambda m: (_ for _ in ()).throw(ValueError("corrupt")), "/m")
+
+
+def test_apc_probe_sizing_keeps_tiny_and_grows_for_checkpoints():
+    from scripts.research.round_driver_golden import apc_probe_sizing
+
+    # The tiny digests were captured with 64 blocks / 0.1 GB: they must not change.
+    assert apc_probe_sizing(None) == (64, 0.1)
+    # A real 1024-token prompt fills a 64-block pool exactly and exceeds 0.1 GB.
+    blocks, gb = apc_probe_sizing("/models/27b")
+    assert blocks * 16 > 1024 and gb > 0.1
