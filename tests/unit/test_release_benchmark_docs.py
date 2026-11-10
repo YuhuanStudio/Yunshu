@@ -1,30 +1,51 @@
 """Published benchmark copies preserve qualified evidence and failed coverage."""
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SNAPSHOT = ROOT / "docs/reports/RELEASE_016_BENCHMARKS_2026-10-19.md"
+NUMBER = re.compile(r"\d+(?:\.\d+)?")
+PAGES = ("", ".zh-TW", ".zh-CN")
 
 
 def table_rows(text):
     return [line for line in text.splitlines() if line.startswith("| ")]
 
 
-def test_console_benchmark_tables_preserve_public_evidence_rows():
-    evidence = SNAPSHOT.read_text()
-    rows = table_rows(evidence)
-    assert len([r for r in rows if "| 3/3 |" in r]) == 27
-    for locale in ("", ".zh-TW", ".zh-CN"):
+def numeric_rows(text):
+    return [
+        tuple(NUMBER.findall(line))
+        for line in table_rows(text)
+        if NUMBER.search(line)
+    ]
+
+
+def page_body(text):
+    return text.split("\n---\n", 1)[1] if text.startswith("---\n") else text
+
+
+def test_console_benchmark_pages_match_benchmarks_md():
+    source = (ROOT / "docs/BENCHMARKS.md").read_text()
+    source_numbers = set(NUMBER.findall(source))
+    source_rows = numeric_rows(source)
+    for locale in PAGES:
         page = (ROOT / f"frontend/docs/guides/benchmarks{locale}.mdx").read_text()
-        assert all(row in page for row in rows)
-        for status in (
-            "output mismatch",
-            "122.724 GiB",
-            "concatenate shapes",
-            "no speed ranking",
-            "All three locales, light/dark and mobile images were visually reviewed.",
+        body = page_body(page)
+        assert set(NUMBER.findall(body)) == source_numbers, locale
+        page_rows = numeric_rows(body)
+        assert all(row in page_rows for row in source_rows), locale
+        for required in (
+            "2026-11-08",
+            "gaps_full_1109",
+            "0.983",
+            "-92.9%",
+            "74.3",
+            "-54.6%",
         ):
-            assert status in page
+            assert required in body, (locale, required)
+
+
+def test_release_015_history_rows_unchanged():
     history = (ROOT / "docs/reports/RELEASE_015_BENCHMARKS.md").read_text()
     assert len(table_rows(history)) == 68
     assert "no part_done (incomplete job)" in history
