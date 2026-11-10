@@ -236,3 +236,28 @@ def test_docs_only_commit_reuses_the_gpu_checks(tmp_path):
     code = _git(repo, "rev-parse", "HEAD")
     assert rc.code_identity(code, repo) != rc.code_identity(first, repo)
     assert rc.reusable_passes(rc.code_identity(code, repo), code, root, repo) == {}
+
+
+def test_dev_release_runs_ci_local_only(monkeypatch, tmp_path):
+    """User 2026-11-10: a dev release (every push between patch releases) must not run the full
+    gate / M3 / agentcompat flow."""
+    monkeypatch.setattr(rc.subprocess, "check_output", lambda *a, **k: "a" * 40)
+    calls = []
+
+    class Ok:
+        returncode = 0
+
+    def run(cmd, *a, **k):
+        calls.append(cmd)
+        return Ok()
+
+    monkeypatch.setattr(rc.subprocess, "run", run)
+    monkeypatch.setattr(
+        rc.subprocess,
+        "Popen",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("dev release launched a GPU check")
+        ),
+    )
+    assert rc.main(["--dev", "--out", str(tmp_path)]) == 0
+    assert len(calls) == 1 and "ci-local" in " ".join(map(str, calls[0]))

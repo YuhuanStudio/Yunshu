@@ -11,11 +11,13 @@ REPOSITORY = "https://github.com/YuhuanStudio/Yunshu"
 
 def render_notes(changelog: str, version: str) -> str:
     """Fail closed on absent versions and derive the comparison from the older entry."""
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(\.dev[0-9]+)?", version):
         raise ValueError(f"Invalid release version: {version}")
+    # a dev release (every push between patch releases, user 2026-11-10) carries [Unreleased]
+    section = "Unreleased" if ".dev" in version else version
     headings = list(re.finditer(r"^## \[([^\]]+)\].*$", changelog, re.MULTILINE))
     for index, heading in enumerate(headings):
-        if heading.group(1) == version:
+        if heading.group(1) == section:
             end = (
                 headings[index + 1].start()
                 if index + 1 < len(headings)

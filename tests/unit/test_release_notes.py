@@ -50,3 +50,16 @@ def test_empty_release_fails():
 def test_first_release_links_to_tag_history():
     notes = MODULE.render_notes("## [0.1.0]\nFirst\n", "0.1.0")
     assert "/commits/v0.1.0" in notes
+
+
+def test_dev_release_takes_the_unreleased_section():
+    """User 2026-11-10: every push is a dev release (0.1.8.devN) whose notes are [Unreleased]."""
+    changelog = """## [Unreleased]
+Future changes
+## [0.1.7] - 2026-11-10
+Current changes
+"""
+    notes = MODULE.render_notes(changelog, "0.1.8.dev1")
+    assert "Future changes" in notes and "Current changes" not in notes
+    assert '"yunshu[vision]==0.1.8.dev1"' in notes
+    assert "/compare/v0.1.7...v0.1.8.dev1" in notes

@@ -21,23 +21,29 @@ built from `main` never claims an unreleased number. Prepare the release version
 `.devN` suffix) and the dated CHANGELOG entry, then commit them; after the tag, set `main` to the next `.dev0`.
 All verification must refer to that final commit; changes afterward need another check.
 
-```bash
-# Maintainer: after each merge batch, before pushing main:
-nice -n 15 scripts/dev/ci-local main
-scripts/dev/yv gate --priority -1 --stages install,serve-27b,families,agent-sessions
-# Only after both pass on the same SHA:
-git push origin main
+Every push to `main` is a release (user decision 2026-11-10):
 
-# Final release: CI first, then gate + M3 sweep + agent compatibility + agentbench
-# together. Agentbench runs at -3 and is informational, not a release blocker.
-scripts/dev/release_check main --label-prefix release015
-# Review the single checklist and every verdict. Gate resumes passed stages on rerun; use the same --out directory if overridden.
+- **Dev release** (`vX.Y.Z.devN`, every push between patch releases): bump `.devN` in `pyproject.toml`
+  and `uv.lock`, run ci-local only, tag, push. PyPI publishes a pre-release (`pip install --pre`), the
+  GitHub release is a prerelease built from `[Unreleased]`. No gate, M3 sweep or agentcompat.
+- **Patch release** (`vX.Y.Z`, about every 2-3 days): the full, optimized check below.
+
+```bash
+# Dev release
+scripts/dev/release_check main --dev --label-prefix dev018
+git tag -a v0.1.8.dev1 -m "Yunshu 0.1.8.dev1"
+git push origin main v0.1.8.dev1
+
+# Patch release: CI first, then gate + M3 sweep + agent compatibility (+ agentbench at -3,
+# informational). Checks that passed on an earlier commit with the same runtime code (only
+# docs/, tests/, .github/ or *.md changed since) are reused, not rerun.
+scripts/dev/release_check main --label-prefix release018
 # Preview only (no CI, no GPU jobs):
 scripts/dev/release_check main --dry-run
 
-# Only after ci-local, full gate, m3sweep and agentcompat PASS on this commit:
-git tag -a v0.1.5 -m "Yunshu 0.1.5"
-git push origin main v0.1.5
+# Only after ci-local, gate, m3sweep and agentcompat PASS:
+git tag -a v0.1.8 -m "Yunshu 0.1.8"
+git push origin main v0.1.8
 ```
 
 Run the gate from the checkout of the commit being pushed. Never run `gate.sh`

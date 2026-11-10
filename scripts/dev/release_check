@@ -143,6 +143,11 @@ def main(argv=None):
     ap.add_argument("ref", nargs="?", default="main")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument(
+        "--dev",
+        action="store_true",
+        help="dev release (vX.Y.Z.devN): run ci-local only, no gate / M3 / agentcompat",
+    )
+    ap.add_argument(
         "--priority", type=int, default=2, help="gpuq priority of the blocking checks"
     )
     ap.add_argument(
@@ -227,6 +232,10 @@ def main(argv=None):
         "status": "PASS" if rc == 0 else "FAIL",
         "evidence": str(ci_log),
     }
+    if a.dev:
+        # a dev release (vX.Y.Z.devN, every push between patch releases): ci-local only
+        print(f"\nDev release check: ci-local {rows['ci-local']['status']} {ci_log}")
+        return 0 if rc == 0 else 1
     if rc == 0:
         if not tree.exists():
             subprocess.run(
