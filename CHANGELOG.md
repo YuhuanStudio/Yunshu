@@ -9,6 +9,25 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 Changes on main after 0.1.7; not part of a published package yet.
 
+### Highlights
+
+### Upgrade notes / breaking changes
+
+### Performance
+
+| Machine | Model / mode | Metric / workload | Before → after | Recorded source |
+|---|---|---|---|---|
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Security
+
+[Full changelog: v0.1.7...main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.7...main)
+
 ## [0.1.7] - 2026-11-10
 
 0.1.7 puts every MLX VLM model on one serving path, the round driver, so follow-up turns, concurrent
@@ -20,7 +39,7 @@ numerically from a cold re-prefill (see Upgrade notes).
 ### Highlights
 
 - Follow-up turns resume from the previous reply's cache instead of prefilling the reply again. On
-  Qwen3.8-27B (M5 Max, 8K code, follow-up first token): 0.386 -> 0.145 s, from the `nextturn-cost-1102c`
+  Qwen3.8-27B (M5 Max, 8K code, follow-up first token): 0.386 → 0.145 s, from the `nextturn-cost-1102c`
   run (3 reps, against the pre-change main 3aa49cdaf). Warm TTFT and decode are unchanged within noise.
 - Every MLX VLM model runs on the round driver. Qwen3.8-27B keeps decode within 1%, with follow-up TTFT
   10-16% lower and an 8K cold TTFT +0.8%; Flash-Next follow-up TTFT is 59% lower, with an open cold 8K decode
@@ -61,21 +80,21 @@ numerically from a cold re-prefill (see Upgrade notes).
 Machine M5 Max 128 GB unless noted. Each row is its own experiment; do not add rows. Interleaved reps as
 stated; the commit or run ID is the source.
 
-| Machine | Model / mode | Metric / workload | Before -> after | Recorded source |
+| Machine | Model / mode | Metric / workload | Before → after | Recorded source |
 |---|---|---|---|---|
-| M5 Max 128 GB | Qwen3.8-27B oQ4e-mtp, DFlash2 | follow-up TTFT, 8K code (3 reps) | 0.386 -> 0.145 s | verify run `nextturn-cost-1102c` (base 3aa49cdaf, cand 1e1c982e4) |
-| M5 Max 128 GB | Qwen3.8-27B oQ4e-mtp, DFlash2 | follow-up TTFT, 8K prose (3 reps) | 0.388 -> 0.144 s | `nextturn-cost-1102c` |
-| M5 Max 128 GB | Qwen3.8-27B oQ4e-mtp, DFlash2 | warm TTFT, 8K code / prose | 0.021 -> 0.022 / 0.024 -> 0.021 s (noise +-9%) | `nextturn-cost-1102c` |
-| M5 Max 128 GB | Qwen3.8-27B oQ4e-mtp, DFlash2 | decode, 8K code / prose (no change beyond noise) | 95.9 -> 95.3 / 70.3 -> 69.4 tok/s (noise +-14% / +-23%) | `nextturn-cost-1102c` |
+| M5 Max 128 GB | Qwen3.8-27B oQ4e-mtp, DFlash2 | follow-up TTFT, 8K code (3 reps) | 0.386 → 0.145 s | verify run `nextturn-cost-1102c` (base 3aa49cdaf, cand 1e1c982e4) |
+| M5 Max 128 GB | Qwen3.8-27B oQ4e-mtp, DFlash2 | follow-up TTFT, 8K prose (3 reps) | 0.388 → 0.144 s | `nextturn-cost-1102c` |
+| M5 Max 128 GB | Qwen3.8-27B oQ4e-mtp, DFlash2 | warm TTFT, 8K code / prose | 0.021 → 0.022 / 0.024 → 0.021 s (noise +-9%) | `nextturn-cost-1102c` |
+| M5 Max 128 GB | Qwen3.8-27B oQ4e-mtp, DFlash2 | decode, 8K code / prose (no change beyond noise) | 95.9 → 95.3 / 70.3 → 69.4 tok/s (noise +-14% / +-23%) | `nextturn-cost-1102c` |
 | M5 Max 128 GB | Qwen3.8-27B | decode / follow-up TTFT / 8K cold TTFT | within 1% / -10..-16% / +0.8% | commit `75052d1ce` (gates `pb2g-27b-merge4`) |
 | M5 Max 128 GB | Qwen3.8-Flash-Next | follow-up TTFT / follow-up decode / warm TTFT | -59% / +12..+41% / -40..-57% | commit `75052d1ce` (gates `pb2g-fn-merge1`) |
 | M5 Max 128 GB | Qwen3.8-Flash-Next | cold 8K decode / 1K cold TTFT (regressions, open) | -4% / +2.7% | commit `75052d1ce`, `lead/fn_cold_ttft.md` |
 | M5 Max 128 GB | Qwen3.8-27B + DFlash2 | decode, code 1K / 8K / 32K (prose flat) | +4.9% / +6.4% / +3.4% | commit `47ef0e668` (run `draftmask-1102`, identity 18/18) |
-| M5 Max 128 GB | Qwen3-Omni-30B (repetitive text, opt-in n-gram) | decode, 1.5K repetitive | 83 -> 125 tok/s (identical text); 32K -1.8% | commit `4f7e6354a` |
-| M5 Max 128 GB | Gemma-4 E2B 4bit, lone row | decode, 2128-token prompt, 512 tokens (2 interleaved reps) | 162 -> 200 tok/s, identical text | commit `3e8597c8d` (gendecode-runs g2kb-*), merged in `c1f8a5977` |
-| M5 Max 128 GB | GLM-OCR bf16 | 16 concurrent requests / one 257-token document | 2.7 -> 5.1 req/s (227 -> 430 tok/s), identical text / 1.02-1.03 -> 1.03-1.04 s | `lead/ocr_bench.py` runs old-1..3 vs new-3,4 and gendecode-runs ocr-newr-*, merged in `c1f8a5977` |
-| M5 Max 128 GB | Qwen3.8-27B, int8 KV | turn-2 decode, 1K / 8K code (correctness stopgap) | 21.6 -> 74.5 / 20.5 -> 101.4 tok/s; follow-up TTFT 0.07-0.19 -> 0.34-0.39 s | commit `26b466961` (run `int8spec-stop-8c5daec0`) |
-| M5 Max 128 GB | Qwen3.8-Flash-Next, concurrent rows (regression) | decode step, 8K / 32K, 2-4 rows | 28.5 -> 35.9 ms (2 rows, +26%); 65.4 -> 79.1 ms (32K, 4 rows, +21%) | `docs/reports/PERF_TREND.md`, 2026-10-30 entry (concurrent sparse QSA) |
+| M5 Max 128 GB | Qwen3-Omni-30B (repetitive text, opt-in n-gram) | decode, 1.5K repetitive | 83 → 125 tok/s (identical text); 32K -1.8% | commit `4f7e6354a` |
+| M5 Max 128 GB | Gemma-4 E2B 4bit, lone row | decode, 2128-token prompt, 512 tokens (2 interleaved reps) | 162 → 200 tok/s, identical text | commit `3e8597c8d` (gendecode-runs g2kb-*), merged in `c1f8a5977` |
+| M5 Max 128 GB | GLM-OCR bf16 | 16 concurrent requests / one 257-token document | 2.7 → 5.1 req/s (227 → 430 tok/s), identical text / 1.02-1.03 → 1.03-1.04 s | `lead/ocr_bench.py` runs old-1..3 vs new-3,4 and gendecode-runs ocr-newr-*, merged in `c1f8a5977` |
+| M5 Max 128 GB | Qwen3.8-27B, int8 KV | turn-2 decode, 1K / 8K code (correctness stopgap) | 21.6 → 74.5 / 20.5 → 101.4 tok/s; follow-up TTFT 0.07-0.19 → 0.34-0.39 s | commit `26b466961` (run `int8spec-stop-8c5daec0`) |
+| M5 Max 128 GB | Qwen3.8-Flash-Next, concurrent rows (regression) | decode step, 8K / 32K, 2-4 rows | 28.5 → 35.9 ms (2 rows, +26%); 65.4 → 79.1 ms (32K, 4 rows, +21%) | `docs/reports/PERF_TREND.md`, 2026-10-30 entry (concurrent sparse QSA) |
 
 Regressions and limits: the 8K cold TTFT of the 27B (+0.8%) and Flash-Next cold 8K decode (-4%) and 1K cold TTFT
 (+2.7%) are open. Concurrent Flash-Next decode steps cost 21-27% more than the dense batch that a concurrent

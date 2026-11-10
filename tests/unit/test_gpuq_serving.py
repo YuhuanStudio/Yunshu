@@ -268,12 +268,13 @@ def test_preempt_pause_resume_and_intervals(q, prod):
 
 def test_paused_time_excluded_from_timeout_and_stall(q, prod):
     g = _gate(q, prod, idle_resume_s=0.1)
-    # 1.2 s of work, 1.5 s timeout and stall limits, stopped for well over 1.5 s in the middle
+    # 1.2 s of work, 3 s timeout and stall limits, stopped for well over 3 s in the middle.
+    # (1.5 s limits left 0.3 s of slack: ci-local on a host at 900% CPU timed the job out, 2026-11-10.)
     job, path = _job(
         q,
         ["sh", "-c", "echo a; sleep 0.6; echo b; sleep 0.6; echo c"],
-        timeout_s=1.5,
-        stall_s=1.5,
+        timeout_s=3.0,
+        stall_s=3.0,
     )
     g.poll()
     t = _run_bg(q, job, path, g)
@@ -281,12 +282,12 @@ def test_paused_time_excluded_from_timeout_and_stall(q, prod):
     time.sleep(0.2)
     prod.active = 1
     assert _wait_for(lambda: q._read(path).get("paused"), 2)
-    time.sleep(1.8)
+    time.sleep(3.6)
     prod.active = 0
     t.join(60)  # generous: the full suite runs beside GPU jobs
     d = q._read(path)
     assert d["state"] == "done", d
-    assert sum(b - a for a, b in d["pauses"]) > 1.5
+    assert sum(b - a for a, b in d["pauses"]) > 3.0
 
 
 def test_timeout_still_fires_on_active_time(q, prod):
