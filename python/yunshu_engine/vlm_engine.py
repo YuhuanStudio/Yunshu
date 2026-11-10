@@ -771,14 +771,20 @@ class VLMEngine:
 
         ple_parallel.install(int(settings.get("YUNSHU_PLE_READ_THREADS")))
         if is_qwen4_family(config):
+            from . import fallbacks
             from .kernels import tf_hc_forward
 
-            tf_hc_forward.install()
+            installed = {"fused_hc": tf_hc_forward.install()}
             if settings.get_bool("YUNSHU_QSA_SPARSE_PREFILL"):
                 from .kernels import qsa_sparse_prefill
 
-                qsa_sparse_prefill.install()
-            tf_hc_forward.install_qwen4_gdn()
+                installed["qsa_sparse_prefill"] = qsa_sparse_prefill.install()
+            installed["qwen4_gdn"] = tf_hc_forward.install_qwen4_gdn()
+            for kind, ok in installed.items():
+                if not ok:  # mlx-vlm has no Qwen4 module this kernel can patch
+                    fallbacks.record(
+                        f"qwen4_install_{kind}", "install() returned False"
+                    )
 
         model_config = model_class.ModelConfig.from_dict(config)
         modules = ["text", "vision", "perceiver", "projector", "audio"]
@@ -800,6 +806,10 @@ class VLMEngine:
             from .qwen4_norms import infer_direct_gamma, normalize
 
             self._qwen4_direct_norms = infer_direct_gamma(weights)
+            logger.info(
+                "Qwen4 norms: %s convention",
+                "direct-gamma" if self._qwen4_direct_norms else "offset (1 + w)",
+            )
             normalize(model, weights, direct=self._qwen4_direct_norms)
         else:
             weights = _prepare_vlm_weights(model, model_class, model_config, weights)
@@ -2597,13 +2607,14 @@ class VLMEngine:
         external = choice.drafter
         if choice.kind != "none":
             logger.info("Speculative decoding: %s (%s)", choice.kind, choice.reason)
-        elif qwen4:
+        elif qwen4 or spec_family:
             from .mlxvlm_mtp import mtp_head_problem
 
             problem = mtp_head_problem(model_path)
             if problem is not None:
                 logger.warning(
-                    "Qwen4 checkpoint has no detectable MTP head: %s", problem
+                    "Checkpoint has no detectable MTP head (and no DFlash drafter): %s",
+                    problem,
                 )
             logger.info(
                 "Speculative decoding: off (drafting off: %s)",

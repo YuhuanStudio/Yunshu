@@ -138,6 +138,9 @@ def _moe_plan(mlp: Any) -> Any:
             [_dense_rows(mlp.gate), _dense_rows(mlp.shared_expert_gate)]
         )
         mx.eval(router_rows)
+        # expert_gateup's K tile; raising here keeps the upstream MoE for this layer
+        if router_rows.shape[-1] % 512:
+            raise ValueError(f"hidden {router_rows.shape[-1]} is not a multiple of 512")
         plan = {
             "router": router_rows,
             "top_k": int(mlp.top_k),
@@ -158,7 +161,16 @@ def _moe(mlp: Any, x2d: Any) -> Any:
     from .tf_flash_next import experts
 
     plan = _moe_plan(mlp)
-    if not _STATE["moe"] or plan is None or x2d.shape[0] > MAX_ROWS:
+    if not _STATE["moe"] or plan is None:
+        return None
+    if x2d.shape[0] > MAX_ROWS:
+        # a decode/verify batch past the kernel's row cap (not a prefill chunk) is a perf cliff
+        if x2d.shape[0] <= 256:
+            from .. import fallbacks
+
+            fallbacks.record(
+                "tf_moe_rows", f"{x2d.shape[0]} rows > MAX_ROWS {MAX_ROWS}"
+            )
         return None
     logits = experts.router(x2d, plan["router"])
     sw, se = plan["sw"], plan["se"]
