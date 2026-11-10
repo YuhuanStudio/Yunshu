@@ -16,6 +16,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import prompt_len  # noqa: E402
+
 PY = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python"
 FILLER = "The harbour town kept a ledger of tides, boats, weather and the names of every ship that passed. "
 PROMPT = "Write a long, detailed story about a lighthouse keeper and the sea. Keep going without stopping."
@@ -52,13 +55,37 @@ def main() -> int:
     ap.add_argument("--tokens", type=int, default=512)
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument(
+        "--ctx-tokens",
+        type=int,
+        default=None,
+        help="served prompt tokens of each first turn (template included); the filler is built to that length",
+    )
+    ap.add_argument(
         "--filler",
         type=int,
         default=0,
-        help="repeat a filler paragraph N times before the question",
+        help="DEPRECATED: repeat a filler paragraph N times before the question; converted to the served "
+        "--ctx-tokens of that prompt with the tokenizer (logged)",
     )
     ap.add_argument("--two-turn", action="store_true")
     a = ap.parse_args()
+    if a.ctx_tokens is not None and a.filler:
+        ap.error("--filler is a deprecated alias of --ctx-tokens; give one")
+    ctx = a.ctx_tokens
+    tok = prompt_len.load_tokenizer(a.model) if (ctx is not None or a.filler) else None
+    if a.filler:
+        ctx = prompt_len.served_tokens(tok, FILLER * a.filler + PROMPT)
+        print(
+            f"warning: --filler {a.filler} is deprecated; using --ctx-tokens {ctx}",
+            flush=True,
+        )
+
+    def content(suffix: str) -> str:
+        """User message for a first turn: the filler built to exactly ctx served tokens, or the bare suffix."""
+        if ctx is None:
+            return suffix
+        return prompt_len.build_text(tok, FILLER, ctx, suffix=suffix)
+
     repo, out = Path(a.repo).resolve(), Path(a.out).resolve()
     work = out.parent / a.label
     (work / "home").mkdir(parents=True, exist_ok=True)
@@ -118,14 +145,14 @@ def main() -> int:
                         "model": os.path.basename(a.model),
                         "temperature": 0,
                         "max_tokens": a.tokens,
-                        "messages": [
-                            {"role": "user", "content": FILLER * a.filler + PROMPT}
-                        ],
+                        "messages": [{"role": "user", "content": content(PROMPT)}],
                     },
                 )
                 dt = time.perf_counter() - s
                 r.raise_for_status()
                 b = r.json()
+                if ctx is not None:
+                    prompt_len.check_served_length(ctx, b["usage"])
                 return {
                     "text": b["choices"][0]["message"]["content"],
                     "ct": b["usage"]["completion_tokens"],
@@ -137,14 +164,9 @@ def main() -> int:
             runs = [one() for _ in range(a.reps)]
             if any(r["ct"] < a.tokens // 2 for r in runs):
                 raise SystemExit(f"too few tokens: {[r['ct'] for r in runs]}")
-            if a.filler and any(r["pt"] < 1500 for r in runs):
-                raise SystemExit(f"prompt too short: {[r['pt'] for r in runs]}")
             two = None
             if a.two_turn:
-                q1 = (
-                    FILLER * a.filler
-                    + "In two sentences, what is the text above about?"
-                )
+                q1 = content("In two sentences, what is the text above about?")
                 msgs = [{"role": "user", "content": q1}]
 
                 def chat(m):
@@ -162,6 +184,8 @@ def main() -> int:
                     return r.json()
 
                 t1 = chat(msgs)
+                if ctx is not None:
+                    prompt_len.check_served_length(ctx, t1["usage"])
                 msgs += [
                     t1["choices"][0]["message"],
                     {"role": "user", "content": "Now say it in five words."},

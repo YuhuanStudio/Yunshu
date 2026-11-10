@@ -9,10 +9,17 @@ import subprocess
 import sys
 import time
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import prompt_len  # noqa: E402
+
+FILLER_SOURCE = " ".join(f"item{i % 97} alpha{i % 13}" for i in range(20000))
 
 
-def make_prompt(words: int) -> str:
-    return " ".join(f"item{i % 97} alpha{i % 13}" for i in range(words // 2))
+def make_prompt(tok, ctx_tokens: int) -> str:
+    """The prompt whose served turn-1 length (template included) is exactly ctx_tokens (prompt_len.py)."""
+    return prompt_len.build_text(tok, FILLER_SOURCE, ctx_tokens)
 
 
 def cached_of(resp: dict) -> int:
@@ -77,14 +84,42 @@ def main():
     ap.add_argument("--work", required=True)
     ap.add_argument("--port", type=int, default=18990)
     ap.add_argument("--stop", choices=("term", "kill"), default="term")
-    ap.add_argument("--words", type=int, default=6000)
+    ap.add_argument(
+        "--ctx-tokens",
+        type=int,
+        default=None,
+        help="served turn-1 prompt tokens (template included; prompt_len.py)",
+    )
+    ap.add_argument(
+        "--words",
+        type=int,
+        default=None,
+        help="DEPRECATED: word count of the old prompt; converted to its served tokens with the tokenizer (logged)",
+    )
+    ap.add_argument(
+        "--tokenizer", default=None, help="tokenizer dir (default: --model)"
+    )
     a = ap.parse_args()
+    if a.ctx_tokens is not None and a.words is not None:
+        ap.error("--words is a deprecated alias of --ctx-tokens; give one")
+    tok = prompt_len.load_tokenizer(a.tokenizer or a.model)
+    if a.ctx_tokens is not None:
+        ctx = a.ctx_tokens
+    else:  # the deprecated word count (default 6000) becomes the served length of that old prompt
+        words = 6000 if a.words is None else a.words
+        legacy = " ".join(f"item{i % 97} alpha{i % 13}" for i in range(words // 2))
+        ctx = prompt_len.served_tokens(tok, legacy)
+        print(
+            f"warning: --words {words} is deprecated; using --ctx-tokens {ctx}",
+            flush=True,
+        )
     home = os.path.join(a.work, "home")
     os.makedirs(home, exist_ok=True)
-    prompt = make_prompt(a.words)
+    prompt = make_prompt(tok, ctx)
     p = serve(a.model, a.port, home, os.path.join(a.work, "s1.log"))
     try:
         r1 = post(a.port, prompt)
+        prompt_len.check_served_length(ctx, r1["usage"])
         print("first", cached_of(r1), r1["usage"], round(r1["_wall"], 2), flush=True)
         time.sleep(3)
     finally:
@@ -97,6 +132,7 @@ def main():
     p = serve(a.model, a.port, home, os.path.join(a.work, "s2.log"))
     try:
         r2 = post(a.port, prompt)
+        prompt_len.check_served_length(ctx, r2["usage"])
     finally:
         os.killpg(p.pid, signal.SIGKILL)
     c = cached_of(r2)

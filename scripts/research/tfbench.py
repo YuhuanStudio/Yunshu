@@ -28,11 +28,12 @@ import jsonschema
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_engines  # noqa: E402
-import fullcmp_manifest as fm  # noqa: E402  (request families: FAMILY_KINDS, IMAGE_COUNT)
 import fullcmp_attribution  # noqa: E402  (layer-1 attribution schema)
 import fullcmp_engaged as fe  # noqa: E402  (engaged spec mode from evidence, never the request)
+import fullcmp_manifest as fm  # noqa: E402  (request families: FAMILY_KINDS, IMAGE_COUNT)
 import fullcmp_provenance as fp  # noqa: E402
 import fullcmp_quiet as fq  # noqa: E402  (quiet-machine snapshots per cell, FULLCMP_SPEC)
+import prompt_len as pl  # noqa: E402  (length label == served usage.prompt_tokens, turn 1)
 from gpuq_contention import was_contended  # noqa: E402
 
 # Identifies this harness in every request row (fullcmp audit: provenance_identity).
@@ -1297,13 +1298,16 @@ def decode_prompt(kind, ctx, long_ask, variant=0):
     return text + (LONG_ASK if long_ask else "")
 
 
-def make_prompt(kind, ntok, salt):
+def make_prompt(kind, ntok, salt, tok=None):
+    """Text whose rendered chat prompt is exactly ntok tokens (prompt_len.build_text, real tokenizer + template)."""
     files = corpus(kind)
-    cpt = 4.0 if kind == "prose" else 3.2
-    need = int(ntok * cpt)
+    tok = tok or pl.load_tokenizer()
     buf = []
     n = 0
     i = salt * 7
+    need = (
+        ntok * 6
+    )  # characters, generously above any tokenizer's chars/token; build_text trims to the token count
     while n < need:
         f = files[i % len(files)]
         i += 1
@@ -1314,7 +1318,7 @@ def make_prompt(kind, ntok, salt):
         "prose": "\n\n---\nWrite a long, detailed essay in your own words that explains the main ideas of the material above. Do not use lists. Keep writing at length.",
         "code": "\n\n---\nWrite a thorough code review of the code above: for every module quote the key functions in full, then propose a rewritten version of each. Keep writing at length.",
     }[kind]
-    return "".join(buf) + ask
+    return pl.build_text(tok, "".join(buf), ntok, suffix=ask)
 
 
 def req(model, text, mt, seed=None, extra=None, temp=0):
@@ -1762,6 +1766,18 @@ LONG_ASK = (
 )
 
 
+# LONG_ASK is ~33 tokens on the Qwen tokenizer (measured); allow it on top of the default tolerance.
+LONG_ASK_ALLOW = 40
+
+
+def served_length(label, usage, turn=1, tol=None):
+    """prompt_len.check_served_length, except against the CPU test stub (TFB_STUB_SERVER, which fullcmp_run
+    refuses for real batches): its prompt_tokens is a word count, not a tokenizer's."""
+    if os.environ.get("TFB_STUB_SERVER"):
+        return usage.get("prompt_tokens")
+    return pl.check_served_length(label, usage, turn, tol)
+
+
 def check_decode_len(r, n, what, allow_eos=False):
     """A decode cell measures exactly n tokens; a short reply is an error (a request that died
     mid-stream must not count as a result). Identity cells (allow_eos) accept the model's own end of
@@ -2039,6 +2055,15 @@ def part_decode(s, out, a):
                         want,
                         f"decode {kind}-{ctx} {phase}",
                         getattr(a, "allow_eos", False),
+                    )
+                    # the label is what the server received on turn 1 (prompt_len.py); the fixed prompt files are
+                    # within tolerance, LONG_ASK adds a known suffix (not part of the file)
+                    r["label_len"] = ctx
+                    r["served_len"] = served_length(
+                        ctx,
+                        {"prompt_tokens": r.get("pt")},
+                        turn=2 if phase == "turn2" else 1,
+                        tol=pl.default_tol(ctx) + (LONG_ASK_ALLOW if a.long_ask else 0),
                     )
                 if phase == "cold":
                     reply = r["_text"]
@@ -2463,6 +2488,7 @@ def part_conc(s, out, a):
             for r in rs:
                 if not a.smoke:
                     check_decode_len(r, a.conc_tokens, f"conc n={n} trial={trial}")
+                    served_length(a.conc_ctx, {"prompt_tokens": r["pt"]})
                 r.pop("_text")
             requests = request_records(rs)
             wall = time.perf_counter() - t0

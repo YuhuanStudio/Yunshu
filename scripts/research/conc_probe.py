@@ -9,7 +9,11 @@ concurrency and recovery after a peer finishes are visible (1 s buckets). Scenar
   stagger     A starts; B joins at +JOIN s; B is shorter, so A's speed after B ends shows recovery
   greedy-*    the same with temperature 0 (the old benchmark shape), for contrast
 
-Usage: conc_probe.py --url http://127.0.0.1:PORT --model NAME --out FILE.jsonl [--tokens 1500] [--ctx-chars 16000]
+Usage: conc_probe.py --url http://127.0.0.1:PORT --model NAME --out FILE.jsonl [--tokens 1500] [--ctx-tokens 4096]
+
+The context length is the SERVED prompt length (usage.prompt_tokens of the request, template included; see
+prompt_len.py): every request is checked against it and the run fails on a mismatch. --ctx-chars is a deprecated
+alias (characters of filler), converted to tokens with the tokenizer and logged.
 """
 
 from __future__ import annotations
@@ -22,6 +26,11 @@ import time
 from pathlib import Path
 
 import httpx
+
+try:
+    from . import prompt_len
+except ImportError:  # run as a script
+    import prompt_len
 
 CORPUS = Path("/Volumes/P5Plus/yunshu-build/snapshot014/corpus")
 
@@ -39,12 +48,30 @@ def filler(chars: int, salt: int) -> str:
     return "\n\n".join(out)[:chars]
 
 
-def body(model: str, salt: int, tokens: int, ctx_chars: int, greedy: bool) -> dict:
-    prompt = (
-        filler(ctx_chars, salt)
-        + f"\n\n[{salt}] Review the material above carefully. Reason step by step about its design, then write a "
+def body(
+    model: str,
+    salt: int,
+    tokens: int,
+    ctx_chars: int | None,
+    greedy: bool,
+    ctx_tokens: int | None = None,
+    tok=None,
+) -> dict:
+    """ctx_tokens (with a tokenizer) = served prompt length, exact; ctx_chars = legacy characters (callers that
+    calibrate chars themselves, see tests/unit/test_prompt_len_guard.py)."""
+    ask = (
+        f"\n\n[{salt}] Review the material above carefully. Reason step by step about its design, then write a "
         "detailed technical critique with concrete improvement proposals."
     )
+    if ctx_tokens is not None:
+        prompt = prompt_len.build_text(
+            tok or prompt_len.load_tokenizer(),
+            filler(ctx_tokens * 6, salt),
+            ctx_tokens,
+            suffix=ask,
+        )
+    else:
+        prompt = filler(ctx_chars, salt) + ask
     b = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -58,7 +85,13 @@ def body(model: str, salt: int, tokens: int, ctx_chars: int, greedy: bool) -> di
 
 
 def run_one(
-    url: str, b: dict, name: str, t_zero: float, rows: list, lock: threading.Lock
+    url: str,
+    b: dict,
+    name: str,
+    t_zero: float,
+    rows: list,
+    lock: threading.Lock,
+    label: int | None = None,
 ) -> None:
     times: list[float] = []
     t0 = time.perf_counter()
@@ -108,10 +141,13 @@ def run_one(
         raise RuntimeError(
             f"{name}: incomplete stream (finish={finish}, usage={usage})"
         )
+    served = prompt_len.check_served_length(label, usage) if label is not None else None
     with lock:
         rows.append(
             {
                 "name": name,
+                "label_len": label,
+                "served_len": served,
                 "start": round(t0 - t_zero, 3),
                 "ttft": round(times[0] - t0, 3) if times else None,
                 "end": round(end - t_zero, 3),
@@ -125,18 +161,18 @@ def run_one(
         )
 
 
-def scenario(url, model, out, label, plans, tokens, ctx_chars):
+def scenario(url, model, out, label, plans, tokens, ctx_tokens, tok=None):
     """plans: list of (name, delay_s, tokens, greedy, salt)."""
     rows: list = []
     lock = threading.Lock()
     t_zero = time.perf_counter()
     threads = []
     for name, delay, ntok, greedy, salt in plans:
-        b = body(model, salt, ntok or tokens, ctx_chars, greedy)
+        b = body(model, salt, ntok or tokens, None, greedy, ctx_tokens, tok)
 
         def go(b=b, name=name, delay=delay):
             time.sleep(delay)
-            run_one(url, b, name, t_zero, rows, lock)
+            run_one(url, b, name, t_zero, rows, lock, ctx_tokens)
 
         th = threading.Thread(target=go)
         th.start()
@@ -185,6 +221,20 @@ def engine_observes(url: str) -> bool:
         return False
 
 
+def ctx_tokens_from_args(a, tok) -> int:
+    """--ctx-tokens wins; deprecated --ctx-chars is converted (and logged); default 4096."""
+    if a.ctx_tokens is not None and a.ctx_chars is not None:
+        raise SystemExit("--ctx-chars is a deprecated alias of --ctx-tokens; give one")
+    if a.ctx_chars is not None:
+        n = prompt_len.tokens_from_chars(tok, a.ctx_chars)
+        print(
+            f"warning: --ctx-chars {a.ctx_chars} is deprecated; using --ctx-tokens {n}",
+            flush=True,
+        )
+        return n
+    return 4096 if a.ctx_tokens is None else a.ctx_tokens
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -196,7 +246,23 @@ def main():
     ap.add_argument("--model", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--tokens", type=int, default=1500)
-    ap.add_argument("--ctx-chars", type=int, default=16000)
+    ap.add_argument(
+        "--ctx-tokens",
+        type=int,
+        default=None,
+        help="served prompt tokens (default 4096)",
+    )
+    ap.add_argument(
+        "--ctx-chars",
+        type=int,
+        default=None,
+        help="DEPRECATED alias: characters, converted to tokens",
+    )
+    ap.add_argument(
+        "--tokenizer",
+        default=prompt_len.DEFAULT_MODEL,
+        help="tokenizer dir for the length fit",
+    )
     ap.add_argument("--join", type=float, default=15.0)
     ap.add_argument(
         "--only", default="", help="comma list of scenario labels to run (default all)"
@@ -210,13 +276,15 @@ def main():
         )
     with open(a.out, "a") as fh:
         fh.write(json.dumps({"meta": {"observe": observe}}) + "\n")
-    T, C = a.tokens, a.ctx_chars
+    tok = prompt_len.load_tokenizer(a.tokenizer)
+    C = ctx_tokens_from_args(a, tok)
+    T = a.tokens
     only = {x for x in a.only.split(",") if x}
 
     def run(label, plans):
         if only and label not in only and label != "warmup":
             return
-        scenario(a.url, a.model, a.out, label, plans, T, C)
+        scenario(a.url, a.model, a.out, label, plans, T, C, tok)
 
     run("warmup", [("w", 0, 64, False, 99)])
     run("solo", [("A", 0, None, False, 1)])

@@ -56,6 +56,32 @@ def stream(url, body, t0, rows, name, lock):
         }
 
 
+def served_ctx(tokens, chars, legacy_chars, tok, flag):
+    """Served prompt tokens for one prompt: --*-ctx-tokens wins; the deprecated character flag is converted
+    (and logged); with neither, the legacy character default is converted (and logged)."""
+    import prompt_len
+
+    if tokens is not None and chars is not None:
+        raise SystemExit(
+            f"{flag} is a deprecated alias; give one of it or its --*-ctx-tokens"
+        )
+    if tokens is not None:
+        return tokens
+    if chars is not None:
+        n = prompt_len.tokens_from_chars(tok, chars)
+        print(
+            f"warning: {flag} {chars} is deprecated; using {n} served tokens",
+            flush=True,
+        )
+        return n
+    n = prompt_len.tokens_from_chars(tok, legacy_chars)
+    print(
+        f"note: default {flag} ({legacy_chars} legacy characters) is {n} served tokens",
+        flush=True,
+    )
+    return n
+
+
 def tps(times, lo, hi):
     window = [t for t in times if lo <= t < hi]
     if len(window) < 2:
@@ -71,8 +97,30 @@ def main():
     p.add_argument("--min-rows", type=int, default=None)
     p.add_argument("--join", type=float, default=12.0)
     p.add_argument("--a-tokens", type=int, default=2000)
-    p.add_argument("--b-chars", type=int, default=60000)
-    p.add_argument("--a-chars", type=int, default=1400)
+    p.add_argument(
+        "--a-ctx-tokens",
+        type=int,
+        default=None,
+        help="A's served prompt tokens (template included; default: the legacy 1400 characters, converted)",
+    )
+    p.add_argument(
+        "--b-ctx-tokens",
+        type=int,
+        default=None,
+        help="B's served prompt tokens (default: the legacy 60000 characters, converted)",
+    )
+    p.add_argument(
+        "--a-chars",
+        type=int,
+        default=None,
+        help="DEPRECATED alias: characters of A's prompt, converted to served tokens",
+    )
+    p.add_argument(
+        "--b-chars",
+        type=int,
+        default=None,
+        help="DEPRECATED alias: characters of B's prompt, converted to served tokens",
+    )
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--scratch", type=Path, required=True)
     p.add_argument(
@@ -88,8 +136,12 @@ def main():
     )
     sys.path.insert(0, str(HERE))
     import conc_probe
+    import prompt_len
     import tfbench as tb
 
+    tok = prompt_len.load_tokenizer(tb.M)
+    a_ctx = served_ctx(a.a_ctx_tokens, a.a_chars, 1400, tok, "--a-chars")
+    b_ctx = served_ctx(a.b_ctx_tokens, a.b_chars, 60000, tok, "--b-chars")
     (a.scratch / "tmp").mkdir(parents=True, exist_ok=True)
     os.environ["TMPDIR"] = str(a.scratch / "tmp")
     env = {
@@ -117,8 +169,10 @@ def main():
         rows: dict = {}
         lock = threading.Lock()
         t0 = time.perf_counter()
-        body_a = conc_probe.body(s.model, 5, a.a_tokens, a.a_chars, True)
-        body_b = conc_probe.body(s.model, 6, 32, a.b_chars, True)
+        body_a = conc_probe.body(
+            s.model, 5, a.a_tokens, None, True, ctx_tokens=a_ctx, tok=tok
+        )
+        body_b = conc_probe.body(s.model, 6, 32, None, True, ctx_tokens=b_ctx, tok=tok)
         threads = [
             threading.Thread(target=stream, args=(s.url, body_a, t0, rows, "A", lock)),
         ]
@@ -134,6 +188,8 @@ def main():
         for th in threads:
             th.join()
         A, B = rows["A"], rows["B"]
+        prompt_len.check_served_length(a_ctx, {"prompt_tokens": A["prompt"]})
+        prompt_len.check_served_length(b_ctx, {"prompt_tokens": B["prompt"]})
         b_start = B["start"]
         b_first = B["times"][0]
         record = {

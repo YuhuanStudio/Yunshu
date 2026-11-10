@@ -23,6 +23,9 @@ import time
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import prompt_len  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 PROMPTS = Path("/Volumes/P5Plus/yunshu-build/tfnew/prompts")
 OQ4E = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
@@ -250,6 +253,8 @@ def main(argv=None) -> int:
             )
             if r["ct"] < a.tokens * 0.9:
                 raise RuntimeError(f"short output {r['ct']}")
+            # the label is the served turn-1 prompt length of the prompt file (prompt_len.py)
+            prompt_len.check_served_length(a.ctx, {"prompt_tokens": r["pt"]})
             r["rep"] = rep
             rows.append(r)
         time.sleep(2)  # let the server flush its per-request / per-stream log lines

@@ -23,6 +23,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(__file__))
+import prompt_len  # noqa: E402
 from memory_ab import code_doc, log_tail, stop_server  # noqa: E402
 from process_memory import system_used_bytes  # noqa: E402
 
@@ -211,13 +212,20 @@ def main(argv=None):
                     "ple": ple,
                 }
             )
+            return d.get("usage") or {}
 
+        tok = prompt_len.load_tokenizer(a.model)
         for size in a.sizes:
-            doc = code_doc(size, max(size - 200, 200))
-            q = doc + "\nList three functions that use 'cache'."
-            request(f"{size}-cold", q)
-            request(
-                f"{size}-warm", q
+            # the size is the served turn-1 prompt length (prompt_len.py); checked on every request below
+            q = prompt_len.build_text(
+                tok,
+                code_doc(size, size * 6),
+                size,
+                suffix="\nList three functions that use 'cache'.",
+            )
+            prompt_len.check_served_length(size, request(f"{size}-cold", q))
+            prompt_len.check_served_length(
+                size, request(f"{size}-warm", q)
             )  # same prompt: APC hit, digest must equal the cold one
         if a.image:
             request(

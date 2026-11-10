@@ -22,6 +22,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(__file__))
+import prompt_len  # noqa: E402
 from process_memory import process_tree_memory  # noqa: E402
 
 GIB = 2**30
@@ -260,15 +261,18 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
                 256,
             )
             record(f"short{i}", u, s)
+        tok = prompt_len.load_tokenizer(model)
         for size in SIZES:
-            doc = code_doc(size, size - 200)
-            msgs = [
-                {
-                    "role": "user",
-                    "content": doc + "\nList three functions that use 'cache'.",
-                }
-            ]
+            # the size is the served turn-1 prompt length (prompt_len.py)
+            doc = prompt_len.build_text(
+                tok,
+                code_doc(size, size * 6),
+                size,
+                suffix="\nList three functions that use 'cache'.",
+            )
+            msgs = [{"role": "user", "content": doc}]
             out, u, s = chat(url, msgs, 128)
+            prompt_len.check_served_length(size, u)
             record(f"{size // 1024}k-turn1", u, s)
             msgs += [
                 {"role": "assistant", "content": out},

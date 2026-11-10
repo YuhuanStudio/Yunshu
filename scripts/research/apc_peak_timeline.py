@@ -22,6 +22,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(__file__))
+import prompt_len  # noqa: E402
 from memory_ab import GIB, code_doc, metrics  # noqa: E402
 from process_memory import process_tree_memory  # noqa: E402
 
@@ -201,9 +202,12 @@ def run_arm(name, tree, model, port, rep, emit, sizes, out_path, session=None):
         side.start()
         step_no = [0]
 
+        last_usage = {}
+
         def measured(label, messages, max_tokens):
             t0 = time.time()
             out, usage = chat(url, messages, max_tokens)
+            last_usage["u"] = usage
             t1 = time.time()
             time.sleep(1.5)
             fp, gauges = side.take(t0, t1 + 1.5)
@@ -265,15 +269,22 @@ def run_arm(name, tree, model, port, rep, emit, sizes, out_path, session=None):
                 [{"role": "user", "content": code_doc(100 + i, 900) + "\nSummarize."}],
                 256,
             )
+        tok = prompt_len.load_tokenizer(model)
         for size in sizes:
+            # the size is the served turn-1 prompt length (prompt_len.py)
             msgs = [
                 {
                     "role": "user",
-                    "content": code_doc(size, size - 200)
-                    + "\nList three functions that use 'cache'.",
+                    "content": prompt_len.build_text(
+                        tok,
+                        code_doc(size, size * 6),
+                        size,
+                        suffix="\nList three functions that use 'cache'.",
+                    ),
                 }
             ]
             out = measured(f"{size // 1024}k-turn1", msgs, 128)
+            prompt_len.check_served_length(size, last_usage["u"])
             msgs += [
                 {"role": "assistant", "content": out},
                 {"role": "user", "content": "Now list three that use 'queue'."},

@@ -25,6 +25,20 @@ scripts/dev/yv ab --base <base-sha> --cand <candidate-sha> --suite preflight --l
 Exit code: 0 every stage passed, 1 a stage failed, 2 infrastructure error (tool, git, gpuq,
 parameter mismatch). `yv ab` blocks until done; `--detach` returns at once.
 
+## Length labels are served lengths
+
+A cell's length label (`1024`, `8192`, `32K`, `--ctx-tokens`) is the server-reported `usage.prompt_tokens` of the
+cell's **first turn**: chat template, system prompt and media (image / audio / video) tokens included. It is never
+content tokens, characters / 4 or filler tokens. Later turns add the reply and are not held to the label.
+`scripts/research/prompt_len.py` is the one implementation: `build_text` fits text to an exact served length for a
+tokenizer + chat template (+ known media tokens), and `check_served_length(label, usage, turn=1)` raises when the
+served count is off by more than `max(16, 1%)`. tfbench decode and concurrent cells, `conc_probe`, `phaseb_conc`,
+`multimodal_apc` and the other length-labelled harnesses (`lone_decode_bench`, `bench_context_batch`, `memory_ab`,
+`phase_probe`, ...) call it and fail the cell on a mismatch. Older character / word / filler flags survive only as
+deprecated aliases that convert with `prompt_len.tokens_from_chars` and log the conversion. `tests/unit/test_prompt_len.py`
+fails any new `scripts/research` script that sends chat prompts and takes a length flag without it (explicit allowlist
+with reasons; the allowlist lists only scripts whose flag is not a prompt length).
+
 ## Arms
 
 For a reviewable verdict, commit both arms and pass their full commit SHAs. Check the

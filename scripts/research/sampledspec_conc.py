@@ -139,8 +139,9 @@ def stream(url, b, t_zero, *, on_first_token=None):
     )
 
 
-def run_scenario(url, model, scenario, shape, tokens, ctx_chars, join, salt_base):
+def run_scenario(url, model, scenario, shape, tokens, ctx_tokens, tok, join, salt_base):
     import conc_probe
+    import prompt_len
 
     t_zero = time.perf_counter()
     out, errs = {}, []
@@ -148,10 +149,15 @@ def run_scenario(url, model, scenario, shape, tokens, ctx_chars, join, salt_base
     def go(name, delay, ntok, salt):
         try:
             time.sleep(delay)
-            prompt = (
-                conc_probe.filler(ctx_chars, salt_base + salt)
-                + f"\n\n[{salt_base + salt}] Review the material above carefully. Reason step by step about "
+            ask = (
+                f"\n\n[{salt_base + salt}] Review the material above carefully. Reason step by step about "
                 "its design, then write a detailed technical critique with concrete improvement proposals."
+            )
+            prompt = prompt_len.build_text(
+                tok,
+                conc_probe.filler(ctx_tokens * 6, salt_base + salt),
+                ctx_tokens,
+                suffix=ask,
             )
             out[name] = stream(url, body(model, prompt, ntok, shape), t_zero)
         except Exception as e:  # noqa: BLE001 - surfaced after join
@@ -167,6 +173,9 @@ def run_scenario(url, model, scenario, shape, tokens, ctx_chars, join, salt_base
         t.join()
     if errs or set(out) != ({"A"} if scenario == "solo" else {"A", "B"}):
         raise RuntimeError(f"scenario failed: {errs}")
+    for name in out:  # served turn-1 length of every request (solo's B is not sent)
+        if out[name]["usage"]:
+            prompt_len.check_served_length(ctx_tokens, out[name]["usage"])
     if scenario == "solo":
         ta = out["A"]["times"]
         out["B"] = dict(
@@ -196,7 +205,18 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--base-src", type=Path, required=True)
     p.add_argument("--cand-src", type=Path, required=True)
-    p.add_argument("--ctx-chars", type=int, required=True)
+    p.add_argument(
+        "--ctx-tokens",
+        type=int,
+        default=None,
+        help="served prompt tokens per request (template included)",
+    )
+    p.add_argument(
+        "--ctx-chars",
+        type=int,
+        default=None,
+        help="DEPRECATED alias: characters of filler, converted to served tokens",
+    )
     p.add_argument("--scenarios", nargs="+", required=True)
     p.add_argument("--shapes", nargs="+", required=True)
     p.add_argument("--rep", type=int, required=True)
@@ -216,7 +236,22 @@ def main():
     if a.dry_run:
         print(json.dumps(dict(complete=True, order=arm_order(a.rep))))
         return
+    import prompt_len
     import tfbench as t
+
+    if a.ctx_tokens is not None and a.ctx_chars is not None:
+        raise SystemExit("--ctx-chars is a deprecated alias of --ctx-tokens; give one")
+    tok = prompt_len.load_tokenizer(a.model or prompt_len.DEFAULT_MODEL)
+    if a.ctx_chars is not None:
+        ctx_tokens = prompt_len.tokens_from_chars(tok, a.ctx_chars)
+        print(
+            f"warning: --ctx-chars {a.ctx_chars} is deprecated; using {ctx_tokens} served tokens",
+            flush=True,
+        )
+    elif a.ctx_tokens is not None:
+        ctx_tokens = a.ctx_tokens
+    else:
+        raise SystemExit("give --ctx-tokens (served prompt tokens per request)")
 
     a.out.parent.mkdir(parents=True, exist_ok=True)
     for arm in arm_order(a.rep):
@@ -254,7 +289,8 @@ def main():
                         scenario,
                         shape,
                         a.tokens,
-                        a.ctx_chars,
+                        ctx_tokens,
+                        tok,
                         a.join,
                         salt_base=1000 * (a.rep + 1) + 10 * si,
                     )

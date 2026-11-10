@@ -20,6 +20,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(__file__))
+import prompt_len  # noqa: E402
 from memory_ab import code_doc, log_tail, stop_server  # noqa: E402
 from process_memory import system_used_bytes  # noqa: E402
 
@@ -141,7 +142,13 @@ def build_parser():
     )
     ap.add_argument("--model", required=True)
     ap.add_argument("--port", type=int, default=18995)
-    ap.add_argument("--ctx", type=int, nargs="+", default=[1024])
+    ap.add_argument(
+        "--ctx",
+        type=int,
+        nargs="+",
+        default=[1024],
+        help="served prompt tokens per request (template included; prompt_len.py)",
+    )
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--tokens", type=int, default=192)
     ap.add_argument("--tf-arg", action="append", default=[])
@@ -210,15 +217,17 @@ def main(argv=None):
             }
         )
         stream_request(url, code_doc(1, 300) + "\nSummarize.", 16)  # warmup
+        tok = prompt_len.load_tokenizer(a.model)
         for ctx in a.ctx:
             for rep in range(a.reps):
-                doc = code_doc(ctx * 100 + rep, max(ctx - 200, 100))
-                res = stream_request(
-                    url,
-                    doc
-                    + "\nList three functions that use 'cache'; explain each at length.",
-                    a.tokens,
+                doc = prompt_len.build_text(
+                    tok,
+                    code_doc(ctx * 100 + rep, ctx * 6),
+                    ctx,
+                    suffix="\nList three functions that use 'cache'; explain each at length.",
                 )
+                res = stream_request(url, doc, a.tokens)
+                prompt_len.check_served_length(ctx, res["usage"] or {})
                 n = (res["usage"] or {}).get("completion_tokens") or res["deltas"]
                 rate = decode_tok_s(res)
                 if rate is None or n < a.tokens:

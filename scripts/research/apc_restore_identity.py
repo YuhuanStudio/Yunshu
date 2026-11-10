@@ -16,6 +16,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import prompt_len  # noqa: E402
 import tfbench as t  # noqa: E402
 
 NO_LOGPROBS = False  # --no-logprobs: compare streamed text pieces (logprobs + penalty stays on the chain)
@@ -188,6 +189,8 @@ def main():
         res["full"] = ask(s.url, s.model, Q, a.tokens, sampling, capture)
     finally:
         s.kill()
+    # the label is the served turn-1 length of the prompt file P (prime); Q adds a one-line instruction on top
+    prompt_len.check_served_length(a.ctx, {"prompt_tokens": res["prime"]["pt"]})
     if a.compare_spec_off:
         s = t.Srv("yunshu", {**env, "YUNSHU_VLM_DRAFT": "off"}, f"apcid-off-{a.ctx}")
         try:

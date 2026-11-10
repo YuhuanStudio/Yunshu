@@ -4,8 +4,9 @@ Mirrors oMLX's admin benchmark (omlx/admin/benchmark.py) over HTTP so every
 engine gets the same test: single requests at prompt lengths 1K..200K tokens
 (``pp``) generating 128 tokens (``tg``), then 2/4/8 concurrent requests at
 pp1024. Every prompt starts with a unique ``BENCH-<uuid>`` prefix so no prefix
-cache can hit; the body is oMLX's code_python corpus. Prompt text is sized with
-the checkpoint's tokenizer; the server's reported prompt_tokens is recorded.
+cache can hit; the body is oMLX's code_python corpus. ``pp`` is the SERVED prompt
+length (template included; prompt_len.py): the prompt is sized with the checkpoint's
+tokenizer and every single and batch request is checked against it.
 
 Per request: TTFT, prefill tok/s (prompt / TTFT), decode tok/s (tokens after
 the first / time after the first). Per batch: aggregate decode tok/s (all
@@ -28,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import prompt_len  # noqa: E402
 from process_memory import process_tree_memory  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,14 +50,10 @@ INSTRUCTIONS = {
 
 
 def make_prompt(tokenizer, corpus, target, instruction=INSTRUCTION):
+    """The user message whose SERVED turn-1 length (chat template included) is exactly target tokens
+    (prompt_len.build_text); the unique BENCH-<uuid> prefix keeps the prefix cache from hitting."""
     prefix = f"BENCH-{uuid.uuid4().hex} "
-    body_tokens = target - len(tokenizer.encode(prefix + instruction))
-    ids = []
-    text = corpus
-    while len(ids) < body_tokens:
-        ids = tokenizer.encode(text)
-        text += corpus
-    return prefix + tokenizer.decode(ids[:body_tokens]) + instruction
+    return prompt_len.build_text(tokenizer, prefix + corpus, target, suffix=instruction)
 
 
 def stream(url, model, prompt, max_tokens, timeout):
@@ -200,6 +198,7 @@ def main():
         emit({"kind": "single", "pp": pp, **r, "footprint_gib": mem()})
         if r.get("error"):
             break
+        prompt_len.check_served_length(pp, {"prompt_tokens": r["prompt_tokens"]})
     for bs in a.batches:
         prompts = [prompt(a.batch_pp) for _ in range(bs)]
         t0 = time.perf_counter()
@@ -209,6 +208,10 @@ def main():
             )
         wall = time.perf_counter() - t0
         ok = [r for r in rs if not r.get("error")]
+        for r in ok:
+            prompt_len.check_served_length(
+                a.batch_pp, {"prompt_tokens": r["prompt_tokens"]}
+            )
         total = sum(r["completion_tokens"] or 0 for r in ok)
         emit(
             {

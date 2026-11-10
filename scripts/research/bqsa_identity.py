@@ -94,16 +94,19 @@ def stream(url, body, started=None):
     }
 
 
-def run_cell(server, scenario, shape, tokens, ctx_chars, join):
+def run_cell(server, scenario, shape, tokens, ctx_tokens, tok, join):
     import conc_probe
+    import prompt_len
     import sampledspec_conc as sampled
 
     jobs = plans(scenario, tokens)
 
     def request(salt, count):
-        prompt = (
-            conc_probe.filler(ctx_chars, salt)
-            + "\nReview this design and propose concrete improvements."
+        prompt = prompt_len.build_text(
+            tok,
+            conc_probe.filler(ctx_tokens * 6, salt),
+            ctx_tokens,
+            suffix="\nReview this design and propose concrete improvements.",
         )
         body = sampled.body(server.model, prompt, count, "seeded")
         body.update(logprobs=True, seed=17 + salt)
@@ -114,6 +117,10 @@ def run_cell(server, scenario, shape, tokens, ctx_chars, join):
     solo = {
         name: stream(server.url, request(salt, count)) for name, count, salt in jobs
     }
+    for row in solo.values():  # served turn-1 length of each solo request
+        prompt_len.check_served_length(
+            ctx_tokens, {"prompt_tokens": row["prompt_tokens"]}
+        )
     started, finished = threading.Event(), threading.Event()
 
     def run(job):
@@ -162,15 +169,42 @@ def main():
     parser.add_argument("--src", type=Path, required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--draft", choices=("off", "mtp"), required=True)
-    parser.add_argument("--ctx-chars", type=int, default=16000)
+    parser.add_argument(
+        "--ctx-tokens",
+        type=int,
+        default=None,
+        help="served prompt tokens per request (template included; default: the legacy 16000 characters, converted)",
+    )
+    parser.add_argument(
+        "--ctx-chars",
+        type=int,
+        default=None,
+        help="DEPRECATED alias: characters of filler, converted to served tokens",
+    )
     parser.add_argument("--tokens", type=int, default=128)
     parser.add_argument("--join", type=float, default=0.5)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--compare-off", type=Path)
     a = parser.parse_args()
-    if a.tokens < 48 or a.ctx_chars < 16 or a.join < 0:
+    if a.tokens < 48 or a.join < 0:
         parser.error("invalid request shape")
+    if a.ctx_tokens is not None and a.ctx_chars is not None:
+        parser.error("--ctx-chars is a deprecated alias of --ctx-tokens; give one")
+    import prompt_len
     import tfbench
+
+    tok = prompt_len.load_tokenizer(a.model)
+    if a.ctx_chars is not None or a.ctx_tokens is None:
+        chars = 16000 if a.ctx_chars is None else a.ctx_chars
+        ctx_tokens = prompt_len.tokens_from_chars(tok, chars)
+        print(
+            f"warning: --ctx-chars {chars} is deprecated; using {ctx_tokens} served tokens",
+            flush=True,
+        )
+    else:
+        ctx_tokens = a.ctx_tokens
+    if ctx_tokens < 16:
+        parser.error("invalid request shape")
 
     tfbench.YUNSHU_SRC = str(a.src.resolve())
     tfbench.OUT = a.out.parent / (a.out.stem + "-servers")
@@ -187,7 +221,7 @@ def main():
             for scenario in ("burst2", "burst4", "stagger"):
                 for shape in ("greedy", "seeded"):
                     row = run_cell(
-                        server, scenario, shape, a.tokens, a.ctx_chars, a.join
+                        server, scenario, shape, a.tokens, ctx_tokens, tok, a.join
                     )
                     rows.append(row)
                     out.write(json.dumps(row) + "\n")

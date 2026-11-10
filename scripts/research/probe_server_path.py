@@ -31,6 +31,8 @@ import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import prompt_len  # noqa: E402
 
 PROMPTS = {
     "code": "Write a Python module implementing a thread-safe LRU cache class with "
@@ -41,17 +43,23 @@ PROMPTS = {
 }
 
 
-def filler(n_tokens: int) -> str:
-    if n_tokens <= 0:
-        return ""
-    words = [
-        f"Record {i}: the sensor reported nominal values." for i in range(n_tokens // 9)
-    ]
+def filler_source() -> str:
+    words = [f"Record {i}: the sensor reported nominal values." for i in range(20000)]
     return "Background log (ignore):\n" + "\n".join(words) + "\n\n"
 
 
-def messages_for(task: str, context: int) -> list[dict]:
-    return [{"role": "user", "content": filler(context) + PROMPTS[task]}]
+def messages_for(task: str, context: int, tok=None) -> list[dict]:
+    """context is the SERVED turn-1 prompt length (template included; prompt_len.py); 0 = the bare task prompt."""
+    if context <= 0:
+        return [{"role": "user", "content": PROMPTS[task]}]
+    return [
+        {
+            "role": "user",
+            "content": prompt_len.build_text(
+                tok, filler_source(), context, suffix=PROMPTS[task]
+            ),
+        }
+    ]
 
 
 def rate(times: list[float]) -> float | None:
@@ -80,13 +88,14 @@ def run_http(url: str, model: str, msgs, max_tokens: int) -> dict:
         {"Content-Type": "application/json"},
     )
     resp = conn.getresponse()
-    times, text, completion = [], [], None
+    times, text, completion, prompt_tokens = [], [], None, None
     for line in resp:
         if not line.startswith(b"data: ") or line[6:].strip() == b"[DONE]":
             continue
         ev = json.loads(line[6:])
         if ev.get("usage"):
             completion = ev["usage"].get("completion_tokens")
+            prompt_tokens = ev["usage"].get("prompt_tokens")
         for ch in ev.get("choices") or []:
             c = (ch.get("delta") or {}).get("content")
             if c:
@@ -98,6 +107,7 @@ def run_http(url: str, model: str, msgs, max_tokens: int) -> dict:
         "ttft_s": round(times[0] - t0, 3) if times else None,
         "chunks": len(times),
         "tokens": completion,
+        "prompt_tokens": prompt_tokens,
         # Tokens after the first over the time after the first content chunk
         # (usage counts tokens; a chunk can carry several or none).
         "decode_tps": round((completion - 1) / span, 2)
@@ -118,7 +128,18 @@ def main():
     ap.add_argument("--served-name", default="Qwen3.8-27B")
     ap.add_argument("--layers", nargs="+", default=["runner", "engine"])
     ap.add_argument("--tasks", nargs="+", default=["code", "prose"])
-    ap.add_argument("--contexts", type=int, nargs="+", default=[0])
+    ap.add_argument(
+        "--contexts",
+        type=int,
+        nargs="+",
+        default=[0],
+        help="served turn-1 prompt tokens (template included); 0 = the bare task prompt",
+    )
+    ap.add_argument(
+        "--tokenizer",
+        default=None,
+        help="tokenizer dir for the length fit (default: --model; needed with --url when contexts > 0)",
+    )
     ap.add_argument("--max-tokens", type=int, default=256)
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--note", default="")
@@ -154,13 +175,25 @@ def main():
 
         runner._step_generator = timed
 
+    tok_path = a.tokenizer or a.model
+    if any(c > 0 for c in a.contexts) and not tok_path:
+        ap.error(
+            "--contexts > 0 needs --tokenizer (or --model) for the served-length fit"
+        )
+    tok = (
+        prompt_len.load_tokenizer(tok_path) if any(c > 0 for c in a.contexts) else None
+    )
     for ctx in a.contexts:
         for task in a.tasks:
-            msgs = messages_for(task, ctx)
+            msgs = messages_for(task, ctx, tok)
             for rep in range(a.repeats):
                 for layer in a.layers:
                     if layer == "http":
                         r = run_http(a.url, a.served_name, msgs, a.max_tokens)
+                        if ctx > 0:
+                            prompt_len.check_served_length(
+                                ctx, {"prompt_tokens": r["prompt_tokens"]}
+                            )
                         r["text_head"] = r.pop("text")[:80]
                         emit(
                             {
@@ -176,6 +209,10 @@ def main():
                         ids, pkw, salt = engine._executor.submit(
                             engine._runner_input, msgs, [], [], False, {}
                         ).result()
+                        if ctx > 0:  # the ids the runner receives are the served prompt
+                            prompt_len.check_served_length(
+                                ctx, {"prompt_tokens": len(ids)}
+                            )
                         times: list[float] = []
                         steps.clear()
                         t0 = time.perf_counter()

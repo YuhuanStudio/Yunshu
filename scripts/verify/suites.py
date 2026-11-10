@@ -92,13 +92,13 @@ SUITES = {
     "round-golden": {"stages": ["round-golden"]},
     "phaseb2": {
         "stages": ["phaseb-identity", "phaseb-speed"],
-        "phaseb_ctx_chars": [16000, 85000],
+        "phaseb_ctx_tokens": [4096, 20480],
         "phaseb_scenarios": ["burst2", "stagger", "burst4"],
         "phaseb_shapes": ["greedy", "seeded"],
     },
     "phaseb-pilot": {
         "stages": ["phaseb-identity"],
-        "phaseb_ctx_chars": [16000],
+        "phaseb_ctx_tokens": [4096],
         "phaseb_scenarios": ["burst2"],
         "phaseb_shapes": ["greedy"],
         "phaseb_arms": ["cand"],
@@ -393,18 +393,18 @@ def parse_suite(spec: str) -> dict:
 
 
 # One (context, scenario) per suite: three speed reps = three queued jobs at a time.
-for _chars in (16000, 85000):
+for _ntok in (4096, 20480):
     for _scen in ("burst2", "stagger", "burst4"):
-        SUITES[f"phaseb2-speed-{_chars // 1000}k-{_scen}"] = {
+        SUITES[f"phaseb2-speed-{_ntok // 1024}k-{_scen}"] = {
             "stages": ["phaseb-speed"],
-            "phaseb_ctx_chars": [_chars],
+            "phaseb_ctx_tokens": [_ntok],
             "phaseb_scenarios": [_scen],
             "phaseb_shapes": ["greedy", "seeded"],
         }
 
 SUITES["phaseb2-ident"] = {
     "stages": ["phaseb-identity"],
-    "phaseb_ctx_chars": [16000],
+    "phaseb_ctx_tokens": [4096],
     "phaseb_scenarios": ["solo", "burst2", "stagger", "burst4"],
     "phaseb_shapes": ["greedy", "seeded"],
 }

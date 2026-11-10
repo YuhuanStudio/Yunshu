@@ -53,7 +53,13 @@ def test_part_decode_rejects_short_reply(tfb, monkeypatch, tmp_path):
 
     def send(url, body, **_kw):
         sent.append(body["max_tokens"])
-        return {"finish": "length", "ct": 64 if len(sent) < 2 else 63, "_text": "t"}
+        # pt: the served turn-1 length (the label), so the length check passes and only the short reply is tested
+        return {
+            "finish": "length",
+            "ct": 64 if len(sent) < 2 else 63,
+            "_text": "t",
+            "pt": 1024,
+        }
 
     monkeypatch.setattr(tfb, "prompt_file_sha256", lambda *_a, **_k: "0" * 64)
     monkeypatch.setattr(tfb, "send", send)

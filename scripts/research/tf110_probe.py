@@ -11,10 +11,14 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import prompt_len  # noqa: E402
 
 BIN = "/Volumes/P5Plus/yunshu-test-envs/bench016/TensorFold-v1.1.0/tensorfold-1.1.0-macos-arm64/bin/tensorfold-native"
 MODEL = "/Volumes/P5Plus/models/TensorFold/Qwen3.8-27B-MLX-4bit"
@@ -140,8 +144,8 @@ def arm(args, depth: int, rep: int, copies: int, emit) -> None:
                 start = time.monotonic()
                 reply = post(port, dict(body, draft=drafting))
                 row = validate(reply, args.tokens, drafting)
-                if row["usage"].get("prompt_tokens") != depth:
-                    raise ValueError("wrong prompt depth")
+                # the depth is the served turn-1 prompt length (prompt_len.py); raises on a mismatch
+                prompt_len.check_served_length(depth, row["usage"])
                 if expected is None:
                     expected = row["token_sha256"]
                 if row["token_sha256"] != expected:

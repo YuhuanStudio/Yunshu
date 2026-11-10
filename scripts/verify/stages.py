@@ -3237,7 +3237,7 @@ def stage_phaseb(ctx: Ctx, *, speed: bool = False) -> StageResult:
 
     name = "phaseb-speed" if speed else "phaseb-identity"
     reps = max(3, int(ctx.suite.get("reps", 3))) if speed else 1
-    contexts = ctx.suite.get("phaseb_ctx_chars", [16000, 85000, 128000])
+    contexts = ctx.suite.get("phaseb_ctx_tokens", [4096, 20480, 32768])
     arms = ctx.suite.get(
         "phaseb_arms", ["base", "cand"] if speed else ["base", "cand", "off"]
     )
@@ -3249,13 +3249,13 @@ def stage_phaseb(ctx: Ctx, *, speed: bool = False) -> StageResult:
         ["greedy", "seeded", "agent"] if speed else ["greedy", "seeded"],
     )
     cells = []
-    for chars in contexts:
+    for ntok in contexts:
         for rep in range(reps):
             for scen in scenarios:
                 cells.append(
                     Cell(
                         name,
-                        f"c{chars}-r{rep}-{scen}",
+                        f"c{ntok}-r{rep}-{scen}",
                         [
                             ctx.py,
                             str(REPO / "scripts/research/phaseb_conc.py"),
@@ -3267,8 +3267,8 @@ def stage_phaseb(ctx: Ctx, *, speed: bool = False) -> StageResult:
                             ctx.model,
                             "--mode",
                             "speed" if speed else "identity",
-                            "--ctx-chars",
-                            str(chars),
+                            "--ctx-tokens",
+                            str(ntok),
                             "--rep",
                             str(rep),
                             "--tokens",

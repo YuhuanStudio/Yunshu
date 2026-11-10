@@ -24,10 +24,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import prompt_len  # noqa: E402
 from bench_context_batch import CORPUS, make_prompt  # noqa: E402
 
 
-def stream(url, model, content, max_tokens, times, first_box):
+def stream(url, model, content, max_tokens, times, first_box, usage_box=None):
     u = urllib.parse.urlparse(url)
     body = {
         "model": model,
@@ -35,6 +36,7 @@ def stream(url, model, content, max_tokens, times, first_box):
         "max_tokens": max_tokens,
         "temperature": 0.0,
         "stream": True,
+        "stream_options": {"include_usage": True},
         "enable_thinking": False,
         "chat_template_kwargs": {"enable_thinking": False},
     }
@@ -51,6 +53,8 @@ def stream(url, model, content, max_tokens, times, first_box):
         if not line.startswith(b"data: ") or line[6:].strip() == b"[DONE]":
             continue
         ev = json.loads(line[6:])
+        if usage_box is not None and ev.get("usage"):
+            usage_box.append(ev["usage"])
         for ch in ev.get("choices") or []:
             if (ch.get("delta") or {}).get("content"):
                 now = time.perf_counter()
@@ -108,14 +112,17 @@ def main():
     for t in threads:
         t.start()
     time.sleep(a.warm_s)
-    long_times, first = [], []
+    long_times, first, long_usage = [], [], []
     t_arrive = time.perf_counter()
     long_t = threading.Thread(
-        target=stream, args=(a.url, a.model, long_prompt, 128, long_times, first)
+        target=stream,
+        args=(a.url, a.model, long_prompt, 128, long_times, first, long_usage),
     )
     long_t.start()
     long_t.join()
     t_long_done = time.perf_counter()
+    # the long request's served turn-1 length is the label --pp (prompt_len.py); no usage = failure
+    prompt_len.check_served_length(a.pp, long_usage[0] if long_usage else {})
     for t in threads:
         t.join()
     t_end = time.perf_counter()

@@ -181,9 +181,12 @@ def main():
             )
         )
         return
+    import prompt_len
     import tfbench as t
 
     survivor = t.decode_prompt("code", args.ctx, True)
+    # the label is the survivor's served turn-1 length (prompt_len.py); LONG_ASK is a known suffix on top of it
+    survivor_tol = prompt_len.default_tol(args.ctx) + t.LONG_ASK_ALLOW
     blocker = [
         {
             "role": "user",
@@ -213,6 +216,9 @@ def main():
             for sampling in SAMPLING:
                 start = len(capture.read_text().splitlines()) if capture.exists() else 0
                 alone = ask(server, survivor, args.tokens, sampling)
+                prompt_len.check_served_length(
+                    args.ctx, alone["usage"], tol=survivor_tol
+                )
                 alone["ids"] = captured_ids(capture, start, alone)
                 start = len(capture.read_text().splitlines())
                 log_start = server.log.stat().st_size
@@ -230,6 +236,9 @@ def main():
                         raise RuntimeError("blocker never started")
                     overlap = ask(server, survivor, args.tokens, sampling)
                     blocked = task.result()
+                prompt_len.check_served_length(
+                    args.ctx, overlap["usage"], tol=survivor_tol
+                )
                 overlap["ids"] = captured_ids(capture, start, overlap)
                 with server.log.open("rb") as log:
                     log.seek(log_start)

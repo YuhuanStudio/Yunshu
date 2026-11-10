@@ -80,6 +80,7 @@ def request(url, body):
     done = False
     finish = None
     stats = {}
+    prompt_tokens = None
     with httpx.stream(
         "POST",
         url + "/v1/chat/completions",
@@ -102,6 +103,7 @@ def request(url, body):
             stats = obj.get("x_yunshu", stats)
             if obj.get("usage"):
                 stats = obj["usage"].get("x_yunshu", stats)
+                prompt_tokens = obj["usage"].get("prompt_tokens")
             for choice in obj.get("choices", []):
                 delta = choice.get("delta", {})
                 if first is None and any(
@@ -120,6 +122,7 @@ def request(url, body):
         "ids": ids,
         "finish": finish,
         "stats": stats,
+        "prompt_tokens": prompt_tokens,
     }
 
 
@@ -274,24 +277,36 @@ def run(a):
                     + (directory / "yunshu.log").read_text()[-3000:]
                 )
             time.sleep(0.5)
+        from research import prompt_len
+
+        tok = prompt_len.load_tokenizer(a.model)
+        ctxs = [int(x) for x in a.ctx.split(",")]
         bodies = [
             {
                 "model": a.model,
                 "messages": [
-                    {"role": "user", "content": "hello " * n + "Reply briefly."}
+                    {
+                        "role": "user",
+                        "content": prompt_len.build_text(
+                            tok, "hello ", n, suffix="Reply briefly."
+                        ),
+                    }
                 ],
                 "max_tokens": 16,
                 "temperature": 0,
             }
-            for n in map(int, a.ctx.split(","))
+            for n in ctxs  # --ctx: served turn-1 prompt tokens (prompt_len.py)
         ]
         for (
             body
         ) in bodies:  # warm each shape so the baseline is not a cold first request
             request(url, body)
         for rep in range(a.reps):
-            for body in bodies:
+            for n, body in zip(ctxs, bodies, strict=True):
                 baseline = request(url, body)
+                prompt_len.check_served_length(
+                    n, {"prompt_tokens": baseline["prompt_tokens"]}
+                )
                 free = g.free_memory_gb()
                 if free is None or free - a.research_gb < 16:
                     raise RuntimeError("research memory admission rejected")

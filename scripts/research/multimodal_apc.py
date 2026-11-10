@@ -22,9 +22,11 @@ import wave
 from importlib.metadata import version
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
 from gpuq_pause import was_paused  # noqa: E402
 from omni_apc_probe import png  # noqa: E402
+from prompt_len import check_served_length  # noqa: E402
 
 
 def with_audio(msg):
@@ -53,25 +55,34 @@ def with_audio(msg):
     return msg
 
 
-def messages(size: int, rgb=(200, 30, 30), tokenizer=None) -> list:
+def messages(size: int, rgb=(200, 30, 30), overhead=None, tokenizer=None) -> list:
+    """Image + filler text whose SERVED length (usage.prompt_tokens, turn 1) is `size`.
+
+    overhead = served tokens that are not text (chat template + image [+ audio]); measure it with
+    `measure_overhead`. size <= overhead + 8 (or no tokenizer) gives the minimal one-phrase request, whose label
+    is whatever the server reports (see prompt_len.py for the length-label definition)."""
     question = "Describe its colour in one word."
-    text = "The image is part of this conversation. " * size + question
-    if tokenizer is not None:
+    text = "The image is part of this conversation. " + question
+    if tokenizer is not None and overhead is not None and size > overhead + 8:
+
+        def count(t):
+            return len(tokenizer.encode(t, add_special_tokens=False))
+
+        source = "The image is part of this conversation. " * (size // 4 + 8)
+        ids = tokenizer.encode(source, add_special_tokens=False)
         tail = "\n\n" + question
-        tail_n = len(tokenizer.encode(tail, add_special_tokens=False))
-        tokens = tokenizer.encode(
-            "The image is part of this conversation. " * max(1, size // 4 + 2),
-            add_special_tokens=False,
-        )
-        n = max(0, size - tail_n)
-        for _ in range(4):
-            text = tokenizer.decode(tokens[:n]) + tail
-            actual = len(tokenizer.encode(text, add_special_tokens=False))
-            if actual >= size:
+        want = size - overhead
+        n = max(1, want - count(tail))
+        for _ in range(32):
+            text = tokenizer.decode(ids[:n]) + tail
+            actual = count(text)
+            if actual == want:
                 break
-            n += size - actual
+            n += want - actual
         else:
-            raise ValueError("cannot construct requested text token budget")
+            raise ValueError(
+                f"cannot construct served length {size} (text {actual} != {want})"
+            )
     return [
         {
             "role": "user",
@@ -90,6 +101,22 @@ def messages(size: int, rgb=(200, 30, 30), tokenizer=None) -> list:
             ],
         }
     ]
+
+
+def text_tokens(msg, tokenizer):
+    parts = [
+        c["text"] for c in msg[0]["content"] if isinstance(c, dict) and "text" in c
+    ]
+    return sum(len(tokenizer.encode(t, add_special_tokens=False)) for t in parts)
+
+
+async def measure_overhead(engine, with_audio_too=False):
+    """Served tokens that are not filler text: template + image (+ audio), from one minimal request."""
+    msg = messages(1)
+    if with_audio_too:
+        msg = with_audio(msg)
+    r = await probe(engine, msg, cold=True)
+    return r["pt"] - text_tokens(msg, engine._tokenizer)
 
 
 def validate_pair(
@@ -320,11 +347,17 @@ async def run(a):
                     },
                 }
             )
+            overhead = await measure_overhead(engine, a.image_audio)
+            emit({"event": "overhead", "non_text_tokens": overhead})
+            tk = engine._tokenizer
             for size in a.sizes:
-                msg = messages(size, tokenizer=engine._tokenizer)
+                msg = messages(size, overhead=overhead, tokenizer=tk)
                 if a.image_audio:
                     msg = with_audio(msg)
                 cold = await measured(lambda: probe(engine, msg, cold=True))
+                if size > overhead + 8:
+                    # label = served turn-1 length (prompt_len.py); fail the cell on mismatch
+                    check_served_length(size, {"prompt_tokens": cold["pt"]})
                 warm = await measured(
                     lambda: probe(engine, msg),
                     restore=lambda: probe(engine, msg, cold=True),
@@ -354,12 +387,12 @@ async def run(a):
                         (
                             with_audio(
                                 messages(
-                                    size, (30, 30, 200), tokenizer=engine._tokenizer
+                                    size, (30, 30, 200), overhead=overhead, tokenizer=tk
                                 )
                             )
                             if a.image_audio
                             else messages(
-                                size, (30, 30, 200), tokenizer=engine._tokenizer
+                                size, (30, 30, 200), overhead=overhead, tokenizer=tk
                             )
                         ),
                     ),
@@ -492,7 +525,9 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", required=True)
     p.add_argument("--out", required=True)
-    p.add_argument("--sizes", type=int, nargs="+", default=[1, 32768])
+    p.add_argument(
+        "--sizes", type=int, nargs="+", default=[1, 32768]
+    )  # <= overhead+8: minimal request, label = served
     p.add_argument("--parity-items", type=int, default=0)
     p.add_argument("--require-hit", action="store_true")
     p.add_argument("--image-audio", action="store_true")

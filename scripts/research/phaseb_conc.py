@@ -24,7 +24,23 @@ def parser():
         "--model", default="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
     )
     p.add_argument("--mode", choices=["identity", "speed"], default="identity")
-    p.add_argument("--ctx-chars", type=int, default=16000)
+    p.add_argument(
+        "--ctx-tokens",
+        type=int,
+        default=None,
+        help="served prompt tokens (default 4096)",
+    )
+    p.add_argument(
+        "--ctx-chars",
+        type=int,
+        default=None,
+        help="DEPRECATED alias: characters, converted to tokens",
+    )
+    p.add_argument(
+        "--tokenizer",
+        default="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp",
+        help="tokenizer dir for the length fit",
+    )
     p.add_argument("--tokens", type=int, default=128)
     p.add_argument("--rep", type=int, default=0)
     p.add_argument(
@@ -57,8 +73,30 @@ def plans(scenario, tokens, join):
     raise ValueError(f"unknown scenario: {scenario}")
 
 
+def resolve_ctx(a):
+    """--ctx-tokens (default 4096); the deprecated --ctx-chars is converted with the tokenizer and logged."""
+    try:
+        from . import prompt_len
+    except ImportError:
+        import prompt_len
+    if a.ctx_chars is not None:
+        n = prompt_len.tokens_from_chars(
+            prompt_len.load_tokenizer(a.tokenizer), a.ctx_chars
+        )
+        print(
+            f"warning: --ctx-chars {a.ctx_chars} is deprecated; using --ctx-tokens {n}",
+            flush=True,
+        )
+        a.ctx_tokens = n
+    elif a.ctx_tokens is None:
+        a.ctx_tokens = 4096
+
+
 def validate(a):
-    if a.tokens < 4 or a.ctx_chars < 16 or a.join < 0 or a.rep < 0:
+    if a.ctx_tokens is not None and a.ctx_chars is not None:
+        raise ValueError("--ctx-chars is a deprecated alias of --ctx-tokens; give one")
+    resolve_ctx(a)
+    if a.tokens < 4 or a.ctx_tokens < 16 or a.join < 0 or a.rep < 0:
         raise ValueError("invalid request shape")
     if not set(a.shapes) <= {"greedy", "seeded", "agent"} or not a.shapes:
         raise ValueError("unknown or empty sampling shapes")
@@ -120,18 +158,28 @@ def check_identity(solo, concurrent):
 
 def run_cell(server, a, scenario, shape, strict=True):
     try:
-        from . import conc_probe
+        from . import conc_probe, prompt_len
         from . import sampledspec_conc as sampled
     except ImportError:
         import conc_probe
+        import prompt_len
         import sampledspec_conc as sampled
 
     jobs = plans(scenario, a.tokens, a.join)
+    tok = prompt_len.load_tokenizer(a.tokenizer)
+
+    def stream(url, b, t_zero, **kw):
+        # the label is the served turn-1 length (prompt_len.py); fail the cell on a mismatch
+        row = sampled.stream(url, b, t_zero, **kw)
+        prompt_len.check_served_length(a.ctx_tokens, row["usage"])
+        return row
 
     def request(salt, ntok):
-        prompt = (
-            conc_probe.filler(a.ctx_chars, salt)
-            + "\nReview this design carefully and propose concrete improvements. Reason step by step."
+        prompt = prompt_len.build_text(
+            tok,
+            conc_probe.filler(a.ctx_tokens * 6, salt),
+            a.ctx_tokens,
+            suffix="\nReview this design carefully and propose concrete improvements. Reason step by step.",
         )
         body = sampled.body(
             server.model, prompt, ntok, "seeded" if shape == "seeded" else "agent"
@@ -144,9 +192,7 @@ def run_cell(server, a, scenario, shape, strict=True):
 
     solo = {}
     for name, _, ntok, salt in jobs:
-        solo[name] = sampled.stream(
-            server.url, request(salt, ntok), time.perf_counter()
-        )
+        solo[name] = stream(server.url, request(salt, ntok), time.perf_counter())
     t_zero = time.perf_counter()
 
     started = threading.Event()
@@ -165,7 +211,7 @@ def run_cell(server, a, scenario, shape, strict=True):
         else:
             time.sleep(delay)
         try:
-            return name, sampled.stream(
+            return name, stream(
                 server.url,
                 request(salt, ntok),
                 t_zero,
@@ -206,7 +252,7 @@ def speed_verdict(rows, reps=3, tolerance=0.02):
     for r in rows:
         if "scenario" in r:
             groups.setdefault(
-                (r["ctx_chars"], r["scenario"], r["shape"]), {}
+                (r["ctx_tokens"], r["scenario"], r["shape"]), {}
             ).setdefault(r["arm"], {})[r["rep"]] = r
     reasons, numbers = [], []
     if not groups:
@@ -371,7 +417,7 @@ def main():
                                 reference.setdefault(key, digests) == digests
                                 for digests in seen
                             )
-                        result.update(arm=arm, rep=a.rep, ctx_chars=a.ctx_chars)
+                        result.update(arm=arm, rep=a.rep, ctx_tokens=a.ctx_tokens)
                         write(result)
                 if arm != "off":
                     server.verify_spec_mode()

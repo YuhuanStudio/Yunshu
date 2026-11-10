@@ -2,6 +2,33 @@
 
 import pytest
 from scripts.research import phaseb_conc as p
+from scripts.research import prompt_len
+
+SMALL_TOK = "/Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16"
+
+
+class _WordTok:
+    """Word-level stand-in for the HF tokenizer: one token per word, a one-token template overhead."""
+
+    def encode(self, text, add_special_tokens=False):
+        return text.split()
+
+    def decode(self, ids):
+        return " ".join(ids)
+
+    def apply_chat_template(
+        self, msgs, tokenize=True, add_generation_prompt=True, **kw
+    ):
+        ids = ["<tpl>"]
+        for m in msgs:
+            ids += m["content"].split()
+        return ids
+
+
+@pytest.fixture
+def no_disk_tok(monkeypatch):
+    # run_cell loads its tokenizer for the length fit; the CPU suite must never read a model directory
+    monkeypatch.setattr(prompt_len, "load_tokenizer", lambda path=None: _WordTok())
 
 
 def test_plan_and_cli_are_cpu_only():
@@ -41,7 +68,7 @@ def test_speed_verdict_requires_interleaved_pairs_and_wins():
         for arm, tps in [("base", 20.0), ("cand", 30.0)]:
             rows.append(
                 dict(
-                    ctx_chars=128000,
+                    ctx_tokens=32768,
                     scenario="burst2",
                     shape="seeded",
                     arm=arm,
@@ -93,7 +120,7 @@ def test_yv_pilot_uses_one_arm_cell_and_short_output():
 
     cfg = parse_suite("phaseb-pilot")
     assert cfg["phaseb_arms"] == ["cand"]
-    assert cfg["phaseb_ctx_chars"] == [16000]
+    assert cfg["phaseb_ctx_tokens"] == [4096]
     assert cfg["phaseb_scenarios"] == ["burst2"]
     assert cfg["phaseb_tokens"] == 128
 
@@ -122,7 +149,7 @@ def test_saved_identity_evidence_rechecks_solo_hash():
     )[0]
 
 
-def test_stagger_waits_for_running_row_first_token(monkeypatch):
+def test_stagger_waits_for_running_row_first_token(monkeypatch, no_disk_tok):
     import threading
     from types import SimpleNamespace
 
@@ -142,11 +169,17 @@ def test_stagger_waits_for_running_row_first_token(monkeypatch):
         else:
             newcomer.set()
         return dict(
-            times=[1, 2, 3], t0=0, ttft=1, usage={"completion_tokens": 3}, digest="same"
+            times=[1, 2, 3],
+            t0=0,
+            ttft=1,
+            usage={"completion_tokens": 3, "prompt_tokens": 64},
+            digest="same",
         )
 
     monkeypatch.setattr(sampled, "stream", stream)
-    a = SimpleNamespace(tokens=128, join=0, ctx_chars=16, mode="identity")
+    a = SimpleNamespace(
+        tokens=128, join=0, ctx_tokens=64, mode="identity", tokenizer=SMALL_TOK
+    )
     result = p.run_cell(
         SimpleNamespace(model="test", url="unused"), a, "stagger", "seeded"
     )
@@ -167,7 +200,7 @@ def test_validate_ignores_queue_device_stamps():
     )[0]
 
 
-def test_base_arm_mismatch_is_recorded_not_fatal(monkeypatch):
+def test_base_arm_mismatch_is_recorded_not_fatal(monkeypatch, no_disk_tok):
     from types import SimpleNamespace
 
     from scripts.research import sampledspec_conc as sampled
@@ -180,11 +213,13 @@ def test_base_arm_mismatch_is_recorded_not_fatal(monkeypatch):
             times=[1, 2, 3],
             t0=0,
             ttft=1,
-            usage={"completion_tokens": 3},
+            usage={"completion_tokens": 3, "prompt_tokens": 64},
             digest=f"d{next(n)}",
         ),
     )
-    a = SimpleNamespace(tokens=128, join=0, ctx_chars=16, mode="identity")
+    a = SimpleNamespace(
+        tokens=128, join=0, ctx_tokens=64, mode="identity", tokenizer=SMALL_TOK
+    )
     server = SimpleNamespace(model="test", url="unused")
     r = p.run_cell(server, a, "solo", "greedy", strict=False)
     assert r["identity"] is False
@@ -214,7 +249,7 @@ def test_speed_verdict_reports_uncovered_stagger_instead_of_aborting():
         return dict(
             arm=arm,
             rep=rep,
-            ctx_chars=1,
+            ctx_tokens=1,
             scenario="stagger",
             shape="greedy",
             solo={"per_row": {}},

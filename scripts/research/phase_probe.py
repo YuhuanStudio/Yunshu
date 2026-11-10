@@ -8,7 +8,11 @@ channel next to the client's own send / first-token / end times, plus prefill pr
 Exits nonzero if a request never reported `prefill` although its first token came > 1.5 s after
 it was sent.
 
-    python scripts/research/phase_probe.py MODEL --scenario burst --out DIR [--ctx-chars 40000]
+    python scripts/research/phase_probe.py MODEL --scenario burst --out DIR [--ctx-tokens 9000]
+
+--ctx-tokens is the SERVED prompt length (usage.prompt_tokens of each request, template included; see
+prompt_len.py); every request is checked against it. --ctx-chars is a deprecated alias (characters of filler),
+converted with the tokenizer and logged; with neither flag the legacy 40000-character default is converted.
 """
 
 from __future__ import annotations
@@ -26,6 +30,8 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import prompt_len  # noqa: E402
 
 
 def first_seen(samples: list[tuple[float, str]]) -> dict[str, float]:
@@ -56,6 +62,20 @@ def missing_prefill(
     return (t_first - t_send) > min_gap and "prefill" not in seen
 
 
+def ctx_tokens_from_args(a, tok) -> int:
+    """--ctx-tokens wins; deprecated --ctx-chars is converted and logged; neither: the legacy 40000-char default."""
+    if a.ctx_tokens is not None and a.ctx_chars is not None:
+        raise SystemExit("--ctx-chars is a deprecated alias of --ctx-tokens; give one")
+    if a.ctx_tokens is not None:
+        return a.ctx_tokens
+    chars = a.ctx_chars if a.ctx_chars is not None else 40000
+    n = prompt_len.tokens_from_chars(tok, chars)
+    print(
+        f"note: --ctx-chars {chars} is deprecated; using {n} served tokens", flush=True
+    )
+    return n
+
+
 def load_conc():
     spec = importlib.util.spec_from_file_location("conc_probe", HERE / "conc_probe.py")
     mod = importlib.util.module_from_spec(spec)
@@ -63,7 +83,7 @@ def load_conc():
     return mod
 
 
-async def run(url, model, plans, ctx_chars, tokens):
+async def run(url, model, plans, ctx_tokens, tokens, tok):
     import httpx
 
     conc = load_conc()
@@ -91,7 +111,7 @@ async def run(url, model, plans, ctx_chars, tokens):
 
     async def one(client, name, delay, salt):
         await asyncio.sleep(delay)
-        b = conc.body(model, salt, tokens, ctx_chars, False)
+        b = conc.body(model, salt, tokens, None, False, ctx_tokens=ctx_tokens, tok=tok)
         r = rec["reqs"].setdefault(
             name,
             {
@@ -109,24 +129,26 @@ async def run(url, model, plans, ctx_chars, tokens):
                 if line.startswith(": yunshu-progress"):
                     with contextlib.suppress(ValueError):
                         r["progress"].append((now, json.loads(line.split(" ", 2)[2])))
-                elif (
-                    line.startswith("data: ")
-                    and line != "data: [DONE]"
-                    and r["first"] is None
-                ):
+                elif line.startswith("data: ") and line != "data: [DONE]":
                     try:
                         d = json.loads(line[6:])
                     except ValueError:
                         continue
-                    for ch in d.get("choices") or []:
-                        dl = ch.get("delta") or {}
-                        if (
-                            dl.get("content")
-                            or dl.get("reasoning_content")
-                            or dl.get("reasoning")
-                        ):
-                            r["first"] = now
+                    if d.get("usage"):
+                        r["prompt_tokens"] = d["usage"].get("prompt_tokens")
+                    if r["first"] is None:
+                        for ch in d.get("choices") or []:
+                            dl = ch.get("delta") or {}
+                            if (
+                                dl.get("content")
+                                or dl.get("reasoning_content")
+                                or dl.get("reasoning")
+                            ):
+                                r["first"] = now
         r["end"] = time.monotonic() - t_zero
+        prompt_len.check_served_length(
+            ctx_tokens, {"prompt_tokens": r.get("prompt_tokens")}
+        )
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(900.0)) as client:
         pt = asyncio.create_task(poller(client))
@@ -205,7 +227,18 @@ def main() -> int:
         "--home", default="/Volumes/P5Plus/yunshu-build/agentload-home-phase"
     )
     ap.add_argument("--out", required=True)
-    ap.add_argument("--ctx-chars", type=int, default=40000)
+    ap.add_argument(
+        "--ctx-tokens",
+        type=int,
+        default=None,
+        help="served prompt tokens per request (template included)",
+    )
+    ap.add_argument(
+        "--ctx-chars",
+        type=int,
+        default=None,
+        help="DEPRECATED alias: characters of filler, converted to served tokens",
+    )
     ap.add_argument("--tokens", type=int, default=200)
     ap.add_argument("--n", type=int, default=2)
     ap.add_argument("--debug", action="store_true")
@@ -268,7 +301,9 @@ def main() -> int:
             if a.scenario == "burst"
             else [("A", 0.0, 11), ("B", 6.0, 12)]
         )
-        rec = asyncio.run(run(url, model, plans, a.ctx_chars, a.tokens))
+        tok = prompt_len.load_tokenizer(a.model)
+        ctx = ctx_tokens_from_args(a, tok)
+        rec = asyncio.run(run(url, model, plans, ctx, a.tokens, tok))
         text, bad = report(rec)
         print(text)
         with open(os.path.join(a.out, f"phases-{a.scenario}.json"), "w") as f:

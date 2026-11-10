@@ -10,8 +10,14 @@ import json
 import os
 import sys
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import prompt_len  # noqa: E402
 
 TFB_DIR = "/Volumes/P5Plus/yunshu-build/wt-kernelstudy/scripts/research"
+# tfbench.LONG_ASK_ALLOW: the LONG_ASK suffix decode_prompt appends is ~33 tokens on top of the file's length
+LONG_ASK_ALLOW = 40
 
 
 def summarize(body):
@@ -84,6 +90,12 @@ def main():
                     raise RuntimeError(
                         f"bad reply ctx={ctx} {phase}: {rec['n']} {rec['finish']}"
                     )
+                # the label is the served turn-1 length; the LONG_ASK suffix is a known extra (tfbench tolerance)
+                prompt_len.check_served_length(
+                    ctx,
+                    {"prompt_tokens": rec["prompt_tokens"]},
+                    tol=prompt_len.default_tol(ctx) + LONG_ASK_ALLOW,
+                )
                 rec.update(ctx=ctx, phase=phase)
                 result["runs"].append(rec)
                 print(ctx, phase, rec["text_sha"], rec["cached"], flush=True)
