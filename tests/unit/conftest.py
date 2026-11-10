@@ -29,6 +29,7 @@ import pytest
 
 # helper modules next to the tests (fullcmp_pin_io) import by bare name, whichever file runs first
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from m5_gpu_gate import m5_gpu_run_here  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -389,6 +390,15 @@ def _bench_machine_present() -> bool:
 
 def pytest_collection_modifyitems(config, items):
     machine = _bench_machine_present()
+    m5_items = [item for item in items if item.get_closest_marker("m5_gpu")]
+    if m5_items and not m5_gpu_run_here():
+        for item in m5_items:
+            item.add_marker(
+                pytest.mark.skip(
+                    reason="needs an M5-class GPU (MetalPerformancePrimitives tensor ops, M5 kernel numerics); "
+                    "set YUNSHU_TEST_M5_GPU=1 to force"
+                )
+            )
     for item in items:
         name = os.path.basename(str(item.fspath))
         if not name.startswith(_FULLCMP_QUICK_FILES):

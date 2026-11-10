@@ -56,6 +56,7 @@ def pre_nax():
         (20, 200),
     ],
 )
+@pytest.mark.m5_gpu
 def test_causal_chunks_equal_stock(dtype, q_len, kv_len):
     q, k, v = _qkv(q_len, kv_len, dtype)
     scale = D**-0.5

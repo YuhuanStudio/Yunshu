@@ -294,4 +294,5 @@ markers = [
     "serial: depends on host-wide state (CPU load, process table); ci-local runs these alone after the parallel pass",
     "fullcmp_quick: fast fullcmp / tfbench harness unit tests (pytest -m fullcmp_quick, under 2 minutes)",
     "fullcmp_e2e: fullcmp end-to-end chains through real tfbench against the stub (11-30 min each)",
+    "m5_gpu: needs an M5-class GPU (MetalPerformancePrimitives tensor ops, M5 kernel numerics); skipped on other GPUs",
 ]

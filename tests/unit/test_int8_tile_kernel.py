@@ -4,6 +4,8 @@ and 1-8 fused tokens."""
 
 import pytest
 
+pytestmark = pytest.mark.m5_gpu
+
 mx = pytest.importorskip("mlx.core")
 
 

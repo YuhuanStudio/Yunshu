@@ -69,6 +69,7 @@ def test_update_and_fetch_quantizes_on_write_like_from_kv():
     assert grown.offset == 37  # a rejected window is a trim, never a re-quantization
 
 
+@pytest.mark.m5_gpu
 @pytest.mark.parametrize("width", [1, 4, 9])
 def test_tree_attention_int8_equals_the_dequantized_reference_bit_for_bit(width):
     """The int8 path (shared prefix via the installed hook, window / tail rows dequantized into the bf16 tail
@@ -98,6 +99,7 @@ def test_tree_attention_int8_equals_the_dequantized_reference_bit_for_bit(width)
     assert err < 0.05, err
 
 
+@pytest.mark.m5_gpu
 def test_a_token_attends_the_same_whatever_the_window_width():
     """Window-width independence: row 0 of a 4-wide window and the 1-wide window at the same position
     give identical bits on the int8 cache (verify == plain decode)."""

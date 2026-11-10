@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -12,6 +14,7 @@ def test_window_store_is_empty_for_a_new_test():
     assert mod is None or mod.resident_bytes() == 0
 
 
+@pytest.mark.m5_gpu
 def test_the_pair_that_failed_the_memory_ledger_test():
     r = subprocess.run(
         [
