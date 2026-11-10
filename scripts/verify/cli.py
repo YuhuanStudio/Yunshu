@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import subprocess
 import sys
@@ -13,6 +14,13 @@ from . import runner
 from .core import REPO, InfraError, resolve_arm
 from .gate import local_env
 from .suites import STAGES, SUITES
+
+
+def _positive_minutes(value: str) -> float:
+    minutes = float(value)
+    if not math.isfinite(minutes) or minutes <= 0:
+        raise argparse.ArgumentTypeError("timeout must be finite and positive")
+    return minutes
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -87,6 +95,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ab.add_argument("--ctx", help="override suite contexts, e.g. 1024,8192")
     ab.add_argument("--reps", type=int, help="speed reps (default from suite, 3)")
+    ab.add_argument(
+        "--cell-timeout-min",
+        type=_positive_minutes,
+        help="hard timeout for probe/identity/speed decode cells; use measured runtimes",
+    )
     ab.add_argument("--mmlu-n", type=int, dest="mmlu_n", help="paired quality items")
     ab.add_argument(
         "--mem-sizes",
@@ -181,6 +194,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="gpuq job owner prefix (default: YV_LABEL_PREFIX, GPUQ_OWNER, then infra)",
     )
     gt.add_argument("--root", help="isolated gate install/cache root")
+    gt.add_argument(
+        "--cell-timeout-min",
+        type=_positive_minutes,
+        help="hard timeout for gate.sh jobs (not the long suite); use measured runtimes",
+    )
     sub.add_parser("suites", help="list suites")
     return ap
 
@@ -238,6 +256,7 @@ def main(argv: list | None = None) -> int:
                 repo=resolve_arm("cand", a.ref).path if a.ref else None,
                 label_prefix=a.label_prefix,
                 extra_env={"GATE_ROOT": a.root} if a.root else None,
+                cell_timeout_min=a.cell_timeout_min,
                 log=lambda m: print(f"[yv] {m}", flush=True),
             )
         if a.cmd == "ab":

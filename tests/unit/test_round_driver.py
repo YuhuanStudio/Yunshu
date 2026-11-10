@@ -824,17 +824,38 @@ def _media_row(lm, drafter, prompt, jump, delta, others=()):
     return toks["m"]
 
 
-def test_media_row_decode_positions_follow_the_row_delta(tiny):
-    """Per-row mRoPE offset in decode: a media row with a position jump keeps producing the same
-    tokens alone and beside text rows (which have offset 0), and the offset is consumed (a wrong
-    delta changes the continuation)."""
+def test_media_row_decode_positions_follow_the_row_delta(tiny, monkeypatch):
+    """Rows keep their own decode offset; rotary positions and K expose its use
+    even when a random model's greedy argmax does not change."""
+    import numpy as np
+
     lm, drafter = tiny
+    target = next(layer.self_attn for layer in lm.model.layers if not layer.is_linear)
+    cls = type(target)
+    original = cls._prepare_projected_qkv
+    seen = []
+
+    def prepare(self, *args, **kwargs):
+        out = original(self, *args, **kwargs)
+        cache = kwargs.get("cache", args[3] if len(args) > 3 else None)
+        pos = kwargs.get("position_ids", args[4] if len(args) > 4 else None)
+        if self is target and cache is None and pos is not None:
+            seen.append((pos.tolist(), np.array(out[1].astype(mx.float32))))
+        return out
+
+    monkeypatch.setattr(cls, "_prepare_projected_qkv", prepare)
     prompt = PROMPTS[1]
     alone = _media_row(lm, drafter, prompt, jump=7, delta=7)
+    good_pos, good_k = seen[0]
+    assert [axis[0][0] for axis in good_pos] == [len(prompt) + 7] * 3
     beside = _media_row(lm, drafter, prompt, jump=7, delta=7, others=PROMPTS[2:3])
     assert alone == beside
+    seen.clear()
     wrong = _media_row(lm, drafter, prompt, jump=7, delta=900)
-    assert wrong != alone
+    wrong_pos, wrong_k = seen[0]
+    assert [axis[0][0] for axis in wrong_pos] == [len(prompt) + 900] * 3
+    assert wrong[0] == alone[0]  # identical prefill, before the decode delta is used
+    assert not np.array_equal(good_k[..., 0, :], wrong_k[..., 0, :])
 
 
 def test_media_row_drafts_with_the_mtp_head_and_matches_plain_decode(tiny):

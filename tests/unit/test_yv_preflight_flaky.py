@@ -120,3 +120,99 @@ def test_no_failed_ids_but_nonzero_rc_still_fails(monkeypatch, tmp_path):
 )
 def test_failed_ids_are_parsed_once_and_untruncated(lines, expected):
     assert stages._failed_test_ids(lines) == expected
+
+
+def test_preflight_tests_use_marked_candidate_python(monkeypatch, tmp_path):
+    ctx = _ctx(tmp_path)
+    own = ctx.cand.path / ".venv/bin/python"
+    own.parent.mkdir(parents=True)
+    own.write_text("fake candidate interpreter")
+    (ctx.cand.path / ".yv-own-venv").touch()
+    calls = _patch(monkeypatch, [REAL], [(0, "1 passed")])
+    assert stages.stage_preflight(ctx).passed
+    assert str(own) in calls[0]
+
+
+def test_mlx_preflight_queues_tests_and_requires_complete_evidence(
+    monkeypatch, tmp_path
+):
+    import json
+
+    ctx = _ctx(tmp_path)
+    submitted = []
+
+    class Queue:
+        def submit(self, label, argv, **kwargs):
+            from scripts.dev.gpuq_preflight import preflight
+
+            ctx.cand.path.mkdir(exist_ok=True)
+            assert preflight(argv, str(ctx.cand.path), {}) == []
+            submitted.append((argv, kwargs))
+            kwargs["out"].write_text(
+                json.dumps(
+                    {"complete": True, "rc": 0, "stdout": "1 passed", "stderr": ""}
+                )
+            )
+            return "preflight-job"
+
+        def wait(self, jid):
+            return SimpleNamespace(rc=0)
+
+    ctx.exe.gq = Queue()
+    ctx.exe.label = "deps-test"
+    ctx.exe.priority = 0
+    monkeypatch.setenv("YV_PREFLIGHT_GPUQ", "1")
+    calls = _patch(monkeypatch, [REAL], [])
+    result = stages.stage_preflight(ctx)
+    assert result.passed
+    assert calls == []  # no pytest process outside the queue
+    assert submitted[0][1]["expect_complete"] is True
+    assert submitted[0][1]["cwd"] == ctx.cand.path
+    assert result.jobs == [("preflight", "tests-0", "preflight-job")]
+
+
+def test_queued_preflight_rejects_missing_completion(monkeypatch, tmp_path):
+    import json
+
+    ctx = _ctx(tmp_path)
+
+    class Queue:
+        def submit(self, label, argv, **kwargs):
+            kwargs["out"].write_text(json.dumps({"rc": 0}))
+            return "incomplete-job"
+
+        def wait(self, jid):
+            return SimpleNamespace(rc=0)
+
+    ctx.exe.gq = Queue()
+    ctx.exe.label = "deps-test"
+    ctx.exe.priority = 0
+    monkeypatch.setenv("YV_PREFLIGHT_GPUQ", "1")
+    with pytest.raises(stages.InfraError, match="incomplete test evidence"):
+        stages._run_preflight_tests(ctx, ["python", "-m", "pytest"], {}, "tests")
+
+
+def test_queued_child_does_not_requeue_nested_verifier_tests(monkeypatch, tmp_path):
+    import json
+    import os
+    import subprocess
+
+    spec, out = tmp_path / "command.json", tmp_path / "result.json"
+    spec.write_text(
+        json.dumps(
+            {
+                "cmd": [
+                    sys.executable,
+                    "-c",
+                    "import os; print(os.getenv('YV_PREFLIGHT_GPUQ', 'unset'))",
+                ],
+                "env": {},
+            }
+        )
+    )
+    subprocess.run(
+        [sys.executable, "-c", stages._PREFLIGHT_CHILD, str(spec), str(out)],
+        env=dict(os.environ, YV_PREFLIGHT_GPUQ="1"),
+        check=True,
+    )
+    assert json.loads(out.read_text())["stdout"].strip() == "unset"

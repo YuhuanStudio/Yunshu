@@ -205,7 +205,7 @@ def enable() -> bool:
     global _enabled, _dispatches
     _enabled = False
     _dispatches = 0
-    if importlib.metadata.version("mlx") != "0.32.3":
+    if importlib.metadata.version("mlx") not in ("0.32.3", "0.32.4"):
         return False
     info = gpu_probe.device_info()
     from .tensorfold.lane_qmm import _generation

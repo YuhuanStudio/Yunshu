@@ -1558,6 +1558,8 @@ def test_gate_cli_pins_ref_and_forwards_owner_prefix(world, monkeypatch):
                 "install",
                 "--root",
                 str(world.tmp / "own-gate"),
+                "--cell-timeout-min",
+                "10",
             ]
         )
         == 0
@@ -1565,6 +1567,7 @@ def test_gate_cli_pins_ref_and_forwards_owner_prefix(world, monkeypatch):
     assert git(seen["repo"], "rev-parse", "HEAD") == commit
     assert seen["label_prefix"] == "sync015"
     assert seen["extra_env"] == {"GATE_ROOT": str(world.tmp / "own-gate")}
+    assert seen["cell_timeout_min"] == 10
 
 
 def test_executor_bounds_submitted_cells_before_waiting(world, monkeypatch):
@@ -1676,6 +1679,67 @@ def test_declared_short_timeout_preserves_gpuq_short_lane(monkeypatch):
     gq.submit("long", ["python", "--version"], timeout_min=14, mem_gb=60, priority=-1)
     assert "--short" in calls[0]
     assert "--short" not in calls[1]
+
+
+def test_cell_timeout_cli_records_only_the_resource_override():
+    from verify import cli
+
+    args = cli.build_parser().parse_args(
+        [
+            "ab",
+            "--base",
+            "main",
+            "--cand",
+            "HEAD",
+            "--label",
+            "short",
+            "--cell-timeout-min",
+            "10",
+        ]
+    )
+    original = suites.parse_suite("zh")
+    cfg = runner.apply_overrides(original, args)
+    assert cfg == {**original, "cell_timeout_min": 10.0}
+
+
+def test_cell_timeout_reaches_identity_and_decode_estimate(monkeypatch):
+    from types import SimpleNamespace
+
+    cfg = {
+        **suites.parse_suite("zh"),
+        "cell_timeout_min": 10,
+        "identity_timeout_min": 14,
+    }
+    ctx = SimpleNamespace(suite=cfg, big=True, mem_gb=60, arm_env=lambda *a: {})
+    monkeypatch.setattr(stages, "_tfbench_argv", lambda *a, **kw: ["python"])
+    monkeypatch.setattr(stages, "_share_key", lambda *a, **kw: "")
+    cells = stages._identity_cells(ctx)
+    assert len(cells) == 3
+    assert all(c.timeout_min == 10 and not c.quiet for c in cells)
+    assert stages._decode_est_min(ctx, [1024, 8192], 2) == 10
+
+
+def test_gate_cell_timeout_is_forwarded_and_recorded(gate_world):
+    assert run_gate(gate_world, stages=["serve-27b"], cell_timeout_min=10) == 0
+    (job,) = list((gate_world.tmp / "jobs").glob("*.json"))
+    data = json.loads(job.read_text())
+    opts = data["opts"]
+    assert float(opts[opts.index("--timeout") + 1]) == 10
+    assert "--quiet" in opts and "--short" in opts
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf"])
+@pytest.mark.parametrize("cmd", ["ab", "gate"])
+def test_cell_timeout_rejects_nonpositive_or_nonfinite(cmd, value):
+    from verify import cli
+
+    prefix = (
+        ["ab", "--base", "main", "--cand", "HEAD", "--label", "bad"]
+        if cmd == "ab"
+        else ["gate"]
+    )
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(prefix + ["--cell-timeout-min", value])
 
 
 def test_client_routes_validator_fails_closed(tmp_path):

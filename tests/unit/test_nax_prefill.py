@@ -40,9 +40,10 @@ def test_unknown_version_disables_even_a_previous_enable(monkeypatch):
     assert not nax_prefill.enabled()
 
 
-def test_known_device_and_abi_can_enable(monkeypatch):
+@pytest.mark.parametrize("version", ["0.32.3", "0.32.4"])
+def test_known_device_and_abi_can_enable(monkeypatch, version):
     monkeypatch.setattr(nax_prefill, "_enabled", False)
-    monkeypatch.setattr(nax_prefill.importlib.metadata, "version", lambda _: "0.32.3")
+    monkeypatch.setattr(nax_prefill.importlib.metadata, "version", lambda _: version)
     monkeypatch.setattr(
         nax_prefill.mx,
         "device_info",

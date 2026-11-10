@@ -1,15 +1,12 @@
-"""The epsilon of the Qwen3.5-family GDN q/k RMS normalisation, read from the installed mlx-vlm.
+# Patches upstream mlx-vlm Qwen3.5-family q/k normalization (MIT); see vendor.json.
+"""Qwen3.5 q/k normalization constants shared by stock, prefill and verify.
 
-``Qwen3_5GatedDeltaNet._normalize_qk`` is ``mx.fast.rms_norm(x, None, eps)``. mlx-vlm 0.7.8 (the
-pinned version) uses ``eps = 1e-6``; mlx-vlm b8bf04c (v0.7.10) uses ``1e-6 / head_dim`` so it equals
-mlx-lm's L2 form ``x * rsqrt(sum(x^2) + 1e-6)``. Yunshu's fused Metal kernels
-(``gdn_prefill._NORM_SCALE_SOURCE``, the RMS arm of ``omlx.qwen35_gdn_prework``) must carry the
-same epsilon as the stock function they replace, or fused prefill != stock decode/verify bits.
-
-The value is therefore never written in a kernel: it is measured once from the installed function
-(run on a tiny-magnitude input, where eps decides the result, and matched to the exact candidate),
-so a bump of mlx-vlm flips the stock and fused paths together. The L2 arms of the prework kernels
-use mlx-lm's ``sum + 1e-6`` and do not depend on this.
+The reviewed mlx-vlm upgrade changes epsilon from 1e-6 to 1e-6/head_dim
+(b8bf04c). Yunshu keeps the pre-upgrade arithmetic as its lossless default:
+changing epsilon is a model-output change, not a layout optimization. The
+compatibility hook runs before fused kernels compile, and their constants are
+still measured from the actual installed function. Standalone measurement also
+recognizes upstream's per-head form so unsupported changes fail qualification.
 """
 
 from __future__ import annotations
@@ -21,13 +18,50 @@ import mlx.core as mx
 
 logger = logging.getLogger(__name__)
 
-BASE_EPS = 1e-6  # mlx-vlm <= 0.7.8
+BASE_EPS = 1e-6  # lossless pre-upgrade arithmetic
 HEAD_DIM = 128  # Qwen3.5-family GDN key head width the fused kernels are written for
 MARKER = "__QK_RMS_EPS__"
 
 
 FIXED = "fixed"
 PER_HEAD_DIM = "per_head_dim"
+
+
+def install_lossless_default() -> bool:
+    """Retain v0.7.8 q/k arithmetic across the reviewed dependency upgrade.
+
+    b8bf04c changes the normalization itself, not just its implementation.
+    Taking that new epsilon silently changes the default model's outputs and
+    exposed APC/spec invariance failures with MLX 0.32.4 on M3. Keep the old
+    default in stock, prefill and verify alike; fused kernels measure this
+    installed function before compiling their matching constants.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        reviewed = version("mlx-vlm") in ("0.7.10", "0.7.11", "0.7.12")
+    except PackageNotFoundError:
+        return False
+    if not reviewed:
+        return False
+    from mlx_vlm.models.qwen3_5.language import Qwen3_5GatedDeltaNet
+
+    cls = Qwen3_5GatedDeltaNet
+    if getattr(cls, "_yunshu_lossless_qk_default", False):
+        return False
+    if getattr(cls._normalize_qk, "_yunshu_norm_scale", False):
+        raise RuntimeError("install lossless q/k arithmetic before fused normalization")
+
+    def normalize(self, q, k):
+        inv = k.shape[-1] ** -0.5
+        return (inv**2) * mx.fast.rms_norm(q, None, BASE_EPS), inv * mx.fast.rms_norm(
+            k, None, BASE_EPS
+        )
+
+    cls._normalize_qk = normalize
+    cls._yunshu_lossless_qk_default = True
+    qk_norm_kind.cache_clear()
+    return True
 
 
 def candidates(head_dim: int = HEAD_DIM) -> dict[str, float]:
@@ -66,8 +100,9 @@ def measure(normalize_qk=None, head_dim: int = HEAD_DIM) -> str | None:
 
 @cache
 def qk_norm_kind() -> str | None:
-    """The installed upstream's q/k RMS epsilon form (None: unrecognised)."""
+    """The active q/k RMS epsilon form (None: unrecognised)."""
     try:
+        install_lossless_default()
         return measure()
     except Exception:
         logger.warning(

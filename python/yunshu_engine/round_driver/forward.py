@@ -166,9 +166,7 @@ def _gdn_mix(layer, qkv, z, b, a, cache) -> mx.array:
         q = gdn_prefill.fused_norm_scale(q, inverse=True)
         k = gdn_prefill.fused_norm_scale(k, inverse=False)
     else:
-        inv = k.shape[-1] ** -0.5
-        q = (inv**2) * mx.fast.rms_norm(q, None, 1e-6)
-        k = inv * mx.fast.rms_norm(k, None, 1e-6)
+        q, k = layer._normalize_qk(q, k)
     out, _ = gated_delta_update(
         q, k, v, a, b, layer.A_log, layer.dt_bias, use_kernel=True, cache=cache
     )

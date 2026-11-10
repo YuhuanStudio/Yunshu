@@ -1,5 +1,5 @@
 # Upstream (derived): Blaizzy/mlx-vlm (MIT) mlx_vlm/speculative/mtp.py @ v0.7.3
-# Patches upstream mlx-vlm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
+# Shared algorithms remain; serving uses the round driver, without a stock-loop installer.
 """MTP draft trees for the speculative decode path (round driver, Qwen3.5 family).
 
 The checkpoint's MTP head predicts one token per step from ``(embed(token),

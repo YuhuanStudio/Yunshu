@@ -11,6 +11,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -232,6 +233,8 @@ def _kind_args(kinds: list, all_kinds: list) -> list:
 def _decode_est_min(
     ctx: Ctx, ctxs: list, kinds: int, n_dec: int = 256, n_t2: int = 0
 ) -> float:
+    if ctx.suite.get("cell_timeout_min") is not None:
+        return float(ctx.suite["cell_timeout_min"])
     start = 2.5 if ctx.big else 0.7
     secs = 0.0
     for c in ctxs:
@@ -289,7 +292,67 @@ def _failed_test_ids(lines: list) -> list:
     return ids
 
 
-# ── a. preflight (CPU only; no gpuq) ─────────────────────────────────────
+_PREFLIGHT_CHILD = """import json, subprocess, sys
+from pathlib import Path
+spec = json.loads(Path(sys.argv[1]).read_text())
+import os
+env = dict(os.environ, **spec["env"])
+env.pop("YV_PREFLIGHT_GPUQ", None)  # verifier unit tests must not nest queue admission
+r = subprocess.run(spec["cmd"], env=env, capture_output=True, text=True)
+Path(sys.argv[-1]).write_text(json.dumps(dict(complete=True, rc=r.returncode,
+    stdout=r.stdout, stderr=r.stderr)))
+sys.exit(0 if r.returncode in (0, 5) else r.returncode)
+"""
+
+
+def _run_preflight_tests(ctx, cmd, env, key):
+    if os.environ.get("YV_PREFLIGHT_GPUQ") != "1":
+        return subprocess.run(
+            cmd,
+            cwd=str(ctx.cand.path),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30 * 60,
+        )
+    # Dependency-upgrade tests can execute Metal: keep them in the shared
+    # queue while the controller remains free to submit later GPU stages.
+    stamp = f"{key}-{time.time_ns()}"
+    spec = ctx.run.path / f"preflight-{stamp}.command.json"
+    out = ctx.run.path / f"preflight-{stamp}.result.json"
+    delta = {k: v for k, v in env.items() if os.environ.get(k) != v}
+    spec.write_text(json.dumps({"cmd": cmd, "env": delta}))
+    jid = ctx.exe.gq.submit(
+        label=f"{ctx.exe.label}-preflight-{stamp}",
+        argv=[
+            ctx.cand.python(ctx.py),
+            "-c",
+            _PREFLIGHT_CHILD,
+            str(spec),
+            "--out",
+            str(out),
+        ],
+        timeout_min=10,
+        priority=ctx.exe.priority,
+        mem_gb=24,
+        out=out,
+        expect_complete=True,
+        cwd=ctx.cand.path,
+    )
+    ctx.exe.jobs.append(("preflight", key, jid))
+    job = ctx.exe.gq.wait(jid)
+    if not out.exists():
+        raise InfraError(f"preflight {jid} ended without test evidence")
+    data = json.loads(out.read_text())
+    if data.get("complete") is not True or job.rc not in (0, 1, 2, 3, 4, 5):
+        raise InfraError(f"preflight {jid} has incomplete test evidence")
+    rc = int(data["rc"])
+    if job.rc != 0 and rc in (0, 5):
+        rc = int(job.rc)
+    return subprocess.CompletedProcess(cmd, rc, data["stdout"], data["stderr"])
+
+
+# ── a. preflight (optional gpuq for MLX dependency tests) ─────────────────────────────────────
 def stage_preflight(ctx: Ctx) -> StageResult:
     name, reasons, numbers = "preflight", [], {}
     env = dict(os.environ, HF_HUB_OFFLINE="1")
@@ -320,12 +383,14 @@ def stage_preflight(ctx: Ctx) -> StageResult:
     numbers.update(changed_files=len(changed), related_tests=len(tests))
     ctx.run.append(name, {"ev": "mapping", "changed": changed, "tests": tests})
     if not reasons and tests:
-        base_cmd = _preflight_base_cmd(ctx.py)
+        test_py = ctx.cand.python(ctx.py)
+        numbers["pytest_python"] = test_py
+        base_cmd = _preflight_base_cmd(test_py)
         run_env = dict(env, PYTHONPATH=str(ctx.cand.path / "python"))
         workers = int(os.environ.get("YV_PREFLIGHT_WORKERS", "6"))
         has_xdist = workers > 1 and (
             subprocess.run(
-                [ctx.py, "-c", "import xdist"],
+                [test_py, "-c", "import xdist"],
                 cwd=str(ctx.cand.path),
                 env=run_env,
                 capture_output=True,
@@ -353,15 +418,8 @@ def stage_preflight(ctx: Ctx) -> StageResult:
         else:
             runs = [base_cmd + tests]
         out, rc = "", 0
-        for cmd in runs:
-            r = subprocess.run(
-                cmd,
-                cwd=str(ctx.cand.path),
-                env=run_env,
-                capture_output=True,
-                text=True,
-                timeout=30 * 60,
-            )
+        for i, cmd in enumerate(runs):
+            r = _run_preflight_tests(ctx, cmd, run_env, f"tests-{i}")
             out += r.stdout + r.stderr
             # 5 = nothing collected (no serial-marked test among the related ones)
             if r.returncode not in (0, 5) and rc == 0:
@@ -371,13 +429,8 @@ def stage_preflight(ctx: Ctx) -> StageResult:
         flaky, still = [], failed
         if rc != 0 and failed:
             # every failure is named in full; each failed test gets one isolated rerun
-            rerun = subprocess.run(
-                [*_preflight_base_cmd(ctx.py), "-rA", *failed],
-                cwd=str(ctx.cand.path),
-                env=run_env,
-                capture_output=True,
-                text=True,
-                timeout=30 * 60,
+            rerun = _run_preflight_tests(
+                ctx, [*_preflight_base_cmd(test_py), "-rA", *failed], run_env, "rerun"
             )
             passed = {
                 ln.split(" ", 1)[1].strip()
@@ -769,7 +822,8 @@ def _identity_cells(ctx: Ctx) -> list:
                             env=ctx.arm_env(tree_arm, extra),
                         ),
                         mem_gb=ctx.mem_gb,
-                        timeout_min=cfg.get("identity_timeout_min")
+                        timeout_min=cfg.get("cell_timeout_min")
+                        or cfg.get("identity_timeout_min")
                         or _decode_est_min(
                             ctx,
                             ctxs,
@@ -3336,7 +3390,7 @@ def _kld_cell(
             f"TFB_OUT={tfb_out}",
             f"TFB_PORT_LAST={PORT_LAST}",
             "TFB_WORK=/Volumes/P5Plus/yunshu-build/tfnew",
-            ctx.py,
+            src.python(ctx.py),
             "-m",
             "verify.kld.capture",
             "run",

@@ -73,13 +73,10 @@ classifiers = [
 dependencies = [
     # ── Apple ML Stack (text path only) ──
     # qmv copies select version-matched arithmetic for mlx f8aaf49d (0.32.4).
-    # 0.32.4 breaks FP32 SSD APC == RAM/cold parity (sync016 unit bisect).
-    # 2026-11-02 postrel-016: 0.32.4 is still the newest MLX; the cap also holds back mlx-vlm 0.7.11 and
-    # mlx-audio 0.6.3 (both require mlx>=0.32.4 / ==0.32.4). Lift together once the parity bug is fixed.
-    "mlx>=0.32.3,<0.32.4",
+    "mlx>=0.32.4",
     "mlx-lm>=0.32.2",
     # ── Model / Tokenizer ──
-    "transformers>=5.19.0",
+    "transformers>=5.22.2",
     "tokenizers>=0.23.2",
     "safetensors>=0.5.0",
     "huggingface-hub>=1.33.0",
@@ -128,7 +125,7 @@ web-render = ["playwright>=1.48,<2"]
 vision = [
     # >=0.7.3: APC (semantic_extra_hash / resident_bytes) and speculative MTP,
     # both used by the Qwen3.5/3.8 VLM path.
-    "mlx-vlm>=0.7.6",
+    "mlx-vlm>=0.7.12",
     "Pillow>=10.0.0",
 ]
 # Audio: speech-to-text (ASR) + text-to-speech (TTS) via mlx-audio.
@@ -136,7 +133,7 @@ vision = [
 audio = [
     # Kokoro TTS text processing (mlx-audio imports it lazily; Apache-2.0, hexgrad/misaki).
     "misaki[en]>=0.9.4,<1",
-    "mlx-audio>=0.5.8",
+    "mlx-audio>=0.6.4",
     # Voice enrollment decodes recordings directly; mlx-audio no longer pulls this in.
     "soundfile>=0.12",
 ]
@@ -149,7 +146,7 @@ audio = [
 # to keep turn 2+ correct for text and speech input (2026-09-28), so the fork's
 # position_ids patch is gone.
 omni = [
-    "mlx-vlm>=0.7.6",
+    "mlx-vlm>=0.7.12",
     "torch>=2.1.0",
     "torchvision>=0.16.0",
     "Pillow>=10.0.0",

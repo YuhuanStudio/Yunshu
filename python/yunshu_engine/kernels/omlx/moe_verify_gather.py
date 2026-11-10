@@ -27,7 +27,7 @@ MAX_ROWS = 8
 _BITS = (4, 5, 6, 8)
 _GROUP_SIZES = (32, 64, 128)
 
-_HEADER = r"""
+_BASE_HEADER = r"""
 using namespace metal;
 
 constant constexpr int SIMD_SIZE = 32;
@@ -189,7 +189,7 @@ inline float qdot_n(
 }
 """
 
-_HEADER = stock_load_vector(_HEADER)
+_HEADER = stock_load_vector(_BASE_HEADER)
 
 
 def qmv_fast_layout(k: int, n: int, bits: int) -> bool:
@@ -200,7 +200,9 @@ def qmv_fast_layout(k: int, n: int, bits: int) -> bool:
     independently: stock gather_qmv still has that restriction after f8aaf49d.
     """
     pack_factor = 8 if bits in (3, 5) else (4 if bits == 6 else 32 // bits)
-    return (FLOAT_SUMS or n % 8 == 0) and k % (pack_factor * (1 if bits == 2 else 2) * 32) == 0
+    return (FLOAT_SUMS or n % 8 == 0) and k % (
+        pack_factor * (1 if bits == 2 else 2) * 32
+    ) == 0
 
 
 # Each threadgroup takes the pair at sorted position ``y`` (pairs ordered by
@@ -312,8 +314,9 @@ def supported(linear, dtype) -> bool:
         return False
     if getattr(linear, "mode", "affine") != "affine":
         return False
-    bits, group_size = getattr(linear, "bits", None), getattr(
-        linear, "group_size", None
+    bits, group_size = (
+        getattr(linear, "bits", None),
+        getattr(linear, "group_size", None),
     )
     if bits not in _BITS or group_size not in _GROUP_SIZES:
         return False

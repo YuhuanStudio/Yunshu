@@ -414,8 +414,10 @@ class RoundDriver:
         generic_layer: bool = False,
         row_drafters: Any = None,
     ):
+        from ..kernels.gdn_qk_eps import install_lossless_default
         from .mtp import MTPHead
 
+        install_lossless_default()
         # Fixed prefill span per prompt (ROUND_PREFILL_CHUNK in vlm_engine.py). While rows
         # decode a prefill step is one span, so this is also the longest a
         # decoding row waits behind a prompt.
@@ -754,6 +756,9 @@ class RoundDriver:
             nax_prefill.arithmetic_id() if nax_prefill.enabled() else "lane"
         )
         if self.generic:
+            # Older generic reply checkpoints may contain suffix K rotated
+            # from zero after APC restore; never reuse them after the fix.
+            arith += ":resume-rope-v2"
             from .. import settings
 
             if settings.get("YUNSHU_JUMP_FORWARD"):

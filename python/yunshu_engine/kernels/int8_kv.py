@@ -118,6 +118,24 @@ class Int8KVCache(KVCache):
             self._reserve(cap, self.keys)
         return (self.keys, self.values)
 
+    def extract(self, idx: int) -> Int8KVCache:
+        """Extract native codes and scales for APC without re-quantizing them.
+
+        Upstream KVCache.extract assumes a two-tensor state; this cache has four.
+        Keep the logical prefix, as state does, and detach writes from the source.
+        """
+        batch_size = 1 if self.keys is None else int(self.keys.shape[0])
+        if idx < 0:
+            idx += batch_size
+        if not 0 <= idx < batch_size:
+            raise IndexError("Int8KVCache row index out of range")
+        out = type(self)()
+        out.state = tuple(
+            None if a is None else mx.contiguous(a[idx : idx + 1]) for a in self.state
+        )
+        out.offset = self.offset
+        return out
+
     # ── bookkeeping ──────────────────────────────────────────────────────
     @property
     def state(self):

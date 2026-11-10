@@ -291,6 +291,38 @@ def test_kld_stage_is_not_applicable_to_a_family_without_capture_hooks(tmp_path)
     assert "gemma4" in res.reasons[0] and logged[0]["status"] == "PASS"
 
 
+def test_capture_preserves_candidate_python():
+    from verify.kld import capture
+
+    command = ["/candidate/bin/python", "-m", "yunshu_cli", "serve", "--port", "18991"]
+    rewritten = capture.serve_command(command, "cand", "qwen3_5")
+    assert rewritten[0] == command[0]
+    assert rewritten[2:5] == ["serve", "cand", "qwen3_5"]
+
+
+def test_kld_cell_uses_candidate_python(tmp_path):
+    from types import SimpleNamespace
+
+    from verify import stages
+
+    selected = []
+
+    def arm_python(fallback):
+        selected.append(fallback)
+        return "/candidate/bin/python"
+
+    ctx = SimpleNamespace(
+        tree=lambda arm: SimpleNamespace(path=tmp_path, python=arm_python),
+        run=SimpleNamespace(path=tmp_path),
+        py="/controller/bin/python",
+        model="/model",
+        suite={},
+    )
+    cell = stages._kld_cell(ctx, "cand", "cand", "cand-0", tmp_path, "0/1", {}, 65)
+    assert selected == [ctx.py]
+    assert cell.argv[cell.argv.index("-m") - 1] == "/candidate/bin/python"
+
+
 def test_kld_family_check_works_in_the_yv_controller_without_the_engine_on_sys_path(
     tmp_path,
 ):
@@ -314,3 +346,39 @@ def test_kld_family_check_works_in_the_yv_controller_without_the_engine_on_sys_p
     )
     assert out.returncode == 0, out.stderr[-2000:]
     assert "'applicable': False" in out.stdout
+
+
+def test_upcast_reference_counts_executed_calls_and_preserves_output_dtype(monkeypatch):
+    from types import SimpleNamespace
+
+    from verify.kld.capture import upcast_attention
+
+    class Array:
+        def __init__(self, dtype):
+            self.dtype = dtype
+
+        def astype(self, dtype):
+            return Array(dtype)
+
+    calls = []
+
+    def sdpa(q, k, v, **kwargs):
+        calls.append((q.dtype, k.dtype, v.dtype, kwargs["mask"].dtype))
+        return Array("fp32")
+
+    mx = SimpleNamespace(
+        array=Array,
+        bool_="bool",
+        float32="fp32",
+        fast=SimpleNamespace(scaled_dot_product_attention=sdpa),
+    )
+    monkeypatch.setitem(sys.modules, "mlx", SimpleNamespace(core=mx))
+    monkeypatch.setitem(sys.modules, "mlx.core", mx)
+    count = [0]
+    upcast_attention(count)
+    assert count == [0]
+    result = mx.fast.scaled_dot_product_attention(
+        Array("bf16"), Array("bf16"), Array("bf16"), mask=Array("bf16")
+    )
+    assert calls == [("fp32", "fp32", "fp32", "fp32")]
+    assert result.dtype == "bf16" and count == [1]

@@ -94,6 +94,7 @@ def header(align_q: bool, align_k: bool) -> str:
         "has_mask": False,
         "do_causal": True,
         "has_sinks": False,
+        "save_lse": False,
     }
     prefix = re.sub(
         r"constant bool (\w+) \[\[function_constant\(\d+\)\]\];",
@@ -112,6 +113,7 @@ def kernel(
 ) -> Any:
     bq, wm = (16, 1) if short else (BQ, WM)
     h = header(align_q, align_k)
+    lse_arg = "nullptr, " if "device float* LSE" in h else ""
     source = f"""
     threadgroup float s_xchg[{wm}][{WN}][{BK} * 16];
     AttnParams params;
@@ -131,7 +133,7 @@ def kernel(
     params.O_strides[0] = {heads} * params.qL * {BD};
     params.O_strides[1] = params.qL * {BD}; params.O_strides[2] = {BD};
     yunshu_attn_dsplit<bfloat, {bq}, {BK}, {BD}, {wm}, {WN}, float, float>(Q, K, V, O, &params,
-      nullptr, nullptr, nullptr, thread_index_in_simdgroup,
+      nullptr, nullptr, nullptr, {lse_arg}thread_index_in_simdgroup,
       simdgroup_index_in_threadgroup, threadgroup_position_in_grid,
       thread_position_in_threadgroup, s_xchg);
     """
@@ -239,7 +241,7 @@ def attend(q: mx.array, k: mx.array, v: mx.array) -> mx.array:
 
 
 def supported_device() -> bool:
-    if importlib.metadata.version("mlx") != "0.32.3":
+    if importlib.metadata.version("mlx") not in ("0.32.3", "0.32.4"):
         return False
     info = gpu_probe.device_info()
     from .tensorfold.lane_qmm import _generation

@@ -173,7 +173,11 @@ def test_kokoro_reads_voices_from_the_loaded_snapshot(
     assert model._voice_model_path == tmp_path
 
     pipeline = SimpleNamespace(
-        voices={}, model=model, repo_id="some/other-repo", lang_code="a"
+        voices={},
+        model=model,
+        model_path=None,
+        repo_id="some/other-repo",
+        lang_code="a",
     )
     # a local voice must never reach the hub download path of the stock function
     monkeypatch.setattr(

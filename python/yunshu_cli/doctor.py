@@ -580,10 +580,10 @@ def check_prefix_tiers() -> Check | None:
 # Minimums mirror pyproject.toml; a lower version has known breakage (APC, MTP, llguidance
 # schemas), so it is a failure with the upgrade command, not a warning.
 MIN_VERSIONS = {
-    "mlx": "0.32.3",
+    "mlx": "0.32.4",
     "mlx-lm": "0.32.2",
-    "mlx-vlm": "0.7.6",
-    "mlx-audio": "0.5.8",
+    "mlx-vlm": "0.7.12",
+    "mlx-audio": "0.6.4",
     "llguidance": "1.9.1",
 }
 # extra name -> (package, what it enables)

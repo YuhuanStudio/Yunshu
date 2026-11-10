@@ -30,17 +30,8 @@ def test_eps_matches_installed_upstream_function_exactly():
         q, k = _stock(x, x * 2)
         assert mx.array_equal(q, (inv**2) * mx.fast.rms_norm(x, None, eps)).item()
         assert mx.array_equal(k, inv * mx.fast.rms_norm(x * 2, None, eps)).item()
-    # the pinned mlx-vlm (0.7.8) is the fixed form; 0.7.10 flips to per_head_dim with no code change
-    import importlib.metadata as md
-
-    from packaging.version import Version
-
-    expected = (
-        "per_head_dim"
-        if Version(md.version("mlx-vlm")) >= Version("0.7.10")
-        else "fixed"
-    )
-    assert kind == expected
+    # The upgrade preserves the reviewed v0.7.8 model arithmetic by default.
+    assert kind == gdn_qk_eps.FIXED
 
 
 @pytest.mark.parametrize(
@@ -110,3 +101,16 @@ def test_scaled_quantized_linear_rows_are_singleton_calls():
     # not a scaled layer, or a single row: left to the caller
     assert batch_invariant.scaled_rows(ql, x) is None
     assert batch_invariant.scaled_rows(scaled, x[:1, :1]) is None
+
+
+@pytest.mark.parametrize("dtype", [mx.float32, mx.bfloat16])
+@pytest.mark.parametrize("head_dim", [64, 128])
+def test_default_norm_preserves_pre_upgrade_arithmetic(dtype, head_dim):
+    # Qualification happens before compiling fused prefill/verify kernels.
+    gdn_qk_eps.qk_norm_kind()
+    x = mx.full((1, 3, 2, head_dim), 1e-3, dtype=dtype)
+    with mx.stream(mx.cpu):
+        q, k = _stock(x, x)
+        inv = head_dim**-0.5
+        assert mx.array_equal(q, (inv**2) * mx.fast.rms_norm(x, None, 1e-6)).item()
+        assert mx.array_equal(k, inv * mx.fast.rms_norm(x, None, 1e-6)).item()

@@ -1,4 +1,4 @@
-# Upstream (extended): Blaizzy/mlx-vlm (MIT) mlx_vlm/speculative/dflash.py @ v0.7.4
+# Upstream (inspired): Blaizzy/mlx-vlm (MIT) mlx_vlm/speculative/dflash.py @ v0.7.4
 """Copy islands for the existing single-request greedy DFlash verifier.
 
 The adapter changes proposals only. The upstream loop still owns target sampling,

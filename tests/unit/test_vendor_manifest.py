@@ -44,3 +44,18 @@ def test_duplicate_patched_symbols_have_the_same_source_fingerprint():
         key = (entry["module"], entry["symbol"])
         digest = entry["source_sha256"]
         assert seen.setdefault(key, digest) == digest, key
+
+
+def test_retired_stock_loop_installers_are_not_listed_as_live_patches():
+    retired = {
+        "python/yunshu_engine/" + name + ".py"
+        for name in (
+            "mtp_lane",
+            "mtp_tree",
+            "dflash_tree",
+            "dflash_copy",
+            "constrained_spec",
+        )
+    }
+    stale = [e for e in MANIFEST["patches"] if e["path"] in retired]
+    assert not stale, [(e["path"], e["symbol"]) for e in stale]

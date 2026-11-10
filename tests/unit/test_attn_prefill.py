@@ -138,3 +138,14 @@ def test_short_kernel_uses_same_bk_and_d_split_with_one_query_simdgroup(monkeypa
         assert "params.qL_rem = params.qL % 16" in source
     finally:
         ap.kernel.cache_clear()
+
+
+@pytest.mark.parametrize("version", ["0.32.3", "0.32.4"])
+def test_reviewed_mlx_versions_keep_m5_prefill_device_support(monkeypatch, version):
+    monkeypatch.setattr(ap.importlib.metadata, "version", lambda _: version)
+    monkeypatch.setattr(
+        ap.gpu_probe,
+        "device_info",
+        lambda: {"device_name": "Apple M5 Max", "architecture": "applegpu_g17s"},
+    )
+    assert ap.supported_device()

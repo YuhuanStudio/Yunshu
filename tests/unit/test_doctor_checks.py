@@ -16,7 +16,7 @@ def _by_name(checks):
 
 def test_version_guard_fails_below_minimum_with_upgrade_command():
     fake = {
-        "mlx": "0.32.3",
+        "mlx": "0.32.4",
         "mlx-lm": "0.30.0",
         "mlx-vlm": "0.7.4",
         "llguidance": "1.7.9",

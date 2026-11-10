@@ -1,5 +1,5 @@
 # Upstream (inspired): ashhart/TensorFold (MIT) src/tensorfold/drafters/dflash_tree.py @ 34bae79a
-# Patches upstream mlx-vlm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
+# Shared algorithms remain; serving uses the round driver, without a stock-loop installer.
 """DFlash2 draft trees for the round driver (round_driver/dflash.py, round_driver/flashnext_dflash.py).
 
 DFlash2 proposes, for a block of positions after the pending token, the top-K

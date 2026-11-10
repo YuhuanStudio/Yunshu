@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import socket
 import time
@@ -230,7 +231,12 @@ def run_gate(
     extra_env: dict | None = None,
     priority: int = 0,
     label_prefix: str | None = None,
+    cell_timeout_min: float | None = None,
 ) -> int:
+    if cell_timeout_min is not None and (
+        not math.isfinite(cell_timeout_min) or cell_timeout_min <= 0
+    ):
+        raise InfraError("cell timeout must be finite and positive")
     label_prefix = (
         label_prefix
         or os.environ.get("YV_LABEL_PREFIX")
@@ -254,12 +260,16 @@ def run_gate(
     rd = RunDir((runs or RUNS) / f"gate-{commit[:12]}")
     env = dict(local_env())
     env.update(extra_env or {})
+    if cell_timeout_min is not None:
+        env["GATE_CELL_TIMEOUT_MIN"] = str(cell_timeout_min)
     gate_root = env.get("GATE_ROOT", os.path.expanduser("~/.cache/yunshu/gate"))
     marker = Path(gate_root) / ".yv-install-commit"
     results = []
     failed = None
     for name in stages:
         prefix, timeout, mem, stall = GATE_STAGES[name]
+        if cell_timeout_min is not None and name != "long":
+            timeout = cell_timeout_min
         prior = [r for r in rd.rows(name) if r.get("ev") == "stage_complete"]
         marker_ok = marker.exists() and marker.read_text().strip() == commit
         # the tools under $GATE_ROOT must still be this commit's install, else a pass is stale

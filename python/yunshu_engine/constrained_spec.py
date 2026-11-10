@@ -1,5 +1,5 @@
 # Upstream (derived): Blaizzy/mlx-vlm (MIT) mlx_vlm/speculative/dflash.py @ v0.7.3
-# Patches upstream symbols (see vendor.json); target rows always use serial arithmetic.
+# Shared algorithms remain; serving uses the round driver, without a stock-loop installer.
 """Request-local grammar transactions and accepted target probabilities.
 
 The serial processor and speculative verifier share the very same constraint;

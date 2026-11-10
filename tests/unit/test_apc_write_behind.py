@@ -191,3 +191,38 @@ def test_close_writes_every_stored_checkpoint(tmp_path):
         assert m.store_exact_cache(_ids(base), _cache(96))
     m.close()
     assert len(_files(tmp_path)) == 2
+
+
+@pytest.mark.parametrize("room", [True, False])
+def test_prefill_only_waits_for_writer_when_memory_admission_needs_it(
+    tmp_path, monkeypatch, room
+):
+    """A ready RAM/standing hit must not join an unrelated checkpoint's SSD write.
+
+    Keep the upstream byte reservation and pressure retry: queued tensors are live
+    memory until the writer releases them, so a failed first admission still flushes.
+    """
+    from mlx_vlm.apc import DiskBlockStore
+
+    m = _disk_mgr(tmp_path)
+    calls = []
+
+    def flush(_disk):
+        calls.append("flush")
+
+    def make_room():
+        calls.append(("admit", m._prefill_reserve_bytes))
+        return room or "flush" in calls
+
+    with monkeypatch.context() as patch:
+        patch.setattr(DiskBlockStore, "flush", flush)
+        patch.setattr(m, "_make_room", make_room)
+        assert m.prepare_prefill(123)
+        expected = [("admit", 123)]
+        if not room:
+            expected += ["flush", ("admit", 123)]
+        assert calls == expected
+        # Explicit durability barriers outside admission continue to join the writer.
+        m.disk.flush()
+        assert calls[-1] == "flush"
+    m.close()

@@ -1257,3 +1257,20 @@ def test_checkpoints_never_land_before_or_inside_media_tokens():
         for n in c.checkpoint_lengths(ids, media):
             assert n >= floor and n % 64 == 0, (n, floor)
             assert not media.intersection(ids[n:]), n
+
+
+def test_upstream_checkpoint_planner_keeps_yunshu_policy_with_stable_prefix():
+    """mlx-vlm 0.7.12 supplies hint kwargs when constructing APC metadata."""
+    from types import SimpleNamespace
+
+    from mlx_vlm.generate.ar import BatchGenerator
+
+    manager = _mgr()
+    coordinator = _coordinator(manager)
+    ids = _prompt(range(100, 3000), range(5000, 12000))
+    expected = coordinator.checkpoint_lengths(ids, set())
+    generator = SimpleNamespace(apc=coordinator, _apc_media_token_ids=lambda: set())
+    # The upstream entry point must not raise before a request is admitted;
+    # Yunshu keeps its own bounded head/final/interval checkpoint policy.
+    got = BatchGenerator._apc_exact_checkpoint_lengths(generator, ids, 71, 512)
+    assert got == expected

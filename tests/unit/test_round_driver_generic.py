@@ -720,6 +720,41 @@ def test_prompt_scoring_chunked_equals_full_forward_bits():
     ]
 
 
+@pytest.mark.parametrize("delta,media", [(None, False), (-2, True)])
+def test_first_resumed_span_keeps_absolute_rope_positions(delta, media):
+    """Restoring K/V must not make a fresh row recompute suffix RoPE from zero."""
+    from types import SimpleNamespace
+
+    observed = []
+
+    class LM:
+        _rope_deltas = None
+        _position_ids = None
+
+        def __call__(self, ids, **kwargs):
+            # Qwen's upstream forward recomputes positions from the supplied
+            # suffix if _rope_deltas is None, even with a nonempty KV cache.
+            if kwargs.get("rope_deltas") is not None:
+                self._rope_deltas = kwargs["rope_deltas"]
+            offset = (
+                0 if self._rope_deltas is None else 3 + int(self._rope_deltas.item())
+            )
+            observed.extend(range(offset, offset + ids.shape[-1]))
+            return mx.zeros((1, ids.shape[-1], 8))
+
+    kwargs = {"inputs_embeds": mx.zeros((1, 6, 8))}
+    if delta is not None:
+        kwargs["rope_deltas"] = mx.array([[delta]])
+    row = SimpleNamespace(
+        req=SimpleNamespace(ids=list(range(6)), media=media),
+        cache=[],
+        features=generic.PromptFeatures(kwargs, 6),
+        state=generic.RowState(),
+    )
+    generic.prefill(LM(), row, 3, 5)
+    assert observed == [3 + (delta or 0), 4 + (delta or 0)]
+
+
 class _ForcedGuide:
     """A token grammar with singleton masks, including checkpointed lookahead."""
 
@@ -1063,6 +1098,14 @@ def test_generic_jump_forward_caches_do_not_enter_default_namespace(monkeypatch)
     assert salts[0] == salts[2]
     assert salts[0][0] != salts[1][0]
     assert salts[0][1] == salts[1][1]
+
+
+def test_generic_resume_cache_namespace_excludes_old_packed_namespace():
+    lm = TinyLM()
+    d = make(lm)
+    generic_salt = d.apc_salt(19, False)
+    d.generic = False  # the previous shared namespace, with identical arithmetic ids
+    assert d.apc_salt(19, False) != generic_salt
 
 
 def test_rows_and_requests_compare_by_identity_not_by_media_arrays():

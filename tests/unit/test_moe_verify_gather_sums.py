@@ -19,7 +19,7 @@ def _sums(header):
 
 
 def test_promoted_sums_match_the_upstream_transcription():
-    sums = _sums(stock_load_vector(gather._HEADER, True))
+    sums = _sums(stock_load_vector(gather._BASE_HEADER, True))
     # load_vector and load_vector_safe: 4-bit, 5-bit, 6-bit multi-term sums, 8-bit single term
     assert sums.count(FOUR) == 4  # 4-bit and 6-bit, in both functions
     assert sums.count(EIGHT) == 2  # 5-bit, in both functions
@@ -27,7 +27,7 @@ def test_promoted_sums_match_the_upstream_transcription():
 
 
 def test_unpromoted_header_is_the_pre_0_32_4_arithmetic():
-    sums = _sums(stock_load_vector(gather._HEADER, False))
+    sums = _sums(stock_load_vector(gather._BASE_HEADER, False))
     assert all("float(" not in s for s in sums)
 
 

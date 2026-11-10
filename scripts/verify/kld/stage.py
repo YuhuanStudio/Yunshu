@@ -11,7 +11,10 @@ import hashlib
 import json
 from pathlib import Path
 
-TOOL_VERSION = "1"
+# v1 could rewrite a marked candidate's server back to the controller interpreter.
+# Those receipts cannot qualify a dependency upgrade, even with the same source key.
+# v2 did not count executed standard fp32 SDPA reference calls for Qwen3.5.
+TOOL_VERSION = "3"
 CACHE_ROOT = Path("/Volumes/Micron/yunshu-kld-cache")
 NOISE_FILE = Path(__file__).with_name("noise.json")
 DEFAULT_EPS = 0.002

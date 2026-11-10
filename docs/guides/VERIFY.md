@@ -340,3 +340,17 @@ checks every row count 1..32 against that source without collecting timings. The
 unchanged original Metal source constants; source-generator regression tests preserve the qualified arithmetic.
 The drafter inventory includes serving's fused all-layer context K|V and gate|up. Its whole projection graph
 uses those fused projections rather than counting both the fused and separate buffers.
+
+For dependency upgrade worktrees marked `.yv-own-venv`, preflight tests use the
+candidate interpreter as well as candidate source. Set `YV_PREFLIGHT_GPUQ=1`
+when those tests touch MLX: pytest and isolated reruns enter the shared GPU queue,
+with complete JSON evidence and job IDs in the verdict. The controller stays
+outside the queue so later stages can submit their own jobs.
+
+For a workload with measured runtimes, `yv ab --cell-timeout-min 10` overrides
+the timeout of probe, identity and speed decode cells; `yv gate
+--cell-timeout-min 10` overrides its selected gate.sh jobs (the long suite keeps
+its own estimates). The option is recorded in the run configuration / gate
+fingerprint. It leaves comparisons, quiet timing admission and completion checks
+unchanged. Jobs at or below ten minutes enter gpuq's existing short lane and are
+killed if they exceed that hard limit. Omit the option for unmeasured workloads.

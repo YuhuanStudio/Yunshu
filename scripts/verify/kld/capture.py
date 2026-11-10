@@ -101,7 +101,7 @@ def detect_arch(model_dir: str) -> str:
     raise RuntimeError(f"kld capture has no hooks for model_type {kind!r}")
 
 
-def upcast_attention() -> None:
+def upcast_attention(ref_calls: list[int]) -> None:
     """Reference mode for every architecture: standard attention accumulates in fp32."""
     import mlx.core as mx
 
@@ -118,6 +118,7 @@ def upcast_attention() -> None:
             *args,
             **kwargs,
         )
+        ref_calls[0] += 1
         return out.astype(queries.dtype)
 
     mx.fast.scaled_dot_product_attention = sdpa
@@ -159,7 +160,7 @@ def install(arm: str, arch: str = "qwen4") -> None:
     ]  # forwards the reference attention replaced (saved with each window)
 
     if arm == "ref":
-        upcast_attention()
+        upcast_attention(ref_calls)
     if arm == "ref" and arch == "qwen4":
         original = l4.dispatch_qsa_attention
 
@@ -372,11 +373,13 @@ def serve_command(command, arm: str, arch: str):
     ``<python> -m <cli module> serve ...`` (or the legacy console script): both are rewritten, otherwise
     no hook is installed and no window is ever written."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "research"))
-    from bench_engines import is_yunshu_command, yunshu_args
+    from bench_engines import YUNSHU_MODULE, is_yunshu_command, yunshu_args
 
     if command and is_yunshu_command(command):
         return [
-            sys.executable,
+            command[0]
+            if list(command[1:3]) == ["-m", YUNSHU_MODULE]
+            else sys.executable,
             str(Path(__file__).resolve()),
             "serve",
             arm,

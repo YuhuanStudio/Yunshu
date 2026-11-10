@@ -122,6 +122,15 @@ def prefill(lm: Any, row: Any, start: int, end: int) -> mx.array | None:
     chunk, then the last token alone asking for one row of logits (``logits_to_keep``). The row's decode
     offsets are captured with the stock helper after that call."""
     feats: PromptFeatures = row.features
+    if start > 0 and not row.state.saved and hasattr(lm, "_rope_deltas"):
+        # A fresh APC row has K/V but no model-local mRoPE state. Upstream
+        # treats a missing delta as a new prompt and numbers only the suffix
+        # from zero. Text has delta zero; explicit media deltas stay per row.
+        delta = feats.rope_deltas
+        if delta is not None:
+            row.state.saved["_rope_deltas"] = delta
+        elif not getattr(row.req, "media", False):
+            row.state.saved["_rope_deltas"] = mx.zeros((1, 1), dtype=mx.int32)
     n = len(row.req.ids)
     final = end == n
     stop = end - 1 if final else end

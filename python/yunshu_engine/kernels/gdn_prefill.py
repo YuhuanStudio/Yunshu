@@ -162,6 +162,7 @@ def fused_norm_scale(x, *, inverse: bool):
 
 
 def install_norm_scale(cls) -> None:
+    gdn_qk_eps.install_lossless_default()
     original = cls._normalize_qk
     if getattr(original, "_yunshu_norm_scale", False):
         return
@@ -369,6 +370,7 @@ def kernel_id() -> str:
 
 def install() -> bool:
     """Patch ``mlx_vlm.models.qwen3_5.gated_delta.gated_delta_kernel`` (idempotent); True when active."""
+    gdn_qk_eps.install_lossless_default()
     if not hasattr(mx.fast, "gated_delta_update"):
         return False
     from mlx_vlm.models.qwen3_5 import gated_delta as gd

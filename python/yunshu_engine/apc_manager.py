@@ -1589,7 +1589,18 @@ class _Coordinator(APCCoordinator):
         self.__dict__.pop("_deferred_checkpoints", None)
         self._deferred_bytes = 0
 
-    def checkpoint_lengths(self, token_ids, media_token_ids, *, begin=True):
+    def checkpoint_lengths(
+        self,
+        token_ids,
+        media_token_ids,
+        *,
+        begin=True,
+        extra_hash=0,
+        stable_prefix_len=0,
+    ):
+        # mlx-vlm supplies stable-prefix hints to its own checkpoint policy.
+        # Yunshu owns its head/final/interval boundaries and semantic hash plan;
+        # accepting the hints must not change the prefill spans or cache keys.
         if begin:
             if hasattr(self.manager, "observation"):
                 pending_ids = self.manager._console_requests.get(tuple(token_ids))
@@ -2567,6 +2578,20 @@ class YunshuAPCManager(APCManager):
         while self.anchor_bytes() > budget and self._drop_anchor():
             dropped += 1
         return dropped
+
+    def prepare_prefill(self, reserve_bytes: int) -> bool:
+        """Admit a RAM hit without joining an unrelated bounded SSD write.
+
+        The memory check still sees the writer's live tensors. If they prevent
+        admission, retain upstream's flush-and-retry path to release them.
+        Explicit disk flushes outside admission remain durability barriers.
+        """
+        token = _ADMISSION.set(True)
+        try:
+            ready = super().prepare_prefill(reserve_bytes)
+        finally:
+            _ADMISSION.reset(token)
+        return ready or super().prepare_prefill(reserve_bytes)
 
     def _memory_headroom(self) -> int:
         memo = getattr(self, "_headroom_memo", None)
