@@ -3371,8 +3371,15 @@ def stage_kld(ctx: Ctx) -> StageResult:
                 ["--kld-decode (teacher-forced decode path) is not implemented"],
             ),
         )
+    # detect_arch imports yunshu_engine; the yv controller runs without the repo's python/ on
+    # sys.path (only the capture jobs get a tree's PYTHONPATH), so every kld stage raised
+    # ModuleNotFoundError at this check (2026-11-10, deps-fix-16 INFRA_ERROR).
+    import sys
+
     from .kld.capture import detect_arch
 
+    if str(REPO / "python") not in sys.path:
+        sys.path.insert(0, str(REPO / "python"))
     try:
         detect_arch(ctx.model)
     except RuntimeError as e:

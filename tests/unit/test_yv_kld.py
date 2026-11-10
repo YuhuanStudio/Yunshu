@@ -289,3 +289,28 @@ def test_kld_stage_is_not_applicable_to_a_family_without_capture_hooks(tmp_path)
     res = stages.stage_kld(ctx)
     assert res.passed and res.numbers == {"applicable": False}
     assert "gemma4" in res.reasons[0] and logged[0]["status"] == "PASS"
+
+
+def test_kld_family_check_works_in_the_yv_controller_without_the_engine_on_sys_path(
+    tmp_path,
+):
+    """yv runs on a plain interpreter (no venv site-packages, no repo python/ on sys.path); the
+    stage's family check imported yunshu_engine and every kld stage raised ModuleNotFoundError
+    (2026-11-10, deps-fix-16 INFRA_ERROR)."""
+    import subprocess
+
+    root = Path(__file__).resolve().parents[2]
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "gemma4"}))
+    code = (
+        "import sys; sys.path.insert(0, {!r})\n"
+        "from types import SimpleNamespace\n"
+        "from verify import stages\n"
+        "ctx = SimpleNamespace(model={!r}, suite={{}}, exe=SimpleNamespace(jobs=[]),"
+        " run=SimpleNamespace(append=lambda n, e: None))\n"
+        "print(stages.stage_kld(ctx).numbers)\n"
+    ).format(str(root / "scripts"), str(tmp_path))
+    out = subprocess.run(
+        [sys.executable, "-S", "-c", code], capture_output=True, text=True, timeout=120
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert "'applicable': False" in out.stdout
