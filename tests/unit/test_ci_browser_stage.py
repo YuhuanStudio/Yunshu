@@ -64,18 +64,20 @@ def test_vm_fixture_forces_capability_but_keeps_explicit_path_overrides(monkeypa
     assert hardware.is_paravirtual_metal() is False
 
 
-def test_cpu_stage_runs_outside_gpuq_and_stops_before_the_unit_suite():
+def test_cpu_stage_runs_outside_gpuq_and_the_gpu_stage_runs_only_the_unit_suite():
     """2026-11-10: the CPU-only browser suite (~50 min) held the GPU lane inside the gpuq job
-    while 25 jobs waited. YUNSHU_CI_STAGE=cpu runs lint/console/browser outside gpuq and exits
-    before the unit suite; the gpu half skips the console and browser parts."""
+    while 25 jobs waited. YUNSHU_CI_STAGE=cpu runs lint/console/browser plus the build and the
+    wheel smoke (they need the console bundle the frontend build makes) outside gpuq and skips
+    the unit suite; the gpu stage runs only the unit suite (a first split put the wheel check
+    in the gpu half without the frontend build: 'console_static/index.html' missing)."""
     script = (ROOT / "scripts/dev/ci-local").read_text()
     guard = script.index('if [ "$STAGE" != cpu ] && [ -z "${GPUQ_RC:-}" ]')
     assert guard < script.index("git clone")
-    cpu_exit = script.index('if [ "$STAGE" = cpu ]; then')
+    suite = script.index('if [ "$STAGE" != cpu ]; then\nPROFILE=')
     assert (
-        script.index("pnpm test:browser")
-        < cpu_exit
-        < script.index("-m pytest tests/unit")
+        script.index("pnpm test:browser") < suite < script.index("-m pytest tests/unit")
     )
+    gpu_exit = script.index('echo "ci-local: GPU stage PASS $SHA"')
+    assert script.index("-m pytest tests/unit") < gpu_exit < script.index("uv build -q")
     assert 'if [ "$STAGE" != gpu ]; then\n(cd frontend && pnpm install' in script
     assert '[ "$STAGE" = all ] || WORK="$WORK-$STAGE"' in script
