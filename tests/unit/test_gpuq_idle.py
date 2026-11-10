@@ -140,6 +140,22 @@ def test_filler_runs_while_head_waits_for_quiet(blocked_head):
     assert job["id"] == "smoke" and job["filler"] is True
 
 
+def test_no_filler_ahead_of_a_gate_head_or_two_levels_below(blocked_head):
+    """2026-11-10: the p2 release gate's quiet stage waited behind lower-priority fillers."""
+    g = blocked_head
+    head(g, gate=True, priority=2)
+    mk(g, "smoke", timeout_s=120, priority=1, submitted=NOW - 10)
+    assert admit(g) is None
+    g2 = blocked_head
+    for p in g2.JOBS.glob("*.json"):
+        p.unlink()
+    head(g2, priority=2)
+    mk(g2, "smoke-p0", timeout_s=120, priority=0, submitted=NOW - 10)
+    assert admit(g2) is None
+    mk(g2, "smoke-p1", timeout_s=120, priority=1, submitted=NOW - 10)
+    assert admit(g2)["id"] == "smoke-p1"
+
+
 def test_head_waits_for_its_window_before_any_filler(blocked_head):
     g = blocked_head
     history(g)

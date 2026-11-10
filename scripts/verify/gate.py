@@ -43,14 +43,16 @@ GATE_STAGES = {
     # not a gate.sh stage: `yv ab --suite long` (its own gpuq jobs), judged from its verdict
     "long": ("long.", 0, 0, 0),
 }
+# Fail fast: the cheap stages that break most often run first, the two 20-30 min soaks last
+# (2026-11-10: agent-sessions, 7 min, failed release 0.1.7 after 1 h 47 min of soaks before it).
 DEFAULT_STAGES = [
     "install",
     "serve-27b",
     "families",
-    "soak-mmlu",
-    "soak-realistic",
     "agent-sessions",
     "long",
+    "soak-mmlu",
+    "soak-realistic",
 ]
 LONG_SUITE = "long"
 
@@ -234,6 +236,9 @@ def run_gate(
         or "infra"
     )
     gq = gq or Gpuq()
+    gq.gate = (
+        True  # every job of the gate (incl. the long suite's cells) is a verdict job
+    )
     repo = repo or REPO
     stages = stages or list(DEFAULT_STAGES)
     unknown = [s for s in stages if s not in GATE_STAGES]

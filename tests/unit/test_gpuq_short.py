@@ -121,6 +121,22 @@ def test_gate_job_still_first(gpuq):
     assert gpuq._pick(jobs, interleave=True)["id"] in {"long0", "s1"}
 
 
+def test_short_never_jumps_two_priority_levels(gpuq):
+    """2026-11-10: p0 shorts were interleaved ahead of the p2 release gate's stages."""
+    jobs = history() + [
+        job("rel", priority=2, submitted=NOW - 60),
+        short("s0", priority=0),
+    ]
+    assert gpuq._pick(jobs, interleave=True)["id"] == "rel"
+    jobs = history() + [
+        job("suite", priority=1, submitted=NOW - 60),
+        short("s0", priority=0),
+    ]
+    assert (
+        gpuq._pick(jobs, interleave=True)["id"] == "s0"
+    )  # one level: still interleaved
+
+
 def test_p_minus_2_not_eligible(gpuq):
     jobs = history() + [job("long0"), short("big", priority=-2)]
     assert gpuq._pick(jobs, interleave=True)["id"] == "long0"

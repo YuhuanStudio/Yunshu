@@ -376,6 +376,11 @@ class Gpuq:
             cmd.append("--short")
         if quiet:
             cmd.append("--quiet")
+        if getattr(self, "gate", False):
+            # a release-gate verdict job: no short job is interleaved ahead of it and it leads
+            # its priority (2026-11-10: release 0.1.7's p2 gate stages waited 1-36 min each behind
+            # interleaved p0/p1 shorts)
+            cmd.append("--gate")
         if device:
             cmd += ["--device", device]
         if out is not None:

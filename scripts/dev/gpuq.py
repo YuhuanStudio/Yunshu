@@ -376,11 +376,14 @@ def _filler(jobs, pending, blockers, head, now) -> dict | None:
     the first quiet slot after every filler."""
     if now - head.get("quiet_wait_started", now) < FILLER_WAIT_S:
         return None
+    if head.get("gate"):
+        return None  # a --gate verdict job waits for its quiet CPU, not behind a 30-min filler
     cands = [
         j
         for j in pending
         if j is not head
         and blockers.get(j["id"]) is None
+        and j.get("priority", 0) >= head.get("priority", 0) - 1
         and not requires_quiet(j)
         and j.get("timeout_s", 1e9) <= FILLER_MAX_MIN * 60
         and j.get("device", "m5") in {"m5", "any"}
@@ -778,11 +781,15 @@ def _interleave_choice(jobs, pending, winner, now) -> dict | None:
     never displaced; nothing running is preempted (this runs only when the lane is free)."""
     if winner.get("gate") or _lane_short(winner):
         return None
+    # A short jumps a long suite of its own or the next priority (a p0 check ahead of a p1 suite),
+    # never one two levels above it (2026-11-10: p0 shorts went ahead of the p2 release gate).
+    ceiling = winner.get("priority", 0) - 1  # declared, not aged
     cands = [
         j
         for j in pending
         if _lane_short(j)
         and j.get("priority", 0) >= -1
+        and j.get("priority", 0) >= ceiling
         and not j.get("gate")
         and now - j.get("submitted", now) >= SHORT_WAIT_S
     ]
