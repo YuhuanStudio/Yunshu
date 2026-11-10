@@ -10,9 +10,8 @@ set -eu
 # The unit suite runs MLX on the GPU: outside gpuq it overlapped timing jobs and voided them
 # (2026-11-02: a turn-2 probe read 10x slow while ci-local ran beside it). Inside a gpuq job
 # GPUQ_RC is set; YUNSHU_CI_OUTSIDE_GPUQ=1 overrides on a machine with no timing work.
-# YUNSHU_CI_STAGE splits the run (default all): `cpu` = lint, mypy, console checks and the browser suite (no GPU:
-# the browser tests run vite and a stand-in engine), allowed outside gpuq; `gpu` = everything else (unit suite,
-# build, wheel smoke), inside gpuq. 2026-11-10: the ~50 min browser suite held the GPU lane while 25 jobs waited.
+# YUNSHU_CI_STAGE splits the run (default all): `cpu` = lint, mypy, console checks, the browser suite (vite and a
+# stand-in engine), the build and the wheel smoke - no GPU, allowed outside gpuq; `gpu` = the unit suite, inside gpuq. 2026-11-10: the ~50 min browser suite held the GPU lane while 25 jobs waited.
 STAGE="${YUNSHU_CI_STAGE:-all}"
 case "$STAGE" in all|cpu|gpu) ;; *) echo "ci-local: YUNSHU_CI_STAGE must be all, cpu or gpu" >&2; exit 2;; esac
 if [ "$STAGE" != cpu ] && [ -z "${GPUQ_RC:-}" ] && [ "${YUNSHU_CI_OUTSIDE_GPUQ:-0}" != 1 ]; then
@@ -57,10 +56,9 @@ if [ "$STAGE" != gpu ] && [ "${YUNSHU_CI_BROWSER:-0}" = 1 ]; then
   (cd frontend && pnpm exec playwright install --with-deps chromium webkit && \
     PLAYWRIGHT_PORT="$PW_PORT" YUNSHU_TEST_PYTHON="$WORK/.venv/bin/python" pnpm test:browser)
 fi
-if [ "$STAGE" = cpu ]; then
-  echo "ci-local: CPU stage PASS $SHA"
-  exit 0
-fi
+# The unit suite is the only part that uses the GPU: the cpu stage skips it and goes on to the build and the
+# wheel checks (they need the console bundle the frontend build above produced); the gpu stage stops after it.
+if [ "$STAGE" != cpu ]; then
 PROFILE="$WORK/ci.sb"
 cat > "$PROFILE" <<EOF
 (version 1)
@@ -135,6 +133,13 @@ cat "$WORK/pytest.log"
 [ "$rc" -eq 0 ] || { echo "ci-local: FAIL (pytest rc $rc) $SHA"; exit "$rc"; }
 cat "$WORK/pytest-paravirtual.log"
 [ "$prc" -eq 0 ] || { echo "ci-local: FAIL (paravirtual pytest rc $prc) $SHA"; exit "$prc"; }
+fi
+if [ "$STAGE" = gpu ]; then
+  cd /
+  [ "${YUNSHU_CI_KEEP:-0}" = 1 ] || { chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"; }
+  echo "ci-local: GPU stage PASS $SHA"
+  exit 0
+fi
 uv build -q
 "$WORK/.venv/bin/python" - <<'PYCODE'
 import glob, tarfile, zipfile
