@@ -136,6 +136,8 @@ def stream(url, b, t_zero, *, on_first_token=None):
         xy=xy,
         finish=finish,
         digest=digest("".join(text), lps),
+        pieces=text,
+        lps=lps,
     )
 
 

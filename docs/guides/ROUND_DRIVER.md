@@ -180,16 +180,21 @@ off) are GPU checks, not CPU-test claims.
 
 A model that has no packed layer (Gemma, the Qwen-VL / Omni families, ...) is served by the same driver through
 `round_driver/generic.py`, on the model's own upstream forward and the stock arithmetic: prefill runs per row on the row's own cache;
-decode rows are batched through the upstream batched forward (a lone row decodes on its own cache; a second row turns the caches into
-`BatchKVCache` / the family's batch classes with left padding, merged with upstream's `_extend_cache`, and every step is one call over
-all rows, as `GenerationBatch` does). A family's outputs are what the model's own upstream forward produces for it; there is no cross-row identity
-contract beyond that (batched stock kernels are not row-invariant).
+every decoding row makes the same upstream call a lone request makes, on its own cache, one call per row per round
+(`GenericBatch.forward`). Batched stock kernels (projections at M=rows, attention over left padding) are not row-invariant, so batching
+them changed a row's output beside other rows; per-row calls keep solo == concurrent, greedy and seeded.
 
+- known gap: concurrent throughput of small generic families is below the old (non-identical) batched path
+  (Gemma-4 E2B 4-bit burst4 about 196 vs 268 tok/s, E4B bf16 about 50 vs 98; solo is unchanged). Batching decode rows through one
+  upstream forward is not row-invariant (the first difference is the projection at M=rows, then attention over left padding), and
+  MLX's own batch-axis call is bit-exact against the single-row kernel only for quantized layers, not dense bf16 (measured; the
+  coordination overhead then cost more than the shared launch saved). The fix direction is a row-invariant multi-row kernel
+  bitwise equal to MLX's M=1 gemv / qmv (so a lone row keeps the stock path).
 - prefill is the stock single-row recipe: chunks with `n_to_process`, then the last prompt token alone with `logits_to_keep=1`; the
   inputs are the runner's prompt features (`get_input_embeddings` of the prompt, or `prepare_media`'s), sequence-aligned kwargs cut
   with the span, so images, audio and video ride as they do upstream (mRoPE models keep their per-row state: `_rope_deltas`, `_position_ids`);
 - spans are the absolute 2048 grid plus the row's checkpoints and `apc_prefill_stride` is the grid (a hit runs the spans a cold prompt did);
-- a row's own cache is cut back out of the batch cache (`extract`) only when the last row of a burst leaves and its reply is to be stored;
+- rows keep their own caches (no batch cache, no `extract`);
 - no drafter and no verify kernels: every row decodes one token a round through its own processors, guide and sampler; APC, cancel,
   memory admission, telemetry and the next-turn store are the driver's and the runner's;
 - KV stays bf16 (`YUNSHU_KV_PRECISION` is the Qwen3.5 layer's option) and the prompt-tail replay is not kept;

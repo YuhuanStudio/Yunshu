@@ -151,6 +151,15 @@ def check_identity(solo, concurrent):
     if solo.keys() != concurrent.keys() or any(
         solo[n]["digest"] != concurrent[n]["digest"] for n in solo
     ):
+        for n in solo:
+            a, b = solo[n], concurrent.get(n, {})
+            pa, pb = a.get("pieces", []), b.get("pieces", [])
+            la, lb = a.get("lps", []), b.get("lps", [])
+            tok = next((i for i, (x, y) in enumerate(zip(pa, pb)) if x != y), None)
+            lpi = next((i for i, (x, y) in enumerate(zip(la, lb)) if x != y), None)
+            print(f"row {n}: {len(pa)}/{len(pb)} pieces, first text diff {tok}, first logprob diff {lpi}", flush=True)
+            if lpi is not None:
+                print("  ", la[lpi], lb[lpi], flush=True)
         raise RuntimeError(
             "concurrent token/logprob digest differs from matched solo request"
         )

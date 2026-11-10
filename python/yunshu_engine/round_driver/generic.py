@@ -194,18 +194,20 @@ def _trimmable(cache: Any, extra: int) -> bool:
 
 
 class GenericBatch:
-    """The decoding rows of a generic target, batched as the stock generator batches them.
+    """The decoding rows of a generic target. Each row decodes on its own cache, one upstream call per
+    row per step: exactly the call a lone request makes, so a row's output does not depend on which
+    other rows share the round (solo == concurrent, greedy and seeded).
 
-    Prefill is per row (own cache, ``prefill`` above). Once a row's first token is out it joins here: a
-    lone row keeps decoding on its own cache (upstream's single-row path); a second row turns the caches
-    into batch caches (``BatchKVCache`` and the family's own batch classes, left padded, merged with
-    upstream's ``_extend_cache``) and every step is ONE upstream forward over all rows, the call and
-    arithmetic ``GenerationBatch._step`` makes. Same interface as ``DecodeBatch`` / ``FlashNextBatch``
-    (``join`` / ``leave`` / ``arrays`` / ``forward`` / ``commit``). The window of a row starts with its
-    pending token, optionally followed by grammar-forced tokens (no drafter).
+    A batched forward (left-padded ``BatchKVCache`` rows through ONE upstream call, the stock
+    generator's way) runs every projection at M=rows and attention over padding, whose kernels round
+    differently from the M=1 decode GEMV; the identity of a row beside others was lost to that
+    (measured on Gemma-4: first difference at the per-layer-input projection, then every layer).
+    Decode is weight-bandwidth bound, so the per-row calls cost about what the batch's matmuls did
+    in launches, not in bytes.  Same interface as ``DecodeBatch`` / ``FlashNextBatch`` (``join`` /
+    ``leave`` / ``arrays`` / ``forward`` / ``commit``). The window of a row starts with its pending
+    token, optionally followed by grammar-forced tokens (no drafter).
 
-    While a row sits in a batch cache its ``row.cache`` is None (the batch owns the K/V); ``restore``
-    cuts the row's own cache back out (``extract``) when its reply cache is to be stored."""
+    ``row.cache`` is always the row's own cache; ``restore`` has nothing to cut out."""
 
     def __init__(self, language_model: Any, kv_format: str = "bf16"):
         if kv_format != "bf16":
@@ -215,132 +217,65 @@ class GenericBatch:
         self.lm = language_model
         self.kv_format = kv_format
         self.rows: list = []
-        self.cache: list | None = (
-            None  # the decoding rows' cache (batch dimension = row order)
-        )
+        self._lens: list[int] = []
 
     def join(self, rows: list) -> None:
-        from mlx_vlm.generate import ar
-
         for row in rows:
-            merged = self.cache is not None
-            self.cache = ar._extend_cache(self.cache, row.cache)
             row.slot = id(row)
             self.rows.append(row)
-            if merged:
-                # the batch cache owns every row's K/V now (a lone row's own cache was copied in)
-                for r in self.rows:
-                    r.cache = None
 
     def leave(self, gone: list) -> None:
         ids = {id(r) for r in gone}
         for r in gone:
             r.slot = None
-        keep = [i for i, r in enumerate(self.rows) if id(r) not in ids]
-        if not keep:
-            self.cache = None
-        elif len(keep) < len(self.rows):
-            keep_arr = mx.array(keep, mx.int32)
-            assert self.cache is not None
-            for c in self.cache:
-                c.filter(keep_arr)
-        self.rows = [self.rows[i] for i in keep]
+        self.rows = [r for r in self.rows if id(r) not in ids]
 
     def restore(self, row: Any) -> None:
-        """Give ``row`` its own cache back (cut out of the batch cache) before it leaves."""
-        if row.cache is not None or self.cache is None:
-            return
-        row.cache = [c.extract(self.rows.index(row)) for c in self.cache]
+        """Rows keep their own caches; nothing to give back."""
+
+    @property
+    def cache(self) -> list | None:
+        """Every decoding row's cache (None with no rows)."""
+        if not self.rows:
+            return None
+        return [c for r in self.rows for c in r.cache]
 
     def arrays(self) -> list:
-        return [] if self.cache is None else cache_arrays(self.cache)
+        return [a for r in self.rows for a in cache_arrays(r.cache)]
 
     def forward(self, lens: list[int], tokens: mx.array) -> mx.array:
-        """One upstream call over decode windows; unpadded logits in row/window order.
-
-        The upstream prepare/finalize protocol rolls trailing padding into each cache's
-        left padding and adjusts its position offset. The T=1 call stays exactly the old call.
-        """
+        """One upstream call per row over its decode window; logits in row/window order."""
         if len(lens) != len(self.rows) or any(int(n) < 1 for n in lens):
             raise ValueError("generic round driver needs a nonempty window per row")
         self._lens = list(lens)
-        width = max(lens)
-        pads = [width - n for n in lens]
-        if width > 1:
-            parts, at = [], 0
-            for n, pad in zip(lens, pads, strict=True):
-                parts.append(mx.pad(tokens[at : at + n], (0, pad)))
-                at += n
-            inputs = mx.stack(parts)
-            if any(pads):
-                for c in self.cache or ():
-                    c.prepare(right_padding=pads, lengths=lens)
-        else:
-            inputs = tokens[:, None]
-        deltas = [r.state.rope_deltas for r in self.rows]
-        kwargs = {}
-        if any(d is not None for d in deltas):
-            if any(d is None for d in deltas):
-                raise RuntimeError(
-                    "generic round driver: rows with and without mRoPE offsets cannot share a batch"
-                )
-            kwargs["rope_deltas"] = (
-                deltas[0] if len(deltas) == 1 else mx.concatenate(deltas, axis=0)
-            )
-        out = self.lm(inputs, cache=self.cache, **kwargs)
-        if width == 1:
-            return _logits_of(out)[:, -1, :]
-        if any(pads):
-            for c in self.cache or ():
-                c.finalize()
-        logits = _logits_of(out)
-        return mx.concatenate([logits[b, :n] for b, n in enumerate(lens)])
+        outs, at = [], 0
+        for row, n in zip(self.rows, lens, strict=True):
+            kwargs = {}
+            if row.state.rope_deltas is not None:
+                kwargs["rope_deltas"] = row.state.rope_deltas
+            out = self.lm(tokens[None, at : at + n], cache=row.cache, **kwargs)
+            logits = _logits_of(out)
+            outs.append(logits[:, -1, :] if n == 1 else logits[0, :n])
+            at += n
+        return outs[0] if len(outs) == 1 else mx.concatenate(outs)
 
     def can_trim(self, extra: int = 0) -> bool:
         """Every cache of the decode batch can cut ``extra`` more window positions after appending them
         (KV caches; a rotating cache only while its window has not wrapped; not recurrent state)."""
-        return self.cache is not None and all(_trimmable(c, extra) for c in self.cache)
+        return bool(self.rows) and all(
+            _trimmable(c, extra) for r in self.rows for c in r.cache
+        )
 
     def commit(self, used: list[int]) -> None:
-        if len(self.rows) == 1 and used[0] < self._lens[0]:
-            # one row: the window's rejected tail is the cache's last positions (no padding to roll);
-            # an in-place trim, not the extract / re-merge a batch needs
-            assert self.cache is not None
-            for c in self.cache:
-                if not c.is_trimmable():
-                    raise RuntimeError(
-                        "generic window cache cannot trim a rejected prefix"
-                    )
-                c.trim(self._lens[0] - used[0])
-            self.rows[0].n += int(used[0])
-            return
-        if any(u != n for u, n in zip(used, self._lens, strict=True)):
-            # A processor can reject a forced token; keep only the verified prefix.
-            # Extracting removes each row's padding before trimming and re-merging.
-            from mlx_vlm.generate import ar
-
-            assert self.cache is not None
-            merged = None
-            for b, (r, u, n) in enumerate(
-                zip(self.rows, used, self._lens, strict=True)
-            ):
-                cache = (
-                    r.cache
-                    if r.cache is not None
-                    else [c.extract(b) for c in self.cache]
-                )
-                if n > u:
-                    for c in cache:
-                        if not c.is_trimmable():
-                            raise RuntimeError(
-                                "generic forced window cache cannot trim a rejected prefix"
-                            )
-                        c.trim(n - u)
-                merged = ar._extend_cache(merged, cache)
-            self.cache = merged
-            for r in self.rows:
-                r.cache = self.cache if len(self.rows) == 1 else None
-        for r, u in zip(self.rows, used, strict=True):
+        for r, u, n in zip(self.rows, used, self._lens, strict=True):
+            if u < n:
+                # a processor can reject a forced token; keep only the verified prefix
+                for c in r.cache:
+                    if not c.is_trimmable():
+                        raise RuntimeError(
+                            "generic window cache cannot trim a rejected prefix"
+                        )
+                    c.trim(n - u)
             r.n += int(u)
 
 

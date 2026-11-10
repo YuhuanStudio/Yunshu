@@ -321,8 +321,8 @@ def test_each_row_decodes_with_its_own_rope_deltas_not_the_models_last():
         c["rope"] is not None for c in decode
     )  # the captured offsets, as the stock generator
     # the model recorded T + 100 * first token on each row's first call: one value per row, in batch order
-    both = [c for c in decode if c["B"] == 2]
-    assert both and both[0]["rope"] == [4 + 100 * a[0], 8 + 100 * b[0]]
+    firsts = {tuple(c["rope"]) for c in decode}
+    assert (4 + 100 * a[0],) in firsts and (8 + 100 * b[0],) in firsts
 
 
 def test_rope_state_does_not_leak_between_interleaved_prefills():
@@ -496,22 +496,20 @@ def test_the_generic_apc_grid_is_the_prefill_step():
 
 
 # ── batched decode ───────────────────────────────────────────────────────────────────────────
-def test_decode_rows_share_one_batched_call_and_a_lone_row_keeps_its_own_cache():
+def test_decode_rows_each_make_their_own_call_on_their_own_cache():
     lm = TinyLM()
     run(
         make(lm),
         [request(lm, PROMPTS[0], 6, handle=0), request(lm, PROMPTS[1], 6, handle=1)],
     )
     decode = [c for c in LOG if c["T"] == 1 and c["keep"] is None]
-    assert decode and all(
-        c["B"] == 2 for c in decode
-    )  # one call per step for both rows
+    assert decode and all(c["B"] == 1 for c in decode)
     LOG.clear()
     run(make(lm), [request(lm, PROMPTS[0], 6, handle=0)])
     assert all(c["B"] == 1 for c in LOG)
 
 
-def test_the_batch_shrinks_when_a_row_leaves_and_the_other_keeps_its_tokens():
+def test_a_row_leaving_leaves_the_other_with_its_tokens():
     lm = TinyLM()
     short = solo(lm, PROMPTS[0], 12)
     LOG.clear()
@@ -523,8 +521,7 @@ def test_the_batch_shrinks_when_a_row_leaves_and_the_other_keeps_its_tokens():
         ],
     )
     assert tokens(out, "a") == short
-    sizes = [c["B"] for c in LOG if c["T"] == 1 and c["keep"] is None]
-    assert sizes[0] == 2 and sizes[-1] == 1
+    assert {c["B"] for c in LOG} == {1}
 
 
 def _prefilled(lm, ids):
@@ -543,21 +540,21 @@ def _prefilled(lm, ids):
     return row
 
 
-def test_a_batch_cache_gives_a_rows_own_cache_back_and_leave_filters_the_others():
+def test_rows_keep_their_own_caches_and_leave_drops_only_that_row():
     lm = TinyLM()
     a, b = _prefilled(lm, prompt(7, 1)), _prefilled(lm, prompt(12, 2))
     want = _prefilled(lm, prompt(12, 2))
     batch = generic.GenericBatch(lm)
     batch.join([a, b])
-    assert a.cache is None and b.cache is None  # the batch cache owns the K/V
-    assert batch.cache[0].keys.shape[0] == 2
+    assert a.cache is not None and b.cache is not None
+    assert batch.cache[0].keys.shape[0] == 1
     batch.restore(b)
     assert b.cache[0].offset == 12
     assert mx.allclose(
         b.cache[0].keys[..., :12, :], want.cache[0].keys[..., :12, :]
     ).item()
     batch.leave([a])
-    assert batch.rows == [b] and batch.cache[0].keys.shape[0] == 1
+    assert batch.rows == [b] and a.slot is None
     batch.leave([b])
     assert batch.cache is None and batch.rows == []
 
@@ -1079,3 +1076,25 @@ def test_rows_and_requests_compare_by_identity_not_by_media_arrays():
     assert a in [b, a] and b not in [a]
     rows = [drv._Row(r, None, None) for r in (a, b)]
     assert rows[1] in rows[::-1] and drv._Row(a, None, None) not in rows
+
+
+class BatchSensitiveLM(TinyLM):
+    """A model whose arithmetic depends on how many rows share the call (as a stock M=rows matmul or a
+    padded-batch attention does): the hidden state is rounded differently by batch size."""
+
+    def __call__(self, inputs, inputs_embeds=None, **kw):
+        if inputs_embeds is None:
+            inputs_embeds = self.embed(inputs)
+        b = inputs.shape[0]
+        inputs_embeds = inputs_embeds * (1.0 + 0.3 * (b - 1))
+        return super().__call__(inputs, inputs_embeds=inputs_embeds, **kw)
+
+
+def test_decode_rows_never_share_an_upstream_call():
+    lm = BatchSensitiveLM()
+    alone = [solo(lm, ids, 12) for ids in PROMPTS]
+    LOG.clear()
+    reqs = [request(lm, ids, 12, handle=i) for i, ids in enumerate(PROMPTS)]
+    together = run(make(lm), reqs)
+    assert [tokens(together, i) for i in range(3)] == alone
+    assert {e["B"] for e in LOG} == {1}
