@@ -88,9 +88,11 @@ def test_split_invariant_prefill_does_not_depend_on_the_kv_precision():
     logprob 0.078 off, hit != miss and solo != concurrent)."""
     import inspect
 
-    from yunshu_engine import vlm_engine
+    from yunshu_engine import (
+        serving_kernels,  # the served kernel setup (moved from vlm_engine, M0)
+    )
 
-    src = inspect.getsource(vlm_engine)
+    src = inspect.getsource(serving_kernels)
     start = src.index("split_ready = bool(")
     end = src.index("gdn_prefill.configure_split(split_ready)")
     assert "YUNSHU_KV_PRECISION" not in src[start:end]
