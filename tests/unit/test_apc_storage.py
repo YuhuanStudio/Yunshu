@@ -32,6 +32,15 @@ BLOCK = 16
 NS = "ns"
 
 
+@pytest.fixture(autouse=True)
+def _prefill_checkpoints_only(monkeypatch):
+    # These tests pin the prefill-checkpoint / tier mechanics. The default next-turn mode
+    # (decode, user 2026-11-02) also stores each finished reply's decode cache, a second
+    # checkpoint at prompt + reply tokens that changes which positions and tiers exist; that mode
+    # is covered by test_decode_cache_next_turn.py.
+    monkeypatch.setenv("YUNSHU_NEXT_TURN_PREFILL", "off")
+
+
 def _cache(n: int, seed: int = 0):
     mx.random.seed(seed)
     rec = ArraysCache(2)
