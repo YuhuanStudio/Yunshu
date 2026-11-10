@@ -3,7 +3,7 @@ title: Round driver
 description: "The packed-row engine that serves every mlx-vlm model: one forward per step over every decoding row, row-invariant arithmetic, and cost-aware MTP or DFlash drafting for several rows at once."
 ---
 
-The round driver (`python/yunshu_engine/round_driver/`) is the serving path for every model loaded through `mlx-vlm`. Each request is a row, and the driver serves rows through one of three model layers: the packed Qwen3.5 layer (dense and MoE Qwen3.5-family models), the packed Flash-Next layer (Qwen4), and the generic layer (the model's own upstream forward per row, no drafter) for every other family and for Apple Paravirtual Metal. Speculative decoding runs on the packed layers: concurrent requests draft too (MTP chains, or DFlash2 drafts sharing a fair 32-node verify budget). With `YUNSHU_VLM_DRAFT=off` the driver still serves every request, without drafting, and speculation on equals speculation off, token for token. This page is a maintainer reference; for the other serving paths see [Architecture](/docs/developers/architecture).
+The round driver (`python/yunshu_engine/round_driver/`) is the serving path for every model loaded through `mlx-vlm`. Each request is a row, and the driver serves rows through one of three model layers: the packed Qwen3.5 layer (dense and MoE Qwen3.5-family models), the packed Flash-Next layer (Qwen4), and the generic layer (the model's own upstream forward per row, no drafter by default) for every other family and for Apple Paravirtual Metal. Speculative decoding runs on the packed layers: concurrent requests draft too (MTP chains, or DFlash2 drafts sharing a fair 32-node verify budget). With `YUNSHU_VLM_DRAFT=off` the driver still serves every request, without drafting, and speculation on equals speculation off, token for token. This page is a maintainer reference; for the other serving paths see [Architecture](/docs/developers/architecture).
 
 ## What it does
 
@@ -39,7 +39,7 @@ flowchart LR
 
 - **Apple Paravirtual Metal**: the generic layer, with no APC and no speculation.
 - **Qwen3.5-family or Qwen4 models** (`_SPEC_MODEL_TYPES`) whose language model the packed layer supports (`_round_driver_wanted`): the packed Qwen3.5 layer, or the Flash-Next layer for Qwen4. A quantized Qwen3.5 checkpoint whose lane arithmetic self-test fails serves on the generic layer.
-- **Every other model**: the generic layer, plain decode.
+- **Every other model**: the generic layer, one upstream call per row, plain decode. A generic row drafts only when it asks for it (`spec_decode: true`) or `YUNSHU_NGRAM_DEFAULT=1` turns n-gram on. A draft LM (`YUNSHU_DRAFT_MODEL`) or the Gemma-4 assistant (`YUNSHU_GEMMA4_ASSISTANT`) is used when set; otherwise n-gram.
 
 The draft is chosen separately (`spec_select.choose`). `YUNSHU_VLM_DRAFT=off` gives no draft; a DFlash drafter directory or `mtp` selects that path; unset uses a matching DFlash2 drafter when one is found, else the checkpoint MTP head. `YUNSHU_MTP=0` disables the MTP head.
 
@@ -54,7 +54,7 @@ Upstream `mlx-vlm`'s `BatchGenerator` runs one `_prompt_batch` at a time, specul
 
 These are the numbers of the earlier stock shared-batch path, kept as the motivation for the driver.
 
-The driver is Yunshu's own loop (inspired by TensorFold's lane engine, MIT; see [Upstream tracking](/docs/developers/upstream-tracking)) so that several rows can share a forward, join at any step and still produce the tokens they would produce alone. Earlier prototype runs measured the earlier stock path behind competitors on concurrent long-reasoning load; there is no current cross-engine number for the driver, and the numbers in the source notes are not release figures. See [Benchmarks](/docs/guides/benchmarks) for the maintained comparisons.
+The driver is Yunshu's own loop (inspired by TensorFold's lane engine, MIT; see [Upstream tracking](/docs/developers/upstream-tracking)) so that several rows can share a forward, join at any step and still produce the tokens they would produce alone. Earlier prototype runs measured the earlier stock path behind competitors on concurrent long-reasoning load; the current cross-engine comparison of this driver (Yunshu 0.1.7.dev0, 2026-11-04 to 2026-11-08) is on [Benchmarks](/docs/guides/benchmarks), and the figures above are from the earlier stock path.
 
 ## Guarantees
 
@@ -65,8 +65,9 @@ A row's arithmetic does not depend on which rows share the step, how many drafts
 - **GDN** runs as one launch over the rows' states; a row that keeps part of its window continues from the saved intermediate state (`DecodeBatch.commit`).
 - **Prefill** follows an atom plan that is a function of the prompt alone, so a repeated prompt, or a row restored from a checkpoint on the grid, prefills with the same atoms as a cold run: APC hit equals miss token for token.
 - **Greedy rows**: speculation on equals speculation off, and a row alone equals the same row in any batch or join order. **Sampled rows** draw with `keyed_sampling.KeyedSampler` (seed and generation index), so the token at index `g` is a pure function of the row's logits, seed and `g`.
+- **Generic layer**: every decoding row makes one upstream call per round on its own cache, so a row's output does not depend on the other rows: solo equals concurrent, greedy and seeded.
 
-Drafting uses the checkpoint's MTP head, or the DFlash2 drafter when one is selected, for every draftable row. The head's KV is kept current every step, so any row can start drafting at any step. Draft depth per row comes from `round_driver/allocate.py` (TensorFold allocation rule, MIT): per-depth acceptance is tracked as an EMA, rows receive drafts greedily by marginal expected tokens, and the step keeps the allocation that maximizes expected committed tokens per millisecond using forward cost measured online. There are no row-count thresholds.
+On the packed layers, drafting uses the checkpoint's MTP head, or the DFlash2 drafter when one is selected, for every draftable row. The head's KV is kept current every step, so any row can start drafting at any step. Draft depth per row comes from `round_driver/allocate.py` (TensorFold allocation rule, MIT): per-depth acceptance is tracked as an EMA, rows receive drafts greedily by marginal expected tokens, and the step keeps the allocation that maximizes expected committed tokens per millisecond using forward cost measured online. There are no row-count thresholds.
 
 Every row uses the model's `APCManager` prefix cache through `APCCoordinator` (checkpoint strategy) on every family without a sliding-window cache. Entries are salted by the model and processor identity (`VLMBatchRunner._driver_extra_hash`), so a prefix cached under one identity is cold under another.
 
@@ -80,7 +81,7 @@ Every row uses the model's `APCManager` prefix cache through `APCCoordinator` (c
 
 ## Limits
 
-- Rows with logits processors other than the driver's windowable set (token masks, logit bias, repetition penalty, one frequency or presence penalty), XTC sampling, and constraints other than invariant tool-call or response-format guides decode one token a round and never draft.
+- XTC sampling rows never draft. Rows with logits processors outside the driver's windowable set (pure token masks and logit bias, repetition penalty, at most one frequency or presence penalty) decode one token a round. Logprobs rows and rows under invariant tool-call or response-format guides draft; other constraints decode one token a round and never draft.
 - A prompt feature that the packed layer does not carry raises an error at admission (`VLMBatchRunner._media_request`).
 - Open work: a per-row cost of about 25 ms per round (draft, verify, draw) keeps four-row seeded decoding level with the earlier shared batch.
 

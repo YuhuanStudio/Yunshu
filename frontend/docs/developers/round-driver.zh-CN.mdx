@@ -3,7 +3,7 @@ title: Round driver
 description: "服务所有 mlx-vlm 模型的 packed-row 引擎：每一步对所有解码中的 row 做一次 forward、row 不变的运算，以及同时为多个 row 做成本感知的 MTP 或 DFlash 草稿。"
 ---
 
-Round driver（`python/yunshu_engine/round_driver/`）是所有经由 `mlx-vlm` 载入的模型的服务路径。每个请求都是一个 row，driver 通过三种模型层服务这些 row：packed Qwen3.5 层（dense 与 MoE 的 Qwen3.5 系列模型）、packed Flash-Next 层（Qwen4），以及 generic 层（每个 row 直接使用模型自己的 upstream forward，不做草稿），供其他所有模型家族与 Apple Paravirtual Metal 使用。推测解码跑在 packed 层上：并行请求也能做草稿（MTP 链，或共享公平 32 节点验证预算的 DFlash2 草稿）。设置 `YUNSHU_VLM_DRAFT=off` 时，driver 仍服务所有请求，只是不做草稿；推测开启与关闭的输出逐 token 相同。本页是维护者参考；其他服务路径请见[架构](/docs/developers/architecture)。
+Round driver（`python/yunshu_engine/round_driver/`）是所有经由 `mlx-vlm` 载入的模型的服务路径。每个请求都是一个 row，driver 通过三种模型层服务这些 row：packed Qwen3.5 层（dense 与 MoE 的 Qwen3.5 系列模型）、packed Flash-Next 层（Qwen4），以及 generic 层（每个 row 直接使用模型自己的 upstream forward，默认不做草稿），供其他所有模型家族与 Apple Paravirtual Metal 使用。推测解码跑在 packed 层上：并行请求也能做草稿（MTP 链，或共享公平 32 节点验证预算的 DFlash2 草稿）。设置 `YUNSHU_VLM_DRAFT=off` 时，driver 仍服务所有请求，只是不做草稿；推测开启与关闭的输出逐 token 相同。本页是维护者参考；其他服务路径请见[架构](/docs/developers/architecture)。
 
 ## 它做什么
 
@@ -39,7 +39,7 @@ flowchart LR
 
 - **Apple Paravirtual Metal**：generic 层，不使用 APC，也不做推测。
 - **Qwen3.5 系列或 Qwen4 模型**（`_SPEC_MODEL_TYPES`），且 packed 层支持其语言模型（`_round_driver_wanted`）：使用 packed Qwen3.5 层，Qwen4 则使用 Flash-Next 层。量化的 Qwen3.5 checkpoint 若 lane 运算自我测试失败，则改用 generic 层。
-- **其他所有模型**：generic 层，一般解码。
+- **其他所有模型**：generic 层，每个 row 一次 upstream 调用，一般解码。只有请求带 `spec_decode: true`，或设置 `YUNSHU_NGRAM_DEFAULT=1` 开启 n-gram，generic row 才会做草稿。设置了草稿 LM（`YUNSHU_DRAFT_MODEL`）或 Gemma-4 assistant（`YUNSHU_GEMMA4_ASSISTANT`）时使用它们，否则使用 n-gram。
 
 草稿另外选择（`spec_select.choose`）。`YUNSHU_VLM_DRAFT=off` 不做草稿；指定 DFlash 草稿模型目录或 `mtp` 则选用该路径；未设置时，若找到相符的 DFlash2 草稿模型就使用它，否则使用 checkpoint 的 MTP head。`YUNSHU_MTP=0` 会关闭 MTP head。
 
@@ -54,7 +54,7 @@ Upstream `mlx-vlm` 的 `BatchGenerator` 一次只跑一个 prompt batch，推测
 
 这些数字来自先前的原始共享 batch 路径，保留作为 driver 的设计动机。
 
-Driver 是 Yunshu 自己的循环（参考 TensorFold 的 lane engine，MIT；见[上游追踪](/docs/developers/upstream-tracking)），让多个 row 能共用一次 forward、在任何一步加入，并仍产生与单独运行时相同的 token。早期原型测量显示，先前的原始路径在并行长推理负载下落后竞争对手；driver 目前没有最新的跨引擎数字，原始笔记中的数字也不是发布版本的数据。维护中的比较请见[性能基准](/docs/guides/benchmarks)。
+Driver 是 Yunshu 自己的循环（参考 TensorFold 的 lane engine，MIT；见[上游追踪](/docs/developers/upstream-tracking)），让多个 row 能共用一次 forward、在任何一步加入，并仍产生与单独运行时相同的 token。早期原型测量显示，先前的原始路径在并行长推理负载下落后竞争对手；这个 driver 的最新跨引擎比较（Yunshu 0.1.7.dev0，2026-11-04 至 2026-11-08）见[性能基准](/docs/guides/benchmarks)，上文数字来自先前的原始路径。
 
 ## 保证
 
@@ -65,8 +65,9 @@ row 的运算不取决于哪些 row 共用该步、其他 row 验证多少草稿
 - **GDN** 以一次 launch 处理所有 row 的状态；只保留窗口一部分的 row 会从保存的中间状态继续（`DecodeBatch.commit`）。
 - **Prefill** 遵循只由 prompt 决定的 atom 计划，因此重复的 prompt，或从网格上 checkpoint 还原的 row，会用与冷运行相同的 atom 做 prefill：APC 命中与未命中逐 token 相同。
 - **贪婪 row**：打开与关闭推测的结果相同，单独运行的 row 与在任何 batch 或加入顺序下的同一个 row 结果也相同。**采样 row** 使用 `keyed_sampling.KeyedSampler`（种子与生成索引），所以索引 `g` 的 token 是该 row 的 logits、种子与 `g` 的纯函数。
+- **generic 层**：每个解码中的 row 每轮对 upstream 做一次自己的调用，使用自己的缓存，所以一个 row 的输出不取决于其他 row：单独运行与并行运行相同，贪婪与 seeded 皆然。
 
-草稿使用 checkpoint 的 MTP head（或选定时的 DFlash2 草稿模型），对每个可做草稿的 row 都适用。head 的 KV 每一步都会更新，所以任何 row 在任何一步都能开始做草稿。每个 row 的草稿深度来自 `round_driver/allocate.py`（TensorFold 的分配规则，MIT）：以 EMA 追踪每个深度的接受率，依边际期望 token 数贪婪地分配草稿，并选择每毫秒期望提交 token 数最大的分配，forward 成本是在运行中在线测量的。不使用以 row 数为准的门槛。
+在 packed 层上，草稿使用 checkpoint 的 MTP head（或选定时的 DFlash2 草稿模型），对每个可做草稿的 row 都适用。head 的 KV 每一步都会更新，所以任何 row 在任何一步都能开始做草稿。每个 row 的草稿深度来自 `round_driver/allocate.py`（TensorFold 的分配规则，MIT）：以 EMA 追踪每个深度的接受率，依边际期望 token 数贪婪地分配草稿，并选择每毫秒期望提交 token 数最大的分配，forward 成本是在运行中在线测量的。不使用以 row 数为准的门槛。
 
 每个模型都使用 `APCManager` 前缀缓存，通过 `APCCoordinator`（checkpoint 策略），适用于所有没有 sliding-window 缓存的模型家族。条目以模型与 processor 的身份做盐值（`VLMBatchRunner._driver_extra_hash`），因此在一种身份下缓存的前缀，对另一种身份来说是冷的。
 
@@ -80,7 +81,7 @@ row 的运算不取决于哪些 row 共用该步、其他 row 验证多少草稿
 
 ## 限制
 
-- 含有 driver 可逐 window row 应用之外的 logits processor（token mask、logit bias、repetition penalty、一个 frequency 或 presence penalty 之外的项目）、XTC 采样，以及不属于 invariant 工具调用或 response-format guide 的约束的 row，每轮只解码一个 token，且从不做草稿。
+- XTC 采样的 row 从不做草稿。含有可窗口化集合之外的 logits processor 的 row（纯 token mask 与 logit bias、repetition penalty、至多一个 frequency 或 presence penalty）每轮只解码一个 token。logprobs 的 row，以及受 invariant 工具调用或 response-format guide 约束的 row 会做草稿；其他约束的 row 每轮只解码一个 token，且从不做草稿。
 - packed 层无法携带的 prompt feature 会在加入时抛出错误（`VLMBatchRunner._media_request`）。
 - 待办：每个 row 每轮约 25 ms 的成本（草稿、验证、抽样）使四 row 的 seeded 解码仅与先前的共享 batch 持平。
 

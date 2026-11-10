@@ -2,56 +2,94 @@
 
 
 > Console docs: the maintained, translated version of this page is `/docs/guides/benchmarks` (source `frontend/docs/guides/benchmarks.mdx`). This file stays as the repository-side reference read by tooling.
-Apple M5 Max, 128 GB unified memory. Yunshu development source pinned to
-`5ac5452c3d82f43a2208d34730cd35136bd73fa0`. Competitor releases were checked on
-2026-10-19; this is a dated snapshot, not a promise to track future releases.
-The [0.1.5 snapshot](reports/RELEASE_015_BENCHMARKS.md) remains unchanged as history.
+Apple M5 Max, 128 GB unified memory, Qwen3.8-27B 4-bit. Yunshu 0.1.7.dev0 (main, round driver)
+and its Phase B build (`yunshu-pb2`). Full comparison run 2026-11-04 to 2026-11-08. Every number
+below comes from the audited study `gaps_full_1109` (2026-11-09; private research notes, not in this
+repository), which was generated from the raw rows. Competitors: TensorFold 1.1.8 and 1.2.1, Splash 1.5.0,
+llama.cpp b12061, oMLX 0.7.3 and 0.7.3rc1, mlx-lm-server 0.32.2, mlx-vlm-server 0.7.11 and mlx-serve 26.11.1.
+Kapitsa 0.2.26 and LM Studio are excluded (see below).
 
-Greedy, single-user, same release015 code/agentic prompt corpus at 32K/64K/128K.
-Cold and warm requests require exactly 2048 output tokens, immediate follow-up 256.
-Every numerical row below has three qualifying interleaved repetitions in its own
-cohort. Values are median [min,max]; cohorts are not pooled. First valid attempt per
-repetition is selected, with complete output, cold/warm text identity, engaged mode
-and clean quiet-gpuq receipts. Missing, short, parity-failed and contended attempts
-remain failures. Only one prompt per depth: this does not establish general quality
-or workload performance. Different weights and quantizations affect generated text
-and speed; the Yunshu TF4 arm uses the same checkpoint as native TensorFold.
+The 2026-10-19 27B snapshot is superseded by this run and is not repeated here; it stays as a dated
+report, [RELEASE_016 snapshot 2026-10-19](reports/RELEASE_016_BENCHMARKS_2026-10-19.md). The
+[0.1.5 snapshot](reports/RELEASE_015_BENCHMARKS.md) remains unchanged as history.
 
-Sticky host swap was present (about 8–10 GiB), so these are not zero-swap results.
-Each cell records before/after vm.swapusage and pageouts; admission rejects swap
-contention and memory-window growth/pageouts above 64 MiB. Older memory-only
-rejections were revalidated against that budget without overwriting receipts;
-real gpuq contention remains excluded. No other owned engine was resident at admission.
-Peak host delta includes reclamation effects and is not process allocation or model
-size. RSS and phys_footprint are reported separately; mmap weights limit either metric.
+## How to read these numbers
+
+- Each value is a median over 2 or 3 repetitions. A third repetition was run unplanned in many Yunshu cells.
+- The study has two views. STRICT counts a row only when both sides pass every audit check; that leaves
+  18 comparable rows, all from batch B1. REF also ignores two bookkeeping failures: a mix of harness commits
+  in B2, and an unplanned extra repetition file. Every number below is a REF number. Under REF, the Yunshu
+  side used for each number carries only checks that REF waives, except the restart row (see Other cells).
+- Excluded: every Kapitsa cell (the launched binary hash does not match the pinned one, so its RAW wins
+  are not used); tool-chat decode tok/s (27-token replies make the timing window too short; tool-chat TTFT
+  is kept); the 128K mixed per-row median (the roles differ; the aggregate is used); restart decode tok/s
+  (not comparable across engines); LM Studio (never run).
+- Percentages follow the study. Positive means Yunshu is better. A percentage uses the better of Yunshu
+  main and Yunshu pb2, while the Yunshu value shown is the main column (the same values as the README).
+  Where pb2 is faster, the displayed ratio can differ from the percentage.
+- Scope: code and prose prompts at 32K, 64K and 128K, plus the concurrency, mixed and restart cells listed
+  below. The study does not establish general quality or a general ranking.
 
 ## Where Yunshu stands
 
-| Axis / cohort | 32K | 64K | 128K |
+Across the full matrix, REF has 114 comparable rows. Yunshu wins 17 and loses 97: losses are to Splash (37),
+TensorFold 1.1.8 (36), TensorFold 1.2.1 (22), llama.cpp (1) and mlx-serve (1). Forty of the losses are at 32K or above.
+
+TensorFold leads 27B decode at every depth for code, and at 32K and 64K for prose; Splash leads prose decode
+at 128K. Cold TTFT is behind Splash at 32K and 64K and ahead at 128K. Warm TTFT is ahead at 32K and behind at
+64K and 128K. Follow-up (turn-2) TTFT loses at every depth, and the largest loss is at 64K (-61.5% code).
+
+### Code prompt
+
+| Metric | 32K | 64K | 128K |
 |---|---|---|---|
-| 27B decode tok/s: Yunshu oQ4e / TensorFold 1.1.0 | 135.2 / 200.4 | 118.0 / 150.6 | 75.5 / 116.7 |
-| Same-checkpoint decode tok/s: Yunshu TF4 / TensorFold | 142.2 / 200.4 | 84.1 / 150.6 | 94.8 / 116.7 |
-| 27B cold TTFT s: Yunshu oQ4e / TensorFold | 34.640 / 34.887 | 79.288 / 84.463 | 200.094 / 241.684 |
-| 27B warm TTFT s: Yunshu oQ4e / TensorFold | 0.178 / 0.152 | 0.314 / 0.213 | 0.573 / 241.252 |
-| 27B immediate follow-up TTFT s: Yunshu oQ4e / TensorFold | 2.961 / 0.228 | 3.906 / 0.284 | 6.235 / 247.820 |
-| Flash-Next decode tok/s: Yunshu / shared-MTP llama.cpp | 66.7 / 60.4 | 56.7 / 55.0 | 24.0 / 42.3 |
+| Decode tok/s, cold | 191.2 vs 238.7 (TensorFold 1.1.8): -19.6% | 107.5 vs 122.7 (TensorFold 1.1.8): -12.4% | 80.9 vs 96.5 (TensorFold 1.1.8): -15.9% |
+| Decode tok/s, warm | 198.6 vs 238.1 (TensorFold 1.1.8): -16.6% | 111.1 vs 122.8 (TensorFold 1.1.8): -9.5% | 84.9 vs 96.5 (TensorFold 1.1.8): -11.1% |
+| Cold TTFT s | 32.846 vs 30.570 (Splash): -6.9% | 74.667 vs 73.051 (Splash): -2.2% | 186.818 vs 197.221 (Splash): +5.6% |
+| Warm TTFT s | 0.044 vs 0.086 (Splash): +94.4% | 0.140 vs 0.108 (Splash): -22.5% | 0.273 vs 0.148 (Splash): -45.0% |
+| Follow-up TTFT s | 1.022 vs 0.433 (llama.cpp b12061): -57.7% | 0.473 vs 0.182 (TensorFold 1.1.8): -61.5% | 0.583 vs 0.318 (TensorFold 1.1.8): -35.0% |
 
-TensorFold leads measured 27B decode at all three depths, including the same-checkpoint
-comparison. Yunshu has lower cold TTFT; native TensorFold has lower warm/follow-up
-TTFT at 32K/64K but reports zero cached tokens at 128K. llama.cpp has lower warm and
-follow-up TTFT than Yunshu at every depth. Flash-Next 128K decode is a Yunshu weakness.
-Splash/oMLX and other unqualified engines are not counted as wins or losses.
+### Prose prompt
 
-## 27B — TensorFold 1.1.0 and llama.cpp b11721
+| Metric | 32K | 64K | 128K |
+|---|---|---|---|
+| Decode tok/s, cold | 66.1 vs 78.0 (TensorFold 1.1.8): -15.3% | 50.8 vs 60.8 (TensorFold 1.2.1): -16.4% | 42.0 vs 49.9 (Splash): -15.3% |
+| Decode tok/s, warm | 67.2 vs 78.5 (TensorFold 1.2.1): -14.3% | 51.0 vs 61.5 (TensorFold 1.2.1): -17.0% | 43.4 vs 52.0 (Splash): -15.0% |
+| Decode tok/s, follow-up | 67.3 vs 99.9 (TensorFold 1.2.1): -30.3% | 51.6 vs 58.5 (TensorFold 1.2.1): -11.8% | 44.1 vs 47.9 (Splash): -7.9% |
+| Cold TTFT s | 32.825 vs 30.572 (Splash): -6.9% | 74.666 vs 73.076 (Splash): -2.1% | 187.030 vs 197.168 (Splash): +5.4% |
+| Warm TTFT s | 0.040 vs 0.082 (llama.cpp b12061): +105.0% | 0.127 vs 0.107 (Splash): -15.4% | 0.266 vs 0.150 (Splash): -41.4% |
+| Follow-up TTFT s | 0.325 vs 0.126 (TensorFold 1.1.8): -47.5% | 0.467 vs 0.181 (TensorFold 1.1.8): -51.3% | 0.567 vs 0.324 (TensorFold 1.2.1): -31.5% |
 
-Yunshu arms use DFlash2; native TensorFold explicitly engages DFlash2. llama.cpp MTP
-and DFlash2 configurations remain separate. The GGUF comparison is cross-quantization.
+### Other cells
 
+- Distinct 8K prompts, aggregate decode tok/s, code. Yunshu main (pb2) at 2, 4 and 8 concurrent requests:
+  27.3 (36.8), 33.0 (38.5) and 37.1 (39.1). Best competitor (REF): TensorFold 1.2.1 42.3, TensorFold 1.2.1 45.1,
+  TensorFold 1.1.8 45.2. Yunshu vs best: -13.1%, -14.7% and -13.5%. Kapitsa is excluded.
+- Mixed 128K, code, 8 concurrent (one 128K long request and 7 short ones). Aggregate tok/s: 16.1 (pb2 18.1)
+  against Splash 17.7, +2.0%. Long-request TTFT: 222.256 s (pb2 212.084 s) against Splash 224.558 s, +5.9%.
+  The per-row median is not like-for-like and is not reported.
+- Turn-2 at near-equal cache (the study's idle5 cell, code, 32K): TTFT 0.983 s with 32704 cached tokens,
+  against TensorFold 1.1.8 at 0.070 s with 33283 cached tokens, -92.9%. Turn-2 at 64K and 128K loses by
+  31 to 61 percent across code and prose.
+- Code turn-2 decode at 32K: 342.2 tok/s (pb2 347.0) against Splash 127.2, +168.9%. The study does not
+  explain this result, so it is not treated as a general claim.
+- Restart, code, 32K: restart TTFT 32.868 s against mlx-serve 26.11.1 at 0.313 s, -99.0%. Both Yunshu
+  engines show 0 cached tokens after the restart (audit `cold_cache` fails), so disk-tier restore is not
+  demonstrated. The restart item is reopened.
+- Structured output (json-schema, 8K, cold decode): 74.3 tok/s (pb2 24.0, which fails engaged mode)
+  against TensorFold 1.1.8 at 163.8, -54.6%.
+- Flash-Next (Qwen4) is not part of this comparison.
 
-[Full ranges, versions, memory and failure coverage](reports/RELEASE_016_BENCHMARKS_2026-10-19.md). All 78 console screenshots now show the qualified 40K–73K MTP session (21 replies, median 1,611 tokens); real late-session rates around 19–20 tok/s remain visible. See the dated report for capture provenance and limits.
+### Open items from the study
 
-TensorFold 1.1.0's same-round suffix-copy graft contributes to its decode lead:
-a clean three-repetition 512-token diagnostic measured copy48/copy0 medians of
-234.37/112.12, 141.83/95.02 and 85.68/69.37 tok/s at 32K/64K/128K,
-with identical paired raw output. This diagnostic does not replace the 2048-token
-standings; see the dated report for turn/cache limits.
+- Kapitsa must be re-pinned (its binary hash has changed) before its cells can count.
+- The 50 cells with an unplanned r2 file need a decision, and then a re-audit.
+- Pin one harness commit for the whole batch (B2 mixes two).
+- Re-run the B1 pb2 round-time outliers at 32K and 64K turn-2.
+- Run LM Studio or remove it from the manifest.
+- Measure tool-chat decode over the real decode window (27-token replies make the current tok/s meaningless).
+
+## History
+
+- 2026-10-19 27B snapshot (TensorFold 1.1.0, llama.cpp b11721): [RELEASE_016 snapshot](reports/RELEASE_016_BENCHMARKS_2026-10-19.md). Superseded by the 2026-11-04 to 2026-11-08 comparison above.
+- 0.1.5 snapshot: [RELEASE_015 benchmarks](reports/RELEASE_015_BENCHMARKS.md).

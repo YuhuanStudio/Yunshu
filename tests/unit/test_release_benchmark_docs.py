@@ -35,18 +35,17 @@ def test_console_benchmark_tables_preserve_public_evidence_rows():
 def test_release_comparison_preserves_weight_and_sample_limits():
     text = (ROOT / "docs/BENCHMARKS.md").read_text()
     for required in (
-        "135.2 / 200.4",
-        "118.0 / 150.6",
-        "75.5 / 116.7",
-        "142.2 / 200.4",
-        "84.1 / 150.6",
-        "94.8 / 116.7",
-        "three qualifying interleaved",
-        "one prompt per depth",
-        "Different weights",
-        "zero cached tokens at 128K",
-        "24.0 / 42.3",
-        "All 78 console screenshots now show the qualified",
+        "2026-11-04 to 2026-11-08",
+        "Yunshu 0.1.7.dev0",
+        "191.2 vs 238.7",
+        "107.5 vs 122.7",
+        "80.9 vs 96.5",
+        "32.846 vs 30.570",
+        "114 comparable rows",
+        "Kapitsa 0.2.26",
+        "0 cached tokens",
+        "0.983 s",
+        "Flash-Next (Qwen4) is not part of this comparison",
     ):
         assert required in text
 

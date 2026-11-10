@@ -7,10 +7,10 @@ Agent 用戶端在使用者的一次操作中，可能送出不只一個請求�
 
 ## 它做什麼
 
-兩個互相配合的策略在 VLM batch runner 上運作，且只有在已載入的後端實際啟用合格的 batch-invariant kernel（`_prefix_invariant_dispatch`，即 27B 等調校過的 Qwen3.5 系列）時才預設開啟：
+一個策略在 VLM batch runner 上運作，且只有在已載入的後端實際啟用合格的 batch-invariant kernel（`_prefix_invariant_dispatch`，即 27B 等調校過的 Qwen3.5 系列）時才預設開啟：
 
 - **輔助請求讓位**（`YUNSHU_AUXILIARY_SCHEDULING`）。`python/yunshu_gateway/admission.py` 的 `auxiliary_kind` 對已驗證的 Chat Completions 請求本體分類。只有符合已擷取的 opencode 標題指紋的請求，才算輔助請求：沒有 tools 或 functions、已擷取的用戶端模型名稱、`max_tokens` 為 32000、恰好三則純文字訊息且角色為 `system,user,user`，且 system 訊息的 SHA-256 等於已擷取的值。其他請求，包括 Claude Code 與 Codex，維持優先權 0，因為這兩者沒有擷取到輔助請求，也不憑空編造指紋。結果是請求記錄上的 `scheduling_priority = -1`；它不會進入 prompt 或取樣參數。
-- **未快取工作排序**（`YUNSHU_UNCACHED_SCHEDULING`）。互動式請求的標準 prefill atom 依估計的未快取 RAM 前綴工作量與等待時間排序（`python/yunshu_engine/serving/work_scheduler.py`），並在 atom 之間保留量測到的解碼時間，讓解碼中的 row 持續輸出。
+- **Prefill 順序**由 round driver 自行決定：每個請求都是一個 row，其 prefill 依剩餘量最短優先排序。早先的未快取工作排序設定（`YUNSHU_UNCACHED_SCHEDULING`）已隨 stock runner 一併移除。
 
 下方的時序圖顯示一個標題請求與一個 agent 回合同時到達的情形。
 
@@ -57,9 +57,8 @@ sequenceDiagram
 | 設定 | 預設 | 效果 |
 |---|---|---|
 | `YUNSHU_AUXILIARY_SCHEDULING` | 僅合格後端為 `true` | `0` 關閉，`1` 也讓不合格的後端啟用。穩定的部署覆寫項 |
-| `YUNSHU_UNCACHED_SCHEDULING` | 僅合格後端為 `true` | 未快取工作排序，含 FIFO 保護、10 秒老化與 atom 之間的解碼保留。`0` 還原 upstream 排序 |
 
-預設值由 `settings.scheduling_enabled` 解析：當值來自預設來源時，由已載入後端的資格決定；明確設定的值永遠優先。Runner 在載入時記錄 `Scheduling policy: qualified=... uncached=... auxiliary=...`，這就是確認已啟用的方式。
+預設值由 `settings.scheduling_enabled` 解析：當值來自預設來源時，由已載入後端的資格決定；明確設定的值永遠優先。
 
 ## 限制
 

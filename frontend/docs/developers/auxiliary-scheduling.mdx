@@ -7,10 +7,10 @@ An agent client sends more than one request per user action. opencode, for examp
 
 ## What it does
 
-Two cooperating policies run on the VLM batch runner, and both are on by default only for a loaded backend that engages the qualified batch-invariant kernels (`_prefix_invariant_dispatch`, the tuned Qwen3.5 family such as 27B):
+One policy runs on the VLM batch runner, and it is on by default only for a loaded backend that engages the qualified batch-invariant kernels (`_prefix_invariant_dispatch`, the tuned Qwen3.5 family such as 27B):
 
 - **Auxiliary yielding** (`YUNSHU_AUXILIARY_SCHEDULING`). `python/yunshu_gateway/admission.py` classifies the validated Chat Completions body with `auxiliary_kind`. A request is auxiliary only when it matches the captured opencode title fingerprint: no tools or functions, the captured client model name, `max_tokens` of 32000, exactly three plain-text messages with roles `system,user,user`, and a SHA-256 of the system message equal to the captured one. Anything else, including requests from Claude Code and Codex, keeps priority 0, because no auxiliary request from those clients was captured and no fingerprint is invented. The result is `scheduling_priority = -1` on the request record; it never enters the prompt or the sampling parameters.
-- **Uncached-work ordering** (`YUNSHU_UNCACHED_SCHEDULING`). Canonical prefill atoms of interactive requests are ordered by estimated uncached RAM-prefix work and wait time (`python/yunshu_engine/serving/work_scheduler.py`), and measured decode time is reserved between atoms so decoding rows keep streaming.
+- **Prefill order** is the round driver's own: every request is a row, and its prefill is ordered shortest remainder first. The earlier uncached-work ordering setting (`YUNSHU_UNCACHED_SCHEDULING`) was removed with the stock runner.
 
 The sequence below shows one title request and one agent turn arriving together.
 
@@ -57,9 +57,8 @@ Evidence comes from saved client traffic, not a client-name or small-model heuri
 | Setting | Default | Effect |
 |---|---|---|
 | `YUNSHU_AUXILIARY_SCHEDULING` | `true` for qualified backends only | `0` disables, `1` also opts an unqualified backend in. A stable deployment override |
-| `YUNSHU_UNCACHED_SCHEDULING` | `true` for qualified backends only | Uncached-work ordering with FIFO protection, 10 s aging and a decode reserve between atoms. `0` restores upstream ordering |
 
-The default resolves in `settings.scheduling_enabled`: when the value comes from the default source, the loaded backend's qualification decides; an explicit value always wins. The runner logs `Scheduling policy: qualified=... uncached=... auxiliary=...` at load, which is the engagement check.
+The default resolves in `settings.scheduling_enabled`: when the value comes from the default source, the loaded backend's qualification decides; an explicit value always wins.
 
 ## Limits
 
