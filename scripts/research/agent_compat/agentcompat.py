@@ -64,6 +64,7 @@ LOCAL_SERVER_PORT, LOCAL_CONTROL_PORT, MCP_PORT = 18997, 18998, 18999
 # the MCP fake then takes the highest free M5 port (servers there pick free ports, so a short-lived
 # fake only narrows their range; release 0.1.7: "local port 18999 is busy" failed agentcompat m3).
 MCP_FALLBACK_PORTS = tuple(range(18996, 18989, -1))
+PORT_WAIT_S = 60
 E2E_SCENARIOS = "cc_edit,cx_edit,oc_edit,oc_bash,cc_mcp,cx_mcp,cc_image,cc_context"
 
 
@@ -261,6 +262,11 @@ def with_m3_server(out: Path, tag: str, model: str, minutes: float, work) -> dic
         ["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"], capture_output=True
     ).stdout.strip()
     for p in (LOCAL_SERVER_PORT, LOCAL_CONTROL_PORT):
+        # the previous job's ssh forward may still be closing (release 0.1.7: the agents job
+        # found 18997 busy seconds after the replay job ended)
+        deadline = time.monotonic() + PORT_WAIT_S
+        while not port_free(p) and time.monotonic() < deadline:
+            time.sleep(1)
         if not port_free(p):
             return dict(ok=False, why=f"local port {p} is busy")
     if mcp_port() is None:
