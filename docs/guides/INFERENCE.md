@@ -137,19 +137,22 @@ for multi-model hosts.
 
 ## Next-turn rehearsal
 
-In 0.1.5, `YUNSHU_NEXT_TURN_PREFILL=stride` is the default for eligible VLM text chats.
-After a reply, idle work prefills full canonical atoms of the assistant reply and stores
-APC checkpoints; the next request still computes the remainder and its new suffix.
+Since 0.1.7, `YUNSHU_NEXT_TURN_PREFILL=decode` is the default for VLM chats: the cache the reply was
+decoded into is stored when the reply ends, so a follow-up that repeats the conversation prefills only its
+new message. The reused reply KV comes from decode kernels, so a follow-up may differ numerically from a cold
+re-prefill; `exact` gives the bit-identical re-prefill (slower follow-up TTFT).
+`stride` (the 0.1.5 and 0.1.6 default) is the rehearsal mode: after a reply, idle work prefills full canonical
+atoms of the assistant reply and stores APC checkpoints; the next request still computes the remainder and its new suffix.
 Stride rehearsal skips boundaries at or before the completed prompt checkpoint: a short
 reply that adds no full atom does not trigger a replay of an older prefix.
 It costs idle GPU time and another cached prefix. A matching request can adopt work
 already in progress (since 0.1.6 rehearsal starts 0.3 s after a reply and stops at the last 64-aligned position at or before the assistant end); a diverging request can wait for the current atom.
-`off` disables it. `boundary` and `exact` add assistant-end splits and can change
-multi-turn floating-point rounding; they are explicit opt-ins. This does not eliminate
+`off` disables it. `boundary` adds assistant-end splits and can change multi-turn floating-point rounding;
+it is an explicit opt-in. This does not eliminate
 the measured [immediate follow-up latency gap](../BENCHMARKS.md#where-yunshu-stands).
 
-Every request is a round-driver row from admission, so concurrent rows draft together; no batch has to
-drain first.
+Every request is a round-driver row from admission; on Qwen3.5-family and Flash-Next models concurrent rows
+draft together, and no batch has to drain first.
 
 ## Orphan adoption (agent retries)
 

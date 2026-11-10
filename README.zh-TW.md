@@ -35,7 +35,7 @@
   附校準過的機率，不生成文字。
 - **原生支援程式碼 agent**：Claude Code、Codex、opencode 透過各自的 API 運作，含伺服器端網頁
   搜尋／抓取與 MCP。
-- **預設無損**：任何可能改變輸出的東西都是要自己開的設定。
+- **預設無損**：開推測解碼時的輸出與關閉時逐 token 相同。唯一會改變數值的預設是後續輪次重用上一則回覆的 decode 快取（`YUNSHU_NEXT_TURN_PREFILL=decode`；`exact` 為逐位元相同的重新預填）；其他會改變輸出的選項都要自己開。
 - **本地且私密**：不傳送使用統計；診斷資料不含 prompt。
 - **完整的 console**：本地網頁 console，有即時請求階段（排隊、含快取命中區段的 prefill、decode）、請求歷史、
   日誌、模型、快取、推理測試、含每把金鑰配額的 API 金鑰、設定（含 CORS 編輯器）與主機功耗／時脈／溫度，
@@ -55,16 +55,16 @@ Yunshu 提供的所有能力，分組列出。每一列連到有範例與限制�
 | 能力 | 內容 |
 |---|---|
 | [無損推測解碼](docs/guides/INFERENCE.md) | DFlash2、MTP 與 prompt-copy 草稿，搭配批次不變 kernel；貪婪輸出與關閉推測時相同 |
-| [文字模型推測](docs/guides/INFERENCE.md) | mlx-lm 模型的 n-gram / suffix 與 Gemma 4 assistant 草稿（外部草稿模型仍為實驗） |
+| [文字模型推測](docs/guides/INFERENCE.md) | n-gram / suffix 草稿，用於 mlx-lm 模型與 round driver 的通用層，逐請求（`spec_decode`）或預設（`YUNSHU_NGRAM_DEFAULT`）啟用；Gemma 4 assistant 與 draft LM 草稿需明確開啟（`YUNSHU_GEMMA4_ASSISTANT`、`YUNSHU_DRAFT_MODEL`）；文字引擎的外部草稿仍為實驗（`YUNSHU_SPEC_UNVERIFIED`） |
 | [前綴快取（APC）](docs/guides/KV_CACHE_MATRIX.md) | 混合模型的精確 checkpoint，位於 RAM、SSD 與可選儲存層；圖片與音訊鍵 |
 | [結構化輸出](docs/guides/INFERENCE.md) | JSON schema、regex、選項與文法在解碼時強制，含工具參數 |
 | [有損記憶體選項](docs/guides/INFERENCE.md) | int8 KV、壓縮 WARM 層與載入時量化；預設關閉 |
 | [大型 MoE 載入（部分）](docs/guides/INFERENCE.md) | 社群 DeepSeek-V4-Flash 權重包的位元與 group size 由張量形狀推得；載入前有容納檢查 |
 | [Neural Engine FFN 分擔（實驗、有損）](docs/guides/ANE_FFN_SPLIT.md) | 選用：27B prefill 時，把每層稠密 FFN 的 W8A8 一部分交給 Apple Neural Engine 與 GPU 並行（Splash 方案）；冷 TTFT 約降 5 至 10% |
-| [Round driver](docs/guides/ROUND_DRIVER.md) | 稠密 Qwen3.5 系列模型的多列推測解碼：並行請求也會做草稿（MTP 鏈、DFlash2 樹與複製鏈），推測開啟與關閉輸出相同 |
+| [Round driver](docs/guides/ROUND_DRIVER.md) | 每個 mlx-vlm 模型都由這裡服務；Qwen3.5 系列（稠密與 MoE）與 Qwen3.8-Flash-Next 的多列推測解碼：並行請求也會做草稿（MTP 鏈、DFlash2 樹與複製鏈），推測開啟與關閉輸出相同 |
 | [模型支援](docs/guides/MODEL_SUPPORT.md) | 各系列哪些是調校、通用與已驗證 |
-| [下一輪預填](docs/guides/INFERENCE.md) | 符合條件的文字回覆以標準 stride 邊界預填 APC；boundary/exact 會改變數值運算，須明確選用 |
-| [多列推測](docs/guides/ROUND_DRIVER.md) | 每個請求都是 round driver 的一個 row；並行 row 也會一起起草（MTP 鏈、共用驗證預算的 DFlash2 草稿） |
+| [後續輪次](docs/guides/INFERENCE.md) | 後續輪次從上一則回覆的 decode 快取接續（`YUNSHU_NEXT_TURN_PREFILL=decode`，預設；數值可能與冷重新預填不同）；`exact` 為逐位元相同的重新預填；`stride` 把回覆預填成 APC checkpoint；`boundary` 會改變數值運算，須明確選用 |
+| [多列推測](docs/guides/ROUND_DRIVER.md) | 每個請求都是 round driver 的一個 row；Qwen3.5 系列與 Flash-Next 的並行 row 也會一起起草（MTP 鏈、共用驗證預算的 DFlash2 草稿） |
 | [孤兒請求接手](docs/guides/INFERENCE.md) | 客戶端逾時斷線的生成會保留 120 秒；相同的重送請求（串流或非串流）直接接手，不重算 |
 
 **API**
@@ -103,7 +103,7 @@ Yunshu 提供的所有能力，分組列出。每一列連到有範例與限制�
 | [語音對語音（部分）](docs/guides/MULTIMODAL.md) | Qwen3-Omni 原生語音；圖片與音訊 APC 有配對驗證，圖片加音訊混合重用尚未驗證 |
 | [Realtime 語音](docs/guides/MULTIMODAL.md) | WebSocket 與可選 WebRTC、伺服器 VAD、打斷、短期 client secret、本機聲音 |
 | [語音轉文字與文字轉語音](docs/guides/MULTIMODAL.md) | transcriptions、translations、speech 與 voices |
-| [OCR 與圖像生成](docs/guides/MULTIMODAL.md) | GLM-OCR 文字擷取；圖像 generations、edits、variations |
+| [OCR 與圖像生成](docs/guides/MULTIMODAL.md) | GLM-OCR 文字擷取，跑在 VLM round driver 上；圖像 generations、edits、variations |
 | [Embeddings、rerank、score、classify](docs/guides/MULTIMODAL.md) | 文字與多模態 embeddings、cross-encoder rerank、訓練過的分類頭 |
 
 **營運與 console**
@@ -137,6 +137,8 @@ yunshu doctor                                   # checks this Mac and says how t
 yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
 yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
 ```
+
+以上安裝的是最新穩定版。`main` 之間的推送可能會在 PyPI 發布預發布版 `X.Y.Z.devN`；加上 `--prerelease allow`（`pip install --pre`）即可安裝。
 
 伺服器在 `http://127.0.0.1:8000`。任何 OpenAI 或 Anthropic 客戶端都能直接使用：
 
@@ -271,10 +273,10 @@ token，所以一般的前綴快取無法使用。Yunshu 在前綴邊界保存**
 |---|---|---|
 | HOT | RAM 中可直接使用的陣列 | 開啟，依可用記憶體決定大小（`YUNSHU_VLM_APC_MEMORY_GB`） |
 | WARM | RAM 中壓縮存放（無損 zstd，或有損 int8 / int4） | 關閉（`YUNSHU_VLM_APC_WARM`） |
-| SSD | `~/.yunshu/cache/apc`，一個全域磁碟預算並保留剩餘空間，重開後仍在 | 開啟（`YUNSHU_VLM_APC_DISK`、`_DIR`、`_GB`） |
+| SSD | `~/.yunshu/cache/apc`，一個全域磁碟預算並保留剩餘空間，重開後仍在（每個 checkpoint 存入時即寫入，`YUNSHU_VLM_APC_PERSIST=store`，預設） | 開啟（`YUNSHU_VLM_APC_DISK`、`_DIR`、`_GB`） |
 | 儲存層 | 外接 SSD、HDD、NAS（`YUNSHU_VLM_APC_DISK_TIERS`） | 關閉；會量測每個磁碟的速度，只有還原比重算快時才使用 |
 
-重複或修改過的長 prompt、多輪對話與 agent 迴圈，會從最近的 checkpoint 還原，不必重新預填。
+重複或修改過的長 prompt、多輪對話與 agent 迴圈，會從最近的 checkpoint 還原，不必重新預填。後續輪次會重用它所接續的那則回覆的 decode 快取（`YUNSHU_NEXT_TURN_PREFILL`，預設 `decode`）。
 對話變長時，同一段對話較舊的 checkpoint 會被取代，不會越堆越多。`yunshu cache status` 與
 `yunshu cache gc` 可檢視與清理 SSD 快取。SSD 命中會經由 MLX 原生的 safetensors 讀取器還原
 （32K 命中的 TTFT 由 440 ms 降到 272 ms）。在通過驗證的 27B / M5 Max 路徑上，預填預設為 split-invariant：
@@ -358,8 +360,8 @@ TensorFold 在所有深度的 27B 解碼領先（雲樞 −12 至 −20 %；一�
 
 | 模型 | 服務路徑 |
 |---|---|
-| Qwen3.5 / 3.6 / 3.8 家族（優先調校 Qwen3.8-27B） | VLM batch runner，含前綴快取與 MTP / DFlash2 推測解碼 |
-| 其他 mlx-vlm 模型（Gemma、GLM、Qwen-VL、Qwen-Omni…） | 同一個 runner；模型支援時可輸入圖片、音訊、影片；快取版面允許時使用前綴快取 |
+| Qwen3.5 / 3.6 / 3.8 家族（優先調校 Qwen3.8-27B） | Round driver（packed Qwen3.5 layer；Qwen3.8-Flash-Next 用 packed Flash-Next layer），含前綴快取與 MTP / DFlash2 推測解碼 |
+| 其他 mlx-vlm 模型（Gemma、GLM、Qwen-VL、Qwen-Omni…） | 同一個 round driver（通用層：每個解碼中的 row 各自呼叫一次上游模型，因此輸出不受其他請求影響）；除非明確開啟（Gemma 4 assistant 或 draft LM，僅限帶 `spec_decode` 的請求），否則不草稿；模型支援時可輸入圖片、音訊、影片；快取版面允許時使用前綴快取 |
 | 純文字 mlx-lm 模型 | 單請求快速路徑，含約束、工具與 logprobs |
 
 `/v1/models` 會回傳每個模型的資訊卡：上下文長度、輸出上限，以及實際支援哪些輸入與功能。
@@ -370,7 +372,7 @@ TensorFold 在所有深度的 27B 解碼領先（雲樞 −12 至 −20 %；一�
 |---|---|---|
 | Qwen3-Omni 語音對語音 | `/v1/omni/speech/stream`（[範例](examples/talk.py)） | `omni` |
 | Realtime 語音、ASR、TTS | `/v1/realtime`、`/v1/audio/transcriptions`、`/v1/audio/speech` | `audio` |
-| OCR | `/v1/ocr`（GLM-OCR） | `vision` |
+| OCR | `/v1/ocr`（GLM-OCR，跑在 VLM round driver 上） | `vision` |
 | 圖片生成與編輯 | `/v1/images/generations`、`/v1/images/edits` | `generation` |
 | Embeddings、rerank、相似度 | `/v1/embeddings`、`/v1/rerank`、`/v1/score` | `embeddings` |
 
@@ -402,6 +404,7 @@ TensorFold 在所有深度的 27B 解碼領先（雲樞 −12 至 −20 %；一�
 | `YUNSHU_SPEC_COPY_ROWS` | prompt-copy 草稿寬度（`0` = 關閉） |
 | `YUNSHU_VLM_APC_MEMORY_GB`、`YUNSHU_VLM_APC_DISK_GB`、`YUNSHU_VLM_APC_DISK_DIR` | 前綴快取的 RAM、SSD 預算與位置 |
 | `YUNSHU_VLM_APC_DISK_TIERS` | 額外的儲存層，例如 `/Volumes/Ext/apc@200,/Volumes/NAS/apc` |
+| `YUNSHU_NEXT_TURN_PREFILL` | 後續輪次重用：`decode`（預設，重用回覆的 decode 快取）或 `exact`（逐位元相同的重新預填） |
 | `YUNSHU_VLM_APC_WARM`、`YUNSHU_KV_PRECISION` | 有損的省記憶體選項（預設關閉） |
 | `YUNSHU_AUTH_TOKEN`、`YUNSHU_QUEUE_LIMIT` | API key 與請求佇列上限 |
 

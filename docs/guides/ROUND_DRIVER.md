@@ -4,7 +4,7 @@
 > Console docs: the maintained, translated version of this page is `/docs/developers/round-driver` (source `frontend/docs/developers/round-driver.mdx`). This file stays as the repository-side reference read by tooling.
 Status: the round driver serves every request of every mlx-vlm model, through three model layers: the packed
 Qwen3.5 layer (dense and MoE Qwen3.5-family, `forward.py`), the packed Flash-Next layer (Qwen4, `flashnext.py`),
-and the generic layer (`generic.py`, the model's own upstream forward per row, no drafter) for every other family
+and the generic layer (`generic.py`, the model's own upstream forward, one call per decoding row; no drafter unless opted in, see below) for every other family
 and for Apple Paravirtual Metal. Speculation (checkpoint MTP head or DFlash2 drafter) runs on the packed layers;
 with `YUNSHU_VLM_DRAFT=off` the driver still serves every request, without drafting, and that is the identity
 reference (spec on == spec off, token for token). DFlash rows share a fair 32-node verify budget
@@ -113,8 +113,10 @@ order**, with drafts all accepted or all rejected, and with the thinking budget'
 (`tests/unit/test_round_driver.py` on a random 4-bit Qwen3.5; `scripts/research/
 sweep_round_driver.py` on a real checkpoint). Sampled rows draw with `keyed_sampling.KeyedSampler` (seed, generation index): the token at index `g` is a pure
 function of the row's logits, seed and `g`, so a draft is kept exactly when serial sampling would have drawn it
-and a sampled row's stream is the same alone, batched, drafting or not. Rows with logits processors (grammar /
-JSON, penalties), logprobs or XTC never draft.
+and a sampled row's stream is the same alone, batched, drafting or not. XTC rows never draft. Other processors
+draft when they are windowable (pure token masks, at most one frequency / presence penalty, repetition penalty),
+and logprobs and response-format guides draft too; each window row is processed on its own (`driver.windowable`,
+`_processors_draft`).
 
 ## Drafting: the MTP head for every greedy or keyed-sampled row, cost-aware depth
 
@@ -195,7 +197,7 @@ them changed a row's output beside other rows; per-row calls keep solo == concur
   with the span, so images, audio and video ride as they do upstream (mRoPE models keep their per-row state: `_rope_deltas`, `_position_ids`);
 - spans are the absolute 2048 grid plus the row's checkpoints and `apc_prefill_stride` is the grid (a hit runs the spans a cold prompt did);
 - rows keep their own caches (no batch cache, no `extract`);
-- no drafter and no verify kernels: every row decodes one token a round through its own processors, guide and sampler; APC, cancel,
+- no drafter by default and no verify kernels (the opt-in n-gram, draft-LM and Gemma-4 assistant drafters are described below): every row decodes one token a round through its own processors, guide and sampler; APC, cancel,
   memory admission, telemetry and the next-turn store are the driver's and the runner's;
 - KV stays bf16 (`YUNSHU_KV_PRECISION` is the Qwen3.5 layer's option) and the prompt-tail replay is not kept;
 - hosts whose lane arithmetic self-test fails (older chips) and the paravirtual-Metal VM also run this layer (plain decode).

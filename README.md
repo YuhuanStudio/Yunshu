@@ -36,7 +36,9 @@ paid for. The first fully tuned model is **Qwen3.8-27B**.
   probabilities in one forward pass of a decision checkpoint, without generating text.
 - **Native coding-agent support** — Claude Code, Codex and opencode work through their own APIs,
   including server-side web search / fetch and MCP.
-- **Lossless by default** — anything that can change output is an explicit setting.
+- **Lossless by default** — speculation is token-identical to plain decode. One default can change
+  numerics: a follow-up turn reuses its reply's decode cache (`YUNSHU_NEXT_TURN_PREFILL=decode`; `exact` gives the
+  bit-identical re-prefill). Other output-changing options are explicit settings.
 - **Local and private** — no usage analytics; diagnostics never contain prompts.
 - **A real console** — a local web console with live request phases (queued, prefill with cache-hit
   segments, decode), request history, logs, models, cache, a playground, API keys with per-key quotas,
@@ -60,16 +62,16 @@ Everything Yunshu serves, grouped. Each row links to the guide with an example a
 | Capability | What it does |
 |---|---|
 | [Lossless speculative decoding](docs/guides/INFERENCE.md) | DFlash2, MTP and prompt-copy drafting with batch-invariant kernels; greedy output equals speculation off |
-| [Text-model speculation](docs/guides/INFERENCE.md) | n-gram / suffix and Gemma 4 assistant drafting for mlx-lm models (external-draft experiments stay experimental) |
+| [Text-model speculation](docs/guides/INFERENCE.md) | n-gram / suffix drafting for mlx-lm models and the round driver's generic layer, per request (`spec_decode`) or by default (`YUNSHU_NGRAM_DEFAULT`); Gemma 4 assistant and draft-LM drafters are opt-in (`YUNSHU_GEMMA4_ASSISTANT`, `YUNSHU_DRAFT_MODEL`); the text-engine external draft stays experimental (`YUNSHU_SPEC_UNVERIFIED`) |
 | [Prefix cache (APC)](docs/guides/KV_CACHE_MATRIX.md) | exact hybrid checkpoints in RAM, SSD and optional storage tiers; image and audio keys |
 | [Structured output](docs/guides/INFERENCE.md) | JSON schema, regex, choice and grammar enforced during decoding, including tool arguments |
 | [Lossy memory options](docs/guides/INFERENCE.md) | int8 KV, compressed WARM tier and load-time quantization; off by default |
 | [Large MoE loading (partial)](docs/guides/INFERENCE.md) | bits and group size derived from tensor shapes for community DeepSeek-V4-Flash packs; fit check before loading |
 | [Neural Engine FFN split (experimental, lossy)](docs/guides/ANE_FFN_SPLIT.md) | opt-in W8A8 share of each dense FFN layer on the Apple Neural Engine beside the GPU during 27B prefill (Splash scheme); cold TTFT -5 to -10% |
-| [Round driver](docs/guides/ROUND_DRIVER.md) | multi-row speculative decoding for dense Qwen3.5-family models: concurrent requests draft too (MTP chains, DFlash2 trees and copy chains), spec on equals spec off |
+| [Round driver](docs/guides/ROUND_DRIVER.md) | every mlx-vlm model is served here; multi-row speculative decoding for Qwen3.5-family models (dense and MoE) and Qwen3.8-Flash-Next: concurrent requests draft too (MTP chains, DFlash2 trees and copy chains), spec on equals spec off |
 | [Model support](docs/guides/MODEL_SUPPORT.md) | what is tuned, generic and validated, per family |
-| [Next-turn rehearsal](docs/guides/INFERENCE.md) | Canonical stride APC rehearsal after eligible text replies; boundary/exact are explicit numeric-changing opt-ins |
-| [Multi-row speculation](docs/guides/ROUND_DRIVER.md) | Every request is a round-driver row; concurrent rows draft too (MTP chains, DFlash2 drafts sharing a verify budget) |
+| [Follow-up turns](docs/guides/INFERENCE.md) | a follow-up resumes from the previous reply's decode cache (`YUNSHU_NEXT_TURN_PREFILL=decode`, default; may differ numerically from a cold re-prefill); `exact` is the bit-identical re-prefill; `stride` rehearses the reply into APC checkpoints |
+| [Multi-row speculation](docs/guides/ROUND_DRIVER.md) | Every request is a round-driver row; on Qwen3.5-family and Flash-Next models concurrent rows draft too (MTP chains, DFlash2 drafts sharing a verify budget) |
 | [Orphan adoption](docs/guides/INFERENCE.md) | A generation whose client timed out is kept for 120 s; the identical retry (streaming or not) attaches to it instead of recomputing |
 
 **APIs**
@@ -108,7 +110,7 @@ Everything Yunshu serves, grouped. Each row links to the guide with an example a
 | [Speech-to-speech (partial)](docs/guides/MULTIMODAL.md) | Qwen3-Omni native speech; repeated-image and audio APC have scoped parity receipts; combined image+audio reuse is unverified |
 | [Realtime voice](docs/guides/MULTIMODAL.md) | WebSocket and optional WebRTC, server VAD, barge-in, ephemeral client secrets, local voices |
 | [Speech to text, text to speech](docs/guides/MULTIMODAL.md) | transcriptions, translations, speech and voices |
-| [OCR and image generation](docs/guides/MULTIMODAL.md) | GLM-OCR text extraction; image generations, edits and variations |
+| [OCR and image generation](docs/guides/MULTIMODAL.md) | GLM-OCR text extraction on the VLM round driver; image generations, edits and variations |
 | [Embeddings, rerank, score, classify](docs/guides/MULTIMODAL.md) | text and multimodal embeddings, cross-encoder rerank, trained classification heads |
 
 **Operations & console**
@@ -142,6 +144,9 @@ yunshu doctor                                   # checks this Mac and says how t
 yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
 yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
 ```
+
+These install the latest stable release. Pushes to `main` between releases may publish a pre-release
+`X.Y.Z.devN` to PyPI; add `--prerelease allow` (`pip install --pre`) to get one.
 
 The server listens on `http://127.0.0.1:8000`. Any OpenAI or Anthropic client works unchanged:
 
@@ -292,11 +297,12 @@ prefill would.
 |---|---|---|
 | HOT | ready-to-use arrays in RAM | on, sized from free memory (`YUNSHU_VLM_APC_MEMORY_GB`) |
 | WARM | compressed in RAM (lossless zstd, or lossy int8 / int4) | off (`YUNSHU_VLM_APC_WARM`) |
-| SSD | `~/.yunshu/cache/apc`, one global disk budget with a free-space reserve, survives restarts | on (`YUNSHU_VLM_APC_DISK`, `_DIR`, `_GB`) |
+| SSD | `~/.yunshu/cache/apc`, one global disk budget with a free-space reserve, survives restarts (each checkpoint is written as it is stored, `YUNSHU_VLM_APC_PERSIST=store`) | on (`YUNSHU_VLM_APC_DISK`, `_DIR`, `_GB`) |
 | Storage tiers | external SSD, HDD, NAS (`YUNSHU_VLM_APC_DISK_TIERS`) | off; each volume's speed is measured and it is used only when restoring beats recomputing |
 
 Repeated or edited long prompts, multi-turn chats and agent loops restore from the nearest
-checkpoint instead of prefilling again. When a conversation grows, older checkpoints of the same
+checkpoint instead of prefilling again. A follow-up turn reuses the decode cache of the reply it continues
+(`YUNSHU_NEXT_TURN_PREFILL`, default `decode`). When a conversation grows, older checkpoints of the same
 conversation are replaced rather than piling up. `yunshu cache status` and `yunshu cache gc` show
 and clean the SSD caches. SSD hits restore through MLX's native safetensors reader (32K hit TTFT 440 -> 272 ms).
 On the qualified 27B / M5 Max path prefill is split-invariant by default: checkpoints sit on absolute
@@ -387,8 +393,8 @@ TensorFold leads 27B decode at every depth (Yunshu −12 to −20 %; prose promp
 
 | Models | Serving path |
 |---|---|
-| Qwen3.5 / 3.6 / 3.8 family (Qwen3.8-27B tuned first) | Round driver (packed Qwen3.5 layer) with prefix cache and MTP / DFlash2 speculation |
-| Other mlx-vlm models (Gemma, GLM, Qwen-VL, Qwen-Omni, …) | Same round driver (generic layer, no drafter); images, audio and video input where the model supports them; prefix cache where the cache layout allows |
+| Qwen3.5 / 3.6 / 3.8 family (Qwen3.8-27B tuned first) | Round driver (packed Qwen3.5 layer; packed Flash-Next layer for Qwen3.8-Flash-Next) with prefix cache and MTP / DFlash2 speculation |
+| Other mlx-vlm models (Gemma, GLM, Qwen-VL, Qwen-Omni, …) | Same round driver (generic layer: one upstream call per decoding row, so a request's output does not depend on other requests); no drafter unless opted in (Gemma 4 assistant or draft LM, for requests with `spec_decode`); images, audio and video input where the model supports them; prefix cache where the cache layout allows |
 | Text-only mlx-lm models | Single-request fast path with constraints, tools and logprobs |
 
 `/v1/models` returns each model's card: context length, output limit, and which inputs and features
@@ -400,7 +406,7 @@ it actually supports.
 |---|---|---|
 | Qwen3-Omni speech-to-speech | `/v1/omni/speech/stream` ([example](examples/talk.py)) | `omni` |
 | Realtime voice, ASR, TTS | `/v1/realtime`, `/v1/audio/transcriptions`, `/v1/audio/speech` | `audio` |
-| OCR | `/v1/ocr` (GLM-OCR) | `vision` |
+| OCR | `/v1/ocr` (GLM-OCR, on the VLM round driver) | `vision` |
 | Image generation and editing | `/v1/images/generations`, `/v1/images/edits` | `generation` |
 | Embeddings, rerank, scoring | `/v1/embeddings`, `/v1/rerank`, `/v1/score` | `embeddings` |
 
@@ -433,6 +439,7 @@ values and their sources. Common ones:
 | `YUNSHU_SPEC_COPY_ROWS` | prompt-copy drafting width (`0` = off) |
 | `YUNSHU_VLM_APC_MEMORY_GB`, `YUNSHU_VLM_APC_DISK_GB`, `YUNSHU_VLM_APC_DISK_DIR` | prefix-cache RAM and SSD budgets and location |
 | `YUNSHU_VLM_APC_DISK_TIERS` | extra storage tiers, e.g. `/Volumes/Ext/apc@200,/Volumes/NAS/apc` |
+| `YUNSHU_NEXT_TURN_PREFILL` | follow-up reuse: `decode` (default, the reply's decode cache) or `exact` (bit-identical re-prefill) |
 | `YUNSHU_VLM_APC_WARM`, `YUNSHU_KV_PRECISION` | lossy memory savers (off by default) |
 | `YUNSHU_AUTH_TOKEN`, `YUNSHU_QUEUE_LIMIT` | API key and request queue limit |
 
