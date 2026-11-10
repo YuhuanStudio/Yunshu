@@ -289,7 +289,10 @@ def test_pre_submit_runs_exactly_two_pytests_and_never_nests(
     real_run = subprocess.run
 
     def fake_run(cmd, **kw):
-        if cmd[0] == "git":  # the snapshot's own git reads stay real
+        # Only pytest launches are counted and stubbed. The patch is process-wide, so other
+        # threads' calls (the snapshot's git reads, a memory sampler's `ps -axo pid=,ppid=,rss=`)
+        # stay real: on a loaded ci-local run three `ps` calls landed here (5 != 2, 2026-11-10).
+        if "pytest" not in list(cmd):
             return real_run(cmd, **kw)
         calls.append((list(cmd), kw.get("env", {}).get("TFB_PRESUBMIT_ACTIVE")))
         return _Done()
