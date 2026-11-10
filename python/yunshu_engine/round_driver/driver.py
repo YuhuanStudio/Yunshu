@@ -373,6 +373,9 @@ class _Row:
     features: Any = None  # generic layer: ``generic.PromptFeatures`` of the prompt
     state: Any = None  # generic layer: ``generic.RowState`` (the model's per-row state)
     ahead_logged: bool = False
+    stale_cache: bool = (
+        False  # the cache holds a position the reply does not (never stored)
+    )
     ahead: Any = (
         None  # lone generic row: the next step's token, already queued on the device
     )
@@ -1026,6 +1029,7 @@ class RoundDriver:
             and gone[0].finished
             and gone[0].apc is not None
             and self.finish_hook is not None
+            and not getattr(gone[0], "stale_cache", False)
         ):
             # the last row leaves a batch cache: cut its own cache out so the reply can be stored
             self.batch.restore(gone[0])
@@ -1059,7 +1063,11 @@ class RoundDriver:
 
             row = gone[0]
             held = False
-            if row.finished and self.finish_hook is not None:
+            if (
+                row.finished
+                and self.finish_hook is not None
+                and not getattr(row, "stale_cache", False)
+            ):
                 # the reply's cache is complete here: the runner holds it for the next turn and
                 # offers the buffers itself once stored
                 if self.dflash is not None:
@@ -1302,8 +1310,12 @@ class RoundDriver:
         # step start put a 32K checkpoint copy (~45 ms) in the middle of a rehearsal's prefill.
         if all(r.pending is not None for r in self.rows):
             self.flush_checkpoints()
-        if not (len(self.rows) == 1 and self.rows[0].pending is not None):
-            self._drop_ahead()
+        if any(r.ahead is not None for r in self.rows) and not (
+            len(self.rows) == 1 and self.rows[0].pending is not None
+        ):
+            return (
+                self._settle_ahead()
+            )  # a second row arrives: this step finishes first
         self._finish_join()
         if not self.rows:
             return []
@@ -1811,13 +1823,39 @@ class RoundDriver:
         return not blockers
 
     def _drop_ahead(self) -> None:
-        """Discard a queued next step (the row stops, or is no longer alone): its token is dropped and the
-        position it appended to the cache is trimmed, so the cache ends where the host left it."""
+        """Discard a queued next step of a row that leaves (stop, cancel): its token is dropped; the position
+        it appended to the cache is trimmed when the cache can trim, else the row's cache is marked stale
+        (never stored for reuse; a rotating-window family has no reply cache on the driver anyway)."""
         for r in self.batch.rows:
-            if r.ahead is not None:
-                r.ahead = None
+            if r.ahead is None:
+                continue
+            r.ahead = None
+            if self.batch.can_trim(1):
                 for c in self.batch.cache or ():
                     c.trim(1)
+            else:
+                r.stale_cache = True
+                logger.info(
+                    "round driver: reply cache not stored (queued step in a window cache)"
+                )
+
+    def _settle_ahead(self) -> list[Event]:
+        """Finish the queued next step of every row that has one (its token is the row's correct next token:
+        the same M=1 arithmetic), so the batch can change shape with no position to trim."""
+        events: list[Event] = []
+        rows = [r for r in self.rows if r.ahead is not None]
+        for row in rows:
+            tok, row.ahead = row.ahead, None
+            self.ahead_steps += 1
+            used = self._emit(row, tok.tolist(), None, events)
+            self.batch.commit(
+                [used] if len(self.batch.rows) == 1 else [1] * len(self.batch.rows)
+            )
+        gone = [r for r in rows if r.finished]
+        self.rows = [r for r in self.rows if not r.finished]
+        self._release(gone)
+        self.steps += 1
+        return events
 
     def _lone_draw(self, row: _Row, tokens: mx.array) -> mx.array:
         hidden = self.batch.forward([1], tokens)
@@ -1835,7 +1873,7 @@ class RoundDriver:
         if tok is None:
             tok = self._lone_draw(row, mx.array([row.pending], dtype=mx.int32))
             mx.async_eval(tok, *self.batch.arrays())
-        if row.generated + 2 <= row.req.max_tokens and self.batch.can_trim(1):
+        if row.generated + 2 <= row.req.max_tokens:
             row.ahead = self._lone_draw(row, tok.astype(mx.int32))
             mx.async_eval(row.ahead, *self.batch.arrays())
         toks = tok.tolist()  # waits for the step
@@ -1855,7 +1893,8 @@ class RoundDriver:
             return cast(list[Event], self.dflash.step(self))
         if self._lone_ahead_ok():
             return self._decode_step_lone()
-        self._drop_ahead()
+        if any(r.ahead is not None for r in self.rows):
+            return self._settle_ahead()
         started = time.perf_counter()
         late = [r for r in self.batch.rows if r.head_state is not None]
         if late:

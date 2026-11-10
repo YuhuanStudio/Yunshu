@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 PY = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python"
+FILLER = "The harbour town kept a ledger of tides, boats, weather and the names of every ship that passed. "
 PROMPT = "Write a long, detailed story about a lighthouse keeper and the sea. Keep going without stopping."
 
 
@@ -50,6 +51,12 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--tokens", type=int, default=512)
     ap.add_argument("--reps", type=int, default=3)
+    ap.add_argument(
+        "--filler",
+        type=int,
+        default=0,
+        help="repeat a filler paragraph N times before the question",
+    )
     a = ap.parse_args()
     repo, out = Path(a.repo).resolve(), Path(a.out).resolve()
     work = out.parent / a.label
