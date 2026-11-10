@@ -107,9 +107,9 @@ cp -R "$CIHOME" "$PVHOME"
 plain_env() { sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN -u VIRTUAL_ENV PYTHONPATH="$CIHOME/shim" TMPDIR="$CIHOME/tmp" HOME="$CIHOME" "$@"; }
 para_env() { sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN -u VIRTUAL_ENV PYTHONPATH="$PVHOME/shim:$WORK" TMPDIR="$PVHOME/tmp" HOME="$PVHOME" "$@"; }
 set +e
-plain_env "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider --timeout=600 --timeout-method=thread -n "$W" --dist loadfile -m "not serial and not fullcmp_e2e" --durations=25 > "$WORK/pytest.log" 2>&1 &
+plain_env "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider --timeout=600 --timeout-method=thread ${CI_PYTEST_ARGS:-} -n "$W" --dist loadfile -m "not serial and not fullcmp_e2e" --durations=25 > "$WORK/pytest.log" 2>&1 &
 plain=$!
-para_env "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider --timeout=600 --timeout-method=thread -n "$W" --dist loadfile -m "not serial and not fullcmp_e2e" -p scripts.dev.ci_paravirtual > "$WORK/pytest-paravirtual.log" 2>&1 &
+para_env "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider --timeout=600 --timeout-method=thread ${CI_PYTEST_ARGS:-} -n "$W" --dist loadfile -m "not serial and not fullcmp_e2e" -p scripts.dev.ci_paravirtual > "$WORK/pytest-paravirtual.log" 2>&1 &
 para=$!
 # The suites write into $WORK, so the caller's log would stay silent for the whole run and gpuq stops a job
 # whose log does not grow for 10 min ("stalled"; 1108f was killed after both suites passed in 10.5 min).
