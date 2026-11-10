@@ -20,7 +20,12 @@ Changes on main after 0.1.7; not part of a published package yet.
 
 ### Added
 
+- Opt-in draft-LM (`YUNSHU_DRAFT_MODEL`) and Gemma-4 assistant (`YUNSHU_GEMMA4_ASSISTANT`) drafters on the round driver's generic layer.
+- Dev releases: every push between patch releases is published as `X.Y.Z.devN` (PyPI pre-release, `pip install --pre`).
+
 ### Changed
+
+- Generic-layer models (Gemma and other non-Qwen families) decode each concurrent row with its own call, so concurrent output equals solo output. Concurrent throughput of small models is lower than the old batched path (Gemma E2B, 2 rows: 173 vs 206 tok/s).
 
 ### Fixed
 
