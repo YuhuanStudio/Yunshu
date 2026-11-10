@@ -371,15 +371,15 @@ SearXNG is optional. MCP servers named in a request are connected by the gateway
 
 ## Performance
 
-2026-10-19 development snapshot · M5 Max 128 GB · Qwen3.8-27B · greedy · three interleaved qualifying reps.
+Full comparison 2026-11-04 to 11-08 · M5 Max 128 GB · Qwen3.8-27B 4-bit · code prompt, 512 output tokens · greedy · medians of 2-3 reps. Yunshu 0.1.7.dev0 (round driver). Competitors: TensorFold 1.1.8 / 1.2.1, Splash 1.5.0, llama.cpp b12061, oMLX 0.7.3, mlx-lm / mlx-vlm servers, mlx-serve.
 
-| Context | Yunshu oQ4e decode tok/s | TensorFold 1.1.0 decode tok/s | Yunshu TF4 same-checkpoint decode tok/s | Yunshu cold / warm / follow-up TTFT s |
+| Context | Yunshu decode tok/s | Best competitor decode tok/s | Yunshu cold / warm / follow-up TTFT s | Best competitor follow-up TTFT s |
 |---|---|---|---|---|
-| 32K | 135.2 | 200.4 | 142.2 | 34.640 / 0.178 / 2.961 |
-| 64K | 118.0 | 150.6 | 84.1 | 79.288 / 0.314 / 3.906 |
-| 128K | 75.5 | 116.7 | 94.8 | 200.094 / 0.573 / 6.235 |
+| 32K | 191.2 | 238.7 (TensorFold 1.1.8) | 32.85 / 0.044 / 1.022 | 0.433 (llama.cpp b12061) |
+| 64K | 107.5 | 122.7 (TensorFold 1.1.8) | 74.67 / 0.140 / 0.473 | 0.182 (TensorFold 1.1.8) |
+| 128K | 80.9 | 96.5 (TensorFold 1.1.8) | 186.82 / 0.273 / 0.583 | 0.318 (TensorFold 1.1.8) |
 
-TensorFold leads 27B decode at all depths, including the same-checkpoint comparison. Yunshu has lower cold TTFT; TensorFold has lower warm/follow-up TTFT at 32K/64K but no cache hit at 128K. llama.cpp has lower warm/follow-up TTFT at every depth. Flash-Next Yunshu / shared-MTP llama.cpp decode: 66.7 / 60.4, 56.7 / 55.0, 24.0 / 42.3 tok/s at 32K/64K/128K (different quantizations). One prompt per depth; no general ranking. Console screenshots were captured during a real 40K–73K MTP session ([Console](docs/CONSOLE.md)).
+TensorFold leads 27B decode at every depth (Yunshu −12 to −20 %; prose prompts −15 to −16 %). Splash has lower cold TTFT at 32K and 64K (30.6 / 73.1 s); Yunshu is lower at 128K. Yunshu has the lowest warm TTFT at 32K; Splash is lower at 64K and 128K (0.108 / 0.148 s). Follow-up TTFT loses at every depth. Since this run, 0.1.7 resumes a follow-up from the previous reply's cache (32K follow-up 0.23 s in a verification run, not part of this comparison). Many Yunshu cells ran an unplanned third rep and fail that audit check only; Kapitsa is excluded (its binary changed during the run). One prompt per depth; no general ranking.
 
 [Evidence and limits](docs/BENCHMARKS.md#where-yunshu-stands); [0.1.5 history](docs/reports/RELEASE_015_BENCHMARKS.md).
 

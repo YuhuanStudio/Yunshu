@@ -342,15 +342,15 @@ agent。对 Claude Code 还会装上状态栏，即时显示预填进度、解�
 
 ## 性能
 
-2026-10-19 development snapshot · M5 Max 128 GB · Qwen3.8-27B · greedy · three interleaved qualifying reps.
+完整比较 2026-11-04 至 11-08 · M5 Max 128 GB · Qwen3.8-27B 4-bit · 代码 prompt，输出 512 token · greedy · 2–3 次中位数。云枢 0.1.7.dev0（round driver）。对手：TensorFold 1.1.8／1.2.1、Splash 1.5.0、llama.cpp b12061、oMLX 0.7.3、mlx-lm／mlx-vlm server、mlx-serve。
 
-| Context | Yunshu oQ4e decode tok/s | TensorFold 1.1.0 decode tok/s | Yunshu TF4 same-checkpoint decode tok/s | Yunshu cold / warm / follow-up TTFT s |
+| Context | Yunshu decode tok/s | Best competitor decode tok/s | Yunshu cold / warm / follow-up TTFT s | Best competitor follow-up TTFT s |
 |---|---|---|---|---|
-| 32K | 135.2 | 200.4 | 142.2 | 34.640 / 0.178 / 2.961 |
-| 64K | 118.0 | 150.6 | 84.1 | 79.288 / 0.314 / 3.906 |
-| 128K | 75.5 | 116.7 | 94.8 | 200.094 / 0.573 / 6.235 |
+| 32K | 191.2 | 238.7 (TensorFold 1.1.8) | 32.85 / 0.044 / 1.022 | 0.433 (llama.cpp b12061) |
+| 64K | 107.5 | 122.7 (TensorFold 1.1.8) | 74.67 / 0.140 / 0.473 | 0.182 (TensorFold 1.1.8) |
+| 128K | 80.9 | 96.5 (TensorFold 1.1.8) | 186.82 / 0.273 / 0.583 | 0.318 (TensorFold 1.1.8) |
 
-TensorFold 在所有深度的 27B 解码均领先，包括同 checkpoint 比较。云枢冷 TTFT 较低；TensorFold 在 32K／64K 的暖缓存与接续 TTFT 较低，但 128K 未命中缓存。llama.cpp 在所有深度的暖缓存与接续 TTFT 均较低。Flash-Next 云枢／共享 MTP llama.cpp 在 32K／64K／128K 解码为 66.7／60.4、56.7／55.0、24.0／42.3 tok/s（不同量化）。每个深度仅一个 prompt，不代表一般排名。控制台截图取自真实 40K–73K MTP 会话（[Console](docs/CONSOLE.md)）。
+TensorFold 在所有深度的 27B 解码领先（云枢 −12 至 −20 %；一般文本 prompt −15 至 −16 %）。Splash 在 32K、64K 冷 TTFT 较低（30.6／73.1 秒），128K 则云枢较低。32K 暖缓存 TTFT 云枢最低；64K、128K Splash 较低（0.108／0.148 秒）。接续 TTFT 在所有深度落后。这次比较之后，0.1.7 的接续回合改为从上一轮回复的缓存续跑（验证运行 32K 接续 0.23 秒，不属于本比较）。不少云枢格多跑了一次未规划的第三轮，只在这一项稽核检查失败；Kapitsa 因运行中自行更换二进制文件而排除。每个深度仅一个 prompt，不代表一般排名。
 
 [Evidence and limits](docs/BENCHMARKS.md#where-yunshu-stands); [0.1.5 history](docs/reports/RELEASE_015_BENCHMARKS.md).
 
