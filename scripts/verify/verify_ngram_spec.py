@@ -14,7 +14,7 @@ Locks in the fixes so they cannot silently regress:
 
 Both use small models (the user confirmed small models are fine for checks).
 
-Run: PYTHONPATH=. uv run python scripts/verify_ngram_spec.py
+Run: PYTHONPATH=. uv run python scripts/verify/verify_ngram_spec.py
 """
 
 from __future__ import annotations

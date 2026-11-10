@@ -45,6 +45,17 @@ def test_the_reply_cache_is_stored_under_prompt_plus_held_tokens():
     assert coord.calls == [([1, 2, 3, 4, 10, 11], 7)]
 
 
+def test_a_cache_holding_every_emitted_token_is_stored_whole():
+    """A row that finished with a queued step has run its last emitted token too: all of it is valid."""
+    group, coord, caches = _group(
+        offset=7
+    )  # 4 prompt + 3 reply tokens, the last one's K/V included
+    VLMBatchRunner._store_decode_cache(
+        group, _job([1, 2, 3, 4], [10, 11, 12]), caches=caches
+    )
+    assert coord.calls == [([1, 2, 3, 4, 10, 11, 12], 7)]
+
+
 def test_a_cache_that_disagrees_with_the_tokens_is_not_stored():
     for offset in (4, 9):  # no reply token held / more than were emitted
         group, coord, caches = _group(offset)

@@ -51,12 +51,3 @@ def test_report_only_verify_keeps_invariant_arithmetic(monkeypatch):
         assert batch_invariant._STATE["active"]
         assert not cs._SERIAL_VERIFY
     assert request.serial_verify_rounds == 0
-
-
-def test_takes_guided_needs_the_copy_wrapper(monkeypatch):
-    from mlx_vlm.speculative import utils
-
-    from yunshu_engine import dflash_copy
-
-    monkeypatch.setattr(utils, "_dflash_rounds", lambda *a, **k: iter(()))
-    assert dflash_copy.takes_guided(None, None, [], {"first_bonus": 1}) is False

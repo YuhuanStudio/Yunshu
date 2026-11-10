@@ -29,9 +29,10 @@ The method behind llama.cpp `perplexity --kl-divergence` and vLLM's logprob-clos
   for a fixed random subset (256 prefill, 128 decode positions), so later comparisons never
   rerun the reference. Positions outside the subset use top-64 plus one lumped tail bucket,
   a lower bound of the true KLD; the full subset reports both (they agree within about 10%).
-* Parts: `prefill` (all positions, 2048-token chunks), `dec1` (one token per step, earlier the
-  speculative lane), `dec6` (6-token verify blocks), `decb` / `decb8` (two-row shared batch
-  on a ragged bf16 / int8 KV cache), `stockb2` (stock two-row batch, a noise floor). Decode
+* Parts (the `PARTS` table in `kld.py`): `prefill` (all positions, 2048-token chunks), `dec1`
+  (one token per step, earlier the speculative lane), `dec6` (6-token verify blocks), `decb` /
+  `decb8` (two-row shared batch on a ragged bf16 / int8 KV cache), `stockb2` (stock two-row
+  batch, a noise floor). Decode
   windows: 8 windows of 384 steps at position 256, plus two of 128 steps at position 31488.
 * Metrics: KLD(ref || cand) mean, median, p99, max; top-1 agreement; mean |dp(top1)|;
   perplexity of both, overall and by corpus type and position bucket.

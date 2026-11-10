@@ -1,6 +1,6 @@
 # Upstream (inspired): ashhart/TensorFold (MIT) src/tensorfold/drafters/dflash_tree.py @ 34bae79a
 # Patches upstream mlx-vlm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
-"""DFlash2 draft trees for the single-request speculative lane.
+"""DFlash2 draft trees for the round driver (round_driver/dflash.py, round_driver/flashnext_dflash.py).
 
 DFlash2 proposes, for a block of positions after the pending token, the top-K
 candidate tokens per position (``candidate_selector``) with a unary score and a
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, cast
+from typing import Any
 
 import mlx.core as mx
 
@@ -656,35 +656,7 @@ def dflash_tree_rounds(
                 return
 
 
-def install() -> bool:
-    """Route upstream's single-row DFlash round loop through the tree rounds
-    (idempotent). Rounds that cannot run a tree fall back to upstream's."""
-    from mlx_vlm.speculative import utils as spec_utils
-
-    current = spec_utils._dflash_rounds
-    if getattr(current, "_yunshu_tree", False):
-        return True
-    original = current
-
-    def rounds(*args, **kwargs):
-        from . import settings
-
-        if settings.get("YUNSHU_SPEC_TREE") != "tree":
-            yield from original(*args, **kwargs)
-            return
-        yield from dflash_tree_rounds(*args, _original=original, **kwargs)
-
-    rounds._yunshu_tree = True
-    cast(Any, rounds)._yunshu_copy_underneath = bool(
-        getattr(original, "_yunshu_copy", False)
-        or getattr(original, "_yunshu_copy_underneath", False)
-    )
-    spec_utils._dflash_rounds = rounds
-    return True
-
-
 __all__ = [
     "dflash_tree_rounds",
-    "install",
     "walk",
 ]

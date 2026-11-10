@@ -20,6 +20,9 @@ from yunshu_engine.apc_warm import WarmTier  # noqa: E402
 def _allow_test_disk_restore(monkeypatch):
     # These tiny roundtrip tests exercise storage, not the host's free-RAM policy.
     monkeypatch.setenv("APC_DISK_MIN_FREE_RAM_GB", "0")
+    # prefill checkpoints only: the default decode mode (user 2026-11-02) adds a reply
+    # checkpoint per request, covered by test_decode_cache_next_turn.py
+    monkeypatch.setenv("YUNSHU_NEXT_TURN_PREFILL", "off")
 
 
 def _cache(n: int, seed: int = 0, dtype=mx.bfloat16):

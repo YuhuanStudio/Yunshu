@@ -21,7 +21,11 @@ from fastapi.testclient import TestClient
 
 
 class _FakeOCR:
-    async def extract_text(self, path, language=None, task="text"):
+    def __init__(self):
+        self.cancel_events = []
+
+    async def extract_text(self, path, language=None, task="text", cancel_event=None):
+        self.cancel_events.append(cancel_event)
         return {
             "text": "hello",
             "confidence": None,
@@ -57,7 +61,8 @@ def _client(monkeypatch):
     from yunshu_gateway import engine as eng_mod
 
     a = OCREngine.__new__(OCREngine)
-    a.extract_text = _FakeOCR().extract_text
+    fake = _FakeOCR()
+    a.extract_text = fake.extract_text
     mgr = types.SimpleNamespace(
         list_entries=lambda: [
             types.SimpleNamespace(model_id="ocr-A", engine=a, is_loaded=True)
@@ -72,6 +77,7 @@ def _client(monkeypatch):
 
     client = TestClient(create_app(), raise_server_exceptions=False)
     client._yunshu_tracker = tracker
+    client._yunshu_fake_ocr = fake
     yield client
     os.environ.pop("YUNSHU_AUTH_DISABLED", None)
 
@@ -110,3 +116,25 @@ def test_ocr_source_wires_disconnect_guard_and_fallback_cancel():
     # registration + unregistration present
     assert ".register(_ocr_id" in src
     assert "_ocr_tracker.unregister(_ocr_id)" in src
+
+
+def test_native_ocr_path_receives_the_disconnect_cancel_event(_client):
+    """The native OCREngine path must get the request's cancel_event: the disconnect guard
+    sets it, and VLMEngine.generate stops the decode between steps (census B1 cancel gap)."""
+    resp = _client.post(
+        "/v1/ocr",
+        data={"model": "ocr-A", "task": "text"},
+        files={
+            "file": (
+                "x.png",
+                __import__("base64").b64decode(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                ),
+                "image/png",
+            )
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    events = _client._yunshu_fake_ocr.cancel_events
+    assert len(events) == 1
+    assert events[0] is not None, "native OCR path got no cancel_event"

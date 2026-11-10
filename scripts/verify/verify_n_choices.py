@@ -15,9 +15,9 @@ this gate covers the INCREMENTAL gateway contract through a real HTTP round-trip
 
 Uses httpx.AsyncClient + ASGITransport so the app runs on the SAME event loop as
 the engine (a sync TestClient spins its own loop → cross-loop future errors when
-tearing the engine_core task down).
+tearing the engine task down).
 
-Run: PYTHONPATH=. uv run python scripts/verify_n_choices.py
+Run: PYTHONPATH=. uv run python scripts/verify/verify_n_choices.py
 """
 
 from __future__ import annotations

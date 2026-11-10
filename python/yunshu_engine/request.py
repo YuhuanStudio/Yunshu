@@ -165,7 +165,7 @@ class Request:
     """Per-request state.
 
     Tracks the full lifecycle: prompt tokenization → generation → output.
-    Integrates with mlx-lm's BatchGenerator via batch_uid.
+    ``batch_uid`` is a legacy batch-row id; the round driver keys its rows itself.
     """
 
     if TYPE_CHECKING:
@@ -191,7 +191,7 @@ class Request:
     output_text: str = ""
     finish_reason: str | None = None
 
-    # BatchGenerator integration
+    # Batch-row id (legacy; not set by the round driver)
     batch_uid: int | None = None
     num_preemptions: int = 0
 

@@ -203,10 +203,8 @@ if _dflash:
     if "--dflash-served" in sys.argv:
         # as the server builds it: 8-bit drafter and cost-aware chain depth
         from yunshu_engine.dflash_tree import quantize_drafter  # noqa: E402
-        from yunshu_engine.spec_schedule import install_chain_budget  # noqa: E402
 
         quantize_drafter(drafter, 8)
-        install_chain_budget()
 else:
     drafter, draft_kind = _load_drafter_in_memory(model_dir), "mtp"
 print(
@@ -225,7 +223,6 @@ if _dv and draft_kind == "mtp":
 if "--mtp-lane" in sys.argv and draft_kind == "mtp":
     from yunshu_engine import mtp_lane  # noqa: E402
 
-    print(json.dumps({"mtp_lane": mtp_lane.install()}), flush=True)
     _win = next(
         (int(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--draft-window=")),
         0,

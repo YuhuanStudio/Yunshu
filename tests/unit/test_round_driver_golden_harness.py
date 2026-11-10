@@ -311,3 +311,75 @@ def test_apc_probe_sizing_keeps_tiny_and_grows_for_checkpoints():
     # A real 1024-token prompt fills a 64-block pool exactly and exceeds 0.1 GB.
     blocks, gb = apc_probe_sizing("/models/27b")
     assert blocks * 16 > 1024 and gb > 0.1
+
+
+def checkpoint_receipt(kernels=None, long_burst=True, layer="qwen3_5"):
+    """A real-checkpoint shaped receipt built from the tiny fixture (no MLX, no checkpoint)."""
+    r = receipt()
+    p = r["payload"]
+    p["layer"] = layer
+    p["checkpoint"] = {"config_sha256": "fixture", "weight_sizes": {}}
+    p["serving_kernels"] = (
+        {"split_prefill": "split64-v1"} if kernels is None else kernels
+    )
+    if long_burst:
+        p["long_burst"] = [
+            dict(
+                mode=mode,
+                schedule="burst",
+                rows=[
+                    [dict(token=3, logprob=(-0.25).hex()) for _ in range(4)]
+                    for _ in range(3)
+                ],
+            )
+            for mode in ("greedy", "seeded")
+        ]
+    r["sha256"] = digest(p)
+    return r
+
+
+def test_served_qwen3_5_checkpoint_receipt_is_valid():
+    validate(checkpoint_receipt())
+
+
+def test_qwen3_5_checkpoint_without_split_prefill_fails_closed():
+    with pytest.raises(ValueError, match="split-invariant prefill"):
+        validate(checkpoint_receipt(kernels={}))
+
+
+def test_checkpoint_without_long_row_burst_fails_closed():
+    with pytest.raises(ValueError, match="long-row burst"):
+        validate(checkpoint_receipt(long_burst=False))
+
+
+def test_checkpoint_build_runs_the_served_kernel_install(tmp_path, monkeypatch):
+    """build() of a real checkpoint installs the same kernel stack VLMEngine serves."""
+    import json
+    from types import SimpleNamespace
+
+    from scripts.research import round_driver_golden as golden
+
+    from yunshu_engine import serving_kernels
+    from yunshu_engine.vlm_engine import VLMEngine
+
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "qwen3_5"}))
+    wrapper = SimpleNamespace(language_model=SimpleNamespace())
+    monkeypatch.setattr(VLMEngine, "_load_vision_model", lambda self, path: wrapper)
+    monkeypatch.setattr(
+        "mlx_lm.utils.load_tokenizer",
+        lambda path: SimpleNamespace(encode=lambda text, **kw: list(range(len(text)))),
+    )
+    import yunshu_engine.mlxvlm_mtp as mtp
+
+    monkeypatch.setattr(mtp, "_load_drafter_in_memory", lambda path: None)
+    seen = {}
+
+    def fake_install(model, config, **kwargs):
+        seen.update(model=model, config=config, **kwargs)
+        return {"split_prefill": "split64-v1"}, None
+
+    monkeypatch.setattr(serving_kernels, "install", fake_install)
+    built = golden.build("qwen3_5", str(tmp_path))
+    assert built[0] is wrapper and built[4] == {"split_prefill": "split64-v1"}
+    assert seen["model"] is wrapper and seen["draft_kind"] == "mtp"
+    assert seen["config"]["model_type"] == "qwen3_5"

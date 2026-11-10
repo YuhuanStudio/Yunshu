@@ -19,6 +19,15 @@ from yunshu_engine.vlm_batch_runner import RunStats  # noqa: E402
 IM_START, USER = 900, 901
 
 
+@pytest.fixture(autouse=True)
+def _prefill_checkpoints_only(monkeypatch):
+    # These tests pin the prefill-checkpoint / tier mechanics. The default next-turn mode
+    # (decode, user 2026-11-02) also stores each finished reply's decode cache, a second
+    # checkpoint at prompt + reply tokens that changes which positions and tiers exist; that mode
+    # is covered by test_decode_cache_next_turn.py.
+    monkeypatch.setenv("YUNSHU_NEXT_TURN_PREFILL", "off")
+
+
 class _Stop:
     def __init__(self):
         self.eos = set()

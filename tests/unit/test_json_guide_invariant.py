@@ -83,25 +83,3 @@ def test_only_tool_guide_may_use_the_fast_tree(guides):
     assert not tree_guide(guides.text)
     assert not tree_guide(guides.combined)
     assert not tree_guide(guides.gated)
-
-
-def test_takes_guided_refuses_response_format(guides, monkeypatch):
-    from mlx_vlm.speculative import utils
-
-    from yunshu_engine import constrained_spec as cs
-    from yunshu_engine import dflash_copy, settings
-
-    def fake(*a, **k):
-        return iter(())
-
-    fake._yunshu_copy = True
-    monkeypatch.setattr(utils, "_dflash_rounds", fake)
-    monkeypatch.setattr(settings, "get", lambda name, *a, **k: "auto")
-    monkeypatch.setattr(dflash_copy, "_copy_gate", lambda *a, **k: True)
-    from yunshu_engine import dflash_fast
-
-    monkeypatch.setattr(dflash_fast, "eligible", lambda *a, **k: True)
-    kw = {"first_bonus": 1}
-    for g, expected in ((guides.text, False), (guides.tool, True)):
-        monkeypatch.setattr(cs, "current_request", lambda g=g: SimpleNamespace(guide=g))
-        assert dflash_copy.takes_guided(None, None, [], kw) is expected

@@ -129,7 +129,7 @@ def top_logprobs_device(log_probs: mx.array, k: int) -> tuple[mx.array, mx.array
 
 def logprob_entry(log_probs: mx.array, token: int, top_k: int | None) -> dict:
     """One per-token logprob entry in the text path's shape, from a 1-D ``log_probs``
-    that is already normalised (the engine loop gets it from the BatchGenerator).
+    that is already normalised (e.g. the output of a log-softmax over the logits).
 
     NaN is reported as -100.0 (as ``_generate_fast`` does); with ``top_k`` the entry also
     carries ``top_logprobs`` from :func:`top_logprobs` (no full-vocabulary sort).

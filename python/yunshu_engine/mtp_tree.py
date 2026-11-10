@@ -1,6 +1,6 @@
 # Upstream (derived): Blaizzy/mlx-vlm (MIT) mlx_vlm/speculative/mtp.py @ v0.7.3
 # Patches upstream mlx-vlm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
-"""MTP draft trees for the single-request speculative lane.
+"""MTP draft trees for the speculative decode path (round driver, Qwen3.5 family).
 
 The checkpoint's MTP head predicts one token per step from ``(embed(token),
 target hidden)``; upstream chains it (each step feeds the previous draft), so a
@@ -367,22 +367,4 @@ def mtp_tree_rounds_batch(
                 return
 
 
-def install() -> bool:
-    """Route upstream's MTP round loop (the server path, one greedy row)
-    through the tree rounds (idempotent)."""
-    from mlx_vlm.speculative import utils as spec_utils
-
-    current = spec_utils._mtp_rounds_batch
-    if getattr(current, "_yunshu_tree", False):
-        return True
-    original = current
-
-    def rounds(*args, **kwargs):
-        return mtp_tree_rounds_batch(*args, _original=original, **kwargs)
-
-    rounds._yunshu_tree = True
-    spec_utils._mtp_rounds_batch = rounds
-    return True
-
-
-__all__ = ["install", "mtp_tree_rounds_batch", "search_tree"]
+__all__ = ["mtp_tree_rounds_batch", "search_tree"]

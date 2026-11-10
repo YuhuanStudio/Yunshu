@@ -1925,7 +1925,7 @@ class KVPrefixCache:
 
     def restore_prefix_from_ssd(self, query_blocks) -> tuple:
         """Reassemble the longest run of consecutive SSD-resident prefix blocks
-        into a contiguous KVCache list usable by BatchGenerator.insert_segments.
+        into a contiguous KVCache list usable as a row's prefill cache.
 
         The prior SSD restore only loaded a SINGLE block and
         returned a structure that wasn't a valid cache (empty output). This loads

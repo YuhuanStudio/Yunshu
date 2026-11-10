@@ -12,7 +12,6 @@ from yunshu_engine.vlm_batch_runner import _DONE, VLMBatchRunner
 @pytest.mark.parametrize("kind", ["mtp", "dflash"])
 @pytest.mark.parametrize("constrained", [False, True])
 def test_guided_logprob_request_keeps_spec(monkeypatch, kind, constrained):
-    monkeypatch.setitem(mtp_lane._STATE, "installed", True)
     monkeypatch.setitem(mtp_lane._STATE, "enabled", True)
     runner = VLMBatchRunner(
         SimpleNamespace(
@@ -144,28 +143,6 @@ def test_accepted_logprobs_match_serial_rows(toy, monkeypatch, k, accuracy):
         assert [v for _, v in top] == [probs[0, t].item() for t in idx]
         refguide.feed(token)
     assert not request.pending
-
-
-def test_first_logprobs_are_not_dummy_zero():
-    request = SpecRequest(True, 2)
-    logits = mx.array([[24, 19.75, 19.6, 10]], dtype=mx.bfloat16)
-    from mlx_vlm.generate import ar
-
-    from yunshu_engine.constrained_spec import install
-
-    install()
-    probs = normalize_rows(request(mx.array([1]), logits)[None])
-    set_request(request)
-    try:
-        ar._sample_with_positions(
-            lambda x: mx.argmax(x, axis=-1), probs, row_ids=[0], positions=[0]
-        )
-    finally:
-        set_request(None)
-    lp, top = request.take(0)
-    probs = normalize_rows(logits.astype(mx.float32)[None])
-    assert lp == probs[0, 0].item() < 0
-    assert top[0] == (0, lp)
 
 
 def test_native_mask_pads_model_vocab_with_forbidden_tokens(toy):
@@ -471,35 +448,3 @@ def test_stock_singleton_prefill_then_dense_verify_representation():
     assert dense.left_padding is None and dense.offset == 2
     assert mx.array_equal(dense.keys[..., :2, :], cache.keys).item()
     assert mx.array_equal(dense.values[..., :2, :], cache.values).item()
-
-
-def test_constructor_canonicalizes_before_immediate_prefill():
-    from mlx_vlm.generate import ar
-    from mlx_vlm.models.cache import ArraysCache, KVCache
-
-    from yunshu_engine.constrained_spec import install
-
-    install()
-    model = SimpleNamespace(
-        make_cache=lambda: [KVCache(), ArraysCache(size=2)],
-        supports_chunked_prefill=lambda **kw: True,
-    )
-    request = SpecRequest()
-    request.guide = object()
-    set_request(request)
-    try:
-        prompt = ar.PromptProcessingBatch(
-            model,
-            [0],
-            [[1, 2, 3]],
-            [4],
-            mx.zeros((1, 3, 2)),
-            {},
-            draft_model=object(),
-            draft_kind="mtp",
-        )
-    finally:
-        set_request(None)
-    assert isinstance(prompt.prompt_cache[0], KVCache)
-    assert prompt.prompt_cache[1].left_padding is None
-    assert prompt.prompt_cache[1].lengths is None

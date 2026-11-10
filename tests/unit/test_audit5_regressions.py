@@ -68,64 +68,6 @@ def test_fp32_round_attention_preserves_dtype_and_causal_prefix():
         assert out.tolist() == [[[1.0] * 256, [2.0] * 256]]
 
 
-@pytest.mark.parametrize("case", ["greedy", "guide", "keyed", "keyed-xtc"])
-def test_tree_setting_reaches_upstream_hook_instead_of_chain_lane(monkeypatch, case):
-    from mlx_vlm.generate import ar
-    from mlx_vlm.speculative import utils
-
-    from yunshu_engine import mtp_lane, settings
-
-    state = dict(mtp_lane._STATE)
-    calls = []
-    monkeypatch.setattr(
-        ar,
-        "run_speculative_server_rounds",
-        lambda *a, **kw: calls.append("tree") or iter(()),
-    )
-    monkeypatch.setattr(
-        utils, "run_speculative_server_rounds", ar.run_speculative_server_rounds
-    )
-    monkeypatch.setattr(
-        settings, "get", lambda name: "tree" if name == "YUNSHU_SPEC_TREE" else None
-    )
-    monkeypatch.setattr(
-        mtp_lane, "rounds", lambda *a, **kw: calls.append("chain") or iter(())
-    )
-    mtp_lane._STATE.update(
-        installed=False, enabled=True, guide=object() if case == "guide" else None
-    )
-    from yunshu_engine.keyed_sampling import KeyedSampler
-
-    sampler = (
-        KeyedSampler(
-            SimpleNamespace(
-                temperature=0.7, xtc_probability=0.5 if case == "keyed-xtc" else 0.0
-            ),
-            42,
-        )
-        if case.startswith("keyed")
-        else None
-    )
-    try:
-        mtp_lane.install()
-        with mx.stream(mx.cpu):
-            ar.run_speculative_server_rounds(
-                None,
-                SimpleNamespace(supports_greedy_draft_argmax=True),
-                [],
-                None,
-                draft_kind="mtp",
-                greedy_sampling=sampler is None,
-                first_bonus=mx.array([1]),
-                max_tokens=4,
-                sampler=sampler,
-            )
-        assert calls == (["chain"] if case in ("guide", "keyed-xtc") else ["tree"])
-    finally:
-        mtp_lane._STATE.clear()
-        mtp_lane._STATE.update(state)
-
-
 @pytest.mark.parametrize("accepted", [False, True])
 def test_generate_leaves_each_alignment_token_uncached(monkeypatch, accepted):
     from yunshu_engine.speculative_decoder import SpecDecodingConfig, VerifyResult

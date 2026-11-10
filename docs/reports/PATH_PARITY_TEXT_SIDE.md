@@ -1,3 +1,5 @@
+> Historical snapshot (2026-10-26). The EngineCore loop and the stock runner described here were deleted (t0-engineloop 2c479d59, Phase B 75052d1c); see docs/guides/ROUND_DRIVER.md.
+
 # Path parity, text side: VLM fixes checked on every text path
 
 > Line numbers in this report refer to the tree when it was written (2026-10-26, before the later review-fix and
