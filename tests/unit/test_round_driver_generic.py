@@ -139,10 +139,19 @@ class TinyLM(nn.Module):
         x = x + shift
         for block, c in zip(self.blocks, cache, strict=True):
             x = block(x, c)
+        pre = x
         x = mx.fast.rms_norm(x, None, 1e-6)
         if logits_to_keep is not None:
             x = x[:, -logits_to_keep:]
-        return _Out(self.embed.as_linear(x))
+        out = _Out(self.embed.as_linear(x))
+        if kwargs.get(
+            "return_hidden"
+        ):  # mlx-vlm: the last decoder output, before the final norm
+            out.hidden_states = [pre]
+        return out
+
+    def speculative_draft_hidden(self, hidden):
+        return mx.fast.rms_norm(hidden, None, 1e-6)
 
 
 class StatefulLM(TinyLM):

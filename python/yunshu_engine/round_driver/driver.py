@@ -412,6 +412,7 @@ class RoundDriver:
         kv_format: str = "bf16",
         max_draft: int | None = None,
         generic_layer: bool = False,
+        row_drafters: Any = None,
     ):
         from .mtp import MTPHead
 
@@ -456,6 +457,8 @@ class RoundDriver:
         # Generic layer: the model's own upstream forward, one call per row (``generic.py``); no drafter,
         # logits instead of hidden states. Mutually exclusive with the two packed model layers.
         self.generic = bool(generic_layer)
+        # draft LM / Gemma-4 assistant drafters of the generic layer (``draftlm.RowDrafters``); n-gram otherwise
+        self.row_drafters = row_drafters if self.generic else None
         if self.generic and (
             self.flash or drafter is not None or dflash_drafter is not None
         ):
@@ -619,10 +622,12 @@ class RoundDriver:
             from .. import settings
             from .ngram import NgramDrafter
 
-            row.ngram = NgramDrafter(settings.get("YUNSHU_SPEC_PROPOSER"))
+            row.ngram = (
+                self.row_drafters.make() if self.row_drafters is not None else None
+            ) or NgramDrafter(settings.get("YUNSHU_SPEC_PROPOSER"))
             st = getattr(req.handle, "stats", None)
             if st is not None:
-                st.spec_mode = "ngram"
+                st.spec_mode = row.ngram.mode
         if (draft or keyed is not None or ngram) and generic_processors(
             req.processors, req.guide is not None, bool(req.logprobs)
         ):
@@ -693,6 +698,8 @@ class RoundDriver:
             return []
         if len(self.batch.rows) != 1:
             return []
+        if row.ngram.needs_target_cache:
+            row.ngram.cache = self.batch.cache
         if not self.batch.can_trim(row.ngram.k + 1):
             if not self._ngram_untrimmable_logged:
                 self._ngram_untrimmable_logged = True
@@ -704,7 +711,9 @@ class RoundDriver:
         drafts: list[int] = row.ngram.propose(row.context, room)
         if drafts and not row.ngram_logged:
             row.ngram_logged = True
-            logger.info("Round driver n-gram window engaged: %d drafts", len(drafts))
+            logger.info(
+                "Round driver %s window engaged: %d drafts", row.ngram.name, len(drafts)
+            )
         return drafts
 
     def _processors_draft(self, processors, logprobs=False, guide=None) -> bool:
@@ -1012,7 +1021,8 @@ class RoundDriver:
             ng = getattr(r, "ngram", None)
             if ng is not None and ng.windows:
                 logger.info(
-                    "Round driver n-gram row: %d windows, %d drafted, %d accepted, %d tokens",
+                    "Round driver %s row: %d windows, %d drafted, %d accepted, %d tokens",
+                    ng.name,
                     ng.windows,
                     ng.drafted,
                     ng.landed,
@@ -1906,6 +1916,14 @@ class RoundDriver:
             )
             lens.append(1 + use)
             used_drafts.append(use)
+        want_hidden = (
+            self.generic
+            and len(rows) == 1
+            and rows[0].ngram is not None
+            and rows[0].ngram.needs_hidden
+        )
+        if self.generic:
+            self.batch.want_hidden = want_hidden
         hidden = self.batch.forward(lens, mx.concatenate(parts))
         items, at = [], 0
         for r, n, win in zip(rows, lens, wins, strict=True):
@@ -1975,6 +1993,14 @@ class RoundDriver:
             used = self._emit(row, toks[:keep], extra, events)
             if row.ngram is not None and len(rows) == 1:
                 row.ngram.observe_step(len(window) > 1, used, step_s)
+            if row.ngram is not None and row.ngram.needs_hidden:
+                # the target's hidden state at the last kept position: the assistant's next proposal reads it
+                kept = self.batch.hidden
+                row.ngram.carry(
+                    kept[0, max(used, 1) - 1]
+                    if want_hidden and kept is not None
+                    else None
+                )
             used_all.append(used)
         self.batch.commit(used_all)
         gone = [r for r in rows if r.finished]

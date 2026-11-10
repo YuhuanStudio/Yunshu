@@ -218,6 +218,11 @@ class GenericBatch:
         self.kv_format = kv_format
         self.rows: list = []
         self._lens: list[int] = []
+        # a hidden-state drafter (Gemma-4 assistant) reads the last layer's output of a lone row's window
+        self.want_hidden = False
+        self.hidden: mx.array | None = (
+            None  # (1, T, D) normed hidden of the last forward
+        )
 
     def join(self, rows: list) -> None:
         for row in rows:
@@ -248,12 +253,29 @@ class GenericBatch:
         if len(lens) != len(self.rows) or any(int(n) < 1 for n in lens):
             raise ValueError("generic round driver needs a nonempty window per row")
         self._lens = list(lens)
+        self.hidden = None
+        hidden = (
+            self.want_hidden
+            and len(lens) == 1
+            and hasattr(self.lm, "speculative_draft_hidden")
+        )
         outs, at = [], 0
         for row, n in zip(self.rows, lens, strict=True):
             kwargs = {}
             if row.state.rope_deltas is not None:
                 kwargs["rope_deltas"] = row.state.rope_deltas
-            out = self.lm(tokens[None, at : at + n], cache=row.cache, **kwargs)
+            if hidden:
+                out = self.lm(
+                    tokens[None, at : at + n],
+                    cache=row.cache,
+                    return_hidden=True,
+                    **kwargs,
+                )
+                sink = getattr(out, "hidden_states", None)
+                if sink:
+                    self.hidden = self.lm.speculative_draft_hidden(sink[-1])
+            else:
+                out = self.lm(tokens[None, at : at + n], cache=row.cache, **kwargs)
             logits = _logits_of(out)
             outs.append(logits[:, -1, :] if n == 1 else logits[0, :n])
             at += n

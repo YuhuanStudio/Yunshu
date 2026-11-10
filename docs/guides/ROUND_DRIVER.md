@@ -245,3 +245,19 @@ there and a `spec_decode` request changes nothing.
 candidate tree (repetitive 1.5K and 32K-token prompts, one prose prompt), requiring engagement on the
 repetitive cases and reporting decode tok/s and whether the text was exactly equal; `--suite ngram-plain`
 requires the drafter to stay off and the two arms identical (packed layers, rotating caches).
+
+## Draft LM and Gemma-4 assistant on the generic layer
+
+Two model drafters plug in where the n-gram drafter does (`round_driver/draftlm.py`; same window, same
+verify, same lone-row / trimmable-cache / greedy scope, same APC namespace and back-off):
+
+- `YUNSHU_DRAFT_MODEL=<mlx-lm checkpoint>`: a separate draft LM (same vocabulary as the target) drafts up to
+  5 tokens greedily from its own per-row KV cache.
+- `YUNSHU_GEMMA4_ASSISTANT=<assistant dir>` on a Gemma-4 target: the assistant drafts from the target's normed
+  hidden state at the last kept position and the target's own shared K/V (the generic layer returns that
+  hidden state for a lone row that asks for it).
+
+Both are used for requests with `spec_decode: true`; the assistant wins over a draft LM when both are set,
+and either wins over n-gram. Gemma-4's sliding-window cache rotates: once the context nears the window
+(512) a window can no longer be trimmed and the row decodes plain (the old text route stopped there too).
+Sampled (temperature > 0) rows decode plain on this layer.

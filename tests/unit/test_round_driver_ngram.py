@@ -216,3 +216,17 @@ def test_a_row_whose_windows_are_slower_than_plain_decodes_plain():
     n.observe_step(True, 3, 0.030)
     n.observe_step(True, 3, 0.030)
     assert not n.slow() and n.propose(ctx, 5) == [3, 1, 2]
+
+
+def test_a_slow_verdict_is_remeasured_after_the_cooldown():
+    n = NgramDrafter("ngram")
+    ctx = [1, 2, 3, 1, 2, 3, 1, 2]
+    for _ in range(3):
+        n.propose(ctx, 5)
+        n.observe_step(False, 1, 0.020)
+    n.propose(ctx, 5)
+    n.observe_step(True, 1, 0.080)  # one early miss: slower than plain
+    assert n.propose(ctx, 5) == []
+    n.cool = 0
+    # the old verdict is forgotten: a window is proposed again and measured afresh
+    assert n.propose(ctx, 5) == [3, 1, 2]

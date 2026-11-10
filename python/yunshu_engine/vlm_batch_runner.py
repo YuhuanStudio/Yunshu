@@ -1205,7 +1205,8 @@ class VLMBatchRunner:
         job.stats.prefill_total = len(job.ids) - hit
         job.stats.prefill_known = True
         job.stats.used_apc = use_apc
-        ngram_row = job.stats.spec_mode == "ngram"  # set by the driver's ``add``
+        # set by the driver's ``add``: n-gram / suffix, draft LM or Gemma-4 assistant row
+        ngram_row = job.stats.spec_mode in ("ngram", "draft-lm", "gemma4-assistant")
         job.stats.used_draft = bool((job.allow_draft and driver.can_draft) or ngram_row)
         if job.stats.used_draft and not ngram_row:
             job.stats.spec_mode = (

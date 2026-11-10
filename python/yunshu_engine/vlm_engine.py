@@ -2867,6 +2867,7 @@ class VLMEngine:
                 stop_tokens=runner.stop_tokens,
                 chunk=PREFILL_STEP,
                 apc=self._apc_backend,
+                row_drafters=self._generic_row_drafters(model_path),
             )
         if use_driver:
             from .round_driver.driver import RoundDriver
@@ -2897,6 +2898,24 @@ class VLMEngine:
         )
         logger.info("Round driver layer: %s", "generic" if generic_layer else "packed")
         return runner
+
+    def _generic_row_drafters(self, model_path: str):
+        """Draft LM (``YUNSHU_DRAFT_MODEL``) / Gemma-4 assistant (``YUNSHU_GEMMA4_ASSISTANT``) drafters
+        of the generic layer, for requests that ask for speculation (``spec_decode``)."""
+        draft = settings.get("YUNSHU_DRAFT_MODEL")
+        assistant = settings.get("YUNSHU_GEMMA4_ASSISTANT")
+        if not (draft or assistant):
+            return None
+        if assistant and not str(self._config.get("model_type", "")).startswith(
+            "gemma4"
+        ):
+            logger.warning("YUNSHU_GEMMA4_ASSISTANT ignored: the model is not Gemma-4")
+            assistant = None
+        from .round_driver.draftlm import build_row_drafters
+
+        return build_row_drafters(
+            self._model.language_model, model_path, draft, assistant
+        )
 
     def _build_text_constraint(self, json_schema):
         if json_schema is None:

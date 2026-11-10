@@ -56,10 +56,15 @@ class NgramDrafter:
     more than a plain step (more expert weights, a T>1 attention over a long cache): the row measures
     both and decodes plain for a while when tokens per second through windows fall below plain."""
 
-    def __init__(self, kind: str = "ngram") -> None:
+    name = "n-gram"  # log label of the row
+    mode = "ngram"  # spec_mode of the row
+    needs_hidden = False  # True: the driver hands this drafter the target's hidden state (``carry``)
+    needs_target_cache = False
+
+    def __init__(self, kind: str = "ngram", *, proposer=None) -> None:
         self.kind = kind
         self.k = MAX_DRAFT
-        self.proposer = make_proposer(kind)
+        self.proposer = proposer if proposer is not None else make_proposer(kind)
         self.misses = 0
         self.cool = 0
         self.windows = self.drafted = self.landed = 0
@@ -77,8 +82,14 @@ class NgramDrafter:
             return []
         if self.slow():
             self.cool = SLOW_COOL
+            # forget the windows' timings: after the cool-down one fresh window is measured again, so a
+            # single early miss cannot switch the row's drafting off for good
+            self.win_s = self.win_tok = 0.0
             return []
-        return [int(t) for t in self.proposer.propose(context)[:room]]
+        return [int(t) for t in self._propose(context, room)[:room]]
+
+    def _propose(self, context: list[int], room: int) -> list[int]:
+        return self.proposer.propose(context)
 
     def slow(self) -> bool:
         """Windows measured slower per token than plain steps (both measured on this row)."""

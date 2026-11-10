@@ -1517,6 +1517,74 @@
           ]
         }
       }
+    },
+    "draftlm_spec": {
+      "module": "python/yunshu_engine/round_driver/draftlm.py",
+      "what": "Draft-LM speculation (YUNSHU_DRAFT_MODEL: an ordinary mlx-lm checkpoint drafts greedily; opt-in per request via spec_decode; greedy lone rows)",
+      "cells": {
+        "batch": {
+          "s": "na",
+          "why": "packed Qwen3.5 / Flash-Next windows are batch-invariant tree verifies fed by MTP or DFlash copy drafts; a second host drafter there would break spec on == spec off"
+        },
+        "generic": {
+          "s": "engaged",
+          "why": "lone-row T>1 window on the model's own forward like n-gram; the draft keeps its own per-row cache, trimmed after each chain",
+          "ev": [
+            [
+              "python/yunshu_engine/round_driver/draftlm.py",
+              "DraftLMDrafter"
+            ],
+            [
+              "python/yunshu_engine/round_driver/driver.py",
+              "row_drafters"
+            ]
+          ]
+        },
+        "text": {
+          "s": "engaged",
+          "why": "engine_speculative.py route (non-stream, greedy / temperature); deleted with the text path switch (T11)",
+          "ev": [
+            [
+              "python/yunshu_engine/batched_engine.py",
+              "_generate_speculative"
+            ]
+          ]
+        }
+      }
+    },
+    "gemma4_assistant_spec": {
+      "module": "python/yunshu_engine/round_driver/draftlm.py",
+      "what": "Gemma-4 assistant drafter (YUNSHU_GEMMA4_ASSISTANT: reads the target's normed hidden state and shared K/V; opt-in per request via spec_decode; greedy lone rows)",
+      "cells": {
+        "batch": {
+          "s": "na",
+          "why": "packed Qwen3.5 / Flash-Next windows are batch-invariant tree verifies fed by MTP or DFlash copy drafts; a second host drafter there would break spec on == spec off"
+        },
+        "generic": {
+          "s": "engaged",
+          "why": "lone-row T>1 window; the layer returns the kept position's hidden state (GenericBatch.hidden); a rotating sliding-window cache that would wrap decodes plain",
+          "ev": [
+            [
+              "python/yunshu_engine/round_driver/draftlm.py",
+              "AssistantDrafter"
+            ],
+            [
+              "python/yunshu_engine/round_driver/driver.py",
+              "row_drafters"
+            ]
+          ]
+        },
+        "text": {
+          "s": "engaged",
+          "why": "engine_speculative.py route (non-stream, greedy / temperature); deleted with the text path switch (T11)",
+          "ev": [
+            [
+              "python/yunshu_engine/batched_engine.py",
+              "_generate_gemma4_assistant_spec"
+            ]
+          ]
+        }
+      }
     }
   },
   "exclusions": [
@@ -2349,6 +2417,34 @@
             "and self.generic"
           ]
         ]
+      },
+      "draftlm_spec": {
+        "s": "na",
+        "why": "Flash-Next rows run the packed layer (flashnext.py / flashnext_dflash.py), not the generic layer; ngram_ok requires self.generic, and the packed windows are batch-invariant MTP / DFlash verifies where a second host proposer would break spec on == spec off",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "def ngram_ok"
+          ],
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "and self.generic"
+          ]
+        ]
+      },
+      "gemma4_assistant_spec": {
+        "s": "na",
+        "why": "Flash-Next rows run the packed layer (flashnext.py / flashnext_dflash.py), not the generic layer; ngram_ok requires self.generic, and the packed windows are batch-invariant MTP / DFlash verifies where a second host proposer would break spec on == spec off",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "def ngram_ok"
+          ],
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "and self.generic"
+          ]
+        ]
       }
     }
   },
@@ -2924,6 +3020,34 @@
             "and self.generic"
           ]
         ]
+      },
+      "draftlm_spec": {
+        "s": "na",
+        "why": "draft-LM speculation is generic-layer only (RoundDriver.ngram_ok requires self.generic); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host drafter would be a second drafter and spec on must equal spec off",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "def ngram_ok"
+          ],
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "and self.generic"
+          ]
+        ]
+      },
+      "gemma4_assistant_spec": {
+        "s": "na",
+        "why": "Gemma-4 assistant speculation is generic-layer only (RoundDriver.ngram_ok requires self.generic); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host drafter would be a second drafter and spec on must equal spec off",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "def ngram_ok"
+          ],
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "and self.generic"
+          ]
+        ]
       }
     },
     "video": {
@@ -3480,6 +3604,34 @@
             "and self.generic"
           ]
         ]
+      },
+      "draftlm_spec": {
+        "s": "na",
+        "why": "draft-LM speculation is generic-layer only (RoundDriver.ngram_ok requires self.generic); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host drafter would be a second drafter and spec on must equal spec off",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "def ngram_ok"
+          ],
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "and self.generic"
+          ]
+        ]
+      },
+      "gemma4_assistant_spec": {
+        "s": "na",
+        "why": "Gemma-4 assistant speculation is generic-layer only (RoundDriver.ngram_ok requires self.generic); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host drafter would be a second drafter and spec on must equal spec off",
+        "ev": [
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "def ngram_ok"
+          ],
+          [
+            "python/yunshu_engine/round_driver/driver.py",
+            "and self.generic"
+          ]
+        ]
       }
     },
     "audio_in": {
@@ -3686,6 +3838,14 @@
         "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
       },
       "ngram_spec": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "draftlm_spec": {
+        "s": "na",
+        "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
+      },
+      "gemma4_assistant_spec": {
         "s": "na",
         "why": "Qwen3.5-family VLM has no audio encoder (mlx_vlm qwen3_5 has no audio code); audio rows are media_input (missing)"
       }
@@ -3972,6 +4132,18 @@
         "why": "driver-only feature: the Thinker bypasses the round driver (bypass census A8); no n-gram speculation",
         "owner": "phaseE",
         "impact": "low"
+      },
+      "draftlm_spec": {
+        "s": "missing",
+        "why": "driver-only feature: the Thinker bypasses the round driver (bypass census A8); no draft-LM speculation",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "gemma4_assistant_spec": {
+        "s": "missing",
+        "why": "driver-only feature: the Thinker bypasses the round driver (bypass census A8); no Gemma-4 assistant speculation",
+        "owner": "phaseE",
+        "impact": "low"
       }
     },
     "ocr": {
@@ -4254,6 +4426,18 @@
       "ngram_spec": {
         "s": "missing",
         "why": "driver-only feature: OCREngine calls mlx-vlm generate directly, not the round driver (bypass census B1); no n-gram speculation",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "draftlm_spec": {
+        "s": "missing",
+        "why": "driver-only feature: OCREngine calls mlx-vlm generate directly, not the round driver (bypass census B1); no draft-LM speculation",
+        "owner": "phaseE",
+        "impact": "low"
+      },
+      "gemma4_assistant_spec": {
+        "s": "missing",
+        "why": "driver-only feature: OCREngine calls mlx-vlm generate directly, not the round driver (bypass census B1); no Gemma-4 assistant speculation",
         "owner": "phaseE",
         "impact": "low"
       }
