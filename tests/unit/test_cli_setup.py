@@ -59,7 +59,14 @@ def _json(*args: str, home: Path, check: bool = True) -> tuple[int, dict]:
         text=True,
         env=env,
     )
-    return r.returncode, json.loads(r.stdout)
+    try:
+        return r.returncode, json.loads(r.stdout)
+    except json.JSONDecodeError:
+        # 2026-11-10 ci-local (paravirtual, loaded host): empty stdout, no clue why. Say why.
+        raise AssertionError(
+            f"yunshu --json {' '.join(args)} printed no JSON (rc {r.returncode})\n"
+            f"stdout: {r.stdout[-2000:]!r}\nstderr: {r.stderr[-4000:]}"
+        ) from None
 
 
 def test_version():
