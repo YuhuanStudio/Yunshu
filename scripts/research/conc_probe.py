@@ -41,6 +41,8 @@ def filler(chars: int, salt: int) -> str:
         for p in CORPUS.rglob("*")
         if p.is_file() and p.suffix in (".txt", ".md", ".py")
     )
+    if not texts:
+        raise FileNotFoundError(f"no filler corpus under {CORPUS}")
     out, i = [], salt
     while sum(len(x) for x in out) < chars and texts:
         out.append(texts[i % len(texts)].read_text(errors="ignore")[:4000])

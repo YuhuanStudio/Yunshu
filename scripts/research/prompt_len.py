@@ -88,6 +88,8 @@ def build_text(tok, source, target, suffix="", media_tokens=0, system=None, **kw
         raise ValueError(f"target {target} is below fixed overhead {fixed} + suffix")
     budget = target - fixed - len(_ids(tok, suffix))
     ids = _ids(tok, source)
+    if not _ids(tok, "\n" + source):
+        raise ValueError("empty source text")  # the repeat loop below would never end
     while len(ids) < budget + 64:
         ids = ids + _ids(tok, "\n" + source)
     text = tok.decode(ids[:budget]) + suffix

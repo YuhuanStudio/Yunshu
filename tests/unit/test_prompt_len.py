@@ -169,3 +169,25 @@ def test_migrated_harnesses_use_the_check():
             )
         else:
             assert "check_served_length" in text, name
+
+
+class _WordTok:
+    def encode(self, text, add_special_tokens=False):
+        return text.split()
+
+    def decode(self, ids):
+        return " ".join(ids)
+
+    def apply_chat_template(self, msgs, tokenize=True, **kw):
+        return ["<tpl>"] + [w for m in msgs for w in m["content"].split()]
+
+
+def test_empty_source_and_missing_corpus_raise_instead_of_spinning(
+    monkeypatch, tmp_path
+):
+    """2026-11-11: in the ci-local sandbox the P5Plus corpus read as empty and build_text looped forever."""
+    with pytest.raises(ValueError, match="empty source"):
+        pl.build_text(_WordTok(), "", 64)
+    monkeypatch.setattr(conc_probe, "CORPUS", tmp_path / "missing")
+    with pytest.raises(FileNotFoundError):
+        conc_probe.filler(100, 0)

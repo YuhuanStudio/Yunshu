@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -50,7 +51,9 @@ def home(tmp_path, monkeypatch):
 
 
 def _json(*args: str, home: Path, check: bool = True) -> tuple[int, dict]:
-    env = {**os.environ, "HOME": str(home), "PYTHONPATH": os.pathsep.join(sys.path)}
+    # cv2's import puts site-packages/cv2 on sys.path; passing that on shadows stdlib typing
+    path = [p for p in sys.path if not re.search(r"site-packages[/\\].", p)]
+    env = {**os.environ, "HOME": str(home), "PYTHONPATH": os.pathsep.join(path)}
     env.pop("YUNSHU_MODELS_DIR", None)
     env.pop("YUNSHU_MODEL", None)
     r = subprocess.run(

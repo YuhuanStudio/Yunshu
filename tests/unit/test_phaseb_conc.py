@@ -29,6 +29,12 @@ class _WordTok:
 def no_disk_tok(monkeypatch):
     # run_cell loads its tokenizer for the length fit; the CPU suite must never read a model directory
     monkeypatch.setattr(prompt_len, "load_tokenizer", lambda path=None: _WordTok())
+    # the corpus lives on P5Plus, which the ci-local sandbox cannot read
+    from scripts.research import conc_probe
+
+    monkeypatch.setattr(
+        conc_probe, "filler", lambda chars, salt: prompt_len.filler_source(chars)
+    )
 
 
 def test_plan_and_cli_are_cpu_only():
