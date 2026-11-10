@@ -1311,7 +1311,7 @@
           "s": "engaged",
           "ev": [
             [
-              "python/yunshu_engine/vlm_engine.py",
+              "python/yunshu_engine/serving_kernels.py",
               "sdpa_chunk.install()"
             ]
           ]
@@ -1320,7 +1320,7 @@
           "s": "engaged",
           "ev": [
             [
-              "python/yunshu_engine/vlm_engine.py",
+              "python/yunshu_engine/serving_kernels.py",
               "sdpa_chunk.install()"
             ]
           ]
@@ -1587,16 +1587,16 @@
     },
     {
       "id": "tree-opt-in-mtp",
-      "a": "YUNSHU_SPEC_TREE=auto",
+      "a": "MTP rows on the round driver",
       "b": "MTP tree",
       "kind": "unimplemented",
       "ev": [
         [
-          "python/yunshu_engine/vlm_engine.py",
-          "mtp_tree import install"
+          "python/yunshu_engine/mtp_tree.py",
+          "def mtp_tree_rounds_batch"
         ]
       ],
-      "why": "'auto' certifies only the DFlash2 Q4 fast tree; MTP has tree code that needs explicit 'tree'."
+      "why": "The driver drafts MTP rows as a chain; the MTP tree rounds only ran through the deleted mlx-vlm single-request loop hook (deadcode-1110). Kept unwired with the MTP copy-and-graft port (MAINLINES 11-10); YUNSHU_SPEC_TREE no longer selects it."
     },
     {
       "id": "penalties-tree-verify",
@@ -1613,8 +1613,8 @@
           "def tree_penalty"
         ],
         [
-          "python/yunshu_engine/mtp_lane.py",
-          "_request_needs_chain"
+          "python/yunshu_engine/round_driver/driver.py",
+          "rows with logits processors run one"
         ]
       ],
       "why": "The DFlash fast tree applies a frequency / presence penalty per window row (keyed_sampling.tree_target_rows, the serial window_row arithmetic) when it is the request's only processor, so sampled requests with the model card's presence penalty keep the tree. logit_bias, the windowed repetition penalty, min_tokens / suppress masks, any guide or logprobs with a processor, and the MTP tree still verify on the chain under exact_verify."
@@ -2320,7 +2320,7 @@
         "s": "engaged",
         "ev": [
           [
-            "python/yunshu_engine/vlm_engine.py",
+            "python/yunshu_engine/serving_kernels.py",
             "sdpa_chunk.install()"
           ]
         ],
@@ -2859,7 +2859,7 @@
         "s": "engaged",
         "ev": [
           [
-            "python/yunshu_engine/vlm_engine.py",
+            "python/yunshu_engine/serving_kernels.py",
             "sdpa_chunk.install()"
           ]
         ],
@@ -3415,7 +3415,7 @@
         "s": "engaged",
         "ev": [
           [
-            "python/yunshu_engine/vlm_engine.py",
+            "python/yunshu_engine/serving_kernels.py",
             "sdpa_chunk.install()"
           ]
         ],
