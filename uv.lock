@@ -5255,7 +5255,7 @@ wheels = [
 
 [[package]]
 name = "yunshu"
-version = "0.1.8.dev0"
+version = "0.1.8.dev1"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

@@ -66,6 +66,8 @@ class IdleMemory:
         self._beat = beat or _beat
         self._release = release or _release_wired
         self._holding = False
+        # a beat queued before the trim must not re-wire after the release
+        self._beats_open = False
         self._beat_timer: threading.Timer | None = None
         self.collections = 0
         self.trims = 0
@@ -73,12 +75,15 @@ class IdleMemory:
 
     def drained(self) -> None:
         """The runner has no work left: start the idle schedule."""
+        with self._lock:
+            self._beats_open = True
         self._arm(0)
         self._arm_beat(self._beats_per_idle)
 
     def activity(self) -> None:
         """A request arrived: cancel what is pending (the pool stays)."""
         with self._lock:
+            self._beats_open = False
             for timer in (self._timer, self._beat_timer):
                 if timer is not None:
                     timer.cancel()
@@ -108,13 +113,16 @@ class IdleMemory:
     def _run_beat(self, left: int) -> None:
         if self._busy():
             return
-        try:
-            self._holding = True
-            self._beat()
-            self.beats += 1
-        except Exception:  # noqa: BLE001
-            logger.debug("idle heartbeat failed", exc_info=True)
-            return
+        with self._lock:
+            if not self._beats_open:
+                return
+            try:
+                self._holding = True
+                self._beat()
+                self.beats += 1
+            except Exception:  # noqa: BLE001
+                logger.debug("idle heartbeat failed", exc_info=True)
+                return
         self._arm_beat(left - 1)
 
     def _arm(self, stage: int) -> None:
@@ -147,6 +155,9 @@ class IdleMemory:
             setattr(self, counter, getattr(self, counter) + 1)
         except Exception:  # noqa: BLE001
             logger.debug("idle memory stage %d failed", stage, exc_info=True)
+        if stage == len(self._stages) - 1:
+            with self._lock:
+                self._beats_open = False
         if stage == len(self._stages) - 1 and self._holding:
             with self._lock:
                 if self._beat_timer is not None:

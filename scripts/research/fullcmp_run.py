@@ -1751,8 +1751,8 @@ def snapshot_harness(work: Path, repo: Path = REPO_ROOT) -> Path:
             for name in dirnames + filenames:
                 p = Path(dirpath) / name
                 os.chmod(p, p.stat().st_mode & ~0o222)
-        os.chmod(tmp, tmp.stat().st_mode & ~0o222)
-        os.rename(tmp, dest)
+        os.rename(tmp, dest)  # before the chmod: some macOS hosts refuse to rename a read-only dir
+        os.chmod(dest, dest.stat().st_mode & ~0o222)
     if marker.read_text().strip() != head:
         raise HarnessDirty(f"snapshot {dest} records {marker.read_text().strip()}, HEAD is {head}")
     verify_snapshot(dest, repo)

@@ -212,6 +212,17 @@ def test_heartbeat_keeps_the_gpu_warm_until_the_trim():
     assert 1 <= len(beats) - 1 == idle.beats <= 4
 
 
+def test_beat_queued_before_the_trim_does_not_rewire_after_the_release():
+    """2026-11-11 hosted CI: a beat that fired just before the trim ran after the release."""
+    beats, busy = [], {"busy": False}
+    idle = _beating(busy, beats, heartbeat_s=10.0)
+    idle.drained()
+    assert _wait(lambda: idle.trims == 1)
+    idle._run_beat(3)  # the late beat lands on the executor after the trim
+    assert "release" not in beats or beats[-1] == "release"
+    assert all(b == "release" for b in beats)
+
+
 def test_request_stops_the_heartbeat():
     beats, busy = [], {"busy": False}
     idle = _beating(busy, beats, heartbeat_s=0.03, trim_s=1.0)
