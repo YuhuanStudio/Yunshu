@@ -7,50 +7,141 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-Changes on main after 0.1.6; not part of a published package yet.
+Changes on main after 0.1.7; not part of a published package yet.
+
+## [0.1.7] - 2026-11-10
+
+0.1.7 puts every MLX VLM model on one serving path, the round driver, so follow-up turns, concurrent
+requests, media input and speculative decoding behave the same across families. Follow-up turns reuse the
+previous reply's cache, and speculation stays on for more request kinds. It ships in the `yunshu` package.
+Outputs of speculation on and off stay token-identical, except that a follow-up turn may now differ
+numerically from a cold re-prefill (see Upgrade notes).
 
 ### Highlights
 
-- A follow-up turn resumes from the previous reply's cache instead of prefilling the reply
-  again, and its drafter keeps the conversation's context: on the 27B at 8K, follow-up first
-  token 0.386 → 0.137 s and follow-up decode 130.6 → 194.7 tok/s.
-- Requests that send `ignore_eos` (benchmarks, throughput runs) or carry a checkpoint's
-  `suppress_tokens` keep the DFlash fast tree instead of the slower 8-token chain.
-- Copy rounds (a reply repeating its context: edits, quoted code) verify up to 64 rows in one
-  round, bit-equal to plain decode.
+- Follow-up turns resume from the previous reply's cache instead of prefilling the reply again. On
+  Qwen3.8-27B (M5 Max, 8K code, follow-up first token): 0.386 -> 0.145 s, from the `nextturn-cost-1102c`
+  run (3 reps, against the pre-change main 3aa49cdaf). Warm TTFT and decode are unchanged within noise.
+- Every MLX VLM model runs on the round driver. Qwen3.8-27B keeps decode within 1%, with follow-up TTFT
+  10-16% lower and an 8K cold TTFT +0.8%; Flash-Next follow-up TTFT is 59% lower, with an open cold 8K decode
+  regression of -4%. [Numbers below.](#performance)
+- Speculative decoding stays on for more requests: frequency and presence penalties, `logit_bias`, static
+  token bans (`ignore_eos`, a checkpoint's `suppress_tokens`), repetition penalty, `min_tokens`, top-n-sigma,
+  `logprobs`, and response-format guides. Each row decodes exactly as it would without speculation.
+- Concurrent image, audio and video requests no longer fail with HTTP 500, and OCR runs on the same engine
+  as the VLM path.
+- Chat templates that declare a reasoning-effort variable receive `reasoning_effort`, and parallel tool results are paired with their calls in
+  the order the assistant made them.
 
 ### Upgrade notes / breaking changes
 
+- `YUNSHU_NEXT_TURN_PREFILL` defaults to `decode` for VLM chats. A finished reply's decode cache is reused by
+  its follow-up, so the follow-up's tokens may differ numerically from a re-prefill of the same conversation.
+  Set `YUNSHU_NEXT_TURN_PREFILL=exact` for the bit-identical re-prefill (slower follow-up TTFT).
+- New setting `YUNSHU_VLM_APC_PERSIST` (default `store`): a prefix checkpoint is written to the SSD tier as it
+  is stored, so a restarted or crashed server keeps its cache. This adds SSD writes. `evict` writes only at
+  RAM eviction and clean shutdown.
+- `reasoning_effort` is now passed to the chat template, which maps it onto the template's own levels
+  (`high` and `max` map to `xhigh`). The built-in thinking-token caps for `low`, `medium`, `high` and `xhigh`
+  are removed; a cap now comes only from an explicit `thinking_budget`. `none` and `minimal` still disable
+  thinking.
+- A VLM checkpoint without an audio encoder rejects audio input with an error. Before, the audio was dropped
+  silently.
+- `YUNSHU_KV_PRECISION=int8` applies to every decode row. Until the int8 follow-up root cause is fixed, an int8
+  reply is not reused by its follow-up; the follow-up re-prefills the reply from the bf16 prefix cache, which
+  costs TTFT (see Performance).
+- Removed settings: `YUNSHU_ENGINE_LOOP`, `YUNSHU_UNCACHED_SCHEDULING`, `YUNSHU_OVERLAP`, `YUNSHU_MAX_CONCURRENT`
+  and `YUNSHU_COMPLETION_BATCH_SIZE`. They are no longer read; remove them from service files and scripts.
+- Removed execution paths: the stock BatchGenerator runner, the single-request speculative lane, lane promotion,
+  the EngineCore continuous-batching loop and its schedulers, and the stock Flash-Next path. Every VLM request is
+  now a round-driver row. Text-only `mlx-lm` models keep their single-request fast path.
+
 ### Performance
 
-| Machine | Model / mode | Metric / workload | Before → after | Recorded source |
+Machine M5 Max 128 GB unless noted. Each row is its own experiment; do not add rows. Interleaved reps as
+stated; the commit or run ID is the source.
+
+| Machine | Model / mode | Metric / workload | Before -> after | Recorded source |
 |---|---|---|---|---|
-| M5 Max 128 GB | Qwen3.8-27B oQ4e, DFlash2 | follow-up TTFT, 8K code | 0.386 → 0.137 s | yv nextturn-cost-1102b (5 reps) |
-| M5 Max 128 GB | Qwen3.8-27B oQ4e, DFlash2 | follow-up decode, 8K code | 130.6 → 194.7 tok/s | yv nextturn-cost-1102b (5 reps) |
-| M5 Max 128 GB | Qwen3.8-27B oQ4e, DFlash2 | decode, 8K code / prose | 96.1 → 96.2 / 70.2 → 70.2 tok/s | yv nextturn-cost-1102b |
+| M5 Max 128 GB | Qwen3.8-27B oQ4e-mtp, DFlash2 | follow-up TTFT, 8K code (3 reps) | 0.386 -> 0.145 s | verify run `nextturn-cost-1102c` (base 3aa49cdaf, cand 1e1c982e4) |
+| M5 Max 128 GB | Qwen3.8-27B oQ4e-mtp, DFlash2 | follow-up TTFT, 8K prose (3 reps) | 0.388 -> 0.144 s | `nextturn-cost-1102c` |
+| M5 Max 128 GB | Qwen3.8-27B oQ4e-mtp, DFlash2 | warm TTFT, 8K code / prose | 0.021 -> 0.022 / 0.024 -> 0.021 s (noise +-9%) | `nextturn-cost-1102c` |
+| M5 Max 128 GB | Qwen3.8-27B oQ4e-mtp, DFlash2 | decode, 8K code / prose (no change beyond noise) | 95.9 -> 95.3 / 70.3 -> 69.4 tok/s (noise +-14% / +-23%) | `nextturn-cost-1102c` |
+| M5 Max 128 GB | Qwen3.8-27B | decode / follow-up TTFT / 8K cold TTFT | within 1% / -10..-16% / +0.8% | commit `75052d1ce` (gates `pb2g-27b-merge4`) |
+| M5 Max 128 GB | Qwen3.8-Flash-Next | follow-up TTFT / follow-up decode / warm TTFT | -59% / +12..+41% / -40..-57% | commit `75052d1ce` (gates `pb2g-fn-merge1`) |
+| M5 Max 128 GB | Qwen3.8-Flash-Next | cold 8K decode / 1K cold TTFT (regressions, open) | -4% / +2.7% | commit `75052d1ce`, `lead/fn_cold_ttft.md` |
+| M5 Max 128 GB | Qwen3.8-27B + DFlash2 | decode, code 1K / 8K / 32K (prose flat) | +4.9% / +6.4% / +3.4% | commit `47ef0e668` (run `draftmask-1102`, identity 18/18) |
+| M5 Max 128 GB | Qwen3-Omni-30B (repetitive text, opt-in n-gram) | decode, 1.5K repetitive | 83 -> 125 tok/s (identical text); 32K -1.8% | commit `4f7e6354a` |
+| M5 Max 128 GB | Gemma-4 E2B 4bit, lone row | decode, 2128-token prompt, 512 tokens (2 interleaved reps) | 162 -> 200 tok/s, identical text | commit `3e8597c8d` (gendecode-runs g2kb-*), merged in `c1f8a5977` |
+| M5 Max 128 GB | GLM-OCR bf16 | 16 concurrent requests / one 257-token document | 2.7 -> 5.1 req/s (227 -> 430 tok/s), identical text / 1.02-1.03 -> 1.03-1.04 s | `lead/ocr_bench.py` runs old-1..3 vs new-3,4 and gendecode-runs ocr-newr-*, merged in `c1f8a5977` |
+| M5 Max 128 GB | Qwen3.8-27B, int8 KV | turn-2 decode, 1K / 8K code (correctness stopgap) | 21.6 -> 74.5 / 20.5 -> 101.4 tok/s; follow-up TTFT 0.07-0.19 -> 0.34-0.39 s | commit `26b466961` (run `int8spec-stop-8c5daec0`) |
+| M5 Max 128 GB | Qwen3.8-Flash-Next, concurrent rows (regression) | decode step, 8K / 32K, 2-4 rows | 28.5 -> 35.9 ms (2 rows, +26%); 65.4 -> 79.1 ms (32K, 4 rows, +21%) | `docs/reports/PERF_TREND.md`, 2026-10-30 entry (concurrent sparse QSA) |
+
+Regressions and limits: the 8K cold TTFT of the 27B (+0.8%) and Flash-Next cold 8K decode (-4%) and 1K cold TTFT
+(+2.7%) are open. Concurrent Flash-Next decode steps cost 21-27% more than the dense batch that a concurrent
+row used before, because concurrent rows now use the same sparse attention as a solo request (identical output).
+int8 KV follow-up turns re-prefill, so their TTFT is higher than with bf16.
+Generic-layer families (Gemma-4, GLM-OCR and other non-Qwen3.5 VLMs) still batch concurrent decode rows with
+stock kernels, so a request's output can differ when it runs beside others; solo output is unaffected. The fix
+(one call per row, identical to solo) is planned for 0.1.8.
 
 ### Added
 
+- `prompt_logprobs` on every round-driver layer, including media and Flash-Next rows. A request asking for it
+  prefills without the prefix cache, so every prompt position is scored.
+- Opt-in grammar jump-forward (`YUNSHU_JUMP_FORWARD=1`): grammar-forced token runs decode in one forward on every
+  driver layer. Generic models may round differently.
+- Opt-in n-gram / suffix speculation on the generic layer for greedy requests (`spec_decode` per request, or
+  `YUNSHU_NGRAM_DEFAULT`). Each row falls back to plain decode when a window is slower.
+- Crash-durable SSD prefix cache: `YUNSHU_VLM_APC_PERSIST` (see Upgrade notes).
+- Media input (images, audio, video) runs on the round driver, including Flash-Next prompt embeddings and
+  mRoPE positions.
+
 ### Changed
 
-- `YUNSHU_NEXT_TURN_PREFILL` defaults to `decode`: a finished reply's cache (prompt + reply) is
-  stored at its own length with the DFlash drafter's context window, and the next turn resumes
-  from it. Its tokens may differ numerically from a re-prefill (the same class of difference as
-  between versions); `exact` keeps the bit-identical re-prefill.
-- The DFlash fast tree keeps requests whose only logits processors are static bans
-  (`ignore_eos`, a checkpoint's `suppress_tokens`) instead of falling back to the 8-token chain.
-- DFlash fast-tree copy rounds verify up to 64 rows (bit-equal to plain decode at 32K); the chain
-  verify stays at 32. Their verify kernels compile at load.
+- Every mlx-vlm model is served by the round driver. OCR generates through the VLM engine and shares a loaded VLM
+  of the same checkpoint.
+- Speculative decoding (MTP or DFlash) stays on for requests with repetition penalty, `min_tokens`, top-n-sigma,
+  frequency or presence penalty, `logit_bias`, static bans, `logprobs`, and response-format guides. XTC does not
+  draft. Spec on and spec off share one arithmetic path.
+- Qwen3.8-Flash-Next uses its DFlash2 drafter by default when one is on disk.
+- The DFlash fast tree verifies up to 64 rows in copy rounds (chain verify stays at 32). `YUNSHU_NEXT_TURN_PREFILL`
+  now defaults to `decode` (see Upgrade notes).
+- Chinese requests search the base vocabulary plus the Han and CJK ids for MTP drafting instead of the full head,
+  so a mostly-Chinese prompt reads about half the head per draft. The output is verified and unchanged; no speed
+  number is recorded yet.
+- Qwen3.5-MoE uses the packed Qwen3.5 layer with MTP and DFlash drafting.
+- Template input orders parallel tool results in the order of the assistant's `tool_calls`.
 
 ### Fixed
 
-- A reply whose client closed the stream after its last token (max_tokens counted on the
-  client's side) still stores its cache for the next turn.
-- The Linux CI browser tests serve the built console instead of the dev server.
+- Concurrent image, audio and video requests failed with HTTP 500 when two media rows were live. Rows now compare
+  by identity.
+- MTP drafting failed with HTTP 500 when a prompt needed the full-vocabulary draft fallback (mostly non-Latin text
+  or image placeholder tokens).
+- With MTP, a follow-up turn re-prefilled a reply that spec-off restored, so spec on and spec off gave different
+  turn-2 output. Turn-2 cached tokens with MTP rose from 1024 / 8192 to 1289 / 8458 in the probe, and outputs now match.
+- With `YUNSHU_KV_PRECISION=int8`, a follow-up turn decoded degenerate text. Stopgap: see Upgrade notes.
+- With concurrent requests, a held reply cache could be dropped when a newer reply finished first, so concurrent
+  output differed from solo output. The newer reply now stores the held one.
+- A reply whose client closed the stream right after its last token still stores its cache for the next turn.
+- Qwen3.5 results could change depending on whether a Flash-Next DFlash setup ran earlier in the process
+  (GPU capability probes now ask the GPU, not the caller's default device).
 
 ### Security
 
-[Full changelog: v0.1.6…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.6...main)
+- None in this release.
+
+### Removed
+
+- The stock BatchGenerator runner, the single-request speculative lane, lane promotion, the EngineCore loop
+  (`YUNSHU_ENGINE_LOOP`) with its schedulers, the stock Flash-Next path, and the mlx-vlm stock speculative-loop
+  patches. Their behavior is served by the round driver.
+- Settings `YUNSHU_ENGINE_LOOP`, `YUNSHU_UNCACHED_SCHEDULING`, `YUNSHU_OVERLAP`, `YUNSHU_MAX_CONCURRENT` and
+  `YUNSHU_COMPLETION_BATCH_SIZE`.
+- The built-in thinking-token caps per `reasoning_effort` level.
+
+[Full changelog: v0.1.6...main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.6...v0.1.7)
 
 ## [0.1.6] - 2026-11-01
 

@@ -1580,3 +1580,17 @@ its own QSA blocks and the batch runs one padded sparse attention launch.
 Output checks: concurrent == solo (token + logprob) in all 12 cells (burst2, burst4, stagger; greedy and
 seeded; MTP on and off; prompts 30.6K-36.7K). Solo requests unchanged (yv bqsa2-3e: identity 0
 mismatches, APC pass, decode -0.5% and cold +0.7%, within noise). The cost over the dense batch is open work.
+
+## 2026-11-02 — Follow-up turns resume from the reply's decode cache (YUNSHU_NEXT_TURN_PREFILL=decode)
+
+yv `nextturn-cost-1102c` (PASS): base 3aa49cdaf vs cand 1e1c982e4, Qwen3.8-27B oQ4e-mtp + DFlash2, M5 Max 128 GB,
+8K code and prose, 3 interleaved reps.
+
+| Cell | Base | Cand |
+|---|---|---|
+| follow-up TTFT, 8K code | 0.386 s | 0.145 s |
+| follow-up TTFT, 8K prose | 0.388 s | 0.144 s |
+| warm TTFT, 8K code / prose | 0.021 / 0.024 s | 0.022 / 0.021 s (noise ±9%) |
+| decode, 8K code / prose | 95.9 / 70.3 tok/s | 95.3 / 69.4 tok/s (noise ±14% / ±23%) |
+
+An earlier run (`nextturn-cost-1102b`) failed its speed gate (warm TTFT); its numbers are not used.
