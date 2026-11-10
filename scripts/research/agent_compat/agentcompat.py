@@ -60,6 +60,10 @@ SERVER_PORT, CONTROL_PORT = 18994, 18995
 # range of M5 gpuq jobs, which run at the same time as M3 jobs (2026-10-07: a forward on 18995
 # made an M5 yv memory job fail to listen).
 LOCAL_SERVER_PORT, LOCAL_CONTROL_PORT, MCP_PORT = 18997, 18998, 18999
+# The resident console (launchd, console-resident/run.sh, since 2026-10-24) listens on 18999 too:
+# the MCP fake then takes the highest free M5 port (servers there pick free ports, so a short-lived
+# fake only narrows their range; release 0.1.7: "local port 18999 is busy" failed agentcompat m3).
+MCP_FALLBACK_PORTS = tuple(range(18996, 18989, -1))
 E2E_SCENARIOS = "cc_edit,cx_edit,oc_edit,oc_bash,cc_mcp,cx_mcp,cc_image,cc_context"
 
 
@@ -196,6 +200,14 @@ def port_free(p: int) -> bool:
             return False
 
 
+def mcp_port() -> int | None:
+    """The MCP fake's local port: 18999, else the highest free 18996-18990 port; None when none is free."""
+    for p in (MCP_PORT, *MCP_FALLBACK_PORTS):
+        if port_free(p):
+            return p
+    return None
+
+
 def run_watched(cmd, tunnel, timeout, **kw):
     """Run a client command; kill it and fail if the ssh tunnel dies (a dropped tunnel must not hang the run)."""
     p = subprocess.Popen(
@@ -248,9 +260,13 @@ def with_m3_server(out: Path, tag: str, model: str, minutes: float, work) -> dic
     sha = run(
         ["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"], capture_output=True
     ).stdout.strip()
-    for p in (LOCAL_SERVER_PORT, LOCAL_CONTROL_PORT, MCP_PORT):
+    for p in (LOCAL_SERVER_PORT, LOCAL_CONTROL_PORT):
         if not port_free(p):
             return dict(ok=False, why=f"local port {p} is busy")
+    if mcp_port() is None:
+        return dict(
+            ok=False, why="no free local port for the MCP fake (18999, 18990-18996)"
+        )
     identity = uuid.uuid4().hex
     receipt = out / f"m3_serve_{tag}.jsonl"
     receipt.unlink(missing_ok=True)
@@ -415,7 +431,7 @@ def stage_m3(out: Path, model: str, minutes: float, scenarios: str) -> dict:
         env = {
             **os.environ,
             "AGENTIC_CLIS": str(CLIS_LATEST),
-            "AGENTCOMPAT_MCP_PORT": str(MCP_PORT),
+            "AGENTCOMPAT_MCP_PORT": str(mcp_port() or MCP_PORT),
             "CENSUS_OUT": str(mdir / "census-scratch"),
         }
         rc, text = run_watched(

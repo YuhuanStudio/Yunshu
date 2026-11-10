@@ -72,6 +72,7 @@ Codex 0.166.0, opencode 1.19.5.
 | `anthropic-beta: thinking-display-updates-2026-08-18` | Claude Code 2.1.291, every turn | accepted; betas are never rejected |
 | `thinking.display` (`thinking: {type: "adaptive", display: "updates"}`) | Claude Code 2.1.291 | `omitted` / `updates` hide local reasoning (streaming and non-streaming); no separate progress-update channel is generated. `summarized` / absent preserve local visible reasoning. Hidden thinking round-trips through a local opaque signature envelope (base64, not encryption); streams emit the matching `signature_delta` before block stop. See API_SURFACE.md |
 | header `x-opencode-session-id` | opencode 1.18.34 | ignored (`x-session-id` already feeds the session affinity) |
+| `GET /health` | not an agent: one `python-httpx/0.28.1` request reached the census mock in the middle of the Claude Code `cc_task` session (2026-11-10); every CLI request in that session came from `claude-cli/2.1.316` | served (`GET /health`, the liveness route) |
 | `anthropic-beta: advanced-tool-use-2025-11-20` | Claude Code 2.1.316 | accepted; betas are never rejected |
 | `/v1/messages` `tools[].defer_loading` | Claude Code 2.1.316 | accepted and ignored on Messages: the tool stays in the prompt (Responses `tool_search` honors it, see API_SURFACE.md) |
 | `/v1/responses` `input[].status` | Codex 0.166.0 (output items sent back with their `status`) | accepted and ignored on input items |

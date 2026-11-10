@@ -19,15 +19,19 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 
 
-def plan(sha, tree, out, prefix):
+def plan(sha, tree, out, prefix, priority=2):
+    """The blocking checks run at ``priority`` (default 2: a release is cut every few days and its
+    gate must not wait behind research jobs - 2026-11-10 the -1 gate sat 2 h behind p0/p1 work);
+    agentbench stays informational at -3."""
     dev = tree / "scripts/dev"
+    pr = str(priority)
     return {
-        "gate": [str(dev / "yv"), "gate", "--priority", "-1"],
+        "gate": [str(dev / "yv"), "gate", "--priority", pr],
         "m3sweep": [
             str(dev / "m3sweep"),
             sha,
             "--priority",
-            "-1",
+            pr,
             "--label-prefix",
             prefix + "-m3",
         ],
@@ -36,7 +40,7 @@ def plan(sha, tree, out, prefix):
             "--out",
             str(out / "agentcompat"),
             "--priority",
-            "-1",
+            pr,
             "--label-prefix",
             prefix + "-compat",
         ],
@@ -79,6 +83,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("ref", nargs="?", default="main")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument(
+        "--priority", type=int, default=2, help="gpuq priority of the blocking checks"
+    )
     ap.add_argument("--label-prefix", default="releng015-release")
     ap.add_argument("--out", type=Path)
     a = ap.parse_args(argv)
@@ -87,7 +94,9 @@ def main(argv=None):
     ).strip()
     out = a.out or Path("/Volumes/P5Plus/yunshu-build/release-check") / sha
     tree = out / "src"
-    commands = plan(sha, tree, out, f"{a.label_prefix}-{time.time_ns()}")
+    commands = plan(
+        sha, tree, out, f"{a.label_prefix}-{time.time_ns()}", priority=a.priority
+    )
     rows = {
         n: {"status": "PLANNED" if a.dry_run else "NOT_RUN"}
         for n in ("ci-local", *commands)

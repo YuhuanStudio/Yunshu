@@ -23,6 +23,17 @@ def test_plan_pins_refs_and_keeps_benchmark_nonblocking(tmp_path):
     )
 
 
+def test_blocking_checks_run_ahead_of_research_jobs(tmp_path):
+    """2026-11-10: the release gate at -1 waited 2 h behind p0/p1 research jobs; releases are cut
+    every few days now, so the blocking checks default to 2 (agentbench stays -3)."""
+    commands = rc.plan("a" * 40, tmp_path, tmp_path, "r")
+    for name in ("gate", "m3sweep", "agentcompat"):
+        argv = commands[name]
+        assert argv[argv.index("--priority") + 1] == "2", name
+    argv = rc.plan("a" * 40, tmp_path, tmp_path, "r", priority=0)["gate"]
+    assert argv[argv.index("--priority") + 1] == "0"
+
+
 def test_verdict_fails_closed(tmp_path):
     p = tmp_path / "verdict.json"
     assert rc.judge(0, p) == "FAIL"
