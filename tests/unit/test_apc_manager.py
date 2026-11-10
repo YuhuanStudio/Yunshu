@@ -975,6 +975,30 @@ def test_rehearsal_checkpoint_does_not_supersede_the_request_just_served():
         m.keep_prior_for = None
 
 
+def test_a_retry_reply_store_keeps_the_checkpoint_that_served_it():
+    """yv gate agent.restart_idle (0.1.7): a retry of the same prompt restores its final
+    checkpoint from RAM, then stores its reply cache (prompt + reply, the next-turn decode
+    store). That store must not thin the checkpoint the retry itself was served from, or the
+    next retry (or the restart's SSD tier) only finds an older anchor."""
+    a = list(range(1000, 1100))
+    reply = [1, 2, 3, 4]
+    m = _mgr()
+    m.begin_request()
+    m.store_exact_cache(a[:96], _cache(96))  # the first request's final checkpoint
+    m.begin_request()  # the retry
+    cache, n = m.lookup_exact_cache(a[:100])
+    assert n == 96 and cache is not None
+    m.store_exact_cache(a[:100] + reply[:3], _cache(103), _any_length=True)
+    assert sorted(len(e.token_ids) for e in m._exact_cache.values()) == [96, 103]
+    m.begin_request()  # a second retry still finds it
+    cache, n = m.lookup_exact_cache(a[:100])
+    assert n == 96 and cache is not None
+    # a linear follow-up (a later request that grew past it) still supersedes it
+    m.begin_request()
+    m.store_exact_cache(a + reply + [7] * 28, _cache(132), _any_length=True)
+    assert 96 not in {len(e.token_ids) for e in m._exact_cache.values()}
+
+
 def test_rehearsal_guard_covers_the_late_ssd_supersede_hook():
     """The SSD write of the rehearsal's checkpoint finishes after the rehearsal task ended; its
     hook must still leave the previous request's checkpoint (and no tombstone) alone."""

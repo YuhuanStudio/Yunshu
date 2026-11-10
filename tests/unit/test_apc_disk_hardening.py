@@ -175,6 +175,43 @@ def test_check_loaded_cache_cases():
     assert not check_loaded_cache(toks, flat)
 
 
+def test_mtp_drafting_checkpoint_passes_with_the_head_layers(tmp_path):
+    """The round driver's MTP drafting checkpoints carry the head's KV after the target's
+    layers: read back from disk they must not be dropped as foreign (gate
+    agent.restart_idle 0.1.7: 0 of 41375 cached after a restart)."""
+    import json
+
+    from mlx_vlm.models.cache import ArraysCache, KVCache
+
+    from yunshu_engine.mlxvlm_mtp import mtp_head_layers
+
+    toks = tuple(range(32))
+    template = [ArraysCache(2), KVCache()]
+    head = _cache()[1]
+    with_head = _cache() + [head]
+    assert check_loaded_cache(toks, _cache(), template, 2, 4, head_layers=1)
+    assert check_loaded_cache(toks, with_head, template, 2, 4, head_layers=1)
+    # without a head (or with a wrong count) the extra layer is still foreign
+    assert not check_loaded_cache(toks, with_head, template, 2, 4)
+    assert not check_loaded_cache(
+        toks, with_head + [head], template, 2, 4, head_layers=1
+    )
+    # a head layer is plain KV with the target's geometry and offset
+    assert not check_loaded_cache(toks, _cache() + [_cache()[0]], template, 2, 4, 1)
+    wide = _cache(heads=3)[1]
+    assert not check_loaded_cache(toks, _cache() + [wide], template, 2, 4, 1)
+
+    ckpt = tmp_path / "m"
+    ckpt.mkdir()
+    (ckpt / "config.json").write_text(
+        json.dumps({"text_config": {"mtp_num_hidden_layers": 1}})
+    )
+    assert mtp_head_layers(str(ckpt)) == 1
+    (ckpt / "config.json").write_text("{}")
+    assert mtp_head_layers(str(ckpt)) == 0
+    assert mtp_head_layers(str(tmp_path / "missing")) == 0
+
+
 def test_namespace_follows_checkpoint_identity(tmp_path):
     from yunshu_engine.vlm_engine import VLMEngine
 

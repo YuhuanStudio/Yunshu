@@ -146,6 +146,11 @@ stock kernels, so a request's output can differ when it runs beside others; solo
 - A reply whose client closed the stream right after its last token still stores its cache for the next turn.
 - Qwen3.5 results could change depending on whether a Flash-Next DFlash setup ran earlier in the process
   (GPU capability probes now ask the GPU, not the caller's default device).
+- With MTP, no prefix cache survived a restart: the SSD tier dropped every MTP checkpoint (they carry the MTP
+  head's layers) as foreign when it read them back. A 41K-token agent session restored 0 tokens after a
+  restart; it now restores its checkpoint.
+- Retrying the same prompt twice lost its prompt cache: the first retry's reply-cache store thinned the
+  checkpoint that had served it, so the second retry re-prefilled from an older anchor.
 
 ### Security
 

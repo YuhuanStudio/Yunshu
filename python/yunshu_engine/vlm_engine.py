@@ -2303,6 +2303,7 @@ class VLMEngine:
         if disk is None or not hasattr(disk, "validator"):
             return
         from .apc_manager import check_loaded_cache
+        from .mlxvlm_mtp import mtp_head_layers
 
         try:
             template = lm.make_cache()
@@ -2316,8 +2317,11 @@ class VLMEngine:
         if not isinstance(head_dim, int):
             head_dim = None
 
+        # the round driver's MTP drafting checkpoints carry the head's KV after the target's
+        # (mlx-vlm's text config drops mtp_num_hidden_layers: read the checkpoint's config)
+        head_layers = mtp_head_layers(self._model_path)
         disk.validator = lambda tokens, cache: check_loaded_cache(
-            tokens, cache, template, kv_heads, head_dim
+            tokens, cache, template, kv_heads, head_dim, head_layers
         )
 
     def _apc_disk_tier(self):

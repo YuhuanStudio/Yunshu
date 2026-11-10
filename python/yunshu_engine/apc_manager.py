@@ -299,7 +299,12 @@ def _is_transient_load_error(e: BaseException) -> bool:
 
 
 def check_loaded_cache(
-    token_ids, prompt_cache, template=None, kv_heads=None, head_dim=None
+    token_ids,
+    prompt_cache,
+    template=None,
+    kv_heads=None,
+    head_dim=None,
+    head_layers=0,
 ):
     """Structural check of an exact checkpoint read back from disk; True when it is
     consistent with the live model.
@@ -308,16 +313,27 @@ def check_loaded_cache(
     and ``head_dim`` (optional) pin the attention geometry. Offsets must agree with the
     token count and every tensor must have a plausible rank, dtype and batch of one. A
     corrupt or foreign file fails here and the caller falls back to a cold prefill.
+
+    ``head_layers``: the MTP head's layer count. The round driver's drafting checkpoints
+    carry the head's KV after the target's layers (``RoundDriver.apc_salt``), so such a
+    checkpoint holds ``len(template) + head_layers`` caches, the tail plain ``KVCache``
+    with the target's attention geometry (gate agent.restart_idle, 0.1.7: every MTP
+    checkpoint read back after a restart was dropped as foreign, 0 of 41375 cached).
     """
     from mlx_vlm.models.cache import RotatingKVCache
 
     n_tokens = len(token_ids)
     if not prompt_cache or n_tokens <= 0:
         return False
-    if template is not None and len(template) != len(prompt_cache):
-        return False
+    heads = max(0, int(head_layers or 0))
+    if template is not None and len(prompt_cache) != len(template):
+        if not heads or len(prompt_cache) != len(template) + heads:
+            return False
     for i, c in enumerate(prompt_cache):
-        if template is not None and type(template[i]).__name__ != type(c).__name__:
+        if template is not None and i >= len(template):
+            if type(c).__name__ != "KVCache":
+                return False  # an MTP head layer is plain KV
+        elif template is not None and type(template[i]).__name__ != type(c).__name__:
             return False
         keys, values = getattr(c, "keys", None), getattr(c, "values", None)
         if keys is not None or values is not None:
@@ -2951,6 +2967,15 @@ class YunshuAPCManager(APCManager):
             key = self._note_disk_hit(
                 tuple(map(int, token_ids)), int(n), self._extra_of(args, kwargs)
             )
+        elif n and key is not None:
+            # The checkpoint now serves this request: it is this generation's, so this
+            # request's own later stores (its reply cache) do not thin it. A retry of the same
+            # prompt keeps finding it (gate agent.restart_idle 0.1.7: the retry's reply store
+            # dropped it, 0 of 41375 cached after the restart); the next request that grows
+            # past it still supersedes it.
+            with self._plock:
+                if key in self._born:
+                    self._born[key] = max(self._born[key], self._generation)
         if n and key is not None:
             if undo is not None:
                 undo["okey"] = key

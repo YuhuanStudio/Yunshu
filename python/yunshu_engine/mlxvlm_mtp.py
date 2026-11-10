@@ -42,6 +42,20 @@ def _mlxvlm_has_mtp() -> bool:
 MTP_TENSOR_PREFIXES = ("mtp.", "language_model.mtp.", "model.mtp.")
 
 
+def mtp_head_layers(model_path: str) -> int:
+    """The checkpoint's MTP head layer count (``mtp_num_hidden_layers``), 0 when it has none or
+    the config is unreadable."""
+    try:
+        cfg = json.loads((Path(model_path) / "config.json").read_text())
+    except Exception:
+        return 0
+    tc = cfg.get("text_config") or cfg
+    try:
+        return max(0, int(tc.get("mtp_num_hidden_layers", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def mtp_head_problem(model_path: str) -> str | None:
     """None when a supported checkpoint has indexed native MTP weights, else why it has none."""
     cfg_path = Path(model_path) / "config.json"
