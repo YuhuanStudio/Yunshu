@@ -89,7 +89,7 @@ class NgramDrafter:
         return [int(t) for t in self._propose(context, room)[:room]]
 
     def _propose(self, context: list[int], room: int) -> list[int]:
-        return self.proposer.propose(context)
+        return list(self.proposer.propose(context))
 
     def slow(self) -> bool:
         """Windows measured slower per token than plain steps (both measured on this row)."""

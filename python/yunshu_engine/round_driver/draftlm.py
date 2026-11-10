@@ -77,7 +77,7 @@ class DraftLMDrafter(NgramDrafter):
 
     def _forward(self, tokens: list[int]) -> int:
         out = self.draft.model(mx.array(tokens, dtype=mx.int32)[None], cache=self.cache)
-        return int(mx.argmax(out[0, -1]).item())
+        return int(mx.argmax(out[0, -1]).item())  # type: ignore[arg-type]
 
     def _trim(self, n: int) -> None:
         if n > 0 and self.cache is not None:
@@ -135,7 +135,7 @@ class AssistantDrafter(NgramDrafter):
         sl, fl = self.assistant.sliding_kv_layer, self.assistant.full_kv_layer
         kv = {sl: tuple(cache[sl].state), fl: tuple(cache[fl].state)}
         offset = int(cache[fl].offset) - 1
-        return self.assistant.propose_chain(context[-1], hidden, kv, offset, k=room)  # type: ignore[return-value]
+        return self.assistant.propose_chain(context[-1], hidden, kv, offset, k=room)  # type: ignore[return-value,no-any-return]
 
 
 class RowDrafters:
