@@ -20,7 +20,7 @@ def test_notes_are_versioned_and_bounded():
     changelog = """## [Unreleased]
 Future changes
 ## [0.1.3] - 2026-10-03
-Current changes [bench](docs/BENCHMARKS.md#results)
+- Current changes [bench](docs/BENCHMARKS.md#results)
 [Full changelog: draft](https://example.com/main)
 ## [0.1.2] - 2026-10-02
 Older changes
@@ -48,18 +48,48 @@ def test_empty_release_fails():
 
 
 def test_first_release_links_to_tag_history():
-    notes = MODULE.render_notes("## [0.1.0]\nFirst\n", "0.1.0")
+    notes = MODULE.render_notes("## [0.1.0]\n- First\n", "0.1.0")
     assert "/commits/v0.1.0" in notes
 
 
 def test_dev_release_takes_the_unreleased_section():
     """User 2026-11-10: every push is a dev release (0.1.8.devN) whose notes are [Unreleased]."""
     changelog = """## [Unreleased]
-Future changes
+- Future changes
 ## [0.1.7] - 2026-11-10
-Current changes
+- Current changes
 """
     notes = MODULE.render_notes(changelog, "0.1.8.dev1")
     assert "Future changes" in notes and "Current changes" not in notes
     assert '"yunshu[vision]==0.1.8.dev1"' in notes
     assert "/compare/v0.1.7...v0.1.8.dev1" in notes
+    assert "brew upgrade" not in notes  # the tap tracks stable releases
+
+
+def test_empty_headings_are_dropped_and_a_section_without_entries_fails():
+    """2026-11-11: v0.1.8.dev1 shipped empty Highlights/Performance/Fixed headings."""
+    changelog = """## [Unreleased]
+Intro.
+### Highlights
+
+### Performance
+
+| a | b |
+|---|---|
+
+### Added
+
+- Real entry
+### Fixed
+
+## [0.1.7]
+- old
+"""
+    notes = MODULE.render_notes(changelog, "0.1.8.dev2")
+    assert "### Added" in notes and "- Real entry" in notes
+    for empty in ("### Highlights", "### Performance", "### Fixed", "| a | b |"):
+        assert empty not in notes
+    with pytest.raises(ValueError, match="no entries"):
+        MODULE.render_notes(
+            "## [Unreleased]\nIntro.\n### Fixed\n## [0.1.7]\n- x\n", "0.1.8.dev2"
+        )

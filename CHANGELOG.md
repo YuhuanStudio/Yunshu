@@ -7,27 +7,48 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-Changes on main after 0.1.7; not part of a published package yet.
+Changes on main after 0.1.7. Published as `0.1.8.devN` pre-releases (`pip install --pre yunshu`); the next
+patch release collects them.
 
 ### Highlights
 
+- Dependencies move to mlx 0.32.4, mlx-vlm 0.7.12, mlx-audio 0.6.4 and transformers 5.22.2, with in-house
+  fixes for two upstream changes (below). Speculation on and off stay token-identical.
+- Gemma and other non-Qwen models on the round driver decode each concurrent row on its own, so a
+  concurrent request returns exactly what it would return alone.
+- Opt-in draft-model speculation for those models: any small draft LM (`YUNSHU_DRAFT_MODEL`) or the
+  Gemma 4 assistant checkpoint (`YUNSHU_GEMMA4_ASSISTANT`).
+
 ### Upgrade notes / breaking changes
+
+- New dependency floor: mlx 0.32.4, mlx-vlm 0.7.12, mlx-audio 0.6.4, transformers 5.22.2. Outputs can
+  differ numerically from 0.1.7 (teacher-forced KL divergence 0.00020 on Qwen3.8-27B); greedy reference
+  outputs on 24 recorded cells are unchanged.
+- Generic-layer models (Gemma, Llama-style and other non-Qwen VLMs) lose some concurrent throughput in
+  exchange for identical solo/concurrent output: Gemma 4 E2B with 2 rows, 206 → 173 tok/s.
 
 ### Performance
 
 | Machine | Model / mode | Metric / workload | Before → after | Recorded source |
 |---|---|---|---|---|
+| M5 Max | Gemma 4 E2B, generic layer | 2 concurrent rows, decode | 206 → 173 tok/s | `genericinv` line, 6ed237233 |
+| M5 Max | Qwen3.8-27B MTP, zh-CN 1K | follow-up decode | −4.2 % (one prompt's MTP acceptance changed under the new deps) | deps verification, 06c8cb67b |
 
 ### Added
 
 - Opt-in draft-LM (`YUNSHU_DRAFT_MODEL`) and Gemma-4 assistant (`YUNSHU_GEMMA4_ASSISTANT`) drafters on the round driver's generic layer.
-- Dev releases: every push between patch releases is published as `X.Y.Z.devN` (PyPI pre-release, `pip install --pre`).
+- Dev releases: every push between patch releases is published as `X.Y.Z.devN` (PyPI pre-release, `pip install --pre`) and a GitHub pre-release.
+- Benchmark harnesses label a context length by the served turn-1 prompt tokens (template included) and fail a cell whose served length is off.
 
 ### Changed
 
-- Generic-layer models (Gemma and other non-Qwen families) decode each concurrent row with its own call, so concurrent output equals solo output. Concurrent throughput of small models is lower than the old batched path (Gemma E2B, 2 rows: 173 vs 206 tok/s).
+- Generic-layer models decode each concurrent row with its own call, so concurrent output equals solo output; the lockstep batched path is removed.
+- Release process: the release gate runs its stages fail-fast, its long stage checks 32K–128K identity and prefix-cache reuse, and GPU checks that passed are reused when only docs or tests change.
 
 ### Fixed
+
+- Idle memory: a heartbeat that fired just before the idle trim could re-wire GPU memory after the trim had released it. The trim now ends the heartbeat window.
+- mlx 0.32.4 quantized matvec summed in a promoted float type and mlx-vlm 0.7.12 changed the q/k-norm epsilon; both are corrected in-house so speculation on and off stay identical.
 
 ### Security
 
