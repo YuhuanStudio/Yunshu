@@ -14,9 +14,7 @@ def table_rows(text):
 
 def numeric_rows(text):
     return [
-        tuple(NUMBER.findall(line))
-        for line in table_rows(text)
-        if NUMBER.search(line)
+        tuple(NUMBER.findall(line)) for line in table_rows(text) if NUMBER.search(line)
     ]
 
 
