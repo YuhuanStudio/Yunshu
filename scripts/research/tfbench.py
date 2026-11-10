@@ -51,6 +51,22 @@ YUNSHU_BIN = DEFAULT_YUNSHU_BIN
 YUNSHU_SRC = os.environ.get("TFB_YUNSHU_SRC", "")
 
 
+def yunshu_pythonpath(src: str) -> str:
+    """The PYTHONPATH entry for a Yunshu source tree: ``src`` itself when it holds
+    ``yunshu_engine``, ``src/python`` when given a checkout root. Anything else fails closed:
+    a PYTHONPATH without ``yunshu_engine`` made the server import the venv's editable install
+    (main) silently, so both arms of an A/B ran main (2026-11-10: phaseb_conc and the
+    superseded-reply probe were called with tree roots)."""
+    root = Path(src)
+    if (root / "yunshu_engine").is_dir():
+        return str(root)
+    if (root / "python" / "yunshu_engine").is_dir():
+        return str(root / "python")
+    raise RuntimeError(
+        f"TFB_YUNSHU_SRC={src!r} holds no yunshu_engine (pass <tree>/python)"
+    )
+
+
 def own_venv_bin(src: str, name: str) -> str | None:
     """A worktree that carries its own .venv (marker file `.yv-own-venv`, for A/Bs of a
     dependency upgrade) is served from that venv; every other tree uses the shared one."""
@@ -348,7 +364,9 @@ def stub_server_cmd(engine, port, log, stub_dir, version=None) -> list[str]:
     cmd = [
         sys.executable,
         # TFB_STUB_SCRIPT picks another stub file in the same dir (tests: the request-family stub)
-        str(Path(stub_dir) / os.environ.get("TFB_STUB_SCRIPT", "fullcmp_stub_server.py")),
+        str(
+            Path(stub_dir) / os.environ.get("TFB_STUB_SCRIPT", "fullcmp_stub_server.py")
+        ),
         "--engine",
         engine,
         "--port",
@@ -382,7 +400,9 @@ class Srv:
         # Fullcmp: a Yunshu server runs only from the pinned tree and venv, or not at all.
         # Checked before any port, directory or process is created.
         self.pin = None
-        self.observe = None  # fullcmp Yunshu: True (profile) or False (timed); see observe_state
+        self.observe = (
+            None  # fullcmp Yunshu: True (profile) or False (timed); see observe_state
+        )
         if fp.fullcmp_mode(os.environ) and self._is_yunshu(engine):
             self.pin = fp.require_yunshu_pin(os.environ, engine=engine)
             self.observe = fp.observe_state(os.environ, True)
@@ -427,7 +447,7 @@ class Srv:
                     raise RuntimeError(
                         "TFB_YUNSHU_SRC (pinned tree python/) is required"
                     )
-                env["PYTHONPATH"] = YUNSHU_SRC
+                env["PYTHONPATH"] = yunshu_pythonpath(YUNSHU_SRC)
                 own_py = own_venv_bin(YUNSHU_SRC, "python")
                 if own_py and bench_engines.is_yunshu_command(cmd):
                     cmd = [
@@ -438,7 +458,7 @@ class Srv:
                     ]
         elif engine == "yunshu":
             if YUNSHU_SRC:
-                env["PYTHONPATH"] = YUNSHU_SRC
+                env["PYTHONPATH"] = yunshu_pythonpath(YUNSHU_SRC)
             own_py = own_venv_bin(YUNSHU_SRC, "python")
             if own_py:
                 entry = [own_py, "-m", bench_engines.YUNSHU_MODULE]
@@ -474,13 +494,19 @@ class Srv:
             # Fullcmp: the server env carries exactly what observe_state decided (no leftovers,
             # no --env override); the header records the value actually passed.
             if "YUNSHU_OBSERVE" in extra_env:
-                raise fp.ProvenanceError("fullcmp: YUNSHU_OBSERVE must not come from --env")
+                raise fp.ProvenanceError(
+                    "fullcmp: YUNSHU_OBSERVE must not come from --env"
+                )
             env.pop("YUNSHU_OBSERVE", None)
             if self.observe:
                 env["YUNSHU_OBSERVE"] = "1"
         elif is_yunshu and os.environ.get("TFB_OBSERVE", "1") != "0":
             env.setdefault("YUNSHU_OBSERVE", "1")
-        if is_yunshu and os.environ.get("TFB_PROFILE") == "1" and os.environ.get("YUNSHU_DEBUG_TREE_PROFILE"):
+        if (
+            is_yunshu
+            and os.environ.get("TFB_PROFILE") == "1"
+            and os.environ.get("YUNSHU_DEBUG_TREE_PROFILE")
+        ):
             # A profile rep sets the engine's stage timer in this process's env (fullcmp_profile.profile_env),
             # which the server env scrubs with every other YUNSHU_* variable: pass that one switch through,
             # or the engine never profiles and the row reports layer 2 as missing (2026-11-09).
@@ -616,23 +642,46 @@ class Srv:
         if not _LOG_PREFIX:
             return live, getattr(self, "ready_log_offset", None)
         prefix = b"".join(_LOG_PREFIX).decode(errors="replace")
-        first = getattr(self, "first_ready_log_offset", getattr(self, "ready_log_offset", None))
+        first = getattr(
+            self, "first_ready_log_offset", getattr(self, "ready_log_offset", None)
+        )
         return prefix + live, first
 
-    def verify_spec_mode(self, final=False, rows=(), probe_response=None, concurrent=(), concurrent_probe=None):
+    def verify_spec_mode(
+        self,
+        final=False,
+        rows=(),
+        probe_response=None,
+        concurrent=(),
+        concurrent_probe=None,
+    ):
         log, ready_offset = self.evidence_log()
-        if fp.fullcmp_mode(os.environ) and self._is_yunshu(self.engine) and final and concurrent and not rows:
+        if (
+            fp.fullcmp_mode(os.environ)
+            and self._is_yunshu(self.engine)
+            and final
+            and concurrent
+            and not rows
+        ):
             # a Yunshu concurrent cell: the same derived verdict the audit re-derives (fe.concurrent_check), not the
             # runner line (the header and the audit must agree on the mode and the line)
-            ev, problems = fe.concurrent_check(fe.load_table(), self.engine, self.requested_spec_mode, log,
-                                               concurrent, ready_offset)
+            ev, problems = fe.concurrent_check(
+                fe.load_table(),
+                self.engine,
+                self.requested_spec_mode,
+                log,
+                concurrent,
+                ready_offset,
+            )
             self.engaged_spec_mode = ev["engaged_mode"]
             self.engaged_log_line = ev["matched_line"]
             self.engaged_evidence_kind = ev["evidence_kind"]
             self.engaged_evidence_source = ev["source"]
             self.engaged_label = ev.get("label")
             if problems:
-                raise RuntimeError("concurrent evidence: " + "; ".join(problems) + f"; see {self.log}")
+                raise RuntimeError(
+                    "concurrent evidence: " + "; ".join(problems) + f"; see {self.log}"
+                )
             return
         if fp.fullcmp_mode(os.environ) and not self._is_yunshu(self.engine):
             # Fullcmp: the engaged mode comes from the evidence table only (fullcmp_engaged); the
@@ -641,8 +690,13 @@ class Srv:
             # cell's records) may refuse a cell.
             self.probe = self.probe_text()
             self._verify_fullcmp_evidence(
-                log, final=final, rows=rows, probe_response=probe_response, concurrent=concurrent,
-                concurrent_probe=concurrent_probe, ready=ready_offset
+                log,
+                final=final,
+                rows=rows,
+                probe_response=probe_response,
+                concurrent=concurrent,
+                concurrent_probe=concurrent_probe,
+                ready=ready_offset,
             )
             return
         # The engaged-mode line the audit checks (fullcmp header engaged_log_line).
@@ -675,19 +729,44 @@ class Srv:
             # measures a different engine (2026-10-20: ragged KV off broke identity)
             raise RuntimeError(f"{off}; see {self.log}")
 
-    def _verify_fullcmp_evidence(self, log, final=False, rows=(), probe_response=None, concurrent=(), concurrent_probe=None, ready=...):
-        table = fe.load_table()  # None when the table is missing or malformed: no evidence at all
+    def _verify_fullcmp_evidence(
+        self,
+        log,
+        final=False,
+        rows=(),
+        probe_response=None,
+        concurrent=(),
+        concurrent_probe=None,
+        ready=...,
+    ):
+        table = (
+            fe.load_table()
+        )  # None when the table is missing or malformed: no evidence at all
         if ready is ...:
             ready = getattr(self, "ready_log_offset", None)
         if concurrent and not rows:
             # concurrent cells: the same shared verdict the audit uses (fe.concurrent_check)
-            ev, problems = fe.concurrent_check(table, self.engine, self.requested_spec_mode, log, concurrent, ready,
-                                               probe_responses=concurrent_probe)
+            ev, problems = fe.concurrent_check(
+                table,
+                self.engine,
+                self.requested_spec_mode,
+                log,
+                concurrent,
+                ready,
+                probe_responses=concurrent_probe,
+            )
             if problems and final:
                 text = self.log.read_text(errors="replace") if self.log.exists() else ""
-                shown = [ln for ln in text.splitlines() if re.search(r"done|chat:|MTP\[", ln)][:10]
-                raise RuntimeError("concurrent evidence: " + "; ".join(problems) + f"; see {self.log}"
-                                   + "; first done lines: " + " | ".join(shown))
+                shown = [
+                    ln for ln in text.splitlines() if re.search(r"done|chat:|MTP\[", ln)
+                ][:10]
+                raise RuntimeError(
+                    "concurrent evidence: "
+                    + "; ".join(problems)
+                    + f"; see {self.log}"
+                    + "; first done lines: "
+                    + " | ".join(shown)
+                )
         else:
             ev = fe.evaluate(
                 self.engine,
@@ -704,11 +783,21 @@ class Srv:
         self.engaged_evidence_kind = ev["evidence_kind"]
         self.engaged_evidence_source = ev["source"]
         self.engaged_label = ev.get("label")
-        self.engaged_per_row = (ev.get("stats") or {}).get("per_row", [])  # reported with the base mode (e.g. 'dflash (kflash tree)')
-        derived_ar = (bool(concurrent) and not rows and self.engaged_spec_mode == "ar") or (
-            self.engaged_spec_mode == "ar" and self.engaged_evidence_kind == "constrained_ar"
+        self.engaged_per_row = (ev.get("stats") or {}).get(
+            "per_row", []
+        )  # reported with the base mode (e.g. 'dflash (kflash tree)')
+        derived_ar = (
+            (bool(concurrent) and not rows and self.engaged_spec_mode == "ar")
+            or (
+                self.engaged_spec_mode == "ar"
+                and self.engaged_evidence_kind == "constrained_ar"
+            )
         )  # a labelled 'ar': a concurrent cell, or a constrained kind cell the engine decodes without drafting
-        if final and self.engaged_spec_mode != self.requested_spec_mode and not derived_ar:
+        if (
+            final
+            and self.engaged_spec_mode != self.requested_spec_mode
+            and not derived_ar
+        ):
             raise RuntimeError(
                 f"requested spec={self.requested_spec_mode}, engaged={self.engaged_spec_mode} "
                 f"(evidence: {self.engaged_evidence_kind}, table: {'ok' if table else 'missing'}); "
@@ -723,7 +812,9 @@ class Srv:
                 os.killpg(self.proc.pid, signal.SIGTERM)
             with contextlib.suppress(Exception):
                 self.proc.wait(RESTART_TERM_GRACE_S)
-            self.term_exit = "exited" if self.proc.poll() is not None else "sigkill after grace"
+            self.term_exit = (
+                "exited" if self.proc.poll() is not None else "sigkill after grace"
+            )
         if self.proc.poll() is None:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(self.proc.pid, signal.SIGKILL)
@@ -763,7 +854,11 @@ def job_log_suffix() -> str:
     job = os.environ.get("GPUQ_JOB_ID") or os.environ.get("TFB_RUN_ID") or ""
     chunk = os.environ.get("TFB_CHUNK") or ""
     parts = [p for p in (job, chunk) if p]
-    return ("-" + "-".join(re.sub(r"[^A-Za-z0-9._-]", "_", p) for p in parts)) if parts else ""
+    return (
+        ("-" + "-".join(re.sub(r"[^A-Za-z0-9._-]", "_", p) for p in parts))
+        if parts
+        else ""
+    )
 
 
 def cell_engine_log(log_path, end=None, prefix=()):
@@ -778,7 +873,9 @@ def cell_log_slice(log_path, start, end=None, prefix=()):
     """Bytes of one cell's engine log: the shared log from offset start to end (None: its end),
     after the full bytes of any log a restart in this cell truncated (prefix, in order)."""
     log_path = Path(log_path)
-    data = log_path.read_bytes() if log_path.exists() else b""  # no log: an empty slice (audit fails)
+    data = (
+        log_path.read_bytes() if log_path.exists() else b""
+    )  # no log: an empty slice (audit fails)
     if not prefix:
         return data[start:end]
     pieces = [*prefix, data]
@@ -787,11 +884,23 @@ def cell_log_slice(log_path, start, end=None, prefix=()):
     return b"".join(pieces)
 
 
-RESTART_TERM_GRACE_S = 120.0  # SIGTERM -> SIGKILL grace for a restart cell's first server
-DISK_SETTLE_QUIET_S = 10.0  # cache dirs unchanged this long = the engine finished writing
+RESTART_TERM_GRACE_S = (
+    120.0  # SIGTERM -> SIGKILL grace for a restart cell's first server
+)
+DISK_SETTLE_QUIET_S = (
+    10.0  # cache dirs unchanged this long = the engine finished writing
+)
 DISK_SETTLE_MAX_S = 180.0
-ENGINE_CACHE_SUBDIRS = (".yunshu/cache", "omlx-ssd", "mtplx-cache", "omlx-base/cache", ".mlx-serve/kv-cache",
-                        "Library/Caches/Splash", ".cache/mlx-vlm/apc", ".cache/kapitsa/prefix-cache")
+ENGINE_CACHE_SUBDIRS = (
+    ".yunshu/cache",
+    "omlx-ssd",
+    "mtplx-cache",
+    "omlx-base/cache",
+    ".mlx-serve/kv-cache",
+    "Library/Caches/Splash",
+    ".cache/mlx-vlm/apc",
+    ".cache/kapitsa/prefix-cache",
+)
 
 
 def _cache_footprint(home) -> tuple:
@@ -801,13 +910,19 @@ def _cache_footprint(home) -> tuple:
             for f in files:
                 with contextlib.suppress(OSError):
                     st = os.stat(os.path.join(root, f))
-                    total, count, newest = total + st.st_size, count + 1, max(newest, st.st_mtime)
+                    total, count, newest = (
+                        total + st.st_size,
+                        count + 1,
+                        max(newest, st.st_mtime),
+                    )
     return total, count, newest
 
 
 def wait_disk_settled(home, quiet_s=None, max_s=None, poll_s=1.0) -> float:
     """Seconds waited until the engine cache dirs under home were unchanged for quiet_s (capped at max_s)."""
-    stub = bool(os.environ.get("TFB_STUB_SERVER"))  # stub servers write no cache: keep e2e tests fast
+    stub = bool(
+        os.environ.get("TFB_STUB_SERVER")
+    )  # stub servers write no cache: keep e2e tests fast
     quiet_s = (0.3 if stub else DISK_SETTLE_QUIET_S) if quiet_s is None else quiet_s
     max_s = DISK_SETTLE_MAX_S if max_s is None else max_s
     if home is None:
@@ -833,11 +948,14 @@ def restart_server(s):
     # engine's cache directories stop changing, then stop it the way a user restart does (SIGTERM, grace).
     s.restart_settle_s = wait_disk_settled(getattr(s, "home", None))
     if log is not None and log.exists():
-        _LOG_PREFIX.append(log.read_bytes())  # the relaunch truncates this log: keep its bytes
+        _LOG_PREFIX.append(
+            log.read_bytes()
+        )  # the relaunch truncates this log: keep its bytes
     s.kill(keep_disk=True, graceful=True)
-    if os.environ.get("TFB_STUB_SERVER") and os.environ.get(
-        "TFB_STUB_WIPE_HOME_ON_RESTART"
-    ) == "1":
+    if (
+        os.environ.get("TFB_STUB_SERVER")
+        and os.environ.get("TFB_STUB_WIPE_HOME_ON_RESTART") == "1"
+    ):
         # TEST-ONLY negative case: a restart on a wiped HOME must lose the disk tier (the audit fails)
         shutil.rmtree(s.home, ignore_errors=True)
     fresh = start_server(
@@ -850,14 +968,14 @@ def restart_server(s):
         reuse_home=True,
     )
     # the evidence verdict reads the first server's saved log then this one's: keep the first ready offset
-    fresh.first_ready_log_offset = getattr(s, "first_ready_log_offset", getattr(s, "ready_log_offset", None))
+    fresh.first_ready_log_offset = getattr(
+        s, "first_ready_log_offset", getattr(s, "ready_log_offset", None)
+    )
     _LIVE_SERVERS.append(fresh)
     return fresh
 
 
-CACHED_UNAVAILABLE = (
-    "usage has no cached-token count (prompt_tokens_details.cached_tokens or usage.cached_tokens)"
-)
+CACHED_UNAVAILABLE = "usage has no cached-token count (prompt_tokens_details.cached_tokens or usage.cached_tokens)"
 
 
 def cached_tokens(usage):
@@ -886,7 +1004,9 @@ def concurrent_prompt(index, trial, ctx, variant=0, run=0):
 
     kind = "prose" if (index + trial) % 2 == 0 else "code"
     source = load_variant_prompt(f"{kind}-32768", variant)
-    return exact_chat_prompt(f"Run {run}, request {trial}:{index}.\n" + source, ctx, LONG_ASK)
+    return exact_chat_prompt(
+        f"Run {run}, request {trial}:{index}.\n" + source, ctx, LONG_ASK
+    )
 
 
 def prompt_digest(messages):
@@ -915,8 +1035,12 @@ def send(
     _progress()
     try:
         return _send_impl(
-            url, body, timeout, capture_timestamps=capture_timestamps,
-            trace_id=trace_id, sample=sample,
+            url,
+            body,
+            timeout,
+            capture_timestamps=capture_timestamps,
+            trace_id=trace_id,
+            sample=sample,
         )
     finally:
         _progress()
@@ -968,7 +1092,9 @@ def _send_impl(
             if d.get("usage"):
                 usage = d["usage"]
                 if sample and _USAGE_SAMPLE[0] is None:
-                    _USAGE_SAMPLE[0] = d  # the final usage chunk of the first benchmark request
+                    _USAGE_SAMPLE[0] = (
+                        d  # the final usage chunk of the first benchmark request
+                    )
             if d.get("x_yunshu"):
                 xy = d["x_yunshu"]
             elif isinstance(d.get("usage"), dict) and d["usage"].get("x_yunshu"):
@@ -1046,7 +1172,9 @@ def _send_impl(
         stop=stop,
         harness=HARNESS_ID,
         cached=cached_tokens(usage),
-        cached_unavailable=None if cached_tokens(usage) is not None else CACHED_UNAVAILABLE,
+        cached_unavailable=None
+        if cached_tokens(usage) is not None
+        else CACHED_UNAVAILABLE,
         dec_tps=round((ct - 1) / (t1 - tf), 1) if tf and ct > 1 and t1 > tf else None,
         finish=finish,
         sha=sha,
@@ -1072,7 +1200,9 @@ def _send_impl(
         else None,
     )
     result["_tools"] = [tools[i] for i in sorted(tools)]
-    result["_image_tokens"] = (usage.get("prompt_tokens_details") or {}).get("image_tokens")
+    result["_image_tokens"] = (usage.get("prompt_tokens_details") or {}).get(
+        "image_tokens"
+    )
     result["_attr_client"] = {
         "t_receive": ew_receive,
         "t_first_token": ew_first,
@@ -1150,7 +1280,9 @@ def prompt_file_sha256(kind, ctx, smoke=False, variant=0):
     None for a smoke cell (inline prompt). prompt_sha256 is the rendered request, not the file."""
     if smoke:
         return None
-    return hashlib.sha256(prompt_path(f"{kind}-{ctx}", variant).read_bytes()).hexdigest()
+    return hashlib.sha256(
+        prompt_path(f"{kind}-{ctx}", variant).read_bytes()
+    ).hexdigest()
 
 
 def decode_prompt(kind, ctx, long_ask, variant=0):
@@ -1216,7 +1348,10 @@ FAMILY_TOOLS = [
             "description": "Read a UTF-8 text file.",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string"}, "max_lines": {"type": "integer"}},
+                "properties": {
+                    "path": {"type": "string"},
+                    "max_lines": {"type": "integer"},
+                },
                 "required": ["path"],
                 "additionalProperties": False,
             },
@@ -1244,7 +1379,10 @@ FAMILY_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"name": {"type": "string"}, "count": {"type": "integer"}},
+                "properties": {
+                    "name": {"type": "string"},
+                    "count": {"type": "integer"},
+                },
                 "required": ["name", "count"],
                 "additionalProperties": False,
             },
@@ -1270,9 +1408,7 @@ FAMILY_ASKS = {
     ],
 }
 # A valid 1x1 PNG, sent as the image_url data URI of each image part.
-IMAGE_PNG_B64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
-)
+IMAGE_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 # sha256 of the PNG bytes: recorded on every image row so the audit compares the image, not the token count each
 # engine's vision encoder turns it into
 IMAGE_PNG_SHA256 = hashlib.sha256(base64.b64decode(IMAGE_PNG_B64)).hexdigest()
@@ -1543,10 +1679,22 @@ REFUSAL_PHRASES = (
 )
 # on an image cell a 4xx that talks about the image itself is the engine saying it cannot take it
 # (llama-server without an mmproj, a text-only chat template, an unknown content type)
-IMAGE_REFUSAL_WORDS = ("image", "vision", "multimodal", "mmproj", "content part", "content type")
+IMAGE_REFUSAL_WORDS = (
+    "image",
+    "vision",
+    "multimodal",
+    "mmproj",
+    "content part",
+    "content type",
+)
 # the explicit wording a 5xx body must carry to be an engine's refusal (not 'unsupported' alone: a crash message such
 # as 'unsupported operation' is a real failure)
-SERVER_REFUSAL_PHRASES = ("is not supported", "are not supported", "does not support", "accepts text parts only")
+SERVER_REFUSAL_PHRASES = (
+    "is not supported",
+    "are not supported",
+    "does not support",
+    "accepts text parts only",
+)
 REFUSAL_BODY_MAX = 600
 
 
@@ -1568,7 +1716,11 @@ def is_refusal_text(text: str) -> bool:
 def refusal_label(kind, text: str) -> str:
     """'unsupported (json-schema with speculative decoding, engine message)': the kind, and the engine's own
     qualifier when its message names speculative decoding."""
-    with_spec = " with speculative decoding" if "speculative decoding" in str(text).lower() else ""
+    with_spec = (
+        " with speculative decoding"
+        if "speculative decoding" in str(text).lower()
+        else ""
+    )
     return f"unsupported ({kind}{with_spec}, engine message)"
 
 
@@ -1686,7 +1838,9 @@ def attribution_fields(s, r):
             os.environ.get("TFB_ATTR_ENGINE") or bench_engines.manifest_id(s.engine)
         )
         unavailable = dict(eng.unavailable)
-        if eng.layer2 == "stages":  # Yunshu-style stage timers: dev0 and the Phase B preview
+        if (
+            eng.layer2 == "stages"
+        ):  # Yunshu-style stage timers: dev0 and the Phase B preview
             _yunshu_server_fields(attr, unavailable, client, spec, lat)
     r["attr"] = attr
     r["attr_unavailable"] = unavailable
@@ -1861,11 +2015,15 @@ def part_decode(s, out, a):
                         media=media,
                         image_parts=fm.IMAGE_COUNT.get(media, 0),
                         image_tokens=image_tokens,
-                        image_sha256=IMAGE_PNG_SHA256 if fm.IMAGE_COUNT.get(media, 0) else None,
+                        image_sha256=IMAGE_PNG_SHA256
+                        if fm.IMAGE_COUNT.get(media, 0)
+                        else None,
                         # the text part of the prompt, when the engine reports the image token count
                         text_tokens=(
                             r.get("pt") - image_tokens
-                            if isinstance(r.get("pt"), int) and isinstance(image_tokens, int) and image_tokens > 0
+                            if isinstance(r.get("pt"), int)
+                            and isinstance(image_tokens, int)
+                            and image_tokens > 0
                             else None
                         ),
                         tool_calls=[
@@ -1896,7 +2054,9 @@ def part_decode(s, out, a):
                     ctx=ctx,
                     kind=kind,
                     phase=phase,
-                    prompt_file=decode_prompt_file(base_kind, ctx, a.smoke, base_variant),
+                    prompt_file=decode_prompt_file(
+                        base_kind, ctx, a.smoke, base_variant
+                    ),
                     prompt_file_sha256=prompt_file_sha256(
                         base_kind, ctx, a.smoke, base_variant
                     ),
@@ -2156,7 +2316,12 @@ def conc_aggregates(decs):
 
     ok = bool(decs) and all(isinstance(d, (int, float)) and d > 0 for d in decs)
     if not ok:
-        return {"dec_min": None, "dec_max": None, "dec_median": None, "fair_max_min": None}
+        return {
+            "dec_min": None,
+            "dec_max": None,
+            "dec_median": None,
+            "fair_max_min": None,
+        }
     return {
         "dec_min": min(decs),
         "dec_max": max(decs),
@@ -2245,18 +2410,24 @@ def request_records(rs):
     for i, r in enumerate(rs):
         xy = r.pop("_xy_speculative", None) or {}
         if isinstance(xy.get("accepted"), (int, float)):
-            spec = {"accepted": int(xy["accepted"]), "drafted": xy.get("drafted"), "rounds": xy.get("rounds")}
+            spec = {
+                "accepted": int(xy["accepted"]),
+                "drafted": xy.get("drafted"),
+                "rounds": xy.get("rounds"),
+            }
         else:
             spec = "unavailable (response carries no per-request speculative counters)"
-        out.append({
-            "rid": i,
-            "pt": r["pt"],
-            "ct": r["ct"],
-            "cached": r["cached"],
-            "ttft_s": r["ttft_s"],
-            "dec_tps": r["dec_tps"],
-            "spec": spec,
-        })
+        out.append(
+            {
+                "rid": i,
+                "pt": r["pt"],
+                "ct": r["ct"],
+                "cached": r["cached"],
+                "ttft_s": r["ttft_s"],
+                "dec_tps": r["dec_tps"],
+                "spec": spec,
+            }
+        )
     return out
 
 
@@ -2668,7 +2839,9 @@ def fullcmp_header(
     host-CPU snapshot taken before the server started (fullcmp_quiet.snapshot)."""
     # the weights the launch loads (bench_engines is the one source): llama-cpp runs the GGUF, kapitsa
     # and TensorFold their own checkpoints; every other engine serves the Jundot oQ4e-mtp checkpoint
-    model_key = bench_engines.WEIGHTS_CENSUS_KEY.get(a.engine) or fp.census_model_id(census, a.model)
+    model_key = bench_engines.WEIGHTS_CENSUS_KEY.get(a.engine) or fp.census_model_id(
+        census, a.model
+    )
     version, git_sha = bench_engines.engine_version(a.engine, YUNSHU_SRC)
     census_key = fp.census_key_for(a.engine)
     return dict(
@@ -2802,7 +2975,11 @@ def run_part_or_unsupported(fn, s, out, a):
     except Exception as exc:
         if a.parallel > 1 and a.part in ("conc", "mixed") and server_exited(s):
             rc = s.proc.poll()
-            unsupported_at_n_row(out, a, f"engine exited rc={rc} during the cell: {type(exc).__name__}: {exc}")
+            unsupported_at_n_row(
+                out,
+                a,
+                f"engine exited rc={rc} during the cell: {type(exc).__name__}: {exc}",
+            )
             return
         raise
 
@@ -2848,7 +3025,9 @@ def finalize_session(path, end_fields):
     os.replace(tmp, path)
 
 
-QUIET_REFUSED_EXIT = 3  # the driver retries a quiet refusal in the same slot (fullcmp_run)
+QUIET_REFUSED_EXIT = (
+    3  # the driver retries a quiet refusal in the same slot (fullcmp_run)
+)
 
 
 def quiet_refused(snapshot) -> bool:
@@ -2856,7 +3035,9 @@ def quiet_refused(snapshot) -> bool:
     return isinstance(snapshot, dict) and snapshot.get("ok") is False
 
 
-HEARTBEAT_S = 30.0  # a heartbeat line every 30 s: a long phase never leaves the job log silent
+HEARTBEAT_S = (
+    30.0  # a heartbeat line every 30 s: a long phase never leaves the job log silent
+)
 HEARTBEAT_STOP_S = 600.0  # no main-thread progress this long: stop beating, so the stall watchdog fires
 _PROGRESS = {"phase": "start", "t": time.time(), "t0": time.time()}
 
@@ -2868,7 +3049,9 @@ def _progress(phase: str | None = None) -> None:
     _PROGRESS["t"] = time.time()
 
 
-def _start_heartbeat(interval: float = HEARTBEAT_S, stop_after: float = HEARTBEAT_STOP_S) -> None:
+def _start_heartbeat(
+    interval: float = HEARTBEAT_S, stop_after: float = HEARTBEAT_STOP_S
+) -> None:
     """Daemon thread: one stdout line per interval while the main thread makes progress: phase name,
     elapsed time and the age of the last progress. A hung main thread stops the beats after stop_after
     seconds without progress, so gpuq's stall watchdog fires instead of a daemon hiding the hang."""
@@ -2973,8 +3156,11 @@ def main():
     if quiet_refused(quiet_pre) and not os.environ.get("TFB_STUB_SERVER"):
         # The host is busy before this cell: refuse BEFORE the server starts and before the raw file is
         # created, so the driver can rerun this cell in the same slot (exit 3 = quiet refusal).
-        print(f"QUIET REFUSED before {a.out}: {quiet_pre.get('total_foreign_pct')}% foreign, "
-              f"holders {[h.get('name') for h in quiet_pre.get('holders', [])[:5]]}", flush=True)
+        print(
+            f"QUIET REFUSED before {a.out}: {quiet_pre.get('total_foreign_pct')}% foreign, "
+            f"holders {[h.get('name') for h in quiet_pre.get('holders', [])[:5]]}",
+            flush=True,
+        )
         sys.exit(QUIET_REFUSED_EXIT)
     job_start_s = time.time()
     swap_start = fp.swap_snapshot() if fullcmp else None
@@ -2993,10 +3179,26 @@ def main():
         # the engine does not come up at N slots / streams (OOM, refusal of the flag): this cell is
         # 'unsupported at N (measured: <error>)'; the job continues with its next cell, never at a lower N
         with open(a.out, "w") as out:
-            emit(out, part="session", engine=a.engine, rep=a.rep, launch_parallel=a.parallel,
-                 launch_ctx_tokens=a.ctx_tokens, start_failed=True)
-            unsupported_at_n_row(out, a, f"engine did not start: {type(exc).__name__}: {exc}")
-            emit(out, part="part_done", engine=a.engine, which=a.part, rep=a.rep, complete=True)
+            emit(
+                out,
+                part="session",
+                engine=a.engine,
+                rep=a.rep,
+                launch_parallel=a.parallel,
+                launch_ctx_tokens=a.ctx_tokens,
+                start_failed=True,
+            )
+            unsupported_at_n_row(
+                out, a, f"engine did not start: {type(exc).__name__}: {exc}"
+            )
+            emit(
+                out,
+                part="part_done",
+                engine=a.engine,
+                which=a.part,
+                rep=a.rep,
+                complete=True,
+            )
         print(f"UNSUPPORTED at N={a.parallel}: engine did not start: {exc}", flush=True)
         sys.exit(0)
     # The engine log is shared by every cell of a job (same name): this cell's slice is the byte
@@ -3095,30 +3297,46 @@ def main():
                     a,
                 )
             if _LIVE_SERVERS:
-                s = _LIVE_SERVERS[-1]  # a restart cell measured on its relaunched server
+                s = _LIVE_SERVERS[
+                    -1
+                ]  # a restart cell measured on its relaunched server
             probe_response = None
             conc_probe = None
             # an engine's explicit refusal ended this cell (an 'unsupported' row): it has no requests to
             # verify, probe or attribute; the evidence checks below are skipped and the cell is closed
             unsupported_cell = cell_unsupported(a.out)
             conc_records = fe.read_concurrent_records(a.out)
-            if fullcmp and a.engine in PROBE_ENGINES and conc_records and not unsupported_cell:
+            if (
+                fullcmp
+                and a.engine in PROBE_ENGINES
+                and conc_records
+                and not unsupported_cell
+            ):
                 # the concurrent probe: the same N requests, non-streaming, at once (the streamed concurrent
                 # requests carry no draft stats). Not a table number: part=probe_conc rows, probe=true.
                 n = sum(len(r.get("requests") or []) for r in conc_records)
                 # the cell's prompts: one shared prompt for a --conc-same cell, else the conc part's prompts
                 same = bool(getattr(a, "conc_same", False))
                 texts = [
-                    concurrent_prompt(0 if same else i, 0, a.conc_ctx, getattr(a, "prompt_variant", 0))
+                    concurrent_prompt(
+                        0 if same else i, 0, a.conc_ctx, getattr(a, "prompt_variant", 0)
+                    )
                     for i in range(n)
                 ]
                 with cf.ThreadPoolExecutor(max(1, n)) as ex:
                     _progress("conc-probe")
                     conc_probe = list(ex.map(lambda t: probe_request(s, t), texts))
                 for rid, resp in enumerate(conc_probe):
-                    emit(out, part="probe_conc", engine=a.engine, rep=a.rep, rid=rid,
-                         probe=True, timings=(resp or {}).get("timings"),
-                         probe_fields=fe.probe_fields(resp))
+                    emit(
+                        out,
+                        part="probe_conc",
+                        engine=a.engine,
+                        rep=a.rep,
+                        rid=rid,
+                        probe=True,
+                        timings=(resp or {}).get("timings"),
+                        probe_fields=fe.probe_fields(resp),
+                    )
             if fullcmp and a.engine in PROBE_ENGINES and not unsupported_cell:
                 # One non-streaming request after the measured parts (not a table number): the serving
                 # path returns per-request draft stats only in a non-streaming response.
@@ -3153,7 +3371,12 @@ def main():
                     cell_engine_log(s.log, log_end_fail, prefix=_LOG_PREFIX)
                 )
                 raise
-            if fullcmp and a.engine != "yunshu" and getattr(s, "engaged_per_row", None) and not unsupported_cell:
+            if (
+                fullcmp
+                and a.engine != "yunshu"
+                and getattr(s, "engaged_per_row", None)
+                and not unsupported_cell
+            ):
                 # attribution per measured request, from the matched evidence (written after the final check)
                 for attr in fe.attr_rows_from(s.engaged_per_row, measured):
                     emit(out, part="attr", engine=a.engine, rep=a.rep, **attr)
@@ -3161,8 +3384,12 @@ def main():
             if fullcmp and conc_records:
                 # attribution per concurrent request (rid, record part), from the shared verdict
                 for attr in fe.concurrent_attr_rows(
-                    fe.load_table(), a.engine, s.requested_spec_mode,
-                    s.log.read_text(errors="replace"), conc_records, getattr(s, "ready_log_offset", None),
+                    fe.load_table(),
+                    a.engine,
+                    s.requested_spec_mode,
+                    s.log.read_text(errors="replace"),
+                    conc_records,
+                    getattr(s, "ready_log_offset", None),
                     probe_responses=conc_probe,
                 ):
                     emit(out, part="attr", engine=a.engine, rep=a.rep, **attr)
@@ -3232,7 +3459,9 @@ def main():
         raise
     finally:
         stop_cell_telemetry()
-        for live in _LIVE_SERVERS:  # a restart cell's relaunched server, then the first one
+        for (
+            live
+        ) in _LIVE_SERVERS:  # a restart cell's relaunched server, then the first one
             live.kill()
         s.kill()
         cleanup_job_home(OUT, os.environ)
