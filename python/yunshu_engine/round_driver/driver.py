@@ -373,9 +373,6 @@ class _Row:
     features: Any = None  # generic layer: ``generic.PromptFeatures`` of the prompt
     state: Any = None  # generic layer: ``generic.RowState`` (the model's per-row state)
     ahead_logged: bool = False
-    stale_cache: bool = (
-        False  # the cache holds a position the reply does not (never stored)
-    )
     ahead: Any = (
         None  # lone generic row: the next step's token, already queued on the device
     )
@@ -1029,7 +1026,6 @@ class RoundDriver:
             and gone[0].finished
             and gone[0].apc is not None
             and self.finish_hook is not None
-            and not getattr(gone[0], "stale_cache", False)
         ):
             # the last row leaves a batch cache: cut its own cache out so the reply can be stored
             self.batch.restore(gone[0])
@@ -1063,11 +1059,7 @@ class RoundDriver:
 
             row = gone[0]
             held = False
-            if (
-                row.finished
-                and self.finish_hook is not None
-                and not getattr(row, "stale_cache", False)
-            ):
+            if row.finished and self.finish_hook is not None:
                 # the reply's cache is complete here: the runner holds it for the next turn and
                 # offers the buffers itself once stored
                 if self.dflash is not None:
@@ -1823,21 +1815,12 @@ class RoundDriver:
         return not blockers
 
     def _drop_ahead(self) -> None:
-        """Discard a queued next step of a row that leaves (stop, cancel): its token is dropped; the position
-        it appended to the cache is trimmed when the cache can trim, else the row's cache is marked stale
-        (never stored for reuse; a rotating-window family has no reply cache on the driver anyway)."""
+        """Forget a queued next step of a row that leaves (stop, cancel): only its output token is dropped.
+        The step's input was the row's last emitted token, so the cache then holds valid K/V for the whole
+        context including that token: one position more than a normal finish, never trimmed (a window
+        cache cannot trim) and stored as it is (the store accepts a cache holding every emitted token)."""
         for r in self.batch.rows:
-            if r.ahead is None:
-                continue
             r.ahead = None
-            if self.batch.can_trim(1):
-                for c in self.batch.cache or ():
-                    c.trim(1)
-            else:
-                r.stale_cache = True
-                logger.info(
-                    "round driver: reply cache not stored (queued step in a window cache)"
-                )
 
     def _settle_ahead(self) -> list[Event]:
         """Finish the queued next step of every row that has one (its token is the row's correct next token:

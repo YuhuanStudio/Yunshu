@@ -57,6 +57,7 @@ def main() -> int:
         default=0,
         help="repeat a filler paragraph N times before the question",
     )
+    ap.add_argument("--two-turn", action="store_true")
     a = ap.parse_args()
     repo, out = Path(a.repo).resolve(), Path(a.out).resolve()
     work = out.parent / a.label
@@ -117,7 +118,9 @@ def main() -> int:
                         "model": os.path.basename(a.model),
                         "temperature": 0,
                         "max_tokens": a.tokens,
-                        "messages": [{"role": "user", "content": PROMPT}],
+                        "messages": [
+                            {"role": "user", "content": FILLER * a.filler + PROMPT}
+                        ],
                     },
                 )
                 dt = time.perf_counter() - s
@@ -126,6 +129,7 @@ def main() -> int:
                 return {
                     "text": b["choices"][0]["message"]["content"],
                     "ct": b["usage"]["completion_tokens"],
+                    "pt": b["usage"]["prompt_tokens"],
                     "s": dt,
                 }
 
@@ -133,7 +137,49 @@ def main() -> int:
             runs = [one() for _ in range(a.reps)]
             if any(r["ct"] < a.tokens // 2 for r in runs):
                 raise SystemExit(f"too few tokens: {[r['ct'] for r in runs]}")
+            if a.filler and any(r["pt"] < 1500 for r in runs):
+                raise SystemExit(f"prompt too short: {[r['pt'] for r in runs]}")
+            two = None
+            if a.two_turn:
+                q1 = (
+                    FILLER * a.filler
+                    + "In two sentences, what is the text above about?"
+                )
+                msgs = [{"role": "user", "content": q1}]
+
+                def chat(m):
+                    r = httpx.post(
+                        base + "/v1/chat/completions",
+                        timeout=600,
+                        json={
+                            "model": os.path.basename(a.model),
+                            "temperature": 0,
+                            "max_tokens": 300,
+                            "messages": m,
+                        },
+                    )
+                    r.raise_for_status()
+                    return r.json()
+
+                t1 = chat(msgs)
+                msgs += [
+                    t1["choices"][0]["message"],
+                    {"role": "user", "content": "Now say it in five words."},
+                ]
+                t2 = chat(msgs)
+                det = t2["usage"].get("prompt_tokens_details") or {}
+                two = {
+                    "t1_finish": t1["choices"][0]["finish_reason"],
+                    "t1_prompt_tokens": t1["usage"]["prompt_tokens"],
+                    "t1_completion_tokens": t1["usage"]["completion_tokens"],
+                    "t2_prompt_tokens": t2["usage"]["prompt_tokens"],
+                    "t2_cached_tokens": det.get("cached_tokens"),
+                    "t1_text": t1["choices"][0]["message"]["content"],
+                    "t2_text": t2["choices"][0]["message"]["content"],
+                }
             res = {
+                "two_turn": two,
+                "prompt_tokens": runs[0]["pt"],
                 "label": a.label,
                 "repo": str(repo),
                 "tokens": runs[0]["ct"],

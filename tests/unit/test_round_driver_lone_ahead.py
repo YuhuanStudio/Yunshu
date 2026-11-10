@@ -158,11 +158,11 @@ def test_second_row_join_keeps_stream_identical(monkeypatch):
     assert got == solo[:6]
 
 
-def test_finish_with_ahead_trims_or_marks_stale(monkeypatch):
-    mp = monkeypatch
-    d, row = _lone(mp, True, max_tokens=100, stop=(12,))
-    _run(d, row, 5)
-    assert row.finished and d.batch.cache[0].trimmed == 1 and not row.stale_cache
-    d, row = _lone(mp, False, stop=(12,))
-    _run(d, row, 5)
-    assert row.finished and row.stale_cache
+def test_finish_with_ahead_keeps_the_extra_position(monkeypatch):
+    """The queued step's input is the last emitted token: its K/V is valid, so nothing is trimmed (a window
+    cache cannot) and the reply cache is kept whole; only the queued output token is dropped."""
+    for trimmable in (True, False):
+        d, row = _lone(monkeypatch, trimmable, max_tokens=100, stop=(12,))
+        _run(d, row, 5)
+        assert row.finished and row.ahead is None
+        assert d.batch.cache[0].trimmed == 0
