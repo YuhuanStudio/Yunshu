@@ -187,3 +187,52 @@ def test_ci_local_runs_through_gpuq(monkeypatch, tmp_path):
     first = calls[0]
     assert first[0].endswith("scripts/dev/gpuq") and first[1] == "run"
     assert first[-2].endswith("scripts/dev/ci-local")
+
+
+def _git(repo, *args):
+    import subprocess
+
+    return subprocess.check_output(
+        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        text=True,
+    ).strip()
+
+
+def test_docs_only_commit_reuses_the_gpu_checks(tmp_path):
+    """User 2026-11-10: a docs edit after a passing gate must not rerun the 2-hour GPU checks;
+    a code edit must."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "python").mkdir()
+    (repo / "python/a.py").write_text("x = 1\n")
+    (repo / "README.md").write_text("old\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "c1")
+    first = _git(repo, "rev-parse", "HEAD")
+    root = tmp_path / "checks"
+    (root / first).mkdir(parents=True)
+    checks = {
+        "ci-local": {"status": "PASS"},
+        "gate": {"status": "PASS", "evidence": "g"},
+        "m3sweep": {"status": "FAIL"},
+        "agentcompat": {"status": "PASS", "evidence": "a"},
+    }
+    (root / first / "verdict.json").write_text(
+        json.dumps({"commit": first, "overall": "FAIL", "checks": checks})
+    )
+    (repo / "README.md").write_text("new\n")
+    (repo / "docs").mkdir()
+    (repo / "docs/guide.md").write_text("x\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "docs")
+    docs = _git(repo, "rev-parse", "HEAD")
+    assert rc.code_identity(docs, repo) == rc.code_identity(first, repo)
+    got = rc.reusable_passes(rc.code_identity(docs, repo), docs, root, repo)
+    assert set(got) == {"gate", "agentcompat"}  # a failed check is never reused
+    assert got["gate"]["reused_from"] == first
+    (repo / "python/a.py").write_text("x = 2\n")
+    _git(repo, "commit", "-qam", "code")
+    code = _git(repo, "rev-parse", "HEAD")
+    assert rc.code_identity(code, repo) != rc.code_identity(first, repo)
+    assert rc.reusable_passes(rc.code_identity(code, repo), code, root, repo) == {}

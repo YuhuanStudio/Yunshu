@@ -17,6 +17,60 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+RELEASE_ROOT = Path("/Volumes/P5Plus/yunshu-build/release-check")
+REUSABLE = ("gate", "m3sweep", "agentcompat")
+# Paths that cannot change what the gate / M3 sweep / agentcompat exercise: prose and the unit
+# tests (ci-local reruns those on every commit). User 2026-11-10: a docs edit after a passing
+# gate must not rerun the 2-hour GPU checks.
+NON_RUNTIME = re.compile(r"^(docs/|tests/|\.github/)|\.md$")
+
+
+def code_identity(sha: str, repo: Path = REPO) -> str:
+    """Hash of the commit's tree without the NON_RUNTIME paths: two commits with the same identity
+    serve, install and test-drive the same code."""
+    import hashlib
+
+    listing = subprocess.check_output(
+        ["git", "-C", str(repo), "ls-tree", "-r", "--full-tree", sha], text=True
+    )
+    kept = [
+        ln
+        for ln in listing.splitlines()
+        if "\t" in ln and not NON_RUNTIME.search(ln.split("\t", 1)[1])
+    ]
+    return hashlib.sha256("\n".join(kept).encode()).hexdigest()[:24]
+
+
+def reusable_passes(
+    identity: str, sha: str, root: Path = RELEASE_ROOT, repo: Path = REPO
+) -> dict:
+    """{check: row} of blocking checks that passed on an earlier commit with the same code identity."""
+    found: dict = {}
+    for vp in sorted(root.glob("*/verdict.json"), key=lambda p: p.stat().st_mtime):
+        try:
+            v = json.loads(vp.read_text())
+        except (OSError, ValueError):
+            continue
+        other = v.get("commit", "")
+        if not other or other == sha:
+            continue
+        ident = v.get("code_identity")
+        if ident is None:
+            try:
+                ident = code_identity(other, repo)
+            except subprocess.CalledProcessError:
+                continue
+        if ident != identity:
+            continue
+        for name in REUSABLE:
+            row = (v.get("checks") or {}).get(name) or {}
+            if row.get("status") == "PASS":
+                found[name] = {
+                    "status": "PASS",
+                    "evidence": row.get("evidence", ""),
+                    "reused_from": other,
+                }
+    return found
 
 
 def plan(sha, tree, out, prefix, priority=2):
@@ -75,6 +129,11 @@ def checklist(rows):
         r = rows[name]
         print(
             f"- [{'x' if r['status'] == 'PASS' else ' '}] {name}: {r['status']} {r.get('evidence', '')}"
+            + (
+                f" (reused from {r['reused_from'][:12]})"
+                if r.get("reused_from")
+                else ""
+            )
             + (" (non-blocking)" if name == "agentbench" else "")
         )
 
@@ -85,6 +144,11 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument(
         "--priority", type=int, default=2, help="gpuq priority of the blocking checks"
+    )
+    ap.add_argument(
+        "--no-reuse",
+        action="store_true",
+        help="rerun the GPU checks even when an earlier commit with the same runtime code passed them",
     )
     ap.add_argument("--label-prefix", default="releng015-release")
     ap.add_argument("--out", type=Path)
@@ -102,11 +166,30 @@ def main(argv=None):
         for n in ("ci-local", *commands)
     }
     print(f"Release commit: {sha}", flush=True)
+    identity = code_identity(sha)
+    reused = (
+        {} if a.no_reuse or a.dry_run else reusable_passes(identity, sha, out.parent)
+    )
+    for name, row in reused.items():
+        commands.pop(name, None)
+        rows[name] = row
+        print(
+            f"{name}: reused PASS of {row['reused_from'][:12]} (same runtime code {identity})"
+        )
     if a.dry_run:
         print(
             shlex.join(
-                [str(REPO / "scripts/dev/gpuq"), "run", "--gate", "--", "nice", "-n", "15",
-                 str(REPO / "scripts/dev/ci-local"), sha]
+                [
+                    str(REPO / "scripts/dev/gpuq"),
+                    "run",
+                    "--gate",
+                    "--",
+                    "nice",
+                    "-n",
+                    "15",
+                    str(REPO / "scripts/dev/ci-local"),
+                    sha,
+                ]
             )
         )
         for name, cmd in commands.items():
@@ -124,7 +207,7 @@ def main(argv=None):
                 "--label",
                 f"{a.label_prefix}-ci-local",
                 "--priority",
-                "0",
+                str(a.priority),  # 2026-11-10: at p0 it waited 20 min behind p1 suites
                 "--gate",
                 "--timeout",
                 "90",
@@ -209,7 +292,12 @@ def main(argv=None):
     success = all(rows[n]["status"] == "PASS" for n in rows if n != "agentbench")
     (out / "verdict.json").write_text(
         json.dumps(
-            {"commit": sha, "overall": "PASS" if success else "FAIL", "checks": rows},
+            {
+                "commit": sha,
+                "code_identity": identity,
+                "overall": "PASS" if success else "FAIL",
+                "checks": rows,
+            },
             indent=2,
         )
         + "\n"
