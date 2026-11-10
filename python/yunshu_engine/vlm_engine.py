@@ -2688,7 +2688,7 @@ class VLMEngine:
             draft_kind=draft_kind,
             spec_family=spec_family,
             model_path=model_path,
-            tokenizer=self._tokenizer,
+            tokenizer=getattr(self, "_tokenizer", None),
             block=block,
             driver_lanes=driver_lanes,
         )
