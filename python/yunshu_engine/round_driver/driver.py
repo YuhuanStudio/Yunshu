@@ -372,6 +372,10 @@ class _Row:
     generic: bool = False  # processors applied per window row by ``window_processed``
     features: Any = None  # generic layer: ``generic.PromptFeatures`` of the prompt
     state: Any = None  # generic layer: ``generic.RowState`` (the model's per-row state)
+    ahead_logged: bool = False
+    ahead: Any = (
+        None  # lone generic row: the next step's token, already queued on the device
+    )
 
 
 @dataclass
@@ -990,6 +994,7 @@ class RoundDriver:
                 logger.warning("APC deferred checkpoint flush failed", exc_info=True)
 
     def remove(self, handle: Any) -> None:
+        self._drop_ahead()
         gone = [r for r in self.rows if r.req.handle is handle]
         for r in gone:  # a cancelled prefill drops its captures, as the runner does
             apc = getattr(r, "apc", None)
@@ -1297,6 +1302,8 @@ class RoundDriver:
         # step start put a 32K checkpoint copy (~45 ms) in the middle of a rehearsal's prefill.
         if all(r.pending is not None for r in self.rows):
             self.flush_checkpoints()
+        if not (len(self.rows) == 1 and self.rows[0].pending is not None):
+            self._drop_ahead()
         self._finish_join()
         if not self.rows:
             return []
@@ -1323,12 +1330,14 @@ class RoundDriver:
             self.decode_steps += 1
             if not self.rows:
                 logger.info(
-                    "round driver idle: %d decode steps, %.1f ms in a step, "
+                    "round driver idle: %d decode steps (%d pipelined), %.1f ms in a step, "
                     "%.1f ms between steps",
                     self.decode_steps,
+                    self.ahead_steps,
                     self.step_s * 1e3 / self.decode_steps,
                     self.gap_s * 1e3 / self.decode_steps,
                 )
+                self.ahead_steps = 0
                 self.decode_steps, self.step_s, self.gap_s, self._t_end = (
                     0,
                     0.0,
@@ -1768,9 +1777,85 @@ class RoundDriver:
         self.steps += 1
         return events
 
+    ahead_steps = 0  # decode steps taken from a queued next step (pipelined lone rows)
+
+    def _lone_blockers(self) -> list[str]:
+        """Why the lone row cannot decode pipelined (empty: it can)."""
+        if len(self.rows) != 1:
+            return ["rows"]
+        r = self.rows[0]
+        req = r.req
+        checks = {
+            "dflash": self.dflash is not None,
+            "head": self.head is not None,
+            "layer": not self.generic,
+            "batch": len(self.batch.rows) != 1,
+            "ngram": r.ngram is not None,
+            "force": bool(r.force),
+            "guide": req.guide is not None,
+            "processors": bool(req.processors),
+            "budget": req.budget is not None,
+            "sampling": req.sampling is not None,
+            "logprobs": bool(req.logprobs),
+            "penalty": r.penalty is not None,
+        }
+        return [k for k, v in checks.items() if v]
+
+    def _lone_ahead_ok(self) -> bool:
+        """A lone plain greedy generic row decodes pipelined (the stock loop's ``async_eval`` of the
+        next step before reading this one): nothing host-side can change the next token."""
+        blockers = self._lone_blockers()
+        if blockers and len(self.rows) == 1 and not self.rows[0].ahead_logged:
+            self.rows[0].ahead_logged = True
+            logger.info("round driver: lone row not pipelined: %s", ",".join(blockers))
+        return not blockers
+
+    def _drop_ahead(self) -> None:
+        """Discard a queued next step (the row stops, or is no longer alone): its token is dropped and the
+        position it appended to the cache is trimmed, so the cache ends where the host left it."""
+        for r in self.batch.rows:
+            if r.ahead is not None:
+                r.ahead = None
+                for c in self.batch.cache or ():
+                    c.trim(1)
+
+    def _lone_draw(self, row: _Row, tokens: mx.array) -> mx.array:
+        hidden = self.batch.forward([1], tokens)
+        return cast(
+            mx.array,
+            self._draw([_Item("d", row, None, 0, 0, 0, 1)], hidden)[0][1],
+        )
+
+    def _decode_step_lone(self) -> list[Event]:
+        row = self.rows[0]
+        tok = row.ahead
+        row.ahead = None
+        if tok is not None:
+            self.ahead_steps += 1
+        if tok is None:
+            tok = self._lone_draw(row, mx.array([row.pending], dtype=mx.int32))
+            mx.async_eval(tok, *self.batch.arrays())
+        if row.generated + 2 <= row.req.max_tokens and self.batch.can_trim(1):
+            row.ahead = self._lone_draw(row, tok.astype(mx.int32))
+            mx.async_eval(row.ahead, *self.batch.arrays())
+        toks = tok.tolist()  # waits for the step
+        events: list[Event] = []
+        used = self._emit(row, toks, None, events)
+        self.batch.commit([used])
+        if row.finished:
+            self._drop_ahead()
+        gone = [r for r in self.rows if r.finished]
+        self.rows = [r for r in self.rows if not r.finished]
+        self._release(gone)
+        self.steps += 1
+        return events
+
     def _decode_step(self) -> list[Event]:
         if self.dflash is not None:
             return cast(list[Event], self.dflash.step(self))
+        if self._lone_ahead_ok():
+            return self._decode_step_lone()
+        self._drop_ahead()
         started = time.perf_counter()
         late = [r for r in self.batch.rows if r.head_state is not None]
         if late:
