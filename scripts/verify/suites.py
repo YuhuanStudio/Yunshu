@@ -327,6 +327,14 @@ SUITES = {
 # Confirmation must keep the exact long workload (2048-token decode and follow-up),
 # rather than falling back to the short stage-list defaults of `--suite speed`.
 SUITES["long-speed"] = {**SUITES["long"], "stages": ["speed"]}
+# The release gate's long stage: correctness at 32K-128K (spec on == off, APC), not the 4-5 h
+# speed/memory/conc comparison (that runs per line). The base is the previous release, so the
+# turn-2 drift a release documents is excused and printed.
+SUITES["long-gate"] = {
+    **SUITES["long"],
+    "stages": ["preflight", "identity", "apc"],
+    "followup_drift_ok": True,
+}
 
 # Thinking-mode MMLU-Pro 300 (the Flash-Next protocol behind MODEL_SUPPORT's 261/300): paired, greedy, long replies.
 # Teacher-forced KL divergence of base and candidate against a reference (docs/guides/VERIFY.md, "kld").

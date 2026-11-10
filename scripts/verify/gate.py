@@ -54,7 +54,9 @@ DEFAULT_STAGES = [
     "soak-mmlu",
     "soak-realistic",
 ]
-LONG_SUITE = "long"
+LONG_SUITE = (
+    "long-gate"  # identity + APC at 32K-128K; speed is per line, not a release blocker
+)
 
 
 def _free_port(first: int = 18990, last: int = 18999) -> int:
