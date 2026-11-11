@@ -174,3 +174,25 @@ def test_install_wraps_and_rebinds(monkeypatch):
                 ):
                     mod.scaled_dot_product_attention = original
         sc._STATE["installed"] = False
+
+
+@pytest.mark.parametrize("hkv", [1, 2])
+def test_gemma_global_head_dim_512_chunks_equal_stock(hkv):
+    # Gemma 4 global layers: head_dim 512, 8 query heads (E2B 8/1, E4B 8/2), causal and sliding-window masks
+    g_h, g_d, q_len, kv_len = 8, 512, 40, 100
+    mx.random.seed(3)
+    q = mx.random.normal((1, g_h, q_len, g_d)).astype(mx.bfloat16)
+    k = mx.random.normal((1, hkv, kv_len, g_d)).astype(mx.bfloat16)
+    v = mx.random.normal((1, hkv, kv_len, g_d)).astype(mx.bfloat16)
+    budget = g_h * kv_len * 2 * 16  # ~16 rows per chunk
+    assert sc.should_chunk(q, k, None, "causal", budget=1)
+    want = mx.fast.scaled_dot_product_attention(q, k, v, scale=1.0, mask="causal")
+    got = sc.chunked_sdpa(stock, q, k, v, None, 1.0, "causal", None, budget)
+    assert mx.array_equal(got, want).item()
+    # sliding window: keys j with i - 32 < j <= i + offset (array mask, as Gemma builds it)
+    i = mx.arange(q_len)[:, None] + (kv_len - q_len)
+    j = mx.arange(kv_len)[None, :]
+    window = mx.logical_and(j <= i, j > i - 32)
+    want = mx.fast.scaled_dot_product_attention(q, k, v, scale=1.0, mask=window)
+    got = sc.chunked_sdpa(stock, q, k, v, None, 1.0, window, None, budget)
+    assert mx.array_equal(got, want).item()

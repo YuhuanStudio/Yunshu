@@ -1,6 +1,6 @@
 # Upstream (inspired): jundot/omlx (Apache-2.0) omlx/patches/sdpa256_attention.py @ 03bc3dd7
 # Patches upstream mlx-vlm / mlx-lm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
-"""Bound the score matrix of head-dim-256 chunked prefill on pre-NAX GPUs (M1-M4).
+"""Bound the score matrix of head-dim-256/512 chunked prefill on pre-NAX GPUs (M1-M4).
 
 MLX 0.32.3 (``ScaledDotProductAttention::use_fallback``) runs head-dim-256 attention with more
 than 8 query rows through the unfused fallback unless the GPU has NAX (M5 and macOS 26.2+) or the
@@ -17,8 +17,8 @@ elementwise ops, the same softmax over the same keys, and a matmul whose reducti
 unchanged (batched, so no split-K); only the number of rows per dispatch differs. Calls whose
 scores fit the budget are not touched.
 
-Gate: Apple GPU generation < 17 (M1-M4; see ``lane_qmm._generation``), head dim 256, more than 8
-query rows, plain (not quantized) KV, scores above ``SCORE_BUDGET``. M5 without NAX (older macOS)
+Gate: Apple GPU generation < 17 (M1-M4; see ``lane_qmm._generation``), head dim 256 or 512 (Gemma 4),
+more than 8 query rows, plain (not quantized) KV, scores above ``SCORE_BUDGET``. M5 without NAX (older macOS)
 is not detected and keeps stock behaviour.
 """
 
@@ -35,7 +35,8 @@ from . import gpu_probe
 
 logger = logging.getLogger(__name__)
 
-HEAD_DIM = 256
+# 512: Gemma 4 global layers (global_head_dim). The rows are chunked, not the head dim.
+HEAD_DIMS = (256, 512)
 MIN_Q_LEN = 9  # MLX: queries <= 8 take the vector kernel
 SCORE_BUDGET = 1 << 30  # bytes of one score tensor per dispatch; the fallback holds ~3
 MIN_ROWS = 16
@@ -111,8 +112,8 @@ def should_chunk(queries, keys, cache, mask, budget: int | None = None) -> bool:
     try:
         if (
             queries.ndim != 4
-            or queries.shape[-1] != HEAD_DIM
-            or keys.shape[-1] != HEAD_DIM
+            or queries.shape[-1] not in HEAD_DIMS
+            or keys.shape[-1] != queries.shape[-1]
         ):
             if queries.ndim == 4 and queries.shape[-2] >= MIN_Q_LEN:
                 # other head widths keep the O(n^2) fallback
