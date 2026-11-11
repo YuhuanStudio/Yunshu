@@ -56,6 +56,10 @@ patch release collects them.
 
 ### Security
 
+### Removed
+
+- `YUNSHU_GENERIC_LANE` (experimental, default off): its A/B lost on Gemma 4 E2B (decode -27..-33%, follow-up decode -35..-42%, cold TTFT +2..+16% at 1K/8K), so the generic-layer lane conversion and its NAX enable are deleted. Generic-layer models keep their stock projections.
+
 [Full changelog: v0.1.7...main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.7...main)
 
 ## [0.1.7] - 2026-11-10

@@ -1914,7 +1914,6 @@
     "python/yunshu_engine/auto_tuner.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan (parameter tuning/SLO), needs an owner. Restored from history at T0 correction."
   },
   "settings": {
-    "YUNSHU_GENERIC_LANE": "lane_linear",
     "YUNSHU_QWEN4_PREFILL_STEP": "prefill_stride_rule",
     "YUNSHU_MTP": "draft_family_coverage",
     "YUNSHU_VLM_DRAFT": "draft_family_coverage",

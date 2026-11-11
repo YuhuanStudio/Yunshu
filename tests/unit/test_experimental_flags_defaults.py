@@ -1,4 +1,4 @@
-"""YUNSHU_GENERIC_LANE and YUNSHU_QWEN4_PREFILL_STEP: defaults keep the shipped arithmetic, overrides flip them."""
+"""YUNSHU_QWEN4_PREFILL_STEP: default keeps the shipped arithmetic, overrides flip it."""
 
 import pytest
 
@@ -10,12 +10,6 @@ def _clean():
     settings.clear_overrides()
     yield
     settings.clear_overrides()
-
-
-def test_generic_lane_is_off_by_default_and_flips():
-    assert settings.get_bool("YUNSHU_GENERIC_LANE") is False
-    settings.set_override("YUNSHU_GENERIC_LANE", True)
-    assert settings.get_bool("YUNSHU_GENERIC_LANE") is True
 
 
 def test_qwen4_prefill_step_default_and_override():

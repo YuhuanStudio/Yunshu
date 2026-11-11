@@ -46,15 +46,6 @@ EVIDENCE = {
         ],
         "Speed A/B queued; KLD vs reference and peak memory at 8192 are the open items before a default.",
     ),
-    "YUNSHU_GENERIC_LANE": (
-        "lane",
-        "pending",
-        [
-            "lead/deep/w3_nax_map.md (generic families: lane conversion is the route to the NAX lane prefill)",
-            "verify runs nax-gemma-e2b / nax-gemma2 (Gemma 4 E2B 4-bit, lane vs stock)",
-        ],
-        "Gemma E2B speed + solo == concurrent identity + KLD are the open items; E4B is bf16 (no quantized projections, no effect).",
-    ),
 }
 
 
