@@ -2898,8 +2898,8 @@ class VLMEngine:
                 chunk=PREFILL_STEP if qwen4 else ROUND_PREFILL_CHUNK,
                 apc=self._apc_backend,
                 kv_format="bf16" if qwen4 else precision,
-                # the packed Flash-Next verify takes a pending token and one draft (block 2)
-                max_draft=max(0, min(int(block or 2) - 1, 1)) if qwen4 else None,
+                # Flash-Next drafts block - 1 tokens per round (default block 2: qwen4_mtp.configure_lane)
+                max_draft=max(0, int(block or 2) - 1) if qwen4 else None,
             )
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s kv=%s",

@@ -33,7 +33,7 @@ from .verify import DRIVER_MAX_ROWS
 
 logger = logging.getLogger(__name__)
 
-MAX_CHAIN = 2  # positions per row in one packed step: the pending token and one draft
+MAX_CHAIN = 2  # default positions per row in one packed step: the pending token and one draft
 PACK_ROWS = 16  # rows of one fused-kernel pack (kernels/tf_flash_next MAX_ROWS)
 
 
