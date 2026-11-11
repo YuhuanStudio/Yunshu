@@ -44,6 +44,7 @@ patch release collects them.
 
 - Generic-layer models decode each concurrent row with its own call, so concurrent output equals solo output; the lockstep batched path is removed.
 - Release process: the release gate runs its stages fail-fast, its long stage checks 32K–128K identity and prefix-cache reuse, and GPU checks that passed are reused when only docs or tests change.
+- Removed `YUNSHU_GENERIC_LANE` (experimental, default off): its A/B lost on Gemma 4 E2B (decode -27..-33%, follow-up decode -35..-42%, cold TTFT +2..+16% at 1K/8K), so the generic-layer lane conversion and its NAX enable are deleted. Generic-layer models keep their stock projections.
 
 ### Fixed
 
@@ -57,9 +58,6 @@ patch release collects them.
 
 ### Security
 
-### Removed
-
-- `YUNSHU_GENERIC_LANE` (experimental, default off): its A/B lost on Gemma 4 E2B (decode -27..-33%, follow-up decode -35..-42%, cold TTFT +2..+16% at 1K/8K), so the generic-layer lane conversion and its NAX enable are deleted. Generic-layer models keep their stock projections.
 
 [Full changelog: v0.1.7...main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.7...main)
 
