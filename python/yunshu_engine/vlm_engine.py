@@ -2722,12 +2722,11 @@ class VLMEngine:
             int(settings.get("YUNSHU_QWEN4_PREFILL_STEP")) if qwen4 else PREFILL_STEP,
             generic=generic_layer,
         )
-        from .kernels import buffer_cache
+        # family-agnostic: restores any exact native KV/Arrays cache without the detached copy
+        from .kernels import buffer_cache, cache_restore
 
+        cache_restore.install()
         if spec_family and not qwen4:
-            from .kernels import cache_restore
-
-            cache_restore.install()
             from .kernels import preempt
 
             preempt.install()
