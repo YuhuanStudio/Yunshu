@@ -83,13 +83,8 @@ def install(
             )
             if settings.get("YUNSHU_PREFILL_MATMUL") == "stock":
                 lane_linear.set_stock_rows(lane_linear.STOCK_MIN_ROWS)
-                text_cfg = config.get("text_config", config)
-                if (
-                    kernels["lane_linear"]
-                    and text_cfg.get("hidden_size") == 5120
-                    and text_cfg.get("num_hidden_layers") == 64
-                    and nax_prefill.enable()
-                ):
+                # every spec-family size: nax_prefill.eligible() checks each call's shape (was 27B-only)
+                if kernels["lane_linear"] and nax_prefill.enable():
                     nax_prefill.warmup(
                         {
                             module.bits
