@@ -1821,7 +1821,8 @@
     "python/yunshu_engine/kv_optimizations.py": "unwired: to be re-homed on the round driver (T5 KV quantization rows; plan step T5). Restored from history at T0 correction; no driver caller yet.",
     "python/yunshu_engine/spec_prefill.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan, needs an owner and a decision (plan T4 is the closest step). Restored from history at T0 correction.",
     "python/yunshu_engine/spec_prefill_engine.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan, needs an owner and a decision (plan T4 is the closest step). Restored from history at T0 correction.",
-    "python/yunshu_engine/mtp_tree.py": "MTP draft-tree rounds for mlx-vlm's single-request loop; its install() patch was dead on the round driver and was removed (deadcode-1110). Kept with mtp_lane.rounds / copy_graft / copy_cost for the planned MTP copy-and-graft port to the driver (MAINLINES 11-10); wire or delete after that A/B."
+    "python/yunshu_engine/mtp_tree.py": "MTP draft-tree rounds for mlx-vlm's single-request loop; its install() patch was dead on the round driver and was removed (deadcode-1110). Kept with mtp_lane.rounds / copy_graft / copy_cost for the planned MTP copy-and-graft port to the driver (MAINLINES 11-10); wire or delete after that A/B.",
+    "python/yunshu_engine/round_driver/textlm.py": "T7 text-model adapter for the round driver; routed by line-textdriver-1111 (text models onto the driver), then removed from orphans"
   },
   "modules_other": {
     "python/yunshu_engine/kernels/gdn_qk_eps.py": "GDN q/k RMS epsilon measured from the installed mlx-vlm and rendered into gdn_prefill._NORM_SCALE_SOURCE and the RMS arm of qwen35_gdn_prework, so a mlx-vlm bump (b8bf04c) flips stock and fused together (value unchanged on 0.7.8)",
