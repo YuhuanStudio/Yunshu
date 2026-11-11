@@ -55,6 +55,8 @@ TEMPLATES = {
     "mistral": "{{ '[TOOL_CALLS]' }}",
     "pythonic": "{{ '<|tool_call_start|>' }}{{ '<|tool_call_end|>' }}",
     "deepseek": "{{ '<｜tool▁calls▁begin｜>' }}",
+    # Cohere Command R7B: the upstream cohere2_moe parser is selected by this marker.
+    "cohere2_moe": "{{ '<|START_ACTION|>' }}{{ '<|END_ACTION|>' }}",
 }
 
 
@@ -86,6 +88,10 @@ DS = (
     "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n"
     '```json\n{"city": "Taipei", "days": 3}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>'
 )
+COHERE = (
+    '<|START_ACTION|>[{"tool_call_id": "0", "tool_name": "get_weather", '
+    '"parameters": {"city": "Taipei", "days": 3}}]<|END_ACTION|>'
+)
 
 CASES = [
     ("gemma4", GEMMA, {"city": "Taipei", "days": 3, "metric": True}),
@@ -95,6 +101,7 @@ CASES = [
     ("mistral", MISTRAL_V3, {"city": "Taipei", "days": 3}),
     ("pythonic", PYTHONIC, {"city": "Taipei", "days": 3}),
     ("deepseek", DS, {"city": "Taipei", "days": 3}),
+    ("cohere2_moe", COHERE, {"city": "Taipei", "days": 3}),
 ]
 
 
@@ -136,6 +143,18 @@ def test_tool_formats_reads_engine_tokenizer_and_caches():
 
 def test_deepseek_detection_is_yunshu_owned():
     assert native_format(_tok(TEMPLATES["deepseek"])) is DEEPSEEK
+
+
+def test_cohere_action_block_is_routed_to_upstream_parser():
+    fmt = native_format(_tok(TEMPLATES["cohere2_moe"]))
+    assert fmt is not None and fmt.name == "cohere2_moe"
+    assert (fmt.start, fmt.end) == ("<|START_ACTION|>", "<|END_ACTION|>")
+
+
+def test_cohere_marker_in_prose_without_json_stays_visible():
+    text = "The <|START_ACTION|> token opens a Cohere tool block."
+    calls, rest = parse_tool_output(text, _formats("cohere2_moe"), TOOLS)
+    assert calls == [] and rest == text
 
 
 # ── non-streaming ──
