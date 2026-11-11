@@ -130,3 +130,40 @@ def test_partial_fast_row_exact_matches_stock(bits, n):
     out = row_exact_qmv.quantized_linear(lin, x)
     for r in range(3):
         assert mx.array_equal(out[:, r : r + 1], lin(x[:, r : r + 1])).item()
+
+
+@pytest.mark.parametrize("q_len", [2, 3, 4])
+@pytest.mark.parametrize("kv_len", [1000, 1025, 2000])
+def test_flash_next_verify_attention_matches_serial_decode(monkeypatch, kv_len, q_len):
+    """2026-11-11 (oMLX d403e4605): Flash-Next dense positions verify through this seam; with the
+    model row-exact switch every verify row equals its one-row decode (gqa 12, hd 256)."""
+    from yunshu_engine.kernels.omlx import qwen35_verify_sdpa_split as s
+
+    q, k, v, scale = _attention_inputs(kv_len, q_len=q_len, hq=24, hk=2, seed=3)
+    limit = s._eligible(q, k, None)
+    assert limit > 0
+    monkeypatch.setattr(s, "_MODEL_ROW_EXACT", True)
+    out = s.verify_attention(q, k, v, scale, limit)
+    for r in range(q_len):
+        ref = _one_row_reference(q, k, v, scale, r)
+        assert mx.array_equal(out[..., r : r + 1, :], ref).item(), f"row {r}"
+
+
+def test_flash_next_default_verify_attention_differs_somewhere():
+    """The fails-before evidence: without the switch some Flash-Next-shaped verify row differs."""
+    from yunshu_engine.kernels.omlx import qwen35_verify_sdpa_split as s
+
+    bad = 0
+    for kv_len in (1000, 1025, 2000):
+        for q_len in (2, 3, 4):
+            q, k, v, scale = _attention_inputs(kv_len, q_len=q_len, hq=24, hk=2, seed=3)
+            s._MODEL_ROW_EXACT = False
+            out = s.verify_attention(q, k, v, scale, s._eligible(q, k, None))
+            bad += sum(
+                not mx.array_equal(
+                    out[..., r : r + 1, :], _one_row_reference(q, k, v, scale, r)
+                ).item()
+                for r in range(q_len)
+            )
+    print("Flash-Next default verify rows != serial decode:", bad)
+    assert bad > 0

@@ -770,6 +770,10 @@ class VLMEngine:
         from . import ple_parallel
 
         ple_parallel.install(int(settings.get("YUNSHU_PLE_READ_THREADS")))
+        from .kernels.omlx import qwen35_verify_sdpa_split
+
+        # Flash-Next dense positions verify through the shared seam: row-exact keeps spec on == off
+        qwen35_verify_sdpa_split.set_model_row_exact(is_qwen4_family(config))
         if is_qwen4_family(config):
             from . import fallbacks
             from .kernels import tf_hc_forward

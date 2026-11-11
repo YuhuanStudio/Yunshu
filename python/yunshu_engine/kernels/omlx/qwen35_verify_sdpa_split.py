@@ -54,6 +54,16 @@ logger = logging.getLogger(__name__)
 
 _PATCHED = False
 _ENGAGED_LOGGED: set[int] = set()
+# Set per loaded model: Flash-Next / Qwen4 verify reaches this seam through mlx-vlm's batch-invariant
+# verifier for its dense (pre-QSA) positions, and only the row-exact plan equals its serial decode.
+_MODEL_ROW_EXACT = False
+
+
+def set_model_row_exact(flag: bool) -> None:
+    """Every verify call of the loaded model uses the row-exact attention (spec on == off)."""
+    global _MODEL_ROW_EXACT
+    _MODEL_ROW_EXACT = bool(flag)
+
 
 # MLX fast::ScaledDotProductAttention routes to the vector kernel only while
 # q_len * gqa_factor <= 32; wider blocks fall to the composed unfused path.
@@ -108,7 +118,9 @@ def _vector_plan(key_len: int, gqa_factor: int, rows: int) -> tuple:
     key partitions. A row's arithmetic depends on the plan, not on the rows
     sharing the call."""
     devc = _gpu_class()
-    if not ((devc in ("d", "s") and key_len >= 1024) or (gqa_factor > 1 and key_len >= 4096)):
+    if not (
+        (devc in ("d", "s") and key_len >= 1024) or (gqa_factor > 1 and key_len >= 4096)
+    ):
         return (1,)
     n_simds = gqa_factor * rows
     if devc == "s":
@@ -907,6 +919,26 @@ def _eligible(queries, keys, cache) -> int:
     return limit
 
 
+def verify_attention(queries, keys, values, scale, limit: int):
+    """The verify-width causal attention this seam serves (``limit`` from ``_eligible``)."""
+    q_len = queries.shape[-2]
+    wide_from = min(limit + 1, _WIDE_MIN_ROWS)
+    if _MODEL_ROW_EXACT or is_row_exact_armed():
+        # MLX's vector kernel scores each query row exactly like a one-row decode call on the
+        # same kernel plan; the tile kernels below round probabilities differently.
+        return _row_exact_causal_sdpa(queries, keys, values, scale, limit)
+    if (
+        q_len <= _WIDE_MAX_ROWS
+        and keys.shape[-2] >= _GQA_MIN_KEYS
+        and queries.shape[1] // keys.shape[1] <= _GQA_MAX_GROUP
+        and _gqa_ready()
+    ):
+        return _gqa_causal_sdpa(queries, keys, values, scale)
+    if wide_from <= q_len <= _WIDE_MAX_ROWS and keys.shape[-2] >= 8:
+        return _wide_causal_sdpa(queries, keys, values, scale)
+    return _chunked_causal_sdpa(queries, keys, values, scale, limit)
+
+
 def apply_qwen35_verify_sdpa_split_patch() -> bool:
     global _PATCHED
     if _PATCHED:
@@ -939,25 +971,7 @@ def apply_qwen35_verify_sdpa_split_patch() -> bool:
             limit = _eligible(queries, keys, cache)
             if limit and getattr(cache, "left_padding", None) is None:
                 try:
-                    q_len = queries.shape[-2]
-                    wide_from = min(limit + 1, _WIDE_MIN_ROWS)
-                    if is_row_exact_armed():
-                        # MLX's vector kernel scores each query row exactly
-                        # like a one-row decode call on the same kernel plan;
-                        # the tile kernels below round probabilities
-                        # differently.
-                        out = _row_exact_causal_sdpa(queries, keys, values, scale, limit)
-                    elif (
-                        q_len <= _WIDE_MAX_ROWS
-                        and keys.shape[-2] >= _GQA_MIN_KEYS
-                        and queries.shape[1] // keys.shape[1] <= _GQA_MAX_GROUP
-                        and _gqa_ready()
-                    ):
-                        out = _gqa_causal_sdpa(queries, keys, values, scale)
-                    elif wide_from <= q_len <= _WIDE_MAX_ROWS and keys.shape[-2] >= 8:
-                        out = _wide_causal_sdpa(queries, keys, values, scale)
-                    else:
-                        out = _chunked_causal_sdpa(queries, keys, values, scale, limit)
+                    out = verify_attention(queries, keys, values, scale, limit)
                     _log_engaged(queries.shape[-2])
                     return out
                 except Exception:
@@ -965,9 +979,7 @@ def apply_qwen35_verify_sdpa_split_patch() -> bool:
                         "verify-split attention failed; falling back",
                         exc_info=True,
                     )
-        return original(
-            queries, keys, values, cache=cache, scale=scale, mask=mask
-        )
+        return original(queries, keys, values, cache=cache, scale=scale, mask=mask)
 
     q35_lang._qwen3_5_left_padded_attention = patched_target_verify_attention
     _PATCHED = True
