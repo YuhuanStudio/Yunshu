@@ -75,6 +75,13 @@ LONG_FROM = 16384  # positions from here on prefill in LONG_CHUNK atoms
 LONG_CHUNK = 2048
 CHUNK = 512  # default prefill chunk: fixed spans from the prompt start
 SHORT_FIRST = 512  # a prompt with at most this many rows left runs before longer ones
+# A prompt this much shorter than the longest waiting one also goes first (up to SHORT_JUMP_MAX
+# rows): 1K prompts no longer wait out a whole 128K prefill (real-1104 mixed cell: 207-243 s).
+SHORT_JUMP_RATIO = 8
+SHORT_JUMP_MAX = 8192
+SHORT_STREAK_MAX = (
+    16  # after this many prefill steps of jumping prompts the oldest gets one
+)
 IDLE_BUDGET = 2048  # prefill tokens per prefill step when no row decodes
 ACCEPT_PRIOR = 0.7  # per-depth draft acceptance before a row has history
 ACCEPT_EMA = 0.15
@@ -423,6 +430,7 @@ class RoundDriver:
         # decoding row waits behind a prompt.
         self.chunk = int(chunk or CHUNK)
         self.idle_budget = max(IDLE_BUDGET, self.chunk)
+        self._short_streak = 0
         # Atom size by absolute position (so it depends on the prompt alone, and a
         # session extended from a stored checkpoint continues on the same grid):
         # the attention re-reads the whole KV per query block, so 512-token blocks
@@ -1372,8 +1380,7 @@ class RoundDriver:
         # Shortest remainder first: a restored prompt (a few rows to run) would
         # otherwise ride behind a whole 2048-row span of a cold one (~1.9 s on the
         # 27B); it finishes in tens of milliseconds, so it goes ahead.
-        short = [r for r in waiting if len(r.req.ids) - r.done <= SHORT_FIRST]
-        out = self._prefill_step(short or waiting, decoding)
+        out = self._prefill_step(self._short_first(waiting), decoding)
         # A checkpoint ends a row's span for the step (the snapshot is taken from
         # the cache after it), so a prompt's last atoms arrive one step apart and
         # its first token waited a whole multi-row step per atom (8 x 1K: 8.3 s for
@@ -1393,6 +1400,25 @@ class RoundDriver:
         if self.dflash is not None:
             self._credit_prefill(time.perf_counter() - prefill_started, decoding)
         return out
+
+    def _short_first(self, waiting: list) -> list:
+        """Prompts much shorter than the longest waiting one run first, shortest first; the
+        split-invariant prefill keeps every row's bits whatever order the spans run in."""
+
+        def left(r):
+            return len(r.req.ids) - r.done
+
+        longest = max((left(r) for r in waiting), default=0)
+        limit = max(SHORT_FIRST, min(SHORT_JUMP_MAX, longest // SHORT_JUMP_RATIO))
+        short = sorted((r for r in waiting if left(r) <= limit), key=left)
+        if not short or len(short) == len(waiting):
+            self._short_streak = 0
+            return short or waiting
+        self._short_streak += 1
+        if self._short_streak > SHORT_STREAK_MAX:
+            self._short_streak = 0
+            return waiting
+        return short
 
     def _will_decode(self) -> bool:
         """Whether the next step is a decode step: rows decode and either no

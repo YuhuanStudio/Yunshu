@@ -485,6 +485,39 @@ def test_prefill_serves_the_oldest_long_prompt_first(tiny, monkeypatch):
         d.step()
 
 
+def test_short_prompts_do_not_wait_out_a_long_prefill(tiny, monkeypatch):
+    """2026-11-11 (real-1104 mixed cell: 1x128K + 7x1K, shorts waited 207-243 s): a prompt far
+    shorter than the long one admitted before it prefills first, and the long one still advances."""
+    from yunshu_engine.round_driver import driver as drv
+
+    lm, _ = tiny
+    monkeypatch.setattr(drv, "SHORT_FIRST", 16)
+    monkeypatch.setattr(drv, "SHORT_STREAK_MAX", 3)
+    d = drv.RoundDriver(lm, stop_tokens=set(), chunk=64)
+    d.idle_budget = 256
+    d.add(
+        drv.Request(
+            [(5 * i + 1) % 500 for i in range(2000)], 1, handle="long", use_apc=False
+        )
+    )
+    for k in range(6):
+        d.add(
+            drv.Request(
+                [(3 * i + k) % 500 for i in range(100)],
+                1,
+                handle=f"s{k}",
+                use_apc=False,
+            )
+        )
+    rows = {r.req.handle: r for r in d.rows}
+    d.step()
+    assert rows["long"].done == 0 and rows["s0"].done == 100 and rows["s1"].done == 100
+    for _ in range(12):
+        d.step()
+    assert all(rows[f"s{k}"].pending is not None for k in range(6))
+    assert rows["long"].done > 0  # the streak guard let the oldest prompt advance
+
+
 def test_single_segment_projection_is_not_copied():
     from yunshu_engine.round_driver import forward as fw
 
