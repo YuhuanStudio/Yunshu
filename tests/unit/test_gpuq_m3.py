@@ -14,6 +14,16 @@ sys.path.insert(0, str(DEV))
 sys.path.insert(0, str(DEV.parent / "research"))
 
 
+def _isolated_env(tmp_path):
+    """Test env without the outer gpuq job's tag: the worker kills every process carrying
+    GPUQ_JOB_ID, so an inherited tag would SIGKILL the pytest run itself (2026-11-11)."""
+    import os
+
+    return {k: v for k, v in os.environ.items() if k != "GPUQ_JOB_ID"} | {
+        "TMPDIR": str(tmp_path)
+    }
+
+
 @pytest.fixture
 def queue(tmp_path, monkeypatch):
     import gpuq
@@ -302,7 +312,6 @@ def test_collection_never_promotes_m3_source_evidence(tmp_path):
 def test_remote_worker_cancelled_while_lock_waiting(tmp_path, cancel_before_start):
     import fcntl
     import json
-    import os
     import subprocess
 
     lock_path = tmp_path / "m3run.lock"
@@ -310,7 +319,7 @@ def test_remote_worker_cancelled_while_lock_waiting(tmp_path, cancel_before_star
     rc = tmp_path / "worker.rc"
     unexpected = tmp_path / "must-not-run"
     payload = dict(
-        env={**os.environ, "TMPDIR": str(tmp_path)},
+        env=_isolated_env(tmp_path),
         timeout=4,
         cwd=str(tmp_path),
         pid=str(pid),
@@ -349,13 +358,12 @@ def test_remote_worker_cancelled_while_lock_waiting(tmp_path, cancel_before_star
 def test_remote_worker_timeout_includes_lock_wait(tmp_path):
     import fcntl
     import json
-    import os
     import subprocess
 
     lock_path = tmp_path / "lock"
     rc = tmp_path / "rc"
     payload = dict(
-        env={**os.environ, "TMPDIR": str(tmp_path)},
+        env=_isolated_env(tmp_path),
         timeout=0.1,
         cwd=str(tmp_path),
         pid=str(tmp_path / "pid"),
@@ -375,7 +383,6 @@ def test_remote_worker_timeout_includes_lock_wait(tmp_path):
 
 def test_remote_worker_cancel_kills_descendants(tmp_path):
     import json
-    import os
     import subprocess
 
     beat = tmp_path / "heartbeat"
@@ -385,7 +392,7 @@ def test_remote_worker_cancel_kills_descendants(tmp_path):
     child = f"import time\nf=open({str(beat)!r}, 'a')\nwhile True:\n f.write('x'); f.flush(); time.sleep(.02)\n"
     command = f'import subprocess,time; from pathlib import Path; subprocess.Popen([{sys.executable!r},"-c",{child!r}]); Path({str(ready)!r}).touch(); time.sleep(30)'
     payload = dict(
-        env={**os.environ, "TMPDIR": str(tmp_path)},
+        env=_isolated_env(tmp_path),
         timeout=5,
         cwd=str(tmp_path),
         pid=str(pid),
@@ -678,3 +685,58 @@ def test_m3_refuses_unlisted_checkpoint_at_submit(queue, monkeypatch):
         device="m3",
     )
     assert queue._read(queue.JOBS / (small + ".json")).get("m3_refused") == []
+
+
+VERIFY_TREE = "/Volumes/P5Plus/yunshu-build/verify/trees/c9e958814adf"
+OTHER_TREE = "/Volumes/P5Plus/yunshu-build/verify/trees/9f4397455664"
+MAIN_CHECKOUT = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu"
+
+
+def _toplevel_of(*args, **kwargs):
+    # `git -C <dir> rev-parse --show-toplevel`: every checkout (tree or main) is its own top
+    return args[0][2] + "\n"
+
+
+def test_verify_tree_job_maps_tree_into_m3_worktree(monkeypatch):
+    """A yv smoke cell runs code from its verify tree, not the cwd's checkout: the laptop
+    must sync and map that tree (2026-11-11: tfbench.py missing on the laptop, every smoke
+    cell routed to M3 failed)."""
+    from gpuq_remote import mapped, paths, run_cwd
+
+    monkeypatch.setattr("subprocess.check_output", _toplevel_of)
+    job = dict(
+        id="smoke",
+        cwd=MAIN_CHECKOUT,
+        cmd=[
+            MAIN_CHECKOUT + "/.venv/bin/python",
+            VERIFY_TREE + "/scripts/research/tfbench.py",
+            "--out",
+            "/Volumes/P5Plus/yunshu-build/verify/out.jsonl",
+        ],
+        env={"TFB_YUNSHU_SRC": VERIFY_TREE + "/python"},
+    )
+    top, wt, pairs, _ = paths(job, "/remote")
+    assert top == VERIFY_TREE
+    assert mapped(job["cmd"][1], pairs) == wt + "/scripts/research/tfbench.py"
+    assert mapped(job["env"]["TFB_YUNSHU_SRC"], pairs) == wt + "/python"
+    assert mapped(job["cmd"][0], pairs) == "/remote/.venv/bin/python"
+    assert run_cwd(job, top, wt, pairs) == wt
+
+
+def test_two_verify_trees_refuse_m3(queue, monkeypatch):
+    """One M3 job syncs one source tree; a job naming two trees is refused at submit."""
+    from gpuq_remote import paths
+
+    monkeypatch.setenv("GPUQ_NO_PREFLIGHT", "1")
+    monkeypatch.setattr("subprocess.check_output", _toplevel_of)
+    cmd = ["true", VERIFY_TREE + "/a.py", OTHER_TREE + "/b.py"]
+    with pytest.raises(ValueError, match="verify tree"):
+        paths(dict(id="two", cwd=MAIN_CHECKOUT, cmd=cmd, env={}), "/remote")
+    with pytest.raises(ValueError, match="verify tree"):
+        queue.submit(cmd, "two-trees", 1, 0, device="m3")
+    assert not list(queue.JOBS.glob("*.json"))
+    jid = queue.submit(cmd, "two-trees-any", 1, 0, device="any")
+    row = queue._read(queue.JOBS / (jid + ".json"))
+    assert row["m3_refused"] and not queue._m3_eligible(row)
+    one = queue.submit(["true", VERIFY_TREE + "/a.py"], "one-tree", 1, 0, device="any")
+    assert queue._read(queue.JOBS / (one + ".json")).get("m3_refused") == []

@@ -132,9 +132,56 @@ def config(env):
     )
 
 
+VERIFY_TREE_RE = re.compile(re.escape(BUILD) + r"/verify/trees/[^/\s:'\";]+")
+
+
+def verify_trees(cmd, env):
+    """Verify trees (BUILD/verify/trees/<sha>, each a git worktree) a job's cmd or env names."""
+    trees = []
+    for value in [*cmd, *env.values()]:
+        for match in VERIFY_TREE_RE.finditer(str(value)):
+            if match[0] not in trees:
+                trees.append(match[0])
+    return trees
+
+
+def verify_tree_conflict(cmd, env):
+    """Refusal reason when a job names more than one verify tree (M3 syncs one source tree)."""
+    trees = verify_trees(cmd, env)
+    if len(trees) > 1:
+        return (
+            "verify trees "
+            + ", ".join(trees)
+            + " in one job (M3 syncs one source tree)"
+        )
+    return None
+
+
+def run_cwd(job, top, wt, pairs):
+    """The job's cwd on the laptop. A verify-tree job's cwd is the main checkout, which the
+    laptop must not run: it runs the synced worktree instead."""
+    cwd = job["cwd"]
+    if verify_trees(job["cmd"], job["env"]) and not (
+        cwd == top or cwd.startswith(top + "/")
+    ):
+        return wt
+    return mapped(cwd, pairs)
+
+
 def paths(job, repo):
+    trees = verify_trees(job["cmd"], job["env"])
+    if len(trees) > 1:
+        raise ValueError("M3: " + verify_tree_conflict(job["cmd"], job["env"]))
+    # A verify tree is itself a git worktree: its toplevel is the source the laptop runs.
     top = subprocess.check_output(
-        ["git", "-C", job["cwd"], "rev-parse", "--show-toplevel"], text=True
+        [
+            "git",
+            "-C",
+            trees[0] if trees else job["cwd"],
+            "rev-parse",
+            "--show-toplevel",
+        ],
+        text=True,
     ).strip()
     wt = repo + "/.m3-wt/gpuq-" + job["id"]
     pairs = [(top, wt), (BUILD, repo + "/.m3-home/out")]
@@ -484,7 +531,7 @@ class Remote:
         code = Path(__file__).with_name("gpuq_remote_worker.py").read_text()
         payload = dict(
             cmd=cmd,
-            cwd=mapped(self.job["cwd"], pairs),
+            cwd=run_cwd(self.job, top, wt, pairs),
             env=env,
             pid=self.pidfile,
             rc=rcpath,

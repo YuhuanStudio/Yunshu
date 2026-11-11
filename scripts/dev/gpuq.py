@@ -1020,9 +1020,18 @@ def submit(
     # job naming any other one is refused here; an `any` job is kept off the laptop lane.
     import gpuq_remote
 
+    tree_conflict = (
+        gpuq_remote.verify_tree_conflict(cmd, dict(os.environ))
+        if device != "m5"
+        else None
+    )
+    if device == "m3" and tree_conflict:
+        raise ValueError("M3: " + tree_conflict)
     m3_refused = (
         gpuq_remote.refused_m3_models(cmd, dict(os.environ)) if device != "m5" else []
     )
+    if tree_conflict:
+        m3_refused.append(tree_conflict)
     if device == "m3" and m3_refused:
         raise ValueError(
             f"M3: checkpoints {m3_refused} are not allowed on the laptop; "
