@@ -383,6 +383,49 @@ def test_paused_seconds_merges_overlapping_pauses(gp, monkeypatch, tmp_path):
     assert gc.paused_seconds(0, 100) == 100.0
 
 
+def test_gpuq_pause_and_serving_reader_parse_the_same_fixture(
+    gp, monkeypatch, tmp_path
+):
+    # both callers must read one pause file identically: the serving reader is the only parser
+    spec = importlib.util.spec_from_file_location(
+        "serving_pauses_parity_test", REPO / "python/yunshu_engine/serving/pauses.py"
+    )
+    sp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sp)
+    assert gp._pauses.__spec__.origin == str(sp.__spec__.origin)
+    fixtures = {
+        "doc.json": {
+            "pauses": [[10, 20], [20, 25], [30, 31.5]]
+        },  # touching counts as overlap
+        "bare.json": [[10, 20], [15, 30]],  # bare list form is accepted
+        "empty.json": {"pauses": []},
+        "reversed.json": {"pauses": [[5, 1]]},  # malformed: fails closed
+        "garbage.json": "not json",
+    }
+    probes = [(0, 5), (9, 10), (12, 18), (25, 26), (25.5, 29), (31, 40), (0, 100)]
+    for name, doc in fixtures.items():
+        f = tmp_path / name
+        f.write_text(doc if isinstance(doc, str) else json.dumps(doc))
+        monkeypatch.setenv("GPUQ_PAUSE_FILE", str(f))
+        try:
+            expected_spans = sp.read_pause_file(str(f), now=1e12)
+        except sp.PauseDataError:
+            expected_spans = None
+        if expected_spans is None:
+            assert gp.was_paused(0, 1) is True
+            with pytest.raises(ValueError):
+                gp.pause_intervals(str(f))
+            continue
+        assert gp.pause_intervals(str(f)) == expected_spans
+        for t0, t1 in probes:
+            assert gp.was_paused(t0, t1, str(f)) == sp.was_paused(
+                t0, t1, str(f), now=1e12
+            )
+            assert gp.paused_seconds(t0, t1, expected_spans) == sp.paused_seconds(
+                t0, t1, expected_spans
+            )
+
+
 def test_memory_admission(q, prod):
     g = _gate(q, prod, reserve_gb=16)
     job, _ = _job(q, ["true"], mem_gb=24)
