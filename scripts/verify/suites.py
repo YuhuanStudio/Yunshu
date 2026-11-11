@@ -184,10 +184,9 @@ SUITES = {
     # decode-path change (kernels, spec decode, sampler): identity incl. spec on == off, speed
     "decode": {
         "stages": ["preflight", "probe", "smoke", "identity", "apc", "speed"],
-        "ctx": [1024, 8192],
-        # spec on == off is opt-in (--spec-off): on main the server-level 'off' path differs
-        # from MTP and DFlash in every 27B 1K cell (2026-10 measurement)
-        "spec_off": False,
+        "ctx": [1024, 2048, 8192],
+        # spec on == off on by default (08_verification_gaps: it was long/zh only); 1030 is available via --ctx
+        "spec_off": True,
         "reps": 3,
     },
     # Chinese prompts (Simplified and Taiwan Traditional Wikipedia essays, prompts/zhcn-* and zhtw-*):
@@ -222,8 +221,8 @@ SUITES = {
     },
     "full": {
         "stages": list(LADDER),
-        "ctx": [1024, 8192, 32768],
-        "spec_off": False,
+        "ctx": [1024, 2048, 8192, 32768],
+        "spec_off": True,
         "reps": 3,
         "mmlu_n": 200,
     },
@@ -238,10 +237,10 @@ SUITES = {
             "kld",
             "speed",
         ],
-        "ctx": [1024, 8192],
+        "ctx": [1024, 2048, 8192],
         # identity and speed also cover Chinese prompts (zhcn, zhtw), not only English prose/code
         "kinds": ["prose", "code", "zhcn", "zhtw"],
-        "spec_off": False,
+        "spec_off": True,
         "reps": 3,
     },
     # long requests (agentic 32K-128K sessions): identity incl. spec on == off over 2048-token

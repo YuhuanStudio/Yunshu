@@ -994,11 +994,19 @@ def test_judge_rows():
     ok, why = gate.judge_rows(
         [
             {"check": "install.build", "status": "PASS"},
-            {"check": "install.x", "status": "SKIP"},
+            {"check": "install.x", "status": "SKIP", "optional": True},
         ],
         "install.",
     )
     assert ok and not why
+    ok, why = gate.judge_rows(
+        [
+            {"check": "install.build", "status": "PASS"},
+            {"check": "families.gemma", "status": "SKIP"},
+        ],
+        "",
+    )
+    assert not ok and "families.gemma" in why[0]
     ok, why = gate.judge_rows(
         [{"check": "serve-27b.server_path", "status": "CONTENDED", "detail": "x"}],
         "serve-27b.",
@@ -1248,7 +1256,7 @@ def test_quick_suite_and_gpu_minutes(world):
     cfg = suites.parse_suite("quick")
     assert (
         cfg["stages"][-1] == "speed"
-        and cfg["ctx"] == [1024, 8192]
+        and cfg["ctx"] == [1024, 2048, 8192]
         and cfg["mmlu_n"] == 200
     )
     assert go(world, suite="smoke", label="g") == 0
@@ -2370,3 +2378,9 @@ def test_quality_interpreter_missing_a_dependency_is_named(tmp_path):
     from verify import stages
 
     assert stages.missing_deps(sys.executable, tmp_path) == ["yunshu-surely-absent-pkg"]
+
+
+def test_per_change_suites_check_spec_off_and_2k_context():
+    for name in ("decode", "quick", "full"):
+        assert suites.SUITES[name]["spec_off"] is True, name
+        assert 2048 in suites.SUITES[name]["ctx"], name

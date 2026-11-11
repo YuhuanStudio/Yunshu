@@ -130,9 +130,14 @@ para_env "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cache
 s=$?; [ "$s" -eq 0 ] || [ "$s" -eq 5 ] || [ "$prc" -ne 0 ] || prc=$s
 set -e
 cat "$WORK/pytest.log"
+# A skipped test did not run: the count must not rise above the committed baseline (scripts/dev/ci_skip_baseline.json).
+skiprc=0
+"$WORK/.venv/bin/python" scripts/dev/ci_skips.py plain "$WORK/pytest.log" || skiprc=1
+"$WORK/.venv/bin/python" scripts/dev/ci_skips.py paravirtual "$WORK/pytest-paravirtual.log" || skiprc=1
 [ "$rc" -eq 0 ] || { echo "ci-local: FAIL (pytest rc $rc) $SHA"; exit "$rc"; }
 cat "$WORK/pytest-paravirtual.log"
 [ "$prc" -eq 0 ] || { echo "ci-local: FAIL (paravirtual pytest rc $prc) $SHA"; exit "$prc"; }
+[ "$skiprc" -eq 0 ] || { echo "ci-local: FAIL (skipped tests above the baseline) $SHA"; exit 1; }
 fi
 if [ "$STAGE" = gpu ]; then
   cd /

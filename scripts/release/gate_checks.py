@@ -73,7 +73,9 @@ class Results:
         self.prefix = prefix
         path.parent.mkdir(parents=True, exist_ok=True)
 
-    def add(self, name: str, status: str, detail: str = "", contended=None) -> bool:
+    def add(
+        self, name: str, status: str, detail: str = "", contended=None, optional=False
+    ) -> bool:
         row = {
             "contended": was_contended() if contended is None else contended,
             "check": f"{self.prefix}{name}",
@@ -81,6 +83,10 @@ class Results:
             "detail": str(detail)[:500],
             "t": time.strftime("%H:%M:%S"),
         }
+        if optional:
+            row["optional"] = (
+                True  # a SKIP of this row is allowed to count as a non-failure
+            )
         with self.path.open("a") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
         print(f"{status:4}  {row['check']}  {row['detail'][:160]}", flush=True)
@@ -705,6 +711,11 @@ def main() -> int:
         choices=("true", "false"),
         help="override the job flag for a measured attempt",
     )
+    r.add_argument(
+        "--optional",
+        action="store_true",
+        help="mark the row optional: only then may a SKIP row pass the stage",
+    )
     for name in ("sdk", "cancel", "long", "family"):
         p = sub.add_parser(name)
         p.add_argument("--url", required=True)
@@ -723,6 +734,7 @@ def main() -> int:
             a.status,
             a.detail,
             contended=None if a.contended is None else a.contended == "true",
+            optional=a.optional,
         )
         return 0
     if a.cmd == "summary":

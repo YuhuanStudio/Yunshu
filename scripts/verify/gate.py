@@ -126,12 +126,15 @@ def stage_fingerprint(
 
 
 def judge_rows(rows: list, prefix: str) -> tuple[bool, list]:
-    """(passed, reasons) for the check rows of one gate stage (pure; unit-tested)."""
+    """(passed, reasons) for the check rows of one gate stage (pure; unit-tested).
+
+    A SKIP row fails the stage unless the row is marked optional."""
     mine = [r for r in rows if str(r.get("check", "")).startswith(prefix)]
     bad = [
         f"{r['check']}: {r.get('status')} {str(r.get('detail', ''))[:200]}"
         for r in mine
-        if r.get("status") not in ("PASS", "SKIP")
+        if r.get("status") != "PASS"
+        and not (r.get("status") == "SKIP" and r.get("optional") is True)
     ]
     if not mine:
         return False, ["no check rows recorded (stage did not run to completion)"]

@@ -291,7 +291,7 @@ fi
 # ── 5. service: a real launchd agent (only with GATE_SERVICE=1) ──────────────────────
 if has service; then
   if [ "${GATE_SERVICE:-0}" != 1 ]; then
-    rec service.launchd SKIP "loads a real launchd agent; run with GATE_SERVICE=1 after the user agrees"
+    rec service.launchd SKIP "loads a real launchd agent; run with GATE_SERVICE=1 after the user agrees" --optional
   elif need_bin $BV service.launchd && [ -n "${M:-}" ]; then
     log "stage service"
     if ${YENV[@]} $BV service install -m $M --port $PORT --force > $OUT/service.log 2>&1; then
