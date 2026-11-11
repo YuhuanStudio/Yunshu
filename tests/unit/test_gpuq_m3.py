@@ -2,6 +2,7 @@
 
 import contextlib
 import importlib
+import os
 import sys
 import threading
 import time
@@ -728,6 +729,10 @@ def test_two_verify_trees_refuse_m3(queue, monkeypatch):
     from gpuq_remote import paths
 
     monkeypatch.setenv("GPUQ_NO_PREFLIGHT", "1")
+    # submit scans the whole environment: a run inside a yv verify tree inherits its PYTHONPATH
+    for key, value in list(os.environ.items()):
+        if "/verify/trees/" in value:
+            monkeypatch.delenv(key)
     monkeypatch.setattr("subprocess.check_output", _toplevel_of)
     cmd = ["true", VERIFY_TREE + "/a.py", OTHER_TREE + "/b.py"]
     with pytest.raises(ValueError, match="verify tree"):
