@@ -28,7 +28,7 @@ from ..dflash_context import context_window
 from ..dflash_fast import Verifier, pack_readback, prepare, unpack_readback
 from ..dflash_plan import FastShape, remap_landed, reorder, search_tree
 from ..text_logprobs import top_logprobs_device
-from .allocate import fair_nodes
+from .allocate import dflash_room, fair_nodes
 from .forward import logits
 from .stage_profile import RoundProfile
 from .verify import DRIVER_MAX_ROWS, Window, forward
@@ -249,6 +249,11 @@ class DFlashBatch:
             tree_verify.vq.clear_group_sums()
 
     def _step_rows(self, driver, rows) -> list[Event]:
+        from .. import gpu_window
+
+        # Timeline-only mode must never replay kernels on live cache buffers.
+        if not self.prof.on:
+            gpu_window.tick(capture_kernels=False)
         t_round = time.perf_counter()
         out = self._step_rows_inner(driver, rows)
         self._diag_round(len(rows), time.perf_counter() - t_round)
@@ -272,6 +277,7 @@ class DFlashBatch:
             self._diag = dict(rounds=0, rows=0, s=0.0, nodes=0, used=0)
 
     def _step_rows_inner(self, driver, rows) -> list[Event]:
+        from .. import gpu_window
         from .driver import _Item, _PerRow
 
         t_start = time.perf_counter()
@@ -309,7 +315,7 @@ class DFlashBatch:
                 copied = copied[:15]
             if copied:
                 copies[b] = copied
-            rooms.append(len(copied) if copied else min(15, room))
+            rooms.append(dflash_room(r.n, room, len(copied)))
         prof.mark("copy_lookup")
         nodes = fair_nodes(rooms, budget=max_rows, turn=self.turn)
         self.turn += 1
@@ -454,6 +460,7 @@ class DFlashBatch:
                     draws.append((targets, lp, None))
             mx.async_eval(*[d[0] for d in draws])
             prof.mark("verify", *[d[0] for d in draws])
+            gpu_window.mark("dflash.prebuild")
             gpu_walked = self._prebuild(rows, windows, results, draws, nodes, copies)
             events: list[Event] = []
             for b, (r, w, res, (target, lp, extra), n) in enumerate(
@@ -462,6 +469,7 @@ class DFlashBatch:
                 ranks_dev = getattr(w.shape, "original_ranks", None)
                 parents_dev = w.shape.parents_array()
                 # one transfer for the round (the lane's pack_readback)
+                gpu_window.mark("dflash.readback")
                 targets, toks, parents, ranks = unpack_readback(
                     pack_readback(target, w.tokens, parents_dev, ranks_dev).tolist(),
                     int(target.size),
@@ -469,6 +477,7 @@ class DFlashBatch:
                     int(parents_dev.size),
                     ranks_dev is not None,
                 )
+                gpu_window.mark("dflash.host_accept_emit")
                 path = dflash_tree.walk(toks, parents, targets)
                 committed = [toks[p] for p in path[1:]] + [targets[path[-1]]]
                 used = 0
@@ -505,7 +514,15 @@ class DFlashBatch:
                 if b in copies:
                     st["copy"] += 1
                     st["copy_used"] += used
-                tree_verify.tree_commit(self.lm, r.cache, res, kept)
+                gpu_window.mark("dflash.tree_commit")
+                tree_verify.tree_commit(
+                    self.lm,
+                    r.cache,
+                    res,
+                    kept,
+                    prepared=gpu_walked.get(b) if used == len(path) else None,
+                )
+                gpu_window.mark("dflash.post_commit")
                 committed_rows.add(id(r))
                 r.n += used
                 copier = self.copiers.get(id(r))
@@ -589,18 +606,20 @@ class DFlashBatch:
                 for x in (lat.cands, lat.unary, lat.anchor)
             ],
         )
+        gpu_window.mark("dflash.return")
         driver.steps += 1
         return events
 
-    def _prebuild(self, rows, windows, results, draws, nodes, copies) -> set:
+    def _prebuild(self, rows, windows, results, draws, nodes, copies) -> dict:
         """A lone drafting row (model tree round, no guide / budget / force): take its accepted path
         on the GPU (``walk_gpu``), append it to the drafter ring and queue the next round's lattice,
         all before the host reads the verify back -- the lane's next-round pipelining. Returns the
-        rows (indices) whose ring was appended here."""
+        rows (indices) whose ring was appended here, mapped to uninstalled GDN
+        replay outputs. The host installs them only for an uncut accepted path."""
         from ..dflash_plan import walk_gpu
 
         if not self.can_draft or len(rows) != 1:
-            return set()
+            return {}
         b, r = 0, rows[0]
         target, _lp, extra = draws[0]
         if (
@@ -612,7 +631,7 @@ class DFlashBatch:
             or not nodes[b]
             or extra is not None
         ):
-            return set()
+            return {}
         w, res = windows[0], results[0]
         path_g, count_g, bonus_g = walk_gpu(
             w.tokens.reshape(-1), w.shape.parents_array(), target.reshape(-1)
@@ -630,6 +649,12 @@ class DFlashBatch:
             committed=r.generated + count_g,
             penalty=r.penalty,
         )
-        mx.async_eval(lat.cands, lat.unary, lat.anchor)
+        prepared = tree_verify.prepare_tree_commit(res, path_g, count_g)
+        mx.async_eval(
+            lat.cands,
+            lat.unary,
+            lat.anchor,
+            *[a for pair in prepared.values() for a in pair],
+        )
         self.prebuilt[id(r)] = lat
-        return {b}
+        return {b: prepared}

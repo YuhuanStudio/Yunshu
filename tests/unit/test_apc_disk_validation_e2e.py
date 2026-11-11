@@ -122,3 +122,10 @@ def test_corrupt_checkpoint_files_fall_back_cold(model, tmp_path, damage):  # no
     assert st.cached_tokens == 0
     assert out == _cold(model, a2)
     assert isinstance(st, RunStats)
+
+
+@pytest.fixture(autouse=True)
+def prompt_checkpoints_only(monkeypatch):
+    # These tests compare prompt checkpoints with cold prefill. Reply-cache
+    # reuse has its own tests and can supersede those checkpoints at finish.
+    monkeypatch.setenv("YUNSHU_NEXT_TURN_PREFILL", "off")

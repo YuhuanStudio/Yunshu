@@ -807,3 +807,26 @@ def test_forced_flash_window_hidden_and_next_state_equal_t1_bits(width):
     assert mx.array_equal(nxt[0][0], nxt[1][0]).item()
     for _, tx in nxt:
         tx.commit(1)
+
+
+def test_long_context_model_cap_preserves_plain_tokens(target, monkeypatch):
+    from yunshu_engine.copy_drafter import CopyDrafter
+    from yunshu_engine.round_driver import dflash as rd
+    from yunshu_engine.round_driver.allocate import dflash_room
+
+    # Exercise the real tree-search/verify path at the long-context allowance
+    # without allocating a 128K tiny-model cache. Boundary logic is CPU-tested.
+    monkeypatch.setattr(CopyDrafter, "draft", lambda self, cap: [])
+    allowances = []
+
+    def long_room(position, remaining, copied):
+        n = dflash_room(131072, remaining, copied)
+        allowances.append(n)
+        return n
+
+    monkeypatch.setattr(rd, "dflash_room", long_room)
+    prompt = list(range(4, 25))
+    ref, _ = _run(target, [prompt], draft=False, tokens=32)
+    got, _ = _run(target, [prompt], draft=True, tokens=32)
+    assert got == ref
+    assert allowances and max(allowances) == 7

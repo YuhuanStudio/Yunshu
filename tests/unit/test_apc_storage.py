@@ -720,3 +720,10 @@ def test_agent_sessions_leave_one_or_two_checkpoints_each_on_the_ssd(tmp_path):
     assert len(disk._exact_index) <= 1 + 3 * 2, "stale checkpoints pile up on the SSD"
     assert cached / prompt > 0.7
     assert mgr.disk_superseded >= 12
+
+
+@pytest.fixture(autouse=True)
+def prompt_checkpoints_only(monkeypatch):
+    # These tests compare prompt checkpoints with cold prefill. Reply-cache
+    # reuse has its own tests and can supersede those checkpoints at finish.
+    monkeypatch.setenv("YUNSHU_NEXT_TURN_PREFILL", "off")

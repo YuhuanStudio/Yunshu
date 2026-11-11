@@ -35,13 +35,13 @@ def _lib():
     return _STATE["lib"]
 
 
-def tick() -> None:
+def tick(*, capture_kernels: bool = True) -> None:
     lib = _lib()
     if lib is None:
         return
     _STATE["n"] += 1
     n = _STATE["n"]
-    capture = hasattr(lib, "metalrt_profile")
+    capture = capture_kernels and hasattr(lib, "metalrt_profile")
     if capture and n == START - 1:
         lib.metalrt_cap_begin()
     elif capture and n == START:

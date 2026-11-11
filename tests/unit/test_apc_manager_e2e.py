@@ -191,3 +191,10 @@ def test_ssd_reload_gives_the_same_tokens_as_ram_and_cold(model, tmp_path):
 
     out_cold, _ = _run(driver_runner(model, processor=_processor()), a2)
     assert out_ssd == out_ram == out_cold
+
+
+@pytest.fixture(autouse=True)
+def prompt_checkpoints_only(monkeypatch):
+    # These tests compare prompt checkpoints with cold prefill. Reply-cache
+    # reuse has its own tests and can supersede those checkpoints at finish.
+    monkeypatch.setenv("YUNSHU_NEXT_TURN_PREFILL", "off")

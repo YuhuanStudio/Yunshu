@@ -42,6 +42,7 @@ import hashlib
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -401,6 +402,35 @@ def _prefix(ids, n: int):
     """The first ``n`` ids as a view of the prompt's int32 array (one conversion per prompt)."""
     arr = ids_array(ids)
     return arr[:n] if arr is not None else ids[:n]
+
+
+def round_readback(
+    targets: list[mx.array],
+    rows: list,
+    used_drafts: list[int],
+    *,
+    read: Callable[[mx.array], list[int]] | None = None,
+) -> tuple[list[list[int]], list[list[int]]]:
+    """One host transfer for target windows and the drafts compared with them.
+
+    The head's seed table stays on the device; callers select its last kept
+    position there. Packing integer IDs adds no floating-point arithmetic.
+    """
+    arrays = [t.reshape(-1).astype(mx.int32) for t in targets]
+    sizes = [int(t.size) for t in arrays]
+    draft_arrays = [
+        r.draft_dev[:n] for r, n in zip(rows, used_drafts, strict=True) if n
+    ]
+    packed = mx.concatenate([*arrays, *draft_arrays])
+    values = cast(list[int], packed.tolist()) if read is None else read(packed)
+    windows, drafts, at = [], [], 0
+    for n in sizes:
+        windows.append(values[at : at + n])
+        at += n
+    for n in used_drafts:
+        drafts.append(values[at : at + n])
+        at += n
+    return windows, drafts
 
 
 class RoundDriver:
@@ -1944,6 +1974,16 @@ class RoundDriver:
             return self._decode_step_lone()
         if any(r.ahead is not None for r in self.rows):
             return self._settle_ahead()
+        from .. import gpu_window
+        from .stage_profile import RoundProfile
+
+        prof = getattr(self, "_mtp_profile", None)
+        if prof is None:
+            self._mtp_profile = prof = RoundProfile()
+        if not prof.on:
+            gpu_window.tick(capture_kernels=False)
+        prof.begin()
+        gpu_window.mark("mtp.graph")
         started = time.perf_counter()
         late = [r for r in self.batch.rows if r.head_state is not None]
         if late:
@@ -1972,6 +2012,8 @@ class RoundDriver:
             )
             lens.append(1 + use)
             used_drafts.append(use)
+        if prof.on:
+            prof.mark("plan", *parts)
         want_hidden = (
             self.generic
             and len(rows) == 1
@@ -2019,9 +2061,14 @@ class RoundDriver:
                 else []
             ),
         )
-        window_tokens: list[Any] = [d[1].tolist() for d in draws]  # waits for the step
+        if prof.on:
+            prof.mark("verify", *[d[1] for d in draws], early_out, early_seeds)
+        gpu_window.mark("mtp.readback")
+        window_tokens, draft_tokens = round_readback(
+            [d[1] for d in draws], rows, used_drafts
+        )  # the round's one token-ID readback
         step_s = time.perf_counter() - started
-        seed_vals: Any = early_seeds.tolist() if early_seeds is not None else []
+        gpu_window.mark("mtp.host_accept_emit")
         # forward cost: from when the GPU could start it (the chain before it
         # is not part of the forward) to now
         gpu_free = self._chain_t + self.chain_ms * self._chain_deep / 1e3
@@ -2032,11 +2079,11 @@ class RoundDriver:
 
         events: list[Event] = []
         used_all: list[int] = []
-        for (it, _tok, extra), toks, use in zip(
-            draws, window_tokens, used_drafts, strict=True
+        for (it, _tok, extra), toks, draft in zip(
+            draws, window_tokens, draft_tokens, strict=True
         ):
             row = it.row
-            window = [row.pending, *(row.draft_dev.tolist() if use else [])]
+            window = [row.pending, *draft]
             keep = 1
             while keep < len(window) and window[keep] == toks[keep - 1]:
                 keep += 1
@@ -2058,7 +2105,9 @@ class RoundDriver:
                     else None
                 )
             used_all.append(used)
+        gpu_window.mark("mtp.commit")
         self.batch.commit(used_all)
+        gpu_window.mark("mtp.post_commit")
         gone = [r for r in rows if r.finished]
         self.rows = [r for r in self.rows if not r.finished]
         for b, r in head_rows:
@@ -2077,14 +2126,19 @@ class RoundDriver:
                     mx.array([i for i, _, _ in alive], dtype=mx.int32),
                     mx.array(at_last, dtype=mx.int32),
                 ]
-                first = mx.array(
-                    [
-                        seed_vals[i][u]
-                        for (i, _, _), u in zip(alive, at_last, strict=True)
-                    ],
-                    dtype=mx.int32,
-                )
+                assert early_seeds is not None
+                first = early_seeds[
+                    mx.array([i for i, _, _ in alive], dtype=mx.int32),
+                    mx.array(at_last, dtype=mx.int32),
+                ]
+                gpu_window.mark("mtp.next_draft")
                 self._draft([r for _, _, r in alive], heads, first)
+        if prof.on:
+            prof.mark("commit", *self.batch.arrays())
+            prof.end([id(r) for r in rows], None)
+            for r in gone:
+                prof.finish(id(r))
+        gpu_window.mark("mtp.return")
         self.steps += 1
         return events
 

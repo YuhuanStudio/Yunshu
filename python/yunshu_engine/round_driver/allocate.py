@@ -144,3 +144,15 @@ def fair_nodes(rooms: Sequence[int], budget: int = 32, turn: int = 0) -> list[in
             if not left:
                 break
     return counts
+
+
+def dflash_room(position: int, remaining: int, copied: int) -> int:
+    """Model-tree allowance at the current KV position, or the copy's own allowance.
+
+    At 128K the baseline already settles on seven model nodes. Avoid its wide
+    warmup/reprobes there; a copy chain still uses its separate confidence cap.
+    The root is reserved separately by fair_nodes.
+    """
+    if copied:
+        return copied
+    return min(7 if position >= 131072 else 15, max(0, remaining))

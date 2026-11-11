@@ -1409,7 +1409,39 @@ def conv_tail(conv_prev, mixed, path, conv_idx, tail_idx):
     return mx.take(seq, conv_idx, axis=0)[None]
 
 
-def tree_commit(lm, cache: Any, res: TreeResult, path: list[int]) -> None:
+def prepare_tree_commit(
+    res: TreeResult, path_arr: mx.array, count_arr: mx.array
+) -> dict:
+    """Build GDN replay/tail outputs before readback, without advancing live caches.
+
+    The caller may install these only when emission kept the entire GPU-walked
+    path. A stop/length cut uses the ordinary host-path commit instead. Unsupported
+    replay layouts remain on the ordinary path, with identical arithmetic.
+    """
+    tail_src = mx.concatenate([mx.arange(3, dtype=mx.int32), 3 + path_arr])
+    conv_idx = tail_src[count_arr[0] + mx.arange(3, dtype=mx.int32)]
+    prepared = {}
+    for i, rec in res.records.items():
+        if rec[0] == "kv":
+            continue
+        _, layer, state, conv_prev, mixed, rows = rec
+        if not tail_fits(layer, conv_prev, mixed):
+            continue
+        fused = getattr(rows, "replay_tail", None)
+        if fused is None and not hasattr(rows, "replay"):
+            prepared[i] = replay_path_tail(
+                layer, state, rows, path_arr, count_arr, conv_prev, mixed, conv_idx
+            )
+        elif fused is not None:
+            prepared[i] = fused(
+                layer, state, path_arr, count_arr, conv_prev, mixed, conv_idx
+            )
+    return prepared
+
+
+def tree_commit(
+    lm, cache: Any, res: TreeResult, path: list[int], *, prepared: dict | None = None
+) -> None:
     """Keep the window rows in ``path`` (root first, each row a child of the
     previous one): the caches end as if those tokens had been decoded one by one."""
     from mlx_vlm.models.qwen3_5 import language as q35
@@ -1437,6 +1469,12 @@ def tree_commit(lm, cache: Any, res: TreeResult, path: list[int]) -> None:
         else:
             _, layer, state, conv_prev, mixed, rows = rec
             c._omlx_gdn_pending = None
+            if prepared is not None and i in prepared:
+                c[1], c[0] = prepared[i]
+                if hasattr(c, "advance"):
+                    c.advance(m)
+                    q35._qwen3_5_advance_lengths_info(c, m)
+                continue
             fused = getattr(rows, "replay_tail", None)
             if fused is None and not hasattr(rows, "replay"):
                 fused = replay_path_tail

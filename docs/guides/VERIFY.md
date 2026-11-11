@@ -346,6 +346,17 @@ unchanged original Metal source constants; source-generator regression tests pre
 The drafter inventory includes serving's fused all-layer context K|V and gate|up. Its whole projection graph
 uses those fused projections rather than counting both the fused and separate buffers.
 
+### Decode round host gaps
+
+`yv ab --base BASE_SHA --cand CAND_SHA --suite round_profile --ctx 1024,32768
+--label g1ports-rounds --detach` runs candidate-only diagnostics with the external
+Metal interposer. Each context gets separate normal timeline and synchronized stage
+census cells (768 output tokens). Use `--env YUNSHU_VLM_DRAFT=mtp` for MTP.
+The timeline disables kernel replay and attributes actual command-buffer idle gaps
+to host segments; the stage timer deliberately synchronizes boundaries and perturbs
+round time. PASS requires both forms of evidence, and establishes neither identity
+nor a speed improvement. Normal uninstrumented decode/long suites decide those.
+
 For dependency upgrade worktrees marked `.yv-own-venv`, preflight tests use the
 candidate interpreter as well as candidate source. Set `YV_PREFLIGHT_GPUQ=1`
 when those tests touch MLX: pytest and isolated reruns enter the shared GPU queue,

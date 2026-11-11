@@ -654,6 +654,85 @@ def _probe_key(ctx: Ctx, ctxs: list, kinds: list) -> str:
     )
 
 
+def round_profile_evidence(text: str, mode: str) -> dict:
+    """Fail closed: synchronized stage sums and normal timeline gaps are distinct evidence."""
+    if mode == "stages":
+        records = [
+            json.loads(line.split("YUNSHU_LAYER2 ", 1)[1])
+            for line in text.splitlines()
+            if "YUNSHU_LAYER2 " in line
+        ]
+        records = [r for r in records if r.get("rounds", 0) >= 10]
+        if not records or any(not r.get("dispatches_per_round") for r in records):
+            raise ValueError("missing stage dispatch census")
+        return {"synchronized_stage_records": records}
+    import ast
+
+    idle, host = [], []
+    for line in text.splitlines():
+        for marker, dest in (
+            ("GPU idle by host segment (ms/round, gaps > 20 us): ", idle),
+            ("Host time by segment (ms/round): ", host),
+        ):
+            if marker in line:
+                dest.append(ast.literal_eval(line.split(marker, 1)[1]))
+    if (
+        not idle
+        or not host
+        or not any(k.startswith(("dflash.", "mtp.")) for r in idle for k in r)
+    ):
+        raise ValueError("missing normal timeline host-gap evidence")
+    return {"idle_ms_per_round": idle, "host_ms_per_round": host}
+
+
+def stage_round_profile(ctx: Ctx) -> StageResult:
+    """Candidate-only diagnostics; PASS means complete evidence, never a speed or identity win."""
+    cells = []
+    keys = []
+    for size in ctx.suite["ctx"]:
+        for mode in ("gaps", "stages"):
+            key = f"cand-c{size}-{mode}"
+            keys.append((key, mode))
+            env = dict(
+                ctx.arm_env("cand"),
+                DYLD_INSERT_LIBRARIES="/Volumes/P5Plus/yunshu-build/metalrt/libmetalrt_trace2.dylib",
+                YUNSHU_DEBUG_TREE_PROFILE="1" if mode == "stages" else "0",
+            )
+            cells.append(
+                Cell(
+                    "round_profile",
+                    key,
+                    _tfbench_argv(
+                        ctx,
+                        "cand",
+                        "round_profile",
+                        key,
+                        _unit_args([size])
+                        + _dec_args(ctx)
+                        + _kind_args(ctx.suite["kinds"], TFBENCH_DEFAULT_KINDS),
+                        env,
+                    ),
+                    mem_gb=ctx.mem_gb,
+                    timeout_min=15,
+                    stall_min=6,
+                    quiet=True,
+                )
+            )
+    results = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(results)
+    numbers = {"diagnostic_only": True, "candidate_only": True}
+    for key, mode in keys:
+        if reasons:
+            break
+        try:
+            numbers[key] = round_profile_evidence(
+                _tfb_log(ctx, "round_profile", key).read_text(), mode
+            )
+        except (ValueError, OSError, SyntaxError) as exc:
+            reasons.append(f"{key}: {exc}")
+    return _finish(ctx, StageResult("round_profile", not reasons, reasons, numbers))
+
+
 def stage_probe(ctx: Ctx) -> StageResult:
     """One server per arm, short greedy cold decode; compare engine round counters (docs/guides/VERIFY.md)."""
     cfg = ctx.suite
@@ -3628,6 +3707,7 @@ STAGE_FUNCS = {
     "searchrank": stage_searchrank,
     "rerank": stage_rerank,
     "preflight": stage_preflight,
+    "round_profile": stage_round_profile,
     "probe": stage_probe,
     "smoke": stage_smoke,
     "toolparse": stage_toolparse,

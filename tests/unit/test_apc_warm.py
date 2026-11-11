@@ -386,3 +386,10 @@ def test_failed_promotion_keeps_the_warm_copy(monkeypatch):
     cache, n = m.lookup_exact_cache(list(a) + [5, 6, 7])
     assert n == 200 and m.lookups[-1].tier == "warm"
     _same(cache, _cache(200, 1))
+
+
+@pytest.fixture(autouse=True)
+def prompt_checkpoints_only(monkeypatch):
+    # These tests compare prompt checkpoints with cold prefill. Reply-cache
+    # reuse has its own tests and can supersede those checkpoints at finish.
+    monkeypatch.setenv("YUNSHU_NEXT_TURN_PREFILL", "off")

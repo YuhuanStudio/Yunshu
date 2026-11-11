@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 STAGES = (
+    "round_profile",
     "round-golden",
     "preflight",
     "console",
@@ -53,6 +54,7 @@ LADDER = tuple(
     for s in STAGES
     if s
     not in (
+        "round_profile",
         "round-golden",
         "kld_decode",
         "longqa",
@@ -91,6 +93,12 @@ LADDER = tuple(
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
+    "round_profile": {
+        "stages": ["round_profile"],
+        "ctx": [1024, 32768],
+        "kinds": ["prose"],
+        "decode_tokens": 768,
+    },
     "round-golden": {"stages": ["round-golden"]},
     "phaseb2": {
         "stages": ["phaseb-identity", "phaseb-speed"],
