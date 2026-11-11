@@ -125,11 +125,12 @@ def _raw_prompt_kwargs(engine) -> dict:
     """Extra engine kwargs that keep a string prompt raw (no chat template).
 
     BatchedEngine already tokenizes a str prompt as raw text and takes no extra kwargs;
-    VLMEngine wraps a str as a user turn unless told otherwise.
+    VLMEngine wraps a str as a user turn unless told otherwise. Only VLMEngine takes the
+    flag, so any other engine is called exactly as before.
     """
-    from yunshu_engine.batched_engine import BatchedEngine
+    from yunshu_engine.vlm_engine import VLMEngine
 
-    return {} if isinstance(engine, BatchedEngine) else {"raw_prompt": True}
+    return {"raw_prompt": True} if isinstance(engine, VLMEngine) else {}
 
 
 def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
