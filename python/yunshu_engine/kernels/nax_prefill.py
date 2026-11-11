@@ -197,6 +197,8 @@ def make(
 
 _enabled = False
 _dispatches = 0
+# 11-11 probe: NAX lane matmul == mx.quantized_matmul bitwise for 2/3/4/5/6/8 bits (stock NAX skips 2-bit)
+LANE_BITS = (2, 3, 4, 5, 6, 8)
 logger = logging.getLogger(__name__)
 
 
@@ -270,7 +272,7 @@ def eligible(m: int, k: int, n: int, bits: int, group: int, tiled: bool) -> bool
         and k % 64 == 0
         and 256 <= n < 100_000
         and n % 64 == 0
-        and bits in (4, 5, 8)
+        and bits in LANE_BITS
         and group == 64
         and tiled
     )
@@ -333,7 +335,7 @@ def narrow_eligible(m: int, k: int, n: int, bits: int, group: int) -> bool:
         and m % 128 == 0
         and k % 64 == 0
         and 0 < n < 256
-        and bits in (4, 5, 8)
+        and bits in LANE_BITS
         and group == 64
     )
 

@@ -15,7 +15,7 @@ from yunshu_engine.kernels import nax_prefill  # noqa: E402
         (2048, 5121, 17408, 4, 64, True),
         (2048, 5120, 48, 5, 64, False),
         (2048, 5120, 248320, 4, 64, True),
-        (2048, 5120, 17408, 6, 64, True),
+        (2048, 5120, 17408, 7, 64, True),  # no 7-bit lane layout
         (2048, 5120, 17408, 4, 32, True),
         (2048, 5120, 17408, 4, 64, False),
     ],
@@ -333,3 +333,27 @@ def test_split_prefill_preserves_narrow_gate_launch_and_sum_reuse(monkeypatch, r
     assert len(calls) == 1
     assert calls[0][:2] == (rows, rows > 512)
     assert calls[0][2] is (x if rows <= 128 else None)
+
+
+@pytest.mark.m5_gpu
+@pytest.mark.parametrize("bits", [2, 3, 4, 5, 6, 8])
+def test_nax_lane_matmul_equals_stock_quantized_matmul(monkeypatch, bits):
+    """2026-11-11: every lane bit width runs NAX bit-identically to MLX (2-bit is the Flash-Next base)."""
+    import mlx.core as mx
+    from yunshu_engine.kernels.tensorfold import lane_qmm
+
+    monkeypatch.setattr(
+        nax_prefill, "_enabled", nax_prefill._enabled
+    )  # restored after the test
+    monkeypatch.setattr(nax_prefill, "_dispatches", nax_prefill._dispatches)
+    if not nax_prefill.enable():
+        pytest.skip("NAX not available on this device")
+    mx.random.seed(bits)
+    w = (mx.random.normal((1024, 2560)) * 0.02).astype(mx.bfloat16)
+    wq, s, b = mx.quantize(w, group_size=64, bits=bits)
+    x = mx.random.normal((1024, 2560)).astype(mx.bfloat16)
+    ref = mx.quantized_matmul(x, wq, s, b, transpose=True, group_size=64, bits=bits)
+    tiled = lane_qmm.tile_weight(wq, lane_qmm.NT, 64, bits=bits)
+    got = nax_prefill.matmul(x, tiled, lane_qmm.pack_scales(s, b), bits=bits)
+    assert nax_prefill.eligible(1024, 2560, 1024, bits, 64, True)
+    assert mx.array_equal(ref, got).item()
