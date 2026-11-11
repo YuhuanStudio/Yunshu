@@ -384,12 +384,10 @@ def install() -> bool:
 
     if not _STATE["installed"]:
         step = gd.gated_delta_kernel
-        # mlx-vlm 0.7.8 added a packed Dk=128 kernel for multi-token calls (bitwise equal to the step
-        # kernel on the GPUs upstream tested). A token's bits must not depend on how a prompt was cut into
-        # spans (hit == cold, split-invariant prefill), so the step kernel stays the one arithmetic here
-        # until an M5 probe (tests/unit/test_gdn_packed_probe.py on the target device) shows equality.
-        if hasattr(gd, "_gated_delta_kernel_packed"):
-            gd._gated_delta_kernel_packed = None
+        # mlx-vlm's packed Dk=128 kernel (multi-token, no mask) is bitwise equal to the step kernel on
+        # M5 Max (probe 11-11, T=2..4096, split and batch-row invariant), so it replaces the step kernel
+        # for verify and short prefill; the split-invariant prefill still uses mx.fast chunked above.
+        # tests/unit/test_gdn_packed_probe.py pins the equality on the target device.
 
         def gated_delta_kernel(q, k, v, g, beta, state, mask=None):
             if split_enabled() and in_prefill_math() and not _STATE["bypass"]:

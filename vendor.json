@@ -2148,7 +2148,8 @@
       "source_sha256": "d98d208ce00d98f216a6de1c964235e9892e08497ec9ba6302a928da450060ff",
       "installed_version": "0.7.12",
       "reviewed_date": "2026-11-07",
-      "review_reason": "pb2-generic 2026-11-07: KEEP. Upstream v0.7.3 -> 0.7.8 changed the lookup so a resident leading block (i == 0 only) wins over the disk path; our override is a subclass wrapper that calls super() and only records the provenance (tier ssd, lookup ms), so it inherits the new order unchanged and its signature is the same."
+      "review_reason": "upstream packed kernel ADOPTED 2026-11-11 (w11_upstream): on M5 Max it is bitwise equal to the step kernel for T=2..4096, token-chained, batch-row and split invariant (probe lead/probe/upstreamgdn/gdn_packed_identity.py, 2x faster than step). gdn_prefill.install no longer nulls gd._gated_delta_kernel_packed; split-invariant prefill still uses mx.fast chunked (different bits, kept). Pinned by tests/unit/test_gdn_packed_probe.py."
+
     },
     {
       "kind": "patches",
