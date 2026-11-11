@@ -117,9 +117,21 @@ def fit_text(tok, body, label, suffix="", tol=None, media_tokens=0, system=None,
     tol = default_tol(label) if tol is None else tol
     if abs(served_tokens(tok, text, media_tokens, system, **kw) - label) <= tol:
         return text
-    return build_text(
-        tok, body, label, suffix=suffix, media_tokens=media_tokens, system=system, **kw
-    )
+    # exact first; a BPE join can make the exact length unreachable, so try the nearest lengths inside tol
+    for delta in sorted(range(-tol, tol + 1), key=abs):
+        try:
+            return build_text(
+                tok,
+                body,
+                label + delta,
+                suffix=suffix,
+                media_tokens=media_tokens,
+                system=system,
+                **kw,
+            )
+        except ValueError:
+            continue
+    raise ValueError(f"cannot construct a served length within {tol} of {label}")
 
 
 def filler_source(n_chars):

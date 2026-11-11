@@ -220,6 +220,25 @@ def test_fit_text_calibrates_to_a_large_template_overhead():
     assert text.endswith(ASK)
 
 
+def test_fit_text_takes_a_length_inside_tol_when_the_exact_one_is_unreachable(
+    monkeypatch,
+):
+    """2026-11-12 textdriver-id3b-b: Qwen2.5's BPE made 8192 exactly unreachable; the cell refused."""
+    tok = _TemplateTok(129)
+    body = " ".join(f"w{i}" for i in range(1500))
+    real = pl.build_text
+
+    def exact_unreachable(tok, source, target, **kw):
+        if target == 1024:
+            raise ValueError("cannot construct served length 1024")
+        return real(tok, source, target, **kw)
+
+    monkeypatch.setattr(pl, "build_text", exact_unreachable)
+    text = pl.fit_text(tok, body, 1024, suffix=ASK)
+    assert abs(pl.served_tokens(tok, text) - 1024) <= pl.default_tol(1024)
+    assert text.endswith(ASK)
+
+
 def test_fit_text_keeps_text_within_tolerance_unchanged():
     tok = _TemplateTok(0)
     body = " ".join(f"w{i}" for i in range(1015))  # 1015 + 9 ask words = 1024 served
