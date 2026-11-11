@@ -83,6 +83,10 @@ def test_sdpa_chunk_head_dim_over_budget_is_counted(monkeypatch):
     k = mx.zeros((1, 2, 2048, 128), dtype=mx.bfloat16)
     assert sdpa_chunk.should_chunk(q, k, None, "causal", budget=1024) is False
     assert _count("sdpa_chunk_head_dim") == 1
+    from yunshu_engine import fallbacks
+
+    # the lazy detail is built on the first event (an undefined name there raised mid-request)
+    assert "head dim" in fallbacks.counts()["sdpa_chunk_head_dim"]["first"]
 
 
 def test_gdn_prefill_norm_scale_width_is_counted(monkeypatch):
