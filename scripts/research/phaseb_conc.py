@@ -123,6 +123,7 @@ def summarize(rows):
                 tps=rate(r["times"]),
                 tokens=r["usage"].get("completion_tokens"),
                 prompt_tokens=r["usage"].get("prompt_tokens"),
+                start=r.get("t0"),
                 digest=r["digest"],
             )
             for name, r in rows.items()
@@ -131,6 +132,16 @@ def summarize(rows):
         if last > first
         else None,
     )
+
+
+def _arrival_order(section):
+    """Row labels in request-start order; None when any row lacks its start time."""
+    rows = _per_row(section)
+    if not rows or any(
+        not isinstance(v.get("start"), (int, float)) for v in rows.values()
+    ):
+        return None
+    return [k for k, _ in sorted(rows.items(), key=lambda kv: kv[1]["start"])]
 
 
 def interval_rates(a, b):
@@ -300,23 +311,36 @@ def speed_verdict(rows, reps=3, tolerance=0.02):
             reasons.append(
                 f"{key}: concurrent aggregate did not improve {base} -> {cand}"
             )
-        names = set(_per_row(next(iter(arms["base"].values()))["concurrent"]))
-        for name in names:
-            rates = {}
+        # Rows are paired by arrival rank, not label: which label reaches the server first is a race.
+        orders = {
+            arm: [_arrival_order(r["concurrent"]) for r in arms[arm].values()]
+            for arm in ("base", "cand")
+        }
+        if any(o is None for arm in orders for o in orders[arm]):
+            reasons.append(f"{key}: missing request start times")
+            continue
+        widths = {len(o) for arm in orders for o in orders[arm]}
+        if len(widths) != 1:
+            reasons.append(f"{key}: row count differs across reps")
+            continue
+        for rank in range(widths.pop()):
+            rates, labels = {}, {}
             for arm in ("base", "cand"):
-                values = [
-                    _per_row(r["concurrent"]).get(name, {}).get("tps")
-                    for r in arms[arm].values()
-                ]
+                values, names = [], []
+                for r, order in zip(arms[arm].values(), orders[arm], strict=True):
+                    names.append(order[rank])
+                    values.append(_per_row(r["concurrent"])[order[rank]].get("tps"))
+                labels[arm] = "/".join(sorted(set(names)))
                 rates[arm] = (
                     statistics.median(values)
                     if all(v is not None and v > 0 for v in values)
                     else None
                 )
+            where = f"{key}/arrival {rank + 1} (base {labels['base']}, cand {labels['cand']})"
             if rates["base"] is None or rates["cand"] is None:
-                reasons.append(f"{key}/{name}: missing per-row rate")
+                reasons.append(f"{where}: missing per-row rate")
             elif rates["cand"] < rates["base"] * (1 - tolerance):
-                reasons.append(f"{key}/{name}: per-row regression")
+                reasons.append(f"{where}: per-row regression")
     return reasons, numbers
 
 

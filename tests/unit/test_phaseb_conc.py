@@ -81,7 +81,10 @@ def test_speed_verdict_requires_interleaved_pairs_and_wins():
                     rep=rep,
                     concurrent=dict(
                         aggregate_tps=2 * tps,
-                        per_row={"A": {"tps": tps}, "B": {"tps": tps}},
+                        per_row={
+                            "A": {"tps": tps, "start": 0.0},
+                            "B": {"tps": tps, "start": 0.1},
+                        },
                     ),
                 )
             )
@@ -261,7 +264,7 @@ def test_speed_verdict_reports_uncovered_stagger_instead_of_aborting():
             solo={"per_row": {}},
             concurrent={
                 "aggregate_tps": 10.0 + (arm == "cand"),
-                "per_row": {"A": {"tps": 5.0}},
+                "per_row": {"A": {"tps": 5.0, "start": 0.0}},
             },
             stagger=stagger,
         )
@@ -271,3 +274,52 @@ def test_speed_verdict_reports_uncovered_stagger_instead_of_aborting():
     assert p.speed_verdict(rows)[0] == []
     rows[0]["stagger"] = dict(ok, after_tps=None)
     assert any("stagger did not cover" in x for x in p.speed_verdict(rows)[0])
+
+
+def _burst_cell(arm, rep, first, tps, aggregate):
+    # arrival rank 1 is the row that reached the server first; labels swap between arms
+    per_row = {name: dict(tps=tps[i], start=0.1 * i) for i, name in enumerate(first)}
+    return dict(
+        arm=arm,
+        rep=rep,
+        ctx_tokens=8192,
+        scenario="burst2",
+        shape="greedy",
+        solo={"per_row": {}},
+        concurrent=dict(aggregate_tps=aggregate, per_row=per_row),
+    )
+
+
+def test_speed_verdict_pairs_rows_by_arrival_order_not_label():
+    rows = []
+    for rep in range(3):
+        # base: A arrives first (fast); cand: B arrives first (fast), A second
+        rows.append(_burst_cell("base", rep, ("A", "B"), (50.0, 10.0), 60.0))
+        rows.append(_burst_cell("cand", rep, ("B", "A"), (50.0, 10.0), 61.0))
+    assert p.speed_verdict(rows)[0] == []
+    # a real first-arrival regression hits every cand rep, not one (median)
+    for r in rows:
+        if r["arm"] == "cand":
+            r["concurrent"]["per_row"]["B"]["tps"] = 30.0
+    assert any("per-row regression" in x for x in p.speed_verdict(rows)[0])
+
+
+def test_speed_verdict_ignores_label_swap_without_slowdown():
+    # no real slowdown: the fast first arrival is B in base and A in cand, so labels swap
+    rows = []
+    for rep in range(3):
+        rows.append(_burst_cell("base", rep, ("B", "A"), (50.0, 10.0), 60.0))
+        rows.append(_burst_cell("cand", rep, ("A", "B"), (50.0, 10.0), 61.0))
+    assert p.speed_verdict(rows)[0] == []
+
+
+def test_speed_verdict_fails_closed_without_request_start():
+    rows = [
+        _burst_cell(arm, rep, ("A", "B"), (20.0, 10.0), 30.0 + (arm == "cand"))
+        for arm in ("base", "cand")
+        for rep in range(3)
+    ]
+    for r in rows:
+        for v in r["concurrent"]["per_row"].values():
+            del v["start"]
+    assert any("missing request start" in x for x in p.speed_verdict(rows)[0])
