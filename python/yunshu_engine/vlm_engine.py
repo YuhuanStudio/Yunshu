@@ -2719,7 +2719,7 @@ class VLMEngine:
             spec_family,
             bool((kernels or {}).get("invariant")),
             qwen4,
-            PREFILL_STEP,
+            int(settings.get("YUNSHU_QWEN4_PREFILL_STEP")) if qwen4 else PREFILL_STEP,
             generic=generic_layer,
         )
         from .kernels import buffer_cache
@@ -2895,7 +2895,9 @@ class VLMEngine:
                 stop_tokens=runner.stop_tokens,
                 # Flash-Next prefill is not split-invariant: its spans are the 2048 grid the APC
                 # checkpoints sit on (apc_prefill_stride), so a hit runs the spans a cold prompt did
-                chunk=PREFILL_STEP if qwen4 else ROUND_PREFILL_CHUNK,
+                chunk=int(settings.get("YUNSHU_QWEN4_PREFILL_STEP"))
+                if qwen4
+                else ROUND_PREFILL_CHUNK,
                 apc=self._apc_backend,
                 kv_format="bf16" if qwen4 else precision,
                 # Flash-Next drafts block - 1 tokens per round (default block 2: qwen4_mtp.configure_lane)
