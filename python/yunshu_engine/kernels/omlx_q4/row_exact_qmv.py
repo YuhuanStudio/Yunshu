@@ -457,6 +457,18 @@ def _plan(linear: nn.QuantizedLinear, x: mx.array, rows: int) -> _Plan | None:
     return plans[key]
 
 
+def _note_per_row(linear: nn.QuantizedLinear, x: mx.array, rows: int) -> None:
+    """Counted: a call the row-exact kernel does not take, which runs one launch per row."""
+    from ... import fallbacks
+
+    reason = "rows" if rows > MAX_ROWS else "layout"
+    fallbacks.record(
+        f"row_exact_qmv_{reason}",
+        lambda: f"rows={rows} bits={getattr(linear, 'bits', None)} group={getattr(linear, 'group_size', None)} "
+        f"mode={getattr(linear, 'mode', 'affine')} dtype={x.dtype} K={x.shape[-1]}: one launch per row",
+    )
+
+
 def quantized_linear(linear: nn.QuantizedLinear, x: mx.array) -> mx.array:
     """``linear(x)`` for ``x`` of shape [..., K], each row with one-row arithmetic.
 
@@ -473,6 +485,7 @@ def quantized_linear(linear: nn.QuantizedLinear, x: mx.array) -> mx.array:
     flat = x.reshape(rows, x.shape[-1])
     plan = _plan(linear, x, rows)
     if plan is None:
+        _note_per_row(linear, x, rows)
         y = mx.concatenate([linear(flat[r : r + 1][None])[0] for r in range(rows)], axis=0)
         return y.reshape(*lead, -1)
     y = plan.kernel(

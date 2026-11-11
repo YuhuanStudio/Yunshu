@@ -128,7 +128,20 @@ def invariant_linear(linear: Any, x: mx.array, exact_fallback) -> mx.array:
             if "bias" in linear:
                 y = y + linear["bias"]
             return y.reshape(batch, length, n)
+        # one-row decode and wider prefill are the exact path by design
+        if 1 < rows <= MAX_ROWS:
+            _note_miss(rows, k, n, linear.bits, linear.group_size)
     return exact_fallback(linear, x)
+
+
+def _note_miss(rows: int, k: int, n: int, bits: int, group_size: int) -> None:
+    """Counted: a verify-shaped marked projection the row-invariant sg8 kernel does not take."""
+    from .. import fallbacks
+
+    fallbacks.record(
+        "batch_invariant_sg8",
+        lambda: f"rows={rows} K={k} N={n} bits={bits} group={group_size}: exact (non-invariant) qmm",
+    )
 
 
 _ZERO_ROWS: dict = {}

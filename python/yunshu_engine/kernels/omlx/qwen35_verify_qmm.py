@@ -1490,6 +1490,16 @@ def _patch_verify_layer_flush() -> None:
     Qwen3_5BatchInvariantForward._model = _model
 
 
+def _note_verify_miss(rows: int, K: int, N: int, bits: int, group_size: int) -> None:
+    """Counted: an armed verify-shaped projection (rows <= 24) that no verify kernel takes (stock qmm)."""
+    from ... import fallbacks
+
+    fallbacks.record(
+        "verify_qmm_no_route",
+        lambda: f"rows={rows} K={K} N={N} bits={bits} group={group_size}: stock qmm in an armed verify",
+    )
+
+
 def apply_verify_qmm_patch() -> bool:
     """Route verify-shaped ``nn.QuantizedLinear`` calls to the vk kernels.
 
@@ -1535,6 +1545,9 @@ def apply_verify_qmm_patch() -> bool:
         elif rows <= 6 and vk_eligible(rows, K, N, self.bits, self.group_size, x.dtype):
             route = "vk"
         if route is None:
+            # verify-shaped (sg8/mma/vk cover 3..24); longer rows are prefill, by design
+            if rows <= 24:
+                _note_verify_miss(rows, K, N, self.bits, self.group_size)
             return orig_call(self, x)
         try:
             # Batched verify rows (requests x block) share one weight pass.

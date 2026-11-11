@@ -177,6 +177,13 @@ def install_norm_scale(cls) -> None:
             and mx.default_device() == mx.gpu
         ):
             return fused_norm_scale(q, inverse=True), fused_norm_scale(k, inverse=False)
+        if split_enabled() and in_prefill_math() and q.ndim == 4 and q.shape[-1] != 128:
+            # the fused norm-scale is the 128-wide GDN head only
+            from .. import fallbacks
+
+            fallbacks.record(
+                "gdn_norm_scale_head_dim", lambda: f"q={tuple(q.shape)}: stock _normalize_qk"
+            )
         return original(self, q, k)
 
     normalize._yunshu_norm_scale = True  # type: ignore[attr-defined]

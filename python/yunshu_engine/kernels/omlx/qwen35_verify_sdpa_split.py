@@ -939,6 +939,16 @@ def verify_attention(queries, keys, values, scale, limit: int):
     return _chunked_causal_sdpa(queries, keys, values, scale, limit)
 
 
+def _note_split_miss(queries, keys) -> None:
+    """Counted: a dense batch-1 verify window the split-verify seam does not take (stock attention)."""
+    from ... import fallbacks
+
+    fallbacks.record(
+        "verify_sdpa_split_unsupported",
+        lambda: f"queries={tuple(queries.shape)} keys={tuple(keys.shape)} dtype={queries.dtype}: stock attention",
+    )
+
+
 def apply_qwen35_verify_sdpa_split_patch() -> bool:
     global _PATCHED
     if _PATCHED:
@@ -979,6 +989,16 @@ def apply_qwen35_verify_sdpa_split_patch() -> bool:
                         "verify-split attention failed; falling back",
                         exc_info=True,
                     )
+            elif (
+                not limit
+                and getattr(queries, "ndim", 0) == 4
+                and queries.shape[0] == 1
+                and queries.shape[-2] > 1
+                # quantized caches and padded batches are other paths by design
+                and not hasattr(cache, "bits")
+                and getattr(cache, "left_padding", None) is None
+            ):
+                _note_split_miss(queries, keys)
         return original(queries, keys, values, cache=cache, scale=scale, mask=mask)
 
     q35_lang._qwen3_5_left_padded_attention = patched_target_verify_attention

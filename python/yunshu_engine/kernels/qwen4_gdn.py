@@ -146,6 +146,13 @@ def gated_delta(
                 logger.info("Qwen4 fused GDN verify engaged (%d rows)", length)
             return result
     _STATE["fallback"] += 1
+    if mask is None:  # a masked verify is the composed layer by design
+        from .. import fallbacks
+
+        fallbacks.record(
+            "qwen4_gdn_verify",
+            lambda: f"rows={length} cache={type(cache).__name__} lengths={getattr(cache, 'lengths', None) is not None}: composed layer",
+        )
     if _STATE["fallback"] == 1:
         logger.info(
             "Qwen4 fused GDN verify: first fallback to the composed layer (%d rows, mask %s)",

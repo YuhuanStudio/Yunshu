@@ -92,6 +92,20 @@ def rows_per_chunk(queries, keys, budget: int | None = None) -> int:
     return max(MIN_ROWS, budget // per_row)
 
 
+def _note_head_dim(queries, keys, budget: int | None) -> None:
+    """Counted: a pre-NAX prefill over the score budget whose head width this chunker does not cover."""
+    if not pre_nax_device():
+        return
+    if score_bytes(queries, keys) <= (SCORE_BUDGET if budget is None else budget):
+        return
+    from .. import fallbacks
+
+    fallbacks.record(
+        "sdpa_chunk_head_dim",
+        lambda: f"queries={tuple(queries.shape)} keys={tuple(keys.shape)}: head dim != {HEAD_DIM}, unchunked SDPA",
+    )
+
+
 def should_chunk(queries, keys, cache, mask, budget: int | None = None) -> bool:
     """Never raises: any odd input keeps the stock call."""
     try:
@@ -100,6 +114,9 @@ def should_chunk(queries, keys, cache, mask, budget: int | None = None) -> bool:
             or queries.shape[-1] != HEAD_DIM
             or keys.shape[-1] != HEAD_DIM
         ):
+            if queries.ndim == 4 and queries.shape[-2] >= MIN_Q_LEN:
+                # other head widths keep the O(n^2) fallback
+                _note_head_dim(queries, keys, budget)
             return False
         if queries.shape[-2] < MIN_Q_LEN:
             return False

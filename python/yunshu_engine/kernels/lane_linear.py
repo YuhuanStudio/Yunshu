@@ -107,6 +107,16 @@ def eligible(module: Any) -> bool:
     )
 
 
+def _note_stock_prefill(m: int, k: int, n: int, bits: int) -> None:
+    """Counted: a NAX-device prefill matmul the NAX atoms and tails do not take (stock QMM instead)."""
+    from .. import fallbacks
+
+    fallbacks.record(
+        "nax_prefill_shape",
+        lambda: f"rows={m} K={k} N={n} bits={bits}: no NAX atom or tail, stock QMM",
+    )
+
+
 class LaneLinear(nn.Module):
     """A quantized projection whose every call runs the row-invariant lane
     matmul (in 128-row pieces above 128 rows)."""
@@ -387,6 +397,9 @@ class LaneLinear(nn.Module):
         ):
             y = nax_prefill.tail_matmul(x2, self.weight, self.sbt, bits=self.bits)
         elif STOCK_ROWS and m > STOCK_ROWS and self.output_dims >= NARROW:
+            # NAX device, but no atom or tail takes these rows
+            if nax_prefill.enabled():
+                _note_stock_prefill(m, self.input_dims, self.output_dims, self.bits)
             weight, scales, biases = self.stock()
             y = mx.quantized_matmul(
                 x2,

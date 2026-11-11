@@ -16,17 +16,27 @@ _COUNTS: dict[str, int] = {}
 _FIRST: dict[str, str] = {}
 
 
-def record(kind: str, detail: str) -> bool:
-    """Count one fallback of ``kind``; log it once per process. Returns True on the first one."""
+def _detail_text(detail) -> str:
+    try:
+        return str(detail()) if callable(detail) else str(detail)
+    except Exception:  # a detail probe must never fail the inference call that hit the fallback
+        return "<detail unavailable>"
+
+
+def record(kind: str, detail) -> bool:
+    """Count one fallback of ``kind``; log it once per process. Returns True on the first one.
+
+    ``detail`` may be a zero-argument callable: it is evaluated only for the first event of a kind,
+    so hot-path call sites pay one lock and one dict update per fallback.
+    """
     with _LOCK:
         _COUNTS[kind] = _COUNTS.get(kind, 0) + 1
         first = kind not in _FIRST
         if first:
-            _FIRST[kind] = detail
+            text = _detail_text(detail)
+            _FIRST[kind] = text
     if first:
-        logger.warning(
-            "Kernel fallback (%s): %s; using the upstream path", kind, detail
-        )
+        logger.warning("Kernel fallback (%s): %s; using the upstream path", kind, text)
     return first
 
 

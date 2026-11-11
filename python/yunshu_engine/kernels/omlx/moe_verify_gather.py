@@ -336,6 +336,17 @@ def supported(linear, dtype) -> bool:
     )
 
 
+def _note_unsupported(rows: int, gate_up, down, dtype) -> None:
+    """Counted: a verify-shaped routed call whose expert weights this kernel does not take (composed gather)."""
+    from ... import fallbacks
+
+    fallbacks.record(
+        "moe_verify_gather_unsupported",
+        lambda: f"rows={rows} dtype={dtype} gate_up_bits={getattr(gate_up, 'bits', None)} "
+        f"down_bits={getattr(down, 'bits', None)} group={getattr(gate_up, 'group_size', None)}: composed gather",
+    )
+
+
 def fused_switch(switch_mlp, x: mx.array, indices: mx.array):
     """Fused gate/up then down routed projections for 2..MAX_ROWS rows.
 
@@ -353,6 +364,9 @@ def fused_switch(switch_mlp, x: mx.array, indices: mx.array):
         and supported(gate_up, x.dtype)
         and supported(down, x.dtype)
     ):
+        # one-row and wider-than-MAX_ROWS calls are the composed path by design
+        if 1 < rows <= MAX_ROWS:
+            _note_unsupported(rows, gate_up, down, x.dtype)
         return None
     top_k = int(indices.shape[-1])
     pairs = indices.reshape(rows * top_k)

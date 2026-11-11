@@ -1540,6 +1540,17 @@ def _is_qwen4_gdn(module) -> bool:
     return qwen4
 
 
+def _note_qwen4_fallback(module, inputs) -> None:
+    """Counted: a Flash-Next (Qwen4) GDN call with no fused prework taking it; stock GDN runs."""
+    from ... import fallbacks
+
+    shape = tuple(getattr(inputs, "shape", ()))
+    fallbacks.record(
+        "qwen4_gdn_prework",
+        lambda: f"{type(module).__name__} inputs={shape} dtype={getattr(inputs, 'dtype', None)}: stock GDN",
+    )
+
+
 def _qwen4_decode_plan(module):
     """The cached decode plan of an ``nn.Module`` Qwen4 GDN layer, else None."""
     if not _is_qwen4_gdn(module):
@@ -2101,6 +2112,14 @@ def apply_qwen35_gdn_prework_patch() -> bool:
             return result
 
         if not _qwen4_decode_dynamic_eligible(self, inputs, mask, cache, None, False):
+            # masked (padded) and speculative-cache calls are other paths by design
+            if (
+                type(self).__name__ == "Qwen4ExpGatedDeltaNet"
+                and mask is None
+                and cache is not None
+                and not getattr(cache, "is_speculating", False)
+            ):
+                _note_qwen4_fallback(self, inputs)
             return original(self, inputs, mask=mask, cache=cache)
         mixed_qkv, z, b, a = _target_verify_linears(
             (self.in_proj_qkv, self.in_proj_z, self.in_proj_b, self.in_proj_a), inputs

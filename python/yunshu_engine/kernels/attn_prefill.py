@@ -181,6 +181,19 @@ def eligible(
     )
 
 
+_COUNTED_SKIPS = ("shape", "kv-dtype-shape")
+
+
+def _note_skip(why: str, queries, keys, values) -> None:
+    from .. import fallbacks
+
+    fallbacks.record(
+        f"attn_prefill_{why.replace('-', '_')}",
+        lambda: f"queries={tuple(queries.shape)} keys={tuple(keys.shape)} values={tuple(values.shape)} "
+        f"dtype={queries.dtype} keys_dtype={keys.dtype}: stock SDPA",
+    )
+
+
 def skip_reason(queries, keys, values, cache, scale, mask, sinks) -> str | None:
     """Why a call keeps the stock function (None: the replacement takes it)."""
     if sinks is not None:
@@ -297,6 +310,9 @@ def _install() -> None:
                 return attend(queries, keys, values)
             if queries.shape[-2] >= MIN_ROWS:
                 _STATE["why"][why] = _STATE["why"].get(why, 0) + 1
+                # designed skips (sinks, masks, cache kinds) are not counted
+                if why in _COUNTED_SKIPS:
+                    _note_skip(why, queries, keys, values)
         _STATE["stock"] += 1
         return stock(queries, keys, values, cache, scale, mask, sinks)
 

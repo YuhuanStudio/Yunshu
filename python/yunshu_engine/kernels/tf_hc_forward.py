@@ -40,6 +40,16 @@ _STATE: dict[str, Any] = {
 }
 
 
+def _note_model_fallback(hidden: Any, model: Any) -> None:
+    """Counted: a fused-HC forward on an installed pack that takes the upstream layer loop."""
+    from .. import fallbacks
+
+    fallbacks.record(
+        "tf_hc_forward_model",
+        lambda: f"hidden={hidden.dtype} layers={len(model.layers)}: upstream layer loop",
+    )
+
+
 def _note_fallback(kind: str, module: Any, exc: BaseException) -> None:
     from .. import fallbacks
 
@@ -169,7 +179,7 @@ def _moe(mlp: Any, x2d: Any) -> Any:
             from .. import fallbacks
 
             fallbacks.record(
-                "tf_moe_rows", f"{x2d.shape[0]} rows > MAX_ROWS {MAX_ROWS}"
+                "tf_moe_rows", lambda: f"{x2d.shape[0]} rows > MAX_ROWS {MAX_ROWS}"
             )
         return None
     logits = experts.router(x2d, plan["router"])
@@ -260,6 +270,8 @@ def _tf_model(
 
     hidden = model.embed_tokens(inputs) if inputs_embeds is None else inputs_embeds
     if hidden.dtype != mx.bfloat16 or not eligible(model):
+        if _STATE["installed"]:
+            _note_model_fallback(hidden, model)
         if hidden_sink is None:
             return _STATE["original"](
                 self, model, inputs, cache, inputs_embeds, position_ids

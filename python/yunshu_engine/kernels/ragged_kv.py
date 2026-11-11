@@ -515,6 +515,16 @@ def _window_limit() -> int:
     return MAX_WINDOW if tile_ready() else 8
 
 
+def _note_lane_miss(queries: Any, keys: Any) -> None:
+    """Counted: a lane-cache call (speculative window) the ragged lane does not take; stock attention runs."""
+    from .. import fallbacks
+
+    fallbacks.record(
+        "dense_lane_attention",
+        lambda: f"queries={tuple(queries.shape)} keys={tuple(keys.shape)} dtype={queries.dtype}: stock attention",
+    )
+
+
 def dense_lane_attention(queries: mx.array, cache: Any, scale: float):
     """The ragged kernel over a one-row stock cache (``_lane_length``) after
     ``update_and_fetch`` stored this step's keys, or None when the call is not
@@ -535,6 +545,7 @@ def dense_lane_attention(queries: mx.array, cache: Any, scale: float):
         or queries.shape[-1] != keys.shape[-1]
         or keys.shape[-1] % 32
     ):
+        _note_lane_miss(queries, keys)
         return None
     # tile: every token x head of the KV head per pass over the keys (verify
     # reads K/V once); the key-parallel fallback (no tensor ops) keeps the

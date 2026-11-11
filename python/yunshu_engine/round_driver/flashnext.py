@@ -191,6 +191,20 @@ def _compute_dtype(lm: Any) -> Any:
     return scales.dtype if scales is not None else table.weight.dtype
 
 
+def _note_unfused(lm: Any, dtype: Any) -> None:
+    """Counted: an installed fused Flash-Next pack that this call cannot take (upstream layer loop)."""
+    from ..kernels import tf_hc_forward
+
+    if not tf_hc_forward._STATE["installed"]:
+        return  # not installed (feature off or device): install-time, not a fallback
+    from .. import fallbacks
+
+    fallbacks.record(
+        "flashnext_fused_pack",
+        lambda: f"dtype={dtype} device={mx.default_device()} hc_eligible={tf_hc_forward.eligible(lm.model)}: upstream layer loop",
+    )
+
+
 def _fused_ready(lm: Any, dtype: Any) -> bool:
     from ..kernels import tf_hc_forward
 
@@ -412,6 +426,7 @@ def chain_forward_capture(
         if sum(int(t.shape[1]) for t in tokens) > PACK_ROWS:
             raise ValueError("fused pack is limited to PACK_ROWS positions")
         return fused_chain_forward(lm, tokens, caches, capture_ids, media)
+    _note_unfused(lm, _compute_dtype(lm))
     out = []
     try:
         for b, (t, c) in enumerate(zip(tokens, caches, strict=True)):
@@ -454,6 +469,7 @@ def chain_forward(lm: Any, tokens: list, caches: list, media: list | None = None
         raise ValueError("chain forward exceeds the shared node budget")
     if _fused_ready(lm, _compute_dtype(lm)):
         return fused_chain_forward(lm, tokens, caches, (), media)
+    _note_unfused(lm, _compute_dtype(lm))
     if media and any(m != (0, False) for m in media):
         rows = []
         try:
